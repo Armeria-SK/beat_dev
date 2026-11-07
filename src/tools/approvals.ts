@@ -83,7 +83,7 @@ export interface ApprovalView extends ApprovalRequest {
 }
 
 // 札を出す会話。子の担当の札は親の会話に出す（親の会話の画面・タスクのページ・通知は、どれもこの関数で選ぶ）
- export const approvalShownIn = (v: Pick<ApprovalRequest, 'conversationId' | 'hostConversationId'>): string => v.hostConversationId ?? v.conversationId;
+export const approvalShownIn = (v: Pick<ApprovalRequest, 'conversationId' | 'hostConversationId'>): string => v.hostConversationId ?? v.conversationId;
 
 // 画面に渡す承認の形。SSE の知らせ・GET /api/approvals・タスクの詳細で、この 1 か所だけを使う
 export function approvalPublic(v: ApprovalView) {

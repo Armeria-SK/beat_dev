@@ -9,6 +9,8 @@ import type { ToolDef } from '../src/tools/types.ts';
 import { approvalShownIn } from '../src/tools/approvals.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, type Script, testConfig } from './helpers.ts';
+import { AGENT_RESULT_MAX_CHARS, toFullWidth } from '../src/engine/chat.ts';
+import { toolText } from '../src/shared/messages/tools.ts';
 
 // F7 agent_run: 親の担当が、別の担当（子）に仕事を任せ、答えを受け取る。深さは 1。
 // 既定（tools.agent を書かない）では、今までと完全に同じ（agent_run はモデルに渡らない）
@@ -212,6 +214,34 @@ test('T-22 子の答えに閉じの区切りを書いても、包みの閉じを
   assert.equal(text.split('子の担当の答え ここまで').length - 1, 1, '閉じは包みの 1 つだけ');
 });
 
+test('T-22b 区切り（開き・閉じ。ja・en）は、どれも置き換えると文が変わる（半角が無い文でも、偽造の対策が黙って効かなくならない）', () => {
+  for (const language of ['ja', 'en'] as const) {
+    for (const key of ['agent.result_open', 'agent.result_close'] as const) {
+      const text = toolText(language, key);
+      assert.notEqual(toFullWidth(text), text, `${language} ${key}`);
+      assert.equal(toFullWidth(text).includes(text), false, `${language} ${key} は置き換えたあとに区切りとして残らない`);
+    }
+  }
+});
+
+test('T-22c 子の答えが上限より長くても、親の結果は閉じの区切りで終わる（切り落とされない）', async t => {
+  const s = await startApp(t, enable());
+  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), reply('あ'.repeat(AGENT_RESULT_MAX_CHARS + 5000)), reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  const text = toolMessages(s, parent)[0]!.text;
+  assert.equal(text.trimEnd().endsWith(toolText('ja', 'agent.result_close')), true, '閉じの区切りが末尾に残る');
+  assert.equal(text.includes(toolText('ja', 'agent.truncated')), true, '打ち切りの注記がある');
+});
+test('T-34 worker.maxParallel が 1 でも、親が子を待つあいだ枠を握らないので固まらない', async t => {
+  const s = await startApp(t, enable(c => { c.worker.maxParallel = 1; }));
+  s.adapter().scripts = [call('agent_run', { task: '任せる' }), reply('子の答え'), reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  const text = toolMessages(s, parent)[0]!.text;
+  assert.equal(text.includes('子の答え'), true);
+  assert.equal(childRuns(s).length, 1);
+});
 // ── 承認・権限（手順 10）: 子の道具は、親と同じ関所を通り、札は親の会話に出る ──
 // 毎回「確かめ」になる試験用の道具。判定役に回してよい種類（risky_command）で、送る・消すはしないと言う
 const askStub: ToolDef<{ key: string }> = {

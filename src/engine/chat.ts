@@ -31,7 +31,7 @@ import { isLocalModel, isLocalPinned, isLocalProvider } from './local-model.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
-import { estimateRequest, estimateTextTokens } from './tokens.ts';
+import { estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
@@ -54,11 +54,13 @@ const UNATTENDED_ITERATION_CEILING = 100;
 export const MAX_LIVE_AGENTS = 2;
 const AGENT_CHILD_TITLE_MAX = 80;
 // 子の担当の答えとして親に返す文字数の上限
-export const AGENT_RESULT_MAX_CHARS = 16000;
+// 道具の結果の上限（pipeline の TOOL_OUTPUT_LIMIT 16000）に、区切りと打ち切りの注記を足しても収まるよう、少し小さくする（閉じの区切りが切り落とされないため）
+export const AGENT_RESULT_MAX_CHARS = 15000;
 
-// 区切りの文字を全角にする（子の答えの中の区切りを、区切りとして読ませないため）
-function toFullWidth(text: string): string {
-  return text.replace(/[ -~]/gu, ch => ch === ' ' ? '\u3000' : String.fromCharCode(ch.charCodeAt(0) + 0xFEE0));
+// 区切りの文字を全角にする（子の答えの中の区切りを、区切りとして読ませないため）。半角が 1 つも無い文は変わらないので、その場合は 2 文字目の前に幅の無い文字を入れて、同じ並びにならないようにする
+export function toFullWidth(text: string): string {
+  const wide = text.replace(/[ -~]/gu, ch => ch === ' ' ? '\u3000' : String.fromCharCode(ch.charCodeAt(0) + 0xFEE0));
+  return wide !== text || text.length < 2 ? wide : `${text[0]}\u200B${text.slice(1)}`;
 }
 
 export function iterationLimit(configured: number, kind: RunKind): number {
@@ -1053,7 +1055,12 @@ export class ChatEngine {
     // 子の答えに区切りの文字が入っていても、親には区切りとして読ませない（全角にする）
     let body = result.text.trim().replaceAll(open, toFullWidth(open)).replaceAll(close, toFullWidth(close));
     if (!body) body = toolText(language, 'agent.empty');
-    if (body.length > AGENT_RESULT_MAX_CHARS) body = `${body.slice(0, AGENT_RESULT_MAX_CHARS)}\n${toolText(language, 'agent.truncated')}`;
+    // 文字数の上限と、親に残っている余裕（トークン）の、先に達した方で切る。区切りと注記の分は先に引く
+    // （パイプラインの切りに閉じの区切りが巻き込まれないよう、ここで包みの中に収める）
+    const truncated = toolText(language, 'agent.truncated');
+    const room = Math.max(0, (parent.outputTokens ?? Infinity) - estimateTextTokens(`${open}\n\n${truncated}\n${close}`) - 16);
+    const shown = prefixLength(body, AGENT_RESULT_MAX_CHARS, room);
+    if (shown < body.length) body = `${body.slice(0, shown)}\n${truncated}`;
     emit('done', toolCalls);
     return { content: `${open}\n${body}\n${close}`, ...(fetched ? { fetched: true } : {}) };
   }
