@@ -19,7 +19,7 @@ export const skillView: ToolDef<{ name: string }> = {
   description: 'スキル（手順書）の本文を読む。system の「スキル」の一覧にある作業をするときは、先にこれで手順を確かめる。',
   input: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64 }) }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task', 'review'],
+  allowedIn: ['chat', 'task', 'review', 'agent'],
   async execute(input, ctx) {
     try {
       const s = store(ctx);

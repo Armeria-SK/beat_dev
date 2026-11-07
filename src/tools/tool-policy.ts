@@ -18,6 +18,11 @@ export const POLICYLESS_TOOLS: ReadonlySet<string> = new Set(['task_complete', '
 
 export const isPolicyable = (name: string): boolean => !POLICYLESS_TOOLS.has(name);
 
+// 設定に書かないときの方針が allow ではない道具。agent_run（別の担当に仕事を任せる）は、書かなければ毎回聞く。tools.policies.agent_run: 'allow' と書くと聞かなくなる
+export const DEFAULT_POLICIES: Readonly<Record<string, ToolPolicy>> = { agent_run: 'ask' };
+
+export const defaultPolicy = (name: string): ToolPolicy => (Object.hasOwn(DEFAULT_POLICIES, name) ? DEFAULT_POLICIES[name]! : 'allow');
+
 const STRICTNESS: Record<ToolPolicy, number> = { allow: 0, ask: 1, block: 2 };
 
 export const isToolPolicy = (value: unknown): value is ToolPolicy => typeof value === 'string' && Object.hasOwn(STRICTNESS, value);
@@ -30,12 +35,13 @@ export const isLooser = (from: ToolPolicy, to: ToolPolicy): boolean => STRICTNES
 
 export interface HasPolicies { tools: { policies?: Record<string, string> | undefined } }
 
-// 設定に書かれた、その道具の方針。書いていない・読めない値・方針を持てない道具は allow
+// 設定に書かれた、その道具の方針。書いていない・読めない値は、その道具の既定（defaultPolicy。ほとんどは allow）。方針を持てない道具は allow
 export function toolPolicy(config: HasPolicies, name: string): ToolPolicy {
   const policies = config.tools.policies;
-  if (!policies || !isPolicyable(name) || !Object.hasOwn(policies, name)) return 'allow';
+  if (!isPolicyable(name)) return 'allow';
+  if (!policies || !Object.hasOwn(policies, name)) return defaultPolicy(name);
   const value = policies[name];
-  return isToolPolicy(value) ? value : 'allow';
+  return isToolPolicy(value) ? value : defaultPolicy(name);
 }
 
 // 実行に効く方針: 実行を始めたときの設定と、いまの設定の厳しい方。途中で厳しくした分はその場から効き、緩めた分は次の実行から。

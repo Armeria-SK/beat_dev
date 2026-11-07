@@ -47,7 +47,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
     max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
   }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck: (input, ctx) => checkFilePath(input.path ?? '.', 'read', ctx).check,
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path ?? '.', 'read', ctx);

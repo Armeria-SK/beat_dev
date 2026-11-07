@@ -25,7 +25,7 @@ export const calculate: ToolDef<{ expression: string }> = {
     expression: Type.String({ minLength: 1, maxLength: 500 }),
   }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   async execute(input, ctx) {
     try {
       const language = languageOf(ctx.config);
@@ -57,7 +57,7 @@ export const dateCalc: ToolDef<{
     years: Type.Optional(Type.Integer()),
   }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   async execute(input, ctx) {
     try {
       const language = languageOf(ctx.config);

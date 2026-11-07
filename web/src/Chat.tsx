@@ -17,6 +17,7 @@ import {
   AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PendingMessageRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
 } from './ChatMessages.tsx';
 import { Composer } from './Composer.tsx';
+import { chatHash } from './routes.ts';
 import type { Draft } from './events.ts';
 import { useT } from './i18n/index.ts';
 import type { IconName } from './icons.tsx';
@@ -112,6 +113,8 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const [effort, setEffort] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [mode, setMode] = useState<PermissionMode>('normal');
+  // 任された子の会話なら、任せた親の会話の id（親が分からなくても空文字）。null はふつうの会話
+  const [childOf, setChildOf] = useState<string | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [archivedNow, setArchivedNow] = useState(false);
@@ -130,7 +133,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const [liveSince] = useState(() => Date.now());
 
   const load = useCallback(async () => {
-    if (!conversationId) { setMessages([]); setPending([]); setLoaded(true); return; }
+    if (!conversationId) { setMessages([]); setPending([]); setChildOf(null); setLoaded(true); return; }
     try {
       const result = await api.messages(conversationId);
       setMessages(result.messages);
@@ -140,6 +143,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       setModelId(result.conversation.model_id ?? null);
       setEffort(result.conversation.effort ?? null);
       setMode(result.conversation.permission_mode ?? 'normal');
+      setChildOf(result.conversation.parent_run_id ? result.conversation.source_conversation_id ?? '' : null);
       setLoaded(true);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) { setMessages([]); setLoaded(true); }
@@ -381,10 +385,10 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   if (draft) {
     const liveHead = !visible.some(m => m.role === 'assistant' && m.runId === draft.runId);
     if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} head={liveHead} />);
-    else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} checking={draft.autoChecking === true} />);
+    else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} checking={draft.autoChecking === true} agent={draft.agent} />);
     else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} startedAt={startedAt} />);
   }
-  for (const p of pending) push(`pending-${p.id}`, 'user', <PendingMessageRow pending={p} onCancel={() => void cancelPending(p.id)} />);
+  for (const p of pending) push(`pending-${p.id}`, 'user', <PendingMessageRow pending={p} onCancel={() => void cancelPending(p.id)} waitingAgent={Boolean(draft?.agent)} />);
   notices.filter(n => n.kind !== 'error').forEach((n, i) => {
     const key = `n-${n.runId}-${i}`;
     if (n.kind === 'memory') push(key, 'note', <MemoryRow message={n.message} eventId={n.eventId} />);
@@ -447,7 +451,11 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
           {list && listCounts && (
             <ChecklistPanel list={list} counts={listCounts} open={listOpen} onToggle={() => setChecklistChoice({ phase: checklistPhase(listCounts), open: !listOpen })} />
           )}
-          <Composer
+          {childOf !== null ? (
+            <div className="chat-approval-note" role="note">
+              {t('conversation.childReadOnly')}{childOf && <> <a className="chat-link" href={chatHash(childOf)}>{t('conversation.childParent')}</a></>}
+            </div>
+          ) : <Composer
             textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
             approvalId={frontApprovalId} assistantName={assistantName} modelName={shownModel} effort={effort} usage={usage}
             modelMenuOpen={menuOpen} onModelMenu={() => { setModeMenuOpen(false); setMenuOpen(open => !open); }}
@@ -456,7 +464,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
             modelMenu={menuOpen ? <ModelMenu models={models} selected={modelId} effort={effort} efforts={efforts} onModel={id => void choose({ modelId: id })} onEffort={value => void choose({ effort: value })} onClose={() => setMenuOpen(false)} /> : null}
             onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
             onSend={() => void send()} onStopAndSend={() => void send(undefined, true)} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
-          />
+          />}
         </div>
       </div>
       {summaryOpen && conversationId && <SummaryDialog conversationId={conversationId} title={title} onClose={() => setSummaryOpen(false)} />}

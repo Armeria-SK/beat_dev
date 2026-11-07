@@ -353,4 +353,10 @@ export const MIGRATIONS: readonly Migration[] = [
     registered_at INTEGER NOT NULL
   );
   `,
+  // 18: 子の担当（agent_run）。子の会話・子の実行の記録が、親の実行を覚える（NULL は親の無い、ふつうの会話・実行）。子の会話は kind 'task' のまま（CHECK を作り直さない）で、この列で見分ける。一覧・履歴の検索・振り返りから外す決まりに使う
+  `
+  ALTER TABLE conversations ADD COLUMN parent_run_id TEXT;
+  ALTER TABLE engine_runs ADD COLUMN parent_run_id TEXT;
+  CREATE INDEX idx_conversations_parent_run ON conversations (parent_run_id) WHERE parent_run_id IS NOT NULL;
+  `,
 ];

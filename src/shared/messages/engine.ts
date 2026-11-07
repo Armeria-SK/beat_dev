@@ -47,6 +47,8 @@ const ja = {
   'taint.carried': '前の実行で読んだもの',
   'taint.unknown': '履歴が長く、確かめきれないもの',
   'taint.checklist': 'よそから来た文を読んだあとに書かれた作業の一覧',
+  'taint.parent': 'この担当を任せた親の担当が、よそから来た文を読んでいたもの',
+  'agent.preamble': 'あなたは、親の担当から仕事を任された子の担当です。最後の返事が親に返ります。持ち主とは直接話せません。',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -96,6 +98,8 @@ const en: Record<keyof typeof ja, string> = {
   'taint.carried': 'what an earlier run read',
   'taint.unknown': 'a history too long to check',
   'taint.checklist': 'a work checklist written after reading text that came from elsewhere',
+  'taint.parent': 'the parent agent that handed over this job had read text from elsewhere',
+  'agent.preamble': 'You are a sub-agent working on a job from the main agent. Your final reply goes back to it. You cannot talk to the owner directly.',
 };
 
 export const engineText = defineMessages('engine', ja, en);

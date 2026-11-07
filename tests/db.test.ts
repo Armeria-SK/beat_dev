@@ -143,8 +143,9 @@ test('マイグレーション 16: 振り返りの会話が、材料にした会
   } finally { db.close(); }
 });
 
-test('マイグレーション 9〜17 を続けて当てる: main の段階（8）の DB から更新しても、振り返りの会話の材料が埋まり、前からあるすべての会話に外から読んだ印が付く。16 は 15 のあとに、17（スキルの登録簿）は 16 のあとに足される', t => {
-  assert.equal(MIGRATIONS.length, 17);
+test('マイグレーション 9〜18 を続けて当てる: main の段階（8）の DB から更新しても、振り返りの会話の材料が埋まり、前からあるすべての会話に外から読んだ印が付く。16 は 15 のあとに、17（スキルの登録簿）は 16 のあとに、18（子の担当の親）は 17 のあとに足される', t => {
+  assert.equal(MIGRATIONS.length, 18);
+  assert.match(String(MIGRATIONS[17]), /parent_run_id/u);
   assert.match(String(MIGRATIONS[16]), /skill_registry/u);
   assert.match(String(MIGRATIONS[15]), /source_conversation_id/u);
   assert.match(String(MIGRATIONS[14]), /grant_folder/u);
@@ -158,6 +159,31 @@ test('マイグレーション 9〜17 を続けて当てる: main の段階（8�
     const row = db.prepare('SELECT source_conversation_id AS c, ever_tainted AS tainted, permission_mode AS mode FROM conversations WHERE id = ?').get('rv') as { c: string | null; tainted: number; mode: string };
     assert.deepEqual({ ...row }, { c: 'src', tainted: 1, mode: 'normal' });
     assert.equal((db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get('src') as { ever_tainted: number }).ever_tainted, 1);
-    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 17);
+    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 18);
+  } finally { db.close(); }
+});
+
+test('マイグレーション 18: 会話と実行の記録に親の実行 parent_run_id が足される。前からある行は NULL。子の会話は kind task のまま作れ、親の実行を覚える（AU-4）', t => {
+  const path = join(tempDir(t), 'clive.db');
+  const before = openDatabase(path, MIGRATIONS.slice(0, 17));
+  before.prepare('INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, ?, 1, 1)').run('old', 'chat');
+  before.prepare("INSERT INTO engine_runs (id, kind, conversation_id, started_at) VALUES ('oldrun', 'chat', 'old', 1)").run();
+  before.close();
+  const db = openDatabase(path, MIGRATIONS);
+  try {
+    assert.equal((db.prepare('SELECT parent_run_id AS p FROM conversations WHERE id = ?').get('old') as { p: string | null }).p, null);
+    assert.equal((db.prepare('SELECT parent_run_id AS p FROM engine_runs WHERE id = ?').get('oldrun') as { p: string | null }).p, null);
+    const conversations = new Conversations(db);
+    const runs = new Runs(db);
+    const child = conversations.create({ kind: 'task', title: 'child', source: { conversationId: 'old' }, parentRunId: 'oldrun' });
+    assert.equal(child.kind, 'task');
+    assert.equal(child.parent_run_id, 'oldrun');
+    assert.equal(child.source_conversation_id, 'old');
+    assert.equal(conversations.create({ kind: 'task' }).parent_run_id, null, '指定しなければ NULL');
+    runs.start('childrun', 'agent', child.id, 'oldrun');
+    runs.start('plain', 'chat', 'old');
+    assert.equal((runs.get('childrun') as { parent_run_id?: string | null } | undefined)?.parent_run_id, 'oldrun');
+    assert.equal((runs.get('plain') as { parent_run_id?: string | null } | undefined)?.parent_run_id, null);
+    assert.deepEqual(conversations.list().map(c => c.id), ['old'], '子の会話は一覧に出ない（kind が chat でない）');
   } finally { db.close(); }
 });

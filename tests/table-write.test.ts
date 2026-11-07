@@ -406,7 +406,7 @@ test('table_write: 道具の定義は書き込み・フォルダの許可つき�
   assert.equal(tableWrite.name, 'table_write');
   assert.equal(tableWrite.effect, 'write');
   assert.equal(tableWrite.folderGrant, true);
-  assert.deepEqual([...tableWrite.allowedIn], ['chat', 'task']);
+  assert.deepEqual([...tableWrite.allowedIn], ['chat', 'task', 'agent']);
   const properties = (tableWrite.input as unknown as { properties: Record<string, unknown> }).properties;
   assert.deepEqual(Object.keys(properties), ['path', 'rows', 'overwrite']);
 });

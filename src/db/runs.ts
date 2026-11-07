@@ -28,6 +28,8 @@ export interface RunRow {
   flags: string;
   // 1 = この実行は、外から読んだ内容（Web・添付、前の実行から引き継いだ分を含む）を読んだ。終わったかどうかに関わらず、読んだ時点で書く
   tainted: number;
+  // 子の担当（agent_run）の実行だけが持つ。親の実行の id
+  parent_run_id: string | null;
 }
 
 export interface RunFinish {
@@ -51,9 +53,9 @@ export class Runs {
   readonly now: () => number;
   constructor(db: DatabaseSync, now: () => number = Date.now) { this.db = db; this.now = now; }
 
-  start(id: string, kind: string, conversationId?: string): void {
-    this.db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at) VALUES (?, ?, ?, ?)')
-      .run(id, kind, conversationId ?? null, this.now());
+  start(id: string, kind: string, conversationId?: string, parentRunId?: string): void {
+    this.db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at, parent_run_id) VALUES (?, ?, ?, ?, ?)')
+      .run(id, kind, conversationId ?? null, this.now(), parentRunId ?? null);
   }
 
   finish(id: string, f: RunFinish): void {

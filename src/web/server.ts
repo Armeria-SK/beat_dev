@@ -9,7 +9,7 @@ import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
-import { approvalWire } from '../tools/approvals.ts';
+import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
 import { searchHistory } from '../memory/history.ts';
@@ -233,7 +233,7 @@ export function createWebServer(app: App): WebServer {
       })),
       pending: app.engine.pending(id),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
-      approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalWire),
+      approvals: app.approvals.pending().filter(a => approvalShownIn(a) === id).map(approvalWire),
     });
   });
   // 次に送るときの量。何も書かない（まだ無い会話を作らず、system も固定しない）
@@ -295,6 +295,8 @@ export function createWebServer(app: App): WebServer {
     sendJson(res, 200, { cancelled: true });
   });
   router.add('POST', '/api/conversations/:id/retry', ({ res, params }) => {
+    // 子の担当（agent_run）の会話は読むだけ。やり直しで普通の会話として動かさない
+    if (app.conversations.get(params[0]!)?.parent_run_id) throw problem(409, 'conflict', 'not_chat_conversation');
     const outcome = app.engine.retry(params[0]!);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     sendJson(res, 202, { runId: outcome.runId });

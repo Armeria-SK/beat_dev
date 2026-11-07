@@ -26,7 +26,8 @@ export type AskKind =
   | 'precheck' | 'code' | 'taint' | 'policy' | 'hook'
   | 'outside_read' | 'outside_write' | 'risky_command' | 'egress' | 'git_write' | 'opaque' | 'persona' | 'owner' | 'web';
 
-export type RunKind = 'chat' | 'task' | 'review';
+// agent: 親の担当から任された子の担当の実行（agent_run が始める。深さ 1）
+export type RunKind = 'chat' | 'task' | 'review' | 'agent';
 
 export interface ToolOutput {
   content: string;
@@ -70,6 +71,8 @@ export interface ExecuteInfo {
   approvedOnce: boolean;
   // 許したときに持ち主に見せた事前の判定
   check?: PreCheck;
+  // この呼び出しの id（モデルが付けたもの。agent_run が、画面の agent.state をどの呼び出しの行に結ぶかに使う）
+  callId?: string;
 }
 
 export interface ToolContext {
@@ -112,7 +115,13 @@ export interface ToolContext {
   autoReadOutside?: boolean | undefined;
   // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許されたフォルダ（この実行だけ。別の実行には渡らない）と、許可した札の承認の記録の id
   writeGrants?: Array<{ folder: string; approvalId: string }> | undefined;
+  // agent_run: 子の担当を始めて、終わるまで待つ（チャット・許したタスクの実行にだけ付く。子の実行には付かない = 深さ 1）。結果は区切りで包んだ答え。失敗は isError
+  agent?: ((input: AgentRunInput, callId?: string) => Promise<ToolOutput>) | undefined;
+  // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）
+  parent?: { runId: string; conversationId: string; kind: RunKind; title: string } | undefined;
 }
+
+export interface AgentRunInput { task: string; tools?: string[] | undefined; title?: string | undefined }
 
 export type TaskControl =
   | { outcome: 'none' }

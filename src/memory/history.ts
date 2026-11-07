@@ -38,7 +38,8 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
   const since = options.days ? (options.now ?? Date.now()) - options.days * 86_400_000 : 0;
   const exclude = options.excludeConversationId ?? '';
   const visible = options.visibleModelIds;
-  const hiddenClause = visible ? ` AND ${visibleSql('c', visible)}` : '';
+  // 子の担当（agent_run）の会話は、親の作業の内側のもの。手元のモデルでも外のモデルでも、画面の検索でも出さない（parent_run_id を持つ会話）
+  const hiddenClause = ` AND c.parent_run_id IS NULL${visible ? ` AND ${visibleSql('c', visible)}` : ''}`;
   const hiddenParams = visible ? [...visible, ...visible] : [];
   const rows = terms.every(t => [...t].length >= 3)
     ? db.prepare(`
@@ -57,6 +58,7 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
 
 // visibleModelIds: searchHistory と同じ。この会話が見せない会話（手元の会話・手元のタスクの会話・それらの振り返りの会話）なら、無いときと同じ（空）を返す
 export function readHistory(db: DatabaseSync, conversationId: string, options: { aroundMessageId?: number | undefined; limit?: number; visibleModelIds?: readonly string[] | undefined } = {}): Array<{ id: number; role: string; text: string; createdAt: number }> {
+  if (db.prepare('SELECT 1 FROM conversations WHERE id = ? AND parent_run_id IS NOT NULL').get(conversationId)) return [];
   if (options.visibleModelIds && !db.prepare(`SELECT 1 FROM conversations c WHERE c.id = ? AND ${visibleSql('c', options.visibleModelIds)}`).get(conversationId, ...options.visibleModelIds, ...options.visibleModelIds)) return [];
   const limit = Math.min(options.limit ?? 20, 60);
   const rows = options.aroundMessageId === undefined

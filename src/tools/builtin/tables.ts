@@ -71,7 +71,7 @@ export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | numb
   }, { additionalProperties: false }),
   effect: 'write',
   folderGrant: true,
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck(input, ctx) {
     const language = languageOf(ctx.config);
     const { abs, check } = checkFilePath(input.path, 'write', ctx);

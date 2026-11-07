@@ -16,13 +16,16 @@ export type RunEvent =
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: ChecklistItem[]; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
+  | { type: 'agent.state'; runId: string; conversationId: string; callId: string; childRunId: string; childConversationId: string; state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout'; toolCalls: number }
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: Task }
   | { type: 'notification'; notification: NotificationItem }
   | { type: 'notification.read'; ids: number[]; unread: number };
 
-export interface Draft { runId: string; conversationId: string; modelId: string; text: string; activeTool?: string | undefined; activeInput?: string | undefined; autoChecking?: boolean | undefined }
+// 任せた子の担当の動き（agent_run を実行しているあいだだけ）。子の会話へのリンクと、使った道具の数
+export interface AgentLive { conversationId: string; toolCalls: number }
+export interface Draft { runId: string; conversationId: string; modelId: string; text: string; activeTool?: string | undefined; activeInput?: string | undefined; autoChecking?: boolean | undefined; agent?: AgentLive | undefined }
 
 export function useRunEvents(onEvent: (e: RunEvent) => void, onResync: (drafts: Draft[]) => void): { connected: boolean; reconnect: () => void } {
   const [connected, setConnected] = useState(false);

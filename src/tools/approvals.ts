@@ -65,6 +65,10 @@ export interface ApprovalRequest {
   // この札に添える「この返事のあいだ、このフォルダ以下への書き込みを許可」のフォルダ。外から読んだ内容のあとの file_write / file_edit の確かめ（理由の種類が taint だけ）にだけ付く
   grantFolder?: string | undefined;
   preview?: PreviewFile[] | undefined;
+  // 子の担当（agent_run）の道具の札だけが持つ。札を出す会話（親の会話。親がタスクならそのタスクの会話）と、子の会話・題（札から子の会話を開くため）。子の札には「この会話では許可」を出さない（decide も今回だけにする）
+  hostConversationId?: string | undefined;
+  childConversationId?: string | undefined;
+  childTitle?: string | undefined;
   // 見つけたパスごとの判定（details の文と同じものを構造で渡す。無ければ空）
   paths?: ApprovalPath[] | undefined;
   // paths に入りきらず、切った行の数
@@ -78,17 +82,21 @@ export interface ApprovalView extends ApprovalRequest {
   expiresAt: number;
 }
 
+// 札を出す会話。子の担当の札は親の会話に出す（親の会話の画面・タスクのページ・通知は、どれもこの関数で選ぶ）
+ export const approvalShownIn = (v: Pick<ApprovalRequest, 'conversationId' | 'hostConversationId'>): string => v.hostConversationId ?? v.conversationId;
+
 // 画面に渡す承認の形。SSE の知らせ・GET /api/approvals・タスクの詳細で、この 1 か所だけを使う
 export function approvalPublic(v: ApprovalView) {
   return {
     id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
     onceOnly: v.onceOnly === true, everyTime: v.everyTime === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0, grantFolder: v.grantFolder ?? null,
+    fromAgent: v.childConversationId ? { conversationId: v.childConversationId, title: v.childTitle ?? '' } : null,
   };
 }
 
 // API の応答（GET /api/approvals・会話・タスクの詳細）が返す形。どの実行・会話の承認かを添える
 export function approvalWire(v: ApprovalView) {
-  return { runId: v.runId, conversationId: v.conversationId, ...approvalPublic(v) };
+  return { runId: v.runId, conversationId: approvalShownIn(v), ...approvalPublic(v) };
 }
 
 export function inputHash(tool: string, input: unknown): string {
@@ -155,7 +163,7 @@ export class ApprovalBroker {
     const pending = this.#pending.get(id);
     if (!pending) return false;
     // コードを動かす確かめと、方針が ask の確かめは、古い画面から「この会話では許可」が送られても今回だけとして扱う。フォルダの許可を添えていない札に「フォルダ」が送られたときも、今回だけ
-    const scope = decision === 'conversation' && (pending.view.onceOnly || pending.view.everyTime) ? 'once'
+    const scope = decision === 'conversation' && (pending.view.onceOnly || pending.view.everyTime || pending.view.childConversationId) ? 'once'
       : decision === 'folder' && !pending.view.grantFolder ? 'once' : decision;
     if (scope === 'conversation') this.#conversationGrants.add(`${pending.view.conversationId}:${pending.view.inputHash}`);
     this.#db.prepare('UPDATE approvals SET scope = ?, grant_folder = ? WHERE id = ?').run(scope, scope === 'folder' ? pending.view.grantFolder ?? null : null, id);

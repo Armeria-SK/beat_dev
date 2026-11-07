@@ -126,7 +126,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
   }, { additionalProperties: false }),
   effect: 'network',
   writesFiles: true,
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.config.tools.web.fetch) return { decision: 'deny', reasons: [guardText(language, 'web.fetch_off')] };

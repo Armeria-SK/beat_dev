@@ -1,5 +1,5 @@
 import { allowEntryRunsCode } from '../../../src/tools/hooks/listed-commands.ts';
-import { isLooser, isPolicyable, isToolPolicy, type ToolPolicy } from '../../../src/tools/tool-policy.ts';
+import { defaultPolicy, isLooser, isPolicyable, isToolPolicy, type ToolPolicy } from '../../../src/tools/tool-policy.ts';
 import { deepEqual } from './merge.ts';
 import type { Config } from './model.ts';
 import { foldersFromConfig, wideningChanges, type Widening } from '../skills-meta.ts';
@@ -108,8 +108,8 @@ function hookChanges(before: Config, after: Config, stage: HookStage): Access[] 
 // 道具ごとの方針の変更のうち、緩めるもの。方針を持てない道具（サーバーが無視する）と、読めない値（allow 扱い）は、サーバーの読み方に合わせる
 export function toolPolicyLoosened(tool: string, from: unknown, to: unknown): Access | null {
   if (!isPolicyable(tool)) return null;
-  const before: ToolPolicy = isToolPolicy(from) ? from : 'allow';
-  const after: ToolPolicy = isToolPolicy(to) ? to : 'allow';
+  const before: ToolPolicy = isToolPolicy(from) ? from : defaultPolicy(tool);
+  const after: ToolPolicy = isToolPolicy(to) ? to : defaultPolicy(tool);
   return isLooser(before, after) ? { kind: 'tool-policy-loosened', tool, from: before, to: after } : null;
 }
 

@@ -23,7 +23,7 @@ interface Props {
   onOpenApproval: () => void;
 }
 
-const RUN_KIND_KEY: Record<string, PlainKey> = { chat: 'run.kind.chat', task: 'run.kind.task', review: 'run.kind.review' };
+const RUN_KIND_KEY: Record<string, PlainKey> = { chat: 'run.kind.chat', task: 'run.kind.task', review: 'run.kind.review', agent: 'runs.kind.agent' };
 const FINISHED_KEY: Partial<Record<TaskStatus, PlainKey>> = { done: 'task.status.done', failed: 'task.status.failed', cancelled: 'task.status.cancelled' };
 const NOTE_REFRESH_MS = 10_000;
 
@@ -190,7 +190,7 @@ export function ActivityBody(props: Props) {
           const outcome = runOutcome(run);
           const kindKey = RUN_KIND_KEY[run.kind];
           return (
-            <div key={run.id} className="act-recent">
+            <div key={run.id} className={run.parent_run_id ? 'act-recent act-recent-child' : 'act-recent'}>
               <span className="act-recent-time">{formatDateTimeSmart(run.started_at, clock)}</span>
               <span className="act-recent-kind">{kindKey ? t(kindKey) : run.kind}{run.model_id && <span className="act-recent-model"> {run.model_id}</span>}</span>
               <span className={`act-recent-result${outcome.kind === 'ok' ? '' : ' bad'}`}>
