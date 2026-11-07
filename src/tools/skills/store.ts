@@ -11,7 +11,8 @@ const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
   en: { heading: '# Skills (procedures)', instruction: 'Before doing any of the work below, first read the procedure with skill_view and then follow it.' },
 };
 
-export interface Skill { name: string; description: string; body: string; uses: number; lastUsedAt: number | null; updatedAt: number }
+export interface Skill { name: string; description: string; body: string; uses: number; lastUsedAt: number | null; updatedAt: number; registered: boolean }
+export type SkillSource = 'approved' | 'owner' | 'upgrade';
 export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null;
   status: 'pending' | 'approved' | 'rejected'; conversation_id: string | null; run_id: string | null; created_at: number; decided_at: number | null;
@@ -69,6 +70,7 @@ export class SkillStore {
 
   get dir(): string { return this.#dir; }
 
+  // フォルダにあるスキルを全部返す（画面のため。registered で、持ち主が認めたものかを分ける）
   list(): Skill[] {
     if (!existsSync(this.#dir)) return [];
     const skills: Skill[] = [];
@@ -88,12 +90,43 @@ export class SkillStore {
     const usage = this.#db.prepare('SELECT uses, last_used_at FROM skill_usage WHERE name = ?').get(name) as { uses: number; last_used_at: number | null } | undefined;
     return {
       name, description: parsed.description ?? storeText(this.#language(), 'skill.no_description'), body: parsed.body,
-      uses: usage?.uses ?? 0, lastUsedAt: usage?.last_used_at ?? null, updatedAt: statSync(path).mtimeMs,
+      uses: usage?.uses ?? 0, lastUsedAt: usage?.last_used_at ?? null, updatedAt: statSync(path).mtimeMs, registered: this.isRegistered(name),
     };
   }
 
+  // 登録している = その名前の行がある。登録した名前は、あとで書き直されても（承認・画面の保存・file_write・シェル）そのまま使う
+  isRegistered(name: string): boolean {
+    return this.#db.prepare('SELECT 1 FROM skill_registry WHERE name = ?').get(name) !== undefined;
+  }
+
+  // 一覧（system）と skill_view が見るのは、登録した名前だけ。未登録の SKILL.md は無いものとして扱う
+  getRegistered(name: string): Skill | undefined {
+    const skill = this.get(name);
+    return skill?.registered ? skill : undefined;
+  }
+
+  listRegistered(): Skill[] { return this.list().filter(s => s.registered); }
+
+  // 持ち主の画面の「登録する」。登録の印を書ける道は approve()・write()（画面の保存）・これの 3 つだけ
+  register(name: string): Skill {
+    if (!this.get(name)) throw new SkillError('skill.not_found', { name });
+    this.#mark(name, 'owner');
+    return this.get(name)!;
+  }
+
+  // 更新の時点で既にあるスキルを全部登録する（起動のとき 1 回だけ呼ぶ）。登録した件数を返す
+  registerExisting(): number {
+    let n = 0;
+    for (const skill of this.list()) if (!skill.registered) { this.#mark(skill.name, 'upgrade'); n++; }
+    return n;
+  }
+
+  #mark(name: string, source: SkillSource): void {
+    this.#db.prepare('INSERT OR IGNORE INTO skill_registry (name, source, registered_at) VALUES (?, ?, ?)').run(name, source, this.#now());
+  }
+
   index(language: Language = DEFAULT_LANGUAGE): string {
-    const skills = this.list();
+    const skills = this.listRegistered();
     if (!skills.length) return '';
     const text = INDEX_TEXT[language];
     return [
@@ -108,15 +141,19 @@ export class SkillStore {
       ON CONFLICT (name) DO UPDATE SET uses = uses + 1, last_used_at = excluded.last_used_at`).run(name, this.#now());
   }
 
-  write(input: { name: string; description: string; body: string }): Skill {
+  // 画面の保存（owner）と、承認した下書き（approved）は、書いたあとに名前を登録する
+  write(input: { name: string; description: string; body: string }, source: SkillSource = 'owner'): Skill {
     validate(input);
     const dir = join(this.#dir, input.name);
     mkdirSync(dir, { recursive: true });
     atomicWriteFile(join(dir, 'SKILL.md'), renderSkillFile(input));
+    this.#mark(input.name, source);
     return this.get(input.name)!;
   }
 
   remove(name: string): void {
+    // フォルダが先に消えていても登録の行は消す（残すと、同じ名前で置き直したものが、そのまま信用されてしまう）
+    this.#db.prepare('DELETE FROM skill_registry WHERE name = ?').run(name);
     if (!this.get(name)) throw new SkillError('skill.not_found', { name });
     rmSync(join(this.#dir, name), { recursive: true, force: true });
   }
@@ -148,7 +185,7 @@ export class SkillStore {
   approve(id: number): Skill {
     const draft = this.getDraft(id);
     if (!draft || draft.status !== 'pending') throw new SkillError('skill.not_pending');
-    const skill = this.write(draft);
+    const skill = this.write(draft, 'approved');
     this.#db.prepare("UPDATE skill_drafts SET status = 'approved', decided_at = ? WHERE id = ?").run(this.#now(), id);
     return skill;
   }

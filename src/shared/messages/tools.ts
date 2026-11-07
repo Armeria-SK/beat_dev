@@ -101,6 +101,7 @@ const ja = {
   'history.not_found': 'その会話は見つかりませんでした',
 
   'skill.unknown': 'スキル「{name}」はありません。{detail}',
+  'skill.unregistered': 'スキル「{name}」は Clive に登録されていないため使えません。持ち主が画面のスキルで「登録する」と、使えるようになります',
   'skill.available': 'あるもの: {names}',
   'skill.none': 'スキルはまだありません',
   'skill.drafted': 'スキル「{name}」の{kind}の下書きを作りました（#{id}）。ユーザーが画面で承認すると有効になります',
@@ -331,6 +332,7 @@ const en: Record<keyof typeof ja, string> = {
   'history.not_found': 'That conversation was not found',
 
   'skill.unknown': 'There is no skill "{name}". {detail}',
+  'skill.unregistered': 'The skill "{name}" is not registered with Clive, so it cannot be used. It becomes usable once the owner registers it from the Skills screen',
   'skill.available': 'Available: {names}',
   'skill.none': 'There are no skills yet',
   'skill.drafted': 'Created a draft to {kind} the skill "{name}" (#{id}). It becomes active when the user approves it on the screen',

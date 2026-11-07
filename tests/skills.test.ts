@@ -24,7 +24,7 @@ const applyFolders = (config: Record<string, any>, folders: FolderDraft): Record
 const draft = (over: Partial<SkillDraft>): SkillDraft => ({
   id: 1, name: 'a', description: 'd', body: 'b', reason: null, status: 'pending', created_at: 100, current: null, ...over,
 });
-const skill = (name: string, over: Partial<SkillSummary> = {}): SkillSummary => ({ name, description: `${name} の説明`, uses: 0, lastUsedAt: null, updatedAt: 0, ...over });
+const skill = (name: string, over: Partial<SkillSummary> = {}): SkillSummary => ({ name, description: `${name} の説明`, uses: 0, lastUsedAt: null, updatedAt: 0, registered: true, ...over });
 
 test('経路: スキルの深いリンク（#/skills/<名前>、#/skills/draft/<名前>）を読み、元の形に戻せる', () => {
   assert.deepEqual(parseRoute('#/skills'), { page: 'skills' });

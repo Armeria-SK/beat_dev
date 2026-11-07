@@ -23,10 +23,12 @@ export const skillView: ToolDef<{ name: string }> = {
   async execute(input, ctx) {
     try {
       const s = store(ctx);
-      const skill = s.get(input.name);
+      const language = languageOf(ctx.config);
+      // 登録した名前だけ読める。フォルダに直接置かれただけの SKILL.md は、中身を返さない
+      const skill = s.getRegistered(input.name);
+      if (!skill && s.get(input.name)) return { content: toolText(language, 'skill.unregistered', { name: input.name }), isError: true };
       if (!skill) {
-        const names = s.list().map(k => k.name);
-        const language = languageOf(ctx.config);
+        const names = s.listRegistered().map(k => k.name);
         return { content: toolText(language, 'skill.unknown', { name: input.name, detail: names.length ? toolText(language, 'skill.available', { names: names.join(', ') }) : toolText(language, 'skill.none') }), isError: true };
       }
       // 振り返りで読んだだけでは「使った」に数えない
@@ -54,7 +56,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
   async execute(input, ctx) {
     try {
       const s = store(ctx);
-      const existing = s.get(input.name);
+      const existing = s.getRegistered(input.name);
       const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId });
       const language = languageOf(ctx.config);
       return { content: toolText(language, 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };

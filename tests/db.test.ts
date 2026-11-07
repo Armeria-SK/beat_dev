@@ -143,8 +143,9 @@ test('マイグレーション 16: 振り返りの会話が、材料にした会
   } finally { db.close(); }
 });
 
-test('マイグレーション 9〜16 を続けて当てる: main の段階（8）の DB から更新しても、振り返りの会話の材料が埋まり、前からあるすべての会話に外から読んだ印が付く。16 は 15 のあとに足される', t => {
-  assert.equal(MIGRATIONS.length, 16);
+test('マイグレーション 9〜17 を続けて当てる: main の段階（8）の DB から更新しても、振り返りの会話の材料が埋まり、前からあるすべての会話に外から読んだ印が付く。16 は 15 のあとに、17（スキルの登録簿）は 16 のあとに足される', t => {
+  assert.equal(MIGRATIONS.length, 17);
+  assert.match(String(MIGRATIONS[16]), /skill_registry/u);
   assert.match(String(MIGRATIONS[15]), /source_conversation_id/u);
   assert.match(String(MIGRATIONS[14]), /grant_folder/u);
   const path = join(tempDir(t), 'clive.db');
@@ -157,6 +158,6 @@ test('マイグレーション 9〜16 を続けて当てる: main の段階（8�
     const row = db.prepare('SELECT source_conversation_id AS c, ever_tainted AS tainted, permission_mode AS mode FROM conversations WHERE id = ?').get('rv') as { c: string | null; tainted: number; mode: string };
     assert.deepEqual({ ...row }, { c: 'src', tainted: 1, mode: 'normal' });
     assert.equal((db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get('src') as { ever_tainted: number }).ever_tainted, 1);
-    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 16);
+    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 17);
   } finally { db.close(); }
 });
