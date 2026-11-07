@@ -993,6 +993,7 @@ export const ja = {
   'runs.decision.deny': '拒否',
   'runs.by.builtin': '組み込み',
   'runs.by.registry': '道具の登録',
+  'runs.by.truncated': '出力の上限で切れた呼び出し',
   'runs.by.validation': '引数の検査',
   'runs.by.user': 'あなた',
   'runs.by.grant': 'この会話の許可',

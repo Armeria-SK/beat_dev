@@ -50,7 +50,7 @@ export function errorBodyText(body: unknown, language: Lang): string | null {
 }
 
 const WARNING_KEY: Record<string, string> = {
-  max_iterations: 'warn.max_iterations', context_trimmed: 'warn.context_trimmed', partial_discarded: 'warn.partial_discarded', retrying: 'warn.retrying',
+  max_iterations: 'warn.max_iterations', output_truncated: 'warn.output_truncated', context_trimmed: 'warn.context_trimmed', partial_discarded: 'warn.partial_discarded', retrying: 'warn.retrying',
   compacted: 'warn.compacted', compaction_failed: 'warn.compaction_failed', queued_saved: 'warn.queued_saved', queued_not_started: 'warn.queued_not_started', server_truncation_suspected: 'warn.server_truncation',
 };
 

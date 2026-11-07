@@ -159,6 +159,18 @@ test('道具の上限で止まってまとめを書いた実行も、最後の�
   await expectAsked(s, send(s, '続けて'), /前の実行/u);
 });
 
+test('出力の上限で切れた返事で終わった実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
+  const s = await setup(t);
+  const cut: Script = async function* () { yield { type: 'text', delta: '読みました。次は' }; yield { type: 'done', stop: 'max_tokens' as StopReason }; };
+  s.adapter().scripts = [call('web_fetch', FETCH), cut];
+  const first = send(s, 'このページを読んで');
+  await settled(s.app, first);
+  await s.app.engine.wait(first);
+  assert.match(s.app.runs.get(first)!.flags, /output_truncated/u);
+  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
+  await expectAsked(s, send(s, '続けて'), /前の実行/u);
+});
+
 test('履歴の見方: 道具を呼んだ assistant の発言をまたいで、返事の付いていない添付を数える（実行の記録が無くても）', async t => {
   const s = await setup(t);
   const { conversations } = s.app;

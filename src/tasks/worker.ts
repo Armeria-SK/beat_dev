@@ -358,7 +358,10 @@ export class Worker {
     try {
       const result = await started.done;
       if (engine.wasPreempted(started.runId)) { reviews.requeue(job.id); return 'ran'; }
-      if (result.ok) {
+      if (result.ok && result.truncated) {
+        // 切れた振り返りは、最後まで書けていないので使わない（見た発言の位置も進めず、整理の案も出さない。次のきっかけでやり直す）
+        reviews.finish(job.id, 'failed', taskText(language, 'review.truncated'));
+      } else if (result.ok) {
         reviews.finish(job.id, 'done', result.text.trim().slice(0, 1000) || taskText(language, 'review.no_reply'));
         if (job.trigger === 'book_full') this.#proposeTidy(job, result.text, language);
         if (job.conversation_id && lastMessageId) kv.set(`review:upto:${job.conversation_id}`, String(lastMessageId));
@@ -455,7 +458,7 @@ export class Worker {
       // 道具で終わり方を決めずに返事だけ書いた: 進展が無いとみなし、休む時間を延ばす。続いたら相談する
       const strikes = (this.#d.kv.getJson<number>(idleKey) ?? 0) + 1;
       this.#d.kv.setJson(idleKey, strikes);
-      if (result.text.trim()) tasks.update(task.id, { appendNote: taskText(language, 'note.memo', { text: result.text.trim().slice(0, 500) }) }, 'clive', runId);
+      if (result.text.trim()) tasks.update(task.id, { appendNote: taskText(language, result.truncated ? 'note.memo_truncated' : 'note.memo', { text: result.text.trim().slice(0, 500) }) }, 'clive', runId);
       if (strikes >= STAGNATION_LIMIT) {
         this.#d.kv.delete(idleKey);
         const question = taskText(language, 'stuck.question', { title: task.title, strikes });

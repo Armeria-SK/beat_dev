@@ -37,6 +37,7 @@ const ja = {
   'reason.stopped': '止められたので、少し休んでから再開します',
   'reason.failed_retry': '失敗しました（{detail}）。{delay} 分後にもう一度試します',
   'note.memo': 'メモ: {text}',
+  'note.memo_truncated': 'メモ（出力の上限で返事が途中で切れました。続きは書けていません）: {text}',
   'stuck.question': '「{title}」を {strikes} 回進めようとしましたが、進め方が決まりません。どうするか教えてください（やめてよければ取り消してください）',
 
   'title.review': '振り返り: {label}',
@@ -44,6 +45,7 @@ const ja = {
   'title.task': 'タスク: {title}',
   'review.nothing': '振り返る記録がありませんでした',
   'review.no_reply': '（返事なし）',
+  'review.truncated': '振り返りの返事が出力の上限で途中で切れたため、結果は使いませんでした（次の機会にやり直します）',
   'review.local_skipped': 'ローカルのモデルで話した会話で、使えるローカルの裏方モデルが無いため、振り返りを飛ばしました（外のモデルには渡しません）',
 
   'notify.waiting_reminder': '返事を待っています: {title}',
@@ -109,6 +111,7 @@ const en: Record<keyof typeof ja, string> = {
   'reason.stopped': 'It was stopped, so it will rest for a short while and then resume',
   'reason.failed_retry': 'It failed ({detail}). Will try again in {delay} min',
   'note.memo': 'Note: {text}',
+  'note.memo_truncated': 'Note (the reply was cut off by the output limit and is incomplete): {text}',
   'stuck.question': 'I tried to work on "{title}" {strikes} times but could not decide how to proceed. Please tell me what to do (cancel it if you would rather drop it)',
 
   'title.review': 'Review: {label}',
@@ -116,6 +119,7 @@ const en: Record<keyof typeof ja, string> = {
   'title.task': 'Task: {title}',
   'review.nothing': 'There was nothing to review',
   'review.no_reply': '(no reply)',
+  'review.truncated': 'The review reply was cut off by the output limit, so its result was not used (it will be retried next time)',
   'review.local_skipped': 'This conversation used a local model and no local background model is available, so the review was skipped (it is never sent to an external model)',
 
   'notify.waiting_reminder': 'Waiting for your reply: {title}',

@@ -268,3 +268,20 @@ test('API: レビュー・スキル・好奇心・振り返りの記録', async 
   assert.equal(jobs.body.pending, 1);
   assert.equal(jobs.body.jobs[0].triggerLabel, '手動');
 });
+
+test('切れた振り返りは失敗にして、見た発言の位置を進めない（次の機会にやり直す）', async t => {
+  const s = await setup(t);
+  await s.app.worker.tick();
+  s.adapter().scripts.push(reply('はい'));
+  await s.chat('c1', 'コーヒーの話');
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.adapter().scripts.push(async function* () {
+    yield { type: 'text', delta: '振り返ると、ユーザーは' };
+    yield { type: 'done', stop: 'max_tokens' as StopReason };
+  });
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const job = s.app.reviews.list()[0]!;
+  assert.equal(job.status, 'failed');
+  assert.match(job.note ?? '', /出力の上限で途中で切れた/u);
+  assert.equal(s.app.kv.get('review:upto:c1'), undefined, '切れた振り返りで、見た発言の位置を進めない');
+});

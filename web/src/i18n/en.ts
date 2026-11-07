@@ -996,6 +996,7 @@ export const en: Dict = {
   'runs.decision.deny': 'Denied',
   'runs.by.builtin': 'Built-in',
   'runs.by.registry': 'Tool registry',
+  'runs.by.truncated': 'Call cut off by the output limit',
   'runs.by.validation': 'Argument check',
   'runs.by.user': 'You',
   'runs.by.grant': 'Granted for this chat',
