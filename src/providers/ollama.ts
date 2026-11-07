@@ -43,9 +43,10 @@ export function toOllamaMessages(system: string, messages: readonly ChatMessage[
 }
 
 function mapDone(reason: unknown, hadTools: boolean): StopReason {
+  // 出力の上限で切れたときは、ツール呼び出しがあっても max_tokens（切れた呼び出しを動かさないため。OpenAI 互換と同じ）
+  if (reason === 'length') return 'max_tokens';
   if (hadTools) return 'tool_use';
   if (reason === 'stop') return 'end_turn';
-  if (reason === 'length') return 'max_tokens';
   return 'other';
 }
 

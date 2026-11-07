@@ -124,7 +124,7 @@ interface CompactionState { count: number; failed: boolean; summarized: number; 
 type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route; upstream?: string };
 
 type CallResult =
-  | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; estimate: number; language: Language }
+  | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; truncated: boolean; estimate: number; language: Language }
   | { ok: false; cancelled: boolean; partial: string; failure: Failure; route?: Route };
 
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -256,12 +256,12 @@ export class ChatEngine {
     return list?.tainted === true && checklistInjects(list);
   }
 
-  // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
+  // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめでも、出力の上限で切れた返事でもない）の印は持ち越さない
   #previousRunCarriesTaint(conversationId: string): boolean {
     const last = this.#d.runs.latestChat(conversationId);
     if (!last || last.tainted !== 1) return false;
     let wrappedUp = true;
-    try { wrappedUp = (JSON.parse(last.flags) as string[]).includes('max_iterations'); } catch { }
+    try { const found = JSON.parse(last.flags) as string[]; wrappedUp = found.includes('max_iterations') || found.includes('output_truncated'); } catch { }
     return !(last.ok === 1 && !wrappedUp);
   }
 
@@ -545,6 +545,8 @@ export class ChatEngine {
     const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0 };
     let index = 0;
     let invalidStreak = 0;
+    // 切れた呼び出しが続けて何回目か（invalidStreak とは別に数える）
+    let truncatedStreak = 0;
     let lastEstimate = 0;
     let lastRoute: Route = chain[0]!;
     const policy = buildPolicy(config, d.paths);
@@ -581,7 +583,7 @@ export class ChatEngine {
       if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted, localOnly: ctx.localOnly === true });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
-      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop };
+      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, ...(stop === 'max_tokens' ? { truncated: true as const } : {}) };
     };
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
@@ -608,6 +610,17 @@ export class ChatEngine {
       call.text = call.text.replace(/^\s+/u, '');
 
       replyLanguage = call.language;
+      // 出力の上限で切れた返事: 黙って成功にしない。お知らせと実行の印を残し、付いていたツール呼び出しは動かさない
+      // （切れた元の文字は記録の入力欄にだけ残し、会話には {} で保存する。次の呼び出しにも、提供元に断られる切れた文字を送らない）
+      const cutRaw = new Map<string, string>();
+      if (call.truncated) {
+        if (!flags.includes('output_truncated')) {
+          flags.push('output_truncated');
+          d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_truncated', message: engineText(languageOf(config), 'warn.output_truncated') });
+        }
+        for (const c of call.toolCalls) cutRaw.set(c.id, c.raw ?? JSON.stringify(c.arguments ?? null));
+        call.toolCalls = call.toolCalls.map(c => ({ id: c.id, name: c.name, arguments: {} }));
+      }
       const saved = d.conversations.append(conversationId, { role: 'assistant', content: call.text, ...(call.toolCalls.length ? { toolCalls: call.toolCalls } : {}) }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
       if (!call.toolCalls.length) return finishOk(call.text, call.stop);
@@ -628,7 +641,7 @@ export class ChatEngine {
           lastUserRequest: () => this.#lastUserRequest(conversationId),
           conversationTainted: () => d.conversations.everTainted(conversationId),
           conversationAutoRead: () => d.conversations.everAutoRead(conversationId),
-        });
+        }, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
         recordTaint();
         recordAutoRead();
         if (outcome.invalidArguments) invalidThisRound++;
@@ -645,6 +658,11 @@ export class ChatEngine {
       if (invalidStreak >= MAX_INVALID_STREAK) {
         const language = languageOf(config);
         return finishFail({ kind: 'provider_error', message: engineText(language, 'tool.invalid_streak', { count: MAX_INVALID_STREAK }), code: 'engine.tool.invalid_streak', params: { count: MAX_INVALID_STREAK }, retryable: false, detail: { reason: 'prompt_exceeds', hint: engineText(language, 'tool.invalid_streak_hint') } });
+      }
+      // 切れが続くなら、同じことを繰り返させず止める（上限を大きくする案内。invalid_streak の案内は出さない）
+      truncatedStreak = cutRaw.size ? truncatedStreak + 1 : 0;
+      if (truncatedStreak >= MAX_INVALID_STREAK) {
+        return finishFail({ kind: 'provider_error', message: engineText(languageOf(config), 'tool.truncated_streak', { count: MAX_INVALID_STREAK }), code: 'engine.tool.truncated_streak', params: { count: MAX_INVALID_STREAK }, retryable: false });
       }
     }
     flags.push('max_iterations');
@@ -850,7 +868,8 @@ export class ChatEngine {
         }
         this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
         if (effort && !p.flags.includes(`effort:${effort}`)) p.flags.push(`effort:${effort}`);
-        return { ok: true, index, text, toolCalls, usage, stop: toolCalls.length ? 'tool_use' : stop, estimate: fitted.estimate.tokens, language };
+        // truncated は書き換える前の停止理由で決める（ツール呼び出しが付いても、出力の上限で切れた返事は切れたまま）
+        return { ok: true, index, text, toolCalls, usage, stop: toolCalls.length ? 'tool_use' : stop, truncated: stop === 'max_tokens', estimate: fitted.estimate.tokens, language };
       }
     }
     return { ok: false, cancelled: false, partial: '', failure: last };
