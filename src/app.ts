@@ -26,7 +26,8 @@ import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.t
 import { historyRead, historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { shellRun } from './tools/builtin/shell.ts';
 import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
-import { Notifications } from './notify/notifications.ts';
+import { NotifyChannels } from './notify/channels.ts';
+import { Notifications, type Notification, type NotifyEvent } from './notify/notifications.ts';
 import { CuriosityStore } from './curiosity/store.ts';
 import { ReviewJobs } from './memory/review.ts';
 import { curiosityAdd, curiosityList, curiosityUpdate } from './tools/builtin/curiosity.ts';
@@ -100,6 +101,7 @@ export class App {
   readonly memory: MemoryStore;
   readonly tasks: TaskStore;
   readonly notifications: Notifications;
+  readonly channels: NotifyChannels;
   readonly reviews: ReviewJobs;
   readonly curiosity: CuriosityStore;
   readonly skills: SkillStore;
@@ -145,7 +147,7 @@ export class App {
         // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
         const task = this.tasks.byConversation(approvalShownIn(v));
         if (task) {
-          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}` });
+          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}`, localOnly: task.local_only === 1 });
         }
       } else {
         this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: approvalShownIn(v), approvalId: v.id, outcome: event.outcome });
@@ -154,7 +156,7 @@ export class App {
     });
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
-    this.notifications = new Notifications(this.db, now);
+    this.notifications = new Notifications(this.db, now, this.log);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
     this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()));
@@ -191,12 +193,23 @@ export class App {
       this.worker.poke();
     };
     this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
-    this.notifications.onNotify = notification => this.bus.publish({ type: 'notification', notification });
+    this.notifications.listen(event => {
+      // 画面（SSE）へは、外へ送らない印（noForward）を載せずに流す
+      const notification: Notification = { ...event };
+      delete (notification as NotifyEvent).noForward;
+      this.bus.publish({ type: 'notification', notification });
+    });
+    // 外の送り先（webhook）へも送る。2 本目の聞き手（待たない。送り先が無ければ何もしない）。外へ送らない通知（noForward）は channels 側で除く
+    this.channels = new NotifyChannels({
+      config: () => this.config(), env: this.env, fetch: options.fetch, now, log: this.log, kv: this.kv,
+      alert: input => { this.notifications.notify(input); },
+    });
+    this.notifications.listen(event => { void this.channels.deliver(event); });
     this.notifications.onSettled = ids => this.bus.publish({ type: 'notification.read', ids, unread: this.notifications.unread() });
     this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
-      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
+      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}`, localOnly: true });
     };
     this.engine.onRunEnd = run => {
       // 道具を多く使った重い会話の後に振り返る

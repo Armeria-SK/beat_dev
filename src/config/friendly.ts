@@ -16,6 +16,7 @@ const PATTERN_ENTRIES: ReadonlyArray<readonly [string | undefined, ConfigMessage
   [AppConfig.properties.profile.properties.color.pattern, 'pattern.color'],
   [AppConfig.properties.worker.properties.quietStart.pattern, 'pattern.time'],
   [AppConfig.properties.worker.properties.quietEnd.pattern, 'pattern.time'],
+  [AppConfig.properties.notify.properties.channels.items.properties.id.pattern, 'pattern.notify_id'],
 ];
 export const PATTERN_MESSAGES: ReadonlyMap<string, ConfigMessageKey> = new Map(PATTERN_ENTRIES.flatMap(([pattern, key]) => (pattern === undefined ? [] : [[pattern, key] as const])));
 
@@ -40,6 +41,7 @@ export function friendlyIssue(error: ValueError): FriendlyIssue | undefined {
     }
     case ValueErrorType.ArrayMinItems: return finite(schema.minItems) ? { code: 'array.min_items', params: { min: schema.minItems } } : undefined;
     case ValueErrorType.ArrayMaxItems: return finite(schema.maxItems) ? { code: 'array.max_items', params: { max: schema.maxItems } } : undefined;
+    case ValueErrorType.ArrayUniqueItems: return { code: 'array.unique', params: {} };
     case ValueErrorType.String: return { code: 'type.string', params: {} };
     case ValueErrorType.Integer: return { code: 'type.integer', params: {} };
     case ValueErrorType.Number: return { code: 'type.number', params: {} };

@@ -35,6 +35,13 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'provider-key': return t('access.providerKey', a.id, a.env);
     case 'provider-key-send': return t('access.providerKeySend', a.id, a.url);
     case 'searxng-url': return t('access.searxng', a.url);
+    case 'notify-channel-added': return t('access.notifyAdded', a.id);
+    case 'notify-channel-target': return t('access.notifyTarget', a.id);
+    case 'notify-channel-body': return t('access.notifyBody', a.id);
+    case 'notify-channel-kinds': return t('access.notifyKinds', a.id, a.kinds.map(k => t(`notifications.kind.${k as 'info'}`)).join(', '));
+    case 'notify-channel-enabled': return t('access.notifyEnabled', a.id);
+    case 'notify-public-url': return t('access.notifyPublicUrl', a.url);
+    case 'limit-raised': return t('access.limitRaised', a.key, a.from, a.to);
     case 'tool-policy-loosened': return t('access.toolPolicy', a.tool, t(POLICY_LABEL[a.from]), t(POLICY_LABEL[a.to]));
   }
 }

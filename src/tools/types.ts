@@ -98,7 +98,7 @@ export interface ToolContext {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
-    notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown) | undefined;
+    notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;

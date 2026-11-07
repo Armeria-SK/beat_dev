@@ -39,7 +39,16 @@ export type Access =
   | { kind: 'provider-key-send'; id: string; url: string }
   | { kind: 'searxng-url'; url: string }
   // 道具ごとの方針を緩める（止める → 承認を求める / 承認なし、承認を求める → 承認なし）
-  | { kind: 'tool-policy-loosened'; tool: string; from: ToolPolicy; to: ToolPolicy };
+  | { kind: 'tool-policy-loosened'; tool: string; from: ToolPolicy; to: ToolPolicy }
+  // 外への通知（webhook）: 送り先を足す・変える / 本文も送る / 送る種類を増やす / 止めていたものを動かす / 通知の中のリンクの宛先を決める
+  | { kind: 'notify-channel-added'; id: string }
+  | { kind: 'notify-channel-target'; id: string }
+  | { kind: 'notify-channel-body'; id: string }
+  | { kind: 'notify-channel-kinds'; id: string; kinds: string[] }
+  | { kind: 'notify-channel-enabled'; id: string }
+  | { kind: 'notify-public-url'; url: string }
+  // 歯止めの数（notify.limits / mcp.limits）を、緩む向きに変える
+  | { kind: 'limit-raised'; key: string; from: number; to: number };
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []);
 const added = (before: readonly string[], after: readonly string[]): string[] => after.filter(x => !before.includes(x));
@@ -120,6 +129,56 @@ function toolPolicyChanges(before: Config, after: Config): Access[] {
   return names.flatMap(name => toolPolicyLoosened(name, was[name], now[name]) ?? []);
 }
 
+// 通知の送り先の変更のうち、広がるもの。ID で突き合わせる。送り先は、URL と token の環境変数名・種類（kind）が変わったときに数える（値そのものは設定に無い）
+function notifyChanges(before: Config, after: Config): Access[] {
+  const list = (config: Config): Array<Record<string, any>> => {
+    const channels = obj(config.notify).channels;
+    return Array.isArray(channels) ? channels.filter((x): x is Record<string, any> => typeof x === 'object' && x !== null) : [];
+  };
+  const old = new Map(list(before).map(c => [String(c.id), c]));
+  const out: Access[] = [];
+  for (const channel of list(after)) {
+    const id = String(channel.id ?? '');
+    const was = old.get(id);
+    if (!was) {
+      // 足すときも、本文を送る・送る種類は並べて見せる（足した先へ何が行くかを確かめられるように）
+      out.push({ kind: 'notify-channel-added', id });
+      if (channel.includeBody === true) out.push({ kind: 'notify-channel-body', id });
+      const first = strings(channel.kinds);
+      if (first.length > 0) out.push({ kind: 'notify-channel-kinds', id, kinds: first });
+      continue;
+    }
+    if (channel.urlEnv !== was.urlEnv || channel.tokenEnv !== was.tokenEnv || channel.kind !== was.kind) out.push({ kind: 'notify-channel-target', id });
+    if ((was.includeBody ?? false) === false && (channel.includeBody ?? false) === true) out.push({ kind: 'notify-channel-body', id });
+    const kinds = added(strings(was.kinds), strings(channel.kinds));
+    if (kinds.length > 0) out.push({ kind: 'notify-channel-kinds', id, kinds });
+    if ((was.enabled ?? true) === false && (channel.enabled ?? true) === true) out.push({ kind: 'notify-channel-enabled', id });
+  }
+  const url = obj(after.notify).publicBaseUrl;
+  if (typeof url === 'string' && url !== '' && url !== obj(before.notify).publicBaseUrl) out.push({ kind: 'notify-public-url', url });
+  return out;
+}
+
+// limits の数が増える = 歯止めが緩む（failsBeforeAlert も、増えると警告が遅れるので緩む向き）。両方に数があるものだけ比べる
+function limitChanges(before: Config, after: Config): Access[] {
+  const out: Access[] = [];
+  for (const root of ['notify', 'mcp']) {
+    const was = obj(obj(before[root]).limits);
+    const now = obj(obj(after[root]).limits);
+    for (const name of Object.keys(now).sort()) {
+      if (typeof was[name] === 'number' && typeof now[name] === 'number' && now[name] > was[name]) out.push({ kind: 'limit-raised', key: `${root}.${name}`, from: was[name], to: now[name] });
+    }
+  }
+  return out;
+}
+
+// 通知の送り先の URL を入れ直す（設定の保存とは別の操作）ときの確かめ。通知の中身が、新しい宛先へ送られるようになる。token は同じ宛先に付くだけなので数えない
+export function secretEntryAccess(slot: { id: string; field: 'url' | 'token' }, config: Config): Access[] {
+  if (slot.field !== 'url') return [];
+  const channels = obj(config.notify).channels;
+  return Array.isArray(channels) && channels.some(c => obj(c).id === slot.id) ? [{ kind: 'notify-channel-target', id: slot.id }] : [];
+}
+
 export function accessWidening(before: Config, after: Config): Access[] {
   const out: Access[] = [...wideningChanges(foldersFromConfig(before), foldersFromConfig(after))];
   const bt = obj(before.tools);
@@ -140,6 +199,7 @@ export function accessWidening(before: Config, after: Config): Access[] {
   out.push(...hookChanges(before, after, 'preToolUse'), ...hookChanges(before, after, 'postToolUse'));
   out.push(...providerChanges(before, after));
   out.push(...toolPolicyChanges(before, after));
+  out.push(...notifyChanges(before, after), ...limitChanges(before, after));
   const searxHost = hostOf(obj(at.web).searxngUrl);
   const searxChanged = searxHost !== hostOf(obj(bt.web).searxngUrl) || ((obj(bt.web).search ?? 'duckduckgo') !== 'searxng' && (obj(at.web).search ?? 'duckduckgo') === 'searxng');
   if (searxHost !== null && !isLoopbackHost(searxHost) && searxChanged) out.push({ kind: 'searxng-url', url: String(obj(at.web).searxngUrl) });

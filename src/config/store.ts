@@ -4,7 +4,8 @@ import { Value } from '@sinclair/typebox/value';
 import { configText } from '../shared/messages/config.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
-import { checkBaseUrl } from '../shared/url.ts';
+import { checkBaseUrl, isSafeOutboundUrl } from '../shared/url.ts';
+import { takenKeyEnvs } from '../shared/provider-key.ts';
 import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
 import { friendlyIssue } from './friendly.ts';
 import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
@@ -48,6 +49,7 @@ export function defaultConfig(): AppConfig {
     profile: { name: 'Clive', shape: 'pebble', color: '#61B8A5', motion: 'auto' },
     worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, maxParallel: 1, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, remindAfterHours: 12, curiosityPerDay: 2 },
     memory: { review: true, reviewIdleMinutes: 30, reviewAfterToolCalls: 8 },
+    notify: { channels: [], publicBaseUrl: '', limits: { maxChannels: 4, maxSendsPerHour: 30, timeoutMs: 5000, retries: 1, failsBeforeAlert: 3 } },
   };
 }
 
@@ -99,7 +101,32 @@ function findings(config: AppConfig): Finding[] {
     try { if (new URL(origin).origin !== origin) add('server.origins', `「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
     catch { add('server.origins', `「${origin}」が URL として読めません`); }
   }
+  notifyFindings(config, add);
   return found;
+}
+
+// 外の送り先（notify）の内容の検査。値の入る環境変数がプロバイダの鍵と重なる設定は断る（鍵を外の送り先へ渡す形を作らせない）
+function notifyFindings(config: AppConfig, add: (path: string, message: string, label?: string) => void): void {
+  const { channels, publicBaseUrl, limits } = config.notify;
+  if (channels.length > limits.maxChannels) add('notify.channels', `送り先は ${limits.maxChannels} 件までです（今は ${channels.length} 件。notify.limits.maxChannels で変えられます）`);
+  if (publicBaseUrl !== '' && !isSafeOutboundUrl(publicBaseUrl)) add('notify.publicBaseUrl', 'https か、この PC の http（127.0.0.1 など）にしてください');
+  const providerEnvs = new Set(takenKeyEnvs(config.providers, ''));
+  providerEnvs.add('ANTHROPIC_API_KEY');
+  const ids = new Set<string>();
+  const used = new Map<string, string>();
+  for (const channel of channels) {
+    if (ids.has(channel.id)) add(`notify.channels.${channel.id}.id`, `ID「${channel.id}」が重複しています`, 'notify.channels');
+    ids.add(channel.id);
+    const envs: Array<[string, string | undefined]> = [['urlEnv', channel.urlEnv], ['tokenEnv', channel.tokenEnv]];
+    for (const [field, name] of envs) {
+      if (name === undefined) continue;
+      const where = `notify.channels.${channel.id}.${field}`;
+      if (providerEnvs.has(name)) add(where, `環境変数「${name}」はプロバイダの鍵に使われています。別の名前にしてください`);
+      const other = used.get(name);
+      if (other !== undefined) add(where, `環境変数「${name}」は ${other} でも使われています。欄ごとに別の名前にしてください`);
+      else used.set(name, `${channel.id}.${field}`);
+    }
+  }
 }
 
 export function semanticProblems(config: AppConfig): string[] {

@@ -359,4 +359,8 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE engine_runs ADD COLUMN parent_run_id TEXT;
   CREATE INDEX idx_conversations_parent_run ON conversations (parent_run_id) WHERE parent_run_id IS NOT NULL;
   `,
+  // 19: 通知が「手元のモデルだけで扱う（localOnly）仕事から出た」ことを覚える。外の送り先（webhook）へは、この印のある通知の題・本文を送らない。前からある通知は 0（印なし）
+  `
+  ALTER TABLE notifications ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
