@@ -119,7 +119,7 @@ export interface NewTask {
   repeat?: { freq: string; values: Record<string, string> };
 }
 
-export interface SkillSummary { name: string; description: string; uses: number; lastUsedAt: number | null; updatedAt: number }
+export interface SkillSummary { name: string; description: string; uses: number; lastUsedAt: number | null; updatedAt: number; registered: boolean }
 export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null; status: string; created_at: number;
   current: { description: string; body: string } | null;
@@ -227,6 +227,7 @@ export const api = {
   skills: () => call<{ skills: SkillSummary[]; dir: string }>('/api/skills'),
   skill: (name: string) => call<{ skill: SkillSummary & { body: string } }>(`/api/skills/${encodeURIComponent(name)}`),
   saveSkill: (name: string, description: string, body: string) => call(`/api/skills/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ description, body }) }),
+  registerSkill: (name: string) => call(`/api/skills/${encodeURIComponent(name)}/register`, { method: 'POST', body: '{}' }),
   deleteSkill: (name: string) => call(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   curiosity: (all = false) => call<{ items: CuriosityItem[] }>(`/api/curiosity${all ? '?all=1' : ''}`),
   addCuriosity: (topic: string, why?: string) => call('/api/curiosity', { method: 'POST', body: JSON.stringify({ topic, ...(why ? { why } : {}) }) }),

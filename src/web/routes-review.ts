@@ -61,6 +61,10 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const text = requireString(body, 'body', { max: 20_000 })!;
     try { sendJson(res, 200, { skill: app.skills.write({ name: params[0]!, description, body: text }) }); } catch (error) { domainFailure(error); }
   });
+  router.add('POST', '/api/skills/:name/register', ({ res, params }) => {
+    if (!app.skills.get(params[0]!)) throw problem(404, 'not_found', 'skill_missing');
+    try { sendJson(res, 200, { skill: app.skills.register(params[0]!) }); } catch (error) { domainFailure(error); }
+  });
   router.add('DELETE', '/api/skills/:name', ({ res, params }) => {
     try { app.skills.remove(params[0]!); sendJson(res, 200, { ok: true }); } catch (error) { domainFailure(error); }
   });
