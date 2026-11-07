@@ -136,7 +136,7 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-interface Active { runId: string; conversationId: string; kind: RunKind; taskId?: string; providers: Set<string>; controller: AbortController; done: Promise<EngineResult> }
+interface Active { runId: string; conversationId: string; kind: RunKind; taskId?: string; providers: Set<string>; primary: string; controller: AbortController; done: Promise<EngineResult> }
 
 export class ChatEngine {
   readonly #d: ChatEngineDeps;
@@ -384,6 +384,16 @@ export class ChatEngine {
 
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
 
+  // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
+  // 数えるのは、動いている裏の実行の「最初に使う提供元」（道具を動かしている最中で limiter の枠を返しているものも含む）。使えるモデルが無いときは true（始めて、いつもの失敗の道に任せる）
+  backgroundHasRoom(localOnly = false): boolean {
+    const first = this.#chain('background', null, localOnly).usable[0];
+    if (!first) return true;
+    let running = 0;
+    for (const active of this.#active.values()) if (active.kind !== 'chat' && active.primary === first.provider.id) running += 1;
+    return running < first.provider.maxParallel;
+  }
+
   // 手元のモデルで話した会話の振り返りに使える、手元の裏方モデルがあるか
   localReviewAvailable(): boolean { return this.#chain('background', null, true).usable.length > 0; }
 
@@ -519,7 +529,7 @@ export class ChatEngine {
         }
         try { this.onRunEnd?.({ runId, conversationId, kind }); } catch (error) { this.#d.log?.(`[ERROR] onRunEnd: ${(error as Error).message}`); }
       });
-    this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), controller, done });
+    this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), primary: chain[0]!.provider.id, controller, done });
   }
 
   // モデルに渡す道具の一覧。外す条件はここだけ（maxTools の数える前に外す）: 振り返りで禁止の道具（reviewAllows: 効果が write・exec・network のもの、ファイルも書く道具）・この実行で禁止された道具・持ち主が「止める」にした道具（tools.policies）。

@@ -307,11 +307,14 @@ export class TaskStore {
     return this.#changed(id);
   }
 
-  pickNext(options: { allowSelf: boolean }): Task | undefined {
+  // accept: 並べた順に見て、これを通った最初のもの（提供元が満杯のタスクを飛ばして次を見るため）
+  pickNext(options: { allowSelf: boolean; accept?: (task: Task) => boolean }): Task | undefined {
     const now = this.#now();
     const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
-    return this.#db.prepare(`SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins}
-      ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at) LIMIT 1`).get(now) as Task | undefined;
+    const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins}
+      ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at)`;
+    if (!options.accept) return this.#db.prepare(`${sql} LIMIT 1`).get(now) as Task | undefined;
+    return (this.#db.prepare(sql).all(now) as unknown as Task[]).find(options.accept);
   }
 
   nextWakeAt(options: { allowSelf: boolean }): number | undefined {

@@ -131,7 +131,8 @@ export class Worker {
   readonly #d: WorkerDeps;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #nextWakeAt: number | undefined;
-  #running: WorkerRunning | undefined;
+  // 動いている裏の実行（キーは runId）。入れた順 = 始めた順。worker.maxParallel 本まで
+  readonly #running = new Map<string, WorkerRunning>();
   #forced = new Set<string>();
   #ticking = false;
   #stopped = true;
@@ -171,7 +172,8 @@ export class Worker {
   }
 
   stopTask(taskId: string): boolean {
-    return this.#running?.kind === 'task' && this.#running.taskId === taskId ? this.#d.engine.stop(this.#running.runId) : false;
+    for (const run of this.#running.values()) if (run.kind === 'task' && run.taskId === taskId) return this.#d.engine.stop(run.runId);
+    return false;
   }
 
   poke(): void {
@@ -205,16 +207,24 @@ export class Worker {
     const c = this.#d.config();
     return {
       enabled: c.worker.enabled, autonomy: c.worker.autonomy, paused: this.paused, quiet: this.quiet(),
-      running: this.#running ?? null, nextWakeAt: this.#nextWakeAt ?? null,
+      running: [...this.#running.values()][0] ?? null, runningAll: [...this.#running.values()], maxParallel: c.worker.maxParallel, nextWakeAt: this.#nextWakeAt ?? null,
       runsLastHour: this.runsLastHour(), maxRunsPerHour: c.worker.maxRunsPerHour,
     };
   }
 
   async tick(): Promise<TickResult> {
-    if (this.#ticking || this.#running) return 'busy';
+    const c = this.#d.config();
+    // 選ぶ部分は 1 本ずつ（#ticking）。実行を始めたら（await の前に）外して、枠が残っていれば次を選べるようにする
+    if (this.#ticking || this.#running.size >= c.worker.maxParallel) return 'busy';
     this.#ticking = true;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      this.#ticking = false;
+      if (this.#running.size < this.#d.config().worker.maxParallel) this.poke();
+    };
     try {
-      const c = this.#d.config();
       const now = this.#now();
       const { tasks } = this.#d;
       const reschedule = (at?: number) => {
@@ -237,10 +247,15 @@ export class Worker {
       if (this.#d.engine.chatting) { reschedule(now + 60_000); return 'busy'; }
       // 「今すぐ実行」を頼まれたものは、1時間の上限より先に実行する（上限は、ひとりでに動く分の費用を抑えるためのもの）
       let task: Task | undefined;
+      const roomFor = (t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
       for (const id of [...this.#forced]) {
-        this.#forced.delete(id);
         const forced = tasks.get(id);
-        if (forced?.status === 'ready' && forced.attempts < forced.max_attempts) { task = forced; break; }
+        if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
+        // 提供元が満杯のあいだは覚えておく（空けば、終わった実行の onRunEnd で拾う）
+        if (!roomFor(forced)) continue;
+        this.#forced.delete(id);
+        task = forced;
+        break;
       }
       if (!task && this.runsLastHour() >= c.worker.maxRunsPerHour) {
         const idleSelf = c.worker.autonomy && !this.quiet() && now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
@@ -257,20 +272,23 @@ export class Worker {
 
       const idleEnough = now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
       const allowSelf = c.worker.autonomy && !this.quiet() && idleEnough;
-      task ??= tasks.pickNext({ allowSelf });
+      task ??= tasks.pickNext({ allowSelf, accept: roomFor });
+      // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りや好奇心にも回さず）、終わった実行の onRunEnd を待つ
+      // （poke が来ない道〔止まっている・自動の予定が無い〕に備えて、保険の予定は 1 分後に置く。終わった実行の poke はそれより早い）
+      if (!task && (this.#forced.size > 0 || tasks.pickNext({ allowSelf }))) { reschedule(now + 60_000); return 'busy'; }
       // 実行するタスクが無ければ、振り返り → 好奇心の順に見る
       const job = !task && c.memory.review ? this.#d.reviews?.next() : undefined;
       if (job) {
-        const outcome = await this.#review(job);
-        reschedule(now);
+        const outcome = await this.#review(job, release);
+        reschedule(outcome === 'busy' ? now + 60_000 : now);
         return outcome;
       }
       if (!task && allowSelf) task = this.#spawnCuriosity(c, now);
       if (!task) { reschedule(tasks.nextWakeAt({ allowSelf })); return 'idle'; }
-      const outcome = await this.#run(task);
+      const outcome = await this.#run(task, release);
       reschedule(now);
       return outcome;
-    } finally { this.#ticking = false; }
+    } finally { if (!released) this.#ticking = false; }
   }
 
   #detectReviewTriggers(c: AppConfig, now: number): void {
@@ -310,7 +328,7 @@ export class Worker {
     return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language });
   }
 
-  async #review(job: ReviewJob): Promise<TickResult> {
+  async #review(job: ReviewJob, release: () => void): Promise<TickResult> {
     const { reviews, conversations, engine, kv } = this.#d;
     if (!reviews) return 'idle';
     const prompt = this.#reviewInput(job);
@@ -320,6 +338,8 @@ export class Worker {
     const local = isLocalPinned(this.#d.config(), job.conversation_id ? conversations.get(job.conversation_id)?.model_id : null) || (job.task_id !== null && this.#d.tasks.get(job.task_id)?.local_only === 1);
     const skipLocal = () => { reviews.finish(job.id, 'done', taskText(language, 'review.local_skipped')); return 'idle' as const; };
     if (local && !engine.localReviewAvailable()) return skipLocal();
+    // 先に使う提供元が満杯なら、まだ claim せずに待つ（終わった実行の onRunEnd で呼び直される）
+    if (!engine.backgroundHasRoom(local)) return 'busy';
     const lastMessageId = job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
     // 止められて・再起動でやり直す振り返りは、前の回の振り返りの会話に続きを書く（新しく作ると、前の回の会話が記録から外れる）。会話は作るときに材料も覚える
     const source = { conversationId: job.conversation_id, taskId: job.task_id };
@@ -333,7 +353,8 @@ export class Worker {
       return 'no_model';
     }
     reviews.claim(job.id, started.runId, conversation.id);
-    this.#running = { kind: 'review', taskId: job.task_id, runId: started.runId, title: taskText(language, 'title.review_running', { label: TRIGGER_TEXT[language][job.trigger] }) };
+    this.#running.set(started.runId, { kind: 'review', taskId: job.task_id, runId: started.runId, title: taskText(language, 'title.review_running', { label: TRIGGER_TEXT[language][job.trigger] }) });
+    release();
     try {
       const result = await started.done;
       if (engine.wasPreempted(started.runId)) { reviews.requeue(job.id); return 'ran'; }
@@ -345,7 +366,7 @@ export class Worker {
         // 振り返りは再試行しない（失敗が続いて費用が膨らむのを防ぐ）。次のきっかけでまた積まれる
         reviews.finish(job.id, 'failed', result.errorMessage);
       }
-    } finally { this.#running = undefined; }
+    } finally { this.#running.delete(started.runId); }
     return 'ran';
   }
 
@@ -373,7 +394,7 @@ export class Worker {
     return task.status === 'ready' ? task : undefined;
   }
 
-  async #run(task: Task): Promise<TickResult> {
+  async #run(task: Task, release: () => void): Promise<TickResult> {
     const { tasks, conversations, engine } = this.#d;
     const c = this.#d.config();
     const language = languageOf(c);
@@ -391,12 +412,13 @@ export class Worker {
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-tasks' });
       return 'no_model';
     }
-    this.#running = { kind: 'task', taskId: task.id, runId: started.runId, title: task.title };
+    this.#running.set(started.runId, { kind: 'task', taskId: task.id, runId: started.runId, title: task.title });
+    release();
     tasks.event(task.id, 'run', 'worker', null, started.runId);
     try {
       const result = await started.done;
       this.#finalize(task, result, started.control.value, started.runId);
-    } finally { this.#running = undefined; }
+    } finally { this.#running.delete(started.runId); }
     return 'ran';
   }
 

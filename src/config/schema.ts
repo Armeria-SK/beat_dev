@@ -134,6 +134,7 @@ export const AppConfig = Type.Object({
     enabled: Type.Boolean({ default: true }),
     autonomy: Type.Boolean({ default: false }),
     maxRunsPerHour: Type.Integer({ minimum: 1, maximum: 120, default: 6 }),
+    maxParallel: Type.Integer({ minimum: 1, maximum: 4, default: 1 }),
     idleMinutes: Type.Integer({ minimum: 0, maximum: 1440, default: 5 }),
     quietStart: Type.String({ default: '', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$|^$' }),
     quietEnd: Type.String({ default: '', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$|^$' }),

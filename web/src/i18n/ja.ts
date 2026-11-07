@@ -709,6 +709,7 @@ export const ja = {
   'settings.worker.autonomy': '自発行動',
   'settings.worker.autonomyDesc': 'オフのとき、Clive が自分で作ったタスクは動きません。予定とあなたが頼んだタスクは動きます',
   'settings.worker.maxPerHour': '1時間の上限',
+  'settings.worker.maxParallel': '同時に動かす数',
   'settings.worker.idle': '話しかけてから自発行動を始めるまで',
   'settings.worker.quiet': '自発行動をしない時間帯',
   'settings.worker.quietDesc': '両方を空にすると、時間帯を決めません',

@@ -712,6 +712,7 @@ export const en: Dict = {
   'settings.worker.autonomy': 'Autonomous work',
   'settings.worker.autonomyDesc': 'When off, tasks Clive created on its own do not run. Scheduled tasks and tasks you asked for still do',
   'settings.worker.maxPerHour': 'Runs per hour',
+  'settings.worker.maxParallel': 'Runs at once',
   'settings.worker.idle': 'Wait after you last talk before starting autonomous work',
   'settings.worker.quiet': 'Hours with no autonomous work',
   'settings.worker.quietDesc': 'Leave both empty for no quiet hours',
