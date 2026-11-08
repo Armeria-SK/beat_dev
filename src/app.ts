@@ -275,6 +275,8 @@ export class App {
 
   // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
   #registerExistingSkills(): void {
+    const dropped = this.skills.pruneMissing();
+    if (dropped) this.log(`[INFO] フォルダの無いスキル ${dropped} 件を、登録から外しました（同じ名前でフォルダを置き直しても、画面の「登録する」までは使われません）`);
     if (this.kv.get('skills:registry-seeded')) return;
     const added = this.skills.registerExisting();
     this.kv.set('skills:registry-seeded', String(Date.now()));

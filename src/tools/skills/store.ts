@@ -72,6 +72,7 @@ export class SkillStore {
 
   // フォルダにあるスキルを全部返す（画面のため。registered で、持ち主が認めたものかを分ける）
   list(): Skill[] {
+    this.pruneMissing();
     if (!existsSync(this.#dir)) return [];
     const skills: Skill[] = [];
     for (const entry of readdirSync(this.#dir, { withFileTypes: true })) {
@@ -85,7 +86,7 @@ export class SkillStore {
   get(name: string): Skill | undefined {
     if (!SKILL_NAME.test(name)) return undefined;
     const path = join(this.#dir, name, 'SKILL.md');
-    if (!existsSync(path)) return undefined;
+    if (!existsSync(path)) { this.#unmark(name); return undefined; }
     const parsed = parseSkillFile(readFileSync(path, 'utf8'));
     const usage = this.#db.prepare('SELECT uses, last_used_at FROM skill_usage WHERE name = ?').get(name) as { uses: number; last_used_at: number | null } | undefined;
     return {
@@ -94,9 +95,21 @@ export class SkillStore {
     };
   }
 
-  // 登録している = その名前の行がある。登録した名前は、あとで書き直されても（承認・画面の保存・file_write・シェル）そのまま使う
+  // 登録している = その名前の行があり、フォルダに SKILL.md がある。登録した名前は、あとで書き直されても（承認・画面の保存・file_write・シェル）そのまま使う。
+  // フォルダが消えていた名前は、見つけた時点で行も消す（UI 以外で消されたあとに置き直されたものを、登録済みとして信用しない）
   isRegistered(name: string): boolean {
-    return this.#db.prepare('SELECT 1 FROM skill_registry WHERE name = ?').get(name) !== undefined;
+    if (!SKILL_NAME.test(name) || this.#db.prepare('SELECT 1 FROM skill_registry WHERE name = ?').get(name) === undefined) return false;
+    if (existsSync(join(this.#dir, name, 'SKILL.md'))) return true;
+    this.#unmark(name);
+    return false;
+  }
+
+  // フォルダ（SKILL.md）の無い名前の登録を全部外す。一覧を作るときと起動のときに呼ぶ。外した件数を返す
+  pruneMissing(): number {
+    const rows = this.#db.prepare('SELECT name FROM skill_registry').all() as Array<{ name: string }>;
+    let n = 0;
+    for (const { name } of rows) if (!existsSync(join(this.#dir, name, 'SKILL.md'))) { this.#unmark(name); n++; }
+    return n;
   }
 
   // 一覧（system）と skill_view が見るのは、登録した名前だけ。未登録の SKILL.md は無いものとして扱う
@@ -119,6 +132,10 @@ export class SkillStore {
     let n = 0;
     for (const skill of this.list()) if (!skill.registered) { this.#mark(skill.name, 'upgrade'); n++; }
     return n;
+  }
+
+  #unmark(name: string): void {
+    this.#db.prepare('DELETE FROM skill_registry WHERE name = ?').run(name);
   }
 
   #mark(name: string, source: SkillSource): void {
@@ -153,7 +170,7 @@ export class SkillStore {
 
   remove(name: string): void {
     // フォルダが先に消えていても登録の行は消す（残すと、同じ名前で置き直したものが、そのまま信用されてしまう）
-    this.#db.prepare('DELETE FROM skill_registry WHERE name = ?').run(name);
+    this.#unmark(name);
     if (!this.get(name)) throw new SkillError('skill.not_found', { name });
     rmSync(join(this.#dir, name), { recursive: true, force: true });
   }
