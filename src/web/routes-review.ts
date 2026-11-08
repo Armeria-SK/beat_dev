@@ -23,8 +23,15 @@ function idOf(raw: string): number {
 
 export function registerReviewRoutes(router: Router, app: App): void {
   // ── 道具と、道具ごとの方針 ──
+  // 外の MCP の道具は、どのサーバーのものか（mcp）と、申告からどう聞くか（asks: sends / removes / write。聞かなければ付けない）を足す
+  const mcpAsks = (tool: ReturnType<App['tools']['list']>[number]): 'sends' | 'removes' | 'write' | undefined => {
+    const check = tool.preCheck?.({}, undefined as never);
+    if (!check || check instanceof Promise || check.decision !== 'ask') return undefined;
+    return check.sends ? 'sends' : check.removes ? 'removes' : 'write';
+  };
   const toolView = (tool: ReturnType<App['tools']['list']>[number], config = app.config()) => ({
     name: tool.name, effect: tool.effect, allowedIn: tool.allowedIn, policy: toolPolicy(config, tool.name), configurable: isPolicyable(tool.name),
+    ...(tool.mcp ? { mcp: { server: tool.mcp.server }, ...(mcpAsks(tool) ? { asks: mcpAsks(tool) } : {}) } : {}),
   });
   router.add('GET', '/api/tools', ({ res }) => {
     const config = app.config();

@@ -24,4 +24,7 @@ export class KV {
   setJson(key: string, value: unknown): void { this.set(key, JSON.stringify(value)); }
 
   delete(key: string): void { this.db.prepare('DELETE FROM kv WHERE key = ?').run(key); }
+
+  // 先頭が prefix のキーをすべて消す（LIKE を使わないので、_ や % もそのままの文字として扱う）
+  deletePrefix(prefix: string): void { this.db.prepare('DELETE FROM kv WHERE substr(key, 1, ?) = ?').run(prefix.length, prefix); }
 }

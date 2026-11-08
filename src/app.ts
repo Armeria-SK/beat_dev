@@ -26,6 +26,8 @@ import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.t
 import { historyRead, historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { shellRun } from './tools/builtin/shell.ts';
 import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
+import { sdkConnect } from './mcp/connect.ts';
+import { McpManager, type McpConnect } from './mcp/manager.ts';
 import { NotifyChannels } from './notify/channels.ts';
 import { Notifications, type Notification, type NotifyEvent } from './notify/notifications.ts';
 import { CuriosityStore } from './curiosity/store.ts';
@@ -81,6 +83,8 @@ export interface AppOptions {
   downloadNetwork?: DownloadNetwork;
   // 試験用: 子の担当（agent_run）の時間切れ（ミリ秒）。設定 tools.agent.timeoutSec の最小は 60 秒なので、試験だけがこれで縮める。書かなければ設定の値
   agentTimeoutMs?: number;
+  // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
+  mcpConnect?: McpConnect;
 }
 
 export class App {
@@ -102,6 +106,7 @@ export class App {
   readonly tasks: TaskStore;
   readonly notifications: Notifications;
   readonly channels: NotifyChannels;
+  readonly mcp: McpManager;
   readonly reviews: ReviewJobs;
   readonly curiosity: CuriosityStore;
   readonly skills: SkillStore;
@@ -170,6 +175,7 @@ export class App {
       curiosity: this.curiosity, skills: this.skills, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
+      mcpCut: (modelId, names) => this.mcp.cut(modelId, names),
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
     });
@@ -205,6 +211,11 @@ export class App {
       alert: input => { this.notifications.notify(input); },
     });
     this.notifications.listen(event => { void this.channels.deliver(event); });
+    // 外の MCP サーバー（start() はふだん main.ts が呼ぶ。呼ぶまでは何もつながない）
+    this.mcp = new McpManager({
+      config: () => this.config(), env: this.env, tools: this.tools, kv: this.kv, log: this.log,
+      notify: input => { this.notifications.notify(input); }, connect: options.mcpConnect ?? sdkConnect, now,
+    });
     this.notifications.onSettled = ids => this.bus.publish({ type: 'notification.read', ids, unread: this.notifications.unread() });
     this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
@@ -268,6 +279,7 @@ export class App {
     if (this.#applied && json !== this.#applied) {
       this.#applied = json;
       this.registry.reload(config);
+      void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
       void this.status.probeAll(config).catch(error => this.log(`[ERROR] 設定の再読み込み後の確認に失敗: ${(error as Error).message}`));
       this.log('[INFO] 設定ファイルの変更を読み込みました');
       this.#warnIgnoredPolicies(config);
@@ -297,6 +309,7 @@ export class App {
     const saved = this.configStore.save(next);
     this.#applied = JSON.stringify(saved);
     this.registry.reload(saved);
+    void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
     if (options.probe !== false) await this.status.probeAll(saved);
     this.worker.poke();
     return saved;
@@ -310,6 +323,7 @@ export class App {
   }
 
   close(): void {
+    void this.mcp.stop().catch(() => undefined);
     this.worker.stop();
     this.engine.saveQueued();
     this.engine.stopAll();

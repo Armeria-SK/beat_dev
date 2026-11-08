@@ -1,14 +1,15 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
 import { configText } from '../shared/messages/config.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
 import { checkBaseUrl, isSafeOutboundUrl } from '../shared/url.ts';
-import { takenKeyEnvs } from '../shared/provider-key.ts';
+import { mcpToolName, MCP_NAME_MAX } from '../mcp/names.ts';
+import { isSecretEnvName, takenKeyEnvs } from '../shared/provider-key.ts';
 import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
 import { friendlyIssue } from './friendly.ts';
-import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
+import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
 
@@ -50,6 +51,7 @@ export function defaultConfig(): AppConfig {
     worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, maxParallel: 1, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, remindAfterHours: 12, curiosityPerDay: 2 },
     memory: { review: true, reviewIdleMinutes: 30, reviewAfterToolCalls: 8 },
     notify: { channels: [], publicBaseUrl: '', limits: { maxChannels: 4, maxSendsPerHour: 30, timeoutMs: 5000, retries: 1, failsBeforeAlert: 3 } },
+    mcp: { servers: [], limits: { maxServers: 4, maxToolsPerServer: 32, callTimeoutMs: 60_000, connectTimeoutMs: 15_000, restartsPerHour: 3, resultMaxChars: 15_000 } },
   };
 }
 
@@ -102,6 +104,7 @@ function findings(config: AppConfig): Finding[] {
     catch { add('server.origins', `「${origin}」が URL として読めません`); }
   }
   notifyFindings(config, add);
+  mcpFindings(config, add);
   return found;
 }
 
@@ -125,6 +128,67 @@ function notifyFindings(config: AppConfig, add: (path: string, message: string, 
       const other = used.get(name);
       if (other !== undefined) add(where, `環境変数「${name}」は ${other} でも使われています。欄ごとに別の名前にしてください`);
       else used.set(name, `${channel.id}.${field}`);
+    }
+  }
+}
+
+// 外の MCP サーバー（mcp）の内容の検査。値の入る環境変数がプロバイダの鍵・通知の欄・ほかの MCP の欄と重なる設定は断る（鍵を外のプログラムへ渡す形を作らせない）
+function mcpFindings(config: AppConfig, add: (path: string, message: string, label?: string) => void): void {
+  const { servers, limits } = config.mcp;
+  if (servers.length > limits.maxServers) add('mcp.servers', `MCP サーバーは ${limits.maxServers} 件までです（今は ${servers.length} 件。mcp.limits.maxServers で変えられます）`);
+  const taken = new Map<string, string>();
+  for (const name of takenKeyEnvs(config.providers, '')) taken.set(name, 'プロバイダの鍵');
+  taken.set('ANTHROPIC_API_KEY', 'プロバイダの鍵');
+  for (const channel of config.notify.channels) {
+    taken.set(channel.urlEnv, `通知の送り先「${channel.id}」`);
+    if (channel.tokenEnv !== undefined) taken.set(channel.tokenEnv, `通知の送り先「${channel.id}」`);
+  }
+  const ids = new Set<string>();
+  for (const server of servers) {
+    const at = `mcp.servers.${server.id}`;
+    if (ids.has(server.id)) add(`${at}.id`, `ID「${server.id}」が重複しています`, 'mcp.servers');
+    ids.add(server.id);
+    const names = Object.keys(server.tools);
+    if (names.length > limits.maxToolsPerServer) add(`${at}.tools`, `道具は 1 サーバーに ${limits.maxToolsPerServer} 件までです（今は ${names.length} 件。mcp.limits.maxToolsPerServer で変えられます）`);
+    // Record のキーの形は、型の検査では見られない（合わないキーは素通りする）ので、ここで確かめる
+    for (const tool of names) {
+      if (!new RegExp(MCP_TOOL_KEY_PATTERN, 'u').test(tool)) add(`${at}.tools`, `道具の名前「${tool.slice(0, 40)}」は、英数字・_・.・- で 64 文字までにしてください（__proto__ / constructor / prototype は使えません）`);
+    }
+    for (const name of Object.keys(server.env)) {
+      if (!new RegExp(MCP_ENV_NAME_PATTERN, 'u').test(name)) add(`${at}.env`, `環境変数の名前「${name.slice(0, 40)}」は、英数字と _ で 27 文字までにしてください`);
+    }
+    for (const name of Object.keys(server.headers)) {
+      if (!new RegExp(MCP_HEADER_NAME_PATTERN, 'u').test(name)) add(`${at}.headers`, `見出しの名前「${name.slice(0, 40)}」は、英数字と - で 27 文字までにしてください`);
+    }
+    const registered = new Map<string, string>();
+    for (const tool of names) {
+      const name = mcpToolName(server.id, tool);
+      if (name.length > MCP_NAME_MAX) add(`${at}.tools.${tool}`, `道具「${tool}」は登録名が ${MCP_NAME_MAX} 文字を超えます（ID を短くするか、道具の名前が短いものにしてください）`);
+      const other = registered.get(name);
+      if (other !== undefined) add(`${at}.tools.${tool}`, `道具「${tool}」は「${other}」と、同じ登録名「${name}」になります`);
+      else registered.set(name, tool);
+    }
+    const refs: Array<[string, string]> = [];
+    if (server.transport === 'stdio') {
+      if (server.command === undefined) add(`${at}.command`, 'この PC のプログラム（stdio）には command が必要です');
+      if (server.cwd !== undefined && !isAbsolute(server.cwd)) add(`${at}.cwd`, '作業フォルダは絶対パスで書いてください');
+      if (server.url !== undefined) add(`${at}.url`, 'stdio のサーバーには url を書けません');
+      if (Object.keys(server.headers).length) add(`${at}.headers`, 'stdio のサーバーには headers を書けません');
+      for (const [name, variable] of Object.entries(server.env)) refs.push([`${at}.env.${name}`, variable]);
+    } else {
+      if (server.url === undefined) add(`${at}.url`, 'URL（http）には url が必要です');
+      else if (!isSafeOutboundUrl(server.url)) add(`${at}.url`, 'URL は https か、この PC の http（127.0.0.1 など）にしてください（user:pass@ は書けません）');
+      if (server.command !== undefined) add(`${at}.command`, 'http のサーバーには command を書けません');
+      if (server.cwd !== undefined) add(`${at}.cwd`, 'http のサーバーには cwd を書けません');
+      if (Object.keys(server.env).length) add(`${at}.env`, 'http のサーバーには env を書けません');
+      for (const [name, variable] of Object.entries(server.headers)) refs.push([`${at}.headers.${name}`, variable]);
+    }
+    for (const [where, variable] of refs) {
+      // 子や相手に渡せるのは、鍵の名前（KEY・TOKEN・SECRET など）の変数だけ。DATABASE_URL のような、ほかの変数を指せないようにする
+      if (!isSecretEnvName(variable)) add(where, `環境変数「${variable}」は、名前に KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれかを含めてください`);
+      const other = taken.get(variable);
+      if (other !== undefined) add(where, `環境変数「${variable}」は ${other} に使われています。欄ごとに別の名前にしてください`);
+      else taken.set(variable, `MCP「${server.id}」の別の欄`);
     }
   }
 }
