@@ -35,6 +35,7 @@ export function ActivityBody(props: Props) {
   const { profile, presence, worker, onWorker, approvals, waitingCount, unread, taskRevision, runRevision } = props;
   const t = useT();
   const running = worker?.running ?? null;
+  const others = (worker?.runningAll ?? []).filter(r => r.runId !== running?.runId); // 2 本目以降（worker.maxParallel > 1 のとき）
   const clock = useNow(30_000);
   const tick = useNow(1000, Boolean(running));
   const [tasks, setTasks] = useState<{ active: Task[]; finished: Task[] } | null>(null);
@@ -151,6 +152,18 @@ export function ActivityBody(props: Props) {
             <span className="act-run-line"><span className={paused ? undefined : 'flow'} /></span>
           </div>
         ) : <span className="act-none">{t('activity.runningNone')}</span>}
+        {others.map(run => (
+          <div className="act-run" key={run.runId}>
+            <div className="act-run-top">
+              <a className="act-run-head" href={run.kind === 'task' && run.taskId ? taskHref(run.taskId) : '#/review'}>
+                <span className={`act-run-spin${paused ? '' : ' spin'}`}><Icon name="loader" size={13} /></span>
+                <span className="act-run-title">{run.title}</span>
+              </a>
+              <button className="btn btn-ghost btn-icon act-run-stop" onClick={() => stopRun(run.runId)} aria-label={t('activity.stopRun')} data-tip={t('activity.stopRun')}><Icon name="square" size={12} /></button>
+            </div>
+            <span className="act-run-line"><span className={paused ? undefined : 'flow'} /></span>
+          </div>
+        ))}
       </section>
 
       <section className="act-section">

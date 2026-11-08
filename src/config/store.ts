@@ -46,7 +46,7 @@ export function defaultConfig(): AppConfig {
     routing: { chat: [], background: [], retriesPerModel: 2 },
     tools: defaultTools(),
     profile: { name: 'Clive', shape: 'pebble', color: '#61B8A5', motion: 'auto' },
-    worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, remindAfterHours: 12, curiosityPerDay: 2 },
+    worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, maxParallel: 1, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, remindAfterHours: 12, curiosityPerDay: 2 },
     memory: { review: true, reviewIdleMinutes: 30, reviewAfterToolCalls: 8 },
   };
 }

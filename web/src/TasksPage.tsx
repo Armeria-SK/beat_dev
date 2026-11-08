@@ -74,8 +74,9 @@ export function TasksPage({ taskId, section, revision, worker, runStartedAt, onN
     return () => clearTimeout(timer);
   }, [section, loaded]);
 
-  const runningTaskId = worker?.running?.kind === 'task' ? worker.running.taskId : null;
-  const runId = worker?.running?.runId;
+  // 並列で動いているときは、タスクごとに自分の実行を探す。枠が全部埋まっているときだけ「ほかで手一杯」
+  const runOf = (id: string | null | undefined) => (id ? worker?.runningAll?.find(r => r.kind === 'task' && r.taskId === id) : undefined);
+  const workerFull = Boolean(worker) && (worker?.runningAll?.length ?? 0) >= (worker?.maxParallel ?? 1);
   const groups = groupTasks(tasks ?? [], now, query);
   const summary = summarize(tasks ?? [], now);
   const searching = query.trim() !== '';
@@ -84,8 +85,8 @@ export function TasksPage({ taskId, section, revision, worker, runStartedAt, onN
 
   // 行の操作と答えの送信は、同じタスクについて 1 つずつ（送信中の行はボタンを無効にし、Enter の 2 回目も送らない）
   const act = (action: TaskAction, task: Task) => once(task.id, async () => {
-    const here = runningTaskId === task.id;
-    const ok = await performTaskAction(action, task, { runId: here ? runId : undefined, busyWithOther: Boolean(worker?.running) && !here });
+    const here = runOf(task.id);
+    const ok = await performTaskAction(action, task, { runId: here?.runId, busyWithOther: workerFull && !here });
     if (ok) reload();
   });
   const sendAnswer = (task: Task) => once(task.id, async () => {
@@ -95,7 +96,7 @@ export function TasksPage({ taskId, section, revision, worker, runStartedAt, onN
   });
 
   const renderRow = (task: Task) => {
-    const here = runningTaskId === task.id;
+    const here = Boolean(runOf(task.id));
     return (
       <TaskRow
         key={task.id} task={task} now={now} selected={task.id === taskId} runningHere={here} fresh={isFresh(task)} pending={pending.has(task.id)}
@@ -158,8 +159,8 @@ export function TasksPage({ taskId, section, revision, worker, runStartedAt, onN
       {sheet.mounted && (taskId ?? shownId) && (
         <TaskSheet
           id={(taskId ?? shownId)!} leaving={sheet.leaving} revision={revision}
-          runId={runningTaskId === (taskId ?? shownId) ? runId : undefined} runStartedAt={runStartedAt}
-          busyWithOther={Boolean(worker?.running) && runningTaskId !== (taskId ?? shownId)} onClose={closeSheet}
+          runId={runOf(taskId ?? shownId)?.runId} runStartedAt={runStartedAt}
+          busyWithOther={workerFull && !runOf(taskId ?? shownId)} onClose={closeSheet}
         />
       )}
     </section>

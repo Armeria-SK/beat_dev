@@ -132,6 +132,7 @@ export function WorkerSection({ draft, saved, update, problems }: SectionProps) 
         <SegField value={Boolean(worker.autonomy)} label={t('settings.worker.autonomy')} options={[{ value: true, label: t('settings.worker.on') }, { value: false, label: t('settings.worker.off') }]} onChange={v => set({ autonomy: v })} />
       </FieldRow>
       {number('maxRunsPerHour', t('settings.worker.maxPerHour'), t('settings.unit.times'), 1, 120)}
+      {number('maxParallel', t('settings.worker.maxParallel'), t('settings.unit.items'), 1, 4)}
       {number('idleMinutes', t('settings.worker.idle'), t('settings.unit.minutes'), 0, 1440)}
       <FieldRow label={t('settings.worker.quiet')} desc={t('settings.worker.quietDesc')} changed={changed('quietStart') || changed('quietEnd')} path="worker.quietStart" error={err('quietStart') ?? err('quietEnd')}>
         <RangeField from={worker.quietStart as string} to={worker.quietEnd as string} label={t('settings.worker.quiet')} onChange={(from, to) => set({ quietStart: from, quietEnd: to })} />

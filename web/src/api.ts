@@ -106,9 +106,10 @@ export interface Task {
   created_at: number; updated_at: number; completed_at: number | null;
 }
 export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
+export interface WorkerRun { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
 export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
-  running: { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string } | null; nextWakeAt: number | null; runsLastHour: number; maxRunsPerHour: number;
+  running: WorkerRun | null; runningAll: WorkerRun[]; maxParallel: number; nextWakeAt: number | null; runsLastHour: number; maxRunsPerHour: number;
 }
 export interface NotificationItem { id: number; kind: string; title: string; body: string | null; link: string | null; read_at: number | null; created_at: number }
 export type Motion = 'auto' | 'none' | 'float' | 'sway' | 'pulse';

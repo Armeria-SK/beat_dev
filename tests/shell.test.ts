@@ -319,7 +319,7 @@ test('PAGE_META: 全ページに名前と絵があり、名前は辞書にある
 });
 
 test('workerState / pickChatModel: 状態バーに出す状態とモデル', () => {
-  const worker = (patch: Partial<WorkerStatus>): WorkerStatus => ({ enabled: true, autonomy: true, paused: false, quiet: false, running: null, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 6, ...patch });
+  const worker = (patch: Partial<WorkerStatus>): WorkerStatus => ({ enabled: true, autonomy: true, paused: false, quiet: false, running: null, runningAll: [], maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 6, ...patch });
   const running = { kind: 'task' as const, taskId: 't', runId: 'r', title: 'x' };
   assert.equal(workerState(null), 'disabled');
   assert.equal(workerState(worker({ enabled: false })), 'disabled');
