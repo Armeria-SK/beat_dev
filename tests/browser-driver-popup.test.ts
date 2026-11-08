@@ -91,7 +91,7 @@ test('プロファイルの権限: seedPreferences はプロファイルと Defa
 });
 
 test('seedPreferences のソース: mkdirSync に mode 0o700 を付け、既にあるプロファイルも 0o700 に直す', () => {
-  const text = readFileSync(resolve(import.meta.dirname, '..', 'src', 'tools', 'browser', 'driver.ts'), 'utf8');
+  const text = readFileSync(resolve(import.meta.dirname, '..', 'src', 'tools', 'browser', 'driver.ts'), 'utf8').replace(/\r/gu, '');
   const body = /export function seedPreferences[\s\S]*?\n\}\n/u.exec(text)?.[0] ?? '';
   assert.ok(body.length > 0);
   const calls = body.match(/mkdirSync\([^)]*\)/gu) ?? [];
