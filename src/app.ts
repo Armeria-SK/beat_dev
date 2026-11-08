@@ -43,6 +43,10 @@ import { docRead } from './tools/builtin/docs.ts';
 import { tableWrite } from './tools/builtin/tables.ts';
 import { imageView } from './tools/builtin/image.ts';
 import { webDownload } from './tools/builtin/download.ts';
+import { BROWSER_TOOLS } from './tools/builtin/browser.ts';
+import { BrowserSession } from './tools/browser/session.ts';
+import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
+import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
@@ -66,6 +70,7 @@ export function builtinTools(): ToolDef[] {
     checklistWrite, notifyOwner, docRead, tableWrite,
     imageView, webDownload,
     agentRun,
+    ...BROWSER_TOOLS,
   ];
 }
 
@@ -85,6 +90,8 @@ export interface AppOptions {
   agentTimeoutMs?: number;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
+  // 試験用: ブラウザの動かし方（書かなければ playwright-core で、手元の Edge / Chrome を動かす）
+  browserDriver?: BrowserDriver;
 }
 
 export class App {
@@ -111,6 +118,7 @@ export class App {
   readonly curiosity: CuriosityStore;
   readonly skills: SkillStore;
   readonly uploads: Uploads;
+  readonly browser: BrowserSession;
   readonly engine: ChatEngine;
   readonly worker: Worker;
   readonly health: HealthMonitor;
@@ -168,6 +176,13 @@ export class App {
     this.#importCuriosity();
     this.#registerExistingSkills();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
+    // ブラウザ 1 つ（全会話で共有）。無効なら何も起動しない。起動は最初の browser_* の呼び出しのとき
+    this.browser = new BrowserSession({
+      driver: options.browserDriver ?? new PlaywrightDriver(), config: () => this.config(), paths: this.paths, log: this.log,
+      notify: input => this.notifications.notify(input), secrets: () => this.registry.secrets(), now,
+    });
+    // 会話を消したら、その会話のタブを閉じる
+    this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); };
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
@@ -175,7 +190,7 @@ export class App {
       curiosity: this.curiosity, skills: this.skills, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
-      mcpCut: (modelId, names) => this.mcp.cut(modelId, names),
+      mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
     });
@@ -279,6 +294,7 @@ export class App {
     if (this.#applied && json !== this.#applied) {
       this.#applied = json;
       this.registry.reload(config);
+      void this.browser?.applyConfig(config).catch(() => undefined);
       void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
       void this.status.probeAll(config).catch(error => this.log(`[ERROR] 設定の再読み込み後の確認に失敗: ${(error as Error).message}`));
       this.log('[INFO] 設定ファイルの変更を読み込みました');
@@ -294,7 +310,7 @@ export class App {
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
     // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
-    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' && !config.tools.agent.enabled }))) : 0;
+    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) }))) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }
@@ -309,6 +325,7 @@ export class App {
     const saved = this.configStore.save(next);
     this.#applied = JSON.stringify(saved);
     this.registry.reload(saved);
+    void this.browser.applyConfig(saved).catch(() => undefined);
     void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
     if (options.probe !== false) await this.status.probeAll(saved);
     this.worker.poke();
@@ -324,6 +341,7 @@ export class App {
 
   close(): void {
     void this.mcp.stop().catch(() => undefined);
+    void this.browser.close().catch(() => undefined);
     this.worker.stop();
     this.engine.saveQueued();
     this.engine.stopAll();

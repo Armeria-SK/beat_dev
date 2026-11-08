@@ -188,6 +188,7 @@ const ja = {
   'shell.unresolved_path': '（判定できない）',
 
   'web.fetch_off': 'web_fetch は設定で止めてあります（tools.web.fetch）',
+  'browser.off': 'ブラウザの道具は設定で止めてあります（tools.browser.enabled）',
   'web.long_query': 'URL に長いクエリが付いています（情報を外へ送る形になっていないか確かめてください）',
   'web.secret_text': 'API キーやトークンらしい文字列が含まれています（外へ送ることになります）',
   'web.search_off': 'web_search は設定で止めてあります（tools.web.search）',
@@ -401,6 +402,7 @@ const en: Record<keyof typeof ja, string> = {
   'shell.unresolved_path': '(cannot be determined)',
 
   'web.fetch_off': 'web_fetch is turned off in the settings (tools.web.fetch)',
+  'browser.off': 'The browser tools are turned off in the settings (tools.browser.enabled)',
   'web.long_query': 'The URL has a long query string (check that it is not sending information out)',
   'web.secret_text': 'It contains what looks like an API key or token (it would be sent out)',
   'web.search_off': 'web_search is turned off in the settings (tools.web.search)',

@@ -11,6 +11,8 @@ export interface AppPaths {
   database: string;
   backups: string;
   uploads: string;
+  // ブラウザ（browser_*）のログイン状態などを置く。Clive の道具から触れない（禁止パス）。バックアップには入れない
+  browserProfile: string;
   workspace: string;
   // API キーを書く .env（起動で読み込むものと同じ。画面から入れた鍵もここに書く）
   env: string;
@@ -26,6 +28,7 @@ export function resolvePaths(dataDir = process.env.CLIVE_DATA_DIR): AppPaths {
     database: join(data, 'clive.db'),
     backups: join(data, 'backups'),
     uploads: join(data, 'uploads'),
+    browserProfile: join(data, 'browser-profile'),
     workspace: join(data, 'workspace'),
     env: join(APP_ROOT, '.env'),
     templates: join(APP_ROOT, 'templates'),

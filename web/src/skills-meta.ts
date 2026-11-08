@@ -42,6 +42,10 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   table_write: { icon: 'pencil', desc: 'tool.table_write' },
   image_view: { icon: 'paperclip', desc: 'tool.image_view' },
   web_download: { icon: 'archive', desc: 'tool.web_download' },
+  browser_open: { icon: 'globe', desc: 'tool.browser_open' },
+  browser_read: { icon: 'globe', desc: 'tool.browser_read' },
+  browser_screenshot: { icon: 'paperclip', desc: 'tool.browser_screenshot' },
+  browser_close: { icon: 'archive', desc: 'tool.browser_close' },
   agent_run: { icon: 'cpu', desc: 'tool.agent_run' },
 };
 

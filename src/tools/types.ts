@@ -8,6 +8,7 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from './skills/store.ts';
 import type { DownloadNetwork, PageNetwork } from './web/public-page.ts';
 import type { SearchThrottle } from './web/search.ts';
+import type { BrowserSession } from './browser/session.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
@@ -100,6 +101,8 @@ export interface ToolContext {
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
+    // ブラウザの道具（browser_*）が使う、全会話で 1 つのブラウザ。無ければ道具は「ブラウザが無い」で失敗する
+    browser?: BrowserSession | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。
@@ -148,6 +151,8 @@ export interface ToolDef<I = any> {
   removes?: true;
   // 外の MCP サーバーの道具（src/mcp/tool.ts が付ける）。計画モードには渡さず（planAllows）、手元のモデルの会話には localOk のサーバーの道具だけ渡す（localAllows）
   mcp?: { server: string; tool: string; localOk: boolean };
+  // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さず（planAllows）、毎回の承認が要る。6a にはこれを付ける道具は無い
+  submits?: true;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

@@ -61,13 +61,18 @@ export function publicIPv4(address: string): boolean {
     || (a === 203 && b === 0 && c === 113));
 }
 
+// ホスト名（URL の hostname の形）が、公開のものとして許せるか。名前そのものの規則だけ（名前を引いた番地は見ない）。
+// 「:」を含む（IPv6）・ドットの無い名前・公開でない IPv4 の直書き・内向きの名前の末尾（.local など）は許さない。ページを読む道具とブラウザの中継が同じ規則を使う
+export function publicHostName(host: string): boolean {
+  return !(host.includes(':') || !host.includes('.') || /^[\d.]+$/u.test(host) && !publicIPv4(host)
+    || /\.(localhost|local|internal|home|lan|test|invalid|example|onion|arpa)\.?$/iu.test(host));
+}
+
 export function pageUrl(input: string): URL {
   if (input.length > 4096) throw failure('invalid_request', 'fetch.too_long');
   let url: URL;
   try { url = new URL(input); } catch { throw failure('invalid_request', 'fetch.bad_url', { url: input.slice(0, 200) }); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port
-    || url.hostname.includes(':') || !url.hostname.includes('.') || /^[\d.]+$/u.test(url.hostname) && !publicIPv4(url.hostname)
-    || /\.(localhost|local|internal|home|lan|test|invalid|example|onion|arpa)\.?$/iu.test(url.hostname)) {
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port || !publicHostName(url.hostname)) {
     throw failure('policy_blocked', 'fetch.policy');
   }
   url.hash = '';
