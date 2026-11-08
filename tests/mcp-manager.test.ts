@@ -208,6 +208,22 @@ test('T-31b: 入力の形に見えない文字を後から足した道具は止�
   assert.match(sent, /文字 /u);
 });
 
+test('T-31c: 更新前に固定した（生の形の）道具は、改行入りの説明があっても止まらず、モデルに渡る形にも改行が残る。pattern・const・enum に見えない文字があれば schema_invalid', async () => {
+  const raw = { description: 'line1\nline2', properties: { text: { description: '一行目\n二行目\t三', type: 'string' } }, type: 'object' };
+  const s = setup([server({ tools: { echo: {}, bad: {} } })], {
+    tools: () => [{ ...ECHO, inputSchema: raw }, { name: 'bad', description: 'x', inputSchema: { type: 'object', properties: { a: { type: 'string', enum: ['a', 'b\u{200b}'] } } } }],
+  });
+  s.kv.setJson('mcp:pin:srv:echo', { description: '文字を返す', schema: JSON.stringify(raw), destructive: false });
+  await s.manager.start();
+  const states = Object.fromEntries(s.manager.status()[0]!.tools.map(t => [t.name, t.state]));
+  assert.deepEqual(states, { echo: 'registered', bad: 'schema_invalid' });
+  assert.equal(s.notices.length, 0, '更新後の最初の接続で、通知を出さない');
+  const sent = JSON.parse(JSON.stringify(s.registry.get('mcp_srv_echo')!.input)) as typeof raw;
+  assert.equal(sent.description, 'line1\nline2');
+  assert.equal(sent.properties.text.description, '一行目\n二行目\t三');
+  assert.match(String(s.manager.status()[0]!.tools.find(t => t.name === 'bad')!.reason), /enum/u);
+});
+
 test('T-32: 受け入れるのは、いま見えている形だけ。受け入れの後にまた変わったら、また止まる', async () => {
   let description = 'a';
   const s = setup([server()], { tools: () => [{ ...ECHO, description }] });

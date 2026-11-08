@@ -38,15 +38,17 @@ TypeRegistry.Set(KIND, (schema, value) => validators.get(schema as object)?.(val
 export type InputSchemaResult = { ok: true; schema: TSchema } | { ok: false; reason: string };
 
 // 見えない文字: 制御文字と書式文字（Unicode の Cc と Cf: 文字の向きを変えるもの・ゼロ幅・タグ文字など）、行・段落の区切り、
-// 割り当て前を含むタグ文字の範囲、異体字選択子（絵文字の後ろに隠して文を運べる）
-const INVISIBLE_ONE = /[\p{Cc}\p{Cf}\u{2028}\u{2029}\u{e0000}-\u{e007f}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}]/gu;
+// 割り当て前を含むタグ文字の範囲、異体字選択子（絵文字の後ろに隠して文を運べる）、対の無いサロゲート（Cs）、
+// 空白に見える文字（ハングルのフィラー・点字の空白・結合用の継ぎ字・クメールの内在母音・モンゴルの選択子・注釈の印）。画面の revealHidden が見える形にする文字と同じ組
+const INVISIBLE_ONE = /[\p{Cc}\p{Cf}\p{Cs}\u{2028}\u{2029}\u{e0000}-\u{e007f}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}\u{34f}\u{115f}\u{1160}\u{17b4}\u{17b5}\u{180b}-\u{180e}\u{2800}\u{3164}\u{ffa0}\u{fff9}-\u{fffb}]/gu;
 const INVISIBLE_RUN = new RegExp(`(?:${INVISIBLE_ONE.source})+`, 'gu');
+// 入力の形の中の文字列は、改行・タブ・復帰を落とさず、数えもしない（説明にふつうに入る。数が常に 0 でないと、差分の注意が埋もれる）
+const SCHEMA_ONE = new RegExp(`(?![\\n\\t\\r])${INVISIBLE_ONE.source}`, 'gu');
+const SCHEMA_RUN = new RegExp(`(?:${SCHEMA_ONE.source})+`, 'gu');
 
-// 落とした数: 改行・タブ・復帰は説明にふつうに入るので、見えない文字には数えない（数が常に 0 でないと、差分の注意が埋もれる）
+// 落とす見えない文字の数（改行・タブ・復帰は数えない）
 export function hiddenCount(text: string | undefined): number {
-  let count = 0;
-  for (const m of (text ?? '').matchAll(INVISIBLE_ONE)) if (m[0] !== '\n' && m[0] !== '\t' && m[0] !== '\r') count += 1;
-  return count;
+  return (text ?? '').match(SCHEMA_ONE)?.length ?? 0;
 }
 
 export const SCHEMA_DEPTH_MAX = 64;
@@ -55,32 +57,55 @@ export interface ScrubbedSchema {
   value: unknown;
   // 落とした見えない文字の数（hiddenCount と同じ数え方）
   stripped: number;
-  // 使えない形だったときの理由（深すぎる・落とした後にキーがぶつかる）。ある間も value は返す（固定と差分の表示は止めない）
+  // 使えない形だったときの理由（深すぎる・落とした後にキーがぶつかる・検査の値に見えない文字がある）。ある間も value は返す（固定と差分の表示は止めない）
   problem?: string;
 }
 
-// 入力の形の中の文字列は、すべてモデルに渡る。説明・題・enum・既定値・キーを含め、どの文字列からも見えない文字を落とす
-// （続く見えない文字は空白 1 つにする。説明文と同じ規則）。見えない文字だけで隠した指示を、持ち主の目にもモデルにも通さない
+// いま見ている所。schema: 形（キーはキーワード）、names: 名前から形への表（properties など。キーは名前）、
+// patterns: 正規表現から形への表（patternProperties）、literal: 検査の値そのもの（pattern・const・enum）
+type Slot = 'schema' | 'names' | 'patterns' | 'literal';
+const NAME_TABLES = new Set(['properties', '$defs', 'definitions', 'dependentSchemas', 'dependentRequired', 'dependencies']);
+const LITERAL_KEYWORDS = new Set(['pattern', 'const', 'enum']);
+const LITERAL_PROBLEM = 'invisible characters in pattern, const or enum';
+
+function childSlot(slot: Slot, key: string): Slot {
+  if (slot === 'literal') return 'literal';
+  if (slot !== 'schema') return 'schema';
+  if (LITERAL_KEYWORDS.has(key)) return 'literal';
+  if (NAME_TABLES.has(key)) return 'names';
+  return key === 'patternProperties' ? 'patterns' : 'schema';
+}
+
+// 入力の形の中の文字列は、すべてモデルに渡る。説明・題・既定値・キーを含め、どの文字列からも見えない文字を落とす
+// （続く見えない文字は空白 1 つにする。説明文と同じ規則。改行・タブ・復帰は残す）。見えない文字だけで隠した指示を、持ち主の目にもモデルにも通さない。
+// ただし pattern・const・enum の値（と patternProperties のキー）は書き換えない: 書き換えると検査の意味が変わる（制御文字を除く正規表現が壊れ、絵文字の異体字選択子が消える）。
+// 落とす文字が入っていたら、そのまま返して problem にする（登録しない。黙って別の検査にしない）
 export function scrubSchema(raw: unknown): ScrubbedSchema {
   let stripped = 0;
   let problem: string | undefined;
-  const text = (s: string): string => { stripped += hiddenCount(s); return s.replace(INVISIBLE_RUN, ' '); };
-  const walk = (value: unknown, depth: number): unknown => {
-    if (typeof value === 'string') return text(value);
+  const text = (s: string): string => { stripped += hiddenCount(s); return s.replace(SCHEMA_RUN, ' '); };
+  const walk = (value: unknown, depth: number, slot: Slot): unknown => {
+    if (typeof value === 'string') {
+      if (slot !== 'literal') return text(value);
+      if (hiddenCount(value) > 0) problem ??= LITERAL_PROBLEM;
+      return value;
+    }
     if (typeof value !== 'object' || value === null) return value;
     if (depth >= SCHEMA_DEPTH_MAX) { problem ??= 'too deep'; return null; }
-    if (Array.isArray(value)) return value.map(item => walk(item, depth + 1));
+    if (Array.isArray(value)) return value.map(item => walk(item, depth + 1, slot));
     const seen = new Set<string>();
     const entries: Array<[string, unknown]> = [];
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      const clean = text(key);
+      let clean = key;
+      if (slot === 'schema' || slot === 'names') clean = text(key);
+      else if (hiddenCount(key) > 0) problem ??= LITERAL_PROBLEM;
       if (seen.has(clean)) problem ??= 'duplicate key after removing invisible characters';
       seen.add(clean);
-      entries.push([clean, walk(item, depth + 1)]);
+      entries.push([clean, walk(item, depth + 1, childSlot(slot, key))]);
     }
     return Object.fromEntries(entries);
   };
-  const out = walk(raw, 0);
+  const out = walk(raw, 0, 'schema');
   return { value: out, stripped, ...(problem ? { problem } : {}) };
 }
 
