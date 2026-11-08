@@ -615,6 +615,7 @@ export class ChatEngine {
     const ctx: ToolContext = {
       runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? defaultWorkspace(policy, d.paths),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
+      conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
       services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,

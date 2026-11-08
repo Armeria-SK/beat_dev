@@ -127,8 +127,8 @@ export function ToolsConfig() {
     // ブラウザの道具（browser_open など。src/tools/browser/）。既定は無効で、無効のあいだは今までと同じ（道具もモデルに渡らない）
     browser: Type.Object({
       enabled: Type.Boolean({ default: false }),
-      // 使うブラウザ。auto は手元の Edge → Chrome の順。path は executablePath の実行ファイル
-      channel: Type.Union([Type.Literal('auto'), Type.Literal('msedge'), Type.Literal('chrome'), Type.Literal('path')], { default: 'auto' }),
+      // 使うブラウザ。auto は手元の Chrome。path は executablePath の実行ファイル（Chromium 系。Edge は使わない）
+      channel: Type.Union([Type.Literal('auto'), Type.Literal('chrome'), Type.Literal('path')], { default: 'auto' }),
       executablePath: Type.String({ default: '', maxLength: 1024 }),
       headless: Type.Boolean({ default: true }),
       // 操作（クリック・入力）を許すサイト。example.com はサブドメインも、=example.com はそのホストだけ。空なら全部「読むだけ」

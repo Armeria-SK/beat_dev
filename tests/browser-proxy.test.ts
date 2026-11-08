@@ -154,7 +154,6 @@ test('名前を引いて返った番地が 1 つでも公開 IPv4 でなけれ�
   r.table['mixed2.example.net'] = ['192.168.0.9', PUBLIC];
   r.table['v6.example.net'] = ['2606:4700::1111'];
   r.table['v6local.example.net'] = ['::1'];
-  r.table['dual.example.net'] = [PUBLIC, '2606:4700::1111'];
   r.table['mapped.example.net'] = ['::ffff:127.0.0.1'];
   for (const name of Object.keys(r.table)) assert.equal(status(await raw(r.proxy.port, CONNECT(`${name}:443`))), 403, name);
   assert.deepEqual(r.connected, [], '断ったものへは 1 度もつながない');
@@ -162,6 +161,15 @@ test('名前を引いて返った番地が 1 つでも公開 IPv4 でなけれ�
   assert.equal(r.logs.length, Object.keys(r.table).length);
   assert.ok(r.logs.every(line => /^\[browser\] blocked [a-z0-9.]+\.example\.net:443 address$/u.test(line)), r.logs.join('\n'));
   assert.equal(status(await raw(r.proxy.port, `GET http://lan.example.net/ HTTP/1.1\r\nHost: lan.example.net\r\n${AUTH}\r\n`)), 403, 'http も同じ');
+});
+
+test('IPv4 と IPv6 の両方を返す名前（ふつうのサイト）は通し、つなぐのは確かめた公開 IPv4 だけ', async t => {
+  const r = await rig(t);
+  r.table['dual.example.net'] = ['2606:4700::1111', PUBLIC, '::1'];
+  assert.equal(status(await raw(r.proxy.port, CONNECT('dual.example.net:443'))), 200);
+  assert.deepEqual(r.connected, [[PUBLIC, 443]], 'IPv6 の番地へはつながない');
+  r.table['dualmixed.example.net'] = ['2606:4700::1111', PUBLIC, '10.0.0.5'];
+  assert.equal(status(await raw(r.proxy.port, CONNECT('dualmixed.example.net:443'))), 403, 'IPv4 に私的なものが混ざれば IPv6 があっても断る');
 });
 
 test('引けない名前・番地の無い名前は 502（断りではない）', async t => {
@@ -219,6 +227,27 @@ test('http の GET は Host を付けて確かめた番地へ送り、Proxy-* �
   assert.equal(seen.headers.accept, 'text/html');
   for (const name of Object.keys(seen.headers)) assert.doesNotMatch(name, /^proxy-/iu, name);
   assert.equal(JSON.stringify(seen.headers).includes('Basic'), false, '合言葉を相手へ送らない');
+});
+
+test('本文つきの GET（Content-Length > 0・Transfer-Encoding）は 400 で、解決もつなぎもしない', async t => {
+  const r = await rig(t);
+  const withLength = await raw(r.proxy.port, `GET http://example.net/a HTTP/1.1\r\nHost: example.net\r\nContent-Length: 5\r\n${AUTH}\r\nhello`, 600);
+  assert.equal(status(withLength), 400);
+  const chunked = await raw(r.proxy.port, `GET http://example.net/a HTTP/1.1\r\nHost: example.net\r\nTransfer-Encoding: chunked\r\n${AUTH}\r\n5\r\nhello\r\n0\r\n\r\n`, 600);
+  assert.equal(status(chunked), 400);
+  assert.deepEqual(r.resolved, []);
+  assert.deepEqual(r.connected, []);
+  assert.equal(r.seen.length, 0);
+});
+
+test('Content-Length: 0 の GET は通すが、content-length・transfer-encoding・expect は相手へ渡さない', async t => {
+  const r = await rig(t);
+  const response = await raw(r.proxy.port, `GET http://example.net/a HTTP/1.1\r\nHost: example.net\r\nContent-Length: 0\r\nExpect: 100-continue\r\n${AUTH}\r\n`, 1000);
+  // 中継自身の http の部品が先に「100 Continue」を返すので、最終の応答（200）が含まれることを見る
+  assert.match(response, /HTTP\/1\.1 200 /u);
+  assert.equal(r.seen.length, 1);
+  const names = Object.keys(r.seen[0]!.headers);
+  for (const name of ['content-length', 'transfer-encoding', 'expect']) assert.equal(names.includes(name), false, name);
 });
 
 test('断りのログは「ホスト:ポート 理由」だけ（道筋・問い合わせ・合言葉を書かない）。断った数は stats に出る', async t => {

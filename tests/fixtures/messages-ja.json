@@ -344,6 +344,7 @@
     "shell.unresolved_path": "（判定できない）",
     "web.fetch_off": "web_fetch は設定で止めてあります（tools.web.fetch）",
     "browser.off": "ブラウザの道具は設定で止めてあります（tools.browser.enabled）",
+    "browser.open.listed": "操作の一覧にあるサイトを開きます。ログイン済みのことがあり、開くだけで（クエリ付き・よそから来た文を読んだあとは特に）操作が走りうるため、確かめます",
     "browser.act.reason": "ブラウザのページを操作します。フォームの送信・購入・投稿など、取り消せないことが起きる可能性があります",
     "browser.act.read_only": "このサイト（{host}）は、設定の操作の一覧（tools.browser.sites）にないので、読むだけです。押す・入れるはできません",
     "browser.act.no_table": "このタブの「触れるもの」の一覧を、まだ読んでいません。browser_read で読んでから、その番号で指定してください",
@@ -652,8 +653,10 @@
     "browser.blocked_scheme": "このページは開けません: 許されない種類の URL です",
     "browser.blocked_navigation": "このページは開けません: 公開されている http / https のページ（標準のポート）だけを開けます",
     "browser.blocked_downgrade": "このページは開けません: https のページから http への移動は止めました",
+    "browser.blocked_listed": "このページは開けません: 操作の一覧のサイトへ、確かめなしに移ろうとしたので止めました（そのサイトを開きたいときは、行き先のアドレスを直接開くよう頼んでください）",
     "browser.disabled": "ブラウザの道具は、設定（tools.browser.enabled）で無効になっています",
-    "browser.no_browser": "Microsoft Edge か Google Chrome が見つかりません。入れるか、設定でブラウザの場所（executablePath）を指定してください",
+    "browser.no_browser": "Google Chrome が見つかりません。入れるか、設定でブラウザの場所（executablePath）に Chromium 系ブラウザの実行ファイルを指定してください",
+    "browser.edge_refused": "Microsoft Edge ではブラウザの操作をしません。設定のブラウザの場所（executablePath）に、Google Chrome か、ほかの Chromium 系ブラウザの実行ファイルを指定してください",
     "browser.launch_failed": "ブラウザを起動できませんでした",
     "browser.profile_busy": "ブラウザのプロファイルを使用中です（別のブラウザの窓が開いているか、前の起動が残っています）。閉じてからやり直してください",
     "browser.launch_paused": "ブラウザの起動に続けて失敗したため、しばらく（あと {minutes} 分ほど）起動しません",
@@ -675,7 +678,9 @@
     "browser.acted_download": "ページが始めたダウンロード {count} 件を断りました。",
     "browser.acted_filechooser": "ページのファイル選択の窓 {count} 件を閉じました（ファイルは選びません）。",
     "browser.notify_title": "ブラウザを起動できません",
-    "browser.notify_body": "ブラウザの起動に {count} 回続けて失敗したため、しばらく起動しません。設定の「ブラウザ」を確かめてください。"
+    "browser.notify_body": "ブラウザの起動に {count} 回続けて失敗したため、しばらく起動しません。設定の「ブラウザ」を確かめてください。",
+    "browser.login_open": "ログイン用のブラウザの窓が開いています。ログインを終えて窓を閉じるまで、ブラウザの道具は使えません。持ち主に窓を閉じてもらってください",
+    "browser.no_display": "この環境には画面が無いので、ブラウザの窓を開けません"
   },
   "store": {
     "memory.empty": "中身が空です",
@@ -805,6 +810,8 @@
     "mcp_bad_secret_name": "秘密の欄の名前が正しくありません",
     "mcp_secret_kind": "このサーバーでは、この種類の秘密の欄は使えません",
     "notify_url_required": "URL は消せません。送り先ごと削除してください",
+    "browser_reset_unsafe": "ブラウザのプロファイルの置き場所が、データの置き場所の下ではないので、消していません",
+    "browser_reset_failed": "ブラウザのプロファイルを消せませんでした（{reason}）。ブラウザの窓が開いていれば閉じてから、もう一度試してください",
     "internal": "内部エラーが発生しました（ログを確認してください）"
   },
   "config": {

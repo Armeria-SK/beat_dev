@@ -21,6 +21,7 @@ import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, U
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
 import { registerKeyRoutes } from './routes-keys.ts';
 import { registerMcpRoutes } from './routes-mcp.ts';
+import { registerBrowserRoutes } from './routes-browser.ts';
 import { registerNotifyRoutes } from './routes-notify.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { registerReviewRoutes } from './routes-review.ts';
@@ -402,6 +403,7 @@ export function createWebServer(app: App): WebServer {
   registerKeyRoutes(router, app);
   registerNotifyRoutes(router, app);
   registerMcpRoutes(router, app);
+  registerBrowserRoutes(router, app);
   router.add('GET', '/api/settings', ({ res }) => sendJson(res, 200, settingsView(app)));
   router.add('GET', '/api/settings/schema', ({ res }) => sendJson(res, 200, AppConfig));
   router.add('PUT', '/api/settings', async ({ req, res }) => {

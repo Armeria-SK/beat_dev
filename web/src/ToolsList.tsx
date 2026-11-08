@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError, type ToolInfo } from './api.ts';
 import { useEscapeLayer } from './hooks.ts';
 import { Icon } from './icons.tsx';
@@ -26,6 +26,15 @@ export function ToolsList({ tools, failed, onChanged, onReload }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ tool: ToolInfo; to: ToolPolicy; item: Access } | null>(null);
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
+  // ブラウザの道具は、設定で有効にするまで使えない。一覧にブラウザの道具があるときだけ、今有効かを 1 度読む（読めなければ添えない）
+  const hasBrowser = tools?.some(tool => tool.name.startsWith('browser_')) === true;
+  const [browserOff, setBrowserOff] = useState(false);
+  useEffect(() => {
+    if (!hasBrowser) return;
+    let live = true;
+    api.browserStatus().then(status => { if (live) setBrowserOff(!status.enabled); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [hasBrowser]);
 
   async function save(tool: ToolInfo, to: ToolPolicy) {
     setConfirm(null);
@@ -78,6 +87,9 @@ export function ToolsList({ tools, failed, onChanged, onReload }: Props) {
                   ))}
                 </div>
               ) : <span className="sk-tool-fixed">{t('tools.policy.fixed')}</span>}
+              {browserOff && tool.name.startsWith('browser_') && (
+                <span className="sk-tool-sub"><a className="chat-link" href="#/settings" onClick={() => openSettingsSection('browser')}>{t('tools.browser.offLink')}</a></span>
+              )}
               {tool.asks && <span className="sk-tool-sub">{t(ASKS_LABEL[tool.asks])}</span>}
               {tool.configurable && tool.policy === 'block' && <span className="sk-tool-sub">{t('tools.policy.blockNote')}</span>}
               {tool.configurable && tool.policy === 'ask' && tool.allowedIn.includes('review') && <span className="sk-tool-sub">{t('tools.policy.reviewNote')}</span>}

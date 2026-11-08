@@ -160,6 +160,8 @@ export interface NotifyLimits { maxChannels: number; maxSendsPerHour: number; ti
 export interface NotifyView { channels: NotifyChannelView[]; limits: NotifyLimits; publicBaseUrl: string }
 export interface NotifySecretState { set: boolean; source?: 'os' }
 export type NotifyTestResult = { ok: true } | { ok: false; reason: string };
+// ブラウザの状態（GET /api/browser/status）。道具の有効・無効は設定の側で見る
+export interface BrowserStatusView { enabled: boolean; running: boolean; loginOpen: boolean; tabs: number; pausedMinutes: number; canShowWindow: boolean }
 // 外の MCP サーバー（GET /api/mcp）。秘密の値は返らない（入っているかだけ）
 export type McpServerState = 'connecting' | 'ready' | 'failed' | 'off';
 export type McpToolState = 'registered' | 'off' | 'changed' | 'missing' | 'schema_invalid' | 'unlisted' | 'cut';
@@ -287,6 +289,10 @@ export const api = {
   deleteNotifySecret: (id: string, field: 'token') => call<NotifySecretState>(`/api/notify/channels/${encodeURIComponent(id)}/secrets/${field}`, { method: 'DELETE' }),
   testNotifyChannel: (id: string) => call<NotifyTestResult>(`/api/notify/channels/${encodeURIComponent(id)}/test`, { method: 'POST', body: '{}' }),
   mcp: () => call<McpView>('/api/mcp'),
+  browserStatus: () => call<BrowserStatusView>('/api/browser/status'),
+  browserLogin: () => call<BrowserStatusView>('/api/browser/login', { method: 'POST', body: '{}' }),
+  browserClose: () => call<BrowserStatusView>('/api/browser/close', { method: 'POST', body: '{}' }),
+  browserProfileReset: () => call<BrowserStatusView>('/api/browser/profile/reset', { method: 'POST', body: '{}' }),
   addMcpServer: (input: McpAddInput) => call<McpView>('/api/mcp/servers', { method: 'POST', body: JSON.stringify(input) }),
   patchMcpServer: (id: string, patch: { enabled?: boolean; localOk?: boolean }) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteMcpServer: (id: string) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),

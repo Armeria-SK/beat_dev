@@ -269,6 +269,60 @@ test('bind を持つが onceOnly でない道具は、札を出した呼び出�
   assert.equal(calls, 1, '会話の許可で札なしに通る呼び出しは 1 回だけ');
 });
 
+// 札を出した呼び出しの、承認後の比べ（pipeline）から実行（act の探し直し）までのあいだに、ページが書き換わる場合
+function runWithSwapAfterRecheck(r: Rig, onSecondPreCheck: () => Promise<void>) {
+  let calls = 0;
+  const original = browserClick.preCheck! as (i: unknown, c: ToolContext) => Promise<import('../src/tools/types.ts').PreCheck>;
+  const swapped = {
+    ...browserClick,
+    preCheck: async (input: never, ctx: ToolContext) => {
+      calls += 1;
+      const result = await original(input, ctx);
+      if (calls === 2) await onSecondPreCheck();
+      return result;
+    },
+  };
+  const registry = new ToolRegistry();
+  registry.register(swapped as never);
+  const run = () => runToolCall({ id: 'k', name: 'browser_click', arguments: { ref: 'e2' } }, r.ctx, {
+    registry, approvals: r.approvals, db: r.db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false,
+  });
+  return { run, calls: () => calls };
+}
+
+test('承認後の比べのあと、実行の直前に別の要素へ入れ替わったら押さない（bind を act に渡して比べ直す）', async t => {
+  const r = rig(t);
+  const page = await opened(r);
+  const swap = async (): Promise<void> => {
+    page.mutate({ ...SITE, snapshot: SNAPSHOT.replace('button "Send"', 'button "Delete account"'), rows: SITE.rows!.map(x => x.name === 'Send' ? { ...x, name: 'Delete account' } : x) });
+    await browserRead.execute({ mode: 'elements' }, r.ctx);
+  };
+  const rigged = runWithSwapAfterRecheck(r, swap);
+  const running = rigged.run();
+  const stop = { done: false };
+  const card = await pendingCard(r, stop);
+  stop.done = true;
+  r.approvals.decide(card!.id, 'once');
+  const outcome = await running;
+  assert.equal(rigged.calls(), 2);
+  assert.equal(outcome.output.isError, true);
+  assert.equal(page.acts.length, 0, '許した要素と違うものには押さない');
+});
+
+test('会話の許可で札なしに通る道は、bind を比べない（Q3 の範囲）。探し直しの守りだけはかかる', async t => {
+  const r = rig(t);
+  const page = await opened(r);
+  const first = await observe(r, 'browser_click', { ref: 'e2' }, 'conversation');
+  assert.equal(first.asked, true);
+  assert.equal(page.acts.length, 1);
+  // 別の要素になっても（読み直した後の同じ番号）、会話の許可で札なしに通る
+  page.mutate({ ...SITE, snapshot: SNAPSHOT.replace('button "Send"', 'button "Delete account"'), rows: SITE.rows!.map(x => x.name === 'Send' ? { ...x, name: 'Delete account' } : x) });
+  await browserRead.execute({ mode: 'elements' }, r.ctx);
+  const second = await r.call('browser_click', { ref: 'e2' });
+  assert.notEqual(second.output.isError, true);
+  assert.equal(page.acts.length, 2);
+});
+
 // ── T-23: 自動承認 ──
 
 test('T-23: 自動承認モードでも、押す・入れるは network なので判定役に回らず、持ち主の札になる', async t => {

@@ -82,6 +82,8 @@ const ja = {
   'mcp_bad_secret_name': '秘密の欄の名前が正しくありません',
   'mcp_secret_kind': 'このサーバーでは、この種類の秘密の欄は使えません',
   'notify_url_required': 'URL は消せません。送り先ごと削除してください',
+  'browser_reset_unsafe': 'ブラウザのプロファイルの置き場所が、データの置き場所の下ではないので、消していません',
+  'browser_reset_failed': 'ブラウザのプロファイルを消せませんでした（{reason}）。ブラウザの窓が開いていれば閉じてから、もう一度試してください',
   'internal': '内部エラーが発生しました（ログを確認してください）',
 } as const;
 
@@ -167,6 +169,8 @@ const en: Record<keyof typeof ja, string> = {
   'mcp_bad_secret_name': 'The name of the secret field is not valid',
   'mcp_secret_kind': 'This kind of secret field cannot be used on this server',
   'notify_url_required': 'The URL cannot be removed. Delete the whole target instead',
+  'browser_reset_unsafe': 'The browser profile is not inside the data folder, so nothing was deleted',
+  'browser_reset_failed': 'The browser profile could not be deleted ({reason}). Close any open browser window and try again',
   'internal': 'An internal error occurred (check the log)',
 };
 

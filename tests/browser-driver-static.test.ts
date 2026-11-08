@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { childEnv, launchArgs, playwrightOptions, type LaunchOptions } from '../src/tools/browser/driver.ts';
 
@@ -34,7 +35,7 @@ test('永続のプロファイルで起動する（launchPersistentContext）。
 });
 
 const options: LaunchOptions = {
-  profileDir: 'C:\\p', channel: 'msedge', executablePath: undefined, headless: true,
+  profileDir: 'C:\\p', channel: 'chrome', executablePath: undefined, headless: true,
   proxy: { server: 'http://127.0.0.1:9', username: 'u', password: 'p' }, viewport: { width: 1280, height: 800 }, locale: 'ja-JP', actionTimeoutMs: 10_000,
 };
 
@@ -45,6 +46,22 @@ test('起動の引数: ループバックも中継へ・QUIC 無し・WebRTC は
   assert.deepEqual(playwrightOptions(options).args, args);
 });
 
+test('起動の引数: --disable-features は 1 つだけで、Playwright の既定（MediaRouter・OptimizationHints など）を含む。あとから付けた引数が既定を潰さない', () => {
+  const features = launchArgs().filter(a => a.startsWith('--disable-features='));
+  assert.equal(features.length, 1);
+  const names = new Set(features[0]!.slice('--disable-features='.length).split(','));
+  // Playwright の既定の一覧（版ごとに変わる。読めなければ、読み方を直す）
+  const bundle = readFileSync(join(dirname(createRequire(import.meta.url).resolve('playwright-core/package.json')), 'lib', 'coreBundle.js'), 'utf8');
+  const start = bundle.indexOf('disabledFeatures = [');
+  assert.ok(start >= 0, 'Playwright の既定の無効な機能の一覧が見つからない');
+  const defaults = [...bundle.slice(start, bundle.indexOf('].filter(Boolean)', start)).matchAll(/^\s*"([A-Za-z0-9]+)",?\s*$/gmu)].map(m => m[1]!);
+  assert.ok(defaults.includes('MediaRouter') && defaults.includes('OptimizationHints'), defaults.join(','));
+  const missing = defaults.filter(name => !names.has(name));
+  assert.deepEqual(missing, [], `Playwright の既定のうち、固定の引数に無い: ${missing.join(',')}`);
+  // 固定の 2 つも残る
+  for (const own of ['PasswordManagerOnboarding', 'AutofillServerCommunication']) assert.ok(names.has(own), own);
+});
+
 test('起動の選択: ダウンロードを受けない・service worker を止める・証明書の誤りを許さない・権限を与えない', () => {
   const o = playwrightOptions(options);
   assert.equal(o.acceptDownloads, false);
@@ -52,7 +69,7 @@ test('起動の選択: ダウンロードを受けない・service worker を止
   assert.equal(o.bypassCSP, false);
   assert.equal(o.ignoreHTTPSErrors, false);
   assert.deepEqual(o.permissions, []);
-  assert.equal(o.channel, 'msedge');
+  assert.equal(o.channel, 'chrome');
   assert.deepEqual(o.proxy, { server: 'http://127.0.0.1:9', username: 'u', password: 'p' });
   const driver = sources.find(s => s.rel === 'tools/browser/driver.ts')!.text;
   assert.match(driver, /acceptDownloads: false/u);

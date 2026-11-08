@@ -66,5 +66,5 @@ test('tools.browser: channel が path なのに executablePath が空なら誤�
   assert.throws(() => parseConfig(withBrowser({ executablePath: 'relative/chrome' })), ConfigError, 'path でなくても相対は誤り');
   const abs = process.platform === 'win32' ? 'C:\\Program Files\\Browser\\browser.exe' : '/usr/bin/browser';
   assert.equal(parseConfig(withBrowser({ channel: 'path', executablePath: abs })).tools.browser.executablePath, abs, 'ファイルが無くても保存は通る');
-  assert.equal(parseConfig(withBrowser({ channel: 'msedge' })).tools.browser.channel, 'msedge');
+  assert.equal(parseConfig(withBrowser({ channel: 'chrome' })).tools.browser.channel, 'chrome');
 });

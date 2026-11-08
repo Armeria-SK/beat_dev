@@ -107,7 +107,7 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
       {approval.preview.map(file => (
         <div key={file.path} className="chat-dialog-file">
           <div className="chat-dialog-mono small">{file.path}{file.truncated ? t('approval.previewCut') : ''}</div>
-          <pre className="chat-dialog-body" aria-label={t('approval.preview')}>{file.text}</pre>
+          <pre className="chat-dialog-body" aria-label={t(approval.tool.startsWith('browser_') ? 'approval.previewAct' : 'approval.preview')}>{file.text}</pre>
         </div>
       ))}
       <div className="chat-dialog-grid">

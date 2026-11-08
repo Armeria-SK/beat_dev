@@ -284,8 +284,10 @@ const ja = {
   'browser.blocked_scheme': 'このページは開けません: 許されない種類の URL です',
   'browser.blocked_navigation': 'このページは開けません: 公開されている http / https のページ（標準のポート）だけを開けます',
   'browser.blocked_downgrade': 'このページは開けません: https のページから http への移動は止めました',
+  'browser.blocked_listed': 'このページは開けません: 操作の一覧のサイトへ、確かめなしに移ろうとしたので止めました（そのサイトを開きたいときは、行き先のアドレスを直接開くよう頼んでください）',
   'browser.disabled': 'ブラウザの道具は、設定（tools.browser.enabled）で無効になっています',
-  'browser.no_browser': 'Microsoft Edge か Google Chrome が見つかりません。入れるか、設定でブラウザの場所（executablePath）を指定してください',
+  'browser.no_browser': 'Google Chrome が見つかりません。入れるか、設定でブラウザの場所（executablePath）に Chromium 系ブラウザの実行ファイルを指定してください',
+  'browser.edge_refused': 'Microsoft Edge ではブラウザの操作をしません。設定のブラウザの場所（executablePath）に、Google Chrome か、ほかの Chromium 系ブラウザの実行ファイルを指定してください',
   'browser.launch_failed': 'ブラウザを起動できませんでした',
   'browser.profile_busy': 'ブラウザのプロファイルを使用中です（別のブラウザの窓が開いているか、前の起動が残っています）。閉じてからやり直してください',
   'browser.launch_paused': 'ブラウザの起動に続けて失敗したため、しばらく（あと {minutes} 分ほど）起動しません',
@@ -308,6 +310,8 @@ const ja = {
   'browser.acted_filechooser': 'ページのファイル選択の窓 {count} 件を閉じました（ファイルは選びません）。',
   'browser.notify_title': 'ブラウザを起動できません',
   'browser.notify_body': 'ブラウザの起動に {count} 回続けて失敗したため、しばらく起動しません。設定の「ブラウザ」を確かめてください。',
+  'browser.login_open': 'ログイン用のブラウザの窓が開いています。ログインを終えて窓を閉じるまで、ブラウザの道具は使えません。持ち主に窓を閉じてもらってください',
+  'browser.no_display': 'この環境には画面が無いので、ブラウザの窓を開けません',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -594,8 +598,10 @@ const en: Record<keyof typeof ja, string> = {
   'browser.blocked_scheme': 'This page cannot be opened: that kind of URL is not allowed',
   'browser.blocked_navigation': 'This page cannot be opened: only public http / https pages (standard ports) can be opened',
   'browser.blocked_downgrade': 'This page cannot be opened: moving from an https page to http was stopped',
+  'browser.blocked_listed': 'This page cannot be opened: it tried to move to a site on the actions list without a confirmation, so it was stopped (to visit that site, ask to open its address directly)',
   'browser.disabled': 'The browser tools are turned off in the settings (tools.browser.enabled)',
-  'browser.no_browser': 'Microsoft Edge or Google Chrome was not found. Install one, or set the browser location (executablePath) in the settings',
+  'browser.no_browser': 'Google Chrome was not found. Install it, or set the browser location (executablePath) in the settings to a Chromium-based browser',
+  'browser.edge_refused': 'Clive does not drive Microsoft Edge. Set the browser location (executablePath) in the settings to Google Chrome or another Chromium-based browser',
   'browser.launch_failed': 'The browser could not be started',
   'browser.profile_busy': 'The browser profile is in use (another browser window is open, or a previous run was left behind). Close it and try again',
   'browser.launch_paused': 'The browser failed to start several times in a row, so it will not be started for a while (about {minutes} more minutes)',
@@ -618,6 +624,8 @@ const en: Record<keyof typeof ja, string> = {
   'browser.acted_filechooser': 'Closed {count} file chooser(s) from the page (no file is chosen).',
   'browser.notify_title': 'The browser cannot be started',
   'browser.notify_body': 'The browser failed to start {count} times in a row, so it will not be started for a while. Check "Browser" in the settings.',
+  'browser.login_open': 'A browser window for logging in is open. The browser tools cannot be used until the owner finishes logging in and closes that window. Ask the owner to close it',
+  'browser.no_display': 'This machine has no display, so a browser window cannot be opened',
 };
 
 export const toolText = defineMessages('tool', ja, en);
