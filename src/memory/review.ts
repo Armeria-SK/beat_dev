@@ -49,8 +49,12 @@ export class ReviewJobs {
     return this.#db.prepare('SELECT * FROM memory_jobs WHERE id = ?').get(id) as ReviewJob | undefined;
   }
 
+  // 古い順に、まだ始まっていない振り返りを 1 本。同じ会話の振り返りがもう動いているものは飛ばす
+  // （worker.maxParallel が 2 以上でも、同じ発言を 2 本が同時に振り返って記憶を二重に書かないため。飛ばした分は実行待ちのまま、先の分が終われば選ばれる）
   next(): ReviewJob | undefined {
-    return this.#db.prepare("SELECT * FROM memory_jobs WHERE status = 'pending' ORDER BY id LIMIT 1").get() as ReviewJob | undefined;
+    return this.#db.prepare(`SELECT * FROM memory_jobs j WHERE j.status = 'pending'
+      AND (j.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM memory_jobs r WHERE r.status = 'running' AND r.conversation_id = j.conversation_id))
+      ORDER BY j.id LIMIT 1`).get() as ReviewJob | undefined;
   }
 
   pendingCount(): number {

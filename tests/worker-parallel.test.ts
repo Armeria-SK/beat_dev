@@ -5,7 +5,9 @@ import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, tempDir, type Script, testConfig } from './helpers.ts';
+import { languageOf } from '../src/shared/language.ts';
+import { taskText } from '../src/shared/messages/tasks.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 async function waitFor(condition: () => boolean, label: string, timeoutMs = 4000): Promise<void> {
   const until = Date.now() + timeoutMs;
@@ -33,6 +35,23 @@ function gated(): { script: Script; release: () => void } {
   return { script, release };
 }
 
+// 振り返り用: 返事を止めておき、release() で文を返して終わらせる（abort されたら止まる）
+function gatedReply(text = '変更なし'): { script: Script; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const script: Script = async function* (req) {
+    yield { type: 'text', delta: '振り返っています…' };
+    await new Promise<void>((resolve, reject) => {
+      if (req.signal.aborted) reject(req.signal.reason);
+      req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true });
+      void gate.then(resolve);
+    });
+    yield { type: 'text', delta: text };
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  };
+  return { script, release };
+}
+
 function hang(): Script {
   return async function* (req) {
     yield { type: 'text', delta: '調べています…' };
@@ -42,6 +61,9 @@ function hang(): Script {
     });
   };
 }
+
+// 振り返りを有効にする（きっかけは手で積むので、会話の途切れ・道具の多さでは勝手に積まれないようにする）
+const reviewOn = (c: AppConfig): void => { c.memory.review = true; c.memory.reviewIdleMinutes = 1440; c.memory.reviewAfterToolCalls = 200; };
 
 async function setup(t: { after: (fn: () => void) => void }, options: { workerMax: number; providerMax: number; timers?: boolean; edit?: (c: AppConfig) => void }) {
   const paths = resolvePaths(tempDir(t));
@@ -208,3 +230,43 @@ test('worker.maxParallel は 1〜4 だけ受け付ける', async t => {
     await assert.rejects(() => setup(t, { workerMax: bad, providerMax: 1 }));
   }
 });
+
+type Rig = Awaited<ReturnType<typeof setup>>;
+
+async function chat(s: Rig, conversationId: string, text: string): Promise<void> {
+  s.adapter().scripts.push(reply('はい'));
+  const outcome = s.app.engine.send(conversationId, text);
+  assert.ok(outcome.ok, JSON.stringify(outcome));
+  await s.app.engine.wait(outcome.runId);
+}
+
+const jobOf = (s: Rig, id: number) => s.app.reviews.get(id)!;
+
+test('並列 2 でも、同じ会話の振り返りは同時に 2 本動かさない。別の会話の分は飛ばされずに先へ進む', async t => {
+  const s = await setup(t, { workerMax: 2, providerMax: 2, edit: reviewOn });
+  await chat(s, 'c1', '来週から大阪に出張です');
+  await chat(s, 'c2', '犬を飼い始めました');
+  const first = s.app.reviews.enqueue('heavy_run', 'run:c1', { conversationId: 'c1' })!;
+  const second = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' })!;
+  const other = s.app.reviews.enqueue('manual', 'manual:c2', { conversationId: 'c2' })!;
+  const base = s.adapter().calls.length;
+  const g1 = gatedReply(); const g2 = gatedReply();
+  s.adapter().scripts.push(g1.script, g2.script);
+  const t1 = s.app.worker.tick();
+  await waitFor(() => s.adapter().calls.length === base + 1, 'c1 の振り返りが始まる');
+  const t2 = s.app.worker.tick();
+  await waitFor(() => s.adapter().calls.length === base + 2, '2 本目の振り返りが始まる');
+  assert.equal(jobOf(s, first.id).status, 'running');
+  assert.equal(jobOf(s, other.id).status, 'running', '別の会話 c2 の振り返りが、c1 の 2 本目に邪魔されず始まる');
+  assert.equal(jobOf(s, second.id).status, 'pending', 'c1 の 2 本目は、c1 の振り返りが動いているあいだ実行待ちのまま');
+  assert.match(String(s.adapter().calls[base]!.messages.at(-1)?.content), /大阪/u);
+  assert.match(String(s.adapter().calls[base + 1]!.messages.at(-1)?.content), /犬/u);
+  g1.release(); g2.release();
+  assert.deepEqual(await Promise.all([t1, t2]), ['ran', 'ran']);
+  assert.ok(s.app.kv.get('review:upto:c1'), '先の振り返りが見た位置を進める');
+  assert.equal(await s.app.worker.tick(), 'idle', '先の分が終われば c1 の 2 本目が選ばれ、見る発言が無いので何もせず終わる');
+  assert.equal(jobOf(s, second.id).status, 'done');
+  assert.equal(jobOf(s, second.id).note, taskText(languageOf(s.app.config()), 'review.nothing'));
+  assert.equal(s.adapter().calls.length, base + 2, '同じ発言のための 2 本目のモデル呼び出しは無い');
+});
+
