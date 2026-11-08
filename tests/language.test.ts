@@ -27,7 +27,7 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { fail, fakeServer, FakeAdapter, reply, sse, tempDir, type Script } from './helpers.ts';
 
-const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
+const CJK = /[\u3000-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uFF00-\uFFEF]/u; // 全角の空白・かな・漢字・全角の記号
 const JA_DIRECTIVE = '返事は日本語で書く';
 const EN_DIRECTIVE = 'Write your replies in English';
 
