@@ -7,7 +7,7 @@ import { isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/p
 
 export type Config = Record<string, any>;
 
-export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
+export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'notify' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
 
 export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArray<{ id: SettingsSection; label: PlainKey; desc: PlainKey }> }> = [
   { label: 'settings.group.model', items: [
@@ -17,6 +17,7 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArr
   ] },
   { label: 'settings.group.behavior', items: [
     { id: 'tools', label: 'settings.section.tools', desc: 'settings.desc.tools' },
+    { id: 'notify', label: 'settings.section.notify', desc: 'settings.desc.notify' },
     { id: 'worker', label: 'settings.section.worker', desc: 'settings.desc.worker' },
     { id: 'memory', label: 'settings.section.memory', desc: 'settings.desc.memory' },
   ] },
@@ -51,6 +52,7 @@ export function sectionSlice(config: Config, section: SettingsSection): unknown 
     case 'models': return [config.models, config.routing];
     case 'providers': return config.providers;
     case 'tools': return config.tools;
+    case 'notify': return config.notify;
     case 'worker': return config.worker;
     case 'memory': return config.memory;
     case 'look': return [config.profile, config.language ?? null];
@@ -93,7 +95,7 @@ export interface Problem {
 }
 
 const SECTION_OF_ROOT: Record<string, SettingsSection> = {
-  models: 'models', routing: 'models', providers: 'providers', tools: 'tools', worker: 'worker', memory: 'memory', profile: 'look', language: 'look', server: 'server',
+  models: 'models', routing: 'models', providers: 'providers', tools: 'tools', notify: 'notify', worker: 'worker', memory: 'memory', profile: 'look', language: 'look', server: 'server',
 };
 
 // サーバーの問題は文字列で返る。「/models/0/contextLength: Expected…」（形の検査。0 は一覧の位置）か

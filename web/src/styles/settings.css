@@ -208,3 +208,11 @@
 .set-name-edit { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 textarea.input.set-persona { width: 100%; min-height: 220px; box-sizing: border-box; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; resize: vertical; }
 .set-persona-bar { display: flex; align-items: center; gap: 10px; }
+
+/* 設定の「通知の送り先」: 宛先ごとのカードと追加フォーム */
+.set-notify { gap: 14px; }
+.set-notify-card { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); min-width: 0; }
+.set-notify-kinds { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.set-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.set-notify-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.set-notify-actions, .set-notify-add { justify-content: flex-start; }

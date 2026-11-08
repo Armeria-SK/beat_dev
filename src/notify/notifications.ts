@@ -12,6 +12,21 @@ export interface Notification {
   dedup_key: string | null;
   read_at: number | null;
   created_at: number;
+  // 1 は手元のモデルだけで扱う仕事から出た通知（外の送り先へは題・本文を送らない）
+  local_only: number;
+}
+
+// 聞き手に渡す値。noForward は DB に残さず、外の送り先へ送らない通知の印（health_alert など、送り先の失敗を知らせる通知が自分で連鎖しないように）
+export type NotifyEvent = Notification & { noForward?: true };
+
+export interface NotifyInput {
+  kind: NotificationKind;
+  title: string;
+  body?: string | undefined;
+  link?: string | undefined;
+  dedupKey?: string | undefined;
+  localOnly?: boolean | undefined;
+  noForward?: true | undefined;
 }
 
 export const DEDUP_MS = 24 * 3_600_000;
@@ -19,22 +34,29 @@ export const DEDUP_MS = 24 * 3_600_000;
 export class Notifications {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
-  onNotify: ((n: Notification) => void) | undefined;
+  readonly #log: (line: string) => void;
+  readonly #listeners: Array<(n: NotifyEvent) => void> = [];
   // 聞かれていたことが片づいて既読にした通知の id（持ち主が読んだときの markRead では呼ばない）
   onSettled: ((ids: number[]) => void) | undefined;
 
-  constructor(db: DatabaseSync, now: () => number = Date.now) { this.#db = db; this.#now = now; }
+  constructor(db: DatabaseSync, now: () => number = Date.now, log: (line: string) => void = () => {}) { this.#db = db; this.#now = now; this.#log = log; }
 
-  notify(input: { kind: NotificationKind; title: string; body?: string | undefined; link?: string | undefined; dedupKey?: string | undefined }): Notification | undefined {
+  // 新しい通知を聞く（画面への配信、外の送り先）。1 本が throw しても、通知の作成と残りの聞き手は止めない
+  listen(listener: (n: NotifyEvent) => void): void { this.#listeners.push(listener); }
+
+  notify(input: NotifyInput): Notification | undefined {
     const now = this.#now();
     if (input.dedupKey) {
       const recent = this.#db.prepare('SELECT 1 FROM notifications WHERE dedup_key = ? AND created_at > ?').get(input.dedupKey, now - DEDUP_MS);
       if (recent) return undefined;
     }
-    const result = this.#db.prepare('INSERT INTO notifications (kind, title, body, link, dedup_key, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(input.kind, input.title.slice(0, 200), input.body?.slice(0, 2000) ?? null, input.link ?? null, input.dedupKey ?? null, now);
+    const result = this.#db.prepare('INSERT INTO notifications (kind, title, body, link, dedup_key, local_only, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(input.kind, input.title.slice(0, 200), input.body?.slice(0, 2000) ?? null, input.link ?? null, input.dedupKey ?? null, input.localOnly ? 1 : 0, now);
     const n = this.#db.prepare('SELECT * FROM notifications WHERE id = ?').get(Number(result.lastInsertRowid)) as unknown as Notification;
-    this.onNotify?.(n);
+    const event: NotifyEvent = input.noForward ? { ...n, noForward: true } : n;
+    for (const listener of this.#listeners) {
+      try { listener(event); } catch (error) { this.#log(`[ERROR] 通知の聞き手が失敗しました: ${(error as Error).message}`); }
+    }
     return n;
   }
 

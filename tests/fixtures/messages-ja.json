@@ -698,6 +698,21 @@
     "key_unsupported": "この API キーの文字の並びは、.env に安全に書けません",
     "key_env_unsafe": "環境変数「{env}」は API キーの名前として使えません（KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれかを含む名前にしてください）",
     "env_unwritable": ".env に書けなかったので、API キーは保存していません（{reason}）",
+    "notify_channel_missing": "通知の送り先「{id}」は設定にありません",
+    "notify_channel_exists": "通知の送り先「{id}」はもうあります",
+    "notify_channel_limit": "通知の送り先は {max} 件までです（設定の notify.limits.maxChannels）",
+    "notify_bad_id": "ID は、英小文字で始まり、英小文字・数字・ハイフンだけの 24 文字までにしてください",
+    "notify_bad_url": "URL は https か、この PC の中（127.0.0.1 など）の http にしてください（ユーザー名やパスワードを URL に入れることはできません）",
+    "notify_secret_empty": "値を入力してください",
+    "notify_secret_chars": "値に使えない文字（改行・制御文字・全角文字など）が入っています。貼り付け直してください",
+    "notify_secret_padded": "値の前か後ろに空白が入っています。取り除いてもう一度入れてください",
+    "notify_secret_too_long": "値が長すぎます（{max} 文字まで）",
+    "notify_secret_unsupported": "この値の文字の並びは、.env に安全に書けません",
+    "notify_env_unsafe": "環境変数「{env}」は秘密の名前として使えません（KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれかを含む名前にしてください）",
+    "notify_env_conflict": "環境変数「{env}」は、ほかの送り先かプロバイダの鍵に使われています",
+    "notify_env_unwritable": ".env に書けなかったので、保存していません（{reason}）",
+    "notify_env_manual": "環境変数「{env}」は設定ファイルに手で書かれた名前なので、画面からは書き換えません。.env を直接編集してください",
+    "notify_url_required": "URL は消せません。送り先ごと削除してください",
     "internal": "内部エラーが発生しました（ログを確認してください）"
   },
   "config": {
@@ -706,6 +721,7 @@
     "pattern.key_env": "ここには、キーそのものではなく、環境変数の「名前」を書きます（英大文字で始め、大文字・数字・_ で、64 文字まで）。キーは「API キー」の欄に入れてください",
     "pattern.effort": "考える深さの名前は、英数字・_・.・- で、英数字から始め、32 文字までにしてください",
     "pattern.color": "色は #RRGGBB の形（例: #61B8A5）にしてください",
+    "pattern.notify_id": "ID は、小文字・数字・- で、小文字から始め、24 文字までにしてください",
     "pattern.time": "時刻は HH:MM（24 時間。例: 22:30）の形にするか、空にしてください",
     "pattern.other": "決まった書き方に合っていません",
     "string.required": "入力してください",
@@ -716,6 +732,7 @@
     "number.max": "{max} 以下の数にしてください",
     "array.min_items": "{min} 個以上にしてください",
     "array.max_items": "{max} 個までにしてください",
+    "array.unique": "同じものを 2 回入れないでください",
     "type.string": "文字で入力してください",
     "type.integer": "整数で入力してください",
     "type.number": "数で入力してください",
@@ -727,5 +744,16 @@
     "type.literal": "{value} にしてください",
     "required": "この項目が必要です",
     "unexpected": "この名前の項目は、設定にありません"
+  },
+  "notify": {
+    "local_title.task_done": "Clive: 手元のモデルの作業が完了しました",
+    "local_title.task_waiting": "Clive: 手元のモデルの作業が返事を待っています",
+    "local_title.task_failed": "Clive: 手元のモデルの作業が失敗しました",
+    "local_title.approval_needed": "Clive: 手元のモデルの作業が承認を待っています",
+    "local_title.health_alert": "Clive: 手元のモデルの作業で異常があります",
+    "local_title.info": "Clive: 手元のモデルの作業からのお知らせがあります",
+    "test": "Clive からの試しの通知です",
+    "channel_failing": "通知の送り先「{id}」に {fails} 回続けて送れていません（{reason}）。設定の「通知」で確かめてください",
+    "cap_reached": "外の送り先への通知が 1 時間の上限（{max} 件）に達したので、この時間の残りは送りません（設定の notify.limits.maxSendsPerHour）"
   }
 }

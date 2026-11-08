@@ -124,6 +124,36 @@ export function ToolsConfig() {
   }, { additionalProperties: false, default: {} });
 }
 
+// 通知の種類（src/notify/notifications.ts の NotificationKind と同じ 6 つ。tests/notify-config.test.ts が一致を確かめる）
+export const NOTIFICATION_KINDS = ['task_done', 'task_waiting', 'task_failed', 'approval_needed', 'health_alert', 'info'] as const;
+export const NotificationKindSchema = Type.Union(NOTIFICATION_KINDS.map(k => Type.Literal(k)));
+// 外の送り先へ送る種類の既定（持ち主の手が要るもの）
+export const DEFAULT_NOTIFY_KINDS = ['task_waiting', 'task_failed', 'approval_needed', 'health_alert'] as const;
+
+// 外の送り先（webhook）。URL と token は設定に書かず、環境変数の名前（urlEnv・tokenEnv）だけを書く。値は .env に入れる（画面から入れられる）
+export const NotifyChannelConfig = Type.Object({
+  id: Type.String({ pattern: '^[a-z][a-z0-9-]{0,23}$' }),
+  kind: Type.Union([Type.Literal('webhook')]),
+  urlEnv: Type.String({ pattern: '^[A-Z][A-Z0-9_]{0,63}$' }),
+  tokenEnv: Type.Optional(Type.String({ pattern: '^[A-Z][A-Z0-9_]{0,63}$' })),
+  kinds: Type.Array(NotificationKindSchema, { minItems: 1, maxItems: 6, uniqueItems: true, default: [...DEFAULT_NOTIFY_KINDS] }),
+  enabled: Type.Boolean({ default: true }),
+  includeBody: Type.Boolean({ default: false }),
+}, { additionalProperties: false });
+
+// 固定の歯止め。範囲の外は丸めずに、読み込みで断る（範囲の端が絶対の上限）
+export const NotifyConfig = Type.Object({
+  channels: Type.Array(NotifyChannelConfig, { default: [], maxItems: 8 }),
+  publicBaseUrl: Type.String({ default: '', maxLength: 2048 }),
+  limits: Type.Object({
+    maxChannels: Type.Integer({ minimum: 1, maximum: 8, default: 4 }),
+    maxSendsPerHour: Type.Integer({ minimum: 1, maximum: 120, default: 30 }),
+    timeoutMs: Type.Integer({ minimum: 1000, maximum: 15_000, default: 5000 }),
+    retries: Type.Integer({ minimum: 0, maximum: 2, default: 1 }),
+    failsBeforeAlert: Type.Integer({ minimum: 1, maximum: 10, default: 3 }),
+  }, { additionalProperties: false, default: {} }),
+}, { additionalProperties: false, default: {} });
+
 export const AppConfig = Type.Object({
   $schema: Type.Optional(Type.String()),
   version: Type.Literal(1),
@@ -159,6 +189,7 @@ export const AppConfig = Type.Object({
     reviewIdleMinutes: Type.Integer({ minimum: 5, maximum: 1440, default: 30 }),
     reviewAfterToolCalls: Type.Integer({ minimum: 1, maximum: 200, default: 8 }),
   }, { additionalProperties: false, default: {} }),
+  notify: NotifyConfig,
 }, { additionalProperties: false });
 
 export type ProviderConfig = Static<typeof ProviderConfig>;
@@ -166,3 +197,5 @@ export type ModelConfig = Static<typeof ModelConfig>;
 export type AppConfig = Static<typeof AppConfig>;
 export type ToolsConfig = Static<ReturnType<typeof ToolsConfig>>;
 export type HookConfig = Static<typeof HookConfig>;
+export type NotifyChannelConfig = Static<typeof NotifyChannelConfig>;
+export type NotifyConfig = Static<typeof NotifyConfig>;

@@ -147,6 +147,17 @@ export interface PersonaView { soul: string; user: string; tokens: { soul: numbe
 // API キーの状態（GET /api/providers/:id/key）。鍵そのものは返らない
 // source: 'os' は、鍵が .env ではなく OS の環境変数にある（ここからは消せない。末尾 4 文字も無い）
 export interface ProviderKeyState { set: boolean; last4?: string | null; source?: 'os' }
+// 外への通知（webhook）の送り先。URL・token の値は返らない（入っているかだけ）
+export type NotifyKind = 'task_done' | 'task_waiting' | 'task_failed' | 'approval_needed' | 'health_alert' | 'info';
+export interface NotifyChannelView {
+  id: string; kind: 'webhook'; enabled: boolean; kinds: NotifyKind[]; includeBody: boolean;
+  urlEnv: string; tokenEnv: string | null; urlSet: boolean; tokenSet: boolean;
+  lastOkAt: number | null; lastFailAt: number | null; reason: string | null; fails: number;
+}
+export interface NotifyLimits { maxChannels: number; maxSendsPerHour: number; timeoutMs: number; retries: number; failsBeforeAlert: number }
+export interface NotifyView { channels: NotifyChannelView[]; limits: NotifyLimits; publicBaseUrl: string }
+export interface NotifySecretState { set: boolean; source?: 'os' }
+export type NotifyTestResult = { ok: true } | { ok: false; reason: string };
 export interface EnvReloadView { loaded: boolean; apiKeys: Record<string, boolean>; notApplied: string[] }
 
 export class ApiError extends Error {
@@ -247,6 +258,14 @@ export const api = {
   providerKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`),
   setProviderKey: (id: string, key: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'PUT', body: JSON.stringify({ key }) }),
   deleteProviderKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'DELETE' }),
+  notify: () => call<NotifyView>('/api/notify/channels'),
+  addNotifyChannel: (input: { id: string; url: string; token?: string; kinds?: NotifyKind[]; includeBody?: boolean }) => call<NotifyView>('/api/notify/channels', { method: 'POST', body: JSON.stringify(input) }),
+  patchNotifyChannel: (id: string, patch: { enabled?: boolean; kinds?: NotifyKind[]; includeBody?: boolean }) => call<NotifyView>(`/api/notify/channels/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteNotifyChannel: (id: string) => call<NotifyView>(`/api/notify/channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  setNotifySecret: (id: string, field: 'url' | 'token', value: string) => call<NotifySecretState>(`/api/notify/channels/${encodeURIComponent(id)}/secrets/${field}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+  deleteNotifySecret: (id: string, field: 'token') => call<NotifySecretState>(`/api/notify/channels/${encodeURIComponent(id)}/secrets/${field}`, { method: 'DELETE' }),
+  testNotifyChannel: (id: string) => call<NotifyTestResult>(`/api/notify/channels/${encodeURIComponent(id)}/test`, { method: 'POST', body: '{}' }),
+  patchNotify: (patch: { publicBaseUrl?: string; limits?: Partial<NotifyLimits> }) => call<NotifyView>('/api/notify', { method: 'PATCH', body: JSON.stringify(patch) }),
   reloadEnv: (env: string[] = []) => call<EnvReloadView>('/api/onboarding/reload-env', { method: 'POST', body: JSON.stringify({ env }) }),
   persona: () => call<PersonaView>('/api/workspace/persona'),
   savePersona: (patch: { soul?: string; user?: string }) => call<PersonaView>('/api/workspace/persona', { method: 'PUT', body: JSON.stringify(patch) }),

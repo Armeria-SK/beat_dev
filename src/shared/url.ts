@@ -18,3 +18,11 @@ export function checkBaseUrl(value: string, usesApiKey: boolean): { url: string 
   }
   return { url: url.href.replace(/\/+$/u, '') };
 }
+
+// 外へ送る先（通知の webhook・リンクの頭）として使える URL か。https か、この PC（ループバック）の http だけ。認証情報（user:pass@）は書けない
+export function isSafeOutboundUrl(value: string): boolean {
+  let url: URL;
+  try { url = new URL(value); } catch { return false; }
+  if (url.username || url.password) return false;
+  return url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHost(url.hostname));
+}
