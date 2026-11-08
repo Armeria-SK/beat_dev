@@ -2,7 +2,7 @@
 // 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は CLIVE_BROWSER_LIVE=1 のときだけ動かす
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BrowserContext, Page, Route } from 'playwright-core';
+import type { BrowserContext, Locator, Page, Route } from 'playwright-core';
 import type { Language } from '../../config/schema.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
@@ -10,7 +10,7 @@ import { routeVerdict, type RouteRefusal } from './route.ts';
 
 export type BrowserFailureCode =
   | 'disabled' | 'no_browser' | 'launch_failed' | 'profile_busy' | 'paused' | 'tab_limit' | 'no_tab'
-  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed';
+  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed';
 
 // ブラウザの道具の失敗。key と params からアプリの決まった文を作る（nav_failed だけ、相手・Playwright の文字が params に入る）
 export class BrowserFailure extends Error {
@@ -47,6 +47,17 @@ export interface LaunchOptions {
 
 export interface ElementState { visible: boolean; enabled: boolean }
 
+// 探し直す要素: 役割・名前（完全一致）・何番目か・読んだときの全部の数（数が違えば別のページとみなして触らない）
+export interface ElementTarget { role: string; name: string; nth: number; count: number }
+// 探し直した要素の属性（パスワード欄などの判定に使う。ariaSnapshot からは分からないので、要素そのものから読む）
+export interface ElementDetail extends ElementState {
+  // <input> は DOM の type（ブラウザが正規化したもの）、それ以外は type 属性。小文字。無ければ undefined
+  type: string | undefined;
+  autocomplete: string | undefined;
+}
+// 操作のあいだに起きたページ側の出来事。数だけ（ダイアログの文などページの文字は持たない）
+export interface ActionEvents { dialogs: number; downloads: number; fileChoosers: number }
+
 export interface PageHandle {
   url(): string;
   title(): Promise<string>;
@@ -58,6 +69,12 @@ export interface PageHandle {
   // 役割と名前（完全一致）に当たる要素の数 / その nth 番目の状態（無ければ undefined）
   countRole(role: string, name: string): Promise<number>;
   stateOf(role: string, name: string, nth: number): Promise<ElementState | undefined>;
+  // 数が読んだときと同じで nth 番目があるときだけ、その要素の状態と属性。そうでなければ undefined
+  locate(target: ElementTarget): Promise<ElementDetail | undefined>;
+  // 押す / 文字を入れる（submit なら最後に Enter）。実行の直前に数をもう一度確かめ、違えば page_changed。
+  // ダイアログは閉じ（beforeunload だけ離れる）、ダウンロードは断り、ファイル選択は閉じて、数を返す
+  click(target: ElementTarget, timeoutMs: number): Promise<ActionEvents>;
+  fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents>;
   // 見えている範囲だけの PNG
   screenshot(): Promise<Buffer>;
   // 要求の横取りが最後に断った遷移の理由（goto の前に消し、断られたら入る）
@@ -162,10 +179,25 @@ function classifyLaunchError(error: unknown): BrowserFailure {
 
 const clipLine = (text: string, max: number) => text.replace(/\s+/gu, ' ').trim().slice(0, max);
 
+// 押したあと、遷移や新しい窓が起きるのを少し待つ（長くは待たない）
+const SETTLE_MS = 250;
+const SETTLE_LOAD_MS = 1000;
+
 class PlaywrightPage implements PageHandle {
   readonly page: Page;
   refusal: RouteRefusal | undefined;
-  constructor(page: Page) { this.page = page; }
+  #events: ActionEvents = { dialogs: 0, downloads: 0, fileChoosers: 0 };
+  constructor(page: Page) {
+    this.page = page;
+    // ページ側の出来事には、いつも自分で答える（放っておくとページが止まる）。中身は読まない
+    page.on('dialog', dialog => {
+      this.#events.dialogs++;
+      // beforeunload（離れてよいか）だけは、離れるのを妨げないよう受ける。ほかの alert / confirm / prompt は閉じる（承諾しない）
+      void (dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss()).catch(() => undefined);
+    });
+    page.on('download', download => { this.#events.downloads++; void download.cancel().catch(() => undefined); });
+    page.on('filechooser', () => { this.#events.fileChoosers++; });
+  }
 
   url(): string { return this.page.url(); }
   title(): Promise<string> { return this.page.title(); }
@@ -198,6 +230,50 @@ class PlaywrightPage implements PageHandle {
     if (nth >= await locator.count()) return undefined;
     const one = locator.nth(nth);
     return { visible: await one.isVisible(), enabled: await one.isEnabled() };
+  }
+
+  async #locator(target: ElementTarget): Promise<Locator | undefined> {
+    const all = this.page.getByRole(target.role as Parameters<Page['getByRole']>[0], { name: target.name, exact: true });
+    if (target.nth >= target.count || await all.count() !== target.count) return undefined;
+    return all.nth(target.nth);
+  }
+
+  async locate(target: ElementTarget): Promise<ElementDetail | undefined> {
+    const one = await this.#locator(target);
+    if (!one) return undefined;
+    const attrs = await one.evaluate((el: Element) => {
+      const input = el instanceof HTMLInputElement ? el.type : el.getAttribute('type');
+      return { type: input ? input.trim().toLowerCase() : null, autocomplete: (el.getAttribute('autocomplete') ?? '').trim().toLowerCase() || null };
+    });
+    return { visible: await one.isVisible(), enabled: await one.isEnabled(), type: attrs.type ?? undefined, autocomplete: attrs.autocomplete ?? undefined };
+  }
+
+  // 操作の前に出来事の数を 0 に戻し、あとで返す
+  async #act(target: ElementTarget, timeoutMs: number, work: (one: Locator) => Promise<void>): Promise<ActionEvents> {
+    const one = await this.#locator(target);
+    if (!one) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0 };
+    try {
+      await work(one);
+    } catch (e) {
+      if ((e as { name?: string }).name === 'TimeoutError') throw new BrowserFailure('timeout', 'browser.timeout', { sec: Math.round(timeoutMs / 1000) });
+      // Playwright の文にはページの文字が入りうるので、そのままは出さない
+      throw new BrowserFailure('act_failed', 'browser.act_failed');
+    }
+    await new Promise<void>(resolve => { setTimeout(resolve, SETTLE_MS); });
+    await this.page.waitForLoadState('domcontentloaded', { timeout: SETTLE_LOAD_MS }).catch(() => undefined);
+    return { ...this.#events };
+  }
+
+  click(target: ElementTarget, timeoutMs: number): Promise<ActionEvents> {
+    return this.#act(target, timeoutMs, one => one.click({ timeout: timeoutMs }));
+  }
+
+  fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents> {
+    return this.#act(target, timeoutMs, async one => {
+      await one.fill(text, { timeout: timeoutMs });
+      if (submit) await one.press('Enter', { timeout: timeoutMs });
+    });
   }
 
   screenshot(): Promise<Buffer> { return this.page.screenshot({ type: 'png', fullPage: false }); }

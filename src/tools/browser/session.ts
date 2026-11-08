@@ -50,6 +50,9 @@ export interface BrowserApi {
   closeAll(): Promise<number>;
   // この呼び出しのあいだに中継が断った数（403 / 503）
   proxyDelta(): { blocked: number; busy: number };
+  // work のあいだにページ側が開いた窓（ポップアップ）を、この会話の新しいタブとして残す。
+  // 上限（maxTabs）を超える分は閉じて数だけ返す。work が失敗したら、集めた窓はすべて閉じる。work の外で開いた窓は今までどおり即座に閉じる
+  withPopups<T>(work: () => Promise<T>): Promise<{ value: T; opened: BrowserTab[]; closed: number }>;
 }
 
 const FAILURES_BEFORE_PAUSE = 3;
@@ -75,6 +78,8 @@ export class BrowserSession {
   #handle: BrowserHandle | undefined;
   #proxy: EgressProxy | undefined;
   #tabs = new Map<string, BrowserTab>();
+  // withPopups のあいだだけ、ページ側が開いた窓を集める入れ物
+  #popups: PageHandle[] | undefined;
   #nextTab = 1;
   #clock = 0;
   #locked = false;
@@ -178,7 +183,10 @@ export class BrowserSession {
       };
       const handle = await this.#d.driver.launch(options);
       if (epoch !== this.#epoch) { await withTimeout(handle.close(), CLOSE_TIMEOUT_MS); throw new BrowserFailure('aborted', 'browser.aborted'); }
-      handle.onPage(page => { void page.close().catch(() => undefined); });
+      handle.onPage(page => {
+        if (this.#popups) { this.#popups.push(page); return; }
+        void page.close().catch(() => undefined);
+      });
       handle.onDisconnected(() => { if (this.#handle === handle) void this.#shutdown(); });
       this.#handle = handle; this.#proxy = proxy;
       this.#failures = 0;
@@ -277,6 +285,28 @@ export class BrowserSession {
         return mine.length;
       },
       proxyDelta: () => { const now = proxy.stats(); return { blocked: now.blocked - start.blocked, busy: now.busy - start.busy }; },
+      withPopups: async work => {
+        const sink: PageHandle[] = [];
+        this.#popups = sink;
+        let value: Awaited<ReturnType<typeof work>>;
+        try {
+          value = await work();
+        } catch (error) {
+          this.#popups = undefined;
+          for (const page of sink) await withTimeout(page.close(), CLOSE_TIMEOUT_MS);
+          throw error;
+        }
+        this.#popups = undefined;
+        const opened: BrowserTab[] = [];
+        let closed = 0;
+        for (const page of sink) {
+          if (this.#tabs.size >= config.limits.maxTabs) { await withTimeout(page.close(), CLOSE_TIMEOUT_MS); closed += 1; continue; }
+          const tab: BrowserTab = { id: `t${this.#nextTab++}`, conversationId: call.conversationId, page, table: undefined, used: ++this.#clock };
+          this.#tabs.set(tab.id, tab);
+          opened.push(tab);
+        }
+        return { value, opened, closed };
+      },
     };
   }
 }

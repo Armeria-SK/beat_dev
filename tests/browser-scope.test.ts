@@ -33,10 +33,10 @@ async function chat(s: Started, id: string, text: string, model?: string): Promi
 
 const names = (s: Started, n: number) => s.adapter().calls[n]!.tools.map(t => t.name);
 const browserNames = (s: Started, n: number) => names(s, n).filter(isBrowserTool).sort();
-const ALL = ['browser_close', 'browser_open', 'browser_read', 'browser_screenshot'];
+const ALL = ['browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type'];
 const enable = (c: ReturnType<typeof testConfig>) => { c.tools.browser.enabled = true; };
 
-test('T-09 組み込みの道具に browser_open / read / screenshot / close がある。既定（無効）ではモデルに渡らない', async t => {
+test('T-09 組み込みの道具に browser_open / read / screenshot / close / click / type がある。既定（無効）ではモデルに渡らない', async t => {
   assert.deepEqual(builtinTools().map(tool => tool.name).filter(isBrowserTool).sort(), ALL);
   assert.deepEqual(BROWSER_TOOLS.map(tool => tool.name).sort(), ALL);
   const s = await startApp(t, { models: [fakeModel('m1')] });
@@ -46,7 +46,7 @@ test('T-09 組み込みの道具に browser_open / read / screenshot / close が
   assert.ok(names(s, 0).includes('file_read'), '前提: ほかの道具は渡っている');
 });
 
-test('T-09 有効にするとチャットの実行に 4 つとも渡る。手元のモデルを選んだ会話（localOnly）でも渡る', async t => {
+test('T-09 有効にするとチャットの実行に 6 つとも渡る。手元のモデルを選んだ会話（localOnly）でも渡る', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')], configure: enable });
   s.adapter().scripts = [reply('こんにちは'), reply('こんにちは')];
   await chat(s, uuid(1), 'やあ');
@@ -65,7 +65,7 @@ test('T-09 計画モードには、読むだけの browser_* は渡り、送信�
   s.app.conversations.create({ id, title: '計画' });
   const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: '計画して', permissionMode: 'plan' });
   await settled(s.app, sent.body.runId);
-  // browser_close は効果が meta なので計画モードには渡らない（読む open / read / screenshot だけ）
+  // browser_close は効果が meta、click / type は submits なので、計画モードには渡らない（読む open / read / screenshot だけ）
   assert.deepEqual(browserNames(s, 0), ['browser_open', 'browser_read', 'browser_screenshot']);
 });
 
