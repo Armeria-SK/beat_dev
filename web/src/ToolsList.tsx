@@ -10,6 +10,8 @@ import { EFFECT_LABEL, orderTools, POLICY_LABEL, toolLook } from './skills-meta.
 import { toast } from './toast.tsx';
 import { TOOL_POLICIES, type ToolPolicy } from '../../src/tools/tool-policy.ts';
 
+const ASKS_LABEL = { sends: 'tools.mcp.asks.sends', removes: 'tools.mcp.asks.removes', write: 'tools.mcp.asks.write' } as const;
+
 interface Props {
   tools: readonly ToolInfo[] | null;
   failed: boolean;
@@ -64,6 +66,7 @@ export function ToolsList({ tools, failed, onChanged, onReload }: Props) {
                 <span className="sk-tool-name">{tool.name}</span>
                 {look.desc && <span className="sk-tool-desc">{t(look.desc)}</span>}
               </div>
+              {tool.mcp && <span className="tag tag-accent-2">{t('tools.mcp.badge', tool.mcp.server)}</span>}
               <span className="tag tag-neutral">{t(EFFECT_LABEL[tool.effect])}</span>
               {tool.configurable ? (
                 <div className="seg sk-seg sk-policy" role="radiogroup" aria-label={t('tools.policy.label', tool.name)}>
@@ -75,6 +78,7 @@ export function ToolsList({ tools, failed, onChanged, onReload }: Props) {
                   ))}
                 </div>
               ) : <span className="sk-tool-fixed">{t('tools.policy.fixed')}</span>}
+              {tool.asks && <span className="sk-tool-sub">{t(ASKS_LABEL[tool.asks])}</span>}
               {tool.configurable && tool.policy === 'block' && <span className="sk-tool-sub">{t('tools.policy.blockNote')}</span>}
               {tool.configurable && tool.policy === 'ask' && tool.allowedIn.includes('review') && <span className="sk-tool-sub">{t('tools.policy.reviewNote')}</span>}
             </div>

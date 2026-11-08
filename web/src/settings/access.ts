@@ -47,6 +47,17 @@ export type Access =
   | { kind: 'notify-channel-kinds'; id: string; kinds: string[] }
   | { kind: 'notify-channel-enabled'; id: string }
   | { kind: 'notify-public-url'; url: string }
+  // 外の MCP サーバー: 足す / 宛先（プログラム・作業フォルダ・URL）を変える / 渡す欄（環境変数・見出し）を足す・変える / 秘密の値を入れる / 止めていたものを動かす / 手元のモデルの会話にも渡す
+  | { kind: 'mcp-server-added'; id: string; transport: string; target: string }
+  | { kind: 'mcp-server-target'; id: string; target: string }
+  | { kind: 'mcp-server-env'; id: string; names: string[] }
+  | { kind: 'mcp-server-secret'; id: string; name: string }
+  | { kind: 'mcp-server-enabled'; id: string }
+  | { kind: 'mcp-server-local'; id: string }
+  // 道具: 登録する道具を足す / 止めていた道具を動かす / 申告（読むだけ・送らない・消さない）を緩める
+  | { kind: 'mcp-tool-added'; id: string; tool: string }
+  | { kind: 'mcp-tool-enabled'; id: string; tool: string }
+  | { kind: 'mcp-tool-loosened'; id: string; tool: string }
   // 歯止めの数（notify.limits / mcp.limits）を、緩む向きに変える
   | { kind: 'limit-raised'; key: string; from: number; to: number };
 
@@ -159,6 +170,56 @@ function notifyChanges(before: Config, after: Config): Access[] {
   return out;
 }
 
+// MCP サーバーの変更のうち、広がるもの。ID で突き合わせる。値（秘密）は設定に無いので、環境変数の名前の参照が変わったかで見る
+// 画面に出す「起動する先」。作業フォルダがあれば添える
+const mcpTarget = (server: Record<string, any>): string => {
+  if (server.transport === 'http') return String(server.url ?? '');
+  const cwd = typeof server.cwd === 'string' && server.cwd !== '' ? ` (cwd: ${server.cwd})` : '';
+  return strings(server.command).join(' ') + cwd;
+};
+// 同じ先かどうかの比べ。引数の区切りが変わる（["a b"] と ["a","b"]）のも違いとして見る
+const mcpTargetKey = (server: Record<string, any>): string => JSON.stringify([server.transport ?? 'stdio', server.url ?? '', strings(server.command), server.cwd ?? '']);
+function mcpChanges(before: Config, after: Config): Access[] {
+  const list = (config: Config): Array<Record<string, any>> => {
+    const servers = obj(config.mcp).servers;
+    return Array.isArray(servers) ? servers.filter((x): x is Record<string, any> => typeof x === 'object' && x !== null) : [];
+  };
+  const old = new Map(list(before).map(s => [String(s.id), s]));
+  const out: Access[] = [];
+  for (const server of list(after)) {
+    const id = String(server.id ?? '');
+    const was = old.get(id);
+    if (!was) out.push({ kind: 'mcp-server-added', id, transport: String(server.transport ?? 'stdio'), target: mcpTarget(server) });
+    else if (mcpTargetKey(server) !== mcpTargetKey(was)) out.push({ kind: 'mcp-server-target', id, target: mcpTarget(server) });
+    // 渡す欄（子の環境変数・HTTP の見出し）。足した・参照先が変わった名前を並べる
+    const names: string[] = [];
+    for (const field of ['env', 'headers']) {
+      const now = obj(server[field]);
+      const prev = obj(was?.[field]);
+      for (const name of Object.keys(now).sort()) if (prev[name] !== now[name]) names.push(name);
+    }
+    if (names.length > 0) out.push({ kind: 'mcp-server-env', id, names });
+    if (was && (was.enabled ?? true) === false && (server.enabled ?? true) === true) out.push({ kind: 'mcp-server-enabled', id });
+    if ((was?.localOk ?? false) === false && (server.localOk ?? false) === true) out.push({ kind: 'mcp-server-local', id });
+    const prevTools = obj(was?.tools);
+    const tools = obj(server.tools);
+    for (const tool of Object.keys(tools).sort()) {
+      const entry = obj(tools[tool]);
+      const had = Object.hasOwn(prevTools, tool);
+      const prev = obj(prevTools[tool]);
+      const on = entry.enabled !== false;
+      if (on && !had) out.push({ kind: 'mcp-tool-added', id, tool });
+      else if (on && prev.enabled === false) out.push({ kind: 'mcp-tool-enabled', id, tool });
+      // 申告の緩み。申告が無い道具は「外へ出る・送りうる」として確かめられるので、そこから申告のある側へ動くのも緩み
+      const effectLoosened = entry.effect === 'read' && prev.effect !== 'read';
+      const sendsLoosened = entry.sends === false && prev.sends !== false;
+      const removesLoosened = prev.removes === true && entry.removes !== true;
+      if (effectLoosened || sendsLoosened || removesLoosened) out.push({ kind: 'mcp-tool-loosened', id, tool });
+    }
+  }
+  return out;
+}
+
 // limits の数が増える = 歯止めが緩む（failsBeforeAlert も、増えると警告が遅れるので緩む向き）。両方に数があるものだけ比べる
 function limitChanges(before: Config, after: Config): Access[] {
   const out: Access[] = [];
@@ -177,6 +238,12 @@ export function secretEntryAccess(slot: { id: string; field: 'url' | 'token' }, 
   if (slot.field !== 'url') return [];
   const channels = obj(config.notify).channels;
   return Array.isArray(channels) && channels.some(c => obj(c).id === slot.id) ? [{ kind: 'notify-channel-target', id: slot.id }] : [];
+}
+
+// MCP サーバーの秘密（子の環境変数・HTTP の見出し）の値を入れる・変える（設定の保存とは別の操作）ときの確かめ。値は、そのサーバーへ渡される
+export function mcpSecretAccess(slot: { id: string; kind: 'env' | 'header'; name: string }, config: Config): Access[] {
+  const servers = obj(config.mcp).servers;
+  return Array.isArray(servers) && servers.some(s => obj(s).id === slot.id) ? [{ kind: 'mcp-server-secret', id: slot.id, name: slot.name }] : [];
 }
 
 export function accessWidening(before: Config, after: Config): Access[] {
@@ -199,7 +266,7 @@ export function accessWidening(before: Config, after: Config): Access[] {
   out.push(...hookChanges(before, after, 'preToolUse'), ...hookChanges(before, after, 'postToolUse'));
   out.push(...providerChanges(before, after));
   out.push(...toolPolicyChanges(before, after));
-  out.push(...notifyChanges(before, after), ...limitChanges(before, after));
+  out.push(...notifyChanges(before, after), ...mcpChanges(before, after), ...limitChanges(before, after));
   const searxHost = hostOf(obj(at.web).searxngUrl);
   const searxChanged = searxHost !== hostOf(obj(bt.web).searxngUrl) || ((obj(bt.web).search ?? 'duckduckgo') !== 'searxng' && (obj(at.web).search ?? 'duckduckgo') === 'searxng');
   if (searxHost !== null && !isLoopbackHost(searxHost) && searxChanged) out.push({ kind: 'searxng-url', url: String(obj(at.web).searxngUrl) });

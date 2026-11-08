@@ -41,6 +41,15 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'notify-channel-kinds': return t('access.notifyKinds', a.id, a.kinds.map(k => t(`notifications.kind.${k as 'info'}`)).join(', '));
     case 'notify-channel-enabled': return t('access.notifyEnabled', a.id);
     case 'notify-public-url': return t('access.notifyPublicUrl', a.url);
+    case 'mcp-server-added': return t('access.mcpAdded', a.id, a.target);
+    case 'mcp-server-target': return t('access.mcpTarget', a.id, a.target);
+    case 'mcp-server-env': return t('access.mcpEnv', a.id, a.names.join(', '));
+    case 'mcp-server-secret': return t('access.mcpSecret', a.id, a.name);
+    case 'mcp-server-enabled': return t('access.mcpEnabled', a.id);
+    case 'mcp-server-local': return t('access.mcpLocal', a.id);
+    case 'mcp-tool-added': return t('access.mcpToolAdded', a.id, a.tool);
+    case 'mcp-tool-enabled': return t('access.mcpToolEnabled', a.id, a.tool);
+    case 'mcp-tool-loosened': return t('access.mcpToolLoosened', a.id, a.tool);
     case 'limit-raised': return t('access.limitRaised', a.key, a.from, a.to);
     case 'tool-policy-loosened': return t('access.toolPolicy', a.tool, t(POLICY_LABEL[a.from]), t(POLICY_LABEL[a.to]));
   }

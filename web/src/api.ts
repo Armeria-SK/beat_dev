@@ -81,6 +81,8 @@ export interface RunRow {
 // 道具の一覧（GET /api/tools）。policy は設定の tools.policies、configurable が false の道具（タスクの進め方に必要なもの）は方針を変えられない
 export interface ToolInfo {
   name: string; effect: 'read' | 'write' | 'exec' | 'network' | 'meta'; allowedIn: Array<'chat' | 'task' | 'review' | 'agent'>; policy: ToolPolicy; configurable: boolean;
+  // 外の MCP サーバーの道具のときだけ。asks は、申告から「確認を求める」理由（聞かないときは無い）
+  mcp?: { server: string }; asks?: 'sends' | 'removes' | 'write';
 }
 
 // POST /api/server/apply の応答。url があるときは、ポートが変わったので、画面はそこへ移る
@@ -158,6 +160,25 @@ export interface NotifyLimits { maxChannels: number; maxSendsPerHour: number; ti
 export interface NotifyView { channels: NotifyChannelView[]; limits: NotifyLimits; publicBaseUrl: string }
 export interface NotifySecretState { set: boolean; source?: 'os' }
 export type NotifyTestResult = { ok: true } | { ok: false; reason: string };
+// 外の MCP サーバー（GET /api/mcp）。秘密の値は返らない（入っているかだけ）
+export type McpServerState = 'connecting' | 'ready' | 'failed' | 'off';
+export type McpToolState = 'registered' | 'off' | 'changed' | 'missing' | 'schema_invalid' | 'unlisted' | 'cut';
+export type McpEffect = 'read' | 'write' | 'network';
+export interface McpToolView { name: string; registered: string; state: McpToolState; reason?: string; description: string }
+export interface McpSecretView { kind: 'env' | 'header'; name: string; set: boolean; source?: 'os' }
+export interface McpServerView {
+  id: string; transport: 'stdio' | 'http'; enabled: boolean; localOk: boolean; target: string; state: McpServerState;
+  reason?: string; detail?: string; stderr: string; tools: McpToolView[]; secrets: McpSecretView[];
+}
+export interface McpLimits { maxServers: number; maxToolsPerServer: number; callTimeoutMs: number; connectTimeoutMs: number; restartsPerHour: number; resultMaxChars: number }
+export interface McpView { servers: McpServerView[]; limits: McpLimits }
+export interface McpShapeView { description: string; schema: string; destructive: boolean }
+export interface McpDiffView { before?: McpShapeView; after: McpShapeView }
+export interface McpAddInput {
+  id: string; transport: 'stdio' | 'http'; command?: string[]; cwd?: string; url?: string;
+  secrets?: { env?: Record<string, string>; headers?: Record<string, string> };
+}
+export interface McpToolPatch { enabled?: boolean; effect?: McpEffect | null; sends?: boolean | null; removes?: boolean | null }
 export interface EnvReloadView { loaded: boolean; apiKeys: Record<string, boolean>; notApplied: string[] }
 
 export class ApiError extends Error {
@@ -265,6 +286,16 @@ export const api = {
   setNotifySecret: (id: string, field: 'url' | 'token', value: string) => call<NotifySecretState>(`/api/notify/channels/${encodeURIComponent(id)}/secrets/${field}`, { method: 'PUT', body: JSON.stringify({ value }) }),
   deleteNotifySecret: (id: string, field: 'token') => call<NotifySecretState>(`/api/notify/channels/${encodeURIComponent(id)}/secrets/${field}`, { method: 'DELETE' }),
   testNotifyChannel: (id: string) => call<NotifyTestResult>(`/api/notify/channels/${encodeURIComponent(id)}/test`, { method: 'POST', body: '{}' }),
+  mcp: () => call<McpView>('/api/mcp'),
+  addMcpServer: (input: McpAddInput) => call<McpView>('/api/mcp/servers', { method: 'POST', body: JSON.stringify(input) }),
+  patchMcpServer: (id: string, patch: { enabled?: boolean; localOk?: boolean }) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteMcpServer: (id: string) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  restartMcpServer: (id: string) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}/restart`, { method: 'POST', body: '{}' }),
+  setMcpSecret: (id: string, kind: 'env' | 'header', name: string, value: string) => call<{ set: boolean }>(`/api/mcp/servers/${encodeURIComponent(id)}/secrets/${kind}/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+  deleteMcpSecret: (id: string, kind: 'env' | 'header', name: string) => call<{ set: boolean; source?: 'os' }>(`/api/mcp/servers/${encodeURIComponent(id)}/secrets/${kind}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  patchMcpTool: (id: string, tool: string, patch: McpToolPatch) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}/tools/${encodeURIComponent(tool)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  acceptMcpTool: (id: string, tool: string) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}/tools/${encodeURIComponent(tool)}/accept`, { method: 'POST', body: '{}' }),
+  mcpToolDiff: (id: string, tool: string) => call<McpDiffView>(`/api/mcp/servers/${encodeURIComponent(id)}/tools/${encodeURIComponent(tool)}/diff`),
   patchNotify: (patch: { publicBaseUrl?: string; limits?: Partial<NotifyLimits> }) => call<NotifyView>('/api/notify', { method: 'PATCH', body: JSON.stringify(patch) }),
   reloadEnv: (env: string[] = []) => call<EnvReloadView>('/api/onboarding/reload-env', { method: 'POST', body: JSON.stringify({ env }) }),
   persona: () => call<PersonaView>('/api/workspace/persona'),

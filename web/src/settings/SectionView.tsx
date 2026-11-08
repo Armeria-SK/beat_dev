@@ -2,6 +2,7 @@ import type { ModelView } from '../api.ts';
 import { MemorySection, ToolsSection, WorkerSection } from './BehaviorSections.tsx';
 import type { Profile } from '../api.ts';
 import { AboutSection } from './AboutSection.tsx';
+import { McpSection } from './McpSection.tsx';
 import { NotifySection } from './NotifySection.tsx';
 import { LookSection } from './LookSection.tsx';
 import { KeysSection, ModelsSection, ProvidersSection } from './ModelsSection.tsx';
@@ -37,6 +38,7 @@ export function SectionView(props: SectionViewProps) {
     case 'keys': return <KeysSection draft={props.draft} apiKeys={props.apiKeys} />;
     case 'tools': return <ToolsSection {...base} />;
     case 'notify': return <NotifySection {...base} onChanged={props.onKeyChanged} />;
+    case 'mcp': return <McpSection {...base} onChanged={props.onKeyChanged} />;
     case 'worker': return <WorkerSection {...base} />;
     case 'memory': return <MemorySection />;
     case 'about': return <AboutSection profileName={String((props.saved.profile as { name?: string } | undefined)?.name ?? '')} onNameSaved={props.onNameSaved} onRerunSetup={props.onRerunSetup} />;
