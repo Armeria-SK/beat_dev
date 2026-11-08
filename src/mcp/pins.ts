@@ -1,15 +1,18 @@
 // MCP の道具の「確かめた形」の固定。サーバーは後から説明や入力の形を書き換えられる（ラグプル）ので、
 // 持ち主が最初に確かめた形を kv に覚えておき、違っていたら道具を止める（受け入れるまで使わない）。
-// 見るのは、モデルに渡る説明（整えたもの）・入力の形・サーバーの destructiveHint（扱いが厳しくなる向きに効く申告）
+// 見るのは、モデルに渡る説明（整えたもの）・入力の形（見えない文字を落としたもの）・サーバーの destructiveHint と openWorldHint（扱いが厳しくなる向きに効く申告）・落とした見えない文字の数
 import { createHash } from 'node:crypto';
 import type { KV } from '../db/kv.ts';
-import { cleanDescription, type McpRemoteTool } from './tool.ts';
+import { cleanDescription, hiddenCount, scrubSchema, type McpRemoteTool } from './tool.ts';
 
 export interface McpShape {
   description: string;
   // 並びを正した JSON（キーの順だけの違いで changed にしない）
   schema: string;
   destructive: boolean;
+  openWorld: boolean;
+  // 説明と入力の形から落とした見えない文字の数。落とした後の形が同じでも、数が違えば changed にして、差分で見えるようにする
+  stripped: number;
 }
 
 export type McpPinState = 'new' | 'same' | 'changed';
@@ -23,15 +26,18 @@ function canonical(value: unknown): unknown {
 }
 
 export function shapeOf(remote: McpRemoteTool): McpShape {
+  const scrubbed = scrubSchema(remote.inputSchema ?? null);
   return {
     description: cleanDescription(remote.description),
-    schema: JSON.stringify(canonical(remote.inputSchema ?? null)),
+    schema: JSON.stringify(canonical(scrubbed.value)),
     destructive: remote.annotations?.destructiveHint === true,
+    openWorld: remote.annotations?.openWorldHint === true,
+    stripped: scrubbed.stripped + hiddenCount(remote.description),
   };
 }
 
 export function shapeSignature(shape: McpShape): string {
-  return createHash('sha256').update(JSON.stringify([shape.description, shape.schema, shape.destructive])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([shape.description, shape.schema, shape.destructive, shape.openWorld, shape.stripped])).digest('hex');
 }
 
 // サーバーの id は [a-z0-9] だけ（':' を含まない）ので、「mcp:pin:<id>:」の前方一致は、前方が同じ別のサーバーに当たらない
@@ -44,7 +50,7 @@ export class McpPins {
   previous(server: string, tool: string): McpShape | undefined {
     const stored = this.#kv.getJson<McpShape>(`${prefix(server)}${tool}`);
     if (!stored || typeof stored.description !== 'string' || typeof stored.schema !== 'string') return undefined;
-    return { description: stored.description, schema: stored.schema, destructive: stored.destructive === true };
+    return { description: stored.description, schema: stored.schema, destructive: stored.destructive === true, openWorld: stored.openWorld === true, stripped: typeof stored.stripped === 'number' && stored.stripped > 0 ? stored.stripped : 0 };
   }
 
   check(server: string, tool: string, remote: McpRemoteTool): McpPinState {

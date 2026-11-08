@@ -192,11 +192,27 @@ export function reasonKey(reason: string | undefined): PlainKey {
 
 // 差分の「受け入れる」の前の確かめ用。見せた形と、押した時点の形が同じか（違えば受け入れず、見せ直す）
 export const sameShape = (a: McpShapeView | undefined, b: McpShapeView | undefined): boolean =>
-  a === undefined || b === undefined ? a === b : a.description === b.description && a.schema === b.schema && a.destructive === b.destructive;
+  a === undefined || b === undefined ? a === b
+    : a.description === b.description && a.schema === b.schema && a.destructive === b.destructive && a.openWorld === b.openWorld && a.stripped === b.stripped;
+
+export interface ShapeChanges { description: boolean; schema: boolean; destructive: boolean; openWorld: boolean; stripped: boolean }
 
 // 前と今で、何が変わったか（長い文の後ろの変更を見落とさないための一言用）
-export function shapeChanges(diff: McpDiffView): { description: boolean; schema: boolean; destructive: boolean } {
-  const before = diff.before;
-  if (!before) return { description: true, schema: true, destructive: diff.after.destructive };
-  return { description: before.description !== diff.after.description, schema: before.schema !== diff.after.schema, destructive: before.destructive !== diff.after.destructive };
+export function shapeChanges(diff: McpDiffView): ShapeChanges {
+  const { before, after } = diff;
+  if (!before) return { description: true, schema: true, destructive: after.destructive, openWorld: after.openWorld, stripped: after.stripped > 0 };
+  return {
+    description: before.description !== after.description,
+    schema: before.schema !== after.schema,
+    destructive: before.destructive !== after.destructive,
+    openWorld: before.openWorld !== after.openWorld,
+    stripped: before.stripped !== after.stripped,
+  };
 }
+
+// サーバーが書いた文を差分の画面に出すとき、見えない文字（向きを変える文字・幅の無い文字・タグ文字・異体字選択子・空白に見える文字・対の無いサロゲートなど）を \u{E0041} のような見える形にする。
+// サーバー側でモデルに渡す形からは落としてあるが、落とし損ねた文字が残っていても、持ち主の目には見えるようにする。改行とタブはそのまま
+const HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\u{2028}\u{2029}\u{e0000}-\u{e007f}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}\u{34f}\u{115f}\u{1160}\u{17b4}\u{17b5}\u{180b}-\u{180e}\u{2800}\u{3164}\u{ffa0}\u{fff9}-\u{fffb}]/gu;
+
+export const revealHidden = (text: string): string =>
+  text.replace(HIDDEN_CHARS, ch => (ch === '\n' || ch === '\t' ? ch : '\\u{' + ch.codePointAt(0)!.toString(16).toUpperCase() + '}'));

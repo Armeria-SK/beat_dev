@@ -68,10 +68,50 @@ test('入力の形が使えないもの（object でない・大きすぎる・�
   assert.equal(r.ok, false);
 });
 
+// タグ文字 3 つ・右から左への上書き・幅ゼロ（ソースには生の見えない文字を置かず、エスケープで書く）
+const HIDDEN = '\u{e0049}\u{e0067}\u{e006e}\u{202e}\u{200b}';
+const INVISIBLE_IN_TEXT = /[\p{Cc}\p{Cf}\u{2028}\u{2029}\u{e0000}-\u{e007f}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}]/u;
+
+test('入力の形の中の文字列（説明・題・enum・既定値・入れ子・配列の中・required・キー）から見えない文字を落とす。モデルに渡る形にも残らない', () => {
+  const raw = {
+    type: 'object',
+    title: `題${HIDDEN}`,
+    properties: {
+      [`na${HIDDEN}me`]: { type: 'string', title: `T${HIDDEN}`, description: `名前${HIDDEN}を入れる`, default: `d${HIDDEN}`, enum: [`a${HIDDEN}`, 'b'], examples: [`e${HIDDEN}`] },
+      nested: { type: 'object', properties: { list: { type: 'array', items: { type: 'string', description: `x${HIDDEN}y` } } } },
+    },
+    required: [`na${HIDDEN}me`],
+  };
+  const r = inputSchemaOf(raw);
+  assert.equal(r.ok, true);
+  const schema = JSON.parse(JSON.stringify((r as { schema: unknown }).schema)) as typeof raw & Record<string, never>;
+  assert.equal(INVISIBLE_IN_TEXT.test(JSON.stringify(schema)), false, 'どの文字列にも残らない');
+  assert.equal(schema.title, '題 ');
+  assert.deepEqual(Object.keys(schema.properties), ['na me', 'nested']);
+  assert.deepEqual(schema.required, ['na me']);
+  const field = (schema.properties as Record<string, Record<string, unknown>>)['na me']!;
+  assert.deepEqual([field['title'], field['description'], field['default'], field['enum'], field['examples']], ['T ', '名前 を入れる', 'd ', ['a ', 'b'], ['e ']]);
+  const model = make({}, { remote: { name: 'x', inputSchema: raw } }).input;
+  assert.equal(INVISIBLE_IN_TEXT.test(JSON.stringify(model)), false, 'ToolDef.input（モデルに渡す仕様の元）にも残らない');
+});
+
+test('入力の形: 見えない文字を含まない形は変わらない。落とした後にキーがぶつかる形、深すぎる形は schema_invalid の元', () => {
+  const plain = { type: 'object', properties: { a: { type: 'string', description: '日本語 and english', enum: ['x', 'y'], default: 'x' }, b: { type: 'integer', minimum: 1 } }, required: ['a'], additionalProperties: false };
+  const r = inputSchemaOf(plain);
+  assert.equal(r.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify((r as { schema: unknown }).schema)), plain);
+  const clash = inputSchemaOf({ type: 'object', properties: { 'a b': { type: 'string' }, 'a\u{200b}b': { type: 'string' } } });
+  assert.equal(clash.ok, false);
+  let deep: Record<string, unknown> = { type: 'string' };
+  for (let i = 0; i < 100; i += 1) deep = { type: 'object', properties: { x: deep } };
+  assert.equal(inputSchemaOf(deep).ok, false);
+});
+
 test('説明文: 制御文字は空白にし、1024 文字で切る', () => {
   assert.equal(cleanDescription('a\u0000b\nc\u202ed'), 'a b c d');
   assert.equal(cleanDescription(undefined), '');
   assert.equal(cleanDescription('a\u00adb\u2060c\ufeffd\u{e0041}e'), 'a b c d e', '見えない書式文字（Cf）も落とす');
+  assert.equal(cleanDescription('a\u{e0002}b\u{fe0f}c\u{e0100}d\u{2028}e'), 'a b c d e', '割り当て前のタグ文字・異体字選択子・行区切りも落とす');
   const long = cleanDescription('x'.repeat(5000));
   assert.equal(long.length, DESCRIPTION_MAX + 1);
   assert.equal(neutralizeFence('a <<< b >>> c <<<<<<'), 'a ＜＜＜ b ＞＞＞ c ＜＜＜＜＜＜');

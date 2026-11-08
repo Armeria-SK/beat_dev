@@ -174,7 +174,7 @@ export interface McpServerView {
 }
 export interface McpLimits { maxServers: number; maxToolsPerServer: number; callTimeoutMs: number; connectTimeoutMs: number; restartsPerHour: number; resultMaxChars: number }
 export interface McpView { servers: McpServerView[]; limits: McpLimits }
-export interface McpShapeView { description: string; schema: string; destructive: boolean }
+export interface McpShapeView { description: string; schema: string; destructive: boolean; openWorld: boolean; stripped: number }
 export interface McpDiffView { before?: McpShapeView; after: McpShapeView }
 export interface McpAddInput {
   id: string; transport: 'stdio' | 'http'; command?: string[]; cwd?: string; url?: string;

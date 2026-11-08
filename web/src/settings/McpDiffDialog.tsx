@@ -3,7 +3,7 @@ import { api, type McpDiffView, type McpShapeView } from '../api.ts';
 import { useEscapeLayer } from '../hooks.ts';
 import { useT } from '../i18n/index.ts';
 import type { McpCtx } from './mcp-ctx.ts';
-import { sameShape, shapeChanges } from './mcp-model.ts';
+import { revealHidden, sameShape, shapeChanges } from './mcp-model.ts';
 
 function Shape({ title, shape }: { title: string; shape: McpShapeView | undefined }) {
   const t = useT();
@@ -13,10 +13,12 @@ function Shape({ title, shape }: { title: string; shape: McpShapeView | undefine
       {shape ? (
         <>
           <span className="set-row-desc">{t('settings.mcp.diff.description')}</span>
-          <pre className="set-mcp-pre">{shape.description || '—'}</pre>
+          <pre className="set-mcp-pre">{revealHidden(shape.description) || '—'}</pre>
           <span className="set-row-desc">{t('settings.mcp.diff.schema')}</span>
-          <pre className="set-mcp-pre">{shape.schema || '—'}</pre>
+          <pre className="set-mcp-pre">{revealHidden(shape.schema) || '—'}</pre>
           <span className="set-row-desc">{shape.destructive ? t('settings.mcp.diff.destructive') : t('settings.mcp.diff.notDestructive')}</span>
+          <span className="set-row-desc">{shape.openWorld ? t('settings.mcp.diff.openWorld') : t('settings.mcp.diff.notOpenWorld')}</span>
+          {shape.stripped > 0 && <span className="set-row-error" role="status">{t('settings.mcp.diff.stripped', shape.stripped)}</span>}
         </>
       ) : <span className="set-note">{t('settings.mcp.diff.none')}</span>}
     </div>
@@ -58,9 +60,9 @@ export function McpDiffDialog({ server, tool, ctx, onClose }: { server: string; 
       {diff === null && <span className="set-note" role="status">{t('settings.loading')}</span>}
       {diff === 'failed' && <span className="set-row-error" role="alert">{t('settings.mcp.diff.failed')}</span>}
       {stale && <span className="set-row-error" role="alert">{t('settings.mcp.diff.stale')}</span>}
-      {changes && (changes.description || changes.schema || changes.destructive) && (
+      {changes && (changes.description || changes.schema || changes.destructive || changes.openWorld || changes.stripped) && (
         <span className="set-row-desc" role="status">
-          {changes.description && t('settings.mcp.diff.changedDescription')} {changes.schema && t('settings.mcp.diff.changedSchema')} {changes.destructive && t('settings.mcp.diff.changedDestructive')}
+          {changes.description && t('settings.mcp.diff.changedDescription')} {changes.schema && t('settings.mcp.diff.changedSchema')} {changes.destructive && t('settings.mcp.diff.changedDestructive')} {changes.openWorld && t('settings.mcp.diff.changedOpenWorld')} {changes.stripped && t('settings.mcp.diff.changedStripped')}
         </span>
       )}
       {diff !== null && diff !== 'failed' && (

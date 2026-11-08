@@ -37,14 +37,63 @@ TypeRegistry.Set(KIND, (schema, value) => validators.get(schema as object)?.(val
 
 export type InputSchemaResult = { ok: true; schema: TSchema } | { ok: false; reason: string };
 
+// 見えない文字: 制御文字と書式文字（Unicode の Cc と Cf: 文字の向きを変えるもの・ゼロ幅・タグ文字など）、行・段落の区切り、
+// 割り当て前を含むタグ文字の範囲、異体字選択子（絵文字の後ろに隠して文を運べる）
+const INVISIBLE_ONE = /[\p{Cc}\p{Cf}\u{2028}\u{2029}\u{e0000}-\u{e007f}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}]/gu;
+const INVISIBLE_RUN = new RegExp(`(?:${INVISIBLE_ONE.source})+`, 'gu');
+
+// 落とした数: 改行・タブ・復帰は説明にふつうに入るので、見えない文字には数えない（数が常に 0 でないと、差分の注意が埋もれる）
+export function hiddenCount(text: string | undefined): number {
+  let count = 0;
+  for (const m of (text ?? '').matchAll(INVISIBLE_ONE)) if (m[0] !== '\n' && m[0] !== '\t' && m[0] !== '\r') count += 1;
+  return count;
+}
+
+export const SCHEMA_DEPTH_MAX = 64;
+
+export interface ScrubbedSchema {
+  value: unknown;
+  // 落とした見えない文字の数（hiddenCount と同じ数え方）
+  stripped: number;
+  // 使えない形だったときの理由（深すぎる・落とした後にキーがぶつかる）。ある間も value は返す（固定と差分の表示は止めない）
+  problem?: string;
+}
+
+// 入力の形の中の文字列は、すべてモデルに渡る。説明・題・enum・既定値・キーを含め、どの文字列からも見えない文字を落とす
+// （続く見えない文字は空白 1 つにする。説明文と同じ規則）。見えない文字だけで隠した指示を、持ち主の目にもモデルにも通さない
+export function scrubSchema(raw: unknown): ScrubbedSchema {
+  let stripped = 0;
+  let problem: string | undefined;
+  const text = (s: string): string => { stripped += hiddenCount(s); return s.replace(INVISIBLE_RUN, ' '); };
+  const walk = (value: unknown, depth: number): unknown => {
+    if (typeof value === 'string') return text(value);
+    if (typeof value !== 'object' || value === null) return value;
+    if (depth >= SCHEMA_DEPTH_MAX) { problem ??= 'too deep'; return null; }
+    if (Array.isArray(value)) return value.map(item => walk(item, depth + 1));
+    const seen = new Set<string>();
+    const entries: Array<[string, unknown]> = [];
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const clean = text(key);
+      if (seen.has(clean)) problem ??= 'duplicate key after removing invisible characters';
+      seen.add(clean);
+      entries.push([clean, walk(item, depth + 1)]);
+    }
+    return Object.fromEntries(entries);
+  };
+  const out = walk(raw, 0);
+  return { value: out, stripped, ...(problem ? { problem } : {}) };
+}
+
 export function inputSchemaOf(raw: unknown): InputSchemaResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ok: false, reason: 'not an object' };
   const copy: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
   if (copy['type'] !== 'object') return { ok: false, reason: 'type is not object' };
   // メタスキーマの指定（$schema）は、ajv が知らない版だと落ちるので外す。検査には要らない
   delete copy['$schema'];
+  const scrubbed = scrubSchema(copy);
+  if (scrubbed.problem) return { ok: false, reason: scrubbed.problem };
   let text: string;
-  try { text = JSON.stringify(copy); } catch { return { ok: false, reason: 'not JSON' }; }
+  try { text = JSON.stringify(scrubbed.value); } catch { return { ok: false, reason: 'not JSON' }; }
   if (text.length > INPUT_SCHEMA_MAX) return { ok: false, reason: 'too large' };
   let validate: JsonSchemaValidator<unknown>;
   try { validate = new AjvJsonSchemaValidator().getValidator(JSON.parse(text) as never); } catch (e) { return { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
@@ -53,9 +102,9 @@ export function inputSchemaOf(raw: unknown): InputSchemaResult {
   return { ok: true, schema };
 }
 
-// 説明文: 制御文字と、見えない書式文字（文字の向きを変えるもの・ゼロ幅・タグ文字など。Unicode の Cc と Cf）を除き、長さを切る（改行は空白にする）
+// 説明文: 見えない文字（INVISIBLE。制御文字・文字の向きを変えるもの・ゼロ幅・タグ文字・異体字選択子など）を空白にし、長さを切る（改行も空白にする）
 export function cleanDescription(text: string | undefined): string {
-  const flat = (text ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ').replace(/\s{2,}/gu, ' ').trim();
+  const flat = (text ?? '').replace(INVISIBLE_RUN, ' ').replace(/\s{2,}/gu, ' ').trim();
   return flat.length > DESCRIPTION_MAX ? `${flat.slice(0, DESCRIPTION_MAX)}…` : flat;
 }
 
