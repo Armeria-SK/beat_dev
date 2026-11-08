@@ -174,7 +174,7 @@ export class App {
     this.notifications = new Notifications(this.db, now, this.log);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
-    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()));
+    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log);
     this.#importCuriosity();
     this.#registerExistingSkills();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
@@ -275,6 +275,7 @@ export class App {
 
   // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
   #registerExistingSkills(): void {
+    this.skills.pruneMissing();
     if (this.kv.get('skills:registry-seeded')) return;
     const added = this.skills.registerExisting();
     this.kv.set('skills:registry-seeded', String(Date.now()));

@@ -6,7 +6,7 @@ import { Value } from '@sinclair/typebox/value';
 import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { buildMcpTool, cleanDescription, inputSchemaOf, neutralizeFence, textOfResult, DESCRIPTION_MAX, type McpCaller, type McpRemoteTool } from '../src/mcp/tool.ts';
+import { buildMcpTool, cleanDescription, hiddenCount, inputSchemaOf, neutralizeFence, textOfResult, DESCRIPTION_MAX, type McpCaller, type McpRemoteTool } from '../src/mcp/tool.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { localAllows, planAllows, runToolCall } from '../src/tools/pipeline.ts';
@@ -68,10 +68,104 @@ test('入力の形が使えないもの（object でない・大きすぎる・�
   assert.equal(r.ok, false);
 });
 
+// タグ文字 3 つ・右から左への上書き・幅ゼロ（ソースには生の見えない文字を置かず、エスケープで書く）
+const HIDDEN = '\u{e0049}\u{e0067}\u{e006e}\u{202e}\u{200b}';
+const INVISIBLE_IN_TEXT = /[\p{Cc}\p{Cf}\u{2028}\u{2029}\u{e0000}-\u{e007f}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}]/u;
+
+test('入力の形の中の文字列（説明・題・既定値・入れ子・配列の中・required・キー）から見えない文字を落とす。モデルに渡る形にも残らない', () => {
+  const raw = {
+    type: 'object',
+    title: `題${HIDDEN}`,
+    properties: {
+      [`na${HIDDEN}me`]: { type: 'string', title: `T${HIDDEN}`, description: `名前${HIDDEN}を入れる`, default: `d${HIDDEN}`, examples: [`e${HIDDEN}`] },
+      nested: { type: 'object', properties: { list: { type: 'array', items: { type: 'string', description: `x${HIDDEN}y` } } } },
+    },
+    required: [`na${HIDDEN}me`],
+  };
+  const r = inputSchemaOf(raw);
+  assert.equal(r.ok, true);
+  const schema = JSON.parse(JSON.stringify((r as { schema: unknown }).schema)) as typeof raw & Record<string, never>;
+  assert.equal(INVISIBLE_IN_TEXT.test(JSON.stringify(schema)), false, 'どの文字列にも残らない');
+  assert.equal(schema.title, '題 ');
+  assert.deepEqual(Object.keys(schema.properties), ['na me', 'nested']);
+  assert.deepEqual(schema.required, ['na me']);
+  const field = (schema.properties as Record<string, Record<string, unknown>>)['na me']!;
+  assert.deepEqual([field['title'], field['description'], field['default'], field['examples']], ['T ', '名前 を入れる', 'd ', ['e ']]);
+  const model = make({}, { remote: { name: 'x', inputSchema: raw } }).input;
+  assert.equal(INVISIBLE_IN_TEXT.test(JSON.stringify(model)), false, 'ToolDef.input（モデルに渡す仕様の元）にも残らない');
+});
+
+test('入力の形: 見えない文字を含まない形は変わらない。落とした後にキーがぶつかる形、深すぎる形は schema_invalid の元', () => {
+  const plain = { type: 'object', properties: { a: { type: 'string', description: '日本語 and english', enum: ['x', 'y'], default: 'x' }, b: { type: 'integer', minimum: 1 } }, required: ['a'], additionalProperties: false };
+  const r = inputSchemaOf(plain);
+  assert.equal(r.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify((r as { schema: unknown }).schema)), plain);
+  const clash = inputSchemaOf({ type: 'object', properties: { 'a b': { type: 'string' }, 'a\u{200b}b': { type: 'string' } } });
+  assert.equal(clash.ok, false);
+  let deep: Record<string, unknown> = { type: 'string' };
+  for (let i = 0; i < 100; i += 1) deep = { type: 'object', properties: { x: deep } };
+  assert.equal(inputSchemaOf(deep).ok, false);
+});
+
+test('入力の形の中の改行・タブ・復帰は、そのまま渡す（落とすのは見えない文字だけ）。見えない文字と混ざったときも改行は残る', () => {
+  const raw = { type: 'object', description: 'line1\nline2', properties: { a: { type: 'string', title: 'T\tU', description: '一行目\r\n二行目\n\t三行目', default: 'x\ny' } } };
+  const r = inputSchemaOf(raw);
+  assert.equal(r.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify((r as { schema: unknown }).schema)), raw, '改行・タブ・復帰を含む形は変わらない');
+  const mixed = inputSchemaOf({ type: 'object', description: 'a\u{200b}\u{e0041}\nb\u0000c' });
+  assert.equal(mixed.ok, true);
+  assert.equal(JSON.parse(JSON.stringify((mixed as { schema: unknown }).schema)).description, 'a \nb c', '続く見えない文字は空白 1 つ、改行はそのまま');
+  assert.equal(hiddenCount('line1\nline2\ttab\r'), 0);
+});
+
+test('pattern・const・enum の値は書き換えない。落とす文字を含むなら、書き換えずに schema_invalid の元にする（検査の意味が変わるため）', () => {
+  const props = (field: Record<string, unknown>) => ({ type: 'object', properties: { a: { type: 'string', ...field } } });
+  const control = `[${'\u0000'}-${'\u001f'}]`;
+  const heart = '\u2764\ufe0f';
+  const bad: Array<[string, Record<string, unknown>]> = [
+    ['pattern', props({ pattern: control })],
+    ['const', props({ const: heart })],
+    ['enum', props({ enum: ['a', `b${'\u{200b}'}`] })],
+    ['入れ子の const', { type: 'object', properties: { a: { const: { k: ['x', `y${'\u{e0041}'}`] } } } }],
+    ['const の中のオブジェクトのキー', { type: 'object', properties: { a: { const: { [`k${'\u{202e}'}`]: 1 } } } }],
+    ['patternProperties のキー（正規表現）', { type: 'object', patternProperties: { [control]: { type: 'string' } } }],
+    ['enum の空白に見える文字', props({ enum: ['a\u{3164}b'] })],
+  ];
+  for (const [label, raw] of bad) {
+    const r = inputSchemaOf(raw);
+    assert.equal(r.ok, false, label);
+    assert.match((r as { reason: string }).reason, /pattern|const|enum/u, label);
+  }
+  const heartFree = inputSchemaOf(props({ const: '\u2764', enum: ['a\nb', 'c\td'], pattern: '^[a-z]+\\u0000?$' }));
+  assert.equal(heartFree.ok, true, '見えない文字を含まない値（改行・タブ・エスケープの文字は含む）は通る');
+  assert.deepEqual(JSON.parse(JSON.stringify((heartFree as { schema: unknown }).schema)).properties.a, { type: 'string', const: '\u2764', enum: ['a\nb', 'c\td'], pattern: '^[a-z]+\\u0000?$' });
+  const named = inputSchemaOf({ type: 'object', properties: { pattern: { type: 'string', description: `p${'\u{200b}'}q` }, enum: { type: 'string' }, const: { type: 'string', title: `c${'\u{202e}'}` } }, required: ['pattern'] });
+  assert.equal(named.ok, true, '「pattern」という名前の入力項目は、キーワードの pattern ではない');
+  const schema = JSON.parse(JSON.stringify((named as { schema: unknown }).schema)) as { properties: Record<string, Record<string, unknown>> };
+  assert.equal(schema.properties['pattern']!['description'], 'p q', '入力項目の中の説明は、ふつうに落とす');
+  assert.equal(schema.properties['const']!['title'], 'c ');
+  const built = buildMcpTool({ server: { id: 'web', localOk: false }, remote: { name: 'bad', inputSchema: props({ enum: [`a${'\u{200b}'}`] }) }, entry: {}, language: 'ja', limits: LIMITS, caller: () => undefined });
+  assert.equal(built.ok, false, '道具としては登録しない');
+});
+
+test('空白に見える文字（ハングルのフィラー・点字の空白など）と、対の無いサロゲートも、説明・題・既定値などから落とす', () => {
+  const blanks = '\u{3164}\u{2800}\u{115f}\u{1160}\u{ffa0}\u{34f}\u{17b4}\u{17b5}\u{180b}\u{180e}\u{fff9}\u{fffb}';
+  assert.equal(cleanDescription(`a${blanks}b`), 'a b', '続く見えない文字は空白 1 つ');
+  assert.equal(cleanDescription('a\u{3164}b\u{2800}c\u{115f}d\u{1160}e\u{ffa0}f\ud800g\udc00h'), 'a b c d e f g h', '対の無いサロゲートも落とす');
+  assert.equal(cleanDescription('日本語\u{1f600}絵文字\u{2764}'), '日本語\u{1f600}絵文字\u{2764}', '対のある文字（絵文字）は落とさない');
+  assert.equal(hiddenCount(`a${blanks}b`), 12);
+  const r = inputSchemaOf({ type: 'object', title: `題${blanks}`, properties: { a: { type: 'string', description: `説明\u{3164}\ud800`, default: `d\u{2800}` } } });
+  assert.equal(r.ok, true);
+  const schema = JSON.parse(JSON.stringify((r as { schema: unknown }).schema)) as { title: string; properties: { a: Record<string, string> } };
+  assert.equal(schema.title, '題 ');
+  assert.deepEqual([schema.properties.a['description'], schema.properties.a['default']], ['説明 ', 'd ']);
+});
+
 test('説明文: 制御文字は空白にし、1024 文字で切る', () => {
   assert.equal(cleanDescription('a\u0000b\nc\u202ed'), 'a b c d');
   assert.equal(cleanDescription(undefined), '');
   assert.equal(cleanDescription('a\u00adb\u2060c\ufeffd\u{e0041}e'), 'a b c d e', '見えない書式文字（Cf）も落とす');
+  assert.equal(cleanDescription('a\u{e0002}b\u{fe0f}c\u{e0100}d\u{2028}e'), 'a b c d e', '割り当て前のタグ文字・異体字選択子・行区切りも落とす');
   const long = cleanDescription('x'.repeat(5000));
   assert.equal(long.length, DESCRIPTION_MAX + 1);
   assert.equal(neutralizeFence('a <<< b >>> c <<<<<<'), 'a ＜＜＜ b ＞＞＞ c ＜＜＜＜＜＜');

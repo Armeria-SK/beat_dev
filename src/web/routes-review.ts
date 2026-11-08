@@ -80,7 +80,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
   // ── レビュー（承認が要るものをまとめて扱う） ──
   router.add('GET', '/api/review', ({ res }) => {
     const drafts = app.skills.drafts('pending').map(d => {
-      const current = app.skills.get(d.name);
+      const current = app.skills.getRegistered(d.name);
       return { ...d, current: current ? { description: current.description, body: current.body } : null };
     });
     sendJson(res, 200, {

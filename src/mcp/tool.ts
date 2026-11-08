@@ -37,14 +37,88 @@ TypeRegistry.Set(KIND, (schema, value) => validators.get(schema as object)?.(val
 
 export type InputSchemaResult = { ok: true; schema: TSchema } | { ok: false; reason: string };
 
+// 見えない文字: 制御文字と書式文字（Unicode の Cc と Cf: 文字の向きを変えるもの・ゼロ幅・タグ文字など）、行・段落の区切り、
+// 割り当て前を含むタグ文字の範囲、異体字選択子（絵文字の後ろに隠して文を運べる）、対の無いサロゲート（Cs）、
+// 空白に見える文字（ハングルのフィラー・点字の空白・結合用の継ぎ字・クメールの内在母音・モンゴルの選択子・注釈の印）。画面の revealHidden が見える形にする文字と同じ組
+const INVISIBLE_ONE = /[\p{Cc}\p{Cf}\p{Cs}\u{2028}\u{2029}\u{e0000}-\u{e007f}\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}\u{34f}\u{115f}\u{1160}\u{17b4}\u{17b5}\u{180b}-\u{180e}\u{2800}\u{3164}\u{ffa0}\u{fff9}-\u{fffb}]/gu;
+const INVISIBLE_RUN = new RegExp(`(?:${INVISIBLE_ONE.source})+`, 'gu');
+// 入力の形の中の文字列は、改行・タブ・復帰を落とさず、数えもしない（説明にふつうに入る。数が常に 0 でないと、差分の注意が埋もれる）
+const SCHEMA_ONE = new RegExp(`(?![\\n\\t\\r])${INVISIBLE_ONE.source}`, 'gu');
+const SCHEMA_RUN = new RegExp(`(?:${SCHEMA_ONE.source})+`, 'gu');
+
+// 落とす見えない文字の数（改行・タブ・復帰は数えない）
+export function hiddenCount(text: string | undefined): number {
+  return (text ?? '').match(SCHEMA_ONE)?.length ?? 0;
+}
+
+export const SCHEMA_DEPTH_MAX = 64;
+
+export interface ScrubbedSchema {
+  value: unknown;
+  // 落とした見えない文字の数（hiddenCount と同じ数え方）
+  stripped: number;
+  // 使えない形だったときの理由（深すぎる・落とした後にキーがぶつかる・検査の値に見えない文字がある）。ある間も value は返す（固定と差分の表示は止めない）
+  problem?: string;
+}
+
+// いま見ている所。schema: 形（キーはキーワード）、names: 名前から形への表（properties など。キーは名前）、
+// patterns: 正規表現から形への表（patternProperties）、literal: 検査の値そのもの（pattern・const・enum）
+type Slot = 'schema' | 'names' | 'patterns' | 'literal';
+const NAME_TABLES = new Set(['properties', '$defs', 'definitions', 'dependentSchemas', 'dependentRequired', 'dependencies']);
+const LITERAL_KEYWORDS = new Set(['pattern', 'const', 'enum']);
+const LITERAL_PROBLEM = 'invisible characters in pattern, const or enum';
+
+function childSlot(slot: Slot, key: string): Slot {
+  if (slot === 'literal') return 'literal';
+  if (slot !== 'schema') return 'schema';
+  if (LITERAL_KEYWORDS.has(key)) return 'literal';
+  if (NAME_TABLES.has(key)) return 'names';
+  return key === 'patternProperties' ? 'patterns' : 'schema';
+}
+
+// 入力の形の中の文字列は、すべてモデルに渡る。説明・題・既定値・キーを含め、どの文字列からも見えない文字を落とす
+// （続く見えない文字は空白 1 つにする。説明文と同じ規則。改行・タブ・復帰は残す）。見えない文字だけで隠した指示を、持ち主の目にもモデルにも通さない。
+// ただし pattern・const・enum の値（と patternProperties のキー）は書き換えない: 書き換えると検査の意味が変わる（制御文字を除く正規表現が壊れ、絵文字の異体字選択子が消える）。
+// 落とす文字が入っていたら、そのまま返して problem にする（登録しない。黙って別の検査にしない）
+export function scrubSchema(raw: unknown): ScrubbedSchema {
+  let stripped = 0;
+  let problem: string | undefined;
+  const text = (s: string): string => { stripped += hiddenCount(s); return s.replace(SCHEMA_RUN, ' '); };
+  const walk = (value: unknown, depth: number, slot: Slot): unknown => {
+    if (typeof value === 'string') {
+      if (slot !== 'literal') return text(value);
+      if (hiddenCount(value) > 0) problem ??= LITERAL_PROBLEM;
+      return value;
+    }
+    if (typeof value !== 'object' || value === null) return value;
+    if (depth >= SCHEMA_DEPTH_MAX) { problem ??= 'too deep'; return null; }
+    if (Array.isArray(value)) return value.map(item => walk(item, depth + 1, slot));
+    const seen = new Set<string>();
+    const entries: Array<[string, unknown]> = [];
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      let clean = key;
+      if (slot === 'schema' || slot === 'names') clean = text(key);
+      else if (hiddenCount(key) > 0) problem ??= LITERAL_PROBLEM;
+      if (seen.has(clean)) problem ??= 'duplicate key after removing invisible characters';
+      seen.add(clean);
+      entries.push([clean, walk(item, depth + 1, childSlot(slot, key))]);
+    }
+    return Object.fromEntries(entries);
+  };
+  const out = walk(raw, 0, 'schema');
+  return { value: out, stripped, ...(problem ? { problem } : {}) };
+}
+
 export function inputSchemaOf(raw: unknown): InputSchemaResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ok: false, reason: 'not an object' };
   const copy: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
   if (copy['type'] !== 'object') return { ok: false, reason: 'type is not object' };
   // メタスキーマの指定（$schema）は、ajv が知らない版だと落ちるので外す。検査には要らない
   delete copy['$schema'];
+  const scrubbed = scrubSchema(copy);
+  if (scrubbed.problem) return { ok: false, reason: scrubbed.problem };
   let text: string;
-  try { text = JSON.stringify(copy); } catch { return { ok: false, reason: 'not JSON' }; }
+  try { text = JSON.stringify(scrubbed.value); } catch { return { ok: false, reason: 'not JSON' }; }
   if (text.length > INPUT_SCHEMA_MAX) return { ok: false, reason: 'too large' };
   let validate: JsonSchemaValidator<unknown>;
   try { validate = new AjvJsonSchemaValidator().getValidator(JSON.parse(text) as never); } catch (e) { return { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
@@ -53,9 +127,9 @@ export function inputSchemaOf(raw: unknown): InputSchemaResult {
   return { ok: true, schema };
 }
 
-// 説明文: 制御文字と、見えない書式文字（文字の向きを変えるもの・ゼロ幅・タグ文字など。Unicode の Cc と Cf）を除き、長さを切る（改行は空白にする）
+// 説明文: 見えない文字（INVISIBLE。制御文字・文字の向きを変えるもの・ゼロ幅・タグ文字・異体字選択子など）を空白にし、長さを切る（改行も空白にする）
 export function cleanDescription(text: string | undefined): string {
-  const flat = (text ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, ' ').replace(/\s{2,}/gu, ' ').trim();
+  const flat = (text ?? '').replace(INVISIBLE_RUN, ' ').replace(/\s{2,}/gu, ' ').trim();
   return flat.length > DESCRIPTION_MAX ? `${flat.slice(0, DESCRIPTION_MAX)}…` : flat;
 }
 

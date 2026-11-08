@@ -10,7 +10,9 @@ import { approvalShownIn } from '../src/tools/approvals.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, type Script, testConfig } from './helpers.ts';
 import { AGENT_RESULT_MAX_CHARS, toFullWidth } from '../src/engine/chat.ts';
+import { engineText } from '../src/shared/messages/engine.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
+import { TOOL_OUTPUT_LIMIT } from '../src/tools/pipeline.ts';
 
 // F7 agent_run: 親の担当が、別の担当（子）に仕事を任せ、答えを受け取る。深さは 1。
 // 既定（tools.agent を書かない）では、今までと完全に同じ（agent_run はモデルに渡らない）
@@ -636,4 +638,130 @@ test('T-42 子の会話への送信・やり直しは 409', async t => {
   assert.equal((await s.json(`/api/conversations/${child}/messages`, 'POST', { text: '続けて' })).status, 409);
   assert.equal((await s.json(`/api/conversations/${child}/retry`, 'POST')).status, 409);
   assert.equal(s.adapter().calls.length, before, '子の会話では何も動かない');
+});
+
+// ── 子の最後の返事が出力の上限で切れたとき・設定を途中で切ったとき（review-impl 3） ──
+const cutReply = (text: string): Script => async function* () {
+  yield { type: 'text', delta: text };
+  yield { type: 'done', stop: 'max_tokens' as StopReason };
+};
+const warningsOf = (events: Array<{ type: string; conversationId?: string; code?: string; message?: string }>, conversationId: string, code: string) => events.filter(e => e.type === 'warning' && e.conversationId === conversationId && e.code === code);
+const listen = (s: Started) => {
+  const seen: Array<{ type: string; conversationId?: string; code?: string; message?: string }> = [];
+  s.app.bus.subscribe(e => { seen.push(e.event as { type: string; conversationId?: string; code?: string; message?: string }); });
+  return seen;
+};
+
+test('T-43 子の最後の返事が出力の上限で切れたら、親の結果の包みの中に決まった注が入り、親の会話に知らせが出る', async t => {
+  const s = await startApp(t, enable());
+  const seen = listen(s);
+  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), cutReply('子の答えは途中で'), reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  const message = toolMessages(s, parent)[0]!;
+  assert.equal(message.message.role === 'tool' && message.message.isError === true, false, '子の途中までの答えは捨てずに渡す（エラーにはしない）');
+  const note = toolText('ja', 'agent.output_truncated');
+  assert.ok(note && note !== 'agent.output_truncated', '注の文がある');
+  const text = message.text;
+  const open = text.indexOf(toolText('ja', 'agent.result_open'));
+  const close = text.indexOf(toolText('ja', 'agent.result_close'));
+  assert.ok(text.includes('子の答えは途中で'), '切れた答えそのものは渡る');
+  assert.ok(open >= 0 && text.indexOf(note) > open && text.indexOf(note) < close, '注は包みの中');
+  // 子の会話にだけ出ていた知らせが、親の会話にも出る（前提: 子の会話の知らせは従来どおり）
+  const child = childConversation(s);
+  assert.equal(warningsOf(seen, child, 'output_truncated').length, 1, '前提: 子の会話の知らせ');
+  const onParent = warningsOf(seen, parent, 'agent_output_truncated');
+  assert.equal(onParent.length, 1, '親の会話に知らせが出る');
+  assert.equal(onParent[0]!.message, engineText('ja', 'warn.agent_output_truncated'));
+  for (const language of ['ja', 'en'] as const) {
+    assert.notEqual(toolText(language, 'agent.output_truncated'), 'agent.output_truncated', `${language} 注`);
+    assert.notEqual(engineText(language, 'warn.agent_output_truncated'), 'warn.agent_output_truncated', `${language} 知らせ`);
+  }
+});
+
+test('T-44 子の返事が切れていなければ、注も親の会話の知らせも出ない', async t => {
+  const s = await startApp(t, enable());
+  const seen = listen(s);
+  s.adapter().scripts = [call('agent_run', { task: '答える' }), reply('子の答え。最後まで書けた'), reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  assert.equal(toolMessage(s, parent).includes(toolText('ja', 'agent.output_truncated')), false);
+  assert.equal(warningsOf(seen, parent, 'agent_output_truncated').length, 0);
+});
+
+test('T-45 子の途中の道具の呼び出しが切れても、最後の返事が切れていなければ注は付かない（印は子の run に残る）', async t => {
+  const s = await startApp(t, enable());
+  const seen = listen(s);
+  const cutCall: Script = async function* () {
+    yield { type: 'tool_call', call: { id: 'call_cut', name: 'calculate', arguments: undefined, raw: '{"expression":"1+' } };
+    yield { type: 'done', stop: 'max_tokens' as StopReason };
+  };
+  s.adapter().scripts = [call('agent_run', { task: '計算して答える' }), cutCall, reply('子の答え。計算し直して書けた'), reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  const flags = JSON.parse((s.app.runs.get(childRuns(s)[0]!.id)!.flags ?? '[]') as string) as string[];
+  assert.ok(flags.includes('output_truncated'), '前提: 子の run には切れた印がある');
+  assert.ok(toolMessage(s, parent).includes('子の答え。計算し直して書けた'), '前提: 最後の返事は届いている');
+  assert.equal(toolMessage(s, parent).includes(toolText('ja', 'agent.output_truncated')), false);
+  assert.equal(warningsOf(seen, parent, 'agent_output_truncated').length, 0);
+});
+
+test('T-46 親が始めたあとに tools.agent.enabled を切ると、その実行の agent_run も子を始めずに unavailable を返す', async t => {
+  const s = await startApp(t, enable());
+  const switchOff: Script = async function* (req) {
+    const config = s.app.config();
+    config.tools.agent.enabled = false;
+    await s.app.applyConfig(config, { probe: false });
+    yield* call('agent_run', { task: '任せる' })(req);
+  };
+  s.adapter().scripts = [switchOff, reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  assert.equal(childRuns(s).length, 0, '子は始まらない');
+  const message = toolMessages(s, parent)[0]!;
+  assert.equal(message.message.role === 'tool' && message.message.isError === true, true);
+  assert.ok(message.text.includes(toolText('ja', 'agent.unavailable')), message.text);
+});
+
+test('T-47 タスクの親が始めたあとに tools.agent.inTasks を切ると、その実行の agent_run も子を始めずに unavailable を返す', async t => {
+  const s = await startApp(t, enable(c => { c.tools.agent.inTasks = true; }));
+  const switchOff: Script = async function* (req) {
+    const config = s.app.config();
+    config.tools.agent.inTasks = false;
+    await s.app.applyConfig(config, { probe: false });
+    yield* call('agent_run', { task: '任せる' })(req);
+  };
+  s.adapter().scripts = [switchOff, reply('タスクの返事')];
+  const task = s.app.tasks.create({ title: '任せるタスク', origin: 'user', actor: 'user' });
+  await s.app.worker.tick();
+  const conversationId = s.app.tasks.get(task.id)!.conversation_id!;
+  assert.equal(childRuns(s).length, 0, '子は始まらない');
+  const message = toolMessages(s, conversationId)[0]!;
+  assert.equal(message.message.role === 'tool' && message.message.isError === true, true);
+  assert.ok(message.text.includes(toolText('ja', 'agent.unavailable')), message.text);
+});
+
+test('T-48 子の返事が長くて切れてもいるとき、両方の注が包みの中に入り、閉じの区切りで終わり、道具の結果の上限に収まる', async t => {
+  const s = await startApp(t, enable());
+  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), cutReply('あ'.repeat(AGENT_RESULT_MAX_CHARS + 5000)), reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  const text = toolMessage(s, parent);
+  assert.equal(text.trimEnd().endsWith(toolText('ja', 'agent.result_close')), true, '閉じの区切りが末尾に残る');
+  assert.equal(text.includes(toolText('ja', 'agent.truncated')), true, '長さの注記');
+  assert.equal(text.includes(toolText('ja', 'agent.output_truncated')), true, '出力の上限で切れた注');
+  assert.ok(text.length <= TOOL_OUTPUT_LIMIT, `${text.length} 文字`);
+});
+
+test('T-49 英語の設定でも、注と親の会話への知らせは英語で出る', async t => {
+  const s = await startApp(t, enable(c => { c.language = 'en'; }));
+  const seen = listen(s);
+  s.adapter().scripts = [call('agent_run', { task: 'answer at length' }), cutReply('The answer is cut off mid'), reply('parent final')];
+  const parent = uuid(1);
+  await chat(s, parent, 'delegate');
+  const text = toolMessage(s, parent);
+  const open = text.indexOf(toolText('en', 'agent.result_open'));
+  const note = text.indexOf(toolText('en', 'agent.output_truncated'));
+  assert.ok(open >= 0 && note > open && note < text.indexOf(toolText('en', 'agent.result_close')), '注は包みの中');
+  assert.equal(warningsOf(seen, parent, 'agent_output_truncated')[0]?.message, engineText('en', 'warn.agent_output_truncated'));
 });

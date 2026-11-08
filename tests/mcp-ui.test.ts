@@ -5,7 +5,7 @@ import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
 import { accessWidening, mcpSecretAccess } from '../web/src/settings/access.ts';
 import {
-  addBody, addProblem, argsFromText, attempt, emptyAddForm, idFromName, previewAdd, previewServer, previewTool, reasonKey, sameShape, scrubSecrets, shapeChanges, summarize, tone,
+  addBody, addProblem, argsFromText, attempt, emptyAddForm, idFromName, previewAdd, previewServer, previewTool, reasonKey, revealHidden, sameShape, scrubSecrets, shapeChanges, summarize, tone,
   PATTERNS,
 } from '../web/src/settings/mcp-model.ts';
 import { SECTION_GROUPS, sectionSlice, type Config } from '../web/src/settings/model.ts';
@@ -234,19 +234,35 @@ test('MCP の文言は ja/en で揃い、en に日本語が混ざらない。確
 
 // ---- 差分の「受け入れる」: 見せた形と押した時点の形が違えば受け入れない ----
 
-test('sameShape: 説明・入力の形・消す語のどれかが違えば別の形', () => {
-  const a = { description: '読む', schema: '{}', destructive: false };
+test('sameShape: 説明・入力の形・消す語・外へ出る申告・落とした見えない文字の数のどれかが違えば別の形', () => {
+  const a = { description: '読む', schema: '{}', destructive: false, openWorld: false, stripped: 0 };
   assert.equal(sameShape(a, { ...a }), true);
   assert.equal(sameShape(a, { ...a, description: '読む。そして送る' }), false);
   assert.equal(sameShape(a, { ...a, schema: '{"a":1}' }), false);
   assert.equal(sameShape(a, { ...a, destructive: true }), false);
+  assert.equal(sameShape(a, { ...a, openWorld: true }), false);
+  assert.equal(sameShape(a, { ...a, stripped: 3 }), false);
   assert.equal(sameShape(undefined, undefined), true);
   assert.equal(sameShape(undefined, a), false);
 });
 
 test('shapeChanges: 前が無ければ全部が新しい。あれば変わった所だけ', () => {
-  const a = { description: 'x'.repeat(500), schema: '{}', destructive: false };
-  assert.deepEqual(shapeChanges({ after: a }), { description: true, schema: true, destructive: false });
-  assert.deepEqual(shapeChanges({ before: a, after: { ...a, description: `${a.description}!` } }), { description: true, schema: false, destructive: false });
-  assert.deepEqual(shapeChanges({ before: a, after: { ...a, destructive: true } }), { description: false, schema: false, destructive: true });
+  const a = { description: 'x'.repeat(500), schema: '{}', destructive: false, openWorld: false, stripped: 0 };
+  const none = { description: false, schema: false, destructive: false, openWorld: false, stripped: false };
+  assert.deepEqual(shapeChanges({ after: a }), { ...none, description: true, schema: true });
+  assert.deepEqual(shapeChanges({ after: { ...a, openWorld: true, stripped: 4 } }), { ...none, description: true, schema: true, openWorld: true, stripped: true });
+  assert.deepEqual(shapeChanges({ before: a, after: { ...a, description: `${a.description}!` } }), { ...none, description: true });
+  assert.deepEqual(shapeChanges({ before: a, after: { ...a, destructive: true } }), { ...none, destructive: true });
+  assert.deepEqual(shapeChanges({ before: a, after: { ...a, openWorld: true } }), { ...none, openWorld: true });
+  assert.deepEqual(shapeChanges({ before: a, after: { ...a, stripped: 2 } }), { ...none, stripped: true });
+});
+
+test('revealHidden: 見えない文字・向きを変える文字・タグ文字は u{…} の見える文字にし、ふつうの文字・改行・タブ・絵文字はそのまま', () => {
+  const shown = (cp: number): string => `${String.fromCharCode(92)}u{${cp.toString(16).toUpperCase()}}`;
+  assert.equal(revealHidden('a\u{e0041}b'), `a${shown(0xe0041)}b`);
+  assert.equal(revealHidden('x\u{202e}y\u{200b}z'), `x${shown(0x202e)}y${shown(0x200b)}z`);
+  assert.equal(revealHidden('\u{fe0f}\u{2028}\u{ad}\u{0}\u{9f}'), [0xfe0f, 0x2028, 0xad, 0, 0x9f].map(shown).join(''));
+  assert.equal(revealHidden(String.fromCodePoint(0x3164, 0x2800, 0x34f, 0x115f, 0xffa0)), [0x3164, 0x2800, 0x34f, 0x115f, 0xffa0].map(shown).join(''), '空白に見える文字も');
+  assert.equal(revealHidden('日本語 text\n\t{"a":"b"} 😀'), '日本語 text\n\t{"a":"b"} 😀');
+  assert.equal(revealHidden(String.fromCharCode(0xd800)), shown(0xd800), '対の無いサロゲートも見える形にする');
 });

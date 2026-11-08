@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
@@ -65,16 +65,21 @@ export class SkillStore {
   onDraft: ((draft: SkillDraft) => void) | undefined;
 
   readonly #language: () => Language;
+  readonly #log: (line: string) => void;
 
-  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE) { this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; }
+  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined) {
+    this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log;
+  }
 
   get dir(): string { return this.#dir; }
 
-  // フォルダにあるスキルを全部返す（画面のため。registered で、持ち主が認めたものかを分ける）
+  // フォルダにあるスキルを全部返す（画面のため。registered で、持ち主が認めたものかを分ける）。フォルダが無い・読めないときは空
   list(): Skill[] {
-    if (!existsSync(this.#dir)) return [];
+    this.pruneMissing();
+    let entries: Dirent[];
+    try { entries = readdirSync(this.#dir, { withFileTypes: true }); } catch { return []; }
     const skills: Skill[] = [];
-    for (const entry of readdirSync(this.#dir, { withFileTypes: true })) {
+    for (const entry of entries) {
       if (!entry.isDirectory() || !SKILL_NAME.test(entry.name)) continue;
       const skill = this.get(entry.name);
       if (skill) skills.push(skill);
@@ -85,7 +90,7 @@ export class SkillStore {
   get(name: string): Skill | undefined {
     if (!SKILL_NAME.test(name)) return undefined;
     const path = join(this.#dir, name, 'SKILL.md');
-    if (!existsSync(path)) return undefined;
+    if (!existsSync(path)) { this.#dropMissing(name); return undefined; }
     const parsed = parseSkillFile(readFileSync(path, 'utf8'));
     const usage = this.#db.prepare('SELECT uses, last_used_at FROM skill_usage WHERE name = ?').get(name) as { uses: number; last_used_at: number | null } | undefined;
     return {
@@ -94,9 +99,22 @@ export class SkillStore {
     };
   }
 
-  // 登録している = その名前の行がある。登録した名前は、あとで書き直されても（承認・画面の保存・file_write・シェル）そのまま使う
+  // 登録している = その名前の行があり、フォルダに SKILL.md がある。登録した名前は、あとで書き直されても（承認・画面の保存・file_write・シェル）そのまま使う。
+  // フォルダが消えていた名前は、見つけた時点で行も消す（UI 以外で消されたあとに置き直されたものを、登録済みとして信用しない）
   isRegistered(name: string): boolean {
-    return this.#db.prepare('SELECT 1 FROM skill_registry WHERE name = ?').get(name) !== undefined;
+    if (!SKILL_NAME.test(name) || this.#db.prepare('SELECT 1 FROM skill_registry WHERE name = ?').get(name) === undefined) return false;
+    if (existsSync(join(this.#dir, name, 'SKILL.md'))) return true;
+    this.#dropMissing(name);
+    return false;
+  }
+
+  // フォルダ（SKILL.md）の無い名前の登録を全部外す（外した名前は 1 件ずつ INFO で記録する）。一覧を作るときと起動のときに呼ぶ。外した件数を返す。
+  // スキル全体のフォルダが無い・読めないときは何も外さない
+  pruneMissing(): number {
+    const rows = this.#db.prepare('SELECT name FROM skill_registry').all() as Array<{ name: string }>;
+    let n = 0;
+    for (const { name } of rows) if (!existsSync(join(this.#dir, name, 'SKILL.md')) && this.#dropMissing(name)) n++;
+    return n;
   }
 
   // 一覧（system）と skill_view が見るのは、登録した名前だけ。未登録の SKILL.md は無いものとして扱う
@@ -119,6 +137,22 @@ export class SkillStore {
     let n = 0;
     for (const skill of this.list()) if (!skill.registered) { this.#mark(skill.name, 'upgrade'); n++; }
     return n;
+  }
+
+  // スキル全体のフォルダを読めるか。読めないとき（ドライブが外れている・同期フォルダが開けない）は、スキルが無いのか見えないだけなのか分からないので、登録は外さない
+  #readable(): boolean {
+    try { readdirSync(this.#dir); return true; } catch { return false; }
+  }
+
+  #unmark(name: string): boolean {
+    return Number(this.#db.prepare('DELETE FROM skill_registry WHERE name = ?').run(name).changes) > 0;
+  }
+
+  // フォルダ（SKILL.md）が無い名前の行を外して、名前を記録する。スキル全体のフォルダを読めないときは何もしない。外したら true
+  #dropMissing(name: string): boolean {
+    if (!this.#readable() || !this.#unmark(name)) return false;
+    this.#log(`[INFO] スキル「${name}」のフォルダが無いので、登録から外しました（同じ名前でフォルダを置き直しても、画面の「登録する」までは使われません）`);
+    return true;
   }
 
   #mark(name: string, source: SkillSource): void {
@@ -153,7 +187,7 @@ export class SkillStore {
 
   remove(name: string): void {
     // フォルダが先に消えていても登録の行は消す（残すと、同じ名前で置き直したものが、そのまま信用されてしまう）
-    this.#db.prepare('DELETE FROM skill_registry WHERE name = ?').run(name);
+    this.#unmark(name);
     if (!this.get(name)) throw new SkillError('skill.not_found', { name });
     rmSync(join(this.#dir, name), { recursive: true, force: true });
   }
