@@ -4,6 +4,7 @@ import { App } from './app.ts';
 import { ConfigError } from './config/store.ts';
 import { loadEnvFile, resolvePaths } from './paths.ts';
 import { serverHostProblem } from './shared/url.ts';
+import { isEdgeExecutable } from './shared/browser-path.ts';
 import { locateBrowser } from './tools/browser/locate.ts';
 import { createWebServer } from './web/server.ts';
 
@@ -74,7 +75,8 @@ async function doctor(): Promise<number> {
     if (browser.enabled) {
       const found = locateBrowser({ channel: browser.channel, executablePath: browser.executablePath });
       if (found) process.stdout.write(`OK  ブラウザ: ${found.path}\n`);
-      else { process.stdout.write('NG  ブラウザの実行ファイルが見つかりません\n     直し方: Microsoft Edge か Google Chrome を入れるか、設定の「ブラウザ」で「パスを指定」してください\n'); bad++; }
+      else if (browser.channel === 'path' && isEdgeExecutable(browser.executablePath)) { process.stdout.write('NG  指定のブラウザは Microsoft Edge です（Edge ではブラウザの操作をしません）\n     直し方: 設定の「ブラウザ」で、Google Chrome か、ほかの Chromium 系ブラウザの実行ファイルを指定してください\n'); bad++; }
+      else { process.stdout.write('NG  ブラウザの実行ファイルが見つかりません\n     直し方: Google Chrome を入れるか、設定の「ブラウザ」で「パスを指定」して Chromium 系ブラウザの実行ファイルを指定してください\n'); bad++; }
     }
     return bad ? 1 : 0;
   } finally { app.close(); }

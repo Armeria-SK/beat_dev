@@ -189,6 +189,7 @@ const ja = {
 
   'web.fetch_off': 'web_fetch は設定で止めてあります（tools.web.fetch）',
   'browser.off': 'ブラウザの道具は設定で止めてあります（tools.browser.enabled）',
+  'browser.open.listed': '操作の一覧にあるサイトを開きます。ログイン済みのことがあり、開くだけで（クエリ付き・外から読んだ内容のあとは特に）操作が走りうるため、確かめます',
   'browser.act.reason': 'ブラウザのページを操作します。フォームの送信・購入・投稿など、取り消せないことが起きる可能性があります',
   'browser.act.read_only': 'このサイト（{host}）は、設定の操作の一覧（tools.browser.sites）にないので、読むだけです。押す・入れるはできません',
   'browser.act.no_table': 'このタブの「触れるもの」の一覧を、まだ読んでいません。browser_read で読んでから、その番号で指定してください',
@@ -421,6 +422,7 @@ const en: Record<keyof typeof ja, string> = {
 
   'web.fetch_off': 'web_fetch is turned off in the settings (tools.web.fetch)',
   'browser.off': 'The browser tools are turned off in the settings (tools.browser.enabled)',
+  'browser.open.listed': 'Opens a site in the operation list. You may be signed in, so just opening it (especially with a query, or after reading outside content) can trigger an action; asking first',
   'browser.act.reason': 'Operates the browser page. Things that cannot be undone (submitting a form, buying, posting) may happen',
   'browser.act.read_only': 'This site ({host}) is not in the operation list (tools.browser.sites), so it is read-only. Clicking and typing are not allowed',
   'browser.act.no_table': 'The list of elements for this tab has not been read yet. Read it with browser_read, then use its number',

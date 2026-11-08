@@ -1,10 +1,11 @@
 // ブラウザの driver。playwright-core を import するのはこのファイルだけ（動的 import。無効のあいだは読み込まない）。
 // 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は CLIVE_BROWSER_LIVE=1 のときだけ動かす
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserContext, Locator, Page, Route } from 'playwright-core';
 import type { Language } from '../../config/schema.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
+import { isEdgeExecutable } from '../../shared/browser-path.ts';
 import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 import { routeVerdict, type RouteRefusal } from './route.ts';
 
@@ -35,8 +36,8 @@ export const REFUSAL_KEYS: Record<RouteRefusal, ToolMessageKey> = {
 
 export interface LaunchOptions {
   profileDir: string;
-  // どちらも undefined なら自動（Edge、無ければ Chrome）
-  channel: 'msedge' | 'chrome' | undefined;
+  // どちらも undefined なら自動（手元の Chrome）。Edge は使わない
+  channel: 'chrome' | undefined;
   executablePath: string | undefined;
   headless: boolean;
   proxy: { server: string; username: string; password: string };
@@ -110,6 +111,16 @@ export function childEnv(source: Record<string, string | undefined> = process.en
   return env;
 }
 
+// Playwright が標準で付ける --disable-features の中身（playwright-core 1.65 時点）。
+// Chromium は --disable-features を 1 つしか読まず、あとから渡した引数が勝つ。こちらの --disable-features が Playwright の既定を潰さないよう、既定をここに写して足す
+// （MediaRouter・OptimizationHints・NetworkTimeServiceQuerying・PreconnectToSearch などは、起動時の余計な通信を止める）。
+// Playwright の版を上げたら、tests/browser-driver-static.test.ts が一覧との食い違いを見つける
+const PLAYWRIGHT_DISABLED_FEATURES = [
+  'AvoidUnnecessaryBeforeUnloadCheckSync', 'DestroyProfileOnBrowserClose', 'HttpsUpgrades', 'HttpsFirstBalancedModeAutoEnable', 'LensOverlay',
+  'MediaRouter', 'PaintHolding', 'ThirdPartyStoragePartitioning', 'AvoidCorsURLLoaderRestartOnRedirect', 'TcpPortRandomizationWin',
+  'OptimizationHints', 'NetworkTimeServiceQuerying', 'AimEnabled', 'PreconnectToSearch', 'msForceBrowserSignIn', 'msEdgeUpdateLaunchServicesPreferredVersion',
+];
+
 // 固定の起動引数（設定で外せない）
 export function launchArgs(): string[] {
   return [
@@ -124,7 +135,7 @@ export function launchArgs(): string[] {
     '--no-first-run',
     '--no-default-browser-check',
     '--deny-permission-prompts',
-    '--disable-features=PasswordManagerOnboarding,AutofillServerCommunication',
+    `--disable-features=${[...PLAYWRIGHT_DISABLED_FEATURES, 'PasswordManagerOnboarding', 'AutofillServerCommunication'].join(',')}`,
   ];
 }
 
@@ -154,7 +165,10 @@ export function localeFor(language: Language): string { return language === 'ja'
 // パスワードを覚えさせない・自動で入れさせない（プロファイルの Default/Preferences。ブラウザが閉じているあいだに書く）
 export function seedPreferences(profileDir: string): void {
   const dir = join(profileDir, 'Default');
-  mkdirSync(dir, { recursive: true });
+  // プロファイルはログイン情報（cookie）を持つので、持ち主だけが読める権限（0o700）にする。Windows では権限の指定は無視される
+  mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { chmodSync(profileDir, 0o700); chmodSync(dir, 0o700); } catch { /* 直せなくても起動は止めない */ }
   const file = join(dir, 'Preferences');
   let prefs: Record<string, unknown> = {};
   try {
@@ -281,13 +295,15 @@ class PlaywrightPage implements PageHandle {
   async close(): Promise<void> { await this.page.close({ runBeforeUnload: false }); }
 }
 
-class PlaywrightBrowser implements BrowserHandle {
+// 試験のために export（本物の BrowserContext の代わりに偽物を渡して、窓の見分けを試す）
+export class PlaywrightBrowser implements BrowserHandle {
   readonly #context: BrowserContext;
   readonly #wrappers = new WeakMap<Page, PlaywrightPage>();
   readonly #own = new WeakSet<Page>();
   #onPage: ((page: PageHandle) => void) | undefined;
-  #creating = false;
-  #claimed = false;
+  // newPage の最中（数えるのは、同時に呼ばれても崩れないため）。そのあいだに届いた opener の無い窓は、戻りを待ってから見分ける
+  #creating = 0;
+  readonly #undecided = new Set<Page>();
 
   constructor(context: BrowserContext) { this.#context = context; }
 
@@ -299,11 +315,17 @@ class PlaywrightBrowser implements BrowserHandle {
 
   async install(): Promise<void> {
     await this.#context.route('**/*', route => this.#intercept(route));
-    this.#context.on('page', page => {
-      // newPage の最中に最初に届いた 'page' は、その newPage の窓（イベントは newPage の戻りより先に来る）
-      if (this.#creating && !this.#claimed) { this.#claimed = true; this.#own.add(page); return; }
-      if (!this.#own.has(page)) this.#onPage?.(this.wrap(page));
-    });
+    this.#context.on('page', page => { void this.#classify(page); });
+  }
+
+  // 新しい窓の見分け: opener（開いた元のページ）を持つものは、ページが開いた popup。
+  // opener の無いものは、自分の newPage の窓か、noopener で開かれた窓。newPage の外で届いたものと、newPage の戻りで自分の窓と分かった以外は popup
+  async #classify(page: Page): Promise<void> {
+    let opener: Page | null;
+    try { opener = await page.opener(); } catch { return; }
+    if (opener === null && this.#own.has(page)) return;
+    if (opener === null && this.#creating > 0) { this.#undecided.add(page); return; }
+    this.#onPage?.(this.wrap(page));
   }
 
   // 副の守り。判定できないものは断る（本体は中継）
@@ -322,12 +344,21 @@ class PlaywrightBrowser implements BrowserHandle {
   }
 
   async newPage(): Promise<PageHandle> {
-    this.#creating = true; this.#claimed = false;
+    this.#creating += 1;
     try {
       const page = await this.#context.newPage();
       this.#own.add(page);
+      this.#undecided.delete(page);
       return this.wrap(page);
-    } finally { this.#creating = false; }
+    } finally {
+      this.#creating -= 1;
+      if (this.#creating === 0) {
+        // 自分の窓でなかったもの（noopener の popup など）は、popup として知らせる
+        const rest = [...this.#undecided];
+        this.#undecided.clear();
+        for (const page of rest) this.#onPage?.(this.wrap(page));
+      }
+    }
   }
 
   pages(): PageHandle[] { return this.#context.pages().map(page => this.wrap(page)); }
@@ -341,13 +372,19 @@ class PlaywrightBrowser implements BrowserHandle {
   }
 }
 
+// 起動を試す channel の順。自動は Chrome だけ（Edge は試さない）。executablePath があればそれを使う（channel は付けない）
+export function launchAttempts(options: Pick<LaunchOptions, 'channel' | 'executablePath'>): Array<LaunchOptions['channel']> {
+  return options.channel || options.executablePath ? [options.channel] : ['chrome'];
+}
+
 export class PlaywrightDriver implements BrowserDriver {
   async launch(options: LaunchOptions): Promise<BrowserHandle> {
+    // 設定の検証をすり抜けても、Edge の実行ファイルは起動しない（プロファイルの準備・playwright の読み込みより前に断る）
+    if (options.executablePath && isEdgeExecutable(options.executablePath)) throw new BrowserFailure('no_browser', 'browser.edge_refused');
     let chromium: typeof import('playwright-core').chromium;
     try { ({ chromium } = await import('playwright-core')); } catch { throw new BrowserFailure('launch_failed', 'browser.launch_failed'); }
     seedPreferences(options.profileDir);
-    // 自動: Edge、無ければ Chrome
-    const attempts: Array<LaunchOptions['channel']> = options.channel || options.executablePath ? [options.channel] : ['msedge', 'chrome'];
+    const attempts = launchAttempts(options);
     let failure: BrowserFailure | undefined;
     for (const channel of attempts) {
       try {

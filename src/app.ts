@@ -90,7 +90,7 @@ export interface AppOptions {
   agentTimeoutMs?: number;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
-  // 試験用: ブラウザの動かし方（書かなければ playwright-core で、手元の Edge / Chrome を動かす）
+  // 試験用: ブラウザの動かし方（書かなければ playwright-core で、手元の Chrome（か path 指定の Chromium 系）を動かす）
   browserDriver?: BrowserDriver;
   // 試験用: ログイン用の窓（見えるブラウザ）を出せる環境か（書かなければ、この計算機の環境から決める）
   browserDisplay?: boolean;

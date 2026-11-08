@@ -8,7 +8,7 @@ import { updateAt, type Config } from './model.ts';
 import { differs, errorFor, type SectionProps } from './types.ts';
 
 const POLL_MS = 3000;
-const CHANNELS = ['auto', 'msedge', 'chrome', 'path'] as const;
+const CHANNELS = ['auto', 'chrome', 'path'] as const;
 
 // 設定の「ブラウザ」: 使う/使わない・操作してよいサイト・使うブラウザ・上限（保存バーで保存）と、
 // 状態の表示・ログイン用の窓・ブラウザを閉じる・ログイン情報を消す（すぐ実行。保存は要らない）

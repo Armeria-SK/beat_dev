@@ -4,6 +4,7 @@ import { Value } from '@sinclair/typebox/value';
 import { configText } from '../shared/messages/config.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
+import { isEdgeExecutable } from '../shared/browser-path.ts';
 import { checkBaseUrl, isSafeOutboundUrl } from '../shared/url.ts';
 import { mcpToolName, MCP_NAME_MAX } from '../mcp/names.ts';
 import { isSecretEnvName, takenKeyEnvs } from '../shared/provider-key.ts';
@@ -114,6 +115,7 @@ function browserFindings(config: AppConfig, add: (path: string, message: string,
   const { channel, executablePath, sites } = config.tools.browser;
   if (channel === 'path' && executablePath === '') add('tools.browser.executablePath', 'channel が path のときは、ブラウザの実行ファイルの場所（executablePath）が必要です');
   if (executablePath !== '' && !isAbsolute(executablePath)) add('tools.browser.executablePath', '実行ファイルの場所は絶対パスで書いてください');
+  if (isEdgeExecutable(executablePath)) add('tools.browser.executablePath', 'Microsoft Edge ではブラウザの操作をしません。Google Chrome か、ほかの Chromium 系ブラウザの実行ファイルを指定してください');
   const seen = new Set<string>();
   for (const site of sites) {
     if (seen.has(site)) add('tools.browser.sites', `「${site}」が重複しています`);

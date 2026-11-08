@@ -63,7 +63,8 @@ export type Access =
   // ブラウザ（AU-6）: 使えるようにする / 操作（押す・入れる）してよいサイトを足す / 「そのホストだけ」を「サブドメインも」に広げる
   | { kind: 'browser-enabled' }
   | { kind: 'browser-site-added'; site: string }
-  | { kind: 'browser-site-widened'; site: string };
+  | { kind: 'browser-site-widened'; site: string }
+| { kind: 'browser-executable' };
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []);
 const added = (before: readonly string[], after: readonly string[]): string[] => after.filter(x => !before.includes(x));
@@ -255,6 +256,12 @@ function browserChanges(before: Config, after: Config): Access[] {
     if (site.startsWith('=') && was.includes(site.slice(1))) continue;
     out.push(!site.startsWith('=') && was.includes(`=${site}`) ? { kind: 'browser-site-widened', site } : { kind: 'browser-site-added', site });
   }
+  // 起動するブラウザの実行ファイル: channel を path にする、executablePath を足す・変える。Clive が起動する実行ファイルを持ち主以外の指定で替えられるので、確かめに出す。
+  // channel を auto / chrome に戻す・executablePath を空にするのは、広がりではない（1 回の変更で 1 行）
+  const was2 = typeof bb.executablePath === 'string' ? bb.executablePath : '';
+  const now2 = typeof ab.executablePath === 'string' ? ab.executablePath : '';
+  const becamePath = ab.channel === 'path' && bb.channel !== 'path';
+  if (becamePath || (now2 !== '' && now2 !== was2)) out.push({ kind: 'browser-executable' });
   return out;
 }
 

@@ -1,7 +1,7 @@
 // ブラウザの外向きの通信の中継（守りの本体）。ブラウザはこの中継経由でしか外に出られない（起動引数 --proxy-bypass-list=<-loopback> で、ループバックも中継に通す）。
 // 中継が決めること:
 // - 待ち受けは 127.0.0.1 だけ。合言葉（Proxy-Authorization の Basic）が合わない要求は 407
-// - 受けるのは CONNECT host:port と、絶対形の GET http://... だけ。ほかは 400
+// - 受けるのは CONNECT host:port と、絶対形の GET http://... だけ（本文つき＝Content-Length > 0・Transfer-Encoding は 400。content-length・expect も上流へ渡さない）。ほかは 400
 // - ポートは 80 / 443 だけ。ほかは 403
 // - IP の直書きは公開 IPv4 だけ。IPv6 は断る。名前は publicHostName（ページを読む道具と同じ規則）を通ったものだけ
 // - 名前は、ここで 1 回だけ引く。返った番地が 1 つでも公開 IPv4 でなければ断る（混在も、IPv6 だけの名前も）。つなぐのは確かめた番地で、引き直さない（再束縛を許さない）
@@ -49,7 +49,7 @@ export interface EgressProxy {
 
 const ALLOWED_PORTS: ReadonlySet<number> = new Set([80, 443]);
 const TARGET = /^(\[[0-9a-fA-F:.]+\]|[^:\s/[\]]+):(\d{1,5})$/u;
-const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host']);
+const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'expect']);
 
 const digest = (text: string): Buffer => createHash('sha256').update(text).digest();
 const defaultResolve = async (host: string): Promise<string[]> => (await lookup(host, { all: true })).map(item => item.address);
@@ -192,6 +192,9 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     let url: URL | undefined;
     if (req.method === 'GET' && /^http:\/\//iu.test(req.url ?? '')) { try { url = new URL(req.url ?? ''); } catch { url = undefined; } }
     if (!url) { reply(400); return; }
+    // 本文つきの要求（Content-Length > 0・Transfer-Encoding）は受けない。上流へ本文を渡さず、要求の形を食い違わせない（要求の密輸を許さない）
+    const length = req.headers['content-length'];
+    if (req.headers['transfer-encoding'] !== undefined || (length !== undefined && !/^0+$/u.test(length.trim()))) { reply(400); return; }
     const port = url.port === '' ? 80 : Number(url.port);
     const release = admit();
     if (!release) { reply(503); return; }

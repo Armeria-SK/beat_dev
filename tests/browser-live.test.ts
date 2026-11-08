@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { LAUNCH_TIMEOUT_MS, PlaywrightDriver, localeFor, playwrightOptions, seedPreferences, type LaunchOptions } from '../src/tools/browser/driver.ts';
 import { startEgressProxy } from '../src/tools/browser/egress-proxy.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { testConfig } from './helpers.ts';
 
-// T-44: 本物の Edge / Chrome で動かす。ふだんは飛ばす（CLIVE_BROWSER_LIVE=1 のときだけ）。
+// T-44: 本物の Chrome で動かす（Edge は使わない）。ふだんは飛ばす（CLIVE_BROWSER_LIVE=1 のときだけ）。
 // 中継の外を通る道が増えていないかを、Playwright や Chromium の版を上げるたびに確かめる（README「版を上げたら」）。
 // 外のネットワーク（https://example.com/）が要る
 const live = process.env.CLIVE_BROWSER_LIVE === '1';
@@ -53,10 +54,8 @@ test('T-44(2): ページの中から 127.0.0.1 への画像・fetch・WebSocket�
   };
   seedPreferences(profileDir);
   let context;
-  for (const channel of ['msedge', 'chrome'] as const) {
-    try { context = await chromium.launchPersistentContext(profileDir, playwrightOptions({ ...launch, channel })); break; } catch { /* 次を試す */ }
-  }
-  assert.ok(context, 'Edge も Chrome も起動できなかった');
+  try { context = await chromium.launchPersistentContext(profileDir, playwrightOptions({ ...launch, channel: 'chrome' })); } catch { /* 下で知らせる */ }
+  assert.ok(context, 'Chrome を起動できなかった');
   t.after(() => context!.close());
   const page = await context.newPage();
   const target = `http://127.0.0.1:${port}`;
@@ -80,6 +79,69 @@ test('T-44(2): ページの中から 127.0.0.1 への画像・fetch・WebSocket�
   assert.notEqual((result as Record<string, string>).ws, 'opened');
   assert.ok(proxy.stats().blocked >= 1, '中継が断った記録がある');
 });
+
+test('T-44(2b): ページの中から 169.254.169.254・[::1]・localhost への画像・fetch が受け口に届かず、中継が断る', options, async t => {
+  const hits: string[] = [];
+  const handler = (label: string) => (req: IncomingMessage, res: import('node:http').ServerResponse) => { hits.push(`${label} ${req.method} ${req.url}`); res.end('hit'); };
+  const sink4 = createServer(handler('v4'));
+  await new Promise<void>(resolve => sink4.listen(0, '127.0.0.1', resolve));
+  t.after(() => { sink4.close(); });
+  const port = (sink4.address() as AddressInfo).port;
+  // [::1] の受け口は、同じポートで立てる（立てられない環境ではそのぶんを見ない。169.254.169.254 は受け口を立てられないので中継の blocked の増え方で見る）
+  const sink6 = createServer(handler('v6'));
+  const v6 = await new Promise<boolean>(resolve => { sink6.once('error', () => resolve(false)); sink6.listen(port, '::1', () => resolve(true)); });
+  t.after(() => { if (v6) sink6.close(); });
+
+  const profileDir = tmpDir(t, 'inward');
+  const proxy = await startEgressProxy({ username: 'clive', password: 'x'.repeat(48) });
+  t.after(() => proxy.close());
+  const { chromium } = await import('playwright-core');
+  const launch: LaunchOptions = {
+    profileDir, channel: undefined, executablePath: undefined, headless: true,
+    proxy: { server: `http://${proxy.host}:${proxy.port}`, username: 'clive', password: 'x'.repeat(48) },
+    viewport: { width: 1280, height: 800 }, locale: localeFor('ja'), actionTimeoutMs: 10_000,
+  };
+  seedPreferences(profileDir);
+  let context;
+  try { context = await chromium.launchPersistentContext(profileDir, playwrightOptions({ ...launch, channel: 'chrome' })); } catch { /* 下で知らせる */ }
+  assert.ok(context, 'Chrome を起動できなかった');
+  t.after(() => context!.close());
+  const page = await context.newPage();
+  await page.setContent('<p>x</p>');
+  const probe = (base: string, label: string) => page.evaluate(async ([target, name]: [string, string]) => {
+    const outcome: Record<string, string> = {};
+    try { await fetch(`${target}/fetch-${name}`, { mode: 'no-cors' }); outcome.fetch = 'resolved'; } catch { outcome.fetch = 'failed'; }
+    const image = new Image();
+    outcome.img = await new Promise<string>(resolve => { image.onload = () => resolve('loaded'); image.onerror = () => resolve('failed'); image.src = `${target}/img-${name}.png`; });
+    return outcome;
+  }, [base, label] as [string, string]);
+
+  const before = proxy.stats().blocked;
+  const targets: Array<[string, string]> = [
+    ['http://169.254.169.254', 'metadata'],
+    [`http://localhost:${port}`, 'localhost'],
+  ];
+  if (v6) targets.push([`http://[::1]:${port}`, 'v6']);
+  const blockedAfter: number[] = [];
+  for (const [base, label] of targets) {
+    await probe(base, label);
+    blockedAfter.push(proxy.stats().blocked);
+  }
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  assert.deepEqual(hits, [], `受け口に届いた: ${hits.join(', ')}`);
+  // 宛先ごとに、中継の断った数が増えている（受け口が無い 169.254.169.254 も、中継が断ったことで見る）
+  assert.ok(blockedAfter[0]! > before, '169.254.169.254 を中継が断った');
+  for (let i = 1; i < blockedAfter.length; i++) assert.ok(blockedAfter[i]! > blockedAfter[i - 1]!, `${targets[i]![0]} を中継が断った`);
+});
+
+// Playwright が標準で付ける --disable-features の名前（Playwright の版ごとに変わる。版を上げたとき、固定の起動引数と食い違っていないかをここで見る）
+function playwrightDisabledFeatures(): string[] {
+  const bundle = readFileSync(join(dirname(createRequire(import.meta.url).resolve('playwright-core/package.json')), 'lib', 'coreBundle.js'), 'utf8');
+  const start = bundle.indexOf('disabledFeatures = [');
+  assert.ok(start >= 0, 'Playwright の既定の無効な機能の一覧が見つからない（読み方を直す）');
+  const end = bundle.indexOf('].filter(Boolean)', start);
+  return [...bundle.slice(start, end).matchAll(/^\s*"([A-Za-z0-9]+)",?\s*$/gmu)].map(m => m[1]!);
+}
 
 test('T-44(1)(3)(4): example.com を開いて本文が読め、押せて、起動したブラウザに --remote-debugging-port が無い', options, async t => {
   const profileDir = tmpDir(t, 'session');
@@ -108,6 +170,17 @@ test('T-44(1)(3)(4): example.com を開いて本文が読め、押せて、起�
   const main = lines.filter(line => !line.includes('--type='));
   assert.ok(main.length > 0, '本体のプロセスが見つからない');
   for (const line of main) assert.match(line, /--proxy-server=/u, '中継を指定して起動している');
+  // --disable-features は、あとから付けたほうが勝つ（起動したコマンド行では、Playwright の既定のあとに Clive の固定の引数が来る）。固定の引数が Playwright の既定（MediaRouter・OptimizationHints など）を潰していないこと
+  const wanted = [...playwrightDisabledFeatures(), 'PasswordManagerOnboarding', 'AutofillServerCommunication'];
+  assert.ok(wanted.includes('MediaRouter') && wanted.includes('OptimizationHints'), `Playwright の一覧の読み取り: ${wanted.join(',')}`);
+  for (const line of main) {
+    const given = line.match(/--disable-features=(\S+)/gu) ?? [];
+    // Playwright の既定と Clive の固定の引数の 2 つが並ぶ。Chromium が読むのは最後の 1 つなので、最後のものを見る
+    assert.ok(given.length >= 1, '--disable-features が無い');
+    const names = new Set(given.at(-1)!.slice('--disable-features='.length).split(','));
+    const missing = wanted.filter(name => !names.has(name));
+    assert.deepEqual(missing, [], `起動したブラウザの --disable-features に無い: ${missing.join(',')}`);
+  }
 
   // 押す（リンク先へ移る）
   const clicked = await session.run(call, async api => {

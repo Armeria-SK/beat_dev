@@ -32,6 +32,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, change: (co
   t.after(() => session.close());
   const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, workspace: 'C:\\work',
+    taint: { tainted: false, sources: [] },
     log: () => undefined, services: { browser: session }, model: { id: 'm', vision: true }, ...over,
   } as unknown as ToolContext);
   return { driver, session, config, ctx, text: (key, params) => toolText(languageOf(config), key, params) };
@@ -381,4 +382,51 @@ test('browser_screenshot: タブが無ければ、起動せずに失敗する', 
   const out = await run(browserScreenshot, {}, r.ctx());
   assert.equal(out.isError, true);
   assert.equal(r.driver.launches, 0);
+});
+
+// R6: 一覧（tools.browser.sites）のサイトは、ログイン済みのことがある。開くだけの GET が操作になりうるので、会話が外を読んだあと・クエリ付きは確かめる
+const TAINTED = { tainted: true, sources: ['web_fetch'] };
+
+test('R6: 一覧のサイト + クエリ付き → ask（web・sends・札に URL）', async t => {
+  const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  const check = await browserOpen.preCheck!({ url: 'https://example.com/logout?token=1' }, r.ctx());
+  assert.equal(check.decision, 'ask');
+  assert.deepEqual(check.askKinds, ['web']);
+  assert.equal(check.sends, true);
+  assert.ok((check.details ?? []).some(d => d.includes('https://example.com/logout?token=1')));
+  const sub = await browserOpen.preCheck!({ url: 'https://www.example.com/a?x=1' }, r.ctx());
+  assert.equal(sub.decision, 'ask');
+});
+
+test('R6: 一覧のサイト + 会話が外を読んだあと → ask', async t => {
+  const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  const check = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: TAINTED }));
+  assert.equal(check.decision, 'ask');
+  assert.deepEqual(check.askKinds, ['web']);
+  assert.equal(check.sends, true);
+});
+
+test('R6: 一覧外のサイトは今までどおり（クエリ付き・taint 済みでも読むだけ）', async t => {
+  const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  assert.equal((await browserOpen.preCheck!({ url: 'https://other.example.org/a?x=1' }, r.ctx())).decision, 'allow');
+  assert.equal((await browserOpen.preCheck!({ url: 'https://other.example.org/a' }, r.ctx({ taint: TAINTED }))).decision, 'allow');
+  const empty = rig(t, c => { c.tools.browser.sites = []; });
+  assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/a?x=1' }, empty.ctx({ taint: TAINTED }))).decision, 'allow');
+});
+
+test('R6: 一覧のサイトでも taint なし・クエリなしなら通る（根ページ・パスだけ）', async t => {
+  const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/' }, r.ctx())).decision, 'allow');
+  assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/docs/page' }, r.ctx())).decision, 'allow');
+});
+
+test('R6: 一覧のサイト + 秘密入りクエリは理由が 2 つ重なる。無効なら deny のまま（ブラウザは起動しない）', async t => {
+  const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  const both = await browserOpen.preCheck!({ url: `https://example.com/?k=${SECRET}` }, r.ctx());
+  assert.equal(both.decision, 'ask');
+  assert.equal(both.reasons.length, 2);
+  assert.equal(both.askKinds?.length, 2);
+  const off = rig(t, c => { c.tools.browser.sites = ['example.com']; c.tools.browser.enabled = false; });
+  assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/a?x=1' }, off.ctx({ taint: TAINTED }))).decision, 'deny');
+  assert.equal(off.driver.launches, 0);
 });

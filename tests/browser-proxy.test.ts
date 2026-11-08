@@ -229,6 +229,27 @@ test('http の GET は Host を付けて確かめた番地へ送り、Proxy-* �
   assert.equal(JSON.stringify(seen.headers).includes('Basic'), false, '合言葉を相手へ送らない');
 });
 
+test('本文つきの GET（Content-Length > 0・Transfer-Encoding）は 400 で、解決もつなぎもしない', async t => {
+  const r = await rig(t);
+  const withLength = await raw(r.proxy.port, `GET http://example.net/a HTTP/1.1\r\nHost: example.net\r\nContent-Length: 5\r\n${AUTH}\r\nhello`, 600);
+  assert.equal(status(withLength), 400);
+  const chunked = await raw(r.proxy.port, `GET http://example.net/a HTTP/1.1\r\nHost: example.net\r\nTransfer-Encoding: chunked\r\n${AUTH}\r\n5\r\nhello\r\n0\r\n\r\n`, 600);
+  assert.equal(status(chunked), 400);
+  assert.deepEqual(r.resolved, []);
+  assert.deepEqual(r.connected, []);
+  assert.equal(r.seen.length, 0);
+});
+
+test('Content-Length: 0 の GET は通すが、content-length・transfer-encoding・expect は相手へ渡さない', async t => {
+  const r = await rig(t);
+  const response = await raw(r.proxy.port, `GET http://example.net/a HTTP/1.1\r\nHost: example.net\r\nContent-Length: 0\r\nExpect: 100-continue\r\n${AUTH}\r\n`, 1000);
+  // 中継自身の http の部品が先に「100 Continue」を返すので、最終の応答（200）が含まれることを見る
+  assert.match(response, /HTTP\/1\.1 200 /u);
+  assert.equal(r.seen.length, 1);
+  const names = Object.keys(r.seen[0]!.headers);
+  for (const name of ['content-length', 'transfer-encoding', 'expect']) assert.equal(names.includes(name), false, name);
+});
+
 test('断りのログは「ホスト:ポート 理由」だけ（道筋・問い合わせ・合言葉を書かない）。断った数は stats に出る', async t => {
   const r = await rig(t);
   await raw(r.proxy.port, `GET http://127.0.0.1/secret/path?token=abc123 HTTP/1.1\r\nHost: 127.0.0.1\r\n${AUTH}\r\n`);

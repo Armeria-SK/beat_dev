@@ -266,7 +266,7 @@ export class BrowserSession {
       proxy = await (this.#d.startProxy ?? startEgressProxy)({ username, password, maxBytesPerMinute: browser.limits.maxMbPerMinute * 1024 * 1024, ...(this.#d.log ? { log: this.#d.log } : {}) });
       const options: LaunchOptions = {
         profileDir: this.#d.paths.browserProfile,
-        channel: browser.channel === 'msedge' || browser.channel === 'chrome' ? browser.channel : undefined,
+        channel: browser.channel === 'chrome' ? 'chrome' : undefined,
         executablePath: browser.channel === 'path' && browser.executablePath ? browser.executablePath : undefined,
         headless,
         proxy: { server: `http://${proxy.host}:${proxy.port}`, username, password },

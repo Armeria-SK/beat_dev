@@ -54,6 +54,7 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'browser-enabled': return t('access.browserEnabled');
     case 'browser-site-added': return t('access.browserSiteAdded', a.site);
     case 'browser-site-widened': return t('access.browserSiteWidened', a.site);
+    case 'browser-executable': return t('access.browserExecutable');
     case 'tool-policy-loosened': return t('access.toolPolicy', a.tool, t(POLICY_LABEL[a.from]), t(POLICY_LABEL[a.to]));
   }
 }

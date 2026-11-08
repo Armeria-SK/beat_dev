@@ -395,6 +395,36 @@ test('広がりの検出（ブラウザ）: 狭める変更（サイトを消す
   assert.ok(!accessWidening(base(), withBrowser({ enabled: true, localOk: true })).some(a => a.kind === ('browser-local' as string)));
 });
 
+test('広がりの検出（ブラウザの実行ファイル）: channel を path にする・executablePath を足す/変えると browser-executable。auto/chrome に戻す・path を空にするのは出ない', () => {
+  const exe = ['browser-executable'];
+  // auto → path
+  assert.deepEqual(kinds(withBrowser({ channel: 'auto' }), withBrowser({ channel: 'path', executablePath: 'C:\\tools\\chrome.exe' })), exe);
+  // 設定が無かった状態 → path
+  assert.deepEqual(kinds(withBrowser({}), withBrowser({ channel: 'path', executablePath: 'C:\\tools\\chrome.exe' })), exe);
+  // path のまま実行ファイルを変える
+  assert.deepEqual(kinds(withBrowser({ channel: 'path', executablePath: 'C:\\a\\chrome.exe' }), withBrowser({ channel: 'path', executablePath: 'C:\\b\\chrome.exe' })), exe);
+  // channel が auto のまま executablePath を足す・変える
+  assert.deepEqual(kinds(withBrowser({ channel: 'auto' }), withBrowser({ channel: 'auto', executablePath: 'C:\\tools\\chrome.exe' })), exe);
+  assert.deepEqual(kinds(withBrowser({ channel: 'chrome', executablePath: 'C:\\a\\chrome.exe' }), withBrowser({ channel: 'chrome', executablePath: 'C:\\b\\chrome.exe' })), exe);
+  // 1 回の変更で 1 行（channel と executablePath を同時に変えても）
+  assert.equal(accessWidening(withBrowser({}), withBrowser({ channel: 'path', executablePath: 'C:\\tools\\chrome.exe' })).filter(a => a.kind === 'browser-executable').length, 1);
+  // 狭める・変えない: 出ない
+  const path = withBrowser({ channel: 'path', executablePath: 'C:\\tools\\chrome.exe' });
+  assert.deepEqual(kinds(path, withBrowser({ channel: 'auto', executablePath: 'C:\\tools\\chrome.exe' })), []);
+  assert.deepEqual(kinds(path, withBrowser({ channel: 'chrome', executablePath: 'C:\\tools\\chrome.exe' })), []);
+  assert.deepEqual(kinds(path, withBrowser({ channel: 'path' })), []);
+  assert.deepEqual(kinds(path, withBrowser({ channel: 'auto' })), []);
+  assert.deepEqual(kinds(path, structuredClone(path)), []);
+  assert.deepEqual(kinds(withBrowser({ channel: 'auto' }), withBrowser({ channel: 'chrome' })), []);
+});
+
+test('辞書（ブラウザの実行ファイル）: access.browserExecutable は ja と en にあり、Chrome 以外を起動しうることを言う', () => {
+  assert.equal(typeof (ja as Record<string, unknown>)['access.browserExecutable'], 'string');
+  assert.equal(typeof (en as Record<string, unknown>)['access.browserExecutable'], 'string');
+  assert.ok(String(ja['access.browserExecutable']).length > 10);
+  assert.ok(String(en['access.browserExecutable']).length > 10);
+});
+
 test('辞書（ブラウザ）: 広がりの文は ja と en にあり、サイトの名前を出す', () => {
   for (const key of ['access.browserEnabled', 'access.browserSiteAdded', 'access.browserSiteWidened'] as const) {
     assert.equal(typeof (ja as Record<string, unknown>)[key], typeof (en as Record<string, unknown>)[key], key);

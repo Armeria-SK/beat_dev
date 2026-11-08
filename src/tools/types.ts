@@ -72,6 +72,9 @@ export interface ExecuteInfo {
   approvedOnce: boolean;
   // 許したときに持ち主に見せた事前の判定
   check?: PreCheck;
+  // 札を出して承認を得た呼び出しで、承認のあとの再判定が比べて一致した bind（札で見せたものの指紋）。道具は実行の直前の探し直しで、同じ指紋になることをもう一度確かめて、違えば実行しない。
+  // 会話の許可で札なしに通る呼び出しには付かない（bind を比べない）
+  bind?: string;
   // この呼び出しの id（モデルが付けたもの。agent_run が、画面の agent.state をどの呼び出しの行に結ぶかに使う）
   callId?: string;
 }

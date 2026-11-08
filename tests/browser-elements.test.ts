@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import type { ElementState, PageHandle } from '../src/tools/browser/driver.ts';
 import { formatElements, readElements, relocate } from '../src/tools/browser/elements.ts';
 
-// T-05: 触れるものの番号。手本は、固定版の playwright-core（本物の Edge）が出した ariaSnapshot
+// T-05: 触れるものの番号。手本は、固定版の playwright-core（本物のブラウザ）が出した ariaSnapshot
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/aria-snapshot-${name}.txt`, import.meta.url), 'utf8');
 const URL_FORM = 'https://example.com/page';
