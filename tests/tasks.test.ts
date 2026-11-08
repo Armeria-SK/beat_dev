@@ -723,3 +723,17 @@ test('モデルが 0 個のあいだは、タスクも振り返りも選ばず�
   assert.equal(await s.app.worker.tick(), 'ran', 'モデルを足したら、待っていたタスクが動く');
   assert.equal(s.app.tasks.get(task.id)!.status, 'done');
 });
+
+test('切れた返事だけで終わったタスクは、メモに「切れた」と書く（普通の返事と区別する）', async t => {
+  const s = await setup(t);
+  const task = s.userTask('資料を作る');
+  s.adapter().scripts.push(async function* () {
+    yield { type: 'text', delta: '資料の骨子は次のとおりです。第一に' };
+    yield { type: 'done', stop: 'max_tokens' as StopReason };
+  });
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const after = s.app.tasks.get(task.id)!;
+  assert.match(after.body, /出力の上限で返事が途中で切れました/u);
+  assert.match(after.body, /資料の骨子は次のとおりです/u);
+  assert.equal(after.status, 'ready', '進展なしの扱いは普通の返事と同じ');
+});

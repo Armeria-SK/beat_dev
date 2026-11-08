@@ -121,12 +121,15 @@ function conversationAutoRead(deps: PipelineDeps): boolean {
   try { return deps.conversationAutoRead(); } catch { return true; }
 }
 
-export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps): Promise<ToolCallOutcome> {
+// truncated: 出力の上限で切れた返事に付いていた呼び出し。動かさず、deny で記録して誤りの結果を返す（message が結果の文、raw が切れた元の文字で、記録の入力欄に 2000 文字まで残す。モデルには送らない）
+export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps, truncated?: { message: string; raw: string }): Promise<ToolCallOutcome> {
   const id = randomUUID();
   const language = languageOf(ctx.config);
   const started = Date.now();
   const tool = deps.registry.get(call.name);
-  const shownInput = redactSecrets(JSON.stringify(call.arguments ?? call.raw ?? null)).slice(0, 4000);
+  const shownInput = truncated
+    ? redactSecrets(truncated.raw).slice(0, 2000)
+    : redactSecrets(JSON.stringify(call.arguments ?? call.raw ?? null)).slice(0, 4000);
   deps.emit({ type: 'tool.call', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, input: shownInput });
 
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
@@ -144,6 +147,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const refuse = (decision: Decision, decidedBy: string, message: string, invalid = false) =>
     finish({ output: { content: message, isError: true }, decision, decidedBy, invalidArguments: invalid });
 
+  if (truncated) return refuse('deny', 'truncated', truncated.message);
   if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: deps.registry.forRun(ctx.kind).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信、ファイルも書く道具）を使わせない（二重の禁止）
