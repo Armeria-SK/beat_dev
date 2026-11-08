@@ -8,7 +8,7 @@ export function buildPolicy(config: AppConfig, paths: AppPaths): ScopePolicy {
   const roots = config.tools.roots.map(r => ({ path: resolveConfigPath(r.path, paths.data), mode: r.mode }));
   const protectedPaths = [
     paths.database, `${paths.database}-wal`, `${paths.database}-shm`, paths.config, `${paths.config}.bak`, paths.backups,
-    paths.env, join(paths.data, 'tool_outputs'),
+    paths.env, join(paths.data, 'tool_outputs'), paths.browserProfile,
   ].map(p => resolveConfigPath(p, paths.data));
   const deny = [...config.tools.deny.map(p => resolveConfigPath(p, paths.data)), ...protectedPaths];
   // 人格とプロフィールは、Clive が書き換えるときに承認を求める（提案として見せる）。スキルのフォルダも同じ:

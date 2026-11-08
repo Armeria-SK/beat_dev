@@ -103,9 +103,22 @@ function findings(config: AppConfig): Finding[] {
     try { if (new URL(origin).origin !== origin) add('server.origins', `「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
     catch { add('server.origins', `「${origin}」が URL として読めません`); }
   }
+  browserFindings(config, add);
   notifyFindings(config, add);
   mcpFindings(config, add);
   return found;
+}
+
+// ブラウザの道具（tools.browser）の内容の検査。実行ファイルが在るかは見ない（無ければ道具が「見つからない」を返す。設定の保存は通す）
+function browserFindings(config: AppConfig, add: (path: string, message: string, label?: string) => void): void {
+  const { channel, executablePath, sites } = config.tools.browser;
+  if (channel === 'path' && executablePath === '') add('tools.browser.executablePath', 'channel が path のときは、ブラウザの実行ファイルの場所（executablePath）が必要です');
+  if (executablePath !== '' && !isAbsolute(executablePath)) add('tools.browser.executablePath', '実行ファイルの場所は絶対パスで書いてください');
+  const seen = new Set<string>();
+  for (const site of sites) {
+    if (seen.has(site)) add('tools.browser.sites', `「${site}」が重複しています`);
+    seen.add(site);
+  }
 }
 
 // 外の送り先（notify）の内容の検査。値の入る環境変数がプロバイダの鍵と重なる設定は断る（鍵を外の送り先へ渡す形を作らせない）

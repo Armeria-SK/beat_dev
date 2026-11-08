@@ -1,7 +1,7 @@
 import { ValueErrorType, type ValueError } from '@sinclair/typebox/errors';
 import type { MessageParams } from '../shared/messages/define.ts';
 import type { ConfigMessageKey } from '../shared/messages/config.ts';
-import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_ID_PATTERN, MCP_TOOL_KEY_PATTERN, ModelConfig, ProviderConfig } from './schema.ts';
+import { AppConfig, BROWSER_SITE_PATTERN, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_ID_PATTERN, MCP_TOOL_KEY_PATTERN, ModelConfig, ProviderConfig } from './schema.ts';
 
 // 設定の形の検査（TypeBox）の誤りを、項目ごとの文のコード（src/shared/messages/config.ts）と差し込みの値に直す。
 // 正規表現や「Expected string to match …」はそのまま見せない。ここに無い種類の誤りは undefined（呼ぶ側は検査の文のまま出す）
@@ -21,6 +21,7 @@ const PATTERN_ENTRIES: ReadonlyArray<readonly [string | undefined, ConfigMessage
   [MCP_TOOL_KEY_PATTERN, 'pattern.mcp_tool'],
   [MCP_ENV_NAME_PATTERN, 'pattern.mcp_env_name'],
   [MCP_HEADER_NAME_PATTERN, 'pattern.mcp_header_name'],
+  [BROWSER_SITE_PATTERN, 'pattern.browser_site'],
 ];
 export const PATTERN_MESSAGES: ReadonlyMap<string, ConfigMessageKey> = new Map(PATTERN_ENTRIES.flatMap(([pattern, key]) => (pattern === undefined ? [] : [[pattern, key] as const])));
 

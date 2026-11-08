@@ -5,6 +5,7 @@ import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import type { McpConnect } from '../src/mcp/manager.ts';
 import { resolvePaths } from '../src/paths.ts';
+import type { BrowserDriver } from '../src/tools/browser/driver.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
@@ -14,7 +15,7 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; fetch?: typeof fetch; mcpConnect?: McpConnect } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver } = {}) {
   const dir = tempDir(t);
   // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
@@ -34,6 +35,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.mcpConnect ? { mcpConnect: options.mcpConnect } : {}),
+    ...(options.browserDriver ? { browserDriver: options.browserDriver } : {}),
   });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);

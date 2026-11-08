@@ -1,0 +1,26 @@
+- heading "見出し" [level=1]
+- paragraph:
+  - text: 本文です
+  - link "ログイン":
+    - /url: https://example.com/login
+- navigation:
+  - link "Home":
+    - /url: /a
+  - link "Home":
+    - /url: /a
+  - button "無効" [disabled]
+- text: 検索
+- textbox "検索":
+  - /placeholder: ここ
+- textbox "パスワード"
+- checkbox "覚える" [checked]
+- combobox "言語":
+  - option "日本語" [selected]
+  - option "English"
+- button "送信"
+- list:
+  - listitem: one
+  - listitem: two
+- iframe
+- tablist:
+  - tab "T1" [selected]

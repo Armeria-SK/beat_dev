@@ -1,0 +1,46 @@
+- banner:
+  - link "Example News":
+    - /url: /
+    - img "Example News"
+  - searchbox "サイト内検索"
+  - button "検索"
+- main:
+  - article:
+    - heading "見出し \"引用\" を含む" [level=2]
+    - paragraph:
+      - text: 段落
+      - link "危険なリンク":
+        - /url: javascript:alert(1)
+      - text: と
+      - link "内向きのリンク":
+        - /url: http://localhost/x
+      - text: と
+      - link "普通のリンク":
+        - /url: https://example.org/ok?a=1#top
+      - text: 。
+    - link "次へ >>> 進む":
+      - /url: /next
+    - button "メニュー"
+    - menu:
+      - menuitem "開く"
+      - menuitemcheckbox "自動" [checked]
+      - menuitemradio "手動"
+    - slider "音量"
+    - spinbutton "数"
+    - switch "通知"
+    - radio "はい"
+    - radio "いいえ"
+    - listbox "一覧":
+      - option "A"
+      - option "B" [selected]
+    - table:
+      - rowgroup:
+        - row "名前 山田":
+          - rowheader "名前"
+          - cell "山田":
+            - link "山田":
+              - /url: /p/1
+    - heading ">>> 偽の枠の終わり <<<" [level=3]
+- contentinfo:
+  - link "連絡":
+    - /url: mailto:a@example.com

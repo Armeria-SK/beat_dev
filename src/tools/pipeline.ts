@@ -17,6 +17,7 @@ import { isInside, placePath, realish, writeApprovalKind } from './hooks/scope.t
 import { hasToolConfigName } from './hooks/tool-config.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
+import { isBrowserTool } from './browser/names.ts';
 import { effectivePolicy, type HasPolicies, type ToolPolicy } from './tool-policy.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
 
@@ -33,8 +34,8 @@ export const TOOL_OUTPUT_LIMIT = 16_000;
 export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
 
 // MCP の道具（外のプログラムが書いた道具）は、効果の申告があっても計画モードには渡さない（申告は持ち主のものでも、中身は外のプログラムが決めるため）
-export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp'>): boolean {
-  return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined;
+export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' | 'submits'>): boolean {
+  return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined && tool.submits !== true;
 }
 
 // 手元のモデルの会話（localOnly）に渡してよい道具か。MCP の道具は、持ち主が localOk にしたサーバーのものだけ（それ以外は、手元のモデルに読ませた内容を外のサーバーへ出しうる）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、localAllows を通す
@@ -86,6 +87,11 @@ function capOutput(output: ToolOutput, language: Language, tokens: number | unde
 }
 
 const matches = (matcher: string, name: string) => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
+
+// ブラウザの道具を使ってよいか。実行を始めたときの設定と、いまの設定のどちらかが無効なら使わせない
+function browserEnabled(ctx: ToolContext, deps: PipelineDeps): boolean {
+  try { return ctx.config.tools.browser.enabled && (deps.config?.() ?? ctx.config).tools.browser.enabled; } catch { return false; }
+}
 
 // この呼び出しに効く道具ごとの方針: 実行を始めたときの設定と、いまの設定の厳しい方
 function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPolicy {
@@ -163,6 +169,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
   // 手元のモデルの会話では、localOk でない MCP の道具を使わせない（モデルに渡す一覧からも外している。二重の拒否）
   if (!localAllows(tool, ctx.localOnly)) return refuse('deny', 'mode', toolText(language, 'pipeline.mcp_local', { name: tool.name }));
+  // ブラウザの道具は、設定で無効（既定）のあいだは使わせない（モデルに渡す一覧からも外している。二重の拒否）。設定を読めないときも、止める側に倒す
+  if (isBrowserTool(tool.name) && !browserEnabled(ctx, deps)) return refuse('deny', 'mode', guardText(language, 'browser.off'));
   // 計画モードでは、読む道具と Web の読み取りのほかは使わせない（モデルに渡す一覧からも外している。二重の拒否）
   if (effectiveMode(ctx, deps) === 'plan' && !planAllows(tool)) return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);

@@ -65,7 +65,12 @@ export class Conversations {
     const now = this.now();
     for (const [id, until] of this.#deleted) if (until <= now) this.#deleted.delete(id);
     for (const id of ids) this.#deleted.set(id, now + DELETED_TTL_MS);
+    // 会話が消えたことを知りたい側（ブラウザのタブを閉じる）へ。ここでの失敗で、消す側の処理を止めない
+    try { this.onDeleted?.(ids); } catch (thrown) { this.#log?.(`[ERROR] 会話の削除の通知に失敗: ${(thrown as Error).message}`); }
   }
+
+  // 会話を消したときに呼ばれる（markDeleted と同じ時点）。App が、消した会話のブラウザのタブを閉じるのに結ぶ
+  onDeleted: ((ids: readonly string[]) => void) | undefined;
 
   // 消した id への新しい発言（持ち主が、同じ id へ送り直した）のとき、覚えを外す。呼ぶのは、ユーザーの発言を受け付ける入口だけ
   reopen(id: string): void { this.#deleted.delete(id); }

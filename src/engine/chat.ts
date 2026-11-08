@@ -19,6 +19,8 @@ import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import { stricterMode } from '../shared/permission-mode.ts';
+import type { BrowserSession } from '../tools/browser/session.ts';
+import { isBrowserTool } from '../tools/browser/names.ts';
 import type { AgentRunInput, RunKind, TaskControl, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
@@ -99,6 +101,8 @@ export interface ChatEngineDeps {
   agentTimeoutMs?: number | undefined;
   // maxTools で切られた MCP の道具を、モデルごとに知らせる（空の一覧は「切られていない」）。MCP の管理が、道具の状態を cut にするために使う
   mcpCut?: (modelId: string, names: readonly string[]) => void;
+  // ブラウザ 1 つ（全会話で共有）。無ければ browser_* は動かない（ToolContext.services.browser）
+  browser?: BrowserSession | undefined;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   retriesPerModel?: number;
 }
@@ -571,7 +575,7 @@ export class ChatEngine {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
     const agentOff = !config.tools.agent.enabled || (kind === 'task' && !config.tools.agent.inTasks);
-    const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
+    const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
       || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly);
     const options = { limit: model.maxTools, exclude };
     const registry = this.#d.tools.registry;
@@ -612,7 +616,7 @@ export class ChatEngine {
       runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? defaultWorkspace(policy, d.paths),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, notify: d.notify, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),

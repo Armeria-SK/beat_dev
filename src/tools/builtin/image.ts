@@ -14,7 +14,7 @@ import { isUnderDownloads } from './downloads-core.ts';
 import { checkFilePath } from './files.ts';
 
 const IMAGE_FETCH_MS = 20_000;
-const ROOM_MARGIN_TOKENS = 200;
+export const ROOM_MARGIN_TOKENS = 200;
 
 const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: '作業フォルダからの相対パス、または許可フォルダ内の絶対パス' });
 

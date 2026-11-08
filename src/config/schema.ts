@@ -78,6 +78,9 @@ export const HookConfig = Type.Object({
   onError: Type.Union([Type.Literal('deny'), Type.Literal('ask')], { default: 'deny' }),
 }, { additionalProperties: false });
 
+// tools.browser.sites の 1 件の書き方（小文字のホスト名。先頭の = は「そのホストだけ」）。画面の文（friendly.ts）も同じ式を使う
+export const BROWSER_SITE_PATTERN = '^=?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9-]{2,63}$';
+
 export function ToolsConfig() {
   return Type.Object({
     roots: Type.Array(RootConfig, { default: [{ path: 'workspace', mode: 'write' }] }),
@@ -120,6 +123,24 @@ export function ToolsConfig() {
       maxPerRun: Type.Integer({ minimum: 1, maximum: 5, default: 3 }),
       // 子 1 本の時間の上限（秒）
       timeoutSec: Type.Integer({ minimum: 60, maximum: 3600, default: 600 }),
+    }, { additionalProperties: false, default: {} }),
+    // ブラウザの道具（browser_open など。src/tools/browser/）。既定は無効で、無効のあいだは今までと同じ（道具もモデルに渡らない）
+    browser: Type.Object({
+      enabled: Type.Boolean({ default: false }),
+      // 使うブラウザ。auto は手元の Edge → Chrome の順。path は executablePath の実行ファイル
+      channel: Type.Union([Type.Literal('auto'), Type.Literal('msedge'), Type.Literal('chrome'), Type.Literal('path')], { default: 'auto' }),
+      executablePath: Type.String({ default: '', maxLength: 1024 }),
+      headless: Type.Boolean({ default: true }),
+      // 操作（クリック・入力）を許すサイト。example.com はサブドメインも、=example.com はそのホストだけ。空なら全部「読むだけ」
+      sites: Type.Array(Type.String({ pattern: BROWSER_SITE_PATTERN, maxLength: 254 }), { maxItems: 100, default: [] }),
+      limits: Type.Object({
+        maxTabs: Type.Integer({ minimum: 1, maximum: 8, default: 3 }),
+        navigationTimeoutSec: Type.Integer({ minimum: 5, maximum: 120, default: 30 }),
+        actionTimeoutSec: Type.Integer({ minimum: 1, maximum: 60, default: 10 }),
+        idleCloseMinutes: Type.Integer({ minimum: 1, maximum: 120, default: 10 }),
+        pageChars: Type.Integer({ minimum: 2000, maximum: 100_000, default: 20_000 }),
+        maxMbPerMinute: Type.Integer({ minimum: 1, maximum: 500, default: 50 }),
+      }, { additionalProperties: false, default: {} }),
     }, { additionalProperties: false, default: {} }),
   }, { additionalProperties: false, default: {} });
 }
