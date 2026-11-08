@@ -162,6 +162,14 @@ function SkillView({ name, onClose, onMissing, onSaved, setDirty }: { name: stri
       .catch(e => setError(errorText(e, t('skills.error'))))
       .finally(() => setBusy(false));
   };
+  const register = () => {
+    setError(''); setBusy(true);
+    api.registerSkill(name)
+      .then(() => api.skill(name))
+      .then(r => { setSkill(r.skill); toast({ kind: 'done', icon: 'circleCheck', title: t('skills.toast.registered'), body: name }); onSaved(); })
+      .catch(e => setError(errorText(e, t('skills.error'))))
+      .finally(() => setBusy(false));
+  };
   const remove = () => {
     setError(''); setBusy(true);
     api.deleteSkill(name).then(() => { toast({ kind: 'info', icon: 'circleSlash', title: t('skills.toast.deleted'), body: name }); onSaved(); onClose(); }, e => { setError(errorText(e, t('skills.error'))); setBusy(false); });
@@ -174,10 +182,12 @@ function SkillView({ name, onClose, onMissing, onSaved, setDirty }: { name: stri
       {!skill && !error && <p className="sk-note">{t('skills.loading')}</p>}
       {skill && mode !== 'edit' && <pre className="sk-pre">{skillFileText(skill)}</pre>}
       {skill && mode === 'edit' && <Fields description={description} onDescription={setDescription} body={body} onBody={setBody} />}
+      {skill && !skill.registered && mode !== 'edit' && <p className="sk-reason">{t('skills.unregisteredNote')}</p>}
       {error && <p className="sk-error" role="alert">{error}</p>}
       {skill && mode === 'view' && (
         <div className="dialog-actions sk-actions">
           <button className="btn btn-ghost sk-plain sk-left" onClick={() => setMode('delete')}>{t('skills.delete')}</button>
+          {!skill.registered && <button className="btn btn-secondary" onClick={register} disabled={busy}>{t('skills.register')}</button>}
           <button className="btn btn-primary" onClick={startEdit}><Icon name="pencil" size={13} />{t('skills.edit')}</button>
         </div>
       )}

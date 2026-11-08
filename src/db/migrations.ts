@@ -344,4 +344,13 @@ export const MIGRATIONS: readonly Migration[] = [
     source_task_id = (SELECT j.task_id FROM memory_jobs j WHERE j.review_conversation_id = conversations.id ORDER BY j.id DESC LIMIT 1)
   WHERE kind = 'task' AND id IN (SELECT review_conversation_id FROM memory_jobs WHERE review_conversation_id IS NOT NULL);
   `,
+  // 17: スキルの登録簿。持ち主が認めた名前（承認した下書き・画面の保存・画面の「登録する」・更新の時点で既にあったもの）だけを、一覧と skill_view に出す。
+  // 「登録している」とは、その名前の行があること（中身のハッシュは持たない。登録した名前は、あとで書き直されてもそのまま使う）。登録の行は、持ち主の画面の API だけが書く
+  `
+  CREATE TABLE skill_registry (
+    name TEXT PRIMARY KEY,
+    source TEXT NOT NULL CHECK (source IN ('approved', 'owner', 'upgrade')),
+    registered_at INTEGER NOT NULL
+  );
+  `,
 ];

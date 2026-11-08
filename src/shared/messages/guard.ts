@@ -112,8 +112,8 @@ const ja = {
   'shape.expr': '式の中の見知らぬ語（{name}）',
   'shape.replace_block': '-replace の置き換えにスクリプトブロック',
   'guard.touch_persona': '人格・プロフィールのファイルを指しています（{path}）。読むだけのコマンドではないので、書き換えるかもしれません',
-  'guard.write_skill': 'スキルのフォルダに書き込みます（{path}）。ここに置くと、画面で確かめていないスキルとして使われます',
-  'guard.touch_skill': 'スキルのフォルダを指しています（{path}）。読むだけのコマンドではないので、書き込むかもしれません。ここに置くと、画面で確かめていないスキルとして使われます',
+  'guard.write_skill': 'スキルのフォルダに書き込みます（{path}）。ここに置いただけの新しい名前のスキルは、画面で登録するまで使われません。登録済みの名前は、書き直したものがそのまま使われます',
+  'guard.touch_skill': 'スキルのフォルダを指しています（{path}）。読むだけのコマンドではないので、書き込むかもしれません。ここに置いただけの新しい名前のスキルは、画面で登録するまで使われません。登録済みの名前は、書き直したものがそのまま使われます',
   'guard.write_git': 'git のフォルダ（.git）に書き込みます（{path}）。git のフックや設定はコマンドを動かせます',
   'guard.touch_git': 'git のフォルダ（.git）を指しています（{path}）。読むだけのコマンドではないので、書き込むかもしれません。git のフックや設定はコマンドを動かせます',
 
@@ -171,7 +171,7 @@ const ja = {
   'file.readonly': '読み取り専用のフォルダです（{root}）',
   'file.symlink': 'シンボリックリンクには書き込みません',
   'file.persona': '人格・プロフィールのファイル（SOUL.md / USER.md）なので、書き換える前に確認します',
-  'file.skill': 'スキルのフォルダなので、書き込む前に確認します。ここに置くと、画面で確かめていないスキルとして使われます（スキルは skill_draft で下書きとして出すと、画面で承認できます）',
+  'file.skill': 'スキルのフォルダなので、書き込む前に確認します。新しい名前のスキルは、ここに置いただけでは使われません（skill_draft で下書きとして出すと、画面で承認して登録できます）。登録済みの名前は、書き直したものがそのまま使われます',
   'file.git': 'git のフォルダ（.git）なので、書き込む前に確認します。git のフックや設定はコマンドを動かせます',
   'file.tool_config': 'ツールの設定ファイル（git・curl・wget・npm・シェルの起動ファイル・PowerShell のプロファイルなど）なので、書き込む前に毎回確認します。設定は、あとで動くコマンドにコードを読み込ませられます',
 
@@ -325,8 +325,8 @@ const en: Record<keyof typeof ja, string> = {
   'shape.expr': 'an unknown word in an expression ({name})',
   'shape.replace_block': 'a script block as the replacement of -replace',
   'guard.touch_persona': 'It points at a persona or profile file ({path}). The command is not a read-only one, so it may rewrite the file',
-  'guard.write_skill': 'It writes into the skills folder ({path}). A skill placed here is used as a skill that has not been checked on screen',
-  'guard.touch_skill': 'It points at the skills folder ({path}). The command is not a read-only one, so it may write there. A skill placed here is used as a skill that has not been checked on screen',
+  'guard.write_skill': 'It writes into the skills folder ({path}). A skill with a new name placed here is not used until it is registered on screen. A name that is already registered is used as rewritten',
+  'guard.touch_skill': 'It points at the skills folder ({path}). The command is not a read-only one, so it may write there. A skill with a new name placed here is not used until it is registered on screen. A name that is already registered is used as rewritten',
   'guard.write_git': 'It writes into a git folder (.git) ({path}). Git hooks and settings can run commands',
   'guard.touch_git': 'It points at a git folder (.git) ({path}). The command is not a read-only one, so it may write there. Git hooks and settings can run commands',
 
@@ -384,7 +384,7 @@ const en: Record<keyof typeof ja, string> = {
   'file.readonly': 'This folder is read only ({root})',
   'file.symlink': 'Writing to a symbolic link is not allowed',
   'file.persona': 'This is a persona or profile file (SOUL.md / USER.md), so it is checked with you before it is rewritten',
-  'file.skill': 'This is the skills folder, so it is checked with you before anything is written. A skill placed here is used as a skill that has not been checked on screen (offer a skill as a draft with skill_draft to have it approved on screen)',
+  'file.skill': 'This is the skills folder, so it is checked with you before anything is written. A skill with a new name placed here is not used until it is registered (offer it as a draft with skill_draft to approve and register it on screen). A name that is already registered is used as rewritten',
   'file.git': 'This is a git folder (.git), so it is checked with you before anything is written. Git hooks and settings can run commands',
   'file.tool_config': 'This is a tool configuration file (git, curl, wget, npm, shell startup files, PowerShell profiles and the like), so it is checked with you every time before anything is written. Settings can make a command that runs later load code',
 

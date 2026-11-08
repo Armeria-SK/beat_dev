@@ -99,6 +99,7 @@ export function SkillsPage({ target, revision }: Props) {
                         <span className="sk-row-name">{row.name}</span>
                         {row.kind === 'draft' && <span className="tag tag-outline">{t('skills.draftTag')}</span>}
                         {row.kind === 'draft' && <span className="tag tag-neutral">{t(row.revises ? 'skills.draftRevision' : 'skills.draftNew')}</span>}
+                        {row.kind === 'skill' && !row.registered && <span className="tag tag-outline">{t('skills.unregisteredTag')}</span>}
                       </span>
                       <span className="sk-row-meta">
                         {row.kind === 'draft' ? t('skills.draftWhen', formatDateTime(row.at))

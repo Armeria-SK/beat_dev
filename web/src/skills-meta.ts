@@ -63,7 +63,7 @@ export const EFFECT_LABEL: Record<ToolEffect, PlainKey> = {
 // 一覧の行。レビュー待ちの下書きを先頭に、そのあとにスキルを名前順で並べる。
 export type SkillRow =
   | { kind: 'draft'; name: string; description: string; at: number; revises: boolean }
-  | { kind: 'skill'; name: string; description: string; uses: number; lastUsedAt: number | null };
+  | { kind: 'skill'; name: string; description: string; uses: number; lastUsedAt: number | null; registered: boolean };
 
 export function skillRows(drafts: readonly SkillDraft[], skills: readonly SkillSummary[]): SkillRow[] {
   const pending = drafts
@@ -72,7 +72,7 @@ export function skillRows(drafts: readonly SkillDraft[], skills: readonly SkillS
     .map((d): SkillRow => ({ kind: 'draft', name: d.name, description: d.description, at: d.created_at, revises: d.current !== null }));
   const known = [...skills]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((s): SkillRow => ({ kind: 'skill', name: s.name, description: s.description, uses: s.uses, lastUsedAt: s.lastUsedAt }));
+    .map((s): SkillRow => ({ kind: 'skill', name: s.name, description: s.description, uses: s.uses, lastUsedAt: s.lastUsedAt, registered: s.registered }));
   return [...pending, ...known];
 }
 

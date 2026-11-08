@@ -155,6 +155,7 @@ export class App {
     this.curiosity = new CuriosityStore(this.db, now);
     this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()));
     this.#importCuriosity();
+    this.#registerExistingSkills();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
@@ -223,6 +224,14 @@ export class App {
   // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
   #warnIgnoredPolicies(config: AppConfig): void {
     for (const name of ignoredPolicyNames(config)) this.log(`[WARN] tools.policies の「${name}」は、方針を持てない道具（タスクの進め方に必要）なので無視します`);
+  }
+
+  // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
+  #registerExistingSkills(): void {
+    if (this.kv.get('skills:registry-seeded')) return;
+    const added = this.skills.registerExisting();
+    this.kv.set('skills:registry-seeded', String(Date.now()));
+    if (added) this.log(`[INFO] 既にあるスキル ${added} 件を登録しました（以後にフォルダへ直接置かれたスキルは、画面の「登録する」までは使われません）`);
   }
 
   #importCuriosity(): void {
