@@ -148,4 +148,13 @@ export function ColorField({ value, onChange, fallback, label }: { value: string
   );
 }
 
+// オン/オフのスイッチ。button なのでキーボード（Space・Enter）でも動く。位置は呼び出し側の値で決まる（押しても、保存に失敗すれば元の位置のまま）
+export function SwitchField({ checked, onChange, label, disabled }: { checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} className={`set-switch${checked ? ' is-on' : ''}`} onClick={() => onChange(!checked)}>
+      <span className="set-switch-knob" aria-hidden="true" />
+    </button>
+  );
+}
+
 export function SubTitle({ children }: { children: ReactNode }) { return <span className="set-subtitle">{children}</span>; }
