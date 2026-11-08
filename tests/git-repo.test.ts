@@ -511,3 +511,15 @@ test('gc の項目: 名前を決めたものだけふつう。gc.recentObjectsHo
   for (const [config, key] of [['[gc]\n\trecentObjectsHook = ./x.sh\n', 'gc.recentobjectshook'], ['[GC]\n\tRecentObjectsHook = x\n', 'gc.recentobjectshook'], ['[gc]\n\tauto = 0\n\tsomethingNew = x\n', 'gc.somethingnew'],
     ['[gc "main"]\n\trecentObjectsHook = x\n', 'gc.main.recentobjectshook']] as const) assert.equal(unusualKey(parseGitConfig(config)!), key, config);
 });
+
+// VS Code が書く branch.<名前>.vscode-merge-base は参照の名前を覚えておくだけの項目。git はこの名前を読まず、コードも動かさない
+// （本物の git 2.54 で status・branch -vv・log・for-each-ref を動かし、別のコマンドが起動しないことと、同梱の説明・実行ファイルにこの名前が無いことを確かめた）
+test('branch.<名前>.vscode-merge-base はふつう。同じ branch の知らない項目・名前のない branch の項目・ほかの節の同名の項目はふつうでない', t => {
+  assert.equal(unusualKey(parseGitConfig('[branch "main"]\n\tvscode-merge-base = origin/main\n')!), null);
+  assert.equal(unusualKey(parseGitConfig('[branch "feature/a.b"]\n\tVSCode-Merge-Base = origin/main\n')!), null);
+  assert.equal(inspectRepo(repoWith(t, `${PLAIN}[branch "dev"]\n\tvscode-merge-base = origin/dev\n`)).configOk, true);
+  for (const [config, key] of [['[branch "main"]\n\tmergeoptions = x\n', 'branch.main.mergeoptions'], ['[branch "main"]\n\tvscode-merge-base = origin/main\n\tvscode-other = x\n', 'branch.main.vscode-other'],
+    ['[branch]\n\tvscode-merge-base = origin/main\n', 'branch.vscode-merge-base'], ['[remote "o"]\n\tvscode-merge-base = x\n', 'remote.o.vscode-merge-base'],
+    ['[branch "main"]\n\tvscode-merge-base-x = x\n', 'branch.main.vscode-merge-base-x']] as const) assert.equal(unusualKey(parseGitConfig(config)!), key, config);
+  assert.equal(inspectRepo(repoWith(t, `${PLAIN}[branch "dev"]\n\tmergeoptions = x\n`)).badKey, 'branch.dev.mergeoptions');
+});

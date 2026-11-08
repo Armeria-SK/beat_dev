@@ -90,7 +90,7 @@ const PLAIN_CORE = new Set(['repositoryformatversion', 'filemode', 'bare', 'loga
   'quotepath', 'excludesfile', 'attributesfile', 'whitespace', 'abbrev', 'commentchar']);
 const PLAIN_BY_SUB: Record<string, ReadonlySet<string>> = {
   remote: new Set(['url', 'fetch', 'pushurl', 'tagopt', 'prune']),
-  branch: new Set(['remote', 'merge', 'rebase', 'pushremote']),
+  branch: new Set(['remote', 'merge', 'rebase', 'pushremote', 'vscode-merge-base']),
   submodule: new Set(['url', 'active']),
   gc: new Set(['reflogexpire', 'reflogexpireunreachable']),
 };
