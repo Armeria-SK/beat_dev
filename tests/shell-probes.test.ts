@@ -93,3 +93,34 @@ test('フックが動く git の書く操作は今回だけ。ふつうの git �
   assert.match(f.bash('git -C fake log -p').reasons.join(), /diff\.x\.textconv/u);
   assert.match(f.bash('git -C fsm status').reasons.join(), /core\.fsmonitor/u);
 });
+
+// VS Code が書く branch.<名前>.vscode-merge-base の入ったリポジトリで、読むだけの git が毎回「今回だけ」の確かめになっていた（項目は参照の名前だけで、git は読まず、コードも動かさない）
+test('VS Code が書く branch.<名前>.vscode-merge-base があるだけのリポジトリでは、読むだけの git は許可。ほかの知らない項目は今までどおり今回だけ', t => {
+  const f = fixture(t);
+  const repoWith = (name: string, config: string): string => {
+    const dir = join(f.ws, name);
+    mkdirSync(join(dir, '.git', 'objects'), { recursive: true });
+    mkdirSync(join(dir, '.git', 'refs'));
+    writeFileSync(join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    writeFileSync(join(dir, '.git', 'config'), `[core]\n\trepositoryformatversion = 0\n${config}`);
+    return dir;
+  };
+  const vsc = repoWith('vsc', '[branch "main"]\n\tvscode-merge-base = origin/main\n');
+  const odd = repoWith('odd', '[branch "main"]\n\tvscode-merge-base = origin/main\n\tmergeoptions = x\n');
+  const at = (cwd: string, command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, cwd, { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
+  const wrong: string[] = [];
+  for (const command of ['git status', 'git log --oneline', 'git show origin/main:src/db/runs.ts', 'git show origin/main:src/db/runs.ts | Select-String x']) {
+    const v = at(vsc, command, 'powershell');
+    if (v.decision !== 'allow' || v.onceOnly) wrong.push(`powershell ${command} → ${v.decision}${v.onceOnly ? '/once' : ''} ${v.reasons.join()}`);
+  }
+  for (const command of ['git status', 'git show origin/main:src/db/runs.ts | grep x']) {
+    const v = at(vsc, command, 'bash');
+    if (v.decision !== 'allow' || v.onceOnly) wrong.push(`bash ${command} → ${v.decision}${v.onceOnly ? '/once' : ''} ${v.reasons.join()}`);
+  }
+  const viaC = f.bash('git -C vsc status');
+  if (viaC.decision !== 'allow' || viaC.onceOnly) wrong.push(`bash git -C vsc status → ${viaC.decision}${viaC.onceOnly ? '/once' : ''}`);
+  assert.deepEqual(wrong, []);
+  const stop = at(odd, 'git status', 'powershell');
+  assert.equal(stop.onceOnly, true);
+  assert.match(stop.reasons.join(), /branch\.main\.mergeoptions/u);
+});
