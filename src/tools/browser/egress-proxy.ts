@@ -110,8 +110,11 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     let addresses: string[];
     try { addresses = await resolve(host); } catch { return { ok: false, status: 502, reason: 'resolve' }; }
     if (addresses.length === 0) return { ok: false, status: 502, reason: 'resolve' };
-    if (addresses.some(address => !publicIPv4(address))) return { ok: false, status: 403, reason: 'address' };
-    return { ok: true, addresses: [...new Set(addresses)] };
+    // つなぐのは IPv4 だけ（defaultConnect が family 4）。IPv6 の番地は使わないので判定から外す
+    // （ふつうのサイトは AAAA も返す）。IPv4 が 1 つも無い名前、IPv4 に公開でないものが 1 つでも混ざる名前は断る
+    const v4 = addresses.filter(address => isIPv4(address));
+    if (v4.length === 0 || v4.some(address => !publicIPv4(address))) return { ok: false, status: 403, reason: 'address' };
+    return { ok: true, addresses: [...new Set(v4)] };
   }
 
   const track = (socket: Socket): void => {

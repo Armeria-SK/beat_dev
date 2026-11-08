@@ -92,6 +92,8 @@ export interface AppOptions {
   mcpConnect?: McpConnect;
   // 試験用: ブラウザの動かし方（書かなければ playwright-core で、手元の Edge / Chrome を動かす）
   browserDriver?: BrowserDriver;
+  // 試験用: ログイン用の窓（見えるブラウザ）を出せる環境か（書かなければ、この計算機の環境から決める）
+  browserDisplay?: boolean;
 }
 
 export class App {
@@ -180,6 +182,7 @@ export class App {
     this.browser = new BrowserSession({
       driver: options.browserDriver ?? new PlaywrightDriver(), config: () => this.config(), paths: this.paths, log: this.log,
       notify: input => this.notifications.notify(input), secrets: () => this.registry.secrets(), now,
+      ...(options.browserDisplay !== undefined ? { canShowWindow: () => options.browserDisplay === true } : {}),
     });
     // 会話を消したら、その会話のタブを閉じる
     this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); };

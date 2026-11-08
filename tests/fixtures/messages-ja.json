@@ -675,7 +675,9 @@
     "browser.acted_download": "ページが始めたダウンロード {count} 件を断りました。",
     "browser.acted_filechooser": "ページのファイル選択の窓 {count} 件を閉じました（ファイルは選びません）。",
     "browser.notify_title": "ブラウザを起動できません",
-    "browser.notify_body": "ブラウザの起動に {count} 回続けて失敗したため、しばらく起動しません。設定の「ブラウザ」を確かめてください。"
+    "browser.notify_body": "ブラウザの起動に {count} 回続けて失敗したため、しばらく起動しません。設定の「ブラウザ」を確かめてください。",
+    "browser.login_open": "ログイン用のブラウザの窓が開いています。ログインを終えて窓を閉じるまで、ブラウザの道具は使えません。持ち主に窓を閉じてもらってください",
+    "browser.no_display": "この環境には画面が無いので、ブラウザの窓を開けません"
   },
   "store": {
     "memory.empty": "中身が空です",
@@ -805,6 +807,8 @@
     "mcp_bad_secret_name": "秘密の欄の名前が正しくありません",
     "mcp_secret_kind": "このサーバーでは、この種類の秘密の欄は使えません",
     "notify_url_required": "URL は消せません。送り先ごと削除してください",
+    "browser_reset_unsafe": "ブラウザのプロファイルの置き場所が、データの置き場所の下ではないので、消していません",
+    "browser_reset_failed": "ブラウザのプロファイルを消せませんでした（{reason}）。ブラウザの窓が開いていれば閉じてから、もう一度試してください",
     "internal": "内部エラーが発生しました（ログを確認してください）"
   },
   "config": {

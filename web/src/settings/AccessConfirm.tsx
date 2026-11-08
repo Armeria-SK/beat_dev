@@ -51,6 +51,9 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'mcp-tool-enabled': return t('access.mcpToolEnabled', a.id, a.tool);
     case 'mcp-tool-loosened': return t('access.mcpToolLoosened', a.id, a.tool);
     case 'limit-raised': return t('access.limitRaised', a.key, a.from, a.to);
+    case 'browser-enabled': return t('access.browserEnabled');
+    case 'browser-site-added': return t('access.browserSiteAdded', a.site);
+    case 'browser-site-widened': return t('access.browserSiteWidened', a.site);
     case 'tool-policy-loosened': return t('access.toolPolicy', a.tool, t(POLICY_LABEL[a.from]), t(POLICY_LABEL[a.to]));
   }
 }

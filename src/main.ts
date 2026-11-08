@@ -4,6 +4,7 @@ import { App } from './app.ts';
 import { ConfigError } from './config/store.ts';
 import { loadEnvFile, resolvePaths } from './paths.ts';
 import { serverHostProblem } from './shared/url.ts';
+import { locateBrowser } from './tools/browser/locate.ts';
 import { createWebServer } from './web/server.ts';
 
 const log = (line: string) => process.stdout.write(`${new Date().toISOString()} ${line}\n`);
@@ -68,6 +69,13 @@ async function doctor(): Promise<number> {
     }
     if (!config.models.length) { process.stdout.write('NG  モデルがまだ設定されていません（画面の「はじめの設定」で足してください）\n'); bad++; }
     else if (!config.routing.chat.some(id => app.status.usable(id))) { process.stdout.write('NG  チャットで使えるモデルがありません\n'); bad++; }
+    // ブラウザの道具が有効なときだけ、使うブラウザの実行ファイルが見つかるか（起動はしない）
+    const browser = config.tools.browser;
+    if (browser.enabled) {
+      const found = locateBrowser({ channel: browser.channel, executablePath: browser.executablePath });
+      if (found) process.stdout.write(`OK  ブラウザ: ${found.path}\n`);
+      else { process.stdout.write('NG  ブラウザの実行ファイルが見つかりません\n     直し方: Microsoft Edge か Google Chrome を入れるか、設定の「ブラウザ」で「パスを指定」してください\n'); bad++; }
+    }
     return bad ? 1 : 0;
   } finally { app.close(); }
 }

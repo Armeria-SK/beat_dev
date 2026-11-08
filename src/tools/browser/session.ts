@@ -22,6 +22,27 @@ export interface BrowserSessionDeps {
   // 時間切れの登録。戻り値は取り消し
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
   startProxy?: ((options: EgressProxyOptions) => Promise<EgressProxy>) | undefined;
+  // ログイン用の窓（見えるブラウザ）を出せる環境か。省くと、この計算機の環境変数から決める
+  canShowWindow?: (() => boolean) | undefined;
+}
+
+// 見えるブラウザの窓を出せるか。Linux は画面（X11 か Wayland）が無ければ出せない。Windows・macOS はいつも出せる
+export function headedAvailable(platform: string, env: Record<string, string | undefined>): boolean {
+  if (platform !== 'linux') return true;
+  return Boolean(env.DISPLAY?.trim() || env.WAYLAND_DISPLAY?.trim());
+}
+
+export interface BrowserStatus {
+  enabled: boolean;
+  // 自動操作のブラウザが起動しているか
+  running: boolean;
+  // ログイン用の窓が開いているか
+  loginOpen: boolean;
+  tabs: number;
+  // 起動を休んでいる残り（分）。休んでいなければ 0
+  pausedMinutes: number;
+  // ログイン用の窓を出せる環境か
+  canShowWindow: boolean;
 }
 
 export interface BrowserTab {
@@ -77,6 +98,8 @@ export class BrowserSession {
   readonly #schedule: (fn: () => void, ms: number) => () => void;
   #handle: BrowserHandle | undefined;
   #proxy: EgressProxy | undefined;
+  // ログイン用の窓（持ち主が自分で操作する見えるブラウザ）。開いているあいだ、道具の呼び出しは断る
+  #login: { handle: BrowserHandle; proxy: EgressProxy } | undefined;
   #tabs = new Map<string, BrowserTab>();
   // withPopups のあいだだけ、ページ側が開いた窓を集める入れ物
   #popups: PageHandle[] | undefined;
@@ -108,6 +131,8 @@ export class BrowserSession {
     try {
       if (call.signal.aborted) throw new BrowserFailure('aborted', 'browser.aborted');
       if (!this.enabled()) throw new BrowserFailure('disabled', 'browser.disabled');
+      // 同じプロファイルを 2 つのブラウザで開けない。ログイン用の窓が開いているあいだは、道具は使えない
+      if (this.#login) throw new BrowserFailure('login_open', 'browser.login_open');
       this.#cancelIdleTimer();
       await this.#ensureLaunched();
       return await fn(this.#api(call));
@@ -128,13 +153,68 @@ export class BrowserSession {
 
   // 設定が変わった。無効になったら閉じる（ほかの変更は次の起動から効く）
   async applyConfig(config: AppConfig): Promise<void> {
-    if (!config.tools.browser.enabled) await this.#shutdown();
+    if (!config.tools.browser.enabled) { await this.#shutdown(); await this.#closeLogin(); }
   }
 
   async close(): Promise<void> {
     this.#epoch += 1;
     this.#cancelIdleTimer();
     await this.#shutdown();
+    await this.#closeLogin();
+  }
+
+  // ---- 設定の画面から（ログイン用の窓・止める・プロファイルの削除） ----
+  status(): BrowserStatus {
+    const now = this.#now();
+    return {
+      enabled: this.enabled(),
+      running: this.#handle !== undefined,
+      loginOpen: this.#login !== undefined,
+      tabs: this.#tabs.size,
+      pausedMinutes: now < this.#pausedUntil ? Math.max(1, Math.ceil((this.#pausedUntil - now) / 60_000)) : 0,
+      canShowWindow: this.canShowWindow(),
+    };
+  }
+
+  canShowWindow(): boolean { return (this.#d.canShowWindow ?? (() => headedAvailable(process.platform, process.env)))(); }
+
+  // ログイン用に、同じプロファイル・同じ中継で、見えるブラウザを開く。自動操作のブラウザが動いていたら先に止める（同じプロファイルは同時に開けない）。
+  // 窓にはポップアップを閉じる仕掛けを付けない（ログインの画面が別の窓を開くことがある）。窓が閉じられたら、ログイン用の窓は無いことになる
+  async openLogin(): Promise<{ alreadyOpen: boolean }> {
+    if (!this.enabled()) throw new BrowserFailure('disabled', 'browser.disabled');
+    if (!this.canShowWindow()) throw new BrowserFailure('no_display', 'browser.no_display');
+    await this.#acquire(undefined);
+    try {
+      if (!this.enabled()) throw new BrowserFailure('disabled', 'browser.disabled');
+      if (this.#login) return { alreadyOpen: true };
+      this.#cancelIdleTimer();
+      await this.#shutdown();
+      const { handle, proxy } = await this.#start(false, true);
+      this.#login = { handle, proxy };
+      handle.onDisconnected(() => { if (this.#login?.handle === handle) void this.#closeLogin(); });
+      return { alreadyOpen: false };
+    } finally { this.#release(); }
+  }
+
+  // ログイン用の窓と自動操作のブラウザをどちらも閉じる（「ブラウザを閉じる」ボタン）
+  async closeAll(): Promise<void> {
+    await this.#acquire(undefined);
+    try {
+      this.#cancelIdleTimer();
+      await this.#shutdown();
+      await this.#closeLogin();
+    } finally { this.#release(); }
+  }
+
+  // ブラウザをすべて止め、ほかの呼び出しを待たせたまま fn を走らせる（プロファイルの削除のあいだに再起動されないため）
+  async withStopped<T>(fn: () => Promise<T>): Promise<T> {
+    await this.#acquire(undefined);
+    try {
+      this.#cancelIdleTimer();
+      await this.#shutdown();
+      await this.#closeLogin();
+      return await fn();
+    } finally { this.#release(); }
   }
 
   // ---- 呼び出しを 1 つずつ ----
@@ -163,6 +243,19 @@ export class BrowserSession {
     if (this.#handle) return;
     const now = this.#now();
     if (now < this.#pausedUntil) throw new BrowserFailure('paused', 'browser.launch_paused', { minutes: String(Math.max(1, Math.ceil((this.#pausedUntil - now) / 60_000))) });
+    const { handle, proxy } = await this.#start(this.#d.config().tools.browser.headless, false);
+    handle.onPage(page => {
+      if (this.#popups) { this.#popups.push(page); return; }
+      void page.close().catch(() => undefined);
+    });
+    handle.onDisconnected(() => { if (this.#handle === handle) void this.#shutdown(); });
+    this.#handle = handle; this.#proxy = proxy;
+    this.#failures = 0;
+  }
+
+  // 中継とブラウザを起動する（自動操作もログイン用の窓も、同じプロファイル・同じ中継）。失敗したら中継を閉じる。
+  // 起動の失敗を数える（続くと休む）のは自動操作のときだけ。持ち主が自分で開くログイン用の窓の失敗は、画面にそのまま返す
+  async #start(headless: boolean, login: boolean): Promise<{ handle: BrowserHandle; proxy: EgressProxy }> {
     const epoch = this.#epoch;
     const config = this.#d.config();
     const browser = config.tools.browser;
@@ -175,7 +268,7 @@ export class BrowserSession {
         profileDir: this.#d.paths.browserProfile,
         channel: browser.channel === 'msedge' || browser.channel === 'chrome' ? browser.channel : undefined,
         executablePath: browser.channel === 'path' && browser.executablePath ? browser.executablePath : undefined,
-        headless: browser.headless,
+        headless,
         proxy: { server: `http://${proxy.host}:${proxy.port}`, username, password },
         viewport: VIEWPORT,
         locale: localeFor(languageOf(config)),
@@ -183,17 +276,11 @@ export class BrowserSession {
       };
       const handle = await this.#d.driver.launch(options);
       if (epoch !== this.#epoch) { await withTimeout(handle.close(), CLOSE_TIMEOUT_MS); throw new BrowserFailure('aborted', 'browser.aborted'); }
-      handle.onPage(page => {
-        if (this.#popups) { this.#popups.push(page); return; }
-        void page.close().catch(() => undefined);
-      });
-      handle.onDisconnected(() => { if (this.#handle === handle) void this.#shutdown(); });
-      this.#handle = handle; this.#proxy = proxy;
-      this.#failures = 0;
+      return { handle, proxy };
     } catch (error) {
       await proxy?.close().catch(() => undefined);
       if (error instanceof BrowserFailure && error.code === 'aborted') throw error;
-      this.#failed(error);
+      if (!login) this.#failed(error); else this.#d.log?.(`browser login window failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown'}`);
       throw error instanceof BrowserFailure ? error : new BrowserFailure('launch_failed', 'browser.launch_failed');
     }
   }
@@ -213,6 +300,14 @@ export class BrowserSession {
   }
 
   // ---- 閉じる ----
+  async #closeLogin(): Promise<void> {
+    const login = this.#login;
+    this.#login = undefined;
+    if (!login) return;
+    await withTimeout(login.handle.close(), CLOSE_TIMEOUT_MS);
+    await login.proxy.close().catch(() => undefined);
+  }
+
   async #shutdown(): Promise<void> {
     const handle = this.#handle; const proxy = this.#proxy;
     this.#handle = undefined; this.#proxy = undefined;

@@ -66,6 +66,7 @@ const DYNAMIC_PREFIXES: Record<string, string> = {
   'mode.': 'Composer.tsx / ModeMenu.tsx / StatusBar.tsx / Chat.tsx: 権限モード（PERMISSION_MODES の値）の名前と説明（mode.normal と mode.normalDesc など）',
   'notifications.kind.': 'settings/AccessConfirm.tsx / settings/NotifySection.tsx: 通知の種類の名前（NOTIFICATION_KINDS の値）',
   'runs.seg.': 'Runs.tsx: 実行ログの切り替えの名前（実行 / 道具 / 振り返り）',
+  'settings.browser.channel.': 'settings/BrowserSection.tsx: 使うブラウザ（auto / msedge / chrome / path）の名前',
   'settings.mcp.declare.effect.': 'settings/McpToolRow.tsx: 道具の性質の申告（read / write / network）の名前',
   'settings.mcp.problem.': 'settings/McpAddForm.tsx: 追加フォームの誤り（addProblem の値）の文',
   'settings.mcp.state.': 'settings/McpServerCard.tsx: サーバーの状態（connecting / ready / failed / off）の名前',

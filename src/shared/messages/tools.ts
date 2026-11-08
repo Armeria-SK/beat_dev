@@ -308,6 +308,8 @@ const ja = {
   'browser.acted_filechooser': 'ページのファイル選択の窓 {count} 件を閉じました（ファイルは選びません）。',
   'browser.notify_title': 'ブラウザを起動できません',
   'browser.notify_body': 'ブラウザの起動に {count} 回続けて失敗したため、しばらく起動しません。設定の「ブラウザ」を確かめてください。',
+  'browser.login_open': 'ログイン用のブラウザの窓が開いています。ログインを終えて窓を閉じるまで、ブラウザの道具は使えません。持ち主に窓を閉じてもらってください',
+  'browser.no_display': 'この環境には画面が無いので、ブラウザの窓を開けません',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -618,6 +620,8 @@ const en: Record<keyof typeof ja, string> = {
   'browser.acted_filechooser': 'Closed {count} file chooser(s) from the page (no file is chosen).',
   'browser.notify_title': 'The browser cannot be started',
   'browser.notify_body': 'The browser failed to start {count} times in a row, so it will not be started for a while. Check "Browser" in the settings.',
+  'browser.login_open': 'A browser window for logging in is open. The browser tools cannot be used until the owner finishes logging in and closes that window. Ask the owner to close it',
+  'browser.no_display': 'This machine has no display, so a browser window cannot be opened',
 };
 
 export const toolText = defineMessages('tool', ja, en);

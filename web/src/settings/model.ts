@@ -7,7 +7,7 @@ import { isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/p
 
 export type Config = Record<string, any>;
 
-export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'notify' | 'mcp' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
+export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'notify' | 'mcp' | 'browser' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
 
 export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArray<{ id: SettingsSection; label: PlainKey; desc: PlainKey }> }> = [
   { label: 'settings.group.model', items: [
@@ -19,6 +19,7 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArr
     { id: 'tools', label: 'settings.section.tools', desc: 'settings.desc.tools' },
     { id: 'notify', label: 'settings.section.notify', desc: 'settings.desc.notify' },
   { id: 'mcp', label: 'settings.section.mcp', desc: 'settings.desc.mcp' },
+    { id: 'browser', label: 'settings.section.browser', desc: 'settings.desc.browser' },
     { id: 'worker', label: 'settings.section.worker', desc: 'settings.desc.worker' },
     { id: 'memory', label: 'settings.section.memory', desc: 'settings.desc.memory' },
   ] },
@@ -52,9 +53,11 @@ export function sectionSlice(config: Config, section: SettingsSection): unknown 
   switch (section) {
     case 'models': return [config.models, config.routing];
     case 'providers': return config.providers;
-    case 'tools': return config.tools;
+    // ブラウザは自分の節で扱うので、「道具」の変更の印には数えない
+    case 'tools': { const { browser: _browser, ...rest } = (config.tools ?? {}) as Record<string, unknown>; return config.tools === undefined ? undefined : rest; }
     case 'notify': return config.notify;
     case 'mcp': return config.mcp;
+    case 'browser': return config.tools?.browser;
     case 'worker': return config.worker;
     case 'memory': return config.memory;
     case 'look': return [config.profile, config.language ?? null];
@@ -118,7 +121,7 @@ export function parseProblem(text: string, config: Config): Problem {
     }
   }
   const root = segments[0] ?? '';
-  const section = SECTION_OF_ROOT[root] ?? null;
+  const section = root === 'tools' && segments[1] === 'browser' ? 'browser' : SECTION_OF_ROOT[root] ?? null;
   const problem: Problem = { text, path: segments.join('.'), message, section };
   if (root === 'models' && segments[1]) problem.modelId = segments[1];
   if (root === 'providers' && segments[1]) problem.providerId = segments[1];

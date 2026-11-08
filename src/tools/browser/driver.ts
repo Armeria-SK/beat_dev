@@ -10,7 +10,7 @@ import { routeVerdict, type RouteRefusal } from './route.ts';
 
 export type BrowserFailureCode =
   | 'disabled' | 'no_browser' | 'launch_failed' | 'profile_busy' | 'paused' | 'tab_limit' | 'no_tab'
-  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed';
+  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed' | 'login_open' | 'no_display';
 
 // ブラウザの道具の失敗。key と params からアプリの決まった文を作る（nav_failed だけ、相手・Playwright の文字が params に入る）
 export class BrowserFailure extends Error {
@@ -286,6 +286,8 @@ class PlaywrightBrowser implements BrowserHandle {
   readonly #wrappers = new WeakMap<Page, PlaywrightPage>();
   readonly #own = new WeakSet<Page>();
   #onPage: ((page: PageHandle) => void) | undefined;
+  #creating = false;
+  #claimed = false;
 
   constructor(context: BrowserContext) { this.#context = context; }
 
@@ -297,7 +299,11 @@ class PlaywrightBrowser implements BrowserHandle {
 
   async install(): Promise<void> {
     await this.#context.route('**/*', route => this.#intercept(route));
-    this.#context.on('page', page => { if (!this.#own.has(page)) this.#onPage?.(this.wrap(page)); });
+    this.#context.on('page', page => {
+      // newPage の最中に最初に届いた 'page' は、その newPage の窓（イベントは newPage の戻りより先に来る）
+      if (this.#creating && !this.#claimed) { this.#claimed = true; this.#own.add(page); return; }
+      if (!this.#own.has(page)) this.#onPage?.(this.wrap(page));
+    });
   }
 
   // 副の守り。判定できないものは断る（本体は中継）
@@ -316,9 +322,12 @@ class PlaywrightBrowser implements BrowserHandle {
   }
 
   async newPage(): Promise<PageHandle> {
-    const page = await this.#context.newPage();
-    this.#own.add(page);
-    return this.wrap(page);
+    this.#creating = true; this.#claimed = false;
+    try {
+      const page = await this.#context.newPage();
+      this.#own.add(page);
+      return this.wrap(page);
+    } finally { this.#creating = false; }
   }
 
   pages(): PageHandle[] { return this.#context.pages().map(page => this.wrap(page)); }

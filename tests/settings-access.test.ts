@@ -360,3 +360,48 @@ test('広がりの確かめの文: 道具ごとの方針を緩める行は、道
   assert.match(ja['access.toolPolicy']('shell_run', '止める', '承認を求める'), /shell_run.*止める.*承認を求める/u);
   assert.match(en['access.toolPolicy']('shell_run', 'Block', 'Ask for approval'), /shell_run.*Block.*Ask for approval/u);
 });
+
+// ---- AU-6c: ブラウザ ----
+const withBrowser = (patch: Record<string, unknown>): Config => {
+  const c = structuredClone(base());
+  (c.tools as Record<string, unknown>).browser = { enabled: false, headless: true, sites: [], limits: { maxTabs: 3, maxMbPerMinute: 50, navigationTimeoutSec: 30 }, ...patch };
+  return c;
+};
+
+test('広がりの検出（ブラウザ）: 有効にする・操作してよいサイトを足す・=example.com を example.com に広げる・上限を上げる', () => {
+  // 無効 → 有効（設定が無かった状態からでも）
+  assert.deepEqual(kinds(base(), withBrowser({ enabled: true })), ['browser-enabled']);
+  assert.deepEqual(kinds(withBrowser({}), withBrowser({ enabled: true })), ['browser-enabled']);
+  // サイトを足す（1 つにつき 1 行）
+  const added = accessWidening(withBrowser({}), withBrowser({ sites: ['example.com', '=mail.example.org'] }));
+  assert.deepEqual(added, [{ kind: 'browser-site-added', site: 'example.com' }, { kind: 'browser-site-added', site: '=mail.example.org' }]);
+  // 「そのホストだけ」を「サブドメインも」に広げる（同じ書き方を足しただけの行にはしない）
+  const widened = accessWidening(withBrowser({ sites: ['=example.com'] }), withBrowser({ sites: ['example.com'] }));
+  assert.deepEqual(widened, [{ kind: 'browser-site-widened', site: 'example.com' }]);
+  // 上限を上げる（tools.browser の limits）
+  const raised = accessWidening(withBrowser({}), withBrowser({ limits: { maxTabs: 8, maxMbPerMinute: 50, navigationTimeoutSec: 30 } }));
+  assert.deepEqual(raised, [{ kind: 'limit-raised', key: 'tools.browser.maxTabs', from: 3, to: 8 }]);
+});
+
+test('広がりの検出（ブラウザ）: 狭める変更（サイトを消す・無効にする・見えるブラウザにする・上限を下げる・サイトを =ホストだけ に狭める）は出ない。手元のモデルの設定（browser-local）も作らない', () => {
+  const before = withBrowser({ enabled: true, headless: true, sites: ['example.com', 'b.example.net'], limits: { maxTabs: 5, maxMbPerMinute: 50, navigationTimeoutSec: 30 } });
+  const after = withBrowser({ enabled: false, headless: false, sites: ['=example.com'], limits: { maxTabs: 2, maxMbPerMinute: 10, navigationTimeoutSec: 30 } });
+  // example.com → =example.com は狭まる。=example.com が増えるが、広がりではない
+  assert.deepEqual(accessWidening(before, after), []);
+  assert.deepEqual(accessWidening(before, withBrowser({ enabled: true, sites: ['example.com'] })), []);
+  // 変えていなければ何も出ない
+  assert.deepEqual(accessWidening(before, structuredClone(before)), []);
+  // 手元のモデルでも使う、という設定は作らない（どんな名前でも browser-local は出ない）
+  assert.ok(!accessWidening(base(), withBrowser({ enabled: true, localOk: true })).some(a => a.kind === ('browser-local' as string)));
+});
+
+test('辞書（ブラウザ）: 広がりの文は ja と en にあり、サイトの名前を出す', () => {
+  for (const key of ['access.browserEnabled', 'access.browserSiteAdded', 'access.browserSiteWidened'] as const) {
+    assert.equal(typeof (ja as Record<string, unknown>)[key], typeof (en as Record<string, unknown>)[key], key);
+    assert.ok((ja as Record<string, unknown>)[key], key);
+  }
+  assert.match((ja as any)['access.browserSiteAdded']('=mail.example.org'), /mail\.example\.org/u);
+  assert.match((en as any)['access.browserSiteAdded']('=mail.example.org'), /mail\.example\.org/u);
+  assert.match((ja as any)['access.browserSiteWidened']('example.com'), /example\.com/u);
+  assert.match((en as any)['access.browserSiteWidened']('example.com'), /example\.com/u);
+});

@@ -7,7 +7,7 @@ import { ja } from '../web/src/i18n/ja.ts';
 import { adoptLanguageInDraft, configWithLanguage, loadPromptAnswer, savePromptAnswer, saveLanguage, shouldAskLanguage, withAdoptedLanguage } from '../web/src/language.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, secondsOf, uniqueId,
+  removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
 import { editsToKeep, restoreKept } from '../web/src/settings/keep.ts';
@@ -35,9 +35,9 @@ function sample(): Config {
   };
 }
 
-test('設定の節: 12 つ・4 グループで、名前と説明が ja にも en にもある', () => {
+test('設定の節: 13 つ・4 グループで、名前と説明が ja にも en にもある', () => {
   assert.equal(SECTION_GROUPS.length, 4);
-  assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'notify', 'mcp', 'worker', 'memory', 'about', 'look', 'server', 'file']);
+  assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'notify', 'mcp', 'browser', 'worker', 'memory', 'about', 'look', 'server', 'file']);
   assert.equal(new Set(SECTION_IDS).size, SECTION_IDS.length);
   for (const group of SECTION_GROUPS) {
     for (const key of [group.label, ...group.items.flatMap(i => [i.label, i.desc])]) {
@@ -483,4 +483,25 @@ test('設定の道具の節: 道具を使う回数の上限の説明に「0 は�
   assert.match(ja['settings.tools.maxStepsDesc'], /0.*制限なし/u);
   assert.match(en['settings.tools.maxStepsDesc'], /0.*no limit/iu);
   assert.doesNotMatch(en['settings.tools.maxSteps'] + en['settings.tools.maxStepsDesc'], /[\u3040-\u30ff\u4e00-\u9fff]/u);
+});
+
+// T-42: ブラウザの節
+test('節「ブラウザ」: 「振る舞い」で MCP の次にあり、設定の tools.browser だけを持つ', () => {
+  const behavior = SECTION_GROUPS.find(g => g.label === 'settings.group.behavior')!;
+  const ids = behavior.items.map(i => i.id);
+  assert.equal(ids[ids.indexOf('mcp') + 1], 'browser');
+  assert.ok(SECTION_IDS.includes('browser'));
+  assert.equal(isSection('browser'), true);
+  const saved = sample();
+  saved.tools.browser = { enabled: false, sites: [], limits: { maxTabs: 3 } };
+  assert.deepEqual(sectionSlice(saved, 'browser'), saved.tools.browser);
+  const draft = structuredClone(saved);
+  draft.tools.browser.enabled = true;
+  assert.deepEqual(SECTION_IDS.filter(id => sectionChanged(saved, draft, id)), ['browser'], 'ブラウザの変更の印は「ブラウザ」だけに付く（「道具」には付かない）');
+  const shell = structuredClone(saved);
+  shell.tools.deny = ['.env', 'x'];
+  assert.deepEqual(SECTION_IDS.filter(id => sectionChanged(saved, shell, id)), ['tools']);
+  const problem = parseProblem('/tools/browser/limits/maxTabs: Expected number to be less or equal to 8', saved);
+  assert.equal(problem.section, 'browser');
+  assert.equal(parseProblem('/tools/deny/0: x', saved).section, 'tools');
 });

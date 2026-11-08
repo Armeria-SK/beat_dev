@@ -154,7 +154,6 @@ test('名前を引いて返った番地が 1 つでも公開 IPv4 でなけれ�
   r.table['mixed2.example.net'] = ['192.168.0.9', PUBLIC];
   r.table['v6.example.net'] = ['2606:4700::1111'];
   r.table['v6local.example.net'] = ['::1'];
-  r.table['dual.example.net'] = [PUBLIC, '2606:4700::1111'];
   r.table['mapped.example.net'] = ['::ffff:127.0.0.1'];
   for (const name of Object.keys(r.table)) assert.equal(status(await raw(r.proxy.port, CONNECT(`${name}:443`))), 403, name);
   assert.deepEqual(r.connected, [], '断ったものへは 1 度もつながない');
@@ -162,6 +161,15 @@ test('名前を引いて返った番地が 1 つでも公開 IPv4 でなけれ�
   assert.equal(r.logs.length, Object.keys(r.table).length);
   assert.ok(r.logs.every(line => /^\[browser\] blocked [a-z0-9.]+\.example\.net:443 address$/u.test(line)), r.logs.join('\n'));
   assert.equal(status(await raw(r.proxy.port, `GET http://lan.example.net/ HTTP/1.1\r\nHost: lan.example.net\r\n${AUTH}\r\n`)), 403, 'http も同じ');
+});
+
+test('IPv4 と IPv6 の両方を返す名前（ふつうのサイト）は通し、つなぐのは確かめた公開 IPv4 だけ', async t => {
+  const r = await rig(t);
+  r.table['dual.example.net'] = ['2606:4700::1111', PUBLIC, '::1'];
+  assert.equal(status(await raw(r.proxy.port, CONNECT('dual.example.net:443'))), 200);
+  assert.deepEqual(r.connected, [[PUBLIC, 443]], 'IPv6 の番地へはつながない');
+  r.table['dualmixed.example.net'] = ['2606:4700::1111', PUBLIC, '10.0.0.5'];
+  assert.equal(status(await raw(r.proxy.port, CONNECT('dualmixed.example.net:443'))), 403, 'IPv4 に私的なものが混ざれば IPv6 があっても断る');
 });
 
 test('引けない名前・番地の無い名前は 502（断りではない）', async t => {

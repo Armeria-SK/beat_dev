@@ -59,7 +59,11 @@ export type Access =
   | { kind: 'mcp-tool-enabled'; id: string; tool: string }
   | { kind: 'mcp-tool-loosened'; id: string; tool: string }
   // 歯止めの数（notify.limits / mcp.limits）を、緩む向きに変える
-  | { kind: 'limit-raised'; key: string; from: number; to: number };
+  | { kind: 'limit-raised'; key: string; from: number; to: number }
+  // ブラウザ（AU-6）: 使えるようにする / 操作（押す・入れる）してよいサイトを足す / 「そのホストだけ」を「サブドメインも」に広げる
+  | { kind: 'browser-enabled' }
+  | { kind: 'browser-site-added'; site: string }
+  | { kind: 'browser-site-widened'; site: string };
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []);
 const added = (before: readonly string[], after: readonly string[]): string[] => after.filter(x => !before.includes(x));
@@ -223,12 +227,33 @@ function mcpChanges(before: Config, after: Config): Access[] {
 // limits の数が増える = 歯止めが緩む（failsBeforeAlert も、増えると警告が遅れるので緩む向き）。両方に数があるものだけ比べる
 function limitChanges(before: Config, after: Config): Access[] {
   const out: Access[] = [];
-  for (const root of ['notify', 'mcp']) {
-    const was = obj(obj(before[root]).limits);
-    const now = obj(obj(after[root]).limits);
+  const roots: Array<[string, (config: Config) => unknown]> = [
+    ['notify', config => config.notify],
+    ['mcp', config => config.mcp],
+    ['tools.browser', config => obj(config.tools).browser],
+  ];
+  for (const [root, pick] of roots) {
+    const was = obj(obj(pick(before)).limits);
+    const now = obj(obj(pick(after)).limits);
     for (const name of Object.keys(now).sort()) {
       if (typeof was[name] === 'number' && typeof now[name] === 'number' && now[name] > was[name]) out.push({ kind: 'limit-raised', key: `${root}.${name}`, from: was[name], to: now[name] });
     }
+  }
+  return out;
+}
+
+// ブラウザ: 無効 → 有効、操作してよいサイトの追加。「=ホスト」（そのホストだけ）が外れて「ホスト」（サブドメインも）が入るのは、広げる変更として別に出す。
+// サイトを消す・「ホスト」を「=ホスト」に狭める・無効にする・見えるブラウザにするのは、広がりではない
+function browserChanges(before: Config, after: Config): Access[] {
+  const bb = obj(obj(before.tools).browser);
+  const ab = obj(obj(after.tools).browser);
+  const out: Access[] = [];
+  if ((bb.enabled ?? false) === false && (ab.enabled ?? false) === true) out.push({ kind: 'browser-enabled' });
+  const was = strings(bb.sites);
+  for (const site of added(was, strings(ab.sites))) {
+    // 前から入っている「ホスト」が、新しい「=ホスト」をすでに含んでいる（狭めただけ）なら、広がりではない
+    if (site.startsWith('=') && was.includes(site.slice(1))) continue;
+    out.push(!site.startsWith('=') && was.includes(`=${site}`) ? { kind: 'browser-site-widened', site } : { kind: 'browser-site-added', site });
   }
   return out;
 }
@@ -266,7 +291,7 @@ export function accessWidening(before: Config, after: Config): Access[] {
   out.push(...hookChanges(before, after, 'preToolUse'), ...hookChanges(before, after, 'postToolUse'));
   out.push(...providerChanges(before, after));
   out.push(...toolPolicyChanges(before, after));
-  out.push(...notifyChanges(before, after), ...mcpChanges(before, after), ...limitChanges(before, after));
+  out.push(...notifyChanges(before, after), ...mcpChanges(before, after), ...browserChanges(before, after), ...limitChanges(before, after));
   const searxHost = hostOf(obj(at.web).searxngUrl);
   const searxChanged = searxHost !== hostOf(obj(bt.web).searxngUrl) || ((obj(bt.web).search ?? 'duckduckgo') !== 'searxng' && (obj(at.web).search ?? 'duckduckgo') === 'searxng');
   if (searxHost !== null && !isLoopbackHost(searxHost) && searxChanged) out.push({ kind: 'searxng-url', url: String(obj(at.web).searxngUrl) });
