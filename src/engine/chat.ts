@@ -65,6 +65,11 @@ export function toFullWidth(text: string): string {
   return wide !== text || text.length < 2 ? wide : `${text[0]}\u200B${text.slice(1)}`;
 }
 
+// 子の担当を任せる道具が、いまの設定で使えないか（モデルに渡す道具の一覧と、#runAgent の入口で同じ判定にする）
+function agentOff(config: AppConfig, kind: RunKind): boolean {
+  return !config.tools.agent.enabled || (kind === 'task' && !config.tools.agent.inTasks);
+}
+
 export function iterationLimit(configured: number, kind: RunKind): number {
   if (configured > 0) return configured;
   return kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
@@ -574,8 +579,7 @@ export class ChatEngine {
   #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal', localOnly = false): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
-    const agentOff = !config.tools.agent.enabled || (kind === 'task' && !config.tools.agent.inTasks);
-    const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
+    const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff(config, kind)) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
       || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly);
     const options = { limit: model.maxTools, exclude };
     const registry = this.#d.tools.registry;
@@ -1020,7 +1024,8 @@ export class ChatEngine {
     const config = parent.config;
     const language = languageOf(config);
     const fail = (key: ToolMessageKey, params?: MessageParams, fetched = false): ToolOutput => ({ content: toolText(language, key, params), isError: true, ...(fetched ? { fetched: true } : {}) });
-    if (!d.tools || !p.routes.length) return fail('agent.unavailable');
+    // 親が始めたあとに設定で切られていても、子は始めない（入口は実行の開始時に決まるので、ここでいまの設定を確かめ直す）
+    if (!d.tools || !p.routes.length || agentOff(d.config(), parent.kind)) return fail('agent.unavailable');
     // 数の歯止め（どちらも、始めずにエラーで返す。待たない）
     const spawned = this.#agentSpawned.get(parent.runId) ?? 0;
     if (spawned >= config.tools.agent.maxPerRun) return fail('agent.too_many', { max: config.tools.agent.maxPerRun });
@@ -1082,11 +1087,14 @@ export class ChatEngine {
     // 文字数の上限と、親に残っている余裕（トークン）の、先に達した方で切る。区切りと注記の分は先に引く
     // （パイプラインの切りに閉じの区切りが巻き込まれないよう、ここで包みの中に収める）
     const truncated = toolText(language, 'agent.truncated');
-    const room = Math.max(0, (parent.outputTokens ?? Infinity) - estimateTextTokens(`${open}\n\n${truncated}\n${close}`) - 16);
+    // 子の最後の返事が出力の上限で切れていたら、完了した答えに見えないよう、包みの頭に決まった注を足し、親の会話にも知らせる
+    const cutNote = result.truncated ? `${toolText(language, 'agent.output_truncated')}\n` : '';
+    const room = Math.max(0, (parent.outputTokens ?? Infinity) - estimateTextTokens(`${open}\n${cutNote}\n${truncated}\n${close}`) - 16);
     const shown = prefixLength(body, AGENT_RESULT_MAX_CHARS, room);
     if (shown < body.length) body = `${body.slice(0, shown)}\n${truncated}`;
+    if (result.truncated) d.bus.publish({ type: 'warning', runId: parent.runId, conversationId: parent.conversationId, code: 'agent_output_truncated', message: engineText(language, 'warn.agent_output_truncated') });
     emit('done', toolCalls);
-    return { content: `${open}\n${body}\n${close}`, ...(fetched ? { fetched: true } : {}) };
+    return { content: `${open}\n${cutNote}${body}\n${close}`, ...(fetched ? { fetched: true } : {}) };
   }
   // 会話のいまの権限モード。子の担当の会話は、任せた親の会話のモードを見る（子の会話自身のモードは使わない）
   #modeOf(conversationId: string): PermissionMode { return this.#d.conversations.modeOf(this.#modeHost.get(conversationId) ?? conversationId); }
