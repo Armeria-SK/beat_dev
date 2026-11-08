@@ -247,7 +247,9 @@ export class Worker {
       if (this.#d.engine.chatting) { reschedule(now + 60_000); return 'busy'; }
       // 「今すぐ実行」を頼まれたものは、1時間の上限より先に実行する（上限は、ひとりでに動く分の費用を抑えるためのもの）
       let task: Task | undefined;
-      const roomFor = (t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
+      // 提供元の空きは、動いている裏の実行それぞれの「最初に使う提供元」で数える（計画の「各実行の providers で数える」より意図して狭い:
+      // 全部で数えると、まだ使っていない鎖の後ろの提供元の枠まで塞ぐ。後ろへ回った分の同時数は limiter が抑える）
+      const roomFor =(t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
       for (const id of [...this.#forced]) {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
@@ -259,7 +261,8 @@ export class Worker {
       }
       if (!task && this.runsLastHour() >= c.worker.maxRunsPerHour) {
         const idleSelf = c.worker.autonomy && !this.quiet() && now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
-        if (tasks.pickNext({ allowSelf: idleSelf })) {
+        // 「今すぐ実行」で提供元の空きを待っているタスクは、上限より先に動くもの（空き待ちであって上限待ちではない）なので、上限の知らせの数に入れない
+        if (tasks.pickNext({ allowSelf: idleSelf, accept: t => !this.#forced.has(t.id) })) {
           this.#d.notifications.notify({
             kind: 'info', title: taskText(languageOf(c), 'notify.budget.title'),
             body: taskText(languageOf(c), 'notify.budget.body', { max: c.worker.maxRunsPerHour }),
