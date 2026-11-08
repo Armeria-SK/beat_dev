@@ -321,7 +321,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     if (grantedFolder && approvalId) (ctx.writeGrants ??= []).push({ folder: grantedFolder, approvalId });
 
     // 見せたあとで中身が変わっていたら（ほかの会話やタスクが書き換えた場合など）、許可されたものとは別のコードなので動かさない
-    if (onceOnly && tool.preCheck) {
+    // bind を付けた事前の判定（ブラウザの「押す・入れる」。onceOnly ではない）も、札を出して承認を得た呼び出しではここで比べる（会話の許可で札なしに通る呼び出しは、この外）
+    if ((onceOnly || first?.bind !== undefined) && tool.preCheck) {
       let again: PreCheck;
       try { again = await tool.preCheck(args, ctx); }
       catch (error) { again = { decision: 'deny', reasons: [guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message })] }; }

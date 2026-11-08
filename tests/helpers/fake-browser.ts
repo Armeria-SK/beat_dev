@@ -1,7 +1,32 @@
-import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type BrowserHandle, type ElementState, type LaunchOptions, type PageHandle } from '../../src/tools/browser/driver.ts';
+import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type LaunchOptions, type PageHandle } from '../../src/tools/browser/driver.ts';
 import type { RouteRefusal } from '../../src/tools/browser/route.ts';
 
 // 試験用の偽のブラウザ。ページの URL・題・本文・ariaSnapshot の文・要素の状態を持ち、開いた記録を残す
+
+// 押した（または Enter を送った）ときにページ側で起きること
+export interface FakeEffect {
+  // 別の URL へ移る（FakeBrowserDriver.site に登録があれば、その中身になる）
+  navigate?: string;
+  // 開く窓の数
+  popups?: number;
+  dialogs?: number;
+  downloads?: number;
+  fileChoosers?: number;
+  // 操作が失敗する（隠れている・重なっているなど）
+  fail?: 'act_failed' | 'timeout';
+}
+
+export interface FakeRow {
+  role: string;
+  name: string;
+  state?: ElementState;
+  // 要素の type 属性（password など）と autocomplete 属性
+  type?: string;
+  autocomplete?: string;
+  effect?: FakeEffect;
+}
+
+export interface FakeAct { kind: 'click' | 'fill'; role: string; name: string; nth: number; text?: string; submit?: boolean }
 
 export interface FakeSite {
   title?: string;
@@ -16,7 +41,7 @@ export interface FakeSite {
   // 開いたあとの URL（リダイレクト）
   finalUrl?: string;
   // 役割・名前ごとの状態（無ければ、見える・有効）。数は snapshot ではなくここで決まる
-  rows?: Array<{ role: string; name: string; state?: ElementState }>;
+  rows?: FakeRow[];
   png?: Buffer;
 }
 
@@ -27,6 +52,8 @@ export class FakePage implements PageHandle {
   readonly browser: FakeBrowser;
   readonly gotos: string[] = [];
   closed = false;
+  // 押した・入れた記録
+  readonly acts: FakeAct[] = [];
   #url = 'about:blank';
   #site: FakeSite | undefined;
   #refusal: RouteRefusal | undefined;
@@ -59,6 +86,37 @@ export class FakePage implements PageHandle {
   async stateOf(role: string, name: string, nth: number): Promise<ElementState | undefined> {
     const row = (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name)[nth];
     return row === undefined ? undefined : row.state ?? { visible: true, enabled: true };
+  }
+
+  #rows(role: string, name: string): FakeRow[] { return (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name); }
+
+  async locate(target: ElementTarget): Promise<ElementDetail | undefined> {
+    const rows = this.#rows(target.role, target.name);
+    const row = rows[target.nth];
+    if (rows.length !== target.count || row === undefined) return undefined;
+    return { ...(row.state ?? { visible: true, enabled: true }), type: row.type, autocomplete: row.autocomplete };
+  }
+
+  #act(act: FakeAct, target: ElementTarget, effect: FakeEffect | undefined): ActionEvents {
+    // 本物と同じ: 実行の直前に数が違えば、触らない
+    if (this.#rows(target.role, target.name).length !== target.count) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    this.acts.push(act);
+    if (effect?.fail === 'act_failed') throw new BrowserFailure('act_failed', 'browser.act_failed');
+    if (effect?.fail === 'timeout') throw new BrowserFailure('timeout', 'browser.timeout', { sec: 1 });
+    if (effect?.navigate !== undefined) {
+      this.#site = this.browser.driver.sites.get(effect.navigate);
+      this.#url = effect.navigate;
+    }
+    for (let i = 0; i < (effect?.popups ?? 0); i++) this.browser.popup();
+    return { dialogs: effect?.dialogs ?? 0, downloads: effect?.downloads ?? 0, fileChoosers: effect?.fileChoosers ?? 0 };
+  }
+
+  async click(target: ElementTarget, _timeoutMs: number): Promise<ActionEvents> {
+    return this.#act({ kind: 'click', role: target.role, name: target.name, nth: target.nth }, target, this.#rows(target.role, target.name)[target.nth]?.effect);
+  }
+
+  async fill(target: ElementTarget, text: string, submit: boolean, _timeoutMs: number): Promise<ActionEvents> {
+    return this.#act({ kind: 'fill', role: target.role, name: target.name, nth: target.nth, text, submit }, target, submit ? this.#rows(target.role, target.name)[target.nth]?.effect : undefined);
   }
 
   async screenshot(): Promise<Buffer> { return this.#site?.png ?? TINY_PNG; }

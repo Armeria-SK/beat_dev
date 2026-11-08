@@ -1152,6 +1152,8 @@ export const en: Dict = {
   'tool.browser_read': 'Read the open page text and a list of elements',
   'tool.browser_screenshot': 'Take a screenshot of the open page (only for models that can see images)',
   'tool.browser_close': 'Close a browser tab (all tabs of this conversation when none is given)',
+  'tool.browser_click': 'Click an element on the browser page (only sites in the operation list in Settings; asks every time, and a conversation grant skips asking for the same input)',
+  'tool.browser_type': 'Type into a field on the browser page (only sites in the operation list; never into password fields; asks every time)',
   'tool.agent_run': 'Hand work to a helper agent and get its result (asks every time)',
   'folders.mode.write': 'Read and write',
   'folders.mode.read': 'Read only',
