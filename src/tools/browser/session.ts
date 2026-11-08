@@ -273,6 +273,8 @@ export class BrowserSession {
         viewport: VIEWPORT,
         locale: localeFor(languageOf(config)),
         actionTimeoutMs: browser.limits.actionTimeoutSec * 1000,
+        // 操作の一覧への、確かめを出せない遷移の守り。一覧は遷移のたびに読む。ログイン用の窓は、持ち主が自分で操作するので守りを付けない
+        sites: login ? () => [] : () => this.#d.config().tools.browser.sites,
       };
       const handle = await this.#d.driver.launch(options);
       if (epoch !== this.#epoch) { await withTimeout(handle.close(), CLOSE_TIMEOUT_MS); throw new BrowserFailure('aborted', 'browser.aborted'); }

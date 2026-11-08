@@ -89,6 +89,9 @@ export interface ToolContext {
   policy: ScopePolicy;
   workspace: string;
   taint: { tainted: boolean; sources: string[] };
+  // この会話が、これまでの実行のどこかで「よそから来た文を読んだ」ことがあるか（taint はこの実行だけ。これは会話ぜんぶ。読めないときは「ある」側）。
+  // 無いとき（試験など）は「ない」として扱う。browser_open の事前の確かめが、この実行で読んでいなくても、会話が読んだあとなら確かめるために見る
+  conversationTainted?: (() => boolean) | undefined;
   // この実行が使うモデルが、すべて手元（提供元の接続先がループバック）か。そうでなければ、手元のモデルを選んだ会話の履歴は、検索にも読み出しにも出さない
   modelsLocal?: boolean | undefined;
   // この実行が作る・触るタスクを、手元のモデルだけで動かすか。手元のモデルを選んだ会話の実行と、手元のモデルだけで動かすタスクの実行が true

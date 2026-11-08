@@ -732,7 +732,7 @@ export const en: Dict = {
   'settings.browser.resetCancel': 'Cancel',
   'settings.browser.resetDone': 'Logins erased',
   'settings.browser.sites': 'Sites Clive may operate',
-  'settings.browser.sitesDesc': 'Only the sites listed here can be opened. "example.com" is that site only; "*.example.com" also covers its subdomains. Just opening a site you are signed in to can trigger a GET action, so opening a listed site asks for confirmation (when the URL has a query, or after outside content was read).',
+  'settings.browser.sitesDesc': 'Only the sites listed here can be opened. "example.com" is that site only; "*.example.com" also covers its subdomains. Just opening a site you are signed in to can trigger a GET action, so opening a listed site asks for confirmation (when the URL has a query, or after text from elsewhere was read). Only the entry URL is checked, and a signed-in site that is not listed opens without asking, so add every site you sign in to here.',
   'settings.browser.channel': 'Browser to use',
   'settings.browser.channel.auto': 'Automatic',
   'settings.browser.channel.chrome': 'Chrome',

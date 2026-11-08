@@ -430,3 +430,19 @@ test('R6: 一覧のサイト + 秘密入りクエリは理由が 2 つ重なる�
   assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/a?x=1' }, off.ctx({ taint: TAINTED }))).decision, 'deny');
   assert.equal(off.driver.launches, 0);
 });
+
+test('R6(b): この実行が読んでいなくても、会話がすでに外を読んでいれば → ask（根ページ・パスだけでも）', async t => {
+  const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  const clean = { tainted: false, sources: [] as string[] };
+  const check = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => true }));
+  assert.equal(check.decision, 'ask');
+  assert.deepEqual(check.askKinds, ['web']);
+  assert.equal(check.sends, true);
+  // 会話も読んでいなければ今までどおり通る
+  assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => false }))).decision, 'allow');
+  // 会話の印が読めない（例外）ときは「ある」側に倒す
+  const broken = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => { throw new Error('db'); } }));
+  assert.equal(broken.decision, 'ask');
+  // 一覧外のサイトは、会話が読んだあとでも今までどおり
+  assert.equal((await browserOpen.preCheck!({ url: 'https://other.example.org/a' }, r.ctx({ taint: clean, conversationTainted: () => true }))).decision, 'allow');
+});

@@ -492,3 +492,15 @@ test('見積もり: 道具の結果の画像は 1 枚ごとに IMAGE_TOKENS 増�
   const user: ChatMessage = { role: 'user', content: '見て' };
   assert.equal(estimateMessageTokens({ ...user, images: [PNG] }) - estimateMessageTokens(user), IMAGE_TOKENS, '比べる基準: 利用者の発言の画像と同じ');
 });
+
+test('会話の taint: 道具の ToolContext に conversationTainted が渡り、会話の印（ever_tainted）を読む', async t => {
+  const seen: Array<boolean | undefined> = [];
+  const s = await startApp(t, { tools: [imageTool('cap', ctx => { seen.push(ctx.conversationTainted?.()); return { content: 'ok' }; })] });
+  s.app.db.prepare('UPDATE conversations SET ever_tainted = 0 WHERE id = ?').run(CONVERSATION);
+  s.adapter().scripts.push(toolCall('cap', {}), reply('おわり'));
+  await runImages(s, '呼んで');
+  s.app.conversations.markTainted(CONVERSATION);
+  s.adapter().scripts.push(toolCall('cap', {}), reply('おわり'));
+  await runImages(s, 'もう一度');
+  assert.deepEqual(seen, [false, true]);
+});

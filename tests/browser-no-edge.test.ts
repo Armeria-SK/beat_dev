@@ -4,6 +4,7 @@ import { ConfigError, parseConfig } from '../src/config/store.ts';
 import * as driverModule from '../src/tools/browser/driver.ts';
 import { BrowserFailure, PlaywrightDriver, type LaunchOptions } from '../src/tools/browser/driver.ts';
 import { locateBrowser } from '../src/tools/browser/locate.ts';
+import { isEdgeExecutable } from '../src/shared/browser-path.ts';
 import { testConfig } from './helpers.ts';
 
 // 持ち主の決定: Edge でブラウザ操作はさせない。Clive は Edge を探さず、起動せず、設定でも通さない
@@ -71,4 +72,30 @@ test('起動: path が Edge の実行ファイルなら、プロファイルも�
     await assert.rejects(new PlaywrightDriver().launch({ ...base, executablePath }), (e: unknown) => e instanceof BrowserFailure && e.key === 'browser.edge_refused', executablePath);
   }
   assert.equal(existsSync(profileDir), false, 'プロファイルのフォルダを作らない');
+});
+
+test('判定: 末尾のドット・空白と .exe を外したあとで Edge と見分ける（msedge.exe. など）', () => {
+  for (const name of ['C:\\x\\msedge.exe.', 'C:\\x\\msedge.exe..', 'C:\\x\\msedge.exe . ', 'C:\\x\\MSEdge.', 'C:\\x\\microsoft-edge.exe.', 'C:\\x\\msedge .exe']) assert.equal(isEdgeExecutable(name), true, name);
+  for (const name of ['C:\\x\\msedge.exe.bak', 'C:\\x\\chrome.exe.', 'C:\\x\\edge.exe', 'C:\\msedge\\chromium.exe.']) assert.equal(isEdgeExecutable(name), false, name);
+});
+
+test('判定: macOS の "Microsoft Edge Beta" など、空白で区切った種類つきの名前も Edge', () => {
+  const names = [
+    '/Applications/Microsoft Edge Beta.app/Contents/MacOS/Microsoft Edge Beta', '/Applications/Microsoft Edge Dev.app/Contents/MacOS/Microsoft Edge Dev',
+    '/Applications/Microsoft Edge Canary.app/Contents/MacOS/Microsoft Edge Canary', '/x/microsoft edge stable', '/x/msedge-beta', '/x/msedge dev', '/x/microsoft-edge-canary',
+  ];
+  for (const name of names) assert.equal(isEdgeExecutable(name), true, name);
+  for (const name of ['/x/Microsoft Edgex', '/x/Microsoft Edge Nightly', '/x/microsoft-edge-beta2', '/Applications/Microsoft Edge Beta.app/Contents/MacOS/chrome']) assert.equal(isEdgeExecutable(name), false, name);
+  assert.throws(() => parseConfig(withBrowser({ channel: 'path', executablePath: '/Applications/Microsoft Edge Beta.app/Contents/MacOS/Microsoft Edge Beta' })), ConfigError);
+  assert.throws(() => parseConfig(withBrowser({ channel: 'path', executablePath: 'C:\\x\\msedge.exe.' })), ConfigError);
+});
+
+test('設定: 既存の channel: "msedge" のエラーに、直し方（auto か chrome か path）が出る', () => {
+  try { parseConfig(withBrowser({ channel: 'msedge' })); assert.fail('通ってはいけない'); } catch (e) {
+    assert.ok(e instanceof ConfigError);
+    const issue = e.issues.find(i => i.path === 'tools.browser.channel');
+    assert.ok(issue, 'channel の指摘がある');
+    assert.match(issue.message, /auto.*chrome.*path/u);
+    assert.match(e.message, /auto \/ chrome \/ path/u);
+  }
 });

@@ -282,3 +282,17 @@ test('会話の削除の連携は、起動していなくても失敗しない',
   await r.session.closeConversation(['c1']);
   assert.equal(r.driver.launches, 0);
 });
+
+test('R6 追補 3: 起動の選択に sites（毎回 config を読む関数）が入る。ログイン用の窓は空で、守りを付けない', async t => {
+  const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  await r.session.run(call(r), async () => undefined);
+  const sites = r.driver.current!.options.sites;
+  assert.ok(sites, 'sites が渡る');
+  assert.deepEqual(sites(), ['example.com']);
+  r.config.tools.browser.sites = ['example.com', 'example.net'];
+  assert.deepEqual(sites(), ['example.com', 'example.net'], '設定を変えると、起動し直さずに効く');
+  await r.session.close();
+  const login = rig(t, c => { c.tools.browser.sites = ['example.com']; });
+  await login.session.openLogin();
+  assert.deepEqual(login.driver.current!.options.sites?.(), [], 'ログイン窓は遷移の守りなし');
+});

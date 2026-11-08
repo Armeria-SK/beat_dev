@@ -729,7 +729,7 @@ export const ja = {
   'settings.browser.resetCancel': 'やめる',
   'settings.browser.resetDone': 'ログイン情報を消しました',
   'settings.browser.sites': '操作してよいサイト',
-  'settings.browser.sitesDesc': 'ここに挙げたサイトだけ開けます。「example.com」はそのサイトだけ、「*.example.com」は下のサイトも含みます。ログイン済みのサイトを開くだけで GET の操作が走りうるので、ここにあるサイトを開くときは（URL にクエリがあるとき・外の内容を読んだあとは）確認が出ます。',
+  'settings.browser.sitesDesc': 'ここに挙げたサイトだけ開けます。「example.com」はそのサイトだけ、「*.example.com」は下のサイトも含みます。ログイン済みのサイトを開くだけで GET の操作が走りうるので、ここにあるサイトを開くときは（URL にクエリがあるとき・よそから来た文を読んだあとは）確認が出ます。確認が出るのは入口の URL だけで、ここに無いサイトの中でログイン済みのものは確認なしで開けるので、ログイン用の窓でログインしたサイトはここに入れてください。',
   'settings.browser.channel': '使うブラウザ',
   'settings.browser.channel.auto': 'おまかせ',
   'settings.browser.channel.chrome': 'Google Chrome',

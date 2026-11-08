@@ -99,3 +99,24 @@ test('seedPreferences のソース: mkdirSync に mode 0o700 を付け、既に�
   for (const call of calls) assert.match(call, /mode:\s*0o700/u, call);
   assert.match(body, /chmodSync\(profileDir,\s*0o700\)/u);
 });
+
+test('opener() が例外を投げた窓は、安全側に倒して popup として扱う（自分で開いたタブだけは除く）', async () => {
+  const boom = async (): Promise<FakePage | null> => { throw new Error('Target closed'); };
+  // newPage の外
+  const r1 = rig(async () => fakePage('mine'));
+  await r1.watch();
+  r1.emit(fakePage('broken', boom));
+  await settle();
+  assert.deepEqual(r1.popups, ['broken']);
+  // newPage の最中: 自分のタブは popup にしない。ほかの窓は、戻ったあとに popup として知らせる
+  const r2 = rig(async emit => {
+    emit(fakePage('broken2', boom));
+    const page = fakePage('mine2', boom);
+    emit(page);
+    return page;
+  });
+  await r2.watch();
+  await r2.browser.newPage();
+  await settle();
+  assert.deepEqual(r2.popups, ['broken2']);
+});
