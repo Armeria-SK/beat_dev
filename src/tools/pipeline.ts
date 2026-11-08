@@ -32,8 +32,14 @@ export const TOOL_OUTPUT_LIMIT = 16_000;
 // 計画モードで使える道具の効果: 読む道具（read）と Web の読み取り（network）。ただしファイルも書く道具（writesFiles）は除く。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、planAllows を通す
 export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
 
-export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles'>): boolean {
-  return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true;
+// MCP の道具（外のプログラムが書いた道具）は、効果の申告があっても計画モードには渡さない（申告は持ち主のものでも、中身は外のプログラムが決めるため）
+export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp'>): boolean {
+  return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined;
+}
+
+// 手元のモデルの会話（localOnly）に渡してよい道具か。MCP の道具は、持ち主が localOk にしたサーバーのものだけ（それ以外は、手元のモデルに読ませた内容を外のサーバーへ出しうる）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、localAllows を通す
+export function localAllows(tool: Pick<ToolDef, 'mcp'>, localOnly: boolean | undefined): boolean {
+  return localOnly !== true || tool.mcp === undefined || tool.mcp.localOk;
 }
 
 // この呼び出しが外へ出るか（効果が network でない道具の networkCall）。投げたら、迷ったので外へ出るとみなす（印を付ける・毎回確かめる向きにしか倒れない）
@@ -155,6 +161,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。会話の許可・フックの allow では越えられない
   const policy = policyFor(tool.name, ctx, deps);
   if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
+  // 手元のモデルの会話では、localOk でない MCP の道具を使わせない（モデルに渡す一覧からも外している。二重の拒否）
+  if (!localAllows(tool, ctx.localOnly)) return refuse('deny', 'mode', toolText(language, 'pipeline.mcp_local', { name: tool.name }));
   // 計画モードでは、読む道具と Web の読み取りのほかは使わせない（モデルに渡す一覧からも外している。二重の拒否）
   if (effectiveMode(ctx, deps) === 'plan' && !planAllows(tool)) return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);

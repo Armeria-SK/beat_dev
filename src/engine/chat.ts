@@ -14,7 +14,7 @@ import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
-import { planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
+import { localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
@@ -97,6 +97,8 @@ export interface ChatEngineDeps {
   now?: () => Date;
   // 子の担当の時間切れ（ミリ秒）。試験で短くするためだけの上書き。ふつうは設定 tools.agent.timeoutSec（秒）を使う
   agentTimeoutMs?: number | undefined;
+  // maxTools で切られた MCP の道具を、モデルごとに知らせる（空の一覧は「切られていない」）。MCP の管理が、道具の状態を cut にするために使う
+  mcpCut?: (modelId: string, names: readonly string[]) => void;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   retriesPerModel?: number;
 }
@@ -177,6 +179,8 @@ export class ChatEngine {
   #agentSpawned = new Map<string, number>();
   // 実行中に送られて、まだ履歴に入っていない発言（会話ごと。再起動で消える）
   #pending = new Map<string, PendingMessage[]>();
+  // maxTools で切られた MCP の道具の警告を出したもの（モデル id と道具の名前の組。1 組に 1 回だけ）
+  #cutWarned = new Set<string>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
 
@@ -561,13 +565,27 @@ export class ChatEngine {
   // 「止める」は、パイプラインと同じく、実行を始めたときの設定（started）といまの設定の厳しい方。始めたときに止めていた道具は、途中で緩めても、その実行のあいだは戻らない。
   // 計画モード（plan）の会話では、planAllows を通る道具だけを渡す: 効果が読む（read）か Web の読み取り（network）で、ファイルも書く道具（writesFiles）でないもの（パイプラインの二重の拒否は runToolCall）。
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal'): ToolDef[] {
+  // 手元のモデルの会話（localOnly）には、localOk でない MCP の道具を渡さない（localAllows。パイプラインも同じに拒む）。
+  // maxTools で切られた MCP の道具は、モデルと道具の組ごとに 1 回だけ [WARN] を出し、MCP の管理に知らせる（画面の状態が cut になる）
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal', localOnly = false): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
     const agentOff = !config.tools.agent.enabled || (kind === 'task' && !config.tools.agent.inTasks);
     const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
-      || (mode === 'plan' && !planAllows(t));
-    return this.#d.tools.registry.forRun(kind, { limit: model.maxTools, exclude });
+      || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly);
+    const options = { limit: model.maxTools, exclude };
+    const registry = this.#d.tools.registry;
+    if (kind === 'chat' && this.#d.mcpCut) {
+      const cut = registry.cut(kind, options).filter(t => t.mcp !== undefined);
+      this.#d.mcpCut(model.id, cut.map(t => t.name));
+      for (const t of cut) {
+        const key = `${model.id}\n${t.name}`;
+        if (this.#cutWarned.has(key)) continue;
+        this.#cutWarned.add(key);
+        this.#d.log?.(`[WARN] モデル「${model.id}」の道具の上限（maxTools ${model.maxTools}）を越えたため、MCP の道具「${t.name}」は渡せません。上限を上げるか、使わない道具を off にしてください`);
+      }
+    }
+    return registry.forRun(kind, options);
   }
 
   async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): Promise<EngineResult> {
@@ -929,7 +947,8 @@ export class ChatEngine {
     const language = languageOf(config);
     const current = this.#modeOf(p.conversationId);
     const mode: PermissionMode = p.kind === 'chat' || p.kind === 'agent' ? stricterMode(p.startedMode ?? current, current) : 'normal';
-    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode);
+    const localOnly = p.kind === 'chat' && isLocalPinned(config, d.conversations.get(p.conversationId)?.model_id);
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly);
     const specs = ToolRegistry.specs(toolDefs);
     const fallbackMode = model.toolMode === 'json_fallback';
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;

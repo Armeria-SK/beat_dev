@@ -24,3 +24,19 @@ export function secretProblem(field: NotifySecretField, value: string): SecretPr
   if (field === 'url' && !isSafeOutboundUrl(value)) return 'bad_url';
   return undefined;
 }
+
+// 外の MCP サーバーの秘密の欄（子に渡す環境変数 env・HTTP の見出し header）。id は英小文字と数字だけなので、名前から id が一意に読める
+export type McpSecretKind = 'env' | 'header';
+
+export function mcpEnvPrefix(id: string): string {
+  return `CLIVE_MCP_${id.toUpperCase()}_`;
+}
+
+// CLIVE_MCP_<ID>_<E|H>_<NAME>_SECRET（最大 63 文字。SECRET を含むので、鍵の名前の決まりを満たす）
+export function mcpEnvName(id: string, kind: McpSecretKind, name: string): string {
+  return `${mcpEnvPrefix(id)}${kind === 'env' ? 'E' : 'H'}_${name.toUpperCase().replaceAll('-', '_')}_SECRET`;
+}
+
+export function isAutoMcpEnv(id: string, kind: McpSecretKind, name: string, variable: string): boolean {
+  return variable === mcpEnvName(id, kind, name);
+}

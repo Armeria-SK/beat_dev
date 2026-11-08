@@ -1,7 +1,7 @@
 import { ValueErrorType, type ValueError } from '@sinclair/typebox/errors';
 import type { MessageParams } from '../shared/messages/define.ts';
 import type { ConfigMessageKey } from '../shared/messages/config.ts';
-import { AppConfig, ModelConfig, ProviderConfig } from './schema.ts';
+import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_ID_PATTERN, MCP_TOOL_KEY_PATTERN, ModelConfig, ProviderConfig } from './schema.ts';
 
 // 設定の形の検査（TypeBox）の誤りを、項目ごとの文のコード（src/shared/messages/config.ts）と差し込みの値に直す。
 // 正規表現や「Expected string to match …」はそのまま見せない。ここに無い種類の誤りは undefined（呼ぶ側は検査の文のまま出す）
@@ -17,6 +17,10 @@ const PATTERN_ENTRIES: ReadonlyArray<readonly [string | undefined, ConfigMessage
   [AppConfig.properties.worker.properties.quietStart.pattern, 'pattern.time'],
   [AppConfig.properties.worker.properties.quietEnd.pattern, 'pattern.time'],
   [AppConfig.properties.notify.properties.channels.items.properties.id.pattern, 'pattern.notify_id'],
+  [MCP_ID_PATTERN, 'pattern.mcp_id'],
+  [MCP_TOOL_KEY_PATTERN, 'pattern.mcp_tool'],
+  [MCP_ENV_NAME_PATTERN, 'pattern.mcp_env_name'],
+  [MCP_HEADER_NAME_PATTERN, 'pattern.mcp_header_name'],
 ];
 export const PATTERN_MESSAGES: ReadonlyMap<string, ConfigMessageKey> = new Map(PATTERN_ENTRIES.flatMap(([pattern, key]) => (pattern === undefined ? [] : [[pattern, key] as const])));
 

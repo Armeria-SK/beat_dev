@@ -146,6 +146,8 @@ export interface ToolDef<I = any> {
   networkCall?: (input: I) => boolean;
   // 呼び出しの引数に関わらず、必ず何かを消す道具（memory_forget）。事前の判定が removes を言わなくても、自動承認は判定役に回さない。効果が meta の道具で消すものは、これを付ける（言い忘れると、判定役に回る）
   removes?: true;
+  // 外の MCP サーバーの道具（src/mcp/tool.ts が付ける）。計画モードには渡さず（planAllows）、手元のモデルの会話には localOk のサーバーの道具だけ渡す（localAllows）
+  mcp?: { server: string; tool: string; localOk: boolean };
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

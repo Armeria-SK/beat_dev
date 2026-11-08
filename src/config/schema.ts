@@ -154,6 +154,58 @@ export const NotifyConfig = Type.Object({
   }, { additionalProperties: false, default: {} }),
 }, { additionalProperties: false, default: {} });
 
+// 外の MCP サーバー（道具を足す、別のプログラム。F8）。URL と秘密は設定に書かず、環境変数の名前（env・headers の右側）だけを書く。値は .env に入れる（画面から入れられる）。
+// 道具の方針（allow / ask / block）は tools.policies の「mcp_<id>_<道具>」で持つ。この設定は、どの道具を登録するか（tools）と、どう確かめるか（effect・sends・removes）だけを持つ
+export const MCP_ID_PATTERN = '^[a-z][a-z0-9]{0,15}$';
+// __proto__ / constructor / prototype は、オブジェクトの継承と紛れるので使えない
+export const MCP_TOOL_KEY_PATTERN = '^(?!(?:__proto__|constructor|prototype)$)[A-Za-z0-9_.-]{1,64}$';
+export const MCP_ENV_NAME_PATTERN = '^[A-Za-z_][A-Za-z0-9_]{0,26}$';
+export const MCP_HEADER_NAME_PATTERN = '^[A-Za-z][A-Za-z0-9-]{0,26}$';
+const ENV_VAR_PATTERN = '^[A-Z][A-Z0-9_]{0,63}$';
+
+export const McpToolEntry = Type.Object({
+  // 道具の on / off。書かなければ on。設定に名前が無い道具は、登録しない（off と同じ）。
+  // （Record の中の値には、TypeBox の既定値が入らないので、既定は読む側が「false でなければ on」と決める）
+  enabled: Type.Optional(Type.Boolean()),
+  // 持ち主の申告。書かなければ「外へ出る（network）・送りうる」として確かめる
+  effect: Type.Optional(Type.Union([Type.Literal('read'), Type.Literal('write'), Type.Literal('network')])),
+  sends: Type.Optional(Type.Boolean()),
+  removes: Type.Optional(Type.Boolean()),
+}, { additionalProperties: false });
+
+// 1 つの MCP サーバー。transport ごとに使う項目が違う（stdio: command・cwd・env / http: url・headers）。
+// 使わない項目や必須の項目は、形の検査（TypeBox の Union は既定値を入れないため、1 つの形にしている）の後の内容の検査（config/store.ts の mcpFindings）が確かめる
+export const McpServerConfig = Type.Object({
+  id: Type.String({ pattern: MCP_ID_PATTERN }),
+  transport: Type.Union([Type.Literal('stdio'), Type.Literal('http')]),
+  enabled: Type.Boolean({ default: true }),
+  // 手元のモデルの会話にも渡すか。既定は渡さない（手元のモデルに読ませた内容を、外のサーバーへ出さないため）
+  localOk: Type.Boolean({ default: false }),
+  tools: Type.Record(Type.String({ pattern: MCP_TOOL_KEY_PATTERN }), McpToolEntry, { default: {}, maxProperties: 64 }),
+  // stdio: [プログラム, 引数…]。シェルは通さない
+  command: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 32 })),
+  // stdio: 絶対パスだけ
+  cwd: Type.Optional(Type.String({ maxLength: 1024 })),
+  // stdio: 子に渡す環境変数（子での名前 → .env の変数名）
+  env: Type.Record(Type.String({ pattern: MCP_ENV_NAME_PATTERN }), Type.String({ pattern: ENV_VAR_PATTERN }), { default: {}, maxProperties: 16 }),
+  // http: https、またはこの PC（loopback）の http
+  url: Type.Optional(Type.String({ maxLength: 500 })),
+  // http: 見出し（名前 → .env の変数名）
+  headers: Type.Record(Type.String({ pattern: MCP_HEADER_NAME_PATTERN }), Type.String({ pattern: ENV_VAR_PATTERN }), { default: {}, maxProperties: 8 }),
+}, { additionalProperties: false });
+// 固定の歯止め。範囲の外は丸めずに、読み込みで断る（範囲の端が絶対の上限）
+export const McpConfig = Type.Object({
+  servers: Type.Array(McpServerConfig, { default: [], maxItems: 8 }),
+  limits: Type.Object({
+    maxServers: Type.Integer({ minimum: 1, maximum: 8, default: 4 }),
+    maxToolsPerServer: Type.Integer({ minimum: 1, maximum: 64, default: 32 }),
+    callTimeoutMs: Type.Integer({ minimum: 5000, maximum: 300_000, default: 60_000 }),
+    connectTimeoutMs: Type.Integer({ minimum: 2000, maximum: 60_000, default: 15_000 }),
+    restartsPerHour: Type.Integer({ minimum: 0, maximum: 10, default: 3 }),
+    resultMaxChars: Type.Integer({ minimum: 1000, maximum: 50_000, default: 15_000 }),
+  }, { additionalProperties: false, default: {} }),
+}, { additionalProperties: false, default: {} });
+
 export const AppConfig = Type.Object({
   $schema: Type.Optional(Type.String()),
   version: Type.Literal(1),
@@ -190,6 +242,7 @@ export const AppConfig = Type.Object({
     reviewAfterToolCalls: Type.Integer({ minimum: 1, maximum: 200, default: 8 }),
   }, { additionalProperties: false, default: {} }),
   notify: NotifyConfig,
+  mcp: McpConfig,
 }, { additionalProperties: false });
 
 export type ProviderConfig = Static<typeof ProviderConfig>;
@@ -199,3 +252,6 @@ export type ToolsConfig = Static<ReturnType<typeof ToolsConfig>>;
 export type HookConfig = Static<typeof HookConfig>;
 export type NotifyChannelConfig = Static<typeof NotifyChannelConfig>;
 export type NotifyConfig = Static<typeof NotifyConfig>;
+export type McpConfig = Static<typeof McpConfig>;
+export type McpServerConfig = Static<typeof McpServerConfig>;
+export type McpToolEntry = Static<typeof McpToolEntry>;
