@@ -89,9 +89,9 @@ function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPoli
 }
 
 // この呼び出しに効く権限モード: 実行を始めたときのモードと、会話のいまのモードの厳しい方（厳しい向きはその場から、緩む向きは次の実行から）。
-// 会話（チャット）の実行だけ。タスク・振り返りは、会話のモードに関係なくふつう
+// 会話（チャット）の実行と、それが任せた子の担当（agent。親の会話のモードを見る）だけ。タスク・振り返りは、会話のモードに関係なくふつう
 export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionMode {
-  if (ctx.kind !== 'chat') return 'normal';
+  if (ctx.kind !== 'chat' && ctx.kind !== 'agent') return 'normal';
   const start = ctx.permissionMode ?? 'normal';
   let now: PermissionMode = start;
   if (deps.permissionMode) { try { now = deps.permissionMode(); } catch { now = 'normal'; } }
@@ -225,7 +225,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // コードを動かす確かめは中身が変わりうるので、前に同じ文字のコマンドを「この会話では許可」にしていても、また確かめる。方針が ask の確かめも、毎回確かめる
   const onceOnly = first?.onceOnly === true;
   const everyTime = askKinds.has('policy') || afterAutoRead;
-  if (decision === 'ask' && !onceOnly && !everyTime && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
+  if (decision === 'ask' && !onceOnly && !everyTime && !ctx.parent && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
   if (decision === 'deny') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
 
   let approvalId: string | undefined;
@@ -289,7 +289,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
-      cwd: summary.cwd, reasons, details, onceOnly, everyTime, kinds: [...askKinds], preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore, grantFolder: grantTarget?.folder,
+      cwd: summary.cwd, reasons, details, onceOnly, everyTime, kinds: [...askKinds], ...(ctx.parent ? { hostConversationId: ctx.parent.conversationId, childConversationId: ctx.conversationId, childTitle: ctx.parent.title } : {}), preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore, grantFolder: grantTarget?.folder,
     }, ctx.config.tools.shell.approvalTimeoutSec * 1000, ctx.signal);
     approvalId = deps.approvals.pending().find(p => p.inputHash === hash && p.runId === ctx.runId)?.id;
     const outcome = await pending;
@@ -317,7 +317,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   // ── 実行 ──
   let output: ToolOutput;
-  try { output = await tool.execute(args, ctx, { approvedOnce, ...(approvedOnce && first ? { check: first } : {}) }); }
+  try { output = await tool.execute(args, ctx, { approvedOnce, callId: call.id, ...(approvedOnce && first ? { check: first } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。
   // シェルのコマンドが外から取得する・外の中身を持ち込む（curl・Invoke-WebRequest・git clone・npm install など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）。

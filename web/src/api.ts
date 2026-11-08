@@ -20,6 +20,8 @@ export interface Conversation {
   model_id?: string | null; effort?: string | null;
   // 会話の権限モード（無い = ふつう）
   permission_mode?: PermissionMode;
+  // 親の担当から任された子の会話か（run の id。無い・null はふつうの会話）と、任せた親の会話。子の会話は読むだけ
+  parent_run_id?: string | null; source_conversation_id?: string | null;
 }
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
@@ -44,6 +46,8 @@ export interface Approval {
   everyTime?: boolean;
   // 外から読んだ内容のあとの file_write / file_edit の確かめ（理由が「外から読んだ」だけ）に添える、「この返事のあいだ、このフォルダ以下への書き込みを許可」のフォルダ。添えないときは null（無い古い応答も null 扱い）
   grantFolder?: string | null;
+  // 任せた子の担当から出た確かめ（子の会話の id と題）。子には「この会話では許可」が無い。無い・null は親自身の確かめ
+  fromAgent?: { conversationId: string; title: string } | null;
 }
 // 会話を次に送るときのコンテキストの使用量。tokens は古い発言を削る前の見積もり、available は削り始める境目、capacity はモデル全体、ratio は tokens / available（1 を超えうる）
 export interface ContextUsage { modelId: string; tokens: number; available: number; capacity: number; ratio: number }
@@ -67,6 +71,8 @@ export interface SettingsView {
   configPath: string;
 }
 export interface RunRow {
+  // parent_run_id は、親の担当から任された子の run のときだけ入る（右パネルで字下げして見せる）
+  parent_run_id?: string | null;
   id: string; kind: string; conversation_id: string | null; model_id: string | null; attempts: number;
   started_at: number; duration_ms: number | null; ok: number | null; error_kind: string | null; error_message: string | null;
   input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; est_prompt_tokens: number | null; flags: string[];
@@ -74,7 +80,7 @@ export interface RunRow {
 
 // 道具の一覧（GET /api/tools）。policy は設定の tools.policies、configurable が false の道具（タスクの進め方に必要なもの）は方針を変えられない
 export interface ToolInfo {
-  name: string; effect: 'read' | 'write' | 'exec' | 'network' | 'meta'; allowedIn: Array<'chat' | 'task' | 'review'>; policy: ToolPolicy; configurable: boolean;
+  name: string; effect: 'read' | 'write' | 'exec' | 'network' | 'meta'; allowedIn: Array<'chat' | 'task' | 'review' | 'agent'>; policy: ToolPolicy; configurable: boolean;
 }
 
 // POST /api/server/apply の応答。url があるときは、ポートが変わったので、画面はそこへ移る

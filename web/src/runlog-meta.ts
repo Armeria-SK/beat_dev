@@ -11,7 +11,7 @@ export const LOG_LIMIT = 200;
 export type Tone = 'ok' | 'bad' | 'wait' | 'plain';
 export interface Status { icon: IconName; tone: Tone; label: string }
 
-const RUN_KIND: Record<string, PlainKey> = { chat: 'runs.kind.chat', task: 'runs.kind.task', review: 'runs.kind.review' };
+const RUN_KIND: Record<string, PlainKey> = { chat: 'runs.kind.chat', task: 'runs.kind.task', review: 'runs.kind.review', agent: 'runs.kind.agent' };
 const ERROR_KIND: Record<string, PlainKey> = {
   timeout: 'runs.error.timeout', rate_limit: 'runs.error.rate_limit', auth: 'runs.error.auth', context_overflow: 'runs.error.context_overflow',
   provider_error: 'runs.error.provider_error', cancelled: 'runs.error.cancelled', internal: 'runs.error.internal',

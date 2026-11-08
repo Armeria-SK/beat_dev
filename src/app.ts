@@ -21,7 +21,7 @@ import { taskText } from './shared/messages/tasks.ts';
 import { EndpointLimiter } from './providers/limiter.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
-import { ApprovalBroker, approvalPublic } from './tools/approvals.ts';
+import { ApprovalBroker, approvalPublic, approvalShownIn } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { shellRun } from './tools/builtin/shell.ts';
@@ -40,6 +40,7 @@ import { docRead } from './tools/builtin/docs.ts';
 import { tableWrite } from './tools/builtin/tables.ts';
 import { imageView } from './tools/builtin/image.ts';
 import { webDownload } from './tools/builtin/download.ts';
+import { agentRun } from './tools/builtin/agent.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { SkillStore } from './tools/skills/store.ts';
@@ -61,6 +62,7 @@ export function builtinTools(): ToolDef[] {
     fileSearch, calculate, dateCalc,
     checklistWrite, notifyOwner, docRead, tableWrite,
     imageView, webDownload,
+    agentRun,
   ];
 }
 
@@ -76,6 +78,8 @@ export interface AppOptions {
   workerTimers?: boolean;
   webNetwork?: PageNetwork;
   downloadNetwork?: DownloadNetwork;
+  // 試験用: 子の担当（agent_run）の時間切れ（ミリ秒）。設定 tools.agent.timeoutSec の最小は 60 秒なので、試験だけがこれで縮める。書かなければ設定の値
+  agentTimeoutMs?: number;
 }
 
 export class App {
@@ -137,14 +141,14 @@ export class App {
     this.approvals = new ApprovalBroker(this.db, event => {
       const v = event.view;
       if (event.type === 'requested') {
-        this.bus.publish({ type: 'approval.requested', runId: v.runId, conversationId: v.conversationId, approval: approvalPublic(v) });
+        this.bus.publish({ type: 'approval.requested', runId: v.runId, conversationId: approvalShownIn(v), approval: approvalPublic(v) });
         // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
-        const task = this.tasks.byConversation(v.conversationId);
+        const task = this.tasks.byConversation(approvalShownIn(v));
         if (task) {
           this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}` });
         }
       } else {
-        this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: v.conversationId, approvalId: v.id, outcome: event.outcome });
+        this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: approvalShownIn(v), approvalId: v.id, outcome: event.outcome });
         this.notifications.settle('approval_needed', { dedupKey: `approval:${v.id}` });
       }
     });
@@ -165,6 +169,7 @@ export class App {
       web: { network: options.webNetwork, download: options.downloadNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       ...(options.now ? { now: () => new Date(now()) } : {}),
+      ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
     });
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
@@ -263,7 +268,8 @@ export class App {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
-    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat'))) : 0;
+    // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
+    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' && !config.tools.agent.enabled }))) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }

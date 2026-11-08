@@ -63,11 +63,12 @@ function ApprovalPanel({ approval, hint, position, onDetails }: PanelProps) {
       </div>
       <pre className="chat-approval-body">{approval.body}</pre>
       {approval.reasons.length > 0 && <div className="chat-approval-reasons">{approval.reasons.join(' · ')}</div>}
+      {approval.fromAgent && <div className="chat-approval-note">{t('approval.fromAgent', approval.fromAgent.title)}</div>}
       {approval.onceOnly && <div className="chat-approval-note">{t('approval.checkContent')}</div>}
       {error && <div className="chat-approval-error" role="alert">{error}</div>}
       <div className="chat-approval-actions">
         <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
-        {!approval.onceOnly && !approval.everyTime && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
+        {!approval.onceOnly && !approval.everyTime && !approval.fromAgent && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
         {approval.grantFolder && <button type="button" className="btn btn-secondary" disabled={busy} title={approval.grantFolder} onClick={() => void decide('folder')}>{t('approval.folder', grantFolderLabel(approval.grantFolder))}</button>}
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>
           {hint && !approval.onceOnly ? <>{t('approval.run')}<span className="chat-approval-key">↵</span></> : t('approval.once')}
@@ -93,7 +94,7 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
       actions={(
         <>
           <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
-          {!approval.onceOnly && !approval.everyTime && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
+          {!approval.onceOnly && !approval.everyTime && !approval.fromAgent && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
           {approval.grantFolder && <button type="button" className="btn btn-secondary" disabled={busy} title={approval.grantFolder} onClick={() => void decide('folder')}>{t('approval.folder', grantFolderLabel(approval.grantFolder))}</button>}
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>{t('approval.once')}</button>
         </>
@@ -101,6 +102,7 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
     >
       <div className="chat-approval-line"><div className="chat-approval-fill" style={{ width: `${approvalFraction(approval.expiresAt, now, total) * 100}%` }} /></div>
       <pre className="chat-dialog-body">{approval.body}</pre>
+      {approval.fromAgent && <div className="chat-approval-note">{t('approval.fromAgent', approval.fromAgent.title)}</div>}
       {approval.onceOnly && <div className="chat-approval-note">{t('approval.checkContent')}</div>}
       {approval.preview.map(file => (
         <div key={file.path} className="chat-dialog-file">

@@ -25,6 +25,8 @@ export interface ConversationRow {
   // 記憶の振り返りの会話だけが持つ。振り返りの材料にした会話・タスク（振り返りの会話には、その全文が入る）。外のモデルの履歴の検索・読み出しから隠す決まりに使う
   source_conversation_id: string | null;
   source_task_id: string | null;
+  // 子の担当（agent_run）の会話だけが持つ。親の実行の id。NULL はふつうの会話
+  parent_run_id: string | null;
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
@@ -76,11 +78,11 @@ export class Conversations {
   }
 
   // source: 記憶の振り返りの会話を作るとき、材料にした会話・タスク。作ると同時に覚える（作ってから振り返りの記録に結び付くまでの間にも、隠す決まりが効くように）
-  create(input: { title?: string; kind?: 'chat' | 'task'; id?: string; source?: ReviewSource } = {}): ConversationRow {
+  create(input: { title?: string; kind?: 'chat' | 'task'; id?: string; source?: ReviewSource; parentRunId?: string } = {}): ConversationRow {
     const now = this.now();
     const id = input.id ?? randomUUID();
-    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at, source_conversation_id, source_task_id) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, input.kind ?? 'chat', input.title ?? null, now, now, input.source?.conversationId ?? null, input.source?.taskId ?? null);
+    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at, source_conversation_id, source_task_id, parent_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, input.kind ?? 'chat', input.title ?? null, now, now, input.source?.conversationId ?? null, input.source?.taskId ?? null, input.parentRunId ?? null);
     return this.get(id)!;
   }
 

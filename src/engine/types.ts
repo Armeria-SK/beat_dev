@@ -91,6 +91,8 @@ export type RunEvent =
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }>; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
+  // 子の担当（agent_run）の状態。runId・conversationId・callId は親のもの（親の会話の画面が、その呼び出しの行に結ぶ）。toolCalls は子が動かした道具の回数（running のときは 0）
+  | { type: 'agent.state'; runId: string; conversationId: string; callId: string; childRunId: string; childConversationId: string; state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout'; toolCalls: number }
   | {
     type: 'run.end'; runId: string; conversationId: string; ok: boolean;
     errorKind?: EngineErrorKind; errorMessage?: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail;

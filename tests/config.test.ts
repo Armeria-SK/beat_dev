@@ -213,3 +213,17 @@ test('tools.maxIterations: 0 は「制限なし」。1〜100 は今までどお�
   assert.equal(parseConfig({ version: 1, server: {}, routing: {} }).tools.maxIterations, 16, '新しい設定の既定値は変えない');
   assert.equal(defaultConfig().tools.maxIterations, 16);
 });
+
+test('tools.agent: 既定は無効・タスクから使わない・1 回に 3 本・600 秒。範囲外と未知のキーは断る（T-43）', () => {
+  const withAgent = (agent: unknown) => ({ ...JSON.parse(JSON.stringify(testConfig())), tools: { agent } });
+  const d = defaultConfig().tools.agent;
+  assert.deepEqual(d, { enabled: false, inTasks: false, maxPerRun: 3, timeoutSec: 600 });
+  assert.deepEqual(parseConfig({ version: 1, server: {}, routing: {} }).tools.agent, d, '書かない設定でも既定が入る');
+  assert.deepEqual(parseConfig(withAgent({ enabled: true })).tools.agent, { ...d, enabled: true });
+  for (const ok of [1, 5]) assert.equal(parseConfig(withAgent({ maxPerRun: ok })).tools.agent.maxPerRun, ok);
+  for (const ok of [60, 3600]) assert.equal(parseConfig(withAgent({ timeoutSec: ok })).tools.agent.timeoutSec, ok);
+  const bad: Array<[string, unknown]> = [['tools.agent.maxPerRun', { maxPerRun: 0 }], ['tools.agent.maxPerRun', { maxPerRun: 6 }], ['tools.agent.timeoutSec', { timeoutSec: 59 }], ['tools.agent.timeoutSec', { timeoutSec: 3601 }], ['tools.agent.enabled', { enabled: 'yes' }], ['tools.agent', { depth: 2 }]];
+  for (const [path, value] of bad) {
+    assert.throws(() => parseConfig(withAgent(value)), (e: unknown) => e instanceof ConfigError && e.issues.some(i => i.path.startsWith(path)), JSON.stringify(value));
+  }
+});

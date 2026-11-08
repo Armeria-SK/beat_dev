@@ -69,7 +69,7 @@ export const imageView: ToolDef<{ path?: string; url?: string }> = {
     url: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
   }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   networkCall: input => input.url !== undefined,
   preCheck(input, ctx) {
     const language = languageOf(ctx.config);

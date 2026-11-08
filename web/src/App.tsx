@@ -316,8 +316,11 @@ export function App() {
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, autoChecking: e.state === 'checking' } : d));
         if (e.state === 'allowed') addNotice(e.conversationId, { runId: e.runId, kind: 'auto', message: t('notice.autoAllowed', e.name, e.reason ?? '') });
         break;
+      case 'agent.state':
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, agent: e.state === 'running' ? { conversationId: e.childConversationId, toolCalls: e.toolCalls } : undefined } : d));
+        break;
       case 'tool.result':
-        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined } : d));
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined } : d));
         if (e.decision === 'deny') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', message: t('notice.toolDenied', e.name, e.preview.split('\n').slice(1, 3).join(' ')) });
         break;
       case 'approval.requested':

@@ -106,7 +106,7 @@ test('コードの網羅: サーバーが作る種類は、すべて辞書に訳
   }
   ja();
   const runKinds = [...(/export type RunKind =([^;]*);/u.exec(source('src/tools/types.ts'))?.[1] ?? '').matchAll(/'([a-z_]+)'/gu)].map(m => m[1]!);
-  assert.deepEqual(runKinds.sort(), ['chat', 'review', 'task']);
+  assert.deepEqual(runKinds.sort(), ['agent', 'chat', 'review', 'task']);
   for (const kind of runKinds) assert.notEqual(runKindLabel(kind), kind);
   const pipeline = source('src/tools/pipeline.ts');
   const decidedBy = new Set([

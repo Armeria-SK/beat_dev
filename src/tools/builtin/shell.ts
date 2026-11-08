@@ -118,7 +118,7 @@ export const shellRun: ToolDef<ShellInput> = {
     timeoutSec: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
   }, { additionalProperties: false }),
   effect: 'exec',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck: shellPreCheck,
   summarize: (input, language) => ({ title: toolText(language, 'summary.shell'), body: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) }),
   async execute(input, ctx, info) {

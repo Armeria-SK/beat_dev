@@ -53,7 +53,7 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
   description: 'テキストファイルを読む。offset（何行目から、1始まり）と limit（何行）で一部だけ読める。',
   input: Type.Object({ path: PathArg, offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })) }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   // downloads/ の下は外の中身なので、読んだ実行に「外から読んだ」印を付ける（doc_read と同じ）。断られた読み取りは印を付けない
   preCheck: (input, ctx) => {
     const { abs, check } = checkFilePath(input.path, 'read', ctx);
@@ -86,7 +86,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
   }, { additionalProperties: false }),
   effect: 'write',
   folderGrant: true,
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck: (input, ctx) => ({ ...checkFilePath(input.path, 'write', ctx).check, sends: false, removes: false }),
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_write', { path: input.path }), body: input.content.slice(0, 4000) }),
   async execute(input, ctx) {
@@ -112,7 +112,7 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
   input: Type.Object({ path: PathArg, old: Type.String({ minLength: 1 }), new: Type.String(), all: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'write',
   folderGrant: true,
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck: (input, ctx) => ({ ...checkFilePath(input.path, 'write', ctx).check, sends: false, removes: false }),
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_edit', { path: input.path }), body: `- ${input.old.slice(0, 2000)}\n+ ${input.new.slice(0, 2000)}` }),
   async execute(input, ctx) {
@@ -139,7 +139,7 @@ export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }>
     all: Type.Optional(Type.Boolean({ description: 'node_modules・.git など大きなフォルダの中も一覧する' })),
   }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck: (input, ctx) => checkFilePath(input.path ?? '.', 'read', ctx).check,
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path ?? '.', 'read', ctx);

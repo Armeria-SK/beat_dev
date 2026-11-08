@@ -111,6 +111,16 @@ export function ToolsConfig() {
     policies: Type.Record(Type.String(), Type.Union([Type.Literal('allow'), Type.Literal('ask'), Type.Literal('block')]), { default: {} }),
     // 1 回の実行で道具を呼べる回数。0 は制限なし（止めるのは、止めるボタン・取り消し・割り込み・承認の拒否や時間切れ・コンテキストの量だけ）
     maxIterations: Type.Integer({ minimum: 0, maximum: 100, default: 16 }),
+    // 子の担当（agent_run）。既定は無効で、無効のあいだは今までと同じ（道具もモデルに渡らない）。深さは 1 で固定（設定にしない）
+    agent: Type.Object({
+      enabled: Type.Boolean({ default: false }),
+      // タスクの実行からも使えるか（既定は会話だけ）
+      inTasks: Type.Boolean({ default: false }),
+      // 1 回の親の実行で始められる子の数
+      maxPerRun: Type.Integer({ minimum: 1, maximum: 5, default: 3 }),
+      // 子 1 本の時間の上限（秒）
+      timeoutSec: Type.Integer({ minimum: 60, maximum: 3600, default: 600 }),
+    }, { additionalProperties: false, default: {} }),
   }, { additionalProperties: false, default: {} });
 }
 

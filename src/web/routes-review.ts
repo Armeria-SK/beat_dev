@@ -4,7 +4,7 @@ import { curiosityText } from '../curiosity/text.ts';
 import { languageOf } from '../shared/language.ts';
 import { TRIGGER_TEXT } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
-import { isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
+import { defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
 import { taskView } from '../tasks/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
@@ -40,7 +40,8 @@ export function registerReviewRoutes(router: Router, app: App): void {
     if (!isPolicyable(name)) throw problem(400, 'invalid_field', 'tool_not_policyable', { field: 'name', params: { name } });
     const current = app.config();
     const policies = { ...current.tools.policies };
-    if (body.policy === 'allow') delete policies[name]; else policies[name] = body.policy;
+    // 既定に戻すときは書いた項目を消す（既定が ask の agent_run を allow にするときは、allow と書く）
+    if (body.policy === defaultPolicy(name)) delete policies[name]; else policies[name] = body.policy;
     const saved = await app.applyConfig({ ...current, tools: { ...current.tools, policies } }, { probe: false });
     sendJson(res, 200, { tool: toolView(tool, saved) });
   });

@@ -41,7 +41,7 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
     offset: Type.Optional(Type.Integer({ minimum: 0, description: '何文字目から読むか（前回の続き）' })),
   }, { additionalProperties: false }),
   effect: 'network',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.config.tools.web.fetch) return { decision: 'deny', reasons: [guardText(language, 'web.fetch_off')] };
@@ -86,7 +86,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
   }, { additionalProperties: false }),
   effect: 'network',
-  allowedIn: ['chat', 'task'],
+  allowedIn: ['chat', 'task', 'agent'],
   preCheck(input, ctx) {
     const w = ctx.config.tools.web;
     const language = languageOf(ctx.config);

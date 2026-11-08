@@ -13,7 +13,7 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined> } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number } = {}) {
   const dir = tempDir(t);
   // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
@@ -30,6 +30,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, ...(options.env ? { env: options.env } : {}),
     adapterOverride: provider => { const made = new FakeAdapter(provider); adapters.set(provider.id, made); return made; },
     ...(options.tools ? { tools: options.tools } : {}),
+    ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
   });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);

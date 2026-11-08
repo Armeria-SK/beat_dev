@@ -12,6 +12,11 @@ function insertOldConversation(db: ReturnType<typeof openDatabase>, id: string, 
   db.prepare('INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES (?, ?, ?, 1, 1)').run(id, kind, id);
 }
 
+// 旧い段階の DB には parent_run_id の列が無いので、Runs.start は使わず、旧い列だけで入れる
+function startOld(db: ReturnType<typeof openDatabase>, id: string, kind: string, conversationId: string): void {
+  db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at) VALUES (?, ?, ?, 1)').run(id, kind, conversationId);
+}
+
 // 段 8b（審査の直し）: 会話ごとの「外から読んだことがある」印（Q16 のあとは、判定役を止めず、判定役に見せる文の 1 行だけに使う。送る・消すを止めるのは humanOnlyOf）と、会話ごとの「自動承認で外を読んだことがある」印（その会話のシェルのコマンドと通信は、ずっと毎回確かめる）
 
 test('マイグレーション 12: conversations に ever_tainted、engine_runs に auto_read_outside が足される。前に外から読んだ実行のある会話は 1 になり、ほかは 0', t => {
@@ -20,10 +25,10 @@ test('マイグレーション 12: conversations に ever_tainted、engine_runs 
   const before = openDatabase(path, MIGRATIONS.slice(0, 11));
   const runs = new Runs(before);
   for (const id of ['clean', 'read-web', 'read-web-task']) insertOldConversation(before, id);
-  runs.start('r-clean', 'chat', 'clean');
-  runs.start('r-web', 'chat', 'read-web');
+  startOld(before, 'r-clean', 'chat', 'clean');
+  startOld(before, 'r-web', 'chat', 'read-web');
   runs.markTainted('r-web');
-  runs.start('r-task', 'task', 'read-web-task');
+  startOld(before, 'r-task', 'task', 'read-web-task');
   runs.markTainted('r-task');
   before.close();
   const db = openDatabase(path, MIGRATIONS.slice(0, 12));
@@ -77,10 +82,10 @@ test('マイグレーション 13: conversations に ever_auto_read が足され
   const before = openDatabase(path, MIGRATIONS.slice(0, 12));
   const runs = new Runs(before);
   for (const id of ['clean', 'read-outside', 'later']) insertOldConversation(before, id);
-  runs.start('r-clean', 'chat', 'clean');
-  runs.start('r-outside', 'chat', 'read-outside');
+  startOld(before, 'r-clean', 'chat', 'clean');
+  startOld(before, 'r-outside', 'chat', 'read-outside');
   before.prepare('UPDATE engine_runs SET auto_read_outside = 1 WHERE id = ?').run('r-outside');
-  runs.start('r-later', 'chat', 'later');
+  startOld(before, 'r-later', 'chat', 'later');
   before.close();
   const db = openDatabase(path, MIGRATIONS);
   try {
@@ -100,7 +105,7 @@ test('マイグレーション 14: main の段階（8）の DB から更新す�
   const path = join(tempDir(t), 'clive.db');
   const main = openDatabase(path, MIGRATIONS.slice(0, 8));
   for (const [id, kind] of [['old-chat', 'chat'], ['old-chat-with-run', 'chat'], ['old-task', 'task']] as const) insertOldConversation(main, id, kind);
-  new Runs(main).start('r-old', 'chat', 'old-chat-with-run');
+  startOld(main, 'r-old', 'chat', 'old-chat-with-run');
   main.close();
   const db = openDatabase(path, MIGRATIONS);
   try {

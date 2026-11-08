@@ -1,6 +1,8 @@
 import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { openSetup } from './onboarding.ts';
 import type { Message, PendingMessage, Profile } from './api.ts';
+import type { AgentLive } from './events.ts';
+import { chatHash } from './routes.ts';
 import { Avatar } from './Avatar.tsx';
 import { chatTime, firstLine, TextThrottle, toolIcon, type ContextNumbers } from './chat-logic.ts';
 import { useNow } from './hooks.ts';
@@ -61,7 +63,7 @@ export const UserMessage = memo(function UserMessage({ message }: { message: Mes
 });
 
 // 実行中に送って、まだ履歴に入っていない発言。「待ち」の印と取り消しのボタンを添える（入ると、ふつうの発言になる）
-export function PendingMessageRow({ pending, onCancel }: { pending: PendingMessage; onCancel: () => void }) {
+export function PendingMessageRow({ pending, onCancel, waitingAgent = false }: { pending: PendingMessage; onCancel: () => void; waitingAgent?: boolean }) {
   const t = useT();
   return (
     <div className="chat-user chat-pending">
@@ -74,7 +76,7 @@ export function PendingMessageRow({ pending, onCancel }: { pending: PendingMessa
         </div>
       ) : null}
       <span className="chat-meta">
-        <span className="tag tag-neutral">{t('chat.pending.tag')}</span> {pending.interrupt ? t('chat.pending.afterStop') : t('chat.pending.hint')}
+        <span className="tag tag-neutral">{t('chat.pending.tag')}</span> {pending.interrupt ? t('chat.pending.afterStop') : waitingAgent ? t('pending.waitAgent') : t('chat.pending.hint')}
         <button type="button" className="btn btn-ghost chat-pending-cancel" onClick={onCancel}>{t('chat.pending.cancel')}</button>
       </span>
     </div>
@@ -178,7 +180,7 @@ export function ThinkingRow({ profile, startedAt }: { profile: Profile | null; s
   );
 }
 
-export function RunningTool({ name, input, startedAt, checking = false }: { name: string; input: string; startedAt: number | null; checking?: boolean }) {
+export function RunningTool({ name, input, startedAt, checking = false, agent }: { name: string; input: string; startedAt: number | null; checking?: boolean; agent?: AgentLive | undefined }) {
   const t = useT();
   const seconds = secondsSince(startedAt, useNow(1000, startedAt !== null));
   return (
@@ -188,6 +190,7 @@ export function RunningTool({ name, input, startedAt, checking = false }: { name
       <span className="chat-tool-name">{name}</span>
       <span className="chat-shimmer chat-tool-first">{checking ? t('mode.autoChecking') : input}</span>
       {seconds !== null && <span className="chat-meta">{t('chat.seconds', seconds)}</span>}
+      {agent && <span className="chat-meta">{t('activity.agent.running', agent.toolCalls)} <a className="chat-link" href={chatHash(agent.conversationId)}>{t('activity.agent.open')}</a></span>}
     </div>
   );
 }

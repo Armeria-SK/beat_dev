@@ -237,7 +237,7 @@ test('baseTokens: 言語に合うルールの長さで見積もる', async t => 
   const s = await startApp(t);
   const rest = () => {
     const config = s.app.config();
-    return estimateToolTokens(ToolRegistry.specs(s.app.tools.forRun('chat'))) + 64;
+    return estimateToolTokens(ToolRegistry.specs(s.app.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' }))) + 64; // 既定では agent_run は無効で、モデルに渡らない
   };
   const expected = (language: Language) => estimateTextTokens(buildSnapshot(s.paths, { skills: '' }, language).text)
     + estimateTextTokens(buildDynamic(s.app.config().timezone, language)) + rest();
