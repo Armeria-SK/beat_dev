@@ -16,8 +16,8 @@ const broken: ThemeStorage = { getItem: () => { throw new Error('blocked'); }, s
 test('テーマはデザインの 6 つで、tokens.css のテーマの区切りと同じ並び', () => {
   assert.deepEqual([...THEMES], ['light', 'dusk', 'sand', 'mist', 'moss', 'ember']);
   const css = readFileSync(new URL('../web/src/ui/styles/tokens.css', import.meta.url), 'utf8');
-  const blocks = [...css.matchAll(/:root\[data-theme="([a-z]+)"\]/gu)].map(m => m[1]);
-  assert.deepEqual(blocks, THEMES.filter(theme => theme !== 'light'));
+  const blocks = [...css.matchAll(/\[data-theme="([a-z]+)"\] \{/gu)].map(m => m[1]);
+  assert.deepEqual(blocks, [...THEMES]);
 });
 
 test('保存が無い・知らない値（古い画面の dark / auto を含む）・読めないときは light', () => {
