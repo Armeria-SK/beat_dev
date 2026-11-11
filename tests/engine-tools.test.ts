@@ -126,7 +126,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 2; i++) await new Promise(r => setTimeout(r, 10));
   const second = (s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>)[1]!;
   assert.ok(second, '2 回目も確かめが出る');
-  assert.doesNotMatch(second.approval.reasons[0]!, /touches Clive itself/u, '無害な中身には目印が付かない');
+  assert.doesNotMatch(second.approval.reasons[0]!, /Clive itself/u, '無害な中身には目印が付かない');
   s.app.approvals.decide(second.approval.id, 'conversation');
   assert.ok((await again.done).ok);
   assert.equal(readFileSync(marker, 'utf8'), 'harmless', '許可すれば動く（拒否の確認が空振りでないことの対照）');

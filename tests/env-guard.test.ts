@@ -65,8 +65,8 @@ test('file_write・file_edit: .env（App が書くもの）への書き込みは
   for (const path of [f.paths.env, `${f.paths.env}.bak`, join(f.paths.data, 'app', '.env.9.9.tmp')]) {
     const result = await call('file_write', { path, content: 'FAKE_KEY=stolen\n' });
     assert.match(result.output.content, /denied/u, path);
-    const edit = await call('file_edit', { path, old_string: 'original', new_string: 'stolen' });
-    assert.match(edit.output.content, /denied|not found|does not exist|is not valid/u, path);
+    const edit = await call('file_edit', { path, old: 'original', new: 'stolen' });
+    assert.match(edit.output.content, /denied/u, path);
   }
   assert.equal(readFileSync(f.paths.env, 'utf8'), 'FAKE_KEY=original\n');
   assert.equal(existsSync(`${f.paths.env}.bak`), false);

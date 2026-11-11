@@ -37,16 +37,18 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
     reason: '過去の移し替えの SQL の中のコメント（履歴なので書き換えない）',
   },
   'web/src/weekdays.ts': { strings: ['月', '火', '水', '木', '金', '土', '日'], reason: 'API に送る曜日の値（src/tasks/schedule.ts の DAY_MAP と対）' },
+  'src/tools/builtin/table-core.ts': { strings: ['\u{FF1D}', '\u{FF0B}', '\u{FF0D}', '\u{FF20}'], reason: 'FORMULA_LEADS: 全角の ＝ ＋ － ＠ で始まるセルも式として無害化する（CSV の式の注入。安全）' },
+  'src/engine/chat.ts': { strings: ['\u{3000}'], reason: 'toFullWidth: 子の答えの中の区切りを全角にして、区切りの偽装を防ぐ（空白は全角の空白に。安全）' },
 };
 
-// 一時の一覧（段階 0 の途中の PR だけ）: まだ英語にしていないファイル → 残りの数（このファイルは次の PR で直す）。0-2a-3・0-2a-4・0-2b で減らし、0-2b で空にする。
+// 一時の一覧（段階 0 の途中の PR だけ）: まだ英語にしていないファイル → 残りの数（上の例外の文字列を除いた数。このファイルは次の PR で直す）。0-2a-3・0-2a-4・0-2b で減らし、0-2b で空にする。
 const PENDING: Record<string, number> = {
   'src/app.ts': 9,
   'src/config/store.ts': 47,
   'src/curiosity/text.ts': 5,
   'src/db/conversations.ts': 2,
   'src/db/database.ts': 1,
-  'src/engine/chat.ts': 4,
+  'src/engine/chat.ts': 3,
   'src/engine/health.ts': 2,
   'src/engine/persona.ts': 13,
   'src/engine/prompts.ts': 19,
@@ -82,7 +84,7 @@ const PENDING: Record<string, number> = {
   'src/tools/builtin/notify.ts': 1,
   'src/tools/builtin/shell.ts': 8,
   'src/tools/builtin/skills.ts': 4,
-  'src/tools/builtin/table-core.ts': 7,
+  'src/tools/builtin/table-core.ts': 3,
   'src/tools/builtin/tables.ts': 2,
   'src/tools/builtin/tasks.ts': 9,
   'src/tools/builtin/web.ts': 3,
@@ -99,7 +101,7 @@ const PENDING: Record<string, number> = {
   'src/web/static.ts': 1,
 };
 
-const japaneseLines = (text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.trim());
+const japaneseLines = (text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.replace(/^[ \t]+|[ \t]+$/gu, ''));
 
 type Hit = { line: number; text: string };
 
@@ -157,16 +159,19 @@ test('英語だけの見張り: src と web/src の日本語の文字列は、�
   const show = (file: string, hits: Hit[]) => hits.map(hit => `  ${file}:${hit.line}: ${hit.text.slice(0, 100)}`).join('\n');
   const problems: string[] = [];
   for (const [file, hits] of found) {
-    const allowed = EXCEPTIONS[file];
+    const left = [...(EXCEPTIONS[file]?.strings ?? [])];
+    const rest: Hit[] = [];
+    for (const hit of hits) {
+      const trial = [...left];
+      const ok = japaneseLines(hit.text).every(line => { const at = trial.indexOf(line); if (at < 0) return false; trial.splice(at, 1); return true; });
+      if (ok) left.splice(0, left.length, ...trial); else rest.push(hit);
+    }
+    if (left.length) problems.push(`${file}: 許した文字列が見つからない（消えたら一覧から外す）: ${JSON.stringify(left)}`);
     const pending = PENDING[file];
-    if (allowed) {
-      const got = JSON.stringify(hits.flatMap(hit => japaneseLines(hit.text)).sort());
-      const want = JSON.stringify([...allowed.strings].sort());
-      if (got !== want) problems.push(`${file}: 許した文字列と違う\n  見つかった: ${got}\n  許す: ${want}`);
-    } else if (pending !== undefined) {
-      if (hits.length !== pending) problems.push(`${file}: 一時の一覧は ${pending}、見つかったのは ${hits.length}（減ったら一覧の数も減らす）\n${show(file, hits)}`);
-    } else {
-      problems.push(`${file}: 日本語の文字列\n${show(file, hits)}`);
+    if (pending === undefined) {
+      if (rest.length) problems.push(`${file}: 日本語の文字列\n${show(file, rest)}`);
+    } else if (rest.length !== pending) {
+      problems.push(`${file}: 一時の一覧は ${pending}、例外のほかに見つかったのは ${rest.length}（減ったら一覧の数も減らす）\n${show(file, rest)}`);
     }
   }
   for (const file of [...Object.keys(EXCEPTIONS), ...Object.keys(PENDING)]) if (!found.has(file)) problems.push(`${file}: もう日本語が無い（一覧から外す）`);

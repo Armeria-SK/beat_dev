@@ -6,7 +6,7 @@ import { openZip } from '../src/shared/zip.ts';
 import { xlsxText } from '../src/shared/office-text.ts';
 
 test('表: startsLikeFormula は式の始まりを見る', () => {
-  for (const t of ['=1+1', '+1', '-1', '@SUM(A1)', '\tx', '\rx', '\nx', '\uFF1D1']) {
+  for (const t of ['=1+1', '+1', '-1', '@SUM(A1)', '\tx', '\rx', '\nx', '\uFF1D1', '\u{FF0B}1', '\u{FF0D}1', '\u{FF20}SUM(A1)']) {
     assert.equal(startsLikeFormula(t), true, `true: ${JSON.stringify(t)}`);
   }
   for (const t of ['a=1', '', '1-2', '   ', ' a=1', '\u3000x', '\uFEFF', '\u200B']) {

@@ -253,7 +253,6 @@ for (const language of ['en'] as const) {
     const slot = () => ({ id: 't', control: { outcome: 'none' } as never });
     assert.equal((await run(taskComplete, { summary: 's' })).content, 'No task is running');
     assert.equal((await run(askUser, { question: 'q' })).content, 'No task is running. In a conversation, just ask the question directly');
-    const endJa = 'この実行はここで終えてください（追加の作業はしない）。';
     const endEn = 'End this run here (do no further work).';
     assert.equal(await text(taskComplete, { summary: 's' }, withTask(slot())), `Recorded as done. ${endEn}`);
     assert.equal(await text(askUser, { question: 'q' }, withTask(slot())), `Asked the user. It will resume when the answer comes. ${endEn}`);

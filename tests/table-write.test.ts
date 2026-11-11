@@ -337,7 +337,7 @@ test('table_write: 文字の合計は 500 万文字まで。1 セル 32,767 文�
   const over = await s.call({ path: 'big.csv', rows: rows(153) });
   assert.equal(over.decision, 'deny');
   assert.match(over.output.content, /The table has too many characters in total \(5,013,351 characters, up to 5,000,000 characters\)/u);
-  assert.doesNotMatch(over.output.content, /Failed: characters/u);
+  assert.doesNotMatch(over.output.content, /failed/iu);
   const direct = await tableWrite.execute({ path: 'big.csv', rows: rows(153) }, s.ctx);
   assert.equal(direct.isError, true);
   assert.equal(direct.content, 'The table has too many characters in total (5,013,351 characters, up to 5,000,000 characters)');
