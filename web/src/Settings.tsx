@@ -4,8 +4,7 @@ import { ChatDialog } from './ChatDialog.tsx';
 import { copyText } from './clipboard.ts';
 import { useEscapeLayer, useSaveShortcut } from './hooks.ts';
 import { Icon } from './icons.tsx';
-import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
-import { adoptLanguageInDraft, withAdoptedLanguage } from './language.ts';
+import { applyServerSettings, formatDateTimeSmart, useT } from './i18n/index.ts';
 import { modLabel } from './keys.ts';
 import { AccessConfirm } from './settings/AccessConfirm.tsx';
 import { accessKey, accessWidening, type Access } from './settings/access.ts';
@@ -76,15 +75,6 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
     } catch { setLoadFailed(true); }
   }, [kept]);
   useEffect(() => { void load(true); }, [load]);
-
-  // 設定を開いたまま、ほかの場所で言語が保存されたら、保存済みと編集中の language を合わせる
-  const preference = getLanguagePreference();
-  const savedLanguage = useRef<unknown>(undefined);
-  savedLanguage.current = saved?.language;
-  useEffect(() => {
-    setSaved(current => (current ? withAdoptedLanguage(current, preference) : current));
-    setDraft(current => (current ? adoptLanguageInDraft(current, savedLanguage.current, preference) : current));
-  }, [preference]);
 
   const dirty = saved && draft ? countChanges(saved, draft) : 0;
   // 保存していない編集は、設定が閉じられても（戻る・トーストの操作など）次に開いたとき戻せるよう、いつも App の持ち物に写しておく

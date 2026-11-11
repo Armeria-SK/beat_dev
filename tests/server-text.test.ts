@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import { test } from 'node:test';
 import { evaluateContext, errorProbeText } from '../src/providers/context.ts';
 import { providerError } from '../src/providers/types.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
@@ -8,15 +8,12 @@ import { providerText } from '../src/shared/messages/providers.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
 import { taskText } from '../src/shared/messages/tasks.ts';
 import { ApiError } from '../web/src/api.ts';
-import { setLanguagePreference } from '../web/src/i18n/index.ts';
 import { classifyHttpFailure } from '../src/providers/http.ts';
 import { errorBodyText, probeMessage, serverText, warningText } from '../web/src/server-text.ts';
 import { startScreenServer } from './screen-server.ts';
 
-afterEach(() => setLanguagePreference('auto'));
-
-test('コードの訳: 画面の言語の文になり、サーバーが同じ言語で書く文と同じになる（領域ごと）', () => {
-  for (const language of ['ja', 'en'] as const) {
+test('コードの訳: 画面の言語（英語）の文になり、サーバーが英語で書く文と同じになる（領域ごと）', () => {
+  for (const language of ['en'] as const) {
     assert.equal(serverText('http.required', { field: 'title' }, language), httpText(language, 'required', { field: 'title' }));
     assert.equal(serverText('http.too_long', { field: 'body', max: 600 }, language), httpText(language, 'too_long', { field: 'body', max: 600 }));
     assert.equal(serverText('task.error.not_found', { id: 'abc' }, language), taskText(language, 'error.not_found', { id: 'abc' }));
@@ -25,7 +22,6 @@ test('コードの訳: 画面の言語の文になり、サーバーが同じ言
     assert.equal(serverText('engine.run.no_provider', { id: 'x' }, language), engineText(language, 'run.no_provider', { id: 'x' }));
     assert.equal(serverText('http.internal', undefined, language), httpText(language, 'internal'));
   }
-  assert.notEqual(serverText('http.required', { field: 'title' }, 'en'), serverText('http.required', { field: 'title' }, 'ja'), '言語ごとに別の文');
   assert.match(serverText('http.required', { field: 'title' }, 'en')!, /title/u);
 });
 
@@ -48,25 +44,25 @@ const TRACEBACK = 'Traceback (most recent call last):\n  File "/app/server.py", 
 test('返事の失敗の札: 相手のサーバーが返した本文（Python の traceback など）は、どの言語でも、画面に出す文に入らない（短い文だけ）', () => {
   const failure = classifyHttpFailure(400, TRACEBACK);
   assert.doesNotMatch(failure.message, /Traceback|server\.py|ValueError/u, 'サーバーが作る文にも本文は入らない');
-  for (const language of ['ja', 'en'] as const) {
+  for (const language of ['en'] as const) {
     const shown = serverText(`provider.${failure.code}`, failure.params, language)!;
     assert.equal(shown, providerText(language, 'http.rejected', { status: 400 }), `${language}: 「リクエストが拒否されました」だけ`);
     assert.doesNotMatch(shown, /Traceback|server\.py|ValueError/u);
   }
   // 古いサーバーが送った値（suffix に本文が入っている）が届いても、画面の文に本文は出ない
-  for (const language of ['ja', 'en'] as const) {
+  for (const language of ['en'] as const) {
     const old = serverText('provider.http.rejected', { status: 400, suffix: `: ${TRACEBACK}` }, language)!;
     assert.equal(old, providerText(language, 'http.rejected', { status: 400 }));
   }
   for (const [status, code] of [[401, 'http.auth'], [404, 'http.not_found'], [429, 'http.rate_limit'], [500, 'http.server'], [400, 'http.rejected']] as const) {
     const error = classifyHttpFailure(status, TRACEBACK);
     assert.equal(error.code, code);
-    const shown = serverText(`provider.${error.code}`, error.params, 'ja')!;
+    const shown = serverText(`provider.${error.code}`, error.params, 'en')!;
     assert.doesNotMatch(shown, /Traceback|ValueError/u, code);
     assert.ok(shown.includes('HTTP'), `${code}: 状態の番号は残る`);
   }
-  assert.equal(serverText('provider.timeout', {}, 'ja'), providerText('ja', 'timeout'), '本文の無い失敗は今までどおり');
-  assert.equal(serverText('provider.mystery', {}, 'ja'), null, '知らないコードは null（呼ぶ側がサーバーの文を使う）');
+  assert.equal(serverText('provider.timeout', {}, 'en'), providerText('en', 'timeout'), '本文の無い失敗は今までどおり');
+  assert.equal(serverText('provider.mystery', {}, 'en'), null, '知らないコードは null（呼ぶ側がサーバーの文を使う）');
 });
 
 test('API のエラーの本文: code / params と、返事の 409 の errorCode / errorParams を読む。コードが無ければ null', () => {
@@ -90,7 +86,6 @@ test('API のエラーを本物のサーバーから受けて、画面の言語�
   assert.equal(missing.body.code, 'http.required');
   assert.deepEqual(missing.body.params, { field: 'content' });
   assert.equal(errorBodyText(missing.body, 'en'), httpText('en', 'required', { field: 'content' }));
-  assert.equal(errorBodyText(missing.body, 'ja'), httpText('ja', 'required', { field: 'content' }));
 
   const badBook = await post('/api/memories', { book: 'x', content: 'a' });
   assert.equal(errorBodyText(badBook.body, 'en'), httpText('en', 'bad_book'));
@@ -110,16 +105,12 @@ test('API のエラーを本物のサーバーから受けて、画面の言語�
   assert.equal(badWhen.body.code, 'http.bad_when');
   assert.equal(errorBodyText(badWhen.body, 'en'), httpText('en', 'bad_when'));
 
-  setLanguagePreference('en');
   const error = new ApiError(missing.status, missing.body);
-  assert.equal(error.message, httpText('en', 'required', { field: 'content' }), 'ApiError の message は、画面の言語の文');
+  assert.equal(error.message, httpText('en', 'required', { field: 'content' }), 'ApiError の message は、画面の言語（英語）の文');
   assert.equal(error.body, missing.body, '本文はそのまま持つ');
-  setLanguagePreference('ja');
-  assert.equal(new ApiError(missing.status, missing.body).message, httpText('ja', 'required', { field: 'content' }));
 });
 
 test('ApiError: コードが無い・辞書に無いときは、サーバーの文のまま。errorMessage だけの本文も読む', () => {
-  setLanguagePreference('en');
   assert.equal(new ApiError(404, { error: 'not_found', message: 'サーバーの文' }).message, 'サーバーの文');
   assert.equal(new ApiError(400, { code: 'http.future_code', message: '未来のコード' }).message, '未来のコード');
   assert.equal(new ApiError(409, { errorMessage: '詳しい文', errorKind: 'busy' }).message, '詳しい文');
@@ -139,17 +130,17 @@ test('警告: コードから画面の言語の文にする。再試行は理由
     ['queued_not_started', { count: 2 }, 'warn.queued_not_started', { count: 2 }],
     ['server_truncation_suspected', { actual: 900, estimate: 5000 }, 'warn.server_truncation', { actual: 900, estimate: 5000 }],
   ];
-  for (const language of ['ja', 'en'] as const) {
+  for (const language of ['en'] as const) {
     for (const [code, params, key, args] of cases) {
       assert.equal(warningText({ code, message: 'サーバーの文', params }, language), engineText(language, key as never, args), `${language} ${code}`);
     }
   }
   const error = providerError('rate_limit', 'http.rate_limit', { status: 429 });
-  const secret = warningText({ code: 'retrying', message: 'サーバーの文', params: { seconds: 8, attempt: 2, retries: 3, errorCode: 'provider.http.server', errorParams: { status: 500, suffix: ': Traceback (most recent call last): boom' } } }, 'ja');
+  const secret = warningText({ code: 'retrying', message: 'サーバーの文', params: { seconds: 8, attempt: 2, retries: 3, errorCode: 'provider.http.server', errorParams: { status: 500, suffix: ': Traceback (most recent call last): boom' } } }, 'en');
   assert.doesNotMatch(secret, /Traceback|boom/u, '再試行の知らせにも、相手の本文は出さない');
-  assert.match(secret, /プロバイダ側のエラーです（HTTP 500）/u);
+  assert.match(secret, /The provider reported an error \(HTTP 500\)/u);
   const retryParams = { seconds: 8, attempt: 2, retries: 3, errorCode: 'provider.http.rate_limit', errorParams: error.params };
-  for (const language of ['ja', 'en'] as const) {
+  for (const language of ['en'] as const) {
     assert.equal(
       warningText({ code: 'retrying', message: 'サーバーの文', params: retryParams }, language),
       engineText(language, 'warn.retrying', { message: error.text(language), seconds: 8, attempt: 2, retries: 3 }),
@@ -180,7 +171,7 @@ test('モデルの確認の説明: サーバーが作る probe の message を�
   for (const fact of facts) {
     for (const from of ['ja', 'en'] as const) {
       const served = evaluateContext({ ...fact, language: from });
-      for (const to of ['ja', 'en'] as const) {
+      for (const to of ['en'] as const) {
         const expected = evaluateContext({ ...fact, language: to }).message;
         assert.equal(probeMessage(served, to), expected, `${fact.modelId}: ${from} で届いたものを ${to} で`);
       }

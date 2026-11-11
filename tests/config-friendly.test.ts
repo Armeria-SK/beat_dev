@@ -155,13 +155,11 @@ test('API: 設定の保存の 400 は、issues に場所・友好的な文・コ
   const port = res.body.issues.find((i: any) => i.path === 'server.port');
   assert.deepEqual(port.params, { min: 1, max: 65535 });
   for (const text of [...res.body.problems, res.body.message]) assert.doesNotMatch(text, RAW, text);
-  // 画面の読み取り: 英語なら英語の文、日本語なら日本語の文。コードの無い古い応答はサーバーの文のまま
+  // 画面の読み取り: サーバーが日本語で書いていても英語の文。コードの無い古い応答はサーバーの文のまま
   const draft: Config = { providers: [{ id: 'Anthropic' }], models: [] };
   const english = problemsOf(res.body, 'failed', draft, 'en');
   assert.match(english.find(p => p.path === 'providers.Anthropic.id')!.message, /^An ID uses lowercase letters/u);
   assert.equal(english.find(p => p.path === 'server.port')!.message, 'Use a number from 1 to 65535');
-  const japanese = problemsOf(res.body, 'failed', draft, 'ja');
-  assert.match(japanese.find(p => p.path === 'providers.Anthropic.id')!.message, /小文字・数字/u);
   assert.equal(issueMessage({ path: 'a', message: 'サーバーの文' }, 'en'), 'サーバーの文');
   assert.equal(issueMessage({ path: 'a', message: 'x', code: 'config.nope.nope' }, 'en'), 'x', '表に無いコードも、サーバーの文のまま');
   assert.equal(issueMessage({ path: 'a', message: 'x', code: 'config.number.range', params: { min: 1 } }, 'en'), 'x', '差し込みの値が足りなければ、サーバーの文のまま');

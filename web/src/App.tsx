@@ -15,7 +15,6 @@ import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
 import { mergeNotice, recountsUsage, withChecklistEvent, type ChecklistView } from './chat-logic.ts';
-import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
 import { undoMemoryEvent } from './memory-undo.ts';
@@ -90,7 +89,7 @@ export function App() {
   const behindSettings = useRef<Route | null>(null);
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
-  const [setupStart, setSetupStart] = useState<StepId>('language');
+  const [setupStart, setSetupStart] = useState<StepId>('you');
   const setupChecked = useRef(false);
   const keptSettings = useRef<KeptEdits | null>(null);
   const taskConversations = useRef(new Map<string, string>());
@@ -186,7 +185,7 @@ export function App() {
     addEventListener(OPEN_SETUP_EVENT, on);
     return () => removeEventListener(OPEN_SETUP_EVENT, on);
   }, [openSetupAt]);
-  const rerunSetup = useCallback(() => { closeSettings(); openSetupAt('language'); }, [closeSettings, openSetupAt]);
+  const rerunSetup = useCallback(() => { closeSettings(); openSetupAt('you'); }, [closeSettings, openSetupAt]);
   const finishSetup = useCallback((conversationId: string | null) => {
     setSetupOpen(false);
     refreshOnboarding(); refreshMeta(); refreshList();
@@ -508,7 +507,7 @@ export function App() {
           mode={mode} drawerOpen={drawerOpen} route={shown} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
           waitingCount={waiting.size} restartRequired={restartRequired}
-          setupPending={onboarding !== null && !onboarding.done && !setupOpen} onSetup={() => openSetupAt(onboarding ? resumeStep(onboarding.steps) : 'language')}
+          setupPending={onboarding !== null && !onboarding.done && !setupOpen} onSetup={() => openSetupAt(onboarding ? resumeStep(onboarding.steps) : 'you')}
           onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
           onRename={setRenaming} onSummary={setSummaryFor} onArchive={c => void archiveConversation(c.id, c.title, t, onConversationChanged)} onDelete={setDeleting}
         />
@@ -523,7 +522,6 @@ export function App() {
                 panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onTogglePanel={togglePanel}
               />
             )}
-          <LanguagePrompt suppressed={onboarding !== null && !onboarding.done} />
           <div className="content" key={viewKey}>
             {shown.page === 'chat' && (
               <Chat

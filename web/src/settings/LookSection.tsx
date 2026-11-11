@@ -5,8 +5,7 @@ import type { Runtime } from '../avatar.ts';
 import { useTheme } from '../hooks.ts';
 import { copyText } from '../clipboard.ts';
 import { Icon } from '../icons.tsx';
-import { LANGUAGES, useT, type LanguagePreference } from '../i18n/index.ts';
-import { configWithLanguage } from '../language.ts';
+import { useT } from '../i18n/index.ts';
 import { setThemeMode, type ThemeMode } from '../theme.ts';
 import { toast } from '../toast.tsx';
 import { ColorField, FieldRow, SegField } from './fields.tsx';
@@ -26,7 +25,6 @@ export function LookSection({ draft, saved, update, problems }: SectionProps) {
   const t = useT();
   const { mode: themeMode } = useTheme();
   const profile = draft.profile as { name: string; shape: string; color: string; motion: string };
-  const language = (draft.language as LanguagePreference | undefined) ?? 'auto';
   const [preview, setPreview] = useState<Preview>('idle');
   const [defaults, setDefaults] = useState<TemplatesView | null>(null);
   const [defaultsOpen, setDefaultsOpen] = useState(false);
@@ -83,9 +81,6 @@ export function LookSection({ draft, saved, update, problems }: SectionProps) {
         </FieldRow>
         <FieldRow label={t('settings.theme')} desc={t('settings.theme.desc')}>
           <SegField<ThemeMode> value={themeMode} label={t('settings.theme')} options={[{ value: 'auto', label: t('settings.theme.auto') }, { value: 'light', label: t('settings.theme.light') }, { value: 'dark', label: t('settings.theme.dark') }]} onChange={setThemeMode} />
-        </FieldRow>
-        <FieldRow label={t('settings.language')} desc={t('settings.language.desc')} changed={differs(saved, draft, c => c.language ?? null)} path="language" error={errorFor(problems, 'language')}>
-          <SegField<LanguagePreference> value={language} label={t('settings.language')} options={[{ value: 'auto', label: t('settings.language.auto') }, ...LANGUAGES.map(l => ({ value: l as LanguagePreference, label: t(`lang.${l}`) }))]} onChange={v => update(c => configWithLanguage(c, v))} />
         </FieldRow>
       </div>
 

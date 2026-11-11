@@ -143,7 +143,7 @@ export interface ReviewJob {
 }
 
 export interface TemplatesView { language: string; rules: string; files: Array<{ name: string; content: string }> }
-export interface OnboardingView { done: boolean; steps: { language: boolean; user: boolean; identity: boolean; persona: boolean; model: boolean } }
+export interface OnboardingView { done: boolean; steps: { user: boolean; identity: boolean; persona: boolean; model: boolean } }
 export interface PersonaWrite { userName?: string; callMe?: string; botName?: string; style?: 'calm' | 'friendly' | 'direct' | 'none'; styleNote?: string }
 export interface PersonaView { soul: string; user: string; tokens: { soul: number; user: number }; budget: number | null; max: number }
 // API キーの状態（GET /api/providers/:id/key）。鍵そのものは返らない

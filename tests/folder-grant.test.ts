@@ -16,7 +16,6 @@ import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { grantFolderLabel } from '../web/src/chat-logic.ts';
@@ -283,12 +282,11 @@ test('エンジンと API: 添付を読んだ実行の file_write の札に gran
   assert.equal(bad.body.params.values, 'once / conversation / folder / deny');
 });
 
-test('画面: 札の「フォルダの許可」と実行ログの文が日本語・英語にあり、英語に日本語が混ざらない。決定は folder として送られる', async () => {
+test('画面: 札の「フォルダの許可」と実行ログの文が英語の辞書にあり、日本語が混ざらない。決定は folder として送られる', async () => {
   const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
   const keys = ['approval.folder', 'runs.by.folder', 'runs.grantFolder'] as const;
-  for (const key of keys) assert.ok(key in ja && key in en, key);
-  assert.match((ja['approval.folder'] as (folder: string) => string)('C:/work/notes'), /C:\/work\/notes/u);
-  assert.match((ja['approval.folder'] as (folder: string) => string)('C:/work/notes'), /返事/u);
+  for (const key of keys) assert.ok(key in en, key);
+  assert.match((en['approval.folder'] as (folder: string) => string)('C:/work/notes'), /this reply/u);
   assert.doesNotMatch((en['approval.folder'] as (folder: string) => string)('C:/work/notes'), CJK);
   assert.match((en['approval.folder'] as (folder: string) => string)('C:/work/notes'), /C:\/work\/notes/u);
   assert.doesNotMatch(en['runs.by.folder'] as string, CJK);

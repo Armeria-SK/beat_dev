@@ -1,7 +1,7 @@
-import type { ja } from './ja.ts';
+import type { en } from './en.ts';
 
 export type Dict = {
-  [K in keyof typeof ja]: (typeof ja)[K] extends (...args: infer A) => string ? (...args: A) => string : string;
+  [K in keyof typeof en]: (typeof en)[K] extends (...args: infer A) => string ? (...args: A) => string : string;
 };
 export type DictKey = keyof Dict;
 // 引数の要らない（文字列の）項目のキー。画面の名前の表など、キーを変数で持つところはこちらを使う。

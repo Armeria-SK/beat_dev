@@ -4,7 +4,6 @@ import { accessKey, accessWidening } from '../web/src/settings/access.ts';
 import { applyEdits, diffConfig } from '../web/src/settings/merge.ts';
 import type { Config } from '../web/src/settings/model.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 
 function base(): Config {
   return {
@@ -194,17 +193,11 @@ test('確認の印: 同じ広がりなら同じ、違えば違う', () => {
   assert.notEqual(accessKey(a), accessKey([]));
 });
 
-test('辞書: 広がりの文は ja と en の両方にあり、en は ja の写しではない', () => {
-  const keys = Object.keys(ja).filter(k => k.startsWith('access.'));
+test('辞書: 広がりの文は en にあり、差し込みが入る', () => {
+  const keys = Object.keys(en).filter(k => k.startsWith('access.'));
   assert.ok(keys.length >= 20, `${keys.length} 件しか読めていない`);
-  for (const key of keys) {
-    const jaEntry = (ja as Record<string, unknown>)[key];
-    const enEntry = (en as Record<string, unknown>)[key];
-    assert.equal(typeof enEntry, typeof jaEntry, key);
-    if (typeof jaEntry === 'string') assert.notEqual(enEntry, jaEntry, `${key}: 訳し忘れ`);
-  }
-  const line = (ja['access.hookAdded'] as (a: string, b: string) => string)('使う前', 'shell_run → node guard.js');
-  assert.equal(line, 'フックを足す（使う前）: shell_run → node guard.js');
+  const line = (en['access.hookAdded'] as (a: string, b: string) => string)('before use', 'shell_run → node guard.js');
+  assert.equal(line, 'Add a hook (before use): shell_run → node guard.js');
 });
 
 test('広がりの検出（プロバイダの外向き）: 送り先がこの PC の外のアドレスに変わる・足される / 使うキーが増える・変わる。キーと一緒に外へ出る組み合わせも両方並べる', () => {
@@ -354,10 +347,8 @@ test('広がりの検出（道具ごとの方針）: 止める → 承認を求�
   assert.notEqual(accessKey(toAsk), accessKey(toAllow));
 });
 
-test('広がりの確かめの文: 道具ごとの方針を緩める行は、道具の名前と前後の方針（辞書の名前）を出す。ja と en の辞書にある', () => {
-  assert.equal(typeof ja['access.toolPolicy'], 'function');
+test('広がりの確かめの文: 道具ごとの方針を緩める行は、道具の名前と前後の方針（辞書の名前）を出す。en の辞書にある', () => {
   assert.equal(typeof en['access.toolPolicy'], 'function');
-  assert.match(ja['access.toolPolicy']('shell_run', '止める', '承認を求める'), /shell_run.*止める.*承認を求める/u);
   assert.match(en['access.toolPolicy']('shell_run', 'Block', 'Ask for approval'), /shell_run.*Block.*Ask for approval/u);
 });
 
@@ -418,20 +409,15 @@ test('広がりの検出（ブラウザの実行ファイル）: channel を pat
   assert.deepEqual(kinds(withBrowser({ channel: 'auto' }), withBrowser({ channel: 'chrome' })), []);
 });
 
-test('辞書（ブラウザの実行ファイル）: access.browserExecutable は ja と en にあり、Chrome 以外を起動しうることを言う', () => {
-  assert.equal(typeof (ja as Record<string, unknown>)['access.browserExecutable'], 'string');
+test('辞書（ブラウザの実行ファイル）: access.browserExecutable は en にあり、Chrome 以外を起動しうることを言う', () => {
   assert.equal(typeof (en as Record<string, unknown>)['access.browserExecutable'], 'string');
-  assert.ok(String(ja['access.browserExecutable']).length > 10);
   assert.ok(String(en['access.browserExecutable']).length > 10);
 });
 
-test('辞書（ブラウザ）: 広がりの文は ja と en にあり、サイトの名前を出す', () => {
+test('辞書（ブラウザ）: 広がりの文は en にあり、サイトの名前を出す', () => {
   for (const key of ['access.browserEnabled', 'access.browserSiteAdded', 'access.browserSiteWidened'] as const) {
-    assert.equal(typeof (ja as Record<string, unknown>)[key], typeof (en as Record<string, unknown>)[key], key);
-    assert.ok((ja as Record<string, unknown>)[key], key);
+    assert.ok((en as Record<string, unknown>)[key], key);
   }
-  assert.match((ja as any)['access.browserSiteAdded']('=mail.example.org'), /mail\.example\.org/u);
   assert.match((en as any)['access.browserSiteAdded']('=mail.example.org'), /mail\.example\.org/u);
-  assert.match((ja as any)['access.browserSiteWidened']('example.com'), /example\.com/u);
   assert.match((en as any)['access.browserSiteWidened']('example.com'), /example\.com/u);
 });

@@ -5,7 +5,6 @@ import { defaultConfig } from '../src/config/store.ts';
 import { renderSkillFile } from '../src/tools/skills/store.ts';
 import type { SkillDraft, SkillSummary } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import { parseRoute, routeHash } from '../web/src/routes.ts';
 import {
   addRoot, broadKind, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersFromConfig, POLICY_LABEL, removeRoot, setRootMode,
@@ -64,7 +63,7 @@ test('通知のリンク: スキルの下書きの通知（#/review）は、そ�
   assert.equal(skillDraftLink({ link: null, title: 'x: y' }), null);
 });
 
-test('道具の一覧: サーバーの一覧（GET /api/tools）の 40 個すべてに、画面の絵と説明（ja と en の辞書）がある。画面にあってサーバーに無い道具も無い', async t => {
+test('道具の一覧: サーバーの一覧（GET /api/tools）の 40 個すべてに、画面の絵と説明（en の辞書）がある。画面にあってサーバーに無い道具も無い', async t => {
   const s = await startScreenServer(t);
   const { tools } = (await (await s.api('/api/tools')).json()) as { tools: Array<{ name: string; effect: keyof typeof EFFECT_LABEL }> };
   const server = builtinTools();
@@ -74,11 +73,11 @@ test('道具の一覧: サーバーの一覧（GET /api/tools）の 40 個すべ
   for (const tool of tools) {
     const look = toolLook(tool.name);
     assert.equal(tool.effect, server.find(def => def.name === tool.name)!.effect, `${tool.name} の効果`);
-    assert.ok(look.desc !== null && look.desc in ja && look.desc in en, `${tool.name} の説明の辞書`);
+    assert.ok(look.desc !== null && look.desc in en, `${tool.name} の説明の辞書`);
     assert.equal(look.desc, `tool.${tool.name}`);
-    assert.ok(EFFECT_LABEL[tool.effect] in ja && EFFECT_LABEL[tool.effect] in en, `${tool.effect} の辞書`);
+    assert.ok(EFFECT_LABEL[tool.effect] in en, `${tool.effect} の辞書`);
   }
-  for (const key of Object.values(POLICY_LABEL)) assert.ok(key in ja && key in en, key);
+  for (const key of Object.values(POLICY_LABEL)) assert.ok(key in en, key);
   assert.deepEqual(toolLook('mystery_tool'), { icon: 'wrench', desc: null }, 'あとから増えた道具は、汎用の絵で説明なし');
   assert.deepEqual(toolLook('__proto__'), { icon: 'wrench', desc: null }, 'Object の予約された名前も、道具ではない');
 });

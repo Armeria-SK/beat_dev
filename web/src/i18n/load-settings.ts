@@ -1,6 +1,6 @@
-import { LANGUAGES, markSettingsApplied, setLanguagePreference, setTimezone } from './state.ts';
+import { setTimezone } from './state.ts';
 
-export interface ServerSettingsView { config: { timezone?: unknown; language?: unknown } }
+export interface ServerSettingsView { config: { timezone?: unknown } }
 
 export interface LoadSettingsOptions {
   waitMs?: number;
@@ -10,12 +10,9 @@ export interface LoadSettingsOptions {
 export const SETTINGS_WAIT_MS = 3000;
 export const SETTINGS_RETRY_MS = 5000;
 
-// サーバーの設定のうち、画面の表示に関わるもの（タイムゾーン・言語）を反映する。language が無ければ「ブラウザの言語」に従う。
+// サーバーの設定のうち、画面の表示に関わるもの（タイムゾーン）を反映する。
 export function applyServerSettings({ config }: ServerSettingsView): void {
   if (typeof config.timezone === 'string') setTimezone(config.timezone);
-  const language = LANGUAGES.find(l => l === config.language);
-  setLanguagePreference(language ?? 'auto');
-  markSettingsApplied();
 }
 
 // 最初の描画は waitMs までしか待たない。そのあとで設定が届いたら、届いた時点で反映する
@@ -28,7 +25,7 @@ export async function loadServerSettings(
   const apply = applyServerSettings;
   let retried = false;
   const attempt = (): Promise<void> => fetchSettings().then(apply, (error: unknown) => {
-    console.warn('Could not load the server settings; showing the default time zone and the browser language', error);
+    console.warn('Could not load the server settings; showing the default time zone', error);
     if (!retried) {
       retried = true;
       setTimeout(() => { void attempt(); }, retryMs);

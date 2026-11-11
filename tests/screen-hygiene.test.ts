@@ -42,9 +42,10 @@ function codeLines(text: string): Array<{ no: number; code: string }> {
   return out;
 }
 
-test('画面の文字は辞書に集める: web/src の辞書（i18n/）の外に、日本語の文字が無い（API に送る曜日の値だけ除く）', () => {
-  // i18n/ だけが、日本語を書いてよい場所。avatars/ は SVG の絵だけ（.ts / .tsx は無い）だが、その中の文字も数える
-  const files = walk(WEB, name => name === 'i18n');
+test('画面は英語だけ: web/src のどこにも（辞書 en.ts も含めて）日本語の文字が無い（API に送る曜日の値だけ除く）', () => {
+  // 辞書も英語の表 1 つだけ。avatars/ は SVG の絵だけ（.ts / .tsx は無い）だが、その中の文字も数える
+  const files = walk(WEB);
+  assert.ok(files.some(file => /[\\/]i18n[\\/]en\.ts$/u.test(file)), '辞書 en.ts を読めていない');
   assert.ok(files.length > 50, `${files.length} ファイルしか読めていない`);
   const hits: string[] = [];
   for (const file of files) {
@@ -62,7 +63,6 @@ test('画面の文字は辞書に集める: web/src の辞書（i18n/）の外�
 // 足すときは、組み立てる側（値の種類が決まっているところ）を確かめて、ここに理由を書く。クラス名の組み立て（`pane${x}` など）は、キーに「.」が続かないので数えない。
 const DYNAMIC_PREFIXES: Record<string, string> = {
   'chat.kind.': 'Composer.tsx: 入力欄の下の注記の種類ごとの文',
-  'lang.': 'Palette.tsx / settings/LookSection.tsx: 言語の名前（LANGUAGES の値）',
   'mode.': 'Composer.tsx / ModeMenu.tsx / StatusBar.tsx / Chat.tsx: 権限モード（PERMISSION_MODES の値）の名前と説明（mode.normal と mode.normalDesc など）',
   'notifications.kind.': 'settings/AccessConfirm.tsx / settings/NotifySection.tsx: 通知の種類の名前（NOTIFICATION_KINDS の値）',
   'runs.seg.': 'Runs.tsx: 実行ログの切り替えの名前（実行 / 道具 / 振り返り）',
@@ -86,7 +86,7 @@ const DYNAMIC_ONLY: Record<string, readonly string[]> = {
 const builtDynamically = (key: string): boolean => Object.keys(DYNAMIC_PREFIXES).some(prefix => key.startsWith(prefix) && (DYNAMIC_ONLY[prefix]?.includes(key) ?? true));
 
 test('辞書に、使われない項目が無い（キー全体が文字列で出てくるか、書き留めた「前半だけ組み立てるキー」の下にある）', () => {
-  const dictionary = readFileSync(join(WEB, 'i18n', 'ja.ts'), 'utf8');
+  const dictionary = readFileSync(join(WEB, 'i18n', 'en.ts'), 'utf8');
   const keys = [...dictionary.matchAll(/^ {2}'([^']+)':/gmu)].map(m => m[1]!);
   assert.ok(keys.length > 800, `${keys.length} 件しか読めていない`);
   const literals = new Set<string>();
@@ -102,7 +102,7 @@ test('辞書に、使われない項目が無い（キー全体が文字列で�
     }
   };
   for (const file of walk(WEB)) {
-    if (/[\\/]i18n[\\/](ja|en)\.ts$/u.test(file)) continue;
+    if (/[\\/]i18n[\\/]en\.ts$/u.test(file)) continue;
     addFrom(readFileSync(file, 'utf8'));
   }
   // 「.」で終わる前半は、キーの組み立てかもしれないので、書き留めてあるものだけを認める（書き留めていない新しいものが出たら、ここで落ちる）

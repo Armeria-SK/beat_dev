@@ -60,7 +60,7 @@ export function sectionSlice(config: Config, section: SettingsSection): unknown 
     case 'browser': return config.tools?.browser;
     case 'worker': return config.worker;
     case 'memory': return config.memory;
-    case 'look': return [config.profile, config.language ?? null];
+    case 'look': return config.profile;
     case 'server': return config.server;
     default: return undefined;
   }
@@ -100,7 +100,7 @@ export interface Problem {
 }
 
 const SECTION_OF_ROOT: Record<string, SettingsSection> = {
-  models: 'models', routing: 'models', providers: 'providers', tools: 'tools', notify: 'notify', mcp: 'mcp', worker: 'worker', memory: 'memory', profile: 'look', language: 'look', server: 'server',
+  models: 'models', routing: 'models', providers: 'providers', tools: 'tools', notify: 'notify', mcp: 'mcp', worker: 'worker', memory: 'memory', profile: 'look', server: 'server',
 };
 
 // サーバーの問題は文字列で返る。「/models/0/contextLength: Expected…」（形の検査。0 は一覧の位置）か

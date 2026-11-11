@@ -5,7 +5,6 @@ import { newConversationId } from './chat-logic.ts';
 import { useEscapeLayer } from './hooks.ts';
 import { getLanguage, useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
-import { saveLanguage } from './language.ts';
 import {
   emptyModelForm, isOutsideUrl, modelFormProblem, MODEL_SOURCES, personaInputOf, SERVER_KINDS, setupModelConfig, STEPS, STYLE_CHOICES,
   type ModelForm, type ModelFormProblem, type ModelSource, type PersonaFields, type StepId,
@@ -36,7 +35,6 @@ export function Onboarding({ leaving, start, profile, onProfile, onLater, onFini
   const [step, setStep] = useState<StepId>(start);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [language, setLanguage] = useState<'ja' | 'en'>(getLanguage());
   const [fields, setFields] = useState<PersonaFields>({ userName: '', callMe: '', botName: profile?.name ?? 'Clive', style: null, styleNote: '' });
   const [look, setLook] = useState({ shape: profile?.shape ?? 'pebble', color: profile?.color ?? '#61B8A5' });
   const set = (patch: Partial<PersonaFields>) => setFields(current => ({ ...current, ...patch }));
@@ -65,8 +63,7 @@ export function Onboarding({ leaving, start, profile, onProfile, onLater, onFini
   async function advance(): Promise<void> {
     setBusy(true); setError(null);
     try {
-      if (step === 'language') await saveLanguage(language);
-      else if (step === 'you') { const input = personaInputOf(fields, 'you'); if (Object.keys(input).length) await api.onboardingPersona(input); }
+      if (step === 'you') { const input = personaInputOf(fields, 'you'); if (Object.keys(input).length) await api.onboardingPersona(input); }
       else if (step === 'identity') {
         const input = personaInputOf(fields, 'identity');
         if (Object.keys(input).length) onProfile((await api.onboardingPersona(input)).profile);
@@ -95,7 +92,6 @@ export function Onboarding({ leaving, start, profile, onProfile, onLater, onFini
             <button type="button" className="btn btn-ghost ob-later" onClick={onLater} disabled={busy}>{t('onboarding.later')}</button>
           </header>
           <div className="ob-body">
-            {step === 'language' && <LanguageStep value={language} onChange={setLanguage} />}
             {step === 'you' && <YouStep fields={fields} set={set} />}
             {step === 'identity' && <IdentityStep fields={fields} set={set} look={look} setLook={setLook} />}
             {step === 'style' && <StyleStep fields={fields} set={set} />}
@@ -124,19 +120,6 @@ function Step({ title, desc, children }: { title: string; desc?: string; childre
       {desc && <p className="ob-step-desc">{desc}</p>}
       {children}
     </section>
-  );
-}
-
-function LanguageStep({ value, onChange }: { value: 'ja' | 'en'; onChange: (language: 'ja' | 'en') => void }) {
-  const t = useT();
-  return (
-    <Step title={t('onboarding.language.title')} desc={t('onboarding.language.desc')}>
-      <div className="ob-choices" role="radiogroup" aria-label={t('onboarding.language.title')}>
-        {(['ja', 'en'] as const).map(l => (
-          <button key={l} type="button" role="radio" aria-checked={value === l} className={`ob-choice${value === l ? ' on' : ''}`} onClick={() => onChange(l)}>{t(`lang.${l}`)}</button>
-        ))}
-      </div>
-    </Step>
   );
 }
 

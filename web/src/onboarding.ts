@@ -3,15 +3,14 @@ import { uniqueId } from './settings/model.ts';
 
 // はじめの設定の、画面を使わない部分: 手順・続きの位置・モデルの入力から設定への書き換え。
 
-export type StepId = 'language' | 'you' | 'identity' | 'style' | 'model' | 'greeting';
-export const STEPS: readonly StepId[] = ['language', 'you', 'identity', 'style', 'model', 'greeting'];
+export type StepId = 'you' | 'identity' | 'style' | 'model' | 'greeting';
+export const STEPS: readonly StepId[] = ['you', 'identity', 'style', 'model', 'greeting'];
 
-export interface OnboardingSteps { language: boolean; user: boolean; identity: boolean; persona: boolean; model: boolean }
+export interface OnboardingSteps { user: boolean; identity: boolean; persona: boolean; model: boolean }
 export interface OnboardingState { done: boolean; steps: OnboardingSteps }
 
 // 左の一覧の「はじめの設定を続ける」から開いたとき、済んでいない最初の手順から始める。
 export function resumeStep(steps: OnboardingSteps): StepId {
-  if (!steps.language) return 'language';
   if (!steps.user) return 'you';
   if (!steps.identity) return 'identity';
   if (!steps.persona) return 'style';

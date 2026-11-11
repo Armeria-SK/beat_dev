@@ -1,22 +1,18 @@
 import { useSyncExternalStore } from 'react';
 import { en } from './en.ts';
-import { ja } from './ja.ts';
-import { getLanguage, getVersion, subscribe, type Lang } from './state.ts';
+import { getVersion, subscribe } from './state.ts';
 import type { ArgsOf, Dict, DictKey } from './types.ts';
 
 export { formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, parseZonedInput, pluralEn, startOfDay, timezoneLabel, type DateStyle } from './format.ts';
 export { formatElapsed } from './elapsed.ts';
 export { applyServerSettings, loadServerSettings, type LoadSettingsOptions, type ServerSettingsView } from './load-settings.ts';
-export {
-  DEFAULT_LANGUAGE, DEFAULT_TIMEZONE, LANGUAGES, getLanguage, getLanguagePreference, getSettingsApplied, getTimezone, initLanguage, resolveLanguage, setLanguagePreference, setTimezone,
-  type Lang, type LanguagePreference,
-} from './state.ts';
+export { DEFAULT_TIMEZONE, getLanguage, getTimezone, setTimezone, type Lang } from './state.ts';
 export type { DictKey, PlainKey } from './types.ts';
 
-const dictionaries: Record<Lang, Dict> = { ja, en };
+const dictionary: Dict = en;
 
 export function t<K extends DictKey>(key: K, ...args: ArgsOf<K>): string {
-  const entry = dictionaries[getLanguage()][key] as string | ((...a: unknown[]) => string);
+  const entry = dictionary[key] as string | ((...a: unknown[]) => string);
   return typeof entry === 'function' ? entry(...args) : entry;
 }
 

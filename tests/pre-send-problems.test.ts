@@ -115,7 +115,6 @@ test('画面の組み立て: サーバーが ja で書いた 409 を、problems 
     const stripHint = (text: string, body: Record<string, any>): string => { const hint = body.problems[0]?.hint as string | undefined; return hint ? text.replace(`（${hint}）`, '').replace(` (${hint})`, '') : text; };
     assert.notEqual(bodies.ja.errorMessage, bodies.en.errorMessage, `${scenario.name}: 言語ごとに別の文`);
     assert.equal(stripHint(noUsableText(bodies.ja, [], 'en')!, bodies.ja), stripHint(bodies.en.errorMessage, bodies.en), `${scenario.name}: ja の 409 を en の画面で`);
-    assert.equal(stripHint(noUsableText(bodies.en, [], 'ja')!, bodies.en), stripHint(bodies.ja.errorMessage, bodies.ja), `${scenario.name}: en の 409 を ja の画面で`);
-    assert.equal(noUsableText(bodies.ja, [], 'ja'), bodies.ja.errorMessage, `${scenario.name}: 同じ言語なら同じ文`);
+    assert.equal(noUsableText(bodies.en, [], 'en'), bodies.en.errorMessage, `${scenario.name}: 同じ言語なら同じ文`);
   }
 });

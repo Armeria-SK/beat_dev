@@ -5,8 +5,7 @@ import type { ModelView, WorkerStatus } from '../web/src/api.ts';
 import { presenceOf } from '../web/src/avatar.ts';
 import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, classifyRun, convMark, isChatGenerating, type RunContext } from '../web/src/conversation-state.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
-import { ja } from '../web/src/i18n/ja.ts';
+import { formatElapsed, formatRelativeCompact, setTimezone } from '../web/src/i18n/index.ts';
 import { hideWhenInert, registerEscapeUnlessInert, saveKeyHandler } from '../web/src/inert.ts';
 import { closeTopLayer, ESC_ORDER, isComposing, modLabel, registerEscape, shortcutOf } from '../web/src/keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference } from '../web/src/layout.ts';
@@ -16,7 +15,7 @@ import { PAGE_META, pickChatModel, workerState } from '../web/src/pages.ts';
 import { chatHash, HOME_ROUTE, pageBehind, parseRoute, routeHash } from '../web/src/routes.ts';
 import { closeTab, dropChats, findGoneChats, loadTabs, MAX_TABS, openTab, sanitizeTabs, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from '../web/src/tabs.ts';
 
-const reset = () => { setLanguagePreference('ja'); setTimezone('Asia/Tokyo'); };
+const reset = () => { setTimezone('Asia/Tokyo'); };
 const keys = (tabs: Tab[]) => tabs.map(x => x.key);
 const tab = (hash: string): Tab => toTab(hash)!;
 
@@ -248,19 +247,13 @@ test('formatRelativeCompact: サイドバー用の短い相対時刻', () => {
   reset();
   const now = Date.UTC(2026, 10, 5, 12, 0, 0);
   const ago = (ms: number) => formatRelativeCompact(now - ms, now);
-  assert.equal(ago(10_000), '今');
-  assert.equal(ago(5 * 60_000), '5分');
-  assert.equal(ago(2 * 3_600_000), '2時間');
-  assert.equal(ago(3 * 86_400_000), '3日');
-  assert.equal(ago(45 * 86_400_000), '1か月');
-  assert.equal(ago(400 * 86_400_000), '1年');
-  assert.equal(ago(-5000), '今', '未来の時刻は今として扱う');
-  setLanguagePreference('en');
   assert.equal(ago(10_000), 'now');
   assert.equal(ago(5 * 60_000), '5m');
   assert.equal(ago(2 * 3_600_000), '2h');
   assert.equal(ago(3 * 86_400_000), '3d');
   assert.equal(ago(45 * 86_400_000), '1mo');
+  assert.equal(ago(400 * 86_400_000), '1y');
+  assert.equal(ago(-5000), 'now', '未来の時刻は今として扱う');
   reset();
 });
 
@@ -272,49 +265,34 @@ test('formatElapsed: 実行中の経過時間', () => {
   assert.equal(formatElapsed(-5000), '00:00');
 });
 
-test('presenceOf: 様子の一言は辞書から出て、言語に追従し、長いタスク名は切る', () => {
+test('presenceOf: 様子の一言は辞書から出て、長いタスク名は切る', () => {
   reset();
   const base = { generating: false, runningTask: null, approvals: 0, waitingTasks: 0, paused: false, quiet: false, celebrating: false };
-  assert.equal(presenceOf(base).line, 'ひと休みしています');
-  assert.equal(presenceOf({ ...base, celebrating: true }).line, 'タスクを終えました');
-  assert.equal(presenceOf({ ...base, generating: true }).line, '返事を考えています');
-  assert.equal(presenceOf({ ...base, runningTask: '週報をまとめる' }).line, 'タスク「週報をまとめる」を進めています');
-  assert.equal(presenceOf({ ...base, runningTask: '一二三四五六七八九十一二三四五六七八' }).line, 'タスク「一二三四五六七八九十一二三四…」を進めています');
-  assert.equal(presenceOf({ ...base, runningTask: '一二三四五六七八九十一二三四' }).line, 'タスク「一二三四五六七八九十一二三四」を進めています', '14 文字までは切らない');
-  assert.equal(presenceOf({ ...base, runningTask: '一二三四五六七八九十一二三四五' }).line, 'タスク「一二三四五六七八九十一二三四…」を進めています', '15 文字からは切る');
-  assert.equal(presenceOf({ ...base, approvals: 2 }).line, '承認を待っています（2 件）');
-  assert.equal(presenceOf({ ...base, waitingTasks: 3 }).line, '返事を待っています（3 件）');
-  assert.equal(presenceOf({ ...base, paused: true }).line, 'お休み中（ワーカーを一時停止しています）');
-  assert.equal(presenceOf({ ...base, quiet: true }).line, 'お休み中（静かにする時間帯です）');
+  assert.equal(presenceOf(base).line, 'Taking a break');
+  assert.equal(presenceOf({ ...base, celebrating: true }).line, 'Finished a task');
+  assert.equal(presenceOf({ ...base, generating: true }).line, 'Thinking of a reply');
+  assert.equal(presenceOf({ ...base, runningTask: '週報をまとめる' }).line, 'Working on task "週報をまとめる"');
+  assert.equal(presenceOf({ ...base, runningTask: '一二三四五六七八九十一二三四五六七八' }).line, 'Working on task "一二三四五六七八九十一二三四…"');
+  assert.equal(presenceOf({ ...base, runningTask: '一二三四五六七八九十一二三四' }).line, 'Working on task "一二三四五六七八九十一二三四"', '14 文字までは切らない');
+  assert.equal(presenceOf({ ...base, runningTask: '一二三四五六七八九十一二三四五' }).line, 'Working on task "一二三四五六七八九十一二三四…"', '15 文字からは切る');
+  assert.equal(presenceOf({ ...base, approvals: 2 }).line, 'Waiting for approval (2)');
+  assert.equal(presenceOf({ ...base, waitingTasks: 3 }).line, 'Waiting for your reply (3)');
+  assert.equal(presenceOf({ ...base, paused: true }).line, 'Resting (the worker is paused)');
+  assert.equal(presenceOf({ ...base, quiet: true }).line, 'Resting (quiet hours)');
   assert.equal(presenceOf({ ...base, paused: true }).sleeping, true);
   assert.equal(presenceOf({ ...base, approvals: 1 }).runtime, 'wait');
-  assert.equal(presenceOf({ ...base, generating: true, approvals: 1 }).line, '返事を考えています', '返事を作っている最中が先（ただし承認待ちの会話は generating に数えない。下の isChatGenerating）');
-  assert.equal(presenceOf({ ...base, runningTask: '週報', approvals: 1 }).line, '承認を待っています（1 件）', 'タスクの実行中でも、承認待ちが優先');
+  assert.equal(presenceOf({ ...base, generating: true, approvals: 1 }).line, 'Thinking of a reply', '返事を作っている最中が先（ただし承認待ちの会話は generating に数えない。下の isChatGenerating）');
+  assert.equal(presenceOf({ ...base, runningTask: '週報', approvals: 1 }).line, 'Waiting for approval (1)', 'タスクの実行中でも、承認待ちが優先');
   assert.equal(presenceOf({ ...base, runningTask: '週報', approvals: 1 }).runtime, 'wait');
-  setLanguagePreference('en');
-  assert.equal(presenceOf(base).line, 'Taking a break');
   assert.equal(presenceOf({ ...base, runningTask: 'Weekly report' }).line, 'Working on task "Weekly report"');
-  assert.equal(presenceOf({ ...base, approvals: 2 }).line, 'Waiting for approval (2)');
   reset();
-});
-
-test('辞書: 枠の文字は ja と en の両方にあり、en は ja の写しではない', () => {
-  const framed = Object.keys(ja).filter(k => /^(nav|tab|panel|status|worker|theme|toast|presence|palette|notifications|task)\./u.test(k));
-  assert.ok(framed.length > 50, `枠の文字が ${framed.length} 件しか読めていない`);
-  const same: string[] = [];
-  for (const key of framed) {
-    const jaEntry = (ja as Record<string, unknown>)[key];
-    const enEntry = (en as Record<string, unknown>)[key];
-    if (typeof jaEntry === 'string' && jaEntry === enEntry) same.push(key);
-  }
-  assert.deepEqual(same, [], '訳し忘れ（ja と同じ文字のまま）');
 });
 
 test('PAGE_META: 全ページに名前と絵があり、名前は辞書にある', () => {
   for (const page of ['chat', 'tasks', 'today', 'notifications', 'settings', 'runs', 'memory', 'review', 'skills'] as const) {
     const meta = PAGE_META[page];
     assert.ok(meta.icon, `${page}: 絵が無い`);
-    assert.ok(typeof (ja as Record<string, unknown>)[meta.label] === 'string', `${page}: ${meta.label} が辞書に無い`);
+    assert.ok(typeof (en as Record<string, unknown>)[meta.label] === 'string', `${page}: ${meta.label} が辞書に無い`);
   }
 });
 
@@ -393,7 +371,7 @@ test('notificationIcon / notificationKindLabel: サーバーの通知の種類�
   for (const kind of ['task_done', 'task_waiting', 'task_failed', 'approval_needed', 'health_alert', 'info']) {
     assert.ok(notificationIcon(kind), `${kind}: 絵が無い`);
     const label = notificationKindLabel(kind);
-    assert.ok(label && typeof (ja as Record<string, unknown>)[label] === 'string' && typeof (en as Record<string, unknown>)[label] === 'string', `${kind}: 名前が辞書に無い`);
+    assert.ok(label && typeof (en as Record<string, unknown>)[label] === 'string', `${kind}: 名前が辞書に無い`);
   }
   assert.equal(notificationIcon('approval_needed'), 'shield');
   assert.equal(notificationIcon('task_failed'), 'circleX');
@@ -412,7 +390,7 @@ test('isChatGenerating: 承認待ちの会話は「返事を作っている」�
   const base = { generating: false, runningTask: null, approvals: 0, waitingTasks: 0, paused: false, quiet: false, celebrating: false };
   reset();
   const line = (generating: boolean) => presenceOf({ ...base, generating, approvals: 1 }).line;
-  assert.equal(line(isChatGenerating(drafts, [{ conversationId: 'c1' }], undefined)), '承認を待っています（1 件）', '姿と一言も、承認待ちが勝つ');
+  assert.equal(line(isChatGenerating(drafts, [{ conversationId: 'c1' }], undefined)), 'Waiting for approval (1)', '姿と一言も、承認待ちが勝つ');
 });
 
 const styleOf = (name: string): string => readFileSync(new URL(`../web/src/styles/${name}`, import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\*[\s\S]*?\*\//g, '');

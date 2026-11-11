@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Task, TaskStatus } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { setLanguagePreference, setTimezone, t } from '../web/src/i18n/index.ts';
-import { ja } from '../web/src/i18n/ja.ts';
+import { setTimezone, t } from '../web/src/i18n/index.ts';
 import { PendingSet, runOnce } from '../web/src/pending.ts';
 import { parseRoute } from '../web/src/routes.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, type TaskDraft } from '../web/src/task-form.ts';
@@ -13,7 +12,7 @@ import {
 import { toTab } from '../web/src/tabs.ts';
 
 const NOW = Date.UTC(2026, 10, 5, 3, 0, 0);
-const reset = () => { setLanguagePreference('ja'); setTimezone('Asia/Tokyo'); };
+const reset = () => { setTimezone('Asia/Tokyo'); };
 
 let seq = 0;
 function task(status: TaskStatus, patch: Partial<Task> = {}): Task {
@@ -153,10 +152,9 @@ test('buildNewTask: 日時の指定は、ブラウザではなくサーバーの
   reset();
 });
 
-test('buildNewTask: 繰り返しは頻度と値を送る。曜日の値はサーバーが読む日本語のまま（en の画面でも）', () => {
+test('buildNewTask: 繰り返しは頻度と値を送る。曜日の値はサーバーが読む日本語のまま（英語の画面でも）', () => {
   const draft: TaskDraft = { ...emptyDraft(), title: 'weekly report', when: 'repeat', freq: 'weekly', time: '17:30', day: '金' };
-  for (const lang of ['ja', 'en'] as const) {
-    setLanguagePreference(lang);
+  for (const lang of ['en'] as const) {
     const built = buildNewTask(draft);
     assert.ok(built.ok);
     assert.deepEqual(built.task.repeat, { freq: 'weekly', values: { time: '17:30', day: '金', minute: '0', interval: '30' } }, `${lang} でも曜日は金のまま`);
@@ -199,43 +197,34 @@ test('#/curiosity は、タスクの「気になること」の節を開く経�
   assert.equal(toTab('#/curiosity'), null, 'タスクのページはタブにしない（タブは会話だけ）');
 });
 
-test('辞書: 状態・出どころ・優先度・経過の種類・気になることの状態は、ja にも en にもある', () => {
+test('辞書: 状態・出どころ・優先度・経過の種類・気になることの状態は、en にある', () => {
   const keys = [
     ...Object.values(STATUS_KEY), ...Object.values(ORIGIN_KEY), ...Object.values(CURIOSITY_STATUS_KEY),
     priorityKey(1), priorityKey(2), priorityKey(3), priorityKey(9),
     ...['created', 'note', 'requeued', 'question', 'approval', 'answer', 'run', 'done', 'failed', 'cancelled', 'approved', 'reopened', 'skipped', 'edited', 'context', 'uncancelled'].map(kind => eventKey(kind)!),
   ];
   for (const key of keys) {
-    assert.equal(typeof (ja as Record<string, unknown>)[key], 'string', `${key} が ja に無い`);
     assert.equal(typeof (en as Record<string, unknown>)[key], 'string', `${key} が en に無い`);
   }
   assert.equal(eventKey('something-new'), null, '知らない種類は辞書を引かない（そのまま出す）');
   assert.equal(priorityKey(9), priorityKey(2), '範囲外の優先度は「中」');
 });
 
-test('辞書: タスク画面（stage 7）の英語に日本語が混ざらない。ja と同じ文のままの訳し忘れも無い', () => {
+test('辞書: タスク画面（stage 7）の英語に日本語が混ざらない', () => {
   const mine = Object.keys(en).filter(key => /^(tasks|newtask|curiosity)\./u.test(key));
   assert.ok(mine.length > 100, `タスク画面の文字が ${mine.length} 件しか読めていない`);
   const japanese = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
-  const same: string[] = [];
   for (const key of mine) {
     const enEntry = (en as Record<string, unknown>)[key];
-    const jaEntry = (ja as Record<string, unknown>)[key];
     const enText = typeof enEntry === 'function' ? (enEntry as (...a: string[]) => string)('a', 'b') : String(enEntry);
     assert.ok(!japanese.test(enText), `${key}: 英語に日本語が混ざっている: ${enText}`);
-    if (typeof jaEntry === 'string' && jaEntry === enEntry) same.push(key);
   }
-  const allowedSame = ['newtask.priority.2', 'tasks.origin.self'];
-  assert.deepEqual(same.filter(key => !allowedSame.includes(key)), [], '訳し忘れ（ja と同じ文字のまま）');
 });
 
 test('辞書: 止めたあとの案内は 20 秒ほどで再開すること、止め続ける方法（取り消す・一時停止）を伝える', () => {
   reset();
-  assert.match(t('tasks.stopHint'), /20 秒.*再開/u);
-  assert.match(t('tasks.stopHint'), /取り消す/u);
-  assert.match(t('tasks.stopHint'), /一時停止/u);
-  assert.match(t('tasks.toast.stoppedBody'), /20秒/u);
-  setLanguagePreference('en');
+  assert.match(t('tasks.stopHint'), /restarts by itself in about 20 seconds/u);
+  assert.match(t('tasks.toast.stoppedBody'), /Restarts in about 20 s/u);
   assert.match(t('tasks.stopHint'), /20 seconds/u);
   assert.match(t('tasks.stopHint'), /cancel/iu);
   assert.match(t('tasks.stopHint'), /pause the worker/iu);

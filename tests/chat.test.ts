@@ -10,11 +10,10 @@ import {
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
-import { ja } from '../web/src/i18n/ja.ts';
+import { setTimezone } from '../web/src/i18n/index.ts';
 import { isMemoryUndone, undoMemoryEvent } from '../web/src/memory-undo.ts';
 
-const reset = () => { setLanguagePreference('ja'); setTimezone('Asia/Tokyo'); };
+const reset = () => { setTimezone('Asia/Tokyo'); };
 afterEach(reset);
 
 const probe = (patch: Partial<Probe> = {}): Probe => ({
@@ -84,10 +83,9 @@ test('slashMatches: 先頭の / のあとの 1 語を前方一致で候補にす
   assert.deepEqual(slashMatches(''), []);
 });
 
-test('slash の説明文は、全コマンドぶん ja と en の両方にある', () => {
+test('slash の説明文は、全コマンドぶん en にある', () => {
   assert.deepEqual(SLASH_COMMANDS.map(c => c.name), ['new', 'task', 'tasks', 'skills', 'log', 'memory', 'stop', 'rename', 'archive', 'summary']);
   for (const command of SLASH_COMMANDS) {
-    assert.ok(ja[command.desc].length > 0, `ja: ${command.desc}`);
     assert.ok(en[command.desc].length > 0, `en: ${command.desc}`);
   }
 });
@@ -147,10 +145,10 @@ test('approvalFraction / formatCountdown: 残り時間の線と mm:ss', () => {
 
 test('chatTime: 時刻だけを、サーバーのタイムゾーンと表示の言語で 24 時間表記にする', () => {
   const at = Date.UTC(2026, 10, 5, 1, 7);
-  assert.equal(chatTime(at, 'ja', 'Asia/Tokyo'), '10:07');
+  assert.equal(chatTime(at, undefined, 'Asia/Tokyo'), '10:07', '言語を書かなければ画面の言語（英語）');
   assert.equal(chatTime(at, 'en', 'Asia/Tokyo'), '10:07');
   assert.equal(chatTime(at, 'en', 'America/Los_Angeles'), '17:07', '前の日の夕方（サマータイムなし）');
-  assert.equal(chatTime(Date.UTC(2026, 10, 5, 15, 0), 'ja', 'Asia/Tokyo'), '00:00', '24 時ではなく 00:00');
+  assert.equal(chatTime(Date.UTC(2026, 10, 5, 15, 0), 'en', 'Asia/Tokyo'), '00:00', '24 時ではなく 00:00');
 });
 
 test('isNearBottom: 下から 80px 以内にいるときだけ、新しい発言へ自動で追いかける', () => {
@@ -190,7 +188,7 @@ test('mergeNotice: 同じ実行の同じ key のお知らせは置き換え、ke
 
 test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引数を使う', () => {
   const kana = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
-  const keys = Object.keys(ja).filter(k => /^(chat|approval|slash|markdown)\.|^notice\.(compacted|stopped)$|^toast\.(undo|memoryUndo)/u.test(k));
+  const keys = Object.keys(en).filter(k => /^(chat|approval|slash|markdown)\.|^notice\.(compacted|stopped)$|^toast\.(undo|memoryUndo)/u.test(k));
   assert.ok(keys.length > 80, `段階 5 のキーが ${keys.length} 件しか読めていない`);
   for (const key of keys) {
     const entry = (en as Record<string, unknown>)[key];
@@ -201,7 +199,7 @@ test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引
   assert.match(en['notice.compacted'](1), /^Summarized 1 older message \(/u);
   assert.match(en['notice.compacted'](4), /^Summarized 4 older messages \(/u);
   assert.match(en['notice.compacted'](4), /originals are kept/u, '原文が残っていることを伝える');
-  assert.match(ja['notice.compacted'](4), /^古い発言 4 件を要約しました（要約は会話の「…」メニューから読めます。原文は残っていて、.*探せます）$/u);
+  assert.match(en['notice.compacted'](4), /^Summarized 4 older messages \(read the summary from the conversation "…" menu; the originals are kept, .*\)$/u);
   assert.match(en['notice.compacted'](4), /summary from the conversation "…" menu/u, '要約の読み方と原文の探し方を分けて書く');
   assert.equal(en['chat.pdfPages'](1), 'PDF, 1 page');
   assert.equal(en['approval.position'](1, 2), '1 / 2');
@@ -321,13 +319,9 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
   const models = [model('local', { probe: unreachable })];
   const expectedEn = engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en').message, hintPart: '' }) });
 
-  setLanguagePreference('en');
-  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, 'en の画面では、サーバーが ja で書いていても英語');
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, '画面は英語。サーバーが ja で書いていても英語');
   assert.notEqual(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage);
-  setLanguagePreference('ja');
-  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage, 'ja ならサーバーの文と同じ');
 
-  setLanguagePreference('en');
   assert.equal(sendFailureOf(new ApiError(409, body), 'x', []).message.includes('Nothing was sent'), true, 'モデルの確認が無くても、問題の文はサーバーのままで枠は英語');
   const stale = [model('local', { probe: { ...unreachable, status: 'ok' } })];
   assert.equal(sendFailureOf(new ApiError(409, body), 'x', stale).message.includes(served.message), true, '状態が違う確認は使わず、サーバーの行のまま');
@@ -466,7 +460,7 @@ test('流れている文の間引き: 短い返事は届くたびに描き、続
   assert.notEqual(long.render('別の文'.repeat(2000), 1003), base, '文が前の続きでなければ、すぐ描き直す');
 });
 
-test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読み書き・読むだけで分かれる）。辞書は ja にも en にもある', () => {
+test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読み書き・読むだけで分かれる）。辞書 en にある', () => {
   assert.equal(approvalPathKey({ verdict: 'in', mode: 'write' }), 'approval.verdict.inWrite');
   assert.equal(approvalPathKey({ verdict: 'in', mode: 'read' }), 'approval.verdict.inRead');
   assert.equal(approvalPathKey({ verdict: 'in' }), 'approval.verdict.inWrite', 'mode が無い古い応答でも落ちない');
@@ -475,7 +469,6 @@ test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読
   assert.equal(approvalPathKey({ verdict: 'unknown' }), 'approval.verdict.unknown');
   assert.equal(approvalPathKey({ verdict: 'something-new' as 'in' }), 'approval.verdict.unknown', '知らない判定は「判定できない」');
   for (const key of ['approval.verdict.inWrite', 'approval.verdict.inRead', 'approval.verdict.out', 'approval.verdict.deny', 'approval.verdict.unknown'] as const) {
-    assert.equal(typeof ja[key], 'string', key);
     assert.equal(typeof en[key], 'string', key);
     assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, `${key}: 英語に日本語が混ざらない`);
   }
@@ -498,10 +491,8 @@ test('使用量の表示: 割合は四捨五入、1 を超えたら「100%+」�
   assert.deepEqual([0, 999, 1000, 12_400, 180_000, 200_000, 999_949, 999_950, 1_250_000, 2_000_000].map(compactTokens),
     ['0', '999', '1k', '12.4k', '180k', '200k', '999.9k', '1M', '1.25M', '2M']);
   assert.deepEqual([compactTokens(-5), compactTokens(Number.NaN), compactTokens(12_449)], ['0', '0', '12.4k']);
-  setLanguagePreference('ja');
-  assert.equal(ja['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k（全体 200k）');
   assert.equal(en['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k (total 200k)');
-  for (const key of ['context.label', 'context.over'] as const) { assert.ok(ja[key] && en[key], key); assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, key); }
+  for (const key of ['context.label', 'context.over'] as const) { assert.ok(en[key], key); assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, key); }
 });
 
 test('使用量の輪を数え直す変更: モデルを替えたときと、権限モードを替えたとき（計画は渡す道具の一覧と指示が変わる）。名前の変更・アーカイブ・削除では数え直さない', () => {
@@ -599,11 +590,9 @@ test('作業の一覧の部品: 項目の文は文字のまま出す（Markdown�
   assert.match(source, /list\.tainted && <p className="chat-checklist-note">\{t\('checklist\.tainted'\)\}<\/p>/u, '外の内容を読んだあとに書かれた一覧には、小さな注記を付ける');
   const keys = ['checklist.title', 'checklist.count', 'checklist.pending', 'checklist.inProgress', 'checklist.done', 'checklist.tainted'] as const;
   for (const key of keys) {
-    assert.ok(key in ja && key in en, key);
-    assert.match(typeof ja[key] === 'string' ? ja[key] : ja[key](1, 2), CJK_CHARS, `${key}: 日本語の文`);
+    assert.ok(key in en, key);
     assert.doesNotMatch(typeof en[key] === 'string' ? en[key] : en[key](1, 2), CJK_CHARS, `${key}: 英語に日本語が混ざらない`);
   }
-  assert.equal(ja['checklist.count'](2, 5), '2 / 5 件済み');
   assert.equal(en['checklist.count'](2, 5), '2 / 5 done');
 });
 

@@ -3,7 +3,6 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { CONVERSATION, fakeModel, settled, startApp } from './app-setup.ts';
@@ -142,7 +141,7 @@ test('文: 要約したお知らせは「要約は会話のメニューから読
   assert.match(sentence, /5 件/u);
   assert.match(sentence, /メニュー/u);
   assert.match(sentence, /過去の会話を探す/u);
-  assert.match(ja['notice.compacted'](5), /メニュー.*過去の会話を探す/u);
+  assert.match(en['notice.compacted'](5), /menu.*Search past chats/u);
   assert.match(en['notice.compacted'](5), /menu/iu);
   assert.match(engineText('en', 'warn.compacted', { count: 5 }), /menu/iu);
 });

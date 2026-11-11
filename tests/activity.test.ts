@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { finishedToday, isReadyNow, lastNoteOf, recentRuns, runOutcome, runsFraction, taskWhen, upNextTasks, UP_NEXT_LIMIT } from '../web/src/activity.ts';
 import type { RunRow, Task, TaskEvent } from '../web/src/api.ts';
-import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 
 const NOW = Date.UTC(2026, 10, 5, 3, 0, 0);
 
@@ -121,15 +119,4 @@ test('recentRuns / runOutcome / runsFraction: 最近の実行 5 件、結果、1
   assert.equal(runsFraction(9, 6), 100, '上限を超えても 100 まで');
   assert.equal(runsFraction(0, 0), 0, '上限が 0 のときは 0');
   assert.equal(runsFraction(-1, 6), 0);
-});
-
-test('辞書: 「いまの動き」の文字は ja と en の両方にあり、en は ja の写しではない', () => {
-  const keys = Object.keys(ja).filter(k => /^(activity|run\.kind)\./u.test(k));
-  assert.ok(keys.length >= 25, `${keys.length} 件しか読めていない`);
-  for (const key of keys) {
-    const jaEntry = (ja as Record<string, unknown>)[key];
-    const enEntry = (en as Record<string, unknown>)[key];
-    assert.equal(typeof enEntry, typeof jaEntry, key);
-    if (typeof jaEntry === 'string') assert.notEqual(enEntry, jaEntry, `${key}: 訳し忘れ`);
-  }
 });

@@ -2,25 +2,24 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import {
   emptyModelForm, isOutsideUrl, markSetupShown, modelFormProblem, personaInputOf, resumeStep, setupModelConfig, STEPS, STYLE_CHOICES, wasSetupShown,
-  type ModelForm, type PersonaFields,
+  type ModelForm, type OnboardingSteps, type PersonaFields,
 } from '../web/src/onboarding.ts';
 import { estimateTokens, overPersonaBudget } from '../web/src/tokens.ts';
 import { sectionChanged } from '../web/src/settings/model.ts';
 
-const steps = (patch: Partial<Record<'language' | 'user' | 'identity' | 'persona' | 'model', boolean>> = {}) => ({ language: false, user: false, identity: false, persona: false, model: false, ...patch });
+const steps = (patch: Partial<Record<'user' | 'identity' | 'persona' | 'model', boolean>> = {}) => ({ user: false, identity: false, persona: false, model: false, ...patch });
 
-test('resumeStep: 左の一覧の「続ける」は、済んでいない最初の手順から始める。全部済んでいればあいさつ', () => {
-  assert.deepEqual(STEPS, ['language', 'you', 'identity', 'style', 'model', 'greeting']);
-  assert.equal(resumeStep(steps()), 'language');
-  assert.equal(resumeStep(steps({ language: true })), 'you');
-  assert.equal(resumeStep(steps({ language: true, user: true })), 'identity');
-  assert.equal(resumeStep(steps({ language: true, user: true, identity: true })), 'style');
-  assert.equal(resumeStep(steps({ language: true, user: true, identity: true, persona: true })), 'model');
-  assert.equal(resumeStep(steps({ language: true, user: true, identity: true, persona: true, model: true })), 'greeting');
-  assert.equal(resumeStep(steps({ model: true })), 'language', '飛ばした手順があれば、そこへ戻る');
+test('resumeStep: 左の一覧の「続ける」は、済んでいない最初の手順から始める。全部済んでいればあいさつ。言語の段は無い', () => {
+  assert.deepEqual(STEPS, ['you', 'identity', 'style', 'model', 'greeting']);
+  assert.equal(resumeStep(steps()), 'you');
+  assert.equal(resumeStep({ ...steps(), language: false } as OnboardingSteps), 'you', 'サーバーがまだ返す steps.language は読まない');
+  assert.equal(resumeStep(steps({ user: true })), 'identity');
+  assert.equal(resumeStep(steps({ user: true, identity: true })), 'style');
+  assert.equal(resumeStep(steps({ user: true, identity: true, persona: true })), 'model');
+  assert.equal(resumeStep(steps({ user: true, identity: true, persona: true, model: true })), 'greeting');
+  assert.equal(resumeStep(steps({ model: true })), 'you', '飛ばした手順があれば、そこへ戻る');
 });
 
 test('personaInputOf: サーバーへ送るのは、入力のあった項目だけ（送った項目だけが書かれ、済みになる）。話し方は「決めない」でも書き足しがあれば送る', () => {
@@ -116,13 +115,12 @@ test('はじめの設定の記録: 自動で開くのは 1 回だけ。保存で
   markSetupShown(blocked);
 });
 
-test('設定の「Clive について」: 節にあり、ja にも en にも文がある。画面の設定の変更としては数えない（名前と全文は別に保存する）', () => {
+test('設定の「Clive について」: 節にあり、en に文がある。画面の設定の変更としては数えない（名前と全文は別に保存する）', () => {
   for (const key of ['settings.section.about', 'settings.desc.about', 'settings.about.name', 'settings.about.rerun', 'onboarding.title', 'onboarding.band', 'onboarding.greeting.request', 'chat.send.setupModel'] as const) {
-    assert.ok(ja[key].length > 0 && en[key].length > 0, key);
-    assert.notEqual(ja[key], en[key], `${key}: 訳し忘れ`);
+    assert.ok(en[key].length > 0, key);
   }
   assert.equal(sectionChanged({ profile: { name: 'a' } }, { profile: { name: 'b' } }, 'about'), false);
-  assert.match(ja['settings.about.warn'](5000, 4000), /5000/u);
+  assert.match(en['settings.about.warn'](5000, 4000), /5000/u);
   assert.match(en['onboarding.model.have'](1), /1 model/u);
   assert.match(en['onboarding.model.have'](3), /3 models/u);
 });

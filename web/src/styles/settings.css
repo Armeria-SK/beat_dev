@@ -160,9 +160,6 @@
 .shell[data-mode="narrow"] .set-inner { padding: 22px 16px 48px; }
 .shell[data-mode="narrow"] .set-bar { padding: 10px 16px; }
 
-.lang-prompt { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 16px; border-bottom: 1px solid var(--color-divider); background: var(--color-surface); font-size: 13px; }
-.lang-prompt-text { flex: 1; min-width: 200px; }
-.lang-prompt-hint { color: var(--color-text-muted); font-size: 12px; }
 .set-reload { align-self: flex-start; margin-top: 6px; }
 .set-widen { display: flex; flex: none; flex-direction: column; gap: 8px; margin: 0 28px 14px; padding: 12px 14px; border: 1px solid var(--color-accent); border-radius: var(--radius-md); background: var(--color-surface); }
 .set-widen ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
