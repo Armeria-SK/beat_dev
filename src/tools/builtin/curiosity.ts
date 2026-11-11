@@ -21,7 +21,7 @@ const line = (i: CuriosityItem, language: Language) => toolText(language, 'curio
 
 export const curiosityAdd: ToolDef<{ topic: string; why?: string }> = {
   name: 'curiosity_add',
-  description: '気になったが今は調べないことを、好奇心リストに書く（自発行動がオンなら、あとで自分で調べる）。topic は短く具体的に、why はなぜ気になったか。',
+  description: 'Write something you are curious about but will not look into now on the curiosity list (if autonomous actions are on, you look into it yourself later). Keep topic short and specific; why is why you became curious.',
   input: Type.Object({
     topic: Type.String({ minLength: 1, maxLength: 200 }),
     why: Type.Optional(Type.String({ maxLength: 500 })),
@@ -38,7 +38,7 @@ export const curiosityAdd: ToolDef<{ topic: string; why?: string }> = {
 
 export const curiosityList: ToolDef<{ include_closed?: boolean }> = {
   name: 'curiosity_list',
-  description: '好奇心リストを見る（気になる・調べている）。include_closed=true で調べ終えたもの・やめたものも。',
+  description: 'View the curiosity list (items you are curious about or looking into). With include_closed=true, also the ones you finished looking into or dropped.',
   input: Type.Object({ include_closed: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'review'],
@@ -53,7 +53,7 @@ export const curiosityList: ToolDef<{ include_closed?: boolean }> = {
 
 export const curiosityUpdate: ToolDef<{ id: number; status?: 'open' | 'done' | 'dropped'; result?: string }> = {
   name: 'curiosity_update',
-  description: '好奇心リストの項目を更新する。調べて分かったことは result に書いて status=done、興味が無くなったら status=dropped。',
+  description: 'Update an item on the curiosity list. Write what you found out in result and set status=done; if you lost interest, status=dropped.',
   input: Type.Object({
     id: Type.Integer({ minimum: 1 }),
     status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('done'), Type.Literal('dropped')])),

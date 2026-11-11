@@ -12,7 +12,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
 
 export const checklistWrite: ToolDef<{ items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }> }> = {
   name: 'checklist_write',
-  description: '作業の手順の一覧を書く（前の一覧を丸ごと置き換える）。3 手順以上の作業の始めに書き、1 つ進むたびに status を直して書き直す。status: pending（まだ）/ in_progress（いま）/ done（済み）。items を空にすると消える。一覧は持ち主の画面に出る。',
+  description: 'Write the list of steps for the work (it replaces the previous list entirely). Write it at the start of work with 3 or more steps, and each time one step moves forward, change its status and write the list again. status: pending (not yet) / in_progress (now) / done (finished). An empty items clears the list. The list is shown on the owner\'s screen.',
   input: Type.Object({
     items: Type.Array(
       Type.Object({

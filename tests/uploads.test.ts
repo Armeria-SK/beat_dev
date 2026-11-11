@@ -103,7 +103,7 @@ test('API: 添付して送ると、中身はデータとしてモデルに渡り
   s.app.approvals.decide(requested.approval.id, 'once');
   await s.app.engine.wait(sent.body.runId);
   const toModel = String(s.adapter().calls[0]!.messages.at(-1)?.content);
-  assert.match(toModel, /これをまとめて[\s\S]*<<<Attachment: 議事録\.pdf（PDF, 1 page\(s\)）>>>[\s\S]*ship on Friday/u);
+  assert.match(toModel, /これをまとめて[\s\S]*<<<Attachment: 議事録\.pdf \(PDF, 1 page\(s\)\)>>>[\s\S]*ship on Friday/u);
   const view = await (await fetch(`${s.origin}/api/conversations/${C1}/messages`, { headers: { Origin: s.origin } })).json() as any;
   const user = view.messages.find((m: any) => m.role === 'user');
   assert.equal(user.text, 'これをまとめて');

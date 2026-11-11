@@ -69,7 +69,7 @@ async function say(s: Awaited<ReturnType<typeof startApp>>, conversationId: stri
 test('テンプレート: PowerShell の制限モードで動かない書き方を避けるよう、基本ルールとシェルの道具の説明に書いてある', t => {
   const real = paths(t);
   assert.match(readTemplate(real, 'rules'), /## When you use the shell\r?\n\r?\n- On Windows, PowerShell runs in constrained mode[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n\r?\n## What you do not do/u);
-  assert.match(shellRun.description, /制限モード[^。]*\[pscustomobject\]/u);
+  assert.match(shellRun.description, /constrained mode, so do not use \.NET type syntax \([^)]*\[pscustomobject\]/u);
 });
 
 test('テンプレート: templates/ の直下を読み、無いファイルは空', t => {

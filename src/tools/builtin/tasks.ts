@@ -35,16 +35,16 @@ function parseWhen(when: string | undefined): number | undefined {
 export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: string; done_criteria?: string; priority?: number; when?: string; repeat?: string; requested_by_user?: boolean }> = {
   name: 'task_create',
   description: [
-    'やること（タスク）をメモ帳に書く。あとで自分で進める。',
-    'ユーザーに頼まれたことは requested_by_user=true。when で開始の日時（ISO 8601、タイムゾーン付き）、repeat で繰り返し（cron: "分 時 日 月 曜日"、例 "0 9 * * MON-FRI"）。',
-    'すぐ終わることはタスクにせず、その場でやる。',
-  ].join(''),
+    'Write a to-do (a task) in the notebook. You work on it yourself later.',
+    'For something the user asked for, requested_by_user=true. when is the start date and time (ISO 8601, with a time zone); repeat is the repetition (cron: "minute hour day month weekday", e.g. "0 9 * * MON-FRI").',
+    'Do not make a task for something that finishes quickly; do it right away.',
+  ].join(' '),
   input: Type.Object({
     title: Type.String({ minLength: 1, maxLength: 200 }),
     body: Type.Optional(Type.String({ maxLength: 4000 })),
     next_action: Type.Optional(Type.String({ maxLength: 500 })),
     done_criteria: Type.Optional(Type.String({ maxLength: 500 })),
-    priority: Type.Optional(Type.Integer({ minimum: 1, maximum: 3, description: '1 が高い' })),
+    priority: Type.Optional(Type.Integer({ minimum: 1, maximum: 3, description: '1 is the highest' })),
     when: Type.Optional(Type.String({ maxLength: 40 })),
     repeat: Type.Optional(Type.String({ maxLength: 60 })),
     requested_by_user: Type.Optional(Type.Boolean()),
@@ -72,7 +72,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
 
 export const taskList: ToolDef<{ include_finished?: boolean }> = {
   name: 'task_list',
-  description: 'タスクの一覧を見る（進行中・予定・返事待ち・提案）。include_finished=true で最近終わったものも。',
+  description: 'View the list of tasks (in progress, scheduled, waiting for a reply, proposed). With include_finished=true, also the recently finished ones.',
   input: Type.Object({ include_finished: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'review'],
@@ -90,7 +90,7 @@ export const taskList: ToolDef<{ include_finished?: boolean }> = {
 
 export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: string; priority?: number; when?: string; status?: 'done' | 'cancelled' }> = {
   name: 'task_update',
-  description: 'タスクにメモを足す・次の一手や優先度や開始日時を変える・完了や取り消しにする（id は一覧の [xxxxxxxx]）。',
+  description: 'Add a note to a task, change its next step, priority or start date and time, or mark it done or cancelled (id is the [xxxxxxxx] in the list).',
   input: Type.Object({
     id: Type.String({ minLength: 6, maxLength: 64 }),
     note: Type.Optional(Type.String({ maxLength: 2000 })),
@@ -121,7 +121,7 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
 
 export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_action: string; resume_after_minutes: number }> = {
   name: 'task_checkpoint',
-  description: 'いま進めているタスクの途中経過を残して休む。試したこと・結果・次の一手・何分後に再開するかを書く。進展がないときも、何が足りないかを書いて休む。',
+  description: 'Record the progress of the task you are working on now and pause. Write what you tried, the result, the next step and after how many minutes to resume. Even when there is no progress, write what is missing and pause.',
   input: Type.Object({
     tried: Type.String({ minLength: 1, maxLength: 1500 }),
     result: Type.String({ minLength: 1, maxLength: 1500 }),
@@ -140,7 +140,7 @@ export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_actio
 
 export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
   name: 'task_complete',
-  description: 'いま進めているタスクを終える。summary に結果を書く。ユーザーに知らせることが無いなら notify=false（静かに終える）。',
+  description: 'Finish the task you are working on now. Write the result in summary. If there is nothing to tell the user, notify=false (finish quietly).',
   input: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4000 }), notify: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
@@ -154,7 +154,7 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
 
 export const askUser: ToolDef<{ question: string }> = {
   name: 'ask_user',
-  description: 'いま進めているタスクについて、ユーザーに尋ねる（答えが来るまでタスクは止まる）。推測で進めると困ることだけを尋ねる。',
+  description: 'Ask the user about the task you are working on now (the task stops until the answer comes). Ask only about things where going ahead on a guess would cause trouble.',
   input: Type.Object({ question: Type.String({ minLength: 1, maxLength: 1500 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],

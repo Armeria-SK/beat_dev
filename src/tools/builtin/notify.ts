@@ -12,7 +12,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
 
 export const notifyOwner: ToolDef<{ title: string; body?: string }> = {
   name: 'notify_owner',
-  description: '持ち主の画面にお知らせを 1 件出す（ブラウザの通知にも出る）。タスクの大事な区切りや、持ち主の判断が要るときだけ使う。リンクは今の会話かタスクに自動で付く（URL は渡せない）。同じ題と本文は 24 時間に 1 回だけ。',
+  description: 'Show one notification on the owner\'s screen (it also appears as a browser notification). Use it only at an important milestone of a task or when the owner\'s decision is needed. A link to the current conversation or task is added automatically (you cannot pass a URL). The same title and body only once per 24 hours.',
   input: Type.Object({
     title: Type.String({ minLength: 1, maxLength: 100 }),
     body: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),

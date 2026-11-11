@@ -34,11 +34,11 @@ const shown = (abs: string, ctx: ToolContext) => {
   return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.replaceAll('\\', '/') : abs;
 };
 
-const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: '作業フォルダからの相対パス、または許可フォルダ内の絶対パス' });
+const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: 'A path relative to the working folder, or an absolute path inside an allowed folder' });
 
 export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; case_sensitive?: boolean; max_results?: number }> = {
   name: 'file_search',
-  description: '許可フォルダの中でファイルを探す。name は名前のワイルドカード（例 *.md）、text は中身に含まれる文字（そのままの文字。正規表現ではない）。両方を指定すると両方に合うもの。path を省くと作業フォルダ。秘密のファイルは探さない。node_modules・.git などの中は、path にそのフォルダを指定したときだけ探す。',
+  description: 'Find files inside the allowed folders. name is a wildcard for the file name (e.g. *.md); text is text contained in the file (plain text, not a regular expression). If both are given, files that match both. If path is omitted, the working folder. Secret files are not searched. Inside node_modules, .git and the like is searched only when path names that folder.',
   input: Type.Object({
     path: Type.Optional(PathArg),
     name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),

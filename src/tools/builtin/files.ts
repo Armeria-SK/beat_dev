@@ -46,11 +46,11 @@ const shown = (abs: string, ctx: ToolContext) => {
   return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.replaceAll('\\', '/') : abs;
 };
 
-const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: '作業フォルダからの相対パス、または許可フォルダ内の絶対パス' });
+const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: 'A path relative to the working folder, or an absolute path inside an allowed folder' });
 
 export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }> = {
   name: 'file_read',
-  description: 'テキストファイルを読む。offset（何行目から、1始まり）と limit（何行）で一部だけ読める。',
+  description: 'Read a text file. With offset (the line to start from, starting at 1) and limit (how many lines) you can read just part of it.',
   input: Type.Object({ path: PathArg, offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'agent'],
@@ -79,7 +79,7 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
 
 export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwrite' | 'append' | 'create' }> = {
   name: 'file_write',
-  description: 'テキストファイルを書く。mode: overwrite（上書き・既定）/ append（末尾に追記）/ create（無いときだけ作る）。フォルダは自動で作る。',
+  description: 'Write a text file. mode: overwrite (overwrite; the default) / append (add to the end) / create (create only if it does not exist). Folders are created automatically.',
   input: Type.Object({
     path: PathArg, content: Type.String({ maxLength: MAX_WRITE_CHARS }),
     mode: Type.Optional(Type.Union([Type.Literal('overwrite'), Type.Literal('append'), Type.Literal('create')])),
@@ -108,7 +108,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
 
 export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: boolean }> = {
   name: 'file_edit',
-  description: 'ファイルの一部を置き換える。old はファイル内でちょうど1回だけ現れる文字列にする（all=true なら全部置き換える）。',
+  description: 'Replace part of a file. old must be text that appears exactly once in the file (with all=true, every occurrence is replaced).',
   input: Type.Object({ path: PathArg, old: Type.String({ minLength: 1 }), new: Type.String(), all: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'write',
   folderGrant: true,
@@ -133,10 +133,10 @@ export const HEAVY_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv
 
 export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }> = {
   name: 'file_list',
-  description: 'フォルダの中身を一覧する。path を省略すると作業フォルダ。depth で何階層下まで見るか（既定 1、最大 4）。node_modules・.git など大きなフォルダの中は、既定では一覧しない（all を true にするか、path にそのフォルダを指定したときだけ中に入る）。',
+  description: 'List the contents of a folder. If path is omitted, the working folder. depth is how many levels down to look (default 1, max 4). The insides of large folders such as node_modules and .git are not listed by default (it goes inside only when all is true or path names that folder).',
   input: Type.Object({
     path: Type.Optional(PathArg), depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
-    all: Type.Optional(Type.Boolean({ description: 'node_modules・.git など大きなフォルダの中も一覧する' })),
+    all: Type.Optional(Type.Boolean({ description: 'Also list the insides of large folders such as node_modules and .git' })),
   }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'agent'],

@@ -20,7 +20,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
 
 export const calculate: ToolDef<{ expression: string }> = {
   name: 'calculate',
-  description: '計算する。四則・%・^（べき）・括弧・sqrt abs round(x,桁) floor ceil min max log ln exp sin cos tan・pi e。暗算せずにこれを使う。',
+  description: 'Calculate. + - * /, %, ^ (power), parentheses, sqrt abs round(x,digits) floor ceil min max log ln exp sin cos tan, pi e. Use this instead of calculating in your head.',
   input: Type.Object({
     expression: Type.String({ minLength: 1, maxLength: 500 }),
   }, { additionalProperties: false }),
@@ -43,7 +43,7 @@ export const dateCalc: ToolDef<{
   days?: number; weeks?: number; months?: number; years?: number;
 }> = {
   name: 'date_calc',
-  description: '日付と時刻の計算。op: now（今の日時。timezone を省くと設定のタイムゾーン）/ add（date に days・weeks・months・years を足す。負で引く）/ diff（date から to までの日数と平日の数）/ weekday（date の曜日）/ convert（datetime を timezone から to_timezone へ）。日付は YYYY-MM-DD、日時は YYYY-MM-DDTHH:mm。',
+  description: 'Date and time calculation. op: now (the current date and time; if timezone is omitted, the time zone in the settings) / add (add days, weeks, months, years to date; negative values subtract) / diff (the number of days and of weekdays from date to to) / weekday (the day of the week of date) / convert (datetime from timezone to to_timezone). Dates are YYYY-MM-DD, date-times are YYYY-MM-DDTHH:mm.',
   input: Type.Object({
     op: Type.Union([Type.Literal('now'), Type.Literal('add'), Type.Literal('diff'), Type.Literal('weekday'), Type.Literal('convert')]),
     date: Type.Optional(Type.String()),

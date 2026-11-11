@@ -108,7 +108,7 @@ export function attachmentBlock(upload: Upload, language: Language = DEFAULT_LAN
   const cut = text.length > MAX_INLINE_CHARS;
   const t = (key: StoreMessageKey, params?: MessageParams) => storeText(language, key, params);
   return [
-    `${t('attachment.open')}: ${neutralizeMarkers(upload.name)}（${upload.kind === 'pdf' ? t('attachment.pdf', { pages: upload.pages ?? '' }) : t('attachment.text')}）>>>`,
+    `${t('attachment.open')}: ${neutralizeMarkers(upload.name)} (${upload.kind === 'pdf' ? t('attachment.pdf', { pages: upload.pages ?? '' }) : t('attachment.text')})>>>`,
     t('attachment.notice'),
     neutralizeMarkers(text.slice(0, MAX_INLINE_CHARS)),
     cut ? t('attachment.cut', { max: MAX_INLINE_CHARS.toLocaleString('en-US'), total: text.length.toLocaleString('en-US') }) : '',

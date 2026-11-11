@@ -16,7 +16,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
 
 export const skillView: ToolDef<{ name: string }> = {
   name: 'skill_view',
-  description: 'スキル（手順書）の本文を読む。system の「スキル」の一覧にある作業をするときは、先にこれで手順を確かめる。',
+  description: 'Read the body of a skill (a procedure). Before doing work that is in the "Skills" list in the system prompt, check the procedure with this first.',
   input: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64 }) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'review', 'agent'],
@@ -41,10 +41,10 @@ export const skillView: ToolDef<{ name: string }> = {
 export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string }> = {
   name: 'skill_draft',
   description: [
-    '繰り返し使える手順を、スキル（手順書）の下書きとして書く。ユーザーが承認するまで有効にならない。',
-    '既にあるスキルを直すときは同じ name で全文を書く（新しく作るより、既存のスキルを直すほうを優先する）。',
-    'name は英小文字・数字・ハイフン。description は「いつ使うか」を1文で。body は手順を具体的に。reason はなぜ作る・直すのか。',
-  ].join(''),
+    'Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.',
+    'To fix an existing skill, write its full text under the same name (prefer fixing an existing skill over making a new one).',
+    'name uses lowercase English letters, digits and hyphens. description is "when to use it" in one sentence. body is the procedure, concretely. reason is why you are making or fixing it.',
+  ].join(' '),
   input: Type.Object({
     name: Type.String({ minLength: 1, maxLength: 63, pattern: '^[a-z0-9][a-z0-9-]*$' }),
     description: Type.String({ minLength: 1, maxLength: 300 }),

@@ -26,7 +26,7 @@ export function csvText(rows: ReadonlyArray<ReadonlyArray<Cell>>): { text: strin
       if (cell === null) {
         value = '';
       } else if (typeof cell === 'number') {
-        if (!Number.isFinite(cell)) throw new Error('csv: 数のセルが有限数ではありません');
+        if (!Number.isFinite(cell)) throw new Error('csv: a number cell is not a finite number');
         value = String(cell);
       } else if (startsLikeFormula(cell)) {
         value = "'" + cell;
@@ -46,7 +46,7 @@ export function csvText(rows: ReadonlyArray<ReadonlyArray<Cell>>): { text: strin
 
 // 0 → 'A'、25 → 'Z'、26 → 'AA'、16383 → 'XFD'
 export function columnName(index: number): string {
-  if (index < 0) throw new Error('columnName: 負のインデックス');
+  if (index < 0) throw new Error('columnName: negative index');
   let n = index;
   let out = '';
   do {
@@ -127,7 +127,7 @@ export function xlsxBytes(rows: ReadonlyArray<ReadonlyArray<Cell>>): { bytes: Bu
       if (cell === null) continue;
       const ref = columnName(j) + (i + 1);
       if (typeof cell === 'number') {
-        if (!Number.isFinite(cell)) throw new Error('xlsx: 数のセルが有限数ではありません');
+        if (!Number.isFinite(cell)) throw new Error('xlsx: a number cell is not a finite number');
         sheet += `<c r="${ref}"><v>${cell}</v></c>`;
       } else {
         const formula = startsLikeFormula(cell);

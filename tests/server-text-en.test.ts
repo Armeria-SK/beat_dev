@@ -522,7 +522,7 @@ test('API: 添付だけの発言の目印と、記憶の削除の理由は英語
   const stored = s.app.conversations.messages('00000000-0000-4000-8000-000000000001')[0]!.message;
   assert.equal(stored.role, 'user');
   if (stored.role === 'user') {
-    assert.ok(stored.content.startsWith('(A file was attached)\n\n<<<Attachment: a.txt（text）>>>'), stored.content);
+    assert.ok(stored.content.startsWith('(A file was attached)\n\n<<<Attachment: a.txt (text)>>>'), stored.content);
     assert.ok(stored.content.endsWith('<<<End of attachment>>>'));
   }
   assert.equal(s.app.conversations.get('00000000-0000-4000-8000-000000000001')!.title, 'a.txt', '添付の目印は題にしない');

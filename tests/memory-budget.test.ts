@@ -256,7 +256,7 @@ test('起動したばかりで確認の結果がまだ無くても、大きな�
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fa', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [model('m', 'fa', 16_384)];
+  config.models = [model('m', 'fa', 20_480)];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   const databasePath = join(dir, 'cold.db');
@@ -268,11 +268,12 @@ test('起動したばかりで確認の結果がまだ無くても、大きな�
   const cold = open();
   try {
     assert.equal(cold.status.all().length, 0, '起動直後は確認の結果が 1 つも無い');
-    assert.ok(cold.memoryTokens() > 10_000, '記憶は 16k のモデルに全部は入らない大きさ');
+    assert.ok(cold.memoryTokens() > 10_000, '記憶は 20k のモデルに全部は入らない大きさ');
+    assert.ok(cold.baseTokens() + 8192 + 1024 + cold.memoryTokens() > 20_480, '記憶を全部数えたら、20k のモデルに収まらない');
     await cold.status.probeAll(cold.config());
     const probe = cold.status.get('m')!;
     assert.equal(probe.status, 'ok', probe.message);
-    assert.ok(probe.required <= 16_384, `必要な長さ ${probe.required} が、モデルの長さに収まる`);
+    assert.ok(probe.required <= 20_480, `必要な長さ ${probe.required} が、モデルの長さに収まる`);
     assert.ok(cold.engine.memoryBudget()! > 0, '確認が通れば、会話に入れる予算も決まる');
   } finally { cold.close(); }
 });

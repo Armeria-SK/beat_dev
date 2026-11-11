@@ -47,28 +47,9 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'src/uploads/store.ts': { strings: ['\u{FF1C}', '\u{FF1E}', '<<<添付ファイル', '<<<添付ファイルここまで>>>'], reason: 'neutralizeMarkers の全角の ＜ ＞（添付の名前と中身の <<< >>> を全角にして枠の印の偽装を防ぐ。安全）と、LEGACY_ATTACHMENT_FRAMES: 前からある発言の日本語の添付の枠を外す（安全: 外さないと添付の中身が利用者の依頼として自動承認の判定役に渡る）' },
 };
 
-// 一時の一覧（段階 0 の途中の PR だけ）: まだ英語にしていないファイル → 残りの数（上の例外の文字列を除いた数。このファイルは次の PR で直す）。0-2a-3・0-2a-4・0-2b で減らし、0-2b で空にする。
+// 一時の一覧: まだ英語にしていないファイル → 残りの数（上の例外の文字列を除いた数）。0-2b のあとに残るのは、0-3 で消す doctor の出力だけ。
 const PENDING: Record<string, number> = {
   'src/main.ts': 7, // doctor の出力だけ（0-3 で doctor ごと消すので訳さない。PLAN.md 版 6）
-  'src/providers/anthropic.ts': 2,
-  'src/tools/builtin/browser.ts': 8,
-  'src/tools/builtin/calc.ts': 2,
-  'src/tools/builtin/checklist.ts': 1,
-  'src/tools/builtin/curiosity.ts': 3,
-  'src/tools/builtin/docs.ts': 2,
-  'src/tools/builtin/download.ts': 2,
-  'src/tools/builtin/file-search.ts': 2,
-  'src/tools/builtin/files.ts': 6,
-  'src/tools/builtin/image.ts': 2,
-  'src/tools/builtin/memory.ts': 10,
-  'src/tools/builtin/notify.ts': 1,
-  'src/tools/builtin/shell.ts': 8,
-  'src/tools/builtin/skills.ts': 4,
-  'src/tools/builtin/table-core.ts': 3,
-  'src/tools/builtin/tables.ts': 2,
-  'src/tools/builtin/tasks.ts': 9,
-  'src/tools/builtin/web.ts': 3,
-  'src/uploads/store.ts': 1,
 };
 
 const japaneseLines = (text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.replace(/^[ \t]+|[ \t]+$/gu, ''));
