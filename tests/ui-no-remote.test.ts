@@ -15,15 +15,14 @@ const REMOTE = [
   /fonts\.(?:googleapis|gstatic)\.com/giu,
 ];
 
-function withoutComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//gu, '')
-    .replace(/<!--[\s\S]*?-->/gu, '')
-    .split(/\r?\n/u).map(line => line.replace(/(^|[^:'"`\\])\/\/.*$/u, '$1')).join('\n');
+function withoutComments(text: string, script: boolean): string {
+  const blocks = text.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/<!--[\s\S]*?-->/gu, '');
+  if (!script) return blocks;
+  return blocks.split(/\r?\n/u).filter(line => !/^\s*\/\//u.test(line)).join('\n');
 }
 
-function remoteLoads(text: string): string[] {
-  const code = withoutComments(text);
+function remoteLoads(text: string, script = false): string[] {
+  const code = withoutComments(text, script);
   return REMOTE.flatMap(pattern => [...code.matchAll(pattern)].map(m => m[0]));
 }
 
@@ -42,15 +41,22 @@ test('見張りの式が外の読み込みを見つける（見張りそのも�
   assert.equal(remoteLoads("@import 'http://example.com/x.css';").length, 1);
   assert.equal(remoteLoads('<link rel="stylesheet" href="https://example.com/x.css">').length, 1);
   assert.equal(remoteLoads('<img src="https://example.com/a.png" alt="" />').length, 1);
-  assert.equal(remoteLoads("<img src={'//cdn.example/a.png'} />").length, 1);
-  assert.equal(remoteLoads('const el = <a href=`http://example.com`>x</a>;').length, 1);
+  assert.equal(remoteLoads('a { background: url(//cdn.example/a.png) }').length, 1);
+  assert.equal(remoteLoads('a { background: url( //cdn.example/a.png) }').length, 1);
+  assert.equal(remoteLoads('@import url(//cdn.example/x.css);').length, 2);
+  assert.equal(remoteLoads("<img src={'//cdn.example/a.png'} />", true).length, 1);
+  assert.equal(remoteLoads('const el = <a href=`http://example.com`>x</a>;', true).length, 1);
+  assert.equal(remoteLoads('const css = `a { background: url(//cdn.example/a.png) }`;', true).length, 1);
   assert.deepEqual(remoteLoads([
     'a { background: url(data:image/png;base64,AAAA) } @import "./local.css"; <link href="/icon.svg">',
+    '/* @import url("https://example.com/x.css"); */',
+  ].join('\n')), []);
+  assert.deepEqual(remoteLoads([
     '<img src={src} /> <a href={href}>x</a>',
     '// <img src="https://example.com/in-a-comment.png">',
     '/* @import url("https://example.com/x.css"); */',
     "const placeholder = 'https://…';",
-  ].join('\n')), []);
+  ].join('\n'), true), []);
 });
 
 test('web/src の CSS・.ts・.tsx と web/index.html に、外の URL を読む書き方が無い', () => {
@@ -58,6 +64,6 @@ test('web/src の CSS・.ts・.tsx と web/index.html に、外の URL を読む
   assert.ok(files.some(f => f.endsWith(join('ui', 'styles', 'bundle.css'))), '新しい画面の CSS を読めていない');
   assert.ok(files.some(f => f.endsWith(join('ui', 'main.tsx'))), '新しい画面の入口を読めていない');
   assert.ok(files.some(f => f.endsWith(join('ui', 'theme.ts'))), '.ts を読めていない');
-  const hits = files.flatMap(file => remoteLoads(readFileSync(file, 'utf8')).map(hit => `${file.slice(WEB.length + 1)}: ${hit}`));
+  const hits = files.flatMap(file => remoteLoads(readFileSync(file, 'utf8'), /\.tsx?$/u.test(file)).map(hit => `${file.slice(WEB.length + 1)}: ${hit}`));
   assert.deepEqual(hits, []);
 });
