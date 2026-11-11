@@ -117,7 +117,7 @@ for (const language of ['ja', 'en'] as const) {
     const task = s.app.tasks.create({ title: 'Notify', origin: 'user', actor: 'user' });
     s.adapter().scripts.push(toolCall('notify_owner', { title: '途中の知らせ' }));
     assert.equal(await s.app.worker.tick(), 'ran');
-    const prefix = language === 'ja' ? 'Clive より: ' : 'From Clive: ';
+    const prefix = 'From Clive: ';
     const first = s.app.notifications.list().find(n => n.kind === 'info');
     assert.equal(first?.link, `#/tasks/${task.id}`);
     assert.ok(first?.title.startsWith(prefix), first?.title);

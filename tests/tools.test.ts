@@ -61,7 +61,7 @@ test('ファイル: 作業フォルダの中は読み書きできる', async t =
   assert.equal((await s.call('file_write', { path: 'notes/a.md', content: 'こんにちは\n二行目' })).output.isError, undefined);
   assert.equal(readFileSync(join(s.paths.workspace, 'notes', 'a.md'), 'utf8'), 'こんにちは\n二行目');
   assert.match((await s.call('file_read', { path: 'notes/a.md', offset: 2 })).output.content, /^二行目/u);
-  assert.match((await s.call('file_edit', { path: 'notes/a.md', old: '二行目', new: '2行目' })).output.content, /1 か所/u);
+  assert.match((await s.call('file_edit', { path: 'notes/a.md', old: '二行目', new: '2行目' })).output.content, /Replaced 1 occurrence\(s\)/u);
   assert.match((await s.call('file_list', { depth: 2 })).output.content, /notes\/[\s\S]*a\.md/u);
   assert.match((await s.call('file_read', { path: join(s.paths.data, 'reference', 'doc.md') })).output.content, /参照用/u);
 });
@@ -79,7 +79,7 @@ test('ファイル: 外・秘密情報・読み取り専用・保護対象は実
   for (const [name, args] of cases) {
     const outcome = await s.call(name, args);
     assert.equal(outcome.decision, 'deny', JSON.stringify(args));
-    assert.match(outcome.output.content, /実行しませんでした/u);
+    assert.match(outcome.output.content, /Not run/u);
   }
   assert.equal(existsSync(join(s.paths.data, 'outside.txt')), false);
   assert.equal(readFileSync(join(s.paths.data, 'reference', 'doc.md'), 'utf8'), '参照用の文書');
@@ -116,10 +116,10 @@ test('引数の形が正しくなければ、実行せずに直させる', async
   const s = setup(t);
   const bad = await s.call('file_write', { path: 'a.md' });
   assert.equal(bad.invalidArguments, true);
-  assert.match(bad.output.content, /引数の形が正しくありません/u);
+  assert.match(bad.output.content, /The shape of the arguments is not valid/u);
   const unknown = await s.call('nope', {});
   assert.equal(unknown.invalidArguments, true);
-  assert.match(unknown.output.content, /使えるツール/u);
+  assert.match(unknown.output.content, /Available tools/u);
 });
 
 // ── シェルと承認 ──────────────────────────────────────────
@@ -129,7 +129,7 @@ test('シェル: 作業フォルダの中のコマンドは承認なしで実行
   const outcome = await s.call('shell_run', { command: 'echo hello-clive' });
   assert.equal(outcome.decision, 'allow');
   assert.match(outcome.output.content, /hello-clive/u);
-  assert.match(outcome.output.content, /終了コード: 0/u);
+  assert.match(outcome.output.content, /exit code: 0/u);
 });
 
 test('シェル: 秘密情報の読み取りは実行しない', async t => {
@@ -147,7 +147,7 @@ test('承認: 今回だけ許可すると1回だけ実行し、拒否なら実�
   const command = process.platform === 'win32' ? `Get-Content "${outsideFile}"` : `cat "${outsideFile}"`;
   const pending = s.call('shell_run', { command });
   const request = await decideNext(s, 'once');
-  assert.match(request.reasons.join(), /許可フォルダの外/u);
+  assert.match(request.reasons.join(), /outside the allowed folders/u);
   assert.match(request.body, /outside\.txt/u);
   const approved = await pending;
   assert.equal(approved.decidedBy, 'user');
@@ -156,7 +156,7 @@ test('承認: 今回だけ許可すると1回だけ実行し、拒否なら実�
   const second = s.call('shell_run', { command });
   await decideNext(s, 'deny');
   const denied = await second;
-  assert.match(denied.output.content, /拒否しました/u);
+  assert.match(denied.output.content, /The user refused to run it/u);
   const rows = s.db.prepare("SELECT status FROM approvals ORDER BY created_at").all() as Array<{ status: string }>;
   assert.deepEqual(rows.map(r => r.status), ['approved', 'denied']);
 });
@@ -174,7 +174,7 @@ test('承認: 「この会話では許可」なら同じ入力は聞き直さな
   for (let i = 0; i < 200 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
   s.controller.abort();
   const cancelled = await third;
-  assert.match(cancelled.output.content, /中止/u);
+  assert.match(cancelled.output.content, /Stopped/u);
 });
 
 async function waitPending(s: ReturnType<typeof setup>) {
@@ -203,7 +203,7 @@ test('V6: コードを動かす確かめは今回だけ。「この会話では�
   const second = s.call('shell_run', { command });
   const asked = await decideNext(s, 'deny');
   assert.equal(asked.onceOnly, true);
-  assert.match((await second).output.content, /拒否しました/u);
+  assert.match((await second).output.content, /The user refused to run it/u);
 
   // 前に同じ文字のコマンドを「この会話では許可」にしていても（コードを動かす確かめではなかった頃の許可など）、中身が違いうるのでまた確かめる
   const grant = s.approvals.request({ runId: 'r0', conversationId: 'c1', tool: 'shell_run', input: { command }, title: '', body: command, reasons: [], details: [] }, 60_000, new AbortController().signal);
@@ -239,7 +239,7 @@ test('V7: 確かめの札を出したあとでファイルの中身が書き換�
   s.approvals.decide(pending.id, 'once');
   const outcome = await swapped;
   assert.equal(outcome.output.isError, true);
-  assert.match(outcome.output.content, /中身が変わった/u);
+  assert.match(outcome.output.content, /the contents of the code file the user checked changed/u);
   assert.equal(outcome.decision, 'deny');
   assert.equal(outcome.decidedBy, 'recheck');
   assert.equal(existsSync(marker), false, '書き換えられたコードが動いた');
@@ -248,7 +248,7 @@ test('V7: 確かめの札を出したあとでファイルの中身が書き換�
   const pendingRemoved = await waitPending(s);
   rmSync(file);
   s.approvals.decide(pendingRemoved.id, 'once');
-  assert.match((await removed).output.content, /中身が変わった/u, 'ファイルが消えても同じ');
+  assert.match((await removed).output.content, /the contents of the code file the user checked changed/u, 'ファイルが消えても同じ');
 
   // 対照: 書き換えなければ、許可どおり動く
   writeFileSync(file, code('safe'));
@@ -268,7 +268,7 @@ test('V7: 許可のあとで判定が deny になったら（設定が変わる�
   s.approvals.decide(request.id, 'once');
   const outcome = await pending;
   assert.equal(outcome.decision, 'deny');
-  assert.match(outcome.output.content, /実行しませんでした（拒否）/u);
+  assert.match(outcome.output.content, /Not run \(denied\)/u);
   assert.equal(existsSync(join(s.paths.workspace, 'ran.txt')), false);
 });
 
@@ -319,7 +319,7 @@ test('V6: 裏で動くタスクも、コードを動かす前は人の許可を�
   const outcome = await s.call('shell_run', { command: 'node put.js' }, { ...s.ctx, kind: 'task', conversationId: 'task-conv' });
   assert.equal(outcome.decision, 'ask');
   assert.equal(outcome.decidedBy, 'user');
-  assert.match(outcome.output.content, /承認の待ち時間が過ぎたため実行しませんでした/u);
+  assert.match(outcome.output.content, /It was not run because the wait for approval ran out/u);
   assert.equal(existsSync(join(s.paths.workspace, 'ran.txt')), false);
   const requested = s.events.filter(e => e.type === 'approval.requested');
   assert.equal(requested.length, 1);
@@ -337,26 +337,26 @@ test('V5: スキルのフォルダと .git への書き込みは、シェルな�
   for (const d of ['hooks', 'objects', 'refs']) mkdirSync(join(s.paths.workspace, 'up', d), { recursive: true });
   writeFileSync(join(s.paths.workspace, 'up', 'HEAD'), 'ref: refs/heads/main\n');
   const cases: Array<[string, RegExp]> = [
-    ['skills/evil/SKILL.md', /スキルのフォルダ/u],
-    ['skills/ok/extra.md', /スキルのフォルダ/u],
-    ['.git/hooks/pre-commit', /git のフォルダ/u],
-    ['proj/.git/hooks/post-checkout', /git のフォルダ/u],
-    ['up/hooks/pre-receive', /git のフォルダ/u],
-    ['up/config', /git のフォルダ/u],
+    ['skills/evil/SKILL.md', /This is the skills folder/u],
+    ['skills/ok/extra.md', /This is the skills folder/u],
+    ['.git/hooks/pre-commit', /This is a git folder/u],
+    ['proj/.git/hooks/post-checkout', /This is a git folder/u],
+    ['up/hooks/pre-receive', /This is a git folder/u],
+    ['up/config', /This is a git folder/u],
   ];
-  if (process.platform === 'win32') cases.push(['proj/.GIT/config', /git のフォルダ/u]);
+  if (process.platform === 'win32') cases.push(['proj/.GIT/config', /This is a git folder/u]);
   for (const [path, reason] of cases) {
     const pending = s.call('file_write', { path, content: 'x' });
     const request = await decideNext(s, 'deny');
     assert.match(request.reasons.join(), reason, path);
     // .git はフックや設定というコードを書くことになるので会話の許可を越えて毎回確かめる。スキルは中身が引数にあるので、これまでの承認と同じ
     assert.equal(request.onceOnly, /\.git|^up\//iu.test(path), path);
-    assert.match((await pending).output.content, /拒否しました/u, path);
+    assert.match((await pending).output.content, /The user refused to run it/u, path);
     assert.equal(existsSync(join(s.paths.workspace, path)) && readFileSync(join(s.paths.workspace, path), 'utf8') === 'x', false, `${path} に書かれてしまった`);
   }
 
   const edit = s.call('file_edit', { path: 'skills/ok/SKILL.md', old: 'old', new: 'new' });
-  assert.match((await decideNext(s, 'deny')).reasons.join(), /スキルのフォルダ/u);
+  assert.match((await decideNext(s, 'deny')).reasons.join(), /This is the skills folder/u);
   await edit;
   assert.equal(readFileSync(join(s.paths.workspace, 'skills', 'ok', 'SKILL.md'), 'utf8'), 'old');
 
@@ -405,10 +405,10 @@ test('V5: シェルでも、スキルのフォルダと .git への書き込み�
   const s = setup(t);
   mkdirSync(join(s.paths.workspace, 'skills'), { recursive: true });
   const asks: Array<[string, RegExp]> = [
-    ['echo x > skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
-    [process.platform === 'win32' ? 'Set-Content -Path .git/config -Value x' : 'echo x > .git/config', /git のフォルダ（.git）に書き込みます/u],
-    ['cp notes.md skills/a/SKILL.md', /スキルのフォルダ/u],
-    ['git clone https://example.com/x.git skills/x', /git の clone/u],
+    ['echo x > skills/a/SKILL.md', /It writes into the skills folder/u],
+    [process.platform === 'win32' ? 'Set-Content -Path .git/config -Value x' : 'echo x > .git/config', /It writes into a git folder \(\.git\)/u],
+    ['cp notes.md skills/a/SKILL.md', /the skills folder/u],
+    ['git clone https://example.com/x.git skills/x', /git clone can run code/u],
     ['python tool.py .git/hooks/pre-commit', /python/u],
   ];
   for (const [command, reason] of asks) {
@@ -458,25 +458,25 @@ test('file_list: node_modules・.git など大きなフォルダの中は、下�
   const out = (await s.call('file_list', { depth: 4 })).output.content;
   assert.match(out, /\npackage\.json\n/u, '本当に見たいものが、500 件の枠に入る');
   assert.match(out, /\n {2}index\.ts\n/u, 'src の中も出る');
-  assert.match(out, /\n\.git\/ （中は省略）\n/u);
-  assert.match(out, /\nnode_modules\/ （中は省略）\n/u);
-  assert.match(out, / {2}node_modules\/ （中は省略）/u, '深いところの node_modules も入らない');
+  assert.match(out, /\n\.git\/ \(contents skipped\)\n/u);
+  assert.match(out, /\nnode_modules\/ \(contents skipped\)\n/u);
+  assert.match(out, / {2}node_modules\/ \(contents skipped\)/u, '深いところの node_modules も入らない');
   assert.doesNotMatch(out, /pkg0|dep\/|objects/u);
-  assert.match(out, /\[\.git\/, node_modules\/ の中は一覧していません/u);
-  assert.doesNotMatch(out, /500 件で打ち切り/u);
+  assert.match(out, /\[The contents of \.git\/, node_modules\/ were not listed/u);
+  assert.doesNotMatch(out, /Cut off at 500 entries/u);
 
   const shallow = (await s.call('file_list', {})).output.content;
-  assert.doesNotMatch(shallow, /中は省略|一覧していません/u, '1 階層だけ見るときは、これまでどおり（中に入らないので注記もいらない）');
+  assert.doesNotMatch(shallow, /contents skipped|were not listed/u, '1 階層だけ見るときは、これまでどおり（中に入らないので注記もいらない）');
   assert.match(shallow, /\nnode_modules\/\n/u);
 
   const inside = (await s.call('file_list', { path: 'node_modules', depth: 2 })).output.content;
   assert.match(inside, /pkg0\/\n {2}index\.js/u, 'path に指定すれば、そのフォルダの中を一覧する');
-  assert.doesNotMatch(inside, /中は省略/u);
+  assert.doesNotMatch(inside, /contents skipped/u);
 
   const all = (await s.call('file_list', { depth: 3, all: true })).output.content;
   assert.match(all, /objects\//u, 'all なら中も入る');
-  assert.doesNotMatch(all, /中は省略|一覧していません/u);
-  assert.match(all, /500 件で打ち切り/u, '入ると、枠を使い切る');
+  assert.doesNotMatch(all, /contents skipped|were not listed/u);
+  assert.match(all, /Cut off at 500 entries/u, '入ると、枠を使い切る');
 });
 
 test('taint: Web や添付の内容を読んだ後は、書き込みも承認制になる', async t => {
@@ -484,7 +484,7 @@ test('taint: Web や添付の内容を読んだ後は、書き込みも承認制
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
   const pending = s.call('file_write', { path: 'a.md', content: 'x' }, ctx);
   const request = await decideNext(s, 'deny');
-  assert.match(request.reasons.join(), /よそから来た文/u);
+  assert.match(request.reasons.join(), /text that came from somewhere else/u);
   assert.equal((await pending).output.isError, true);
 });
 
@@ -517,7 +517,7 @@ test('フック: exit 2 で拒否、JSON で ask、タイムアウトは止め�
 
   const timedOut = await s.call('file_read', { path: 'x.md' });
   assert.equal(timedOut.decision, 'deny');
-  assert.match(timedOut.output.content, /タイムアウト/u);
+  assert.match(timedOut.output.content, /Timed out after 300 ms/u);
 
   const stillDenied = await s.call('file_write', { path: '.env', content: 'x' });
   assert.equal(stillDenied.decision, 'deny', 'allow を返すフックがあっても組み込みの拒否は変わらない');
@@ -614,7 +614,7 @@ test('11.7: 入れるもの・.git への書き込みは、事前判定が「今
   const first = s.call('shell_run', { command: 'npm install' });
   const request = await decideNext(s, 'deny');
   assert.equal(request.onceOnly, true);
-  assert.match(request.reasons.join(), /見せたファイルのほかに/u, '限界の文が札に付く');
+  assert.match(request.reasons.join(), /beyond the files shown/u, '限界の文が札に付く');
   await first;
 });
 
@@ -624,12 +624,12 @@ test('ツールの設定ファイル（PowerShell のプロファイルなど）
   const first = s.call('file_write', { path, content: 'Write-Host hi' });
   const request = await decideNext(s, 'conversation');
   assert.equal(request.onceOnly, true);
-  assert.match(request.reasons.join(), /ツールの設定ファイル/u);
-  assert.match((await first).output.content, /Write-Host hi|書き込みました|書きました|bytes|文字/u);
+  assert.match(request.reasons.join(), /This is a tool configuration file/u);
+  assert.match((await first).output.content, /Write-Host hi|Created|Overwritten|bytes|characters/u);
   const second = s.call('file_write', { path, content: 'Write-Host again' });
   const asked = await decideNext(s, 'deny');
   assert.equal(asked.onceOnly, true, '会話の許可があっても、また確かめる');
-  assert.match((await second).output.content, /拒否しました/u);
+  assert.match((await second).output.content, /The user refused to run it/u);
   assert.equal((await s.call('file_write', { path: 'dot/notes.md', content: 'x' })).decision, 'allow');
 });
 
@@ -639,7 +639,7 @@ test('作業フォルダの .curlrc・_curlrc・.wgetrc への file_write も、
     const first = s.call('file_write', { path, content: 'output = "SOUL.md"' });
     const request = await decideNext(s, 'conversation');
     assert.equal(request.onceOnly, true, path);
-    assert.match(request.reasons.join(), /ツールの設定ファイル/u, path);
+    assert.match(request.reasons.join(), /This is a tool configuration file/u, path);
     await first;
     const second = s.call('file_write', { path, content: 'x' });
     assert.equal((await decideNext(s, 'deny')).onceOnly, true, `${path}: 会話の許可があっても、また確かめる`);

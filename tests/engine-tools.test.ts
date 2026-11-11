@@ -107,9 +107,9 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   assert.equal(request.preview.length, 1);
   assert.match(request.preview[0]!.path, /put\.js$/u);
   assert.match(request.preview[0]!.text, /api\/settings/u, '動かすコードの中身が札に出る');
-  assert.match(request.reasons[0]!, /Clive 自身の設定・人格・承認・記憶に触れる文字/u, '理由の先頭に目印');
+  assert.match(request.reasons[0]!, /This code contains text that touches Clive itself/u, '理由の先頭に目印');
   assert.match(request.reasons[0]!, /config\.json/u);
-  assert.ok(request.reasons.some(r => /ファイルに書かれたコードを動かします/u.test(r)));
+  assert.ok(request.reasons.some(r => /It runs code written in a file/u.test(r)));
   assert.equal(existsSync(marker), false, '承認の前には動いていない');
 
   s.app.approvals.decide(request.id, 'deny');
@@ -117,7 +117,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   assert.ok(result.ok);
   assert.equal(existsSync(marker), false, '拒否したのに動いた');
   assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore, '設定ファイルが書き換わった');
-  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool' && /拒否/u.test(m.text))?.text ?? '', /ユーザーが実行を拒否しました/u);
+  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool' && /refused/u.test(m.text))?.text ?? '', /The user refused to run it/u);
 
   // 同じ文字のコマンドを、中身を変えてもう一度出しても、また確かめになる（拒否のあとも、許可のあとも）
   writeFileSync(join(s.paths.workspace, 'put.js'), "require('node:fs').writeFileSync('ran.txt', 'harmless');\n");
@@ -126,7 +126,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 2; i++) await new Promise(r => setTimeout(r, 10));
   const second = (s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>)[1]!;
   assert.ok(second, '2 回目も確かめが出る');
-  assert.doesNotMatch(second.approval.reasons[0]!, /Clive 自身/u, '無害な中身には目印が付かない');
+  assert.doesNotMatch(second.approval.reasons[0]!, /touches Clive itself/u, '無害な中身には目印が付かない');
   s.app.approvals.decide(second.approval.id, 'conversation');
   assert.ok((await again.done).ok);
   assert.equal(readFileSync(marker, 'utf8'), 'harmless', '許可すれば動く（拒否の確認が空振りでないことの対照）');
@@ -153,7 +153,7 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   assert.equal(results.length, 3);
   for (const text of results) {
     assert.ok(text.length < 9100, `16k のモデルでは、1 つの結果は、道具の仕様と今のやり取りを引いた残りの一部（約 8,700 文字より小さい）: ${text.length}`);
-    assert.match(text, /文字中 \d,\d{3} 文字だけを返しました/u);
+    assert.match(text, /only \d,\d{3} of [\d,]+ characters were returned/u);
   }
   assert.ok(results[0]!.length > results[1]!.length && results[1]!.length > results[2]!.length, '結果が積まれるほど、次の結果に許す量は小さくなる');
   const last = small.adapter().calls.at(-1)!;
@@ -165,7 +165,7 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   large.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
   assert.ok((await (await large.send('一覧を読んで')).done).ok);
   const big = large.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
-  assert.match(big, /文字中 16,000 文字だけを返しました/u, '大きなコンテキストでは、今までどおり 16,000 文字');
+  assert.match(big, /only 16,000 of [\d,]+ characters were returned/u, '大きなコンテキストでは、今までどおり 16,000 文字');
 });
 
 // 道具の数が 24 → 31 に増えて、固定の分（system と道具の仕様）が 16k の約 4 割になっても、結果が入りきらなくならない。

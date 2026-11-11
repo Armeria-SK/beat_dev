@@ -134,8 +134,8 @@ test('保存: downloads/ に中身が同じバイトで書かれ、書きかけ�
   assert.ok(!out.output.isError, out.output.content);
   assert.deepEqual(s.listing(), ['report.pdf']);
   assert.ok(readFileSync(join(s.downloads, 'report.pdf')).equals(Buffer.concat(body)));
-  assert.match(out.output.content, /downloads\/report\.pdf（170,005 バイト、種類 application\/pdf）。取得元: https:\/\/files\.example\.com\/report\.pdf/u);
-  assert.match(out.output.content, /外部の内容/u);
+  assert.match(out.output.content, /downloads\/report\.pdf \(170,005 bytes, type application\/pdf\)\. Source: https:\/\/files\.example\.com\/report\.pdf/u);
+  assert.match(out.output.content, /External content/u);
   assert.equal(s.ctx.taint.tainted, true);
   assert.deepEqual(s.ctx.taint.sources, ['web_download']);
 });
@@ -213,7 +213,7 @@ test('名前: 開くと動く名前（desktop.ini）は .download を付け、�
   const out = await s.call({ url: URL_PDF, name: 'desktop.ini' });
   assert.deepEqual(s.listing(), ['desktop.ini.download']);
   assert.match(out.output.content, /downloads\/desktop\.ini\.download/u);
-  assert.match(out.output.content, /\.download を付けました/u);
+  assert.match(out.output.content, /\.download was added to the end of the name/u);
 });
 
 test('上書きしない: 同じ名前を 3 回 → a.pdf a-1.pdf a-2.pdf、最初のファイルの中身は変わらない', async t => {
@@ -286,8 +286,8 @@ test('上書きしない: コピーに切り替える前に、空きが「ファ
   assert.equal(calls, 2, '最初の確かめのあとに、コピーの前にも空きを見た');
   assert.equal(copy.mock.callCount(), 0, 'コピーを始めていない');
   assert.equal(out.output.isError, true);
-  assert.match(out.output.content, /空きが少なくなった/u);
-  assert.match(out.output.content, new RegExp(`残り ${GiB + 6} バイト`, 'u'));
+  assert.match(out.output.content, /Free space at the save destination ran low/u);
+  assert.match(out.output.content, new RegExp(`\\(${GiB + 6} bytes left\\)`, 'u'));
   assert.deepEqual(s.listing(), [], '保存先も、隠した書きかけも残らない');
   assert.equal(s.ctx.taint.tainted, false, '決まった文だけの失敗');
 });
@@ -368,7 +368,7 @@ test('上書きしない: 名前が 1000 個とも取られていたら download
   for (let n = 1; n <= 999; n++) writeFileSync(join(s.downloads, `a-${n}.pdf`), 'taken');
   const out = await s.call({ url: 'https://files.example.com/a.pdf' });
   assert.equal(out.output.isError, true);
-  assert.match(out.output.content, /同じ名前のファイルが多すぎる/u);
+  assert.match(out.output.content, /too many files with the same name/u);
   assert.equal(s.listing().length, 1000);
   assert.ok(s.listing().every(name => readFileSync(join(s.downloads, name), 'utf8') === 'taken'));
 });
@@ -386,7 +386,7 @@ test('失敗の後始末: 60 秒なにも届かなければ止めて、downloads
     mock.timers.tick(60_000);
     const out = await pending;
     assert.equal(out.output.isError, true);
-    assert.match(out.output.content, /60 秒のあいだ何も届かなかった/u);
+    assert.match(out.output.content, /Nothing arrived for 60 seconds/u);
     assert.deepEqual(s.listing(), []);
     assert.equal(s.ctx.taint.tainted, false, '決まった文だけの失敗');
   } finally { mock.timers.reset(); }
@@ -403,7 +403,7 @@ test('失敗の後始末: 実行の取り消しで止めて、downloads/ に何�
   s.controller.abort();
   const out = await pending;
   assert.equal(out.output.isError, true);
-  assert.match(out.output.content, /中止しました/u);
+  assert.match(out.output.content, /Stopped/u);
   assert.deepEqual(s.listing(), []);
 });
 
@@ -415,7 +415,7 @@ test('失敗の後始末: 書いている途中で空きが 1GiB を切ったら
   const out = await s.call({ url: URL_PDF });
   assert.ok(calls >= 2, '最初のほかに、書いている途中でも空きを見た');
   assert.equal(out.output.isError, true);
-  assert.match(out.output.content, /空きが少なくなった/u);
+  assert.match(out.output.content, /Free space at the save destination ran low/u);
   assert.deepEqual(s.listing(), []);
   assert.equal(s.ctx.taint.tainted, false, '決まった文だけの失敗');
 });
@@ -426,7 +426,7 @@ test('失敗の後始末: 空きが最初から 1GiB を切っていれば、つ
   patchFs(t, 'statfsSync', () => (() => ({ bavail: 100, bsize: 1 })) as never);
   const out = await s.call({ url: URL_PDF });
   assert.equal(out.output.isError, true);
-  assert.match(out.output.content, /空きが少なくなった/u);
+  assert.match(out.output.content, /Free space at the save destination ran low/u);
   assert.deepEqual(w.opens, []);
   assert.deepEqual(s.listing(), []);
 });
@@ -440,7 +440,7 @@ test('失敗の後始末: 圧縮して返す相手・HTTP の失敗・LAN の宛
   });
   const s = setup(t, undefined, w.network);
   const encoded = await s.again({ url: URL_PDF });
-  assert.match(encoded.output.content, /圧縮した形（gzip）/u);
+  assert.match(encoded.output.content, /compressed form \(gzip\)/u);
   assert.equal(encoded.output.isError, true);
   assert.equal((await s.again({ url: 'https://files.example.com/missing.bin' })).output.isError, true);
   const lan = await s.again({ url: 'https://private.example.com/a.bin' });
@@ -500,7 +500,7 @@ test('Zone.Identifier（Windows）: 印を書けなくても、保存したフ�
   }) as never);
   const out = await s.call({ url: 'https://files.example.com/a.pdf' });
   assert.ok(!out.output.isError, out.output.content);
-  assert.match(out.output.content, /Zone\.Identifier）を付けられませんでした: EINVAL/u);
+  assert.match(out.output.content, /\(Zone\.Identifier\) could not be added: EINVAL/u);
   assert.ok(!out.output.content.includes(s.ctx.workspace));
   assert.deepEqual(s.listing(), ['a.pdf']);
   assert.equal(readFileSync(join(s.downloads, 'a.pdf'), 'utf8'), 'x');
@@ -541,7 +541,7 @@ test('リンク: 判定のあとで downloads がリンクに替わっていて�
   symlinkSync(target, s.downloads, process.platform === 'win32' ? 'junction' : 'dir');
   const out = await webDownload.execute({ url: URL_PDF }, s.ctx);
   assert.equal(out.isError, true);
-  assert.match(out.content, /リンクになっている/u);
+  assert.match(out.content, /is a link, so nothing was saved/u);
   assert.ok(!out.content.includes(s.ctx.workspace));
   assert.equal(out.noRemoteContent, true);
   assert.deepEqual(readdirSync(target), []);
@@ -581,7 +581,7 @@ test('事前の判定: URL に秘密らしい文字・長い問い合わせが�
   assert.ok(secret.kinds?.includes('web'));
   assert.ok(secret.paths?.some(p => p.input === 'downloads'));
   const long = await s.asked({ url: `https://files.example.com/a.pdf?${'q=1&'.repeat(100)}` });
-  assert.match(long.reasons.join('\n'), /長いクエリ/u);
+  assert.match(long.reasons.join('\n'), /long query string/u);
   for (const url of ['http://localhost/a.bin', 'http://192.168.1.10/a.bin', 'file:///etc/passwd', 'https://user:pw@files.example.com/a.bin']) {
     const out = await s.call({ url });
     assert.equal(out.decision, 'deny', url);
@@ -692,7 +692,7 @@ test('本物の通信: 24MiB を流しながら書き、保存したファイル
   const s = setup(t, undefined, network);
   const out = await s.call({ url: 'https://files.example.com/download?id=1' });
   assert.ok(!out.output.isError, out.output.content);
-  assert.match(out.output.content, /downloads\/big\.bin（25,165,824 バイト/u);
+  assert.match(out.output.content, /downloads\/big\.bin \(25,165,824 bytes/u);
   assert.deepEqual(s.listing(), ['big.bin']);
   assert.equal(createHash('sha256').update(readFileSync(join(s.downloads, 'big.bin'))).digest('hex'), sent.digest('hex'));
 });

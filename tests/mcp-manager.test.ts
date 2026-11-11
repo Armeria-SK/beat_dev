@@ -268,7 +268,7 @@ test('T-34: 落ちている間、道具を呼ぶと mcp.unavailable で返る（
   s.fakes[0]!.drop();
   const out = await tool.execute({ text: 'x' }, { signal: new AbortController().signal, config: s.config } as never);
   assert.equal(out.isError, true);
-  assert.match(out.content, /つながっていない/u);
+  assert.match(out.content, /is not connected/u);
 });
 
 test('T-35: maxTools で切られた道具は、状態が cut になる（モデルごとの記録。切られなくなれば戻る）', async () => {

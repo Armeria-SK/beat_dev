@@ -63,7 +63,7 @@ test('ワイルドカードに当たるものが 2,000 件を超えるとき: �
     const v = f.ps(c);
     assert.equal(v.decision, 'ask', c);
     assert.equal(v.onceOnly, false, c);
-    assert.match(v.reasons.join('\n'), /ワイルドカードに当たるものが多い/u, c);
+    assert.match(v.reasons.join('\n'), /The wildcard matches too many items/u, c);
   }
   // 書く・消す側も、当たったものの中の秘密のパスは止める
   assert.equal(f.ps('Remove-Item bigsecret/*').decision, 'deny');
@@ -93,7 +93,7 @@ test('パイプで流れるファイルの一覧が上限（20,000 件）を超�
   for (let i = 0; i < 20_050; i++) writeFileSync(join(dir, `f${String(i).padStart(6, '0')}.txt`), '');
   const v = f.ps('Get-ChildItem huge | Get-Content');
   assert.equal(v.decision, 'ask');
-  assert.match(v.reasons.join('\n'), /ワイルドカードに当たるものが多い/u);
+  assert.match(v.reasons.join('\n'), /The wildcard matches too many items/u);
   writeFileSync(join(dir, 'zzz.pem'), 'KEY');
   assert.equal(f.ps('Get-ChildItem huge | Get-Content').decision, 'deny');
 });

@@ -282,7 +282,7 @@ test('自動承認: 許可フォルダの外を読むだけのコマンドは、
   const reasons = JSON.parse(rows[0]!.reasons) as string[];
   assert.ok(reasons.length >= 2, '元の理由のあとに判定役の理由が付く');
   assert.equal(reasons.at(-1), '依頼の範囲です', '最後の要素が判定役の理由');
-  assert.match(reasons[0]!, /許可フォルダの外/u);
+  assert.match(reasons[0]!, /outside the allowed folders/u);
   const call = s.db.prepare('SELECT decision, decided_by, approval_id, ok FROM tool_calls').get() as { decision: string; decided_by: string; approval_id: string; ok: number };
   assert.deepEqual([call.decision, call.decided_by, call.ok], ['allow', 'auto-mode', 1]);
   assert.equal(call.approval_id, (s.db.prepare('SELECT id FROM approvals').get() as { id: string }).id, '道具の記録は approvals の行につながる');
@@ -321,7 +321,7 @@ test('自動承認: 判定役の失敗・時間切れ・読めない返事・取
     const s = await setup(t, options);
     const running = s.call('shell_run', { command: s.readOutside }, s.ctx, timeoutMs ? { timeoutMs } : {});
     const request = await waitPending(s);
-    assert.match(request.reasons.join('\n'), /答えられなかった/u, label);
+    assert.match(request.reasons.join('\n'), /could not give an answer/u, label);
     s.approvals.decide(request.id, 'deny');
     const outcome = await running;
     assert.equal(outcome.decision, 'ask', label);
@@ -483,7 +483,7 @@ test('よそから来た文を読んだあと（taint）も、送らず消さな
   assert.equal(s.prompts.length, 1);
   assert.equal(s.approvals.pending().length, 0, '札は出ない');
   const row = s.db.prepare("SELECT reasons FROM approvals WHERE scope = 'auto'").get() as { reasons: string };
-  assert.ok((JSON.parse(row.reasons) as string[]).some(r => /よそから来た文/u.test(r)), 'taint の理由が記録に載る');
+  assert.ok((JSON.parse(row.reasons) as string[]).some(r => /text that came from somewhere else/u.test(r)), 'taint の理由が記録に載る');
   // taint だけの確かめ（新しいファイルを書く）も判定役が決める
   const written = await s.call('file_write', { path: 'a.md', content: 'x' }, tainted);
   assert.deepEqual([written.decision, written.decidedBy], ['allow', 'auto-mode']);
@@ -550,7 +550,7 @@ test('外を読むのを自動承認で許したあと、その実行の残り�
   const seen = await askedKinds(s, 'web_fetch', { url: 'https://example.com/' });
   assert.deepEqual(seen.kinds, ['egress']);
   assert.equal(seen.everyTime, true, '「この会話では許可」は出さない・覚えない');
-  assert.ok(seen.reasons.some(r => /外への送信は毎回確認します/u.test(r)));
+  assert.ok(seen.reasons.some(r => /every command and anything sent out is checked with you/u.test(r)));
   assert.equal(s.prompts.length, 1, '判定役は呼ばない');
   // 前に同じ入力を「この会話では許可」にしていても通らない
   const grant = await setup(t, { mode: 'normal', startMode: 'normal' });
@@ -584,7 +584,7 @@ test('外を読むのを自動承認で許したあと、その実行の残り�
     assert.ok('request' in first && first.request, `${command}: 札なしで動いてしまった`);
     assert.deepEqual([...(first.request.kinds ?? [])], ['egress'], command);
     assert.equal(first.request.everyTime, true, `${command}: 「この会話では許可」は出さない・覚えない`);
-    assert.ok(first.request.reasons.some(r => /毎回確認します/u.test(r)), command);
+    assert.ok(first.request.reasons.some(r => /is checked with you from now on/u.test(r)), command);
     s.approvals.decide(first.request.id, 'deny');
     assert.equal((await running).decidedBy, 'user', command);
   }
@@ -605,7 +605,7 @@ test('会話で一度でも自動承認で外を読んだ（会話ごとの印�
       const seen = await askedKinds(s, tool, args, s.ctx, extra);
       assert.deepEqual(seen.kinds, ['egress'], `${label}: ${tool}`);
       assert.equal(seen.everyTime, true, `${label}: ${tool}: 「この会話では許可」は出さない・覚えない`);
-      assert.ok(seen.reasons.some(r => /この会話/u.test(r)), `${label}: 札の理由は「この会話」と言う`);
+      assert.ok(seen.reasons.some(r => /in this conversation/u.test(r)), `${label}: 札の理由は「この会話」と言う`);
     }
     assert.equal(s.ctx.autoReadOutside, undefined, `${label}: この実行は外を読んでいない`);
     assert.equal(s.prompts.length, 0, `${label}: 判定役は呼ばない`);
@@ -707,7 +707,7 @@ test('よそから来た文を読んだあとの取得（許可の一覧にあ�
   assert.equal(s.ctx.taint.tainted, true);
   const seen = await askedKinds(s, 'shell_run', { command: FETCH_COMMANDS[0]! });
   assert.deepEqual(seen.kinds, ['taint']);
-  assert.ok(seen.reasons.some(r => /送信なので/u.test(r)), '送信なので自動では通さない、と札に出る');
+  assert.ok(seen.reasons.some(r => /This sends something out/u.test(r)), '送信なので自動では通さない、と札に出る');
   assert.equal(s.prompts.length, 0, '判定役を呼ばない');
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
 });
@@ -794,15 +794,15 @@ test('よそから来た文を読んだあと: 送る・消す・何も言わな
     ],
   });
   const tainted = taintedOf(s);
-  const rows: Array<[string, unknown, '送信' | '削除']> = [
-    ['t_sends', {}, '送信'], ['t_removes', {}, '削除'], ['t_silent_write', {}, '送信'], ['t_no_precheck_exec', {}, '送信'],
-    ['t_silent_removes_write', {}, '削除'], ['t_silent_removes_exec', {}, '削除'],
-    ['t_net_writer', {}, '送信'], ['t_net_call', {}, '送信'], ['t_meta_removes', {}, '削除'], ['memory_forget', { id: 1, reason: 'x' }, '削除'],
+  const rows: Array<[string, unknown, 'sends' | 'deletes']> = [
+    ['t_sends', {}, 'sends'], ['t_removes', {}, 'deletes'], ['t_silent_write', {}, 'sends'], ['t_no_precheck_exec', {}, 'sends'],
+    ['t_silent_removes_write', {}, 'deletes'], ['t_silent_removes_exec', {}, 'deletes'],
+    ['t_net_writer', {}, 'sends'], ['t_net_call', {}, 'sends'], ['t_meta_removes', {}, 'deletes'], ['memory_forget', { id: 1, reason: 'x' }, 'deletes'],
   ];
   for (const [name, args, word] of rows) {
     const seen = await askedKinds(s, name, args, tainted);
     assert.deepEqual(seen.kinds, ['taint'], name);
-    assert.ok(seen.reasons.some(r => r.includes(`${word}なので`)), `${name}: 札の理由に「${word}なので」が載る (${seen.reasons.join(' / ')})`);
+    assert.ok(seen.reasons.some(r => r.includes(`This ${word} something`)), `${name}: 札の理由に「This ${word} something」が載る (${seen.reasons.join(' / ')})`);
     assert.equal(seen.everyTime, false, `${name}: 「この会話では許可」は消さない（持ち主の許可の仕組みはそのまま）`);
   }
   assert.equal(s.prompts.length, 0, 'どれも判定役を呼ばない（1 つ目の関所）');
@@ -819,10 +819,10 @@ test('送る・消すの関所は、よそから来た文を読んでいなく�
       fake('u_net', 'network', { preCheck: said({ sends: false, removes: false }, ['outside_read']) }),
     ],
   });
-  for (const [name, word] of [['u_sends', '送信'], ['u_removes', '削除'], ['u_silent', '送信'], ['u_net', '送信']] as const) {
+  for (const [name, word] of [['u_sends', 'sends'], ['u_removes', 'deletes'], ['u_silent', 'sends'], ['u_net', 'sends']] as const) {
     const seen = await askedKinds(s, name, {});
     assert.deepEqual(seen.kinds, ['outside_read'], name);
-    assert.ok(seen.reasons.some(r => r.includes(`${word}なので`)), name);
+    assert.ok(seen.reasons.some(r => r.includes(`This ${word} something`)), name);
   }
   assert.equal(s.prompts.length, 0, '送る・消す・分からないものは、読む前でも判定役を呼ばない');
   const clean = await s.call('u_clean', {});
@@ -876,7 +876,7 @@ test('2 つ目の関所: 判定役が allow と答えたあとに、材料が「
   const running = s.call('t_flip', {});
   const request = await waitPending(s);
   assert.equal(s.prompts.length, 1, '1 つ目の関所は通った（判定役が呼ばれた）');
-  assert.ok(request.reasons.some(r => /送信なので/u.test(r)), '2 つ目の関所が止めて、理由が札に載る');
+  assert.ok(request.reasons.some(r => /This sends something out/u.test(r)), '2 つ目の関所が止めて、理由が札に載る');
   assert.equal(ran, 0, '札のあいだは動かない');
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, '自動の記録は作らない');
   s.approvals.decide(request.id, 'deny');
@@ -895,7 +895,7 @@ test('メモリの道具（Q-C）: memory_save は判定役が決める。memory
   assert.equal(s.prompts.length, 1);
   const seen = await askedKinds(s, 'memory_forget', { id: 1, reason: 'x' }, tainted);
   assert.deepEqual(seen.kinds, ['taint']);
-  assert.ok(seen.reasons.some(r => /削除なので/u.test(r)));
+  assert.ok(seen.reasons.some(r => /This deletes something/u.test(r)));
   assert.equal(s.prompts.length, 1, 'memory_forget は判定役を呼ばない（呼んだのは memory_save の 1 回だけ）');
   const idle = await setup(t, { tools: [memoryForget], mutate: c => { c.tools.policies = { memory_forget: 'ask' }; } });
   assert.deepEqual((await askedKinds(idle, 'memory_forget', { id: 1, reason: 'x' })).kinds, ['policy'], '比べる基準: 方針の ask は、今までどおり判定役に回らない');

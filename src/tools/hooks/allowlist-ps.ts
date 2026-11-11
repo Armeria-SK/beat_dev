@@ -89,7 +89,7 @@ export function parsePs(spec: PsCmd, words: readonly Word[], acc: Acc, ctx: Matc
       continue;
     }
     const raw = args[++i];
-    if (!raw || (isParam(raw) && !raw.attached)) { acc.add('once', 'list.form', { cmd: name, detail: `${w.text} の値` }, true); if (raw) i--; continue; }
+    if (!raw || (isParam(raw) && !raw.attached)) { acc.add('once', 'list.form', { cmd: name, detail: `value of ${w.text}` }, true); if (raw) i--; continue; }
     const value = wildcardParam(spec, def, key) ? withWildcard(raw) : raw;
     take(key, value);
     all.set(key, [...(all.get(key) ?? []), value]);

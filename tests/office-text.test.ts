@@ -148,14 +148,14 @@ test('xlsxText: シートの順と見出し。共有の文字・数・inlineStr�
     'xl/worksheets/sheet2.xml': sheetXml('<row r="1"><c r="A1" t="s"><v>1</v></c></row>'),
   });
   const result = xlsxText(zip, 'ja');
-  assert.equal(textOf(result), '[シート: 売上]\n商品\t3\ty\n直接\tTRUE\tFALSE\tx\t#DIV/0!\n\n[シート: メモ]\n注意');
+  assert.equal(textOf(result), '[Sheet: 売上]\n商品\t3\ty\n直接\tTRUE\tFALSE\tx\t#DIV/0!\n\n[Sheet: メモ]\n注意');
   assert.equal(result.ok && result.truncated, false);
   assert.ok(!textOf(result).includes('HYPERLINK'));
 });
 
 test('xlsxText: 式だけで覚えている値の無いセルは空で、式の文字は出ない', () => {
   const text = textOf(xlsxText(oneSheet(`<row><c r="A1"><f>SUM(B1:B9)</f></c><c r="B1" t="str"><f>"secret"&amp;A9</f></c>${inline('C1', '本')}</row>`), 'ja'));
-  assert.equal(text, '[シート: Sheet1]\n\t\t本');
+  assert.equal(text, '[Sheet: Sheet1]\n\t\t本');
 });
 
 test('xlsxText: ふりがな（rPh）は足さない。リッチな文字は連結する', () => {
@@ -163,30 +163,30 @@ test('xlsxText: ふりがな（rPh）は足さない。リッチな文字は連�
     `<row><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="inlineStr"><is><t>大阪</t><rPh sb="0" eb="2"><t>オオサカ</t></rPh></is></c></row>`,
     { 'xl/sharedStrings.xml': sstXml('<si><t>東京</t><rPh sb="0" eb="2"><t>トウキョウ</t></rPh><phoneticPr fontId="1"/></si><si><r><t>A</t></r><r><rPr><b/></rPr><t>B</t></r></si>') },
   );
-  assert.equal(textOf(xlsxText(zip, 'ja')), '[シート: Sheet1]\n東京\tAB\t大阪');
+  assert.equal(textOf(xlsxText(zip, 'ja')), '[Sheet: Sheet1]\n東京\tAB\t大阪');
 });
 
 test('xlsxText: 列のすき間はタブで埋め、r の無いセルは順に詰め、列の順に並べる', () => {
-  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('A1', '値')}${inline('C1', '値')}</row>`), 'ja')), '[シート: Sheet1]\n値\t\t値');
-  assert.equal(textOf(xlsxText(oneSheet(`<row>${bare('a')}${bare('b')}${bare('c')}</row>`), 'ja')), '[シート: Sheet1]\na\tb\tc');
-  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('C1', 'c')}${inline('A1', 'a')}</row>`), 'ja')), '[シート: Sheet1]\na\t\tc');
-  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('C2', 'c')}${bare('d')}</row>`), 'ja')), '[シート: Sheet1]\n\t\tc\td');
+  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('A1', '値')}${inline('C1', '値')}</row>`), 'ja')), '[Sheet: Sheet1]\n値\t\t値');
+  assert.equal(textOf(xlsxText(oneSheet(`<row>${bare('a')}${bare('b')}${bare('c')}</row>`), 'ja')), '[Sheet: Sheet1]\na\tb\tc');
+  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('C1', 'c')}${inline('A1', 'a')}</row>`), 'ja')), '[Sheet: Sheet1]\na\t\tc');
+  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('C2', 'c')}${bare('d')}</row>`), 'ja')), '[Sheet: Sheet1]\n\t\tc\td');
 });
 
 test('xlsxText: 読めない・大きすぎる r は前のセルの次の列。後ろの空のセルはタブにしない', () => {
   const rows = `<row>${inline('XFE1', 'a')}${inline('ZZZ1', 'b')}${inline('AAAA1', 'c')}${inline('A', 'd')}${inline('1', 'e')}${inline('ab-1', 'f')}</row>`;
-  assert.equal(textOf(xlsxText(oneSheet(rows), 'ja')), '[シート: Sheet1]\na\tb\tc\td\te\tf');
-  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('A1', 'x')}<c r="B1" s="3"/><c r="C1"><v></v></c></row>`), 'ja')), '[シート: Sheet1]\nx');
+  assert.equal(textOf(xlsxText(oneSheet(rows), 'ja')), '[Sheet: Sheet1]\na\tb\tc\td\te\tf');
+  assert.equal(textOf(xlsxText(oneSheet(`<row>${inline('A1', 'x')}<c r="B1" s="3"/><c r="C1"><v></v></c></row>`), 'ja')), '[Sheet: Sheet1]\nx');
 });
 
 test('xlsxText: 空の行は出さず、行の番号のすき間に空の行を作らない', () => {
   const rows = `<row r="1">${inline('A1', 'a')}</row><row r="2"/><row r="3"><c r="A3"/></row><row r="5">${inline('A5', 'b')}</row><row r="1048576">${inline('A1048576', 'z')}</row>`;
-  assert.equal(textOf(xlsxText(oneSheet(rows), 'ja')), '[シート: Sheet1]\na\nb\nz');
+  assert.equal(textOf(xlsxText(oneSheet(rows), 'ja')), '[Sheet: Sheet1]\na\nb\nz');
 });
 
 test('xlsxText: XFD1 のセル 1 つでも落ちず、出力は上限以下', () => {
   const text = textOf(xlsxText(oneSheet(`<row>${inline('XFD1', '端')}</row>`), 'ja'));
-  assert.equal(text, `[シート: Sheet1]\n${'\t'.repeat(16_383)}端`);
+  assert.equal(text, `[Sheet: Sheet1]\n${'\t'.repeat(16_383)}端`);
   assert.ok(text.length <= OFFICE_TEXT_MAX);
 });
 
@@ -243,7 +243,7 @@ test('xlsxText: たどりの細工の Target を持つシートは飛ばされ�
     'xl/worksheets/s.xml': baitSheet,
   });
   const text = textOf(xlsxText(zip, 'ja'));
-  assert.equal(text, '[シート: good]\nOK');
+  assert.equal(text, '[Sheet: good]\nOK');
   assert.ok(!text.includes('SECRET'));
 });
 
@@ -266,7 +266,7 @@ test('xlsxText: 根からの Target・./ と .. を含む正しいたどりは�
       'xl/_rels/workbook.xml.rels': relsXml([['r1', target]]),
       'xl/worksheets/s.xml': sheetXml(`<row>${inline('A1', '読')}</row>`),
     });
-    assert.equal(textOf(xlsxText(zip, 'ja')), '[シート: n]\n読', target);
+    assert.equal(textOf(xlsxText(zip, 'ja')), '[Sheet: n]\n読', target);
   }
 });
 
@@ -277,7 +277,7 @@ test('xlsxText: id の前置きは何でもよい。前置きの無い sheetId �
     'xl/worksheets/a.xml': sheetXml(`<row>${inline('A1', 'A')}</row>`),
     'xl/worksheets/b.xml': sheetXml(`<row>${inline('A1', 'B')}</row>`),
   });
-  assert.equal(textOf(xlsxText(zip, 'ja')), '[シート: p]\nA');
+  assert.equal(textOf(xlsxText(zip, 'ja')), '[Sheet: p]\nA');
 });
 
 test('xlsxText: .rels が無ければ sheet1.xml から番号順。名前の合う部品が無いシートは飛ばす', () => {
@@ -286,31 +286,31 @@ test('xlsxText: .rels が無ければ sheet1.xml から番号順。名前の合�
     'xl/worksheets/sheet1.xml': sheetXml(`<row>${inline('A1', '1')}</row>`),
     'xl/worksheets/sheet3.xml': sheetXml(`<row>${inline('A1', '3')}</row>`),
   });
-  assert.equal(textOf(xlsxText(zip, 'ja')), '[シート: 一]\n1\n\n[シート: 三]\n3');
+  assert.equal(textOf(xlsxText(zip, 'ja')), '[Sheet: 一]\n1\n\n[Sheet: 三]\n3');
 });
 
 test('xlsxText: 共有の文字の番号が範囲外・数でないときは空', () => {
   const rows = `<row>${['999', '-1', '1e3', 'abc', ''].map((v, n) => `<c r="${'ABCDE'[n]}1" t="s"><v>${v}</v></c>`).join('')}${inline('F1', 'z')}</row>`;
   const zip = oneSheet(rows, { 'xl/sharedStrings.xml': sstXml('<si><t>0番</t></si>') });
-  assert.equal(textOf(xlsxText(zip, 'ja')), '[シート: Sheet1]\n\t\t\t\t\tz');
+  assert.equal(textOf(xlsxText(zip, 'ja')), '[Sheet: Sheet1]\n\t\t\t\t\tz');
 });
 
 test('xlsxText: 共有の文字は 200,000 個まで。超えた分は空で、truncated', () => {
   const items = '<si><t>a</t></si>'.repeat(199_999) + '<si><t>LAST</t></si><si><t>OVER</t></si>';
   const zip = oneSheet('<row><c r="A1" t="s"><v>199999</v></c><c r="B1" t="s"><v>200000</v></c></row>', { 'xl/sharedStrings.xml': sstXml(items) }, LOOSE);
   const result = xlsxText(zip, 'ja');
-  assert.equal(textOf(result), '[シート: Sheet1]\nLAST');
+  assert.equal(textOf(result), '[Sheet: Sheet1]\nLAST');
   assert.equal(result.ok && result.truncated, true);
   assert.equal(result.ok && result.countLimit, true, '文字数の上限ではなく、個数の上限で切れた印');
 });
 
 test('xlsxText: 読むセルの合計は 1,000,000 個まで。超えたら止めて truncated', () => {
   const over = xlsxText(oneSheet(`<row r="1">${inline('A1', 'x')}</row><row r="2">${'<c/>'.repeat(1_000_000)}</row>`, {}, LOOSE), 'ja');
-  assert.equal(textOf(over), '[シート: Sheet1]\nx');
+  assert.equal(textOf(over), '[Sheet: Sheet1]\nx');
   assert.equal(over.ok && over.truncated, true);
   assert.equal(over.ok && over.countLimit, true);
   const exact = xlsxText(oneSheet(`<row r="1">${inline('A1', 'x')}</row><row r="2">${'<c/>'.repeat(999_999)}</row>`, {}, LOOSE), 'ja');
-  assert.equal(textOf(exact), '[シート: Sheet1]\nx');
+  assert.equal(textOf(exact), '[Sheet: Sheet1]\nx');
   assert.equal(exact.ok && exact.truncated, false);
 });
 
@@ -323,7 +323,7 @@ test('xlsxText: シートは 256 個まで。超えた分は読まず truncated'
   ids.forEach((_, n) => { files[`xl/worksheets/s${n + 1}.xml`] = sheetXml(`<row>${inline('A1', `v${n + 1}`)}</row>`); });
   const result = xlsxText(xlsxZip(files), 'ja');
   const text = textOf(result);
-  assert.ok(text.includes('[シート: S256]\nv256'));
+  assert.ok(text.includes('[Sheet: S256]\nv256'));
   assert.ok(!text.includes('S257'));
   assert.equal(result.ok && result.truncated, true);
   assert.equal(result.ok && result.countLimit, true);
@@ -370,7 +370,7 @@ test('xlsxText: 先頭の BOM があっても読める', () => {
     'xl/sharedStrings.xml': '\uFEFF' + sstXml('<si><t>字</t></si>'),
     'xl/worksheets/s.xml': '\uFEFF' + sheetXml('<row><c r="A1" t="s"><v>0</v></c></row>'),
   });
-  assert.equal(textOf(xlsxText(zip, 'ja')), '[シート: n]\n字');
+  assert.equal(textOf(xlsxText(zip, 'ja')), '[Sheet: n]\n字');
 });
 
 test('xlsxText: 英語の language では見出しに日本語の文字が無い。見出しの名前の制御文字は空白にする', () => {
@@ -408,7 +408,7 @@ test('docxText・xlsxText: 上限の切れ目がサロゲートペアの途中�
   assert.ok(docx.ok);
   assert.equal(docx.truncated, true);
   assert.ok(!/[\ud800-\udbff]$/.test(docx.text));
-  const prefix = '[シート: Sheet1]\n';
+  const prefix = '[Sheet: Sheet1]\n';
   const xlsx = xlsxText(oneSheet(`<row>${inline('A1', 'a'.repeat(OFFICE_TEXT_MAX - prefix.length - 1) + emoji)}</row>`), 'ja');
   assert.ok(xlsx.ok);
   assert.equal(xlsx.truncated, true);
@@ -417,20 +417,20 @@ test('docxText・xlsxText: 上限の切れ目がサロゲートペアの途中�
 });
 
 test('xlsxText: v の無い b のセルは FALSE にせず空として扱う', () => {
-  assert.equal(textOf(xlsxText(oneSheet(`<row><c r="A1" t="b"/><c r="B1" t="b"><v>0</v></c>${inline('C1', 'x')}</row>`), 'ja')), '[シート: Sheet1]\n\tFALSE\tx');
+  assert.equal(textOf(xlsxText(oneSheet(`<row><c r="A1" t="b"/><c r="B1" t="b"><v>0</v></c>${inline('C1', 'x')}</row>`), 'ja')), '[Sheet: Sheet1]\n\tFALSE\tx');
 });
 
-test('xlsxText: セルの文字のタブ・改行・復帰は空白にして、表の形を崩さず、偽の行や [シート: …] の見出しを作らせない', () => {
+test('xlsxText: セルの文字のタブ・改行・復帰は空白にして、表の形を崩さず、偽の行や [Sheet: …] の見出しを作らせない', () => {
   const zip = oneSheet(
     `<row r="1">${inline('A1', 'x&#9;y')}${inline('B1', 'p&#10;q')}<c r="C1" t="s"><v>0</v></c><c r="D1" t="str"><v>m&#13;n</v></c></row>`
-    + `<row r="2">${inline('A2', 'end\n[シート: 偽]\r\nfake&#9;row')}</row>`
-    + `<row r="3">${inline('A3', '\n[シート: 偽]')}</row>`,
+    + `<row r="2">${inline('A2', 'end\n[Sheet: 偽]\r\nfake&#9;row')}</row>`
+    + `<row r="3">${inline('A3', '\n[Sheet: 偽]')}</row>`,
     { 'xl/sharedStrings.xml': sstXml('<si><t>s1&#10;s2</t></si>') },
   );
   const text = textOf(xlsxText(zip, 'ja'));
-  assert.equal(text, '[シート: Sheet1]\nx y\tp q\ts1 s2\tm n\nend [シート: 偽]  fake row\n [シート: 偽]');
+  assert.equal(text, '[Sheet: Sheet1]\nx y\tp q\ts1 s2\tm n\nend [Sheet: 偽]  fake row\n [Sheet: 偽]');
   const lines = text.split('\n');
   assert.equal(lines.length, 4, '見出し 1 行 + 行 3 つ');
-  assert.deepEqual(lines.filter((line) => line.startsWith('[シート:')), ['[シート: Sheet1]']);
+  assert.deepEqual(lines.filter((line) => line.startsWith('[Sheet:')), ['[Sheet: Sheet1]']);
   assert.equal(lines[1]!.split('\t').length, 4, '1 行目は 4 つのセル');
 });

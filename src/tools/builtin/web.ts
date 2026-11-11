@@ -105,7 +105,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       const wait = web(ctx).throttle.take(w.maxSearchesPerHour);
       if (wait) await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, wait);
-        ctx.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new SearchFailure(toolText('ja', 'fetch.aborted'), 'fetch.aborted')); }, { once: true });
+        ctx.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new SearchFailure(toolText('en', 'fetch.aborted'), 'fetch.aborted')); }, { once: true });
       });
       const hits: SearchHit[] = w.search === 'searxng'
         ? await searchSearxng(w.searxngUrl, input.query, { limit, language: searxngLanguage(w.region) ?? '', signal: ctx.signal, fetch: web(ctx).fetch })

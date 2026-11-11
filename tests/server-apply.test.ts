@@ -422,7 +422,7 @@ test('A4: モデルの道具（シェル）からは押せない。この PC の
     assert.notEqual(outcome.decision, 'allow', `${command}: 確かめなしに通った`);
     // 断られるのではなく、毎回（今回だけ）の承認を求める。理由は「この PC の中のサーバー（Clive 自身を含む）につなぐ」（code.loopback）
     assert.ok(asked.length >= 1 && asked.every(a => a.onceOnly), `${command}: 今回だけの承認を求める`);
-    assert.ok(asked.some(a => a.reasons.some(reason => reason.includes('この PC の中のサーバー'))), `${command}: 理由は code.loopback`);
+    assert.ok(asked.some(a => a.reasons.some(reason => reason.includes('It connects to a server on this PC'))), `${command}: 理由は code.loopback`);
   }
   assert.equal(s.app.restartRequired(), true, 'シェルからは反映されていない');
   assert.equal(s.app.bootServer.port, s.port);

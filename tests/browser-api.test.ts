@@ -59,7 +59,7 @@ test('login: 画面の無い Linux は 409（理由を返し、ブラウザは�
   const { json } = await startApp(t, { configure: enable, browserDriver: driver, browserDisplay: false });
   const res = await json('/api/browser/login', 'POST', {});
   assert.equal(res.status, 409);
-  assert.match(String(res.body.message), /画面/u);
+  assert.match(String(res.body.message), /no display/u);
   assert.equal(driver.launches, 0);
 });
 
@@ -83,7 +83,7 @@ test('login: 見えるブラウザを同じプロファイルで開き、窓の�
   assert.equal(again.status, 200);
   assert.equal(driver.launches, 2);
   // 窓のあいだ、道具は断る
-  await assert.rejects(app.browser.run(call(), async () => 'x'), (e: unknown) => e instanceof BrowserFailure && e.code === 'login_open' && /ログイン用/u.test(e.text('ja')));
+  await assert.rejects(app.browser.run(call(), async () => 'x'), (e: unknown) => e instanceof BrowserFailure && e.code === 'login_open' && /for logging in/u.test(e.text('ja')));
   // 閉じれば戻る
   const closed = await json('/api/browser/close', 'POST', {});
   assert.equal(closed.status, 200);

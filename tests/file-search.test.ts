@@ -95,7 +95,7 @@ test('ファイル検索: 名前と中身の両方に合うものだけ返す', 
   makeFixtures(s);
   const out = await s.call('file_search', { name: '*.md', text: 'バナナ' });
   assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /見つかりませんでした/u);
+  assert.match(out.output.content, /Nothing was found/u);
 });
 
 test('ファイル検索: 名前も中身も無ければ直させる', async t => {
@@ -103,7 +103,7 @@ test('ファイル検索: 名前も中身も無ければ直させる', async t =
   makeFixtures(s);
   const out = await s.call('file_search', {});
   assert.equal(out.output.isError, true);
-  assert.match(out.output.content, /少なくとも 1 つ/u);
+  assert.match(out.output.content, /at least one/u);
 });
 
 test('ファイル検索: 作業フォルダの外は拒否する', async t => {
@@ -120,7 +120,7 @@ test('ファイル検索: 結果が max_results に達したら打ち切る', as
   for (let i = 1; i <= 21; i++) writeFileSync(join(ws, `f${String(i).padStart(2, '0')}.txt`), `ファイル ${i}`);
   const out = await s.call('file_search', { name: '*.txt', max_results: 20 });
   assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /20 件で打ち切りました/u);
+  assert.match(out.output.content, /Stopped at 20 results/u);
 });
 
 test('ファイル検索: シンボリックリンクの先（外のフォルダ）は探さない', async t => {
@@ -143,7 +143,7 @@ test('ファイル検索: 名前ワイルドカードは指数回帰しない（
   const ms = Date.now() - start;
   assert.equal(out.decision, 'allow');
   assert.ok(ms < 100, `ワイルドカードの照合が ${ms}ms かかった`);
-  assert.match(out.output.content, /見つかりませんでした/u);
+  assert.match(out.output.content, /Nothing was found/u);
 });
 
 test('ファイル検索: 名前ワイルドカードは大文字小文字を区別できる', async t => {
@@ -152,7 +152,7 @@ test('ファイル検索: 名前ワイルドカードは大文字小文字を区
   const insensitive = await s.call('file_search', { name: '*.md' });
   assert.match(insensitive.output.content, /a\.MD/u);
   const sensitive = await s.call('file_search', { name: '*.md', case_sensitive: true });
-  assert.match(sensitive.output.content, /見つかりませんでした/u);
+  assert.match(sensitive.output.content, /Nothing was found/u);
 });
 
 test('ファイル検索: [ ] は正規表現ではなくそのままの文字', async t => {
@@ -169,7 +169,7 @@ test('ファイル検索: 中止済みのシグナルなら素早く止まり、
   s.controller.abort();
   const out = await s.call('file_search', { name: '*.txt' });
   assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /見つかりませんでした/u);
+  assert.match(out.output.content, /Nothing was found/u);
 });
 
 test('ファイル検索: 上限を超えたら全体で止まる（内側のループだけではない）', async t => {
@@ -181,8 +181,8 @@ test('ファイル検索: 上限を超えたら全体で止まる（内側のル
   for (let i = 1; i <= 20_000; i++) writeFileSync(join(ws, `z${String(i).padStart(5, '0')}.dat`), 'x');
   const out = await s.call('file_search', { name: '*.txt' });
   assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /20000 個まで見て止めました/u);
-  assert.doesNotMatch(out.output.content, /20001 個まで/u);
+  assert.match(out.output.content, /stopped after looking at 20000\]/u);
+  assert.doesNotMatch(out.output.content, /looking at 20001/u);
   assert.doesNotMatch(out.output.content, /sub\/b\.txt/u);
 });
 

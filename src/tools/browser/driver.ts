@@ -19,7 +19,7 @@ export class BrowserFailure extends Error {
   readonly key: ToolMessageKey;
   readonly params: MessageParams;
   constructor(code: BrowserFailureCode, key: ToolMessageKey, params: MessageParams = {}) {
-    super(toolText('ja', key, params));
+    super(toolText('en', key, params));
     this.code = code; this.key = key; this.params = params;
   }
 

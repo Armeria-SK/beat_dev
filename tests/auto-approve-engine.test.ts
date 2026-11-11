@@ -144,7 +144,7 @@ test('自動承認（エンジン）: 判定役のモデルの呼び出しが失
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await waitFor(() => s.app.approvals.pending().length === 1, '判定役が失敗したので札');
   const [request] = s.app.approvals.pending();
-  assert.match(request!.reasons.join('\n'), /答えられなかった/u);
+  assert.match(request!.reasons.join('\n'), /could not give an answer/u);
   s.app.approvals.decide(request!.id, 'once');
   await settled(s.app, sent.body.runId);
   assert.equal(autoRows(s).length, 0);
@@ -174,7 +174,7 @@ test('自動承認（エンジン）: 今回だけの確かめ（コードを動
   assert.equal(t2.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(t2).includes(TAINTED_NOTE), '判定役に、よそから来た文を読んだ会話だと伝える');
   assert.equal(autoRows(t2).length, 1);
-  assert.match((JSON.parse(autoRows(t2)[0]!.reasons) as string[]).join('\n'), /よそから来た文/u, '理由に taint が載る');
+  assert.match((JSON.parse(autoRows(t2)[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, '理由に taint が載る');
 });
 
 // ── 外から読んだ内容のあと（Web）。同じ実行の中でも、止めたあとの次の実行にも持ち越す ──
@@ -214,7 +214,7 @@ test('自動承認（エンジン）: Web を読んだあとの外読みは、�
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   const rows = s.app.db.prepare("SELECT reasons FROM approvals WHERE scope = 'auto'").all() as Array<{ reasons: string }>;
   assert.equal(rows.length, 1);
-  assert.match((JSON.parse(rows[0]!.reasons) as string[]).join('\n'), /よそから来た文/u, '理由に taint が載る');
+  assert.match((JSON.parse(rows[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, '理由に taint が載る');
   assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'auto-mode');
 });
 
@@ -228,7 +228,7 @@ test('自動承認（エンジン）: Web を読んだあとの送る操作・�
   await waitFor(() => s.app.approvals.pending().length === 1, '送る操作の札');
   const [card] = s.app.approvals.pending();
   assert.deepEqual([...(card!.kinds ?? [])], ['taint']);
-  assert.ok(card!.reasons.some(r => /送信なので/u.test(r)));
+  assert.ok(card!.reasons.some(r => /This sends something out/u.test(r)));
   assert.equal(s.adapter().calls.filter(isClassifier).length, 0, '判定役を呼ばない');
   s.app.approvals.decide(card!.id, 'deny');
   await settled(s.app, sent.runId);
@@ -240,7 +240,7 @@ test('自動承認（エンジン）: Web を読んだあとの送る操作・�
   const second = forget.app.engine.send('c1', 'このページを読んで、記憶を消して');
   assert.ok(second.ok);
   await waitFor(() => forget.app.approvals.pending().length === 1, '消す操作の札');
-  assert.ok(forget.app.approvals.pending()[0]!.reasons.some(r => /削除なので/u.test(r)));
+  assert.ok(forget.app.approvals.pending()[0]!.reasons.some(r => /This deletes something/u.test(r)));
   assert.equal(forget.adapter().calls.filter(isClassifier).length, 0, '判定役を呼ばない');
   forget.app.approvals.decide(forget.app.approvals.pending()[0]!.id, 'deny');
   await settled(forget.app, second.runId);
@@ -268,7 +268,7 @@ test('自動承認（エンジン）: Web を読んだ実行が止められた�
   assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(s).includes(TAINTED_NOTE), '持ち越した印は、判定役に伝わる');
-  assert.match((JSON.parse(autoRows(s)[0]!.reasons) as string[]).join('\n'), /よそから来た文/u, '理由に taint が載る（持ち越した印）');
+  assert.match((JSON.parse(autoRows(s)[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, '理由に taint が載る（持ち越した印）');
 });
 
 test('自動承認（エンジン）: 外のメモを自動で読んだあとの、許可の一覧にある取得（curl）は、同じ返事の中でも札が出る。判定役は 2 回目を見ない', async t => {
@@ -298,7 +298,7 @@ test('自動承認（エンジン）: シェルで外から取得したら、実
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, '実行の記録に印が残る（止めた・落ちた実行の次の実行へ引き継ぐ材料）');
   assert.equal(autoRows(s).length, 1);
-  assert.deepEqual([...(JSON.parse(autoRows(s)[0]!.reasons) as string[])].filter(r => /よそから来た文/u.test(r)).length, 1, '理由に taint が載る');
+  assert.deepEqual([...(JSON.parse(autoRows(s)[0]!.reasons) as string[])].filter(r => /text that came from somewhere else/u.test(r)).length, 1, '理由に taint が載る');
 });
 
 // ── 会話の印（一度でも外から読んだ会話は、判定役を使わない）と、自動承認で外を読んだ印の持ち越し ──
@@ -322,7 +322,7 @@ test('自動承認（エンジン）: 一度でもよそから来た文を読ん
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(s).includes(TAINTED_NOTE), '会話の印は、判定役に伝わる');
   const reasons = JSON.parse(autoRows(s)[0]!.reasons) as string[];
-  assert.ok(!reasons.some(r => /よそから来た文/u.test(r)), 'この実行は読んでいないので、taint の理由は載らない');
+  assert.ok(!reasons.some(r => /text that came from somewhere else/u.test(r)), 'この実行は読んでいないので、taint の理由は載らない');
 });
 
 test('自動承認（エンジン）: 外から読んだことの無い会話には印が付かない。シェルで取得した・添付を付けた会話には付く', async t => {
@@ -405,7 +405,7 @@ test('自動承認（エンジン）: 持ち主が札で許した git clone も�
   assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, '実行の記録に印が残る');
   assert.equal(s.app.conversations.everTainted(CONVERSATION), true);
   assert.equal(autoRows(s).length, 1);
-  assert.match((JSON.parse(autoRows(s)[0]!.reasons) as string[]).join('\n'), /よそから来た文/u, 'clone を動かしたあとなので taint が載る');
+  assert.match((JSON.parse(autoRows(s)[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, 'clone を動かしたあとなので taint が載る');
 });
 
 test('自動承認（エンジン）: 外のメモを自動で読んだ会話は、その返事が終わったあとの発言でも、シェルのコマンド（許可の一覧にある curl も）を毎回確かめる。モードをふつうに戻しても、ずっと', async t => {
@@ -450,7 +450,7 @@ test('自動承認（エンジン）: 判定役の返事が max_tokens で途中
   s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutOff(ALLOW), say('読みました')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await waitFor(() => s.app.approvals.pending().length === 1, '返事が切れた判定役のあとの札');
-  assert.match(s.app.approvals.pending()[0]!.reasons.join('\n'), /答えられなかった/u);
+  assert.match(s.app.approvals.pending()[0]!.reasons.join('\n'), /could not give an answer/u);
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1);
   s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
   await settled(s.app, sent.body.runId);

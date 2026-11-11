@@ -47,8 +47,8 @@ test('フックの置き場所: 設定に core.hooksPath があれば返さな�
   const v = f.bash('git commit -m x', husky);
   assert.equal(v.onceOnly, true);
   assert.equal(v.ownHooksDir, null);
-  assert.match(v.reasons.join('\n'), /core\.hooksPath を設定していますが、そのフックは Clive の git では動きません/u);
-  assert.doesNotMatch(v.reasons.join('\n'), /フックが動きうります/u);
+  assert.match(v.reasons.join('\n'), /This repository sets core\.hooksPath, but those hooks do not run in the git that Clive runs/u);
+  assert.doesNotMatch(v.reasons.join('\n'), /Git hooks can run in this repository/u);
 });
 
 test('フックの置き場所: git が無い・リポジトリが無い・複数のリポジトリ・cd の先が分からない・設定がふつうでないときは返さない', t => {

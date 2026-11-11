@@ -187,7 +187,7 @@ test('削除: その会話で notify_owner が出した通知は、題も本文�
 
   const rows = app.db.prepare('SELECT title, link, dedup_key AS k FROM notifications ORDER BY id').all() as Array<{ title: string; link: string | null; k: string }>;
   assert.deepEqual(rows.map(r => ({ ...r })), [
-    { title: 'Clive より: 別の件', link: `#/c/${OTHER}`, k: rows[0]!.k },
+    { title: 'From Clive: 別の件', link: `#/c/${OTHER}`, k: rows[0]!.k },
     { title: 'Clive より: タスクの区切り', link: `#/tasks/${task.id}`, k: 'owner:task-run' },
     { title: 'ほかの知らせ', link: null, k: 'done:1' },
   ], 'この会話の notify_owner の通知だけ消える。ほかの会話・タスクの通知は残り、会話を指すだけの通知はリンクが外れる');

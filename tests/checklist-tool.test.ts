@@ -77,7 +77,7 @@ test('checklist_write: items を空にすると消える', async t => {
   await s.call('checklist_write', { items: [{ text: 'a', status: 'pending' }] });
   const out = await s.call('checklist_write', { items: [] });
   assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /空/u);
+  assert.match(out.output.content, /cleared/u);
   assert.equal(readChecklist(kv(s.db), 'c1'), undefined);
   const updated = s.events.filter(e => e.type === 'checklist.updated');
   assert.equal(updated.length, 2);
@@ -120,7 +120,7 @@ test('checklist_write: services の無い ctx では isError', async t => {
   const noServices: ToolContext = { ...s.ctx, services: undefined };
   const out = await s.call('checklist_write', { items: [{ text: 'a', status: 'pending' }] }, noServices);
   assert.ok(out.output.isError);
-  assert.match(out.output.content, /保存できません/u);
+  assert.match(out.output.content, /cannot be saved/u);
 });
 
 test('checklist_write: kind: review では使えない（pipeline.tool_not_allowed）', async t => {
@@ -128,7 +128,7 @@ test('checklist_write: kind: review では使えない（pipeline.tool_not_allow
   const reviewCtx: ToolContext = { ...s.ctx, kind: 'review' };
   const out = await s.call('checklist_write', { items: [{ text: 'a', status: 'pending' }] }, reviewCtx);
   assert.equal(out.decision, 'deny');
-  assert.match(out.output.content, /この種類の実行では使えません/u);
+  assert.match(out.output.content, /cannot be used in this kind of run/u);
 });
 
 test('checklist_write: 英語の設定では出力に日本語の文字が無い', async t => {

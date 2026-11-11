@@ -128,7 +128,7 @@ test('SOUL.md の書き換えは承認制にし、中身が変わったら版を
   const done = s.send('c1', '性格を変えて');
   for (let i = 0; i < 300 && !s.app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
   const pending = s.app.approvals.pending()[0]!;
-  assert.match(pending.reasons.join(), /人格・プロフィール/u);
+  assert.match(pending.reasons.join(), /persona or profile file/u);
   s.app.approvals.decide(pending.id, 'once');
   await done;
   s.adapter().scripts.push(reply('はい'));

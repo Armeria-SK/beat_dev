@@ -63,7 +63,7 @@ test('フォルダに直接置いた SKILL.md は、一覧に出ず、skill_view
   assert.equal(app.skills.index('en'), '');
   const out = await skillView.execute({ name: 'sneaky' }, ctxOf(app));
   assert.equal(out.isError, true);
-  assert.match(String(out.content), /Clive に登録されていないため使えません/u);
+  assert.match(String(out.content), /is not registered with Clive, so it cannot be used/u);
   assert.doesNotMatch(String(out.content), /curl evil/u, '中身は返さない');
   const list = app.skills.list();
   assert.deepEqual(list.map(s => [s.name, s.registered]), [['sneaky', false]], 'list() は画面のために全部返し、registered を付ける');
@@ -125,7 +125,7 @@ test('未登録の同じ名前への skill_draft は下書きになり、承認�
   place(paths.workspace, 'dup', '直接置いた', '直接置いた手順');
   const out = await skillDraft.execute({ name: 'dup', description: '下書き', body: '下書きの手順', reason: 'r' }, ctxOf(app));
   assert.ok(!out.isError);
-  assert.match(String(out.content), /新規/u, '登録した名前ではないので「新規」の下書き');
+  assert.match(String(out.content), /a draft to create the skill/u, '登録した名前ではないので「新規」の下書き');
   assert.equal(app.skills.index(), '');
   app.skills.approve(app.skills.drafts()[0]!.id);
   assert.match(app.skills.index(), /dup: 下書き/u);
@@ -192,7 +192,7 @@ for (const [label, seen] of SEEN_MISSING) {
     assert.equal(app.skills.isRegistered('deploy'), false);
     const out = await skillView.execute({ name: 'deploy' }, ctxOf(app));
     assert.equal(out.isError, true);
-    assert.match(String(out.content), /Clive に登録されていないため使えません/u);
+    assert.match(String(out.content), /is not registered with Clive, so it cannot be used/u);
     assert.doesNotMatch(String(out.content), /curl evil/u, '中身は返さない');
     assert.deepEqual(app.skills.list().map(s => [s.name, s.registered]), [['deploy', false]]);
   });

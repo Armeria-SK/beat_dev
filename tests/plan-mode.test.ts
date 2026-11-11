@@ -57,7 +57,7 @@ test('計画モード（パイプライン）: 読む道具と Web の読み取�
     } else {
       assert.equal(outcome.decision, 'deny', effect);
       assert.equal(outcome.decidedBy, 'mode', effect);
-      assert.match(outcome.output.content, /計画/u, effect);
+      assert.match(outcome.output.content, /plan mode/u, effect);
     }
   }
   assert.deepEqual(s.ran, ['read', 'network']);

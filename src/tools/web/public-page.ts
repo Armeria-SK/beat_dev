@@ -23,7 +23,7 @@ export class RetrievalFailure extends Error {
 }
 
 function failure(code: RetrievalCode, key: ToolMessageKey, params: MessageParams = {}, status?: number): RetrievalFailure {
-  return new RetrievalFailure(code, toolText('ja', key, params), status, key, params);
+  return new RetrievalFailure(code, toolText('en', key, params), status, key, params);
 }
 
 export function clip(text: string, max: number): string {
@@ -37,7 +37,7 @@ export function mediaTypeOf(contentType: string): string | undefined {
   return /^[\w.+-]+\/[\w.+-]+$/u.test(media) ? media.slice(0, 100) : undefined;
 }
 
-const typeShown = (contentType: string) => mediaTypeOf(contentType) ?? toolText('ja', 'fetch.type_unknown');
+const typeShown = (contentType: string) => mediaTypeOf(contentType) ?? toolText('en', 'fetch.type_unknown');
 
 const MAX_BYTES = 512 * 1024;
 export const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp)(;|$)/iu;

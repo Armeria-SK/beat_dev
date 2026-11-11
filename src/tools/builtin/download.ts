@@ -83,7 +83,7 @@ async function place(part: string, dir: string, name: string, size: number): Pro
         // コピーは書きかけとは別に、ファイルの大きさ分を新しく使う。足りなければコピーを始めない
         spaceChecked = true;
         const free = freeBytesOf(dir);
-        if (free < size + DOWNLOAD_LIMITS.minFreeBytes) throw new RetrievalFailure('http_failure', toolText('ja', 'download.disk_low', { free }), undefined, 'download.disk_low', { free });
+        if (free < size + DOWNLOAD_LIMITS.minFreeBytes) throw new RetrievalFailure('http_failure', toolText('en', 'download.disk_low', { free }), undefined, 'download.disk_low', { free });
       }
       try {
         await copyFile(part, target, constants.COPYFILE_EXCL);

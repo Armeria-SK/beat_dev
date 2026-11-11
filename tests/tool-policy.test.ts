@@ -117,7 +117,7 @@ test('A3: ask は、ふだん確かめなしの呼び出しにも毎回承認を
   assert.equal(approvalPublic(request).everyTime, true);
   assert.equal(approvalPublic(request).onceOnly, false, 'コードを動かす確かめ（onceOnly）とは別');
   assert.match(request.reasons.join(), /file_write/u);
-  assert.match(request.reasons.join(), /承認を求める/u);
+  assert.match(request.reasons.join(), /ask for approval/u);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false, '承認の前は動かない');
   assert.equal(s.approvals.decide(request.id, 'conversation'), true, '古い画面から「この会話では許可」が送られても');
   const done = await first;
@@ -132,7 +132,7 @@ test('A3: ask は、ふだん確かめなしの呼び出しにも毎回承認を
   s.approvals.decide(again.id, 'deny');
   const denied = await second;
   assert.equal(denied.output.isError, true);
-  assert.match(denied.output.content, /拒否/u);
+  assert.match(denied.output.content, /refused/u);
 });
 
 test('A3: ask は会話の許可（ほかの理由で前に「この会話では許可」にした同じ入力）も越える', async t => {
@@ -199,7 +199,7 @@ test('A3: 振り返りでは ask は拒否として扱う（承認する人が�
   const review = await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' });
   assert.equal(review.decision, 'deny');
   assert.equal(review.decidedBy, 'policy');
-  assert.match(review.output.content, /振り返り/u);
+  assert.match(review.output.content, /a review \(background work\)/u);
   assert.equal(s.approvals.pending().length, 0, '待たない');
   assert.deepEqual(s.ran, []);
   const chat = s.call('memory_save', {});
@@ -217,7 +217,7 @@ test('A3: タスクの実行で ask になったら、今のシェルの承認�
   s.ctx.config.tools.shell.approvalTimeoutSec = 1;
   const outcome = await s.call('file_write', { path: 'a.md', content: 'x' }, { ...s.ctx, kind: 'task', conversationId: 'task-conv' });
   assert.equal(outcome.decision, 'ask');
-  assert.match(outcome.output.content, /承認の待ち時間が過ぎたため実行しませんでした/u);
+  assert.match(outcome.output.content, /It was not run because the wait for approval ran out/u);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
   const requested = s.events.filter(e => e.type === 'approval.requested');
   assert.equal(requested.length, 1);

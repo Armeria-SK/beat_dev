@@ -70,7 +70,7 @@ async function expectAsk(s: ReturnType<typeof setup>, command: string): Promise<
   s.approvals.decide(request.id, 'deny');
   const outcome = await pending;
   assert.equal(outcome.output.isError, true, command);
-  assert.match(outcome.output.content, /拒否しました/u, command);
+  assert.match(outcome.output.content, /The user refused to run it/u, command);
 }
 
 const psAvailable = process.platform === 'win32' && spawnSync('powershell.exe', ['-NoProfile', '-Command', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
@@ -134,7 +134,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 組み立てた書�
   for (const command of ['Write-Output ‘x’', 'ls --% x', '``n`o`de --eval=1']) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'deny', command);
-    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+    assert.match(outcome.output.content, /The way it is written cannot be judged/u, command);
   }
 });
 
@@ -246,7 +246,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 管理共有・デ�
     for (const command of [`Set-Content '${path}' -Value pwned`, `'pwned' > '${path}'`, `Get-Content '${path}'`]) {
       const outcome = await s.call(command);
       assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
-      assert.match(outcome.output.content, /ネットワークのパス/u, command);
+      assert.match(outcome.output.content, /network \(UNC\) paths/u, command);
     }
   }
   assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '管理共有ごしに人格が書き換わった');
@@ -294,7 +294,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: git grep -e \'\' -- 
   for (const c of [command, `git grep -e "" -- '-O./x.sh'`, `git grep -e '' '-O./x.sh'`]) {
     const outcome = await s.call(c);
     assert.equal(outcome.decision, 'deny', `${c}: ${outcome.output.content}`);
-    assert.match(outcome.output.content, /引数/u, c);
+    assert.match(outcome.output.content, /argument/u, c);
   }
   assert.equal(existsSync(marker), false, 'Clive のシェルで x.sh が動いた');
 });
@@ -340,7 +340,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: "…" の中の $( �
   for (const command of ['Write-Output "${env:PATH}"', 'Write-Output "$$(Get-Date)"', "Write-Output \"$(Write-Output ')')\"", 'Write-Output "$(Get-Date # c`n)"']) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
-    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+    assert.match(outcome.output.content, /The way it is written cannot be judged/u, command);
   }
 });
 
@@ -538,7 +538,7 @@ test('実機（bash）: "…" の中の $( ) の中の引用符・コメント�
   for (const command of [`echo "$(echo '"')" ＂--pre=x＂`, "echo a # it's\necho ＂--pre=x＂ done", "cat <<'EOF'\nit's\nEOF\necho ＂--pre=x＂ done", 'echo "$(echo ＡＢ)"']) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
-    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+    assert.match(outcome.output.content, /The way it is written cannot be judged/u, command);
     assert.doesNotMatch(outcome.output.content, /done/u, `${command}: 動いた`);
   }
   for (const [command, expected] of [[`echo "$(echo 'ＡＢ')"`, 'ＡＢ'], [`echo "ＡＢ $(echo '"')"`, 'ＡＢ "']] as const) {
@@ -948,7 +948,7 @@ for (const shell of ['powershell', 'bash'] as const) {
       const request = s.approvals.pending()[0];
       assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
       assert.equal(request.onceOnly, true);
-      assert.match(request.reasons.join('\n'), /フックが動きうります/u);
+      assert.match(request.reasons.join('\n'), /Git hooks can run in this repository/u);
       s.approvals.decide(request.id, decision);
       return pending;
     };
@@ -1013,14 +1013,14 @@ for (const shell of ['powershell', 'bash'] as const) {
     const count = (): number => Number(git('rev-list', '--all', '--count').stdout.trim() || 0);
     // 設定が .husky を指す: そのフックは、許しても動かない（空のフォルダへ向けたまま）。.git/hooks のフックも、設定に隠れているので動かない
     git('config', 'core.hooksPath', '.husky');
-    const first = await ask('cd hk2; git commit --allow-empty -q -m x', /core\.hooksPath を設定していますが、そのフックは Clive の git では動きません/u);
+    const first = await ask('cd hk2; git commit --allow-empty -q -m x', /This repository sets core\.hooksPath, but those hooks do not run in the git that Clive runs/u);
     assert.equal(first.output.isError, false, first.output.content);
     assert.equal(existsSync(marker('husky')), false, '設定の core.hooksPath のフックが動いた');
     assert.equal(existsSync(marker('own')), false);
     assert.equal(count(), 1);
     // 設定は無い: 同じコマンドの中で .husky を指すように書き換えても、動くのは .git/hooks のフックだけ
     git('config', '--unset', 'core.hooksPath');
-    const second = await ask('cd hk2; git config core.hooksPath .husky; git commit --allow-empty -q -m y', /フックが動きうります/u);
+    const second = await ask('cd hk2; git config core.hooksPath .husky; git commit --allow-empty -q -m y', /Git hooks can run in this repository/u);
     assert.equal(second.output.isError, false, second.output.content);
     assert.equal(existsSync(marker('husky')), false, '同じコマンドで書き換えた core.hooksPath のフックが動いた');
     assert.equal(existsSync(marker('own')), true, '.git/hooks のフックが動かない');
@@ -1166,7 +1166,7 @@ for (const shell of ['powershell', 'bash'] as const) {
     const second = s.approvals.pending()[0];
     assert.ok(second, '承認の依頼が来ていない');
     assert.equal(second.onceOnly, true);
-    assert.match(second.reasons.join('\n'), /この PC のフォルダ/u);
+    assert.match(second.reasons.join('\n'), /points to a folder on this PC/u);
     s.approvals.decide(second.id, 'once');
     const pushed = await pushing;
     assert.equal(pushed.output.isError, false, pushed.output.content);

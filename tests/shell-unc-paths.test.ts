@@ -64,7 +64,7 @@ test('UNC・デバイスのパス: 作業フォルダの外のネットワーク
     const v = f.ps(command);
     assert.equal(v.decision, 'deny', `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
   }
-  assert.match(f.ps("Get-Content '//server/share/a.txt'").reasons.join('\n'), /ネットワークのパス/u);
+  assert.match(f.ps("Get-Content '//server/share/a.txt'").reasons.join('\n'), /network \(UNC\) paths/u);
   assert.match(f.ps("Get-Content '//?/C:/Windows/win.ini'").reasons.join('\n'), /\\\\\?\\/u);
 });
 

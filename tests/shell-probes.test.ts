@@ -83,7 +83,7 @@ test('フックが動く git の書く操作は今回だけ。ふつうの git �
   writeFileSync(join(f.ws, 'clean', '.git', 'config'), '[core]\n\trepositoryformatversion = 0\n');
   const hooked = f.bash('git -C sub commit -m x');
   assert.equal(hooked.onceOnly, true);
-  assert.match(hooked.reasons.join(), /フックが動きうります/u);
+  assert.match(hooked.reasons.join(), /Git hooks can run in this repository/u);
   const clean = f.bash('git -C clean commit -m x');
   assert.equal(clean.decision, 'ask');
   assert.equal(clean.onceOnly, false);

@@ -89,7 +89,7 @@ test('remote の url が この PC のフォルダ・file:// なら、git push �
   const hk = join(f.ws, 'hk');
   for (const [c, cwd] of [['git push up', hk], ['git push mirror main', hk], ['git push', hk], ['cd hk && git push up', f.ws], ['git -C hk push up', f.ws]] as const) {
     assert.equal(once(f.bash(c, cwd)), true, `${c}: ${show(f.bash(c, cwd))}`);
-    assert.match(f.bash(c, cwd).reasons.join('\n'), /この PC のフォルダ/u, c);
+    assert.match(f.bash(c, cwd).reasons.join('\n'), /points to a folder on this PC/u, c);
   }
   assert.equal(f.bash('git push origin main', hk).decision, 'ask');
   assert.equal(f.bash('git push origin main', hk).onceOnly, false, 'この PC の外の remote はふつうの確かめ');

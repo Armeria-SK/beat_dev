@@ -234,7 +234,7 @@ test('途中経過（task_checkpoint）を残すと、指定の時間まで休�
   assert.equal(rested.status, 'ready');
   assert.equal(rested.next_action, '結果を見る');
   assert.equal(rested.run_at, s.clock.now + 30 * MIN);
-  assert.match(rested.body, /試したこと: ビルドした/u);
+  assert.match(rested.body, /Tried: ビルドした/u);
   assert.equal(await s.app.worker.tick(), 'idle');
   s.clock.now += 31 * MIN;
   s.adapter().scripts.push(toolCall('task_complete', { summary: '成功' }));

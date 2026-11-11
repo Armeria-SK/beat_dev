@@ -71,7 +71,7 @@ test('cd の先が分からない（変数・ワイルドカード・cd -・~ユ
   assert.deepEqual(wrong, []);
   // 理由は「cd の先が分からず、リポジトリの設定を調べられない」（cwd）。ほかの理由で止まっているだけではない
   // bash の ~ユーザー は字句の読み取りで止まる（書き方を判定できない）ので、この理由は付かない
-  const lacks = (c: string, shell: 'bash' | 'powershell'): boolean => { const v = f.run(c, shell); return !(v.decision === 'deny' && shell === 'bash' && c.includes('~nobody')) && !/（cwd）/u.test(v.reasons.join()); };
+  const lacks = (c: string, shell: 'bash' | 'powershell'): boolean => { const v = f.run(c, shell); return !(v.decision === 'deny' && shell === 'bash' && c.includes('~nobody')) && !/\(cwd\)/u.test(v.reasons.join()); };
   const noReason = [...bash.filter(c => lacks(c, 'bash')), ...ps.filter(c => lacks(c, 'powershell'))];
   assert.deepEqual(noReason, []);
 });
@@ -108,8 +108,8 @@ test('cd のあとの curl・wget: 動いた先の設定ファイルを数える
   }
   // cd $d 自体は、読むパスが値の分からないふつうの確かめ。-q・--no-config があれば、curl・wget のための今回だけは付かない
   for (const c of ['cd $d && curl -q -sS https://example.com/', 'cd $d && wget --no-config --max-redirect=0 -O - https://example.com/']) assert.equal(f.run(c).onceOnly, false, c);
-  assert.match(f.run(`cd rc && ${curl}`).reasons.join(), /curl の設定ファイル/u);
-  assert.match(f.run(`cd $d && ${curl}`).reasons.join(), /cd の先/u);
+  assert.match(f.run(`cd rc && ${curl}`).reasons.join(), /curl has a config file/u);
+  assert.match(f.run(`cd $d && ${curl}`).reasons.join(), /The folder after cd is not known/u);
 });
 
 // 判定の流れを cd の追い方と共有しているので、cd で動いた先にだけある守る場所（スキルのフォルダ）への書き込みも、これまでどおり見つかる
@@ -134,7 +134,7 @@ test('git push の宛先の名前は、cd で動いた先のリポジトリの�
   assert.equal(f.run('git -C rem push origin main').onceOnly, false);
   for (const c of ['cd rem && git push victim', 'git -C rem push victim', 'cd rem && git push upstream main', 'cd rem && cd ../ok && git push origin main', 'cd ok && git push origin main']) {
     assert.equal(once(f.run(c)), true, c);
-    assert.match(f.run(c).reasons.join(), /remote の名前ではありません/u, c);
+    assert.match(f.run(c).reasons.join(), /is not a remote name in this repository's settings/u, c);
   }
   assert.equal(once(f.run('cd rem; Set-Location ../ok; git push origin main', 'powershell')), true);
 });

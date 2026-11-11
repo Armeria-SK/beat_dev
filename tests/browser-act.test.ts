@@ -137,9 +137,9 @@ test('T-20: 事前の判定は ask。sends・askKinds web・bind・fetched・札
   const file = check.preview![0]!;
   assert.ok(file.path.includes(PAGE));
   assert.ok(file.text.includes('textbox') && file.text.includes('Search'));
-  assert.ok(file.text.includes('ページが付けた名前'), 'ページが付けた名前だと添える');
+  assert.ok(file.text.includes('name given by the page'), 'ページが付けた名前だと添える');
   assert.ok(file.text.includes('こんにちは'), '入れる文字の全文');
-  assert.ok(file.text.includes('Enter を送ります'));
+  assert.ok(file.text.includes('Then Enter is pressed'));
   const click = await preCheck(r, browserClick, { ref: 'e2' });
   assert.equal(click.decision, 'ask');
   assert.equal(click.sends, true);
@@ -394,7 +394,7 @@ test('T-26: 遷移のあとの古い番号・表を読んでいないタブ・if
   page.navigateTo(OTHER);
   const stale = await preCheck(r, browserClick, { ref: 'e2' });
   assert.equal(stale.decision, 'deny');
-  assert.ok(stale.reasons[0]!.includes('ページが変わりました'));
+  assert.ok(stale.reasons[0]!.includes('The page has changed'));
   page.navigateTo(PAGE);
   // iframe の中のボタン（Inner）には番号が無い。e12 は存在しない
   const frame = await preCheck(r, browserClick, { ref: 'e12' });
@@ -429,7 +429,7 @@ test('type: 入れた文字数を書き、文字そのものは結果に書か�
   const page = await opened(r);
   const out = await browserType.execute({ ref: 'e1', text: 'ひみつの文', submit: true }, r.ctx);
   assert.equal(out.isError, undefined, out.content);
-  assert.ok(out.content.includes('5 文字') && out.content.includes('Enter'));
+  assert.ok(out.content.includes('Typed 5 characters') && out.content.includes('Enter'));
   assert.ok(!out.content.includes('ひみつ'));
   assert.deepEqual(page.acts.map(x => [x.kind, x.text, x.submit]), [['fill', 'ひみつの文', true]]);
 });
@@ -440,9 +440,9 @@ test('T-28: ダイアログ・ダウンロード・ファイル選択は断っ�
   const r = rig(t);
   await opened(r);
   const out = await browserClick.execute({ ref: 'e2' }, r.ctx);
-  assert.ok(out.content.includes('ダイアログ'));
-  assert.ok(out.content.includes('ダウンロード'));
-  assert.ok(out.content.includes('ファイル選択'));
+  assert.ok(out.content.includes('dialog(s) from the page'));
+  assert.ok(out.content.includes('download(s) started by the page'));
+  assert.ok(out.content.includes('file chooser(s) from the page'));
 });
 
 test('T-28: ポップアップは新しいタブとして残し、上限を超えたら閉じて結果に書く', async t => {
@@ -454,7 +454,7 @@ test('T-28: ポップアップは新しいタブとして残し、上限を超�
   assert.equal(before, 1);
   assert.equal(r.session.tabCount('c1'), 2, '上限 2: 1 つだけ残る');
   assert.ok(out.content.includes('t2'));
-  assert.ok(out.content.includes('閉じました') && out.content.includes('1'));
+  assert.ok(out.content.includes('were closed because of the tab limit') && out.content.includes('1'));
   assert.equal(r.driver.current!.pageList.length, 2, '閉じた窓は残らない');
 });
 

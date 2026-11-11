@@ -17,7 +17,7 @@ export class SearchFailure extends Error {
 }
 
 function searchFailure(key: ToolMessageKey, params: MessageParams = {}): SearchFailure {
-  return new SearchFailure(toolText('ja', key, params), key, params);
+  return new SearchFailure(toolText('en', key, params), key, params);
 }
 
 export type SearchProvider = 'duckduckgo' | 'searxng' | 'off';

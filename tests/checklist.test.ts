@@ -74,7 +74,7 @@ test('pendingとin_progressが出てdoneは出ない', () => {
     tainted: false,
     updatedAt: 1,
   }, 'ja');
-  assert.match(section, /^作業の一覧/);
+  assert.match(section, /^Work list/);
   assert.match(section, /- \[ \] task 1/);
   assert.match(section, /- \[>\] task 2/);
   assert.doesNotMatch(section, /task 3/);
@@ -86,7 +86,7 @@ test('taintedなら汚染の文が入る', () => {
     tainted: true,
     updatedAt: 1,
   }, 'ja');
-  assert.match(section, /よそから来た文を読んだあとに書かれました/);
+  assert.match(section, /This list was written after reading text that came from elsewhere/);
 });
 
 test('英語の文に日本語の文字が入らない', () => {
