@@ -9,7 +9,7 @@ import { CONVERSATION, fakeModel, settled, startApp } from './app-setup.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import type { Script } from './helpers.ts';
 
-const isSummaryCall = (req: ModelRequest) => req.system.frozen.includes('要約係');
+const isSummaryCall = (req: ModelRequest) => req.system.frozen.includes('conversation summarizer');
 
 // 要約の呼び出しには要約を、それ以外は「道具を N 回呼んでから返事」で答える台本。要約を失敗させる回数なども決められる
 function router(options: { tools: number; summaryFails?: (n: number) => boolean }) {
@@ -66,8 +66,8 @@ test('1 回の返事の中でも、外す発言が増えたら要約を重ねる
   const runId = await run();
   assert.equal(s.app.runs.get(runId)!.ok, 1);
   assert.ok(r.calls.summaries.length >= 2, `要約の呼び出しが ${r.calls.summaries.length} 回しかない`);
-  assert.doesNotMatch((r.calls.summaries[0]!.messages[0] as { content: string }).content, /これまでの要約（これに足して/u, '1 回目は前の要約が無い');
-  assert.match((r.calls.summaries[1]!.messages[0] as { content: string }).content, /これまでの要約（これに足して[\s\S]*要約 1 回目/u, '2 回目は前の要約に足す');
+  assert.doesNotMatch((r.calls.summaries[0]!.messages[0] as { content: string }).content, /Summary so far \(add to this/u, '1 回目は前の要約が無い');
+  assert.match((r.calls.summaries[1]!.messages[0] as { content: string }).content, /Summary so far \(add to this[\s\S]*要約 1 回目/u, '2 回目は前の要約に足す');
   const upto = s.app.conversations.get(CONVERSATION)!.summary_upto!;
   assert.ok(upto > 0);
   assert.match(s.app.conversations.get(CONVERSATION)!.summary!, /要約 \d 回目/u);
@@ -137,10 +137,10 @@ test('要約を読む API: GET /api/conversations/:id/summary は要約と、ど
 });
 
 test('文: 要約したお知らせは「要約は会話のメニューから読める」「原文は過去の会話を探すで探せる」を分けて書く', () => {
-  const sentence = engineText('ja', 'warn.compacted', { count: 5 });
-  assert.match(sentence, /5 件/u);
-  assert.match(sentence, /メニュー/u);
-  assert.match(sentence, /過去の会話を探す/u);
+  const sentence = engineText('en', 'warn.compacted', { count: 5 });
+  assert.match(sentence, /5 older messages/u);
+  assert.match(sentence, /menu/u);
+  assert.match(sentence, /Search past chats/u);
   assert.match(en['notice.compacted'](5), /menu.*Search past chats/u);
   assert.match(en['notice.compacted'](5), /menu/iu);
   assert.match(engineText('en', 'warn.compacted', { count: 5 }), /menu/iu);

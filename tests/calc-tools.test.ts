@@ -111,8 +111,8 @@ test('date_calc: add に date が無いと失敗', async t => {
   assert.equal(out.output.isError, true);
 });
 
-test('date_calc: 英語の設定では出力に日本語が混ざらない', async t => {
-  const s = setup(t, c => { c.language = 'en'; });
+test('date_calc: 出力に日本語が混ざらない', async t => {
+  const s = setup(t);
   for (const out of [
     await s.call('calculate', { expression: '1+2*3' }),
     await s.call('date_calc', { op: 'add', date: '2026-01-31', months: 1 }),

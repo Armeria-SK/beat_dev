@@ -1,58 +1,6 @@
 import { defineMessages } from './define.ts';
 
-const ja = {
-  'send.busy_chat': 'この会話はまだ返事を作っています。止めるか、終わるまで待ってください',
-  'send.busy': 'この会話はまだ返事を作っています',
-  'send.nothing_to_retry': 'やり直す発言がありません',
-  'send.queue_full': '待っている発言が多すぎます（{max} 件まで）。返事が終わってから送ってください',
-  'send.task_running': 'このタスクの会話は実行中です',
-  'send.review_running': 'この振り返りは実行中です',
-  'run.preempted': 'ユーザーとの会話を優先するため中断しました',
-  'run.restart_interrupted': 'アプリの再起動で中断しました',
-  'run.internal': '内部エラー: {detail}',
-  'run.no_model': '実行できるモデルがありませんでした',
-  'run.no_provider': 'プロバイダ「{id}」がありません',
-  'run.unexpected': '想定外のエラー: {detail}',
-  'problem.not_in_config': '設定に見つかりません',
-  'problem.unchecked': 'まだ確認していません',
-  'problem.hint_suffix': '（{hint}）',
-  'problem.line': '・{id}: {message}{hintPart}',
-  'problem.none': '・モデルがまだ設定されていません（画面の「はじめの設定」で足してください）',
-  'usage.model_missing': 'モデル「{id}」が設定にありません',
-  'wrapup.fallback': '道具の上限（{max} 回）に達したので止めました。続けるなら「続けて」と送ってください',
-  'handover.note': 'この会話で進めた分: {text}',
-  'no_usable': '使えるモデルがないため送信しませんでした。設定画面で確認してください。\n{lines}',
-  'tool.invalid_streak': 'モデルが正しい形でツールを呼べませんでした（{count} 回続けて）。ツールに強いモデルに替えるか、maxTools で数を絞ってください',
-  'tool.invalid_streak_hint': 'maxTools で道具の数を絞ってください',
-  'tool.truncated_call': '出力の上限で返事が途中で切れたため、このツール呼び出しは実行していません。内容を短くするか、分けて呼び直してください（長い書き込みは、先に一部だけ書いて、続きを足す形にしてください）',
-  'tool.truncated_skill_draft': '出力の上限で返事が途中で切れたため、この呼び出しは実行していません。スキルの本文を短くして、呼び直してください',
-  'tool.truncated_streak': '返事が出力の上限で切れた状態が {count} 回続いたので止めました。models[].maxOutputTokens を大きくするか、頼む内容を小さく分けてください',
-  'hint.prompt_exceeds': '会話を新しく始めるか、長い添付やツールの出力を減らしてください',
-  'fit.overflow': '入力の見積もり（{required} トークン）が、使える量（{available} トークン）に収まりません',
-  'warn.output_truncated': '返事が出力の上限で途中で切れました。続きが必要なら「続けて」と送るか、models[].maxOutputTokens を大きくしてください',
-  'warn.max_iterations': 'ツールを使った呼び直しが上限（{max} 回）に達したため止めました。続けるなら「続けて」と送ってください',
-  'warn.agent_output_truncated': '任せた子の担当の最後の報告が、出力の上限で途中で切れました。親に渡った答えは途中までです',
-  'warn.context_trimmed': 'コンテキストに収めるため、古い発言 {count} 件をこの返事の材料から外しました',
-  'warn.partial_discarded': '返事の途中で失敗したため、途中までの内容は保存しませんでした',
-  'warn.retrying': '{message}。{seconds} 秒後に再試行します（{attempt}/{retries}）',
-  'warn.compacted': '会話が長くなったため、古い発言 {count} 件を要約しました（要約は会話の「…」メニューから読めます。原文は残っていて、記憶の「過去の会話を探す」で探せます）',
-  'warn.compaction_failed': '古い発言の要約に失敗したため、要約せずに外して続けます',
-  'warn.queued_saved': '返事が止まったので、待っていた発言 {count} 件は保存だけしました。続けるには、送り直すか「もう一度」を押してください',
-  'warn.queued_not_started': '使えるモデルが無く返事を始められなかったので、待っていた発言 {count} 件は保存だけしました。モデルを確かめてから、送り直すか「もう一度」を押してください',
-  'warn.server_truncation': 'サーバーが受け取った入力（{actual} トークン）が見積もり（{estimate}）より大幅に少なく、サーバー側で切り捨てられた可能性があります',
-  'truncation.disable': '{message}（{strikes} 回連続）。サーバー側のコンテキスト長を確認してから、設定画面で確認し直してください',
-  'message.stopped_partway': '（途中で止めました）',
-  'attachment.image': '（画像を添付しました）',
-  'attachment.file': '（ファイルを添付しました）',
-  'attachment.taint': '添付「{name}」',
-  'taint.carried': '前の実行で読んだもの',
-  'taint.unknown': '履歴が長く、確かめきれないもの',
-  'taint.checklist': 'よそから来た文を読んだあとに書かれた作業の一覧',
-  'taint.parent': 'この担当を任せた親の担当が、よそから来た文を読んでいたもの',
-  'agent.preamble': 'あなたは、親の担当から仕事を任された子の担当です。最後の返事が親に返ります。持ち主とは直接話せません。',
-} as const;
-
-const en: Record<keyof typeof ja, string> = {
+const en = {
   'send.busy_chat': 'This conversation is still writing a reply. Stop it or wait until it finishes',
   'send.busy': 'This conversation is still writing a reply',
   'send.nothing_to_retry': 'There is no message to redo',
@@ -104,5 +52,5 @@ const en: Record<keyof typeof ja, string> = {
   'agent.preamble': 'You are a sub-agent working on a job from the main agent. Your final reply goes back to it. You cannot talk to the owner directly.',
 };
 
-export const engineText = defineMessages('engine', ja, en);
-export type EngineMessageKey = keyof typeof ja;
+export const engineText = defineMessages('engine', en);
+export type EngineMessageKey = keyof typeof en;

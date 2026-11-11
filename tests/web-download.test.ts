@@ -619,7 +619,7 @@ test('引数: 保存先は選べない（path など知らない項目は断る�
 test('「外を読んだ」印: 決まった文だけの失敗の鍵（idle・disk_low）だけ、印を付けない失敗にする。encoded は相手の Content-Encoding を文に写すので印を付ける側', () => {
   const marked = new Set(['download.idle', 'download.disk_low']);
   for (const key of ['download.idle', 'download.disk_low', 'download.encoded', 'fetch.http_status', 'fetch.type', 'fetch.dns'] as const) {
-    assert.equal(webFailure(new RetrievalFailure('http_failure', 'x', undefined, key), 'ja').noRemoteContent === true, marked.has(key), key);
+    assert.equal(webFailure(new RetrievalFailure('http_failure', 'x', undefined, key), 'en').noRemoteContent === true, marked.has(key), key);
   }
 });
 
@@ -642,7 +642,7 @@ test('英語の設定: 結果・失敗・断りの文に日本語の文字が無
     'https://files.example.com/enc.bin': { contentEncoding: 'br' },
     'https://files.example.com/missing.bin': { status: 404 },
   });
-  const s = setup(t, c => { c.language = 'en'; }, w.network);
+  const s = setup(t, undefined, w.network);
   const texts: string[] = [];
   texts.push((await s.again({ url: URL_PDF, name: 'desktop.ini' })).output.content);
   texts.push((await s.again({ url: 'https://files.example.com/enc.bin' })).output.content);

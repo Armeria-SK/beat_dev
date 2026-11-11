@@ -155,8 +155,8 @@ test('notify_owner: 振り返りでは使えない', async t => {
   assert.equal(s.sent.length, 0);
 });
 
-test('notify_owner: 英語の設定では英語で、日本語の文字が出ない', async t => {
-  const s = setup(t, c => { c.language = 'en'; });
+test('notify_owner: 英語で、日本語の文字が出ない', async t => {
+  const s = setup(t);
   const r = await s.call({ title: 'done', body: 'result in chat' });
   const sent = s.sent[0];
   assert.ok(sent);

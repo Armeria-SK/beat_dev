@@ -88,7 +88,7 @@ test('table_write: xlsx は式を書かず、文字は変えずに文字のセ�
   assert.equal(out.output.content, 'Wrote the table: a.xlsx (2 rows, 3 columns)\n[To prevent it from working as a formula, 1 cells were written as text]');
   const opened = openZip(read(s, 'a.xlsx'));
   assert.equal(opened.ok, true);
-  const text = xlsxText(opened.zip, 'ja');
+  const text = xlsxText(opened.zip, 'en');
   assert.equal(text.ok, true);
   assert.ok(text.ok && text.text.includes('a\t1'));
   assert.ok(text.ok && text.text.includes('=1+1\t\tx'));
@@ -381,9 +381,9 @@ test('table_write: 外から読んだあとの札にはフォルダの許可が�
   assert.equal(existsSync(join(s.paths.workspace, 'other', 'c.csv')), false);
 });
 
-test('table_write: 札の中身は先頭 20 行・4,000 文字までで、BOM は付けず、日英で題が変わる', () => {
+test('table_write: 札の中身は先頭 20 行・4,000 文字までで、BOM は付けず、題は英語', () => {
   const rows = Array.from({ length: 25 }, (_, i) => [`r${i}`]);
-  const card = tableWrite.summarize!({ path: 'a.csv', rows }, 'ja');
+  const card = tableWrite.summarize!({ path: 'a.csv', rows }, 'en');
   assert.equal(card.title, 'Writing a table file: a.csv (25 rows)');
   assert.equal(card.body, rows.slice(0, 20).map(r => `${r[0]}\r\n`).join(''));
   assert.ok(!card.body.includes(BOM));
@@ -432,8 +432,8 @@ test('table_write: 書けずに投げられた失敗は、パスを含む messag
   assert.equal(listing(s).some(name => name.startsWith('boom.csv')), false);
 });
 
-test('table_write: 英語の設定では、結果にも失敗の文にも日本語が出ない', async t => {
-  const s = setup(t, c => { c.language = 'en'; });
+test('table_write: 結果にも失敗の文にも日本語が出ない', async t => {
+  const s = setup(t);
   writeFileSync(join(s.paths.workspace, 'old.csv'), 'old');
   mkdirSync(join(s.paths.workspace, 'dir.csv'));
   const results = [

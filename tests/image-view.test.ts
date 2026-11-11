@@ -556,7 +556,7 @@ test('image_view: 英語の設定では、結果にも失敗の文にも日本�
     'https://img.example.com/c.png': { body: png(10, 10, IMAGE_MAX_BYTES + 1), truncated: true },
     'https://img.example.com/d.png': { status: 302, location: 'http://img.example.com/x.png' },
   }, { ...PUBLIC_DNS, 'lan.example.com': ['10.0.0.5'] });
-  const s = setup(t, c => { c.language = 'en'; }, net);
+  const s = setup(t, undefined, net);
   mkdirSync(join(s.paths.workspace, 'dir.png'));
   put(s, 'a.png', png(640, 480));
   put(s, 'downloads/a.png', png(64, 32));

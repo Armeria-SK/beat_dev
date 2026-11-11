@@ -86,7 +86,7 @@ test('切れたツール呼び出しは動かさず、誤りの結果を返す�
   assert.equal('raw' in assistant.toolCalls![0]!, false);
   const tool = stored.find(m => m.role === 'tool') as Extract<ChatMessage, { role: 'tool' }>;
   assert.equal(tool.isError, true);
-  assert.match(tool.content, /途中で切れ|上限|短く/u);
+  assert.match(tool.content, /cut off|output limit|shorter/u);
 
   // 次の呼び出しには {} のまま渡る（切れた文字を送り返さない）
   const second = s.adapter().calls[1]!.messages.find(m => m.role === 'assistant' && m.toolCalls?.length) as Extract<ChatMessage, { role: 'assistant' }>;

@@ -61,7 +61,6 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   const config = testConfig();
-  config.language = 'ja';
   config.tools.browser.enabled = true;
   config.tools.browser.sites = ['example.com'];
   options.mutate?.(config);

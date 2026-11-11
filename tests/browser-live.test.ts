@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { LAUNCH_TIMEOUT_MS, PlaywrightDriver, localeFor, playwrightOptions, seedPreferences, type LaunchOptions } from '../src/tools/browser/driver.ts';
+import { LAUNCH_TIMEOUT_MS, PlaywrightDriver, playwrightOptions, seedPreferences, systemLocale, type LaunchOptions } from '../src/tools/browser/driver.ts';
 import { startEgressProxy } from '../src/tools/browser/egress-proxy.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { testConfig } from './helpers.ts';
@@ -50,7 +50,7 @@ test('T-44(2): ページの中から 127.0.0.1 への画像・fetch・WebSocket�
   const launch: LaunchOptions = {
     profileDir, channel: undefined, executablePath: undefined, headless: true,
     proxy: { server: `http://${proxy.host}:${proxy.port}`, username: 'clive', password: 'x'.repeat(48) },
-    viewport: { width: 1280, height: 800 }, locale: localeFor('ja'), actionTimeoutMs: 10_000,
+    viewport: { width: 1280, height: 800 }, locale: systemLocale(), actionTimeoutMs: 10_000,
   };
   seedPreferences(profileDir);
   let context;
@@ -99,7 +99,7 @@ test('T-44(2b): ページの中から 169.254.169.254・[::1]・localhost への
   const launch: LaunchOptions = {
     profileDir, channel: undefined, executablePath: undefined, headless: true,
     proxy: { server: `http://${proxy.host}:${proxy.port}`, username: 'clive', password: 'x'.repeat(48) },
-    viewport: { width: 1280, height: 800 }, locale: localeFor('ja'), actionTimeoutMs: 10_000,
+    viewport: { width: 1280, height: 800 }, locale: systemLocale(), actionTimeoutMs: 10_000,
   };
   seedPreferences(profileDir);
   let context;

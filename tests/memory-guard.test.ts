@@ -81,23 +81,23 @@ test('memory_save: 外から読んだ後でも、読むだけの記憶の道具�
 
 // ── 1 回の実行での件数 ──
 
-test('memory_save: 1 回の実行で記憶できるのは 5 件まで。6 件目は断る（日本語・英語）', async t => {
+test('memory_save: 1 回の実行で記憶できるのは 5 件まで。6 件目は断る（英語の文）', async t => {
   const s = setup(t);
   for (let i = 1; i <= 3; i++) assert.equal((await s.call('memory_save', { book: 'notes', content: `教訓 ${i}` })).output.isError, undefined, `${i} 件目`);
   assert.equal((await s.call('memory_update', { id: 'n1', content: '教訓 1（直した）' })).output.isError, undefined);
   assert.equal((await s.call('memory_forget', { id: 'n2', reason: '要らない' })).output.isError, undefined);
   for (let i = 4; i <= 5; i++) assert.equal((await s.call('memory_save', { book: 'notes', content: `教訓 ${i}` })).output.isError, undefined, `書き直し・消す操作は数えないので、${i} 件目も保存できる`);
-  assert.equal((await s.call('memory_save', { book: 'notes', content: '教訓 4' })).output.content.includes('既にあります'), true, '重複は件数に数えない（保存されないので）');
+  assert.equal((await s.call('memory_save', { book: 'notes', content: '教訓 4' })).output.content.includes('already exists'), true, '重複は件数に数えない（保存されないので）');
   const sixth = await s.call('memory_save', { book: 'notes', content: '教訓 6' });
   assert.equal(sixth.output.isError, true);
-  assert.equal(sixth.output.content, 'この実行で記憶できるのは 5 件までです。残りは次の会話で記憶してください');
+  assert.equal(sixth.output.content, 'At most 5 memories can be saved in a single run. Save the rest in a later conversation');
   assert.equal(s.memory.list().length, 4, '5 件作って、1 件は消した。消した分も作った件数には数える');
 
   assert.equal((await s.call('memory_save', { book: 'notes', content: '別の実行の教訓' }, { ...s.ctx, runId: 'r2' })).output.isError, undefined, '件数は実行ごと');
   for (let i = 1; i <= 8; i++) s.memory.save({ book: 'user', content: `画面から ${i}`, actor: 'user' });
   assert.equal(s.memory.list('user').length, 8, '利用者が画面から足すのは数えない');
 
-  const en = setup(t, c => { c.language = 'en'; });
+  const en = setup(t);
   for (let i = 1; i <= 5; i++) await en.call('memory_save', { book: 'notes', content: `Lesson ${i}` });
   const over = await en.call('memory_save', { book: 'notes', content: 'Lesson 6' });
   assert.equal(over.output.content, 'At most 5 memories can be saved in a single run. Save the rest in a later conversation');

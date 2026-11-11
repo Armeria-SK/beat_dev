@@ -38,7 +38,7 @@ export function LookSection({ draft, saved, update, problems }: SectionProps) {
     setDefaultsOpen(open);
     if (open && !defaults) {
       setDefaultsFailed(false);
-      void api.templates('en').then(setDefaults).catch(() => setDefaultsFailed(true));
+      void api.templates().then(setDefaults).catch(() => setDefaultsFailed(true));
     }
   };
   const copy = (text: string) => {

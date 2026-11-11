@@ -164,7 +164,7 @@ export function playwrightOptions(o: LaunchOptions, env: Record<string, string> 
   };
 }
 
-export function localeFor(language: Language): string { return language === 'ja' ? 'ja-JP' : 'en-US'; }
+export function systemLocale(): string { return Intl.DateTimeFormat().resolvedOptions().locale; }
 
 // パスワードを覚えさせない・自動で入れさせない（プロファイルの Default/Preferences。ブラウザが閉じているあいだに書く）
 export function seedPreferences(profileDir: string): void {

@@ -1,4 +1,4 @@
-import type { Language, ModelConfig, ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { ChatMessage, ContextDetail, EngineErrorKind, StopReason, ToolCall, ToolSpec, Usage } from '../engine/types.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { providerText, type ProviderMessageKey } from '../shared/messages/providers.ts';
@@ -84,7 +84,7 @@ export class ProviderError extends Error {
 }
 
 export function providerError(kind: EngineErrorKind, code: ProviderMessageKey, params: MessageParams = {}, options: { retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail; upstream?: string } = {}): ProviderError {
-  return new ProviderError(kind, providerText('ja', code, params), { ...options, code, params });
+  return new ProviderError(kind, providerText(DEFAULT_LANGUAGE, code, params), { ...options, code, params });
 }
 
 export type FetchLike = typeof fetch;

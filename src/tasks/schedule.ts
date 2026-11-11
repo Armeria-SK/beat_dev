@@ -8,14 +8,6 @@ const DAY_EN: Record<string, string> = { 月: 'Monday', 火: 'Tuesday', 水: 'We
 
 export type Freq = 'daily' | 'weekday' | 'weekly' | 'hourly' | 'interval';
 
-export const FREQ_LABELS: Record<Freq, string> = {
-  daily: '毎日（時刻指定）',
-  weekday: '平日のみ（月〜金）',
-  weekly: '毎週（曜日・時刻指定）',
-  hourly: '毎時（分指定）',
-  interval: 'N分ごと',
-};
-
 export function inferFreqFromCron(cron: string): Freq | null {
   const parts = cron.trim().split(/\s+/u);
   if (parts.length !== 5) return null;
@@ -86,7 +78,7 @@ export function describeCron(cron: string, language: Language = DEFAULT_LANGUAGE
   switch (freq) {
     case 'daily': return taskText(language, 'cron.daily', { time: f.time! });
     case 'weekday': return taskText(language, 'cron.weekday', { time: f.time! });
-    case 'weekly': return taskText(language, 'cron.weekly', { day: language === 'en' ? DAY_EN[f.day!] ?? f.day! : f.day!, time: f.time! });
+    case 'weekly': return taskText(language, 'cron.weekly', { day: DAY_EN[f.day!] ?? f.day!, time: f.time! });
     case 'hourly': return taskText(language, 'cron.hourly', { minute: f.minute! });
     case 'interval': return taskText(language, 'cron.interval', { interval: f.interval! });
   }

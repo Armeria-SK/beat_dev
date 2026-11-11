@@ -83,7 +83,7 @@ test('login: 見えるブラウザを同じプロファイルで開き、窓の�
   assert.equal(again.status, 200);
   assert.equal(driver.launches, 2);
   // 窓のあいだ、道具は断る
-  await assert.rejects(app.browser.run(call(), async () => 'x'), (e: unknown) => e instanceof BrowserFailure && e.code === 'login_open' && /for logging in/u.test(e.text('ja')));
+  await assert.rejects(app.browser.run(call(), async () => 'x'), (e: unknown) => e instanceof BrowserFailure && e.code === 'login_open' && /for logging in/u.test(e.text('en')));
   // 閉じれば戻る
   const closed = await json('/api/browser/close', 'POST', {});
   assert.equal(closed.status, 200);

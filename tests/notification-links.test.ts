@@ -37,9 +37,9 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: ReturnTyp
   return { app, adapter: () => adapter, clock, linkOf };
 }
 
-for (const language of ['ja', 'en'] as const) {
+for (const language of ['en'] as const) {
   test(`通知のリンクは、今ある画面だけを指す（${language}）`, async t => {
-    const s = await setup(t, c => { c.language = language; c.worker.maxRunsPerHour = 100; });
+    const s = await setup(t, c => { c.worker.maxRunsPerHour = 100; });
     const all = () => s.app.notifications.list().map(n => n.link);
 
     // 終わった・質問・相談・失敗
@@ -88,7 +88,7 @@ for (const language of ['ja', 'en'] as const) {
     assert.equal(s.linkOf('health_alert'), '#/settings');
 
     // 1 時間の上限・使えるモデルが無い（別の環境で起こす）
-    const limited = await setup(t, c => { c.language = language; c.worker.maxRunsPerHour = 1; });
+    const limited = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
     limited.app.tasks.create({ title: 'First', origin: 'user', actor: 'user' });
     limited.adapter().scripts.push(toolCall('task_complete', { summary: 'ok', notify: false }));
     assert.equal(await limited.app.worker.tick(), 'ran');
@@ -96,7 +96,7 @@ for (const language of ['ja', 'en'] as const) {
     assert.equal(await limited.app.worker.tick(), 'budget');
     assert.equal(limited.linkOf('info'), '#/tasks');
 
-    const noModel = await setup(t, c => { c.language = language; });
+    const noModel = await setup(t);
     noModel.app.tasks.create({ title: 'Needs a model', origin: 'user', actor: 'user' });
     noModel.adapter().probeResult = { status: 'unreachable', message: 'x' };
     await noModel.app.status.probeAll(noModel.app.config());
@@ -113,7 +113,7 @@ for (const language of ['ja', 'en'] as const) {
   });
 
   test(`持ち主への知らせはタスクを指し、同じ題は重ねない（${language}）`, async t => {
-    const s = await setup(t, c => { c.language = language; c.worker.maxRunsPerHour = 100; });
+    const s = await setup(t, c => { c.worker.maxRunsPerHour = 100; });
     const task = s.app.tasks.create({ title: 'Notify', origin: 'user', actor: 'user' });
     s.adapter().scripts.push(toolCall('notify_owner', { title: '途中の知らせ' }));
     assert.equal(await s.app.worker.tick(), 'ran');

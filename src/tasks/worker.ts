@@ -59,26 +59,6 @@ interface TaskText {
 }
 
 const TASK_TEXT: Record<Language, TaskText> = {
-  ja: {
-    intro: '[タスクの実行] あなたは今、自分のメモ帳のタスクを進めています（ユーザーとの会話ではありません。返事は記録に残ります）。',
-    heading: '# タスク',
-    id: 'ID',
-    title: 'タイトル',
-    origin: '出どころ',
-    originLabel: { user: 'ユーザーの依頼', self: '自分で決めたこと', curiosity: '好奇心から', schedule: '予定' },
-    details: '詳細',
-    nextAction: '次の一手',
-    doneCriteria: '完了の条件',
-    historyHeading: '# これまでの経過（新しい順）',
-    howHeading: '# 進め方',
-    how: [
-      '- 道具を使って進める。1回の実行でやりすぎない',
-      '- 終わったら task_complete（結果の要約）。ユーザーに知らせることが無ければ notify=false で静かに終える',
-      '- 続きを後でやる・何かを待つなら task_checkpoint（試したこと・結果・次の一手・何分後に再開するか）',
-      '- ユーザーに確かめないと進められないことだけ ask_user で尋ねる',
-    ],
-    time: (ms, timezone) => new Date(ms).toLocaleString('ja-JP', { timeZone: timezone }),
-  },
   en: {
     intro: '[Task run] You are now working on a task from your own notepad (this is not a conversation with the user; your reply is saved to the record).',
     heading: '# Task',
@@ -96,6 +76,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
       '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
       '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
       '- Use ask_user only for what you cannot move forward on without checking with the user',
+      "- Write notes, questions and the summary in the language of the task's title and details",
     ],
     time: (ms, timezone) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms),
   },

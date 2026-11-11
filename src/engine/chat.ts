@@ -40,7 +40,7 @@ import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts'
 import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine } from '../shared/plain-text.ts';
-import { compactPrompt, compactSpeaker, compactSystem, nextStepOf, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder, wrapUpPrompt, wrapUpSystem } from './prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, nextStepOf, summarySection, wrapUpPrompt, wrapUpSystem } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -113,7 +113,7 @@ export interface ChatEngineDeps {
 }
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${(['ja', 'en'] as const).flatMap(l => [engineText(l, 'attachment.image'), engineText(l, 'attachment.file')]).map(escapeRegExp).join('|')})$`, 'u');
+const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${[engineText(DEFAULT_LANGUAGE, 'attachment.image'), engineText(DEFAULT_LANGUAGE, 'attachment.file')].map(escapeRegExp).join('|')})$`, 'u');
 
 // messageCode / messageParams は、モデルの確認（probe）の messageCode / messageParams と同じ（確認していない・設定に無いときは engine.problem.*）。画面が自分の言語で組み立てられるように添える。
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: MessageParams | undefined }
@@ -151,7 +151,7 @@ interface CompactionState { count: number; failed: boolean; summarized: number; 
 type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route; upstream?: string };
 
 type CallResult =
-  | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; truncated: boolean; estimate: number; language: Language }
+  | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; truncated: boolean; estimate: number }
   | { ok: false; cancelled: boolean; partial: string; failure: Failure; route?: Route };
 
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -477,7 +477,7 @@ export class ChatEngine {
       if (active.kind === 'chat' || active.kind === 'agent' || ![...active.providers].some(p => providers.has(p))) continue;
       this.#preempted.add(active.runId);
       if (active.taskId) tasks.push(active.taskId);
-      active.controller.abort(new ProviderError('cancelled', engineText('ja', 'run.preempted'), { retryable: false }));
+      active.controller.abort(new ProviderError('cancelled', engineText(DEFAULT_LANGUAGE, 'run.preempted'), { retryable: false }));
     }
     return tasks;
   }
@@ -647,9 +647,7 @@ export class ChatEngine {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
       }
     };
-    let replyLanguage: Language | undefined;
     const finishOk = (text: string, stop: StopReason, wrapUp?: { nextAction: string | undefined }): EngineResult => {
-      if (replyLanguage && this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
       if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted, localOnly: ctx.localOnly === true });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
@@ -680,7 +678,6 @@ export class ChatEngine {
       // 考える部分を別に返すモデル（Qwen3 など）は、答えの頭に空行が付く。保存する前に落とす
       call.text = call.text.replace(/^\s+/u, '');
 
-      replyLanguage = call.language;
       // 出力の上限で切れた返事: 黙って成功にしない。お知らせと実行の印を残し、付いていたツール呼び出しは動かさない
       // （切れた元の文字は記録の入力欄にだけ残し、会話には {} で保存する。次の呼び出しにも、提供元に断られる切れた文字を送らない）
       const cutRaw = new Map<string, string>();
@@ -940,7 +937,7 @@ export class ChatEngine {
         this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
         if (effort && !p.flags.includes(`effort:${effort}`)) p.flags.push(`effort:${effort}`);
         // truncated は書き換える前の停止理由で決める（ツール呼び出しが付いても、出力の上限で切れた返事は切れたまま）
-        return { ok: true, index, text, toolCalls, usage, stop: toolCalls.length ? 'tool_use' : stop, truncated: stop === 'max_tokens', estimate: fitted.estimate.tokens, language };
+        return { ok: true, index, text, toolCalls, usage, stop: toolCalls.length ? 'tool_use' : stop, truncated: stop === 'max_tokens', estimate: fitted.estimate.tokens };
       }
     }
     return { ok: false, cancelled: false, partial: '', failure: last };
@@ -968,8 +965,7 @@ export class ChatEngine {
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
-    let history = stored.map(m => m.message);
-    if (this.#frozenLanguage(p.conversationId) !== language || this.#lastReplyLanguage(p.conversationId) !== language) history = withReplyReminder(history, language);
+    const history = stored.map(m => m.message);
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
     return { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor };
@@ -1134,14 +1130,6 @@ export class ChatEngine {
     } finally { release?.(); }
   }
 
-  #frozenLanguage(conversationId: string): Language {
-    return LANGUAGES.find(l => l === this.#d.kv.get(snapshotLanguageKey(conversationId))) ?? DEFAULT_LANGUAGE;
-  }
-
-  #lastReplyLanguage(conversationId: string): Language {
-    return LANGUAGES.find(l => l === this.#d.kv.get(replyLanguageKey(conversationId))) ?? this.#frozenLanguage(conversationId);
-  }
-
   #snapshot(conversationId: string): string {
     const d = this.#d;
     const existing = d.conversations.get(conversationId)?.snapshot;
@@ -1149,7 +1137,7 @@ export class ChatEngine {
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
     const snapshot = this.#buildSnapshotText(language);
-    if (d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash)) d.kv.set(snapshotLanguageKey(conversationId), language);
+    d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 

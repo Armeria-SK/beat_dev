@@ -83,7 +83,7 @@ test('振り返り: 手元の裏方モデルが 1 つも使えないときは、
   assert.equal(s.adapter().calls.length, 0);
   const [job] = reviewJobs(s);
   assert.equal(job!.status, 'done', '失敗でも待ちでもなく、飛ばして終わり');
-  assert.match(job!.note ?? '', /飛ばしました/u);
+  assert.match(job!.note ?? '', /the review was skipped/u);
   assert.deepEqual(reviewConversations(s), [], '振り返りの会話を作らない');
   assert.equal(s.app.notifications.list().filter(n => n.kind === 'health_alert').length, 0);
   assert.equal(await s.app.worker.tick(), 'idle', '次の回で繰り返さない');
@@ -209,7 +209,7 @@ test('振り返り: 手元のモデルを選んだあと、そのモデルを設
   assert.equal(s.adapter().calls.length, 0);
   const [job] = reviewJobs(s);
   assert.equal(job!.status, 'done');
-  assert.match(job!.note ?? '', /飛ばしました/u);
+  assert.match(job!.note ?? '', /the review was skipped/u);
   assert.deepEqual(reviewConversations(s), [], '振り返りの会話を作らない');
 });
 
@@ -377,7 +377,7 @@ test('タスクの実行: 使える手元の裏方モデルが無ければ、外
     assert.equal(waiting.status, 'ready');
     assert.ok(waiting.run_at! > Date.now(), 'あとでもう一度');
     assert.equal(waiting.attempts, 0);
-    assert.match(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content ?? '', /手元のモデル/u);
+    assert.match(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content ?? '', /used a local model/u);
     assert.equal(s.app.notifications.list().filter(n => n.kind === 'health_alert').length, 0);
   }
 });

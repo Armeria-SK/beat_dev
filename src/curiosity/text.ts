@@ -9,13 +9,6 @@ interface CuriosityText {
 }
 
 const TEXT: Record<Language, CuriosityText> = {
-  ja: {
-    title: topic => `調べる: ${topic}`,
-    why: why => `気になった理由: ${why}`,
-    summarize: '調べて分かったことを、ユーザーに役立つ形で短くまとめる。',
-    doneCriteria: '分かったことを task_complete の summary にまとめた',
-    doneCriteriaQuiet: '分かったことを task_complete の summary にまとめた（知らせる価値が無ければ notify=false）',
-  },
   en: {
     title: topic => `Look into: ${topic}`,
     why: why => `Why this caught your interest: ${why}`,

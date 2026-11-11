@@ -12,8 +12,8 @@ export function format(template: string, params: MessageParams = {}): string {
   return template.replace(/\{(\w+)\}/gu, (whole, name: string) => (name in params ? String(params[name]) : whole));
 }
 
-export function defineMessages<K extends string>(domain: string, ja: Record<K, string>, en: Record<K, string>): Catalog<K> {
-  const tables: Record<Language, Record<K, string>> = { ja, en };
+export function defineMessages<K extends string>(domain: string, en: Record<K, string>): Catalog<K> {
+  const tables: Record<Language, Record<K, string>> = { en };
   const text = (language: Language, key: K, params?: MessageParams): string => format(tables[language][key], params);
   return Object.assign(text, { domain, tables });
 }
@@ -24,7 +24,7 @@ export class LocalizedError<K extends string> extends Error {
   readonly #catalog: Catalog<K>;
 
   constructor(catalog: Catalog<K>, code: K, params: MessageParams = {}) {
-    super(catalog('ja', code, params));
+    super(catalog('en', code, params));
     this.code = code;
     this.params = params;
     this.#catalog = catalog;

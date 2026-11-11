@@ -10,7 +10,6 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { searchHistory } from '../src/memory/history.ts';
 import { inputHash } from '../src/tools/approvals.ts';
 import { checklistKey } from '../src/tools/builtin/checklist-core.ts';
-import { replyLanguageKey, snapshotLanguageKey } from '../src/engine/prompts.ts';
 import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, type Script } from './helpers.ts';
 
@@ -48,8 +47,8 @@ async function populate(s: Awaited<ReturnType<typeof startApp>>) {
   app.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, ok, duration_ms, output_preview, full_ref, created_at)
     VALUES ('tc2', 'run-o', ?, 'file_read', '{}', 'allow', 'builtin', 1, 5, '別', ?, 6)`).run(OTHER, otherOutput);
   // kv
-  for (const key of [snapshotLanguageKey(TARGET), replyLanguageKey(TARGET), `review:upto:${TARGET}`]) app.kv.set(key, '1');
-  for (const key of [snapshotLanguageKey(OTHER), `review:upto:${OTHER}`, 'calibration:m1']) app.kv.set(key, '1');
+  for (const key of [`snapshot-language:${TARGET}`, `reply-language:${TARGET}`, `review:upto:${TARGET}`]) app.kv.set(key, '1');
+  for (const key of [`snapshot-language:${OTHER}`, `review:upto:${OTHER}`, 'calibration:m1']) app.kv.set(key, '1');
   app.kv.set(checklistKey(TARGET), JSON.stringify({ items: [{ text: `${SECRET} を調べる`, status: 'pending' }], tainted: false, updatedAt: 1 }));
   app.kv.set(checklistKey(OTHER), JSON.stringify({ items: [{ text: '別の作業', status: 'done' }], tainted: false, updatedAt: 1 }));
   // 残すもの: 記憶・スキルの下書き・その会話から作ったタスク
@@ -114,7 +113,7 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   // kv
   const keys = (app.db.prepare('SELECT key FROM kv').all() as Array<{ key: string }>).map(r => r.key);
   assert.ok(!keys.some(k => k.includes(TARGET)), `会話ごとの kv が残っている: ${keys.join(', ')}`);
-  assert.ok(keys.includes(snapshotLanguageKey(OTHER)) && keys.includes(`review:upto:${OTHER}`) && keys.includes('calibration:m1'), 'ほかの kv は残る');
+  assert.ok(keys.includes(`snapshot-language:${OTHER}`) && keys.includes(`review:upto:${OTHER}`) && keys.includes('calibration:m1'), 'ほかの kv は残る');
   assert.equal(app.kv.get(checklistKey(TARGET)), undefined, '作業の一覧（checklist:<会話ID>）も消える');
   assert.ok(app.kv.get(checklistKey(OTHER)), 'ほかの会話の作業の一覧は残る');
   // 残すもの

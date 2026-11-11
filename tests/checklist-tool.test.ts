@@ -131,8 +131,8 @@ test('checklist_write: kind: review では使えない（pipeline.tool_not_allow
   assert.match(out.output.content, /cannot be used in this kind of run/u);
 });
 
-test('checklist_write: 英語の設定では出力に日本語の文字が無い', async t => {
-  const s = setup(t, c => { c.language = 'en'; });
+test('checklist_write: 出力に日本語の文字が無い', async t => {
+  const s = setup(t);
   const out = await s.call('checklist_write', { items: [{ text: 'a', status: 'pending' }] });
   assert.equal(out.decision, 'allow');
   assert.ok(!/[぀-ヿ゠-ヿ一-鿿]/u.test(out.output.content));

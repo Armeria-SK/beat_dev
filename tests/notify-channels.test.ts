@@ -106,7 +106,7 @@ test('T-08 local_only の通知は、題が決まった文になり、本文は�
     const sent = call.init.body as string;
     assert.doesNotMatch(sent, /PRIVATE/u);
     assert.ok(!sent.includes('"body"'));
-    assert.match(sent, /"title":"Clive: 手元のモデル/u);
+    assert.match(sent, /"title":"Clive: [^"]*work on a local model/u);
   }
 });
 
@@ -253,7 +253,7 @@ test('T-19 test は無効なチャネルにも決まった文を送り、上限�
   const s = setup(config({ channel: { enabled: false }, notify: { limits: { maxSendsPerHour: 1 } } }));
   assert.deepEqual(await s.channels.test('phone'), { ok: true });
   assert.deepEqual(await s.channels.test('phone'), { ok: true });
-  assert.match(s.calls[0]!.init.body as string, /Clive からの試しの通知です/u);
+  assert.match(s.calls[0]!.init.body as string, /This is a test notification from Clive/u);
   assert.equal(await s.channels.test('nope'), undefined);
   const fail = setup(config(), [500, 500]);
   assert.deepEqual(await fail.channels.test('phone'), { ok: false, reason: 'http_500' });

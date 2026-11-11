@@ -545,8 +545,8 @@ test('保存だけにした理由でお知らせが分かれる: 使えるモデ
   await waitFor(() => roles(s).length === 3, '保存');
   const warnings = events.filter(e => e.type === 'warning' && e.code.startsWith('queued_')) as Array<Extract<RunEvent, { type: 'warning' }>>;
   assert.deepEqual(warnings.map(w => w.code), ['queued_not_started']);
-  assert.match(warnings[0]!.message, /使えるモデルが無/u, '「返事が止まった」ではなく、始められなかった理由を言う');
-  assert.doesNotMatch(warnings[0]!.message, /返事が止まった/u);
+  assert.match(warnings[0]!.message, /No usable model was available/u, '「返事が止まった」ではなく、始められなかった理由を言う');
+  assert.doesNotMatch(warnings[0]!.message, /The reply stopped/u);
   assert.deepEqual(warnings[0]!.params, { count: 1 });
   assert.deepEqual(roles(s), ['user:最初', 'assistant:おわり', 'user:待たせた発言']);
   assert.equal(runsOf(s).length, 1);

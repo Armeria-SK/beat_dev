@@ -21,9 +21,9 @@ import { tempDir, testConfig } from './helpers.ts';
 const LIMITS = { callTimeoutMs: 60000, resultMaxChars: 15000 };
 const REMOTE: McpRemoteTool = { name: 'Get-Page', description: 'ページを取る', inputSchema: { type: 'object', properties: { url: { type: 'string' }, n: { type: 'integer', minimum: 1 } }, required: ['url'], additionalProperties: false } };
 
-function make(entry: McpToolEntry = {}, over: Partial<{ remote: McpRemoteTool; caller: McpCaller | undefined; localOk: boolean; language: 'ja' | 'en'; secrets: string[] }> = {}): ToolDef {
+function make(entry: McpToolEntry = {}, over: Partial<{ remote: McpRemoteTool; caller: McpCaller | undefined; localOk: boolean; language: 'en'; secrets: string[] }> = {}): ToolDef {
   const caller = 'caller' in over ? over.caller : { callTool: async () => ({ content: [{ type: 'text', text: 'ok' }] }) };
-  const r = buildMcpTool({ server: { id: 'web', localOk: over.localOk ?? false }, remote: over.remote ?? REMOTE, entry, language: over.language ?? 'ja', limits: LIMITS, caller: () => caller, ...(over.secrets ? { secrets: () => over.secrets! } : {}) });
+  const r = buildMcpTool({ server: { id: 'web', localOk: over.localOk ?? false }, remote: over.remote ?? REMOTE, entry, language: over.language ?? 'en', limits: LIMITS, caller: () => caller, ...(over.secrets ? { secrets: () => over.secrets! } : {}) });
   assert.equal(r.ok, true);
   return (r as { tool: ToolDef }).tool;
 }
@@ -64,7 +64,7 @@ test('入力の形が使えないもの（object でない・大きすぎる・�
   assert.equal(inputSchemaOf({ type: 'object', properties: { a: { type: 'string', description: 'x'.repeat(20000) } } }).ok, false);
   assert.equal(inputSchemaOf({ type: 'object', properties: { a: { $ref: 'https://evil.example/s.json' } } }).ok, false);
   assert.equal(inputSchemaOf({ $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties: {} }).ok, true);
-  const r = buildMcpTool({ server: { id: 'web', localOk: false }, remote: { name: 'bad', inputSchema: { type: 'array' } }, entry: {}, language: 'ja', limits: LIMITS, caller: () => undefined });
+  const r = buildMcpTool({ server: { id: 'web', localOk: false }, remote: { name: 'bad', inputSchema: { type: 'array' } }, entry: {}, language: 'en', limits: LIMITS, caller: () => undefined });
   assert.equal(r.ok, false);
 });
 
@@ -144,7 +144,7 @@ test('pattern・const・enum の値は書き換えない。落とす文字を含
   const schema = JSON.parse(JSON.stringify((named as { schema: unknown }).schema)) as { properties: Record<string, Record<string, unknown>> };
   assert.equal(schema.properties['pattern']!['description'], 'p q', '入力項目の中の説明は、ふつうに落とす');
   assert.equal(schema.properties['const']!['title'], 'c ');
-  const built = buildMcpTool({ server: { id: 'web', localOk: false }, remote: { name: 'bad', inputSchema: props({ enum: [`a${'\u{200b}'}`] }) }, entry: {}, language: 'ja', limits: LIMITS, caller: () => undefined });
+  const built = buildMcpTool({ server: { id: 'web', localOk: false }, remote: { name: 'bad', inputSchema: props({ enum: [`a${'\u{200b}'}`] }) }, entry: {}, language: 'en', limits: LIMITS, caller: () => undefined });
   assert.equal(built.ok, false, '道具としては登録しない');
 });
 
@@ -214,7 +214,7 @@ test('実行: 答えは [外部の内容] の枠に包み、本文の <<< >>> �
 
 test('実行: 長い答えは resultMaxChars で切る。空の答え・isError・structuredContent・秘密の伏せ字', async () => {
   const run = async (result: unknown, limits = LIMITS) => {
-    const r = buildMcpTool({ server: { id: 'web', localOk: false }, remote: REMOTE, entry: {}, language: 'ja', limits, caller: () => ({ callTool: async () => result }) });
+    const r = buildMcpTool({ server: { id: 'web', localOk: false }, remote: REMOTE, entry: {}, language: 'en', limits, caller: () => ({ callTool: async () => result }) });
     return (r as { tool: ToolDef }).tool.execute({ url: 'u' }, { config: parseConfig(testConfig()), signal: new AbortController().signal } as ToolContext);
   };
   const long = await run({ content: [{ type: 'text', text: 'a'.repeat(100) }] }, { ...LIMITS, resultMaxChars: 10 });

@@ -1,3 +1,4 @@
+import { DEFAULT_LANGUAGE } from '../config/schema.ts';
 import { engineText } from '../shared/messages/engine.ts';
 import type { ChatMessage, ToolSpec } from './types.ts';
 import { estimateRequest, type Estimate } from './tokens.ts';
@@ -6,7 +7,7 @@ export class ContextOverflow extends Error {
   readonly required: number;
   readonly available: number;
   constructor(required: number, available: number) {
-    super(engineText('ja', 'fit.overflow', { required: required.toLocaleString('en-US'), available: available.toLocaleString('en-US') }));
+    super(engineText(DEFAULT_LANGUAGE, 'fit.overflow', { required: required.toLocaleString('en-US'), available: available.toLocaleString('en-US') }));
     this.required = required;
     this.available = available;
   }

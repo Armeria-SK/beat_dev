@@ -216,7 +216,7 @@ test('Ollama: model_info から上限を読み、設定が上限を超えれば 
 test('Ollama: 起動していなければ unreachable', async () => {
   const result = await new OllamaAdapter(ollama('http://127.0.0.1:9'), {}).probe(model(), 1024);
   assert.equal(result.status, 'unreachable');
-  assert.match(result.message, /起動/);
+  assert.match(result.message, /Check that it is running/);
 });
 
 // ── Anthropic ─────────────────────────────────────────────

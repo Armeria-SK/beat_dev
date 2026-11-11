@@ -223,7 +223,7 @@ test('圧縮して返されたら保存しない（identity 以外）', async ()
     const error = await failureOf(downloadPublic('https://files.example.com/a.gz', new AbortController().signal, memory.sink, { network: w.download }));
     assert.equal(error.key, 'download.encoded', encoding);
     assert.equal(error.code, 'invalid_response');
-    assert.match(error.text('ja'), new RegExp(encoding.toLowerCase().replace(/[^\w]/gu, '.'), 'u'));
+    assert.match(error.text('en'), new RegExp(encoding.toLowerCase().replace(/[^\w]/gu, '.'), 'u'));
     assert.equal(memory.written.length, 0);
     assert.deepEqual([...w.closes.values()], [1]);
   }

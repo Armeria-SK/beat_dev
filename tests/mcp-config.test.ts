@@ -40,8 +40,8 @@ test('道具は書けば有効（false でなければ on）。申告（effect�
 test('T-03 断るもの: id の重複・id の形・上限超え・絶対でない cwd・危ない url・知らない項目', () => {
   const bad: Array<[string, Record<string, unknown>, RegExp]> = [
     ['id の重複', { servers: [stdio(), stdio()] }, /重複/u],
-    ['id が大文字', { servers: [stdio({ id: 'GH' })] }, /小文字/u],
-    ['id が長い', { servers: [stdio({ id: 'a'.repeat(17) })] }, /16 文字/u],
+    ['id が大文字', { servers: [stdio({ id: 'GH' })] }, /lowercase/u],
+    ['id が長い', { servers: [stdio({ id: 'a'.repeat(17) })] }, /up to 16 characters/u],
     ['maxServers を越える', { servers: [stdio({ id: 'a' }), stdio({ id: 'b' })], limits: { maxServers: 1 } }, /1 件まで/u],
     ['相対の cwd', { servers: [stdio({ cwd: 'relative/dir' })] }, /絶対パス/u],
     ['http の外部', { servers: [http({ url: 'http://example.com' })] }, /https/u],

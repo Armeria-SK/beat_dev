@@ -309,29 +309,30 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
   const { errorProbeText } = await import('../src/providers/context.ts');
   const { providerError } = await import('../src/providers/types.ts');
   const { engineText } = await import('../src/shared/messages/engine.ts');
-  const served = errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'ja');
-  const unreachable = probe({ modelId: 'local', status: 'unreachable', message: served.message, ...(served.messageCode ? { messageCode: served.messageCode } : {}), ...(served.messageParams ? { messageParams: served.messageParams as Record<string, string | number> } : {}) });
+  const served = errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en');
+  const SERVER_LINE = 'the line as the server wrote it';
+  const unreachable = probe({ modelId: 'local', status: 'unreachable', message: SERVER_LINE, ...(served.messageCode ? { messageCode: served.messageCode } : {}), ...(served.messageParams ? { messageParams: served.messageParams as Record<string, string | number> } : {}) });
   const body = {
     error: 'provider_error', errorKind: 'provider_error', errorCode: 'engine.no_usable',
-    errorMessage: engineText('ja', 'no_usable', { lines: engineText('ja', 'problem.line', { id: 'local', message: served.message, hintPart: '' }) }),
-    problems: [{ modelId: 'local', status: 'unreachable', message: served.message }],
+    errorMessage: engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: SERVER_LINE, hintPart: '' }) }),
+    problems: [{ modelId: 'local', status: 'unreachable', message: SERVER_LINE }],
   };
   const models = [model('local', { probe: unreachable })];
   const expectedEn = engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en').message, hintPart: '' }) });
 
-  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, '画面は英語。サーバーが ja で書いていても英語');
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, '画面はサーバーの書いた行ではなく、コードから組み立てる');
   assert.notEqual(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage);
 
   assert.equal(sendFailureOf(new ApiError(409, body), 'x', []).message.includes('Nothing was sent'), true, 'モデルの確認が無くても、問題の文はサーバーのままで枠は英語');
   const stale = [model('local', { probe: { ...unreachable, status: 'ok' } })];
-  assert.equal(sendFailureOf(new ApiError(409, body), 'x', stale).message.includes(served.message), true, '状態が違う確認は使わず、サーバーの行のまま');
-  const withHint = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: served.message, hint: '直し方' }] };
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', stale).message.includes(SERVER_LINE), true, '状態が違う確認は使わず、サーバーの行のまま');
+  const withHint = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: SERVER_LINE, hint: '直し方' }] };
   assert.equal(sendFailureOf(new ApiError(409, withHint), 'x', models).message.includes('(直し方)'), true, 'hint は付く（英語の括弧）');
   const none = { ...body, problems: [] };
   assert.equal(sendFailureOf(new ApiError(409, none), 'x', models).message, engineText('en', 'no_usable', { lines: engineText('en', 'problem.none') }));
   const other = { error: 'busy', errorMessage: '忙しい', errorCode: 'engine.send.busy' };
   assert.equal(sendFailureOf(new ApiError(409, other), 'x', models).message, engineText('en', 'send.busy'), 'ほかのコードは ApiError の訳のまま');
-  const coded = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: served.message, messageCode: served.messageCode, messageParams: served.messageParams }] };
+  const coded = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: SERVER_LINE, messageCode: served.messageCode, messageParams: served.messageParams }] };
   assert.equal(sendFailureOf(new ApiError(409, coded), 'x', []).message, expectedEn, 'problems 自身にコードが付いていれば、モデルの一覧が無くても英語');
   const wrongStatus = { models: [model('local', { probe: { ...unreachable, status: 'ok', messageCode: 'provider.probe.unknown' } })] };
   assert.equal(sendFailureOf(new ApiError(409, coded), 'x', wrongStatus.models).message, expectedEn, 'コードがあれば、モデルの一覧の状態には頼らない');

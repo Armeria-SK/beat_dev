@@ -81,16 +81,13 @@ test('計画モード（パイプライン）: 始めたときと今のモード
   }
 });
 
-test('計画モード: 日本語・英語の指示。毎回組み立てる system に入り、ふつうのモードでは何も足さない', () => {
+test('計画モード: 英語の指示。毎回組み立てる system に入り、ふつうのモードでは何も足さない', () => {
   const now = new Date('2026-11-04T20:00:00Z');
-  const plain = buildDynamic('Asia/Tokyo', 'ja', now);
-  assert.equal(buildDynamic('Asia/Tokyo', 'ja', now, 'normal'), plain);
-  assert.equal(buildDynamic('Asia/Tokyo', 'ja', now, 'auto'), plain);
-  const ja = buildDynamic('Asia/Tokyo', 'ja', now, 'plan');
-  assert.ok(ja.startsWith(plain));
-  assert.match(ja, /計画モード/u);
-  assert.match(ja, /手順の一覧/u);
+  const plain = buildDynamic('Asia/Tokyo', 'en', now);
+  assert.equal(buildDynamic('Asia/Tokyo', 'en', now, 'normal'), plain);
+  assert.equal(buildDynamic('Asia/Tokyo', 'en', now, 'auto'), plain);
   const en = buildDynamic('Asia/Tokyo', 'en', now, 'plan');
+  assert.ok(en.startsWith(plain));
   assert.match(en, /plan mode/iu);
   assert.match(en, /numbered list/u);
   assert.doesNotMatch(en, CJK);
@@ -126,8 +123,8 @@ test('計画モード（エンジン）: モデルに渡す道具は読む道具
   assert.deepEqual(toolNames(s.adapter().calls[1]!), all, 'ふつうのモードは全部');
 });
 
-test('計画モード（エンジン）: 毎回組み立てる system の部分に計画の指示が入る（固定の system は変わらない）。英語の設定なら英語', async t => {
-  const s = await startApp(t, { configure: c => { c.language = 'en'; } });
+test('計画モード（エンジン）: 毎回組み立てる system の部分に計画の指示（英語）が入る（固定の system は変わらない）', async t => {
+  const s = await startApp(t);
   s.adapter().scripts = [say('a'), say('b')];
   const plan = await post(s, 'plan please', { permissionMode: 'plan' });
   await settled(s.app, plan.body.runId);

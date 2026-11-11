@@ -27,8 +27,8 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode だけ', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode']);
+test('古い鍵の一覧: この段では models[].toolMode と language', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language']);
 });
 
 test('toolMode: "json_fallback" の設定も parseConfig で読め、モデルに toolMode が残らない。dropped は 1 回だけ', () => {
@@ -101,7 +101,7 @@ test('持ち主の設定と同じ形（language: "ja"、toolMode: "native"、秘
   const config = parseConfig(raw);
   assert.equal(config.models[0]!.id, 'qwen-local');
   assert.equal('toolMode' in config.models[0]!, false);
-  assert.equal(config.language, 'ja');
+  assert.equal('language' in config, false);
 
   const dir = tempDir(t);
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
@@ -113,7 +113,7 @@ test('持ち主の設定と同じ形（language: "ja"、toolMode: "native"、秘
   t.after(() => app.close());
   app.config();
   app.config();
-  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: models[].toolMode']);
+  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: models[].toolMode, language']);
   assert.deepEqual(readFileSync(paths.config), before);
 });
 

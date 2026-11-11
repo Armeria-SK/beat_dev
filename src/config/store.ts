@@ -230,7 +230,7 @@ export function parseConfig(raw: unknown): AppConfig {
   const withDefaults = Value.Default(AppConfig, Value.Clone(dropLegacy(raw).config));
   if (!Value.Check(AppConfig, withDefaults)) {
     // 正規表現や「Expected string to match …」はそのまま見せない。項目ごとの友好的な文（src/shared/messages/config.ts）にする
-    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('ja', friendly.code, friendly.params) : e.message }; });
+    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('en', friendly.code, friendly.params) : e.message }; });
     throw new ConfigError('設定ファイルの形式が正しくありません',
       errors.map(x => `${x.e.path || '/'}: ${x.message}`),
       errors.map(x => ({ path: issuePath(x.e.path, withDefaults), message: x.message, ...(x.friendly ? { code: `config.${x.friendly.code}`, params: x.friendly.params } : {}) })));

@@ -217,7 +217,7 @@ function bareStore(t: { after: (fn: () => void) => void }) {
   const db = openDatabase(':memory:', MIGRATIONS);
   t.after(() => db.close());
   const logs: string[] = [];
-  const skills = new SkillStore(db, dir, Date.now, () => 'ja', line => logs.push(line));
+  const skills = new SkillStore(db, dir, Date.now, () => 'en', line => logs.push(line));
   const rows = (name: string) => (db.prepare('SELECT COUNT(*) AS n FROM skill_registry WHERE name = ?').get(name) as { n: number }).n;
   return { skills, dir, logs, rows };
 }

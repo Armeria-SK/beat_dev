@@ -238,7 +238,7 @@ test('引数の形が3回続けて正しくなければ止める', async t => {
   const result = await (await s.send('書いて')).done;
   assert.equal(result.ok, false);
   if (result.ok) return;
-  assert.match(result.errorMessage, /正しい形でツールを呼べませんでした/u);
+  assert.match(result.errorMessage, /could not call tools in a valid form/u);
   assert.equal(s.adapter().calls.length, 3);
 });
 
@@ -423,7 +423,7 @@ test('道具の結果の画像: 古い画像つきのやり取りを要約に回
   await runImages(s, '最新の質問');
   assert.ok(s.adapter().calls.length >= 2);
   const summaryCall = s.adapter().calls[0]!;
-  assert.match(JSON.stringify(summaryCall.messages), /会話の古い部分/u, '1 回目の呼び出しは要約の依頼');
+  assert.match(JSON.stringify(summaryCall.messages), /Older part of the conversation/u, '1 回目の呼び出しは要約の依頼');
   assert.match(JSON.stringify(summaryCall.messages), /img_ok/u, '要約に回った古い部分に、画像つきの道具の結果が入っている');
   assert.equal(JSON.stringify(s.adapter().calls).includes(MARK), false, '要約の依頼にも、そのあとの呼び出しにも画像は入らない');
   assert.ok(storedTool(s)[0]!.images, '原文の画像は DB に残る');

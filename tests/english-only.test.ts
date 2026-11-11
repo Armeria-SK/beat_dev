@@ -39,38 +39,30 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'web/src/weekdays.ts': { strings: ['月', '火', '水', '木', '金', '土', '日'], reason: 'API に送る曜日の値（src/tasks/schedule.ts の DAY_MAP と対）' },
   'src/tools/builtin/table-core.ts': { strings: ['\u{FF1D}', '\u{FF0B}', '\u{FF0D}', '\u{FF20}'], reason: 'FORMULA_LEADS: 全角の ＝ ＋ － ＠ で始まるセルも式として無害化する（CSV の式の注入。安全）' },
   'src/engine/chat.ts': { strings: ['\u{3000}'], reason: 'toFullWidth: 子の答えの中の区切りを全角にして、区切りの偽装を防ぐ（空白は全角の空白に。安全）' },
+  'src/engine/persona.ts': { strings: ['基本情報', '名前', '話し方', '名前', '呼び方', '^-[ \\t]*(?:${labels})[ \\t]*[:\u{FF1A}][ \\t]*'], reason: '見出しと行の名前の読む側: 持ち主の日本語の SOUL.md / USER.md の節と行（区切りの全角のコロンも）を読んで探す' },
+  'src/engine/prompts.ts': { strings: ['/(?:^|\\n)[ \\t]*(?:(?:#{1,6}|[-*+])[ \\t]+)?[*_\u{300C}\u{300E}"\u{201C}\'`]*(?:次の一手|Next steps?)[*_\u{300D}\u{300F}"\u{201D}\'`]*[ \\t]*(?:[:\u{FF1A}][*_\u{300D}\u{300F}"\u{201D}\'`]*|\\r?\\n)([\\s\\S]+)$/iu'], reason: 'NEXT_STEP: モデルが日本語の見出し「次の一手」（と括弧）で書いたまとめも拾う' },
+  'src/memory/review.ts': { strings: ['/^(?:変更なし|No changes?)[\u{3002}.!\u{FF01}]?$/iu'], reason: 'isNoProposal: モデルが日本語で書いた「変更なし」（と句読点）も拾う' },
+  'src/memory/store.ts': { strings: ['/[\\s\u{3000}]+/u'], reason: 'searchTerms: 記憶の検索の語を全角の空白でも区切る' },
+  'src/tasks/schedule.ts': { strings: ['月'], reason: 'DAY_MAP の曜日の値（API の値。cronToFields の既定。画面の weekdays.ts と対）' },
+  'src/uploads/store.ts': { strings: ['<<<添付ファイル', '<<<添付ファイルここまで>>>'], reason: 'LEGACY_ATTACHMENT_FRAMES: 前からある発言の日本語の添付の枠を外す（安全: 外さないと添付の中身が利用者の依頼として自動承認の判定役に渡る）' },
 };
 
 // 一時の一覧（段階 0 の途中の PR だけ）: まだ英語にしていないファイル → 残りの数（上の例外の文字列を除いた数。このファイルは次の PR で直す）。0-2a-3・0-2a-4・0-2b で減らし、0-2b で空にする。
 const PENDING: Record<string, number> = {
   'src/app.ts': 9,
   'src/config/store.ts': 47,
-  'src/curiosity/text.ts': 5,
   'src/db/conversations.ts': 2,
   'src/db/database.ts': 1,
   'src/engine/chat.ts': 3,
   'src/engine/health.ts': 2,
-  'src/engine/persona.ts': 13,
-  'src/engine/prompts.ts': 19,
-  'src/engine/workspace.ts': 5,
   'src/env-file.ts': 10,
   'src/main.ts': 20,
   'src/mcp/manager.ts': 2,
-  'src/memory/review.ts': 37,
-  'src/memory/store.ts': 4,
   'src/notify/channels.ts': 2,
   'src/notify/notifications.ts': 1,
   'src/providers/anthropic.ts': 2,
-  'src/shared/messages/config.ts': 33,
-  'src/shared/messages/engine.ts': 49,
-  'src/shared/messages/http.ts': 84,
-  'src/shared/messages/notify.ts': 9,
-  'src/shared/messages/providers.ts': 45,
-  'src/shared/messages/stores.ts': 44,
-  'src/shared/messages/tasks.ts': 65,
   'src/shared/url.ts': 5,
-  'src/tasks/schedule.ts': 6,
-  'src/tasks/worker.ts': 23,
+  'src/tasks/worker.ts': 6,
   'src/tools/builtin/browser.ts': 8,
   'src/tools/builtin/calc.ts': 2,
   'src/tools/builtin/checklist.ts': 1,
@@ -90,7 +82,7 @@ const PENDING: Record<string, number> = {
   'src/tools/builtin/web.ts': 3,
   'src/tools/registry.ts': 2,
   'src/tools/shell/git-env.ts': 1,
-  'src/tools/skills/store.ts': 3,
+  'src/tools/skills/store.ts': 1,
   'src/uploads/store.ts': 1,
   'src/web/auth.ts': 3,
   'src/web/routes-browser.ts': 1,
@@ -176,4 +168,14 @@ test('英語だけの見張り: src と web/src の日本語の文字列は、�
   }
   for (const file of [...Object.keys(EXCEPTIONS), ...Object.keys(PENDING)]) if (!found.has(file)) problems.push(`${file}: もう日本語が無い（一覧から外す）`);
   assert.deepEqual(problems, []);
+});
+
+test('英語だけの見張り: templates/ の初期ファイル（モデルが読むルールと SOUL / USER / CURIOSITY）に日本語が無い', () => {
+  const dir = join(ROOT, 'templates');
+  const entries = readdirSync(dir, { withFileTypes: true });
+  assert.deepEqual(entries.map(entry => entry.name).sort(), ['CURIOSITY.md', 'SOUL.md', 'USER.md', 'rules.md'], '英語の 4 つだけ（言語ごとのフォルダは無い）');
+  for (const entry of entries) {
+    const hits = readFileSync(join(dir, entry.name), 'utf8').split(/\r?\n/u).map((line, i) => ({ line: i + 1, text: line })).filter(hit => JAPANESE.test(hit.text));
+    assert.deepEqual(hits, [], `templates/${entry.name}`);
+  }
 });

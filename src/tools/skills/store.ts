@@ -7,7 +7,6 @@ import { LocalizedError, type MessageParams } from '../../shared/messages/define
 import { storeText, type StoreMessageKey } from '../../shared/messages/stores.ts';
 
 const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
-  ja: { heading: '# スキル（手順書）', instruction: '次の作業をするときは、先に skill_view で手順を読んでから従う。' },
   en: { heading: '# Skills (procedures)', instruction: 'Before doing any of the work below, first read the procedure with skill_view and then follow it.' },
 };
 

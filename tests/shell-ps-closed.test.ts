@@ -26,7 +26,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const policy: ScopePolicy = {
     roots: [{ path: ws, mode: 'write' }], deny: [realish(join(base, 'config.json'))], askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')], skillsDir: join(ws, 'skills'),
   };
-  const ps = (command: string, extra: { allow?: string[]; language?: 'ja' | 'en' } = {}) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, ...extra });
+  const ps = (command: string, extra: { allow?: string[]; language?: 'en' } = {}) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, ...extra });
   const bash = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: false });
   return { base, ws, ps, bash };
 }

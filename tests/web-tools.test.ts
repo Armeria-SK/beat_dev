@@ -337,13 +337,13 @@ test('「外を読んだ」印を付けない失敗は、文が全部アプリ�
   const marked = new Set(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked']);
   const keys = ['fetch.too_long', 'fetch.bad_url', 'fetch.policy', 'fetch.http_status', 'fetch.type', 'fetch.aborted', 'fetch.dns', 'fetch.not_public', 'fetch.redirects', 'fetch.redirect_downgrade', 'fetch.timeout', 'fetch.connect', 'search.blocked', 'search.searx_connect', 'search.searx_json', 'search.searx_http', 'search.searx_bad', 'search.limit'] as const;
   for (const key of keys) {
-    const fromFetch = webFailure(new RetrievalFailure('http_failure', 'x', undefined, key), 'ja');
+    const fromFetch = webFailure(new RetrievalFailure('http_failure', 'x', undefined, key), 'en');
     assert.equal(fromFetch.noRemoteContent === true, marked.has(key), `fetch 側 ${key}`);
-    const fromSearch = webFailure(new SearchFailure('x', key), 'ja');
+    const fromSearch = webFailure(new SearchFailure('x', key), 'en');
     assert.equal(fromSearch.noRemoteContent === true, marked.has(key), `検索側 ${key}`);
   }
-  assert.equal(webFailure(new Error('boom'), 'ja').noRemoteContent, undefined, '想定外の例外は印を付ける側');
-  assert.equal(webFailure(new SearchFailure('tools.web.searxngUrl: 不正'), 'ja').noRemoteContent, undefined, 'キーの無い失敗も印を付ける側');
+  assert.equal(webFailure(new Error('boom'), 'en').noRemoteContent, undefined, '想定外の例外は印を付ける側');
+  assert.equal(webFailure(new SearchFailure('tools.web.searxngUrl: 不正'), 'en').noRemoteContent, undefined, 'キーの無い失敗も印を付ける側');
 });
 
 test('中止（abort）の fetch は、通信前でも印を付けない結果になる', async () => {

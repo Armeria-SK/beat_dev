@@ -24,7 +24,6 @@ interface Rig {
 
 function rig(t: { after: (fn: () => void | Promise<void>) => void }, change: (config: AppConfig) => void = () => undefined): Rig {
   const config = testConfig();
-  config.language = 'ja';
   config.tools.browser.enabled = true;
   change(config);
   const driver = new FakeBrowserDriver();
@@ -295,7 +294,7 @@ test('中止: すでに中止なら起動せず aborted。開く途中の中止�
 
 test('summarize は URL（browser_open）。4 つとも文言がある', async t => {
   const r = rig(t);
-  const summary = browserOpen.summarize!({ url: 'https://example.com/x' }, 'ja');
+  const summary = browserOpen.summarize!({ url: 'https://example.com/x' }, 'en');
   assert.equal(summary.body, 'https://example.com/x');
   for (const tool of [browserOpen, browserRead, browserScreenshot, browserClose]) {
     const s = tool.summarize!({ url: 'https://example.com/x' }, languageOf(r.config));

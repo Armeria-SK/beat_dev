@@ -348,8 +348,8 @@ test('doc_read: 大きさを確かめたあとに大きくなったファイル�
   }
 });
 
-test('doc_read: 英語の設定では、結果にも失敗の文にも日本語が出ない', async t => {
-  const s = setup(t, c => { c.language = 'en'; });
+test('doc_read: 結果にも失敗の文にも日本語が出ない', async t => {
+  const s = setup(t);
   mkdirSync(join(s.paths.workspace, 'dir.pdf'));
   put(s, 'a.xlsx', xlsxBytes([['name', 'count'], ['apple', 3]]).bytes);
   put(s, 'a.docx', docxBytes('one', 'two', 'three'));

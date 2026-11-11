@@ -36,7 +36,7 @@ async function waitFor(condition: () => boolean, label: string, timeoutMs = 3000
   }
 }
 
-async function setup(t: { after: (fn: () => void) => void }, options: { maxIterations?: number; language?: 'ja' | 'en'; webNetwork?: PageNetwork } = {}) {
+async function setup(t: { after: (fn: () => void) => void }, options: { maxIterations?: number; webNetwork?: PageNetwork } = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -45,7 +45,6 @@ async function setup(t: { after: (fn: () => void) => void }, options: { maxItera
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   config.tools.maxIterations = options.maxIterations ?? 16;
-  if (options.language) config.language = options.language;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const clock = { now: Date.parse('2026-11-04T20:00:00Z') };
@@ -64,7 +63,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { maxItera
 }
 
 const WRAP = 'ここまでにやったこと:\n- a.md を 2 回書いた\n\n次の一手:\nb.md を確かめてから、c.md を書く';
-const fallbackJa = (max: number) => `道具の上限（${max} 回）に達したので止めました。続けるなら「続けて」と送ってください`;
+const fallback = (max: number) => `Stopped because the tool-call limit (${max}) was reached. Send "continue" if you want it to keep going`;
 
 // ── 6b: 上限に達したら、まとめを返事として保存する ──
 
@@ -82,23 +81,23 @@ test('上限に達したら、道具なしで 1 回だけモデルを呼び、�
   const prompt = calls[2]!.messages;
   assert.deepEqual(prompt.map(m => m.role), ['user'], '道具の呼び出しの履歴は文字の記録にして 1 通で渡す（道具の定義が要らない）');
   assert.match((prompt[0] as { content: string }).content, /続きをやって[\s\S]*a\.md/u, '直近のやり取りが入る');
-  assert.match((prompt[0] as { content: string }).content, /ここまでにやったこと[\s\S]*次の一手/u, '何を書かせるかの指示が入る');
+  assert.match((prompt[0] as { content: string }).content, /"Done so far"[\s\S]*"Next step"/u, '何を書かせるかの指示が入る');
   assert.ok(s.events.some(e => e.type === 'warning' && e.code === 'max_iterations'), '画面のお知らせも残す');
   const run = s.app.runs.get(runId)!;
   assert.deepEqual([run.ok, JSON.parse(run.flags)], [1, ['max_iterations']]);
   assert.ok(s.events.some(e => e.type === 'message.saved' && e.runId === runId && e.role === 'assistant'));
 });
 
-test('まとめを書かせても空・失敗なら、決まった文を返事として保存する（日本語・英語）', async t => {
+test('まとめを書かせても空・失敗なら、決まった文（英語）を返事として保存する', async t => {
   for (const [label, last] of [['空', reply('   ')], ['失敗', fail(new ProviderError('provider_error', 'boom', { retryable: false }))]] as const) {
     const s = await setup(t, { maxIterations: 1 });
     s.adapter().scripts.push(toolCall('file_write', { path: 'a.md', content: '1' }), last);
     const { result } = await s.chat('やって');
     assert.ok(result.ok, label);
-    assert.equal(result.text, fallbackJa(1), label);
-    assert.equal(s.app.conversations.messages('c1').at(-1)!.text, fallbackJa(1), `${label}: 決まった文が記録に残る`);
+    assert.equal(result.text, fallback(1), label);
+    assert.equal(s.app.conversations.messages('c1').at(-1)!.text, fallback(1), `${label}: 決まった文が記録に残る`);
   }
-  const en = await setup(t, { maxIterations: 1, language: 'en' });
+  const en = await setup(t, { maxIterations: 1 });
   en.adapter().scripts.push(toolCall('file_write', { path: 'a.md', content: '1' }), reply(''));
   const { result } = await en.chat('do it');
   assert.equal(result.text, 'Stopped because the tool-call limit (1) was reached. Send "continue" if you want it to keep going');
@@ -117,7 +116,7 @@ test('まとめを書かせている最中に止められたら、決まった�
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.equal(result.errorKind, 'cancelled');
-  assert.equal(s.app.conversations.messages('c1').some(m => m.role === 'assistant' && m.text === fallbackJa(1)), false, '決まった文を返事として残さない');
+  assert.equal(s.app.conversations.messages('c1').some(m => m.role === 'assistant' && m.text === fallback(1)), false, '決まった文を返事として残さない');
   const run = s.app.runs.get(outcome.runId)!;
   assert.deepEqual([run.ok, run.error_kind], [0, 'cancelled']);
   assert.ok(s.events.some(e => e.type === 'run.end' && e.runId === outcome.runId && e.ok === false));

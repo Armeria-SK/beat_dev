@@ -108,7 +108,7 @@ test('API: 使えるモデルが無ければ 409 で理由と直し方を返し�
   assert.equal(sent.status, 409);
   const body = await sent.json() as any;
   assert.equal(body.errorKind, 'context_overflow');
-  assert.match(body.errorMessage, /送信しませんでした/);
+  assert.match(body.errorMessage, /Nothing was sent/);
   const models = await (await s.api('/api/models')).json() as any;
   assert.equal(models.models[0].probe.status, 'too_small');
   assert.equal(s.app.conversations.messages('00000000-0000-4000-8000-0000000000c1').length, 0);

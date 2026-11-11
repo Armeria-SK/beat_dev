@@ -158,7 +158,7 @@ test('一時停止中と、1 時間あたりの上限を超えたときは動か
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(await s.app.worker.tick(), 'budget');
-  assert.match(s.app.notifications.list()[0]?.title ?? '', /上限に達した/u, '上限で待たせていることを知らせる');
+  assert.match(s.app.notifications.list()[0]?.title ?? '', /run limit was reached/u, '上限で待たせていることを知らせる');
   // 「今すぐ実行」を頼まれたものは、上限に関係なく先に動く
   const urgent = s.userTask('急ぎ');
   s.app.worker.requestRun(urgent.id);
@@ -196,7 +196,7 @@ test('チャットが来るとタスクの実行を中断し、あとで続き�
   assert.equal(after.status, 'ready');
   assert.equal(after.attempts, 0);
   assert.equal(after.run_at, s.clock.now + 2 * MIN);
-  assert.match(s.app.tasks.events(task.id)[0]!.content ?? '', /優先/u);
+  assert.match(s.app.tasks.events(task.id)[0]!.content ?? '', /give priority to the conversation/u);
   const chatResult = await s.app.engine.wait(chat.runId);
   assert.ok(!chatResult || chatResult.ok);
 
@@ -273,7 +273,7 @@ test('道具で終え方を決めないまま 3 回続いたら、ユーザー�
   assert.equal(await s.app.worker.tick(), 'ran');
   const stuck = s.app.tasks.get(task.id)!;
   assert.equal(stuck.status, 'waiting');
-  assert.match(stuck.waiting_text ?? '', /3 回/u);
+  assert.match(stuck.waiting_text ?? '', /3 times/u);
   assert.match(stuck.body, /考えました 0/u, '返事はメモとして残す');
 });
 
@@ -325,8 +325,8 @@ test('画面の「止める」で止めたタスクは、20 秒ほど休んで�
   assert.equal(after.run_at, stoppedAt + 20_000);
   assert.equal(after.attempts, 0, '失敗として数えない');
   const requeued = s.app.tasks.events(task.id).find(e => e.kind === 'requeued');
-  assert.match(requeued?.content ?? '', /止められた/u);
-  assert.doesNotMatch(requeued?.content ?? '', /1 時間/u);
+  assert.match(requeued?.content ?? '', /It was stopped/u);
+  assert.doesNotMatch(requeued?.content ?? '', /hours?/u);
   assert.equal(await s.app.worker.tick(), 'idle', '20 秒たつまでは動かない');
   s.adapter().scripts.push(toolCall('task_complete', { summary: '終わりました', notify: false }));
   s.clock.now = stoppedAt + 20_000;
@@ -395,7 +395,7 @@ test('API: タスク・ワーカー・通知・プロフィール', async t => {
   const created = await api('/api/tasks', { title: '週報', repeat: { freq: 'weekly', values: { day: '金', time: '17:00' } } });
   assert.equal(created.status, 201);
   assert.equal(created.body.task.status, 'scheduled');
-  assert.equal(created.body.task.cron_text, '毎週金曜 17:00');
+  assert.equal(created.body.task.cron_text, 'Every Friday at 17:00');
   assert.equal((await api('/api/tasks', { title: '変な予定', repeat: { freq: 'weekly', values: { day: 'X' } } })).status, 400);
 
   const plain = await api('/api/tasks', { title: '本を返す', priority: 1, when: '2026-11-06T09:00:00+09:00' });
@@ -733,7 +733,7 @@ test('切れた返事だけで終わったタスクは、メモに「切れた�
   });
   assert.equal(await s.app.worker.tick(), 'ran');
   const after = s.app.tasks.get(task.id)!;
-  assert.match(after.body, /出力の上限で返事が途中で切れました/u);
+  assert.match(after.body, /the reply was cut off by the output limit/u);
   assert.match(after.body, /資料の骨子は次のとおりです/u);
   assert.equal(after.status, 'ready', '進展なしの扱いは普通の返事と同じ');
 });

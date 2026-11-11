@@ -142,7 +142,7 @@ export interface ReviewJob {
   changes: MemoryEvent[];
 }
 
-export interface TemplatesView { language: string; rules: string; files: Array<{ name: string; content: string }> }
+export interface TemplatesView { rules: string; files: Array<{ name: string; content: string }> }
 export interface OnboardingView { done: boolean; steps: { user: boolean; identity: boolean; persona: boolean; model: boolean } }
 export interface PersonaWrite { userName?: string; callMe?: string; botName?: string; style?: 'calm' | 'friendly' | 'direct' | 'none'; styleNote?: string }
 export interface PersonaView { soul: string; user: string; tokens: { soul: number; user: number }; budget: number | null; max: number }
@@ -274,7 +274,7 @@ export const api = {
   updateCuriosity: (id: number, patch: { status?: CuriosityItem['status']; result?: string }) => call(`/api/curiosity/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   curiosityTask: (id: number) => call(`/api/curiosity/${id}/task`, { method: 'POST', body: '{}' }),
   history: (q: string, days?: number) => call<{ hits: HistoryHit[] }>(`/api/history?q=${encodeURIComponent(q)}${days ? `&days=${days}` : ''}`),
-  templates: (language: string) => call<TemplatesView>(`/api/templates/${encodeURIComponent(language)}`),
+  templates: () => call<TemplatesView>('/api/templates'),
   onboarding: () => call<OnboardingView>('/api/onboarding'),
   onboardingDone: () => call<OnboardingView>('/api/onboarding/done', { method: 'POST', body: '{}' }),
   onboardingPersona: (input: PersonaWrite) => call<OnboardingView & { profile: Profile }>('/api/onboarding/persona', { method: 'POST', body: JSON.stringify(input) }),

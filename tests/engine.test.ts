@@ -84,7 +84,7 @@ test('使えるモデルが無ければ、発言を保存せず、モデルに�
   assert.equal(outcome.httpStatus, 409);
   assert.equal(outcome.errorKind, 'context_overflow');
   assert.equal(outcome.detail?.reason, 'server_ctx_too_small');
-  assert.match(outcome.errorMessage, /送信しませんでした/);
+  assert.match(outcome.errorMessage, /Nothing was sent/);
   assert.equal(s.conversations.messages('c1').length, 0);
   assert.equal(s.adapter.calls.length, 0);
 });
@@ -167,7 +167,7 @@ test('利用者が止めたら、途中までの返事を「止めた」と分�
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.equal(result.errorKind, 'cancelled');
-  assert.match(s.conversations.messages('c1').at(-1)!.text, /書きかけ[\s\S]*途中で止めました/);
+  assert.match(s.conversations.messages('c1').at(-1)!.text, /書きかけ[\s\S]*stopped partway/);
   assert.equal(s.runs.get(outcome.runId)!.error_kind, 'cancelled');
 });
 
@@ -203,8 +203,8 @@ test('入りきらない古いやり取りは要約してから送る（原文�
   const result = await sendAndWait(s.engine, 'c1', '最新の質問');
   assert.ok(result.ok);
   const [summaryCall, answerCall] = s.adapter.calls;
-  assert.match((summaryCall!.messages[0] as { content: string }).content, /会話の古い部分/u);
-  assert.match(answerCall!.system.dynamic, /これまでの会話の要約[\s\S]*「い」についての相談/u);
+  assert.match((summaryCall!.messages[0] as { content: string }).content, /Older part of the conversation/u);
+  assert.match(answerCall!.system.dynamic, /Summary of the conversation so far[\s\S]*「い」についての相談/u);
   const sent = answerCall!.messages;
   assert.equal((sent.at(-1) as { content: string }).content, '最新の質問');
   assert.equal(sent[0]!.role, 'user', '組の途中から始まらない');
@@ -236,7 +236,7 @@ test('サーバー側で切り捨てられた疑いが2回続いたら、その�
   assert.equal(s.status.usable('a'), true);
   await sendAndWait(s.engine, 'c1', long);
   assert.equal(s.status.usable('a'), false);
-  assert.match(s.status.get('a')!.message, /切り捨て/);
+  assert.match(s.status.get('a')!.message, /may have cut it off/);
 });
 
 test('見積もりの補正を学習する（切り捨てが起こりえない範囲だけ）', async t => {
@@ -272,7 +272,7 @@ test('モデルが 1 つも無いときの送信は 409 engine.no_usable（probl
     assert.equal(outcome.httpStatus, 409);
     assert.equal(outcome.errorCode, 'engine.no_usable');
     assert.deepEqual(outcome.problems, []);
-    assert.match(outcome.errorMessage, /モデルがまだ設定されていません/u);
+    assert.match(outcome.errorMessage, /No model has been set up yet/u);
   }
   assert.equal(s.conversations.messages('c1').length, 0);
   assert.equal(s.adapter.calls.length, 0);

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { DEFAULT_LANGUAGE, LANGUAGES, type Language } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { ImageRef } from '../engine/types.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { storeText, type StoreMessageKey } from '../shared/messages/stores.ts';
@@ -115,11 +115,15 @@ export function attachmentBlock(upload: Upload, language: Language = DEFAULT_LAN
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
+export const LEGACY_ATTACHMENT_FRAMES: ReadonlyArray<{ open: string; close: string }> = [
+  { open: '<<<添付ファイル', close: '<<<添付ファイルここまで>>>' },
+];
+
 export function stripAttachments(text: string): string {
   let result = text;
-  for (const language of LANGUAGES) {
-    const open = escapeRegExp(storeText(language, 'attachment.open'));
-    const close = escapeRegExp(storeText(language, 'attachment.close'));
+  for (const frame of [{ open: ATTACHMENT_OPEN, close: ATTACHMENT_CLOSE }, ...LEGACY_ATTACHMENT_FRAMES]) {
+    const open = escapeRegExp(frame.open);
+    const close = escapeRegExp(frame.close);
     result = result.replace(new RegExp(`\\n*${open}[\\s\\S]*?${close}`, 'gu'), '');
   }
   return result.trim();

@@ -314,5 +314,5 @@ const en = {
   'browser.no_display': 'This machine has no display, so a browser window cannot be opened',
 };
 
-export const toolText = defineMessages('tool', en, en);
+export const toolText = defineMessages('tool', en);
 export type ToolMessageKey = keyof typeof en;

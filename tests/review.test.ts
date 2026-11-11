@@ -62,7 +62,7 @@ test('振り返りの実行では、シェルもファイルも渡さず、呼�
   const names = request.tools.map(t => t.name);
   assert.ok(names.includes('memory_save') && names.includes('skill_draft') && names.includes('curiosity_add'));
   for (const forbidden of ['shell_run', 'file_write', 'file_edit', 'file_read', 'task_create', 'web_fetch', 'web_search']) assert.ok(!names.includes(forbidden), forbidden);
-  assert.match(String(request.messages.at(-1)?.content), /振り返り/u);
+  assert.match(String(request.messages.at(-1)?.content), /\[Review\]/u);
   assert.match(String(request.messages.at(-1)?.content), /渋谷で打ち合わせ/u);
   const call = s.app.db.prepare("SELECT decision, ok FROM tool_calls WHERE tool = 'shell_run'").get() as { decision: string; ok: number };
   assert.equal(call.decision, 'deny');
@@ -120,12 +120,12 @@ test('振り返りで記憶をまとめても、取り消せる', async t => {
 
 test('ユーザーが消した記憶は、振り返りの依頼文で「覚え直さない」と伝える', () => {
   const prompt = reviewPrompt({ trigger: 'idle', transcript: '【ユーザー】こんにちは', forgotten: ['猫を飼っている'] });
-  assert.match(prompt, /消した記憶[\s\S]*猫を飼っている/u);
+  assert.match(prompt, /Memories the user deleted[\s\S]*猫を飼っている/u);
   const transcript = transcriptOf([
     { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: 'a'.repeat(50), message: { role: 'user', content: 'x' }, created_at: 0 },
     { id: 2, conversation_id: 'c', run_id: null, role: 'assistant', text: '新しい方', message: { role: 'assistant', content: 'x' }, created_at: 0 },
   ], 20);
-  assert.equal(transcript, '【Clive】新しい方', '長すぎるときは新しい方を残す');
+  assert.equal(transcript, '[Clive] 新しい方', '長すぎるときは新しい方を残す');
 });
 
 test('タスクが終わったら振り返る。重い会話の後も振り返る', async t => {
@@ -138,7 +138,7 @@ test('タスクが終わったら振り返る。重い会話の後も振り返�
   assert.equal(s.app.reviews.list()[0]?.task_id, task.id);
   s.adapter().scripts.push(reply('変更なし'));
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.match(String(s.adapter().calls.at(-1)!.messages.at(-1)?.content), /終わったタスク[\s\S]*わかった/u);
+  assert.match(String(s.adapter().calls.at(-1)!.messages.at(-1)?.content), /Finished task[\s\S]*わかった/u);
 
   s.adapter().scripts.push(toolCall('memory_search', { query: 'コーヒー' }), reply('ありませんでした'));
   const runId = await s.chat('c2', 'コーヒーの記憶ある？');
@@ -176,7 +176,7 @@ test('スキルの下書きは、承認するまで索引に出ず、読めな�
   assert.match(system, /weekly-report/u, '新しい会話の system に索引が入る');
   assert.match(s.app.conversations.messages('c2').find(m => m.role === 'tool')!.text, /3行でまとめる/u);
   assert.equal(s.app.skills.get('weekly-report')!.uses, 1);
-  assert.throws(() => s.app.skills.approve(draft.id), /承認待ち/u);
+  assert.throws(() => s.app.skills.approve(draft.id), /not a draft waiting for approval/u);
 });
 
 test('SKILL.md の読み書き（先頭の --- の中の name と description）', () => {
@@ -266,7 +266,7 @@ test('API: レビュー・スキル・好奇心・振り返りの記録', async 
   assert.equal((await api('/api/reviews', { conversationId: 'c9' })).status, 200, '同じ発言では二度積まない');
   const jobs = await api('/api/reviews');
   assert.equal(jobs.body.pending, 1);
-  assert.equal(jobs.body.jobs[0].triggerLabel, '手動');
+  assert.equal(jobs.body.jobs[0].triggerLabel, 'Manual');
 });
 
 test('切れた振り返りは失敗にして、見た発言の位置を進めない（次の機会にやり直す）', async t => {
@@ -282,6 +282,6 @@ test('切れた振り返りは失敗にして、見た発言の位置を進め�
   assert.equal(await s.app.worker.tick(), 'ran');
   const job = s.app.reviews.list()[0]!;
   assert.equal(job.status, 'failed');
-  assert.match(job.note ?? '', /出力の上限で途中で切れた/u);
+  assert.match(job.note ?? '', /cut off by the output limit/u);
   assert.equal(s.app.kv.get('review:upto:c1'), undefined, '切れた振り返りで、見た発言の位置を進めない');
 });

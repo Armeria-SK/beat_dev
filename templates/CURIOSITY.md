@@ -1,8 +1,8 @@
 # CURIOSITY
 
-気になったこと・やってみたいこと。Clive が自分で動くときのきっかけになります。
+Things that sparked curiosity and things worth trying. They give Clive a reason to act on its own.
 
-## 気になっていること
+## Things of interest
 
-## やってみたいこと
+## Things to try
 

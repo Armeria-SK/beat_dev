@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
-import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
+import { AppConfig } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
 import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
 import { modelEfforts } from '../engine/efforts.ts';
@@ -78,10 +78,6 @@ function autoReasonOf(reasons: string | null): string | null {
     const list = JSON.parse(reasons) as unknown;
     return Array.isArray(list) && typeof list.at(-1) === 'string' ? list.at(-1) as string : null;
   } catch { return null; }
-}
-
-function isLanguage(value: string): value is Language {
-  return (LANGUAGES as readonly string[]).includes(value);
 }
 
 function modelsView(app: App) {
@@ -417,10 +413,8 @@ export function createWebServer(app: App): WebServer {
     await app.applyConfig(next);
     sendJson(res, 200, { ...settingsView(app), ...modelsView(app) });
   });
-  router.add('GET', '/api/templates/:language', ({ res, params }) => {
-    const language = params[0]!;
-    if (!isLanguage(language)) throw problem(404, 'not_found', 'unknown_language', { params: { language, values: LANGUAGES.join(' / ') } });
-    sendJson(res, 200, { language, ...defaultTexts(app.paths, language) });
+  router.add('GET', '/api/templates', ({ res }) => {
+    sendJson(res, 200, defaultTexts(app.paths));
   });
   router.add('GET', '/api/models', ({ res }) => sendJson(res, 200, modelsView(app)));
   router.add('POST', '/api/models/probe', async ({ res }) => {

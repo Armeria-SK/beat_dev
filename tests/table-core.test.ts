@@ -97,7 +97,7 @@ test('表: xlsxBytes の往復は xlsxText で読める', () => {
   assert.equal(neutralized, 1, '=1+1 のセルを無害化');
   const opened = openZip(bytes);
   assert.equal(opened.ok, true);
-  const result = xlsxText(opened.zip, 'ja');
+  const result = xlsxText(opened.zip, 'en');
   assert.equal(result.ok, true);
   const text = result.ok ? result.text : '';
   assert.ok(text.includes('名前\t数'), '1 行目');
@@ -124,7 +124,7 @@ test('表: 制御文字を含むセルは落として読める', () => {
   const { bytes } = xlsxBytes([['a' + String.fromCharCode(1) + 'b']]);
   const opened = openZip(bytes);
   assert.equal(opened.ok, true);
-  const result = xlsxText(opened.zip, 'ja');
+  const result = xlsxText(opened.zip, 'en');
   assert.equal(result.ok, true, 'damaged にならない');
   const text = result.ok ? result.text : '';
   assert.ok(text.includes('ab'), '制御文字は落ちる');

@@ -75,7 +75,7 @@ test('API のエラーの本文: code / params と、返事の 409 の errorCode
   assert.equal(errorBodyText({ code: 'http.mystery', message: 'm' }, 'en'), null);
 });
 
-test('API のエラーを本物のサーバーから受けて、画面の言語に訳す（言語がサーバーと画面で違っても）', async t => {
+test('API のエラーを本物のサーバーから受けて、コードから画面の文を組み立てる（サーバーの文には頼らない）', async t => {
   const { api } = await startScreenServer(t);
   const post = async (path: string, body: unknown) => {
     const res = await api(path, { method: 'POST', body: JSON.stringify(body) });
@@ -95,7 +95,7 @@ test('API のエラーを本物のサーバーから受けて、画面の言語�
   assert.equal(goneBody.code, 'store.memory.not_found');
   assert.deepEqual(goneBody.params, { id: 999 });
   assert.equal(errorBodyText(goneBody, 'en'), storeText('en', 'memory.not_found', { id: 999 }));
-  assert.notEqual(errorBodyText(goneBody, 'en'), goneBody.message, 'サーバーは ja で書いているので、en の画面では別の文になる');
+  assert.notEqual(errorBodyText({ ...goneBody, message: 'SERVER TEXT' }, 'en'), 'SERVER TEXT', '画面はサーバーの文ではなく、コードから組み立てる');
 
   const noEvent = await post('/api/memory-events/999/undo', {});
   assert.equal(noEvent.body.code, 'store.memory.no_event');
@@ -169,7 +169,7 @@ test('モデルの確認の説明: サーバーが作る probe の message を�
     { modelId: 'i', server: 'generic', required: 32768, declared: 65536, unmeasuredNote: 'probe.note.max_unavailable' as const },
   ];
   for (const fact of facts) {
-    for (const from of ['ja', 'en'] as const) {
+    for (const from of ['en'] as const) {
       const served = evaluateContext({ ...fact, language: from });
       for (const to of ['en'] as const) {
         const expected = evaluateContext({ ...fact, language: to }).message;
@@ -177,8 +177,8 @@ test('モデルの確認の説明: サーバーが作る probe の message を�
       }
     }
   }
-  const ja = evaluateContext({ ...facts[2]!, language: 'ja' });
-  assert.notEqual(probeMessage(ja, 'en'), ja.message, '日本語で届いた説明が、英語の画面では英語になる');
+  const served = { ...evaluateContext({ ...facts[2]!, language: 'en' }), message: 'SERVER TEXT' };
+  assert.notEqual(probeMessage(served, 'en'), served.message, 'サーバーの書いた説明ではなく、コードから英語で組み立てる');
 });
 
 test('モデルの確認の説明（接続などの失敗）: プロバイダのエラーのコードから、画面の言語で書く。コードが無ければサーバーの文', () => {
@@ -190,8 +190,8 @@ test('モデルの確認の説明（接続などの失敗）: プロバイダの
     providerError('auth', 'key.missing', { env: 'OPENAI_API_KEY' }),
   ];
   for (const error of errors) {
-    const served = errorProbeText(error, 'ja');
-    assert.equal(probeMessage({ message: served.message, messageCode: served.messageCode, messageParams: served.messageParams }, 'en'), error.text('en'), error.code);
+    const served = errorProbeText(error, 'en');
+    assert.equal(probeMessage({ message: 'SERVER TEXT', messageCode: served.messageCode, messageParams: served.messageParams }, 'en'), error.text('en'), error.code);
   }
   assert.equal(probeMessage({ message: 'サーバーの文' }, 'en'), 'サーバーの文');
   assert.equal(probeMessage({ message: 'サーバーの文', messageCode: 'provider.probe.too_small', messageParams: { effective: '1' } }, 'en'), 'サーバーの文', '値が足りなければサーバーの文');

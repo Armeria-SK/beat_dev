@@ -29,7 +29,7 @@ const mem = (id: number, book: 'user' | 'notes', content: string, updatedAt: num
   id, book, content, status: 'active', origin: 'chat', source_conversation_id: null, source_message_id: null, created_at: id, updated_at: updatedAt,
 });
 
-function smallestBudgetShowing(memories: readonly Memory[], count: number, language: 'ja' | 'en' = 'ja'): number {
+function smallestBudgetShowing(memories: readonly Memory[], count: number, language: 'en' = 'en'): number {
   for (let budget = 0; budget < 100_000; budget++) if (planBooks(memories, language, budget).shown.length >= count) return budget;
   throw new Error('入る予算が見つかりません');
 }
@@ -45,8 +45,7 @@ test('記憶: 本の大きさに上限は無く、保存は断らない。1 件 
   assert.throws(() => memory.save({ book: 'notes', content: 'y'.repeat(601), actor: 'clive' }), (e: unknown) => e instanceof MemoryError && e.code === 'memory.too_long');
   const { eventId } = memory.forget(first.id, 'user');
   assert.doesNotThrow(() => memory.undo(eventId), '消したものを戻すときも、大きさでは断らない');
-  assert.equal(Object.keys(storeText.tables.ja).some(key => key.includes('over_cap')), false, '上限のエラーの文は表に無い');
-  assert.equal(Object.keys(storeText.tables.en).some(key => key.includes('over_cap')), false);
+  assert.equal(Object.keys(storeText.tables.en).some(key => key.includes('over_cap')), false, '上限のエラーの文は表に無い');
 });
 
 // ── 会話に入れる量の予算 ──
@@ -54,9 +53,9 @@ test('記憶: 本の大きさに上限は無く、保存は断らない。1 件 
 test('renderBooks: 予算が無ければ全部入る（今までの出力のまま）。予算を渡さない呼び出しも同じ', () => {
   const memories = [mem(1, 'user', '紅茶が好き', 100), mem(2, 'notes', '返事は短く', 200)];
   const text = renderBooks(memories);
-  assert.equal(text, '# 覚えていること（記憶）\n\n## ユーザーについての記憶\n- [u1] 紅茶が好き\n\n## Clive のメモと教訓\n- [n2] 返事は短く');
-  assert.equal(renderBooks(memories, 'ja', undefined), text);
-  assert.equal(planBooks(memories, 'ja').omitted.length, 0);
+  assert.equal(text, "# What you remember (memory)\n\n## Memories about the user\n- [u1] 紅茶が好き\n\n## Clive's notes and lessons\n- [n2] 返事は短く");
+  assert.equal(renderBooks(memories, 'en', undefined), text);
+  assert.equal(planBooks(memories, 'en').omitted.length, 0);
 });
 
 test('renderBooks: 予算まで、新しく直した順に入れ、入らなかった分は「ほか N 件」の 1 行にする', () => {
@@ -66,20 +65,20 @@ test('renderBooks: 予算まで、新しく直した順に入れ、入らなか�
     mem(3, 'user', `新しい事実${'う'.repeat(40)}`, 300),
   ];
   const budget1 = smallestBudgetShowing(memories, 1);
-  const one = planBooks(memories, 'ja', budget1);
+  const one = planBooks(memories, 'en', budget1);
   assert.deepEqual(one.shown.map(m => m.id), [3], '直したのが新しいものから入る');
   assert.deepEqual(one.omitted.map(m => m.id), [1, 2], '入らなかった分は古い順');
   assert.match(one.text, /\[u3\] 新しい事実/u);
   assert.doesNotMatch(one.text, /\[u1\]|\[n2\]/u);
-  assert.ok(one.text.endsWith('（ほか 2 件。memory_search で探せます）'), one.text);
+  assert.ok(one.text.endsWith('(2 more. You can find them with memory_search)'), one.text);
   assert.ok(estimateTextTokens(one.text) <= budget1 + 30, '予算の目安を、見出しと「ほか」の 1 行の分を除いて超えない');
 
   const budget2 = smallestBudgetShowing(memories, 2);
-  const two = planBooks(memories, 'ja', budget2);
+  const two = planBooks(memories, 'en', budget2);
   assert.deepEqual(two.shown.map(m => m.id), [2, 3], '新しい 2 件。本の中の並びは今までどおり（作った順）');
-  assert.match(two.text, /## ユーザーについての記憶\n- \[u3\][^\n]*\n\n## Clive のメモと教訓\n- \[n2\][^\n]*\n\n（ほか 1 件。memory_search で探せます）$/u);
+  assert.match(two.text, /## Memories about the user\n- \[u3\][^\n]*\n\n## Clive's notes and lessons\n- \[n2\][^\n]*\n\n\(1 more\. You can find them with memory_search\)$/u);
 
-  const all = planBooks(memories, 'ja', smallestBudgetShowing(memories, 3));
+  const all = planBooks(memories, 'en', smallestBudgetShowing(memories, 3));
   assert.equal(all.omitted.length, 0);
   assert.equal(all.text, renderBooks(memories), '全部入るなら、予算なしと同じ文');
   assert.equal(all.tokens, estimateTextTokens(renderBooks(memories)), 'tokens は全部を入れたときの見積もり（予算とは関係ない）');
@@ -87,12 +86,12 @@ test('renderBooks: 予算まで、新しく直した順に入れ、入らなか�
 
 test('renderBooks: 新しい順に数えて、入らない 1 件で止める（古い小さな記憶だけが飛び越して入ることはない）', () => {
   const memories = [mem(1, 'user', '小さな古い記憶', 100), mem(2, 'user', 'あ'.repeat(500), 200)];
-  const bigCost = estimateTextTokens(planBooks([memories[1]!], 'ja', 100_000).text);
-  const plan = planBooks(memories, 'ja', bigCost - 5);
+  const bigCost = estimateTextTokens(planBooks([memories[1]!], 'en', 100_000).text);
+  const plan = planBooks(memories, 'en', bigCost - 5);
   assert.deepEqual(plan.shown.map(m => m.id), [], '新しい大きな記憶が入らないなら、その後ろは数えない');
   assert.deepEqual(plan.omitted.map(m => m.id), [1, 2], '入らなかった分は古い順');
-  assert.match(plan.text, /^# 覚えていること（記憶）\n\n（ほか 2 件。memory_search で探せます）$/u);
-  assert.equal(planBooks(memories, 'ja', 0).shown.length, 0, '予算が 0 でも壊れない');
+  assert.match(plan.text, /^# What you remember \(memory\)\n\n\(2 more\. You can find them with memory_search\)$/u);
+  assert.equal(planBooks(memories, 'en', 0).shown.length, 0, '予算が 0 でも壊れない');
 });
 
 test('renderBooks: 直した時刻が同じなら、あとの id が新しい。消した記憶は数えない。英語に日本語は混ざらない', () => {
@@ -102,7 +101,7 @@ test('renderBooks: 直した時刻が同じなら、あとの id が新しい。
   assert.deepEqual(plan.omitted.map(m => m.id), [1]);
   assert.ok(plan.text.endsWith('(1 more. You can find them with memory_search)'), plan.text);
   assert.doesNotMatch(plan.text, CJK);
-  assert.equal(storeText('ja', 'memory.more', { n: 3 }), '（ほか 3 件。memory_search で探せます）');
+  assert.equal(storeText('en', 'memory.more', { n: 3 }), '(3 more. You can find them with memory_search)');
 });
 
 // ── 予算の計算（エンジン）と、会話の最初の固定 ──
@@ -196,7 +195,7 @@ test('会話の最初に固定する system には、予算まで（新しく直
   s.fill(6);
   const budget = s.app.engine.memoryBudget()!;
   assert.equal(budget, Math.floor(availableOf(20_000) * 0.12));
-  const plan = planBooks(s.app.memory.list(), 'ja', budget);
+  const plan = planBooks(s.app.memory.list(), 'en', budget);
   assert.ok(plan.shown.length >= 1 && plan.omitted.length >= 1, `予算で切れる量にしてある: shown=${plan.shown.length} omitted=${plan.omitted.length}`);
 
   s.adapter().scripts.push(reply('はい'));
@@ -206,7 +205,7 @@ test('会話の最初に固定する system には、予算まで（新しく直
   const frozen = s.adapter().calls[0]!.system.frozen;
   for (const m of plan.shown) assert.ok(frozen.includes(`[${m.book === 'user' ? 'u' : 'n'}${m.id}] `), `入るはずの記憶 ${m.id}`);
   for (const m of plan.omitted) assert.ok(!frozen.includes(`[${m.book === 'user' ? 'u' : 'n'}${m.id}] `), `入らないはずの記憶 ${m.id}`);
-  assert.ok(frozen.includes(`（ほか ${plan.omitted.length} 件。memory_search で探せます）`));
+  assert.ok(frozen.includes(`(${plan.omitted.length} more. You can find them with memory_search)`));
   const newest = s.app.memory.list().reduce((a, b) => (b.updated_at > a.updated_at ? b : a));
   assert.ok(plan.shown.some(m => m.id === newest.id), 'いちばん新しく直したものは必ず入る');
 
@@ -338,29 +337,29 @@ test('整理の振り返り: 依頼文は、会話に入りきらない記憶を
   await s.app.worker.tick();
   s.fill(6);
   const budget = s.app.engine.memoryBudget()!;
-  const plan = planBooks(s.app.memory.list(), 'ja', budget);
+  const plan = planBooks(s.app.memory.list(), 'en', budget);
   s.adapter().scripts.push(reply('変更なし'));
   assert.equal(await s.app.worker.tick(), 'ran');
   const prompt = String(s.adapter().calls.at(-1)!.messages.at(-1)?.content);
-  assert.match(prompt, /きっかけ: 記憶が大きくなった/u);
-  assert.match(prompt, /# 記憶の量\n記憶の合計は約 \d+ トークンで、会話に入れる量の目安（約 \d+ トークン）を超えています/u);
+  assert.match(prompt, /Trigger: Memory has grown large/u);
+  assert.match(prompt, /# Memory usage\nMemory totals about \d+ tokens, over the guideline for what goes into a conversation \(about \d+ tokens\)/u);
   const listed = [...prompt.matchAll(/^- \[[un](\d+)\] /gmu)].map(m => Number(m[1]));
   assert.ok(plan.omitted.length >= 2, '挙げる対象が複数ある量にしてある');
   assert.deepEqual(listed, plan.omitted.map(m => m.id), '入りきらない記憶だけを、古い順に（会話に入っている記憶は挙げない）');
   assert.ok(listed.every((id, i) => i === 0 || listed[i - 1]! < id), '古い順');
 });
 
-test('bookPressureText: 会話に入りきらない記憶を古い順に挙げ、挙げる量は予算まで。残りは「ほか N 件」（日本語・英語）', () => {
+test('bookPressureText: 会話に入りきらない記憶を古い順に挙げ、挙げる量は予算まで。残りは「ほか N 件」（英語）', () => {
   const outside = Array.from({ length: 50 }, (_, i) => ({ id: i + 1, book: (i % 2 ? 'notes' : 'user') as 'user' | 'notes', content: `${String(i + 1).padStart(2, '0')}${'あ'.repeat(98)}` }));
-  const ja = bookPressureText({ tokens: 9000, budget: 500, outside }, 'ja');
-  const lines = ja.split('\n');
-  assert.equal(lines[0], '記憶の合計は約 9000 トークンで、会話に入れる量の目安（約 500 トークン）を超えています。会話に入りきらない記憶が 50 件あります。重なりをまとめる・古いものを減らす案を出す');
-  assert.equal(lines[1], '会話に入りきらない記憶（古い順）:');
+  const full = bookPressureText({ tokens: 9000, budget: 500, outside }, 'en');
+  const lines = full.split('\n');
+  assert.equal(lines[0], 'Memory totals about 9000 tokens, over the guideline for what goes into a conversation (about 500 tokens). 50 memories do not fit in a conversation. Propose merging overlapping memories and trimming old ones');
+  assert.equal(lines[1], 'Memories that do not fit (oldest first):');
   const items = lines.filter(l => l.startsWith('- ['));
   assert.ok(items.length >= 3 && items.length <= 5, `予算 500 トークンで 100 字ずつ: ${items.length} 件`);
   assert.ok(items[0]!.startsWith('- [u1] 01'), '古い方から');
   assert.ok(items[1]!.startsWith('- [n2] 02'));
-  assert.equal(lines.at(-1), `…（ほか ${50 - items.length} 件）`);
+  assert.equal(lines.at(-1), `… (${50 - items.length} more)`);
   assert.ok(estimateTextTokens(items.join('\n')) <= 500, '挙げる分は予算に収まる');
 
   const en = bookPressureText({ tokens: 9000, budget: 500, outside: outside.slice(0, 2).map(m => ({ ...m, content: `fact ${m.id}` })) }, 'en');
@@ -428,7 +427,7 @@ test('整理の振り返り: 返事（消す・まとめる案）を、#/memory 
   const tidy = s.app.notifications.list().filter(n => n.link === '#/memory');
   assert.equal(tidy.length, 1);
   assert.equal(tidy[0]!.kind, 'info');
-  assert.equal(tidy[0]!.title, '記憶の整理の案があります');
+  assert.equal(tidy[0]!.title, 'Suggestions for tidying up memory');
   assert.equal(tidy[0]!.body, proposal);
   assert.equal(s.app.reviews.list()[0]!.note, proposal, '振り返りの記録にも残る');
 
@@ -441,7 +440,7 @@ test('整理の振り返り: 返事（消す・まとめる案）を、#/memory 
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.notifications.list().filter(n => n.link === '#/memory').length, 1, '空の返事も知らせない');
 
-  const en = await setup(t, c => { c.language = 'en'; c.models = [model('big', 'fa', 20_000)]; });
+  const en = await setup(t, c => { c.models = [model('big', 'fa', 20_000)]; });
   await en.app.worker.tick();
   en.fill(6);
   en.adapter().scripts.push(reply('[u1] Delete: outdated'));
@@ -462,12 +461,12 @@ test('整理の振り返り: 返事（消す・まとめる案）を、#/memory 
 
 test('整理の振り返りの依頼文: 消さずに案を書く方針になる（ほかの振り返りの方針は今までどおり）', () => {
   const tidy = reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x' });
-  assert.match(tidy, /memory_forget は使えない/u);
-  assert.match(tidy, /最後の返事に 1 件 1 行で書く/u);
-  assert.doesNotMatch(tidy, /要らなくなった方は memory_forget/u, '消す指示は残さない');
-  assert.doesNotMatch(tidy, /memory_save（book=user）/u, '新しく覚える指示も残さない');
+  assert.match(tidy, /memory_forget is not available/u);
+  assert.match(tidy, /in your final reply, one per line/u);
+  assert.doesNotMatch(tidy, /drop the one you no longer need with memory_forget/u, '消す指示は残さない');
+  assert.doesNotMatch(tidy, /memory_save \(book=user\)/u, '新しく覚える指示も残さない');
   const other = reviewPrompt({ trigger: 'idle', forgotten: [] });
-  assert.match(other, /要らなくなった方は memory_forget/u);
+  assert.match(other, /drop the one you no longer need with memory_forget/u);
   const en = reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x', language: 'en' });
   assert.match(en, /memory_forget is not available/u);
   assert.doesNotMatch(en, CJK);

@@ -1,15 +1,14 @@
 # USER
 
-ユーザーについて分かっていること。ここを書き換えると、次の会話から反映されます。
+What is known about the user. If you edit this, the change takes effect from the next conversation.
 
-## 基本情報
+## Basic information
 
-- 名前:
-- 主な使用言語: 日本語
+- Name:
 
-## 関心
+## Interests
 
-## 今のプロジェクト
+## Current projects
 
-## 覚えておくこと
+## Things to remember
 

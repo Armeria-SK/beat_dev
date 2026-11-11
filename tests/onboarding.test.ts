@@ -4,7 +4,6 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import type { Language } from '../src/config/schema.ts';
 import { isInitialPersona, normalizePersonaInput, PERSONA_BACKUPS_KEPT, personaTexts, PERSONA_MAX_CHARS, STYLES, startsWithHash, styleText, writePersonaFile, PersonaError } from '../src/engine/persona.ts';
 import { readTemplate } from '../src/engine/workspace.ts';
 import { reloadEnvFile, resolvePaths } from '../src/paths.ts';
@@ -14,13 +13,14 @@ import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
 const TEMPLATE_PATHS = resolvePaths('unused-data-dir');
 // 作業フォルダの初期ファイルは、チェックアウトの設定によって改行が CRLF のことがある。比べる試験は LF にそろえて読む（改行を保つことは別の試験で確かめる）
 const lf = (text: string): string => text.replace(/\r\n/gu, '\n');
-const template = (name: 'SOUL.md' | 'USER.md', language: Language): string => lf(readTemplate(TEMPLATE_PATHS, name, language));
+const template = (name: 'SOUL.md' | 'USER.md'): string => lf(readTemplate(TEMPLATE_PATHS, name));
+const JA_SOUL = '# SOUL\n\nあなた自身の人格。ここを書き換えると、次の会話から反映されます。\n\n## 名前\n\nClive\n\n## ユーザーとの関係\n\n\n## 話し方\n\n\n## 大事にしていること\n\n\n## やらないこと';
+const JA_USER = '# USER\n\nユーザーについて分かっていること。ここを書き換えると、次の会話から反映されます。\n\n## 基本情報\n\n- 名前:\n- 主な使用言語: 日本語\n\n## 関心\n\n## 今のプロジェクト\n\n## 覚えておくこと';
 
-async function start(t: Parameters<typeof tempDir>[0], language?: Language, models = true) {
+async function start(t: Parameters<typeof tempDir>[0], models = true) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
-  if (language) config.language = language;
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = models ? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }] : [];
   config.routing = { chat: models ? ['m'] : [], background: [], retriesPerModel: 0 };
@@ -43,53 +43,53 @@ async function start(t: Parameters<typeof tempDir>[0], language?: Language, mode
 
 // ── 節の書き換え（画面を使わない部分） ──
 
-test('personaTexts（日本語）: 名前・呼び方・話し方の節だけを書き換え、ほかの節と持ち主の行は残す', () => {
-  const soul = template('SOUL.md', 'ja');
-  const user = `${template('USER.md', 'ja')}\n`.replace('- 主な使用言語: 日本語', '- 主な使用言語: 日本語\n- 勤務先: 自宅');
-  const next = personaTexts(soul, user, 'ja', { userName: 'やまだ', callMe: 'やまださん', botName: 'ミナト', style: 'friendly', styleNote: '絵文字は使わない' });
+test('personaTexts（日本語の見出しのファイル）: 名前・呼び方・話し方の節だけをその場で書き換え、ほかの節と持ち主の行は残す', () => {
+  const soul = JA_SOUL;
+  const user = `${JA_USER}\n`.replace('- 主な使用言語: 日本語', '- 主な使用言語: 日本語\n- 勤務先: 自宅');
+  const next = personaTexts(soul, user, 'en', { userName: 'やまだ', callMe: 'やまださん', botName: 'ミナト', style: 'friendly', styleNote: '絵文字は使わない' });
   assert.match(next.soul, /## 名前\n\nミナト\n\n## ユーザーとの関係/u);
-  assert.match(next.soul, /## 話し方\n\n親しみやすく丁寧に話す。[^\n]+\n\n絵文字は使わない\n\n## 大事にしていること/u);
-  assert.match(next.user, /## 基本情報\n\n- 名前: やまだ\n- 呼び方: やまださん\n- 主な使用言語: 日本語\n- 勤務先: 自宅\n\n## 関心/u);
+  assert.match(next.soul, /## 話し方\n\nSpeak in a friendly, polite way\.[^\n]+\n\n絵文字は使わない\n\n## 大事にしていること/u);
+  assert.match(next.user, /## 基本情報\n\n- 名前: やまだ\n- Preferred name: やまださん\n- 主な使用言語: 日本語\n- 勤務先: 自宅\n\n## 関心/u);
   assert.equal(next.soul.split('## ').length, soul.split('## ').length, '節の数は変わらない');
   const restored = next.soul.replace('## 名前\n\nミナト\n', '## 名前\n\nClive\n').replace(/## 話し方\n\n[\s\S]*?\n\n## 大事にしていること/u, '## 話し方\n\n\n## 大事にしていること');
   assert.equal(restored, soul, '名前と話し方の節のほかは 1 文字も変わらない');
-  const again = personaTexts(next.soul, next.user, 'ja', { userName: 'やまだ', callMe: 'やまださん', botName: 'ミナト', style: 'friendly', styleNote: '絵文字は使わない' });
+  const again = personaTexts(next.soul, next.user, 'en', { userName: 'やまだ', callMe: 'やまださん', botName: 'ミナト', style: 'friendly', styleNote: '絵文字は使わない' });
   assert.deepEqual(again, next, '同じ値でもう一度書いても同じ（重ならない）');
 });
 
-test('personaTexts（見出しは日本語・英語の両方を探す）: 今の言語の見出しを先に探し、なければもう一方の言語の見出しの節を直し、どちらも無いときだけ最後に足す', () => {
-  const englishFiles = { soul: template('SOUL.md', 'en'), user: template('USER.md', 'en') };
-  const fromJa = personaTexts(englishFiles.soul, englishFiles.user, 'ja', { botName: 'Mina', userName: 'Taro', style: 'direct' });
-  assert.match(fromJa.soul, /## Name\n\nMina\n\n## Relationship/u, '言語を ja に切り替えたあとでも、英語の見出しの節を直す');
-  assert.doesNotMatch(fromJa.soul, /## 名前/u, '日本語の見出しを足さない');
-  assert.match(fromJa.soul, /## Way of speaking\n\n率直に、短く話す。/u, '本文は今の言語（ja）で書く');
-  assert.match(fromJa.user, /## Basic information\n\n- 名前: Taro\n- Main language: English/u, '英語の見出しの節の「- Name:」の行を、今の言語の書き方で直す');
-  assert.equal(fromJa.user.split('## Basic information').length, 2, '基本情報の節は 1 つのまま');
+test('personaTexts（見出しは英語・日本語の両方を探す）: 英語の見出しを先に探し、なければ日本語の見出しの節を直し、どちらも無いときだけ最後に英語の見出しで足す', () => {
+  const englishFiles = { soul: template('SOUL.md'), user: template('USER.md') };
+  const fromEn = personaTexts(englishFiles.soul, englishFiles.user, 'en', { botName: 'Mina', userName: 'Taro', style: 'direct' });
+  assert.match(fromEn.soul, /## Name\n\nMina\n\n## Relationship/u, '英語の見出しの節を直す');
+  assert.doesNotMatch(fromEn.soul, /## 名前/u, '日本語の見出しを足さない');
+  assert.match(fromEn.soul, /## Way of speaking\n\nSpeak frankly and briefly\./u, '話し方の型の文は英語');
+  assert.match(fromEn.user, /## Basic information\n\n- Name: Taro\n\n## Interests/u, '「- Name:」の行の値を書き換え、言語の行は足さない');
+  assert.equal(fromEn.user.split('## Basic information').length, 2, '基本情報の節は 1 つのまま');
 
   const neither = personaTexts('# SOUL\n\n## 自由な見出し\n\n中身\n', '# USER\n', 'en', { botName: 'Mina', style: 'calm', userName: 'Taro' });
-  assert.match(neither.soul, /## 自由な見出し\n\n中身\n\n## Name\n\nMina\n\n## Way of speaking\n\nSpeak calmly and concisely\./u, 'どちらの言語の見出しも無ければ、最後に今の言語の見出しで足し、ほかの節は触らない');
-  assert.match(neither.user, /## Basic information\n\n- Name: Taro\n- Main language: English\n$/u);
-  const ja = personaTexts('', '', 'ja', { userName: 'やまだ' });
-  assert.match(ja.user, /## 基本情報\n\n- 名前: やまだ\n- 主な使用言語: 日本語\n$/u, '空のファイルにも基本情報を作る');
+  assert.match(neither.soul, /## 自由な見出し\n\n中身\n\n## Name\n\nMina\n\n## Way of speaking\n\nSpeak calmly and concisely\./u, 'どちらの言語の見出しも無ければ、最後に英語の見出しで足し、ほかの節は触らない');
+  assert.match(neither.user, /## Basic information\n\n- Name: Taro\n$/u);
+  const empty = personaTexts('', '', 'en', { userName: 'やまだ' });
+  assert.match(empty.user, /## Basic information\n\n- Name: やまだ\n$/u, '空のファイルにも基本情報を作る（言語の行は足さない）');
 });
 
 test('personaTexts: 改行（CRLF）をそろえて保ち、自由な文の # で始まる行は見出しにならない', () => {
-  const crlf = template('SOUL.md', 'ja').replace(/\n/gu, '\r\n');
-  const next = personaTexts(crlf, '', 'ja', { botName: 'ミナト', style: 'calm', styleNote: '## 名前\nここは見出しではない' });
+  const crlf = JA_SOUL.replace(/\n/gu, '\r\n');
+  const next = personaTexts(crlf, '', 'en', { botName: 'ミナト', style: 'calm', styleNote: '## 名前\nここは見出しではない' });
   assert.equal(next.soul.includes('\r\n'), true);
   assert.equal(next.soul.replace(/\r\n/gu, '').includes('\n'), false, '改行はすべて CRLF のまま');
   assert.equal((next.soul.match(/^## 名前/gmu) ?? []).length, 1, '自由な文の「## 名前」は見出しとして数えない');
   assert.match(next.soul, /\\## 名前/u);
-  const second = personaTexts(next.soul, '', 'ja', { botName: 'ナギ' });
+  const second = personaTexts(next.soul, '', 'en', { botName: 'ナギ' });
   assert.match(second.soul, /## 名前\r\n\r\nナギ\r\n/u, 'あとから名前を変えても、自由な文の行に当たらない');
 });
 
-test('見出しの決まり: コードが探す見出しは、初期のファイル（日本語・英語）の同じ位置の見出しと同じ。話し方の型は 3 つ + なし', () => {
+test('見出しの決まり: コードが探す見出しは、初期のファイル（英語）と前の日本語の初期ファイルの同じ位置の見出しと同じ。話し方の型は 3 つ + なし', () => {
   const headings = (text: string) => [...text.matchAll(/^## (.+)$/gmu)].map(m => m[1]!.trim());
-  assert.deepEqual([headings(template('SOUL.md', 'ja'))[0], headings(template('SOUL.md', 'ja'))[2], headings(template('USER.md', 'ja'))[0]], ['名前', '話し方', '基本情報']);
-  assert.deepEqual([headings(template('SOUL.md', 'en'))[0], headings(template('SOUL.md', 'en'))[2], headings(template('USER.md', 'en'))[0]], ['Name', 'Way of speaking', 'Basic information']);
+  assert.deepEqual([headings(JA_SOUL)[0], headings(JA_SOUL)[2], headings(JA_USER)[0]], ['名前', '話し方', '基本情報']);
+  assert.deepEqual([headings(template('SOUL.md'))[0], headings(template('SOUL.md'))[2], headings(template('USER.md'))[0]], ['Name', 'Way of speaking', 'Basic information']);
   assert.deepEqual([...STYLES], ['calm', 'friendly', 'direct', 'none']);
-  for (const language of ['ja', 'en'] as const) {
+  for (const language of ['en'] as const) {
     assert.equal(styleText('none', language), '');
     for (const style of ['calm', 'friendly', 'direct'] as const) assert.ok(styleText(style, language).length > 20);
   }
@@ -161,7 +161,7 @@ test('reloadEnvFile: 起動したあとに足した鍵を読み込み、すで�
 test('GET /api/onboarding: 新しいデータでは未完了。すでに使っているデータ（会話・記憶・書き換えた SOUL / USER）には出さない', async t => {
   const fresh = await start(t);
   const state = await (await fresh.api('/api/onboarding')).json() as any;
-  assert.deepEqual(state, { done: false, steps: { language: false, user: false, identity: false, persona: false, model: true } });
+  assert.deepEqual(state, { done: false, steps: { user: false, identity: false, persona: false, model: true } });
 
   const withConversation = await start(t);
   withConversation.app.conversations.create({ title: '前からある会話' });
@@ -175,11 +175,12 @@ test('GET /api/onboarding: 新しいデータでは未完了。すでに使っ�
   writeFileSync(join(edited.paths.workspace, 'SOUL.md'), `${edited.file('SOUL.md')}\n自分で足した一行\n`);
   assert.equal(((await (await edited.api('/api/onboarding')).json()) as any).done, true, '書き換えた SOUL.md = 設定済みとみなす');
 
-  const english = await start(t, 'en');
-  assert.equal(((await (await english.api('/api/onboarding')).json()) as any).done, false, '英語の初期ファイルも「初期のまま」と見分ける');
+  const english = await start(t);
+  assert.equal(((await (await english.api('/api/onboarding')).json()) as any).done, false, '英語の初期ファイルは「初期のまま」と見分ける');
   assert.equal(isInitialPersona(english.paths, 'SOUL.md', english.file('SOUL.md')), true);
+  assert.equal(isInitialPersona(english.paths, 'SOUL.md', JA_SOUL), false, '前の日本語の初期ファイルは「もう使っている」とみなす');
 
-  const noModel = await start(t, undefined, false);
+  const noModel = await start(t, false);
   assert.equal(((await (await noModel.api('/api/onboarding')).json()) as any).steps.model, false);
 });
 
@@ -190,11 +191,11 @@ test('POST /api/onboarding/persona: 名前・呼び方・話し方をサーバ�
   const body = await res.json() as any;
   assert.equal(body.profile.name, 'ミナト');
   assert.equal(s.app.config().profile.name, 'ミナト', '画面の名前と SOUL.md の名前を一緒に書く');
-  assert.match(s.file('SOUL.md'), /## 名前\n\nミナト\n/u);
-  assert.match(s.file('SOUL.md'), /## 話し方\n\n落ち着いて簡潔に話す。[^\n]+\n\n短めに\n/u);
-  assert.match(s.file('USER.md'), /- 名前: やまだ\n- 呼び方: やまださん/u);
+  assert.match(s.file('SOUL.md'), /## Name\n\nミナト\n/u);
+  assert.match(s.file('SOUL.md'), /## Way of speaking\n\nSpeak calmly and concisely\.[^\n]+\n\n短めに\n/u);
+  assert.match(s.file('USER.md'), /- Name: やまだ\n- Preferred name: やまださん/u);
   assert.equal(readdirSync(join(s.paths.backups, 'persona')).filter(f => f.startsWith('SOUL.md.')).length, 1, '書き換えの前の SOUL.md は backups/persona に控える');
-  assert.deepEqual(body.steps, { language: false, user: true, identity: true, persona: true, model: true });
+  assert.deepEqual(body.steps, { user: true, identity: true, persona: true, model: true });
   assert.equal(body.done, false, 'はじめの設定の途中で書き換えても、「使っているデータ」とは見なさず、続きの案内が残る');
   assert.equal(((await (await s.post('/api/onboarding/done', {})).json()) as any).done, true);
   assert.equal(((await (await s.api('/api/onboarding')).json()) as any).done, true);
@@ -203,7 +204,7 @@ test('POST /api/onboarding/persona: 名前・呼び方・話し方をサーバ�
   await partial.post('/api/onboarding/persona', { botName: 'ナギ' });
   assert.equal(((await (await partial.api('/api/onboarding')).json()) as any).steps.identity, true);
   assert.equal(((await (await partial.api('/api/onboarding')).json()) as any).steps.user, false, '送った項目だけが済みになる');
-  assert.doesNotMatch(partial.file('USER.md'), /呼び方/u, '送っていない項目は書かない');
+  assert.doesNotMatch(partial.file('USER.md'), /Preferred name/u, '送っていない項目は書かない');
 });
 
 test('POST /api/onboarding/persona: 検査（話し方の型・空・長さ・名前の空白）と、Origin が無い書き込みの拒否', async t => {
@@ -228,15 +229,15 @@ test('POST /api/onboarding/persona: 検査（話し方の型・空・長さ・�
   assert.equal(noOriginPut.status, 403);
 });
 
-test('POST /api/onboarding/persona（日本語・英語）: 英語に切り替えたあとは英語の見出しの文で書き、日本語の見出しのファイルがあってもその節を直す', async t => {
-  const en = await start(t, 'en');
+test('POST /api/onboarding/persona（英語・日本語の見出し）: 英語の見出しの文で書き、日本語の見出しのファイルがあればその節を直す', async t => {
+  const en = await start(t);
   await en.post('/api/onboarding/persona', { userName: 'Taro', botName: 'Mina', style: 'friendly' });
   assert.match(en.file('SOUL.md'), /## Name\n\nMina\n/u);
   assert.match(en.file('SOUL.md'), /## Way of speaking\n\nSpeak in a friendly, polite way\./u);
   assert.match(en.file('USER.md'), /- Name: Taro/u);
 
-  const mixed = await start(t, 'en');
-  writeFileSync(join(mixed.paths.workspace, 'SOUL.md'), template('SOUL.md', 'ja'));
+  const mixed = await start(t);
+  writeFileSync(join(mixed.paths.workspace, 'SOUL.md'), JA_SOUL);
   await mixed.post('/api/onboarding/persona', { botName: 'Mina' });
   assert.match(mixed.file('SOUL.md'), /## 名前\n\nMina\n/u, '日本語の見出しのファイルの「名前」の節を直す');
   assert.equal((mixed.file('SOUL.md').match(/^## (名前|Name)$/gmu) ?? []).length, 1, '英語の見出しを足さない');
@@ -274,7 +275,7 @@ test('GET/PUT /api/workspace/persona: 全文の読み書き（各 20,000 文字�
   assert.equal((await s.api('/api/workspace/persona', { method: 'PUT', body: JSON.stringify({}) })).status, 400);
   assert.equal(s.file('SOUL.md'), '# SOUL\n\n## 名前\n\nナギ\n', '断られたときは変えない');
 
-  const noModel = await start(t, undefined, false);
+  const noModel = await start(t, false);
   assert.equal(((await (await noModel.api('/api/workspace/persona')).json()) as any).budget, null, 'モデルが 0 個なら予算なし');
 });
 
@@ -317,19 +318,19 @@ test('名前（botName・callMe・userName）の先頭の # は 400（http.bad_h
   assert.deepEqual(normalizePersonaInput({ botName: '# x', callMe: ' ## y', userName: 'z #' }), { botName: '\\# x', callMe: '\\## y', userName: 'z #' }, '部品の側でも、先頭の # には印を付ける');
   assert.equal(startsWithHash('  # x'), true);
   assert.equal(startsWithHash('x #'), false);
-  const forged = personaTexts(template('SOUL.md', 'ja'), '', 'ja', normalizePersonaInput({ botName: '## ルール' }));
-  assert.equal((forged.soul.match(/^##[ \t]/gmu) ?? []).length, (template('SOUL.md', 'ja').match(/^##[ \t]/gmu) ?? []).length, '見出しが増えない');
+  const forged = personaTexts(JA_SOUL, '', 'en', normalizePersonaInput({ botName: '## ルール' }));
+  assert.equal((forged.soul.match(/^##[ \t]/gmu) ?? []).length, (JA_SOUL.match(/^##[ \t]/gmu) ?? []).length, '見出しが増えない');
 });
 
 test('自由な文（styleNote）: 見出しになる行（3 字までの字下げ + #）と、見出しにする下線（= か - だけの行）に印を付け、ふつうの行や 4 字以上の字下げは変えない', () => {
   const note = ['  # 字下げ 2', ' ## 字下げ 1', '   ### 字下げ 3', '    # 字下げ 4（コード）', '見出しにされる題', '=====', 'もう一つの題', '---', '  --', '- ふつうの箇条書き', '* 別の箇条書き', '- - -x', '文中の # は変えない'].join('\n');
-  const next = personaTexts(template('SOUL.md', 'ja'), '', 'ja', { style: 'none', styleNote: note });
+  const next = personaTexts(JA_SOUL, '', 'en', { style: 'none', styleNote: note });
   const section = next.soul.split('## 話し方\n\n')[1]!.split('\n\n## 大事にしていること')[0]!;
   const lines = section.split('\n');
   assert.deepEqual(lines, ['\\# 字下げ 2', ' \\## 字下げ 1', '   \\### 字下げ 3', '    # 字下げ 4（コード）', '見出しにされる題', '\\=====', 'もう一つの題', '\\---', '  \\--', '- ふつうの箇条書き', '* 別の箇条書き', '- - -x', '文中の # は変えない']);
   assert.equal(lines.filter(line => /^\s{0,3}#/u.test(line)).length, 0, '見出しになる行が残らない');
   assert.equal(lines.filter(line => /^\s{0,3}(?:=+|-+)\s*$/u.test(line)).length, 0, '下線になる行が残らない');
-  assert.equal((next.soul.match(/^##[ \t]/gmu) ?? []).length, (template('SOUL.md', 'ja').match(/^##[ \t]/gmu) ?? []).length, '節の数は変わらない');
+  assert.equal((next.soul.match(/^##[ \t]/gmu) ?? []).length, (JA_SOUL.match(/^##[ \t]/gmu) ?? []).length, '節の数は変わらない');
 });
 
 test('writePersonaFile: 書く前の控えは、ファイルごとに新しいものから 20 個まで残し、古いものから消す（別のファイルの控えは消さない）', t => {

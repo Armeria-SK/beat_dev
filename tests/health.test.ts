@@ -51,7 +51,7 @@ test('続けて失敗したモデルは後回しにして知らせ、成功し�
   assert.ok(s.app.status.coolingDown('a', s.clock.now));
   const alert = s.app.notifications.list()[0]!;
   assert.equal(alert.kind, 'health_alert');
-  assert.match(alert.title, /「a」が続けて失敗/u);
+  assert.match(alert.title, /Model "a" keeps failing/u);
 
   // 後回しの間は、予備を先に使う（ローカルは呼ばない）
   const localCalls = s.local().calls.length;
@@ -79,5 +79,5 @@ test('後回しは時間が経てば終わる。API キーの誤りは 1 回目�
   s.clock.now += COOLDOWN_MS + 1;
   s.local().scripts.unshift(down());
   await s.send('c-auth');
-  assert.ok(s.app.notifications.list().some(n => /「b」の認証/u.test(n.title)));
+  assert.ok(s.app.notifications.list().some(n => /Authentication failed for model "b"/u.test(n.title)));
 });

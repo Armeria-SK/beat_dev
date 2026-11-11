@@ -233,5 +233,5 @@ const en = {
   'hook.exit_code': 'Exit code {code}',
 };
 
-export const guardText = defineMessages('guard', en, en);
+export const guardText = defineMessages('guard', en);
 export type GuardMessageKey = keyof typeof en;

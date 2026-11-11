@@ -32,17 +32,17 @@ test('記憶: 保存・更新・削除と、それぞれの取り消し', () => 
   assert.equal(memory.list('user').length, 1);
   memory.undo(created);
   assert.equal(memory.list('user').length, 0, '作成の取り消しは忘れる扱い');
-  assert.throws(() => memory.undo(created), /既に取り消し/u);
+  assert.throws(() => memory.undo(created), /already been undone/u);
   assert.equal(memory.events(m.id).length, 6);
 });
 
 test('記憶: 秘密情報・重複・長すぎる1件・空は保存しない', () => {
   const { memory } = store();
-  assert.throws(() => memory.save({ book: 'user', content: 'キーは sk-ant-api03-abcdefghijklmnop です', actor: 'clive' }), /API キー/u);
+  assert.throws(() => memory.save({ book: 'user', content: 'キーは sk-ant-api03-abcdefghijklmnop です', actor: 'clive' }), /API key or token/u);
   memory.save({ book: 'user', content: '同じ内容', actor: 'clive' });
-  assert.throws(() => memory.save({ book: 'user', content: '同じ内容', actor: 'clive' }), /既にあります/u);
-  assert.throws(() => memory.save({ book: 'user', content: 'x'.repeat(700), actor: 'clive' }), /長すぎます/u);
-  assert.throws(() => memory.save({ book: 'user', content: '   ', actor: 'clive' }), /空/u);
+  assert.throws(() => memory.save({ book: 'user', content: '同じ内容', actor: 'clive' }), /already exists/u);
+  assert.throws(() => memory.save({ book: 'user', content: 'x'.repeat(700), actor: 'clive' }), /too long/u);
+  assert.throws(() => memory.save({ book: 'user', content: '   ', actor: 'clive' }), /is empty/u);
 });
 
 test('記憶: 3文字以上は FTS、短い語は LIKE で探す', () => {

@@ -17,9 +17,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
 };
 const STATUSES = ['inbox', 'ready', 'running', 'waiting', 'scheduled', 'done', 'failed', 'cancelled'] as const;
 const short = (id: string) => id.slice(0, 8);
-const when = (ms: number, timezone: string, language: Language) => (language === 'en'
-  ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms)
-  : new Date(ms).toLocaleString('ja-JP', { timeZone: timezone }));
+const when = (ms: number, timezone: string, _language: Language) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms);
 
 function line(task: Task, timezone: string, language: Language): string {
   const at = task.cron ? toolText(language, 'task.when_cron', { cron: describeCron(task.cron, language) }) : task.run_at ? toolText(language, 'task.since', { time: when(task.run_at, timezone, language) }) : '';

@@ -135,7 +135,7 @@ export class App {
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
     this.#reportDropped();
-    ensureWorkspace(this.paths, languageOf(config));
+    ensureWorkspace(this.paths);
     this.bootServer = structuredClone(config.server);
     this.#warnIgnoredPolicies(config);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
