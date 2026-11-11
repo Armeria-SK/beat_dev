@@ -38,7 +38,7 @@ const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: 'A pat
 
 export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; case_sensitive?: boolean; max_results?: number }> = {
   name: 'file_search',
-  description: 'Find files inside the allowed folders. name is a wildcard for the file name (e.g. *.md); text is text contained in the file (plain text, not a regular expression). If both are given, files that match both. If path is omitted, the working folder. Secret files are not searched. Inside node_modules, .git and the like is searched only when path names that folder.',
+  description: 'Find files inside the allowed folders. name is a wildcard for the file name (e.g. *.md); text is text contained in the file (plain text, not a regular expression). If both are given, files that match both. If path is omitted, the working folder. Secret files are not searched. The insides of node_modules, .git and the like are searched only when path names that folder.',
   input: Type.Object({
     path: Type.Optional(PathArg),
     name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),

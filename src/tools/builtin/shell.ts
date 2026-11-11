@@ -104,13 +104,13 @@ export const shellRun: ToolDef<ShellInput> = {
   name: 'shell_run',
   description: [
     'Run one shell command (PowerShell on Windows, bash on Linux). cwd must be inside an allowed folder (if omitted, the working folder).',
-    'Do not leave it with cd; specify cwd instead. Sending data out, installing packages and operations that touch anything outside the allowed folders need the user\'s approval.',
+    'Do not use cd to move outside the allowed folders; set cwd instead. Sending data out, installing packages and operations that touch anything outside the allowed folders need the user\'s approval.',
     'Destructive operations and reading secrets cannot be run.',
     'Walking a large folder such as node_modules or .git with -Recurse or the like is slow (over 20 seconds for 15,000 files), and the result is too long to fit in the context. Exclude such folders, or narrow the scope with -Name, -Filter or -Depth.',
     'On Windows, PowerShell runs in constrained mode, so do not use .NET type syntax ([Math]::, [IO.File]::, [pscustomobject]), New-Object or Add-Type; write it with cmdlets and string methods.',
     'PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
     'In Windows PowerShell, cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user\'s confirmation every time, even when the path is fixed. To write a file, use the file_write / file_edit tools, not the shell. Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
-    'Forms of curl or wget that save to a file (curl -o or -O, wget -O other than -O -) need the user\'s confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).',
+    'Forms of curl or wget that save to a file (curl with -o or -O; wget in any form other than -O -) need the user\'s confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).',
   ].join(' '),
   input: Type.Object({
     command: Type.String({ minLength: 1, maxLength: 8000 }),

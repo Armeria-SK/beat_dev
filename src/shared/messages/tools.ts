@@ -284,7 +284,7 @@ const en = {
   'browser.blocked_scheme': 'This page cannot be opened: that kind of URL is not allowed',
   'browser.blocked_navigation': 'This page cannot be opened: only public http / https pages (standard ports) can be opened',
   'browser.blocked_downgrade': 'This page cannot be opened: moving from an https page to http was stopped',
-  'browser.blocked_listed': 'This page cannot be opened: it tried to move to a site on the actions list without a confirmation, so it was stopped (to visit that site, ask to open its address directly)',
+  'browser.blocked_listed': 'This page cannot be opened: it tried to move to a site on the operation list without a confirmation, so it was stopped (to visit that site, ask to open its address directly)',
   'browser.disabled': 'The browser tools are turned off in the settings (tools.browser.enabled)',
   'browser.no_browser': 'Google Chrome was not found. Install it, or set the browser location (executablePath) in the settings to a Chromium-based browser',
   'browser.edge_refused': 'Clive does not drive Microsoft Edge. Set the browser location (executablePath) in the settings to Google Chrome or another Chromium-based browser',

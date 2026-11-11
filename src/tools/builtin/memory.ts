@@ -68,7 +68,7 @@ export const memoryUpdate: ToolDef<{ id: number | string; content: string }> = {
 
 export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
   name: 'memory_forget',
-  description: 'Delete a memory that is no longer needed or was wrong. Also use this when the user says "forget it".',
+  description: 'Delete a memory that is no longer needed or was wrong. Also use this when the user asks you to forget something.',
   input: Type.Object({ id: IdArg, reason: Type.String({ minLength: 1, maxLength: 300 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],

@@ -21,7 +21,7 @@ const line = (i: CuriosityItem, language: Language) => toolText(language, 'curio
 
 export const curiosityAdd: ToolDef<{ topic: string; why?: string }> = {
   name: 'curiosity_add',
-  description: 'Write something you are curious about but will not look into now on the curiosity list (if autonomous actions are on, you look into it yourself later). Keep topic short and specific; why is why you became curious.',
+  description: 'Write something you are curious about but will not look into now on the curiosity list (if autonomous action is on, you look into it yourself later). Keep topic short and specific; why is why you became curious.',
   input: Type.Object({
     topic: Type.String({ minLength: 1, maxLength: 200 }),
     why: Type.Optional(Type.String({ maxLength: 500 })),

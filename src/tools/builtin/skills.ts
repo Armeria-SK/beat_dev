@@ -16,7 +16,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
 
 export const skillView: ToolDef<{ name: string }> = {
   name: 'skill_view',
-  description: 'Read the body of a skill (a procedure). Before doing work that is in the "Skills" list in the system prompt, check the procedure with this first.',
+  description: 'Read the body of a skill (a procedure). Before doing work that is in the "Skills (procedures)" list in the system prompt, check the procedure with this first.',
   input: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64 }) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'review', 'agent'],
