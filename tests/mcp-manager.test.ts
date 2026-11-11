@@ -347,7 +347,7 @@ test('R-05: 道具を組に置けなかったら、前の組を残さない', as
   s.config.mcp.servers = [server({ tools: { echo: {}, other: {} } })];
   await s.manager.reload();
   assert.deepEqual(names(s.registry), [], '古い組が残らない');
-  assert.ok(s.logs.some(l => l.includes('登録できませんでした')));
+  assert.ok(s.logs.some(l => l.includes('Could not register the tools')));
 });
 
 test('R-06: 消えたサーバーの登録と固定は先に消え、閉じるのが遅い 1 台が、ほかの更新を止めない', async () => {

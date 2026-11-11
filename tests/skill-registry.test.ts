@@ -297,7 +297,7 @@ test('起動のとき、スキル全体のフォルダごと無くなってい�
   const logs: string[] = [];
   const second = await boot(t, { root: first.root, log: line => logs.push(line) });
   assert.equal(rowCount(second.app, 'a'), 1, '起動の点検でも外さない');
-  assert.equal(logs.filter(l => /スキル/u.test(l)).length, 0);
+  assert.equal(logs.filter(l => /skill/iu.test(l)).length, 0);
   assert.deepEqual(second.app.skills.list(), []);
   place(second.paths.workspace, 'a');
   assert.deepEqual(second.app.skills.list().map(s => [s.name, s.registered]), [['a', true]]);

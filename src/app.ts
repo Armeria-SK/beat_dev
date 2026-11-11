@@ -144,7 +144,7 @@ export class App {
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);
     const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));
-    if (dangling) this.log(`[INFO] 前回の終了時に途中だった実行 ${dangling} 件を中断扱いにしました`);
+    if (dangling) this.log(`[INFO] Marked ${dangling} run(s) left unfinished at the last shutdown as interrupted`);
     this.registry = new ProviderRegistry({
       env: this.env,
       ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -272,7 +272,7 @@ export class App {
 
   // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
   #warnIgnoredPolicies(config: AppConfig): void {
-    for (const name of ignoredPolicyNames(config)) this.log(`[WARN] tools.policies の「${name}」は、方針を持てない道具（タスクの進め方に必要）なので無視します`);
+    for (const name of ignoredPolicyNames(config)) this.log(`[WARN] Ignoring "${name}" in tools.policies: this tool cannot have a policy (it is needed to run tasks)`);
   }
 
   // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
@@ -281,7 +281,7 @@ export class App {
     if (this.kv.get('skills:registry-seeded')) return;
     const added = this.skills.registerExisting();
     this.kv.set('skills:registry-seeded', String(Date.now()));
-    if (added) this.log(`[INFO] 既にあるスキル ${added} 件を登録しました（以後にフォルダへ直接置かれたスキルは、画面の「登録する」までは使われません）`);
+    if (added) this.log(`[INFO] Registered ${added} existing skill(s) (skills placed directly in the folder from now on are not used until you press "Register" on the screen)`);
   }
 
   #importCuriosity(): void {
@@ -289,9 +289,9 @@ export class App {
     const path = join(this.paths.workspace, 'CURIOSITY.md');
     let added = 0;
     try { if (existsSync(path)) added = this.curiosity.importMarkdown(readFileSync(path, 'utf8')); }
-    catch (error) { this.log(`[WARN] CURIOSITY.md を読めませんでした: ${(error as Error).message}`); }
+    catch (error) { this.log(`[WARN] Could not read CURIOSITY.md: ${(error as Error).message}`); }
     this.kv.set('curiosity:imported', String(Date.now()));
-    if (added) this.log(`[INFO] CURIOSITY.md から好奇心リストに ${added} 件取り込みました（以後は画面の「好奇心」で編集します）`);
+    if (added) this.log(`[INFO] Imported ${added} item(s) from CURIOSITY.md into the curiosity list (from now on, edit them under "Curiosity" on the screen)`);
   }
 
   config(): AppConfig {
@@ -301,9 +301,9 @@ export class App {
       this.#applied = json;
       this.registry.reload(config);
       void this.browser?.applyConfig(config).catch(() => undefined);
-      void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
-      void this.status.probeAll(config).catch(error => this.log(`[ERROR] 設定の再読み込み後の確認に失敗: ${(error as Error).message}`));
-      this.log('[INFO] 設定ファイルの変更を読み込みました');
+      void this.mcp?.reload().catch(error => this.log(`[ERROR] Failed to reload MCP: ${(error as Error).message}`));
+      void this.status.probeAll(config).catch(error => this.log(`[ERROR] Failed to check the models after reloading the settings: ${(error as Error).message}`));
+      this.log('[INFO] Loaded the changes to the settings file');
       this.#warnIgnoredPolicies(config);
       this.worker?.poke();
     }
@@ -339,7 +339,7 @@ export class App {
     this.#applied = JSON.stringify(saved);
     this.registry.reload(saved);
     void this.browser.applyConfig(saved).catch(() => undefined);
-    void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
+    void this.mcp?.reload().catch(error => this.log(`[ERROR] Failed to reload MCP: ${(error as Error).message}`));
     if (options.probe !== false) await this.status.probeAll(saved);
     this.worker.poke();
     return saved;

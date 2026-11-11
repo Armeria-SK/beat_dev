@@ -128,16 +128,16 @@ export class Worker {
 
   setPaused(paused: boolean): void {
     this.#d.kv.set('worker:paused', paused ? '1' : '0');
-    this.#d.log(`[INFO] ワーカーを${paused ? '一時停止' : '再開'}しました`);
+    this.#d.log(`[INFO] Worker ${paused ? 'paused' : 'resumed'}`);
     this.poke();
   }
 
   start(): void {
     this.#stopped = false;
     const recovered = this.#d.tasks.recoverExpiredLeases({ all: true });
-    if (recovered) this.#d.log(`[INFO] 途中で止まっていたタスク ${recovered} 件を実行待ちに戻しました`);
+    if (recovered) this.#d.log(`[INFO] Put ${recovered} task(s) that had stopped midway back in the queue`);
     const reviews = this.#d.reviews?.recoverRunning() ?? 0;
-    if (reviews) this.#d.log(`[INFO] 途中で止まっていた振り返り ${reviews} 件を積み直しました`);
+    if (reviews) this.#d.log(`[INFO] Re-queued ${reviews} review(s) that had stopped midway`);
     this.poke();
   }
 
@@ -167,7 +167,7 @@ export class Worker {
     this.#nextWakeAt = this.#now() + delayMs;
     this.#timer = setTimeout(() => {
       this.tick().catch(error => {
-        this.#d.log(`[ERROR] ワーカー: ${(error as Error).stack ?? error}`);
+        this.#d.log(`[ERROR] Worker: ${(error as Error).stack ?? error}`);
         if (!this.#stopped) this.#schedule(IDLE_POLL_MS);
       });
     }, Math.max(0, delayMs));

@@ -150,7 +150,7 @@ export class SkillStore {
   // フォルダ（SKILL.md）が無い名前の行を外して、名前を記録する。スキル全体のフォルダを読めないときは何もしない。外したら true
   #dropMissing(name: string): boolean {
     if (!this.#readable() || !this.#unmark(name)) return false;
-    this.#log(`[INFO] スキル「${name}」のフォルダが無いので、登録から外しました（同じ名前でフォルダを置き直しても、画面の「登録する」までは使われません）`);
+    this.#log(`[INFO] Unregistered skill "${name}" because its folder is missing (even if a folder with the same name is put back, it is not used until you press "Register" on the screen)`);
     return true;
   }
 

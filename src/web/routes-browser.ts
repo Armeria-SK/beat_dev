@@ -37,7 +37,7 @@ export function registerBrowserRoutes(router: Router, app: App): void {
       }
       try { await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
       catch (error) {
-        app.log(`[WARN] ブラウザのプロファイルを消せませんでした: ${error instanceof Error ? error.message : String(error)}`);
+        app.log(`[WARN] Could not delete the browser profile: ${error instanceof Error ? error.message : String(error)}`);
         throw problem(500, 'internal', 'browser_reset_failed', { params: { reason: error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'unknown' } });
       }
     });

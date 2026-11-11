@@ -292,10 +292,10 @@ test('レジストリの組: 内蔵が先・組が後。組の置き換えと削
   r.setGroup('a', [plain('mcp_a_x'), plain('mcp_a_y')]);
   r.register(plain('builtin'));
   assert.deepEqual(r.names(), ['builtin', 'mcp_a_x', 'mcp_a_y']);
-  assert.throws(() => r.register(plain('mcp_a_x')), /重複/u);
-  assert.throws(() => r.setGroup('b', [plain('builtin')]), /重複/u);
-  assert.throws(() => r.setGroup('b', [plain('mcp_a_y')]), /重複/u);
-  assert.throws(() => r.setGroup('b', [plain('mcp_b_z'), plain('mcp_b_z')]), /重複/u);
+  assert.throws(() => r.register(plain('mcp_a_x')), /is duplicated/u);
+  assert.throws(() => r.setGroup('b', [plain('builtin')]), /is duplicated/u);
+  assert.throws(() => r.setGroup('b', [plain('mcp_a_y')]), /is duplicated/u);
+  assert.throws(() => r.setGroup('b', [plain('mcp_b_z'), plain('mcp_b_z')]), /is duplicated/u);
   assert.deepEqual(r.names(), ['builtin', 'mcp_a_x', 'mcp_a_y'], '失敗では何も変わらない');
   r.setGroup('a', [plain('mcp_a_y'), plain('mcp_a_z')]);
   assert.deepEqual(r.names(), ['builtin', 'mcp_a_y', 'mcp_a_z'], '同じ組は丸ごと置き換え（自分の名前との重複は許す）');

@@ -79,7 +79,7 @@ async function refused(port: number): Promise<boolean> {
 
 test('serverHostProblem: ループバック以外の host は断る（起動と反映が同じ検査を使う）', () => {
   for (const host of ['127.0.0.1', 'localhost', '::1', '127.0.0.2']) assert.equal(serverHostProblem(host), undefined, host);
-  for (const host of ['0.0.0.0', '192.168.1.5', '::', 'example.com']) assert.match(serverHostProblem(host) ?? '', /ループバック/u, host);
+  for (const host of ['0.0.0.0', '192.168.1.5', '::', 'example.com']) assert.match(serverHostProblem(host) ?? '', /loopback/u, host);
 });
 
 test('serverChange: 待ち受け（host・port）と認証（origins・tailscaleLogins）のどちらが違うかを見る。同じなら何も変わらない', () => {
@@ -144,7 +144,7 @@ test('A4: ポートを変えたら、新しいポートで待ち受けを始め�
   assert.equal((await send(next, '/api/health', { headers: s.local(next) })).status, 200, '新しいポートで受け付ける');
   assert.equal(await refused(s.port), true, '古いポートは閉じる');
   assert.equal((await send(next, '/api/server/apply', { method: 'POST', headers: s.local(next), body: {} })).body.error, 'nothing_to_apply', '入れ替えたあとは、新しい値が「いま動いているもの」');
-  assert.ok(s.logs.some(line => /\[INFO\].*サーバーの設定を反映/u.test(line) && /この PC/u.test(line)), `押した人を 1 行残す: ${s.logs.join(' | ')}`);
+  assert.ok(s.logs.some(line => /\[INFO\].*Applied the server settings/u.test(line) && /this PC/u.test(line)), `押した人を 1 行残す: ${s.logs.join(' | ')}`);
 });
 
 test('A4: 新しいポートで待ち受けを始められなければ、古いままにして 409（listen_failed）。何も入れ替えない', async t => {

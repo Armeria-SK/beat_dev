@@ -51,7 +51,7 @@ test('整合性の問題をまとめて返す', () => {
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   assert.throws(() => parseConfig(config), (e: unknown) => {
     const problems = (e as ConfigError).problems.join('\n');
-    return /重複/.test(problems) && /contextLength が必須/.test(problems) && /routing\.chat/.test(problems) && /https にしてください/.test(problems);
+    return /is duplicated/.test(problems) && /contextLength is required/.test(problems) && /routing\.chat/.test(problems) && /Use https/.test(problems);
   });
 });
 
@@ -164,10 +164,10 @@ test('内容の問題は ID で書いた場所（path）つきで返し、文（
   ]) assert.ok(paths.includes(path), `${path} が無い: ${paths.join(', ')}`);
   assert.equal(issues.length, problems.length, '文と同じ数');
   issues.forEach((issue, i) => assert.ok(problems[i]!.endsWith(issue.message), `${issue.path}: 文の後ろが message と同じ`));
-  assert.ok(problems.includes('routing.chat: モデル「missing」がありません'), '文は今までと同じ');
-  assert.ok(problems.includes('providers.oa: OpenAI 互換には baseUrl が必要です'));
-  assert.ok(problems.includes('models.orphan: プロバイダ「nope」がありません'));
-  assert.equal(issues.find(i => i.path === 'models.orphan.provider')!.message, 'プロバイダ「nope」がありません');
+  assert.ok(problems.includes('routing.chat: Model "missing" does not exist'), '文は今までと同じ');
+  assert.ok(problems.includes('providers.oa: OpenAI-compatible providers need a baseUrl'));
+  assert.ok(problems.includes('models.orphan: Provider "nope" does not exist'));
+  assert.equal(issues.find(i => i.path === 'models.orphan.provider')!.message, 'Provider "nope" does not exist');
 });
 
 test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す。一覧でない場所はそのまま点で結ぶ', () => {

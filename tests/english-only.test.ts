@@ -39,7 +39,7 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'web/src/weekdays.ts': { strings: ['月', '火', '水', '木', '金', '土', '日'], reason: 'API に送る曜日の値（src/tasks/schedule.ts の DAY_MAP と対）' },
   'src/tools/builtin/table-core.ts': { strings: ['\u{FF1D}', '\u{FF0B}', '\u{FF0D}', '\u{FF20}'], reason: 'FORMULA_LEADS: 全角の ＝ ＋ － ＠ で始まるセルも式として無害化する（CSV の式の注入。安全）' },
   'src/engine/chat.ts': { strings: ['\u{3000}'], reason: 'toFullWidth: 子の答えの中の区切りを全角にして、区切りの偽装を防ぐ（空白は全角の空白に。安全）' },
-  'src/engine/persona.ts': { strings: ['基本情報', '名前', '話し方', '名前', '呼び方', '^-[ \\t]*(?:${labels})[ \\t]*[:\u{FF1A}][ \\t]*'], reason: '見出しと行の名前の読む側: 持ち主の日本語の SOUL.md / USER.md の節と行（区切りの全角のコロンも）を読んで探す' },
+  'src/engine/persona.ts': { strings: ['基本情報', '名前', '話し方', '名前', '呼び方', '^-[ \\t]*(?:${labels})[ \\t]*[:\u{FF1A}][ \\t]*'], reason: '見出しと行の名前: 持ち主の日本語の SOUL.md / USER.md の節と行（区切りの全角のコロンも）を読んで探し、見出しが日本語のファイルに節・行を足すときも日本語の名前で書く' },
   'src/engine/prompts.ts': { strings: ['/(?:^|\\n)[ \\t]*(?:(?:#{1,6}|[-*+])[ \\t]+)?[*_\u{300C}\u{300E}"\u{201C}\'`]*(?:次の一手|Next steps?)[*_\u{300D}\u{300F}"\u{201D}\'`]*[ \\t]*(?:[:\u{FF1A}][*_\u{300D}\u{300F}"\u{201D}\'`]*|\\r?\\n)([\\s\\S]+)$/iu'], reason: 'NEXT_STEP: モデルが日本語の見出し「次の一手」（と括弧）で書いたまとめも拾う' },
   'src/memory/review.ts': { strings: ['/^(?:変更なし|No changes?)[\u{3002}.!\u{FF01}]?$/iu'], reason: 'isNoProposal: モデルが日本語で書いた「変更なし」（と句読点）も拾う' },
   'src/memory/store.ts': { strings: ['/[\\s\u{3000}]+/u'], reason: 'searchTerms: 記憶の検索の語を全角の空白でも区切る' },
@@ -49,20 +49,8 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
 
 // 一時の一覧（段階 0 の途中の PR だけ）: まだ英語にしていないファイル → 残りの数（上の例外の文字列を除いた数。このファイルは次の PR で直す）。0-2a-3・0-2a-4・0-2b で減らし、0-2b で空にする。
 const PENDING: Record<string, number> = {
-  'src/app.ts': 9,
-  'src/config/store.ts': 47,
-  'src/db/conversations.ts': 2,
-  'src/db/database.ts': 1,
-  'src/engine/chat.ts': 3,
-  'src/engine/health.ts': 2,
-  'src/env-file.ts': 10,
-  'src/main.ts': 20,
-  'src/mcp/manager.ts': 2,
-  'src/notify/channels.ts': 2,
-  'src/notify/notifications.ts': 1,
+  'src/main.ts': 7, // doctor の出力だけ（0-3 で doctor ごと消すので訳さない。PLAN.md 版 6）
   'src/providers/anthropic.ts': 2,
-  'src/shared/url.ts': 5,
-  'src/tasks/worker.ts': 6,
   'src/tools/builtin/browser.ts': 8,
   'src/tools/builtin/calc.ts': 2,
   'src/tools/builtin/checklist.ts': 1,
@@ -80,17 +68,7 @@ const PENDING: Record<string, number> = {
   'src/tools/builtin/tables.ts': 2,
   'src/tools/builtin/tasks.ts': 9,
   'src/tools/builtin/web.ts': 3,
-  'src/tools/registry.ts': 2,
-  'src/tools/shell/git-env.ts': 1,
-  'src/tools/skills/store.ts': 1,
   'src/uploads/store.ts': 1,
-  'src/web/auth.ts': 3,
-  'src/web/routes-browser.ts': 1,
-  'src/web/routes-mcp.ts': 1,
-  'src/web/routes-notify.ts': 1,
-  'src/web/server-host.ts': 8,
-  'src/web/server.ts': 1,
-  'src/web/static.ts': 1,
 };
 
 const japaneseLines = (text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.replace(/^[ \t]+|[ \t]+$/gu, ''));

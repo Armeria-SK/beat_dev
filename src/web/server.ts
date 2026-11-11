@@ -210,7 +210,7 @@ export function createWebServer(app: App): WebServer {
     if (running()) throw problem(409, 'conflict', 'conversation_running');
     const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
     app.approvals.forgetConversation(id);
-    if (erased.files.failed.length) app.log(`[WARN] 会話を消したあと、消せなかったファイルがあります: ${erased.files.failed.join(', ')}`);
+    if (erased.files.failed.length) app.log(`[WARN] Some files could not be deleted after deleting the conversation: ${erased.files.failed.join(', ')}`);
     app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted' });
     sendJson(res, 200, { deleted: true, ...erased });
   });

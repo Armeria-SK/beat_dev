@@ -282,8 +282,8 @@ test('API: 設定の問題は文（problems）のほかに、ID で書いた場�
   assert.equal(unknownRoute.status, 400);
   const first = (await unknownRoute.json()) as any;
   assert.equal(first.error, 'invalid_config');
-  assert.deepEqual(first.issues, [{ path: 'routing.chat', message: 'モデル「nope」がありません' }]);
-  assert.deepEqual(first.problems, ['routing.chat: モデル「nope」がありません'], '文は今までと同じ');
+  assert.deepEqual(first.issues, [{ path: 'routing.chat', message: 'Model "nope" does not exist' }]);
+  assert.deepEqual(first.problems, ['routing.chat: Model "nope" does not exist'], '文は今までと同じ');
 
   const badShape = structuredClone(view.config);
   badShape.models[0].contextLength = 'many';
@@ -293,8 +293,8 @@ test('API: 設定の問題は文（problems）のほかに、ID で書いた場�
 
   writeFileSync(s.app.paths.config, JSON.stringify({ ...view.config, routing: { ...view.config.routing, background: ['ghost'] } }));
   const broken = (await (await s.api('/api/settings')).json()) as any;
-  assert.deepEqual(broken.configError.issues, [{ path: 'routing.background', message: 'モデル「ghost」がありません' }]);
-  assert.deepEqual(broken.configError.problems, ['routing.background: モデル「ghost」がありません']);
+  assert.deepEqual(broken.configError.issues, [{ path: 'routing.background', message: 'Model "ghost" does not exist' }]);
+  assert.deepEqual(broken.configError.problems, ['routing.background: Model "ghost" does not exist']);
 });
 
 test('API: 承認の札の paths は、承認の一覧・会話・タスクの詳細・SSE のどれでも同じ形で、無ければ空の配列', async t => {

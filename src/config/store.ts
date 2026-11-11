@@ -69,9 +69,9 @@ function findings(config: AppConfig): Finding[] {
   const add = (path: string, message: string, label = path): void => { found.push({ path, message, text: `${label}: ${message}` }); };
   const providerIds = new Set<string>();
   for (const provider of config.providers) {
-    if (providerIds.has(provider.id)) add(`providers.${provider.id}.id`, `ID「${provider.id}」が重複しています`, 'providers');
+    if (providerIds.has(provider.id)) add(`providers.${provider.id}.id`, `ID "${provider.id}" is duplicated`, 'providers');
     providerIds.add(provider.id);
-    if (provider.kind === 'openai_compatible' && !provider.baseUrl) add(`providers.${provider.id}.baseUrl`, 'OpenAI 互換には baseUrl が必要です', `providers.${provider.id}`);
+    if (provider.kind === 'openai_compatible' && !provider.baseUrl) add(`providers.${provider.id}.baseUrl`, 'OpenAI-compatible providers need a baseUrl', `providers.${provider.id}`);
     if (provider.baseUrl !== undefined) {
       const checked = checkBaseUrl(provider.baseUrl, Boolean(provider.apiKeyEnv));
       if ('problem' in checked) add(`providers.${provider.id}.baseUrl`, checked.problem);
@@ -79,31 +79,31 @@ function findings(config: AppConfig): Finding[] {
   }
   const modelIds = new Set<string>();
   for (const model of config.models) {
-    if (modelIds.has(model.id)) add(`models.${model.id}.id`, `ID「${model.id}」が重複しています`, 'models');
+    if (modelIds.has(model.id)) add(`models.${model.id}.id`, `ID "${model.id}" is duplicated`, 'models');
     modelIds.add(model.id);
     const provider = config.providers.find(p => p.id === model.provider);
-    if (!provider) { add(`models.${model.id}.provider`, `プロバイダ「${model.provider}」がありません`, `models.${model.id}`); continue; }
+    if (!provider) { add(`models.${model.id}.provider`, `Provider "${model.provider}" does not exist`, `models.${model.id}`); continue; }
     if (provider.kind !== 'anthropic' && model.contextLength === undefined) {
-      add(`models.${model.id}.contextLength`, 'ローカル LLM や OpenAI 互換では contextLength が必須です（README の「ローカル LLM のコンテキスト長」を参照）', `models.${model.id}`);
+      add(`models.${model.id}.contextLength`, 'contextLength is required for local LLMs and OpenAI-compatible providers (see the README section on the context length of local LLMs)', `models.${model.id}`);
     }
     // contextLength < minContext は保存を止めない（使う前の確認で「使えない」と知らせる）。
     // 起動や保存を拒否すると、メタデータの誤りで全体が止まってしまう
     if (model.contextLength !== undefined && model.maxOutputTokens >= model.contextLength) {
-      add(`models.${model.id}.maxOutputTokens`, 'maxOutputTokens がコンテキスト長以上です', `models.${model.id}`);
+      add(`models.${model.id}.maxOutputTokens`, 'maxOutputTokens is equal to or larger than the context length', `models.${model.id}`);
     }
   }
   for (const route of ['chat', 'background'] as const) {
-    for (const id of config.routing[route]) if (!modelIds.has(id)) add(`routing.${route}`, `モデル「${id}」がありません`);
+    for (const id of config.routing[route]) if (!modelIds.has(id)) add(`routing.${route}`, `Model "${id}" does not exist`);
   }
   config.tools.shell.allow.forEach((entry, i) => {
-    if (!parseAllowEntry(entry)) add('tools.shell.allow', `${i + 1} 番目の「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`);
+    if (!parseAllowEntry(entry)) add('tools.shell.allow', `Entry ${i + 1} "${entry}" cannot be written this way. Write only a fixed command (a single statement with no quotes, variables, wildcards, substitutions, redirections or separators)`);
   });
   for (const name of Object.keys(config.tools.policies)) {
-    if (!TOOL_NAME_PATTERN.test(name)) add('tools.policies', `「${name}」は道具の名前として書けません（英小文字で始まり、英小文字・数字・_ だけ、64 文字まで）`);
+    if (!TOOL_NAME_PATTERN.test(name)) add('tools.policies', `"${name}" cannot be used as a tool name (it must start with a lowercase letter and contain only lowercase letters, digits and _, up to 64 characters)`);
   }
   for (const origin of config.server.origins) {
-    try { if (new URL(origin).origin !== origin) add('server.origins', `「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
-    catch { add('server.origins', `「${origin}」が URL として読めません`); }
+    try { if (new URL(origin).origin !== origin) add('server.origins', `Write "${origin}" as an origin (no trailing / or path)`); }
+    catch { add('server.origins', `"${origin}" cannot be read as a URL`); }
   }
   browserFindings(config, add);
   notifyFindings(config, add);
@@ -114,12 +114,12 @@ function findings(config: AppConfig): Finding[] {
 // ブラウザの道具（tools.browser）の内容の検査。実行ファイルが在るかは見ない（無ければ道具が「見つからない」を返す。設定の保存は通す）
 function browserFindings(config: AppConfig, add: (path: string, message: string, label?: string) => void): void {
   const { channel, executablePath, sites } = config.tools.browser;
-  if (channel === 'path' && executablePath === '') add('tools.browser.executablePath', 'channel が path のときは、ブラウザの実行ファイルの場所（executablePath）が必要です');
-  if (executablePath !== '' && !isAbsolute(executablePath)) add('tools.browser.executablePath', '実行ファイルの場所は絶対パスで書いてください');
-  if (isEdgeExecutable(executablePath)) add('tools.browser.executablePath', 'Microsoft Edge ではブラウザの操作をしません。Google Chrome か、ほかの Chromium 系ブラウザの実行ファイルを指定してください');
+  if (channel === 'path' && executablePath === '') add('tools.browser.executablePath', 'When channel is path, the location of the browser executable (executablePath) is required');
+  if (executablePath !== '' && !isAbsolute(executablePath)) add('tools.browser.executablePath', 'Write the location of the executable as an absolute path');
+  if (isEdgeExecutable(executablePath)) add('tools.browser.executablePath', 'Browser control does not work with Microsoft Edge. Specify the executable of Google Chrome or another Chromium-based browser');
   const seen = new Set<string>();
   for (const site of sites) {
-    if (seen.has(site)) add('tools.browser.sites', `「${site}」が重複しています`);
+    if (seen.has(site)) add('tools.browser.sites', `"${site}" is duplicated`);
     seen.add(site);
   }
 }
@@ -127,22 +127,22 @@ function browserFindings(config: AppConfig, add: (path: string, message: string,
 // 外の送り先（notify）の内容の検査。値の入る環境変数がプロバイダの鍵と重なる設定は断る（鍵を外の送り先へ渡す形を作らせない）
 function notifyFindings(config: AppConfig, add: (path: string, message: string, label?: string) => void): void {
   const { channels, publicBaseUrl, limits } = config.notify;
-  if (channels.length > limits.maxChannels) add('notify.channels', `送り先は ${limits.maxChannels} 件までです（今は ${channels.length} 件。notify.limits.maxChannels で変えられます）`);
-  if (publicBaseUrl !== '' && !isSafeOutboundUrl(publicBaseUrl)) add('notify.publicBaseUrl', 'https か、この PC の http（127.0.0.1 など）にしてください');
+  if (channels.length > limits.maxChannels) add('notify.channels', `Up to ${limits.maxChannels} destinations are allowed (there are ${channels.length} now; change this with notify.limits.maxChannels)`);
+  if (publicBaseUrl !== '' && !isSafeOutboundUrl(publicBaseUrl)) add('notify.publicBaseUrl', 'Use https, or http on this PC (127.0.0.1 and the like)');
   const providerEnvs = new Set(takenKeyEnvs(config.providers, ''));
   providerEnvs.add('ANTHROPIC_API_KEY');
   const ids = new Set<string>();
   const used = new Map<string, string>();
   for (const channel of channels) {
-    if (ids.has(channel.id)) add(`notify.channels.${channel.id}.id`, `ID「${channel.id}」が重複しています`, 'notify.channels');
+    if (ids.has(channel.id)) add(`notify.channels.${channel.id}.id`, `ID "${channel.id}" is duplicated`, 'notify.channels');
     ids.add(channel.id);
     const envs: Array<[string, string | undefined]> = [['urlEnv', channel.urlEnv], ['tokenEnv', channel.tokenEnv]];
     for (const [field, name] of envs) {
       if (name === undefined) continue;
       const where = `notify.channels.${channel.id}.${field}`;
-      if (providerEnvs.has(name)) add(where, `環境変数「${name}」はプロバイダの鍵に使われています。別の名前にしてください`);
+      if (providerEnvs.has(name)) add(where, `Environment variable "${name}" is used for a provider key. Use a different name`);
       const other = used.get(name);
-      if (other !== undefined) add(where, `環境変数「${name}」は ${other} でも使われています。欄ごとに別の名前にしてください`);
+      if (other !== undefined) add(where, `Environment variable "${name}" is also used by ${other}. Use a different name for each field`);
       else used.set(name, `${channel.id}.${field}`);
     }
   }
@@ -151,60 +151,60 @@ function notifyFindings(config: AppConfig, add: (path: string, message: string, 
 // 外の MCP サーバー（mcp）の内容の検査。値の入る環境変数がプロバイダの鍵・通知の欄・ほかの MCP の欄と重なる設定は断る（鍵を外のプログラムへ渡す形を作らせない）
 function mcpFindings(config: AppConfig, add: (path: string, message: string, label?: string) => void): void {
   const { servers, limits } = config.mcp;
-  if (servers.length > limits.maxServers) add('mcp.servers', `MCP サーバーは ${limits.maxServers} 件までです（今は ${servers.length} 件。mcp.limits.maxServers で変えられます）`);
+  if (servers.length > limits.maxServers) add('mcp.servers', `Up to ${limits.maxServers} MCP servers are allowed (there are ${servers.length} now; change this with mcp.limits.maxServers)`);
   const taken = new Map<string, string>();
-  for (const name of takenKeyEnvs(config.providers, '')) taken.set(name, 'プロバイダの鍵');
-  taken.set('ANTHROPIC_API_KEY', 'プロバイダの鍵');
+  for (const name of takenKeyEnvs(config.providers, '')) taken.set(name, 'a provider key');
+  taken.set('ANTHROPIC_API_KEY', 'a provider key');
   for (const channel of config.notify.channels) {
-    taken.set(channel.urlEnv, `通知の送り先「${channel.id}」`);
-    if (channel.tokenEnv !== undefined) taken.set(channel.tokenEnv, `通知の送り先「${channel.id}」`);
+    taken.set(channel.urlEnv, `notification destination "${channel.id}"`);
+    if (channel.tokenEnv !== undefined) taken.set(channel.tokenEnv, `notification destination "${channel.id}"`);
   }
   const ids = new Set<string>();
   for (const server of servers) {
     const at = `mcp.servers.${server.id}`;
-    if (ids.has(server.id)) add(`${at}.id`, `ID「${server.id}」が重複しています`, 'mcp.servers');
+    if (ids.has(server.id)) add(`${at}.id`, `ID "${server.id}" is duplicated`, 'mcp.servers');
     ids.add(server.id);
     const names = Object.keys(server.tools);
-    if (names.length > limits.maxToolsPerServer) add(`${at}.tools`, `道具は 1 サーバーに ${limits.maxToolsPerServer} 件までです（今は ${names.length} 件。mcp.limits.maxToolsPerServer で変えられます）`);
+    if (names.length > limits.maxToolsPerServer) add(`${at}.tools`, `Up to ${limits.maxToolsPerServer} tools are allowed per server (there are ${names.length} now; change this with mcp.limits.maxToolsPerServer)`);
     // Record のキーの形は、型の検査では見られない（合わないキーは素通りする）ので、ここで確かめる
     for (const tool of names) {
-      if (!new RegExp(MCP_TOOL_KEY_PATTERN, 'u').test(tool)) add(`${at}.tools`, `道具の名前「${tool.slice(0, 40)}」は、英数字・_・.・- で 64 文字までにしてください（__proto__ / constructor / prototype は使えません）`);
+      if (!new RegExp(MCP_TOOL_KEY_PATTERN, 'u').test(tool)) add(`${at}.tools`, `Tool name "${tool.slice(0, 40)}" must use only letters, digits, _, . and -, up to 64 characters (__proto__ / constructor / prototype are not allowed)`);
     }
     for (const name of Object.keys(server.env)) {
-      if (!new RegExp(MCP_ENV_NAME_PATTERN, 'u').test(name)) add(`${at}.env`, `環境変数の名前「${name.slice(0, 40)}」は、英数字と _ で 27 文字までにしてください`);
+      if (!new RegExp(MCP_ENV_NAME_PATTERN, 'u').test(name)) add(`${at}.env`, `Environment variable name "${name.slice(0, 40)}" must use only letters, digits and _, up to 27 characters`);
     }
     for (const name of Object.keys(server.headers)) {
-      if (!new RegExp(MCP_HEADER_NAME_PATTERN, 'u').test(name)) add(`${at}.headers`, `見出しの名前「${name.slice(0, 40)}」は、英数字と - で 27 文字までにしてください`);
+      if (!new RegExp(MCP_HEADER_NAME_PATTERN, 'u').test(name)) add(`${at}.headers`, `Header name "${name.slice(0, 40)}" must use only letters, digits and -, up to 27 characters`);
     }
     const registered = new Map<string, string>();
     for (const tool of names) {
       const name = mcpToolName(server.id, tool);
-      if (name.length > MCP_NAME_MAX) add(`${at}.tools.${tool}`, `道具「${tool}」は登録名が ${MCP_NAME_MAX} 文字を超えます（ID を短くするか、道具の名前が短いものにしてください）`);
+      if (name.length > MCP_NAME_MAX) add(`${at}.tools.${tool}`, `The registered name of tool "${tool}" is longer than ${MCP_NAME_MAX} characters (shorten the ID, or use a tool with a shorter name)`);
       const other = registered.get(name);
-      if (other !== undefined) add(`${at}.tools.${tool}`, `道具「${tool}」は「${other}」と、同じ登録名「${name}」になります`);
+      if (other !== undefined) add(`${at}.tools.${tool}`, `Tool "${tool}" gets the same registered name "${name}" as "${other}"`);
       else registered.set(name, tool);
     }
     const refs: Array<[string, string]> = [];
     if (server.transport === 'stdio') {
-      if (server.command === undefined) add(`${at}.command`, 'この PC のプログラム（stdio）には command が必要です');
-      if (server.cwd !== undefined && !isAbsolute(server.cwd)) add(`${at}.cwd`, '作業フォルダは絶対パスで書いてください');
-      if (server.url !== undefined) add(`${at}.url`, 'stdio のサーバーには url を書けません');
-      if (Object.keys(server.headers).length) add(`${at}.headers`, 'stdio のサーバーには headers を書けません');
+      if (server.command === undefined) add(`${at}.command`, 'A program on this PC (stdio) needs a command');
+      if (server.cwd !== undefined && !isAbsolute(server.cwd)) add(`${at}.cwd`, 'Write the working folder as an absolute path');
+      if (server.url !== undefined) add(`${at}.url`, 'A stdio server cannot have a url');
+      if (Object.keys(server.headers).length) add(`${at}.headers`, 'A stdio server cannot have headers');
       for (const [name, variable] of Object.entries(server.env)) refs.push([`${at}.env.${name}`, variable]);
     } else {
-      if (server.url === undefined) add(`${at}.url`, 'URL（http）には url が必要です');
-      else if (!isSafeOutboundUrl(server.url)) add(`${at}.url`, 'URL は https か、この PC の http（127.0.0.1 など）にしてください（user:pass@ は書けません）');
-      if (server.command !== undefined) add(`${at}.command`, 'http のサーバーには command を書けません');
-      if (server.cwd !== undefined) add(`${at}.cwd`, 'http のサーバーには cwd を書けません');
-      if (Object.keys(server.env).length) add(`${at}.env`, 'http のサーバーには env を書けません');
+      if (server.url === undefined) add(`${at}.url`, 'A URL (http) server needs a url');
+      else if (!isSafeOutboundUrl(server.url)) add(`${at}.url`, 'Use https for the URL, or http on this PC (127.0.0.1 and the like) (user:pass@ is not allowed)');
+      if (server.command !== undefined) add(`${at}.command`, 'An http server cannot have a command');
+      if (server.cwd !== undefined) add(`${at}.cwd`, 'An http server cannot have a cwd');
+      if (Object.keys(server.env).length) add(`${at}.env`, 'An http server cannot have env');
       for (const [name, variable] of Object.entries(server.headers)) refs.push([`${at}.headers.${name}`, variable]);
     }
     for (const [where, variable] of refs) {
       // 子や相手に渡せるのは、鍵の名前（KEY・TOKEN・SECRET など）の変数だけ。DATABASE_URL のような、ほかの変数を指せないようにする
-      if (!isSecretEnvName(variable)) add(where, `環境変数「${variable}」は、名前に KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれかを含めてください`);
+      if (!isSecretEnvName(variable)) add(where, `The name of environment variable "${variable}" must contain one of KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL`);
       const other = taken.get(variable);
-      if (other !== undefined) add(where, `環境変数「${variable}」は ${other} に使われています。欄ごとに別の名前にしてください`);
-      else taken.set(variable, `MCP「${server.id}」の別の欄`);
+      if (other !== undefined) add(where, `Environment variable "${variable}" is used by ${other}. Use a different name for each field`);
+      else taken.set(variable, `another field of MCP "${server.id}"`);
     }
   }
 }
@@ -231,13 +231,13 @@ export function parseConfig(raw: unknown): AppConfig {
   if (!Value.Check(AppConfig, withDefaults)) {
     // 正規表現や「Expected string to match …」はそのまま見せない。項目ごとの友好的な文（src/shared/messages/config.ts）にする
     const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('en', friendly.code, friendly.params) : e.message }; });
-    throw new ConfigError('設定ファイルの形式が正しくありません',
+    throw new ConfigError('The settings file is not in the right format',
       errors.map(x => `${x.e.path || '/'}: ${x.message}`),
       errors.map(x => ({ path: issuePath(x.e.path, withDefaults), message: x.message, ...(x.friendly ? { code: `config.${x.friendly.code}`, params: x.friendly.params } : {}) })));
   }
   const config = withDefaults as AppConfig;
   const found = findings(config);
-  if (found.length) throw new ConfigError('設定の内容に問題があります', found.map(f => f.text), found.map(({ path, message }) => ({ path, message })));
+  if (found.length) throw new ConfigError('There are problems in the settings', found.map(f => f.text), found.map(({ path, message }) => ({ path, message })));
   return config;
 }
 
@@ -302,7 +302,7 @@ export class ConfigStore {
     try { raw = JSON.parse(readFileSync(this.path, 'utf8')); }
     catch {
       try { copyFileSync(this.path, `${this.path}.bak`); } catch { }
-      throw new ConfigError(`設定ファイル ${this.path} が JSON として壊れています。${this.path}.bak に退避しました。直してから起動し直してください`);
+      throw new ConfigError(`The settings file ${this.path} is not valid JSON. It was copied to ${this.path}.bak. Fix it, then start again`);
     }
     const config = parseConfig(raw);
     this.#dropped = dropLegacy(raw).dropped;

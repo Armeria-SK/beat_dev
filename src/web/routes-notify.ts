@@ -131,7 +131,7 @@ export function registerNotifyRoutes(router: Router, app: App): void {
       if (stillUsed(name)) continue;
       const osValue = fromOs(name);
       try { removeEnvValue(app.paths.env, name); if (!osValue) delete app.env[name]; }
-      catch { app.log(`[WARN] 通知の送り先「${channel.id}」の秘密（${name}）を .env から消せませんでした。.env を直接開いて消してください`); }
+      catch { app.log(`[WARN] Could not remove the secret (${name}) of notification destination "${channel.id}" from .env. Open .env and remove it yourself`); }
     }
     app.kv.delete(`notify:channel:${channel.id}`);
     sendJson(res, 200, view());

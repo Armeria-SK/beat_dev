@@ -180,7 +180,7 @@ test('T-11 URL・token・応答の本文は、ログ・kv・status に出ない'
   await s.channels.deliver(ev('task_failed'));
   const all = JSON.stringify([s.logs, s.alerts, s.channels.status(), s.kv.get('notify:channel:phone')]);
   assert.doesNotMatch(all, /SECRETPATH|tok-abc|hooks\.example/u);
-  assert.match(s.logs.join('\n'), /\[WARN\] 通知の送り先「phone」に送れませんでした/u);
+  assert.match(s.logs.join('\n'), /\[WARN\] Could not send to notification destination "phone"/u);
 });
 
 test('T-12 failsBeforeAlert 回続けて失敗すると health_alert が 1 件。外へ送らない印つき。成功で 0 に戻る', async () => {

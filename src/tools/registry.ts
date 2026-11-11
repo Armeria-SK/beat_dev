@@ -9,7 +9,7 @@ export class ToolRegistry {
   #groups = new Map<string, Map<string, ToolDef>>();
 
   register(tool: ToolDef): this {
-    if (this.#has(tool.name)) throw new Error(`ツール ${tool.name} が重複しています`);
+    if (this.#has(tool.name)) throw new Error(`Tool ${tool.name} is duplicated`);
     this.#tools.set(tool.name, tool);
     return this;
   }
@@ -25,7 +25,7 @@ export class ToolRegistry {
     const seen = new Set<string>();
     for (const tool of tools) {
       const own = this.#groups.get(group)?.has(tool.name) === true;
-      if ((!own && this.#has(tool.name)) || seen.has(tool.name)) throw new Error(`ツール ${tool.name} が重複しています`);
+      if ((!own && this.#has(tool.name)) || seen.has(tool.name)) throw new Error(`Tool ${tool.name} is duplicated`);
       seen.add(tool.name);
     }
     this.#groups.delete(group);

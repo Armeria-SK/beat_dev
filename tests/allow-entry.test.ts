@@ -54,8 +54,8 @@ test('設定を読むとき: 書けない項目は ConfigError で、場所つ�
   config.tools.shell.allow = ['npm test', 'npm test; rm -rf .', 'node $x'];
   const problems = semanticProblems(config);
   assert.equal(problems.filter(p => p.startsWith('tools.shell.allow:')).length, 2);
-  assert.match(problems.join('\n'), /2 番目の「npm test; rm -rf \.」/u);
-  assert.match(problems.join('\n'), /3 番目の「node \$x」/u);
+  assert.match(problems.join('\n'), /Entry 2 "npm test; rm -rf \."/u);
+  assert.match(problems.join('\n'), /Entry 3 "node \$x"/u);
   assert.throws(() => parseConfig(JSON.parse(JSON.stringify(config))), (error: unknown) => {
     assert.ok(error instanceof ConfigError);
     assert.equal(error.problems.length, 2);

@@ -102,15 +102,15 @@ function prefixOf(line: string, name: string): string {
 
 const where = (text: string, name: string): Span[] => spansOf(text).filter(span => span.key === name);
 
-function refuse(): never { throw new EnvFileError('file', '.env の今の書き方では、ほかの変数を変えずに書き換えられません'); }
+function refuse(): never { throw new EnvFileError('file', '.env cannot be rewritten without changing other variables, the way it is written now'); }
 
 // current（.env の中身）の name を value に置き換えた中身を返す。ほかの行・コメント・空行・順番はそのまま。
 // 同じ名前の古い代入（古い鍵）は外し、無ければ末尾に足す。書き換えた全体を読み直して、鍵以外の変数が変わるなら投げる
 export function setEnvText(current: string, name: string, value: string): string {
-  if (!NAME.test(name)) throw new EnvFileError('name', '環境変数の名前が正しくありません');
-  if (QUOTES.includes(value[0] ?? '')) throw new EnvFileError('value', '鍵の文字を .env に安全に書けません');
+  if (!NAME.test(name)) throw new EnvFileError('name', 'The environment variable name is not valid');
+  if (QUOTES.includes(value[0] ?? '')) throw new EnvFileError('value', 'The characters of the key cannot be written safely to .env');
   const forms = candidates(value);
-  if (forms.length === 0) throw new EnvFileError('value', '鍵の文字を .env に安全に書けません');
+  if (forms.length === 0) throw new EnvFileError('value', 'The characters of the key cannot be written safely to .env');
   const before = parse(current);
   const found = where(current, name);
   if (found.length === 0 && before.has(name)) refuse();
@@ -135,7 +135,7 @@ export function setEnvText(current: string, name: string, value: string): string
 
 // current の name の代入をすべて外した中身を返す。無ければ undefined。外した全体を読み直して、鍵以外の変数が変わるなら投げる
 export function removeEnvText(current: string, name: string): string | undefined {
-  if (!NAME.test(name)) throw new EnvFileError('name', '環境変数の名前が正しくありません');
+  if (!NAME.test(name)) throw new EnvFileError('name', 'The environment variable name is not valid');
   const before = parse(current);
   const found = where(current, name);
   if (found.length === 0) {
@@ -151,13 +151,13 @@ export function removeEnvText(current: string, name: string): string | undefined
 
 function readExisting(path: string): string {
   if (!existsSync(path)) return '';
-  if (lstatSync(path).isSymbolicLink()) throw new EnvFileError('link', '.env がリンクなので書き換えません');
-  try { return readFileSync(path, 'utf8'); } catch (error) { throw new EnvFileError('io', `.env を読めませんでした（${(error as NodeJS.ErrnoException).code ?? 'error'}）`); }
+  if (lstatSync(path).isSymbolicLink()) throw new EnvFileError('link', '.env is a link, so it is not rewritten');
+  try { return readFileSync(path, 'utf8'); } catch (error) { throw new EnvFileError('io', `Could not read .env (${(error as NodeJS.ErrnoException).code ?? 'error'})`); }
 }
 
 // 控え（.env.bak）がリンクなら、写すとリンク先を上書きしてしまうので断る
 function checkBackup(path: string): void {
-  if (lstatSync(`${path}.bak`, { throwIfNoEntry: false })?.isSymbolicLink()) throw new EnvFileError('link', '.env.bak がリンクなので書き換えません');
+  if (lstatSync(`${path}.bak`, { throwIfNoEntry: false })?.isSymbolicLink()) throw new EnvFileError('link', '.env.bak is a link, so it is not rewritten');
 }
 
 // backup: 'previous' は前の .env を控えにする。'content' は新しい中身を控えにする（鍵を消したあと、消した鍵の入った前の .env を控えに残さない）。
@@ -175,7 +175,7 @@ function save(path: string, previous: string | undefined, content: string, backu
     atomicWriteFile(path, content, 0o600);
   } catch (error) {
     if (error instanceof EnvFileError) throw error;
-    throw new EnvFileError('io', `.env に書けませんでした（${(error as NodeJS.ErrnoException).code ?? 'error'}）`);
+    throw new EnvFileError('io', `Could not write to .env (${(error as NodeJS.ErrnoException).code ?? 'error'})`);
   }
 }
 
@@ -192,7 +192,7 @@ export function setEnvValue(path: string, name: string, value: string): void {
 
 // 同じ名前の行をすべて外す。無ければ何もしない（ファイルも作らない）。外したら true
 export function removeEnvValue(path: string, name: string): boolean {
-  if (!NAME.test(name)) throw new EnvFileError('name', '環境変数の名前が正しくありません');
+  if (!NAME.test(name)) throw new EnvFileError('name', 'The environment variable name is not valid');
   if (!existsSync(path)) return false;
   const current = readExisting(path);
   const next = removeEnvText(current, name);

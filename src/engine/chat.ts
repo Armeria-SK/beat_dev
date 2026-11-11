@@ -563,7 +563,7 @@ export class ChatEngine {
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
         // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
         if (kind === 'chat') {
-          try { this.#drainPending(conversationId, runId, ended); } catch (error) { this.#d.log?.(`[ERROR] 待っていた発言の引き取り: ${(error as Error).stack ?? error}`); }
+          try { this.#drainPending(conversationId, runId, ended); } catch (error) { this.#d.log?.(`[ERROR] Failed to pick up the waiting messages: ${(error as Error).stack ?? error}`); }
         }
         try { this.onRunEnd?.({ runId, conversationId, kind }); } catch (error) { this.#d.log?.(`[ERROR] onRunEnd: ${(error as Error).message}`); }
       });
@@ -590,7 +590,7 @@ export class ChatEngine {
         const key = `${model.id}\n${t.name}`;
         if (this.#cutWarned.has(key)) continue;
         this.#cutWarned.add(key);
-        this.#d.log?.(`[WARN] モデル「${model.id}」の道具の上限（maxTools ${model.maxTools}）を越えたため、MCP の道具「${t.name}」は渡せません。上限を上げるか、使わない道具を off にしてください`);
+        this.#d.log?.(`[WARN] MCP tool "${t.name}" cannot be passed to model "${model.id}" because it is over the tool limit (maxTools ${model.maxTools}). Raise the limit, or turn off tools you do not use`);
       }
     }
     return registry.forRun(kind, options);
@@ -848,7 +848,7 @@ export class ChatEngine {
       const { model, provider } = route;
       if (index > p.start) {
         d.bus.publish({ type: 'model.switch', runId: p.runId, conversationId: p.conversationId, from: p.chain[index - 1]!.model.id, to: model.id, reason: last.message });
-        d.log?.(`[WARN] model ${p.chain[index - 1]!.model.id} が使えなかったため ${model.id} に切り替えます: ${last.message.split('\n')[0]}`);
+        d.log?.(`[WARN] model ${p.chain[index - 1]!.model.id} was not available, switching to ${model.id}: ${last.message.split('\n')[0]}`);
       }
       const adapter = d.registry.get(provider.id);
       if (!adapter) { last = { kind: 'internal', message: engineText(language, 'run.no_provider', { id: provider.id }), code: 'engine.run.no_provider', params: { id: provider.id }, retryable: false, route }; continue; }

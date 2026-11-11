@@ -44,7 +44,7 @@ export function sanitizeGitConfig(texts: readonly string[]): string {
     if (!entries) continue;
     for (const entry of entries) if (allowed(entry) && !/[\r\n]/u.test(entry.value)) kept.push(entry);
   }
-  let out = '# Clive が作った設定: ホームとシステムの git の設定から、コードを動かせない項目だけを写したもの\n';
+  let out = '# Settings made by Clive: only the entries that cannot run code, copied from the home and system git settings\n';
   let header = '';
   for (const entry of kept) {
     const parts = entry.key.split('.');
