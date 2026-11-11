@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { archiveConversation } from '../web/src/conversation-actions.ts';
 import { subscribe, toast, type FeedbackItem } from '../web/src/feedback.ts';
@@ -33,6 +34,13 @@ test('toast は購読しているすべての受け手に同じ知らせを渡�
   toast({ title: 'three' });
   assert.deepEqual(a.items, [{ title: 'one' }, { kind: 'done', title: 'two', body: 'detail' }]);
   assert.deepEqual(b.items, [{ title: 'one' }]);
+});
+
+test('今の画面の toast.tsx は、読み込まれたときに feedback を購読して、届いた知らせを自分のトーストに出す', () => {
+  const source = readFileSync(new URL('../web/src/toast.tsx', import.meta.url), 'utf8').replace(/\r/gu, '');
+  assert.match(source, /^import \{[^}]*\bsubscribe as subscribeFeedback\b[^}]*\} from '\.\/feedback\.ts';$/mu);
+  assert.match(source, /^subscribeFeedback\(item => \{ toast\(item\); \}\);$/mu, '一番上の階層で購読し、toast に渡す');
+  assert.match(source, /^export function toast\(input: ToastInput\): number \{$/mu);
 });
 
 test('受け手がいないときの toast は何もしない（落ちない）', () => {

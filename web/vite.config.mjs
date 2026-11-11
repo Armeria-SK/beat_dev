@@ -2,8 +2,12 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const target = `http://127.0.0.1:${process.env.CLIVE_PORT ?? 4777}`;
-const entry = process.env.VITE_BEAT_UI === '1' ? './src/ui/main.tsx' : './src/legacy-main.tsx';
+const beat = process.env.VITE_BEAT_UI === '1';
+if (beat && process.env.CLIVE_PORT !== undefined && process.env.CLIVE_PORT !== '4797') {
+  throw new Error(`VITE_BEAT_UI=1 only talks to the preview server on 4797 (CLIVE_PORT=${process.env.CLIVE_PORT})`);
+}
+const target = `http://127.0.0.1:${beat ? 4797 : process.env.CLIVE_PORT ?? 4777}`;
+const entry = beat ? './src/ui/main.tsx' : './src/legacy-main.tsx';
 
 const woff2Only = {
   name: 'clive-woff2-only',

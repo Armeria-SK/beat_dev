@@ -13,7 +13,7 @@ function memory(init: Record<string, string> = {}): ThemeStorage & { store: Map<
 }
 const broken: ThemeStorage = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
 
-test('テーマはデザインの 6 つで、tokens.json と tokens.css のテーマと同じ並び', () => {
+test('テーマはデザインの 6 つで、tokens.css のテーマの区切りと同じ並び', () => {
   assert.deepEqual([...THEMES], ['light', 'dusk', 'sand', 'mist', 'moss', 'ember']);
   const css = readFileSync(new URL('../web/src/ui/styles/tokens.css', import.meta.url), 'utf8');
   const blocks = [...css.matchAll(/:root\[data-theme="([a-z]+)"\]/gu)].map(m => m[1]);

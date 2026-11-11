@@ -2,12 +2,13 @@
 // node scripts/preview-server.ts — takes no arguments. Port 4797, data under <product>/tmp/p1-preview only.
 import { existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { App } from '../src/app.ts';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ToolCall } from '../src/engine/types.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import type { ModelRequest, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
+import { isSensitiveName } from '../src/shared/redaction.ts';
 import { BrowserFailure } from '../src/tools/browser/driver.ts';
 import { createWebServer } from '../src/web/server.ts';
 
@@ -29,9 +30,8 @@ function stop(reason: string): never {
 }
 
 function checkRoot(): void {
-  if (resolve(ROOT) !== ROOT || !ROOT.endsWith(`${sep}tmp${sep}p1-preview`)) stop(`the preview folder is not <product>${sep}tmp${sep}p1-preview: ${ROOT}`);
-  if (relative(APP_ROOT, ROOT) !== join('tmp', 'p1-preview')) stop(`the preview folder is not inside the product folder: ${ROOT}`);
-  for (const dir of [join(APP_ROOT, 'tmp'), ROOT]) {
+  if (relative(APP_ROOT, ROOT) !== join('tmp', 'p1-preview')) stop(`the preview folder is not <product>${sep}tmp${sep}p1-preview: ${ROOT}`);
+  for (const dir of [join(APP_ROOT, 'tmp'), ROOT, DIST]) {
     if (existsSync(dir) && !lstatSync(dir).isDirectory()) stop(`${dir} is a link or a file, not a folder`);
   }
 }
@@ -46,7 +46,7 @@ function reset(target: string): void {
 }
 
 function scrubSecrets(): string[] {
-  const removed = Object.keys(process.env).filter(name => /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/iu.test(name));
+  const removed = Object.keys(process.env).filter(name => isSensitiveName(name) || /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/iu.test(name));
   for (const name of removed) delete process.env[name];
   return removed;
 }
@@ -83,7 +83,7 @@ function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
   if (said.includes('/demo write')) return call('file_write', { path: join(WORK, 'notes.md'), content: '# Notes\n\nWritten by the preview model.\n' });
   if (said.includes('/demo read')) return call('file_read', { path: join(WORK, 'notes.md') });
   if (said.includes('/demo run')) return call('shell_run', { command: 'node -e "console.log(6*7)"', cwd: WORK });
-  if (said.includes('/demo outside')) return call('file_write', { path: join(OUTSIDE, 'x.txt'), content: 'Written after approval.\n' });
+  if (said.includes('/demo outside')) return call('file_write', { path: join(OUTSIDE, 'x.txt'), content: 'This write should have been refused.\n' });
   if (said.includes('/demo image')) return words('Here is a picture:\n\n![A chart](https://example.com/a.png)\n');
   return words(HELP);
 }
@@ -153,6 +153,7 @@ async function start(): Promise<void> {
   ];
   config.routing = { chat: ['preview-a', 'preview-b'], background: ['preview-a'], retriesPerModel: 0 };
   config.tools.roots = [{ path: WORK, mode: 'write' }];
+  config.tools.deny = [...config.tools.deny, join(APP_ROOT, 'data'), join(APP_ROOT, '.env')];
   config.worker.autonomy = false;
   writeFileSync(paths.config, JSON.stringify(config, null, 2));
 

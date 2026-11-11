@@ -60,10 +60,22 @@ for (const theme of THEMES) {
   });
 }
 
-test('どのテーマも同じトークンの名前を持ち、テーマの区切りは color の値だけを替える', () => {
+test('light 以外のテーマの区切りは、どれも同じトークンの名前の組を替え、その名前はどれも :root にもある', () => {
   const themed = [...block(':root[data-theme="dusk"]').keys()].sort();
   for (const theme of THEMES.filter(t => t !== 'light')) assert.deepEqual([...block(`:root[data-theme="${theme}"]`).keys()].sort(), themed, theme);
   for (const name of themed) assert.ok(root.has(name), `${name} が :root に無い`);
+});
+
+test('どのテーマも light の写しではない（地・文字・強調の色が light と違い、テーマどうしも同じ組にならない）', () => {
+  const core = ['--ground', '--surface', '--ink', '--pulse', '--pulse-soft'];
+  const seen = new Map<string, string>();
+  for (const theme of THEMES) {
+    const tokens = themeTokens(theme);
+    const key = core.map(name => color(tokens, `var(${name})`).join(',')).join('|');
+    assert.equal(seen.get(key), undefined, `${theme} が ${seen.get(key)} と同じ色の組`);
+    seen.set(key, theme);
+    if (theme !== 'light') for (const name of ['--ground', '--pulse']) assert.notEqual(tokens.get(name), root.get(name), `${theme} の ${name} が light と同じ`);
+  }
 });
 
 test('color-scheme: dusk と ember は dark、ほかは light（ふだんの入力欄やスクロールバーの色）', () => {
