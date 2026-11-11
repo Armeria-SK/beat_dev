@@ -128,7 +128,7 @@ export function parseProblem(text: string, config: Config): Problem {
   return problem;
 }
 
-// code / params: 形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。message はサーバーの日本語の文
+// code / params: 形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。message はサーバーの英語の文
 export interface ServerIssue { path: string; message: string; code?: string; params?: Record<string, unknown> }
 const isIssue = (value: unknown): value is ServerIssue =>
   isPlain(value) && typeof value.path === 'string' && typeof value.message === 'string';

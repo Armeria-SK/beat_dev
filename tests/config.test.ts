@@ -51,7 +51,7 @@ test('整合性の問題をまとめて返す', () => {
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   assert.throws(() => parseConfig(config), (e: unknown) => {
     const problems = (e as ConfigError).problems.join('\n');
-    return /is duplicated/.test(problems) && /contextLength is required/.test(problems) && /routing\.chat/.test(problems) && /Use https/.test(problems);
+    return /is duplicated/.test(problems) && /contextLength is required/.test(problems) && /routing\.chat/.test(problems) && /Use https for connections that use an API key/.test(problems);
   });
 });
 

@@ -79,7 +79,7 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   const s = await startApp(t);
   const { app } = s;
   const p = await populate(s);
-  assert.ok(searchHistory(app.db, SECRET, { limit: 5 }).length > 0 || true);
+  assert.ok(searchHistory(app.db, SECRET, { limit: 5 }).some(hit => hit.conversationId === TARGET), '前提: 消す前は、消す会話の本文で検索できる');
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));
 
@@ -140,7 +140,7 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   assert.equal((app.db.prepare("SELECT review_conversation_id AS r FROM memory_jobs WHERE run_id = 'run-rv2'").get() as { r: string }).r, p.otherReviewId);
   // ほかの会話は無傷
   assert.equal(app.conversations.messages(OTHER).length, 1);
-  assert.ok(searchHistory(app.db, '別の話', { limit: 5 }).length === 0 || true);
+  assert.deepEqual(searchHistory(app.db, '別の話', { limit: 5 }).map(hit => hit.conversationId), [OTHER], 'ほかの会話は消したあとも検索できる');
   assert.deepEqual(events.filter(e => e.type === 'conversation.changed').map(e => [(e as { conversationId: string }).conversationId, (e as { change: string }).change]), [[TARGET, 'deleted']]);
   // どの表にも、会話の ID も本文も残っていない
   const tables = (app.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'messages_fts%' AND name NOT LIKE 'memories_fts%' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>).map(r => r.name);

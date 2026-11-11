@@ -291,7 +291,7 @@ export class App {
     try { if (existsSync(path)) added = this.curiosity.importMarkdown(readFileSync(path, 'utf8')); }
     catch (error) { this.log(`[WARN] Could not read CURIOSITY.md: ${(error as Error).message}`); }
     this.kv.set('curiosity:imported', String(Date.now()));
-    if (added) this.log(`[INFO] Imported ${added} item(s) from CURIOSITY.md into the curiosity list (from now on, edit them under "Curiosity" on the screen)`);
+    if (added) this.log(`[INFO] Imported ${added} item(s) from CURIOSITY.md into the curiosity list (from now on, edit them under "Curiosities" on the screen)`);
   }
 
   config(): AppConfig {
