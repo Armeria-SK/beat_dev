@@ -54,7 +54,7 @@ try {
   await start();
 } catch (error) {
   if (error instanceof ConfigError) process.stderr.write(`Settings error: ${error.message}\n`);
-  else if ((error as NodeJS.ErrnoException | undefined)?.code?.startsWith('ERR_PARSE_ARGS')) process.stderr.write(`Could not start: ${String(error)}\n`);
+  else if ((error as NodeJS.ErrnoException | undefined)?.code?.startsWith('ERR_PARSE_ARGS')) process.stderr.write(`Could not start: ${String(error).replace(/\s*\n\s*/gu, ' ')}\n`);
   else process.stderr.write(`Could not start: ${(error as Error).stack ?? error}\n`);
   process.exitCode = 1;
 }

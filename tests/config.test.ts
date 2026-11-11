@@ -104,6 +104,7 @@ test('起動: 知らない引数（位置の引数・知らないオプション
   const cases: Array<[string[], RegExp]> = [
     [['check'], /^Could not start: TypeError \[ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL\]: [^\n]*'check'[^\n]*\n$/u],
     [['--foo'], /^Could not start: TypeError \[ERR_PARSE_ARGS_UNKNOWN_OPTION\]: [^\n]*'--foo'[^\n]*\n$/u],
+    [['--data-dir', '--foo'], /^Could not start: TypeError \[ERR_PARSE_ARGS_INVALID_OPTION_VALUE\]: [^\n]*'--data-dir'[^\n]*\n$/u],
   ];
   for (const [extra, stderr] of cases) {
     const dir = tempDir(t);
@@ -117,6 +118,16 @@ test('起動: 知らない引数（位置の引数・知らないオプション
     assert.equal(run.stdout, '', `${extra[0]}: 起動のログを出さない`);
     assert.deepEqual(readdirSync(dir), ['config.json'], `${extra[0]}: DB も作らない（設定を読む手前で止まる）`);
   }
+});
+
+test('起動: --data-dir は今までどおり読み、そのフォルダの設定と DB を使う（ループバックでない host なら待ち受けの前に止まる）', t => {
+  const dir = tempDir(t);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ ...defaultConfig(), server: { host: '0.0.0.0', port: 4777 } }));
+  const run = spawnSync(process.execPath, ['src/main.ts', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 30_000 });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /^Settings error: Set server\.host to a loopback address such as 127\.0\.0\.1 \(it is 0\.0\.0\.0 now\)[^\n]*\n$/u);
+  assert.equal(existsSync(join(dir, 'clive.db')), true, '指定したフォルダに DB を作った（--data-dir を使った）');
 });
 
 test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書いてあっても読めて、初期値にはもう書かない', () => {
