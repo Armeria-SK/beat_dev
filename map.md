@@ -230,7 +230,7 @@
     - `state.ts`: タイムゾーンの保持。`getLanguage()` はいつも `en` を返す（呼ぶ所は P1 で言語の引数ごと消す）。
     - `load-settings.ts`: 起動時にサーバーの `timezone` だけを読む `loadServerSettings`と、読めた設定を画面に反映する `applyServerSettings`（設定を開いたとき・保存したときも使う）。最初の描画は待ち時間（3 秒）までしか待たないが、遅れて届いた設定も捨てずに反映し、読めなければ一度だけやり直す（捨てると、日時の入力が違う時刻として読まれる）。
     - `../server-text.ts`（i18n の外）: サーバーが画面に出す文のうち、コード（`code`）と値（`params`）が付くものを、画面の言語の文にする。文の表は `src/shared/messages` のもの（`http` `task` `store` `provider` `engine`）をそのまま読むので、サーバーの訳と食い違わない。API のエラー（`ApiError` の `message` は `code` / `errorCode` から画面の言語で作る）・返事の失敗（`run.end` の `errorCode` / `errorParams`）・警告（`warning` の `params`。再試行は理由のコードをはめる）・モデルの確認（`probe` の `messageCode` / `messageParams`。too_small の出どころと ok の注記はコードから組み立てる。直し方の `hint` は訳さない）。表に無いコード・値が足りないときは null を返し、サーバーの文のまま出す。
-    - `format.ts`: 日時（`compact` `full` `precise` `time`）・相対時刻・数・並べる文を `Intl` で整える。日時はブラウザではなくサーバーの `timezone` で表示し、`datetime-local` の入力もその時刻として読む（`parseZonedInput`）。
+    - `format.ts`: 日時（`compact` `full` `precise` `time`）・相対時刻・数・並べる文を `Intl` で整える。日時はブラウザではなくサーバーの `timezone` で表示し、形は 24 時間・年/月/日の順（`2026/11/20 15:30`・`11/20 15:30`・`15:30`。`formatToParts` から組み立てる）、`datetime-local` の入力もその時刻として読む（`parseZonedInput`）。
     - 訳すのは表示の文字だけ。API に送る値（曜日の `月`〜`日` など）は訳さない。この時点で辞書に入っているのは、全体の枠（サイドバー・タブ・状態バー・右のパネル・トースト・様子の一言）の文字、経路名、画面が自分で組み立てる文、ブラウザ通知、曜日のラベル、テーマの切り替えの文、設定の画面の文字（`settings.*` `probe.status.*`）。引数の要らない項目のキーを変数で持つときは `PlainKey` 型を使う（関数の項目まで含む `DictKey` の和集合は、型で断られる）。各画面の文字は、その画面を作り直す段階で足す。サーバーから来る文字は訳していない。
   - `weekdays.ts`: 曜日の値（`月`〜`日`。サーバーの `src/tasks/schedule.ts` の `DAY_MAP` と対）と、ラベルの辞書キー。
   - `ZoneNote.tsx`: 日時を出す画面に添える、タイムゾーン名（例: `Asia/Tokyo (UTC+09:00)`）の小さな注記。
