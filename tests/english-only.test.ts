@@ -44,7 +44,7 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'src/memory/review.ts': { strings: ['/^(?:変更なし|No changes?)[\u{3002}.!\u{FF01}]?$/iu'], reason: 'isNoProposal: モデルが日本語で書いた「変更なし」（と句読点）も拾う' },
   'src/memory/store.ts': { strings: ['/[\\s\u{3000}]+/u'], reason: 'searchTerms: 記憶の検索の語を全角の空白でも区切る' },
   'src/tasks/schedule.ts': { strings: ['月'], reason: 'DAY_MAP の曜日の値（API の値。cronToFields の既定。画面の weekdays.ts と対）' },
-  'src/uploads/store.ts': { strings: ['<<<添付ファイル', '<<<添付ファイルここまで>>>'], reason: 'LEGACY_ATTACHMENT_FRAMES: 前からある発言の日本語の添付の枠を外す（安全: 外さないと添付の中身が利用者の依頼として自動承認の判定役に渡る）' },
+  'src/uploads/store.ts': { strings: ['\u{FF1C}', '\u{FF1E}', '<<<添付ファイル', '<<<添付ファイルここまで>>>'], reason: 'neutralizeMarkers の全角の ＜ ＞（添付の名前と中身の <<< >>> を全角にして枠の印の偽装を防ぐ。安全）と、LEGACY_ATTACHMENT_FRAMES: 前からある発言の日本語の添付の枠を外す（安全: 外さないと添付の中身が利用者の依頼として自動承認の判定役に渡る）' },
 };
 
 // 一時の一覧（段階 0 の途中の PR だけ）: まだ英語にしていないファイル → 残りの数（上の例外の文字列を除いた数。このファイルは次の PR で直す）。0-2a-3・0-2a-4・0-2b で減らし、0-2b で空にする。

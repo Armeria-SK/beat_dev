@@ -100,14 +100,17 @@ export class Uploads {
 export const ATTACHMENT_OPEN = storeText(DEFAULT_LANGUAGE, 'attachment.open');
 export const ATTACHMENT_CLOSE = storeText(DEFAULT_LANGUAGE, 'attachment.close');
 
+// 添付の名前と中身の <<< >>> を全角にして、枠の印（英語・前の日本語のどれも <<< で始まる）を偽装させない
+const neutralizeMarkers = (value: string): string => value.replace(/<{3,}/gu, m => '\u{FF1C}'.repeat(m.length)).replace(/>{3,}/gu, m => '\u{FF1E}'.repeat(m.length));
+
 export function attachmentBlock(upload: Upload, language: Language = DEFAULT_LANGUAGE): string {
   const text = upload.text ?? '';
   const cut = text.length > MAX_INLINE_CHARS;
   const t = (key: StoreMessageKey, params?: MessageParams) => storeText(language, key, params);
   return [
-    `${t('attachment.open')}: ${upload.name}（${upload.kind === 'pdf' ? t('attachment.pdf', { pages: upload.pages ?? '' }) : t('attachment.text')}）>>>`,
+    `${t('attachment.open')}: ${neutralizeMarkers(upload.name)}（${upload.kind === 'pdf' ? t('attachment.pdf', { pages: upload.pages ?? '' }) : t('attachment.text')}）>>>`,
     t('attachment.notice'),
-    text.slice(0, MAX_INLINE_CHARS),
+    neutralizeMarkers(text.slice(0, MAX_INLINE_CHARS)),
     cut ? t('attachment.cut', { max: MAX_INLINE_CHARS.toLocaleString('en-US'), total: text.length.toLocaleString('en-US') }) : '',
     t('attachment.close'),
   ].filter(Boolean).join('\n');
@@ -119,12 +122,11 @@ export const LEGACY_ATTACHMENT_FRAMES: ReadonlyArray<{ open: string; close: stri
   { open: '<<<添付ファイル', close: '<<<添付ファイルここまで>>>' },
 ];
 
+// 添付の枠は、利用者の文のあとにだけ付く（web/server.ts の送信）。最初の枠の開き（行の頭）から後ろを全部外す。
+// 閉じの印までで外すと、前から保存してある中身に閉じの印が書かれていたとき、その後ろが利用者の依頼として残るため
+const FRAME_START = new RegExp(`(?:^|\\n)(?:${[ATTACHMENT_OPEN, ...LEGACY_ATTACHMENT_FRAMES.map(frame => frame.open)].map(escapeRegExp).join('|')})`, 'u');
+
 export function stripAttachments(text: string): string {
-  let result = text;
-  for (const frame of [{ open: ATTACHMENT_OPEN, close: ATTACHMENT_CLOSE }, ...LEGACY_ATTACHMENT_FRAMES]) {
-    const open = escapeRegExp(frame.open);
-    const close = escapeRegExp(frame.close);
-    result = result.replace(new RegExp(`\\n*${open}[\\s\\S]*?${close}`, 'gu'), '');
-  }
-  return result.trim();
+  const start = FRAME_START.exec(text);
+  return (start ? text.slice(0, start.index) : text).trim();
 }

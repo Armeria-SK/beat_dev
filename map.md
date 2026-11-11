@@ -138,7 +138,7 @@
 - 使うもの: `node:sqlite` と `src/shared/notification-list.ts`、`src/shared/secret-slots.ts`、`src/shared/url.ts`
 
 ### 添付ファイル — `src/uploads`
-- テキスト・PDF・画像の保存（1 件 10MB まで、1 通に 5 件まで）と、本文に埋め込む添付ブロックの生成・取り除き。
+- テキスト・PDF・画像の保存（1 件 10MB まで、1 通に 5 件まで）と、本文に埋め込む添付ブロックの生成・取り除き。ブロックを作るとき、添付の名前と中身の `<<<` `>>>` を全角にして枠の印を偽装させない（`neutralizeMarkers`）。取り除く `stripAttachments` は、最初の枠の開き（英語と、前の日本語の `LEGACY_ATTACHMENT_FRAMES`）から後ろを全部外す（枠は利用者の文のあとにだけ付くため。前から保存してある中身に閉じの印があっても、その後ろが利用者の依頼として残らない）。
 - 入口: `src/uploads/store.ts`（`Uploads`）
 - 使うもの: `src/shared`（`pdf-text`）、`node:fs`
 
