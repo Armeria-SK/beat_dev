@@ -49,7 +49,7 @@ test('personaTexts（日本語の見出しのファイル）: 名前・呼び方
   const next = personaTexts(soul, user, 'en', { userName: 'やまだ', callMe: 'やまださん', botName: 'ミナト', style: 'friendly', styleNote: '絵文字は使わない' });
   assert.match(next.soul, /## 名前\n\nミナト\n\n## ユーザーとの関係/u);
   assert.match(next.soul, /## 話し方\n\nSpeak in a friendly, polite way\.[^\n]+\n\n絵文字は使わない\n\n## 大事にしていること/u);
-  assert.match(next.user, /## 基本情報\n\n- 名前: やまだ\n- Preferred name: やまださん\n- 主な使用言語: 日本語\n- 勤務先: 自宅\n\n## 関心/u);
+  assert.match(next.user, /## 基本情報\n\n- 名前: やまだ\n- 呼び方: やまださん\n- 主な使用言語: 日本語\n- 勤務先: 自宅\n\n## 関心/u);
   assert.equal(next.soul.split('## ').length, soul.split('## ').length, '節の数は変わらない');
   const restored = next.soul.replace('## 名前\n\nミナト\n', '## 名前\n\nClive\n').replace(/## 話し方\n\n[\s\S]*?\n\n## 大事にしていること/u, '## 話し方\n\n\n## 大事にしていること');
   assert.equal(restored, soul, '名前と話し方の節のほかは 1 文字も変わらない');
@@ -57,7 +57,7 @@ test('personaTexts（日本語の見出しのファイル）: 名前・呼び方
   assert.deepEqual(again, next, '同じ値でもう一度書いても同じ（重ならない）');
 });
 
-test('personaTexts（見出しは英語・日本語の両方を探す）: 英語の見出しを先に探し、なければ日本語の見出しの節を直し、どちらも無いときだけ最後に英語の見出しで足す', () => {
+test('personaTexts（見出しは英語・日本語の両方を探す）: 英語の見出しを先に探し、なければ日本語の見出しの節を直し、どちらも無いときだけ最後に足す（ファイルの見出しが日本語なら日本語、ほかは英語）', () => {
   const englishFiles = { soul: template('SOUL.md'), user: template('USER.md') };
   const fromEn = personaTexts(englishFiles.soul, englishFiles.user, 'en', { botName: 'Mina', userName: 'Taro', style: 'direct' });
   assert.match(fromEn.soul, /## Name\n\nMina\n\n## Relationship/u, '英語の見出しの節を直す');
@@ -67,7 +67,9 @@ test('personaTexts（見出しは英語・日本語の両方を探す）: 英語
   assert.equal(fromEn.user.split('## Basic information').length, 2, '基本情報の節は 1 つのまま');
 
   const neither = personaTexts('# SOUL\n\n## 自由な見出し\n\n中身\n', '# USER\n', 'en', { botName: 'Mina', style: 'calm', userName: 'Taro' });
-  assert.match(neither.soul, /## 自由な見出し\n\n中身\n\n## Name\n\nMina\n\n## Way of speaking\n\nSpeak calmly and concisely\./u, 'どちらの言語の見出しも無ければ、最後に英語の見出しで足し、ほかの節は触らない');
+  assert.match(neither.soul, /## 自由な見出し\n\n中身\n\n## 名前\n\nMina\n\n## 話し方\n\nSpeak calmly and concisely\./u, 'どちらの言語の見出しも無ければ、最後に足す。ファイルの見出しが日本語なので日本語の見出しで、ほかの節は触らない');
+  const englishNeither = personaTexts('# SOUL\n\n## Free heading\n\nBody\n', '', 'en', { botName: 'Mina' });
+  assert.match(englishNeither.soul, /## Free heading\n\nBody\n\n## Name\n\nMina\n$/u, 'ファイルの見出しが英語なら英語の見出しで足す');
   assert.match(neither.user, /## Basic information\n\n- Name: Taro\n$/u);
   const empty = personaTexts('', '', 'en', { userName: 'やまだ' });
   assert.match(empty.user, /## Basic information\n\n- Name: やまだ\n$/u, '空のファイルにも基本情報を作る（言語の行は足さない）');

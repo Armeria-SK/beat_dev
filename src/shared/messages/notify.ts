@@ -1,6 +1,6 @@
 import { defineMessages } from './define.ts';
 
-// 外の送り先（webhook）へ送る文と、送り先の失敗・上限を知らせる通知の文。送る文は設定の言語（languageOf）で選ぶ
+// 外の送り先（webhook）へ送る文と、送り先の失敗・上限を知らせる通知の文。送る文は英語
 const en = {
   'local_title.task_done': 'Clive: work on a local model finished',
   'local_title.task_waiting': 'Clive: work on a local model is waiting for a reply',

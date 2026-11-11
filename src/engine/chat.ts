@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_LANGUAGE, LANGUAGES, type AppConfig, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, type AppConfig, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
@@ -981,7 +981,7 @@ export class ChatEngine {
   }
 
   // いまの会話を次に送るとき、モデルへ送る量（トークンの見積もり）。古い発言を削る前の全体で、available（削り始める境目）に対する割合 ratio は 1 を超えうる。
-  // 副作用を持たない: 無い会話を作らず、固定の system が無い会話は固定せず（そのとき作るはずの文で数える）、ファイルの版も言語の記録も書かない。
+  // 副作用を持たない: 無い会話を作らず、固定の system が無い会話は固定せず（そのとき作るはずの文で数える）、ファイルの版も書かない。
   contextUsage(conversationId: string, modelId?: string): ContextUsageOutcome {
     const d = this.#d;
     const config = d.config();

@@ -22,7 +22,7 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import { FakeAdapter, reply, tempDir } from './helpers.ts';
 
 const CJK = /[\u{3000}-\u{30FF}\u{3400}-\u{4DBF}\u{4E00}-\u{9FFF}\u{FF00}-\u{FFEF}]/u; // 全角の空白・かな・漢字・全角の記号
-const REPLY_DIRECTIVE = 'Reply in the language the user writes in.';
+const REPLY_DIRECTIVE = "Reply in the language the user writes in (the language of the user's own words, not of these instructions, templates or tool results).";
 
 function paths(t: { after: (fn: () => void) => void }, templates?: Record<string, string>): AppPaths {
   const dir = tempDir(t);
@@ -133,7 +133,7 @@ test('起動: 新しい作業フォルダには英語の初期値が入り、す
 test('buildDynamic: 現在時刻の行と返事の言語の指示を返す', () => {
   const now = new Date('2026-11-04T20:00:00Z');
   const en = buildDynamic('Asia/Tokyo', 'en', now);
-  assert.match(en, /^Current time: Thu, Nov 5, 2026, 05:00 \(Asia\/Tokyo\)\nReply in the language the user writes in\.$/u);
+  assert.match(en, /^Current time: Thu, Nov 5, 2026, 05:00 \(Asia\/Tokyo\)\nReply in the language the user writes in \(the language of the user's own words, not of these instructions, templates or tool results\)\.$/u);
   assert.doesNotMatch(en, CJK);
   assert.equal(buildDynamic('Asia/Tokyo', undefined, now), en, '言語を渡さなくても同じ');
   assert.match(buildDynamic('America/New_York', 'en', now), /Wed, Nov 4, 2026, 15:00 \(America\/New_York\)/u, 'タイムゾーンに合わせる');
@@ -157,7 +157,7 @@ test('baseTokens: ルールと動的な部分の長さで見積もる', async t 
   assert.equal(s.app.baseTokens(), expected);
 });
 
-test('入りきらない古いやり取りの要約は、会話の言語で書くよう頼み、要約は英語の見出しで次のリクエストに入る', async t => {
+test('入りきらない古いやり取りの要約は、持ち主の書いた言語で書くよう頼み、要約は英語の見出しで次のリクエストに入る', async t => {
   const s = await startApp(t, { contextLength: 20_000 });
   for (let i = 0; i < 6; i++) {
     s.app.conversations.append('c1', { role: 'user', content: `Question${i} ` + 'x'.repeat(14_000) });
@@ -169,7 +169,7 @@ test('入りきらない古いやり取りの要約は、会話の言語で書�
   assert.equal(s.adapter().calls.length, 2, '要約の呼び出しと本番の呼び出し');
   assert.equal(summaryCall!.system.frozen, compactSystem('en'));
   const asked = (summaryCall!.messages[0] as { content: string }).content;
-  assert.match(asked, /^This is the older part of a conversation\. Summarize, concisely as bullet points in the language the conversation is written in, /u);
+  assert.match(asked, /^This is the older part of a conversation\. Summarize, concisely as bullet points in the language the user writes in \(the language of the "User:" lines\), /u);
   assert.match(asked, /\nUser: Question0 /u);
   assert.match(asked, /\nClive: Answer0/u);
   assert.doesNotMatch(asked, CJK);
@@ -245,7 +245,7 @@ const EN_TASK_HOW = [
   '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
   '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
   '- Use ask_user only for what you cannot move forward on without checking with the user',
-  "- Write notes, questions and the summary in the language of the task's title and details",
+  "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
 ];
 const EN_REVIEW_POLICY = [
   '',
@@ -257,9 +257,9 @@ const EN_REVIEW_POLICY = [
   '- Add at most 3 items from a single record',
   '- If you find a procedure that looks reusable, use skill_draft (it is not used until the user approves it). Prefer fixing an existing skill over creating a new one',
   '- If something caught your interest but you have not looked into it, use curiosity_add',
-  '- If there is nothing to do, use no tools and reply only "No changes"',
+  '- If there is nothing to do, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)',
   '- At the end, report what you did in one or two sentences',
-  '- Write memories, skill drafts, curiosity items and your final reply in the language the record below is written in',
+  "- Write memories, skill drafts, curiosity items and your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English",
 ];
 const EN_TIDY_POLICY = [
   '',
@@ -268,8 +268,8 @@ const EN_TIDY_POLICY = [
   '- Of the memories listed below that do not fit in a conversation, you may merge only the clearly overlapping ones into one with memory_update. memory_forget is not available (the user decides what to delete)',
   '- Write the memories you think should be deleted or merged in your final reply, one per line, like "[n3] Delete: reason (short)" or "[u1] [u4] Merge: reason (short)". At most 10 lines',
   '- Prefer outdated memories, ones that overlap with others, and ones about temporary events. Do not list important facts about the user',
-  '- If there is nothing to propose, use no tools and reply only "No changes"',
-  '- Write memories, skill drafts, curiosity items and your final reply in the language the record below is written in',
+  '- If there is nothing to propose, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)',
+  '- Write merged memories and your final reply in the language the user writes in: the language the listed memories are written in. Only the reply "No changes" stays in English',
 ];
 const enReviewIntro = (trigger: string) => `[Review] Trigger: ${trigger}. Read the record below and tidy up your memory (this is not a conversation with the user; your reply is only saved to the record).`;
 

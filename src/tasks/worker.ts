@@ -76,7 +76,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
       '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
       '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
       '- Use ask_user only for what you cannot move forward on without checking with the user',
-      "- Write notes, questions and the summary in the language of the task's title and details",
+      "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
     ],
     time: (ms, timezone) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms),
   },

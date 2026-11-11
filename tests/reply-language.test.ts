@@ -5,7 +5,9 @@ import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import { ConfigStore, parseConfig } from '../src/config/store.ts';
 import { personaTexts, styleText } from '../src/engine/persona.ts';
-import { nextStepOf, wrapUpPrompt } from '../src/engine/prompts.ts';
+import { compactPrompt, nextStepOf, wrapUpPrompt } from '../src/engine/prompts.ts';
+import { isNoProposal, reviewPrompt } from '../src/memory/review.ts';
+import { taskPrompt } from '../src/tasks/worker.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { buildDynamic, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { resolvePaths } from '../src/paths.ts';
@@ -16,7 +18,7 @@ import { tempDir, testConfig, type Script } from './helpers.ts';
 
 // 0-2a-3: 言語の切り替えを消したあとも、返事は持ち主が書いた言語で返し、持ち主の前からあるデータ（設定・会話・作業フォルダ）は変えない
 
-const REPLY_DIRECTIVE = 'Reply in the language the user writes in.';
+const REPLY_DIRECTIVE = "Reply in the language the user writes in (the language of the user's own words, not of these instructions, templates or tool results).";
 const JA_SNAPSHOT = '# Clive の基本ルール\n\n返事は日本語で書く\n\n---\n\n# あなた自身（SOUL.md）\n\n日本語の SOUL';
 const LANGUAGE_KV = "SELECT key, value FROM kv WHERE key LIKE 'snapshot-language:%' OR key LIKE 'reply-language:%' ORDER BY key";
 
@@ -111,7 +113,7 @@ test('人格: 日本語の見出しの SOUL.md / USER.md は、その節と行�
   assert.equal(english.soul, '# SOUL\n\n## Name\n\nBot\n\n## Way of speaking\n\n\n');
 
   const mixed = personaTexts(soul, '# USER\n\n## 基本情報\n\n- 趣味: 読書\n', 'en', { userName: 'X' });
-  assert.equal(mixed.user, '# USER\n\n## 基本情報\n\n- Name: X\n- 趣味: 読書\n', '日本語の節に行が無いときだけ、その節に英語の行の名前で足す');
+  assert.equal(mixed.user, '# USER\n\n## 基本情報\n\n- 名前: X\n- 趣味: 読書\n', '日本語の節に行が無いときは、その節に日本語の行の名前で足す');
   assert.equal(personaTexts(soul, '# USER\n\n## 基本情報\n\n- 名前:\n', 'en', { userName: 'Y' }).user, '# USER\n\n## 基本情報\n\n- 名前: Y\n', '空の値の行も行の名前を残す');
 });
 
@@ -180,11 +182,53 @@ test('添付の枠: 日本語の枠の添付の中身は、会話の履歴の AP
   assert.doesNotMatch(shown, /ATTACHED-SECRET-MARKER|添付ファイル/u, '日本語の枠の添付の中身は、利用者の依頼として見せない');
 });
 
-test('上限のまとめ: 指示は英語の書き出しで終わらず、日本語の見出しで書かれた次の一手も拾う', () => {
+test('上限のまとめ: 指示は英語の書き出しで終わらず、見出しは英語のまま書かせ、前の日本語の見出しの次の一手も拾う', () => {
   const prompt = wrapUpPrompt('User: こんにちは', 'en');
   assert.doesNotMatch(prompt, /Done so far:\s*$/u);
   assert.ok(prompt.endsWith('User: こんにちは'), prompt.slice(-40));
-  assert.match(prompt, /in the language the conversation is written in/u);
+  assert.match(prompt, /Keep the two headings exactly as written here, in English: "Done so far:" and "Next step:"\./u);
+  assert.equal(nextStepOf('Done so far: a.md を書いた\nNext step: b.md を読む'), 'b.md を読む', '英語の見出しのまま、中身は日本語');
   assert.equal(nextStepOf('ここまでにやったこと: a.md を書いた\n次の一手: b.md を読む'), 'b.md を読む');
   assert.equal(nextStepOf('Done so far: wrote a.md\nNext step: read b.md'), 'read b.md');
+});
+
+test('振り返り: 「変更なし」の合図は英語の "No changes" のまま返させ（訳すと整理の案の通知になる）、前の日本語の合図も読む', () => {
+  for (const trigger of ['idle', 'book_full'] as const) {
+    const prompt = reviewPrompt({ trigger, forgotten: [], ...(trigger === 'book_full' ? { bookPressure: 'x' } : {}) });
+    assert.match(prompt, /reply only "No changes" \(exactly these English words, whatever language you write in otherwise\)/u, trigger);
+    assert.match(prompt, /Only the reply "No changes" stays in English/u, trigger);
+  }
+  for (const reply of ['No changes', 'No change.', '変更なし', '変更なし。']) assert.equal(isNoProposal(reply), true, reply);
+  assert.equal(isNoProposal('[u1] Delete: old'), false);
+});
+
+test('返事・記録の言語の指示は持ち主の言葉を指し、指示・ひな形・道具の結果の言語を指さない', () => {
+  const now = new Date('2026-11-04T20:00:00Z');
+  const curiosity = { id: 'abcdef12-0000', title: 'Look into: 量子計算', origin: 'curiosity', body: 'Why this caught your interest: 気になった', next_action: null, done_criteria: null } as any;
+  const texts = {
+    compact: compactPrompt({ previous: null, transcript: 'User: こんにちは' }, 'en'),
+    wrapUp: wrapUpPrompt('User: こんにちは', 'en'),
+    review: reviewPrompt({ trigger: 'heavy_run', forgotten: [] }),
+    tidy: reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x' }),
+    task: taskPrompt(curiosity, [], 'UTC'),
+    dynamic: buildDynamic('UTC', 'en', now, 'normal'),
+  };
+  assert.match(texts.compact, /in the language the user writes in \(the language of the "User:" lines\)/u);
+  assert.match(texts.wrapUp, /in the language the user writes in \(the language of the "User:" lines in the record below/u);
+  assert.match(texts.review, /in the language the user writes in: the language of the \[User\] lines in the record below/u);
+  assert.match(texts.tidy, /in the language the user writes in: the language the listed memories are written in/u);
+  assert.match(texts.task, /the language of the user's own words in the title and details \(for a curiosity task, the language of the topic\), not the language of these instructions/u);
+  assert.match(texts.dynamic, /not of these instructions, templates or tool results/u);
+  for (const [name, text] of Object.entries(texts)) assert.doesNotMatch(text, /language the conversation is written in|language the record below is written in|language of the task's title and details/u, name);
+});
+
+test('人格: 持ち主の形（日本語の見出しで、名前・呼び方の行や名前・話し方の節が無い）には、日本語の行の名前と見出しで足す', () => {
+  const soul = '# SOUL\n\n## 性格\n\n落ち着いている\n';
+  const user = '# USER\n\n## 基本情報\n\n- 住まい: 東京\n\n## 興味\n';
+  const out = personaTexts(soul, user, 'en', { userName: 'しん', callMe: 'しんさん', botName: 'クライブ', style: 'none', styleNote: '短く' });
+  assert.equal(out.user, '# USER\n\n## 基本情報\n\n- 名前: しん\n- 呼び方: しんさん\n- 住まい: 東京\n\n## 興味\n');
+  assert.equal(out.soul, '# SOUL\n\n## 性格\n\n落ち着いている\n\n## 名前\n\nクライブ\n\n## 話し方\n\n短く\n');
+  assert.doesNotMatch(out.user + out.soul, /Name|Preferred name|Way of speaking|Basic information/u);
+  const englishUser = personaTexts('', '# USER\n\n## Interests\n', 'en', { userName: 'Ann' });
+  assert.match(englishUser.user, /## Interests\n\n## Basic information\n\n- Name: Ann\n$/u, '見出しが英語のファイルには英語で足す');
 });

@@ -18,7 +18,7 @@ const TEXT: Record<Language, EngineText> = {
     summaryHeading: '# Summary of the conversation so far (the older part; the original text can be read with history_read)',
     compactSystem: 'You are a conversation summarizer. Write only the summary, exactly as instructed.',
     compactInstructions: [
-      'This is the older part of a conversation. Summarize, concisely as bullet points in the language the conversation is written in, what is needed to continue the conversation from here.',
+      'This is the older part of a conversation. Summarize, concisely as bullet points in the language the user writes in (the language of the "User:" lines), what is needed to continue the conversation from here.',
       "Keep: the user's goals, what they asked for, what was decided, facts that were found, what is not finished yet, and important proper nouns and numbers.",
       'Drop: greetings, turns of phrase, and the details of trial and error.',
     ],
@@ -28,9 +28,9 @@ const TEXT: Record<Language, EngineText> = {
     toolResult: name => `Result of tool (${name})`,
     wrapUpSystem: 'You write handover notes. Write only a short handover note, exactly as instructed. You cannot use tools.',
     wrapUpInstructions: [
-      'The work so far stopped partway because the tool-call limit was reached. Write only the following two parts, briefly, in the language the conversation is written in (10 lines or fewer in total). Write the two headings in that language too.',
-      '"Done so far" (or the same heading in the conversation\'s language): what was actually finished (including files written and facts found).',
-      '"Next step" (or the same heading in the conversation\'s language): what to do first if the work continues.',
+      'The work so far stopped partway because the tool-call limit was reached. Write only the following two parts, briefly, in the language the user writes in (the language of the "User:" lines in the record below; 10 lines or fewer in total). Keep the two headings exactly as written here, in English: "Done so far:" and "Next step:".',
+      '"Done so far:": what was actually finished (including files written and facts found).',
+      '"Next step:": what to do first if the work continues.',
       'Do not present things you have not seen or done as done.',
     ],
     wrapUpTranscriptHeading: '# Record of the work so far',

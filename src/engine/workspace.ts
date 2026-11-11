@@ -83,7 +83,7 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
     locale: 'en-US',
     format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
-    reply: 'Reply in the language the user writes in.',
+    reply: "Reply in the language the user writes in (the language of the user's own words, not of these instructions, templates or tool results).",
     plan: 'You are in "plan mode". You cannot change files, run commands, or write memories or tasks (only tools that read, and reading the web, are available). Do not change anything: investigate if needed, then finish by presenting a plan as a numbered list of steps.',
   },
 };

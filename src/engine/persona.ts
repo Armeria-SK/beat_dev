@@ -60,24 +60,29 @@ export interface PersonaInput {
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
-interface Span { bodyStart: number; end: number }
+interface Span { bodyStart: number; end: number; nameIndex: number }
 
-// 見出し（## ...）は、英語の見出しを先に、なければ日本語の見出しも探す（持ち主の日本語のファイルも同じ節を直す）。足すときは英語の見出し。
+const JAPANESE_SCRIPT = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}/u;
+const hasJapaneseHeadings = (lf: string): boolean => [...lf.matchAll(/^#{1,6}[ \t]+(.+)$/gmu)].some(m => JAPANESE_SCRIPT.test(m[1]!));
+
+// 見出し（## ...）は、英語の見出しを先に、なければ日本語の見出しも探す（持ち主の日本語のファイルも同じ節を直す）。足すときは、ファイルの見出しが日本語なら日本語、そうでなければ英語。
 function findSection(lf: string, section: Section): Span | null {
-  for (const name of HEADINGS[section]) {
+  for (const [nameIndex, name] of HEADINGS[section].entries()) {
     const heading = new RegExp(`^##[ \\t]+${escapeRegExp(name)}[ \\t]*$`, 'mu').exec(lf);
     if (!heading) continue;
     const bodyStart = heading.index + heading[0].length + (lf[heading.index + heading[0].length] === '\n' ? 1 : 0);
     const next = /^#{1,2}[ \t]/mu.exec(lf.slice(bodyStart));
-    return { bodyStart, end: next ? bodyStart + next.index : lf.length };
+    return { bodyStart, end: next ? bodyStart + next.index : lf.length, nameIndex };
   }
   return null;
 }
 
+const nameIndexFor = (lf: string, span: Span | null): number => (span ? span.nameIndex : hasJapaneseHeadings(lf) ? 1 : 0);
+
 function setSectionBody(lf: string, section: Section, body: string): string {
   const span = findSection(lf, section);
   const text = body.trim();
-  if (!span) return `${lf.replace(/\n*$/u, '\n')}\n## ${HEADINGS[section][0]}\n\n${text}\n`;
+  if (!span) return `${lf.replace(/\n*$/u, '\n')}\n## ${HEADINGS[section][nameIndexFor(lf, span)]}\n\n${text}\n`;
   const before = lf.slice(0, span.bodyStart);
   const after = lf.slice(span.end);
   return `${before}\n${text ? `${text}\n` : ''}${after ? '\n' : ''}${after}`;
@@ -101,7 +106,7 @@ function setUserLines(lf: string, values: { name?: string | undefined; call?: st
       keep[at] = `${prefix}${prefix.endsWith(':') ? ' ' : ''}${value}`;
       return;
     }
-    const line = `- ${USER_LABELS[key][0]}: ${value}`;
+    const line = `- ${USER_LABELS[key][nameIndexFor(lf, span)]}: ${value}`;
     const nameAt = key === 'call' ? keep.findIndex(l => labelPattern('name').test(l)) : -1;
     if (nameAt >= 0) keep.splice(nameAt + 1, 0, line);
     else keep.unshift(line);

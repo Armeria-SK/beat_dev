@@ -15,7 +15,7 @@ import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_
 
 const ToolsSchema = ToolsConfigSchema();
 
-// code / params は、形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。画面は、これから画面の言語の文を作る（message は日本語の文）
+// code / params は、形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。画面は、これから画面の言語の文を作る（message はサーバーが書いた文）
 export interface ConfigIssue { path: string; message: string; code?: string; params?: MessageParams }
 
 // 文（場所: 内容）から場所と内容を取り出す。issues を渡されなかった ConfigError の代わり。場所が無い文は path が空になる

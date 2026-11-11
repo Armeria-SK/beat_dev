@@ -81,7 +81,7 @@ test('上限に達したら、道具なしで 1 回だけモデルを呼び、�
   const prompt = calls[2]!.messages;
   assert.deepEqual(prompt.map(m => m.role), ['user'], '道具の呼び出しの履歴は文字の記録にして 1 通で渡す（道具の定義が要らない）');
   assert.match((prompt[0] as { content: string }).content, /続きをやって[\s\S]*a\.md/u, '直近のやり取りが入る');
-  assert.match((prompt[0] as { content: string }).content, /"Done so far"[\s\S]*"Next step"/u, '何を書かせるかの指示が入る');
+  assert.match((prompt[0] as { content: string }).content, /"Done so far:"[\s\S]*"Next step:"/u, '何を書かせるかの指示が入る');
   assert.ok(s.events.some(e => e.type === 'warning' && e.code === 'max_iterations'), '画面のお知らせも残す');
   const run = s.app.runs.get(runId)!;
   assert.deepEqual([run.ok, JSON.parse(run.flags)], [1, ['max_iterations']]);
