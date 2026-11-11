@@ -150,7 +150,7 @@ test('保存の合流: タグ・順番・フックのような一覧は、1 つ�
   assert.equal(ok.config.tools.shell.enabled, false);
 });
 
-test('保存の合流: キーの削除（auto = language を消す）も、先に変えられていたら衝突', () => {
+test('保存の合流: キーの削除も、先に変えられていたら衝突（変えられていなければ消える）', () => {
   const saved = sample();
   const draft = structuredClone(saved);
   delete draft.language;
