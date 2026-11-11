@@ -88,6 +88,13 @@ for (const theme of THEMES) {
   });
 }
 
+test('テーマに関わらない値の規則（:root だけを選ぶもの）は var( を含まない（テーマの値を指すものはテーマの規則に置く。ここに置くと見本がページの色になる）', () => {
+  const fixedRules = rules.filter(rule => rule.selectors.length === 1 && rule.selectors[0] === ':root');
+  assert.equal(fixedRules.length, 1, ':root だけを選ぶ規則が 1 つではない');
+  const refs = [...fixedRules[0]!.decls].filter(([, value]) => value.includes('var(')).map(([name]) => name);
+  assert.deepEqual(refs, []);
+});
+
 test('どのテーマも [data-theme="<名前>"] だけで選ぶ規則を 1 つ持ち（light は :root も）、どれも同じトークンの名前の組を書く', () => {
   const themed = [...themeRule('light').decls.keys()].sort();
   assert.ok(themeRule('light').selectors.includes(':root'), 'light の規則が :root も選んでいない');
