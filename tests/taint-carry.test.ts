@@ -37,7 +37,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { maxItera
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;
@@ -242,7 +242,7 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));

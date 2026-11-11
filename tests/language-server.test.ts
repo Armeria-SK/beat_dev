@@ -50,7 +50,7 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   if (options.language) config.language = options.language;
@@ -261,7 +261,7 @@ test('API: タスクの操作の失敗は、コードとパラメータを添え
 
 // ── モデルの確認・プロバイダのエラー ──
 
-const probeModel = (over: Partial<ModelConfig> = {}): ModelConfig => ({ id: 'm', provider: 'p', model: 'test-model', contextLength: 8192, minContext: 1024, maxOutputTokens: 512, toolMode: 'native', vision: false, ...over });
+const probeModel = (over: Partial<ModelConfig> = {}): ModelConfig => ({ id: 'm', provider: 'p', model: 'test-model', contextLength: 8192, minContext: 1024, maxOutputTokens: 512, vision: false, ...over });
 const compatProvider = (baseUrl: string, over: Partial<ProviderConfig> = {}): ProviderConfig => ({ id: 'p', kind: 'openai_compatible', baseUrl, maxParallel: 1, timeoutMs: 10_000, ...over });
 
 test('モデルの確認: 日本語の文は今までの出力と一字も違わない', () => {
@@ -471,9 +471,9 @@ test('エンジンの失敗（英語）: 使えるモデルが無い・ツール
   const result = await s.app.engine.wait(outcome.runId)!;
   assert.ok(result && !result.ok);
   if (result && !result.ok) {
-    assert.equal(result.errorMessage, 'The model could not call tools in a valid form (3 times in a row). Switch to a model that handles tools well, or set toolMode to json_fallback');
+    assert.equal(result.errorMessage, 'The model could not call tools in a valid form (3 times in a row). Switch to a model that handles tools well, or reduce the number of tools with maxTools');
     assert.equal(result.errorCode, 'engine.tool.invalid_streak');
-    assert.equal(result.detail?.hint, 'Set models[].toolMode to json_fallback, or reduce the number of tools with maxTools');
+    assert.equal(result.detail?.hint, 'Reduce the number of tools with maxTools');
   }
   const toolResults = events.filter(e => e.type === 'tool.result');
   assert.ok(toolResults.length >= 1);

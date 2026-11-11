@@ -33,7 +33,7 @@ async function setup(t: { after: (fn: () => void) => void }, model: Partial<Mode
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...model }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.tools.maxIterations = maxIterations;
   writeFileSync(paths.config, JSON.stringify(config));
@@ -223,17 +223,6 @@ test('本文に書かれたツール呼び出し（<tool_call>）も拾って実
   assert.equal(readFileSync(join(s.paths.workspace, 't.md'), 'utf8'), '本文から');
   assert.match(s.app.runs.get(runId)!.flags, /text_tool_calls/u);
   assert.equal(s.app.conversations.messages('c1')[1]!.text, '作ります');
-});
-
-test('json_fallback のモデルには API のツールを渡さず、使い方を system に書く', async t => {
-  const s = await setup(t, { toolMode: 'json_fallback' });
-  s.adapter().scripts.push(textOnly('<tool_call>{"name": "file_list", "arguments": {}}</tool_call>'), reply('一覧しました'));
-  const { done } = await s.send('一覧して');
-  assert.ok((await done).ok);
-  const [first, second] = s.adapter().calls;
-  assert.equal(first!.tools.length, 0);
-  assert.match(first!.system.dynamic, /使える道具[\s\S]*file_list/u);
-  assert.deepEqual(second!.messages.map(m => m.role), ['user', 'assistant', 'user'], 'role: tool を送らない');
 });
 
 test('maxTools で渡すツールを絞れる', async t => {
@@ -468,20 +457,6 @@ test('道具の結果の画像: 手元のモデルを選んだ会話の道具の
   const second = s.adapter().calls[1]!.messages.at(-1)!;
   assert.deepEqual(second.role === 'tool' ? second.images : undefined, [PNG], '手元のモデルには届く');
   assert.equal(s.adapters.get('remote')?.calls.length ?? 0, 0, '外の提供元は一度も呼ばれない（画像はどこへも新しくは出ない）');
-});
-
-test('道具の結果の画像: 本文で道具を呼ぶモデル（json_fallback）には、道具の結果をまとめた利用者の発言の images として渡る', async t => {
-  const s = await startApp(t, {
-    models: [fakeModel('m1', { toolMode: 'json_fallback', vision: true })],
-    tools: [imageTool('img_ok', () => ({ content: '画像を見せます', images: [PNG] }))],
-  });
-  s.adapter().scripts.push(textOnly('<tool_call>{"name": "img_ok", "arguments": {}}</tool_call>'), reply('見ました'));
-  await runImages(s, '画像を見て');
-  const second = s.adapter().calls[1]!.messages;
-  assert.deepEqual(second.map(m => m.role), ['user', 'assistant', 'user'], 'role: tool は送らない');
-  const last = second.at(-1)!;
-  assert.deepEqual(last.role === 'user' ? last.images : undefined, [PNG], '道具の結果をまとめた利用者の発言に画像がある');
-  assert.match(last.content, /img_ok」の結果/u);
 });
 
 test('見積もり: 道具の結果の画像は 1 枚ごとに IMAGE_TOKENS 増える（利用者の発言の画像と同じ数え方）。画像が無ければ今までどおり', () => {

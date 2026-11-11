@@ -24,8 +24,8 @@ function sample(): Config {
       { id: 'claude', kind: 'anthropic', maxParallel: 2, timeoutMs: 120000 },
     ],
     models: [
-      { id: 'big', provider: 'local', model: 'qwen', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false },
-      { id: 'sonnet', provider: 'claude', model: 'claude-sonnet', minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: true },
+      { id: 'big', provider: 'local', model: 'qwen', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, vision: false },
+      { id: 'sonnet', provider: 'claude', model: 'claude-sonnet', minContext: 8192, maxOutputTokens: 4096, vision: true },
     ],
     routing: { chat: ['big', 'sonnet'], background: ['big'], retriesPerModel: 1 },
     tools: { deny: ['.env'], shell: { enabled: true, allow: ['git status'] } },

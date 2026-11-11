@@ -34,7 +34,6 @@ export const ModelConfig = Type.Object({
   contextLength: Type.Optional(Type.Integer({ minimum: 1024, maximum: 10_000_000 })),
   minContext: Type.Integer({ minimum: 1024, maximum: 10_000_000, default: 65536 }),
   maxOutputTokens: Type.Integer({ minimum: 256, maximum: 200_000, default: 8192 }),
-  toolMode: Type.Union([Type.Literal('native'), Type.Literal('json_fallback')], { default: 'native' }),
   maxTools: Type.Optional(Type.Integer({ minimum: 0, maximum: 128 })),
   vision: Type.Boolean({ default: false }),
   temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),

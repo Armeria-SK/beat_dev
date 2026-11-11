@@ -41,7 +41,7 @@ async function setup(t: { after: (fn: () => void | Promise<void>) => void }, mod
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 131072, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...model }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 131072, minContext: 4096, maxOutputTokens: 1024, vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;

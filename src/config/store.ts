@@ -10,6 +10,7 @@ import { mcpToolName, MCP_NAME_MAX } from '../mcp/names.ts';
 import { isSecretEnvName, takenKeyEnvs } from '../shared/provider-key.ts';
 import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
 import { friendlyIssue } from './friendly.ts';
+import { dropLegacy } from './legacy.ts';
 import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
@@ -226,7 +227,7 @@ function issuePath(pointer: string, raw: unknown): string {
 }
 
 export function parseConfig(raw: unknown): AppConfig {
-  const withDefaults = Value.Default(AppConfig, Value.Clone(raw));
+  const withDefaults = Value.Default(AppConfig, Value.Clone(dropLegacy(raw).config));
   if (!Value.Check(AppConfig, withDefaults)) {
     // 正規表現や「Expected string to match …」はそのまま見せない。項目ごとの友好的な文（src/shared/messages/config.ts）にする
     const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('ja', friendly.code, friendly.params) : e.message }; });
@@ -268,10 +269,13 @@ export class ConfigStore {
   #cache: AppConfig | undefined;
   #stamp = '';
   #lastError: ConfigError | undefined;
+  #dropped: readonly string[] = [];
   readonly path: string;
   constructor(path: string) { this.path = path; }
 
   get lastError(): ConfigError | undefined { return this.#lastError; }
+
+  get dropped(): readonly string[] { return this.#dropped; }
 
   current(): AppConfig {
     try {
@@ -301,6 +305,7 @@ export class ConfigStore {
       throw new ConfigError(`設定ファイル ${this.path} が JSON として壊れています。${this.path}.bak に退避しました。直してから起動し直してください`);
     }
     const config = parseConfig(raw);
+    this.#dropped = dropLegacy(raw).dropped;
     this.#cache = config;
     this.#stamp = stamp;
     return structuredClone(config);
@@ -313,6 +318,7 @@ export class ConfigStore {
     }
     atomicWriteFile(this.path, `${JSON.stringify(parsed, null, 2)}\n`);
     this.#cache = parsed;
+    this.#dropped = [];
     this.#stamp = fileStamp(this.path);
     this.#lastError = undefined;
     return structuredClone(parsed);

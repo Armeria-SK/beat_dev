@@ -140,7 +140,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
 }
 
 const model = (id: string, provider: string, contextLength: number | undefined, over: Partial<ModelConfig> = {}): ModelConfig => ({
-  id, provider, model: id, ...(contextLength === undefined ? {} : { contextLength }), minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over,
+  id, provider, model: id, ...(contextLength === undefined ? {} : { contextLength }), minContext: 4096, maxOutputTokens: 1024, vision: false, ...over,
 });
 
 // 容量が書かれていない（Anthropic）モデルで、確認の結果にも長さが無い場合

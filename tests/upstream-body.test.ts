@@ -51,7 +51,7 @@ test('Anthropic: 想定外のエラーも、API のエラーも、本文を文�
 });
 
 const provider = (url: string): ProviderConfig => ({ id: 'p', kind: 'openai_compatible', baseUrl: `${url}/v1`, maxParallel: 1, timeoutMs: 10_000 });
-const model: ModelConfig = { id: 'm', provider: 'p', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false };
+const model: ModelConfig = { id: 'm', provider: 'p', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false };
 
 test('モデルの確認: 相手のサーバーが 500 や 400 で本文を返しても、確認の結果の文にも値にも本文は入らない', async t => {
   for (const status of [400, 401, 404, 500]) {
@@ -69,8 +69,8 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }, { id: 'spare', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:2/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [
-    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false },
-    { id: 'm2', provider: 'spare', model: 'y', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false },
+    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false },
+    { id: 'm2', provider: 'spare', model: 'y', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false },
   ];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 1 };
   config.memory.review = false;

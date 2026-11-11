@@ -33,7 +33,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
@@ -139,7 +139,7 @@ test('切れた呼び出しのあとに正しく終われば、続けて切れ�
 // ── 提供元 ───────────────────────────────────────────────
 
 const model = (over: Partial<ModelConfig> = {}): ModelConfig => ({
-  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over,
+  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, vision: false, ...over,
 });
 const request = (m: ModelConfig): ModelRequest => ({
   model: m, system: { frozen: 'あなたは Clive', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],

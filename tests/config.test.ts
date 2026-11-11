@@ -46,7 +46,7 @@ test('形式の誤りは場所つきで返す', () => {
 test('整合性の問題をまとめて返す', () => {
   const config = testConfig();
   config.models.push({ ...config.models[0]!, provider: 'nope' });
-  config.models.push({ id: 'local2', provider: 'ollama', model: 'x', minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: false });
+  config.models.push({ id: 'local2', provider: 'ollama', model: 'x', minContext: 65536, maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   assert.throws(() => parseConfig(config), (e: unknown) => {
@@ -126,7 +126,7 @@ test('doctor: モデルがあっても使えないときは、モデルが 0 個
   mkdirSync(dir, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'dead', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 5000 }];
-  config.models = [{ id: 'm', provider: 'dead', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'dead', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   writeFileSync(join(dir, 'config.json'), JSON.stringify(config));
   const run = spawnSync(process.execPath, ['src/main.ts', 'doctor', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
@@ -149,9 +149,9 @@ test('内容の問題は ID で書いた場所（path）つきで返し、文（
   config.providers.push({ id: 'oa', kind: 'openai_compatible', maxParallel: 1, timeoutMs: 60_000 });
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   config.models.push({ ...config.models[0]! });
-  config.models.push({ id: 'orphan', provider: 'nope', model: 'x', minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false });
-  config.models.push({ id: 'no-ctx', provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false });
-  config.models.push({ id: 'too-big', provider: 'ollama', model: 'x', contextLength: 8192, minContext: 4096, maxOutputTokens: 8192, toolMode: 'native', vision: false });
+  config.models.push({ id: 'orphan', provider: 'nope', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
+  config.models.push({ id: 'no-ctx', provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
+  config.models.push({ id: 'too-big', provider: 'ollama', model: 'x', contextLength: 8192, minContext: 4096, maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.tools.shell.allow = ['npm test', 'npm test; rm -rf .'];
   config.server.origins = ['http://a.example/path'];
@@ -189,7 +189,7 @@ test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す
 
 test('番号が指す項目に id が無い・一覧の形が壊れているときは、番号のままにする（落ちない）', () => {
   const raw = JSON.parse(JSON.stringify(testConfig()));
-  raw.models.push({ provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false });
+  raw.models.push({ provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
   const paths = issuesOf(raw).issues.map(i => i.path);
   assert.ok(paths.some(p => p === 'models.3.id' || p.startsWith('models.3')), paths.join(', '));
   const broken = issuesOf({ ...JSON.parse(JSON.stringify(testConfig())), models: 'none' });

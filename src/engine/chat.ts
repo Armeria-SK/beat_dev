@@ -31,7 +31,7 @@ import { modelEfforts } from './efforts.ts';
 import { ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
 import { isLocalModel, isLocalPinned, isLocalProvider } from './local-model.ts';
 import type { ModelStatus } from './status.ts';
-import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
+import { extractToolCalls, looksLikeTextToolCall } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
 import { estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
@@ -859,7 +859,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode });
+        const { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode });
         const toolNames = new Set(toolDefs.map(t => t.name));
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
@@ -874,7 +874,7 @@ export class ChatEngine {
         }
         // 外す発言が多ければ、外す部分を前の要約に足して要約し直してから組み立て直す（同じ実行の中でも、外す発言が増えたらまた。
         // 1 回の実行で MAX_COMPACTIONS_PER_RUN 回まで。要約に失敗したら、その実行は外すだけにして、要約を呼び続けない）
-        if (fitted.removed >= COMPACT_MIN_MESSAGES && !fallbackMode && !p.compaction.failed && p.compaction.count < MAX_COMPACTIONS_PER_RUN) {
+        if (fitted.removed >= COMPACT_MIN_MESSAGES && !p.compaction.failed && p.compaction.count < MAX_COMPACTIONS_PER_RUN) {
           p.compaction.count++;
           const removed = stored.slice(0, fitted.removed);
           const ok = await this.#compact({ route, adapter, runId: p.runId, conversationId: p.conversationId, removed, previous: conversation?.summary ?? null, capacity, signal: p.signal });
@@ -929,10 +929,10 @@ export class ChatEngine {
         } finally { release?.(); }
 
         // 本文に書かれたツール呼び出しを拾う（ツール非対応のモデル、または tool_calls を使わずに本文に書いたモデル）
-        if (!toolCalls.length && toolNames.size && (fallbackMode || looksLikeTextToolCall(text))) {
+        if (!toolCalls.length && toolNames.size && looksLikeTextToolCall(text)) {
           const parsed = extractToolCalls(text, toolNames);
           if (parsed.calls.length) {
-            toolCalls.push(...(fallbackMode ? parsed.calls.slice(0, 1) : parsed.calls));
+            toolCalls.push(...parsed.calls);
             text = parsed.text;
             if (!p.flags.includes('text_tool_calls')) p.flags.push('text_tool_calls');
           }
@@ -959,7 +959,6 @@ export class ChatEngine {
     const localOnly = p.kind === 'chat' && isLocalPinned(config, d.conversations.get(p.conversationId)?.model_id);
     const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly);
     const specs = ToolRegistry.specs(toolDefs);
-    const fallbackMode = model.toolMode === 'json_fallback';
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
     const available = contextAvailable(capacity, model);
     const conversation = d.conversations.get(p.conversationId);
@@ -967,14 +966,13 @@ export class ChatEngine {
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, checklist, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     let history = stored.map(m => m.message);
-    if (fallbackMode) history = toJsonFallbackHistory(history, language);
     if (this.#frozenLanguage(p.conversationId) !== language || this.#lastReplyLanguage(p.conversationId) !== language) history = withReplyReminder(history, language);
-    const apiTools = fallbackMode ? [] : specs;
+    const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
-    return { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor };
+    return { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor };
   }
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、

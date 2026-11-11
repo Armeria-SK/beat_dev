@@ -155,9 +155,6 @@ export function ModelsSection({ draft, saved, update, problems, probes, probing,
           <FieldRow label={t('settings.models.fieldMaxOutput')} changed={changed('maxOutputTokens')} path={`${base}maxOutputTokens`} error={errorFor(problems, `${base}maxOutputTokens`) ?? errorFor(problems, base.slice(0, -1))}>
             <NumberField value={selected.maxOutputTokens as number} label={t('settings.models.fieldMaxOutput')} unit={t('settings.unit.tokens')} width="130px" min={256} onChange={v => edit({ maxOutputTokens: v })} />
           </FieldRow>
-          <FieldRow label={t('settings.models.fieldToolMode')} desc={t('settings.models.fieldToolModeDesc')} changed={changed('toolMode')} path={`${base}toolMode`}>
-            <SegField value={selected.toolMode as string} label={t('settings.models.fieldToolMode')} options={[{ value: 'native', label: t('settings.models.toolNative') }, { value: 'json_fallback', label: t('settings.models.toolText') }]} onChange={v => edit({ toolMode: v })} />
-          </FieldRow>
           <FieldRow label={t('settings.models.fieldMaxTools')} changed={changed('maxTools')} path={`${base}maxTools`}>
             <NumberField value={selected.maxTools as number | undefined} optional label={t('settings.models.fieldMaxTools')} unit={t('settings.unit.items')} min={0} max={128} onChange={v => edit({ maxTools: v })} />
           </FieldRow>

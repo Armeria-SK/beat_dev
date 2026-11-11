@@ -89,7 +89,7 @@ test('実行の記録（本物の提供元の窓口）: サーバーが本文に
     mkdirSync(paths.data, { recursive: true });
     const config = testConfig();
     config.providers = [{ id: 'svc', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'SVC_KEY', maxParallel: 1, timeoutMs: 10_000 }];
-    config.models = [{ id: 'm', provider: 'svc', model: 'x-name', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+    config.models = [{ id: 'm', provider: 'svc', model: 'x-name', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
     config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
     config.memory.review = false;
     writeFileSync(paths.config, JSON.stringify(config));

@@ -134,6 +134,7 @@ export class App {
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
+    this.#reportDropped();
     ensureWorkspace(this.paths, languageOf(config));
     this.bootServer = structuredClone(config.server);
     this.#warnIgnoredPolicies(config);
@@ -267,6 +268,7 @@ export class App {
   }
 
   #applied = '';
+  #droppedReported = '';
 
   // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
   #warnIgnoredPolicies(config: AppConfig): void {
@@ -306,7 +308,14 @@ export class App {
       this.worker?.poke();
     }
     this.#applied ||= json;
+    this.#reportDropped();
     return config;
+  }
+
+  #reportDropped(): void {
+    const dropped = this.configStore.dropped.join(', ');
+    if (dropped && dropped !== this.#droppedReported) this.log(`[INFO] Ignored settings that are no longer used: ${dropped}`);
+    this.#droppedReported = dropped;
   }
 
   baseTokens(): number {

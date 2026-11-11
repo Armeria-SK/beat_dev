@@ -21,7 +21,7 @@ import { ProviderError } from '../src/providers/types.ts';
 import { FakeAdapter, fail, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function localModel(id: string, over: Partial<ModelConfig> = {}): ModelConfig {
-  return { id, provider: 'fake', model: id, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over };
+  return { id, provider: 'fake', model: id, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...over };
 }
 
 async function setup(t: { after: (fn: () => void) => void }, options: { models?: ModelConfig[]; scripts?: Script[] } = {}) {

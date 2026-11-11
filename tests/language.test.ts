@@ -13,7 +13,6 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder } from '../src/engine/prompts.ts';
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import type { ChatMessage } from '../src/engine/types.ts';
-import { jsonFallbackInstructions, toJsonFallbackHistory } from '../src/engine/toolcall-parse.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildDynamic, buildSnapshot, defaultTexts, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { bookPressureText, reviewPrompt, transcriptOf, type ReviewTrigger } from '../src/memory/review.ts';
@@ -50,7 +49,7 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   options.before?.(p.workspace);
   const config = defaultConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: options.contextLength ?? 65536, minContext: 1024, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: options.contextLength ?? 65536, minContext: 1024, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   if (options.language) config.language = options.language;
   writeFileSync(p.config, JSON.stringify(config));
@@ -342,8 +341,6 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
     compact: compactPrompt({ previous: 'Before', transcript: 'User: hi' }, 'en'),
     speakers: ['user', 'assistant', 'tool'].map(role => compactSpeaker({ role, name: 'file_list' }, 'en')).join(' '),
     task: taskPrompt(task, events, 'Asia/Tokyo', 'en'),
-    fallback: jsonFallbackInstructions([{ name: 'file_list', description: 'List files', inputSchema: { type: 'object' } }], 'en'),
-    fallbackHistory: JSON.stringify(toJsonFallbackHistory([{ role: 'tool', name: 'file_list', content: 'x', isError: true, toolCallId: '1' }], 'en')),
     transcript: transcriptOf(stored, 15_000, 'en'),
     pressure: bookPressureText(pressure, 'en'),
     curiosity: Object.values(curiosityText('en')).map(v => (typeof v === 'function' ? v('Topic') : v)).join('\n'),
@@ -359,7 +356,6 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
   assert.match(texts.task!, /^\[Task run\]/u);
   assert.match(texts.task!, /Where it came from: From your curiosity/u);
   assert.match(texts['review:book_full']!, /Memory usage\nMemory totals about 900 tokens, over the guideline for what goes into a conversation \(about 500 tokens\)\. 2 memories do not fit in a conversation\. Propose merging overlapping memories and trimming old ones\nMemories that do not fit \(oldest first\):\n- \[u1\] Old fact\n- \[n2\] Old lesson/u);
-  assert.match(texts.fallbackHistory!, /\[Result of tool \\"file_list\\" \(error\)\]/u);
 });
 
 test('決まり文: 言語を渡さない呼び出しは日本語のまま', () => {
@@ -367,7 +363,6 @@ test('決まり文: 言語を渡さない呼び出しは日本語のまま', () 
   assert.equal(renderBooks(memories), renderBooks(memories, 'ja'));
   assert.match(renderBooks(memories), /^# 覚えていること（記憶）\n\n## ユーザーについての記憶\n- \[u1\] 紅茶$/u);
   assert.match(reviewPrompt({ trigger: 'idle', forgotten: [] }), /^\[振り返り\] きっかけ: 会話が途切れた。/u);
-  assert.match(jsonFallbackInstructions([{ name: 'a', description: 'b', inputSchema: {} }]), /^# 使える道具/u);
 });
 
 // ── 日本語の決まり文は、段階 12a の前（0250344）の出力と一字も変えない ──
@@ -500,35 +495,7 @@ test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字
   ].join('\n'));
 });
 
-test('日本語の固定文: json_fallback の説明・スキル一覧・好奇心のタスクの文は 0250344 の出力と一字も違わない', t => {
-  const specs = [
-    { name: 'file_list', description: '一覧', inputSchema: { type: 'object' } },
-    { name: 'memory_save', description: '記憶する', inputSchema: { type: 'object', properties: { body: { type: 'string' } } } },
-  ];
-  const expectedFallback = [
-    '# 使える道具',
-    '道具を使うときは、返事の中に次の形式で書いてください（1回の返事で1つまで）。',
-    '<tool_call>{"name": "道具の名前", "arguments": { ... }}</tool_call>',
-    '道具の結果は次のメッセージで渡します。道具を使わないときは、普通に返事を書いてください。',
-    '- file_list: 一覧',
-    '  引数（JSON Schema）: {"type":"object"}',
-    '- memory_save: 記憶する',
-    '  引数（JSON Schema）: {"type":"object","properties":{"body":{"type":"string"}}}',
-  ].join('\n');
-  assert.equal(jsonFallbackInstructions(specs), expectedFallback);
-  assert.equal(jsonFallbackInstructions(specs, 'ja'), expectedFallback);
-  assert.equal(jsonFallbackInstructions([]), '');
-  assert.deepEqual(toJsonFallbackHistory([
-    { role: 'user', content: 'a' },
-    { role: 'assistant', content: 'b', toolCalls: [{ id: '1', name: 'file_list', arguments: {} }] },
-    { role: 'tool', name: 'file_list', content: 'x', isError: true, toolCallId: '1' },
-    { role: 'tool', name: 'file_list', content: 'y', isError: false, toolCallId: '2' },
-  ]), [
-    { role: 'user', content: 'a' },
-    { role: 'assistant', content: 'b\n<tool_call>{"name":"file_list","arguments":{}}</tool_call>' },
-    { role: 'user', content: '[道具「file_list」の結果（エラー）]\nx\n\n[道具「file_list」の結果]\ny' },
-  ]);
-
+test('日本語の固定文: スキル一覧・好奇心のタスクの文は 0250344 の出力と一字も違わない', t => {
   const p = paths(t);
   mkdirSync(p.workspace, { recursive: true });
   const db = openDatabase(':memory:', MIGRATIONS);
@@ -729,7 +696,7 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   mkdirSync(p.data, { recursive: true });
   const config = defaultConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', server: 'generic', baseUrl: `${model.url}/v1`, maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 1024, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 1024, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   writeFileSync(p.config, JSON.stringify(config));
   const app = new App({ paths: p, databasePath: ':memory:', log: () => undefined, workerTimers: false });

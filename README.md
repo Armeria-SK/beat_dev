@@ -206,13 +206,14 @@ Clive は毎回、system（ルール・人格・記憶の枠・道具の説明�
   { "id": "local", "kind": "openai_compatible", "server": "generic", "baseUrl": "http://127.0.0.1:8080/v1", "apiKeyEnv": "LOCAL_LLM_API_KEY", "maxParallel": 1, "timeoutMs": 600000 }
 ],
 "models": [
-  { "id": "local-model", "provider": "local", "model": "<サーバーでのモデル名>", "contextLength": 65536, "minContext": 32768, "maxOutputTokens": 8192, "toolMode": "native", "vision": false }
+  { "id": "local-model", "provider": "local", "model": "<サーバーでのモデル名>", "contextLength": 65536, "minContext": 32768, "maxOutputTokens": 8192, "vision": false }
 ],
 "routing": { "chat": ["local-model"], "background": ["local-model"], "retriesPerModel": 2 }
 ```
 
 - キーが要らないサーバーなら `apiKeyEnv` は書かない。要るなら、画面の「設定」›「プロバイダ」の「API キー」の欄に貼り付けるのがいちばん簡単です（`.env` に `CLIVE_<プロバイダの ID>_API_KEY=...` の形で書き、`apiKeyEnv` も自動で設定します。すでに `apiKeyEnv` があればその名前を使います）。自分で `.env` に `LOCAL_LLM_API_KEY=...` のように書いてもかまいません
-- ツール呼び出しが苦手なモデルは、`toolMode` を `json_fallback` にするか、`maxTools` で渡す道具の数を絞る
+- ツール呼び出しが苦手なモデルは、`maxTools` で渡す道具の数を絞る
+- 古い設定の鍵（`toolMode` など）は読み飛ばし、起動のログに 1 行出す（`config.json` は書き換えません。次に画面から設定を保存したとき、その鍵の無い形で書かれます）
 
 ## Clive の言語（日本語・英語）
 
@@ -224,7 +225,7 @@ Clive は毎回、system（ルール・人格・記憶の枠・道具の説明�
 
 - 値は `"ja"`（日本語）か `"en"`（英語）。書かないときは日本語です。再起動は要りません。画面の「設定」›「見た目」の「表示の言語」（ブラウザに合わせる / 日本語 / English）でも変えられます
 - 画面の言語: `language` があればそれに従い、無ければブラウザの言語に従います（「ブラウザに合わせる」は `language` を消すので、返事は日本語のままです）。`language` が無いまま画面が日本語以外になるときは、「Clive の返事も英語にしますか」と 1 回だけ尋ねます（答えはこのブラウザに覚えます。「はい」なら `language` を `en` にします）
-- 変わるもの: 返事の言語、ルール（`templates/rules.ja.md` / `templates/en/rules.md`）、SOUL / USER / CURIOSITY の初期値、モデルに渡す決まり文（タスクの実行・振り返り・会話の要約・道具の呼び方の指示、記憶やスキルの見出し）、現在時刻の行
+- 変わるもの: 返事の言語、ルール（`templates/rules.ja.md` / `templates/en/rules.md`）、SOUL / USER / CURIOSITY の初期値、モデルに渡す決まり文（タスクの実行・振り返り・会話の要約、記憶やスキルの見出し）、現在時刻の行
 - いつから変わるか
   - 返事の言語の指示は、毎回組み立てる「動的な部分」に入れてあります。だから、すでにある会話にも、言語を変えた次のリクエストから付きます
   - ルールと人格の見出しは、会話の始めに固定されます（上の「大事にしていること」）。そのため英語のルールで始まるのは、言語を変えたあとに始めた会話・タスク・振り返りだけです。前から続く会話は、始めたときのルールのままです
