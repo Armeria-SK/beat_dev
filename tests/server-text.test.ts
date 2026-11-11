@@ -120,7 +120,6 @@ test('ApiError: コードが無い・辞書に無いときは、サーバーの�
 
 test('警告: コードから画面の言語の文にする。再試行は理由のコード（無ければ詳しい文）をはめる。知らないコードはサーバーの文', () => {
   const cases: Array<[string, Record<string, string | number>, string, Record<string, string | number>]> = [
-    ['max_iterations', { max: 16 }, 'warn.max_iterations', { max: 16 }],
     ['agent_output_truncated', {}, 'warn.agent_output_truncated', {}],
     ['context_trimmed', { count: 4 }, 'warn.context_trimmed', { count: 4 }],
     ['partial_discarded', {}, 'warn.partial_discarded', {}],
@@ -152,7 +151,7 @@ test('警告: コードから画面の言語の文にする。再試行は理由
     '理由のコードが無ければ詳しい文をはめる',
   );
   assert.equal(warningText({ code: 'retrying', message: 'サーバーの文', params: { seconds: 5 } }, 'en'), 'サーバーの文', '理由が無ければ、サーバーの文');
-  assert.equal(warningText({ code: 'max_iterations', message: 'サーバーの文' }, 'en'), 'サーバーの文', '値が無ければサーバーの文');
+  assert.equal(warningText({ code: 'context_trimmed', message: 'サーバーの文' }, 'en'), 'サーバーの文', '値が無ければサーバーの文');
   assert.equal(warningText({ code: 'something_new', message: 'サーバーの文', params: { a: 1 } }, 'en'), 'サーバーの文');
 });
 

@@ -111,8 +111,6 @@ export function ToolsConfig() {
     }, { additionalProperties: false, default: {} }),
     // 道具ごとの方針（道具の名前 → allow / ask / block）。今の判定に厳しさを足すだけで、緩める道は無い。書かない道具は allow（src/tools/tool-policy.ts）
     policies: Type.Record(Type.String(), Type.Union([Type.Literal('allow'), Type.Literal('ask'), Type.Literal('block')]), { default: {} }),
-    // 1 回の実行で道具を呼べる回数。0 は制限なし（止めるのは、止めるボタン・取り消し・割り込み・承認の拒否や時間切れ・コンテキストの量だけ）
-    maxIterations: Type.Integer({ minimum: 0, maximum: 100, default: 16 }),
     // 子の担当（agent_run）。既定は無効で、無効のあいだは今までと同じ（道具もモデルに渡らない）。深さは 1 で固定（設定にしない）
     agent: Type.Object({
       enabled: Type.Boolean({ default: false }),

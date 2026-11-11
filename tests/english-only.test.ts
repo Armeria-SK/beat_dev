@@ -40,7 +40,6 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'src/tools/builtin/table-core.ts': { strings: ['\u{FF1D}', '\u{FF0B}', '\u{FF0D}', '\u{FF20}'], reason: 'FORMULA_LEADS: 全角の ＝ ＋ － ＠ で始まるセルも式として無害化する（CSV の式の注入。安全）' },
   'src/engine/chat.ts': { strings: ['\u{3000}'], reason: 'toFullWidth: 子の答えの中の区切りを全角にして、区切りの偽装を防ぐ（空白は全角の空白に。安全）' },
   'src/engine/persona.ts': { strings: ['基本情報', '名前', '話し方', '名前', '呼び方', '^-[ \\t]*(?:${labels})[ \\t]*[:\u{FF1A}][ \\t]*'], reason: '見出しと行の名前: 持ち主の日本語の SOUL.md / USER.md の節と行（区切りの全角のコロンも）を読んで探し、見出しが日本語のファイルに節・行を足すときも日本語の名前で書く' },
-  'src/engine/prompts.ts': { strings: ['/(?:^|\\n)[ \\t]*(?:(?:#{1,6}|[-*+])[ \\t]+)?[*_\u{300C}\u{300E}"\u{201C}\'`]*(?:次の一手|Next steps?)[*_\u{300D}\u{300F}"\u{201D}\'`]*[ \\t]*(?:[:\u{FF1A}][*_\u{300D}\u{300F}"\u{201D}\'`]*|\\r?\\n)([\\s\\S]+)$/iu'], reason: 'NEXT_STEP: モデルが日本語の見出し「次の一手」（と括弧）で書いたまとめも拾う' },
   'src/memory/review.ts': { strings: ['/^(?:変更なし|No changes?)[\u{3002}.!\u{FF01}]?$/iu'], reason: 'isNoProposal: モデルが日本語で書いた「変更なし」（と句読点）も拾う' },
   'src/memory/store.ts': { strings: ['/[\\s\u{3000}]+/u'], reason: 'searchTerms: 記憶の検索の語を全角の空白でも区切る' },
   'src/tasks/schedule.ts': { strings: ['月'], reason: 'DAY_MAP の曜日の値（API の値。cronToFields の既定。画面の weekdays.ts と対）' },

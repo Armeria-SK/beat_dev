@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import { ConfigStore, parseConfig } from '../src/config/store.ts';
 import { personaTexts, styleText } from '../src/engine/persona.ts';
-import { compactPrompt, nextStepOf, wrapUpPrompt } from '../src/engine/prompts.ts';
+import { compactPrompt } from '../src/engine/prompts.ts';
 import { isNoProposal, reviewPrompt } from '../src/memory/review.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
@@ -182,16 +182,6 @@ test('添付の枠: 日本語の枠の添付の中身は、会話の履歴の AP
   assert.doesNotMatch(shown, /ATTACHED-SECRET-MARKER|添付ファイル/u, '日本語の枠の添付の中身は、利用者の依頼として見せない');
 });
 
-test('上限のまとめ: 指示は英語の書き出しで終わらず、見出しは英語のまま書かせ、前の日本語の見出しの次の一手も拾う', () => {
-  const prompt = wrapUpPrompt('User: こんにちは', 'en');
-  assert.doesNotMatch(prompt, /Done so far:\s*$/u);
-  assert.ok(prompt.endsWith('User: こんにちは'), prompt.slice(-40));
-  assert.match(prompt, /Keep the two headings exactly as written here, in English: "Done so far:" and "Next step:"\./u);
-  assert.equal(nextStepOf('Done so far: a.md を書いた\nNext step: b.md を読む'), 'b.md を読む', '英語の見出しのまま、中身は日本語');
-  assert.equal(nextStepOf('ここまでにやったこと: a.md を書いた\n次の一手: b.md を読む'), 'b.md を読む');
-  assert.equal(nextStepOf('Done so far: wrote a.md\nNext step: read b.md'), 'read b.md');
-});
-
 test('振り返り: 「変更なし」の合図は英語の "No changes" のまま返させ（訳すと整理の案の通知になる）、前の日本語の合図も読む', () => {
   for (const trigger of ['idle', 'book_full'] as const) {
     const prompt = reviewPrompt({ trigger, forgotten: [], ...(trigger === 'book_full' ? { bookPressure: 'x' } : {}) });
@@ -207,14 +197,12 @@ test('返事・記録の言語の指示は持ち主の言葉を指し、指示�
   const curiosity = { id: 'abcdef12-0000', title: 'Look into: 量子計算', origin: 'curiosity', body: 'Why this caught your interest: 気になった', next_action: null, done_criteria: null } as any;
   const texts = {
     compact: compactPrompt({ previous: null, transcript: 'User: こんにちは' }, 'en'),
-    wrapUp: wrapUpPrompt('User: こんにちは', 'en'),
     review: reviewPrompt({ trigger: 'heavy_run', forgotten: [] }),
     tidy: reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x' }),
     task: taskPrompt(curiosity, [], 'UTC'),
     dynamic: buildDynamic('UTC', 'en', now, 'normal'),
   };
   assert.match(texts.compact, /in the language the user writes in \(the language of the "User:" lines\)/u);
-  assert.match(texts.wrapUp, /in the language the user writes in \(the language of the "User:" lines in the record below/u);
   assert.match(texts.review, /in the language the user writes in: the language of the \[User\] lines in the record below/u);
   assert.match(texts.tidy, /in the language the user writes in: the language the listed memories are written in/u);
   assert.match(texts.task, /the language of the user's own words in the title and details \(for a curiosity task, the language of the topic\), not the language of these instructions/u);

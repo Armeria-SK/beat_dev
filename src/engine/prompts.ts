@@ -8,9 +8,6 @@ interface EngineText {
   compactTranscriptHeading: string;
   user: string;
   toolResult: (name: string) => string;
-  wrapUpSystem: string;
-  wrapUpInstructions: readonly string[];
-  wrapUpTranscriptHeading: string;
 }
 
 const TEXT: Record<Language, EngineText> = {
@@ -26,14 +23,6 @@ const TEXT: Record<Language, EngineText> = {
     compactTranscriptHeading: '# Older part of the conversation',
     user: 'User',
     toolResult: name => `Result of tool (${name})`,
-    wrapUpSystem: 'You write handover notes. Write only a short handover note, exactly as instructed. You cannot use tools.',
-    wrapUpInstructions: [
-      'The work so far stopped partway because the tool-call limit was reached. Write only the following two parts, briefly, in the language the user writes in (the language of the "User:" lines in the record below; 10 lines or fewer in total). Keep the two headings exactly as written here, in English: "Done so far:" and "Next step:".',
-      '"Done so far:": what was actually finished (including files written and facts found).',
-      '"Next step:": what to do first if the work continues.',
-      'Do not present things you have not seen or done as done.',
-    ],
-    wrapUpTranscriptHeading: '# Record of the work so far',
   },
 };
 
@@ -43,23 +32,6 @@ export function summarySection(summary: string, language: Language): string {
 
 export function compactSystem(language: Language): string {
   return TEXT[language].compactSystem;
-}
-
-export function wrapUpSystem(language: Language): string {
-  return TEXT[language].wrapUpSystem;
-}
-
-export function wrapUpPrompt(transcript: string, language: Language): string {
-  const text = TEXT[language];
-  return [...text.wrapUpInstructions, `\n${text.wrapUpTranscriptHeading}\n${transcript}`].join('\n');
-}
-
-const NEXT_STEP = /(?:^|\n)[ \t]*(?:(?:#{1,6}|[-*+])[ \t]+)?[*_「『"“'`]*(?:次の一手|Next steps?)[*_」』"”'`]*[ \t]*(?:[:：][*_」』"”'`]*|\r?\n)([\s\S]+)$/iu;
-
-// まとめの「次の一手」の部分（見出しの後ろ）。見出しは「」・""・**・先頭の # や - で飾ってよく、コロンは無くてもよい（中身は同じ行でも次の行でも）。見つからなければ undefined
-export function nextStepOf(summary: string): string | undefined {
-  const step = NEXT_STEP.exec(summary)?.[1]?.trim();
-  return step ? step.slice(0, 500) : undefined;
 }
 
 export function compactSpeaker(message: { role: string; name?: string }, language: Language): string {

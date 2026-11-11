@@ -3,6 +3,7 @@ import { AVATAR_SHAPES } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
 import { TaskError, taskView, type Task } from '../tasks/store.ts';
+import { splitKey } from '../tasks/worker.ts';
 import { languageOf } from '../shared/language.ts';
 import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { taskText } from '../shared/messages/tasks.ts';
@@ -104,6 +105,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
         ...(when !== undefined ? { runAt: when } : {}),
       }, 'user');
       app.tasks.event(task.id, 'edited', 'user');
+      app.kv.delete(splitKey(task.id));
       sendJson(res, 200, { task: view(updated) });
     } catch (error) { taskProblem(error); }
   });
@@ -114,6 +116,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status !== 'waiting') throw problem(409, 'task', 'not_waiting');
     app.tasks.event(task.id, 'answer', 'user', taskText(languageOf(app.config()), 'event.answer', { question: task.waiting_text ?? '', text }));
     const updated = app.tasks.setReady(task.id, { actor: 'user' });
+    app.kv.delete(splitKey(task.id));
     app.worker.requestRun(task.id);
     sendJson(res, 200, { task: view(updated) });
   });
@@ -142,6 +145,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
       } else {
         task = app.tasks.update(task.id, { runAt: null }, 'user');
       }
+      app.kv.delete(splitKey(task.id));
       app.worker.requestRun(task.id);
       sendJson(res, 202, { task: view(task) });
     } catch (error) { taskProblem(error); }

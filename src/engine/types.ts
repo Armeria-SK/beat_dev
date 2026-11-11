@@ -63,7 +63,8 @@ export interface ContextDetail {
 
 export type EngineResult =
   // truncated: 最後の返事が出力の上限で途中で切れた（成功扱いでも、最後まで書けていない）
-  | { ok: true; runId: string; text: string; modelId: string; usage: Usage; stop: StopReason; truncated?: true }
+  // split: 人のいない実行が区切りの回数に来て終わった。続きは次の実行
+  | { ok: true; runId: string; text: string; modelId: string; usage: Usage; stop: StopReason; truncated?: true; split?: true }
   | {
     ok: false;
     runId: string;

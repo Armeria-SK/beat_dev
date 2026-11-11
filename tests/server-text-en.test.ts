@@ -363,7 +363,7 @@ function collect(app: App): RunEvent[] {
 }
 
 test('エンジンの失敗と警告（英語）: 文は英語で、コードと値を添える', async t => {
-  const s = await startApp(t, { edit: c => { c.routing.retriesPerModel = 1; c.tools.maxIterations = 1; } });
+  const s = await startApp(t, { edit: c => { c.routing.retriesPerModel = 1; } });
   const events = collect(s.app);
   const send = async (id: string, text: string) => {
     const outcome = s.app.engine.send(id, text);
@@ -391,13 +391,6 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
   await send('c2', 'hi');
   const discarded = events.find(e => e.type === 'warning' && e.code === 'partial_discarded') as Extract<RunEvent, { type: 'warning' }>;
   assert.equal(discarded.message, 'The reply failed partway, so the part written so far was not saved');
-
-  // ツールの呼び直しが上限
-  s.adapter().scripts.push(toolCall('task_list', {}));
-  await send('c3', 'hi');
-  const limit = events.find(e => e.type === 'warning' && e.code === 'max_iterations') as Extract<RunEvent, { type: 'warning' }>;
-  assert.equal(limit.message, 'Stopped because the tool-calling loop reached its limit of 1. Send "continue" if you want it to keep going');
-  assert.deepEqual(limit.params, { max: 1 });
 
   // 止められた返事（途中まで保存される）
   s.adapter().scripts.push(hang());

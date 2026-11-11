@@ -27,8 +27,51 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode と language', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations']);
+});
+
+test('tools.maxIterations（16 でも 0 でも）の設定が parseConfig で読め、dropped に入り、読んだ設定に残らない', () => {
+  for (const value of [16, 0]) {
+    const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+    raw.tools.maxIterations = value;
+    const config = parseConfig(raw);
+    assert.equal('maxIterations' in config.tools, false, String(value));
+    assert.deepEqual(dropLegacy(raw).dropped, ['tools.maxIterations'], String(value));
+  }
+});
+
+test('ConfigStore: tools.maxIterations 入りのファイルを読むと dropped に入り、ファイルのバイトは変わらない', t => {
+  const path = join(tempDir(t), 'config.json');
+  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+  raw.tools.maxIterations = 0;
+  writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
+  const before = readFileSync(path);
+  const store = new ConfigStore(path);
+  const config = store.load();
+  assert.equal('maxIterations' in config.tools, false);
+  assert.deepEqual(store.dropped, ['tools.maxIterations']);
+  assert.deepEqual(readFileSync(path), before);
+});
+
+test('持ち主の形に tools.maxIterations: 0 を足した設定が読め、起動のログの Ignored の 1 行に tools.maxIterations が入り、ファイルは書き換えない', t => {
+  const raw = ownerShapedConfig();
+  raw.tools.maxIterations = 0;
+  assert.equal(parseConfig(raw).models[0]!.id, 'qwen-local');
+  assert.deepEqual(dropLegacy(raw).dropped, ['models[].toolMode', 'language', 'tools.maxIterations']);
+
+  const dir = tempDir(t);
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
+  mkdirSync(paths.data, { recursive: true });
+  writeFileSync(paths.config, `${JSON.stringify(raw, null, 2)}\n`);
+  const before = readFileSync(paths.config);
+  const logs: string[] = [];
+  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
+  t.after(() => app.close());
+  app.config();
+  app.config();
+  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations']);
+  assert.deepEqual(readFileSync(paths.config), before);
 });
 
 test('toolMode: "json_fallback" の設定も parseConfig で読め、モデルに toolMode が残らない。dropped は 1 回だけ', () => {

@@ -57,7 +57,7 @@ test('長さ・数の範囲・形・必須・知らない項目も、友好的�
     c.worker.quietStart = '25:99';
     c.profile.color = 'red';
     c.models[0].efforts = ['ok', '!bad'];
-    c.tools.maxIterations = 1.5;
+    c.tools.agent.maxPerRun = 1.5;
     c.worker.enabled = 'yes';
     c.profile.shape = 'square-ish';
     c.profile.extra = 1;
@@ -71,7 +71,7 @@ test('長さ・数の範囲・形・必須・知らない項目も、友好的�
   assert.equal(at('worker.quietStart').code, 'config.pattern.time');
   assert.equal(at('profile.color').code, 'config.pattern.color');
   assert.ok(error.issues.some(i => i.path.endsWith('.efforts.1') && i.code === 'config.pattern.effort'), String(error.issues.map(i => i.path)));
-  assert.equal(at('tools.maxIterations').code, 'config.type.integer');
+  assert.equal(at('tools.agent.maxPerRun').code, 'config.type.integer');
   assert.equal(at('worker.enabled').code, 'config.type.boolean');
   assert.equal(at('profile.shape').code, 'config.type.choice');
   assert.match(at('profile.shape').message, /Use one of these: .*pebble/u);

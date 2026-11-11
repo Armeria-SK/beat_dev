@@ -153,8 +153,8 @@ test('T-08 子が 2 本動いているとき、3 本目は busy のエラーに�
   await settled(s.app, runB);
 });
 
-test('T-09 子の道具の回数は maxIterations が 0 でも 100 で止まり、親に max_iterations の文が返る', async t => {
-  const s = await startApp(t, enable(c => { c.tools.maxIterations = 0; }));
+test('T-09 子の道具の回数は 100 で区切られ、親に max_iterations の文が返る', async t => {
+  const s = await startApp(t, enable());
   s.adapter().scripts = [call('agent_run', { task: 'ずっと計算する' }), ...Array.from({ length: 100 }, () => call('calculate', { expression: '1+1' })), reply('親の最後の返事')];
   const parent = uuid(1);
   await chat(s, parent, '任せたい');

@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schema.ts';
 import type { Conversations } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
-import type { ChatEngine } from '../engine/chat.ts';
+import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts';
 import { isLocalPinned } from '../engine/local-model.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
@@ -19,6 +19,9 @@ const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
 const RETRY_DELAYS_MIN = [1, 5, 15];
 const STAGNATION_LIMIT = 3;
+// 区切り（人のいない実行の回数の上限）が続いたとき、持ち主に 1 回だけ知らせる数。止めはしない
+const SPLIT_LIMIT = 3;
+export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 
 export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model';
@@ -417,6 +420,7 @@ export class Worker {
     const idleKey = `task-idle:${task.id}`;
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
     if (tasks.get(task.id)?.status !== 'running') return;
+    if (!(result.ok && result.split)) this.#d.kv.delete(splitKey(task.id));
     if (this.#d.engine.wasPreempted(runId)) {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
@@ -436,6 +440,17 @@ export class Worker {
       this.#d.kv.delete(idleKey);
       tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'clive', runId);
       tasks.setReady(task.id, { runAt: now + Math.min(Math.max(control.resumeAfterMinutes, 1), 10_080) * 60_000, reason: taskText(language, 'reason.checkpoint', { minutes: control.resumeAfterMinutes }) });
+      return;
+    }
+    if (result.ok && result.split) {
+      // 区切りの回数に来た: 進展なしとは数えず、すぐ続ける。続けて区切れた数が SPLIT_LIMIT に来たら 1 回だけ知らせる（止めない。止めるのは持ち主の取り消し）
+      this.#d.kv.delete(idleKey);
+      const splits = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
+      this.#d.kv.setJson(splitKey(task.id), splits);
+      if (splits === SPLIT_LIMIT) {
+        notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}`, localOnly: task.local_only === 1 });
+      }
+      tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
       return;
     }
     if (result.ok) {

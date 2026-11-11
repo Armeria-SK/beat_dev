@@ -277,6 +277,85 @@ test('道具で終え方を決めないまま 3 回続いたら、ユーザー�
   assert.match(stuck.body, /考えました 0/u, '返事はメモとして残す');
 });
 
+// ── 人のいない実行の 100 往復の区切り（M1 の持ち主の決定 B: 止めずに続け、3 回続いたら 1 回だけ知らせる） ──
+
+const SPLIT_REASON = 'Reached 100 rounds of tool calls in one run, so it continues in a new run';
+const splitRun = (s: Awaited<ReturnType<typeof setup>>) => s.adapter().scripts.push(...Array.from({ length: 100 }, () => toolCall('task_list', {})));
+const longNotes = (s: Awaited<ReturnType<typeof setup>>) => s.app.notifications.list().filter(n => n.kind === 'info');
+const lastRun = (s: Awaited<ReturnType<typeof setup>>) => s.app.db.prepare("SELECT * FROM engine_runs WHERE kind = 'task' ORDER BY rowid DESC LIMIT 1").get() as { flags: string; iterations: number };
+
+test('タスクの実行が 100 往復で区切られたら、すぐ実行待ちに戻す（進展なしとは数えない）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const task = s.userTask('延々と調べるタスク');
+  s.app.kv.setJson(`task-idle:${task.id}`, 2);
+  splitRun(s);
+  s.adapter().scripts.push(reply('届かない'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const calls = s.adapter().calls;
+  assert.equal(calls.length, 100, '101 回目の呼び出しは無い');
+  assert.ok(calls.every(c => c.tools.length > 0), '道具を渡さないまとめの呼び出しは無い');
+  const run = lastRun(s);
+  assert.deepEqual(JSON.parse(run.flags), ['max_iterations']);
+  assert.equal(run.iterations, 100);
+  const after = s.app.tasks.get(task.id)!;
+  assert.equal(after.status, 'ready');
+  assert.ok(after.run_at !== null && after.run_at <= s.clock.now, `すぐ続ける（run_at ${after.run_at}）`);
+  assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')?.content, SPLIT_REASON);
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '進展なしの数は消える');
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 1);
+  assert.deepEqual(s.events.filter(e => e.type === 'warning'), [], '人のいない実行にお知らせは出さない');
+});
+
+test('区切りが 3 回続いても止めず、題つきで 1 回だけ知らせる（4 回目も知らせない）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const task = s.userTask('終わらない調べもの');
+  for (let i = 1; i <= 4; i++) {
+    const before = s.adapter().calls.length;
+    splitRun(s);
+    assert.equal(await s.app.worker.tick(), 'ran', `${i} 回目`);
+    const calls = s.adapter().calls.slice(before);
+    assert.equal(calls.length, 100, `${i} 回目: 100 回の呼び出し`);
+    assert.ok(calls.every(c => c.tools.length > 0), `${i} 回目: どの呼び出しにも道具を渡す`);
+    assert.equal(s.app.tasks.get(task.id)!.status, 'ready', `${i} 回目: 返事待ちにしない`);
+    const notes = longNotes(s);
+    if (i < 3) assert.equal(notes.length, 0, `${i} 回目: まだ知らせない`);
+    else {
+      assert.equal(notes.length, 1, `${i} 回目: 知らせはちょうど 1 つ`);
+      assert.equal(notes[0]!.title, 'Taking a long time: 終わらない調べもの');
+      assert.equal(notes[0]!.body, '"終わらない調べもの" has run 3 times in a row (100 rounds of tool calls each) without finishing. It keeps going; cancel it if it is stuck');
+      assert.equal(notes[0]!.link, `#/tasks/${task.id}`);
+    }
+  }
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 4);
+});
+
+test('区切りでない終わり・持ち主の操作（run-now・PATCH・answer）で、続けての区切りの数は 0 に戻る', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 50; });
+  const request = await serve(t, s);
+  const task = s.userTask('長い作業');
+  const splitKey = `task-split:${task.id}`;
+  for (let i = 0; i < 2; i++) { splitRun(s); await s.app.worker.tick(); }
+  assert.equal(s.app.kv.getJson<number>(splitKey), 2);
+  s.adapter().scripts.push(toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 1 }));
+  await s.app.worker.tick();
+  assert.equal(s.app.kv.get(splitKey), undefined, '途中経過で終わった実行は数を消す');
+  s.clock.now += MIN;
+  for (let i = 0; i < 2; i++) { splitRun(s); await s.app.worker.tick(); }
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
+  assert.equal(s.app.kv.getJson<number>(splitKey), 2, '数え直した');
+  assert.equal(longNotes(s).length, 0, '続けて 3 回になっていないので知らせない');
+
+  assert.equal((await request(`/api/tasks/${task.id}/run-now`, {})).status, 202);
+  assert.equal(s.app.kv.get(splitKey), undefined, 'run-now で消える');
+  s.app.kv.setJson(splitKey, 2);
+  assert.equal((await request(`/api/tasks/${task.id}`, { priority: 1 }, 'PATCH')).status, 200);
+  assert.equal(s.app.kv.get(splitKey), undefined, 'PATCH で消える');
+  s.app.kv.setJson(splitKey, 2);
+  s.app.tasks.setWaiting(task.id, 'question', 'どうする？');
+  assert.equal((await request(`/api/tasks/${task.id}/answer`, { text: '続けて' })).status, 200);
+  assert.equal(s.app.kv.get(splitKey), undefined, 'answer で消える');
+});
+
 test('使えるモデルが無ければ実行せず、待ってから試す', async t => {
   const s = await setup(t);
   const task = s.userTask('仕事');
@@ -364,8 +443,6 @@ test('会話で作ったタスクは、作った会話の ID で探す（経過�
   s.app.tasks.event(text.id, 'context', 'clive', 'この会話（conv-a）で作りました / Created in conv-a');
   const manual = s.app.tasks.create({ title: '画面から作った', origin: 'user', actor: 'user' });
   assert.equal(manual.created_in_conversation, null);
-  assert.deepEqual(s.app.tasks.createdByConversation('conv-a'), [mine.id]);
-  assert.deepEqual(s.app.tasks.createdByConversation('conv-b'), []);
 });
 
 test('通知は同じ dedupKey なら 24 時間出さない', async t => {

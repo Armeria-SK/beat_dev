@@ -32,7 +32,7 @@ const untilStopped: Script = async function* (req) {
   await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
 };
 
-async function setup(t: { after: (fn: () => void) => void }, options: { maxIterations?: number } = {}) {
+async function setup(t: { after: (fn: () => void) => void }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -41,7 +41,6 @@ async function setup(t: { after: (fn: () => void) => void }, options: { maxItera
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;
-  if (options.maxIterations) config.tools.maxIterations = options.maxIterations;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
@@ -146,15 +145,16 @@ test('印は実行の頭から残る: 外から読んだ実行をやり直して
   await expectAsked(s, retry(s), /what an earlier run read/u);
 });
 
-test('道具の上限で止まってまとめを書いた実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
-  const s = await setup(t, { maxIterations: 1 });
+test('前からある実行の記録の道具の上限の印（max_iterations）を持つ実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
+  const s = await setup(t);
   s.adapter().scripts = [call('web_fetch', FETCH), reply('ここまでやりました。次の一手: 書く')];
   const first = send(s, 'このページを読んで');
   await settled(s.app, first);
   await s.app.engine.wait(first);
+  s.app.conversations.db.prepare("UPDATE engine_runs SET flags = '[\"max_iterations\"]' WHERE id = ?").run(first);
   assert.equal(s.app.runs.get(first)!.ok, 1);
   assert.match(s.app.runs.get(first)!.flags, /max_iterations/u);
-  assert.equal(s.app.conversations.messages(C).at(-1)!.role, 'assistant', '前提: 最後はまとめの返事（道具の呼び出しの付かない assistant の発言）');
+  assert.equal(s.app.conversations.messages(C).at(-1)!.role, 'assistant', '前提: 最後は道具の呼び出しの付かない assistant の発言');
   s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
   await expectAsked(s, send(s, '続けて'), /what an earlier run read/u);
 });

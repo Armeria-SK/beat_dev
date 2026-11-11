@@ -937,8 +937,6 @@ export const en = {
   'settings.tools.noUse': 'Do not use',
   'settings.tools.shellKind': 'Shell type',
   'settings.tools.auto': 'Auto',
-  'settings.tools.maxSteps': 'Tool-call limit',
-  'settings.tools.maxStepsDesc': 'How many times tools can be called in one reply (one run). 0 means no limit for chats only (the Stop button, cancelling, the context size and the like stop it, not the count). Unattended runs (tasks and reviews) still stop at 100 when this is 0',
   'settings.tools.shellTimeout': 'Command time limit',
   'settings.tools.allowCmds': 'Commands allowed without approval',
   'settings.tools.allowInvalid': (entry: string) => `"${entry}" cannot be written that way. Write a fixed command only (one statement without quotes, variables, wildcards, substitution, redirects or separators)`,

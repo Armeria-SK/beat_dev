@@ -40,7 +40,7 @@ import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts'
 import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine } from '../shared/plain-text.ts';
-import { compactPrompt, compactSpeaker, compactSystem, nextStepOf, summarySection, wrapUpPrompt, wrapUpSystem } from './prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -51,7 +51,8 @@ const TRUNCATION_STRIKES = 2;
 const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
-const UNATTENDED_ITERATION_CEILING = 100;
+// 人のいない実行（タスク・振り返り・子の担当）を区切る回数
+export const UNATTENDED_ITERATION_CEILING = 100;
 // アプリ全体で同時に動かせる子の担当の数（これを越えたら待たずに busy を返す）
 export const MAX_LIVE_AGENTS = 2;
 const AGENT_CHILD_TITLE_MAX = 80;
@@ -70,10 +71,6 @@ function agentOff(config: AppConfig, kind: RunKind): boolean {
   return !config.tools.agent.enabled || (kind === 'task' && !config.tools.agent.inTasks);
 }
 
-export function iterationLimit(configured: number, kind: RunKind): number {
-  if (configured > 0) return configured;
-  return kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
-}
 const COMPACT_MIN_MESSAGES = 4;
 // 1 回の実行で要約を重ねられる回数。外す発言が増えるたびに要約し直すが、無限には繰り返さない
 const MAX_COMPACTIONS_PER_RUN = 5;
@@ -292,7 +289,7 @@ export class ChatEngine {
     return list?.tainted === true && checklistInjects(list);
   }
 
-  // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめでも、出力の上限で切れた返事でもない）の印は持ち越さない
+  // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、前からある実行の記録の道具の上限の印でも、出力の上限で切れた返事でもない）の印は持ち越さない
   #previousRunCarriesTaint(conversationId: string): boolean {
     const last = this.#d.runs.latestChat(conversationId);
     if (!last || last.tainted !== 1) return false;
@@ -647,11 +644,11 @@ export class ChatEngine {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
       }
     };
-    const finishOk = (text: string, stop: StopReason, wrapUp?: { nextAction: string | undefined }): EngineResult => {
-      if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted, localOnly: ctx.localOnly === true });
+    const finishOk = (text: string, stop: StopReason, split?: { split: true }): EngineResult => {
+      if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted, localOnly: ctx.localOnly === true });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
-      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, ...(stop === 'max_tokens' ? { truncated: true as const } : {}) };
+      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split: true as const } : {}) };
     };
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
@@ -661,7 +658,7 @@ export class ChatEngine {
       return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
 
-    const maxIterations = iterationLimit(config.tools.maxIterations, kind);
+    const maxIterations = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
@@ -734,15 +731,8 @@ export class ChatEngine {
       }
     }
     flags.push('max_iterations');
-    d.bus.publish({ type: 'warning', runId, conversationId, code: 'max_iterations', message: engineText(languageOf(config), 'warn.max_iterations', { max: maxIterations }), params: { max: maxIterations } });
-    if (kind !== 'chat') return finishOk('', 'other');
-    // 会話は黙って止まらない: 道具なしで 1 回だけ、ここまで・次の一手を書かせて返事として残す。書けなければ決まった文
-    const wrapped = await this.#wrapUp({ route: lastRoute, conversationId, signal, onUsage: addUsage });
-    if (wrapped === 'cancelled') return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
-    const text = wrapped ?? engineText(languageOf(config), 'wrapup.fallback', { max: maxIterations });
-    const saved = d.conversations.append(conversationId, { role: 'assistant', content: text }, runId);
-    d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
-    return finishOk(text, 'other', { nextAction: wrapped ? nextStepOf(wrapped) : undefined });
+    counters.iterations = maxIterations;
+    return finishOk('', 'other', { split: true });
   }
 
   // 自動承認の判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）。無ければ空（判定役には回らず、確かめる）
@@ -779,52 +769,18 @@ export class ChatEngine {
     } finally { release?.(); }
   }
 
-  // 上限で止まった会話のまとめ。道具を渡さず、直近のやり取りを文字の記録にして 1 通で渡す（道具の呼び出しの履歴を送ると、道具の定義が要るプロバイダがあるため）。
-  // 書けた文を返す。空・失敗は null、止められたときは 'cancelled'
-  async #wrapUp(c: { route: Route; conversationId: string; signal: AbortSignal; onUsage: (usage: Usage) => void }): Promise<string | 'cancelled' | null> {
-    const d = this.#d;
-    const language = languageOf(d.config());
-    const { model, provider } = c.route;
-    const adapter = d.registry.get(provider.id);
-    if (!adapter) return null;
-    const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
-    const available = contextAvailable(capacity, model);
-    const conversation = d.conversations.get(c.conversationId);
-    const stored = d.conversations.messages(c.conversationId).filter(m => m.id > (conversation?.summary_upto ?? 0));
-    const maxChars = Math.min(COMPACT_TRANSCRIPT_CHARS, Math.max(1000, Math.floor(available * 0.5)));
-    const transcript = stored.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, 1500)}`).join('\n').slice(-maxChars);
-    let release: (() => void) | undefined;
-    let usage: Usage = {};
-    try {
-      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, c.signal);
-      let text = '';
-      for await (const event of adapter.stream({
-        model, system: { frozen: wrapUpSystem(language), dynamic: '' },
-        messages: [{ role: 'user', content: wrapUpPrompt(transcript, language) }], tools: [], maxOutputTokens: Math.min(1000, model.maxOutputTokens), signal: c.signal,
-      })) {
-        if (event.type === 'text') text += event.delta;
-        else if (event.type === 'usage') usage = { ...usage, ...event.usage };
-      }
-      return text.trim() || null;
-    } catch {
-      return c.signal.aborted ? 'cancelled' : null;
-    } finally { c.onUsage(usage); release?.(); }
-  }
-
-  // 会話の実行が終わるとき、会話で進んだ分をタスクの経過（メモ）に書く。書く先は次のとおりで、普通の終わりで何にも触っていなければ何も書かない:
+  // 会話の実行が終わるとき、会話で進んだ分をタスクの経過（メモ）に書く。書く先は次のとおりで、何にも触っていなければ何も書かない:
   // - この実行で作った・task_update で触ったタスク（作る以外の道具を使った実行だけ。作っただけの確認の返事はメモにしない）
-  // - 道具の上限で止まったときは、さらに、この会話で作った実行待ち・返事待ちのタスク。まとめに次の一手があれば、次の一手も書く
-  // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触った・この会話で作ったときだけ書き、そのとき実行中のままの状態（running）も許す
+  // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触ったときだけ書き、そのとき実行中のままの状態（running）も許す
   // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
   // 手元のモデルの会話の実行（localOnly）が書いたタスクは、手元のモデルだけで動かすタスクにする（メモに会話の文が入るため）
-  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean }): void {
+  #handOver(runId: string, text: string, run: { workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean }): void {
     const d = this.#d;
-    const note = summary.note.trim();
+    const note = text.trim();
     if (!d.tasks || !note || run.tainted) return;
     const preempted = new Set(this.#preemptedTasks.get(runId) ?? []);
     const targets = new Set<string>();
-    if (run.wrapUp || run.workCalls > 0) for (const id of run.touched) targets.add(id);
-    if (run.wrapUp) for (const id of d.tasks.createdByConversation(conversationId)) targets.add(id);
+    if (run.workCalls > 0) for (const id of run.touched) targets.add(id);
     if (!targets.size) return;
     const language = languageOf(d.config());
     for (const id of targets) {
@@ -832,7 +788,7 @@ export class ChatEngine {
       if (!task) continue;
       const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
       if (!open.includes(task.status)) continue;
-      d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }), ...(summary.nextAction ? { nextAction: summary.nextAction } : {}) }, 'clive', runId);
+      d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }) }, 'clive', runId);
       if (run.localOnly) d.tasks.markLocalOnly(id);
     }
   }
@@ -1072,7 +1028,7 @@ export class ChatEngine {
     if (why.value === 'parent' || (!result.ok && result.errorKind === 'cancelled')) { emit('cancelled', toolCalls); return fail('agent.stopped', undefined, fetched); }
     if (!result.ok) { emit('failed', toolCalls); return fail('agent.failed', { reason: result.errorMessage }, fetched); }
     const flags = (() => { try { return JSON.parse(row?.flags ?? '[]') as string[]; } catch { return []; } })();
-    if (flags.includes('max_iterations')) { emit('failed', toolCalls); return fail('agent.max_iterations', { max: iterationLimit(config.tools.maxIterations, 'agent') }, fetched); }
+    if (flags.includes('max_iterations')) { emit('failed', toolCalls); return fail('agent.max_iterations', { max: UNATTENDED_ITERATION_CEILING }, fetched); }
     const open = toolText(language, 'agent.result_open');
     const close = toolText(language, 'agent.result_close');
     // 子の答えに区切りの文字が入っていても、親には区切りとして読ませない（全角にする）

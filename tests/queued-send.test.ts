@@ -233,26 +233,6 @@ test('実行が失敗・取り消しで終わったとき、待っていた発�
   assert.ok(events.some(e => e.type === 'warning' && e.code === 'queued_saved'));
 });
 
-test('6b のまとめ: 道具の上限で止まる実行でも、待っていた発言はまとめに混ざらず、まとめのあとの新しい実行で読まれる', async t => {
-  const s = await startApp(t, { configure: c => { c.tools.maxIterations = 1; } });
-  await withFile(s);
-  const g = gate();
-  const wrap: ModelRequest[] = [];
-  const seen: ModelRequest[] = [];
-  s.adapter().scripts = [after(g, call('file_read', { path: 'a.txt' })), spy(say('ここまで: 読んだ\n次の一手: 要約'), wrap), spy(say('新しい指示の返事'), seen)];
-  const first = await post(s, '読んで');
-  await post(s, '新しい指示です');
-  g.open();
-  await s.app.engine.wait(first.body.runId);
-  const second = s.app.engine.activeRuns().find(r => r.conversationId === CONVERSATION)!;
-  assert.ok(second && second.runId !== first.body.runId, 'まとめのあとに新しい実行が始まる');
-  await settled(s.app, second.runId);
-  assert.doesNotMatch((wrap[0]!.messages[0] as { content: string }).content, /新しい指示です/u, 'まとめの記録に待っていた発言は入らない');
-  assert.deepEqual(roles(s), ['user:読んで', 'assistant:', 'tool:[file_read] ', 'assistant:ここまで: 読んだ\n次の', 'user:新しい指示です', 'assistant:新しい指示の返事']);
-  assert.equal(runsOf(s).length, 2);
-  assert.ok(JSON.parse(s.app.runs.get(first.body.runId)!.flags).includes('max_iterations'));
-});
-
 test('裏のタスクとの関係 1: 実行中に差し込むだけなら、動いている裏の実行を止めない', async t => {
   // 同時に 2 つ呼べる提供元にする（1 つだけだと、動いている裏の実行が会話の次の呼び出しを待たせる）
   const s = await startApp(t, { configure: c => { c.providers[0]!.maxParallel = 2; } });

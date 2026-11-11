@@ -342,13 +342,12 @@ test('タスク: 手元のモデルを選んだ会話で task_update したタ�
   assert.equal(s.app.tasks.get(other.id)!.local_only, 0);
 });
 
-test('タスク: 道具の上限のまとめ（会話の経過をタスクのメモへ書く）が手元のモデルの会話から書かれたら、書き先のタスクも local_only になる', async t => {
-  const s = await startApp(t, { ...twoProviders([]), configure: c => { twoProviders([]).configure(c); c.tools.maxIterations = 1; } });
-  const id = uuid(1);
-  const created = s.app.tasks.create({ title: 'この会話で作ったタスク', origin: 'user', actor: 'user', createdInConversation: id });
-  await runIn(s, id, 'loc', [call('task_list', {}), reply('ここまでやりました。次の一手: 続きを書く')]);
+test('タスク: 手元のモデルの会話が経過を書いたタスクは local_only', async t => {
+  const s = await startApp(t, twoProviders([]));
+  const created = s.app.tasks.create({ title: '前からあるタスク', origin: 'user', actor: 'user' });
+  await runIn(s, uuid(1), 'loc', [call('task_update', { id: created.id.slice(0, 8), priority: 1 }), call('file_list', {}), reply('ここまでやりました')]);
   const task = s.app.tasks.get(created.id)!;
-  assert.match(task.body, /ここまでやりました/u, '前提: まとめがメモに書かれた');
+  assert.match(task.body, /ここまでやりました/u, '前提: 会話の経過がメモに書かれた');
   assert.equal(task.local_only, 1);
 });
 

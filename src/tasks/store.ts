@@ -93,11 +93,6 @@ export class TaskStore {
     return rows.length === 1 ? rows[0] : undefined;
   }
 
-  createdByConversation(conversationId: string): string[] {
-    const rows = this.#db.prepare('SELECT id FROM tasks WHERE created_in_conversation = ?').all(conversationId) as Array<{ id: string }>;
-    return rows.map(r => r.id);
-  }
-
   byConversation(conversationId: string): Task | undefined {
     return this.#db.prepare('SELECT * FROM tasks WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1').get(conversationId) as Task | undefined;
   }

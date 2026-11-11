@@ -6,6 +6,7 @@ export interface LegacyKey {
 export const LEGACY_KEYS: readonly LegacyKey[] = [
   { path: 'models[].toolMode', removedIn: 'beat 0-1' },
   { path: 'language', removedIn: 'beat 0-2a-3' },
+  { path: 'tools.maxIterations', removedIn: 'beat 0-3b' },
 ];
 
 function isObject(value: unknown): value is Record<string, unknown> {
