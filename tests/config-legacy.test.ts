@@ -116,3 +116,25 @@ test('持ち主の設定と同じ形（language: "ja"、toolMode: "native"、秘
   assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: models[].toolMode']);
   assert.deepEqual(readFileSync(paths.config), before);
 });
+
+test('起動のログ: 保存で古い鍵が消えたあと、手で toolMode を書き戻すと、再読み込みでもう一度 1 行出す', async t => {
+  const dir = tempDir(t);
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
+  mkdirSync(paths.data, { recursive: true });
+  writeFileSync(paths.config, JSON.stringify(withToolMode('native')));
+  const logs: string[] = [];
+  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
+  t.after(() => app.close());
+  const ignored = () => logs.filter(line => line.includes('no longer used'));
+  assert.equal(ignored().length, 1, '起動で 1 行');
+
+  await app.applyConfig(app.config(), { probe: false });
+  app.config();
+  assert.equal(readFileSync(paths.config, 'utf8').includes('toolMode'), false);
+  assert.equal(ignored().length, 1, '保存しただけでは出さない');
+
+  writeFileSync(paths.config, `${JSON.stringify(withToolMode('json_fallback'), null, 2)}\n`);
+  app.config();
+  app.config();
+  assert.deepEqual(ignored(), ['[INFO] Ignored settings that are no longer used: models[].toolMode', '[INFO] Ignored settings that are no longer used: models[].toolMode']);
+});

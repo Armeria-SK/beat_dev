@@ -928,7 +928,7 @@ export class ChatEngine {
           break;
         } finally { release?.(); }
 
-        // 本文に書かれたツール呼び出しを拾う（ツール非対応のモデル、または tool_calls を使わずに本文に書いたモデル）
+        // 本文に書かれたツール呼び出しを拾う（tool_calls を使わずに本文に書いたモデル）
         if (!toolCalls.length && toolNames.size && looksLikeTextToolCall(text)) {
           const parsed = extractToolCalls(text, toolNames);
           if (parsed.calls.length) {
