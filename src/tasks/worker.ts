@@ -419,12 +419,13 @@ export class Worker {
     const language = this.#language();
     const idleKey = `task-idle:${task.id}`;
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
-    if (tasks.get(task.id)?.status !== 'running') return;
-    if (!(result.ok && result.split)) this.#d.kv.delete(splitKey(task.id));
+    if (tasks.get(task.id)?.status !== 'running') { this.#d.kv.delete(splitKey(task.id)); return; }
+    // 割り込みは、やり直しと同じに数える（区切りの数を消しも増やしもしない）
     if (this.#d.engine.wasPreempted(runId)) {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }
+    if (!(result.ok && result.split)) this.#d.kv.delete(splitKey(task.id));
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'done', control.summary, 'clive', runId);
@@ -443,8 +444,8 @@ export class Worker {
       return;
     }
     if (result.ok && result.split) {
-      // 区切りの回数に来た: 進展なしとは数えず、すぐ続ける。続けて区切れた数が SPLIT_LIMIT に来たら 1 回だけ知らせる（止めない。止めるのは持ち主の取り消し）
-      this.#d.kv.delete(idleKey);
+      // 区切りの回数に来た: すぐ続ける。進展なしの数（idleKey）は増やしも消しもしない（区切りと返事だけの終わりが交互に続くタスクも、今までどおり相談に届く）。
+      // 続けて区切れた数が SPLIT_LIMIT に来たら 1 回だけ知らせる（止めない。止めるのは持ち主の取り消し）
       const splits = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
       this.#d.kv.setJson(splitKey(task.id), splits);
       if (splits === SPLIT_LIMIT) {

@@ -658,9 +658,9 @@ export class ChatEngine {
       return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
 
-    const maxIterations = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
+    const ceiling = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
-    for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
+    for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       if (kind === 'chat' || kind === 'agent') { recordTaint(); recordAutoRead(); }
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode });
@@ -731,7 +731,7 @@ export class ChatEngine {
       }
     }
     flags.push('max_iterations');
-    counters.iterations = maxIterations;
+    counters.iterations = ceiling;
     return finishOk('', 'other', { split: true });
   }
 

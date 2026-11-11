@@ -342,7 +342,7 @@ test('タスク: 手元のモデルを選んだ会話で task_update したタ�
   assert.equal(s.app.tasks.get(other.id)!.local_only, 0);
 });
 
-test('タスク: 手元のモデルの会話が経過を書いたタスクは local_only', async t => {
+test('タスク: 手元のモデルの会話が task_update で触って経過を書いたタスクは local_only（印を付けるのは task_update の道具で、#handOver の印付けは念のための重ね）', async t => {
   const s = await startApp(t, twoProviders([]));
   const created = s.app.tasks.create({ title: '前からあるタスク', origin: 'user', actor: 'user' });
   await runIn(s, uuid(1), 'loc', [call('task_update', { id: created.id.slice(0, 8), priority: 1 }), call('file_list', {}), reply('ここまでやりました')]);

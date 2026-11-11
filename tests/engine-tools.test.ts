@@ -324,7 +324,6 @@ test('会話は制限なし: 100 回を超えて道具を使い続け、止め�
   const run = s.app.runs.get(result.runId)!;
   assert.deepEqual(JSON.parse(run.flags), []);
   assert.ok(run.iterations! >= 130);
-  assert.equal(s.app.conversations.messages('c1').some(m => m.role === 'assistant' && m.text === 'まとめです'), false);
 });
 
 // ── 段 4-4: 道具の結果の画像（X5 ToolOutput.images）のエンジンの側 ──

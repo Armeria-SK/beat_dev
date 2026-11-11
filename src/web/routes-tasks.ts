@@ -162,12 +162,17 @@ export function registerTaskRoutes(router: Router, app: App): void {
     }
     const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
     app.worker.stopTask(task.id);
+    app.kv.delete(splitKey(task.id));
     sendJson(res, 200, { task: view(updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
   router.add('POST', '/api/tasks/:id/uncancel', ({ res, params }) => {
     const task = getTask(params[0]!);
-    try { sendJson(res, 200, { task: view(app.tasks.uncancel(task.id, 'user')) }); } catch (error) { taskProblem(error); }
+    try {
+      const restored = app.tasks.uncancel(task.id, 'user');
+      app.kv.delete(splitKey(task.id));
+      sendJson(res, 200, { task: view(restored) });
+    } catch (error) { taskProblem(error); }
   });
   router.add('POST', '/api/tasks/:id/done', close('done'));
 
