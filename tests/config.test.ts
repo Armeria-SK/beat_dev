@@ -46,7 +46,7 @@ test('形式の誤りは場所つきで返す', () => {
 test('整合性の問題をまとめて返す', () => {
   const config = testConfig();
   config.models.push({ ...config.models[0]!, provider: 'nope' });
-  config.models.push({ id: 'local2', provider: 'ollama', model: 'x', minContext: 65536, maxOutputTokens: 8192, vision: false });
+  config.models.push({ id: 'local2', provider: 'local', model: 'x', minContext: 65536, maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   assert.throws(() => parseConfig(config), (e: unknown) => {
@@ -95,7 +95,7 @@ test('初期値にはモデルが無く、チャットも裏方の順番も空�
   const config = new ConfigStore(path).load();
   assert.deepEqual(config.models, []);
   assert.deepEqual(config.routing, { chat: [], background: [], retriesPerModel: 2 });
-  assert.deepEqual(config.providers.map(p => p.id), ['anthropic', 'ollama']);
+  assert.deepEqual(config.providers.map(p => p.id), ['anthropic']);
   assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).models, [], '書き出した設定ファイルにも見本のモデルは入らない');
   assert.doesNotThrow(() => parseConfig(defaultConfig()), 'モデルが 0 個の設定は、そのまま検証を通る');
 });
@@ -151,13 +151,13 @@ function issuesOf(raw: unknown): { problems: readonly string[]; issues: Readonly
 
 test('内容の問題は ID で書いた場所（path）つきで返し、文（problems）は今までと同じ', () => {
   const config = testConfig();
-  config.providers.push({ id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 60_000 });
+  config.providers.push({ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:11434/v1', maxParallel: 1, timeoutMs: 60_000 });
   config.providers.push({ id: 'oa', kind: 'openai_compatible', maxParallel: 1, timeoutMs: 60_000 });
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   config.models.push({ ...config.models[0]! });
   config.models.push({ id: 'orphan', provider: 'nope', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
-  config.models.push({ id: 'no-ctx', provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
-  config.models.push({ id: 'too-big', provider: 'ollama', model: 'x', contextLength: 8192, minContext: 4096, maxOutputTokens: 8192, vision: false });
+  config.models.push({ id: 'no-ctx', provider: 'local', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
+  config.models.push({ id: 'too-big', provider: 'local', model: 'x', contextLength: 8192, minContext: 4096, maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.tools.shell.allow = ['npm test', 'npm test; rm -rf .'];
   config.server.origins = ['http://a.example/path'];
@@ -165,7 +165,7 @@ test('内容の問題は ID で書いた場所（path）つきで返し、文（
 
   const paths = issues.map(i => i.path);
   for (const path of [
-    'providers.ollama.id', 'providers.oa.baseUrl', 'providers.remote.baseUrl', 'models.claude-sonnet.id', 'models.orphan.provider', 'models.no-ctx.contextLength',
+    'providers.local.id', 'providers.oa.baseUrl', 'providers.remote.baseUrl', 'models.claude-sonnet.id', 'models.orphan.provider', 'models.no-ctx.contextLength',
     'models.too-big.maxOutputTokens', 'routing.chat', 'tools.shell.allow', 'server.origins',
   ]) assert.ok(paths.includes(path), `${path} が無い: ${paths.join(', ')}`);
   assert.equal(issues.length, problems.length, '文と同じ数');
@@ -187,7 +187,7 @@ test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す
   assert.ok(problems.some(p => p.startsWith('/models/2/contextLength: ')), '文は今までと同じ番号の形');
   const paths = issues.map(i => i.path);
   assert.ok(paths.includes('models.local.contextLength'), paths.join(', '));
-  assert.ok(paths.includes('providers.ollama.timeoutMs'), paths.join(', '));
+  assert.ok(paths.includes('providers.local.timeoutMs'), paths.join(', '));
   assert.ok(paths.includes('server.port'), paths.join(', '));
   assert.ok(paths.includes('routing.chat.0'), '一覧でない配列は番号のまま');
   assert.equal(issues.find(i => i.path === 'models.local.contextLength')!.message, problems.find(p => p.startsWith('/models/2/contextLength: '))!.slice('/models/2/contextLength: '.length));
@@ -195,7 +195,7 @@ test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す
 
 test('番号が指す項目に id が無い・一覧の形が壊れているときは、番号のままにする（落ちない）', () => {
   const raw = JSON.parse(JSON.stringify(testConfig()));
-  raw.models.push({ provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
+  raw.models.push({ provider: 'local', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
   const paths = issuesOf(raw).issues.map(i => i.path);
   assert.ok(paths.some(p => p === 'models.3.id' || p.startsWith('models.3')), paths.join(', '));
   const broken = issuesOf({ ...JSON.parse(JSON.stringify(testConfig())), models: 'none' });

@@ -12,7 +12,6 @@ import { TaskError } from '../src/tasks/store.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { CONTEXT_HINTS, contextHint, evaluateContext } from '../src/providers/context.ts';
 import { classifyFetchError, classifyHttpFailure, requireApiKey } from '../src/providers/http.ts';
-import { OllamaAdapter } from '../src/providers/ollama.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
 import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
@@ -265,7 +264,6 @@ test('モデルの確認: 言語を渡さない呼び出しは英語の文', () 
   assert.equal(evaluateContext({ ...facts, declared: 70000 }).message, 'Usable: 70,000 tokens');
   assert.equal(evaluateContext({ ...facts, declared: 70000, unmeasuredNote: 'probe.note.use_config' }).message, 'Usable: 70,000 tokens (The length cannot be fetched from the server, so the configured value is used)');
   assert.equal(CONTEXT_HINTS.hosted(65536), 'Choose a model whose context length is 65,536 or more');
-  assert.equal(CONTEXT_HINTS.ollama(65536), 'Set contextLength in the config to 65,536 or more (Clive sends it as num_ctx every time). If VRAM is short, it gets slow or fails to load');
   assert.equal(CONTEXT_HINTS.lmstudio(65536), 'Reload the model in LM Studio with a Context Length of 65,536 or more, and set contextLength to match');
   assert.equal(CONTEXT_HINTS.llamacpp(65536), 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
   assert.equal(CONTEXT_HINTS.vllm(65536), 'Start vLLM with --max-model-len 65,536 or more');
@@ -306,15 +304,14 @@ test('プロバイダのエラー: 文は英語で、コードと値を添える
     return error.message === 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)'
       && error.text('en') === 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)' && error.code === 'key.missing';
   });
-  for (const kind of ['ollama', 'lmstudio', 'llamacpp', 'vllm', 'tabbyapi', 'generic', 'hosted'] as const) noJapanese(`hint ${kind}`, contextHint('en', kind, 65536));
+  for (const kind of ['lmstudio', 'llamacpp', 'vllm', 'tabbyapi', 'generic', 'hosted'] as const) noJapanese(`hint ${kind}`, contextHint('en', kind, 65536));
 });
 
 test('モデルの確認（英語）: 接続先ごとの message / hint / code', async t => {
   const tabby = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(JSON.stringify({ id: 'other-model', parameters: { max_seq_len: 4096 } })); });
   const vllm = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(JSON.stringify({ data: [{ id: 'another' }] })); });
   const small = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(JSON.stringify({ default_generation_settings: { n_ctx: 2048 } })); });
-  const gone = await fakeServer((_req, _body, res) => { res.writeHead(404); res.end('{}'); });
-  t.after(async () => { for (const s of [tabby, vllm, small, gone]) await s.close(); });
+  t.after(async () => { for (const s of [tabby, vllm, small]) await s.close(); });
 
   const tabbyResult = await new OpenAiCompatibleAdapter(compatProvider(`${tabby.url}/v1`, { server: 'tabbyapi' }), {}).probe(probeModel(), 65536, 'en');
   assert.equal(tabbyResult.status, 'not_found');
@@ -336,17 +333,11 @@ test('モデルの確認（英語）: 接続先ごとの message / hint / code',
   assert.deepEqual(tooSmall.messageParams, { effective: '2,048', required: '65,536', sourceKind: 'measured', n: '2,048' }, 'messageParams hold a sub-code, not language-written text');
   assert.equal(tooSmall.hint, 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
 
-  const missing = await new OllamaAdapter({ id: 'p', kind: 'ollama', baseUrl: gone.url, maxParallel: 1, timeoutMs: 10_000 }, {}).probe(probeModel(), 65536, 'en');
-  assert.equal(missing.status, 'not_found');
-  assert.equal(missing.message, 'Ollama does not have the model "test-model" (fetch it with: ollama pull test-model)');
-  const unreachable = await new OllamaAdapter({ id: 'p', kind: 'ollama', baseUrl: 'http://127.0.0.1:9', maxParallel: 1, timeoutMs: 10_000 }, {}).probe(probeModel(), 65536, 'en');
-  assert.equal(unreachable.status, 'unreachable');
-  assert.equal(unreachable.message, 'Cannot connect to Ollama (http://127.0.0.1:9). Check that it is running');
   const noKey = await new OpenAiCompatibleAdapter(compatProvider('http://127.0.0.1:9/v1', { apiKeyEnv: 'NOPE_KEY' }), {}).probe(probeModel(), 65536, 'en');
   assert.equal(noKey.status, 'no_api_key');
   assert.equal(noKey.message, 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)');
   assert.equal(noKey.messageCode, 'provider.key.missing');
-  for (const r of [tabbyResult, vllmResult, tooSmall, missing, unreachable, noKey]) { noJapanese('probe message', r.message); noJapanese('probe hint', r.hint); }
+  for (const r of [tabbyResult, vllmResult, tooSmall, noKey]) { noJapanese('probe message', r.message); noJapanese('probe hint', r.hint); }
 });
 
 test('モデルの確認: アダプタの確認には英語が届く', async t => {

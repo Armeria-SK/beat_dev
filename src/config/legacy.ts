@@ -32,9 +32,29 @@ function dropPath(target: Record<string, unknown>, segments: readonly string[]):
   return isObject(next) ? dropPath(next, rest) : false;
 }
 
-export function dropLegacy(raw: unknown): { config: unknown; dropped: string[] } {
-  if (!isObject(raw)) return { config: raw, dropped: [] };
+const OLD_OLLAMA_URL = 'http://127.0.0.1:11434';
+
+function rewriteOllama(config: Record<string, unknown>): string[] {
+  const providers = config.providers;
+  if (!Array.isArray(providers)) return [];
+  const rewritten: string[] = [];
+  for (const provider of providers) {
+    if (!isObject(provider) || provider.kind !== 'ollama') continue;
+    provider.kind = 'openai_compatible';
+    if (provider.baseUrl === undefined || typeof provider.baseUrl === 'string') {
+      const base = (provider.baseUrl ?? OLD_OLLAMA_URL).trim().replace(/\/+$/u, '');
+      provider.baseUrl = base.endsWith('/v1') ? base : `${base}/v1`;
+    }
+    if (provider.server === undefined) provider.server = 'generic';
+    rewritten.push(`providers.${String(provider.id)}.kind "ollama" → "openai_compatible" (${String(provider.baseUrl)})`);
+  }
+  return rewritten;
+}
+
+export function dropLegacy(raw: unknown): { config: unknown; dropped: string[]; rewritten: string[] } {
+  if (!isObject(raw)) return { config: raw, dropped: [], rewritten: [] };
   const config = structuredClone(raw);
   const dropped = LEGACY_KEYS.filter(key => dropPath(config, key.path.split('.'))).map(key => key.path);
-  return dropped.length ? { config, dropped } : { config: raw, dropped };
+  const rewritten = rewriteOllama(config);
+  return dropped.length || rewritten.length ? { config, dropped, rewritten } : { config: raw, dropped, rewritten };
 }

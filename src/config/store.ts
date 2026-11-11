@@ -35,17 +35,13 @@ export class ConfigError extends Error {
   }
 }
 
-export const OLLAMA_DEFAULT_URL = 'http://127.0.0.1:11434';
-
 export function defaultConfig(): AppConfig {
   return {
     version: 1,
     timezone: 'Asia/Tokyo',
     server: { host: '127.0.0.1', port: 4777, origins: [], tailscaleLogins: [] },
     providers: [
-      { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
-      { id: 'ollama', kind: 'ollama', baseUrl: OLLAMA_DEFAULT_URL, maxParallel: 1, timeoutMs: 600_000 },
-    ],
+      { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },    ],
     models: [],
     routing: { chat: [], background: [], retriesPerModel: 2 },
     tools: defaultTools(),
@@ -270,12 +266,15 @@ export class ConfigStore {
   #stamp = '';
   #lastError: ConfigError | undefined;
   #dropped: readonly string[] = [];
+  #rewritten: readonly string[] = [];
   readonly path: string;
   constructor(path: string) { this.path = path; }
 
   get lastError(): ConfigError | undefined { return this.#lastError; }
 
   get dropped(): readonly string[] { return this.#dropped; }
+
+  get rewritten(): readonly string[] { return this.#rewritten; }
 
   current(): AppConfig {
     try {
@@ -305,7 +304,7 @@ export class ConfigStore {
       throw new ConfigError(`The settings file ${this.path} is not valid JSON. It was copied to ${this.path}.bak. Fix it, then start again`);
     }
     const config = parseConfig(raw);
-    this.#dropped = dropLegacy(raw).dropped;
+    ({ dropped: this.#dropped, rewritten: this.#rewritten } = dropLegacy(raw));
     this.#cache = config;
     this.#stamp = stamp;
     return structuredClone(config);
@@ -319,6 +318,7 @@ export class ConfigStore {
     atomicWriteFile(this.path, `${JSON.stringify(parsed, null, 2)}\n`);
     this.#cache = parsed;
     this.#dropped = [];
+    this.#rewritten = [];
     this.#stamp = fileStamp(this.path);
     this.#lastError = undefined;
     return structuredClone(parsed);

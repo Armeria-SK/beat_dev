@@ -17,7 +17,7 @@ const reset = () => { setTimezone('Asia/Tokyo'); };
 afterEach(reset);
 
 const probe = (patch: Partial<Probe> = {}): Probe => ({
-  modelId: 'm', status: 'too_small', server: 'ollama', declared: 8192, measured: 8192, modelMax: 32768, effective: 8192, required: 17260,
+  modelId: 'm', status: 'too_small', server: 'generic', declared: 8192, measured: 8192, modelMax: 32768, effective: 8192, required: 17260,
   message: 'too small', checkedAt: 1, ...patch,
 });
 const model = (id: string, patch: Partial<ModelView> = {}): ModelView => ({
@@ -309,7 +309,7 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
   const { errorProbeText } = await import('../src/providers/context.ts');
   const { providerError } = await import('../src/providers/types.ts');
   const { engineText } = await import('../src/shared/messages/engine.ts');
-  const served = errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en');
+  const served = errorProbeText(providerError('provider_error', 'connect', {}), 'en');
   const SERVER_LINE = 'the line as the server wrote it';
   const unreachable = probe({ modelId: 'local', status: 'unreachable', message: SERVER_LINE, ...(served.messageCode ? { messageCode: served.messageCode } : {}), ...(served.messageParams ? { messageParams: served.messageParams as Record<string, string | number> } : {}) });
   const body = {
@@ -318,7 +318,7 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
     problems: [{ modelId: 'local', status: 'unreachable', message: SERVER_LINE }],
   };
   const models = [model('local', { probe: unreachable })];
-  const expectedEn = engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en').message, hintPart: '' }) });
+  const expectedEn = engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: 'Cannot connect to the provider', hintPart: '' }) });
 
   assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, '画面はサーバーの書いた行ではなく、コードから組み立てる');
   assert.notEqual(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage);

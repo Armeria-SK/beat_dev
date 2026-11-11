@@ -50,15 +50,15 @@ test('送る前の 409（確認していない）: 英語の文で、problems �
 
 test('送る前の 409（接続できない）: モデルの確認の messageCode / messageParams をそのまま problems に付ける', async t => {
   const s = await startApp(t, { probe: false });
-  const unreachable = errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en');
+  const unreachable = errorProbeText(providerError('provider_error', 'connect', {}), 'en');
   s.adapter().probeResult = { status: 'unreachable', ...unreachable };
   await s.app.status.probeAll(s.app.config());
   const body = await blockedBody(s);
   assert.equal(body.errorKind, 'provider_error');
-  assert.equal(body.errorMessage, `${FRAME_EN}- m: Cannot connect to Ollama (http://127.0.0.1:11434). Check that it is running`);
+  assert.equal(body.errorMessage, `${FRAME_EN}- m: Cannot connect to the provider`);
   assert.deepEqual(body.problems, [{
-    modelId: 'm', status: 'unreachable', message: 'Cannot connect to Ollama (http://127.0.0.1:11434). Check that it is running',
-    messageCode: 'provider.probe.ollama_unreachable', messageParams: { base: 'http://127.0.0.1:11434' },
+    modelId: 'm', status: 'unreachable', message: 'Cannot connect to the provider',
+    messageCode: 'provider.connect', messageParams: {},
   }]);
 });
 
@@ -88,7 +88,7 @@ test('送る前の 409: コードの無いモデルの確認（古いアダプ�
 test('画面の組み立て: サーバーの 409 を、problems 自身のコードだけ（モデルの一覧なし）で組み立て直し、サーバーの書いた文には頼らない', async t => {
   const scenarios: Array<{ name: string; probe: () => Record<string, unknown> | null }> = [
     { name: '確認していない', probe: () => null },
-    { name: '接続できない', probe: () => ({ status: 'unreachable', ...errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en') }) },
+    { name: '接続できない', probe: () => ({ status: 'unreachable', ...errorProbeText(providerError('provider_error', 'connect', {}), 'en') }) },
     { name: '長さが足りない（直し方つき）', probe: () => evaluateContext({ modelId: 'm', server: 'generic', required: 32768, measured: 8192, hint: 'same hint', language: 'en', now: 1 }) as never },
     { name: '長さが分からない', probe: () => evaluateContext({ modelId: 'm', server: 'generic', required: 32768, language: 'en', now: 1 }) as never },
   ];

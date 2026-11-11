@@ -3,14 +3,11 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import type { ChatMessage, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { toAnthropicMessages } from '../src/providers/anthropic.ts';
-import { OllamaAdapter, toOllamaMessages } from '../src/providers/ollama.ts';
 import { toOpenAiMessages } from '../src/providers/openai-compatible.ts';
-import type { ModelRequest, StreamEvent } from '../src/providers/types.ts';
-import { FakeAdapter, fakeServer, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 // 出力の上限で切れた返事（停止理由が max_tokens）を、成功として扱わない（AU-1）
 
@@ -138,40 +135,7 @@ test('切れた呼び出しのあとに正しく終われば、続けて切れ�
 
 // ── 提供元 ───────────────────────────────────────────────
 
-const model = (over: Partial<ModelConfig> = {}): ModelConfig => ({
-  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, vision: false, ...over,
-});
-const request = (m: ModelConfig): ModelRequest => ({
-  model: m, system: { frozen: 'あなたは Clive', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
-  tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
-});
-const ollama = (baseUrl: string): ProviderConfig => ({ id: 'p', kind: 'ollama', baseUrl, maxParallel: 1, timeoutMs: 10_000 });
-
-test('Ollama: done_reason が length なら、ツール呼び出しがあっても max_tokens を返す', async t => {
-  const server = await fakeServer((_req, _body, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-    res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'file_write', arguments: '{"path":"a' } }] }, done: false })}\n`);
-    res.end(`${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'length' })}\n`);
-  });
-  t.after(() => server.close());
-  const events: StreamEvent[] = [];
-  for await (const e of new OllamaAdapter(ollama(server.url), {}).stream(request(model()))) events.push(e);
-  assert.deepEqual(events.at(-1), { type: 'done', stop: 'max_tokens' });
-});
-
-test('Ollama: 道具があり停止理由が stop なら、今までどおり tool_use', async t => {
-  const server = await fakeServer((_req, _body, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-    res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'file_write', arguments: { path: 'a' } } }] }, done: false })}\n`);
-    res.end(`${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'stop' })}\n`);
-  });
-  t.after(() => server.close());
-  const events: StreamEvent[] = [];
-  for await (const e of new OllamaAdapter(ollama(server.url), {}).stream(request(model()))) events.push(e);
-  assert.deepEqual(events.at(-1), { type: 'done', stop: 'tool_use' });
-});
-
-test('3 つの提供元とも、会話に残した {} の呼び出しをそのまま送り返せる', () => {
+test('2 つの提供元とも、会話に残した {} の呼び出しをそのまま送り返せる', () => {
   const saved: ChatMessage[] = [
     { role: 'user', content: '書いて' },
     { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'file_write', arguments: {} }] },
@@ -179,8 +143,6 @@ test('3 つの提供元とも、会話に残した {} の呼び出しをその�
   ];
   const openai = toOpenAiMessages('s', saved, false).find(m => m.role === 'assistant') as { tool_calls: Array<{ function: { arguments: string } }> };
   assert.equal(openai.tool_calls[0]!.function.arguments, '{}');
-  const olla = toOllamaMessages('s', saved, false).find(m => m.role === 'assistant') as { tool_calls: Array<{ function: { arguments: unknown } }> };
-  assert.deepEqual(olla.tool_calls[0]!.function.arguments, {});
   const anth = toAnthropicMessages(saved, false).find(m => m.role === 'assistant')!;
   const block = (anth.content as Array<{ type: string; input?: unknown }>).find(b => b.type === 'tool_use')!;
   assert.deepEqual(block.input, {});

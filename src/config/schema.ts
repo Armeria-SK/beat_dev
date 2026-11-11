@@ -3,7 +3,6 @@ import { Type, type Static } from '@sinclair/typebox';
 export const ProviderKind = Type.Union([
   Type.Literal('anthropic'),
   Type.Literal('openai_compatible'),
-  Type.Literal('ollama'),
 ]);
 
 export const ServerKind = Type.Union([

@@ -208,15 +208,15 @@ test('エフォート: 送信でモデルを替えて今の値が新しいモデ
 
 test('エフォート: 設定の efforts は openai_compatible だけ。確認した結果（supported_reasoning_efforts）も使うが、設定が先', async t => {
   const s = await startApp(t, {
-    models: [fakeModel('m1'), fakeModel('m2', { efforts: ['low'] }), fakeModel('o', { provider: 'ollama-like', efforts })],
-    configure: config => { config.providers.push({ id: 'ollama-like', kind: 'ollama', baseUrl: 'http://127.0.0.1:2', maxParallel: 1, timeoutMs: 10_000 }); },
+    models: [fakeModel('m1'), fakeModel('m2', { efforts: ['low'] }), fakeModel('o', { provider: 'not-compat', efforts })],
+    configure: config => { config.providers.push({ id: 'not-compat', kind: 'anthropic', baseUrl: 'http://127.0.0.1:2', maxParallel: 1, timeoutMs: 10_000 }); },
   });
   s.adapter().probeResult = { efforts: ['low', 'medium', 'xhigh'] } as never;
   await s.app.status.probeAll(s.app.config());
   const models = (await s.json('/api/models', 'GET')).body.models as Array<{ id: string; efforts: string[] }>;
   assert.deepEqual(models.find(m => m.id === 'm1')!.efforts, ['low', 'medium', 'xhigh'], '確認で分かった値');
   assert.deepEqual(models.find(m => m.id === 'm2')!.efforts, ['low'], '設定に書けばそれが先');
-  assert.deepEqual(models.find(m => m.id === 'o')!.efforts, [], 'Ollama のモデルに書いても使わない');
+  assert.deepEqual(models.find(m => m.id === 'o')!.efforts, [], 'OpenAI 互換でないモデルに書いても使わない');
 });
 
 function compat(baseUrl: string, server: ProviderConfig['server'] = 'generic'): ProviderConfig {

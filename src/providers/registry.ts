@@ -1,6 +1,5 @@
 import type { AppConfig, ProviderConfig } from '../config/schema.ts';
 import { AnthropicAdapter } from './anthropic.ts';
-import { OllamaAdapter } from './ollama.ts';
 import { OpenAiCompatibleAdapter } from './openai-compatible.ts';
 import { providerSecrets } from './http.ts';
 import type { Env, FetchLike, ProviderAdapter } from './types.ts';
@@ -8,7 +7,6 @@ import type { Env, FetchLike, ProviderAdapter } from './types.ts';
 export function createAdapter(provider: ProviderConfig, env: Env, fetchImpl?: FetchLike): ProviderAdapter {
   switch (provider.kind) {
     case 'anthropic': return new AnthropicAdapter(provider, env, fetchImpl);
-    case 'ollama': return new OllamaAdapter(provider, env, fetchImpl);
     case 'openai_compatible': return new OpenAiCompatibleAdapter(provider, env, fetchImpl);
   }
 }

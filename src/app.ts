@@ -269,6 +269,7 @@ export class App {
 
   #applied = '';
   #droppedReported = '';
+  #rewrittenReported = '';
 
   // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
   #warnIgnoredPolicies(config: AppConfig): void {
@@ -316,6 +317,9 @@ export class App {
     const dropped = this.configStore.dropped.join(', ');
     if (dropped && dropped !== this.#droppedReported) this.log(`[INFO] Ignored settings that are no longer used: ${dropped}`);
     this.#droppedReported = dropped;
+    const rewritten = this.configStore.rewritten.join(', ');
+    if (rewritten && rewritten !== this.#rewrittenReported) this.log(`[INFO] Read old settings in their new form: ${rewritten}`);
+    this.#rewrittenReported = rewritten;
   }
 
   baseTokens(): number {

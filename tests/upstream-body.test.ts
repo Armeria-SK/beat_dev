@@ -8,7 +8,6 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { classifyAnthropicError } from '../src/providers/anthropic.ts';
 import { classifyHttpFailure } from '../src/providers/http.ts';
-import { OllamaAdapter } from '../src/providers/ollama.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
 import { providerError } from '../src/providers/types.ts';
 import { fail, fakeServer, FakeAdapter, tempDir, testConfig } from './helpers.ts';
@@ -58,8 +57,7 @@ test('モデルの確認: 相手のサーバーが 500 や 400 で本文を返�
     const server = await fakeServer((_req, _body, res) => { res.writeHead(status, { 'content-type': 'text/plain' }); res.end(BODY); });
     t.after(() => server.close());
     const compat = await new OpenAiCompatibleAdapter(provider(server.url), {}).probe(model, 65536, 'en');
-    const ollama = await new OllamaAdapter({ id: 'o', kind: 'ollama', baseUrl: server.url, maxParallel: 1, timeoutMs: 10_000 }, {}).probe(model, 65536, 'en');
-    for (const result of [compat, ollama]) assert.doesNotMatch(JSON.stringify(result), LEAK, `HTTP ${status}: ${JSON.stringify(result)}`);
+    for (const result of [compat]) assert.doesNotMatch(JSON.stringify(result), LEAK, `HTTP ${status}: ${JSON.stringify(result)}`);
   }
 });
 

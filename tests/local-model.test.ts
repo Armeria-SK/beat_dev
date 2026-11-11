@@ -35,12 +35,11 @@ function chatWith(s: Started, id: string, modelId: string | null, text: string):
   s.app.conversations.append(id, { role: 'user', content: text });
 }
 
-test('手元のモデルの判定: 提供元の baseUrl がループバックのホスト。Ollama の既定の接続先も手元。外のホスト・LAN・接続先なしは違う', () => {
+test('手元のモデルの判定: 提供元の baseUrl がループバックのホスト。外のホスト・LAN・接続先なしは違う', () => {
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://127.0.0.1:1234/v1' })), true);
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://localhost:8080/v1' })), true);
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://[::1]:8080/v1' })), true);
-  assert.equal(isLocalProvider(provider({ kind: 'ollama' })), true, 'Ollama は baseUrl が無ければ既定の 127.0.0.1');
-  assert.equal(isLocalProvider(provider({ kind: 'ollama', baseUrl: 'http://192.168.1.20:11434' })), false, 'LAN の別のマシンは手元ではない');
+  assert.equal(isLocalProvider(provider({ kind: 'openai_compatible', baseUrl: 'http://192.168.1.20:11434' })), false, 'LAN の別のマシンは手元ではない');
   assert.equal(isLocalProvider(provider({ baseUrl: 'https://api.example.test/v1' })), false);
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://127.0.0.1.example.test/v1' })), false, '名前の前半が似ているだけ');
   assert.equal(isLocalProvider(provider({ kind: 'anthropic' })), false, 'Anthropic の既定の接続先は外');

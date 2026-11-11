@@ -164,7 +164,7 @@ test('モデルの確認の説明: サーバーが作る probe の message を�
     { modelId: 'e', server: 'generic', required: 32768, modelMax: 4096 },
     { modelId: 'f', server: 'lmstudio', required: 32768, measured: 131072 },
     { modelId: 'g', server: 'generic', required: 32768, declared: 131072, unmeasuredNote: 'probe.note.use_config' as const },
-    { modelId: 'h', server: 'ollama', required: 32768, declared: 65536, unmeasuredNote: 'probe.note.not_loaded' as const },
+    { modelId: 'h', server: 'generic', required: 32768, declared: 65536, unmeasuredNote: 'probe.note.not_loaded' as const },
     { modelId: 'i', server: 'generic', required: 32768, declared: 65536, unmeasuredNote: 'probe.note.max_unavailable' as const },
   ];
   for (const fact of facts) {
@@ -182,8 +182,8 @@ test('モデルの確認の説明: サーバーが作る probe の message を�
 
 test('モデルの確認の説明（接続などの失敗）: プロバイダのエラーのコードから、画面の言語で書く。コードが無ければサーバーの文', () => {
   const errors = [
-    providerError('provider_error', 'probe.ollama_not_found', { model: 'qwen3:32b' }),
-    providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }),
+    providerError('provider_error', 'probe.vllm_missing', { model: 'qwen3:32b' }),
+    providerError('provider_error', 'probe.openrouter_missing', { model: 'qwen3:32b' }),
     providerError('provider_error', 'probe.tabby_other', { current: 'a', model: 'b' }),
     providerError('provider_error', 'probe.check_failed', { detail: 'boom' }),
     providerError('auth', 'key.missing', { env: 'OPENAI_API_KEY' }),
