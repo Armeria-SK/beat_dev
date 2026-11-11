@@ -192,7 +192,7 @@ export class App {
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, log: this.log,
-      web: { network: options.webNetwork, download: options.downloadNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
+      web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
       ...(options.now ? { now: () => new Date(now()) } : {}),

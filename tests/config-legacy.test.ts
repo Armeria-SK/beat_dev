@@ -30,8 +30,8 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl']);
 });
 
 test('tools.maxIterations（16 でも 0 でも）の設定が parseConfig で読め、dropped に入り、読んだ設定に残らない', () => {
@@ -316,4 +316,91 @@ test('画面からの保存: PUT /api/settings に kind: "ollama" の設定 → 
   assert.equal(res.status, 200);
   const saved = JSON.parse(readFileSync(s.paths.config, 'utf8')) as { providers: Array<Record<string, unknown>> };
   assert.deepEqual(saved.providers.find(p => p.id === 'ollama'), { id: 'ollama', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:11434/v1', maxParallel: 1, timeoutMs: 600000, server: 'generic' });
+});
+
+const OWNER_WEB = { fetch: true, search: 'searxng', searxngUrl: 'http://127.0.0.1:8888', region: 'jp-jp', maxSearchesPerHour: 30 };
+
+function withSearxng(web: Record<string, unknown> = { search: 'searxng', searxngUrl: 'http://127.0.0.1:8888' }) {
+  const config = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+  Object.assign(config.tools.web, web);
+  return config;
+}
+
+test('古い tools.web.search: "searxng" は duckduckgo に読み替え、searxngUrl は落とす。dropped と rewritten にそれぞれ 1 つ', () => {
+  const raw = withSearxng();
+  const result = dropLegacy(raw);
+  const web = (result.config as { tools: { web: Record<string, unknown> } }).tools.web;
+  assert.equal(web.search, 'duckduckgo');
+  assert.equal('searxngUrl' in web, false);
+  assert.deepEqual(result.dropped, ['tools.web.searxngUrl']);
+  assert.deepEqual(result.rewritten, ['tools.web.search "searxng" → "duckduckgo"']);
+  const config = parseConfig(raw);
+  assert.equal(config.tools.web.search, 'duckduckgo');
+  assert.equal('searxngUrl' in config.tools.web, false);
+});
+
+test('searxngUrl だけ（search は duckduckgo / off）は落とすだけで、search は読み替えない', () => {
+  for (const search of ['duckduckgo', 'off']) {
+    const raw = withSearxng({ search, searxngUrl: 'http://127.0.0.1:8888' });
+    const result = dropLegacy(raw);
+    assert.deepEqual(result.dropped, ['tools.web.searxngUrl'], search);
+    assert.deepEqual(result.rewritten, [], search);
+    assert.equal(parseConfig(raw).tools.web.search, search, search);
+  }
+  const off = withSearxng({ search: 'off' });
+  assert.deepEqual(dropLegacy(off), { config: off, dropped: [], rewritten: [] });
+  assert.equal(parseConfig(off).tools.web.search, 'off');
+});
+
+test('SearXNG の読み替え: 入力を変えない。同じ入力を 2 回通しても同じ。読み替えたあとの形をもう一度通すと何も変わらない', () => {
+  const raw = withSearxng();
+  const before = JSON.stringify(raw);
+  const first = dropLegacy(raw);
+  assert.equal(JSON.stringify(raw), before);
+  assert.deepEqual(first, dropLegacy(raw));
+  const again = dropLegacy(first.config);
+  assert.deepEqual([again.dropped, again.rewritten], [[], []]);
+  assert.equal(again.config, first.config);
+});
+
+test('ConfigStore: SearXNG の設定のファイルを読むとファイルのバイトは変わらない。保存すると新しい形で書き、dropped と rewritten は空', t => {
+  const path = join(tempDir(t), 'config.json');
+  writeFileSync(path, `${JSON.stringify(withSearxng(), null, 2)}\n`);
+  const before = readFileSync(path);
+  const store = new ConfigStore(path);
+  const config = store.load();
+  assert.equal(config.tools.web.search, 'duckduckgo');
+  assert.deepEqual(store.dropped, ['tools.web.searxngUrl']);
+  assert.deepEqual(store.rewritten, ['tools.web.search "searxng" → "duckduckgo"']);
+  store.current();
+  assert.deepEqual(readFileSync(path), before);
+  store.save(config);
+  assert.deepEqual([store.dropped, store.rewritten], [[], []]);
+  const saved = JSON.parse(readFileSync(path, 'utf8')) as { tools: { web: Record<string, unknown> } };
+  assert.equal(saved.tools.web.search, 'duckduckgo');
+  assert.equal('searxngUrl' in saved.tools.web, false);
+});
+
+test('持ち主の形（tools.maxIterations: 0 と SearXNG の tools.web）が読め、region は jp-jp のまま。起動のログは決まった 2 行で、ファイルは書き換えない', t => {
+  const raw = ownerShapedConfig();
+  raw.tools.maxIterations = 0;
+  raw.tools.web = { ...OWNER_WEB };
+  const config = parseConfig(raw);
+  assert.deepEqual(config.tools.web, { fetch: true, search: 'duckduckgo', region: 'jp-jp', maxSearchesPerHour: 30 });
+
+  const dir = tempDir(t);
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
+  mkdirSync(paths.data, { recursive: true });
+  writeFileSync(paths.config, `${JSON.stringify(raw, null, 2)}\n`);
+  const before = readFileSync(paths.config);
+  const logs: string[] = [];
+  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
+  t.after(() => app.close());
+  app.config();
+  app.config();
+  assert.deepEqual(logs.filter(line => /no longer used|new form/u.test(line)), [
+    '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl',
+    '[INFO] Read old settings in their new form: tools.web.search "searxng" → "duckduckgo"',
+  ]);
+  assert.deepEqual(readFileSync(paths.config), before);
 });

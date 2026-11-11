@@ -211,7 +211,6 @@ const en = {
   'web.long_query': 'The URL has a long query string (check that it is not sending information out)',
   'web.secret_text': 'It contains what looks like an API key or token (it would be sent out)',
   'web.search_off': 'web_search is turned off in the settings (tools.web.search)',
-  'web.searxng_unset': 'tools.web.searxngUrl is not set',
 
   'pipeline.precheck_failed': 'The check before running failed: {detail}',
   'pipeline.taint': 'You have just read text that came from somewhere else, such as the web or an attachment ({sources}), so this is checked with you to be safe',

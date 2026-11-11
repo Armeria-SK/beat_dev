@@ -7,7 +7,7 @@ import type { Language } from '../../config/schema.ts';
 import type { PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { htmlText } from '../web/html-text.ts';
 import { clip, decodeText, fetchPublic, pageUrl, RetrievalFailure } from '../web/public-page.ts';
-import { searchDuckDuckGo, SearchFailure, searchSearxng, searxngLanguage, SearchThrottle, type SearchHit } from '../web/search.ts';
+import { searchDuckDuckGo, SearchFailure, SearchThrottle } from '../web/search.ts';
 
 const PAGE_CHARS = 20_000;
 const SEARCH_BLOCK_LIMIT = 2;
@@ -15,7 +15,7 @@ const SEARCH_BLOCK_LIMIT = 2;
 const sharedThrottle = new SearchThrottle();
 
 function web(ctx: ToolContext) {
-  return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, network: ctx.services?.web?.network, fetch: ctx.services?.web?.fetch };
+  return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, network: ctx.services?.web?.network };
 }
 
 export function exfiltrationCheck(text: string, language: Language, extraReasons: string[] = []): PreCheck {
@@ -91,7 +91,6 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     const w = ctx.config.tools.web;
     const language = languageOf(ctx.config);
     if (w.search === 'off') return { decision: 'deny', reasons: [guardText(language, 'web.search_off')] };
-    if (w.search === 'searxng' && !w.searxngUrl) return { decision: 'deny', reasons: [guardText(language, 'web.searxng_unset')] };
     return exfiltrationCheck(input.query, language);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_search'), body: input.query }),
@@ -107,15 +106,13 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
         const timer = setTimeout(resolve, wait);
         ctx.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new SearchFailure(toolText('en', 'fetch.aborted'), 'fetch.aborted')); }, { once: true });
       });
-      const hits: SearchHit[] = w.search === 'searxng'
-        ? await searchSearxng(w.searxngUrl, input.query, { limit, language: searxngLanguage(w.region) ?? '', signal: ctx.signal, fetch: web(ctx).fetch })
-        : await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network });
+      const hits = await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network });
       ctx.searchBlocks = 0;
       if (!hits.length) return { content: toolText(language, 'web.no_hits', { query: input.query }) };
       return {
         content: [
           toolText(language, 'web.external'),
-          toolText(language, 'web.search_header', { query: input.query, engine: w.search === 'searxng' ? 'SearXNG' : 'DuckDuckGo' }),
+          toolText(language, 'web.search_header', { query: input.query, engine: 'DuckDuckGo' }),
           '<<<',
           ...hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${h.snippet}` : ''}`),
           '>>>',

@@ -7,6 +7,7 @@ export const LEGACY_KEYS: readonly LegacyKey[] = [
   { path: 'models[].toolMode', removedIn: 'beat 0-1' },
   { path: 'language', removedIn: 'beat 0-2a-3' },
   { path: 'tools.maxIterations', removedIn: 'beat 0-3b' },
+  { path: 'tools.web.searxngUrl', removedIn: 'beat 0-4b' },
 ];
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -51,10 +52,17 @@ function rewriteOllama(config: Record<string, unknown>): string[] {
   return rewritten;
 }
 
+function rewriteSearxng(config: Record<string, unknown>): string[] {
+  const tools = config.tools;
+  if (!isObject(tools) || !isObject(tools.web) || tools.web.search !== 'searxng') return [];
+  tools.web.search = 'duckduckgo';
+  return ['tools.web.search "searxng" → "duckduckgo"'];
+}
+
 export function dropLegacy(raw: unknown): { config: unknown; dropped: string[]; rewritten: string[] } {
   if (!isObject(raw)) return { config: raw, dropped: [], rewritten: [] };
   const config = structuredClone(raw);
   const dropped = LEGACY_KEYS.filter(key => dropPath(config, key.path.split('.'))).map(key => key.path);
-  const rewritten = rewriteOllama(config);
+  const rewritten = [...rewriteOllama(config), ...rewriteSearxng(config)];
   return dropped.length || rewritten.length ? { config, dropped, rewritten } : { config: raw, dropped, rewritten };
 }

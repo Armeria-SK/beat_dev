@@ -81,9 +81,9 @@ const en = {
   'web.no_link_text': '(no text)',
   'web.no_hits': 'There were no search results for "{query}". Try different words',
   'web.search_header': 'Search: {query} ({engine})',
-  'web.search_unavailable': 'Search is unavailable in this run (setting up SearXNG fixes it)',
+  'web.search_unavailable': 'Search is unavailable for the rest of this run (DuckDuckGo refused it twice in a row)',
   'web.search_blocked_title': 'Search is being stopped by the automated-access check',
-  'web.search_blocked_body': 'DuckDuckGo refused searches several times in a row. Set up SearXNG and enter it under Tools in the settings to make search work reliably',
+  'web.search_blocked_body': 'DuckDuckGo refused searches several times in a row. Search works again after a while',
 
   'fetch.too_long': 'The URL is too long',
   'fetch.bad_url': 'Cannot read this as a URL: {url}',
@@ -99,11 +99,7 @@ const en = {
   'fetch.timeout': 'Timed out ({seconds} s)',
   'fetch.connect': 'Could not connect: {detail}',
 
-  'search.blocked': 'DuckDuckGo judged this to be automated access and returned no results. Wait a while, or switch to SearXNG (tools.web.searxngUrl)',
-  'search.searx_connect': 'Could not connect to SearXNG ({origin}): {detail}',
-  'search.searx_json': 'SearXNG does not return JSON. Add json to search.formats in settings.yml',
-  'search.searx_http': 'SearXNG returned an error (HTTP {status})',
-  'search.searx_bad': 'The reply from SearXNG could not be read',
+  'search.blocked': 'DuckDuckGo judged this to be automated access and returned no results. Wait a while and try again',
   'search.limit': 'Searches are limited to {max} per hour (tools.web.maxSearchesPerHour)',
 
   'memory.saved': 'Saved to memory [{id}] ({label}: {used} characters in total). It will be used from the next conversation',

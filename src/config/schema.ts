@@ -103,8 +103,7 @@ export function ToolsConfig() {
     }, { additionalProperties: false, default: {} }),
     web: Type.Object({
       fetch: Type.Boolean({ default: true }),
-      search: Type.Union([Type.Literal('duckduckgo'), Type.Literal('searxng'), Type.Literal('off')], { default: 'duckduckgo' }),
-      searxngUrl: Type.String({ default: '' }),
+      search: Type.Union([Type.Literal('duckduckgo'), Type.Literal('off')], { default: 'duckduckgo' }),
       region: Type.String({ default: 'jp-jp', maxLength: 10 }),
       maxSearchesPerHour: Type.Integer({ minimum: 1, maximum: 600, default: 30 }),
     }, { additionalProperties: false, default: {} }),

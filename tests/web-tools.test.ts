@@ -10,7 +10,7 @@ import { webFailure, webFetch } from '../src/tools/builtin/web.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { htmlText } from '../src/tools/web/html-text.ts';
 import { decodeText, defaultNetwork, fetchPublic, mediaTypeOf, pageUrl, publicIPv4, RetrievalFailure, type PageNetwork, type PageResponse } from '../src/tools/web/public-page.ts';
-import { parseDuckDuckGo, searchDuckDuckGo, SearchFailure, searchSearxng, searxngLanguage, SearchThrottle } from '../src/tools/web/search.ts';
+import { parseDuckDuckGo, searchDuckDuckGo, SearchFailure, SearchThrottle } from '../src/tools/web/search.ts';
 import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function fakeNetwork(dns: Record<string, string[]>, pages: Record<string, Partial<PageResponse>>): PageNetwork & { gets: string[] } {
@@ -104,48 +104,29 @@ test('DuckDuckGo が自動アクセスの確認（HTTP 202）を返したら、�
   assert.equal(net.gets.length, 1, '繰り返し試さない');
 });
 
-test('SearXNG の JSON を読む。JSON が無効なら直し方を返す', async () => {
-  let asked = '';
-  const fetchOk = (async (url: string | URL) => {
-    asked = String(url);
-    return new Response(JSON.stringify({ results: [{ title: 'A', url: 'https://a.example/', content: '抜粋' }, { title: 'bad', url: 'javascript:1' }] }), { status: 200 });
-  }) as typeof fetch;
-  const hits = await searchSearxng('http://127.0.0.1:8888', 'テスト', { limit: 5, language: 'ja', fetch: fetchOk });
-  assert.deepEqual(hits, [{ title: 'A', url: 'https://a.example/', snippet: '抜粋' }]);
-  assert.match(asked, /\/search\?q=%E3%83%86%E3%82%B9%E3%83%88&format=json&language=ja$/u);
-  const fetch403 = (async () => new Response('', { status: 403 })) as typeof fetch;
-  await assert.rejects(searchSearxng('http://127.0.0.1:8888', 'x', { limit: 5, language: '', fetch: fetch403 }), /search\.formats/u);
-});
-
-test('SearXNG に渡す言語: 地域「国-言語」の後ろ（言語）を先に読む。jp→ja・kr→ko・tzh→zh・wt→渡さない、ほかは 2 文字の言語のコードならそのまま、読めなければ前（国）から探す', () => {
-  const table: Array<[string, string | undefined]> = [
-    // 後ろ（言語）を読む
-    ['br-pt', 'pt'], ['ca-fr', 'fr'], ['ch-de', 'de'], ['be-fr', 'fr'], ['in-en', 'en'], ['xa-ar', 'ar'], ['jp-jp', 'ja'], ['wt-wt', undefined],
-    ['kr-kr', 'ko'], ['tw-tzh', 'zh'], ['hk-tzh', 'zh'], ['cn-zh', 'zh'], ['uk-en', 'en'], ['us-en', 'en'], ['us-es', 'es'], ['xl-es', 'es'], ['ua-uk', 'uk'], ['ct-ca', 'ca'],
-    ['de-de', 'de'], ['fr-fr', 'fr'], ['ru-ru', 'ru'], ['DE-De', 'de'], ['zzz-en', 'en'],
-    // 後ろが無い・読めないときは、前（国）から探す（jp→ja・kr→ko・cn/tw/hk→zh・uk/us→en・2 文字の言語のコード）
-    ['jp', 'ja'], ['kr', 'ko'], ['uk', 'en'], ['us', 'en'], ['en', 'en'], ['de-xx', 'de'], ['jp-', 'ja'], ['uk-zzz', 'en'],
-    // どちらからも言語にならない
-    ['', undefined], ['-', undefined], ['wt', undefined], ['xl', undefined], ['xl-xx', undefined], ['__proto__', undefined], ['constructor-x', undefined],
-  ];
-  for (const [region, expected] of table) assert.equal(searxngLanguage(region), expected, region);
-});
-
-test('web_search（SearXNG）: 設定の地域 jp-jp は language=ja で送る。言語に直せない地域は language を付けない', async t => {
-  const asked: string[] = [];
-  const searx = (async (url: string | URL) => {
-    asked.push(String(url));
-    return new Response(JSON.stringify({ results: [{ title: 'A', url: 'https://a.example/', content: '抜粋' }] }), { status: 200 });
-  }) as typeof fetch;
-  for (const [region, expected] of [['jp-jp', 'ja'], ['de-de', 'de'], ['wt-wt', null]] as const) {
-    const s = await setupApp(t, fakeNetwork({}, {}), undefined, c => { c.tools.web.search = 'searxng'; c.tools.web.searxngUrl = 'http://127.0.0.1:8888'; c.tools.web.region = region; }, searx);
-    s.adapter().scripts.push(toolCall('web_search', { query: 'テスト' }), reply('検索しました'));
+test('web_search: 古い設定（search: "searxng"・searxngUrl）でも DuckDuckGo に設定の地域（kl）を付けて送り、searxngUrl へは何も送らない。見出しの検索元は DuckDuckGo', async t => {
+  for (const region of ['jp-jp', 'us-en']) {
+    const asked: string[] = [];
+    const spy = (async (url: string | URL) => {
+      asked.push(String(url));
+      return new Response(JSON.stringify({ results: [{ title: 'A', url: 'https://a.example/', content: 'x' }] }), { status: 200 });
+    }) as typeof fetch;
+    const net = fakeNetwork({ 'html.duckduckgo.com': ['52.142.124.215'] }, { [`https://html.duckduckgo.com/html/?q=sqlite&kl=${region}`]: { body: Buffer.from(DDG) } });
+    const s = await setupApp(t, net, undefined, c => {
+      const web = c.tools.web as Record<string, unknown>;
+      web.search = 'searxng';
+      web.searxngUrl = 'http://127.0.0.1:8888';
+      web.region = region;
+    }, spy);
+    assert.equal(s.app.config().tools.web.search, 'duckduckgo', region);
+    s.adapter().scripts.push(toolCall('web_search', { query: 'sqlite' }), reply('検索しました'));
     await chat(s, '調べて');
-    const sent = new URL(asked.at(-1)!);
-    assert.equal(sent.searchParams.get('language'), expected, `地域 ${region}`);
-    assert.equal(sent.searchParams.get('q'), 'テスト');
+    assert.deepEqual(net.gets, [`https://html.duckduckgo.com/html/?q=sqlite&kl=${region}@52.142.124.215`], region);
+    assert.deepEqual(asked.filter(url => url.includes('8888')), [], region);
+    const result = String(s.app.conversations.messages('c1').find(m => m.role === 'tool')!.message.content);
+    assert.equal(result.split('\n')[1], 'Search: sqlite (DuckDuckGo)', region);
+    assert.ok(result.includes('1. SQLite FTS5 Extension\n   https://sqlite.org/fts5.html'), result);
   }
-  assert.equal(asked.length, 3);
 });
 
 test('検索の回数を抑える（連打は間をあけ、1時間の上限で止める）', () => {
@@ -249,7 +230,7 @@ function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error'>): PageNet
 
 // 検索の間隔（1.5 秒）の待ちを実時間で待たないよう、呼ぶたびに 5 秒進む時計を渡す
 const steppingClock = (): (() => number) => { let at = Date.parse('2026-11-05T00:00:00Z'); return () => (at += 5000); };
-const UNAVAILABLE = 'Search is unavailable in this run (setting up SearXNG fixes it)';
+const UNAVAILABLE = 'Search is unavailable for the rest of this run (DuckDuckGo refused it twice in a row)';
 const toolTexts = (s: Awaited<ReturnType<typeof setupApp>>, conversationId = 'c1') => s.app.conversations.messages(conversationId).filter(m => m.role === 'tool').map(m => m.message.content);
 
 async function chat(s: Awaited<ReturnType<typeof setupApp>>, text: string, conversationId = 'c1') {
@@ -291,7 +272,7 @@ test('途中で検索が成功する・別の失敗が挟まると、続けて�
   assert.notEqual(texts[5], UNAVAILABLE);
 });
 
-test('止められたことは、持ち主に 1 日 1 回だけお知らせする（SearXNG を勧める）', async t => {
+test('止められたことは、持ち主に 1 日 1 回だけお知らせする', async t => {
   const net = scriptedNetwork('blocked', 'blocked', 'blocked', 'blocked');
   const s = await setupApp(t, net, steppingClock());
   s.adapter().scripts.push(toolCall('web_search', { query: 'あ' }), reply('一回目'));
@@ -305,7 +286,8 @@ test('止められたことは、持ち主に 1 日 1 回だけお知らせす�
   const [note, ...rest] = s.app.notifications.list();
   assert.equal(rest.length, 0);
   assert.match(note!.title, /Search/u);
-  assert.match(note!.body ?? '', /SearXNG/u);
+  assert.equal(note!.body, 'DuckDuckGo refused searches several times in a row. Search works again after a while');
+  assert.doesNotMatch(note!.body ?? '', /SearXNG/u);
   assert.equal(note!.link, '#/settings');
   s.adapter().scripts.push(toolCall('web_search', { query: 'お' }), toolCall('web_search', { query: 'か' }), reply('四回目'));
   await chat(s, '調べて');
@@ -335,7 +317,7 @@ const LONG_URL = `https://b.example.com/${LONG_PATH}`;
 
 test('「外を読んだ」印を付けない失敗は、文が全部アプリの決まった文のものだけ（キーの表で固定）', () => {
   const marked = new Set(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked']);
-  const keys = ['fetch.too_long', 'fetch.bad_url', 'fetch.policy', 'fetch.http_status', 'fetch.type', 'fetch.aborted', 'fetch.dns', 'fetch.not_public', 'fetch.redirects', 'fetch.redirect_downgrade', 'fetch.timeout', 'fetch.connect', 'search.blocked', 'search.searx_connect', 'search.searx_json', 'search.searx_http', 'search.searx_bad', 'search.limit'] as const;
+  const keys = ['fetch.too_long', 'fetch.bad_url', 'fetch.policy', 'fetch.http_status', 'fetch.type', 'fetch.aborted', 'fetch.dns', 'fetch.not_public', 'fetch.redirects', 'fetch.redirect_downgrade', 'fetch.timeout', 'fetch.connect', 'search.blocked', 'search.limit'] as const;
   for (const key of keys) {
     const fromFetch = webFailure(new RetrievalFailure('http_failure', 'x', undefined, key), 'en');
     assert.equal(fromFetch.noRemoteContent === true, marked.has(key), `fetch 側 ${key}`);
@@ -343,7 +325,7 @@ test('「外を読んだ」印を付けない失敗は、文が全部アプリ�
     assert.equal(fromSearch.noRemoteContent === true, marked.has(key), `検索側 ${key}`);
   }
   assert.equal(webFailure(new Error('boom'), 'en').noRemoteContent, undefined, '想定外の例外は印を付ける側');
-  assert.equal(webFailure(new SearchFailure('tools.web.searxngUrl: 不正'), 'en').noRemoteContent, undefined, 'キーの無い失敗も印を付ける側');
+  assert.equal(webFailure(new SearchFailure('不正'), 'en').noRemoteContent, undefined, 'キーの無い失敗も印を付ける側');
 });
 
 test('中止（abort）の fetch は、通信前でも印を付けない結果になる', async () => {
@@ -357,7 +339,7 @@ test('決まった文だけの失敗（検索のボット判定・回数の上�
   const cases: Array<{ label: string; network: PageNetwork; calls: Script[]; configure?: (config: ReturnType<typeof testConfig>) => void; expectText: RegExp }> = [
     { label: '検索のボット判定', network: scriptedNetwork('blocked'), calls: [toolCall('web_search', { query: 'あ' })], expectText: /judged this to be automated access/u },
     { label: '検索の回数の上限', network: scriptedNetwork('blocked', 'ok'), calls: [toolCall('web_search', { query: 'あ' }), toolCall('web_search', { query: 'い' })], configure: c => { c.tools.web.maxSearchesPerHour = 1; }, expectText: /limited to 1 per hour/u },
-    { label: '2 回続けて止められたあとの検索', network: scriptedNetwork('blocked', 'blocked', 'ok'), calls: [toolCall('web_search', { query: 'あ' }), toolCall('web_search', { query: 'い' }), toolCall('web_search', { query: 'う' })], expectText: /Search is unavailable in this run/u },
+    { label: '2 回続けて止められたあとの検索', network: scriptedNetwork('blocked', 'blocked', 'ok'), calls: [toolCall('web_search', { query: 'あ' }), toolCall('web_search', { query: 'い' }), toolCall('web_search', { query: 'う' })], expectText: /Search is unavailable for the rest of this run/u },
     { label: 'https から http への転送', network: redirect('http://a.example.com/plain'), calls: [toolCall('web_fetch', { url: 'https://a.example.com/' })], expectText: /Redirects from https to http/u },
     { label: 'LAN への転送', network: redirect('http://169.254.169.254/latest/meta-data/'), calls: [toolCall('web_fetch', { url: 'https://a.example.com/' })], expectText: /Local and LAN/u },
   ];
