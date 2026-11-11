@@ -1,18 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import { subscribe as subscribeFeedback, type FeedbackItem, type FeedbackKind } from './feedback.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { useT } from './i18n/index.ts';
 import type { LayoutMode } from './layout.ts';
 
-export type ToastKind = 'info' | 'done' | 'approval' | 'memory';
+export type ToastKind = FeedbackKind;
 
-export interface ToastInput {
-  kind?: ToastKind;
-  icon?: IconName;
-  title: string;
-  body?: string;
-  action?: { label: string; run: () => void };
-  durationMs?: number;
-}
+export type ToastInput = FeedbackItem;
 
 export interface ToastItem extends ToastInput { id: number; leaving: boolean }
 
@@ -58,6 +52,8 @@ export function toast(input: ToastInput): number {
   scheduleDismiss(id, input.durationMs ?? DEFAULT_MS);
   return id;
 }
+
+subscribeFeedback(item => { toast(item); });
 
 export function toastStackHeight(count: number, expanded: boolean): number {
   return expanded ? count * 66 : 58 + Math.min(Math.max(count - 1, 0), 2) * 7;

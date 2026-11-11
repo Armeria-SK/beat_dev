@@ -1,4 +1,4 @@
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 
 export type PaletteGroupKey = 'actions' | 'conversations' | 'tasks' | 'skills';
 

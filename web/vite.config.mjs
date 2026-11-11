@@ -1,7 +1,9 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const target = `http://127.0.0.1:${process.env.CLIVE_PORT ?? 4777}`;
+const entry = process.env.VITE_BEAT_UI === '1' ? './src/ui/main.tsx' : './src/legacy-main.tsx';
 
 const woff2Only = {
   name: 'clive-woff2-only',
@@ -17,6 +19,7 @@ const woff2Only = {
 export default defineConfig({
   root: 'web',
   plugins: [woff2Only, react()],
+  resolve: { alias: [{ find: /^virtual-entry$/, replacement: fileURLToPath(new URL(entry, import.meta.url)) }] },
   build: { outDir: 'dist', emptyOutDir: true, assetsInlineLimit: 0 },
   server: {
     proxy: {

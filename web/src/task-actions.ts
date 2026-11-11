@@ -1,7 +1,7 @@
 import { api, ApiError, type Task } from './api.ts';
 import { t } from './i18n/index.ts';
+import { toast } from './feedback.ts';
 import { ROW_ACTION_API } from './task-meta.ts';
-import { toast } from './toast.tsx';
 
 export type TaskAction = keyof typeof ROW_ACTION_API | 'stop';
 

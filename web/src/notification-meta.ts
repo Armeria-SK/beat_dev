@@ -1,6 +1,6 @@
 import { arrangeNotifications, NOTIFICATION_LIST_LIMIT } from '../../src/shared/notification-list.ts';
 import type { NotificationItem } from './api.ts';
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 import type { PlainKey } from './i18n/index.ts';
 import { parseRoute, routeHash } from './routes.ts';
 

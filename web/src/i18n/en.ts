@@ -1468,4 +1468,10 @@ export const en = {
   'memory.sizeNote': 'There is no character limit. What goes into a conversation has a budget (about 12% of the smaller usable model), and the most recently changed memories go in first. Clive suggests tidying up when it is exceeded.',
   // p0-6
   'chat.send.setupModel': 'Open the first-run setup',
+  'ui.wordmark': 'beat',
+  'ui.sidebar': 'beat',
+  'ui.avatar.idle': 'beat is idle',
+  'ui.avatar.working': 'beat is working',
+  'ui.avatar.waiting': 'beat is waiting for you',
+  'ui.toasts': 'Updates',
 };

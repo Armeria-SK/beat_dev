@@ -1,6 +1,6 @@
 import type { CuriosityItem, Task, TaskStatus } from './api.ts';
 import type { PlainKey } from './i18n/types.ts';
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 
 // タスク画面の、画面を使わない部分（分け方・並べ方・どの操作を出すか）。文字は辞書のキーで持ち、表示のときに引く。
 

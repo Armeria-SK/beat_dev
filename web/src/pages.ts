@@ -1,4 +1,4 @@
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 import type { PlainKey } from './i18n/index.ts';
 import type { Page } from './routes.ts';
 import type { ModelView, WorkerStatus } from './api.ts';

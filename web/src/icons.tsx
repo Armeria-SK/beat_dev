@@ -1,4 +1,5 @@
-import { PATHS, type IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
+import { PATHS } from './icon-paths.ts';
 
 export type { IconName };
 

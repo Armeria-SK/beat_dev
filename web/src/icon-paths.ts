@@ -42,6 +42,8 @@
  *   SOFTWARE.
  */
 
+import type { IconName } from './icon-name.ts';
+
 export const PATHS = {
   msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   tasks: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
@@ -92,6 +94,4 @@ export const PATHS = {
   slash: '<path d="M22 2 2 22"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'
-} as const;
-
-export type IconName = keyof typeof PATHS;
+} as const satisfies Record<IconName, string>;

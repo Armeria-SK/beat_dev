@@ -1,0 +1,17 @@
+.bt-root .markdown { display: flex; flex-direction: column; gap: var(--space-3); font-family: var(--font-sans); font-size: 14px; line-height: 22px; color: var(--ink); overflow-wrap: anywhere; }
+.bt-root .markdown > * { margin: 0; }
+.bt-root .markdown h1, .bt-root .markdown h2, .bt-root .markdown h3, .bt-root .markdown h4, .bt-root .markdown h5, .bt-root .markdown h6 { margin: 0; font-family: var(--font-sans); font-size: 14px; line-height: 22px; font-weight: 600; color: var(--ink); }
+.bt-root .markdown strong { font-weight: 600; }
+.bt-root .markdown ul, .bt-root .markdown ol { margin: 0; padding-left: 1.25em; display: flex; flex-direction: column; gap: var(--space-1); }
+.bt-root .markdown li > p { display: inline; margin: 0; }
+.bt-root .markdown a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.bt-root .markdown :not(pre) > code { padding: 1px 5px; border-radius: var(--radius-xs); background: var(--surface-sunk); font-family: var(--font-mono); font-size: 12.5px; }
+.bt-root .markdown pre { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--surface-sunk); font-family: var(--font-mono); font-size: 12.5px; line-height: 20px; overflow-x: auto; }
+.bt-root .markdown pre code { font-family: inherit; font-size: inherit; }
+.bt-root .markdown blockquote { margin: 0; padding-left: var(--space-3); border-left: 2px solid var(--line-strong); color: var(--ink-soft); }
+.bt-root .markdown hr { width: 100%; border: 0; border-top: 1px solid var(--line); }
+.bt-root .markdown .muted { font-family: var(--font-sans); font-size: 12px; line-height: 18px; color: var(--ink-mute); }
+.bt-root .markdown .table-wrap { overflow-x: auto; }
+.bt-root .markdown table { border-collapse: collapse; font-size: 13px; }
+.bt-root .markdown th, .bt-root .markdown td { padding: var(--space-1) var(--space-2); border: 1px solid var(--line); text-align: left; }
+.bt-root .markdown th { font-weight: 600; background: var(--surface-sunk); }

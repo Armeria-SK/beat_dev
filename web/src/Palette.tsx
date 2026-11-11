@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api, type Conversation, type SkillSummary, type Task, type TaskStatus, type WorkerStatus } from './api.ts';
 import { useExit, useTheme } from './hooks.ts';
 import { Icon } from './icons.tsx';
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 import { formatRelative, useT, type PlainKey } from './i18n/index.ts';
 import { isComposing, modLabel } from './keys.ts';
 import { flattenPalette, filterPalette, moveIndex, type PaletteGroup, type PaletteItem } from './palette.ts';
