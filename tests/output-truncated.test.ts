@@ -3,11 +3,13 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
+import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import type { ChatMessage, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { toAnthropicMessages } from '../src/providers/anthropic.ts';
-import { toOpenAiMessages } from '../src/providers/openai-compatible.ts';
-import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { AnthropicAdapter, toAnthropicMessages } from '../src/providers/anthropic.ts';
+import { OpenAiCompatibleAdapter, toOpenAiMessages } from '../src/providers/openai-compatible.ts';
+import type { ModelRequest, StreamEvent } from '../src/providers/types.ts';
+import { FakeAdapter, fakeServer, reply, sse, tempDir, testConfig, type Script } from './helpers.ts';
 
 // 出力の上限で切れた返事（停止理由が max_tokens）を、成功として扱わない（AU-1）
 
@@ -134,6 +136,42 @@ test('切れた呼び出しのあとに正しく終われば、続けて切れ�
 });
 
 // ── 提供元 ───────────────────────────────────────────────
+
+const streamModel: ModelConfig = { id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false };
+const streamRequest: ModelRequest = {
+  model: streamModel, system: { frozen: 'あなたは Clive', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
+  tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
+};
+
+test('OpenAI 互換: finish_reason が length なら、途中のツール呼び出しがあっても max_tokens を返す', async t => {
+  const server = await fakeServer((_req, _body, res) => sse(res, [
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'file_write', arguments: '{"path":"a' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'length' }] },
+  ]));
+  t.after(() => server.close());
+  const provider: ProviderConfig = { id: 'p', kind: 'openai_compatible', baseUrl: `${server.url}/v1`, maxParallel: 1, timeoutMs: 10_000 };
+  const events: StreamEvent[] = [];
+  for await (const e of new OpenAiCompatibleAdapter(provider, {}).stream(streamRequest)) events.push(e);
+  assert.equal(events.some(e => e.type === 'tool_call'), true, '途中の呼び出しは届いている');
+  assert.deepEqual(events.at(-1), { type: 'done', stop: 'max_tokens' });
+});
+
+test('Anthropic: stop_reason が max_tokens なら、途中のツール呼び出しがあっても max_tokens を返す', async () => {
+  const body = [
+    { type: 'message_start', message: { id: 'msg', type: 'message', role: 'assistant', model: 'x', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_1', name: 'file_write', input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"a' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'max_tokens', stop_sequence: null }, usage: { output_tokens: 1024 } },
+    { type: 'message_stop' },
+  ].map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+  const fetchImpl = (async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream', 'request-id': 'req_test' } })) as typeof fetch;
+  const provider: ProviderConfig = { id: 'p', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 1, timeoutMs: 10_000 };
+  const events: StreamEvent[] = [];
+  for await (const e of new AnthropicAdapter(provider, { ANTHROPIC_API_KEY: 'sk-ant-test' }, fetchImpl).stream(streamRequest)) events.push(e);
+  assert.equal(events.some(e => e.type === 'tool_call'), true, '途中の呼び出しは届いている');
+  assert.deepEqual(events.at(-1), { type: 'done', stop: 'max_tokens' });
+});
 
 test('2 つの提供元とも、会話に残した {} の呼び出しをそのまま送り返せる', () => {
   const saved: ChatMessage[] = [

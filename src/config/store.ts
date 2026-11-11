@@ -41,7 +41,8 @@ export function defaultConfig(): AppConfig {
     timezone: 'Asia/Tokyo',
     server: { host: '127.0.0.1', port: 4777, origins: [], tailscaleLogins: [] },
     providers: [
-      { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },    ],
+      { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
+    ],
     models: [],
     routing: { chat: [], background: [], retriesPerModel: 2 },
     tools: defaultTools(),
