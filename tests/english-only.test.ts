@@ -47,11 +47,6 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'src/uploads/store.ts': { strings: ['\u{FF1C}', '\u{FF1E}', '<<<添付ファイル', '<<<添付ファイルここまで>>>'], reason: 'neutralizeMarkers の全角の ＜ ＞（添付の名前と中身の <<< >>> を全角にして枠の印の偽装を防ぐ。安全）と、LEGACY_ATTACHMENT_FRAMES: 前からある発言の日本語の添付の枠を外す（安全: 外さないと添付の中身が利用者の依頼として自動承認の判定役に渡る）' },
 };
 
-// 一時の一覧: まだ英語にしていないファイル → 残りの数（上の例外の文字列を除いた数）。0-2b のあとに残るのは、0-3 で消す doctor の出力だけ。
-const PENDING: Record<string, number> = {
-  'src/main.ts': 7, // doctor の出力だけ（0-3 で doctor ごと消すので訳さない。PLAN.md 版 6）
-};
-
 const japaneseLines = (text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.replace(/^[ \t]+|[ \t]+$/gu, ''));
 
 type Hit = { line: number; text: string };
@@ -99,7 +94,7 @@ test('英語だけの見張り: 文字列・テンプレート・正規表現・
   assert.deepEqual(texts('a.tsx', 'const a = <p title="題">こんにちは</p>;'), ['題', 'こんにちは']);
 });
 
-test('英語だけの見張り: src と web/src の日本語の文字列は、決めた例外と一時の一覧のものだけ', () => {
+test('英語だけの見張り: src と web/src の日本語の文字列は、決めた例外のものだけ', () => {
   const files = [...walk(join(ROOT, 'src'), /\.ts$/u), ...walk(join(ROOT, 'web', 'src'), /\.tsx?$/u)];
   assert.ok(files.length > 200, `${files.length} ファイルしか読めていない`);
   const found = new Map<string, Hit[]>();
@@ -118,14 +113,9 @@ test('英語だけの見張り: src と web/src の日本語の文字列は、�
       if (ok) left.splice(0, left.length, ...trial); else rest.push(hit);
     }
     if (left.length) problems.push(`${file}: 許した文字列が見つからない（消えたら一覧から外す）: ${JSON.stringify(left)}`);
-    const pending = PENDING[file];
-    if (pending === undefined) {
-      if (rest.length) problems.push(`${file}: 日本語の文字列\n${show(file, rest)}`);
-    } else if (rest.length !== pending) {
-      problems.push(`${file}: 一時の一覧は ${pending}、例外のほかに見つかったのは ${rest.length}（減ったら一覧の数も減らす）\n${show(file, rest)}`);
-    }
+    if (rest.length) problems.push(`${file}: 日本語の文字列\n${show(file, rest)}`);
   }
-  for (const file of [...Object.keys(EXCEPTIONS), ...Object.keys(PENDING)]) if (!found.has(file)) problems.push(`${file}: もう日本語が無い（一覧から外す）`);
+  for (const file of Object.keys(EXCEPTIONS)) if (!found.has(file)) problems.push(`${file}: もう日本語が無い（一覧から外す）`);
   assert.deepEqual(problems, []);
 });
 

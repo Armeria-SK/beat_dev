@@ -10,7 +10,6 @@
   "scripts": {
     "start": "node src/main.ts",
     "dev": "node --watch src/main.ts",
-    "doctor": "node src/main.ts doctor",
     "test": "node --test --test-reporter=spec \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
     "build:web": "vite build --config web/vite.config.mjs",

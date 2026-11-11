@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ConfigError, ConfigStore, defaultConfig, parseConfig } from '../src/config/store.ts';
@@ -100,14 +100,23 @@ test('初期値にはモデルが無く、チャットも裏方の順番も空�
   assert.doesNotThrow(() => parseConfig(defaultConfig()), 'モデルが 0 個の設定は、そのまま検証を通る');
 });
 
-test('doctor: モデルが 0 個なら、そのことを案内して終了コード 1', t => {
-  const dir = tempDir(t);
-  mkdirSync(dir, { recursive: true });
-  const run = spawnSync(process.execPath, ['src/main.ts', 'doctor', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
-  assert.equal(run.status, 1, run.stderr);
-  assert.match(run.stdout, /設定ファイル: .*（OK）/u);
-  assert.match(run.stdout, /NG {2}モデルがまだ設定されていません/u);
-  assert.doesNotMatch(run.stdout, /チャットで使えるモデルがありません/u, '「使えない」ではなく「まだ無い」と案内する');
+test('起動: 知らない引数（位置の引数・知らないオプション）では起動せず、Could not start: の 1 行と終了コード 1', t => {
+  const cases: Array<[string[], RegExp]> = [
+    [['check'], /^Could not start: TypeError \[ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL\]: [^\n]*'check'[^\n]*\n$/u],
+    [['--foo'], /^Could not start: TypeError \[ERR_PARSE_ARGS_UNKNOWN_OPTION\]: [^\n]*'--foo'[^\n]*\n$/u],
+  ];
+  for (const [extra, stderr] of cases) {
+    const dir = tempDir(t);
+    mkdirSync(dir, { recursive: true });
+    // 引数を読み違えて起動へ進んでも、待ち受けの前に設定の誤り（ループバックでない host）で止まるようにしておく（試験がポートを開かないため）
+    const config = JSON.stringify({ ...defaultConfig(), server: { host: '0.0.0.0', port: 4777 } });
+    writeFileSync(join(dir, 'config.json'), config);
+    const run = spawnSync(process.execPath, ['src/main.ts', ...extra, '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 30_000 });
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, stderr);
+    assert.equal(run.stdout, '', `${extra[0]}: 起動のログを出さない`);
+    assert.deepEqual(readdirSync(dir), ['config.json'], `${extra[0]}: DB も作らない（設定を読む手前で止まる）`);
+  }
 });
 
 test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書いてあっても読めて、初期値にはもう書かない', () => {
@@ -119,20 +128,6 @@ test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書�
   const fresh = parseConfig({ version: 1, server: {}, routing: {} });
   assert.equal(fresh.memory.userMaxChars, undefined, '書かなければ補わない');
   assert.equal(fresh.memory.reviewIdleMinutes, 30);
-});
-
-test('doctor: モデルがあっても使えないときは、モデルが 0 個のときとは別の案内で、終了コード 1', t => {
-  const dir = tempDir(t);
-  mkdirSync(dir, { recursive: true });
-  const config = testConfig();
-  config.providers = [{ id: 'dead', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 5000 }];
-  config.models = [{ id: 'm', provider: 'dead', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
-  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
-  writeFileSync(join(dir, 'config.json'), JSON.stringify(config));
-  const run = spawnSync(process.execPath, ['src/main.ts', 'doctor', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
-  assert.equal(run.status, 1, run.stderr);
-  assert.match(run.stdout, /NG {2}チャットで使えるモデルがありません/u);
-  assert.doesNotMatch(run.stdout, /まだ設定されていません/u, 'モデルは設定されているので、「まだ無い」とは案内しない');
 });
 
 function issuesOf(raw: unknown): { problems: readonly string[]; issues: ReadonlyArray<{ path: string; message: string }> } {
