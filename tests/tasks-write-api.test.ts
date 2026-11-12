@@ -436,7 +436,7 @@ test('cancel の理由は、user の別の行（kind: reason）として経過�
   ]);
   assert.deepEqual(seenAtPublish[0], ['cancelled', 'reason', 'created'], '取り消しの知らせ（task.changed）が出た時点で、理由の行はもう書かれている');
   const restored = s.app.tasks.uncancel(withReason.id, 'user');
-  assert.match(taskPrompt(restored, s.app.tasks.events(restored.id), 'Asia/Tokyo', 'en'), /reason: Not this week\./u, '戻すと、理由も次の実行のモデルに渡る');
+  assert.match(taskPrompt(restored, s.app.tasks.events(restored.id), 'Asia/Tokyo', 'en'), / reason for cancelling \(the user's own words\): Not this week\.\n  Maybe later\.\n/u, '戻すと、理由も次の実行のモデルに渡る');
 
   for (const body of [undefined, {}, { reason: '' }, { reason: '   ' }, { reason: null }]) {
     const task = s.userTask('No reason');
