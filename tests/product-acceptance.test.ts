@@ -137,11 +137,11 @@ test('3-1b 出どころ: owner_choice の負の確かめ（区切られて現れ
     const result = f.check(choice(question, answer));
     return result.kind === 'owner_choice' ? result.answerMessageId : result.kind;
   };
-  for (const text of ['OK, go ahead', 'A bit of both', 'A few tweaks first', 'we have 3 A grade servers', '1A', 'Aでお願いします']) {
+  for (const text of ['OK, go ahead', 'A bit of both', 'A few tweaks first', 'we have 3 A grade servers', 'A 2', 'A-ok', '2. A']) {
     pair(text);
     assert.equal(kindOf('A'), 'ai_added', text);
   }
-  for (const text of ['A', '1. A, 2. C', 'Q1: A', 'A.', 'A, please', 'Ａ', '１．Ａ']) {
+  for (const text of ['A', '1. A, 2. C', 'Q1: A', 'A.', 'A, please', 'Ａ', '１．Ａ', '1A', 'Aでお願いします', 'Aで', '1. Aです', 'A。', '1. A でお願いします', '1. A (local is fine)', '1. A - local is fine', '1. A – local is fine', 'A!', 'A?', 'A;']) {
     const id = pair(text);
     assert.equal(kindOf('A'), id, text);
   }
@@ -193,6 +193,108 @@ test('3-1b 出どころ: 答えは自分の問いの番号に結び付く。「1
   f.say(c3, 'assistant', `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose\nC) None`);
   f.say(c3, 'user', 'C');
   assert.equal(f.check(choice(Q1, 'C')).kind, 'ai_added', 'C は Q2 の選択肢で、Q1 の区切りの中には無い');
+  const bang = f.chat();
+  f.say(bang, 'assistant', `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose\nC) None`);
+  f.say(bang, 'user', '1. A!\n2. C!');
+  assert.equal(f.check(choice(Q2, 'C')).kind, 'owner_choice', '「2. C!」');
+});
+
+test('3-1b 出どころ（確かでなければ付け替える）: 問いが 2 つ以上ある発言には番号の合う答えだけ。番号の無い「A, B」「A\\nB」はどちらの問いにも結び付けない。問いの範囲に別の番号の行があれば断る（P1b）。選択肢の区切りは次の番号の行か「?」の行まで', () => {
+  const f = speechFixture();
+  const Q1 = 'Do users need to log in first?';
+  const Q2 = 'How strict should passwords be?';
+  const two = `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose`;
+  for (const reply of ['A, B', 'A\nB']) {
+    const c = f.chat();
+    f.say(c, 'assistant', two);
+    f.say(c, 'user', reply);
+    assert.equal(f.check(choice(Q2, 'A')).kind, 'ai_added', `${reply}: Q2 = A`);
+    assert.equal(f.check(choice(Q2, 'B')).kind, 'ai_added', `${reply}: Q2 = B（どちらとも取れる）`);
+    assert.equal(f.check(choice(Q1, 'A')).kind, 'ai_added', `${reply}: Q1 = A`);
+  }
+  const twoMarks = f.chat();
+  f.say(twoMarks, 'assistant', `${Q1}\nA) Yes\nB) No\n${Q2}\nA) Strict\nB) Loose`);
+  f.say(twoMarks, 'user', 'A');
+  assert.equal(f.check(choice(Q1, 'A')).kind, 'ai_added', '番号の無い問いが 2 つ');
+
+  const span = f.chat();
+  f.say(span, 'assistant', two);
+  f.say(span, 'user', '1. B, 2. A');
+  assert.equal(f.check(choice(`No 2. ${Q2}`, 'A')).kind, 'ai_added', 'P1b: 範囲に別の問いの行');
+
+  const STORAGE = 'Pick the storage backend for uploads';
+  const RULE = 'Pick the password rule for accounts';
+  const noMarks = f.chat();
+  f.say(noMarks, 'assistant', `1. ${STORAGE}\nA) Local\nB) S3\n2. ${RULE}\nC) Strict\nD) Loose`);
+  f.say(noMarks, 'user', '1. C');
+  assert.equal(f.check(choice(STORAGE, 'C')).kind, 'ai_added', '選択肢の区切りは次の番号の行まで');
+  const single = f.chat();
+  f.say(single, 'assistant', `1. ${STORAGE}\nA) Local\nB) S3`);
+  f.say(single, 'user', 'B');
+  assert.equal(f.check(choice(STORAGE, 'B')).kind, 'owner_choice', '問いが 1 つなら「?」が無くても番号で問いとわかる');
+  const BACKEND = 'Choose the cache backend for sessions';
+  const bare = f.chat();
+  f.say(bare, 'assistant', `${BACKEND}\nA) Memory\nB) Redis`);
+  f.say(bare, 'user', 'A');
+  assert.equal(f.check(choice(BACKEND, 'A')).kind, 'ai_added', '「?」も番号も無い行は問いと決められない');
+  const across = f.chat();
+  f.say(across, 'assistant', `1. ${STORAGE}\n2. ${RULE}\nA) Strict\nB) Loose`);
+  f.say(across, 'user', '1. A');
+  assert.equal(f.check(choice(`${STORAGE} 2. ${RULE}`, 'A')).kind, 'ai_added', 'P1b: 問いの範囲が次の番号の行にまたがる');
+
+  const LONG = 'Where should we keep the uploaded files?';
+  const longTwo = f.chat();
+  f.say(longTwo, 'assistant', `1. ${LONG}\nA) Local\nB) Cloud\n2. ${Q2}\nA) Strict\nB) Loose`);
+  f.say(longTwo, 'user', '1. keep them on the local disk for now, 2. A');
+  assert.equal(f.check(choice(LONG, 'keep them on the local disk')).kind, 'ai_added', '問いが 2 つあると長い答えも結び付けない');
+});
+
+test('3-1b 出どころ（確かでなければ付け替える）: 見える平らな行の問いだけ。HTML のかたまり・入れ子の角かっこのリンク・参照の定義の次の行の題は問いにならない（P2 の残り）', () => {
+  const f = speechFixture();
+  const pair = (question: string, answer: string) => { const c = f.chat(); f.say(c, 'assistant', question); return f.say(c, 'user', answer); };
+  const kindOf = (question: string, answer: string) => f.check(choice(question, answer)).kind;
+  pair('Here is the plan.\n<div>\nDo you want telemetry enabled?\n</div>', 'yes');
+  assert.equal(kindOf('Do you want telemetry enabled?', 'yes'), 'ai_added', 'HTML のかたまり');
+  pair('See [the [full] guide](https://example.test/Do-you-want-analytics-enabled?) now.', 'yes');
+  assert.equal(kindOf('Do-you-want-analytics-enabled?', 'yes'), 'ai_added', '入れ子の角かっこのリンク');
+  pair('Read the guide [1] first.\n\n[1]: https://example.test/guide\n    "Do you want crash reports sent?"', 'yes');
+  assert.equal(kindOf('Do you want crash reports sent?', 'yes'), 'ai_added', '参照の定義の次の行の題');
+  pair('Noted. <span hidden>Do you want usage stats collected?</span>', 'yes');
+  assert.equal(kindOf('Do you want usage stats collected?', 'yes'), 'ai_added', 'タグのある行');
+  pair('Here is the plan.\n\nShould the export include hidden columns?', 'yes');
+  assert.equal(kindOf('Should the export include hidden columns?', 'yes'), 'owner_choice', 'ふつうの行は通る');
+});
+
+test('3-1b 出どころ: 調べる質問は新しいほうから 20 件まで。25 回聞いて最も古い 1 回だけに答えがあっても確かめない', () => {
+  const f = speechFixture();
+  const QUESTION = 'Which storage should the uploader use?';
+  const ask = `${QUESTION}\nA) Local\nB) S3`;
+  const first = f.chat();
+  f.say(first, 'assistant', ask);
+  f.say(first, 'user', 'A');
+  for (let i = 0; i < 24; i++) f.say(f.chat(), 'assistant', ask);
+  assert.equal(f.check(choice(QUESTION, 'A')).kind, 'ai_added');
+  const near = speechFixture();
+  const c = near.chat();
+  near.say(c, 'assistant', ask);
+  near.say(c, 'user', 'A');
+  for (let i = 0; i < 19; i++) near.say(near.chat(), 'assistant', ask);
+  assert.equal(near.check(choice(QUESTION, 'A')).kind, 'owner_choice', '20 件目までなら確かめる');
+});
+
+test('3-1b 出どころの速さ: 持ち主の 10 万文字の発言 1 つに 120 件の抜き書きを照らしても、発言の下ごしらえ込みで短い時間で終わる', () => {
+  const sentences = Array.from({ length: 2000 }, (_, i) => `Requirement number ${i} says the uploader keeps part ${i} safe`);
+  let text = sentences.join('. ');
+  text = text.slice(0, 100_000);
+  const rows = [{ id: 1, conversation_id: 'c', role: 'user' as const, text, generated: 0 }];
+  const quotes = Array.from({ length: 120 }, (_, i) => `Requirement number ${i * 10} says the uploader keeps part ${i * 10} safe`);
+  const started = performance.now();
+  const speech = prepareSpeech(rows);
+  const results = quotes.map(quote => verifySource(speech, words(quote)));
+  const took = performance.now() - started;
+  assert.equal(text.length, 100_000);
+  assert.ok(results.every(r => r.kind === 'owner_words' && typeof r.context === 'string' && r.context.length <= 500));
+  assert.ok(took < 3000, `${took.toFixed(0)} ms`);
 });
 
 test('3-1b 出どころ: yes / no / はい / いいえ は「?」か選択肢の印のある問いへの答えだけ。リンクの行き先・参照の定義・HTML のコメントは問いにならない（P2・P2b）', () => {
@@ -239,6 +341,13 @@ test('3-1b 出どころ: owner_words は一致した持ち主の文をまるご�
   assert.ok(cut.includes(QUOTE));
   const head = `${QUOTE} ${'omega '.repeat(150)}`;
   f.say(c, 'user', `Note: ${head}`.replace(QUOTE, 'the import must keep every row id intact'));
+  const EMOJI = String.fromCodePoint(0x1F600);
+  const QUOTE2 = 'the backups must run every night now';
+  assert.equal(QUOTE2.length, 36, '窓の両端が絵文字の途中に来る長さ');
+  f.say(c, 'user', `${EMOJI.repeat(400)}${QUOTE2}${EMOJI.repeat(400)}`);
+  const emoji = (f.check(words(QUOTE2)) as { context?: string }).context!;
+  assert.ok(emoji.includes(QUOTE2) && emoji.length <= 500);
+  assert.doesNotMatch(emoji, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u, '絵文字の途中で切らない');
   const front = (f.check(words('the import must keep every row id intact')) as { context?: string }).context!;
   assert.ok(front.length <= 500 && front.startsWith('Note: the import') && front.endsWith('…'), front.slice(0, 40));
 });
@@ -366,6 +475,9 @@ test('3-1b acceptance_write の決まり: 項目 60 まで・結果 300 文字�
     ['invisible operator in command', { items: [item('R', undefined, { kind: 'command', command: 'npm⁡test' })] }],
     ['hangul filler in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test ㅤ' })] }],
     ['braille blank in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test ⠀' })] }],
+    ['no-break space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0xA0)}test` })] }],
+    ['ideographic space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0x3000)}test` })] }],
+    ['thin space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0x2009)}test` })] }],
     ['language input', { items: [item('R')], language: 'en' }],
   ];
   for (const [label, input] of bad) {

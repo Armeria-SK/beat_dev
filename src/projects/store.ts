@@ -16,6 +16,8 @@ export const CHECK_COMMAND_MAX = 1000;
 export const LANGUAGE_TAG = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}​-‍⁠﻿]/u;
 
+const ODD_SPACE = /(?! )\p{Zs}/u;
+
 export type ScoutMode = 'off' | 'research' | 'fix';
 
 export interface ProjectRow {
@@ -45,7 +47,7 @@ export function projectName(raw: string): string {
 
 export function checkCommandOf(raw: string | null): string | null {
   const command = raw?.trim() ?? '';
-  if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command) || stripHidden(command) !== command) throw new ProjectError('bad_check_command');
+  if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command) || stripHidden(command) !== command || ODD_SPACE.test(command)) throw new ProjectError('bad_check_command');
   return command || null;
 }
 

@@ -87,19 +87,21 @@ export function quoteWeight(text: string): number {
   return weight;
 }
 
-interface Spoken { id: number; conversationId: string; owner: boolean; generated: boolean; raw: string; norm: string; next?: Spoken | undefined; later?: Spoken[] | undefined; lines?: string[] | undefined }
+interface Line { text: string; norm: string; plain: boolean; mark: boolean; number: number | null; style: string | null }
+interface OwnerView { text: string; norm: string; at: number[]; starts: number[]; ends: number[] }
+
+interface Spoken {
+  id: number; conversationId: string; owner: boolean; generated: boolean; raw: string; norm: string;
+  next?: Spoken | undefined; peers?: Spoken[] | undefined; laterAt?: number | undefined;
+  lines?: Line[] | undefined; view?: OwnerView | undefined;
+}
 
 export interface Speech { owner: Spoken[]; assistant: Spoken[]; laterOwner: (from: Spoken) => Spoken[] }
-
-const visible = (text: string): string => text
-  .replace(/<!--[\s\S]*?(?:-->|$)/gu, '')
-  .replace(/^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*$/gmu, '')
-  .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/gu, '$1');
 
 export function prepareSpeech(rows: readonly SpeechRow[]): Speech {
   const all: Spoken[] = rows.map(row => {
     const owner = row.role === 'user';
-    const raw = owner ? stripAttachments(row.text) : visible(row.text);
+    const raw = owner ? stripAttachments(row.text) : row.text;
     return { id: row.id, conversationId: row.conversation_id, owner, generated: row.generated === 1, raw, norm: normalizeQuote(raw) };
   });
   const byConversation = new Map<string, Spoken[]>();
@@ -110,16 +112,18 @@ export function prepareSpeech(rows: readonly SpeechRow[]): Speech {
   }
   for (const list of byConversation.values()) {
     list.sort((a, b) => a.id - b.id);
+    const peers = list.filter(s => s.owner && !s.generated);
     let next: Spoken | undefined;
-    const later: Spoken[] = [];
+    let laterAt = peers.length;
     for (let i = list.length - 1; i >= 0; i--) {
       const spoken = list[i]!;
       if (!spoken.owner) {
         spoken.next = next;
-        spoken.later = later.slice().reverse();
+        spoken.peers = peers;
+        spoken.laterAt = laterAt;
       } else {
         next = spoken;
-        if (!spoken.generated) later.push(spoken);
+        if (!spoken.generated) laterAt--;
       }
     }
   }
@@ -127,17 +131,20 @@ export function prepareSpeech(rows: readonly SpeechRow[]): Speech {
   return {
     owner: newestFirst(all.filter(s => s.owner && !s.generated)),
     assistant: newestFirst(all.filter(s => !s.owner)),
-    laterOwner: from => from.later ?? [],
+    laterOwner: from => from.peers?.slice(from.laterAt) ?? [],
   };
 }
 
 const MAX_ASKED = 20;
 const CONTEXT_MAX = 500;
 const ELLIPSIS = '…';
-const ANSWER_END = '(?=[ \\t]*$|[).:,\\u3001])';
-const NUMBER_MARK = '(?:Q[ \\t]*)?(\\d{1,2})[.):](?!\\d)';
-const NUMBERED = new RegExp(`(?:^|[\\s,;\\u3001(])${NUMBER_MARK}[ \\t]*(?=\\S)`, 'mu');
-const QUESTION_NUMBER = new RegExp(`^[ \\t]*(?:#{1,6}[ \\t]+)?(?:\\*\\*)?${NUMBER_MARK}`, 'u');
+const ANSWER_END = '(?=[ \\t]*$|[).:,;!?\\u3001\\u3002]|[ \\t]*[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}]|[ \\t]+[(\\-\\u2013])';
+const NUMBER_MARK = '(?:Q[ \\t]*)?(\\d{1,2})(?:[.):](?!\\d)[ \\t]*|(?=[A-H](?![A-Za-z])))';
+const NUMBERED = new RegExp(`(?:^|[\\s,;\\u3001(])${NUMBER_MARK}(?=\\S)`, 'mu');
+const QUESTION_NUMBER = /^[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*)?(Q[ \t]*)?(\d{1,2})([.):])(?!\d)/u;
+const HTML_START = /^[ \t]{0,3}<[A-Za-z!?/]/u;
+const TAG = /<[^<>\n]*>/u;
+const REF_DEF = /^[ \t]{0,3}\[[^\n]*\]:/u;
 const STOPS = '.!?\\u3002\\uFF01\\uFF1F';
 const SENTENCE = new RegExp(`[^${STOPS}\\n]+[${STOPS}]*|[${STOPS}]+`, 'gu');
 
@@ -152,7 +159,7 @@ function patternsOf(token: string): TokenPatterns {
     const t = escapeRegExp(token);
     patterns = {
       head: new RegExp(`^[ \\t]*${t}${ANSWER_END}`, 'mu'),
-      numbered: new RegExp(`(?:^|[\\s,;\\u3001(])${NUMBER_MARK}[ \\t]*${t}${ANSWER_END}`, 'gmu'),
+      numbered: new RegExp(`(?:^|[\\s,;\\u3001(])${NUMBER_MARK}${t}${ANSWER_END}`, 'gmu'),
       offered: new RegExp(`\\(${t}\\)|(?<![A-Za-z0-9])${t}[).:]`, 'u'),
     };
     TOKEN_PATTERNS.set(token, patterns);
@@ -160,81 +167,144 @@ function patternsOf(token: string): TokenPatterns {
   return patterns;
 }
 
-interface Asked { number: number | null; block: string; questionMark: boolean }
-
-function askedIn(message: Spoken, question: string, questionMark: boolean): Asked | undefined {
-  const lines = message.lines ??= message.raw.normalize('NFKC').split('\n');
-  let start = -1;
-  let suffix = '';
-  for (let i = lines.length - 1; i >= 0; i--) {
-    suffix = normalizeQuote(lines[i]!) + suffix;
-    if (suffix.includes(question)) { start = i; break; }
-  }
-  if (start < 0) return undefined;
-  let end = start;
-  let joined = normalizeQuote(lines[start]!);
-  while (!joined.includes(question) && end + 1 < lines.length) joined += normalizeQuote(lines[++end]!);
-  let stop = end + 1;
-  while (stop < lines.length && !lines[stop]!.includes('?')) stop++;
-  const number = QUESTION_NUMBER.exec(lines[start]!)?.[1];
-  return { number: number === undefined ? null : Number(number), block: lines.slice(start, stop).join('\n'), questionMark };
+function linesOf(message: Spoken): Line[] {
+  let html = false;
+  let comment = false;
+  let afterDefinition = false;
+  return message.raw.normalize('NFKC').split('\n').map(text => {
+    if (text.trim() === '') html = false;
+    if (HTML_START.test(text)) html = true;
+    const definition = REF_DEF.test(text);
+    const opens = text.includes('<!--');
+    const plain = !html && !comment && !opens && !text.includes('-->') && !TAG.test(text) && !text.includes('](') && !definition && !afterDefinition;
+    if (opens && !text.slice(text.indexOf('<!--')).includes('-->')) comment = true;
+    else if (comment && text.includes('-->')) comment = false;
+    afterDefinition = definition;
+    const numbered = QUESTION_NUMBER.exec(text);
+    return { text, norm: normalizeQuote(text), plain, mark: text.includes('?'), number: numbered ? Number(numbered[2]) : null, style: numbered ? `${numbered[1] ? 'Q' : ''}${numbered[3]}` : null };
+  });
 }
 
-function placed(raw: string, token: string, number: number | null): boolean {
+interface Asked { number: number | null; block: string; questionMark: boolean; multi: boolean }
+
+function askedIn(message: Spoken, question: string, claimedMark: boolean): Asked | undefined {
+  const lines = message.lines ??= linesOf(message);
+  let span: [number, number] | undefined;
+  for (let i = 0; i < lines.length;) {
+    if (!lines[i]!.plain) { i++; continue; }
+    const offsets: number[] = [];
+    let joined = '';
+    let j = i;
+    for (; j < lines.length && lines[j]!.plain; j++) { offsets.push(joined.length); joined += lines[j]!.norm; }
+    const at = joined.lastIndexOf(question);
+    if (at >= 0) {
+      const lineAt = (pos: number) => { let k = offsets.length - 1; while (offsets[k]! > pos) k--; return i + k; };
+      span = [lineAt(at), lineAt(at + question.length - 1)];
+    }
+    i = j;
+  }
+  if (!span) return undefined;
+  const [start, end] = span;
+  for (let k = start; k <= end; k++) {
+    if (k > start && lines[k]!.number !== null) return undefined;
+    if (k < end && lines[k]!.mark) return undefined;
+  }
+  const head = lines[start]!;
+  const spanMark = lines[end]!.mark;
+  if (!spanMark && head.number === null) return undefined;
+  const asks = (line: Line) => line.mark || (line.number !== null && line.style !== ')') || (head.style !== null && line.style === head.style);
+  let count = 0;
+  for (const line of lines) if (asks(line)) count++;
+  let stop = end + 1;
+  while (stop < lines.length && !asks(lines[stop]!)) stop++;
+  const block = lines.slice(start, stop).filter(line => line.plain).map(line => line.text).join('\n');
+  return { number: head.number, block, questionMark: claimedMark && spanMark, multi: count > 1 };
+}
+
+function placed(raw: string, token: string, asked: Asked): boolean {
   const text = raw.normalize('NFKC').trim();
   const patterns = patternsOf(token);
   if (NUMBERED.test(text)) {
-    if (number === null) return false;
-    for (const match of text.matchAll(patterns.numbered)) if (Number(match[1]) === number) return true;
+    if (asked.number === null) return false;
+    for (const match of text.matchAll(patterns.numbered)) if (Number(match[1]) === asked.number) return true;
     return false;
   }
+  if (asked.multi) return false;
   return text === token || patterns.head.test(text);
 }
 
 function answered(reply: Spoken, answer: string, asked: Asked): boolean {
-  if (quoteWeight(answer) >= MIN_QUOTE_WEIGHT) return reply.norm.includes(normalizeQuote(answer));
+  if (quoteWeight(answer) >= MIN_QUOTE_WEIGHT) return !asked.multi && reply.norm.includes(normalizeQuote(answer));
   const token = answer.normalize('NFKC').trim();
   const option = OPTION_LETTER.test(token) || OPTION_DIGIT.test(token);
   const offered = patternsOf(token).offered.test(asked.block);
   if (option ? !offered : !(asked.questionMark || offered)) return false;
-  return placed(reply.raw, token, asked.number);
+  return placed(reply.raw, token, asked);
 }
 
-function contextOf(raw: string, quote: string): string {
-  const parts = [...raw.matchAll(SENTENCE)];
-  let best: string | undefined;
-  for (let i = 0; i < parts.length; i++) {
-    let norm = '';
-    for (let j = i; j < parts.length; j++) {
-      norm += normalizeQuote(parts[j]![0]);
-      if (!norm.includes(quote)) continue;
-      const from = parts[i]!.index;
-      const text = raw.slice(from, parts[j]!.index + parts[j]![0].length).trim();
-      if (best === undefined || text.length < best.length) best = text;
-      break;
-    }
+function foldChar(text: string, i: number): [string, number] {
+  const code = text.codePointAt(i)!;
+  if (code < 128) {
+    if (code === 32 || (code >= 9 && code <= 13)) return ['', 1];
+    return [code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : text[i]!, 1];
   }
-  return windowed(sanitizeModelInputText(clean(best ?? raw)).text, quote);
+  const char = String.fromCodePoint(code);
+  return [normalizeQuote(char), char.length];
 }
 
-function windowed(text: string, quote: string): string {
-  if (text.length <= CONTEXT_MAX) return text;
+const fold = (text: string): string => {
+  let out = '';
+  for (let i = 0; i < text.length;) { const [part, size] = foldChar(text, i); out += part; i += size; }
+  return out;
+};
+
+function ownerViewOf(message: Spoken): OwnerView {
+  const text = sanitizeModelInputText(clean(message.raw)).text;
+  let norm = '';
+  const at: number[] = [];
+  for (let i = 0; i < text.length;) {
+    const [part, size] = foldChar(text, i);
+    for (let k = 0; k < part.length; k++) at.push(i);
+    norm += part;
+    i += size;
+  }
+  const starts: number[] = [];
+  const ends: number[] = [];
+  for (const match of text.matchAll(SENTENCE)) { starts.push(match.index); ends.push(match.index + match[0].length); }
+  return { text, norm, at, starts, ends };
+}
+
+function partOf(starts: readonly number[], pos: number): number {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (starts[mid]! <= pos) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+
+const isHigh = (code: number) => code >= 0xD800 && code <= 0xDBFF;
+const isLow = (code: number) => code >= 0xDC00 && code <= 0xDFFF;
+
+function contextOf(message: Spoken, quote: string): string | undefined {
+  const view = message.view ??= ownerViewOf(message);
+  const folded = fold(quote);
+  const index = folded ? view.norm.indexOf(folded) : -1;
+  if (index < 0 || view.starts.length === 0) return undefined;
+  const { text } = view;
+  const from = view.at[index]!;
+  const lastAt = view.at[index + folded.length - 1]!;
+  const to = lastAt + (isHigh(text.charCodeAt(lastAt)) ? 2 : 1);
+  let a = view.starts[partOf(view.starts, from)]!;
+  let b = view.ends[partOf(view.starts, to - 1)]!;
+  while (a < b && /\s/u.test(text[a]!)) a++;
+  while (b > a && /\s/u.test(text[b - 1]!)) b--;
+  if (b - a <= CONTEXT_MAX) return text.slice(a, b);
   const room = CONTEXT_MAX - 2;
-  const has = (from: number, to: number) => normalizeQuote(text.slice(from, to)).includes(quote);
-  let start = 0;
-  let end = room;
-  if (has(0, text.length)) {
-    let lo = 0;
-    let hi = text.length;
-    while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (has(mid, text.length)) lo = mid; else hi = mid - 1; }
-    let a = lo;
-    let b = text.length;
-    while (a < b) { const mid = Math.floor((a + b) / 2); if (has(lo, mid)) b = mid; else a = mid + 1; }
-    start = Math.max(0, lo - Math.max(0, Math.floor((room - (a - lo)) / 2)));
-    end = Math.min(text.length, start + room);
-    start = Math.max(0, end - room);
-  }
-  return `${start > 0 ? ELLIPSIS : ''}${text.slice(start, end)}${end < text.length ? ELLIPSIS : ''}`;
+  let start = Math.max(a, from - Math.max(0, Math.floor((room - (to - from)) / 2)));
+  let end = Math.min(b, start + room);
+  start = Math.max(a, end - room);
+  if (start > a && isLow(text.charCodeAt(start))) start++;
+  if (end < b && isHigh(text.charCodeAt(end - 1))) end--;
+  return `${start > a ? ELLIPSIS : ''}${text.slice(start, end)}${end < b ? ELLIPSIS : ''}`;
 }
 
 export function verifySource(speech: Speech, claimed: ClaimedSource): AcceptanceSource {
@@ -244,7 +314,9 @@ export function verifySource(speech: Speech, claimed: ClaimedSource): Acceptance
     if (quoteWeight(claimed.quote) < MIN_QUOTE_WEIGHT) return unchecked('too_short');
     const quote = normalizeQuote(claimed.quote);
     const found = speech.owner.find(s => s.norm.includes(quote));
-    return found ? { kind: 'owner_words', quote: claimed.quote, messageId: found.id, conversationId: found.conversationId, context: contextOf(found.raw, quote) } : unchecked('not_found');
+    if (!found) return unchecked('not_found');
+    const context = contextOf(found, quote);
+    return { kind: 'owner_words', quote: claimed.quote, messageId: found.id, conversationId: found.conversationId, ...(context === undefined ? {} : { context }) };
   }
   const unchecked = (reason: UncheckedReason): AcceptanceSource => ({ kind: 'ai_added', claimed: 'owner_choice', reason, question: claimed.question, answer: claimed.answer });
   if (quoteWeight(claimed.question) < MIN_QUOTE_WEIGHT) return unchecked('too_short');
