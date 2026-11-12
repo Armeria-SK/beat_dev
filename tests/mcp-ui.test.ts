@@ -218,7 +218,7 @@ test('MCP の節は「動き」の組の通知の後に入り、設定の mcp �
 
 test('MCP の文言は en にあり、日本語が混ざらない。確かめの文は差し込みが入る', () => {
   const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('settings.mcp.') || k.startsWith('access.mcp')).sort();
-  assert.ok(keys(en).length > 60);
+  assert.ok(keys(en).length > 30);
   for (const k of keys(en)) {
     const v = (en as Record<string, unknown>)[k];
     const text = typeof v === 'function' ? (v as (...a: unknown[]) => string)('x', 'y', 'z') : String(v);

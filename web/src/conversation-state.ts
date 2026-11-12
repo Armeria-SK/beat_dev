@@ -1,4 +1,4 @@
-import { chatHash } from './routes.ts';
+import { routeHash } from './ui/routes.ts';
 
 export type ConvMark = 'approval' | 'generating' | null;
 
@@ -38,7 +38,7 @@ export interface RunContext {
 export function approvalTargetHash(approval: { conversationId: string; runId: string }, context: RunContext): string {
   const taskId = context.taskConversations.get(approval.conversationId)
     ?? (context.running?.runId === approval.runId && context.running.kind === 'task' ? context.running.taskId : null);
-  return taskId ? `#/tasks/${encodeURIComponent(taskId)}` : chatHash(approval.conversationId);
+  return routeHash(taskId ? { view: 'task', id: taskId } : { view: 'chat', id: approval.conversationId });
 }
 
 export type RunGuess = 'chat' | 'background' | 'unknown';

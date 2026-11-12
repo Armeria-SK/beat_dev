@@ -6,8 +6,8 @@ import { subscribe, toast, type FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import { performTaskAction } from '../web/src/task-actions.ts';
 
-// 画面を持たないトーストの受け渡し（feedback.ts）。古い画面の toast.tsx も新しい画面もここを購読する。
-// task-actions.ts と conversation-actions.ts は、画面の部品（toast.tsx）を読まず、ここへ知らせを出す。
+// 画面を持たないトーストの受け渡し（feedback.ts）。画面のトースト（ui/toasts.tsx）がここを購読する。
+// task-actions.ts と conversation-actions.ts は、画面の部品を読まず、ここへ知らせを出す。
 
 function collect(): { items: FeedbackItem[]; stop: () => void } {
   const items: FeedbackItem[] = [];
@@ -36,11 +36,10 @@ test('toast は購読しているすべての受け手に同じ知らせを渡�
   assert.deepEqual(b.items, [{ title: 'one' }]);
 });
 
-test('今の画面の toast.tsx は、読み込まれたときに feedback を購読して、届いた知らせを自分のトーストに出す', () => {
-  const source = readFileSync(new URL('../web/src/toast.tsx', import.meta.url), 'utf8').replace(/\r/gu, '');
-  assert.match(source, /^import \{[^}]*\bsubscribe as subscribeFeedback\b[^}]*\} from '\.\/feedback\.ts';$/mu);
-  assert.match(source, /^subscribeFeedback\(item => \{ toast\(item\); \}\);$/mu, '一番上の階層で購読し、toast に渡す');
-  assert.match(source, /^export function toast\(input: ToastInput\): number \{$/mu);
+test('画面のトースト（ui/toasts.tsx）は feedback を購読して、届いた知らせを出す', () => {
+  const source = readFileSync(new URL('../web/src/ui/toasts.tsx', import.meta.url), 'utf8').replace(/\r/gu, '');
+  assert.match(source, /^import \{ subscribe \} from '\.\.\/feedback\.ts';$/mu);
+  assert.match(source, /const stop = subscribe\(item => \{/u);
 });
 
 test('受け手がいないときの toast は何もしない（落ちない）', () => {

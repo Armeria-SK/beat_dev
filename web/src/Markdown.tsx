@@ -10,7 +10,7 @@ const SAFE_PROTOCOLS = /^(https?:|mailto:|#|\/)/i;
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const t = useT();
   return (
-    <div className="markdown">
+    <div className="ui-md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
@@ -20,9 +20,9 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
           img: ({ alt, src }) => {
             const label = alt || t('markdown.imageHidden');
             const host = imageHost(src);
-            return <span className="muted">{host ? t('markdown.imageFrom', label, host) : t('markdown.image', label)}</span>;
+            return <span className="ui-md__note">{host ? t('markdown.imageFrom', label, host) : t('markdown.image', label)}</span>;
           },
-          table: ({ children }) => <div className="table-wrap"><table>{children}</table></div>,
+          table: ({ children }) => <div className="ui-md__table"><table>{children}</table></div>,
         }}
       >
         {text}

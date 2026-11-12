@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type KeyboardEv
 import type { ModelView, SettingsView } from '../../api.ts';
 import { useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
-import { accessText } from '../../settings/AccessConfirm.tsx';
+import { accessText } from './access-text.tsx';
 import type { Access } from '../../settings/access.ts';
 import type { Config } from '../../settings/model.ts';
 import { menuStep } from '../menu.ts';

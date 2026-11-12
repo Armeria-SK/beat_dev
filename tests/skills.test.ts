@@ -5,12 +5,11 @@ import { defaultConfig } from '../src/config/store.ts';
 import { renderSkillFile } from '../src/tools/skills/store.ts';
 import type { SkillDraft, SkillSummary } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { parseRoute, routeHash } from '../web/src/routes.ts';
+import { parseRoute, routeHash } from '../web/src/ui/routes.ts';
 import {
   addRoot, broadKind, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersFromConfig, POLICY_LABEL, removeRoot, setRootMode,
   orderTools, skillDraftLink, skillFileText, skillRows, TOOL_LOOKS, toolLook, wideningChanges, type FolderDraft,
 } from '../web/src/skills-meta.ts';
-import { toTab } from '../web/src/tabs.ts';
 import { startScreenServer } from './screen-server.ts';
 
 // 触れないパスは、設定の画面のタグの欄が直接直す。ここは、フォルダの変更を数える試験のための小さな補助
@@ -26,15 +25,14 @@ const draft = (over: Partial<SkillDraft>): SkillDraft => ({
 const skill = (name: string, over: Partial<SkillSummary> = {}): SkillSummary => ({ name, description: `${name} の説明`, uses: 0, lastUsedAt: null, updatedAt: 0, registered: true, ...over });
 
 test('経路: スキルの深いリンク（#/skills/<名前>、#/skills/draft/<名前>）を読み、元の形に戻せる', () => {
-  assert.deepEqual(parseRoute('#/skills'), { page: 'skills' });
-  assert.deepEqual(parseRoute('#/skills/weekly-report'), { page: 'skills', target: { kind: 'skill', name: 'weekly-report' } });
-  assert.deepEqual(parseRoute('#/skills/draft/weekly-report'), { page: 'skills', target: { kind: 'draft', name: 'weekly-report' } });
-  assert.deepEqual(parseRoute('#/skills/draft'), { page: 'skills', target: { kind: 'skill', name: 'draft' } }, 'draft という名前のスキルは、スキルとして開く');
-  assert.deepEqual(parseRoute('#/skills/%E3%81%82'), { page: 'skills', target: { kind: 'skill', name: 'あ' } });
-  assert.deepEqual(parseRoute('#/skills/%E0%A4%A'), { page: 'skills', target: { kind: 'skill', name: '%E0%A4%A' } }, '壊れたエンコードでも落ちない');
+  assert.deepEqual(parseRoute('#/skills'), { view: 'skills' });
+  assert.deepEqual(parseRoute('#/skills/weekly-report'), { view: 'skills', target: { kind: 'skill', name: 'weekly-report' } });
+  assert.deepEqual(parseRoute('#/skills/draft/weekly-report'), { view: 'skills', target: { kind: 'draft', name: 'weekly-report' } });
+  assert.deepEqual(parseRoute('#/skills/draft'), { view: 'skills', target: { kind: 'skill', name: 'draft' } }, 'draft という名前のスキルは、スキルとして開く');
+  assert.deepEqual(parseRoute('#/skills/%E3%81%82'), { view: 'skills', target: { kind: 'skill', name: 'あ' } });
+  assert.deepEqual(parseRoute('#/skills/%E0%A4%A'), { view: 'skills', target: { kind: 'skill', name: '%E0%A4%A' } }, '壊れたエンコードでも落ちない');
   for (const hash of ['#/skills', '#/skills/x', '#/skills/draft/x', '#/skills/draft']) assert.equal(routeHash(parseRoute(hash)), hash);
-  assert.deepEqual(parseRoute('#/review'), { page: 'review' }, '古い経路は変えない');
-  assert.equal(toTab('#/skills/draft/x'), null, 'スキルのページはタブにしない（タブは会話だけ）');
+  assert.deepEqual(parseRoute('#/review'), { view: 'skills' }, '古い経路は Skills へ読み替える');
 });
 
 test('スキルの一覧: レビュー待ちの下書きを先頭に（新しい順）、そのあとにスキルを名前順で並べる', () => {

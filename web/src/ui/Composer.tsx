@@ -3,7 +3,7 @@ import { PERMISSION_MODES, type PermissionMode } from '../../../src/shared/permi
 import { api, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import {
-  ATTACH_ACCEPT, attachRoom, composerView, depthOptions, enterAction, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER, queuedLine, slashItems, toastLift,
+  ATTACH_ACCEPT, attachRoom, composerView, depthOptions, enterAction, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER, queuedLine, slashItems, toastLift,
   type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
 import { menuStep } from './menu.ts';
@@ -243,7 +243,7 @@ export function Composer(props: ComposerProps) {
         <span className="bt-composer__spacer" />
         <span className="bt-seg" role="group" aria-label={t('ui.composer.mode')}>
           {PERMISSION_MODES.map(value => (
-            <button key={value} type="button" className="bt-seg__opt" aria-pressed={mode === value} disabled={view.disabled} onClick={() => { if (value !== mode) props.onChoose({ permissionMode: value }); }}>{t(MODE_LABEL[value])}</button>
+            <button key={value} type="button" className="bt-seg__opt" title={t(MODE_HINT[value])} aria-pressed={mode === value} disabled={view.disabled} onClick={() => { if (value !== mode) props.onChoose({ permissionMode: value }); }}>{t(MODE_LABEL[value])}</button>
           ))}
         </span>
         {view.actions === 'busy' ? (

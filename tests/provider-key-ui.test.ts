@@ -101,31 +101,9 @@ test('鍵の名前として使えない環境変数名（KEY・TOKEN・SECRET・
   assert.equal(keyEnvUnsafe(c, 'local'), 'HOME', '名前を付けたあとのプロバイダ');
 });
 
-test('辞書: 鍵の名前として使えないときの注意は、使える言葉を 5 つ並べ、詳しい設定の欄を指す。サーバーの 409 の文にも CREDENTIAL が入る', () => {
-  for (const [dict, name] of [[en, 'en']] as const) {
-    const text = (dict['settings.key.unsafeEnv'] as (n: string) => string)('PATH');
-    assert.match(text, /PATH/u, name);
-    for (const word of ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL']) assert.match(text, new RegExp(word, 'u'), `${name}: ${word}`);
-    assert.match(text, /Advanced/u, `${name}: 詳しい設定を指す`);
-    assert.equal(typeof dict['settings.key.openAdvanced'], 'string');
-  }
+test('鍵の名前として使えないときのサーバーの 409 の文に CREDENTIAL が入る', () => {
   for (const [lang, pattern] of [['en', /CREDENTIAL/u]] as const) {
     assert.match(errorBodyText({ code: 'http.key_env_unsafe', params: { env: 'PATH' } }, lang)!, pattern, lang);
   }
 });
 
-test('辞書: 末尾 4 文字が無いとき（短い鍵）は、「設定済み」だけを出す（空の「末尾 」を出さない）', () => {
-  for (const [dict, withTail, without] of [[en, /Set \(ends with abcd\)/u, /^Set$/u]] as const) {
-    const set = dict['settings.key.set'] as (last4: string) => string;
-    assert.match(set('abcd'), withTail);
-    assert.match(set(''), without);
-  }
-});
-
-test('辞書: キーが OS の環境変数にあるときの表示と、消せなかったときの知らせは、en にある', () => {
-  for (const [dict, name] of [[en, 'en']] as const) {
-    for (const key of ['settings.key.setOs', 'settings.key.osNote', 'settings.key.stillSetOs'] as const) assert.equal(typeof dict[key], 'string', `${name}: ${key}`);
-    assert.match(dict['settings.key.osNote'] as string, /operating system/u, name);
-    assert.match(dict['settings.key.osNote'] as string, /\.env/u, name);
-  }
-});

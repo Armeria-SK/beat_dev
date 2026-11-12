@@ -3,12 +3,11 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { TRIGGER_LABEL, TRIGGER_TEXT } from '../src/memory/review.ts';
 import type { ReviewJob, RunRow, ToolCallRow } from '../web/src/api.ts';
-import { parseRoute, routeHash } from '../web/src/routes.ts';
+import { parseRoute, routeHash } from '../web/src/ui/routes.ts';
 import {
   changeLabel, decidedByLabel, decisionLabel, decisionTag, formatTokens, jobStatusLabel, jobTag, jobTriggerLabel, LOG_LIMIT, logHash, runDetail, runKindLabel,
   runSeconds, runStatus, toolStatus,
 } from '../web/src/runlog-meta.ts';
-import { toTab } from '../web/src/tabs.ts';
 import { startScreenServer } from './screen-server.ts';
 
 const run = (over: Partial<RunRow> = {}): RunRow => ({
@@ -100,20 +99,17 @@ test('コードの網羅: サーバーが作る種類は、すべて辞書に訳
   }
 });
 
-test('経路: #/runs[/tools|/reviews] と、振り返りの実行中のリンク。実行ログも #/review もタブにしない', () => {
-  assert.deepEqual(parseRoute('#/runs'), { page: 'runs' });
-  assert.deepEqual(parseRoute('#/runs/tools'), { page: 'runs', tab: 'tools' });
-  assert.deepEqual(parseRoute('#/runs/reviews'), { page: 'runs', tab: 'reviews' });
-  assert.deepEqual(parseRoute('#/runs/reviews?x=1'), { page: 'runs', tab: 'reviews' });
-  assert.deepEqual(parseRoute('#/runs/unknown'), { page: 'runs' });
-  assert.deepEqual(parseRoute('#/runsx'), { page: 'runs' }, '前方一致は今までどおり');
+test('経路: #/runs[/run|/tools|/reviews] と、振り返りの実行中のリンク。古い #/review は Skills へ', () => {
+  assert.deepEqual(parseRoute('#/runs'), { view: 'runs' });
+  assert.deepEqual(parseRoute('#/runs/tools'), { view: 'runs', tab: 'tools' });
+  assert.deepEqual(parseRoute('#/runs/reviews'), { view: 'runs', tab: 'reviews' });
+  assert.deepEqual(parseRoute('#/runs/reviews?x=1'), { view: 'runs', tab: 'reviews' });
+  assert.deepEqual(parseRoute('#/runs/unknown'), { view: 'runs' });
   for (const hash of ['#/runs', '#/runs/tools', '#/runs/reviews']) assert.equal(routeHash(parseRoute(hash)), hash);
   assert.equal(logHash('runs'), '#/runs');
   assert.equal(logHash('tools'), '#/runs/tools');
   assert.equal(logHash('reviews'), '#/runs/reviews');
-  assert.equal(toTab('#/runs/reviews'), null, '実行ログのページはタブにしない（タブは会話だけ）');
-  assert.equal(toTab('#/review'), null, '#/review は転送だけで、タブにしない');
-  assert.deepEqual(parseRoute('#/review'), { page: 'review' });
+  assert.deepEqual(parseRoute('#/review'), { view: 'skills' });
 });
 
 test('画面が使う API: 実行・道具・振り返りの記録を、画面の読み取りで表にできる', async t => {

@@ -22,9 +22,9 @@ test('applyServerSettings: 設定の timezone を画面に反映する', () => {
 
 test('t(): 英語の辞書を引き、関数の項目には引数を差し込む', () => {
   reset();
-  assert.equal(t('nav.tasks'), 'Tasks');
-  assert.equal(t('nav.tasksWaiting', 3), '3 awaiting reply');
-  assert.equal(t('notice.modelSwitch', 'a', 'b', 'c'), 'a was unavailable, so Clive switched to b (c)');
+  assert.equal(t('ui.nav.kanban'), 'Kanban');
+  assert.equal(t('ui.foot.waiting', 3), '3 waiting for you');
+  assert.equal(t('ui.checklist.count', 2, 5), '2 / 5');
   reset();
 });
 
@@ -199,14 +199,14 @@ test('loadServerSettings: timezone が文字列でなければ何もしない', 
 
 test('t(): 引数が違うキーの和集合は型で断り、引数が同じ和集合は呼べる', () => {
   reset();
-  const mixed = 'nav.tasks' as 'nav.tasks' | 'nav.tasksWaiting';
+  const mixed = 'ui.nav.kanban' as 'ui.nav.kanban' | 'ui.foot.waiting';
   // @ts-expect-error 文字列の項目と関数の項目の和集合は、引数が決まらないので呼べない
   const rejected = () => t(mixed);
   assert.equal(typeof rejected, 'function');
-  const memory = 'notice.memoryCreate' as 'notice.memoryCreate' | 'notice.memoryUpdate';
-  assert.equal(t(memory, 'x'), 'Remembered: x');
-  const plain = 'nav.tasks' as 'nav.tasks' | 'nav.memory';
-  assert.equal(t(plain), 'Tasks');
+  const memory = 'ui.notice.memoryCreate' as 'ui.notice.memoryCreate' | 'ui.notice.memoryUpdate';
+  assert.equal(t(memory, 'x'), 'Memory saved: x');
+  const plain = 'ui.nav.kanban' as 'ui.nav.kanban' | 'ui.nav.memory';
+  assert.equal(t(plain), 'Kanban');
 });
 
 test('formatDateTimeSmart: 今日（設定のタイムゾーンで）の時刻は時刻だけ、別の日は日付つき', () => {

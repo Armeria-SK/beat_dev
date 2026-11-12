@@ -10,12 +10,12 @@
 .ui-owner { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-owner__files { display: block; margin-top: var(--space-1); }
 .ui-reply { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
-.ui-reply > .markdown { align-self: stretch; }
+.ui-reply > .ui-md { align-self: stretch; }
 .ui-copy { opacity: 0; }
 .ui-reply:hover .ui-copy, .ui-reply:focus-within .ui-copy, .ui-copy:focus-visible { opacity: 1; }
 @media (hover: none) { .ui-copy { opacity: 1; } }
 .ui-bar__error { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ui-live .markdown > :last-child::after { content: ""; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--pulse); animation: bt-caret var(--dur-beat) steps(1) infinite; }
+.ui-live .ui-md >:last-child::after { content: ""; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--pulse); animation: bt-caret var(--dur-beat) steps(1) infinite; }
 .ui-notice__text { overflow-wrap: anywhere; text-align: center; }
 .ui-danger { color: var(--danger); }
 .bt-app__main > .ui-offline { flex: none; width: 100%; max-width: 720px; margin: 0 auto var(--space-2); }

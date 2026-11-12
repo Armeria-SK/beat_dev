@@ -2,7 +2,6 @@ import { arrangeNotifications, NOTIFICATION_LIST_LIMIT } from '../../src/shared/
 import type { NotificationItem } from './api.ts';
 import type { IconName } from './icon-name.ts';
 import type { PlainKey } from './i18n/index.ts';
-import { parseRoute, routeHash } from './routes.ts';
 
 const ICONS: Record<string, IconName> = {
   approval_needed: 'shield', task_waiting: 'help', task_done: 'circleCheck', task_failed: 'circleX', health_alert: 'alert', info: 'info',
@@ -19,16 +18,6 @@ const KIND_LABELS: Record<string, PlainKey> = {
 
 export const notificationIcon = (kind: string): IconName => ICONS[kind] ?? 'info';
 export const notificationKindLabel = (kind: string): PlainKey | null => KIND_LABELS[kind] ?? null;
-
-// 通知のリンクはデータベースに文字列で残っている（古い経路を含む）。画面の経路として読めるものだけを開く。
-// #/curiosity はタスクの節に移ったが、古い通知のために今も通す。
-export function notificationLink(link: string | null): string | null {
-  if (!link) return null;
-  const route = parseRoute(link);
-  const canonical = route.page === 'tasks' && route.section ? `#/${route.section}` : routeHash(route);
-  if (canonical === '#/') return link === '#/' ? link : null;
-  return link === canonical || link.startsWith(`${canonical}/`) ? link : null;
-}
 
 // 画面の一覧に、届いた通知を足す。サーバーの一覧と同じ並べ方（承認待ちなどの未読は先頭に残る）
 export const withNotification = (list: readonly NotificationItem[] | null, added: NotificationItem): NotificationItem[] =>

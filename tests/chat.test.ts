@@ -188,21 +188,14 @@ test('mergeNotice: 同じ実行の同じ key のお知らせは置き換え、ke
 
 test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引数を使う', () => {
   const kana = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
-  const keys = Object.keys(en).filter(k => /^(chat|approval|slash|markdown)\.|^notice\.(compacted|stopped)$|^toast\.(undo|memoryUndo)/u.test(k));
-  assert.ok(keys.length > 80, `段階 5 のキーが ${keys.length} 件しか読めていない`);
+  const keys = Object.keys(en).filter(k => /^(chat|approval|slash|markdown|ui\.(notice|approval|composer|tool|thread))\./u.test(k));
+  assert.ok(keys.length > 80, `会話のキーが ${keys.length} 件しか読めていない`);
   for (const key of keys) {
     const entry = (en as Record<string, unknown>)[key];
     const out = typeof entry === 'function' ? (entry as (...a: unknown[]) => string)('x', 3) : entry;
     assert.equal(typeof out, 'string', key);
     assert.ok(!kana.test(String(out)), `${key} の英語に日本語が混ざっている: ${String(out)}`);
   }
-  assert.match(en['notice.compacted'](1), /^Summarized 1 older message \(/u);
-  assert.match(en['notice.compacted'](4), /^Summarized 4 older messages \(/u);
-  assert.match(en['notice.compacted'](4), /originals are kept/u, '原文が残っていることを伝える');
-  assert.match(en['notice.compacted'](4), /^Summarized 4 older messages \(read the summary from the conversation "…" menu; the originals are kept, .*\)$/u);
-  assert.match(en['notice.compacted'](4), /summary from the conversation "…" menu/u, '要約の読み方と原文の探し方を分けて書く');
-  assert.equal(en['chat.pdfPages'](1), 'PDF, 1 page');
-  assert.equal(en['approval.position'](1, 2), '1 / 2');
 });
 
 test('liveRenderDelay: 短い返事は届くたびに描き、長い返事は長さに比例して間引く（上限 1 秒）', () => {
@@ -492,8 +485,6 @@ test('使用量の表示: 割合は四捨五入、1 を超えたら「100%+」�
   assert.deepEqual([0, 999, 1000, 12_400, 180_000, 200_000, 999_949, 999_950, 1_250_000, 2_000_000].map(compactTokens),
     ['0', '999', '1k', '12.4k', '180k', '200k', '999.9k', '1M', '1.25M', '2M']);
   assert.deepEqual([compactTokens(-5), compactTokens(Number.NaN), compactTokens(12_449)], ['0', '0', '12.4k']);
-  assert.equal(en['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k (total 200k)');
-  for (const key of ['context.label', 'context.over'] as const) { assert.ok(en[key], key); assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, key); }
 });
 
 test('使用量の輪を数え直す変更: モデルを替えたときと、権限モードを替えたとき（計画は渡す道具の一覧と指示が変わる）。名前の変更・アーカイブ・削除では数え直さない', () => {
@@ -582,25 +573,26 @@ test('checklistOpen: 作業中は開いて、全部済みは畳んで出す。�
 });
 
 test('作業の一覧の部品: 項目の文は文字のまま出す（Markdown・リンク・生の HTML を通さない）。辞書の文は日英にそろう', () => {
-  const source = readFileSync(new URL('../web/src/ChecklistPanel.tsx', import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\/.*$/gmu, '');
+  const source = readFileSync(new URL('../web/src/ui/Checklist.tsx', import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\/.*$/gmu, '');
   assert.doesNotMatch(source, /Markdown/u, 'Markdown.tsx を通さない');
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/u);
   assert.doesNotMatch(source, /href|<a[\s>]|linkify|innerHTML/iu, 'リンクにしない');
-  assert.match(source, /<span className="chat-checklist-text">\{item\.text\}<\/span>/u, '項目の文は、そのまま文字として 1 か所だけに入れる');
+  assert.match(source, /<span>\{item\.text\}<\/span>/u, '項目の文は、そのまま文字として 1 か所だけに入れる');
   assert.equal(source.match(/item\.text/gu)?.length, 1);
-  assert.match(source, /list\.tainted && <p className="chat-checklist-note">\{t\('checklist\.tainted'\)\}<\/p>/u, '外の内容を読んだあとに書かれた一覧には、小さな注記を付ける');
-  const keys = ['checklist.title', 'checklist.count', 'checklist.pending', 'checklist.inProgress', 'checklist.done', 'checklist.tainted'] as const;
+  assert.match(source, /tainted && <p className="bt-meta ui-checklist__note">\{t\('ui\.checklist\.tainted'\)\}<\/p>/u, '外の内容を読んだあとに書かれた一覧には、小さな注記を付ける');
+  const keys = ['ui.checklist', 'ui.checklist.count', 'ui.checklist.done', 'ui.checklist.tainted'] as const;
   for (const key of keys) {
     assert.ok(key in en, key);
     assert.doesNotMatch(typeof en[key] === 'string' ? en[key] : en[key](1, 2), CJK_CHARS, `${key}: 英語に日本語が混ざらない`);
   }
-  assert.equal(en['checklist.count'](2, 5), '2 / 5 done');
+  assert.equal(en['ui.checklist.count'](2, 5), '2 / 5');
 });
 
-test('作業の一覧の置き場所: 入力欄（Composer）の直前に 1 つ。Chat は出来事（checklist）が届いていればそれを、無ければ開いたときに読んだ一覧を出す', () => {
-  const chat = readFileSync(new URL('../web/src/Chat.tsx', import.meta.url), 'utf8').replace(/\r/g, '');
-  assert.equal(chat.match(/<ChecklistPanel\b/gu)?.length, 1);
-  assert.ok(chat.indexOf('<ChecklistPanel') < chat.indexOf('<Composer') && chat.indexOf('<ChecklistPanel') > chat.indexOf('<ApprovalDock'), '承認の札の下、入力欄の上');
-  assert.match(chat, /checklistToShow\(checklist, readChecklist\)/u, '出来事が先、読んだ一覧はその次');
-  assert.match(readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8'), /case 'checklist\.updated':/u);
+test('作業の一覧の置き場所: 実行中は入力欄（Composer）の直前に 1 つ。出来事（checklist）が届いていればそれを、無ければ開いたときに読んだ一覧を出す', () => {
+  const chat = readFileSync(new URL('../web/src/ui/Conversation.tsx', import.meta.url), 'utf8').replace(/\r/g, '');
+  assert.equal(chat.match(/<Checklist\b/gu)?.length, 2, '終わったあとの会話の中と、実行中の入力欄の上');
+  const pinned = chat.indexOf('{running && checklist.length > 0 && <Checklist');
+  assert.ok(pinned > 0 && pinned < chat.indexOf('<Composer') && chat.indexOf('<Composer', pinned) - pinned < 400, '実行中の一覧は入力欄のすぐ上');
+  assert.match(chat, /const checklist = liveChecklist \?\? readList\?\.items \?\? \[\];/u, '出来事が先、読んだ一覧はその次');
+  assert.match(readFileSync(new URL('../web/src/ui/live-state.ts', import.meta.url), 'utf8'), /case 'checklist\.updated':/u);
 });

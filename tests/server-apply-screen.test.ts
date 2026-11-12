@@ -19,7 +19,8 @@ test('applyStep: ポートが変わった（url がある）ときは、移ら�
 });
 
 test('画面は、反映したあとに自分で移らない（location.assign / replace / href への代入を使わない）。移動はアドレス欄への入力・貼り付けだけ', () => {
-  const source = readFileSync(new URL('../web/src/Settings.tsx', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../web/src/ui/settings/computer.tsx', import.meta.url), 'utf8');
+  assert.match(source, /applyStep\(await api\.applyServer\(force\), location\.hash\)/u, '反映の口を呼ぶのはこのファイル');
   assert.doesNotMatch(source, /location\.(assign|replace)\s*\(|location\.href\s*=|window\.open\s*\(/u);
   assert.doesNotMatch(source, /<a\s[^>]*href=\{[^}]*(movedTo|moved\.url)/u, '新しい URL をクリックできるリンクにしない（押すと同じサイトの別のポートからの移動になり、断られる）');
 });
@@ -37,7 +38,7 @@ test('applyFailure: 締め出しの確かめ（409 would_lock_out）は理由つ
 });
 
 test('辞書: 再起動の文は en にあり、サーバーの理由（締め出し・待ち受けの失敗など）のコードは、画面の言語（英語）に訳せる', () => {
-  for (const key of ['settings.restart.button', 'settings.restart.busy', 'settings.restart.done', 'settings.restart.already', 'settings.restart.failed', 'settings.restart.lockoutTitle', 'settings.restart.lockoutNote', 'settings.restart.lockoutCancel', 'settings.restart.lockoutDo', 'settings.restart.movedTitle', 'settings.restart.movedBody', 'settings.restart.movedCopy', 'settings.restart.movedClose'] as const) {
+  for (const key of ['ui.set.server.applied', 'ui.set.server.moved'] as const) {
     assert.equal(typeof en[key], 'string', key);
   }
   const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;

@@ -89,10 +89,6 @@ test('idFromInput: 打った文字から決まる ID。今の ID と同じなら
   assert.deepEqual(idFromInput('foo', 'provider', ['foo', 'foo-2'], 'foo-2'), { id: 'foo-2', changed: false }, '番号つきの自分の ID に戻る形も、自分自身とは重ならない');
 });
 
-test('辞書: 直した ID の見せ方と、決められないときの文は en にある', () => {
-  assert.equal((en['settings.id.preview'] as (id: string) => string)('anthropic'), 'ID: anthropic');
-  assert.match(String(en['settings.id.none']), /letters|digits/u);
-});
 
 test('⌘/Ctrl+S: 打ちかけの ID の欄にいるときは、その欄を確定する（欄を離れる）。そうでなければ何もしない（commitPendingId）', () => {
   const calls: string[] = [];

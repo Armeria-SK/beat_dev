@@ -141,7 +141,5 @@ test('文: 要約したお知らせは「要約は会話のメニューから読
   assert.match(sentence, /5 older messages/u);
   assert.match(sentence, /menu/u);
   assert.match(sentence, /Search past chats/u);
-  assert.match(en['notice.compacted'](5), /menu.*Search past chats/u);
-  assert.match(en['notice.compacted'](5), /menu/iu);
   assert.match(engineText('en', 'warn.compacted', { count: 5 }), /menu/iu);
 });

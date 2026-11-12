@@ -3,31 +3,21 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { PERMISSION_MODES } from '../src/shared/permission-mode.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { t } from '../web/src/i18n/index.ts';
+import { MODE_HINT, MODE_LABEL } from '../web/src/ui/composer-state.ts';
 
-// 段 8b の画面: 入力欄の権限モードの札・一覧・「この計画で進める」の文
+// 入力欄の権限モード（Ask / Auto / Plan）の名前と、ボタンの title に出す説明の文
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 
 test('権限モードの画面の文: 3 つのモードそれぞれの名前と説明が英語の辞書にあり、日本語が混ざらない', () => {
   for (const mode of PERMISSION_MODES) {
-    for (const key of [`mode.${mode}`, `mode.${mode}Desc`] as const) {
+    for (const key of [MODE_LABEL[mode], MODE_HINT[mode]] as const) {
       assert.ok(key in en, key);
       assert.doesNotMatch(en[key] as string, CJK, key);
     }
   }
-  for (const key of ['mode.chip', 'mode.menu', 'mode.switched', 'mode.failed', 'mode.autoChecking', 'plan.proceed', 'plan.proceedHint', 'plan.proceedRequest', 'runs.autoReason'] as const) {
-    assert.doesNotMatch(en[key] as string, CJK, key);
-  }
-  assert.doesNotMatch(t('mode.statusTip', t('mode.auto')), CJK);
-  assert.doesNotMatch(t('notice.autoAllowed', 'shell_run', 'reads the memo'), CJK);
-  assert.match(t('mode.statusTip', t('mode.plan')), /Permission mode for this chat: Plan/u);
-});
-
-test('「この計画で進める」: 送る依頼の文は英語。ボタンの名前と別の文', () => {
-  assert.equal(t('plan.proceed'), 'Proceed with this plan');
-  assert.equal(t('plan.proceedRequest'), 'Please go ahead with this plan.');
-  assert.doesNotMatch(t('plan.proceedRequest'), CJK);
+  const composer = readFileSync(new URL('../web/src/ui/Composer.tsx', import.meta.url), 'utf8');
+  assert.match(composer, /className="bt-seg__opt" title=\{t\(MODE_HINT\[value\]\)\}/u, '説明は、入力欄のモードのボタンの title に出す');
 });
 
 test('自動承認と計画の説明は、できること・できないことを隠さない（Web の読み取りが外へ文字を出しうること、コードを動かす確かめ・外への書き込みは自動承認でも人に聞くこと）', () => {

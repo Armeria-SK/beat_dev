@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { RunEvent } from '../src/engine/types.ts';
-import { PAGE_META } from '../web/src/pages.ts';
-import { parseRoute, routeHash } from '../web/src/routes.ts';
+import { parseRoute, routeHash } from '../web/src/ui/routes.ts';
 import { startApp, uuid } from './app-setup.ts';
 
 async function make(s: Awaited<ReturnType<typeof startApp>>, n: number, title: string, at: number) {
@@ -70,8 +69,7 @@ test('アーカイブ・戻す・題の変更は、ほかの画面にも届く�
   assert.equal(events.filter(e => e.type === 'conversation.changed').length, 3, '題もアーカイブも変えない PATCH では流さない');
 });
 
-test('画面: #/archived の経路とページの名前', () => {
-  assert.deepEqual(parseRoute('#/archived'), { page: 'archived' });
-  assert.equal(routeHash({ page: 'archived' }), '#/archived');
-  assert.equal(PAGE_META.archived.icon, 'archive');
+test('画面: #/archived の経路', () => {
+  assert.deepEqual(parseRoute('#/archived'), { view: 'archived' });
+  assert.equal(routeHash({ view: 'archived' }), '#/archived');
 });

@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
-import { en } from '../web/src/i18n/en.ts';
 import {
-  emptyModelForm, isOutsideUrl, markSetupShown, modelFormProblem, personaInputOf, resumeStep, setupModelConfig, STEPS, STYLE_CHOICES, wasSetupShown,
-  type ModelForm, type OnboardingSteps, type PersonaFields,
+  emptyModelForm, isOutsideUrl, markSetupShown, modelFormProblem, resumeStep, setupModelConfig, STEPS, wasSetupShown,
+  type ModelForm, type OnboardingSteps,
 } from '../web/src/onboarding.ts';
 import { estimateTokens, overPersonaBudget } from '../web/src/tokens.ts';
-import { sectionChanged } from '../web/src/settings/model.ts';
 
 const steps = (patch: Partial<Record<'user' | 'identity' | 'persona' | 'model', boolean>> = {}) => ({ user: false, identity: false, persona: false, model: false, ...patch });
 
@@ -20,19 +18,6 @@ test('resumeStep: 左の一覧の「続ける」は、済んでいない最初�
   assert.equal(resumeStep(steps({ user: true, identity: true, persona: true })), 'model');
   assert.equal(resumeStep(steps({ user: true, identity: true, persona: true, model: true })), 'greeting');
   assert.equal(resumeStep(steps({ model: true })), 'you', '飛ばした手順があれば、そこへ戻る');
-});
-
-test('personaInputOf: サーバーへ送るのは、入力のあった項目だけ（送った項目だけが書かれ、済みになる）。話し方は「決めない」でも書き足しがあれば送る', () => {
-  const fields: PersonaFields = { userName: ' やまだ ', callMe: '', botName: ' ミナト ', style: 'friendly', styleNote: '  ' };
-  assert.deepEqual(personaInputOf(fields, 'you'), { userName: 'やまだ' });
-  assert.deepEqual(personaInputOf({ ...fields, userName: '', callMe: '' }, 'you'), {}, '空なら何も送らない');
-  assert.deepEqual(personaInputOf(fields, 'identity'), { botName: 'ミナト' });
-  assert.deepEqual(personaInputOf({ ...fields, botName: '  ' }, 'identity'), {});
-  assert.deepEqual(personaInputOf(fields, 'style'), { style: 'friendly' });
-  assert.deepEqual(personaInputOf({ ...fields, style: 'none', styleNote: '' }, 'style'), {}, '決めないで、書き足しも無ければ送らない');
-  assert.deepEqual(personaInputOf({ ...fields, style: 'none', styleNote: '絵文字なし' }, 'style'), { style: 'none', styleNote: '絵文字なし' });
-  assert.deepEqual(personaInputOf({ ...fields, style: null, styleNote: '短く' }, 'style'), { styleNote: '短く' });
-  assert.deepEqual([...STYLE_CHOICES], ['calm', 'friendly', 'direct', 'none']);
 });
 
 const form = (patch: Partial<ModelForm> = {}): ModelForm => ({ ...emptyModelForm('openai'), model: 'qwen3-27b', baseUrl: 'http://127.0.0.1:1234/v1', ...patch });
@@ -113,14 +98,4 @@ test('はじめの設定の記録: 自動で開くのは 1 回だけ。保存で
   const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
   assert.equal(wasSetupShown(blocked), false);
   markSetupShown(blocked);
-});
-
-test('設定の「Clive について」: 節にあり、en に文がある。画面の設定の変更としては数えない（名前と全文は別に保存する）', () => {
-  for (const key of ['settings.section.about', 'settings.desc.about', 'settings.about.name', 'settings.about.rerun', 'onboarding.title', 'onboarding.band', 'onboarding.greeting.request', 'chat.send.setupModel'] as const) {
-    assert.ok(en[key].length > 0, key);
-  }
-  assert.equal(sectionChanged({ profile: { name: 'a' } }, { profile: { name: 'b' } }, 'about'), false);
-  assert.match(en['settings.about.warn'](5000, 4000), /5000/u);
-  assert.match(en['onboarding.model.have'](1), /1 model/u);
-  assert.match(en['onboarding.model.have'](3), /3 models/u);
 });

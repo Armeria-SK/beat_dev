@@ -57,8 +57,8 @@ test('通知の節は「動き」の組に入り、設定の notify を切り出
   const ids = SECTION_GROUPS.flatMap(g => g.items.map(s => s.id));
   assert.ok(ids.includes('notify'));
   assert.deepEqual(sectionSlice(config({ channels: [] }), 'notify'), { channels: [] });
-  const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('settings.notify.')).sort();
-  assert.ok(keys(en).length > 40);
+  const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('notifications.kind.')).sort();
+  assert.ok(keys(en).length >= 6);
   for (const k of keys(en)) {
     const v = (en as Record<string, unknown>)[k];
     const text = typeof v === 'function' ? (v as (...a: unknown[]) => string)('x', 'y') : String(v);

@@ -3,7 +3,7 @@ import { api, ApiError, type SkillDraft, type SkillSummary, type SkillVersion, t
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
-import { accessText } from '../../settings/AccessConfirm.tsx';
+import { accessText } from '../settings/access-text.tsx';
 import type { Access } from '../../settings/access.ts';
 import { findDraft, orderTools, toolLook } from '../../skills-meta.ts';
 import { lineDelta } from '../../../../src/shared/line-delta.ts';
