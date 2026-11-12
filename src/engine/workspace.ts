@@ -38,7 +38,7 @@ export function readTemplate(paths: AppPaths, name: TemplateName): string {
 export const REQUIREMENTS_COMPACT_BELOW = 32_000;
 
 export function requirementsText(paths: AppPaths, available: number): string {
-  return readIfExists(join(paths.templates, available < REQUIREMENTS_COMPACT_BELOW ? 'requirements.compact.md' : 'requirements.md'));
+  return readIfExists(join(paths.templates, available < REQUIREMENTS_COMPACT_BELOW ? 'requirements.compact.md' : 'requirements.md')).replace(/\r\n/gu, '\n');
 }
 
 export function defaultTexts(paths: AppPaths): { rules: string; files: Array<{ name: WorkspaceFile; content: string }> } {
