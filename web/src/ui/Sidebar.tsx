@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type Conversation, type HistoryHit } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import type { AgentState, FootLine } from './agent-state.ts';
@@ -70,6 +70,9 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
 export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running }: SidebarProps) {
   const t = useT();
   const [searching, setSearching] = useState(false);
+  const searchButton = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => { if (!searching && refocus.current) { refocus.current = false; searchButton.current?.focus(); } }, [searching]);
   const at = (view: Route['view']) => route.view === view;
   return (
     <nav className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
@@ -89,9 +92,9 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
 
         <div className="ui-sidebar__labelrow">
           <span className="bt-label bt-sidebar__label">{t('ui.section.noProduct')}</span>
-          {!searching && <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.open')} onClick={() => setSearching(true)}><Icon name="search" /></button>}
+          {!searching && <button ref={searchButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.open')} onClick={() => setSearching(true)}><Icon name="search" /></button>}
         </div>
-        {searching && <SessionSearch onClose={() => setSearching(false)} />}
+        {searching && <SessionSearch onClose={() => { refocus.current = true; setSearching(false); }} />}
         {conversations.map(c => {
           const active = route.view === 'chat' && route.id === c.id;
           const live = running.has(c.id);

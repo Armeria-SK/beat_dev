@@ -20,15 +20,16 @@ test('ui/variants: ?v.<名前>=b のときだけ b、ほかの値・無い・別
   assert.deepEqual([...VARIANTS], ['toast', 'onboarding']);
 });
 
-test('ui/variants: b を選ぶ呼び出し（variant）は、どれも import.meta.env.DEV の後ろにある（いまは呼ぶ所が無くてもよい）', () => {
+test('ui/variants: b を選ぶ呼び出し（variant）は、どれも同じ行・同じ文の中で import.meta.env.DEV の後ろにある（いまは呼ぶ所が無くてもよい）', () => {
   const bad: string[] = [];
   const files = (readdirSync(UI, { recursive: true }) as string[]).filter(n => /\.tsx?$/u.test(n) && !/(^|[\\/])variants\.ts$/u.test(n));
   assert.ok(files.length >= 8, `${files.length} files`);
   for (const name of files) {
     const text = readFileSync(join(UI, name), 'utf8');
     for (const m of text.matchAll(/\bvariant\(/gu)) {
-      const before = text.slice(Math.max(0, m.index - 120), m.index);
-      if (!/import\.meta\.env\.DEV(?: && | \? )/u.test(before)) bad.push(`${name}: ${before.split('\n').at(-1)}${m[0]}`);
+      const start = Math.max(text.lastIndexOf(';', m.index), text.lastIndexOf('{', m.index), text.lastIndexOf('}', m.index), text.lastIndexOf('\n', m.index)) + 1;
+      const statement = text.slice(start, m.index);
+      if (!/import\.meta\.env\.DEV(?: && | \? )/u.test(statement)) bad.push(`${name}: ${statement.trim()}${m[0]}`);
     }
   }
   assert.deepEqual(bad, []);

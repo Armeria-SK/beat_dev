@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ChecklistItem, type Conversation, type TaskStatus, type WorkerStatus } from '../api.ts';
+import { api, type Conversation, type WorkerStatus } from '../api.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { useT } from '../i18n/index.ts';
 import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
+import { EMPTY, reduce, type Action, type Effect, type LiveState } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Icon } from './parts.tsx';
-import { HOME, isConversation, parseRoute, routeBehind, routeHash, type Route } from './routes.ts';
+import { isConversation, parseRoute, routeBehind, routeHash, type Route } from './routes.ts';
 import { Sidebar } from './Sidebar.tsx';
 
-const BROWSER_NOTIFY = new Set(['approval_needed', 'task_waiting']);
 const NARROW = '(max-width: 760px)';
 
 type T = ReturnType<typeof useT>;
@@ -39,6 +39,13 @@ function readRoute(): Route {
   return route;
 }
 
+const visible = (el: Element | null): el is HTMLElement =>
+  el instanceof HTMLElement && el.isConnected && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+
+function focusFirst(...candidates: Array<Element | null>): void {
+  requestAnimationFrame(() => { for (const el of candidates) if (visible(el)) { el.focus(); return; } });
+}
+
 function SettingsShell({ onClose }: { onClose: () => void }) {
   const t = useT();
   const close = useRef<HTMLButtonElement>(null);
@@ -62,23 +69,57 @@ export function App() {
   const t = useT();
   const [route, setRoute] = useState<Route>(readRoute);
   const behindRef = useRef<Route | null>(route.view === 'settings' ? null : route);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [approvals, setApprovals] = useState(0);
-  const [tasks, setTasks] = useState<ReadonlyMap<string, TaskStatus>>(new Map());
-  const [skillDrafts, setSkillDrafts] = useState(0);
-  const [unread, setUnread] = useState(0);
+  const [live, setLive] = useState<LiveState>(EMPTY);
+  const liveRef = useRef(live);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [streaming, setStreaming] = useState<ReadonlySet<string>>(new Set());
-  const [checklists, setChecklists] = useState<ReadonlyMap<string, ChecklistItem[]>>(new Map());
   const [drawer, setDrawer] = useState(false);
-  const menuButton = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef(drawer);
+  drawerRef.current = drawer;
+  const menuButton = useRef<HTMLButtonElement | null>(null);
+  const settingsOpener = useRef<Element | null>(null);
 
   const behind = routeBehind(route, behindRef.current);
   if (route.view !== 'settings') behindRef.current = route;
 
+  const runRef = useRef<(effects: Effect[]) => void>(() => undefined);
+  const dispatch = useCallback((action: Action) => {
+    const next = reduce(liveRef.current, action);
+    liveRef.current = next.state;
+    setLive(next.state);
+    runRef.current(next.effects);
+  }, []);
+
+  const load = useMemo(() => ({
+    conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations })).catch(() => undefined); },
+    approvals: () => { void api.approvals().then(r => dispatch({ type: 'approvals', count: r.approvals.length })).catch(() => undefined); },
+    tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished] })).catch(() => undefined); },
+    drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
+    unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
+    worker: () => { void api.worker().then(setWorker).catch(() => undefined); },
+  }), [dispatch]);
+
+  runRef.current = (effects: Effect[]) => {
+    const granted = 'Notification' in window && Notification.permission === 'granted';
+    for (const effect of effects) {
+      if (effect.kind === 'refresh') load[effect.what]();
+      else if (effect.kind === 'checklist') {
+        const id = effect.conversationId;
+        void api.checklist(id).then(r => dispatch({ type: 'checklist', conversationId: id, items: r.items })).catch(() => undefined);
+      } else if (effect.kind === 'notifyApproval') {
+        if (granted) new Notification(t('browser.approvalNeeded'), { body: effect.title });
+      } else if (granted) new Notification(t('browser.notification', effect.title), { body: effect.body });
+    }
+  };
+
   useEffect(() => {
-    const onHash = () => { setRoute(readRoute()); setDrawer(false); };
+    const onHash = () => {
+      const next = readRoute();
+      setRoute(next);
+      if (drawerRef.current) {
+        setDrawer(false);
+        if (next.view !== 'settings') focusFirst(menuButton.current);
+      }
+    };
     addEventListener('hashchange', onHash);
     return () => removeEventListener('hashchange', onHash);
   }, []);
@@ -90,83 +131,18 @@ export function App() {
     return () => query.removeEventListener('change', onChange);
   }, []);
 
-  const refreshConversations = useCallback(() => { void api.conversations().then(r => setConversations(r.conversations)).catch(() => undefined); }, []);
-  const refreshApprovals = useCallback(() => { void api.approvals().then(r => setApprovals(r.approvals.length)).catch(() => undefined); }, []);
-  const refreshTasks = useCallback(() => { void api.tasks().then(r => setTasks(new Map(r.active.map(x => [x.id, x.status])))).catch(() => undefined); }, []);
-  const refreshDrafts = useCallback(() => { void api.review().then(r => setSkillDrafts(r.skillDrafts.length)).catch(() => undefined); }, []);
-  const refreshUnread = useCallback(() => { void api.notifications().then(r => setUnread(r.unread)).catch(() => undefined); }, []);
-  const refreshWorker = useCallback(() => { void api.worker().then(setWorker).catch(() => undefined); }, []);
-  const refreshChecklist = useCallback((id: string) => {
-    void api.checklist(id).then(r => setChecklists(m => new Map(m).set(id, r.items))).catch(() => undefined);
-  }, []);
-  const refreshAll = useCallback(() => {
-    refreshConversations(); refreshApprovals(); refreshTasks(); refreshDrafts(); refreshUnread(); refreshWorker();
-  }, [refreshConversations, refreshApprovals, refreshTasks, refreshDrafts, refreshUnread, refreshWorker]);
+  useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker'] as const) load[what](); }, [load]);
+  useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
 
-  useEffect(() => { refreshAll(); }, [refreshAll]);
-  useEffect(() => { const timer = setInterval(refreshWorker, 30_000); return () => clearInterval(timer); }, [refreshWorker]);
-
-  const known = useRef(new Set<string>());
-  known.current = new Set(conversations.map(c => c.id));
-
-  const onEvent = useCallback((e: RunEvent) => {
-    switch (e.type) {
-      case 'run.start':
-        setDrafts(ds => [...ds.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '' }]);
-        if (!known.current.has(e.conversationId)) refreshConversations();
-        refreshChecklist(e.conversationId);
-        refreshWorker();
-        break;
-      case 'text.delta':
-        setStreaming(s => (s.has(e.conversationId) ? s : new Set(s).add(e.conversationId)));
-        break;
-      case 'run.end':
-        setDrafts(ds => ds.filter(d => d.runId !== e.runId));
-        setStreaming(s => { if (!s.has(e.conversationId)) return s; const next = new Set(s); next.delete(e.conversationId); return next; });
-        refreshConversations(); refreshWorker(); refreshDrafts(); refreshApprovals();
-        break;
-      case 'approval.requested':
-        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification(t('browser.approvalNeeded'), { body: e.approval.title });
-        refreshApprovals();
-        break;
-      case 'approval.resolved':
-        refreshApprovals();
-        break;
-      case 'checklist.updated':
-        setChecklists(m => new Map(m).set(e.conversationId, e.items));
-        break;
-      case 'conversation.changed':
-        refreshConversations();
-        break;
-      case 'task.changed':
-        setTasks(m => new Map(m).set(e.task.id, e.task.status));
-        refreshWorker();
-        break;
-      case 'notification':
-        setUnread(n => n + 1);
-        refreshDrafts();
-        if (BROWSER_NOTIFY.has(e.notification.kind) && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-          new Notification(t('browser.notification', e.notification.title), { body: e.notification.body ?? '' });
-        }
-        break;
-      case 'notification.read':
-        setUnread(e.unread);
-        break;
-      default:
-        break;
-    }
-  }, [t, refreshConversations, refreshChecklist, refreshWorker, refreshDrafts, refreshApprovals]);
-
-  const onResync = useCallback((serverDrafts: Draft[]) => {
-    setDrafts(serverDrafts);
-    setStreaming(new Set(serverDrafts.filter(d => d.text).map(d => d.conversationId)));
-    for (const d of serverDrafts) refreshChecklist(d.conversationId);
-    refreshAll();
-  }, [refreshAll, refreshChecklist]);
-
+  const onEvent = useCallback((event: RunEvent) => dispatch({ type: 'event', event, hidden: document.hidden }), [dispatch]);
+  const onResync = useCallback((drafts: Draft[]) => dispatch({ type: 'resync', drafts }), [dispatch]);
   useRunEvents(onEvent, onResync);
 
-  const waiting: Waiting = useMemo(() => ({ approvals, drafts: skillDrafts, ...countTasks(tasks.values()) }), [approvals, skillDrafts, tasks]);
+  const { conversations, drafts, checklists, streaming, skillDrafts, unread } = live;
+  const waiting: Waiting = useMemo(
+    () => ({ approvals: live.approvals, drafts: skillDrafts, ...countTasks([...live.tasks.values()].map(m => m.status)) }),
+    [live.approvals, skillDrafts, live.tasks],
+  );
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
   const state = agentState(waiting, working);
   const running = useMemo(() => new Set(drafts.map(d => d.conversationId)), [drafts]);
@@ -177,24 +153,33 @@ export function App() {
     if ((waiting.approvals || waiting.answers) && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
   }, [waiting.approvals, waiting.answers]);
 
+  const settingsOpen = route.view === 'settings';
+  useEffect(() => {
+    if (settingsOpen) { settingsOpener.current = document.activeElement; return; }
+    const opener = settingsOpener.current;
+    if (!opener) return;
+    settingsOpener.current = null;
+    focusFirst(opener, document.querySelector('[data-settings-button]'), menuButton.current);
+  }, [settingsOpen]);
+
   const closeSettings = useCallback(() => {
-    location.hash = routeHash(behindRef.current ?? HOME);
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-settings-button]')?.focus());
+    if (behindRef.current) history.back();
+    else location.replace('#/');
   }, []);
-  const closeDrawer = useCallback(() => { setDrawer(false); menuButton.current?.focus(); }, []);
+  const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
-      if (route.view === 'settings') { e.preventDefault(); closeSettings(); return; }
+      if (settingsOpen) { e.preventDefault(); closeSettings(); return; }
       if (drawer) { e.preventDefault(); closeDrawer(); }
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  }, [route.view, drawer, closeSettings, closeDrawer]);
+  }, [settingsOpen, drawer, closeSettings, closeDrawer]);
 
   useEffect(() => {
-    if (drawer) document.querySelector<HTMLElement>('.bt-sidebar .bt-wordmark')?.focus();
+    if (drawer) focusFirst(document.querySelector('.bt-sidebar .bt-wordmark'));
   }, [drawer]);
 
   const conversation = behind.view === 'chat' ? conversations.find(c => c.id === behind.id) : undefined;
@@ -202,19 +187,20 @@ export function App() {
   const kanban = kanbanCount(waiting);
   const convo = isConversation(behind);
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);
+  const covered = drawer || settingsOpen;
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
-      <NarrowBar title={title} unread={unread} onMenu={e => { menuButton.current = e; setDrawer(true); }} />
-      <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined}>
+      <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} />
+      <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined} inert={settingsOpen}>
         <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} />
         {convo ? (
-          <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`}>
+          <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>
             <header className="bt-app__bar"><span className="bt-app__bar-title">{title}</span></header>
             <div className="bt-thread" />
           </main>
         ) : (
-          <main className="bt-screen">
+          <main className="bt-screen" inert={drawer}>
             <div className="bt-screen__inner">
               <header className="bt-screen__head"><h1 className={`bt-screen__title${behind.view === 'overview' ? ' bt-screen__title--lg' : ''}`}>{title}</h1></header>
               <p className="bt-meta">{t('ui.later')}</p>
@@ -222,9 +208,9 @@ export function App() {
           </main>
         )}
       </div>
-      {drawer && <div className="ui-navveil" onClick={closeDrawer} />}
-      <TabBar route={behind} kanban={kanban} />
-      {route.view === 'settings' && <SettingsShell onClose={closeSettings} />}
+      {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={settingsOpen} />}
+      <TabBar route={behind} kanban={kanban} covered={covered} />
+      {settingsOpen && <SettingsShell onClose={closeSettings} />}
     </div>
   );
 }
