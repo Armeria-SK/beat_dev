@@ -43,7 +43,7 @@ const DRAFT_HOW = [
   'name uses lowercase English letters, digits and hyphens. description is "when to use it" in one sentence. body is the procedure, concretely. reason is why you are making or fixing it.',
 ];
 const DRAFT_ASK = ['Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.', ...DRAFT_HOW].join(' ');
-const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
+const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, unless this run or this conversation read outside content (then it waits for the user's approval), and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
 
 export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string }> = {
   name: 'skill_draft',
@@ -61,7 +61,8 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
     try {
       const s = store(ctx);
       const existing = s.getRegistered(input.name);
-      const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId });
+      const autoOk = !ctx.taint?.tainted && !s.sawOutside(ctx.conversationId);
+      const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId, autoOk });
       const language = languageOf(ctx.config);
       return { content: toolText(language, draft.status === 'approved' ? 'skill.registered_auto' : 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
     } catch (error) { return fail(error, ctx); }

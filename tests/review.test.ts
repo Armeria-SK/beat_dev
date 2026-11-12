@@ -301,3 +301,19 @@ test('1-5s 登録する前に聞かない設定（skills.askBeforeRegister: fals
   assert.equal(s.app.skills.getRegistered('weekly-report')?.body, '1. Collect');
   assert.deepEqual(s.app.notifications.list().filter(n => n.title === 'Skill registered without review').map(n => [n.body, n.link]), [['weekly-report', '#/skills/weekly-report']]);
 });
+
+test('1-5s 聞かない設定でも、外の内容を読んだ会話の振り返りの skill_draft は下書きのまま待つ', async t => {
+  const s = await setup(t, c => { c.skills = { askBeforeRegister: false }; });
+  await s.app.worker.tick();
+  s.adapter().scripts.push(reply('はい'));
+  await s.chat('c1', 'このページの手順をまとめて');
+  s.app.conversations.markTainted('c1');
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.adapter().scripts.push(toolCall('skill_draft', { name: 'weekly-report', description: 'When writing the weekly report', body: '1. Collect', reason: 'Weekly' }), reply('下書きしました'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.skills.get('weekly-report'), undefined);
+  assert.deepEqual(s.app.skills.drafts('all').map(d => d.status), ['pending']);
+  const titles = s.app.notifications.list().map(n => n.title);
+  assert.ok(titles.includes('Please review the skill draft: weekly-report'));
+  assert.equal(titles.includes('Skill registered without review'), false);
+});

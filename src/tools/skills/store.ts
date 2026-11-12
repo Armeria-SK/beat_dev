@@ -30,6 +30,9 @@ export const askBeforeRegister = (config: Pick<AppConfig, 'skills'>): boolean =>
 export type SkillAuthor = 'you' | 'beat' | 'beat-auto';
 export interface SkillVersion { id: string; at: number; who: SkillAuthor; lines: number; description: string; body: string }
 export const SKILL_VERSIONS_KEPT = 20;
+export const SKILL_AUTO_PER_DAY = 5;
+const AUTO_LOG_KEY = 'skills:auto-registered';
+const DAY_MS = 86_400_000;
 const VERSION_FILE = /^(\d{1,16})-(you|beat-auto|beat)(?:-(\d{1,4}))?\.md$/u;
 
 function versionOrder(file: string): [number, number] {
@@ -220,7 +223,9 @@ export class SkillStore {
     const file = same ? `${at}-${who}-${same + 1}.md` : `${at}-${who}.md`;
     writeFileSync(join(dir, file), previous, { encoding: 'utf8', flag: 'wx' });
     const sorted = [...files, file].sort(byVersion);
-    for (const old of sorted.slice(0, Math.max(0, sorted.length - SKILL_VERSIONS_KEPT))) unlinkSync(join(dir, old));
+    const lastYou = sorted.findLastIndex(f => VERSION_FILE.exec(f)![2] === 'you');
+    const keep = new Set(lastYou >= 0 ? sorted.slice(lastYou, lastYou + 2) : []);
+    for (const old of sorted.slice(0, Math.max(0, sorted.length - SKILL_VERSIONS_KEPT))) if (!keep.has(old)) unlinkSync(join(dir, old));
   }
 
   history(name: string): SkillVersion[] {
@@ -249,7 +254,37 @@ export class SkillStore {
     if (!found) throw new SkillError('skill.not_found', { name });
   }
 
-  draft(input: { name: string; description: string; body: string; reason?: string | undefined; conversationId?: string; runId?: string }): SkillDraft {
+  sawOutside(conversationId: string | undefined): boolean {
+    if (!conversationId) return true;
+    const own = this.#db.prepare('SELECT source_conversation_id, source_task_id FROM conversations WHERE id = ?').get(conversationId) as { source_conversation_id: string | null; source_task_id: string | null } | undefined;
+    if (!own) return true;
+    const ids = [conversationId];
+    if (own.source_conversation_id) ids.push(own.source_conversation_id);
+    if (own.source_task_id) {
+      const task = this.#db.prepare('SELECT conversation_id FROM tasks WHERE id = ?').get(own.source_task_id) as { conversation_id: string | null } | undefined;
+      if (!task) return true;
+      if (task.conversation_id) ids.push(task.conversation_id);
+    }
+    return ids.some(id => {
+      const row = this.#db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get(id) as { ever_tainted: number } | undefined;
+      return row === undefined || row.ever_tainted !== 0
+        || this.#db.prepare('SELECT 1 FROM engine_runs WHERE conversation_id = ? AND tainted = 1 LIMIT 1').get(id) !== undefined;
+    });
+  }
+
+  #autoQuotaLeft(now: number): boolean {
+    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(AUTO_LOG_KEY) as { value: string } | undefined;
+    const recent = (row ? (JSON.parse(row.value) as number[]) : []).filter(at => at > now - DAY_MS);
+    return recent.length < SKILL_AUTO_PER_DAY;
+  }
+
+  #countAuto(now: number): void {
+    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(AUTO_LOG_KEY) as { value: string } | undefined;
+    const recent = [...(row ? (JSON.parse(row.value) as number[]) : []).filter(at => at > now - DAY_MS), now];
+    this.#db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(AUTO_LOG_KEY, JSON.stringify(recent), now);
+  }
+
+  draft(input: { name: string; description: string; body: string; reason?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean }): SkillDraft {
     validate(input);
     const pending = this.#db.prepare("SELECT COUNT(*) AS n FROM skill_drafts WHERE status = 'pending'").get() as { n: number };
     if (pending.n >= 20) throw new SkillError('skill.too_many_drafts');
@@ -259,8 +294,8 @@ export class SkillStore {
     const result = this.#db.prepare('INSERT INTO skill_drafts (name, description, body, reason, conversation_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(input.name, input.description.trim(), input.body.trim(), input.reason?.trim() || null, input.conversationId ?? null, input.runId ?? null, now);
     const id = Number(result.lastInsertRowid);
-    if (this.autoRegister?.() === true) {
-      try { this.approve(id, 'beat-auto'); } catch (error) { this.#log(`[WARN] Could not register skill "${input.name}" without review, so it waits as a draft: ${(error as Error).message}`); }
+    if (input.autoOk === true && this.autoRegister?.() === true && this.#autoQuotaLeft(now)) {
+      try { this.approve(id, 'beat-auto'); this.#countAuto(now); } catch (error) { this.#log(`[WARN] Could not register skill "${input.name}" without review, so it waits as a draft: ${(error as Error).message}`); }
     }
     const draft = this.getDraft(id)!;
     this.onDraft?.(draft);
