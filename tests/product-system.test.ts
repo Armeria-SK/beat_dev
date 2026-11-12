@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig, ModelConfig } from '../src/config/schema.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
-import { INSTRUCTIONS_DEFAULT_TOKENS, instructionsBudget, instructionsSection, readInstructions } from '../src/projects/instructions.ts';
+import { INSTRUCTIONS_DEFAULT_TOKENS, instructionsBudget, instructionsSection, linkTarget, readInstructions } from '../src/projects/instructions.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { startScreenServer } from './screen-server.ts';
 
 function toolCall(name: string, args: unknown): Script {
   return async function* () {
@@ -101,6 +102,77 @@ test('2-3 指示ファイル: フォルダやリンクで外を指す AGENTS.md 
   assert.deepEqual(readInstructions(inner, 2000), { name: 'AGENTS.md', text: 'inner rules', truncated: false }, '中を指すリンクは読む');
 });
 
+test('2-3 指示ファイルのリンク: 同じフォルダの AGENTS.md・CLAUDE.md を指すときだけ受ける（ほかのファイル・外・ネットワーク・危ない形・秘密・自分自身は断る）', () => {
+  const root = join(process.cwd(), 'tmp', 'p2-3-root');
+  const link = join(root, 'AGENTS.md');
+  assert.equal(linkTarget(root, link, 'CLAUDE.md'), join(root, 'CLAUDE.md'));
+  assert.equal(linkTarget(root, join(root, 'CLAUDE.md'), join(root, 'AGENTS.md')), join(root, 'AGENTS.md'));
+  for (const target of ['docs/ai.md', join('docs', 'ai.md'), '.env', join('..', 'CLAUDE.md'), join(root, 'sub', 'CLAUDE.md'), 'AGENTS.md', '\\\\host\\share\\CLAUDE.md', '//host/share/CLAUDE.md', '\\\\?\\C:\\x\\CLAUDE.md']) {
+    assert.equal(linkTarget(root, link, target), undefined, target);
+  }
+  if (process.platform === 'win32') {
+    assert.equal(linkTarget(root, link, 'claude.md'), join(root, 'claude.md'), '大文字小文字のゆれは同じ名前');
+    assert.equal(linkTarget(root, link, 'CLAUDE.md:secret'), undefined);
+    assert.equal(linkTarget(root, link, 'C:\\x\\nul'), undefined);
+  }
+});
+
+test('2-3 指示ファイル: ジャンクションの AGENTS.md（外のフォルダ・同じ名前のフォルダを指す）は読まず、読まなかったことを 1 行残す', t => {
+  const base = tempDir(t);
+  const root = join(base, 'root');
+  mkdirSync(root);
+  mkdirSync(join(base, 'outside'));
+  writeFileSync(join(base, 'outside', 'x.md'), 'OUTSIDE');
+  symlinkSync(join(base, 'outside'), join(root, 'AGENTS.md'), 'junction');
+  writeFileSync(join(root, 'CLAUDE.md'), 'inside');
+  const lines: string[] = [];
+  assert.equal(readInstructions(root, 2000, line => lines.push(line)), undefined);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /^\[INFO\] Did not read AGENTS\.md/u);
+  const root2 = join(base, 'root2');
+  mkdirSync(join(root2, 'CLAUDE.md'), { recursive: true });
+  symlinkSync(join(root2, 'CLAUDE.md'), join(root2, 'AGENTS.md'), 'junction');
+  assert.equal(readInstructions(root2, 2000), undefined, '受けたリンクの先がふつうのファイルでなければ読まない');
+});
+
+test('2-3 指示ファイル: ハードリンクの AGENTS.md は読まない', t => {
+  const base = tempDir(t);
+  const root = join(base, 'root');
+  mkdirSync(root);
+  writeFileSync(join(base, 'outside.md'), 'OUTSIDE');
+  linkSync(join(base, 'outside.md'), join(root, 'AGENTS.md'));
+  assert.equal(readInstructions(root, 2000), undefined);
+});
+
+test('2-3 指示ファイル: 調べるところで失敗しても投げず、指示なしで始め、[WARN] を 1 行残す。切ったときは [INFO] を 1 行', t => {
+  const base = tempDir(t);
+  const lines: string[] = [];
+  assert.equal(readInstructions(`${base}\u{0}x`, 2000, line => lines.push(line)), undefined);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /^\[WARN\] Could not read AGENTS\.md .* \(ERR_INVALID_ARG_VALUE\), so the conversation starts without it$/u);
+  const root = join(base, 'root');
+  mkdirSync(root);
+  writeFileSync(join(root, 'AGENTS.md'), 'z'.repeat(5000));
+  const cut: string[] = [];
+  assert.equal(readInstructions(root, 100, line => cut.push(line))?.truncated, true);
+  assert.equal(cut.length, 1);
+  assert.match(cut[0]!, /^\[INFO\] AGENTS\.md .* is longer than the limit/u);
+});
+
+test('2-3 指示ファイル: 見えない文字の広い一覧（異体字セレクタ・ハングルのフィラー・行区切り）も取り除く', t => {
+  const root = tempDir(t);
+  writeFileSync(join(root, 'AGENTS.md'), 'a\u{FE0F}b\u{3164}c\u{2028}d\u{2029}e\u{115F}f\u{E0100}g\rh');
+  assert.equal(readInstructions(root, 2000)?.text, 'abcdefg\rh');
+});
+
+test('2-3 指示ファイル: 読む量は上限のトークンに見合うバイト数まで。ラテン文字でない文も上限まで入り、巨大なファイルは頭だけ読む', t => {
+  const root = tempDir(t);
+  writeFileSync(join(root, 'AGENTS.md'), 'ก'.repeat(5000));
+  assert.equal(readInstructions(root, 100)?.text.length, 350, 'タイ文字（1 文字 3 バイト・3.5 文字で 1 トークン）でも上限まで入る');
+  writeFileSync(join(root, 'AGENTS.md'), `${'\u{200B}'.repeat(2_000_000)}TAIL`);
+  assert.equal(readInstructions(root, 100), undefined, '頭の上限のバイト数だけ読むので、後ろの TAIL は読まない');
+});
+
 test('2-3 製品の会話: 固定の system に指示ファイルがあり、SOUL.md・USER.md・記憶の節が無い。毎回の部分に製品と「相対パスはここから」。記憶の道具は渡らない', async t => {
   const s = await setup(t);
   writeFileSync(join(s.root, 'AGENTS.md'), 'PRODUCT-RULES: use tabs');
@@ -139,6 +211,21 @@ test('2-3 製品の会話で指示ファイルが無ければ節ごと無い（S
   assert.equal(frozenOf(s.app, 'p1'), first, '会話の途中では変わらない');
   await s.send('p2', 'new', s.project.id);
   assert.match(frozenOf(s.app, 'p2'), /# Product instructions \(CLAUDE\.md\)\n\nLATER-RULES/u);
+});
+
+test('2-3 製品のフォルダがジャンクションにすり替わっていたら、指示ファイルを読まない（SOUL.md・USER.md も入らないまま）', async t => {
+  const s = await setup(t);
+  writeFileSync(join(s.root, 'AGENTS.md'), 'REAL-RULES');
+  const other = `${s.root}-other`;
+  mkdirSync(other);
+  writeFileSync(join(other, 'AGENTS.md'), 'SWAPPED-RULES');
+  renameSync(s.root, `${s.root}-moved`);
+  symlinkSync(other, s.root, 'junction');
+  s.adapter().scripts.push(reply('ok'));
+  await s.send('p1', 'hello', s.project.id);
+  const frozen = frozenOf(s.app, 'p1');
+  for (const absent of ['SWAPPED-RULES', 'REAL-RULES', 'Product instructions', 'SOUL-MARKER', 'USER-MARKER']) assert.ok(!frozen.includes(absent), absent);
+  assert.ok(!s.adapter().calls[0]!.system.dynamic.includes('relative paths start here'));
 });
 
 test('2-3 前からある会話の固定した system は変わらない（記憶の入った古い system のまま）', async t => {
@@ -221,4 +308,19 @@ test('2-3 data/workspace の中身と DB の記憶の行数は、製品の会話
   await s.send('p1', 'hello', s.project.id);
   await s.send('n1', 'hello');
   assert.deepEqual({ hash: hash(), rows: rows() }, before);
+});
+
+test('2-3 ルールの「覚えておくこと」は、記憶を約束せず USER.md を案内する', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(reply('ok'));
+  await s.send('n1', 'hello');
+  const frozen = frozenOf(s.app, 'n1');
+  assert.ok(!frozen.includes('Write important things to memory') && !frozen.includes('Write to memory'), frozen);
+  assert.match(frozen, /You do not keep memories between conversations for now\. Do not promise to remember something\. If the user wants you to know something about them every time, suggest they write it in USER\.md/u);
+});
+
+test('2-3 Memory の画面の API: 記憶が会話に入らないあいだは context が null（画面は「今は会話に使わない」）', async t => {
+  const s = await startScreenServer(t);
+  const body = await (await s.api('/api/memories')).json() as { context: unknown };
+  assert.equal(body.context, null);
 });

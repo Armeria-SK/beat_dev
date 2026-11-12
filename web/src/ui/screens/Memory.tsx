@@ -13,7 +13,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import type { UiIconName } from '../icons.ts';
 
 type T = ReturnType<typeof useT>;
-interface Loaded { books: Record<Book, BookView>; context: MemoryContext; events: MemoryEvent[] }
+interface Loaded { books: Record<Book, BookView>; context: MemoryContext | null; events: MemoryEvent[] }
 
 const BOOKS: readonly Book[] = ['user', 'notes'];
 const BOOK_KEY = { user: 'ui.memory.user', notes: 'ui.memory.notes' } as const satisfies Record<Book, string>;
@@ -223,7 +223,7 @@ export function Memory({ revision }: { revision: number }) {
   const current = items.find(item => item.id === selected) ?? (creating ? undefined : items[0]);
   const changed = (select?: number) => { if (select !== undefined) setSelected(select); setTick(n => n + 1); };
   const pickBook = (next: Book) => { setBook(next); setSelected(null); setCreating(false); };
-  const usage = data ? (data.context.budget === null
+  const usage = data ? (data.context === null ? t('ui.memory.notUsed') : data.context.budget === null
     ? t('ui.memory.usage', formatNumber(data.books[book].used), formatNumber(data.context.tokens))
     : t('ui.memory.usageBudget', formatNumber(data.books[book].used), formatNumber(data.context.tokens), formatNumber(data.context.budget))) : '';
 
@@ -241,7 +241,7 @@ export function Memory({ revision }: { revision: number }) {
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
       {data && (
         <p className="bt-meta ui-lib__usage">
-          {usage}{data.context.omitted > 0 && <> · <span className="ui-danger">{t('ui.memory.omitted', data.context.omitted)}</span></>}
+          {usage}{data.context !== null && data.context.omitted > 0 && <> · <span className="ui-danger">{t('ui.memory.omitted', data.context.omitted)}</span></>}
         </p>
       )}
       {data && items.length === 0 && !creating && (

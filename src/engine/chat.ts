@@ -1099,20 +1099,20 @@ export class ChatEngine {
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = this.#buildSnapshotText(language, conversationId);
+    const snapshot = this.#buildSnapshotText(language, conversationId, d.log);
     d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 
   // 会話の始めに固定する system の文。作るだけで、何も書かない
-  #buildSnapshotText(language: Language, conversationId: string) {
+  #buildSnapshotText(language: Language, conversationId: string, log?: (line: string) => void) {
     const d = this.#d;
     const product = d.conversations.projectOf(conversationId) !== null;
     const project = this.#projectOf(conversationId);
     return buildSnapshot(d.paths, {
       ...(d.botMemory && d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
-      ...(product ? { persona: false, instructions: project && instructionsSection(readInstructions(project.root, instructionsBudget(this.#smallestAvailable()))) } : {}),
+      ...(product ? { persona: false, instructions: project && instructionsSection(readInstructions(project.root, instructionsBudget(this.#smallestAvailable()), log)) } : {}),
     }, language);
   }
 

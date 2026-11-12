@@ -1,13 +1,15 @@
-import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, fstatSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { prefixLength } from '../engine/tokens.ts';
-import { isInside } from '../tools/hooks/scope.ts';
+import { isRemotePath, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
 
 export const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
 export const INSTRUCTIONS_BUDGET_RATIO = 0.05;
 export const INSTRUCTIONS_DEFAULT_TOKENS = 2000;
+export const INSTRUCTIONS_BYTES_PER_TOKEN = 14;
 
-const INVISIBLE = /[\u{0}-\u{8}\u{B}\u{C}\u{E}-\u{1F}\u{7F}-\u{9F}\u{AD}\u{61C}\u{180E}\u{200B}-\u{200F}\u{202A}-\u{202E}\u{2060}-\u{2069}\u{FEFF}\u{E0000}-\u{E007F}]/gu;
+const WINDOWS = process.platform === 'win32';
+const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\u{0}-\u{8}\u{B}\u{C}\u{E}-\u{1F}\u{7F}-\u{9F}\u{2028}\u{2029}]/gu;
 
 export interface Instructions {
   name: (typeof INSTRUCTION_FILES)[number];
@@ -20,23 +22,25 @@ export const instructionsBudget = (smallestAvailable: number | undefined): numbe
 
 export const stripInvisible = (text: string): string => text.replace(INVISIBLE, '');
 
-function insideReal(realRoot: string, path: string): string | undefined {
-  try {
-    const real = realpathSync.native(path);
-    return isInside(realRoot, real) ? real : undefined;
-  } catch { return undefined; }
+const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
+
+export function linkTarget(root: string, linkPath: string, target: string): string | undefined {
+  if (isRemotePath(target) || windowsHazard(target) !== undefined) return undefined;
+  const resolved = resolve(dirname(linkPath), target);
+  if (isRemotePath(resolved) || windowsHazard(resolved) !== undefined || isSecretPath(resolved)) return undefined;
+  if (fold(resolved) === fold(resolve(linkPath))) return undefined;
+  return INSTRUCTION_FILES.some(name => fold(resolve(root, name)) === fold(resolved)) ? resolved : undefined;
 }
 
-function readHead(realRoot: string, path: string, maxBytes: number): { text: string; whole: boolean } | undefined {
-  let fd: number | undefined;
+type Log = (line: string) => void;
+
+function readHead(path: string, maxBytes: number): { text: string; whole: boolean } | 'refused' {
+  const checked = lstatSync(path, { bigint: true });
+  if (!checked.isFile() || checked.nlink !== 1n) return 'refused';
+  const fd = openSync(path, 'r');
   try {
-    const real = insideReal(realRoot, path);
-    if (!real || !statSync(real).isFile()) return undefined;
-    fd = openSync(real, 'r');
     const opened = fstatSync(fd, { bigint: true });
-    const again = insideReal(realRoot, path);
-    const now = again === undefined ? undefined : statSync(again, { bigint: true });
-    if (!opened.isFile() || !now || now.ino !== opened.ino || now.dev !== opened.dev) return undefined;
+    if (!opened.isFile() || opened.nlink !== 1n || opened.ino !== checked.ino || opened.dev !== checked.dev) return 'refused';
     const total = Number(opened.size);
     const size = Math.min(total, maxBytes);
     const buffer = Buffer.alloc(size);
@@ -50,22 +54,32 @@ function readHead(realRoot: string, path: string, maxBytes: number): { text: str
     let text = buffer.subarray(0, read).toString('utf8');
     if (!whole) text = text.replace(/\u{FFFD}+$/u, '');
     return { text, whole };
-  } catch { return undefined; } finally { if (fd !== undefined) closeSync(fd); }
+  } finally { closeSync(fd); }
 }
 
-export function readInstructions(root: string, budgetTokens: number): Instructions | undefined {
-  let realRoot: string;
-  try { realRoot = realpathSync.native(root); } catch { return undefined; }
+export function readInstructions(root: string, budgetTokens: number, log: Log = () => undefined): Instructions | undefined {
   for (const name of INSTRUCTION_FILES) {
     const path = join(root, name);
-    if (!lstatSync(path, { throwIfNoEntry: false })) continue;
-    const head = readHead(realRoot, path, budgetTokens * 4 + 16);
-    if (!head) return undefined;
-    const clean = stripInvisible(head.text).trim();
-    const keep = prefixLength(clean, clean.length, budgetTokens);
-    const text = clean.slice(0, keep).trimEnd();
-    if (!text) return undefined;
-    return { name, text, truncated: !head.whole || keep < clean.length };
+    try {
+      const entry = lstatSync(path, { throwIfNoEntry: false });
+      if (!entry) continue;
+      const file = entry.isFile() ? path : entry.isSymbolicLink() ? linkTarget(root, path, readlinkSync(path)) : undefined;
+      const head = file === undefined ? 'refused' : readHead(file, budgetTokens * INSTRUCTIONS_BYTES_PER_TOKEN + 16);
+      if (head === 'refused') {
+        log(`[INFO] Did not read ${name} in the product folder ${root}: only a plain file, or a link to AGENTS.md or CLAUDE.md in the same folder, is read`);
+        return undefined;
+      }
+      const clean = stripInvisible(head.text).trim();
+      const keep = prefixLength(clean, clean.length, budgetTokens);
+      const text = clean.slice(0, keep).trimEnd();
+      if (!text) return undefined;
+      const truncated = !head.whole || keep < clean.length;
+      if (truncated) log(`[INFO] ${name} in the product folder ${root} is longer than the limit (about ${budgetTokens} tokens), so only its beginning is used`);
+      return { name, text, truncated };
+    } catch (error) {
+      log(`[WARN] Could not read ${name} in the product folder ${root} (${(error as NodeJS.ErrnoException).code ?? 'error'}), so the conversation starts without it`);
+      return undefined;
+    }
   }
   return undefined;
 }
