@@ -10,7 +10,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { estimateRequest, estimateTextTokens } from '../src/engine/tokens.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { ProviderError, type ModelRequest } from '../src/providers/types.ts';
-import { AcceptanceStore } from '../src/mesh/acceptance-stub.ts';
+import { AcceptanceStore } from '../src/projects/acceptance.ts';
 import { unsafeMeshPath } from '../src/mesh/files.ts';
 import { MESH_FIRST_LINE, Mesh, composeIndex, meshIndexLimit, wrapMeshIndex, type IndexMaterials } from '../src/mesh/index.ts';
 import { resolvePaths } from '../src/paths.ts';
@@ -149,7 +149,7 @@ function meshFixture(t: { after: (fn: () => void) => void }) {
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
   const plans = new PlanStore(new KV(db), { projects: paths.projects, backups: paths.backups });
-  const mesh = new Mesh({ projectsDir: paths.projects, backupsDir: paths.backups, plans, acceptance: new AcceptanceStore(paths.projects), timezone: () => 'UTC' });
+  const mesh = new Mesh({ projectsDir: paths.projects, backupsDir: paths.backups, plans, acceptance: new AcceptanceStore(db, paths.projects), timezone: () => 'UTC' });
   const registry = new ToolRegistry().register(meshSearch).register(meshRead).register(meshStateSet);
   const policy = buildPolicy(config, paths);
   const ctxOf = (over: Partial<ToolContext> = {}): ToolContext => ({
@@ -765,14 +765,17 @@ test('3-1c 審査の直し 12: 500 個のファイルでも目次はすぐ作れ
 });
 
 test('3-1c 審査の直し 13: 実行の途中で予備のモデルに替わって上限が変わっても、目次はその実行で固定のまま', async t => {
-  const s = await setup(t, { models: [fakeModel('m1'), fakeModel('m2', { contextLength: 16_000 })] });
+  const s = await setup(t, { models: [fakeModel('m1'), fakeModel('m2', { contextLength: 20_000 })] });
   const shop = await s.product('shop');
+  const dir = join(s.app.paths.projects, shop.id);
+  for (let i = 0; i < 80; i++) writeFileSync(join(dir, `note-${String(i).padStart(2, '0')}.md`), `# Note number ${i} about the uploader\n`);
   s.adapter().scripts = [fail(new ProviderError('auth', 'bad key', { retryable: false })), reply('from m2')];
   await s.send(uuid(1), { text: 'go', projectId: shop.id, permissionMode: 'normal' });
   const calls = s.adapter().calls;
   assert.equal(calls.length, 2);
-  assert.equal(meshBody(calls[1]!.system.dynamic), meshBody(calls[0]!.system.dynamic));
-  assert.match(meshBody(calls[1]!.system.dynamic), /^- plan\.md/mu, 'はじめのモデルで作ったふつうの形のまま');
+  const first = meshBody(calls[0]!.system.dynamic);
+  assert.equal(meshBody(calls[1]!.system.dynamic), first);
+  assert.ok(estimateTextTokens(first) > meshIndexLimit(20_000 - 1024), '予備のモデルの上限では作り直すと短くなる量');
 });
 
 test('3-1c 審査の直し 14: 手で書き足した STATE.md の控えは state-owner- の別の輪に置き、AI の書き込み 25 回でも消えない', async t => {

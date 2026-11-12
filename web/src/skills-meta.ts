@@ -16,6 +16,7 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   file_search: { icon: 'search', desc: 'tool.file_search' },
   shell_run: { icon: 'terminal', desc: 'tool.shell_run' },
   plan_write: { icon: 'filePen', desc: 'tool.plan_write' },
+  acceptance_write: { icon: 'filePen', desc: 'tool.acceptance_write' },
   mesh_search: { icon: 'search', desc: 'tool.mesh_search' },
   mesh_read: { icon: 'file', desc: 'tool.mesh_read' },
   mesh_state_set: { icon: 'pencil', desc: 'tool.mesh_state_set' },

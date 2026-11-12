@@ -3,7 +3,7 @@ import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
 import { neutralizeFence } from '../shared/fence.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import { redactSecrets } from '../shared/redaction.ts';
-import type { AcceptanceDoc, AcceptanceSource } from './acceptance-stub.ts';
+import type { AcceptanceDoc, AcceptanceSource } from '../projects/acceptance.ts';
 import { MeshError, scrubText } from './files.ts';
 
 export interface MeshText { rel: string; lines: string[]; mtime: number; fetched: boolean }

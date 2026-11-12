@@ -230,6 +230,7 @@ export const en = {
   'tool.file_list': 'List the contents of a folder',
   'tool.shell_run': 'Run a shell command',
   'tool.plan_write': 'Write the plan of the product (only in product conversations)',
+  'tool.acceptance_write': 'Write the draft acceptance list of the product (only in product conversations)',
   'tool.mesh_search': 'Search the notes, plan and acceptance items of the product',
   'tool.mesh_read': 'Read a file of the notes of the product (such as the plan)',
   'tool.mesh_state_set': 'Note where the work on the product stands',

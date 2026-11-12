@@ -9,7 +9,7 @@ import { makeFence, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
 import type { TaskStore } from '../tasks/store.ts';
-import type { AcceptanceDoc } from './acceptance-stub.ts';
+import type { AcceptanceDoc } from '../projects/acceptance.ts';
 import { dateIn, isMarkdown, listMeshFiles, MeshError, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
 import { acceptanceLines, readMesh, searchMesh, type MeshText } from './search.ts';
 import { applyPatch, hasForeignLines, parseNotes, renderState, STATE_FILE, type NoteAuthor, type StateNote, type StatePatch } from './state.ts';

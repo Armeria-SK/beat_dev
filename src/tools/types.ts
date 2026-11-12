@@ -15,6 +15,8 @@ import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { PlanStore } from '../projects/plan.ts';
+import type { AcceptanceStore } from '../projects/acceptance.ts';
+import type { ProjectStore } from '../projects/store.ts';
 import type { Mesh } from '../mesh/index.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
@@ -108,6 +110,7 @@ export interface ToolContext {
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined; mesh?: Mesh | undefined;
+    acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
