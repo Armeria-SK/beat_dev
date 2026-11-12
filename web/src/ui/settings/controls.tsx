@@ -126,15 +126,31 @@ export function Select<V extends string>({ value, options, label, placeholder, d
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
   useLayoutEffect(() => {
-    const menu = list.current;
-    const opener = button.current;
-    if (!open || !menu || !opener) { setFit(null); return; }
-    setFit(menuFit(opener.getBoundingClientRect(), clipBounds(menu), { width: menu.offsetWidth, height: menu.scrollHeight }, MENU_GAP));
+    if (!open) { setFit(null); return undefined; }
+    const place = () => {
+      const menu = list.current;
+      const opener = button.current;
+      if (menu && opener) setFit(menuFit(opener.getBoundingClientRect(), clipBounds(menu), { width: menu.offsetWidth, height: menu.scrollHeight }, MENU_GAP));
+    };
+    place();
+    const moved = (e: Event) => { if (e.target !== list.current) place(); };
+    window.addEventListener('resize', place);
+    document.addEventListener('scroll', moved, true);
+    return () => { window.removeEventListener('resize', place); document.removeEventListener('scroll', moved, true); };
   }, [open]);
+  const placed = fit !== null;
+  useEffect(() => {
+    const menu = list.current;
+    if (!open || !placed || !menu) return;
+    const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
+    const target = items.find(el => el.getAttribute('aria-checked') === 'true') ?? items[0];
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    if (target.offsetTop < menu.scrollTop) menu.scrollTop = target.offsetTop;
+    else if (target.offsetTop + target.offsetHeight > menu.scrollTop + menu.clientHeight) menu.scrollTop = target.offsetTop + target.offsetHeight - menu.clientHeight;
+  }, [open, placed]);
   useEffect(() => {
     if (!open) return undefined;
-    const items = list.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [];
-    ([...items].find(el => el.getAttribute('aria-checked') === 'true') ?? items[0])?.focus();
     const away = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener('pointerdown', away, true);
     return () => document.removeEventListener('pointerdown', away, true);
@@ -158,7 +174,7 @@ export function Select<V extends string>({ value, options, label, placeholder, d
           {options.map(option => (
             <li key={option.value} role="none">
               <button type="button" role="menuitemradio" aria-checked={option.value === value} className="bt-menu__item"
-                onClick={() => { close(); if (option.value !== value) onChange(option.value); }}><b>{option.label}</b></button>
+                onClick={() => { close(); if (option.value !== value) onChange(option.value); }}><b>{option.label}</b>{option.value === value && <Icon name="check" />}</button>
             </li>
           ))}
         </ul>

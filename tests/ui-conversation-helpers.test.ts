@@ -47,6 +47,9 @@ test('ui/menu: 選ぶ一覧は、ボタンの右端にそろえて左へ広が�
   const fit = menuFit({ top: 100, bottom: 128, left: 220, right: 300 }, bounds, size, 4);
   assert.equal(fit.left, true);
   assert.equal(fit.maxWidth, 580);
+  const wide = menuFit({ top: 100, bottom: 128, left: 600, right: 700 }, bounds, { width: 600, height: 100 }, 4);
+  assert.equal(wide.left, false, '左にも入らないが右のほうが狭いなら、右端そろえのまま左へ広げる');
+  assert.equal(wide.maxWidth, 500);
 });
 
 test('ui/menu: メニューからフォーカスが出たら閉じるが、開いたボタンへ出たときは閉じない（ボタンの押し直しで閉じられる）', () => {

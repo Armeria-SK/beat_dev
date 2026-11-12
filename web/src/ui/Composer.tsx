@@ -59,7 +59,7 @@ function PopMenu({ label, opener, onClose, onLeave, children }: { label: string;
 function PopItem({ name, hint, checked, disabled, onPick }: { name: string; hint?: string; checked: boolean; disabled?: boolean; onPick: () => void }) {
   return (
     <li role="none">
-      <button type="button" role="menuitemradio" aria-checked={checked} disabled={disabled} className="bt-menu__item" onClick={onPick}><b>{name}</b>{hint}</button>
+      <button type="button" role="menuitemradio" aria-checked={checked} disabled={disabled} className="bt-menu__item" onClick={onPick}><b>{name}</b>{hint}{checked && <Icon name="check" />}</button>
     </li>
   );
 }

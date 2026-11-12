@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { pickFocus } from '../web/src/ui/focus.ts';
+import { pickFocus, underHead } from '../web/src/ui/focus.ts';
 
 // Settings を閉じたあとの焦点の戻し先（1-1 のレビューの残り）。開いた元 → Settings のボタン → メニューのボタンの順で、
 // 見えていて文書の中にあるものへ。body は戻し先にしない（何にも焦点が無いまま開いたとき、開いた元が body になる）。
@@ -20,6 +20,13 @@ test('ui/focus: 開いた元が無い（#/settings を直接開いた）とき�
   assert.equal(pickFocus([null, settings, menu], body, () => false), menu);
   const hiddenStyle = el('settings');
   assert.equal(pickFocus([null, hiddenStyle, menu], body, x => x === hiddenStyle), menu);
+});
+
+test('ui/focus: 止まった頭の下に入った焦点は、頭の下に少し空けて見える所までだけ戻す。隠れていなければ動かさない', () => {
+  assert.equal(underHead(92, 40, 8), 60);
+  assert.equal(underHead(92, 100, 8), 0);
+  assert.equal(underHead(92, 84, 8), 16);
+  assert.equal(underHead(173, -20, 8), 201);
 });
 
 test('ui/focus: 文書から外れた元は使わない。どれも使えなければ null', () => {
