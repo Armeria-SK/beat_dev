@@ -278,12 +278,10 @@ export function editAccess(i: { acc: Acceptance | null; state: PlanState; mode: 
 export const problemField = (problem: FormProblem): 'result' | 'command' =>
   (problem === 'ui.acc.edit.noCommand' || problem === 'ui.acc.edit.longCommand' ? 'command' : 'result');
 
-export const decideArgs = (productId: string, change: AcceptanceChange, decision: 'approve' | 'reject'): [string, string, 'approve' | 'reject'] => [productId, change.id, decision];
-
 export const approveDisabled = (acc: Acceptance, change: AcceptanceChange, busy: boolean): boolean => busy || proposalStale(acc, change);
 
-export const loadedAcceptance = (r: { acceptance: Acceptance; coverage?: Coverage }): { acc: Acceptance; change: AcceptanceChange | null; coverage: Coverage | null; sentBuild: null } =>
-  ({ acc: r.acceptance, change: r.acceptance.change ?? null, coverage: r.coverage ?? null, sentBuild: null });
+export const loadedAcceptance = (r: { acceptance: Acceptance; coverage?: Coverage }): { acc: Acceptance; change: AcceptanceChange | null; coverage: Coverage | null } =>
+  ({ acc: r.acceptance, change: r.acceptance.change ?? null, coverage: r.coverage ?? null });
 
 export type DecisionFailure = { kind: 'stale' } | { kind: 'failed'; detail: string | null };
 

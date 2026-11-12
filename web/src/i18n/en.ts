@@ -1469,7 +1469,7 @@ export const en = {
   'ui.acc.edit.long': 'The result is longer than 300 characters',
   'ui.acc.edit.noCommand': 'Write the command',
   'ui.acc.edit.longCommand': 'The command is longer than 1000 characters',
-  'ui.acc.edit.stale': 'The list changed meanwhile. Your edit was not saved',
+  'ui.acc.edit.stale': 'The list changed meanwhile. Your edit was not saved. Open Edit again',
   'ui.acc.edit.failed': 'Could not save the item',
   'ui.acc.ask.title': 'Plan changed. Update the acceptance items too?',
   'ui.acc.ask.ask': 'Ask beat',

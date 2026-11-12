@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { api, ApiError, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type AcceptanceVersionDetail, type Conversation, type Task } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  ASK_TEXT, approveDisabled, askAfterSave, askSend, askTarget, buildAction, decideArgs, editAccess, editBase, editHint, loadedAcceptance, noticeAfterReload, problemField, versionItems, watchedBuild, decisionFailure, diffLabel, editOp, editRequest, formProblem, itemForm, previousVersion, proposalRows, proposalStale, removeOp,
+  ASK_TEXT, approveDisabled, askAfterSave, askSend, askTarget, buildAction, editAccess, editBase, editHint, loadedAcceptance, noticeAfterReload, problemField, versionItems, watchedBuild, decisionFailure, diffLabel, editOp, editRequest, formProblem, itemForm, previousVersion, proposalRows, proposalStale, removeOp,
   revealSection, versionDiff, versionSourceLabel, versionsShown,
 } from '../web/src/ui/acceptance.ts';
 
@@ -149,20 +149,18 @@ test('ui/acceptance 3-3: 直す欄の誤りは、その誤りの欄に結びつ�
   assert.equal(problemField('ui.acc.edit.longCommand'), 'command');
 });
 
-test('ui/acceptance 3-3: Approve / Reject が送るもの。古い案は Approve を押せない（Reject は押せる）', () => {
-  assert.deepEqual(decideArgs('P1', change({ id: 'ch7' }), 'approve'), ['P1', 'ch7', 'approve']);
-  assert.deepEqual(decideArgs('P1', change({ id: 'ch7' }), 'reject'), ['P1', 'ch7', 'reject']);
+test('ui/acceptance 3-3: 古い案は Approve を押せない（Reject は押せる）', () => {
   assert.equal(approveDisabled(acc({ version: 2 }), change({ base_version: 1 }), false), true);
   assert.equal(approveDisabled(acc({ version: 1 }), change({ base_version: 1 }), false), false);
   assert.equal(approveDisabled(acc({ version: 1 }), change({ base_version: 1 }), true), true);
 });
 
-test('ui/acceptance 3-3: 一覧を読み直したら、案は acceptance.change から取り、今送った Build のつなぎ（sentBuild）は消す', () => {
+test('ui/acceptance 3-3: 一覧を読み直したら、案は acceptance.change から取る', () => {
   const c = change();
   const coverage = { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 };
   const a = acc({ change: c });
-  assert.deepEqual(loadedAcceptance({ acceptance: a, coverage }), { acc: a, change: c, coverage, sentBuild: null });
-  assert.deepEqual(loadedAcceptance({ acceptance: acc() }), { acc: acc(), change: null, coverage: null, sentBuild: null });
+  assert.deepEqual(loadedAcceptance({ acceptance: a, coverage }), { acc: a, change: c, coverage });
+  assert.deepEqual(loadedAcceptance({ acceptance: acc() }), { acc: acc(), change: null, coverage: null });
 });
 
 test('ui/acceptance 3-3: api.send は generated: true を送る本文に載せる', async () => {

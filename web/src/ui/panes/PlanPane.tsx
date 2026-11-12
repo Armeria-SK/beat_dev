@@ -8,7 +8,7 @@ import { useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import {
   acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
-  decideArgs, decisionFailure, diffLabel, editAccess, editBase, editHint, editOp, editRequest, formProblem, itemDetails, itemForm, loadedAcceptance, noticeAfterReload, outsideContent, pagingCursor, previousVersion, problemField, proposalRows, proposalStale, removeOp, revealSection, revealStep,
+  decisionFailure, diffLabel, editAccess, editBase, editHint, editOp, editRequest, formProblem, itemDetails, itemForm, loadedAcceptance, noticeAfterReload, outsideContent, pagingCursor, previousVersion, problemField, proposalRows, proposalStale, removeOp, revealSection, revealStep,
   showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type EditBase, type ItemForm, type Paging,
 } from '../acceptance.ts';
 import { useNow } from '../hooks.ts';
@@ -32,7 +32,7 @@ function Meta({ doc, writing }: { doc: PlanDoc | null; writing: boolean }) {
   return <span className="bt-meta">{file} · {by ? t('ui.plan.editedBy', when, t(by)) : t('ui.plan.edited', when)}</span>;
 }
 
-interface Editing { hint: string | null; busy: boolean; locked: boolean; base: EditBase; onEdit: (op: OwnerOp, base: EditBase) => Promise<boolean> }
+interface Editing { hint: string | null; busy: boolean; locked: boolean; base: EditBase; onEdit: (op: OwnerOp, base: EditBase) => Promise<'saved' | 'stale' | 'failed'> }
 
 const CHECK_KINDS: ReadonlyArray<ItemForm['check']> = ['command', 'look', 'read'];
 
@@ -49,7 +49,7 @@ function ItemEditor({ item, base, editing, onDone }: { item: AcceptanceItem | nu
   const blocked = editing.busy || editing.locked;
   const save = async () => {
     if (!op || blocked) return;
-    if (await editing.onEdit(op, base)) onDone();
+    if (await editing.onEdit(op, base) !== 'failed') onDone();
   };
   const invalid = (which: 'result' | 'command') => (field === which ? { 'aria-invalid': true, 'aria-describedby': `${id}-problem` } : {});
   return (
@@ -129,7 +129,7 @@ function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing
             {link && <a className="bt-meta ui-acc__link" href={link}>{t('ui.acc.showInConversation')}</a>}
             {editable && item && editing && (mode.kind === 'remove' ? (
               <RowConfirm warn={t('ui.acc.edit.removeWhat')} note={editing.hint ?? undefined} action={t('ui.acc.edit.remove')} busy={editing.busy || editing.locked}
-                onConfirm={() => void editing.onEdit(removeOp(item), mode.base).then(ok => { if (ok) back(null); })} onKeep={again => back(again ? 'remove' : null)} />
+                onConfirm={() => void editing.onEdit(removeOp(item), mode.base).then(out => { if (out !== 'failed') back(null); })} onKeep={again => back(again ? 'remove' : null)} />
             ) : (
               <span className="ui-acc__buttons">
                 <Button ref={editButton} variant="ghost" small disabled={editing.busy || editing.locked} onClick={() => setMode({ kind: 'edit', base: editing.base })}>{t('ui.acc.edit.edit')}</Button>
@@ -411,7 +411,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       const next = loadedAcceptance(r);
       setAcc(next.acc);
       setChange(next.change);
-      setSentBuild(next.sentBuild);
+      setSentBuild(null);
       setCoverage(next.coverage);
       setAccFailed(false);
       setBuildNotice(current => noticeAfterReload(current, r.acceptance));
@@ -526,20 +526,21 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setMode('edit');
   };
 
-  const changeItems = async (op: OwnerOp, base: EditBase): Promise<boolean> => {
-    if (!acc || accBusy) return false;
+  const changeItems = async (op: OwnerOp, base: EditBase): Promise<'saved' | 'stale' | 'failed'> => {
+    if (!acc || accBusy) return 'failed';
     setAccBusy(true);
     setAccNotice(null);
-    let ok = true;
+    let out: 'saved' | 'stale' | 'failed' = 'saved';
     try {
       await api.editAcceptance(productId, editRequest(base, op));
     } catch (error) {
-      ok = false;
-      setAccNotice({ what: 'edit', failure: decisionFailure(error) });
+      const failure = decisionFailure(error);
+      out = failure.kind;
+      setAccNotice({ what: 'edit', failure });
     }
     await loadAcceptance();
     setAccBusy(false);
-    return ok;
+    return out;
   };
 
   const decide = async (decision: 'approve' | 'reject') => {
@@ -547,7 +548,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setAccBusy(true);
     setAccNotice(null);
     try {
-      await api.decideChange(...decideArgs(productId, change, decision));
+      await api.decideChange(productId, change.id, decision);
     } catch (error) {
       setAccNotice({ what: 'change', failure: decisionFailure(error) });
     }
