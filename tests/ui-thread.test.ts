@@ -32,6 +32,28 @@ test('ui/thread: 続けて呼んだ道具は 1 つのまとまり（bt-tools）�
   assert.deepEqual(tools.rows.map(r => [r.name, JSON.parse(r.input).path, r.result?.text]), [['file_read', 'a.ts', 'content'], ['file_edit', 'a.ts', 'Replaced 1 occurrence(s): a.ts']]);
 });
 
+test('ui/thread: 手元のサーバーが毎回同じ呼び出し番号を返しても、各行はその回の入力を出し、行の key は重ならない', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'look around'),
+      msg('assistant', '', { toolCalls: [call('call_0', 'shell_run', { command: 'Get-Location; Get-ChildItem' })] }),
+      msg('tool', 'D:\\a', { toolName: 'shell_run', toolCallId: 'call_0' }),
+      msg('assistant', '', { toolCalls: [call('call_0', 'shell_run', { command: 'git status' })] }),
+      msg('tool', 'clean', { toolName: 'shell_run', toolCallId: 'call_0' }),
+      msg('assistant', '', { toolCalls: [call('call_0', 'file_read', { path: 'README.md' })] }),
+      msg('tool', '# x', { toolName: 'file_read', toolCallId: 'call_0' }),
+    ],
+  });
+  const tools = items[1]!;
+  assert.ok(tools.kind === 'tools');
+  assert.deepEqual(tools.rows.map(r => [r.name, r.input]), [
+    ['shell_run', JSON.stringify({ command: 'Get-Location; Get-ChildItem' })],
+    ['shell_run', JSON.stringify({ command: 'git status' })],
+    ['file_read', JSON.stringify({ path: 'README.md' })],
+  ]);
+  assert.equal(new Set(items.flatMap(i => (i.kind === 'tools' ? i.rows.map(r => r.key) : [i.key]))).size, items.length - 1 + tools.rows.length);
+});
+
 test('ui/thread: 返事の文があいだに入ると、道具のまとまりは分かれる。コピーは 1 回の返事の最後の文だけで、その回の文を全部まとめる', () => {
   const items = threadItems({
     messages: [

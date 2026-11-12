@@ -57,7 +57,7 @@ const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.t
 
 export function threadItems({ messages, draft, approvals = [], notices = [] }: ThreadInput): ThreadItem[] {
   const inputs = new Map<string, string>();
-  for (const m of messages) for (const call of m.toolCalls ?? []) inputs.set(call.id, call.input);
+  const usedKeys = new Set<string>();
   const visible = messages.filter(m => !hiddenReply(m));
   const turns = replyTurns(visible, draft?.runId ?? null);
   const items: ThreadItem[] = [];
@@ -69,10 +69,14 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
     return group.rows;
   };
 
-  for (const m of visible) {
+  for (const m of messages) {
+    for (const call of m.toolCalls ?? []) inputs.set(call.id, call.input);
+    if (hiddenReply(m)) continue;
     const key = `m-${m.id}`;
     if (m.role === 'tool') {
-      const rowKey = toolKey(m.toolCallId) ?? key;
+      const firstKey = toolKey(m.toolCallId) ?? key;
+      const rowKey = usedKeys.has(firstKey) ? `${firstKey}-${key}` : firstKey;
+      usedKeys.add(rowKey);
       tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: inputs.get(m.toolCallId ?? '') ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
     } else if (m.role === 'user') {
       items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
