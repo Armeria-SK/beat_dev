@@ -5,6 +5,7 @@ import { Kind, TypeRegistry, type TSchema } from '@sinclair/typebox';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import type { JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation';
 import type { Language, McpConfig, McpServerConfig, McpToolEntry } from '../config/schema.ts';
+import { neutralizeFence } from '../shared/fence.ts';
 import { languageOf } from '../shared/language.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { toolText } from '../shared/messages/tools.ts';
@@ -131,11 +132,6 @@ export function inputSchemaOf(raw: unknown): InputSchemaResult {
 export function cleanDescription(text: string | undefined): string {
   const flat = (text ?? '').replace(INVISIBLE_RUN, ' ').replace(/\s{2,}/gu, ' ').trim();
   return flat.length > DESCRIPTION_MAX ? `${flat.slice(0, DESCRIPTION_MAX)}…` : flat;
-}
-
-// 答えの本文の中の区切り（<<< と >>>）は全角にして、枠を偽装されないようにする
-export function neutralizeFence(text: string): string {
-  return text.replace(/<{3,}/gu, m => '＜'.repeat(m.length)).replace(/>{3,}/gu, m => '＞'.repeat(m.length));
 }
 
 interface ContentPart { type?: unknown; text?: unknown; resource?: { text?: unknown } | undefined }

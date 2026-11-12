@@ -1,6 +1,6 @@
 import type { Language } from '../config/schema.ts';
 import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
-import { neutralizeFence } from '../mcp/tool.ts';
+import { neutralizeFence } from '../shared/fence.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import type { AcceptanceDoc, AcceptanceSource } from './acceptance-stub.ts';
@@ -91,12 +91,14 @@ export function readMesh(text: MeshText, input: { section?: string | undefined; 
   let section: string | undefined;
   if (input.section !== undefined) {
     const headings = lines.flatMap((line, index) => (/^#+\s/u.test(line) ? [{ index, level: /^#+/u.exec(line)![0].length, title: line.replace(/^#+\s*/u, '').trim() }] : []));
-    const wanted = fold(input.section.replace(/^#+\s*/u, '').trim());
-    const found = headings.find(h => fold(h.title) === wanted) ?? headings.find(h => fold(h.title).includes(wanted));
+    const asked = label(input.section.replace(/^#+\s*/u, '').trim());
+    const wanted = fold(asked);
+    const titles = headings.map(h => ({ h, title: fold(label(h.title)) }));
+    const found = (titles.find(x => x.title === wanted) ?? titles.find(x => x.title.includes(wanted)))?.h;
     if (!found || !wanted) throw new MeshError('mesh.no_section', { section: label(input.section), path: text.rel, sections: headings.map(h => label(h.title)).join(', ') || '-' }, text.fetched);
     const end = headings.find(h => h.index > found.index && h.level <= found.level)?.index ?? lines.length;
     lines = lines.slice(found.index, end);
-    section = label(found.title);
+    section = asked;
   }
   const whole = safe(lines.join('\n').replace(/\n+$/u, ''));
   const total = whole.length;

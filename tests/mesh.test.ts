@@ -683,6 +683,41 @@ test('3-1c 審査の直し 9: 節を読んだときの続きの案内は、フ�
   assert.equal(read, `## Steps\n${steps}`);
 });
 
+test('3-1c 再審査の直し 1・2: ` < > " を含む見出しも、続きの案内の名前で読み戻せる。案内の節の名前は AI が渡した名前で、ファイルの見出しは枠の外に出ない', async t => {
+  const f = meshFixture(t);
+  const body = (n: number) => Array.from({ length: 400 }, (_, i) => `${n}-${i} ${'w'.repeat(20)}`).join('\n');
+  const headings = ['Changes to `src/app.ts`', 'Use <b> tags', 'When a > b', 'Say "hi" first'];
+  writeFileSync(join(f.dir, 'notes.md'), `# Notes\n${headings.map((h, n) => `## ${h}\n${body(n)}`).join('\n')}\n## Steps and more\n${body(9)}\n`);
+  const NOTE = /\n>>>\n\[.*call mesh_read with file "notes\.md", section "([^"]*)", offset (\d+)/u;
+  const follow = async (first: string) => {
+    let section = first;
+    let offset = 0;
+    let read = '';
+    for (let i = 0; i < 40; i++) {
+      const out = await f.run('mesh_read', offset ? { file: 'notes.md', section, offset } : { file: 'notes.md', section });
+      assert.equal(out.output.isError, undefined, `${section}: ${out.output.content.slice(0, 300)}`);
+      const text = out.output.content;
+      read += text.slice(text.indexOf('<<<\n') + 4, text.lastIndexOf('\n>>>'));
+      const next = NOTE.exec(text);
+      if (!next) return { read, parts: i + 1 };
+      section = next[1]!;
+      offset = Number(next[2]);
+    }
+    assert.fail('続きが終わらない');
+  };
+  for (const [n, heading] of headings.entries()) {
+    const done = await follow(heading);
+    assert.ok(done.parts > 1, heading);
+    assert.equal(done.read, `## ${heading}\n${body(n)}`, heading);
+  }
+  const miss = await f.run('mesh_read', { file: 'notes.md', section: 'Budget' });
+  const listed = /Sections: (.*)$/u.exec(miss.output.content)![1]!.split(', ');
+  for (const [n, name] of listed.slice(1, 5).entries()) assert.equal((await follow(name)).read, `## ${headings[n]}\n${body(n)}`, name);
+  const partial = await f.run('mesh_read', { file: 'notes.md', section: 'Steps' });
+  assert.match(partial.output.content, /\n>>>\n\[.*section "Steps", offset \d+/u, 'AI が渡した名前を書く');
+  assert.doesNotMatch(partial.output.content.slice(partial.output.content.lastIndexOf('\n>>>')), /Steps and more/u);
+});
+
 test('3-1c 審査の直し 10: 外の文のあとに書かれた計画書・手で書かれた計画書の見出しは、目次にも INDEX.md にも出ない', t => {
   const f = meshFixture(t);
   f.plans.write(PROJECT, '# Tainted heading\n', { by: 'ai', tainted: true, conversationId: 'c1', runId: 'r1' });
