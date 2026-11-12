@@ -41,24 +41,47 @@ export function memoryHistory(events: readonly MemoryEvent[], current: string): 
 
 export interface SkillContent { description: string; body: string }
 
-export interface SkillChange { version: SkillVersion; who: Who; auto: boolean; created: boolean; delta: LineDelta; action: VersionAction }
+export interface SkillChange {
+  key: string;
+  version: SkillVersion | null;
+  oldest: boolean;
+  who: Who;
+  auto: boolean;
+  created: boolean;
+  delta: LineDelta | null;
+  action: VersionAction;
+  target: SkillContent | null;
+}
 
 const sameContent = (a: SkillContent, b: SkillContent): boolean => a.body === b.body && a.description === b.description;
+const isEmpty = (c: SkillContent): boolean => c.body === '' && c.description === '';
 
+function actionFor(target: SkillContent, current: SkillContent, kind: 'undo' | 'restore'): VersionAction {
+  if (isEmpty(target)) return 'delete';
+  return sameContent(target, current) ? null : kind;
+}
+
+// versions は新しい順の控え（どれも「その書き込みの前の中身」）。行 i はその書き込みの変化で、
+// Undo（行 0）はその前の中身へ、Restore（行 i ≥ 1）はその変化が作った中身（versions[i-1]）へ戻す。
+// 最後に、いちばん古い控えそのものの行（空の beat-auto の控えなら Delete）を足す。
 export function skillHistory(versions: readonly SkillVersion[], current: SkillContent): SkillChange[] {
-  const sorted = [...versions];
-  return sorted.map((version, index) => {
-    const after: SkillContent = index === 0 ? current : sorted[index - 1]!;
-    const created = version.lines === 0 && version.body === '';
-    let action: VersionAction;
-    if (created && version.who === 'beat-auto') action = 'delete';
-    else if (index === 0) action = sameContent(version, current) ? null : 'undo';
-    else action = sameContent(version, current) ? null : 'restore';
+  const rows: SkillChange[] = versions.map((version, index) => {
+    const produced: SkillContent = index === 0 ? current : versions[index - 1]!;
+    const target: SkillContent = index === 0 ? version : produced;
     return {
-      version, who: version.who === 'you' ? 'you' : 'beat', auto: version.who === 'beat-auto', created,
-      delta: lineDelta(version.body, after.body), action,
+      key: version.id, version, oldest: false, who: version.who === 'you' ? 'you' : 'beat', auto: version.who === 'beat-auto',
+      created: isEmpty(version), delta: lineDelta(version.body, produced.body),
+      action: actionFor(target, current, index === 0 ? 'undo' : 'restore'), target,
     };
   });
+  const last = versions.at(-1);
+  if (last && !(versions.length === 1 && isEmpty(last))) {
+    rows.push({
+      key: `oldest:${last.id}`, version: null, oldest: true, who: 'beat', auto: last.who === 'beat-auto', created: isEmpty(last), delta: null,
+      action: actionFor(last, current, 'restore'), target: last,
+    });
+  }
+  return rows;
 }
 
 export type ToolChoice = { kind: 'save' } | { kind: 'confirm'; item: Access } | { kind: 'none' };
@@ -67,6 +90,16 @@ export function toolChoice(tool: Pick<ToolInfo, 'name' | 'policy' | 'configurabl
   if (!tool.configurable || tool.policy === to) return { kind: 'none' };
   const item = toolPolicyLoosened(tool.name, tool.policy, to);
   return item ? { kind: 'confirm', item } : { kind: 'save' };
+}
+
+// 保存の直前に読み直した今の方針（fresh）で決め直す。確かめを済ませた変更（confirmed）は、今の方針からの緩め方が
+// 確かめたものと同じときだけそのまま保存し、違えば（ほかのタブや設定ファイルで締められていたら）確かめをやり直す。
+export function toolDecision(fresh: Pick<ToolInfo, 'name' | 'policy' | 'configurable'>, to: ToolPolicy, confirmed: Access | null): ToolChoice {
+  const choice = toolChoice(fresh, to);
+  if (choice.kind !== 'confirm' || !confirmed) return choice;
+  const same = confirmed.kind === 'tool-policy-loosened' && choice.item.kind === 'tool-policy-loosened'
+    && confirmed.tool === choice.item.tool && confirmed.from === choice.item.from && confirmed.to === choice.item.to;
+  return same ? { kind: 'save' } : choice;
 }
 
 export function toolCounts(tools: readonly Pick<ToolInfo, 'policy'>[]): Record<ToolPolicy, number> {

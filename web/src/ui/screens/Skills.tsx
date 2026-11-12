@@ -10,7 +10,7 @@ import { lineDelta } from '../../../../src/shared/line-delta.ts';
 import { TOOL_POLICIES, type ToolPolicy } from '../../../../src/tools/tool-policy.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
-import { skillHistory, toolChoice, toolCounts, type SkillChange } from '../library.ts';
+import { skillHistory, toolChoice, toolCounts, toolDecision, type SkillChange } from '../library.ts';
 import { Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash, type SkillTarget } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
@@ -32,11 +32,12 @@ function Delta({ added, removed }: { added: number; removed: number }) {
 }
 
 function changeLabel(t: T, change: SkillChange): string {
+  if (change.oldest) return t(change.created ? 'ui.skills.change.beforeAuto' : 'ui.skills.change.oldest');
   if (change.auto) return t(change.created ? 'ui.skills.change.autoNew' : 'ui.skills.change.auto');
   return t(change.who === 'you' ? 'ui.skills.change.you' : 'ui.skills.change.beat');
 }
 
-function NewSkill({ onSaved, onClose }: { onSaved: (name: string) => void; onClose: () => void }) {
+function NewSkill({ existing, onSaved, onClose }: { existing: readonly string[]; onSaved: (name: string) => void; onClose: () => void }) {
   const t = useT();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -44,6 +45,7 @@ function NewSkill({ onSaved, onClose }: { onSaved: (name: string) => void; onClo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const ready = name.trim() && description.trim() && body.trim();
+  const taken = existing.includes(name.trim());
   const save = async () => {
     if (busy || !ready) return;
     setBusy(true); setError('');
@@ -60,6 +62,7 @@ function NewSkill({ onSaved, onClose }: { onSaved: (name: string) => void; onClo
         <label className="ui-lib__label"><span className="bt-label">{t('ui.skills.field.name')}</span>
           <input className="bt-field bt-field--mono" autoFocus value={name} maxLength={63} spellCheck={false} placeholder={t('ui.skills.namePlaceholder')} onChange={e => setName(e.target.value)} />
         </label>
+        {taken && <p className="bt-meta ui-danger" role="status">{t('ui.skills.exists')}</p>}
         <label className="ui-lib__label"><span className="bt-label">{t('ui.skills.field.description')}</span>
           <input className="bt-field" value={description} maxLength={300} onChange={e => setDescription(e.target.value)} />
         </label>
@@ -68,7 +71,7 @@ function NewSkill({ onSaved, onClose }: { onSaved: (name: string) => void; onClo
         </label>
         {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}
         <span className="ui-lib__buttons">
-          <Button variant="primary" small disabled={busy || !ready} onClick={() => void save()}>{t('ui.lib.save')}</Button>
+          <Button variant="primary" small disabled={busy || !ready} onClick={() => void save()}>{t(taken ? 'ui.skills.replace' : 'ui.lib.save')}</Button>
           <Button variant="ghost" small onClick={onClose}>{t('ui.cancel')}</Button>
         </span>
       </div>
@@ -120,9 +123,15 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
   });
   const putBack = (change: SkillChange) => void run(async () => {
     if (change.action === 'delete') { setConfirming(true); return; }
-    await api.saveSkill(name, change.version.description, change.version.body);
+    if (!change.target) return;
+    await api.saveSkill(name, change.target.description, change.target.body);
     reload();
     toast({ icon: 'undo', title: t(change.action === 'undo' ? 'ui.skills.toast.undone' : 'ui.skills.toast.restored'), body: name });
+  });
+  const register = () => void run(async () => {
+    await api.registerSkill(name);
+    reload();
+    toast({ icon: 'check', title: t('ui.skills.toast.registered'), body: name });
   });
   const remove = () => void run(async () => {
     await api.deleteSkill(name);
@@ -143,6 +152,7 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
             <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>{t('ui.lib.edit')}</button>
           </div>
           {mode === 'edit' && <Button small disabled={busy || !description.trim() || !body.trim()} onClick={save}>{t('ui.lib.save')}</Button>}
+          {!skill.registered && mode === 'read' && <Button small variant="primary" disabled={busy} onClick={register}>{t('ui.skills.register')}</Button>}
           {!confirming && <Button ref={deleteButton} small variant="ghost" disabled={busy} onClick={() => setConfirming(true)}>{t('ui.lib.delete')}</Button>}
         </div>
         {confirming && (
@@ -169,13 +179,15 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
           {changes.length > 0 && (
             <ul className="bt-list">
               {changes.map(change => (
-                <li key={change.version.id} className="bt-row ui-lib__version">
-                  <Icon name={change.created ? 'plus' : 'pencil'} />
+                <li key={change.key} className="bt-row ui-lib__version">
+                  <Icon name={change.oldest ? 'file' : change.created ? 'plus' : 'pencil'} />
                   <div className="bt-row__main">
                     <span className="bt-row__title">{changeLabel(t, change)}</span>
-                    <span className="bt-row__sub bt-meta" title={formatDateTime(change.version.at, 'full')}>
-                      {t(change.who === 'you' ? 'ui.lib.you' : 'ui.lib.beat')} · {formatRelative(change.version.at, now)}<Delta {...change.delta} />
-                    </span>
+                    {change.version && (
+                      <span className="bt-row__sub bt-meta" title={formatDateTime(change.version.at, 'full')}>
+                        {t(change.who === 'you' ? 'ui.lib.you' : 'ui.lib.beat')} · {formatRelative(change.version.at, now)}{change.delta && <Delta {...change.delta} />}
+                      </span>
+                    )}
                   </div>
                   {change.action && (
                     <div className="bt-row__end">
@@ -252,10 +264,16 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ tool: ToolInfo; to: ToolPolicy; item: Access } | null>(null);
   const counts = toolCounts(tools);
-  const save = async (tool: ToolInfo, to: ToolPolicy) => {
+  const apply = async (tool: ToolInfo, to: ToolPolicy, confirmed: Access | null) => {
     setConfirm(null);
     setBusy(tool.name);
     try {
+      const fresh = (await api.tools()).tools.find(x => x.name === tool.name);
+      if (!fresh) throw new Error(tool.name);
+      if (fresh.policy !== tool.policy) onSaved(fresh);
+      const decision = toolDecision(fresh, to, confirmed);
+      if (decision.kind === 'confirm') { setConfirm({ tool: fresh, to, item: decision.item }); return; }
+      if (decision.kind === 'none') return;
       const saved = (await api.setToolPolicy(tool.name, to)).tool;
       onSaved(saved);
       toast({ icon: 'check', title: t('ui.tools.toast.saved', saved.name, t(POLICY_KEY[saved.policy])), ...(saved.policy === 'ask' && saved.allowedIn.includes('review') ? { body: t('tools.policy.reviewNote') } : {}) });
@@ -265,10 +283,8 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
     } finally { setBusy(null); }
   };
   const choose = (tool: ToolInfo, to: ToolPolicy) => {
-    if (busy) return;
-    const choice = toolChoice(tool, to);
-    if (choice.kind === 'confirm') setConfirm({ tool, to, item: choice.item });
-    else if (choice.kind === 'save') void save(tool, to);
+    if (busy || toolChoice(tool, to).kind === 'none') return;
+    void apply(tool, to, null);
   };
   return (
     <section className="bt-section bt-rise" style={{ '--bt-i': 3 } as CSSProperties} aria-label={t('ui.skills.tools')}>
@@ -306,7 +322,7 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
                   <span className="bt-label">{t('ui.tools.confirm')}</span>
                   <span className="bt-meta ui-confirm__note">{accessText(t, asking.item)}</span>
                   <span className="ui-confirm__buttons">
-                    <Button variant="primary" small disabled={busy !== null} onClick={() => void save(asking.tool, asking.to)}>{t('ui.tools.confirmOk')}</Button>
+                    <Button variant="primary" small disabled={busy !== null} onClick={() => void apply(asking.tool, asking.to, asking.item)}>{t('ui.tools.confirmOk')}</Button>
                     <Button variant="ghost" small autoFocus onClick={() => setConfirm(null)}>{t('ui.cancel')}</Button>
                   </span>
                 </div>
@@ -330,7 +346,6 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
   const [failed, setFailed] = useState(false);
   const [browserOff, setBrowserOff] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const loads = useRef(latestOnly());
   const now = useNow(60_000);
@@ -362,15 +377,6 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
   const openDraft = target?.kind === 'draft' ? findDraft(pending, target.name) : undefined;
   const openSkill = target?.kind === 'skill' ? target.name : null;
   const sorted = useMemo(() => [...(skills ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [skills]);
-  const register = async (name: string) => {
-    if (busy) return;
-    setBusy(name);
-    try {
-      await api.registerSkill(name);
-      toast({ icon: 'check', title: t('ui.skills.toast.registered'), body: name });
-      reload();
-    } catch (failure) { toast({ icon: 'alert', title: t('ui.skills.toast.failed'), body: failText(failure, t) }); } finally { setBusy(null); }
-  };
 
   return (
     <div className="bt-screen__inner">
@@ -380,7 +386,7 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
       </header>
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
       <div className="bt-pane__stack ui-lib__stack">
-        {creating && <NewSkill onClose={() => setCreating(false)} onSaved={name => { setCreating(false); reload(); location.hash = skillHash(name); }} />}
+        {creating && <NewSkill existing={sorted.map(s => s.name)} onClose={() => setCreating(false)} onSaved={name => { setCreating(false); reload(); location.hash = skillHash(name); }} />}
         {pending.length > 0 && (
           <section className="bt-section bt-rise" style={{ '--bt-i': 1 } as CSSProperties} aria-label={t('ui.skills.drafts')}>
             <div className="bt-section__head">
@@ -411,12 +417,7 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
                             {!skill.registered && <> · {t('ui.skills.unregisteredNote')}</>}
                           </span>
                         </div>
-                        {!skill.registered && (
-                          <div className="bt-row__end" onClick={e => e.stopPropagation()}>
-                            <span className="bt-tag">{t('ui.skills.unregistered')}</span>
-                            <Button small disabled={busy !== null} onClick={() => void register(skill.name)}>{t('ui.skills.register')}</Button>
-                          </div>
-                        )}
+                        {!skill.registered && <div className="bt-row__end"><span className="bt-tag">{t('ui.skills.unregistered')}</span></div>}
                         <Icon name={open ? 'chevD' : 'chevR'} />
                       </li>
                       {open && <li className="bt-row ui-lib__open"><SkillDetail name={skill.name} revision={revision + tick} now={now} onChanged={reload} /></li>}

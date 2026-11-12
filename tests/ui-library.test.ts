@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { MemoryEvent, ReviewJob, RunRow, SkillVersion, ToolCallRow } from '../web/src/api.ts';
 import {
   archivedLine, durationText, filterLog, jobResult, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, runResult, skillHistory,
-  tokensText, toolChoice, toolCounts,
+  tokensText, toolChoice, toolCounts, toolDecision,
 } from '../web/src/ui/library.ts';
 
 // 新しい画面の Library（steps/p1-ui.md の「画面」の Memory・Skills・Runs・Archived と PR 1-5a）の決まり。画面を持たない純粋な関数（web/src/ui/library.ts）。
@@ -38,20 +38,40 @@ test('ui/library: 記憶の History は新しい順。いちばん新しい変�
 const version = (id: string, at: number, who: SkillVersion['who'], body: string, description = 'd'): SkillVersion =>
   ({ id, at, who, lines: body ? body.split('\n').length : 0, description, body });
 
-test('ui/library: スキルの History は、サーバーの並び（新しい順。同じミリ秒の控えも並びで決まる）のまま、いちばん新しい控えが Undo、古い控えが Restore。行の足し引きは控えとその次の版の差', () => {
-  const current = { description: 'd', body: 'a\nb\nc' };
-  const rows = skillHistory([version('1-beat-2', 1, 'beat', 'a\nb'), version('1-you', 1, 'you', 'a')], current);
-  assert.deepEqual(rows.map(r => [r.version.id, r.action, r.who, r.delta.added, r.delta.removed]), [['1-beat-2', 'undo', 'beat', 1, 0], ['1-you', 'restore', 'you', 1, 0]]);
-  assert.equal(skillHistory([version('1-you', 1, 'you', 'a\nb\nc')], current)[0]!.action, null, '今と同じ中身には出さない');
+const writes = (rows: ReturnType<typeof skillHistory>) => rows.map(r => [r.version?.id ?? 'oldest', r.action, r.action === 'delete' ? null : r.target?.body ?? null]);
+
+test('ui/library: スキルの History の Restore は、その行の変化が作った中身へ戻す（Memory と同じ）。Undo はいちばん新しい変化の前へ。最後の行はいちばん古い控えそのもの', () => {
+  const current = { description: 'd', body: 'Z' };
+  // beat-auto が X を登録 → 持ち主が Y に直す → 承認した下書きが Z に変える（控えは新しい順: Y・X・空）
+  const rows = skillHistory([version('3-beat', 3, 'beat', 'Y'), version('2-you', 2, 'you', 'X'), version('1-beat-auto', 1, 'beat-auto', '', '')], current);
+  assert.deepEqual(writes(rows), [['3-beat', 'undo', 'Y'], ['2-you', 'restore', 'Y'], ['1-beat-auto', 'restore', 'X'], ['oldest', 'delete', null]]);
+  assert.deepEqual(rows.map(r => r.who), ['beat', 'you', 'beat', 'beat']);
+  assert.equal(rows[2]!.created, true, '空の控えの次の変化は「作った」変化');
+  assert.deepEqual([rows[0]!.delta, rows[1]!.delta], [{ added: 1, removed: 1 }, { added: 1, removed: 1 }]);
 });
 
-test('ui/library: 聞かずに登録した新しいスキルの空の控え（0 行・beat-auto）は Restore ではなく Delete。中身のある beat-auto の控えはふつうに戻せる', () => {
+test('ui/library: スキルの History は、サーバーの並び（新しい順。同じミリ秒の控えも並びで決まる）のまま。今と同じ中身へ戻す行には出さない', () => {
+  const current = { description: 'd', body: 'a\nb\nc' };
+  const rows = skillHistory([version('1-beat-2', 1, 'beat', 'a\nb'), version('1-you', 1, 'you', 'a')], current);
+  assert.deepEqual(writes(rows), [['1-beat-2', 'undo', 'a\nb'], ['1-you', 'restore', 'a\nb'], ['oldest', 'restore', 'a']]);
+  assert.deepEqual(writes(skillHistory([version('1-you', 1, 'you', 'a\nb\nc')], current)), [['1-you', null, 'a\nb\nc'], ['oldest', null, 'a\nb\nc']]);
+});
+
+test('ui/library: 聞かずに登録した新しいスキル（控えが空の 1 つだけ）は、Undo ではなく Delete の 1 行。中身のある beat-auto の控えはふつうに戻せる', () => {
   const current = { description: 'd', body: 'x\ny' };
   const fresh = skillHistory([version('1-beat-auto', 1, 'beat-auto', '', '')], current);
   assert.deepEqual(fresh.map(r => [r.action, r.auto, r.created]), [['delete', true, true]]);
-  const later = skillHistory([version('2-you', 2, 'you', 'x'), version('1-beat-auto', 1, 'beat-auto', '', '')], current);
-  assert.deepEqual(later.map(r => r.action), ['undo', 'delete']);
-  assert.deepEqual(skillHistory([version('1-beat-auto', 1, 'beat-auto', 'old')], current).map(r => [r.action, r.created]), [['undo', false]]);
+  assert.deepEqual(writes(skillHistory([version('1-beat-auto', 1, 'beat-auto', 'old')], current)), [['1-beat-auto', 'undo', 'old'], ['oldest', 'restore', 'old']]);
+});
+
+test('ui/library: 道具の方針は保存の直前に読み直した今の方針で決め直す。ほかで Block に締められていたら、Allow → Ask のつもりでも確かめを出す。確かめた緩め方と同じときだけ保存', () => {
+  const fresh = (policy: 'allow' | 'ask' | 'block') => ({ name: 'shell_run', policy, configurable: true });
+  assert.deepEqual(toolDecision(fresh('block'), 'ask', null), { kind: 'confirm', item: { kind: 'tool-policy-loosened', tool: 'shell_run', from: 'block', to: 'ask' } });
+  assert.deepEqual(toolDecision(fresh('allow'), 'ask', null), { kind: 'save' });
+  const askedFromAsk = { kind: 'tool-policy-loosened', tool: 'shell_run', from: 'ask', to: 'allow' } as const;
+  assert.deepEqual(toolDecision(fresh('ask'), 'allow', askedFromAsk), { kind: 'save' });
+  assert.deepEqual(toolDecision(fresh('block'), 'allow', askedFromAsk), { kind: 'confirm', item: { kind: 'tool-policy-loosened', tool: 'shell_run', from: 'block', to: 'allow' } }, '確かめたあとに締められていたら、もう一度');
+  assert.deepEqual(toolDecision(fresh('allow'), 'allow', askedFromAsk), { kind: 'none' });
 });
 
 test('ui/library: 道具の方針を緩める（Block → Ask・Allow、Ask → Allow）ときは、設定の「広がる変更」と同じ確かめ（toolPolicyLoosened）を出す。締めるときはすぐ保存、変えられない道具は何もしない', () => {
