@@ -7,19 +7,13 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { estimateRequest, estimateTextTokens } from '../src/engine/tokens.ts';
 import { AcceptanceStore, frozenHash, type AcceptanceDoc, type ChangeOp } from '../src/projects/acceptance.ts';
 import { BUILD_BODY } from '../src/projects/build.ts';
-import { acceptanceChange } from '../src/tools/builtin/acceptance.ts';
+import { acceptanceChange, acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, type Script } from './helpers.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
 const SMALL = { contextLength: 98_304, maxOutputTokens: 80_716 };
-
-function withChange() {
-  const tools = builtinTools();
-  tools.splice(tools.findIndex(tool => tool.name === 'acceptance_write') + 1, 0, acceptanceChange);
-  return tools;
-}
 
 const call = (name: string, args: unknown): Script => async function* () {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
@@ -29,7 +23,7 @@ const call = (name: string, args: unknown): Script => async function* () {
 
 async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   const products = realpathSync.native(tempDir(t as never));
-  const s = await startApp(t, { models: [fakeModel('m1')], projectFolderExempt: [products], tools: withChange(), ...options });
+  const s = await startApp(t, { models: [fakeModel('m1')], projectFolderExempt: [products], tools: builtinTools(), ...options });
   const events: RunEvent[] = [];
   s.app.bus.subscribe(e => events.push(e.event));
   const product = async (name: string) => {
@@ -79,21 +73,77 @@ test('3-3-s acceptance_change の印: meta・planOk・projectOnly・製品の会
   assert.match(acceptanceChange.description, /approve/iu);
   const spec = estimateTextTokens(JSON.stringify({ name: acceptanceChange.name, description: acceptanceChange.description, inputSchema: acceptanceChange.input }));
   assert.ok(spec <= 180, String(spec));
+  assert.equal(acceptanceChange.acceptanceState, 'frozen');
+  assert.equal(acceptanceWrite.acceptanceState, 'draft');
+  const write = estimateTextTokens(JSON.stringify({ name: acceptanceWrite.name, description: acceptanceWrite.description, inputSchema: acceptanceWrite.input }));
+  assert.ok(spec <= write, '同時に渡らない 2 つのうち、baseTokens は acceptance_write だけを数えるので、acceptance_change はそれより小さく保つ');
+  const names = builtinTools().map(tool => tool.name);
+  assert.equal(names.indexOf('acceptance_change'), names.indexOf('acceptance_write') + 1, 'acceptance_write のすぐ後ろ（shell_run の後ろ）');
 });
 
-test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,672）で、製品の計画モードの最初の頼み（system と道具の説明）は、文書の言語が自動でも ja でも 40% 以下', async t => {
-  for (const language of [null, 'ja']) {
-    const s = await setup(t, { models: [fakeModel('small', SMALL)], tools: builtinTools() });
+test('3-3-s 一覧の状態で道具を出し分ける: 一覧が無い・下書きなら acceptance_write だけ、固定のあとは acceptance_change だけ（計画モードでもふつうのモードでも）。製品に属さない会話にはどちらも無い', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const names = () => s.adapter().calls.at(-1)!.tools.map(tool => tool.name);
+  for (const [n, mode] of [[1, 'plan'], [2, 'normal']] as const) {
+    s.adapter().scripts = [reply('a')];
+    await s.send(uuid(n), { text: 'x', projectId: shop.id, permissionMode: mode });
+    assert.ok(names().includes('acceptance_write') && !names().includes('acceptance_change'), `無い ${mode}: ${names().join()}`);
+  }
+  s.adapter().scripts = [call('acceptance_write', { items: [item('One')] }), reply('ok')];
+  await s.send(uuid(1), { text: 'list', projectId: shop.id });
+  assert.ok(names().includes('acceptance_write') && !names().includes('acceptance_change'), '下書き');
+  await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+  assert.equal((await s.build(shop.id)).status, 201);
+  for (const [n, mode] of [[3, 'plan'], [4, 'normal']] as const) {
+    s.adapter().scripts = [reply('a')];
+    await s.send(uuid(n), { text: 'x', projectId: shop.id, permissionMode: mode });
+    assert.ok(names().includes('acceptance_change') && !names().includes('acceptance_write'), `固定 ${mode}: ${names().join()}`);
+  }
+  s.adapter().scripts = [reply('a')];
+  await s.send(uuid(5), { text: 'x', permissionMode: 'plan' });
+  assert.ok(!names().includes('acceptance_change') && !names().includes('acceptance_write'));
+});
+
+test('3-3-s 出し分けはパイプラインでも断る: 名前で呼んでも、下書きの製品の acceptance_change と固定した製品の acceptance_write は道具の中身まで届かない', async t => {
+  const s = await setup(t);
+  const draft = await s.product('draft');
+  s.adapter().scripts = [call('acceptance_write', { items: [item('One')] }), reply('ok')];
+  await s.send(uuid(1), { text: 'list', projectId: draft.id });
+  await s.propose(draft.id, uuid(1), 'change', { changes: [{ op: 'add', result: 'Two', check: 'look' }] });
+  assert.match(s.results().at(-1)!, /only after the acceptance list is locked/u);
+  const refusedChange = s.app.db.prepare("SELECT decided_by, decision FROM tool_calls WHERE tool = 'acceptance_change' ORDER BY rowid DESC LIMIT 1").get() as Record<string, unknown>;
+  assert.deepEqual({ ...refusedChange }, { decided_by: 'registry', decision: 'deny' });
+  assert.equal(s.rows(draft.id).length, 0);
+
+  const shop = await s.frozen();
+  const before = readFileSync(join(s.paths.projects, shop.id, 'acceptance.json'), 'utf8');
+  s.adapter().scripts = [call('acceptance_write', { items: [item('Replaced')] }), reply('ok')];
+  await s.send(uuid(2), { text: 'rewrite', projectId: shop.id });
+  assert.match(s.results().at(-1)!, /cannot change the locked acceptance list/u);
+  const refusedWrite = s.app.db.prepare("SELECT decided_by, decision FROM tool_calls WHERE tool = 'acceptance_write' ORDER BY rowid DESC LIMIT 1").get() as Record<string, unknown>;
+  assert.deepEqual({ ...refusedWrite }, { decided_by: 'registry', decision: 'deny' });
+  assert.equal(readFileSync(join(s.paths.projects, shop.id, 'acceptance.json'), 'utf8'), before);
+});
+
+test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,672）で、製品の計画モードの最初の頼み（system と道具の説明）は、一覧が下書きでも固定のあとでも、文書の言語が自動でも ja でも 40% 以下', async t => {
+  for (const [language, locked] of [[null, false], ['ja', false], [null, true], ['ja', true]] as const) {
+    const s = await setup(t, { models: [fakeModel('small', SMALL)] });
     const demo = await s.product('Demo');
     if (language) await s.json(`/api/projects/${demo.id}`, 'PATCH', { docLanguage: language });
+    if (locked) {
+      await s.json(`/api/projects/${demo.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+      assert.equal((await s.build(demo.id)).status, 201);
+    }
     s.adapter().scripts = [reply('ok')];
     await s.send(uuid(1), { text: 'x', projectId: demo.id, permissionMode: 'plan' });
+    assert.ok(s.adapter().calls.at(-1)!.tools.some(tool => tool.name === (locked ? 'acceptance_change' : 'acceptance_write')));
     const last = s.adapter().calls.at(-1)!;
     const { tokens } = estimateRequest(`${last.system.frozen}
 ${last.system.dynamic}`, [], last.tools);
     const available = (await s.json(`/api/conversations/${uuid(1)}/context?modelId=small`, 'GET')).body.available as number;
     assert.equal(available, 12_672);
-    assert.ok(tokens <= available * 0.4, `${language ?? 'auto'}: ${tokens} > ${available * 0.4}`);
+    assert.ok(tokens <= available * 0.4, `${language ?? 'auto'} ${locked ? 'locked' : 'draft'}: ${tokens} > ${available * 0.4}`);
   }
 });
 
@@ -456,7 +506,8 @@ test('3-3-s AI からは版を変えられない: 固定のあとの acceptance_
 
 test('3-3-s 製品のタスクの実行には acceptance_change を渡さない（製品の会話だけ）', async t => {
   const s = await setup(t);
-  const shop = await s.product('shop');
+  const shop = await s.frozen();
+  await s.json(`/api/tasks/${shop.task.id}/cancel`, 'POST', {});
   s.adapter().scripts = [reply('a')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
   assert.ok(s.adapter().calls.at(-1)!.tools.some(tool => tool.name === 'acceptance_change'));

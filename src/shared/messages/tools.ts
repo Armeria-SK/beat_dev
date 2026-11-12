@@ -5,6 +5,8 @@ const en = {
 
   'pipeline.tool_missing': 'There is no tool "{name}". Available tools: {names}',
   'pipeline.tool_not_allowed': 'The tool "{name}" cannot be used in this kind of run',
+  'pipeline.acceptance_draft': 'The tool "{name}" works only after the acceptance list is locked by a build. Write the draft with acceptance_write',
+  'pipeline.acceptance_frozen': 'The tool "{name}" cannot change the locked acceptance list. Propose a change with acceptance_change',
   'pipeline.project_only': 'The tool "{name}" can be used only in a conversation or task that belongs to a product',
   'pipeline.policy_blocked': 'The tool "{name}" is turned off in the settings, so it cannot be used. Think of another way, or ask the user',
   'pipeline.review_forbidden': '"{name}" cannot be used during a review',

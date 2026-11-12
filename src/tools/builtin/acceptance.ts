@@ -63,6 +63,7 @@ export const acceptanceChange: ToolDef<Static<typeof CHANGE_INPUT>> = {
   allowedIn: ['chat'],
   planOk: true,
   projectOnly: true,
+  acceptanceState: 'frozen',
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     const services = ctx.services;
@@ -95,6 +96,7 @@ export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
   allowedIn: ['chat'],
   planOk: true,
   projectOnly: true,
+  acceptanceState: 'draft',
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     const services = ctx.services;

@@ -14,7 +14,7 @@ import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
-import { localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
+import { acceptanceAllows, localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
@@ -606,11 +606,15 @@ export class ChatEngine {
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
   // 手元のモデルの会話（localOnly）には、localOk でない MCP の道具を渡さない（localAllows。パイプラインも同じに拒む）。
   // maxTools で切られた MCP の道具は、モデルと道具の組ごとに 1 回だけ [WARN] を出し、MCP の管理に知らせる（画面の状態が cut になる）
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal', localOnly = false, inProject = false): ToolDef[] {
+  #frozen(projectId: string | undefined): boolean {
+    return Boolean(projectId && this.#d.acceptance?.latest(projectId));
+  }
+
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal', localOnly = false, inProject = false, frozen = false): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
     const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff(config, kind)) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
-      || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly) || (t.projectOnly === true && !inProject);
+      || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly) || (t.projectOnly === true && !inProject) || !acceptanceAllows(t, frozen);
     const options = { limit: model.maxTools, exclude };
     const registry = this.#d.tools.registry;
     if (kind === 'chat' && this.#d.mcpCut) {
@@ -954,7 +958,7 @@ export class ChatEngine {
     const current = this.#modeOf(p.conversationId);
     const mode: PermissionMode = p.kind === 'chat' || p.kind === 'agent' ? stricterMode(p.startedMode ?? current, current) : 'normal';
     const localOnly = p.kind === 'chat' && isLocalPinned(config, d.conversations.get(p.conversationId)?.model_id);
-    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly, p.project !== undefined);
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly, p.project !== undefined, this.#frozen(p.project?.id));
     const specs = ToolRegistry.specs(toolDefs, config);
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
     const available = contextAvailable(capacity, model);
@@ -1048,7 +1052,7 @@ export class ChatEngine {
     if (live >= MAX_LIVE_AGENTS) return fail('agent.busy');
     // 子に渡せる道具 = 親にいま渡る道具 ∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
     const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'normal', this.#modeOf(parent.conversationId)) : 'normal';
-    const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, false, parent.project !== undefined).filter(t => t.allowedIn.includes('agent'));
+    const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, false, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
     const givableNames = new Set(givable.map(t => t.name));
     if (input.tools) {
       const unknown = [...new Set(input.tools)].filter(name => !givableNames.has(name));

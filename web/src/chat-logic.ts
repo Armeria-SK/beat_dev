@@ -250,7 +250,7 @@ export const isRenameWithoutTitle = (input: string): boolean => /^\/rename\s*$/u
 export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
   file_read: 'file', file_write: 'filePen', file_edit: 'pencil', file_list: 'folder', file_search: 'search',
   shell_run: 'terminal',
-  plan_write: 'filePen', acceptance_write: 'filePen', mesh_search: 'search', mesh_read: 'file', mesh_state_set: 'pencil',
+  plan_write: 'filePen', acceptance_write: 'filePen', acceptance_change: 'filePen', mesh_search: 'search', mesh_read: 'file', mesh_state_set: 'pencil',
   web_fetch: 'globe', web_search: 'search',
   memory_save: 'bookmark', memory_update: 'bookmark', memory_forget: 'bookmark', memory_search: 'bookmark',
   history_search: 'clock', history_read: 'clock',
