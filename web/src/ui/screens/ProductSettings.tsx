@@ -77,16 +77,16 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
         {langShown && (
           <div className="bt-form-row">
             <label className="bt-label" htmlFor="ui-ps-lang">{t('ui.ps.lang')}</label>
-            <select id="ui-ps-lang" className="bt-field ui-ps__lang" value={lang.pick} onChange={e => setLang({ pick: e.target.value, other: e.target.value === OTHER ? lang.other : '' })}>
+            <select id="ui-ps-lang" className="bt-field ui-ps__lang" aria-describedby="ui-ps-lang-hint" value={lang.pick} onChange={e => setLang({ pick: e.target.value, other: e.target.value === OTHER ? lang.other : '' })}>
               <option value="">{autoLabel(project)}</option>
               {LANGUAGES.map(tag => <option key={tag} value={tag}>{languageName(tag)}</option>)}
               <option value={OTHER}>{t('ui.ps.langOther')}</option>
             </select>
             {lang.pick === OTHER && (
               <input className="bt-field bt-field--mono ui-ps__lang" type="text" value={lang.other} aria-label={t('ui.ps.langTag')} placeholder="pt-BR" maxLength={12} spellCheck={false} autoComplete="off"
-                aria-invalid={langChange === 'invalid' && lang.other !== ''} onChange={e => setLang({ pick: OTHER, other: e.target.value })} />
+                aria-invalid={langChange === 'invalid' && lang.other !== ''} aria-describedby="ui-ps-lang-hint" onChange={e => setLang({ pick: OTHER, other: e.target.value })} />
             )}
-            <span className={`bt-meta${langChange === 'invalid' && lang.other !== '' ? ' ui-danger' : ''}`}>{langChange === 'invalid' && lang.other !== '' ? t('ui.ps.langInvalid') : t('ui.ps.langHint')}</span>
+            <span id="ui-ps-lang-hint" role="status" className={`bt-meta${langChange === 'invalid' && lang.other !== '' ? ' ui-danger' : ''}`}>{langChange === 'invalid' && lang.other !== '' ? t('ui.ps.langInvalid') : t('ui.ps.langHint')}</span>
           </div>
         )}
         <div className="ui-np__actions"><Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim() || langChange === 'invalid'}>{t('ui.ps.save')}</Button></div>

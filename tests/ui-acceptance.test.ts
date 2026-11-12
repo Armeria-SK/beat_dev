@@ -54,19 +54,29 @@ test('ui/acceptance: 開いた中身は 引用 / 質問と答え / コマンド 
     { label: 'ui.acc.detail.check', note: 'ui.acc.detail.look' },
   ]);
   const html = itemDetails(item('A-3', { source: { kind: 'owner_words', quote: '<img src=x onerror=alert(1)>' }, check: { kind: 'read' } }));
-  assert.deepEqual(html[0], { label: 'ui.acc.detail.quote', text: '<img src=x onerror=alert(1)>' },'文字のまま。HTML にするのは画面ではなく React の文字');
+  assert.deepEqual(html[0], { label: 'ui.acc.detail.quote', text: '<img src=x onerror=alert(1)>' }, '引用の文字をそのまま渡す（変えない・削らない）');
   assert.deepEqual(html[1], { label: 'ui.acc.detail.check', note: 'ui.acc.detail.read' });
+});
+
+test('ui/acceptance: 答えの見出しは "Answer"。持ち主の答えと決めつけない（AI が言っただけの答えにも使う）', () => {
+  assert.equal(t('ui.acc.detail.answer'), 'Answer');
+  assert.equal(t('ui.acc.detail.question'), 'Question');
 });
 
 test('ui/acceptance: AI が別の種類を言ったのに確かめられなかった項目は、言った種類と理由を出し、引用もあれば出す', () => {
   const claimed = itemDetails(item('A-4', { source: { kind: 'ai_added', claimed: 'owner_words', reason: 'too_short', quote: 'OK' } }));
-  assert.deepEqual(claimed.slice(0, 2), [
-    { label: 'ui.acc.detail.claimed', note: 'ui.acc.reason.too_short' },
+  assert.deepEqual(claimed.slice(0, 3), [
+    { label: 'ui.acc.detail.claimed', note: 'ui.acc.claimed.words' },
+    { label: 'ui.acc.detail.why', note: 'ui.acc.reason.too_short' },
     { label: 'ui.acc.detail.quote', text: 'OK' },
   ]);
+  assert.equal(t('ui.acc.detail.claimed'), 'Claimed');
+  assert.equal(t('ui.acc.claimed.words'), 'Your words');
+  assert.equal(t('ui.acc.claimed.choice'), 'Your answer');
   const notNext = itemDetails(item('A-5', { source: { kind: 'ai_added', claimed: 'owner_choice', reason: 'not_next_reply', question: 'Which one? A) x B) y', answer: 'B' } }));
-  assert.deepEqual(notNext.slice(0, 3), [
-    { label: 'ui.acc.detail.claimed', note: 'ui.acc.reason.not_next_reply' },
+  assert.deepEqual(notNext.slice(0, 4), [
+    { label: 'ui.acc.detail.claimed', note: 'ui.acc.claimed.choice' },
+    { label: 'ui.acc.detail.why', note: 'ui.acc.reason.not_next_reply' },
     { label: 'ui.acc.detail.question', text: 'Which one? A) x B) y' },
     { label: 'ui.acc.detail.answer', text: 'B' },
   ]);

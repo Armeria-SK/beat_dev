@@ -29,17 +29,21 @@ function Row({ entry }: { entry: AcceptanceItem | NotDoingItem }) {
   const item = 'result' in entry ? entry : null;
   const state = item ? stateLabel(item.state) : null;
   const details = itemDetails(entry);
+  const opens = details.length > 0;
+  const text = 'result' in entry ? entry.result : entry.text;
   return (
-    <li className="bt-row ui-acc__row">
+    <li className={`bt-row ui-acc__row${opens ? ' bt-row--link' : ''}`} onClick={opens ? () => setOpen(o => !o) : undefined}>
       <span className="bt-tag ui-acc__id">{entry.id}</span>
       <div className="bt-row__main">
-        <button type="button" className="ui-rowbtn ui-acc__text" aria-expanded={open} disabled={details.length === 0} onClick={() => setOpen(o => !o)}>{'result' in entry ? entry.result : entry.text}</button>
+        {opens
+          ? <button type="button" className="ui-rowbtn ui-acc__text" aria-expanded={open}>{text}</button>
+          : <span className="ui-acc__text">{text}</span>}
         <span className="ui-acc__tags">
           <span className="bt-chip">{t(sourceLabel(entry.source))}</span>
           {item && <span className="bt-chip">{t(checkLabel(item.check))}</span>}
         </span>
         {open && (
-          <dl className="ui-acc__detail">
+          <dl className="ui-acc__detail" onClick={e => e.stopPropagation()}>
             {details.map(d => (
               <div key={d.label} className="ui-acc__pair">
                 <dt className="bt-label">{t(d.label)}</dt>
@@ -50,6 +54,7 @@ function Row({ entry }: { entry: AcceptanceItem | NotDoingItem }) {
         )}
       </div>
       {state && <span className="bt-row__end"><Pill>{t(state)}</Pill></span>}
+      {opens && <Icon name={open ? 'chevD' : 'chevR'} className="ui-acc__chev" />}
     </li>
   );
 }

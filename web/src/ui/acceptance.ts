@@ -26,12 +26,17 @@ export const stateLabel = (state: AcceptanceItem['state']): 'ui.acc.state.open' 
 
 export type Detail = { label: PlainKey; text: string; mono?: true } | { label: PlainKey; note: PlainKey };
 
+const CLAIMED = { owner_words: 'ui.acc.claimed.words', owner_choice: 'ui.acc.claimed.choice' } as const;
+
 const REASON = { not_found: 'ui.acc.reason.not_found', too_short: 'ui.acc.reason.too_short', not_next_reply: 'ui.acc.reason.not_next_reply' } as const;
 
 function sourceDetails(source: AcceptanceSource): Detail[] {
   if (source.kind === 'owner_edit') return [];
   const out: Detail[] = [];
-  if (source.kind === 'ai_added' && source.claimed) out.push({ label: 'ui.acc.detail.claimed', note: source.reason ? REASON[source.reason] : 'ui.acc.reason.not_found' });
+  if (source.kind === 'ai_added' && source.claimed) {
+    out.push({ label: 'ui.acc.detail.claimed', note: CLAIMED[source.claimed] });
+    out.push({ label: 'ui.acc.detail.why', note: REASON[source.reason ?? 'not_found'] });
+  }
   if ('quote' in source && source.quote) out.push({ label: 'ui.acc.detail.quote', text: source.quote });
   if ('question' in source && source.question) out.push({ label: 'ui.acc.detail.question', text: source.question });
   if ('answer' in source && source.answer) out.push({ label: 'ui.acc.detail.answer', text: source.answer });

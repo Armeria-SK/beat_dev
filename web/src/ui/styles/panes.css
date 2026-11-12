@@ -22,7 +22,7 @@
 .ui-acc .bt-row.ui-acc__row { align-items: flex-start; }
 .ui-acc__id { min-width: 4ch; padding-top: 2px; }
 .ui-acc__text { display: block; color: var(--ink); overflow-wrap: anywhere; }
-.ui-acc__text:disabled { cursor: default; }
+.ui-acc__chev { flex: none; margin-top: 2px; }
 .ui-acc__tags { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-1); }
 .ui-acc__detail { display: flex; flex-direction: column; gap: var(--space-2); margin: var(--space-2) 0 0; }
 .ui-acc__pair { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

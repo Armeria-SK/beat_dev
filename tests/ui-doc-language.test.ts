@@ -25,6 +25,9 @@ test('ui/doc-language: 自動のときは Auto を選び、検出した印を出
   assert.equal(autoLabel(project({ doc_language: 'ja' })), 'Auto (detected: ja)');
   assert.equal(autoLabel(project()), 'Auto (not detected yet)');
   assert.equal(autoLabel(project({ doc_language: 'en', doc_language_pinned: true })), 'Auto', '選んでいるときは検出した印が分からない');
+  const reset = project({ doc_language: 'ko', doc_language_pinned: false });
+  assert.deepEqual(languagePick(reset), { pick: '', other: '' }, 'Auto に戻した PATCH の返事（サーバーが検出し直した印）で Auto を選ぶ');
+  assert.equal(autoLabel(reset), 'Auto (detected: ko)');
 });
 
 test('ui/doc-language: 送る形。変わっていなければ送らない、Auto は null、読めない印は送らない', () => {
