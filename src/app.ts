@@ -57,6 +57,7 @@ import { Uploads } from './uploads/store.ts';
 import { ToolRegistry } from './tools/registry.ts';
 import { ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
+import { redactSecrets } from './shared/redaction.ts';
 import { MemoryStore, renderBooks } from './memory/store.ts';
 
 export function builtinTools(): ToolDef[] {
@@ -163,7 +164,7 @@ export class App {
         // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
         const task = this.tasks.byConversation(approvalShownIn(v));
         if (task) {
-          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}`, localOnly: task.local_only === 1 });
+          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: redactSecrets(`${v.title}\n${v.body}`), link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}`, localOnly: task.local_only === 1 });
         }
       } else {
         this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: approvalShownIn(v), approvalId: v.id, outcome: event.outcome });

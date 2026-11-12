@@ -9,7 +9,7 @@ import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
-import { redactSecrets } from '../shared/redaction.ts';
+import { redactJsonValue } from '../shared/redaction.ts';
 import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
@@ -228,7 +228,7 @@ export function createWebServer(app: App): WebServer {
         text: m.message.role === 'user' ? stripAttachments(m.message.content) : m.message.content,
         ...(m.message.role === 'user' && m.message.attachments?.length ? { attachments: m.message.attachments } : {}),
         ...(m.message.role === 'assistant' && m.message.toolCalls?.length
-          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: redactSecrets(JSON.stringify(c.arguments ?? c.raw ?? null)).slice(0, 2000) })) } : {}),
+          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(redactJsonValue(c.arguments ?? c.raw ?? null)).slice(0, 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError) } : {}),
       })),
       pending: app.engine.pending(id),

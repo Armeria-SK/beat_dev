@@ -9,8 +9,8 @@ const URL_PARAM = /(?<=[?&#]|&amp;|\\u0026)([A-Za-z_][A-Za-z0-9_.-]*)=[^\s&#"'`<
 const URL_PARAM_SECRET_NAME = /^(?:key|sig|code)$|(?:^|[_-])signature$/i;
 const URL_PARAM_SEPARATOR = /(?:[?&#]|&amp;|\\u0026)$/;
 const PRIVATE_KEY_MARKER = /-----(BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----/g;
-const ASSIGNMENT_HEAD = /(?<![A-Za-z0-9_])[0-9]*["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*[:=]\s*/g;
-const ASSIGNMENT_VALUE = /"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\r\n]+/y;
+const ASSIGNMENT_HEAD = /(?<![A-Za-z0-9_])[0-9]*["']?([A-Za-z_][A-Za-z0-9_]*)(?:\\*["'])?\s*[:=]\s*/g;
+const ASSIGNMENT_VALUE = /\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}\r\n]+/y;
 const SENSITIVE_NAME =
   /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|SESSION_KEY|AUTH|AUTHORIZATION|COOKIE|COOKIES|CREDENTIAL|CREDENTIALS|PRIVATE_KEY)(?:_|$)/i;
 
@@ -138,14 +138,27 @@ function redactAssignments(input: string): string {
   for (let match = head.exec(input); match !== null; match = head.exec(input)) {
     if (!isSensitiveName(match[1]!)) continue;
     const valueStart = head.lastIndex;
+    if (input.startsWith('[REDACTED]', valueStart) && URL_PARAM_SEPARATOR.test(input.slice(Math.max(0, match.index - 6), match.index))) {
+      head.lastIndex = valueStart + '[REDACTED]'.length;
+      continue;
+    }
     value.lastIndex = valueStart;
     if (!value.test(input)) continue;
-    if (input.startsWith('[REDACTED]', valueStart) && URL_PARAM_SEPARATOR.test(input.slice(Math.max(0, match.index - 6), match.index))) continue;
     parts.push(input.slice(copied, valueStart), '[REDACTED]');
     copied = head.lastIndex = value.lastIndex;
   }
   parts.push(input.slice(copied));
   return parts.join('');
+}
+
+const JSON_DEPTH_LIMIT = 100;
+
+export function redactJsonValue(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return redactSecrets(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= JSON_DEPTH_LIMIT) return '[REDACTED]';
+  if (Array.isArray(value)) return value.map(item => redactJsonValue(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, isSensitiveName(key) ? '[REDACTED]' : redactJsonValue(item, depth + 1)]));
 }
 
 export function redactDisplaySnapshot(input: string): string {
