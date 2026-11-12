@@ -5,7 +5,7 @@ import { isComposing } from '../../keys.ts';
 import { accessText } from './access-text.tsx';
 import type { Access } from '../../settings/access.ts';
 import type { Config } from '../../settings/model.ts';
-import { menuFit, menuStep, type Box, type MenuFit } from '../menu.ts';
+import { menuFit, menuScrollFor, menuStep, type Box, type MenuFit } from '../menu.ts';
 import { Button, Icon } from '../parts.tsx';
 import { fieldStep, readNumber, type FieldDraft } from './commit.ts';
 
@@ -117,6 +117,10 @@ function clipBounds(el: HTMLElement): Box {
   return box;
 }
 
+const revealIn = (menu: HTMLElement, item: HTMLElement): void => {
+  menu.scrollTop = menuScrollFor({ top: item.offsetTop, height: item.offsetHeight }, menu.scrollTop, menu.clientHeight);
+};
+
 export function Select<V extends string>({ value, options, label, placeholder, disabled, onChange }: {
   value: V | null; options: ReadonlyArray<Option<V>>; label: string; placeholder?: string; disabled?: boolean; onChange: (value: V) => void;
 }) {
@@ -146,9 +150,13 @@ export function Select<V extends string>({ value, options, label, placeholder, d
     const target = items.find(el => el.getAttribute('aria-checked') === 'true') ?? items[0];
     if (!target) return;
     target.focus({ preventScroll: true });
-    if (target.offsetTop < menu.scrollTop) menu.scrollTop = target.offsetTop;
-    else if (target.offsetTop + target.offsetHeight > menu.scrollTop + menu.clientHeight) menu.scrollTop = target.offsetTop + target.offsetHeight - menu.clientHeight;
+    revealIn(menu, target);
   }, [open, placed]);
+  useLayoutEffect(() => {
+    const menu = list.current;
+    const active = document.activeElement;
+    if (fit && menu && active instanceof HTMLElement && menu.contains(active)) revealIn(menu, active);
+  }, [fit]);
   useEffect(() => {
     if (!open) return undefined;
     const away = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };

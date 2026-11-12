@@ -11,6 +11,12 @@ export function menuStep(current: number, count: number, key: string): number | 
   }
 }
 
+export function menuScrollFor(item: { top: number; height: number }, scrollTop: number, viewHeight: number): number {
+  if (item.top < scrollTop) return item.top;
+  if (item.top + item.height > scrollTop + viewHeight) return item.top + item.height - viewHeight;
+  return scrollTop;
+}
+
 export interface Box { top: number; bottom: number; left: number; right: number }
 export interface MenuFit { up: boolean; left: boolean; maxHeight: number; maxWidth: number }
 

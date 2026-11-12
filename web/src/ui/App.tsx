@@ -174,7 +174,7 @@ export function App() {
       if (!target || !inner || !head || head.contains(target)) return;
       requestAnimationFrame(() => {
         if (getComputedStyle(head).position !== 'sticky') return;
-        const hidden = underHead(head.getBoundingClientRect().bottom, target.getBoundingClientRect().top, 8);
+        const hidden = underHead(head.getBoundingClientRect().bottom, target.getBoundingClientRect().top, 8, target.matches(':focus-visible'));
         if (hidden > 0) inner.scrollTop -= hidden;
       });
     };

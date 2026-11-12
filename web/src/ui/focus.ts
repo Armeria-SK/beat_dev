@@ -10,4 +10,4 @@ export function pickFocus<T extends FocusCandidate>(
   return null;
 }
 
-export const underHead = (headBottom: number, top: number, room: number): number => Math.max(0, headBottom + room - top);
+export const underHead = (headBottom: number, top: number, room: number, keyboard: boolean): number => (keyboard ? Math.max(0, headBottom + room - top) : 0);

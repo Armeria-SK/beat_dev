@@ -54,6 +54,54 @@ test('ui/thread: 手元のサーバーが毎回同じ呼び出し番号を返し
   assert.equal(new Set(items.flatMap(i => (i.kind === 'tools' ? i.rows.map(r => r.key) : [i.key]))).size, items.length - 1 + tools.rows.length);
 });
 
+test('ui/thread: 1 つの返事で同じ呼び出し番号が 2 回出ても、結果は呼んだ順にそれぞれの入力と組む', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'go'),
+      msg('assistant', '', { toolCalls: [call('call_0', 'shell_run', { command: 'ls' }), call('call_0', 'shell_run', { command: 'pwd' })] }),
+      msg('tool', 'a', { toolName: 'shell_run', toolCallId: 'call_0' }),
+      msg('tool', 'b', { toolName: 'shell_run', toolCallId: 'call_0' }),
+    ],
+  });
+  const tools = items[1]!;
+  assert.ok(tools.kind === 'tools');
+  assert.deepEqual(tools.rows.map(r => [JSON.parse(r.input).command, r.result?.text]), [['ls', 'a'], ['pwd', 'b']]);
+});
+
+test('ui/thread: 番号を使い回すとき、動いている行と結果待ちの行も前の行とキーが重ならず、保存されたあとも同じキーのまま', () => {
+  const round1 = [
+    msg('user', 'go', { runId: 'r2' }),
+    msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: 'ls' })] }),
+    msg('tool', 'one', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' }),
+  ];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '' };
+  const running = threadItems({ messages: round1, draft: { ...draft, activeTool: 'shell_run', activeInput: '{"command":"pwd"}', toolCallId: 'call_0', settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"ls"}' }], settledCount: 1 } }).at(-1)!;
+  assert.ok(running.kind === 'tools');
+  const keys = running.rows.map(r => r.key);
+  assert.equal(new Set(keys).size, 2, `キーが重ならない: ${keys}`);
+  const round2 = [...round1, msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: 'pwd' })] }), msg('tool', 'two', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' })];
+  const saved = threadItems({ messages: round2, draft: { ...draft, settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"ls"}' }, { callId: 'call_0', name: 'shell_run', input: '{"command":"pwd"}' }], settledCount: 2 } }).filter(i => i.kind === 'tools').at(-1)!;
+  assert.ok(saved.kind === 'tools');
+  assert.deepEqual(saved.rows.map(r => r.key), keys, '動いていた行が保存された行になっても、キーは変わらない');
+  assert.deepEqual(saved.rows.map(r => r.result?.text), ['one', 'two']);
+});
+
+test('ui/thread: 結果が届いたが保存を読む前の行は、同じ番号の前の行が保存済みでも消さない（その回の保存の数で決める）', () => {
+  const messages = [
+    msg('user', 'go', { runId: 'r2' }),
+    msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: 'ls' })] }),
+    msg('tool', 'one', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' }),
+  ];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '', settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"ls"}' }, { callId: 'call_0', name: 'shell_run', input: '{"command":"pwd"}' }], settledCount: 2 };
+  const tools = threadItems({ messages, draft }).filter(i => i.kind === 'tools').at(-1)!;
+  assert.ok(tools.kind === 'tools');
+  assert.deepEqual(tools.rows.map(r => [JSON.parse(r.input).command, r.result?.text ?? null]), [['ls', 'one'], ['pwd', null]]);
+  const older = [...messages, ...[2, 3, 4].flatMap(n => [msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: `c${n}` })] }), msg('tool', `r${n}`, { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' })])];
+  const trimmed = { ...draft, settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"c4"}' }, { callId: 'call_0', name: 'shell_run', input: '{"command":"c5"}' }], settledCount: 5 };
+  const rows = threadItems({ messages: older, draft: trimmed }).flatMap(i => (i.kind === 'tools' ? i.rows : []));
+  assert.deepEqual(rows.map(r => r.result?.text ?? JSON.parse(r.input).command), ['one', 'r2', 'r3', 'r4', 'c5'], '覚えが古いものから外れていても、まだ保存されていない最後の 1 つだけを出す');
+});
+
 test('ui/thread: 返事の文があいだに入ると、道具のまとまりは分かれる。コピーは 1 回の返事の最後の文だけで、その回の文を全部まとめる', () => {
   const items = threadItems({
     messages: [
@@ -138,7 +186,7 @@ test('ui/thread: 動いている道具の行と、結果が届いたあとの行
   const gap = threadItems({ messages: base, draft: settled }).find(i => i.kind === 'tools')!;
   assert.ok(gap.kind === 'tools');
   assert.deepEqual([gap.key, gap.rows.map(r => [r.key, r.result, r.running])], ['t-call_9', [['t-call_9', null, undefined]]], '結果が届いてから保存された発言を読むまでのあいだも、行は残る');
-  const after = threadItems({ messages: [...base, msg('tool', 'out', { toolName: 'shell_run', toolCallId: 'call_9' })], draft: settled }).filter(i => i.kind === 'tools');
+  const after = threadItems({ messages: [...base, msg('tool', 'out', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_9' })], draft: settled }).filter(i => i.kind === 'tools');
   assert.deepEqual(after.flatMap(i => (i.kind === 'tools' ? i.rows.map(r => r.result?.text) : [])), ['out'], '読んだあとは 1 行だけ');
   const unknown = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run' } }).at(-1)!;
   assert.ok(unknown.kind === 'tools');

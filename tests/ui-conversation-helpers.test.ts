@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { latestOnly } from '../web/src/ui/latest.ts';
-import { menuFit, menuLeft, menuStep } from '../web/src/ui/menu.ts';
+import { menuFit, menuLeft, menuScrollFor, menuStep } from '../web/src/ui/menu.ts';
 import { staggerOf } from '../web/src/ui/tool-row.ts';
 
 // 会話の画面の小さな決まり（1-2 のコードレビューから）。
@@ -50,6 +50,12 @@ test('ui/menu: 選ぶ一覧は、ボタンの右端にそろえて左へ広が�
   const wide = menuFit({ top: 100, bottom: 128, left: 600, right: 700 }, bounds, { width: 600, height: 100 }, 4);
   assert.equal(wide.left, false, '左にも入らないが右のほうが狭いなら、右端そろえのまま左へ広げる');
   assert.equal(wide.maxWidth, 500);
+});
+
+test('ui/menu: 一覧が縮んだり置き直されたりしても、焦点のある行が見えるように一覧の中だけをスクロールする', () => {
+  assert.equal(menuScrollFor({ top: 120, height: 30 }, 0, 100), 50);
+  assert.equal(menuScrollFor({ top: 10, height: 30 }, 40, 100), 10);
+  assert.equal(menuScrollFor({ top: 50, height: 30 }, 20, 100), 20);
 });
 
 test('ui/menu: メニューからフォーカスが出たら閉じるが、開いたボタンへ出たときは閉じない（ボタンの押し直しで閉じられる）', () => {

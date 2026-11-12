@@ -23,10 +23,14 @@ test('ui/focus: 開いた元が無い（#/settings を直接開いた）とき�
 });
 
 test('ui/focus: 止まった頭の下に入った焦点は、頭の下に少し空けて見える所までだけ戻す。隠れていなければ動かさない', () => {
-  assert.equal(underHead(92, 40, 8), 60);
-  assert.equal(underHead(92, 100, 8), 0);
-  assert.equal(underHead(92, 84, 8), 16);
-  assert.equal(underHead(173, -20, 8), 201);
+  assert.equal(underHead(92, 40, 8, true), 60);
+  assert.equal(underHead(92, 100, 8, true), 0);
+  assert.equal(underHead(92, 84, 8, true), 16);
+  assert.equal(underHead(173, -20, 8, true), 201);
+});
+
+test('ui/focus: マウスで押した焦点（focus-visible でない）は戻さない。押している間に行が動いて別の所を押すことになるため', () => {
+  assert.equal(underHead(92, 87, 8, false), 0);
 });
 
 test('ui/focus: 文書から外れた元は使わない。どれも使えなければ null', () => {
