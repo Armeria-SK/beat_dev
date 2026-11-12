@@ -423,7 +423,7 @@ export class TaskStore {
       const task = this.get(id);
       if (!task) throw new TaskError('error.not_found', { id });
       if (task.status === 'running' || task.status === 'waiting' || !this.#neverRan(task)) throw new TaskError('error.already_started');
-      const newest = this.#db.prepare('SELECT kind FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(id) as { kind: string } | undefined;
+      const newest = this.#db.prepare('SELECT kind FROM task_events WHERE task_id = ? AND run_id IS NOT ? ORDER BY id DESC LIMIT 1').get(id, UNTRUSTED_RUN) as { kind: string } | undefined;
       if (task.status !== 'ready' || newest?.kind !== 'approved') throw new TaskError('error.not_approved');
       this.#db.prepare("UPDATE tasks SET status = 'inbox', updated_at = ? WHERE id = ?").run(this.#now(), id);
       this.event(id, 'unapproved', 'user');

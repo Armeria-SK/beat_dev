@@ -421,7 +421,12 @@ export const MIGRATIONS: readonly Migration[] = [
   SELECT DISTINCT e.task_id, 'context', 'system', 'Written by a run of a conversation that read text from elsewhere.', 'untrusted-input', CAST(strftime('%s', 'now') AS INTEGER) * 1000
   FROM task_events e LEFT JOIN engine_runs r ON r.id = e.run_id LEFT JOIN conversations c ON c.id = r.conversation_id
   WHERE e.run_id IS NOT NULL AND e.run_id <> 'untrusted-input' AND e.kind IN ('context', 'note', 'edited')
-    AND (r.id IS NULL OR r.tainted = 1 OR c.ever_tainted = 1)
+    AND (r.conversation_id IS NULL OR r.tainted = 1 OR c.ever_tainted = 1)
     AND NOT EXISTS (SELECT 1 FROM task_events x WHERE x.task_id = e.task_id AND x.run_id = 'untrusted-input' AND x.kind = 'context');
+  INSERT INTO task_events (task_id, kind, actor, content, run_id, created_at)
+  SELECT t.id, 'context', 'system', 'Its text came from a schedule that had text written after reading text from elsewhere.', 'untrusted-input', CAST(strftime('%s', 'now') AS INTEGER) * 1000
+  FROM tasks t
+  WHERE t.origin = 'schedule' AND t.parent_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM task_events x WHERE x.task_id = t.id AND x.run_id = 'untrusted-input' AND x.kind = 'context');
   `,
 ];

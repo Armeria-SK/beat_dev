@@ -94,3 +94,12 @@ test('判定役の頼み: 外を読んだ実行が予定に書き足したあと
   assert.equal(s.app.tasks.get(run.id)!.parent_id, null);
   assert.equal(s.app.tasks.judgeRequest(run.id), '', '予定の経過が消えても、写した AI の文は持ち主の頼みにならない');
 });
+
+test('判定役の頼み: 承認のあとに印 untrusted-input が足されても、まだ動いていない提案の承認は取り消せる', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Proposal', origin: 'self', actor: 'clive', propose: true });
+  s.app.tasks.approve(task.id);
+  s.app.tasks.markUntrusted(task.id, 'system', 'x');
+  assert.equal(s.app.tasks.events(task.id)[0]!.run_id, UNTRUSTED_RUN, '前提: いちばん新しい経過は印');
+  assert.equal(s.app.tasks.unapprove(task.id).status, 'inbox');
+});
