@@ -9,6 +9,14 @@ function lines(text: string): string[] {
   return parts;
 }
 
+export function appendDelta(before: string, appended: string): LineDelta {
+  if (before === '' || before.endsWith('\n')) return { added: lines(appended).length, removed: 0 };
+  const cut = appended.indexOf('\n');
+  const head = (cut < 0 ? appended : appended.slice(0, cut)).replace(/\r$/u, '');
+  const rest = cut < 0 ? 0 : lines(appended.slice(cut + 1)).length;
+  return head === '' ? { added: rest, removed: 0 } : { added: 1 + rest, removed: 1 };
+}
+
 export function lineDelta(before: string, after: string): LineDelta {
   const left = new Map<string, number>();
   for (const line of lines(before)) left.set(line, (left.get(line) ?? 0) + 1);

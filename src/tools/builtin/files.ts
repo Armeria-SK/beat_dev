@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import { atomicWriteFile } from '../../config/store.ts';
 import { languageOf } from '../../shared/language.ts';
-import { lineDelta } from '../../shared/line-delta.ts';
+import { appendDelta, lineDelta } from '../../shared/line-delta.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { approvalPaths } from '../approvals.ts';
@@ -16,6 +16,10 @@ const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_DELTA_BYTES = 4 * 1024 * 1024;
+
+export function previousForDelta(abs: string, io: { size: (path: string) => number; read: (path: string) => string } = { size: p => statSync(p).size, read: p => readFileSync(p, 'utf8') }): string | null {
+  try { return io.size(abs) <= MAX_DELTA_BYTES ? io.read(abs) : null; } catch { return null; }
+}
 const MAX_WRITE_CHARS = 1_000_000;
 
 type Need = 'read' | 'write';
@@ -102,13 +106,14 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     // （ask は実行前に承認済みなので、ここでは deny だけを止める）
     const recheck = checkFilePath(abs, 'write', ctx).check;
     if (recheck.decision === 'deny') return { content: toolText(language, 'file.recheck_failed', { detail: recheck.reasons.join(' / ') }), isError: true };
-    const counted = !exists || input.mode === 'append' || statSync(abs).size <= MAX_DELTA_BYTES;
-    const previous = exists && counted ? readFileSync(abs, 'utf8') : '';
-    const next = input.mode === 'append' && exists ? previous + input.content : input.content;
+    const appending = input.mode === 'append' && exists;
+    const current = appending ? readFileSync(abs, 'utf8') : '';
+    const next = appending ? current + input.content : input.content;
+    const before = appending ? null : exists ? previousForDelta(abs) : '';
     atomicWriteFile(abs, next);
     const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
-    if (!counted) return { content: toolText(language, 'file.wrote', params) };
-    const delta = lineDelta(previous, next);
+    const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
+    if (!delta) return { content: toolText(language, 'file.wrote', params) };
     return { content: toolText(language, 'file.wrote_lines', { ...params, added: delta.added.toLocaleString('en-US'), removed: delta.removed.toLocaleString('en-US') }) };
   },
 };

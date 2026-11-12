@@ -11,7 +11,7 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
 import { curiosityAdd, curiosityList, curiosityUpdate } from '../src/tools/builtin/curiosity.ts';
-import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
+import { fileEdit, fileList, fileRead, fileWrite, previousForDelta } from '../src/tools/builtin/files.ts';
 import { historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { skillDraft, skillView } from '../src/tools/builtin/skills.ts';
@@ -389,4 +389,12 @@ test('file_write: 4MB を超える既存のファイルの上書きは、前の�
   writeFileSync(join(s.paths.workspace, 'huge.txt'), 'x\n'.repeat(2 * 1024 * 1024 + 1));
   assert.equal(await out('file_write', { path: 'huge.txt', content: 'small' }), 'Overwritten: huge.txt (5 characters)');
   assert.equal(await out('file_write', { path: 'huge.txt', content: 'a\nb\n' }), 'Overwritten: huge.txt (4 characters; +2 -1 lines)');
+});
+
+test('file_write: 前の中身が読めない上書きは、行数を付けずに今までの形で返す（読めないことで書き込みを失敗にしない。1-2s）', () => {
+  const read = () => { throw Object.assign(new Error('locked'), { code: 'EBUSY' }); };
+  assert.equal(previousForDelta('x', { size: () => 10, read }), null);
+  assert.equal(previousForDelta('x', { size: () => { throw new Error('gone'); }, read: () => 'a' }), null);
+  assert.equal(previousForDelta('x', { size: () => 4 * 1024 * 1024 + 1, read: () => 'a' }), null);
+  assert.equal(previousForDelta('x', { size: () => 3, read: () => 'abc' }), 'abc');
 });

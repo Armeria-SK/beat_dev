@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { lineDelta } from '../src/shared/line-delta.ts';
+import { appendDelta, lineDelta } from '../src/shared/line-delta.ts';
 
 // 書き換えの前後の行の足し引き（file_write の結果と、画面の ToolRow の +n −n）。行は中身で突き合わせ、並びは見ない。
 
@@ -21,4 +21,9 @@ test('lineDelta: 同じ中身の行は数で突き合わせる（重なった行
   assert.deepEqual(lineDelta('x\nx\nx\n', 'x\nx\n'), { added: 0, removed: 1 });
   assert.deepEqual(lineDelta('a\nb\n', 'b\na\n'), { added: 0, removed: 0 });
   assert.deepEqual(lineDelta('one\ntwo\n3', 'one\ntwo\n3new'), { added: 1, removed: 1 });
+});
+
+test('appendDelta: 足す書き込みは前の中身と突き合わせず数える（前の終わりに改行が無ければ、最後の行が 1 つ変わる）。中身の違う行どうしでは lineDelta と同じ数', () => {
+  const cases: Array<[string, string]> = [['', 'a\nb'], ['a\n', 'b\nc\n'], ['a', 'b\nc'], ['a', '\nb'], ['a', 'b'], ['a\r\n', 'b'], ['a', ''], ['a', '\n'], ['x\ny', 'z\n']];
+  for (const [before, appended] of cases) assert.deepEqual(appendDelta(before, appended), lineDelta(before, before + appended), JSON.stringify([before, appended]));
 });
