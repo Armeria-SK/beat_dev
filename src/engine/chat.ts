@@ -42,6 +42,8 @@ import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
+import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
+import { folderMissing, type ProjectRow, type ProjectStore } from '../projects/store.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
 export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
@@ -92,6 +94,8 @@ export interface ChatEngineDeps {
   paths: AppPaths;
   tools?: { registry: ToolRegistry; approvals: ApprovalBroker };
   memory?: MemoryStore;
+  botMemory?: boolean | undefined;
+  projects?: Pick<ProjectStore, 'get'> | undefined;
   tasks?: TaskStore;
   curiosity?: CuriosityStore;
   skills?: SkillStore;
@@ -921,7 +925,8 @@ export class ChatEngine {
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, checklist].filter(Boolean).join('\n\n');
+    const project = this.#projectOf(p.conversationId);
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, project), summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     const history = stored.map(m => m.message);
     const apiTools = specs;
@@ -962,7 +967,7 @@ export class ChatEngine {
       model = chain.usable.map(r => r.model).find(m => (d.status.get(m.id)?.effective ?? m.contextLength ?? 0) > 0);
       if (!model) return this.#noUsableModel(chain.problems);
     }
-    const snapshot = existing?.snapshot ?? this.#previewSnapshot(language);
+    const snapshot = existing?.snapshot ?? this.#previewSnapshot(language, conversationId);
     const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat' });
     const { tokens } = estimateRequest(`${built.system.frozen}\n${built.system.dynamic}`, built.history, built.apiTools, built.factor);
     return { ok: true, modelId: model.id, tokens, available: built.available, capacity: built.capacity, ratio: tokens / built.available };
@@ -1094,21 +1099,30 @@ export class ChatEngine {
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = this.#buildSnapshotText(language);
+    const snapshot = this.#buildSnapshotText(language, conversationId);
     d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 
   // 会話の始めに固定する system の文。作るだけで、何も書かない
-  #buildSnapshotText(language: Language) {
+  #buildSnapshotText(language: Language, conversationId: string) {
     const d = this.#d;
+    const product = d.conversations.projectOf(conversationId) !== null;
+    const project = this.#projectOf(conversationId);
     return buildSnapshot(d.paths, {
-      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
+      ...(d.botMemory && d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
+      ...(product ? { persona: false, instructions: project && instructionsSection(readInstructions(project.root, instructionsBudget(this.#smallestAvailable()))) } : {}),
     }, language);
   }
 
-  #previewSnapshot(language: Language): string { return this.#buildSnapshotText(language).text; }
+  #projectOf(conversationId: string): ProjectRow | undefined {
+    const id = this.#d.conversations.projectOf(conversationId);
+    const project = id === null ? undefined : this.#d.projects?.get(id);
+    return project && !folderMissing(project) ? project : undefined;
+  }
+
+  #previewSnapshot(language: Language, conversationId: string): string { return this.#buildSnapshotText(language, conversationId).text; }
 
   #checkTruncation(runId: string, conversationId: string, model: ModelConfig, estimate: { raw: number; tokens: number }, usage: Usage, capacity: number, flags: string[]): void {
     const d = this.#d;

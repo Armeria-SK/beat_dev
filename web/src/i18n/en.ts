@@ -1240,6 +1240,7 @@ export const en = {
   'ui.set.persona.color': 'Colour',
   'ui.set.persona.colorDesc': 'The avatar at rest',
   'ui.set.persona.files': 'Persona files',
+  'ui.set.persona.scope': 'Used in conversations outside a product. Product conversations follow the product folder\'s AGENTS.md (or CLAUDE.md) instead.',
   'ui.set.persona.soul': 'How it behaves',
   'ui.set.persona.soulDesc': 'SOUL.md',
   'ui.set.persona.user': 'About you',

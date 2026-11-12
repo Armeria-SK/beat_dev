@@ -61,12 +61,12 @@ test('通知のリンク: スキルの下書きの通知（#/review）は、そ�
   assert.equal(skillDraftLink({ link: null, title: 'x: y' }), null);
 });
 
-test('道具の一覧: サーバーの一覧（GET /api/tools）の 40 個すべてに、画面の絵と説明（en の辞書）がある。画面にあってサーバーに無い道具も無い', async t => {
+test('道具の一覧: サーバーの一覧（GET /api/tools。記憶の道具は出ない）のすべてに、画面の絵と説明（en の辞書）がある。画面にあって組み込みに無い道具も無い', async t => {
   const s = await startScreenServer(t);
   const { tools } = (await (await s.api('/api/tools')).json()) as { tools: Array<{ name: string; effect: keyof typeof EFFECT_LABEL }> };
   const server = builtinTools();
-  assert.equal(tools.length, server.length);
-  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(def => def.name).sort());
+  assert.equal(tools.length, server.length - 4);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(def => def.name).filter(name => !name.startsWith('memory_')).sort());
   assert.deepEqual(Object.keys(TOOL_LOOKS).sort(), server.map(def => def.name).sort(), '絵と説明の辞書は、サーバーの道具と同じ名前');
   for (const tool of tools) {
     const look = toolLook(tool.name);

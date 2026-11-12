@@ -65,7 +65,7 @@ async function sandbox(t: { after: (fn: () => void) => void }, options: Options)
     get: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from(html) }) as PageResponse,
   };
   let adapter!: ClassifierAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => { adapter = new ClassifierAdapter(p); adapter.answer = options.answer ?? ALLOW; return adapter; } });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, botMemory: true, webNetwork: network, adapterOverride: p => { adapter = new ClassifierAdapter(p); adapter.answer = options.answer ?? ALLOW; return adapter; } });
   t.after(() => app.close());
   await app.status.probeAll(app.config());
   const ws = paths.workspace;

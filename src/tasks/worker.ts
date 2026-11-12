@@ -40,6 +40,7 @@ export interface WorkerDeps {
   autoSchedule?: boolean;
   reviews?: ReviewJobs | undefined;
   memory?: MemoryStore | undefined;
+  botMemory?: boolean | undefined;
   curiosity?: CuriosityStore | undefined;
   memoryBudget?: (() => number | undefined) | undefined;
 }
@@ -294,7 +295,7 @@ export class Worker {
     reviews.enqueueIdleConversations(c.memory.reviewIdleMinutes * 60_000, since);
     // 記憶が会話に入れる量の予算を超えたら、整理の振り返りを 1 日 1 回積む（予算が決まらないとき・モデルが 0 個のときは積まない）
     const budget = this.#d.memoryBudget?.();
-    if (memory && budget !== undefined && planBooks(memory.list(), languageOf(c), budget).omitted.length > 0) {
+    if (this.#d.botMemory && memory && budget !== undefined && planBooks(memory.list(), languageOf(c), budget).omitted.length > 0) {
       reviews.enqueue('book_full', `book:all:${Math.floor(now / 86_400_000)}`);
     }
   }
@@ -308,26 +309,27 @@ export class Worker {
       const budget = this.#d.memoryBudget?.();
       const plan = memory && budget !== undefined ? planBooks(memory.list(), language, budget) : undefined;
       const pressure = plan && budget !== undefined && plan.omitted.length > 0 ? bookPressureText({ tokens: plan.tokens, budget, outside: plan.omitted }, language) : undefined;
-      return reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language });
+      return reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language, memory: true });
     }
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
       if (!task) return undefined;
-      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister });
+      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory });
     }
     if (!job.conversation_id) return undefined;
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
     const upto = Number(kv.get(`review:upto:${job.conversation_id}`) ?? 0);
     const messages = conversations.messages(job.conversation_id, 200).filter(m => m.id > upto);
     if (!messages.some(m => m.role === 'user')) return undefined;
-    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language, skillsAutoRegister });
+    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory });
   }
 
   async #review(job: ReviewJob, release: () => void): Promise<TickResult> {
     const { reviews, conversations, engine, kv } = this.#d;
     if (!reviews) return 'idle';
-    const prompt = this.#reviewInput(job);
     const language = this.#language();
+    if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
+    const prompt = this.#reviewInput(job);
     if (!prompt) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
     // 手元のモデルで話した会話（選んだモデルが設定から消えた会話も）と、手元のモデルだけで動かすタスクの振り返りは、手元の裏方モデルだけで行う。使えるものが無ければ、外のモデルに回さず、その振り返りを飛ばす
     const local = isLocalPinned(this.#d.config(), job.conversation_id ? conversations.get(job.conversation_id)?.model_id : null) || (job.task_id !== null && this.#d.tasks.get(job.task_id)?.local_only === 1);

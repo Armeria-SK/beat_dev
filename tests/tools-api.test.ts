@@ -13,20 +13,20 @@ const patch = (s: Awaited<ReturnType<typeof startScreenServer>>, name: string, b
   s.api(`/api/tools/${name}`, { method: 'PATCH', body: JSON.stringify(body), headers });
 const fileOf = (s: Awaited<ReturnType<typeof startScreenServer>>) => JSON.parse(readFileSync(s.app.paths.config, 'utf8')) as { tools: { policies?: Record<string, string> } };
 
-test('GET /api/tools: 組み込みの道具 40 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定は agent_run だけ ask、ほかは allow）', async t => {
+test('GET /api/tools: 組み込みの道具のうち記憶の道具を除く 36 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定は agent_run だけ ask、ほかは allow）', async t => {
   const s = await startScreenServer(t);
   const res = await s.api('/api/tools');
   assert.equal(res.status, 200);
   const { tools } = (await res.json()) as { tools: ToolRow[] };
   const server = builtinTools();
-  assert.equal(tools.length, 40);
-  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(tool => tool.name).sort());
+  assert.equal(tools.length, 36);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(tool => tool.name).filter(name => !name.startsWith('memory_')).sort());
   for (const tool of tools) {
     const def = server.find(d => d.name === tool.name)!;
     assert.deepEqual([tool.effect, tool.allowedIn, tool.policy], [def.effect, [...def.allowedIn], tool.name === 'agent_run' ? 'ask' : 'allow'], tool.name);
   }
   assert.deepEqual(tools.filter(tool => !tool.configurable).map(tool => tool.name).sort(), ['ask_user', 'task_checkpoint', 'task_complete']);
-  assert.deepEqual(tools.find(tool => tool.name === 'memory_save')!.allowedIn, ['chat', 'task', 'review'], '振り返りでも使う道具は、allowedIn に review がある（画面の添え書きの元）');
+  assert.deepEqual(tools.find(tool => tool.name === 'history_search')!.allowedIn, ['chat', 'task', 'review'], '振り返りでも使う道具は、allowedIn に review がある（画面の添え書きの元）');
 });
 
 test('PATCH /api/tools/:name: 方針を 1 つだけ変えて設定に保存する。allow に戻すと書いた項目を消す。ほかの設定には触れず、モデルの確認の通信もしない', async t => {
