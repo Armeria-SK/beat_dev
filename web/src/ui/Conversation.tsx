@@ -5,7 +5,7 @@ import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrot
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
-import { cancelClearsInterrupt, firstMode, NEW_DRAFT, queuedLine, showProceed, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
+import { cancelClearsInterrupt, firstMode, NEW_DRAFT, queuedLine, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getLanguage, useT } from '../i18n/index.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
@@ -83,6 +83,20 @@ function QuietNotice({ notices }: { notices: RunNotice[] }) {
         {notices.map((n, i) => (
           <Fragment key={i}>{i > 0 && ' · '}{noticeText(t, n)}{n.kind === 'memory' && <MemoryUndo eventId={n.eventId} />}</Fragment>
         ))}
+      </span>
+      <span className="bt-notice__rule" />
+    </div>
+  );
+}
+
+function PlanWritten({ onOpen, rising }: { onOpen: (() => void) | undefined; rising: boolean }) {
+  const t = useT();
+  return (
+    <div className={`bt-notice${rising ? ' bt-rise' : ''}`}>
+      <span className="bt-notice__rule" />
+      <span className="ui-notice__text">
+        {t('ui.plan.written')}
+        {onOpen && <> · <button type="button" className="bt-notice__action" onClick={onOpen}>{t('ui.plan.openPane')}</button></>}
       </span>
       <span className="bt-notice__rule" />
     </div>
@@ -362,16 +376,6 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
 
   const pick = (text: string): void => { void submit('send', text, [], { label: t('ui.fail.retry'), run: () => pick(text) }); };
 
-  const proceed = async () => {
-    if (!id || sending) return;
-    setSending(true); setFailure(null);
-    stick.current = true;
-    try {
-      await api.send(id, t('ui.plan.proceedRequest'), [], { permissionMode: 'normal' }, { generated: true });
-      await load();
-    } catch (error) { await fail(error, null); await load(); } finally { setSending(false); }
-  };
-
   const changeFailed = (error: unknown) => {
     stick.current = true;
     setFailure({ ...sendFailureOf(error, t('ui.fail.change'), models), retry: null, title: t('ui.fail.change') });
@@ -419,6 +423,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
       case 'stop': if (draft) void api.stop(draft.runId).catch(changeFailed); return;
       case 'archive': if (id) void api.archiveConversation(id).then(() => load(), changeFailed); return;
       case 'summary': setSummaryOpen(true); stick.current = false; scroller.current?.scrollTo({ top: 0 }); return;
+      case 'build': panes?.onOpenPlan?.(true); return;
       case 'rename': return;
     }
   };
@@ -498,6 +503,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
         if (item.weight === 'fail' && n.kind === 'error') return <Fragment key={item.key}>{runFailure(n)}</Fragment>;
         return <Notice key={item.key} tone="warn" icon="alert" title={noticeText(t, n)} />;
       }
+      case 'plan': return <PlanWritten key={item.key} onOpen={panes?.onOpenPlan ? () => panes.onOpenPlan?.(false) : undefined} rising={rise(item.key)} />;
     }
   }
 
@@ -532,17 +538,11 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
         )}
       </div>
       {running && checklist.length > 0 && <Checklist items={checklist} tainted={readList?.tainted ?? false} live className="ui-pinned bt-rise" />}
-      {!gone && !helper && showProceed({ mode: choice.permissionMode, hasConversation: id !== null, running, sending, approvals: approvals.length, last: messages.at(-1) }) && (
-        <div className="ui-pinned ui-proceed" role="group" aria-label={t('ui.plan.proceed')}>
-          <Button variant="primary" onClick={() => void proceed()}>{t('ui.plan.proceed')}</Button>
-          <span className="bt-meta">{t('ui.plan.proceedHint')}</span>
-        </div>
-      )}
       {!gone && !helper && (
         <Composer
           draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} planless={startMode === 'plan'} running={running} sending={sending} pending={pending}
           models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode}
-          slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1 }}
+          slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1, product: Boolean(product && panes?.onOpenPlan) }}
           onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}
           onStop={() => { if (draft) void api.stop(draft.runId).catch(changeFailed); }}
           onChoose={next => void choose(next)} onCancelPending={pendingId => void cancelPending(pendingId)} onSlash={runSlash}

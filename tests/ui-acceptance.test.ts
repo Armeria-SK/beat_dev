@@ -123,8 +123,8 @@ test('ui/acceptance: 履歴が多すぎて 1 回の書き込みで確かめき�
   assert.equal(t('ui.acc.reason.scan_budget'), 'Too much history to check in one write');
 });
 
-test('ui/acceptance: 下書きのあいだは "Draft — fixed when you build"、固定のあとは版の番号', () => {
-  assert.equal(acceptanceMeta(acc()), 'Draft — fixed when you build');
+test('ui/acceptance: 下書きのあいだは "Draft — locked when you build"、固定のあとは版の番号', () => {
+  assert.equal(acceptanceMeta(acc()), 'Draft — locked when you build');
   assert.equal(acceptanceMeta(acc({ draft: false, version: 2 })), 'v2');
 });
 

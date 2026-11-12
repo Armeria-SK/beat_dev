@@ -4,7 +4,7 @@ import { useT } from '../i18n/index.ts';
 import { useMedia } from './hooks.ts';
 import { PlanPane } from './panes/PlanPane.tsx';
 import {
-  closePane, fitLayout, keepHidden, KEY_STEP, openable, PANE_MIN, paneDef, paneRange, panesWidth, parseLayout, resizePane, selectView, showSplit, singlePane, STORE_KEY, tabOrder, togglePanes, visiblePanes,
+  closePane, fitLayout, keepHidden, KEY_STEP, openable, openView, PANE_MIN, paneDef, paneRange, panesWidth, parseLayout, resizePane, selectView, showSplit, singlePane, STORE_KEY, tabOrder, togglePanes, visiblePanes,
   type PaneLayout, type PaneView,
 } from './panes.ts';
 import { Button } from './parts.tsx';
@@ -13,7 +13,7 @@ import './styles/panes.css';
 const NARROW = '(max-width: 760px)';
 const SIDEBAR = 248;
 
-export interface PanesToggle { open: boolean; onToggle: () => void }
+export interface PanesToggle { open: boolean; onToggle: () => void; onOpenPlan?: ((reveal: boolean) => void) | undefined }
 
 export function PanesButton({ open, onToggle }: PanesToggle) {
   const t = useT();
@@ -52,6 +52,9 @@ export interface PanesState {
   begin: () => void;
   drag: (index: number, dx: number) => void;
   nudge: (index: number, dx: number) => void;
+  reveal: boolean;
+  openPlan: (reveal: boolean) => void;
+  revealed: () => void;
 }
 
 export function usePanes(productId: string | null): PanesState {
@@ -59,6 +62,7 @@ export function usePanes(productId: string | null): PanesState {
   const room = useRoom();
   const [layout, setLayout] = useState<PaneLayout>(() => parseLayout(readStored()));
   const [singleView, setSingleView] = useState<PaneView | null>(null);
+  const [reveal, setReveal] = useState(false);
   const views = useMemo(() => openable({ productId }), [productId]);
   const single = singlePane(narrow, room);
   const visible = visiblePanes(layout, views);
@@ -87,6 +91,13 @@ export function usePanes(productId: string | null): PanesState {
     begin: () => { base.current = shown; },
     drag: (index, dx) => keep(resizePane(base.current, index, dx, room), base.current),
     nudge: (index, dx) => keep(resizePane(shown, index, dx, room)),
+    reveal,
+    openPlan: wanted => {
+      if (!views.includes('plan')) return;
+      if (single) setSingleView('plan'); else keep(openView(shown, views, 'plan'));
+      setReveal(wanted);
+    },
+    revealed: () => setReveal(false),
   };
 }
 
@@ -116,11 +127,11 @@ function Handle({ index, width, panes }: { index: number; width: number; panes: 
   );
 }
 
-export function Panes({ panes, productId, scope, revision, inert }: { panes: PanesState; productId: string; scope: string; revision: string; inert: boolean }) {
+export function Panes({ panes, productId, scope, revision, taskRevision, isGit, inert }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; isGit: boolean; inert: boolean }) {
   const t = useT();
   const body = (view: PaneView): ReactNode => {
     switch (view) {
-      case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} revision={revision} />;
+      case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} />;
     }
   };
   const tabs = tabOrder(panes.views, panes.narrow);

@@ -20,7 +20,8 @@ export type ThreadItem =
   | { kind: 'reply'; key: string; text: string; copyText: string | null; at: number; stamped: boolean }
   | { kind: 'tools'; key: string; rows: ToolItem[] }
   | { kind: 'live'; key: string; text: string; since: number | null }
-  | { kind: 'notice'; key: string; weight: NoticeWeight; notices: RunNotice[] };
+  | { kind: 'notice'; key: string; weight: NoticeWeight; notices: RunNotice[] }
+  | { kind: 'plan'; key: string };
 
 export interface ThreadInput {
   messages: readonly Message[];
@@ -69,6 +70,10 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
     return group.rows;
   };
 
+  const planRuns = new Set(messages.filter(m => m.role === 'tool' && m.toolName === 'plan_write' && !m.isError && m.runId && m.runId !== draft?.runId).map(m => m.runId!));
+  const lastOfRun = new Map<string, number>();
+  for (const m of visible) if (m.runId && planRuns.has(m.runId)) lastOfRun.set(m.runId, m.id);
+
   for (const m of visible) {
     const key = `m-${m.id}`;
     if (m.role === 'tool') {
@@ -80,6 +85,7 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
       const turn = turns.get(m.id);
       items.push({ kind: 'reply', key, text: m.text, copyText: turn ? turn.copyText : m.text, at: m.createdAt, stamped: turn ? turn.copyText !== null : true });
     }
+    if (m.runId && lastOfRun.get(m.runId) === m.id) items.push({ kind: 'plan', key: `plan-${m.runId}` });
   }
 
   const waiting = approvals;

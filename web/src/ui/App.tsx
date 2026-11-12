@@ -308,7 +308,7 @@ export function App() {
   const paneProduct = convo ? convoProduct?.id ?? null : null;
   const panes = usePanes(paneProduct);
   const paneCount = convo ? panes.shown.length : 0;
-  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle } : undefined;
+  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan } : undefined;
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
@@ -366,7 +366,7 @@ export function App() {
           </main>
         )}
         {paneProduct && paneCount > 0 && (
-          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer}
+          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`} />
         )}
       </div>
