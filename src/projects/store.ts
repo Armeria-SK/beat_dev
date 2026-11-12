@@ -5,6 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { projectText, type ProjectMessageKey } from '../shared/messages/projects.ts';
+import { stripHidden } from '../shared/plain-text.ts';
 import { isInside, realish } from '../tools/hooks/scope.ts';
 import type { Remote } from './remotes.ts';
 import { folderGone } from './work-folder.ts';
@@ -44,7 +45,7 @@ export function projectName(raw: string): string {
 
 export function checkCommandOf(raw: string | null): string | null {
   const command = raw?.trim() ?? '';
-  if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command)) throw new ProjectError('bad_check_command');
+  if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command) || stripHidden(command) !== command) throw new ProjectError('bad_check_command');
   return command || null;
 }
 
@@ -116,7 +117,7 @@ export class ProjectStore {
   }
 
   detectDocLanguage(id: string, tag: string): boolean {
-    this.#db.prepare('INSERT OR IGNORE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(`doc-language:${id}`, JSON.stringify(tag), this.#now());
+    this.#db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(`doc-language:${id}`, JSON.stringify(tag), this.#now());
     return Number(this.#db.prepare('UPDATE projects SET doc_language = ? WHERE id = ? AND doc_language IS NULL AND doc_language_pinned = 0').run(tag, id).changes) === 1;
   }
 

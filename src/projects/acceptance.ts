@@ -24,7 +24,7 @@ export type ClaimedSource =
   | { kind: 'owner_choice'; question: string; answer: string }
   | { kind: 'ai_added' };
 export type AcceptanceSource =
-  | { kind: 'owner_words'; quote: string; messageId: number; conversationId: string }
+  | { kind: 'owner_words'; quote: string; messageId: number; conversationId: string; context?: string }
   | { kind: 'owner_choice'; question: string; questionMessageId: number; answer: string; answerMessageId: number; conversationId: string }
   | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: UncheckedReason; quote?: string; question?: string; answer?: string }
   | { kind: 'owner_edit' };
@@ -87,14 +87,19 @@ export function quoteWeight(text: string): number {
   return weight;
 }
 
-interface Spoken { id: number; conversationId: string; owner: boolean; generated: boolean; raw: string; norm: string; next?: Spoken | undefined }
+interface Spoken { id: number; conversationId: string; owner: boolean; generated: boolean; raw: string; norm: string; next?: Spoken | undefined; later?: Spoken[] | undefined; lines?: string[] | undefined }
 
 export interface Speech { owner: Spoken[]; assistant: Spoken[]; laterOwner: (from: Spoken) => Spoken[] }
+
+const visible = (text: string): string => text
+  .replace(/<!--[\s\S]*?(?:-->|$)/gu, '')
+  .replace(/^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*$/gmu, '')
+  .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/gu, '$1');
 
 export function prepareSpeech(rows: readonly SpeechRow[]): Speech {
   const all: Spoken[] = rows.map(row => {
     const owner = row.role === 'user';
-    const raw = owner ? stripAttachments(row.text) : row.text;
+    const raw = owner ? stripAttachments(row.text) : visible(row.text);
     return { id: row.id, conversationId: row.conversation_id, owner, generated: row.generated === 1, raw, norm: normalizeQuote(raw) };
   });
   const byConversation = new Map<string, Spoken[]>();
@@ -106,42 +111,108 @@ export function prepareSpeech(rows: readonly SpeechRow[]): Speech {
   for (const list of byConversation.values()) {
     list.sort((a, b) => a.id - b.id);
     let next: Spoken | undefined;
+    const later: Spoken[] = [];
     for (let i = list.length - 1; i >= 0; i--) {
       const spoken = list[i]!;
-      if (!spoken.owner) spoken.next = next;
-      else next = spoken;
+      if (!spoken.owner) {
+        spoken.next = next;
+        spoken.later = later.slice().reverse();
+      } else {
+        next = spoken;
+        if (!spoken.generated) later.push(spoken);
+      }
     }
   }
   const newestFirst = (list: Spoken[]) => list.sort((a, b) => b.id - a.id);
   return {
     owner: newestFirst(all.filter(s => s.owner && !s.generated)),
     assistant: newestFirst(all.filter(s => !s.owner)),
-    laterOwner: from => (byConversation.get(from.conversationId) ?? []).filter(s => s.owner && !s.generated && s.id > from.id),
+    laterOwner: from => from.later ?? [],
   };
 }
 
+const MAX_ASKED = 20;
+const ANSWER_END = '(?=[ \\t]*$|[).:,\\u3001])';
+const NUMBER_MARK = '(?:Q[ \\t]*)?(\\d{1,2})[.):](?!\\d)';
+const NUMBERED = new RegExp(`(?:^|[\\s,;\\u3001(])${NUMBER_MARK}[ \\t]*(?=\\S)`, 'mu');
+const QUESTION_NUMBER = new RegExp(`^[ \\t]*(?:#{1,6}[ \\t]+)?(?:\\*\\*)?${NUMBER_MARK}`, 'u');
+const STOPS = '.!?\\u3002\\uFF01\\uFF1F';
+const SENTENCE = new RegExp(`[^${STOPS}\\n]+[${STOPS}]*|[${STOPS}]+`, 'gu');
+
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
-function placed(raw: string, token: string): boolean {
-  const text = raw.trim();
-  if (text === token) return true;
-  const t = escapeRegExp(token);
-  const end = '(?![A-Za-z0-9])';
-  if (new RegExp(`(?:^|\\n)[ \\t]*${t}${end}`, 'u').test(text)) return true;
-  const separator = OPTION_DIGIT.test(token) ? '[ \\t]*[.):\\uFF1A][ \\t]*' : '(?:[ \\t]*[.):\\uFF1A])?[ \\t]*';
-  return new RegExp(`(?:^|[\\s,;\\u3001\\uFF0C])Q?\\d{1,2}${separator}${t}${end}`, 'u').test(text);
+interface TokenPatterns { head: RegExp; numbered: RegExp; offered: RegExp }
+const TOKEN_PATTERNS = new Map<string, TokenPatterns>();
+
+function patternsOf(token: string): TokenPatterns {
+  let patterns = TOKEN_PATTERNS.get(token);
+  if (!patterns) {
+    const t = escapeRegExp(token);
+    patterns = {
+      head: new RegExp(`^[ \\t]*${t}${ANSWER_END}`, 'mu'),
+      numbered: new RegExp(`(?:^|[\\s,;\\u3001(])${NUMBER_MARK}[ \\t]*${t}${ANSWER_END}`, 'gmu'),
+      offered: new RegExp(`\\(${t}\\)|(?<![A-Za-z0-9])${t}[).:]`, 'u'),
+    };
+    TOKEN_PATTERNS.set(token, patterns);
+  }
+  return patterns;
 }
 
-function offered(question: string, token: string): boolean {
-  if (!OPTION_LETTER.test(token) && !OPTION_DIGIT.test(token)) return true;
-  const t = escapeRegExp(token);
-  return new RegExp(`\\(${t}\\)|(?<![A-Za-z0-9])${t}[).:\\uFF1A]`, 'u').test(question);
+interface Asked { number: number | null; block: string; questionMark: boolean }
+
+function askedIn(message: Spoken, question: string, questionMark: boolean): Asked | undefined {
+  const lines = message.lines ??= message.raw.normalize('NFKC').split('\n');
+  let start = -1;
+  let suffix = '';
+  for (let i = lines.length - 1; i >= 0; i--) {
+    suffix = normalizeQuote(lines[i]!) + suffix;
+    if (suffix.includes(question)) { start = i; break; }
+  }
+  if (start < 0) return undefined;
+  let end = start;
+  let joined = normalizeQuote(lines[start]!);
+  while (!joined.includes(question) && end + 1 < lines.length) joined += normalizeQuote(lines[++end]!);
+  let stop = end + 1;
+  while (stop < lines.length && !lines[stop]!.includes('?')) stop++;
+  const number = QUESTION_NUMBER.exec(lines[start]!)?.[1];
+  return { number: number === undefined ? null : Number(number), block: lines.slice(start, stop).join('\n'), questionMark };
 }
 
-function answered(reply: Spoken, answer: string, question: Spoken): boolean {
+function placed(raw: string, token: string, number: number | null): boolean {
+  const text = raw.normalize('NFKC').trim();
+  const patterns = patternsOf(token);
+  if (NUMBERED.test(text)) {
+    if (number === null) return false;
+    for (const match of text.matchAll(patterns.numbered)) if (Number(match[1]) === number) return true;
+    return false;
+  }
+  return text === token || patterns.head.test(text);
+}
+
+function answered(reply: Spoken, answer: string, asked: Asked): boolean {
   if (quoteWeight(answer) >= MIN_QUOTE_WEIGHT) return reply.norm.includes(normalizeQuote(answer));
-  const token = answer.trim();
-  return placed(reply.raw, token) && offered(question.raw, token);
+  const token = answer.normalize('NFKC').trim();
+  const option = OPTION_LETTER.test(token) || OPTION_DIGIT.test(token);
+  const offered = patternsOf(token).offered.test(asked.block);
+  if (option ? !offered : !(asked.questionMark || offered)) return false;
+  return placed(reply.raw, token, asked.number);
+}
+
+function contextOf(raw: string, quote: string): string {
+  const parts = [...raw.matchAll(SENTENCE)];
+  let best: string | undefined;
+  for (let i = 0; i < parts.length; i++) {
+    let norm = '';
+    for (let j = i; j < parts.length; j++) {
+      norm += normalizeQuote(parts[j]![0]);
+      if (!norm.includes(quote)) continue;
+      const from = parts[i]!.index;
+      const text = raw.slice(from, parts[j]!.index + parts[j]![0].length).trim();
+      if (best === undefined || text.length < best.length) best = text;
+      break;
+    }
+  }
+  return sanitizeModelInputText(clean(best ?? raw)).text;
 }
 
 export function verifySource(speech: Speech, claimed: ClaimedSource): AcceptanceSource {
@@ -151,20 +222,28 @@ export function verifySource(speech: Speech, claimed: ClaimedSource): Acceptance
     if (quoteWeight(claimed.quote) < MIN_QUOTE_WEIGHT) return unchecked('too_short');
     const quote = normalizeQuote(claimed.quote);
     const found = speech.owner.find(s => s.norm.includes(quote));
-    return found ? { kind: 'owner_words', quote: claimed.quote, messageId: found.id, conversationId: found.conversationId } : unchecked('not_found');
+    return found ? { kind: 'owner_words', quote: claimed.quote, messageId: found.id, conversationId: found.conversationId, context: contextOf(found.raw, quote) } : unchecked('not_found');
   }
   const unchecked = (reason: UncheckedReason): AcceptanceSource => ({ kind: 'ai_added', claimed: 'owner_choice', reason, question: claimed.question, answer: claimed.answer });
   if (quoteWeight(claimed.question) < MIN_QUOTE_WEIGHT) return unchecked('too_short');
-  if (quoteWeight(claimed.answer) < MIN_QUOTE_WEIGHT && !SHORT_ANSWER.test(claimed.answer.trim())) return unchecked('too_short');
+  const answer = claimed.answer.normalize('NFKC').trim();
+  if (quoteWeight(claimed.answer) < MIN_QUOTE_WEIGHT && !SHORT_ANSWER.test(answer)) return unchecked('too_short');
   const question = normalizeQuote(claimed.question);
-  const asked = speech.assistant.filter(s => s.norm.includes(question));
-  for (const q of asked) {
+  const questionMark = claimed.question.normalize('NFKC').includes('?');
+  const asked: Array<[Spoken, Asked]> = [];
+  for (const s of speech.assistant) {
+    if (!s.norm.includes(question)) continue;
+    const found = askedIn(s, question, questionMark);
+    if (found) asked.push([s, found]);
+    if (asked.length >= MAX_ASKED) break;
+  }
+  for (const [q, found] of asked) {
     const reply = q.next;
-    if (reply && !reply.generated && answered(reply, claimed.answer, q)) {
+    if (reply && !reply.generated && answered(reply, answer, found)) {
       return { kind: 'owner_choice', question: claimed.question, questionMessageId: q.id, answer: claimed.answer, answerMessageId: reply.id, conversationId: q.conversationId };
     }
   }
-  if (asked.some(q => speech.laterOwner(q).some(reply => answered(reply, claimed.answer, q)))) return unchecked('not_next_reply');
+  if (asked.some(([q, found]) => speech.laterOwner(q).some(reply => answered(reply, answer, found)))) return unchecked('not_next_reply');
   return unchecked('not_found');
 }
 
@@ -328,7 +407,8 @@ export class AcceptanceStore {
     const current = this.#readFile(projectId);
     const frozen = Math.max(current?.version ?? 0, this.latest(projectId)?.version ?? 0);
     if (frozen >= 1) throw new AcceptanceError('frozen', { version: frozen });
-    this.#replace(this.#file(projectId), { ...doc, version: 0 });
+    const taintedRuns = [...new Set([...(current?.taintedRuns ?? []), ...(doc.taintedRuns ?? [])])];
+    this.#replace(this.#file(projectId), { ...doc, version: 0, taintedRuns });
   }
 
   verifyFrozen(projectId: string): 'ok' | 'mismatch' | 'not_frozen' {

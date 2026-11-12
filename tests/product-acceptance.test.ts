@@ -58,7 +58,7 @@ test('3-1b 出どころ: 持ち主の発言に無い抜き書きは ai_added（n
   f.say(c, 'user', 'Uploads must resume after a restart, please');
   f.say(c, 'assistant', 'Downloads must be fast and cheap. Got it');
   const second = f.say(c, 'user', 'Again: uploads must resume after a restart');
-  assert.deepEqual(f.check(words('uploads must resume after a restart')), { kind: 'owner_words', quote: 'uploads must resume after a restart', messageId: second, conversationId: c });
+  assert.deepEqual(f.check(words('uploads must resume after a restart')), { kind: 'owner_words', quote: 'uploads must resume after a restart', messageId: second, conversationId: c, context: 'Again: uploads must resume after a restart' });
   assert.deepEqual(f.check(words('downloads must be fast and cheap')), { kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: 'downloads must be fast and cheap' }, 'AI の発言だけにある文は持ち主の言葉ではない');
   assert.deepEqual(f.check({ kind: 'ai_added' }), { kind: 'ai_added' });
 });
@@ -127,7 +127,7 @@ test('3-1b 出どころ: 短い owner_words（日本語 5 字・英語 11 字）
 test('3-1b 出どころ: owner_choice の負の確かめ（区切られて現れない記号・選択肢に無い記号・短い質問）と、通る形', () => {
   const f = speechFixture();
   const QUESTION = 'Which storage should the uploader use?';
-  const ask = `${QUESTION}\nA) Local disk (recommended)\nB) S3\nC) Both`;
+  const ask = `1. ${QUESTION}\nA) Local disk (recommended)\nB) S3\nC) Both`;
   const pair = (answerText: string, question = ask) => {
     const c = f.chat();
     f.say(c, 'assistant', question);
@@ -137,9 +137,11 @@ test('3-1b 出どころ: owner_choice の負の確かめ（区切られて現れ
     const result = f.check(choice(question, answer));
     return result.kind === 'owner_choice' ? result.answerMessageId : result.kind;
   };
-  pair('OK, go ahead');
-  assert.equal(kindOf('A'), 'ai_added', '「OK, go ahead」の中の A は区切られていない');
-  for (const text of ['A', '1. A, 2. C', '1A', 'Q1: A', 'Aでお願いします']) {
+  for (const text of ['OK, go ahead', 'A bit of both', 'A few tweaks first', 'we have 3 A grade servers', '1A', 'Aでお願いします']) {
+    pair(text);
+    assert.equal(kindOf('A'), 'ai_added', text);
+  }
+  for (const text of ['A', '1. A, 2. C', 'Q1: A', 'A.', 'A, please', 'Ａ', '１．Ａ']) {
     const id = pair(text);
     assert.equal(kindOf('A'), id, text);
   }
@@ -158,9 +160,75 @@ test('3-1b 出どころ: owner_choice の負の確かめ（区切られて現れ
   const USERS = 'How many users will share it at once?';
   pair('I need 2 users', `${USERS}\n1) One\n2) Two\n3) Many`);
   assert.equal(kindOf('2', USERS), 'ai_added', '「I need 2 users」と 2');
+  const NODES = 'How many worker nodes should run it?';
+  pair('node 1.2', `1. ${NODES}\n1) One\n2) Two`);
+  assert.equal(kindOf('2', NODES), 'ai_added', '「node 1.2」の 2 は小数');
   const LONG = 'Where should we keep the uploaded files?';
   const long = pair('Keep them on the local disk for now', `${LONG}\nA) Local\nB) Cloud`);
   assert.equal(kindOf('keep them on the local disk', LONG), long, '長い答えは含まれるかで見る');
+});
+
+test('3-1b 出どころ: 答えは自分の問いの番号に結び付く。「1. A / 2. C」は Q2 = A も Q1 = C も通さない（P1 のログインとパスワード）', () => {
+  const f = speechFixture();
+  const Q1 = 'Do users need to log in first?';
+  const Q2 = 'How strict should passwords be?';
+  const c = f.chat();
+  const q = f.say(c, 'assistant', `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose\nC) None`);
+  const a = f.say(c, 'user', '1. A\n2. C');
+  assert.equal(f.check(choice(Q2, 'A')).kind, 'ai_added', 'Q2 の答えは C');
+  assert.equal(f.check(choice(Q1, 'C')).kind, 'ai_added', 'Q1 に C は無く、Q1 の答えは A');
+  assert.deepEqual(f.check(choice(Q1, 'A')), { kind: 'owner_choice', question: Q1, questionMessageId: q, answer: 'A', answerMessageId: a, conversationId: c });
+  assert.equal(f.check(choice(Q2, 'C')).kind, 'owner_choice');
+
+  const P1A = 'Should people sign in with a password?';
+  const P1B = 'Should a login page come first?';
+  const c2 = f.chat();
+  f.say(c2, 'assistant', `1. ${P1A}\nA) Yes\nB) No\n2. ${P1B}\nA) Yes\nB) No`);
+  f.say(c2, 'user', '1. B, 2. A');
+  assert.equal(f.check(choice(P1A, 'A')).kind, 'ai_added', 'P1: A は 2 の答え');
+  assert.equal(f.check(choice(P1B, 'A')).kind, 'owner_choice');
+  assert.equal(f.check(choice(P1A, 'B')).kind, 'owner_choice');
+
+  const c3 = f.chat();
+  f.say(c3, 'assistant', `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose\nC) None`);
+  f.say(c3, 'user', 'C');
+  assert.equal(f.check(choice(Q1, 'C')).kind, 'ai_added', 'C は Q2 の選択肢で、Q1 の区切りの中には無い');
+});
+
+test('3-1b 出どころ: yes / no / はい / いいえ は「?」か選択肢の印のある問いへの答えだけ。リンクの行き先・参照の定義・HTML のコメントは問いにならない（P2・P2b）', () => {
+  const f = speechFixture();
+  const pair = (question: string, answer: string) => { const c = f.chat(); f.say(c, 'assistant', question); return f.say(c, 'user', answer); };
+  const answerOf = (question: string, answer: string) => {
+    const result = f.check(choice(question, answer));
+    return result.kind === 'owner_choice' ? result.answerMessageId : result.kind;
+  };
+  const yes = pair('Should uploads resume after a restart?', 'yes');
+  assert.equal(answerOf('Should uploads resume after a restart?', 'yes'), yes);
+  const JA = '再起動のあとも続きから再開しますか？';
+  const hai = pair(JA, 'はい');
+  assert.equal(answerOf(JA, 'はい'), hai);
+  pair('Uploads will resume after a restart', 'yes');
+  assert.equal(answerOf('Uploads will resume after a restart', 'yes'), 'ai_added', '問いでない文への yes');
+  pair('See [the guide](https://example.test/Do-you-want-telemetry-enabled?) for details.', 'yes');
+  assert.equal(answerOf('Do-you-want-telemetry-enabled?', 'yes'), 'ai_added', 'P2: リンクの行き先');
+  pair('Read the guide [1] first.\n\n[1]: https://example.test/guide "Do you want telemetry enabled?"', 'yes');
+  assert.equal(answerOf('Do you want telemetry enabled?', 'yes'), 'ai_added', 'P2b: 参照の定義');
+  pair('Thanks, noted.\n<!-- Do you want analytics turned on? -->', 'yes');
+  assert.equal(answerOf('Do you want analytics turned on?', 'yes'), 'ai_added', 'P2b: HTML のコメント');
+  pair('Do you want the dark theme as the default?', 'no idea, you decide');
+  assert.equal(answerOf('Do you want the dark theme as the default?', 'no'), 'ai_added', '「no idea」は no ではない');
+});
+
+test('3-1b 出どころ: owner_words は一致した持ち主の文をまるごと context に残す（否定が切れた引用でも持ち主の言葉が見られる。P3）', () => {
+  const f = speechFixture();
+  const c = f.chat();
+  const m = f.say(c, 'user', 'Keep it small. I do not want uploads to resume after a restart. Thanks');
+  assert.deepEqual(f.check(words('uploads to resume after a restart')),
+    { kind: 'owner_words', quote: 'uploads to resume after a restart', messageId: m, conversationId: c, context: 'I do not want uploads to resume after a restart.' });
+  const ja = f.say(c, 'user', '小さく作りたい。再起動しても続きから再開しなくてよい。以上');
+  const result = f.check(words('再起動しても続きから再開')) as { context?: string; messageId?: number };
+  assert.equal(result.messageId, ja);
+  assert.equal(result.context, '再起動しても続きから再開しなくてよい。');
 });
 
 test('3-1b 道具の印: acceptance_write は meta・planOk・projectOnly・会話だけ。作る役（タスク）と子の担当から名前で呼ばせても、パイプラインが断る', async t => {
@@ -237,7 +305,6 @@ test('3-1b acceptance_write: コードが出どころを付け替えて番号を
       item('The page loads under a second', { kind: 'ai_added' }, { kind: 'read' }),
     ],
     notDoing: [nd('User accounts', { kind: 'owner_words', quote: 'do not add user accounts' })],
-    language: 'en',
   }, h.ctxOf());
   assert.equal(out.decision, 'allow');
   assert.match(out.output.content, /3 items/u);
@@ -245,13 +312,13 @@ test('3-1b acceptance_write: コードが出どころを付け替えて番号を
   assert.match(out.output.content, /not_found: 1/u);
   const doc = JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc;
   assert.deepEqual(doc, {
-    schema: 1, version: 0, language: 'en',
+    schema: 1, version: 0, language: null,
     items: [
-      { id: 'A-1', result: 'Uploads resume after a restart', source: { kind: 'owner_words', quote: 'uploads must resume after a restart', messageId: said, conversationId: 'c1' }, check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
+      { id: 'A-1', result: 'Uploads resume after a restart', source: { kind: 'owner_words', quote: 'uploads must resume after a restart', messageId: said, conversationId: 'c1', context: 'Uploads must resume after a restart.' }, check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
       { id: 'A-2', result: 'Files are listed newest first', source: { kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: 'files must be sorted by date' }, check: { kind: 'look' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
       { id: 'A-3', result: 'The page loads under a second', source: { kind: 'ai_added' }, check: { kind: 'read' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
     ],
-    notDoing: [{ id: 'N-1', text: 'User accounts', source: { kind: 'owner_words', quote: 'do not add user accounts', messageId: said, conversationId: 'c1' } }],
+    notDoing: [{ id: 'N-1', text: 'User accounts', source: { kind: 'owner_words', quote: 'do not add user accounts', messageId: said, conversationId: 'c1', context: 'Do not add user accounts for now' } }],
     taintedRuns: [],
   });
   assert.deepEqual(h.events.filter(e => e.type === 'acceptance.changed'), [{ type: 'acceptance.changed', projectId: PROJECT, version: 0, draft: true }]);
@@ -280,6 +347,14 @@ test('3-1b acceptance_write の決まり: 項目 60 まで・結果 300 文字�
     ['secret', { items: [item('Use sk-abcdefghijklmnop as the key')] }],
     ['secret in command', { items: [item('R', undefined, { kind: 'command', command: 'curl -H "Authorization: Bearer sk-abcdefghijklmnop"' })] }],
     ['61 not doing', { items: [], notDoing: Array.from({ length: ACCEPTANCE_MAX_ITEMS + 1 }, (_, i) => nd(`N${i}`)) }],
+    ['zero width in command', { items: [item('R', undefined, { kind: 'command', command: 'npm​ test' })] }],
+    ['bidi in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test ‮txt' })] }],
+    ['tag chars in command', { items: [item('R', undefined, { kind: 'command', command: `npm test${String.fromCodePoint(0xE0072, 0xE006D)}` })] }],
+    ['soft hyphen in command', { items: [item('R', undefined, { kind: 'command', command: 'npm te­st' })] }],
+    ['invisible operator in command', { items: [item('R', undefined, { kind: 'command', command: 'npm⁡test' })] }],
+    ['hangul filler in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test ㅤ' })] }],
+    ['braille blank in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test ⠀' })] }],
+    ['language input', { items: [item('R')], language: 'en' }],
   ];
   for (const [label, input] of bad) {
     const out = await h.run('acceptance_write', input, h.ctxOf());
@@ -312,14 +387,16 @@ test('3-1b acceptance_write: 固定のあと（version >= 1）は断られ、フ
   assert.equal(existsSync(archived.file), false);
 });
 
-test('3-1b acceptance_write: よそから来た文を読んだ実行の書き込みは止めず、下書きの taintedRuns にその実行を残す', async t => {
+test('3-1b acceptance_write: よそから来た文を読んだ実行の書き込みは止めず、下書きの taintedRuns にその実行を積む。あとのきれいな実行の書き込みでは消えない', async t => {
   const h = toolHarness(t);
   await h.run('acceptance_write', { items: [item('A')] }, h.ctxOf({ runId: 'r9', taint: { tainted: true, sources: ['web'] } }));
   assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9']);
   await h.run('acceptance_write', { items: [item('A')] }, h.ctxOf({ runId: 'r10', conversationTainted: () => true }));
-  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r10'], '会話が前に外を読んでいれば');
+  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10'], '会話が前に外を読んでいれば');
+  await h.run('acceptance_write', { items: [item('A')] }, h.ctxOf({ runId: 'r9', taint: { tainted: true, sources: ['web'] } }));
+  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10'], '同じ実行は 1 度だけ');
   await h.run('acceptance_write', { items: [item('A')] }, h.ctxOf({ runId: 'r11' }));
-  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, []);
+  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10'], 'きれいな実行では消えない');
 });
 
 function storeFixture(t: { after: (fn: () => void) => void }, io: ConstructorParameters<typeof AcceptanceStore>[2] = {}) {
@@ -524,16 +601,37 @@ test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_w
   assert.deepEqual(fixed.frozen, { version: 1, hash: frozenHash(v1), plan_hash: 'ph', created_at: 77, source: 'build', build_task_id: 'task-1' });
 });
 
-test('3-1b 言語: plan_write が初めて ja を渡すと製品に控え、2 回目の en では変わらない。持ち主が選んだ（pinned）製品では変わらない。読めない印は控えず結果に 1 行', async t => {
+test('3-1b 一覧の口: よそから来た文を読んだ実行が書いたら tainted: true、あとできれいな会話が書き直しても true のまま。言語は製品のものを使う', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  await s.json(`/api/projects/${shop.id}`, 'PATCH', { docLanguage: 'ja' });
+  s.adapter().scripts = [reply('hello'), call('acceptance_write', { items: [item('First')] }), reply('ok'), call('acceptance_write', { items: [item('Second')] }), reply('ok')];
+  await s.send(uuid(1), { text: 'hi', projectId: shop.id });
+  s.app.conversations.markTainted(uuid(1));
+  await s.send(uuid(1), { text: 'write it' });
+  const dirty = (await s.json(`/api/projects/${shop.id}/acceptance`, 'GET')).body.acceptance;
+  assert.equal(dirty.tainted, true);
+  assert.equal(dirty.language, 'ja');
+  await s.send(uuid(2), { text: 'rewrite it', projectId: shop.id });
+  const after = (await s.json(`/api/projects/${shop.id}/acceptance`, 'GET')).body.acceptance;
+  assert.deepEqual(after.items.map((i: { result: string }) => i.result), ['Second']);
+  assert.equal(after.tainted, true, 'きれいな書き直しでは消えない');
+});
+
+test('3-1b 言語: plan_write が初めて ja を渡すと製品に控えて project.changed を流す。2 回目の en では製品は変わらず、控えは最新の en。持ち主が選んだ（pinned）製品では変わらない。読めない印は控えず結果に 1 行。外を読んだ実行の印は控えない', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   assert.equal(shop.doc_language, null);
   assert.equal(shop.doc_language_pinned, false);
+  const changes = () => s.events.filter(e => e.type === 'project.changed' && e.projectId === shop.id && e.change === 'updated').length;
+  const before = changes();
   s.adapter().scripts = [call('plan_write', { content: '# 計画', language: 'ja' }), reply('a'), call('plan_write', { content: '# Plan', language: 'en' }), reply('b')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id });
   assert.equal(s.app.projects.get(shop.id)?.doc_language, 'ja');
+  assert.equal(changes(), before + 1, '検出で変わったら画面へ知らせる');
   await s.send(uuid(1), { text: 'again' });
   assert.equal(s.app.projects.get(shop.id)?.doc_language, 'ja');
+  assert.equal(changes(), before + 1, '変わらなければ知らせない');
   const listed = (await s.json('/api/projects', 'GET')).body.projects[0];
   assert.deepEqual([listed.doc_language, listed.doc_language_pinned], ['ja', false]);
 
@@ -561,8 +659,19 @@ test('3-1b 言語: plan_write が初めて ja を渡すと製品に控え、2 �
   assert.deepEqual([nothing.body.project.doc_language, nothing.body.project.doc_language_pinned], [null, false], '決める材料が無ければ null');
   await s.json(`/api/projects/${shop.id}`, 'PATCH', { docLanguage: 'fr' });
   const back = await s.json(`/api/projects/${shop.id}`, 'PATCH', { docLanguage: null });
-  assert.deepEqual([back.body.project.doc_language, back.body.project.doc_language_pinned], ['ja', false], '最初に検出した印に戻る');
+  assert.deepEqual([back.body.project.doc_language, back.body.project.doc_language_pinned], ['en', false], '最後に渡された印に戻る');
   assert.ok(s.events.some(e => e.type === 'project.changed' && e.projectId === cafe.id && e.change === 'updated'));
+
+  const dirty = await s.product('dirty');
+  s.adapter().scripts = [reply('hello'), call('plan_write', { content: '# Plan', language: 'ja' }), reply('e')];
+  await s.send(uuid(3), { text: 'hi', projectId: dirty.id });
+  s.app.conversations.markTainted(uuid(3));
+  await s.send(uuid(3), { text: 'plan' });
+  assert.equal(readFileSync(join(s.paths.projects, dirty.id, 'plan.md'), 'utf8'), '# Plan');
+  assert.equal(s.app.projects.get(dirty.id)?.doc_language, null, '外を読んだ実行の印では決めない');
+  await s.json(`/api/projects/${dirty.id}`, 'PATCH', { docLanguage: 'en' });
+  const reset = await s.json(`/api/projects/${dirty.id}`, 'PATCH', { docLanguage: null });
+  assert.equal(reset.body.project.doc_language, null, '外を読んだ実行の印は控えにも残らない');
 });
 
 test('3-1b 言語（本物の App）: 製品の会話・タスク・子の担当の毎回の部分に言語の 1 行が入り、製品に属さない会話には入らない', async t => {

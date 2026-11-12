@@ -29,7 +29,7 @@ export const planWrite: ToolDef<{ content: string; language?: string }> = {
       const saved = services.plans.write(ctx.project.id, input.content, { by: 'ai', tainted, conversationId: ctx.conversationId, runId: ctx.runId });
       if (saved.changed) services.emit({ type: 'plan.changed', projectId: ctx.project.id, hash: saved.hash, by: 'ai' });
       const tag = languageTagOf(input.language);
-      if (tag) services.projects?.detectDocLanguage(ctx.project.id, tag);
+      if (tag && !tainted && services.projects?.detectDocLanguage(ctx.project.id, tag)) services.emit({ type: 'project.changed', projectId: ctx.project.id, change: 'updated' });
       const saidLanguage = input.language !== undefined && !tag ? [toolText(languageOf(ctx.config), 'language.ignored', { tag: input.language })] : [];
       return { content: [toolText(languageOf(ctx.config), 'plan.saved', { chars: saved.content.length }), ...saidLanguage].join('\n') };
     } catch (error) { return fail(error, ctx); }
