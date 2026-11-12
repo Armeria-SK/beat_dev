@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SCHEDULE_MIN_SLOT_MS, SCHEDULE_PLANNED_LIMIT } from '../src/tasks/store.ts';
+import { SCHEDULE_MIN_SLOT_MS, SCHEDULE_PLANNED_LIMIT, SCHEDULE_PLANNED_TOTAL, SCHEDULE_RAN_LIMIT } from '../src/tasks/store.ts';
 import { DAY, HOUR, MIN, taskApp, toolCall } from './helpers/task-app.ts';
 
 test('GET /api/tasks: 止めたひな形は、終わったタスクが 60 件たまっても repeating に残る（最後の実行の状態と結果の 1 行つき）', async t => {
@@ -119,6 +119,56 @@ test('GET /api/schedule: 毎分の決まりのひな形は 200 個で止まり�
   assert.equal(mine.at(-1).start, from + SCHEDULE_PLANNED_LIMIT * MIN);
   assert.deepEqual(res.body.templates.map((x: any) => [x.taskId, x.truncated]), [[minute.id, true], [hourly.id, false]]);
   assert.equal(res.body.slots.filter((x: any) => x.taskId === hourly.id).length, 8 * 24 - 1, '今の時刻ちょうどの回と、範囲の終わりちょうどの回は入らない');
+});
+
+test('GET /api/schedule: これからの回は全部のひな形を合わせて 2,000 個まで。ひな形が 10 個を超えると 1 つあたりの上限が等しく下がり、truncated が付く', async t => {
+  const s = await taskApp(t);
+  const from = s.clock.now;
+  const ids = Array.from({ length: 10 }, (_, i) => s.userTask(`Every minute ${i}`, { cron: '*/1 * * * *', timezone: 'UTC' }).id);
+  const countOf = (body: any, id: string) => body.slots.filter((x: any) => x.taskId === id).length;
+  const ten = (await s.api(`/api/schedule?from=${from}&to=${from + DAY}`)).body;
+  assert.deepEqual(ids.map(id => countOf(ten, id)), ids.map(() => SCHEDULE_PLANNED_LIMIT), '10 個までは今までどおり 1 つ 200 個');
+
+  ids.push(s.userTask('Every minute 10', { cron: '*/1 * * * *', timezone: 'UTC' }).id);
+  const daily = s.userTask('Daily', { cron: '0 9 * * *', timezone: 'UTC' });
+  const each = Math.floor(SCHEDULE_PLANNED_TOTAL / 12);
+  const twelve = (await s.api(`/api/schedule?from=${from}&to=${from + DAY}`)).body;
+  assert.deepEqual(ids.map(id => countOf(twelve, id)), ids.map(() => each));
+  assert.equal(countOf(twelve, daily.id), 1, '上限に届かないひな形はそのまま');
+  assert.ok(twelve.slots.filter((x: any) => x.state === 'planned').length <= SCHEDULE_PLANNED_TOTAL);
+  assert.deepEqual(twelve.templates.map((x: any) => x.truncated), [...ids.map(() => true), false]);
+  assert.equal(twelve.slots.filter((x: any) => x.taskId === ids[11 - 1]).at(-1).start, from + each * MIN, '近い回から残す');
+});
+
+test('GET /api/schedule: 動いた回は新しい方から 2,000 個まで。あふれたら ranTruncated が付く', async t => {
+  const s = await taskApp(t);
+  const from = s.clock.now - HOUR;
+  const task = s.userTask('Busy');
+  const conversation = s.app.conversations.create({ kind: 'task', title: 'Busy' }).id;
+  s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(conversation, task.id);
+  const insert = s.app.db.prepare("INSERT INTO engine_runs (id, kind, conversation_id, started_at, ended_at) VALUES (?, 'task', ?, ?, ?)");
+  for (let i = 0; i <= SCHEDULE_RAN_LIMIT; i++) insert.run(`run-${i}`, conversation, from + i * 1000, from + i * 1000 + 500);
+
+  const over = (await s.api(`/api/schedule?from=${from}&to=${from + DAY}`)).body;
+  const past = over.slots.filter((x: any) => x.state === 'past');
+  assert.equal(past.length, SCHEDULE_RAN_LIMIT);
+  assert.equal(over.ranTruncated, true);
+  assert.deepEqual([past[0].start, past.at(-1).start], [from + 1000, from + SCHEDULE_RAN_LIMIT * 1000], 'いちばん古い 1 つが落ちる');
+
+  s.app.db.prepare("DELETE FROM engine_runs WHERE id = 'run-5'").run();
+  const exact = (await s.api(`/api/schedule?from=${from}&to=${from + DAY}`)).body;
+  assert.equal(exact.slots.filter((x: any) => x.state === 'past').length, SCHEDULE_RAN_LIMIT);
+  assert.equal(exact.ranTruncated, false, 'ちょうど 2,000 個は切れていない');
+});
+
+test('GET /api/schedule: 時刻指定のタスクは近い方から 200 個まで', async t => {
+  const s = await taskApp(t);
+  const from = s.clock.now;
+  for (let i = 0; i <= SCHEDULE_PLANNED_LIMIT; i++) s.userTask(`Timed ${i}`, { runAt: from + (i + 1) * MIN });
+  const res = (await s.api(`/api/schedule?from=${from}&to=${from + DAY}`)).body;
+  assert.equal(res.slots.length, SCHEDULE_PLANNED_LIMIT);
+  assert.deepEqual([res.slots[0].start, res.slots.at(-1).start], [from + MIN, from + SCHEDULE_PLANNED_LIMIT * MIN], 'いちばん遠い 1 つが落ちる');
+  assert.ok(res.slots.every((x: any) => x.state === 'planned' && x.runTaskId === x.taskId));
 });
 
 test('GET /api/schedule: 動いた回の時刻は engine_runs の始まりと終わりと同じ。動いている回は live', async t => {

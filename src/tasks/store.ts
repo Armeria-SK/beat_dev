@@ -75,6 +75,7 @@ const FINISHED_T = 'COALESCE(completed_at, updated_at)';
 
 export const SCHEDULE_MAX_RANGE_MS = 8 * 86_400_000;
 export const SCHEDULE_PLANNED_LIMIT = 200;
+export const SCHEDULE_PLANNED_TOTAL = 2000;
 export const SCHEDULE_RAN_LIMIT = 2000;
 export const SCHEDULE_MIN_SLOT_MS = 60_000;
 
@@ -170,15 +171,18 @@ export class TaskStore {
     }
     const lastLength = this.#db.prepare(`SELECT r.ended_at - r.started_at AS length FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id
       WHERE t.parent_id = ? AND r.kind = 'task' AND r.ended_at IS NOT NULL ORDER BY r.started_at DESC LIMIT 1`);
+    const hasRunChild = this.#db.prepare('SELECT 1 FROM tasks WHERE parent_id = ? AND conversation_id IS NOT NULL LIMIT 1');
     const templates: Schedule['templates'] = [];
     const active = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} AND status = 'scheduled' ORDER BY created_at, rowid`).all() as unknown as Task[];
+    const perTemplate = Math.min(SCHEDULE_PLANNED_LIMIT, Math.max(1, Math.floor(SCHEDULE_PLANNED_TOTAL / Math.max(1, active.length))));
     for (const template of active) {
-      const length = Math.max(SCHEDULE_MIN_SLOT_MS, (lastLength.get(template.id) as { length: number } | undefined)?.length ?? 0);
+      const last = hasRunChild.get(template.id) ? lastLength.get(template.id) as { length: number } | undefined : undefined;
+      const length = Math.max(SCHEDULE_MIN_SLOT_MS, last?.length ?? 0);
       let truncated = false;
       let count = 0;
       let at = nextRunAt(template.cron!, template.timezone ?? 'UTC', Math.max(now, from - 1));
       while (at !== null && at < to) {
-        if (count === SCHEDULE_PLANNED_LIMIT) { truncated = true; break; }
+        if (count === perTemplate) { truncated = true; break; }
         slots.push({ taskId: template.id, runTaskId: null, title: template.title, start: at, length, state: 'planned' });
         count += 1;
         at = nextRunAt(template.cron!, template.timezone ?? 'UTC', at);
