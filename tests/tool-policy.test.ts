@@ -54,7 +54,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, live?: () => AppConfig) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(live ? { config: live } : {}) });
-  return { paths, ctx, call, approvals, events, db, ran, parsed, controller };
+  return { paths, ctx, call, approvals, events, db, ran, parsed, controller, registry };
 }
 
 async function waitPending(s: ReturnType<typeof setup>) {
@@ -210,6 +210,28 @@ test('A3: 振り返りでは ask は拒否として扱う（承認する人が�
 
   const plain = setup(t);
   assert.equal((await plain.call('memory_save', {}, { ...plain.ctx, kind: 'review' })).decision, 'allow', '方針が無ければ振り返りで使える（比べる基準）');
+});
+
+test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {
+  const s = setup(t);
+  s.ctx.config.tools.shell.approvalTimeoutSec = 1;
+  s.registry.register({ ...stub('memory_forget', ['chat', 'review'], s.ran), escalateOnTaint: true });
+  const taint = { tainted: true, sources: ['history_read: c9'] };
+  const started = Date.now();
+  const review = await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint });
+  assert.equal(review.decision, 'deny');
+  assert.match(review.output.content, /history_read: c9.*a review \(background work\) has nobody to approve it/u);
+  assert.equal(s.approvals.pending().length, 0, '承認の札を作らない');
+  assert.ok(Date.now() - started < 5000, '待たない');
+  assert.deepEqual(s.ran, []);
+  assert.equal((await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' })).decision, 'allow', '外を読んでいない振り返りは今までどおり使える');
+  assert.equal((await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint })).decision, 'allow', '外を読んだあとでも、確かめの対象でない道具は変わらない');
+
+  const chat = s.call('memory_forget', {}, { ...s.ctx, taint });
+  const request = await waitPending(s);
+  s.approvals.decide(request.id, 'once');
+  assert.equal((await chat).decision, 'ask');
+  assert.deepEqual(s.ran, ['memory_forget', 'memory_save', 'memory_forget']);
 });
 
 test('A3: タスクの実行で ask になったら、今のシェルの承認と同じ流れ（タスクの承認待ち。時間が過ぎたら動かさない）', async t => {
