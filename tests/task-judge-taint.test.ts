@@ -83,11 +83,11 @@ test('判定役の頼み: 外を読んだ実行が予定に書き足したあと
   const chat = s.app.conversations.create({ title: 'tainted run' });
   s.app.runs.start('run-tainted', 'chat', chat.id);
   s.app.runs.markTainted('run-tainted');
-  s.app.tasks.update(template.id, { appendNote: 'AI-NOTE' }, 'clive', 'run-tainted');
+  s.app.tasks.update(template.id, { appendNote: 'AI-NOTE' }, 'beat','run-tainted');
   const run = s.app.tasks.spawnNow(template.id)!;
   assert.match(run.body, /AI-NOTE/u, '前提: 実行は予定の本文を写す');
   assert.equal(s.app.tasks.judgeRequest(run.id), '');
-  s.app.tasks.finish(run.id, 'done', null, 'clive');
+  s.app.tasks.finish(run.id, 'done', null, 'beat');
 
   s.app.tasks.remove(template.id);
   s.app.tasks.reopen(run.id, 'user');
@@ -97,7 +97,7 @@ test('判定役の頼み: 外を読んだ実行が予定に書き足したあと
 
 test('判定役の頼み: 承認のあとに印 untrusted-input が足されても、まだ動いていない提案の承認は取り消せる', async t => {
   const s = await setup(t);
-  const task = s.app.tasks.create({ title: 'Proposal', origin: 'self', actor: 'clive', propose: true });
+  const task = s.app.tasks.create({ title: 'Proposal', origin: 'self', actor: 'beat', propose: true });
   s.app.tasks.approve(task.id);
   s.app.tasks.markUntrusted(task.id, 'system', 'x');
   assert.equal(s.app.tasks.events(task.id)[0]!.run_id, UNTRUSTED_RUN, '前提: いちばん新しい経過は印');
