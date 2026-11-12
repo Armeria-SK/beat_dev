@@ -265,7 +265,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const toolConfig: MatchCtx['toolConfig'] = tool => {
     if (!seen.known || (tool === 'npm' && wroteEarlier)) return { unknownCwd: true };
     const file = tool === 'curl' ? seen.cwds.map(c => curlConfigFile(env, c)).find(Boolean)
-      : tool === 'npm' ? seen.cwds.map(npmProjectConfigFile).find(Boolean)
+      : tool === 'npm' ? seen.cwds.map(c => npmProjectConfigFile(c, env)).find(Boolean)
         : wgetConfigFile(env);
     return file ? { file } : undefined;
   };

@@ -236,6 +236,7 @@ export function insideGitDir(abs: string): boolean {
 }
 
 export function findGitDir(start: string): Found | null {
+  if (isRemotePath(start)) return { gitDir: start, commonDir: start, broken: true };
   let dir = resolve(start);
   for (let depth = 0; depth < 64; depth++) {
     const dotGit = join(dir, '.git');

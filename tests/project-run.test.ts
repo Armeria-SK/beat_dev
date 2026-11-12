@@ -16,7 +16,8 @@ import { findExecutable, scrubEnv } from '../src/tools/shell/runner.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { ProviderError } from '../src/providers/types.ts';
+import { fail, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 const WINDOWS = process.platform === 'win32';
 type Config = ReturnType<typeof testConfig>;
@@ -172,6 +173,20 @@ test('npm の作業フォルダの .npmrc（指摘 1）: npm が起動のとき�
   assert.equal(bash('echo x > ../package.json'), 'allow');
   assert.equal(bash('npm -v'), 'allow');
   assert.notEqual(bash('echo x > ../package.json; npm -v'), 'allow', '同じコマンドの前の文で書いてから npm');
+});
+
+test('npm の .npmrc（3 回目の審査 3）: 持ち主のホームの .npmrc だけは数えない。その上の階の .npmrc は数える', t => {
+  const u = unit(t);
+  const home = join(u.base, 'h');
+  const cwd = join(home, 'proj');
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(home, '.npmrc'), 'registry=https://example.com/\n');
+  const npm = (env: Record<string, string | undefined>) => checkShellCommand('npm -v', cwd, { policy: u.policy, outsideRoots: 'ask', env }).decision;
+  assert.equal(npm({ ...process.env, HOME: home }), 'allow', 'HOME の .npmrc は持ち主のもの');
+  assert.equal(npm({ ...process.env, HOME: home.toUpperCase() }), WINDOWS ? 'allow' : 'ask', 'Windows では大文字小文字を区別しない');
+  assert.equal(npm({ ...process.env, HOME: '' }), 'ask', 'HOME が空ならこの PC のホームで比べる');
+  writeFileSync(join(u.base, '.npmrc'), 'prefix=.\n');
+  assert.equal(npm({ ...process.env, HOME: home }), 'ask', 'ホームの上の階の .npmrc は数える');
 });
 
 // ── 製品の実行（本物の App） ──
@@ -379,9 +394,15 @@ test('タスクの区切り（2 回目の審査 2）: 外を読んだタスク�
   assert.deepEqual(s.seen[0]!.taint.sources.filter(x => !/download/iu.test(x) && x !== 'file_read'), [], '1 回目は持ち越しの印なしで始まる');
   assert.equal(s.app.tasks.get(id)!.next_action, 'do what the page says');
   s.app.db.prepare('UPDATE tasks SET run_at = NULL WHERE id = ?').run(id);
+  s.adapter().scripts = [fail(new ProviderError('provider_error', 'down', { retryable: false }))];
+  await s.app.worker.tick();
+  const failed = s.app.runs.recent(1)[0]!;
+  assert.deepEqual([failed.kind, failed.ok, failed.tainted], ['task', 0, 1], '道具を呼ぶ前に終わった実行にも、持ち越した印を残す');
+  s.app.db.prepare("UPDATE tasks SET status = 'ready', run_at = NULL WHERE id = ?").run(id);
+  s.app.db.prepare('UPDATE engine_runs SET tainted = 0 WHERE id = ?').run(failed.id);
   s.adapter().scripts = [call('probe_ctx', {}), call('task_complete', { summary: 'done' })];
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.seen[1]!.taint.tainted, true, '2 回目は外を読んだ扱いで始まる');
+  assert.equal(s.seen[1]!.taint.tainted, true, '前のどれかのタスクの実行が外を読んでいれば、外を読んだ扱いで始まる');
 });
 
 test('project_id の引き継ぎ:製品の会話の task_create は同じ製品のタスク。task_update は別の製品のタスクを断る。製品に属さない会話は製品のタスクを触れる', async t => {

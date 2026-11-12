@@ -401,7 +401,7 @@ export class ChatEngine {
     const control = { value: { outcome: 'none' } as TaskControl };
     const language = languageOf(this.#d.config());
     const sources = [
-      ...(this.#d.runs.latestTask(conversationId)?.tainted === 1 ? [engineText(language, 'taint.carried')] : []),
+      ...(this.#d.runs.anyTaintedTask(conversationId) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
     ];
     if (sources.length) this.#initialTaint.set(runId, sources);
@@ -677,6 +677,7 @@ export class ChatEngine {
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       if (kind === 'chat' || kind === 'agent') { recordTaint(); recordAutoRead(); }
+      if (kind === 'task') recordTaint();
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);

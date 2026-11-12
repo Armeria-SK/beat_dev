@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
 import { readRemotes } from '../src/projects/remotes.ts';
+import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { findGitDir, inspectRepo, insideGitDir, isGitDir, isLocalRemoteUrl, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
 import { tempDir } from './helpers.ts';
 
@@ -550,4 +551,16 @@ test('commondir・gitdir がネットワークのパス（\\\\host\\share）な�
   writeFileSync(join(root, 'g', '.git'), 'gitdir: \\\\evil-host\\share\\other\n');
   assert.equal(findGitDir(join(root, 'g'))?.broken, true);
   assert.deepEqual(touched, []);
+  assert.equal(findGitDir('\\\\evil-host\\share\\a')?.broken, true);
+  assert.equal(inspectRepo('//evil-host/share/a').unreadable, true);
+  assert.deepEqual(touched, [], 'git の調べ（3 回目の審査 4）');
+  const policy = { roots: [{ path: root, mode: 'write' as const }], deny: [] };
+  for (const [command, shell] of [
+    ['cd //evil-host/share/a; npm -v', 'bash'], ['cd //evil-host/share/a; curl https://example.com/', 'bash'], ['git -C //evil-host/share status', 'bash'], ['cd //evil-host/share; git status', 'bash'],
+    ['cd \\\\evil-host\\share\\a; npm -v', 'powershell'], ['git -C \\\\evil-host\\share status', 'powershell'],
+  ] as const) {
+    const verdict = checkShellCommand(command, root, { policy, outsideRoots: 'ask', shell, windows: true });
+    assert.notEqual(verdict.decision, 'allow', command);
+    assert.deepEqual(touched, [], `シェルの判定（3 回目の審査 2・4）: ${command}`);
+  }
 });

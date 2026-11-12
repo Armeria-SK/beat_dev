@@ -4,8 +4,8 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { isInside } from './scope.ts';
+import { dirname, join, resolve } from 'node:path';
+import { isInside, isRemotePath } from './scope.ts';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -83,6 +83,7 @@ const MAX_RC_BYTES = 1_048_576;
 
 // 空の行・# のコメントだけなら、読まれても何も変わらない
 function hasSettings(file: string): boolean {
+  if (isRemotePath(file)) return true;
   try {
     const st = statSync(file);
     if (!st.isFile()) return false;
@@ -110,10 +111,12 @@ export function curlConfigFile(env: Env, cwd?: string): string | undefined {
   return files.find(hasSettings);
 }
 
-export function npmProjectConfigFile(cwd: string): string | undefined {
+export function npmProjectConfigFile(cwd: string, env: Env): string | undefined {
+  const key = (p: string): string => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+  const own = new Set([key(join(env.HOME || homedir(), '.npmrc')), key(join(homedir(), '.npmrc'))]);
   for (let dir = cwd; ; dir = dirname(dir)) {
     const file = join(dir, '.npmrc');
-    if (hasSettings(file)) return file;
+    if (!own.has(key(file)) && hasSettings(file)) return file;
     if (dirname(dir) === dir) return undefined;
   }
 }
