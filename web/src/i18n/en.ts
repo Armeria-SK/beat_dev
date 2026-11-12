@@ -794,7 +794,7 @@ export const en = {
   'ui.memory.saved': (who: string, when: string) => `saved by ${who} · ${when}`,
   'ui.memory.edited': (who: string, when: string) => `edited by ${who} · ${when}`,
   'ui.memory.notUsed': 'Not used in conversations for now',
-  'ui.memory.usage':(chars: string, tokens: string) => `${chars} characters · ${tokens} tokens in context`,
+  'ui.memory.usage': (chars: string, tokens: string) => `${chars} characters · ${tokens} tokens in context`,
   'ui.memory.usageBudget': (chars: string, tokens: string, budget: string) => `${chars} characters · ${tokens} of ${budget} tokens in context`,
   'ui.memory.omitted': (n: number) => `${n} left out of context · over the budget`,
   'ui.memory.empty': 'No memories yet',

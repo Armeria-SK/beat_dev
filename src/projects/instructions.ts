@@ -2,8 +2,8 @@ import { closeSync, fstatSync, lstatSync, openSync, readlinkSync, readSync } fro
 import { dirname, join, resolve } from 'node:path';
 import { prefixLength } from '../engine/tokens.ts';
 import { isRemotePath, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
+import { INSTRUCTION_FILES } from '../tools/policy.ts';
 
-export const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
 export const INSTRUCTIONS_BUDGET_RATIO = 0.05;
 export const INSTRUCTIONS_DEFAULT_TOKENS = 2000;
 export const INSTRUCTIONS_BYTES_PER_TOKEN = 14;

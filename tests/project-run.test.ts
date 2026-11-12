@@ -257,6 +257,42 @@ test('製品の会話の子の担当:親の作業フォルダ・許可フォル�
   assert.ok(child.policy.roots.some(r => r.path === shop.root && r.mode === 'write'));
 });
 
+const productLine = (dynamic: string) => /Product folder: (.+) \(relative paths start here\)\./u.exec(dynamic)?.[1];
+
+test('2-3 製品の毎回の 1 行: 会話・タスク・子の担当で、1 行のフォルダは ctx.workspace と同じで、相対パスの file_write もシェルもそこで動く。振り返りには 1 行が無い', async t => {
+  const s = await setup(t, { configure: (c: Config) => { c.tools.agent.enabled = true; c.tools.agent.inTasks = true; c.tools.policies = { agent_run: 'allow' }; } });
+  const shop = await s.product('shop');
+  writeFileSync(join(shop.root, 'AGENTS.md'), 'SHOP-RULES');
+  const shell = () => call('shell_run', { command: WINDOWS ? 'Get-Location' : 'pwd' });
+  s.adapter().scripts = [
+    call('probe_ctx', {}), call('file_write', { path: 'chat.txt', content: 'c' }), shell(),
+    call('agent_run', { task: 'look', tools: ['probe_ctx', 'file_write'] }), call('probe_ctx', {}), call('file_write', { path: 'child.txt', content: 'a' }), reply('child'),
+    reply('parent'),
+  ];
+  assert.equal((await s.send(uuid(1), { text: 'work', projectId: shop.id })).status, 202);
+  const made = await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  s.adapter().scripts = [call('probe_ctx', {}), call('file_write', { path: 'task.txt', content: 't' }), shell(), call('task_complete', { summary: 'done' })];
+  assert.equal(await s.app.worker.tick(), 'ran');
+
+  assert.deepEqual(s.seen.map(ctx => [ctx.kind, ctx.workspace]), [['chat', shop.root], ['agent', shop.root], ['task', shop.root]]);
+  for (const name of ['chat.txt', 'child.txt', 'task.txt']) assert.ok(existsSync(join(shop.root, name)), name);
+  const runCalls = s.adapter().calls;
+  const shellCwds = runCalls.map(request => /^\$ (?:Get-Location|pwd)\n\n\(\w+, cwd: (.+?), exit code: 0/u.exec(String(request.messages.at(-1)?.content))?.[1]).filter(Boolean);
+  assert.deepEqual(shellCwds, [shop.root, shop.root], 'シェルは会話でもタスクでも作業フォルダで始まる');
+  assert.equal(runCalls.length, 12);
+  for (const request of runCalls) assert.equal(productLine(request.system.dynamic), shop.root, request.system.dynamic);
+
+  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1) });
+  s.adapter().scripts = [reply('No changes')];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const review = s.adapter().calls.at(-1)!;
+  assert.match(String(review.messages.at(-1)?.content), /^\[Review\]/u);
+  assert.equal(productLine(review.system.dynamic), undefined, review.system.dynamic);
+  assert.ok(!review.system.dynamic.includes('This conversation belongs to the product'));
+  assert.ok(review.system.frozen.includes('SHOP-RULES'), '製品の振り返りも製品の指示ファイルを持つ');
+});
+
 test('製品の会話の web_download: Clive の置き場の downloads/ を確かめて書き、その絶対パスを返す。製品のフォルダの downloads は使わない', async t => {
   const network: DownloadNetwork = {
     resolve: async () => ['93.184.216.34'],

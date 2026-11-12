@@ -135,6 +135,16 @@ test('2-3 指示ファイル: ジャンクションの AGENTS.md（外のフォ�
   assert.equal(readInstructions(root2, 2000), undefined, '受けたリンクの先がふつうのファイルでなければ読まない');
 });
 
+test('2-3 指示ファイル: 同じフォルダの CLAUDE.md を指すジャンクションの AGENTS.md は読む（特別な権限なしで作れるリンク）', t => {
+  const root = join(tempDir(t), 'root');
+  mkdirSync(root);
+  writeFileSync(join(root, 'CLAUDE.md'), 'LINKED-RULES');
+  symlinkSync(join(root, 'CLAUDE.md'), join(root, 'AGENTS.md'), 'junction');
+  const lines: string[] = [];
+  assert.deepEqual(readInstructions(root, 2000, line => lines.push(line)), { name: 'AGENTS.md', text: 'LINKED-RULES', truncated: false });
+  assert.deepEqual(lines, []);
+});
+
 test('2-3 指示ファイル: ハードリンクの AGENTS.md は読まない', t => {
   const base = tempDir(t);
   const root = join(base, 'root');
@@ -228,6 +238,19 @@ test('2-3 製品のフォルダがジャンクションにすり替わってい�
   assert.ok(!s.adapter().calls[0]!.system.dynamic.includes('relative paths start here'));
 });
 
+test('2-3 使用量の見積もり: まだ固定していない製品の会話は、製品の指示ファイルと製品の 1 行を入れた量で数える', async t => {
+  const s = await setup(t);
+  s.app.conversations.ensure('p', { projectId: s.project.id });
+  s.app.conversations.ensure('n');
+  const tokens = (id: string) => { const usage = s.app.engine.contextUsage(id); assert.ok(usage.ok, JSON.stringify(usage)); return usage.tokens; };
+  const plainBefore = tokens('n');
+  const before = tokens('p');
+  writeFileSync(join(s.root, 'AGENTS.md'), 'rule '.repeat(800));
+  assert.ok(tokens('p') > before + 500, '指示ファイルの分が増える');
+  assert.equal(tokens('n'), plainBefore, '製品に属さない会話は変わらない');
+  assert.equal(s.app.conversations.get('p')?.snapshot ?? null, null, '数えるだけで固定しない');
+});
+
 test('2-3 前からある会話の固定した system は変わらない（記憶の入った古い system のまま）', async t => {
   const s = await setup(t);
   s.app.conversations.ensure('old');
@@ -316,7 +339,7 @@ test('2-3 ルールの「覚えておくこと」は、記憶を約束せず USE
   await s.send('n1', 'hello');
   const frozen = frozenOf(s.app, 'n1');
   assert.ok(!frozen.includes('Write important things to memory') && !frozen.includes('Write to memory'), frozen);
-  assert.match(frozen, /You do not keep memories between conversations for now\. Do not promise to remember something\. If the user wants you to know something about them every time, suggest they write it in USER\.md/u);
+  assert.match(frozen, /You do not keep memories between conversations for now\. Do not promise to remember something\. Outside a product, if the user wants you to know something about them every time, suggest they write it in USER\.md \(Settings › Persona\)\. A product's conversations do not read USER\.md: there, suggest the product's AGENTS\.md or CLAUDE\.md instead/u);
 });
 
 test('2-3 Memory の画面の API: 記憶が会話に入らないあいだは context が null（画面は「今は会話に使わない」）', async t => {
