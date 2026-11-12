@@ -57,6 +57,7 @@ interface TaskText {
   nextAction: string;
   doneCriteria: string;
   historyHeading: string;
+  ownerReason: string;
   howHeading: string;
   how: readonly string[];
   time: (ms: number, timezone: string) => string;
@@ -74,6 +75,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
     nextAction: 'Next step',
     doneCriteria: 'Done when',
     historyHeading: '# History so far (newest first)',
+    ownerReason: "reason for cancelling (the user's own words)",
     howHeading: '# How to proceed',
     how: [
       '- Make progress with your tools. Do not overdo it in a single run',
@@ -94,7 +96,9 @@ export function inQuietHours(now: number, timezone: string, start: string, end: 
 
 export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
   const text = TASK_TEXT[language];
-  const history = events.filter(e => e.content).slice(0, 10).map(e => `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`);
+  const history = events.filter(e => e.content).slice(0, 10).map(e => (e.kind === 'reason'
+    ? `- ${text.time(e.created_at, timezone)} ${text.ownerReason}: ${e.content!.replace(/\r?\n/gu, '\n  ')}`
+    : `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`));
   return [
     text.intro,
     '',
@@ -234,7 +238,7 @@ export class Worker {
       let task: Task | undefined;
       // 提供元の空きは、動いている裏の実行それぞれの「最初に使う提供元」で数える（計画の「各実行の providers で数える」より意図して狭い:
       // 全部で数えると、まだ使っていない鎖の後ろの提供元の枠まで塞ぐ。後ろへ回った分の同時数は limiter が抑える）
-      const roomFor =(t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
+      const roomFor = (t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
       for (const id of [...this.#forced]) {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
@@ -297,7 +301,7 @@ export class Worker {
     const { db, conversations, tasks, memory, kv } = this.#d;
     const language = languageOf(this.#d.config());
     const skillsAutoRegister = !askBeforeRegister(this.#d.config());
-    const forgotten =(db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
+    const forgotten = (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
     if (job.trigger === 'book_full') {
       const budget = this.#d.memoryBudget?.();
       const plan = memory && budget !== undefined ? planBooks(memory.list(), language, budget) : undefined;
