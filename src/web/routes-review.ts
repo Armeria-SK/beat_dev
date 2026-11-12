@@ -19,7 +19,8 @@ function domainFailure(error: unknown): never {
 const TODAY_COUNTED = { engine_runs: 'started_at', tool_calls: 'created_at', memory_jobs: 'created_at' } as const;
 
 export function todayCount(app: App, table: keyof typeof TODAY_COUNTED, now = Date.now()): number {
-  const since = startOfDayIn(app.config().timezone, now);
+  let since: number;
+  try { since = startOfDayIn(app.config().timezone, now); } catch { since = startOfDayIn('UTC', now); }
   return Number((app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${TODAY_COUNTED[table]} >= ?`).get(since) as { n: number }).n);
 }
 

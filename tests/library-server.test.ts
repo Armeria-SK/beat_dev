@@ -224,6 +224,22 @@ test('1-5s Runs の件数: /api/runs・/api/tool-calls・/api/reviews の total 
   assert.equal((await api('/api/reviews')).body.total, 3);
 });
 
+test('1-5s Runs の件数: 設定のタイムゾーンが正しくない名前でも 500 にならず、UTC の 0 時から数える', async t => {
+  const { app } = await boot(t, { ...testConfig(), timezone: 'Not/AZone' });
+  const api = await serve(t, app);
+  const now = Date.now();
+  const start = startOfDayIn('UTC', now);
+  for (const [i, at] of [now, start, start - 1].entries()) {
+    app.db.prepare("INSERT INTO engine_runs (id, kind, started_at) VALUES (?, 'chat', ?)").run(`run-${i}`, at);
+    app.db.prepare("INSERT INTO tool_calls (id, run_id, tool, input, decision, decided_by, created_at) VALUES (?, 'r', 'file_read', '{}', 'allow', 'policy', ?)").run(`call-${i}`, at);
+    app.db.prepare("INSERT INTO memory_jobs (trigger, dedup_key, created_at) VALUES ('manual', ?, ?)").run(`job-${i}`, at);
+  }
+  for (const path of ['/api/runs', '/api/tool-calls', '/api/reviews']) {
+    const res = await api(path);
+    assert.deepEqual([path, res.status, res.body.total], [path, 200, 2]);
+  }
+});
+
 test('1-5s 今日の始まりは設定のタイムゾーンの 0 時（夏時間の切り替わりの日も）', () => {
   assert.equal(startOfDayIn('Asia/Tokyo', Date.UTC(2026, 10, 12, 5, 30, 12, 345)), Date.UTC(2026, 10, 11, 15, 0));
   assert.equal(startOfDayIn('Asia/Tokyo', Date.UTC(2026, 10, 11, 15, 0)), Date.UTC(2026, 10, 11, 15, 0));
