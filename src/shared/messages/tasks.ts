@@ -58,6 +58,7 @@ const en = {
   'review.no_reply': '(no reply)',
   'review.truncated': 'The review reply was cut off by the output limit, so its result was not used (it will be retried next time)',
   'review.local_skipped': 'This conversation used a local model and no local background model is available, so the review was skipped (it is never sent to an external model)',
+  'review.tidy_skipped': 'Memory tidy-up reviews are off for now, so this one was skipped',
 
   'notify.waiting_reminder': 'Waiting for your reply: {title}',
   'notify.budget.title': 'The hourly run limit was reached, so tasks are being held back for a while',

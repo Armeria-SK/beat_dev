@@ -384,7 +384,7 @@ export function createWebServer(app: App): WebServer {
         user: { used: app.memory.used('user'), items: items.filter(m => m.book === 'user') },
         notes: { used: app.memory.used('notes'), items: items.filter(m => m.book === 'notes') },
       },
-      context: { tokens: plan.tokens, budget: budget ?? null, omitted: plan.omitted.length },
+      context: app.botMemory ? { tokens: plan.tokens, budget: budget ?? null, omitted: plan.omitted.length } : null,
     });
   });
   router.add('POST', '/api/memories', async ({ req, res }) => {

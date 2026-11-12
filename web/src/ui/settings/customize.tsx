@@ -85,6 +85,7 @@ export function PersonaPanel({ onReplay }: { onReplay: () => void }) {
         </Row>
       </Group>
       <Group title={t('ui.set.persona.files')}>
+        <p className="bt-meta">{t('ui.set.persona.scope')}</p>
         {persona === null && <p className="bt-meta" role="status">{t('ui.set.loading')}</p>}
         {persona === 'failed' && <p className="bt-meta bt-del" role="alert">{t('ui.set.loadFailed')}</p>}
         {view && (

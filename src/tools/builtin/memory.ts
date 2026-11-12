@@ -8,6 +8,8 @@ import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
+export const MEMORY_TOOL_NAMES: readonly string[] = ['memory_save', 'memory_update', 'memory_forget', 'memory_search'];
+
 const BookArg = Type.Union([Type.Literal('user'), Type.Literal('notes')], { description: 'user: facts and preferences about the user / notes: Clive\'s own notes and lessons' });
 const IdArg = Type.Union([Type.Integer({ minimum: 1 }), Type.String({ pattern: '^[unUN]?[0-9]+$' })], { description: 'The memory ID (for [u7], "u7" or 7)' });
 

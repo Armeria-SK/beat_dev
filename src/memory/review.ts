@@ -103,8 +103,11 @@ export class ReviewJobs {
   }
 }
 
+const MEMORY_POLICY_LINES: ReadonlySet<number> = new Set([1, 2, 3, 4]);
+
 interface ReviewText {
   intro: (trigger: string) => string;
+  skillIntro: (trigger: string) => string;
   policyHeading: string;
   policy: readonly string[];
   skillAuto: string;
@@ -129,6 +132,7 @@ interface ReviewText {
 const REVIEW_TEXT: Record<Language, ReviewText> = {
   en: {
     intro: trigger => `[Review] Trigger: ${trigger}. Read the record below and tidy up your memory (this is not a conversation with the user; your reply is only saved to the record).`,
+    skillIntro: trigger => `[Review] Trigger: ${trigger}. Read the record below and look for procedures worth keeping as skills (this is not a conversation with the user; your reply is only saved to the record).`,
     policyHeading: '# Policy',
     policy: [
       '- Keep only "lessons and facts that will help next time". Do not keep a log of events',
@@ -220,17 +224,19 @@ export function reviewPrompt(input: {
   bookPressure?: string | undefined;
   language?: Language | undefined;
   skillsAutoRegister?: boolean | undefined;
+  memory?: boolean | undefined;
 }): string {
   const language = input.language ?? DEFAULT_LANGUAGE;
   const text = REVIEW_TEXT[language];
-  const policy = input.skillsAutoRegister ? text.policy.map(line => (line.includes('skill_draft') ? text.skillAuto : line)) : text.policy;
+  const kept = input.memory ? text.policy : text.policy.filter((_, i) => !MEMORY_POLICY_LINES.has(i));
+  const policy = input.skillsAutoRegister ? kept.map(line => (line.includes('skill_draft') ? text.skillAuto : line)) : kept;
   const parts = [
-    text.intro(TRIGGER_TEXT[language][input.trigger]),
+    (input.memory ? text.intro : text.skillIntro)(TRIGGER_TEXT[language][input.trigger]),
     '',
     text.policyHeading,
     ...(input.trigger === 'book_full' ? text.tidyPolicy : policy),
   ];
-  if (input.forgotten.length) {
+  if (input.memory && input.forgotten.length) {
     parts.push('', text.forgottenHeading, ...input.forgotten.map(f => `- ${clip(f, 200, language)}`));
   }
   if (input.bookPressure) parts.push('', `${text.pressureHeading}\n${input.bookPressure}`);

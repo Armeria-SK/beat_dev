@@ -51,15 +51,17 @@ const SNAPSHOT_HEADINGS: Record<Language, { soul: string; user: string }> = {
   en: { soul: '# Who you are (SOUL.md)', user: '# About the user (USER.md)' },
 };
 
-export function buildSnapshot(paths: AppPaths, extra: { memories?: string; skills?: string } = {}, language: Language = DEFAULT_LANGUAGE): Snapshot {
+export function buildSnapshot(paths: AppPaths, extra: { memories?: string; skills?: string; persona?: boolean; instructions?: string | undefined } = {}, language: Language = DEFAULT_LANGUAGE): Snapshot {
   const rules = readTemplate(paths, 'rules');
-  const soul = readIfExists(join(paths.workspace, 'SOUL.md'));
-  const user = readIfExists(join(paths.workspace, 'USER.md'));
+  const persona = extra.persona !== false;
+  const soul = persona ? readIfExists(join(paths.workspace, 'SOUL.md')) : '';
+  const user = persona ? readIfExists(join(paths.workspace, 'USER.md')) : '';
   const headings = SNAPSHOT_HEADINGS[language];
   const sections = [
     rules,
     soul && `${headings.soul}\n\n${soul}`,
     user && `${headings.user}\n\n${user}`,
+    extra.instructions,
     extra.memories,
     extra.skills,
   ].filter(Boolean);
@@ -78,8 +80,9 @@ export function recordFileVersions(db: DatabaseSync, paths: AppPaths, now = Date
   }
 }
 
-const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string }> = {
+const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string; product: (name: string, root: string) => string }> = {
   en: {
+    product: (name, root) => `This conversation belongs to the product "${name}". Product folder: ${root} (relative paths start here).`,
     locale: 'en-US',
     format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
@@ -89,8 +92,8 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
 };
 
 // 毎回組み立てる system の部分（固定の system は変えない）。計画モード（plan）のときだけ、計画の指示を足す
-export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal'): string {
+export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal', product?: { name: string; root: string }): string {
   const text = DYNAMIC[language];
   const formatted = new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now);
-  return [text.time(formatted, timezone), text.reply, ...(mode === 'plan' ? [text.plan] : [])].join('\n');
+  return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), text.reply, ...(mode === 'plan' ? [text.plan] : [])].join('\n');
 }

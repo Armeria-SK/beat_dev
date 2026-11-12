@@ -121,7 +121,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   const clock = { now: Date.parse('2026-11-05T01:00:00Z') };
   const adapters = new Map<string, FakeAdapter>();
   const app = new App({
-    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false,
+    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, botMemory: true,
     adapterOverride: p => { const a = new FakeAdapter(p); adapters.set(p.id, a); return a; },
   });
   await app.status.probeAll(app.config());
@@ -260,7 +260,7 @@ test('起動したばかりで確認の結果がまだ無くても、大きな�
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   const databasePath = join(dir, 'cold.db');
-  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, botMemory: true, adapterOverride: p => new FakeAdapter(p) });
   const first = open();
   for (let i = 0; i < 20; i++) first.memory.save({ book: i % 2 ? 'notes' : 'user', content: `${String(i).padStart(2, '0')}${'あ'.repeat(598)}`, actor: 'user' });
   first.close();
@@ -478,7 +478,7 @@ test('整理の振り返りの依頼文: 消さずに案を書く方針になる
   assert.match(tidy, /in your final reply, one per line/u);
   assert.doesNotMatch(tidy, /drop the one you no longer need with memory_forget/u, '消す指示は残さない');
   assert.doesNotMatch(tidy, /memory_save \(book=user\)/u, '新しく覚える指示も残さない');
-  const other = reviewPrompt({ trigger: 'idle', forgotten: [] });
+  const other = reviewPrompt({ trigger: 'idle', forgotten: [], memory: true });
   assert.match(other, /drop the one you no longer need with memory_forget/u);
   const en = reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x', language: 'en' });
   assert.match(en, /memory_forget is not available/u);

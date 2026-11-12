@@ -29,7 +29,7 @@ test('認証: Host・Origin・Sec-Fetch-Site・Tailscale を確かめる', () =>
   assert.throws(() => new WebAuth(['http://192.168.1.2:4777']), /https/);
 });
 
-async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, models?: ModelConfig[]) {
+async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, models?: ModelConfig[], botMemory = false) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -39,7 +39,7 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const app = new App({
-    paths, databasePath: ':memory:', log: () => undefined,
+    paths, databasePath: ':memory:', log: () => undefined, botMemory,
     adapterOverride: provider => (adapter = new FakeAdapter(provider)),
   });
   await app.status.probeAll(app.config());
@@ -135,7 +135,7 @@ test('API: 設定の検証エラーは 400 で場所を返し、API キーの値
 });
 
 test('API: 記憶の追加・編集・削除・取り消しと、過去の会話の検索', async t => {
-  const s = await startApp(t);
+  const s = await startApp(t, undefined, true);
   const added = await s.api('/api/memories', { method: 'POST', body: JSON.stringify({ book: 'user', content: '朝はコーヒー' }) });
   assert.equal(added.status, 201);
   const { memory } = await added.json() as any;

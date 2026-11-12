@@ -228,7 +228,7 @@ test('maxTools で渡すツールを絞れる', async t => {
   const s = await setup(t, { maxTools: 2 });
   s.adapter().scripts.push(reply('ok'));
   await (await s.send('やあ')).done;
-  assert.deepEqual(s.adapter().calls[0]!.tools.map(t => t.name), ['memory_save', 'history_search'], '記憶と履歴の検索を先に残す');
+  assert.deepEqual(s.adapter().calls[0]!.tools.map(t => t.name), ['history_search', 'web_search'], '履歴の検索を先に残す（記憶の道具は渡さない）');
 });
 
 test('引数の形が3回続けて正しくなければ止める', async t => {
