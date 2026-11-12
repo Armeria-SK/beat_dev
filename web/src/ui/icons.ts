@@ -2,6 +2,8 @@ import type { IconName } from '../icon-name.ts';
 
 export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code' | 'branch' | 'more' | 'image' | 'slash' | 'hook' | 'window' | 'plug' | 'server' | 'palette' | 'person';
 
+export const pillGlyph = (tone: string | undefined): 'check' | 'x' | null => (tone === 'ok' ? 'check' : tone === 'danger' ? 'x' : null);
+
 export const GLYPHS: Partial<Record<UiIconName, string>> = {
   branch: '<circle cx="4.5" cy="4" r="1.5"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="11.5" cy="8" r="1.5"/><path d="M4.5 5.5v5M4.5 8H10"/>',
   more: '<circle cx="3.5" cy="8" r=".75"/><circle cx="8" cy="8" r=".75"/><circle cx="12.5" cy="8" r=".75"/>',

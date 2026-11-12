@@ -73,6 +73,7 @@
 .ui-pop__item:disabled b { color: var(--ink-mute); }
 .ui-chip { border: 0; cursor: pointer; }
 .ui-chip:hover { color: var(--ink); }
+.bt-icon.ui-pill__glyph { width: 12px; height: 12px; }
 .ui-toasts { position: fixed; right: var(--space-5); bottom: max(var(--space-5), calc(var(--ui-toast-lift, 0px) + var(--space-2))); z-index: 50; pointer-events: none; }
 .ui-toasts .bt-toast { pointer-events: auto; }
 .ui-toasts .bt-toast .bt-btn { flex: none; align-self: center; }

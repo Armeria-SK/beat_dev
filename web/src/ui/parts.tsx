@@ -1,7 +1,7 @@
-import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
 import { useT } from '../i18n/index.ts';
 import type { AgentState } from './agent-state.ts';
-import { GLYPHS, type UiIconName } from './icons.ts';
+import { GLYPHS, pillGlyph, type UiIconName } from './icons.ts';
 
 export function Icon({ name, className }: { name: UiIconName; className?: string }) {
   const glyph = GLYPHS[name];
@@ -21,14 +21,23 @@ export function Button({ variant, small, icon, children, className, type = 'butt
 export type PillTone = 'running' | 'waiting' | 'ok' | 'warn' | 'danger';
 
 export function Pill({ tone, children }: { tone?: PillTone; children: ReactNode }) {
-  return <span className={`bt-pill${tone ? ` bt-pill--${tone}` : ''}`}><span className="bt-pill__dot" />{children}</span>;
+  const glyph = pillGlyph(tone);
+  return <span className={`bt-pill${tone ? ` bt-pill--${tone}` : ''}`}>{glyph ? <Icon name={glyph} className="ui-pill__glyph" /> : <span className="bt-pill__dot" />}{children}</span>;
 }
 
 export const countText = (n: number): string => (n > 99 ? '99+' : String(n));
 
 export function CountBadge({ n, quiet, label }: { n: number; quiet?: boolean; label?: string }) {
+  const shown = useRef(n);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (shown.current === n) return;
+    const from = shown.current;
+    shown.current = n;
+    if (from > 0 && n > 0) setTick(k => k + 1);
+  }, [n]);
   if (n <= 0) return null;
-  return <span className={`bt-count${quiet ? ' bt-count--quiet' : ''}`} aria-label={label}><span className="bt-count__n">{countText(n)}</span></span>;
+  return <span className={`bt-count${quiet ? ' bt-count--quiet' : ''}${tick > 0 ? ' is-ticking' : ''}`} aria-label={label}><span key={tick} className="bt-count__n">{countText(n)}</span></span>;
 }
 
 const AVATAR_LABEL = { idle: 'ui.avatar.idle', working: 'ui.avatar.working', waiting: 'ui.avatar.waiting' } as const;
