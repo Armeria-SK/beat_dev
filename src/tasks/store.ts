@@ -232,7 +232,7 @@ export class TaskStore {
     const tainted = this.#db.prepare(`SELECT 1 FROM task_events e LEFT JOIN engine_runs r ON r.id = e.run_id LEFT JOIN conversations c ON c.id = r.conversation_id
       WHERE e.task_id IN (?, ?) AND e.run_id IS NOT NULL AND e.kind IN ('context', 'note', 'edited') AND (r.id IS NULL OR r.tainted = 1 OR c.ever_tainted = 1) LIMIT 1`).get(task.id, task.parent_id ?? task.id);
     if (tainted) return '';
-    return [task.title, task.body, task.done_criteria].filter(Boolean).join('\n');
+    return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
   }
 
   event(taskId: string, kind: string, actor: string, content?: string | null, runId?: string): void {
