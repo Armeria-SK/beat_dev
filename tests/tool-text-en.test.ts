@@ -63,18 +63,18 @@ test('ツールの結果と承認の文: 英語で書く', async t => {
   assert.equal(await out('file_read', { path: 'missing.txt' }), 'The file does not exist: missing.txt');
   assert.equal(await out('file_list', { path: 'nodir' }), 'The folder does not exist: nodir');
 
-  assert.equal(await out('file_write', { path: 'a.md', content: 'one\ntwo\nthree' }), 'Created: a.md (13 characters)');
+  assert.equal(await out('file_write', { path: 'a.md', content: 'one\ntwo\nthree' }), 'Created: a.md (13 characters; +3 -0 lines)');
   assert.equal(await out('file_write', { path: 'a.md', content: 'x', mode: 'create' }), 'It already exists: a.md');
   assert.equal(await out('file_read', { path: 'a.md', limit: 1 }), 'one\n\n[Lines 1 to 1 of 3. Read on with offset=2]');
   assert.equal(await out('file_edit', { path: 'a.md', old: 'zzz', new: 'y' }), 'The text to replace was not found. Check the current content with file_read');
   assert.equal(await out('file_edit', { path: 'a.md', old: 'o', new: 'y' }), 'The text to replace appears in 2 places. Narrow it to one place with the surrounding text, or set all=true');
   assert.equal(await out('file_edit', { path: 'a.md', old: 'three', new: '3' }), 'Replaced 1 occurrence(s): a.md');
-  assert.equal(await out('file_write', { path: 'a.md', content: 'new', mode: 'append' }), 'Appended: a.md (12 characters)');
-  assert.equal(await out('file_write', { path: 'a.md', content: 'new' }), 'Overwritten: a.md (3 characters)');
+  assert.equal(await out('file_write', { path: 'a.md', content: 'new', mode: 'append' }), 'Appended: a.md (12 characters; +1 -1 lines)');
+  assert.equal(await out('file_write', { path: 'a.md', content: 'new' }), 'Overwritten: a.md (3 characters; +1 -3 lines)');
   assert.equal(await out('file_list', {}), `${s.ctx.workspace}/\na.md`);
   mkdirSync(join(s.paths.workspace, 'empty'));
   assert.equal(await out('file_list', { path: 'empty' }), 'empty/ is empty');
-  assert.equal(await out('file_write', { path: 'big.txt', content: 'a'.repeat(20_000) }), 'Created: big.txt (20,000 characters)');
+  assert.equal(await out('file_write', { path: 'big.txt', content: 'a'.repeat(20_000) }), 'Created: big.txt (20,000 characters; +1 -0 lines)');
   assert.equal((await out('file_read', { path: 'big.txt' })).slice(16_000), '\n\n[The output was long, so only 16,000 of 20,000 characters were returned. The rest is not shown]');
 
   const outside = await out('file_read', { path: '../outside.txt' });
@@ -381,4 +381,12 @@ test('Web の道具: 結果・失敗・事前の確認の文は英語で書く',
   assert.deepEqual(off.reasons, ['web_fetch is turned off in the settings (tools.web.fetch)']);
   const badUrl = await webFetch.preCheck!({ url: 'ftp://good.example.com/' }, ctx);
   assert.deepEqual(badUrl.reasons, ['Only public http / https pages (standard ports) can be read. Local and LAN destinations are not read']);
+});
+
+test('file_write: 4MB を超える既存のファイルの上書きは、前の中身を読まず行数を付けない（足し引きの行数は画面の ToolRow の +n −n。1-2s）', async t => {
+  const s = setup(t);
+  const out = async (name: string, args: unknown) => (await s.call(name, args)).output.content;
+  writeFileSync(join(s.paths.workspace, 'huge.txt'), 'x\n'.repeat(2 * 1024 * 1024 + 1));
+  assert.equal(await out('file_write', { path: 'huge.txt', content: 'small' }), 'Overwritten: huge.txt (5 characters)');
+  assert.equal(await out('file_write', { path: 'huge.txt', content: 'a\nb\n' }), 'Overwritten: huge.txt (4 characters; +2 -1 lines)');
 });

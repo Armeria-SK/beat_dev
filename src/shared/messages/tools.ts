@@ -55,6 +55,7 @@ const en = {
   'file.wrote.overwrite': 'Overwritten',
   'file.wrote.create': 'Created',
   'file.wrote': '{verb}: {path} ({chars} characters)',
+  'file.wrote_lines': '{verb}: {path} ({chars} characters; +{added} -{removed} lines)',
   'file.no_match': 'The text to replace was not found. Check the current content with file_read',
   'file.many_matches': 'The text to replace appears in {count} places. Narrow it to one place with the surrounding text, or set all=true',
   'file.replaced': 'Replaced {count} occurrence(s): {path}',
