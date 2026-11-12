@@ -25,8 +25,9 @@ import { ApprovalBroker, approvalPublic, approvalShownIn } from './tools/approva
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { shellRun } from './tools/builtin/shell.ts';
-import { planRead, planWrite } from './tools/builtin/plan.ts';
+import { planWrite } from './tools/builtin/plan.ts';
 import { acceptanceWrite } from './tools/builtin/acceptance.ts';
+import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
 import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
 import { sdkConnect } from './mcp/connect.ts';
 import { McpManager, type McpConnect } from './mcp/manager.ts';
@@ -56,6 +57,7 @@ import { askBeforeRegister, SkillStore } from './tools/skills/store.ts';
 import { TaskStore, taskView } from './tasks/store.ts';
 import { ProjectStore } from './projects/store.ts';
 import { PlanStore } from './projects/plan.ts';
+import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
@@ -69,7 +71,7 @@ export function builtinTools(): ToolDef[] {
   return [
     taskComplete, taskCheckpoint, askUser,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun,
-    planWrite, planRead, acceptanceWrite,
+    planWrite, acceptanceWrite, meshSearch, meshRead, meshStateSet,
     taskCreate, taskList, taskUpdate,
     memoryUpdate, memoryForget, memorySearch, historyRead,
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
@@ -126,6 +128,7 @@ export class App {
   readonly projects: ProjectStore;
   readonly plans: PlanStore;
   readonly acceptance: AcceptanceStore;
+  readonly mesh: Mesh;
   readonly projectFolderExempt: readonly string[];
   readonly botMemory: boolean;
   readonly notifications: Notifications;
@@ -193,6 +196,7 @@ export class App {
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.acceptance = new AcceptanceStore(this.db, this.paths.projects, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.acceptance.repairAll(this.log);
+    this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log);
     this.reviews = new ReviewJobs(this.db, now);
@@ -214,7 +218,7 @@ export class App {
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
-      curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, log: this.log,
+      curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
