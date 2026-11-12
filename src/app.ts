@@ -220,7 +220,8 @@ export class App {
     };
     this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
     this.tasks.onDeleted = removed => {
-      this.log(`[INFO] Deleted task "${removed.title.replace(/[\u0000-\u001f\u007f]+/gu, ' ')}" (${removed.id})`);
+      const title = removed.title.replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
+      this.log(`[INFO] Deleted task "${title}" (${removed.id})`);
       this.bus.publish({ type: 'task.deleted', id: removed.id });
     };
     this.notifications.listen(event => {

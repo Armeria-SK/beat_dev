@@ -153,6 +153,15 @@ test('DELETE: ひな形と経過と kv が消え、過去の実行は parent_id 
   assert.equal(s.count('tasks'), before.tasks - 1);
 });
 
+test('DELETE: 消したことのログの行は、題の制御文字・行の区切り・向きを変える文字を空白にし、" と \\ を逃がす（行を偽れない）', async t => {
+  const s = await taskApp(t);
+  const hidden = [0x85, 0x2028, 0x2029, 0x202e, 0x2066, 0x200f, 0x61c].map(code => String.fromCodePoint(code));
+  const title = `a${hidden.join('x')}h\r\ni" (fake-id)\\`;
+  const task = s.userTask(title, { cron: '0 9 * * *', timezone: 'UTC' });
+  assert.equal((await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE')).status, 200);
+  assert.deepEqual(s.logs.filter(line => line.includes('Deleted task')), [`[INFO] Deleted task "a x x x x x x h i\\" (fake-id)\\\\" (${task.id})`]);
+});
+
 test('DELETE: 動いている回があるひな形は 409（run_open）。回が終われば消せる。止めたひな形も消せる', async t => {
   const s = await taskApp(t);
   const template = s.userTask('Busy', { cron: '0 9 * * *', timezone: 'UTC' });
