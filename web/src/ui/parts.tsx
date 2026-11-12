@@ -33,11 +33,11 @@ export function CountBadge({ n, quiet, label }: { n: number; quiet?: boolean; la
 
 const AVATAR_LABEL = { idle: 'ui.avatar.idle', working: 'ui.avatar.working', waiting: 'ui.avatar.waiting' } as const;
 
-export function Avatar({ state, size }: { state: AgentState; size?: 'sm' | 'lg' }) {
+export function Avatar({ state, size, color }: { state: AgentState; size?: 'sm' | 'lg'; color?: string | undefined }) {
   const t = useT();
   const classes = ['bt-avatar', size && `bt-avatar--${size}`, state !== 'idle' && `bt-avatar--${state}`].filter(Boolean).join(' ');
   return (
-    <span className={classes} role="img" aria-label={t(AVATAR_LABEL[state])}>
+    <span className={classes} role="img" aria-label={t(AVATAR_LABEL[state])} style={state === 'idle' && color ? { color } : undefined}>
       <span className="bt-avatar__ring" /><span className="bt-avatar__orbit" /><span className="bt-avatar__body" />
     </span>
   );

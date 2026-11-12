@@ -15,6 +15,7 @@ export interface SidebarProps {
   unread: number;
   conversations: Conversation[];
   running: ReadonlySet<string>;
+  color?: string | undefined;
 }
 
 function SideLink({ href, icon, name, active, count, countLabel }: {
@@ -67,7 +68,7 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running }: SidebarProps) {
+export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running, color }: SidebarProps) {
   const t = useT();
   const [searching, setSearching] = useState(false);
   const searchButton = useRef<HTMLButtonElement>(null);
@@ -78,7 +79,7 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
     <nav className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
       <div className="bt-sidebar__head">
         <a className="bt-wordmark" href="#/">{t('ui.wordmark')}</a>
-        <Avatar state={state} size="sm" />
+        <Avatar state={state} size="sm" color={color} />
       </div>
       <div className="bt-mode" role="radiogroup" aria-label={t('ui.mode')} data-mode="dev">
         <button className="bt-mode__opt" type="button" role="radio" aria-checked="true" tabIndex={0}><Icon name="code" />{t('ui.mode.dev')}</button>

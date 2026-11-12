@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type Approval, type Conversation as ConversationRow, type WorkerStatus } from '../api.ts';
+import { api, type Approval, type Conversation as ConversationRow, type Profile, type WorkerStatus } from '../api.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
@@ -7,7 +7,8 @@ import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './a
 import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
-import { Icon } from './parts.tsx';
+import { Onboarding } from './Onboarding.tsx';
+import { canEscape, ONBOARD_ESC_A, ONBOARD_ESC_B } from './onboarding-steps.ts';
 import { pickFocus } from './focus.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
@@ -19,9 +20,11 @@ import { Runs } from './screens/Runs.tsx';
 import { Schedule } from './screens/Schedule.tsx';
 import { Skills } from './screens/Skills.tsx';
 import { TaskScreen } from './screens/Task.tsx';
+import { Settings } from './settings/Settings.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
+import { variant } from './variants.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_APPROVALS: Approval[] = [];
@@ -73,25 +76,6 @@ function focusFirst(...candidates: Array<Element | null>): void {
   });
 }
 
-function SettingsShell({ onClose }: { onClose: () => void }) {
-  const t = useT();
-  const close = useRef<HTMLButtonElement>(null);
-  useEffect(() => { close.current?.focus(); }, []);
-  return (
-    <div className="ui-overlay">
-      <div className="bt-scrim" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-        <section className="bt-modal" role="dialog" aria-modal="true" aria-labelledby="ui-settings-title">
-          <header className="bt-modal__bar">
-            <h2 className="bt-modal__title" id="ui-settings-title">{t('ui.nav.settings')}</h2>
-            <button ref={close} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.close')} onClick={onClose}><Icon name="x" /></button>
-          </header>
-          <div className="bt-modal__main"><p className="bt-meta">{t('ui.later')}</p></div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
 export function App() {
   const t = useT();
   const [route, setRoute] = useState<Route>(readRoute);
@@ -104,6 +88,10 @@ export function App() {
   drawerRef.current = drawer;
   const menuButton = useRef<HTMLButtonElement | null>(null);
   const settingsOpener = useRef<Element | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
+  const onboardRef = useRef(onboard);
+  onboardRef.current = onboard;
 
   const behind = routeBehind(route, behindRef.current);
   if (route.view !== 'settings') behindRef.current = route;
@@ -123,6 +111,7 @@ export function App() {
     drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
     unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
     worker: () => { void api.worker().then(setWorker).catch(() => undefined); },
+    profile: () => { void api.profile().then(setProfile).catch(() => undefined); },
   }), [dispatch]);
 
   runRef.current = (effects: Effect[]) => {
@@ -185,7 +174,8 @@ export function App() {
     return () => query.removeEventListener('change', onChange);
   }, []);
 
-  useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker'] as const) load[what](); }, [load]);
+  useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker', 'profile'] as const) load[what](); }, [load]);
+  useEffect(() => { void api.onboarding().then(state => { if (!state.done) setOnboard(old => old ?? 'first'); }).catch(() => undefined); }, []);
   useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
   useEffect(() => { void loadServerSettings(api.settings); }, []);
 
@@ -227,15 +217,31 @@ export function App() {
   const setUnread = useCallback((count: number) => dispatch({ type: 'unread', count }), [dispatch]);
   const setDrafts = useCallback((count: number) => dispatch({ type: 'skillDrafts', count }), [dispatch]);
 
+  const escRule = import.meta.env.DEV && variant('onboarding') === 'b' ? ONBOARD_ESC_B : ONBOARD_ESC_A;
+  const closeOnboard = useCallback(() => {
+    setOnboard(null);
+    focusFirst(document.querySelector('[data-settings-button]'), menuButton.current);
+  }, []);
+  const replay = useCallback(() => {
+    setOnboard('replay');
+    closeSettings();
+  }, [closeSettings]);
+  const finishOnboard = useCallback(() => {
+    setOnboard(null);
+    load.profile();
+    location.hash = '#/';
+  }, [load]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (onboard) { e.preventDefault(); if (canEscape(escRule, onboard === 'replay')) closeOnboard(); return; }
       if (settingsOpen) { e.preventDefault(); closeSettings(); return; }
       if (drawer) { e.preventDefault(); closeDrawer(); }
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  }, [settingsOpen, drawer, closeSettings, closeDrawer]);
+  }, [onboard, escRule, closeOnboard, settingsOpen, drawer, closeSettings, closeDrawer]);
 
   useEffect(() => {
     if (drawer) focusFirst(document.querySelector('.bt-sidebar .bt-wordmark'));
@@ -247,13 +253,14 @@ export function App() {
   const kanban = kanbanCount(waiting);
   const convo = isConversation(behind);
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);
-  const covered = drawer || settingsOpen;
+  const covered = drawer || settingsOpen || onboard !== null;
+  const shut = settingsOpen || onboard !== null;
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
       <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} />
-      <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined} inert={settingsOpen}>
-        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} />
+      <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined} inert={shut}>
+        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} color={profile?.color} />
         {convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>
             <Conversation
@@ -296,9 +303,12 @@ export function App() {
           </main>
         )}
       </div>
-      {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={settingsOpen} />}
+      {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={shut} />}
       <TabBar route={behind} kanban={kanban} covered={covered} />
-      {settingsOpen && <SettingsShell onClose={closeSettings} />}
+      {settingsOpen && onboard === null && (
+        <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
+      )}
+      {onboard !== null && <Onboarding profile={profile} replay={onboard === 'replay'} onProfile={load.profile} onDone={finishOnboard} />}
       <Toasts />
     </div>
   );

@@ -1,6 +1,6 @@
 import type { IconName } from '../icon-name.ts';
 
-export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code' | 'branch' | 'more' | 'image' | 'slash';
+export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code' | 'branch' | 'more' | 'image' | 'slash' | 'hook' | 'window' | 'plug' | 'server' | 'palette' | 'person';
 
 export const GLYPHS: Partial<Record<UiIconName, string>> = {
   branch: '<circle cx="4.5" cy="4" r="1.5"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="11.5" cy="8" r="1.5"/><path d="M4.5 5.5v5M4.5 8H10"/>',
@@ -41,4 +41,10 @@ export const GLYPHS: Partial<Record<UiIconName, string>> = {
   undo: '<path d="M5 3L2.5 5.5 5 8M2.5 5.5h7a3.5 3.5 0 010 7H6"/>',
   refresh: '<path d="M12.5 8a4.5 4.5 0 11-1.6-3.4M12.5 3v2.5H10"/>',
   cpu: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 2v2M9.5 2v2M6.5 12v2M9.5 12v2M2 6.5h2M2 9.5h2M12 6.5h2M12 9.5h2"/>',
+  hook: '<path d="M5.5 4v4.5a3 3 0 006 0V7.5"/><circle cx="5.5" cy="3" r="1"/>',
+  window: '<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><path d="M2.5 6.5h11"/>',
+  plug: '<path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2a3.5 3.5 0 01-7 0zM8 11v2.5"/>',
+  server: '<rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><path d="M5 5h.2M5 11h.2"/>',
+  palette: '<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11M8 5.5h4.8M8 8h5.5M8 10.5h4.8"/>',
+  person: '<circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5a5 5 0 0110 0"/>',
 };
