@@ -53,7 +53,7 @@ function Detail({ row, t }: { row: LogRow; t: T }) {
   const job = row.job!;
   return (
     <div className="ui-lib__more">
-      {job.note && <span>{job.note}</span>}
+      {job.note && <span>{maskTarget(job.note)}</span>}
       {job.changes.length === 0 ? <span>{t('ui.runs.noChanges')}</span> : (
         <ul className="ui-lib__changes">
           {job.changes.map(change => <li key={change.id}>{changeLabel(change.action)} · {change.after ?? change.before}{change.undone_at ? ` · ${t('ui.memory.undone')}` : ''}</li>)}

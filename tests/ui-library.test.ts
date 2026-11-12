@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { MemoryEvent, ReviewJob, RunRow, SkillVersion, ToolCallRow } from '../web/src/api.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
-  archivedLine, durationText, filterLog, jobResult, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, runResult, skillHistory,
-  tokensText, toolChoice, toolCounts, toolDecision,
+  archivedLine, archivedNothing, durationText, filterLog, jobResult, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, runResult, skillHistory,
+  tokensText, toolChoice, toolCounts, toolDecision, undoDeletes,
 } from '../web/src/ui/library.ts';
+import { maskTarget } from '../web/src/ui/tool-row.ts';
 
 // 新しい画面の Library（steps/p1-ui.md の「画面」の Memory・Skills・Runs・Archived と PR 1-5a）の決まり。画面を持たない純粋な関数（web/src/ui/library.ts）。
 
@@ -150,4 +153,31 @@ test('ui/library: しまった会話の行は、メッセージ数としまっ�
   assert.deepEqual(archivedLine({ message_count: 48, archived_at: 123 }), { messages: 48, archivedAt: 123 });
   assert.deepEqual(archivedLine({ message_count: 3, archived_at: null }), { messages: 3, archivedAt: null });
   assert.deepEqual(archivedLine({}), { messages: null, archivedAt: null });
+});
+
+test('ui/library: しまった会話が 1 つも無いときは "Nothing archived" の 1 行だけ。探して見つからないだけのとき・打っている途中は検索の欄を残す', () => {
+  assert.equal(archivedNothing([], '', ''), true);
+  assert.equal(archivedNothing(null, '', ''), false, 'まだ読めていない');
+  assert.equal(archivedNothing([{}], '', ''), false);
+  assert.equal(archivedNothing([], 'zz', 'zz'), false, '探して見つからない');
+  assert.equal(archivedNothing([], 'zz', ''), false, '欄を空にした直後（まだ前の検索の結果）は欄を消さない');
+  assert.equal(archivedNothing([], '', 'z'), false, '打ち始めた');
+});
+
+test('ui/library: 記憶の History のいちばん新しい行が「作成」のときの Undo は記憶を消すので、Delete と同じ確かめを通す', () => {
+  const [created] = memoryHistory([event(1, 'create', { after: 'a' })], 'a');
+  assert.equal(created!.action, 'undo');
+  assert.equal(undoDeletes(created!), true);
+  const [edited, first] = memoryHistory([event(2, 'update', { after: 'b' }), event(1, 'create', { after: 'a' })], 'b');
+  assert.equal(undoDeletes(edited!), false, '書き換えの Undo は前の中身へ戻すだけ');
+  assert.equal(undoDeletes(first!), false, '古い行の Restore は消さない');
+});
+
+test('ui/library: Runs の振り返りの行は、What の列でも秘密を伏せる（詳細も同じ関数を通す）', () => {
+  const job = { id: 1, status: 'done', triggerLabel: 'After a session', note: 'saw https://user:hunter2secret@example.com/x', created_at: 1, finished_at: 2, run_id: null, changes: [] } as unknown as ReviewJob;
+  const [row] = logRows({ runs: [], calls: [], jobs: [job], runLabel: k => k, titleOf: () => null });
+  assert.equal(row!.what.includes('hunter2secret'), false);
+  assert.equal(maskTarget(job.note!).includes('hunter2secret'), false);
+  const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'screens', 'Runs.tsx'), 'utf8');
+  assert.equal(source.includes('{job.note}'), false, '詳細に生の note を出さない');
 });

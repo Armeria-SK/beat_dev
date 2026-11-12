@@ -314,7 +314,7 @@ export function App() {
             ) : behind.view === 'memory' ? (
               <Memory revision={live.libraryRevision + live.epoch} />
             ) : behind.view === 'skills' ? (
-              <Skills target={behind.target} revision={live.libraryRevision + live.epoch + skillDrafts} running={working} onDrafts={setDrafts} />
+              <Skills target={behind.target} revision={`${live.libraryRevision}:${live.epoch}:${skillDrafts}`} running={working} onDrafts={setDrafts} />
             ) : behind.view === 'runs' ? (
               <Runs tab={behind.tab} revision={live.libraryRevision + live.epoch + live.taskRevision} conversations={conversations} />
             ) : behind.view === 'archived' ? (
