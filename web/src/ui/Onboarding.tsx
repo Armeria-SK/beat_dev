@@ -33,11 +33,11 @@ function existingProvider(config: Json, choice: ProviderChoice): Json | undefine
   return undefined;
 }
 
-export interface OnboardingProps { profile: Profile | null; replay: boolean; onProfile: () => void; onDone: () => void }
+export interface OnboardingProps { profile: Profile | null; replay: boolean; start: number; onProfile: () => void; onDone: () => void; onSkip: () => void }
 
-export function Onboarding({ profile, replay, onProfile, onDone }: OnboardingProps) {
+export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }: OnboardingProps) {
   const t = useT();
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(start);
   const step = ONBOARD_STEPS[index]!;
   const [name, setName] = useState('');
   const [agent, setAgent] = useState(profile?.name ?? 'beat');
@@ -226,9 +226,10 @@ export function Onboarding({ profile, replay, onProfile, onDone }: OnboardingPro
           <div className="ui-ob__nav">
             <Button variant="ghost" disabled={index === 0 || busy} onClick={() => { setError(null); setIndex(index - 1); }}>{t('ui.ob.back')}</Button>
             <span className="ui-ob__fill" />
+            {!replay && <Button variant="ghost" disabled={busy} onClick={onSkip}>{t('ui.ob.skip')}</Button>}
             <Button variant="primary" data-next disabled={!ready || busy} onClick={() => void next()}>{step === 'hello' ? t('ui.ob.start') : t('ui.ob.continue')}</Button>
           </div>
-          {replay && <p className="bt-meta ui-ob__meta">{t('ui.ob.replayNote')}</p>}
+          <p className="bt-meta ui-ob__meta">{t(replay ? 'ui.ob.replayNote' : 'ui.ob.skipNote')}</p>
         </div>
       </main>
     </div>

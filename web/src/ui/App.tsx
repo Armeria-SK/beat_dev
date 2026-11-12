@@ -8,7 +8,8 @@ import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
-import { canEscape, ONBOARD_ESC_A, ONBOARD_ESC_B } from './onboarding-steps.ts';
+import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
+import { opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
 import { pickFocus } from './focus.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
@@ -24,7 +25,6 @@ import { Settings } from './settings/Settings.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
-import { variant } from './variants.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_APPROVALS: Approval[] = [];
@@ -90,6 +90,7 @@ export function App() {
   const settingsOpener = useRef<Element | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
+  const [setup, setSetup] = useState<OnboardingState | null>(null);
   const onboardRef = useRef(onboard);
   onboardRef.current = onboard;
 
@@ -175,7 +176,8 @@ export function App() {
   }, []);
 
   useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker', 'profile'] as const) load[what](); }, [load]);
-  useEffect(() => { void api.onboarding().then(state => { if (!state.done) setOnboard(old => old ?? 'first'); }).catch(() => undefined); }, []);
+  const loadSetup = useCallback(() => api.onboarding().then(state => { setSetup(state); return state; }), []);
+  useEffect(() => { void loadSetup().then(state => { if (opensOnLoad(state.done, wasSetupShown())) setOnboard(old => old ?? 'first'); }).catch(() => undefined); }, [loadSetup]);
   useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
   useEffect(() => { void loadServerSettings(api.settings); }, []);
 
@@ -217,11 +219,13 @@ export function App() {
   const setUnread = useCallback((count: number) => dispatch({ type: 'unread', count }), [dispatch]);
   const setDrafts = useCallback((count: number) => dispatch({ type: 'skillDrafts', count }), [dispatch]);
 
-  const escRule = import.meta.env.DEV && variant('onboarding') === 'b' ? ONBOARD_ESC_B : ONBOARD_ESC_A;
   const closeOnboard = useCallback(() => {
+    markSetupShown();
     setOnboard(null);
+    void loadSetup().catch(() => undefined);
     focusFirst(document.querySelector('[data-settings-button]'), menuButton.current);
-  }, []);
+  }, [loadSetup]);
+  const resumeSetup = useCallback(() => { setDrawer(false); setOnboard('first'); }, []);
   const replay = useCallback(() => {
     setOnboard('replay');
     closeSettings();
@@ -229,19 +233,20 @@ export function App() {
   const finishOnboard = useCallback(() => {
     setOnboard(null);
     load.profile();
+    void loadSetup().catch(() => undefined);
     location.hash = '#/';
-  }, [load]);
+  }, [load, loadSetup]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
-      if (onboard) { e.preventDefault(); if (canEscape(escRule, onboard === 'replay')) closeOnboard(); return; }
+      if (onboard) { e.preventDefault(); closeOnboard(); return; }
       if (settingsOpen) { e.preventDefault(); closeSettings(); return; }
       if (drawer) { e.preventDefault(); closeDrawer(); }
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  }, [onboard, escRule, closeOnboard, settingsOpen, drawer, closeSettings, closeDrawer]);
+  }, [onboard, closeOnboard, settingsOpen, drawer, closeSettings, closeDrawer]);
 
   useEffect(() => {
     if (drawer) focusFirst(document.querySelector('.bt-sidebar .bt-wordmark'));
@@ -260,7 +265,7 @@ export function App() {
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
       <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} />
       <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined} inert={shut}>
-        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} color={profile?.color} />
+        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
         {convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>
             <Conversation
@@ -308,7 +313,7 @@ export function App() {
       {settingsOpen && onboard === null && (
         <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
       )}
-      {onboard !== null && <Onboarding profile={profile} replay={onboard === 'replay'} onProfile={load.profile} onDone={finishOnboard} />}
+      {onboard !== null && <Onboarding profile={profile} replay={onboard === 'replay'} start={onboard === 'first' && setup ? resumeIndex(setup.steps) : 0} onProfile={load.profile} onDone={finishOnboard} onSkip={closeOnboard} />}
       <Toasts />
     </div>
   );

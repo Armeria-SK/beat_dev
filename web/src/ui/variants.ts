@@ -1,4 +1,4 @@
-export const VARIANTS = ['toast', 'onboarding'] as const;
+export const VARIANTS = ['toast'] as const;
 export type VariantName = typeof VARIANTS[number];
 
 export function pickVariant(name: VariantName, search: string): 'a' | 'b' {

@@ -16,6 +16,8 @@ export interface SidebarProps {
   conversations: Conversation[];
   running: ReadonlySet<string>;
   color?: string | undefined;
+  setupPending: boolean;
+  onSetup: () => void;
 }
 
 function SideLink({ href, icon, name, active, count, countLabel }: {
@@ -68,7 +70,7 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running, color }: SidebarProps) {
+export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running, color, setupPending, onSetup }: SidebarProps) {
   const t = useT();
   const [searching, setSearching] = useState(false);
   const searchButton = useRef<HTMLButtonElement>(null);
@@ -86,6 +88,7 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
         <button className="bt-mode__opt" type="button" role="radio" aria-checked="false" aria-disabled="true" tabIndex={-1} title={t('ui.mode.botLater')}><Icon name="msg" />{t('ui.mode.bot')}</button>
       </div>
       <div className="bt-sidebar__scroll">
+        {setupPending && <button type="button" className="bt-side ui-side-setup" onClick={onSetup}><Icon name="person" /><span className="bt-side__name">{t('ui.ob.resume')}</span></button>}
         <span className="bt-label bt-sidebar__label">{t('ui.section.workspace')}</span>
         <SideLink href="#/overview" icon="grid" name={t('ui.nav.overview')} active={at('overview')} />
         <SideLink href="#/kanban" icon="columns" name={t('ui.nav.kanban')} active={at('kanban')} count={kanban} countLabel={t('ui.count.waiting', kanban)} />

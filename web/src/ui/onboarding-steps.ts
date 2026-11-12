@@ -1,5 +1,5 @@
 import type { PersonaWrite } from '../api.ts';
-import type { ModelForm } from '../onboarding.ts';
+import { resumeStep, STEPS, type ModelForm, type OnboardingSteps } from '../onboarding.ts';
 
 export const ONBOARD_STEPS = ['name', 'agent', 'style', 'model', 'hello'] as const;
 export type OnboardStep = typeof ONBOARD_STEPS[number];
@@ -60,8 +60,8 @@ export function modelFormOf(form: ConnectForm): ModelForm {
 
 export const REACHABLE = new Set(['ok', 'too_small', 'exceeds_model', 'unknown']);
 
-export interface OnboardEsc { anytime: boolean; tag: string }
-export const ONBOARD_ESC_A: OnboardEsc = { anytime: false, tag: 'a' };
-export const ONBOARD_ESC_B: OnboardEsc = { anytime: true, tag: 'onboarding-b-esc-anytime' };
+export const resumeIndex = (steps: OnboardingSteps): number => STEPS.indexOf(resumeStep(steps));
 
-export const canEscape = (rule: OnboardEsc, replay: boolean): boolean => rule.anytime || replay;
+export const opensOnLoad = (done: boolean, putOff: boolean): boolean => !done && !putOff;
+
+export const setupPending = (done: boolean | null, open: boolean): boolean => done === false && !open;
