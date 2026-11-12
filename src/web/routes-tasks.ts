@@ -122,7 +122,6 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const when = whenOf(body);
     const cron = cronOf(body);
     if (cron !== undefined && when !== undefined) throw problem(400, 'invalid_field', 'repeat_with_when', { field: 'repeat' });
-    const template = task.cron !== null && task.parent_id === null;
     const fields = {
       ...(title !== undefined ? { title } : {}), ...(text !== undefined ? { body: text } : {}),
       ...(nextAction !== undefined ? { nextAction } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}),
@@ -130,7 +129,6 @@ export function registerTaskRoutes(router: Router, app: App): void {
       ...(when !== undefined ? { runAt: when } : {}),
     };
     try {
-      if (when !== undefined && template) throw new TaskError('error.template_when');
       const updated = transaction(app.db, () => {
         let next = cron !== undefined ? app.tasks.setSchedule(task.id, cron, app.config().timezone, 'user') : task;
         if (cron === undefined || Object.keys(fields).length) {
@@ -212,13 +210,15 @@ export function registerTaskRoutes(router: Router, app: App): void {
   };
 
   const close = (status: 'cancelled' | 'done') => async ({ req, res, params }: { req: IncomingMessage; res: Parameters<typeof sendJson>[0]; params: string[] }) => {
-    const task = getTask(params[0]!);
     const reason = status === 'cancelled' ? await cancelReasonOf(req) : undefined;
+    const task = getTask(params[0]!);
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
-    const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
-    if (reason) app.tasks.event(task.id, 'reason', 'user', reason);
+    const updated = transaction(app.db, () => {
+      if (reason) app.tasks.event(task.id, 'reason', 'user', reason);
+      return app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
+    });
     app.worker.stopTask(task.id);
     app.kv.delete(splitKey(task.id));
     sendJson(res, 200, { task: view(updated) });

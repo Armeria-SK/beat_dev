@@ -238,6 +238,7 @@ export class TaskStore {
     return transaction(this.#db, () => {
       const task = this.get(id);
       if (!task) throw new TaskError('error.not_found', { id });
+      if (patch.runAt !== undefined && task.cron !== null && task.parent_id === null) throw new TaskError('error.template_when');
       const body = patch.appendNote ? `${task.body}${task.body ? '\n' : ''}- ${patch.appendNote}` : patch.body ?? task.body;
       this.#db.prepare(`UPDATE tasks SET title = ?, body = ?, next_action = ?, done_criteria = ?, priority = ?, run_at = ?, updated_at = ? WHERE id = ?`).run(
         patch.title?.trim() || task.title, body.slice(-20_000),
@@ -330,7 +331,7 @@ export class TaskStore {
   }
 
   #neverRan(task: Task): boolean {
-    return task.conversation_id === null && !this.#db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND run_id IS NOT NULL LIMIT 1').get(task.id);
+    return task.conversation_id === null && !this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND run_id IS NOT NULL AND kind <> 'context' LIMIT 1").get(task.id);
   }
 
   unapprove(id: string): Task {
@@ -365,6 +366,7 @@ export class TaskStore {
       const task = this.get(id);
       if (!task) throw new TaskError('error.not_found', { id });
       if (task.cron !== null && task.parent_id === null) {
+        if (task.conversation_id !== null) throw new TaskError('error.not_deletable');
         if (this.hasOpenRun(id)) throw new TaskError('error.run_open');
       } else if (!(task.status === 'ready' && task.parent_id === null && task.cron === null && task.run_at !== null && this.#neverRan(task))) {
         throw new TaskError('error.not_deletable');

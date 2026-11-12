@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { request } from 'node:http';
 import { test } from 'node:test';
+import { reply } from './helpers.ts';
 import { TASK_SOFT_REFERENCES, TaskError } from '../src/tasks/store.ts';
 import { splitKey, taskPrompt } from '../src/tasks/worker.ts';
 import { HOUR, MIN, taskApp, toolCall } from './helpers/task-app.ts';
@@ -265,6 +267,91 @@ test('DELETE は 1 つのトランザクション: 途中で失敗したら、�
   assert.ok(!s.events.some(e => e.type === 'task.deleted'));
 });
 
+test('DELETE: ひな形に会話が結び付いていたら 409', async t => {
+  const s = await taskApp(t);
+  const template = s.userTask('Summary', { cron: '0 9 * * *', timezone: 'UTC' });
+  s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(s.app.conversations.create({ kind: 'task', title: 'Summary' }).id, template.id);
+  const res = await s.api(`/api/tasks/${template.id}`, undefined, 'DELETE');
+  assert.equal(res.status, 409);
+  assert.equal(res.body.code, 'task.error.not_deletable');
+  assert.ok(s.app.tasks.get(template.id));
+});
+
+// ── モデルの道具（task_create / task_update）で作った・触ったタスク ──
+
+test('task_create の道具で作ったタスク（作ったときの context の行に会話の実行の印が付く）も、動いていなければ承認を戻せて、消せる', async t => {
+  const s = await taskApp(t, config => { config.worker.selfTasksNeedApproval = true; });
+  s.app.worker.setPaused(true);
+  s.adapter().scripts.push(toolCall('task_create', { title: 'Tidy the notes' }), reply('Proposed.'));
+  await s.chat('Anything to tidy?');
+  s.adapter().scripts.push(toolCall('task_create', { title: 'Call the dentist', when: '2026-11-06T09:00:00+09:00', requested_by_user: true }), reply('Noted.'));
+  await s.chat('Remind me to call the dentist');
+  const byTitle = (title: string) => (s.app.db.prepare('SELECT id FROM tasks WHERE title = ?').get(title) as { id: string }).id;
+  const proposal = s.app.tasks.get(byTitle('Tidy the notes'))!;
+  const timed = s.app.tasks.get(byTitle('Call the dentist'))!;
+  assert.deepEqual([proposal.status, timed.status, timed.run_at !== null, timed.conversation_id], ['inbox', 'ready', true, null]);
+  for (const task of [proposal, timed]) {
+    assert.equal(s.count('task_events', "task_id = ? AND kind = 'context' AND run_id IS NOT NULL", task.id), 1, '前提: 作ったときの行に実行の印がある');
+  }
+
+  assert.equal((await s.api(`/api/tasks/${proposal.id}/approve`, {})).body.task.status, 'ready');
+  const undone = await s.api(`/api/tasks/${proposal.id}/unapprove`, {});
+  assert.equal(undone.status, 200, JSON.stringify(undone.body));
+  assert.equal(undone.body.task.status, 'inbox');
+
+  const removed = await s.api(`/api/tasks/${timed.id}`, undefined, 'DELETE');
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal(s.app.tasks.get(timed.id), undefined);
+
+  // 動いたあとは、作ったときの行があっても今までどおり断る
+  assert.equal((await s.api(`/api/tasks/${proposal.id}/approve`, {})).body.task.status, 'ready');
+  s.app.tasks.event(proposal.id, 'run', 'worker', null, 'run-1');
+  assert.equal((await s.api(`/api/tasks/${proposal.id}/unapprove`, {})).body.code, 'task.error.already_started');
+});
+
+test('task_update の道具でも、ひな形の開始の時刻（when）は動かせない', async t => {
+  const s = await taskApp(t);
+  const template = s.userTask('Morning summary', { cron: '0 9 * * *', timezone: 'UTC' });
+  const before = snapshot(s);
+  s.adapter().scripts.push(toolCall('task_update', { id: template.id.slice(0, 8), when: '2026-12-01T09:00:00+09:00' }), reply('Could not move it.'));
+  await s.chat('Move the morning summary');
+  assert.equal(snapshot(s), before);
+  assert.equal(s.app.tasks.get(template.id)!.run_at, template.run_at);
+  assert.throws(() => s.app.tasks.update(template.id, { runAt: null }, 'user'), (e: unknown) => e instanceof TaskError && e.code === 'error.template_when');
+  assert.equal(s.app.tasks.update(template.id, { appendNote: 'a note' }, 'user').run_at, template.run_at, 'when のほかは今までどおり書ける');
+});
+
+// ── cancel を待っているあいだに変わったタスク ──
+
+function heldCancel(s: S, id: string) {
+  const url = new URL(`${s.origin}/api/tasks/${id}/cancel`);
+  const req = request({ host: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { Origin: s.origin, 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' } });
+  const done = new Promise<{ status: number; body: any }>((resolve, reject) => {
+    req.on('error', reject);
+    req.on('response', res => { let text = ''; res.on('data', c => { text += String(c); }); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text) })); });
+  });
+  req.write('{"reason":');
+  return { finish: () => { req.end('"too late"}'); return done; } };
+}
+
+test('cancel: 本文を待っているあいだに終わった・消えたタスクは、上書きせずに断る', async t => {
+  const s = await taskApp(t);
+  const finished = s.userTask('Finishes meanwhile');
+  const deleted = s.userTask('Deleted meanwhile', { runAt: s.clock.now + HOUR });
+  const held = [heldCancel(s, finished.id), heldCancel(s, deleted.id)];
+  await new Promise(r => setTimeout(r, 100));
+  s.app.tasks.finish(finished.id, 'done', 'Really finished', 'clive');
+  s.app.tasks.remove(deleted.id);
+  const [first, second] = [await held[0]!.finish(), await held[1]!.finish()];
+  assert.equal(first.status, 409);
+  assert.equal(first.body.code, 'http.already_finished');
+  const kept = s.app.tasks.get(finished.id)!;
+  assert.deepEqual([kept.status, kept.result_summary], ['done', 'Really finished']);
+  assert.ok(!s.app.tasks.events(finished.id).some(e => e.kind === 'reason' || e.kind === 'cancelled'));
+  assert.equal(second.status, 404);
+  assert.equal(s.count('task_events', 'task_id = ?', deleted.id), 0, '消えたタスクの経過を書き足さない');
+});
+
 // ── unapprove ──
 
 test('unapprove: 承認でできた、動いていないタスクだけを inbox に戻す（経過に unapproved）', async t => {
@@ -328,14 +415,16 @@ test('unapprove: 動き出したタスクは 409（already_started）。区切�
 test('cancel の理由は、user の別の行（kind: reason）として経過に入る。理由なしは今までと同じ', async t => {
   const s = await taskApp(t);
   const withReason = s.userTask('Proposed', { origin: 'self', propose: true });
-  const res = await s.api(`/api/tasks/${withReason.id}/cancel`, { reason: '  Not this week.\nMaybe later.  ' });
+  const seenAtPublish: string[][] = [];
+  s.app.bus.subscribe(e => { if (e.event.type === 'task.changed' && e.event.task.id === withReason.id) seenAtPublish.push(s.app.tasks.events(withReason.id).map(x => x.kind)); });  const res = await s.api(`/api/tasks/${withReason.id}/cancel`, { reason: '  Not this week.\nMaybe later.  ' });
   assert.equal(res.status, 200);
   assert.equal(res.body.task.status, 'cancelled');
   assert.equal(res.body.task.result_summary, 'Cancelled from the screen', '取り消しの要約には混ぜない');
   assert.deepEqual(s.app.tasks.events(withReason.id).slice(0, 2).map(e => [e.kind, e.actor, e.content]), [
-    ['reason', 'user', 'Not this week.\nMaybe later.'],
     ['cancelled', 'user', 'Cancelled from the screen'],
+    ['reason', 'user', 'Not this week.\nMaybe later.'],
   ]);
+  assert.deepEqual(seenAtPublish[0], ['cancelled', 'reason', 'created'], '取り消しの知らせ（task.changed）が出た時点で、理由の行はもう書かれている');
   const restored = s.app.tasks.uncancel(withReason.id, 'user');
   assert.match(taskPrompt(restored, s.app.tasks.events(restored.id), 'Asia/Tokyo', 'en'), /reason: Not this week\./u, '戻すと、理由も次の実行のモデルに渡る');
 

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { App } from '../../src/app.ts';
+import type { AppConfig } from '../../src/config/schema.ts';
 import type { RunEvent, StopReason, ToolCall } from '../../src/engine/types.ts';
 import { resolvePaths } from '../../src/paths.ts';
 import { createWebServer } from '../../src/web/server.ts';
@@ -19,7 +20,7 @@ export function toolCall(name: string, args: unknown): Script {
 }
 
 // 偽の時計・偽のモデル・メモリの中の DB で App と Web サーバーを立てる（タスクの API のテスト用）
-export async function taskApp(t: { after: (fn: () => void) => void }) {
+export async function taskApp(t: { after: (fn: () => void) => void }, edit: (config: AppConfig) => void = () => undefined) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -27,6 +28,7 @@ export async function taskApp(t: { after: (fn: () => void) => void }) {
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
+  edit(config);
   writeFileSync(paths.config, JSON.stringify(config));
   const clock = { now: Date.parse('2026-11-04T20:00:00Z') };
   let adapter!: FakeAdapter;
@@ -51,5 +53,11 @@ export async function taskApp(t: { after: (fn: () => void) => void }) {
     app.tasks.create({ title, origin: 'user', actor: 'user', ...extra });
   const count = (table: string, where = '1 = 1', ...args: Array<string | number>) =>
     (app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`).get(...args) as { n: number }).n;
-  return { app, adapter: () => adapter, clock, events, logs, api, userTask, count };
+  // 会話で 1 回送り、実行が終わるまで待つ（モデルの台本は adapter().scripts に先に積む）
+  const chat = async (text: string, conversationId = 'c1') => {
+    const outcome = app.engine.send(conversationId, text);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome));
+    await app.engine.wait(outcome.runId);
+  };
+  return { app, adapter: () => adapter, clock, events, logs, api, origin, userTask, count, chat };
 }
