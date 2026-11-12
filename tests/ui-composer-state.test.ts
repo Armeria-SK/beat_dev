@@ -5,7 +5,8 @@ import { SLASH_COMMANDS } from '../web/src/chat-logic.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  attachRoom, cancelClearsInterrupt, composerView, depthOptions, enterAction, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, PLACEHOLDER, queuedLine, replaceTargets, slashAvailable, slashItems,
+  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
+  slashAvailable, slashItems,
   submitMessage, toastLift, UI_SLASH,
   type ComposerInput, type SubmitDeps, type SubmitInput,
 } from '../web/src/ui/composer-state.ts';
@@ -42,6 +43,8 @@ test('ui/composer-state: モデルが無いと押せない（置き場の文字�
 test('ui/composer-state: 置き場の文字: 新しい会話 Message、会話の中 Reply、作成中の文、Plan のとき Describe the change to plan', () => {
   assert.equal(t(PLACEHOLDER[composerView({ ...base, hasConversation: false }).placeholder]), 'Message');
   assert.equal(t(PLACEHOLDER[composerView(base).placeholder]), 'Reply');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, hasConversation: false, product: true }).placeholder]), 'Describe what to build', '製品の新しい会話');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, product: true }).placeholder]), 'Reply', '製品の会話の中は Reply のまま');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan' }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', running: true }).placeholder]), 'Reply · Queue waits for the next break, Force interrupts');
@@ -172,8 +175,10 @@ const input = (extra: Partial<SubmitInput> = {}): SubmitInput => ({ kind: 'send'
 
 test('ui/composer-state: 送る順番。ふつうの送信はお知らせを片づけてから送る。新しい会話は新しい ID へ送る', async () => {
   const h = submitHarness({}, false);
-  assert.deepEqual(await submitMessage(input({ attachmentIds: ['u1', 'u2'] }), h.deps), { kind: 'sent', queued: false, replaced: null });
+  assert.deepEqual(await submitMessage(input({ attachmentIds: ['u1', 'u2'] }), h.deps), { kind: 'sent', queued: false, replaced: null, effortReset: false });
   assert.deepEqual(h.calls, ['clear c', 'send c hello [u1,u2]']);
+  const reset = { ...submitHarness().deps, send: async () => ({ queued: false, effortReset: true }) };
+  assert.deepEqual(await submitMessage(input(), reset), { kind: 'sent', queued: false, replaced: null, effortReset: true }, '送信の返事の effortReset を画面へ渡す');
   const fresh = submitHarness({}, false);
   await submitMessage(input({ conversationId: null, target: 'new-id', kind: 'queue', pending: [pend('p', 'x')] }), fresh.deps);
   assert.deepEqual(fresh.calls, ['clear new-id', 'send new-id hello []'], '会話がまだ無いときは置き換えるものが無い');
@@ -184,9 +189,9 @@ test('ui/composer-state: Queue は、前の待ち（割り込みでないもの�
   const h = submitHarness();
   const out = await submitMessage(input({ kind: 'queue', running: true, pending }), h.deps);
   assert.deepEqual(h.calls, ['cancel c p1', 'cancel c p2', 'clear c', 'send c hello []']);
-  assert.deepEqual(out, { kind: 'sent', queued: true, replaced: pending[2] });
+  assert.deepEqual(out, { kind: 'sent', queued: true, replaced: pending[2], effortReset: false });
   const gone = submitHarness({ cancel: 'gone' });
-  assert.deepEqual(await submitMessage(input({ kind: 'queue', running: true, pending }), gone.deps), { kind: 'sent', queued: true, replaced: null });
+  assert.deepEqual(await submitMessage(input({ kind: 'queue', running: true, pending }), gone.deps), { kind: 'sent', queued: true, replaced: null, effortReset: false });
   const send = submitHarness();
   await submitMessage(input({ kind: 'send', pending }), send.deps);
   assert.deepEqual(send.calls, ['clear c', 'send c hello []'], 'Queue でなければ待ちに触らない');
@@ -204,7 +209,7 @@ test('ui/composer-state: 置き換えの途中で失敗したら、消えた前�
 
 test('ui/composer-state: Force は、返事を作っている最中だけ割り込みの印を付けて送る。待たされなかった・失敗したら印を外す', async () => {
   const h = submitHarness();
-  assert.deepEqual(await submitMessage(input({ kind: 'force', running: true, pending: [pend('p1', 'kept')] }), h.deps), { kind: 'sent', queued: true, replaced: null });
+  assert.deepEqual(await submitMessage(input({ kind: 'force', running: true, pending: [pend('p1', 'kept')] }), h.deps), { kind: 'sent', queued: true, replaced: null, effortReset: false });
   assert.deepEqual(h.calls, ['clear c', 'interrupt c on', 'send c hello [] interrupt'], 'Force は前の待ちを消さない');
   const direct = submitHarness({}, false);
   await submitMessage(input({ kind: 'force', running: true }), direct.deps);
@@ -217,13 +222,49 @@ test('ui/composer-state: Force は、返事を作っている最中だけ割り�
   assert.deepEqual(idle.calls, ['clear c', 'send c hello []'], '動いていなければふつうの送信');
 });
 
+test('ui/composer-state: 書きかけの文は会話ごとに覚える（別の会話へ移っても残る）。空にしたら忘れる', () => {
+  const drafts = createDrafts();
+  assert.equal(drafts.get('a'), '');
+  drafts.set('a', 'half a thought');
+  drafts.set(NEW_DRAFT, 'first words');
+  assert.equal(drafts.get('a'), 'half a thought');
+  assert.equal(drafts.get('b'), '', 'ほかの会話には出ない');
+  assert.equal(drafts.get(NEW_DRAFT), 'first words');
+  drafts.set('a', '');
+  assert.equal(drafts.get('a'), '', '送ったら（空にしたら）残らない');
+});
+
+test('ui/composer-state: 知っているコマンド名とちょうど同じ文は、今は出していないコマンドでも発言として送らない', () => {
+  assert.equal(bareCommand('/archive')?.name, 'archive');
+  assert.equal(bareCommand('  /Stop ')?.name, 'stop');
+  assert.equal(bareCommand('/summary')?.name, 'summary');
+  for (const command of UI_SLASH) assert.equal(bareCommand(`/${command.name}`)?.name, command.name);
+  assert.equal(bareCommand('/stop now'), null, '続きのある文はふつうの発言');
+  assert.equal(bareCommand('/unknown'), null);
+  assert.equal(bareCommand('stop'), null);
+  assert.equal(bareCommand('/usr/bin'), null);
+});
+
+test('ui/composer-state: 待ちの行は 1 つだけ（いちばん新しい待ち）。ほかは数で言う', () => {
+  assert.equal(queueRow([]), null);
+  assert.deepEqual(queueRow([pend('1', 'a')]), { shown: pend('1', 'a'), more: 0 });
+  assert.deepEqual(queueRow([pend('1', 'a'), pend('2', 'b', true)]), { shown: pend('2', 'b', true), more: 1 });
+});
+
+test('ui/composer-state: 上限を超えて選んだ添付は、はみ出た数を知らせる', () => {
+  assert.equal(attachLeftOut(0, 5), 0);
+  assert.equal(attachLeftOut(0, 7), 2);
+  assert.equal(attachLeftOut(4, 3), 2);
+  assert.equal(attachLeftOut(5, 1), 1);
+});
+
 test('ui/composer-state: /rename は題を書き換えるだけで送らない。題が無い・会話が無いときは何もしない', async () => {
   const h = submitHarness();
   assert.deepEqual(await submitMessage(input({ text: '/rename New title' }), h.deps), { kind: 'renamed' });
   assert.deepEqual(h.calls, ['rename c New title']);
   const none = submitHarness();
   assert.deepEqual(await submitMessage(input({ text: '/rename' }), none.deps), { kind: 'ignored' });
-  assert.deepEqual(await submitMessage(input({ text: '/rename X', conversationId: null }), none.deps), { kind: 'ignored' });
+  assert.deepEqual(await submitMessage(input({ text: '/rename X', conversationId: null }), none.deps), { kind: 'ignored', why: 'rename_unsent' }, '新しい会話では、まだ送っていないと知らせられるように理由を返す');
   assert.deepEqual(none.calls, []);
   const bad = submitHarness({ rename: 'nope' });
   assert.deepEqual(await submitMessage(input({ text: '/rename X' }), bad.deps), { kind: 'failed', error: 'nope', replaced: null });

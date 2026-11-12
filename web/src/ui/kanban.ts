@@ -28,12 +28,14 @@ export interface TaskCard { kind: 'task'; key: string; column: ColumnId; task: T
 export type SessionOutcome = 'running' | 'ok' | 'failed' | 'stopped';
 export interface SessionCard {
   kind: 'session'; key: string; column: 'progress' | 'done' | 'failed'; conversationId: string; title: string | null; at: number;
-  startedAt: number | null; step: Step | null; outcome: SessionOutcome;
+  startedAt: number | null; step: Step | null; outcome: SessionOutcome; projectId?: string;
 }
 export type Card = TaskCard | SessionCard;
 
+export const cardProject = (card: Card): string | null => (card.kind === 'task' ? card.task.project_id ?? null : card.projectId ?? null);
+
 export interface SessionInput {
-  conversations: ReadonlyArray<Pick<Conversation, 'id' | 'title'>>;
+  conversations: ReadonlyArray<Pick<Conversation, 'id' | 'title' | 'project_id'>>;
   drafts: ReadonlyArray<{ runId: string; conversationId: string; startedAt?: number | undefined }>;
   runs: ReadonlyArray<Pick<RunRow, 'id' | 'kind' | 'conversation_id' | 'started_at' | 'duration_ms' | 'ok' | 'error_kind'>>;
   checklists: ReadonlyMap<string, readonly ChecklistItem[]>;
@@ -48,7 +50,7 @@ export function sessionCards({ conversations, drafts, runs, checklists }: Sessio
       const startedAt = draft.startedAt ?? runs.find(r => r.id === draft.runId)?.started_at ?? null;
       cards.push({
         kind: 'session', key: `s:${c.id}:progress`, column: 'progress', conversationId: c.id, title: c.title, at: startedAt ?? 0, startedAt,
-        step: checklistStep(checklists.get(c.id) ?? []), outcome: 'running',
+        step: checklistStep(checklists.get(c.id) ?? []), outcome: 'running', ...(c.project_id ? { projectId: c.project_id } : {}),
       });
       continue;
     }
@@ -62,7 +64,7 @@ export function sessionCards({ conversations, drafts, runs, checklists }: Sessio
     const column = outcome === 'ok' ? 'done' : 'failed';
     cards.push({
       kind: 'session', key: `s:${c.id}:${column}`, column, conversationId: c.id, title: c.title, at: last.started_at + (last.duration_ms ?? 0),
-      startedAt: last.started_at, step: null, outcome,
+      startedAt: last.started_at, step: null, outcome, ...(c.project_id ? { projectId: c.project_id } : {}),
     });
   }
   return cards;
@@ -131,5 +133,18 @@ export function mergeFinished(loaded: readonly Task[], page: readonly Task[]): T
 }
 
 export const pagesToReload = (loaded: number): number => Math.max(KANBAN_PAGE, Math.ceil(loaded / KANBAN_PAGE) * KANBAN_PAGE);
+
+export const COLUMN_TABS_MEDIA = '(max-width: 760px)';
+
+export function tabStep(current: number, count: number, key: string): number | null {
+  if (count === 0) return null;
+  switch (key) {
+    case 'ArrowRight': return (Math.max(0, current) + 1) % count;
+    case 'ArrowLeft': return (Math.max(0, current) - 1 + count) % count;
+    case 'Home': return 0;
+    case 'End': return count - 1;
+    default: return null;
+  }
+}
 
 export const stepPercent = (step: Step | null): number => (step ? Math.round((Math.max(0, step.step - 1) / step.total) * 100) : 0);

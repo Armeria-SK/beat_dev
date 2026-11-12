@@ -37,6 +37,7 @@ export function FoldersPanel() {
         <Row k="root:add" title={t('ui.set.folders.add')} desc={t('ui.set.folders.addDesc')}>
           <CommitField value="" label={t('ui.set.folders.addField')} mono placeholder={t('ui.set.folders.addPh')} resetKey={folders.roots.map(r => r.path).join('\n')} onCommit={path => { if (path) setRoots('root:add', c => addRoot(foldersFromConfig(c), path, 'read').roots); }} />
         </Row>
+        <p className="bt-meta">{t('ui.product.foldersNote')}</p>
       </Group>
       <Group title={t('ui.set.folders.limits')}>
         <Row k="folders:deny" title={t('ui.set.folders.deny')} desc={t('ui.set.folders.denyDesc')}
@@ -52,7 +53,7 @@ export function FoldersPanel() {
 }
 
 type Stage = 'preToolUse' | 'postToolUse';
-interface Hook { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask' }
+interface Hook { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask'; enabled?: boolean }
 
 function hooksOf(config: Config, stage: Stage): Hook[] {
   const list = config.tools?.hooks?.[stage];
@@ -71,8 +72,9 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
   const k = `hook:${stage}:${index}`;
   const edit = (patch: Partial<Hook>) => void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).map((h, i) => (i === index ? { ...h, ...patch } : h))));
   const busy = ctx.busy !== null;
+  const on = hook.enabled !== false;
   return (
-    <Row k={k} title={<code className="bt-meta">{hook.command.join(' ')}</code>} desc={t('ui.set.hooks.when', hook.matcher)}
+    <Row k={k} title={<code className="bt-meta">{hook.command.join(' ')}</code>} desc={t(on ? 'ui.set.hooks.when' : 'ui.set.hooks.whenOff', hook.matcher)}
       below={(removing || open) && (
         <>
           {removing && <RowConfirm warn={t('ui.set.hooks.removeWarn')} action={t('ui.set.hooks.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).filter((_, i) => i !== index))); }} onKeep={() => setRemoving(false)} />}
@@ -93,6 +95,7 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
           )}
         </>
       )}>
+      <Switch checked={on} label={t('ui.set.hooks.on', hook.command.join(' '))} disabled={busy} onChange={enabled => edit({ enabled })} />
       <Button small variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>
       {!removing && <Button small variant="ghost" disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.hooks.remove')}</Button>}
     </Row>

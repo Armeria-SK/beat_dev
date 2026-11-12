@@ -22,7 +22,7 @@ function toolCall(name: string, args: unknown): Script {
   };
 }
 
-async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig) => void = () => undefined, before: (workspace: string) => void = () => undefined) {
+async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig) => void = () => undefined, before: (workspace: string) => void = () => undefined, botMemory = false) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   before(paths.workspace);
@@ -35,7 +35,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   const clock = { now: Date.parse('2026-11-05T01:00:00Z') }; // 日本時間 10:00
   let adapter!: FakeAdapter;
   const app = new App({
-    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false,
+    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, botMemory,
     adapterOverride: p => (adapter = new FakeAdapter(p)),
   });
   await app.status.probeAll(app.config());
@@ -60,7 +60,8 @@ test('振り返りの実行では、シェルもファイルも渡さず、呼�
   assert.equal(await s.app.worker.tick(), 'ran');
   const request = s.adapter().calls.at(-2)!;
   const names = request.tools.map(t => t.name);
-  assert.ok(names.includes('memory_save') && names.includes('skill_draft') && names.includes('curiosity_add'));
+  assert.ok(names.includes('skill_draft') && names.includes('curiosity_add'));
+  assert.ok(!names.some(name => name.startsWith('memory_')), names.join(','));
   for (const forbidden of ['shell_run', 'file_write', 'file_edit', 'file_read', 'task_create', 'web_fetch', 'web_search']) assert.ok(!names.includes(forbidden), forbidden);
   assert.match(String(request.messages.at(-1)?.content), /\[Review\]/u);
   assert.match(String(request.messages.at(-1)?.content), /渋谷で打ち合わせ/u);
@@ -72,7 +73,7 @@ test('振り返りの実行では、シェルもファイルも渡さず、呼�
 });
 
 test('会話が途切れたときの振り返りは、新しい発言が来るまで 1 回だけ', async t => {
-  const s = await setup(t, c => { c.memory.reviewIdleMinutes = 30; });
+  const s = await setup(t, c => { c.memory.reviewIdleMinutes = 30; }, undefined, true);
   await s.app.worker.tick();
   s.adapter().scripts.push(reply('了解'));
   await s.chat('c1', '来週から大阪に出張です');
@@ -98,7 +99,7 @@ test('会話が途切れたときの振り返りは、新しい発言が来る�
 });
 
 test('振り返りで記憶をまとめても、取り消せる', async t => {
-  const s = await setup(t);
+  const s = await setup(t, undefined, undefined, true);
   const a = s.app.memory.save({ book: 'user', content: 'コーヒーが好き', actor: 'clive' }).memory;
   const b = s.app.memory.save({ book: 'user', content: '朝はコーヒーを飲む', actor: 'clive' }).memory;
   await s.app.worker.tick();
@@ -119,7 +120,7 @@ test('振り返りで記憶をまとめても、取り消せる', async t => {
 });
 
 test('ユーザーが消した記憶は、振り返りの依頼文で「覚え直さない」と伝える', () => {
-  const prompt = reviewPrompt({ trigger: 'idle', transcript: '【ユーザー】こんにちは', forgotten: ['猫を飼っている'] });
+  const prompt = reviewPrompt({ trigger: 'idle', transcript: '【ユーザー】こんにちは', forgotten: ['猫を飼っている'], memory: true });
   assert.match(prompt, /Memories the user deleted[\s\S]*猫を飼っている/u);
   const transcript = transcriptOf([
     { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: 'a'.repeat(50), message: { role: 'user', content: 'x' }, created_at: 0 },

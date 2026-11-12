@@ -10,6 +10,7 @@ import { languageOf } from '../shared/language.ts';
 import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
+import { projectFilterOf, usableProjectId } from './routes-projects.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
@@ -58,12 +59,15 @@ export function registerTaskRoutes(router: Router, app: App): void {
     return task;
   };
 
-  router.add('GET', '/api/tasks', ({ res }) => sendJson(res, 200, {
-    active: app.tasks.list().map(view),
-    finished: app.tasks.recentlyFinished().map(view),
-    finishedTotal: app.tasks.finishedTotal(),
-    repeating: app.tasks.templates().map(task => ({ ...view(task), last_run: task.last_run })),
-  }));
+  router.add('GET', '/api/tasks', ({ res, url }) => {
+    const project = projectFilterOf(url);
+    sendJson(res, 200, {
+      active: app.tasks.list({ project }).map(view),
+      finished: app.tasks.recentlyFinished(50, project).map(view),
+      finishedTotal: app.tasks.finishedTotal(project),
+      repeating: app.tasks.templates(project).map(task => ({ ...view(task), last_run: task.last_run })),
+    });
+  });
 
   router.add('GET', '/api/tasks/finished', ({ res, url }) => {
     const beforeT = url.searchParams.get('beforeT');
@@ -72,8 +76,9 @@ export function registerTaskRoutes(router: Router, app: App): void {
       throw problem(400, 'invalid_field', 'bad_cursor', { field: 'beforeT' });
     }
     const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit') ?? 20)) || 20, 1), 100);
-    const page = app.tasks.finishedPage({ before: beforeT !== null && beforeId !== null ? { t: Number(beforeT), id: beforeId } : undefined, limit });
-    sendJson(res, 200, { tasks: page.tasks.map(view), next: page.next ? { beforeT: page.next.t, beforeId: page.next.id } : null, total: app.tasks.finishedTotal() });
+    const project = projectFilterOf(url);
+    const page = app.tasks.finishedPage({ before: beforeT !== null && beforeId !== null ? { t: Number(beforeT), id: beforeId } : undefined, limit, project });
+    sendJson(res, 200, { tasks: page.tasks.map(view), next: page.next ? { beforeT: page.next.t, beforeId: page.next.id } : null, total: app.tasks.finishedTotal(project) });
   });
 
   router.add('GET', '/api/schedule', ({ res, url }) => {
@@ -91,9 +96,10 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const priority = priorityOf(body);
     const when = whenOf(body);
     const cron = cronOf(body);
+    const projectId = usableProjectId(app, body.projectId);
     try {
       const task = app.tasks.create({
-        title, body: text, priority, origin: 'user', actor: 'user',
+        title, body: text, priority, origin: 'user', actor: 'user', projectId,
         ...(when ? { runAt: when } : {}), ...(cron ? { cron, timezone: app.config().timezone } : {}),
       });
       // 「今すぐ」頼まれたものは、すぐに実行する（1時間の上限より先に）
@@ -204,7 +210,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   const cancelReasonOf = async (req: IncomingMessage): Promise<string | undefined> => {
     if (!/^application\/json\b/iu.test(req.headers['content-type'] ?? '')) return undefined;
-    const body = requireObject(await readJson(req));
+    let body: Record<string, unknown>;
+    try { body = requireObject(await readJson(req)); } catch { return undefined; }
     if (body.reason === undefined || body.reason === null || (typeof body.reason === 'string' && !body.reason.trim())) return undefined;
     return requireString(body, 'reason', { max: 2000 })!.trim();
   };
@@ -215,9 +222,13 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
-    const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
-    app.worker.stopTask(task.id);
-    app.kv.delete(splitKey(task.id));
+    let updated: Task;
+    try {
+      updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
+    } finally {
+      app.worker.stopTask(task.id);
+      app.kv.delete(splitKey(task.id));
+    }
     sendJson(res, 200, { task: view(updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
@@ -248,7 +259,15 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   // ── 通知 ──
-  router.add('GET', '/api/notifications', ({ res }) => sendJson(res, 200, { notifications: app.notifications.list(), unread: app.notifications.unread() }));
+  const projectOfLink = (link: string | null): string | null => {
+    if (link?.startsWith('#/c/')) return app.conversations.projectOf(link.slice('#/c/'.length));
+    if (link?.startsWith('#/tasks/')) return app.tasks.get(link.slice('#/tasks/'.length))?.project_id ?? null;
+    if (link?.startsWith('#/p/')) return app.projects.get(link.slice('#/p/'.length))?.id ?? null;
+    return null;
+  };
+  router.add('GET', '/api/notifications', ({ res }) => sendJson(res, 200, {
+    notifications: app.notifications.list().map(n => ({ ...n, project_id: projectOfLink(n.link) })), unread: app.notifications.unread(),
+  }));
   router.add('POST', '/api/notifications/read', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     let ids: number[] | undefined;

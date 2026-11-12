@@ -74,6 +74,7 @@ export const HookConfig = Type.Object({
   command: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
   timeoutMs: Type.Integer({ minimum: 100, maximum: 120_000, default: 30_000 }),
   onError: Type.Union([Type.Literal('deny'), Type.Literal('ask')], { default: 'deny' }),
+  enabled: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 
 // tools.browser.sites の 1 件の書き方（小文字のホスト名。先頭の = は「そのホストだけ」）。画面の文（friendly.ts）も同じ式を使う

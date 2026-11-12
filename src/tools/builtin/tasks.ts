@@ -50,6 +50,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
     requested_by_user: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false }),
   effect: 'meta',
+  escalateOnTaint: true,
   allowedIn: ['chat', 'task'],
   async execute(input, ctx) {
     try {
@@ -58,7 +59,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
-        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'clive', createdInConversation: ctx.conversationId, localOnly: ctx.localOnly === true,
+        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'clive', createdInConversation: ctx.conversationId, localOnly: ctx.localOnly === true, projectId: ctx.project?.id,
       });
       ctx.touchedTasks?.add(task.id);
       const language = languageOf(ctx.config);
@@ -100,12 +101,14 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
     status: Type.Optional(Type.Union([Type.Literal('done'), Type.Literal('cancelled')])),
   }, { additionalProperties: false }),
   effect: 'meta',
+  escalateOnTaint: true,
   allowedIn: ['chat', 'task'],
   async execute(input, ctx) {
     try {
       const s = store(ctx);
       const task = s.find(input.id);
       if (!task) throw new TaskError('error.tool_not_found', { id: input.id });
+      if (ctx.project && task.project_id !== ctx.project.id) throw new TaskError('error.other_project', { id: input.id });
       let updated = s.update(task.id, {
         ...(input.note ? { appendNote: input.note } : {}), ...(input.next_action ? { nextAction: input.next_action } : {}),
         ...(input.priority ? { priority: input.priority } : {}), ...(input.when ? { runAt: parseWhen(input.when) ?? null } : {}),

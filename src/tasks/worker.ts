@@ -15,6 +15,8 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister } from '../tools/skills/store.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
+import { projectFolderGone } from '../projects/run.ts';
+import type { ProjectStore } from '../projects/store.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
@@ -25,7 +27,7 @@ const SPLIT_LIMIT = 3;
 export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 
-export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model';
+export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model' | 'folder_missing';
 
 export interface WorkerDeps {
   db: DatabaseSync;
@@ -40,8 +42,10 @@ export interface WorkerDeps {
   autoSchedule?: boolean;
   reviews?: ReviewJobs | undefined;
   memory?: MemoryStore | undefined;
+  botMemory?: boolean | undefined;
   curiosity?: CuriosityStore | undefined;
   memoryBudget?: (() => number | undefined) | undefined;
+  projects?: ProjectStore | undefined;
 }
 
 export interface WorkerRunning { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
@@ -58,6 +62,7 @@ interface TaskText {
   doneCriteria: string;
   historyHeading: string;
   ownerReason: string;
+  otherReason: string;
   howHeading: string;
   how: readonly string[];
   time: (ms: number, timezone: string) => string;
@@ -76,6 +81,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
     doneCriteria: 'Done when',
     historyHeading: '# History so far (newest first)',
     ownerReason: "reason for cancelling (the user's own words)",
+    otherReason: 'reason for cancelling',
     howHeading: '# How to proceed',
     how: [
       '- Make progress with your tools. Do not overdo it in a single run',
@@ -94,10 +100,10 @@ export function inQuietHours(now: number, timezone: string, start: string, end: 
   return start < end ? hm >= start && hm < end : hm >= start || hm < end;
 }
 
-export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
+export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
   const text = TASK_TEXT[language];
   const history = events.filter(e => e.content).slice(0, 10).map(e => (e.kind === 'reason'
-    ? `- ${text.time(e.created_at, timezone)} ${text.ownerReason}: ${e.content!.replace(/\r?\n/gu, '\n  ')}`
+    ? `- ${text.time(e.created_at, timezone)} ${e.actor === 'user' ? text.ownerReason : text.otherReason}: ${e.content!.replace(/\r\n|[\r\n\p{Zl}\p{Zp}]/gu, '\n  ')}`
     : `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`));
   return [
     text.intro,
@@ -292,7 +298,7 @@ export class Worker {
     reviews.enqueueIdleConversations(c.memory.reviewIdleMinutes * 60_000, since);
     // 記憶が会話に入れる量の予算を超えたら、整理の振り返りを 1 日 1 回積む（予算が決まらないとき・モデルが 0 個のときは積まない）
     const budget = this.#d.memoryBudget?.();
-    if (memory && budget !== undefined && planBooks(memory.list(), languageOf(c), budget).omitted.length > 0) {
+    if (this.#d.botMemory && memory && budget !== undefined && planBooks(memory.list(), languageOf(c), budget).omitted.length > 0) {
       reviews.enqueue('book_full', `book:all:${Math.floor(now / 86_400_000)}`);
     }
   }
@@ -306,26 +312,27 @@ export class Worker {
       const budget = this.#d.memoryBudget?.();
       const plan = memory && budget !== undefined ? planBooks(memory.list(), language, budget) : undefined;
       const pressure = plan && budget !== undefined && plan.omitted.length > 0 ? bookPressureText({ tokens: plan.tokens, budget, outside: plan.omitted }, language) : undefined;
-      return reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language });
+      return reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language, memory: true });
     }
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
       if (!task) return undefined;
-      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister });
+      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory });
     }
     if (!job.conversation_id) return undefined;
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
     const upto = Number(kv.get(`review:upto:${job.conversation_id}`) ?? 0);
     const messages = conversations.messages(job.conversation_id, 200).filter(m => m.id > upto);
     if (!messages.some(m => m.role === 'user')) return undefined;
-    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language, skillsAutoRegister });
+    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory });
   }
 
   async #review(job: ReviewJob, release: () => void): Promise<TickResult> {
     const { reviews, conversations, engine, kv } = this.#d;
     if (!reviews) return 'idle';
-    const prompt = this.#reviewInput(job);
     const language = this.#language();
+    if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
+    const prompt = this.#reviewInput(job);
     if (!prompt) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
     // 手元のモデルで話した会話（選んだモデルが設定から消えた会話も）と、手元のモデルだけで動かすタスクの振り返りは、手元の裏方モデルだけで行う。使えるものが無ければ、外のモデルに回さず、その振り返りを飛ばす
     const local = isLocalPinned(this.#d.config(), job.conversation_id ? conversations.get(job.conversation_id)?.model_id : null) || (job.task_id !== null && this.#d.tasks.get(job.task_id)?.local_only === 1);
@@ -338,7 +345,7 @@ export class Worker {
     const source = { conversationId: job.conversation_id, taskId: job.task_id };
     const earlier = job.review_conversation_id ? conversations.get(job.review_conversation_id) : undefined;
     if (earlier?.kind === 'task') conversations.setSource(earlier.id, source);
-    const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }), source });
+    const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }), source, projectId: (job.conversation_id ? conversations.projectOf(job.conversation_id) : null) ?? (job.task_id ? this.#d.tasks.get(job.task_id)?.project_id : null) });
     const started = engine.runReview(conversation.id, prompt, { ...(job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {}), ...(local ? { localOnly: true } : {}) });
     if (!started.ok) {
       if (local) return skipLocal();
@@ -394,8 +401,14 @@ export class Worker {
     const { tasks, conversations, engine } = this.#d;
     const c = this.#d.config();
     const language = languageOf(c);
-    const conversationId = task.conversation_id ?? conversations.create({ kind: 'task', title: taskText(language, 'title.task', { title: task.title }) }).id;
+    const conversationId = task.conversation_id ?? conversations.create({ kind: 'task', title: taskText(language, 'title.task', { title: task.title }), projectId: task.project_id }).id;
     if (!tasks.claim(task.id, LEASE_MS, conversationId)) return 'busy';
+    if (this.#d.projects && projectFolderGone(this.#d.projects, task.project_id)) {
+      const name = this.#d.projects.get(task.project_id!)?.name ?? task.project_id!;
+      tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.folder_missing', { name }) });
+      this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}` });
+      return 'folder_missing';
+    }
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language);
     const started = engine.runTask(task, conversationId, prompt);
     if (!started.ok) {

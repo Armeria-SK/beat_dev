@@ -30,6 +30,7 @@ export type Access =
   | { kind: 'hook-added'; stage: HookStage; hook: HookSummary }
   | { kind: 'hook-edited'; stage: HookStage; hook: HookSummary }
   | { kind: 'hook-removed'; stage: HookStage; hook: HookSummary }
+  | { kind: 'hook-disabled'; stage: HookStage; hook: HookSummary }
   | { kind: 'origin-added'; origin: string }
   | { kind: 'login-added'; login: string }
   | { kind: 'logins-cleared' }
@@ -116,17 +117,30 @@ export function keyEntryAccess(provider: Record<string, any>): Access[] {
 function hookChanges(before: Config, after: Config, stage: HookStage): Access[] {
   const rawOf = (config: Config) => (Array.isArray(obj(obj(config.tools).hooks)[stage]) ? obj(obj(config.tools).hooks)[stage] as unknown[] : []);
   const oldHooks = [...rawOf(before)];
-  const newHooks: unknown[] = [];
+  const changed: unknown[] = [];
   for (const hook of rawOf(after)) {
     const same = oldHooks.findIndex(h => deepEqual(h, hook));
-    if (same >= 0) oldHooks.splice(same, 1); else newHooks.push(hook);
+    if (same >= 0) oldHooks.splice(same, 1); else changed.push(hook);
   }
   const summary = (hook: unknown): HookSummary => ({ matcher: String(obj(hook).matcher ?? ''), command: strings(obj(hook).command) });
+  const on = (hook: unknown): boolean => obj(hook).enabled !== false;
+  const body = (hook: unknown): unknown => { const { enabled: _enabled, ...rest } = obj(hook); return rest; };
+  const guardOff = (was: unknown, now: unknown): boolean => stage === 'preToolUse' && on(was) && !on(now);
   const out: Access[] = [];
+  const newHooks: unknown[] = [];
+  for (const hook of changed) {
+    const same = oldHooks.findIndex(h => deepEqual(body(h), body(hook)));
+    if (same < 0) { newHooks.push(hook); continue; }
+    if (guardOff(oldHooks[same], hook)) out.push({ kind: 'hook-disabled', stage, hook: summary(hook) });
+    oldHooks.splice(same, 1);
+  }
   newHooks.forEach((hook, i) => {
-    if (i < oldHooks.length) out.push({ kind: 'hook-edited', stage, hook: summary(hook) });
-    else out.push({ kind: 'hook-added', stage, hook: summary(hook) });
+    out.push({ kind: i < oldHooks.length ? 'hook-edited' : 'hook-added', stage, hook: summary(hook) });
   });
+  // 書き換えたフックは、どれがどれだったかを決められない。オンだった「使う前」のフックが残っていて、書き換えたあとにオフのものがあれば、オフにしたものとして並べる
+  if (stage === 'preToolUse' && oldHooks.slice(0, newHooks.length).some(on)) {
+    for (const hook of newHooks.slice(0, oldHooks.length)) if (!on(hook)) out.push({ kind: 'hook-disabled', stage, hook: summary(hook) });
+  }
   if (stage === 'preToolUse') for (const hook of oldHooks.slice(newHooks.length)) out.push({ kind: 'hook-removed', stage, hook: summary(hook) });
   return out;
 }

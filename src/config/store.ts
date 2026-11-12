@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute } from 'node:path';
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
 import { configText } from '../shared/messages/config.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
@@ -56,6 +56,11 @@ export function defaultConfig(): AppConfig {
 
 export function defaultTools(): ToolsConfig {
   return Value.Default(ToolsSchema, {}) as ToolsConfig;
+}
+
+export function resetConfig(current: AppConfig): AppConfig {
+  const next = defaultConfig();
+  return { ...next, timezone: current.timezone, server: structuredClone(current.server), tools: { ...next.tools, roots: structuredClone(current.tools.roots), deny: [...current.tools.deny] } };
 }
 
 interface Finding extends ConfigIssue { text: string }
@@ -309,6 +314,13 @@ export class ConfigStore {
     this.#cache = config;
     this.#stamp = stamp;
     return structuredClone(config);
+  }
+
+  backup(dir: string, now = Date.now()): string {
+    mkdirSync(dir, { recursive: true });
+    const target = join(dir, `${basename(this.path)}.reset-${new Date(now).toISOString().replace(/[:.]/gu, '-')}.bak`);
+    copyFileSync(this.path, target, constants.COPYFILE_EXCL);
+    return target;
   }
 
   save(config: AppConfig): AppConfig {

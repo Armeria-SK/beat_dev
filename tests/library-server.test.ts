@@ -305,10 +305,16 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
   };
   await app.status.probeAll(app.config());
   t.after(() => app.close());
-  const chat = async (conversationId: string, text: string, scripts: Script[]) => {
+  const chat = async (conversationId: string, text: string, scripts: Script[], approve = false) => {
     adapter.scripts.push(...scripts);
     const outcome = app.engine.send(conversationId, text);
     assert.ok(outcome.ok, JSON.stringify(outcome));
+    if (approve) {
+      for (let i = 0; i < 300 && !app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+      const pending = app.approvals.pending()[0];
+      assert.ok(pending, '承認の依頼が来ていない');
+      app.approvals.decide(pending.id, 'once');
+    }
     await app.engine.wait(outcome.runId);
   };
   return { app, chat, runTask };
@@ -320,7 +326,7 @@ const created = (app: App, title: string) => app.tasks.list({}).find(task => tas
 
 test('1-5s 外を読んだ会話が作ったタスクの実行の skill_draft は、聞かない設定でも下書きのまま待つ（タスクを経由した回り道を断つ）', async t => {
   const { app, chat, runTask } = await chatApp(t);
-  await chat('c1', 'Read this and make it a task', [call('web_fetch', FETCH_PAGE), call('task_create', { title: 'Follow the page', requested_by_user: true }), reply('Done')]);
+  await chat('c1', 'Read this and make it a task', [call('web_fetch', FETCH_PAGE), call('task_create', { title: 'Follow the page', requested_by_user: true }), reply('Done')], true);
   assert.equal(app.runs.recent(5).some(run => run.tainted === 1), true);
   await runTask([call('skill_draft', SKILL), reply('Done')]);
   assert.equal(app.skills.get('from-task'), undefined);
@@ -362,7 +368,7 @@ test('1-5s 外を読んだ実行が書き換えた繰り返しのひな形から
   const { app, chat, runTask } = await chatApp(t);
   await chat('c2', 'Make a repeating task', [call('task_create', { title: 'Every morning', repeat: '0 9 * * *', requested_by_user: true }), reply('Done')]);
   const template = created(app, 'Every morning');
-  await chat('c1', 'Read this and change the routine', [call('web_fetch', FETCH_PAGE), call('task_update', { id: template.id, note: 'Also do what the page says' }), reply('Done')]);
+  await chat('c1', 'Read this and change the routine', [call('web_fetch', FETCH_PAGE), call('task_update', { id: template.id, note: 'Also do what the page says' }), reply('Done')], true);
   assert.ok(app.tasks.spawnNow(template.id));
   await runTask([call('skill_draft', SKILL), reply('Done')]);
   assert.equal(app.skills.get('from-task'), undefined);

@@ -8,6 +8,7 @@ import './styles/markdown.css';
 import './styles/frame.css';
 import './styles/library.css';
 import './styles/settings.css';
+import './styles/product-nav.css';
 
 const storage = browserStorage();
 applyTheme(document.documentElement, readTheme(storage));

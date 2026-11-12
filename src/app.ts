@@ -23,7 +23,7 @@ import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
 import { ApprovalBroker, approvalPublic, approvalShownIn } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
-import { historyRead, historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
+import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { shellRun } from './tools/builtin/shell.ts';
 import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
 import { sdkConnect } from './mcp/connect.ts';
@@ -52,6 +52,7 @@ import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { askBeforeRegister, SkillStore } from './tools/skills/store.ts';
 import { TaskStore, taskView } from './tasks/store.ts';
+import { ProjectStore } from './projects/store.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
 import { ToolRegistry } from './tools/registry.ts';
@@ -95,12 +96,15 @@ export interface AppOptions {
   browserDriver?: BrowserDriver;
   // 試験用: ログイン用の窓（見えるブラウザ）を出せる環境か（書かなければ、この計算機の環境から決める）
   browserDisplay?: boolean;
+  projectFolderExempt?: readonly string[];
+  botMemory?: boolean;
 }
 
 export class App {
   readonly paths: AppPaths;
   // 提供元が鍵を読む環境変数（ふだんは process.env）。画面から入れた鍵はここにも入れ、起動し直さなくても効かせる
   readonly env: Record<string, string | undefined>;
+  readonly fetch: FetchLike;
   readonly configStore: ConfigStore;
   readonly db: DatabaseSync;
   readonly conversations: Conversations;
@@ -114,6 +118,9 @@ export class App {
   readonly approvals: ApprovalBroker;
   readonly memory: MemoryStore;
   readonly tasks: TaskStore;
+  readonly projects: ProjectStore;
+  readonly projectFolderExempt: readonly string[];
+  readonly botMemory: boolean;
   readonly notifications: Notifications;
   readonly channels: NotifyChannels;
   readonly mcp: McpManager;
@@ -132,6 +139,7 @@ export class App {
   constructor(options: AppOptions) {
     this.paths = options.paths;
     this.env = (options.env ?? process.env) as Record<string, string | undefined>;
+    this.fetch = options.fetch ?? fetch;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
@@ -152,11 +160,12 @@ export class App {
       ...(options.adapterOverride ? { override: options.adapterOverride } : {}),
     });
     this.registry.reload(config);
+    this.botMemory = options.botMemory === true;
     this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: () => this.baseTokens(), memoryTokens: () => this.memoryTokens(), log: this.log });
     this.bus = new RunBus();
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
-    for (const tool of options.tools ?? builtinTools()) this.tools.register(tool);
+    for (const tool of options.tools ?? builtinTools()) if (this.botMemory || !MEMORY_TOOL_NAMES.includes(tool.name)) this.tools.register(tool);
     this.approvals = new ApprovalBroker(this.db, event => {
       const v = event.view;
       if (event.type === 'requested') {
@@ -173,6 +182,8 @@ export class App {
     });
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
+    this.projects = new ProjectStore(this.db, this.paths.projects, now);
+    this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
@@ -192,8 +203,8 @@ export class App {
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
-      tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, tasks: this.tasks,
-      curiosity: this.curiosity, skills: this.skills, log: this.log,
+      tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
+      curiosity: this.curiosity, skills: this.skills, projects: this.projects, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
@@ -203,7 +214,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(),
+      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), projects: this.projects,
     });
     this.tasks.onChange = task => {
       this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
@@ -221,7 +232,7 @@ export class App {
     };
     this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
     this.tasks.onDeleted = removed => {
-      const title = removed.title.replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
+      const title = removed.title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
       this.log(`[INFO] Deleted task "${title}" (${removed.id})`);
       this.bus.publish({ type: 'task.deleted', id: removed.id });
     };
@@ -345,7 +356,7 @@ export class App {
 
   // 記憶を全部入れたときの見積もり。必要な長さには、各モデルの available の 12% までだけが数えられる（requiredContext）
   memoryTokens(): number {
-    return this.memory ? estimateTextTokens(renderBooks(this.memory.list(), languageOf(this.config()))) : 0;
+    return this.botMemory && this.memory ? estimateTextTokens(renderBooks(this.memory.list(), languageOf(this.config()))) : 0;
   }
 
   // probe: false は、モデルやプロバイダに関わらない変更（道具の方針など）で、モデルの確認の通信をしない

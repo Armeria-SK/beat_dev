@@ -18,7 +18,8 @@ export type RunEvent =
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
   | { type: 'agent.state'; runId: string; conversationId: string; callId: string; childRunId: string; childConversationId: string; state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout'; toolCalls: number }
   | { type: 'pending.changed'; conversationId: string }
-  | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
+  | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId?: string | null }
+  | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
   | { type: 'task.changed'; task: Task }
   | { type: 'task.deleted'; id: string }
   | { type: 'notification'; notification: NotificationItem }

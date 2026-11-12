@@ -79,6 +79,30 @@ test('ui/timeline: 行は "Tasks"（ひな形でないタスクの回）が先�
   ]);
 });
 
+test('ui/timeline: ひな形でないタスクの回は製品ごとの行に分かれる。製品なしと一覧に無い製品は "Tasks" の行（2-2c）', () => {
+  const at = (taskId: string, start: number, projectId?: string | null): ScheduleSlot => ({ ...slot(taskId, start, HOUR), ...(projectId === undefined ? {} : { projectId }) });
+  const rows = buildRows({
+    slots: [at('a', HOUR, 'p1aaaa'), at('b', 3 * HOUR), at('c', 5 * HOUR, null), at('d', 7 * HOUR, 'gone01'), at('r1', 9 * HOUR, 'p1aaaa'), at('e', 11 * HOUR, 'p2aaaa')],
+    streams: [stream('r1')], tasksTitle: 'Tasks', range: 'day', window: DAY_WINDOW, now: 0,
+    products: [{ id: 'p1aaaa', title: 'One' }, { id: 'p2aaaa', title: 'Two' }, { id: 'p3aaaa', title: 'Three' }],
+  });
+  assert.deepEqual(rows.map(row => [row.id, row.title, row.bars.map(b => b.start / HOUR)]), [
+    ['', 'Tasks', [3, 5, 7]],
+    ['product:p1aaaa', 'One', [1]],
+    ['product:p2aaaa', 'Two', [11]],
+    ['product:p3aaaa', 'Three', []],
+    ['r1', 'r1', [9]],
+  ]);
+});
+
+test('ui/timeline: 閉じたひな形の行は ended と分かり、止めただけの行・動いている行には付かない', () => {
+  const rows = buildRows({
+    slots: [slot('r3', 10 * HOUR, HOUR)],
+    streams: [stream('r1', { ended: false }), stream('r2', { paused: true }), stream('r3', { paused: true, ended: true })], tasksTitle: 'Tasks', range: 'day', window: DAY_WINDOW, now: 6 * HOUR,
+  });
+  assert.deepEqual(rows.slice(1).map(row => [row.id, row.paused, row.ended === true, row.bars.length]), [['r1', false, false, 0], ['r2', true, false, 0], ['r3', true, true, 0]]);
+});
+
 test('ui/timeline: 打ち切られたひな形（毎分の決まりなど）は、これからの枠を並べずに、今から範囲の終わりまでの 1 本の帯で描き、決まりの文を持つ', () => {
   const minute = 60_000;
   const planned = Array.from({ length: 200 }, (_, i) => slot('every', 6 * HOUR + (i + 1) * minute, 30_000));

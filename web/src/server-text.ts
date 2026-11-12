@@ -2,6 +2,7 @@ import { format } from '../../src/shared/messages/define.ts';
 import { configText } from '../../src/shared/messages/config.ts';
 import { engineText } from '../../src/shared/messages/engine.ts';
 import { httpText } from '../../src/shared/messages/http.ts';
+import { projectText } from '../../src/shared/messages/projects.ts';
 import { providerText } from '../../src/shared/messages/providers.ts';
 import { storeText } from '../../src/shared/messages/stores.ts';
 import { taskText } from '../../src/shared/messages/tasks.ts';
@@ -12,7 +13,7 @@ import type { Lang } from './i18n/state.ts';
 // 画面の訳が食い違わない。コードが表に無い・差し込みの値が足りないときは null を返し、呼ぶ側はサーバーが書いた文（message）を出す。
 
 type Catalog = { readonly tables: Record<Lang, Record<string, string>> };
-const DOMAINS: Record<string, Catalog> = { http: httpText, task: taskText, store: storeText, provider: providerText, engine: engineText, config: configText };
+const DOMAINS: Record<string, Catalog> = { http: httpText, task: taskText, store: storeText, provider: providerText, engine: engineText, config: configText, project: projectText };
 
 export type Params = Record<string, unknown> | undefined | null;
 

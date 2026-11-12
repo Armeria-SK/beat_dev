@@ -73,8 +73,8 @@ export function weekBars(slots: readonly ScheduleSlot[], w: TimeWindow): Bar[] {
   return bars;
 }
 
-export interface Stream { id: string; title: string; paused: boolean; rule: string | null; truncated: boolean }
-export interface TimelineRow { id: string; title: string; paused: boolean; rule: string | null; bars: Bar[] }
+export interface Stream { id: string; title: string; paused: boolean; ended?: boolean; rule: string | null; truncated: boolean }
+export interface TimelineRow { id: string; title: string; paused: boolean; ended?: boolean; rule: string | null; bars: Bar[] }
 
 export interface RowsInput {
   slots: readonly ScheduleSlot[];
@@ -83,12 +83,20 @@ export interface RowsInput {
   range: Range;
   window: TimeWindow;
   now: number;
+  products?: ReadonlyArray<{ id: string; title: string }>;
 }
 
-export function buildRows({ slots, streams, tasksTitle, range, window: w, now }: RowsInput): TimelineRow[] {
+export const PRODUCT_ROW = 'product:';
+
+export function buildRows({ slots, streams, tasksTitle, range, window: w, now, products = [] }: RowsInput): TimelineRow[] {
   const own = new Set(streams.map(stream => stream.id));
+  const known = new Set(products.map(product => product.id));
   const draw = (list: readonly ScheduleSlot[]): Bar[] => (range === 'day' ? dayBars(list, w) : weekBars(list, w));
-  const rows: TimelineRow[] = [{ id: '', title: tasksTitle, paused: false, rule: null, bars: draw(slots.filter(slot => !own.has(slot.taskId))) }];
+  const loose = slots.filter(slot => !own.has(slot.taskId));
+  const rows: TimelineRow[] = [
+    { id: '', title: tasksTitle, paused: false, rule: null, bars: draw(loose.filter(slot => !slot.projectId || !known.has(slot.projectId))) },
+    ...products.map(product => ({ id: `${PRODUCT_ROW}${product.id}`, title: product.title, paused: false, rule: null, bars: draw(loose.filter(slot => slot.projectId === product.id)) })),
+  ];
   for (const stream of streams) {
     const mine = slots.filter(slot => slot.taskId === stream.id);
     const ran = mine.filter(slot => slot.state !== 'planned');
@@ -98,7 +106,7 @@ export function buildRows({ slots, streams, tasksTitle, range, window: w, now }:
       const band = bar(start, w.to, 'planned', stream.title, w, planned.length, true);
       rows.push({ id: stream.id, title: stream.title, paused: false, rule: stream.rule, bars: [...draw(ran), ...(band ? [band] : [])] });
     } else {
-      rows.push({ id: stream.id, title: stream.title, paused: stream.paused, rule: null, bars: draw([...ran, ...planned]) });
+      rows.push({ id: stream.id, title: stream.title, paused: stream.paused, ...(stream.paused && stream.ended ? { ended: true } : {}), rule: null, bars: draw([...ran, ...planned]) });
     }
   }
   return rows;

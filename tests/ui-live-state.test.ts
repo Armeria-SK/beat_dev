@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Conversation, NotificationItem, Task } from '../web/src/api.ts';
+import type { Conversation, NotificationItem, Project, Task } from '../web/src/api.ts';
 import type { RunEvent } from '../web/src/events.ts';
 import { EMPTY, reduce, type Action, type Effect, type LiveState } from '../web/src/ui/live-state.ts';
 
@@ -71,8 +71,55 @@ test('ui/live-state: 未読の数は notification で 1 増え、notification.re
 test('ui/live-state: つなぎ直し（resync）は、サーバーの下書きを入れ、全部を読み直す', () => {
   const r = reduce(EMPTY, { type: 'resync', drafts: [{ runId: 'r', conversationId: 'c', modelId: 'm', text: 'x' }, { runId: 'q', conversationId: 'd', modelId: 'm', text: '' }] });
   assert.deepEqual([...r.state.streaming], ['c']);
-  assert.deepEqual(refreshes(r.effects), ['approvals', 'conversations', 'drafts', 'tasks', 'unread', 'worker']);
+  assert.deepEqual(refreshes(r.effects), ['approvals', 'conversations', 'drafts', 'projects', 'tasks', 'unread', 'worker']);
   assert.equal(r.effects.filter(e => e.kind === 'checklist').length, 2);
+});
+
+const project = (id: string, over: Partial<Project> = {}): Project => ({
+  id, name: id, root: `C:\\work\\${id}`, check_command: null, scout_mode: 'off', remotes: [], archived_at: null, created_at: 0, updated_at: 0,
+  is_git: false, folder_missing: false, waiting: { proposals: 0, questions: 0, pending: 0 }, running: 0, last_activity_at: null, ...over,
+});
+const approvalAsked: RunEvent = { type: 'approval.requested', runId: 'r', conversationId: 'c', approval: { id: 'a', tool: 'file_write', title: 'Write x', body: '', reasons: [], details: [], paths: [], expiresAt: 0, onceOnly: false, preview: [] } };
+
+test('ui/live-state: project.changed は製品の一覧を読み直す（しまう・戻すは会話の一覧も）', () => {
+  for (const change of ['created', 'updated'] as const) {
+    const r = reduce(EMPTY, ev({ type: 'project.changed', projectId: 'p1aaaa', change }));
+    assert.deepEqual(refreshes(r.effects), ['projects'], change);
+    assert.equal(r.state, EMPTY);
+  }
+  for (const change of ['archived', 'restored'] as const) {
+    assert.deepEqual(refreshes(reduce(EMPTY, ev({ type: 'project.changed', projectId: 'p1aaaa', change })).effects), ['conversations', 'projects'], change);
+  }
+});
+
+test('ui/live-state: 製品があるときだけ、タスクと承認の出来事で製品の数を読み直す（製品が無ければ今までと同じ）', () => {
+  const events: RunEvent[] = [
+    { type: 'task.changed', task: task('t1', 'inbox', 5) },
+    { type: 'task.deleted', id: 't1' },
+    approvalAsked,
+    { type: 'approval.resolved', runId: 'r', conversationId: 'c', approvalId: 'a', outcome: 'once' },
+  ];
+  const withProducts = run(EMPTY, { type: 'projects', projects: [project('p1aaaa')] });
+  for (const event of events) {
+    assert.equal(refreshes(reduce(EMPTY, ev(event)).effects).includes('projectCounts'), false, event.type);
+    assert.equal(refreshes(reduce(withProducts, ev(event)).effects).filter(w => w === 'projectCounts').length, 1, event.type);
+    assert.equal(refreshes(reduce(withProducts, ev(event)).effects).includes('projects'), false, event.type);
+  }
+});
+
+test('ui/live-state: 製品の一覧と、会話の一覧の more を入れる（more の無い応答は空）', () => {
+  assert.equal(EMPTY.projectsLoaded, false);
+  const s = run(EMPTY, { type: 'projects', projects: [project('p1aaaa'), project('p2aaaa')] }, { type: 'conversations', conversations: [conv('c1')], more: { p1aaaa: 4, none: 2 } });
+  assert.equal(s.projectsLoaded, true);
+  assert.deepEqual(s.projects.map(p => p.id), ['p1aaaa', 'p2aaaa']);
+  assert.deepEqual(s.conversationsMore, { p1aaaa: 4, none: 2 });
+  assert.deepEqual(run(s, { type: 'conversations', conversations: [conv('c1')] }).conversationsMore, {});
+  assert.equal(run(EMPTY, { type: 'projects', projects: [] }).projectsLoaded, true, '製品の口が無いサーバー（空の一覧）でも読み終えた扱い');
+
+  const renamed = run(s, { type: 'project', project: project('p1aaaa', { name: 'Renamed' }) });
+  assert.deepEqual(renamed.projects.map(p => p.name), ['Renamed', 'p2aaaa'], '同じ ID は場所を変えずに置き換える');
+  assert.deepEqual(run(s, { type: 'project', project: project('p3aaaa') }).projects.map(p => p.id), ['p1aaaa', 'p2aaaa', 'p3aaaa']);
+  assert.deepEqual(run(s, { type: 'project', project: project('p1aaaa', { archived_at: 9 }) }).projects.map(p => p.id), ['p2aaaa'], 'しまった製品は一覧から外す');
 });
 
 test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出し・お知らせ・承認の一覧・会話ごとの読み直しの数）', () => {
@@ -143,4 +190,40 @@ test('ui/live-state: Library の画面を読み直す合図（libraryRevision）
   ];
   for (const event of bumps) assert.equal(reduce(EMPTY, ev(event)).state.libraryRevision, 1, event.type);
   assert.equal(reduce(EMPTY, ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'a' })).state.libraryRevision, 0);
+});
+
+test('ui/live-state: 割り込みの発言が始まらなかった知らせ（queued_not_started）で割り込みの印を外す。ほかの警告では外さない', () => {
+  const forced = run(EMPTY, ev({ type: 'run.start', runId: 'r1', conversationId: 'c', modelId: 'm' }), { type: 'interrupt', conversationId: 'c', on: true });
+  const other = run(forced, ev({ type: 'warning', runId: 'r1', conversationId: 'c', code: 'context_trimmed', message: 'x' }));
+  assert.ok(other.interrupting.has('c'));
+  const dropped = run(forced, ev({ type: 'warning', runId: 'r1', conversationId: 'c', code: 'queued_not_started', message: 'not started' }));
+  assert.equal(dropped.interrupting.has('c'), false);
+  assert.deepEqual(dropped.notices.get('c')!.map(n => n.kind), ['warning'], '知らせそのものは出す');
+  const next = run(dropped, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: true }), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.equal(next.notices.get('c'), undefined, '次のふつうの実行に Interrupted は付かない');
+});
+
+test('ui/live-state: 返事を待ち始めた時刻（「考え中 N 秒」の元）は、実行の始まり・道具の結果・返事の保存で進む', () => {
+  const at = (event: RunEvent, now: number): Action => ({ type: 'event', event, hidden: false, now });
+  const started = run(EMPTY, at({ type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }, 100));
+  assert.equal(started.drafts[0]!.waitingSince, 100);
+  const called = run(started, at({ type: 'tool.call', runId: 'r', conversationId: 'c', callId: 'k', name: 'file_read', input: '{}' }, 200));
+  assert.equal(called.drafts[0]!.waitingSince, 100);
+  const result = run(called, at({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: 'k', name: 'file_read', ok: true, decision: 'allow', preview: '' }, 300));
+  assert.equal(result.drafts[0]!.waitingSince, 300);
+  const saved = run(result, at({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 1, role: 'assistant' }, 400));
+  assert.equal(saved.drafts[0]!.waitingSince, 400);
+  assert.equal(run(saved, at({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 2, role: 'user' }, 500)).drafts[0]!.waitingSince, 400);
+});
+
+test('ui/live-state: 結果が届いた道具の覚えは新しい 20 件まで（古いものから外れる）', () => {
+  let s = run(EMPTY, ev({ type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }));
+  for (let i = 1; i <= 23; i++) {
+    s = run(s,
+      ev({ type: 'tool.call', runId: 'r', conversationId: 'c', callId: `k${i}`, name: 'file_read', input: '{}' }),
+      ev({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: `k${i}`, name: 'file_read', ok: true, decision: 'allow', preview: '' }));
+  }
+  const settled = s.drafts[0]!.settled!;
+  assert.equal(settled.length, 20);
+  assert.deepEqual([settled[0]!.callId, settled.at(-1)!.callId], ['k4', 'k23']);
 });

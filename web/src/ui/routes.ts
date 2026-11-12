@@ -7,6 +7,8 @@ export type Route =
   | { view: 'overview' } | { view: 'kanban' } | { view: 'schedule' } | { view: 'notifications' }
   | { view: 'memory' } | { view: 'archived' }
   | { view: 'task'; id: string }
+  | { view: 'product'; id: string } | { view: 'productNew'; id: string } | { view: 'productSettings'; id: string }
+  | { view: 'newProduct' }
   | { view: 'skills'; target?: SkillTarget }
   | { view: 'runs'; tab?: RunsTab }
   | { view: 'settings'; section?: string };
@@ -21,6 +23,8 @@ const LEGACY: Record<string, Route> = {
   tasks: { view: 'kanban' }, today: { view: 'overview' }, review: { view: 'skills' }, curiosity: { view: 'kanban' },
 };
 
+export const PRODUCT_ID = /^[A-Za-z0-9_-]{6,64}$/u;
+
 function decode(part: string): string {
   try { return decodeURIComponent(part); } catch { return part; }
 }
@@ -30,6 +34,11 @@ export function parseRoute(hash: string): Route {
   const [head = '', a, b] = parts;
   if (head === 'c' && a) return { view: 'chat', id: decode(a) };
   if (head === 'tasks' && a) return { view: 'task', id: decode(a) };
+  if (head === 'p') {
+    if (!a || !PRODUCT_ID.test(a)) return HOME;
+    return { view: b === 'new' ? 'productNew' : b === 'settings' ? 'productSettings' : 'product', id: a };
+  }
+  if (head === 'products') return a === 'new' ? { view: 'newProduct' } : HOME;
   if ((PLAIN as readonly string[]).includes(head)) return { view: head as typeof PLAIN[number] };
   if (head === 'skills') {
     if (a === 'draft' && b) return { view: 'skills', target: { kind: 'draft', name: decode(b) } };
@@ -45,6 +54,10 @@ export function routeHash(route: Route): string {
     case 'new': return '#/';
     case 'chat': return `#/c/${encodeURIComponent(route.id)}`;
     case 'task': return `#/tasks/${encodeURIComponent(route.id)}`;
+    case 'product': return `#/p/${route.id}`;
+    case 'productNew': return `#/p/${route.id}/new`;
+    case 'productSettings': return `#/p/${route.id}/settings`;
+    case 'newProduct': return '#/products/new';
     case 'skills': return route.target ? `#/skills/${route.target.kind === 'draft' ? 'draft/' : ''}${encodeURIComponent(route.target.name)}` : '#/skills';
     case 'runs': return route.tab ? `#/runs/${route.tab}` : '#/runs';
     case 'settings': return route.section ? `#/settings/${encodeURIComponent(route.section)}` : '#/settings';
@@ -88,3 +101,12 @@ export function settingsCloser(env: CloseEnv): { fire: () => void; reset: () => 
 }
 
 export const isConversation = (route: Route): boolean => route.view === 'new' || route.view === 'chat';
+
+export function routeProductId(route: Route): string | null {
+  return route.view === 'product' || route.view === 'productNew' || route.view === 'productSettings' ? route.id : null;
+}
+
+export function settleRoute(route: Route, productIds: readonly string[] | null): Route {
+  const id = routeProductId(route);
+  return id !== null && productIds !== null && !productIds.includes(id) ? HOME : route;
+}

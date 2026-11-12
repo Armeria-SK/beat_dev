@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { subscribe } from '../feedback.ts';
 import { Button, Icon, ToastStack } from './parts.tsx';
 import {
-  dropToast, leaveToast, pauseClock, pushToast, resumeClock, startClock, TOAST_A, TOAST_B, TOAST_LEAVE_MS, toastDuration, type ToastClock, type ToastEntry,
+  dropToast, holdChange, isHeld, leaveToast, NO_HOLD, pauseClock, pushToast, resumeClock, startClock, TOAST_A, TOAST_B, TOAST_LEAVE_MS, toastDuration, type ToastClock, type ToastEntry, type ToastHold,
 } from './toast-list.ts';
 import { variant } from './variants.ts';
 
@@ -14,7 +14,7 @@ export function Toasts() {
   const nextId = useRef(1);
   const clocks = useRef(new Map<number, Running>());
   const leaving = useRef(new Set<ReturnType<typeof setTimeout>>());
-  const held = useRef(false);
+  const held = useRef(NO_HOLD);
 
   const dismiss = (id: number) => {
     const running = clocks.current.get(id);
@@ -27,8 +27,11 @@ export function Toasts() {
   const arm = (id: number, running: Running) => {
     running.timer = setTimeout(() => dismiss(id), running.clock.remaining);
   };
-  const hold = (on: boolean) => {
-    held.current = on;
+  const hold = (part: keyof ToastHold, to: boolean) => {
+    const change = holdChange(held.current, part, to);
+    held.current = change.hold;
+    if (change.flip === null) return;
+    const on = change.flip;
     const now = performance.now();
     for (const [id, running] of clocks.current) {
       if (running.timer) clearTimeout(running.timer);
@@ -45,7 +48,7 @@ export function Toasts() {
       const id = nextId.current++;
       const now = performance.now();
       const running: Running = { clock: startClock(toastDuration(item, limits), now), timer: null };
-      if (held.current) running.clock = pauseClock(running.clock, now); else act.current.arm(id, running);
+      if (isHeld(held.current)) running.clock = pauseClock(running.clock, now); else act.current.arm(id, running);
       clocks.current.set(id, running);
       setList(current => {
         const next = pushToast(current, { id, item, leaving: false }, limits.max);
@@ -71,8 +74,8 @@ export function Toasts() {
 
   return (
     <div className="ui-toasts" data-toasts={limits.tag}
-      onPointerEnter={() => hold(true)} onPointerLeave={() => hold(false)}
-      onFocus={() => hold(true)} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) hold(false); }}>
+      onPointerEnter={() => hold('hover', true)} onPointerLeave={() => hold('hover', false)}
+      onFocus={() => hold('focus', true)} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) hold('focus', false); }}>
       <ToastStack>
         {list.map(({ id, item, leaving: isLeaving }) => {
           const body = (

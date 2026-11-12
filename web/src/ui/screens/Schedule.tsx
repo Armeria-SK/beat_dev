@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { api, ApiError, type RepeatingTask, type ScheduleView, type Task } from '../../api.ts';
+import { api, ApiError, type Project, type RepeatingTask, type ScheduleView, type Task } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatDateTimeSmart, formatRelative, formatZonedInput, getTimezone, startOfDay, timezoneLabel, useT } from '../../i18n/index.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, FREQS, PRIORITIES, type DraftError, type Freq, type TaskDraft } from '../../task-form.ts';
@@ -9,18 +9,21 @@ import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, countText, Notice, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
-import { draftFromTask, repeatPatch, splitSchedule, timePatch, type DeleteBlock, type RepeatingRow, type TimedRow } from '../schedule.ts';
+import {
+  confirmStale, draftFromTask, otherZone, RELOAD_DELAY_MS, reloadWait, repeatPatch, runNowKind, splitSchedule, timePatch, type DeleteBlock, type RepeatingRow, type TimedRow,
+} from '../schedule.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
 import { buildRows, dayHours, nowAt, scrollToNow, windowOf, type Bar, type Range, type Stream, type TimeWindow } from '../timeline.ts';
-import { PRIORITY_KEY } from './Kanban.tsx';
+import { productName, withProduct } from '../product-meta.ts';
+import { sidebarOrder } from '../products.ts';
+import { PRIORITY_KEY, ProductPick } from './Kanban.tsx';
 
 type T = ReturnType<typeof useT>;
 
-export interface ScheduleProps { revision: number }
+export interface ScheduleProps { revision: number; projects: readonly Project[] }
 
 interface Loaded { repeating: RepeatingTask[]; active: Task[]; schedule: ScheduleView; range: Range; window: TimeWindow }
 
-const RELOAD_DELAY_MS = 150;
 const FREQ_KEY = {
   daily: 'ui.schedule.freq.daily', weekday: 'ui.schedule.freq.weekday', weekly: 'ui.schedule.freq.weekly', hourly: 'ui.schedule.freq.hourly', interval: 'ui.schedule.freq.interval',
 } as const satisfies Record<Freq, string>;
@@ -47,7 +50,7 @@ function summaryText(t: T, draft: TaskDraft): string | null {
   }
 }
 
-function RuleFields({ draft, set }: { draft: TaskDraft; set: (patch: Partial<TaskDraft>) => void }) {
+function RuleFields({ draft, set, zone }: { draft: TaskDraft; set: (patch: Partial<TaskDraft>) => void; zone?: string | null | undefined }) {
   const t = useT();
   const timed = draft.freq === 'daily' || draft.freq === 'weekday' || draft.freq === 'weekly';
   return (
@@ -64,14 +67,16 @@ function RuleFields({ draft, set }: { draft: TaskDraft; set: (patch: Partial<Tas
       {draft.freq === 'hourly' && <input className="bt-field ui-sched__num" type="number" min={0} max={59} value={draft.minute} aria-label={t('ui.schedule.minute')} onChange={e => set({ minute: e.target.value })} />}
       {draft.freq === 'interval' && <input className="bt-field ui-sched__num" type="number" min={1} max={59} value={draft.interval} aria-label={t('ui.schedule.interval')} onChange={e => set({ interval: e.target.value })} />}
       <span className="bt-meta">{timezoneLabel()}</span>
+      {zone && <span className="bt-meta">{t('ui.schedule.zoneWas', timezoneLabel(zone))}</span>}
     </div>
   );
 }
 
-function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; onClose: () => void; onSaved: () => void }) {
+function ScheduleForm({ task, projects = [], onClose, onSaved }: { task: RepeatingTask | null; projects?: readonly Project[]; onClose: () => void; onSaved: () => void }) {
   const t = useT();
   const [start] = useState(() => (task ? draftFromTask(task) : { draft: { ...emptyDraft(), when: 'repeat' as const }, ruleKnown: true }));
   const [draft, setDraft] = useState<TaskDraft>(start.draft);
+  const [product, setProduct] = useState<string | null>(null);
   const [ruleOpen, setRuleOpen] = useState(start.ruleKnown);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -94,7 +99,7 @@ function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; 
       } else {
         const built = buildNewTask(draft);
         if (!built.ok) { setError(t(ERROR_KEY[built.error])); setBusy(false); return; }
-        const { task: created } = await api.createTask(built.task);
+        const { task: created } = await api.createTask(withProduct(built.task, product));
         toast({ kind: 'done', icon: 'check', title: t(repeat ? 'ui.schedule.toast.created' : 'ui.task.toast.created'), body: created.title, href: routeHash({ view: 'task', id: created.id }) });
       }
       onSaved();
@@ -111,6 +116,7 @@ function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; 
       <input className="bt-field" autoFocus value={draft.title} maxLength={200} aria-label={t('ui.task.title')} placeholder={t('ui.task.title')} onChange={e => set({ title: e.target.value })} />
       <textarea className="bt-field" rows={3} value={draft.body} maxLength={20_000} aria-label={t('ui.task.body')} placeholder={t('ui.newtask.body')} onChange={e => set({ body: e.target.value })} />
       <div className="ui-newtask__row">
+        {!task && <ProductPick projects={projects} value={product} onChange={setProduct} />}
         <span className="bt-seg" role="group" aria-label={t('ui.task.priority')}>
           {PRIORITIES.map(p => <button key={p} type="button" className="bt-seg__opt" aria-pressed={draft.priority === p} onClick={() => set({ priority: p })}>{t(PRIORITY_KEY[p])}</button>)}
         </span>
@@ -121,7 +127,7 @@ function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; 
           </span>
         )}
       </div>
-      {repeat && ruleOpen && <RuleFields draft={draft} set={set} />}
+      {repeat && ruleOpen && <RuleFields draft={draft} set={set} zone={task ? otherZone(task.timezone, getTimezone()) : null} />}
       {task && !ruleOpen && (
         <div className="ui-newtask__row">
           <span className="bt-meta">{t('ui.schedule.ruleNow', task.cron_text ?? task.cron ?? '')}</span>
@@ -180,16 +186,24 @@ function TimeForm({ task, onClose, onSaved }: { task: Task; onClose: () => void;
   );
 }
 
-function DeleteConfirm({ note, busy, onDelete, onKeep }: { note: string; busy: boolean; onDelete: () => void; onKeep: () => void }) {
+function DeleteConfirm({ note, busy, onDelete, onKeep }: { note: string; busy: boolean; onDelete: () => void; onKeep: (refocus: boolean) => void }) {
   const t = useT();
+  const box = useRef<HTMLDivElement>(null);
+  const keep = useRef(onKeep);
+  keep.current = onKeep;
+  useEffect(() => {
+    const away = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) keep.current(false); };
+    document.addEventListener('pointerdown', away, true);
+    return () => document.removeEventListener('pointerdown', away, true);
+  }, []);
   return (
-    <div className="ui-sched__confirm" role="group" aria-label={t('ui.schedule.deleteWarn')}
-      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onKeep(); } }}>
+    <div ref={box} className="ui-sched__confirm" role="group" aria-label={t('ui.schedule.deleteWarn')}
+      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onKeep(true); } }}>
       <span className="bt-meta ui-danger">{t('ui.schedule.deleteWarn')}</span>
       <span className="bt-meta ui-sched__note">{note}</span>
       <span className="ui-sched__buttons">
         <Button variant="danger" small disabled={busy} onClick={onDelete}>{t('ui.schedule.delete')}</Button>
-        <Button variant="ghost" small autoFocus onClick={onKeep}>{t('ui.schedule.keep')}</Button>
+        <Button variant="ghost" small autoFocus onClick={() => onKeep(true)}>{t('ui.schedule.keep')}</Button>
       </span>
     </div>
   );
@@ -199,23 +213,24 @@ interface RowActions {
   busy: boolean;
   confirming: boolean;
   editing: boolean;
-  onConfirm: (on: boolean) => void;
+  onConfirm: (on: boolean, refocus?: boolean) => void;
   onEdit: (on: boolean) => void;
   onDelete: () => void;
   run: (action: () => Promise<unknown>, done?: { title: string; icon?: 'check' | 'undo' }) => void;
   reload: () => void;
 }
 
-function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; actions: RowActions }) {
+function RepeatingItem({ row, now, actions, product }: { row: RepeatingRow; now: number; actions: RowActions; product: string | null }) {
   const t = useT();
   const { task, state, next, last, blocked } = row;
+  const runNow = runNowKind(state);
   if (actions.editing) return <li className="bt-row ui-sched ui-sched--form"><ScheduleForm task={task} onClose={() => actions.onEdit(false)} onSaved={actions.reload} /></li>;
   const when = state === 'active' ? (next !== null ? t('ui.schedule.next', whenText(next, now), formatRelative(next, now)) : null) : t(state === 'paused' ? 'ui.schedule.pausedMeta' : 'ui.schedule.endedMeta');
   return (
     <li className="bt-row ui-sched" data-task={task.id}>
       <div className="bt-row__main">
         <a className="bt-row__title ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a>
-        <span className="bt-row__sub bt-meta">{[task.cron_text ?? task.cron, when].filter(Boolean).join(' · ')}</span>
+        <span className="bt-row__sub bt-meta">{[product, task.cron_text ?? task.cron, when].filter(Boolean).join(' · ')}</span>
         <span className="bt-row__sub bt-meta">
           {last
             ? <>{t('ui.schedule.last')} <a className="bt-tool__link" href={routeHash({ view: 'task', id: last.id })}>{formatRelative(last.at, now)}</a> · {t(STATUS_KEY[last.status])}{last.summary ? ` · ${last.summary}` : ''}</>
@@ -224,7 +239,7 @@ function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; 
         {blocked && !actions.confirming && <span className="bt-row__sub bt-meta">{t(BLOCK_KEY[blocked])}</span>}
       </div>
       {actions.confirming ? (
-        <DeleteConfirm note={t('ui.schedule.deleteNote.repeating')} busy={actions.busy} onDelete={actions.onDelete} onKeep={() => actions.onConfirm(false)} />
+        <DeleteConfirm note={t('ui.schedule.deleteNote.repeating')} busy={actions.busy} onDelete={actions.onDelete} onKeep={refocus => actions.onConfirm(false, refocus)} />
       ) : (
         <div className="bt-row__end ui-sched__buttons">
           {last?.status === 'running' && <Pill tone="running">{t('ui.kanban.running')}</Pill>}
@@ -233,7 +248,7 @@ function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; 
           {state === 'ended' && <span className="bt-tag">{t('ui.schedule.ended')}</span>}
           {state === 'active' && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.cancelTask(task.id), { title: t('ui.schedule.toast.paused') })}>{t('ui.schedule.pause')}</Button>}
           {state === 'paused' && <Button small disabled={actions.busy} onClick={() => actions.run(() => api.taskAction(task.id, 'uncancel'), { title: t('ui.schedule.toast.resumed'), icon: 'undo' })}>{t('ui.schedule.resume')}</Button>}
-          {state !== 'paused' && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.taskAction(task.id, 'run-now'), { title: t('ui.task.toast.started') })}>{t('ui.task.runNow')}</Button>}
+          {runNow && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.taskAction(task.id, 'run-now'), { title: t(runNow === 'restart' ? 'ui.schedule.toast.restarted' : 'ui.task.toast.started') })}>{t(runNow === 'restart' ? 'ui.schedule.restart' : 'ui.task.runNow')}</Button>}
           <Button variant="ghost" small disabled={actions.busy} data-edit={task.id} onClick={() => actions.onEdit(true)}>{t('ui.schedule.edit')}</Button>
           <Button variant="ghost" small disabled={actions.busy || blocked !== null} title={blocked ? t(BLOCK_KEY[blocked]) : undefined} data-delete={task.id} onClick={() => actions.onConfirm(true)}>{t('ui.schedule.delete')}</Button>
         </div>
@@ -242,7 +257,7 @@ function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; 
   );
 }
 
-function TimedItem({ row, now, actions }: { row: TimedRow; now: number; actions: RowActions }) {
+function TimedItem({ row, now, actions, product }: { row: TimedRow; now: number; actions: RowActions; product: string | null }) {
   const t = useT();
   const { task, at, blocked } = row;
   return (
@@ -250,13 +265,13 @@ function TimedItem({ row, now, actions }: { row: TimedRow; now: number; actions:
       <span className="bt-meta ui-sched__at">{whenText(at, now)}</span>
       <div className="bt-row__main">
         <a className="bt-row__title ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a>
-        <span className="bt-row__sub bt-meta">{at <= now ? t('ui.schedule.due') : formatRelative(at, now)}</span>
+        <span className="bt-row__sub bt-meta">{[product, at <= now ? t('ui.schedule.due') : formatRelative(at, now)].filter(Boolean).join(' · ')}</span>
         {blocked && !actions.confirming && <span className="bt-row__sub bt-meta">{t(BLOCK_KEY[blocked])}</span>}
       </div>
       {actions.editing ? (
         <TimeForm task={task} onClose={() => actions.onEdit(false)} onSaved={actions.reload} />
       ) : actions.confirming ? (
-        <DeleteConfirm note={t('ui.schedule.deleteNote.timed')} busy={actions.busy} onDelete={actions.onDelete} onKeep={() => actions.onConfirm(false)} />
+        <DeleteConfirm note={t('ui.schedule.deleteNote.timed')} busy={actions.busy} onDelete={actions.onDelete} onKeep={refocus => actions.onConfirm(false, refocus)} />
       ) : (
         <div className="bt-row__end ui-sched__buttons">
           <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.taskAction(task.id, 'run-now'), { title: t('ui.task.toast.started') })}>{t('ui.task.runNow')}</Button>
@@ -276,12 +291,13 @@ function barTitle(t: T, bar: Bar, range: Range): string {
   return bar.count > 1 ? t('ui.schedule.slot.many', bar.count, at, state) : t('ui.schedule.slot.one', bar.title, at, state);
 }
 
-function Timeline({ range, window: win, now, schedule, streams }: { range: Range; window: TimeWindow; now: number; schedule: ScheduleView; streams: Stream[] }) {
+function Timeline({ range, window: win, now, schedule, streams, projects }: { range: Range; window: TimeWindow; now: number; schedule: ScheduleView; streams: Stream[]; projects: readonly Project[] }) {
   const t = useT();
   const scroller = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const slots = useMemo(() => schedule.slots.map(slot => (slot.state === 'live' ? { ...slot, length: Math.max(slot.length, now - slot.start) } : slot)), [schedule.slots, now]);
-  const rows = useMemo(() => buildRows({ slots, streams, tasksTitle: t('ui.schedule.stream.tasks'), range, window: win, now }), [slots, streams, t, range, win, now]);
+  const products = useMemo(() => sidebarOrder(projects).map(p => ({ id: p.id, title: t('ui.pf.tasksOf', p.name) })), [projects, t]);
+  const rows = useMemo(() => buildRows({ slots, streams, tasksTitle: t('ui.schedule.stream.tasks'), range, window: win, now, products }), [slots, streams, t, range, win, now, products]);
   const at = nowAt(now, win);
   const labels = range === 'day' ? dayHours() : win.days.slice(0, 7).map(day => dayLabel(day, { weekday: 'short', day: 'numeric' }));
 
@@ -302,12 +318,12 @@ function Timeline({ range, window: win, now, schedule, streams }: { range: Range
           <div key={row.id} className="bt-timeline__row" data-stream={row.id || 'tasks'}>
             <span className="ui-timeline__name" title={row.title}>
               {row.title}
-              {row.paused && <span className="bt-meta"> {t('ui.schedule.pausedMeta')}</span>}
+              {row.paused && <span className="bt-meta"> {t(row.ended ? 'ui.schedule.endedMeta' : 'ui.schedule.pausedMeta')}</span>}
               {row.rule && <span className="bt-meta"> {row.rule}</span>}
             </span>
             <div className="bt-timeline__track">
               {row.bars.map(bar => (
-                <span key={`${bar.state}:${bar.start}`} title={barTitle(t, bar, range)} data-state={bar.state}
+                <span key={`${bar.state}:${bar.start}`} role="img" aria-label={barTitle(t, bar, range)} title={barTitle(t, bar, range)} data-state={bar.state}
                   className={`bt-timeline__slot${bar.state === 'past' ? ' bt-timeline__slot--past' : bar.state === 'live' ? ' bt-timeline__slot--live' : ''}${bar.band ? ' ui-timeline__band' : ''}`}
                   style={{ '--bt-at': `${bar.at}%`, '--bt-len': `${bar.len}%` } as CSSProperties} />
               ))}
@@ -320,7 +336,7 @@ function Timeline({ range, window: win, now, schedule, streams }: { range: Range
   );
 }
 
-export function Schedule({ revision }: ScheduleProps) {
+export function Schedule({ revision, projects }: ScheduleProps) {
   const t = useT();
   const [range, setRange] = useState<Range>('day');
   const [data, setData] = useState<Loaded | null>(null);
@@ -331,6 +347,8 @@ export function Schedule({ revision }: ScheduleProps) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const loads = useRef(latestOnly());
   const first = useRef(true);
+  const lastLoad = useRef(0);
+  const seen = useRef(revision);
   const newButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef<string | null>(null);
   const now = useNow(60_000);
@@ -338,6 +356,7 @@ export function Schedule({ revision }: ScheduleProps) {
 
   const load = useCallback(async () => {
     const ticket = loads.current.begin();
+    lastLoad.current = Date.now();
     const win = windowOf(range, Date.now(), startOfDay);
     try {
       const [tasks, schedule] = await Promise.all([api.tasks(), api.schedule(win.from, win.to)]);
@@ -350,7 +369,9 @@ export function Schedule({ revision }: ScheduleProps) {
   }, [range]);
 
   useEffect(() => {
-    const timer = setTimeout(() => void load(), first.current ? 0 : RELOAD_DELAY_MS);
+    const pushed = seen.current !== revision;
+    seen.current = revision;
+    const timer = setTimeout(() => void load(), first.current ? 0 : pushed ? reloadWait(lastLoad.current, Date.now()) : RELOAD_DELAY_MS);
     first.current = false;
     return () => clearTimeout(timer);
   }, [load, revision, today]);
@@ -363,9 +384,11 @@ export function Schedule({ revision }: ScheduleProps) {
   }, [editing, confirming]);
 
   const rows = useMemo(() => (data ? splitSchedule(data) : null), [data]);
+  const stale = rows !== null && confirmStale(confirming, [...rows.repeating, ...rows.timed]);
+  useEffect(() => { if (stale) setConfirming(null); }, [stale]);
   const streams = useMemo<Stream[]>(() => (rows && data ? rows.repeating.map(row => {
     const template = data.schedule.templates.find(item => item.taskId === row.task.id);
-    return { id: row.task.id, title: row.task.title, paused: row.state !== 'active', rule: template?.cron_text ?? row.task.cron_text, truncated: template?.truncated ?? false };
+    return { id: row.task.id, title: row.task.title, paused: row.state !== 'active', ended: row.state === 'ended', rule: template?.cron_text ?? row.task.cron_text, truncated: template?.truncated ?? false };
   }) : []), [rows, data]);
 
   const withBusy = async (id: string, work: () => Promise<void>) => {
@@ -379,13 +402,16 @@ export function Schedule({ revision }: ScheduleProps) {
     busy: busy.has(task.id),
     confirming: confirming === task.id,
     editing: editing === task.id,
-    onConfirm: on => { if (!on) refocus.current = `[data-delete="${CSS.escape(task.id)}"]`; setEditing(null); setConfirming(on ? task.id : null); },
+    onConfirm: (on, back = true) => { if (!on && back) refocus.current = `[data-delete="${CSS.escape(task.id)}"]`; setEditing(null); setConfirming(on ? task.id : null); },
     onEdit: on => { if (!on) refocus.current = `[data-edit="${CSS.escape(task.id)}"]`; setConfirming(null); setEditing(on ? task.id : null); },
     onDelete: () => void withBusy(task.id, async () => {
       try {
         const { deleted: removed } = await api.deleteTask(task.id);
         toast({ icon: 'x', title: deleted, body: removed.keptRuns > 0 ? t('ui.schedule.toast.kept', task.title, removed.keptRuns) : task.title });
         setConfirming(null);
+        await load();
+        newButton.current?.focus();
+        return;
       } catch (error) { reportOpError(error); setConfirming(null); }
       await load();
     }),
@@ -415,18 +441,18 @@ export function Schedule({ revision }: ScheduleProps) {
           <Button ref={newButton} icon="plus" aria-expanded={creating} onClick={() => setCreating(open => !open)}>{t('ui.schedule.newShort')}</Button>
         </div>
       </header>
-      {creating && <ScheduleForm task={null} onClose={closeNew} onSaved={() => void load()} />}
+      {creating && <ScheduleForm task={null} projects={projects} onClose={closeNew} onSaved={() => void load()} />}
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
       {data && rows && (
         <>
-          <Timeline range={data.range} window={data.window} now={now} schedule={data.schedule} streams={streams} />
+          <Timeline range={data.range} window={data.window} now={now} schedule={data.schedule} streams={streams} projects={projects} />
           {data.schedule.ranTruncated && <p className="bt-meta ui-col__empty">{t('ui.schedule.ranTruncated')}</p>}
           <div className="bt-cols">
             <section className="bt-section bt-rise" style={{ '--bt-i': 2 } as CSSProperties} aria-label={t('ui.schedule.repeating')}>
               <div className="bt-section__head"><span className="bt-label">{t('ui.schedule.repeating')}</span><span className="bt-count bt-count--quiet"><span className="bt-count__n">{countText(rows.repeating.length)}</span></span></div>
               {rows.repeating.length === 0 ? <p className="bt-meta ui-col__empty">{t('ui.schedule.noRepeating')}</p> : (
                 <ul className="bt-list">
-                  {rows.repeating.map(row => <RepeatingItem key={row.task.id} row={row} now={now} actions={actionsFor(row.task, t('ui.schedule.toast.deleted'))} />)}
+                  {rows.repeating.map(row => <RepeatingItem key={row.task.id} row={row} now={now} product={productName(projects, row.task.project_id)} actions={actionsFor(row.task, t('ui.schedule.toast.deleted'))} />)}
                 </ul>
               )}
             </section>
@@ -434,7 +460,7 @@ export function Schedule({ revision }: ScheduleProps) {
               <div className="bt-section__head"><span className="bt-label">{t('ui.schedule.timed')}</span><span className="bt-count bt-count--quiet"><span className="bt-count__n">{countText(rows.timed.length)}</span></span></div>
               {rows.timed.length === 0 ? <p className="bt-meta ui-col__empty">{t('ui.schedule.noTimed')}</p> : (
                 <ul className="bt-list">
-                  {rows.timed.map(row => <TimedItem key={row.task.id} row={row} now={now} actions={actionsFor(row.task, t('ui.schedule.toast.deletedTask'))} />)}
+                  {rows.timed.map(row => <TimedItem key={row.task.id} row={row} now={now} product={productName(projects, row.task.project_id)} actions={actionsFor(row.task, t('ui.schedule.toast.deletedTask'))} />)}
                 </ul>
               )}
             </section>

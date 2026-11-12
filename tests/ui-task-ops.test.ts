@@ -4,7 +4,7 @@ import { ApiError } from '../web/src/api.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import { sheetActions } from '../web/src/task-meta.ts';
-import { answerTaskOp, runTaskOp, taskButtons, type TaskOpDeps } from '../web/src/ui/task-ops.ts';
+import { answerTaskOp, editOverwrites, runTaskOp, taskButtons, type TaskOpDeps } from '../web/src/ui/task-ops.ts';
 
 // 新しい画面のタスクの操作（Kanban のカードとタスクの画面。steps/p1-ui.md の 1-4a）。
 // 戻せる操作（承認 → unapprove、却下・取り消し → uncancel）のトーストにだけ Undo が付く。画面を持たない関数（web/src/ui/task-ops.ts）。
@@ -145,4 +145,12 @@ test('ui/task-ops: タスクの画面のボタン。提案は Approve と Reject
   assert.deepEqual(ops('failed'), ['retry*']);
   assert.deepEqual(ops('done'), ['retry']);
   assert.deepEqual(ops('cancelled'), ['restore*', 'retry']);
+});
+
+test('ui/task-ops: 欄を書き換えている最中に下でその欄が変わったら、Save の前に知らせる（開いたときの値と今の値が違い、書いた値とも違うとき）', () => {
+  assert.equal(editOverwrites('old', 'old', 'mine'), false, '下は変わっていない');
+  assert.equal(editOverwrites('old', 'theirs', 'mine'), true);
+  assert.equal(editOverwrites('old', 'theirs', 'old'), true, '書き換えていなくても、Save すれば新しい値を戻してしまう');
+  assert.equal(editOverwrites('old', 'mine', 'mine'), false, '同じ値になるなら上書きにならない');
+  assert.equal(editOverwrites('', 'now set', ''), true);
 });

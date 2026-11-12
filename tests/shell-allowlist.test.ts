@@ -207,7 +207,7 @@ test('git のリポジトリの設定: ふつうでなければ git はすべて
 });
 
 test('curl・wget: 設定ファイルがあれば今回だけ（最初の -q・--no-config を除く）。無ければ、これまでどおり', () => {
-  const has = { toolConfig: (tool: 'curl' | 'wget') => ({ file: `/h/.${tool}rc` }) };
+  const has = { toolConfig: (tool: 'curl' | 'wget' | 'npm') => ({ file: `/h/.${tool}rc` }) };
   const rows: Array<[string, ShellKind, Level]> = [
     ['curl https://example.com/', 'bash', 'once'], ['curl -sS https://example.com/', 'bash', 'once'], ['curl -q https://example.com/', 'bash', 'allow'], ['curl -q -sS https://example.com/', 'bash', 'allow'],
     ['curl -sS -q https://example.com/', 'bash', 'once'], ['curl -qs https://example.com/', 'bash', 'once'], ['curl -L -q https://example.com/', 'bash', 'once'],
@@ -277,10 +277,12 @@ test('git: 前に置ける引数・サブコマンドごとの扱い', () => {
     ['git diff --cached', 'allow'], ['git diff --output=x', 'once'], ['git diff --ext-diff', 'once'], ['git blame -L 1,5 f', 'allow'], ['git blame --contents x f', 'once'],
     ['git branch', 'allow'], ['git branch -a', 'allow'], ['git branch -r', 'allow'], ['git branch --show-current', 'allow'], ['git branch new', 'ask'], ['git branch -D x', 'ask'], ['git tag', 'allow'], ['git tag -l "v*"', 'allow'], ['git tag v1', 'ask'],
     ['git cat-file -p HEAD', 'allow'], ['git cat-file --textconv HEAD:f', 'once'], ['git cat-file --batch', 'once'], ['git grep -n foo', 'allow'], ['git grep -O foo', 'once'], ['git ls-files', 'allow'], ['git rev-parse --show-toplevel', 'allow'],
-    ['git stash list', 'allow'], ['git stash', 'ask'], ['git stash pop', 'ask'], ['git reflog', 'allow'], ['git reflog show HEAD', 'allow'], ['git reflog expire --all', 'once'], ['git remote', 'allow'], ['git remote -v', 'allow'], ['git remote show origin', 'once'],
+    ['git stash list', 'allow'], ['git reflog', 'allow'], ['git reflog show HEAD', 'allow'], ['git reflog expire --all', 'once'], ['git remote', 'allow'], ['git remote -v', 'allow'], ['git remote show origin', 'once'],
     ['git config --get user.name', 'allow'], ['git config --list', 'allow'], ['git config user.name', 'allow'], ['git config user.name x', 'once'], ['git config --global x y', 'once'], ['git worktree list', 'allow'], ['git worktree add x', 'once'],
-    ['git checkout -b feature', 'ask'], ['git switch main', 'ask'], ['git restore --staged f', 'ask'], ['git reset --hard', 'ask'], ['git merge main', 'ask'], ['git rebase main', 'ask'], ['git rebase --exec ./x main', 'once'], ['git rebase -i main', 'once'],
-    ['git cherry-pick abc', 'ask'], ['git revert abc', 'ask'], ['git apply p.diff', 'ask'], ['git mv a b', 'ask'], ['git rm f', 'ask'], ['git commit -am x', 'ask'], ['git commit --amend --no-edit', 'ask'],
+    ['git checkout -b feature', 'once'], ['git switch main', 'once'], ['git restore --staged f', 'once'], ['git reset --hard', 'once'], ['git merge main', 'once'], ['git rebase main', 'once'], ['git rebase --exec ./x main', 'once'], ['git rebase -i main', 'once'],
+    ['git cherry-pick abc', 'once'], ['git revert abc', 'once'], ['git apply p.diff', 'once'], ['git am p.mbox', 'once'], ['git checkout main -- .', 'once'], ['git restore .', 'once'], ['git reset --keep HEAD~1', 'once'],
+    ['git stash pop', 'once'], ['git stash apply', 'once'], ['git stash', 'once'], ['git stash push', 'once'], ['git stash show', 'ask'], ['git stash drop', 'ask'], ['git reset', 'ask'], ['git reset --soft HEAD~1', 'ask'], ['git reset -- f', 'ask'],
+    ['git mv a b', 'ask'], ['git rm f', 'ask'], ['git commit -am x', 'ask'], ['git commit --amend --no-edit', 'ask'],
     ['git push -u origin main', 'ask'], ['git push --receive-pack=x origin', 'once'], ['git push --exec=x', 'once'], ['git push ext::sh origin', 'once'], ['git push https://x/y.git', 'once'], ['git push origin HEAD:main', 'ask'],
     ['git fetch', 'once'], ['git pull', 'once'], ['git clone x y', 'once'], ['git ls-remote .', 'once'], ['git init', 'once'], ['git submodule update', 'once'], ['git bisect start', 'once'], ['git gc', 'once'], ['git filter-branch', 'once'],
     ['git log $x', 'once'], ['git log -- $f', 'allow'], ['git show HEAD:README.md', 'allow'], ['git log feature/x..main', 'allow'], ['git log "a b"', 'once'],

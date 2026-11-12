@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { api, type Conversation, type ReviewJob, type RunRow, type ToolCallRow } from '../../api.ts';
+import { api, type Conversation, type Project, type ReviewJob, type RunRow, type ToolCallRow } from '../../api.ts';
 import { formatDateTime, formatNumber, startOfDay, useT } from '../../i18n/index.ts';
 import { changeLabel, decidedByLabel, decisionLabel, runDetail, runKindLabel } from '../../runlog-meta.ts';
 import { latestOnly } from '../latest.ts';
@@ -7,6 +7,8 @@ import {
   durationText, filterLog, LOG_FILTERS, logFooter, logRows, tokensText, type LogFilter, type LogResult, type LogRow, type LogTotals,
 } from '../library.ts';
 import { EmptyState, Notice, Pill, type PillTone } from '../parts.tsx';
+import { inFilter, optionLabel, settleFilter } from '../product-meta.ts';
+import { ALL_PRODUCTS, filterOptions, filterQuery, type ProductFilter } from '../products.ts';
 import { routeHash, type RunsTab } from '../routes.ts';
 import { maskTarget } from '../tool-row.ts';
 
@@ -53,7 +55,7 @@ function Detail({ row, t }: { row: LogRow; t: T }) {
   const job = row.job!;
   return (
     <div className="ui-lib__more">
-      {job.note && <span>{job.note}</span>}
+      {job.note && <span>{maskTarget(job.note)}</span>}
       {job.changes.length === 0 ? <span>{t('ui.runs.noChanges')}</span> : (
         <ul className="ui-lib__changes">
           {job.changes.map(change => <li key={change.id}>{changeLabel(change.action)} · {change.after ?? change.before}{change.undone_at ? ` · ${t('ui.memory.undone')}` : ''}</li>)}
@@ -64,9 +66,11 @@ function Detail({ row, t }: { row: LogRow; t: T }) {
   );
 }
 
-export function Runs({ tab, revision, conversations }: { tab?: RunsTab | undefined; revision: number; conversations: readonly Conversation[] }) {
+export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab | undefined; revision: number; conversations: readonly Conversation[]; projects: readonly Project[] }) {
   const t = useT();
   const filter = FILTER_OF(tab);
+  const [picked, setPicked] = useState<ProductFilter>(ALL_PRODUCTS);
+  const product = settleFilter(picked, projects);
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
@@ -74,19 +78,29 @@ export function Runs({ tab, revision, conversations }: { tab?: RunsTab | undefin
 
   const load = useCallback(async () => {
     const ticket = loads.current.begin();
+    const project = filterQuery(product);
     try {
-      const [runs, calls, jobs] = await Promise.all([api.runs(), api.toolCalls(), api.reviews()]);
+      const [runs, calls, jobs] = await Promise.all([api.runs(200, project), api.toolCalls(project), api.reviews(project)]);
       if (!loads.current.isCurrent(ticket)) return;
       setData({ runs: runs.runs, calls: calls.toolCalls, jobs: jobs.jobs, totals: { run: runs.total, tool: calls.total, review: jobs.total } });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
     }
-  }, []);
-  useEffect(() => { const timer = setTimeout(() => void load(), 300); return () => clearTimeout(timer); }, [load, revision]);
+  }, [product]);
+  const lastProduct = useRef(product);
+  useEffect(() => {
+    const switched = lastProduct.current !== product;
+    lastProduct.current = product;
+    const timer = setTimeout(() => void load(), switched ? 0 : 300);
+    return () => clearTimeout(timer);
+  }, [load, revision, product]);
+  const options = projects.some(p => p.archived_at === null) ? filterOptions(projects) : [];
 
   const titles = useMemo(() => new Map(conversations.map(c => [c.id, c.title])), [conversations]);
-  const rows = useMemo(() => (data ? logRows({ runs: data.runs, calls: data.calls, jobs: data.jobs, runLabel: runKindLabel, titleOf: id => titles.get(id) ?? null }) : []), [data, titles]);
+  const rows = useMemo(() => (data ? logRows({
+    runs: inFilter(data.runs, product), calls: inFilter(data.calls, product), jobs: inFilter(data.jobs, product), runLabel: runKindLabel, titleOf: id => titles.get(id) ?? null,
+  }) : []), [data, product, titles]);
   const shown = useMemo(() => filterLog(rows, filter), [rows, filter]);
   const today = startOfDay(Date.now());
   const footer = data ? logFooter(rows, filter, data.totals, today) : null;
@@ -97,6 +111,11 @@ export function Runs({ tab, revision, conversations }: { tab?: RunsTab | undefin
       <header className="bt-screen__head bt-rise">
         <h1 className="bt-screen__title">{t('ui.nav.runs')}</h1>
         <div className="bt-screen__tools">
+          {options.length > 0 && (
+            <select className="bt-select" value={product} aria-label={t('ui.pf.product')} onChange={e => { setOpen(null); setPicked(e.target.value); }}>
+              {options.map(option => <option key={option.key} value={option.key}>{optionLabel({ ...option, waiting: 0 }, t('ui.runs.all'), t('ui.section.noProduct'))}</option>)}
+            </select>
+          )}
           <div className="bt-seg" role="group" aria-label={t('ui.runs.kind')}>
             {LOG_FILTERS.map(id => <button key={id} type="button" className="bt-seg__opt" aria-pressed={filter === id} onClick={() => pick(id)}>{t(FILTER_KEY[id])}</button>)}
           </div>

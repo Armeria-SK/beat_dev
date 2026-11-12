@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type PersonaView } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatNumber, useT } from '../../i18n/index.ts';
+import { accessWidening } from '../../settings/access.ts';
 import { issueMessage } from '../../settings/model.ts';
 import { estimateTokens, overPersonaBudget } from '../../tokens.ts';
 import { Button } from '../parts.tsx';
+import { RowConfirm } from '../RowConfirm.tsx';
 import { applyTheme, browserStorage, readReducedMotion, readTheme, saveReducedMotion, saveTheme, THEMES, type Theme } from '../theme.ts';
 import { mergeRawConfig, parseRawConfig } from './commit.ts';
 import { CommitField, Group, Row, Switch, useSet } from './controls.tsx';
@@ -83,6 +85,7 @@ export function PersonaPanel({ onReplay }: { onReplay: () => void }) {
         </Row>
       </Group>
       <Group title={t('ui.set.persona.files')}>
+        <p className="bt-meta">{t('ui.set.persona.scope')}</p>
         {persona === null && <p className="bt-meta" role="status">{t('ui.set.loading')}</p>}
         {persona === 'failed' && <p className="bt-meta bt-del" role="alert">{t('ui.set.loadFailed')}</p>}
         {view && (
@@ -163,6 +166,28 @@ export function AdvancedPanel() {
     if (conflicts.length > 0) { ctx.fail('adv:file', t('ui.set.adv.conflict', conflicts.join(', '))); return; }
     if (saved) { toast({ icon: 'check', title: t('ui.set.adv.saved') }); await open(); }
   };
+  const [resetting, setResetting] = useState(false);
+  const [backup, setBackup] = useState<string | null>(null);
+  const reset = async () => {
+    setResetting(false); ctx.clear('adv:reset');
+    const run = async (): Promise<boolean> => {
+      ctx.setBusy('adv:reset');
+      try {
+        const done = await api.resetSettings();
+        setBackup(done.backup); setText(null);
+        await ctx.reload(); ctx.onProfile();
+        toast({ icon: 'check', title: t('ui.set.adv.resetDone') });
+        return true;
+      } catch (error) { ctx.fail('adv:reset', errorText(error, t('ui.set.adv.resetFailed'))); return false; }
+      finally { ctx.setBusy(null); }
+    };
+    try {
+      const [latest, preview] = await Promise.all([api.settings(), api.resetPreview()]);
+      const items = accessWidening(latest.config, preview.config);
+      if (items.length > 0) await ctx.ask({ row: 'adv:reset', items, title: t('ui.set.adv.resetWiden'), ok: t('ui.set.adv.reset') }, run);
+      else await run();
+    } catch (error) { ctx.fail('adv:reset', errorText(error, t('ui.set.adv.resetFailed'))); }
+  };
   const broken = ctx.view.configError;
   return (
     <Group title={t('ui.set.adv.file')}>
@@ -186,6 +211,15 @@ export function AdvancedPanel() {
           </div>
         )}>
         {text === null && <Button small onClick={() => void open()}>{t('ui.set.adv.open')}</Button>}
+      </Row>
+      <Row k="adv:reset" title={t('ui.set.adv.reset')} desc={t('ui.set.adv.resetDesc')}
+        below={(resetting || backup) && (
+          <>
+            {resetting && <RowConfirm warn={t('ui.set.adv.resetWarn')} note={t('ui.set.adv.resetNote')} action={t('ui.set.adv.reset')} busy={ctx.busy !== null} onConfirm={() => void reset()} onKeep={() => setResetting(false)} />}
+            {backup && <p className="bt-meta" role="status">{t('ui.set.adv.resetBackup', backup)}</p>}
+          </>
+        )}>
+        {!resetting && <Button small variant="danger" disabled={ctx.busy !== null} onClick={() => setResetting(true)}>{t('ui.set.adv.reset')}</Button>}
       </Row>
     </Group>
   );

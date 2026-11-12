@@ -233,7 +233,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     reasons.push(guardText(language, 'pipeline.auto_egress'));
   }
   for (const hook of ctx.config.tools.hooks.preToolUse) {
-    if (!matches(hook.matcher, tool.name) || decision === 'deny') continue;
+    if (hook.enabled === false || !matches(hook.matcher, tool.name) || decision === 'deny') continue;
     const summary = tool.summarize?.(args, language);
     const result = await runCommandHook(hook, {
       hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: summary?.cwd ?? ctx.workspace, run_id: ctx.runId, conversation_id: ctx.conversationId,
@@ -355,7 +355,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   // ── 実行後フック（記録用。結果は変えない） ──
   for (const hook of ctx.config.tools.hooks.postToolUse) {
-    if (!matches(hook.matcher, tool.name)) continue;
+    if (hook.enabled === false || !matches(hook.matcher, tool.name)) continue;
     await runCommandHook(hook, {
       hook_event_name: 'PostToolUse', tool_name: tool.name, tool_input: args, tool_output: output.content.slice(0, 8000),
       cwd: ctx.workspace, run_id: ctx.runId, conversation_id: ctx.conversationId,

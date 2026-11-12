@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChecklistItem, RunRow, Task } from '../web/src/api.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
-  buildBoard, columnOf, COLUMNS, KANBAN_PAGE, mergeFinished, pagesToReload, sessionCards, stepPercent, type Board, type ColumnId, type SessionCard,
+  buildBoard, cardProject, COLUMN_TABS_MEDIA, columnOf, COLUMNS, KANBAN_PAGE, mergeFinished, pagesToReload, sessionCards, stepPercent, tabStep, type Board, type ColumnId, type SessionCard,
 } from '../web/src/ui/kanban.ts';
+
+const matchesCss = (media: string): boolean => {
+  const css = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'styles', 'frame.css'), 'utf8');
+  const block = css.slice(css.indexOf(`@media ${media}`));
+  return css.includes(`@media ${media}`) && block.includes('.ui-coltabs { display: flex;');
+};
 
 // 新しい画面の Kanban（steps/p1-ui.md の「画面」の Kanban と PR 1-4a）の決まり。画面を持たない純粋な関数（web/src/ui/kanban.ts）。
 
@@ -135,4 +143,26 @@ test('ui/kanban: 動いているタスクは、その会話の作業の一覧が
   assert.equal(stepPercent({ step: 3, total: 4 }), 50);
   assert.equal(stepPercent({ step: 1, total: 6 }), 0);
   assert.equal(stepPercent(null), 0);
+});
+
+test('ui/kanban: 狭い幅の列のタブは矢印キーで移る（端でひと回り）。Home は最初、End は最後', () => {
+  assert.equal(tabStep(0, 5, 'ArrowRight'), 1);
+  assert.equal(tabStep(4, 5, 'ArrowRight'), 0);
+  assert.equal(tabStep(0, 5, 'ArrowLeft'), 4);
+  assert.equal(tabStep(2, 5, 'ArrowLeft'), 1);
+  assert.equal(tabStep(2, 5, 'Home'), 0);
+  assert.equal(tabStep(2, 5, 'End'), 4);
+  assert.equal(tabStep(2, 5, 'Enter'), null);
+  assert.equal(tabStep(2, 5, 'ArrowDown'), null, '縦の矢印はページの送りに残す');
+  assert.equal(tabStep(0, 0, 'ArrowRight'), null);
+  assert.equal(matchesCss(COLUMN_TABS_MEDIA), true, 'タブが出る幅は CSS の区切りと同じ');
+});
+
+test('ui/kanban: カードの製品は、タスクは行の project_id、Session は会話の project_id（製品なしは null）', () => {
+  const conversations = [{ id: 'c1', title: 'A', project_id: 'p1aaaa' }, { id: 'c2', title: 'B', project_id: null }, { id: 'c3', title: 'C' }];
+  const runs = [runRow('r1', 'c1'), runRow('r2', 'c2'), runRow('r3', 'c3')];
+  const cards = sessionCards({ conversations, drafts: [{ runId: 'live', conversationId: 'c1' }], runs, checklists: NONE });
+  assert.deepEqual(cards.map(card => [card.conversationId, cardProject(card)]), [['c1', 'p1aaaa'], ['c2', null], ['c3', null]]);
+  const b = board([task('t1', 'inbox', { project_id: 'p2aaaa' }), task('t2', 'inbox')]);
+  assert.deepEqual(b.columns[0]!.cards.map(cardProject).sort(), ['p2aaaa', null].sort());
 });

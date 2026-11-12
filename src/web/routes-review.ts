@@ -6,7 +6,9 @@ import { TRIGGER_TEXT } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
 import { defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
-import { taskView } from '../tasks/store.ts';
+import { taskView, type ProjectFilter } from '../tasks/store.ts';
+import type { ReviewJob } from '../memory/review.ts';
+import { projectFilterOf } from './routes-projects.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const STATUSES: readonly CuriosityStatus[] = ['open', 'researching', 'done', 'dropped'];
@@ -18,10 +20,21 @@ function domainFailure(error: unknown): never {
 
 const TODAY_COUNTED = { engine_runs: 'started_at', tool_calls: 'created_at', memory_jobs: 'created_at' } as const;
 
-export function todayCount(app: App, table: keyof typeof TODAY_COUNTED, now = Date.now()): number {
+export function projectOfSql(table: keyof typeof TODAY_COUNTED, alias: string = table): string {
+  const viaConversation = `(SELECT pc.project_id FROM conversations pc WHERE pc.id = ${alias}.conversation_id)`;
+  return table === 'memory_jobs' ? `COALESCE(${viaConversation}, (SELECT pt.project_id FROM tasks pt WHERE pt.id = ${alias}.task_id))` : viaConversation;
+}
+
+export function projectWhere(table: keyof typeof TODAY_COUNTED, project: ProjectFilter, alias: string = table): { sql: string; args: string[] } {
+  if (project === undefined) return { sql: '', args: [] };
+  return project === null ? { sql: ` AND ${projectOfSql(table, alias)} IS NULL`, args: [] } : { sql: ` AND ${projectOfSql(table, alias)} = ?`, args: [project] };
+}
+
+export function todayCount(app: App, table: keyof typeof TODAY_COUNTED, now = Date.now(), project?: ProjectFilter): number {
   let since: number;
   try { since = startOfDayIn(app.config().timezone, now); } catch { since = startOfDayIn('UTC', now); }
-  return Number((app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${TODAY_COUNTED[table]} >= ?`).get(since) as { n: number }).n);
+  const filter = projectWhere(table, project);
+  return Number((app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${TODAY_COUNTED[table]} >= ?${filter.sql}`).get(since, ...filter.args) as { n: number }).n);
 }
 
 function idOf(raw: string): number {
@@ -54,7 +67,10 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     if (!isToolPolicy(body.policy)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'policy', params: { field: 'policy', values: 'allow / ask / block' } });
     if (!isPolicyable(name)) throw problem(400, 'invalid_field', 'tool_not_policyable', { field: 'name', params: { name } });
+    if (body.from !== undefined && !isToolPolicy(body.from)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'from', params: { field: 'from', values: 'allow / ask / block' } });
     const current = app.config();
+    const now = toolPolicy(current, name);
+    if (body.from !== undefined && body.from !== now) throw problem(409, 'conflict', 'tool_policy_changed', { params: { name, policy: now } });
     const policies = { ...current.tools.policies };
     // 既定に戻すときは書いた項目を消す（既定が ask の agent_run を allow にするときは、allow と書く）
     if (body.policy === defaultPolicy(name)) delete policies[name]; else policies[name] = body.policy;
@@ -147,12 +163,16 @@ export function registerReviewRoutes(router: Router, app: App): void {
   });
 
   // ── 振り返りの記録 ──
-  router.add('GET', '/api/reviews', ({ res }) => {
-    const jobs = app.reviews.list(50).map(job => ({
+  router.add('GET', '/api/reviews', ({ res, url }) => {
+    const project = projectFilterOf(url);
+    const filter = projectWhere('memory_jobs', project);
+    const rows = app.db.prepare(`SELECT memory_jobs.*, ${projectOfSql('memory_jobs')} AS project_id FROM memory_jobs WHERE 1 = 1${filter.sql} ORDER BY id DESC LIMIT 50`)
+      .all(...filter.args) as unknown as Array<ReviewJob & { project_id: string | null }>;
+    const jobs = rows.map(job => ({
       ...job, triggerLabel: TRIGGER_TEXT[languageOf(app.config())][job.trigger],
       changes: job.run_id ? app.db.prepare('SELECT * FROM memory_events WHERE run_id = ? ORDER BY id').all(job.run_id) : [],
     }));
-    sendJson(res, 200, { jobs, pending: app.reviews.pendingCount(), total: todayCount(app, 'memory_jobs') });
+    sendJson(res, 200, { jobs, pending: app.reviews.pendingCount(), total: todayCount(app, 'memory_jobs', undefined, project) });
   });
   router.add('POST', '/api/reviews', async ({ req, res }) => {
     const body = requireObject(await readJson(req));

@@ -1,0 +1,7 @@
+.ui-pfilter { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.ui-pfilter .bt-seg__opt { flex: none; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .bt-screen__tools:has(> .ui-pfilter) { flex-wrap: nowrap; width: 100%; }
+  .ui-pfilter { flex: 1 1 auto; min-width: 0; }
+}

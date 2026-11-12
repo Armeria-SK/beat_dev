@@ -95,7 +95,7 @@ test('GET /api/schedule: 止めたひな形のこれからの回は出さず、�
     [daily.id, Date.parse('2026-11-06T09:00:00Z'), 'planned'],
   ]);
   assert.ok(res.body.slots.every((x: any) => x.length === SCHEDULE_MIN_SLOT_MS), '動いた回が無ければ、決まった最小の長さ');
-  assert.deepEqual(res.body.templates, [{ taskId: daily.id, title: 'Daily', cron_text: 'Every day at 09:00', truncated: false }]);
+  assert.deepEqual(res.body.templates, [{ taskId: daily.id, projectId: null, title: 'Daily', cron_text: 'Every day at 09:00', truncated: false }]);
   assert.ok(!res.body.slots.some((x: any) => x.taskId === paused.id));
 
   const tooWide = await s.api(`/api/schedule?from=${from}&to=${from + 8 * DAY + 1}`);
@@ -121,7 +121,27 @@ test('GET /api/schedule: 毎分の決まりのひな形は 200 個で止まり�
   assert.equal(res.body.slots.filter((x: any) => x.taskId === hourly.id).length, 8 * 24 - 1, '今の時刻ちょうどの回と、範囲の終わりちょうどの回は入らない');
 });
 
-test('GET /api/schedule: これからの回は全部のひな形を合わせて 2,000 個まで。ひな形が 10 個を超えると 1 つあたりの上限が等しく下がり、truncated が付く', async t => {
+test('GET /api/schedule: 枠を使い切らないひな形の余りは、多いひな形へ回る（予定のひな形が 12 個あっても、毎時のひな形は 1 週間ぶん全部出る）', async t => {
+  const s = await taskApp(t);
+  const from = s.clock.now;
+  for (let i = 0; i < 11; i++) s.userTask(`Daily ${i}`, { cron: '0 9 * * *', timezone: 'UTC' });
+  const hourly = s.userTask('Hourly', { cron: '0 * * * *', timezone: 'UTC' });
+  const week = (await s.api(`/api/schedule?from=${from}&to=${from + 7 * DAY}`)).body;
+  assert.ok(Math.floor(SCHEDULE_PLANNED_TOTAL / 12) < 7 * 24 - 1, '前提: 等分の枠では足りない');
+  assert.equal(week.slots.filter((x: any) => x.taskId === hourly.id).length, 7 * 24 - 1);
+  assert.deepEqual(week.templates.map((x: any) => x.truncated), Array.from({ length: 12 }, () => false));
+});
+
+test('GET /api/schedule: 予定のひな形が 2,000 個を超えても、これからの回は合わせて 2,000 個まで', async t => {
+  const s = await taskApp(t);
+  const from = s.clock.now;
+  for (let i = 0; i < SCHEDULE_PLANNED_TOTAL + 1; i++) s.userTask(`Daily ${i}`, { cron: '0 9 * * *', timezone: 'UTC' });
+  const day = (await s.api(`/api/schedule?from=${from}&to=${from + DAY}`)).body;
+  assert.equal(day.slots.filter((x: any) => x.state === 'planned').length, SCHEDULE_PLANNED_TOTAL);
+  assert.deepEqual(day.templates.filter((x: any) => x.truncated).length, 1, '出せなかったひな形には truncated が付く');
+});
+
+test('GET /api/schedule: これからの回は全部のひな形を合わせて 2,000 個まで。ひな形が 10 個を超えると 1 つあたりの上限が下がり、余りは前のひな形から足す。truncated が付く', async t => {
   const s = await taskApp(t);
   const from = s.clock.now;
   const ids = Array.from({ length: 10 }, (_, i) => s.userTask(`Every minute ${i}`, { cron: '*/1 * * * *', timezone: 'UTC' }).id);
@@ -133,9 +153,9 @@ test('GET /api/schedule: これからの回は全部のひな形を合わせて 
   const daily = s.userTask('Daily', { cron: '0 9 * * *', timezone: 'UTC' });
   const each = Math.floor(SCHEDULE_PLANNED_TOTAL / 12);
   const twelve = (await s.api(`/api/schedule?from=${from}&to=${from + DAY}`)).body;
-  assert.deepEqual(ids.map(id => countOf(twelve, id)), ids.map(() => each));
+  assert.deepEqual(ids.map(id => countOf(twelve, id)), [200, 200, 200, 200, 200, 169, each, each, each, each, each], '等分（166）のあと、Daily が使わなかった分を前から 200 個まで足す');
   assert.equal(countOf(twelve, daily.id), 1, '上限に届かないひな形はそのまま');
-  assert.ok(twelve.slots.filter((x: any) => x.state === 'planned').length <= SCHEDULE_PLANNED_TOTAL);
+  assert.equal(twelve.slots.filter((x: any) => x.state === 'planned').length, SCHEDULE_PLANNED_TOTAL);
   assert.deepEqual(twelve.templates.map((x: any) => x.truncated), [...ids.map(() => true), false]);
   assert.equal(twelve.slots.filter((x: any) => x.taskId === ids[11 - 1]).at(-1).start, from + each * MIN, '近い回から残す');
 });
@@ -192,8 +212,8 @@ test('GET /api/schedule: 動いた回の時刻は engine_runs の始まりと終
 
   const res = await s.api(`/api/schedule?from=${from}&to=${from + 2 * DAY}`);
   const past = res.body.slots.filter((x: any) => x.state === 'past');
-  assert.deepEqual(past, [{ taskId: template.id, runTaskId: child.id, title: 'Daily', start: run.started_at, length: 90_000, state: 'past' }]);
-  assert.deepEqual(res.body.slots.filter((x: any) => x.state === 'live'), [{ taskId: live.id, runTaskId: live.id, title: 'Live one', start: s.clock.now - 30_000, length: 30_000, state: 'live' }]);
+  assert.deepEqual(past, [{ taskId: template.id, projectId: null, runTaskId: child.id, title: 'Daily', start: run.started_at, length: 90_000, state: 'past' }]);
+  assert.deepEqual(res.body.slots.filter((x: any) => x.state === 'live'), [{ taskId: live.id, projectId: null, runTaskId: live.id, title: 'Live one', start: s.clock.now - 30_000, length: 30_000, state: 'live' }]);
   const planned = res.body.slots.filter((x: any) => x.state === 'planned');
   assert.ok(planned.length > 0 && planned.every((x: any) => x.taskId === template.id && x.length === 90_000), 'これからの回の長さは、最後の実行の長さ');
   assert.equal(res.body.ranTruncated, false);

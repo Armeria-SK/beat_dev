@@ -37,6 +37,8 @@ export interface Task {
   created_in_conversation: string | null;
   // 1 = 手元のモデルを選んだ会話から作った（手元のモデルだけで動かす）
   local_only: number;
+  project_id: string | null;
+  proposed_by: string | null;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -58,6 +60,7 @@ export interface CreateTask {
   curiosityId?: number | undefined;
   createdInConversation?: string | undefined;
   localOnly?: boolean | undefined;
+  projectId?: string | null | undefined;
   actor: string;
 }
 
@@ -81,8 +84,12 @@ export const SCHEDULE_MIN_SLOT_MS = 60_000;
 
 export type RepeatingTask = Task & { last_run: { id: string; status: TaskStatus; summary: string | null; at: number } | null };
 export interface FinishedCursor { t: number; id: string }
-export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned' }
-export interface Schedule { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean }>; ranTruncated: boolean }
+export type ProjectFilter = string | null | undefined;
+const byProject = (project: ProjectFilter): { sql: string; args: string[] } =>
+  project === undefined ? { sql: '', args: [] } : project === null ? { sql: ' AND project_id IS NULL', args: [] } : { sql: ' AND project_id = ?', args: [project] };
+
+export interface ScheduleSlot { taskId: string; projectId: string | null; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned' }
+export interface Schedule { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; projectId: string | null; title: string; cron_text: string; truncated: boolean }>; ranTruncated: boolean }
 
 export const TASK_SOFT_REFERENCES = [
   { table: 'curiosity_items', column: 'task_id' },
@@ -125,19 +132,22 @@ export class TaskStore {
     return this.#db.prepare('SELECT * FROM tasks WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1').get(conversationId) as Task | undefined;
   }
 
-  list(options: { statuses?: readonly TaskStatus[]; limit?: number } = {}): Task[] {
+  list(options: { statuses?: readonly TaskStatus[]; limit?: number; project?: ProjectFilter } = {}): Task[] {
     const statuses = options.statuses ?? ACTIVE;
     const placeholders = statuses.map(() => '?').join(',');
-    return this.#db.prepare(`SELECT * FROM tasks WHERE status IN (${placeholders}) ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at) LIMIT ?`)
-      .all(...statuses, options.limit ?? 200) as unknown as Task[];
+    const filter = byProject(options.project);
+    return this.#db.prepare(`SELECT * FROM tasks WHERE status IN (${placeholders})${filter.sql} ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at) LIMIT ?`)
+      .all(...statuses, ...filter.args, options.limit ?? 200) as unknown as Task[];
   }
 
-  recentlyFinished(limit = 50): Task[] {
-    return this.#db.prepare("SELECT * FROM tasks WHERE status IN ('done', 'failed', 'cancelled') ORDER BY COALESCE(completed_at, updated_at) DESC LIMIT ?").all(limit) as unknown as Task[];
+  recentlyFinished(limit = 50, project?: ProjectFilter): Task[] {
+    const filter = byProject(project);
+    return this.#db.prepare(`SELECT * FROM tasks WHERE status IN ('done', 'failed', 'cancelled')${filter.sql} ORDER BY COALESCE(completed_at, updated_at) DESC LIMIT ?`).all(...filter.args, limit) as unknown as Task[];
   }
 
-  templates(): RepeatingTask[] {
-    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} ORDER BY created_at, rowid`).all() as unknown as Task[];
+  templates(project?: ProjectFilter): RepeatingTask[] {
+    const filter = byProject(project);
+    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE}${filter.sql} ORDER BY created_at, rowid`).all(...filter.args) as unknown as Task[];
     const last = this.#db.prepare('SELECT id, status, result_summary, COALESCE(completed_at, updated_at) AS at FROM tasks WHERE parent_id = ? ORDER BY rowid DESC LIMIT 1');
     return rows.map(task => {
       const run = last.get(task.id) as { id: string; status: TaskStatus; result_summary: string | null; at: number } | undefined;
@@ -145,15 +155,17 @@ export class TaskStore {
     });
   }
 
-  finishedTotal(): number {
-    return (this.#db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})`).get() as { n: number }).n;
+  finishedTotal(project?: ProjectFilter): number {
+    const filter = byProject(project);
+    return (this.#db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})${filter.sql}`).get(...filter.args) as { n: number }).n;
   }
 
-  finishedPage(options: { before?: FinishedCursor | undefined; limit: number }): { tasks: Task[]; next: FinishedCursor | null } {
+  finishedPage(options: { before?: FinishedCursor | undefined; limit: number; project?: ProjectFilter }): { tasks: Task[]; next: FinishedCursor | null } {
     const before = options.before;
-    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})
+    const filter = byProject(options.project);
+    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})${filter.sql}
       ${before ? `AND (${FINISHED_T} < ? OR (${FINISHED_T} = ? AND id < ?))` : ''}
-      ORDER BY ${FINISHED_T} DESC, id DESC LIMIT ?`).all(...(before ? [before.t, before.t, before.id] : []), options.limit + 1) as unknown as Task[];
+      ORDER BY ${FINISHED_T} DESC, id DESC LIMIT ?`).all(...filter.args, ...(before ? [before.t, before.t, before.id] : []), options.limit + 1) as unknown as Task[];
     const tasks = rows.slice(0, options.limit);
     const tail = tasks.at(-1);
     return { tasks, next: rows.length > options.limit && tail ? { t: tail.completed_at ?? tail.updated_at, id: tail.id } : null };
@@ -162,36 +174,40 @@ export class TaskStore {
   schedule(from: number, to: number): Schedule {
     const now = this.#now();
     const slots: ScheduleSlot[] = [];
-    const ran = this.#db.prepare(`SELECT COALESCE(t.parent_id, t.id) AS taskId, t.id AS runTaskId, COALESCE(p.title, t.title) AS title, r.started_at AS start, r.ended_at AS ended
+    const ran = this.#db.prepare(`SELECT COALESCE(t.parent_id, t.id) AS taskId, t.project_id AS projectId, t.id AS runTaskId, COALESCE(p.title, t.title) AS title, r.started_at AS start, r.ended_at AS ended
       FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id LEFT JOIN tasks p ON p.id = t.parent_id
       WHERE r.kind = 'task' AND r.started_at < ? AND COALESCE(r.ended_at, ?) >= ?
-      ORDER BY r.started_at DESC LIMIT ?`).all(to, now, from, SCHEDULE_RAN_LIMIT + 1) as Array<{ taskId: string; runTaskId: string; title: string; start: number; ended: number | null }>;
+      ORDER BY r.started_at DESC LIMIT ?`).all(to, now, from, SCHEDULE_RAN_LIMIT + 1) as Array<{ taskId: string; projectId: string | null; runTaskId: string; title: string; start: number; ended: number | null }>;
     for (const row of ran.slice(0, SCHEDULE_RAN_LIMIT)) {
-      slots.push({ taskId: row.taskId, runTaskId: row.runTaskId, title: row.title, start: row.start, length: Math.max(0, (row.ended ?? now) - row.start), state: row.ended === null ? 'live' : 'past' });
+      slots.push({ taskId: row.taskId, projectId: row.projectId, runTaskId: row.runTaskId, title: row.title, start: row.start, length: Math.max(0, (row.ended ?? now) - row.start), state: row.ended === null ? 'live' : 'past' });
     }
     const lastLength = this.#db.prepare(`SELECT r.ended_at - r.started_at AS length FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id
       WHERE t.parent_id = ? AND r.kind = 'task' AND r.ended_at IS NOT NULL ORDER BY r.started_at DESC LIMIT 1`);
     const hasRunChild = this.#db.prepare('SELECT 1 FROM tasks WHERE parent_id = ? AND conversation_id IS NOT NULL LIMIT 1');
     const templates: Schedule['templates'] = [];
     const active = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} AND status = 'scheduled' ORDER BY created_at, rowid`).all() as unknown as Task[];
-    const perTemplate = Math.min(SCHEDULE_PLANNED_LIMIT, Math.max(1, Math.floor(SCHEDULE_PLANNED_TOTAL / Math.max(1, active.length))));
-    for (const template of active) {
+    const share = Math.min(SCHEDULE_PLANNED_LIMIT, Math.max(1, Math.floor(SCHEDULE_PLANNED_TOTAL / Math.max(1, active.length))));
+    let budget = SCHEDULE_PLANNED_TOTAL;
+    const plans = active.map(template => {
       const last = hasRunChild.get(template.id) ? lastLength.get(template.id) as { length: number } | undefined : undefined;
-      const length = Math.max(SCHEDULE_MIN_SLOT_MS, last?.length ?? 0);
-      let truncated = false;
-      let count = 0;
-      let at = nextRunAt(template.cron!, template.timezone ?? 'UTC', Math.max(now, from - 1));
-      while (at !== null && at < to) {
-        if (count === perTemplate) { truncated = true; break; }
-        slots.push({ taskId: template.id, runTaskId: null, title: template.title, start: at, length, state: 'planned' });
-        count += 1;
-        at = nextRunAt(template.cron!, template.timezone ?? 'UTC', at);
+      return { template, length: Math.max(SCHEDULE_MIN_SLOT_MS, last?.length ?? 0), count: 0, at: nextRunAt(template.cron!, template.timezone ?? 'UTC', Math.max(now, from - 1)) };
+    });
+    const fill = (plan: typeof plans[number], limit: number): void => {
+      while (plan.at !== null && plan.at < to && plan.count < limit && budget > 0) {
+        slots.push({ taskId: plan.template.id, projectId: plan.template.project_id, runTaskId: null, title: plan.template.title, start: plan.at, length: plan.length, state: 'planned' });
+        plan.count += 1;
+        budget -= 1;
+        plan.at = nextRunAt(plan.template.cron!, plan.template.timezone ?? 'UTC', plan.at);
       }
-      templates.push({ taskId: template.id, title: template.title, cron_text: describeCron(template.cron!, this.#language()), truncated });
+    };
+    for (const plan of plans) fill(plan, share);
+    for (const plan of plans) fill(plan, SCHEDULE_PLANNED_LIMIT);
+    for (const plan of plans) {
+      templates.push({ taskId: plan.template.id, projectId: plan.template.project_id, title: plan.template.title, cron_text: describeCron(plan.template.cron!, this.#language()), truncated: plan.at !== null && plan.at < to });
     }
-    const timed = this.#db.prepare(`SELECT id, title, run_at FROM tasks WHERE status = 'ready' AND cron IS NULL AND parent_id IS NULL AND run_at >= ? AND run_at < ? ORDER BY run_at LIMIT ?`)
-      .all(from, to, SCHEDULE_PLANNED_LIMIT) as Array<{ id: string; title: string; run_at: number }>;
-    for (const task of timed) slots.push({ taskId: task.id, runTaskId: task.id, title: task.title, start: task.run_at, length: SCHEDULE_MIN_SLOT_MS, state: 'planned' });
+    const timed = this.#db.prepare(`SELECT id, project_id, title, run_at FROM tasks WHERE status = 'ready' AND cron IS NULL AND parent_id IS NULL AND run_at >= ? AND run_at < ? ORDER BY run_at LIMIT ?`)
+      .all(from, to, SCHEDULE_PLANNED_LIMIT) as Array<{ id: string; project_id: string | null; title: string; run_at: number }>;
+    for (const task of timed) slots.push({ taskId: task.id, projectId: task.project_id, runTaskId: task.id, title: task.title, start: task.run_at, length: SCHEDULE_MIN_SLOT_MS, state: 'planned' });
     slots.sort((a, b) => a.start - b.start);
     return { from, to, slots, templates, ranTruncated: ran.length > SCHEDULE_RAN_LIMIT };
   }
@@ -224,10 +240,10 @@ export class TaskStore {
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, local_only, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, local_only, project_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.localOnly ? 1 : 0, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.localOnly ? 1 : 0, input.projectId ?? null, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);
@@ -427,8 +443,8 @@ export class TaskStore {
     // 前回分がまだ終わっていなければ、重ねて作らない
     if (this.hasOpenRun(template.id)) { this.event(template.id, 'skipped', 'system', taskText(this.#language(), 'event.skipped')); return undefined; }
     const id = randomUUID();
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, parent_id, local_only, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'ready', 'schedule', ?, ?, ?, ?, ?)`).run(id, template.title, template.body, template.next_action, template.done_criteria, template.priority, template.id, template.local_only, now, now);
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, parent_id, local_only, project_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'ready', 'schedule', ?, ?, ?, ?, ?, ?)`).run(id, template.title, template.body, template.next_action, template.done_criteria, template.priority, template.id, template.local_only, template.project_id, now, now);
     this.event(id, 'created', actor, taskText(this.#language(), 'event.created_from', { title: template.title }));
     return this.#changed(id);
   }
@@ -454,6 +470,7 @@ export class TaskStore {
     const now = this.#now();
     const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
     const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins}
+      AND (project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
       ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at)`;
     if (!options.accept) return this.#db.prepare(`${sql} LIMIT 1`).get(now) as Task | undefined;
     return (this.#db.prepare(sql).all(now) as unknown as Task[]).find(options.accept);

@@ -23,7 +23,28 @@ export interface Conversation {
   // 親の担当から任された子の会話か（run の id。無い・null はふつうの会話）と、任せた親の会話。子の会話は読むだけ
   parent_run_id?: string | null; source_conversation_id?: string | null;
   message_count?: number; archived_at?: number | null;
+  project_id?: string | null;
 }
+export interface ProjectRemote { name: string; url: string; push_url: string | null }
+export interface ProjectWaiting { proposals: number; questions: number; pending: number }
+export interface Project {
+  id: string; name: string; root: string;
+  check_command: string | null;
+  scout_mode: 'off' | 'research' | 'fix';
+  remotes: ProjectRemote[];
+  archived_at: number | null; created_at: number; updated_at: number;
+  is_git: boolean;
+  folder_missing: boolean;
+  waiting: ProjectWaiting;
+  running: number;
+  last_activity_at: number | null;
+}
+export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
+export interface NewProject { root: string; name?: string; checkCommand?: string }
+export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true }
+export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
+export interface FolderList { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
+export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
@@ -77,6 +98,7 @@ export interface RunRow {
   id: string; kind: string; conversation_id: string | null; model_id: string | null; attempts: number;
   started_at: number; duration_ms: number | null; ok: number | null; error_kind: string | null; error_message: string | null;
   input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; est_prompt_tokens: number | null; flags: string[];
+  project_id?: string | null;
 }
 
 // 道具の一覧（GET /api/tools）。policy は設定の tools.policies、configurable が false の道具（タスクの進め方に必要なもの）は方針を変えられない
@@ -97,6 +119,7 @@ export interface ToolCallRow {
   autoReason: string | null;
   // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しで、許可したフォルダ（ほかは null）
   grantFolder: string | null;
+  project_id?: string | null;
 }
 
 export type Book = 'user' | 'notes';
@@ -104,7 +127,7 @@ export interface MemoryItem { id: number; book: Book; content: string; origin: s
 export interface MemoryEvent { id: number; memory_id: number; action: string; before: string | null; after: string | null; actor: string; reason: string | null; undone_at: number | null; created_at: number }
 export interface BookView { used: number; items: MemoryItem[] }
 export interface MemoryContext { tokens: number; budget: number | null; omitted: number }
-export interface HistoryHit { conversationId: string; title: string | null; messageId: number; role: string; createdAt: number; snippet: string }
+export interface HistoryHit { conversationId: string; title: string | null; messageId: number; role: string; createdAt: number; snippet: string; projectId?: string | null }
 
 export type TaskStatus = 'inbox' | 'ready' | 'running' | 'waiting' | 'scheduled' | 'done' | 'failed' | 'cancelled';
 export interface Task {
@@ -114,24 +137,27 @@ export interface Task {
   conversation_id: string | null; result_summary: string | null; attempts: number; max_attempts: number;
   created_at: number; updated_at: number; completed_at: number | null;
   cancelled_from?: TaskStatus | null;
+  timezone?: string | null;
+  project_id?: string | null;
 }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
 export type RepeatingTask = Task & { last_run: TaskLastRun | null };
-export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned' }
-export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean }>; ranTruncated: boolean }
+export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned'; projectId?: string | null }
+export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean; projectId?: string | null }>; ranTruncated: boolean }
 export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
 export interface WorkerRun { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
 export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
   running: WorkerRun | null; runningAll: WorkerRun[]; maxParallel: number; nextWakeAt: number | null; runsLastHour: number; maxRunsPerHour: number;
 }
-export interface NotificationItem { id: number; kind: string; title: string; body: string | null; link: string | null; read_at: number | null; created_at: number }
+export interface NotificationItem { id: number; kind: string; title: string; body: string | null; link: string | null; read_at: number | null; created_at: number; project_id?: string | null }
 export type Motion = 'auto' | 'none' | 'float' | 'sway' | 'pulse';
 export interface Profile { name: string; shape: string; color: string; motion: Motion; shapes: string[]; motions: Motion[] }
 export interface NewTask {
   title: string; body?: string; priority?: number; when?: string;
   repeat?: { freq: string; values: Record<string, string> };
+  projectId?: string;
 }
 
 export interface SkillSummary { name: string; description: string; uses: number; lastUsedAt: number | null; updatedAt: number; registered: boolean }
@@ -148,6 +174,7 @@ export interface ReviewJob {
   id: number; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;
   conversation_id: string | null; task_id: string | null; run_id: string | null; created_at: number; finished_at: number | null;
   changes: MemoryEvent[];
+  project_id?: string | null;
 }
 
 export interface TemplatesView { rules: string; files: Array<{ name: string; content: string }> }
@@ -212,8 +239,15 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+const inProject = (project: string | undefined, lead: '?' | '&'): string => (project ? `${lead}project=${encodeURIComponent(project)}` : '');
+
 export const api = {
-  conversations: () => call<{ conversations: Conversation[] }>('/api/conversations'),
+  conversations: () => call<ConversationList>('/api/conversations'),
+  conversationsOf: (project: string, limit = 200) => call<ConversationList>(`/api/conversations?project=${encodeURIComponent(project)}&limit=${limit}`),
+  projects: (archived = false) => call<{ projects: Project[] }>(`/api/projects${archived ? '?archived=1' : ''}`),
+  createProject: (input: NewProject) => call<{ project: Project; notes: ProjectNote[] }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
+  patchProject: (id: string, patch: ProjectPatch) => call<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
   archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
@@ -227,8 +261,8 @@ export const api = {
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
-  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean } = {}) =>
-    call<{ runId: string; queued?: boolean; pendingId?: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}) }) }),
+  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean; projectId?: string } = {}) =>
+    call<{ runId: string; queued?: boolean; pendingId?: string; effortReset?: boolean }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}), ...(options.projectId ? { projectId: options.projectId } : {}) }) }),
   chooseMode: (id: string, permissionMode: PermissionMode) => call<{ conversation: Conversation }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ permissionMode }) }),
   chooseModel: (id: string, choice: ModelChoice) => call<{ conversation: Conversation; effortReset?: boolean }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(choice) }),
   upload: async (file: File) => {
@@ -239,25 +273,25 @@ export const api = {
   },
   retry: (id: string) => call<{ runId: string }>(`/api/conversations/${id}/retry`, { method: 'POST', body: '{}' }),
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
-  runs: (limit = 200) => call<{ runs: RunRow[]; total: number }>(`/api/runs?limit=${limit}`),
-  toolCalls: () => call<{ toolCalls: ToolCallRow[]; total: number }>('/api/tool-calls?limit=200'),
+  runs: (limit = 200, project?: string) => call<{ runs: RunRow[]; total: number }>(`/api/runs?limit=${limit}${inProject(project, '&')}`),
+  toolCalls: (project?: string) => call<{ toolCalls: ToolCallRow[]; total: number }>(`/api/tool-calls?limit=200${inProject(project, '&')}`),
   settings: () => call<SettingsView>('/api/settings'),
   applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
-  memories: () => call<{ books: Record<Book, BookView>; context: MemoryContext }>('/api/memories'),
+  memories: () => call<{ books: Record<Book, BookView>; context: MemoryContext | null }>('/api/memories'),
   addMemory: (book: Book, content: string) => call<{ memory: MemoryItem; eventId: number }>('/api/memories', { method: 'POST', body: JSON.stringify({ book, content }) }),
   editMemory: (id: number, content: string) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   forgetMemory: (id: number) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'DELETE' }),
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
   recentMemoryEvents: () => call<{ events: MemoryEvent[] }>('/api/memory-events'),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
-  tasks: () => call<{ active: Task[]; finished: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>('/api/tasks'),
+  tasks: (project?: string) => call<{ active: Task[]; finished: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>(`/api/tasks${inProject(project, '?')}`),
   schedule: (from: number, to: number) => call<ScheduleView>(`/api/schedule?from=${from}&to=${to}`),
   deleteTask: (id: string) => call<{ deleted: { id: string; events: number; keptRuns: number } }>(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  finishedTasks: (before: FinishedCursor | null, limit = 20) =>
-    call<{ tasks: Task[]; next: FinishedCursor | null; total: number }>(`/api/tasks/finished?limit=${limit}${before ? `&beforeT=${before.beforeT}&beforeId=${encodeURIComponent(before.beforeId)}` : ''}`),
+  finishedTasks: (before: FinishedCursor | null, limit = 20, project?: string) =>
+    call<{ tasks: Task[]; next: FinishedCursor | null; total: number }>(`/api/tasks/finished?limit=${limit}${before ? `&beforeT=${before.beforeT}&beforeId=${encodeURIComponent(before.beforeId)}` : ''}${inProject(project, '&')}`),
   unapproveTask: (id: string) => call<{ task: Task }>(`/api/tasks/${id}/unapprove`, { method: 'POST', body: '{}' }),
   cancelTask: (id: string, reason = '') => call<{ task: Task }>(`/api/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}) }),
   task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
@@ -275,7 +309,7 @@ export const api = {
   review: () => call<{ skillDrafts: SkillDraft[]; taskProposals: Task[] }>('/api/review'),
   approveDraft: (id: number) => call(`/api/skill-drafts/${id}/approve`, { method: 'POST', body: '{}' }),
   rejectDraft: (id: number) => call(`/api/skill-drafts/${id}/reject`, { method: 'POST', body: '{}' }),
-  reviews: () => call<{ jobs: ReviewJob[]; pending: number; total: number }>('/api/reviews'),
+  reviews: (project?: string) => call<{ jobs: ReviewJob[]; pending: number; total: number }>(`/api/reviews${inProject(project, '?')}`),
   reviewConversation: (conversationId: string) => call<{ queued: boolean }>('/api/reviews', { method: 'POST', body: JSON.stringify({ conversationId }) }),
   tools: () => call<{ tools: ToolInfo[] }>('/api/tools'),
   setToolPolicy: (name: string, policy: ToolPolicy) => call<{ tool: ToolInfo }>(`/api/tools/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ policy }) }),
@@ -294,6 +328,9 @@ export const api = {
   onboarding: () => call<OnboardingView>('/api/onboarding'),
   onboardingDone: () => call<OnboardingView>('/api/onboarding/done', { method: 'POST', body: '{}' }),
   onboardingPersona: (input: PersonaWrite) => call<OnboardingView & { profile: Profile }>('/api/onboarding/persona', { method: 'POST', body: JSON.stringify(input) }),
+  providerModels: (id: string) => call<{ models: string[]; truncated: boolean }>(`/api/providers/${encodeURIComponent(id)}/models`),
+  resetPreview: () => call<{ config: Record<string, any> }>('/api/settings/reset'),
+  resetSettings: () => call<SettingsView & { models: ModelView[]; backup: string }>('/api/settings/reset', { method: 'POST', body: '{}' }),
   providerKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`),
   setProviderKey: (id: string, key: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'PUT', body: JSON.stringify({ key }) }),
   deleteProviderKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'DELETE' }),

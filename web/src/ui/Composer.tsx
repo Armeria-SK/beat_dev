@@ -1,18 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { PERMISSION_MODES, type PermissionMode } from '../../../src/shared/permission-mode.ts';
 import { api, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
+import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import {
-  ATTACH_ACCEPT, attachRoom, composerView, depthOptions, enterAction, escStops, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER, queuedLine, slashItems, toastLift,
+  ATTACH_ACCEPT, attachLeftOut, attachRoom, bareCommand, composerDrafts, composerView, depthOptions, enterAction, escStops, MAX_ATTACHMENTS, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER,
+  queuedLine, queueRow, slashAvailable, slashItems, toastLift,
   type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
-import { menuStep } from './menu.ts';
+import { menuLeft, menuStep } from './menu.ts';
 import { Icon } from './parts.tsx';
 
 const MAX_HEIGHT = 200;
 
 export interface ComposerProps {
+  draftKey: string;
   hasConversation: boolean;
+  product?: boolean;
   running: boolean;
   sending: boolean;
   pending: PendingMessage[];
@@ -32,7 +36,7 @@ export interface ComposerProps {
 
 type Pop = 'model' | 'depth' | null;
 
-function PopMenu({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
+function PopMenu({ label, opener, onClose, onLeave, children }: { label: string; opener: RefObject<HTMLElement | null>; onClose: () => void; onLeave: () => void; children: ReactNode }) {
   const list = useRef<HTMLUListElement>(null);
   useEffect(() => {
     const items = list.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not(:disabled)') ?? [];
@@ -40,6 +44,7 @@ function PopMenu({ label, onClose, children }: { label: string; onClose: () => v
   }, []);
   return (
     <ul ref={list} className="bt-menu ui-pop" role="menu" aria-label={label}
+      onBlur={e => { if (menuLeft(e.relatedTarget, e.currentTarget.contains(e.relatedTarget), opener.current)) onLeave(); }}
       onKeyDown={e => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); return; }
         const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not(:disabled)')];
@@ -62,7 +67,8 @@ function PopItem({ name, hint, checked, disabled, onPick }: { name: string; hint
 export function Composer(props: ComposerProps) {
   const { hasConversation, running, sending, pending, models, chatOrder, modelId, effort, mode } = props;
   const t = useT();
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => composerDrafts.get(props.draftKey));
+  const write = (value: string) => { composerDrafts.set(props.draftKey, value); setText(value); };
   const [attached, setAttached] = useState<UploadView[]>([]);
   const [uploading, setUploading] = useState(false);
   const [pop, setPop] = useState<Pop>(null);
@@ -76,7 +82,7 @@ export function Composer(props: ComposerProps) {
   const depthButton = useRef<HTMLButtonElement>(null);
   const submitting = useRef(false);
 
-  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending });
+  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product) });
   const current = modelInEffect(models ?? [], chatOrder, modelId);
   const depths = depthOptions(current);
   const commands = slashClosed ? [] : slashItems(text, props.slash, slashForced);
@@ -117,28 +123,36 @@ export function Composer(props: ComposerProps) {
     setPop(null);
   };
 
-  const change = (value: string) => { setText(value); setSlashIndex(0); setSlashClosed(false); if (!value.startsWith('/')) setSlashForced(false); };
-
-  const submit = async (kind: SubmitKind) => {
-    if (!view.canSubmit || submitting.current) return;
-    submitting.current = true;
-    try {
-      if (await props.onSubmit(kind, text.trim(), attached)) { setText(''); setAttached([]); }
-    } finally { submitting.current = false; }
-    input.current?.focus();
-  };
-
   const runSlash = (command: UiSlash) => {
     setSlashForced(false);
     const typed = text.startsWith('/') ? '' : text;
-    if (command.name === 'rename') { setText(`/rename ${typed}`); setSlashClosed(true); input.current?.focus(); return; }
+    if (command.name === 'rename') { write(`/rename ${typed}`); setSlashClosed(true); input.current?.focus(); return; }
     props.onSlash(command);
-    if (!typed) setText('');
+    if (!typed) write('');
+    input.current?.focus();
+  };
+
+  const change = (value: string) => { write(value); setSlashIndex(0); setSlashClosed(false); if (!value.startsWith('/')) setSlashForced(false); };
+
+  const submit = async (kind: SubmitKind) => {
+    if (!view.canSubmit || submitting.current) return;
+    const command = attached.length === 0 ? bareCommand(text) : null;
+    if (command) {
+      if (slashAvailable(props.slash).some(c => c.name === command.name)) runSlash(command);
+      else toast({ kind: 'info', icon: 'alert', title: t('ui.composer.slashOff', command.name) });
+      return;
+    }
+    submitting.current = true;
+    try {
+      if (await props.onSubmit(kind, text.trim(), attached)) { write(''); setAttached([]); }
+    } finally { submitting.current = false; }
     input.current?.focus();
   };
 
   const attach = async (files: FileList | null) => {
     if (!files?.length) return;
+    const leftOut = attachLeftOut(attached.length, files.length);
+    if (leftOut > 0) toast({ kind: 'info', icon: 'alert', title: t('ui.composer.attachLimit', MAX_ATTACHMENTS, leftOut) });
     setUploading(true);
     try {
       for (const picked of [...files].slice(0, attachRoom(attached.length, files.length))) {
@@ -157,7 +171,7 @@ export function Composer(props: ComposerProps) {
     if (commands.length > 0) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex((active + 1) % commands.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((active - 1 + commands.length) % commands.length); return; }
-      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); runSlash(commands[active]!); return; }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runSlash(commands[active]!); return; }
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSlashClosed(true); setSlashForced(false); return; }
     }
     if (escStops({ key: e.key, composing }, running, pop !== null)) { e.preventDefault(); e.stopPropagation(); props.onStop(); return; }
@@ -167,6 +181,7 @@ export function Composer(props: ComposerProps) {
     void submit(action);
   };
 
+  const queue = queueRow(pending);
   const modelText = modelId ? (current ? modelName(current) : modelId) : current ? t('ui.composer.autoModel', modelName(current)) : t('ui.composer.auto');
 
   return (
@@ -182,7 +197,7 @@ export function Composer(props: ComposerProps) {
         </ul>
       )}
       {pop === 'model' && (
-        <PopMenu label={t('ui.composer.model')} onClose={closePop}>
+        <PopMenu label={t('ui.composer.model')} opener={modelButton} onClose={closePop} onLeave={() => setPop(null)}>
           {modelOptions(models ?? [], modelId).map(option => (
             <PopItem key={option.id ?? ''} name={option.name ?? t('ui.composer.auto')} hint={option.id === null ? t('ui.composer.autoHint') : option.disabled ? t('ui.composer.unavailable') : option.hint}
               checked={option.checked} disabled={option.disabled} onPick={() => { closePop(); if (option.id !== modelId) props.onChoose({ modelId: option.id }); }} />
@@ -190,20 +205,20 @@ export function Composer(props: ComposerProps) {
         </PopMenu>
       )}
       {pop === 'depth' && (
-        <PopMenu label={t('ui.composer.depth')} onClose={closePop}>
+        <PopMenu label={t('ui.composer.depth')} opener={depthButton} onClose={closePop} onLeave={() => setPop(null)}>
           {[null, ...depths].map(value => (
             <PopItem key={value ?? ''} name={value ?? t('ui.composer.depthDefault')} checked={effort === value} onPick={() => { closePop(); if (value !== effort) props.onChoose({ effort: value }); }} />
           ))}
         </PopMenu>
       )}
-      {pending.map(p => (
-        <div key={p.id} className="bt-composer__queue bt-rise">
+      {queue && (
+        <div key={queue.shown.id} className="bt-composer__queue bt-rise">
           <span className="bt-label">{t('ui.composer.queued')}</span>
-          <span className="bt-composer__queue-text">{queuedLine(p)}</span>
-          <span className="bt-meta">{p.interrupt ? t('ui.composer.queuedForce') : t('ui.composer.queuedHint')}</span>
-          <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.composer.unqueue')} onClick={() => props.onCancelPending(p.id)}><Icon name="x" /></button>
+          <span className="bt-composer__queue-text">{queuedLine(queue.shown)}</span>
+          <span className="bt-meta">{queue.shown.interrupt ? t('ui.composer.queuedForce') : t('ui.composer.queuedHint')}{queue.more > 0 && <> · {t('ui.composer.queuedMore', queue.more)}</>}</span>
+          <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.composer.unqueue')} onClick={() => props.onCancelPending(queue.shown.id)}><Icon name="x" /></button>
         </div>
-      ))}
+      )}
       {attached.length > 0 && (
         <div className="bt-composer__attach">
           {attached.map(a => (
@@ -215,7 +230,7 @@ export function Composer(props: ComposerProps) {
         </div>
       )}
       <textarea
-        ref={input} className="bt-composer__input" rows={1} value={text} disabled={view.disabled} readOnly={sending}
+        ref={input} className="bt-composer__input" rows={2} value={text} disabled={view.disabled} readOnly={sending}
         aria-label={t('ui.composer.message')} placeholder={t(PLACEHOLDER[view.placeholder])}
         aria-controls={commands.length > 0 ? 'ui-slash' : undefined} aria-activedescendant={commands.length > 0 ? `ui-slash-${commands[active]!.name}` : undefined}
         onChange={e => change(e.target.value)} onKeyDown={onKeyDown}
@@ -230,12 +245,12 @@ export function Composer(props: ComposerProps) {
           <Icon name="slash" />
         </button>
         <span className="ui-composer__picks">
-          <button ref={modelButton} type="button" className="bt-select" aria-label={t('ui.composer.model')} aria-haspopup="menu" aria-expanded={pop === 'model'} disabled={view.disabled}
+          <button ref={modelButton} type="button" className="bt-select" aria-label={`${t('ui.composer.model')} · ${modelText}`} aria-haspopup="menu" aria-expanded={pop === 'model'} disabled={view.disabled}
             onClick={() => { setSlashForced(false); setPop(open => (open === 'model' ? null : 'model')); }}>
             {modelText} <Icon name="chevD" className="ui-select__chev" />
           </button>
           {depths.length > 0 && (
-            <button ref={depthButton} type="button" className="bt-select" aria-label={t('ui.composer.depth')} aria-haspopup="menu" aria-expanded={pop === 'depth'}
+            <button ref={depthButton} type="button" className="bt-select" aria-label={`${t('ui.composer.depth')} · ${effort ?? t('ui.composer.depthDefault')}`} aria-haspopup="menu" aria-expanded={pop === 'depth'}
               onClick={() => { setSlashForced(false); setPop(open => (open === 'depth' ? null : 'depth')); }}>
               {t('ui.composer.depthValue', effort ?? t('ui.composer.depthDefault'))} <Icon name="chevD" className="ui-select__chev" />
             </button>

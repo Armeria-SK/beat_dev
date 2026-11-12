@@ -39,6 +39,11 @@ export function memoryHistory(events: readonly MemoryEvent[], current: string): 
   });
 }
 
+export const undoDeletes = (version: Pick<MemoryVersion, 'action'> & { event: Pick<MemoryEvent, 'action'> }): boolean =>
+  version.action === 'undo' && version.event.action === 'create';
+
+export const ROW_LEAVE_MS = 220;
+
 export interface SkillContent { description: string; body: string }
 
 export interface SkillChange {
@@ -61,9 +66,6 @@ function actionFor(target: SkillContent, current: SkillContent, kind: 'undo' | '
   return sameContent(target, current) ? null : kind;
 }
 
-// versions は新しい順の控え（どれも「その書き込みの前の中身」）。行 i はその書き込みの変化で、
-// Undo（行 0）はその前の中身へ、Restore（行 i ≥ 1）はその変化が作った中身（versions[i-1]）へ戻す。
-// 最後に、いちばん古い控えそのものの行（空の beat-auto の控えなら Delete）を足す。
 export function skillHistory(versions: readonly SkillVersion[], current: SkillContent): SkillChange[] {
   const rows: SkillChange[] = versions.map((version, index) => {
     const produced: SkillContent = index === 0 ? current : versions[index - 1]!;
@@ -92,8 +94,6 @@ export function toolChoice(tool: Pick<ToolInfo, 'name' | 'policy' | 'configurabl
   return item ? { kind: 'confirm', item } : { kind: 'save' };
 }
 
-// 保存の直前に読み直した今の方針（fresh）で決め直す。確かめを済ませた変更（confirmed）は、今の方針からの緩め方が
-// 確かめたものと同じときだけそのまま保存し、違えば（ほかのタブや設定ファイルで締められていたら）確かめをやり直す。
 export function toolDecision(fresh: Pick<ToolInfo, 'name' | 'policy' | 'configurable'>, to: ToolPolicy, confirmed: Access | null): ToolChoice {
   const choice = toolChoice(fresh, to);
   if (choice.kind !== 'confirm' || !confirmed) return choice;
@@ -195,6 +195,9 @@ export function durationText(ms: number | null): string {
 }
 
 export const tokensText = (n: number | null): string => (n === null ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+export const archivedNothing = (items: readonly unknown[] | null, loadedFor: string, query: string): boolean =>
+  items !== null && items.length === 0 && loadedFor.trim() === '' && query === '';
 
 export function archivedLine(conversation: Pick<Conversation, 'message_count' | 'archived_at'>): { messages: number | null; archivedAt: number | null } {
   return { messages: typeof conversation.message_count === 'number' ? conversation.message_count : null, archivedAt: conversation.archived_at ?? null };

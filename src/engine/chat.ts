@@ -16,6 +16,8 @@ import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../to
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
 import { localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
+import type { ProjectStore } from '../projects/store.ts';
+import { runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import { stricterMode } from '../shared/permission-mode.ts';
@@ -42,6 +44,7 @@ import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
+import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
 export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
@@ -92,9 +95,11 @@ export interface ChatEngineDeps {
   paths: AppPaths;
   tools?: { registry: ToolRegistry; approvals: ApprovalBroker };
   memory?: MemoryStore;
+  botMemory?: boolean | undefined;
   tasks?: TaskStore;
   curiosity?: CuriosityStore;
   skills?: SkillStore;
+  projects?: ProjectStore | undefined;
   web?: NonNullable<ToolContext['services']>['web'];
   notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
@@ -124,7 +129,7 @@ export type SendOutcome =
   | { ok: true; runId: string; messageId?: number; queued?: boolean; pendingId?: string }
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail; problems?: ModelProblem[] };
 
-type Route = { model: ModelConfig; provider: ProviderConfig };
+type Route = { model: ModelConfig; provider: ProviderConfig; backup?: boolean };
 
 interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[] }
 // held: 実行が始まったあとに会話のモデルか権限モードが替わり、そのあとに送られた発言。今の実行（古いモデルの鎖・古いモードの実行）へは差し込まず、実行が終わってから新しいモデル・新しいモードの実行で読ませる
@@ -198,10 +203,10 @@ export class ChatEngine {
 
   // 実行中の会話に送った発言は、新しい実行にせず待たせる（待ちの発言）。今の実行が次の区切り（道具の結果を返して、次にモデルを呼ぶ前）に来たら
   // 履歴に入れ、実行が先に終わったら、その発言で新しい実行を始める。interrupt なら、今の実行を止めて、待っていた発言と一緒に新しい実行を始める
-  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean } = {}): SendOutcome {
+  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean; projectId?: string | undefined } = {}): SendOutcome {
     const item: ChatItem = { content: text, images, attachments };
     const running = this.#byConversation.get(conversationId);
-    if (running === undefined) return this.#beginChat(conversationId, [item], choice);
+    if (running === undefined) return this.#beginChat(conversationId, [item], choice, options.projectId);
     if (this.#active.get(running)?.kind !== 'chat') return this.#busy('send.busy_chat');
     const queue = this.#pending.get(conversationId) ?? [];
     if (queue.length >= MAX_PENDING_MESSAGES) {
@@ -237,7 +242,7 @@ export class ChatEngine {
   }
 
   // 発言を保存して、チャットの実行を始める（1 つ以上の発言を順に保存し、1 つの実行で読ませる）。使えるモデルが無ければ、何も保存せずに断る
-  #beginChat(conversationId: string, items: ChatItem[], choice: SendChoice): SendOutcome {
+  #beginChat(conversationId: string, items: ChatItem[], choice: SendChoice, projectId?: string): SendOutcome {
     const existing = this.#d.conversations.get(conversationId);
     const pinned = choice.modelId !== undefined ? choice.modelId : existing?.model_id ?? null;
     const effort = choice.effort !== undefined ? choice.effort : existing?.effort ?? null;
@@ -247,6 +252,7 @@ export class ChatEngine {
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     // ユーザーが同じ id へ新しく送ったときは、消したばかりの会話の覚えを外す（動いていた実行の遅れた書き込みだけを見送るため）
     this.#d.conversations.reopen(conversationId);
+    this.#d.conversations.ensure(conversationId, { projectId });
     if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
@@ -395,7 +401,12 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     const control = { value: { outcome: 'none' } as TaskControl };
-    if (this.#checklistCarriesTaint(conversationId)) this.#initialTaint.set(runId, [engineText(languageOf(this.#d.config()), 'taint.checklist')]);
+    const language = languageOf(this.#d.config());
+    const sources = [
+      ...(this.#d.runs.anyTaintedTask(conversationId) ? [engineText(language, 'taint.carried')] : []),
+      ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
+    ];
+    if (sources.length) this.#initialTaint.set(runId, sources);
     this.#start(runId, conversationId, chain.usable, 'task', { task, control });
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
@@ -515,7 +526,7 @@ export class ChatEngine {
         ...(probe ? (probe.messageCode ? { messageCode: probe.messageCode, ...(probe.messageParams ? { messageParams: probe.messageParams } : {}) } : {}) : { messageCode: 'engine.problem.unchecked' }),
       });
     }
-    return { usable: [...usable, ...cooling], problems };
+    return { usable: [...usable, ...cooling].map(route => (route.model.id === ids[0] ? route : { ...route, backup: true })), problems };
   }
 
   #noUsableModel(problems: ModelProblem[]): Extract<SendOutcome, { ok: false }> {
@@ -598,9 +609,10 @@ export class ChatEngine {
     // 子の担当は、親が始めたときの設定で動く（親と同じ決まり。途中で緩めても広がらない）
     const config = agent?.parent.config ?? d.config();
     d.runs.start(runId, kind, conversationId, agent?.parent.runId);
-    const snapshot = this.#snapshot(conversationId);
+    const resolved = agent ? agent.parent.project : runProject(d.projects, d.conversations.projectOf(conversationId));
+    const snapshot = this.#snapshot(conversationId, resolved);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
-    const flags: string[] = [];
+    const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
     const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0 };
     let index = 0;
@@ -609,12 +621,17 @@ export class ChatEngine {
     let truncatedStreak = 0;
     let lastEstimate = 0;
     let lastRoute: Route = chain[0]!;
-    const policy = agent?.parent.policy ?? buildPolicy(config, d.paths);
+    const project = kind === 'review' ? undefined : resolved;
+    if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
+    const productRoots = agent || kind === 'review' ? [] : [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
+    const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
+    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
+    const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
-      runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? defaultWorkspace(policy, d.paths),
+      runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
@@ -645,7 +662,7 @@ export class ChatEngine {
       }
     };
     const finishOk = (text: string, stop: StopReason, split?: { split: true }): EngineResult => {
-      if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), localOnly: ctx.localOnly === true });
+      if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), localOnly: ctx.localOnly === true, projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split: true as const } : {}) };
@@ -663,7 +680,8 @@ export class ChatEngine {
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       if (kind === 'chat' || kind === 'agent') { recordTaint(); recordAutoRead(); }
-      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode });
+      if (kind === 'task') recordTaint();
+      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
         return finishFail(call.failure);
@@ -697,7 +715,7 @@ export class ChatEngine {
         counters.toolCalls++;
         if (!toolCall.name.startsWith('task_')) counters.workCalls++;
         // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
-        ctx.outputTokens = this.#toolResultTokens({ conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode });
+        ctx.outputTokens = this.#toolResultTokens({ conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project });
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
         const outcome = await runToolCall(toolCall, ctx, {
           registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
@@ -774,7 +792,7 @@ export class ChatEngine {
   // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触ったときだけ書き、そのとき実行中のままの状態（running）も許す
   // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
   // 手元のモデルの会話の実行（localOnly）が書いたタスクは、手元のモデルだけで動かすタスクにする（メモに会話の文が入るため）
-  #handOver(runId: string, text: string, run: { workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean }): void {
+  #handOver(runId: string, text: string, run: { workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean; projectId: string | null }): void {
     const d = this.#d;
     const note = text.trim();
     if (!d.tasks || !note || run.tainted) return;
@@ -785,7 +803,7 @@ export class ChatEngine {
     const language = languageOf(d.config());
     for (const id of targets) {
       const task = d.tasks.get(id);
-      if (!task) continue;
+      if (!task || (task.project_id ?? null) !== run.projectId) continue;
       const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
       if (!open.includes(task.status)) continue;
       d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }) }, 'clive', runId);
@@ -793,7 +811,7 @@ export class ChatEngine {
     }
   }
 
-  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined }): Promise<CallResult> {
+  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }): Promise<CallResult> {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
@@ -813,7 +831,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode });
+        const { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
         const toolNames = new Set(toolDefs.map(t => t.name));
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
@@ -903,7 +921,7 @@ export class ChatEngine {
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
   // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
   // startedMode: 実行を始めたときの権限モード（実行の中でだけ渡す。使用量の数え方は次の実行のためなので、会話のいまのモードで数える）
-  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined }) {
+  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }) {
     const d = this.#d;
     const { model } = p;
     const config = d.config();
@@ -920,7 +938,9 @@ export class ChatEngine {
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, checklist].filter(Boolean).join('\n\n');
+    const name = p.project?.root ? d.projects?.get(p.project.id)?.name : undefined;
+    const product = name !== undefined && p.project?.root ? { name, root: p.project.root } : undefined;
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product), summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     const history = stored.map(m => m.message);
     const apiTools = specs;
@@ -930,7 +950,7 @@ export class ChatEngine {
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
   // そのモデルの available から引いた余裕の一部（context-budget.ts の toolResultTokens）。モデルの容量が分からなければ undefined（文字数の上限だけ）。何も書かない
-  #toolResultTokens(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined }): number | undefined {
+  #toolResultTokens(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }): number | undefined {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return undefined;
     const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
@@ -961,8 +981,9 @@ export class ChatEngine {
       model = chain.usable.map(r => r.model).find(m => (d.status.get(m.id)?.effective ?? m.contextLength ?? 0) > 0);
       if (!model) return this.#noUsableModel(chain.problems);
     }
-    const snapshot = existing?.snapshot ?? this.#previewSnapshot(language);
-    const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat' });
+    const project = runProject(d.projects, d.conversations.projectOf(conversationId));
+    const snapshot = existing?.snapshot ?? this.#buildSnapshotText(language, conversationId, project).text;
+    const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat', project });
     const { tokens } = estimateRequest(`${built.system.frozen}\n${built.system.dynamic}`, built.history, built.apiTools, built.factor);
     return { ok: true, modelId: model.id, tokens, available: built.available, capacity: built.capacity, ratio: tokens / built.available };
   }
@@ -997,7 +1018,7 @@ export class ChatEngine {
 
     const title = plainLine(input.title ?? input.task, AGENT_CHILD_TITLE_MAX) || plainLine(input.task, AGENT_CHILD_TITLE_MAX) || 'agent';
     const childRunId = randomUUID();
-    const child = d.conversations.create({ title, kind: 'task', source: { conversationId: parent.conversationId }, parentRunId: parent.runId });
+    const child = d.conversations.create({ title, kind: 'task', source: { conversationId: parent.conversationId }, parentRunId: parent.runId, projectId: d.conversations.projectOf(parent.conversationId) });
     const saved = d.conversations.append(child.id, { role: 'user', content: `${engineText(language, 'agent.preamble')}\n\n${input.task}` });
     d.bus.publish({ type: 'message.saved', runId: childRunId, conversationId: child.id, messageId: saved.id, role: 'user' });
     // 親が外から読んでいたら、子もその状態で始める。外を読まずに許可フォルダの外を読んだ印も引き継ぐ
@@ -1087,27 +1108,27 @@ export class ChatEngine {
     } finally { release?.(); }
   }
 
-  #snapshot(conversationId: string): string {
+  #snapshot(conversationId: string, project: ToolContext['project']): string {
     const d = this.#d;
     const existing = d.conversations.get(conversationId)?.snapshot;
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = this.#buildSnapshotText(language);
+    const snapshot = this.#buildSnapshotText(language, conversationId, project, d.log);
     d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 
   // 会話の始めに固定する system の文。作るだけで、何も書かない
-  #buildSnapshotText(language: Language) {
+  #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void) {
     const d = this.#d;
+    const product = d.conversations.projectOf(conversationId) !== null;
     return buildSnapshot(d.paths, {
-      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
+      ...(d.botMemory && d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
+      ...(product ? { persona: false, instructions: project?.root && instructionsSection(readInstructions(project.root, instructionsBudget(this.#smallestAvailable()), log)) } : {}),
     }, language);
   }
-
-  #previewSnapshot(language: Language): string { return this.#buildSnapshotText(language).text; }
 
   #checkTruncation(runId: string, conversationId: string, model: ModelConfig, estimate: { raw: number; tokens: number }, usage: Usage, capacity: number, flags: string[]): void {
     const d = this.#d;

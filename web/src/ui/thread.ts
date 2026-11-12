@@ -1,5 +1,6 @@
 import type { Approval, ChecklistItem, Message } from '../api.ts';
 import { replyTurns } from '../chat-logic.ts';
+import { formatDateTime, formatDateTimeSmart, timezoneLabel } from '../i18n/index.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import type { ToolResult } from './tool-row.ts';
 
@@ -15,10 +16,10 @@ export interface ToolItem {
 export type NoticeWeight = 'quiet' | 'warn' | 'fail';
 
 export type ThreadItem =
-  | { kind: 'owner'; key: string; text: string; attachments: string[] }
-  | { kind: 'reply'; key: string; text: string; copyText: string | null }
+  | { kind: 'owner'; key: string; text: string; attachments: string[]; at: number }
+  | { kind: 'reply'; key: string; text: string; copyText: string | null; at: number; stamped: boolean }
   | { kind: 'tools'; key: string; rows: ToolItem[] }
-  | { kind: 'live'; key: string; text: string }
+  | { kind: 'live'; key: string; text: string; since: number | null }
   | { kind: 'notice'; key: string; weight: NoticeWeight; notices: RunNotice[] };
 
 export interface ThreadInput {
@@ -52,7 +53,7 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
 
 const toolKey = (callId: string | undefined): string | null => (callId ? `t-${callId}` : null);
 
-const hiddenReply =(m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
+const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
 export function threadItems({ messages, draft, approvals = [], notices = [] }: ThreadInput): ThreadItem[] {
   const inputs = new Map<string, string>();
@@ -74,10 +75,10 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
       const rowKey = toolKey(m.toolCallId) ?? key;
       tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: inputs.get(m.toolCallId ?? '') ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
     } else if (m.role === 'user') {
-      items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name) });
+      items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
     } else {
       const turn = turns.get(m.id);
-      items.push({ kind: 'reply', key, text: m.text, copyText: turn ? turn.copyText : m.text });
+      items.push({ kind: 'reply', key, text: m.text, copyText: turn ? turn.copyText : m.text, at: m.createdAt, stamped: turn ? turn.copyText !== null : true });
     }
   }
 
@@ -87,20 +88,37 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
     if (!saved.has(done.callId)) tools(`t-${done.callId}`).push({ key: `t-${done.callId}`, name: done.name, input: done.input, result: null });
   }
   if (draft) {
-    if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text });
+    if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
     else if (draft.activeTool && waiting.length === 0) {
       const rowKey = toolKey(draft.toolCallId) ?? `run-${draft.runId}-${draft.activeTool}`;
       tools(rowKey).push({
         key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
         running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
       });
-    } else if (waiting.length === 0) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '' });
+    } else if (waiting.length === 0) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
   }
   for (const approval of waiting) {
     tools(`approval-${approval.id}`).push({ key: `approval-${approval.id}`, name: approval.tool, input: '', result: null, approval });
   }
   noticeRows(notices).forEach((row, i) => items.push({ kind: 'notice', key: `n-${row.notices[0]!.runId}-${i}`, ...row }));
   return items;
+}
+
+export interface MessageStamp { text: string; title: string }
+
+export function messageStamp(at: number, now: number): MessageStamp | null {
+  if (!at) return null;
+  const full = formatDateTime(at, 'full');
+  const sameYear = full.slice(0, 4) === formatDateTime(now, 'full').slice(0, 4);
+  return { text: sameYear ? formatDateTimeSmart(at, now) : full, title: `${full} ${timezoneLabel(undefined, at)}` };
+}
+
+export const replyMeta = (name: string | null | undefined, stamp: MessageStamp | null): string => [name?.trim(), stamp?.text].filter(Boolean).join(' · ');
+
+export function thinkingSeconds(since: number | null, now: number): number | null {
+  if (!since) return null;
+  const seconds = Math.floor((now - since) / 1000);
+  return seconds >= 1 ? seconds : null;
 }
 
 export const RISE_MS = 600;

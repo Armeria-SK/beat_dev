@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import type { Approval, ChecklistItem, Message } from '../web/src/api.ts';
 import { imageHost } from '../web/src/markdown-image.ts';
 import type { RunNotice } from '../web/src/ui/live-state.ts';
-import { checklistShape, contextMeter, isRising, noticeRows, threadItems } from '../web/src/ui/thread.ts';
+import { setTimezone } from '../web/src/i18n/index.ts';
+import { checklistShape, contextMeter, isRising, messageStamp, noticeRows, replyMeta, thinkingSeconds, threadItems } from '../web/src/ui/thread.ts';
 
 // 新しい画面の会話（p1-ui.md の「会話」）: 発言・返事・道具の行のまとまり・流れている返事・承認の行・お知らせの並びを作る純粋な関数。
 
@@ -47,11 +48,51 @@ test('ui/thread: 返事の文があいだに入ると、道具のまとまりは
   assert.deepEqual(replies.map(r => r.kind === 'reply' && r.copyText), [null, null, 'First.\n\nSecond.\n\nLast.']);
 });
 
+test('ui/thread: 発言と返事に時刻を持たせる。返事の時刻と AI の名前は 1 回の返事の最後の文にだけ出す', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'go', { createdAt: 1000 }),
+      msg('assistant', 'First.', { toolCalls: [call('a', 'shell_run', { command: 'ls' })], createdAt: 2000 }),
+      msg('tool', 'out', { toolName: 'shell_run', toolCallId: 'a', createdAt: 2500 }),
+      msg('assistant', 'Last.', { createdAt: 3000 }),
+    ],
+  });
+  assert.deepEqual(items.map(i => (i.kind === 'owner' ? [i.kind, i.at] : i.kind === 'reply' ? [i.kind, i.at, i.stamped] : [i.kind])), [['owner', 1000], ['reply', 2000, false], ['tools'], ['reply', 3000, true]]);
+  const live = threadItems({ messages: [msg('user', 'go'), msg('assistant', 'So far.', { runId: 'r9' })], draft: { runId: 'r9', conversationId: 'c', modelId: 'm', text: '' } });
+  assert.deepEqual(live.filter(i => i.kind === 'reply').map(i => i.kind === 'reply' && i.stamped), [false], '作っている最中の回には、まだ時刻を出さない');
+});
+
+test('ui/thread: 時刻の書き方。今日は時刻だけ、別の日は日付つき、別の年は年つき。重ねると年月日とタイムゾーン（サーバーのタイムゾーンで）', () => {
+  setTimezone('Asia/Tokyo');
+  try {
+    const now = Date.UTC(2026, 10, 12, 3, 0);
+    assert.deepEqual(messageStamp(Date.UTC(2026, 10, 12, 0, 5), now), { text: '09:05', title: '2026/11/12 09:05 Asia/Tokyo (UTC+09:00)' });
+    assert.equal(messageStamp(Date.UTC(2026, 10, 11, 14, 59), now)!.text, '11/11 23:59', '東京ではきのう');
+    assert.equal(messageStamp(Date.UTC(2026, 10, 11, 15, 0), now)!.text, '00:00', '東京では今日（UTC ではきのう）');
+    assert.equal(messageStamp(Date.UTC(2025, 11, 31, 3, 0), now)!.text, '2025/12/31 12:00');
+    assert.equal(messageStamp(0, now), null, '時刻の無い発言には出さない');
+    assert.equal(replyMeta('Clive', messageStamp(Date.UTC(2026, 10, 12, 0, 5), now)), 'Clive · 09:05');
+    assert.equal(replyMeta(undefined, messageStamp(Date.UTC(2026, 10, 12, 0, 5), now)), '09:05', '名前がまだ読めていなければ時刻だけ');
+    assert.equal(replyMeta('  ', null), '');
+    setTimezone('America/New_York');
+    assert.equal(messageStamp(Date.UTC(2026, 10, 12, 0, 5), now)!.text, '19:05', '設定のタイムゾーンで書く（ニューヨークでは同じ日の 19:05）');
+  } finally { setTimezone('Asia/Tokyo'); }
+});
+
+test('ui/thread: 「考え中 N 秒」は待ち始めから 1 秒たってから。待ち始めが分からなければ出さない', () => {
+  assert.equal(thinkingSeconds(null, 5000), null);
+  assert.equal(thinkingSeconds(1000, 1900), null);
+  assert.equal(thinkingSeconds(1000, 2000), 1);
+  assert.equal(thinkingSeconds(1000, 13_999), 12);
+  assert.equal(thinkingSeconds(5000, 1000), null, '時計がずれていても負の数は出さない');
+});
+
 test('ui/thread: 返事を作っている最中は、流れている文 → 動いている道具の行 → 何も無ければ caret だけ。承認を待つ間は道具の行の代わりに承認の行', () => {
   const base = [msg('user', 'go')];
   const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '' };
-  assert.deepEqual(threadItems({ messages: base, draft: { ...draft, text: 'Hel' } }).at(-1), { kind: 'live', key: 'live-r2', text: 'Hel' });
-  assert.deepEqual(threadItems({ messages: base, draft }).at(-1), { kind: 'live', key: 'live-r2', text: '' });
+  assert.deepEqual(threadItems({ messages: base, draft: { ...draft, text: 'Hel' } }).at(-1), { kind: 'live', key: 'live-r2', text: 'Hel', since: null });
+  assert.deepEqual(threadItems({ messages: base, draft }).at(-1), { kind: 'live', key: 'live-r2', text: '', since: null });
+  assert.deepEqual(threadItems({ messages: base, draft: { ...draft, waitingSince: 700 } }).at(-1), { kind: 'live', key: 'live-r2', text: '', since: 700 }, '待ち始めの時刻を「考え中 N 秒」のために渡す');
   const running = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run', activeInput: '{"command":"npm test"}', toolStartedAt: 5 } }).at(-1)!;
   assert.ok(running.kind === 'tools');
   assert.deepEqual(running.rows[0]!.running, { startedAt: 5, checking: false, helperTools: null, helperConversation: null });
