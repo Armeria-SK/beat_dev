@@ -53,6 +53,7 @@
 - 移し替え 21（beat 3-1b）: 受け入れの一覧の固定した版 `acceptance_versions`（製品と版の組で 1 行。`hash` は固定の部分のハッシュ、`content` はその版の中身、`plan_hash`、`source` は build / change / question / proposal、`build_task_id`。書くのは Build〔3-2〕と、3-3 からは Approve・持ち主の直し・`applyOwnerDecision`）と、製品の持ち主向けの文書の言語 `projects.doc_language`（NULL = まだ決まっていない）・`doc_language_pinned`（1 = 持ち主が選んだ）。`build_task_id` はタスクのやわらかい参照（`TASK_SOFT_REFERENCES`。参照されているタスクは消せない）
 - 移し替え 22（beat 3-2-s）: `tasks.acceptance_items`（NULL 可。Build のタスクだけが、固定した版の受け入れ項目の id の並びを JSON の文字列で持つ。`TaskStore.hasOpenBuild` が「製品に動いている Build があるか」に、`TaskStore.openBuild` がその id〔いちばん新しいもの〕に使う）
 - 移し替え 23（beat 3-3-s）: 受け入れの一覧の変更の案 `acceptance_changes`（`id`・`project_id`・`base_version`〔案を作ったときの版〕・`ops`〔`[{ op: add|change|remove, id?, item?: { result, check }, source }]` の JSON。出どころはコードが確かめたあとの形〕・`language`・`conversation_id`・`tainted`・`status` は pending / approved / rejected / superseded・`created_at`・`decided_at`）と索引 `ix_acceptance_changes_project`。新しい表だけ
+- 移し替え 24（判定役の印の付け直し）: 前からあるタスクの経過（`context` `note` `edited` に `run_id`）のうち、読んだ実行・読んだ会話の実行・記録の無い実行が書いたものがあるタスクに、印 `untrusted-input`（`context`、actor `system`）を 1 つ足す。前の版では印を書いた時点で付けていなかったので、会話を消すと AI の文が判定役に届いていた。予定に付いた印は、予定を消すときに `remove` が実行のタスクへ移す（予定があるあいだは実行のタスクは予定の経過も見る）。すでに印のあるタスクには足さない
 - 入口: `src/db/database.ts`（`openDatabase`）
 - 使うもの: `node:sqlite` だけ（型として `engine/types.ts` を参照）
 
