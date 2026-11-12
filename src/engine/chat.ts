@@ -18,6 +18,8 @@ import { localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pip
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
+import { meshIndexLimit, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
+import { newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import { runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
@@ -102,6 +104,7 @@ export interface ChatEngineDeps {
   skills?: SkillStore;
   projects?: ProjectStore | undefined;
   plans?: PlanStore | undefined;
+  mesh?: Mesh | undefined;
   web?: NonNullable<ToolContext['services']>['web'];
   notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
@@ -184,6 +187,8 @@ export class ChatEngine {
   #runModel = new Map<string, string | null>();
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
   #runMode = new Map<string, PermissionMode>();
+  #runFence = new Map<string, string>();
+  #runIndex = new Map<string, { limit: number; body: string }>();
   // 止める操作（stop）を受けた実行
   #stopped = new Set<string>();
   // 子の担当の会話 → それを任せた親の会話（親がチャットのときだけ。子の権限モードは、親の会話のいまのモードに従う）
@@ -574,6 +579,8 @@ export class ChatEngine {
         this.#preemptedTasks.delete(runId);
         this.#runModel.delete(runId);
         this.#runMode.delete(runId);
+        this.#runFence.delete(runId);
+        this.#runIndex.delete(runId);
         this.#stopped.delete(runId);
         this.#modeHost.delete(conversationId);
         this.#agentSpawned.delete(runId);
@@ -631,6 +638,7 @@ export class ChatEngine {
     let lastEstimate = 0;
     let lastRoute: Route = chain[0]!;
     const project = kind === 'review' ? undefined : resolved;
+    if (project) d.mesh?.persist(project.id);
     if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
     const productRoots = agent || kind === 'review' ? [] : [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
     const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
@@ -644,7 +652,7 @@ export class ChatEngine {
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, mesh: d.mesh, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
@@ -724,7 +732,9 @@ export class ChatEngine {
         counters.toolCalls++;
         if (!toolCall.name.startsWith('task_')) counters.workCalls++;
         // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
-        ctx.outputTokens = this.#toolResultTokens({ conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project });
+        const budget = this.#toolResultTokens({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project });
+        ctx.outputTokens = budget.tokens;
+        ctx.contextAvailable = budget.available;
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
         const outcome = await runToolCall(toolCall, ctx, {
           registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
@@ -840,7 +850,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
+        const { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
         const toolNames = new Set(toolDefs.map(t => t.name));
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
@@ -930,7 +940,7 @@ export class ChatEngine {
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
   // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
   // startedMode: 実行を始めたときの権限モード（実行の中でだけ渡す。使用量の数え方は次の実行のためなので、会話のいまのモードで数える）
-  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }) {
+  #assemble(p: { runId?: string | undefined; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }) {
     const d = this.#d;
     const { model } = p;
     const config = d.config();
@@ -949,7 +959,8 @@ export class ChatEngine {
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
     const name = p.project?.root ? d.projects?.get(p.project.id)?.name : undefined;
     const product = name !== undefined && p.project?.root ? { name, root: p.project.root } : undefined;
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, p.kind === 'chat'), summary, checklist].filter(Boolean).join('\n\n');
+    const mesh = this.#meshIndex(p.runId, p.project, available);
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, p.kind === 'chat'), mesh, summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     const history = stored.map(m => m.message);
     const apiTools = specs;
@@ -959,11 +970,28 @@ export class ChatEngine {
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
   // そのモデルの available から引いた余裕の一部（context-budget.ts の toolResultTokens）。モデルの容量が分からなければ undefined（文字数の上限だけ）。何も書かない
-  #toolResultTokens(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }): number | undefined {
+  #toolResultTokens(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }): { tokens: number | undefined; available: number | undefined } {
     const built = this.#assemble(p);
-    if (!(built.capacity > 0)) return undefined;
+    if (!(built.capacity > 0)) return { tokens: undefined, available: undefined };
     const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
-    return toolResultTokens(built.available, tokens, built.factor);
+    return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
+  }
+
+  #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number): string {
+    const mesh = this.#d.mesh;
+    if (!mesh || !project) return '';
+    const limit = meshIndexLimit(available);
+    let body = runId ? this.#runIndex.get(runId) : undefined;
+    if (!body || body.limit !== limit) {
+      let text = '';
+      try { text = mesh.indexBody(project.id, limit); } catch (error) { this.#d.log?.(`[WARN] Could not build the mesh index of product ${project.id}: ${(error as Error).message}`); }
+      body = { limit, body: text };
+      if (runId) this.#runIndex.set(runId, body);
+    }
+    if (!body.body) return '';
+    let nonce = runId ? this.#runFence.get(runId) : PLACEHOLDER_NONCE;
+    if (!nonce) { nonce = newNonce(); this.#runFence.set(runId!, nonce); }
+    return wrapMeshIndex(body.body, nonce);
   }
 
   // いまの会話を次に送るとき、モデルへ送る量（トークンの見積もり）。古い発言を削る前の全体で、available（削り始める境目）に対する割合 ratio は 1 を超えうる。

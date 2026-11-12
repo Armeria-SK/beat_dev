@@ -15,6 +15,7 @@ import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { PlanStore } from '../projects/plan.ts';
+import type { Mesh } from '../mesh/index.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -106,7 +107,7 @@ export interface ToolContext {
   log: (line: string) => void;
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
-    tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined;
+    tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined; mesh?: Mesh | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
@@ -117,6 +118,7 @@ export interface ToolContext {
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。
   // 文字数の上限（pipeline.ts の TOOL_OUTPUT_LIMIT = 16,000 文字）とは別で、先に達した方で切る。無ければ文字数の上限だけ
   outputTokens?: number | undefined;
+  contextAvailable?: number | undefined;
   // いまモデルを呼んでいる（この道具の結果を次に読む）モデル。エンジンが道具を呼ぶ直前に入れる（鎖で替わったら替わる）。vision は設定の models[].vision。無い（試験・ほかの呼び方）なら、画像を読めないとみなす
   model?: { id: string; vision: boolean } | undefined;
   // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）

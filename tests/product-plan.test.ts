@@ -13,7 +13,7 @@ import { buildDynamic } from '../src/engine/workspace.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { PLAN_BACKUPS, PLAN_MAX_CHARS, PlanStore } from '../src/projects/plan.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
-import { planRead, planWrite } from '../src/tools/builtin/plan.ts';
+import { planWrite } from '../src/tools/builtin/plan.ts';
 import { fileEdit, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { planAllows, runToolCall } from '../src/tools/pipeline.ts';
@@ -121,9 +121,6 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
   assert.equal(planWrite.projectOnly, true);
   assert.equal(planWrite.effect, 'meta');
   assert.deepEqual([...planWrite.allowedIn], ['chat']);
-  assert.equal(planRead.projectOnly, true);
-  assert.equal(planRead.effect, 'read');
-  assert.deepEqual([...planRead.allowedIn].sort(), ['agent', 'chat', 'task']);
   assert.equal(planAllows(planWrite), true);
   assert.equal(planAllows(fileWrite), false);
 
@@ -133,7 +130,7 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
   const plans = new PlanStore(new KV(db), { projects: paths.projects, backups: paths.backups });
-  const registry = new ToolRegistry().register(planWrite).register(planRead).register(fileWrite);
+  const registry = new ToolRegistry().register(planWrite).register(fileWrite);
   const policy = buildPolicy(config, paths);
   const events: RunEvent[] = [];
   const base: ToolContext = {
@@ -156,9 +153,6 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
   assert.equal(written.decision, 'allow', written.output.content);
   assert.equal(readFileSync(join(paths.projects, PROJECT, 'plan.md'), 'utf8'), '# Plan\n1. Do it');
   assert.deepEqual(events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: PROJECT, hash: sha('# Plan\n1. Do it'), by: 'ai' }]);
-  const read = await run('plan_read', {}, { ...product, kind: 'task', permissionMode: undefined });
-  assert.equal(read.decision, 'allow');
-  assert.match(read.output.content, /# Plan\n1\. Do it/u);
   const blocked = await run('file_write', { path: 'x.txt', content: 'x' }, product);
   assert.equal(blocked.decidedBy, 'mode', '計画モードで projectOnly でない書き込みの道具は今までどおり断る');
 
@@ -229,42 +223,42 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   return { ...s, products, events, folder, product, send, names };
 }
 
-test('3-1a 道具の一覧: 製品の会話には plan_write と plan_read、製品に属さない会話（どのモードでも）には無い。製品のタスクには plan_read だけ、振り返りにはどちらも無い。子の担当には plan_read だけ', async t => {
+test('3-1a 道具の一覧: 製品の会話には plan_write と mesh_read、製品に属さない会話（どのモードでも）には無い。製品のタスクには mesh_read だけ、振り返りにはどちらも無い。子の担当には mesh_read だけ', async t => {
   const s = await setup(t, { configure: c => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });
   const shop = await s.product('shop');
   s.adapter().scripts = [reply('a'), reply('b'), reply('c'), reply('d')];
   await s.send(uuid(1), { text: 'plan it', projectId: shop.id, permissionMode: 'plan' });
-  assert.ok(s.names().includes('plan_write') && s.names().includes('plan_read'), s.names().join());
+  assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_read'), s.names().join());
   await s.send(uuid(2), { text: 'do it', projectId: shop.id, permissionMode: 'normal' });
-  assert.ok(s.names().includes('plan_write') && s.names().includes('plan_read'));
+  assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_read'));
   for (const [n, mode] of [[3, 'normal'], [4, 'plan'], [5, 'auto']] as const) {
     await s.send(uuid(n), { text: 'hi', permissionMode: mode });
-    assert.ok(!s.names().some(name => name.startsWith('plan_')), mode);
+    assert.ok(!s.names().some(name => name.startsWith('plan_') || name.startsWith('mesh_')), mode);
   }
 
   s.adapter().scripts = [call('agent_run', { task: 'look' }), reply('child'), reply('parent')];
   await s.send(uuid(6), { text: 'delegate', projectId: shop.id, permissionMode: 'normal' });
   const child = s.adapter().calls.at(-2)!.tools.map(tool => tool.name);
-  assert.ok(child.includes('plan_read') && !child.includes('plan_write'), child.join());
+  assert.ok(child.includes('mesh_read') && !child.includes('plan_write'), child.join());
 
   const made = await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
   assert.equal(made.status, 201, JSON.stringify(made.body));
   s.adapter().scripts = [call('task_complete', { summary: 'done' })];
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.ok(s.names().includes('plan_read') && !s.names().includes('plan_write'), s.names().join());
+  assert.ok(s.names().includes('mesh_read') && !s.names().includes('plan_write'), s.names().join());
 
   s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1) });
   s.adapter().scripts = [reply('No changes')];
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.ok(!s.names().some(name => name.startsWith('plan_')), s.names().join());
+  assert.ok(!s.names().some(name => name.startsWith('plan_') || name.startsWith('mesh_')), s.names().join());
 });
 
-test('3-1a 登録の順（maxTools: 12）: (a) 製品の計画モードに plan_write / plan_read が残る (b) 製品のタスクとふつうの会話に task_complete・file_read・file_edit・shell_run が残る (c) 製品に属さない会話の一覧は今と同じ', async t => {
+test('3-1a 登録の順（maxTools: 12）: (a) 製品の計画モードに plan_write / mesh_read が残る (b) 製品のタスクとふつうの会話に task_complete・file_read・file_edit・shell_run が残る (c) 製品に属さない会話の一覧は今と同じ', async t => {
   const s = await setup(t, { models: [fakeModel('m1', { maxTools: 12 })] });
   const shop = await s.product('shop');
   s.adapter().scripts = [reply('a'), reply('b')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
-  assert.ok(s.names().includes('plan_write') && s.names().includes('plan_read'), s.names().join());
+  assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_read'), s.names().join());
   await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'normal' });
   for (const name of ['file_read', 'file_edit', 'shell_run']) assert.ok(s.names().includes(name), `${name}: ${s.names().join()}`);
   await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
@@ -411,7 +405,7 @@ function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
   const plans = new PlanStore(new KV(db), { projects: paths.projects, backups: paths.backups }, Date.now, { archived: () => archived });
-  const registry = new ToolRegistry().register(planWrite).register(planRead);
+  const registry = new ToolRegistry().register(planWrite);
   const policy = buildPolicy(config, paths);
   const events: RunEvent[] = [];
   const ctxOf = (over: Partial<ToolContext> = {}): ToolContext => ({
@@ -425,24 +419,6 @@ function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
   });
   return { paths, plans, events, ctxOf, run, file: join(paths.projects, PROJECT, 'plan.md') };
 }
-
-const CONTINUES = /\n\n\[The plan continues: call plan_read with offset (\d+) to read the rest \((\d+) characters in all\)\]$/u;
-
-test('3-1a 審査 S1: 外の文を読んだあとに書かれた計画書・beat の外で直された計画書を plan_read で読んだ実行は「外から読んだ」になる。きれいな計画書なら付かない', async t => {
-  const h = toolHarness(t);
-  h.plans.write(PROJECT, '# Clean', AI);
-  const clean = h.ctxOf();
-  assert.equal((await h.run('plan_read', {}, clean)).decision, 'allow');
-  assert.equal(clean.taint.tainted, false);
-  h.plans.write(PROJECT, '# After web', { ...AI, runId: 'r2', tainted: true });
-  const reader = h.ctxOf({ kind: 'task' });
-  await h.run('plan_read', {}, reader);
-  assert.equal(reader.taint.tainted, true);
-  writeFileSync(h.file, '# Edited by hand');
-  const outside = h.ctxOf({ kind: 'task' });
-  await h.run('plan_read', {}, outside);
-  assert.equal(outside.taint.tainted, true);
-});
 
 test('3-1a 審査 S2: この実行が外を読んでいなくても、会話が前の実行で外を読んでいれば plan_write は tainted。会話の印が読めなければ tainted', async t => {
   const h = toolHarness(t);
@@ -491,26 +467,6 @@ test('3-1a 審査 S4: planOk は効果が meta / read で、ファイルも書�
 test('3-1a 審査 S5: 制御文字（タブ・改行を除く）と U+2028 / U+2029 も取り除く', t => {
   const f = storeFixture(t);
   assert.equal(f.store.write(PROJECT, 'a\u0001b\u0007c\u001Bd\u2028e\u2029f\tg\r\nh\u007F', AI).content, 'abcdef\tg\r\nh');
-});
-
-test('3-1a 審査 S6: 64,000 文字の計画書も plan_read で全部読める（続きは offset で読む）', async t => {
-  const h = toolHarness(t);
-  const full = Array.from({ length: 64_000 }, (_, i) => String.fromCharCode(97 + (i % 26))).join('');
-  h.plans.write(PROJECT, full, AI);
-  let offset = 0;
-  let read = '';
-  for (let i = 0; i < 10; i++) {
-    const out = await h.run('plan_read', offset ? { offset } : {}, h.ctxOf());
-    assert.equal(out.output.isError, undefined, out.output.content.slice(0, 200));
-    const more = CONTINUES.exec(out.output.content);
-    read += more ? out.output.content.slice(0, more.index) : out.output.content;
-    if (!more) break;
-    assert.equal(Number(more[2]), 64_000);
-    offset = Number(more[1]);
-  }
-  assert.equal(read, full);
-  const past = await h.run('plan_read', { offset: 64_000 }, h.ctxOf());
-  assert.match(past.output.content, /no more/u);
 });
 
 test('3-1a 審査 S7: plan.md がふつうのファイルでない（フォルダ・リンク）なら、読まず書かない', t => {
@@ -582,11 +538,11 @@ test('3-1a 審査 C3: 同じ中身の書き直しは控えも plan.changed も�
   assert.equal(f.store.view(PROJECT).tainted, true, '同じ中身を外を読んでいない実行が書き直しても、tainted は消えない');
 });
 
-test('3-1a 審査 C4: plan_write / plan_read は builtinTools の shell_run の後ろに並ぶ', () => {
+test('3-1a 審査 C4: plan_write / mesh_read は builtinTools の shell_run の後ろに並ぶ', () => {
   const names = builtinTools().map(tool => tool.name);
   assert.ok(names.indexOf('shell_run') >= 0);
   assert.ok(names.indexOf('plan_write') > names.indexOf('shell_run'));
-  assert.ok(names.indexOf('plan_read') > names.indexOf('shell_run'));
+  assert.ok(names.indexOf('mesh_read') > names.indexOf('shell_run'));
 });
 
 test('3-1a 審査: しまった製品の plan_write は、PUT と同じく分かる誤りで断り、ファイルを変えない', async t => {
