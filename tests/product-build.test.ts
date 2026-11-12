@@ -77,6 +77,7 @@ test('3-2-s 要件の聞き取りの文: ふつうの形は 700 トークン以�
     assert.doesNotMatch(text, /your answer|owner_choice/iu);
     assert.match(text, /plan_write/u);
     assert.match(text, /acceptance_write/u);
+    assert.match(text, /once locked[^.]*acceptance_change/u, '固定のあとは acceptance_change で案を出すと言う（2 つは同時に渡らない）');
     assert.match(text, /at most 3/u);
     assert.doesNotMatch(text, /[^\x09\x0A\x20-\x7E]/u, 'モデル向けの文は ASCII の英語');
   }
@@ -228,7 +229,7 @@ test('3-2-s Build: ハッシュが違えば 409 で何も変わらない。計�
 
   const ok = await s.build(shop.id, good);
   assert.equal(ok.status, 201);
-  await s.json(`/api/tasks/${ok.body.task.id}/cancel`, 'POST', {});
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(ok.body.task.id);
   const frozen = await s.build(shop.id, { planHash: good.planHash, acceptanceHash: (await s.list(shop.id)).acceptance.hash });
   assert.equal(frozen.status, 409);
   assert.equal(frozen.body.code, 'build.frozen');

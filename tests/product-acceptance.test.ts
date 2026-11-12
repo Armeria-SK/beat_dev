@@ -364,8 +364,12 @@ test('3-1b acceptance_write: 固定のあと（version >= 1）は断られ、フ
   const before = readFileSync(h.file, 'utf8');
   const out = await h.run('acceptance_write', { items: [item('Second')] }, h.ctxOf());
   assert.equal(out.output.isError, true);
-  assert.match(out.output.content, /fixed \(version 1\)/u);
+  assert.equal(out.decidedBy, 'registry', '固定のあとはパイプラインが断る');
+  assert.match(out.output.content, /cannot change the locked acceptance list/u);
   assert.match(out.output.content, /acceptance_change/u);
+  const direct = await acceptanceWrite.execute({ items: [item('Second')] } as never, h.ctxOf());
+  assert.equal(direct.isError, true, '道具の中でも断る（二重）');
+  assert.match(direct.content, /fixed \(version 1\)/u);
   assert.equal(readFileSync(h.file, 'utf8'), before);
 
   const archived = toolHarness(t, { archived: true });
@@ -563,7 +567,7 @@ test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_w
   const shop = await s.product('shop');
   const empty = await s.json(`/api/projects/${shop.id}/acceptance`, 'GET');
   assert.equal(empty.status, 200);
-  assert.deepEqual(empty.body.acceptance, { version: 0, language: null, items: [], not_doing: [], draft: true, hash: null, tainted: false, frozen: null });
+  assert.deepEqual(empty.body.acceptance, { version: 0, language: null, items: [], not_doing: [], draft: true, hash: null, tainted: false, frozen: null, change: null, unbuilt: [], open_build_task_id: null });
   assert.equal((await s.json('/api/projects/aaaaaaaa-0000-4000-8000-999999999999/acceptance', 'GET')).status, 404);
   assert.equal((await s.json('/api/projects/../acceptance', 'GET')).status, 404);
 

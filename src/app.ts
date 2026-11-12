@@ -26,7 +26,7 @@ import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.t
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { shellRun } from './tools/builtin/shell.ts';
 import { planWrite } from './tools/builtin/plan.ts';
-import { acceptanceWrite } from './tools/builtin/acceptance.ts';
+import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts';
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
 import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
 import { sdkConnect } from './mcp/connect.ts';
@@ -71,7 +71,7 @@ export function builtinTools(): ToolDef[] {
   return [
     taskComplete, taskCheckpoint, askUser,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun,
-    planWrite, acceptanceWrite, meshSearch, meshRead, meshStateSet,
+    planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
     taskCreate, taskList, taskUpdate,
     memoryUpdate, memoryForget, memorySearch, historyRead,
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
@@ -128,6 +128,7 @@ export class App {
   readonly projects: ProjectStore;
   readonly plans: PlanStore;
   readonly acceptance: AcceptanceStore;
+  readonly now: () => number;
   readonly mesh: Mesh;
   readonly projectFolderExempt: readonly string[];
   readonly botMemory: boolean;
@@ -159,6 +160,7 @@ export class App {
     this.#warnIgnoredPolicies(config);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
     const now = options.now ?? Date.now;
+    this.now = now;
     this.conversations = new Conversations(this.db, now, this.log);
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);
@@ -194,7 +196,10 @@ export class App {
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
-    this.acceptance = new AcceptanceStore(this.db, this.paths.projects, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null, log: this.log });
+    this.acceptance = new AcceptanceStore(this.db, this.paths.projects, {
+      archived: id => (this.projects.get(id)?.archived_at ?? null) !== null, log: this.log, now, languages: this.projects,
+      planHash: id => { try { return this.plans.view(id).hash; } catch { return null; } },
+    });
     this.acceptance.repairAll(this.log);
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
@@ -363,7 +368,7 @@ export class App {
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
     // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
-    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) }), config)) : 0;
+    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen' }), config)) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }

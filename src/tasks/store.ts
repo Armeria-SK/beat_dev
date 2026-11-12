@@ -352,7 +352,21 @@ export class TaskStore {
   }
 
   hasOpenBuild(projectId: string): boolean {
-    return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting')").get(projectId));
+    return this.openBuild(projectId) !== null;
+  }
+
+  openBuild(projectId: string): string | null {
+    const row = this.#db.prepare("SELECT id FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting') ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  builds(projectId: string): Array<{ items: string[]; created_at: number }> {
+    const rows = this.#db.prepare("SELECT acceptance_items, created_at FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting', 'done')").all(projectId) as Array<{ acceptance_items: string; created_at: number }>;
+    return rows.map(row => {
+      let items: unknown;
+      try { items = JSON.parse(row.acceptance_items); } catch { items = []; }
+      return { items: Array.isArray(items) ? items.filter((id): id is string => typeof id === 'string') : [], created_at: row.created_at };
+    });
   }
 
   markUntrusted(taskId: string, actor: string, note: string): void {

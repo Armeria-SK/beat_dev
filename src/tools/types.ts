@@ -171,6 +171,7 @@ export interface ToolDef<I = any> {
   submits?: true;
   planOk?: true;
   projectOnly?: true;
+  acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

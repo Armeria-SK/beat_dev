@@ -36,10 +36,10 @@ test('移し替え 22: 形 21 の DB を今のコードで開いても行は減�
   const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');
   const before = seedV21(path);
-  assert.equal(MIGRATIONS.length, 22);
+  assert.ok(MIGRATIONS.length >= 22);
   assert.match(String(MIGRATIONS[21]), /ALTER TABLE tasks ADD COLUMN acceptance_items TEXT/u);
 
-  const db = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const db = openDatabase(path, MIGRATIONS.slice(0, 22), { backupDir: backups });
   try {
     assert.equal(version(db), 22);
     assert.deepEqual(counts(db), before, '行数が前後で同じ');
@@ -57,7 +57,7 @@ test('移し替え 22: 形 21 の DB を今のコードで開いても行は減�
     assert.ok(!columns(backup, 'tasks').includes('acceptance_items'));
   } finally { backup.close(); }
 
-  const again = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const again = openDatabase(path, MIGRATIONS.slice(0, 22), { backupDir: backups });
   try {
     assert.equal(version(again), 22);
     assert.deepEqual(counts(again), before);
