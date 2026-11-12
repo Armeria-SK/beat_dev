@@ -117,6 +117,16 @@ test('再試行できない失敗（認証など）はすぐ次のモデルへ',
   assert.deepEqual(s.sleeps, []);
 });
 
+test('予備のモデルへ切り替えた実行は、記録の flags に fallback が 1 つ付く（Runs の Fallback の印。切り替えなしでは付かない）', async t => {
+  const s = await setup(t, { scripts: [fail(new ProviderError('auth', 'bad key', { retryable: false })), reply('予備'), reply('ふつう')] });
+  const switched = await sendAndWait(s.engine, 'c1', 'やあ');
+  assert.deepEqual(JSON.parse(s.runs.get(switched.runId)!.flags), ['fallback']);
+  const plain = await sendAndWait(s.engine, 'c1', 'もう一度');
+  assert.ok(plain.ok);
+  assert.equal(plain.modelId, 'a');
+  assert.deepEqual(JSON.parse(s.runs.get(plain.runId)!.flags), []);
+});
+
 test('すべて失敗したら text は空で、エラー文を返事として保存しない', async t => {
   const authFail = () => fail(new ProviderError('auth', 'bad key', { retryable: false }));
   const s = await setup(t, { scripts: [authFail(), authFail()] });

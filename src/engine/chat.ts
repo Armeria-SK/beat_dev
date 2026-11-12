@@ -804,6 +804,7 @@ export class ChatEngine {
       const { model, provider } = route;
       if (index > p.start) {
         d.bus.publish({ type: 'model.switch', runId: p.runId, conversationId: p.conversationId, from: p.chain[index - 1]!.model.id, to: model.id, reason: last.message });
+        if (!p.flags.includes('fallback')) p.flags.push('fallback');
         d.log?.(`[WARN] model ${p.chain[index - 1]!.model.id} was not available, switching to ${model.id}: ${last.message.split('\n')[0]}`);
       }
       const adapter = d.registry.get(provider.id);
