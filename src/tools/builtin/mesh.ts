@@ -52,7 +52,6 @@ export const meshStateSet: ToolDef<StatePatch> = {
   input: Type.Object({ goal: note(200), now: note(120), next: note(120), blocked: note(120) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task'],
-  planOk: true,
   projectOnly: true,
   async execute(input, ctx) {
     const mesh = ctx.services?.mesh;

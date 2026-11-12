@@ -34,6 +34,7 @@ const en = {
   'event.answer': 'Reply to the question "{question}": {text}',
   'event.run_now': 'Run now',
   'event.uncancelled': 'The cancellation was undone',
+  'event.build_untrusted': 'Written after reading text from elsewhere, or changed outside the app.',
   'summary.done_from_ui': 'Marked as done from the screen',
   'summary.cancelled_from_ui': 'Cancelled from the screen',
 

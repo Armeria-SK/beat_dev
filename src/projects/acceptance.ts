@@ -3,6 +3,7 @@ import { lstatSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { SpeechRow } from '../db/conversations.ts';
+import { transaction } from '../db/database.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { acceptanceText, type AcceptanceMessageKey } from '../shared/messages/acceptance.ts';
 import { stripHidden } from '../shared/plain-text.ts';
@@ -268,10 +269,52 @@ function overlay(base: AcceptanceDoc, file: AcceptanceDoc | undefined): Acceptan
   };
 }
 
+export const UNREFERENCED_PAGE = 50;
+export const UNREFERENCED_TEXT_MAX = 300;
+
+export interface Coverage {
+  owner_words: number;
+  owner_choice: number;
+  owner_edit: number;
+  ai_added: number;
+  by_hand: number;
+  unreferenced: Array<{ message_id: number; conversation_id: string; text: string; created_at: number }>;
+  unreferenced_total: number;
+}
+
+function clip(text: string): string {
+  if (text.length <= UNREFERENCED_TEXT_MAX) return text;
+  const end = isHigh(text.charCodeAt(UNREFERENCED_TEXT_MAX - 1)) ? UNREFERENCED_TEXT_MAX - 1 : UNREFERENCED_TEXT_MAX;
+  return text.slice(0, end);
+}
+
+export function coverageOf(doc: AcceptanceDoc | undefined, rows: readonly SpeechRow[], before?: number): Coverage {
+  const items = (doc?.items ?? []).filter(entry => entry.removedIn === null);
+  const counts = { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0 };
+  for (const entry of items) if (Object.hasOwn(counts, entry.source?.kind)) counts[entry.source.kind]++;
+  const cited = new Set<number>();
+  for (const { source } of [...items, ...(doc?.notDoing ?? [])]) {
+    if (source?.kind === 'owner_words') cited.add(source.messageId);
+    if (source?.kind === 'owner_choice') cited.add(source.answerMessageId);
+  }
+  const at = (row: SpeechRow) => row.created_at ?? 0;
+  const loose = rows.filter(row => row.role === 'user' && row.generated !== 1 && !cited.has(row.id)).sort((a, b) => at(b) - at(a) || b.id - a.id);
+  const page = before === undefined ? loose : loose.filter(row => at(row) < before);
+  let end = Math.min(page.length, UNREFERENCED_PAGE);
+  while (end > 0 && end < page.length && at(page[end]!) === at(page[end - 1]!)) end++;
+  return {
+    ...counts,
+    by_hand: items.filter(entry => entry.check?.kind === 'look' || entry.check?.kind === 'read').length,
+    unreferenced: page.slice(0, end).map(row => ({ message_id: row.id, conversation_id: row.conversation_id, text: clip(stripAttachments(row.text)), created_at: at(row) })),
+    unreferenced_total: loose.length,
+  };
+}
+
 export interface AcceptanceIo {
   writeFileSync?: (path: string, data: string) => void;
   renameSync?: (from: string, to: string) => void;
   archived?: (projectId: string) => boolean;
+  log?: (line: string) => void;
 }
 
 export class AcceptanceStore {
@@ -280,6 +323,7 @@ export class AcceptanceStore {
   readonly #write: (path: string, data: string) => void;
   readonly #rename: (from: string, to: string) => void;
   readonly #archived: (projectId: string) => boolean;
+  readonly #log: (line: string) => void;
 
   constructor(db: DatabaseSync, projectsDir: string, io: AcceptanceIo = {}) {
     this.#db = db;
@@ -287,6 +331,7 @@ export class AcceptanceStore {
     this.#write = io.writeFileSync ?? ((path, data) => writeFileSync(path, data));
     this.#rename = io.renameSync ?? renameSync;
     this.#archived = io.archived ?? (() => false);
+    this.#log = io.log ?? (() => undefined);
   }
 
   #file(projectId: string): string { return join(projectDir(this.#dir, projectId), ACCEPTANCE_FILE); }
@@ -354,17 +399,49 @@ export class AcceptanceStore {
     return file && file.version === row.version && frozenHash(file) === row.hash ? 'ok' : 'mismatch';
   }
 
-  #replace(file: string, doc: AcceptanceDoc): void {
-    const temp = `${file}.tmp-${randomBytes(6).toString('hex')}`;
+  freeze(projectId: string, doc: AcceptanceDoc, row: Pick<AcceptanceVersionRow, 'plan_hash' | 'source' | 'created_at'>, inside: () => string | null): AcceptanceVersionRow {
+    const file = this.#file(projectId);
+    const temp = this.#stage(file, doc);
+    let saved: AcceptanceVersionRow;
     try {
-      this.#write(temp, `${JSON.stringify(doc, null, 2)}\n`);
-      for (let attempt = 0; ; attempt++) {
-        try { this.#rename(temp, file); return; } catch (error) {
-          if (attempt >= 4 || !BUSY.has((error as NodeJS.ErrnoException).code ?? '')) throw error;
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
-        }
-      }
+      saved = transaction(this.#db, () => {
+        const made: AcceptanceVersionRow = { project_id: projectId, version: doc.version, hash: frozenHash(doc), content: JSON.stringify(doc), ...row, build_task_id: inside() };
+        this.#db.prepare('INSERT INTO acceptance_versions (project_id, version, hash, content, plan_hash, source, build_task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(made.project_id, made.version, made.hash, made.content, made.plan_hash, made.source, made.build_task_id, made.created_at);
+        return made;
+      });
     } catch (error) {
+      rmSync(temp, { force: true });
+      throw error;
+    }
+    try { this.#publish(temp, file); } catch (error) {
+      rmSync(temp, { force: true });
+      this.#log(`[WARN] Fixed version ${doc.version} of the acceptance list of product ${projectId}, but could not replace acceptance.json (${(error as Error).message}). It is restored from the saved version before the next write or at startup`);
+    }
+    return saved;
+  }
+
+  #stage(file: string, doc: AcceptanceDoc): string {
+    const temp = `${file}.tmp-${randomBytes(6).toString('hex')}`;
+    try { this.#write(temp, `${JSON.stringify(doc, null, 2)}\n`); } catch (error) {
+      rmSync(temp, { force: true });
+      throw error;
+    }
+    return temp;
+  }
+
+  #publish(temp: string, file: string): void {
+    for (let attempt = 0; ; attempt++) {
+      try { this.#rename(temp, file); return; } catch (error) {
+        if (attempt >= 4 || !BUSY.has((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
+      }
+    }
+  }
+
+  #replace(file: string, doc: AcceptanceDoc): void {
+    const temp = this.#stage(file, doc);
+    try { this.#publish(temp, file); } catch (error) {
       rmSync(temp, { force: true });
       throw error;
     }

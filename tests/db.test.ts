@@ -143,8 +143,9 @@ test('マイグレーション 16: 振り返りの会話が、材料にした会
   } finally { db.close(); }
 });
 
-test('マイグレーション 9〜21 を続けて当てる: main の段階（8）の DB から更新しても、振り返りの会話の材料が埋まり、前からあるすべての会話に外から読んだ印が付く。16 は 15 のあとに、17（スキルの登録簿）は 16 のあとに、18（子の担当の親）は 17 のあとに足される', t => {
-  assert.equal(MIGRATIONS.length, 21);
+test('マイグレーション 9〜22 を続けて当てる: main の段階（8）の DB から更新しても、振り返りの会話の材料が埋まり、前からあるすべての会話に外から読んだ印が付く。16 は 15 のあとに、17（スキルの登録簿）は 16 のあとに、18（子の担当の親）は 17 のあとに足される', t => {
+  assert.equal(MIGRATIONS.length, 22);
+  assert.match(String(MIGRATIONS[21]), /acceptance_items/u);
   assert.match(String(MIGRATIONS[20]), /CREATE TABLE acceptance_versions/u);
   assert.match(String(MIGRATIONS[19]), /CREATE TABLE projects/u);
   assert.match(String(MIGRATIONS[18]), /local_only/u);
@@ -162,7 +163,7 @@ test('マイグレーション 9〜21 を続けて当てる: main の段階（8�
     const row = db.prepare('SELECT source_conversation_id AS c, ever_tainted AS tainted, permission_mode AS mode FROM conversations WHERE id = ?').get('rv') as { c: string | null; tainted: number; mode: string };
     assert.deepEqual({ ...row }, { c: 'src', tainted: 1, mode: 'normal' });
     assert.equal((db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get('src') as { ever_tainted: number }).ever_tainted, 1);
-    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 21);
+    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 22);
   } finally { db.close(); }
 });
 

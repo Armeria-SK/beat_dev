@@ -121,7 +121,7 @@ test('英語だけの見張り: src と web/src の日本語の文字列は、�
 test('英語だけの見張り: templates/ の初期ファイル（モデルが読むルールと SOUL / USER / CURIOSITY）に日本語が無い', () => {
   const dir = join(ROOT, 'templates');
   const entries = readdirSync(dir, { withFileTypes: true });
-  assert.deepEqual(entries.map(entry => entry.name).sort(), ['CURIOSITY.md', 'SOUL.md', 'USER.md', 'rules.md'], '英語の 4 つだけ（言語ごとのフォルダは無い）');
+  assert.deepEqual(entries.map(entry => entry.name).sort(), ['CURIOSITY.md', 'SOUL.md', 'USER.md', 'requirements.compact.md', 'requirements.md', 'rules.md'], '英語の 6 つだけ（言語ごとのフォルダは無い）');
   for (const entry of entries) {
     const hits = readFileSync(join(dir, entry.name), 'utf8').split(/\r?\n/u).map((line, i) => ({ line: i + 1, text: line })).filter(hit => JAPANESE.test(hit.text));
     assert.deepEqual(hits, [], `templates/${entry.name}`);
