@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import {
-  api, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceOp, type AcceptanceVersion, type Coverage, type NotDoingItem, type PlanDoc, type Task,
+  api, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type OwnerOp, type Coverage, type NotDoingItem, type PlanDoc, type Task,
 } from '../../api.ts';
 import { newConversationId } from '../../chat-logic.ts';
 import { formatRelative } from '../../i18n/format.ts';
@@ -9,7 +9,7 @@ import { Markdown } from '../../Markdown.tsx';
 import {
   acceptanceMeta, addPage, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildRequest, canEditItems, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
   decisionFailure, diffLabel, editOp, editRequest, formProblem, itemDetails, itemForm, noticeAfterReload, outsideContent, pagingCursor, previousVersion, proposalRows, proposalStale, removeOp, revealSection, revealStep, saveHint,
-  showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, versionDiff, versionSourceLabel, versionsShown, type BuildFailure, type DecisionFailure, type DiffRow, type ItemForm, type Paging,
+  showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type ItemForm, type Paging,
 } from '../acceptance.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
@@ -32,7 +32,7 @@ function Meta({ doc, writing }: { doc: PlanDoc | null; writing: boolean }) {
   return <span className="bt-meta">{file} · {by ? t('ui.plan.editedBy', when, t(by)) : t('ui.plan.edited', when)}</span>;
 }
 
-interface Editing { hint: string | null; busy: boolean; onEdit: (op: AcceptanceOp) => Promise<boolean> }
+interface Editing { hint: string | null; busy: boolean; onEdit: (op: OwnerOp) => Promise<boolean> }
 
 const CHECK_KINDS: ReadonlyArray<ItemForm['check']> = ['command', 'look', 'read'];
 
@@ -178,7 +178,7 @@ function VersionRow({ productId, version, previous }: { productId: string; versi
     if (!open || rows !== null) return undefined;
     let live = true;
     void Promise.all([api.acceptanceVersion(productId, version.version), previous === null ? null : api.acceptanceVersion(productId, previous)]).then(
-      ([after, before]) => { if (live) setRows(versionDiff(before?.version.items ?? null, after.version.items)); },
+      ([after, before]) => { if (live) setRows(versionDiff(before ? versionItems(before.version) : null, versionItems(after.version))); },
       () => { if (live) setRows('failed'); },
     );
     return () => { live = false; };
@@ -383,7 +383,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       const r = await api.acceptance(productId);
       if (!accLoads.current.isCurrent(ticket)) return;
       setAcc(r.acceptance);
-      setChange(r.change ?? null);
+      setChange(r.acceptance.change ?? null);
       setCoverage(r.coverage ?? null);
       setAccFailed(false);
       setBuildNotice(current => noticeAfterReload(current, r.acceptance));
@@ -393,7 +393,8 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   }, [productId]);
   useEffect(() => { void loadAcceptance(); }, [loadAcceptance, revision]);
 
-  const buildTask = acc?.frozen?.build_task_id ?? null;
+  const [sentBuild, setSentBuild] = useState<string | null>(null);
+  const buildTask = watchedBuild(sentBuild, acc);
   useEffect(() => {
     if (!buildTask) { if (!building) setTask(null); return undefined; }
     let live = true;
@@ -452,6 +453,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     try {
       const r = await api.build(productId, hashes);
       focusRunning.current = true;
+      setSentBuild(r.task.id);
       setTask(r.task);
     } catch (error) {
       const failure = buildFailure(error);
@@ -497,7 +499,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setMode('edit');
   };
 
-  const changeItems = async (op: AcceptanceOp): Promise<boolean> => {
+  const changeItems = async (op: OwnerOp): Promise<boolean> => {
     if (!acc || accBusy) return false;
     setAccBusy(true);
     setAccNotice(null);

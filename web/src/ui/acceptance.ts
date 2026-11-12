@@ -1,5 +1,5 @@
 import type {
-  Acceptance, AcceptanceChange, AcceptanceCheck, AcceptanceEdit, AcceptanceItem, AcceptanceOp, AcceptanceSource, AcceptanceVersion, Conversation, Coverage, ModelChoice, NotDoingItem, PlanDoc, Task, UnreferencedMessage,
+  Acceptance, AcceptanceChange, AcceptanceCheck, AcceptanceEdit, AcceptanceItem, AcceptanceSource, AcceptanceVersion, AcceptanceVersionDetail, Conversation, Coverage, ModelChoice, NotDoingItem, OwnerOp, PlanDoc, Task, UnreferencedMessage,
 } from '../api.ts';
 import { sendChoiceOf } from '../chat-logic.ts';
 import { t, type PlainKey } from '../i18n/index.ts';
@@ -75,11 +75,15 @@ const ACTIVE: ReadonlySet<Task['status']> = new Set(['ready', 'running', 'waitin
 export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: Acceptance | null; task: Task | null; isGit: boolean; pending?: boolean }): BuildAction | null {
   if (!i.acc) return null;
   const active = i.task !== null && ACTIVE.has(i.task.status);
-  if (i.acc.frozen) return active ? { kind: 'building' } : null;
   if (active) return { kind: 'building' };
+  if (i.acc.frozen && !buildLeft(i.acc)) return null;
   if (i.mode === 'edit' || (i.state !== 'ready' && i.state !== 'writing')) return null;
   return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' || i.pending === true };
 }
+
+export const watchedBuild = (sent: string | null, acc: Acceptance | null): string | null => sent ?? acc?.frozen?.build_task_id ?? null;
+
+const buildLeft = (acc: Acceptance): boolean => (acc.unbuilt?.length ?? 0) > 0;
 
 export const beforeBuildShown = (i: { mode: 'read' | 'edit'; acc: Acceptance | null; coverage: Coverage | null; action: BuildAction | null }): boolean =>
   i.mode === 'read' && i.acc !== null && i.coverage !== null && i.action?.kind === 'build';
@@ -145,7 +149,7 @@ export function mergeUnreferenced(loaded: readonly UnreferencedMessage[], page: 
 }
 
 export const noticeAfterReload = (notice: BuildFailure | null, acc: Acceptance): BuildFailure | null =>
-  (acc.frozen ? null : notice);
+  (acc.frozen && !buildLeft(acc) ? null : notice);
 
 export interface Paging { list: UnreferencedMessage[]; generation: number; exhausted: boolean }
 
@@ -167,13 +171,18 @@ export const diffLabel = (kind: DiffKind): (typeof DIFF)[DiffKind] => DIFF[kind]
 export function proposalRows(acc: Acceptance, change: AcceptanceChange): DiffRow[] {
   const current = new Map(acc.items.map(i => [i.id, i]));
   return change.ops.map((op): DiffRow => {
-    const source = op.source ?? null;
+    const source = op.source;
     if (op.op === 'add') return { kind: 'added', id: null, result: op.item.result, before: null, source, check: op.item.check };
     const was = current.get(op.id);
     if (op.op === 'remove') return { kind: 'removed', id: op.id, result: was?.result ?? op.id, before: null, source, check: was?.check ?? null };
-    const result = op.item.result ?? was?.result ?? op.id;
-    return { kind: 'changed', id: op.id, result, before: was && was.result !== result ? was.result : null, source, check: op.item.check ?? was?.check ?? null };
+    const result = op.item.result;
+    return { kind: 'changed', id: op.id, result, before: was && was.result !== result ? was.result : null, source, check: op.item.check };
   });
+}
+
+export function versionItems(detail: AcceptanceVersionDetail): AcceptanceItem[] {
+  const items = (detail.content as { items?: unknown } | null)?.items;
+  return Array.isArray(items) ? items as AcceptanceItem[] : [];
 }
 
 export const proposalStale = (acc: Acceptance, change: AcceptanceChange): boolean => change.base_version !== acc.version;
@@ -239,16 +248,16 @@ export function formProblem(form: ItemForm): FormProblem | null {
 
 const formCheck = (form: ItemForm): AcceptanceCheck => (form.check === 'command' ? { kind: 'command', command: form.command.trim() } : { kind: form.check });
 
-export function editOp(form: ItemForm, item: AcceptanceItem | null): AcceptanceOp | null {
+export function editOp(form: ItemForm, item: AcceptanceItem | null): OwnerOp | null {
   const next = { result: form.result.trim(), check: formCheck(form) };
   if (!item) return { op: 'add', item: next };
   if (next.result === item.result && stable(next.check) === stable(item.check)) return null;
   return { op: 'change', id: item.id, item: next };
 }
 
-export const removeOp = (item: AcceptanceItem): AcceptanceOp => ({ op: 'remove', id: item.id });
+export const removeOp = (item: AcceptanceItem): OwnerOp => ({ op: 'remove', id: item.id });
 
-export const editRequest = (acc: Acceptance, op: AcceptanceOp): AcceptanceEdit => ({ baseVersion: acc.version, ops: [op] });
+export const editRequest = (acc: Acceptance, op: OwnerOp): AcceptanceEdit => ({ baseVersion: acc.version, baseHash: acc.hash, ops: [op] });
 
 export const saveHint = (acc: Acceptance): string | null => (acc.draft ? null : t('ui.acc.edit.newVersion', acc.version + 1));
 
@@ -257,8 +266,10 @@ export const canEditItems = (i: { acc: Acceptance | null; state: PlanState; mode
 
 export type DecisionFailure = { kind: 'stale' } | { kind: 'failed'; detail: string | null };
 
+const RELOAD: ReadonlySet<unknown> = new Set(['acceptance.stale', 'acceptance.not_pending', 'acceptance.no_change']);
+
 export const decisionFailure = (error: unknown): DecisionFailure =>
-  ((error as { status?: unknown } | null)?.status === 409 ? { kind: 'stale' } : { kind: 'failed', detail: apiDetail(error) });
+  (RELOAD.has((error as { body?: { code?: unknown } } | null)?.body?.code) ? { kind: 'stale' } : { kind: 'failed', detail: apiDetail(error) });
 
 export const askAfterSave = (acc: Acceptance | null): boolean => acc?.frozen != null;
 
