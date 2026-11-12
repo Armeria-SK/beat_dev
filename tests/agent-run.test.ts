@@ -342,6 +342,26 @@ test('T-27 親が auto モードでも、子の聞く道具は判定役に回ら
   await settled(s.app, runId);
 });
 
+test('T-27b 親がタスク（自動承認）のとき、親の聞く道具は判定役に回り、子の聞く道具は chat の子と同じく判定役に回らず札になる', async t => {
+  const ALLOW = '{"decision":"allow","reason":"依頼どおりです"}';
+  const taintStub: ToolDef<{ key: string }> = { ...askStub, preCheck: () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['taint'], sends: false, removes: false }) };
+  const options = withAsk(c => { c.tools.agent.inTasks = true; });
+  const s = await startApp(t, { ...options, tools: options.tools.map(tool => (tool.name === 'ask_stub' ? taintStub : tool)) });
+  s.adapter().scripts = [call('ask_stub', { key: 'p' }), reply(ALLOW), call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'c' }), reply('子の答え'), reply('タスクの返事')];
+  const task = s.app.tasks.create({ title: '任せるタスク', origin: 'user', actor: 'user' });
+  const started = s.app.engine.runTask(task, s.app.conversations.create({ kind: 'task' }).id, '任せるタスクをやって');
+  assert.ok(started.ok);
+  await waitFor(pendingCount(s, 1), '札');
+  const card = s.app.approvals.pending()[0]!;
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '親の聞く道具は判定役が決めた');
+  assert.equal(card.childConversationId !== undefined, true, '札は子のもの');
+  s.app.approvals.decide(card.id, 'once');
+  await started.done;
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '子では判定役を呼ばない');
+  const decided = (s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'ask_stub' ORDER BY created_at").all() as Array<{ decided_by: string }>).map(r => r.decided_by);
+  assert.deepEqual(decided, ['auto-mode', 'user']);
+});
+
 test('T-28 agent_run 自体は、方針を書かなければ札が出る（既定 ask）。allow なら札なし', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')], configure: c => { c.tools.agent.enabled = true; } });
   s.adapter().scripts = [call('agent_run', { task: '任せる' }), reply('子の答え'), reply('親の最後の返事')];

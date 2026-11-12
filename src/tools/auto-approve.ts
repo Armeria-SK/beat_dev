@@ -59,12 +59,12 @@ export interface AutoGate {
 
 // 判定役に回してよいか。すべての条件が満たされたときだけ true（1 つでも欠ければ、今までどおり人が確かめる）
 export function mayClassify(gate: AutoGate): boolean {
-  if (gate.mode !== 'auto' || gate.runKind !== 'chat') return false;
+  if (gate.mode !== 'auto' || (gate.runKind !== 'chat' && gate.runKind !== 'task')) return false;
   if (gate.decision !== 'ask') return false;
   if (gate.humanOnly !== undefined) return false;
   if (gate.onceOnly || gate.everyTime) return false;
   if (gate.kinds.size === 0) return false;
-  for (const kind of gate.kinds) if (!CLASSIFIABLE_KINDS.has(kind)) return false;
+  for (const kind of gate.kinds) if (!CLASSIFIABLE_KINDS.has(kind) || (gate.runKind === 'task' && kind !== 'taint')) return false;
   return true;
 }
 

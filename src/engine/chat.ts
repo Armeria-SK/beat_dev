@@ -639,7 +639,7 @@ export class ChatEngine {
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
-      ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : agent ? { permissionMode: agent.mode } : {}),
+      ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '' } } : {}),
     };
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider)) && (agent?.parent.modelsLocal ?? true);
@@ -721,7 +721,7 @@ export class ChatEngine {
           registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
           permissionMode: () => this.#modeOf(conversationId),
           autoClassify: (prompt, classifierSignal) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal),
-          lastUserRequest: () => this.#lastUserRequest(conversationId),
+          lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? '' : this.#lastUserRequest(conversationId)),
           conversationTainted: () => d.conversations.everTainted(conversationId),
           conversationAutoRead: () => d.conversations.everAutoRead(conversationId),
         }, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
