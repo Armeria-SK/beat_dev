@@ -418,7 +418,7 @@ test('3-1c 目次の入る所: 製品の会話・タスク・子の担当の毎�
   await s.send(uuid(1), { text: 'plan it', projectId: shop.id, permissionMode: 'plan' });
   assert.match(s.last().system.dynamic, MARK);
   assert.ok(existsSync(join(s.app.paths.projects, shop.id, 'INDEX.md')) && existsSync(join(s.app.paths.projects, shop.id, 'STATE.md')), '実行の始めに INDEX.md と STATE.md を書く');
-  assert.ok(['mesh_search', 'mesh_read', 'mesh_state_set', 'plan_write'].every(name => s.names().includes(name)), s.names().join());
+  assert.ok(['mesh_search', 'mesh_read', 'plan_write'].every(name => s.names().includes(name)) && !s.names().includes('mesh_state_set'), s.names().join());
   await s.send(uuid(2), { text: 'hello' });
   assert.doesNotMatch(s.last().system.dynamic, MARK);
   assert.ok(!s.names().some(name => name.startsWith('mesh_')), s.names().join());
@@ -529,12 +529,11 @@ test('3-1c 登録の順（maxTools: 12）: 製品の計画モードに plan_writ
   for (const name of ['mesh_search', 'mesh_read', 'mesh_state_set']) assert.ok(names.indexOf(name) > names.indexOf('shell_run'), name);
 });
 
-test('3-1c 新しい道具の印: mesh_search / mesh_read は read、mesh_state_set は meta。どれも planOk と projectOnly', () => {
+test('3-1c 新しい道具の印: mesh_search / mesh_read は read、mesh_state_set は meta。どれも projectOnly。planOk は mesh_search / mesh_read だけ（3-2-s で計画モードから mesh_state_set を外した）', () => {
   assert.deepEqual([meshSearch.effect, meshRead.effect, meshStateSet.effect], ['read', 'read', 'meta']);
-  for (const tool of [meshSearch, meshRead, meshStateSet]) {
-    assert.equal(tool.planOk, true, tool.name);
-    assert.equal(tool.projectOnly, true, tool.name);
-  }
+  for (const tool of [meshSearch, meshRead, meshStateSet]) assert.equal(tool.projectOnly, true, tool.name);
+  for (const tool of [meshSearch, meshRead]) assert.equal(tool.planOk, true, tool.name);
+  assert.notEqual(meshStateSet.planOk, true);
   assert.deepEqual([...meshSearch.allowedIn].sort(), ['agent', 'chat', 'task']);
   assert.deepEqual([...meshRead.allowedIn].sort(), ['agent', 'chat', 'task']);
   assert.deepEqual([...meshStateSet.allowedIn].sort(), ['chat', 'task']);

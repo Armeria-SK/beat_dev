@@ -39,6 +39,7 @@ export interface Task {
   local_only: number;
   project_id: string | null;
   proposed_by: string | null;
+  acceptance_items: string | null;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -61,6 +62,7 @@ export interface CreateTask {
   createdInConversation?: string | undefined;
   localOnly?: boolean | undefined;
   projectId?: string | null | undefined;
+  acceptanceItems?: readonly string[] | undefined;
   actor: string;
 }
 
@@ -98,6 +100,7 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'acceptance_versions', column: 'build_task_id' },
 ] as const;
 export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:'] as const;
+export const UNTRUSTED_RUN = 'untrusted-input';
 export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }
 
 function firstLine(text: string | null): string | null {
@@ -241,10 +244,10 @@ export class TaskStore {
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, local_only, project_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, local_only, project_id, acceptance_items, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.localOnly ? 1 : 0, input.projectId ?? null, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.localOnly ? 1 : 0, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);
@@ -348,6 +351,17 @@ export class TaskStore {
     return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(parentId));
   }
 
+  hasOpenBuild(projectId: string): boolean {
+    return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting')").get(projectId));
+  }
+
+  markUntrusted(taskId: string, actor: string, note: string): void {
+    transaction(this.#db, () => {
+      if (this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND run_id = ? AND kind = 'context' LIMIT 1").get(taskId, UNTRUSTED_RUN)) return;
+      this.event(taskId, 'context', actor, note, UNTRUSTED_RUN);
+    });
+  }
+
   approve(id: string): Task {
     const task = this.get(id);
     if (!task || task.status !== 'inbox') throw new TaskError('error.not_proposal');
@@ -390,6 +404,8 @@ export class TaskStore {
     const removed = transaction(this.#db, () => {
       const task = this.get(id);
       if (!task) throw new TaskError('error.not_found', { id });
+      const locked = this.#db.prepare('SELECT version FROM acceptance_versions WHERE build_task_id = ? ORDER BY version DESC LIMIT 1').get(id) as { version: number } | undefined;
+      if (locked) throw new TaskError('error.build_locked', { version: locked.version });
       if (task.cron !== null && task.parent_id === null) {
         if (task.conversation_id !== null) throw new TaskError('error.not_deletable');
         if (this.hasOpenRun(id)) throw new TaskError('error.run_open');

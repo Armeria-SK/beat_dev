@@ -367,7 +367,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
     setSending(true); setFailure(null);
     stick.current = true;
     try {
-      await api.send(id, t('ui.plan.proceedRequest'), [], { permissionMode: 'normal' });
+      await api.send(id, t('ui.plan.proceedRequest'), [], { permissionMode: 'normal' }, { generated: true });
       await load();
     } catch (error) { await fail(error, null); await load(); } finally { setSending(false); }
   };

@@ -193,14 +193,15 @@ test('3-1a 守り: ふつうのファイルの道具とシェルからは plan.m
   assert.equal(readFileSync(file, 'utf8'), 'secret plan\n');
 });
 
-test('3-1a 毎回の system: 製品の計画モードの会話にだけ「Write the plan with plan_write.」が入る', () => {
+test('3-1a 毎回の system: 製品の計画モードの会話にだけ plan_write の指示が入る（3-2-s で要件の聞き取りの文に置き換わった）', () => {
   const at = new Date('2026-11-12T00:00:00Z');
   const product = { name: 'Shop', root: 'C:/shop' };
-  assert.match(buildDynamic('UTC', 'en', at, 'plan', product, true), /\nWrite the plan with plan_write\.$/u);
-  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', undefined, false), /plan_write/u);
-  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'normal', product, false), /plan_write/u);
-  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', product, false), /plan_write/u, '子の担当（plan_write が無い）には入れない');
-  assert.equal(buildDynamic('UTC', 'en', at, 'plan', undefined), buildDynamic('UTC', 'en', at, 'plan', undefined, false), '製品に属さない会話の計画モードは今のまま');
+  const line = 'Write the plan with plan_write.';
+  assert.match(buildDynamic('UTC', 'en', at, 'plan', product, line), /\nWrite the plan with plan_write\.$/u);
+  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', undefined, line), /plan_write/u);
+  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'normal', product, line), /plan_write/u);
+  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', product), /plan_write/u, '子の担当（plan_write が無い）には入れない');
+  assert.equal(buildDynamic('UTC', 'en', at, 'plan', undefined), buildDynamic('UTC', 'en', at, 'plan', undefined, line), '製品に属さない会話の計画モードは今のまま');
 });
 
 async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
@@ -281,7 +282,7 @@ test('3-1a 毎回の system（本物の App）: 製品の計画モードの会�
   const shop = await s.product('shop');
   s.adapter().scripts = [reply('a'), reply('b'), reply('c')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
-  assert.match(s.adapter().calls.at(-1)!.system.dynamic, /Write the plan with plan_write\./u);
+  assert.match(s.adapter().calls.at(-1)!.system.dynamic, /plan_write/u);
   await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'normal' });
   assert.doesNotMatch(s.adapter().calls.at(-1)!.system.dynamic, /plan_write/u);
   await s.send(uuid(3), { text: 'plan', permissionMode: 'plan' });

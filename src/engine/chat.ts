@@ -47,7 +47,7 @@ import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
-import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
+import { buildDynamic, buildSnapshot, recordFileVersions, requirementsText } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -138,7 +138,9 @@ export type SendOutcome =
 
 type Route = { model: ModelConfig; provider: ProviderConfig; backup?: boolean };
 
-interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[] }
+interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[]; generated?: true }
+
+const userMessage = ({ content, images, attachments, generated }: ChatItem): ChatMessage => ({ role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}), ...(generated ? { generated } : {}) });
 // held: 実行が始まったあとに会話のモデルか権限モードが替わり、そのあとに送られた発言。今の実行（古いモデルの鎖・古いモードの実行）へは差し込まず、実行が終わってから新しいモデル・新しいモードの実行で読ませる
 // afterStop: 今の実行を止めたあとに送られた発言。止めた実行が終わるのを待って、新しい実行を始める（止める前に待たせた発言は、保存だけ）
 interface PendingMessage extends ChatItem { id: string; interrupt: boolean; createdAt: number; held: boolean; afterStop: boolean }
@@ -212,8 +214,8 @@ export class ChatEngine {
 
   // 実行中の会話に送った発言は、新しい実行にせず待たせる（待ちの発言）。今の実行が次の区切り（道具の結果を返して、次にモデルを呼ぶ前）に来たら
   // 履歴に入れ、実行が先に終わったら、その発言で新しい実行を始める。interrupt なら、今の実行を止めて、待っていた発言と一緒に新しい実行を始める
-  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean; projectId?: string | undefined } = {}): SendOutcome {
-    const item: ChatItem = { content: text, images, attachments };
+  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean; projectId?: string | undefined; generated?: boolean } = {}): SendOutcome {
+    const item: ChatItem = { content: text, images, attachments, ...(options.generated ? { generated: true as const } : {}) };
     const running = this.#byConversation.get(conversationId);
     if (running === undefined) return this.#beginChat(conversationId, [item], choice, options.projectId);
     if (this.#active.get(running)?.kind !== 'chat') return this.#busy('send.busy_chat');
@@ -270,8 +272,9 @@ export class ChatEngine {
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
     let firstId: number | undefined;
-    for (const { content, images, attachments } of items) {
-      const saved = this.#d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
+    for (const item of items) {
+      const { content, attachments } = item;
+      const saved = this.#d.conversations.append(conversationId, userMessage(item));
       firstId ??= saved.id;
       // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
       this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(content).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : content);
@@ -331,8 +334,9 @@ export class ChatEngine {
     const held = queue.filter(p => p.held);
     if (held.length) this.#pending.set(conversationId, held); else this.#pending.delete(conversationId);
     const language = languageOf(d.config());
-    for (const { content, images, attachments } of injectable) {
-      const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) }, runId);
+    for (const item of injectable) {
+      const { attachments } = item;
+      const saved = d.conversations.append(conversationId, userMessage(item), runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
       if (attachments.length) {
         ctx.taint.tainted = true;
@@ -364,8 +368,8 @@ export class ChatEngine {
   // 理由: stopped = 返事が止まった（失敗・取り消し・終了）、not_started = 返事を始められなかった（使えるモデルが無い）
   #saveQueued(conversationId: string, messages: PendingMessage[], runId: string, reason: 'stopped' | 'not_started'): void {
     const d = this.#d;
-    for (const { content, images, attachments } of messages) {
-      const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
+    for (const item of messages) {
+      const saved = d.conversations.append(conversationId, userMessage(item));
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     }
     const language = languageOf(d.config());
@@ -962,7 +966,8 @@ export class ChatEngine {
     const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
     const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language } : undefined;
     const mesh = this.#meshIndex(p.runId, p.project, available);
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, p.kind === 'chat'), mesh, summary, checklist].filter(Boolean).join('\n\n');
+    const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), mesh, summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     const history = stored.map(m => m.message);
     const apiTools = specs;

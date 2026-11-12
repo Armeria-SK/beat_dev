@@ -563,7 +563,7 @@ test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_w
   const shop = await s.product('shop');
   const empty = await s.json(`/api/projects/${shop.id}/acceptance`, 'GET');
   assert.equal(empty.status, 200);
-  assert.deepEqual(empty.body, { acceptance: { version: 0, language: null, items: [], not_doing: [], draft: true, hash: null, tainted: false, frozen: null } });
+  assert.deepEqual(empty.body.acceptance, { version: 0, language: null, items: [], not_doing: [], draft: true, hash: null, tainted: false, frozen: null });
   assert.equal((await s.json('/api/projects/aaaaaaaa-0000-4000-8000-999999999999/acceptance', 'GET')).status, 404);
   assert.equal((await s.json('/api/projects/../acceptance', 'GET')).status, 404);
 

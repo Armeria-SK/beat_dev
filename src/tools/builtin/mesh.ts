@@ -4,15 +4,24 @@ import { meshBudget } from '../../mesh/search.ts';
 import type { StatePatch } from '../../mesh/state.ts';
 import { languageOf } from '../../shared/language.ts';
 import { errorText } from '../../shared/messages/define.ts';
+import { taskText } from '../../shared/messages/tasks.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
+const MESH_ACTOR = 'mesh';
+
+const markTask =(output: ToolOutput, ctx: ToolContext): ToolOutput => {
+  const tasks = ctx.services?.tasks;
+  if (output.fetched && ctx.task && tasks) tasks.markUntrusted(ctx.task.id, MESH_ACTOR, taskText(languageOf(ctx.config), 'event.read_untrusted'));
+  return output;
+};
+
 const fail = (error: unknown, ctx: ToolContext): ToolOutput =>
-  ({ content: toolText(languageOf(ctx.config), 'failed', { detail: errorText(error, languageOf(ctx.config)) }), isError: true, ...(error instanceof MeshError && error.fetched ? { fetched: true } : {}) });
+  markTask({ content: toolText(languageOf(ctx.config), 'failed', { detail: errorText(error, languageOf(ctx.config)) }), isError: true, ...(error instanceof MeshError && error.fetched ? { fetched: true } : {}) }, ctx);
 
 const unavailable = (ctx: ToolContext): ToolOutput => ({ content: toolText(languageOf(ctx.config), 'mesh.unavailable'), isError: true });
 
-const result = (found: { content: string; fetched: boolean }): ToolOutput => ({ content: found.content, ...(found.fetched ? { fetched: true } : {}) });
+const result = (found: { content: string; fetched: boolean }, ctx: ToolContext): ToolOutput => markTask({ content: found.content, ...(found.fetched ? { fetched: true } : {}) }, ctx);
 
 export const meshSearch: ToolDef<{ query: string; file?: string }> = {
   name: 'mesh_search',
@@ -25,7 +34,7 @@ export const meshSearch: ToolDef<{ query: string; file?: string }> = {
   async execute(input, ctx) {
     const mesh = ctx.services?.mesh;
     if (!mesh || !ctx.project) return unavailable(ctx);
-    try { return result(mesh.search(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config))); } catch (error) { return fail(error, ctx); }
+    try { return result(mesh.search(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config)), ctx); } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -40,7 +49,7 @@ export const meshRead: ToolDef<{ file: string; section?: string; offset?: number
   async execute(input, ctx) {
     const mesh = ctx.services?.mesh;
     if (!mesh || !ctx.project) return unavailable(ctx);
-    try { return result(mesh.read(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config))); } catch (error) { return fail(error, ctx); }
+    try { return result(mesh.read(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config)), ctx); } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -52,7 +61,6 @@ export const meshStateSet: ToolDef<StatePatch> = {
   input: Type.Object({ goal: note(200), now: note(120), next: note(120), blocked: note(120) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task'],
-  planOk: true,
   projectOnly: true,
   async execute(input, ctx) {
     const mesh = ctx.services?.mesh;

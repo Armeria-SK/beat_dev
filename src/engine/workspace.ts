@@ -35,6 +35,12 @@ export function readTemplate(paths: AppPaths, name: TemplateName): string {
   return readIfExists(templatePath(paths, name));
 }
 
+export const REQUIREMENTS_COMPACT_BELOW = 32_000;
+
+export function requirementsText(paths: AppPaths, available: number): string {
+  return readIfExists(join(paths.templates, available < REQUIREMENTS_COMPACT_BELOW ? 'requirements.compact.md' : 'requirements.md')).replace(/\r\n/gu, '\n');
+}
+
 export function defaultTexts(paths: AppPaths): { rules: string; files: Array<{ name: WorkspaceFile; content: string }> } {
   return {
     rules: readTemplate(paths, 'rules'),
@@ -80,7 +86,7 @@ export function recordFileVersions(db: DatabaseSync, paths: AppPaths, now = Date
   }
 }
 
-const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string; productPlan: string; product: (name: string, root: string) => string; docLanguage: (tag: string) => string }> = {
+const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string; product: (name: string, root: string) => string; docLanguage: (tag: string) => string }> = {
   en: {
     product: (name, root) => `This conversation belongs to the product "${name}". Product folder: ${root} (relative paths start here).`,
     docLanguage: tag => `Owner-facing documents of this product (plan, acceptance items, questions, deviation notes) are written in ${tag}.`,
@@ -88,14 +94,13 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
     format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
     reply: "Reply in the language the user writes in (the language of the user's own words, not of these instructions, templates or tool results).",
-    productPlan: 'Write the plan with plan_write.',
     plan: 'You are in "plan mode". You cannot change files, run commands, or write memories or tasks (only tools that read, and reading the web, are available). Do not change anything: investigate if needed, then finish by presenting a plan as a numbered list of steps.',
   },
 };
 
 // 毎回組み立てる system の部分（固定の system は変えない）。計画モード（plan）のときだけ、計画の指示を足す
-export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal', product?: { name: string; root: string; docLanguage?: string | null }, planWrite = false): string {
+export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal', product?: { name: string; root: string; docLanguage?: string | null }, requirements = ''): string {
   const text = DYNAMIC[language];
   const formatted = new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now);
-  return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), ...(product?.docLanguage ? [text.docLanguage(product.docLanguage)] : []), text.reply, ...(mode === 'plan' ? [text.plan] : []), ...(mode === 'plan' && product && planWrite ? [text.productPlan] : [])].join('\n');
+  return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), ...(product?.docLanguage ? [text.docLanguage(product.docLanguage)] : []), text.reply, ...(mode === 'plan' ? [product && requirements ? requirements : text.plan] : [])].join('\n');
 }

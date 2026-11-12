@@ -1,11 +1,14 @@
 import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
 import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
-import { AcceptanceError, frozenHash } from '../projects/acceptance.ts';
+import { ownerSpeech } from '../db/conversations.ts';
+import { AcceptanceError, coverageOf, frozenHash } from '../projects/acceptance.ts';
+import { BuildError, startBuild } from '../projects/build.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
+import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
-import type { ProjectFilter } from '../tasks/store.ts';
+import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import { approvalShownIn } from '../tools/approvals.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
 
@@ -147,14 +150,19 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 200, { plan: planWire(project.id, view) });
   });
 
-  router.add('GET', '/api/projects/:id/acceptance', ({ res, params }) => {
-    const project = app.projects.get(params[0]!);
-    if (!project) throw problem(404, 'not_found', 'project_missing');
-    let doc;
-    try { doc = app.acceptance.read(project.id); } catch (error) {
+  const accepted = <T>(work: () => T): T => {
+    try { return work(); } catch (error) {
       if (error instanceof AcceptanceError) throw domainProblem(400, 'acceptance', error);
       throw error;
     }
+  };
+
+  router.add('GET', '/api/projects/:id/acceptance', ({ res, params, url }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    const rawBefore = url.searchParams.get('unreferencedBefore');
+    if (rawBefore !== null && !/^\d{1,16}$/u.test(rawBefore)) throw problem(400, 'invalid_field', 'bad_time', { field: 'unreferencedBefore', params: { field: 'unreferencedBefore' } });
+    const doc = accepted(() => app.acceptance.read(project.id));
     const frozen = app.acceptance.latest(project.id);
     sendJson(res, 200, {
       acceptance: {
@@ -162,7 +170,28 @@ export function registerProjectRoutes(router: Router, app: App): void {
         hash: doc ? frozenHash(doc) : null, tainted: (doc?.taintedRuns?.length ?? 0) > 0,
         frozen: frozen ? { version: frozen.version, hash: frozen.hash, plan_hash: frozen.plan_hash, created_at: frozen.created_at, source: frozen.source, build_task_id: frozen.build_task_id } : null,
       },
+      coverage: coverageOf(doc, ownerSpeech(app.db, project.id), rawBefore === null ? undefined : Number(rawBefore)),
     });
+  });
+
+  router.add('POST', '/api/projects/:id/build', async ({ req, res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    const body = requireObject(await readJson(req));
+    const planHash = requireString(body, 'planHash', { max: 128 })!;
+    const acceptanceHash = body.acceptanceHash === null ? null : requireString(body, 'acceptanceHash', { max: 128 })!;
+    if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
+    if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
+    let built;
+    try {
+      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()) }, project.id, { planHash, acceptanceHash })));
+    } catch (error) {
+      if (error instanceof BuildError) throw domainProblem(error.code === 'no_plan' ? 400 : 409, 'build', error);
+      if (error instanceof ProjectError) throw projectProblem(400, error);
+      throw error;
+    }
+    app.bus.publish({ type: 'acceptance.changed', projectId: project.id, version: built.version.version, draft: false });
+    sendJson(res, 201, { task: taskView(built.task, languageOf(app.config())), version: built.version.version });
   });
 
   router.add('POST', '/api/folders/list', async ({ req, res }) => {

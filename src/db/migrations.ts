@@ -398,4 +398,7 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE projects ADD COLUMN doc_language TEXT;
   ALTER TABLE projects ADD COLUMN doc_language_pinned INTEGER NOT NULL DEFAULT 0;
   `,
+  `
+  ALTER TABLE tasks ADD COLUMN acceptance_items TEXT;
+  `,
 ];

@@ -273,6 +273,7 @@ export function createWebServer(app: App): WebServer {
     });
     if (body.interrupt !== undefined && typeof body.interrupt !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'interrupt', params: { field: 'interrupt' } });
     const interrupt = body.interrupt === true;
+    if (body.generated !== undefined && typeof body.generated !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'generated', params: { field: 'generated' } });
     const existing = app.conversations.get(id);
     const { choice, effortReset } = readChoice(app, body, existing);
     const images: ImageRef[] = [];
@@ -297,7 +298,7 @@ export function createWebServer(app: App): WebServer {
     const projectId = usableProjectId(app, body.projectId);
     if (existing && projectId !== undefined && existing.project_id !== projectId) throw projectProblem(409, new ProjectError('mismatch'));
     if (projectFolderGone(app.projects, projectId ?? existing?.project_id)) throw projectProblem(409, new ProjectError('folder_missing'));
-    const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt, projectId });
+    const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt, projectId, generated: body.generated === true });
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     // 実行中だったときは待たせた（queued）。今の実行が次の区切りで読む。取り消すときは pendingId
     // 考える深さを新しいモデルに無いので戻したときは、effortReset で知らせる（PATCH と同じ）
