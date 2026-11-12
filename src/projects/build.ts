@@ -74,8 +74,8 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
       createdInConversation: plan.updated_by === 'ai' ? meta?.conversationId ?? undefined : undefined,
     });
     if (untrusted) {
-      for (const run of marked) d.tasks.event(task.id, 'context', BUILD_ACTOR, null, run);
       d.tasks.markUntrusted(task.id, BUILD_ACTOR, taskText(d.language(), 'event.build_untrusted'));
+      for (const run of marked) d.tasks.event(task.id, 'context', BUILD_ACTOR, null, run);
     }
     return task.id;
   };
