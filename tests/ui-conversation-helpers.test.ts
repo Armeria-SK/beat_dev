@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { latestOnly } from '../web/src/ui/latest.ts';
-import { menuLeft, menuStep } from '../web/src/ui/menu.ts';
+import { menuFit, menuLeft, menuStep } from '../web/src/ui/menu.ts';
 import { staggerOf } from '../web/src/ui/tool-row.ts';
 
 // 会話の画面の小さな決まり（1-2 のコードレビューから）。
@@ -29,6 +29,24 @@ test('ui/menu: 会話のメニューは ↓ ↑ で項目を回り、Home / End 
 test('ui/tool-row: 一緒に届いた道具の行は、新しいものだけ 0, 1, 2… の順で浮かせる（デザインの --bt-i）', () => {
   assert.deepEqual(staggerOf([false, true, true, false, true]), [null, 0, 1, null, 2]);
   assert.deepEqual(staggerOf([]), []);
+});
+
+test('ui/menu: 選ぶ一覧は、下に入らず上のほうが広ければ上に開き、入る側の高さまでに縮めてスクロールさせる', () => {
+  const bounds = { top: 0, bottom: 600, left: 0, right: 800 };
+  const size = { width: 240, height: 300 };
+  assert.deepEqual(menuFit({ top: 100, bottom: 128, left: 500, right: 600 }, bounds, size, 4), { up: false, left: false, maxHeight: 468, maxWidth: 600 });
+  assert.deepEqual(menuFit({ top: 500, bottom: 528, left: 500, right: 600 }, bounds, size, 4), { up: true, left: false, maxHeight: 496, maxWidth: 600 });
+  assert.equal(menuFit({ top: 280, bottom: 308, left: 500, right: 600 }, bounds, { width: 240, height: 900 }, 4).up, false);
+  assert.equal(menuFit({ top: 300, bottom: 328, left: 500, right: 600 }, bounds, { width: 240, height: 900 }, 4).maxHeight, 296);
+});
+
+test('ui/menu: 選ぶ一覧は、ボタンの右端にそろえて左へ広がるが、左に入らず右のほうが広ければボタンの左端から右へ広がる', () => {
+  const bounds = { top: 0, bottom: 600, left: 200, right: 800 };
+  const size = { width: 240, height: 100 };
+  assert.equal(menuFit({ top: 100, bottom: 128, left: 700, right: 780 }, bounds, size, 4).left, false);
+  const fit = menuFit({ top: 100, bottom: 128, left: 220, right: 300 }, bounds, size, 4);
+  assert.equal(fit.left, true);
+  assert.equal(fit.maxWidth, 580);
 });
 
 test('ui/menu: メニューからフォーカスが出たら閉じるが、開いたボタンへ出たときは閉じない（ボタンの押し直しで閉じられる）', () => {

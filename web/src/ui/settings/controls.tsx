@@ -1,11 +1,11 @@
-import { createContext, useContext, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import type { ModelView, SettingsView } from '../../api.ts';
 import { useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
 import { accessText } from './access-text.tsx';
 import type { Access } from '../../settings/access.ts';
 import type { Config } from '../../settings/model.ts';
-import { menuStep } from '../menu.ts';
+import { menuFit, menuStep, type Box, type MenuFit } from '../menu.ts';
 import { Button, Icon } from '../parts.tsx';
 import { fieldStep, readNumber, type FieldDraft } from './commit.ts';
 
@@ -101,13 +101,36 @@ export function Seg<V extends string>({ value, options, label, disabled, onChang
   );
 }
 
+const MENU_GAP = 4;
+
+function clipBounds(el: HTMLElement): Box {
+  const box = { top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth };
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+    const rect = node.getBoundingClientRect();
+    box.top = Math.max(box.top, rect.top);
+    box.left = Math.max(box.left, rect.left);
+    box.bottom = Math.min(box.bottom, rect.top + node.clientHeight);
+    box.right = Math.min(box.right, rect.left + node.clientWidth);
+  }
+  return box;
+}
+
 export function Select<V extends string>({ value, options, label, placeholder, disabled, onChange }: {
   value: V | null; options: ReadonlyArray<Option<V>>; label: string; placeholder?: string; disabled?: boolean; onChange: (value: V) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [fit, setFit] = useState<MenuFit | null>(null);
   const box = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
+  useLayoutEffect(() => {
+    const menu = list.current;
+    const opener = button.current;
+    if (!open || !menu || !opener) { setFit(null); return; }
+    setFit(menuFit(opener.getBoundingClientRect(), clipBounds(menu), { width: menu.offsetWidth, height: menu.scrollHeight }, MENU_GAP));
+  }, [open]);
   useEffect(() => {
     if (!open) return undefined;
     const items = list.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [];
@@ -124,7 +147,8 @@ export function Select<V extends string>({ value, options, label, placeholder, d
         {current?.label ?? placeholder ?? '—'} <Icon name="chevD" />
       </button>
       {open && (
-        <ul ref={list} className="bt-menu ui-set__menu" role="menu" aria-label={label}
+        <ul ref={list} className={`bt-menu ui-set__menu${fit?.up ? ' ui-set__menu--up' : ''}${fit?.left ? ' ui-set__menu--left' : ''}`} role="menu" aria-label={label}
+          style={fit ? { '--ui-menu-room': `${fit.maxHeight}px`, '--ui-menu-width': `${fit.maxWidth}px` } as CSSProperties : undefined}
           onKeyDown={e => {
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
             const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
@@ -134,7 +158,7 @@ export function Select<V extends string>({ value, options, label, placeholder, d
           {options.map(option => (
             <li key={option.value} role="none">
               <button type="button" role="menuitemradio" aria-checked={option.value === value} className="bt-menu__item"
-                onClick={() => { close(); if (option.value !== value) onChange(option.value); }}>{option.label}</button>
+                onClick={() => { close(); if (option.value !== value) onChange(option.value); }}><b>{option.label}</b></button>
             </li>
           ))}
         </ul>
