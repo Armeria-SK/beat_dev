@@ -28,6 +28,18 @@
 .ui-acc__pair { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ui-acc__pair dd { margin: 0; color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-acc__pair dd.ui-acc__mono { font: 400 12px/18px var(--font-mono); color: var(--ink); }
+.ui-plan__after { margin: 0; }
+.ui-cov { scroll-margin-top: var(--space-3); }
+.ui-cov__counts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; color: var(--ink); font-size: 13px; line-height: 20px; }
+.ui-cov__empty { margin: 0; }
+.ui-cov__group { display: flex; flex-direction: column; gap: var(--space-1); }
+.ui-cov .bt-row.ui-cov__row { align-items: flex-start; flex-wrap: wrap; gap: var(--space-1) var(--space-3); }
+.ui-cov__said { color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.ui-cov__arrow { color: var(--ink-mute); }
+.ui-cov__item { display: flex; gap: var(--space-2); min-width: 0; }
+.ui-cov__result { color: var(--ink); overflow-wrap: anywhere; }
+.ui-cov__item > .bt-tag { padding-top: 2px; }
+.ui-cov__toggle { display: flex; align-items: center; gap: var(--space-1); min-height: 32px; }
 .ui-frame > .bt-app.has-panes.is-pane-single > .bt-app__main { display: none; }
 .ui-frame > .bt-app.has-panes.is-pane-single > .ui-panes { display: flex; height: 100%; padding: var(--space-2); }
 .is-pane-single > .ui-panes > .ui-panes__pane { flex: 1 1 auto; min-width: 0; min-height: 0; }
@@ -43,4 +55,5 @@
   .ui-plan .bt-seg__opt, .ui-plan .bt-pane__bar .bt-btn, .ui-panes .bt-tabs__end .bt-btn { height: 40px; }
   .ui-plan .bt-seg__opt { padding: 0 var(--space-3); }
   .ui-acc__text { min-height: 40px; }
+  .ui-cov__toggle { min-height: 40px; }
 }

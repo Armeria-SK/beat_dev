@@ -1,5 +1,6 @@
-import type { Acceptance, AcceptanceCheck, AcceptanceItem, AcceptanceSource, NotDoingItem, PlanDoc } from '../api.ts';
+import type { Acceptance, AcceptanceCheck, AcceptanceItem, AcceptanceSource, Coverage, NotDoingItem, PlanDoc, Task, UnreferencedMessage } from '../api.ts';
 import { t, type PlainKey } from '../i18n/index.ts';
+import { apiDetail, type PlanState } from './plan.ts';
 import { routeHash } from './routes.ts';
 
 const idNumber = (id: string): number => Number(/(\d+)$/.exec(id)?.[1] ?? Number.NaN);
@@ -62,3 +63,64 @@ export const showAcceptance = (acc: Acceptance | null): boolean =>
   acc !== null && (!acc.draft || shownItems(acc).length > 0 || acc.not_doing.length > 0);
 
 export const outsideContent = (plan: PlanDoc | null, acc: Acceptance | null): boolean => plan?.tainted === true || acc?.tainted === true;
+
+export type BuildAction = { kind: 'build'; label: 'ui.plan.build' | 'ui.plan.start'; disabled: boolean } | { kind: 'building' };
+
+const ACTIVE: ReadonlySet<Task['status']> = new Set(['ready', 'running', 'waiting']);
+
+export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: Acceptance | null; task: Task | null; isGit: boolean }): BuildAction | null {
+  if (!i.acc) return null;
+  if (i.acc.frozen) return i.task && ACTIVE.has(i.task.status) ? { kind: 'building' } : null;
+  if (i.mode === 'edit' || (i.state !== 'ready' && i.state !== 'writing')) return null;
+  return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' };
+}
+
+export const buildRequest = (doc: PlanDoc | null, acc: Acceptance): { planHash: string; acceptanceHash: string | null } | null =>
+  (doc?.hash ? { planHash: doc.hash, acceptanceHash: acc.hash } : null);
+
+export const changedAfterBuild = (doc: PlanDoc | null, acc: Acceptance | null): boolean =>
+  Boolean(acc?.frozen && doc?.hash && acc.frozen.plan_hash !== doc.hash);
+
+export type BuildFailure = { kind: 'changed' } | { kind: 'running' } | { kind: 'failed'; detail: string | null };
+
+export function buildFailure(error: unknown): BuildFailure {
+  const code = (error as { body?: { code?: unknown } } | null)?.body?.code;
+  if (code === 'build.changed') return { kind: 'changed' };
+  if (code === 'build.running') return { kind: 'running' };
+  return { kind: 'failed', detail: apiDetail(error) };
+}
+
+type CountKey = 'ui.cov.words' | 'ui.cov.answers' | 'ui.cov.ai' | 'ui.cov.byHand' | 'ui.cov.edited';
+
+export function coverageCounts(c: Coverage): Array<[CountKey, number]> {
+  const out: Array<[CountKey, number]> = [['ui.cov.words', c.owner_words], ['ui.cov.answers', c.owner_choice], ['ui.cov.ai', c.ai_added], ['ui.cov.byHand', c.by_hand]];
+  if (c.owner_edit > 0) out.push(['ui.cov.edited', c.owner_edit]);
+  return out;
+}
+
+export interface CoverageGroups {
+  words: Array<{ quote: string; item: AcceptanceItem }>;
+  answers: Array<{ question: string; answer: string; item: AcceptanceItem }>;
+  ai: AcceptanceItem[];
+  edited: AcceptanceItem[];
+}
+
+export function coverageGroups(acc: Acceptance): CoverageGroups {
+  const g: CoverageGroups = { words: [], answers: [], ai: [], edited: [] };
+  for (const item of shownItems(acc)) {
+    const s = item.source;
+    if (s.kind === 'owner_words') g.words.push({ quote: s.quote, item });
+    else if (s.kind === 'owner_choice') g.answers.push({ question: s.question, answer: s.answer, item });
+    else if (s.kind === 'ai_added') g.ai.push(item);
+    else g.edited.push(item);
+  }
+  return g;
+}
+
+export const unreferencedCursor = (loaded: readonly UnreferencedMessage[], total: number): number | null =>
+  (loaded.length > 0 && loaded.length < total ? Math.min(...loaded.map(m => m.created_at)) : null);
+
+export function mergeUnreferenced(loaded: readonly UnreferencedMessage[], page: readonly UnreferencedMessage[]): UnreferencedMessage[] {
+  const seen = new Set(loaded.map(m => m.message_id));
+  return [...loaded, ...page.filter(m => !seen.has(m.message_id))];
+}

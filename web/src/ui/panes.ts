@@ -41,6 +41,11 @@ export function togglePanes(shown: PaneLayout, views: readonly PaneView[]): Pane
   return first ? [{ view: first, width: PANE_DEFAULT }] : [];
 }
 
+export function openView(shown: PaneLayout, views: readonly PaneView[], view: PaneView): PaneLayout {
+  if (!views.includes(view) || shown.some(p => p.view === view)) return shown;
+  return shown.length ? selectView(shown, 0, view) : [{ view, width: PANE_DEFAULT }];
+}
+
 export const closePane = (layout: PaneLayout, index: number): PaneLayout => layout.filter((_, i) => i !== index);
 
 export const selectView = (layout: PaneLayout, index: number, view: PaneView): PaneLayout =>

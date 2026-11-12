@@ -180,3 +180,41 @@ test('Markdown の画像: 読み込まず、http(s) のときだけホストを�
   assert.equal(imageHost('ftp://example.com/a.png'), null);
   assert.equal(imageHost(undefined), null);
 });
+
+test('ui/thread: plan_write で計画書を書いた実行が終わると、その実行の最後に「Plan written」の知らせを 1 つ出す。動いている実行・失敗した書き込み・別の道具には出さない', () => {
+  const written = threadItems({
+    messages: [
+      msg('user', 'build me an uploader', { runId: 'p1' }),
+      msg('assistant', '', { runId: 'p1', toolCalls: [call('w1', 'plan_write', { content: '# Plan' }), call('w2', 'plan_write', { content: '# Plan 2' })] }),
+      msg('tool', 'Wrote plan.md', { runId: 'p1', toolName: 'plan_write', toolCallId: 'w1' }),
+      msg('tool', 'Wrote plan.md', { runId: 'p1', toolName: 'plan_write', toolCallId: 'w2' }),
+      msg('assistant', 'The plan is in the Plan pane.', { runId: 'p1' }),
+      msg('user', 'thanks', { runId: 'p2' }),
+      msg('assistant', 'ok', { runId: 'p2' }),
+    ],
+  });
+  assert.deepEqual(written.map(i => i.kind), ['owner', 'tools', 'reply', 'plan', 'owner', 'reply']);
+  assert.equal(written[3]!.key, 'plan-p1');
+
+  const live = threadItems({
+    messages: [
+      msg('user', 'go', { runId: 'p3' }),
+      msg('assistant', '', { runId: 'p3', toolCalls: [call('w3', 'plan_write', { content: '# Plan' })] }),
+      msg('tool', 'Wrote plan.md', { runId: 'p3', toolName: 'plan_write', toolCallId: 'w3' }),
+    ],
+    draft: { runId: 'p3', conversationId: 'c', text: 'writing', activeTool: null } as never,
+  });
+  assert.ok(!live.some(i => i.kind === 'plan'), '実行の終わりまで出さない');
+
+  const failed = threadItems({
+    messages: [
+      msg('user', 'go', { runId: 'p4' }),
+      msg('assistant', '', { runId: 'p4', toolCalls: [call('w4', 'plan_write', { content: 'sk-' })] }),
+      msg('tool', 'Refused', { runId: 'p4', toolName: 'plan_write', toolCallId: 'w4', isError: true }),
+      msg('assistant', '', { runId: 'p4', toolCalls: [call('w5', 'file_read', { path: 'a' })] }),
+      msg('tool', 'x', { runId: 'p4', toolName: 'file_read', toolCallId: 'w5' }),
+      msg('assistant', 'Could not write it.', { runId: 'p4' }),
+    ],
+  });
+  assert.ok(!failed.some(i => i.kind === 'plan'));
+});

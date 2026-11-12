@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   CONVERSATION_MIN, closePane, fitLayout, GUTTER, keepHidden, maxPanes, openable, PANE_DEFAULT, PANE_MIN, PANES, paneRange, panesWidth, parseLayout, resizePane, selectView, showSplit, singlePane, tabOrder, togglePanes,
-  visiblePanes, type PaneLayout,
+  openView, visiblePanes, type PaneLayout,
 } from '../web/src/ui/panes.ts';
 
 // 会話の右の欄（beat 3-1a-u）。画面を持たない決まり: 開ける欄・開く・閉じる・並び・幅の範囲・覚えた形の読み方（web/src/ui/panes.ts）。
@@ -112,4 +112,12 @@ test('ui/panes: 覚えた形の読み方: 壊れた・知らない値は捨て�
   assert.deepEqual(parseLayout('not json'), []);
   assert.deepEqual(parseLayout('{"view":"plan"}'), []);
   assert.deepEqual(parseLayout('[{"view":"plan","width":420.6},{"view":"nope","width":400},{"view":"plan","width":"x"},{"view":"plan","width":10}]'), [{ view: 'plan', width: 421 }, { view: 'plan', width: PANE_MIN }]);
+});
+
+test('ui/panes: Plan の欄を開く（Notice・/build）: 見えていなければ開き、もう見えていればそのまま。どこかの欄が別の中身なら最初の欄を Plan にする', () => {
+  assert.deepEqual(openView([], ['plan'], 'plan'), [{ view: 'plan', width: PANE_DEFAULT }]);
+  const shown = [{ view: 'plan', width: 380 }] as PaneLayout;
+  assert.equal(openView(shown, ['plan'], 'plan'), shown);
+  assert.deepEqual(openView([{ view: 'pending', width: 380 }] as unknown as PaneLayout, ['plan', 'pending' as never], 'plan'), [{ view: 'plan', width: 380 }]);
+  assert.deepEqual(openView([], [], 'plan'), [], '開けない会話では何もしない');
 });

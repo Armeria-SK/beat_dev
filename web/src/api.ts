@@ -60,6 +60,10 @@ export interface Acceptance {
   frozen: { version: number; hash: string; plan_hash: string | null; created_at: number; source: string; build_task_id: string | null } | null;
   tainted?: boolean;
 }
+export interface UnreferencedMessage { message_id: number; conversation_id: string; text: string; created_at: number }
+export interface Coverage {
+  owner_words: number; owner_choice: number; owner_edit: number; ai_added: number; by_hand: number; unreferenced: UnreferencedMessage[]; unreferenced_total: number;
+}
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
 export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null }
@@ -269,7 +273,10 @@ export const api = {
   createProject: (input: NewProject) => call<{ project: Project; notes: ProjectNote[] }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   patchProject: (id: string, patch: ProjectPatch) => call<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   plan: (id: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`),
-  acceptance: (id: string) => call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance`),
+  acceptance: (id: string, unreferencedBefore?: number) =>
+    call<{ acceptance: Acceptance; coverage?: Coverage }>(`/api/projects/${encodeURIComponent(id)}/acceptance${unreferencedBefore === undefined ? '' : `?unreferencedBefore=${unreferencedBefore}`}`),
+  build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }) =>
+    call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(hashes) }),
   savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
   listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
   archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),

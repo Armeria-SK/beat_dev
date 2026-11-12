@@ -99,9 +99,9 @@ test('ui/composer-state: スラッシュコマンド: 今の一覧を 1 つも�
   for (const command of SLASH_COMMANDS) assert.ok(names.includes(command.name), command.name);
   assert.ok(names.includes('plan'));
   for (const command of UI_SLASH) assert.equal(typeof t(command.desc), 'string');
-  const none = { hasConversation: false, running: false, hasSummary: false, archived: false };
+  const none = { hasConversation: false, running: false, hasSummary: false, archived: false, product: false };
   assert.deepEqual(slashAvailable(none).map(c => c.name), ['new', 'plan', 'task', 'tasks', 'skills', 'log', 'memory']);
-  const all = { hasConversation: true, running: true, hasSummary: true, archived: false };
+  const all = { hasConversation: true, running: true, hasSummary: true, archived: false, product: true };
   assert.deepEqual(slashAvailable(all).map(c => c.name), names);
   assert.ok(!slashAvailable({ ...all, archived: true }).some(c => c.name === 'archive'));
   assert.deepEqual(slashItems('/ta', all).map(c => c.name), ['task', 'tasks']);
@@ -109,6 +109,16 @@ test('ui/composer-state: スラッシュコマンド: 今の一覧を 1 つも�
   assert.deepEqual(slashItems('hello', all), []);
   assert.deepEqual(slashItems('hello', all, true).map(c => c.name), names, 'ボタンで開いたときは全部');
   assert.deepEqual(slashItems('/', none).length, 7);
+});
+
+test('ui/composer-state: /build は製品の会話でだけ出る（欄を開いて対応表まで送るだけで、作りはしない）', () => {
+  const ctx = { hasConversation: true, running: false, hasSummary: false, archived: false };
+  assert.ok(slashAvailable({ ...ctx, product: true }).some(c => c.name === 'build'));
+  assert.ok(!slashAvailable({ ...ctx, product: false }).some(c => c.name === 'build'));
+  assert.ok(slashAvailable({ ...ctx, hasConversation: false, product: true }).some(c => c.name === 'build'), '新しい製品の会話でも欄は開ける');
+  assert.equal(bareCommand('/build')?.name, 'build');
+  assert.equal(t('ui.slash.build'), 'Review the plan before building');
+  assert.equal(UI_SLASH.find(c => c.name === 'build')?.desc, 'ui.slash.build');
 });
 
 test('ui/composer-state: 待たせる発言は 1 つ: もう一度 Queue するとき取り消すのは、割り込みでない待ちの発言の全部', () => {
