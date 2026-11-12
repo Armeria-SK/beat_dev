@@ -216,6 +216,18 @@ export class TaskStore {
     return this.#db.prepare('SELECT * FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT ?').all(taskId, limit) as unknown as TaskEvent[];
   }
 
+  judgeRequest(id: string): string {
+    const task = this.get(id);
+    if (!task) return '';
+    const template = task.parent_id ? this.get(task.parent_id) : undefined;
+    const origin = template?.origin ?? task.origin;
+    if (origin === 'self' || origin === 'curiosity') return '';
+    const tainted = this.#db.prepare(`SELECT 1 FROM task_events e LEFT JOIN engine_runs r ON r.id = e.run_id LEFT JOIN conversations c ON c.id = r.conversation_id
+      WHERE e.task_id IN (?, ?) AND e.run_id IS NOT NULL AND e.kind IN ('context', 'note', 'edited') AND (r.id IS NULL OR r.tainted = 1 OR c.ever_tainted = 1) LIMIT 1`).get(task.id, task.parent_id ?? task.id);
+    if (tainted) return '';
+    return [task.title, task.body, task.done_criteria].filter(Boolean).join('\n');
+  }
+
   event(taskId: string, kind: string, actor: string, content?: string | null, runId?: string): void {
     this.#db.prepare('INSERT INTO task_events (task_id, kind, actor, content, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(taskId, kind, actor, content ?? null, runId ?? null, this.#now());

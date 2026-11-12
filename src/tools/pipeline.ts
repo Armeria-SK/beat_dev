@@ -260,7 +260,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 送る・消す（と、どちらか分からない）操作は、よそから来た文を読んだかどうかに関わらず、判定役に回さない（1 つ目の関所）。判定役が許すと答えたあとにも、材料を取り直してもう一度見る（2 つ目の関所）。
   // 会話の許可・フォルダの許可・持ち主が札で通したものは、この関所の外（持ち主が決めたこと）
   const humanOnlyNow = (): HumanOnly | undefined => humanOnlyOf({ effect: tool.effect, network, toolRemoves: tool.removes === true, check: first });
-  const autoGate: Omit<AutoGate, 'humanOnly'> = { mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime };
+  const autoGate: Omit<AutoGate, 'humanOnly'> = { mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime: everyTime || (ctx.kind === 'task' && tool.escalateOnTaint === true) };
   const humanOnly = humanOnlyNow();
   const humanOnlyReason = (kind: HumanOnly) => guardText(language, kind === 'sends' ? 'pipeline.auto_human_sends' : 'pipeline.auto_human_removes');
   // 送る・消すのせいで自動承認にならなかったと札で分かるように、理由を添える（このほかの理由で回らないときは添えない）

@@ -64,7 +64,7 @@ export function mayClassify(gate: AutoGate): boolean {
   if (gate.humanOnly !== undefined) return false;
   if (gate.onceOnly || gate.everyTime) return false;
   if (gate.kinds.size === 0) return false;
-  for (const kind of gate.kinds) if (!CLASSIFIABLE_KINDS.has(kind)) return false;
+  for (const kind of gate.kinds) if (!CLASSIFIABLE_KINDS.has(kind) || (gate.runKind === 'task' && kind !== 'taint')) return false;
   return true;
 }
 

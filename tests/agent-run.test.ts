@@ -344,7 +344,9 @@ test('T-27 親が auto モードでも、子の聞く道具は判定役に回ら
 
 test('T-27b 親がタスク（自動承認）のとき、親の聞く道具は判定役に回り、子の聞く道具は chat の子と同じく判定役に回らず札になる', async t => {
   const ALLOW = '{"decision":"allow","reason":"依頼どおりです"}';
-  const s = await startApp(t, withAsk(c => { c.tools.agent.inTasks = true; }));
+  const taintStub: ToolDef<{ key: string }> = { ...askStub, preCheck: () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['taint'], sends: false, removes: false }) };
+  const options = withAsk(c => { c.tools.agent.inTasks = true; });
+  const s = await startApp(t, { ...options, tools: options.tools.map(tool => (tool.name === 'ask_stub' ? taintStub : tool)) });
   s.adapter().scripts = [call('ask_stub', { key: 'p' }), reply(ALLOW), call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'c' }), reply('子の答え'), reply('タスクの返事')];
   const task = s.app.tasks.create({ title: '任せるタスク', origin: 'user', actor: 'user' });
   const started = s.app.engine.runTask(task, s.app.conversations.create({ kind: 'task' }).id, '任せるタスクをやって');

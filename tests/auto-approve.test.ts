@@ -56,7 +56,10 @@ test('mayClassify: 範囲の外の種類は、単独でも、判定役に回し�
 test('mayClassify: 自動承認でないモード・会話以外の実行・ask でない判定・今回だけ・毎回・送る・消すは、種類が良くても回さない', () => {
   for (const mode of PERMISSION_MODES.filter(m => m !== 'auto')) assert.equal(mayClassify(gate({ mode })), false, mode);
   for (const runKind of ['review', 'agent'] as const) assert.equal(mayClassify(gate({ runKind })), false, runKind);
-  assert.equal(mayClassify(gate({ runKind: 'task' })), true, 'タスクの実行は chat と同じに回す（持ち主の判断 2026-11-12）');
+  assert.equal(mayClassify(gate({ runKind: 'task', kinds: new Set<AskKind>(['taint']) })), true, 'タスクの実行も回す（持ち主の判断 2026-11-12）');
+  for (const kinds of [['outside_read'], ['risky_command'], ['taint', 'outside_read']] as const) {
+    assert.equal(mayClassify(gate({ runKind: 'task', kinds: new Set<AskKind>(kinds) })), false, `タスクで回すのは taint だけ: ${kinds.join()}`);
+  }
   assert.equal(mayClassify(gate({ runKind: 'task', mode: 'normal' })), false, 'タスクでも自動承認のモードでなければ回さない');
   for (const decision of ['allow', 'deny'] as const) assert.equal(mayClassify(gate({ decision })), false, decision);
   assert.equal(mayClassify(gate({ onceOnly: true })), false);
@@ -374,14 +377,20 @@ test('自動承認でないモードでは、判定役を呼ばない: ふつう
   assert.equal(effectiveMode({ ...probe.ctx, permissionMode: 'auto' }, { permissionMode: () => { throw new Error('x'); } } as never), 'normal', '今のモードを読めなければ、ふつうに倒す');
   assert.equal(effectiveMode({ ...probe.ctx, kind: 'task', permissionMode: 'auto' }, { permissionMode: () => 'normal' } as never), 'auto', 'タスクは実行を始めたときのモードだけを見る（タスクの会話のモードは見ない）');
   assert.equal(effectiveMode({ ...probe.ctx, kind: 'task', permissionMode: undefined }, { permissionMode: () => 'auto' } as never), 'normal', 'モードの無いタスクはふつう');
+  assert.equal(effectiveMode({ ...probe.ctx, kind: 'task', permissionMode: 'plan' }, { permissionMode: () => 'plan' } as never), 'normal', 'タスクは計画にならない');
   assert.equal(effectiveMode({ ...probe.ctx, kind: 'review', permissionMode: 'auto' }, { permissionMode: () => 'auto' } as never), 'normal', '振り返りには効かない');
 });
 
-test('タスクの実行（自動承認で始めたもの）: 外を読むだけのコマンドは判定役が allow なら動く。判定役が無ければ札', async t => {
+test('タスクの実行（自動承認で始めたもの）: よそから来た文を読んだあとの、許可フォルダの中を読むコマンドは判定役が allow なら動く。外読み・escalateOnTaint の道具・判定役が無いときは札', async t => {
+  const taskCtx = (s: Setup): ToolContext => ({ ...s.ctx, kind: 'task', conversationId: 'task-conv', permissionMode: 'auto', taint: { tainted: true, sources: ['web_fetch'] } });
+  const inRoot = (s: Setup) => {
+    const path = join(s.paths.workspace, 'weather.json');
+    writeFileSync(path, '{"temp":21}');
+    return process.platform === 'win32' ? `Get-Content "${path}" | ConvertFrom-Json` : `cat "${path}"`;
+  };
   const s = await setup(t, { mode: 'normal' });
-  const task: ToolContext = { ...s.ctx, kind: 'task', conversationId: 'task-conv', permissionMode: 'auto' };
   let done = false;
-  const call = s.call('shell_run', { command: s.readOutside }, task).finally(() => { done = true; });
+  const call = s.call('shell_run', { command: inRoot(s) }, taskCtx(s)).finally(() => { done = true; });
   for (let i = 0; i < 300 && !done && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
   const card = s.approvals.pending()[0];
   if (card) s2(s, card);
@@ -390,10 +399,17 @@ test('タスクの実行（自動承認で始めたもの）: 外を読むだけ
   assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'auto-mode']);
   assert.equal(s.prompts.length, 1);
 
-  const none = await setup(t, { mode: 'normal' });
-  const running = none.call('shell_run', { command: none.readOutside }, { ...none.ctx, kind: 'task', conversationId: 'task-conv', permissionMode: 'auto' }, { noClassifier: true });
-  s2(none, await waitPending(none));
-  assert.deepEqual([(await running).decidedBy], ['user']);
+  for (const [label, name, args, extra] of [
+    ['外読み', 'shell_run', (x: Setup) => ({ command: x.readOutside }), {}],
+    ['escalateOnTaint', 'memory_save', () => ({ book: 'user', content: '覚えて' }), {}],
+    ['判定役が無い', 'shell_run', (x: Setup) => ({ command: inRoot(x) }), { noClassifier: true }],
+  ] as const) {
+    const x = await setup(t, { mode: 'normal', tools: [memorySave] });
+    const running = x.call(name, args(x), taskCtx(x), extra);
+    s2(x, await waitPending(x));
+    assert.equal((await running).decidedBy, 'user', label);
+    assert.equal(x.prompts.length, 0, `${label}: 判定役を呼ばない`);
+  }
 });
 
 test('判定役を待っているあいだにモードを替えたら、判定役の答えは使わない: ふつうに戻したら札が出て、計画にしたら断る。自動承認のままなら許す', async t => {
