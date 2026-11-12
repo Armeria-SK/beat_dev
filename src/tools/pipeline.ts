@@ -101,8 +101,9 @@ function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPoli
 }
 
 // この呼び出しに効く権限モード: 実行を始めたときのモードと、会話のいまのモードの厳しい方（厳しい向きはその場から、緩む向きは次の実行から）。
-// 会話（チャット）の実行と、それが任せた子の担当（agent。親の会話のモードを見る）だけ。タスク・振り返りは、会話のモードに関係なくふつう
+// 会話（チャット）の実行と、それが任せた子の担当（agent。親の会話のモードを見る）だけ。タスクは実行を始めたときのモードが自動承認なら自動承認、ほかはふつう（会話のモードは見ない）。振り返りは、会話のモードに関係なくふつう
 export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionMode {
+  if (ctx.kind === 'task') return ctx.permissionMode === 'auto' ? 'auto' : 'normal';
   if (ctx.kind !== 'chat' && ctx.kind !== 'agent') return 'normal';
   const start = ctx.permissionMode ?? 'normal';
   let now: PermissionMode = start;
