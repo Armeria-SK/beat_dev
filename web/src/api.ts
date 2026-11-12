@@ -48,7 +48,7 @@ export interface PlanDoc {
 export type AcceptanceSource =
   | { kind: 'owner_words'; quote: string; context?: string; messageId?: number; conversationId?: string }
   | { kind: 'owner_choice'; question: string; answer: string; questionMessageId?: number; answerMessageId?: number; conversationId?: string }
-  | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: 'not_found' | 'too_short' | 'not_next_reply' | 'choice_unverified'; quote?: string; question?: string; answer?: string }
+  | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: 'not_found' | 'too_short' | 'not_next_reply' | 'choice_unverified' | 'scan_budget'; quote?: string; question?: string; answer?: string }
   | { kind: 'owner_edit' };
 export type AcceptanceCheck = { kind: 'command'; command: string } | { kind: 'look' } | { kind: 'read' };
 export interface AcceptanceItem {

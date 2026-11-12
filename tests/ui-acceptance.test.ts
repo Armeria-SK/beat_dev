@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Acceptance, AcceptanceItem, PlanDoc } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
-import { acceptanceMeta, checkLabel, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../web/src/ui/acceptance.ts';
+import { acceptanceMeta, checkLabel, conversationLink, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../web/src/ui/acceptance.ts';
 
 // 受け入れの一覧の表示（beat 3-1b-u）。画面を持たない決まり: 並べ方・札の言葉・開いた中身（web/src/ui/acceptance.ts）。
 
@@ -106,6 +106,21 @@ test('ui/acceptance: 選択肢の答えはまだ確かめない（choice_unverif
   ]);
   assert.equal(t('ui.acc.reason.choice_unverified'), 'choices are not verified yet');
   assert.equal(t(sourceLabel({ kind: 'owner_choice', question: 'q', answer: 'A' })), 'Your answer', '確かめた選択の札は残す（あとで戻る）');
+});
+
+test('ui/acceptance: あなたの言葉の項目には、その発言の会話を開くリンク（今ある会話の経路。会話の ID は URL の形に直す）', () => {
+  assert.equal(conversationLink({ kind: 'owner_words', quote: 'q', messageId: 4, conversationId: 'c1' }), '#/c/c1');
+  assert.equal(conversationLink({ kind: 'owner_words', quote: 'q', messageId: 4, conversationId: 'a/b"><x' }), '#/c/a%2Fb%22%3E%3Cx');
+  assert.equal(conversationLink({ kind: 'owner_words', quote: 'q' }), null, '会話が分からなければ出さない');
+  assert.equal(conversationLink({ kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: 'q' }), null);
+  assert.equal(conversationLink({ kind: 'owner_choice', question: 'q', answer: 'A', conversationId: 'c1' }), null);
+  assert.equal(t('ui.acc.showInConversation'), 'Show in conversation');
+});
+
+test('ui/acceptance: 履歴が多すぎて 1 回の書き込みで確かめきれなかった理由の言葉', () => {
+  const d = itemDetails(item('A-11', { source: { kind: 'ai_added', claimed: 'owner_words', reason: 'scan_budget', quote: 'long ago' } }));
+  assert.deepEqual(d[1], { label: 'ui.acc.detail.why', note: 'ui.acc.reason.scan_budget' });
+  assert.equal(t('ui.acc.reason.scan_budget'), 'Too much history to check in one write');
 });
 
 test('ui/acceptance: 下書きのあいだは "Draft — fixed when you build"、固定のあとは版の番号', () => {

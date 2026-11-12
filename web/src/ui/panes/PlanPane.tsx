@@ -3,7 +3,7 @@ import { api, type Acceptance, type AcceptanceItem, type NotDoingItem, type Plan
 import { formatRelative } from '../../i18n/format.ts';
 import { useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
-import { acceptanceMeta, checkLabel, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../acceptance.ts';
+import { acceptanceMeta, checkLabel, conversationLink, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../acceptance.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Icon, Notice, Pill } from '../parts.tsx';
@@ -31,6 +31,7 @@ function Row({ entry }: { entry: AcceptanceItem | NotDoingItem }) {
   const details = itemDetails(entry);
   const opens = details.length > 0;
   const text = 'result' in entry ? entry.result : entry.text;
+  const link = conversationLink(entry.source);
   return (
     <li className={`bt-row ui-acc__row${opens ? ' bt-row--link' : ''}`} onClick={opens ? () => setOpen(o => !o) : undefined}>
       <span className="bt-tag ui-acc__id">{entry.id}</span>
@@ -50,6 +51,7 @@ function Row({ entry }: { entry: AcceptanceItem | NotDoingItem }) {
                 <dd className={'text' in d && d.mono ? 'ui-acc__mono' : undefined}>{'text' in d ? d.text : t(d.note)}</dd>
               </div>
             ))}
+            {link && <a className="bt-meta ui-acc__link" href={link}>{t('ui.acc.showInConversation')}</a>}
           </dl>
         )}
       </div>
