@@ -15,6 +15,7 @@ import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
+import { SKILL_AUTO_PER_DAY } from '../src/tools/skills/store.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -223,6 +224,7 @@ test('スキルのフォルダへの書き込みの確かめの文は、聞か�
   assert.deepEqual([unasked.decision, unasked.askKinds], ['ask', ['persona']], '確かめそのものは変わらない');
   assert.match(unasked.reasons[0]!, /skill_draft instead: under the current setting it is registered without the user's review/u);
   assert.doesNotMatch(unasked.reasons[0]!, /on screen/u);
+  assert.ok(unasked.reasons[0]!.includes(`or ${SKILL_AUTO_PER_DAY} skills were already registered that way in the last 24 hours; in those cases it waits as a draft`), '1 日の上限に達したら下書きで待つことも言う');
 });
 
 test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {
@@ -233,6 +235,7 @@ test('振り返りでは、外から読んだ内容のあとの書き込みの�
   const started = Date.now();
   const review = await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint });
   assert.equal(review.decision, 'deny');
+  assert.equal(review.decidedBy, 'taint', '記録で、ほかの拒否（builtin）と見分けられる');
   assert.match(review.output.content, /history_read: c9.*a review \(background work\) has nobody to approve it/u);
   assert.equal(s.approvals.pending().length, 0, '承認の札を作らない');
   assert.ok(Date.now() - started < 5000, '待たない');

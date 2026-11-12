@@ -124,7 +124,7 @@ export type SendOutcome =
   | { ok: true; runId: string; messageId?: number; queued?: boolean; pendingId?: string }
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail; problems?: ModelProblem[] };
 
-type Route = { model: ModelConfig; provider: ProviderConfig };
+type Route = { model: ModelConfig; provider: ProviderConfig; backup?: boolean };
 
 interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[] }
 // held: 実行が始まったあとに会話のモデルか権限モードが替わり、そのあとに送られた発言。今の実行（古いモデルの鎖・古いモードの実行）へは差し込まず、実行が終わってから新しいモデル・新しいモードの実行で読ませる
@@ -515,7 +515,7 @@ export class ChatEngine {
         ...(probe ? (probe.messageCode ? { messageCode: probe.messageCode, ...(probe.messageParams ? { messageParams: probe.messageParams } : {}) } : {}) : { messageCode: 'engine.problem.unchecked' }),
       });
     }
-    return { usable: [...usable, ...cooling], problems };
+    return { usable: [...usable, ...cooling].map(route => (route.model.id === ids[0] ? route : { ...route, backup: true })), problems };
   }
 
   #noUsableModel(problems: ModelProblem[]): Extract<SendOutcome, { ok: false }> {
@@ -600,7 +600,7 @@ export class ChatEngine {
     d.runs.start(runId, kind, conversationId, agent?.parent.runId);
     const snapshot = this.#snapshot(conversationId);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
-    const flags: string[] = [];
+    const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
     const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0 };
     let index = 0;

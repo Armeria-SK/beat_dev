@@ -160,6 +160,9 @@ test('DELETE: 消したことのログの行は、題の制御文字・行の区
   const task = s.userTask(title, { cron: '0 9 * * *', timezone: 'UTC' });
   assert.equal((await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE')).status, 200);
   assert.deepEqual(s.logs.filter(line => line.includes('Deleted task')), [`[INFO] Deleted task "a x x x x x x h i\\" (fake-id)\\\\" (${task.id})`]);
+  const widthless = s.userTask(`p${[0x200b, 0xfeff, 0xad, 0x2060].map(code => String.fromCodePoint(code)).join('q')}r`, { cron: '0 9 * * *', timezone: 'UTC' });
+  assert.equal((await s.api(`/api/tasks/${widthless.id}`, undefined, 'DELETE')).status, 200);
+  assert.equal(s.logs.filter(line => line.includes('Deleted task')).at(-1), `[INFO] Deleted task "p q q q r" (${widthless.id})`, '幅のない文字も落とす');
 });
 
 test('DELETE: 動いている回があるひな形は 409（run_open）。回が終われば消せる。止めたひな形も消せる', async t => {

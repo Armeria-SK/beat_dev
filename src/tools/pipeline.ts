@@ -205,7 +205,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint || tool.writesFiles === true) && decision !== 'deny') {
     const sources = ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep'));
     if (ctx.kind === 'review') {
-      decision = 'deny';
+      decision = 'deny'; decidedBy = 'taint';
       reasons.push(guardText(language, 'pipeline.taint_review', { sources }));
     } else {
       decision = worst(decision, 'ask');
