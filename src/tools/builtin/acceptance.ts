@@ -77,16 +77,21 @@ export const acceptanceChange: ToolDef<Static<typeof CHANGE_INPUT>> = {
       services.emit({ type: 'acceptance.changed', projectId: ctx.project.id, version: row.base_version, draft: false });
       const changed: Record<string, number> = {};
       for (const { source } of ops) if (source.kind === 'ai_added' && source.reason) changed[source.reason] = (changed[source.reason] ?? 0) + 1;
-      const reasons = Object.entries(changed).map(([reason, n]) => `${reason}: ${n}`).join(', ');
       return { content: toolText(language, 'acceptance.proposed', {
-        changes: ops.length, version: row.base_version, verified: ops.filter(op => op.source.kind === 'owner_words').length,
-        changed: Object.values(changed).reduce((sum, n) => sum + n, 0), reasons: reasons ? ` (${reasons})` : '',
+        changes: ops.length, version: row.base_version, verified: ops.filter(op => op.source.kind === 'owner_words' || op.source.kind === 'owner_choice').length,
+        aiAdded: ops.filter(op => op.source.kind === 'ai_added').length, unconfirmed: unconfirmedText(changed),
       }) };
     } catch (error) {
       return { content: toolText(language, 'failed', { detail: errorText(error, language) }), isError: true };
     }
   },
 };
+
+function unconfirmedText(changed: Partial<Record<string, number>>): string {
+  const total = Object.values(changed).reduce<number>((sum, n) => sum + (n ?? 0), 0);
+  if (total === 0) return '';
+  return ` (${total} of them because the quote or answer was not found: ${Object.entries(changed).map(([reason, n]) => `${reason}: ${n}`).join(', ')})`;
+}
 
 export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
   name: 'acceptance_write',
@@ -109,9 +114,8 @@ export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
       const { doc, verified, changed } = buildDraft({ items: input.items.map(entry => ({ result: entry.result, source: claimOf(entry), check: checkOf(entry) })), notDoing: input.notDoing?.map(entry => ({ text: entry.text, source: claimOf(entry) })) }, speech, { language: docLanguage, taintedRuns: tainted ? [ctx.runId] : [] });
       services.acceptance.writeDraft(ctx.project.id, doc);
       services.emit({ type: 'acceptance.changed', projectId: ctx.project.id, version: 0, draft: true });
-      const reasons = Object.entries(changed).map(([reason, n]) => `${reason}: ${n}`).join(', ');
-      const changedTotal = Object.values(changed).reduce((sum, n) => sum + n, 0);
-      return { content: toolText(language, 'acceptance.saved', { items: doc.items.length, notDoing: doc.notDoing.length, verified, changed: changedTotal, reasons: reasons ? ` (${reasons})` : '' }) };
+      const aiAdded = [...doc.items, ...doc.notDoing].filter(entry => entry.source.kind === 'ai_added').length;
+      return { content: toolText(language, 'acceptance.saved', { items: doc.items.length, notDoing: doc.notDoing.length, verified, aiAdded, unconfirmed: unconfirmedText(changed) }) };
     } catch (error) {
       return { content: toolText(language, 'failed', { detail: errorText(error, language) }), isError: true };
     }

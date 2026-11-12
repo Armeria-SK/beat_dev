@@ -287,7 +287,7 @@ test('3-1b acceptance_write: コードが出どころを付け替えて番号を
   }, h.ctxOf());
   assert.equal(out.decision, 'allow');
   assert.match(out.output.content, /3 items/u);
-  assert.match(out.output.content, /2 verified/u);
+  assert.match(out.output.content, /2 confirmed in the conversation/u);
   assert.match(out.output.content, /not_found: 1/u);
   const doc = JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc;
   assert.deepEqual(doc, {
@@ -573,7 +573,7 @@ test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_w
 
   s.adapter().scripts = [call('acceptance_write', { items: [item('Uploads resume after a restart', { kind: 'owner_words', quote: 'uploads must resume after a restart' })], notDoing: [nd('Accounts')] }), reply('ok')];
   await s.send(uuid(1), { text: 'Uploads must resume after a restart', projectId: shop.id });
-  assert.match(s.lastTool(), /1 verified/u);
+  assert.match(s.lastTool(), /1 confirmed in the conversation/u);
   const got = (await s.json(`/api/projects/${shop.id}/acceptance`, 'GET')).body.acceptance;
   assert.equal(got.draft, true);
   assert.equal(got.version, 0);

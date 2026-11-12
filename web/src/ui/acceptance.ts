@@ -206,7 +206,7 @@ export function versionDiff(before: readonly AcceptanceItem[] | null, after: rea
   for (const id of ids) {
     const a = was.get(id);
     const b = now.get(id);
-    if (a && !b) rows.push({ kind: 'removed', id, result: a.result, before: null, source: a.source, check: a.check });
+    if (a && !b) rows.push({ kind: 'removed', id, result: a.result, before: null, source: null, check: a.check });
     else if (!a && b) rows.push({ kind: 'added', id, result: b.result, before: null, source: b.source, check: b.check });
     else if (a && b && fixedPart(a) !== fixedPart(b)) rows.push({ kind: 'changed', id, result: b.result, before: a.result !== b.result ? a.result : null, source: b.source, check: b.check });
   }

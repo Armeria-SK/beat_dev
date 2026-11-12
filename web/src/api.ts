@@ -174,6 +174,7 @@ export interface Task {
   cancelled_from?: TaskStatus | null;
   timezone?: string | null;
   project_id?: string | null;
+  acceptance_items?: string | null;
 }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }

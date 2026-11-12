@@ -145,7 +145,7 @@ function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing
   );
 }
 
-function DiffList({ rows }: { rows: DiffRow[] }) {
+function DiffList({ rows, removedBy }: { rows: DiffRow[]; removedBy?: string }) {
   const t = useT();
   if (rows.length === 0) return <p className="bt-meta ui-acc__problem">{t('ui.acc.diff.none')}</p>;
   return (
@@ -159,6 +159,7 @@ function DiffList({ rows }: { rows: DiffRow[] }) {
             <span className="ui-acc__tags">
               <span className="bt-chip">{t(diffLabel(r.kind))}</span>
               {r.source && <span className="bt-chip">{t(sourceLabel(r.source))}</span>}
+              {!r.source && r.kind === 'removed' && removedBy && <span className="bt-chip">{removedBy}</span>}
               {r.check && r.kind !== 'removed' && <span className="bt-chip">{t(checkLabel(r.check))}</span>}
             </span>
           </div>
@@ -210,7 +211,7 @@ function VersionRow({ productId, version, previous }: { productId: string; versi
         <button type="button" className="ui-rowbtn ui-acc__text" aria-expanded={open} aria-label={`${t('ui.acc.version', version.version)} · ${source ? t(source) : version.source}`}>{source ? t(source) : version.source}</button>
         {open && (
           <div className="ui-acc__detail" onClick={e => e.stopPropagation()}>
-            {rows === 'failed' ? <p className="bt-meta ui-danger ui-acc__problem">{t('ui.acc.versions.loadFailed')}</p> : rows && <DiffList rows={rows} />}
+            {rows === 'failed' ? <p className="bt-meta ui-danger ui-acc__problem">{t('ui.acc.versions.loadFailed')}</p> : rows && <DiffList rows={rows} removedBy={source ? t(source) : version.source} />}
           </div>
         )}
       </div>

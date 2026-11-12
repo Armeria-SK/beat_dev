@@ -205,7 +205,9 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
       const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true });
-      return { state: { ...s, tasks, taskRevision: s.taskRevision + 1 }, effects: [...refresh('worker'), ...counts(s)] };
+      const next = { ...s, tasks, taskRevision: s.taskRevision + 1 };
+      const build = e.task.project_id && e.task.acceptance_items && old?.status !== e.task.status ? e.task.project_id : null;
+      return { state: build ? planBump(next, build) : next, effects: [...refresh('worker'), ...counts(s)] };
     }
     case 'task.deleted': {
       const tasks = new Map(s.tasks);

@@ -179,6 +179,8 @@ test('3-3-s 固定のあと会話で言った要件が、acceptance_change で p
   });
   assert.equal(sent.status, 202);
   assert.match(s.results().at(-1)!, /^Proposed/u);
+  assert.match(s.results().at(-1)!, /Sources: 1 confirmed in the conversation, 2 shown to the owner as AI added \(1 of them because the quote or answer was not found: not_found: 1\)\./u, 'AI added の数は、確かめられなかった引用だけでなく AI added の op 全部');
+  assert.match(s.results().find(r => r.startsWith('I wrote the acceptance draft'))!, /Sources: 0 confirmed in the conversation, 3 shown to the owner as AI added\. /u);
   const [row] = s.rows(shop.id);
   assert.equal(row!.status, 'pending');
   assert.equal(row!.base_version, 1);

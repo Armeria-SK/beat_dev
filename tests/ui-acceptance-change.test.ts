@@ -65,6 +65,7 @@ test('ui/acceptance 3-3: 版どうしの違い。外した項目は Removed、�
     ['added', 'A-5', 'Result A-5', null],
     ['added', 'A-10', 'Result A-10', null],
   ]);
+  assert.equal(rows.find(r => r.kind === 'removed')!.source, null, '消した行に、消された項目を足した人の出どころを出さない（版の出どころで示す）');
 });
 
 test('ui/acceptance 3-3: 確かめ方だけが違っても Changed（前の文は出さない）', () => {
