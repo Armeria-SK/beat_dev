@@ -231,6 +231,7 @@ export const en = {
   'tool.shell_run': 'Run a shell command',
   'tool.plan_write': 'Write the plan of the product (only in product conversations)',
   'tool.plan_read': 'Read the plan of the product',
+  'tool.acceptance_write': 'Write the draft acceptance list of the product (only in product conversations)',
   'tool.web_fetch': 'Read a public web page',
   'tool.web_search': 'Search the web',
   'tool.memory_save': 'Add a memory',

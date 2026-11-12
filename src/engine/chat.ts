@@ -18,6 +18,7 @@ import { localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pip
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
+import type { AcceptanceStore } from '../projects/acceptance.ts';
 import { runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
@@ -102,6 +103,7 @@ export interface ChatEngineDeps {
   skills?: SkillStore;
   projects?: ProjectStore | undefined;
   plans?: PlanStore | undefined;
+  acceptance?: AcceptanceStore | undefined;
   web?: NonNullable<ToolContext['services']>['web'];
   notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
@@ -644,7 +646,7 @@ export class ChatEngine {
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
@@ -947,8 +949,8 @@ export class ChatEngine {
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
-    const name = p.project?.root ? d.projects?.get(p.project.id)?.name : undefined;
-    const product = name !== undefined && p.project?.root ? { name, root: p.project.root } : undefined;
+    const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
+    const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language } : undefined;
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, p.kind === 'chat'), summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     const history = stored.map(m => m.message);

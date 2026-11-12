@@ -383,4 +383,19 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE tasks ADD COLUMN proposed_by TEXT;
   CREATE INDEX ix_tasks_project ON tasks (project_id) WHERE project_id IS NOT NULL;
   `,
+  `
+  CREATE TABLE acceptance_versions (
+    project_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    content TEXT NOT NULL,
+    plan_hash TEXT,
+    source TEXT NOT NULL CHECK (source IN ('build', 'change', 'question', 'proposal')),
+    build_task_id TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, version)
+  ) STRICT;
+  ALTER TABLE projects ADD COLUMN doc_language TEXT;
+  ALTER TABLE projects ADD COLUMN doc_language_pinned INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

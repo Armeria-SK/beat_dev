@@ -1,6 +1,7 @@
 import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
-import { checkCommandOf, defaultProjectName, folderMissing, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { AcceptanceError, frozenHash } from '../projects/acceptance.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
 import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
@@ -57,6 +58,7 @@ export function projectWire(app: App, row: ProjectRow) {
     running: app.engine.activeRuns().filter(r => inProject(r.conversationId)).length,
     last_activity_at: counts.lastActivityAt,
     has_plan: app.plans.has(row.id),
+    doc_language: row.doc_language, doc_language_pinned: row.doc_language_pinned === 1,
   };
 }
 
@@ -100,12 +102,15 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (body.refreshRemotes !== undefined && body.refreshRemotes !== true) throw projectProblem(400, new ProjectError('bad_refresh'));
     const rawName = requireString(body, 'name', { optional: true, max: 400 });
     const rawCheck = optionalText(body, 'checkCommand', 4000);
-    const updated = guarded(() => app.projects.update(current.id, {
+    const docLanguage = body.docLanguage === null ? null : languageTagOf(body.docLanguage);
+    if (body.docLanguage !== undefined && docLanguage === undefined) throw problem(400, 'invalid_field', 'bad_language', { field: 'docLanguage', params: { field: 'docLanguage' } });
+    const changed = guarded(() => app.projects.update(current.id, {
       ...(rawName !== undefined ? { name: projectName(rawName) } : {}),
       ...(rawCheck !== undefined ? { checkCommand: checkCommandOf(rawCheck) } : {}),
       ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {}),
       ...(body.refreshRemotes === true && !folderMissing(current) ? { remotes: readRemotes(current.root) } : {}),
     }));
+    const updated = docLanguage === undefined ? changed : app.projects.setDocLanguage(current.id, docLanguage);
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
     app.bus.publish({ type: 'project.changed', projectId: current.id, change });
     sendJson(res, 200, { project: projectWire(app, updated) });
@@ -140,6 +145,24 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (saved.changed) app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: saved.hash, by: 'owner' });
     const { changed: _changed, ...view } = saved;
     sendJson(res, 200, { plan: planWire(project.id, view) });
+  });
+
+  router.add('GET', '/api/projects/:id/acceptance', ({ res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    let doc;
+    try { doc = app.acceptance.read(project.id); } catch (error) {
+      if (error instanceof AcceptanceError) throw domainProblem(400, 'acceptance', error);
+      throw error;
+    }
+    const frozen = app.acceptance.latest(project.id);
+    sendJson(res, 200, {
+      acceptance: {
+        version: doc?.version ?? 0, language: doc?.language ?? null, items: doc?.items ?? [], not_doing: doc?.notDoing ?? [], draft: (doc?.version ?? 0) === 0,
+        hash: doc ? frozenHash(doc) : null, tainted: (doc?.taintedRuns?.length ?? 0) > 0,
+        frozen: frozen ? { version: frozen.version, hash: frozen.hash, plan_hash: frozen.plan_hash, created_at: frozen.created_at, source: frozen.source, build_task_id: frozen.build_task_id } : null,
+      },
+    });
   });
 
   router.add('POST', '/api/folders/list', async ({ req, res }) => {
