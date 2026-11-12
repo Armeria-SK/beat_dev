@@ -3,6 +3,7 @@ import { ftsPhrase, likeEscape, searchTerms } from './store.ts';
 
 export interface HistoryHit {
   conversationId: string;
+  projectId: string | null;
   title: string | null;
   messageId: number;
   role: string;
@@ -43,16 +44,16 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
   const hiddenParams = visible ? [...visible, ...visible] : [];
   const rows = terms.every(t => [...t].length >= 3)
     ? db.prepare(`
-        SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title FROM messages_fts f
+        SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title, c.project_id FROM messages_fts f
         JOIN messages m ON m.id = f.rowid JOIN conversations c ON c.id = m.conversation_id
         WHERE messages_fts MATCH ? AND m.created_at >= ? AND m.conversation_id != ?${hiddenClause}
         ORDER BY m.created_at DESC LIMIT ?`).all(ftsPhrase(terms), since, exclude, ...hiddenParams, limit)
     : db.prepare(`
-        SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title FROM messages m JOIN conversations c ON c.id = m.conversation_id
+        SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title, c.project_id FROM messages m JOIN conversations c ON c.id = m.conversation_id
         WHERE ${terms.map(() => "m.text LIKE ? ESCAPE '\\'").join(' AND ')} AND m.created_at >= ? AND m.conversation_id != ?${hiddenClause}
         ORDER BY m.created_at DESC LIMIT ?`).all(...terms.map(t => `%${likeEscape(t)}%`), since, exclude, ...hiddenParams, limit);
-  return (rows as Array<{ id: number; conversation_id: string; role: string; text: string; created_at: number; title: string | null }>).map(r => ({
-    conversationId: r.conversation_id, title: r.title, messageId: r.id, role: r.role, createdAt: r.created_at, snippet: snippet(r.text, terms),
+  return (rows as Array<{ id: number; conversation_id: string; role: string; text: string; created_at: number; title: string | null; project_id: string | null }>).map(r => ({
+    conversationId: r.conversation_id, projectId: r.project_id, title: r.title, messageId: r.id, role: r.role, createdAt: r.created_at, snippet: snippet(r.text, terms),
   }));
 }
 

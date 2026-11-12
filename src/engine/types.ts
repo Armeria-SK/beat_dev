@@ -101,7 +101,8 @@ export type RunEvent =
   // 会話の題・アーカイブ・削除が変わった（開いているほかの画面が一覧を読み直すため）
   // 実行中に送った待ちの発言が増えた・取り消された・履歴に入った（画面が待ちの一覧を読み直す）
   | { type: 'pending.changed'; conversationId: string }
-  | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
+  | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId: string | null }
+  | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'task.deleted'; id: string }
   | { type: 'notification'; notification: Notification }

@@ -7,6 +7,7 @@ import { App } from '../src/app.ts';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ToolCall } from '../src/engine/types.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
+import { checkWorkFolder } from '../src/projects/work-folder.ts';
 import { providerError, type ModelRequest, type ProviderAdapter, type StreamEvent } from '../src/providers/types.ts';
 import { isSensitiveName } from '../src/shared/redaction.ts';
 import { BrowserFailure } from '../src/tools/browser/driver.ts';
@@ -20,7 +21,8 @@ const WORK = join(ROOT, 'work');
 const OUTSIDE = join(ROOT, 'outside');
 const ENV_FILE = join(ROOT, '.env');
 const DIST = join(ROOT, 'dist');
-const RESET = [DATA, WORK, OUTSIDE, ENV_FILE, `${ENV_FILE}.bak`];
+const PRODUCTS = join(ROOT, 'products');
+const RESET = [DATA, WORK, OUTSIDE, PRODUCTS, ENV_FILE, `${ENV_FILE}.bak`];
 
 const log = (line: string) => process.stdout.write(`${new Date().toISOString()} ${line}\n`);
 
@@ -152,6 +154,36 @@ function seed(app: App): void {
   app.notifications.notify({ kind: 'task_failed', title: 'Task failed', body: 'Fetch the price list', link: `#/tasks/${failed.id}` });
   app.notifications.notify({ kind: 'info', title: 'Preview data loaded', body: 'Everything here is made up.' });
   seedLibrary(app);
+  seedProducts(app);
+}
+
+function seedProducts(app: App): void {
+  const now = Date.now();
+  const add = (folder: string, name: string, checkCommand: string | null) => {
+    const dir = join(PRODUCTS, folder);
+    mkdirSync(dir, { recursive: true });
+    const checked = checkWorkFolder(dir, { paths: app.paths, appRoot: APP_ROOT, config: app.config(), active: app.projects.list(), exempt: app.projectFolderExempt });
+    if (!checked.ok) stop(`could not use ${dir} as a product folder: ${checked.reason}`);
+    return app.projects.create({ name, root: checked.root, rootKey: checked.rootKey, checkCommand });
+  };
+  const talk = (projectId: string, title: string, lines: string[]) => {
+    const c = app.conversations.create({ title, projectId });
+    lines.forEach((content, i) => app.conversations.append(c.id, { role: i % 2 === 0 ? 'user' : 'assistant', content }));
+  };
+  const shop = add('shop-site', 'Shop site', 'npm test');
+  const notes = add('travel-notes', 'Travel notes', null);
+  talk(shop.id, 'Add a cart badge', ['Show the number of items on the cart icon.', 'I will add a badge to the header.']);
+  talk(shop.id, 'Fix the price rounding', ['Totals are off by one yen.', 'The tax is rounded per line. I will round once at the end.']);
+  talk(shop.id, 'Plan the checkout page', ['What should the checkout page ask for?']);
+  talk(notes.id, 'Outline the Kyoto trip', ['Make an outline for three days in Kyoto.', 'Day 1: east side. Day 2: Arashiyama. Day 3: Fushimi.']);
+  const tasks = app.tasks;
+  tasks.create({ title: 'Write tests for the cart total', body: 'Proposed for the shop.', origin: 'self', propose: true, actor: 'preview', projectId: shop.id });
+  const ask = tasks.create({ title: 'Choose the payment provider', origin: 'user', runAt: now + 86_400_000, actor: 'preview', projectId: shop.id });
+  tasks.setWaiting(ask.id, 'question', 'Card only, or card and bank transfer?');
+  tasks.create({ title: 'Check for broken links', origin: 'user', cron: '0 7 * * MON', timezone: 'Asia/Tokyo', actor: 'preview', projectId: shop.id });
+  const shipped = tasks.create({ title: 'Compress the product photos', origin: 'user', runAt: now + 86_400_000, actor: 'preview', projectId: shop.id });
+  tasks.finish(shipped.id, 'done', 'All photos are under 200 KB.', 'preview');
+  tasks.create({ title: 'Collect the train times', origin: 'user', runAt: now + 5 * 3_600_000, actor: 'preview', projectId: notes.id });
 }
 
 function seedLibrary(app: App): void {
@@ -208,7 +240,7 @@ async function start(): Promise<void> {
   if (process.argv.length > 2) stop('it takes no arguments (the port and the data folder are fixed)');
   checkRoot();
   for (const target of RESET) reset(target);
-  for (const dir of [DATA, WORK, OUTSIDE]) mkdirSync(dir, { recursive: true });
+  for (const dir of [DATA, WORK, OUTSIDE, PRODUCTS]) mkdirSync(dir, { recursive: true });
   const removed = scrubSecrets();
 
   const paths = resolvePaths(DATA);
@@ -248,6 +280,7 @@ async function start(): Promise<void> {
     mcpConnect: async () => { throw new Error('The preview server does not start MCP servers'); },
     browserDriver: { launch: async () => { throw new BrowserFailure('launch_failed', 'browser.launch_failed'); } },
     browserDisplay: false,
+    projectFolderExempt: [PRODUCTS],
   });
   await app.status.probeAll(app.config());
   seed(app);

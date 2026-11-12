@@ -27,11 +27,21 @@ export interface ConversationRow {
   source_task_id: string | null;
   // 子の担当（agent_run）の会話だけが持つ。親の実行の id。NULL はふつうの会話
   parent_run_id: string | null;
+  project_id: string | null;
 }
+
+export const LIST_NO_PROJECT_LIMIT = 100;
+export const LIST_PER_PROJECT_LIMIT = 30;
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
 export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean; message_count: number; archived_at: number | null };
 const ARCHIVED_AT = 'archived-at:';
+type ListRow = Omit<ConversationListItem, 'has_summary'> & { has_summary: number };
+const LIST_COLUMNS = `conversations.id, conversations.kind, conversations.title, conversations.archived, conversations.created_at, conversations.last_message_at, conversations.summary_upto,
+        conversations.model_id, conversations.effort, conversations.permission_mode, conversations.project_id,
+        (conversations.summary IS NOT NULL AND conversations.summary != '') AS has_summary,
+        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = conversations.id) AS message_count,
+        (SELECT CAST(value AS INTEGER) FROM kv WHERE key = '${ARCHIVED_AT}' || conversations.id) AS archived_at`;
 
 export interface StoredMessage {
   id: number;
@@ -84,12 +94,16 @@ export class Conversations {
   }
 
   // source: 記憶の振り返りの会話を作るとき、材料にした会話・タスク。作ると同時に覚える（作ってから振り返りの記録に結び付くまでの間にも、隠す決まりが効くように）
-  create(input: { title?: string; kind?: 'chat' | 'task'; id?: string; source?: ReviewSource; parentRunId?: string } = {}): ConversationRow {
+  create(input: { title?: string; kind?: 'chat' | 'task'; id?: string; source?: ReviewSource; parentRunId?: string; projectId?: string | null | undefined } = {}): ConversationRow {
     const now = this.now();
     const id = input.id ?? randomUUID();
-    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at, source_conversation_id, source_task_id, parent_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, input.kind ?? 'chat', input.title ?? null, now, now, input.source?.conversationId ?? null, input.source?.taskId ?? null, input.parentRunId ?? null);
+    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at, source_conversation_id, source_task_id, parent_run_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, input.kind ?? 'chat', input.title ?? null, now, now, input.source?.conversationId ?? null, input.source?.taskId ?? null, input.parentRunId ?? null, input.projectId ?? null);
     return this.get(id)!;
+  }
+
+  projectOf(id: string): string | null {
+    return (this.db.prepare('SELECT project_id FROM conversations WHERE id = ?').get(id) as { project_id: string | null } | undefined)?.project_id ?? null;
   }
 
   // 振り返りの会話の材料を覚え直す（前の回から続きを書くとき）
@@ -102,18 +116,42 @@ export class Conversations {
   }
 
   // チャットの会話の一覧（新しい順）。archived: true でアーカイブした会話。query は題の部分一致（大文字小文字を区別しない）
-  list(limit = 100, options: { archived?: boolean; query?: string } = {}): ConversationListItem[] {
+  list(limit = 100, options: { archived?: boolean; query?: string; project?: string | null | undefined } = {}): ConversationListItem[] {
+    const query = options.query?.trim();
+    const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
+    const project = options.project === undefined ? '' : options.project === null ? ' AND project_id IS NULL' : ' AND project_id = ?';
+    const rows = this.db.prepare(`
+      SELECT ${LIST_COLUMNS}
+      FROM conversations WHERE archived = ? AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}${project}
+      ORDER BY last_message_at DESC LIMIT ?
+    `).all(...[options.archived ? 1 : 0, ...(like ? [like] : []), ...(options.project ? [options.project] : []), limit]) as unknown as ListRow[];
+    return rows.map(row => ({ ...row, has_summary: row.has_summary === 1 }));
+  }
+
+  listByProject(options: { query?: string } = {}): { conversations: ConversationListItem[]; more: Record<string, number> } {
     const query = options.query?.trim();
     const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
     const rows = this.db.prepare(`
-      SELECT id, kind, title, archived, created_at, last_message_at, summary_upto, model_id, effort, permission_mode,
-        (summary IS NOT NULL AND summary != '') AS has_summary,
-        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = conversations.id) AS message_count,
-        (SELECT CAST(value AS INTEGER) FROM kv WHERE key = '${ARCHIVED_AT}' || conversations.id) AS archived_at
-      FROM conversations WHERE archived = ? AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}
-      ORDER BY last_message_at DESC LIMIT ?
-    `).all(...[options.archived ? 1 : 0, ...(like ? [like] : []), limit]) as unknown as Array<Omit<ConversationListItem, 'has_summary'> & { has_summary: number }>;
-    return rows.map(row => ({ ...row, has_summary: row.has_summary === 1 }));
+      WITH ranked AS (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY last_message_at DESC) AS rn, COUNT(*) OVER (PARTITION BY project_id) AS total
+        FROM conversations WHERE archived = 0 AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}
+          AND (project_id IS NULL OR project_id IN (SELECT id FROM projects WHERE archived_at IS NULL))
+      )
+      SELECT ${LIST_COLUMNS}, ranked.total AS total
+      FROM ranked JOIN conversations ON conversations.id = ranked.id
+      WHERE ranked.rn <= CASE WHEN conversations.project_id IS NULL THEN ${LIST_NO_PROJECT_LIMIT} ELSE ${LIST_PER_PROJECT_LIMIT} END
+      ORDER BY conversations.last_message_at DESC
+    `).all(...(like ? [like] : [])) as unknown as Array<ListRow & { total: number }>;
+    const more: Record<string, number> = {};
+    for (const row of rows) {
+      const over = row.total - (row.project_id === null ? LIST_NO_PROJECT_LIMIT : LIST_PER_PROJECT_LIMIT);
+      if (over > 0) more[row.project_id ?? 'none'] = over;
+    }
+    return { conversations: rows.map(({ total: _total, ...row }) => ({ ...row, has_summary: row.has_summary === 1 })), more };
+  }
+
+  countChats(project: string | null): number {
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM conversations WHERE archived = 0 AND kind = 'chat' AND project_id ${project === null ? 'IS NULL' : '= ?'}`).get(...(project === null ? [] : [project])) as { n: number }).n;
   }
 
   // 会話の要約（全文）と、どこまでの発言を要約したか・要約した発言の件数
@@ -125,11 +163,11 @@ export class Conversations {
   }
 
   // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）。消したばかりの会話は作り直さず、false を返す（見送ったことを記録する）
-  ensure(id: string): boolean {
+  ensure(id: string, options: { projectId?: string | null | undefined } = {}): boolean {
     if (this.get(id)) return true;
     if (this.#isDeleted(id)) { this.#log?.(`[WARN] Skipped writing to deleted conversation ${id} (the conversation is not re-created)`); return false; }
     const now = this.now();
-    this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, 'chat', ?, ?)`).run(id, now, now);
+    this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at, project_id) VALUES (?, 'chat', ?, ?, ?)`).run(id, now, now, options.projectId ?? null);
     return true;
   }
 

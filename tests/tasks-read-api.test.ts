@@ -95,7 +95,7 @@ test('GET /api/schedule: 止めたひな形のこれからの回は出さず、�
     [daily.id, Date.parse('2026-11-06T09:00:00Z'), 'planned'],
   ]);
   assert.ok(res.body.slots.every((x: any) => x.length === SCHEDULE_MIN_SLOT_MS), '動いた回が無ければ、決まった最小の長さ');
-  assert.deepEqual(res.body.templates, [{ taskId: daily.id, title: 'Daily', cron_text: 'Every day at 09:00', truncated: false }]);
+  assert.deepEqual(res.body.templates, [{ taskId: daily.id, projectId: null, title: 'Daily', cron_text: 'Every day at 09:00', truncated: false }]);
   assert.ok(!res.body.slots.some((x: any) => x.taskId === paused.id));
 
   const tooWide = await s.api(`/api/schedule?from=${from}&to=${from + 8 * DAY + 1}`);
@@ -212,8 +212,8 @@ test('GET /api/schedule: 動いた回の時刻は engine_runs の始まりと終
 
   const res = await s.api(`/api/schedule?from=${from}&to=${from + 2 * DAY}`);
   const past = res.body.slots.filter((x: any) => x.state === 'past');
-  assert.deepEqual(past, [{ taskId: template.id, runTaskId: child.id, title: 'Daily', start: run.started_at, length: 90_000, state: 'past' }]);
-  assert.deepEqual(res.body.slots.filter((x: any) => x.state === 'live'), [{ taskId: live.id, runTaskId: live.id, title: 'Live one', start: s.clock.now - 30_000, length: 30_000, state: 'live' }]);
+  assert.deepEqual(past, [{ taskId: template.id, projectId: null, runTaskId: child.id, title: 'Daily', start: run.started_at, length: 90_000, state: 'past' }]);
+  assert.deepEqual(res.body.slots.filter((x: any) => x.state === 'live'), [{ taskId: live.id, projectId: null, runTaskId: live.id, title: 'Live one', start: s.clock.now - 30_000, length: 30_000, state: 'live' }]);
   const planned = res.body.slots.filter((x: any) => x.state === 'planned');
   assert.ok(planned.length > 0 && planned.every((x: any) => x.taskId === template.id && x.length === 90_000), 'これからの回の長さは、最後の実行の長さ');
   assert.equal(res.body.ranTruncated, false);

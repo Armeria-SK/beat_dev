@@ -25,7 +25,10 @@ import { registerMcpRoutes } from './routes-mcp.ts';
 import { registerBrowserRoutes } from './routes-browser.ts';
 import { registerNotifyRoutes } from './routes-notify.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
-import { registerReviewRoutes, todayCount } from './routes-review.ts';
+import { projectFilterOf, projectProblem, registerProjectRoutes, usableProjectId } from './routes-projects.ts';
+import { ProjectError } from '../projects/store.ts';
+import { projectOfSql, projectWhere, registerReviewRoutes, todayCount } from './routes-review.ts';
+import type { RunRow } from '../db/runs.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
@@ -150,7 +153,14 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/conversations', ({ res, url }) => {
     const archived = ['1', 'true'].includes(url.searchParams.get('archived') ?? '');
     const query = (url.searchParams.get('q') ?? '').slice(0, 100);
-    sendJson(res, 200, { conversations: app.conversations.list(archived ? 200 : 100, { archived, ...(query.trim() ? { query } : {}) }) });
+    const search = query.trim() ? { query } : {};
+    if (archived) { sendJson(res, 200, { conversations: app.conversations.list(200, { archived, ...search }) }); return; }
+    const project = projectFilterOf(url);
+    if (project === undefined) { sendJson(res, 200, app.conversations.listByProject(search)); return; }
+    const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit') ?? 100)) || 100, 1), 200);
+    const conversations = app.conversations.list(limit, { ...search, project });
+    const over = query.trim() ? 0 : app.conversations.countChats(project) - conversations.length;
+    sendJson(res, 200, { conversations, more: over > 0 ? { [project ?? 'none']: over } : {} });
   });
   router.add('POST', '/api/conversations', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
@@ -162,12 +172,13 @@ export function createWebServer(app: App): WebServer {
     const current = app.conversations.get(id);
     if (!current) throw problem(404, 'not_found', 'conversation_missing');
     const body = requireObject(await readJson(req));
+    if (body.projectId !== undefined) throw projectProblem(400, new ProjectError('fixed_on_conversation'));
     const title = requireString(body, 'title', { optional: true, max: 200 });
     if (body.archived !== undefined && typeof body.archived !== 'boolean') {
       throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
     }
     const { choice, effortReset } = readChoice(app, body, current);
-    const changed = (change: 'renamed' | 'archived' | 'unarchived') => app.bus.publish({ type: 'conversation.changed', conversationId: id, change });
+    const changed = (change: 'renamed' | 'archived' | 'unarchived') => app.bus.publish({ type: 'conversation.changed', conversationId: id, change, projectId: current.project_id });
     if (title) { app.conversations.rename(id, title); changed('renamed'); }
     app.conversations.setChoice(id, choice);
     if (body.archived === true) { app.conversations.archive(id); changed('archived'); }
@@ -212,7 +223,7 @@ export function createWebServer(app: App): WebServer {
     const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
     app.approvals.forgetConversation(id);
     if (erased.files.failed.length) app.log(`[WARN] Some files could not be deleted after deleting the conversation: ${erased.files.failed.join(', ')}`);
-    app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted' });
+    app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted', projectId: conversation.project_id });
     sendJson(res, 200, { deleted: true, ...erased });
   });
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {
@@ -282,7 +293,9 @@ export function createWebServer(app: App): WebServer {
     // 画面が決めた id へ最初の発言を送ると、受け付けたときに会話ができる。作られる id は UUID の形だけ。タスク・振り返りの会話には、ここから送らせない
     if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
     if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
-    const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt });
+    const projectId = usableProjectId(app, body.projectId);
+    if (existing && projectId !== undefined && existing.project_id !== projectId) throw projectProblem(409, new ProjectError('mismatch'));
+    const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt, projectId });
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     // 実行中だったときは待たせた（queued）。今の実行が次の区切りで読む。取り消すときは pendingId
     // 考える深さを新しいモデルに無いので戻したときは、effortReset で知らせる（PATCH と同じ）
@@ -318,7 +331,11 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/runs/active', ({ res }) => sendJson(res, 200, { drafts: app.bus.drafts() }));
   router.add('GET', '/api/runs', ({ res, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
-    sendJson(res, 200, { runs: app.runs.recent(limit).map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs') });
+    const project = projectFilterOf(url);
+    const filter = projectWhere('engine_runs', project);
+    const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
+      .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null }>;
+    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project) });
   });
 
   // ── 承認とツールの記録 ──
@@ -337,9 +354,11 @@ export function createWebServer(app: App): WebServer {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
     // 自動承認が許した呼び出しには、判定役の短い理由 autoReason を添える（承認の記録 scope = 'auto' の reasons の最後の要素。ほかは null）。
     // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しには、許可したフォルダ grantFolder を添える（ほかは null）
-    const rows = app.db.prepare(`SELECT t.*, a.reasons AS approval_reasons, a.scope AS approval_scope, a.grant_folder AS grant_folder FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id
-      ORDER BY t.created_at DESC LIMIT ?`).all(limit) as Array<Record<string, unknown> & { approval_reasons: string | null; approval_scope: string | null; grant_folder: string | null }>;
-    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })), total: todayCount(app, 'tool_calls') });
+    const project = projectFilterOf(url);
+    const filter = projectWhere('tool_calls', project, 't');
+    const rows = app.db.prepare(`SELECT t.*, ${projectOfSql('tool_calls', 't')} AS project_id, a.reasons AS approval_reasons, a.scope AS approval_scope, a.grant_folder AS grant_folder FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id
+      WHERE 1 = 1${filter.sql} ORDER BY t.created_at DESC LIMIT ?`).all(...filter.args, limit) as Array<Record<string, unknown> & { approval_reasons: string | null; approval_scope: string | null; grant_folder: string | null }>;
+    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })), total: todayCount(app, 'tool_calls', undefined, project) });
   });
 
   // ── 記憶と履歴 ──
@@ -389,6 +408,8 @@ export function createWebServer(app: App): WebServer {
     sendJson(res, 200, { hits: searchHistory(app.db, q, { days, limit: 50 }) });
   });
 
+  // ── 製品・フォルダの一覧 ──
+  registerProjectRoutes(router, app);
   // ── タスク・ワーカー・通知・プロフィール ──
   registerTaskRoutes(router, app);
   // ── スキル・レビュー・好奇心・振り返り ──

@@ -1,0 +1,119 @@
+import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
+import { transaction } from '../db/database.ts';
+import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
+import { projectText, type ProjectMessageKey } from '../shared/messages/projects.ts';
+import { isInside, realish } from '../tools/hooks/scope.ts';
+import { folderGone } from './work-folder.ts';
+
+export const PROJECT_ID = /^[A-Za-z0-9_-]{6,64}$/u;
+export const PROJECT_NAME_MAX = 100;
+export const CHECK_COMMAND_MAX = 1000;
+const UNSAFE_TEXT = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}​-‍⁠﻿]/u;
+
+export type ScoutMode = 'off' | 'research' | 'fix';
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  root: string;
+  root_key: string;
+  check_command: string | null;
+  scout_mode: ScoutMode;
+  remotes: string;
+  archived_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export class ProjectError extends LocalizedError<ProjectMessageKey> {
+  constructor(code: ProjectMessageKey, params?: MessageParams) { super(projectText, code, params); }
+}
+
+export function projectName(raw: string): string {
+  const name = raw.trim();
+  if (!name || name.length > PROJECT_NAME_MAX || UNSAFE_TEXT.test(name)) throw new ProjectError('bad_name');
+  return name;
+}
+
+export function checkCommandOf(raw: string | null): string | null {
+  const command = raw?.trim() ?? '';
+  if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command)) throw new ProjectError('bad_check_command');
+  return command || null;
+}
+
+export function projectDir(projectsDir: string, id: string): string {
+  if (!PROJECT_ID.test(id)) throw new ProjectError('unknown');
+  const dir = join(projectsDir, id);
+  if (!isInside(realish(projectsDir), realish(dir))) throw new ProjectError('unknown');
+  return dir;
+}
+
+export const folderMissing = (project: Pick<ProjectRow, 'root' | 'root_key'>): boolean => folderGone(project.root, project.root_key);
+
+export function defaultProjectName(root: string): string {
+  const cleaned = (basename(root) || root).replace(new RegExp(UNSAFE_TEXT.source, 'gu'), '').trim().slice(0, PROJECT_NAME_MAX).trim();
+  return cleaned || 'Project';
+}
+
+const isRootConflict = (error: unknown): boolean => error instanceof Error && /UNIQUE constraint failed: projects\.root_key/u.test(error.message);
+
+export class ProjectStore {
+  readonly #db: DatabaseSync;
+  readonly #now: () => number;
+  readonly #dir: string;
+
+  constructor(db: DatabaseSync, projectsDir: string, now: () => number = Date.now) { this.#db = db; this.#dir = projectsDir; this.#now = now; }
+
+  get(id: string): ProjectRow | undefined {
+    if (!PROJECT_ID.test(id)) return undefined;
+    return this.#db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined;
+  }
+
+  list(options: { archived?: boolean } = {}): ProjectRow[] {
+    return this.#db.prepare(`SELECT * FROM projects WHERE archived_at IS ${options.archived ? 'NOT NULL' : 'NULL'} ORDER BY created_at, rowid`).all() as unknown as ProjectRow[];
+  }
+
+  create(input: { name: string; root: string; rootKey: string; checkCommand: string | null }): ProjectRow {
+    const id = randomUUID();
+    const now = this.#now();
+    try {
+      transaction(this.#db, () => {
+        this.#db.prepare('INSERT INTO projects (id, name, root, root_key, check_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(id, input.name, input.root, input.rootKey, input.checkCommand, now, now);
+        mkdirSync(projectDir(this.#dir, id), { recursive: true });
+      });
+    } catch (error) {
+      if (isRootConflict(error)) throw new ProjectError('root_in_use');
+      throw error;
+    }
+    return this.get(id)!;
+  }
+
+  update(id: string, patch: { name?: string | undefined; checkCommand?: string | null | undefined; archived?: boolean | undefined }): ProjectRow {
+    const current = this.get(id);
+    if (!current) throw new ProjectError('unknown');
+    const restoring = patch.archived === false && current.archived_at !== null;
+    if (restoring && this.#db.prepare('SELECT 1 FROM projects WHERE root_key = ? AND archived_at IS NULL AND id != ?').get(current.root_key, id)) throw new ProjectError('root_in_use');
+    const now = this.#now();
+    const archivedAt = patch.archived === undefined ? current.archived_at : patch.archived ? current.archived_at ?? now : null;
+    try {
+      this.#db.prepare('UPDATE projects SET name = ?, check_command = ?, archived_at = ?, updated_at = ? WHERE id = ?')
+        .run(patch.name ?? current.name, patch.checkCommand === undefined ? current.check_command : patch.checkCommand, archivedAt, now, id);
+    } catch (error) {
+      if (isRootConflict(error)) throw new ProjectError('root_in_use');
+      throw error;
+    }
+    return this.get(id)!;
+  }
+
+  counts(id: string): { proposals: number; questions: number; lastActivityAt: number | null } {
+    const tasks = this.#db.prepare(`SELECT COALESCE(SUM(status = 'inbox'), 0) AS proposals, COALESCE(SUM(status = 'waiting' AND waiting_kind = 'question'), 0) AS questions, MAX(updated_at) AS last
+      FROM tasks WHERE project_id = ?`).get(id) as { proposals: number; questions: number; last: number | null };
+    const chats = this.#db.prepare('SELECT MAX(last_message_at) AS last FROM conversations WHERE project_id = ?').get(id) as { last: number | null };
+    const last = Math.max(tasks.last ?? 0, chats.last ?? 0);
+    return { proposals: tasks.proposals, questions: tasks.questions, lastActivityAt: last > 0 ? last : null };
+  }
+}

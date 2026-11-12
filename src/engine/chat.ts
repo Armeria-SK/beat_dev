@@ -198,10 +198,10 @@ export class ChatEngine {
 
   // 実行中の会話に送った発言は、新しい実行にせず待たせる（待ちの発言）。今の実行が次の区切り（道具の結果を返して、次にモデルを呼ぶ前）に来たら
   // 履歴に入れ、実行が先に終わったら、その発言で新しい実行を始める。interrupt なら、今の実行を止めて、待っていた発言と一緒に新しい実行を始める
-  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean } = {}): SendOutcome {
+  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean; projectId?: string | undefined } = {}): SendOutcome {
     const item: ChatItem = { content: text, images, attachments };
     const running = this.#byConversation.get(conversationId);
-    if (running === undefined) return this.#beginChat(conversationId, [item], choice);
+    if (running === undefined) return this.#beginChat(conversationId, [item], choice, options.projectId);
     if (this.#active.get(running)?.kind !== 'chat') return this.#busy('send.busy_chat');
     const queue = this.#pending.get(conversationId) ?? [];
     if (queue.length >= MAX_PENDING_MESSAGES) {
@@ -237,7 +237,7 @@ export class ChatEngine {
   }
 
   // 発言を保存して、チャットの実行を始める（1 つ以上の発言を順に保存し、1 つの実行で読ませる）。使えるモデルが無ければ、何も保存せずに断る
-  #beginChat(conversationId: string, items: ChatItem[], choice: SendChoice): SendOutcome {
+  #beginChat(conversationId: string, items: ChatItem[], choice: SendChoice, projectId?: string): SendOutcome {
     const existing = this.#d.conversations.get(conversationId);
     const pinned = choice.modelId !== undefined ? choice.modelId : existing?.model_id ?? null;
     const effort = choice.effort !== undefined ? choice.effort : existing?.effort ?? null;
@@ -247,6 +247,7 @@ export class ChatEngine {
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     // ユーザーが同じ id へ新しく送ったときは、消したばかりの会話の覚えを外す（動いていた実行の遅れた書き込みだけを見送るため）
     this.#d.conversations.reopen(conversationId);
+    this.#d.conversations.ensure(conversationId, { projectId });
     if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
@@ -997,7 +998,7 @@ export class ChatEngine {
 
     const title = plainLine(input.title ?? input.task, AGENT_CHILD_TITLE_MAX) || plainLine(input.task, AGENT_CHILD_TITLE_MAX) || 'agent';
     const childRunId = randomUUID();
-    const child = d.conversations.create({ title, kind: 'task', source: { conversationId: parent.conversationId }, parentRunId: parent.runId });
+    const child = d.conversations.create({ title, kind: 'task', source: { conversationId: parent.conversationId }, parentRunId: parent.runId, projectId: d.conversations.projectOf(parent.conversationId) });
     const saved = d.conversations.append(child.id, { role: 'user', content: `${engineText(language, 'agent.preamble')}\n\n${input.task}` });
     d.bus.publish({ type: 'message.saved', runId: childRunId, conversationId: child.id, messageId: saved.id, role: 'user' });
     // 親が外から読んでいたら、子もその状態で始める。外を読まずに許可フォルダの外を読んだ印も引き継ぐ
