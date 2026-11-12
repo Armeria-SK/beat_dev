@@ -9,6 +9,9 @@
 .bt-app__main > .ui-pinned { flex: none; margin-bottom: var(--space-3); max-height: 40vh; overflow-y: auto; }
 .ui-owner { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-owner__files { display: block; margin-top: var(--space-1); }
+.ui-msg__meta { display: block; margin-top: var(--space-1); text-align: right; }
+.ui-reply__foot { display: flex; align-items: center; gap: var(--space-2); min-height: 28px; }
+.ui-thinking { margin-left: var(--space-2); }
 .ui-reply { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
 .ui-reply > .ui-md { align-self: stretch; }
 .ui-copy { opacity: 0; }
@@ -70,6 +73,7 @@
 .ui-pop__item:disabled b { color: var(--ink-mute); }
 .ui-chip { border: 0; cursor: pointer; }
 .ui-chip:hover { color: var(--ink); }
+.bt-icon.ui-pill__glyph { width: 12px; height: 12px; }
 .ui-toasts { position: fixed; right: var(--space-5); bottom: max(var(--space-5), calc(var(--ui-toast-lift, 0px) + var(--space-2))); z-index: 50; pointer-events: none; }
 .ui-toasts .bt-toast { pointer-events: auto; }
 .ui-toasts .bt-toast .bt-btn { flex: none; align-self: center; }

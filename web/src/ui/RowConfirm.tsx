@@ -3,25 +3,25 @@ import { useT } from '../i18n/index.ts';
 import { Button } from './parts.tsx';
 
 export function RowConfirm({ warn, note, action, busy, onConfirm, onKeep }: {
-  warn: string; note?: string | undefined; action: string; busy: boolean; onConfirm: () => void; onKeep: () => void;
+  warn: string; note?: string | undefined; action: string; busy: boolean; onConfirm: () => void; onKeep: (refocus: boolean) => void;
 }) {
   const t = useT();
   const box = useRef<HTMLDivElement>(null);
   const keep = useRef(onKeep);
   keep.current = onKeep;
   useEffect(() => {
-    const away = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) keep.current(); };
+    const away = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) keep.current(false); };
     document.addEventListener('pointerdown', away, true);
     return () => document.removeEventListener('pointerdown', away, true);
   }, []);
   return (
     <div ref={box} className="ui-confirm" role="group" aria-label={warn}
-      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onKeep(); } }}>
+      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onKeep(true); } }}>
       <span className="bt-label bt-del">{warn}</span>
       {note && <span className="bt-meta ui-confirm__note">{note}</span>}
       <span className="ui-confirm__buttons">
         <Button variant="danger" small disabled={busy} onClick={onConfirm}>{action}</Button>
-        <Button variant="ghost" small autoFocus onClick={onKeep}>{t('ui.lib.keep')}</Button>
+        <Button variant="ghost" small autoFocus onClick={() => onKeep(true)}>{t('ui.lib.keep')}</Button>
       </span>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { api, ApiError, type Book, type BookView, type MemoryContext, type MemoryEvent, type MemoryItem } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatNumber, formatRelative, useT } from '../../i18n/index.ts';
@@ -6,7 +6,7 @@ import { Markdown } from '../../Markdown.tsx';
 import { memoryRef } from '../../memory-page.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
-import { latestEventByMemory, memoryHistory, memoryStamp, type MemoryVersion } from '../library.ts';
+import { latestEventByMemory, memoryHistory, memoryStamp, undoDeletes, type MemoryVersion } from '../library.ts';
 import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
@@ -23,7 +23,6 @@ const MAX = 600;
 
 const failText = (error: unknown, t: T): string => (error instanceof ApiError ? error.message : t('ui.memory.toast.failed'));
 const whoText = (t: T, who: 'you' | 'beat'): string => t(who === 'you' ? 'ui.lib.you' : 'ui.lib.beat');
-const onRowKey = (run: () => void) => (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); run(); } };
 
 function undoAction(t: T, eventId: number, reload: () => void) {
   return {
@@ -35,15 +34,16 @@ function undoAction(t: T, eventId: number, reload: () => void) {
   };
 }
 
-function History({ item, events, now, busy, onRun }: {
-  item: MemoryItem; events: MemoryEvent[] | null; now: number; busy: boolean;
+function History({ item, events, failed, now, busy, onRun }: {
+  item: MemoryItem; events: MemoryEvent[] | null; failed: boolean; now: number; busy: boolean;
   onRun: (version: MemoryVersion) => void;
 }) {
   const t = useT();
   const versions = useMemo(() => (events ? memoryHistory(events, item.content) : []), [events, item.content]);
   return (
     <div className="bt-section ui-lib__history">
-      <div className="bt-section__head"><span className="bt-label">{t('ui.lib.history')}</span><span className="bt-meta">{t('ui.lib.versions', versions.length)}</span></div>
+      <div className="bt-section__head"><span className="bt-label">{t('ui.lib.history')}</span>{events && <span className="bt-meta">{t('ui.lib.versions', versions.length)}</span>}</div>
+      {failed && <p className="bt-meta ui-danger" role="alert">{t('ui.memory.historyFailed')}</p>}
       {versions.length > 0 && (
         <ul className="bt-list">
           {versions.map(version => {
@@ -78,6 +78,7 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
   const [mode, setMode] = useState<'read' | 'edit'>('read');
   const [draft, setDraft] = useState(item.content);
   const [events, setEvents] = useState<MemoryEvent[] | null>(null);
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
@@ -86,7 +87,8 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
 
   useEffect(() => {
     const ticket = loads.current.begin();
-    void api.memoryEvents(item.id).then(r => { if (loads.current.isCurrent(ticket)) setEvents(r.events); }).catch(() => undefined);
+    void api.memoryEvents(item.id).then(r => { if (loads.current.isCurrent(ticket)) { setEvents(r.events); setHistoryFailed(false); } })
+      .catch(() => { if (loads.current.isCurrent(ticket)) setHistoryFailed(true); });
   }, [item.id, item.updated_at, revision]);
   useEffect(() => { if (mode === 'read') setDraft(item.content); }, [item.content, mode]);
 
@@ -104,6 +106,7 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
     toast({ kind: 'memory', icon: 'check', title: t('ui.memory.toast.saved'), body: result.memory.content, action: undoAction(t, result.eventId, reload) });
   });
   const restore = (version: MemoryVersion) => void run(async () => {
+    if (undoDeletes(version)) { setConfirming(true); return; }
     if (version.action === 'undo') {
       await api.undoMemory(version.event.id);
       reload();
@@ -136,8 +139,8 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
           {!confirming && <Button ref={deleteButton} small variant="ghost" disabled={busy} onClick={() => setConfirming(true)}>{t('ui.lib.delete')}</Button>}
         </div>
         {confirming && (
-          <RowConfirm warn={t('ui.lib.deleteWarn')} note={t('ui.memory.deleteNote')} action={t('ui.lib.delete')} busy={busy}
-            onConfirm={remove} onKeep={() => { setConfirming(false); requestAnimationFrame(() => deleteButton.current?.focus()); }} />
+          <RowConfirm warn={t('ui.memory.deleteWarn')} note={t('ui.memory.deleteNote')} action={t('ui.lib.delete')} busy={busy}
+            onConfirm={remove} onKeep={refocus => { setConfirming(false); if (refocus) requestAnimationFrame(() => deleteButton.current?.focus()); }} />
         )}
         {mode === 'edit' ? (
           <textarea className="bt-doc bt-doc--edit ui-lib__editor" autoFocus value={draft} maxLength={MAX} rows={5} aria-label={t('ui.memory.field')}
@@ -151,7 +154,7 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
         )}
         {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}
         {item.source_conversation_id && <a className="bt-tool__link bt-meta" href={routeHash({ view: 'chat', id: item.source_conversation_id })}>{t('ui.memory.source')}</a>}
-        <History item={item} events={events} now={now} busy={busy} onRun={restore} />
+        <History item={item} events={events} failed={historyFailed} now={now} busy={busy} onRun={restore} />
       </div>
     </section>
   );
@@ -252,9 +255,9 @@ export function Memory({ revision }: { revision: number }) {
               const active = !creating && current?.id === item.id;
               const pick = () => { setCreating(false); setSelected(item.id); };
               return (
-                <li key={item.id} className={`bt-row bt-row--link${active ? ' is-active' : ''}`} tabIndex={0} aria-current={active ? 'true' : undefined} onClick={pick} onKeyDown={onRowKey(pick)}>
+                <li key={item.id} className={`bt-row bt-row--link${active ? ' is-active' : ''}`} onClick={pick}>
                   <div className="bt-row__main">
-                    <span className="bt-row__title ui-lib__title">{item.content}</span>
+                    <button type="button" className="bt-row__title ui-lib__title ui-rowbtn" aria-current={active ? 'true' : undefined}>{item.content}</button>
                     <span className="bt-row__sub bt-meta" title={formatDateTime(stamp.at, 'full')}>
                       {t(stamp.edited ? 'ui.memory.edited' : 'ui.memory.saved', whoText(t, stamp.who), formatRelative(stamp.at, now))}
                     </span>

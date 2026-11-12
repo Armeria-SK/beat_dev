@@ -1,16 +1,15 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { api, ApiError, type SkillDraft, type SkillSummary, type SkillVersion, type ToolInfo } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
-import { accessText } from '../settings/access-text.tsx';
 import type { Access } from '../../settings/access.ts';
 import { findDraft, orderTools, toolLook } from '../../skills-meta.ts';
 import { lineDelta } from '../../../../src/shared/line-delta.ts';
 import { TOOL_POLICIES, type ToolPolicy } from '../../../../src/tools/tool-policy.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
-import { skillHistory, toolChoice, toolCounts, toolDecision, type SkillChange } from '../library.ts';
+import { ROW_LEAVE_MS, skillHistory, toolCounts, toolDecision, type SkillChange } from '../library.ts';
 import { Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash, type SkillTarget } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
@@ -23,7 +22,6 @@ const POLICY_KEY = { allow: 'ui.tools.allow', ask: 'ui.tools.ask', block: 'ui.to
 const ASKS_KEY = { sends: 'tools.mcp.asks.sends', removes: 'tools.mcp.asks.removes', write: 'tools.mcp.asks.write' } as const;
 
 const failText = (error: unknown, t: T): string => (error instanceof ApiError ? error.message : t('ui.skills.toast.failed'));
-const onRowKey = (run: () => void) => (e: KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); run(); } };
 const skillHash = (name: string | null): string => routeHash(name ? { view: 'skills', target: { kind: 'skill', name } } : { view: 'skills' });
 const draftHash = (name: string | null): string => routeHash(name ? { view: 'skills', target: { kind: 'draft', name } } : { view: 'skills' });
 
@@ -83,7 +81,7 @@ function NewSkill({ existing, onSaved, onClose }: { existing: readonly string[];
   );
 }
 
-function SkillDetail({ name, revision, now, onChanged }: { name: string; revision: number; now: number; onChanged: () => void }) {
+function SkillDetail({ name, revision, now, onChanged }: { name: string; revision: string; now: number; onChanged: () => void }) {
   const t = useT();
   const [skill, setSkill] = useState<Skill | null>(null);
   const [versions, setVersions] = useState<SkillVersion[] | null>(null);
@@ -166,7 +164,7 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
         </div>
         {confirming && (
           <RowConfirm warn={t('ui.lib.deleteWarn')} note={t('ui.skills.deleteNote')} action={t('ui.lib.delete')} busy={busy}
-            onConfirm={remove} onKeep={() => { setConfirming(false); requestAnimationFrame(() => deleteButton.current?.focus()); }} />
+            onConfirm={remove} onKeep={refocus => { setConfirming(false); if (refocus) requestAnimationFrame(() => deleteButton.current?.focus()); }} />
         )}
         {dropping && (
           <RowConfirm warn={t('ui.set.leave.title')} action={t('ui.set.leave.discard')} busy={busy}
@@ -224,25 +222,27 @@ function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open: boole
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
+  const [leaving, setLeaving] = useState(false);
   const discardButton = useRef<HTMLButtonElement>(null);
   const delta = draft.current ? lineDelta(draft.current.body, draft.body) : null;
   const decide = async (register: boolean) => {
-    if (busy) return;
+    if (busy || leaving) return;
     setBusy(true); setError('');
     try {
       if (register) await api.approveDraft(draft.id); else await api.rejectDraft(draft.id);
       setConfirming(false);
+      setLeaving(true);
       toast({ icon: register ? 'check' : 'x', title: t(register ? 'ui.skills.toast.registered' : 'ui.skills.toast.discarded'), body: draft.name });
       if (open) location.replace(register ? skillHash(draft.name) : draftHash(null));
-      onDone();
+      setTimeout(onDone, ROW_LEAVE_MS);
     } catch (failure) { setError(failText(failure, t)); } finally { setBusy(false); }
   };
   const toggle = () => { location.hash = open ? draftHash(null) : draftHash(draft.name); };
   return (
     <>
-      <li className={`bt-row bt-row--link ui-lib__draft${open ? ' is-active' : ''}`} tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={onRowKey(toggle)}>
+      <li className={`bt-row bt-row--link ui-lib__draft${open ? ' is-active' : ''}${leaving ? ' is-leaving' : ''}`} onClick={toggle}>
         <div className="bt-row__main">
-          <span className="bt-row__title"><code>{draft.name}</code></span>
+          <button type="button" className="bt-row__title ui-rowbtn" aria-expanded={open}><code>{draft.name}</code></button>
           <span className="bt-row__sub bt-meta" title={formatDateTime(draft.created_at, 'full')}>
             {t('ui.skills.drafted', formatRelative(draft.created_at, now))} · {t(draft.current ? 'ui.skills.draftUpdate' : 'ui.skills.draftNew')}
             {delta && <Delta {...delta} />}
@@ -251,12 +251,12 @@ function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open: boole
         {confirming ? (
           <div className="ui-lib__confirmcell" onClick={e => e.stopPropagation()}>
             <RowConfirm warn={t('ui.skills.discardWarn')} note={t('ui.skills.discardNote')} action={t('ui.skills.discard')} busy={busy}
-              onConfirm={() => void decide(false)} onKeep={() => { setConfirming(false); requestAnimationFrame(() => discardButton.current?.focus()); }} />
+              onConfirm={() => void decide(false)} onKeep={refocus => { setConfirming(false); if (refocus) requestAnimationFrame(() => discardButton.current?.focus()); }} />
           </div>
         ) : (
           <div className="bt-row__end" onClick={e => e.stopPropagation()}>
-            <Button variant="primary" small disabled={busy} onClick={() => void decide(true)}>{t('ui.skills.register')}</Button>
-            <Button ref={discardButton} variant="ghost" small disabled={busy} onClick={() => setConfirming(true)}>{t('ui.skills.discard')}</Button>
+            <Button variant="primary" small disabled={busy || leaving} onClick={() => void decide(true)}>{t('ui.skills.register')}</Button>
+            <Button ref={discardButton} variant="ghost" small disabled={busy || leaving} onClick={() => setConfirming(true)}>{t('ui.skills.discard')}</Button>
           </div>
         )}
       </li>
@@ -277,6 +277,8 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ tool: ToolInfo; to: ToolPolicy; item: Access } | null>(null);
   const counts = toolCounts(tools);
+  const focusPolicy = (name: string, to: ToolPolicy) => requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-tool="${CSS.escape(name)}"] [data-policy="${to}"]`)?.focus());
+  const cancel = (asking: { tool: ToolInfo; to: ToolPolicy }) => { setConfirm(null); focusPolicy(asking.tool.name, asking.to); };
   const apply = async (tool: ToolInfo, to: ToolPolicy, confirmed: Access | null) => {
     setConfirm(null);
     setBusy(tool.name);
@@ -293,10 +295,10 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
     } catch (failure) {
       toast({ icon: 'alert', title: t('ui.tools.toast.failed'), body: failText(failure, t) });
       onFailed();
-    } finally { setBusy(null); }
+    } finally { setBusy(null); if (confirmed) focusPolicy(tool.name, to); }
   };
   const choose = (tool: ToolInfo, to: ToolPolicy) => {
-    if (busy || toolChoice(tool, to).kind === 'none') return;
+    if (busy || !tool.configurable) return;
     void apply(tool, to, null);
   };
   return (
@@ -324,19 +326,19 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
               <div className="bt-row__end">
                 <div className="bt-seg" role="group" aria-label={t('ui.tools.policy', tool.name)}>
                   {TOOL_POLICIES.map(policy => (
-                    <button key={policy} type="button" className="bt-seg__opt" aria-pressed={tool.policy === policy}
+                    <button key={policy} type="button" className="bt-seg__opt" data-policy={policy} aria-pressed={tool.policy === policy}
                       disabled={!tool.configurable || busy !== null || asking !== null} onClick={() => choose(tool, policy)}>{t(POLICY_KEY[policy])}</button>
                   ))}
                 </div>
               </div>
               {asking && (
                 <div className="ui-confirm ui-lib__widen" role="alertdialog" aria-label={t('ui.tools.confirm')}
-                  onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setConfirm(null); } }}>
+                  onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(asking); } }}>
                   <span className="bt-label">{t('ui.tools.confirm')}</span>
-                  <span className="bt-meta ui-confirm__note">{accessText(t, asking.item)}</span>
+                  <span className="bt-meta ui-confirm__note">{t('ui.tools.loosen', asking.tool.name, t(POLICY_KEY[asking.tool.policy]), t(POLICY_KEY[asking.to]))}</span>
                   <span className="ui-confirm__buttons">
                     <Button variant="primary" small disabled={busy !== null} onClick={() => void apply(asking.tool, asking.to, asking.item)}>{t('ui.tools.confirmOk')}</Button>
-                    <Button variant="ghost" small autoFocus onClick={() => setConfirm(null)}>{t('ui.cancel')}</Button>
+                    <Button variant="ghost" small autoFocus onClick={() => cancel(asking)}>{t('ui.cancel')}</Button>
                   </span>
                 </div>
               )}
@@ -349,7 +351,7 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
   );
 }
 
-export interface SkillsProps { target?: SkillTarget | undefined; revision: number; running: boolean; onDrafts: (count: number) => void }
+export interface SkillsProps { target?: SkillTarget | undefined; revision: string; running: boolean; onDrafts: (count: number) => void }
 
 export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
   const t = useT();
@@ -421,10 +423,10 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
                   const toggle = () => { location.hash = skillHash(open ? null : skill.name); };
                   return (
                     <Fragment key={skill.name}>
-                      <li className={`bt-row bt-row--link${open ? ' is-active' : ''}`} tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={onRowKey(toggle)}>
+                      <li className={`bt-row bt-row--link${open ? ' is-active' : ''}`} onClick={toggle}>
                         <Icon name="file" />
                         <div className="bt-row__main">
-                          <span className="bt-row__title"><code>{skill.name}</code></span>
+                          <button type="button" className="bt-row__title ui-rowbtn" aria-expanded={open}><code>{skill.name}</code></button>
                           <span className="bt-row__sub bt-meta">
                             {skill.description} · {skill.uses > 0 ? t('ui.skills.used', skill.uses) : t('ui.skills.unused')}
                             {!skill.registered && <> · {t('ui.skills.unregisteredNote')}</>}
@@ -433,7 +435,7 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
                         {!skill.registered && <div className="bt-row__end"><span className="bt-tag">{t('ui.skills.unregistered')}</span></div>}
                         <Icon name={open ? 'chevD' : 'chevR'} />
                       </li>
-                      {open && <li className="bt-row ui-lib__open"><SkillDetail name={skill.name} revision={revision + tick} now={now} onChanged={reload} /></li>}
+                      {open && <li className="bt-row ui-lib__open"><SkillDetail name={skill.name} revision={`${revision}:${tick}`} now={now} onChanged={reload} /></li>}
                     </Fragment>
                   );
                 })}

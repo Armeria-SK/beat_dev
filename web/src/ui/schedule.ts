@@ -33,6 +33,18 @@ export function splitSchedule(input: { repeating: readonly RepeatingTask[]; acti
   return { repeating, timed };
 }
 
+export const runNowKind = (state: RepeatState): 'run' | 'restart' | null => (state === 'active' ? 'run' : state === 'ended' ? 'restart' : null);
+
+export const confirmStale = (confirming: string | null, rows: ReadonlyArray<{ task: Pick<Task, 'id'>; blocked: DeleteBlock | null }>): boolean =>
+  confirming !== null && rows.some(row => row.task.id === confirming && row.blocked !== null);
+
+export const RELOAD_DELAY_MS = 150;
+export const RELOAD_FLOOR_MS = 2000;
+
+export const reloadWait = (lastAt: number, now: number): number => Math.max(RELOAD_DELAY_MS, lastAt + RELOAD_FLOOR_MS - now);
+
+export const otherZone = (taskZone: string | null | undefined, current: string): string | null => (taskZone && taskZone !== current ? taskZone : null);
+
 const DOW = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const two = (text: string): string => text.padStart(2, '0');
 const num = (text: string, max: number): boolean => /^\d{1,2}$/u.test(text) && Number(text) <= max;

@@ -114,6 +114,7 @@ export interface Task {
   conversation_id: string | null; result_summary: string | null; attempts: number; max_attempts: number;
   created_at: number; updated_at: number; completed_at: number | null;
   cancelled_from?: TaskStatus | null;
+  timezone?: string | null;
 }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
@@ -228,7 +229,7 @@ export const api = {
   decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
   send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean } = {}) =>
-    call<{ runId: string; queued?: boolean; pendingId?: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}) }) }),
+    call<{ runId: string; queued?: boolean; pendingId?: string; effortReset?: boolean }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}) }) }),
   chooseMode: (id: string, permissionMode: PermissionMode) => call<{ conversation: Conversation }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ permissionMode }) }),
   chooseModel: (id: string, choice: ModelChoice) => call<{ conversation: Conversation; effortReset?: boolean }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(choice) }),
   upload: async (file: File) => {

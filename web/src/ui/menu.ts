@@ -1,3 +1,5 @@
+export const menuLeft = (to: unknown, inside: boolean, opener: unknown): boolean => to !== null && to !== undefined && !inside && to !== opener;
+
 export function menuStep(current: number, count: number, key: string): number | null {
   if (count === 0) return null;
   switch (key) {

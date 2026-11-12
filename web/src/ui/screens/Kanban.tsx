@@ -4,9 +4,9 @@ import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, formatElapsed, formatRelative, timezoneLabel, useT } from '../../i18n/index.ts';
 import { buildNewTask, emptyDraft, PRIORITIES, type TaskDraft } from '../../task-form.ts';
 import { plainLine } from '../../task-meta.ts';
-import { useNow } from '../hooks.ts';
+import { useMedia, useNow } from '../hooks.ts';
 import {
-  buildBoard, KANBAN_PAGE, mergeFinished, pagesToReload, RUNS_WINDOW, sessionCards, stepPercent,
+  buildBoard, COLUMN_TABS_MEDIA, KANBAN_PAGE, mergeFinished, pagesToReload, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
   type Card, type ColumnId, type SessionCard, type Step, type TaskCard,
 } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
@@ -189,6 +189,7 @@ export function Kanban({ conversations, drafts, checklists, revision }: KanbanPr
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const [moreBusy, setMoreBusy] = useState(false);
   const [tab, setTab] = useState<ColumnId>('proposed');
+  const tabbed = useMedia(COLUMN_TABS_MEDIA);
   const loads = useRef(latestOnly());
   const wanted = useRef(KANBAN_PAGE);
   const first = useRef(true);
@@ -267,7 +268,16 @@ export function Kanban({ conversations, drafts, checklists, revision }: KanbanPr
         <>
           <div className="bt-tabs ui-coltabs" role="tablist" aria-label={t('ui.kanban.columns')}>
             {board.columns.map(column => (
-              <button key={column.id} type="button" role="tab" className="bt-tab" aria-selected={tab === column.id} onClick={() => setTab(column.id)}>
+              <button key={column.id} type="button" role="tab" className="bt-tab" id={`ui-coltab-${column.id}`} aria-controls={`ui-col-${column.id}`}
+                aria-selected={tab === column.id} tabIndex={tab === column.id ? 0 : -1} onClick={() => setTab(column.id)}
+                onKeyDown={e => {
+                  const to = tabStep(board.columns.findIndex(c => c.id === tab), board.columns.length, e.key);
+                  const target = to === null ? undefined : board.columns[to];
+                  if (!target) return;
+                  e.preventDefault();
+                  setTab(target.id);
+                  document.getElementById(`ui-coltab-${target.id}`)?.focus();
+                }}>
                 {columnName(t, column.id)}<span className={`bt-count${column.accent ? '' : ' bt-count--quiet'}`}><span className="bt-count__n">{countText(column.cards.length)}</span></span>
               </button>
             ))}
@@ -276,7 +286,7 @@ export function Kanban({ conversations, drafts, checklists, revision }: KanbanPr
             {board.columns.map(column => {
               const firstTask = column.cards.findIndex(card => card.kind === 'task' && !(card.task.run_at !== null && card.task.run_at > now));
               return (
-                <section key={column.id} className={`bt-col${tab === column.id ? '' : ' ui-col--off'}`} aria-label={columnName(t, column.id)}>
+                <section key={column.id} id={`ui-col-${column.id}`} className={`bt-col${tab === column.id ? '' : ' ui-col--off'}`} aria-label={columnName(t, column.id)} {...(tabbed ? { role: 'tabpanel' } : {})}>
                   <div className="bt-col__head">
                     <span className="bt-label">{columnName(t, column.id)}</span>
                     <span className={`bt-count${column.accent ? '' : ' bt-count--quiet'}`} aria-label={t('ui.kanban.count', column.cards.length)}><span className="bt-count__n">{countText(column.cards.length)}</span></span>

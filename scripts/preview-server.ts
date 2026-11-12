@@ -1,4 +1,4 @@
-// Throwaway preview server for screen checks (plans/beat/steps/p1-ui.md,"試しのサーバー").
+// Throwaway preview server for screen checks (plans/beat/steps/p1-ui.md, "試しのサーバー").
 // node scripts/preview-server.ts — takes no arguments. Port 4797, data under <product>/tmp/p1-preview only.
 import { existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';

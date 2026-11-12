@@ -6,6 +6,7 @@
 .ui-lib__usage { margin: 0; }
 .ui-lib__split > .bt-list { max-height: calc(100vh - 220px); overflow-y: auto; }
 .ui-lib__title { font-weight: 400; }
+.ui-rowbtn { appearance: none; width: 100%; padding: 0; border: 0; background: none; font-family: inherit; font-size: inherit; line-height: inherit; text-align: left; cursor: pointer; }
 .ui-lib__pane { min-width: 0; }
 .ui-lib__pane .bt-pane__body { overflow: visible; }
 .ui-lib__pane .bt-doc { overflow-wrap: anywhere; }

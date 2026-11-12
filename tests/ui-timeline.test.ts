@@ -79,6 +79,14 @@ test('ui/timeline: 行は "Tasks"（ひな形でないタスクの回）が先�
   ]);
 });
 
+test('ui/timeline: 閉じたひな形の行は ended と分かり、止めただけの行・動いている行には付かない', () => {
+  const rows = buildRows({
+    slots: [slot('r3', 10 * HOUR, HOUR)],
+    streams: [stream('r1', { ended: false }), stream('r2', { paused: true }), stream('r3', { paused: true, ended: true })], tasksTitle: 'Tasks', range: 'day', window: DAY_WINDOW, now: 6 * HOUR,
+  });
+  assert.deepEqual(rows.slice(1).map(row => [row.id, row.paused, row.ended === true, row.bars.length]), [['r1', false, false, 0], ['r2', true, false, 0], ['r3', true, true, 0]]);
+});
+
 test('ui/timeline: 打ち切られたひな形（毎分の決まりなど）は、これからの枠を並べずに、今から範囲の終わりまでの 1 本の帯で描き、決まりの文を持つ', () => {
   const minute = 60_000;
   const planned = Array.from({ length: 200 }, (_, i) => slot('every', 6 * HOUR + (i + 1) * minute, 30_000));

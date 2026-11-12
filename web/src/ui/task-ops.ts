@@ -84,6 +84,8 @@ export async function answerTaskOp(task: Pick<Task, 'id' | 'title'>, text: strin
   }
 }
 
+export const editOverwrites = (opened: string, current: string, draft: string): boolean => current !== opened && current !== draft;
+
 export interface OpButton { op: TaskOp; primary: boolean }
 
 export function taskButtons(status: Task['status'], actions: ReadonlyArray<{ action: SheetAction; primary: boolean }>, runningHere: boolean): OpButton[] {

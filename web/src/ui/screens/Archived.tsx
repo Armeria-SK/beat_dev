@@ -4,7 +4,7 @@ import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
-import { archivedLine } from '../library.ts';
+import { archivedLine, archivedNothing } from '../library.ts';
 import { Button, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
@@ -17,6 +17,7 @@ export function Archived({ revision }: { revision: number }) {
   const t = useT();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Conversation[] | null>(null);
+  const [loadedFor, setLoadedFor] = useState('');
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -30,7 +31,7 @@ export function Archived({ revision }: { revision: number }) {
     try {
       const result = await api.archivedConversations(q);
       if (!loads.current.isCurrent(ticket)) return;
-      setItems(result.conversations); setFailed(false);
+      setItems(result.conversations); setLoadedFor(q); setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
     }
@@ -63,17 +64,18 @@ export function Archived({ revision }: { revision: number }) {
       reload();
     } catch (error) { toast({ icon: 'alert', title: t('ui.archived.toast.failed'), body: failText(error, t) }); } finally { setBusy(null); }
   };
-  const keep = (id: string) => { setConfirming(null); requestAnimationFrame(() => deleteButtons.current.get(id)?.focus()); };
+  const keep = (id: string, refocus: boolean) => { setConfirming(null); if (refocus) requestAnimationFrame(() => deleteButtons.current.get(id)?.focus()); };
+  const nothing = archivedNothing(items, loadedFor, query);
 
   return (
     <div className="bt-screen__inner">
       <header className="bt-screen__head bt-rise">
         <h1 className="bt-screen__title">{t('ui.nav.archived')}</h1>
-        <div className="bt-screen__tools">{items && <span className="bt-meta">{t('ui.archived.count', items.length)}</span>}</div>
+        <div className="bt-screen__tools">{items && !nothing && <span className="bt-meta">{t('ui.archived.count', items.length)}</span>}</div>
       </header>
-      <input type="search" className="bt-field ui-lib__search bt-rise" value={query} placeholder={t('ui.archived.search')} aria-label={t('ui.archived.search')} onChange={e => setQuery(e.target.value)} />
+      {!nothing && <input type="search" className="bt-field ui-lib__search bt-rise" value={query} placeholder={t('ui.archived.search')} aria-label={t('ui.archived.search')} onChange={e => setQuery(e.target.value)} />}
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: reload }} />}
-      {items && items.length === 0 && <p className="ui-lib__nothing">{query.trim() ? t('ui.archived.noMatch') : t('ui.archived.empty')}</p>}
+      {items && items.length === 0 && <p className="ui-lib__nothing">{nothing ? t('ui.archived.empty') : t('ui.archived.noMatch')}</p>}
       {items && items.length > 0 && (
         <ul className="bt-list bt-rise" style={{ '--bt-i': 1 } as CSSProperties} aria-label={t('ui.nav.archived')}>
           {items.map(c => {
@@ -90,7 +92,7 @@ export function Archived({ revision }: { revision: number }) {
                 </div>
                 {confirming === c.id ? (
                   <RowConfirm warn={t('ui.lib.deleteWarn')} note={t('ui.session.deleteWhat')} action={t('ui.lib.delete')} busy={busy === c.id}
-                    onConfirm={() => void remove(c)} onKeep={() => keep(c.id)} />
+                    onConfirm={() => void remove(c)} onKeep={refocus => keep(c.id, refocus)} />
                 ) : (
                   <div className="bt-row__end">
                     <Button small disabled={busy !== null} onClick={() => void restore(c)}>{t('ui.archived.restore')}</Button>

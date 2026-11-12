@@ -289,7 +289,7 @@ export function App() {
         {convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>
             <Conversation
-              key={chatId ?? 'new'} id={chatId} listTitle={conversation?.title ?? null}
+              key={chatId ?? 'new'} id={chatId} listTitle={conversation?.title ?? null} aiName={profile?.name}
               draft={chatId ? drafts.find(d => d.conversationId === chatId) : undefined}
               approvals={chatId ? live.approvals.filter(a => a.conversationId === chatId) : NO_APPROVALS}
               notices={(chatId && live.notices.get(chatId)) || NO_NOTICES}
@@ -314,7 +314,7 @@ export function App() {
             ) : behind.view === 'memory' ? (
               <Memory revision={live.libraryRevision + live.epoch} />
             ) : behind.view === 'skills' ? (
-              <Skills target={behind.target} revision={live.libraryRevision + live.epoch + skillDrafts} running={working} onDrafts={setDrafts} />
+              <Skills target={behind.target} revision={`${live.libraryRevision}:${live.epoch}:${skillDrafts}`} running={working} onDrafts={setDrafts} />
             ) : behind.view === 'runs' ? (
               <Runs tab={behind.tab} revision={live.libraryRevision + live.epoch + live.taskRevision} conversations={conversations} />
             ) : behind.view === 'archived' ? (
