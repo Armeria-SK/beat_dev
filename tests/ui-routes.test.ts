@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CLOSE_FALLBACK_MS, HOME, isConversation, latch, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from '../web/src/ui/routes.ts';
+import { CLOSE_FALLBACK_MS, HOME, isConversation, latch, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settleRoute, type Route } from '../web/src/ui/routes.ts';
 
 // 新しい画面（web/src/ui）の経路。p1-ui.md の「枠」: #/ #/c/<id> #/overview #/kanban #/tasks/<id> #/schedule #/notifications #/memory
 // #/skills[/<名前>|/draft/<名前>] #/runs[/tools|/reviews] #/archived #/settings[/<区分>]。
@@ -24,7 +24,35 @@ const ROUTES: Array<[string, Route]> = [
   ['#/archived', { view: 'archived' }],
   ['#/settings', { view: 'settings' }],
   ['#/settings/models', { view: 'settings', section: 'models' }],
+  ['#/p/prod_01-AB', { view: 'product', id: 'prod_01-AB' }],
+  ['#/p/prod_01-AB/new', { view: 'productNew', id: 'prod_01-AB' }],
+  ['#/p/prod_01-AB/settings', { view: 'productSettings', id: 'prod_01-AB' }],
+  ['#/products/new', { view: 'newProduct' }],
 ];
+
+test('ui/routes: 製品の経路。形の合わない ID・足りない経路はホーム、知らない続きは製品の Overview', () => {
+  for (const hash of ['#/p', '#/p/', '#/p/short', '#/p/has.dot1', '#/p/..%2Fxxxx', `#/p/${'a'.repeat(65)}`, '#/p/a%20bcdef/new', '#/products', '#/products/other']) {
+    assert.deepEqual(parseRoute(hash), HOME, hash);
+  }
+  assert.deepEqual(parseRoute('#/p/abcdef/else'), { view: 'product', id: 'abcdef' });
+  assert.equal(routeHash(parseRoute('#/p/abcdef/else')), '#/p/abcdef');
+  assert.equal(isConversation({ view: 'product', id: 'abcdef' }), false);
+});
+
+test('ui/routes: 知らない製品の経路はホーム（一覧を読み終えてから。製品の口が無いサーバーでは一覧が空）', () => {
+  const routes: Route[] = [{ view: 'product', id: 'abcdef' }, { view: 'productNew', id: 'abcdef' }, { view: 'productSettings', id: 'abcdef' }];
+  for (const route of routes) {
+    assert.equal(routeProductId(route), 'abcdef');
+    assert.equal(settleRoute(route, null), route, '読み込み中は動かさない');
+    assert.equal(settleRoute(route, ['abcdef', 'other1']), route);
+    assert.deepEqual(settleRoute(route, []), HOME);
+    assert.deepEqual(settleRoute(route, ['other1']), HOME);
+  }
+  for (const route of [{ view: 'newProduct' }, { view: 'chat', id: 'abcdef' }, { view: 'overview' }, HOME] as Route[]) {
+    assert.equal(routeProductId(route), null);
+    assert.equal(settleRoute(route, []), route);
+  }
+});
 
 test('ui/routes: どの経路も読めて、書き戻すと同じハッシュになる', () => {
   for (const [hash, route] of ROUTES) {

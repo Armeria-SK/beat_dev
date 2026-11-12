@@ -390,6 +390,8 @@ export const en = {
   'ui.nav.notifications': 'Notifications',
   'ui.nav.settings': 'Settings',
   'ui.nav.task': 'Task',
+  'ui.product.new': 'New product',
+  'ui.product.settings': 'Product settings',
   'ui.session.new': 'New session',
   'ui.session.untitled': 'Untitled',
   'ui.session.running': 'Running',

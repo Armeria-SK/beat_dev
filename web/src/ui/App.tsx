@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type Approval, type Conversation as ConversationRow, type Profile, type WorkerStatus } from '../api.ts';
+import { api, type Approval, type Conversation as ConversationRow, type Profile, type Project, type WorkerStatus } from '../api.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
@@ -11,7 +11,8 @@ import { Onboarding } from './Onboarding.tsx';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
 import { opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
 import { pickFocus } from './focus.ts';
-import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
+import { noProductApi, productOf, throttled } from './products.ts';
+import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settleRoute, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
 import { Memory } from './screens/Memory.tsx';
@@ -32,6 +33,7 @@ const NARROW = '(max-width: 760px)';
 const NO_APPROVALS: Approval[] = [];
 const NO_NOTICES: RunNotice[] = [];
 const DISCONNECT_GRACE_MS = 3000;
+const PRODUCT_COUNTS_MS = 2000;
 
 function useDisconnected(connected: boolean): boolean {
   const [shown, setShown] = useState(false);
@@ -45,8 +47,12 @@ function useDisconnected(connected: boolean): boolean {
 
 type T = ReturnType<typeof useT>;
 
-function viewTitle(t: T, route: Route, conversation: ConversationRow | undefined): string {
+function viewTitle(t: T, route: Route, conversation: ConversationRow | undefined, product: Project | undefined): string {
   switch (route.view) {
+    case 'product': return product?.name ?? t('ui.nav.overview');
+    case 'productSettings': return t('ui.product.settings');
+    case 'newProduct': return t('ui.product.new');
+    case 'productNew':
     case 'new': return t('ui.session.new');
     case 'chat': return conversation?.title || t('ui.session.untitled');
     case 'overview': return t('ui.nav.overview');
@@ -108,15 +114,21 @@ export function App() {
     runRef.current(next.effects);
   }, []);
 
+  const loadProjects = useCallback(() => {
+    void api.projects().then(r => r.projects, error => (noProductApi(error) ? [] : null))
+      .then(projects => { if (Array.isArray(projects)) dispatch({ type: 'projects', projects }); }).catch(() => undefined);
+  }, [dispatch]);
   const load = useMemo(() => ({
-    conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations })).catch(() => undefined); },
+    projects: loadProjects,
+    projectCounts: throttled(loadProjects, PRODUCT_COUNTS_MS),
+    conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations, more: r.more })).catch(() => undefined); },
     approvals: () => { void api.approvals().then(r => dispatch({ type: 'approvals', approvals: r.approvals })).catch(() => undefined); },
     tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished] })).catch(() => undefined); },
     drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
     unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
     worker: () => { void api.worker().then(setWorker).catch(() => undefined); },
     profile: () => { void api.profile().then(setProfile).catch(() => undefined); },
-  }), [dispatch]);
+  }), [dispatch, loadProjects]);
 
   runRef.current = (effects: Effect[]) => {
     const granted = 'Notification' in window && Notification.permission === 'granted';
@@ -195,7 +207,10 @@ export function App() {
     return () => query.removeEventListener('change', onChange);
   }, []);
 
-  useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker', 'profile'] as const) load[what](); }, [load]);
+  useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker', 'profile', 'projects'] as const) load[what](); }, [load]);
+  useEffect(() => {
+    if (settleRoute(route, live.projectsLoaded ? live.projects.map(p => p.id) : null) !== route) location.replace('#/');
+  }, [route, live.projects, live.projectsLoaded]);
   const loadSetup = useCallback(() => api.onboarding().then(state => { setSetup(state); return state; }), []);
   useEffect(() => { void loadSetup().then(state => { if (opensOnLoad(state.done, wasSetupShown())) setOnboard(old => old ?? 'first'); }).catch(() => undefined); }, [loadSetup]);
   useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
@@ -274,7 +289,7 @@ export function App() {
 
   const chatId = behind.view === 'chat' ? behind.id : null;
   const conversation = chatId ? conversations.find(c => c.id === chatId) : undefined;
-  const title = viewTitle(t, behind, conversation);
+  const title = viewTitle(t, behind, conversation, productOf(live.projects, routeProductId(behind)));
   const kanban = kanbanCount(waiting);
   const convo = isConversation(behind);
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);
