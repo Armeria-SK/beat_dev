@@ -260,12 +260,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 送る・消す（と、どちらか分からない）操作は、よそから来た文を読んだかどうかに関わらず、判定役に回さない（1 つ目の関所）。判定役が許すと答えたあとにも、材料を取り直してもう一度見る（2 つ目の関所）。
   // 会話の許可・フォルダの許可・持ち主が札で通したものは、この関所の外（持ち主が決めたこと）
   const humanOnlyNow = (): HumanOnly | undefined => humanOnlyOf({ effect: tool.effect, network, toolRemoves: tool.removes === true, check: first });
-  const autoGate: Omit<AutoGate, 'humanOnly'> = { mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime: everyTime || (ctx.kind === 'task' && tool.escalateOnTaint === true) };
+  const taskAlwaysOwner = ctx.kind === 'task' && tool.escalateOnTaint === true;
+  const autoGate: Omit<AutoGate, 'humanOnly'> = { mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime: everyTime || taskAlwaysOwner };
   const humanOnly = humanOnlyNow();
   const humanOnlyReason = (kind: HumanOnly) => guardText(language, kind === 'sends' ? 'pipeline.auto_human_sends' : 'pipeline.auto_human_removes');
   // 送る・消すのせいで自動承認にならなかったと札で分かるように、理由を添える（このほかの理由で回らないときは添えない）
   if (decision === 'ask' && deps.autoClassify && humanOnly !== undefined && mayClassify({ ...autoGate, humanOnly: undefined })) reasons.push(humanOnlyReason(humanOnly));
-  if (decision === 'ask' && deps.autoClassify && mayClassify({ ...autoGate, humanOnly })) {
+  const taskNotOwner = decision === 'ask' && deps.autoClassify !== undefined && ctx.kind === 'task' && mayClassify({ ...autoGate, humanOnly }) && !(deps.lastUserRequest?.() ?? '').trim();
+  if (taskNotOwner) reasons.push(guardText(language, 'pipeline.auto_task_not_owner'));
+  if (decision === 'ask' && deps.autoClassify && !taskNotOwner && mayClassify({ ...autoGate, humanOnly })) {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
       deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });

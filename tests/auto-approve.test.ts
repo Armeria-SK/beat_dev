@@ -410,6 +410,19 @@ test('タスクの実行（自動承認で始めたもの）: よそから来た
     assert.equal((await running).decidedBy, 'user', label);
     assert.equal(x.prompts.length, 0, `${label}: 判定役を呼ばない`);
   }
+
+  const removes: ToolDef<{ key: string }> = {
+    name: 'removes_stub', description: '消す（試験用）', input: Type.Object({ key: Type.String() }), effect: 'write', allowedIn: ['chat', 'task'],
+    preCheck: () => ({ decision: 'allow', reasons: [], sends: false, removes: true }), execute: async () => ({ content: '消した' }),
+  };
+  const r = await setup(t, { mode: 'normal', tools: [removes] });
+  const running = r.call('removes_stub', { key: 'a' }, taskCtx(r));
+  const request = await waitPending(r);
+  assert.deepEqual([...(request.kinds ?? [])], ['taint']);
+  assert.ok(request.reasons.some(reason => /This deletes something/u.test(reason)), '消すので自動では通さない');
+  s2(r, request);
+  assert.equal((await running).decidedBy, 'user');
+  assert.equal(r.prompts.length, 0, '消すは判定役を呼ばない');
 });
 
 test('判定役を待っているあいだにモードを替えたら、判定役の答えは使わない: ふつうに戻したら札が出て、計画にしたら断る。自動承認のままなら許す', async t => {

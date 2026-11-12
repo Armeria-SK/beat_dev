@@ -216,12 +216,15 @@ export class TaskStore {
     return this.#db.prepare('SELECT * FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT ?').all(taskId, limit) as unknown as TaskEvent[];
   }
 
+  cliveDecided(id: string): boolean {
+    const task = this.get(id);
+    const origin = (task?.parent_id ? this.get(task.parent_id) : undefined)?.origin ?? task?.origin;
+    return origin === 'self' || origin === 'curiosity';
+  }
+
   judgeRequest(id: string): string {
     const task = this.get(id);
-    if (!task) return '';
-    const template = task.parent_id ? this.get(task.parent_id) : undefined;
-    const origin = template?.origin ?? task.origin;
-    if (origin === 'self' || origin === 'curiosity') return '';
+    if (!task || this.cliveDecided(id)) return '';
     const tainted = this.#db.prepare(`SELECT 1 FROM task_events e LEFT JOIN engine_runs r ON r.id = e.run_id LEFT JOIN conversations c ON c.id = r.conversation_id
       WHERE e.task_id IN (?, ?) AND e.run_id IS NOT NULL AND e.kind IN ('context', 'note', 'edited') AND (r.id IS NULL OR r.tainted = 1 OR c.ever_tainted = 1) LIMIT 1`).get(task.id, task.parent_id ?? task.id);
     if (tainted) return '';
@@ -410,7 +413,7 @@ export class TaskStore {
       for (const ref of TASK_SOFT_REFERENCES) {
         if (this.#db.prepare(`SELECT 1 FROM ${ref.table} WHERE ${ref.column} = ? LIMIT 1`).get(id)) throw new TaskError('error.still_referenced');
       }
-      const keptRuns = Number(this.#db.prepare('UPDATE tasks SET parent_id = NULL WHERE parent_id = ?').run(id).changes);
+      const keptRuns = Number(this.#db.prepare(`UPDATE tasks SET parent_id = NULL, origin = CASE WHEN ? IN ('self', 'curiosity') THEN ? ELSE origin END WHERE parent_id = ?`).run(task.origin, task.origin, id).changes);
       const events = Number(this.#db.prepare('DELETE FROM task_events WHERE task_id = ?').run(id).changes);
       for (const prefix of TASK_KV_PREFIXES) this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`${prefix}${id}`);
       this.#db.prepare('DELETE FROM tasks WHERE id = ?').run(id);

