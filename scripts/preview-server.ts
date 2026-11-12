@@ -234,7 +234,7 @@ async function start(): Promise<void> {
     paths, log, env: {},
     adapterOverride: fakeAdapter,
     fetch: (async (input: Parameters<typeof fetch>[0]) => {
-      if (String(input) === 'http://127.0.0.1:1/v1/models') return Response.json({ data: ['preview-a', 'preview-b', 'preview-small', 'preview-new'].map(id => ({ id })) });
+      if (String(input) === 'http://127.0.0.1:8000/v1/models') return Response.json({ data: ['preview-a', 'preview-b', 'preview-small', 'preview-new'].map(id => ({ id })) });
       throw new Error('The preview server makes no network requests');
     }) as typeof fetch,
     webNetwork: {
