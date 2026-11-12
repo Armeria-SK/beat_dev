@@ -3,7 +3,7 @@ import { PERMISSION_MODES, type PermissionMode } from '../../../src/shared/permi
 import { api, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import {
-  ATTACH_ACCEPT, attachRoom, composerView, depthOptions, enterAction, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER, queuedLine, slashItems, toastLift,
+  ATTACH_ACCEPT, attachRoom, composerView, depthOptions, enterAction, escStops, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER, queuedLine, slashItems, toastLift,
   type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
 import { menuStep } from './menu.ts';
@@ -160,6 +160,7 @@ export function Composer(props: ComposerProps) {
       if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); runSlash(commands[active]!); return; }
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSlashClosed(true); setSlashForced(false); return; }
     }
+    if (escStops({ key: e.key, composing }, running, pop !== null)) { e.preventDefault(); e.stopPropagation(); props.onStop(); return; }
     const action = enterAction({ key: e.key, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, composing }, running);
     if (action === null) return;
     e.preventDefault();

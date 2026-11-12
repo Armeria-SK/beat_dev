@@ -8,7 +8,7 @@ import { useNow } from '../hooks.ts';
 import { buildBoard, KANBAN_PAGE, RUNS_WINDOW, sessionCards, type Card, type ColumnId } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
-import { finishedSince, LAST_LOOK_KEY, miniBoard, readLastLook, runningRows, tiles, type RunningRow, type Tile, type TileId } from '../overview.ts';
+import { finishedSince, LAST_LOOK_KEY, miniBoard, readLastLook, runningRows, tiles, workerLine, type RunningRow, type Tile, type TileId } from '../overview.ts';
 import { Button, countText, Icon, Notice, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
@@ -120,6 +120,7 @@ export function Overview({ waiting, approvals, conversations, drafts, checklists
   const done = useMemo(() => (data ? finishedSince(data.finished, look.at) : null), [data, look.at]);
   const now = useNow(running.some(row => row.startedAt !== null) ? 1000 : 30_000);
   const stats = tiles(waiting, approvals);
+  const line = workerLine(worker, now);
 
   const act = async (key: string, work: () => Promise<unknown>) => {
     if (busy.has(key)) return;
@@ -155,6 +156,7 @@ export function Overview({ waiting, approvals, conversations, drafts, checklists
         <div className="bt-screen__tools">
           {worker && !worker.enabled && <span className="bt-meta" data-worker="off">{t('ui.overview.workerOff')} · <a className="bt-tool__link" href="#/settings">{t('ui.nav.settings')}</a></span>}
           {worker?.enabled && worker.paused && <span className="bt-meta">{t('ui.overview.workerPaused')}</span>}
+          {line && <span className="bt-meta" data-worker-line>{t('ui.overview.workerRuns', line.runs, line.max)}{line.nextWakeAt !== null && ` · ${t('ui.overview.nextWake', formatDateTimeSmart(line.nextWakeAt, now))}`}</span>}
           {worker?.enabled && (
             <Button icon={worker.paused ? 'refresh' : 'pause'} disabled={busy.has('worker')} data-worker={worker.paused ? 'paused' : 'on'} onClick={() => setPaused(!worker.paused)}>
               {t(worker.paused ? 'ui.overview.resume' : 'ui.overview.pause')}

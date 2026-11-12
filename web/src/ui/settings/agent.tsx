@@ -14,13 +14,14 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKey } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
-import { keyLine, lastChecked, moveItem, providerReach, rolesOf, setConversation, setFallback, type Reach } from './view.ts';
+import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
 type T = ReturnType<typeof useT>;
 
-const REACH: Record<Reach, { tone: PillTone; key: 'ui.set.reach.ok' | 'ui.set.reach.offline' | 'ui.set.reach.rejected' }> = {
+const REACH: Record<ModelReach, { tone: PillTone; key: 'ui.set.reach.ok' | 'ui.set.reach.offline' | 'ui.set.reach.rejected' | 'ui.set.reach.small' }> = {
   ok: { tone: 'ok', key: 'ui.set.reach.ok' }, warn: { tone: 'warn', key: 'ui.set.reach.offline' }, danger: { tone: 'danger', key: 'ui.set.reach.rejected' },
+  small: { tone: 'warn', key: 'ui.set.reach.small' },
 };
 
 const KEY_LINE = { set: 'ui.set.key.set', os: 'ui.set.key.os', none: 'ui.set.key.none', loading: 'ui.set.key.loading', failed: 'ui.set.key.failed' } as const;
@@ -222,7 +223,7 @@ function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boole
   const k = `model:${id}`;
   const [removing, setRemoving] = useState(false);
   const probe = ctx.models.find(m => m.id === id)?.probe ?? null;
-  const reach: Reach | null = probe ? providerReach(model.provider as string, ctx.models.filter(m => m.id === id)) : null;
+  const reach: ModelReach | null = probe ? modelReach(probe.status) : null;
   const edit = (patch: Json) => void ctx.commit(k, c => updateListItem(c, 'models', id, patch));
   const busy = ctx.busy !== null;
   const rename = (text: string) => {

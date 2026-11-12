@@ -48,6 +48,19 @@ export function enterAction(e: { key: string; shiftKey: boolean; ctrlKey: boolea
   return e.ctrlKey || e.metaKey ? 'force' : 'queue';
 }
 
+export function escStops(e: { key: string; composing: boolean }, running: boolean, menuOpen: boolean): boolean {
+  return e.key === 'Escape' && !e.composing && running && !menuOpen;
+}
+
+export interface ProceedInput {
+  mode: PermissionMode; hasConversation: boolean; running: boolean; sending: boolean; approvals: number;
+  last: { role: string; text: string } | undefined;
+}
+
+export function showProceed(i: ProceedInput): boolean {
+  return i.mode === 'plan' && i.hasConversation && !i.running && !i.sending && i.approvals === 0 && i.last?.role === 'assistant' && i.last.text.trim() !== '';
+}
+
 const usable = (m: ModelView): boolean => m.probe?.status === 'ok';
 
 export function modelInEffect(models: readonly ModelView[], chatOrder: readonly string[], modelId: string | null): ModelView | undefined {

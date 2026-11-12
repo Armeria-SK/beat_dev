@@ -9,6 +9,12 @@ const REACH_OF: Record<string, Reach> = {
   no_api_key: 'danger', not_found: 'danger', error: 'danger',
 };
 
+export type ModelReach = Reach | 'small';
+
+export function modelReach(status: string): ModelReach {
+  return status === 'too_small' ? 'small' : REACH_OF[status] ?? 'danger';
+}
+
 export function providerReach(providerId: string, models: readonly ModelView[]): Reach | null {
   const seen = models.filter(m => m.provider === providerId && m.probe).map(m => REACH_OF[m.probe!.status] ?? 'danger');
   if (seen.length === 0) return null;

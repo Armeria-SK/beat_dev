@@ -592,7 +592,9 @@ test('作業の一覧の置き場所: 実行中は入力欄（Composer）の直�
   const chat = readFileSync(new URL('../web/src/ui/Conversation.tsx', import.meta.url), 'utf8').replace(/\r/g, '');
   assert.equal(chat.match(/<Checklist\b/gu)?.length, 2, '終わったあとの会話の中と、実行中の入力欄の上');
   const pinned = chat.indexOf('{running && checklist.length > 0 && <Checklist');
-  assert.ok(pinned > 0 && pinned < chat.indexOf('<Composer') && chat.indexOf('<Composer', pinned) - pinned < 400, '実行中の一覧は入力欄のすぐ上');
+  const between = chat.slice(pinned, chat.indexOf('<Composer', pinned));
+  assert.ok(pinned > 0 && pinned < chat.indexOf('<Composer'), '実行中の一覧は入力欄の上');
+  assert.equal(between.match(/className="[^"]*"/gu)?.filter(c => !c.includes('ui-pinned') && !c.includes('bt-meta')).length ?? 0, 0, '一覧と入力欄のあいだにあるのは、同じ固定の段（Plan の「この計画で進める」）だけ');
   assert.match(chat, /const checklist = liveChecklist \?\? readList\?\.items \?\? \[\];/u, '出来事が先、読んだ一覧はその次');
   assert.match(readFileSync(new URL('../web/src/ui/live-state.ts', import.meta.url), 'utf8'), /case 'checklist\.updated':/u);
 });

@@ -5,7 +5,7 @@ import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrot
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
-import { cancelClearsInterrupt, queuedLine, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
+import { cancelClearsInterrupt, queuedLine, showProceed, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getLanguage, useT } from '../i18n/index.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
@@ -340,6 +340,16 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
 
   const pick = (text: string): void => { void submit('send', text, [], { label: t('ui.fail.retry'), run: () => pick(text) }); };
 
+  const proceed = async () => {
+    if (!id || sending) return;
+    setSending(true); setFailure(null);
+    stick.current = true;
+    try {
+      await api.send(id, t('ui.plan.proceedRequest'), [], { permissionMode: 'normal' });
+      await load();
+    } catch (error) { await fail(error, null); await load(); } finally { setSending(false); }
+  };
+
   const changeFailed = (error: unknown) => {
     stick.current = true;
     setFailure({ ...sendFailureOf(error, t('ui.fail.change'), models), retry: null, title: t('ui.fail.change') });
@@ -485,6 +495,12 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
         )}
       </div>
       {running && checklist.length > 0 && <Checklist items={checklist} tainted={readList?.tainted ?? false} live className="ui-pinned bt-rise" />}
+      {!gone && !helper && showProceed({ mode: choice.permissionMode, hasConversation: id !== null, running, sending, approvals: approvals.length, last: messages.at(-1) }) && (
+        <div className="ui-pinned ui-proceed" role="group" aria-label={t('ui.plan.proceed')}>
+          <Button variant="primary" onClick={() => void proceed()}>{t('ui.plan.proceed')}</Button>
+          <span className="bt-meta">{t('ui.plan.proceedHint')}</span>
+        </div>
+      )}
       {!gone && !helper && (
         <Composer
           hasConversation={id !== null} running={running} sending={sending} pending={pending}

@@ -1,4 +1,4 @@
-import type { ChecklistItem, Conversation, Task, WorkerRun } from '../api.ts';
+import type { ChecklistItem, Conversation, Task, WorkerRun, WorkerStatus } from '../api.ts';
 import { checklistStep } from './agent-state.ts';
 import { finishedAt, isTemplate, type Board, type Card, type ColumnId, type Step } from './kanban.ts';
 import { routeHash } from './routes.ts';
@@ -54,6 +54,14 @@ export function runningRows({ worker, drafts, conversations, checklists }: Runni
     });
   }
   return rows;
+}
+
+export interface WorkerLine { runs: number; max: number; nextWakeAt: number | null }
+
+export function workerLine(worker: Pick<WorkerStatus, 'enabled' | 'paused' | 'runningAll' | 'nextWakeAt' | 'runsLastHour' | 'maxRunsPerHour'> | null, now: number): WorkerLine | null {
+  if (!worker?.enabled) return null;
+  const waits = !worker.paused && worker.runningAll.length === 0 && worker.nextWakeAt !== null;
+  return { runs: worker.runsLastHour, max: worker.maxRunsPerHour, nextWakeAt: waits ? Math.max(worker.nextWakeAt!, now) : null };
 }
 
 export const FINISHED_SHOWN = 8;
