@@ -1,5 +1,5 @@
 import { accessKey, accessWidening, keyEntryAccess, type Access } from '../../settings/access.ts';
-import { deepEqual } from '../../settings/merge.ts';
+import { applyEdits, deepEqual, diffConfig } from '../../settings/merge.ts';
 import type { Config } from '../../settings/model.ts';
 
 export type Control = 'switch' | 'seg' | 'select' | 'tile' | 'button' | 'text' | 'path' | 'command' | 'list' | 'url' | 'number' | 'secret';
@@ -63,6 +63,11 @@ export function planKey(provider: Record<string, any> | undefined, confirmedKey:
   const items = keyEntryAccess(provider);
   if (items.length > 0 && accessKey(items) !== confirmedKey) return { kind: 'confirm', items, key: accessKey(items) };
   return { kind: 'send' };
+}
+
+export function mergeRawConfig(loaded: Config, edited: Config, latest: Config): { config: Config; conflicts: string[] } {
+  const merged = applyEdits(latest, diffConfig(loaded, edited));
+  return { config: merged.config, conflicts: merged.conflicts.map(c => c.path) };
 }
 
 export function parseRawConfig(text: string): Config | null {

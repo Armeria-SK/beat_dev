@@ -25,6 +25,8 @@ import { Settings } from './settings/Settings.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
+import { Button } from './parts.tsx';
+import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, unloadGuard } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_APPROVALS: Approval[] = [];
@@ -91,6 +93,7 @@ export function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
+  const [leave, setLeave] = useState<string | null>(null);
   const onboardRef = useRef(onboard);
   onboardRef.current = onboard;
 
@@ -147,6 +150,17 @@ export function App() {
   viewRef.current = route.view;
 
   useEffect(() => {
+    addEventListener('beforeunload', unloadGuard);
+    return () => removeEventListener('beforeunload', unloadGuard);
+  }, []);
+  const discardEdits = useCallback(() => {
+    const to = leave;
+    clearUnsaved(SCREEN_EDITS);
+    setLeave(null);
+    if (to !== null) location.hash = to;
+  }, [leave]);
+
+  useEffect(() => {
     const onPop = () => closer.reset();
     addEventListener('popstate', onPop);
     return () => removeEventListener('popstate', onPop);
@@ -155,6 +169,12 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       const next = readRoute();
+      const held = behindRef.current;
+      if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS), held, next)) {
+        setLeave(routeHash(next));
+        location.replace(routeHash(held));
+        return;
+      }
       hashGeneration.current += 1;
       closer.reset();
       if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;
@@ -314,6 +334,16 @@ export function App() {
         <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
       )}
       {onboard !== null && <Onboarding profile={profile} replay={onboard === 'replay'} start={onboard === 'first' && setup ? resumeIndex(setup.steps) : 0} onProfile={load.profile} onDone={finishOnboard} onSkip={closeOnboard} />}
+      {leave !== null && (
+        <div className="ui-confirm ui-leave" role="alertdialog" aria-label={t('ui.set.leave.title')}
+          onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setLeave(null); } }}>
+          <span className="bt-label bt-del">{t('ui.set.leave.title')}</span>
+          <span className="ui-confirm__buttons">
+            <Button variant="danger" small onClick={discardEdits}>{t('ui.set.leave.discard')}</Button>
+            <Button variant="ghost" small autoFocus onClick={() => setLeave(null)}>{t('ui.set.leave.keep')}</Button>
+          </span>
+        </div>
+      )}
       <Toasts />
     </div>
   );

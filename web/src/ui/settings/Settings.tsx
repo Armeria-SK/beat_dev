@@ -7,6 +7,7 @@ import { Button, Icon } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { BackgroundPanel, ModelsPanel, SkillsPanel } from './agent.tsx';
 import { planSave } from './commit.ts';
+import { clearUnsaved, setUnsaved } from '../unsaved.ts';
 import { BrowserPanel, FoldersPanel, HooksPanel, ServerPanel } from './computer.tsx';
 import { Loading, SettingsContext, type Ask, type Pending, type SetCtx } from './controls.tsx';
 import { confirmable, hasUnsaved, serial } from './flow.ts';
@@ -91,7 +92,8 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
     }).then(result => (typeof result === 'boolean' ? result : ask({ row, items: result.items }, () => run(row, edit, result.key))));
   }, [enqueue, ask, onSaved, t]);
 
-  const setDirty = useCallback((key: string, on: boolean) => { dirty.current.set(key, on); }, []);
+  const setDirty = useCallback((key: string, on: boolean) => { dirty.current.set(key, on); setUnsaved(`settings:${key}`, on); }, []);
+  useEffect(() => () => clearUnsaved('settings:'), []);
   const guard = useCallback((go: () => void) => { if (hasUnsaved(dirty.current)) setLeave(() => go); else go(); }, []);
   const tryClose = useCallback(() => guard(onClose), [guard, onClose]);
   const tryOpen = useCallback((id: string) => guard(() => openCategory(id)), [guard]);
@@ -104,7 +106,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
     addEventListener('keydown', onKey, true);
     return () => removeEventListener('keydown', onKey, true);
   }, [onClose]);
-  const discard = () => { const go = leave; dirty.current.clear(); setLeave(null); go?.(); };
+  const discard = () => { const go = leave; dirty.current.clear(); clearUnsaved('settings:'); setLeave(null); go?.(); };
 
   const ctx = useMemo<SetCtx | null>(() => (view ? {
     view, config: view.config, models, busy, pending, errors, revision,

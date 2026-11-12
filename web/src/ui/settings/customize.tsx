@@ -6,7 +6,7 @@ import { issueMessage } from '../../settings/model.ts';
 import { estimateTokens, overPersonaBudget } from '../../tokens.ts';
 import { Button } from '../parts.tsx';
 import { applyTheme, browserStorage, readReducedMotion, readTheme, saveReducedMotion, saveTheme, THEMES, type Theme } from '../theme.ts';
-import { parseRawConfig } from './commit.ts';
+import { mergeRawConfig, parseRawConfig } from './commit.ts';
 import { CommitField, Group, Row, Switch, useSet } from './controls.tsx';
 
 const errorText = (error: unknown, fallback: string): string => (error instanceof ApiError ? error.message : fallback);
@@ -152,7 +152,16 @@ export function AdvancedPanel() {
     const parsed = parseRawConfig(text);
     if (!parsed) { setBad(true); return; }
     setBad(false);
-    if (await ctx.commit('adv:file', () => parsed)) { toast({ icon: 'check', title: t('ui.set.adv.saved') }); await open(); }
+    const base = loaded === null ? null : parseRawConfig(loaded);
+    if (!base) return;
+    let conflicts: string[] = [];
+    const saved = await ctx.commit('adv:file', latest => {
+      const merged = mergeRawConfig(base, parsed, latest);
+      conflicts = merged.conflicts;
+      return conflicts.length > 0 ? latest : merged.config;
+    });
+    if (conflicts.length > 0) { ctx.fail('adv:file', t('ui.set.adv.conflict', conflicts.join(', '))); return; }
+    if (saved) { toast({ icon: 'check', title: t('ui.set.adv.saved') }); await open(); }
   };
   const broken = ctx.view.configError;
   return (

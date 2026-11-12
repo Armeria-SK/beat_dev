@@ -14,6 +14,7 @@ import { skillHistory, toolChoice, toolCounts, toolDecision, type SkillChange } 
 import { Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash, type SkillTarget } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
+import { SCREEN_EDITS, setUnsaved } from '../unsaved.ts';
 
 type T = ReturnType<typeof useT>;
 type Skill = SkillSummary & { body: string };
@@ -45,6 +46,8 @@ function NewSkill({ existing, onSaved, onClose }: { existing: readonly string[];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const ready = name.trim() && description.trim() && body.trim();
+  const typed = name !== '' || description !== '' || body !== '';
+  useEffect(() => { setUnsaved(`${SCREEN_EDITS}skill-new`, typed); return () => setUnsaved(`${SCREEN_EDITS}skill-new`, false); }, [typed]);
   const taken = existing.includes(name.trim());
   const save = async () => {
     if (busy || !ready) return;
@@ -52,6 +55,7 @@ function NewSkill({ existing, onSaved, onClose }: { existing: readonly string[];
     try {
       await api.saveSkill(name.trim(), description.trim(), body);
       toast({ icon: 'check', title: t('ui.skills.toast.saved'), body: name.trim() });
+      setUnsaved(`${SCREEN_EDITS}skill-new`, false);
       onSaved(name.trim());
     } catch (failure) { setError(failText(failure, t)); } finally { setBusy(false); }
   };
@@ -88,6 +92,7 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [dropping, setDropping] = useState(false);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0);
   const loads = useRef(latestOnly());
@@ -105,6 +110,9 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
     });
   }, [name, revision, tick, t]);
   useEffect(() => { if (skill && mode === 'read') { setDescription(skill.description); setBody(skill.body); } }, [skill, mode]);
+  const edited = mode === 'edit' && skill !== null && (description !== skill.description || body !== skill.body);
+  useEffect(() => { setUnsaved(`${SCREEN_EDITS}skill:${name}`, edited); return () => setUnsaved(`${SCREEN_EDITS}skill:${name}`, false); }, [name, edited]);
+  const toRead = () => { if (edited) setDropping(true); else { setMode('read'); setError(''); } };
 
   const changes = useMemo(() => (skill && versions ? skillHistory(versions, { description: skill.description, body: skill.body }) : []), [skill, versions]);
   const reload = () => { setTick(n => n + 1); onChanged(); };
@@ -135,6 +143,7 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
   });
   const remove = () => void run(async () => {
     await api.deleteSkill(name);
+    setUnsaved(`${SCREEN_EDITS}skill:${name}`, false);
     setConfirming(false);
     onChanged();
     location.hash = skillHash(null);
@@ -148,7 +157,7 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
         <div className="bt-pane__bar">
           <span className="bt-meta">skills/{name}/SKILL.md</span>
           <div className="bt-seg" role="group" aria-label={t('ui.lib.mode')}>
-            <button type="button" className="bt-seg__opt" aria-pressed={mode === 'read'} onClick={() => { setMode('read'); setError(''); }}>{t('ui.lib.read')}</button>
+            <button type="button" className="bt-seg__opt" aria-pressed={mode === 'read'} onClick={toRead}>{t('ui.lib.read')}</button>
             <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>{t('ui.lib.edit')}</button>
           </div>
           {mode === 'edit' && <Button small disabled={busy || !description.trim() || !body.trim()} onClick={save}>{t('ui.lib.save')}</Button>}
@@ -159,8 +168,12 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
           <RowConfirm warn={t('ui.lib.deleteWarn')} note={t('ui.skills.deleteNote')} action={t('ui.lib.delete')} busy={busy}
             onConfirm={remove} onKeep={() => { setConfirming(false); requestAnimationFrame(() => deleteButton.current?.focus()); }} />
         )}
+        {dropping && (
+          <RowConfirm warn={t('ui.set.leave.title')} action={t('ui.set.leave.discard')} busy={busy}
+            onConfirm={() => { setDropping(false); setMode('read'); setError(''); }} onKeep={() => setDropping(false)} />
+        )}
         {mode === 'edit' ? (
-          <div className="ui-lib__form" onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMode('read'); } }}>
+          <div className="ui-lib__form" onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); toRead(); } }}>
             <label className="ui-lib__label"><span className="bt-label">{t('ui.skills.field.description')}</span>
               <input className="bt-field" autoFocus value={description} maxLength={300} onChange={e => setDescription(e.target.value)} />
             </label>
