@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import { prefixLength } from '../engine/tokens.ts';
 import type { RunEvent, ToolCall } from '../engine/types.ts';
-import { redactSecrets } from '../shared/redaction.ts';
+import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { languageOf } from '../shared/language.ts';
 import { stricterMode, type PermissionMode } from '../shared/permission-mode.ts';
 import { guardText } from '../shared/messages/guard.ts';
@@ -141,7 +141,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const tool = deps.registry.get(call.name);
   const shownInput = truncated
     ? redactSecrets(truncated.raw).slice(0, 2000)
-    : redactSecrets(JSON.stringify(call.arguments ?? call.raw ?? null)).slice(0, 4000);
+    : JSON.stringify(redactJsonValue(call.arguments ?? call.raw ?? null)).slice(0, 4000);
   deps.emit({ type: 'tool.call', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, input: shownInput });
 
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
@@ -203,9 +203,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   }
   // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる（札の理由と、自動承認の判定役に回してよい種類 taint のため。送る・消すは humanOnlyOf が別に止める）。拒否は拒否のまま
   if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint || tool.writesFiles === true) && decision !== 'deny') {
-    decision = worst(decision, 'ask');
-    askKinds.add('taint');
-    reasons.push(guardText(language, 'pipeline.taint', { sources: ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep')) }));
+    const sources = ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep'));
+    if (ctx.kind === 'review') {
+      decision = 'deny';
+      reasons.push(guardText(language, 'pipeline.taint_review', { sources }));
+    } else {
+      decision = worst(decision, 'ask');
+      askKinds.add('taint');
+      reasons.push(guardText(language, 'pipeline.taint', { sources }));
+    }
   }
   // 道具ごとの方針 ask: 今の判定に「承認を求める」を足すだけ（拒否は拒否のまま。allow は何もしない）。振り返りには承認する人がいないので拒否として扱う
   if (policy === 'ask' && decision !== 'deny') {

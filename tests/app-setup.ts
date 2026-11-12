@@ -11,7 +11,7 @@ import { createWebServer } from '../src/web/server.ts';
 import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
 
 export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelConfig {
-  return { id, provider: 'fake', model: `${id}-name`, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over };
+  return { id, provider: 'fake', model: `${id}-name`, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...over };
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ

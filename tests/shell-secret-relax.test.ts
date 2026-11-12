@@ -87,12 +87,9 @@ test('(a) listTree: node_modules の中の秘密らしいパスは depSecrets �
   assert.equal(listTree(join(f.ws, 'deps'), true).depSecrets, undefined, '依存に秘密らしいパスが無ければ付けない');
 });
 
-test('(a) 札に出す理由の文は日本語・英語にあり、当たったパスの数とパスを載せる。多いときは数件だけ出して、ほかの数を数える', () => {
-  const ja = guardText('ja', 'list.secret_in_deps', { count: 7, paths: 'a, b' });
+test('(a) 札に出す理由の文は英語にあり、当たったパスの数とパスを載せる。多いときは数件だけ出して、ほかの数を数える', () => {
   const en = guardText('en', 'list.secret_in_deps', { count: 7, paths: 'a, b' });
-  assert.match(ja, /node_modules/u);
-  assert.match(ja, /7/u);
-  assert.match(ja, /a, b/u);
+  assert.match(en, /a, b/u);
   assert.match(en, /node_modules/u);
   assert.match(en, /7/u);
   assert.doesNotMatch(en, /[　-ヿ㐀-䶿一-鿿]/u);

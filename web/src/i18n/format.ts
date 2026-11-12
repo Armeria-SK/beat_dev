@@ -18,7 +18,7 @@ function dateFormatter(locale: string, zone: string, style: DateStyle | 'wall'):
   if (!formatter) {
     formatter = style === 'wall'
       ? new Intl.DateTimeFormat(locale, { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' })
-      : new Intl.DateTimeFormat(locale, { timeZone: zone, ...DATE_OPTIONS[style] });
+      : new Intl.DateTimeFormat(locale, { timeZone: zone, hourCycle: 'h23', ...DATE_OPTIONS[style] });
     formatters.set(key, formatter);
   }
   return formatter;
@@ -37,8 +37,18 @@ function offsetMs(ms: number, zone: string): number {
 
 const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
+const DATE_SHAPES: Record<DateStyle, (p: Record<string, string>) => string> = {
+  compact: p => `${p.month}/${p.day} ${p.hour}:${p.minute}`,
+  full: p => `${p.year}/${p.month}/${p.day} ${p.hour}:${p.minute}`,
+  precise: p => `${p.month}/${p.day} ${p.hour}:${p.minute}:${p.second}`,
+  time: p => `${p.hour}:${p.minute}`,
+};
+
 export function formatDateTime(ms: number | null | undefined, style: DateStyle = 'compact'): string {
-  return ms ? dateFormatter(getLanguage(), getTimezone(), style).format(ms) : '—';
+  if (!ms) return '—';
+  const parts: Record<string, string> = {};
+  for (const part of dateFormatter('en-US', getTimezone(), style).formatToParts(ms)) parts[part.type] = part.value;
+  return DATE_SHAPES[style](parts);
 }
 
 // 今日の時刻は時刻だけ、別の日は日付つきで。
@@ -63,6 +73,11 @@ export function parseZonedInput(value: string, zone = getTimezone()): number | n
 export function startOfDay(ms: number, zone = getTimezone()): number {
   const w = wallClock(ms, zone);
   return parseZonedInput(`${pad(w.year, 4)}-${pad(w.month)}-${pad(w.day)}T00:00`, zone) ?? ms;
+}
+
+export function formatZonedInput(ms: number, zone = getTimezone()): string {
+  const w = wallClock(ms, zone);
+  return `${pad(w.year, 4)}-${pad(w.month)}-${pad(w.day)}T${pad(w.hour)}:${pad(w.minute)}`;
 }
 
 export function timezoneLabel(zone = getTimezone(), at = Date.now()): string {

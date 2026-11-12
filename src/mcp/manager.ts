@@ -306,7 +306,7 @@ export class McpManager {
       entry.state = 'failed';
       entry.reason = reason;
       entry.detail = detail;
-      this.#d.log(`[WARN] MCP サーバー「${server.id}」につながれませんでした（${reason}${detail ? `: ${detail}` : ''}）`);
+      this.#d.log(`[WARN] Could not connect to MCP server "${server.id}" (${reason}${detail ? `: ${detail}` : ''})`);
       if (auto) this.#retry(server.id, entry, reason);
     };
     const env = refs(server.env, this.#d.env);
@@ -418,7 +418,7 @@ export class McpManager {
     catch (error) {
       // 古い組を残さない（新しい形を置けなかったのに、前の道具が使えるままにしない）
       this.#d.tools.removeGroup(server.id);
-      this.#d.log(`[ERROR] MCP サーバー「${server.id}」の道具を登録できませんでした: ${(error as Error).message}`); }
+      this.#d.log(`[ERROR] Could not register the tools of MCP server "${server.id}": ${(error as Error).message}`); }
   }
 
   #noticeChanged(entry: Entry, server: string, remote: McpRemoteTool, language: Language): void {

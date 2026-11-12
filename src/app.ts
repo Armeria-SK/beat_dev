@@ -50,13 +50,14 @@ import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
-import { SkillStore } from './tools/skills/store.ts';
+import { askBeforeRegister, SkillStore } from './tools/skills/store.ts';
 import { TaskStore, taskView } from './tasks/store.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
 import { ToolRegistry } from './tools/registry.ts';
 import { ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
+import { redactSecrets } from './shared/redaction.ts';
 import { MemoryStore, renderBooks } from './memory/store.ts';
 
 export function builtinTools(): ToolDef[] {
@@ -134,7 +135,8 @@ export class App {
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
-    ensureWorkspace(this.paths, languageOf(config));
+    this.#reportDropped();
+    ensureWorkspace(this.paths);
     this.bootServer = structuredClone(config.server);
     this.#warnIgnoredPolicies(config);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
@@ -143,7 +145,7 @@ export class App {
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);
     const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));
-    if (dangling) this.log(`[INFO] 前回の終了時に途中だった実行 ${dangling} 件を中断扱いにしました`);
+    if (dangling) this.log(`[INFO] Marked ${dangling} run(s) left unfinished at the last shutdown as interrupted`);
     this.registry = new ProviderRegistry({
       env: this.env,
       ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -162,7 +164,7 @@ export class App {
         // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
         const task = this.tasks.byConversation(approvalShownIn(v));
         if (task) {
-          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}`, localOnly: task.local_only === 1 });
+          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: redactSecrets(`${v.title}\n${v.body}`), link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}`, localOnly: task.local_only === 1 });
         }
       } else {
         this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: approvalShownIn(v), approvalId: v.id, outcome: event.outcome });
@@ -174,7 +176,8 @@ export class App {
     this.notifications = new Notifications(this.db, now, this.log);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
-    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log);
+    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'));
+    this.skills.autoRegister = () => !askBeforeRegister(this.config());
     this.#importCuriosity();
     this.#registerExistingSkills();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
@@ -191,7 +194,7 @@ export class App {
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, log: this.log,
-      web: { network: options.webNetwork, download: options.downloadNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
+      web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
       ...(options.now ? { now: () => new Date(now()) } : {}),
@@ -217,6 +220,11 @@ export class App {
       this.worker.poke();
     };
     this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
+    this.tasks.onDeleted = removed => {
+      const title = removed.title.replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
+      this.log(`[INFO] Deleted task "${title}" (${removed.id})`);
+      this.bus.publish({ type: 'task.deleted', id: removed.id });
+    };
     this.notifications.listen(event => {
       // 画面（SSE）へは、外へ送らない印（noForward）を載せずに流す
       const notification: Notification = { ...event };
@@ -238,6 +246,10 @@ export class App {
     this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
+      if (draft.status === 'approved') {
+        this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_auto'), body: draft.name, link: `#/skills/${encodeURIComponent(draft.name)}`, dedupKey: `skill-auto:${draft.id}`, localOnly: true, noForward: true });
+        return;
+      }
       this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}`, localOnly: true });
     };
     this.engine.onRunEnd = run => {
@@ -253,7 +265,7 @@ export class App {
     };
   }
 
-  // Web サーバーを起動するときに呼ぶ（doctor など、動いているサーバーと同じ DB を開くだけの使い方では呼ばない。呼ぶと動いている承認待ちの通知まで既読になる）。
+  // Web サーバーを起動するときに呼ぶ（動いているサーバーと同じ DB を開くだけの使い方では呼ばない。呼ぶと動いている承認待ちの通知まで既読になる）。
   // もう答えようのない大事な未読を既読にする（片づいたときに既読にする仕組みの前からあった通知と、落ちて承認の札ごと消えた通知）。
   // 起動直後は承認の札がひとつも無いので、承認待ちは全部。返事待ち・失敗は、タスクが無いか、今その状態でないものだけ既読にする
   settleStaleNotifications(): void {
@@ -267,10 +279,12 @@ export class App {
   }
 
   #applied = '';
+  #droppedReported = '';
+  #rewrittenReported = '';
 
   // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
   #warnIgnoredPolicies(config: AppConfig): void {
-    for (const name of ignoredPolicyNames(config)) this.log(`[WARN] tools.policies の「${name}」は、方針を持てない道具（タスクの進め方に必要）なので無視します`);
+    for (const name of ignoredPolicyNames(config)) this.log(`[WARN] Ignoring "${name}" in tools.policies: this tool cannot have a policy (it is needed to run tasks)`);
   }
 
   // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
@@ -279,7 +293,7 @@ export class App {
     if (this.kv.get('skills:registry-seeded')) return;
     const added = this.skills.registerExisting();
     this.kv.set('skills:registry-seeded', String(Date.now()));
-    if (added) this.log(`[INFO] 既にあるスキル ${added} 件を登録しました（以後にフォルダへ直接置かれたスキルは、画面の「登録する」までは使われません）`);
+    if (added) this.log(`[INFO] Registered ${added} existing skill(s) (skills placed directly in the folder from now on are not used until you press "Register" on the screen)`);
   }
 
   #importCuriosity(): void {
@@ -287,9 +301,9 @@ export class App {
     const path = join(this.paths.workspace, 'CURIOSITY.md');
     let added = 0;
     try { if (existsSync(path)) added = this.curiosity.importMarkdown(readFileSync(path, 'utf8')); }
-    catch (error) { this.log(`[WARN] CURIOSITY.md を読めませんでした: ${(error as Error).message}`); }
+    catch (error) { this.log(`[WARN] Could not read CURIOSITY.md: ${(error as Error).message}`); }
     this.kv.set('curiosity:imported', String(Date.now()));
-    if (added) this.log(`[INFO] CURIOSITY.md から好奇心リストに ${added} 件取り込みました（以後は画面の「好奇心」で編集します）`);
+    if (added) this.log(`[INFO] Imported ${added} item(s) from CURIOSITY.md into the curiosity list (from now on, edit them under "Curiosities" on the screen)`);
   }
 
   config(): AppConfig {
@@ -299,14 +313,24 @@ export class App {
       this.#applied = json;
       this.registry.reload(config);
       void this.browser?.applyConfig(config).catch(() => undefined);
-      void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
-      void this.status.probeAll(config).catch(error => this.log(`[ERROR] 設定の再読み込み後の確認に失敗: ${(error as Error).message}`));
-      this.log('[INFO] 設定ファイルの変更を読み込みました');
+      void this.mcp?.reload().catch(error => this.log(`[ERROR] Failed to reload MCP: ${(error as Error).message}`));
+      void this.status.probeAll(config).catch(error => this.log(`[ERROR] Failed to check the models after reloading the settings: ${(error as Error).message}`));
+      this.log('[INFO] Loaded the changes to the settings file');
       this.#warnIgnoredPolicies(config);
       this.worker?.poke();
     }
     this.#applied ||= json;
+    this.#reportDropped();
     return config;
+  }
+
+  #reportDropped(): void {
+    const dropped = this.configStore.dropped.join(', ');
+    if (dropped && dropped !== this.#droppedReported) this.log(`[INFO] Ignored settings that are no longer used: ${dropped}`);
+    this.#droppedReported = dropped;
+    const rewritten = this.configStore.rewritten.join(', ');
+    if (rewritten && rewritten !== this.#rewrittenReported) this.log(`[INFO] Read old settings in their new form: ${rewritten}`);
+    this.#rewrittenReported = rewritten;
   }
 
   baseTokens(): number {
@@ -314,7 +338,7 @@ export class App {
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
     // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
-    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) }))) : 0;
+    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) }), config)) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }
@@ -330,7 +354,7 @@ export class App {
     this.#applied = JSON.stringify(saved);
     this.registry.reload(saved);
     void this.browser.applyConfig(saved).catch(() => undefined);
-    void this.mcp?.reload().catch(error => this.log(`[ERROR] MCP の再読み込みに失敗: ${(error as Error).message}`));
+    void this.mcp?.reload().catch(error => this.log(`[ERROR] Failed to reload MCP: ${(error as Error).message}`));
     if (options.probe !== false) await this.status.probeAll(saved);
     this.worker.poke();
     return saved;

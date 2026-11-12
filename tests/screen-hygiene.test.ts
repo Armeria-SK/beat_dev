@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { PERMISSION_MODES } from '../src/shared/permission-mode.ts';
 
 // 画面（web/src）の片付けの見張り。辞書の外に日本語の文字が残っていないこと、辞書に使われない項目が溜まっていないことを、毎回の npm test で確かめる。
 
@@ -42,9 +41,9 @@ function codeLines(text: string): Array<{ no: number; code: string }> {
   return out;
 }
 
-test('画面の文字は辞書に集める: web/src の辞書（i18n/）の外に、日本語の文字が無い（API に送る曜日の値だけ除く）', () => {
-  // i18n/ だけが、日本語を書いてよい場所。avatars/ は SVG の絵だけ（.ts / .tsx は無い）だが、その中の文字も数える
-  const files = walk(WEB, name => name === 'i18n');
+test('画面は英語だけ: web/src のどこにも（辞書 en.ts も含めて）日本語の文字が無い（API に送る曜日の値だけ除く）', () => {
+  const files = walk(WEB);
+  assert.ok(files.some(file => /[\\/]i18n[\\/]en\.ts$/u.test(file)), '辞書 en.ts を読めていない');
   assert.ok(files.length > 50, `${files.length} ファイルしか読めていない`);
   const hits: string[] = [];
   for (const file of files) {
@@ -61,32 +60,18 @@ test('画面の文字は辞書に集める: web/src の辞書（i18n/）の外�
 // キー名の組み立て（`chat.kind.${x}` など）で、前半だけが分かるキーの前半。ここに書いたものだけが、「その前半で始まるキーを全部使っている」と数えられる。
 // 足すときは、組み立てる側（値の種類が決まっているところ）を確かめて、ここに理由を書く。クラス名の組み立て（`pane${x}` など）は、キーに「.」が続かないので数えない。
 const DYNAMIC_PREFIXES: Record<string, string> = {
-  'chat.kind.': 'Composer.tsx: 入力欄の下の注記の種類ごとの文',
-  'lang.': 'Palette.tsx / settings/LookSection.tsx: 言語の名前（LANGUAGES の値）',
-  'mode.': 'Composer.tsx / ModeMenu.tsx / StatusBar.tsx / Chat.tsx: 権限モード（PERMISSION_MODES の値）の名前と説明（mode.normal と mode.normalDesc など）',
-  'notifications.kind.': 'settings/AccessConfirm.tsx / settings/NotifySection.tsx: 通知の種類の名前（NOTIFICATION_KINDS の値）',
-  'runs.seg.': 'Runs.tsx: 実行ログの切り替えの名前（実行 / 道具 / 振り返り）',
-  'settings.browser.channel.': 'settings/BrowserSection.tsx: 使うブラウザ（auto / chrome / path）の名前',
-  'settings.mcp.declare.effect.': 'settings/McpToolRow.tsx: 道具の性質の申告（read / write / network）の名前',
-  'settings.mcp.problem.': 'settings/McpAddForm.tsx: 追加フォームの誤り（addProblem の値）の文',
-  'settings.mcp.state.': 'settings/McpServerCard.tsx: サーバーの状態（connecting / ready / failed / off）の名前',
-  'settings.mcp.toolState.': 'settings/McpToolRow.tsx: 道具の状態（registered / off / changed ほか）の名前',
-  'settings.look.motion.': 'settings/LookSection.tsx: 動きの名前（MOTIONS の値）',
-  'settings.look.state.': 'settings/LookSection.tsx: 様子の見本の名前',
-  'settings.notify.limit.': 'settings/NotifySection.tsx: 上限 5 つの名前と説明（notify.limits のキー）',
-  'skills.seg.': 'SkillsPage.tsx: スキル・ツールの切り替えの名前',
-  'worker.': 'settings/BehaviorSections.tsx: ワーカーの状態の名前',
+  'notifications.kind.': 'ui/settings/access-text.tsx: 通知の種類の名前（NOTIFICATION_KINDS の値）',
+  'settings.mcp.problem.': 'ui/settings/mcp.tsx: 追加フォームの誤り（addProblem の値）の文',
+  'settings.mcp.state.': 'ui/settings/mcp.tsx: サーバーの状態（connecting / ready / failed / off）の名前',
+  'settings.mcp.toolState.': 'ui/settings/mcp.tsx: 道具の状態（registered / off / changed ほか）の名前',
 };
 
 // 前半が同じキーのうち、組み立てて使うものが決まっているときの、そのキー（ここに無い同じ前半のキーは、キー全体が文字列で出てこなければ、使われていないとみなす）。
-// 権限モードは、名前 `mode.${mode}` と説明 `mode.${mode}Desc` だけを組み立てる。`mode.chip` `mode.menu` などの文は、キー全体で書く
-const DYNAMIC_ONLY: Record<string, readonly string[]> = {
-  'mode.': PERMISSION_MODES.flatMap(mode => [`mode.${mode}`, `mode.${mode}Desc`]),
-};
+const DYNAMIC_ONLY: Record<string, readonly string[]> = {};
 const builtDynamically = (key: string): boolean => Object.keys(DYNAMIC_PREFIXES).some(prefix => key.startsWith(prefix) && (DYNAMIC_ONLY[prefix]?.includes(key) ?? true));
 
 test('辞書に、使われない項目が無い（キー全体が文字列で出てくるか、書き留めた「前半だけ組み立てるキー」の下にある）', () => {
-  const dictionary = readFileSync(join(WEB, 'i18n', 'ja.ts'), 'utf8');
+  const dictionary = readFileSync(join(WEB, 'i18n', 'en.ts'), 'utf8');
   const keys = [...dictionary.matchAll(/^ {2}'([^']+)':/gmu)].map(m => m[1]!);
   assert.ok(keys.length > 800, `${keys.length} 件しか読めていない`);
   const literals = new Set<string>();
@@ -102,7 +87,7 @@ test('辞書に、使われない項目が無い（キー全体が文字列で�
     }
   };
   for (const file of walk(WEB)) {
-    if (/[\\/]i18n[\\/](ja|en)\.ts$/u.test(file)) continue;
+    if (/[\\/]i18n[\\/]en\.ts$/u.test(file)) continue;
     addFrom(readFileSync(file, 'utf8'));
   }
   // 「.」で終わる前半は、キーの組み立てかもしれないので、書き留めてあるものだけを認める（書き留めていない新しいものが出たら、ここで落ちる）

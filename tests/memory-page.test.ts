@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import { actionKey, actorKey, BOOK_TAB_KEY, canUndo, MEMORY_TABS, memoryRef, originKey, roleKey, TAB_KEY } from '../web/src/memory-page.ts';
 import { usageFraction, usageIsHigh } from '../web/src/usage.ts';
 
@@ -52,33 +51,14 @@ test('切り替え: 3 つ（ユーザーについて・メモと教訓・会話�
   assert.deepEqual([...MEMORY_TABS], ['user', 'notes', 'search']);
   assert.deepEqual(Object.keys(TAB_KEY).sort(), [...MEMORY_TABS].sort());
   assert.deepEqual(Object.keys(BOOK_TAB_KEY).sort(), ['notes', 'user']);
-  for (const tab of MEMORY_TABS) assert.ok(TAB_KEY[tab] in ja && TAB_KEY[tab] in en, tab);
+  for (const tab of MEMORY_TABS) assert.ok(TAB_KEY[tab] in en, tab);
 });
 
-test('辞書: 記憶のページの文字は ja と en の両方にあり、en は ja の写しではない', () => {
-  const keys = Object.keys(ja).filter(k => k.startsWith('memory.'));
-  assert.ok(keys.length >= 45, `${keys.length} 件しか読めていない`);
-  const sameInBoth = new Set(['memory.actor.clive', 'memory.role.assistant']);
-  for (const key of keys) {
-    const jaEntry = (ja as Record<string, unknown>)[key];
-    const enEntry = (en as Record<string, unknown>)[key];
-    assert.equal(typeof enEntry, typeof jaEntry, key);
-    if (typeof jaEntry === 'string' && !sameInBoth.has(key)) assert.notEqual(enEntry, jaEntry, `${key}: 訳し忘れ`);
-  }
+test('辞書: 記憶のページの文字は en にある', () => {
+  const keys = Object.keys(en).filter(k => k.startsWith('memory.'));
+  assert.ok(keys.length >= 13, `${keys.length} 件しか読めていない`);
   for (const key of ['memory.origin.user', 'memory.origin.review', 'memory.origin.clive', 'memory.action.create', 'memory.actor.user', 'memory.role.tool']) {
-    assert.ok(key in ja && key in en, key);
+    assert.ok(key in en, key);
   }
 });
 
-test('辞書: 差し込みの文は、引数を入れた形で読める', () => {
-  const jaLine = (ja['memory.event.line'] as (a: string, b: string, c: string) => string)('10:15', 'あなた', '削除');
-  assert.equal(jaLine, '10:15 あなたが削除');
-  const enLine = (en['memory.event.line'] as (a: string, b: string, c: string) => string)('10:15', 'you', 'deleted');
-  assert.equal(enLine, '10:15 deleted by you');
-  assert.equal((ja['memory.size'] as (a: string) => string)('1,240'), '文字数 1,240 字');
-  assert.equal((en['memory.size'] as (a: string) => string)('1,240'), '1,240 chars');
-  assert.equal((ja['memory.context'] as (a: string, b: string) => string)('3,200', '7,348'), '会話に入る量 約 3,200 / 7,348 トークン');
-  assert.equal((en['memory.context'] as (a: string, b: string) => string)('3,200', '7,348'), 'In a conversation: about 3,200 / 7,348 tokens');
-  assert.equal((ja['memory.over'] as (a: string) => string)('3'), '3 件は会話に入りません。必要なときは Clive が memory_search で探します');
-  assert.equal((en['memory.over'] as (a: string) => string)('3'), '3 will not fit in a conversation. Clive looks them up with memory_search when needed');
-});

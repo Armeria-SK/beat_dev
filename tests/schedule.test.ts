@@ -62,8 +62,8 @@ test('nextRunAt: タイムゾーンを考慮する（Asia/Tokyo の 9 時は UTC
 });
 
 test('describeCron: 人向けの説明', () => {
-  assert.equal(describeCron('0 9 * * MON-FRI'), '平日 09:00');
-  assert.equal(describeCron('15 10 * * TUE'), '毎週火曜 10:15');
-  assert.equal(describeCron('*/30 * * * *'), '30 分ごと');
+  assert.equal(describeCron('0 9 * * MON-FRI'), 'Weekdays at 09:00');
+  assert.equal(describeCron('15 10 * * TUE'), 'Every Tuesday at 10:15');
+  assert.equal(describeCron('*/30 * * * *'), 'Every 30 min');
   assert.equal(describeCron('0 0 1 * *'), '0 0 1 * *', '簡単入力で表せないものは式のまま');
 });

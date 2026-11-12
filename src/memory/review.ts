@@ -22,14 +22,13 @@ export interface ReviewJob {
 }
 
 export const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
-  ja: { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が大きくなった', manual: '手動' },
   en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory has grown large', manual: 'Manual' },
 };
 
-export const TRIGGER_LABEL = TRIGGER_TEXT.ja;
+export const TRIGGER_LABEL = TRIGGER_TEXT.en;
 
 // 整理の振り返り（book_full）では、記憶を消さず・新しく覚えず、案を知らせる。この実行には渡さず、呼ばれても拒否する道具
-export const TIDY_FORBIDDEN_TOOLS: readonly string[] = ['memory_forget', 'memory_save'];
+export const TIDY_FORBIDDEN_TOOLS: readonly string[] = ['memory_forget', 'memory_save', 'skill_draft'];
 
 // 整理の案の返事が「案なし」のとき（通知しない）
 export const isNoProposal = (reply: string): boolean => /^(?:変更なし|No changes?)[。.!！]?$/iu.test(reply.trim());
@@ -108,6 +107,7 @@ interface ReviewText {
   intro: (trigger: string) => string;
   policyHeading: string;
   policy: readonly string[];
+  skillAuto: string;
   tidyPolicy: readonly string[];
   forgottenHeading: string;
   pressureHeading: string;
@@ -127,43 +127,6 @@ interface ReviewText {
 }
 
 const REVIEW_TEXT: Record<Language, ReviewText> = {
-  ja: {
-    intro: trigger => `[振り返り] きっかけ: ${trigger}。下の記録を読んで、記憶を整える（ユーザーとの会話ではありません。返事は記録に残るだけです）。`,
-    policyHeading: '# 方針',
-    policy: [
-      '- 残すのは「次に役立つ教訓と事実」。出来事のログは残さない',
-      '- 既に記憶にあることは足さない。重なっている記憶は memory_update で1つにまとめ、要らなくなった方は memory_forget',
-      '- 矛盾したら新しい方を残す',
-      '- 拾い漏れたユーザーについての事実（好み・予定・関係・環境）は memory_save（book=user）。自分の教訓は book=notes',
-      '- 1つの記録から足すのは多くても3件',
-      '- 繰り返し使えそうな手順が見つかったら skill_draft（ユーザーが承認するまで使われない）。新しく作るより、既存のスキルを直すほうを優先する',
-      '- 気になったが調べていないことがあれば curiosity_add',
-      '- することがなければ、道具を使わずに「変更なし」とだけ返す',
-      '- 最後に、何をしたかを1〜2文で返す',
-    ],
-    tidyPolicy: [
-      '- 今回の目的は、記憶を整理する案を出すこと。新しく覚えることはしない（memory_save は使えない）',
-      '- 下に挙げた「会話に入りきらない記憶」のうち、重なりがはっきりしているものだけ、memory_update で 1 つにまとめてよい。memory_forget は使えない（消すかどうかはユーザーが決める）',
-      '- 消したほうがよい・まとめたほうがよいと思う記憶は、最後の返事に 1 件 1 行で書く。書き方は「[n3] 消す: 理由（短く）」「[u1] [u4] まとめる: 理由（短く）」。多くても 10 行',
-      '- 古くなったもの・ほかの記憶と重なるもの・一時的な出来事のものを優先して挙げる。ユーザーの大事な事実は挙げない',
-      '- 提案が無ければ、道具を使わずに「変更なし」とだけ返す',
-    ],
-    forgottenHeading: '# ユーザーが消した記憶（同じ内容を覚え直さない）',
-    pressureHeading: '# 記憶の量',
-    pressureSummary: (tokens, budget, count) => `記憶の合計は約 ${tokens} トークンで、会話に入れる量の目安（約 ${budget} トークン）を超えています。会話に入りきらない記憶が ${count} 件あります。重なりをまとめる・古いものを減らす案を出す`,
-    pressureListHeading: '会話に入りきらない記憶（古い順）:',
-    pressureMore: count => `…（ほか ${count} 件）`,
-    taskHeading: '# 終わったタスク',
-    taskTitle: 'タイトル',
-    taskResult: '結果',
-    taskNotes: 'メモ',
-    taskEvents: '経過',
-    transcriptHeading: '# 会話の記録',
-    truncated: '…（略）',
-    user: 'ユーザー',
-    tool: name => `道具 ${name}`,
-    line: (label, body) => `【${label}】${body}`,
-  },
   en: {
     intro: trigger => `[Review] Trigger: ${trigger}. Read the record below and tidy up your memory (this is not a conversation with the user; your reply is only saved to the record).`,
     policyHeading: '# Policy',
@@ -175,15 +138,18 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
       '- Add at most 3 items from a single record',
       '- If you find a procedure that looks reusable, use skill_draft (it is not used until the user approves it). Prefer fixing an existing skill over creating a new one',
       '- If something caught your interest but you have not looked into it, use curiosity_add',
-      '- If there is nothing to do, use no tools and reply only "No changes"',
+      '- If there is nothing to do, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)',
       '- At the end, report what you did in one or two sentences',
+      "- Write memories, skill drafts, curiosity items and your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English",
     ],
+    skillAuto: "- If you find a procedure that looks reusable, use skill_draft (it is registered right away without the user's review unless the record read outside content or is about a task, in which case it waits for the user's approval; the user can undo it from the skill's History). Prefer fixing an existing skill over creating a new one",
     tidyPolicy: [
       '- The purpose this time is to propose how to tidy up memory. Do not learn anything new (memory_save is not available)',
       '- Of the memories listed below that do not fit in a conversation, you may merge only the clearly overlapping ones into one with memory_update. memory_forget is not available (the user decides what to delete)',
       '- Write the memories you think should be deleted or merged in your final reply, one per line, like "[n3] Delete: reason (short)" or "[u1] [u4] Merge: reason (short)". At most 10 lines',
       '- Prefer outdated memories, ones that overlap with others, and ones about temporary events. Do not list important facts about the user',
-      '- If there is nothing to propose, use no tools and reply only "No changes"',
+      '- If there is nothing to propose, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)',
+      '- Write merged memories and your final reply in the language the user writes in: the language the listed memories are written in. Only the reply "No changes" stays in English',
     ],
     forgottenHeading: '# Memories the user deleted (do not learn the same thing again)',
     pressureHeading: '# Memory usage',
@@ -253,14 +219,16 @@ export function reviewPrompt(input: {
   forgotten: readonly string[];
   bookPressure?: string | undefined;
   language?: Language | undefined;
+  skillsAutoRegister?: boolean | undefined;
 }): string {
   const language = input.language ?? DEFAULT_LANGUAGE;
   const text = REVIEW_TEXT[language];
+  const policy = input.skillsAutoRegister ? text.policy.map(line => (line.includes('skill_draft') ? text.skillAuto : line)) : text.policy;
   const parts = [
     text.intro(TRIGGER_TEXT[language][input.trigger]),
     '',
     text.policyHeading,
-    ...(input.trigger === 'book_full' ? text.tidyPolicy : text.policy),
+    ...(input.trigger === 'book_full' ? text.tidyPolicy : policy),
   ];
   if (input.forgotten.length) {
     parts.push('', text.forgottenHeading, ...input.forgotten.map(f => `- ${clip(f, 200, language)}`));

@@ -3,167 +3,43 @@ import { test } from 'node:test';
 import { DAY_MAP } from '../src/tasks/schedule.ts';
 import { en } from '../web/src/i18n/en.ts';
 import {
-  applyServerSettings, formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getSettingsApplied, getTimezone, initLanguage, loadServerSettings, parseZonedInput, pluralEn,
-  resolveLanguage, setLanguagePreference, setTimezone, startOfDay, t, timezoneLabel,
+  applyServerSettings, formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getTimezone, loadServerSettings, parseZonedInput, pluralEn,
+  setTimezone, startOfDay, t, timezoneLabel,
 } from '../web/src/i18n/index.ts';
-import { ja } from '../web/src/i18n/ja.ts';
-import { markSettingsApplied, subscribe } from '../web/src/i18n/state.ts';
+import { subscribe } from '../web/src/i18n/state.ts';
 import { WEEKDAYS } from '../web/src/weekdays.ts';
 
-interface BrowserInit { stored?: string; languages?: string[]; language?: string; storageThrows?: boolean }
-// 言語はブラウザに保存しない（サーバーの設定）。古い保存値が残っていても読まないことも確かめる。
-
-function makeBrowser(init: BrowserInit) {
-  const store = new Map<string, string>();
-  if (init.stored !== undefined) store.set('clive.language', init.stored);
-  const documentElement = { lang: '' };
-  const localStorage = {
-    getItem: (k: string) => { if (init.storageThrows) throw new Error('blocked'); return store.get(k) ?? null; },
-    setItem: (k: string, v: string) => { if (init.storageThrows) throw new Error('blocked'); store.set(k, v); },
-    removeItem: (k: string) => { if (init.storageThrows) throw new Error('blocked'); store.delete(k); },
-  };
-  const navigator = { ...(init.languages ? { languages: init.languages } : {}), ...(init.language ? { language: init.language } : {}) };
-  return { store, documentElement, localStorage, navigator, document: { documentElement } };
-}
-
-function withBrowser<T>(env: ReturnType<typeof makeBrowser>, fn: () => T): T {
-  const names = ['localStorage', 'navigator', 'document'] as const;
-  const saved = names.map(n => [n, Object.getOwnPropertyDescriptor(globalThis, n)] as const);
-  for (const n of names) Object.defineProperty(globalThis, n, { value: env[n], configurable: true, writable: true });
-  try { return fn(); } finally {
-    for (const [n, d] of saved) { if (d) Object.defineProperty(globalThis, n, d); else delete (globalThis as Record<string, unknown>)[n]; }
-  }
-}
-
 function reset() {
-  setLanguagePreference('ja');
   setTimezone('Asia/Tokyo');
 }
 
-test('resolveLanguage: 保存した値 → ブラウザの言語の主の部分 → ja の順で決める', () => {
-  assert.equal(resolveLanguage('en', ['ja-JP']), 'en');
-  assert.equal(resolveLanguage('ja', ['en-US']), 'ja');
-  assert.equal(resolveLanguage(null, ['en-GB']), 'en', 'en-GB は主の部分 en で英語');
-  assert.equal(resolveLanguage(null, ['EN-us']), 'en', '大文字小文字は見ない');
-  assert.equal(resolveLanguage(null, ['en_US']), 'en');
-  assert.equal(resolveLanguage(null, ['ja-JP', 'en']), 'ja', '先に出てきた方');
-  assert.equal(resolveLanguage(null, ['fr-FR', 'en-US']), 'en', '辞書が無い言語は飛ばして次を見る');
-  assert.equal(resolveLanguage(null, ['zh-Hant', 'fr']), 'ja', 'どれも無ければ ja');
-  assert.equal(resolveLanguage(null, []), 'ja');
-  assert.equal(resolveLanguage('fr', ['en-GB']), 'en', '知らない保存値は無いのと同じ');
-  assert.equal(resolveLanguage('auto', ['en']), 'en');
-  assert.equal(resolveLanguage(undefined, ['en']), 'en');
-});
-
-test('initLanguage: ブラウザの言語（navigator.languages の主の部分）→ ja の順で決まり、<html lang> が追従する。ブラウザの保存値は読まない', () => {
-  const gb = makeBrowser({ languages: ['en-GB', 'ja'] });
-  withBrowser(gb, () => {
-    setLanguagePreference('ja');
-    initLanguage();
-    assert.equal(getLanguage(), 'en', '以前に決めた言語は引き継がず、ブラウザの言語から始める');
-    assert.equal(getLanguagePreference(), 'auto');
-    assert.equal(gb.documentElement.lang, 'en');
-  });
-  const none = makeBrowser({ languages: [] });
-  withBrowser(none, () => {
-    initLanguage();
-    assert.equal(getLanguage(), 'ja');
-    assert.equal(none.documentElement.lang, 'ja');
-  });
-  const legacy = makeBrowser({ language: 'en-GB' });
-  withBrowser(legacy, () => {
-    initLanguage();
-    assert.equal(getLanguage(), 'en', 'languages が無い環境は language を見る');
-  });
-  const oldSaved = makeBrowser({ stored: 'en', languages: ['ja-JP'] });
-  withBrowser(oldSaved, () => {
-    initLanguage();
-    assert.equal(getLanguage(), 'ja', '段階 2 の仮の保存（clive.language）は読まない。言語はサーバーの設定が決める');
-    assert.equal(getLanguagePreference(), 'auto');
-  });
-  const blocked = makeBrowser({ languages: ['en-US'], storageThrows: true });
-  withBrowser(blocked, () => {
-    initLanguage();
-    assert.equal(getLanguage(), 'en', '保存先が読めなくても落ちずにブラウザの言語に従う');
-  });
+test('applyServerSettings: 設定の timezone を画面に反映する', () => {
+  reset();
+  applyServerSettings({ config: { timezone: 'America/New_York' } });
+  assert.equal(getTimezone(), 'America/New_York');
   reset();
 });
 
-test('setLanguagePreference: サーバーの設定の language を反映する。<html lang>・購読者への通知が揃い、auto でブラウザの言語に戻る。ブラウザには書かない', () => {
-  const env = makeBrowser({ languages: ['ja-JP'] });
-  withBrowser(env, () => {
-    initLanguage();
-    let calls = 0;
-    const off = subscribe(() => { calls += 1; });
-    setLanguagePreference('en');
-    assert.equal(getLanguage(), 'en');
-    assert.equal(getLanguagePreference(), 'en');
-    assert.equal(env.store.has('clive.language'), false, 'ブラウザには保存しない');
-    assert.equal(env.documentElement.lang, 'en');
-    assert.equal(t('nav.tasks'), 'Tasks');
-    assert.ok(calls >= 1, '画面を描き直すために購読者へ知らせる');
-    setLanguagePreference('ja');
-    assert.equal(t('nav.tasks'), 'タスク');
-    assert.equal(env.documentElement.lang, 'ja');
-    setLanguagePreference('en');
-    setLanguagePreference('auto');
-    assert.equal(getLanguage(), 'ja', 'ブラウザが ja-JP なので ja に戻る');
-    off();
-  });
+test('t(): 英語の辞書を引き、関数の項目には引数を差し込む', () => {
+  reset();
+  assert.equal(t('ui.nav.kanban'), 'Kanban');
+  assert.equal(t('ui.foot.waiting', 3), '3 waiting for you');
+  assert.equal(t('ui.checklist.count', 2, 5), '2 / 5');
   reset();
 });
 
-test('applyServerSettings: 設定の language（無ければ auto = ブラウザの言語）と timezone を画面に反映する', () => {
-  const env = makeBrowser({ languages: ['en-US'] });
-  withBrowser(env, () => {
-    initLanguage();
-    assert.equal(getSettingsApplied(), false, '設定を読むまでは「反映した」ではない');
-    applyServerSettings({ config: { language: 'ja', timezone: 'America/New_York' } });
-    assert.equal(getSettingsApplied(), true);
-    assert.equal(getLanguage(), 'ja', 'language が設定にあればそれに従う（ブラウザが英語でも）');
-    assert.equal(getLanguagePreference(), 'ja');
-    assert.equal(getTimezone(), 'America/New_York');
-    applyServerSettings({ config: {} });
-    assert.equal(getLanguagePreference(), 'auto', 'language が無ければ auto');
-    assert.equal(getLanguage(), 'en', 'auto はブラウザの言語（返事の言語は別で、サーバーが ja のまま）');
-    applyServerSettings({ config: { language: 'fr' } });
-    assert.equal(getLanguagePreference(), 'auto', '知らない言語は無いのと同じ');
-    applyServerSettings({ config: { language: 'en' } });
-    assert.equal(getLanguage(), 'en');
-  });
-  reset();
-});
-
-test('t(): 言語ごとの辞書を引き、関数の項目には引数を差し込む', () => {
-  reset();
-  assert.equal(t('nav.tasks'), 'タスク');
-  assert.equal(t('nav.tasksWaiting', 3), '返事待ち 3');
-  assert.equal(t('notice.modelSwitch', 'a', 'b', 'c'), 'a が使えなかったため b に切り替えました（c）');
-  setLanguagePreference('en');
-  assert.equal(t('nav.tasks'), 'Tasks');
-  assert.equal(t('nav.tasksWaiting', 3), '3 awaiting reply');
-  assert.equal(t('notice.modelSwitch', 'a', 'b', 'c'), 'a was unavailable, so Clive switched to b (c)');
-  reset();
-});
-
-test('辞書: ja と en はキーが同じで、関数の項目は引数がどちらの訳にも出る', () => {
-  const jaKeys = Object.keys(ja).sort();
+test('辞書: en の文字列の項目は空でなく、関数の項目は引数が訳に出る', () => {
   const enKeys = Object.keys(en).sort();
-  assert.deepEqual(enKeys, jaKeys, 'キーの過不足（型でも落ちるが、実行時にも確かめる）');
-  assert.ok(jaKeys.length > 30, `キーが ${jaKeys.length} 件しか読めていない`);
+  assert.ok(enKeys.length > 30, `キーが ${enKeys.length} 件しか読めていない`);
   let functionEntries = 0;
-  for (const key of jaKeys) {
-    const jaEntry = (ja as Record<string, unknown>)[key];
+  for (const key of enKeys) {
     const enEntry = (en as Record<string, unknown>)[key];
-    assert.equal(typeof enEntry, typeof jaEntry, `${key}: 文字列か関数かが ja と違う`);
-    assert.ok(typeof jaEntry === 'string' ? jaEntry.length > 0 : true, `${key}: 空の訳`);
-    if (typeof jaEntry !== 'function') continue;
+    assert.ok(typeof enEntry === 'string' ? enEntry.length > 0 : typeof enEntry === 'function', `${key}: 空の訳`);
+    if (typeof enEntry !== 'function') continue;
     functionEntries += 1;
-    const args = Array.from({ length: jaEntry.length }, (_, i) => 7001 + i);
-    for (const [lang, entry] of [['ja', jaEntry], ['en', enEntry]] as const) {
-      const out = (entry as (...a: number[]) => string)(...args);
-      for (const arg of args) assert.ok(out.includes(String(arg)), `${key}（${lang}）の訳に引数 ${arg} が出ていない: ${out}`);
-    }
+    const args = Array.from({ length: enEntry.length }, (_, i) => 7001 + i);
+    const out = (enEntry as (...a: number[]) => string)(...args);
+    for (const arg of args) assert.ok(out.includes(String(arg)), `${key} の訳に引数 ${arg} が出ていない: ${out}`);
   }
   assert.ok(functionEntries >= 5, `関数の項目が ${functionEntries} 件しか読めていない`);
 });
@@ -174,11 +50,14 @@ test('formatDateTime: ブラウザではなくサーバーのタイムゾーン�
   assert.equal(formatDateTime(instant), '11/5 09:30');
   assert.equal(formatDateTime(instant, 'full'), '2026/11/05 09:30');
   assert.equal(formatDateTime(instant, 'precise'), '11/05 09:30:00');
+  assert.equal(formatDateTime(instant, 'time'), '09:30');
+  const midnight = Date.UTC(2026, 10, 19, 15, 5);
+  assert.equal(formatDateTime(midnight), '11/20 00:05', '0 時は 24 時でなく 00 時');
+  assert.equal(formatDateTime(midnight, 'full'), '2026/11/20 00:05');
+  assert.equal(formatDateTime(midnight, 'precise'), '11/20 00:05:00');
+  assert.equal(formatDateTime(midnight, 'time'), '00:05');
   setTimezone('America/New_York');
   assert.equal(formatDateTime(instant), '11/4 19:30', 'ニューヨークでは前の日の夜');
-  setLanguagePreference('en');
-  const english = formatDateTime(instant);
-  assert.ok(/11\/4/.test(english) && /07:30/.test(english), `en の表示: ${english}`);
   assert.equal(formatDateTime(null), '—');
   assert.equal(formatDateTime(undefined), '—');
   reset();
@@ -235,17 +114,13 @@ test('timezoneLabel: 名前と UTC からのずれを返す', () => {
   assert.equal(timezoneLabel('UTC', winter), 'UTC (UTC+00:00)');
 });
 
-test('formatRelative / formatNumber / formatList / pluralEn: 言語に合わせて整える', () => {
+test('formatRelative / formatNumber / formatList / pluralEn: 英語で整える', () => {
   reset();
   const now = Date.UTC(2026, 10, 5, 12, 0);
-  assert.equal(formatRelative(now - 3 * 60_000, now), '3 分前');
-  assert.equal(formatRelative(now + 2 * 3_600_000, now), '2 時間後');
-  assert.equal(formatRelative(now - 3 * 86_400_000, now), '3 日前');
-  assert.equal(formatRelative(now - 10_000, now), '今');
+  assert.equal(formatRelative(now - 3 * 86_400_000, now), '3 days ago');
+  assert.equal(formatRelative(now - 10_000, now), 'now');
   assert.equal(formatNumber(1234567), '1,234,567');
-  assert.equal(formatList(['a', 'b', 'c']), 'a、b、c');
   assert.equal(formatList([]), '');
-  setLanguagePreference('en');
   assert.equal(formatRelative(now - 3 * 60_000, now), '3 minutes ago');
   assert.equal(formatRelative(now + 2 * 3_600_000, now), 'in 2 hours');
   assert.equal(formatRelative(now - 800 * 86_400_000, now), '2 years ago');
@@ -258,13 +133,10 @@ test('formatRelative / formatNumber / formatList / pluralEn: 言語に合わせ�
   reset();
 });
 
-test('WEEKDAYS: API に送る値はサーバーの曜日の読み取りと同じ日本語のままで、言語を変えてもラベルだけが変わる', () => {
+test('WEEKDAYS: API に送る値はサーバーの曜日の読み取りと同じ日本語のままで、ラベルは英語', () => {
   reset();
   assert.deepEqual(WEEKDAYS.map(d => d.value), Object.keys(DAY_MAP), 'サーバー（src/tasks/schedule.ts の DAY_MAP）と同じ値・同じ順');
-  assert.deepEqual(WEEKDAYS.map(d => t(d.label)), ['月曜', '火曜', '水曜', '木曜', '金曜', '土曜', '日曜']);
-  setLanguagePreference('en');
   assert.deepEqual(WEEKDAYS.map(d => t(d.label)), ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']);
-  assert.deepEqual(WEEKDAYS.map(d => d.value), Object.keys(DAY_MAP), 'en でも値は変わらない');
   reset();
 });
 
@@ -276,20 +148,6 @@ async function quietly<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { console.warn = warn; }
 }
 
-test('markSettingsApplied: 初めて読めたときだけ、画面に知らせる（2 回目以降は知らせない）', () => {
-  initLanguage();
-  let notified = 0;
-  const stop = subscribe(() => { notified += 1; });
-  markSettingsApplied();
-  assert.equal(getSettingsApplied(), true);
-  assert.equal(notified, 1);
-  markSettingsApplied();
-  assert.equal(notified, 1, '同じ状態を何度も知らせない');
-  stop();
-  initLanguage();
-  assert.equal(getSettingsApplied(), false, '起動のやり直しでは、読めていない状態に戻る');
-});
-
 test('loadServerSettings: 待ち時間のうちに届いた設定のタイムゾーンを反映する', async () => {
   reset();
   await loadServerSettings(async () => ({ config: { timezone: 'America/New_York' } }), { waitMs: 200 });
@@ -298,21 +156,17 @@ test('loadServerSettings: 待ち時間のうちに届いた設定のタイムゾ
 });
 
 test('loadServerSettings: 待ち時間のあとに届いた設定も捨てず、届いた時点でタイムゾーンを反映する', async () => {
-  initLanguage();
   reset();
   const started = Date.now();
   await loadServerSettings(async () => { await sleep(120); return { config: { timezone: 'America/New_York' } }; }, { waitMs: 20 });
   assert.ok(Date.now() - started < 100, '最初の描画は待ち時間で先へ進む');
   assert.equal(getTimezone(), 'Asia/Tokyo', '届くまでは既定のまま');
-  assert.equal(getSettingsApplied(), false, '待っているあいだは、設定を読めていない');
   await sleep(200);
   assert.equal(getTimezone(), 'America/New_York', '遅れて届いた設定で入れ替わる');
-  assert.equal(getSettingsApplied(), true, '届いたら読めた');
   reset();
 });
 
 test('loadServerSettings: 読めなかったときは一度だけやり直し、それでも読めなければ既定のまま', async () => {
-  initLanguage();
   reset();
   let calls = 0;
   await quietly(async () => {
@@ -322,13 +176,10 @@ test('loadServerSettings: 読めなかったときは一度だけやり直し、
       return { config: { timezone: 'Europe/Paris' } };
     }, { waitMs: 200, retryMs: 20 });
     assert.equal(getTimezone(), 'Asia/Tokyo', '最初の読み込みは失敗');
-    assert.equal(getSettingsApplied(), false, '失敗では「反映した」にしない');
     await sleep(120);
     assert.equal(calls, 2);
     assert.equal(getTimezone(), 'Europe/Paris', 'やり直しで届いた設定を反映する');
-    assert.equal(getSettingsApplied(), true);
   });
-  initLanguage();
   let failures = 0;
   await quietly(async () => {
     await loadServerSettings(async () => { failures += 1; throw new Error('down'); }, { waitMs: 200, retryMs: 20 });
@@ -336,7 +187,6 @@ test('loadServerSettings: 読めなかったときは一度だけやり直し、
   });
   assert.equal(failures, 2, '最初の 1 回とやり直しの 1 回だけ');
   assert.equal(getTimezone(), 'Europe/Paris', '失敗では書き換えない');
-  assert.equal(getSettingsApplied(), false, '読めないままなら、設定を読めていない');
   reset();
 });
 
@@ -349,14 +199,14 @@ test('loadServerSettings: timezone が文字列でなければ何もしない', 
 
 test('t(): 引数が違うキーの和集合は型で断り、引数が同じ和集合は呼べる', () => {
   reset();
-  const mixed = 'nav.tasks' as 'nav.tasks' | 'nav.tasksWaiting';
+  const mixed = 'ui.nav.kanban' as 'ui.nav.kanban' | 'ui.foot.waiting';
   // @ts-expect-error 文字列の項目と関数の項目の和集合は、引数が決まらないので呼べない
   const rejected = () => t(mixed);
   assert.equal(typeof rejected, 'function');
-  const memory = 'notice.memoryCreate' as 'notice.memoryCreate' | 'notice.memoryUpdate';
-  assert.equal(t(memory, 'x'), '記憶しました: x');
-  const plain = 'nav.tasks' as 'nav.tasks' | 'nav.memory';
-  assert.equal(t(plain), 'タスク');
+  const memory = 'ui.notice.memoryCreate' as 'ui.notice.memoryCreate' | 'ui.notice.memoryUpdate';
+  assert.equal(t(memory, 'x'), 'Memory saved: x');
+  const plain = 'ui.nav.kanban' as 'ui.nav.kanban' | 'ui.nav.memory';
+  assert.equal(t(plain), 'Kanban');
 });
 
 test('formatDateTimeSmart: 今日（設定のタイムゾーンで）の時刻は時刻だけ、別の日は日付つき', () => {
@@ -371,16 +221,5 @@ test('formatDateTimeSmart: 今日（設定のタイムゾーンで）の時刻�
   setTimezone('America/New_York');
   assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 0, 30), now), '19:30', 'ニューヨークでは now と同じ日（11/4）の晩');
   assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 12, 0), now), '11/5 07:00', 'ニューヨークでは翌日（11/5）の朝');
-  reset();
-});
-
-test('loadServerSettings: 遅れて届いた language も、届いた時点で反映する', async () => {
-  reset();
-  setLanguagePreference('auto');
-  await loadServerSettings(async () => { await sleep(100); return { config: { language: 'en', timezone: 'Asia/Tokyo' } }; }, { waitMs: 20 });
-  assert.equal(getLanguagePreference(), 'auto', '最初の描画は待たずに先へ進む');
-  await sleep(200);
-  assert.equal(getLanguagePreference(), 'en');
-  assert.equal(getLanguage(), 'en');
   reset();
 });

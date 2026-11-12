@@ -1,0 +1,52 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { notificationToast, pauseClock, pushToast, resumeClock, startClock, TOAST_A, TOAST_B, toastDuration, type ToastEntry } from '../web/src/ui/toast-list.ts';
+
+// 新しい画面のトースト（steps/p1-ui.md の T6 と PR 1-4a）。数と長さは 2 つの形（a: 2 つまで・5 秒、b: 3 つまで・3.6 秒。Undo つきはどちらも 6 秒）。
+// 乗せているあいだ止まる時計と、サーバーの通知 → トーストの直し方。画面を持たない関数（web/src/ui/toast-list.ts）。
+
+const UI = join(import.meta.dirname, '..', 'web', 'src', 'ui');
+const entry = (id: number): ToastEntry => ({ id, item: { title: `t${id}` }, leaving: false });
+const undo = { label: 'Undo', run: () => undefined };
+
+test('ui/toasts: T6 の 2 つの形。a は 2 つまで・5 秒、b は 3 つまで・3.6 秒、Undo つきはどちらも 6 秒', () => {
+  assert.deepEqual([TOAST_A.max, TOAST_A.ms, TOAST_A.undoMs], [2, 5000, 6000]);
+  assert.deepEqual([TOAST_B.max, TOAST_B.ms, TOAST_B.undoMs], [3, 3600, 6000]);
+  assert.equal(toastDuration({ title: 'x' }, TOAST_B), 3600);
+  assert.equal(toastDuration({ title: 'x', action: undo }, TOAST_B), 6000);
+  assert.equal(toastDuration({ title: 'x', action: undo }, TOAST_A), 6000);
+  assert.equal(toastDuration({ title: 'x' }), 5000, '渡さなければ a');
+  const four = [1, 2, 3, 4].reduce<ToastEntry[]>((list, id) => pushToast(list, entry(id), TOAST_B.max), []);
+  assert.deepEqual(four.map(e => e.id), [2, 3, 4], '古いものから消える');
+  assert.deepEqual([1, 2, 3].reduce<ToastEntry[]>((list, id) => pushToast(list, entry(id), TOAST_A.max), []).map(e => e.id), [2, 3]);
+});
+
+test('ui/toasts: b の形を選ぶのは 1 か所で、開発のときだけ（ビルドでは a に畳まれる）。目印の文字は b の側にしか無い', () => {
+  const source = readFileSync(join(UI, 'toasts.tsx'), 'utf8');
+  assert.equal(source.split("import.meta.env.DEV && variant('toast') === 'b' ? TOAST_B : TOAST_A").length, 2);
+  assert.equal(source.split('TOAST_B').length, 3, 'import と、その 1 か所だけ');
+  assert.match(TOAST_B.tag, /^toast-b-/u);
+  assert.equal(TOAST_A.tag.includes('toast-b'), false);
+});
+
+test('ui/toasts: 乗せているあいだ時計は止まり、離すと残りの時間から続く', () => {
+  const started = startClock(5000, 100);
+  const paused = pauseClock(started, 1600);
+  assert.deepEqual(paused, { remaining: 3500, startedAt: null });
+  assert.deepEqual(pauseClock(paused, 9999), paused, '止まっている時計をもう一度止めても減らない');
+  const resumed = resumeClock(paused, 20_000);
+  assert.deepEqual(resumed, { remaining: 3500, startedAt: 20_000 });
+  assert.deepEqual(resumeClock(resumed, 30_000), resumed, '動いている時計は始め直さない');
+  assert.equal(pauseClock(started, 99_999).remaining, 0, '負にならない');
+});
+
+test('ui/toasts: サーバーの通知をトーストにする。待ちは点、失敗は alert、ほかは check。行き先は新しい経路に読み替える', () => {
+  assert.deepEqual(notificationToast({ kind: 'task_waiting', title: 'Waiting for you', body: 'Pick a name\nsecond line', link: '#/tasks/abc' }),
+    { title: 'Waiting for you', body: 'Pick a name', lead: 'dot', href: '#/tasks/abc' });
+  assert.deepEqual(notificationToast({ kind: 'approval_needed', title: 'A', body: null, link: '#/c/x1' }), { title: 'A', lead: 'dot', href: '#/c/x1' });
+  assert.deepEqual(notificationToast({ kind: 'task_failed', title: 'F', body: '', link: null }), { title: 'F', icon: 'alert' });
+  assert.deepEqual(notificationToast({ kind: 'task_done', title: 'D', body: 'x', link: '#/tasks' }), { title: 'D', body: 'x', icon: 'check', href: '#/kanban' });
+  assert.equal(notificationToast({ kind: 'info', title: 'I', body: null, link: 'https://example.com/' }).href, undefined, '外の URL へは飛ばさない');
+});

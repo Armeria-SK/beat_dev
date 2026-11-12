@@ -1,4 +1,4 @@
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 import type { NotificationItem, SkillDraft, SkillSummary } from './api.ts';
 import type { PlainKey } from './i18n/index.ts';
 import type { ToolPolicy } from '../../src/tools/tool-policy.ts';

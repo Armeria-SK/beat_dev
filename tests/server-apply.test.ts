@@ -48,7 +48,7 @@ async function start(t: { after: (fn: () => void | Promise<void>) => void }, mut
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.server = { host: '127.0.0.1', port, origins: [], tailscaleLogins: [] };
   mutate(config.server);
@@ -79,7 +79,7 @@ async function refused(port: number): Promise<boolean> {
 
 test('serverHostProblem: ループバック以外の host は断る（起動と反映が同じ検査を使う）', () => {
   for (const host of ['127.0.0.1', 'localhost', '::1', '127.0.0.2']) assert.equal(serverHostProblem(host), undefined, host);
-  for (const host of ['0.0.0.0', '192.168.1.5', '::', 'example.com']) assert.match(serverHostProblem(host) ?? '', /ループバック/u, host);
+  for (const host of ['0.0.0.0', '192.168.1.5', '::', 'example.com']) assert.match(serverHostProblem(host) ?? '', /loopback/u, host);
 });
 
 test('serverChange: 待ち受け（host・port）と認証（origins・tailscaleLogins）のどちらが違うかを見る。同じなら何も変わらない', () => {
@@ -144,7 +144,7 @@ test('A4: ポートを変えたら、新しいポートで待ち受けを始め�
   assert.equal((await send(next, '/api/health', { headers: s.local(next) })).status, 200, '新しいポートで受け付ける');
   assert.equal(await refused(s.port), true, '古いポートは閉じる');
   assert.equal((await send(next, '/api/server/apply', { method: 'POST', headers: s.local(next), body: {} })).body.error, 'nothing_to_apply', '入れ替えたあとは、新しい値が「いま動いているもの」');
-  assert.ok(s.logs.some(line => /\[INFO\].*サーバーの設定を反映/u.test(line) && /この PC/u.test(line)), `押した人を 1 行残す: ${s.logs.join(' | ')}`);
+  assert.ok(s.logs.some(line => /\[INFO\].*Applied the server settings/u.test(line) && /this PC/u.test(line)), `押した人を 1 行残す: ${s.logs.join(' | ')}`);
 });
 
 test('A4: 新しいポートで待ち受けを始められなければ、古いままにして 409（listen_failed）。何も入れ替えない', async t => {
@@ -422,7 +422,7 @@ test('A4: モデルの道具（シェル）からは押せない。この PC の
     assert.notEqual(outcome.decision, 'allow', `${command}: 確かめなしに通った`);
     // 断られるのではなく、毎回（今回だけ）の承認を求める。理由は「この PC の中のサーバー（Clive 自身を含む）につなぐ」（code.loopback）
     assert.ok(asked.length >= 1 && asked.every(a => a.onceOnly), `${command}: 今回だけの承認を求める`);
-    assert.ok(asked.some(a => a.reasons.some(reason => reason.includes('この PC の中のサーバー'))), `${command}: 理由は code.loopback`);
+    assert.ok(asked.some(a => a.reasons.some(reason => reason.includes('It connects to a server on this PC'))), `${command}: 理由は code.loopback`);
   }
   assert.equal(s.app.restartRequired(), true, 'シェルからは反映されていない');
   assert.equal(s.app.bootServer.port, s.port);

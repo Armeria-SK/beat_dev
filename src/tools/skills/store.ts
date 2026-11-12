@@ -1,13 +1,13 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
+import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../../config/schema.ts';
 import { atomicWriteFile } from '../../config/store.ts';
+import { conversationSawOutside } from '../../db/outside.ts';
 import { LocalizedError, type MessageParams } from '../../shared/messages/define.ts';
 import { storeText, type StoreMessageKey } from '../../shared/messages/stores.ts';
 
 const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
-  ja: { heading: '# スキル（手順書）', instruction: '次の作業をするときは、先に skill_view で手順を読んでから従う。' },
   en: { heading: '# Skills (procedures)', instruction: 'Before doing any of the work below, first read the procedure with skill_view and then follow it.' },
 };
 
@@ -25,6 +25,26 @@ export class SkillError extends LocalizedError<StoreMessageKey> {
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const MAX_BODY = 20_000;
 const MAX_DESCRIPTION = 300;
+
+export const askBeforeRegister = (config: Pick<AppConfig, 'skills'>): boolean => config.skills?.askBeforeRegister !== false;
+
+export type SkillAuthor = 'you' | 'beat' | 'beat-auto';
+export interface SkillVersion { id: string; at: number; who: SkillAuthor; lines: number; description: string; body: string }
+export const SKILL_VERSIONS_KEPT = 20;
+export const SKILL_AUTO_PER_DAY = 5;
+const AUTO_LOG_KEY = 'skills:auto-registered';
+const DAY_MS = 86_400_000;
+const VERSION_FILE = /^(\d{1,16})-(you|beat-auto|beat)(?:-(\d{1,4}))?\.md$/u;
+
+function versionOrder(file: string): [number, number] {
+  const m = VERSION_FILE.exec(file)!;
+  return [Number(m[1]), Number(m[3] ?? 1)];
+}
+const byVersion = (a: string, b: string): number => {
+  const [at, an] = versionOrder(a);
+  const [bt, bn] = versionOrder(b);
+  return at - bt || an - bn;
+};
 
 function unquote(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
@@ -63,12 +83,14 @@ export class SkillStore {
   readonly #dir: string;
   readonly #now: () => number;
   onDraft: ((draft: SkillDraft) => void) | undefined;
+  autoRegister: (() => boolean) | undefined;
 
   readonly #language: () => Language;
   readonly #log: (line: string) => void;
+  readonly #backups: string | null;
 
-  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined) {
-    this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log;
+  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined, backups: string | null = null) {
+    this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log; this.#backups = backups;
   }
 
   get dir(): string { return this.#dir; }
@@ -151,7 +173,7 @@ export class SkillStore {
   // フォルダ（SKILL.md）が無い名前の行を外して、名前を記録する。スキル全体のフォルダを読めないときは何もしない。外したら true
   #dropMissing(name: string): boolean {
     if (!this.#readable() || !this.#unmark(name)) return false;
-    this.#log(`[INFO] スキル「${name}」のフォルダが無いので、登録から外しました（同じ名前でフォルダを置き直しても、画面の「登録する」までは使われません）`);
+    this.#log(`[INFO] Unregistered skill "${name}" because its folder is missing (even if a folder with the same name is put back, it is not used until you press "Register" on the screen)`);
     return true;
   }
 
@@ -176,23 +198,80 @@ export class SkillStore {
   }
 
   // 画面の保存（owner）と、承認した下書き（approved）は、書いたあとに名前を登録する
-  write(input: { name: string; description: string; body: string }, source: SkillSource = 'owner'): Skill {
+  write(input: { name: string; description: string; body: string }, source: SkillSource = 'owner', who: SkillAuthor = 'you'): Skill {
     validate(input);
     const dir = join(this.#dir, input.name);
+    const target = join(dir, 'SKILL.md');
+    const content = renderSkillFile(input);
+    this.#keepVersion(input.name, target, content, who);
     mkdirSync(dir, { recursive: true });
-    atomicWriteFile(join(dir, 'SKILL.md'), renderSkillFile(input));
+    atomicWriteFile(target, content);
     this.#mark(input.name, source);
     return this.get(input.name)!;
   }
 
-  remove(name: string): void {
-    // フォルダが先に消えていても登録の行は消す（残すと、同じ名前で置き直したものが、そのまま信用されてしまう）
-    this.#unmark(name);
-    if (!this.get(name)) throw new SkillError('skill.not_found', { name });
-    rmSync(join(this.#dir, name), { recursive: true, force: true });
+  #keepVersion(name: string, target: string, next: string, who: SkillAuthor): void {
+    if (this.#backups === null) return;
+    if (!SKILL_NAME.test(name)) throw new SkillError('skill.bad_name');
+    let previous = '';
+    try { if (lstatSync(target).isFile()) previous = readFileSync(target, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    if (previous === next || (previous === '' && who !== 'beat-auto')) return;
+    const dir = join(this.#backups, name);
+    mkdirSync(dir, { recursive: true });
+    const files = readdirSync(dir).filter(file => VERSION_FILE.test(file));
+    const at = this.#now();
+    const same = files.filter(file => versionOrder(file)[0] === at).length;
+    const file = same ? `${at}-${who}-${same + 1}.md` : `${at}-${who}.md`;
+    writeFileSync(join(dir, file), previous, { encoding: 'utf8', flag: 'wx' });
+    const sorted = [...files, file].sort(byVersion);
+    const lastYou = sorted.findLastIndex(f => VERSION_FILE.exec(f)![2] === 'you');
+    const keep = new Set(lastYou >= 0 ? sorted.slice(lastYou, lastYou + 2) : sorted.slice(0, 1));
+    for (const old of sorted.slice(0, Math.max(0, sorted.length - SKILL_VERSIONS_KEPT))) if (!keep.has(old)) unlinkSync(join(dir, old));
   }
 
-  draft(input: { name: string; description: string; body: string; reason?: string | undefined; conversationId?: string; runId?: string }): SkillDraft {
+  history(name: string): SkillVersion[] {
+    if (!SKILL_NAME.test(name)) throw new SkillError('skill.bad_name');
+    if (this.#backups === null) return [];
+    const dir = join(this.#backups, name);
+    let files: string[];
+    try { files = readdirSync(dir).filter(file => VERSION_FILE.test(file)); } catch { return []; }
+    return files.sort(byVersion).reverse().map(file => {
+      const m = VERSION_FILE.exec(file)!;
+      const parsed = parseSkillFile(readFileSync(join(dir, file), 'utf8'));
+      return {
+        id: file.slice(0, -'.md'.length), at: Number(m[1]), who: m[2] as SkillAuthor,
+        lines: parsed.body ? parsed.body.split(/\r?\n/u).length : 0, description: parsed.description ?? '', body: parsed.body,
+      };
+    });
+  }
+
+  remove(name: string): void {
+    if (!SKILL_NAME.test(name)) throw new SkillError('skill.bad_name');
+    // フォルダが先に消えていても登録の行は消す（残すと、同じ名前で置き直したものが、そのまま信用されてしまう）
+    this.#unmark(name);
+    const found = this.get(name) !== undefined;
+    if (found) rmSync(join(this.#dir, name), { recursive: true, force: true });
+    if (this.#backups !== null) rmSync(join(this.#backups, name), { recursive: true, force: true });
+    if (!found) throw new SkillError('skill.not_found', { name });
+  }
+
+  sawOutside(conversationId: string | undefined): boolean {
+    return conversationSawOutside(this.#db, conversationId);
+  }
+
+  #autoQuotaLeft(now: number): boolean {
+    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(AUTO_LOG_KEY) as { value: string } | undefined;
+    const recent = (row ? (JSON.parse(row.value) as number[]) : []).filter(at => at > now - DAY_MS);
+    return recent.length < SKILL_AUTO_PER_DAY;
+  }
+
+  #countAuto(now: number): void {
+    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(AUTO_LOG_KEY) as { value: string } | undefined;
+    const recent = [...(row ? (JSON.parse(row.value) as number[]) : []).filter(at => at > now - DAY_MS), now];
+    this.#db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(AUTO_LOG_KEY, JSON.stringify(recent), now);
+  }
+
+  draft(input: { name: string; description: string; body: string; reason?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean }): SkillDraft {
     validate(input);
     const pending = this.#db.prepare("SELECT COUNT(*) AS n FROM skill_drafts WHERE status = 'pending'").get() as { n: number };
     if (pending.n >= 20) throw new SkillError('skill.too_many_drafts');
@@ -201,7 +280,11 @@ export class SkillStore {
     this.#db.prepare("UPDATE skill_drafts SET status = 'rejected', decided_at = ? WHERE name = ? AND status = 'pending'").run(now, input.name);
     const result = this.#db.prepare('INSERT INTO skill_drafts (name, description, body, reason, conversation_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(input.name, input.description.trim(), input.body.trim(), input.reason?.trim() || null, input.conversationId ?? null, input.runId ?? null, now);
-    const draft = this.getDraft(Number(result.lastInsertRowid))!;
+    const id = Number(result.lastInsertRowid);
+    if (input.autoOk === true && this.autoRegister?.() === true) {
+      try { if (this.#autoQuotaLeft(now)) { this.approve(id, 'beat-auto'); this.#countAuto(now); } } catch (error) { this.#log(`[WARN] Could not register skill "${input.name}" without review, so it waits as a draft: ${(error as Error).message}`); }
+    }
+    const draft = this.getDraft(id)!;
     this.onDraft?.(draft);
     return draft;
   }
@@ -216,10 +299,10 @@ export class SkillStore {
       : this.#db.prepare('SELECT * FROM skill_drafts WHERE status = ? ORDER BY id DESC LIMIT ?').all(status, limit)) as unknown as SkillDraft[];
   }
 
-  approve(id: number): Skill {
+  approve(id: number, who: 'beat' | 'beat-auto' = 'beat'): Skill {
     const draft = this.getDraft(id);
     if (!draft || draft.status !== 'pending') throw new SkillError('skill.not_pending');
-    const skill = this.write(draft, 'approved');
+    const skill = this.write(draft, 'approved', who);
     this.#db.prepare("UPDATE skill_drafts SET status = 'approved', decided_at = ? WHERE id = ?").run(this.#now(), id);
     return skill;
   }

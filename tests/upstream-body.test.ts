@@ -8,7 +8,6 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { classifyAnthropicError } from '../src/providers/anthropic.ts';
 import { classifyHttpFailure } from '../src/providers/http.ts';
-import { OllamaAdapter } from '../src/providers/ollama.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
 import { providerError } from '../src/providers/types.ts';
 import { fail, fakeServer, FakeAdapter, tempDir, testConfig } from './helpers.ts';
@@ -24,7 +23,7 @@ test('HTTP の失敗: 文にも、文に添える値にも、相手のサーバ�
   for (const body of bodies) {
     for (const status of [400, 401, 403, 404, 408, 409, 429, 500, 503]) {
       const error = classifyHttpFailure(status, body);
-      for (const text of [error.message, error.text('ja'), error.text('en'), JSON.stringify(error.params)]) assert.doesNotMatch(text, LEAK, `HTTP ${status}: ${text}`);
+      for (const text of [error.message, error.text('en'), JSON.stringify(error.params)]) assert.doesNotMatch(text, LEAK, `HTTP ${status}: ${text}`);
       assert.equal('suffix' in error.params, false, `HTTP ${status}: suffix が残っている`);
       assert.match(error.upstream ?? '', /Traceback/u, `HTTP ${status}: 実行ログ用の本文が残っていない`);
       assert.ok((error.upstream ?? '').length <= 300, '長い本文は切る');
@@ -33,7 +32,7 @@ test('HTTP の失敗: 文にも、文に添える値にも、相手のサーバ�
     assert.equal(overflow.kind, 'context_overflow');
     for (const text of [overflow.message, overflow.text('en'), JSON.stringify(overflow.params)]) assert.doesNotMatch(text, LEAK);
   }
-  assert.equal(classifyHttpFailure(401, 'bad key').text('ja'), '認証に失敗しました（HTTP 401）');
+  assert.equal(classifyHttpFailure(401, 'bad key').text('en'), 'Authentication failed (HTTP 401)');
   assert.equal(classifyHttpFailure(503, '').text('en'), 'The provider reported an error (HTTP 503)');
   assert.equal(classifyHttpFailure(400, 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 rejected').upstream?.includes('abcdefghijklmnopqrstuvwxyz0123456789'), false, '本文の秘密は、実行ログ用にも伏せる');
   assert.equal(classifyHttpFailure(400, '').upstream, undefined);
@@ -51,15 +50,14 @@ test('Anthropic: 想定外のエラーも、API のエラーも、本文を文�
 });
 
 const provider = (url: string): ProviderConfig => ({ id: 'p', kind: 'openai_compatible', baseUrl: `${url}/v1`, maxParallel: 1, timeoutMs: 10_000 });
-const model: ModelConfig = { id: 'm', provider: 'p', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false };
+const model: ModelConfig = { id: 'm', provider: 'p', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false };
 
 test('モデルの確認: 相手のサーバーが 500 や 400 で本文を返しても、確認の結果の文にも値にも本文は入らない', async t => {
   for (const status of [400, 401, 404, 500]) {
     const server = await fakeServer((_req, _body, res) => { res.writeHead(status, { 'content-type': 'text/plain' }); res.end(BODY); });
     t.after(() => server.close());
-    const compat = await new OpenAiCompatibleAdapter(provider(server.url), {}).probe(model, 65536, 'ja');
-    const ollama = await new OllamaAdapter({ id: 'o', kind: 'ollama', baseUrl: server.url, maxParallel: 1, timeoutMs: 10_000 }, {}).probe(model, 65536, 'ja');
-    for (const result of [compat, ollama]) assert.doesNotMatch(JSON.stringify(result), LEAK, `HTTP ${status}: ${JSON.stringify(result)}`);
+    const compat = await new OpenAiCompatibleAdapter(provider(server.url), {}).probe(model, 65536, 'en');
+    for (const result of [compat]) assert.doesNotMatch(JSON.stringify(result), LEAK, `HTTP ${status}: ${JSON.stringify(result)}`);
   }
 });
 
@@ -69,8 +67,8 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }, { id: 'spare', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:2/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [
-    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false },
-    { id: 'm2', provider: 'spare', model: 'y', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false },
+    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false },
+    { id: 'm2', provider: 'spare', model: 'y', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false },
   ];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 1 };
   config.memory.review = false;
@@ -101,7 +99,7 @@ test('返事の失敗: 画面に届く出来事（run.end・再試行の警告�
   assert.doesNotMatch(JSON.stringify(result), LEAK, '結果');
   assert.doesNotMatch(JSON.stringify(s.events), LEAK, 'run.end・警告の出来事');
   const row = s.app.runs.get(outcome.runId)!;
-  assert.match(row.error_message ?? '', /プロバイダ側のエラーです（HTTP 503）/u, '実行ログには短い文');
+  assert.match(row.error_message ?? '', /The provider reported an error \(HTTP 503\)/u, '実行ログには短い文');
   assert.match(row.error_message ?? '', /Traceback/u, '実行ログには本文が残る');
 });
 

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import { errorBodyText } from '../web/src/server-text.ts';
 import { accessKey, keyEntryAccess } from '../web/src/settings/access.ts';
 import { keyEnvUnsafe, keyReady, providerKeyEnv, sharedKeyWith, trimKey, type Config } from '../web/src/settings/model.ts';
@@ -30,8 +29,7 @@ test('外のアドレスに鍵を送るときは、送り先を並べて確か�
   assert.notEqual(accessKey(keyEntryAccess(remote!)), accessKey([]));
 });
 
-test('辞書: 鍵を送る確かめの文は ja と en の両方にあり、送り先が入る', () => {
-  assert.match((ja['access.providerKeySend'] as (a: string, b: string) => string)('remote', 'https://api.example.com/v1'), /remote.*https:\/\/api\.example\.com\/v1/u);
+test('辞書: 鍵を送る確かめの文は en にあり、送り先が入る', () => {
   assert.match((en['access.providerKeySend'] as (a: string, b: string) => string)('remote', 'https://api.example.com/v1'), /remote.*https:\/\/api\.example\.com\/v1/u);
 });
 
@@ -74,18 +72,17 @@ test('貼り付けた鍵の前後の空白・改行は取り除いて送る（�
   assert.equal(trimKey('   '), '');
 });
 
-test('鍵の API の失敗は、コードから画面の言語の文になる（鍵そのものは入らない）', () => {
-  for (const [code, params, ja_, en_] of [
-    ['http.key_empty', {}, /API キーを入力/u, /Enter the API key/u],
-    ['http.key_chars', {}, /使えない文字/u, /cannot be used/u],
-    ['http.key_padded', {}, /前か後ろに空白/u, /space before or after/u],
-    ['http.key_too_long', { max: 2048 }, /2048/u, /2048/u],
-    ['http.key_unsupported', {}, /\.env に安全に書けません/u, /cannot be written to \.env safely/u],
-    ['http.key_env_unsafe', { env: 'PATH' }, /PATH/u, /PATH/u],
-    ['http.env_unwritable', { reason: 'x' }, /\.env に書けなかった/u, /Could not write to \.env/u],
-    ['http.provider_missing', { id: 'x' }, /設定にありません/u, /not in the settings/u],
+test('鍵の API の失敗は、コードから画面の言語（英語）の文になる（鍵そのものは入らない）', () => {
+  for (const [code, params, en_] of [
+    ['http.key_empty', {}, /Enter the API key/u],
+    ['http.key_chars', {}, /cannot be used/u],
+    ['http.key_padded', {}, /space before or after/u],
+    ['http.key_too_long', { max: 2048 }, /2048/u],
+    ['http.key_unsupported', {}, /cannot be written to \.env safely/u],
+    ['http.key_env_unsafe', { env: 'PATH' }, /PATH/u],
+    ['http.env_unwritable', { reason: 'x' }, /Could not write to \.env/u],
+    ['http.provider_missing', { id: 'x' }, /not in the settings/u],
   ] as const) {
-    assert.match(errorBodyText({ code, params }, 'ja')!, ja_, code);
     assert.match(errorBodyText({ code, params }, 'en')!, en_, code);
   }
 });
@@ -104,31 +101,9 @@ test('鍵の名前として使えない環境変数名（KEY・TOKEN・SECRET・
   assert.equal(keyEnvUnsafe(c, 'local'), 'HOME', '名前を付けたあとのプロバイダ');
 });
 
-test('辞書: 鍵の名前として使えないときの注意は、使える言葉を 5 つ並べ、詳しい設定の欄を指す。サーバーの 409 の文にも CREDENTIAL が入る', () => {
-  for (const [dict, name] of [[ja, 'ja'], [en, 'en']] as const) {
-    const text = (dict['settings.key.unsafeEnv'] as (n: string) => string)('PATH');
-    assert.match(text, /PATH/u, name);
-    for (const word of ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL']) assert.match(text, new RegExp(word, 'u'), `${name}: ${word}`);
-    assert.match(text, name === 'ja' ? /詳しい設定/u : /Advanced/u, `${name}: 詳しい設定を指す`);
-    assert.equal(typeof dict['settings.key.openAdvanced'], 'string');
-  }
-  for (const [lang, pattern] of [['ja', /CREDENTIAL/u], ['en', /CREDENTIAL/u]] as const) {
+test('鍵の名前として使えないときのサーバーの 409 の文に CREDENTIAL が入る', () => {
+  for (const [lang, pattern] of [['en', /CREDENTIAL/u]] as const) {
     assert.match(errorBodyText({ code: 'http.key_env_unsafe', params: { env: 'PATH' } }, lang)!, pattern, lang);
   }
 });
 
-test('辞書: 末尾 4 文字が無いとき（短い鍵）は、「設定済み」だけを出す（空の「末尾 」を出さない）', () => {
-  for (const [dict, withTail, without] of [[ja, /設定済み（末尾 abcd）/u, /^設定済み$/u], [en, /Set \(ends with abcd\)/u, /^Set$/u]] as const) {
-    const set = dict['settings.key.set'] as (last4: string) => string;
-    assert.match(set('abcd'), withTail);
-    assert.match(set(''), without);
-  }
-});
-
-test('辞書: キーが OS の環境変数にあるときの表示と、消せなかったときの知らせは、ja と en の両方にある', () => {
-  for (const [dict, name] of [[ja, 'ja'], [en, 'en']] as const) {
-    for (const key of ['settings.key.setOs', 'settings.key.osNote', 'settings.key.stillSetOs'] as const) assert.equal(typeof dict[key], 'string', `${name}: ${key}`);
-    assert.match(dict['settings.key.osNote'] as string, name === 'ja' ? /OS の環境変数/u : /operating system/u, name);
-    assert.match(dict['settings.key.osNote'] as string, /\.env/u, name);
-  }
-});

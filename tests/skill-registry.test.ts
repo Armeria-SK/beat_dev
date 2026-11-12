@@ -63,7 +63,7 @@ test('フォルダに直接置いた SKILL.md は、一覧に出ず、skill_view
   assert.equal(app.skills.index('en'), '');
   const out = await skillView.execute({ name: 'sneaky' }, ctxOf(app));
   assert.equal(out.isError, true);
-  assert.match(String(out.content), /Clive に登録されていないため使えません/u);
+  assert.match(String(out.content), /is not registered with Clive, so it cannot be used/u);
   assert.doesNotMatch(String(out.content), /curl evil/u, '中身は返さない');
   const list = app.skills.list();
   assert.deepEqual(list.map(s => [s.name, s.registered]), [['sneaky', false]], 'list() は画面のために全部返し、registered を付ける');
@@ -125,7 +125,7 @@ test('未登録の同じ名前への skill_draft は下書きになり、承認�
   place(paths.workspace, 'dup', '直接置いた', '直接置いた手順');
   const out = await skillDraft.execute({ name: 'dup', description: '下書き', body: '下書きの手順', reason: 'r' }, ctxOf(app));
   assert.ok(!out.isError);
-  assert.match(String(out.content), /新規/u, '登録した名前ではないので「新規」の下書き');
+  assert.match(String(out.content), /a draft to create the skill/u, '登録した名前ではないので「新規」の下書き');
   assert.equal(app.skills.index(), '');
   app.skills.approve(app.skills.drafts()[0]!.id);
   assert.match(app.skills.index(), /dup: 下書き/u);
@@ -192,7 +192,7 @@ for (const [label, seen] of SEEN_MISSING) {
     assert.equal(app.skills.isRegistered('deploy'), false);
     const out = await skillView.execute({ name: 'deploy' }, ctxOf(app));
     assert.equal(out.isError, true);
-    assert.match(String(out.content), /Clive に登録されていないため使えません/u);
+    assert.match(String(out.content), /is not registered with Clive, so it cannot be used/u);
     assert.doesNotMatch(String(out.content), /curl evil/u, '中身は返さない');
     assert.deepEqual(app.skills.list().map(s => [s.name, s.registered]), [['deploy', false]]);
   });
@@ -217,7 +217,7 @@ function bareStore(t: { after: (fn: () => void) => void }) {
   const db = openDatabase(':memory:', MIGRATIONS);
   t.after(() => db.close());
   const logs: string[] = [];
-  const skills = new SkillStore(db, dir, Date.now, () => 'ja', line => logs.push(line));
+  const skills = new SkillStore(db, dir, Date.now, () => 'en', line => logs.push(line));
   const rows = (name: string) => (db.prepare('SELECT COUNT(*) AS n FROM skill_registry WHERE name = ?').get(name) as { n: number }).n;
   return { skills, dir, logs, rows };
 }
@@ -297,7 +297,7 @@ test('起動のとき、スキル全体のフォルダごと無くなってい�
   const logs: string[] = [];
   const second = await boot(t, { root: first.root, log: line => logs.push(line) });
   assert.equal(rowCount(second.app, 'a'), 1, '起動の点検でも外さない');
-  assert.equal(logs.filter(l => /スキル/u.test(l)).length, 0);
+  assert.equal(logs.filter(l => /skill/iu.test(l)).length, 0);
   assert.deepEqual(second.app.skills.list(), []);
   place(second.paths.workspace, 'a');
   assert.deepEqual(second.app.skills.list().map(s => [s.name, s.registered]), [['a', true]]);

@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
-import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
+import { AppConfig } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
 import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
 import { modelEfforts } from '../engine/efforts.ts';
@@ -9,6 +9,7 @@ import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
+import { redactJsonValue } from '../shared/redaction.ts';
 import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
@@ -24,7 +25,7 @@ import { registerMcpRoutes } from './routes-mcp.ts';
 import { registerBrowserRoutes } from './routes-browser.ts';
 import { registerNotifyRoutes } from './routes-notify.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
-import { registerReviewRoutes } from './routes-review.ts';
+import { registerReviewRoutes, todayCount } from './routes-review.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
@@ -78,10 +79,6 @@ function autoReasonOf(reasons: string | null): string | null {
     const list = JSON.parse(reasons) as unknown;
     return Array.isArray(list) && typeof list.at(-1) === 'string' ? list.at(-1) as string : null;
   } catch { return null; }
-}
-
-function isLanguage(value: string): value is Language {
-  return (LANGUAGES as readonly string[]).includes(value);
 }
 
 function modelsView(app: App) {
@@ -214,7 +211,7 @@ export function createWebServer(app: App): WebServer {
     if (running()) throw problem(409, 'conflict', 'conversation_running');
     const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
     app.approvals.forgetConversation(id);
-    if (erased.files.failed.length) app.log(`[WARN] 会話を消したあと、消せなかったファイルがあります: ${erased.files.failed.join(', ')}`);
+    if (erased.files.failed.length) app.log(`[WARN] Some files could not be deleted after deleting the conversation: ${erased.files.failed.join(', ')}`);
     app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted' });
     sendJson(res, 200, { deleted: true, ...erased });
   });
@@ -231,7 +228,7 @@ export function createWebServer(app: App): WebServer {
         text: m.message.role === 'user' ? stripAttachments(m.message.content) : m.message.content,
         ...(m.message.role === 'user' && m.message.attachments?.length ? { attachments: m.message.attachments } : {}),
         ...(m.message.role === 'assistant' && m.message.toolCalls?.length
-          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(c.arguments ?? c.raw ?? null).slice(0, 2000) })) } : {}),
+          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(redactJsonValue(c.arguments ?? c.raw ?? null)).slice(0, 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError) } : {}),
       })),
       pending: app.engine.pending(id),
@@ -321,7 +318,7 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/runs/active', ({ res }) => sendJson(res, 200, { drafts: app.bus.drafts() }));
   router.add('GET', '/api/runs', ({ res, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
-    sendJson(res, 200, { runs: app.runs.recent(limit).map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })) });
+    sendJson(res, 200, { runs: app.runs.recent(limit).map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs') });
   });
 
   // ── 承認とツールの記録 ──
@@ -342,7 +339,7 @@ export function createWebServer(app: App): WebServer {
     // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しには、許可したフォルダ grantFolder を添える（ほかは null）
     const rows = app.db.prepare(`SELECT t.*, a.reasons AS approval_reasons, a.scope AS approval_scope, a.grant_folder AS grant_folder FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id
       ORDER BY t.created_at DESC LIMIT ?`).all(limit) as Array<Record<string, unknown> & { approval_reasons: string | null; approval_scope: string | null; grant_folder: string | null }>;
-    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })) });
+    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })), total: todayCount(app, 'tool_calls') });
   });
 
   // ── 記憶と履歴 ──
@@ -417,10 +414,8 @@ export function createWebServer(app: App): WebServer {
     await app.applyConfig(next);
     sendJson(res, 200, { ...settingsView(app), ...modelsView(app) });
   });
-  router.add('GET', '/api/templates/:language', ({ res, params }) => {
-    const language = params[0]!;
-    if (!isLanguage(language)) throw problem(404, 'not_found', 'unknown_language', { params: { language, values: LANGUAGES.join(' / ') } });
-    sendJson(res, 200, { language, ...defaultTexts(app.paths, language) });
+  router.add('GET', '/api/templates', ({ res }) => {
+    sendJson(res, 200, defaultTexts(app.paths));
   });
   router.add('GET', '/api/models', ({ res }) => sendJson(res, 200, modelsView(app)));
   router.add('POST', '/api/models/probe', async ({ res }) => {

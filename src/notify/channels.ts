@@ -76,7 +76,7 @@ export class NotifyChannels {
       const sendable = targets.filter(() => this.#reserve(config));
       await Promise.all(sendable.map(c => this.#send(config, c, n)));
     } catch (error) {
-      this.#o.log(`[ERROR] 外の送り先への通知で想定外の失敗: ${(error as Error).name}`);
+      this.#o.log(`[ERROR] Unexpected failure while notifying external destinations: ${(error as Error).name}`);
     }
   }
 
@@ -162,7 +162,7 @@ export class NotifyChannels {
     }
     const fails = (previous?.fails ?? 0) + 1;
     this.#o.kv.setJson(key, { ...(previous?.lastOkAt === undefined ? {} : { lastOkAt: previous.lastOkAt }), lastFailAt: now, reason: result.reason, fails } satisfies ChannelRecord);
-    this.#o.log(`[WARN] 通知の送り先「${channel.id}」に送れませんでした（${result.reason}）`);
+    this.#o.log(`[WARN] Could not send to notification destination "${channel.id}" (${result.reason})`);
     if (fails >= config.notify.limits.failsBeforeAlert) {
       this.#o.alert({ kind: 'health_alert', title: notifyText(languageOf(config), 'channel_failing', { id: channel.id, fails, reason: result.reason }), link: '#/settings', dedupKey: `notify-channel-fail:${channel.id}`, noForward: true });
     }

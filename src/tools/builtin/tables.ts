@@ -23,7 +23,7 @@ const shown = (abs: string, ctx: ToolContext) => {
   return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.replaceAll('\\', '/') : abs;
 };
 
-const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: '作業フォルダからの相対パス、または許可フォルダ内の絶対パス' });
+const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: 'A path relative to the working folder, or an absolute path inside an allowed folder' });
 const CellArg = Type.Union([Type.String({ maxLength: TABLE_MAX_CELL_CHARS }), Type.Number(), Type.Null()]);
 
 const error = (content: string): ToolOutput => ({ content, isError: true });
@@ -63,7 +63,7 @@ function claimNewFile(abs: string): boolean {
 
 export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | number | null>>; overwrite?: boolean }> = {
   name: 'table_write',
-  description: '表のファイル（.csv か .xlsx。拡張子で決まる）を書く。rows は行の並びで、各行はセルの並び（文字・数・null）。数は数として渡す（"-5" のような文字は、式にならないよう先頭に \' が付く）。式は書けない。既にあるファイルは overwrite: true のときだけ上書きする。',
+  description: 'Write a table file (.csv or .xlsx; decided by the extension). rows is a list of rows, and each row is a list of cells (text, number or null). Pass numbers as numbers (text such as "-5" gets a leading \' so that it does not become a formula). Formulas cannot be written. An existing file is overwritten only with overwrite: true.',
   input: Type.Object({
     path: PathArg,
     rows: Type.Array(Type.Array(CellArg, { maxItems: TABLE_MAX_COLUMNS }), { minItems: 1, maxItems: TABLE_MAX_ROWS }),

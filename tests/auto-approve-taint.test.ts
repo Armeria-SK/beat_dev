@@ -181,7 +181,7 @@ for (const source of SOURCES) {
       assert.ok(!autoStates(s).includes('allowed'));
       if (channel.gate) {
         assert.deepEqual([...(card!.kinds ?? [])], ['taint'], '種類は taint だけ（種類だけなら判定役に回る形）');
-        assert.ok(card!.reasons.some(r => (channel.gate === 'sends' ? /送信なので/u : /削除なので/u).test(r)), '札の理由に、送る・消すのせいだと載る');
+        assert.ok(card!.reasons.some(r => (channel.gate === 'sends' ? /This sends something out/u : /This deletes something/u).test(r)), '札の理由に、送る・消すのせいだと載る');
       }
       s.app.approvals.decide(card!.id, 'deny');
       await settled(s.app, runId);

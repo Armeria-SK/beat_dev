@@ -10,15 +10,14 @@ import {
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
-import { ja } from '../web/src/i18n/ja.ts';
+import { setTimezone } from '../web/src/i18n/index.ts';
 import { isMemoryUndone, undoMemoryEvent } from '../web/src/memory-undo.ts';
 
-const reset = () => { setLanguagePreference('ja'); setTimezone('Asia/Tokyo'); };
+const reset = () => { setTimezone('Asia/Tokyo'); };
 afterEach(reset);
 
 const probe = (patch: Partial<Probe> = {}): Probe => ({
-  modelId: 'm', status: 'too_small', server: 'ollama', declared: 8192, measured: 8192, modelMax: 32768, effective: 8192, required: 17260,
+  modelId: 'm', status: 'too_small', server: 'generic', declared: 8192, measured: 8192, modelMax: 32768, effective: 8192, required: 17260,
   message: 'too small', checkedAt: 1, ...patch,
 });
 const model = (id: string, patch: Partial<ModelView> = {}): ModelView => ({
@@ -84,10 +83,9 @@ test('slashMatches: 先頭の / のあとの 1 語を前方一致で候補にす
   assert.deepEqual(slashMatches(''), []);
 });
 
-test('slash の説明文は、全コマンドぶん ja と en の両方にある', () => {
+test('slash の説明文は、全コマンドぶん en にある', () => {
   assert.deepEqual(SLASH_COMMANDS.map(c => c.name), ['new', 'task', 'tasks', 'skills', 'log', 'memory', 'stop', 'rename', 'archive', 'summary']);
   for (const command of SLASH_COMMANDS) {
-    assert.ok(ja[command.desc].length > 0, `ja: ${command.desc}`);
     assert.ok(en[command.desc].length > 0, `en: ${command.desc}`);
   }
 });
@@ -147,10 +145,10 @@ test('approvalFraction / formatCountdown: 残り時間の線と mm:ss', () => {
 
 test('chatTime: 時刻だけを、サーバーのタイムゾーンと表示の言語で 24 時間表記にする', () => {
   const at = Date.UTC(2026, 10, 5, 1, 7);
-  assert.equal(chatTime(at, 'ja', 'Asia/Tokyo'), '10:07');
+  assert.equal(chatTime(at, undefined, 'Asia/Tokyo'), '10:07', '言語を書かなければ画面の言語（英語）');
   assert.equal(chatTime(at, 'en', 'Asia/Tokyo'), '10:07');
   assert.equal(chatTime(at, 'en', 'America/Los_Angeles'), '17:07', '前の日の夕方（サマータイムなし）');
-  assert.equal(chatTime(Date.UTC(2026, 10, 5, 15, 0), 'ja', 'Asia/Tokyo'), '00:00', '24 時ではなく 00:00');
+  assert.equal(chatTime(Date.UTC(2026, 10, 5, 15, 0), 'en', 'Asia/Tokyo'), '00:00', '24 時ではなく 00:00');
 });
 
 test('isNearBottom: 下から 80px 以内にいるときだけ、新しい発言へ自動で追いかける', () => {
@@ -190,21 +188,14 @@ test('mergeNotice: 同じ実行の同じ key のお知らせは置き換え、ke
 
 test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引数を使う', () => {
   const kana = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
-  const keys = Object.keys(ja).filter(k => /^(chat|approval|slash|markdown)\.|^notice\.(compacted|stopped)$|^toast\.(undo|memoryUndo)/u.test(k));
-  assert.ok(keys.length > 80, `段階 5 のキーが ${keys.length} 件しか読めていない`);
+  const keys = Object.keys(en).filter(k => /^(chat|approval|slash|markdown|ui\.(notice|approval|composer|tool|thread))\./u.test(k));
+  assert.ok(keys.length > 80, `会話のキーが ${keys.length} 件しか読めていない`);
   for (const key of keys) {
     const entry = (en as Record<string, unknown>)[key];
     const out = typeof entry === 'function' ? (entry as (...a: unknown[]) => string)('x', 3) : entry;
     assert.equal(typeof out, 'string', key);
     assert.ok(!kana.test(String(out)), `${key} の英語に日本語が混ざっている: ${String(out)}`);
   }
-  assert.match(en['notice.compacted'](1), /^Summarized 1 older message \(/u);
-  assert.match(en['notice.compacted'](4), /^Summarized 4 older messages \(/u);
-  assert.match(en['notice.compacted'](4), /originals are kept/u, '原文が残っていることを伝える');
-  assert.match(ja['notice.compacted'](4), /^古い発言 4 件を要約しました（要約は会話の「…」メニューから読めます。原文は残っていて、.*探せます）$/u);
-  assert.match(en['notice.compacted'](4), /summary from the conversation "…" menu/u, '要約の読み方と原文の探し方を分けて書く');
-  assert.equal(en['chat.pdfPages'](1), 'PDF, 1 page');
-  assert.equal(en['approval.position'](1, 2), '1 / 2');
 });
 
 test('liveRenderDelay: 短い返事は届くたびに描き、長い返事は長さに比例して間引く（上限 1 秒）', () => {
@@ -311,33 +302,30 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
   const { errorProbeText } = await import('../src/providers/context.ts');
   const { providerError } = await import('../src/providers/types.ts');
   const { engineText } = await import('../src/shared/messages/engine.ts');
-  const served = errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'ja');
-  const unreachable = probe({ modelId: 'local', status: 'unreachable', message: served.message, ...(served.messageCode ? { messageCode: served.messageCode } : {}), ...(served.messageParams ? { messageParams: served.messageParams as Record<string, string | number> } : {}) });
+  const served = errorProbeText(providerError('provider_error', 'connect', {}), 'en');
+  const SERVER_LINE = 'the line as the server wrote it';
+  const unreachable = probe({ modelId: 'local', status: 'unreachable', message: SERVER_LINE, ...(served.messageCode ? { messageCode: served.messageCode } : {}), ...(served.messageParams ? { messageParams: served.messageParams as Record<string, string | number> } : {}) });
   const body = {
     error: 'provider_error', errorKind: 'provider_error', errorCode: 'engine.no_usable',
-    errorMessage: engineText('ja', 'no_usable', { lines: engineText('ja', 'problem.line', { id: 'local', message: served.message, hintPart: '' }) }),
-    problems: [{ modelId: 'local', status: 'unreachable', message: served.message }],
+    errorMessage: engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: SERVER_LINE, hintPart: '' }) }),
+    problems: [{ modelId: 'local', status: 'unreachable', message: SERVER_LINE }],
   };
   const models = [model('local', { probe: unreachable })];
-  const expectedEn = engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en').message, hintPart: '' }) });
+  const expectedEn = engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: 'Cannot connect to the provider', hintPart: '' }) });
 
-  setLanguagePreference('en');
-  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, 'en の画面では、サーバーが ja で書いていても英語');
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, '画面はサーバーの書いた行ではなく、コードから組み立てる');
   assert.notEqual(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage);
-  setLanguagePreference('ja');
-  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage, 'ja ならサーバーの文と同じ');
 
-  setLanguagePreference('en');
   assert.equal(sendFailureOf(new ApiError(409, body), 'x', []).message.includes('Nothing was sent'), true, 'モデルの確認が無くても、問題の文はサーバーのままで枠は英語');
   const stale = [model('local', { probe: { ...unreachable, status: 'ok' } })];
-  assert.equal(sendFailureOf(new ApiError(409, body), 'x', stale).message.includes(served.message), true, '状態が違う確認は使わず、サーバーの行のまま');
-  const withHint = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: served.message, hint: '直し方' }] };
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', stale).message.includes(SERVER_LINE), true, '状態が違う確認は使わず、サーバーの行のまま');
+  const withHint = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: SERVER_LINE, hint: '直し方' }] };
   assert.equal(sendFailureOf(new ApiError(409, withHint), 'x', models).message.includes('(直し方)'), true, 'hint は付く（英語の括弧）');
   const none = { ...body, problems: [] };
   assert.equal(sendFailureOf(new ApiError(409, none), 'x', models).message, engineText('en', 'no_usable', { lines: engineText('en', 'problem.none') }));
   const other = { error: 'busy', errorMessage: '忙しい', errorCode: 'engine.send.busy' };
   assert.equal(sendFailureOf(new ApiError(409, other), 'x', models).message, engineText('en', 'send.busy'), 'ほかのコードは ApiError の訳のまま');
-  const coded = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: served.message, messageCode: served.messageCode, messageParams: served.messageParams }] };
+  const coded = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: SERVER_LINE, messageCode: served.messageCode, messageParams: served.messageParams }] };
   assert.equal(sendFailureOf(new ApiError(409, coded), 'x', []).message, expectedEn, 'problems 自身にコードが付いていれば、モデルの一覧が無くても英語');
   const wrongStatus = { models: [model('local', { probe: { ...unreachable, status: 'ok', messageCode: 'provider.probe.unknown' } })] };
   assert.equal(sendFailureOf(new ApiError(409, coded), 'x', wrongStatus.models).message, expectedEn, 'コードがあれば、モデルの一覧の状態には頼らない');
@@ -466,7 +454,7 @@ test('流れている文の間引き: 短い返事は届くたびに描き、続
   assert.notEqual(long.render('別の文'.repeat(2000), 1003), base, '文が前の続きでなければ、すぐ描き直す');
 });
 
-test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読み書き・読むだけで分かれる）。辞書は ja にも en にもある', () => {
+test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読み書き・読むだけで分かれる）。辞書 en にある', () => {
   assert.equal(approvalPathKey({ verdict: 'in', mode: 'write' }), 'approval.verdict.inWrite');
   assert.equal(approvalPathKey({ verdict: 'in', mode: 'read' }), 'approval.verdict.inRead');
   assert.equal(approvalPathKey({ verdict: 'in' }), 'approval.verdict.inWrite', 'mode が無い古い応答でも落ちない');
@@ -475,7 +463,6 @@ test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読
   assert.equal(approvalPathKey({ verdict: 'unknown' }), 'approval.verdict.unknown');
   assert.equal(approvalPathKey({ verdict: 'something-new' as 'in' }), 'approval.verdict.unknown', '知らない判定は「判定できない」');
   for (const key of ['approval.verdict.inWrite', 'approval.verdict.inRead', 'approval.verdict.out', 'approval.verdict.deny', 'approval.verdict.unknown'] as const) {
-    assert.equal(typeof ja[key], 'string', key);
     assert.equal(typeof en[key], 'string', key);
     assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, `${key}: 英語に日本語が混ざらない`);
   }
@@ -498,10 +485,6 @@ test('使用量の表示: 割合は四捨五入、1 を超えたら「100%+」�
   assert.deepEqual([0, 999, 1000, 12_400, 180_000, 200_000, 999_949, 999_950, 1_250_000, 2_000_000].map(compactTokens),
     ['0', '999', '1k', '12.4k', '180k', '200k', '999.9k', '1M', '1.25M', '2M']);
   assert.deepEqual([compactTokens(-5), compactTokens(Number.NaN), compactTokens(12_449)], ['0', '0', '12.4k']);
-  setLanguagePreference('ja');
-  assert.equal(ja['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k（全体 200k）');
-  assert.equal(en['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k (total 200k)');
-  for (const key of ['context.label', 'context.over'] as const) { assert.ok(ja[key] && en[key], key); assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, key); }
 });
 
 test('使用量の輪を数え直す変更: モデルを替えたときと、権限モードを替えたとき（計画は渡す道具の一覧と指示が変わる）。名前の変更・アーカイブ・削除では数え直さない', () => {
@@ -590,27 +573,28 @@ test('checklistOpen: 作業中は開いて、全部済みは畳んで出す。�
 });
 
 test('作業の一覧の部品: 項目の文は文字のまま出す（Markdown・リンク・生の HTML を通さない）。辞書の文は日英にそろう', () => {
-  const source = readFileSync(new URL('../web/src/ChecklistPanel.tsx', import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\/.*$/gmu, '');
+  const source = readFileSync(new URL('../web/src/ui/Checklist.tsx', import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\/.*$/gmu, '');
   assert.doesNotMatch(source, /Markdown/u, 'Markdown.tsx を通さない');
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/u);
   assert.doesNotMatch(source, /href|<a[\s>]|linkify|innerHTML/iu, 'リンクにしない');
-  assert.match(source, /<span className="chat-checklist-text">\{item\.text\}<\/span>/u, '項目の文は、そのまま文字として 1 か所だけに入れる');
+  assert.match(source, /<span>\{item\.text\}<\/span>/u, '項目の文は、そのまま文字として 1 か所だけに入れる');
   assert.equal(source.match(/item\.text/gu)?.length, 1);
-  assert.match(source, /list\.tainted && <p className="chat-checklist-note">\{t\('checklist\.tainted'\)\}<\/p>/u, '外の内容を読んだあとに書かれた一覧には、小さな注記を付ける');
-  const keys = ['checklist.title', 'checklist.count', 'checklist.pending', 'checklist.inProgress', 'checklist.done', 'checklist.tainted'] as const;
+  assert.match(source, /tainted && <p className="bt-meta ui-checklist__note">\{t\('ui\.checklist\.tainted'\)\}<\/p>/u, '外の内容を読んだあとに書かれた一覧には、小さな注記を付ける');
+  const keys = ['ui.checklist', 'ui.checklist.count', 'ui.checklist.done', 'ui.checklist.tainted'] as const;
   for (const key of keys) {
-    assert.ok(key in ja && key in en, key);
-    assert.match(typeof ja[key] === 'string' ? ja[key] : ja[key](1, 2), CJK_CHARS, `${key}: 日本語の文`);
+    assert.ok(key in en, key);
     assert.doesNotMatch(typeof en[key] === 'string' ? en[key] : en[key](1, 2), CJK_CHARS, `${key}: 英語に日本語が混ざらない`);
   }
-  assert.equal(ja['checklist.count'](2, 5), '2 / 5 件済み');
-  assert.equal(en['checklist.count'](2, 5), '2 / 5 done');
+  assert.equal(en['ui.checklist.count'](2, 5), '2 / 5');
 });
 
-test('作業の一覧の置き場所: 入力欄（Composer）の直前に 1 つ。Chat は出来事（checklist）が届いていればそれを、無ければ開いたときに読んだ一覧を出す', () => {
-  const chat = readFileSync(new URL('../web/src/Chat.tsx', import.meta.url), 'utf8').replace(/\r/g, '');
-  assert.equal(chat.match(/<ChecklistPanel\b/gu)?.length, 1);
-  assert.ok(chat.indexOf('<ChecklistPanel') < chat.indexOf('<Composer') && chat.indexOf('<ChecklistPanel') > chat.indexOf('<ApprovalDock'), '承認の札の下、入力欄の上');
-  assert.match(chat, /checklistToShow\(checklist, readChecklist\)/u, '出来事が先、読んだ一覧はその次');
-  assert.match(readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8'), /case 'checklist\.updated':/u);
+test('作業の一覧の置き場所: 実行中は入力欄（Composer）の直前に 1 つ。出来事（checklist）が届いていればそれを、無ければ開いたときに読んだ一覧を出す', () => {
+  const chat = readFileSync(new URL('../web/src/ui/Conversation.tsx', import.meta.url), 'utf8').replace(/\r/g, '');
+  assert.equal(chat.match(/<Checklist\b/gu)?.length, 2, '終わったあとの会話の中と、実行中の入力欄の上');
+  const pinned = chat.indexOf('{running && checklist.length > 0 && <Checklist');
+  const between = chat.slice(pinned, chat.indexOf('<Composer', pinned));
+  assert.ok(pinned > 0 && pinned < chat.indexOf('<Composer'), '実行中の一覧は入力欄の上');
+  assert.equal(between.match(/className="[^"]*"/gu)?.filter(c => !c.includes('ui-pinned') && !c.includes('bt-meta')).length ?? 0, 0, '一覧と入力欄のあいだにあるのは、同じ固定の段（Plan の「この計画で進める」）だけ');
+  assert.match(chat, /const checklist = liveChecklist \?\? readList\?\.items \?\? \[\];/u, '出来事が先、読んだ一覧はその次');
+  assert.match(readFileSync(new URL('../web/src/ui/live-state.ts', import.meta.url), 'utf8'), /case 'checklist\.updated':/u);
 });

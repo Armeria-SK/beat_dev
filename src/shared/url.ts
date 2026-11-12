@@ -5,16 +5,16 @@ export function isLoopbackHost(hostname: string): boolean {
 
 // server.host の検査。この PC の外には待ち受けない（ほかの端末からは Tailscale Serve 経由）。問題が無ければ undefined。起動（main.ts）と、画面からの反映（src/web/server-host.ts）が同じ検査を使う
 export function serverHostProblem(host: string): string | undefined {
-  return isLoopbackHost(host) ? undefined : `server.host は 127.0.0.1 などのループバックにしてください（今は ${host}）。ほかの端末からは Tailscale Serve 経由で開きます（README の「ほかの端末から使う」）`;
+  return isLoopbackHost(host) ? undefined : `Set server.host to a loopback address such as 127.0.0.1 (it is ${host} now). Other devices open Clive through Tailscale Serve (see the README section on using Clive from other devices)`;
 }
 
 export function checkBaseUrl(value: string, usesApiKey: boolean): { url: string } | { problem: string } {
   let url: URL;
-  try { url = new URL(value); } catch { return { problem: 'URL として読めません' }; }
-  if (url.username || url.password || url.search || url.hash) return { problem: '認証情報・クエリ・# を含めないでください' };
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return { problem: 'http か https にしてください' };
+  try { url = new URL(value); } catch { return { problem: 'Cannot be read as a URL' }; }
+  if (url.username || url.password || url.search || url.hash) return { problem: 'Do not include credentials, a query or #' };
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return { problem: 'Use http or https' };
   if (url.protocol === 'http:' && usesApiKey && !isLoopbackHost(url.hostname)) {
-    return { problem: 'API キーを使う接続は https にしてください（http はこの PC のサーバーだけ）' };
+    return { problem: 'Use https for connections that use an API key (http only for servers on this PC)' };
   }
   return { url: url.href.replace(/\/+$/u, '') };
 }

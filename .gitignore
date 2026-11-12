@@ -2,6 +2,7 @@ node_modules/
 web/dist/
 /data/
 /docs
+/tmp/
 .env
 .env.*
 !.env.example

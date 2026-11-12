@@ -1,0 +1,52 @@
+.ui-set__navgroup:not([hidden]) { display: contents; }
+.bt-modal:has(.ui-set__leave) { grid-template-rows: auto auto minmax(0, 1fr); }
+.ui-set__leave { justify-content: flex-start; padding: var(--space-2) var(--space-5); border-bottom: 1px solid var(--line); background: var(--surface-sunk); }
+.ui-set__nomatch { padding: var(--space-2); }
+.ui-set__below { display: flex; flex-direction: column; gap: var(--space-2); padding: 0 0 var(--space-3); }
+.ui-set__below + .bt-setting { border-top: 1px solid var(--line); }
+.ui-set__error { margin: 0; overflow-wrap: anywhere; }
+.ui-set__widen { justify-content: flex-start; padding: var(--space-2) var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-sunk); }
+.ui-set__items { flex: 1 1 100%; margin: 0; padding-left: var(--space-5); overflow-wrap: anywhere; }
+.ui-set__items li + li { margin-top: var(--space-1); }
+.ui-confirm .sk-warn { display: block; color: var(--danger); }
+.ui-set__select { position: relative; display: inline-flex; }
+.ui-set__menu { position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 5; max-height: 280px; overflow-y: auto; }
+.ui-set__list { display: flex; flex-direction: column; gap: var(--space-2); }
+.ui-set__chips { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.ui-set__chip { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; padding: 0 0 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-sunk); font: 400 12px/24px var(--font-mono); overflow-wrap: anywhere; }
+.ui-set__list .bt-field { max-width: 360px; }
+.ui-set__form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.ui-set__form .bt-field { width: auto; flex: 1 1 200px; min-width: 0; }
+.ui-set__form--stack { flex-direction: column; align-items: stretch; }
+.ui-set__form--stack .bt-field { flex: none; width: 100%; }
+.ui-set__args { min-height: 72px; resize: vertical; }
+.ui-set__detail { margin-left: var(--space-4); padding-left: var(--space-4); border-left: 1px solid var(--line); }
+.ui-set__detail .bt-setting { min-height: 48px; }
+.ui-set__diff { display: flex; flex-direction: column; gap: var(--space-2); }
+.ui-set__shapes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.ui-set__shape { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.ui-set__pre { margin: 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 12px/18px var(--font-mono); }
+.ui-set__doc { display: flex; flex-direction: column; gap: var(--space-2); }
+.ui-set__editor { display: block; width: 100%; min-height: 160px; box-sizing: border-box; resize: vertical; }
+.ui-set__editor--tall { min-height: 320px; }
+.ui-set__color { width: 44px; height: 28px; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-overlay); cursor: pointer; }
+.ui-onboard { position: fixed; inset: 0; z-index: 45; overflow: auto; background: var(--ground); }
+.ui-onboard > .bt-onboard { min-height: 100%; height: auto; box-sizing: border-box; }
+.ui-ob__meta { margin: 0; }
+.ui-ob__agent { display: flex; align-items: center; gap: var(--space-5); }
+.ui-ob__test { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.ui-ob__nav { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.ui-ob__fill { flex: 1; }
+
+@media (max-width: 760px) {
+  .ui-set__hint { display: none; }
+  .ui-set__detail { margin-left: 0; padding-left: var(--space-3); }
+  .ui-set__shapes { grid-template-columns: minmax(0, 1fr); }
+  .bt-setting__end { flex-wrap: wrap; max-width: 100%; min-width: 0; }
+  .bt-setting__end .bt-field:not(.bt-field--short) { flex: 1 1 100%; width: 100%; }
+  .bt-setting .bt-btn, .ui-set__form .bt-btn, .ui-confirm .bt-btn { height: 40px; }
+  .ui-ob__nav { flex-direction: column-reverse; }
+  .ui-ob__nav .bt-btn { width: 100%; height: 40px; }
+  .ui-ob__fill { display: none; }
+  .ui-onboard .bt-screen__title--xl { font-size: 28px; line-height: 32px; }
+}

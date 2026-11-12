@@ -1,5 +1,5 @@
 import type { ReviewJob, RunRow, ToolCallRow } from './api.ts';
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 import { formatList, formatNumber, t, type PlainKey } from './i18n/index.ts';
 
 export type LogView = 'runs' | 'tools' | 'reviews';

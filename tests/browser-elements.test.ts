@@ -73,8 +73,8 @@ test('300 個までに切り、超えた数を omitted に数える。nth と co
   assert.equal(table.items[299]!.ref, 'e300');
   assert.equal(table.items[0]!.count, 175);
   assert.equal(table.items[298]!.nth, 149);
-  const text = formatElements(table, 'ja');
-  assert.match(text, /ほか 50 個/u);
+  const text = formatElements(table, 'en');
+  assert.match(text, /\(50 more elements are omitted\)/u);
   assert.match(formatElements(table, 'en'), /50 more/u);
 });
 
@@ -86,18 +86,18 @@ test('iframe の中は、番号を振らない（どのホストの枠か分か�
 
 test('一覧の文字: 番号・役割・名前・状態・href', () => {
   const table = readElements(fixture('form'), URL_FORM);
-  const lines = formatElements(table, 'ja').split('\n');
+  const lines = formatElements(table, 'en').split('\n');
   assert.equal(lines[0], 'e1 link "ログイン" → https://example.com/login');
   assert.ok(lines.includes('e4 button "無効" [disabled]'));
   assert.ok(lines.includes('e5 textbox "検索"'));
-  assert.equal(formatElements(readElements(fixture('empty'), URL_FORM), 'ja'), '（触れるものはありません）');
+  assert.equal(formatElements(readElements(fixture('empty'), URL_FORM), 'en'), '(There is nothing to touch)');
 });
 
 test('長い名前は表示だけ切る（改行は空白にする）。探し直しには元の名前を使う', () => {
   const name = `${'あ'.repeat(300)}\\nX`;
   const table = readElements(`- button "${name}"\n`, URL_FORM);
   assert.equal(table.items[0]!.name.length, 302);
-  const line = formatElements(table, 'ja');
+  const line = formatElements(table, 'en');
   assert.ok(line.length < 200 && !line.includes('\n'));
 });
 

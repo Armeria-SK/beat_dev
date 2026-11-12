@@ -32,16 +32,15 @@ const untilStopped: Script = async function* (req) {
   await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
 };
 
-async function setup(t: { after: (fn: () => void) => void }, options: { maxIterations?: number } = {}) {
+async function setup(t: { after: (fn: () => void) => void }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;
-  if (options.maxIterations) config.tools.maxIterations = options.maxIterations;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
@@ -108,7 +107,7 @@ for (const how of ['retry', 'send'] as const) {
     assert.equal(s.app.runs.get(first)!.tainted, 1, 'Web を読んだ実行は、終わるとき「外から読んだ」印が残る');
     s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
     const runId = next(s, how);
-    await expectAsked(s, runId, /前の実行/u);
+    await expectAsked(s, runId, /what an earlier run read/u);
   });
 }
 
@@ -143,20 +142,21 @@ test('印は実行の頭から残る: 外から読んだ実行をやり直して
   await s.app.engine.wait(second);
   assert.equal(s.app.runs.get(second)!.tainted, 1, '引き継いだ印が、この実行にも残る');
   s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, retry(s), /前の実行/u);
+  await expectAsked(s, retry(s), /what an earlier run read/u);
 });
 
-test('道具の上限で止まってまとめを書いた実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
-  const s = await setup(t, { maxIterations: 1 });
+test('前からある実行の記録の道具の上限の印（max_iterations）を持つ実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
+  const s = await setup(t);
   s.adapter().scripts = [call('web_fetch', FETCH), reply('ここまでやりました。次の一手: 書く')];
   const first = send(s, 'このページを読んで');
   await settled(s.app, first);
   await s.app.engine.wait(first);
+  s.app.conversations.db.prepare("UPDATE engine_runs SET flags = '[\"max_iterations\"]' WHERE id = ?").run(first);
   assert.equal(s.app.runs.get(first)!.ok, 1);
   assert.match(s.app.runs.get(first)!.flags, /max_iterations/u);
-  assert.equal(s.app.conversations.messages(C).at(-1)!.role, 'assistant', '前提: 最後はまとめの返事（道具の呼び出しの付かない assistant の発言）');
+  assert.equal(s.app.conversations.messages(C).at(-1)!.role, 'assistant', '前提: 最後は道具の呼び出しの付かない assistant の発言');
   s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, send(s, '続けて'), /前の実行/u);
+  await expectAsked(s, send(s, '続けて'), /what an earlier run read/u);
 });
 
 test('出力の上限で切れた返事で終わった実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
@@ -168,7 +168,7 @@ test('出力の上限で切れた返事で終わった実行も、最後の返�
   await s.app.engine.wait(first);
   assert.match(s.app.runs.get(first)!.flags, /output_truncated/u);
   s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, send(s, '続けて'), /前の実行/u);
+  await expectAsked(s, send(s, '続けて'), /what an earlier run read/u);
 });
 
 test('履歴の見方: 道具を呼んだ assistant の発言をまたいで、返事の付いていない添付を数える（実行の記録が無くても）', async t => {
@@ -203,7 +203,7 @@ test('履歴の見方: 読み出せる行数（500）のなかに最後の返事
   }
   assert.ok(conversations.messages(C, 1000).length > 500, '前提: 500 行より長い');
   s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, retry(s), /確かめきれ/u);
+  await expectAsked(s, retry(s), /a history too long to check/u);
 });
 
 test('履歴の見方: 500 行より長くても、そのなかに最後の返事が見つかれば、その後ろだけを見る（確かめきれない扱いにしない）', async t => {
@@ -242,7 +242,7 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
@@ -269,7 +269,7 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
     const retried = second.engine.retry(C);
     assert.ok(retried.ok);
     await waitFor(() => second.approvals.pending().length === 1, '再起動後のやり直しの確かめ');
-    assert.match(second.approvals.pending()[0]!.reasons.join(' '), /前の実行/u);
+    assert.match(second.approvals.pending()[0]!.reasons.join(' '), /what an earlier run read/u);
     second.approvals.decide(second.approvals.pending()[0]!.id, 'deny');
     await settled(second, retried.runId);
     await second.engine.wait(retried.runId);

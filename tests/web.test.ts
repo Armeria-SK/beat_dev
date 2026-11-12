@@ -34,7 +34,7 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = models ?? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = models ?? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: config.models.map(m => m.id), background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
@@ -103,12 +103,12 @@ test('API: 発言を送ると返事が SSE で流れ、保存される', async t
 });
 
 test('API: 使えるモデルが無ければ 409 で理由と直し方を返し、発言は保存しない', async t => {
-  const s = await startApp(t, [{ id: 'small', provider: 'fake', model: 'x', contextLength: 4096, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }]);
+  const s = await startApp(t, [{ id: 'small', provider: 'fake', model: 'x', contextLength: 4096, minContext: 4096, maxOutputTokens: 1024, vision: false }]);
   const sent = await s.api('/api/conversations/00000000-0000-4000-8000-0000000000c1/messages', { method: 'POST', body: JSON.stringify({ text: 'やあ' }) });
   assert.equal(sent.status, 409);
   const body = await sent.json() as any;
   assert.equal(body.errorKind, 'context_overflow');
-  assert.match(body.errorMessage, /送信しませんでした/);
+  assert.match(body.errorMessage, /Nothing was sent/);
   const models = await (await s.api('/api/models')).json() as any;
   assert.equal(models.models[0].probe.status, 'too_small');
   assert.equal(s.app.conversations.messages('00000000-0000-4000-8000-0000000000c1').length, 0);
@@ -282,8 +282,8 @@ test('API: 設定の問題は文（problems）のほかに、ID で書いた場�
   assert.equal(unknownRoute.status, 400);
   const first = (await unknownRoute.json()) as any;
   assert.equal(first.error, 'invalid_config');
-  assert.deepEqual(first.issues, [{ path: 'routing.chat', message: 'モデル「nope」がありません' }]);
-  assert.deepEqual(first.problems, ['routing.chat: モデル「nope」がありません'], '文は今までと同じ');
+  assert.deepEqual(first.issues, [{ path: 'routing.chat', message: 'Model "nope" does not exist' }]);
+  assert.deepEqual(first.problems, ['routing.chat: Model "nope" does not exist'], '文は今までと同じ');
 
   const badShape = structuredClone(view.config);
   badShape.models[0].contextLength = 'many';
@@ -293,8 +293,8 @@ test('API: 設定の問題は文（problems）のほかに、ID で書いた場�
 
   writeFileSync(s.app.paths.config, JSON.stringify({ ...view.config, routing: { ...view.config.routing, background: ['ghost'] } }));
   const broken = (await (await s.api('/api/settings')).json()) as any;
-  assert.deepEqual(broken.configError.issues, [{ path: 'routing.background', message: 'モデル「ghost」がありません' }]);
-  assert.deepEqual(broken.configError.problems, ['routing.background: モデル「ghost」がありません']);
+  assert.deepEqual(broken.configError.issues, [{ path: 'routing.background', message: 'Model "ghost" does not exist' }]);
+  assert.deepEqual(broken.configError.problems, ['routing.background: Model "ghost" does not exist']);
 });
 
 test('API: 承認の札の paths は、承認の一覧・会話・タスクの詳細・SSE のどれでも同じ形で、無ければ空の配列', async t => {
@@ -335,8 +335,8 @@ test('API: 承認の札の paths は、承認の一覧・会話・タスクの�
 
 test('API: GET /api/conversations/:id/context は使用量を返す。無い会話でも会話を作らず、指定のモデルが設定に無ければ 404、使えるモデルが無ければ 409', async t => {
   const s = await startApp(t, [
-    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false },
-    { id: 'big', provider: 'fake', model: 'y', contextLength: 131072, minContext: 4096, maxOutputTokens: 2048, toolMode: 'native', vision: false },
+    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false },
+    { id: 'big', provider: 'fake', model: 'y', contextLength: 131072, minContext: 4096, maxOutputTokens: 2048, vision: false },
   ]);
   const get = async (path: string) => { const res = await s.api(path); return { status: res.status, body: (await res.json()) as any }; };
   s.app.conversations.create({ id: 'chat1', title: '会話' });
@@ -364,7 +364,7 @@ test('API: GET /api/conversations/:id/context は使用量を返す。無い会�
   const task = await get('/api/conversations/task-conv/context');
   assert.deepEqual([task.status, task.body.code], [409, 'http.not_chat_conversation']);
 
-  const none = await startApp(t, [{ id: 'tiny', provider: 'fake', model: 'z', contextLength: 4096, minContext: 4096, maxOutputTokens: 512, toolMode: 'native', vision: false }]);
+  const none = await startApp(t, [{ id: 'tiny', provider: 'fake', model: 'z', contextLength: 4096, minContext: 4096, maxOutputTokens: 512, vision: false }]);
   const refused = await (await none.api('/api/conversations/c1/context')).json() as any;
   assert.equal(refused.errorCode, 'engine.no_usable');
   assert.equal(refused.problems.length, 1);

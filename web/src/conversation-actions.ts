@@ -1,6 +1,6 @@
 import { api, ApiError } from './api.ts';
+import { toast } from './feedback.ts';
 import type { useT } from './i18n/index.ts';
-import { toast } from './toast.tsx';
 
 export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived' | 'model' | 'mode' | 'deleted'; id: string };
 type T = ReturnType<typeof useT>;

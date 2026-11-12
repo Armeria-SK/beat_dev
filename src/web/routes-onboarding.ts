@@ -33,7 +33,7 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
     const done = app.kv.get(DONE_KEY) !== undefined || (!started && usedAlready);
     return {
       done,
-      steps: { language: config.language !== undefined, user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: config.models.length > 0 },
+      steps: { user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: config.models.length > 0 },
     };
   };
 

@@ -1,11 +1,10 @@
 import type { AppConfig, ProviderConfig } from '../config/schema.ts';
-import { OLLAMA_DEFAULT_URL } from '../config/store.ts';
 import { isLoopbackHost } from '../shared/url.ts';
 
-// 手元のモデル = 提供元の接続先（baseUrl）がループバックのホスト。Ollama は接続先が無ければ既定の 127.0.0.1。
+// 手元のモデル = 提供元の接続先（baseUrl）がループバックのホスト。
 // 手元のモデルで話した会話は、外のモデルに渡さない約束の元になる判定（振り返り・履歴の検索）
 export function isLocalProvider(provider: ProviderConfig): boolean {
-  const base = provider.baseUrl ?? (provider.kind === 'ollama' ? OLLAMA_DEFAULT_URL : undefined);
+  const base = provider.baseUrl;
   if (!base) return false;
   try { return isLoopbackHost(new URL(base).hostname); } catch { return false; }
 }

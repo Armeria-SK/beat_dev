@@ -308,7 +308,7 @@ register(['find'], (words, acc, ctx) => {
     const def = FIND_VALUE.get(w.text);
     if (!def) { acc.add('once', 'list.flag', { cmd: 'find', flag: w.text }, true); continue; }
     const v = args[i++];
-    if (!v) { formOnce(acc, 'find', `${w.text} の値`); continue; }
+    if (!v) { formOnce(acc, 'find', `value of ${w.text}`); continue; }
     checkValue(def.type === 'bool' ? 'x' : def.type, v, acc, 'find', w.text, ctx);
   }
 });
@@ -382,7 +382,7 @@ register(['tar'], (words, acc, ctx) => {
       const kind = TAR_LONG_VALUE.get(name);
       if (kind) {
         const v = eq < 0 ? args[++i] : { ...w, text: text.slice(eq + 1) };
-        if (!v || v.text === '') unsafe(`${name} の値`);
+        if (!v || v.text === '') unsafe(`value of ${name}`);
         else if (kind === 'f') file = v;
         else { dirs.push(v); cdir = nested(cdir, v); }
         continue;
@@ -401,7 +401,7 @@ register(['tar'], (words, acc, ctx) => {
       else if (ch === 'f' || ch === 'C') {
         const rest = text.slice(j + 1);
         const v = rest !== '' ? { ...w, text: rest } : args[++i];
-        if (!v) { formOnce(acc, 'tar', `-${ch} の値`); break; }
+        if (!v) { formOnce(acc, 'tar', `value of -${ch}`); break; }
         if (ch === 'f') file = v;
         else { dirs.push(v); cdir = nested(cdir, v); }
         break;
@@ -507,7 +507,7 @@ register(['curl'], (words, acc, ctx) => {
       if (def.type === 'bool') { if (eq > 0) acc.add('once', 'list.flag', { cmd: 'curl', flag: text }, true); continue; }
       const attached = text.startsWith('--') ? (eq > 0 ? text.slice(eq + 1) : '') : text.slice(k + 2);
       const value = attached !== '' ? { ...w, text: attached, dynamic: false, glob: false } : args[++i];
-      if (!value) { formOnce(acc, 'curl', `${name} の値`); break; }
+      if (!value) { formOnce(acc, 'curl', `value of ${name}`); break; }
       if (value.dynamic || value.glob) acc.add('once', 'list.dynamic', { cmd: 'curl', detail: value.text }, true);
       if (name === '-H' || name === '--header') {
         const header = /^\s*([A-Za-z][A-Za-z0-9-]*)\s*[:;]/u.exec(value.text)?.[1];
@@ -575,7 +575,7 @@ register(['wget'], (words, acc, ctx) => {
       if (def.type === 'bool') { if (eq > 0) acc.add('once', 'list.flag', { cmd: 'wget', flag: text }, true); continue; }
       const attached = text.startsWith('--') ? (eq > 0 ? text.slice(eq + 1) : '') : text.slice(k + 2);
       const value = attached !== '' ? { ...w, text: attached, dynamic: false, glob: false } : args[++i];
-      if (!value) { formOnce(acc, 'wget', `${name} の値`); break; }
+      if (!value) { formOnce(acc, 'wget', `value of ${name}`); break; }
       if (value.dynamic || value.glob) acc.add('once', 'list.dynamic', { cmd: 'wget', detail: value.text }, true);
       if (name === '--max-redirect') redirects = value.text;
       if (name === '-O' || name === '--output-document') { output = true; toStdout = value.text === '-'; }

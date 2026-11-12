@@ -106,7 +106,7 @@ export interface ToolContext {
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
-    web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
+    web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
     // ブラウザの道具（browser_*）が使う、全会話で 1 つのブラウザ。無ければ道具は「ブラウザが無い」で失敗する
     browser?: BrowserSession | undefined;
   } | undefined;
@@ -141,6 +141,8 @@ export type TaskControl =
 export interface ToolDef<I = any> {
   name: string;
   description: string;
+  // 設定で変わる説明（モデルへ渡すときに description の代わりに使う）
+  describe?: (config: AppConfig) => string;
   input: TSchema;
   effect: ToolEffect;
   allowedIn: readonly RunKind[];

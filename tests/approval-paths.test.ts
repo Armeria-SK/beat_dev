@@ -61,7 +61,7 @@ test('シェル: 見つけたパスごとに、許可フォルダの中（読み
     { input: doc, path: doc, verdict: 'in', mode: 'read' },
   ], '外は先に並べる（中は見つけた順）');
   assert.equal(view.details.length, 3, '文の details も残す');
-  assert.match(view.details[2]!, /許可フォルダの外/u, 'details は見つけた順のまま');
+  assert.match(view.details[2]!, /outside the allowed folders/u, 'details は見つけた順のまま');
 });
 
 test('シェル: cd で動いた先からの相対パスは、動いた先で判定する', async t => {

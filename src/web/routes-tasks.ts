@@ -1,8 +1,11 @@
+import type { IncomingMessage } from 'node:http';
 import type { App } from '../app.ts';
+import { transaction } from '../db/database.ts';
 import { AVATAR_SHAPES } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
-import { TaskError, taskView, type Task } from '../tasks/store.ts';
+import { SCHEDULE_MAX_RANGE_MS, TaskError, taskView, type Task } from '../tasks/store.ts';
+import { splitKey } from '../tasks/worker.ts';
 import { languageOf } from '../shared/language.ts';
 import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { taskText } from '../shared/messages/tasks.ts';
@@ -58,7 +61,28 @@ export function registerTaskRoutes(router: Router, app: App): void {
   router.add('GET', '/api/tasks', ({ res }) => sendJson(res, 200, {
     active: app.tasks.list().map(view),
     finished: app.tasks.recentlyFinished().map(view),
+    finishedTotal: app.tasks.finishedTotal(),
+    repeating: app.tasks.templates().map(task => ({ ...view(task), last_run: task.last_run })),
   }));
+
+  router.add('GET', '/api/tasks/finished', ({ res, url }) => {
+    const beforeT = url.searchParams.get('beforeT');
+    const beforeId = url.searchParams.get('beforeId');
+    if ((beforeT === null) !== (beforeId === null) || (beforeT !== null && !/^\d{1,16}$/u.test(beforeT)) || beforeId === '') {
+      throw problem(400, 'invalid_field', 'bad_cursor', { field: 'beforeT' });
+    }
+    const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit') ?? 20)) || 20, 1), 100);
+    const page = app.tasks.finishedPage({ before: beforeT !== null && beforeId !== null ? { t: Number(beforeT), id: beforeId } : undefined, limit });
+    sendJson(res, 200, { tasks: page.tasks.map(view), next: page.next ? { beforeT: page.next.t, beforeId: page.next.id } : null, total: app.tasks.finishedTotal() });
+  });
+
+  router.add('GET', '/api/schedule', ({ res, url }) => {
+    const [from, to] = ['from', 'to'].map(name => { const raw = url.searchParams.get(name); return raw !== null && /^\d{1,16}$/u.test(raw) ? Number(raw) : Number.NaN; }) as [number, number];
+    if (!(from < to) || to - from > SCHEDULE_MAX_RANGE_MS) {
+      throw problem(400, 'invalid_field', 'bad_range', { field: 'from', params: { days: SCHEDULE_MAX_RANGE_MS / 86_400_000 } });
+    }
+    sendJson(res, 200, app.tasks.schedule(from, to));
+  });
 
   router.add('POST', '/api/tasks', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
@@ -96,15 +120,36 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const doneCriteria = doneCriteriaOf(body);
     const priority = priorityOf(body);
     const when = whenOf(body);
+    const cron = cronOf(body);
+    if (cron !== undefined && when !== undefined) throw problem(400, 'invalid_field', 'repeat_with_when', { field: 'repeat' });
+    const fields = {
+      ...(title !== undefined ? { title } : {}), ...(text !== undefined ? { body: text } : {}),
+      ...(nextAction !== undefined ? { nextAction } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...(when !== undefined ? { runAt: when } : {}),
+    };
     try {
-      const updated = app.tasks.update(task.id, {
-        ...(title !== undefined ? { title } : {}), ...(text !== undefined ? { body: text } : {}),
-        ...(nextAction !== undefined ? { nextAction } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}),
-        ...(priority !== undefined ? { priority } : {}),
-        ...(when !== undefined ? { runAt: when } : {}),
-      }, 'user');
-      app.tasks.event(task.id, 'edited', 'user');
+      const updated = transaction(app.db, () => {
+        let next = cron !== undefined ? app.tasks.setSchedule(task.id, cron, app.config().timezone, 'user') : task;
+        if (cron === undefined || Object.keys(fields).length) {
+          next = app.tasks.update(task.id, fields, 'user');
+          app.tasks.event(task.id, 'edited', 'user');
+        }
+        return next;
+      });
+      app.kv.delete(splitKey(task.id));
       sendJson(res, 200, { task: view(updated) });
+    } catch (error) {
+      if (error instanceof TaskError && error.code === 'error.bad_cron') throw domainProblem(400, 'task', error);
+      taskProblem(error);
+    }
+  });
+
+  router.add('DELETE', '/api/tasks/:id', ({ res, params }) => {
+    const task = getTask(params[0]!);
+    try {
+      const removed = app.tasks.remove(task.id);
+      sendJson(res, 200, { deleted: { id: removed.id, events: removed.events, keptRuns: removed.keptRuns } });
     } catch (error) { taskProblem(error); }
   });
 
@@ -114,6 +159,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status !== 'waiting') throw problem(409, 'task', 'not_waiting');
     app.tasks.event(task.id, 'answer', 'user', taskText(languageOf(app.config()), 'event.answer', { question: task.waiting_text ?? '', text }));
     const updated = app.tasks.setReady(task.id, { actor: 'user' });
+    app.kv.delete(splitKey(task.id));
     app.worker.requestRun(task.id);
     sendJson(res, 200, { task: view(updated) });
   });
@@ -142,6 +188,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
       } else {
         task = app.tasks.update(task.id, { runAt: null }, 'user');
       }
+      app.kv.delete(splitKey(task.id));
       app.worker.requestRun(task.id);
       sendJson(res, 202, { task: view(task) });
     } catch (error) { taskProblem(error); }
@@ -151,19 +198,36 @@ export function registerTaskRoutes(router: Router, app: App): void {
     try { sendJson(res, 200, { task: view(app.tasks.approve(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
   });
 
-  const close = (status: 'cancelled' | 'done') => ({ res, params }: { res: Parameters<typeof sendJson>[0]; params: string[] }) => {
+  router.add('POST', '/api/tasks/:id/unapprove', ({ res, params }) => {
+    try { sendJson(res, 200, { task: view(app.tasks.unapprove(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
+  });
+
+  const cancelReasonOf = async (req: IncomingMessage): Promise<string | undefined> => {
+    if (!/^application\/json\b/iu.test(req.headers['content-type'] ?? '')) return undefined;
+    const body = requireObject(await readJson(req));
+    if (body.reason === undefined || body.reason === null || (typeof body.reason === 'string' && !body.reason.trim())) return undefined;
+    return requireString(body, 'reason', { max: 2000 })!.trim();
+  };
+
+  const close = (status: 'cancelled' | 'done') => async ({ req, res, params }: { req: IncomingMessage; res: Parameters<typeof sendJson>[0]; params: string[] }) => {
+    const reason = status === 'cancelled' ? await cancelReasonOf(req) : undefined;
     const task = getTask(params[0]!);
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
-    const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
+    const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
     app.worker.stopTask(task.id);
+    app.kv.delete(splitKey(task.id));
     sendJson(res, 200, { task: view(updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
   router.add('POST', '/api/tasks/:id/uncancel', ({ res, params }) => {
     const task = getTask(params[0]!);
-    try { sendJson(res, 200, { task: view(app.tasks.uncancel(task.id, 'user')) }); } catch (error) { taskProblem(error); }
+    try {
+      const restored = app.tasks.uncancel(task.id, 'user');
+      app.kv.delete(splitKey(task.id));
+      sendJson(res, 200, { task: view(restored) });
+    } catch (error) { taskProblem(error); }
   });
   router.add('POST', '/api/tasks/:id/done', close('done'));
 

@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { AppConfig } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { BrowserFailure, CLOSE_TIMEOUT_MS, localeFor, type BrowserDriver, type BrowserHandle, type LaunchOptions, type PageHandle } from './driver.ts';
+import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type LaunchOptions, type PageHandle } from './driver.ts';
 import type { ElementTable } from './elements.ts';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './egress-proxy.ts';
 
@@ -271,7 +271,7 @@ export class BrowserSession {
         headless,
         proxy: { server: `http://${proxy.host}:${proxy.port}`, username, password },
         viewport: VIEWPORT,
-        locale: localeFor(languageOf(config)),
+        locale: systemLocale(),
         actionTimeoutMs: browser.limits.actionTimeoutSec * 1000,
         // 操作の一覧への、確かめを出せない遷移の守り。一覧は遷移のたびに読む。ログイン用の窓は、持ち主が自分で操作するので守りを付けない
         sites: login ? () => [] : () => this.#d.config().tools.browser.sites,

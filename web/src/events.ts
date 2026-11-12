@@ -20,6 +20,7 @@ export type RunEvent =
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: Task }
+  | { type: 'task.deleted'; id: string }
   | { type: 'notification'; notification: NotificationItem }
   | { type: 'notification.read'; ids: number[]; unread: number };
 

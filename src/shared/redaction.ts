@@ -4,9 +4,13 @@ const SECRET_PATTERNS = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
 ];
 const URL_CREDENTIAL = /(?:https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi;
+const URL_USERINFO_PASSWORD = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s/?#@:]*:)[^\s/?#@]+@/gi;
+const URL_PARAM = /(?<=[?&#]|&amp;|\\u0026)([A-Za-z_][A-Za-z0-9_.-]*)=[^\s&#"'`<>\\]+/g;
+const URL_PARAM_SECRET_NAME = /^(?:key|sig|code)$|(?:^|[_-])signature$/i;
+const URL_PARAM_SEPARATOR = /(?:[?&#]|&amp;|\\u0026)$/;
 const PRIVATE_KEY_MARKER = /-----(BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----/g;
-const SENSITIVE_ASSIGNMENT =
-  /(?<![A-Za-z0-9_])([0-9]*)(["']?)([A-Za-z_][A-Za-z0-9_]*)(["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\r\n]+)/gi;
+const ASSIGNMENT_HEAD = /(?<![A-Za-z0-9_])[0-9]*["']?([A-Za-z_][A-Za-z0-9_]*)(?:\\*["'])?\s*[:=]\s*/g;
+const ASSIGNMENT_VALUE = /\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}\r\n]+/y;
 const SENSITIVE_NAME =
   /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|SESSION_KEY|AUTH|AUTHORIZATION|COOKIE|COOKIES|CREDENTIAL|CREDENTIALS|PRIVATE_KEY)(?:_|$)/i;
 
@@ -118,16 +122,43 @@ export function redactExact(input: string, exactSecrets: readonly string[]): str
 export function redactSecrets(input: string, exactSecrets: readonly string[] = []): string {
   let redacted = redactExact(input, exactSecrets);
   redacted = sanitizeModelInputText(redacted).text;
-  redacted = redacted.replace(
-    SENSITIVE_ASSIGNMENT,
-    // A name is scanned only from its start. Preserve leading digits because
-    // the legacy matcher also recognized assignments in e.g. `1api_key=value`.
-    (match, digits: string, quote: string, name: string, separator: string) =>
-      isSensitiveName(name)
-        ? `${digits}${quote}${name}${separator}[REDACTED]`
-        : match,
-  );
-  return redacted;
+  redacted = redacted.replace(URL_USERINFO_PASSWORD, '$1[REDACTED]@');
+  redacted = redacted.replace(URL_PARAM, (match, name: string) =>
+    isSensitiveName(name) || URL_PARAM_SECRET_NAME.test(name) ? `${name}=[REDACTED]` : match);
+  return redactAssignments(redacted);
+}
+
+function redactAssignments(input: string): string {
+  const head = new RegExp(ASSIGNMENT_HEAD.source, ASSIGNMENT_HEAD.flags);
+  const value = new RegExp(ASSIGNMENT_VALUE.source, ASSIGNMENT_VALUE.flags);
+  const parts: string[] = [];
+  let copied = 0;
+  // A name is scanned only from its start. Leading digits stay in the head because
+  // the legacy matcher also recognized assignments in e.g. `1api_key=value`.
+  for (let match = head.exec(input); match !== null; match = head.exec(input)) {
+    if (!isSensitiveName(match[1]!)) continue;
+    const valueStart = head.lastIndex;
+    if (input.startsWith('[REDACTED]', valueStart) && URL_PARAM_SEPARATOR.test(input.slice(Math.max(0, match.index - 6), match.index))) {
+      head.lastIndex = valueStart + '[REDACTED]'.length;
+      continue;
+    }
+    value.lastIndex = valueStart;
+    if (!value.test(input)) continue;
+    parts.push(input.slice(copied, valueStart), '[REDACTED]');
+    copied = head.lastIndex = value.lastIndex;
+  }
+  parts.push(input.slice(copied));
+  return parts.join('');
+}
+
+const JSON_DEPTH_LIMIT = 100;
+
+export function redactJsonValue(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return redactSecrets(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= JSON_DEPTH_LIMIT) return '[REDACTED]';
+  if (Array.isArray(value)) return value.map(item => redactJsonValue(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, isSensitiveName(key) ? '[REDACTED]' : redactJsonValue(item, depth + 1)]));
 }
 
 export function redactDisplaySnapshot(input: string): string {

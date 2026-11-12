@@ -836,14 +836,14 @@ test('穴 5（F4）: @ のあとの名前は、ほかの読み取りと同じに
   const f = holeFixture(t);
   const wrong: string[] = [];
   const rows: ReadonlyArray<readonly [string, 'ask' | 'deny', RegExp]> = [
-    ['tar -cf out.tar @../inner.tar', 'ask', /許可フォルダの外/u],
-    ['tar -C sub -cf out.tar @../../inner.tar', 'ask', /許可フォルダの外/u],
-    ['tar -cf out.tar @.env', 'deny', /秘密/u],
-    ['tar -cf out.tar @sub/.env', 'deny', /秘密/u],
-    ['tar -C sub -cf out.tar @.env', 'deny', /秘密/u],
+    ['tar -cf out.tar @../inner.tar', 'ask', /outside the allowed folders/u],
+    ['tar -C sub -cf out.tar @../../inner.tar', 'ask', /outside the allowed folders/u],
+    ['tar -cf out.tar @.env', 'deny', /looks like it holds secrets/u],
+    ['tar -cf out.tar @sub/.env', 'deny', /looks like it holds secrets/u],
+    ['tar -C sub -cf out.tar @.env', 'deny', /looks like it holds secrets/u],
     // -C sub のあとの @../inner.tar は、作業フォルダの中の inner.tar（-C を無視して読むと、作業フォルダの外に見える）
-    ['tar -C sub -cf out.tar @../inner.tar', 'ask', /^(?![\s\S]*(?:許可フォルダの外|秘密))/u],
-    ['tar -cf out.tar @RO/inner.tar', 'ask',/^(?![\s\S]*(?:許可フォルダの外|秘密))/u],
+    ['tar -C sub -cf out.tar @../inner.tar', 'ask', /^(?![\s\S]*(?:outside the allowed folders|looks like it holds secrets))/u],
+    ['tar -cf out.tar @RO/inner.tar', 'ask',/^(?![\s\S]*(?:outside the allowed folders|looks like it holds secrets))/u],
   ];
   for (const [row, want, why] of rows) {
     const command = row.replace('RO/', `${f.ro}/`);

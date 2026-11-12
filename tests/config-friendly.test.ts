@@ -34,11 +34,11 @@ test('持ち主の 2 つの例: ID に「Anthropic」・環境変数名に貼っ
   const error = issuesOf(configWith(c => { c.providers[0].id = 'Anthropic'; c.providers[1].apiKeyEnv = pasted; }));
   const id = error.issues.find(i => i.path === 'providers.Anthropic.id')!;
   assert.equal(id.code, 'config.pattern.provider_id');
-  assert.match(id.message, /小文字・数字・_・-.*40 文字まで/u);
+  assert.match(id.message, /lowercase letters, digits, _ and -.*up to 40 characters/u);
   const env = error.issues.find(i => i.path.endsWith('.apiKeyEnv'))!;
   assert.equal(env.code, 'config.pattern.key_env');
-  assert.match(env.message, /キーそのものではなく、環境変数の「名前」/u);
-  assert.match(env.message, /「API キー」の欄/u);
+  assert.match(env.message, /the NAME of an environment variable here, not the key itself/u);
+  assert.match(env.message, /the "API key" field/u);
   for (const text of [...error.problems, ...error.issues.map(i => i.message), error.message]) {
     assert.doesNotMatch(text, RAW, text);
     assert.equal(text.includes(pasted), false, '貼られたキーを文に入れない');
@@ -57,24 +57,24 @@ test('長さ・数の範囲・形・必須・知らない項目も、友好的�
     c.worker.quietStart = '25:99';
     c.profile.color = 'red';
     c.models[0].efforts = ['ok', '!bad'];
-    c.tools.maxIterations = 1.5;
+    c.tools.agent.maxPerRun = 1.5;
     c.worker.enabled = 'yes';
     c.profile.shape = 'square-ish';
     c.profile.extra = 1;
   }));
   const at = (path: string) => error.issues.find(i => i.path === path)!;
   assert.deepEqual([at('server.port').code, at('server.port').params], ['config.number.range', { min: 1, max: 65535 }]);
-  assert.equal(at('server.port').message, '1 から 65535 までの数にしてください');
-  assert.equal(at('worker.maxRunsPerHour').message, '1 から 120 までの数にしてください');
-  assert.deepEqual([at('profile.name').code, at('profile.name').message], ['config.string.required', '入力してください']);
+  assert.equal(at('server.port').message, 'Use a number from 1 to 65535');
+  assert.equal(at('worker.maxRunsPerHour').message, 'Use a number from 1 to 120');
+  assert.deepEqual([at('profile.name').code, at('profile.name').message], ['config.string.required', 'Enter a value']);
   assert.deepEqual([at(`models.${testConfig().models[0]!.id}.label`).code, at(`models.${testConfig().models[0]!.id}.label`).params], ['config.string.max_length', { max: 80 }]);
   assert.equal(at('worker.quietStart').code, 'config.pattern.time');
   assert.equal(at('profile.color').code, 'config.pattern.color');
   assert.ok(error.issues.some(i => i.path.endsWith('.efforts.1') && i.code === 'config.pattern.effort'), String(error.issues.map(i => i.path)));
-  assert.equal(at('tools.maxIterations').code, 'config.type.integer');
+  assert.equal(at('tools.agent.maxPerRun').code, 'config.type.integer');
   assert.equal(at('worker.enabled').code, 'config.type.boolean');
   assert.equal(at('profile.shape').code, 'config.type.choice');
-  assert.match(at('profile.shape').message, /次のどれかにしてください: .*pebble/u);
+  assert.match(at('profile.shape').message, /Use one of these: .*pebble/u);
   assert.equal(at('profile.extra').code, 'config.unexpected');
   for (const text of [...error.problems, ...error.issues.map(i => i.message)]) assert.doesNotMatch(text, RAW, text);
 });
@@ -118,9 +118,8 @@ test('スキーマの形の決まり（pattern・長さ・数の範囲・個数�
       for (const e of errors) {
         const friendly = friendlyIssue(e);
         assert.ok(friendly, `${path}: ${e.message} の友好的な文が無い`);
-        const ja = configText('ja', friendly.code, friendly.params);
         const enText = configText('en', friendly.code, friendly.params);
-        for (const text of [ja, enText]) { assert.doesNotMatch(text, RAW, `${path}: ${text}`); assert.doesNotMatch(text, /\{\w+\}/u, `${path}: 差し込みが残っている ${text}`); }
+        for (const text of [enText]) { assert.doesNotMatch(text, RAW, `${path}: ${text}`); assert.doesNotMatch(text, /\{\w+\}/u, `${path}: 差し込みが残っている ${text}`); }
         assert.doesNotMatch(enText, CJK, `${path}: 英語に日本語が混ざる`);
         checked++;
       }
@@ -139,7 +138,7 @@ test('形の誤り（型）: 文字・整数・数・オンオフ・一覧・ま
   for (const e of errors) {
     const friendly = friendlyIssue(e);
     assert.ok(friendly, `${e.path}: ${e.message}`);
-    for (const language of ['ja', 'en'] as const) assert.doesNotMatch(configText(language, friendly.code, friendly.params), RAW, `${e.path}`);
+    for (const language of ['en'] as const) assert.doesNotMatch(configText(language, friendly.code, friendly.params), RAW, `${e.path}`);
   }
 });
 
@@ -151,17 +150,15 @@ test('API: 設定の保存の 400 は、issues に場所・友好的な文・コ
   assert.equal(res.body.error, 'invalid_config');
   const id = res.body.issues.find((i: any) => i.path === 'providers.Anthropic.id');
   assert.equal(id.code, 'config.pattern.provider_id');
-  assert.match(id.message, /小文字・数字/u);
+  assert.match(id.message, /^An ID uses lowercase letters/u);
   const port = res.body.issues.find((i: any) => i.path === 'server.port');
   assert.deepEqual(port.params, { min: 1, max: 65535 });
   for (const text of [...res.body.problems, res.body.message]) assert.doesNotMatch(text, RAW, text);
-  // 画面の読み取り: 英語なら英語の文、日本語なら日本語の文。コードの無い古い応答はサーバーの文のまま
+  // 画面の読み取り: コードから英語の文を組み立てる。コードの無い古い応答はサーバーの文のまま
   const draft: Config = { providers: [{ id: 'Anthropic' }], models: [] };
   const english = problemsOf(res.body, 'failed', draft, 'en');
   assert.match(english.find(p => p.path === 'providers.Anthropic.id')!.message, /^An ID uses lowercase letters/u);
   assert.equal(english.find(p => p.path === 'server.port')!.message, 'Use a number from 1 to 65535');
-  const japanese = problemsOf(res.body, 'failed', draft, 'ja');
-  assert.match(japanese.find(p => p.path === 'providers.Anthropic.id')!.message, /小文字・数字/u);
   assert.equal(issueMessage({ path: 'a', message: 'サーバーの文' }, 'en'), 'サーバーの文');
   assert.equal(issueMessage({ path: 'a', message: 'x', code: 'config.nope.nope' }, 'en'), 'x', '表に無いコードも、サーバーの文のまま');
   assert.equal(issueMessage({ path: 'a', message: 'x', code: 'config.number.range', params: { min: 1 } }, 'en'), 'x', '差し込みの値が足りなければ、サーバーの文のまま');

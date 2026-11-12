@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { SkillError, type SkillStore } from '../skills/store.ts';
+import { askBeforeRegister, SkillError, type SkillStore } from '../skills/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 function store(ctx: ToolContext): SkillStore {
@@ -16,7 +16,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
 
 export const skillView: ToolDef<{ name: string }> = {
   name: 'skill_view',
-  description: 'スキル（手順書）の本文を読む。system の「スキル」の一覧にある作業をするときは、先にこれで手順を確かめる。',
+  description: 'Read the body of a skill (a procedure). Before doing work that is in the "Skills (procedures)" list in the system prompt, check the procedure with this first.',
   input: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64 }) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'review', 'agent'],
@@ -38,13 +38,17 @@ export const skillView: ToolDef<{ name: string }> = {
   },
 };
 
+const DRAFT_HOW = [
+  'To fix an existing skill, write its full text under the same name (prefer fixing an existing skill over making a new one).',
+  'name uses lowercase English letters, digits and hyphens. description is "when to use it" in one sentence. body is the procedure, concretely. reason is why you are making or fixing it.',
+];
+const DRAFT_ASK = ['Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.', ...DRAFT_HOW].join(' ');
+const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, unless this run or this conversation read outside content or this is a task's run (then it waits for the user's approval), and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
+
 export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string }> = {
   name: 'skill_draft',
-  description: [
-    '繰り返し使える手順を、スキル（手順書）の下書きとして書く。ユーザーが承認するまで有効にならない。',
-    '既にあるスキルを直すときは同じ name で全文を書く（新しく作るより、既存のスキルを直すほうを優先する）。',
-    'name は英小文字・数字・ハイフン。description は「いつ使うか」を1文で。body は手順を具体的に。reason はなぜ作る・直すのか。',
-  ].join(''),
+  description: DRAFT_ASK,
+  describe: config => (askBeforeRegister(config) ? DRAFT_ASK : DRAFT_AUTO),
   input: Type.Object({
     name: Type.String({ minLength: 1, maxLength: 63, pattern: '^[a-z0-9][a-z0-9-]*$' }),
     description: Type.String({ minLength: 1, maxLength: 300 }),
@@ -57,8 +61,10 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
     try {
       const s = store(ctx);
       const existing = s.getRegistered(input.name);
-      const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId });
+      const autoOk = !ctx.taint?.tainted && !s.sawOutside(ctx.conversationId);
+      const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId, autoOk });
       const language = languageOf(ctx.config);
+      if (draft.status === 'approved') return { content: toolText(language, existing ? 'skill.registered_auto_edit' : 'skill.registered_auto_new', { name: draft.name, id: draft.id }) };
       return { content: toolText(language, 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
     } catch (error) { return fail(error, ctx); }
   },

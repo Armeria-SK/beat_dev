@@ -227,7 +227,7 @@ export function parseGnu(spec: GnuSpec, words: readonly Word[], acc: Acc, ctx: M
       seen.add(name);
       if (def.type === 'bool' || def.type === 'opt') { if (eq < 0 || def.type === 'bool') acc.add('once', 'list.flag', { cmd, flag: text }, true); continue; }
       const value = eq > 0 ? { ...w, text: text.slice(eq + 1), dynamic: false, glob: false } : args[++i];
-      if (!value) { acc.add('once', 'list.form', { cmd, detail: `${name} の値` }, true); continue; }
+      if (!value) { acc.add('once', 'list.form', { cmd, detail: `value of ${name}` }, true); continue; }
       if (eq < 0 && (value.dynamic || value.glob) && !spec.ro) acc.add('once', 'list.dynamic', { cmd, detail: value.text }, true);
       keep(name, value);
       checkValue(def.type, value, acc, cmd, name, ctx);
@@ -243,7 +243,7 @@ export function parseGnu(spec: GnuSpec, words: readonly Word[], acc: Acc, ctx: M
       if (def.type === 'bool' || def.type === 'opt') continue;
       const rest = text.slice(j + 1);
       const value = rest !== '' ? { ...w, text: rest, dynamic: false, glob: false } : args[++i];
-      if (!value) { acc.add('once', 'list.form', { cmd, detail: `${key} の値` }, true); break; }
+      if (!value) { acc.add('once', 'list.form', { cmd, detail: `value of ${key}` }, true); break; }
       if (rest === '' && (value.dynamic || value.glob) && !spec.ro) acc.add('once', 'list.dynamic', { cmd, detail: value.text }, true);
       keep(key, value);
       checkValue(def.type, value, acc, cmd, key, ctx);

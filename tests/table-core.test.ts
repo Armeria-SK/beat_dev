@@ -6,7 +6,7 @@ import { openZip } from '../src/shared/zip.ts';
 import { xlsxText } from '../src/shared/office-text.ts';
 
 test('表: startsLikeFormula は式の始まりを見る', () => {
-  for (const t of ['=1+1', '+1', '-1', '@SUM(A1)', '\tx', '\rx', '\nx', '\uFF1D1']) {
+  for (const t of ['=1+1', '+1', '-1', '@SUM(A1)', '\tx', '\rx', '\nx', '\uFF1D1', '\u{FF0B}1', '\u{FF0D}1', '\u{FF20}SUM(A1)']) {
     assert.equal(startsLikeFormula(t), true, `true: ${JSON.stringify(t)}`);
   }
   for (const t of ['a=1', '', '1-2', '   ', ' a=1', '\u3000x', '\uFEFF', '\u200B']) {
@@ -97,7 +97,7 @@ test('表: xlsxBytes の往復は xlsxText で読める', () => {
   assert.equal(neutralized, 1, '=1+1 のセルを無害化');
   const opened = openZip(bytes);
   assert.equal(opened.ok, true);
-  const result = xlsxText(opened.zip, 'ja');
+  const result = xlsxText(opened.zip, 'en');
   assert.equal(result.ok, true);
   const text = result.ok ? result.text : '';
   assert.ok(text.includes('名前\t数'), '1 行目');
@@ -124,7 +124,7 @@ test('表: 制御文字を含むセルは落として読める', () => {
   const { bytes } = xlsxBytes([['a' + String.fromCharCode(1) + 'b']]);
   const opened = openZip(bytes);
   assert.equal(opened.ok, true);
-  const result = xlsxText(opened.zip, 'ja');
+  const result = xlsxText(opened.zip, 'en');
   assert.equal(result.ok, true, 'damaged にならない');
   const text = result.ok ? result.text : '';
   assert.ok(text.includes('ab'), '制御文字は落ちる');

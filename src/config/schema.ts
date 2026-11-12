@@ -3,7 +3,6 @@ import { Type, type Static } from '@sinclair/typebox';
 export const ProviderKind = Type.Union([
   Type.Literal('anthropic'),
   Type.Literal('openai_compatible'),
-  Type.Literal('ollama'),
 ]);
 
 export const ServerKind = Type.Union([
@@ -34,7 +33,6 @@ export const ModelConfig = Type.Object({
   contextLength: Type.Optional(Type.Integer({ minimum: 1024, maximum: 10_000_000 })),
   minContext: Type.Integer({ minimum: 1024, maximum: 10_000_000, default: 65536 }),
   maxOutputTokens: Type.Integer({ minimum: 256, maximum: 200_000, default: 8192 }),
-  toolMode: Type.Union([Type.Literal('native'), Type.Literal('json_fallback')], { default: 'native' }),
   maxTools: Type.Optional(Type.Integer({ minimum: 0, maximum: 128 })),
   vision: Type.Boolean({ default: false }),
   temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
@@ -62,9 +60,9 @@ export const AVATAR_SHAPES = [
 
 export const RESTART_KEYS = ['server'] as const;
 
-export const LANGUAGES = ['ja', 'en'] as const;
+export const LANGUAGES = ['en'] as const;
 export type Language = (typeof LANGUAGES)[number];
-export const DEFAULT_LANGUAGE: Language = 'ja';
+export const DEFAULT_LANGUAGE: Language = 'en';
 
 export const RootConfig = Type.Object({
   path: Type.String({ minLength: 1, maxLength: 1024 }),
@@ -105,15 +103,12 @@ export function ToolsConfig() {
     }, { additionalProperties: false, default: {} }),
     web: Type.Object({
       fetch: Type.Boolean({ default: true }),
-      search: Type.Union([Type.Literal('duckduckgo'), Type.Literal('searxng'), Type.Literal('off')], { default: 'duckduckgo' }),
-      searxngUrl: Type.String({ default: '' }),
+      search: Type.Union([Type.Literal('duckduckgo'), Type.Literal('off')], { default: 'duckduckgo' }),
       region: Type.String({ default: 'jp-jp', maxLength: 10 }),
       maxSearchesPerHour: Type.Integer({ minimum: 1, maximum: 600, default: 30 }),
     }, { additionalProperties: false, default: {} }),
     // 道具ごとの方針（道具の名前 → allow / ask / block）。今の判定に厳しさを足すだけで、緩める道は無い。書かない道具は allow（src/tools/tool-policy.ts）
     policies: Type.Record(Type.String(), Type.Union([Type.Literal('allow'), Type.Literal('ask'), Type.Literal('block')]), { default: {} }),
-    // 1 回の実行で道具を呼べる回数。0 は制限なし（止めるのは、止めるボタン・取り消し・割り込み・承認の拒否や時間切れ・コンテキストの量だけ）
-    maxIterations: Type.Integer({ minimum: 0, maximum: 100, default: 16 }),
     // 子の担当（agent_run）。既定は無効で、無効のあいだは今までと同じ（道具もモデルに渡らない）。深さは 1 で固定（設定にしない）
     agent: Type.Object({
       enabled: Type.Boolean({ default: false }),
@@ -231,7 +226,6 @@ export const AppConfig = Type.Object({
   $schema: Type.Optional(Type.String()),
   version: Type.Literal(1),
   timezone: Type.String({ default: 'Asia/Tokyo' }),
-  language: Type.Optional(Type.Union(LANGUAGES.map(l => Type.Literal(l)))),
   server: ServerConfig,
   providers: Type.Array(ProviderConfig, { default: [] }),
   models: Type.Array(ModelConfig, { default: [] }),
@@ -264,6 +258,9 @@ export const AppConfig = Type.Object({
   }, { additionalProperties: false, default: {} }),
   notify: NotifyConfig,
   mcp: McpConfig,
+  skills: Type.Optional(Type.Object({
+    askBeforeRegister: Type.Optional(Type.Boolean()),
+  }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
 export type ProviderConfig = Static<typeof ProviderConfig>;

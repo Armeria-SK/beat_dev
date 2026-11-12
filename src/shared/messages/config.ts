@@ -4,43 +4,7 @@ import { defineMessages } from './define.ts';
 // 設定の保存の 400 と壊れた設定の読み込みが、場所（path）といっしょにコード（config.<キー>）と差し込みの値を返し、画面が画面の言語で書き直す。
 // pattern の文は項目ごと（src/config/friendly.ts の PATTERN_MESSAGES）。足した pattern に文が無いと、tests/config-friendly.test.ts が落ちる
 
-const ja = {
-  'pattern.provider_id': 'ID は、小文字・数字・_・- で、小文字か数字から始め、40 文字までにしてください',
-  'pattern.model_id': 'ID は、小文字・数字・_・.・- で、小文字か数字から始め、64 文字までにしてください',
-  'pattern.key_env': 'ここには、キーそのものではなく、環境変数の「名前」を書きます（英大文字で始め、大文字・数字・_ で、64 文字まで）。キーは「API キー」の欄に入れてください',
-  'pattern.effort': '考える深さの名前は、英数字・_・.・- で、英数字から始め、32 文字までにしてください',
-  'pattern.color': '色は #RRGGBB の形（例: #61B8A5）にしてください',
-  'pattern.notify_id': 'ID は、小文字・数字・- で、小文字から始め、24 文字までにしてください',
-  'pattern.mcp_id': 'ID は、小文字・数字で、小文字から始め、16 文字までにしてください',
-  'pattern.mcp_tool': '道具の名前は、英数字・_・.・- で、64 文字までにしてください',
-  'pattern.mcp_env_name': '環境変数の名前は、英数字と _ で、英字か _ から始め、27 文字までにしてください',
-  'pattern.mcp_header_name': '見出しの名前は、英数字と - で、英字から始め、27 文字までにしてください',
-  'pattern.browser_site': 'サイトは、小文字のホスト名（例: example.com）で書いてください。先頭に = を付けると、そのホストだけ（サブドメインは含めない）になります。*・パス・ポート・IP アドレスは書けません',
-  'pattern.time': '時刻は HH:MM（24 時間。例: 22:30）の形にするか、空にしてください',
-  'pattern.other': '決まった書き方に合っていません',
-  'string.required': '入力してください',
-  'string.min_length': '{min} 文字以上にしてください',
-  'string.max_length': '{max} 文字までにしてください',
-  'number.range': '{min} から {max} までの数にしてください',
-  'number.min': '{min} 以上の数にしてください',
-  'number.max': '{max} 以下の数にしてください',
-  'array.min_items': '{min} 個以上にしてください',
-  'array.max_items': '{max} 個までにしてください',
-  'array.unique': '同じものを 2 回入れないでください',
-  'type.string': '文字で入力してください',
-  'type.integer': '整数で入力してください',
-  'type.number': '数で入力してください',
-  'type.boolean': 'オンかオフ（true か false）にしてください',
-  'type.array': '一覧の形にしてください',
-  'type.object': 'まとまり（オブジェクト）の形にしてください',
-  'type.union': '選べる値のどれかにしてください',
-  'type.choice': '次のどれかにしてください: {values}',
-  'type.literal': '{value} にしてください',
-  'required': 'この項目が必要です',
-  'unexpected': 'この名前の項目は、設定にありません',
-} as const;
-
-const en: Record<keyof typeof ja, string> = {
+const en = {
   'pattern.provider_id': 'An ID uses lowercase letters, digits, _ and -, starts with a letter or digit, and is up to 40 characters',
   'pattern.model_id': 'An ID uses lowercase letters, digits, _, . and -, starts with a letter or digit, and is up to 64 characters',
   'pattern.key_env': 'Write the NAME of an environment variable here, not the key itself (start with a capital letter; capitals, digits and _ only; up to 64 characters). Enter the key in the "API key" field',
@@ -76,5 +40,5 @@ const en: Record<keyof typeof ja, string> = {
   'unexpected': 'There is no setting with this name',
 };
 
-export const configText = defineMessages('config', ja, en);
-export type ConfigMessageKey = keyof typeof ja;
+export const configText = defineMessages('config', en);
+export type ConfigMessageKey = keyof typeof en;

@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { conversationSawOutside } from '../../db/outside.ts';
 import { externalModelIds } from '../../engine/local-model.ts';
 import { readHistory, searchHistory } from '../../memory/history.ts';
 import { BOOK_LABELS, MemoryError, prefix, type Book } from '../../memory/store.ts';
@@ -7,8 +8,8 @@ import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
-const BookArg = Type.Union([Type.Literal('user'), Type.Literal('notes')], { description: 'user: ユーザーについての事実・好み／notes: Clive 自身のメモと教訓' });
-const IdArg = Type.Union([Type.Integer({ minimum: 1 }), Type.String({ pattern: '^[unUN]?[0-9]+$' })], { description: '記憶の ID（[u7] なら "u7" か 7）' });
+const BookArg = Type.Union([Type.Literal('user'), Type.Literal('notes')], { description: 'user: facts and preferences about the user / notes: Clive\'s own notes and lessons' });
+const IdArg = Type.Union([Type.Integer({ minimum: 1 }), Type.String({ pattern: '^[unUN]?[0-9]+$' })], { description: 'The memory ID (for [u7], "u7" or 7)' });
 
 function services(ctx: ToolContext) {
   if (!ctx.services) throw new MemoryError('memory.unavailable');
@@ -28,10 +29,10 @@ function latestUserMessage(ctx: ToolContext): number | undefined {
 export const memorySave: ToolDef<{ book: Book; content: string }> = {
   name: 'memory_save',
   description: [
-    '次の会話でも覚えておくべきことを、その場で記憶する（ChatGPT のメモリのように）。',
-    'user: ユーザーの名前・好み・状況・決めたこと。notes: 自分の教訓・やり方のコツ。',
-    '1件は短く1つの事実にする。その場限りの経緯や、もう分かっていることは書かない。',
-  ].join(''),
+    'Save, right away, something that should be remembered in later conversations too (like ChatGPT\'s memory).',
+    'user: the user\'s name, preferences, situation and decisions. notes: your own lessons and tips on how to do things.',
+    'Keep each entry short, one fact. Do not write things that only matter in the moment or that are already known.',
+  ].join(' '),
   input: Type.Object({ book: BookArg, content: Type.String({ minLength: 1, maxLength: 600 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
@@ -51,7 +52,7 @@ export const memorySave: ToolDef<{ book: Book; content: string }> = {
 
 export const memoryUpdate: ToolDef<{ id: number | string; content: string }> = {
   name: 'memory_update',
-  description: '記憶を書き直す（古くなった・間違っていた・似た記憶をまとめるとき）。',
+  description: 'Rewrite a memory (when it is out of date or wrong, or to merge similar memories).',
   input: Type.Object({ id: IdArg, content: Type.String({ minLength: 1, maxLength: 600 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
@@ -68,7 +69,7 @@ export const memoryUpdate: ToolDef<{ id: number | string; content: string }> = {
 
 export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
   name: 'memory_forget',
-  description: 'もう要らない・間違っていた記憶を消す。ユーザーに「忘れて」と言われたときも使う。',
+  description: 'Delete a memory that is no longer needed or was wrong. Also use this when the user asks you to forget something.',
   input: Type.Object({ id: IdArg, reason: Type.String({ minLength: 1, maxLength: 300 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
@@ -86,7 +87,7 @@ export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
 
 export const memorySearch: ToolDef<{ query: string; limit?: number }> = {
   name: 'memory_search',
-  description: '記憶を検索する（会話の最初に渡した記憶に無いときや、ID を確かめたいとき）。',
+  description: 'Search memories (when something is not in the memories given at the start of the conversation, or when you want to check an ID).',
   input: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'review'],
@@ -106,7 +107,7 @@ const fmtDate = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace(
 
 export const historySearch: ToolDef<{ query: string; days?: number; limit?: number }> = {
   name: 'history_search',
-  description: '過去の会話を検索する。「前に話したあれ」「いつだっけ」と聞かれたら、推測で答えずにまず検索する。days で直近 N 日に絞れる。',
+  description: 'Search past conversations. When asked about "that thing we talked about before" or "when was it", search first instead of answering from a guess. days narrows it to the last N days.',
   input: Type.Object({
     query: Type.String({ minLength: 1, maxLength: 200 }),
     days: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
@@ -119,14 +120,18 @@ export const historySearch: ToolDef<{ query: string; days?: number; limit?: numb
       const hits = searchHistory(services(ctx).db, input.query, { days: input.days, limit: input.limit ?? 12, excludeConversationId: ctx.conversationId, visibleModelIds: visibleModels(ctx) });
       const language = languageOf(ctx.config);
       if (!hits.length) return { content: toolText(language, 'history.no_hit', { query: input.query, days: input.days ? toolText(language, 'history.days', { days: input.days }) : '' }) };
-      return { content: hits.map(h => toolText(language, 'history.line', { date: fmtDate(h.createdAt), title: h.title ?? toolText(language, 'history.untitled'), cid: h.conversationId, mid: h.messageId, role: h.role, snippet: h.snippet })).join('\n') };
+      const db = services(ctx).db;
+      return {
+        content: hits.map(h => toolText(language, 'history.line', { date: fmtDate(h.createdAt), title: h.title ?? toolText(language, 'history.untitled'), cid: h.conversationId, mid: h.messageId, role: h.role, snippet: h.snippet })).join('\n'),
+        ...([...new Set(hits.map(h => h.conversationId))].some(id => conversationSawOutside(db, id)) ? { fetched: true } : {}),
+      };
     } catch (error) { return fail(error, ctx); }
   },
 };
 
 export const historyRead: ToolDef<{ conversation_id: string; around_message_id?: number; limit?: number }> = {
   name: 'history_read',
-  description: '過去の会話の一部を読む。history_search で見つけた message_id の前後を読むときに使う。',
+  description: 'Read part of a past conversation. Use it to read around a message_id found with history_search.',
   input: Type.Object({
     conversation_id: Type.String({ minLength: 1, maxLength: 100 }),
     around_message_id: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -138,7 +143,10 @@ export const historyRead: ToolDef<{ conversation_id: string; around_message_id?:
     try {
       const rows = readHistory(services(ctx).db, input.conversation_id, { aroundMessageId: input.around_message_id, limit: input.limit ?? 20, visibleModelIds: visibleModels(ctx) });
       if (!rows.length) return { content: toolText(languageOf(ctx.config), 'history.not_found'), isError: true };
-      return { content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n') };
+      return {
+        content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n'),
+        ...(conversationSawOutside(services(ctx).db, input.conversation_id) ? { fetched: true } : {}),
+      };
     } catch (error) { return fail(error, ctx); }
   },
 };

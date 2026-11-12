@@ -10,7 +10,6 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { searchHistory } from '../src/memory/history.ts';
 import { inputHash } from '../src/tools/approvals.ts';
 import { checklistKey } from '../src/tools/builtin/checklist-core.ts';
-import { replyLanguageKey, snapshotLanguageKey } from '../src/engine/prompts.ts';
 import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, type Script } from './helpers.ts';
 
@@ -48,8 +47,8 @@ async function populate(s: Awaited<ReturnType<typeof startApp>>) {
   app.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, ok, duration_ms, output_preview, full_ref, created_at)
     VALUES ('tc2', 'run-o', ?, 'file_read', '{}', 'allow', 'builtin', 1, 5, '別', ?, 6)`).run(OTHER, otherOutput);
   // kv
-  for (const key of [snapshotLanguageKey(TARGET), replyLanguageKey(TARGET), `review:upto:${TARGET}`]) app.kv.set(key, '1');
-  for (const key of [snapshotLanguageKey(OTHER), `review:upto:${OTHER}`, 'calibration:m1']) app.kv.set(key, '1');
+  for (const key of [`snapshot-language:${TARGET}`, `reply-language:${TARGET}`, `review:upto:${TARGET}`]) app.kv.set(key, '1');
+  for (const key of [`snapshot-language:${OTHER}`, `review:upto:${OTHER}`, 'calibration:m1']) app.kv.set(key, '1');
   app.kv.set(checklistKey(TARGET), JSON.stringify({ items: [{ text: `${SECRET} を調べる`, status: 'pending' }], tainted: false, updatedAt: 1 }));
   app.kv.set(checklistKey(OTHER), JSON.stringify({ items: [{ text: '別の作業', status: 'done' }], tainted: false, updatedAt: 1 }));
   // 残すもの: 記憶・スキルの下書き・その会話から作ったタスク
@@ -80,7 +79,7 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   const s = await startApp(t);
   const { app } = s;
   const p = await populate(s);
-  assert.ok(searchHistory(app.db, SECRET, { limit: 5 }).length > 0 || true);
+  assert.ok(searchHistory(app.db, SECRET, { limit: 5 }).some(hit => hit.conversationId === TARGET), '前提: 消す前は、消す会話の本文で検索できる');
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));
 
@@ -114,7 +113,7 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   // kv
   const keys = (app.db.prepare('SELECT key FROM kv').all() as Array<{ key: string }>).map(r => r.key);
   assert.ok(!keys.some(k => k.includes(TARGET)), `会話ごとの kv が残っている: ${keys.join(', ')}`);
-  assert.ok(keys.includes(snapshotLanguageKey(OTHER)) && keys.includes(`review:upto:${OTHER}`) && keys.includes('calibration:m1'), 'ほかの kv は残る');
+  assert.ok(keys.includes(`snapshot-language:${OTHER}`) && keys.includes(`review:upto:${OTHER}`) && keys.includes('calibration:m1'), 'ほかの kv は残る');
   assert.equal(app.kv.get(checklistKey(TARGET)), undefined, '作業の一覧（checklist:<会話ID>）も消える');
   assert.ok(app.kv.get(checklistKey(OTHER)), 'ほかの会話の作業の一覧は残る');
   // 残すもの
@@ -141,7 +140,7 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   assert.equal((app.db.prepare("SELECT review_conversation_id AS r FROM memory_jobs WHERE run_id = 'run-rv2'").get() as { r: string }).r, p.otherReviewId);
   // ほかの会話は無傷
   assert.equal(app.conversations.messages(OTHER).length, 1);
-  assert.ok(searchHistory(app.db, '別の話', { limit: 5 }).length === 0 || true);
+  assert.deepEqual(searchHistory(app.db, '別の話', { limit: 5 }).map(hit => hit.conversationId), [OTHER], 'ほかの会話は消したあとも検索できる');
   assert.deepEqual(events.filter(e => e.type === 'conversation.changed').map(e => [(e as { conversationId: string }).conversationId, (e as { change: string }).change]), [[TARGET, 'deleted']]);
   // どの表にも、会話の ID も本文も残っていない
   const tables = (app.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'messages_fts%' AND name NOT LIKE 'memories_fts%' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>).map(r => r.name);
@@ -187,7 +186,7 @@ test('削除: その会話で notify_owner が出した通知は、題も本文�
 
   const rows = app.db.prepare('SELECT title, link, dedup_key AS k FROM notifications ORDER BY id').all() as Array<{ title: string; link: string | null; k: string }>;
   assert.deepEqual(rows.map(r => ({ ...r })), [
-    { title: 'Clive より: 別の件', link: `#/c/${OTHER}`, k: rows[0]!.k },
+    { title: 'From Clive: 別の件', link: `#/c/${OTHER}`, k: rows[0]!.k },
     { title: 'Clive より: タスクの区切り', link: `#/tasks/${task.id}`, k: 'owner:task-run' },
     { title: 'ほかの知らせ', link: null, k: 'done:1' },
   ], 'この会話の notify_owner の通知だけ消える。ほかの会話・タスクの通知は残り、会話を指すだけの通知はリンクが外れる');

@@ -21,7 +21,7 @@ import { ProviderError } from '../src/providers/types.ts';
 import { FakeAdapter, fail, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function localModel(id: string, over: Partial<ModelConfig> = {}): ModelConfig {
-  return { id, provider: 'fake', model: id, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over };
+  return { id, provider: 'fake', model: id, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...over };
 }
 
 async function setup(t: { after: (fn: () => void) => void }, options: { models?: ModelConfig[]; scripts?: Script[] } = {}) {
@@ -84,7 +84,7 @@ test('使えるモデルが無ければ、発言を保存せず、モデルに�
   assert.equal(outcome.httpStatus, 409);
   assert.equal(outcome.errorKind, 'context_overflow');
   assert.equal(outcome.detail?.reason, 'server_ctx_too_small');
-  assert.match(outcome.errorMessage, /送信しませんでした/);
+  assert.match(outcome.errorMessage, /Nothing was sent/);
   assert.equal(s.conversations.messages('c1').length, 0);
   assert.equal(s.adapter.calls.length, 0);
 });
@@ -115,6 +115,16 @@ test('再試行できない失敗（認証など）はすぐ次のモデルへ',
   assert.ok(result.ok);
   assert.equal(result.modelId, 'b');
   assert.deepEqual(s.sleeps, []);
+});
+
+test('予備のモデルへ切り替えた実行は、記録の flags に fallback が 1 つ付く（Runs の Fallback の印。切り替えなしでは付かない）', async t => {
+  const s = await setup(t, { scripts: [fail(new ProviderError('auth', 'bad key', { retryable: false })), reply('予備'), reply('ふつう')] });
+  const switched = await sendAndWait(s.engine, 'c1', 'やあ');
+  assert.deepEqual(JSON.parse(s.runs.get(switched.runId)!.flags), ['fallback']);
+  const plain = await sendAndWait(s.engine, 'c1', 'もう一度');
+  assert.ok(plain.ok);
+  assert.equal(plain.modelId, 'a');
+  assert.deepEqual(JSON.parse(s.runs.get(plain.runId)!.flags), []);
 });
 
 test('すべて失敗したら text は空で、エラー文を返事として保存しない', async t => {
@@ -167,7 +177,7 @@ test('利用者が止めたら、途中までの返事を「止めた」と分�
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.equal(result.errorKind, 'cancelled');
-  assert.match(s.conversations.messages('c1').at(-1)!.text, /書きかけ[\s\S]*途中で止めました/);
+  assert.match(s.conversations.messages('c1').at(-1)!.text, /書きかけ[\s\S]*stopped partway/);
   assert.equal(s.runs.get(outcome.runId)!.error_kind, 'cancelled');
 });
 
@@ -203,8 +213,8 @@ test('入りきらない古いやり取りは要約してから送る（原文�
   const result = await sendAndWait(s.engine, 'c1', '最新の質問');
   assert.ok(result.ok);
   const [summaryCall, answerCall] = s.adapter.calls;
-  assert.match((summaryCall!.messages[0] as { content: string }).content, /会話の古い部分/u);
-  assert.match(answerCall!.system.dynamic, /これまでの会話の要約[\s\S]*「い」についての相談/u);
+  assert.match((summaryCall!.messages[0] as { content: string }).content, /Older part of the conversation/u);
+  assert.match(answerCall!.system.dynamic, /Summary of the conversation so far[\s\S]*「い」についての相談/u);
   const sent = answerCall!.messages;
   assert.equal((sent.at(-1) as { content: string }).content, '最新の質問');
   assert.equal(sent[0]!.role, 'user', '組の途中から始まらない');
@@ -236,7 +246,7 @@ test('サーバー側で切り捨てられた疑いが2回続いたら、その�
   assert.equal(s.status.usable('a'), true);
   await sendAndWait(s.engine, 'c1', long);
   assert.equal(s.status.usable('a'), false);
-  assert.match(s.status.get('a')!.message, /切り捨て/);
+  assert.match(s.status.get('a')!.message, /may have cut it off/);
 });
 
 test('見積もりの補正を学習する（切り捨てが起こりえない範囲だけ）', async t => {
@@ -272,7 +282,7 @@ test('モデルが 1 つも無いときの送信は 409 engine.no_usable（probl
     assert.equal(outcome.httpStatus, 409);
     assert.equal(outcome.errorCode, 'engine.no_usable');
     assert.deepEqual(outcome.problems, []);
-    assert.match(outcome.errorMessage, /モデルがまだ設定されていません/u);
+    assert.match(outcome.errorMessage, /No model has been set up yet/u);
   }
   assert.equal(s.conversations.messages('c1').length, 0);
   assert.equal(s.adapter.calls.length, 0);

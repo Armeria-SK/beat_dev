@@ -24,7 +24,7 @@ test('アプリより新しいスキーマは開かない', t => {
   const raw = new DatabaseSync(path);
   raw.exec('PRAGMA user_version = 99');
   raw.close();
-  assert.throws(() => openDatabase(path, MIGRATIONS), /新しい/);
+  assert.throws(() => openDatabase(path, MIGRATIONS), /newer/);
 });
 
 test('未適用のマイグレーションがあれば、適用前にバックアップを取る', t => {

@@ -39,11 +39,11 @@ test('道具は書けば有効（false でなければ on）。申告（effect�
 
 test('T-03 断るもの: id の重複・id の形・上限超え・絶対でない cwd・危ない url・知らない項目', () => {
   const bad: Array<[string, Record<string, unknown>, RegExp]> = [
-    ['id の重複', { servers: [stdio(), stdio()] }, /重複/u],
-    ['id が大文字', { servers: [stdio({ id: 'GH' })] }, /小文字/u],
-    ['id が長い', { servers: [stdio({ id: 'a'.repeat(17) })] }, /16 文字/u],
-    ['maxServers を越える', { servers: [stdio({ id: 'a' }), stdio({ id: 'b' })], limits: { maxServers: 1 } }, /1 件まで/u],
-    ['相対の cwd', { servers: [stdio({ cwd: 'relative/dir' })] }, /絶対パス/u],
+    ['id の重複', { servers: [stdio(), stdio()] }, /is duplicated/u],
+    ['id が大文字', { servers: [stdio({ id: 'GH' })] }, /lowercase/u],
+    ['id が長い', { servers: [stdio({ id: 'a'.repeat(17) })] }, /up to 16 characters/u],
+    ['maxServers を越える', { servers: [stdio({ id: 'a' }), stdio({ id: 'b' })], limits: { maxServers: 1 } }, /Up to 1 MCP servers are allowed/u],
+    ['相対の cwd', { servers: [stdio({ cwd: 'relative/dir' })] }, /absolute path/u],
     ['http の外部', { servers: [http({ url: 'http://example.com' })] }, /https/u],
     ['stdio に url', { servers: [stdio({ url: 'https://example.com' })] }, /url/u],
     ['http に command', { servers: [http({ command: ['node'] })] }, /command/u],
@@ -53,12 +53,12 @@ test('T-03 断るもの: id の重複・id の形・上限超え・絶対でな�
     ['url に認証情報', { servers: [http({ url: 'https://user:pass@example.com' })] }, /https/u],
     ['知らない項目', { servers: [stdio({ shell: true })] }, /./u],
     ['command が空', { servers: [stdio({ command: [] })] }, /./u],
-    ['道具の名前に空白', { servers: [stdio({ tools: { 'bad name': {} } })] }, /道具の名前/u],
-    ['env の名前に = や空白', { servers: [stdio({ env: { 'A=B': 'X_TOKEN' } })] }, /環境変数の名前/u],
-    ['見出しの名前に改行', { servers: [http({ headers: { 'X\r\nEvil': 'X_TOKEN' } })] }, /見出しの名前/u],
-    ['道具の名前が constructor', { servers: [stdio({ tools: { constructor: {} } })] }, /道具の名前/u],
-    ['env が鍵の名前でない変数を指す', { servers: [stdio({ env: { A: 'DATABASE_URL' } })] }, /KEY・TOKEN・SECRET/u],
-    ['headers が鍵の名前でない変数を指す', { servers: [http({ headers: { Authorization: 'HOME_DIR' } })] }, /KEY・TOKEN・SECRET/u],
+    ['道具の名前に空白', { servers: [stdio({ tools: { 'bad name': {} } })] }, /Tool name "/u],
+    ['env の名前に = や空白', { servers: [stdio({ env: { 'A=B': 'X_TOKEN' } })] }, /Environment variable name "/u],
+    ['見出しの名前に改行', { servers: [http({ headers: { 'X\r\nEvil': 'X_TOKEN' } })] }, /Header name "/u],
+    ['道具の名前が constructor', { servers: [stdio({ tools: { constructor: {} } })] }, /Tool name "/u],
+    ['env が鍵の名前でない変数を指す', { servers: [stdio({ env: { A: 'DATABASE_URL' } })] }, /KEY, TOKEN, SECRET/u],
+    ['headers が鍵の名前でない変数を指す', { servers: [http({ headers: { Authorization: 'HOME_DIR' } })] }, /KEY, TOKEN, SECRET/u],
   ];
   for (const [name, mcp, pattern] of bad) assert.match(problems(withMcp(mcp)), pattern, name);
 });
@@ -76,9 +76,9 @@ test('T-03b limits: 範囲の外は丸めずに断る', () => {
 
 test('T-21 道具の数の上限と、登録名の重複・64 文字超えは設定の誤りになる', () => {
   const entries = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`t${i}`, {}]));
-  assert.match(problems(withMcp({ servers: [stdio({ tools: entries(3) })], limits: { maxToolsPerServer: 2 } })), /2 件まで/u);
-  assert.match(problems(withMcp({ servers: [stdio({ tools: { 'Get-Issue': {}, 'get_issue': {} } })] })), /同じ登録名/u);
-  assert.match(problems(withMcp({ servers: [stdio({ tools: { ['x'.repeat(60)]: {} } })] })), /64 文字/u);
+  assert.match(problems(withMcp({ servers: [stdio({ tools: entries(3) })], limits: { maxToolsPerServer: 2 } })), /Up to 2 tools are allowed per server/u);
+  assert.match(problems(withMcp({ servers: [stdio({ tools: { 'Get-Issue': {}, 'get_issue': {} } })] })), /same registered name/u);
+  assert.match(problems(withMcp({ servers: [stdio({ tools: { ['x'.repeat(60)]: {} } })] })), /longer than 64 characters/u);
   parseConfig(withMcp({ servers: [stdio({ tools: { ['x'.repeat(40)]: {} } })] }));
 });
 
@@ -100,7 +100,7 @@ test('T-31 env・headers の参照が、プロバイダの鍵・通知の欄・�
   ];
   for (const [name, mcp, rest] of cases) {
     const raw = withMcp(mcp, rest);
-    assert.match(problems(raw), /環境変数「/u, name);
+    assert.match(problems(raw), /Environment variable "/u, name);
   }
   parseConfig(withMcp({ servers: [stdio({ env: { A: 'ONE_TOKEN' } }), http({ headers: { Authorization: 'TWO_TOKEN' } })] }));
 });

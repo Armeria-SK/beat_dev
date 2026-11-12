@@ -122,7 +122,7 @@ test('bash: 引用符の外の全角を、判定でも止める（"$(echo \'"\')
   for (const command of [`echo "$(echo '"')" ＡＢ`, `rg "$(echo '"')" ＂--pre=x＂ f.txt`, "echo a # it's\nrg ＂--pre=x＂ f.txt z"]) {
     const verdict = f.bash(command);
     assert.equal(verdict.decision, 'deny', command);
-    assert.match(verdict.reasons.join(), /全角/u, command);
+    assert.match(verdict.reasons.join(), /a full-width character outside quotes/u, command);
   }
   assert.equal(f.bash(`echo "$(echo 'ＡＢ')"`).decision, 'allow');
 });

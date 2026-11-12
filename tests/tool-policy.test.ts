@@ -10,7 +10,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
-import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
+import { checkFilePath, fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
@@ -54,7 +54,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, live?: () => AppConfig) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(live ? { config: live } : {}) });
-  return { paths, ctx, call, approvals, events, db, ran, parsed, controller };
+  return { paths, ctx, call, approvals, events, db, ran, parsed, controller, registry };
 }
 
 async function waitPending(s: ReturnType<typeof setup>) {
@@ -117,7 +117,7 @@ test('A3: ask は、ふだん確かめなしの呼び出しにも毎回承認を
   assert.equal(approvalPublic(request).everyTime, true);
   assert.equal(approvalPublic(request).onceOnly, false, 'コードを動かす確かめ（onceOnly）とは別');
   assert.match(request.reasons.join(), /file_write/u);
-  assert.match(request.reasons.join(), /承認を求める/u);
+  assert.match(request.reasons.join(), /ask for approval/u);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false, '承認の前は動かない');
   assert.equal(s.approvals.decide(request.id, 'conversation'), true, '古い画面から「この会話では許可」が送られても');
   const done = await first;
@@ -132,7 +132,7 @@ test('A3: ask は、ふだん確かめなしの呼び出しにも毎回承認を
   s.approvals.decide(again.id, 'deny');
   const denied = await second;
   assert.equal(denied.output.isError, true);
-  assert.match(denied.output.content, /拒否/u);
+  assert.match(denied.output.content, /refused/u);
 });
 
 test('A3: ask は会話の許可（ほかの理由で前に「この会話では許可」にした同じ入力）も越える', async t => {
@@ -199,7 +199,7 @@ test('A3: 振り返りでは ask は拒否として扱う（承認する人が�
   const review = await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' });
   assert.equal(review.decision, 'deny');
   assert.equal(review.decidedBy, 'policy');
-  assert.match(review.output.content, /振り返り/u);
+  assert.match(review.output.content, /a review \(background work\)/u);
   assert.equal(s.approvals.pending().length, 0, '待たない');
   assert.deepEqual(s.ran, []);
   const chat = s.call('memory_save', {});
@@ -212,12 +212,47 @@ test('A3: 振り返りでは ask は拒否として扱う（承認する人が�
   assert.equal((await plain.call('memory_save', {}, { ...plain.ctx, kind: 'review' })).decision, 'allow', '方針が無ければ振り返りで使える（比べる基準）');
 });
 
+test('スキルのフォルダへの書き込みの確かめの文は、聞かずに登録する設定のときは「画面で承認して登録」と言わない', t => {
+  const ask = setup(t);
+  const asked = checkFilePath('skills/memo/SKILL.md', 'write', ask.ctx).check;
+  assert.deepEqual([asked.decision, asked.askKinds], ['ask', ['persona']]);
+  assert.match(asked.reasons[0]!, /skill_draft to approve and register it on screen/u);
+
+  const auto = setup(t, {}, c => { c.skills = { askBeforeRegister: false }; });
+  const unasked = checkFilePath('skills/memo/SKILL.md', 'write', auto.ctx).check;
+  assert.deepEqual([unasked.decision, unasked.askKinds], ['ask', ['persona']], '確かめそのものは変わらない');
+  assert.match(unasked.reasons[0]!, /skill_draft instead: under the current setting it is registered without the user's review/u);
+  assert.doesNotMatch(unasked.reasons[0]!, /on screen/u);
+});
+
+test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {
+  const s = setup(t);
+  s.ctx.config.tools.shell.approvalTimeoutSec = 1;
+  s.registry.register({ ...stub('memory_forget', ['chat', 'review'], s.ran), escalateOnTaint: true });
+  const taint = { tainted: true, sources: ['history_read: c9'] };
+  const started = Date.now();
+  const review = await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint });
+  assert.equal(review.decision, 'deny');
+  assert.match(review.output.content, /history_read: c9.*a review \(background work\) has nobody to approve it/u);
+  assert.equal(s.approvals.pending().length, 0, '承認の札を作らない');
+  assert.ok(Date.now() - started < 5000, '待たない');
+  assert.deepEqual(s.ran, []);
+  assert.equal((await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' })).decision, 'allow', '外を読んでいない振り返りは今までどおり使える');
+  assert.equal((await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint })).decision, 'allow', '外を読んだあとでも、確かめの対象でない道具は変わらない');
+
+  const chat = s.call('memory_forget', {}, { ...s.ctx, taint });
+  const request = await waitPending(s);
+  s.approvals.decide(request.id, 'once');
+  assert.equal((await chat).decision, 'ask');
+  assert.deepEqual(s.ran, ['memory_forget', 'memory_save', 'memory_forget']);
+});
+
 test('A3: タスクの実行で ask になったら、今のシェルの承認と同じ流れ（タスクの承認待ち。時間が過ぎたら動かさない）', async t => {
   const s = setup(t, { file_write: 'ask' });
   s.ctx.config.tools.shell.approvalTimeoutSec = 1;
   const outcome = await s.call('file_write', { path: 'a.md', content: 'x' }, { ...s.ctx, kind: 'task', conversationId: 'task-conv' });
   assert.equal(outcome.decision, 'ask');
-  assert.match(outcome.output.content, /承認の待ち時間が過ぎたため実行しませんでした/u);
+  assert.match(outcome.output.content, /It was not run because the wait for approval ran out/u);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
   const requested = s.events.filter(e => e.type === 'approval.requested');
   assert.equal(requested.length, 1);

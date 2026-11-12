@@ -115,7 +115,7 @@ test('shell: 表形式のプローブ（bash）', t => {
     [':(){ :|:& };:', 'deny'],
     ['ls `pwd`', 'deny', 'バッククォートは書き方を判定できない'],
     // 承認を求める
-    ['cat /etc/hosts', 'ask', '許可フォルダの外'],
+    ['cat /etc/hosts', 'ask', 'outside the allowed folders'],
     ['cd .. && ls', 'ask', '外へ移動'],
     ['npm install left-pad', 'ask', 'パッケージの導入（今回だけ）'],
     ['npx some-tool', 'ask'],
@@ -490,7 +490,7 @@ test('C2: PATH で見つかった実体が許可フォルダ・データのフ�
     checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', ...bashOpts, which, dataDir: data, ...extra });
   const planted = run('git status', () => inside);
   assert.equal(planted.onceOnly, true);
-  assert.match(planted.reasons.join(), /実体を確かめられません/u);
+  assert.match(planted.reasons.join(), /cannot be confirmed/u);
   assert.equal(run('git status', () => join(data, 'bin', 'git')).onceOnly, true, 'データのフォルダの中も同じ');
   assert.equal(run('git status', () => join(f.base, 'elsewhere', 'git')).decision, 'allow', '許可フォルダの外のふつうの場所なら通す');
   assert.equal(run('git status', () => undefined).decision, 'allow', '見つからなければ動かないだけ');
@@ -546,7 +546,7 @@ test('Windows の別の名前: 末尾の . や空白、大文字小文字、代�
   assert.equal(ps('Set-Content NUL x').decision, 'deny');
   const plain = ps('Set-Content notes.md. x');
   assert.equal(plain.decision, 'ask', '書くコマンドレットとして確かめる');
-  assert.doesNotMatch(plain.reasons.join(' '), /人格・プロフィール/u, '守る場所でなければ、末尾の . で守る場所の理由は付かない');
+  assert.doesNotMatch(plain.reasons.join(' '), /persona or profile file/u, '守る場所でなければ、末尾の . で守る場所の理由は付かない');
   assert.equal(ps('Get-Content notes.md.').decision, 'allow');
   if (process.platform === 'win32') {
     const short = realish(join(f.ws, 'SOUL~1.MD'));
@@ -584,7 +584,7 @@ test('値の分からないパス: 読むなら ふつうの確かめ、書く�
   assert.equal(run('cat $f').decision, 'ask');
   assert.equal(run('cat $f').onceOnly, false);
   assert.equal(run('echo x > $f').onceOnly, true);
-  assert.match(run('echo x > $f').reasons.join(), /書き込み先が分かりません/u);
+  assert.match(run('echo x > $f').reasons.join(), /The place to write is unknown/u);
   assert.equal(run('rm -- $f').onceOnly, true);
   assert.equal(run('for f in *.md; do cat "$f"; done').decision, 'ask');
   assert.equal(run('for f in *.md; do rm "$f"; done').onceOnly, true);

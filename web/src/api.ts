@@ -22,6 +22,7 @@ export interface Conversation {
   permission_mode?: PermissionMode;
   // 親の担当から任された子の会話か（run の id。無い・null はふつうの会話）と、任せた親の会話。子の会話は読むだけ
   parent_run_id?: string | null; source_conversation_id?: string | null;
+  message_count?: number; archived_at?: number | null;
 }
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
@@ -112,7 +113,13 @@ export interface Task {
   cron: string | null; cron_text: string | null; run_at: number | null; parent_id: string | null; waiting_text: string | null;
   conversation_id: string | null; result_summary: string | null; attempts: number; max_attempts: number;
   created_at: number; updated_at: number; completed_at: number | null;
+  cancelled_from?: TaskStatus | null;
 }
+export interface FinishedCursor { beforeT: number; beforeId: string }
+export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
+export type RepeatingTask = Task & { last_run: TaskLastRun | null };
+export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned' }
+export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean }>; ranTruncated: boolean }
 export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
 export interface WorkerRun { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
 export interface WorkerStatus {
@@ -132,6 +139,7 @@ export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null; status: string; created_at: number;
   current: { description: string; body: string } | null;
 }
+export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
 export interface CuriosityItem {
   id: number; topic: string; why: string | null; status: 'open' | 'researching' | 'done' | 'dropped'; result: string | null;
   task_id: string | null; source: 'clive' | 'user' | 'file'; created_at: number; updated_at: number;
@@ -142,8 +150,8 @@ export interface ReviewJob {
   changes: MemoryEvent[];
 }
 
-export interface TemplatesView { language: string; rules: string; files: Array<{ name: string; content: string }> }
-export interface OnboardingView { done: boolean; steps: { language: boolean; user: boolean; identity: boolean; persona: boolean; model: boolean } }
+export interface TemplatesView { rules: string; files: Array<{ name: string; content: string }> }
+export interface OnboardingView { done: boolean; steps: { user: boolean; identity: boolean; persona: boolean; model: boolean } }
 export interface PersonaWrite { userName?: string; callMe?: string; botName?: string; style?: 'calm' | 'friendly' | 'direct' | 'none'; styleNote?: string }
 export interface PersonaView { soul: string; user: string; tokens: { soul: number; user: number }; budget: number | null; max: number }
 // API キーの状態（GET /api/providers/:id/key）。鍵そのものは返らない
@@ -231,23 +239,30 @@ export const api = {
   },
   retry: (id: string) => call<{ runId: string }>(`/api/conversations/${id}/retry`, { method: 'POST', body: '{}' }),
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
-  runs: (limit = 200) => call<{ runs: RunRow[] }>(`/api/runs?limit=${limit}`),
-  toolCalls: () => call<{ toolCalls: ToolCallRow[] }>('/api/tool-calls?limit=200'),
+  runs: (limit = 200) => call<{ runs: RunRow[]; total: number }>(`/api/runs?limit=${limit}`),
+  toolCalls: () => call<{ toolCalls: ToolCallRow[]; total: number }>('/api/tool-calls?limit=200'),
   settings: () => call<SettingsView>('/api/settings'),
   applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
   memories: () => call<{ books: Record<Book, BookView>; context: MemoryContext }>('/api/memories'),
-  addMemory: (book: Book, content: string) => call('/api/memories', { method: 'POST', body: JSON.stringify({ book, content }) }),
-  editMemory: (id: number, content: string) => call(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
+  addMemory: (book: Book, content: string) => call<{ memory: MemoryItem; eventId: number }>('/api/memories', { method: 'POST', body: JSON.stringify({ book, content }) }),
+  editMemory: (id: number, content: string) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   forgetMemory: (id: number) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'DELETE' }),
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
+  recentMemoryEvents: () => call<{ events: MemoryEvent[] }>('/api/memory-events'),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
-  tasks: () => call<{ active: Task[]; finished: Task[] }>('/api/tasks'),
+  tasks: () => call<{ active: Task[]; finished: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>('/api/tasks'),
+  schedule: (from: number, to: number) => call<ScheduleView>(`/api/schedule?from=${from}&to=${to}`),
+  deleteTask: (id: string) => call<{ deleted: { id: string; events: number; keptRuns: number } }>(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  finishedTasks: (before: FinishedCursor | null, limit = 20) =>
+    call<{ tasks: Task[]; next: FinishedCursor | null; total: number }>(`/api/tasks/finished?limit=${limit}${before ? `&beforeT=${before.beforeT}&beforeId=${encodeURIComponent(before.beforeId)}` : ''}`),
+  unapproveTask: (id: string) => call<{ task: Task }>(`/api/tasks/${id}/unapprove`, { method: 'POST', body: '{}' }),
+  cancelTask: (id: string, reason = '') => call<{ task: Task }>(`/api/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}) }),
   task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
   createTask: (task: NewTask) => call<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(task) }),
-  editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null }) =>
+  editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null; repeat?: NewTask['repeat'] }) =>
     call<{ task: Task }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   answerTask: (id: string, text: string) => call<{ task: Task }>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
   taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'uncancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
@@ -260,13 +275,14 @@ export const api = {
   review: () => call<{ skillDrafts: SkillDraft[]; taskProposals: Task[] }>('/api/review'),
   approveDraft: (id: number) => call(`/api/skill-drafts/${id}/approve`, { method: 'POST', body: '{}' }),
   rejectDraft: (id: number) => call(`/api/skill-drafts/${id}/reject`, { method: 'POST', body: '{}' }),
-  reviews: () => call<{ jobs: ReviewJob[]; pending: number }>('/api/reviews'),
+  reviews: () => call<{ jobs: ReviewJob[]; pending: number; total: number }>('/api/reviews'),
   reviewConversation: (conversationId: string) => call<{ queued: boolean }>('/api/reviews', { method: 'POST', body: JSON.stringify({ conversationId }) }),
   tools: () => call<{ tools: ToolInfo[] }>('/api/tools'),
   setToolPolicy: (name: string, policy: ToolPolicy) => call<{ tool: ToolInfo }>(`/api/tools/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ policy }) }),
   skills: () => call<{ skills: SkillSummary[]; dir: string }>('/api/skills'),
   skill: (name: string) => call<{ skill: SkillSummary & { body: string } }>(`/api/skills/${encodeURIComponent(name)}`),
   saveSkill: (name: string, description: string, body: string) => call(`/api/skills/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ description, body }) }),
+  skillHistory: (name: string) => call<{ versions: SkillVersion[] }>(`/api/skills/${encodeURIComponent(name)}/history`),
   registerSkill: (name: string) => call(`/api/skills/${encodeURIComponent(name)}/register`, { method: 'POST', body: '{}' }),
   deleteSkill: (name: string) => call(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   curiosity: (all = false) => call<{ items: CuriosityItem[] }>(`/api/curiosity${all ? '?all=1' : ''}`),
@@ -274,7 +290,7 @@ export const api = {
   updateCuriosity: (id: number, patch: { status?: CuriosityItem['status']; result?: string }) => call(`/api/curiosity/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   curiosityTask: (id: number) => call(`/api/curiosity/${id}/task`, { method: 'POST', body: '{}' }),
   history: (q: string, days?: number) => call<{ hits: HistoryHit[] }>(`/api/history?q=${encodeURIComponent(q)}${days ? `&days=${days}` : ''}`),
-  templates: (language: string) => call<TemplatesView>(`/api/templates/${encodeURIComponent(language)}`),
+  templates: () => call<TemplatesView>('/api/templates'),
   onboarding: () => call<OnboardingView>('/api/onboarding'),
   onboardingDone: () => call<OnboardingView>('/api/onboarding/done', { method: 'POST', body: '{}' }),
   onboardingPersona: (input: PersonaWrite) => call<OnboardingView & { profile: Profile }>('/api/onboarding/persona', { method: 'POST', body: JSON.stringify(input) }),

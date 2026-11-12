@@ -15,7 +15,7 @@ export function openDatabase(path: string, migrations: readonly Migration[], opt
   try {
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA secure_delete = ON;');
     const { user_version: current } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    if (current > migrations.length) throw new Error('データベースのスキーマがこのアプリより新しいため開けません');
+    if (current > migrations.length) throw new Error('Cannot open the database: its schema is newer than this app');
     if (existed && current < migrations.length && options.backupDir) {
       mkdirSync(options.backupDir, { recursive: true });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');

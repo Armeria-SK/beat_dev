@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ConfigError, ConfigStore, defaultConfig, parseConfig } from '../src/config/store.ts';
@@ -46,12 +46,12 @@ test('形式の誤りは場所つきで返す', () => {
 test('整合性の問題をまとめて返す', () => {
   const config = testConfig();
   config.models.push({ ...config.models[0]!, provider: 'nope' });
-  config.models.push({ id: 'local2', provider: 'ollama', model: 'x', minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: false });
+  config.models.push({ id: 'local2', provider: 'local', model: 'x', minContext: 65536, maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   assert.throws(() => parseConfig(config), (e: unknown) => {
     const problems = (e as ConfigError).problems.join('\n');
-    return /重複/.test(problems) && /contextLength が必須/.test(problems) && /routing\.chat/.test(problems) && /https にしてください/.test(problems);
+    return /is duplicated/.test(problems) && /contextLength is required/.test(problems) && /routing\.chat/.test(problems) && /Use https for connections that use an API key/.test(problems);
   });
 });
 
@@ -95,19 +95,39 @@ test('初期値にはモデルが無く、チャットも裏方の順番も空�
   const config = new ConfigStore(path).load();
   assert.deepEqual(config.models, []);
   assert.deepEqual(config.routing, { chat: [], background: [], retriesPerModel: 2 });
-  assert.deepEqual(config.providers.map(p => p.id), ['anthropic', 'ollama']);
+  assert.deepEqual(config.providers.map(p => p.id), ['anthropic']);
   assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).models, [], '書き出した設定ファイルにも見本のモデルは入らない');
   assert.doesNotThrow(() => parseConfig(defaultConfig()), 'モデルが 0 個の設定は、そのまま検証を通る');
 });
 
-test('doctor: モデルが 0 個なら、そのことを案内して終了コード 1', t => {
+test('起動: 知らない引数（位置の引数・知らないオプション）では起動せず、Could not start: の 1 行と終了コード 1', t => {
+  const cases: Array<[string[], RegExp]> = [
+    [['check'], /^Could not start: TypeError \[ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL\]: [^\n]*'check'[^\n]*\n$/u],
+    [['--foo'], /^Could not start: TypeError \[ERR_PARSE_ARGS_UNKNOWN_OPTION\]: [^\n]*'--foo'[^\n]*\n$/u],
+    [['--data-dir', '--foo'], /^Could not start: TypeError \[ERR_PARSE_ARGS_INVALID_OPTION_VALUE\]: [^\n]*'--data-dir'[^\n]*\n$/u],
+  ];
+  for (const [extra, stderr] of cases) {
+    const dir = tempDir(t);
+    mkdirSync(dir, { recursive: true });
+    // 引数を読み違えて起動へ進んでも、待ち受けの前に設定の誤り（ループバックでない host）で止まるようにしておく（試験がポートを開かないため）
+    const config = JSON.stringify({ ...defaultConfig(), server: { host: '0.0.0.0', port: 4777 } });
+    writeFileSync(join(dir, 'config.json'), config);
+    const run = spawnSync(process.execPath, ['src/main.ts', ...extra, '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 30_000 });
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, stderr);
+    assert.equal(run.stdout, '', `${extra[0]}: 起動のログを出さない`);
+    assert.deepEqual(readdirSync(dir), ['config.json'], `${extra[0]}: DB も作らない（設定を読む手前で止まる）`);
+  }
+});
+
+test('起動: --data-dir は今までどおり読み、そのフォルダの設定と DB を使う（ループバックでない host なら待ち受けの前に止まる）', t => {
   const dir = tempDir(t);
   mkdirSync(dir, { recursive: true });
-  const run = spawnSync(process.execPath, ['src/main.ts', 'doctor', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ ...defaultConfig(), server: { host: '0.0.0.0', port: 4777 } }));
+  const run = spawnSync(process.execPath, ['src/main.ts', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 30_000 });
   assert.equal(run.status, 1, run.stderr);
-  assert.match(run.stdout, /設定ファイル: .*（OK）/u);
-  assert.match(run.stdout, /NG {2}モデルがまだ設定されていません/u);
-  assert.doesNotMatch(run.stdout, /チャットで使えるモデルがありません/u, '「使えない」ではなく「まだ無い」と案内する');
+  assert.match(run.stderr, /^Settings error: Set server\.host to a loopback address such as 127\.0\.0\.1 \(it is 0\.0\.0\.0 now\)[^\n]*\n$/u);
+  assert.equal(existsSync(join(dir, 'clive.db')), true, '指定したフォルダに DB を作った（--data-dir を使った）');
 });
 
 test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書いてあっても読めて、初期値にはもう書かない', () => {
@@ -121,20 +141,6 @@ test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書�
   assert.equal(fresh.memory.reviewIdleMinutes, 30);
 });
 
-test('doctor: モデルがあっても使えないときは、モデルが 0 個のときとは別の案内で、終了コード 1', t => {
-  const dir = tempDir(t);
-  mkdirSync(dir, { recursive: true });
-  const config = testConfig();
-  config.providers = [{ id: 'dead', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 5000 }];
-  config.models = [{ id: 'm', provider: 'dead', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
-  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
-  writeFileSync(join(dir, 'config.json'), JSON.stringify(config));
-  const run = spawnSync(process.execPath, ['src/main.ts', 'doctor', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
-  assert.equal(run.status, 1, run.stderr);
-  assert.match(run.stdout, /NG {2}チャットで使えるモデルがありません/u);
-  assert.doesNotMatch(run.stdout, /まだ設定されていません/u, 'モデルは設定されているので、「まだ無い」とは案内しない');
-});
-
 function issuesOf(raw: unknown): { problems: readonly string[]; issues: ReadonlyArray<{ path: string; message: string }> } {
   try { parseConfig(raw); } catch (error) {
     assert.ok(error instanceof ConfigError);
@@ -145,13 +151,13 @@ function issuesOf(raw: unknown): { problems: readonly string[]; issues: Readonly
 
 test('内容の問題は ID で書いた場所（path）つきで返し、文（problems）は今までと同じ', () => {
   const config = testConfig();
-  config.providers.push({ id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 60_000 });
+  config.providers.push({ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:11434/v1', maxParallel: 1, timeoutMs: 60_000 });
   config.providers.push({ id: 'oa', kind: 'openai_compatible', maxParallel: 1, timeoutMs: 60_000 });
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   config.models.push({ ...config.models[0]! });
-  config.models.push({ id: 'orphan', provider: 'nope', model: 'x', minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false });
-  config.models.push({ id: 'no-ctx', provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false });
-  config.models.push({ id: 'too-big', provider: 'ollama', model: 'x', contextLength: 8192, minContext: 4096, maxOutputTokens: 8192, toolMode: 'native', vision: false });
+  config.models.push({ id: 'orphan', provider: 'nope', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
+  config.models.push({ id: 'no-ctx', provider: 'local', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
+  config.models.push({ id: 'too-big', provider: 'local', model: 'x', contextLength: 8192, minContext: 4096, maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.tools.shell.allow = ['npm test', 'npm test; rm -rf .'];
   config.server.origins = ['http://a.example/path'];
@@ -159,15 +165,15 @@ test('内容の問題は ID で書いた場所（path）つきで返し、文（
 
   const paths = issues.map(i => i.path);
   for (const path of [
-    'providers.ollama.id', 'providers.oa.baseUrl', 'providers.remote.baseUrl', 'models.claude-sonnet.id', 'models.orphan.provider', 'models.no-ctx.contextLength',
+    'providers.local.id', 'providers.oa.baseUrl', 'providers.remote.baseUrl', 'models.claude-sonnet.id', 'models.orphan.provider', 'models.no-ctx.contextLength',
     'models.too-big.maxOutputTokens', 'routing.chat', 'tools.shell.allow', 'server.origins',
   ]) assert.ok(paths.includes(path), `${path} が無い: ${paths.join(', ')}`);
   assert.equal(issues.length, problems.length, '文と同じ数');
   issues.forEach((issue, i) => assert.ok(problems[i]!.endsWith(issue.message), `${issue.path}: 文の後ろが message と同じ`));
-  assert.ok(problems.includes('routing.chat: モデル「missing」がありません'), '文は今までと同じ');
-  assert.ok(problems.includes('providers.oa: OpenAI 互換には baseUrl が必要です'));
-  assert.ok(problems.includes('models.orphan: プロバイダ「nope」がありません'));
-  assert.equal(issues.find(i => i.path === 'models.orphan.provider')!.message, 'プロバイダ「nope」がありません');
+  assert.ok(problems.includes('routing.chat: Model "missing" does not exist'), '文は今までと同じ');
+  assert.ok(problems.includes('providers.oa: OpenAI-compatible providers need a baseUrl'));
+  assert.ok(problems.includes('models.orphan: Provider "nope" does not exist'));
+  assert.equal(issues.find(i => i.path === 'models.orphan.provider')!.message, 'Provider "nope" does not exist');
 });
 
 test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す。一覧でない場所はそのまま点で結ぶ', () => {
@@ -181,7 +187,7 @@ test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す
   assert.ok(problems.some(p => p.startsWith('/models/2/contextLength: ')), '文は今までと同じ番号の形');
   const paths = issues.map(i => i.path);
   assert.ok(paths.includes('models.local.contextLength'), paths.join(', '));
-  assert.ok(paths.includes('providers.ollama.timeoutMs'), paths.join(', '));
+  assert.ok(paths.includes('providers.local.timeoutMs'), paths.join(', '));
   assert.ok(paths.includes('server.port'), paths.join(', '));
   assert.ok(paths.includes('routing.chat.0'), '一覧でない配列は番号のまま');
   assert.equal(issues.find(i => i.path === 'models.local.contextLength')!.message, problems.find(p => p.startsWith('/models/2/contextLength: '))!.slice('/models/2/contextLength: '.length));
@@ -189,7 +195,7 @@ test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す
 
 test('番号が指す項目に id が無い・一覧の形が壊れているときは、番号のままにする（落ちない）', () => {
   const raw = JSON.parse(JSON.stringify(testConfig()));
-  raw.models.push({ provider: 'ollama', model: 'x', minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false });
+  raw.models.push({ provider: 'local', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
   const paths = issuesOf(raw).issues.map(i => i.path);
   assert.ok(paths.some(p => p === 'models.3.id' || p.startsWith('models.3')), paths.join(', '));
   const broken = issuesOf({ ...JSON.parse(JSON.stringify(testConfig())), models: 'none' });
@@ -202,16 +208,6 @@ test('ConfigError に issues が渡されなければ、文（場所: 内容）�
     { path: 'models.a', message: '内容' }, { path: '/server/port', message: 'bad' }, { path: '', message: '場所の無い文' },
   ]);
   assert.deepEqual(new ConfigError('y').issues, []);
-});
-
-test('tools.maxIterations: 0 は「制限なし」。1〜100 は今までどおり、負・101 以上・小数は断る。省略した新しい設定は 16', () => {
-  const withSteps = (value: unknown) => ({ ...JSON.parse(JSON.stringify(testConfig())), tools: { maxIterations: value } });
-  for (const ok of [0, 1, 16, 100]) assert.equal(parseConfig(withSteps(ok)).tools.maxIterations, ok, String(ok));
-  for (const ng of [-1, -100, 101, 1000, 1.5, '16', null]) {
-    assert.throws(() => parseConfig(withSteps(ng)), (e: unknown) => e instanceof ConfigError && e.issues.some(i => i.path === 'tools.maxIterations'), String(ng));
-  }
-  assert.equal(parseConfig({ version: 1, server: {}, routing: {} }).tools.maxIterations, 16, '新しい設定の既定値は変えない');
-  assert.equal(defaultConfig().tools.maxIterations, 16);
 });
 
 test('tools.agent: 既定は無効・タスクから使わない・1 回に 3 本・600 秒。範囲外と未知のキーは断る（T-43）', () => {

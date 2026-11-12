@@ -6,11 +6,10 @@ import { App } from '../src/app.ts';
 import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import type { ChatMessage, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { toAnthropicMessages } from '../src/providers/anthropic.ts';
-import { OllamaAdapter, toOllamaMessages } from '../src/providers/ollama.ts';
-import { toOpenAiMessages } from '../src/providers/openai-compatible.ts';
+import { AnthropicAdapter, toAnthropicMessages } from '../src/providers/anthropic.ts';
+import { OpenAiCompatibleAdapter, toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import type { ModelRequest, StreamEvent } from '../src/providers/types.ts';
-import { FakeAdapter, fakeServer, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, fakeServer, reply, sse, tempDir, testConfig, type Script } from './helpers.ts';
 
 // 出力の上限で切れた返事（停止理由が max_tokens）を、成功として扱わない（AU-1）
 
@@ -33,7 +32,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
@@ -86,7 +85,7 @@ test('切れたツール呼び出しは動かさず、誤りの結果を返す�
   assert.equal('raw' in assistant.toolCalls![0]!, false);
   const tool = stored.find(m => m.role === 'tool') as Extract<ChatMessage, { role: 'tool' }>;
   assert.equal(tool.isError, true);
-  assert.match(tool.content, /途中で切れ|上限|短く/u);
+  assert.match(tool.content, /cut off|output limit|shorter/u);
 
   // 次の呼び出しには {} のまま渡る（切れた文字を送り返さない）
   const second = s.adapter().calls[1]!.messages.find(m => m.role === 'assistant' && m.toolCalls?.length) as Extract<ChatMessage, { role: 'assistant' }>;
@@ -138,40 +137,43 @@ test('切れた呼び出しのあとに正しく終われば、続けて切れ�
 
 // ── 提供元 ───────────────────────────────────────────────
 
-const model = (over: Partial<ModelConfig> = {}): ModelConfig => ({
-  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over,
-});
-const request = (m: ModelConfig): ModelRequest => ({
-  model: m, system: { frozen: 'あなたは Clive', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
+const streamModel: ModelConfig = { id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false };
+const streamRequest: ModelRequest = {
+  model: streamModel, system: { frozen: 'あなたは Clive', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
   tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
-});
-const ollama = (baseUrl: string): ProviderConfig => ({ id: 'p', kind: 'ollama', baseUrl, maxParallel: 1, timeoutMs: 10_000 });
+};
 
-test('Ollama: done_reason が length なら、ツール呼び出しがあっても max_tokens を返す', async t => {
-  const server = await fakeServer((_req, _body, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-    res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'file_write', arguments: '{"path":"a' } }] }, done: false })}\n`);
-    res.end(`${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'length' })}\n`);
-  });
+test('OpenAI 互換: finish_reason が length なら、途中のツール呼び出しがあっても max_tokens を返す', async t => {
+  const server = await fakeServer((_req, _body, res) => sse(res, [
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'file_write', arguments: '{"path":"a' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'length' }] },
+  ]));
   t.after(() => server.close());
+  const provider: ProviderConfig = { id: 'p', kind: 'openai_compatible', baseUrl: `${server.url}/v1`, maxParallel: 1, timeoutMs: 10_000 };
   const events: StreamEvent[] = [];
-  for await (const e of new OllamaAdapter(ollama(server.url), {}).stream(request(model()))) events.push(e);
+  for await (const e of new OpenAiCompatibleAdapter(provider, {}).stream(streamRequest)) events.push(e);
+  assert.equal(events.some(e => e.type === 'tool_call'), true, '途中の呼び出しは届いている');
   assert.deepEqual(events.at(-1), { type: 'done', stop: 'max_tokens' });
 });
 
-test('Ollama: 道具があり停止理由が stop なら、今までどおり tool_use', async t => {
-  const server = await fakeServer((_req, _body, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-    res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'file_write', arguments: { path: 'a' } } }] }, done: false })}\n`);
-    res.end(`${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'stop' })}\n`);
-  });
-  t.after(() => server.close());
+test('Anthropic: stop_reason が max_tokens なら、途中のツール呼び出しがあっても max_tokens を返す', async () => {
+  const body = [
+    { type: 'message_start', message: { id: 'msg', type: 'message', role: 'assistant', model: 'x', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_1', name: 'file_write', input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"a' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'max_tokens', stop_sequence: null }, usage: { output_tokens: 1024 } },
+    { type: 'message_stop' },
+  ].map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+  const fetchImpl = (async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream', 'request-id': 'req_test' } })) as typeof fetch;
+  const provider: ProviderConfig = { id: 'p', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 1, timeoutMs: 10_000 };
   const events: StreamEvent[] = [];
-  for await (const e of new OllamaAdapter(ollama(server.url), {}).stream(request(model()))) events.push(e);
-  assert.deepEqual(events.at(-1), { type: 'done', stop: 'tool_use' });
+  for await (const e of new AnthropicAdapter(provider, { ANTHROPIC_API_KEY: 'sk-ant-test' }, fetchImpl).stream(streamRequest)) events.push(e);
+  assert.equal(events.some(e => e.type === 'tool_call'), true, '途中の呼び出しは届いている');
+  assert.deepEqual(events.at(-1), { type: 'done', stop: 'max_tokens' });
 });
 
-test('3 つの提供元とも、会話に残した {} の呼び出しをそのまま送り返せる', () => {
+test('2 つの提供元とも、会話に残した {} の呼び出しをそのまま送り返せる', () => {
   const saved: ChatMessage[] = [
     { role: 'user', content: '書いて' },
     { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'file_write', arguments: {} }] },
@@ -179,8 +181,6 @@ test('3 つの提供元とも、会話に残した {} の呼び出しをその�
   ];
   const openai = toOpenAiMessages('s', saved, false).find(m => m.role === 'assistant') as { tool_calls: Array<{ function: { arguments: string } }> };
   assert.equal(openai.tool_calls[0]!.function.arguments, '{}');
-  const olla = toOllamaMessages('s', saved, false).find(m => m.role === 'assistant') as { tool_calls: Array<{ function: { arguments: unknown } }> };
-  assert.deepEqual(olla.tool_calls[0]!.function.arguments, {});
   const anth = toAnthropicMessages(saved, false).find(m => m.role === 'assistant')!;
   const block = (anth.content as Array<{ type: string; input?: unknown }>).find(b => b.type === 'tool_use')!;
   assert.deepEqual(block.input, {});

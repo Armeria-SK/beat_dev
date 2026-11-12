@@ -55,7 +55,7 @@ export class Notifications {
     const n = this.#db.prepare('SELECT * FROM notifications WHERE id = ?').get(Number(result.lastInsertRowid)) as unknown as Notification;
     const event: NotifyEvent = input.noForward ? { ...n, noForward: true } : n;
     for (const listener of this.#listeners) {
-      try { listener(event); } catch (error) { this.#log(`[ERROR] 通知の聞き手が失敗しました: ${(error as Error).message}`); }
+      try { listener(event); } catch (error) { this.#log(`[ERROR] A notification listener failed: ${(error as Error).message}`); }
     }
     return n;
   }

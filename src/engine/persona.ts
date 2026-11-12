@@ -1,7 +1,7 @@
 import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteFile } from '../config/store.ts';
-import { LANGUAGES, type Language } from '../config/schema.ts';
+import type { Language } from '../config/schema.ts';
 import type { AppPaths } from '../paths.ts';
 import { readTemplate } from './workspace.ts';
 
@@ -17,33 +17,25 @@ export type Style = (typeof STYLES)[number];
 
 type Section = 'userBasic' | 'soulName' | 'soulStyle';
 
-const HEADINGS: Record<Section, Record<Language, string>> = {
-  userBasic: { ja: '基本情報', en: 'Basic information' },
-  soulName: { ja: '名前', en: 'Name' },
-  soulStyle: { ja: '話し方', en: 'Way of speaking' },
+const HEADINGS: Record<Section, readonly [string, ...string[]]> = {
+  userBasic: ['Basic information', '基本情報'],
+  soulName: ['Name', '名前'],
+  soulStyle: ['Way of speaking', '話し方'],
 };
 
-const USER_LABELS: Record<'name' | 'call' | 'language', Record<Language, string>> = {
-  name: { ja: '名前', en: 'Name' },
-  call: { ja: '呼び方', en: 'Preferred name' },
-  language: { ja: '主な使用言語', en: 'Main language' },
-};
-const LANGUAGE_NAME: Record<Language, Record<Language, string>> = {
-  ja: { ja: '日本語', en: 'Japanese' },
-  en: { ja: '英語', en: 'English' },
+const USER_LABELS: Record<'name' | 'call', readonly [string, ...string[]]> = {
+  name: ['Name', '名前'],
+  call: ['Preferred name', '呼び方'],
 };
 
 const STYLE_TEXT: Record<Exclude<Style, 'none'>, Record<Language, string>> = {
   calm: {
-    ja: '落ち着いて簡潔に話す。前置きや大げさな言い回しを避け、結論を先に、必要なことだけを伝える。',
     en: 'Speak calmly and concisely. Skip preambles and grand phrasing; give the conclusion first and only what is needed.',
   },
   friendly: {
-    ja: '親しみやすく丁寧に話す。やわらかい言葉づかいで、相手の気持ちに寄り添いながら、分かりやすく説明する。',
     en: 'Speak in a friendly, polite way. Use gentle wording, stay close to how the person feels, and explain things clearly.',
   },
   direct: {
-    ja: '率直に、短く話す。できる・できないをはっきり言い、遠回しな表現や長い説明は避ける。',
     en: 'Speak frankly and briefly. Say plainly what you can and cannot do, and avoid roundabout phrasing and long explanations.',
   },
 };
@@ -67,54 +59,61 @@ export interface PersonaInput {
 }
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-const languagesFirst = (language: Language): Language[] => [language, ...LANGUAGES.filter(l => l !== language)];
 
-interface Span { bodyStart: number; end: number }
+interface Span { bodyStart: number; end: number; nameIndex: number }
 
-// 見出し（## ...）は、今の言語の見出しを先に、なければほかの言語の見出しも探す（日本語で作ったファイルを英語に切り替えても同じ節を直す）。
-function findSection(lf: string, section: Section, language: Language): Span | null {
-  for (const lang of languagesFirst(language)) {
-    const heading = new RegExp(`^##[ \\t]+${escapeRegExp(HEADINGS[section][lang])}[ \\t]*$`, 'mu').exec(lf);
+const JAPANESE_SCRIPT = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}/u;
+const hasJapaneseHeadings = (lf: string): boolean => [...lf.matchAll(/^#{1,6}[ \t]+(.+)$/gmu)].some(m => JAPANESE_SCRIPT.test(m[1]!));
+
+// 見出し（## ...）は、英語の見出しを先に、なければ日本語の見出しも探す（持ち主の日本語のファイルも同じ節を直す）。足すときは、ファイルの見出しが日本語なら日本語、そうでなければ英語。
+function findSection(lf: string, section: Section): Span | null {
+  for (const [nameIndex, name] of HEADINGS[section].entries()) {
+    const heading = new RegExp(`^##[ \\t]+${escapeRegExp(name)}[ \\t]*$`, 'mu').exec(lf);
     if (!heading) continue;
     const bodyStart = heading.index + heading[0].length + (lf[heading.index + heading[0].length] === '\n' ? 1 : 0);
     const next = /^#{1,2}[ \t]/mu.exec(lf.slice(bodyStart));
-    return { bodyStart, end: next ? bodyStart + next.index : lf.length };
+    return { bodyStart, end: next ? bodyStart + next.index : lf.length, nameIndex };
   }
   return null;
 }
 
-function setSectionBody(lf: string, section: Section, language: Language, body: string): string {
-  const span = findSection(lf, section, language);
+const nameIndexFor = (lf: string, span: Span | null): number => (span ? span.nameIndex : hasJapaneseHeadings(lf) ? 1 : 0);
+
+function setSectionBody(lf: string, section: Section, body: string): string {
+  const span = findSection(lf, section);
   const text = body.trim();
-  if (!span) return `${lf.replace(/\n*$/u, '\n')}\n## ${HEADINGS[section][language]}\n\n${text}\n`;
+  if (!span) return `${lf.replace(/\n*$/u, '\n')}\n## ${HEADINGS[section][nameIndexFor(lf, span)]}\n\n${text}\n`;
   const before = lf.slice(0, span.bodyStart);
   const after = lf.slice(span.end);
   return `${before}\n${text ? `${text}\n` : ''}${after ? '\n' : ''}${after}`;
 }
 
 function labelPattern(key: 'name' | 'call'): RegExp {
-  const labels = LANGUAGES.map(l => escapeRegExp(USER_LABELS[key][l])).join('|');
-  return new RegExp(`^-[ \\t]*(?:${labels})[ \\t]*[:：]`, 'u');
+  const labels = USER_LABELS[key].map(escapeRegExp).join('|');
+  return new RegExp(`^-[ \\t]*(?:${labels})[ \\t]*[:：][ \\t]*`, 'u');
 }
 
 // USER.md の基本情報の節は、名前と呼び方の行だけを書き換える（持ち主が足したほかの行は残す）。
-function setUserLines(lf: string, language: Language, values: { name?: string | undefined; call?: string | undefined }): string {
-  const span = findSection(lf, 'userBasic', language);
+function setUserLines(lf: string, values: { name?: string | undefined; call?: string | undefined }): string {
+  const span = findSection(lf, 'userBasic');
   const lines = span ? lf.slice(span.bodyStart, span.end).split('\n').filter((line, i, all) => line.trim() || (i > 0 && i < all.length - 1)) : [];
   const keep = lines.filter(line => line.trim() !== '');
   const upsert = (key: 'name' | 'call', value: string | undefined): void => {
     if (value === undefined) return;
-    const line = `- ${USER_LABELS[key][language]}: ${value}`;
     const at = keep.findIndex(l => labelPattern(key).test(l));
-    if (at >= 0) { keep[at] = line; return; }
+    if (at >= 0) {
+      const prefix = labelPattern(key).exec(keep[at]!)![0];
+      keep[at] = `${prefix}${prefix.endsWith(':') ? ' ' : ''}${value}`;
+      return;
+    }
+    const line = `- ${USER_LABELS[key][nameIndexFor(lf, span)]}: ${value}`;
     const nameAt = key === 'call' ? keep.findIndex(l => labelPattern('name').test(l)) : -1;
     if (nameAt >= 0) keep.splice(nameAt + 1, 0, line);
     else keep.unshift(line);
   };
   upsert('name', values.name);
   upsert('call', values.call);
-  if (!span && !keep.some(l => /^-[ \t]*(?:主な使用言語|Main language)/u.test(l))) keep.push(`- ${USER_LABELS.language[language]}: ${LANGUAGE_NAME[language][language]}`);
-  return setSectionBody(lf, 'userBasic', language, keep.join('\n'));
+  return setSectionBody(lf, 'userBasic', keep.join('\n'));
 }
 
 const oneLine = (value: string): string => value.replace(/[\r\n\t]+/gu, ' ').replace(/ {2,}/gu, ' ').trim();
@@ -139,12 +138,12 @@ const withEol = (lf: string, eol: string): string => (eol === '\n' ? lf : lf.rep
 export function personaTexts(soul: string, user: string, language: Language, input: PersonaInput): { soul: string; user: string } {
   let soulLf = toLf(soul);
   let userLf = toLf(user);
-  if (input.botName !== undefined) soulLf = setSectionBody(soulLf, 'soulName', language, input.botName);
+  if (input.botName !== undefined) soulLf = setSectionBody(soulLf, 'soulName', input.botName);
   if (input.style !== undefined || input.styleNote !== undefined) {
     const parts = [input.style ? styleText(input.style, language) : '', input.styleNote ? cleanBlock(input.styleNote) : ''].filter(Boolean);
-    soulLf = setSectionBody(soulLf, 'soulStyle', language, parts.join('\n\n'));
+    soulLf = setSectionBody(soulLf, 'soulStyle', parts.join('\n\n'));
   }
-  if (input.userName !== undefined || input.callMe !== undefined) userLf = setUserLines(userLf, language, { name: input.userName, call: input.callMe });
+  if (input.userName !== undefined || input.callMe !== undefined) userLf = setUserLines(userLf, { name: input.userName, call: input.callMe });
   return { soul: withEol(soulLf, eolOf(soul)), user: withEol(userLf, eolOf(user)) };
 }
 
@@ -201,9 +200,9 @@ function pruneBackups(dir: string, name: PersonaFile): void {
 
 const normalized = (text: string): string => toLf(text).trim();
 
-// 初期の文（日本語・英語どちらの初期ファイル）と同じなら、まだ何も書き換えていない。
+// 初期の文（英語の初期ファイル）と同じなら、まだ何も書き換えていない。
 export function isInitialPersona(paths: AppPaths, name: PersonaFile, current: string): boolean {
   const text = normalized(current);
   if (!text) return true;
-  return LANGUAGES.some(language => normalized(readTemplate(paths, name, language)) === text);
+  return normalized(readTemplate(paths, name)) === text;
 }

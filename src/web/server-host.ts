@@ -107,7 +107,7 @@ export class ServerHost {
   async listen(override?: { host: string; port: number }): Promise<void> {
     const { host, port } = override ?? this.#running;
     await listenOn(this.#server, host, port);
-    this.#server.on('error', error => this.#deps.log(`[ERROR] 待ち受けのエラー: ${error.message}`));
+    this.#server.on('error', error => this.#deps.log(`[ERROR] Listener error: ${error.message}`));
   }
 
   async apply(request: Requester, next: ServerConfig, force: boolean): Promise<ApplyOutcome> {
@@ -135,7 +135,7 @@ export class ServerHost {
           newServer.close();
           return fail({ code: 'listen_failed', host: next.host, port: next.port, errno: (error as NodeJS.ErrnoException).code ?? (error as Error).message });
         }
-        newServer.on('error', error => this.#deps.log(`[ERROR] 待ち受けのエラー: ${error.message}`));
+        newServer.on('error', error => this.#deps.log(`[ERROR] Listener error: ${error.message}`));
       }
       // ここから先は await しない（入れ替えの途中に別の要求が割り込んで、新旧が混ざらないように）
       const old = this.#server;
@@ -144,8 +144,8 @@ export class ServerHost {
       this.#running = structuredClone(next);
       this.#deps.accept(structuredClone(next));
       this.#deps.closeStreams();
-      const where = who ? (who.local ? 'この PC' : `Tailscale: ${who.login ?? '?'}`) : '不明';
-      this.#deps.log(`[INFO] サーバーの設定を反映しました（待ち受け: ${change.listen ? `${running.host}:${running.port} → ${next.host}:${next.port}` : '変更なし'}、認証: ${change.auth ? '入れ替え' : '変更なし'}。押した人: ${where}）`);
+      const where = who ? (who.local ? 'this PC' : `Tailscale: ${who.login ?? '?'}`) : 'unknown';
+      this.#deps.log(`[INFO] Applied the server settings (listening: ${change.listen ? `${running.host}:${running.port} → ${next.host}:${next.port}` : 'unchanged'}, auth: ${change.auth ? 'replaced' : 'unchanged'}; applied by: ${where})`);
       let retired = false;
       const retire = () => {
         if (retired || !change.listen) return;

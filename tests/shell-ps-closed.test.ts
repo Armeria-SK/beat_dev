@@ -26,7 +26,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const policy: ScopePolicy = {
     roots: [{ path: ws, mode: 'write' }], deny: [realish(join(base, 'config.json'))], askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')], skillsDir: join(ws, 'skills'),
   };
-  const ps = (command: string, extra: { allow?: string[]; language?: 'ja' | 'en' } = {}) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, ...extra });
+  const ps = (command: string, extra: { allow?: string[]; language?: 'en' } = {}) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, ...extra });
   const bash = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: false });
   return { base, ws, ps, bash };
 }
@@ -167,10 +167,10 @@ test('Invoke-WebRequest・Invoke-RestMethod: パイプで流れてくる値が -
 });
 
 test('シェルの道具の説明が、PowerShell の書き込みは毎回確認が要ることと、書くなら file_write を使うことを、モデルに伝える。既存の制限モードの注意も残る', () => {
-  assert.match(shellRun.description, /PowerShell では[^。]*ファイルを書く[^。]*毎回ユーザーの確認が要る。ファイルを書くときは[^。]*file_write/u);
-  assert.match(shellRun.description, /Get-ChildItem -Filter の結果[^。]*確認が要る/u);
-  assert.match(shellRun.description, /curl・wget でファイルに保存する形[^。]*毎回ユーザーの確認が要る。curl の URL に[^。]*-g/u);
-  assert.match(shellRun.description, /制限モード[^。]*\[pscustomobject\]/u);
+  assert.match(shellRun.description, /In Windows PowerShell, cmdlets that write[^.]*need the user's confirmation every time[^.]*\. To write a file, use the[^.]*file_write/u);
+  assert.match(shellRun.description, /the result of Get-ChildItem -Filter[^.]*needs confirmation every time/u);
+  assert.match(shellRun.description, /Forms of curl or wget that save to a file[^.]*need the user's confirmation every time[^.]*\. When a curl URL contains[^.]*-g/u);
+  assert.match(shellRun.description, /constrained mode, so do not use \.NET type syntax \([^)]*\[pscustomobject\]/u);
 });
 
 const LEGIT_PS = [

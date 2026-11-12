@@ -1,3 +1,4 @@
+import type { AppConfig } from '../config/schema.ts';
 import type { ToolSpec } from '../engine/types.ts';
 import type { RunKind, ToolDef } from './types.ts';
 
@@ -9,7 +10,7 @@ export class ToolRegistry {
   #groups = new Map<string, Map<string, ToolDef>>();
 
   register(tool: ToolDef): this {
-    if (this.#has(tool.name)) throw new Error(`ツール ${tool.name} が重複しています`);
+    if (this.#has(tool.name)) throw new Error(`Tool ${tool.name} is duplicated`);
     this.#tools.set(tool.name, tool);
     return this;
   }
@@ -25,7 +26,7 @@ export class ToolRegistry {
     const seen = new Set<string>();
     for (const tool of tools) {
       const own = this.#groups.get(group)?.has(tool.name) === true;
-      if ((!own && this.#has(tool.name)) || seen.has(tool.name)) throw new Error(`ツール ${tool.name} が重複しています`);
+      if ((!own && this.#has(tool.name)) || seen.has(tool.name)) throw new Error(`Tool ${tool.name} is duplicated`);
       seen.add(tool.name);
     }
     this.#groups.delete(group);
@@ -58,7 +59,7 @@ export class ToolRegistry {
     return options.limit === undefined ? [] : this.#candidates(kind, options).slice(options.limit);
   }
 
-  static specs(tools: readonly ToolDef[]): ToolSpec[] {
-    return tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.input as unknown as Record<string, unknown> }));
+  static specs(tools: readonly ToolDef[], config?: AppConfig): ToolSpec[] {
+    return tools.map(t => ({ name: t.name, description: (config && t.describe?.(config)) ?? t.description, inputSchema: t.input as unknown as Record<string, unknown> }));
   }
 }

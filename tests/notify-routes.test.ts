@@ -134,7 +134,7 @@ test('T-19 test は決まった文を送る。Origin の確かめを通らない
   const res = await s.json('/api/notify/channels/phone/test', 'POST');
   assert.deepEqual(res.body, { ok: true });
   assert.equal(s.sent.length, 1);
-  assert.match(s.sent[0]!.body, /Clive からの試しの通知です/u);
+  assert.match(s.sent[0]!.body, /This is a test notification from Clive/u);
   assert.equal(s.sent[0]!.url, URL1);
   assert.equal((await s.json('/api/notify/channels/nope/test', 'POST')).status, 404);
   const calls: Array<[string, string, Record<string, string>]> = [
@@ -196,7 +196,7 @@ test('配線: お知らせが作られると送り先へ届く（手元だけの
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(s.sent.length, 2);
   assert.doesNotMatch(s.sent[0]!.body, /PRIVATE/u);
-  assert.match(s.sent[0]!.body, /手元のモデル/u);
+  assert.match(s.sent[0]!.body, /work on a local model/u);
   assert.match(s.sent[1]!.body, /公開の題/u);
   // 2 回続けて失敗したので、health_alert が 1 件できるが、それは外へ送られない（送り先がまた失敗する連鎖にしない）
   const alerts = s.app.notifications.list(50).filter(n => n.kind === 'health_alert');

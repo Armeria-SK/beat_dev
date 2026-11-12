@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schema.ts';
 import type { Conversations } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
-import type { ChatEngine } from '../engine/chat.ts';
+import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts';
 import { isLocalPinned } from '../engine/local-model.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
@@ -12,6 +12,7 @@ import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
+import { askBeforeRegister } from '../tools/skills/store.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
 
@@ -19,6 +20,9 @@ const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
 const RETRY_DELAYS_MIN = [1, 5, 15];
 const STAGNATION_LIMIT = 3;
+// 区切り（人のいない実行の回数の上限）が続いたとき、持ち主に 1 回だけ知らせる数。止めはしない
+const SPLIT_LIMIT = 3;
+export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 
 export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model';
@@ -53,32 +57,13 @@ interface TaskText {
   nextAction: string;
   doneCriteria: string;
   historyHeading: string;
+  ownerReason: string;
   howHeading: string;
   how: readonly string[];
   time: (ms: number, timezone: string) => string;
 }
 
 const TASK_TEXT: Record<Language, TaskText> = {
-  ja: {
-    intro: '[タスクの実行] あなたは今、自分のメモ帳のタスクを進めています（ユーザーとの会話ではありません。返事は記録に残ります）。',
-    heading: '# タスク',
-    id: 'ID',
-    title: 'タイトル',
-    origin: '出どころ',
-    originLabel: { user: 'ユーザーの依頼', self: '自分で決めたこと', curiosity: '好奇心から', schedule: '予定' },
-    details: '詳細',
-    nextAction: '次の一手',
-    doneCriteria: '完了の条件',
-    historyHeading: '# これまでの経過（新しい順）',
-    howHeading: '# 進め方',
-    how: [
-      '- 道具を使って進める。1回の実行でやりすぎない',
-      '- 終わったら task_complete（結果の要約）。ユーザーに知らせることが無ければ notify=false で静かに終える',
-      '- 続きを後でやる・何かを待つなら task_checkpoint（試したこと・結果・次の一手・何分後に再開するか）',
-      '- ユーザーに確かめないと進められないことだけ ask_user で尋ねる',
-    ],
-    time: (ms, timezone) => new Date(ms).toLocaleString('ja-JP', { timeZone: timezone }),
-  },
   en: {
     intro: '[Task run] You are now working on a task from your own notepad (this is not a conversation with the user; your reply is saved to the record).',
     heading: '# Task',
@@ -90,12 +75,14 @@ const TASK_TEXT: Record<Language, TaskText> = {
     nextAction: 'Next step',
     doneCriteria: 'Done when',
     historyHeading: '# History so far (newest first)',
+    ownerReason: "reason for cancelling (the user's own words)",
     howHeading: '# How to proceed',
     how: [
       '- Make progress with your tools. Do not overdo it in a single run',
       '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
       '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
       '- Use ask_user only for what you cannot move forward on without checking with the user',
+      "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
     ],
     time: (ms, timezone) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms),
   },
@@ -109,7 +96,9 @@ export function inQuietHours(now: number, timezone: string, start: string, end: 
 
 export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
   const text = TASK_TEXT[language];
-  const history = events.slice(0, 10).filter(e => e.content).map(e => `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`);
+  const history = events.filter(e => e.content).slice(0, 10).map(e => (e.kind === 'reason'
+    ? `- ${text.time(e.created_at, timezone)} ${text.ownerReason}: ${e.content!.replace(/\r?\n/gu, '\n  ')}`
+    : `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`));
   return [
     text.intro,
     '',
@@ -147,16 +136,16 @@ export class Worker {
 
   setPaused(paused: boolean): void {
     this.#d.kv.set('worker:paused', paused ? '1' : '0');
-    this.#d.log(`[INFO] ワーカーを${paused ? '一時停止' : '再開'}しました`);
+    this.#d.log(`[INFO] Worker ${paused ? 'paused' : 'resumed'}`);
     this.poke();
   }
 
   start(): void {
     this.#stopped = false;
     const recovered = this.#d.tasks.recoverExpiredLeases({ all: true });
-    if (recovered) this.#d.log(`[INFO] 途中で止まっていたタスク ${recovered} 件を実行待ちに戻しました`);
+    if (recovered) this.#d.log(`[INFO] Put ${recovered} task(s) that had stopped midway back in the queue`);
     const reviews = this.#d.reviews?.recoverRunning() ?? 0;
-    if (reviews) this.#d.log(`[INFO] 途中で止まっていた振り返り ${reviews} 件を積み直しました`);
+    if (reviews) this.#d.log(`[INFO] Re-queued ${reviews} review(s) that had stopped midway`);
     this.poke();
   }
 
@@ -186,7 +175,7 @@ export class Worker {
     this.#nextWakeAt = this.#now() + delayMs;
     this.#timer = setTimeout(() => {
       this.tick().catch(error => {
-        this.#d.log(`[ERROR] ワーカー: ${(error as Error).stack ?? error}`);
+        this.#d.log(`[ERROR] Worker: ${(error as Error).stack ?? error}`);
         if (!this.#stopped) this.#schedule(IDLE_POLL_MS);
       });
     }, Math.max(0, delayMs));
@@ -249,7 +238,7 @@ export class Worker {
       let task: Task | undefined;
       // 提供元の空きは、動いている裏の実行それぞれの「最初に使う提供元」で数える（計画の「各実行の providers で数える」より意図して狭い:
       // 全部で数えると、まだ使っていない鎖の後ろの提供元の枠まで塞ぐ。後ろへ回った分の同時数は limiter が抑える）
-      const roomFor =(t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
+      const roomFor = (t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
       for (const id of [...this.#forced]) {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
@@ -311,6 +300,7 @@ export class Worker {
   #reviewInput(job: ReviewJob): string | undefined {
     const { db, conversations, tasks, memory, kv } = this.#d;
     const language = languageOf(this.#d.config());
+    const skillsAutoRegister = !askBeforeRegister(this.#d.config());
     const forgotten = (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
     if (job.trigger === 'book_full') {
       const budget = this.#d.memoryBudget?.();
@@ -321,14 +311,14 @@ export class Worker {
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
       if (!task) return undefined;
-      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language });
+      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister });
     }
     if (!job.conversation_id) return undefined;
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
     const upto = Number(kv.get(`review:upto:${job.conversation_id}`) ?? 0);
     const messages = conversations.messages(job.conversation_id, 200).filter(m => m.id > upto);
     if (!messages.some(m => m.role === 'user')) return undefined;
-    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language });
+    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language, skillsAutoRegister });
   }
 
   async #review(job: ReviewJob, release: () => void): Promise<TickResult> {
@@ -435,11 +425,13 @@ export class Worker {
     const language = this.#language();
     const idleKey = `task-idle:${task.id}`;
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
-    if (tasks.get(task.id)?.status !== 'running') return;
+    if (tasks.get(task.id)?.status !== 'running') { this.#d.kv.delete(splitKey(task.id)); return; }
+    // 割り込みは、やり直しと同じに数える（区切りの数を消しも増やしもしない）
     if (this.#d.engine.wasPreempted(runId)) {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }
+    if (!(result.ok && result.split)) this.#d.kv.delete(splitKey(task.id));
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'done', control.summary, 'clive', runId);
@@ -455,6 +447,17 @@ export class Worker {
       this.#d.kv.delete(idleKey);
       tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'clive', runId);
       tasks.setReady(task.id, { runAt: now + Math.min(Math.max(control.resumeAfterMinutes, 1), 10_080) * 60_000, reason: taskText(language, 'reason.checkpoint', { minutes: control.resumeAfterMinutes }) });
+      return;
+    }
+    if (result.ok && result.split) {
+      // 区切りの回数に来た: すぐ続ける。進展なしの数（idleKey）は増やしも消しもしない（区切りと返事だけの終わりが交互に続くタスクも、今までどおり相談に届く）。
+      // 続けて区切れた数が SPLIT_LIMIT に来たら 1 回だけ知らせる（止めない。止めるのは持ち主の取り消し）
+      const splits = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
+      this.#d.kv.setJson(splitKey(task.id), splits);
+      if (splits === SPLIT_LIMIT) {
+        notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}`, localOnly: task.local_only === 1 });
+      }
+      tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
       return;
     }
     if (result.ok) {

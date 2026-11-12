@@ -35,12 +35,11 @@ function chatWith(s: Started, id: string, modelId: string | null, text: string):
   s.app.conversations.append(id, { role: 'user', content: text });
 }
 
-test('手元のモデルの判定: 提供元の baseUrl がループバックのホスト。Ollama の既定の接続先も手元。外のホスト・LAN・接続先なしは違う', () => {
+test('手元のモデルの判定: 提供元の baseUrl がループバックのホスト。外のホスト・LAN・接続先なしは違う', () => {
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://127.0.0.1:1234/v1' })), true);
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://localhost:8080/v1' })), true);
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://[::1]:8080/v1' })), true);
-  assert.equal(isLocalProvider(provider({ kind: 'ollama' })), true, 'Ollama は baseUrl が無ければ既定の 127.0.0.1');
-  assert.equal(isLocalProvider(provider({ kind: 'ollama', baseUrl: 'http://192.168.1.20:11434' })), false, 'LAN の別のマシンは手元ではない');
+  assert.equal(isLocalProvider(provider({ kind: 'openai_compatible', baseUrl: 'http://192.168.1.20:11434' })), false, 'LAN の別のマシンは手元ではない');
   assert.equal(isLocalProvider(provider({ baseUrl: 'https://api.example.test/v1' })), false);
   assert.equal(isLocalProvider(provider({ baseUrl: 'http://127.0.0.1.example.test/v1' })), false, '名前の前半が似ているだけ');
   assert.equal(isLocalProvider(provider({ kind: 'anthropic' })), false, 'Anthropic の既定の接続先は外');
@@ -83,7 +82,7 @@ test('振り返り: 手元の裏方モデルが 1 つも使えないときは、
   assert.equal(s.adapter().calls.length, 0);
   const [job] = reviewJobs(s);
   assert.equal(job!.status, 'done', '失敗でも待ちでもなく、飛ばして終わり');
-  assert.match(job!.note ?? '', /飛ばしました/u);
+  assert.match(job!.note ?? '', /the review was skipped/u);
   assert.deepEqual(reviewConversations(s), [], '振り返りの会話を作らない');
   assert.equal(s.app.notifications.list().filter(n => n.kind === 'health_alert').length, 0);
   assert.equal(await s.app.worker.tick(), 'idle', '次の回で繰り返さない');
@@ -209,7 +208,7 @@ test('振り返り: 手元のモデルを選んだあと、そのモデルを設
   assert.equal(s.adapter().calls.length, 0);
   const [job] = reviewJobs(s);
   assert.equal(job!.status, 'done');
-  assert.match(job!.note ?? '', /飛ばしました/u);
+  assert.match(job!.note ?? '', /the review was skipped/u);
   assert.deepEqual(reviewConversations(s), [], '振り返りの会話を作らない');
 });
 
@@ -342,13 +341,12 @@ test('タスク: 手元のモデルを選んだ会話で task_update したタ�
   assert.equal(s.app.tasks.get(other.id)!.local_only, 0);
 });
 
-test('タスク: 道具の上限のまとめ（会話の経過をタスクのメモへ書く）が手元のモデルの会話から書かれたら、書き先のタスクも local_only になる', async t => {
-  const s = await startApp(t, { ...twoProviders([]), configure: c => { twoProviders([]).configure(c); c.tools.maxIterations = 1; } });
-  const id = uuid(1);
-  const created = s.app.tasks.create({ title: 'この会話で作ったタスク', origin: 'user', actor: 'user', createdInConversation: id });
-  await runIn(s, id, 'loc', [call('task_list', {}), reply('ここまでやりました。次の一手: 続きを書く')]);
+test('タスク: 手元のモデルの会話が task_update で触って経過を書いたタスクは local_only（印を付けるのは task_update の道具で、#handOver の印付けは念のための重ね）', async t => {
+  const s = await startApp(t, twoProviders([]));
+  const created = s.app.tasks.create({ title: '前からあるタスク', origin: 'user', actor: 'user' });
+  await runIn(s, uuid(1), 'loc', [call('task_update', { id: created.id.slice(0, 8), priority: 1 }), call('file_list', {}), reply('ここまでやりました')]);
   const task = s.app.tasks.get(created.id)!;
-  assert.match(task.body, /ここまでやりました/u, '前提: まとめがメモに書かれた');
+  assert.match(task.body, /ここまでやりました/u, '前提: 会話の経過がメモに書かれた');
   assert.equal(task.local_only, 1);
 });
 
@@ -377,7 +375,7 @@ test('タスクの実行: 使える手元の裏方モデルが無ければ、外
     assert.equal(waiting.status, 'ready');
     assert.ok(waiting.run_at! > Date.now(), 'あとでもう一度');
     assert.equal(waiting.attempts, 0);
-    assert.match(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content ?? '', /手元のモデル/u);
+    assert.match(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content ?? '', /used a local model/u);
     assert.equal(s.app.notifications.list().filter(n => n.kind === 'health_alert').length, 0);
   }
 });

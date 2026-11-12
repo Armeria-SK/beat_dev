@@ -268,7 +268,7 @@ test('T-34: 落ちている間、道具を呼ぶと mcp.unavailable で返る（
   s.fakes[0]!.drop();
   const out = await tool.execute({ text: 'x' }, { signal: new AbortController().signal, config: s.config } as never);
   assert.equal(out.isError, true);
-  assert.match(out.content, /つながっていない/u);
+  assert.match(out.content, /is not connected/u);
 });
 
 test('T-35: maxTools で切られた道具は、状態が cut になる（モデルごとの記録。切られなくなれば戻る）', async () => {
@@ -347,7 +347,7 @@ test('R-05: 道具を組に置けなかったら、前の組を残さない', as
   s.config.mcp.servers = [server({ tools: { echo: {}, other: {} } })];
   await s.manager.reload();
   assert.deepEqual(names(s.registry), [], '古い組が残らない');
-  assert.ok(s.logs.some(l => l.includes('登録できませんでした')));
+  assert.ok(s.logs.some(l => l.includes('Could not register the tools')));
 });
 
 test('R-06: 消えたサーバーの登録と固定は先に消え、閉じるのが遅い 1 台が、ほかの更新を止めない', async () => {

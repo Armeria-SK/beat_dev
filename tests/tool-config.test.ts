@@ -57,8 +57,8 @@ test('ツールの設定ファイルへの書き込み・消すこと・名前�
     `Remove-Item '${join(f.home, '.wgetrc')}'`, `New-Item -Path '${join(f.home, '.config', 'git')}' -Name config -Force`, `Out-File '${join(f.home, 'Documents', 'PowerShell', 'Microsoft.PowerShell_profile.ps1')}'`,
     `Set-Content '${join(f.home, 'AppData', 'Roaming', '_curlrc')}' x`,
   ];
-  for (const command of bash) { const v = f.bash(command); assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`); assert.match(v.reasons.join(), /ツールの設定ファイル/u, command); }
-  for (const command of ps) { const v = f.ps(command); assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`); assert.match(v.reasons.join(), /ツールの設定ファイル/u, command); }
+  for (const command of bash) { const v = f.bash(command); assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`); assert.match(v.reasons.join(), /a tool configuration file/u, command); }
+  for (const command of ps) { const v = f.ps(command); assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`); assert.match(v.reasons.join(), /a tool configuration file/u, command); }
   // 読むのは、これまでどおり
   assert.equal(f.bash(`cat ${f.home.replaceAll('\\', '/')}/.gitconfig`).decision, 'allow');
   assert.equal(f.ps(`Get-Content '${join(f.home, '.gitconfig')}'`).decision, 'allow');
@@ -123,7 +123,7 @@ test('curl の設定ファイルが見つかる場所のどれかにあれば、
     writeFileSync(place, 'output = "SOUL.md"\n');
     const v = f.run('curl -sS https://example.com/');
     assert.equal(v.onceOnly, true, `${place}: ${v.decision} ${v.reasons.join(' / ')}`);
-    assert.match(v.reasons.join(), /curl の設定ファイル/u, place);
+    assert.match(v.reasons.join(), /curl has a config file/u, place);
     assert.equal(f.run('curl -q -sS https://example.com/').decision, 'allow', `${place} -q`);
     assert.equal(f.run('curl.exe -sS https://example.com/', 'powershell').onceOnly, true, `${place} PowerShell`);
     rmSync(place);
@@ -147,7 +147,7 @@ test('wget の設定ファイルが見つかる場所のどれかにあれば、
     writeFileSync(place, 'output_document = SOUL.md\n');
     const v = run(wget);
     assert.equal(v.onceOnly, true, `${place}: ${v.decision} ${v.reasons.join(' / ')}`);
-    assert.match(v.reasons.join(), /wget の設定ファイル/u, place);
+    assert.match(v.reasons.join(), /wget has a config file/u, place);
     assert.equal(run('wget --no-config --max-redirect=0 -O - https://example.com/').decision, 'allow', `${place} --no-config`);
     rmSync(place);
   }
@@ -228,7 +228,7 @@ test('.curlrc・_curlrc・.wgetrc への書き込み・消すこと・名前の�
   for (const command of ['echo x > .curlrc', 'echo x >> sub/_curlrc', 'tee .wgetrc', 'cp a.txt .curlrc', 'cp a.txt sub/_curlrc', 'mv a.txt .wgetrc', 'rm .curlrc', 'rm sub/_curlrc', 'touch .wgetrc', 'mkdir .curlrc', 'printf x | tee sub/.wgetrc']) {
     const v = f.bash(command);
     assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
-    assert.match(v.reasons.join(), /ツールの設定ファイル/u, command);
+    assert.match(v.reasons.join(), /a tool configuration file/u, command);
   }
   for (const command of ['Set-Content .curlrc x', 'Add-Content sub\\_curlrc x', 'Out-File .wgetrc', 'Copy-Item a.txt .curlrc', 'Move-Item a.txt sub\\.wgetrc', 'Remove-Item .curlrc', 'New-Item -Path . -Name _curlrc', 'Rename-Item notes.md -NewName .wgetrc']) {
     const v = f.ps(command);
@@ -274,7 +274,7 @@ test('ホームが許可フォルダの外でも、ツールの設定ファイ�
     ...ps.filter(c => !f.ps(c).onceOnly).map(c => `powershell: ${c} → ${f.ps(c).decision}`),
   ];
   assert.deepEqual(wrong, []);
-  assert.match(f.bash(`echo x >> ${h}/.gitconfig`).reasons.join(), /ツールの設定ファイル/u);
+  assert.match(f.bash(`echo x >> ${h}/.gitconfig`).reasons.join(), /a tool configuration file/u);
   // 外の、ふつうのファイルは、これまでどおりふつうの確かめ（今回だけにはならない）。読むのも同じ
   for (const c of [`echo x > ${h}/notes.txt`, `cp a.txt ${h}/Documents/x.txt`]) { const v = f.bash(c); assert.equal(v.decision, 'ask', c); assert.equal(v.onceOnly, false, c); }
   assert.equal(f.bash(`cat ${h}/.gitconfig`).onceOnly, false);

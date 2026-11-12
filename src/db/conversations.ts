@@ -30,7 +30,8 @@ export interface ConversationRow {
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
-export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean };
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean; message_count: number; archived_at: number | null };
+const ARCHIVED_AT = 'archived-at:';
 
 export interface StoredMessage {
   id: number;
@@ -66,7 +67,7 @@ export class Conversations {
     for (const [id, until] of this.#deleted) if (until <= now) this.#deleted.delete(id);
     for (const id of ids) this.#deleted.set(id, now + DELETED_TTL_MS);
     // 会話が消えたことを知りたい側（ブラウザのタブを閉じる）へ。ここでの失敗で、消す側の処理を止めない
-    try { this.onDeleted?.(ids); } catch (thrown) { this.#log?.(`[ERROR] 会話の削除の通知に失敗: ${(thrown as Error).message}`); }
+    try { this.onDeleted?.(ids); } catch (thrown) { this.#log?.(`[ERROR] Failed to notify that conversations were deleted: ${(thrown as Error).message}`); }
   }
 
   // 会話を消したときに呼ばれる（markDeleted と同じ時点）。App が、消した会話のブラウザのタブを閉じるのに結ぶ
@@ -106,7 +107,9 @@ export class Conversations {
     const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
     const rows = this.db.prepare(`
       SELECT id, kind, title, archived, created_at, last_message_at, summary_upto, model_id, effort, permission_mode,
-        (summary IS NOT NULL AND summary != '') AS has_summary
+        (summary IS NOT NULL AND summary != '') AS has_summary,
+        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = conversations.id) AS message_count,
+        (SELECT CAST(value AS INTEGER) FROM kv WHERE key = '${ARCHIVED_AT}' || conversations.id) AS archived_at
       FROM conversations WHERE archived = ? AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}
       ORDER BY last_message_at DESC LIMIT ?
     `).all(...[options.archived ? 1 : 0, ...(like ? [like] : []), limit]) as unknown as Array<Omit<ConversationListItem, 'has_summary'> & { has_summary: number }>;
@@ -124,7 +127,7 @@ export class Conversations {
   // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）。消したばかりの会話は作り直さず、false を返す（見送ったことを記録する）
   ensure(id: string): boolean {
     if (this.get(id)) return true;
-    if (this.#isDeleted(id)) { this.#log?.(`[WARN] 消した会話 ${id} への書き込みを見送りました（会話を作り直しません）`); return false; }
+    if (this.#isDeleted(id)) { this.#log?.(`[WARN] Skipped writing to deleted conversation ${id} (the conversation is not re-created)`); return false; }
     const now = this.now();
     this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, 'chat', ?, ?)`).run(id, now, now);
     return true;
@@ -170,11 +173,16 @@ export class Conversations {
   }
 
   archive(id: string): void {
-    this.db.prepare('UPDATE conversations SET archived = 1 WHERE id = ?').run(id);
+    const changed = Number(this.db.prepare('UPDATE conversations SET archived = 1 WHERE id = ? AND archived = 0').run(id).changes);
+    if (changed > 0) {
+      const now = this.now();
+      this.db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(`${ARCHIVED_AT}${id}`, String(now), now);
+    }
   }
 
   unarchive(id: string): void {
     this.db.prepare('UPDATE conversations SET archived = 0 WHERE id = ?').run(id);
+    this.db.prepare('DELETE FROM kv WHERE key = ?').run(`${ARCHIVED_AT}${id}`);
   }
 
   setSnapshotOnce(id: string, snapshot: string, hash: string): boolean {

@@ -10,17 +10,16 @@ export const WORKSPACE_FILES = ['SOUL.md', 'USER.md', 'CURIOSITY.md'] as const;
 export type WorkspaceFile = (typeof WORKSPACE_FILES)[number];
 export type TemplateName = 'rules' | WorkspaceFile;
 
-export function templatePath(paths: AppPaths, name: TemplateName, language: Language): string | undefined {
-  const japanese = join(paths.templates, name === 'rules' ? 'rules.ja.md' : name);
-  const candidates = language === 'ja' ? [japanese] : [join(paths.templates, language, name === 'rules' ? 'rules.md' : name), japanese];
-  return candidates.find(path => existsSync(path));
+export function templatePath(paths: AppPaths, name: TemplateName): string | undefined {
+  const path = join(paths.templates, name === 'rules' ? 'rules.md' : name);
+  return existsSync(path) ? path : undefined;
 }
 
-export function ensureWorkspace(paths: AppPaths, language: Language = DEFAULT_LANGUAGE): void {
+export function ensureWorkspace(paths: AppPaths): void {
   mkdirSync(paths.workspace, { recursive: true });
   for (const name of WORKSPACE_FILES) {
     const target = join(paths.workspace, name);
-    const source = templatePath(paths, name, language);
+    const source = templatePath(paths, name);
     if (!source) continue;
     try { copyFileSync(source, target, constants.COPYFILE_EXCL); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
@@ -32,14 +31,14 @@ function readIfExists(path: string | undefined): string {
   try { return existsSync(path) ? readFileSync(path, 'utf8').trim() : ''; } catch { return ''; }
 }
 
-export function readTemplate(paths: AppPaths, name: TemplateName, language: Language): string {
-  return readIfExists(templatePath(paths, name, language));
+export function readTemplate(paths: AppPaths, name: TemplateName): string {
+  return readIfExists(templatePath(paths, name));
 }
 
-export function defaultTexts(paths: AppPaths, language: Language): { rules: string; files: Array<{ name: WorkspaceFile; content: string }> } {
+export function defaultTexts(paths: AppPaths): { rules: string; files: Array<{ name: WorkspaceFile; content: string }> } {
   return {
-    rules: readTemplate(paths, 'rules', language),
-    files: WORKSPACE_FILES.map(name => ({ name, content: readTemplate(paths, name, language) })),
+    rules: readTemplate(paths, 'rules'),
+    files: WORKSPACE_FILES.map(name => ({ name, content: readTemplate(paths, name) })),
   };
 }
 
@@ -49,12 +48,11 @@ export interface Snapshot {
 }
 
 const SNAPSHOT_HEADINGS: Record<Language, { soul: string; user: string }> = {
-  ja: { soul: '# あなた自身（SOUL.md）', user: '# ユーザーについて（USER.md）' },
   en: { soul: '# Who you are (SOUL.md)', user: '# About the user (USER.md)' },
 };
 
 export function buildSnapshot(paths: AppPaths, extra: { memories?: string; skills?: string } = {}, language: Language = DEFAULT_LANGUAGE): Snapshot {
-  const rules = readTemplate(paths, 'rules', language);
+  const rules = readTemplate(paths, 'rules');
   const soul = readIfExists(join(paths.workspace, 'SOUL.md'));
   const user = readIfExists(join(paths.workspace, 'USER.md'));
   const headings = SNAPSHOT_HEADINGS[language];
@@ -81,18 +79,11 @@ export function recordFileVersions(db: DatabaseSync, paths: AppPaths, now = Date
 }
 
 const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string }> = {
-  ja: {
-    locale: 'ja-JP',
-    format: { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' },
-    time: (formatted, timezone) => `現在時刻: ${formatted}（${timezone}）`,
-    reply: '返事は日本語で書く（ユーザーが別の言語で話しかけたら、その言語で返す）',
-    plan: 'いまは「計画モード」です。ファイルの変更・コマンドの実行・記憶やタスクの書き込みはできません（読む道具と Web の読み取りだけ使えます）。実際には何も変えず、必要なら調べたうえで、最後に番号付きの手順の一覧で計画を示してください',
-  },
   en: {
     locale: 'en-US',
     format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
-    reply: 'Write your replies in English (if the user speaks to you in another language, reply in that language).',
+    reply: "Reply in the language the user writes in (the language of the user's own words, not of these instructions, templates or tool results).",
     plan: 'You are in "plan mode". You cannot change files, run commands, or write memories or tasks (only tools that read, and reading the web, are available). Do not change anything: investigate if needed, then finish by presenting a plan as a numbered list of steps.',
   },
 };

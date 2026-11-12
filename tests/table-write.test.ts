@@ -65,7 +65,7 @@ test('table_write: CSV は BOM 付きで書き、式に見える文字は先頭�
   const out = await s.call({ path: 'out/a.csv', rows: [['名前', '数'], ['=cmd|"/c calc"!A0', 1]] });
   assert.equal(out.decision, 'allow');
   assert.ok(!out.output.isError, out.output.content);
-  assert.equal(out.output.content, '表を書きました: out/a.csv（2 行・2 列）\n[式として動かないよう、1 個のセルを文字として書きました]');
+  assert.equal(out.output.content, 'Wrote the table: out/a.csv (2 rows, 2 columns)\n[To prevent it from working as a formula, 1 cells were written as text]');
   const bytes = read(s, 'out/a.csv');
   assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
   assert.equal(bytes.toString('utf8'), `${BOM}名前,数\r\n"'=cmd|""/c calc""!A0",1\r\n`);
@@ -76,19 +76,19 @@ test('table_write: 数は数のまま、文字の "-5" と全角の式の始ま�
   const out = await s.call({ path: 'n.csv', rows: [['-5', -5, 1.5, null, 'a,b', '\uFF1D1', '+1', '@x', 'ok']] });
   assert.ok(!out.output.isError, out.output.content);
   assert.equal(read(s, 'n.csv').toString('utf8'), `${BOM}'-5,-5,1.5,,"a,b",'\uFF1D1,'+1,'@x,ok\r\n`);
-  assert.match(out.output.content, /\[式として動かないよう、4 個のセルを文字として書きました\]$/u);
+  assert.match(out.output.content, /\[To prevent it from working as a formula, 4 cells were written as text\]$/u);
   const plain = await s.call({ path: 'plain.csv', rows: [['a', 1]] });
-  assert.equal(plain.output.content, '表を書きました: plain.csv（1 行・2 列）');
+  assert.equal(plain.output.content, 'Wrote the table: plain.csv (1 rows, 2 columns)');
 });
 
 test('table_write: xlsx は式を書かず、文字は変えずに文字のセルの書式を付け、書いた形が読み戻せる', async t => {
   const s = setup(t);
   const out = await s.call({ path: 'a.xlsx', rows: [['a', 1], ['=1+1', null, 'x']] });
   assert.ok(!out.output.isError, out.output.content);
-  assert.equal(out.output.content, '表を書きました: a.xlsx（2 行・3 列）\n[式として動かないよう、1 個のセルを文字として書きました]');
+  assert.equal(out.output.content, 'Wrote the table: a.xlsx (2 rows, 3 columns)\n[To prevent it from working as a formula, 1 cells were written as text]');
   const opened = openZip(read(s, 'a.xlsx'));
   assert.equal(opened.ok, true);
-  const text = xlsxText(opened.zip, 'ja');
+  const text = xlsxText(opened.zip, 'en');
   assert.equal(text.ok, true);
   assert.ok(text.ok && text.text.includes('a\t1'));
   assert.ok(text.ok && text.text.includes('=1+1\t\tx'));
@@ -99,7 +99,7 @@ test('table_write: xlsx は式を書かず、文字は変えずに文字のセ�
   assert.ok(xml.includes('s="1"'), '式に見える文字のセルに quotePrefix の書式');
   assert.ok(!xml.includes("'=1+1"), 'xlsx には \' を足さない');
   const back = await docRead.execute({ path: 'a.xlsx' }, s.ctx);
-  assert.ok(back.content.endsWith('<<<\n[シート: Sheet1]\na\t1\n=1+1\t\tx\n>>>'), back.content);
+  assert.ok(back.content.endsWith('<<<\n[Sheet: Sheet1]\na\t1\n=1+1\t\tx\n>>>'), back.content);
 });
 
 test('table_write: 既にあるファイルは overwrite: true のときだけ上書きし、そうでなければ中身を変えない', async t => {
@@ -110,7 +110,7 @@ test('table_write: 既にあるファイルは overwrite: true のときだけ�
     const refused = await s.call(args);
     assert.equal(refused.decision, 'allow');
     assert.equal(refused.output.isError, true);
-    assert.equal(refused.output.content, `既にあります: ${args.path}`);
+    assert.equal(refused.output.content, `It already exists: ${args.path}`);
   }
   assert.equal(read(s, 'a.csv').toString('utf8'), 'old');
   assert.equal(read(s, 'a.xlsx').toString('utf8'), 'old');
@@ -133,7 +133,7 @@ test('table_write: execute を直接呼んでも、overwrite なしでは既に�
   for (const overwrite of [undefined, true]) {
     const dir = await tableWrite.execute({ path: 'd.csv', rows: [['new']], ...(overwrite === undefined ? {} : { overwrite }) }, s.ctx);
     assert.equal(dir.isError, true);
-    assert.equal(dir.content, 'フォルダです: d.csv');
+    assert.equal(dir.content, 'This is a folder: d.csv');
   }
 });
 
@@ -156,7 +156,7 @@ test('table_write: 確かめたあとに別の誰かが作ったファイルは�
     for (const args of [{ path: 'race.csv', rows: [['new']] }, { path: 'race.xlsx', rows: [['new']], overwrite: false }]) {
       const out = await s.call(args);
       assert.equal(out.output.isError, true, args.path);
-      assert.equal(out.output.content, `既にあります: ${args.path}`);
+      assert.equal(out.output.content, `It already exists: ${args.path}`);
       assert.equal(read(s, args.path).toString('utf8'), 'racer', `${args.path}: 確かめたあとに作られたファイルを置き換えてしまった`);
     }
     assert.equal(raced.size, 2, '確かめたあとにファイルを作る細工が両方で働いた');
@@ -198,14 +198,14 @@ test('table_write: 書ける形は拡張子だけで決まり、.csv .xlsx 以�
     const out = await s.call({ path, rows: [['a']] });
     assert.equal(out.decision, 'deny', path);
     assert.equal(out.output.isError, true, path);
-    assert.match(out.output.content, /実行しませんでした/u, path);
+    assert.match(out.output.content, /Not run/u, path);
   }
-  assert.match((await s.call({ path: 'a.txt', rows: [['a']] })).output.content, /書ける形は \.csv と \.xlsx だけです: a\.txt/u);
+  assert.match((await s.call({ path: 'a.txt', rows: [['a']] })).output.content, /Only \.csv and \.xlsx can be written: a\.txt/u);
   if (process.platform === 'win32') assert.equal((await s.call({ path: 'a.txt:x.csv', rows: [['a']] })).decision, 'deny', 'Windows の別のデータの流れ');
   assert.deepEqual(listing(s), [], '何も書かれていない');
   const direct = await tableWrite.execute({ path: 'a.txt', rows: [['a']] }, s.ctx);
   assert.equal(direct.isError, true);
-  assert.match(direct.content, /書ける形は/u);
+  assert.match(direct.content, /Only \.csv and \.xlsx can be written/u);
   assert.deepEqual(listing(s), []);
   assert.ok(!(await s.call({ path: 'A.CSV', rows: [['a']] })).output.isError);
   assert.ok(!(await s.call({ path: 'B.XLSX', rows: [['a']] })).output.isError);
@@ -222,7 +222,7 @@ test('table_write: 許可フォルダの外・読むだけのフォルダ・秘�
   for (const path of refused) {
     const out = await s.call({ path, rows: [['a']] });
     assert.equal(out.decision, 'deny', path);
-    assert.match(out.output.content, /実行しませんでした/u, path);
+    assert.match(out.output.content, /Not run/u, path);
   }
   assert.equal(existsSync(join(s.paths.data, 'outside.csv')), false);
   assert.equal(existsSync(join(s.paths.data, 'x.csv')), false);
@@ -233,7 +233,7 @@ test('table_write: 許可フォルダの外・読むだけのフォルダ・秘�
     const pending = s.call({ path, rows: [['a']] });
     const request = await decideNext(s, 'deny');
     assert.equal(request.onceOnly, path.startsWith('.git'), path);
-    assert.match((await pending).output.content, /拒否しました/u, path);
+    assert.match((await pending).output.content, /The user refused to run it/u, path);
     assert.equal(existsSync(join(s.paths.workspace, path)), false, `${path} に書かれてしまった`);
   }
 
@@ -274,7 +274,7 @@ test('table_write: フォルダを作った直後にリンクへ差し替えら�
     const out = await s.call({ path: 'swap/x.csv', rows: [['a']] });
     if (!swapped) { t.skip('シンボリックリンクを作れない環境'); return; }
     assert.equal(out.output.isError, true);
-    assert.match(out.output.content, /書き込み先の確認に失敗しました/u);
+    assert.match(out.output.content, /Checking the write destination failed/u);
     assert.equal(existsSync(join(target, 'x.csv')), false, '差し替えたリンクの先に書かれてしまった');
     assert.equal(spy.mock.callCount() > 0, true);
   } finally {
@@ -304,12 +304,12 @@ test('table_write: 引数の形が正しくなければ実行せずに直させ�
   for (const args of bad) {
     const out = await s.call(args);
     assert.equal(out.invalidArguments, true, JSON.stringify(args).slice(0, 80));
-    assert.match(out.output.content, /引数の形が正しくありません/u);
+    assert.match(out.output.content, /The shape of the arguments is not valid/u);
   }
   assert.deepEqual(listing(s), []);
   const edge = await s.call({ path: 'edge.csv', rows: [nulls(1, 16384)[0], ['x'.repeat(32767)]] });
   assert.ok(!edge.output.isError, edge.output.content);
-  assert.match(edge.output.content, /^表を書きました: edge\.csv（2 行・16384 列）/u);
+  assert.match(edge.output.content, /^Wrote the table: edge\.csv \(2 rows, 16384 columns\)/u);
 });
 
 test('table_write: セルは 10 万個まで。超えたら書かない（道具の呼び出しでも、execute を直接呼んでも）', async t => {
@@ -317,16 +317,16 @@ test('table_write: セルは 10 万個まで。超えたら書かない（道具
   const over = await s.call({ path: 'big.csv', rows: nulls(1001, 100) });
   assert.equal(over.decision, 'deny');
   assert.equal(over.output.isError, true);
-  assert.match(over.output.content, /セルが多すぎます（100,100 個。100,000 個まで）/u);
+  assert.match(over.output.content, /There are too many cells \(100,100 cells, up to 100,000 cells\)/u);
   const overX = await s.call({ path: 'big.xlsx', rows: nulls(1001, 100) });
-  assert.match(overX.output.content, /セルが多すぎます/u);
+  assert.match(overX.output.content, /There are too many cells/u);
   const direct = await tableWrite.execute({ path: 'big.csv', rows: [Array.from({ length: 100_001 }, () => null)] }, s.ctx);
   assert.equal(direct.isError, true);
-  assert.equal(direct.content, 'セルが多すぎます（100,001 個。100,000 個まで）');
+  assert.equal(direct.content, 'There are too many cells (100,001 cells, up to 100,000 cells)');
   assert.deepEqual(listing(s), []);
   const edge = await s.call({ path: 'edge.csv', rows: nulls(1000, 100) });
   assert.ok(!edge.output.isError, edge.output.content);
-  assert.match(edge.output.content, /^表を書きました: edge\.csv（1000 行・100 列）/u);
+  assert.match(edge.output.content, /^Wrote the table: edge\.csv \(1000 rows, 100 columns\)/u);
 });
 
 test('table_write: 文字の合計は 500 万文字まで。1 セル 32,767 文字 × 多数でも、超えたら書かない', async t => {
@@ -336,11 +336,11 @@ test('table_write: 文字の合計は 500 万文字まで。1 セル 32,767 文�
   const rows = (count: number): string[][] => Array.from({ length: count }, () => [cell]);
   const over = await s.call({ path: 'big.csv', rows: rows(153) });
   assert.equal(over.decision, 'deny');
-  assert.match(over.output.content, /文字の合計が多すぎます（5,013,351 文字。5,000,000 文字まで）/u);
-  assert.doesNotMatch(over.output.content, /失敗しました|characters/u);
+  assert.match(over.output.content, /The table has too many characters in total \(5,013,351 characters, up to 5,000,000 characters\)/u);
+  assert.doesNotMatch(over.output.content, /failed/iu);
   const direct = await tableWrite.execute({ path: 'big.csv', rows: rows(153) }, s.ctx);
   assert.equal(direct.isError, true);
-  assert.equal(direct.content, '文字の合計が多すぎます（5,013,351 文字。5,000,000 文字まで）');
+  assert.equal(direct.content, 'The table has too many characters in total (5,013,351 characters, up to 5,000,000 characters)');
   assert.deepEqual(listing(s), []);
   const within = await s.call({ path: 'ok.csv', rows: rows(152) });
   assert.ok(!within.output.isError, within.output.content);
@@ -353,8 +353,8 @@ test('table_write: 外から読んだあとは、作業フォルダの中でも�
   const args = { path: 'a.csv', rows: [['=cmd', 'x'], ['ok', 1]] };
   const denied = s.call(args, ctx);
   const request = await decideNext(s, 'deny');
-  assert.match(request.reasons.join(), /よそから来た文/u);
-  assert.equal(request.title, '表のファイルを書く: a.csv（2 行）');
+  assert.match(request.reasons.join(), /text that came from somewhere else/u);
+  assert.equal(request.title, 'Writing a table file: a.csv (2 rows)');
   assert.equal(request.body, "'=cmd,x\r\nok,1\r\n");
   assert.equal((await denied).output.isError, true);
   assert.equal(existsSync(join(s.paths.workspace, 'a.csv')), false);
@@ -381,10 +381,10 @@ test('table_write: 外から読んだあとの札にはフォルダの許可が�
   assert.equal(existsSync(join(s.paths.workspace, 'other', 'c.csv')), false);
 });
 
-test('table_write: 札の中身は先頭 20 行・4,000 文字までで、BOM は付けず、日英で題が変わる', () => {
+test('table_write: 札の中身は先頭 20 行・4,000 文字までで、BOM は付けず、題は英語', () => {
   const rows = Array.from({ length: 25 }, (_, i) => [`r${i}`]);
-  const card = tableWrite.summarize!({ path: 'a.csv', rows }, 'ja');
-  assert.equal(card.title, '表のファイルを書く: a.csv（25 行）');
+  const card = tableWrite.summarize!({ path: 'a.csv', rows }, 'en');
+  assert.equal(card.title, 'Writing a table file: a.csv (25 rows)');
   assert.equal(card.body, rows.slice(0, 20).map(r => `${r[0]}\r\n`).join(''));
   assert.ok(!card.body.includes(BOM));
   const long = tableWrite.summarize!({ path: 'a.xlsx', rows: [['-'.repeat(3000)], ['b'.repeat(3000)]] }, 'en');
@@ -422,7 +422,7 @@ test('table_write: 書けずに投げられた失敗は、パスを含む messag
   try {
     const out = await s.call({ path: 'boom.csv', rows: [['a']] });
     assert.equal(out.output.isError, true);
-    assert.equal(out.output.content, '失敗しました: EACCES');
+    assert.equal(out.output.content, 'Failed: EACCES');
     assert.doesNotMatch(out.output.content, /hidden-place/u);
     assert.equal(spy.mock.callCount() > 0, true);
   } finally {
@@ -432,8 +432,8 @@ test('table_write: 書けずに投げられた失敗は、パスを含む messag
   assert.equal(listing(s).some(name => name.startsWith('boom.csv')), false);
 });
 
-test('table_write: 英語の設定では、結果にも失敗の文にも日本語が出ない', async t => {
-  const s = setup(t, c => { c.language = 'en'; });
+test('table_write: 結果にも失敗の文にも日本語が出ない', async t => {
+  const s = setup(t);
   writeFileSync(join(s.paths.workspace, 'old.csv'), 'old');
   mkdirSync(join(s.paths.workspace, 'dir.csv'));
   const results = [

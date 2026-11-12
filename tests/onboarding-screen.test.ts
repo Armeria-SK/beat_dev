@@ -1,39 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
-import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import {
-  emptyModelForm, isOutsideUrl, markSetupShown, modelFormProblem, personaInputOf, resumeStep, setupModelConfig, STEPS, STYLE_CHOICES, wasSetupShown,
-  type ModelForm, type PersonaFields,
+  emptyModelForm, isOutsideUrl, markSetupShown, modelFormProblem, resumeStep, setupModelConfig, STEPS, wasSetupShown,
+  type ModelForm, type OnboardingSteps,
 } from '../web/src/onboarding.ts';
 import { estimateTokens, overPersonaBudget } from '../web/src/tokens.ts';
-import { sectionChanged } from '../web/src/settings/model.ts';
 
-const steps = (patch: Partial<Record<'language' | 'user' | 'identity' | 'persona' | 'model', boolean>> = {}) => ({ language: false, user: false, identity: false, persona: false, model: false, ...patch });
+const steps = (patch: Partial<Record<'user' | 'identity' | 'persona' | 'model', boolean>> = {}) => ({ user: false, identity: false, persona: false, model: false, ...patch });
 
-test('resumeStep: 左の一覧の「続ける」は、済んでいない最初の手順から始める。全部済んでいればあいさつ', () => {
-  assert.deepEqual(STEPS, ['language', 'you', 'identity', 'style', 'model', 'greeting']);
-  assert.equal(resumeStep(steps()), 'language');
-  assert.equal(resumeStep(steps({ language: true })), 'you');
-  assert.equal(resumeStep(steps({ language: true, user: true })), 'identity');
-  assert.equal(resumeStep(steps({ language: true, user: true, identity: true })), 'style');
-  assert.equal(resumeStep(steps({ language: true, user: true, identity: true, persona: true })), 'model');
-  assert.equal(resumeStep(steps({ language: true, user: true, identity: true, persona: true, model: true })), 'greeting');
-  assert.equal(resumeStep(steps({ model: true })), 'language', '飛ばした手順があれば、そこへ戻る');
-});
-
-test('personaInputOf: サーバーへ送るのは、入力のあった項目だけ（送った項目だけが書かれ、済みになる）。話し方は「決めない」でも書き足しがあれば送る', () => {
-  const fields: PersonaFields = { userName: ' やまだ ', callMe: '', botName: ' ミナト ', style: 'friendly', styleNote: '  ' };
-  assert.deepEqual(personaInputOf(fields, 'you'), { userName: 'やまだ' });
-  assert.deepEqual(personaInputOf({ ...fields, userName: '', callMe: '' }, 'you'), {}, '空なら何も送らない');
-  assert.deepEqual(personaInputOf(fields, 'identity'), { botName: 'ミナト' });
-  assert.deepEqual(personaInputOf({ ...fields, botName: '  ' }, 'identity'), {});
-  assert.deepEqual(personaInputOf(fields, 'style'), { style: 'friendly' });
-  assert.deepEqual(personaInputOf({ ...fields, style: 'none', styleNote: '' }, 'style'), {}, '決めないで、書き足しも無ければ送らない');
-  assert.deepEqual(personaInputOf({ ...fields, style: 'none', styleNote: '絵文字なし' }, 'style'), { style: 'none', styleNote: '絵文字なし' });
-  assert.deepEqual(personaInputOf({ ...fields, style: null, styleNote: '短く' }, 'style'), { styleNote: '短く' });
-  assert.deepEqual([...STYLE_CHOICES], ['calm', 'friendly', 'direct', 'none']);
+test('resumeStep: 左の一覧の「続ける」は、済んでいない最初の手順から始める。全部済んでいればあいさつ。言語の段は無い', () => {
+  assert.deepEqual(STEPS, ['you', 'identity', 'style', 'model', 'greeting']);
+  assert.equal(resumeStep(steps()), 'you');
+  assert.equal(resumeStep({ ...steps(), language: false } as OnboardingSteps), 'you', 'サーバーがまだ返す steps.language は読まない');
+  assert.equal(resumeStep(steps({ user: true })), 'identity');
+  assert.equal(resumeStep(steps({ user: true, identity: true })), 'style');
+  assert.equal(resumeStep(steps({ user: true, identity: true, persona: true })), 'model');
+  assert.equal(resumeStep(steps({ user: true, identity: true, persona: true, model: true })), 'greeting');
+  assert.equal(resumeStep(steps({ model: true })), 'you', '飛ばした手順があれば、そこへ戻る');
 });
 
 const form = (patch: Partial<ModelForm> = {}): ModelForm => ({ ...emptyModelForm('openai'), model: 'qwen3-27b', baseUrl: 'http://127.0.0.1:1234/v1', ...patch });
@@ -66,7 +50,7 @@ test('setupModelConfig（OpenAI 互換）: 送り先・サーバーの種類・�
   const { config, modelId } = setupModelConfig(base(), form({ server: 'tabbyapi', apiKeyEnv: 'LOCAL_KEY', contextLength: '65536' }), null);
   assert.equal(modelId, 'qwen3-27b');
   assert.deepEqual(config.providers.at(-1), { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1', server: 'tabbyapi', maxParallel: 1, timeoutMs: 600000, apiKeyEnv: 'LOCAL_KEY' });
-  assert.deepEqual(config.models, [{ id: 'qwen3-27b', label: '', provider: 'local', model: 'qwen3-27b', contextLength: 65536, minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false }]);
+  assert.deepEqual(config.models, [{ id: 'qwen3-27b', label: '', provider: 'local', model: 'qwen3-27b', contextLength: 65536, minContext: 8192, maxOutputTokens: 4096, vision: false }]);
   assert.deepEqual(config.routing, { chat: ['qwen3-27b'], background: ['qwen3-27b'], retriesPerModel: 2 });
   assert.equal(config.providers.length, 3, '最初から入っているプロバイダは残す');
   const noKey = setupModelConfig(base(), form(), null).config;
@@ -114,15 +98,4 @@ test('はじめの設定の記録: 自動で開くのは 1 回だけ。保存で
   const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
   assert.equal(wasSetupShown(blocked), false);
   markSetupShown(blocked);
-});
-
-test('設定の「Clive について」: 節にあり、ja にも en にも文がある。画面の設定の変更としては数えない（名前と全文は別に保存する）', () => {
-  for (const key of ['settings.section.about', 'settings.desc.about', 'settings.about.name', 'settings.about.rerun', 'onboarding.title', 'onboarding.band', 'onboarding.greeting.request', 'chat.send.setupModel'] as const) {
-    assert.ok(ja[key].length > 0 && en[key].length > 0, key);
-    assert.notEqual(ja[key], en[key], `${key}: 訳し忘れ`);
-  }
-  assert.equal(sectionChanged({ profile: { name: 'a' } }, { profile: { name: 'b' } }, 'about'), false);
-  assert.match(ja['settings.about.warn'](5000, 4000), /5000/u);
-  assert.match(en['onboarding.model.have'](1), /1 model/u);
-  assert.match(en['onboarding.model.have'](3), /3 models/u);
 });

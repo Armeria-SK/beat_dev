@@ -83,7 +83,7 @@ async function place(part: string, dir: string, name: string, size: number): Pro
         // コピーは書きかけとは別に、ファイルの大きさ分を新しく使う。足りなければコピーを始めない
         spaceChecked = true;
         const free = freeBytesOf(dir);
-        if (free < size + DOWNLOAD_LIMITS.minFreeBytes) throw new RetrievalFailure('http_failure', toolText('ja', 'download.disk_low', { free }), undefined, 'download.disk_low', { free });
+        if (free < size + DOWNLOAD_LIMITS.minFreeBytes) throw new RetrievalFailure('http_failure', toolText('en', 'download.disk_low', { free }), undefined, 'download.disk_low', { free });
       }
       try {
         await copyFile(part, target, constants.COPYFILE_EXCL);
@@ -119,10 +119,10 @@ function mergeChecks(first: PreCheck, second: PreCheck): PreCheck {
 
 export const webDownload: ToolDef<{ url: string; name?: string }> = {
   name: 'web_download',
-  description: '公開の Web のファイルをダウンロードして、作業フォルダの downloads/ に保存する（場所は選べない。name は名前の候補で、安全な形に直される。同じ名前があれば -1 などを付け、上書きしない）。保存したファイルは外部のデータ。ローカルや LAN の宛先は取れない。',
+  description: 'Download a file from the public web and save it in downloads/ in the working folder (the location cannot be chosen; name is a suggested name and is changed into a safe form; if the same name exists, -1 or similar is added and nothing is overwritten). The saved file is external data. Local and LAN addresses cannot be fetched.',
   input: Type.Object({
     url: Type.String({ minLength: 1, maxLength: 4096 }),
-    name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, description: '保存する名前の候補' })),
+    name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, description: 'A suggested name to save the file as' })),
   }, { additionalProperties: false }),
   effect: 'network',
   writesFiles: true,

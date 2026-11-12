@@ -103,7 +103,7 @@ test('X2 計画モード（パイプライン）: 効果 network + writesFiles �
   const writer = await plan.call('net_writer', {});
   assert.equal(writer.decision, 'deny');
   assert.equal(writer.decidedBy, 'mode');
-  assert.match(writer.output.content, /計画/u);
+  assert.match(writer.output.content, /plan mode/u);
   assert.equal(writer.output.isError, true);
   for (const name of ['net_plain', 'reader']) assert.equal((await plan.call(name, {})).decision, 'allow', `${name}: 計画モードでも動く（今までどおり）`);
   assert.equal((await plan.call('plain_write', {})).decidedBy, 'mode', '比べる基準: 書き込みの道具は今までどおり断る');
@@ -176,7 +176,7 @@ test('X2 外から読んだ内容のあと: network + writesFiles の道具は�
   const asked = await observe(tainted, 'net_writer', {}, 'deny');
   assert.equal(asked.asked, true);
   assert.deepEqual(asked.asked && asked.kinds, ['taint']);
-  assert.ok(asked.asked && asked.reasons.some(r => /よそから来た文/u.test(r)), '理由は外を読んだあとの確かめ');
+  assert.ok(asked.asked && asked.reasons.some(r => /text that came from somewhere else/u.test(r)), '理由は外を読んだあとの確かめ');
   assert.equal(asked.outcome.decidedBy, 'user');
   assert.deepEqual(ran, [], '断ったので動かない');
   const approved = await observe(tainted, 'net_writer', {}, 'once');
@@ -205,7 +205,7 @@ test('X2 振り返り: network + writesFiles の道具も、writesFiles の無�
     const outcome = await s.call(name, {}, review);
     assert.equal(outcome.decision, 'deny', name);
     assert.equal(outcome.decidedBy, 'registry', name);
-    assert.match(outcome.output.content, /振り返り/u, name);
+    assert.match(outcome.output.content, /during a review/u, name);
   }
   assert.equal((await s.call('reader', {}, review)).decision, 'allow');
   assert.deepEqual(ran, ['reader']);
@@ -222,7 +222,7 @@ test('X2 振り返りの締め付け: 効果が read・meta でも writesFiles �
     const outcome = await s.call(name, {}, review);
     assert.equal(outcome.decision, 'deny', name);
     assert.equal(outcome.decidedBy, 'registry', name);
-    assert.match(outcome.output.content, /振り返り/u, name);
+    assert.match(outcome.output.content, /during a review/u, name);
   }
   assert.equal((await s.call('reader', {}, review)).decision, 'allow');
   assert.equal((await s.call('read_writer', {})).decision, 'allow', '比べる基準: 会話の実行では動く（締め付けは振り返りだけ）');
@@ -289,7 +289,7 @@ test('X6 自動承認で外を読んだ会話（会話の印・この実行の�
     assert.equal(remote.asked, true, `${flag}: url ありは確かめる`);
     assert.deepEqual(remote.asked && remote.kinds, ['egress'], flag);
     assert.equal(remote.asked && remote.everyTime, true, `${flag}: 毎回の確かめ`);
-    assert.ok(remote.asked && remote.reasons.some(r => /毎回確認します/u.test(r)), flag);
+    assert.ok(remote.asked && remote.reasons.some(r => /is checked with you from now on/u.test(r)), flag);
     const again = await observe(s, 'img_view', REMOTE, 'deny', ctx);
     assert.equal(again.asked, true, `${flag}: 「この会話では許可」にしても、2 回目もまた確かめる`);
     assert.equal(again.outcome.decidedBy, 'user', flag);

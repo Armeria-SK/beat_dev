@@ -3,20 +3,27 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import { atomicWriteFile } from '../../config/store.ts';
 import { languageOf } from '../../shared/language.ts';
+import { appendDelta, lineDelta } from '../../shared/line-delta.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { approvalPaths } from '../approvals.ts';
 import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
 import { isToolConfigPath } from '../hooks/tool-config.ts';
+import { askBeforeRegister } from '../skills/store.ts';
 import { isUnderDownloads } from './downloads-core.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
 const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git' } as const;
 
 const MAX_READ_BYTES = 512 * 1024;
+const MAX_DELTA_BYTES = 4 * 1024 * 1024;
 const MAX_WRITE_CHARS = 1_000_000;
 
 type Need = 'read' | 'write';
+
+export function previousForDelta(abs: string, io: { size: (path: string) => number; read: (path: string) => string } = { size: p => statSync(p).size, read: p => readFileSync(p, 'utf8') }): string | null {
+  try { return io.size(abs) <= MAX_DELTA_BYTES ? io.read(abs) : null; } catch { return null; }
+}
 
 export function checkFilePath(input: string, need: Need, ctx: ToolContext): { abs: string; check: PreCheck } {
   const language = languageOf(ctx.config);
@@ -35,7 +42,7 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
   // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
   if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] });
-  if (protectedKind) return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])], askKinds: ['persona'] });
+  if (protectedKind) return result({ decision: 'ask', reasons: [guardText(language, protectedKind === 'skill' && !askBeforeRegister(ctx.config) ? 'file.skill_auto' : FILE_KEYS[protectedKind])], askKinds: ['persona'] });
   // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる
   if (need === 'write' && isToolConfigPath(abs)) return result({ decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] });
   return result({ decision: 'allow', reasons: [] });
@@ -46,11 +53,11 @@ const shown = (abs: string, ctx: ToolContext) => {
   return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.replaceAll('\\', '/') : abs;
 };
 
-const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: '作業フォルダからの相対パス、または許可フォルダ内の絶対パス' });
+const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: 'A path relative to the working folder, or an absolute path inside an allowed folder' });
 
 export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }> = {
   name: 'file_read',
-  description: 'テキストファイルを読む。offset（何行目から、1始まり）と limit（何行）で一部だけ読める。',
+  description: 'Read a text file. With offset (the line to start from, starting at 1) and limit (how many lines) you can read just part of it.',
   input: Type.Object({ path: PathArg, offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'agent'],
@@ -79,7 +86,7 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
 
 export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwrite' | 'append' | 'create' }> = {
   name: 'file_write',
-  description: 'テキストファイルを書く。mode: overwrite（上書き・既定）/ append（末尾に追記）/ create（無いときだけ作る）。フォルダは自動で作る。',
+  description: 'Write a text file. mode: overwrite (overwrite; the default) / append (add to the end) / create (create only if it does not exist). Folders are created automatically.',
   input: Type.Object({
     path: PathArg, content: Type.String({ maxLength: MAX_WRITE_CHARS }),
     mode: Type.Optional(Type.Union([Type.Literal('overwrite'), Type.Literal('append'), Type.Literal('create')])),
@@ -100,15 +107,21 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     // （ask は実行前に承認済みなので、ここでは deny だけを止める）
     const recheck = checkFilePath(abs, 'write', ctx).check;
     if (recheck.decision === 'deny') return { content: toolText(language, 'file.recheck_failed', { detail: recheck.reasons.join(' / ') }), isError: true };
-    const next = input.mode === 'append' && exists ? readFileSync(abs, 'utf8') + input.content : input.content;
+    const appending = input.mode === 'append' && exists;
+    const current = appending ? readFileSync(abs, 'utf8') : '';
+    const next = appending ? current + input.content : input.content;
+    const before = appending ? null : exists ? previousForDelta(abs) : '';
     atomicWriteFile(abs, next);
-    return { content: toolText(language, 'file.wrote', { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') }) };
+    const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
+    const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
+    if (!delta) return { content: toolText(language, 'file.wrote', params) };
+    return { content: toolText(language, 'file.wrote_lines', { ...params, added: delta.added.toLocaleString('en-US'), removed: delta.removed.toLocaleString('en-US') }) };
   },
 };
 
 export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: boolean }> = {
   name: 'file_edit',
-  description: 'ファイルの一部を置き換える。old はファイル内でちょうど1回だけ現れる文字列にする（all=true なら全部置き換える）。',
+  description: 'Replace part of a file. old must be text that appears exactly once in the file (with all=true, every occurrence is replaced).',
   input: Type.Object({ path: PathArg, old: Type.String({ minLength: 1 }), new: Type.String(), all: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'write',
   folderGrant: true,
@@ -133,10 +146,10 @@ export const HEAVY_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv
 
 export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }> = {
   name: 'file_list',
-  description: 'フォルダの中身を一覧する。path を省略すると作業フォルダ。depth で何階層下まで見るか（既定 1、最大 4）。node_modules・.git など大きなフォルダの中は、既定では一覧しない（all を true にするか、path にそのフォルダを指定したときだけ中に入る）。',
+  description: 'List the contents of a folder. If path is omitted, the working folder. depth is how many levels down to look (default 1, max 4). The insides of large folders such as node_modules and .git are not listed by default (it goes inside only when all is true or path names that folder).',
   input: Type.Object({
     path: Type.Optional(PathArg), depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
-    all: Type.Optional(Type.Boolean({ description: 'node_modules・.git など大きなフォルダの中も一覧する' })),
+    all: Type.Optional(Type.Boolean({ description: 'Also list the insides of large folders such as node_modules and .git' })),
   }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'agent'],

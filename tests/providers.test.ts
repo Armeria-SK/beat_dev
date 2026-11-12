@@ -5,13 +5,12 @@ import type { ChatMessage, ImageRef } from '../src/engine/types.ts';
 import { AnthropicAdapter, toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { evaluateContext } from '../src/providers/context.ts';
 import { checkBaseUrl, parseRetryAfter, readSseData } from '../src/providers/http.ts';
-import { contextLengthFromShow, OllamaAdapter, toOllamaMessages } from '../src/providers/ollama.ts';
 import { OpenAiCompatibleAdapter, toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import { ProviderError, type ModelRequest, type StreamEvent } from '../src/providers/types.ts';
 import { fakeServer, sse } from './helpers.ts';
 
 const model = (over: Partial<ModelConfig> = {}): ModelConfig => ({
-  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over,
+  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, vision: false, ...over,
 });
 const request = (m: ModelConfig, over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: m, system: { frozen: 'あなたは Clive', dynamic: '現在時刻' }, messages: [{ role: 'user', content: 'こんにちは' }],
@@ -171,54 +170,6 @@ test('probe: 接続できなければ unreachable', async () => {
   assert.equal(result.status, 'unreachable');
 });
 
-// ── Ollama ────────────────────────────────────────────────
-
-const ollama = (baseUrl: string): ProviderConfig => ({ id: 'p', kind: 'ollama', baseUrl, maxParallel: 1, timeoutMs: 10_000 });
-
-test('Ollama: num_ctx を毎回送り、NDJSON を読む', async t => {
-  const server = await fakeServer((_req, _body, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-    res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'やあ' }, done: false })}\n`);
-    res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'task_list', arguments: { status: 'ready' } } }] }, done: false })}\n`);
-    res.end(`${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'stop', prompt_eval_count: 120, eval_count: 9 })}\n`);
-  });
-  t.after(() => server.close());
-  const events = await collect(new OllamaAdapter(ollama(server.url), {}).stream(request(model({ contextLength: 65536 }))));
-  assert.equal(server.requests[0]!.body.options.num_ctx, 65536);
-  assert.equal(server.requests[0]!.body.options.num_predict, 1024);
-  assert.equal(text(events), 'やあ');
-  const call = events.find(e => e.type === 'tool_call') as Extract<StreamEvent, { type: 'tool_call' }>;
-  assert.equal(call.call.name, 'task_list');
-  assert.deepEqual(call.call.arguments, { status: 'ready' });
-  assert.deepEqual(events.find(e => e.type === 'usage'), { type: 'usage', usage: { inputTokens: 120, outputTokens: 9 } });
-  assert.deepEqual(events.at(-1), { type: 'done', stop: 'tool_use' });
-});
-
-test('Ollama: model_info から上限を読み、設定が上限を超えれば exceeds_model', async t => {
-  const server = await fakeServer((_req, body, res) => {
-    if (body.model === 'missing') { res.writeHead(404); res.end('{"error":"model not found"}'); return; }
-    res.writeHead(200); res.end(JSON.stringify({ model_info: { 'qwen3.context_length': 32768 }, capabilities: ['completion', 'tools'] }));
-  });
-  t.after(() => server.close());
-  const adapter = new OllamaAdapter(ollama(server.url), {});
-  const over = await adapter.probe(model({ contextLength: 65536 }), 65536);
-  assert.equal(over.status, 'exceeds_model');
-  assert.equal(over.modelMax, 32768);
-  const small = await adapter.probe(model({ contextLength: 8192, minContext: 1024 }), 65536);
-  assert.equal(small.status, 'too_small');
-  assert.deepEqual(small.capabilities, ['completion', 'tools']);
-  const ok = await adapter.probe(model({ contextLength: 32768, minContext: 1024 }), 16384);
-  assert.equal(ok.status, 'ok');
-  assert.equal((await adapter.probe(model({ model: 'missing' }), 1024)).status, 'not_found');
-  assert.equal(contextLengthFromShow({ model_info: { 'llama.context_length': 8192 } }), 8192);
-});
-
-test('Ollama: 起動していなければ unreachable', async () => {
-  const result = await new OllamaAdapter(ollama('http://127.0.0.1:9'), {}).probe(model(), 1024);
-  assert.equal(result.status, 'unreachable');
-  assert.match(result.message, /起動/);
-});
-
 // ── Anthropic ─────────────────────────────────────────────
 
 function anthropicSse(events: Array<{ type: string } & Record<string, unknown>>): Response {
@@ -303,7 +254,6 @@ function withoutImages(history: ChatMessage[]): ChatMessage[] {
 }
 const anthropicOf = (h: ChatMessage[], vision: boolean) => toAnthropicMessages(h, vision);
 const openAiOf = (h: ChatMessage[], vision: boolean) => toOpenAiMessages('sys', h, vision);
-const ollamaOf = (h: ChatMessage[], vision: boolean) => toOllamaMessages('sys', h, vision);
 const json = (v: unknown) => JSON.stringify(v);
 const roles = (out: Array<{ role: string }>) => out.map(m => m.role);
 
@@ -311,28 +261,25 @@ const roles = (out: Array<{ role: string }>) => out.map(m => m.role);
 const BEFORE = {
   anthropic: '[{"role":"user","content":[{"type":"text","text":"見て"}]},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"image_view","input":{"path":"a.png"}},{"type":"tool_use","id":"c2","name":"file_read","input":{"path":"b.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"結果1"},{"type":"tool_result","tool_use_id":"c2","content":"結果2"}]},{"role":"assistant","content":[{"type":"text","text":"見ました","cache_control":{"type":"ephemeral"}}]}]',
   openAi: '[{"role":"system","content":"sys"},{"role":"user","content":"見て"},{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"image_view","arguments":"{\\"path\\":\\"a.png\\"}"}},{"id":"c2","type":"function","function":{"name":"file_read","arguments":"{\\"path\\":\\"b.txt\\"}"}}]},{"role":"tool","tool_call_id":"c1","content":"結果1"},{"role":"tool","tool_call_id":"c2","content":"結果2"},{"role":"assistant","content":"見ました"}]',
-  ollama: '[{"role":"system","content":"sys"},{"role":"user","content":"見て"},{"role":"assistant","content":"","tool_calls":[{"function":{"name":"image_view","arguments":{"path":"a.png"}}},{"function":{"name":"file_read","arguments":{"path":"b.txt"}}}]},{"role":"tool","content":"結果1","tool_name":"image_view"},{"role":"tool","content":"結果2","tool_name":"file_read"},{"role":"assistant","content":"見ました"}]',
 };
 
-test('道具の結果の画像: 画像が無い履歴は、画像に対応する前と同じ JSON になる（3 つの提供元・vision の true / false）', () => {
+test('道具の結果の画像: 画像が無い履歴は、画像に対応する前と同じ JSON になる（2 つの提供元・vision の true / false）', () => {
   for (const vision of [true, false]) {
     assert.equal(json(anthropicOf(toolHistory(), vision)), BEFORE.anthropic);
     assert.equal(json(openAiOf(toolHistory(), vision)), BEFORE.openAi);
-    assert.equal(json(ollamaOf(toolHistory(), vision)), BEFORE.ollama);
   }
 });
 
-test('道具の結果の画像: vision が false なら画像を落とし、画像が無いときと同じ JSON になる（3 つの提供元）', () => {
+test('道具の結果の画像: vision が false なら画像を落とし、画像が無いときと同じ JSON になる（2 つの提供元）', () => {
   const histories = [toolHistory([PNG]), toolHistory([PNG], [JPG]), toolHistory(undefined, [JPG], false), toolHistory([PNG], undefined, false)];
   for (const history of histories) {
     const bare = withoutImages(history);
-    const outs = [anthropicOf(history, false), openAiOf(history, false), ollamaOf(history, false)].map(json);
-    assert.deepEqual(outs, [anthropicOf(bare, false), openAiOf(bare, false), ollamaOf(bare, false)].map(json));
+    const outs = [anthropicOf(history, false), openAiOf(history, false)].map(json);
+    assert.deepEqual(outs, [anthropicOf(bare, false), openAiOf(bare, false)].map(json));
     for (const out of outs) assert.ok(!out.includes('AAAA') && !out.includes('BBBB') && !out.includes('image from tool result'), out);
   }
   assert.equal(json(anthropicOf(toolHistory([PNG]), false)), BEFORE.anthropic);
   assert.equal(json(openAiOf(toolHistory([PNG]), false)), BEFORE.openAi);
-  assert.equal(json(ollamaOf(toolHistory([PNG]), false)), BEFORE.ollama);
 });
 
 test('Anthropic の道具の結果の画像: tool_result の中に [text, image] で入り、画像の無い結果は文字のまま', () => {
@@ -427,29 +374,7 @@ test('OpenAI 互換の道具の結果の画像: 利用者の添付の画像は�
   ] });
 });
 
-test('Ollama の道具の結果の画像: 道具の結果の並びが終わったあとに、画像だけの利用者の発言が 1 つ入る', () => {
-  const out = ollamaOf(toolHistory([PNG]), true);
-  assert.deepEqual(roles(out), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
-  assert.deepEqual(out[3], { role: 'tool', content: '結果1', tool_name: 'image_view' });
-  assert.deepEqual(out[4], { role: 'tool', content: '結果2', tool_name: 'file_read' });
-  assert.deepEqual(out[5], { role: 'user', content: '[image from tool result c1]', images: ['AAAA'] });
-});
-
-test('Ollama の道具の結果の画像: 2 つ目だけ・両方に画像があるときの順番と、最後の発言が道具の結果のとき', () => {
-  const second = ollamaOf(toolHistory(undefined, [JPG]), true);
-  assert.deepEqual(roles(second), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
-  assert.deepEqual(second[5], { role: 'user', content: '[image from tool result c2]', images: ['BBBB'] });
-  const both = ollamaOf(toolHistory([PNG], [JPG]), true);
-  assert.deepEqual(roles(both), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
-  assert.deepEqual(both[5], { role: 'user', content: '[image from tool result c1]\n[image from tool result c2]', images: ['AAAA', 'BBBB'] });
-  assert.deepEqual(roles(ollamaOf(toolHistory([PNG], undefined, false), true)), ['system', 'user', 'assistant', 'tool', 'tool', 'user']);
-});
-
-test('Ollama の道具の結果の画像: 利用者の添付の画像は今までどおり', () => {
-  assert.deepEqual(ollamaOf([{ role: 'user', content: 'これ', images: [PNG] }], true)[1], { role: 'user', content: 'これ', images: ['AAAA'] });
-});
-
-test('道具の結果の画像: 実際に送る本文にも、3 つの提供元とも画像が載る（Anthropic は tool_result の中、ほかは並びのあとの利用者の発言）', async t => {
+test('道具の結果の画像: 実際に送る本文にも、2 つの提供元とも画像が載る（Anthropic は tool_result の中、OpenAI 互換は並びのあとの利用者の発言）', async t => {
   const history = toolHistory([PNG], undefined, false);
 
   let anthropicBody: any;
@@ -463,18 +388,12 @@ test('道具の結果の画像: 実際に送る本文にも、3 つの提供元�
   const okReply = (_req: unknown, _body: unknown, res: Parameters<Parameters<typeof fakeServer>[0]>[2]) => sse(res, [{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]);
   const compatServer = await fakeServer(okReply);
   const blindServer = await fakeServer(okReply);
-  const ollamaServer = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(`${JSON.stringify({ message: { content: 'ok' }, done: true, done_reason: 'stop' })}\n`); });
-  t.after(async () => { await compatServer.close(); await blindServer.close(); await ollamaServer.close(); });
+  t.after(async () => { await compatServer.close(); await blindServer.close(); });
 
   await collect(new OpenAiCompatibleAdapter(compat(compatServer.url), {}).stream(request(model({ vision: true }), { messages: history })));
   const compatSent = compatServer.requests[0]!.body.messages;
   assert.deepEqual(roles(compatSent), ['system', 'user', 'assistant', 'tool', 'tool', 'user']);
   assert.equal(compatSent.at(-1).content[1].image_url.url, 'data:image/png;base64,AAAA');
-
-  await collect(new OllamaAdapter(ollama(ollamaServer.url), {}).stream(request(model({ vision: true }), { messages: history })));
-  const ollamaSent = ollamaServer.requests[0]!.body.messages;
-  assert.deepEqual(roles(ollamaSent), ['system', 'user', 'assistant', 'tool', 'tool', 'user']);
-  assert.deepEqual(ollamaSent.at(-1).images, ['AAAA']);
 
   await collect(new OpenAiCompatibleAdapter(compat(blindServer.url), {}).stream(request(model({ vision: false }), { messages: history })));
   assert.deepEqual(roles(blindServer.requests[0]!.body.messages), ['system', 'user', 'assistant', 'tool', 'tool']);

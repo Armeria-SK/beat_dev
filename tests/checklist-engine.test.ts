@@ -34,13 +34,12 @@ const call = (name: string, args: unknown): Script => async function* () {
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
-async function setup(t: { after: (fn: () => void) => void }, language: Language = 'ja') {
+async function setup(t: { after: (fn: () => void) => void }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
-  config.language = language;
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;
@@ -92,12 +91,12 @@ test('一覧は毎回の system の「毎回組み立てる部分」に入る（
   await run(s, [reply('次です')]);
   const [before, afterWrite, nextRun] = s.adapter().calls;
   assert.equal(s.adapter().calls.length, 3);
-  const heading = toolText('ja', 'checklist.section');
+  const heading = toolText('en', 'checklist.section');
   assert.ok(!before!.system.dynamic.includes(heading), '書く前は見出しが無い');
   for (const request of [afterWrite!, nextRun!]) {
     assert.ok(request.system.dynamic.includes(`${heading}\n- [ ] ${OPEN}\n- [>] ${ACTIVE}`), '見出しと、終わっていない項目が並びの順に入る');
     assert.ok(!request.system.dynamic.includes(DONE), '済みの項目は入らない');
-    assert.ok(!request.system.dynamic.includes(toolText('ja', 'checklist.section_tainted')), '外から読んでいない一覧に、印の文は付かない');
+    assert.ok(!request.system.dynamic.includes(toolText('en', 'checklist.section_tainted')), '外から読んでいない一覧に、印の文は付かない');
   }
   assert.equal(afterWrite!.system.frozen, before!.system.frozen, '固定の system は変わらない');
   assert.equal(nextRun!.system.frozen, before!.system.frozen);
@@ -109,12 +108,12 @@ test('全部 済み の一覧は、system に見出しも項目も入れない',
   await run(s, [call('checklist_write', { items: [{ text: DONE, status: 'done' }] }), reply('書きました')]);
   await run(s, [reply('次です')]);
   const last = s.adapter().calls.at(-1)!;
-  assert.ok(!last.system.dynamic.includes(toolText('ja', 'checklist.section')));
+  assert.ok(!last.system.dynamic.includes(toolText('en', 'checklist.section')));
   assert.ok(!last.system.dynamic.includes(DONE));
 });
 
-test('英語の設定なら、一覧の見出しも英語で入る', async t => {
-  const s = await setup(t, 'en');
+test('一覧の見出しは英語で入る', async t => {
+  const s = await setup(t);
   await run(s, [call('checklist_write', { items: [{ text: 'check the price', status: 'pending' }] }), reply('saved')]);
   const last = s.adapter().calls.at(-1)!;
   assert.ok(last.system.dynamic.includes(`${toolText('en', 'checklist.section')}\n- [ ] check the price`));
@@ -131,13 +130,13 @@ test('使用量の見積もり（contextUsage）にも一覧の分が入る（�
   assert.ok(filled.tokens - empty.tokens >= 5000, `一覧の分（30 × 約 190 文字）が増える: ${filled.tokens - empty.tokens}`);
 });
 
-for (const language of ['ja', 'en'] as const) {
+for (const language of ['en'] as const) {
   test(`外から読んだ実行が書いた一覧のあとの実行は「外から読んだ」で始まる（書き込みは確かめが出る。一覧の見出しにも印の文が付く）（${language}）`, async t => {
-    const s = await setup(t, language);
+    const s = await setup(t);
     await run(s, [call('web_fetch', FETCH), call('checklist_write', LIST), reply('written')]);
     assert.equal(readChecklist(s.app.kv, C)?.tainted, true, '前提: 外から読んだ実行が書いた一覧は印付きで保存される');
     const second = send(s, 'next', [call('file_write', WRITE), reply('done')]);
-    await expectAsked(s, second, language === 'ja' ? /作業の一覧/u : /work checklist/u);
+    await expectAsked(s, second, /work checklist/u);
     assert.equal(s.app.runs.get(second)!.tainted, 1, '実行の記録にも印が残る');
     const system = s.adapter().calls[3]!.system.dynamic;
     assert.ok(system.includes(toolText(language, 'checklist.section_tainted')), '一覧の見出しに、外から読んだ印の文が付く');
@@ -179,7 +178,7 @@ test('やり直し（retry）も、印付きの一覧が残っていれば「外
   s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
   const retried = s.app.engine.retry(C);
   assert.ok(retried.ok);
-  await expectAsked(s, retried.runId, /作業の一覧/u);
+  await expectAsked(s, retried.runId, /work checklist/u);
 });
 
 test('タスクの会話も同じ: 印付きの一覧が残っていれば、次のタスクの実行は「外から読んだ」で始まる（書き込みは確かめが出る）。印の無い一覧なら出ない', async t => {
@@ -194,7 +193,7 @@ test('タスクの会話も同じ: 印付きの一覧が残っていれば、次
     return started;
   };
   const tainted = await runTask(true);
-  await expectAsked(s, tainted.runId, /作業の一覧/u);
+  await expectAsked(s, tainted.runId, /work checklist/u);
   await tainted.done;
   assert.equal(s.app.runs.get(tainted.runId)!.tainted, 1);
   const clean = await runTask(false);

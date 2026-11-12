@@ -109,22 +109,22 @@ const ONCE_WITHOUT_PERSONA_REASON = ['dd if=x of=SOUL.md', 'cmd /c "type x > SOU
 
 // L2: スキルのフォルダと .git への書き込み（理由は場所ごと）
 const PROTECTED_PLACES_BASH: Array<[string, RegExp]> = [
-  ['echo x > skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
-  ['cp put.js skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
-  ['mkdir skills/a', /スキルのフォルダに書き込みます/u],
-  ['curl -o skills/a/SKILL.md https://example.com/x', /スキルのフォルダに書き込みます/u],
-  ['echo x > .git/hooks/pre-commit', /git のフォルダ（.git）に書き込みます/u],
-  ['mv x.sh sub/.git/hooks/post-merge', /git のフォルダ（.git）に書き込みます/u],
-  ['cp put.js .git/config', /git のフォルダ（.git）に書き込みます/u],
-  ['git clone https://example.com/x.git skills/x', /git の clone/u],
+  ['echo x > skills/a/SKILL.md', /It writes into the skills folder/u],
+  ['cp put.js skills/a/SKILL.md', /It writes into the skills folder/u],
+  ['mkdir skills/a', /It writes into the skills folder/u],
+  ['curl -o skills/a/SKILL.md https://example.com/x', /It writes into the skills folder/u],
+  ['echo x > .git/hooks/pre-commit', /It writes into a git folder \(\.git\)/u],
+  ['mv x.sh sub/.git/hooks/post-merge', /It writes into a git folder \(\.git\)/u],
+  ['cp put.js .git/config', /It writes into a git folder \(\.git\)/u],
+  ['git clone https://example.com/x.git skills/x', /git clone can run code/u],
   ['python tool.py .git/hooks/pre-commit', /python/u],
-  ['tar xf a.tgz -C skills/x', /展開/u],
-  ['tar xf a.tgz -C .git/hooks', /展開/u],
-  ['unzip a.zip -d skills/x', /展開/u],
+  ['tar xf a.tgz -C skills/x', /Expanding the archive/u],
+  ['tar xf a.tgz -C .git/hooks', /Expanding the archive/u],
+  ['unzip a.zip -d skills/x', /Expanding the archive/u],
 ];
 const PROTECTED_PLACES_PS: Array<[string, RegExp]> = [
-  ['Set-Content .git/config x', /git のフォルダ（.git）に書き込みます/u],
-  ['Expand-Archive a.zip -DestinationPath skills/x', /展開/u],
+  ['Set-Content .git/config x', /It writes into a git folder \(\.git\)/u],
+  ['Expand-Archive a.zip -DestinationPath skills/x', /Expanding the archive/u],
 ];
 
 test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書き込みは、シェルでは毎回確かめ（今回だけ）。読むだけは通す', t => {
@@ -134,13 +134,13 @@ test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書�
       const verdict = shell === 'bash' ? f.bash(command) : f.ps(command);
       assert.equal(verdict.decision, 'ask', `${shell}: ${command}: ${verdict.reasons.join(' / ')}`);
       assert.equal(verdict.onceOnly, true, `${shell}: ${command}`);
-      assert.match(verdict.reasons.join(), /人格・プロフィール/u, `${shell}: ${command}`);
+      assert.match(verdict.reasons.join(), /persona or profile file/u, `${shell}: ${command}`);
     }
   }
   for (const command of ['Get-ChildItem *.md | Remove-Item', 'Get-ChildItem tmp | Copy-Item -Destination .']) {
     const verdict = f.ps(command);
     assert.equal(verdict.onceOnly, true, command);
-    assert.match(verdict.reasons.join(), /パイプで流れてくる値/u, command);
+    assert.match(verdict.reasons.join(), /A value that comes through the pipe/u, command);
   }
   for (const command of ONCE_WITHOUT_PERSONA_REASON) {
     const verdict = f.bash(command);
@@ -375,7 +375,7 @@ test('V2: bash のバッククォートは書き方が判定できないので�
   const f = fixture(t);
   for (const verdict of [f.bash('echo `node put.js`'), f.ps('echo `node put.js`'), f.ps('``n`o`de --eval=1')]) {
     assert.equal(verdict.decision, 'deny');
-    assert.match(verdict.reasons.join(), /書き方を判定できません/u);
+    assert.match(verdict.reasons.join(), /The way it is written cannot be judged/u);
   }
   assert.equal(f.bash('echo $(node put.js)').onceOnly, true);
   assert.deepEqual(f.bash('echo $(node put.js)').scripts, [join(f.ws, 'put.js')]);
@@ -458,12 +458,12 @@ test('R1.7: 読むだけのコマンドの引数にある localhost は確かめ
   }
 });
 
-test('確かめの理由は、種類（code）と、日本語・英語の文で返る', t => {
+test('確かめの理由は、種類（code）と英語の文で返る（言語を指定しない設定でも）', t => {
   const f = fixture(t);
   const ja = f.bash('node put.js');
   assert.deepEqual(ja.askKinds, ['code']);
-  assert.match(ja.reasons.join(), /ファイルに書かれたコード/u);
-  assert.match(ja.reasons.join(), /node の put.js は、決まった形ではありません/u);
+  assert.match(ja.reasons.join(), /It runs code written in a file/u);
+  assert.match(ja.reasons.join(), /The put\.js of node is not in a fixed form/u);
   const en = checkShellCommand('node put.js', f.ws, { policy: f.policy, outsideRoots: 'ask', language: 'en', shell: 'bash', windows: false });
   assert.match(en.reasons.join(), /runs code written in a file/u);
   assert.match(en.reasons.join(), /not in a fixed form/u);

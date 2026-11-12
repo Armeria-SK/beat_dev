@@ -68,7 +68,7 @@ test('calculate: 位置の分からないエラーでは「?」を出す', async
   const s = setup(t);
   const out = await s.call('calculate', { expression: '2 +' });
   assert.equal(out.output.isError, true);
-  assert.doesNotMatch(out.output.content, /（ 文字目/u);
+  assert.doesNotMatch(out.output.content, /character \)/u);
   assert.match(out.output.content, /\?/u);
 });
 
@@ -81,7 +81,7 @@ test('date_calc: 月末に月を足すとその月の末日になる', async t =
 test('date_calc: 曜日を見る', async t => {
   const s = setup(t);
   const out = await s.call('date_calc', { op: 'weekday', date: '2026-11-06' });
-  assert.match(out.output.content, /金曜日/u);
+  assert.match(out.output.content, /Friday/u);
 });
 
 test('date_calc: タイムゾーンを変換する', async t => {
@@ -111,8 +111,8 @@ test('date_calc: add に date が無いと失敗', async t => {
   assert.equal(out.output.isError, true);
 });
 
-test('date_calc: 英語の設定では出力に日本語が混ざらない', async t => {
-  const s = setup(t, c => { c.language = 'en'; });
+test('date_calc: 出力に日本語が混ざらない', async t => {
+  const s = setup(t);
   for (const out of [
     await s.call('calculate', { expression: '1+2*3' }),
     await s.call('date_calc', { op: 'add', date: '2026-01-31', months: 1 }),

@@ -109,7 +109,7 @@ test('上限（20,000 件）を超えて歩ききれないときはふつうの�
     const v = run(c);
     assert.equal(v.decision, 'ask', `${c}: ${show(v)}`);
     assert.equal(v.onceOnly, false, c);
-    assert.match(v.reasons.join('\n'), /ワイルドカードに当たるものが多い/u, c);
+    assert.match(v.reasons.join('\n'), /The wildcard matches too many items/u, c);
   }
   writeFileSync(join(dir, 'zzz.pem'), 'KEY');
   for (const [run, c] of [[f.bash, 'grep -r x huge'], [f.bash, 'rg x huge']] as const) assert.equal(run(c).decision, 'deny', c);

@@ -3,36 +3,19 @@ import { uniqueId } from './settings/model.ts';
 
 // はじめの設定の、画面を使わない部分: 手順・続きの位置・モデルの入力から設定への書き換え。
 
-export type StepId = 'language' | 'you' | 'identity' | 'style' | 'model' | 'greeting';
-export const STEPS: readonly StepId[] = ['language', 'you', 'identity', 'style', 'model', 'greeting'];
+export type StepId = 'you' | 'identity' | 'style' | 'model' | 'greeting';
+export const STEPS: readonly StepId[] = ['you', 'identity', 'style', 'model', 'greeting'];
 
-export interface OnboardingSteps { language: boolean; user: boolean; identity: boolean; persona: boolean; model: boolean }
+export interface OnboardingSteps { user: boolean; identity: boolean; persona: boolean; model: boolean }
 export interface OnboardingState { done: boolean; steps: OnboardingSteps }
 
 // 左の一覧の「はじめの設定を続ける」から開いたとき、済んでいない最初の手順から始める。
 export function resumeStep(steps: OnboardingSteps): StepId {
-  if (!steps.language) return 'language';
   if (!steps.user) return 'you';
   if (!steps.identity) return 'identity';
   if (!steps.persona) return 'style';
   if (!steps.model) return 'model';
   return 'greeting';
-}
-
-export const STYLE_CHOICES = ['calm', 'friendly', 'direct', 'none'] as const;
-export type StyleChoice = (typeof STYLE_CHOICES)[number];
-
-export interface PersonaFields { userName: string; callMe: string; botName: string; style: StyleChoice | null; styleNote: string }
-
-// サーバーへ送る値。空の項目は送らない（送った項目だけが書かれ、済みになる）。
-export function personaInputOf(fields: PersonaFields, part: 'you' | 'identity' | 'style'): Record<string, string> {
-  const trimmed = (text: string) => text.trim();
-  if (part === 'you') return { ...(trimmed(fields.userName) ? { userName: trimmed(fields.userName) } : {}), ...(trimmed(fields.callMe) ? { callMe: trimmed(fields.callMe) } : {}) };
-  if (part === 'identity') return trimmed(fields.botName) ? { botName: trimmed(fields.botName) } : {};
-  return {
-    ...(fields.style && (fields.style !== 'none' || trimmed(fields.styleNote)) ? { style: fields.style } : {}),
-    ...(trimmed(fields.styleNote) ? { styleNote: trimmed(fields.styleNote) } : {}),
-  };
 }
 
 export const SERVER_KINDS = ['generic', 'lmstudio', 'llamacpp', 'tabbyapi', 'vllm', 'openrouter', 'openai'] as const;
@@ -104,7 +87,7 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     id: existing?.id ?? uniqueId(slug(form.model), models.map(m => m.id)),
     label: '', provider: providerId, model: form.model.trim(),
     ...(form.source === 'openai' && form.contextLength.trim() !== '' ? { contextLength: length } : {}),
-    minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false,
+    minContext: 8192, maxOutputTokens: 4096, vision: false,
   };
   const at = existing ? models.findIndex(m => m.id === existing.id) : -1;
   if (at >= 0) models[at] = { ...existing, ...model }; else models.push(model);
@@ -115,12 +98,6 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     ? { ...routing, chat: ids, background: ids }
     : { ...routing, chat: routing.chat.includes(model.id) ? routing.chat : [...routing.chat, model.id], background: routing.background.includes(model.id) ? routing.background : [...routing.background, model.id] };
   return { config: { ...config, providers, models, routing: next }, modelId: model.id };
-}
-
-// 設定のモーダルを開く前に、開く節を覚えさせる（Settings.tsx の SECTION_KEY と同じ）。
-export const OPEN_SETUP_EVENT = 'clive:open-setup';
-export function openSetup(): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(OPEN_SETUP_EVENT));
 }
 
 const SEEN_KEY = 'clive.onboardingSeen';

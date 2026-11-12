@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import { accessWidening, secretEntryAccess } from '../web/src/settings/access.ts';
 import { SECTION_GROUPS, sectionSlice, type Config } from '../web/src/settings/model.ts';
 
@@ -46,22 +45,20 @@ test('URL の入れ直しは確かめる（宛先が変わる）。token は確�
   assert.deepEqual(secretEntryAccess({ id: 'ghost', field: 'url' }, c), []);
 });
 
-test('確かめの文言は、ja/en とも差し込みが入り、en に日本語が混ざらない', () => {
-  const ja7 = [ja['access.notifyAdded']('p'), ja['access.notifyTarget']('p'), ja['access.notifyBody']('p'), ja['access.notifyKinds']('p', 'お知らせ'), ja['access.notifyEnabled']('p'), ja['access.notifyPublicUrl']('https://x.example'), ja['access.limitRaised']('notify.maxChannels', 4, 8)];
+test('確かめの文言は、差し込みが入り、日本語が混ざらない', () => {
   const en7 = [en['access.notifyAdded']('p'), en['access.notifyTarget']('p'), en['access.notifyBody']('p'), en['access.notifyKinds']('p', 'Info'), en['access.notifyEnabled']('p'), en['access.notifyPublicUrl']('https://x.example'), en['access.limitRaised']('notify.maxChannels', 4, 8)];
-  for (const text of [...ja7, ...en7]) assert.ok(text.includes('p') || text.includes('https://x.example') || text.includes('notify.maxChannels'), text);
-  assert.ok(ja7[3]!.includes('お知らせ') && en7[3]!.includes('Info'));
-  assert.ok(ja7[6]!.includes('4') && ja7[6]!.includes('8') && en7[6]!.includes('4') && en7[6]!.includes('8'));
+  for (const text of en7) assert.ok(text.includes('p') || text.includes('https://x.example') || text.includes('notify.maxChannels'), text);
+  assert.ok(en7[3]!.includes('Info'));
+  assert.ok(en7[6]!.includes('4') && en7[6]!.includes('8'));
   for (const text of en7) assert.doesNotMatch(text, /[\u3040-\u30ff\u4e00-\u9fff]/u, text);
 });
 
-test('通知の節は「動き」の組に入り、設定の notify を切り出す。画面の文言は ja/en で揃う', () => {
+test('通知の節は「動き」の組に入り、設定の notify を切り出す。画面の文言は en にある', () => {
   const ids = SECTION_GROUPS.flatMap(g => g.items.map(s => s.id));
   assert.ok(ids.includes('notify'));
   assert.deepEqual(sectionSlice(config({ channels: [] }), 'notify'), { channels: [] });
-  const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('settings.notify.')).sort();
-  assert.deepEqual(keys(en), keys(ja));
-  assert.ok(keys(ja).length > 40);
+  const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('notifications.kind.')).sort();
+  assert.ok(keys(en).length >= 6);
   for (const k of keys(en)) {
     const v = (en as Record<string, unknown>)[k];
     const text = typeof v === 'function' ? (v as (...a: unknown[]) => string)('x', 'y') : String(v);

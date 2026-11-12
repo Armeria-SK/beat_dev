@@ -15,12 +15,12 @@ export class WebAuth {
   constructor(origins: readonly string[], logins: readonly string[] = []) {
     for (const origin of origins) {
       const url = new URL(origin);
-      if (url.origin !== origin || !['http:', 'https:'].includes(url.protocol)) throw new Error(`origin の形式が正しくありません: ${origin}`);
+      if (url.origin !== origin || !['http:', 'https:'].includes(url.protocol)) throw new Error(`The origin is not in the right format: ${origin}`);
       const local = isLoopbackHost(url.hostname);
-      if (url.protocol !== 'https:' && !local) throw new Error(`この PC 以外から開く origin は https にしてください: ${origin}`);
+      if (url.protocol !== 'https:' && !local) throw new Error(`Use https for origins opened from outside this PC: ${origin}`);
       this.#byHost.set(url.host, { origin, local });
     }
-    if (logins.some(login => !LOGIN.test(login))) throw new Error('Tailscale のログイン名の形式が正しくありません');
+    if (logins.some(login => !LOGIN.test(login))) throw new Error('A Tailscale login name is not in the right format');
     this.origins = [...origins];
     this.#logins = new Set(logins.map(l => l.toLowerCase()));
   }

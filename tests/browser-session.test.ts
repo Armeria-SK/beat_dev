@@ -55,18 +55,18 @@ test('1 回目の呼び出しで起動する（それまでは起動しない）
   assert.equal(options.headless, true);
   assert.equal(options.channel, undefined);
   assert.equal(options.executablePath, undefined);
-  assert.equal(options.locale, 'ja-JP');
+  assert.equal(options.locale, Intl.DateTimeFormat().resolvedOptions().locale);
   await r.session.run(call(r), async () => undefined);
   assert.equal(r.driver.launches, 1, '2 回目は起動し直さない');
 });
 
-test('設定の channel / executablePath / headless / 言語を起動の選択へ渡す', async t => {
-  const r = rig(t, c => { c.tools.browser.channel = 'path'; c.tools.browser.executablePath = 'C:\\Browser\\b.exe'; c.tools.browser.headless = false; c.language = 'en'; });
+test('設定の channel / executablePath / headless と PC の locale を起動の選択へ渡す', async t => {
+  const r = rig(t, c => { c.tools.browser.channel = 'path'; c.tools.browser.executablePath = 'C:\\Browser\\b.exe'; c.tools.browser.headless = false; });
   await r.session.run(call(r), async () => undefined);
   const o = r.driver.current!.options;
   assert.equal(o.executablePath, 'C:\\Browser\\b.exe');
   assert.equal(o.headless, false);
-  assert.equal(o.locale, 'en-US');
+  assert.equal(o.locale, Intl.DateTimeFormat().resolvedOptions().locale);
   const r2 = rig(t, c => { c.tools.browser.channel = 'chrome'; });
   await r2.session.run(call(r2), async () => undefined);
   assert.equal(r2.driver.current!.options.channel, 'chrome');

@@ -23,7 +23,7 @@ export function toAnthropicMessages(messages: readonly ChatMessage[], vision: bo
     if (m.role === 'user') {
       const blocks: Block[] = [];
       if (vision) for (const img of m.images ?? []) blocks.push(imageBlock(img));
-      blocks.push({ type: 'text', text: m.content || '（空のメッセージ）' });
+      blocks.push({ type: 'text', text: m.content || '(empty message)' });
       push('user', blocks);
     } else if (m.role === 'assistant') {
       const blocks: Block[] = [];
@@ -32,7 +32,7 @@ export function toAnthropicMessages(messages: readonly ChatMessage[], vision: bo
         const input = call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : {};
         blocks.push({ type: 'tool_use', id: call.id, name: call.name, input });
       }
-      push('assistant', blocks.length ? blocks : [{ type: 'text', text: '（空の応答）' }]);
+      push('assistant', blocks.length ? blocks : [{ type: 'text', text: '(empty reply)' }]);
     } else {
       const images = vision ? m.images ?? [] : [];
       const content = images.length ? [...(m.content ? [{ type: 'text' as const, text: m.content }] : []), ...images.map(imageBlock)] : m.content;

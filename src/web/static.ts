@@ -20,7 +20,7 @@ export function serveStatic(root: string, req: IncomingMessage, res: ServerRespo
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   if (!existsSync(join(root, 'index.html'))) {
     res.writeHead(200, HEADERS('text/html; charset=utf-8'));
-    res.end('<!doctype html><meta charset="utf-8"><title>Clive</title><p>画面がまだビルドされていません。<code>npm run build:web</code> を実行してから開き直してください。</p>');
+    res.end('<!doctype html><meta charset="utf-8"><title>Clive</title><p>The screen has not been built yet. Run <code>npm run build:web</code>, then open this page again.</p>');
     return true;
   }
   try {

@@ -1,80 +1,6 @@
 import { defineMessages } from './define.ts';
 
-const ja = {
-  'error.empty_title': 'タイトルが空です',
-  'error.bad_cron': '繰り返しの指定（cron）が正しくありません: {cron}',
-  'error.not_found': 'タスク {id} がありません',
-  'error.not_proposal': '承認待ちの提案ではありません',
-  'error.not_schedule': '予定ではありません',
-  'error.running': '実行中です',
-  'error.schedule_cannot_run': '予定はそのままでは実行できません（今すぐ実行を使ってください）',
-  'error.waiting_answer': '返事を待っています。先に答えてください',
-  'error.previous_unfinished': '前回の実行がまだ終わっていません',
-  'error.not_cancelled': '取り消した状態ではないので、元に戻せません',
-  'error.no_cancel_record': '取り消す前の状態の記録が無いので、元に戻せません（「もう一度実行」を使ってください）',
-  'error.sibling_open': '同じ予定の別の実行が動いているので、元に戻せません',
-  'error.unavailable': 'タスクの仕組みが使えません',
-  'error.bad_when': 'when が日時として読めません（例: 2026-11-06T09:00:00+09:00）: {when}',
-  'error.bad_repeat': 'repeat の cron が正しくありません: {repeat}',
-  'error.tool_not_found': 'タスク {id} が見つかりません（task_list で確かめてください）',
-
-  'event.proposed': '提案として作成',
-  'event.repeat': '繰り返し: {cron}',
-  'event.recovered': '前回の実行が途中で止まったため、もう一度実行します',
-  'event.skipped': '前回の実行がまだ終わっていないため、今回は作りませんでした',
-  'event.created_from': '予定「{title}」から作成',
-  'event.answer': '質問「{question}」への返事: {text}',
-  'event.run_now': '今すぐ実行',
-  'event.uncancelled': '取り消しを元に戻しました',
-  'summary.done_from_ui': '画面から完了にしました',
-  'summary.cancelled_from_ui': '画面から取り消しました',
-
-  'reason.no_model': '使えるモデルが無いため待ちます: {detail}',
-  'reason.local_wait': '手元のモデルで話した会話から作ったタスクなので、使える手元のモデルが無いあいだは待ちます（外のモデルには回しません）',
-  'reason.preempted': 'ユーザーとの会話を優先するため中断しました（続きから再開します）',
-  'reason.checkpoint': '{minutes} 分後に再開します',
-  'reason.no_progress': '進展が無かったので、少し休んでから再開します',
-  'reason.stopped': '止められたので、少し休んでから再開します',
-  'reason.failed_retry': '失敗しました（{detail}）。{delay} 分後にもう一度試します',
-  'note.memo': 'メモ: {text}',
-  'note.memo_truncated': 'メモ（出力の上限で返事が途中で切れました。続きは書けていません）: {text}',
-  'stuck.question': '「{title}」を {strikes} 回進めようとしましたが、進め方が決まりません。どうするか教えてください（やめてよければ取り消してください）',
-
-  'title.review': '振り返り: {label}',
-  'title.review_running': '振り返り（{label}）',
-  'title.task': 'タスク: {title}',
-  'review.nothing': '振り返る記録がありませんでした',
-  'review.no_reply': '（返事なし）',
-  'review.truncated': '振り返りの返事が出力の上限で途中で切れたため、結果は使いませんでした（次の機会にやり直します）',
-  'review.local_skipped': 'ローカルのモデルで話した会話で、使えるローカルの裏方モデルが無いため、振り返りを飛ばしました（外のモデルには渡しません）',
-
-  'notify.waiting_reminder': '返事を待っています: {title}',
-  'notify.budget.title': '1時間の実行の上限に達したので、タスクを少し待たせています',
-  'notify.budget.body': '上限は 1 時間に {max} 回です（設定の worker.maxRunsPerHour）。急ぐタスクは「今すぐ実行」で動かせます',
-  'notify.review_no_model': '振り返りに使えるモデルがありません',
-  'notify.memory_tidy': '記憶の整理の案があります',
-  'notify.task_no_model': 'タスクを実行できるモデルがありません',
-  'notify.task_done': 'タスク完了: {title}',
-  'notify.task_question': '質問があります: {title}',
-  'notify.task_consult': '相談があります: {title}',
-  'notify.task_failed': 'タスク失敗: {title}',
-  'notify.approval_needed': '承認が必要です: {title}',
-  'notify.skill_draft': 'スキルの下書きを確かめてください: {name}',
-
-  'health.auth_title': 'モデル「{model}」の認証に失敗しています',
-  'health.failing_title': 'モデル「{model}」が続けて失敗しています（{count} 回）',
-  'health.auth_tail': 'API キーの設定を確かめてください。',
-  'health.failing_tail': '{minutes} 分間は予備のモデルを先に使います。',
-  'health.default_reason': '失敗',
-
-  'cron.daily': '毎日 {time}',
-  'cron.weekday': '平日 {time}',
-  'cron.weekly': '毎週{day}曜 {time}',
-  'cron.hourly': '毎時 {minute} 分',
-  'cron.interval': '{interval} 分ごと',
-} as const;
-
-const en: Record<keyof typeof ja, string> = {
+const en = {
   'error.empty_title': 'The title is empty',
   'error.bad_cron': 'The repeat setting (cron) is not valid: {cron}',
   'error.not_found': 'Task {id} was not found',
@@ -87,6 +13,13 @@ const en: Record<keyof typeof ja, string> = {
   'error.not_cancelled': 'It is not cancelled, so it cannot be restored',
   'error.no_cancel_record': 'There is no record of its state before it was cancelled, so it cannot be restored (use "Run again")',
   'error.sibling_open': 'Another run of the same schedule is still active, so this cannot be restored',
+  'error.not_template': 'This is not a repeating task, so it has no repeat setting to change',
+  'error.template_when': 'A repeating task starts at the times its repeat setting gives, so "when" cannot be set on it (change "repeat" instead)',
+  'error.not_deletable': 'Only a repeating task, or a timed task that has never run, can be deleted (cancel this one instead)',
+  'error.still_referenced': 'Another record (a curiosity item, a review, or a review conversation) still refers to this task, so it cannot be deleted (cancel it instead)',
+  'error.run_open': 'A run of this repeating task is still active, so it cannot be deleted yet',
+  'error.already_started': 'This task has already started, so its approval cannot be undone',
+  'error.not_approved': 'This task did not become ready through an approval, so there is no approval to undo',
   'error.unavailable': 'The task feature is not available',
   'error.bad_when': '"when" cannot be read as a date and time (example: 2026-11-06T09:00:00+09:00): {when}',
   'error.bad_repeat': 'The cron in "repeat" is not valid: {repeat}',
@@ -110,9 +43,11 @@ const en: Record<keyof typeof ja, string> = {
   'reason.no_progress': 'No progress was made, so it will rest for a while and then resume',
   'reason.stopped': 'It was stopped, so it will rest for a short while and then resume',
   'reason.failed_retry': 'It failed ({detail}). Will try again in {delay} min',
+  'reason.split': 'Reached {max} rounds of tool calls in one run, so it continues in a new run',
   'note.memo': 'Note: {text}',
   'note.memo_truncated': 'Note (the reply was cut off by the output limit and is incomplete): {text}',
   'stuck.question': 'I tried to work on "{title}" {strikes} times but could not decide how to proceed. Please tell me what to do (cancel it if you would rather drop it)',
+  'split.long_body': '"{title}" has run {runs} times in a row ({max} rounds of tool calls each) without finishing. It keeps going; cancel it if it is stuck',
 
   'title.review': 'Review: {label}',
   'title.review_running': 'Review ({label})',
@@ -131,9 +66,11 @@ const en: Record<keyof typeof ja, string> = {
   'notify.task_done': 'Task finished: {title}',
   'notify.task_question': 'I have a question: {title}',
   'notify.task_consult': 'I need your advice: {title}',
+  'notify.task_long': 'Taking a long time: {title}',
   'notify.task_failed': 'Task failed: {title}',
   'notify.approval_needed': 'Approval needed: {title}',
   'notify.skill_draft': 'Please review the skill draft: {name}',
+  'notify.skill_auto': 'Skill registered without review',
 
   'health.auth_title': 'Authentication failed for model "{model}"',
   'health.failing_title': 'Model "{model}" keeps failing ({count} times)',
@@ -148,6 +85,6 @@ const en: Record<keyof typeof ja, string> = {
   'cron.interval': 'Every {interval} min',
 };
 
-export const taskText = defineMessages('task', ja, en);
-export type TaskMessageKey = keyof typeof ja;
+export const taskText = defineMessages('task', en);
+export type TaskMessageKey = keyof typeof en;
 export type TaskErrorCode = Extract<TaskMessageKey, `error.${string}`>;

@@ -1,7 +1,7 @@
 import type { PermissionMode } from '../../src/shared/permission-mode.ts';
 import { ApiError, type ApprovalPathView, type ChecklistItem, type ChecklistStatus, type ModelChoice, type ModelView } from './api.ts';
 import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
-import type { IconName } from './icon-paths.ts';
+import type { IconName } from './icon-name.ts';
 import { probeMessage, serverText } from './server-text.ts';
 
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: Record<string, string | number> | undefined }

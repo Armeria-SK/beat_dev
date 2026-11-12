@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_ID_PATTERN } from '../src/config/schema.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { ja } from '../web/src/i18n/ja.ts';
 import { accessWidening, mcpSecretAccess } from '../web/src/settings/access.ts';
 import {
   addBody, addProblem, argsFromText, attempt, emptyAddForm, idFromName, previewAdd, previewServer, previewTool, reasonKey, revealHidden, sameShape, scrubSecrets, shapeChanges, summarize, tone,
@@ -202,10 +201,10 @@ test('理由の語は、画面の文言に対応する。知らない語は「�
   for (const reason of ['env_missing', 'connect_failed', 'timeout', 'list_failed', 'too_many_restarts', 'dropped', 'not_connected']) {
     const key = reasonKey(reason);
     assert.notEqual(key, 'settings.mcp.reason.other', reason);
-    assert.ok(key in ja && key in en, key);
+    assert.ok(key in en, key);
   }
   assert.equal(reasonKey('something new'), 'settings.mcp.reason.other');
-  assert.ok('settings.mcp.reason.other' in ja && 'settings.mcp.reason.other' in en);
+  assert.ok('settings.mcp.reason.other' in en);
 });
 
 // ---- 節・文言 ----
@@ -217,18 +216,17 @@ test('MCP の節は「動き」の組の通知の後に入り、設定の mcp �
   assert.deepEqual(sectionSlice({ mcp: { servers: [] } } as unknown as Config, 'mcp'), { servers: [] });
 });
 
-test('MCP の文言は ja/en で揃い、en に日本語が混ざらない。確かめの文は差し込みが入る', () => {
+test('MCP の文言は en にあり、日本語が混ざらない。確かめの文は差し込みが入る', () => {
   const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('settings.mcp.') || k.startsWith('access.mcp')).sort();
-  assert.deepEqual(keys(en), keys(ja));
-  assert.ok(keys(ja).length > 60);
+  assert.ok(keys(en).length > 30);
   for (const k of keys(en)) {
     const v = (en as Record<string, unknown>)[k];
     const text = typeof v === 'function' ? (v as (...a: unknown[]) => string)('x', 'y', 'z') : String(v);
     assert.doesNotMatch(text, /[\u3040-\u30ff\u4e00-\u9fff]/u, k);
   }
-  assert.ok(ja['access.mcpAdded']('files', 'node srv.mjs').includes('files'));
+  assert.ok(en['access.mcpAdded']('files', 'node srv.mjs').includes('files'));
   assert.ok(en['access.mcpTarget']('files', 'node srv.mjs').includes('node srv.mjs'));
-  assert.ok(ja['access.mcpToolAdded']('files', 'read_file').includes('read_file'));
+  assert.ok(en['access.mcpToolAdded']('files', 'read_file').includes('read_file'));
   assert.ok(en['access.mcpEnv']('files', 'TOKEN').includes('TOKEN'));
 });
 

@@ -8,14 +8,6 @@ const DAY_EN: Record<string, string> = { 月: 'Monday', 火: 'Tuesday', 水: 'We
 
 export type Freq = 'daily' | 'weekday' | 'weekly' | 'hourly' | 'interval';
 
-export const FREQ_LABELS: Record<Freq, string> = {
-  daily: '毎日（時刻指定）',
-  weekday: '平日のみ（月〜金）',
-  weekly: '毎週（曜日・時刻指定）',
-  hourly: '毎時（分指定）',
-  interval: 'N分ごと',
-};
-
 export function inferFreqFromCron(cron: string): Freq | null {
   const parts = cron.trim().split(/\s+/u);
   if (parts.length !== 5) return null;
@@ -72,6 +64,19 @@ export function cronToFields(cron: string, freq: Freq): Record<string, string> {
   return {};
 }
 
+export function startOfDayIn(timezone: string, now: number): number {
+  const format = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = format.format(now);
+  let first = Math.floor(now / 1000);
+  let before = first - 26 * 3600;
+  while (format.format(before * 1000) === today) before -= 3600;
+  while (first - before > 1) {
+    const middle = Math.floor((before + first) / 2);
+    if (format.format(middle * 1000) === today) first = middle; else before = middle;
+  }
+  return first * 1000;
+}
+
 export function nextRunAt(cron: string, timezone: string, after: number): number | null {
   try {
     const next = new Cron(cron, { paused: true, timezone }).nextRun(new Date(after));
@@ -86,7 +91,7 @@ export function describeCron(cron: string, language: Language = DEFAULT_LANGUAGE
   switch (freq) {
     case 'daily': return taskText(language, 'cron.daily', { time: f.time! });
     case 'weekday': return taskText(language, 'cron.weekday', { time: f.time! });
-    case 'weekly': return taskText(language, 'cron.weekly', { day: language === 'en' ? DAY_EN[f.day!] ?? f.day! : f.day!, time: f.time! });
+    case 'weekly': return taskText(language, 'cron.weekly', { day: DAY_EN[f.day!] ?? f.day!, time: f.time! });
     case 'hourly': return taskText(language, 'cron.hourly', { minute: f.minute! });
     case 'interval': return taskText(language, 'cron.interval', { interval: f.interval! });
   }

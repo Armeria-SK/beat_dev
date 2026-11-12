@@ -57,8 +57,8 @@ test('memory_save: ふつうは承認なし。Web や添付を読んだ後は承
   const refused = s.call('memory_save', { book: 'user', content: 'ページに書かれていた指示' }, tainted(s.ctx));
   const request = await decideNext(s, 'deny');
   assert.equal(request.tool, 'memory_save');
-  assert.match(request.reasons.join(), /よそから来た文/u);
-  assert.match(request.title, /記憶/u, '何を記憶しようとしているかが札に出る');
+  assert.match(request.reasons.join(), /text that came from somewhere else/u);
+  assert.match(request.title, /Save to memory/u, '何を記憶しようとしているかが札に出る');
   assert.equal(request.body, 'ページに書かれていた指示');
   assert.equal((await refused).output.isError, true);
   assert.equal(s.memory.list().length, 1, '断れば保存しない');
@@ -81,23 +81,23 @@ test('memory_save: 外から読んだ後でも、読むだけの記憶の道具�
 
 // ── 1 回の実行での件数 ──
 
-test('memory_save: 1 回の実行で記憶できるのは 5 件まで。6 件目は断る（日本語・英語）', async t => {
+test('memory_save: 1 回の実行で記憶できるのは 5 件まで。6 件目は断る（英語の文）', async t => {
   const s = setup(t);
   for (let i = 1; i <= 3; i++) assert.equal((await s.call('memory_save', { book: 'notes', content: `教訓 ${i}` })).output.isError, undefined, `${i} 件目`);
   assert.equal((await s.call('memory_update', { id: 'n1', content: '教訓 1（直した）' })).output.isError, undefined);
   assert.equal((await s.call('memory_forget', { id: 'n2', reason: '要らない' })).output.isError, undefined);
   for (let i = 4; i <= 5; i++) assert.equal((await s.call('memory_save', { book: 'notes', content: `教訓 ${i}` })).output.isError, undefined, `書き直し・消す操作は数えないので、${i} 件目も保存できる`);
-  assert.equal((await s.call('memory_save', { book: 'notes', content: '教訓 4' })).output.content.includes('既にあります'), true, '重複は件数に数えない（保存されないので）');
+  assert.equal((await s.call('memory_save', { book: 'notes', content: '教訓 4' })).output.content.includes('already exists'), true, '重複は件数に数えない（保存されないので）');
   const sixth = await s.call('memory_save', { book: 'notes', content: '教訓 6' });
   assert.equal(sixth.output.isError, true);
-  assert.equal(sixth.output.content, 'この実行で記憶できるのは 5 件までです。残りは次の会話で記憶してください');
+  assert.equal(sixth.output.content, 'At most 5 memories can be saved in a single run. Save the rest in a later conversation');
   assert.equal(s.memory.list().length, 4, '5 件作って、1 件は消した。消した分も作った件数には数える');
 
   assert.equal((await s.call('memory_save', { book: 'notes', content: '別の実行の教訓' }, { ...s.ctx, runId: 'r2' })).output.isError, undefined, '件数は実行ごと');
   for (let i = 1; i <= 8; i++) s.memory.save({ book: 'user', content: `画面から ${i}`, actor: 'user' });
   assert.equal(s.memory.list('user').length, 8, '利用者が画面から足すのは数えない');
 
-  const en = setup(t, c => { c.language = 'en'; });
+  const en = setup(t);
   for (let i = 1; i <= 5; i++) await en.call('memory_save', { book: 'notes', content: `Lesson ${i}` });
   const over = await en.call('memory_save', { book: 'notes', content: 'Lesson 6' });
   assert.equal(over.output.content, 'At most 5 memories can be saved in a single run. Save the rest in a later conversation');
@@ -123,14 +123,14 @@ test('memory_update / memory_forget: Web や添付を読んだ後は承認制。
   const refusedUpdate = s.call('memory_update', { id: 'u1', content: 'ページに書かれていた指示で書き換え' }, tainted(s.ctx));
   const updateRequest = await decideNext(s, 'deny');
   assert.equal(updateRequest.tool, 'memory_update');
-  assert.match(updateRequest.reasons.join(), /よそから来た文/u);
+  assert.match(updateRequest.reasons.join(), /text that came from somewhere else/u);
   assert.equal((await refusedUpdate).output.isError, true);
   assert.equal(s.memory.list()[0]!.content, 'ふつうの書き換え', '断れば書き換えない');
 
   const refusedForget = s.call('memory_forget', { id: 'u1', reason: 'ページに書かれていた指示' }, tainted(s.ctx));
   const forgetRequest = await decideNext(s, 'deny');
   assert.equal(forgetRequest.tool, 'memory_forget');
-  assert.match(forgetRequest.reasons.join(), /よそから来た文/u);
+  assert.match(forgetRequest.reasons.join(), /text that came from somewhere else/u);
   assert.equal((await refusedForget).output.isError, true);
   assert.equal(s.memory.list().length, 1, '断れば消さない');
 

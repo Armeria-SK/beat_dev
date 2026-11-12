@@ -73,7 +73,7 @@ export function registerMcpRoutes(router: Router, app: App): void {
     if (stillUsed(config, variable)) return { set: true };
     const osValue = fromOs(variable);
     try { removeEnvValue(app.paths.env, variable); if (!osValue) delete app.env[variable]; }
-    catch { app.log(`[WARN] MCP サーバー「${label}」の秘密（${variable}）を .env から消せませんでした。.env を直接開いて消してください`); }
+    catch { app.log(`[WARN] Could not remove the secret (${variable}) of MCP server "${label}" from .env. Open .env and remove it yourself`); }
     return osValue ? { set: true, source: 'os' } : { set: false };
   };
   const reconnect = (id: string): void => { void app.mcp.restart(id).catch(log); };

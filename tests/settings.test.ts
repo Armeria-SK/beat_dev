@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import { test } from 'node:test';
 import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
-import { getLanguagePreference, setLanguagePreference } from '../web/src/i18n/index.ts';
-import { ja } from '../web/src/i18n/ja.ts';
-import { adoptLanguageInDraft, configWithLanguage, loadPromptAnswer, savePromptAnswer, saveLanguage, shouldAskLanguage, withAdoptedLanguage } from '../web/src/language.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
@@ -24,8 +21,8 @@ function sample(): Config {
       { id: 'claude', kind: 'anthropic', maxParallel: 2, timeoutMs: 120000 },
     ],
     models: [
-      { id: 'big', provider: 'local', model: 'qwen', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false },
-      { id: 'sonnet', provider: 'claude', model: 'claude-sonnet', minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: true },
+      { id: 'big', provider: 'local', model: 'qwen', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, vision: false },
+      { id: 'sonnet', provider: 'claude', model: 'claude-sonnet', minContext: 8192, maxOutputTokens: 4096, vision: true },
     ],
     routing: { chat: ['big', 'sonnet'], background: ['big'], retriesPerModel: 1 },
     tools: { deny: ['.env'], shell: { enabled: true, allow: ['git status'] } },
@@ -35,14 +32,13 @@ function sample(): Config {
   };
 }
 
-test('設定の節: 13 つ・4 グループで、名前と説明が ja にも en にもある', () => {
+test('設定の節: 13 つ・4 グループで、名前と説明が en にある', () => {
   assert.equal(SECTION_GROUPS.length, 4);
   assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'notify', 'mcp', 'browser', 'worker', 'memory', 'about', 'look', 'server', 'file']);
   assert.equal(new Set(SECTION_IDS).size, SECTION_IDS.length);
   for (const group of SECTION_GROUPS) {
     for (const key of [group.label, ...group.items.flatMap(i => [i.label, i.desc])]) {
-      assert.ok(ja[key].length > 0 && en[key].length > 0, key);
-      if (key !== 'settings.group.clive') assert.notEqual(en[key], ja[key], `${key}: 訳し忘れ`);
+      assert.ok(en[key].length > 0, key);
     }
   }
   assert.equal(isSection('tools'), true);
@@ -50,21 +46,10 @@ test('設定の節: 13 つ・4 グループで、名前と説明が ja にも en
   assert.equal(isSection(null), false);
 });
 
-const SAME_IN_BOTH = new Set(['settings.group.clive', 'settings.models.fieldId']);
-
-test('辞書: 設定の画面の文字は ja と en の両方にあり、en は ja の写しではない', () => {
-  const keys = Object.keys(ja).filter(k => /^(settings|probe|langPrompt)\./u.test(k));
-  assert.ok(keys.length >= 200, `${keys.length} 件しか読めていない`);
-  for (const key of keys) {
-    const jaEntry = (ja as Record<string, unknown>)[key];
-    const enEntry = (en as Record<string, unknown>)[key];
-    assert.equal(typeof enEntry, typeof jaEntry, key);
-    if (typeof jaEntry === 'string' && !SAME_IN_BOTH.has(key)) assert.notEqual(enEntry, jaEntry, `${key}: 訳し忘れ`);
-  }
-  for (const status of ['ok', 'too_small', 'exceeds_model', 'unknown', 'unreachable', 'no_api_key', 'not_found', 'error', 'unchecked']) {
-    assert.ok(`probe.status.${status}` in ja, status);
-  }
-  assert.equal(Object.keys(ja).includes('settings.language.hint'), false, '仮の注意書きは外した');
+test('辞書: 設定の画面の文字は en にある', () => {
+  const keys = Object.keys(en).filter(k => /^(settings|probe)\./u.test(k));
+  assert.ok(keys.length >= 50, `${keys.length} 件しか読めていない`);
+  assert.equal(Object.keys(en).includes('settings.language.hint'), false, '仮の注意書きは外した');
 });
 
 test('変更の数: 何も変えていなければ 0、項目ごとに 1 件', () => {
@@ -98,13 +83,11 @@ test('変更の数: 並び（文字列の一覧）は 1 件、models / providers
   assert.equal(countChanges(saved, swapped), 0, 'models の並びは id で見るので、並べ替えだけは変更に数えない');
 });
 
-test('変更の数: language を足す・消すも 1 件で、「見た目」の節の変更になる', () => {
+test('language は画面では触らない: サーバーの設定に language があっても無くても「見た目」の節の変更にならない', () => {
   const saved = sample();
-  const draft = configWithLanguage(saved, 'en');
-  assert.equal(countChanges(saved, draft), 1);
-  assert.equal(sectionChanged(saved, draft, 'look'), true);
+  const draft = { ...saved, language: 'en' };
+  assert.equal(sectionChanged(saved, draft, 'look'), false);
   assert.equal(sectionChanged(saved, draft, 'models'), false);
-  assert.equal(countChanges(draft, configWithLanguage(draft, 'auto')), 1);
 });
 
 test('節の変更の印: 触った節だけに付く', () => {
@@ -148,7 +131,7 @@ test('問題の読み取り: 内容の検査（models.<id>: …・routing.chat: 
   assert.equal(parseProblem('/tools/shell/timeoutSec: Expected number', config).path, 'tools.shell.timeoutSec');
   assert.equal(parseProblem('/worker/maxRunsPerHour: x', config).section, 'worker');
   assert.equal(parseProblem('/memory/userMaxChars: x', config).section, 'memory');
-  assert.equal(parseProblem('/language: Expected union value', config).section, 'look');
+  assert.equal(parseProblem('/language: Expected union value', config).section, null, '画面に language の欄は無いので、どの節にも結ばない');
   const odd = parseProblem('the file could not be written', config);
   assert.equal(odd.section, null);
   assert.equal(odd.path, '');
@@ -261,55 +244,6 @@ test('行の印: 問題の文と、変更の有無', () => {
   assert.equal(differs(config, config, c => undefined), false);
 });
 
-test('Clive も英語にするかの質問: 設定に language が無く、画面が日本語以外で、まだ答えていないときだけ', () => {
-  const ask = (serverLanguage: 'auto' | 'ja' | 'en', screenLanguage: 'ja' | 'en', answered: boolean, loaded = true) => shouldAskLanguage({ serverLanguage, screenLanguage, answered, loaded });
-  assert.equal(ask('auto', 'en', false), true);
-  assert.equal(ask('auto', 'en', false, false), false, '設定をまだ読めていないあいだは聞かない（「いいえ」を誤って覚えさせない）');
-  assert.equal(ask('auto', 'ja', false), false, '画面が日本語なら聞かない');
-  assert.equal(ask('auto', 'en', true), false, '答えたら二度と聞かない');
-  assert.equal(ask('en', 'en', false), false, '設定で決まっていれば聞かない');
-  assert.equal(ask('ja', 'en', false), false);
-});
-
-test('質問の答えの保存: yes / no だけを覚え、保存できない環境でも落ちない', () => {
-  const store = new Map<string, string>();
-  const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
-  assert.equal(loadPromptAnswer(storage), null);
-  savePromptAnswer('no', storage);
-  assert.equal(loadPromptAnswer(storage), 'no');
-  savePromptAnswer('yes', storage);
-  assert.equal(loadPromptAnswer(storage), 'yes');
-  store.set('clive.languagePrompt', 'maybe');
-  assert.equal(loadPromptAnswer(storage), null);
-  const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
-  assert.equal(loadPromptAnswer(blocked), null);
-  assert.doesNotThrow(() => savePromptAnswer('yes', blocked));
-});
-
-test('言語の設定への書き込み: auto は language を消し、元の設定は変えない', () => {
-  const config = { timezone: 'Asia/Tokyo', language: 'en' };
-  assert.deepEqual(configWithLanguage(config, 'auto'), { timezone: 'Asia/Tokyo' });
-  assert.deepEqual(configWithLanguage(config, 'ja'), { timezone: 'Asia/Tokyo', language: 'ja' });
-  assert.deepEqual(configWithLanguage({ timezone: 'x' }, 'en'), { timezone: 'x', language: 'en' });
-  assert.deepEqual(config, { timezone: 'Asia/Tokyo', language: 'en' });
-});
-
-test('設定を開いたまま言語が保存されたとき: 保存済みと、触っていない編集中の language を合わせ、自分の編集は残す', () => {
-  const saved = { timezone: 'x' };
-  assert.equal(withAdoptedLanguage(saved, 'auto'), saved, 'language が無い = auto なら同じもの');
-  assert.equal(withAdoptedLanguage({ language: 'en' }, 'en').language, 'en');
-  const same = { language: 'en' };
-  assert.equal(withAdoptedLanguage(same, 'en'), same);
-  assert.deepEqual(withAdoptedLanguage(saved, 'en'), { timezone: 'x', language: 'en' });
-  assert.deepEqual(withAdoptedLanguage({ timezone: 'x', language: 'en' }, 'auto'), { timezone: 'x' });
-  assert.deepEqual(saved, { timezone: 'x' }, '元は変わらない');
-  const untouched = { timezone: 'x', memory: { userMaxChars: 1 } };
-  assert.deepEqual(adoptLanguageInDraft(untouched, undefined, 'en'), { timezone: 'x', memory: { userMaxChars: 1 }, language: 'en' }, '触っていなければ合わせる（ほかの編集は残る）');
-  const edited = { timezone: 'x', language: 'ja' };
-  assert.equal(adoptLanguageInDraft(edited, undefined, 'en'), edited, '自分で language を変えていれば、その編集を残す');
-  assert.deepEqual(adoptLanguageInDraft({ language: 'ja' }, 'ja', 'en'), { language: 'en' });
-});
-
 test('コピー: clipboard が使えればそれで、使えない・断られたときは選択してコピーに切り替え、できたかどうかを返す', async () => {
   const written: string[] = [];
   const fallback: string[] = [];
@@ -324,42 +258,6 @@ test('コピー: clipboard が使えればそれで、使えない・断られ�
   assert.equal(await copyText('e', { clipboard: { writeText: async () => { throw new Error('denied'); } }, selectionCopy: () => false }), false);
 });
 
-const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; setLanguagePreference('auto'); });
-
-test('saveLanguage: 設定を読み直して language だけを変えて PUT し、画面に反映する', async () => {
-  const calls: Array<{ url: string; method: string; body: unknown }> = [];
-  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
-    calls.push({ url, method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : undefined });
-    const body = (init.method ?? 'GET') === 'GET' ? { config: { timezone: 'Asia/Tokyo', server: { port: 4780 } } } : { config: {} };
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }) as typeof fetch;
-  await saveLanguage('en');
-  assert.deepEqual(calls.map(c => `${c.method} ${c.url}`), ['GET /api/settings', 'PUT /api/settings']);
-  assert.deepEqual(calls[1]!.body, { config: { timezone: 'Asia/Tokyo', server: { port: 4780 }, language: 'en' } });
-  assert.equal(getLanguagePreference(), 'en');
-
-  calls.length = 0;
-  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
-    calls.push({ url, method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : undefined });
-    const body = (init.method ?? 'GET') === 'GET' ? { config: { timezone: 'Asia/Tokyo', language: 'en' } } : { config: {} };
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }) as typeof fetch;
-  await saveLanguage('auto');
-  assert.deepEqual(calls[1]!.body, { config: { timezone: 'Asia/Tokyo' } }, 'auto は language を送らない');
-  assert.equal(getLanguagePreference(), 'auto');
-});
-
-test('saveLanguage: 保存に失敗したら画面の言語は変えない', async () => {
-  setLanguagePreference('ja');
-  globalThis.fetch = (async (_url: string, init: RequestInit = {}) => {
-    if ((init.method ?? 'GET') === 'GET') return new Response(JSON.stringify({ config: {} }), { status: 200 });
-    return new Response(JSON.stringify({ error: 'invalid_config', problems: ['/language: bad'] }), { status: 400 });
-  }) as typeof fetch;
-  await assert.rejects(saveLanguage('en'));
-  assert.equal(getLanguagePreference(), 'ja');
-});
-
 test('closeAction: 設定のモーダルを閉じるとき、保存していない変更があれば確かめ、保存している最中は待つ', () => {
   assert.equal(closeAction({ dirty: 0, busy: false }), 'close', '変更が無ければそのまま閉じる');
   assert.equal(closeAction({ dirty: 3, busy: false }), 'confirm', '変更があれば、捨てる前に確かめる');
@@ -367,15 +265,6 @@ test('closeAction: 設定のモーダルを閉じるとき、保存していな�
   assert.equal(closeAction({ dirty: 2, busy: true }), 'wait');
 });
 
-test('設定のモーダルの辞書: 閉じる確かめの文は ja にも en にもあり、件数が入る', () => {
-  assert.match(ja['settings.discard.body'](3), /3/u);
-  assert.match(en['settings.discard.body'](1), /1 unsaved change /u);
-  assert.match(en['settings.discard.body'](2), /2 unsaved changes /u);
-  for (const key of ['settings.close', 'settings.discard.title', 'settings.discard.keep', 'settings.discard.do'] as const) {
-    assert.ok(ja[key] && en[key], key);
-    assert.notEqual(ja[key], en[key], `${key} は訳してある`);
-  }
-});
 
 test('editsToKeep: 保存していない編集があるときだけ、残すものを返す', () => {
   const saved = sample();
@@ -417,10 +306,6 @@ test('restoreKept: 同じ値をほかの場所も先に変えていたら編集�
   assert.equal(restoreKept({ saved, draft: sample() }, latest).restored, false, '変更の無い残りは使わない');
 });
 
-test('設定を残した旨の辞書: ja にも en にもある', () => {
-  assert.ok(ja['settings.kept'].length > 0 && en['settings.kept'].length > 0);
-  assert.notEqual(ja['settings.kept'], en['settings.kept']);
-});
 
 test('モデルを足したとき、チャットも裏方も空の順番には、今の候補（設定のモデル全部）に新しいモデルを足して入れる', () => {
   const empty = { ...sample(), models: [], routing: { chat: [], background: [], retriesPerModel: 1 } };
@@ -476,13 +361,6 @@ test('保存の問題: issues があれば文を読み取らずに、そのま�
   }
   assert.deepEqual(problemsOf({ message: 'x' }, 'ただの失敗', config), [parseProblem('ただの失敗', config)], 'どちらも無ければ、渡された文');
   assert.deepEqual(problemsOf(undefined, 'ただの失敗', config), [parseProblem('ただの失敗', config)]);
-});
-
-test('設定の道具の節: 道具を使う回数の上限の説明に「0 は制限なし」が入る（ja・en）', () => {
-  assert.match(ja['settings.tools.maxSteps'], /道具/u);
-  assert.match(ja['settings.tools.maxStepsDesc'], /0.*制限なし/u);
-  assert.match(en['settings.tools.maxStepsDesc'], /0.*no limit/iu);
-  assert.doesNotMatch(en['settings.tools.maxSteps'] + en['settings.tools.maxStepsDesc'], /[\u3040-\u30ff\u4e00-\u9fff]/u);
 });
 
 // T-42: ブラウザの節

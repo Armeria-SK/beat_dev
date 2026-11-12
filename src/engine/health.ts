@@ -42,7 +42,7 @@ export class HealthMonitor {
   #succeed(modelId: string): void {
     if (this.#failures.delete(modelId) && this.#status.coolingDown(modelId)) {
       this.#status.endCooldown(modelId);
-      this.#log(`[INFO] model ${modelId}: 回復しました`);
+      this.#log(`[INFO] model ${modelId}: recovered`);
     }
   }
 
@@ -52,7 +52,7 @@ export class HealthMonitor {
     this.#failures.set(modelId, { count, reason });
     if (!immediate && count < FAILURE_THRESHOLD) return;
     this.#status.cooldown(modelId, this.#now() + COOLDOWN_MS, reason);
-    this.#log(`[WARN] model ${modelId}: ${count} 回続けて失敗したため、${COOLDOWN_MS / 60_000} 分間は予備のモデルを先に使います（${reason.split('\n')[0]}）`);
+    this.#log(`[WARN] model ${modelId}: failed ${count} time(s) in a row, so the fallback models are tried first for ${COOLDOWN_MS / 60_000} minutes (${reason.split('\n')[0]})`);
     const language = this.#language();
     this.#notifications.notify({
       kind: 'health_alert',

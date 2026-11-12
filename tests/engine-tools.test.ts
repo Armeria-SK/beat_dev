@@ -28,14 +28,13 @@ function textOnly(text: string): Script {
   return async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
 }
 
-async function setup(t: { after: (fn: () => void) => void }, model: Partial<ModelConfig> = {}, maxIterations = 16) {
+async function setup(t: { after: (fn: () => void) => void }, model: Partial<ModelConfig> = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...model }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
-  config.tools.maxIterations = maxIterations;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, adapterOverride: p => (adapter = new FakeAdapter(p)) });
@@ -107,9 +106,9 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   assert.equal(request.preview.length, 1);
   assert.match(request.preview[0]!.path, /put\.js$/u);
   assert.match(request.preview[0]!.text, /api\/settings/u, '動かすコードの中身が札に出る');
-  assert.match(request.reasons[0]!, /Clive 自身の設定・人格・承認・記憶に触れる文字/u, '理由の先頭に目印');
+  assert.match(request.reasons[0]!, /This code contains text that touches Clive itself/u, '理由の先頭に目印');
   assert.match(request.reasons[0]!, /config\.json/u);
-  assert.ok(request.reasons.some(r => /ファイルに書かれたコードを動かします/u.test(r)));
+  assert.ok(request.reasons.some(r => /It runs code written in a file/u.test(r)));
   assert.equal(existsSync(marker), false, '承認の前には動いていない');
 
   s.app.approvals.decide(request.id, 'deny');
@@ -117,7 +116,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   assert.ok(result.ok);
   assert.equal(existsSync(marker), false, '拒否したのに動いた');
   assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore, '設定ファイルが書き換わった');
-  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool' && /拒否/u.test(m.text))?.text ?? '', /ユーザーが実行を拒否しました/u);
+  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool' && /refused/u.test(m.text))?.text ?? '', /The user refused to run it/u);
 
   // 同じ文字のコマンドを、中身を変えてもう一度出しても、また確かめになる（拒否のあとも、許可のあとも）
   writeFileSync(join(s.paths.workspace, 'put.js'), "require('node:fs').writeFileSync('ran.txt', 'harmless');\n");
@@ -126,7 +125,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 2; i++) await new Promise(r => setTimeout(r, 10));
   const second = (s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>)[1]!;
   assert.ok(second, '2 回目も確かめが出る');
-  assert.doesNotMatch(second.approval.reasons[0]!, /Clive 自身/u, '無害な中身には目印が付かない');
+  assert.doesNotMatch(second.approval.reasons[0]!, /Clive itself/u, '無害な中身には目印が付かない');
   s.app.approvals.decide(second.approval.id, 'conversation');
   assert.ok((await again.done).ok);
   assert.equal(readFileSync(marker, 'utf8'), 'harmless', '許可すれば動く（拒否の確認が空振りでないことの対照）');
@@ -153,7 +152,7 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   assert.equal(results.length, 3);
   for (const text of results) {
     assert.ok(text.length < 9100, `16k のモデルでは、1 つの結果は、道具の仕様と今のやり取りを引いた残りの一部（約 8,700 文字より小さい）: ${text.length}`);
-    assert.match(text, /文字中 \d,\d{3} 文字だけを返しました/u);
+    assert.match(text, /only \d,\d{3} of [\d,]+ characters were returned/u);
   }
   assert.ok(results[0]!.length > results[1]!.length && results[1]!.length > results[2]!.length, '結果が積まれるほど、次の結果に許す量は小さくなる');
   const last = small.adapter().calls.at(-1)!;
@@ -165,7 +164,7 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   large.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
   assert.ok((await (await large.send('一覧を読んで')).done).ok);
   const big = large.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
-  assert.match(big, /文字中 16,000 文字だけを返しました/u, '大きなコンテキストでは、今までどおり 16,000 文字');
+  assert.match(big, /only 16,000 of [\d,]+ characters were returned/u, '大きなコンテキストでは、今までどおり 16,000 文字');
 });
 
 // 道具の数が 24 → 31 に増えて、固定の分（system と道具の仕様）が 16k の約 4 割になっても、結果が入りきらなくならない。
@@ -225,17 +224,6 @@ test('本文に書かれたツール呼び出し（<tool_call>）も拾って実
   assert.equal(s.app.conversations.messages('c1')[1]!.text, '作ります');
 });
 
-test('json_fallback のモデルには API のツールを渡さず、使い方を system に書く', async t => {
-  const s = await setup(t, { toolMode: 'json_fallback' });
-  s.adapter().scripts.push(textOnly('<tool_call>{"name": "file_list", "arguments": {}}</tool_call>'), reply('一覧しました'));
-  const { done } = await s.send('一覧して');
-  assert.ok((await done).ok);
-  const [first, second] = s.adapter().calls;
-  assert.equal(first!.tools.length, 0);
-  assert.match(first!.system.dynamic, /使える道具[\s\S]*file_list/u);
-  assert.deepEqual(second!.messages.map(m => m.role), ['user', 'assistant', 'user'], 'role: tool を送らない');
-});
-
 test('maxTools で渡すツールを絞れる', async t => {
   const s = await setup(t, { maxTools: 2 });
   s.adapter().scripts.push(reply('ok'));
@@ -249,17 +237,20 @@ test('引数の形が3回続けて正しくなければ止める', async t => {
   const result = await (await s.send('書いて')).done;
   assert.equal(result.ok, false);
   if (result.ok) return;
-  assert.match(result.errorMessage, /正しい形でツールを呼べませんでした/u);
+  assert.match(result.errorMessage, /could not call tools in a valid form/u);
   assert.equal(s.adapter().calls.length, 3);
 });
 
-test('呼び直しの上限に達したら止めて知らせる', async t => {
-  const s = await setup(t, {}, 2);
-  s.adapter().scripts.push(toolCall('file_list', {}), toolCall('file_list', {}), reply('届かない'));
+test('会話は回数で止まらない: 20 回道具を呼んでから普通に終わる', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...Array.from({ length: 20 }, () => toolCall('file_list', {})), reply('おわり'));
   const { runId, done } = await s.send('一覧を続けて');
-  assert.ok((await done).ok);
-  assert.ok(s.events.some(e => e.type === 'warning' && e.code === 'max_iterations'));
-  assert.match(s.app.runs.get(runId)!.flags, /max_iterations/u);
+  const result = await done;
+  assert.ok(result.ok);
+  assert.equal(s.adapter().calls.length, 21);
+  assert.deepEqual(JSON.parse(s.app.runs.get(runId)!.flags), []);
+  assert.deepEqual(s.events.filter(e => e.type === 'warning'), []);
+  assert.equal(s.app.conversations.messages('c1').at(-1)!.text, 'おわり');
 });
 
 test('承認を待っている間に止めたら、実行せずに中止する', async t => {
@@ -297,23 +288,21 @@ test('使用量: 道具の仕様と道具の往復も数に入り、次の送信
   assert.ok(withTools.tokens - withoutTools.tokens > 500, `道具の仕様の分が増える（${withTools.tokens} と ${withoutTools.tokens}）`);
 });
 
-// ── 6d: 道具を使う回数の上限なし（tools.maxIterations = 0） ──
+// ── 6d: 会話は道具を使う回数で止まらない ──
 
 function endlessTools(onCall: (calls: number) => void): Script {
   let calls = 0;
-  return async function* (req) {
+  return async function* () {
     calls++;
     onCall(calls);
-    // 道具を渡さない呼び出し（上限のまとめ）が来たら、まとめを返す
-    if (req.tools.length === 0) { yield { type: 'text', delta: 'まとめです' }; yield { type: 'done', stop: 'end_turn' as StopReason }; return; }
     const call: ToolCall = { id: `call_${calls}`, name: 'file_list', arguments: {} };
     yield { type: 'tool_call', call };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }
 
-async function runEndless(t: { after: (fn: () => void) => void }, maxIterations: number, stopAt: number) {
-  const s = await setup(t, {}, maxIterations);
+async function runEndless(t: { after: (fn: () => void) => void }, stopAt: number) {
+  const s = await setup(t);
   let runId = '';
   const script = endlessTools(calls => { if (calls === stopAt) s.app.engine.stop(runId); });
   const adapter = s.adapter();
@@ -324,8 +313,8 @@ async function runEndless(t: { after: (fn: () => void) => void }, maxIterations:
   return { s, result, calls: adapter.calls };
 }
 
-test('0 は制限なし: 100 回を超えて道具を使い続け、止めるボタン（取り消し）で止まる。まとめも上限のお知らせも出さない', async t => {
-  const { s, result, calls } = await runEndless(t, 0, 130);
+test('会話は制限なし: 100 回を超えて道具を使い続け、止めるボタン（取り消し）で止まる。まとめも上限のお知らせも出さない', async t => {
+  const { s, result, calls } = await runEndless(t, 130);
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.equal(result.errorKind, 'cancelled');
@@ -335,16 +324,6 @@ test('0 は制限なし: 100 回を超えて道具を使い続け、止めるボ
   const run = s.app.runs.get(result.runId)!;
   assert.deepEqual(JSON.parse(run.flags), []);
   assert.ok(run.iterations! >= 130);
-  assert.equal(s.app.conversations.messages('c1').some(m => m.role === 'assistant' && m.text === 'まとめです'), false);
-});
-
-test('上限 100 は今までどおり: 100 回目の呼び出しのあとで止まり、まとめを 1 回呼ぶ', async t => {
-  const { s, result, calls } = await runEndless(t, 100, 100_000);
-  assert.ok(result.ok);
-  assert.equal(calls.length, 101, '道具の呼び出し 100 回 + まとめ 1 回');
-  assert.equal(calls.at(-1)!.tools.length, 0);
-  assert.equal(result.text, 'まとめです');
-  assert.ok(s.events.some(e => e.type === 'warning' && e.code === 'max_iterations'));
 });
 
 // ── 段 4-4: 道具の結果の画像（X5 ToolOutput.images）のエンジンの側 ──
@@ -434,7 +413,7 @@ test('道具の結果の画像: 古い画像つきのやり取りを要約に回
   await runImages(s, '最新の質問');
   assert.ok(s.adapter().calls.length >= 2);
   const summaryCall = s.adapter().calls[0]!;
-  assert.match(JSON.stringify(summaryCall.messages), /会話の古い部分/u, '1 回目の呼び出しは要約の依頼');
+  assert.match(JSON.stringify(summaryCall.messages), /Older part of the conversation/u, '1 回目の呼び出しは要約の依頼');
   assert.match(JSON.stringify(summaryCall.messages), /img_ok/u, '要約に回った古い部分に、画像つきの道具の結果が入っている');
   assert.equal(JSON.stringify(s.adapter().calls).includes(MARK), false, '要約の依頼にも、そのあとの呼び出しにも画像は入らない');
   assert.ok(storedTool(s)[0]!.images, '原文の画像は DB に残る');
@@ -468,20 +447,6 @@ test('道具の結果の画像: 手元のモデルを選んだ会話の道具の
   const second = s.adapter().calls[1]!.messages.at(-1)!;
   assert.deepEqual(second.role === 'tool' ? second.images : undefined, [PNG], '手元のモデルには届く');
   assert.equal(s.adapters.get('remote')?.calls.length ?? 0, 0, '外の提供元は一度も呼ばれない（画像はどこへも新しくは出ない）');
-});
-
-test('道具の結果の画像: 本文で道具を呼ぶモデル（json_fallback）には、道具の結果をまとめた利用者の発言の images として渡る', async t => {
-  const s = await startApp(t, {
-    models: [fakeModel('m1', { toolMode: 'json_fallback', vision: true })],
-    tools: [imageTool('img_ok', () => ({ content: '画像を見せます', images: [PNG] }))],
-  });
-  s.adapter().scripts.push(textOnly('<tool_call>{"name": "img_ok", "arguments": {}}</tool_call>'), reply('見ました'));
-  await runImages(s, '画像を見て');
-  const second = s.adapter().calls[1]!.messages;
-  assert.deepEqual(second.map(m => m.role), ['user', 'assistant', 'user'], 'role: tool は送らない');
-  const last = second.at(-1)!;
-  assert.deepEqual(last.role === 'user' ? last.images : undefined, [PNG], '道具の結果をまとめた利用者の発言に画像がある');
-  assert.match(last.content, /img_ok」の結果/u);
 });
 
 test('見積もり: 道具の結果の画像は 1 枚ごとに IMAGE_TOKENS 増える（利用者の発言の画像と同じ数え方）。画像が無ければ今までどおり', () => {

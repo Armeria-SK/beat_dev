@@ -157,10 +157,10 @@ test('環境変数の名前: あればその名前、Anthropic は ANTHROPIC_API
   assert.equal(keyEnvName({ id: 'fake', kind: 'openai_compatible', apiKeyEnv: 'FAKE_KEY' }), 'FAKE_KEY');
   assert.equal(keyEnvName({ id: 'anthropic', kind: 'anthropic' }), 'ANTHROPIC_API_KEY');
   assert.equal(keyEnvName({ id: 'my-llm', kind: 'openai_compatible' }), 'CLIVE_MY_LLM_API_KEY');
-  assert.equal(keyEnvName({ id: 'a_b', kind: 'ollama' }), 'CLIVE_A_B_API_KEY');
-  assert.equal(keyEnvName({ id: 'a-b', kind: 'ollama' }, new Set(['CLIVE_A_B_API_KEY'])), 'CLIVE_A_B_API_KEY_2');
-  assert.equal(keyEnvName({ id: 'a-b', kind: 'ollama' }, new Set(['CLIVE_A_B_API_KEY', 'CLIVE_A_B_API_KEY_2'])), 'CLIVE_A_B_API_KEY_3');
-  assert.match(keyEnvName({ id: 'x'.repeat(40), kind: 'ollama' }), /^[A-Z][A-Z0-9_]{0,63}$/u, '一番長い ID でも名前の形に収まる');
+  assert.equal(keyEnvName({ id: 'a_b', kind: 'openai_compatible' }), 'CLIVE_A_B_API_KEY');
+  assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['CLIVE_A_B_API_KEY'])), 'CLIVE_A_B_API_KEY_2');
+  assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['CLIVE_A_B_API_KEY', 'CLIVE_A_B_API_KEY_2'])), 'CLIVE_A_B_API_KEY_3');
+  assert.match(keyEnvName({ id: 'x'.repeat(40), kind: 'openai_compatible' }), /^[A-Z][A-Z0-9_]{0,63}$/u, '一番長い ID でも名前の形に収まる');
 });
 
 test('鍵を持つ名前だけを書く（isSecretEnvName）: PATH などの環境変数は、鍵の名前として書き換えない', () => {

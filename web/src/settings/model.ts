@@ -60,7 +60,7 @@ export function sectionSlice(config: Config, section: SettingsSection): unknown 
     case 'browser': return config.tools?.browser;
     case 'worker': return config.worker;
     case 'memory': return config.memory;
-    case 'look': return [config.profile, config.language ?? null];
+    case 'look': return config.profile;
     case 'server': return config.server;
     default: return undefined;
   }
@@ -100,7 +100,7 @@ export interface Problem {
 }
 
 const SECTION_OF_ROOT: Record<string, SettingsSection> = {
-  models: 'models', routing: 'models', providers: 'providers', tools: 'tools', notify: 'notify', mcp: 'mcp', worker: 'worker', memory: 'memory', profile: 'look', language: 'look', server: 'server',
+  models: 'models', routing: 'models', providers: 'providers', tools: 'tools', notify: 'notify', mcp: 'mcp', worker: 'worker', memory: 'memory', profile: 'look', server: 'server',
 };
 
 // サーバーの問題は文字列で返る。「/models/0/contextLength: Expected…」（形の検査。0 は一覧の位置）か
@@ -128,7 +128,7 @@ export function parseProblem(text: string, config: Config): Problem {
   return problem;
 }
 
-// code / params: 形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。message はサーバーの日本語の文
+// code / params: 形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。message はサーバーの英語の文
 export interface ServerIssue { path: string; message: string; code?: string; params?: Record<string, unknown> }
 const isIssue = (value: unknown): value is ServerIssue =>
   isPlain(value) && typeof value.path === 'string' && typeof value.message === 'string';
@@ -186,7 +186,7 @@ export function uniqueId(base: string, taken: readonly string[]): string {
 export function addModel(config: Config): { config: Config; id: string } {
   const providers = config.providers as Array<{ id: string }>;
   const id = uniqueId('new-model', (config.models as Array<{ id: string }>).map(m => m.id));
-  const model = { id, label: '', provider: providers[0]?.id ?? '', model: '', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false };
+  const model = { id, label: '', provider: providers[0]?.id ?? '', model: '', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, vision: false };
   const ids = (config.models as Array<{ id: string }>).map(m => m.id);
   const routing = config.routing as { chat: string[]; background: string[] };
   // チャットも裏方も順番が空のときは、サーバーが設定のモデル全部を候補にする。足したモデルが他のモデルを押しのけないよう、今の候補に足した順番にする

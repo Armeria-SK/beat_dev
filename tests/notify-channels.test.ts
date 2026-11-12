@@ -106,7 +106,7 @@ test('T-08 local_only の通知は、題が決まった文になり、本文は�
     const sent = call.init.body as string;
     assert.doesNotMatch(sent, /PRIVATE/u);
     assert.ok(!sent.includes('"body"'));
-    assert.match(sent, /"title":"Clive: 手元のモデル/u);
+    assert.match(sent, /"title":"Clive: [^"]*work on a local model/u);
   }
 });
 
@@ -180,7 +180,7 @@ test('T-11 URL・token・応答の本文は、ログ・kv・status に出ない'
   await s.channels.deliver(ev('task_failed'));
   const all = JSON.stringify([s.logs, s.alerts, s.channels.status(), s.kv.get('notify:channel:phone')]);
   assert.doesNotMatch(all, /SECRETPATH|tok-abc|hooks\.example/u);
-  assert.match(s.logs.join('\n'), /\[WARN\] 通知の送り先「phone」に送れませんでした/u);
+  assert.match(s.logs.join('\n'), /\[WARN\] Could not send to notification destination "phone"/u);
 });
 
 test('T-12 failsBeforeAlert 回続けて失敗すると health_alert が 1 件。外へ送らない印つき。成功で 0 に戻る', async () => {
@@ -253,7 +253,7 @@ test('T-19 test は無効なチャネルにも決まった文を送り、上限�
   const s = setup(config({ channel: { enabled: false }, notify: { limits: { maxSendsPerHour: 1 } } }));
   assert.deepEqual(await s.channels.test('phone'), { ok: true });
   assert.deepEqual(await s.channels.test('phone'), { ok: true });
-  assert.match(s.calls[0]!.init.body as string, /Clive からの試しの通知です/u);
+  assert.match(s.calls[0]!.init.body as string, /This is a test notification from Clive/u);
   assert.equal(await s.channels.test('nope'), undefined);
   const fail = setup(config(), [500, 500]);
   assert.deepEqual(await fail.channels.test('phone'), { ok: false, reason: 'http_500' });

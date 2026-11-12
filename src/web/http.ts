@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Language } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { ConfigError } from '../config/store.ts';
 import type { LocalizedError, MessageParams } from '../shared/messages/define.ts';
 import { httpText, type HttpMessageKey } from '../shared/messages/http.ts';
@@ -22,7 +22,7 @@ export class HttpProblem extends Error {
 
 export function problem(status: number, error: string, key: HttpMessageKey, options: { field?: string; params?: MessageParams } = {}): HttpProblem {
   const params = options.params ?? {};
-  const body = { error, ...(options.field ? { field: options.field } : {}), message: httpText('ja', key, params), code: `http.${key}`, ...(Object.keys(params).length ? { params } : {}) };
+  const body = { error, ...(options.field ? { field: options.field } : {}), message: httpText(DEFAULT_LANGUAGE, key, params), code: `http.${key}`, ...(Object.keys(params).length ? { params } : {}) };
   return new HttpProblem(status, body, language => httpText(language, key, params));
 }
 

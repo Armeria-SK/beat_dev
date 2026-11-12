@@ -61,14 +61,13 @@ export function evaluateContext(f: ContextFacts): ProbeResult {
   return { ...base, status: 'ok', effective, ...probeText(language, 'probe.ok', { effective: fmt(effective), note }, { effective: fmt(effective), ...(note && f.unmeasuredNote ? { noteCode: `provider.${f.unmeasuredNote}` } : {}) }) };
 }
 
-type HintKind = 'ollama' | 'lmstudio' | 'llamacpp' | 'vllm' | 'tabbyapi' | 'generic' | 'hosted';
+type HintKind = 'lmstudio' | 'llamacpp' | 'vllm' | 'tabbyapi' | 'generic' | 'hosted';
 
 export function contextHint(language: Language, kind: HintKind, required: number): string {
   return providerText(language, `hint.${kind}`, { required: fmt(required) });
 }
 
 export const CONTEXT_HINTS = {
-  ollama: (required: number) => contextHint(DEFAULT_LANGUAGE, 'ollama', required),
   lmstudio: (required: number) => contextHint(DEFAULT_LANGUAGE, 'lmstudio', required),
   llamacpp: (required: number) => contextHint(DEFAULT_LANGUAGE, 'llamacpp', required),
   vllm: (required: number) => contextHint(DEFAULT_LANGUAGE, 'vllm', required),
