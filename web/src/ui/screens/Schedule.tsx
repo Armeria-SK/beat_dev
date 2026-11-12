@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { api, ApiError, type RepeatingTask, type ScheduleView, type Task } from '../../api.ts';
+import { api, ApiError, type Project, type RepeatingTask, type ScheduleView, type Task } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatDateTimeSmart, formatRelative, formatZonedInput, getTimezone, startOfDay, timezoneLabel, useT } from '../../i18n/index.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, FREQS, PRIORITIES, type DraftError, type Freq, type TaskDraft } from '../../task-form.ts';
@@ -14,11 +14,13 @@ import {
 } from '../schedule.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
 import { buildRows, dayHours, nowAt, scrollToNow, windowOf, type Bar, type Range, type Stream, type TimeWindow } from '../timeline.ts';
-import { PRIORITY_KEY } from './Kanban.tsx';
+import { productName, withProduct } from '../product-meta.ts';
+import { sidebarOrder } from '../products.ts';
+import { PRIORITY_KEY, ProductPick } from './Kanban.tsx';
 
 type T = ReturnType<typeof useT>;
 
-export interface ScheduleProps { revision: number }
+export interface ScheduleProps { revision: number; projects: readonly Project[] }
 
 interface Loaded { repeating: RepeatingTask[]; active: Task[]; schedule: ScheduleView; range: Range; window: TimeWindow }
 
@@ -70,10 +72,11 @@ function RuleFields({ draft, set, zone }: { draft: TaskDraft; set: (patch: Parti
   );
 }
 
-function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; onClose: () => void; onSaved: () => void }) {
+function ScheduleForm({ task, projects = [], onClose, onSaved }: { task: RepeatingTask | null; projects?: readonly Project[]; onClose: () => void; onSaved: () => void }) {
   const t = useT();
   const [start] = useState(() => (task ? draftFromTask(task) : { draft: { ...emptyDraft(), when: 'repeat' as const }, ruleKnown: true }));
   const [draft, setDraft] = useState<TaskDraft>(start.draft);
+  const [product, setProduct] = useState<string | null>(null);
   const [ruleOpen, setRuleOpen] = useState(start.ruleKnown);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -96,7 +99,7 @@ function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; 
       } else {
         const built = buildNewTask(draft);
         if (!built.ok) { setError(t(ERROR_KEY[built.error])); setBusy(false); return; }
-        const { task: created } = await api.createTask(built.task);
+        const { task: created } = await api.createTask(withProduct(built.task, product));
         toast({ kind: 'done', icon: 'check', title: t(repeat ? 'ui.schedule.toast.created' : 'ui.task.toast.created'), body: created.title, href: routeHash({ view: 'task', id: created.id }) });
       }
       onSaved();
@@ -113,6 +116,7 @@ function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; 
       <input className="bt-field" autoFocus value={draft.title} maxLength={200} aria-label={t('ui.task.title')} placeholder={t('ui.task.title')} onChange={e => set({ title: e.target.value })} />
       <textarea className="bt-field" rows={3} value={draft.body} maxLength={20_000} aria-label={t('ui.task.body')} placeholder={t('ui.newtask.body')} onChange={e => set({ body: e.target.value })} />
       <div className="ui-newtask__row">
+        {!task && <ProductPick projects={projects} value={product} onChange={setProduct} />}
         <span className="bt-seg" role="group" aria-label={t('ui.task.priority')}>
           {PRIORITIES.map(p => <button key={p} type="button" className="bt-seg__opt" aria-pressed={draft.priority === p} onClick={() => set({ priority: p })}>{t(PRIORITY_KEY[p])}</button>)}
         </span>
@@ -216,7 +220,7 @@ interface RowActions {
   reload: () => void;
 }
 
-function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; actions: RowActions }) {
+function RepeatingItem({ row, now, actions, product }: { row: RepeatingRow; now: number; actions: RowActions; product: string | null }) {
   const t = useT();
   const { task, state, next, last, blocked } = row;
   const runNow = runNowKind(state);
@@ -226,7 +230,7 @@ function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; 
     <li className="bt-row ui-sched" data-task={task.id}>
       <div className="bt-row__main">
         <a className="bt-row__title ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a>
-        <span className="bt-row__sub bt-meta">{[task.cron_text ?? task.cron, when].filter(Boolean).join(' · ')}</span>
+        <span className="bt-row__sub bt-meta">{[product, task.cron_text ?? task.cron, when].filter(Boolean).join(' · ')}</span>
         <span className="bt-row__sub bt-meta">
           {last
             ? <>{t('ui.schedule.last')} <a className="bt-tool__link" href={routeHash({ view: 'task', id: last.id })}>{formatRelative(last.at, now)}</a> · {t(STATUS_KEY[last.status])}{last.summary ? ` · ${last.summary}` : ''}</>
@@ -253,7 +257,7 @@ function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; 
   );
 }
 
-function TimedItem({ row, now, actions }: { row: TimedRow; now: number; actions: RowActions }) {
+function TimedItem({ row, now, actions, product }: { row: TimedRow; now: number; actions: RowActions; product: string | null }) {
   const t = useT();
   const { task, at, blocked } = row;
   return (
@@ -261,7 +265,7 @@ function TimedItem({ row, now, actions }: { row: TimedRow; now: number; actions:
       <span className="bt-meta ui-sched__at">{whenText(at, now)}</span>
       <div className="bt-row__main">
         <a className="bt-row__title ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a>
-        <span className="bt-row__sub bt-meta">{at <= now ? t('ui.schedule.due') : formatRelative(at, now)}</span>
+        <span className="bt-row__sub bt-meta">{[product, at <= now ? t('ui.schedule.due') : formatRelative(at, now)].filter(Boolean).join(' · ')}</span>
         {blocked && !actions.confirming && <span className="bt-row__sub bt-meta">{t(BLOCK_KEY[blocked])}</span>}
       </div>
       {actions.editing ? (
@@ -287,12 +291,13 @@ function barTitle(t: T, bar: Bar, range: Range): string {
   return bar.count > 1 ? t('ui.schedule.slot.many', bar.count, at, state) : t('ui.schedule.slot.one', bar.title, at, state);
 }
 
-function Timeline({ range, window: win, now, schedule, streams }: { range: Range; window: TimeWindow; now: number; schedule: ScheduleView; streams: Stream[] }) {
+function Timeline({ range, window: win, now, schedule, streams, projects }: { range: Range; window: TimeWindow; now: number; schedule: ScheduleView; streams: Stream[]; projects: readonly Project[] }) {
   const t = useT();
   const scroller = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const slots = useMemo(() => schedule.slots.map(slot => (slot.state === 'live' ? { ...slot, length: Math.max(slot.length, now - slot.start) } : slot)), [schedule.slots, now]);
-  const rows = useMemo(() => buildRows({ slots, streams, tasksTitle: t('ui.schedule.stream.tasks'), range, window: win, now }), [slots, streams, t, range, win, now]);
+  const products = useMemo(() => sidebarOrder(projects).map(p => ({ id: p.id, title: t('ui.pf.tasksOf', p.name) })), [projects, t]);
+  const rows = useMemo(() => buildRows({ slots, streams, tasksTitle: t('ui.schedule.stream.tasks'), range, window: win, now, products }), [slots, streams, t, range, win, now, products]);
   const at = nowAt(now, win);
   const labels = range === 'day' ? dayHours() : win.days.slice(0, 7).map(day => dayLabel(day, { weekday: 'short', day: 'numeric' }));
 
@@ -331,7 +336,7 @@ function Timeline({ range, window: win, now, schedule, streams }: { range: Range
   );
 }
 
-export function Schedule({ revision }: ScheduleProps) {
+export function Schedule({ revision, projects }: ScheduleProps) {
   const t = useT();
   const [range, setRange] = useState<Range>('day');
   const [data, setData] = useState<Loaded | null>(null);
@@ -436,18 +441,18 @@ export function Schedule({ revision }: ScheduleProps) {
           <Button ref={newButton} icon="plus" aria-expanded={creating} onClick={() => setCreating(open => !open)}>{t('ui.schedule.newShort')}</Button>
         </div>
       </header>
-      {creating && <ScheduleForm task={null} onClose={closeNew} onSaved={() => void load()} />}
+      {creating && <ScheduleForm task={null} projects={projects} onClose={closeNew} onSaved={() => void load()} />}
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
       {data && rows && (
         <>
-          <Timeline range={data.range} window={data.window} now={now} schedule={data.schedule} streams={streams} />
+          <Timeline range={data.range} window={data.window} now={now} schedule={data.schedule} streams={streams} projects={projects} />
           {data.schedule.ranTruncated && <p className="bt-meta ui-col__empty">{t('ui.schedule.ranTruncated')}</p>}
           <div className="bt-cols">
             <section className="bt-section bt-rise" style={{ '--bt-i': 2 } as CSSProperties} aria-label={t('ui.schedule.repeating')}>
               <div className="bt-section__head"><span className="bt-label">{t('ui.schedule.repeating')}</span><span className="bt-count bt-count--quiet"><span className="bt-count__n">{countText(rows.repeating.length)}</span></span></div>
               {rows.repeating.length === 0 ? <p className="bt-meta ui-col__empty">{t('ui.schedule.noRepeating')}</p> : (
                 <ul className="bt-list">
-                  {rows.repeating.map(row => <RepeatingItem key={row.task.id} row={row} now={now} actions={actionsFor(row.task, t('ui.schedule.toast.deleted'))} />)}
+                  {rows.repeating.map(row => <RepeatingItem key={row.task.id} row={row} now={now} product={productName(projects, row.task.project_id)} actions={actionsFor(row.task, t('ui.schedule.toast.deleted'))} />)}
                 </ul>
               )}
             </section>
@@ -455,7 +460,7 @@ export function Schedule({ revision }: ScheduleProps) {
               <div className="bt-section__head"><span className="bt-label">{t('ui.schedule.timed')}</span><span className="bt-count bt-count--quiet"><span className="bt-count__n">{countText(rows.timed.length)}</span></span></div>
               {rows.timed.length === 0 ? <p className="bt-meta ui-col__empty">{t('ui.schedule.noTimed')}</p> : (
                 <ul className="bt-list">
-                  {rows.timed.map(row => <TimedItem key={row.task.id} row={row} now={now} actions={actionsFor(row.task, t('ui.schedule.toast.deletedTask'))} />)}
+                  {rows.timed.map(row => <TimedItem key={row.task.id} row={row} now={now} product={productName(projects, row.task.project_id)} actions={actionsFor(row.task, t('ui.schedule.toast.deletedTask'))} />)}
                 </ul>
               )}
             </section>

@@ -83,12 +83,20 @@ export interface RowsInput {
   range: Range;
   window: TimeWindow;
   now: number;
+  products?: ReadonlyArray<{ id: string; title: string }>;
 }
 
-export function buildRows({ slots, streams, tasksTitle, range, window: w, now }: RowsInput): TimelineRow[] {
+export const PRODUCT_ROW = 'product:';
+
+export function buildRows({ slots, streams, tasksTitle, range, window: w, now, products = [] }: RowsInput): TimelineRow[] {
   const own = new Set(streams.map(stream => stream.id));
+  const known = new Set(products.map(product => product.id));
   const draw = (list: readonly ScheduleSlot[]): Bar[] => (range === 'day' ? dayBars(list, w) : weekBars(list, w));
-  const rows: TimelineRow[] = [{ id: '', title: tasksTitle, paused: false, rule: null, bars: draw(slots.filter(slot => !own.has(slot.taskId))) }];
+  const loose = slots.filter(slot => !own.has(slot.taskId));
+  const rows: TimelineRow[] = [
+    { id: '', title: tasksTitle, paused: false, rule: null, bars: draw(loose.filter(slot => !slot.projectId || !known.has(slot.projectId))) },
+    ...products.map(product => ({ id: `${PRODUCT_ROW}${product.id}`, title: product.title, paused: false, rule: null, bars: draw(loose.filter(slot => slot.projectId === product.id)) })),
+  ];
   for (const stream of streams) {
     const mine = slots.filter(slot => slot.taskId === stream.id);
     const ran = mine.filter(slot => slot.state !== 'planned');

@@ -4,7 +4,7 @@ import type { ChecklistItem, RunRow, Task } from '../web/src/api.ts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  buildBoard, COLUMN_TABS_MEDIA, columnOf, COLUMNS, KANBAN_PAGE, mergeFinished, pagesToReload, sessionCards, stepPercent, tabStep, type Board, type ColumnId, type SessionCard,
+  buildBoard, cardProject, COLUMN_TABS_MEDIA, columnOf, COLUMNS, KANBAN_PAGE, mergeFinished, pagesToReload, sessionCards, stepPercent, tabStep, type Board, type ColumnId, type SessionCard,
 } from '../web/src/ui/kanban.ts';
 
 const matchesCss = (media: string): boolean => {
@@ -156,4 +156,13 @@ test('ui/kanban: 狭い幅の列のタブは矢印キーで移る（端でひと
   assert.equal(tabStep(2, 5, 'ArrowDown'), null, '縦の矢印はページの送りに残す');
   assert.equal(tabStep(0, 0, 'ArrowRight'), null);
   assert.equal(matchesCss(COLUMN_TABS_MEDIA), true, 'タブが出る幅は CSS の区切りと同じ');
+});
+
+test('ui/kanban: カードの製品は、タスクは行の project_id、Session は会話の project_id（製品なしは null）', () => {
+  const conversations = [{ id: 'c1', title: 'A', project_id: 'p1aaaa' }, { id: 'c2', title: 'B', project_id: null }, { id: 'c3', title: 'C' }];
+  const runs = [runRow('r1', 'c1'), runRow('r2', 'c2'), runRow('r3', 'c3')];
+  const cards = sessionCards({ conversations, drafts: [{ runId: 'live', conversationId: 'c1' }], runs, checklists: NONE });
+  assert.deepEqual(cards.map(card => [card.conversationId, cardProject(card)]), [['c1', 'p1aaaa'], ['c2', null], ['c3', null]]);
+  const b = board([task('t1', 'inbox', { project_id: 'p2aaaa' }), task('t2', 'inbox')]);
+  assert.deepEqual(b.columns[0]!.cards.map(cardProject).sort(), ['p2aaaa', null].sort());
 });

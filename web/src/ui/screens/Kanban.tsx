@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { api, type ChecklistItem, type Conversation, type FinishedCursor, type RunRow, type Task } from '../../api.ts';
+import { api, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, formatElapsed, formatRelative, timezoneLabel, useT } from '../../i18n/index.ts';
 import { buildNewTask, emptyDraft, PRIORITIES, type TaskDraft } from '../../task-form.ts';
 import { plainLine } from '../../task-meta.ts';
 import { useMedia, useNow } from '../hooks.ts';
 import {
-  buildBoard, COLUMN_TABS_MEDIA, KANBAN_PAGE, mergeFinished, pagesToReload, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
+  buildBoard, cardProject, COLUMN_TABS_MEDIA, KANBAN_PAGE, mergeFinished, pagesToReload, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
   type Card, type ColumnId, type SessionCard, type Step, type TaskCard,
 } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
 import { Button, countText, Notice, Pill } from '../parts.tsx';
+import { inFilter, newTaskProduct, optionLabel, productName, settleFilter, withProduct } from '../product-meta.ts';
+import { ALL_PRODUCTS, filterOptions, filterQuery, sidebarOrder, type ProductFilter } from '../products.ts';
+import '../styles/product-filter.css';
 import { routeHash } from '../routes.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
 
@@ -22,6 +25,7 @@ export interface KanbanProps {
   drafts: LiveDraft[];
   checklists: ReadonlyMap<string, ChecklistItem[]>;
   revision: number;
+  projects: readonly Project[];
 }
 
 interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
@@ -32,12 +36,12 @@ const COLUMN_KEY = {
 export const PRIORITY_KEY = { 1: 'ui.task.priority.1', 2: 'ui.task.priority.2', 3: 'ui.task.priority.3' } as const;
 const RELOAD_DELAY_MS = 150;
 
-export async function readFinished(count: number): Promise<{ tasks: Task[]; next: FinishedCursor | null; total: number }> {
+export async function readFinished(count: number, project?: string): Promise<{ tasks: Task[]; next: FinishedCursor | null; total: number }> {
   let tasks: Task[] = [];
   let next: FinishedCursor | null = null;
   let total = 0;
   do {
-    const page = await api.finishedTasks(next, Math.min(100, count - tasks.length));
+    const page = await api.finishedTasks(next, Math.min(100, count - tasks.length), project);
     tasks = mergeFinished(tasks, page.tasks);
     next = page.next;
     total = page.total;
@@ -54,11 +58,11 @@ function StepBar({ step, label }: { step: Step | null; label: string }) {
   );
 }
 
-function Head({ label, dot, right }: { label: string; dot: boolean; right?: ReactNode }) {
+function Head({ label, dot, right, product }: { label: string; dot: boolean; right?: ReactNode; product: string | null }) {
   return (
     <div className="bt-card__head">
       {dot ? <span className="bt-card__kind"><span className="bt-dot" aria-hidden="true" /><span className="bt-label">{label}</span></span> : <span className="bt-label">{label}</span>}
-      {right}
+      {product ? <span className="bt-card__kind">{right}<span className="bt-tag">{product}</span></span> : right}
     </div>
   );
 }
@@ -69,7 +73,7 @@ function Meta({ items }: { items: Array<string | false | null> }) {
   return <div className="bt-card__meta">{shown.map(item => <span key={item}>{item}</span>)}</div>;
 }
 
-function SessionCardView({ card, now, index }: { card: SessionCard; now: number; index: number }) {
+function SessionCardView({ card, now, index, product }: { card: SessionCard; now: number; index: number; product: string | null }) {
   const t = useT();
   const running = card.outcome === 'running';
   const right = running ? <Pill tone="running">{t('ui.kanban.running')}</Pill>
@@ -77,18 +81,18 @@ function SessionCardView({ card, now, index }: { card: SessionCard; now: number;
     : card.outcome === 'stopped' ? <span className="bt-tag">{t('ui.kanban.stopped')}</span> : undefined;
   return (
     <article className={`bt-card ${running ? 'bt-sheen' : 'bt-rise'}`} style={{ '--bt-i': index } as CSSProperties}>
-      <Head label={t('ui.kanban.session')} dot={false} right={right} />
+      <Head label={t('ui.kanban.session')} dot={false} right={right} product={running ? null : product} />
       <h3 className="bt-card__title"><a className="ui-card__link" href={routeHash({ view: 'chat', id: card.conversationId })}>{card.title || t('ui.session.untitled')}</a></h3>
       {running && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
       <Meta items={running
-        ? [card.step && t('ui.kanban.step', card.step.step, card.step.total), card.startedAt !== null && formatElapsed(now - card.startedAt)]
+        ? [product, card.step && t('ui.kanban.step', card.step.step, card.step.total), card.startedAt !== null && formatElapsed(now - card.startedAt)]
         : [formatRelative(card.at, now)]} />
     </article>
   );
 }
 
-function TaskCardView({ card, now, index, first, busy, rejecting, onApprove, onReject, onRejecting }: {
-  card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean;
+function TaskCardView({ card, now, index, first, busy, rejecting, product, onApprove, onReject, onRejecting }: {
+  card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean; product: string | null;
   onApprove: () => void; onReject: (reason: string) => void; onRejecting: (on: boolean) => void;
 }) {
   const t = useT();
@@ -105,12 +109,12 @@ function TaskCardView({ card, now, index, first, busy, rejecting, onApprove, onR
   const timed = task.run_at !== null && task.run_at > now;
   const meta: Array<string | false | null> = column === 'approved'
     ? [timed ? t('ui.kanban.starts', formatDateTimeSmart(task.run_at, now)) : first && t('ui.kanban.next'), card.repeating && t('ui.kanban.repeating')]
-    : column === 'progress' ? [card.step && t('ui.kanban.step', card.step.step, card.step.total), card.repeating && t('ui.kanban.repeating')]
+    : column === 'progress' ? [running && product, card.step && t('ui.kanban.step', card.step.step, card.step.total), card.repeating && t('ui.kanban.repeating')]
     : column === 'proposed' ? [task.origin !== 'user' && t('ui.kanban.byBeat'), card.repeating && t('ui.kanban.repeating')]
     : [formatRelative(card.at, now), card.repeating && t('ui.kanban.repeating')];
   return (
     <article className={`bt-card ${running ? 'bt-sheen' : 'bt-rise'}${rejecting ? ' is-rejecting' : ''}`} style={{ '--bt-i': index } as CSSProperties}>
-      <Head label={label} dot={card.waiting} right={right} />
+      <Head label={label} dot={card.waiting} right={right} product={running ? null : product} />
       <h3 className="bt-card__title"><a className="ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a></h3>
       {body && <p className="bt-card__body">{body}</p>}
       {column === 'progress' && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
@@ -135,9 +139,22 @@ function TaskCardView({ card, now, index, first, busy, rejecting, onApprove, onR
   );
 }
 
-function NewTask({ onClose }: { onClose: () => void }) {
+export function ProductPick({ projects, value, onChange }: { projects: readonly Project[]; value: string | null; onChange: (id: string | null) => void }) {
+  const t = useT();
+  const shown = sidebarOrder(projects);
+  if (shown.length === 0) return null;
+  return (
+    <select className="bt-field ui-sched__pick" value={value ?? ''} aria-label={t('ui.pf.product')} onChange={e => onChange(e.target.value || null)}>
+      <option value="">{t('ui.section.noProduct')}</option>
+      {shown.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+    </select>
+  );
+}
+
+function NewTask({ projects, product: initial, onClose }: { projects: readonly Project[]; product: string | null; onClose: () => void }) {
   const t = useT();
   const [draft, setDraft] = useState<TaskDraft>(emptyDraft);
+  const [product, setProduct] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<TaskDraft>) => { setDraft(d => ({ ...d, ...patch })); setError(''); };
@@ -148,7 +165,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     if (!built.ok) { setError(t(built.error === 'title' ? 'ui.newtask.needTitle' : 'ui.newtask.needTime')); return; }
     setBusy(true);
     try {
-      const { task } = await api.createTask(built.task);
+      const { task } = await api.createTask(withProduct(built.task, product));
       toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.created'), body: task.title, href: routeHash({ view: 'task', id: task.id }) });
       onClose();
     } catch (failure) { reportOpError(failure); setBusy(false); }
@@ -159,6 +176,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
       <input className="bt-field" autoFocus value={draft.title} maxLength={200} aria-label={t('ui.task.title')} placeholder={t('ui.task.title')} onChange={e => set({ title: e.target.value })} />
       <textarea className="bt-field" rows={3} value={draft.body} maxLength={20_000} aria-label={t('ui.task.body')} placeholder={t('ui.newtask.body')} onChange={e => set({ body: e.target.value })} />
       <div className="ui-newtask__row">
+        <ProductPick projects={projects} value={product} onChange={setProduct} />
         <span className="bt-seg" role="group" aria-label={t('ui.task.priority')}>
           {PRIORITIES.map(p => <button key={p} type="button" className="bt-seg__opt" aria-pressed={draft.priority === p} onClick={() => set({ priority: p })}>{t(PRIORITY_KEY[p])}</button>)}
         </span>
@@ -180,8 +198,10 @@ function NewTask({ onClose }: { onClose: () => void }) {
 
 function columnName(t: T, id: ColumnId): string { return t(COLUMN_KEY[id]); }
 
-export function Kanban({ conversations, drafts, checklists, revision }: KanbanProps) {
+export function Kanban({ conversations, drafts, checklists, revision, projects }: KanbanProps) {
   const t = useT();
+  const [picked, setPicked] = useState<ProductFilter>(ALL_PRODUCTS);
+  const filter = settleFilter(picked, projects);
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -198,33 +218,39 @@ export function Kanban({ conversations, drafts, checklists, revision }: KanbanPr
 
   const load = useCallback(async () => {
     const ticket = loads.current.begin();
+    const project = filterQuery(filter);
     try {
-      const [tasks, finished, runs] = await Promise.all([api.tasks(), readFinished(wanted.current), api.runs(RUNS_WINDOW)]);
+      const [tasks, finished, runs] = await Promise.all([api.tasks(project), readFinished(wanted.current, project), api.runs(RUNS_WINDOW, project)]);
       if (!loads.current.isCurrent(ticket)) return;
       setData({ active: tasks.active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
     }
-  }, []);
+  }, [filter]);
 
   const runKey = drafts.map(d => d.runId).join(',');
+  const lastFilter = useRef(filter);
   useEffect(() => {
-    const timer = setTimeout(() => void load(), first.current ? 0 : RELOAD_DELAY_MS);
+    const switched = lastFilter.current !== filter;
+    lastFilter.current = filter;
+    if (switched) wanted.current = KANBAN_PAGE;
+    const timer = setTimeout(() => void load(), first.current || switched ? 0 : RELOAD_DELAY_MS);
     first.current = false;
     return () => clearTimeout(timer);
-  }, [load, revision, runKey]);
+  }, [load, filter, revision, runKey]);
 
   useEffect(() => {
     if (rejecting === null && lastRejecting.current !== null) document.querySelector<HTMLElement>(`[data-reject="${CSS.escape(lastRejecting.current)}"]`)?.focus();
     lastRejecting.current = rejecting;
   }, [rejecting]);
 
-  const sessions = useMemo(() => sessionCards({ conversations, drafts, runs: data?.runs ?? [], checklists }), [conversations, drafts, data, checklists]);
+  const sessions = useMemo(() => sessionCards({ conversations: inFilter(conversations, filter), drafts, runs: data?.runs ?? [], checklists }), [conversations, filter, drafts, data, checklists]);
   const board = useMemo(
-    () => (data ? buildBoard({ active: data.active, finished: data.finished, hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }) : null),
-    [data, sessions, checklists],
+    () => (data ? buildBoard({ active: inFilter(data.active, filter), finished: inFilter(data.finished, filter), hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }) : null),
+    [data, filter, sessions, checklists],
   );
+  const options = projects.some(p => p.archived_at === null) ? filterOptions(projects) : [];
   const ticking = sessions.some(card => card.outcome === 'running');
   const now = useNow(ticking ? 1000 : 30_000);
 
@@ -244,10 +270,11 @@ export function Kanban({ conversations, drafts, checklists, revision }: KanbanPr
   const closeNew = () => { setCreating(false); newButton.current?.focus(); };
 
   const renderCard = (card: Card, index: number, firstTask: boolean) => {
-    if (card.kind === 'session') return <SessionCardView key={card.key} card={card} now={now} index={index} />;
+    const product = productName(projects, cardProject(card));
+    if (card.kind === 'session') return <SessionCardView key={card.key} card={card} now={now} index={index} product={product} />;
     const { task } = card;
     return (
-      <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id}
+      <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product}
         onApprove={() => void act(task.id, () => runTaskOp('approve', task))}
         onReject={reason => void act(task.id, async () => { const ok = await runTaskOp('reject', task, { reason }); if (ok) setRejecting(null); return ok; })}
         onRejecting={on => setRejecting(on ? task.id : null)} />
@@ -259,10 +286,19 @@ export function Kanban({ conversations, drafts, checklists, revision }: KanbanPr
       <header className="bt-screen__head bt-rise">
         <h1 className="bt-screen__title">{t('ui.nav.kanban')}</h1>
         <div className="bt-screen__tools">
+          {options.length > 0 && (
+            <div className="bt-seg ui-pfilter" role="group" aria-label={t('ui.pf.filter')}>
+              {options.map(option => (
+                <button key={option.key} type="button" className="bt-seg__opt" aria-pressed={filter === option.key} onClick={() => setPicked(option.key)}>
+                  {optionLabel(option, t('ui.runs.all'), t('ui.section.noProduct'))}
+                </button>
+              ))}
+            </div>
+          )}
           <Button ref={newButton} icon="plus" aria-expanded={creating} onClick={() => setCreating(open => !open)}>{t('ui.kanban.new')}</Button>
         </div>
       </header>
-      {creating && <NewTask onClose={closeNew} />}
+      {creating && <NewTask projects={projects} product={newTaskProduct(filter)} onClose={closeNew} />}
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
       {board && (
         <>

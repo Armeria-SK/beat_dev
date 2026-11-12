@@ -2,6 +2,7 @@ import type { PersonaWrite } from '../api.ts';
 import { resumeStep, setupProviderConfig, STEPS, type ModelForm, type OnboardingSteps } from '../onboarding.ts';
 import { accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
 import type { Config } from '../settings/model.ts';
+import { routeHash } from './routes.ts';
 
 export const ONBOARD_STEPS = ['name', 'agent', 'style', 'model', 'hello'] as const;
 export type OnboardStep = typeof ONBOARD_STEPS[number];
@@ -73,3 +74,5 @@ export const resumeIndex = (steps: OnboardingSteps): number => STEPS.indexOf(res
 export const opensOnLoad = (done: boolean, putOff: boolean): boolean => !done && !putOff;
 
 export const setupPending = (done: boolean | null, open: boolean): boolean => done === false && !open;
+
+export const ONBOARD_DONE_HASH = routeHash({ view: 'newProduct' });

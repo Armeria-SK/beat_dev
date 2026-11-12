@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { api, ApiError, type Conversation } from '../../api.ts';
+import { api, ApiError, type Conversation, type Project } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { archivedLine, archivedNothing } from '../library.ts';
 import { Button, Notice } from '../parts.tsx';
+import { productLine } from '../product-meta.ts';
 import { routeHash } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 
@@ -13,10 +14,11 @@ type T = ReturnType<typeof useT>;
 
 const failText = (error: unknown, t: T): string | undefined => (error instanceof ApiError ? error.message : undefined);
 
-export function Archived({ revision }: { revision: number }) {
+export function Archived({ revision, projects }: { revision: number; projects: readonly Project[] }) {
   const t = useT();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Conversation[] | null>(null);
+  const [shelved, setShelved] = useState<Project[]>([]);
   const [loadedFor, setLoadedFor] = useState('');
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -37,17 +39,29 @@ export function Archived({ revision }: { revision: number }) {
     }
   }, []);
   useEffect(() => { const timer = setTimeout(() => void load(query), query ? 200 : 100); return () => clearTimeout(timer); }, [load, query, revision, tick]);
+  const hasProducts = items?.some(c => c.project_id) ?? false;
+  const activeKey = projects.map(p => p.id).join(',');
+  useEffect(() => {
+    if (!hasProducts) return;
+    void api.projects(true).then(r => setShelved(r.projects)).catch(() => undefined);
+  }, [hasProducts, activeKey, revision]);
 
   const reload = () => setTick(n => n + 1);
   const title = (c: Conversation): string => c.title || t('ui.session.untitled');
+  const productText = (c: Conversation): string | null => {
+    const line = productLine(c.project_id, projects, shelved);
+    if (!line) return null;
+    return line.archived ? (line.name ? t('ui.pf.archived', line.name) : t('ui.pf.someArchived')) : line.name;
+  };
   const restore = async (c: Conversation) => {
     if (busy) return;
     setBusy(c.id);
     try {
       await api.unarchiveConversation(c.id);
       setItems(current => current?.filter(x => x.id !== c.id) ?? current);
+      const line = productLine(c.project_id, projects, shelved);
       toast({
-        icon: 'undo', title: t('ui.archived.toast.restored'), body: title(c),
+        icon: 'undo', title: t('ui.archived.toast.restored'), body: line?.archived ? t('ui.pf.restoredUnder', line.name ?? t('ui.pf.someArchived')) : title(c),
         action: { label: t('ui.toast.undo'), run: () => { void api.archiveConversation(c.id).then(reload).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: failText(error, t) })); } },
       });
       reload();
@@ -81,6 +95,7 @@ export function Archived({ revision }: { revision: number }) {
           {items.map(c => {
             const { messages, archivedAt } = archivedLine(c);
             const meta = [
+              productText(c),
               messages !== null ? t('ui.archived.messages', messages) : null,
               archivedAt !== null ? t('ui.archived.at', formatRelative(archivedAt, now)) : t('ui.archived.atUnknown'),
             ].filter(Boolean).join(' · ');

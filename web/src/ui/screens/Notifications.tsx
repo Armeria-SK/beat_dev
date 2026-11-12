@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { api, type NotificationItem } from '../../api.ts';
+import { api, type NotificationItem, type Project } from '../../api.ts';
 import { formatDateTime, formatRelative, startOfDay, useT } from '../../i18n/index.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
@@ -7,10 +7,11 @@ import {
   groupByDay, lastNotificationAt, markOf, markRead, notificationTarget, visibleNotifications, type DayGroupId, type NotificationFilter,
 } from '../notifications.ts';
 import { Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
+import { productName } from '../product-meta.ts';
 import { reportOpError } from '../task-ops.ts';
 import type { View } from '../routes.ts';
 
-export interface NotificationsProps { unread: number; epoch: number; onUnread: (count: number) => void }
+export interface NotificationsProps { unread: number; epoch: number; onUnread: (count: number) => void; projects: readonly Project[] }
 
 const GROUP_KEY = { today: 'ui.notifications.today', yesterday: 'ui.notifications.yesterday', earlier: 'ui.notifications.earlier' } as const satisfies Record<DayGroupId, string>;
 const OPEN_KEY: Partial<Record<View, 'ui.notifications.open.task' | 'ui.notifications.open.kanban' | 'ui.notifications.open.session' | 'ui.notifications.open.skills' | 'ui.notifications.open.overview'>> = {
@@ -19,7 +20,7 @@ const OPEN_KEY: Partial<Record<View, 'ui.notifications.open.task' | 'ui.notifica
 
 const firstLine = (text: string | null): string => text?.split('\n').find(line => line.trim())?.trim() ?? '';
 
-export function Notifications({ unread, epoch, onUnread }: NotificationsProps) {
+export function Notifications({ unread, epoch, onUnread, projects }: NotificationsProps) {
   const t = useT();
   const [items, setItems] = useState<NotificationItem[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -86,7 +87,7 @@ export function Notifications({ unread, epoch, onUnread }: NotificationsProps) {
               const mark = markOf(item);
               const target = notificationTarget(item.link);
               const isUnread = item.read_at === null;
-              const body = firstLine(item.body);
+              const body = [productName(projects, item.project_id), firstLine(item.body)].filter(Boolean).join(' · ');
               const active = target !== null || isUnread;
               return (
                 <li key={item.id} className={`bt-row ui-notif${active ? ' bt-row--link' : ''}`} data-read={isUnread ? '0' : '1'} onClick={active ? () => open(item, target?.hash ?? null) : undefined}>
