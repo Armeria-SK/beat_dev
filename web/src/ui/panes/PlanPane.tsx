@@ -228,11 +228,11 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
 
   const buildTask = acc?.frozen?.build_task_id ?? null;
   useEffect(() => {
-    if (!buildTask) { setTask(null); return undefined; }
+    if (!buildTask) { if (!building) setTask(null); return undefined; }
     let live = true;
     void api.task(buildTask).then(r => { if (live) setTask(r.task); }, () => { if (live) setTask(null); });
     return () => { live = false; };
-  }, [buildTask, taskRevision]);
+  }, [buildTask, taskRevision, building]);
 
   const load = useCallback(async (): Promise<PlanDoc | null> => {
     const ticket = loads.current.begin();
@@ -281,16 +281,18 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     if (!hashes || building) return;
     setBuilding(true);
     setBuildNotice(null);
+    let outcome: BuildFailure | null = null;
     try {
       const r = await api.build(productId, hashes);
       focusRunning.current = true;
       setTask(r.task);
     } catch (error) {
-      const outcome = buildFailure(error);
-      if (outcome.kind !== 'running') setBuildNotice(outcome);
-      if (outcome.kind === 'changed') void load();
+      const failure = buildFailure(error);
+      if (failure.kind !== 'running') outcome = failure;
+      if (failure.kind === 'changed') void load();
     }
     await loadAcceptance();
+    if (outcome) setBuildNotice(outcome);
     setBuilding(false);
   };
 
@@ -339,11 +341,11 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
         {action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
         {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill tone="running">{t('ui.plan.building')}</Pill></span>}
       </div>
-      {shown && acc && coverage && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
-      {changedAfterBuild(doc, acc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
       {buildNotice?.kind === 'changed' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} /></div>}
       {buildNotice?.kind === 'frozen' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} /></div>}
       {buildNotice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.buildFailed')} text={buildNotice.detail ?? undefined} />}
+      {shown && acc && coverage && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
+      {changedAfterBuild(doc, acc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
       {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}</p>}
       {notice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} also={{ label: t('ui.plan.discard'), run: discard }} />}
       {draft?.replaces && dirty && notice?.kind !== 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.rebased')} action={{ label: t('ui.plan.discard'), run: discard }} />}

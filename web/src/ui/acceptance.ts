@@ -141,7 +141,7 @@ export function mergeUnreferenced(loaded: readonly UnreferencedMessage[], page: 
 }
 
 export const noticeAfterReload = (notice: BuildFailure | null, acc: Acceptance): BuildFailure | null =>
-  (notice && acc.frozen && notice.kind !== 'frozen' ? null : notice);
+  (acc.frozen ? null : notice);
 
 export interface Paging { list: UnreferencedMessage[]; generation: number; exhausted: boolean }
 

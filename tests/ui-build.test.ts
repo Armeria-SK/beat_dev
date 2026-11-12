@@ -137,13 +137,13 @@ test('ui/build: 押している最中は押せない。Build が通った直後�
   assert.deepEqual(buildAction({ state: 'ready', mode: 'read', acc: acc(), task: task('done'), isGit: true }), { kind: 'build', label: 'ui.plan.build', disabled: false });
 });
 
-test('ui/build: 409 build.frozen（もう固定済み）はサーバーの文で知らせ、読み直しても残す。changed・failed の知らせは、読み直して固定が見えたら消す', () => {
+test('ui/build: 409 build.frozen（もう固定済み）はサーバーの文で知らせる。changed・failed・frozen の知らせは、読み直して固定が見えたら消す', () => {
   const frozenErr = new ApiError(409, { code: 'build.frozen', message: 'The acceptance list is already fixed (version 1). Change it before building again' });
   assert.deepEqual(buildFailure(frozenErr), { kind: 'frozen', detail: frozenErr.message });
   const built = acc({ draft: false, version: 1, frozen: frozen() });
   assert.equal(noticeAfterReload({ kind: 'changed' }, built), null);
   assert.equal(noticeAfterReload({ kind: 'failed', detail: 'x' }, built), null);
-  assert.deepEqual(noticeAfterReload({ kind: 'frozen', detail: 'y' }, built), { kind: 'frozen', detail: 'y' });
+  assert.equal(noticeAfterReload({ kind: 'frozen', detail: 'y' }, built), null, '固定が見えたら frozen の知らせも消す');
   assert.deepEqual(noticeAfterReload({ kind: 'changed' }, acc()), { kind: 'changed' }, '固定の前は残す');
   assert.equal(noticeAfterReload(null, built), null);
 });
