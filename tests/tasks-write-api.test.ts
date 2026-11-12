@@ -165,10 +165,75 @@ test('DELETE: 消したことのログの行は、題の制御文字・行の区
   assert.equal(s.logs.filter(line => line.includes('Deleted task')).at(-1), `[INFO] Deleted task "p q q q r" (${widthless.id})`, '幅のない文字も落とす');
 });
 
-test('DELETE: 動いている回があるひな形は 409（run_open）。回が終われば消せる。止めたひな形も消せる', async t => {
+test('DELETE: まだ始まっていない回（実行待ち）だけなら、止めたひな形も消せて、その回は取り消して残る（戻せる）', async t => {
+  const s = await taskApp(t);
+  const template = s.userTask('Weather', { cron: '*/2 * * * *', timezone: 'UTC' });
+  const queued = s.app.tasks.spawnNow(template.id)!;
+  s.app.tasks.finish(template.id, 'cancelled', null, 'user');
+  const res = await s.api(`/api/tasks/${template.id}`, undefined, 'DELETE');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.deleted.keptRuns, 1);
+  const kept = s.app.tasks.get(queued.id)!;
+  assert.deepEqual([kept.status, kept.parent_id, kept.cancelled_from], ['cancelled', null, 'ready']);
+  assert.ok(s.events.some(e => e.type === 'task.changed' && e.task.id === queued.id && e.task.status === 'cancelled'), 'ボードから実行待ちの回が消える');
+  assert.equal(await s.app.worker.tick(), 'idle', '取り消した回は動かない');
+  assert.equal(s.adapter().calls.length, 0);
+  assert.equal(s.app.tasks.uncancel(queued.id, 'user').status, 'ready');
+});
+
+test('DELETE: 実行待ちの回が複数でも、前に動いたことがある回でも、全部取り消して kv の区切りも片付ける。知らせは DB に書き終わってから、parent_id が空の形で出る', async t => {
+  const s = await taskApp(t);
+  const template = s.userTask('Weather', { cron: '*/2 * * * *', timezone: 'UTC' });
+  const first = s.app.tasks.spawnNow(template.id)!;
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(first.id);
+  const ran = s.app.tasks.spawnNow(template.id)!;
+  assert.ok(s.app.tasks.claim(ran.id, 60_000, s.app.conversations.create({ kind: 'task', title: 'Weather' }).id));
+  s.app.tasks.setReady(ran.id, { countAttempt: true, reason: 'retry later' });
+  s.app.db.prepare("UPDATE tasks SET status = 'ready' WHERE id = ?").run(first.id);
+  s.app.kv.setJson(splitKey(ran.id), 3);
+  const seen: Array<[string, boolean, string | null]> = [];
+  const original = s.app.tasks.onChange;
+  s.app.tasks.onChange = changed => { seen.push([changed.id, s.app.db.isTransaction, changed.parent_id]); original?.(changed); };
+  s.events.length = 0;
+
+  const res = await s.api(`/api/tasks/${template.id}`, undefined, 'DELETE');
+  assert.equal(res.status, 200);
+  for (const id of [first.id, ran.id]) {
+    const kept = s.app.tasks.get(id)!;
+    assert.deepEqual([kept.status, kept.parent_id, kept.cancelled_from], ['cancelled', null, 'ready'], id);
+    assert.match(kept.result_summary ?? '', /deleted while this run was waiting/u);
+  }
+  assert.equal(s.app.tasks.get(ran.id)!.conversation_id !== null, true, '前に動いた回の会話は残る');
+  assert.equal(s.app.kv.get(splitKey(ran.id)), undefined, '取り消した回の区切りの kv も片付ける');
+  assert.deepEqual(seen.sort(), [[first.id, false, null], [ran.id, false, null]].sort());
+  const order = s.events.filter(e => e.type === 'task.changed' || e.type === 'task.deleted').map(e => e.type);
+  assert.deepEqual(order, ['task.changed', 'task.changed', 'task.deleted']);
+});
+
+test('DELETE: 取り消した回の聞き手が失敗しても、消すことと取り消しは残り、task.deleted も出る', async t => {
+  const s = await taskApp(t);
+  const template = s.userTask('Weather', { cron: '*/2 * * * *', timezone: 'UTC' });
+  const queued = s.app.tasks.spawnNow(template.id)!;
+  const original = s.app.tasks.onChange;
+  s.app.tasks.onChange = changed => { original?.(changed); throw new Error('listener failed'); };
+  s.events.length = 0;
+  const res = await s.api(`/api/tasks/${template.id}`, undefined, 'DELETE');
+  assert.equal(res.status, 500);
+  assert.equal(s.app.tasks.get(template.id), undefined);
+  assert.equal(s.app.tasks.get(queued.id)!.status, 'cancelled');
+  assert.deepEqual(s.events.filter(e => e.type === 'task.deleted'), [{ type: 'task.deleted', id: template.id }]);
+});
+
+test('DELETE: 実行中・返事待ちの回があるひな形は 409（run_open）で何も変えない。その回を取り消せば消せる', async t => {
   const s = await taskApp(t);
   const template = s.userTask('Busy', { cron: '0 9 * * *', timezone: 'UTC' });
   const child = s.app.tasks.spawnNow(template.id)!;
+  assert.ok(s.app.tasks.claim(child.id, 60_000, s.app.conversations.create({ kind: 'task', title: 'Busy' }).id));
+  const waiting = s.userTask('Asks', { cron: '0 10 * * *', timezone: 'UTC' });
+  const asking = s.app.tasks.spawnNow(waiting.id)!;
+  s.app.tasks.setWaiting(asking.id, 'question', 'Which city?');
+  const blocked = await s.api(`/api/tasks/${waiting.id}`, undefined, 'DELETE');
+  assert.deepEqual([blocked.status, blocked.body.code], [409, 'task.error.run_open']);
   const before = snapshot(s);
   const res = await s.api(`/api/tasks/${template.id}`, undefined, 'DELETE');
   assert.equal(res.status, 409);
@@ -276,14 +341,18 @@ test('DELETE は 1 つのトランザクション: 途中で失敗したら、�
   const template = s.userTask('Summary', { cron: '0 9 * * *', timezone: 'UTC' });
   const child = s.app.tasks.spawnNow(template.id)!;
   s.app.tasks.finish(child.id, 'done', 'ok', 'clive');
+  const queued = s.app.tasks.spawnNow(template.id)!;
   s.app.kv.setJson(splitKey(template.id), 2);
+  s.app.kv.setJson(splitKey(queued.id), 4);
   s.app.db.exec("CREATE TRIGGER test_block_delete BEFORE DELETE ON tasks BEGIN SELECT RAISE(ABORT, 'blocked by the test'); END");
   const before = snapshot(s);
   s.events.length = 0;
   assert.throws(() => s.app.tasks.remove(template.id), /blocked by the test/u);
   assert.equal(snapshot(s), before);
   assert.equal(s.app.tasks.get(child.id)!.parent_id, template.id);
+  assert.deepEqual([s.app.tasks.get(queued.id)!.status, s.app.tasks.get(queued.id)!.parent_id], ['ready', template.id]);
   assert.ok(!s.events.some(e => e.type === 'task.deleted'));
+  assert.ok(!s.events.some(e => e.type === 'task.changed'), '戻した取り消しを知らせない');
 });
 
 test('DELETE: ひな形に会話が結び付いていたら 409', async t => {

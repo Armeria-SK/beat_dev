@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseEnv } from 'node:util';
 import { EnvFileError, removeEnvValue, setEnvValue } from '../src/env-file.ts';
-import { keyEnvName, keyProblem, MAX_KEY_CHARS, isSecretEnvName } from '../src/shared/provider-key.ts';
+import { derivedKeyEnv, keyEnvName, keyProblem, MAX_KEY_CHARS, isSecretEnvName } from '../src/shared/provider-key.ts';
 import { tempDir } from './helpers.ts';
 
 // 段 9f: API キーを .env に書く部分。ほかの行・コメント・順番を残し、一時ファイルに書いてから置き換え、控えは 1 つ、Linux では 0600
@@ -161,6 +161,8 @@ test('環境変数の名前: あればその名前、Anthropic は ANTHROPIC_API
   assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['CLIVE_A_B_API_KEY'])), 'CLIVE_A_B_API_KEY_2');
   assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['CLIVE_A_B_API_KEY', 'CLIVE_A_B_API_KEY_2'])), 'CLIVE_A_B_API_KEY_3');
   assert.match(keyEnvName({ id: 'x'.repeat(40), kind: 'openai_compatible' }), /^[A-Z][A-Z0-9_]{0,63}$/u, '一番長い ID でも名前の形に収まる');
+  assert.equal(derivedKeyEnv('anthropic-2', new Set(['ANTHROPIC_API_KEY'])), 'CLIVE_ANTHROPIC_2_API_KEY');
+  assert.equal(derivedKeyEnv('anthropic-2', new Set(['CLIVE_ANTHROPIC_2_API_KEY'])), 'CLIVE_ANTHROPIC_2_API_KEY_2');
 });
 
 test('鍵を持つ名前だけを書く（isSecretEnvName）: PATH などの環境変数は、鍵の名前として書き換えない', () => {

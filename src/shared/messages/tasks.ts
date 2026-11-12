@@ -39,6 +39,7 @@ const en = {
   'event.read_untrusted': 'Read product notes written after reading text from elsewhere, or changed outside the app.',
   'summary.done_from_ui': 'Marked as done from the screen',
   'summary.cancelled_from_ui': 'Cancelled from the screen',
+  'summary.cancelled_schedule_deleted': 'Cancelled because its schedule was deleted while this run was waiting',
 
   'reason.no_model': 'Waiting because no model is available: {detail}',
   'reason.local_wait': 'This task came from a conversation that used a local model, so it waits while no local model is available (it is never sent to an external model)',

@@ -12,7 +12,7 @@ import { Panes, usePanes } from './Panes.tsx';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
 import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
-import { pickFocus } from './focus.ts';
+import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
 import { awaitingProduct, projectLoads, settleLeave } from './product-nav.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, type Route } from './routes.ts';
@@ -168,6 +168,21 @@ export function App() {
   const viewRef = useRef(route.view);
   viewRef.current = route.view;
 
+  useEffect(() => {
+    const reveal = (e: FocusEvent) => {
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      const inner = target?.closest<HTMLElement>('.bt-screen > .bt-screen__inner');
+      const head = inner?.querySelector<HTMLElement>(':scope > .bt-screen__head');
+      if (!target || !inner || !head || head.contains(target)) return;
+      requestAnimationFrame(() => {
+        if (getComputedStyle(head).position !== 'sticky') return;
+        const hidden = underHead(head.getBoundingClientRect().bottom, target.getBoundingClientRect().top, 8, target.matches(':focus-visible'));
+        if (hidden > 0) inner.scrollTop -= hidden;
+      });
+    };
+    document.addEventListener('focusin', reveal);
+    return () => document.removeEventListener('focusin', reveal);
+  }, []);
   useEffect(() => {
     addEventListener('beforeunload', unloadGuard);
     return () => removeEventListener('beforeunload', unloadGuard);

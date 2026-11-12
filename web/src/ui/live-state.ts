@@ -5,7 +5,7 @@ import type { Draft, RunEvent } from '../events.ts';
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean }
 
 export interface SettledTool { callId: string; name: string; input: string }
-export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined; waitingSince?: number | undefined }
+export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined; settledCount?: number | undefined; waitingSince?: number | undefined }
 
 const SETTLED_MAX = 20;
 const settle = (d: LiveDraft, callId: string): SettledTool[] | undefined =>
@@ -157,7 +157,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         effects: [],
       };
     case 'tool.result': {
-      const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId), waitingSince: now })) });
+      const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId), settledCount: (d.settledCount ?? 0) + (d.activeTool && d.toolCallId === e.callId ? 1 : 0), waitingSince: now })) });
       return {
         state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
         effects: [],

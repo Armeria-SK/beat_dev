@@ -242,6 +242,7 @@ test('ui/live-state: 結果が届いた道具の覚えは新しい 20 件まで�
   const settled = s.drafts[0]!.settled!;
   assert.equal(settled.length, 20);
   assert.deepEqual([settled[0]!.callId, settled.at(-1)!.callId], ['k4', 'k23']);
+  assert.equal(s.drafts[0]!.settledCount, 23, '外れた分も含めて、その回で結果が届いた数を数える');
 });
 
 test('ui/live-state: Build のタスク（acceptance_items を持つ）の状態が変わったら、その製品の Plan の欄を読み直す（取り消し・失敗・戻しで unbuilt と open_build_task_id が変わる）', () => {
