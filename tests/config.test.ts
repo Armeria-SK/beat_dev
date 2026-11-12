@@ -61,6 +61,15 @@ test('キーを使わないローカルネットワークの http は許す', ()
   assert.doesNotThrow(() => parseConfig(config));
 });
 
+test('apiKeyEnv の無い Anthropic も ANTHROPIC_API_KEY を使うので、この PC の外の http は断る（この PC の中の http は通す）', () => {
+  const outside = testConfig();
+  outside.providers.push({ id: 'proxy', kind: 'anthropic', baseUrl: 'http://192.168.1.5:8080', maxParallel: 1, timeoutMs: 60_000 });
+  assert.throws(() => parseConfig(outside), (e: unknown) => /providers\.proxy\.baseUrl: Use https for connections that use an API key/.test((e as ConfigError).problems.join('\n')));
+  const loopback = testConfig();
+  loopback.providers.push({ id: 'proxy', kind: 'anthropic', baseUrl: 'http://127.0.0.1:8080', maxParallel: 1, timeoutMs: 60_000 });
+  assert.doesNotThrow(() => parseConfig(loopback));
+});
+
 test('contextLength が minContext より小さくても保存は止めない（使う前の確認で知らせる）', () => {
   const config = testConfig();
   config.models[2]!.contextLength = 16384; // minContext（65536）より小さい
