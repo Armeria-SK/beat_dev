@@ -428,8 +428,14 @@ test('cancel: 終わりの知らせと聞き手は DB に書き終わってか�
   const original = s.app.tasks.onChange;
   const inTransaction: boolean[] = [];
   s.app.tasks.onChange = changed => { inTransaction.push(s.app.db.isTransaction); original?.(changed); throw new Error('listener failed'); };
+  s.app.kv.set(splitKey(task.id), '1');
+  const stopped: string[] = [];
+  const stopTask = s.app.worker.stopTask.bind(s.app.worker);
+  s.app.worker.stopTask = id => { stopped.push(id); return stopTask(id); };
   const res = await s.api(`/api/tasks/${task.id}/cancel`, { reason: 'Not now' });
   assert.equal(res.status, 500);
+  assert.deepEqual(stopped, [task.id], '聞き手が失敗しても、実行を止める');
+  assert.equal(s.app.kv.get(splitKey(task.id)), undefined, '聞き手が失敗しても、kv を片付ける');
   assert.deepEqual(inTransaction, [false]);
   assert.equal(s.app.tasks.get(task.id)!.status, 'cancelled');
   assert.deepEqual(s.app.tasks.events(task.id).map(e => e.kind), ['cancelled', 'reason', 'created']);
@@ -457,6 +463,13 @@ test('cancel の理由は、user の別の行（kind: reason）として経過�
       ? await s.api(`/api/tasks/${task.id}/cancel`, undefined, 'POST')
       : await s.api(`/api/tasks/${task.id}/cancel`, body);
     assert.equal(plain.status, 200);
+    assert.deepEqual(s.app.tasks.events(task.id).map(e => e.kind), ['cancelled', 'created']);
+  }
+
+  for (const raw of ['{broken', '"just a string"', '[1]', '']) {
+    const task = s.userTask('Garbage body');
+    const res = await fetch(`${s.origin}/api/tasks/${task.id}/cancel`, { method: 'POST', headers: { Origin: s.origin, 'Content-Type': 'application/json' }, body: raw });
+    assert.equal(res.status, 200, `壊れた本文（${raw}）は「理由なし」として取り消す`);
     assert.deepEqual(s.app.tasks.events(task.id).map(e => e.kind), ['cancelled', 'created']);
   }
 

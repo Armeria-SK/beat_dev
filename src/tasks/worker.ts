@@ -58,6 +58,7 @@ interface TaskText {
   doneCriteria: string;
   historyHeading: string;
   ownerReason: string;
+  otherReason: string;
   howHeading: string;
   how: readonly string[];
   time: (ms: number, timezone: string) => string;
@@ -76,6 +77,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
     doneCriteria: 'Done when',
     historyHeading: '# History so far (newest first)',
     ownerReason: "reason for cancelling (the user's own words)",
+    otherReason: 'reason for cancelling',
     howHeading: '# How to proceed',
     how: [
       '- Make progress with your tools. Do not overdo it in a single run',
@@ -94,10 +96,10 @@ export function inQuietHours(now: number, timezone: string, start: string, end: 
   return start < end ? hm >= start && hm < end : hm >= start || hm < end;
 }
 
-export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
+export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
   const text = TASK_TEXT[language];
   const history = events.filter(e => e.content).slice(0, 10).map(e => (e.kind === 'reason'
-    ? `- ${text.time(e.created_at, timezone)} ${text.ownerReason}: ${e.content!.replace(/\r?\n/gu, '\n  ')}`
+    ? `- ${text.time(e.created_at, timezone)} ${e.actor === 'user' ? text.ownerReason : text.otherReason}: ${e.content!.replace(/\r\n|[\r\n\p{Zl}\p{Zp}]/gu, '\n  ')}`
     : `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`));
   return [
     text.intro,
