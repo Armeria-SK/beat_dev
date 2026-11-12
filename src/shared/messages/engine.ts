@@ -46,7 +46,6 @@ const en = {
   'taint.carried': 'what an earlier run read',
   'taint.unknown': 'a history too long to check',
   'taint.checklist': 'a work checklist written after reading text that came from elsewhere',
-  'taint.acceptance': 'the acceptance list of this product, written by a run that had read text from elsewhere',
   'taint.parent': 'the parent agent that handed over this job had read text from elsewhere',
   'agent.preamble': 'You are a sub-agent working on a job from the main agent. Your final reply goes back to it. You cannot talk to the owner directly.',
 };

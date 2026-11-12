@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Language } from '../config/schema.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import type { PlanStore } from '../projects/plan.ts';
-import { languageTagOf, projectDir, type ProjectStore } from '../projects/store.ts';
+import { projectDir, type ProjectStore } from '../projects/store.ts';
 import { makeFence, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
@@ -30,7 +30,6 @@ const HEAD_BYTES = 4096;
 export interface AcceptanceSummary { total: number; met: number; open: number; unverified: number; version: number }
 
 export interface IndexMaterials {
-  docLanguage: string | null;
   notes: StateNote[];
   state: { updatedAt: number } | null;
   plan: { updatedAt: number; heading: string | null; clean: boolean; ai: boolean } | null;
@@ -83,7 +82,7 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
     const text = secretFree(scrubText(note.text, 120));
     return text ? [`${note.field}: ${note.by === 'owner' ? '' : AI_NOTE}${text}`] : [];
   });
-  const head = [...(languageTagOf(m.docLanguage) ? [`documents language: ${m.docLanguage}`] : []), ...notes];
+  const head = notes;
   const shown = m.files.filter(file => safeName(file.path));
   const hiddenCount = m.files.length - shown.length;
   const hiddenLine = hiddenCount ? [`- ${hiddenCount} files with names that cannot be shown`] : [];
@@ -138,7 +137,6 @@ interface Light {
   acceptance: IndexMaterials['acceptance'];
   counts: IndexMaterials['counts'];
   running: string[];
-  docLanguage: string | null;
   timezone: string;
 }
 
@@ -183,10 +181,6 @@ export class Mesh {
     } catch { return { doc: undefined, summary: 'unreadable' }; }
   }
 
-  acceptanceTainted(projectId: string): boolean {
-    return (this.#acceptance(projectId).doc?.taintedRuns?.length ?? 0) > 0;
-  }
-
   #light(projectId: string): Light {
     const dir = this.#dir(projectId);
     const files = listMeshFiles(dir).filter(file => file.rel !== INDEX_FILE && file.rel !== STATE_FILE);
@@ -196,18 +190,16 @@ export class Mesh {
     const { summary: acceptance } = this.#acceptance(projectId);
     const counts = this.#d.projects?.counts(projectId) ?? { questions: 0, proposals: 0 };
     const running = this.#d.tasks?.list({ statuses: ['ready', 'running'], project: projectId, limit: 50 }).map(task => plainLine(task.title, 60)) ?? [];
-    const docLanguage = this.#d.projects?.get(projectId)?.doc_language ?? null;
     const timezone = this.#d.timezone();
     const stateMtime = stateStat ? Math.floor(stateStat.mtimeMs) : null;
     const plan = this.#d.plans.meta(projectId);
-    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, docLanguage, timezone, plan ?? null]);
-    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, docLanguage, timezone };
+    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan ?? null]);
+    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone };
   }
 
   #materials(projectId: string, light: Light): IndexMaterials {
     const view = this.#d.plans.view(projectId);
     return {
-      docLanguage: light.docLanguage,
       notes: light.notes,
       state: light.stateMtime === null ? null : { updatedAt: light.stateMtime },
       plan: view.content === null ? null : { updatedAt: view.updated_at ?? 0, heading: /^#+\s+(.+)$/mu.exec(view.content)?.[1]?.trim() ?? null, clean: !view.tainted && view.updated_by !== 'outside', ai: view.updated_by === 'ai' },
