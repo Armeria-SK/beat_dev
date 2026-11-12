@@ -1,6 +1,13 @@
 import type { IconName } from '../icon-name.ts';
 
-export const GLYPHS: Partial<Record<IconName, string>> = {
+export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code';
+
+export const GLYPHS: Partial<Record<UiIconName, string>> = {
+  grid: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/>',
+  columns: '<rect x="2.5" y="3" width="3" height="10" rx="1"/><rect x="6.5" y="3" width="3" height="6.5" rx="1"/><rect x="10.5" y="3" width="3" height="8.5" rx="1"/>',
+  calendar: '<rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3"/>',
+  layers: '<path d="M8 2.5l5.5 3L8 8.5 2.5 5.5zM2.5 8.5L8 11.5l5.5-3"/>',
+  code: '<path d="M6 4.5L2.5 8 6 11.5M10 4.5L13.5 8 10 11.5"/>',
   plus: '<path d="M8 3v10M3 8h10"/>',
   x: '<path d="M4 4l8 8M12 4l-8 8"/>',
   check: '<path d="M3.5 8.5l3 3 6-7"/>',

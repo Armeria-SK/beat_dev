@@ -1,0 +1,69 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { HOME, isConversation, parseRoute, routeBehind, routeHash, type Route } from '../web/src/ui/routes.ts';
+
+// 新しい画面（web/src/ui）の経路。p1-ui.md の「枠」: #/ #/c/<id> #/overview #/kanban #/tasks/<id> #/schedule #/notifications #/memory
+// #/skills[/<名前>|/draft/<名前>] #/runs[/tools|/reviews] #/archived #/settings[/<区分>]。
+
+const ROUTES: Array<[string, Route]> = [
+  ['#/', { view: 'new' }],
+  ['#/c/abc', { view: 'chat', id: 'abc' }],
+  ['#/overview', { view: 'overview' }],
+  ['#/kanban', { view: 'kanban' }],
+  ['#/tasks/t1', { view: 'task', id: 't1' }],
+  ['#/schedule', { view: 'schedule' }],
+  ['#/notifications', { view: 'notifications' }],
+  ['#/memory', { view: 'memory' }],
+  ['#/skills', { view: 'skills' }],
+  ['#/skills/tidy', { view: 'skills', target: { kind: 'skill', name: 'tidy' } }],
+  ['#/skills/draft/tidy', { view: 'skills', target: { kind: 'draft', name: 'tidy' } }],
+  ['#/runs', { view: 'runs' }],
+  ['#/runs/tools', { view: 'runs', tab: 'tools' }],
+  ['#/runs/reviews', { view: 'runs', tab: 'reviews' }],
+  ['#/archived', { view: 'archived' }],
+  ['#/settings', { view: 'settings' }],
+  ['#/settings/models', { view: 'settings', section: 'models' }],
+];
+
+test('ui/routes: どの経路も読めて、書き戻すと同じハッシュになる', () => {
+  for (const [hash, route] of ROUTES) {
+    assert.deepEqual(parseRoute(hash), route, hash);
+    assert.equal(routeHash(route), hash, hash);
+  }
+});
+
+test('ui/routes: 通知に保存された古い経路を新しい画面へ読み替える（#/tasks → Kanban、#/today → Overview、#/review → Skills、#/curiosity → Kanban）', () => {
+  assert.deepEqual(parseRoute('#/tasks'), { view: 'kanban' });
+  assert.deepEqual(parseRoute('#/today'), { view: 'overview' });
+  assert.deepEqual(parseRoute('#/review'), { view: 'skills' });
+  assert.deepEqual(parseRoute('#/curiosity'), { view: 'kanban' });
+  assert.deepEqual(parseRoute('#/tasks/0193'), { view: 'task', id: '0193' });
+});
+
+test('ui/routes: 知らない経路・空・Object の名前は新しい会話になる', () => {
+  for (const hash of ['', '#', '#/nope', '#/constructor', '#/__proto__', '#/toString', '#/c', '#/c/', '#/tasks/']) {
+    const route = parseRoute(hash);
+    assert.deepEqual(route, hash.startsWith('#/tasks') ? { view: 'kanban' } : HOME, hash);
+  }
+});
+
+test('ui/routes: 名前は符号化して書き、読むときに戻す（壊れた符号化はそのまま）', () => {
+  const route: Route = { view: 'chat', id: 'a b/c' };
+  assert.equal(routeHash(route), '#/c/a%20b%2Fc');
+  assert.deepEqual(parseRoute(routeHash(route)), route);
+  assert.deepEqual(parseRoute('#/c/%E0%A4%A'), { view: 'chat', id: '%E0%A4%A' });
+  assert.deepEqual(parseRoute('#/skills/draft/a%2Fb'), { view: 'skills', target: { kind: 'draft', name: 'a/b' } });
+});
+
+test('ui/routes: Settings はモーダルなので、後ろには直前の画面を残す（直前が無ければ新しい会話）', () => {
+  const kanban: Route = { view: 'kanban' };
+  assert.deepEqual(routeBehind({ view: 'settings' }, kanban), kanban);
+  assert.deepEqual(routeBehind({ view: 'settings' }, null), HOME);
+  assert.deepEqual(routeBehind(kanban, { view: 'memory' }), kanban);
+});
+
+test('ui/routes: 会話の 2 つ（新しい会話と会話）だけが bt-app、ほかは画面（bt-shell）', () => {
+  assert.equal(isConversation({ view: 'new' }), true);
+  assert.equal(isConversation({ view: 'chat', id: 'x' }), true);
+  for (const [, route] of ROUTES.filter(([, r]) => r.view !== 'new' && r.view !== 'chat')) assert.equal(isConversation(route), false, route.view);
+});

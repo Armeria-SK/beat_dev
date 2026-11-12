@@ -1,9 +1,9 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import type { IconName } from '../icon-name.ts';
 import { useT } from '../i18n/index.ts';
-import { GLYPHS } from './icons.ts';
+import type { AgentState } from './agent-state.ts';
+import { GLYPHS, type UiIconName } from './icons.ts';
 
-export function Icon({ name }: { name: IconName }) {
+export function Icon({ name }: { name: UiIconName }) {
   const glyph = GLYPHS[name];
   if (!glyph) return null;
   return <svg className="bt-icon" viewBox="0 0 16 16" aria-hidden="true" dangerouslySetInnerHTML={{ __html: glyph }} />;
@@ -12,7 +12,7 @@ export function Icon({ name }: { name: IconName }) {
 type ButtonVariant = 'primary' | 'ghost' | 'danger';
 
 export function Button({ variant, small, icon, children, className, type = 'button', ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: ButtonVariant; small?: boolean; icon?: IconName;
+  variant?: ButtonVariant; small?: boolean; icon?: UiIconName;
 }) {
   const classes = ['bt-btn', variant && `bt-btn--${variant}`, small && 'bt-btn--sm', icon && !children && 'bt-btn--icon', className].filter(Boolean).join(' ');
   return <button {...rest} type={type} className={classes}>{icon && <Icon name={icon} />}{children}</button>;
@@ -30,8 +30,6 @@ export function CountBadge({ n, quiet, label }: { n: number; quiet?: boolean; la
   if (n <= 0) return null;
   return <span className={`bt-count${quiet ? ' bt-count--quiet' : ''}`} aria-label={label}><span className="bt-count__n">{countText(n)}</span></span>;
 }
-
-export type AgentState = 'idle' | 'working' | 'waiting';
 
 const AVATAR_LABEL = { idle: 'ui.avatar.idle', working: 'ui.avatar.working', waiting: 'ui.avatar.waiting' } as const;
 
@@ -57,7 +55,7 @@ export function EmptyState({ lead, title, text, action }: { lead?: ReactNode; ti
 }
 
 export function Notice({ tone, icon, title, text, action }: {
-  tone?: 'warn' | 'fail'; icon?: IconName; title: ReactNode; text?: ReactNode; action?: { label: string; run: () => void };
+  tone?: 'warn' | 'fail'; icon?: UiIconName; title: ReactNode; text?: ReactNode; action?: { label: string; run: () => void };
 }) {
   if (tone === 'fail') {
     return (
@@ -79,7 +77,7 @@ export function Notice({ tone, icon, title, text, action }: {
   );
 }
 
-export function Toast({ title, text, icon, live, leaving }: { title: string; text?: string | undefined; icon?: IconName | undefined; live?: boolean; leaving?: boolean }) {
+export function Toast({ title, text, icon, live, leaving }: { title: string; text?: string | undefined; icon?: UiIconName | undefined; live?: boolean; leaving?: boolean }) {
   return (
     <div className={`bt-toast${leaving ? ' is-leaving' : ''}`}>
       {live ? <span className="bt-dot" aria-hidden="true" /> : <Icon name={icon ?? 'check'} />}

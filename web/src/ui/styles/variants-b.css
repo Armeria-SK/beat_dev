@@ -1,0 +1,7 @@
+.ui-menu { display: none; }
+@media (max-width: 760px) {
+  .ui-frame.is-narrow-b > .ui-menu { display: inline-flex; position: fixed; top: var(--space-2); left: var(--space-2); z-index: 20; width: 40px; height: 40px; background: var(--surface-overlay); box-shadow: var(--shadow-rise); }
+  .ui-frame.is-narrow-b > .bt-app > .bt-app__main .bt-app__bar { padding-left: var(--space-8); }
+  .ui-frame.is-narrow-b > .bt-shell > .bt-screen > .bt-screen__inner { padding-top: var(--space-8); }
+}
+.bt-root.is-reduced-b *, .bt-root.is-reduced-b *::before, .bt-root.is-reduced-b *::after { animation: none !important; transition: none !important; }
