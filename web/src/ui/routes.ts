@@ -56,4 +56,12 @@ export function routeBehind(route: Route, previous: Route | null): Route {
   return route.view === 'settings' ? previous ?? HOME : route;
 }
 
-export const isConversation = (route: Route): boolean => route.view === 'new' || route.view === 'chat';
+export function latch(run: () => void): { fire: () => void; reset: () => void } {
+  let fired = false;
+  return {
+    fire: () => { if (fired) return; fired = true; run(); },
+    reset: () => { fired = false; },
+  };
+}
+
+export const isConversation =(route: Route): boolean => route.view === 'new' || route.view === 'chat';

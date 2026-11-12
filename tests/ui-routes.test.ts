@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HOME, isConversation, parseRoute, routeBehind, routeHash, type Route } from '../web/src/ui/routes.ts';
+import { HOME, isConversation, latch, parseRoute, routeBehind, routeHash, type Route } from '../web/src/ui/routes.ts';
 
 // 新しい画面（web/src/ui）の経路。p1-ui.md の「枠」: #/ #/c/<id> #/overview #/kanban #/tasks/<id> #/schedule #/notifications #/memory
 // #/skills[/<名前>|/draft/<名前>] #/runs[/tools|/reviews] #/archived #/settings[/<区分>]。
@@ -66,4 +66,14 @@ test('ui/routes: 会話の 2 つ（新しい会話と会話）だけが bt-app�
   assert.equal(isConversation({ view: 'new' }), true);
   assert.equal(isConversation({ view: 'chat', id: 'x' }), true);
   for (const [, route] of ROUTES.filter(([, r]) => r.view !== 'new' && r.view !== 'chat')) assert.equal(isConversation(route), false, route.view);
+});
+
+test('ui/routes: latch は reset まで 1 回だけ動く（Settings を閉じる history.back() を、2 回目の Esc や二度押しで重ねない）', () => {
+  let calls = 0;
+  const closer = latch(() => { calls += 1; });
+  closer.fire(); closer.fire(); closer.fire();
+  assert.equal(calls, 1);
+  closer.reset();
+  closer.fire(); closer.fire();
+  assert.equal(calls, 2);
 });

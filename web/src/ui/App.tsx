@@ -6,7 +6,7 @@ import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './a
 import { EMPTY, reduce, type Action, type Effect, type LiveState } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Icon } from './parts.tsx';
-import { isConversation, parseRoute, routeBehind, routeHash, type Route } from './routes.ts';
+import { isConversation, latch, parseRoute, routeBehind, routeHash, type Route } from './routes.ts';
 import { Sidebar } from './Sidebar.tsx';
 
 const NARROW = '(max-width: 760px)';
@@ -111,9 +111,18 @@ export function App() {
     }
   };
 
+  const closer = useMemo(() => latch(() => {
+    if (behindRef.current) history.back();
+    else location.replace('#/');
+  }), []);
+  const viewRef = useRef(route.view);
+  viewRef.current = route.view;
+
   useEffect(() => {
     const onHash = () => {
       const next = readRoute();
+      closer.reset();
+      if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;
       setRoute(next);
       if (drawerRef.current) {
         setDrawer(false);
@@ -122,7 +131,7 @@ export function App() {
     };
     addEventListener('hashchange', onHash);
     return () => removeEventListener('hashchange', onHash);
-  }, []);
+  }, [closer]);
 
   useEffect(() => {
     const query = matchMedia(NARROW);
@@ -155,17 +164,14 @@ export function App() {
 
   const settingsOpen = route.view === 'settings';
   useEffect(() => {
-    if (settingsOpen) { settingsOpener.current = document.activeElement; return; }
+    if (settingsOpen) return;
     const opener = settingsOpener.current;
     if (!opener) return;
     settingsOpener.current = null;
     focusFirst(opener, document.querySelector('[data-settings-button]'), menuButton.current);
   }, [settingsOpen]);
 
-  const closeSettings = useCallback(() => {
-    if (behindRef.current) history.back();
-    else location.replace('#/');
-  }, []);
+  const closeSettings = closer.fire;
   const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);
 
   useEffect(() => {

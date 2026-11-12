@@ -29,7 +29,9 @@ test('ui/variants: b を選ぶ呼び出し（variant）は、どれも同じ行�
     for (const m of text.matchAll(/\bvariant\(/gu)) {
       const start = Math.max(text.lastIndexOf(';', m.index), text.lastIndexOf('{', m.index), text.lastIndexOf('}', m.index), text.lastIndexOf('\n', m.index)) + 1;
       const statement = text.slice(start, m.index);
-      if (!/import\.meta\.env\.DEV(?: && | \? )/u.test(statement)) bad.push(`${name}: ${statement.trim()}${m[0]}`);
+      const guard = /import\.meta\.env\.DEV( && | \? )(.*)$/u.exec(statement);
+      const onDevSide = guard !== null && !/\|\||\?\?|(^|[^?]):/u.test(guard[2]!);
+      if (!onDevSide) bad.push(`${name}: ${statement.trim()}${m[0]}`);
     }
   }
   assert.deepEqual(bad, []);
