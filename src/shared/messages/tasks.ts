@@ -37,6 +37,8 @@ const en = {
   'event.uncancelled': 'The cancellation was undone',
   'event.build_untrusted': 'Written after reading text from elsewhere, or changed outside the app.',
   'event.read_untrusted': 'Read product notes written after reading text from elsewhere, or changed outside the app.',
+  'event.run_untrusted': 'Written by a run of a conversation that read text from elsewhere.',
+  'event.schedule_untrusted': 'Its text came from a schedule that had text written after reading text from elsewhere.',
   'summary.done_from_ui': 'Marked as done from the screen',
   'summary.cancelled_from_ui': 'Cancelled from the screen',
   'summary.cancelled_schedule_deleted': 'Cancelled because its schedule was deleted while this run was waiting',
