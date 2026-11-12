@@ -47,7 +47,7 @@ export const CATEGORIES: readonly Category[] = [
     rows: ['ui.set.look.theme', 'ui.set.look.reduce'],
     paths: [] },
   { id: 'advanced', group: 'customize', icon: 'sliders', label: 'ui.set.cat.advanced',
-    rows: ['ui.set.adv.file', 'ui.set.adv.open'],
+    rows: ['ui.set.adv.file', 'ui.set.adv.open', 'ui.set.adv.reset'],
     paths: [] },
 ];
 

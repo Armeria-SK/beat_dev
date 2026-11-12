@@ -28,6 +28,7 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'hook-added': return t('access.hookAdded', stage(a.stage), hook(a.hook));
     case 'hook-edited': return t('access.hookEdited', stage(a.stage), hook(a.hook));
     case 'hook-removed': return t('access.hookRemoved', stage(a.stage), hook(a.hook));
+    case 'hook-disabled': return t('access.hookDisabled', stage(a.stage), hook(a.hook));
     case 'origin-added': return t('access.origin', a.origin);
     case 'login-added': return t('access.login', a.login);
     case 'logins-cleared': return t('access.loginsCleared');

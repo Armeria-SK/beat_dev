@@ -54,6 +54,8 @@ const en = {
   'unknown_model': 'The model "{id}" is not in the settings',
   'bad_effort': 'The effort "{effort}" cannot be used with this model (available: {values})',
   'provider_missing': 'The provider "{id}" is not in the settings (if you just added it, save the settings first)',
+  'models_list_failed': 'Could not get the model list from "{id}": {reason}',
+  'reset_no_backup': 'The settings were not reset, because a backup copy of the settings file could not be written ({reason})',
   'key_empty': 'Enter the API key',
   'key_chars': 'The API key contains characters that cannot be used (line breaks, control characters, full-width characters, and so on). Paste it again',
   'key_padded': 'The API key has a space before or after it. Remove it and enter the key again',

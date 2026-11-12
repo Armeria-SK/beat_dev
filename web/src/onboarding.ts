@@ -73,7 +73,9 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
       ...(form.apiKeyEnv.trim() ? { apiKeyEnv: form.apiKeyEnv.trim() } : {}),
     };
     const own = existing ? providers.findIndex(p => p.id === existing.provider && p.kind === 'openai_compatible') : -1;
+    const spare = own >= 0 ? -1 : providers.findIndex(p => p.kind === 'openai_compatible' && p.baseUrl === fields.baseUrl && !models.some(m => m.provider === p.id));
     if (own >= 0) { providerId = providers[own]!.id; providers[own] = { id: providerId, ...fields }; }
+    else if (spare >= 0) { providerId = providers[spare]!.id; providers[spare] = { ...providers[spare]!, ...fields }; }
     else { providerId = uniqueId('local', providers.map(p => p.id)); providers.push({ id: providerId, ...fields }); }
   } else {
     const kind = form.source;
@@ -98,6 +100,17 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     ? { ...routing, chat: ids, background: ids }
     : { ...routing, chat: routing.chat.includes(model.id) ? routing.chat : [...routing.chat, model.id], background: routing.background.includes(model.id) ? routing.background : [...routing.background, model.id] };
   return { config: { ...config, providers, models, routing: next }, modelId: model.id };
+}
+
+export function setupProviderConfig(config: Config, form: ModelForm): { config: Config; providerId: string } {
+  const providers = config.providers as Entry[];
+  const url = form.baseUrl.trim();
+  const found = form.source === 'openai' ? providers.find(p => p.kind === 'openai_compatible' && p.baseUrl === url) : providers.find(p => p.kind === form.source);
+  if (found) return { config, providerId: found.id };
+  const made: Entry = form.source === 'openai'
+    ? { id: uniqueId('local', providers.map(p => p.id)), kind: 'openai_compatible', baseUrl: url, server: form.server, maxParallel: 1, timeoutMs: 600_000 }
+    : { ...DEFAULTS[form.source] };
+  return { config: { ...config, providers: [...providers, made] }, providerId: made.id };
 }
 
 const SEEN_KEY = 'clive.onboardingSeen';

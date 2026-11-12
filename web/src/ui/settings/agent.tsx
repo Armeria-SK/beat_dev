@@ -273,6 +273,15 @@ function AddModel({ onDone }: { onDone: (id: string) => void }) {
   const providers = (ctx.config.providers as Json[]).map(p => p.id as string);
   const [provider, setProvider] = useState<string | null>(providers[0] ?? null);
   const [name, setName] = useState('');
+  const [names, setNames] = useState<string[]>([]);
+  const [listFailed, setListFailed] = useState<string | null>(null);
+  useEffect(() => {
+    setNames([]); setListFailed(null);
+    if (!provider) return undefined;
+    let live = true;
+    api.providerModels(provider).then(list => { if (live) setNames(list.models); }).catch(error => { if (live) setListFailed(errorText(error, '')); });
+    return () => { live = false; };
+  }, [provider]);
   const add = async () => {
     let made = '';
     const ok = await ctx.commit('model:add', c => {
@@ -284,12 +293,16 @@ function AddModel({ onDone }: { onDone: (id: string) => void }) {
     if (ok) onDone(made);
   };
   return (
-    <div className="ui-set__form">
-      <Select value={provider} options={providers.map(p => ({ value: p, label: p }))} label={t('ui.set.model.provider')} onChange={setProvider} />
-      <input className="bt-field bt-field--mono" aria-label={t('ui.set.model.name')} placeholder={t('ui.set.model.namePh')} value={name} spellCheck={false} onChange={e => setName(e.target.value)} />
-      <Button small variant="primary" disabled={ctx.busy !== null || !provider || !name.trim()} onClick={() => void add()}>{t('ui.set.add')}</Button>
-      <Button small variant="ghost" onClick={() => { ctx.cancel(); onDone(''); }}>{t('ui.cancel')}</Button>
-    </div>
+    <>
+      <div className="ui-set__form">
+        <Select value={provider} options={providers.map(p => ({ value: p, label: p }))} label={t('ui.set.model.provider')} onChange={setProvider} />
+        <input className="bt-field bt-field--mono" aria-label={t('ui.set.model.name')} placeholder={t('ui.set.model.namePh')} value={name} spellCheck={false} list="ui-set-model-names" onChange={e => setName(e.target.value)} />
+        <datalist id="ui-set-model-names">{names.map(n => <option key={n} value={n} />)}</datalist>
+        <Button small variant="primary" disabled={ctx.busy !== null || !provider || !name.trim()} onClick={() => void add()}>{t('ui.set.add')}</Button>
+        <Button small variant="ghost" onClick={() => { ctx.cancel(); onDone(''); }}>{t('ui.cancel')}</Button>
+      </div>
+      {(listFailed !== null || names.length > 0) && <p className="bt-meta" role="status">{listFailed !== null ? listFailed || t('ui.set.model.listFailed') : t('ui.set.model.listed', names.length)}</p>}
+    </>
   );
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, ApiError, type Probe, type Profile } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
-import { setupModelConfig } from '../onboarding.ts';
+import { setupModelConfig, setupProviderConfig } from '../onboarding.ts';
 import { accessKey, accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
 import { deepEqual } from '../settings/merge.ts';
 import type { AgentState } from './agent-state.ts';
@@ -50,7 +50,9 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
   const [result, setResult] = useState<Probe | null>(null);
   const [existing, setExisting] = useState<string | null>(null);
   const [problem, setProblem] = useState<keyof typeof PROBLEM_TEXT | null>(null);
-  const [widen, setWiden] = useState<{ items: Access[]; key: string } | null>(null);
+  const [widen, setWiden] = useState<{ items: Access[]; key: string; list?: boolean } | null>(null);
+  const [names, setNames] = useState<string[]>([]);
+  const [listNote, setListNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -113,6 +115,29 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
       const probed = await api.probe();
       setResult(probed.models.find(m => m.id === built.modelId)?.probe ?? { modelId: built.modelId, status: 'unknown', server: '', required: 0, message: '', checkedAt: Date.now() });
     } catch (failure) { setError(errorText(failure, t('ui.ob.model.failed'))); }
+    finally { setBusy(false); }
+  }
+
+  async function list(confirmed: string | null = null) {
+    const found = connectProblem({ ...form, model: '-', context: '32768' }, keySet);
+    setProblem(found);
+    if (found) return;
+    setBusy(true); setError(null); setWiden(null); setListNote(null);
+    try {
+      const latest = (await api.settings()).config;
+      const built = setupProviderConfig(latest, modelFormOf(form));
+      const provider = (built.config.providers as Json[]).find(p => p.id === built.providerId);
+      const items = [...accessWidening(latest, built.config), ...(form.key.trim() && provider ? keyEntryAccess(provider) : [])];
+      if (items.length > 0 && accessKey(items) !== confirmed) { setWiden({ items, key: accessKey(items), list: true }); return; }
+      if (!deepEqual(built.config, latest)) await api.saveSettings(built.config);
+      if (form.key.trim()) {
+        await api.setProviderKey(built.providerId, form.key.trim());
+        setForm(old => ({ ...old, key: '' }));
+        setKeySet(true);
+      }
+      const got = await api.providerModels(built.providerId);
+      setNames(got.models); setListNote(t('ui.set.model.listed', got.models.length));
+    } catch (failure) { setNames([]); setListNote(errorText(failure, t('ui.set.model.listFailed'))); }
     finally { setBusy(false); }
   }
 
@@ -185,11 +210,12 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
               <div className="bt-form-row"><span className="bt-label">{t('ui.ob.model.provider')}</span>
                 <div><div className="bt-seg" role="group" aria-label={t('ui.ob.model.provider')}>
                   {PROVIDERS.map(p => <button key={p} type="button" className="bt-seg__opt" aria-pressed={form.provider === p}
-                    onClick={() => { setForm(emptyConnect(p)); setModelId(null); setResult(null); setProblem(null); setWiden(null); }}>{t(PROVIDER_LABEL[p])}</button>)}
+                    onClick={() => { setForm(emptyConnect(p)); setModelId(null); setResult(null); setProblem(null); setWiden(null); setNames([]); setListNote(null); }}>{t(PROVIDER_LABEL[p])}</button>)}
                 </div></div></div>
               <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.name')}</span>
-                <input className="bt-field bt-field--mono" value={form.model} placeholder={t('ui.ob.model.namePh')} spellCheck={false} autoComplete="off" aria-invalid={problem === 'model' || undefined}
+                <input className="bt-field bt-field--mono" value={form.model} placeholder={t('ui.ob.model.namePh')} spellCheck={false} autoComplete="off" aria-invalid={problem === 'model' || undefined} list="ui-ob-model-names"
                   onChange={e => { setForm({ ...form, model: e.target.value }); setResult(null); }} /></label>
+              <datalist id="ui-ob-model-names">{names.map(n => <option key={n} value={n} />)}</datalist>
               {form.provider === 'custom' && (
                 <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.url')}</span>
                   <input className="bt-field bt-field--mono" value={form.baseUrl} spellCheck={false} autoComplete="off" aria-invalid={problem === 'baseUrl' || undefined}
@@ -206,11 +232,13 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
               {problem && <p className="bt-meta bt-del" role="alert">{t(PROBLEM_TEXT[problem])}</p>}
               <div className="ui-ob__test">
                 <Button disabled={busy} onClick={() => void test()}>{t('ui.ob.model.test')}</Button>
+                <Button variant="ghost" disabled={busy} onClick={() => void list()}>{t('ui.ob.model.list')}</Button>
                 {pill}
                 {!result && existing && <span className="bt-meta">{t('ui.ob.model.existing', existing)}</span>}
               </div>
               {result && !REACHABLE.has(result.status) && result.message && <p className="bt-meta">{result.message}</p>}
-              {widen && <Widen pending={{ row: 'ob:model', items: widen.items, title: t('ui.ob.model.widen'), run: () => void test(widen.key) }} busy={busy} onCancel={() => setWiden(null)} />}
+              {listNote && <p className="bt-meta" role="status">{listNote}</p>}
+              {widen && <Widen pending={{ row: 'ob:model', items: widen.items, title: t('ui.ob.model.widen'), run: () => void (widen.list ? list(widen.key) : test(widen.key)) }} busy={busy} onCancel={() => setWiden(null)} />}
             </section>
           )}
 

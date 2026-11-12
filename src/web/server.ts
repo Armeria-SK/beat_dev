@@ -2,7 +2,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig } from '../config/schema.ts';
-import { ConfigError, parseConfig } from '../config/store.ts';
+import { ConfigError, parseConfig, resetConfig } from '../config/store.ts';
 import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
 import { modelEfforts } from '../engine/efforts.ts';
 import { defaultTexts } from '../engine/workspace.ts';
@@ -413,6 +413,17 @@ export function createWebServer(app: App): WebServer {
     }
     await app.applyConfig(next);
     sendJson(res, 200, { ...settingsView(app), ...modelsView(app) });
+  });
+  router.add('GET', '/api/settings/reset', ({ res }) => sendJson(res, 200, { config: resetConfig(app.config()) }));
+  router.add('POST', '/api/settings/reset', async ({ req, res }) => {
+    requireObject(await readJson(req));
+    const next = resetConfig(app.config());
+    let backup: string;
+    try { backup = app.configStore.backup(); }
+    catch (error) { throw problem(409, 'reset_no_backup', 'reset_no_backup', { params: { reason: (error as NodeJS.ErrnoException).code ?? 'unknown' } }); }
+    await app.applyConfig(next);
+    app.log(`[INFO] Reset the settings to the defaults (the previous settings file was copied to ${backup})`);
+    sendJson(res, 200, { backup, ...settingsView(app), ...modelsView(app) });
   });
   router.add('GET', '/api/templates', ({ res }) => {
     sendJson(res, 200, defaultTexts(app.paths));

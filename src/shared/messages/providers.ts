@@ -16,6 +16,8 @@ const en = {
   'anthropic.connect': 'Cannot connect to the Anthropic API',
   'anthropic.busy': 'The Anthropic API is busy (HTTP 529)',
   'unexpected': 'An unexpected error occurred (see the run log for details)',
+  'models.unreadable': 'The provider did not answer with a model list',
+  'models.too_large': 'The model list from the provider is too large to read',
 
   'probe.exceeds_model': 'The configured contextLength ({declared}) exceeds the limit of the model ({modelMax})',
   'probe.unknown': 'The context length is unknown (it could not be fetched from the server and is not in the settings)',

@@ -2,7 +2,13 @@ import type { App } from '../app.ts';
 import type { ProviderConfig } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
 import { envFileValue, EnvFileError, removeEnvValue, setEnvValue } from '../env-file.ts';
+import { providerSecrets } from '../providers/http.ts';
+import { listProviderModels } from '../providers/model-list.ts';
+import { ProviderError } from '../providers/types.ts';
+import { languageOf } from '../shared/language.ts';
+import { providerText } from '../shared/messages/providers.ts';
 import { isSecretEnvName, keyEnvName, keyProblem, MAX_KEY_CHARS, takenKeyEnvs } from '../shared/provider-key.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import { configProblem, problem, readJson, requireObject, type Router, sendJson } from './http.ts';
 
 // API キーを画面から入れる（段 9f）。鍵は .env にだけ書き、応答・ログ・DB・SSE のどこにも出さない。GET が返すのは「入っているか」と末尾 4 文字だけ。
@@ -49,6 +55,15 @@ export function registerKeyRoutes(router: Router, app: App): void {
     const { provider } = providerOf(params[0]!);
     const name = readName(provider);
     sendJson(res, 200, name ? stateOf(name) : NOT_SET);
+  });
+
+  router.add('GET', '/api/providers/:id/models', async ({ res, params }) => {
+    const { provider } = providerOf(params[0]!);
+    try { sendJson(res, 200, await listProviderModels(provider, app.env, app.fetch)); }
+    catch (error) {
+      const reason = error instanceof ProviderError ? error.text(languageOf(app.config())) : providerText(languageOf(app.config()), 'unexpected');
+      throw problem(502, 'models_unavailable', 'models_list_failed', { params: { id: provider.id, reason: redactSecrets(reason, providerSecrets(provider, app.env)) } });
+    }
   });
 
   router.add('PUT', '/api/providers/:id/key', async ({ req, res, params }) => {

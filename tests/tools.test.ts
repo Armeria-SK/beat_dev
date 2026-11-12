@@ -523,6 +523,29 @@ test('フック: exit 2 で拒否、JSON で ask、タイムアウトは止め�
   assert.equal(stillDenied.decision, 'deny', 'allow を返すフックがあっても組み込みの拒否は変わらない');
 });
 
+test('フック: enabled が false のものは動かさない（使う前も使ったあとも）。enabled を書いていないフックは今までどおり動く', async t => {
+  const dir = tempDir(t);
+  const mark = join(dir, 'ran.txt');
+  const deny = join(dir, 'deny.mjs');
+  writeFileSync(deny, `process.stderr.write('stopped by the hook');process.exit(2)`);
+  const post = join(dir, 'post.mjs');
+  writeFileSync(post, `import { writeFileSync } from 'node:fs';writeFileSync(${JSON.stringify(mark)}, 'ran');`);
+  const hook = (script: string, enabled?: boolean) => ({ matcher: 'shell_run', command: [process.execPath, script], timeoutMs: 10_000, onError: 'deny' as const, ...(enabled === undefined ? {} : { enabled }) });
+
+  const off = setup(t, c => { c.tools.hooks = { preToolUse: [hook(deny, false)], postToolUse: [hook(post, false)] }; });
+  assert.equal((await off.call('shell_run', { command: 'echo fine' })).decision, 'allow', '止めるフックがオフなら止まらない');
+  assert.equal(existsSync(mark), false, 'オフの「使ったあと」のフックは動かない');
+
+  const unset = setup(t, c => { c.tools.hooks = { preToolUse: [hook(deny)], postToolUse: [] }; });
+  assert.equal((await unset.call('shell_run', { command: 'echo fine' })).decision, 'deny', 'enabled を書いていない古い設定のフックは動く');
+  const on = setup(t, c => { c.tools.hooks = { preToolUse: [hook(deny, true)], postToolUse: [] }; });
+  assert.equal((await on.call('shell_run', { command: 'echo fine' })).decision, 'deny');
+
+  const after = setup(t, c => { c.tools.hooks = { preToolUse: [], postToolUse: [hook(post)] }; });
+  await after.call('shell_run', { command: 'echo fine' });
+  assert.equal(existsSync(mark), true, 'オンの「使ったあと」のフックは動く');
+});
+
 // ── 子プロセス ────────────────────────────────────────────
 
 test('子プロセス: API キーやトークンは環境変数から外す', async t => {
