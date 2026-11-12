@@ -3,7 +3,7 @@ import { APP_ROOT } from '../paths.ts';
 import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
 import { ownerSpeech } from '../db/conversations.ts';
 import { AcceptanceError, coverageOf, frozenHash, ownerChanges, type AcceptanceChangeRow, type AcceptanceDoc } from '../projects/acceptance.ts';
-import { BuildError, startBuild } from '../projects/build.ts';
+import { BuildError, startBuild, unbuilt } from '../projects/build.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
 import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
@@ -168,6 +168,8 @@ export function registerProjectRoutes(router: Router, app: App): void {
       hash: doc ? frozenHash(doc) : null, tainted: (doc?.taintedRuns?.length ?? 0) > 0,
       frozen: frozen ? { version: frozen.version, hash: frozen.hash, plan_hash: frozen.plan_hash, created_at: frozen.created_at, source: frozen.source, build_task_id: frozen.build_task_id } : null,
       change: changeWire(app.acceptance.pending(projectId)),
+      unbuilt: frozen && doc ? unbuilt(app, projectId, doc) : [],
+      open_build_task_id: app.tasks.openBuild(projectId),
     };
   };
   const projectOr404 = (id: string) => {
@@ -195,7 +197,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
 
   router.add('GET', '/api/projects/:id/acceptance/versions/:n', ({ res, params }) => {
     const project = projectOr404(params[0]!);
-    if (!/^[1-9]d{0,8}$/u.test(params[1]!)) throw problem(400, 'invalid_id', 'invalid_id');
+    if (!/^[1-9]\d{0,8}$/u.test(params[1]!)) throw problem(400, 'invalid_id', 'invalid_id');
     const row = app.acceptance.version(project.id, Number(params[1]));
     if (!row) throw problem(404, 'not_found', 'item_missing');
     const { content, ...rest } = row;

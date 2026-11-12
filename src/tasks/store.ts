@@ -352,7 +352,12 @@ export class TaskStore {
   }
 
   hasOpenBuild(projectId: string): boolean {
-    return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting')").get(projectId));
+    return this.openBuild(projectId) !== null;
+  }
+
+  openBuild(projectId: string): string | null {
+    const row = this.#db.prepare("SELECT id FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting') ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as { id: string } | undefined;
+    return row?.id ?? null;
   }
 
   builds(projectId: string): Array<{ items: string[]; created_at: number }> {

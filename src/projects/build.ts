@@ -31,7 +31,7 @@ export interface BuildDeps {
   now?: () => number;
 }
 
-function unbuilt(d: BuildDeps, projectId: string, doc: AcceptanceDoc): string[] {
+export function unbuilt(d: Pick<BuildDeps, 'acceptance' | 'tasks'>, projectId: string, doc: AcceptanceDoc): string[] {
   const since = new Map(d.acceptance.versions(projectId).map(row => [row.version, row.created_at]));
   const first = Math.min(...since.keys());
   const builds = d.tasks.builds(projectId);

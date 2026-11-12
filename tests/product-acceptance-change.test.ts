@@ -61,6 +61,8 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   return { ...s, events, product, send, results, list, plan, build, file, rows, versionCount, frozen, propose };
 }
 
+const pick = (acceptance: Record<string, unknown>) => ({ unbuilt: acceptance.unbuilt, open_build_task_id: acceptance.open_build_task_id });
+
 const item = (result: string, source: Record<string, unknown> = { source: 'ai_added' }, check: Record<string, unknown> = { check: 'command', command: 'npm test' }) => ({ result, ...source, ...check });
 
 test('3-3-s acceptance_change の印: meta・planOk・projectOnly・製品の会話だけ。説明は英語で短く、持ち主が Approve するまで変わらないと言う', () => {
@@ -489,6 +491,51 @@ test('3-3-s Build をもう一度: 変わった版に受け持つタスクの無
   const third = await s.build(shop.id);
   assert.equal(third.status, 409);
   assert.equal(third.body.code, 'build.frozen');
+});
+
+test('3-3-s 一覧の口の unbuilt と open_build_task_id: 固定の前は [] と null。固定のあとは受け持ちの無い「未」の番号と、開いている Build タスク（2 回目の Build も指す。frozen.build_task_id は版を作った Build しか指さない）。Approve・Reject・直しの返事も同じ形', async t => {
+  const s = await setup(t);
+  const draft = await s.product('draft');
+  assert.deepEqual(pick((await s.list(draft.id)).acceptance), { unbuilt: [], open_build_task_id: null });
+  s.adapter().scripts = [call('acceptance_write', { items: [item('One')] }), reply('ok')];
+  await s.send(uuid(1), { text: 'list', projectId: draft.id });
+  assert.deepEqual(pick((await s.list(draft.id)).acceptance), { unbuilt: [], open_build_task_id: null }, '下書きの未の項目は数えない');
+
+  const shop = await s.frozen();
+  assert.deepEqual(pick((await s.list(shop.id)).acceptance), { unbuilt: [], open_build_task_id: shop.task.id });
+  const edited = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 1, ops: [{ op: 'add', item: { result: 'Share links expire', check: { kind: 'look' } } }] });
+  assert.deepEqual(pick(edited.body.acceptance), { unbuilt: ['A-4'], open_build_task_id: shop.task.id });
+
+  await s.propose(shop.id, uuid(2), 'change', { changes: [{ op: 'change', id: 'A-2', result: 'Files are listed oldest first', check: 'look' }] });
+  const approved = await s.json(`/api/projects/${shop.id}/acceptance/changes/${String(s.rows(shop.id).at(-1)!.id)}/approve`, 'POST', {});
+  assert.deepEqual(pick(approved.body.acceptance), { unbuilt: ['A-2', 'A-4'], open_build_task_id: shop.task.id });
+  await s.propose(shop.id, uuid(2), 'change', { changes: [{ op: 'remove', id: 'A-1' }] });
+  const rejected = await s.json(`/api/projects/${shop.id}/acceptance/changes/${String(s.rows(shop.id).at(-1)!.id)}/reject`, 'POST', {});
+  assert.deepEqual(pick(rejected.body.acceptance), { unbuilt: ['A-2', 'A-4'], open_build_task_id: shop.task.id });
+
+  await s.json(`/api/tasks/${shop.task.id}/cancel`, 'POST', {});
+  assert.deepEqual(pick((await s.list(shop.id)).acceptance), { unbuilt: ['A-2', 'A-4'], open_build_task_id: null });
+  const again = await s.build(shop.id);
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+  const after = (await s.list(shop.id)).acceptance;
+  assert.deepEqual(pick(after), { unbuilt: [], open_build_task_id: again.body.task.id });
+  assert.equal(after.frozen.version, 3);
+  assert.equal(after.frozen.build_task_id, null, '最新の版（Approve で作った版）は 2 回目の Build を指さない');
+  assert.equal(s.app.acceptance.version(shop.id, 1)!.build_task_id, shop.task.id);
+});
+
+test('3-3-s 版の口: 10 番目より後の版も読める', async t => {
+  const s = await setup(t);
+  const shop = await s.frozen();
+  for (let base = 1; base < 11; base++) s.app.acceptance.ownerEdit(shop.id, { baseVersion: base, ops: [{ op: 'add', item: { result: `Extra ${base}`, check: { kind: 'look' } } }] });
+  assert.equal(s.app.acceptance.latest(shop.id)!.version, 11);
+  for (const n of [10, 11]) {
+    const one = await s.json(`/api/projects/${shop.id}/acceptance/versions/${n}`, 'GET');
+    assert.equal(one.status, 200, `v${n}`);
+    assert.equal(one.body.version.version, n);
+  }
+  assert.equal((await s.json(`/api/projects/${shop.id}/acceptance/versions/12`, 'GET')).status, 404);
+  assert.equal((await s.json(`/api/projects/${shop.id}/acceptance/versions/1000000000`, 'GET')).status, 400);
 });
 
 test('3-3-s AI からは版を変えられない: 固定のあとの acceptance_write は断られ、acceptance_change は案を積むだけで版の行もファイルも変えない', async t => {
