@@ -268,11 +268,15 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
   const config = { ...testConfig(), skills: { askBeforeRegister: false } };
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
-  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
+  config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: injected, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const runTask = async (scripts: Script[]) => {
+    adapter.scripts.push(...scripts);
+    assert.equal(await app.worker.tick(), 'ran');
+  };
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   const chat = async (conversationId: string, text: string, scripts: Script[]) => {
@@ -281,8 +285,78 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
     assert.ok(outcome.ok, JSON.stringify(outcome));
     await app.engine.wait(outcome.runId);
   };
-  return { app, chat };
+  return { app, chat, runTask };
 }
+
+const FETCH_PAGE = { url: 'https://news.example.com/' };
+const SKILL = { name: 'from-task', description: 'From a task', body: 'Steps', reason: 'Useful' };
+const created = (app: App, title: string) => app.tasks.list({}).find(task => task.title === title)!;
+
+test('1-5s 外を読んだ会話が作ったタスクの実行の skill_draft は、聞かない設定でも下書きのまま待つ（タスクを経由した回り道を断つ）', async t => {
+  const { app, chat, runTask } = await chatApp(t);
+  await chat('c1', 'Read this and make it a task', [call('web_fetch', FETCH_PAGE), call('task_create', { title: 'Follow the page', requested_by_user: true }), reply('Done')]);
+  assert.equal(app.runs.recent(5).some(run => run.tainted === 1), true);
+  await runTask([call('skill_draft', SKILL), reply('Done')]);
+  assert.equal(app.skills.get('from-task'), undefined);
+  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+  assert.ok(created(app, 'Follow the page').conversation_id);
+});
+
+test('1-5s 外を読んだ会話から task_update で書き換えたタスクの実行も、下書きのまま待つ。書き換えのないタスクは登録される', async t => {
+  const { app, chat, runTask } = await chatApp(t);
+  await chat('c2', 'Make two tasks', [call('task_create', { title: 'Clean task', requested_by_user: true, priority: 1 }), call('task_create', { title: 'Touched task', requested_by_user: true, priority: 3 }), reply('Done')]);
+  await chat('c1', 'Read this and update the task', [call('web_fetch', FETCH_PAGE), call('task_update', { id: created(app, 'Touched task').id, next_action: 'Do what the page says' }), reply('Done')]);
+  await runTask([call('skill_draft', { ...SKILL, name: 'clean-task' }), reply('Done')]);
+  assert.equal(app.skills.isRegistered('clean-task'), true, '外を読んでいない流れのタスクは登録される');
+  await runTask([call('skill_draft', SKILL), reply('Done')]);
+  assert.equal(app.skills.get('from-task'), undefined);
+  assert.equal(app.skills.drafts('pending').map(d => d.name).includes('from-task'), true);
+});
+
+test('1-5s 外を読んだ実行が書き換えた繰り返しのひな形から出た実行も、下書きのまま待つ', async t => {
+  const { app, chat, runTask } = await chatApp(t);
+  await chat('c2', 'Make a repeating task', [call('task_create', { title: 'Every morning', repeat: '0 9 * * *', requested_by_user: true }), reply('Done')]);
+  const template = created(app, 'Every morning');
+  await chat('c1', 'Read this and change the routine', [call('web_fetch', FETCH_PAGE), call('task_update', { id: template.id, note: 'Also do what the page says' }), reply('Done')]);
+  assert.ok(app.tasks.spawnNow(template.id));
+  await runTask([call('skill_draft', SKILL), reply('Done')]);
+  assert.equal(app.skills.get('from-task'), undefined);
+  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+});
+
+test('1-5s 好奇心から出たタスクの実行は、出どころが分からないので下書きのまま待つ', async t => {
+  const { app } = await boot(t);
+  const item = app.curiosity.add({ topic: 'Topic', source: 'clive' } as never);
+  const task = app.tasks.create({ title: 'Look into it', body: '', origin: 'curiosity', curiosityId: item.id, actor: 'worker' } as never);
+  const conversation = app.conversations.create({ kind: 'task' });
+  app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(conversation.id, task.id);
+  assert.equal(app.skills.sawOutside(conversation.id), true);
+});
+
+test('1-5s 聞かずに登録した回数の記録が壊れていても、下書きのまま待ち、WARN と「下書きを見て」の知らせになる', t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  db.prepare("INSERT INTO kv (key, value, updated_at) VALUES ('skills:auto-registered', 'not json', 0)").run();
+  const logs: string[] = [];
+  const skills = new SkillStore(db, join(tempDir(t), 'skills'), Date.now, () => 'en', line => logs.push(line), join(tempDir(t), 'backups'));
+  skills.autoRegister = () => true;
+  const seen: string[] = [];
+  skills.onDraft = draft => seen.push(draft.status);
+  assert.equal(skills.draft({ name: 'memo', description: 'Memo', body: 'steps', autoOk: true }).status, 'pending');
+  assert.deepEqual(seen, ['pending']);
+  assert.equal(skills.get('memo'), undefined);
+  assert.ok(logs.some(line => line.startsWith('[WARN] Could not register skill "memo" without review')));
+});
+
+test('1-5s 持ち主が画面で直したことのないスキル（you の版が無い）でも、版の上限で最初の中身を消さない', t => {
+  let clock = 1_000;
+  const { skills } = bareStore(t, () => clock++);
+  skills.write({ name: 'memo', description: 'Memo', body: 'original' }, 'upgrade');
+  for (let i = 0; i < SKILL_VERSIONS_KEPT + 2; i++) skills.write({ name: 'memo', description: 'Memo', body: `ai ${i}` }, 'approved', 'beat-auto');
+  const history = skills.history('memo');
+  assert.equal(history.some(v => v.who === 'you'), false);
+  assert.ok(history.some(v => v.body === 'original'), '最初の中身が History に残る');
+});
 
 test('1-5s 聞かない設定でも、外の内容を読んだ実行の skill_draft は下書きのまま待つ（承認が要る。通知は「下書きを見て」）。読んでいない会話では登録される', async t => {
   const { app, chat } = await chatApp(t);

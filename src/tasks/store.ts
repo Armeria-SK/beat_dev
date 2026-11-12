@@ -248,6 +248,7 @@ export class TaskStore {
         patch.runAt === undefined ? task.run_at : patch.runAt, this.#now(), id,
       );
       if (patch.appendNote) this.event(id, 'note', actor, patch.appendNote, runId);
+      else if (runId) this.event(id, 'edited', actor, null, runId);
       return this.#changed(id);
     });
   }

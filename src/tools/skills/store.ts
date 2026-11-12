@@ -224,7 +224,7 @@ export class SkillStore {
     writeFileSync(join(dir, file), previous, { encoding: 'utf8', flag: 'wx' });
     const sorted = [...files, file].sort(byVersion);
     const lastYou = sorted.findLastIndex(f => VERSION_FILE.exec(f)![2] === 'you');
-    const keep = new Set(lastYou >= 0 ? sorted.slice(lastYou, lastYou + 2) : []);
+    const keep = new Set(lastYou >= 0 ? sorted.slice(lastYou, lastYou + 2) : sorted.slice(0, 1));
     for (const old of sorted.slice(0, Math.max(0, sorted.length - SKILL_VERSIONS_KEPT))) if (!keep.has(old)) unlinkSync(join(dir, old));
   }
 
@@ -255,21 +255,30 @@ export class SkillStore {
   }
 
   sawOutside(conversationId: string | undefined): boolean {
-    if (!conversationId) return true;
-    const own = this.#db.prepare('SELECT source_conversation_id, source_task_id FROM conversations WHERE id = ?').get(conversationId) as { source_conversation_id: string | null; source_task_id: string | null } | undefined;
-    if (!own) return true;
-    const ids = [conversationId];
-    if (own.source_conversation_id) ids.push(own.source_conversation_id);
-    if (own.source_task_id) {
-      const task = this.#db.prepare('SELECT conversation_id FROM tasks WHERE id = ?').get(own.source_task_id) as { conversation_id: string | null } | undefined;
-      if (!task) return true;
-      if (task.conversation_id) ids.push(task.conversation_id);
-    }
-    return ids.some(id => {
-      const row = this.#db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get(id) as { ever_tainted: number } | undefined;
-      return row === undefined || row.ever_tainted !== 0
-        || this.#db.prepare('SELECT 1 FROM engine_runs WHERE conversation_id = ? AND tainted = 1 LIMIT 1').get(id) !== undefined;
-    });
+    return !conversationId || this.#outsideConversation(conversationId, new Set());
+  }
+
+  #outsideConversation(id: string, seen: Set<string>): boolean {
+    if (seen.has(`c:${id}`)) return false;
+    seen.add(`c:${id}`);
+    const row = this.#db.prepare('SELECT ever_tainted, source_conversation_id, source_task_id FROM conversations WHERE id = ?').get(id) as { ever_tainted: number; source_conversation_id: string | null; source_task_id: string | null } | undefined;
+    if (!row || row.ever_tainted !== 0) return true;
+    if (this.#db.prepare('SELECT 1 FROM engine_runs WHERE conversation_id = ? AND tainted = 1 LIMIT 1').get(id) !== undefined) return true;
+    if (row.source_conversation_id && this.#outsideConversation(row.source_conversation_id, seen)) return true;
+    if (row.source_task_id && this.#outsideTask(row.source_task_id, seen)) return true;
+    const tasks = this.#db.prepare('SELECT id FROM tasks WHERE conversation_id = ?').all(id) as Array<{ id: string }>;
+    return tasks.some(task => this.#outsideTask(task.id, seen));
+  }
+
+  #outsideTask(id: string, seen: Set<string>): boolean {
+    if (seen.has(`t:${id}`)) return false;
+    seen.add(`t:${id}`);
+    const task = this.#db.prepare('SELECT conversation_id, parent_id, created_in_conversation, curiosity_id FROM tasks WHERE id = ?').get(id) as { conversation_id: string | null; parent_id: string | null; created_in_conversation: string | null; curiosity_id: number | null } | undefined;
+    if (!task || task.curiosity_id !== null) return true;
+    if (this.#db.prepare('SELECT 1 FROM task_events e JOIN engine_runs r ON r.id = e.run_id WHERE e.task_id = ? AND r.tainted = 1 LIMIT 1').get(id) !== undefined) return true;
+    if (task.created_in_conversation && this.#outsideConversation(task.created_in_conversation, seen)) return true;
+    if (task.conversation_id && this.#outsideConversation(task.conversation_id, seen)) return true;
+    return task.parent_id !== null && this.#outsideTask(task.parent_id, seen);
   }
 
   #autoQuotaLeft(now: number): boolean {
@@ -294,8 +303,8 @@ export class SkillStore {
     const result = this.#db.prepare('INSERT INTO skill_drafts (name, description, body, reason, conversation_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(input.name, input.description.trim(), input.body.trim(), input.reason?.trim() || null, input.conversationId ?? null, input.runId ?? null, now);
     const id = Number(result.lastInsertRowid);
-    if (input.autoOk === true && this.autoRegister?.() === true && this.#autoQuotaLeft(now)) {
-      try { this.approve(id, 'beat-auto'); this.#countAuto(now); } catch (error) { this.#log(`[WARN] Could not register skill "${input.name}" without review, so it waits as a draft: ${(error as Error).message}`); }
+    if (input.autoOk === true && this.autoRegister?.() === true) {
+      try { if (this.#autoQuotaLeft(now)) { this.approve(id, 'beat-auto'); this.#countAuto(now); } } catch (error) { this.#log(`[WARN] Could not register skill "${input.name}" without review, so it waits as a draft: ${(error as Error).message}`); }
     }
     const draft = this.getDraft(id)!;
     this.onDraft?.(draft);
