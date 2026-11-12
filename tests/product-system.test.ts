@@ -59,15 +59,15 @@ test('2-3 指示ファイル: AGENTS.md を読み、無ければ CLAUDE.md、ど
   assert.equal(instructionsSection(undefined), undefined);
   writeFileSync(join(root, 'CLAUDE.md'), 'claude rules');
   assert.deepEqual(readInstructions(root, 2000), { name: 'CLAUDE.md', text: 'claude rules', truncated: false });
-  writeFileSync(join(root, 'AGENTS.md'), '﻿agents rules\n');
+  writeFileSync(join(root, 'AGENTS.md'), '\u{FEFF}agents rules\n');
   assert.deepEqual(readInstructions(root, 2000), { name: 'AGENTS.md', text: 'agents rules', truncated: false });
   assert.equal(instructionsSection(readInstructions(root, 2000)), '# Product instructions (AGENTS.md)\n\nagents rules');
 });
 
 test('2-3 指示ファイル: 見えない文字（幅ゼロ・向きを変える印・タグ文字・制御文字）を取り除く。改行とタブは残す', t => {
   const root = tempDir(t);
-  writeFileSync(join(root, 'AGENTS.md'), 'a​b‮c⁦d\u{E0041}e\u0007f\tg\nh­i');
-  assert.equal(readInstructions(root, 2000)?.text, 'abcdef\tg\nhi');
+  writeFileSync(join(root, 'AGENTS.md'), 'a\u{200B}b\u{202E}c\u{2066}d\u{E0041}e\u{7}f\tg\nh\u{AD}i\u{FEFF}j');
+  assert.equal(readInstructions(root, 2000)?.text, 'abcdef\tg\nhij');
 });
 
 test('2-3 指示ファイル: 上限を超えると頭から上限まで入れ、切った旨の 1 行が付く。大きなファイルを丸ごと読まない', t => {

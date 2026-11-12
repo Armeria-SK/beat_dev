@@ -7,7 +7,7 @@ export const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
 export const INSTRUCTIONS_BUDGET_RATIO = 0.05;
 export const INSTRUCTIONS_DEFAULT_TOKENS = 2000;
 
-const INVISIBLE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F­؜᠎​-‏‪-‮⁠-⁩﻿\u{E0000}-\u{E007F}]/gu;
+const INVISIBLE = /[\u{0}-\u{8}\u{B}\u{C}\u{E}-\u{1F}\u{7F}-\u{9F}\u{AD}\u{61C}\u{180E}\u{200B}-\u{200F}\u{202A}-\u{202E}\u{2060}-\u{2069}\u{FEFF}\u{E0000}-\u{E007F}]/gu;
 
 export interface Instructions {
   name: (typeof INSTRUCTION_FILES)[number];
@@ -20,13 +20,25 @@ export const instructionsBudget = (smallestAvailable: number | undefined): numbe
 
 export const stripInvisible = (text: string): string => text.replace(INVISIBLE, '');
 
-function readHead(path: string, maxBytes: number): { text: string; whole: boolean } | undefined {
+function insideReal(realRoot: string, path: string): string | undefined {
+  try {
+    const real = realpathSync.native(path);
+    return isInside(realRoot, real) ? real : undefined;
+  } catch { return undefined; }
+}
+
+function readHead(realRoot: string, path: string, maxBytes: number): { text: string; whole: boolean } | undefined {
   let fd: number | undefined;
   try {
-    fd = openSync(path, 'r');
-    const stat = fstatSync(fd);
-    if (!stat.isFile()) return undefined;
-    const size = Math.min(stat.size, maxBytes);
+    const real = insideReal(realRoot, path);
+    if (!real || !statSync(real).isFile()) return undefined;
+    fd = openSync(real, 'r');
+    const opened = fstatSync(fd, { bigint: true });
+    const again = insideReal(realRoot, path);
+    const now = again === undefined ? undefined : statSync(again, { bigint: true });
+    if (!opened.isFile() || !now || now.ino !== opened.ino || now.dev !== opened.dev) return undefined;
+    const total = Number(opened.size);
+    const size = Math.min(total, maxBytes);
     const buffer = Buffer.alloc(size);
     let read = 0;
     while (read < size) {
@@ -34,9 +46,9 @@ function readHead(path: string, maxBytes: number): { text: string; whole: boolea
       if (n === 0) break;
       read += n;
     }
-    const whole = read === stat.size;
+    const whole = read === total;
     let text = buffer.subarray(0, read).toString('utf8');
-    if (!whole) text = text.replace(/�+$/u, '');
+    if (!whole) text = text.replace(/\u{FFFD}+$/u, '');
     return { text, whole };
   } catch { return undefined; } finally { if (fd !== undefined) closeSync(fd); }
 }
@@ -47,11 +59,7 @@ export function readInstructions(root: string, budgetTokens: number): Instructio
   for (const name of INSTRUCTION_FILES) {
     const path = join(root, name);
     if (!lstatSync(path, { throwIfNoEntry: false })) continue;
-    let real: string;
-    try { real = realpathSync.native(path); } catch { return undefined; }
-    if (!isInside(realRoot, real)) return undefined;
-    try { if (!statSync(real).isFile()) return undefined; } catch { return undefined; }
-    const head = readHead(real, budgetTokens * 4 + 16);
+    const head = readHead(realRoot, path, budgetTokens * 4 + 16);
     if (!head) return undefined;
     const clean = stripInvisible(head.text).trim();
     const keep = prefixLength(clean, clean.length, budgetTokens);
