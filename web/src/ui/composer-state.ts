@@ -162,8 +162,8 @@ export async function submitMessage(i: SubmitInput, d: SubmitDeps): Promise<Subm
   }
 }
 
-export const queuedLine =(p: Pick<PendingMessage, 'text' | 'attachments'>): string => p.text.replace(/\s+/gu, ' ').trim() || p.attachments.map(a => a.name).join(', ');
+export const queuedLine = (p: Pick<PendingMessage, 'text' | 'attachments'>): string => p.text.replace(/\s+/gu, ' ').trim() || p.attachments.map(a => a.name).join(', ');
 
 export const toastLift = (viewportHeight: number, composerTop: number): number => Math.max(0, Math.round(viewportHeight - composerTop));
 
-export const attachRoom =(attached: number, incoming: number): number => Math.max(0, Math.min(incoming, MAX_ATTACHMENTS - attached));
+export const attachRoom = (attached: number, incoming: number): number => Math.max(0, Math.min(incoming, MAX_ATTACHMENTS - attached));

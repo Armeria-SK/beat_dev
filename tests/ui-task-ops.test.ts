@@ -119,6 +119,12 @@ test('ui/task-ops: 取り消し・却下の前にタスクが終わっていた�
   assert.equal(await runTaskOp('cancel', TASK, {}, other.deps), false);
 });
 
+test('ui/task-ops: Mark done の前にタスクが終わっていた（409 http.already_finished）ときも、「もう終わっていた」と知らせて読み直させる（true）', async () => {
+  const h = harness({ done: new ApiError(409, { error: 'task', code: 'http.already_finished', message: 'finished' }) });
+  assert.equal(await runTaskOp('done', TASK, {}, h.deps), true);
+  assert.deepEqual(h.toasts.map(item => [item.title, item.body]), [[t('ui.task.toast.alreadyFinished'), 'Tidy the notes']]);
+});
+
 test('ui/task-ops: 返事待ちのタスクに答える', async () => {
   const h = harness();
   assert.equal(await answerTaskOp(TASK, 'export.csv', h.deps), true);

@@ -61,7 +61,7 @@ export async function runTaskOp(op: TaskOp, task: Pick<Task, 'id' | 'title'>, op
         return true;
     }
   } catch (error) {
-    if ((op === 'cancel' || op === 'reject') && alreadyFinished(error)) {
+    if ((op === 'cancel' || op === 'reject' || op === 'done') && alreadyFinished(error)) {
       deps.toast({ icon: 'alert', title: t('ui.task.toast.alreadyFinished'), body: task.title });
       return true;
     }

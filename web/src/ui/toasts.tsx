@@ -87,7 +87,7 @@ export function Toasts() {
               {item.href
                 ? <a className="bt-toast__body ui-toast__link" href={item.href} onClick={() => dismiss(id)}>{body}</a>
                 : <div className="bt-toast__body">{body}</div>}
-              {item.action && <Button small icon="undo" onClick={() => { item.action!.run(); dismiss(id); }}>{item.action.label}</Button>}
+              {item.action && <Button small icon="undo" disabled={isLeaving} onClick={() => { item.action!.run(); dismiss(id); }}>{item.action.label}</Button>}
             </div>
           );
         })}
