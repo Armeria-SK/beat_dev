@@ -119,7 +119,7 @@ test('shell: 表形式のプローブ（bash）', t => {
     ['cd .. && ls', 'ask', '外へ移動'],
     ['npm install left-pad', 'ask', 'パッケージの導入（今回だけ）'],
     ['npx some-tool', 'ask'],
-    ['npm test', 'ask', 'package.json の scripts は Clive が書き換えられるので毎回確かめる（tests/code-guard.test.ts に表）'],
+    ['npm test', 'ask', 'package.json の scripts は beat が書き換えられるので毎回確かめる（tests/code-guard.test.ts に表）'],
     ['git push origin main', 'ask', '外への送信'],
     ['curl -X POST https://example.com -d @data.json', 'ask'],
     ['python -c "import os; os.remove(1)"', 'ask', 'インタプリタへのコード直渡し'],

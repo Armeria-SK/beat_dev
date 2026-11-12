@@ -5,7 +5,7 @@ import { ConfigError, defaultConfig, parseConfig } from '../src/config/store.ts'
 import { NOTIFICATION_KINDS, NotificationKindSchema } from '../src/config/schema.ts';
 import type { NotificationKind } from '../src/notify/notifications.ts';
 
-const channel = (over: Record<string, unknown> = {}) => ({ id: 'phone', kind: 'webhook', urlEnv: 'CLIVE_NOTIFY_PHONE_URL_SECRET', ...over });
+const channel = (over: Record<string, unknown> = {}) => ({ id: 'phone', kind: 'webhook', urlEnv: 'BEAT_NOTIFY_PHONE_URL_SECRET', ...over });
 const withNotify = (notify: Record<string, unknown>) => ({ ...JSON.parse(JSON.stringify(defaultConfig())), notify });
 
 test('T-01 設定に notify が無ければ既定の値になる（送り先なし・リンクの頭なし）', () => {
@@ -34,15 +34,15 @@ test('チャネルの既定: 種類は 4 つ・有効・本文なし', () => {
 
 test('T-03 断るもの', () => {
   const bad: Array<[string, Record<string, unknown>]> = [
-    ['id の重複', { channels: [channel(), channel({ urlEnv: 'CLIVE_NOTIFY_OTHER_URL_SECRET' })] }],
-    ['urlEnv が小文字', { channels: [channel({ urlEnv: 'clive_notify_url_secret' })] }],
+    ['id の重複', { channels: [channel(), channel({ urlEnv: 'BEAT_NOTIFY_OTHER_URL_SECRET' })] }],
+    ['urlEnv が小文字', { channels: [channel({ urlEnv: 'beat_notify_url_secret' })] }],
     ['id が大文字', { channels: [channel({ id: 'Phone' })] }],
     ['publicBaseUrl が http の外部', { publicBaseUrl: 'http://example.com' }],
-    ['publicBaseUrl が URL でない', { publicBaseUrl: 'clive.example' }],
+    ['publicBaseUrl が URL でない', { publicBaseUrl: 'beat.example' }],
     ['urlEnv が ANTHROPIC_API_KEY', { channels: [channel({ urlEnv: 'ANTHROPIC_API_KEY' })] }],
     ['tokenEnv が ANTHROPIC_API_KEY', { channels: [channel({ tokenEnv: 'ANTHROPIC_API_KEY' })] }],
     ['同じ urlEnv の 2 つ', { channels: [channel(), channel({ id: 'tablet' })] }],
-    ['urlEnv と tokenEnv が同じ', { channels: [channel({ tokenEnv: 'CLIVE_NOTIFY_PHONE_URL_SECRET' })] }],
+    ['urlEnv と tokenEnv が同じ', { channels: [channel({ tokenEnv: 'BEAT_NOTIFY_PHONE_URL_SECRET' })] }],
     ['kinds が空', { channels: [channel({ kinds: [] })] }],
     ['kinds に知らない種類', { channels: [channel({ kinds: ['nope'] })] }],
     ['kind が webhook でない', { channels: [channel({ kind: 'ntfy' })] }],
@@ -52,13 +52,13 @@ test('T-03 断るもの', () => {
 });
 
 test('T-03 プロバイダの鍵の変数（apiKeyEnv）を指す urlEnv も断る', () => {
-  const raw = withNotify({ channels: [channel({ urlEnv: 'CLIVE_OPENAI_API_KEY' })] });
-  raw.providers.push({ id: 'openai', kind: 'openai_compatible', baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'CLIVE_OPENAI_API_KEY', maxParallel: 1, timeoutMs: 600_000 });
+  const raw = withNotify({ channels: [channel({ urlEnv: 'BEAT_OPENAI_API_KEY' })] });
+  raw.providers.push({ id: 'openai', kind: 'openai_compatible', baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'BEAT_OPENAI_API_KEY', maxParallel: 1, timeoutMs: 600_000 });
   assert.throws(() => parseConfig(raw), ConfigError);
 });
 
 test('T-03 通す: https と loopback の http の publicBaseUrl', () => {
-  assert.equal(parseConfig(withNotify({ publicBaseUrl: 'https://clive.example.ts.net' })).notify.publicBaseUrl, 'https://clive.example.ts.net');
+  assert.equal(parseConfig(withNotify({ publicBaseUrl: 'https://beat.example.ts.net' })).notify.publicBaseUrl, 'https://beat.example.ts.net');
   assert.equal(parseConfig(withNotify({ publicBaseUrl: 'http://127.0.0.1:4777' })).notify.publicBaseUrl, 'http://127.0.0.1:4777');
 });
 
@@ -73,12 +73,12 @@ test('T-03b limits: 範囲外は丸めずに ConfigError。既定は §1.3 の�
 });
 
 test('T-03b maxChannels より多いチャネルは ConfigError', () => {
-  const channels = ['a', 'b', 'c'].map(id => channel({ id, urlEnv: `CLIVE_NOTIFY_${id.toUpperCase()}_URL_SECRET` }));
+  const channels = ['a', 'b', 'c'].map(id => channel({ id, urlEnv: `BEAT_NOTIFY_${id.toUpperCase()}_URL_SECRET` }));
   assert.throws(() => parseConfig(withNotify({ channels, limits: { maxChannels: 2 } })), ConfigError);
   assert.equal(parseConfig(withNotify({ channels, limits: { maxChannels: 3 } })).notify.channels.length, 3);
 });
 
 test('チャネルは絶対の上限 8 を越えられない', () => {
-  const channels = Array.from({ length: 9 }, (_, i) => channel({ id: `c${i}`, urlEnv: `CLIVE_NOTIFY_C${i}_URL_SECRET` }));
+  const channels = Array.from({ length: 9 }, (_, i) => channel({ id: `c${i}`, urlEnv: `BEAT_NOTIFY_C${i}_URL_SECRET` }));
   assert.throws(() => parseConfig(withNotify({ channels, limits: { maxChannels: 8 } })), ConfigError);
 });

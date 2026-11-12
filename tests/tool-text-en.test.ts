@@ -128,7 +128,7 @@ test('承認の依頼: 題と理由は英語で書く', async t => {
   await cmd;
 });
 
-test('コードを動かす確かめ: 理由・Clive 自身に触れる目印・見せられないファイルの文は英語で書く', async t => {
+test('コードを動かす確かめ: 理由・beat 自身に触れる目印・見せられないファイルの文は英語で書く', async t => {
   const s = setup(t);
   writeFileSync(join(s.paths.workspace, 'put.js'), "fetch('http://127.0.0.1:4777/api/settings');\n");
   mkdirSync(join(s.paths.workspace, 'sub'), { recursive: true });
@@ -136,8 +136,8 @@ test('コードを動かす確かめ: 理由・Clive 自身に触れる目印・
   const request = await decideNext(s.approvals, 'deny');
   await pending;
   assert.equal((request as { onceOnly?: boolean }).onceOnly, true);
-  assert.equal(request.reasons[0], 'This code contains text that touches Clive itself (its settings, persona, approvals or memory): /api/, 127.0.0.1 / localhost');
-  assert.ok(request.reasons.includes('It runs code written in a file (put.js). Clive can rewrite that file, so it is checked with you every time'));
+  assert.equal(request.reasons[0], 'This code contains text that touches beat itself (its settings, persona, approvals or memory): /api/, 127.0.0.1 / localhost');
+  assert.ok(request.reasons.includes('It runs code written in a file (put.js). beat can rewrite that file, so it is checked with you every time'));
   const texts = (request.preview ?? []).map(p => p.text);
   assert.equal(texts[0], "fetch('http://127.0.0.1:4777/api/settings');\n");
   assert.equal(texts[1], 'This file does not exist yet (the command creates it). Its contents cannot be shown');
@@ -201,8 +201,8 @@ test('記憶・履歴・スキル・好奇心の道具の結果（英語）', as
     '以前の上限（200 文字）を超えても、断らずに保存する');
   assert.equal((await run(memorySave, { book: 'user', content: 'a'.repeat(100) })).content, 'The same content already exists ([u1])');
   assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), 'Rewritten [u1]');
-  assert.equal(await text(memorySave, { book: 'notes', content: 'n'.repeat(250) }), "Saved to memory [n3] (Clive's notes and lessons: 250 characters in total). It will be used from the next conversation");
-  assert.equal(await text(memorySave, { book: 'notes', content: 'lesson' }), "Saved to memory [n4] (Clive's notes and lessons: 256 characters in total). It will be used from the next conversation");
+  assert.equal(await text(memorySave, { book: 'notes', content: 'n'.repeat(250) }), "Saved to memory [n3] (beat's notes and lessons: 250 characters in total). It will be used from the next conversation");
+  assert.equal(await text(memorySave, { book: 'notes', content: 'lesson' }), "Saved to memory [n4] (beat's notes and lessons: 256 characters in total). It will be used from the next conversation");
   assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), 'The content has not changed');
   assert.equal(await text(memoryUpdate, { id: 99, content: 'x' }), 'Memory 99 was not found');
   assert.equal(await text(memorySearch, { query: 'zzzz' }), 'No memory matches "zzzz"');

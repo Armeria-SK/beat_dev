@@ -11,13 +11,13 @@ export const TAB_KEY = { ...BOOK_TAB_KEY, search: 'memory.tab.search' } as const
 export function originKey(origin: string): PlainKey {
   if (origin === 'user') return 'memory.origin.user';
   if (origin === 'review') return 'memory.origin.review';
-  return 'memory.origin.clive';
+  return 'memory.origin.beat';
 }
 
 const ACTION_KEY: Record<string, PlainKey> = {
   create: 'memory.action.create', update: 'memory.action.update', forget: 'memory.action.forget', restore: 'memory.action.restore',
 };
-const ACTOR_KEY: Record<string, PlainKey> = { clive: 'memory.actor.clive', user: 'memory.actor.user', review: 'memory.actor.review' };
+const ACTOR_KEY: Record<string, PlainKey> = { beat: 'memory.actor.beat', user: 'memory.actor.user', review: 'memory.actor.review' };
 const ROLE_KEY: Record<string, PlainKey> = { user: 'memory.role.user', assistant: 'memory.role.assistant', tool: 'memory.role.tool' };
 
 // 知らない値は、サーバーの文字のまま出す（キーを持たない）。
@@ -28,5 +28,5 @@ export const roleKey = (role: string): PlainKey | undefined => ROLE_KEY[role];
 // 取り消せるのは、まだ取り消していない、復元ではない変更だけ。
 export const canUndo = (event: { action: string; undone_at: number | null }): boolean => !event.undone_at && event.action !== 'restore';
 
-// 本の [u12] / [n3] の短い呼び名（Clive が会話の中で使うのと同じ）。
+// 本の [u12] / [n3] の短い呼び名（beat が会話の中で使うのと同じ）。
 export const memoryRef = (item: { book: string; id: number }): string => `[${item.book === 'user' ? 'u' : 'n'}${item.id}]`;

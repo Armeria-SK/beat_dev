@@ -7,7 +7,7 @@ test('GET /api/tasks: 止めたひな形は、終わったタスクが 60 件た
   const s = await taskApp(t);
   const paused = s.userTask('Morning summary', { cron: '0 9 * * *', timezone: 'Asia/Tokyo' });
   const child = s.app.tasks.spawnNow(paused.id)!;
-  s.app.tasks.finish(child.id, 'done', 'Summarized 3 items\nsecond line', 'clive');
+  s.app.tasks.finish(child.id, 'done', 'Summarized 3 items\nsecond line', 'beat');
   s.app.tasks.finish(paused.id, 'cancelled', null, 'user');
   const fresh = s.userTask('Weekly report', { cron: '0 17 * * FRI', timezone: 'Asia/Tokyo' });
   for (let i = 0; i < 60; i++) {
@@ -30,7 +30,7 @@ test('GET /api/tasks: ひな形の最後の実行は、いちばんあとに作�
   const s = await taskApp(t);
   const template = s.userTask('Morning summary', { cron: '0 9 * * *', timezone: 'UTC' });
   const first = s.app.tasks.spawnNow(template.id)!;
-  s.app.tasks.finish(first.id, 'done', 'first', 'clive');
+  s.app.tasks.finish(first.id, 'done', 'first', 'beat');
   s.clock.now -= HOUR;
   const second = s.app.tasks.spawnNow(template.id)!;
   s.app.tasks.finish(second.id, 'failed', 'second', 'worker');

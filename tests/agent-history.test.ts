@@ -9,7 +9,7 @@ import { tempDir } from './helpers.ts';
 
 // 子の担当（agent_run）の会話は、親の作業の内側のもの。履歴の検索・読み出しには、手元のモデル（visibleModelIds を渡さない）でも外のモデルでも出さない（T-40）
 test('子の会話は、履歴の検索にも読み出しにも出ない。ふつうの会話は今までどおり出る', t => {
-  const db = openDatabase(join(tempDir(t), 'clive.db'), MIGRATIONS);
+  const db = openDatabase(join(tempDir(t), 'beat.db'), MIGRATIONS);
   try {
     const conversations = new Conversations(db);
     conversations.create({ id: 'parent', title: '親' });

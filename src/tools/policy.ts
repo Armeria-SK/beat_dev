@@ -16,7 +16,7 @@ export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root
     paths.env, join(paths.data, 'tool_outputs'), paths.browserProfile, paths.projects,
   ].map(p => resolveConfigPath(p, paths.data));
   const deny = [...config.tools.deny.map(p => resolveConfigPath(p, paths.data)), ...protectedPaths];
-  // 人格とプロフィールは、Clive が書き換えるときに承認を求める（提案として見せる）。スキルのフォルダも同じ:
+  // 人格とプロフィールは、beat が書き換えるときに承認を求める（提案として見せる）。スキルのフォルダも同じ:
   // 新しい名前のスキルは、ここに置いただけでは使われない（正規の道は skill_draft → 画面の承認で登録）。登録済みの名前は、書き直したものがそのまま使われる
   const skillsDir = resolveConfigPath(join(paths.workspace, 'skills'), paths.data);
   const askOnWrite = [...['SOUL.md', 'USER.md'].map(name => resolveConfigPath(join(paths.workspace, name), paths.data)), skillsDir, ...instructions];

@@ -20,10 +20,10 @@ function store() {
 
 test('記憶: 保存・更新・削除と、それぞれの取り消し', () => {
   const { memory } = store();
-  const { memory: m, eventId: created } = memory.save({ book: 'user', content: 'ユーザーは  コーヒーより紅茶が好き', actor: 'clive', conversationId: 'c1', messageId: 3 });
+  const { memory: m, eventId: created } = memory.save({ book: 'user', content: 'ユーザーは  コーヒーより紅茶が好き', actor: 'beat', conversationId: 'c1', messageId: 3 });
   assert.equal(m.content, 'ユーザーは コーヒーより紅茶が好き', '空白をまとめる');
   assert.equal(m.source_message_id, 3);
-  const { eventId: updated } = memory.update(m.id, 'ユーザーは紅茶が好き（特にアールグレイ）', 'clive');
+  const { eventId: updated } = memory.update(m.id, 'ユーザーは紅茶が好き（特にアールグレイ）', 'beat');
   memory.undo(updated);
   assert.equal(memory.get(m.id)!.content, 'ユーザーは コーヒーより紅茶が好き');
   const { eventId: forgotten } = memory.forget(m.id, 'user', 'もう違う');
@@ -38,17 +38,17 @@ test('記憶: 保存・更新・削除と、それぞれの取り消し', () => 
 
 test('記憶: 秘密情報・重複・長すぎる1件・空は保存しない', () => {
   const { memory } = store();
-  assert.throws(() => memory.save({ book: 'user', content: 'キーは sk-ant-api03-abcdefghijklmnop です', actor: 'clive' }), /API key or token/u);
-  memory.save({ book: 'user', content: '同じ内容', actor: 'clive' });
-  assert.throws(() => memory.save({ book: 'user', content: '同じ内容', actor: 'clive' }), /already exists/u);
-  assert.throws(() => memory.save({ book: 'user', content: 'x'.repeat(700), actor: 'clive' }), /too long/u);
-  assert.throws(() => memory.save({ book: 'user', content: '   ', actor: 'clive' }), /is empty/u);
+  assert.throws(() => memory.save({ book: 'user', content: 'キーは sk-ant-api03-abcdefghijklmnop です', actor: 'beat' }), /API key or token/u);
+  memory.save({ book: 'user', content: '同じ内容', actor: 'beat' });
+  assert.throws(() => memory.save({ book: 'user', content: '同じ内容', actor: 'beat' }), /already exists/u);
+  assert.throws(() => memory.save({ book: 'user', content: 'x'.repeat(700), actor: 'beat' }), /too long/u);
+  assert.throws(() => memory.save({ book: 'user', content: '   ', actor: 'beat' }), /is empty/u);
 });
 
 test('記憶: 3文字以上は FTS、短い語は LIKE で探す', () => {
   const { memory } = store();
-  memory.save({ book: 'user', content: 'ローカルLLMは Ollama で動かしている', actor: 'clive' });
-  memory.save({ book: 'notes', content: '猫の名前はタマ', actor: 'clive' });
+  memory.save({ book: 'user', content: 'ローカルLLMは Ollama で動かしている', actor: 'beat' });
+  memory.save({ book: 'notes', content: '猫の名前はタマ', actor: 'beat' });
   assert.equal(memory.search('Ollama').length, 1);
   assert.equal(memory.search('猫').length, 1, '1文字');
   assert.equal(memory.search('タマ 猫').length, 1, '短い語を含む複数語');
@@ -87,7 +87,7 @@ function toolCall(name: string, args: unknown): Script {
 async function app(t: { after: (fn: () => void) => void }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
-  writeFileSync(join(paths.workspace, 'SOUL.md'), '# SOUL\n名前は Clive');
+  writeFileSync(join(paths.workspace, 'SOUL.md'), '# SOUL\n名前は beat');
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
@@ -124,7 +124,7 @@ test('会話中に覚えたことは、今の会話の system には入らず、
 
 test('SOUL.md の書き換えは承認制にし、中身が変わったら版を残す', async t => {
   const s = await app(t);
-  s.adapter().scripts.push(toolCall('file_write', { path: 'SOUL.md', content: '# SOUL\n名前は Clive。皮肉屋' }), reply('提案しました'));
+  s.adapter().scripts.push(toolCall('file_write', { path: 'SOUL.md', content: '# SOUL\n名前は beat。皮肉屋' }), reply('提案しました'));
   const done = s.send('c1', '性格を変えて');
   for (let i = 0; i < 300 && !s.app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
   const pending = s.app.approvals.pending()[0]!;

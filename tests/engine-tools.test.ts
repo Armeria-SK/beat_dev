@@ -83,7 +83,7 @@ test('承認を待ってから続ける', async t => {
   assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool')!.text, /secret-ish/u);
 });
 
-// security-self-api.md の V1: 報告された筋道そのもの。Clive が put.js を書いて動かし、API・設定ファイルに手を出そうとする
+// security-self-api.md の V1: 報告された筋道そのもの。beat が put.js を書いて動かし、API・設定ファイルに手を出そうとする
 test('V1: スクリプトを書いて node で動かす筋道は、中身つきの今回だけの確かめで止まる。拒否すれば何も起きない', async t => {
   const s = await setup(t);
   const configBefore = readFileSync(s.paths.config, 'utf8');
@@ -106,7 +106,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   assert.equal(request.preview.length, 1);
   assert.match(request.preview[0]!.path, /put\.js$/u);
   assert.match(request.preview[0]!.text, /api\/settings/u, '動かすコードの中身が札に出る');
-  assert.match(request.reasons[0]!, /This code contains text that touches Clive itself/u, '理由の先頭に目印');
+  assert.match(request.reasons[0]!, /This code contains text that touches beat itself/u, '理由の先頭に目印');
   assert.match(request.reasons[0]!, /config\.json/u);
   assert.ok(request.reasons.some(r => /It runs code written in a file/u.test(r)));
   assert.equal(existsSync(marker), false, '承認の前には動いていない');
@@ -125,7 +125,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 2; i++) await new Promise(r => setTimeout(r, 10));
   const second = (s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>)[1]!;
   assert.ok(second, '2 回目も確かめが出る');
-  assert.doesNotMatch(second.approval.reasons[0]!, /Clive itself/u, '無害な中身には目印が付かない');
+  assert.doesNotMatch(second.approval.reasons[0]!, /beat itself/u, '無害な中身には目印が付かない');
   s.app.approvals.decide(second.approval.id, 'conversation');
   assert.ok((await again.done).ok);
   assert.equal(readFileSync(marker, 'utf8'), 'harmless', '許可すれば動く（拒否の確認が空振りでないことの対照）');

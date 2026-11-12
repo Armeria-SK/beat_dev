@@ -14,7 +14,7 @@ import { tempDir, type Script } from './helpers.ts';
 // 段 8b: 入力欄の権限モード（ふつう / 自動承認 / 計画）。会話ごとに覚える。新しい会話はいつも「ふつう」
 
 test('マイグレーション 11: conversations に permission_mode が足される。前からある会話は normal。知らない値は入れられない', t => {
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 10));
   before.prepare("INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES ('old', 'chat', '前からある会話', 1, 1)").run();
   before.close();

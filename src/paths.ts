@@ -11,7 +11,7 @@ export interface AppPaths {
   database: string;
   backups: string;
   uploads: string;
-  // ブラウザ（browser_*）のログイン状態などを置く。Clive の道具から触れない（禁止パス）。バックアップには入れない
+  // ブラウザ（browser_*）のログイン状態などを置く。beat の道具から触れない（禁止パス）。バックアップには入れない
   browserProfile: string;
   workspace: string;
   projects: string;
@@ -21,12 +21,12 @@ export interface AppPaths {
   webDist: string;
 }
 
-export function resolvePaths(dataDir = process.env.CLIVE_DATA_DIR): AppPaths {
+export function resolvePaths(dataDir = process.env.BEAT_DATA_DIR): AppPaths {
   const data = resolve(dataDir ?? join(APP_ROOT, 'data'));
   return {
     data,
     config: join(data, 'config.json'),
-    database: join(data, 'clive.db'),
+    database: join(data, 'beat.db'),
     backups: join(data, 'backups'),
     uploads: join(data, 'uploads'),
     browserProfile: join(data, 'browser-profile'),

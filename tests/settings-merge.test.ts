@@ -18,7 +18,7 @@ function sample(): Config {
     tools: { deny: ['.env'], roots: [{ path: 'workspace', mode: 'write' }], hooks: { preToolUse: [], postToolUse: [] }, shell: { enabled: true, allow: [] } },
     worker: { enabled: true, autonomy: false, maxRunsPerHour: 6 },
     memory: { userMaxChars: 1500, notesMaxChars: 2500 },
-    profile: { name: 'Clive', shape: 'orb', color: '#C9A227', motion: 'auto' },
+    profile: { name: 'beat', shape: 'orb', color: '#C9A227', motion: 'auto' },
   };
 }
 

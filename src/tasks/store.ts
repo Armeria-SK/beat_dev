@@ -222,7 +222,7 @@ export class TaskStore {
     return this.#db.prepare('SELECT * FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT ?').all(taskId, limit) as unknown as TaskEvent[];
   }
 
-  cliveDecided(id: string): boolean {
+  beatDecided(id: string): boolean {
     const task = this.get(id);
     const origin = (task?.parent_id ? this.get(task.parent_id) : undefined)?.origin ?? task?.origin;
     return origin === 'self' || origin === 'curiosity';
@@ -230,7 +230,7 @@ export class TaskStore {
 
   judgeRequest(id: string): string {
     const task = this.get(id);
-    if (!task || this.cliveDecided(id) || this.#textTainted(task.id, task.parent_id)) return '';
+    if (!task || this.beatDecided(id) || this.#textTainted(task.id, task.parent_id)) return '';
     return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
   }
 
@@ -323,7 +323,7 @@ export class TaskStore {
   setWaiting(id: string, kind: 'question' | 'approval', text: string, runId?: string): Task {
     this.#db.prepare(`UPDATE tasks SET status = 'waiting', waiting_kind = ?, waiting_text = ?, lease_until = NULL, updated_at = ? WHERE id = ?`)
       .run(kind, text, this.#now(), id);
-    this.event(id, kind === 'question' ? 'question' : 'approval', 'clive', text, runId);
+    this.event(id, kind === 'question' ? 'question' : 'approval', 'beat', text, runId);
     return this.#changed(id);
   }
 

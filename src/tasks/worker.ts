@@ -447,7 +447,7 @@ export class Worker {
     if (!(result.ok && result.split)) this.#d.kv.delete(splitKey(task.id));
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
-      tasks.finish(task.id, 'done', control.summary, 'clive', runId);
+      tasks.finish(task.id, 'done', control.summary, 'beat', runId);
       if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, localOnly: task.local_only === 1 });
       return;
     }
@@ -458,7 +458,7 @@ export class Worker {
     }
     if (control.outcome === 'checkpoint') {
       this.#d.kv.delete(idleKey);
-      tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'clive', runId);
+      tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
       tasks.setReady(task.id, { runAt: now + Math.min(Math.max(control.resumeAfterMinutes, 1), 10_080) * 60_000, reason: taskText(language, 'reason.checkpoint', { minutes: control.resumeAfterMinutes }) });
       return;
     }
@@ -477,7 +477,7 @@ export class Worker {
       // 道具で終わり方を決めずに返事だけ書いた: 進展が無いとみなし、休む時間を延ばす。続いたら相談する
       const strikes = (this.#d.kv.getJson<number>(idleKey) ?? 0) + 1;
       this.#d.kv.setJson(idleKey, strikes);
-      if (result.text.trim()) tasks.update(task.id, { appendNote: taskText(language, result.truncated ? 'note.memo_truncated' : 'note.memo', { text: result.text.trim().slice(0, 500) }) }, 'clive', runId);
+      if (result.text.trim()) tasks.update(task.id, { appendNote: taskText(language, result.truncated ? 'note.memo_truncated' : 'note.memo', { text: result.text.trim().slice(0, 500) }) }, 'beat', runId);
       if (strikes >= STAGNATION_LIMIT) {
         this.#d.kv.delete(idleKey);
         const question = taskText(language, 'stuck.question', { title: task.title, strikes });

@@ -87,7 +87,7 @@ test('宛先（command・cwd・url）や、渡す欄が変わるのも確かめ�
   assert.equal(accessWidening(joined, config(server({ command: ['node', 'a', 'b'] }))).length, 1);
   const web = config(server({ transport: 'http', command: undefined, url: 'https://a.example.com/' }));
   assert.deepEqual(accessWidening(web, config(server({ transport: 'http', command: undefined, url: 'https://b.example.com/' }))), [{ kind: 'mcp-server-target', id: 'files', target: 'https://b.example.com/' }]);
-  assert.deepEqual(accessWidening(base, config(server({ env: { TOKEN: 'CLIVE_MCP_FILES_E_TOKEN_SECRET' } }))), [{ kind: 'mcp-server-env', id: 'files', names: ['TOKEN'] }]);
+  assert.deepEqual(accessWidening(base, config(server({ env: { TOKEN: 'BEAT_MCP_FILES_E_TOKEN_SECRET' } }))), [{ kind: 'mcp-server-env', id: 'files', names: ['TOKEN'] }]);
   const withEnv = config(server({ env: { TOKEN: 'A_SECRET' } }));
   assert.deepEqual(accessWidening(withEnv, config(server({ env: { TOKEN: 'B_SECRET' } }))), [{ kind: 'mcp-server-env', id: 'files', names: ['TOKEN'] }]);
   // 欄を減らすのは確かめない
@@ -96,7 +96,7 @@ test('宛先（command・cwd・url）や、渡す欄が変わるのも確かめ�
 });
 
 test('秘密の値を入れる・変えるときは確かめる。設定にないサーバーは確かめない', () => {
-  const c = config(server({ env: { TOKEN: 'CLIVE_MCP_FILES_E_TOKEN_SECRET' } }));
+  const c = config(server({ env: { TOKEN: 'BEAT_MCP_FILES_E_TOKEN_SECRET' } }));
   assert.deepEqual(mcpSecretAccess({ id: 'files', kind: 'env', name: 'TOKEN' }, c), [{ kind: 'mcp-server-secret', id: 'files', name: 'TOKEN' }]);
   assert.deepEqual(mcpSecretAccess({ id: 'ghost', kind: 'env', name: 'TOKEN' }, c), []);
 });

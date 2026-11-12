@@ -11,7 +11,7 @@ export interface CuriosityItem {
   status: CuriosityStatus;
   result: string | null;
   task_id: string | null;
-  source: 'clive' | 'user' | 'file';
+  source: 'beat' | 'user' | 'file';
   created_at: number;
   updated_at: number;
 }

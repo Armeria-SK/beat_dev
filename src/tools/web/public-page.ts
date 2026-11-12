@@ -42,7 +42,7 @@ const typeShown = (contentType: string) => mediaTypeOf(contentType) ?? toolText(
 const MAX_BYTES = 512 * 1024;
 export const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp)(;|$)/iu;
 const PAGE_TYPES = /^(text\/(html|plain|xml|markdown|csv)|application\/(json|xml|rss\+xml|atom\+xml|xhtml\+xml))(;|$)/iu;
-const USER_AGENT = 'Clive/0.1 (personal agent; public page reader)';
+const USER_AGENT = 'beat/0.1 (personal agent; public page reader)';
 
 export interface PageResponse { status: number; location?: string; contentType: string; body: Buffer; truncated?: boolean }
 export interface PageNetwork {

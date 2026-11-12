@@ -246,7 +246,7 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
-  const databasePath = join(dir, 'clive.db');
+  const databasePath = join(dir, 'beat.db');
   let adapter!: FakeAdapter;
   const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   const first = open();

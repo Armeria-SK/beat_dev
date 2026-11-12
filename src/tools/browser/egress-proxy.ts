@@ -144,7 +144,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     socket.end(`HTTP/1.1 ${status} ${text}\r\n${extra}Connection: close\r\nContent-Length: 0\r\n\r\n`);
   };
   const REASONS: Record<number, string> = { 400: 'Bad Request', 403: 'Forbidden', 407: 'Proxy Authentication Required', 502: 'Bad Gateway', 503: 'Service Unavailable' };
-  const AUTH_CHALLENGE = 'Proxy-Authenticate: Basic realm="clive"\r\n';
+  const AUTH_CHALLENGE = 'Proxy-Authenticate: Basic realm="beat"\r\n';
 
   async function handleConnect(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
     if (!authorized(req.headers['proxy-authorization'])) { rawReply(socket, 407, REASONS[407]!, AUTH_CHALLENGE); return; }
@@ -188,7 +188,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       res.end();
     };
     req.resume();
-    if (!authorized(req.headers['proxy-authorization'])) { reply(407, { 'proxy-authenticate': 'Basic realm="clive"' }); return; }
+    if (!authorized(req.headers['proxy-authorization'])) { reply(407, { 'proxy-authenticate': 'Basic realm="beat"' }); return; }
     let url: URL | undefined;
     if (req.method === 'GET' && /^http:\/\//iu.test(req.url ?? '')) { try { url = new URL(req.url ?? ''); } catch { url = undefined; } }
     if (!url) { reply(400); return; }

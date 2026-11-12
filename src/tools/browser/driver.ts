@@ -1,5 +1,5 @@
 // ブラウザの driver。playwright-core を import するのはこのファイルだけ（動的 import。無効のあいだは読み込まない）。
-// 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は CLIVE_BROWSER_LIVE=1 のときだけ動かす
+// 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は BEAT_BROWSER_LIVE=1 のときだけ動かす
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserContext, Locator, Page, Request, Route } from 'playwright-core';

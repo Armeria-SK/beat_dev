@@ -124,7 +124,7 @@ test('前回分が終わっていなければ、予定から重ねて作らな�
 
 test('自分で決めたタスクは、自発行動がオンで・操作が途切れて・静かな時間帯でないときだけ動く', async t => {
   const s = await setup(t, c => { c.worker.idleMinutes = 5; c.worker.quietStart = '23:00'; c.worker.quietEnd = '07:00'; });
-  s.app.tasks.create({ title: '気になったことを調べる', origin: 'self', actor: 'clive' });
+  s.app.tasks.create({ title: '気になったことを調べる', origin: 'self', actor: 'beat' });
   assert.equal(await s.app.worker.tick(), 'idle', '自発行動がオフ');
   await s.app.applyConfig({ ...s.app.config(), worker: { ...s.app.config().worker, autonomy: true } });
   // 設定を保存するとプロバイダが作り直されるので、台本はその後に積む
@@ -140,7 +140,7 @@ test('自分で決めたタスクは、自発行動がオンで・操作が途�
 
 test('「今すぐ実行」は自発行動がオフでも動く', async t => {
   const s = await setup(t);
-  const task = s.app.tasks.create({ title: '自分のメモ', origin: 'self', actor: 'clive' });
+  const task = s.app.tasks.create({ title: '自分のメモ', origin: 'self', actor: 'beat' });
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'やりました' }));
   assert.equal(await s.app.worker.tick(), 'idle');
   s.app.worker.requestRun(task.id);
@@ -509,7 +509,7 @@ test('会話で作ったタスクは、作った会話の ID で探す（経過�
   const mine = s.app.tasks.list().find(task => task.title === '洗濯')!;
   assert.equal(mine.created_in_conversation, 'conv-a');
   const text = s.app.tasks.create({ title: '経過の文に会話の ID がある', origin: 'user', actor: 'user' });
-  s.app.tasks.event(text.id, 'context', 'clive', 'この会話（conv-a）で作りました / Created in conv-a');
+  s.app.tasks.event(text.id, 'context', 'beat', 'この会話（conv-a）で作りました / Created in conv-a');
   const manual = s.app.tasks.create({ title: '画面から作った', origin: 'user', actor: 'user' });
   assert.equal(manual.created_in_conversation, null);
 });
@@ -630,7 +630,7 @@ test('取り消しを戻すと、取り消す前の状態に返る（提案・�
   const s = await setup(t);
   const events = (id: string) => s.app.tasks.events(id);
 
-  const proposal = s.app.tasks.create({ title: '提案', origin: 'self', actor: 'clive', propose: true });
+  const proposal = s.app.tasks.create({ title: '提案', origin: 'self', actor: 'beat', propose: true });
   assert.equal(cancel(s, proposal.id).cancelled_from, 'inbox', '取り消す前の状態を覚える');
   const backProposal = s.app.tasks.uncancel(proposal.id, 'user');
   assert.deepEqual([backProposal.status, backProposal.cancelled_from, backProposal.completed_at, backProposal.result_summary], ['inbox', null, null, null], '承認なしでは動かない提案のまま');
@@ -687,7 +687,7 @@ test('戻せないとき: 取り消した状態でない・取り消す前の記
   assert.equal(s.app.tasks.get(plain.id)!.status, 'cancelled', '断ったら何も変えない');
 
   const done = s.userTask('終わったもの');
-  s.app.tasks.finish(done.id, 'done', '済み', 'clive');
+  s.app.tasks.finish(done.id, 'done', '済み', 'beat');
   assert.throws(() => s.app.tasks.uncancel(done.id, 'user'), (e: any) => e.code === 'error.not_cancelled', '完了は戻せない');
 
   const template = s.userTask('毎時の確認', { cron: '0 * * * *', timezone: 'UTC' });
@@ -703,14 +703,14 @@ test('戻せないとき: 取り消した状態でない・取り消す前の記
 
 test('取り消しの記録は、取り消した人が誰でも残る。二重に取り消しても、終わったものを取り消しても、記録を壊さない', async t => {
   const s = await setup(t);
-  const byClive = s.userTask('Clive が取り消す');
-  assert.equal(cancel(s, byClive.id, 'clive').cancelled_from, 'ready', '道具からの取り消しも同じ finish を通る');
-  assert.equal(cancel(s, byClive.id, 'clive').cancelled_from, 'ready', '二重に取り消しても、前の記録を消さない');
-  assert.equal(s.app.tasks.uncancel(byClive.id, 'user').status, 'ready');
+  const byBeat = s.userTask('beat が取り消す');
+  assert.equal(cancel(s, byBeat.id, 'beat').cancelled_from, 'ready', '道具からの取り消しも同じ finish を通る');
+  assert.equal(cancel(s, byBeat.id, 'beat').cancelled_from, 'ready', '二重に取り消しても、前の記録を消さない');
+  assert.equal(s.app.tasks.uncancel(byBeat.id, 'user').status, 'ready');
 
   const finished = s.userTask('終わっていたもの');
-  s.app.tasks.finish(finished.id, 'done', '済み', 'clive');
-  assert.equal(cancel(s, finished.id, 'clive').cancelled_from, null, '終わったものを取り消した場合は、戻す先が決められない');
+  s.app.tasks.finish(finished.id, 'done', '済み', 'beat');
+  assert.equal(cancel(s, finished.id, 'beat').cancelled_from, null, '終わったものを取り消した場合は、戻す先が決められない');
 
   const failed = s.userTask('失敗するもの');
   const afterFail = s.app.tasks.finish(failed.id, 'failed', 'だめでした', 'worker');

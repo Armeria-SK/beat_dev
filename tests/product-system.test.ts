@@ -38,7 +38,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   t.after(() => app.close());
   writeFileSync(join(paths.workspace, 'SOUL.md'), 'SOUL-MARKER');
   writeFileSync(join(paths.workspace, 'USER.md'), 'USER-MARKER');
-  app.memory.save({ book: 'user', content: 'MEMORY-MARKER likes tea', actor: 'clive' });
+  app.memory.save({ book: 'user', content: 'MEMORY-MARKER likes tea', actor: 'beat' });
   const root = join(dir, 'product');
   mkdirSync(root);
   const real = realpathSync.native(root);
@@ -308,7 +308,7 @@ test('2-3 振り返り: 依頼文に memory_ の字が無く、記憶の道具�
 
 test('2-3 整理の振り返り（book_full）は積まれず、待っていた分は「飛ばした」で終わる（モデルを呼ばず、失敗の通知も出ない）', async t => {
   const s = await setup(t, c => { c.models = [model('m', 16_384)]; });
-  for (let i = 0; i < 40; i++) s.app.memory.save({ book: 'notes', content: `note ${i} ${'z'.repeat(500)}`, actor: 'clive' });
+  for (let i = 0; i < 40; i++) s.app.memory.save({ book: 'notes', content: `note ${i} ${'z'.repeat(500)}`, actor: 'beat' });
   await s.app.worker.tick();
   assert.equal(s.app.reviews.list().filter(job => job.trigger === 'book_full').length, 0, '記憶が予算を超えても積まない');
   const job = s.app.reviews.enqueue('book_full', 'book:all:1')!;

@@ -119,7 +119,7 @@ function mergeChecks(first: PreCheck, second: PreCheck): PreCheck {
 
 export const webDownload: ToolDef<{ url: string; name?: string }> = {
   name: 'web_download',
-  description: 'Download a file from the public web and save it in the downloads folder of Clive (downloads/ in the Clive workspace, never in a product folder; the result gives the full path; the location cannot be chosen; name is a suggested name and is changed into a safe form; if the same name exists, -1 or similar is added and nothing is overwritten). The saved file is external data. Local and LAN addresses cannot be fetched.',
+  description: 'Download a file from the public web and save it in the downloads folder of beat (downloads/ in the beat workspace, never in a product folder; the result gives the full path; the location cannot be chosen; name is a suggested name and is changed into a safe form; if the same name exists, -1 or similar is added and nothing is overwritten). The saved file is external data. Local and LAN addresses cannot be fetched.',
   input: Type.Object({
     url: Type.String({ minLength: 1, maxLength: 4096 }),
     name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, description: 'A suggested name to save the file as' })),

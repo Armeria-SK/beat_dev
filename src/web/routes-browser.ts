@@ -5,7 +5,7 @@ import { BrowserFailure } from '../tools/browser/driver.ts';
 import { HttpProblem, problem, sendJson, type Router } from './http.ts';
 
 // ブラウザの管理（画面専用。モデルの道具には足さない）。ほかの書き込みと同じ Host・Origin・Sec-Fetch-Site の確かめを通った要求だけが届く。
-// ログイン用の窓は持ち主が自分で操作する見えるブラウザ。ログイン情報は Clive 専用のプロファイルに残る（ふだんのブラウザのものは使わない）
+// ログイン用の窓は持ち主が自分で操作する見えるブラウザ。ログイン情報は beat 専用のプロファイルに残る（ふだんのブラウザのものは使わない）
 
 // BrowserFailure を、画面にそのまま見せられる 409 にする
 function failureProblem(error: unknown): unknown {
@@ -26,7 +26,7 @@ export function registerBrowserRoutes(router: Router, app: App): void {
     sendJson(res, 200, app.browser.status());
   });
 
-  // ログイン情報（Clive 専用のプロファイル）を消す。ブラウザを止めてから、置き場所を確かめて消す
+  // ログイン情報（beat 専用のプロファイル）を消す。ブラウザを止めてから、置き場所を確かめて消す
   router.add('POST', '/api/browser/profile/reset', async ({ res }) => {
     await app.browser.withStopped(async () => {
       const profile = resolve(app.paths.browserProfile);

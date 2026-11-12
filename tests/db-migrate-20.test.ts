@@ -41,7 +41,7 @@ function seedV19(path: string): Record<string, number> {
 
 test('移し替え 20: 形 19 の DB を今のコードで開いても、行は 1 つも減らず、会話とタスクの project_id は全部 NULL。開く前の控えができ、もう一度開いても何も変わらない', t => {
   const dir = tempDir(t);
-  const path = join(dir, 'clive.db');
+  const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');
   const before = seedV19(path);
   const db = openDatabase(path, MIGRATIONS.slice(0, 20), { backupDir: backups });
@@ -60,7 +60,7 @@ test('移し替え 20: 形 19 の DB を今のコードで開いても、行は 
 
   const files = readdirSync(backups);
   assert.equal(files.length, 1, '控えは 1 つ');
-  assert.match(files[0]!, /^clive-v19-.+\.db$/u);
+  assert.match(files[0]!, /^beat-v19-.+\.db$/u);
   const backup = openDatabase(join(backups, files[0]!), MIGRATIONS.slice(0, 19));
   try {
     assert.equal(version(backup), 19, '控えは形 19 のまま');
@@ -78,7 +78,7 @@ test('移し替え 20: 形 19 の DB を今のコードで開いても、行は 
 
 test('移し替え 20: 途中で落ちると、DB は形 19 のまま（表も列も足されない）で、行も残る', t => {
   const dir = tempDir(t);
-  const path = join(dir, 'clive.db');
+  const path = join(dir, 'beat.db');
   const before = seedV19(path);
   const failing: Migration[] = [...MIGRATIONS.slice(0, 19), db => { db.exec(String(MIGRATIONS[19])); throw new Error('stopped midway'); }];
   assert.throws(() => openDatabase(path, failing, { backupDir: join(dir, 'backups') }), /stopped midway/u);
@@ -96,7 +96,7 @@ test('移し替え 20: 途中で落ちると、DB は形 19 のまま（表も�
 
 test('移し替え 20: 同じフォルダ（root_key）の使っている製品は 1 つだけ。しまった製品とは重なってよい。前の版のコードは形 20 の DB を開かない', t => {
   const dir = tempDir(t);
-  const path = join(dir, 'clive.db');
+  const path = join(dir, 'beat.db');
   const db = openDatabase(path, MIGRATIONS);
   try {
     const add = (id: string, archivedAt: number | null) => db.prepare('INSERT INTO projects (id, name, root, root_key, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1)').run(id, id, 'C:\\Work\\Shop', 'c:\\work\\shop', archivedAt);

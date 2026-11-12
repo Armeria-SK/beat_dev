@@ -145,7 +145,7 @@ export const MIGRATIONS: readonly Migration[] = [
     action TEXT NOT NULL CHECK (action IN ('create', 'update', 'forget', 'restore')),
     before TEXT,
     after TEXT,
-    actor TEXT NOT NULL CHECK (actor IN ('clive', 'user', 'review')),
+    actor TEXT NOT NULL CHECK (actor IN ('beat', 'user', 'review')),
     run_id TEXT,
     reason TEXT,
     undone_at INTEGER,
@@ -232,7 +232,7 @@ export const MIGRATIONS: readonly Migration[] = [
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'researching', 'done', 'dropped')),
     result TEXT,
     task_id TEXT,
-    source TEXT NOT NULL DEFAULT 'clive',
+    source TEXT NOT NULL DEFAULT 'beat',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   ) STRICT;

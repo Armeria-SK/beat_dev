@@ -97,8 +97,8 @@ test('有効にして browser_open を呼ぶと、ページの内容が返り、
   await waitFor(() => s.app.browser.tabCount(id) === 0, 'タブが閉じる');
 });
 
-test('T-12 ブラウザのプロファイル（ログイン状態）は禁止パス。Clive のファイルの道具からは読み書きできない', () => {
-  const paths = resolvePaths('C:\\clive-data');
+test('T-12 ブラウザのプロファイル（ログイン状態）は禁止パス。beat のファイルの道具からは読み書きできない', () => {
+  const paths = resolvePaths('C:\\beat-data');
   assert.equal(paths.browserProfile.endsWith('browser-profile'), true);
   const policy = buildPolicy(testConfig(), paths);
   for (const sub of ['', 'Default\\Cookies', 'Default\\Login Data']) {

@@ -35,7 +35,7 @@ const FINGERPRINT_LIMIT_BYTES = 1_048_576;
 
 const sha256 = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');
 
-// server.origins の host。Tailscale の URL なども Clive に届くので、ループバックと同じに確かめる
+// server.origins の host。Tailscale の URL なども beat に届くので、ループバックと同じに確かめる
 function selfHostsOf(config: AppConfig): string[] {
   return config.server.origins.flatMap(origin => {
     try { return [new URL(origin).hostname]; } catch { return origin.trim() ? [origin.trim()] : []; }

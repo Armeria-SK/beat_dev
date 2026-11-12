@@ -277,7 +277,7 @@ test('持ち主が自分で読んだ知らせと、まだ片づいていない�
 
 test('起動の時点で（settleStaleNotifications）、答えようのない大事な未読は既読にする（承認の札は再起動で無くなる／タスクがもうその状態ではない・もう無い）。まだ答えられるものは残す。App を作っただけでは触らない', async t => {
   const { dir, paths } = prepare(t);
-  const databasePath = join(dir, 'clive.db');
+  const databasePath = join(dir, 'beat.db');
   const first = open(paths, databasePath);
   const make = (title: string) => first.app.tasks.create({ title, origin: 'user', actor: 'user' });
   const stillWaiting = make('still waiting');

@@ -488,7 +488,7 @@ test('本物の通信: 本文を流して受け取り、Accept-Encoding は送�
   assert.equal(result.contentDisposition, "attachment; filename*=UTF-8''%E5%90%8D.zip");
   assert.equal(seen['accept-encoding'], undefined, 'Accept-Encoding を送らない');
   assert.equal(seen.accept, '*/*');
-  assert.match(String(seen['user-agent']), /^Clive\//u);
+  assert.match(String(seen['user-agent']), /^beat\//u);
   assert.ok(memory.written.length >= 2, '複数のかたまりに分かれて届く');
 });
 

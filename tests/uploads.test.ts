@@ -72,9 +72,9 @@ test('添付の種類を中身で見分ける（テキスト・PDF・画像）�
   const s = await setup(t);
   const text = s.app.uploads.save({ name: 'メモ.md', mime: 'text/markdown', body: Buffer.from('# 見出し\n本文') });
   assert.deepEqual([text.kind, text.chars], ['text', 8]);
-  const pdf = s.app.uploads.save({ name: 'a.pdf', mime: 'application/pdf', body: tinyPdf('Hello Clive') });
+  const pdf = s.app.uploads.save({ name: 'a.pdf', mime: 'application/pdf', body: tinyPdf('Hello beat') });
   assert.deepEqual([pdf.kind, pdf.pages], ['pdf', 1]);
-  assert.equal(s.app.uploads.get(pdf.id)!.text, 'Hello Clive');
+  assert.equal(s.app.uploads.get(pdf.id)!.text, 'Hello beat');
   const disguised = s.app.uploads.save({ name: 'photo.txt', mime: 'text/plain', body: PNG });
   assert.deepEqual([disguised.kind, disguised.mime], ['image', 'image/png'], '拡張子より中身を信じる');
   assert.throws(() => s.app.uploads.save({ name: 'tool.exe', mime: 'application/octet-stream', body: Buffer.from([0x4d, 0x5a, 0, 0, 1, 2]) }), UploadError);

@@ -113,7 +113,7 @@ test('DELETE: ひな形と経過と kv が消え、過去の実行は parent_id 
   const s = await taskApp(t);
   const template = s.userTask('Morning summary', { cron: '0 9 * * *', timezone: 'UTC' });
   const other = s.userTask('Other schedule', { cron: '0 10 * * *', timezone: 'UTC' });
-  const runs = [0, 1].map(() => { const child = s.app.tasks.spawnNow(template.id)!; s.app.tasks.finish(child.id, 'done', 'ok', 'clive'); return child; });
+  const runs = [0, 1].map(() => { const child = s.app.tasks.spawnNow(template.id)!; s.app.tasks.finish(child.id, 'done', 'ok', 'beat'); return child; });
   s.app.tasks.update(template.id, { appendNote: 'a note' }, 'user');
   s.app.kv.setJson(splitKey(template.id), 2);
   s.app.kv.setJson(`task-idle:${template.id}`, 1);
@@ -340,7 +340,7 @@ test('DELETE は 1 つのトランザクション: 途中で失敗したら、�
   const s = await taskApp(t);
   const template = s.userTask('Summary', { cron: '0 9 * * *', timezone: 'UTC' });
   const child = s.app.tasks.spawnNow(template.id)!;
-  s.app.tasks.finish(child.id, 'done', 'ok', 'clive');
+  s.app.tasks.finish(child.id, 'done', 'ok', 'beat');
   const queued = s.app.tasks.spawnNow(template.id)!;
   s.app.kv.setJson(splitKey(template.id), 2);
   s.app.kv.setJson(splitKey(queued.id), 4);
@@ -428,7 +428,7 @@ test('cancel: 本文を待っているあいだに終わった・消えたタス
   const deleted = s.userTask('Deleted meanwhile', { runAt: s.clock.now + HOUR });
   const held = [heldCancel(s, finished.id), heldCancel(s, deleted.id)];
   await new Promise(r => setTimeout(r, 100));
-  s.app.tasks.finish(finished.id, 'done', 'Really finished', 'clive');
+  s.app.tasks.finish(finished.id, 'done', 'Really finished', 'beat');
   s.app.tasks.remove(deleted.id);
   const [first, second] = [await held[0]!.finish(), await held[1]!.finish()];
   assert.equal(first.status, 409);

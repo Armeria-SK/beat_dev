@@ -835,7 +835,7 @@ export class ChatEngine {
       if (!task || (task.project_id ?? null) !== run.projectId) continue;
       const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
       if (!open.includes(task.status)) continue;
-      d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }) }, 'clive', runId);
+      d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }) }, 'beat', runId);
       if (run.localOnly) d.tasks.markLocalOnly(id);
     }
   }

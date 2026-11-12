@@ -12,11 +12,11 @@ import { startEgressProxy } from '../src/tools/browser/egress-proxy.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { testConfig } from './helpers.ts';
 
-// T-44: 本物の Chrome で動かす（Edge は使わない）。ふだんは飛ばす（CLIVE_BROWSER_LIVE=1 のときだけ）。
+// T-44: 本物の Chrome で動かす（Edge は使わない）。ふだんは飛ばす（BEAT_BROWSER_LIVE=1 のときだけ）。
 // 中継の外を通る道が増えていないかを、Playwright や Chromium の版を上げるたびに確かめる（README「版を上げたら」）。
 // 外のネットワーク（https://example.com/）が要る
-const live = process.env.CLIVE_BROWSER_LIVE === '1';
-const options = { skip: live ? false : 'CLIVE_BROWSER_LIVE=1 のときだけ動かす（本物のブラウザと外のネットワークが要る）', timeout: 180_000 };
+const live = process.env.BEAT_BROWSER_LIVE === '1';
+const options = { skip: live ? false : 'BEAT_BROWSER_LIVE=1 のときだけ動かす（本物のブラウザと外のネットワークが要る）', timeout: 180_000 };
 
 // この計算機のブラウザのコマンド行のうち、プロファイルの置き場を含むもの
 function commandLines(marker: string): string[] {
@@ -30,7 +30,7 @@ function commandLines(marker: string): string[] {
 }
 
 function tmpDir(t: { after: (fn: () => void) => void }, name: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `clive-live-${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `beat-live-${name}-`));
   t.after(() => { try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 閉じ遅れ */ } });
   return dir;
 }
@@ -44,12 +44,12 @@ test('T-44(2): ページの中から 127.0.0.1 への画像・fetch・WebSocket�
   const port = (sink.address() as AddressInfo).port;
 
   const profileDir = tmpDir(t, 'leak');
-  const proxy = await startEgressProxy({ username: 'clive', password: 'x'.repeat(48) });
+  const proxy = await startEgressProxy({ username: 'beat', password: 'x'.repeat(48) });
   t.after(() => proxy.close());
   const { chromium } = await import('playwright-core');
   const launch: LaunchOptions = {
     profileDir, channel: undefined, executablePath: undefined, headless: true,
-    proxy: { server: `http://${proxy.host}:${proxy.port}`, username: 'clive', password: 'x'.repeat(48) },
+    proxy: { server: `http://${proxy.host}:${proxy.port}`, username: 'beat', password: 'x'.repeat(48) },
     viewport: { width: 1280, height: 800 }, locale: systemLocale(), actionTimeoutMs: 10_000,
   };
   seedPreferences(profileDir);
@@ -93,12 +93,12 @@ test('T-44(2b): ページの中から 169.254.169.254・[::1]・localhost への
   t.after(() => { if (v6) sink6.close(); });
 
   const profileDir = tmpDir(t, 'inward');
-  const proxy = await startEgressProxy({ username: 'clive', password: 'x'.repeat(48) });
+  const proxy = await startEgressProxy({ username: 'beat', password: 'x'.repeat(48) });
   t.after(() => proxy.close());
   const { chromium } = await import('playwright-core');
   const launch: LaunchOptions = {
     profileDir, channel: undefined, executablePath: undefined, headless: true,
-    proxy: { server: `http://${proxy.host}:${proxy.port}`, username: 'clive', password: 'x'.repeat(48) },
+    proxy: { server: `http://${proxy.host}:${proxy.port}`, username: 'beat', password: 'x'.repeat(48) },
     viewport: { width: 1280, height: 800 }, locale: systemLocale(), actionTimeoutMs: 10_000,
   };
   seedPreferences(profileDir);
@@ -170,12 +170,12 @@ test('T-44(1)(3)(4): example.com を開いて本文が読め、押せて、起�
   const main = lines.filter(line => !line.includes('--type='));
   assert.ok(main.length > 0, '本体のプロセスが見つからない');
   for (const line of main) assert.match(line, /--proxy-server=/u, '中継を指定して起動している');
-  // --disable-features は、あとから付けたほうが勝つ（起動したコマンド行では、Playwright の既定のあとに Clive の固定の引数が来る）。固定の引数が Playwright の既定（MediaRouter・OptimizationHints など）を潰していないこと
+  // --disable-features は、あとから付けたほうが勝つ（起動したコマンド行では、Playwright の既定のあとに beat の固定の引数が来る）。固定の引数が Playwright の既定（MediaRouter・OptimizationHints など）を潰していないこと
   const wanted = [...playwrightDisabledFeatures(), 'PasswordManagerOnboarding', 'AutofillServerCommunication'];
   assert.ok(wanted.includes('MediaRouter') && wanted.includes('OptimizationHints'), `Playwright の一覧の読み取り: ${wanted.join(',')}`);
   for (const line of main) {
     const given = line.match(/--disable-features=(\S+)/gu) ?? [];
-    // Playwright の既定と Clive の固定の引数の 2 つが並ぶ。Chromium が読むのは最後の 1 つなので、最後のものを見る
+    // Playwright の既定と beat の固定の引数の 2 つが並ぶ。Chromium が読むのは最後の 1 つなので、最後のものを見る
     assert.ok(given.length >= 1, '--disable-features が無い');
     const names = new Set(given.at(-1)!.slice('--disable-features='.length).split(','));
     const missing = wanted.filter(name => !names.has(name));

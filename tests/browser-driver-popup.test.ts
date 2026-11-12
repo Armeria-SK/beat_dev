@@ -80,7 +80,7 @@ test('newPage の最中に届いた opener の無い窓のうち、戻ったタ�
 });
 
 test('プロファイルの権限: seedPreferences はプロファイルと Default を 0o700 で作る（Windows では権限は無視される）', t => {
-  const base = mkdtempSync(join(tmpdir(), 'clive-seed-'));
+  const base = mkdtempSync(join(tmpdir(), 'beat-seed-'));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const profile = join(base, 'browser-profile');
   seedPreferences(profile);

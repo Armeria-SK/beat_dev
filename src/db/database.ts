@@ -19,7 +19,7 @@ export function openDatabase(path: string, migrations: readonly Migration[], opt
     if (existed && current < migrations.length && options.backupDir) {
       mkdirSync(options.backupDir, { recursive: true });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const target = join(options.backupDir, `clive-v${current}-${stamp}.db`);
+      const target = join(options.backupDir, `beat-v${current}-${stamp}.db`);
       db.prepare('VACUUM INTO ?').run(target);
     }
     transaction(db, () => {
@@ -38,13 +38,13 @@ export function openDatabase(path: string, migrations: readonly Migration[], opt
 
 export function transaction<T>(db: DatabaseSync, work: () => T): T {
   const nested = db.isTransaction;
-  db.exec(nested ? 'SAVEPOINT clive_nested' : 'BEGIN IMMEDIATE');
+  db.exec(nested ? 'SAVEPOINT beat_nested' : 'BEGIN IMMEDIATE');
   try {
     const result = work();
-    db.exec(nested ? 'RELEASE clive_nested' : 'COMMIT');
+    db.exec(nested ? 'RELEASE beat_nested' : 'COMMIT');
     return result;
   } catch (error) {
-    db.exec(nested ? 'ROLLBACK TO clive_nested; RELEASE clive_nested' : 'ROLLBACK');
+    db.exec(nested ? 'ROLLBACK TO beat_nested; RELEASE beat_nested' : 'ROLLBACK');
     throw error;
   }
 }

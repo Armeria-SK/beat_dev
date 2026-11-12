@@ -5,7 +5,7 @@ export function isLoopbackHost(hostname: string): boolean {
 
 // server.host の検査。この PC の外には待ち受けない（ほかの端末からは Tailscale Serve 経由）。問題が無ければ undefined。起動（main.ts）と、画面からの反映（src/web/server-host.ts）が同じ検査を使う
 export function serverHostProblem(host: string): string | undefined {
-  return isLoopbackHost(host) ? undefined : `Set server.host to a loopback address such as 127.0.0.1 (it is ${host} now). Other devices open Clive through Tailscale Serve (see the README section on using Clive from other devices)`;
+  return isLoopbackHost(host) ? undefined : `Set server.host to a loopback address such as 127.0.0.1 (it is ${host} now). Other devices open beat through Tailscale Serve (see the README section on using beat from other devices)`;
 }
 
 export function checkBaseUrl(value: string, usesApiKey: boolean): { url: string } | { problem: string } {

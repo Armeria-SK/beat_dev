@@ -19,19 +19,19 @@ function fixture(t: { after: (fn: () => void) => void }, content?: string) {
 
 test('.env が無ければ作る。1 行だけ、改行で終わる', t => {
   const f = fixture(t);
-  setEnvValue(f.path, 'CLIVE_X_API_KEY', 'sk-new-0001');
-  assert.equal(f.text(), 'CLIVE_X_API_KEY=sk-new-0001\n');
+  setEnvValue(f.path, 'BEAT_X_API_KEY', 'sk-new-0001');
+  assert.equal(f.text(), 'BEAT_X_API_KEY=sk-new-0001\n');
   assert.deepEqual(f.files(), ['.env'], '元が無いので控えも無い');
 });
 
 test('ほかの行・コメント・空行・順番はそのまま。同じ名前の行だけ置き換える（名前が似ている行は触らない）', t => {
-  const original = '# 鍵\nANTHROPIC_API_KEY=sk-ant-old\n\nCLIVE_X_API_KEY=old # メモ\nCLIVE_X_API_KEY_2=other\nexport FOO=bar\n# end\n';
+  const original = '# 鍵\nANTHROPIC_API_KEY=sk-ant-old\n\nBEAT_X_API_KEY=old # メモ\nBEAT_X_API_KEY_2=other\nexport FOO=bar\n# end\n';
   const f = fixture(t, original);
-  setEnvValue(f.path, 'CLIVE_X_API_KEY', 'sk-new-0002');
-  assert.equal(f.text(), '# 鍵\nANTHROPIC_API_KEY=sk-ant-old\n\nCLIVE_X_API_KEY=sk-new-0002\nCLIVE_X_API_KEY_2=other\nexport FOO=bar\n# end\n');
+  setEnvValue(f.path, 'BEAT_X_API_KEY', 'sk-new-0002');
+  assert.equal(f.text(), '# 鍵\nANTHROPIC_API_KEY=sk-ant-old\n\nBEAT_X_API_KEY=sk-new-0002\nBEAT_X_API_KEY_2=other\nexport FOO=bar\n# end\n');
   const parsed = parseEnv(f.text());
-  assert.equal(parsed.CLIVE_X_API_KEY, 'sk-new-0002');
-  assert.equal(parsed.CLIVE_X_API_KEY_2, 'other');
+  assert.equal(parsed.BEAT_X_API_KEY, 'sk-new-0002');
+  assert.equal(parsed.BEAT_X_API_KEY_2, 'other');
   assert.equal(parsed.ANTHROPIC_API_KEY, 'sk-ant-old');
 });
 
@@ -156,13 +156,13 @@ test('鍵の検査（keyProblem）: 空・改行・制御文字・半角以外�
 test('環境変数の名前: あればその名前、Anthropic は ANTHROPIC_API_KEY、ほかは ID から作る（- は _ に）。ほかのプロバイダと同じ名前になるときは番号を足す', () => {
   assert.equal(keyEnvName({ id: 'fake', kind: 'openai_compatible', apiKeyEnv: 'FAKE_KEY' }), 'FAKE_KEY');
   assert.equal(keyEnvName({ id: 'anthropic', kind: 'anthropic' }), 'ANTHROPIC_API_KEY');
-  assert.equal(keyEnvName({ id: 'my-llm', kind: 'openai_compatible' }), 'CLIVE_MY_LLM_API_KEY');
-  assert.equal(keyEnvName({ id: 'a_b', kind: 'openai_compatible' }), 'CLIVE_A_B_API_KEY');
-  assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['CLIVE_A_B_API_KEY'])), 'CLIVE_A_B_API_KEY_2');
-  assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['CLIVE_A_B_API_KEY', 'CLIVE_A_B_API_KEY_2'])), 'CLIVE_A_B_API_KEY_3');
+  assert.equal(keyEnvName({ id: 'my-llm', kind: 'openai_compatible' }), 'BEAT_MY_LLM_API_KEY');
+  assert.equal(keyEnvName({ id: 'a_b', kind: 'openai_compatible' }), 'BEAT_A_B_API_KEY');
+  assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['BEAT_A_B_API_KEY'])), 'BEAT_A_B_API_KEY_2');
+  assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['BEAT_A_B_API_KEY', 'BEAT_A_B_API_KEY_2'])), 'BEAT_A_B_API_KEY_3');
   assert.match(keyEnvName({ id: 'x'.repeat(40), kind: 'openai_compatible' }), /^[A-Z][A-Z0-9_]{0,63}$/u, '一番長い ID でも名前の形に収まる');
-  assert.equal(derivedKeyEnv('anthropic-2', new Set(['ANTHROPIC_API_KEY'])), 'CLIVE_ANTHROPIC_2_API_KEY');
-  assert.equal(derivedKeyEnv('anthropic-2', new Set(['CLIVE_ANTHROPIC_2_API_KEY'])), 'CLIVE_ANTHROPIC_2_API_KEY_2');
+  assert.equal(derivedKeyEnv('anthropic-2', new Set(['ANTHROPIC_API_KEY'])), 'BEAT_ANTHROPIC_2_API_KEY');
+  assert.equal(derivedKeyEnv('anthropic-2', new Set(['BEAT_ANTHROPIC_2_API_KEY'])), 'BEAT_ANTHROPIC_2_API_KEY_2');
 });
 
 test('鍵を持つ名前だけを書く（isSecretEnvName）: PATH などの環境変数は、鍵の名前として書き換えない', () => {
@@ -183,11 +183,11 @@ test('引用符で始まる鍵は、書かずに断る（あとの行の引用�
 });
 
 test('閉じていない引用符で始まる別の変数の行は、その行だけ（続きの行を飲み込まない）。置き換えても、ほかの変数が残る', t => {
-  const f = fixture(t, 'OTHER="oops\nB_KEY=1\nCLIVE_X_API_KEY=old\nC=2\n');
+  const f = fixture(t, 'OTHER="oops\nB_KEY=1\nBEAT_X_API_KEY=old\nC=2\n');
   setEnvValue(f.path, 'OTHER', 'new');
-  assert.equal(f.text(), 'OTHER=new\nB_KEY=1\nCLIVE_X_API_KEY=old\nC=2\n');
+  assert.equal(f.text(), 'OTHER=new\nB_KEY=1\nBEAT_X_API_KEY=old\nC=2\n');
   const parsed = parseEnv(f.text());
-  assert.deepEqual([parsed.OTHER, parsed.B_KEY, parsed.CLIVE_X_API_KEY, parsed.C], ['new', '1', 'old', '2']);
+  assert.deepEqual([parsed.OTHER, parsed.B_KEY, parsed.BEAT_X_API_KEY, parsed.C], ['new', '1', 'old', '2']);
 });
 
 test('閉じていない引用符の行を消しても、続きの行とコメントが残る', t => {

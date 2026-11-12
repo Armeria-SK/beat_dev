@@ -124,31 +124,31 @@ test('bash: echo "\\$(rm x)" は本物の bash でも文字を出すだけで何
   assert.ok(lexedReal.ok && lexedReal.statements.map(s => s.words[0]!.text).join() === 'touch,echo', '字句の読み取りも、置換の中の touch を文として読む');
 });
 
-// Windows の Git Bash に bash -c で渡すと、"…" の中の連続する \\ は 1 つに減る。Clive のシェルは、スクリプトを標準入力で渡す（runner.ts）ので減らず、ファイルで渡した結果と同じになる
-test('bash（Windows）: 素の bash -c は連続する \\\\ を 1 つに減らす。Clive のシェルの渡し方（標準入力）は、ファイルで渡した結果と同じで、ガードの読みどおりに動く', { skip: (process.platform !== 'win32' || !bashPath) && 'Windows の Git Bash が無い' }, async t => {
+// Windows の Git Bash に bash -c で渡すと、"…" の中の連続する \\ は 1 つに減る。beat のシェルは、スクリプトを標準入力で渡す（runner.ts）ので減らず、ファイルで渡した結果と同じになる
+test('bash（Windows）: 素の bash -c は連続する \\\\ を 1 つに減らす。beat のシェルの渡し方（標準入力）は、ファイルで渡した結果と同じで、ガードの読みどおりに動く', { skip: (process.platform !== 'win32' || !bashPath) && 'Windows の Git Bash が無い' }, async t => {
   const dir = scratch(t);
   const spec = resolveShell('bash');
   const viaC = (script: string) => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', script], { cwd: join(dir, 'cwd'), encoding: 'utf8' });
-  const viaClive = (script: string) => runProcess(spec.file, spec.args(script), { cwd: join(dir, 'cwd'), env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 100_000, ...(spec.stdin ? { input: spec.stdin(script) } : {}) });
+  const viaBeat = (script: string) => runProcess(spec.file, spec.args(script), { cwd: join(dir, 'cwd'), env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 100_000, ...(spec.stdin ? { input: spec.stdin(script) } : {}) });
   const dangerous = 'echo "\\\\\\$(touch made3)"';
   assert.equal(viaFile(dir, dangerous).stdout, '\\$(touch made3)\n', '前提: ファイルで渡せば、置換にならず文字を出すだけ');
   assert.equal(existsSync(join(dir, 'cwd', 'made3')), false);
   assert.equal(viaC(dangerous).stdout, '\\\n', '前提: -c で渡すと \\\\ が減って、$( が本物の置換になる');
   assert.equal(existsSync(join(dir, 'cwd', 'made3')), true, '前提: -c では置換の touch が動く');
   rmSync(join(dir, 'cwd', 'made3'));
-  assert.equal((await viaClive(dangerous)).stdout, '\\$(touch made3)\n', 'Clive のシェルの渡し方では、置換にならず文字を出すだけ');
-  assert.equal(existsSync(join(dir, 'cwd', 'made3')), false, 'Clive のシェルで置換の touch が動いた');
+  assert.equal((await viaBeat(dangerous)).stdout, '\\$(touch made3)\n', 'beat のシェルの渡し方では、置換にならず文字を出すだけ');
+  assert.equal(existsSync(join(dir, 'cwd', 'made3')), false, 'beat のシェルで置換の touch が動いた');
   const differ: string[] = [];
   for (const row of BASH_DQ_ROWS) {
     const script = `printf '<%s>\\n'${row.slice(row.indexOf(' '))}`;
     const c = viaC(script);
     const f = viaFile(dir, script);
-    const clive = await viaClive(script);
-    assert.equal(clive.stdout, f.stdout, `${row}: Clive のシェルの結果が、ファイルで渡した結果と違う`);
+    const beat = await viaBeat(script);
+    assert.equal(beat.stdout, f.stdout, `${row}: beat のシェルの結果が、ファイルで渡した結果と違う`);
     if (c.stdout !== f.stdout) differ.push(row);
     const lexed = lexShell(row, 'bash');
     assert.ok(lexed.ok, `${row}: 読めない`);
-    if (lexed.ok) assert.deepEqual(clive.stdout.replace(/\n$/u, '').split('\n').map(l => l.replace(/^<|>$/gu, '')), lexed.statements[0]!.words.slice(1).map(w => w.text), `${row}: ガードの読みどおりに動く`);
+    if (lexed.ok) assert.deepEqual(beat.stdout.replace(/\n$/u, '').split('\n').map(l => l.replace(/^<|>$/gu, '')), lexed.statements[0]!.words.slice(1).map(w => w.text), `${row}: ガードの読みどおりに動く`);
   }
   assert.ok(differ.length > 0, '前提: \\\\ を含む行は -c で結果が変わる');
   assert.ok(differ.every(row => row.includes('\\\\')), `\\\\ を含まない行が -c で変わった: ${differ.filter(row => !row.includes('\\\\')).join(' / ')}`);
@@ -213,7 +213,7 @@ const SEP = '\u001f';
 const PS_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$lines = [System.IO.File]::ReadAllLines($env:CLIVE_LEX_IN, [System.Text.Encoding]::UTF8)
+$lines = [System.IO.File]::ReadAllLines($env:BEAT_LEX_IN, [System.Text.Encoding]::UTF8)
 for ($i = 0; $i -lt $lines.Count; $i++) {
   $errors = $null; $tokens = $null
   $ast = [System.Management.Automation.Language.Parser]::ParseInput($lines[$i], [ref]$tokens, [ref]$errors)
@@ -240,7 +240,7 @@ test('PowerShell 5.1: 字句の読み取りが読んだコマンドの語は、�
   const dir = tempDir(t);
   const input = join(dir, 'in.txt');
   writeFileSync(input, PS_ROWS.join('\n'), 'utf8');
-  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_LEX_IN: input } });
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, BEAT_LEX_IN: input } });
   assert.equal(real.status, 0, real.stderr);
   const byRow = new Map<number, string[][]>();
   const errored = new Set<number>();
@@ -269,7 +269,7 @@ test('PowerShell 5.1: 本物の Parser が違う語に読む書き方（曲が�
   const dir = tempDir(t);
   const input = join(dir, 'in.txt');
   writeFileSync(input, rows.join('\n'), 'utf8');
-  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_LEX_IN: input } });
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, BEAT_LEX_IN: input } });
   assert.equal(real.status, 0, real.stderr);
   const realOf = (i: number): string[] | undefined => real.stdout.split(/\r?\n/u).filter(l => l.startsWith(`CMD|${i}|`)).map(l => l.split('|').slice(2).join('|'))[0]?.split(SEP);
   // 本物は引用符・ハイフンとして読む（空白で割った素朴な読み方とは語の数が違う）
@@ -288,7 +288,7 @@ test('字句の読み取りが止める形は、PowerShell 7 でも bash でも�
 const PS_COUNT_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$rows = $env:CLIVE_ROWS | ConvertFrom-Json
+$rows = $env:BEAT_ROWS | ConvertFrom-Json
 foreach ($s in $rows) {
   $errors = $null; $tokens = $null
   $ast = [System.Management.Automation.Language.Parser]::ParseInput($s, [ref]$tokens, [ref]$errors)
@@ -300,13 +300,13 @@ foreach ($s in $rows) {
 // 審査で見つかった: CR 1 つは文の区切り、U+0085・U+2028・U+2029 は語の区切り。字句の読み取りは、どれも止める
 test('PowerShell 5.1: 本物の Parser が文や語を分ける文字（CR 1 つ・U+0085・U+2028・U+2029）を、字句の読み取りは止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
   const rows = ['Write-Output a\rnode p.js', 'Set-Content README.md\rx', 'Write-Output a\u0085b', 'Write-Output a b', 'Write-Output a b'];
-  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_COUNT_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(rows) } });
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_COUNT_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, BEAT_ROWS: JSON.stringify(rows) } });
   assert.equal(real.status, 0, real.stderr);
   const counts = real.stdout.split(/\r?\n/u).filter(l => /^\d+\|/u.test(l));
   assert.deepEqual(counts, ['2|2,2', '2|2,1', '1|3', '1|3', '1|3'], '本物は CR で文を分け、U+0085 などで語を分ける');
   for (const row of rows) for (const shell of ['powershell', 'pwsh', 'bash', 'sh'] as ShellKind[]) assert.equal(lexShell(row, shell).ok, false, `${shell}: ${JSON.stringify(row)} は止める`);
   // CRLF は本物も 1 つの改行として読む
-  const crlf = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_COUNT_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(['Write-Output a\r\nWrite-Output b']) } });
+  const crlf = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_COUNT_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, BEAT_ROWS: JSON.stringify(['Write-Output a\r\nWrite-Output b']) } });
   assert.match(crlf.stdout, /^2\|2,2$/mu);
   const mine = lexShell('Write-Output a\r\nWrite-Output b', 'powershell');
   assert.ok(mine.ok && mine.statements.length === 2 && mine.statements.every(s => s.words.length === 2));
@@ -364,9 +364,9 @@ for ($i = 0; $i -lt $rows.Count; $i++) {
 }
 `;
 
-const PS_DQ_SCRIPT = psDqScript('$env:CLIVE_ROWS | ConvertFrom-Json');
+const PS_DQ_SCRIPT = psDqScript('$env:BEAT_ROWS | ConvertFrom-Json');
 // 行が多いときは環境変数の上限（32767 文字）に収まらないので、ファイルで渡す
-const PS_DQ_FILE_SCRIPT = psDqScript('[System.IO.File]::ReadAllText($env:CLIVE_ROWS_FILE, [System.Text.Encoding]::UTF8) | ConvertFrom-Json');
+const PS_DQ_FILE_SCRIPT = psDqScript('[System.IO.File]::ReadAllText($env:BEAT_ROWS_FILE, [System.Text.Encoding]::UTF8) | ConvertFrom-Json');
 
 function parseRealWords(stdout: string): { byRow: Map<number, string[][]>; errored: Set<number> } {
   const byRow = new Map<number, string[][]>();
@@ -382,7 +382,7 @@ function parseRealWords(stdout: string): { byRow: Map<number, string[][]>; error
 }
 
 function realWordsOf(rows: readonly string[]): { byRow: Map<number, string[][]>; errored: Set<number> } {
-  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(rows) } });
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, BEAT_ROWS: JSON.stringify(rows) } });
   assert.equal(real.status, 0, real.stderr);
   return parseRealWords(real.stdout);
 }
@@ -390,7 +390,7 @@ function realWordsOf(rows: readonly string[]): { byRow: Map<number, string[][]>;
 function realWordsOfFile(dir: string, rows: readonly string[]): { byRow: Map<number, string[][]>; errored: Set<number> } {
   const file = join(dir, 'rows.json');
   writeFileSync(file, JSON.stringify(rows), 'utf8');
-  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_FILE_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS_FILE: file } });
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_FILE_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, BEAT_ROWS_FILE: file } });
   assert.equal(real.status, 0, real.stderr);
   return parseRealWords(real.stdout);
 }

@@ -15,7 +15,7 @@ export function keyProblem(key: string): KeyProblem | undefined {
 }
 
 // 鍵を入れる環境変数の名前。プロバイダに書かれていればその名前、Anthropic は ANTHROPIC_API_KEY（書いていなくても使う名前）、
-// ほかは ID から CLIVE_<ID の大文字>_API_KEY を作る。taken（ほかのプロバイダがすでに使っている名前）と重なるときは _2 _3 … を足す
+// ほかは ID から BEAT_<ID の大文字>_API_KEY を作る。taken（ほかのプロバイダがすでに使っている名前）と重なるときは _2 _3 … を足す
 export function keyEnvName(provider: { id: string; kind: string; apiKeyEnv?: string | undefined }, taken: ReadonlySet<string> = new Set()): string {
   if (provider.apiKeyEnv) return provider.apiKeyEnv;
   if (provider.kind === 'anthropic') return 'ANTHROPIC_API_KEY';
@@ -23,7 +23,7 @@ export function keyEnvName(provider: { id: string; kind: string; apiKeyEnv?: str
 }
 
 export function derivedKeyEnv(id: string, taken: ReadonlySet<string> = new Set()): string {
-  const base = `CLIVE_${id.toUpperCase().replaceAll('-', '_')}_API_KEY`;
+  const base = `BEAT_${id.toUpperCase().replaceAll('-', '_')}_API_KEY`;
   let name = base;
   for (let n = 2; taken.has(name); n += 1) name = `${base}_${n}`;
   return name;

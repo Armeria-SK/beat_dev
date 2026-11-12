@@ -38,11 +38,11 @@ function smallestBudgetShowing(memories: readonly Memory[], count: number, langu
 
 test('記憶: 本の大きさに上限は無く、保存は断らない。1 件 600 文字の上限だけが残る', () => {
   const { memory } = store();
-  for (let i = 0; i < 40; i++) memory.save({ book: 'user', content: `${String(i).padStart(3, '0')}${'あ'.repeat(550)}`, actor: 'clive' });
+  for (let i = 0; i < 40; i++) memory.save({ book: 'user', content: `${String(i).padStart(3, '0')}${'あ'.repeat(550)}`, actor: 'beat' });
   assert.equal(memory.used('user'), 40 * 553, '以前の上限（ユーザーについて 2,000 文字）を大きく超えても保存できる');
   const first = memory.list('user')[0]!;
-  assert.doesNotThrow(() => memory.update(first.id, 'x'.repeat(600), 'clive'), '書き直しも断らない');
-  assert.throws(() => memory.save({ book: 'notes', content: 'y'.repeat(601), actor: 'clive' }), (e: unknown) => e instanceof MemoryError && e.code === 'memory.too_long');
+  assert.doesNotThrow(() => memory.update(first.id, 'x'.repeat(600), 'beat'), '書き直しも断らない');
+  assert.throws(() => memory.save({ book: 'notes', content: 'y'.repeat(601), actor: 'beat' }), (e: unknown) => e instanceof MemoryError && e.code === 'memory.too_long');
   const { eventId } = memory.forget(first.id, 'user');
   assert.doesNotThrow(() => memory.undo(eventId), '消したものを戻すときも、大きさでは断らない');
   assert.equal(Object.keys(storeText.tables.en).some(key => key.includes('over_cap')), false, '上限のエラーの文は表に無い');
@@ -53,7 +53,7 @@ test('記憶: 本の大きさに上限は無く、保存は断らない。1 件 
 test('renderBooks: 予算が無ければ全部入る（今までの出力のまま）。予算を渡さない呼び出しも同じ', () => {
   const memories = [mem(1, 'user', '紅茶が好き', 100), mem(2, 'notes', '返事は短く', 200)];
   const text = renderBooks(memories);
-  assert.equal(text, "# What you remember (memory)\n\n## Memories about the user\n- [u1] 紅茶が好き\n\n## Clive's notes and lessons\n- [n2] 返事は短く");
+  assert.equal(text, "# What you remember (memory)\n\n## Memories about the user\n- [u1] 紅茶が好き\n\n## beat's notes and lessons\n- [n2] 返事は短く");
   assert.equal(renderBooks(memories, 'en', undefined), text);
   assert.equal(planBooks(memories, 'en').omitted.length, 0);
 });
@@ -76,7 +76,7 @@ test('renderBooks: 予算まで、新しく直した順に入れ、入らなか�
   const budget2 = smallestBudgetShowing(memories, 2);
   const two = planBooks(memories, 'en', budget2);
   assert.deepEqual(two.shown.map(m => m.id), [2, 3], '新しい 2 件。本の中の並びは今までどおり（作った順）');
-  assert.match(two.text, /## Memories about the user\n- \[u3\][^\n]*\n\n## Clive's notes and lessons\n- \[n2\][^\n]*\n\n\(1 more\. You can find them with memory_search\)$/u);
+  assert.match(two.text, /## Memories about the user\n- \[u3\][^\n]*\n\n## beat's notes and lessons\n- \[n2\][^\n]*\n\n\(1 more\. You can find them with memory_search\)$/u);
 
   const all = planBooks(memories, 'en', smallestBudgetShowing(memories, 3));
   assert.equal(all.omitted.length, 0);

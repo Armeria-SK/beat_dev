@@ -12,7 +12,7 @@ import { maskTarget } from '../web/src/ui/tool-row.ts';
 // 新しい画面の Library（steps/p1-ui.md の「画面」の Memory・Skills・Runs・Archived と PR 1-5a）の決まり。画面を持たない純粋な関数（web/src/ui/library.ts）。
 
 const event = (id: number, action: string, extra: Partial<MemoryEvent> = {}): MemoryEvent =>
-  ({ id, memory_id: 1, action, before: null, after: null, actor: 'clive', reason: null, undone_at: null, created_at: id * 10, ...extra });
+  ({ id, memory_id: 1, action, before: null, after: null, actor: 'beat', reason: null, undone_at: null, created_at: id * 10, ...extra });
 
 test('ui/library: 記憶の一覧の行は、最後の変化が作成なら「誰が保存したか」、書き換えなら「誰が書き換えたか」と時刻', () => {
   const item = { origin: 'review', created_at: 5, updated_at: 50 };

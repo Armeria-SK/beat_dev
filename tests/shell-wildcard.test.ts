@@ -19,10 +19,10 @@ function fixture(t: { after: (fn: () => void) => void }) {
   for (const d of ['skills/a', '.git', 'sub']) mkdirSync(join(ws, d), { recursive: true });
   for (const [f, text] of [['SOUL.md', 'persona'], ['USER.md', 'user'], ['.env', 'SECRET=1'], ['.git/description', 'desc'], ['skills/a/SKILL.md', 'skill'], ['sub/z.txt', 'z'], ['notes.md', 'n'], ['a.txt', 'a']] as const) writeFileSync(join(ws, f), text);
   writeFileSync(join(base, 'config.json'), '{}');
-  writeFileSync(join(base, 'clive.db'), '');
+  writeFileSync(join(base, 'beat.db'), '');
   const policy: ScopePolicy = {
     roots: [{ path: ws, mode: 'write' }],
-    deny: [realish(join(base, 'config.json')), realish(join(base, 'clive.db'))],
+    deny: [realish(join(base, 'config.json')), realish(join(base, 'beat.db'))],
     askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')],
     skillsDir: join(ws, 'skills'),
   };
@@ -50,10 +50,10 @@ test('PowerShell: 引用符つきの -Path・-FilePath・位置のパスのワ�
   assert.deepEqual(wrong, []);
 });
 
-test('PowerShell: 引用符つきのワイルドカードが、禁止（秘密のパス・config.json・clive.db）に当たるなら止める', t => {
+test('PowerShell: 引用符つきのワイルドカードが、禁止（秘密のパス・config.json・beat.db）に当たるなら止める', t => {
   const f = fixture(t);
   const rows = [
-    "Get-Content '.en[v]'", "Get-Content -Path '.en?'", "Select-String -Path '.en[v]' -Pattern S", "Get-ChildItem -Path '.en[v]'", "Get-Content '..\\config.jso[n]'", "Get-Content '..\\clive.d[b]'",
+    "Get-Content '.en[v]'", "Get-Content -Path '.en?'", "Select-String -Path '.en[v]' -Pattern S", "Get-ChildItem -Path '.en[v]'", "Get-Content '..\\config.jso[n]'", "Get-Content '..\\beat.d[b]'",
     "Set-Content '..\\config.jso[n]' x", "Get-Content '..\\conf*.json'", "Get-Content '..\\*.db'", 'Get-Content ".en[v]"', "gc '.e*'", "Get-Content '.*'", "Copy-Item '.en[v]' sub/",
   ];
   const wrong = rows.filter(c => f.ps(c).decision !== 'deny').map(c => `${c} → ${f.ps(c).decision}`);

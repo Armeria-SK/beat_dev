@@ -28,7 +28,7 @@ export interface ShellGuardOptions {
   windows?: boolean;
   shell?: ShellKind;
   language?: Language;
-  // server.origins の host。Tailscale の URL なども Clive 自身に届くので、ループバックと同じに確かめる
+  // server.origins の host。Tailscale の URL なども beat 自身に届くので、ループバックと同じに確かめる
   selfHosts?: readonly string[];
   // C2: 子プロセスの PATH で、名前から実際に起動されるファイル。許可フォルダ・データのフォルダの中なら、その名前の一覧はすべて今回だけ
   which?: (name: string) => string | undefined;

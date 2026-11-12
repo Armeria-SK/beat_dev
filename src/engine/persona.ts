@@ -176,7 +176,7 @@ function assertWritable(paths: AppPaths, name: PersonaFile): string {
   return target;
 }
 
-// 書く前の控えは、作業フォルダの中ではなく data/backups/persona/ に置く（Clive の道具から触れない場所）。
+// 書く前の控えは、作業フォルダの中ではなく data/backups/persona/ に置く（beat の道具から触れない場所）。
 export function writePersonaFile(paths: AppPaths, name: PersonaFile, content: string, now = Date.now()): void {
   const target = assertWritable(paths, name);
   const existing = readOrEmpty(target);

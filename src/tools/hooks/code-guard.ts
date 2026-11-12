@@ -60,7 +60,7 @@ export function readOnlyInvocation(seg: Segment): boolean {
 const PACKAGE_TOOLS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const PACKAGE_READONLY_SUB = new Set(['ls', 'list', 'll', 'la', 'view', 'info', 'show', 'outdated', 'why', 'explain', 'help', 'audit', 'version', 'bin', 'root', 'prefix']);
 const RUNNER_TOOLS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye', 'bundle']);
-// パッケージの道具を取ってきて（または node_modules/.bin のものを）動かす。node_modules は Clive が書き換えられるので、毎回確かめる
+// パッケージの道具を取ってきて（または node_modules/.bin のものを）動かす。node_modules は beat が書き換えられるので、毎回確かめる
 const NPX_TOOLS = new Set(['npx', 'pnpx', 'bunx']);
 const BUILD_TOOLS = new Set([
   'make', 'gmake', 'nmake', 'just', 'rake', 'ninja', 'mvn', 'gradle', 'gradlew', 'ant', 'sbt', 'pytest', 'tox', 'nox', 'jest', 'vitest', 'mocha', 'playwright', 'msbuild',
@@ -86,9 +86,9 @@ const PS_OPERATOR = /^(?:-(?:[ic]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmat
 // コマンドの文字のなかの、この PC の中の宛先（ループバック）
 const LOOPBACK = /(?:^|[^\w.])(?:127\.\d{1,3}(?:\.\d{1,3}){0,2}|localhost|0\.0\.0\.0|2130706433|0x7f[0-9a-f]*|\[?::1\]?)(?![\w-])/iu;
 
-// Clive 自身の設定・人格・承認・記憶に触れる文字（人への目印。判定には使わない）
+// beat 自身の設定・人格・承認・記憶に触れる文字（人への目印。判定には使わない）
 const SELF_MARKERS: ReadonlyArray<[string, RegExp]> = [
-  ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['SOUL.md', /SOUL\.md/iu], ['USER.md', /USER\.md/iu], ['clive.db', /clive\.db/iu], ['.env', /(?:^|[^\w])\.env(?![\w])/u],
+  ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['SOUL.md', /SOUL\.md/iu], ['USER.md', /USER\.md/iu], ['beat.db', /beat\.db/iu], ['.env', /(?:^|[^\w])\.env(?![\w])/u],
   ['skills/', /skills[\\/]/iu], ['127.0.0.1 / localhost', LOOPBACK],
 ];
 export function selfTouchMarkers(text: string, selfHosts: readonly string[]): string[] {
@@ -329,7 +329,7 @@ function envFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   return hit ? [finding(ctx.language, 'code.env', { name: hit }, false)] : [];
 }
 
-// ── R1.7 この PC の中のサーバー・Clive 自身 ──
+// ── R1.7 この PC の中のサーバー・beat 自身 ──
 function loopbackFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   if (noCodeRun(seg)) return [];
   const hit = LOOPBACK.exec(seg.raw);

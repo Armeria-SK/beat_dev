@@ -137,9 +137,9 @@ export function checkWorkFolder(input: string, ctx: WorkFolderContext): WorkFold
       ? zone([env.SystemRoot ?? env.windir, env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramData])
       : zone(['/etc', '/usr', '/bin', '/sbin', '/var', '/opt', '/lib', '/boot', '/dev', '/proc', '/sys', '/System', '/Library', '/Applications']);
     if (system.some(dir => overlaps(dir, real))) return refuse('folder_system');
-    if (overlaps(realOf(ctx.appRoot), real)) return refuse('folder_clive');
+    if (overlaps(realOf(ctx.appRoot), real)) return refuse('folder_beat');
   }
-  if (overlaps(realOf(ctx.paths.data), real)) return refuse('folder_clive');
+  if (overlaps(realOf(ctx.paths.data), real)) return refuse('folder_beat');
   const profiles = dirname(home);
   if (!exempted && dirname(profiles) !== profiles && isInside(profiles, real) && !isInside(home, real)) return refuse('folder_home');
   if (isSecretPath(real) || isSecretPath(abs)) return refuse('folder_secret');

@@ -54,8 +54,8 @@ async function populate(s: Awaited<ReturnType<typeof startApp>>) {
   // 残すもの: 記憶・スキルの下書き・その会話から作ったタスク
   app.db.prepare(`INSERT INTO memories (book, content, origin, source_conversation_id, source_message_id, created_at, updated_at) VALUES ('notes', '覚えたこと', 'chat', ?, 1, 1, 1)`).run(TARGET);
   app.db.prepare(`INSERT INTO skill_drafts (name, description, body, status, conversation_id, run_id, created_at) VALUES ('s', 'd', 'b', 'pending', ?, 'run-t', 1)`).run(TARGET);
-  const task = app.tasks.create({ title: 'この会話から作ったタスク', origin: 'self', actor: 'clive', createdInConversation: TARGET });
-  app.tasks.event(task.id, 'context', 'clive', `会話 ${TARGET} から作成`, 'run-t');
+  const task = app.tasks.create({ title: 'この会話から作ったタスク', origin: 'self', actor: 'beat', createdInConversation: TARGET });
+  app.tasks.event(task.id, 'context', 'beat', `会話 ${TARGET} から作成`, 'run-t');
   // 振り返りの予定
   app.db.prepare(`INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, status, created_at) VALUES ('idle', ?, ?, 'pending', 1)`).run(`idle:${TARGET}:3`, TARGET);
   // この会話を材料にした振り返り（記憶の振り返りの会話）。終わった振り返りの記録は、消す会話の発言を写した会話と、返事を載せたメモを持つ。ほかの会話の振り返りは巻き込まない
@@ -178,16 +178,16 @@ test('削除: その会話で notify_owner が出した通知は、題も本文�
   assert.ok(mine[0]!.dedup_key?.startsWith('owner:'), '前提: owner: の印が付く');
   assert.ok(mine[0]!.body?.includes(SECRET));
   // タスクの実行が出した通知（リンクはタスク）と、会話を指すだけで notify_owner ではない通知
-  const task = app.tasks.create({ title: '残るタスク', origin: 'self', actor: 'clive', createdInConversation: TARGET });
-  app.notifications.notify({ kind: 'info', title: 'Clive より: タスクの区切り', body: 'タスクの知らせ', link: `#/tasks/${task.id}`, dedupKey: 'owner:task-run' });
+  const task = app.tasks.create({ title: '残るタスク', origin: 'self', actor: 'beat', createdInConversation: TARGET });
+  app.notifications.notify({ kind: 'info', title: 'beat より: タスクの区切り', body: 'タスクの知らせ', link: `#/tasks/${task.id}`, dedupKey: 'owner:task-run' });
   app.notifications.notify({ kind: 'task_done', title: 'ほかの知らせ', link: `#/c/${TARGET}`, dedupKey: 'done:1' });
 
   assert.equal((await s.json(`/api/conversations/${TARGET}`, 'DELETE')).status, 200);
 
   const rows = app.db.prepare('SELECT title, link, dedup_key AS k FROM notifications ORDER BY id').all() as Array<{ title: string; link: string | null; k: string }>;
   assert.deepEqual(rows.map(r => ({ ...r })), [
-    { title: 'From Clive: 別の件', link: `#/c/${OTHER}`, k: rows[0]!.k },
-    { title: 'Clive より: タスクの区切り', link: `#/tasks/${task.id}`, k: 'owner:task-run' },
+    { title: 'From beat: 別の件', link: `#/c/${OTHER}`, k: rows[0]!.k },
+    { title: 'beat より: タスクの区切り', link: `#/tasks/${task.id}`, k: 'owner:task-run' },
     { title: 'ほかの知らせ', link: null, k: 'done:1' },
   ], 'この会話の notify_owner の通知だけ消える。ほかの会話・タスクの通知は残り、会話を指すだけの通知はリンクが外れる');
   assert.ok(rows[0]!.k.startsWith('owner:'));

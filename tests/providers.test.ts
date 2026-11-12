@@ -13,7 +13,7 @@ const model = (over: Partial<ModelConfig> = {}): ModelConfig => ({
   id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, vision: false, ...over,
 });
 const request = (m: ModelConfig, over: Partial<ModelRequest> = {}): ModelRequest => ({
-  model: m, system: { frozen: 'あなたは Clive', dynamic: '現在時刻' }, messages: [{ role: 'user', content: 'こんにちは' }],
+  model: m, system: { frozen: 'あなたは beat', dynamic: '現在時刻' }, messages: [{ role: 'user', content: 'こんにちは' }],
   tools: [], maxOutputTokens: 1024, signal: new AbortController().signal, ...over,
 });
 async function collect(it: AsyncIterable<StreamEvent>): Promise<StreamEvent[]> {

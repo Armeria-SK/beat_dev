@@ -16,16 +16,16 @@ import { FakeAdapter, reply, tempDir, testConfig } from './helpers.ts';
 const req = (headers: Record<string, string>, method = 'GET') => ({ headers, method } as unknown as IncomingMessage);
 
 test('認証: Host・Origin・Sec-Fetch-Site・Tailscale を確かめる', () => {
-  const auth = new WebAuth(['http://127.0.0.1:4777', 'https://clive.tail1234.ts.net'], ['me@example.com']);
+  const auth = new WebAuth(['http://127.0.0.1:4777', 'https://beat.tail1234.ts.net'], ['me@example.com']);
   assert.equal(auth.check(req({ host: '127.0.0.1:4777' })).ok, true);
   assert.equal(auth.check(req({ host: 'evil.example:4777' })).ok, false, 'DNS リバインディング');
   assert.equal(auth.check(req({ host: '127.0.0.1:4777', origin: 'http://evil.example' })).ok, false);
   assert.equal(auth.check(req({ host: '127.0.0.1:4777' }, 'POST')).ok, false, '書き込みには Origin が要る');
   assert.equal(auth.check(req({ host: '127.0.0.1:4777', origin: 'http://127.0.0.1:4777' }, 'POST')).ok, true);
   assert.equal(auth.check(req({ host: '127.0.0.1:4777', 'sec-fetch-site': 'cross-site' })).ok, false);
-  assert.equal(auth.check(req({ host: 'clive.tail1234.ts.net' })).ok, false, 'Tailscale のヘッダが無い');
-  assert.equal(auth.check(req({ host: 'clive.tail1234.ts.net', 'tailscale-user-login': 'someone@else.com' })).ok, false);
-  assert.equal(auth.check(req({ host: 'clive.tail1234.ts.net', 'tailscale-user-login': 'me@example.com' })).ok, true);
+  assert.equal(auth.check(req({ host: 'beat.tail1234.ts.net' })).ok, false, 'Tailscale のヘッダが無い');
+  assert.equal(auth.check(req({ host: 'beat.tail1234.ts.net', 'tailscale-user-login': 'someone@else.com' })).ok, false);
+  assert.equal(auth.check(req({ host: 'beat.tail1234.ts.net', 'tailscale-user-login': 'me@example.com' })).ok, true);
   assert.throws(() => new WebAuth(['http://192.168.1.2:4777']), /https/);
 });
 
@@ -88,13 +88,13 @@ test('API: 発言を送ると返事が SSE で流れ、保存される', async t
   const s = await startApp(t);
   const created = await (await s.api('/api/conversations', { method: 'POST', body: '{}' })).json() as any;
   const id = created.conversation.id;
-  s.adapter().scripts.push(reply('こんにちは、Clive です'));
+  s.adapter().scripts.push(reply('こんにちは、beat です'));
   const listening = readEvents(s.origin, e => e.type === 'run.end');
   await new Promise(r => setTimeout(r, 50));
   const sent = await s.api(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text: 'やあ' }) });
   assert.equal(sent.status, 202);
   const events = await listening;
-  assert.equal(events.filter(e => e.type === 'text.delta').map(e => e.text).join(''), 'こんにちは、Clive です');
+  assert.equal(events.filter(e => e.type === 'text.delta').map(e => e.text).join(''), 'こんにちは、beat です');
   assert.equal(events.at(-1).ok, true);
   const history = await (await s.api(`/api/conversations/${id}/messages`)).json() as any;
   assert.deepEqual(history.messages.map((m: any) => m.role), ['user', 'assistant']);

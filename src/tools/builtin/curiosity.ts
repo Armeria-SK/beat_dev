@@ -30,7 +30,7 @@ export const curiosityAdd: ToolDef<{ topic: string; why?: string }> = {
   allowedIn: ['chat', 'task', 'review'],
   async execute(input, ctx) {
     try {
-      const item = store(ctx).add({ topic: input.topic, why: input.why, source: 'clive' });
+      const item = store(ctx).add({ topic: input.topic, why: input.why, source: 'beat' });
       return { content: toolText(languageOf(ctx.config), 'curiosity.added', { line: line(item, languageOf(ctx.config)) }) };
     } catch (error) { return fail(error, ctx); }
   },

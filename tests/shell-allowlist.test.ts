@@ -517,9 +517,9 @@ test('名前の決まり（C1）: 引用符・変数・パスのコマンド名�
   assert.equal(levelOf('ls.exe', 'powershell'), 'once');
 });
 
-// 審査で見つかった: 転送（リダイレクト）や Host・Origin ヘッダで、名前だけでは見抜けない形で Clive 自身の画面の API に届く。
+// 審査で見つかった: 転送（リダイレクト）や Host・Origin ヘッダで、名前だけでは見抜けない形で beat 自身の画面の API に届く。
 // curl の -L・Host/Origin などのヘッダ、wget と iwr/irm の既定の転送の追いかけは、今回だけにする
-test('Clive 自身の API に名前では届かせない: Host・Origin などのヘッダ・転送を追う指定は今回だけ', () => {
+test('beat 自身の API に名前では届かせない: Host・Origin などのヘッダ・転送を追う指定は今回だけ', () => {
   const once = [
     'curl -H "Host: 127.0.0.1:7800" https://127.0.0.1.nip.io:7800/api/settings', "curl -H 'host:127.0.0.1' https://e.example/", 'curl --header "Origin: http://127.0.0.1:7800" https://e.example/',
     'curl --header="Origin: http://localhost" https://e.example/', 'curl -H "Sec-Fetch-Site: same-origin" https://e.example/', 'curl -H "X-Forwarded-Host: 127.0.0.1" https://e.example/',
@@ -530,7 +530,7 @@ test('Clive 自身の API に名前では届かせない: Host・Origin など�
   const wrong = once.filter(c => levelOf(c, 'bash') !== 'once');
   assert.deepEqual(wrong, []);
   const allow = [
-    'curl https://e.example/', 'curl -sS https://e.example/x', 'curl -H "Accept: application/json" https://e.example/', "curl -H 'User-Agent: clive' https://e.example/", 'curl -H "X-Api-Version: 2" https://e.example/',
+    'curl https://e.example/', 'curl -sS https://e.example/x', 'curl -H "Accept: application/json" https://e.example/', "curl -H 'User-Agent: beat' https://e.example/", 'curl -H "X-Api-Version: 2" https://e.example/',
     'wget --max-redirect=0 -O - https://e.example/x', 'wget -q --max-redirect 0 -O- https://e.example/x',
   ];
   assert.deepEqual(allow.filter(c => levelOf(c, 'bash') !== 'allow'), []);
