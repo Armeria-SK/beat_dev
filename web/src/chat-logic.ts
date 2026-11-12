@@ -125,10 +125,10 @@ export function sendTarget(conversationId: string | null, created: string | null
 // 会話の変更のうち、使用量の輪を数え直すもの: 使うモデルが変わるとき、権限モードが変わるとき（計画モードは、モデルに渡す道具の一覧と指示が変わる）
 export const recountsUsage = (kind: string): boolean => kind === 'model' || kind === 'mode';
 
-export function sendChoiceOf(conversationId: string | null, current: { modelId: string | null; effort: string | null; permissionMode?: PermissionMode }, override?: ModelChoice): ModelChoice {
+export function sendChoiceOf(conversationId: string | null, current: { modelId: string | null; effort: string | null; permissionMode?: PermissionMode }, override?: ModelChoice, product = false): ModelChoice {
   if (override) return { ...override };
   if (conversationId) return {};
-  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(current.permissionMode && current.permissionMode !== 'normal' ? { permissionMode: current.permissionMode } : {}) };
+  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(current.permissionMode && (product || current.permissionMode !== 'normal') ? { permissionMode: current.permissionMode } : {}) };
 }
 
 export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';

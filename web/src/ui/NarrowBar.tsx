@@ -1,16 +1,18 @@
 import type { RefObject } from 'react';
 import { useT } from '../i18n/index.ts';
+import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { CountBadge, Icon } from './parts.tsx';
 import type { Route } from './routes.ts';
 
-export function NarrowBar({ title, unread, expanded, covered, menuRef, onMenu }: {
-  title: string; unread: number; expanded: boolean; covered: boolean; menuRef: RefObject<HTMLButtonElement | null>; onMenu: () => void;
+export function NarrowBar({ title, unread, expanded, covered, menuRef, onMenu, panes }: {
+  title: string; unread: number; expanded: boolean; covered: boolean; menuRef: RefObject<HTMLButtonElement | null>; onMenu: () => void; panes?: PanesToggle | undefined;
 }) {
   const t = useT();
   return (
     <header className="ui-narrowbar" inert={covered}>
       <button ref={menuRef} type="button" className="bt-btn bt-btn--icon bt-btn--ghost" aria-label={t('ui.menu')} aria-expanded={expanded} onClick={onMenu}><Icon name="menu" /></button>
       <span className="ui-narrowbar__title">{title}</span>
+      {panes && <PanesButton {...panes} />}
       <a className="bt-btn bt-btn--icon bt-btn--ghost bt-bell" href="#/notifications" aria-label={t('ui.bell', unread)}>
         <Icon name="bell" /><CountBadge n={unread} />
       </a>

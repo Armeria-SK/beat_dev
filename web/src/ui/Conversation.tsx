@@ -5,7 +5,7 @@ import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrot
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
-import { cancelClearsInterrupt, NEW_DRAFT, queuedLine, showProceed, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
+import { cancelClearsInterrupt, firstMode, NEW_DRAFT, queuedLine, showProceed, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getLanguage, useT } from '../i18n/index.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
@@ -17,6 +17,7 @@ import { latestOnly } from './latest.ts';
 import { menuStep } from './menu.ts';
 import { sendOptions } from './product-nav.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
+import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
 import { contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadItems, type ThreadItem } from './thread.ts';
@@ -38,6 +39,7 @@ export interface ConversationProps {
   onReconnect: () => void;
   onClearNotices: (id: string) => void;
   onInterrupt: (id: string, on: boolean) => void;
+  panes?: PanesToggle | undefined;
 }
 
 interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[] }
@@ -167,8 +169,8 @@ function SessionMenu({ conversation, onRename, onSummary, onClose }: { conversat
   );
 }
 
-function Bar({ conversation: row, readOnly, title, product, meter, onRenamed, onSummary }: {
-  conversation: ConversationRow | null; readOnly: boolean; title: string; product: Project | undefined; meter: { value: number; high: boolean } | null; onRenamed: (title: string) => void; onSummary: () => void;
+function Bar({ conversation: row, readOnly, title, product, meter, panes, onRenamed, onSummary }: {
+  conversation: ConversationRow | null; readOnly: boolean; title: string; product: Project | undefined; meter: { value: number; high: boolean } | null; panes: PanesToggle | undefined; onRenamed: (title: string) => void; onSummary: () => void;
 }) {
   const t = useT();
   const conversation = readOnly ? null : row;
@@ -214,6 +216,7 @@ function Bar({ conversation: row, readOnly, title, product, meter, onRenamed, on
           {meter.value}%{meter.high && <> · {t('ui.meter.high')}</>}
         </span>
       )}
+      {panes && <PanesButton {...panes} />}
       {conversation && (
         <div className="ui-bar__menu" ref={wrap}>
           <button ref={menuButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.session.menu')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(open => !open)}>
@@ -253,7 +256,7 @@ function failNotice(title: string, text: string | null, action: FailAction | nul
   return <Notice tone="fail" title={title} text={text ?? undefined} {...(action ? { action } : {})} />;
 }
 
-export function Conversation({ id, listTitle, aiName, product, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt }: ConversationProps) {
+export function Conversation({ id, listTitle, aiName, product, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
@@ -261,7 +264,12 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
   const [models, setModels] = useState<ModelView[]>([]);
   const [modelsRead, setModelsRead] = useState(false);
   const [chatOrder, setChatOrder] = useState<string[]>([]);
-  const [draftChoice, setDraftChoice] = useState<Choice>(NO_CHOICE);
+  const startMode = firstMode(product);
+  const [draftChoice, setDraftChoice] = useState<Choice>({ ...NO_CHOICE, permissionMode: startMode });
+  const modeChosen = useRef(false);
+  useEffect(() => {
+    if (!modeChosen.current) setDraftChoice(current => ({ ...current, permissionMode: startMode }));
+  }, [startMode]);
   const [usageTick, setUsageTick] = useState(0);
   const [failure, setFailure] = useState<(SendFailure & { retry: FailAction | null; title?: string }) | null>(null);
   const [sending, setSending] = useState(false);
@@ -329,7 +337,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
     try {
       const out = await submitMessage({ kind, text, attachmentIds: attachments.map(a => a.id), conversationId: id, target, running: Boolean(draft), pending }, {
         rename: api.renameConversation, cancelPending: api.cancelPending,
-        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice), sendOptions(id, product?.id, interrupt)),
+        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice, undefined, Boolean(product)), sendOptions(id, product?.id, interrupt)),
         isGone: error => error instanceof ApiError && error.status === 404,
         clearNotices: onClearNotices, interrupt: onInterrupt,
       });
@@ -371,6 +379,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
 
   const choose = async (next: ModelChoice) => {
     if (!id) {
+      if (next.permissionMode !== undefined) modeChosen.current = true;
       setDraftChoice(current => ({
         modelId: next.modelId !== undefined ? next.modelId : current.modelId,
         effort: next.effort !== undefined ? next.effort : next.modelId !== undefined ? null : current.effort,
@@ -499,7 +508,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
 
   return (
     <>
-      <Bar conversation={conversation} readOnly={Boolean(conversation?.parent_run_id)} title={title} product={product} meter={gone ? null : meter} onRenamed={() => void load()} onSummary={() => setSummaryOpen(true)} />
+      <Bar conversation={conversation} readOnly={Boolean(conversation?.parent_run_id)} title={title} product={product} meter={gone ? null : meter} panes={panes} onRenamed={() => void load()} onSummary={() => setSummaryOpen(true)} />
       {disconnected && <div className="ui-offline"><Notice tone="warn" icon="alert" title={t('ui.notice.disconnected')} action={{ label: t('ui.notice.reconnect'), run: onReconnect }} /></div>}
       <div ref={scroller} className="bt-thread" onScroll={e => { stick.current = isNearBottom(e.currentTarget); }}>
         {conversation?.archived === 1 && (

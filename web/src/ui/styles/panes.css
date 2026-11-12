@@ -1,0 +1,31 @@
+.bt-app.has-panes[data-panes] { grid-template-columns: 248px minmax(340px, 1fr) var(--ui-panes-w, 0px); }
+.bt-app__panes.ui-panes { display: flex; gap: 0; padding-left: 0; }
+.ui-panes > .ui-panes__pane { flex: 0 0 auto; min-width: 300px; }
+.ui-panes > .ui-panes__pane:last-child { flex-grow: 1; }
+.ui-panes__handle { position: relative; flex: none; width: var(--space-2); cursor: col-resize; touch-action: none; outline: none; }
+.ui-panes__handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; border-radius: var(--radius-pill); background: transparent; transition: background-color var(--dur-quick) var(--ease-soft); }
+.ui-panes__handle:hover::after { background: var(--line-strong); }
+.ui-panes__handle.is-dragging::after, .ui-panes__handle:focus-visible::after { background: var(--pulse); }
+.ui-panes__toggle[aria-pressed="true"] { color: var(--ink); background: var(--surface-sunk); }
+.ui-narrowbar > .ui-panes__toggle { display: none; }
+.ui-plan { display: flex; flex-direction: column; gap: var(--space-3); min-height: 100%; }
+.ui-plan > .bt-pane__bar { margin-bottom: 0; }
+.ui-plan .bt-seg__opt:disabled { color: var(--ink-mute); cursor: default; }
+.ui-plan__empty { max-width: none; padding: var(--space-7) 0; }
+.bt-root .ui-plan__doc .ui-md { color: var(--ink-soft); }
+.bt-root .ui-plan__doc .ui-md h1 { font: 400 28px/32px var(--font-display); color: var(--ink); }
+.bt-root .ui-plan__doc .ui-md h2 { margin-top: var(--space-3); font: 400 20px/26px var(--font-display); color: var(--ink); }
+.bt-root .ui-plan__doc .ui-md h3 { color: var(--ink); }
+.ui-plan__editor { box-sizing: border-box; flex: 1; width: 100%; min-height: 320px; resize: none; }
+.ui-plan__editor:focus { border-color: var(--pulse); outline: none; }
+
+@media (max-width: 760px) {
+  .ui-narrowbar > .ui-panes__toggle { display: inline-flex; height: 40px; }
+  .ui-frame > .bt-app .bt-app__bar > .ui-panes__toggle { display: none; }
+  .ui-frame > .bt-app.has-panes > .bt-app__main { display: none; }
+  .ui-frame > .bt-app.has-panes > .ui-panes { display: flex; height: 100%; padding: var(--space-2); }
+  .ui-panes > .ui-panes__pane { flex: 1 1 auto; min-width: 0; min-height: 0; }
+  .ui-frame > .bt-app.has-panes > .ui-panes .bt-pane__body { overflow-y: auto; }
+  .ui-plan .bt-seg__opt, .ui-plan .bt-pane__bar .bt-btn, .ui-panes .bt-tabs__end .bt-btn { height: 40px; }
+  .ui-plan .bt-seg__opt { padding: 0 var(--space-3); }
+}

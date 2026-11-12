@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { api, type Approval, type Conversation as ConversationRow, type Profile, type Project, type WorkerStatus } from '../api.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
@@ -8,6 +8,8 @@ import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
+import { Panes, usePanes } from './Panes.tsx';
+import { runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
 import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
 import { pickFocus } from './focus.ts';
@@ -302,11 +304,16 @@ export function App() {
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);
   const covered = drawer || settingsOpen || onboard !== null;
   const shut = settingsOpen || onboard !== null;
+  const paneProduct = convo ? convoProduct?.id ?? null : null;
+  const panes = usePanes(paneProduct);
+  const paneCount = convo ? panes.shown.length : 0;
+  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle } : undefined;
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
-      <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} />
-      <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined} inert={shut}>
+      <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} panes={paneToggle} />
+      <div className={convo ? `bt-app${paneCount ? ' has-panes' : ''}` : 'bt-shell'} data-panes={convo ? String(paneCount) : undefined} inert={shut}
+        style={paneCount && !panes.narrow ? { '--ui-panes-w': `${panes.width}px` } as CSSProperties : undefined}>
         <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={live.projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
         {convo && awaitingProduct(behind, routeProduct) ? (
           <main className="bt-app__main" inert={drawer} />
@@ -320,7 +327,7 @@ export function App() {
               liveChecklist={chatId ? checklists.get(chatId) : undefined}
               revision={(chatId ? live.revisions.get(chatId) ?? 0 : 0) + live.epoch}
               disconnected={disconnected} onReconnect={reconnect}
-              onClearNotices={clearNotices} onInterrupt={interrupt}
+              onClearNotices={clearNotices} onInterrupt={interrupt} panes={paneToggle}
             />
           </main>
         ) : (
@@ -356,6 +363,10 @@ export function App() {
               </div>
             )}
           </main>
+        )}
+        {paneProduct && paneCount > 0 && (
+          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer}
+            revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`} />
         )}
       </div>
       {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={shut} />}
