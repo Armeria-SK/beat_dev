@@ -73,8 +73,8 @@ export function weekBars(slots: readonly ScheduleSlot[], w: TimeWindow): Bar[] {
   return bars;
 }
 
-export interface Stream { id: string; title: string; paused: boolean; rule: string | null; truncated: boolean }
-export interface TimelineRow { id: string; title: string; paused: boolean; rule: string | null; bars: Bar[] }
+export interface Stream { id: string; title: string; paused: boolean; ended?: boolean; rule: string | null; truncated: boolean }
+export interface TimelineRow { id: string; title: string; paused: boolean; ended?: boolean; rule: string | null; bars: Bar[] }
 
 export interface RowsInput {
   slots: readonly ScheduleSlot[];
@@ -98,7 +98,7 @@ export function buildRows({ slots, streams, tasksTitle, range, window: w, now }:
       const band = bar(start, w.to, 'planned', stream.title, w, planned.length, true);
       rows.push({ id: stream.id, title: stream.title, paused: false, rule: stream.rule, bars: [...draw(ran), ...(band ? [band] : [])] });
     } else {
-      rows.push({ id: stream.id, title: stream.title, paused: stream.paused, rule: null, bars: draw([...ran, ...planned]) });
+      rows.push({ id: stream.id, title: stream.title, paused: stream.paused, ...(stream.paused && stream.ended ? { ended: true } : {}), rule: null, bars: draw([...ran, ...planned]) });
     }
   }
   return rows;

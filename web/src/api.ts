@@ -114,6 +114,7 @@ export interface Task {
   conversation_id: string | null; result_summary: string | null; attempts: number; max_attempts: number;
   created_at: number; updated_at: number; completed_at: number | null;
   cancelled_from?: TaskStatus | null;
+  timezone?: string | null;
 }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }

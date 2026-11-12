@@ -4,7 +4,9 @@ import type { RepeatingTask, Task } from '../web/src/api.ts';
 import { formatZonedInput, parseZonedInput } from '../web/src/i18n/index.ts';
 import { emptyDraft } from '../web/src/task-form.ts';
 import { WEEKDAYS } from '../web/src/weekdays.ts';
-import { draftFromTask, isTimed, repeatFromCron, repeatingRow, repeatPatch, sameRule, splitSchedule, timePatch } from '../web/src/ui/schedule.ts';
+import {
+  confirmStale, draftFromTask, isTimed, otherZone, RELOAD_DELAY_MS, reloadWait, repeatFromCron, repeatingRow, repeatPatch, runNowKind, sameRule, splitSchedule, timePatch,
+} from '../web/src/ui/schedule.ts';
 
 // 新しい画面の Schedule（steps/p1-ui.md の「画面」の Schedule と PR 1-4b）の決まり。画面を持たない純粋な関数（web/src/ui/schedule.ts）。
 
@@ -82,6 +84,33 @@ test('ui/schedule: Edit の保存は変えた欄だけ送る。決まりは変�
   assert.equal(repeatPatch(start, { ...start }, { known: false, open: true }).repeat?.freq, 'daily');
   assert.equal(sameRule({ ...emptyDraft(), freq: 'interval', interval: '05' }, { ...emptyDraft(), freq: 'interval', interval: '5' }), true);
   assert.equal(sameRule({ ...emptyDraft(), freq: 'weekly', day: WEEKDAYS[0].value }, { ...emptyDraft(), freq: 'weekly', day: WEEKDAYS[1].value }), false);
+});
+
+test('ui/schedule: 閉じたひな形の Run now は "Restart" と名乗り、止めた行には出さない', () => {
+  assert.deepEqual([runNowKind('active'), runNowKind('ended'), runNowKind('paused')], ['run', 'restart', null]);
+});
+
+test('ui/schedule: Delete の確かめを開いているあいだに押せない理由が付いたら、確かめを閉じる', () => {
+  const open = repeatingRow(template('a', 'scheduled', { last_run: lastRun('running') }));
+  const free = repeatingRow(template('b', 'scheduled'));
+  assert.equal(confirmStale('a', [open, free]), true);
+  assert.equal(confirmStale('b', [open, free]), false);
+  assert.equal(confirmStale(null, [open, free]), false);
+  assert.equal(confirmStale('gone', [open, free]), false);
+});
+
+test('ui/schedule: 知らせで起きる読み直しは、前の読み直しから 2 秒より詰めない', () => {
+  assert.equal(reloadWait(10_000, 10_100), 1900);
+  assert.equal(reloadWait(10_000, 11_900), RELOAD_DELAY_MS);
+  assert.equal(reloadWait(10_000, 60_000), RELOAD_DELAY_MS);
+  assert.equal(reloadWait(0, 60_000), RELOAD_DELAY_MS);
+});
+
+test('ui/schedule: ひな形のタイムゾーンが今の設定と違うときだけ、欄の横に出す', () => {
+  assert.equal(otherZone('America/New_York', 'Asia/Tokyo'), 'America/New_York');
+  assert.equal(otherZone('Asia/Tokyo', 'Asia/Tokyo'), null);
+  assert.equal(otherZone(null, 'Asia/Tokyo'), null);
+  assert.equal(otherZone(undefined, 'Asia/Tokyo'), null);
 });
 
 test('ui/schedule: 時刻指定の Edit の欄は、サーバーのタイムゾーンの時刻で始まり、そのまま読み戻せる', () => {
