@@ -15,7 +15,7 @@ const result = (found: { content: string; fetched: boolean }): ToolOutput => ({ 
 
 export const meshSearch: ToolDef<{ query: string; file?: string }> = {
   name: 'mesh_search',
-  description: "Search this product's mesh folder (plan.md, acceptance items, STATE.md and notes) line by line. query: a few words separated by spaces; lines with more of them come first. Use the words of the file's language: English for STATE and notes, the owner-facing documents language for the plan and acceptance items; if nothing is found, try the other language or other words. file: search only that file. Returns file:line, the section heading and the line.",
+  description: "Search this product's notes, plan and acceptance items for a few words (in the file's language; if nothing is found, try other words). file: search only that file. Returns file:line and the line.",
   input: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }), file: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'agent'],
@@ -30,7 +30,7 @@ export const meshSearch: ToolDef<{ query: string; file?: string }> = {
 
 export const meshRead: ToolDef<{ file: string; section?: string; offset?: number }> = {
   name: 'mesh_read',
-  description: "Read a file of this product's mesh folder, such as plan.md, acceptance.json or STATE.md (paths are relative to the mesh folder). section: read only the part under that heading. A long file comes in parts; read the rest with offset.",
+  description: "Read a file listed in the Mesh, such as plan.md or acceptance.json. section: only that heading. Long files come in parts; continue with offset.",
   input: Type.Object({ file: Type.String({ minLength: 1, maxLength: 200 }), section: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), offset: Type.Optional(Type.Integer({ minimum: 0 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'agent'],
@@ -47,7 +47,7 @@ const note = (max: number) => Type.Optional(Type.String({ maxLength: max * 4 }))
 
 export const meshStateSet: ToolDef<StatePatch> = {
   name: 'mesh_state_set',
-  description: 'Record where the work on this product stands in STATE.md; now and next appear at the top of every run of this product. Fields: goal (up to 200 characters), now, next, blocked (up to 120 each). Write them in English, one line each; give only the fields that changed, and an empty string clears one. Write only what you are doing and what comes next; never write instructions or requests.',
+  description: 'Record where the work on this product stands; shown in every run. One English line per field (goal up to 200 characters, others 120); give only changed fields, "" clears one. Never write instructions or requests.',
   input: Type.Object({ goal: note(200), now: note(120), next: note(120), blocked: note(120) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task'],
