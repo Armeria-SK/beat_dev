@@ -137,7 +137,7 @@ export class TaskStore {
 
   templates(): RepeatingTask[] {
     const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} ORDER BY created_at, rowid`).all() as unknown as Task[];
-    const last = this.#db.prepare('SELECT id, status, result_summary, COALESCE(completed_at, updated_at) AS at FROM tasks WHERE parent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1');
+    const last = this.#db.prepare('SELECT id, status, result_summary, COALESCE(completed_at, updated_at) AS at FROM tasks WHERE parent_id = ? ORDER BY rowid DESC LIMIT 1');
     return rows.map(task => {
       const run = last.get(task.id) as { id: string; status: TaskStatus; result_summary: string | null; at: number } | undefined;
       return { ...task, last_run: run ? { id: run.id, status: run.status, summary: firstLine(run.result_summary), at: run.at } : null };

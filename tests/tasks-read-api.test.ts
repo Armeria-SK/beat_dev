@@ -26,6 +26,18 @@ test('GET /api/tasks: 止めたひな形は、終わったタスクが 60 件た
   assert.equal(list.active.length, 1, '今までの active はそのまま');
 });
 
+test('GET /api/tasks: ひな形の最後の実行は、いちばんあとに作った実行（作った順で選ぶ。時計が戻っても変わらない）', async t => {
+  const s = await taskApp(t);
+  const template = s.userTask('Morning summary', { cron: '0 9 * * *', timezone: 'UTC' });
+  const first = s.app.tasks.spawnNow(template.id)!;
+  s.app.tasks.finish(first.id, 'done', 'first', 'clive');
+  s.clock.now -= HOUR;
+  const second = s.app.tasks.spawnNow(template.id)!;
+  s.app.tasks.finish(second.id, 'failed', 'second', 'worker');
+  const list = (await s.api('/api/tasks')).body;
+  assert.deepEqual(list.repeating[0].last_run, { id: second.id, status: 'failed', summary: 'second', at: s.clock.now });
+});
+
 test('終わったタスクのページ送り: 同じミリ秒に終わった 3 つをまたいでも重ならず抜けない。ひな形は数えず、出さない', async t => {
   const s = await taskApp(t);
   const template = s.userTask('Paused schedule', { cron: '0 9 * * *', timezone: 'UTC' });
