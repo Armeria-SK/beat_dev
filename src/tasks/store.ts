@@ -101,6 +101,8 @@ export const TASK_SOFT_REFERENCES = [
 ] as const;
 export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:'] as const;
 export const UNTRUSTED_RUN = 'untrusted-input';
+const TEXT_EVENT_KINDS: readonly string[] = ['context', 'note', 'edited'];
+const TEXT_EVENTS = TEXT_EVENT_KINDS.map(kind => `'${kind}'`).join(', ');
 export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }
 
 function firstLine(text: string | null): string | null {
@@ -228,16 +230,26 @@ export class TaskStore {
 
   judgeRequest(id: string): string {
     const task = this.get(id);
-    if (!task || this.cliveDecided(id)) return '';
-    const tainted = this.#db.prepare(`SELECT 1 FROM task_events e LEFT JOIN engine_runs r ON r.id = e.run_id LEFT JOIN conversations c ON c.id = r.conversation_id
-      WHERE e.task_id IN (?, ?) AND e.run_id IS NOT NULL AND e.kind IN ('context', 'note', 'edited') AND (r.id IS NULL OR r.tainted = 1 OR c.ever_tainted = 1) LIMIT 1`).get(task.id, task.parent_id ?? task.id);
-    if (tainted) return '';
+    if (!task || this.cliveDecided(id) || this.#textTainted(task.id, task.parent_id)) return '';
     return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
   }
 
+  #textTainted(taskId: string, parentId: string | null): boolean {
+    return this.#db.prepare(`SELECT 1 FROM task_events e LEFT JOIN engine_runs r ON r.id = e.run_id LEFT JOIN conversations c ON c.id = r.conversation_id
+      WHERE e.task_id IN (?, ?) AND e.run_id IS NOT NULL AND e.kind IN (${TEXT_EVENTS}) AND (r.id IS NULL OR r.tainted = 1 OR c.ever_tainted = 1) LIMIT 1`).get(taskId, parentId ?? taskId) !== undefined;
+  }
+
+  #runTainted(runId: string): boolean {
+    return this.#db.prepare(`SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM engine_runs WHERE id = ?)
+      OR EXISTS (SELECT 1 FROM engine_runs r LEFT JOIN conversations c ON c.id = r.conversation_id WHERE r.id = ? AND (r.tainted = 1 OR c.ever_tainted = 1))`).get(runId, runId) !== undefined;
+  }
+
   event(taskId: string, kind: string, actor: string, content?: string | null, runId?: string): void {
-    this.#db.prepare('INSERT INTO task_events (task_id, kind, actor, content, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(taskId, kind, actor, content ?? null, runId ?? null, this.#now());
+    transaction(this.#db, () => {
+      this.#db.prepare('INSERT INTO task_events (task_id, kind, actor, content, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(taskId, kind, actor, content ?? null, runId ?? null, this.#now());
+      if (runId && runId !== UNTRUSTED_RUN && TEXT_EVENT_KINDS.includes(kind) && this.#runTainted(runId)) this.markUntrusted(taskId, actor, taskText(this.#language(), 'event.run_untrusted'));
+    });
   }
 
   #changed(id: string): Task {
@@ -453,6 +465,11 @@ export class TaskStore {
       for (const run of queued) {
         this.#writeFinish(run.id, 'cancelled', taskText(this.#language(), 'summary.cancelled_schedule_deleted'), 'user');
         this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`task-split:${run.id}`);
+      }
+      if (this.#textTainted(id, null)) {
+        for (const run of this.#db.prepare('SELECT id FROM tasks WHERE parent_id = ?').all(id) as Array<{ id: string }>) {
+          this.markUntrusted(run.id, 'system', taskText(this.#language(), 'event.schedule_untrusted'));
+        }
       }
       const keptRuns = Number(this.#db.prepare(`UPDATE tasks SET parent_id = NULL, origin = CASE WHEN ? IN ('self', 'curiosity') THEN ? ELSE origin END WHERE parent_id = ?`).run(task.origin, task.origin, id).changes);
       const events = Number(this.#db.prepare('DELETE FROM task_events WHERE task_id = ?').run(id).changes);
