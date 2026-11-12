@@ -187,7 +187,7 @@ export class App {
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
-    this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now);
+    this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log);
     this.reviews = new ReviewJobs(this.db, now);

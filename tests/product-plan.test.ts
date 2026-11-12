@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
@@ -55,7 +55,7 @@ test('3-1a 計画書の置き場: plan_write の中身が data/projects/<id>/pla
   assert.equal(f.store.has(PROJECT), false);
   const view = f.store.write(PROJECT, '# Goal\nShip it\n', AI);
   assert.equal(readFileSync(f.file, 'utf8'), '# Goal\nShip it\n');
-  assert.deepEqual(view, { content: '# Goal\nShip it\n', hash: sha('# Goal\nShip it\n'), updated_at: view.updated_at, updated_by: 'ai', tainted: false });
+  assert.deepEqual(view, { content: '# Goal\nShip it\n', hash: sha('# Goal\nShip it\n'), updated_at: view.updated_at, updated_by: 'ai', tainted: false, changed: true });
   assert.equal(typeof view.updated_at, 'number');
   assert.equal(f.store.has(PROJECT), true);
   assert.deepEqual(f.kv.getJson(`plan:${PROJECT}`), { hash: sha('# Goal\nShip it\n'), updatedAt: view.updated_at, by: 'ai', tainted: false, conversationId: 'c1', runId: 'r1' });
@@ -65,7 +65,7 @@ test('3-1a 計画書の置き場: plan_write の中身が data/projects/<id>/pla
 
 test('3-1a 計画書の控え: 書き換える前の版を data/backups/mesh/<id>/ に置き、新しい順に 20 まで（21 個目で古いものが消える）', t => {
   const f = storeFixture(t);
-  for (let i = 0; i <= PLAN_BACKUPS + 1; i++) f.store.write(PROJECT, `v${i}`, AI);
+  for (let i = 0; i <= PLAN_BACKUPS + 1; i++) f.store.write(PROJECT, `v${i}`, { ...AI, runId: `r${i}` });
   assert.equal(PLAN_BACKUPS, 20);
   assert.equal(f.backups().length, 20);
   assert.deepEqual(f.backupTexts(), Array.from({ length: 20 }, (_, i) => `v${i + 1}`), 'v0 が消え、v1〜v20 が残る');
@@ -402,4 +402,198 @@ test('3-1a 計画書の口: AI の plan_write で plan.changed（by ai）、計�
   const tainted = (await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan;
   assert.equal(tainted.content, '# Plan after attachment');
   assert.equal(tainted.tainted, true);
+});
+
+function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
+  const paths = resolvePaths(tempDir(t));
+  mkdirSync(paths.workspace, { recursive: true });
+  mkdirSync(join(paths.projects, PROJECT), { recursive: true });
+  const config = parseConfig(testConfig());
+  const db = openDatabase(':memory:', MIGRATIONS);
+  const plans = new PlanStore(new KV(db), { projects: paths.projects, backups: paths.backups }, Date.now, { archived: () => archived });
+  const registry = new ToolRegistry().register(planWrite).register(planRead);
+  const policy = buildPolicy(config, paths);
+  const events: RunEvent[] = [];
+  const ctxOf = (over: Partial<ToolContext> = {}): ToolContext => ({
+    runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy, project: { id: PROJECT },
+    workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
+    services: { db, memory: undefined as never, emit: e => events.push(e), plans }, ...over,
+  });
+  const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
+    registry, approvals: new ApprovalBroker(db, () => undefined), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal',
+    conversationTainted: () => false, conversationAutoRead: () => false,
+  });
+  return { paths, plans, events, ctxOf, run, file: join(paths.projects, PROJECT, 'plan.md') };
+}
+
+const CONTINUES = /\n\n\[The plan continues: call plan_read with offset (\d+) to read the rest \((\d+) characters in all\)\]$/u;
+
+test('3-1a 審査 S1: 外の文を読んだあとに書かれた計画書・beat の外で直された計画書を plan_read で読んだ実行は「外から読んだ」になる。きれいな計画書なら付かない', async t => {
+  const h = toolHarness(t);
+  h.plans.write(PROJECT, '# Clean', AI);
+  const clean = h.ctxOf();
+  assert.equal((await h.run('plan_read', {}, clean)).decision, 'allow');
+  assert.equal(clean.taint.tainted, false);
+  h.plans.write(PROJECT, '# After web', { ...AI, runId: 'r2', tainted: true });
+  const reader = h.ctxOf({ kind: 'task' });
+  await h.run('plan_read', {}, reader);
+  assert.equal(reader.taint.tainted, true);
+  writeFileSync(h.file, '# Edited by hand');
+  const outside = h.ctxOf({ kind: 'task' });
+  await h.run('plan_read', {}, outside);
+  assert.equal(outside.taint.tainted, true);
+});
+
+test('3-1a 審査 S2: この実行が外を読んでいなくても、会話が前の実行で外を読んでいれば plan_write は tainted。会話の印が読めなければ tainted', async t => {
+  const h = toolHarness(t);
+  await h.run('plan_write', { content: '# One' }, h.ctxOf({ conversationTainted: () => true }));
+  assert.equal(h.plans.view(PROJECT).tainted, true);
+  await h.run('plan_write', { content: '# Two' }, h.ctxOf({ conversationTainted: () => false }));
+  assert.equal(h.plans.view(PROJECT).tainted, false);
+  await h.run('plan_write', { content: '# Three' }, h.ctxOf({ conversationTainted: () => { throw new Error('db closed'); } }));
+  assert.equal(h.plans.view(PROJECT).tainted, true);
+});
+
+test('3-1a 審査 S2（本物の App）: 1 回目の実行で添付を読み、2 回目の実行で plan_write すると tainted', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const upload = await (await s.api('/api/uploads?name=notes.txt', { method: 'POST', body: 'outside text', headers: { 'Content-Type': 'text/plain' } })).json() as { upload: { id: string } };
+  s.adapter().scripts = [reply('read it')];
+  await s.send(uuid(1), { text: 'see attached', attachments: [upload.upload.id], projectId: shop.id });
+  s.adapter().scripts = [call('plan_write', { content: '# Plan in run 2' }), reply('ok')];
+  await s.send(uuid(1), { text: 'now write the plan' });
+  const plan = (await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan;
+  assert.equal(plan.content, '# Plan in run 2');
+  assert.equal(plan.tainted, true);
+});
+
+test('3-1a 審査 S3: 1 つの AI の実行が何度書いても控えは 1 つ。持ち主の最後の版は、AI の実行がいくつ続いても控えから消えない', t => {
+  const f = storeFixture(t);
+  const OWNER = { by: 'owner' as const, tainted: false, conversationId: null, runId: null };
+  f.store.write(PROJECT, 'owner version', OWNER);
+  for (let i = 0; i < 21; i++) f.store.write(PROJECT, `ai ${i}`, AI);
+  assert.deepEqual(f.backupTexts(), ['owner version'], '同じ実行の書き直しは控えない');
+  for (let i = 0; i < 25; i++) f.store.write(PROJECT, `run ${i}`, { ...AI, runId: `r-${i}` });
+  assert.ok(f.backupTexts().includes('owner version'), f.backupTexts().join());
+  assert.ok(f.backups().length <= PLAN_BACKUPS + 1, String(f.backups().length));
+  assert.ok(f.backupTexts().includes('run 23'));
+});
+
+test('3-1a 審査 S4: planOk は効果が meta / read で、ファイルも書く・送信になる・MCP の道具でないときだけ効く', () => {
+  const base = { planOk: true as const };
+  assert.equal(planAllows({ ...base, effect: 'meta' }), true);
+  assert.equal(planAllows({ ...base, effect: 'read' }), true);
+  for (const effect of ['write', 'exec'] as const) assert.equal(planAllows({ ...base, effect }), false, effect);
+  assert.equal(planAllows({ ...base, effect: 'meta', writesFiles: true }), false);
+  assert.equal(planAllows({ ...base, effect: 'meta', submits: true }), false);
+});
+
+test('3-1a 審査 S5: 制御文字（タブ・改行を除く）と U+2028 / U+2029 も取り除く', t => {
+  const f = storeFixture(t);
+  assert.equal(f.store.write(PROJECT, 'a\u0001b\u0007c\u001Bd\u2028e\u2029f\tg\r\nh\u007F', AI).content, 'abcdef\tg\r\nh');
+});
+
+test('3-1a 審査 S6: 64,000 文字の計画書も plan_read で全部読める（続きは offset で読む）', async t => {
+  const h = toolHarness(t);
+  const full = Array.from({ length: 64_000 }, (_, i) => String.fromCharCode(97 + (i % 26))).join('');
+  h.plans.write(PROJECT, full, AI);
+  let offset = 0;
+  let read = '';
+  for (let i = 0; i < 10; i++) {
+    const out = await h.run('plan_read', offset ? { offset } : {}, h.ctxOf());
+    assert.equal(out.output.isError, undefined, out.output.content.slice(0, 200));
+    const more = CONTINUES.exec(out.output.content);
+    read += more ? out.output.content.slice(0, more.index) : out.output.content;
+    if (!more) break;
+    assert.equal(Number(more[2]), 64_000);
+    offset = Number(more[1]);
+  }
+  assert.equal(read, full);
+  const past = await h.run('plan_read', { offset: 64_000 }, h.ctxOf());
+  assert.match(past.output.content, /no more/u);
+});
+
+test('3-1a 審査 S7: plan.md がふつうのファイルでない（フォルダ・リンク）なら、読まず書かない', t => {
+  const f = storeFixture(t);
+  mkdirSync(f.file);
+  assert.throws(() => f.store.write(PROJECT, 'x', AI), (e: Error & { code?: string }) => e.code === 'not_file');
+  assert.throws(() => f.store.view(PROJECT), (e: Error & { code?: string }) => e.code === 'not_file');
+  assert.equal(f.store.has(PROJECT), true);
+});
+
+test('3-1a 審査 C1: 名前の付け替えが EPERM / EBUSY / EACCES で一時的に失敗しても、数回やり直して書ける。ずっと失敗すれば前の中身のままで一時ファイルも残らない', t => {
+  let failures = 0;
+  let always = false;
+  const f = storeFixture(t, {
+    renameSync: (from, to) => {
+      if (always || failures < 2) { failures++; throw Object.assign(new Error('busy'), { code: failures % 2 ? 'EPERM' : 'EBUSY' }); }
+      renameSync(from, to);
+    },
+  });
+  f.store.write(PROJECT, 'first', AI);
+  assert.equal(readFileSync(f.file, 'utf8'), 'first');
+  assert.equal(failures, 2);
+  always = true;
+  assert.throws(() => f.store.write(PROJECT, 'second', { ...AI, runId: 'r2' }), /busy/u);
+  assert.equal(readFileSync(f.file, 'utf8'), 'first');
+  assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT)), ['plan.md']);
+});
+
+test('3-1a 審査 C2: writing は実行に効いているモードで決まる（計画モードで始めた実行は、途中で会話をふつうに戻しても writing）', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const seen: boolean[] = [];
+  s.adapter().scripts = [async function* () {
+    s.app.conversations.setChoice(uuid(1), { permissionMode: 'normal' });
+    seen.push((await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan.writing);
+    await gate;
+    yield { type: 'text', delta: 'done' };
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  }];
+  const sent = await s.json(`/api/conversations/${uuid(1)}/messages`, 'POST', { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
+  assert.equal(sent.status, 202);
+  while (!seen.length) await new Promise(r => setTimeout(r, 5));
+  release();
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(seen, [true]);
+});
+
+test('3-1a 審査 C3: 同じ中身の書き直しは控えも plan.changed も作らない', async t => {
+  const h = toolHarness(t);
+  await h.run('plan_write', { content: '# Same' }, h.ctxOf());
+  await h.run('plan_write', { content: '# Same' }, h.ctxOf({ runId: 'r2' }));
+  assert.equal(h.events.filter(e => e.type === 'plan.changed').length, 1);
+  assert.equal(existsSync(join(h.paths.backups, 'mesh', PROJECT)), false);
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const first = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: null });
+  const again = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: first.body.plan.hash });
+  assert.equal(again.status, 200);
+  assert.deepEqual(Object.keys(again.body.plan).sort(), ['content', 'hash', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.equal(s.events.filter(e => e.type === 'plan.changed').length, 1, 'PUT も同じ中身なら流さない');
+  const f = storeFixture(t);
+  assert.equal(f.store.write(PROJECT, 'x', AI).changed, true);
+  assert.equal(f.store.write(PROJECT, 'x', { ...AI, runId: 'r9' }).changed, false);
+  assert.deepEqual(f.backups(), []);
+  f.store.write(PROJECT, 'y', { ...AI, tainted: true });
+  f.store.write(PROJECT, 'y', { ...AI, runId: 'r10' });
+  assert.equal(f.store.view(PROJECT).tainted, true, '同じ中身を外を読んでいない実行が書き直しても、tainted は消えない');
+});
+
+test('3-1a 審査 C4: plan_write / plan_read は builtinTools の shell_run の後ろに並ぶ', () => {
+  const names = builtinTools().map(tool => tool.name);
+  assert.ok(names.indexOf('shell_run') >= 0);
+  assert.ok(names.indexOf('plan_write') > names.indexOf('shell_run'));
+  assert.ok(names.indexOf('plan_read') > names.indexOf('shell_run'));
+});
+
+test('3-1a 審査: しまった製品の plan_write は、PUT と同じく分かる誤りで断り、ファイルを変えない', async t => {
+  const h = toolHarness(t, true);
+  const out = await h.run('plan_write', { content: '# Plan' }, h.ctxOf());
+  assert.equal(out.output.isError, true);
+  assert.match(out.output.content, /archived/u);
+  assert.equal(existsSync(h.file), false);
+  assert.equal(h.events.length, 0);
 });

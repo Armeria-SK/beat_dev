@@ -203,6 +203,8 @@ const en = {
   'checklist.section_tainted': '(This list was written after reading text that came from elsewhere)',
   'plan.saved': 'I wrote the plan ({chars} characters). The owner reads it in the Plan pane; do not paste it into the conversation',
   'plan.none': 'This product has no plan yet',
+  'plan.continues': '[The plan continues: call plan_read with offset {offset} to read the rest ({total} characters in all)]',
+  'plan.past_end': 'There is no more of the plan (it has {total} characters)',
   'plan.no_store': 'The plan cannot be saved in this run',
   'notify_owner.title': 'From Clive: {title}',
   'notify_owner.title_tainted': 'From Clive (after reading text that came from elsewhere): {title}',

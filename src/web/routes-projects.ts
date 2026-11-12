@@ -113,7 +113,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
 
   const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => ({
     ...view,
-    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId && app.conversations.modeOf(r.conversationId) === 'plan'),
+    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId && r.mode === 'plan'),
   });
   const planned = <T>(work: () => T): T => {
     try { return work(); } catch (error) {
@@ -125,7 +125,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
   router.add('GET', '/api/projects/:id/plan', ({ res, params }) => {
     const project = app.projects.get(params[0]!);
     if (!project) throw problem(404, 'not_found', 'project_missing');
-    sendJson(res, 200, { plan: planWire(project.id) });
+    sendJson(res, 200, { plan: planned(() => planWire(project.id)) });
   });
 
   router.add('PUT', '/api/projects/:id/plan', async ({ req, res, params }) => {
@@ -137,8 +137,9 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const baseHash = body.baseHash;
     if (baseHash !== null && typeof baseHash !== 'string') throw problem(400, 'invalid_field', 'required', { field: 'baseHash', params: { field: 'baseHash' } });
     const saved = planned(() => app.plans.write(project.id, content, { by: 'owner', tainted: false, conversationId: null, runId: null }, baseHash));
-    app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: saved.hash, by: 'owner' });
-    sendJson(res, 200, { plan: planWire(project.id, saved) });
+    if (saved.changed) app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: saved.hash, by: 'owner' });
+    const { changed: _changed, ...view } = saved;
+    sendJson(res, 200, { plan: planWire(project.id, view) });
   });
 
   router.add('POST', '/api/folders/list', async ({ req, res }) => {

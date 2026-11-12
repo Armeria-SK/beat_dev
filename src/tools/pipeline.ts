@@ -35,7 +35,7 @@ export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'ne
 
 // MCP の道具（外のプログラムが書いた道具）は、効果の申告があっても計画モードには渡さない（申告は持ち主のものでも、中身は外のプログラムが決めるため）
 export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' | 'submits' | 'planOk'>): boolean {
-  if (tool.planOk === true && tool.mcp === undefined) return true;
+  if (tool.planOk === true && (tool.effect === 'meta' || tool.effect === 'read') && tool.writesFiles !== true && tool.submits !== true && tool.mcp === undefined) return true;
   return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined && tool.submits !== true;
 }
 

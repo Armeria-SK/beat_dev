@@ -508,8 +508,11 @@ export class ChatEngine {
 
   wait(runId: string): Promise<EngineResult> | undefined { return this.#active.get(runId)?.done; }
   get chatting(): boolean { return [...this.#active.values()].some(a => a.kind === 'chat'); }
-  activeRuns(): Array<{ runId: string; conversationId: string; kind: RunKind }> {
-    return [...this.#active.values()].map(a => ({ runId: a.runId, conversationId: a.conversationId, kind: a.kind }));
+  activeRuns(): Array<{ runId: string; conversationId: string; kind: RunKind; mode?: PermissionMode }> {
+    return [...this.#active.values()].map(a => ({
+      runId: a.runId, conversationId: a.conversationId, kind: a.kind,
+      ...(a.kind === 'chat' ? { mode: stricterMode(this.#runMode.get(a.runId) ?? 'normal', this.#d.conversations.modeOf(a.conversationId)) } : {}),
+    }));
   }
 
   // 会話で選んだモデルがあれば（pinned）、そのモデルだけで鎖を作る。使えなければ、ほかのモデルへ切り替えずに、そのモデルの問題だけを返す
