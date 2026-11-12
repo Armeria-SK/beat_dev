@@ -419,7 +419,7 @@ export function createWebServer(app: App): WebServer {
     requireObject(await readJson(req));
     const next = resetConfig(app.config());
     let backup: string;
-    try { backup = app.configStore.backup(); }
+    try { backup = app.configStore.backup(app.paths.backups); }
     catch (error) { throw problem(409, 'reset_no_backup', 'reset_no_backup', { params: { reason: (error as NodeJS.ErrnoException).code ?? 'unknown' } }); }
     await app.applyConfig(next);
     app.log(`[INFO] Reset the settings to the defaults (the previous settings file was copied to ${backup})`);

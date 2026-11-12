@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
+import { placePath } from '../src/tools/hooks/scope.ts';
+import { buildPolicy } from '../src/tools/policy.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
 import { startApp } from './app-setup.ts';
 
@@ -14,6 +16,7 @@ async function start(t: Parameters<typeof startApp>[0]) {
     env: { FAKE_KEY: KEY },
     configure: c => {
       c.server.origins = ['https://me.example.ts.net'];
+      c.timezone = 'Europe/Berlin';
       c.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }];
       c.tools.deny = [...c.tools.deny, '~/private'];
       c.tools.hooks.preToolUse = [{ matcher: 'shell_run', command: ['node', 'guard.js'], timeoutMs: 1000, onError: 'deny' }];
@@ -23,7 +26,7 @@ async function start(t: Parameters<typeof startApp>[0]) {
     },
   });
   writeFileSync(s.paths.env, ENV_TEXT);
-  const backups = () => readdirSync(dirname(s.paths.config)).filter(name => name.includes('.reset-'));
+  const backups = () => [s.paths.backups, dirname(s.paths.config)].flatMap(dir => (existsSync(dir) ? readdirSync(dir) : [])).filter(name => name.includes('.reset-'));
   return { ...s, backups };
 }
 
@@ -35,9 +38,12 @@ test('Reset: 設定ファイルの控えを書いてから既定に戻し、控�
 
   const done = await s.json('/api/settings/reset', 'POST', {});
   assert.equal(done.status, 200);
-  assert.match(done.body.backup, /^config\.json\.reset-\d{4}-\d{2}-\d{2}T[\d-]+Z\.bak$/u);
-  assert.deepEqual(s.backups(), [done.body.backup]);
-  assert.equal(readFileSync(join(dirname(s.paths.config), done.body.backup), 'utf8'), before, '控えは戻す前の設定ファイルそのまま');
+  assert.match(basename(done.body.backup), /^config\.json\.reset-\d{4}-\d{2}-\d{2}T[\d-]+Z\.bak$/u);
+  assert.equal(dirname(done.body.backup), s.paths.backups, '控えは、道具が触れない backups フォルダに置く');
+  assert.deepEqual(s.backups(), [basename(done.body.backup)]);
+  assert.equal(readFileSync(done.body.backup, 'utf8'), before, '控えは戻す前の設定ファイルそのまま');
+  assert.equal(placePath(done.body.backup, buildPolicy(s.app.config(), s.paths)).kind, 'deny', 'モデルの道具は控えを読めない・書けない');
+  assert.equal(s.app.config().timezone, 'Europe/Berlin', '時刻帯は残す（予定の時刻がずれない）');
 
   const now = s.app.config();
   const fresh = defaultConfig();
@@ -91,7 +97,7 @@ test('Reset: 控えを書けないときは戻さない（409）。Origin の無
 
 test('Reset: 同じ時刻の控えがすでにあれば上書きしない', async t => {
   const s = await start(t);
-  const name = s.app.configStore.backup(1_800_000_000_000);
-  assert.throws(() => s.app.configStore.backup(1_800_000_000_000), { code: 'EEXIST' });
-  assert.deepEqual(s.backups(), [name]);
+  const made = s.app.configStore.backup(s.paths.backups, 1_800_000_000_000);
+  assert.throws(() => s.app.configStore.backup(s.paths.backups, 1_800_000_000_000), { code: 'EEXIST' });
+  assert.deepEqual(s.backups(), [basename(made)]);
 });

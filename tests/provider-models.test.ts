@@ -4,6 +4,7 @@ import type { ProviderConfig } from '../src/config/schema.ts';
 import { listProviderModels, MODEL_LIST_MAX } from '../src/providers/model-list.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import { setupModelConfig, setupProviderConfig, type ModelForm } from '../web/src/onboarding.ts';
+import { listPlan } from '../web/src/ui/onboarding-steps.ts';
 import { startApp } from './app-setup.ts';
 
 const KEY = 'Zk3qP9xW7mB2vN8cLd5Tq1';
@@ -111,4 +112,20 @@ test('はじめの設定: 一覧のためにプロバイダだけを足し、同
   assert.equal(tested.config.models[0].provider, 'local');
   const second = setupModelConfig(tested.config, { ...form, model: 'gemma' }, null);
   assert.equal(second.config.providers.length, 3, '使われているプロバイダは、今までどおり別に足す');
+
+  const retested = setupModelConfig(tested.config, form, tested.modelId);
+  assert.equal(retested.config.providers.at(-1).apiKeyEnv, 'LOCAL_API_KEY', '同じ送り先をもう一度確かめても、鍵の名前は残る');
+  const moved = setupModelConfig(tested.config, { ...form, baseUrl: 'https://far.example/v1' }, tested.modelId);
+  assert.equal('apiKeyEnv' in moved.config.providers.at(-1), false, '送り先を変えたら、前の鍵は新しい送り先へ持っていかない');
+});
+
+test('はじめの設定の一覧: 鍵を入れて外の送り先の一覧を取るときは、鍵がそこへ送られることを確かめに並べる。この PC の中・鍵なしなら並べない', () => {
+  const latest = { providers: [{ id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600000 }], models: [], routing: { chat: [], background: [], retriesPerModel: 2 } };
+  const form = { provider: 'custom' as const, model: '', baseUrl: 'https://far.example/v1', context: '32768', key: 'secret-value' };
+  const outside = listPlan(latest, form);
+  assert.equal(outside.providerId, 'local');
+  assert.deepEqual(outside.items, [{ kind: 'provider-url', id: 'local', url: 'https://far.example/v1' }, { kind: 'provider-key-send', id: 'local', url: 'https://far.example/v1' }]);
+  assert.deepEqual(listPlan(latest, { ...form, key: '' }).items.map(i => i.kind), ['provider-url']);
+  assert.deepEqual(listPlan(latest, { ...form, baseUrl: 'http://127.0.0.1:8000/v1' }).items, []);
+  assert.deepEqual(listPlan(outside.config, form).items, [{ kind: 'provider-key-send', id: 'local', url: 'https://far.example/v1' }], '保存済みの外のプロバイダに鍵を入れるときも並べる');
 });

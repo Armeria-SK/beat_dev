@@ -1,5 +1,7 @@
 import type { PersonaWrite } from '../api.ts';
-import { resumeStep, STEPS, type ModelForm, type OnboardingSteps } from '../onboarding.ts';
+import { resumeStep, setupProviderConfig, STEPS, type ModelForm, type OnboardingSteps } from '../onboarding.ts';
+import { accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
+import type { Config } from '../settings/model.ts';
 
 export const ONBOARD_STEPS = ['name', 'agent', 'style', 'model', 'hello'] as const;
 export type OnboardStep = typeof ONBOARD_STEPS[number];
@@ -58,7 +60,13 @@ export function modelFormOf(form: ConnectForm): ModelForm {
   return { source: 'openai', model: form.model.trim(), baseUrl: form.baseUrl.trim(), server: 'generic', contextLength: form.context.trim(), apiKeyEnv: '' };
 }
 
-export const REACHABLE = new Set(['ok', 'too_small', 'exceeds_model', 'unknown']);
+export function listPlan(latest: Config, form: ConnectForm): { config: Config; providerId: string; items: Access[] } {
+  const built = setupProviderConfig(latest, modelFormOf(form));
+  const provider = (built.config.providers as Array<Record<string, any>>).find(p => p.id === built.providerId);
+  return { ...built, items: [...accessWidening(latest, built.config), ...(form.key.trim() && provider ? keyEntryAccess(provider) : [])] };
+}
+
+export const REACHABLE =new Set(['ok', 'too_small', 'exceeds_model', 'unknown']);
 
 export const resumeIndex = (steps: OnboardingSteps): number => STEPS.indexOf(resumeStep(steps));
 

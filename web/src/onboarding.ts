@@ -74,7 +74,11 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     };
     const own = existing ? providers.findIndex(p => p.id === existing.provider && p.kind === 'openai_compatible') : -1;
     const spare = own >= 0 ? -1 : providers.findIndex(p => p.kind === 'openai_compatible' && p.baseUrl === fields.baseUrl && !models.some(m => m.provider === p.id));
-    if (own >= 0) { providerId = providers[own]!.id; providers[own] = { id: providerId, ...fields }; }
+    if (own >= 0) {
+      const old = providers[own]!;
+      providerId = old.id;
+      providers[own] = { id: providerId, ...(old.baseUrl === fields.baseUrl && typeof old.apiKeyEnv === 'string' ? { apiKeyEnv: old.apiKeyEnv } : {}), ...fields };
+    }
     else if (spare >= 0) { providerId = providers[spare]!.id; providers[spare] = { ...providers[spare]!, ...fields }; }
     else { providerId = uniqueId('local', providers.map(p => p.id)); providers.push({ id: providerId, ...fields }); }
   } else {

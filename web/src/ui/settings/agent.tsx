@@ -275,11 +275,12 @@ function AddModel({ onDone }: { onDone: (id: string) => void }) {
   const [name, setName] = useState('');
   const [names, setNames] = useState<string[]>([]);
   const [listFailed, setListFailed] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
   useEffect(() => {
     setNames([]); setListFailed(null);
     if (!provider) return undefined;
     let live = true;
-    api.providerModels(provider).then(list => { if (live) setNames(list.models); }).catch(error => { if (live) setListFailed(errorText(error, '')); });
+    api.providerModels(provider).then(list => { if (live) { setNames(list.models); setTruncated(list.truncated); } }).catch(error => { if (live) setListFailed(errorText(error, '')); });
     return () => { live = false; };
   }, [provider]);
   const add = async () => {
@@ -301,7 +302,7 @@ function AddModel({ onDone }: { onDone: (id: string) => void }) {
         <Button small variant="primary" disabled={ctx.busy !== null || !provider || !name.trim()} onClick={() => void add()}>{t('ui.set.add')}</Button>
         <Button small variant="ghost" onClick={() => { ctx.cancel(); onDone(''); }}>{t('ui.cancel')}</Button>
       </div>
-      {(listFailed !== null || names.length > 0) && <p className="bt-meta" role="status">{listFailed !== null ? listFailed || t('ui.set.model.listFailed') : t('ui.set.model.listed', names.length)}</p>}
+      {(listFailed !== null || names.length > 0) && <p className="bt-meta" role="status">{listFailed !== null ? listFailed || t('ui.set.model.listFailed') : t(truncated ? 'ui.set.model.listedFirst' : 'ui.set.model.listed', names.length)}</p>}
     </>
   );
 }

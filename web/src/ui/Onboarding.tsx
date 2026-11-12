@@ -2,12 +2,12 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, ApiError, type Probe, type Profile } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
-import { setupModelConfig, setupProviderConfig } from '../onboarding.ts';
+import { setupModelConfig } from '../onboarding.ts';
 import { accessKey, accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
 import { deepEqual } from '../settings/merge.ts';
 import type { AgentState } from './agent-state.ts';
 import {
-  agentInput, canContinue, connectProblem, emptyConnect, modelFormOf, nameInput, ONBOARD_STEPS, OPENAI_URL, PROVIDERS, REACHABLE, styleInput, STYLES,
+  agentInput, canContinue, connectProblem, emptyConnect, listPlan, modelFormOf, nameInput, ONBOARD_STEPS, OPENAI_URL, PROVIDERS, REACHABLE, styleInput, STYLES,
   type ConnectForm, type ProviderChoice, type StyleId,
 } from './onboarding-steps.ts';
 import { Avatar, Button, Pill } from './parts.tsx';
@@ -125,9 +125,8 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     setBusy(true); setError(null); setWiden(null); setListNote(null);
     try {
       const latest = (await api.settings()).config;
-      const built = setupProviderConfig(latest, modelFormOf(form));
-      const provider = (built.config.providers as Json[]).find(p => p.id === built.providerId);
-      const items = [...accessWidening(latest, built.config), ...(form.key.trim() && provider ? keyEntryAccess(provider) : [])];
+      const built = listPlan(latest, form);
+      const items = built.items;
       if (items.length > 0 && accessKey(items) !== confirmed) { setWiden({ items, key: accessKey(items), list: true }); return; }
       if (!deepEqual(built.config, latest)) await api.saveSettings(built.config);
       if (form.key.trim()) {
@@ -136,7 +135,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
         setKeySet(true);
       }
       const got = await api.providerModels(built.providerId);
-      setNames(got.models); setListNote(t('ui.set.model.listed', got.models.length));
+      setNames(got.models); setListNote(t(got.truncated ? 'ui.set.model.listedFirst' : 'ui.set.model.listed', got.models.length));
     } catch (failure) { setNames([]); setListNote(errorText(failure, t('ui.set.model.listFailed'))); }
     finally { setBusy(false); }
   }
@@ -219,7 +218,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
               {form.provider === 'custom' && (
                 <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.url')}</span>
                   <input className="bt-field bt-field--mono" value={form.baseUrl} spellCheck={false} autoComplete="off" aria-invalid={problem === 'baseUrl' || undefined}
-                    onChange={e => { setForm({ ...form, baseUrl: e.target.value }); setResult(null); }} /></label>
+                    onChange={e => { setForm({ ...form, baseUrl: e.target.value }); setResult(null); setNames([]); setListNote(null); }} /></label>
               )}
               {form.provider !== 'anthropic' && (
                 <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.context')}</span>

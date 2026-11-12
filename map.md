@@ -41,7 +41,7 @@
 - `tools.agent`（AU-4）: `{ enabled: false, inTasks: false, maxPerRun: 3, timeoutSec: 600 }`。`maxPerRun` は 1〜5、`timeoutSec` は 60 以上。書かなければ子の担当は使えず、今までと同じ。
 - `skills`（1-5s）: `{ askBeforeRegister?: boolean }`。書かなければ（既定）AI のスキルの下書きは持ち主の承認を待つ。`false` で聞かずに登録する（スキルの節）。既定値を持たない書き方なので、既定のままなら設定ファイルに書き足さない。再起動は要らない。振り返りの指示（`memory/review.ts` の `reviewPrompt` の `skillsAutoRegister`。ワーカーが渡す）と `skill_draft` の説明は、この設定で文が替わる。
 - `friendly.ts`: 形の検査（TypeBox）の誤りを、項目ごとの友好的な文のコード（`config.<キー>`）と差し込みの値に直す（`friendlyIssue`）。パターン（`PATTERN_MESSAGES`。スキーマの pattern から取る。ID・環境変数名・考える深さの名前・色・時刻）・長さ・数の範囲・個数・型・選べる値・必須・知らない項目。正規表現や「Expected string to match …」はそのまま見せない。`parseConfig` が `issues` の各項目に `code` / `params` を付け、`message` と `problems` は日本語のその文にする。スキーマに pattern を足して文を足し忘れると `tests/config-friendly.test.ts` が落ちる。
-- 設定を初期に戻す（1-5c）: `resetConfig(current)` は `defaultConfig()` に、今の `server`（待ち受けと認証）と `tools.roots` / `tools.deny`（フォルダ）だけを残した設定を返す。`ConfigStore.backup()` は設定ファイルの控えを隣に `config.json.reset-<時刻>.bak` で書き、名前を返す（同じ名前があれば上書きせず投げる）。フックの `enabled`（`HookConfig`。書かなければオン。既定値は書き足さない）もここ。
+- 設定を初期に戻す（1-5c）: `resetConfig(current)` は `defaultConfig()` に、今の `timezone`・`server`（待ち受けと認証）・`tools.roots` / `tools.deny`（フォルダ）だけを残した設定を返す。`ConfigStore.backup(dir)` は設定ファイルの控えを `dir`（`paths.backups` = `data/backups`。道具の禁止の場所なので、モデルは読めない・書けない）に `config.json.reset-<時刻>.bak` で書き、その場所を返す（同じ名前があれば上書きせず投げる）。フックの `enabled`（`HookConfig`。書かなければオン。既定値は書き足さない）もここ。
 - 入口: `src/config/store.ts`（`ConfigStore`）
 - 使うもの: `src/shared`（`url.ts`）、`@sinclair/typebox`
 
