@@ -229,6 +229,18 @@ test('3-1b 出どころ: owner_words は一致した持ち主の文をまるご�
   const result = f.check(words('再起動しても続きから再開')) as { context?: string; messageId?: number };
   assert.equal(result.messageId, ja);
   assert.equal(result.context, '再起動しても続きから再開しなくてよい。');
+
+  const QUOTE = 'the export must keep every column header';
+  const long = `${'alpha '.repeat(150)}${QUOTE} ${'omega '.repeat(150)}`;
+  f.say(c, 'user', long);
+  const cut = (f.check(words(QUOTE)) as { context?: string }).context!;
+  assert.ok(cut.length <= 500, String(cut.length));
+  assert.ok(cut.startsWith('…') && cut.endsWith('…'), cut.slice(0, 20));
+  assert.ok(cut.includes(QUOTE));
+  const head = `${QUOTE} ${'omega '.repeat(150)}`;
+  f.say(c, 'user', `Note: ${head}`.replace(QUOTE, 'the import must keep every row id intact'));
+  const front = (f.check(words('the import must keep every row id intact')) as { context?: string }).context!;
+  assert.ok(front.length <= 500 && front.startsWith('Note: the import') && front.endsWith('…'), front.slice(0, 40));
 });
 
 test('3-1b 道具の印: acceptance_write は meta・planOk・projectOnly・会話だけ。作る役（タスク）と子の担当から名前で呼ばせても、パイプラインが断る', async t => {
@@ -618,7 +630,7 @@ test('3-1b 一覧の口: よそから来た文を読んだ実行が書いたら 
   assert.equal(after.tainted, true, 'きれいな書き直しでは消えない');
 });
 
-test('3-1b 言語: plan_write が初めて ja を渡すと製品に控えて project.changed を流す。2 回目の en では製品は変わらず、控えは最新の en。持ち主が選んだ（pinned）製品では変わらない。読めない印は控えず結果に 1 行。外を読んだ実行の印は控えない', async t => {
+test('3-1b 言語: plan_write が初めて ja を渡すと製品に控えて project.changed を流す。選んでいなければ 2 回目の en にすぐ従う。持ち主が選んだ（pinned）製品では変わらない。読めない印は控えず結果に 1 行。外を読んだ実行の印は控えない', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   assert.equal(shop.doc_language, null);
@@ -630,10 +642,13 @@ test('3-1b 言語: plan_write が初めて ja を渡すと製品に控えて pro
   assert.equal(s.app.projects.get(shop.id)?.doc_language, 'ja');
   assert.equal(changes(), before + 1, '検出で変わったら画面へ知らせる');
   await s.send(uuid(1), { text: 'again' });
-  assert.equal(s.app.projects.get(shop.id)?.doc_language, 'ja');
-  assert.equal(changes(), before + 1, '変わらなければ知らせない');
+  assert.equal(s.app.projects.get(shop.id)?.doc_language, 'en', '選んでいなければ最新の印にすぐ従う');
+  assert.equal(changes(), before + 2);
+  s.adapter().scripts = [call('plan_write', { content: '# Plan', language: 'en' }), reply('b2')];
+  await s.send(uuid(1), { text: 'same' });
+  assert.equal(changes(), before + 2, '変わらなければ知らせない');
   const listed = (await s.json('/api/projects', 'GET')).body.projects[0];
-  assert.deepEqual([listed.doc_language, listed.doc_language_pinned], ['ja', false]);
+  assert.deepEqual([listed.doc_language, listed.doc_language_pinned], ['en', false]);
 
   const cafe = await s.product('cafe');
   s.adapter().scripts = [call('plan_write', { content: '# Plan', language: 'japanese' }), reply('c')];

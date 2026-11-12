@@ -118,7 +118,7 @@ export class ProjectStore {
 
   detectDocLanguage(id: string, tag: string): boolean {
     this.#db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(`doc-language:${id}`, JSON.stringify(tag), this.#now());
-    return Number(this.#db.prepare('UPDATE projects SET doc_language = ? WHERE id = ? AND doc_language IS NULL AND doc_language_pinned = 0').run(tag, id).changes) === 1;
+    return Number(this.#db.prepare('UPDATE projects SET doc_language = ?1 WHERE id = ?2 AND doc_language IS NOT ?1 AND doc_language_pinned = 0').run(tag, id).changes) === 1;
   }
 
   #detected(id: string): string | null {

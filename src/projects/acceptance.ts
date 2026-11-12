@@ -132,6 +132,8 @@ export function prepareSpeech(rows: readonly SpeechRow[]): Speech {
 }
 
 const MAX_ASKED = 20;
+const CONTEXT_MAX = 500;
+const ELLIPSIS = '…';
 const ANSWER_END = '(?=[ \\t]*$|[).:,\\u3001])';
 const NUMBER_MARK = '(?:Q[ \\t]*)?(\\d{1,2})[.):](?!\\d)';
 const NUMBERED = new RegExp(`(?:^|[\\s,;\\u3001(])${NUMBER_MARK}[ \\t]*(?=\\S)`, 'mu');
@@ -212,7 +214,27 @@ function contextOf(raw: string, quote: string): string {
       break;
     }
   }
-  return sanitizeModelInputText(clean(best ?? raw)).text;
+  return windowed(sanitizeModelInputText(clean(best ?? raw)).text, quote);
+}
+
+function windowed(text: string, quote: string): string {
+  if (text.length <= CONTEXT_MAX) return text;
+  const room = CONTEXT_MAX - 2;
+  const has = (from: number, to: number) => normalizeQuote(text.slice(from, to)).includes(quote);
+  let start = 0;
+  let end = room;
+  if (has(0, text.length)) {
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (has(mid, text.length)) lo = mid; else hi = mid - 1; }
+    let a = lo;
+    let b = text.length;
+    while (a < b) { const mid = Math.floor((a + b) / 2); if (has(lo, mid)) b = mid; else a = mid + 1; }
+    start = Math.max(0, lo - Math.max(0, Math.floor((room - (a - lo)) / 2)));
+    end = Math.min(text.length, start + room);
+    start = Math.max(0, end - room);
+  }
+  return `${start > 0 ? ELLIPSIS : ''}${text.slice(start, end)}${end < text.length ? ELLIPSIS : ''}`;
 }
 
 export function verifySource(speech: Speech, claimed: ClaimedSource): AcceptanceSource {
