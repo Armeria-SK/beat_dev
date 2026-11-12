@@ -65,19 +65,16 @@ export function cronToFields(cron: string, freq: Freq): Record<string, string> {
 }
 
 export function startOfDayIn(timezone: string, now: number): number {
-  const format = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-  const wall = (ms: number): { date: string; seconds: number } => {
-    const p = Object.fromEntries(format.formatToParts(ms).map(part => [part.type, part.value]));
-    return { date: `${p.year}-${p.month}-${p.day}`, seconds: Number(p.hour) * 3600 + Number(p.minute) * 60 + Number(p.second) };
-  };
-  const today = wall(now).date;
-  let start = now - (((now % 1000) + 1000) % 1000);
-  for (let i = 0; i < 3; i++) {
-    const w = wall(start);
-    if (w.date === today && w.seconds === 0) break;
-    start += w.date === today ? -w.seconds * 1000 : (86_400 - w.seconds) * 1000;
+  const format = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = format.format(now);
+  let first = Math.floor(now / 1000);
+  let before = first - 26 * 3600;
+  while (format.format(before * 1000) === today) before -= 3600;
+  while (first - before > 1) {
+    const middle = Math.floor((before + first) / 2);
+    if (format.format(middle * 1000) === today) first = middle; else before = middle;
   }
-  return start;
+  return first * 1000;
 }
 
 export function nextRunAt(cron: string, timezone: string, after: number): number | null {

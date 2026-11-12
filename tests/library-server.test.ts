@@ -231,6 +231,14 @@ test('1-5s 今日の始まりは設定のタイムゾーンの 0 時（夏時間
   assert.equal(startOfDayIn('America/New_York', Date.UTC(2026, 2, 8, 14, 0)), Date.UTC(2026, 2, 8, 5, 0), '進む日: 0 時は冬時間');
 });
 
+test('1-5s 今日の始まり: 0 時に夏時間が切り替わる地域でも、その日の最初の瞬間（前の日の 23 時にも、2 回目の 0 時にもならない）', () => {
+  assert.equal(startOfDayIn('America/Havana', Date.UTC(2026, 2, 8, 14, 0)), Date.UTC(2026, 2, 8, 5, 0), '0 時が無い日: 1 時から始まる');
+  assert.equal(startOfDayIn('America/Havana', Date.UTC(2026, 2, 8, 5, 0)), Date.UTC(2026, 2, 8, 5, 0), 'その最初の瞬間ちょうど');
+  assert.equal(startOfDayIn('America/Havana', Date.UTC(2026, 2, 8, 4, 59, 59)), Date.UTC(2026, 2, 7, 5, 0), '切り替わる 1 秒前は前の日');
+  assert.equal(startOfDayIn('America/Havana', Date.UTC(2026, 10, 1, 15, 0)), Date.UTC(2026, 10, 1, 4, 0), '0 時が 2 回ある日: 1 回目から');
+  assert.equal(startOfDayIn('America/Havana', Date.UTC(2026, 10, 1, 4, 30)), Date.UTC(2026, 10, 1, 4, 0));
+});
+
 test('1-5s しまった会話の一覧に、メッセージ数としまった時刻が付く。戻すと時刻は消え、会話を消すと記録も消える', async t => {
   const { app } = await boot(t);
   const api = await serve(t, app);
