@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApiError, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type AcceptanceVersionDetail, type Conversation, type Task } from '../web/src/api.ts';
+import { api, ApiError, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type AcceptanceVersionDetail, type Conversation, type Task } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  ASK_TEXT, askAfterSave, askSend, askTarget, buildAction, canEditItems, noticeAfterReload, versionItems, watchedBuild, decisionFailure, diffLabel, editOp, editRequest, formProblem, itemForm, previousVersion, proposalRows, proposalStale, removeOp, saveHint,
+  ASK_TEXT, approveDisabled, askAfterSave, askSend, askTarget, buildAction, decideArgs, editAccess, editBase, editHint, loadedAcceptance, noticeAfterReload, problemField, versionItems, watchedBuild, decisionFailure, diffLabel, editOp, editRequest, formProblem, itemForm, previousVersion, proposalRows, proposalStale, removeOp,
   revealSection, versionDiff, versionSourceLabel, versionsShown,
 } from '../web/src/ui/acceptance.ts';
 
@@ -113,26 +113,69 @@ test('ui/acceptance 3-3: 直しの op。新しい項目は add、変えた項目
   assert.deepEqual(removeOp(a1), { op: 'remove', id: 'A-1' });
 });
 
-test('ui/acceptance 3-3: 直しは表に出している版を baseVersion に載せる（下書きは 0）', () => {
+test('ui/acceptance 3-3: 直しは、Edit・Remove・Add を開いたときの版とハッシュで送る。開いたあとに一覧が書き直されても、Save のときの一覧を使わない', () => {
+  const opened = draft({ hash: 'd1' });
+  const base = editBase(opened);
+  assert.deepEqual(base, { baseVersion: 0, baseHash: 'd1' });
+  const rewritten = draft({ hash: 'd2', items: [item('A-1', { result: 'Rewritten by the AI' })] });
   const op = removeOp(item('A-1'));
-  assert.deepEqual(editRequest(acc({ version: 3, hash: 'v3' }), op), { baseVersion: 3, baseHash: 'v3', ops: [op] });
-  assert.deepEqual(editRequest(draft({ hash: 'd1' }), op), { baseVersion: 0, baseHash: 'd1', ops: [op] }, '下書きは版がいつも 0 なので、読んだ下書きのハッシュで AI の書き直しを見分ける');
-  assert.deepEqual(editRequest(draft({ hash: null }), op), { baseVersion: 0, baseHash: null, ops: [op] });
+  assert.deepEqual(editRequest(base, op), { baseVersion: 0, baseHash: 'd1', ops: [op] }, 'AI が書き直したあとでも、開いたときのハッシュのまま（サーバーが古いと断る）');
+  assert.notEqual(editRequest(base, op).baseHash, rewritten.hash);
+  assert.deepEqual(editRequest(editBase(acc({ version: 3, hash: 'v3' })), op), { baseVersion: 3, baseHash: 'v3', ops: [op] });
+  assert.deepEqual(editBase(draft({ hash: null })), { baseVersion: 0, baseHash: null });
   assert.equal('source' in op, false, '持ち主の直しに source を載せない（サーバーは知らない欄を 400 で断る）');
 });
 
-test('ui/acceptance 3-3: 固定のあとの Save は新しい版になると先に出す。下書きでは出さない', () => {
-  assert.equal(saveHint(acc({ version: 2 })), 'Saving makes v3');
-  assert.equal(saveHint(draft()), null);
+test('ui/acceptance 3-3: 直す欄の添え書き。固定のあとは新しい版になること、案があるときは案を捨てること', () => {
+  assert.equal(editHint(acc({ version: 2 }), null), 'Saving makes v3');
+  assert.equal(editHint(draft(), null), null);
+  assert.equal(editHint(acc({ version: 2 }), change({ base_version: 2 })), 'Saving makes v3 · Saving discards the proposed change');
+  assert.equal(editHint(draft(), change({ base_version: 0 })), 'Saving discards the proposed change');
 });
 
-test('ui/acceptance 3-3: 項目を直せるのは読むときだけ。計画書を書いている最中・Build を送っている最中は直せない', () => {
-  assert.equal(canEditItems({ acc: acc(), state: 'ready', mode: 'read', pending: false }), true);
-  assert.equal(canEditItems({ acc: draft(), state: 'empty', mode: 'read', pending: false }), true);
-  assert.equal(canEditItems({ acc: null, state: 'ready', mode: 'read', pending: false }), false);
-  assert.equal(canEditItems({ acc: acc(), state: 'ready', mode: 'edit', pending: false }), false);
-  assert.equal(canEditItems({ acc: acc(), state: 'writing', mode: 'read', pending: false }), false);
-  assert.equal(canEditItems({ acc: acc(), state: 'ready', mode: 'read', pending: true }), false);
+test('ui/acceptance 3-3: 項目を直せるのは読むとき。計画書を書いている最中・Build を送っている最中は止める（開いた欄は消さず、押せなくする）', () => {
+  assert.equal(editAccess({ acc: acc(), state: 'ready', mode: 'read', pending: false }), 'on');
+  assert.equal(editAccess({ acc: draft(), state: 'empty', mode: 'read', pending: false }), 'on');
+  assert.equal(editAccess({ acc: null, state: 'ready', mode: 'read', pending: false }), 'off');
+  assert.equal(editAccess({ acc: acc(), state: 'ready', mode: 'edit', pending: false }), 'off');
+  assert.equal(editAccess({ acc: acc(), state: 'writing', mode: 'read', pending: false }), 'locked');
+  assert.equal(editAccess({ acc: acc(), state: 'ready', mode: 'read', pending: true }), 'locked');
+});
+
+test('ui/acceptance 3-3: 直す欄の誤りは、その誤りの欄に結びつける（文の誤りは結果の欄、コマンドの誤りはコマンドの欄）', () => {
+  assert.equal(problemField('ui.acc.edit.empty'), 'result');
+  assert.equal(problemField('ui.acc.edit.long'), 'result');
+  assert.equal(problemField('ui.acc.edit.noCommand'), 'command');
+  assert.equal(problemField('ui.acc.edit.longCommand'), 'command');
+});
+
+test('ui/acceptance 3-3: Approve / Reject が送るもの。古い案は Approve を押せない（Reject は押せる）', () => {
+  assert.deepEqual(decideArgs('P1', change({ id: 'ch7' }), 'approve'), ['P1', 'ch7', 'approve']);
+  assert.deepEqual(decideArgs('P1', change({ id: 'ch7' }), 'reject'), ['P1', 'ch7', 'reject']);
+  assert.equal(approveDisabled(acc({ version: 2 }), change({ base_version: 1 }), false), true);
+  assert.equal(approveDisabled(acc({ version: 1 }), change({ base_version: 1 }), false), false);
+  assert.equal(approveDisabled(acc({ version: 1 }), change({ base_version: 1 }), true), true);
+});
+
+test('ui/acceptance 3-3: 一覧を読み直したら、案は acceptance.change から取り、今送った Build のつなぎ（sentBuild）は消す', () => {
+  const c = change();
+  const coverage = { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 };
+  const a = acc({ change: c });
+  assert.deepEqual(loadedAcceptance({ acceptance: a, coverage }), { acc: a, change: c, coverage, sentBuild: null });
+  assert.deepEqual(loadedAcceptance({ acceptance: acc() }), { acc: acc(), change: null, coverage: null, sentBuild: null });
+});
+
+test('ui/acceptance 3-3: api.send は generated: true を送る本文に載せる', async () => {
+  const seen: unknown[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => { seen.push(JSON.parse(String(init.body))); return new Response('{"runId":"r1"}', { status: 200 }); }) as typeof fetch;
+  try {
+    const out = askSend(null, 'P1', () => 'fresh');
+    await api.send(out.id, out.text, [], out.choice, out.options);
+    await api.send('c1', 'hello');
+  } finally { globalThis.fetch = real; }
+  assert.deepEqual(seen[0], { text: ASK_TEXT, permissionMode: 'plan', projectId: 'P1', generated: true });
+  assert.deepEqual(seen[1], { text: 'hello' }, 'ふつうの送信には載せない');
 });
 
 test('ui/acceptance 3-3: Approve / Reject / 直しの失敗。409 は古い版（読み直す）、ほかはサーバーの理由つき', () => {
@@ -150,15 +193,12 @@ test('ui/acceptance 3-3: 「一覧も変えますか」は、固定のあとに�
   assert.equal(askAfterSave(null), false);
 });
 
-test('ui/acceptance 3-3: Ask beat の送り先は、その製品のいちばん新しい計画モードの会話。子の会話・アーカイブ・ほかの製品・ほかのモードは使わない', () => {
+test('ui/acceptance 3-3: Ask beat の送り先は、その製品のいちばん新しい計画モードの会話。ほかの製品・ほかのモードは使わない', () => {
   const list = [
     convo('old', { last_message_at: 10 }),
     convo('newest', { last_message_at: 30 }),
     convo('normal', { last_message_at: 99, permission_mode: 'normal' }),
     convo('other', { last_message_at: 99, project_id: 'P2' }),
-    convo('helper', { last_message_at: 99, parent_run_id: 'r1' }),
-    convo('archived', { last_message_at: 99, archived: 1 }),
-    convo('archivedAt', { last_message_at: 99, archived_at: 5 }),
   ];
   assert.equal(askTarget(list, 'P1'), 'newest');
   assert.equal(askTarget(list.filter(c => c.id !== 'newest' && c.id !== 'old'), 'P1'), null);

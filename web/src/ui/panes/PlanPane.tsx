@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
 import {
   api, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type OwnerOp, type Coverage, type NotDoingItem, type PlanDoc, type Task,
 } from '../../api.ts';
@@ -7,9 +7,9 @@ import { formatRelative } from '../../i18n/format.ts';
 import { useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import {
-  acceptanceMeta, addPage, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildRequest, canEditItems, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
-  decisionFailure, diffLabel, editOp, editRequest, formProblem, itemDetails, itemForm, noticeAfterReload, outsideContent, pagingCursor, previousVersion, proposalRows, proposalStale, removeOp, revealSection, revealStep, saveHint,
-  showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type ItemForm, type Paging,
+  acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
+  decideArgs, decisionFailure, diffLabel, editAccess, editBase, editHint, editOp, editRequest, formProblem, itemDetails, itemForm, loadedAcceptance, noticeAfterReload, outsideContent, pagingCursor, previousVersion, problemField, proposalRows, proposalStale, removeOp, revealSection, revealStep,
+  showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type EditBase, type ItemForm, type Paging,
 } from '../acceptance.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
@@ -32,26 +32,32 @@ function Meta({ doc, writing }: { doc: PlanDoc | null; writing: boolean }) {
   return <span className="bt-meta">{file} · {by ? t('ui.plan.editedBy', when, t(by)) : t('ui.plan.edited', when)}</span>;
 }
 
-interface Editing { hint: string | null; busy: boolean; onEdit: (op: OwnerOp) => Promise<boolean> }
+interface Editing { hint: string | null; busy: boolean; locked: boolean; base: EditBase; onEdit: (op: OwnerOp, base: EditBase) => Promise<boolean> }
 
 const CHECK_KINDS: ReadonlyArray<ItemForm['check']> = ['command', 'look', 'read'];
 
-function ItemEditor({ item, editing, onDone }: { item: AcceptanceItem | null; editing: Editing; onDone: () => void }) {
+function ItemEditor({ item, base, editing, onDone }: { item: AcceptanceItem | null; base: EditBase; editing: Editing; onDone: () => void }) {
   const t = useT();
+  const id = useId();
   const [form, setForm] = useState<ItemForm>(() => itemForm(item));
   const problem = formProblem(form);
-  const touched = form.result !== itemForm(item).result || form.check !== itemForm(item).check || form.command !== itemForm(item).command;
+  const start = itemForm(item);
+  const touched = form.result !== start.result || form.check !== start.check || form.command !== start.command;
+  const shown = touched ? problem : null;
+  const field = shown ? problemField(shown) : null;
   const op = problem ? null : editOp(form, item);
+  const blocked = editing.busy || editing.locked;
   const save = async () => {
-    if (!op || editing.busy) return;
-    if (await editing.onEdit(op)) onDone();
+    if (!op || blocked) return;
+    if (await editing.onEdit(op, base)) onDone();
   };
+  const invalid = (which: 'result' | 'command') => (field === which ? { 'aria-invalid': true, 'aria-describedby': `${id}-problem` } : {});
   return (
     <div className="ui-acc__form" onClick={e => e.stopPropagation()}
       onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onDone(); } }}>
       <label className="ui-acc__pair">
         <span className="bt-label">{t('ui.acc.edit.result')}</span>
-        <textarea className="bt-field ui-acc__input" rows={2} autoFocus value={form.result} onChange={e => setForm({ ...form, result: e.target.value })} />
+        <textarea className="bt-field ui-acc__input" rows={2} autoFocus value={form.result} onChange={e => setForm({ ...form, result: e.target.value })} {...invalid('result')} />
       </label>
       <div className="ui-acc__pair">
         <span className="bt-label">{t('ui.acc.edit.check')}</span>
@@ -64,24 +70,35 @@ function ItemEditor({ item, editing, onDone }: { item: AcceptanceItem | null; ed
       {form.check === 'command' && (
         <label className="ui-acc__pair">
           <span className="bt-label">{t('ui.acc.edit.command')}</span>
-          <input className="bt-field bt-field--mono" spellCheck={false} autoComplete="off" value={form.command} onChange={e => setForm({ ...form, command: e.target.value })}
+          <input className="bt-field bt-field--mono" spellCheck={false} autoComplete="off" value={form.command} onChange={e => setForm({ ...form, command: e.target.value })} {...invalid('command')}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void save(); } }} />
         </label>
       )}
-      {touched && problem && <p className="bt-meta ui-danger ui-acc__problem">{t(problem)}</p>}
+      {shown && <p id={`${id}-problem`} role="alert" className="bt-meta ui-danger ui-acc__problem">{t(shown)}</p>}
       {editing.hint && <p className="bt-meta ui-acc__problem">{editing.hint}</p>}
       <span className="ui-acc__buttons">
-        <Button small disabled={op === null || editing.busy} onClick={() => void save()}>{t('ui.acc.edit.save')}</Button>
+        <Button small disabled={op === null || blocked} onClick={() => void save()}>{t('ui.acc.edit.save')}</Button>
         <Button variant="ghost" small onClick={onDone}>{t('ui.acc.edit.cancel')}</Button>
       </span>
     </div>
   );
 }
 
+type RowMode = { kind: 'view' } | { kind: 'edit' | 'remove'; base: EditBase };
+
 function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing?: Editing | undefined }) {
   const t = useT();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<'view' | 'edit' | 'remove'>('view');
+  const [mode, setMode] = useState<RowMode>({ kind: 'view' });
+  const editButton = useRef<HTMLButtonElement>(null);
+  const removeButton = useRef<HTMLButtonElement>(null);
+  const refocus = useRef<'edit' | 'remove' | null>(null);
+  useEffect(() => {
+    if (mode.kind !== 'view' || refocus.current === null) return;
+    (refocus.current === 'edit' ? editButton : removeButton).current?.focus();
+    refocus.current = null;
+  }, [mode]);
+  const back = (to: 'edit' | 'remove' | null) => { refocus.current = to; setMode({ kind: 'view' }); };
   const item = 'result' in entry ? entry : null;
   const state = item ? stateLabel(item.state) : null;
   const details = itemDetails(entry);
@@ -90,7 +107,7 @@ function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing
   const text = 'result' in entry ? entry.result : entry.text;
   const link = conversationLink(entry.source);
   return (
-    <li className={`bt-row ui-acc__row${opens ? ' bt-row--link' : ''}`} onClick={opens && mode === 'view' ? () => setOpen(o => !o) : undefined}>
+    <li className={`bt-row ui-acc__row${opens ? ' bt-row--link' : ''}`} onClick={opens && mode.kind === 'view' ? () => setOpen(o => !o) : undefined}>
       <span className="bt-tag ui-acc__id">{entry.id}</span>
       <div className="bt-row__main">
         {opens
@@ -100,8 +117,8 @@ function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing
           <span className="bt-chip">{t(sourceLabel(entry.source))}</span>
           {item && <span className="bt-chip">{t(checkLabel(item.check))}</span>}
         </span>
-        {open && mode === 'edit' && item && editing && <ItemEditor item={item} editing={editing} onDone={() => setMode('view')} />}
-        {open && mode !== 'edit' && (
+        {open && mode.kind === 'edit' && item && editing && <ItemEditor item={item} base={mode.base} editing={editing} onDone={() => back('edit')} />}
+        {open && mode.kind !== 'edit' && (
           <dl className="ui-acc__detail" onClick={e => e.stopPropagation()}>
             {details.map(d => (
               <div key={d.label} className="ui-acc__pair">
@@ -110,13 +127,13 @@ function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing
               </div>
             ))}
             {link && <a className="bt-meta ui-acc__link" href={link}>{t('ui.acc.showInConversation')}</a>}
-            {editable && item && editing && (mode === 'remove' ? (
-              <RowConfirm warn={t('ui.acc.edit.removeWhat')} note={editing.hint ?? undefined} action={t('ui.acc.edit.remove')} busy={editing.busy}
-                onConfirm={() => void editing.onEdit(removeOp(item)).then(ok => { if (ok) setMode('view'); })} onKeep={() => setMode('view')} />
+            {editable && item && editing && (mode.kind === 'remove' ? (
+              <RowConfirm warn={t('ui.acc.edit.removeWhat')} note={editing.hint ?? undefined} action={t('ui.acc.edit.remove')} busy={editing.busy || editing.locked}
+                onConfirm={() => void editing.onEdit(removeOp(item), mode.base).then(ok => { if (ok) back(null); })} onKeep={again => back(again ? 'remove' : null)} />
             ) : (
               <span className="ui-acc__buttons">
-                <Button variant="ghost" small disabled={editing.busy} onClick={() => setMode('edit')}>{t('ui.acc.edit.edit')}</Button>
-                <Button variant="ghost" small disabled={editing.busy} onClick={() => setMode('remove')}>{t('ui.acc.edit.remove')}</Button>
+                <Button ref={editButton} variant="ghost" small disabled={editing.busy || editing.locked} onClick={() => setMode({ kind: 'edit', base: editing.base })}>{t('ui.acc.edit.edit')}</Button>
+                <Button ref={removeButton} variant="ghost" small disabled={editing.busy || editing.locked} onClick={() => setMode({ kind: 'remove', base: editing.base })}>{t('ui.acc.edit.remove')}</Button>
               </span>
             ))}
           </dl>
@@ -160,9 +177,10 @@ function ProposedChange({ acc, change, busy, onDecide }: { acc: Acceptance; chan
         <span className="bt-label">{t('ui.acc.change.title')}</span>
         <span className="bt-meta">{stale ? t('ui.acc.change.stale', change.base_version) : t('ui.acc.change.versions', change.base_version, change.base_version + 1)}</span>
       </div>
+      {change.tainted && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}</p>}
       <DiffList rows={proposalRows(acc, change)} />
       <span className="ui-acc__buttons">
-        <Button small disabled={busy || stale} onClick={() => onDecide('approve')}>{t('ui.acc.change.approve')}</Button>
+        <Button small disabled={approveDisabled(acc, change, busy)} onClick={() => onDecide('approve')}>{t('ui.acc.change.approve')}</Button>
         <Button variant="ghost" small disabled={busy} onClick={() => onDecide('reject')}>{t('ui.acc.change.reject')}</Button>
       </span>
     </section>
@@ -189,7 +207,7 @@ function VersionRow({ productId, version, previous }: { productId: string; versi
     <li className="bt-row ui-acc__row bt-row--link" onClick={toggle}>
       <span className="bt-tag ui-acc__id">{t('ui.acc.version', version.version)}</span>
       <div className="bt-row__main">
-        <button type="button" className="ui-rowbtn ui-acc__text" aria-expanded={open}>{source ? t(source) : version.source}</button>
+        <button type="button" className="ui-rowbtn ui-acc__text" aria-expanded={open} aria-label={`${t('ui.acc.version', version.version)} · ${source ? t(source) : version.source}`}>{source ? t(source) : version.source}</button>
         {open && (
           <div className="ui-acc__detail" onClick={e => e.stopPropagation()}>
             {rows === 'failed' ? <p className="bt-meta ui-danger ui-acc__problem">{t('ui.acc.versions.loadFailed')}</p> : rows && <DiffList rows={rows} />}
@@ -221,7 +239,14 @@ function Versions({ productId, latest }: { productId: string; latest: number }) 
 
 function AcceptanceList({ acc, editing }: { acc: Acceptance; editing: Editing | undefined }) {
   const t = useT();
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<EditBase | null>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (adding !== null || !refocus.current) return;
+    refocus.current = false;
+    addButton.current?.focus();
+  }, [adding]);
   const items = shownItems(acc);
   const notDoing = shownNotDoing(acc);
   return (
@@ -233,8 +258,8 @@ function AcceptanceList({ acc, editing }: { acc: Acceptance; editing: Editing | 
         </div>
         {items.length > 0 && <ul className="bt-list">{items.map(i => <Row key={i.id} entry={i} editing={editing} />)}</ul>}
         {editing && (adding
-          ? <ItemEditor item={null} editing={editing} onDone={() => setAdding(false)} />
-          : <span className="ui-acc__buttons"><Button variant="ghost" small icon="plus" disabled={editing.busy} onClick={() => setAdding(true)}>{t('ui.acc.edit.add')}</Button></span>)}
+          ? <ItemEditor item={null} base={adding} editing={editing} onDone={() => { refocus.current = true; setAdding(null); }} />
+          : <span className="ui-acc__buttons"><Button ref={addButton} variant="ghost" small icon="plus" disabled={editing.busy || editing.locked} onClick={() => setAdding(editing.base)}>{t('ui.acc.edit.add')}</Button></span>)}
       </section>
       {notDoing.length > 0 && (
         <section className="bt-section ui-acc" aria-label={t('ui.acc.notDoing')}>
@@ -383,10 +408,11 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     try {
       const r = await api.acceptance(productId);
       if (!accLoads.current.isCurrent(ticket)) return;
-      setAcc(r.acceptance);
-      setChange(r.acceptance.change ?? null);
-      setSentBuild(null);
-      setCoverage(r.coverage ?? null);
+      const next = loadedAcceptance(r);
+      setAcc(next.acc);
+      setChange(next.change);
+      setSentBuild(next.sentBuild);
+      setCoverage(next.coverage);
       setAccFailed(false);
       setBuildNotice(current => noticeAfterReload(current, r.acceptance));
     } catch {
@@ -500,13 +526,13 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setMode('edit');
   };
 
-  const changeItems = async (op: OwnerOp): Promise<boolean> => {
+  const changeItems = async (op: OwnerOp, base: EditBase): Promise<boolean> => {
     if (!acc || accBusy) return false;
     setAccBusy(true);
     setAccNotice(null);
     let ok = true;
     try {
-      await api.editAcceptance(productId, editRequest(acc, op));
+      await api.editAcceptance(productId, editRequest(base, op));
     } catch (error) {
       ok = false;
       setAccNotice({ what: 'edit', failure: decisionFailure(error) });
@@ -521,7 +547,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setAccBusy(true);
     setAccNotice(null);
     try {
-      await api.decideChange(productId, change.id, decision);
+      await api.decideChange(...decideArgs(productId, change, decision));
     } catch (error) {
       setAccNotice({ what: 'change', failure: decisionFailure(error) });
     }
@@ -544,8 +570,9 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     } finally { setAskBusy(false); }
   };
 
-  const editing: Editing | undefined = canEditItems({ acc, state, mode, pending: building }) && acc
-    ? { hint: saveHint(acc), busy: accBusy, onEdit: changeItems }
+  const access = editAccess({ acc, state, mode, pending: building });
+  const editing: Editing | undefined = access !== 'off' && acc
+    ? { hint: editHint(acc, change), busy: accBusy, locked: access === 'locked', base: editBase(acc), onEdit: changeItems }
     : undefined;
 
   return (
@@ -563,8 +590,8 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       {buildNotice?.kind === 'changed' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} /></div>}
       {buildNotice?.kind === 'frozen' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} /></div>}
       {buildNotice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.buildFailed')} text={buildNotice.detail ?? undefined} />}
-      {asking && !askFailed && <Notice title={t('ui.acc.ask.title')} action={{ label: t('ui.acc.ask.ask'), run: () => void ask() }} also={{ label: t('ui.acc.ask.notNow'), run: () => setAsking(false) }} />}
-      {asking && askFailed && <Notice tone="fail" title={t('ui.acc.ask.failed')} text={askFailed.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void ask() }} also={{ label: t('ui.acc.ask.notNow'), run: () => setAsking(false) }} />}
+      {asking && !askFailed && <div role="status"><Notice title={t('ui.acc.ask.title')} action={{ label: t('ui.acc.ask.ask'), run: () => void ask() }} also={{ label: t('ui.acc.ask.notNow'), run: () => setAsking(false) }} /></div>}
+      {asking && askFailed && <Notice tone="fail" title={t('ui.acc.ask.failed')} text={askFailed.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void ask() }} />}
       {shown && acc && coverage && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
       {changedAfterBuild(doc, acc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
       {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}</p>}

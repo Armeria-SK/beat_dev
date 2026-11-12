@@ -257,12 +257,33 @@ export function editOp(form: ItemForm, item: AcceptanceItem | null): OwnerOp | n
 
 export const removeOp = (item: AcceptanceItem): OwnerOp => ({ op: 'remove', id: item.id });
 
-export const editRequest = (acc: Acceptance, op: OwnerOp): AcceptanceEdit => ({ baseVersion: acc.version, baseHash: acc.hash, ops: [op] });
+export type EditBase = Pick<AcceptanceEdit, 'baseVersion' | 'baseHash'>;
 
-export const saveHint = (acc: Acceptance): string | null => (acc.draft ? null : t('ui.acc.edit.newVersion', acc.version + 1));
+export const editBase = (acc: Acceptance): EditBase => ({ baseVersion: acc.version, baseHash: acc.hash });
 
-export const canEditItems = (i: { acc: Acceptance | null; state: PlanState; mode: 'read' | 'edit'; pending: boolean }): boolean =>
-  i.acc !== null && i.mode === 'read' && i.state !== 'writing' && !i.pending;
+export const editRequest = (base: EditBase, op: OwnerOp): AcceptanceEdit => ({ ...base, ops: [op] });
+
+export function editHint(acc: Acceptance, change: AcceptanceChange | null): string | null {
+  const parts = [...(acc.draft ? [] : [t('ui.acc.edit.newVersion', acc.version + 1)]), ...(change ? [t('ui.acc.edit.discardsChange')] : [])];
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+export type EditAccess = 'off' | 'locked' | 'on';
+
+export function editAccess(i: { acc: Acceptance | null; state: PlanState; mode: 'read' | 'edit'; pending: boolean }): EditAccess {
+  if (i.acc === null || i.mode !== 'read') return 'off';
+  return i.state === 'writing' || i.pending ? 'locked' : 'on';
+}
+
+export const problemField = (problem: FormProblem): 'result' | 'command' =>
+  (problem === 'ui.acc.edit.noCommand' || problem === 'ui.acc.edit.longCommand' ? 'command' : 'result');
+
+export const decideArgs = (productId: string, change: AcceptanceChange, decision: 'approve' | 'reject'): [string, string, 'approve' | 'reject'] => [productId, change.id, decision];
+
+export const approveDisabled = (acc: Acceptance, change: AcceptanceChange, busy: boolean): boolean => busy || proposalStale(acc, change);
+
+export const loadedAcceptance = (r: { acceptance: Acceptance; coverage?: Coverage }): { acc: Acceptance; change: AcceptanceChange | null; coverage: Coverage | null; sentBuild: null } =>
+  ({ acc: r.acceptance, change: r.acceptance.change ?? null, coverage: r.coverage ?? null, sentBuild: null });
 
 export type DecisionFailure = { kind: 'stale' } | { kind: 'failed'; detail: string | null };
 
@@ -276,7 +297,7 @@ export const askAfterSave = (acc: Acceptance | null): boolean => acc?.frozen != 
 export const ASK_TEXT = 'I changed the plan. Check whether the acceptance items still match it, and propose any changes they need with acceptance_change.';
 
 export function askTarget(list: readonly Conversation[], productId: string): string | null {
-  const mine = list.filter(c => c.project_id === productId && c.permission_mode === 'plan' && !c.parent_run_id && c.archived !== 1 && c.archived_at == null);
+  const mine = list.filter(c => c.project_id === productId && c.permission_mode === 'plan');
   return mine.sort((a, b) => b.last_message_at - a.last_message_at)[0]?.id ?? null;
 }
 

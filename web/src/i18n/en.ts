@@ -1464,6 +1464,7 @@ export const en = {
   'ui.acc.edit.check': 'Check',
   'ui.acc.edit.command': 'Command',
   'ui.acc.edit.newVersion': (n: number) => `Saving makes v${n}`,
+  'ui.acc.edit.discardsChange': 'Saving discards the proposed change',
   'ui.acc.edit.empty': 'Write the result',
   'ui.acc.edit.long': 'The result is longer than 300 characters',
   'ui.acc.edit.noCommand': 'Write the command',
