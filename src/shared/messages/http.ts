@@ -33,6 +33,7 @@ const en = {
   'approval_gone': 'This approval has already ended (it may have timed out or been cancelled)',
   'tool_missing': 'There is no tool "{name}"',
   'tool_not_policyable': 'The tool "{name}" is needed to run tasks, so it cannot be set to ask for approval or be turned off',
+  'tool_policy_changed': 'The setting of the tool "{name}" was changed somewhere else (it is "{policy}" now). Reload and try again',
   'nothing_to_apply': 'There is nothing to apply (the server settings are the same as the running ones)',
   'apply_busy': 'Another apply is in progress. Press it again after it finishes',
   'host_not_loopback': 'Set server.host to a loopback address such as 127.0.0.1 (it is {host} now). Open Clive from other devices through Tailscale Serve',

@@ -85,6 +85,22 @@ test('PATCH /api/tools/:name: 同時に別の道具を変えても、どちら�
   assert.deepEqual(fileOf(s).tools.policies, { file_write: 'block', file_edit: 'ask', shell_run: 'block', web_fetch: 'ask' });
 });
 
+test('PATCH /api/tools/:name: from（画面が見ていた前の方針）が今の方針と違えば 409 で何も書かない。合っていれば通り、from なしは今までどおり', async t => {
+  const s = await startScreenServer(t);
+  assert.equal((await patch(s, 'shell_run', { policy: 'block' })).status, 200);
+  const stale = await patch(s, 'shell_run', { policy: 'allow', from: 'ask' });
+  assert.equal(stale.status, 409);
+  const body = (await stale.json()) as { code: string; params: Record<string, string> };
+  assert.deepEqual([body.code, body.params], ['http.tool_policy_changed', { name: 'shell_run', policy: 'block' }]);
+  assert.equal(s.app.config().tools.policies.shell_run, 'block', '締めた方針は緩まない');
+  assert.equal((await patch(s, 'shell_run', { policy: 'allow', from: 'nope' })).status, 400);
+  assert.equal(s.app.config().tools.policies.shell_run, 'block');
+  assert.equal((await patch(s, 'shell_run', { policy: 'ask', from: 'block' })).status, 200);
+  assert.equal((await patch(s, 'agent_run', { policy: 'allow', from: 'ask' })).status, 200, '書いていない道具の from は既定の方針と比べる');
+  assert.equal((await patch(s, 'shell_run', { policy: 'allow' })).status, 200, 'from なしは比べない');
+  assert.deepEqual(fileOf(s).tools.policies, { agent_run: 'allow' });
+});
+
 test('PATCH /api/tools/:name: 知らない道具は 404、方針を持てない道具・知らない方針は 400（どれも何も書かない）', async t => {
   const s = await startScreenServer(t);
   const wrote = () => fileOf(s).tools.policies;

@@ -204,7 +204,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   const cancelReasonOf = async (req: IncomingMessage): Promise<string | undefined> => {
     if (!/^application\/json\b/iu.test(req.headers['content-type'] ?? '')) return undefined;
-    const body = requireObject(await readJson(req));
+    let body: Record<string, unknown>;
+    try { body = requireObject(await readJson(req)); } catch { return undefined; }
     if (body.reason === undefined || body.reason === null || (typeof body.reason === 'string' && !body.reason.trim())) return undefined;
     return requireString(body, 'reason', { max: 2000 })!.trim();
   };
@@ -215,9 +216,13 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
-    const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
-    app.worker.stopTask(task.id);
-    app.kv.delete(splitKey(task.id));
+    let updated: Task;
+    try {
+      updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
+    } finally {
+      app.worker.stopTask(task.id);
+      app.kv.delete(splitKey(task.id));
+    }
     sendJson(res, 200, { task: view(updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));

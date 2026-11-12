@@ -4,7 +4,8 @@ import { Type } from '@sinclair/typebox';
 import type { RunEvent, ToolCall } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
 import { transcriptOf } from '../src/memory/review.ts';
-import { redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
+import { isSensitiveEnvName, redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
+import { scrubEnv } from '../src/tools/shell/runner.ts';
 import { toolRow } from '../web/src/ui/tool-row.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { CONVERSATION, startApp } from './app-setup.ts';
@@ -29,7 +30,7 @@ test('伏せ字: URL の ? と & のあとの秘密の名前（access_token・ap
 
 test('伏せ字: URL の # のあと（#access_token=）と、URL でよく秘密を運ぶ名前（key・sig・signature・code）の値を伏せる', () => {
   assert.equal(redactSecrets(`https://x.example/cb#access_token=${S1}&state=1`), 'https://x.example/cb#access_token=[REDACTED]&state=1');
-  assert.equal(redactSecrets(`https://x.example/p?key=${S1}&sig=${S2}&code=${S3}&v=3`), 'https://x.example/p?key=[REDACTED]&sig=[REDACTED]&code=[REDACTED]&v=3');
+  assert.equal(redactSecrets(`https://x.example/p?key=${S1}${S2}&sig=${S2}${S3}&code=${S3}${S1}&v=3`), 'https://x.example/p?key=[REDACTED]&sig=[REDACTED]&code=[REDACTED]&v=3');
   assert.equal(redactSecrets(`https://s3.example/o?X-Amz-Signature=${S1}&X-Amz-Date=20261112`), 'https://s3.example/o?X-Amz-Signature=[REDACTED]&X-Amz-Date=20261112');
 });
 
@@ -115,6 +116,136 @@ test('伏せ字: 空白のない長い入力（&token=x の並び、伏せたあ
     assert.ok(took < 10_000, `${unit}: ${Math.round(took)}ms`);
     assert.equal(out.includes('=x'), false);
   }
+});
+
+const LONG = `${S1}${S2}`;
+const leaks = (text: string, ...marks: string[]): string[] => { const out = redactSecrets(text); return marks.filter(mark => out.includes(mark)).map(mark => `${mark} in ${out}`); };
+
+test('伏せ字: URL の値の途中に \\/ や引用符があっても、うしろの部分を残さない。JSON の閉じの引用符・& のあとの値・閉じかっこは残す', () => {
+  assert.equal(redactSecrets(`{"url":"https:\\/\\/x.example\\/p?token=${S1}\\/${S2}&page=2"}`), '{"url":"https:\\/\\/x.example\\/p?token=[REDACTED]&page=2"}');
+  for (const quote of ['"', "'", '`', '<', '>']) assert.equal(redactSecrets(`see x?token=${S1}${quote}${S2} end`), 'see x?token=[REDACTED] end', quote);
+  assert.equal(redactSecrets(`<a href="/p?token=${S1}">Link</a>`), '<a href="/p?token=[REDACTED]">Link</a>');
+  assert.equal(redactSecrets(`{"url":"https://x.example/p?token=${S1}","n":1}`), '{"url":"https://x.example/p?token=[REDACTED]","n":1}');
+  assert.equal(redactSecrets(`[link](https://x.example/p?token=${S1}) next`), '[link](https://x.example/p?token=[REDACTED]) next');
+  assert.equal(redactSecrets(`\`https://x.example/p?token=${S1}\`を開く`), '`https://x.example/p?token=[REDACTED]`を開く');
+});
+
+test('伏せ字: 名前の決まりに足した形（ハイフン入りのヘッダー名・apikey・passphrase・jwt・hmac・oauth_verifier・signing_key・PGPASSWORD・DB_PASS など）', () => {
+  for (const text of [
+    `X-Api-Key: ${S1}`, `x-auth-token: ${S1}`, `apikey=${S1}`, `APIKEY=${S1}`, `passphrase=${S1}`, `jwt=${S1}`, `hmac=${S1}`, `oauth_verifier=${S1}`, `signing_key=${S1}`,
+    `PGPASSWORD=${S1} psql`, `DB_PASS=${S1}`, `MYSQL_PWD=${S1}`, `X-Amz-Credential: ${S1}`, `5-token=${S1}`, `--api-key=${S1}`,
+  ]) assert.deepEqual(leaks(text, S1), [], text);
+  assert.equal(redactSecrets(`curl -H "X-Api-Key: ${S1}" https://a.example`), 'curl -H "X-Api-Key: [REDACTED] https://a.example');
+});
+
+test('伏せ字: URL の中だけで秘密として扱う名前（pwd・pass・sid・otp・sessionId・;jsessionid=）と、名前の形（token[]=・data[token]=・%5F・%3D で包んだ URL・&#38; のあと）', () => {
+  for (const text of [
+    `https://x.example/p?pwd=${S1}`, `https://x.example/p?a=1&pass=${S1}`, `https://x.example/p?sid=${S1}`, `https://x.example/p?otp=${S1}`, `https://x.example/p?sessionId=${S1}`,
+    `https://x.example/p;jsessionid=${S1}?a=1`, `https://x.example/p?token[]=${S1}`, `https://x.example/p?data[token]=${S1}`, `https://x.example/p?data%5Btoken%5D=${S1}`,
+    `https://x.example/p?access%5Ftoken=${S1}`, `https://x.example/p?a=1&#38;token=${S1}`, `https://x.example/p?a=1&#x26;token=${S1}`, `https://x.example/p?a.b.token=${S1}`,
+    `https://x.example/go?next=https%3A%2F%2Fy.example%2Fcb%3Faccess_token%3D${S1}%26state%3D1`,
+  ]) assert.deepEqual(leaks(text, S1), [], text);
+  assert.equal(redactSecrets(`https://x.example/go?next=https%3A%2F%2Fy.example%2Fcb%3Faccess_token%3D${S1}%26state%3D1`), 'https://x.example/go?next=https%3A%2F%2Fy.example%2Fcb%3Faccess_token%3D[REDACTED]%26state%3D1');
+  assert.equal(redactSecrets(`https://x.example/p;jsessionid=${S1}&a=1`), 'https://x.example/p;jsessionid=[REDACTED]&a=1');
+});
+
+test('伏せ字: 値が空白で分かれる形（Authorization: Basic …・--password …・curl -u user:pass・mysql -p…・Cookie: の行）', () => {
+  assert.equal(redactSecrets(`Authorization: Basic ${S1}`), 'Authorization: [REDACTED]');
+  assert.equal(redactSecrets(`Proxy-Authorization: Basic ${S1}\nHost: x`), 'Proxy-Authorization: [REDACTED]\nHost: x');
+  assert.equal(redactSecrets(`curl -H "Authorization: Basic ${S1}" https://a.example`), 'curl -H "Authorization: [REDACTED]" https://a.example');
+  assert.equal(redactSecrets(`tool --password ${S1} --api-key ${S2} run`), 'tool --password [REDACTED] --api-key [REDACTED] run');
+  assert.equal(redactSecrets(`New-Thing -Password "${S1} ${S2}" -Name x`), 'New-Thing -Password [REDACTED] -Name x');
+  assert.equal(redactSecrets(`curl -u admin:${S1} https://a.example`), 'curl -u admin:[REDACTED] https://a.example');
+  assert.equal(redactSecrets(`curl --user "admin:${S1}" https://a.example`), 'curl --user "admin:[REDACTED]" https://a.example');
+  assert.equal(redactSecrets(`mysql -u root -p${S1} app`), 'mysql -u root -p[REDACTED] app');
+  assert.equal(redactSecrets(`mysql -p"${S1} ${S2}" app`), 'mysql -p[REDACTED] app');
+  assert.equal(redactSecrets(`{"command":"tool --token ${S1}"}`), '{"command":"tool --token [REDACTED]"}', 'JSON の閉じの引用符は食わない');
+  assert.equal(redactSecrets(`{"command":"tool --token \\"${S1} ${S2}\\" x"}`), '{"command":"tool --token [REDACTED] x"}');
+  assert.equal(redactSecrets(`Cookie: a=1; sid=${S1}; theme=${S2}\nHost: x`), 'Cookie: [REDACTED]\nHost: x');
+  assert.equal(redactSecrets(`curl -H "Cookie: a=1; b=${S1}" https://a.example`), 'curl -H "Cookie: [REDACTED]" https://a.example');
+});
+
+test('伏せ字: URL の userinfo で、パスワードに生の @ / ? があっても残さない。パスワードなしの長いトークンも伏せる', () => {
+  assert.deepEqual(leaks(`https://user:${S1}@${S2}@host.example/x`, S1, S2), []);
+  assert.equal(redactSecrets(`postgres://svc:${S1}@${S2}@db.example/app`), 'postgres://svc:[REDACTED]@db.example/app');
+  assert.equal(redactSecrets(`postgres://svc:${S1}/${S2}@db.example/app`), 'postgres://svc:[REDACTED]@db.example/app');
+  assert.equal(redactSecrets(`postgres://svc:${S1}?${S2}@db.example/app`), 'postgres://svc:[REDACTED]@db.example/app');
+  assert.equal(redactSecrets(`git clone https://${LONG}@github.com/o/r.git`), 'git clone https://[REDACTED]@github.com/o/r.git');
+});
+
+test('伏せ字: 伏せすぎない（短い code・key、token_type、コードの断片、ポートつきの URL、uid:gid、終わりの行）', () => {
+  for (const plain of [
+    'https://x.example/p?code=JP', 'https://x.example/p?code=200&key=value', 'https://x.example/p#key=1', 'token_type=bearer', '{"token_type":"bearer","token_count":12}',
+    'a?key=1:2', 'foo&code=1', '[link](#code=1)', 'x;key=1', 'pass=3 fail=0', 'pwd: /home/me', 'sid=5', 'session_id: abc', 'max_tokens: 4096', 'auth_url=https://x.example/login',
+    'http://[::1]:8080/a@b', 'file://C:/Users/me/a@b.txt', 'docker://registry:5000/img@sha256:abc', 'docker run -u 1000:1000 img', 'git push -u origin main', 'sort -u file',
+    'mkdir -p a/b', 'ssh -p22 host', 'mysql -P3306 -h db', 'tar -pxf a.tar', 'use --verbose to see more', 'sort-key: price', 'https://user@host.example/repo.git',
+  ]) assert.equal(redactSecrets(plain), plain);
+  assert.equal(redactSecrets(`$ run --password=\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)`), '$ run --password=\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)', '値なしで終わる名前は、次の行を食わない');
+  assert.equal(redactSecrets('password=\nnext line'), 'password=\nnext line');
+});
+
+const parses = (text: string): boolean => { try { JSON.parse(text); return true; } catch { return false; } };
+
+test('審査 1: Cookie の値が引用符つき・\\ 入りでも、前の版より多く残さない。JSON の閉じの引用符は食わない', () => {
+  assert.equal(redactSecrets('Set-Cookie: sid="SECRETVAL"; Path=/'), 'Set-Cookie: [REDACTED]');
+  assert.equal(redactSecrets('< Set-Cookie: session="eyJhIjoxfQ.SECRETSIG"; HttpOnly; Path=/'), '< Set-Cookie: [REDACTED]');
+  assert.equal(redactSecrets('Cookie: sid=abc\\def; b=2'), 'Cookie: [REDACTED]');
+  assert.equal(redactSecrets('{"h":"Cookie: a=1; b=2"}'), '{"h":"Cookie: [REDACTED]"}');
+  assert.equal(redactSecrets('{"cookie": "abc", "n": 1}'), '{"cookie": [REDACTED], "n": 1}');
+  assert.equal(redactSecrets('{\\"h\\":\\"Cookie: abc\\"}'), '{\\"h\\":\\"Cookie: [REDACTED]\\"}');
+});
+
+test('審査 2・3: -u と mysql -p と --flag は、JSON の中の JSON・次の鍵を壊さない', () => {
+  const user = redactSecrets(JSON.stringify({ result: JSON.stringify({ cmd: 'curl -u bob:hunter2', y: 1 }) }));
+  assert.deepEqual([parses(user), user.includes('hunter2')], [true, false], user);
+  const mysql = redactSecrets(JSON.stringify({ result: JSON.stringify({ cmd: 'mysql -uroot -phunter2', y: 1 }) }));
+  assert.deepEqual([parses(mysql), mysql.includes('hunter2')], [true, false], mysql);
+  for (const text of ['{"cmd":"mysql -u root -p","next":"v"}', '{"cmd":"--token ","next":"v"}']) assert.equal(redactSecrets(text), text);
+});
+
+test('審査 4: userinfo の 2 つ目の読み方は、ポートのあとの引用符・カンマ・かっこをまたいで、うしろの @ まで食わない', () => {
+  for (const text of ['{"a":"http://h:3000","b":"https://c.d/e","mail":"x@y.z"}', 'origins=http://a:3000,https://b/c,me@x.com', 'see (http://a:3000) and https://b/c me@x.com', 'http://a:3000']) {
+    assert.equal(redactSecrets(text), text);
+  }
+});
+
+test('審査 5: 値が次の行にあっても、次の行が字下げされていれば伏せる。行の頭から始まる次の行は食わない', () => {
+  assert.equal(redactSecrets('Password:\n  hunter2secret'), 'Password:\n  [REDACTED]');
+  assert.equal(redactSecrets('secret:\r\n  abc'), 'secret:\r\n  [REDACTED]');
+  assert.equal(redactSecrets('Token:\nSECRETVALUE123'), 'Token:\nSECRETVALUE123', '行の頭から始まる値は残る（分かっている漏れ）');
+  assert.equal(redactSecrets('API_KEY=\nabc'), 'API_KEY=\nabc');
+});
+
+test('審査 6: シェルの子に渡す環境変数は、種類・場所を言う名前（…_URL・…_TYPE など）でも、秘密の名前なら渡さない', () => {
+  const names = ['AUTH_URL', 'BASIC_AUTH_URL', 'MONGO_AUTH_URI', 'HTTP_PROXY_AUTH_ENDPOINT', 'COOKIE_TTL', 'SESSION_COOKIE_EXPIRES', 'PASSWD_TYPE', 'AUTHORIZATION_TYPE'];
+  const source = Object.fromEntries([...names, 'PLAIN_NAME'].map(name => [name, 'v']));
+  assert.deepEqual(Object.keys(scrubEnv([...names, 'PLAIN_NAME'], source)), ['PLAIN_NAME']);
+  for (const name of names) assert.equal(isSensitiveEnvName(name), true, name);
+});
+
+test('伏せ字（redactJsonValue）: 鍵の名前に空白・. ・[] が入る形、名前と値が別々の所にある形も伏せる。短い文字列はそのまま', () => {
+  const out = redactJsonValue({
+    'password ': S1, 'x.password': S1, 'data[token]': S1, header: { name: 'password', value: S1 }, env: [{ key: 'API_KEY', value: S1 }],
+    headers: [['Authorization', `Basic ${S1}`], ['Accept', 'text/html']], plain: { name: 'title', value: 'hello world' }, tiny: ['a', 'bc', 'k=v'], 'x.path': 'docs/a.md',
+  }) as Record<string, unknown>;
+  assert.equal(JSON.stringify(out).includes(S1), false, JSON.stringify(out));
+  assert.deepEqual(out.header, { name: 'password', value: '[REDACTED]' });
+  assert.deepEqual(out.headers, [['Authorization', '[REDACTED]'], ['Accept', 'text/html']]);
+  assert.deepEqual([out.plain, out.tiny, out['x.path']], [{ name: 'title', value: 'hello world' }, ['a', 'bc', 'k=v'], 'docs/a.md']);
+  assert.equal(redactJsonValue('jwt=x'), 'jwt=[REDACTED]', '短くても = を含む文字列は伏せ字に通す');
+});
+
+test('伏せ字: 足した形（ハイフンの並び・--flag の並び・-u・mysql・userinfo・%3D）でも、読む量が長さの 2 乗にならない', () => {
+  for (const unit of ['a-', '-', '--password ', '--password "', '-u a', 'mysql ', 'a://b:c/', 'a://b:c', 'https://aaaaaaaaaaaaaaaaaaaaaaaa', '%26a', '?a[b]', 'Cookie: a ', 'Authorization: Basic ', ';a=b"c']) {
+    const text = unit.repeat(Math.ceil(1_000_000 / unit.length));
+    const started = performance.now();
+    redactSecrets(text);
+    const took = performance.now() - started;
+    assert.ok(took < 10_000, `${unit}: ${Math.round(took)}ms`);
+  }
+  const started = performance.now();
+  redactJsonValue(Array.from({ length: 200_000 }, () => 'ab'));
+  assert.ok(performance.now() - started < 10_000);
 });
 
 test('タスクの実行中の承認の通知: 本文に入る道具の引数の秘密を伏せる（承認の札そのものは変えない）', async t => {

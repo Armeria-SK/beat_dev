@@ -174,20 +174,24 @@ export class TaskStore {
     const hasRunChild = this.#db.prepare('SELECT 1 FROM tasks WHERE parent_id = ? AND conversation_id IS NOT NULL LIMIT 1');
     const templates: Schedule['templates'] = [];
     const active = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} AND status = 'scheduled' ORDER BY created_at, rowid`).all() as unknown as Task[];
-    const perTemplate = Math.min(SCHEDULE_PLANNED_LIMIT, Math.max(1, Math.floor(SCHEDULE_PLANNED_TOTAL / Math.max(1, active.length))));
-    for (const template of active) {
+    const share = Math.min(SCHEDULE_PLANNED_LIMIT, Math.max(1, Math.floor(SCHEDULE_PLANNED_TOTAL / Math.max(1, active.length))));
+    let budget = SCHEDULE_PLANNED_TOTAL;
+    const plans = active.map(template => {
       const last = hasRunChild.get(template.id) ? lastLength.get(template.id) as { length: number } | undefined : undefined;
-      const length = Math.max(SCHEDULE_MIN_SLOT_MS, last?.length ?? 0);
-      let truncated = false;
-      let count = 0;
-      let at = nextRunAt(template.cron!, template.timezone ?? 'UTC', Math.max(now, from - 1));
-      while (at !== null && at < to) {
-        if (count === perTemplate) { truncated = true; break; }
-        slots.push({ taskId: template.id, runTaskId: null, title: template.title, start: at, length, state: 'planned' });
-        count += 1;
-        at = nextRunAt(template.cron!, template.timezone ?? 'UTC', at);
+      return { template, length: Math.max(SCHEDULE_MIN_SLOT_MS, last?.length ?? 0), count: 0, at: nextRunAt(template.cron!, template.timezone ?? 'UTC', Math.max(now, from - 1)) };
+    });
+    const fill = (plan: typeof plans[number], limit: number): void => {
+      while (plan.at !== null && plan.at < to && plan.count < limit && budget > 0) {
+        slots.push({ taskId: plan.template.id, runTaskId: null, title: plan.template.title, start: plan.at, length: plan.length, state: 'planned' });
+        plan.count += 1;
+        budget -= 1;
+        plan.at = nextRunAt(plan.template.cron!, plan.template.timezone ?? 'UTC', plan.at);
       }
-      templates.push({ taskId: template.id, title: template.title, cron_text: describeCron(template.cron!, this.#language()), truncated });
+    };
+    for (const plan of plans) fill(plan, share);
+    for (const plan of plans) fill(plan, SCHEDULE_PLANNED_LIMIT);
+    for (const plan of plans) {
+      templates.push({ taskId: plan.template.id, title: plan.template.title, cron_text: describeCron(plan.template.cron!, this.#language()), truncated: plan.at !== null && plan.at < to });
     }
     const timed = this.#db.prepare(`SELECT id, title, run_at FROM tasks WHERE status = 'ready' AND cron IS NULL AND parent_id IS NULL AND run_at >= ? AND run_at < ? ORDER BY run_at LIMIT ?`)
       .all(from, to, SCHEDULE_PLANNED_LIMIT) as Array<{ id: string; title: string; run_at: number }>;

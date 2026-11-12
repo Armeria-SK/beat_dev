@@ -127,6 +127,21 @@ test('予備のモデルへ切り替えた実行は、記録の flags に fallba
   assert.deepEqual(JSON.parse(s.runs.get(plain.runId)!.flags), []);
 });
 
+test('先頭のモデルが休んでいて、最初から予備のモデルで動いた実行にも fallback が付く。会話で選んだモデルだけの実行には付かない', async t => {
+  const s = await setup(t, { scripts: [reply('予備'), reply('選んだモデル')] });
+  s.status.cooldown('a', Date.now() + 60_000, 'busy');
+  const started = await sendAndWait(s.engine, 'c1', 'やあ');
+  assert.ok(started.ok);
+  assert.equal(started.modelId, 'b');
+  assert.equal(s.events.some(e => e.type === 'model.switch'), false, '途中の切り替えは無い');
+  assert.deepEqual(JSON.parse(s.runs.get(started.runId)!.flags), ['fallback']);
+  s.conversations.setChoice('c1', { modelId: 'b' });
+  const pinned = await sendAndWait(s.engine, 'c1', 'もう一度');
+  assert.ok(pinned.ok);
+  assert.equal(pinned.modelId, 'b');
+  assert.deepEqual(JSON.parse(s.runs.get(pinned.runId)!.flags), []);
+});
+
 test('すべて失敗したら text は空で、エラー文を返事として保存しない', async t => {
   const authFail = () => fail(new ProviderError('auth', 'bad key', { retryable: false }));
   const s = await setup(t, { scripts: [authFail(), authFail()] });

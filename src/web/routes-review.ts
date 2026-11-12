@@ -54,7 +54,10 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     if (!isToolPolicy(body.policy)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'policy', params: { field: 'policy', values: 'allow / ask / block' } });
     if (!isPolicyable(name)) throw problem(400, 'invalid_field', 'tool_not_policyable', { field: 'name', params: { name } });
+    if (body.from !== undefined && !isToolPolicy(body.from)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'from', params: { field: 'from', values: 'allow / ask / block' } });
     const current = app.config();
+    const now = toolPolicy(current, name);
+    if (body.from !== undefined && body.from !== now) throw problem(409, 'conflict', 'tool_policy_changed', { params: { name, policy: now } });
     const policies = { ...current.tools.policies };
     // 既定に戻すときは書いた項目を消す（既定が ask の agent_run を allow にするときは、allow と書く）
     if (body.policy === defaultPolicy(name)) delete policies[name]; else policies[name] = body.policy;
