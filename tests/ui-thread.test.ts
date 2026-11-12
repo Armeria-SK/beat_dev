@@ -102,6 +102,17 @@ test('ui/thread: 結果が届いたが保存を読む前の行は、同じ番号
   assert.deepEqual(rows.map(r => r.result?.text ?? JSON.parse(r.input).command), ['one', 'r2', 'r3', 'r4', 'c5'], '覚えが古いものから外れていても、まだ保存されていない最後の 1 つだけを出す');
 });
 
+test('ui/thread: 実行の途中から画面を開いた（数え直しになった）ときも、まだ保存されていない番号の結果待ちの行は消さない', () => {
+  const messages = [
+    msg('user', 'go', { runId: 'r2' }),
+    msg('assistant', '', { runId: 'r2', toolCalls: [call('id_1', 'shell_run', { command: 'ls' })] }),
+    msg('tool', 'one', { runId: 'r2', toolName: 'shell_run', toolCallId: 'id_1' }),
+  ];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '', settled: [{ callId: 'id_2', name: 'shell_run', input: '{"command":"pwd"}' }], settledCount: 1 };
+  const rows = threadItems({ messages, draft }).flatMap(i => (i.kind === 'tools' ? i.rows : []));
+  assert.deepEqual(rows.map(r => [r.key, r.result?.text ?? null]), [['t-id_1', 'one'], ['t-id_2', null]]);
+});
+
 test('ui/thread: 返事の文があいだに入ると、道具のまとまりは分かれる。コピーは 1 回の返事の最後の文だけで、その回の文を全部まとめる', () => {
   const items = threadItems({
     messages: [

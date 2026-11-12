@@ -94,10 +94,11 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
 
   const waiting = approvals;
   const settled = draft?.settled ?? [];
-  const savedInRun = draft ? messages.filter(m => m.role === 'tool' && m.runId === draft.runId).length : 0;
+  const savedRun = draft ? messages.filter(m => m.role === 'tool' && m.runId === draft.runId) : [];
+  const savedIdsInRun = new Set(savedRun.map(m => m.toolCallId));
   const firstSettled = (draft?.settledCount ?? settled.length) - settled.length;
   settled.forEach((done, i) => {
-    if (firstSettled + i < savedInRun) return;
+    if (savedIdsInRun.has(done.callId) && firstSettled + i < savedRun.length) return;
     const rowKey = rowKeyOf(done.callId);
     tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null });
   });
