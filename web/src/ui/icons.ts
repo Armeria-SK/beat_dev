@@ -1,8 +1,12 @@
 import type { IconName } from '../icon-name.ts';
 
-export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code';
+export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code' | 'branch' | 'more';
 
 export const GLYPHS: Partial<Record<UiIconName, string>> = {
+  branch: '<circle cx="4.5" cy="4" r="1.5"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="11.5" cy="8" r="1.5"/><path d="M4.5 5.5v5M4.5 8H10"/>',
+  more: '<circle cx="3.5" cy="8" r=".75"/><circle cx="8" cy="8" r=".75"/><circle cx="12.5" cy="8" r=".75"/>',
+  wrench: '<path d="M10.5 2.5a3 3 0 00-2.9 3.8L2.8 11.1a1.4 1.4 0 002 2l4.8-4.8a3 3 0 003.8-2.9l-1.9 1.1-1.6-.4-.4-1.6z"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1 1 0 00-1-1h-6a1 1 0 00-1 1v6a1 1 0 001 1h2"/>',
   grid: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/>',
   columns: '<rect x="2.5" y="3" width="3" height="10" rx="1"/><rect x="6.5" y="3" width="3" height="6.5" rx="1"/><rect x="10.5" y="3" width="3" height="8.5" rx="1"/>',
   calendar: '<rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3"/>',

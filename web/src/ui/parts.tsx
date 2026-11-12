@@ -3,10 +3,10 @@ import { useT } from '../i18n/index.ts';
 import type { AgentState } from './agent-state.ts';
 import { GLYPHS, type UiIconName } from './icons.ts';
 
-export function Icon({ name }: { name: UiIconName }) {
+export function Icon({ name, className }: { name: UiIconName; className?: string }) {
   const glyph = GLYPHS[name];
   if (!glyph) return null;
-  return <svg className="bt-icon" viewBox="0 0 16 16" aria-hidden="true" dangerouslySetInnerHTML={{ __html: glyph }} />;
+  return <svg className={className ? `bt-icon ${className}` : 'bt-icon'} viewBox="0 0 16 16" aria-hidden="true" dangerouslySetInnerHTML={{ __html: glyph }} />;
 }
 
 type ButtonVariant = 'primary' | 'ghost' | 'danger';

@@ -74,3 +74,43 @@ test('ui/live-state: つなぎ直し（resync）は、サーバーの下書き�
   assert.deepEqual(refreshes(r.effects), ['approvals', 'conversations', 'drafts', 'tasks', 'unread', 'worker']);
   assert.equal(r.effects.filter(e => e.kind === 'checklist').length, 2);
 });
+
+test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出し・お知らせ・承認の一覧・会話ごとの読み直しの数）', () => {
+  const s0 = run(EMPTY, { type: 'conversations', conversations: [conv('c')] }, { type: 'event', event: { type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }, hidden: false, now: 100 });
+  assert.equal(s0.runStarts.get('r'), 100);
+  const s1 = run(s0, ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'He' }), ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'llo' }));
+  assert.equal(s1.drafts[0]!.text, 'Hello');
+  const s2 = run(s1, ev({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 1, role: 'assistant' }));
+  assert.equal(s2.drafts[0]!.text, '', '保存された文は下書きから外す');
+  assert.equal(s2.revisions.get('c'), 1);
+  const s3 = run(s2, { type: 'event', event: { type: 'tool.call', runId: 'r', conversationId: 'c', callId: 'x', name: 'shell_run', input: '{}' }, hidden: false, now: 200 });
+  assert.deepEqual([s3.drafts[0]!.activeTool, s3.drafts[0]!.toolStartedAt], ['shell_run', 200]);
+  const s4 = run(s3, ev({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: 'x', name: 'shell_run', ok: false, decision: 'deny', preview: 'head\nno way\nmore' }));
+  assert.equal(s4.drafts[0]!.activeTool, undefined);
+  assert.deepEqual(s4.notices.get('c'), [{ runId: 'r', kind: 'denied', tool: 'shell_run', detail: 'no way more' }]);
+  const approval = { id: 'a1', title: 'Write', tool: 'file_write' } as unknown as Extract<RunEvent, { type: 'approval.requested' }>['approval'];
+  const s5 = run(s4, ev({ type: 'approval.requested', runId: 'r', conversationId: 'c', approval }));
+  assert.deepEqual(s5.approvals.map(a => [a.id, a.conversationId, a.runId]), [['a1', 'c', 'r']]);
+  assert.deepEqual(run(s5, ev({ type: 'approval.resolved', runId: 'r', conversationId: 'c', approvalId: 'a1', outcome: 'once' })).approvals, []);
+  const failed = reduce(s5, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'timeout', errorMessage: 'slow' }));
+  assert.equal(failed.state.runStarts.has('r'), false);
+  assert.deepEqual(failed.state.notices.get('c')!.at(-1), { runId: 'r', kind: 'error', errorKind: 'timeout', errorCode: undefined, errorParams: undefined, errorMessage: 'slow', hint: undefined, measured: undefined, required: undefined });
+  const stopped = run(s5, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'cancelled' }));
+  assert.equal(stopped.notices.get('c')!.at(-1)!.kind, 'stopped');
+  assert.equal(run(stopped, { type: 'clearNotices', conversationId: 'c' }).notices.has('c'), false);
+});
+
+test('ui/live-state: 要約の件数のお知らせは同じ実行の中で置き換え、会話を消したら開いている画面を閉じる手続きを出す', () => {
+  const s = run(EMPTY, ev({ type: 'compaction', runId: 'r', conversationId: 'c', summarized: 3 }), ev({ type: 'compaction', runId: 'r', conversationId: 'c', summarized: 7 }));
+  assert.deepEqual(s.notices.get('c'), [{ runId: 'r', kind: 'compaction', key: 'compaction', summarized: 7 }]);
+  const gone = reduce(EMPTY, ev({ type: 'conversation.changed', conversationId: 'c', change: 'deleted' }));
+  assert.ok(gone.effects.some(e => e.kind === 'gone' && e.conversationId === 'c'));
+  assert.equal(reduce(EMPTY, { type: 'resync', drafts: [] }).state.epoch, 1, 'つなぎ直しで、開いている会話を読み直す');
+});
+
+test('ui/live-state: 新しい実行が始まると、その会話の前の実行のお知らせは片づける（会話の最後に古い失敗や警告を残さない）', () => {
+  const s = run(EMPTY, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'timeout' }), ev({ type: 'compaction', runId: 'r1', conversationId: 'd', summarized: 2 }));
+  const next = run(s, ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.equal(next.notices.has('c'), false);
+  assert.equal(next.notices.get('d')?.length, 1, 'ほかの会話のお知らせは残す');
+});

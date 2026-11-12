@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type Conversation, type WorkerStatus } from '../api.ts';
+import { api, type Approval, type Conversation as ConversationRow, type WorkerStatus } from '../api.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { useT } from '../i18n/index.ts';
 import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
-import { EMPTY, reduce, type Action, type Effect, type LiveState } from './live-state.ts';
+import { Conversation } from './Conversation.tsx';
+import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Icon } from './parts.tsx';
 import { pickFocus } from './focus.ts';
@@ -11,10 +12,23 @@ import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsClose
 import { Sidebar } from './Sidebar.tsx';
 
 const NARROW = '(max-width: 760px)';
+const NO_APPROVALS: Approval[] = [];
+const NO_NOTICES: RunNotice[] = [];
+const DISCONNECT_GRACE_MS = 3000;
+
+function useDisconnected(connected: boolean): boolean {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (connected) { setShown(false); return undefined; }
+    const timer = setTimeout(() => setShown(true), DISCONNECT_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [connected]);
+  return shown;
+}
 
 type T = ReturnType<typeof useT>;
 
-function viewTitle(t: T, route: Route, conversation: Conversation | undefined): string {
+function viewTitle(t: T, route: Route, conversation: ConversationRow | undefined): string {
   switch (route.view) {
     case 'new': return t('ui.session.new');
     case 'chat': return conversation?.title || t('ui.session.untitled');
@@ -92,7 +106,7 @@ export function App() {
 
   const load = useMemo(() => ({
     conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations })).catch(() => undefined); },
-    approvals: () => { void api.approvals().then(r => dispatch({ type: 'approvals', count: r.approvals.length })).catch(() => undefined); },
+    approvals: () => { void api.approvals().then(r => dispatch({ type: 'approvals', approvals: r.approvals })).catch(() => undefined); },
     tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished] })).catch(() => undefined); },
     drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
     unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
@@ -106,6 +120,9 @@ export function App() {
       else if (effect.kind === 'checklist') {
         const id = effect.conversationId;
         void api.checklist(id).then(r => dispatch({ type: 'checklist', conversationId: id, items: r.items })).catch(() => undefined);
+      } else if (effect.kind === 'gone') {
+        const now = parseRoute(location.hash);
+        if (now.view === 'chat' && now.id === effect.conversationId) location.replace('#/');
       } else if (effect.kind === 'notifyApproval') {
         if (granted) new Notification(t('browser.approvalNeeded'), { body: effect.title });
       } else if (granted) new Notification(t('browser.notification', effect.title), { body: effect.body });
@@ -157,13 +174,14 @@ export function App() {
   useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker'] as const) load[what](); }, [load]);
   useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
 
-  const onEvent = useCallback((event: RunEvent) => dispatch({ type: 'event', event, hidden: document.hidden }), [dispatch]);
+  const onEvent = useCallback((event: RunEvent) => dispatch({ type: 'event', event, hidden: document.hidden, now: Date.now() }), [dispatch]);
   const onResync = useCallback((drafts: Draft[]) => dispatch({ type: 'resync', drafts }), [dispatch]);
-  useRunEvents(onEvent, onResync);
+  const { connected, reconnect } = useRunEvents(onEvent, onResync);
+  const disconnected = useDisconnected(connected);
 
   const { conversations, drafts, checklists, streaming, skillDrafts, unread } = live;
   const waiting: Waiting = useMemo(
-    () => ({ approvals: live.approvals, drafts: skillDrafts, ...countTasks([...live.tasks.values()].map(m => m.status)) }),
+    () => ({ approvals: live.approvals.length, drafts: skillDrafts, ...countTasks([...live.tasks.values()].map(m => m.status)) }),
     [live.approvals, skillDrafts, live.tasks],
   );
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
@@ -188,6 +206,7 @@ export function App() {
   }, [settingsOpen]);
 
   const closeSettings = closer.fire;
+  const clearNotices = useCallback((id: string) => dispatch({ type: 'clearNotices', conversationId: id }), [dispatch]);
   const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);
 
   useEffect(() => {
@@ -204,7 +223,8 @@ export function App() {
     if (drawer) focusFirst(document.querySelector('.bt-sidebar .bt-wordmark'));
   }, [drawer]);
 
-  const conversation = behind.view === 'chat' ? conversations.find(c => c.id === behind.id) : undefined;
+  const chatId = behind.view === 'chat' ? behind.id : null;
+  const conversation = chatId ? conversations.find(c => c.id === chatId) : undefined;
   const title = viewTitle(t, behind, conversation);
   const kanban = kanbanCount(waiting);
   const convo = isConversation(behind);
@@ -218,8 +238,16 @@ export function App() {
         <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} />
         {convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>
-            <header className="bt-app__bar"><span className="bt-app__bar-title">{title}</span></header>
-            <div className="bt-thread" />
+            <Conversation
+              key={chatId ?? 'new'} id={chatId} listTitle={conversation?.title ?? null}
+              draft={chatId ? drafts.find(d => d.conversationId === chatId) : undefined}
+              approvals={chatId ? live.approvals.filter(a => a.conversationId === chatId) : NO_APPROVALS}
+              notices={(chatId && live.notices.get(chatId)) || NO_NOTICES}
+              liveChecklist={chatId ? checklists.get(chatId) : undefined}
+              revision={(chatId ? live.revisions.get(chatId) ?? 0 : 0) + live.epoch}
+              disconnected={disconnected} onReconnect={reconnect}
+              onClearNotices={clearNotices}
+            />
           </main>
         ) : (
           <main className="bt-screen" inert={drawer}>

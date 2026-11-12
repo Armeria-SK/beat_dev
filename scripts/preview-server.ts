@@ -7,7 +7,7 @@ import { App } from '../src/app.ts';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ToolCall } from '../src/engine/types.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
-import type { ModelRequest, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
+import { providerError, type ModelRequest, type ProviderAdapter, type StreamEvent } from '../src/providers/types.ts';
 import { isSensitiveName } from '../src/shared/redaction.ts';
 import { BrowserFailure } from '../src/tools/browser/driver.ts';
 import { createWebServer } from '../src/web/server.ts';
@@ -74,6 +74,10 @@ const HELP = [
   '- `/demo run` runs `node -e` and prints 42 (it asks for approval first)',
   '- `/demo outside` tries to write outside the allowed folder (it is refused)',
   '- `/demo image` replies with a remote image link (it must not load)',
+  '- `/demo edit` and `/demo overwrite` change the note (after `/demo write`)',
+  '- `/demo list` and `/demo long-list` write a checklist',
+  '- `/demo helper` hands a small job to a helper',
+  '- `/demo fail` fails on every model',
 ].join('\n');
 
 function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
@@ -85,6 +89,12 @@ function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
   if (said.includes('/demo run')) return call('shell_run', { command: 'node -e "console.log(6*7)"', cwd: WORK });
   if (said.includes('/demo outside')) return call('file_write', { path: join(OUTSIDE, 'x.txt'), content: 'This write should have been refused.\n' });
   if (said.includes('/demo image')) return words('Here is a picture:\n\n![A chart](https://example.com/a.png)\n');
+  if (said.includes('/demo edit')) return call('file_edit', { path: join(WORK, 'notes.md'), old: 'Written by the preview model.', new: 'Edited by the preview model.\nWith a second line.' });
+  if (said.includes('/demo overwrite')) return call('file_write', { path: join(WORK, 'notes.md'), content: '# Notes\n\nOne line now.\n' });
+  if (said.includes('/demo long-list')) return call('checklist_write', { items: Array.from({ length: 10 }, (_, i) => ({ text: `Step ${i + 1}`, status: i < 6 ? 'done' : i === 6 ? 'in_progress' : 'pending' })) });
+  if (said.includes('/demo list')) return call('checklist_write', { items: [{ text: 'Read the note', status: 'done' }, { text: 'Change one line', status: 'in_progress' }, { text: 'Read it back', status: 'pending' }] });
+  if (said.includes('/demo helper')) return call('agent_run', { task: 'Say hello from the helper.', title: 'Say hello', tools: ['file_read'] });
+  if (said.includes('/demo fail')) return (async function* (): AsyncGenerator<StreamEvent> { throw providerError('timeout', 'timeout', {}, { retryable: false }); })();
   return words(HELP);
 }
 
@@ -94,7 +104,7 @@ function fakeAdapter(provider: ProviderAdapter['provider']): ProviderAdapter {
     stream: script,
     probe: async (model, required) => ({
       modelId: model.id, server: 'preview', required, declared: model.contextLength, effective: model.contextLength ?? 65536,
-      status: 'ok', message: 'preview', checkedAt: Date.now(),
+      status: model.id === 'preview-small' ? 'too_small' : 'ok', message: model.id === 'preview-small' ? 'Too small on purpose' : 'preview', checkedAt: Date.now(),
     }),
   };
 }
@@ -150,11 +160,13 @@ async function start(): Promise<void> {
   config.models = [
     { id: 'preview-a', label: 'Preview A', provider: 'preview', model: 'preview-a', contextLength: 65536, minContext: 4096, maxOutputTokens: 2048, vision: false },
     { id: 'preview-b', label: 'Preview B', provider: 'preview', model: 'preview-b', contextLength: 32768, minContext: 4096, maxOutputTokens: 2048, vision: false },
+    { id: 'preview-small', label: 'Preview small', provider: 'preview', model: 'preview-small', contextLength: 4096, minContext: 4096, maxOutputTokens: 2048, vision: false },
   ];
   config.routing = { chat: ['preview-a', 'preview-b'], background: ['preview-a'], retriesPerModel: 0 };
   config.tools.roots = [{ path: WORK, mode: 'write' }];
   config.tools.deny = [...config.tools.deny, join(APP_ROOT, 'data'), join(APP_ROOT, '.env')];
   config.worker.autonomy = false;
+  config.tools.agent = { ...config.tools.agent, enabled: true };
   writeFileSync(paths.config, JSON.stringify(config, null, 2));
 
   const app = new App({
