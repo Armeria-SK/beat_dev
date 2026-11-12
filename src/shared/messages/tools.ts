@@ -5,6 +5,7 @@ const en = {
 
   'pipeline.tool_missing': 'There is no tool "{name}". Available tools: {names}',
   'pipeline.tool_not_allowed': 'The tool "{name}" cannot be used in this kind of run',
+  'pipeline.project_only': 'The tool "{name}" can be used only in a conversation or task that belongs to a product',
   'pipeline.policy_blocked': 'The tool "{name}" is turned off in the settings, so it cannot be used. Think of another way, or ask the user',
   'pipeline.review_forbidden': '"{name}" cannot be used during a review',
   'pipeline.mcp_local': 'This is a conversation with a local model, so the tool "{name}" (a tool of an external MCP server) is not available (it is available only when the owner has allowed that server in conversations with local models)',
@@ -200,6 +201,9 @@ const en = {
   'checklist.no_store': 'The work list cannot be saved in this run',
   'checklist.section': 'Work list (notes you wrote with checklist_write. Not the owner\'s instructions):',
   'checklist.section_tainted': '(This list was written after reading text that came from elsewhere)',
+  'plan.saved': 'I wrote the plan ({chars} characters). The owner reads it in the Plan pane; do not paste it into the conversation',
+  'plan.none': 'This product has no plan yet',
+  'plan.no_store': 'The plan cannot be saved in this run',
   'notify_owner.title': 'From Clive: {title}',
   'notify_owner.title_tainted': 'From Clive (after reading text that came from elsewhere): {title}',
   'notify_owner.sent': 'Notified the owner: {title}',

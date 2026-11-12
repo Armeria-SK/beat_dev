@@ -44,7 +44,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   const real = realpathSync.native(root);
   const project = app.projects.create({ name: 'Demo', root: real, rootKey: rootKeyOf(real), checkCommand: null });
   const send = async (id: string, text: string, projectId?: string) => {
-    const outcome = app.engine.send(id, text, [], [], {}, projectId ? { projectId } : {});
+    const outcome = app.engine.send(id, text, [], [], projectId && !app.conversations.get(id) ? { permissionMode: 'normal' } : {}, projectId ? { projectId } : {});
     assert.ok(outcome.ok, JSON.stringify(outcome));
     const result = await app.engine.wait(outcome.runId);
     assert.ok(!result || result.ok, JSON.stringify(result));

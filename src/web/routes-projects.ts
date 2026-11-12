@@ -1,6 +1,7 @@
 import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
 import { checkCommandOf, defaultProjectName, folderMissing, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { PlanError, type PlanView } from '../projects/plan.ts';
 import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
 import type { ProjectFilter } from '../tasks/store.ts';
@@ -55,6 +56,7 @@ export function projectWire(app: App, row: ProjectRow) {
     waiting: { proposals: counts.proposals, questions: counts.questions, pending: app.approvals.pending().filter(a => inProject(approvalShownIn(a))).length },
     running: app.engine.activeRuns().filter(r => inProject(r.conversationId)).length,
     last_activity_at: counts.lastActivityAt,
+    has_plan: app.plans.has(row.id),
   };
 }
 
@@ -107,6 +109,36 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
     app.bus.publish({ type: 'project.changed', projectId: current.id, change });
     sendJson(res, 200, { project: projectWire(app, updated) });
+  });
+
+  const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => ({
+    ...view,
+    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId && app.conversations.modeOf(r.conversationId) === 'plan'),
+  });
+  const planned = <T>(work: () => T): T => {
+    try { return work(); } catch (error) {
+      if (error instanceof PlanError) throw domainProblem(error.code === 'changed' ? 409 : 400, 'plan', error);
+      throw error;
+    }
+  };
+
+  router.add('GET', '/api/projects/:id/plan', ({ res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    sendJson(res, 200, { plan: planWire(project.id) });
+  });
+
+  router.add('PUT', '/api/projects/:id/plan', async ({ req, res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    const body = requireObject(await readJson(req, 1024 * 1024));
+    if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
+    const content = requireString(body, 'content')!;
+    const baseHash = body.baseHash;
+    if (baseHash !== null && typeof baseHash !== 'string') throw problem(400, 'invalid_field', 'required', { field: 'baseHash', params: { field: 'baseHash' } });
+    const saved = planned(() => app.plans.write(project.id, content, { by: 'owner', tainted: false, conversationId: null, runId: null }, baseHash));
+    app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: saved.hash, by: 'owner' });
+    sendJson(res, 200, { plan: planWire(project.id, saved) });
   });
 
   router.add('POST', '/api/folders/list', async ({ req, res }) => {

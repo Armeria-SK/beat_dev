@@ -17,6 +17,7 @@ import { checklistInjects, checklistSection, readChecklist } from '../tools/buil
 import { localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
+import type { PlanStore } from '../projects/plan.ts';
 import { runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
@@ -100,6 +101,7 @@ export interface ChatEngineDeps {
   curiosity?: CuriosityStore;
   skills?: SkillStore;
   projects?: ProjectStore | undefined;
+  plans?: PlanStore | undefined;
   web?: NonNullable<ToolContext['services']>['web'];
   notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
@@ -252,8 +254,12 @@ export class ChatEngine {
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     // ユーザーが同じ id へ新しく送ったときは、消したばかりの会話の覚えを外す（動いていた実行の遅れた書き込みだけを見送るため）
     this.#d.conversations.reopen(conversationId);
-    this.#d.conversations.ensure(conversationId, { projectId });
-    if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
+    if (existing) {
+      if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
+    } else {
+      const permissionMode = choice.permissionMode ?? (projectId !== undefined && this.#d.plans?.has(projectId) === false ? 'plan' : 'normal');
+      this.#d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode });
+    }
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
     let firstId: number | undefined;
@@ -584,11 +590,11 @@ export class ChatEngine {
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
   // 手元のモデルの会話（localOnly）には、localOk でない MCP の道具を渡さない（localAllows。パイプラインも同じに拒む）。
   // maxTools で切られた MCP の道具は、モデルと道具の組ごとに 1 回だけ [WARN] を出し、MCP の管理に知らせる（画面の状態が cut になる）
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal', localOnly = false): ToolDef[] {
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal', localOnly = false, inProject = false): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
     const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff(config, kind)) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
-      || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly);
+      || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly) || (t.projectOnly === true && !inProject);
     const options = { limit: model.maxTools, exclude };
     const registry = this.#d.tools.registry;
     if (kind === 'chat' && this.#d.mcpCut) {
@@ -635,7 +641,7 @@ export class ChatEngine {
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
@@ -929,7 +935,7 @@ export class ChatEngine {
     const current = this.#modeOf(p.conversationId);
     const mode: PermissionMode = p.kind === 'chat' || p.kind === 'agent' ? stricterMode(p.startedMode ?? current, current) : 'normal';
     const localOnly = p.kind === 'chat' && isLocalPinned(config, d.conversations.get(p.conversationId)?.model_id);
-    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly);
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly, p.project !== undefined);
     const specs = ToolRegistry.specs(toolDefs, config);
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
     const available = contextAvailable(capacity, model);
@@ -940,7 +946,7 @@ export class ChatEngine {
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
     const name = p.project?.root ? d.projects?.get(p.project.id)?.name : undefined;
     const product = name !== undefined && p.project?.root ? { name, root: p.project.root } : undefined;
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product), summary, checklist].filter(Boolean).join('\n\n');
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, p.kind === 'chat'), summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     const history = stored.map(m => m.message);
     const apiTools = specs;
@@ -1006,7 +1012,7 @@ export class ChatEngine {
     if (live >= MAX_LIVE_AGENTS) return fail('agent.busy');
     // 子に渡せる道具 = 親にいま渡る道具 ∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
     const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'normal', this.#modeOf(parent.conversationId)) : 'normal';
-    const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode).filter(t => t.allowedIn.includes('agent'));
+    const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, false, parent.project !== undefined).filter(t => t.allowedIn.includes('agent'));
     const givableNames = new Set(givable.map(t => t.name));
     if (input.tools) {
       const unknown = [...new Set(input.tools)].filter(name => !givableNames.has(name));

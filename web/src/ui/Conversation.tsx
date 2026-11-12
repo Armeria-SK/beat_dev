@@ -329,7 +329,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
     try {
       const out = await submitMessage({ kind, text, attachmentIds: attachments.map(a => a.id), conversationId: id, target, running: Boolean(draft), pending }, {
         rename: api.renameConversation, cancelPending: api.cancelPending,
-        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice), sendOptions(id, product?.id, interrupt)),
+        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice, undefined, product !== undefined), sendOptions(id, product?.id, interrupt)),
         isGone: error => error instanceof ApiError && error.status === 404,
         clearNotices: onClearNotices, interrupt: onInterrupt,
       });

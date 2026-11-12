@@ -14,6 +14,7 @@ import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
+import type { PlanStore } from '../projects/plan.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -105,7 +106,7 @@ export interface ToolContext {
   log: (line: string) => void;
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
-    tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined;
+    tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
@@ -163,6 +164,8 @@ export interface ToolDef<I = any> {
   mcp?: { server: string; tool: string; localOk: boolean };
   // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さず（planAllows）、毎回の承認が要る。6a にはこれを付ける道具は無い
   submits?: true;
+  planOk?: true;
+  projectOnly?: true;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

@@ -104,9 +104,9 @@ test('renameTitleOf / isRenameWithoutTitle: /rename のあとの題だけを取�
   assert.equal(isRenameWithoutTitle('/rename x'), false);
 });
 
-test('toolIcon: 組み込みの道具 40 個すべてに絵があり、知らない道具は terminal', () => {
+test('toolIcon: 組み込みの道具 42 個すべてに絵があり、知らない道具は terminal', () => {
   const names = builtinTools().map(t => t.name).sort();
-  assert.equal(names.length, 40);
+  assert.equal(names.length, 42);
   assert.deepEqual(Object.keys(TOOL_ICONS).sort(), names, '道具を足したり消したりしたら、絵の表も直す');
   assert.equal(toolIcon('file_read'), 'file');
   assert.equal(toolIcon('shell_run'), 'terminal');
@@ -371,6 +371,15 @@ test('sendChoiceOf: 権限モードは、新しい会話の最初の発言にだ
   assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'auto' }), {}, '会話があれば、サーバーが覚えている');
   assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'plan' }, { permissionMode: 'normal' }), { permissionMode: 'normal' }, '計画から進めるときは、ふつうに戻す選びを一緒に送る');
   assert.deepEqual(sendChoiceOf(null, { modelId: 'm', effort: 'low', permissionMode: 'auto' }), { modelId: 'm', effort: 'low', permissionMode: 'auto' });
+});
+
+test('sendChoiceOf（3-1a）: 新しい製品の会話の最初の発言は、ふつうでも権限モードを送る（送らないとサーバーが計画モードにするので、持ち主の選んだふつうを区別する）', () => {
+  const none = { modelId: null, effort: null };
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'normal' }, undefined, true), { permissionMode: 'normal' });
+  assert.deepEqual(sendChoiceOf(null, none, undefined, true), { permissionMode: 'normal' }, 'モードが分からなければふつうとして送る');
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'plan' }, undefined, true), { permissionMode: 'plan' });
+  assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'normal' }, undefined, true), {}, '会話があれば、サーバーが覚えている');
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'normal' }, undefined, false), {}, '製品に属さない会話は今までどおり');
 });
 
 test('newConversationId / sendTarget: 最初の発言は画面が決めた id へ送り（会話を先に作らない）、断られたあとのやり直しは同じ id を使う', () => {

@@ -10,7 +10,7 @@ import { reply, tempDir, type Script, type testConfig } from './helpers.ts';
 type Config = ReturnType<typeof testConfig>;
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
-const PROJECT_KEYS = ['archived_at', 'check_command', 'created_at', 'folder_missing', 'id', 'is_git', 'last_activity_at', 'name', 'remotes', 'root', 'running', 'scout_mode', 'updated_at', 'waiting'];
+const PROJECT_KEYS = ['archived_at', 'check_command', 'created_at', 'folder_missing', 'has_plan', 'id', 'is_git', 'last_activity_at', 'name', 'remotes', 'root', 'running', 'scout_mode', 'updated_at', 'waiting'];
 const NOTES = ['nested_inside', 'contains_product', 'inside_config_root', 'config_root_read_only', 'not_git'];
 
 const call = (name: string, args: unknown): Script => async function* () {
@@ -31,7 +31,8 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
     return made.body.project as { id: string; name: string; root: string };
   };
   const send = async (id: string, body: Record<string, unknown>) => {
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', body);
+    const fresh = body.projectId !== undefined && body.permissionMode === undefined && !s.app.conversations.get(id);
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', fresh ? { ...body, permissionMode: 'normal' } : body);
     if (sent.status === 202) await settled(s.app, sent.body.runId);
     return sent;
   };

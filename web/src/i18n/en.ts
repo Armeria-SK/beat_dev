@@ -229,6 +229,8 @@ export const en = {
   'tool.file_edit': 'Replace part of a file',
   'tool.file_list': 'List the contents of a folder',
   'tool.shell_run': 'Run a shell command',
+  'tool.plan_write': 'Write the plan of the product (only in product conversations)',
+  'tool.plan_read': 'Read the plan of the product',
   'tool.web_fetch': 'Read a public web page',
   'tool.web_search': 'Search the web',
   'tool.memory_save': 'Add a memory',

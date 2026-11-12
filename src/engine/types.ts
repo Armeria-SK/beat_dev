@@ -103,6 +103,7 @@ export type RunEvent =
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId: string | null }
   | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
+  | { type: 'plan.changed'; projectId: string; hash: string; by: 'ai' | 'owner' }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'task.deleted'; id: string }
   | { type: 'notification'; notification: Notification }
