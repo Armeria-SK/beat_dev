@@ -603,6 +603,8 @@ export const en = {
   'ui.task.edit': (field: string) => `Edit: ${field}`,
   'ui.task.save': 'Save',
   'ui.task.saveFailed': 'Not saved',
+  'ui.task.changedUnder': 'This changed while you were editing · Save replaces the newer text',
+  'ui.task.reloadFailed': 'Could not refresh · showing the last loaded state',
   'ui.task.runNow': 'Run now',
   'ui.task.retry': 'Retry',
   'ui.task.runAgain': 'Run again',

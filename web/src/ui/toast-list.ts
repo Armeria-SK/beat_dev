@@ -28,6 +28,15 @@ export const pauseClock = (clock: ToastClock, now: number): ToastClock =>
 
 export const resumeClock = (clock: ToastClock, now: number): ToastClock => (clock.startedAt === null ? { ...clock, startedAt: now } : clock);
 
+export interface ToastHold { hover: boolean; focus: boolean }
+export const NO_HOLD: ToastHold = { hover: false, focus: false };
+export const isHeld = (hold: ToastHold): boolean => hold.hover || hold.focus;
+
+export function holdChange(hold: ToastHold, part: keyof ToastHold, on: boolean): { hold: ToastHold; flip: boolean | null } {
+  const next = { ...hold, [part]: on };
+  return { hold: next, flip: isHeld(next) === isHeld(hold) ? null : isHeld(next) };
+}
+
 export const WAITING_KINDS: ReadonlySet<string> = new Set(['task_waiting', 'approval_needed']);
 export const FAILED_KINDS: ReadonlySet<string> = new Set(['task_failed', 'health_alert']);
 

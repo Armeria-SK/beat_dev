@@ -132,4 +132,17 @@ export function mergeFinished(loaded: readonly Task[], page: readonly Task[]): T
 
 export const pagesToReload = (loaded: number): number => Math.max(KANBAN_PAGE, Math.ceil(loaded / KANBAN_PAGE) * KANBAN_PAGE);
 
-export const stepPercent = (step: Step | null): number => (step ? Math.round((Math.max(0, step.step - 1) / step.total) * 100) : 0);
+export const COLUMN_TABS_MEDIA = '(max-width: 760px)';
+
+export function tabStep(current: number, count: number, key: string): number | null {
+  if (count === 0) return null;
+  switch (key) {
+    case 'ArrowRight': return (Math.max(0, current) + 1) % count;
+    case 'ArrowLeft': return (Math.max(0, current) - 1 + count) % count;
+    case 'Home': return 0;
+    case 'End': return count - 1;
+    default: return null;
+  }
+}
+
+export const stepPercent =(step: Step | null): number => (step ? Math.round((Math.max(0, step.step - 1) / step.total) * 100) : 0);

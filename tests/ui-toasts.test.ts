@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { notificationToast, pauseClock, pushToast, resumeClock, startClock, TOAST_A, TOAST_B, toastDuration, type ToastEntry } from '../web/src/ui/toast-list.ts';
+import { holdChange, isHeld, NO_HOLD, notificationToast, pauseClock, pushToast, resumeClock, startClock, TOAST_A, TOAST_B, toastDuration, type ToastEntry } from '../web/src/ui/toast-list.ts';
 
 // 新しい画面のトースト（steps/p1-ui.md の T6 と PR 1-4a）。数と長さは 2 つの形（a: 2 つまで・5 秒、b: 3 つまで・3.6 秒。Undo つきはどちらも 6 秒）。
 // 乗せているあいだ止まる時計と、サーバーの通知 → トーストの直し方。画面を持たない関数（web/src/ui/toast-list.ts）。
@@ -40,6 +40,36 @@ test('ui/toasts: 乗せているあいだ時計は止まり、離すと残りの
   assert.deepEqual(resumed, { remaining: 3500, startedAt: 20_000 });
   assert.deepEqual(resumeClock(resumed, 30_000), resumed, '動いている時計は始め直さない');
   assert.equal(pauseClock(started, 99_999).remaining, 0, '負にならない');
+});
+
+test('ui/toasts: 乗せている・フォーカスがあるは別々に持つ。どちらかがあるあいだ止まり、両方が無くなったときだけ動かす（対にならない合図で残り時間をやり直さない）', () => {
+  const hovered = holdChange(NO_HOLD, 'hover', true);
+  assert.deepEqual(hovered, { hold: { hover: true, focus: false }, flip: true });
+  const focused = holdChange(hovered.hold, 'focus', true);
+  assert.equal(focused.flip, null, 'もう止まっているので、時計には触らない');
+  const left = holdChange(focused.hold, 'hover', false);
+  assert.equal(left.flip, null, 'フォーカスが残っているあいだは止めたまま');
+  assert.equal(isHeld(left.hold), true);
+  const blurred = holdChange(left.hold, 'focus', false);
+  assert.deepEqual(blurred, { hold: NO_HOLD, flip: false });
+  assert.equal(holdChange(NO_HOLD, 'focus', false).flip, null, '止まっていないのに来た「動かす」は何もしない');
+  assert.equal(holdChange(NO_HOLD, 'hover', false).flip, null);
+
+  let clock = startClock(5000, 0);
+  let hold = NO_HOLD;
+  const signal = (part: 'hover' | 'focus', on: boolean, now: number) => {
+    const change = holdChange(hold, part, on);
+    hold = change.hold;
+    if (change.flip !== null) clock = change.flip ? pauseClock(clock, now) : resumeClock(clock, now);
+  };
+  signal('hover', false, 1000);
+  signal('focus', false, 2000);
+  assert.deepEqual(clock, { remaining: 5000, startedAt: 0 }, '対にならない「離れた」が続いても、始めの時刻のまま');
+  signal('hover', true, 3000);
+  signal('focus', true, 3500);
+  signal('hover', false, 4000);
+  signal('focus', false, 9000);
+  assert.deepEqual(clock, { remaining: 2000, startedAt: 9000 });
 });
 
 test('ui/toasts: サーバーの通知をトーストにする。待ちは点、失敗は alert、ほかは check。行き先は新しい経路に読み替える', () => {

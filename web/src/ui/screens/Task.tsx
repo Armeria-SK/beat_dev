@@ -8,7 +8,7 @@ import { PRIORITIES } from '../../task-form.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, EmptyState, Icon, Notice, Pill, type PillTone } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
-import { answerTaskOp, reportOpError, runTaskOp, taskButtons, type TaskOp } from '../task-ops.ts';
+import { answerTaskOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type TaskOp } from '../task-ops.ts';
 import { threadItems } from '../thread.ts';
 import { ToolGroup } from '../ToolRow.tsx';
 import { PRIORITY_KEY } from './Kanban.tsx';
@@ -47,6 +47,7 @@ function Field({ task, field, onSaved }: { task: Task; field: FieldName; onSaved
   const spec = FIELD[field];
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [opened, setOpened] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const editButton = useRef<HTMLButtonElement>(null);
@@ -71,6 +72,7 @@ function Field({ task, field, onSaved }: { task: Task; field: FieldName; onSaved
           {spec.multiline
             ? <textarea className="bt-field" autoFocus rows={4} value={draft} maxLength={spec.max} aria-label={label} onChange={e => setDraft(e.target.value)} />
             : <input className="bt-field" autoFocus value={draft} maxLength={spec.max} aria-label={label} onChange={e => setDraft(e.target.value)} />}
+          {editOverwrites(opened, value, draft) && <span className="bt-meta ui-danger" role="status">{t('ui.task.changedUnder')}</span>}
           {error && <span className="bt-meta ui-danger" role="alert">{error}</span>}
           <span className="ui-field__buttons">
             <Button type="submit" variant="primary" small disabled={busy || (spec.required && !draft.trim())}>{t('ui.task.save')}</Button>
@@ -87,7 +89,7 @@ function Field({ task, field, onSaved }: { task: Task; field: FieldName; onSaved
         <span className={`ui-field__value${value ? '' : ' ui-field__value--unset'}`}>{value || t('ui.task.notSet')}</span>
       </div>
       <div className="bt-row__end">
-        <Button ref={editButton} variant="ghost" small icon="pencil" aria-label={t('ui.task.edit', label)} title={t('ui.task.edit', label)} onClick={() => { setDraft(value); setEditing(true); }} />
+        <Button ref={editButton} variant="ghost" small icon="pencil" aria-label={t('ui.task.edit', label)} title={t('ui.task.edit', label)} onClick={() => { setDraft(value); setOpened(value); setEditing(true); }} />
       </div>
     </li>
   );
@@ -207,6 +209,8 @@ export function TaskScreen({ id, revision, worker }: TaskScreenProps) {
           ))}
         </div>
       </header>
+
+      {failed && <Notice tone="warn" icon="alert" title={t('ui.task.reloadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
 
       {rejecting && (
         <form className="ui-task__reject bt-rise" onSubmit={e => { e.preventDefault(); void run('reject', { reason }); }}
