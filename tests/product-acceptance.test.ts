@@ -336,6 +336,7 @@ test('3-1b acceptance_write の決まり: 項目 60 まで・結果 300 文字�
     ['variation selector in command', { items: [item('R', undefined, { kind: 'command', command: `npm test${String.fromCharCode(0xFE0F)}` })] }],
     ['supplementary variation selector in command', { items: [item('R', undefined, { kind: 'command', command: `npm test${String.fromCodePoint(0xE0100)}` })] }],
     ['format character in command', { items: [item('R', undefined, { kind: 'command', command: `npm test ${String.fromCharCode(0xFFF9)}x${String.fromCharCode(0xFFFB)}` })] }],
+    ['braille blank in command', { items: [item('R', undefined, { kind: 'command', command: `npm test ${String.fromCharCode(0x2800)}` })] }],
     ['five spaces in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test     && rm -rf /' })] }],
     ['no-break space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0xA0)}test` })] }],
     ['ideographic space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0x3000)}test` })] }],

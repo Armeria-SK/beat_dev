@@ -15,7 +15,7 @@ export const CHECK_COMMAND_MAX = 1000;
 export const LANGUAGE_TAG = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}​-‍⁠﻿]/u;
 
-const COMMAND_UNSEEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]|(?! )\p{Zs}| {5}/u;
+const COMMAND_UNSEEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}\u{2800}]|(?! )\p{Zs}| {5}/u;
 
 export type ScoutMode = 'off' | 'research' | 'fix';
 
