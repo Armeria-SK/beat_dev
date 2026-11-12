@@ -8,6 +8,8 @@ import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
 import { serverText, warningText } from '../server-text.ts';
 import { useContextUsage } from '../use-context-usage.ts';
 import { Checklist } from './Checklist.tsx';
+import { latestOnly } from './latest.ts';
+import { menuStep } from './menu.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
@@ -110,14 +112,21 @@ function SessionMenu({ conversation, onRename, onSummary, onClose }: { conversat
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const first = useRef<HTMLButtonElement>(null);
+  const confirm = useRef<HTMLButtonElement>(null);
   useEffect(() => { first.current?.focus(); }, []);
+  useEffect(() => { if (confirming) confirm.current?.focus(); }, [confirming]);
   const act = async (run: () => Promise<unknown>, after: () => void) => {
     setBusy(true); setError('');
     try { await run(); after(); } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); setBusy(false); }
   };
   return (
     <ul className="bt-menu ui-sessionmenu" role="menu" aria-label={t('ui.session.menu')}
-      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); onClose(); } }}>
+      onKeyDown={e => {
+        if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+        const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')];
+        const next = menuStep(items.indexOf(document.activeElement as HTMLElement), items.length, e.key);
+        if (next !== null) { e.preventDefault(); items[next]?.focus(); }
+      }}>
       <li role="none"><button ref={first} type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={onRename}>{t('ui.session.rename')}</button></li>
       {conversation.has_summary && <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={onSummary}>{t('ui.session.summary')}</button></li>}
       {conversation.archived !== 1 && (
@@ -128,8 +137,8 @@ function SessionMenu({ conversation, onRename, onSummary, onClose }: { conversat
         <li role="none" className="ui-menu__confirm">
           <span className="bt-meta">{t('ui.session.deleteWhat')}</span>
           <span className="ui-menu__confirmrow">
-            <Button variant="danger" small disabled={busy} onClick={() => void act(() => api.deleteConversation(conversation.id), () => location.replace('#/'))}>{t('ui.session.deleteConfirm')}</Button>
-            <Button variant="ghost" small onClick={() => setConfirming(false)}>{t('ui.session.keep')}</Button>
+            <Button ref={confirm} role="menuitem" variant="danger" small disabled={busy} onClick={() => void act(() => api.deleteConversation(conversation.id), () => location.replace('#/'))}>{t('ui.session.deleteConfirm')}</Button>
+            <Button role="menuitem" variant="ghost" small onClick={() => setConfirming(false)}>{t('ui.session.keep')}</Button>
           </span>
         </li>
       ) : (
@@ -140,12 +149,15 @@ function SessionMenu({ conversation, onRename, onSummary, onClose }: { conversat
   );
 }
 
-function Bar({ conversation, title, meter, onRenamed, onSummary }: {
-  conversation: ConversationRow | null; title: string; meter: { value: number; high: boolean } | null; onRenamed: (title: string) => void; onSummary: () => void;
+function Bar({ conversation: row, readOnly, title, meter, onRenamed, onSummary }: {
+  conversation: ConversationRow | null; readOnly: boolean; title: string; meter: { value: number; high: boolean } | null; onRenamed: (title: string) => void; onSummary: () => void;
 }) {
   const t = useT();
+  const conversation = readOnly ? null : row;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const finished = useRef(false);
   const [menu, setMenu] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -157,21 +169,25 @@ function Bar({ conversation, title, meter, onRenamed, onSummary }: {
   }, [menu]);
   const closeMenu = () => { setMenu(false); menuButton.current?.focus(); };
   const save = async () => {
+    if (finished.current) return;
+    finished.current = true;
     const next = draft.trim().slice(0, 200);
     setEditing(false);
     if (!conversation || !next || next === conversation.title) return;
-    try { await api.renameConversation(conversation.id, next); onRenamed(next); } catch { setEditing(false); }
+    try { await api.renameConversation(conversation.id, next); onRenamed(next); } catch (e) { setRenameError(e instanceof ApiError ? e.message : String(e)); }
   };
-  const startRename = () => { setMenu(false); setDraft(conversation?.title ?? ''); setEditing(true); };
+  const cancel = () => { finished.current = true; setEditing(false); };
+  const startRename = () => { finished.current = false; setRenameError(''); setMenu(false); setDraft(conversation?.title ?? ''); setEditing(true); };
   return (
     <header className="bt-app__bar">
       {editing ? (
         <input className="bt-field ui-bar__field" autoFocus value={draft} aria-label={t('ui.session.renameField')} maxLength={200}
           onChange={e => setDraft(e.target.value)} onBlur={() => void save()}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void save(); } else if (e.key === 'Escape') { e.preventDefault(); setEditing(false); } }} />
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void save(); } else if (e.key === 'Escape') { e.preventDefault(); cancel(); } }} />
       ) : conversation ? (
         <button type="button" className="bt-app__bar-title ui-bar__title" title={t('ui.session.rename')} onClick={startRename}>{title}</button>
       ) : <span className="bt-app__bar-title ui-bar__title">{title}</span>}
+      {renameError && <span className="bt-meta ui-danger ui-bar__error" role="alert">{t('ui.session.renameFailed', renameError)}</span>}
       {meter && (
         <span className={`bt-meter${meter.high ? ' bt-meter--high' : ''}`} role="meter" aria-label={t('ui.meter')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={meter.value}
           style={{ '--bt-meter': meter.value } as CSSProperties}>
@@ -233,13 +249,17 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
   const stick = useRef(true);
   const created = useRef<string | null>(null);
 
+  const loads = useRef(latestOnly());
   const load = useCallback(async () => {
+    const ticket = loads.current.begin();
     if (!id) { setLoaded(null); setGone(false); return; }
     try {
       const r = await api.messages(id);
+      if (!loads.current.isCurrent(ticket)) return;
       setLoaded({ conversation: r.conversation, messages: r.messages });
       setGone(false);
     } catch (error) {
+      if (!loads.current.isCurrent(ticket)) return;
       if (error instanceof ApiError && error.status === 404) { setLoaded(null); setGone(true); }
     }
   }, [id]);
@@ -299,7 +319,7 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
     run: () => void api.chooseModel(id, { modelId: alternative.id }).then(() => { void load(); then(); }, error => fail(error, null)),
   } : null);
   const openSettings = { label: t('ui.fail.openSettings'), run: () => { location.hash = '#/settings'; } };
-  const canRetry = lastIsUser && !draft;
+  const canRetry = lastIsUser && !draft && !conversation?.parent_run_id;
 
   function runFailure(n: Extract<RunNotice, { kind: 'error' }>): ReactNode {
     const text = noticeText(t, n);
@@ -320,7 +340,7 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
 
   const rise = (key: string): boolean => primed.current && !seen.current.has(key);
   useEffect(() => {
-    for (const item of items) seen.current.add(item.key);
+    for (const item of items) { seen.current.add(item.key); if (item.kind === 'tools') for (const row of item.rows) seen.current.add(row.key); }
     if (loaded !== null || id === null) primed.current = true;
   });
 
@@ -341,7 +361,7 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
           </div>
         );
       case 'live': return <LiveReply key={item.key} text={item.text} />;
-      case 'tools': return <ToolGroup key={item.key} rows={item.rows} rise={rise(item.key)} />;
+      case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} />;
       case 'notice': {
         if (item.weight === 'quiet') return <QuietNotice key={item.key} notices={item.notices} />;
         const n = item.notices[0]!;
@@ -358,7 +378,7 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
 
   return (
     <>
-      <Bar conversation={conversation} title={title} meter={gone ? null : meter} onRenamed={() => void load()} onSummary={() => setSummaryOpen(true)} />
+      <Bar conversation={conversation} readOnly={Boolean(conversation?.parent_run_id)} title={title} meter={gone ? null : meter} onRenamed={() => void load()} onSummary={() => setSummaryOpen(true)} />
       {disconnected && <div className="ui-offline"><Notice tone="warn" icon="alert" title={t('ui.notice.disconnected')} action={{ label: t('ui.notice.reconnect'), run: onReconnect }} /></div>}
       <div ref={scroller} className="bt-thread" onScroll={e => { stick.current = isNearBottom(e.currentTarget); }}>
         {conversation?.archived === 1 && (

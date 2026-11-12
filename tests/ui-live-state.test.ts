@@ -77,7 +77,6 @@ test('ui/live-state: つなぎ直し（resync）は、サーバーの下書き�
 
 test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出し・お知らせ・承認の一覧・会話ごとの読み直しの数）', () => {
   const s0 = run(EMPTY, { type: 'conversations', conversations: [conv('c')] }, { type: 'event', event: { type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }, hidden: false, now: 100 });
-  assert.equal(s0.runStarts.get('r'), 100);
   const s1 = run(s0, ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'He' }), ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'llo' }));
   assert.equal(s1.drafts[0]!.text, 'Hello');
   const s2 = run(s1, ev({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 1, role: 'assistant' }));
@@ -93,7 +92,6 @@ test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出�
   assert.deepEqual(s5.approvals.map(a => [a.id, a.conversationId, a.runId]), [['a1', 'c', 'r']]);
   assert.deepEqual(run(s5, ev({ type: 'approval.resolved', runId: 'r', conversationId: 'c', approvalId: 'a1', outcome: 'once' })).approvals, []);
   const failed = reduce(s5, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'timeout', errorMessage: 'slow' }));
-  assert.equal(failed.state.runStarts.has('r'), false);
   assert.deepEqual(failed.state.notices.get('c')!.at(-1), { runId: 'r', kind: 'error', errorKind: 'timeout', errorCode: undefined, errorParams: undefined, errorMessage: 'slow', hint: undefined, measured: undefined, required: undefined });
   const stopped = run(s5, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'cancelled' }));
   assert.equal(stopped.notices.get('c')!.at(-1)!.kind, 'stopped');

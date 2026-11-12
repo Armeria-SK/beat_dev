@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { ApiError, type Approval } from '../api.ts';
 import { decideApproval, useDecisionPending, type ApprovalDecision } from '../approval-decide.ts';
 import { approvalPathKey, approvalPathsMore } from '../chat-logic.ts';
@@ -7,9 +7,12 @@ import { useNow } from './hooks.ts';
 import { Button, Icon, Pill } from './parts.tsx';
 import { routeHash } from './routes.ts';
 import type { ToolItem } from './thread.ts';
-import { elapsedClock, folderLabel, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
+import { elapsedClock, folderLabel, staggerOf, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
 
 type T = ReturnType<typeof useT>;
+
+const enterClass = (enter: number | null): string => (enter === null ? '' : ' bt-rise');
+const enterStyle = (enter: number | null): CSSProperties | undefined => (enter === null ? undefined : { '--bt-i': enter } as CSSProperties);
 
 function verbText(t: T, view: ToolRowView): string {
   switch (view.verb) {
@@ -59,7 +62,7 @@ function Row({ view, running, meta, children }: { view: ToolRowView; running: bo
   );
 }
 
-function ToolLine({ item }: { item: ToolItem }) {
+function ToolLine({ item, enter }: { item: ToolItem; enter: number | null }) {
   const t = useT();
   const view = toolRow(item.name, item.input, item.result);
   const running = item.running;
@@ -72,7 +75,7 @@ function ToolLine({ item }: { item: ToolItem }) {
   } else meta = metaNode(t, view.meta);
   const helperLink = running?.helperConversation ? <a className="bt-tool__link" href={routeHash({ view: 'chat', id: running.helperConversation })}>{t('ui.tool.openHelper')}</a> : null;
   return (
-    <details className={`bt-tool${running ? ' bt-tool--running' : ''}`} open={running && view.verb === 'helper' ? true : undefined}>
+    <details className={`bt-tool${running ? ' bt-tool--running' : ''}${enterClass(enter)}`} style={enterStyle(enter)} open={running && view.verb === 'helper' ? true : undefined}>
       <Row view={view} running={Boolean(running)} meta={meta}>
         <div className="bt-tool__body">
           {item.result ? <pre className="ui-tool__out">{item.result.text || t('ui.tool.noOutput')}</pre> : <span className="ui-tool__out">{view.target || view.name}</span>}
@@ -83,7 +86,7 @@ function ToolLine({ item }: { item: ToolItem }) {
   );
 }
 
-function ApprovalLine({ approval }: { approval: Approval }) {
+function ApprovalLine({ approval, enter }: { approval: Approval; enter: number | null }) {
   const t = useT();
   const view = toolRow(approval.tool, '', null);
   const now = useNow(1000);
@@ -96,7 +99,7 @@ function ApprovalLine({ approval }: { approval: Approval }) {
   const more = approvalPathsMore(approval);
   const meta = <><Pill tone="waiting">{t('ui.approval.waiting')}</Pill>{t('ui.approval.left', elapsedClock(approval.expiresAt - now))}</>;
   return (
-    <details className="bt-tool ui-approval" open>
+    <details className={`bt-tool ui-approval${enterClass(enter)}`} style={enterStyle(enter)} open>
       <Row view={{ ...view, target: approval.title }} running={false} meta={meta}>
         <div className="bt-tool__body ui-approval__body">
           {approval.body && <pre className="ui-tool__out">{approval.body}</pre>}
@@ -136,10 +139,11 @@ function ApprovalLine({ approval }: { approval: Approval }) {
   );
 }
 
-export function ToolGroup({ rows, rise }: { rows: ToolItem[]; rise: boolean }) {
+export function ToolGroup({ rows, isNew }: { rows: ToolItem[]; isNew: (key: string) => boolean }) {
+  const enters = staggerOf(rows.map(r => isNew(r.key)));
   return (
-    <div className={`bt-tools${rise ? ' bt-rise' : ''}`}>
-      {rows.map(item => (item.approval ? <ApprovalLine key={item.key} approval={item.approval} /> : <ToolLine key={item.key} item={item} />))}
+    <div className="bt-tools">
+      {rows.map((item, i) => (item.approval ? <ApprovalLine key={item.key} approval={item.approval} enter={enters[i]!} /> : <ToolLine key={item.key} item={item} enter={enters[i]!} />))}
     </div>
   );
 }

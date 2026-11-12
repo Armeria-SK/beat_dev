@@ -29,12 +29,11 @@ export interface LiveState {
   notices: ReadonlyMap<string, RunNotice[]>;
   revisions: ReadonlyMap<string, number>;
   epoch: number;
-  runStarts: ReadonlyMap<string, number>;
 }
 
 export const EMPTY: LiveState = {
   conversations: [], approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), epoch: 0, runStarts: new Map(),
+  notices: new Map(), revisions: new Map(), epoch: 0,
 };
 
 export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker';
@@ -96,7 +95,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       const notices = new Map(s.notices);
       notices.delete(e.conversationId);
       return {
-        state: { ...s, drafts, notices, runStarts: new Map(s.runStarts).set(e.runId, now) },
+        state: { ...s, drafts, notices },
         effects: [...(known ? [] : refresh('conversations')), { kind: 'checklist', conversationId: e.conversationId }, ...refresh('worker')],
       };
     }
@@ -142,9 +141,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       };
     }
     case 'run.end': {
-      const runStarts = new Map(s.runStarts);
-      runStarts.delete(e.runId);
-      let state: LiveState = bump({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId), runStarts }, e.conversationId);
+      let state: LiveState = bump({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }, e.conversationId);
       if (!e.ok && e.errorKind === 'cancelled') state = addNotice(state, e.conversationId, { runId: e.runId, kind: 'stopped' });
       else if (!e.ok) {
         state = addNotice(state, e.conversationId, {

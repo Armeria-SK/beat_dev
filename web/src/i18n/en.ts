@@ -1520,6 +1520,7 @@ export const en = {
   'ui.session.menu': 'Session menu',
   'ui.session.rename': 'Rename',
   'ui.session.renameField': 'Session title',
+  'ui.session.renameFailed': (reason: string) => `Not renamed · ${reason}`,
   'ui.session.summary': 'Summary',
   'ui.session.archive': 'Archive',
   'ui.session.delete': 'Delete',

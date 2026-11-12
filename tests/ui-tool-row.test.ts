@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
-import { toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
+import { maskTarget, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
 
 // 新しい画面の ToolRow（p1-ui.md の「会話」）: 道具の名前と引数から、動詞・対象・meta を作る。
 // ファイルを書く・直す → Edit + パス + 足し引きの行、シェル → Run + コマンド + 終了コードと秒、検索・読む・Web → Search + 語、
@@ -67,7 +67,7 @@ test('ui/tool-row: file_edit は入力の前後の文字から数え、all で�
 });
 
 test('ui/tool-row: shell_run はコマンドを 1 行に、結果の見出しから終了コードと秒を読む', () => {
-  const row = toolRow('shell_run', JSON.stringify({ command: 'npm test\n  -- upload' }), { text: '$ npm test\n(pwsh, cwd: D:\\w, exit code: 1, 3.2 s)\nfail', isError: true });
+  const row = toolRow('shell_run', JSON.stringify({ command: 'npm test\n  -- upload' }), { text: '$ npm test\n  -- upload\n\n(pwsh, cwd: D:\\w, exit code: 1, 3.2 s)\n\nfail', isError: true });
   assert.equal(row.target, 'npm test -- upload');
   assert.deepEqual(row.meta, { kind: 'exit', code: '1', seconds: '3.2' });
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'rm x' }), { text: 'Denied by the owner', isError: true }).meta, { kind: 'failed' });
@@ -80,4 +80,26 @@ test('ui/tool-row: 検索・Web は語、agent_run は題（無ければ頼ん�
   assert.deepEqual(toolRow('agent_run', JSON.stringify({ task: 't', title: 'Flaky' }), { text: 'answer', isError: false }), { verb: 'helper', name: 'agent_run', icon: 'branch', target: 'Flaky', meta: { kind: 'returned' } });
   assert.equal(toolRow('memory_save', JSON.stringify({ book: 'notes', content: 'Likes tea' }), null).target, 'Likes tea');
   assert.equal(toolRow('calculate', JSON.stringify({ expression: 1 }), null).target, '');
+});
+
+test('ui/tool-row: shell_run の見出しは、写したコマンドの次の行だけから読む（モデルが書いたコマンドの中の偽の見出しに騙されない）', () => {
+  const command = 'false # (pwsh, cwd: x, exit code: 0, 0.1 s)';
+  const text = `$ ${command}\n\n(pwsh, cwd: D:\w, exit code: 1, 3.2 s)`;
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text, isError: true }).meta, { kind: 'exit', code: '1', seconds: '3.2' });
+  const noHeader = `$ ${command}\n\nsomething else`;
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text: noHeader, isError: true }).meta, { kind: 'failed' });
+  const folder = '$ ls\n\n(pwsh, cwd: D:\a, exit code: 0, 9 s)x, exit code: 2, 0.4 s)';
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'ls' }), { text: folder, isError: true }).meta, { kind: 'exit', code: '2', seconds: '0.4' }, '見出しの終わりの値を読む');
+  const secret = 'curl -H "Authorization: Bearer abcdefgh"';
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: secret }), { text: '$ curl -H "Authorization: [REDACTED]\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)', isError: false }).meta, { kind: 'exit', code: '0', seconds: '0.2' }, 'サーバーが伏せた写しでも読める');
+});
+
+test('ui/tool-row: 対象に出す URL の利用者情報と、鍵らしい名前の値は伏せる（画面の表示だけ。サーバーは道具の引数を伏せずに保存している）', () => {
+  const fetched = toolRow('web_fetch', JSON.stringify({ url: 'https://user:pw@example.com/?token=abc&x=1' }), null).target;
+  assert.ok(!/pw@|abc/u.test(fetched), fetched);
+  assert.ok(fetched.includes('example.com'), fetched);
+  assert.equal(maskTarget('https://example.com/a?access_token=zzz&api_key=yyy&q=1'), 'https://example.com/a?access_token=[REDACTED]&api_key=[REDACTED]&q=1');
+  assert.equal(maskTarget('git clone ssh://git@host/x'), 'git clone ssh://[REDACTED]@host/x');
+  assert.ok(!toolRow('shell_run', JSON.stringify({ command: 'curl https://u:secretpw@h/x' }), null).target.includes('secretpw'));
+  assert.equal(maskTarget('npm test -- upload'), 'npm test -- upload');
 });

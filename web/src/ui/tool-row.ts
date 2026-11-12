@@ -1,4 +1,5 @@
 import { lineDelta } from '../../../src/shared/line-delta.ts';
+import { isSensitiveName, redactSecrets } from '../../../src/shared/redaction.ts';
 import type { UiIconName } from './icons.ts';
 
 export type ToolVerb = 'edit' | 'run' | 'search' | 'helper' | 'tool';
@@ -45,8 +46,17 @@ function record(input: string): Record<string, unknown> | null {
   } catch { return null; }
 }
 
+const USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu;
+const QUERY_PARAM = /([?&])([^=&#\s]+)=([^&#\s]*)/gu;
+
+export function maskTarget(value: string): string {
+  return redactSecrets(value)
+    .replace(USERINFO, '$1[REDACTED]@')
+    .replace(QUERY_PARAM, (match, sep: string, name: string) => (isSensitiveName(name) ? `${sep}${name}=[REDACTED]` : match));
+}
+
 function oneLine(value: string): string {
-  const line = value.replace(/\s+/gu, ' ').trim();
+  const line = maskTarget(value).replace(/\s+/gu, ' ').trim();
   return line.length > MAX_TARGET ? `${line.slice(0, MAX_TARGET)}…` : line;
 }
 
@@ -88,10 +98,14 @@ function editMeta(name: string, args: Record<string, unknown> | null, result: To
   return null;
 }
 
-function runMeta(result: ToolResult): ToolMeta {
-  const header = /\(.*exit code: ([^,]+), ([\d.]+) s\)/u.exec(result.text);
-  if (header) return { kind: 'exit', code: header[1]!.trim(), seconds: header[2]! };
-  return result.isError ? { kind: 'failed' } : null;
+function runMeta(result: ToolResult, command: unknown): ToolMeta {
+  const failed: ToolMeta = result.isError ? { kind: 'failed' } : null;
+  if (typeof command !== 'string') return failed;
+  const echo = [command, redactSecrets(command)].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e));
+  if (!echo) return failed;
+  const header = result.text.slice(echo.length).replace(/^\n/u, '').split('\n', 1)[0]!;
+  const match = /^\(.*, exit code: ([^,()]+), ([\d.]+) s\)$/u.exec(header);
+  return match ? { kind: 'exit', code: match[1]!.trim(), seconds: match[2]! } : failed;
 }
 
 export function elapsedClock(ms: number): string {
@@ -113,9 +127,14 @@ export function toolRow(name: string, input: string, result: ToolResult | null):
   const target = pick(args, TARGET_KEYS[name] ?? COMMON_KEYS);
   const view = { verb, name, icon: VERB_ICON[verb], target };
   if (!result) return { ...view, meta: null };
-  if (verb === 'run') return { ...view, meta: runMeta(result) };
+  if (verb === 'run') return { ...view, meta: runMeta(result, args?.['command']) };
   if (result.isError) return { ...view, meta: { kind: 'failed' } };
   if (verb === 'edit') return { ...view, meta: editMeta(name, args, result) };
   if (verb === 'helper') return { ...view, meta: { kind: 'returned' } };
   return { ...view, meta: null };
+}
+
+export function staggerOf(fresh: readonly boolean[]): Array<number | null> {
+  let n = 0;
+  return fresh.map(isFresh => (isFresh ? n++ : null));
 }

@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { useT } from '../i18n/index.ts';
 import type { AgentState } from './agent-state.ts';
 import { GLYPHS, type UiIconName } from './icons.ts';
@@ -12,7 +12,7 @@ export function Icon({ name, className }: { name: UiIconName; className?: string
 type ButtonVariant = 'primary' | 'ghost' | 'danger';
 
 export function Button({ variant, small, icon, children, className, type = 'button', ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: ButtonVariant; small?: boolean; icon?: UiIconName;
+  variant?: ButtonVariant; small?: boolean; icon?: UiIconName; ref?: Ref<HTMLButtonElement>;
 }) {
   const classes = ['bt-btn', variant && `bt-btn--${variant}`, small && 'bt-btn--sm', icon && !children && 'bt-btn--icon', className].filter(Boolean).join(' ');
   return <button {...rest} type={type} className={classes}>{icon && <Icon name={icon} />}{children}</button>;
