@@ -20,6 +20,7 @@ const en = {
   'task_missing': 'The task was not found',
   'not_waiting': 'This task is not waiting for a reply',
   'already_finished': 'This task has already finished',
+  'repeat_with_when': 'Send "repeat" or "when", not both',
   'bad_cursor': 'beforeT (a time in milliseconds) and beforeId must be sent together',
   'bad_range': 'from and to must be times in milliseconds, with from before to and at most {days} days apart',
   'bad_bool': '{field} must be true or false',

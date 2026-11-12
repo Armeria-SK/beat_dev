@@ -1,4 +1,6 @@
+import type { IncomingMessage } from 'node:http';
 import type { App } from '../app.ts';
+import { transaction } from '../db/database.ts';
 import { AVATAR_SHAPES } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
@@ -118,16 +120,38 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const doneCriteria = doneCriteriaOf(body);
     const priority = priorityOf(body);
     const when = whenOf(body);
+    const cron = cronOf(body);
+    if (cron !== undefined && when !== undefined) throw problem(400, 'invalid_field', 'repeat_with_when', { field: 'repeat' });
+    const template = task.cron !== null && task.parent_id === null;
+    const fields = {
+      ...(title !== undefined ? { title } : {}), ...(text !== undefined ? { body: text } : {}),
+      ...(nextAction !== undefined ? { nextAction } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...(when !== undefined ? { runAt: when } : {}),
+    };
     try {
-      const updated = app.tasks.update(task.id, {
-        ...(title !== undefined ? { title } : {}), ...(text !== undefined ? { body: text } : {}),
-        ...(nextAction !== undefined ? { nextAction } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}),
-        ...(priority !== undefined ? { priority } : {}),
-        ...(when !== undefined ? { runAt: when } : {}),
-      }, 'user');
-      app.tasks.event(task.id, 'edited', 'user');
+      if (when !== undefined && template) throw new TaskError('error.template_when');
+      const updated = transaction(app.db, () => {
+        let next = cron !== undefined ? app.tasks.setSchedule(task.id, cron, app.config().timezone, 'user') : task;
+        if (cron === undefined || Object.keys(fields).length) {
+          next = app.tasks.update(task.id, fields, 'user');
+          app.tasks.event(task.id, 'edited', 'user');
+        }
+        return next;
+      });
       app.kv.delete(splitKey(task.id));
       sendJson(res, 200, { task: view(updated) });
+    } catch (error) {
+      if (error instanceof TaskError && error.code === 'error.bad_cron') throw domainProblem(400, 'task', error);
+      taskProblem(error);
+    }
+  });
+
+  router.add('DELETE', '/api/tasks/:id', ({ res, params }) => {
+    const task = getTask(params[0]!);
+    try {
+      const removed = app.tasks.remove(task.id);
+      sendJson(res, 200, { deleted: { id: removed.id, events: removed.events, keptRuns: removed.keptRuns } });
     } catch (error) { taskProblem(error); }
   });
 
@@ -176,12 +200,25 @@ export function registerTaskRoutes(router: Router, app: App): void {
     try { sendJson(res, 200, { task: view(app.tasks.approve(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
   });
 
-  const close = (status: 'cancelled' | 'done') => ({ res, params }: { res: Parameters<typeof sendJson>[0]; params: string[] }) => {
+  router.add('POST', '/api/tasks/:id/unapprove', ({ res, params }) => {
+    try { sendJson(res, 200, { task: view(app.tasks.unapprove(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
+  });
+
+  const cancelReasonOf = async (req: IncomingMessage): Promise<string | undefined> => {
+    if (!/^application\/json\b/iu.test(req.headers['content-type'] ?? '')) return undefined;
+    const body = requireObject(await readJson(req));
+    if (body.reason === undefined || body.reason === null || (typeof body.reason === 'string' && !body.reason.trim())) return undefined;
+    return requireString(body, 'reason', { max: 2000 })!.trim();
+  };
+
+  const close = (status: 'cancelled' | 'done') => async ({ req, res, params }: { req: IncomingMessage; res: Parameters<typeof sendJson>[0]; params: string[] }) => {
     const task = getTask(params[0]!);
+    const reason = status === 'cancelled' ? await cancelReasonOf(req) : undefined;
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
     const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
+    if (reason) app.tasks.event(task.id, 'reason', 'user', reason);
     app.worker.stopTask(task.id);
     app.kv.delete(splitKey(task.id));
     sendJson(res, 200, { task: view(updated) });

@@ -218,6 +218,10 @@ export class App {
       this.worker.poke();
     };
     this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
+    this.tasks.onDeleted = removed => {
+      this.log(`[INFO] Deleted task "${removed.title.replace(/[\u0000-\u001f\u007f]+/gu, ' ')}" (${removed.id})`);
+      this.bus.publish({ type: 'task.deleted', id: removed.id });
+    };
     this.notifications.listen(event => {
       // 画面（SSE）へは、外へ送らない印（noForward）を載せずに流す
       const notification: Notification = { ...event };

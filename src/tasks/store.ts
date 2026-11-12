@@ -83,6 +83,14 @@ export interface FinishedCursor { t: number; id: string }
 export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned' }
 export interface Schedule { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean }>; ranTruncated: boolean }
 
+export const TASK_SOFT_REFERENCES = [
+  { table: 'curiosity_items', column: 'task_id' },
+  { table: 'memory_jobs', column: 'task_id' },
+  { table: 'conversations', column: 'source_task_id' },
+] as const;
+export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:'] as const;
+export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }
+
 function firstLine(text: string | null): string | null {
   const line = text?.split('\n').find(l => l.trim())?.trim();
   return line ? line.slice(0, 200) : null;
@@ -94,6 +102,7 @@ export class TaskStore {
   onChange: ((task: Task) => void) | undefined;
   // 取り消しを戻すとき、タスクの書き換えと同じ transaction の中で呼ばれる（好奇心の状態を戻すため）
   onUncancelled: ((task: Task) => void) | undefined;
+  onDeleted: ((removed: RemovedTask) => void) | undefined;
 
   readonly #language: () => Language;
 
@@ -318,6 +327,59 @@ export class TaskStore {
     if (!task || task.status !== 'inbox') throw new TaskError('error.not_proposal');
     this.event(id, 'approved', 'user');
     return this.setReady(id);
+  }
+
+  #neverRan(task: Task): boolean {
+    return task.conversation_id === null && !this.#db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND run_id IS NOT NULL LIMIT 1').get(task.id);
+  }
+
+  unapprove(id: string): Task {
+    transaction(this.#db, () => {
+      const task = this.get(id);
+      if (!task) throw new TaskError('error.not_found', { id });
+      if (task.status === 'running' || task.status === 'waiting' || !this.#neverRan(task)) throw new TaskError('error.already_started');
+      const newest = this.#db.prepare('SELECT kind FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(id) as { kind: string } | undefined;
+      if (task.status !== 'ready' || newest?.kind !== 'approved') throw new TaskError('error.not_approved');
+      this.#db.prepare("UPDATE tasks SET status = 'inbox', updated_at = ? WHERE id = ?").run(this.#now(), id);
+      this.event(id, 'unapproved', 'user');
+    });
+    return this.#changed(id);
+  }
+
+  setSchedule(id: string, cron: string, timezone: string, actor: string): Task {
+    transaction(this.#db, () => {
+      const task = this.get(id);
+      if (!task) throw new TaskError('error.not_found', { id });
+      if (task.cron === null || task.parent_id !== null) throw new TaskError('error.not_template');
+      const now = this.#now();
+      const next = nextRunAt(cron, timezone, now);
+      if (next === null) throw new TaskError('error.bad_cron', { cron });
+      this.#db.prepare('UPDATE tasks SET cron = ?, timezone = ?, run_at = ?, updated_at = ? WHERE id = ?').run(cron, timezone, task.status === 'scheduled' ? next : null, now, id);
+      this.event(id, 'edited', actor, taskText(this.#language(), 'event.repeat', { cron }));
+    });
+    return this.#changed(id);
+  }
+
+  remove(id: string): RemovedTask {
+    const removed = transaction(this.#db, () => {
+      const task = this.get(id);
+      if (!task) throw new TaskError('error.not_found', { id });
+      if (task.cron !== null && task.parent_id === null) {
+        if (this.hasOpenRun(id)) throw new TaskError('error.run_open');
+      } else if (!(task.status === 'ready' && task.parent_id === null && task.cron === null && task.run_at !== null && this.#neverRan(task))) {
+        throw new TaskError('error.not_deletable');
+      }
+      for (const ref of TASK_SOFT_REFERENCES) {
+        if (this.#db.prepare(`SELECT 1 FROM ${ref.table} WHERE ${ref.column} = ? LIMIT 1`).get(id)) throw new TaskError('error.not_deletable');
+      }
+      const keptRuns = Number(this.#db.prepare('UPDATE tasks SET parent_id = NULL WHERE parent_id = ?').run(id).changes);
+      const events = Number(this.#db.prepare('DELETE FROM task_events WHERE task_id = ?').run(id).changes);
+      for (const prefix of TASK_KV_PREFIXES) this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`${prefix}${id}`);
+      this.#db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+      return { id, title: task.title, events, keptRuns };
+    });
+    this.onDeleted?.(removed);
+    return removed;
   }
 
   recoverExpiredLeases(options: { all?: boolean } = {}): number {
