@@ -21,7 +21,7 @@ test('予備パーサー: Mistral の [TOOL_CALLS]、コードブロック、本
 
 test('予備パーサー: 知らないツール名や普通の JSON は拾わない', () => {
   assert.equal(extractToolCalls('<tool_call>{"name": "rm_rf", "arguments": {}}</tool_call>', names).calls.length, 0);
-  assert.equal(extractToolCalls('設定はこうです: {"name": "Clive", "age": 1}', names).calls.length, 0);
+  assert.equal(extractToolCalls('設定はこうです: {"name": "beat", "age": 1}', names).calls.length, 0);
   assert.equal(looksLikeTextToolCall('普通の返事'), false);
   assert.equal(looksLikeTextToolCall('<tool_call>{}</tool_call>'), true);
 });

@@ -24,11 +24,11 @@ test('使用量: 8 割を「超えた」ときだけ高い（ちょうど 8 割�
 test('記憶の値の読み替え: 出どころ・変更の種類・やった人・発言の役。知らない値は読み替えない', () => {
   assert.equal(originKey('user'), 'memory.origin.user');
   assert.equal(originKey('review'), 'memory.origin.review');
-  assert.equal(originKey('clive'), 'memory.origin.clive');
-  assert.equal(originKey('something-new'), 'memory.origin.clive', '知らない出どころは Clive が会話の中で覚えたものとして扱う');
+  assert.equal(originKey('beat'), 'memory.origin.beat');
+  assert.equal(originKey('something-new'), 'memory.origin.beat', '知らない出どころは beat が会話の中で覚えたものとして扱う');
   assert.deepEqual(['create', 'update', 'forget', 'restore'].map(actionKey), ['memory.action.create', 'memory.action.update', 'memory.action.forget', 'memory.action.restore']);
   assert.equal(actionKey('merge'), undefined);
-  assert.deepEqual(['clive', 'user', 'review'].map(actorKey), ['memory.actor.clive', 'memory.actor.user', 'memory.actor.review']);
+  assert.deepEqual(['beat', 'user', 'review'].map(actorKey), ['memory.actor.beat', 'memory.actor.user', 'memory.actor.review']);
   assert.equal(actorKey('robot'), undefined);
   assert.deepEqual(['user', 'assistant', 'tool'].map(roleKey), ['memory.role.user', 'memory.role.assistant', 'memory.role.tool']);
   assert.equal(roleKey('system'), undefined);
@@ -57,7 +57,7 @@ test('切り替え: 3 つ（ユーザーについて・メモと教訓・会話�
 test('辞書: 記憶のページの文字は en にある', () => {
   const keys = Object.keys(en).filter(k => k.startsWith('memory.'));
   assert.ok(keys.length >= 13, `${keys.length} 件しか読めていない`);
-  for (const key of ['memory.origin.user', 'memory.origin.review', 'memory.origin.clive', 'memory.action.create', 'memory.actor.user', 'memory.role.tool']) {
+  for (const key of ['memory.origin.user', 'memory.origin.review', 'memory.origin.beat', 'memory.action.create', 'memory.actor.user', 'memory.role.tool']) {
     assert.ok(key in en, key);
   }
 });

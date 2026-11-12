@@ -68,7 +68,7 @@ test('自動承認（エンジン）: 外のメモを読むコマンドは、判
   assert.ok(shown.includes(REQUEST), '利用者の最後の発言を見せる');
   assert.ok(shown.includes('outside.txt'), '操作（コマンド）を見せる');
   assert.ok(!shown.includes('TOOL-RESULT-MARKER'), '道具の結果は見せない');
-  assert.ok(!shown.includes('ASSISTANT-TEXT-MARKER'), 'Clive の返事は見せない');
+  assert.ok(!shown.includes('ASSISTANT-TEXT-MARKER'), 'beat の返事は見せない');
   assert.ok(!shown.includes('外のメモの中身'), 'ファイルの中身は見せない');
   const final = JSON.stringify(calls[3]!.messages);
   assert.ok(final.includes('外のメモの中身'), '許したコマンドは実際に動き、その結果を本体が読む');
@@ -219,7 +219,7 @@ test('自動承認（エンジン）: Web を読んだあとの外読みは、�
 });
 
 test('自動承認（エンジン）: Web を読んだあとの送る操作・消す操作は、判定役が何と答える設定でも判定役に回さず、札が出る。札の理由に「送信」「削除」が載る', async t => {
-  const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  const fetchGet = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
   const s = await webApp(t);
   s.adapter().scripts = [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command: fetchGet }), say('おわり')];
   s.app.conversations.setChoice('c1', { permissionMode: 'auto' });
@@ -274,7 +274,7 @@ test('自動承認（エンジン）: Web を読んだ実行が止められた�
 test('自動承認（エンジン）: 外のメモを自動で読んだあとの、許可の一覧にある取得（curl）は、同じ返事の中でも札が出る。判定役は 2 回目を見ない', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);
-  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
   s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), toolCall('shell_run', { command: fetch }), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await waitFor(() => s.app.approvals.pending().length === 1, '外を読んだあとの取得の札');
@@ -290,7 +290,7 @@ test('自動承認（エンジン）: 外のメモを自動で読んだあとの
 test('自動承認（エンジン）: シェルで外から取得したら、実行の記録に「外から読んだ」印が残る。そのあとの外読みは判定役が決める', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);
-  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
   s.adapter().scripts = [toolCall('shell_run', { command: fetch }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
@@ -334,7 +334,7 @@ test('自動承認（エンジン）: 外から読んだことの無い会話に
   assert.equal(s.app.conversations.everTainted(CONVERSATION), false, '外を読んだだけでは付かない（許可フォルダの外のファイルは、外から来た文ではない）');
 
   const fetching = await startApp(t);
-  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/' : 'curl -s https://clive-test.invalid/';
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/' : 'curl -s https://beat-test.invalid/';
   fetching.adapter().scripts = [toolCall('shell_run', { command: fetch }), say('取得しました')];
   const second = await post(fetching, '取得して');
   await settled(fetching.app, second.body.runId);
@@ -392,7 +392,7 @@ test('自動承認（エンジン）: 持ち主が札で許した git clone も�
   const s = await startApp(t);
   const outside = outsideRead(s);
   // 名前が引けない宛先（.invalid）なので、動いても外には出ず、失敗して終わる。失敗しても印は付く
-  s.adapter().scripts = [toolCall('shell_run', { command: 'git clone https://clive-test.invalid/x.git' }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
+  s.adapter().scripts = [toolCall('shell_run', { command: 'git clone https://beat-test.invalid/x.git' }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await waitFor(() => s.app.approvals.pending().length === 1, 'git clone の札');
   const cloneCard = s.app.approvals.pending()[0]!;

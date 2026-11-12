@@ -19,7 +19,7 @@ import { tempDir, testConfig, type Script } from './helpers.ts';
 // 0-2a-3: 言語の切り替えを消したあとも、返事は持ち主が書いた言語で返し、持ち主の前からあるデータ（設定・会話・作業フォルダ）は変えない
 
 const REPLY_DIRECTIVE = "Reply in the language the user writes in (the language of the user's own words, not of these instructions, templates or tool results).";
-const JA_SNAPSHOT = '# Clive の基本ルール\n\n返事は日本語で書く\n\n---\n\n# あなた自身（SOUL.md）\n\n日本語の SOUL';
+const JA_SNAPSHOT = '# beat の基本ルール\n\n返事は日本語で書く\n\n---\n\n# あなた自身（SOUL.md）\n\n日本語の SOUL';
 const LANGUAGE_KV = "SELECT key, value FROM kv WHERE key LIKE 'snapshot-language:%' OR key LIKE 'reply-language:%' ORDER BY key";
 
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
@@ -69,7 +69,7 @@ test('返事の言語: 新しい会話の固定の system は英語のルール�
   await settled(s.app, sent.body.runId);
   const call = s.adapter().calls.at(-1)!;
   assert.ok(call.system.frozen.startsWith(readTemplate(s.paths, 'rules')), call.system.frozen.slice(0, 80));
-  assert.match(call.system.frozen, /^# Clive's basic rules/u);
+  assert.match(call.system.frozen, /^# beat's basic rules/u);
   assert.ok(call.system.dynamic.includes(REPLY_DIRECTIVE));
   assert.deepEqual(s.app.db.prepare(LANGUAGE_KV).all(), []);
 });
@@ -136,7 +136,7 @@ test('API: GET /api/templates は英語の初期の文 4 つを返し、言語�
   const res = await s.json('/api/templates', 'GET');
   assert.equal(res.status, 200);
   assert.deepEqual(Object.keys(res.body).sort(), ['files', 'rules']);
-  assert.match(res.body.rules, /^# Clive's basic rules/u);
+  assert.match(res.body.rules, /^# beat's basic rules/u);
   assert.deepEqual(res.body.files.map((f: { name: string }) => f.name), [...WORKSPACE_FILES]);
   for (const file of res.body.files as Array<{ name: string; content: string }>) assert.equal(file.content, readTemplate(s.paths, file.name as (typeof WORKSPACE_FILES)[number]));
   assert.equal((await s.api('/api/templates/ja')).status, 404);

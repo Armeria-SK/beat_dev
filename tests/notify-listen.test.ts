@@ -51,7 +51,7 @@ test('localOnly は DB に残り、noForward は聞き手にだけ渡る（DB �
 
 test('T-21a 移し替え 19 のあと、前からある通知は local_only = 0', t => {
   assert.ok(MIGRATIONS.length >= 19);
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 18));
   before.prepare("INSERT INTO notifications (kind, title, created_at) VALUES ('info', '前から', 1)").run();
   before.close();

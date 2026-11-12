@@ -37,11 +37,11 @@ test('鍵の環境変数の名前（providerKeyEnv）: 書かれていればそ�
   const c = config();
   assert.equal(providerKeyEnv(c, 'remote'), 'EXAMPLE_API_KEY');
   assert.equal(providerKeyEnv(c, 'claude'), 'ANTHROPIC_API_KEY');
-  assert.equal(providerKeyEnv(c, 'local'), 'CLIVE_LOCAL_API_KEY');
-  assert.equal(providerKeyEnv(c, 'my-llm'), 'CLIVE_MY_LLM_API_KEY');
+  assert.equal(providerKeyEnv(c, 'local'), 'BEAT_LOCAL_API_KEY');
+  assert.equal(providerKeyEnv(c, 'my-llm'), 'BEAT_MY_LLM_API_KEY');
   assert.equal(providerKeyEnv(c, 'nope'), undefined);
-  (c.providers as Array<Record<string, unknown>>).push({ id: 'my_llm', kind: 'ollama', apiKeyEnv: 'CLIVE_MY_LLM_API_KEY' });
-  assert.equal(providerKeyEnv(c, 'my-llm'), 'CLIVE_MY_LLM_API_KEY_2');
+  (c.providers as Array<Record<string, unknown>>).push({ id: 'my_llm', kind: 'ollama', apiKeyEnv: 'BEAT_MY_LLM_API_KEY' });
+  assert.equal(providerKeyEnv(c, 'my-llm'), 'BEAT_MY_LLM_API_KEY_2');
 });
 
 test('同じ環境変数を使うほかのプロバイダ（sharedKeyWith）: 入れ直す・消すと、そちらにも効くので知らせる', () => {

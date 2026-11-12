@@ -4,7 +4,7 @@ import { deepEqual } from './merge.ts';
 import type { Config } from './model.ts';
 import { foldersFromConfig, wideningChanges, type Widening } from '../skills-meta.ts';
 
-// 設定の保存で、Clive が触れられる範囲・動かせるもの・外から届く範囲が広がる変更を、そのまま並べるための部分。
+// 設定の保存で、beat が触れられる範囲・動かせるもの・外から届く範囲が広がる変更を、そのまま並べるための部分。
 // フォルダ（触れないパスを外す・フォルダを足す・読み書きにする）は、スキル・ツールの画面と同じ `wideningChanges` をそのまま使う。
 // 狭くなる変更や、広がりに関わらない変更は含めない。
 // worker.autonomy の false → true（右のパネルの「自発行動」のスイッチ）は、わざと含めない。パネルで 1 回押すだけで切り替えられる操作として設計してあり、
@@ -16,7 +16,7 @@ export interface HookSummary { matcher: string; command: string[] }
 export type Access =
   | Widening
   | { kind: 'shell-enabled' }
-  // runsCode: 項目のとおりのコマンドは一覧に無いので、足すと Clive も書き換えられるコード（スクリプト・scripts・テストなど）を確かめずに動かすことになる
+  // runsCode: 項目のとおりのコマンドは一覧に無いので、足すと beat も書き換えられるコード（スクリプト・scripts・テストなど）を確かめずに動かすことになる
   | { kind: 'shell-allow-added'; command: string; runsCode: boolean }
   | { kind: 'shell-ask-removed'; command: string }
   | { kind: 'shell-deny-removed'; command: string }
@@ -271,7 +271,7 @@ function browserChanges(before: Config, after: Config): Access[] {
     if (site.startsWith('=') && was.includes(site.slice(1))) continue;
     out.push(!site.startsWith('=') && was.includes(`=${site}`) ? { kind: 'browser-site-widened', site } : { kind: 'browser-site-added', site });
   }
-  // 起動するブラウザの実行ファイル: channel を path にする、executablePath を足す・変える。Clive が起動する実行ファイルを持ち主以外の指定で替えられるので、確かめに出す。
+  // 起動するブラウザの実行ファイル: channel を path にする、executablePath を足す・変える。beat が起動する実行ファイルを持ち主以外の指定で替えられるので、確かめに出す。
   // channel を auto / chrome に戻す・executablePath を空にするのは、広がりではない（1 回の変更で 1 行）
   const was2 = typeof bb.executablePath === 'string' ? bb.executablePath : '';
   const now2 = typeof ab.executablePath === 'string' ? ab.executablePath : '';

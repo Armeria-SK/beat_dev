@@ -9,8 +9,8 @@ import { startApp } from './app-setup.ts';
 const URL1 = 'https://hooks.example.com/services/T000/Zk3qP9xW7mB2vN8c';
 const URL2 = 'https://hooks.example.com/services/T000/Rt6yH4nJ8vC1xA9s';
 const TOKEN = 'Qm5dK2wE7hB4tY1nLp9';
-const ENV_URL = 'CLIVE_NOTIFY_PHONE_URL_SECRET';
-const ENV_TOKEN = 'CLIVE_NOTIFY_PHONE_TOKEN';
+const ENV_URL = 'BEAT_NOTIFY_PHONE_URL_SECRET';
+const ENV_TOKEN = 'BEAT_NOTIFY_PHONE_TOKEN';
 
 type Sent = { url: string; body: string; headers: Record<string, string> };
 
@@ -134,7 +134,7 @@ test('T-19 test は決まった文を送る。Origin の確かめを通らない
   const res = await s.json('/api/notify/channels/phone/test', 'POST');
   assert.deepEqual(res.body, { ok: true });
   assert.equal(s.sent.length, 1);
-  assert.match(s.sent[0]!.body, /This is a test notification from Clive/u);
+  assert.match(s.sent[0]!.body, /This is a test notification from beat/u);
   assert.equal(s.sent[0]!.url, URL1);
   assert.equal((await s.json('/api/notify/channels/nope/test', 'POST')).status, 404);
   const calls: Array<[string, string, Record<string, string>]> = [
@@ -162,8 +162,8 @@ test('PATCH: チャネルの enabled / kinds / includeBody、notify の publicBa
   assert.deepEqual([c.enabled, c.includeBody, c.kinds], [false, true, ['info']]);
   assert.equal((await s.json('/api/notify/channels/phone', 'PATCH', { kinds: ['nope'] })).status, 400);
   assert.equal((await s.json('/api/notify/channels/phone', 'PATCH', { enabled: 'yes' })).status, 400);
-  assert.equal((await s.json('/api/notify', 'PATCH', { publicBaseUrl: 'https://clive.example.ts.net', limits: { maxSendsPerHour: 10 } })).status, 200);
-  assert.equal(s.app.config().notify.publicBaseUrl, 'https://clive.example.ts.net');
+  assert.equal((await s.json('/api/notify', 'PATCH', { publicBaseUrl: 'https://beat.example.ts.net', limits: { maxSendsPerHour: 10 } })).status, 200);
+  assert.equal(s.app.config().notify.publicBaseUrl, 'https://beat.example.ts.net');
   assert.equal(s.app.config().notify.limits.maxSendsPerHour, 10);
   assert.equal(s.app.config().notify.limits.timeoutMs, 5000, '触れていない上限は変わらない');
   assert.equal((await s.json('/api/notify', 'PATCH', { limits: { maxSendsPerHour: 999 } })).status, 400);

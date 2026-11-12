@@ -9,7 +9,7 @@ import { serveStatic } from '../src/web/static.ts';
 import { tempDir } from './helpers.ts';
 
 // 段 9（A4）の審査で、同じサイトの別のポート（別の 127.0.0.1 / localhost のポートのページ、同じ ts.net の別のホスト）からの最上位の移動を通す例外は、
-// そのページから Clive を開いて #/ の経路を操作できる（承認ボタンの上に重ねて押させる・二度押させるなど）ため、外した。
+// そのページから beat を開いて #/ の経路を操作できる（承認ボタンの上に重ねて押させる・二度押させるなど）ため、外した。
 // ポートを変えたあとの移動は、画面が新しい URL を見せて、持ち主がアドレス欄に入力・貼り付けて開く（ブラウザは Sec-Fetch-Site: none を送る）
 
 const TAILNET = 'box.tail1234.ts.net';
@@ -58,7 +58,7 @@ test('持ち主がアドレス欄に入力・貼り付けて開く移動（Sec-F
 test('画面（HTML）の応答には Cross-Origin-Opener-Policy: same-origin を付ける（ほかのページから window.open で開かれても、開いたページから操作できない）。部品（JS など）には付けない', async t => {
   const dist = join(tempDir(t), 'dist');
   mkdirSync(join(dist, 'assets'), { recursive: true });
-  writeFileSync(join(dist, 'index.html'), '<!doctype html><title>Clive</title>');
+  writeFileSync(join(dist, 'index.html'), '<!doctype html><title>beat</title>');
   writeFileSync(join(dist, 'assets', 'app.js'), '1');
   const built = createServer((req, res) => { if (!serveStatic(dist, req, res)) res.writeHead(404).end(); });
   const unbuilt = createServer((req, res) => { if (!serveStatic(join(dist, 'nothing'), req, res)) res.writeHead(404).end(); });

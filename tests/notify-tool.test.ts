@@ -53,7 +53,7 @@ test('notify_owner: チャットでは会話のリンクで知らせる', async 
   assert.ok(first);
   assert.equal(first.link, '#/c/c1');
   assert.equal(first.kind, 'info');
-  assert.equal(first.title, 'From Clive: 終わりました');
+  assert.equal(first.title, 'From beat: 終わりました');
   assert.equal(first.body, '結果は会話に');
   assert.equal(r.output.isError, undefined);
 });
@@ -91,7 +91,7 @@ test('notify_owner: 外を読んだあとでは題に印が付く', async t => {
   await s.call({ title: '区切り' });
   const first = s.sent[0];
   assert.ok(first);
-  assert.ok(first.title.startsWith('From Clive (after reading text that came from elsewhere): '), `題 ${JSON.stringify(first.title)} が印付きで始まらない`);
+  assert.ok(first.title.startsWith('From beat (after reading text that came from elsewhere): '), `題 ${JSON.stringify(first.title)} が印付きで始まらない`);
 });
 
 test('notify_owner: 題の改行と向き替え文字が落ち、本文の改行は残り向き替え文字は落ちる', async t => {
@@ -99,7 +99,7 @@ test('notify_owner: 題の改行と向き替え文字が落ち、本文の改行
   await s.call({ title: 'a\nb‮', body: 'x\ny‮' });
   const first = s.sent[0];
   assert.ok(first);
-  assert.equal(first.title, 'From Clive: a b');
+  assert.equal(first.title, 'From beat: a b');
   assert.equal(first.body, 'x\ny');
 });
 
@@ -160,7 +160,7 @@ test('notify_owner: 英語で、日本語の文字が出ない', async t => {
   const r = await s.call({ title: 'done', body: 'result in chat' });
   const sent = s.sent[0];
   assert.ok(sent);
-  assert.ok(sent.title.startsWith('From Clive: '));
+  assert.ok(sent.title.startsWith('From beat: '));
   assert.ok(!/[぀-ヿ一-鿿]/u.test(r.output.content));
   assert.ok(!/[぀-ヿ一-鿿]/u.test(sent.title));
 });

@@ -40,7 +40,7 @@ function lockOut(request: Requester, who: Extract<AuthResult, { ok: true }> | un
   const moves = running.host !== next.host || running.port !== next.port;
   const post = (headers: IncomingHttpHeaders) => newAuth.check({ headers, method: 'POST' } as IncomingMessage);
   if (!who || !who.local) {
-    // Tailscale から来た要求: Tailscale Serve の転送先は Clive からは変えられないので、待ち受ける場所が変われば、もう届かない
+    // Tailscale から来た要求: Tailscale Serve の転送先は beat からは変えられないので、待ち受ける場所が変われば、もう届かない
     if (moves) return { reason: 'port', params: {} };
     const verdict = post(request.headers);
     if (verdict.ok) return undefined;

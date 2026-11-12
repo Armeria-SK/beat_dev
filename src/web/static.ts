@@ -9,7 +9,7 @@ const MIME: Record<string, string> = {
 
 export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 
-// 画面（HTML）には Cross-Origin-Opener-Policy も付ける: ほかのページが window.open で Clive を開いても、開いたページから Clive の window を操作できない
+// 画面（HTML）には Cross-Origin-Opener-Policy も付ける: ほかのページが window.open で beat を開いても、開いたページから beat の window を操作できない
 const HEADERS = (type: string) => ({
   'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache',
   'Content-Security-Policy': CSP, 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
@@ -20,7 +20,7 @@ export function serveStatic(root: string, req: IncomingMessage, res: ServerRespo
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   if (!existsSync(join(root, 'index.html'))) {
     res.writeHead(200, HEADERS('text/html; charset=utf-8'));
-    res.end('<!doctype html><meta charset="utf-8"><title>Clive</title><p>The screen has not been built yet. Run <code>npm run build:web</code>, then open this page again.</p>');
+    res.end('<!doctype html><meta charset="utf-8"><title>beat</title><p>The screen has not been built yet. Run <code>npm run build:web</code>, then open this page again.</p>');
     return true;
   }
   try {

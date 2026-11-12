@@ -10,7 +10,7 @@ import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 export const MEMORY_TOOL_NAMES: readonly string[] = ['memory_save', 'memory_update', 'memory_forget', 'memory_search'];
 
-const BookArg = Type.Union([Type.Literal('user'), Type.Literal('notes')], { description: 'user: facts and preferences about the user / notes: Clive\'s own notes and lessons' });
+const BookArg = Type.Union([Type.Literal('user'), Type.Literal('notes')], { description: 'user: facts and preferences about the user / notes: beat\'s own notes and lessons' });
 const IdArg = Type.Union([Type.Integer({ minimum: 1 }), Type.String({ pattern: '^[unUN]?[0-9]+$' })], { description: 'The memory ID (for [u7], "u7" or 7)' });
 
 function services(ctx: ToolContext) {
@@ -44,7 +44,7 @@ export const memorySave: ToolDef<{ book: Book; content: string }> = {
     try {
       const s = services(ctx);
       const messageId = latestUserMessage(ctx);
-      const { memory, eventId } = s.memory.save({ book: input.book, content: input.content, actor: ctx.kind === 'review' ? 'review' : 'clive', conversationId: ctx.conversationId, ...(messageId === undefined ? {} : { messageId }), runId: ctx.runId });
+      const { memory, eventId } = s.memory.save({ book: input.book, content: input.content, actor: ctx.kind === 'review' ? 'review' : 'beat', conversationId: ctx.conversationId, ...(messageId === undefined ? {} : { messageId }), runId: ctx.runId });
       s.emit({ type: 'memory.changed', runId: ctx.runId, conversationId: ctx.conversationId, memoryId: memory.id, book: memory.book, action: 'create', content: memory.content, eventId });
       const language = languageOf(ctx.config);
       return { content: toolText(language, 'memory.saved', { id: `${prefix(memory.book)}${memory.id}`, label: BOOK_LABELS[language][memory.book], used: s.memory.used(memory.book) }) };
@@ -62,7 +62,7 @@ export const memoryUpdate: ToolDef<{ id: number | string; content: string }> = {
   async execute(input, ctx) {
     try {
       const s = services(ctx);
-      const { memory, eventId } = s.memory.update(parseId(input.id), input.content, ctx.kind === 'review' ? 'review' : 'clive', ctx.runId);
+      const { memory, eventId } = s.memory.update(parseId(input.id), input.content, ctx.kind === 'review' ? 'review' : 'beat', ctx.runId);
       s.emit({ type: 'memory.changed', runId: ctx.runId, conversationId: ctx.conversationId, memoryId: memory.id, book: memory.book, action: 'update', content: memory.content, eventId });
       return { content: toolText(languageOf(ctx.config), 'memory.updated', { id: `${prefix(memory.book)}${memory.id}` }) };
     } catch (error) { return fail(error, ctx); }
@@ -80,7 +80,7 @@ export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
   async execute(input, ctx) {
     try {
       const s = services(ctx);
-      const { memory, eventId } = s.memory.forget(parseId(input.id), ctx.kind === 'review' ? 'review' : 'clive', input.reason, ctx.runId);
+      const { memory, eventId } = s.memory.forget(parseId(input.id), ctx.kind === 'review' ? 'review' : 'beat', input.reason, ctx.runId);
       s.emit({ type: 'memory.changed', runId: ctx.runId, conversationId: ctx.conversationId, memoryId: memory.id, book: memory.book, action: 'forget', content: memory.content, eventId });
       return { content: toolText(languageOf(ctx.config), 'memory.forgotten', { id: `${prefix(memory.book)}${memory.id}` }) };
     } catch (error) { return fail(error, ctx); }

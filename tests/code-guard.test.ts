@@ -57,7 +57,7 @@ const BYPASSES: Array<[string, string]> = [
   ['$p=@{Uri="http://127.0.0.1:4777/api/settings";Method="Put";Body="{}"}; irm @p', 'R1.6 splatting + R1.7 ループバック'],
   ['exec 3<>/dev/tcp/127.0.0.1/4777; printf "PUT /api/settings HTTP/1.1" >&3', 'R1.6 /dev/tcp + R1.7'],
   ['(New-Object Net.WebClient).UploadString("http" + "://127.0.0.1:4777/api/settings", "{}")', 'R1.6 New-Object（偶然の deny に頼らない）'],
-  // この PC の中のサーバー・Clive 自身
+  // この PC の中のサーバー・beat 自身
   ['curl http://127.0.0.1:4777/api/settings', 'R1.7'],
   ['curl http://localhost:4777/api/approvals', 'R1.7 localhost'],
   ['curl --request=PUT http://127.0.0.1:4777/api/settings', 'R1.9 + R1.7'],
@@ -273,7 +273,7 @@ const WRAPPED: Array<[string, string]> = [
   ['Set-Item env:NODE_OPTIONS "--require ./put.js"', 'Set-Item env:'],
   ['cmd /c "set NODE_OPTIONS=--require ./put.js && npm ls"', 'cmd の set'],
   // npx 系・wsl
-  ['npx tsc --noEmit', 'npx（node_modules/.bin は Clive が書き換えられる）'],
+  ['npx tsc --noEmit', 'npx（node_modules/.bin は beat が書き換えられる）'],
   ['npx prettier --check .', 'npx'],
   ['pnpx tsc', 'pnpx'],
   ['bunx tsc', 'bunx'],
@@ -441,7 +441,7 @@ test('D4・11.6: tools.shell.allow が外せるのは「一覧に無いコマン
   assert.equal(f.bash('npm test; curl http://127.0.0.1:4777', { allow }).decision, 'ask', 'ほかの文のループバックは外せない');
 });
 
-test('R1.7: server.origins の host（Tailscale の URL など）も Clive 自身として確かめる', t => {
+test('R1.7: server.origins の host（Tailscale の URL など）も beat 自身として確かめる', t => {
   const f = fixture(t);
   const url = 'curl https://box.tail1234.ts.net/api/approvals';
   assert.equal(f.bash(url).decision, 'allow', '知らない host への GET はそのまま');

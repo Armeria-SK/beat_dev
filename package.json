@@ -1,8 +1,8 @@
 {
-  "name": "clive",
+  "name": "beat",
   "version": "0.1.0",
   "private": true,
-  "description": "Clive — いつも動いている個人用 AI エージェント",
+  "description": "beat — いつも動いている個人用 AI エージェント",
   "type": "module",
   "engines": {
     "node": ">=24.16.0"

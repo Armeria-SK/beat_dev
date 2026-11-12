@@ -31,7 +31,7 @@ async function boot(t: { after: (fn: () => void) => void }, config: Record<strin
   const paths = resolvePaths(root);
   mkdirSync(paths.workspace, { recursive: true });
   if (config) writeFileSync(paths.config, JSON.stringify(config));
-  const app = new App({ paths, databasePath: join(root, 'clive.db'), log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  const app = new App({ paths, databasePath: join(root, 'beat.db'), log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
   open.push(app);
   app.conversations.ensure('c1');
   const events: NotifyEvent[] = [];
@@ -401,7 +401,7 @@ test('1-5s 外を読んだ会話が当たる history_search の実行も「外�
 test('1-5s AI が時刻だけを書き換えた（edited の行がある）まだ動いていない時刻指定のタスクは、持ち主が消せる', async t => {
   const { app } = await boot(t);
   const task = app.tasks.create({ title: 'Later', body: '', origin: 'user', actor: 'user', runAt: Date.now() + 3_600_000 } as never);
-  app.tasks.update(task.id, { runAt: Date.now() + 7_200_000 }, 'clive', 'run-x');
+  app.tasks.update(task.id, { runAt: Date.now() + 7_200_000 }, 'beat', 'run-x');
   assert.ok(app.tasks.events(task.id).some(e => e.kind === 'edited' && e.run_id === 'run-x'));
   app.tasks.remove(task.id);
   assert.equal(app.tasks.get(task.id), undefined);
@@ -418,7 +418,7 @@ test('1-5s タスクの実行の指示の経過は、中身の無い行（edited
 
 test('1-5s 好奇心から出たタスクの実行は、出どころが分からないので下書きのまま待つ', async t => {
   const { app } = await boot(t);
-  const item = app.curiosity.add({ topic: 'Topic', source: 'clive' } as never);
+  const item = app.curiosity.add({ topic: 'Topic', source: 'beat' } as never);
   const task = app.tasks.create({ title: 'Look into it', body: '', origin: 'curiosity', curiosityId: item.id, actor: 'worker' } as never);
   const conversation = app.conversations.create({ kind: 'task' });
   app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(conversation.id, task.id);

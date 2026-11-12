@@ -126,9 +126,9 @@ test('引数の形が正しくなければ、実行せずに直させる', async
 
 test('シェル: 作業フォルダの中のコマンドは承認なしで実行する', async t => {
   const s = setup(t);
-  const outcome = await s.call('shell_run', { command: 'echo hello-clive' });
+  const outcome = await s.call('shell_run', { command: 'echo hello-beat' });
   assert.equal(outcome.decision, 'allow');
-  assert.match(outcome.output.content, /hello-clive/u);
+  assert.match(outcome.output.content, /hello-beat/u);
   assert.match(outcome.output.content, /exit code: 0/u);
 });
 

@@ -6,7 +6,7 @@ import { isSafeOutboundUrl } from './url.ts';
 export type NotifySecretField = 'url' | 'token';
 
 export function notifyEnvName(id: string, field: NotifySecretField): string {
-  const base = `CLIVE_NOTIFY_${id.toUpperCase().replaceAll('-', '_')}`;
+  const base = `BEAT_NOTIFY_${id.toUpperCase().replaceAll('-', '_')}`;
   return field === 'url' ? `${base}_URL_SECRET` : `${base}_TOKEN`;
 }
 
@@ -29,10 +29,10 @@ export function secretProblem(field: NotifySecretField, value: string): SecretPr
 export type McpSecretKind = 'env' | 'header';
 
 export function mcpEnvPrefix(id: string): string {
-  return `CLIVE_MCP_${id.toUpperCase()}_`;
+  return `BEAT_MCP_${id.toUpperCase()}_`;
 }
 
-// CLIVE_MCP_<ID>_<E|H>_<NAME>_SECRET（最大 63 文字。SECRET を含むので、鍵の名前の決まりを満たす）
+// BEAT_MCP_<ID>_<E|H>_<NAME>_SECRET（最大 63 文字。SECRET を含むので、鍵の名前の決まりを満たす）
 export function mcpEnvName(id: string, kind: McpSecretKind, name: string): string {
   return `${mcpEnvPrefix(id)}${kind === 'env' ? 'E' : 'H'}_${name.toUpperCase().replaceAll('-', '_')}_SECRET`;
 }

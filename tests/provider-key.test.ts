@@ -67,11 +67,11 @@ test('キーを入れる: .env に 1 行、設定に apiKeyEnv（ID から作っ
   const res = await s.put('my-llm', { key: KEY });
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, { set: true, last4: KEY.slice(-4) });
-  assert.equal(readFileSync(s.paths.env, 'utf8'), `CLIVE_MY_LLM_API_KEY=${KEY}\n`);
-  assert.equal(s.env.CLIVE_MY_LLM_API_KEY, KEY, '起動し直さなくても効く');
-  assert.equal(s.app.config().providers.find(p => p.id === 'my-llm')!.apiKeyEnv, 'CLIVE_MY_LLM_API_KEY');
+  assert.equal(readFileSync(s.paths.env, 'utf8'), `BEAT_MY_LLM_API_KEY=${KEY}\n`);
+  assert.equal(s.env.BEAT_MY_LLM_API_KEY, KEY, '起動し直さなくても効く');
+  assert.equal(s.app.config().providers.find(p => p.id === 'my-llm')!.apiKeyEnv, 'BEAT_MY_LLM_API_KEY');
   assert.deepEqual((await s.get('my-llm')).body, { set: true, last4: KEY.slice(-4) });
-  assert.equal((await s.json('/api/settings', 'GET')).body.apiKeys.CLIVE_MY_LLM_API_KEY, true, '設定の「API キー」の節にも、入っていると出る');
+  assert.equal((await s.json('/api/settings', 'GET')).body.apiKeys.BEAT_MY_LLM_API_KEY, true, '設定の「API キー」の節にも、入っていると出る');
   assert.deepEqual(Object.keys((await s.get('my-llm')).body).sort(), ['last4', 'set']);
 });
 
@@ -93,13 +93,13 @@ test('.env のほかの行・コメント・順番はそのまま残る。消す
   const original = '# 私の鍵\nANTHROPIC_API_KEY=sk-ant-keepme-0000\n\nOTHER_SETTING=1\n';
   writeFileSync(s.paths.env, original);
   assert.equal((await s.put('my-llm', { key: KEY })).status, 200);
-  assert.equal(readFileSync(s.paths.env, 'utf8'), `${original}CLIVE_MY_LLM_API_KEY=${KEY}\n`);
+  assert.equal(readFileSync(s.paths.env, 'utf8'), `${original}BEAT_MY_LLM_API_KEY=${KEY}\n`);
   assert.equal(readFileSync(`${s.paths.env}.bak`, 'utf8'), original);
   const gone = await s.del('my-llm');
   assert.equal(gone.status, 200);
   assert.deepEqual(gone.body, { set: false, last4: null });
   assert.equal(readFileSync(s.paths.env, 'utf8'), original);
-  assert.equal(s.env.CLIVE_MY_LLM_API_KEY, undefined, '消したら、動いている Clive からも消える');
+  assert.equal(s.env.BEAT_MY_LLM_API_KEY, undefined, '消したら、動いている beat からも消える');
   assert.deepEqual((await s.get('my-llm')).body, { set: false, last4: null });
   assert.equal((await s.del('my-llm')).status, 200, '無くても消せる（何もしない）');
 });
@@ -158,7 +158,7 @@ test('キーが OS の環境変数にあるとき（.env に無い）: GET は {
   const res = await s.del('fake');
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, { set: true, source: 'os' });
-  assert.equal(s.env.FAKE_KEY, OS_KEY, 'OS の値を、動いている Clive から消さない');
+  assert.equal(s.env.FAKE_KEY, OS_KEY, 'OS の値を、動いている beat から消さない');
   assert.equal(existsSync(s.paths.env), false, '.env を作らない');
   assert.equal(JSON.stringify(res.body).includes(OS_KEY.slice(-4)), false, '末尾も出さない');
   assert.deepEqual((await s.get('fake')).body, { set: true, source: 'os' }, '消えていない');
@@ -244,7 +244,7 @@ test('改行・制御文字・前後の空白・空・長すぎる鍵は 400 で
   }
   assert.equal(existsSync(s.paths.env), false, '.env を作らない');
   assert.equal(readFileSync(s.paths.config, 'utf8'), before);
-  assert.equal(s.env.CLIVE_MY_LLM_API_KEY, undefined);
+  assert.equal(s.env.BEAT_MY_LLM_API_KEY, undefined);
 });
 
 test('三種類の引用符と # をすべて含む鍵は、.env に安全に書けないので 400（何も書かない）', async t => {
@@ -287,7 +287,7 @@ test('.env の前の方に閉じていない引用符の行があり、鍵の引
 
 test('知らないプロバイダは 404。ID の形が変でも同じ（環境変数の名前を作らない）', async t => {
   const s = await start(t);
-  for (const id of ['nope', 'A%20B', '..%2F..', 'CLIVE_X_API_KEY']) {
+  for (const id of ['nope', 'A%20B', '..%2F..', 'BEAT_X_API_KEY']) {
     assert.equal((await s.put(id, { key: KEY })).status, 404, id);
     assert.equal((await s.get(id)).status, 404, id);
     assert.equal((await s.del(id)).status, 404, id);
@@ -322,7 +322,7 @@ test('Origin・Sec-Fetch-Site・Host の確かめは、ほかの書き込みと�
   assert.equal(status, 403, '別の Host');
   assert.equal(existsSync(s.paths.env), false);
   assert.equal(readFileSync(s.paths.config, 'utf8'), before);
-  assert.equal(s.env.CLIVE_MY_LLM_API_KEY, undefined);
+  assert.equal(s.env.BEAT_MY_LLM_API_KEY, undefined);
 });
 
 test('モデルの道具から届かない: 道具の一覧に、鍵・環境変数・プロバイダの設定を触るものが無い', async t => {
@@ -354,7 +354,7 @@ test('設定が通らない形になるなら（この PC の外への http に�
   assert.equal(res.body.error, 'invalid_config');
   assert.equal(existsSync(s.paths.env), false, '.env を書かない');
   assert.equal(readFileSync(s.paths.config, 'utf8'), config);
-  assert.equal(s.env.CLIVE_REMOTE_API_KEY, undefined);
+  assert.equal(s.env.BEAT_REMOTE_API_KEY, undefined);
   assert.equal(JSON.stringify(res.body).includes(KEY), false);
 });
 
@@ -364,11 +364,11 @@ test('二つ同時に入れても、両方の行と両方の apiKeyEnv が残る
   assert.equal(a.status, 200);
   assert.equal(b.status, 200);
   const env = readFileSync(s.paths.env, 'utf8');
-  assert.match(env, new RegExp(`CLIVE_MY_LLM_API_KEY=${KEY}\\n`, 'u'));
-  assert.match(env, new RegExp(`CLIVE_OTHER_API_KEY=${KEY2}\\n`, 'u'));
+  assert.match(env, new RegExp(`BEAT_MY_LLM_API_KEY=${KEY}\\n`, 'u'));
+  assert.match(env, new RegExp(`BEAT_OTHER_API_KEY=${KEY2}\\n`, 'u'));
   const providers = s.app.config().providers;
-  assert.equal(providers.find(p => p.id === 'my-llm')!.apiKeyEnv, 'CLIVE_MY_LLM_API_KEY');
-  assert.equal(providers.find(p => p.id === 'other')!.apiKeyEnv, 'CLIVE_OTHER_API_KEY');
+  assert.equal(providers.find(p => p.id === 'my-llm')!.apiKeyEnv, 'BEAT_MY_LLM_API_KEY');
+  assert.equal(providers.find(p => p.id === 'other')!.apiKeyEnv, 'BEAT_OTHER_API_KEY');
 });
 
 test('同じ環境変数名を使うプロバイダが別にいれば、作る名前は重ならない（片方の鍵を上書きしない）', async t => {
@@ -379,10 +379,10 @@ test('同じ環境変数名を使うプロバイダが別にいれば、作る�
   assert.equal((await s.put('a-b', { key: KEY })).status, 200);
   assert.equal((await s.put('a_b', { key: KEY2 })).status, 200);
   const providers = s.app.config().providers;
-  assert.equal(providers.find(p => p.id === 'a-b')!.apiKeyEnv, 'CLIVE_A_B_API_KEY');
-  assert.equal(providers.find(p => p.id === 'a_b')!.apiKeyEnv, 'CLIVE_A_B_API_KEY_2');
-  assert.equal(s.env.CLIVE_A_B_API_KEY, KEY);
-  assert.equal(s.env.CLIVE_A_B_API_KEY_2, KEY2);
+  assert.equal(providers.find(p => p.id === 'a-b')!.apiKeyEnv, 'BEAT_A_B_API_KEY');
+  assert.equal(providers.find(p => p.id === 'a_b')!.apiKeyEnv, 'BEAT_A_B_API_KEY_2');
+  assert.equal(s.env.BEAT_A_B_API_KEY, KEY);
+  assert.equal(s.env.BEAT_A_B_API_KEY_2, KEY2);
 });
 
 test('Linux: 作った .env は 0600', { skip: process.platform === 'win32' }, async t => {

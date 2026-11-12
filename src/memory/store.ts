@@ -7,7 +7,7 @@ import { storeText, type StoreMessageKey } from '../shared/messages/stores.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
 
 export type Book = 'user' | 'notes';
-export type Actor = 'clive' | 'user' | 'review';
+export type Actor = 'beat' | 'user' | 'review';
 
 export interface Memory {
   id: number;
@@ -39,7 +39,7 @@ export class MemoryError extends LocalizedError<StoreMessageKey> {
 }
 
 export const BOOK_LABELS: Record<Language, Record<Book, string>> = {
-  en: { user: 'Memories about the user', notes: "Clive's notes and lessons" },
+  en: { user: 'Memories about the user', notes: "beat's notes and lessons" },
 };
 export const BOOK_LABEL = BOOK_LABELS.en;
 const MEMORY_HEADING: Record<Language, string> = { en: '# What you remember (memory)' };

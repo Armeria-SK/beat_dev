@@ -187,7 +187,7 @@ async function expectBlocked(s: ReturnType<typeof setup>, command: string): Prom
 }
 
 // 6 回目の審査: `'{"Destination":"SOUL.md"}' | ConvertFrom-Json | Copy-Item -Path evil.txt -Force`（と Import-Csv・計算した列）は、確かめなしで通り、SOUL.md を上書きし .git/hooks/pre-commit を置いた。
-// `Get-ChildItem -Force -Recurse -Filter '.env?' | Select-String SECRET` は .env を表示した。本物の Windows PowerShell 5.1 で、素のシェルでは本当に起きること（前提）と、Clive のシェルでは確かめになるか止まり、拒否すれば何も起きないことを確かめる
+// `Get-ChildItem -Force -Recurse -Filter '.env?' | Select-String SECRET` は .env を表示した。本物の Windows PowerShell 5.1 で、素のシェルでは本当に起きること（前提）と、beat のシェルでは確かめになるか止まり、拒否すれば何も起きないことを確かめる
 test('実機（Windows PowerShell 5.1・制限モード）: パイプの値の名前で書き込み先が決まる書き込みと、-Filter・-Include 越しの秘密の読み取りは、確かめになるか止まり、拒否すれば何も起きない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
   const plant = (dir: string): void => {
@@ -228,7 +228,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: パイプの値の�
 });
 
 // 再審査の指摘: `//localhost/D$/…/USER.md`（管理共有）や `//?/D:/…`（デバイスのパス）は、本物の Windows で人格を書き換えたのに、許可フォルダの外のふつうの確かめだけで通った。
-// 本物の Windows PowerShell 5.1 で、その書き方が本当に書けること（前提）と、Clive のシェルでは確かめにも進まず止まることを確かめる
+// 本物の Windows PowerShell 5.1 で、その書き方が本当に書けること（前提）と、beat のシェルでは確かめにも進まず止まることを確かめる
 test('実機（Windows PowerShell 5.1・制限モード）: 管理共有・デバイスのパスで人格を書き換える書き方は、確かめにも進まず止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
   const ws = s.paths.workspace;
@@ -253,7 +253,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 管理共有・デ�
 });
 
 // 再審査の指摘（低）: 当たるものが 2,000 件を超えるワイルドカードの中の秘密のパスと、バッククォートでエスケープした秘密の名前（'.en`v'）は、ふつうの確かめで通っていた。
-// 本物の Windows PowerShell 5.1 で、その書き方が .env を読めること（前提）と、Clive のシェルでは確かめにも進まず止まることを確かめる
+// 本物の Windows PowerShell 5.1 で、その書き方が .env を読めること（前提）と、beat のシェルでは確かめにも進まず止まることを確かめる
 test('実機（Windows PowerShell 5.1・制限モード）: バッククォートでエスケープした秘密の名前と、2,000 件を超えるワイルドカードの中の秘密は、確かめにも進まず止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
   writeFileSync(s.files('.env'), 'SECRET=1\n');
@@ -278,7 +278,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: バッククォー�
 });
 
 // 7 回目の審査（致命）: PowerShell 5.1 は外部のプログラムの空の引数を捨てる。`git grep -e '' -- '-O./x.sh'` は、git に `grep -e -- -O./x.sh` として渡り、x.sh が動いた
-test('実機（Windows PowerShell 5.1・制限モード）: git grep -e \'\' -- -O./x.sh は、素のシェルでは x.sh が動くが、Clive のシェルでは止まって動かない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+test('実機（Windows PowerShell 5.1・制限モード）: git grep -e \'\' -- -O./x.sh は、素のシェルでは x.sh が動くが、beat のシェルでは止まって動かない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   if (spawnSync('git', ['--version']).status !== 0) { t.skip('git が無い'); return; }
   const s = setup(t, 'powershell');
   const repo = s.paths.workspace;
@@ -296,7 +296,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: git grep -e \'\' -- 
     assert.equal(outcome.decision, 'deny', `${c}: ${outcome.output.content}`);
     assert.match(outcome.output.content, /argument/u, c);
   }
-  assert.equal(existsSync(marker), false, 'Clive のシェルで x.sh が動いた');
+  assert.equal(existsSync(marker), false, 'beat のシェルで x.sh が動いた');
 });
 
 // "…" の中の $( … ) は、中の文をトップレベルの文と同じに調べる（§11.15）。読むだけ・整えるだけは承認なしで本当に動き、中で書く・消す・コードを動かすものは確かめになって、拒否すれば何も起きない
@@ -345,7 +345,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: "…" の中の $( �
 });
 
 // 代入の左辺の添字（$a[ … ] = 1）の中の $( … ) も、トップレベルの文と同じに調べる。以前は代入かどうかの先読みが添字の中を読み飛ばして、確かめなしで書いた・消した
-test('実機（Windows PowerShell 5.1・制限モード）: 代入の左辺の添字の中で書く・消す部分式は、素の PowerShell では動くが、Clive のシェルでは確かめになり、拒否すれば何も書かれない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+test('実機（Windows PowerShell 5.1・制限モード）: 代入の左辺の添字の中で書く・消す部分式は、素の PowerShell では動くが、beat のシェルでは確かめになり、拒否すれば何も書かれない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
   writeFileSync(s.files('x'), 'keep');
   writeFileSync(s.files('.env'), 'SECRET=1\n');
@@ -431,8 +431,8 @@ test('実機（bash）: "…" の中の \\ を含む読むだけのコマンド�
   assert.equal(readFileSync(s.files('x'), 'utf8'), 'keep', 'echo "\\$(rm x)" で x が消えた');
 });
 
-// Windows の Git Bash に bash -c で渡すと、連続する \\ が 1 つに減る。Clive のシェルはスクリプトを標準入力で渡す（runner.ts）ので減らず、ガードの読みどおりに動く
-test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の bash -c では減って置換が動くが、Clive のシェルでは減らず、ガードの読みどおり文字のまま出て、置換の touch は動かない', { skip: (process.platform !== 'win32' || !bashAvailable) && 'Windows の Git Bash が無い' }, async t => {
+// Windows の Git Bash に bash -c で渡すと、連続する \\ が 1 つに減る。beat のシェルはスクリプトを標準入力で渡す（runner.ts）ので減らず、ガードの読みどおりに動く
+test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の bash -c では減って置換が動くが、beat のシェルでは減らず、ガードの読みどおり文字のまま出て、置換の touch は動かない', { skip: (process.platform !== 'win32' || !bashAvailable) && 'Windows の Git Bash が無い' }, async t => {
   const s = setup(t, 'bash');
   const dangerous = 'echo "\\\\\\$(touch made)"';
   const raw = spawnSync(bashPath!, ['--noprofile', '--norc', '-c', dangerous], { cwd: s.paths.workspace, encoding: 'utf8' });
@@ -447,7 +447,7 @@ test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の 
   assert.equal(outcome.decidedBy !== 'user', true, '承認を求めた');
   assert.equal(outcome.output.isError, false, outcome.output.content);
   assert.equal(body(outcome), '\\$(touch made)', 'ガードの読みと同じ文字が出る');
-  assert.equal(existsSync(s.files('made')), false, 'Clive のシェルで置換の touch が動いた');
+  assert.equal(existsSync(s.files('made')), false, 'beat のシェルで置換の touch が動いた');
   for (const [command, expected] of [
     ['echo "a\\\\b"', 'a\\b'], ['echo "\\\\\\\\"', '\\\\'], ['echo "x\\\\" "y"', 'x\\ y'], ['echo "\\\\$HOME_UNSET_XYZ"', '\\'], ['grep -c "line\\\\|notes" a.txt', '3'],
   ] as const) {
@@ -461,7 +461,7 @@ test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の 
 });
 
 // 最終審査で再現: 空になりうる変数（PowerShell の $1 $0 $é $日 $$ $^ $?、bash の $1 $@ $* $!）を名前に含む読むパスは、文字どおりの名前と読まれて .env の確かめを通り抜けた。
-// 本物のシェルでは .env を読むこと（前提）と、Clive のシェルでは確かめなしに読まず、拒否すれば秘密が出ないことを確かめる。ただ出すだけの "$1" は承認なしで動く
+// 本物のシェルでは .env を読むこと（前提）と、beat のシェルでは確かめなしに読まず、拒否すれば秘密が出ないことを確かめる。ただ出すだけの "$1" は承認なしで動く
 async function expectAskedNotRun(s: ReturnType<typeof setup>, command: string): Promise<void> {
   let settled = false;
   const pending = s.call(command).then(outcome => { settled = true; return outcome; });
@@ -474,7 +474,7 @@ async function expectAskedNotRun(s: ReturnType<typeof setup>, command: string): 
   assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
 }
 
-test('実機（Windows PowerShell 5.1・制限モード）: Get-Content ".env$1" は素のシェルでは .env を読むが、Clive のシェルでは確かめなしに読まない。"$1" をただ出すだけは承認なしで動く', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+test('実機（Windows PowerShell 5.1・制限モード）: Get-Content ".env$1" は素のシェルでは .env を読むが、beat のシェルでは確かめなしに読まない。"$1" をただ出すだけは承認なしで動く', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
   writeFileSync(s.files('.env'), 'SECRET=1\n');
   const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
@@ -491,8 +491,8 @@ test('実機（Windows PowerShell 5.1・制限モード）: Get-Content ".env$1"
 });
 
 // 最終審査の指摘: 値を式として評価する bash の構文・組み込みは、変数の値や引用符で囲んだ文字列の中の a[$(コマンド)]（配列の添字）で、コマンドを動かす。
-// 素の bash では動くこと（前提）と、Clive のシェルでは今回だけの確かめになり、拒否すれば動かないことを確かめる。整数の定数だけの式・普通の [ ] の比較は承認なしで動く
-test('実機（bash）: 値を式として評価する形（[[ x -eq 0 ]]・$((x))・test -v・let・declare -i）は、素の bash では添字の $( ) が動くが、Clive のシェルでは今回だけの確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+// 素の bash では動くこと（前提）と、beat のシェルでは今回だけの確かめになり、拒否すれば動かないことを確かめる。整数の定数だけの式・普通の [ ] の比較は承認なしで動く
+test('実機（bash）: 値を式として評価する形（[[ x -eq 0 ]]・$((x))・test -v・let・declare -i）は、素の bash では添字の $( ) が動くが、beat のシェルでは今回だけの確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
   const s = setup(t, 'bash');
   const marker = s.files('ran.txt');
   writeFileSync(s.files('pwn.sh'), '#!/bin/sh\necho ran > ran.txt\n', { mode: 0o755 });
@@ -506,7 +506,7 @@ test('実機（bash）: 値を式として評価する形（[[ x -eq 0 ]]・$((x
     assert.equal(existsSync(marker), true, `前提: 素の bash では ./pwn.sh が動く: ${command}`);
     rmSync(marker);
     await expectBlocked(s, command);
-    assert.equal(existsSync(marker), false, `Clive のシェルで ./pwn.sh が動いた: ${command}`);
+    assert.equal(existsSync(marker), false, `beat のシェルで ./pwn.sh が動いた: ${command}`);
   }
   for (const [command, expected] of [['echo $((6*7))', /42/u], ['[[ 5 -gt 3 ]] && echo yes', /yes/u], ['[ "$HOME" ] && [ 1 -eq 1 ] && echo ok', /ok/u], ['[[ -v HOME ]] && echo set', /set/u]] as const) {
     const outcome = await s.call(command);
@@ -516,7 +516,7 @@ test('実機（bash）: 値を式として評価する形（[[ x -eq 0 ]]・$((x
   }
 });
 
-test('実機（bash）: cat .env$@ や cat ".env$1" は素の bash では .env を読むが、Clive のシェルでは確かめなしに読まない。"$1" $@ をただ出すだけは承認なしで動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
+test('実機（bash）: cat .env$@ や cat ".env$1" は素の bash では .env を読むが、beat のシェルでは確かめなしに読まない。"$1" $@ をただ出すだけは承認なしで動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
   const s = setup(t, 'bash');
   writeFileSync(s.files('.env'), 'SECRET=1\n');
   const raw = (command: string): string => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
@@ -549,8 +549,8 @@ test('実機（bash）: "…" の中の $( ) の中の引用符・コメント�
 });
 
 // 最終審査で再現: $( ) の終わりの切り出しが bash とずれて、コメントの後ろ・case の )・$(( の部分シェル・[[ ]] のコメントと閉じ方・$[ ]・(( )) が、中の文を隠していた。
-// 素の bash では pwn.sh が動くこと（前提）と、Clive のシェルでは止まるか確かめになり、拒否すれば pwn.sh が動かないことを確かめる。ふつうの [[ ]] は承認なしで動く
-test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の )・$(( の部分シェル・[[ ]]・$[ ]・(( ））は、素の bash では pwn.sh が動くが、Clive のシェルでは止まるか確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+// 素の bash では pwn.sh が動くこと（前提）と、beat のシェルでは止まるか確かめになり、拒否すれば pwn.sh が動かないことを確かめる。ふつうの [[ ]] は承認なしで動く
+test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の )・$(( の部分シェル・[[ ]]・$[ ]・(( ））は、素の bash では pwn.sh が動くが、beat のシェルでは止まるか確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
   const s = setup(t, 'bash');
   const marker = s.files('ran.txt');
   writeFileSync(s.files('pwn.sh'), '#!/bin/sh\necho ran > ran.txt\n', { mode: 0o755 });
@@ -564,7 +564,7 @@ test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の 
     assert.equal(existsSync(marker), true, `前提: 素の bash では pwn.sh が動く: ${JSON.stringify(command)}`);
     rmSync(marker);
     await expectBlocked(s, command);
-    assert.equal(existsSync(marker), false, `Clive のシェルで pwn.sh が動いた: ${JSON.stringify(command)}`);
+    assert.equal(existsSync(marker), false, `beat のシェルで pwn.sh が動いた: ${JSON.stringify(command)}`);
   }
   for (const [command, expected] of [['if [[ -f a.txt ]]; then echo yes; fi', /yes/u], ['[[ -n x ]] && echo ok || echo no', /ok/u], ['echo "$(echo a#b) $#"', /a#b/u], ['echo $((1 + 2))', /3/u]] as const) {
     const outcome = await s.call(command);
@@ -577,7 +577,7 @@ test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
 // 8 回目の審査（致命）: curl は URL の { } [ ] を展開し、-o の #1 に差し込み、-O は展開した名前で保存する。
-// 本物の curl と、この PC の小さなサーバーで、素のシェルでは本当に書かれる・届くこと（前提）と、-g があれば文字どおりになることを確かめ、Clive のシェルでは止まって何も起きないことを確かめる
+// 本物の curl と、この PC の小さなサーバーで、素のシェルでは本当に書かれる・届くこと（前提）と、-g があれば文字どおりになることを確かめ、beat のシェルでは止まって何も起きないことを確かめる
 const curlExe = which('curl');
 async function startEcho(): Promise<{ port: number; seen: string[]; close: () => void }> {
   const seen: string[] = [];
@@ -647,7 +647,7 @@ for (const shell of ['powershell', 'bash'] as const) {
 }
 
 // 8 回目の審査（高）: findstr /f:list.txt は、list.txt に書かれたファイルを読む。チェックサムの -c も、一覧のファイルに書かれたファイルを読む。引用符で囲んだフラグも、プログラムにはフラグ
-test('実機（Windows PowerShell 5.1・制限モード）: findstr /f: は素のシェルでは一覧のファイル（.env）を読むが、Clive のシェルでは今回だけの確かめになり、拒否すれば動かない。引用符つきの /s も下を歩いて止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+test('実機（Windows PowerShell 5.1・制限モード）: findstr /f: は素のシェルでは一覧のファイル（.env）を読むが、beat のシェルでは今回だけの確かめになり、拒否すれば動かない。引用符つきの /s も下を歩いて止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
   seedSecrets(s);
   writeFileSync(s.files('list.txt'), '.env\n');
@@ -659,7 +659,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: findstr /f: は素�
   await expectDenied(s, ["findstr '/s' SECRET *", 'findstr "/s" SECRET *'], raw);
 });
 
-test('実機（bash）: md5sum -c は素のシェルでは一覧のファイルを読んで照合するが、Clive のシェルでは今回だけの確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+test('実機（bash）: md5sum -c は素のシェルでは一覧のファイルを読んで照合するが、beat のシェルでは今回だけの確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
   const s = setup(t, 'bash');
   seedSecrets(s);
   const bash = (command: string): string => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
@@ -670,7 +670,7 @@ test('実機（bash）: md5sum -c は素のシェルでは一覧のファイル�
   assert.equal((await s.call('md5sum a.txt')).decision, 'allow', '照合でない md5sum は、これまでどおり');
 });
 
-// 7 回目の審査（高）: フォルダを再帰して中身を読むコマンドは、下の秘密のパスを調べていなかった。素のシェルで本当に表示されること（前提）と、Clive のシェルでは止まり、秘密が出ないことを確かめる
+// 7 回目の審査（高）: フォルダを再帰して中身を読むコマンドは、下の秘密のパスを調べていなかった。素のシェルで本当に表示されること（前提）と、beat のシェルでは止まり、秘密が出ないことを確かめる
 function seedSecrets(s: ReturnType<typeof setup>): void {
   mkdirSync(s.files('proj/inner'), { recursive: true });
   writeFileSync(s.files('.env'), 'SECRET=root\n');
@@ -781,10 +781,10 @@ for (const shell of ['powershell', 'bash'] as const) {
   });
 }
 
-// 審査の指摘（深い審査）: 洗い出しで core.quotepath と core.excludesFile まで落ち、日本語のファイル名が八進数で出る・全体の無視の一覧が効かない、が起きた。Clive のシェルを通して、本物の git で確かめる
+// 審査の指摘（深い審査）: 洗い出しで core.quotepath と core.excludesFile まで落ち、日本語のファイル名が八進数で出る・全体の無視の一覧が効かない、が起きた。beat のシェルを通して、本物の git で確かめる
 for (const shell of ['powershell', 'bash'] as const) {
   const available = shell === 'powershell' ? psAvailable : bashAvailable;
-  test(`実機（${shell}）: ホームの core.quotepath=false と core.excludesFile は、Clive の git status でも効く（日本語のファイル名がそのまま出て、全体の無視の一覧が効く）`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+  test(`実機（${shell}）: ホームの core.quotepath=false と core.excludesFile は、beat の git status でも効く（日本語のファイル名がそのまま出て、全体の無視の一覧が効く）`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
     const s = setup(t, shell);
     const root = s.paths.workspace;
     const home = join(s.paths.workspace, '..', 'quote-home');
@@ -1013,7 +1013,7 @@ for (const shell of ['powershell', 'bash'] as const) {
     const count = (): number => Number(git('rev-list', '--all', '--count').stdout.trim() || 0);
     // 設定が .husky を指す: そのフックは、許しても動かない（空のフォルダへ向けたまま）。.git/hooks のフックも、設定に隠れているので動かない
     git('config', 'core.hooksPath', '.husky');
-    const first = await ask('cd hk2; git commit --allow-empty -q -m x', /This repository sets core\.hooksPath, but those hooks do not run in the git that Clive runs/u);
+    const first = await ask('cd hk2; git commit --allow-empty -q -m x', /This repository sets core\.hooksPath, but those hooks do not run in the git that beat runs/u);
     assert.equal(first.output.isError, false, first.output.content);
     assert.equal(existsSync(marker('husky')), false, '設定の core.hooksPath のフックが動いた');
     assert.equal(existsSync(marker('own')), false);
@@ -1090,12 +1090,12 @@ for (const shell of ['powershell', 'bash'] as const) {
 
 // 審査の指摘（深い審査）: 本物の PowerShell 5.1 は、引用符つきの -Path・位置のパスのワイルドカードも解決する。承認なしで人格・スキル・.git が書き換わり、秘密（.env）が読めた。
 // 本物のシェルで、今回だけの確かめを断れば何も変わらないこと、秘密・config.json は止まり中身が出ないことを確かめる
-test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきのワイルドカードで、人格・スキル・.git は書けず、秘密・config.json・clive.db は読めない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきのワイルドカードで、人格・スキル・.git は書けず、秘密・config.json・beat.db は読めない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
   const root = s.paths.workspace;
   mkdirSync(join(root, 'skills', 'a'), { recursive: true });
   mkdirSync(join(root, '.git'), { recursive: true });
-  const files: Array<[string, string]> = [['SOUL.md', 'persona'], ['USER.md', 'user'], ['.env', 'SECRET=1'], ['.git/description', 'desc'], ['skills/a/SKILL.md', 'skill'], [join('..', 'config.json'), '{"k":"CONFIGSECRET"}'], [join('..', 'clive.db'), 'DBSECRET']];
+  const files: Array<[string, string]> = [['SOUL.md', 'persona'], ['USER.md', 'user'], ['.env', 'SECRET=1'], ['.git/description', 'desc'], ['skills/a/SKILL.md', 'skill'], [join('..', 'config.json'), '{"k":"CONFIGSECRET"}'], [join('..', 'beat.db'), 'DBSECRET']];
   for (const [f, text] of files) writeFileSync(join(root, f), text);
   const before = files.map(([f]) => readFileSync(join(root, f), 'utf8'));
   // 今回だけの確かめになる（断る）
@@ -1104,7 +1104,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきの�
     "Add-Content -Path '.gi[t]/description' -Value x -Force", "Set-Location 'skill[s]'; Set-Content a/SKILL.md x", "'x' > 'SOUL.*'", "Remove-Item 'SOUL.*'",
   ]) await expectAsk(s, command);
   // 止める
-  for (const command of ["Get-Content '.en[v]'", "Get-Content '..\\config.jso[n]'", "Get-Content '..\\clive.d[b]'", "Select-String -Path '.en?' -Pattern S"]) {
+  for (const command of ["Get-Content '.en[v]'", "Get-Content '..\\config.jso[n]'", "Get-Content '..\\beat.d[b]'", "Select-String -Path '.en?' -Pattern S"]) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
     assert.doesNotMatch(outcome.output.content, /SECRET=1|CONFIGSECRET|DBSECRET/u, `${command}: 秘密の中身が出た`);
@@ -1174,7 +1174,7 @@ for (const shell of ['powershell', 'bash'] as const) {
   });
 }
 
-// 9 回目の審査（高）: `cp -r secrets stuff; cat stuff/token.txt` は、素のシェルでは秘密のフォルダの中身を表示する。Clive のシェルでは、動かす前に止まり、コピー先もできず、中身も出ない
+// 9 回目の審査（高）: `cp -r secrets stuff; cat stuff/token.txt` は、素のシェルでは秘密のフォルダの中身を表示する。beat のシェルでは、動かす前に止まり、コピー先もできず、中身も出ない
 function seedSecretFolder(s: ReturnType<typeof setup>): void {
   for (const dir of ['secrets', 'proj', 'stuff', 'stuff2']) rmSync(s.files(dir), { recursive: true, force: true });
   mkdirSync(s.files('secrets'), { recursive: true });

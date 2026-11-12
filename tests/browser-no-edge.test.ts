@@ -6,7 +6,7 @@ import { BrowserFailure, PlaywrightDriver, type LaunchOptions } from '../src/too
 import { isEdgeExecutable } from '../src/shared/browser-path.ts';
 import { testConfig } from './helpers.ts';
 
-// 持ち主の決定: Edge でブラウザ操作はさせない。Clive は Edge を探さず、起動せず、設定でも通さない
+// 持ち主の決定: Edge でブラウザ操作はさせない。beat は Edge を探さず、起動せず、設定でも通さない
 
 const withBrowser = (browser: unknown) => ({ ...JSON.parse(JSON.stringify(testConfig())), tools: { browser } });
 const EDGE_WIN = ['C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe', 'C:\\Users\\u\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe'];
@@ -47,7 +47,7 @@ test('起動: path が Edge の実行ファイルなら、プロファイルも�
   const { mkdtempSync, existsSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const parent = mkdtempSync(join(tmpdir(), 'clive-noedge-'));
+  const parent = mkdtempSync(join(tmpdir(), 'beat-noedge-'));
   t.after(() => rmSync(parent, { recursive: true, force: true }));
   const profileDir = join(parent, 'profile');
   const base: LaunchOptions = { profileDir, channel: undefined, executablePath: undefined, headless: true, proxy: { server: 'http://127.0.0.1:9', username: 'u', password: 'p' }, viewport: { width: 1280, height: 800 }, locale: 'ja-JP', actionTimeoutMs: 10_000 };

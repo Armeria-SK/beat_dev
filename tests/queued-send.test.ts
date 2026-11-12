@@ -435,7 +435,7 @@ test('終了するとき、待たせている発言は保存だけして残す�
   config.models = [fakeModel('m1')];
   config.routing = { chat: ['m1'], background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
-  const databasePath = join(dir, 'clive.db');
+  const databasePath = join(dir, 'beat.db');
   const adapters: FakeAdapter[] = [];
   const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, adapterOverride: provider => { const made = new FakeAdapter(provider); adapters.push(made); return made; } });
 

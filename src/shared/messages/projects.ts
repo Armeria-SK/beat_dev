@@ -22,7 +22,7 @@ const en = {
   'folder_home': 'Your home folder (or a folder above it) cannot be a product folder. Pick a folder inside it',
   'folder_app_data': 'Folders that hold app settings and temporary files cannot be a product folder',
   'folder_system': 'System folders cannot be a product folder',
-  'folder_clive': 'The folder of this app and its data cannot be a product folder',
+  'folder_beat': 'The folder of this app and its data cannot be a product folder',
   'folder_secret': 'Folders that hold secrets cannot be a product folder',
   'folder_denied': 'This folder is on the blocked list in the settings',
   'folder_link': 'This link cannot be followed. Paste the full path of the folder it points to',

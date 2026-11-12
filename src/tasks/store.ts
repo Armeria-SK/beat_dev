@@ -292,7 +292,7 @@ export class TaskStore {
   setWaiting(id: string, kind: 'question' | 'approval', text: string, runId?: string): Task {
     this.#db.prepare(`UPDATE tasks SET status = 'waiting', waiting_kind = ?, waiting_text = ?, lease_until = NULL, updated_at = ? WHERE id = ?`)
       .run(kind, text, this.#now(), id);
-    this.event(id, kind === 'question' ? 'question' : 'approval', 'clive', text, runId);
+    this.event(id, kind === 'question' ? 'question' : 'approval', 'beat', text, runId);
     return this.#changed(id);
   }
 

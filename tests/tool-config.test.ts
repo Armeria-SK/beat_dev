@@ -171,7 +171,7 @@ test('本物の curl: 一覧の場所の設定ファイルは本当に読まれ�
   writeFileSync(target, 'body\n');
   const url = pathToFileURL(target).href;
   const windows = process.platform === 'win32';
-  // newer: 新しい curl（8.19 は読む。7.81 は読まない）だけが読む場所。古い curl では本物が読まないので、Clive 側の確かめだけを見る
+  // newer: 新しい curl（8.19 は読む。7.81 は読まない）だけが読む場所。古い curl では本物が読まないので、beat 側の確かめだけを見る
   const places: Array<{ v: string; rel: string; windowsOnly?: true; newer?: true }> = [
     { v: 'CURL_HOME', rel: '.curlrc' }, { v: 'HOME', rel: '.curlrc' }, { v: 'HOME', rel: '.config/curlrc', newer: true }, { v: 'XDG_CONFIG_HOME', rel: 'curlrc', newer: true },
     { v: 'CURL_HOME', rel: '_curlrc', windowsOnly: true }, { v: 'HOME', rel: '_curlrc', windowsOnly: true }, { v: 'USERPROFILE', rel: '.curlrc', windowsOnly: true }, { v: 'USERPROFILE', rel: '_curlrc', windowsOnly: true },
@@ -190,7 +190,7 @@ test('本物の curl: 一覧の場所の設定ファイルは本当に読まれ�
     const label = `${place.v}/${place.rel}`;
     if (!place.newer) assert.match(spawnSync('curl', ['-s', url], { cwd: empty, env, encoding: 'utf8' }).stdout, /CONFIGREAD/u, `本物の curl が読まない場所: ${label}`);
     assert.doesNotMatch(spawnSync('curl', ['-q', '-s', url], { cwd: empty, env, encoding: 'utf8' }).stdout, /CONFIGREAD/u, `-q でも読まれた: ${label}`);
-    assert.equal(checkShellCommand('curl -sS https://example.com/', f.ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: false, env }).onceOnly, true, `Clive の一覧に無い場所: ${label}`);
+    assert.equal(checkShellCommand('curl -sS https://example.com/', f.ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: false, env }).onceOnly, true, `beat の一覧に無い場所: ${label}`);
     assert.equal(checkShellCommand('curl -q -sS https://example.com/', f.ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: false, env }).decision, 'allow', `-q でも確かめになる: ${label}`);
   }
 });
@@ -204,7 +204,7 @@ test('読めない設定ファイルがあれば、curl は今回だけ', { skip
   try { assert.equal(f.run('curl -sS https://example.com/').onceOnly, true); } finally { chmodSync(rc, 0o644); }
 });
 
-// 本物の wget は、読む設定ファイルを --version に載せる（(user) は ~/.wgetrc、(env) は WGETRC）。Clive の一覧と合っているか
+// 本物の wget は、読む設定ファイルを --version に載せる（(user) は ~/.wgetrc、(env) は WGETRC）。beat の一覧と合っているか
 const wgetAvailable = spawnSync('wget', ['--version']).status === 0;
 test('本物の wget: ~/.wgetrc と WGETRC は、本当に読まれる場所として載る', { skip: !wgetAvailable && 'wget が無い' }, t => {
   const f = curlFixture(t);

@@ -8,7 +8,7 @@ import { defaultConfig } from '../src/config/store.ts';
 import type { ModelRequest, ProbeResult, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
 
 export function tempDir(t: { after: (fn: () => void) => void }): string {
-  const dir = mkdtempSync(join(tmpdir(), 'clive-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -71,7 +71,7 @@ test('ui/thread: 時刻の書き方。今日は時刻だけ、別の日は日付
     assert.equal(messageStamp(Date.UTC(2026, 10, 11, 15, 0), now)!.text, '00:00', '東京では今日（UTC ではきのう）');
     assert.equal(messageStamp(Date.UTC(2025, 11, 31, 3, 0), now)!.text, '2025/12/31 12:00');
     assert.equal(messageStamp(0, now), null, '時刻の無い発言には出さない');
-    assert.equal(replyMeta('Clive', messageStamp(Date.UTC(2026, 10, 12, 0, 5), now)), 'Clive · 09:05');
+    assert.equal(replyMeta('beat', messageStamp(Date.UTC(2026, 10, 12, 0, 5), now)), 'beat · 09:05');
     assert.equal(replyMeta(undefined, messageStamp(Date.UTC(2026, 10, 12, 0, 5), now)), '09:05', '名前がまだ読めていなければ時刻だけ');
     assert.equal(replyMeta('  ', null), '');
     setTimezone('America/New_York');

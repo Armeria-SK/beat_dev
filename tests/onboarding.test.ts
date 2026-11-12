@@ -14,7 +14,7 @@ const TEMPLATE_PATHS = resolvePaths('unused-data-dir');
 // 作業フォルダの初期ファイルは、チェックアウトの設定によって改行が CRLF のことがある。比べる試験は LF にそろえて読む（改行を保つことは別の試験で確かめる）
 const lf = (text: string): string => text.replace(/\r\n/gu, '\n');
 const template = (name: 'SOUL.md' | 'USER.md'): string => lf(readTemplate(TEMPLATE_PATHS, name));
-const JA_SOUL = '# SOUL\n\nあなた自身の人格。ここを書き換えると、次の会話から反映されます。\n\n## 名前\n\nClive\n\n## ユーザーとの関係\n\n\n## 話し方\n\n\n## 大事にしていること\n\n\n## やらないこと';
+const JA_SOUL = '# SOUL\n\nあなた自身の人格。ここを書き換えると、次の会話から反映されます。\n\n## 名前\n\nbeat\n\n## ユーザーとの関係\n\n\n## 話し方\n\n\n## 大事にしていること\n\n\n## やらないこと';
 const JA_USER = '# USER\n\nユーザーについて分かっていること。ここを書き換えると、次の会話から反映されます。\n\n## 基本情報\n\n- 名前:\n- 主な使用言語: 日本語\n\n## 関心\n\n## 今のプロジェクト\n\n## 覚えておくこと';
 
 async function start(t: Parameters<typeof tempDir>[0], models = true) {
@@ -51,7 +51,7 @@ test('personaTexts（日本語の見出しのファイル）: 名前・呼び方
   assert.match(next.soul, /## 話し方\n\nSpeak in a friendly, polite way\.[^\n]+\n\n絵文字は使わない\n\n## 大事にしていること/u);
   assert.match(next.user, /## 基本情報\n\n- 名前: やまだ\n- 呼び方: やまださん\n- 主な使用言語: 日本語\n- 勤務先: 自宅\n\n## 関心/u);
   assert.equal(next.soul.split('## ').length, soul.split('## ').length, '節の数は変わらない');
-  const restored = next.soul.replace('## 名前\n\nミナト\n', '## 名前\n\nClive\n').replace(/## 話し方\n\n[\s\S]*?\n\n## 大事にしていること/u, '## 話し方\n\n\n## 大事にしていること');
+  const restored = next.soul.replace('## 名前\n\nミナト\n', '## 名前\n\nbeat\n').replace(/## 話し方\n\n[\s\S]*?\n\n## 大事にしていること/u, '## 話し方\n\n\n## 大事にしていること');
   assert.equal(restored, soul, '名前と話し方の節のほかは 1 文字も変わらない');
   const again = personaTexts(next.soul, next.user, 'en', { userName: 'やまだ', callMe: 'やまださん', botName: 'ミナト', style: 'friendly', styleNote: '絵文字は使わない' });
   assert.deepEqual(again, next, '同じ値でもう一度書いても同じ（重ならない）');
@@ -145,15 +145,15 @@ test('writePersonaFile: リンク（シンボリックリンク・ジャンク�
 test('reloadEnvFile: 起動したあとに足した鍵を読み込み、すでにある変数は上書きせず、違う値が書かれている変数の名前だけを返す（値は返さない）', t => {
   const dir = tempDir(t);
   const path = join(dir, '.env');
-  writeFileSync(path, 'CLIVE_TEST_NEW_KEY=sk-new-secret\nCLIVE_TEST_SAME=same\nCLIVE_TEST_CHANGED=changed-in-file\n');
-  delete process.env.CLIVE_TEST_NEW_KEY;
-  process.env.CLIVE_TEST_SAME = 'same';
-  process.env.CLIVE_TEST_CHANGED = 'running-value';
-  t.after(() => { delete process.env.CLIVE_TEST_NEW_KEY; delete process.env.CLIVE_TEST_SAME; delete process.env.CLIVE_TEST_CHANGED; });
+  writeFileSync(path, 'BEAT_TEST_NEW_KEY=sk-new-secret\nBEAT_TEST_SAME=same\nBEAT_TEST_CHANGED=changed-in-file\n');
+  delete process.env.BEAT_TEST_NEW_KEY;
+  process.env.BEAT_TEST_SAME = 'same';
+  process.env.BEAT_TEST_CHANGED = 'running-value';
+  t.after(() => { delete process.env.BEAT_TEST_NEW_KEY; delete process.env.BEAT_TEST_SAME; delete process.env.BEAT_TEST_CHANGED; });
   const result = reloadEnvFile(path);
-  assert.deepEqual(result, { loaded: true, notApplied: ['CLIVE_TEST_CHANGED'] });
-  assert.equal(process.env.CLIVE_TEST_NEW_KEY, 'sk-new-secret', '新しい鍵は読み込まれる');
-  assert.equal(process.env.CLIVE_TEST_CHANGED, 'running-value', '動いている値は上書きしない（起動し直すまで）');
+  assert.deepEqual(result, { loaded: true, notApplied: ['BEAT_TEST_CHANGED'] });
+  assert.equal(process.env.BEAT_TEST_NEW_KEY, 'sk-new-secret', '新しい鍵は読み込まれる');
+  assert.equal(process.env.BEAT_TEST_CHANGED, 'running-value', '動いている値は上書きしない（起動し直すまで）');
   assert.deepEqual(reloadEnvFile(join(dir, 'missing.env')), { loaded: false, notApplied: [] });
   rmSync(path);
 });
@@ -257,7 +257,7 @@ test('POST /api/onboarding/persona: SOUL.md がリンクなどのときは 409�
   assert.deepEqual([body.code, body.params], ['http.persona_unsafe', { file: 'SOUL.md' }]);
   assert.equal(existsSync(join(outside, 'target', 'x')), false);
   assert.deepEqual(readdirSync(join(outside, 'target')), []);
-  assert.equal(s.app.config().profile.name, 'Clive', '書けなかったときは画面の名前も変えない');
+  assert.equal(s.app.config().profile.name, 'beat', '書けなかったときは画面の名前も変えない');
   assert.doesNotMatch(s.file('USER.md'), /やまだ/u, '同じ要求の USER.md も書かない（先に SOUL.md で断る）');
 });
 
@@ -295,11 +295,11 @@ test('POST /api/onboarding/reload-env: パスを受け取らず、鍵がある�
   assert.equal(typeof body.loaded, 'boolean');
   delete process.env.FAKE_KEY;
   assert.deepEqual(((await (await s.post('/api/onboarding/reload-env', {})).json()) as any).apiKeys, { FAKE_KEY: false }, '鍵が無ければ false');
-  process.env.CLIVE_TEST_ASKED = 'also-secret';
-  t.after(() => { delete process.env.CLIVE_TEST_ASKED; });
-  const asked = await s.post('/api/onboarding/reload-env', { env: ['lower_case', 5, 'CLIVE_TEST_ASKED', 'PATH', 'CLIVE_TEST_MISSING'] });
+  process.env.BEAT_TEST_ASKED = 'also-secret';
+  t.after(() => { delete process.env.BEAT_TEST_ASKED; });
+  const asked = await s.post('/api/onboarding/reload-env', { env: ['lower_case', 5, 'BEAT_TEST_ASKED', 'PATH', 'BEAT_TEST_MISSING'] });
   const askedText = await asked.text();
-  assert.deepEqual((JSON.parse(askedText) as any).apiKeys, { FAKE_KEY: false, CLIVE_TEST_ASKED: true }, '設定のプロバイダの鍵のほかに尋ねられるのは、これから足す 1 つだけ（形の合う最初の名前）。ほかの名前は答えない');
+  assert.deepEqual((JSON.parse(askedText) as any).apiKeys, { FAKE_KEY: false, BEAT_TEST_ASKED: true }, '設定のプロバイダの鍵のほかに尋ねられるのは、これから足す 1 つだけ（形の合う最初の名前）。ほかの名前は答えない');
   assert.equal(askedText.includes('also-secret'), false);
   const several = await (await s.post('/api/onboarding/reload-env', { env: ['PATH', 'HOME', 'USERPROFILE'] })).json() as any;
   assert.deepEqual(Object.keys(several.apiKeys).sort(), ['FAKE_KEY', 'PATH'], '複数の名前を並べても、先頭の 1 つだけ');
@@ -315,7 +315,7 @@ test('名前（botName・callMe・userName）の先頭の # は 400（http.bad_h
     assert.deepEqual([json.code, json.error], ['http.bad_hash_start', 'invalid_field']);
   }
   assert.deepEqual([s.file('SOUL.md'), s.file('USER.md')], before, '断られたときは何も書かない');
-  assert.equal(s.app.config().profile.name, 'Clive', '画面の名前も変えない');
+  assert.equal(s.app.config().profile.name, 'beat', '画面の名前も変えない');
   assert.equal((await s.post('/api/onboarding/persona', { botName: 'C#' })).status, 200, '先頭でなければよい');
   assert.deepEqual(normalizePersonaInput({ botName: '# x', callMe: ' ## y', userName: 'z #' }), { botName: '\\# x', callMe: '\\## y', userName: 'z #' }, '部品の側でも、先頭の # には印を付ける');
   assert.equal(startsWithHash('  # x'), true);

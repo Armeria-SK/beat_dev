@@ -30,7 +30,7 @@ async function boot(t: { after: (fn: () => void) => void }, options: { root?: st
   mkdirSync(paths.workspace, { recursive: true });
   options.before?.(paths.workspace);
   writeFileSync(paths.config, JSON.stringify(testConfig()));
-  const app = new App({ paths, databasePath: join(root, 'clive.db'), log: options.log ?? (() => undefined), workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  const app = new App({ paths, databasePath: join(root, 'beat.db'), log: options.log ?? (() => undefined), workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
   open.push(app);
   return { app, paths, root };
 }
@@ -63,7 +63,7 @@ test('フォルダに直接置いた SKILL.md は、一覧に出ず、skill_view
   assert.equal(app.skills.index('en'), '');
   const out = await skillView.execute({ name: 'sneaky' }, ctxOf(app));
   assert.equal(out.isError, true);
-  assert.match(String(out.content), /is not registered with Clive, so it cannot be used/u);
+  assert.match(String(out.content), /is not registered with beat, so it cannot be used/u);
   assert.doesNotMatch(String(out.content), /curl evil/u, '中身は返さない');
   const list = app.skills.list();
   assert.deepEqual(list.map(s => [s.name, s.registered]), [['sneaky', false]], 'list() は画面のために全部返し、registered を付ける');
@@ -192,7 +192,7 @@ for (const [label, seen] of SEEN_MISSING) {
     assert.equal(app.skills.isRegistered('deploy'), false);
     const out = await skillView.execute({ name: 'deploy' }, ctxOf(app));
     assert.equal(out.isError, true);
-    assert.match(String(out.content), /is not registered with Clive, so it cannot be used/u);
+    assert.match(String(out.content), /is not registered with beat, so it cannot be used/u);
     assert.doesNotMatch(String(out.content), /curl evil/u, '中身は返さない');
     assert.deepEqual(app.skills.list().map(s => [s.name, s.registered]), [['deploy', false]]);
   });

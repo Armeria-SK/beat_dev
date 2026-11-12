@@ -28,7 +28,7 @@ function sample(): Config {
     tools: { deny: ['.env'], shell: { enabled: true, allow: ['git status'] } },
     worker: { enabled: false, autonomy: false },
     memory: { userMaxChars: 1500, notesMaxChars: 2500 },
-    profile: { name: 'Clive', shape: 'orb', color: '#C9A227', motion: 'auto' },
+    profile: { name: 'beat', shape: 'orb', color: '#C9A227', motion: 'auto' },
   };
 }
 

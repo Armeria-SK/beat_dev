@@ -90,7 +90,7 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
     sendJson(res, 200, { profile: app.config().profile, ...state() });
   });
 
-  // SOUL.md と USER.md の全文（設定の「Clive について」の編集）。利用者自身の編集なので承認は要らない。
+  // SOUL.md と USER.md の全文（設定の「beat について」の編集）。利用者自身の編集なので承認は要らない。
   const personaView = () => {
     const { soul, user } = readPersona(app.paths);
     return { soul, user, tokens: { soul: estimateTextTokens(soul), user: estimateTextTokens(user) }, budget: app.engine.personaBudget() ?? null, max: PERSONA_MAX_CHARS };

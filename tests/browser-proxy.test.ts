@@ -8,7 +8,7 @@ import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from '../
 // T-02: ブラウザの外向きの通信の中継。名前の解決・つなぎは偽物に差し替えて、実際のネットワークには出ない
 
 const PUBLIC = '93.184.216.34';
-const AUTH = `Proxy-Authorization: Basic ${Buffer.from('clive:pw').toString('base64')}\r\n`;
+const AUTH = `Proxy-Authorization: Basic ${Buffer.from('beat:pw').toString('base64')}\r\n`;
 
 interface Rig {
   proxy: EgressProxy;
@@ -38,7 +38,7 @@ async function rig(t: TestContext, extra: Partial<EgressProxyOptions> = {}): Pro
   const connected: Array<[string, number]> = [];
   const table: Record<string, string[]> = {};
   const proxy = await startEgressProxy({
-    username: 'clive', password: 'pw', log: line => logs.push(line),
+    username: 'beat', password: 'pw', log: line => logs.push(line),
     resolve: async host => { resolved.push(host); return table[host] ?? [PUBLIC]; },
     connect: (address, port) => { connected.push([address, port]); return connect(port === 80 ? upstreamPort : echoPort, '127.0.0.1'); },
     ...extra,
@@ -72,9 +72,9 @@ test('待ち受けは 127.0.0.1 だけ（T-02）', async t => {
 test('合言葉が無い・違う要求は 407 で、解決もつなぎもしない', async t => {
   const r = await rig(t);
   const bad = [
-    '', `Proxy-Authorization: Basic ${Buffer.from('clive:wrong').toString('base64')}\r\n`,
+    '', `Proxy-Authorization: Basic ${Buffer.from('beat:wrong').toString('base64')}\r\n`,
     `Proxy-Authorization: Basic ${Buffer.from('other:pw').toString('base64')}\r\n`,
-    `Proxy-Authorization: Basic ${Buffer.from('clive:pw-longer').toString('base64')}\r\n`,
+    `Proxy-Authorization: Basic ${Buffer.from('beat:pw-longer').toString('base64')}\r\n`,
     `Proxy-Authorization: Basic ${Buffer.from('c').toString('base64')}\r\n`,
     'Proxy-Authorization: Bearer pw\r\n', 'Proxy-Authorization: Basic\r\n', 'Proxy-Authorization: Basic !!!\r\n',
   ];

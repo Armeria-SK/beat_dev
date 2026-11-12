@@ -127,7 +127,7 @@ test('起動: --data-dir は今までどおり読み、そのフォルダの設�
   const run = spawnSync(process.execPath, ['src/main.ts', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 30_000 });
   assert.equal(run.status, 1, run.stderr);
   assert.match(run.stderr, /^Settings error: Set server\.host to a loopback address such as 127\.0\.0\.1 \(it is 0\.0\.0\.0 now\)[^\n]*\n$/u);
-  assert.equal(existsSync(join(dir, 'clive.db')), true, '指定したフォルダに DB を作った（--data-dir を使った）');
+  assert.equal(existsSync(join(dir, 'beat.db')), true, '指定したフォルダに DB を作った（--data-dir を使った）');
 });
 
 test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書いてあっても読めて、初期値にはもう書かない', () => {

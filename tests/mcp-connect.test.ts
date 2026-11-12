@@ -32,13 +32,13 @@ test('T-38: 本物の stdio で、道具の一覧と呼び出しが通る', asyn
 });
 
 test('T-39: 子の環境変数は、持ち主が指したものと最小の既定だけ。アプリのほかの秘密は渡らない', async t => {
-  process.env.CLIVE_TEST_SECRET_FOR_MCP = 'leak-me';
-  t.after(() => { delete process.env.CLIVE_TEST_SECRET_FOR_MCP; });
+  process.env.BEAT_TEST_SECRET_FOR_MCP = 'leak-me';
+  t.after(() => { delete process.env.BEAT_TEST_SECRET_FOR_MCP; });
   const link = await open(t, { MY_TOKEN: 'tok-1' });
   const result = await link.caller.callTool({ name: 'env_names', arguments: {} }, { timeout: 10000 }) as { content: Array<{ text: string }> };
   const names = result.content[0]!.text.split(',');
   assert.ok(names.includes('MY_TOKEN'));
-  assert.ok(!names.includes('CLIVE_TEST_SECRET_FOR_MCP'));
+  assert.ok(!names.includes('BEAT_TEST_SECRET_FOR_MCP'));
 });
 
 test('T-40: 子が落ちると onClose が呼ばれる。こちらから閉じたときは呼ばれない', async t => {

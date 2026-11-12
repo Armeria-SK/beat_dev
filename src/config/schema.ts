@@ -233,7 +233,7 @@ export const AppConfig = Type.Object({
   routing: RoutingConfig,
   tools: ToolsConfig(),
   profile: Type.Object({
-    name: Type.String({ minLength: 1, maxLength: 40, default: 'Clive' }),
+    name: Type.String({ minLength: 1, maxLength: 40, default: 'beat' }),
     shape: Type.Union(AVATAR_SHAPES.map(s => Type.Literal(s)), { default: 'pebble' }),
     color: Type.String({ pattern: '^#[0-9a-fA-F]{6}$', default: '#61B8A5' }),
     motion: Type.Union([Type.Literal('auto'), Type.Literal('none'), Type.Literal('float'), Type.Literal('sway'), Type.Literal('pulse')], { default: 'auto' }),

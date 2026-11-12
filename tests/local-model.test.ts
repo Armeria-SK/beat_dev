@@ -391,7 +391,7 @@ test('タスクの実行: local_only のタスクが task_create で作る子の
 test('タスクの実行: local_only のタスクが終わったあとの振り返り（記憶に残す振り返り）も、手元の裏方モデルだけで行う。外のモデルには回さない', async t => {
   const s = await startApp(t, twoProviders(['ext1', 'loc2', 'ext2']));
   const task = s.app.tasks.create({ title: '手元だけで', origin: 'user', actor: 'user', localOnly: true });
-  s.app.tasks.finish(task.id, 'done', 'タスクの結果', 'clive');
+  s.app.tasks.finish(task.id, 'done', 'タスクの結果', 'beat');
   s.app.reviews.enqueue('task', `task:${task.id}`, { taskId: task.id });
   s.adapter().scripts = [reply('変更なし')];
   assert.equal(await s.app.worker.tick(), 'ran');
@@ -400,7 +400,7 @@ test('タスクの実行: local_only のタスクが終わったあとの振り�
   assert.match(String(s.adapter().calls[0]!.messages.at(-1)?.content), /タスクの結果/u);
 
   const normal = s.app.tasks.create({ title: '普通のタスク', origin: 'user', actor: 'user' });
-  s.app.tasks.finish(normal.id, 'done', 'ふつうの結果', 'clive');
+  s.app.tasks.finish(normal.id, 'done', 'ふつうの結果', 'beat');
   s.app.reviews.enqueue('task', `task:${normal.id}`, { taskId: normal.id });
   s.adapters.get('ext')!.scripts = [reply('変更なし')];
   assert.equal(await s.app.worker.tick(), 'ran');

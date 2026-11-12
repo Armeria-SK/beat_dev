@@ -9,7 +9,7 @@ import { tempDir } from './helpers.ts';
 
 // ガードの読みと、bash が実行するものが同じであること（security-self-api.md §11.15）。
 // Windows の Git Bash は、bash -c の引数の中の連続する \\ を 1 つに減らす（msys が引数を読み直す）ので、スクリプトは引数でなく標準入力で渡す。
-// ここで走らせるのは、Clive のシェルの道具が実際に使う resolveShell と runProcess
+// ここで走らせるのは、beat のシェルの道具が実際に使う resolveShell と runProcess
 
 const bashPath = which('bash');
 const bashAvailable = bashPath !== undefined && spawnSync(bashPath, ['--noprofile', '--norc', '-c', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
@@ -79,7 +79,7 @@ const BACKSLASH_RUNS = [0, 1, 2, 3, 4, 5, 6];
 const TRAILING = ['$', '`', '"', '\\', '\n', 'n', '.', '|', '(', ')', '[', ']', '*', '?', '-', '/', "'", ' ', '!', '#', 'a', '0', '{'];
 const TAILS = ['X', '(echo QQ)X'];
 
-test('ガードの読み（"…" の中の \\ の連続 0〜6 個 × 後ろの 23 通り）が、Clive のシェルが動かす bash の結果と同じ', { skip }, async t => {
+test('ガードの読み（"…" の中の \\ の連続 0〜6 個 × 後ろの 23 通り）が、beat のシェルが動かす bash の結果と同じ', { skip }, async t => {
   const dir = tempDir(t);
   mkdirSync(join(dir, 'cwd'));
   const run = runnerIn(join(dir, 'cwd'));
@@ -116,7 +116,7 @@ test('ガードの読み（"…" の中の \\ の連続 0〜6 個 × 後ろの 2
   assert.deepEqual(wrong, []);
 });
 
-test('bash: echo "\\\\\\$(touch made) は、Clive のシェルで置換にならず、文字を出すだけで何も作らない。素の -c は Windows では置換にしてしまう', { skip }, async t => {
+test('bash: echo "\\\\\\$(touch made) は、beat のシェルで置換にならず、文字を出すだけで何も作らない。素の -c は Windows では置換にしてしまう', { skip }, async t => {
   const dir = tempDir(t);
   const script = 'echo "\\\\\\$(touch made)"';
   const result = await runnerIn(dir)(script);

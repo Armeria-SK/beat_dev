@@ -100,8 +100,8 @@ test('会話が途切れたときの振り返りは、新しい発言が来る�
 
 test('振り返りで記憶をまとめても、取り消せる', async t => {
   const s = await setup(t, undefined, undefined, true);
-  const a = s.app.memory.save({ book: 'user', content: 'コーヒーが好き', actor: 'clive' }).memory;
-  const b = s.app.memory.save({ book: 'user', content: '朝はコーヒーを飲む', actor: 'clive' }).memory;
+  const a = s.app.memory.save({ book: 'user', content: 'コーヒーが好き', actor: 'beat' }).memory;
+  const b = s.app.memory.save({ book: 'user', content: '朝はコーヒーを飲む', actor: 'beat' }).memory;
   await s.app.worker.tick();
   s.adapter().scripts.push(reply('はい'));
   await s.chat('c1', 'コーヒーの話');
@@ -126,7 +126,7 @@ test('ユーザーが消した記憶は、振り返りの依頼文で「覚え�
     { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: 'a'.repeat(50), message: { role: 'user', content: 'x' }, created_at: 0 },
     { id: 2, conversation_id: 'c', run_id: null, role: 'assistant', text: '新しい方', message: { role: 'assistant', content: 'x' }, created_at: 0 },
   ], 20);
-  assert.equal(transcript, '[Clive] 新しい方', '長すぎるときは新しい方を残す');
+  assert.equal(transcript, '[beat] 新しい方', '長すぎるときは新しい方を残す');
 });
 
 test('タスクが終わったら振り返る。重い会話の後も振り返る', async t => {
@@ -192,8 +192,8 @@ test('SKILL.md の読み書き（先頭の --- の中の name と description）
 
 test('好奇心から調べるタスクを作り、結果を書き戻す（自発行動・上限・静かな時間帯を守る）', async t => {
   const s = await setup(t, c => { c.memory.review = false; c.worker.curiosityPerDay = 1; c.worker.idleMinutes = 0; c.worker.quietStart = '23:00'; c.worker.quietEnd = '07:00'; });
-  s.app.curiosity.add({ topic: 'node:sqlite の FTS5', why: '日本語検索に使えるか', source: 'clive' });
-  s.app.curiosity.add({ topic: 'croner のタイムゾーン', source: 'clive' });
+  s.app.curiosity.add({ topic: 'node:sqlite の FTS5', why: '日本語検索に使えるか', source: 'beat' });
+  s.app.curiosity.add({ topic: 'croner のタイムゾーン', source: 'beat' });
   assert.equal(await s.app.worker.tick(), 'idle', '自発行動がオフ');
   await s.app.applyConfig({ ...s.app.config(), worker: { ...s.app.config().worker, autonomy: true } });
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'trigram で日本語も検索できる', notify: true }));
@@ -213,7 +213,7 @@ test('好奇心から調べるタスクを作り、結果を書き戻す（自�
 
 test('自発タスクを承認制にしているとき、断ったら好奇心は「やめた」になる', async t => {
   const s = await setup(t, c => { c.memory.review = false; c.worker.autonomy = true; c.worker.idleMinutes = 0; c.worker.selfTasksNeedApproval = true; });
-  const item = s.app.curiosity.add({ topic: 'WebGPU', source: 'clive' });
+  const item = s.app.curiosity.add({ topic: 'WebGPU', source: 'beat' });
   assert.equal(await s.app.worker.tick(), 'idle');
   const proposal = s.app.tasks.list({ statuses: ['inbox'] })[0]!;
   assert.equal(proposal.origin, 'curiosity');

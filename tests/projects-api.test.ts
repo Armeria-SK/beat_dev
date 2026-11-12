@@ -74,10 +74,10 @@ test('製品の API: 選べないフォルダは 400（コードは project.fold
   assert.deepEqual(await refused({ root: join(s.products, 'shop') }), [409, 'project', 'project.root_in_use']);
   assert.deepEqual(await refused({ root: join(s.products, 'nope') }), [400, 'project', 'project.folder_not_found']);
   assert.deepEqual(await refused({ root: 'relative/path' }), [400, 'project', 'project.folder_not_absolute']);
-  assert.deepEqual(await refused({ root: join(APP_ROOT, 'src') }), [400, 'project', 'project.folder_clive'], '抜け道の外は今までどおり');
+  assert.deepEqual(await refused({ root: join(APP_ROOT, 'src') }), [400, 'project', 'project.folder_beat'], '抜け道の外は今までどおり');
   const dataDir = await s.json('/api/projects', 'POST', { root: s.paths.data });
   assert.equal(dataDir.status, 400);
-  assert.match(dataDir.body.code, /^project\.folder_(clive|app_data)$/u);
+  assert.match(dataDir.body.code, /^project\.folder_(beat|app_data)$/u);
   assert.deepEqual(await refused({ root: s.folder('named'), name: 'bad‮name' }), [400, 'project', 'project.bad_name']);
   assert.deepEqual(await refused({ root: s.folder('named'), name: 'x'.repeat(101) }), [400, 'project', 'project.bad_name']);
   assert.deepEqual(await refused({ root: s.folder('named'), checkCommand: 'a\nb' }), [400, 'project', 'project.bad_check_command']);
@@ -101,11 +101,11 @@ test('製品の API: 名前を送らないとき、フォルダの名前が長�
   assert.deepEqual([named.status, named.body.code], [400, 'project.bad_name'], '打った名前は今までどおり断る');
 });
 
-test('製品の API: 抜け道の引数を渡さない App では、Clive のフォルダの中も一時フォルダも選べない', async t => {
+test('製品の API: 抜け道の引数を渡さない App では、beat のフォルダの中も一時フォルダも選べない', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')] });
   assert.deepEqual(s.app.projectFolderExempt, []);
-  const inClive = await s.json('/api/projects', 'POST', { root: join(APP_ROOT, 'src') });
-  assert.deepEqual([inClive.status, inClive.body.code], [400, 'project.folder_clive']);
+  const inBeat = await s.json('/api/projects', 'POST', { root: join(APP_ROOT, 'src') });
+  assert.deepEqual([inBeat.status, inBeat.body.code], [400, 'project.folder_beat']);
   const elsewhere = realpathSync.native(tempDir(t));
   const temp = await s.json('/api/projects', 'POST', { root: elsewhere });
   if (process.platform === 'win32') assert.deepEqual([temp.status, temp.body.code], [400, 'project.folder_app_data']);

@@ -163,7 +163,7 @@ export type Widening =
   | { kind: 'root-added'; path: string; mode: RootMode; broad: BroadKind | null }
   | { kind: 'root-write'; path: string; broad: BroadKind | null };
 
-// 保存で、Clive が触れられる範囲が広がるもの（触れないパスを外す・フォルダを足す・読むだけを読み書きにする）を、そのまま並べる。狭くなる変更は含めない。
+// 保存で、beat が触れられる範囲が広がるもの（触れないパスを外す・フォルダを足す・読むだけを読み書きにする）を、そのまま並べる。狭くなる変更は含めない。
 export function wideningChanges(before: FolderDraft, after: FolderDraft): Widening[] {
   const out: Widening[] = [];
   for (const path of before.deny) if (!after.deny.includes(path)) out.push({ kind: 'deny-removed', path, builtin: DEFAULT_DENY.includes(path) });

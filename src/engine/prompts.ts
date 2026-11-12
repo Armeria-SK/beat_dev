@@ -36,7 +36,7 @@ export function compactSystem(language: Language): string {
 
 export function compactSpeaker(message: { role: string; name?: string }, language: Language): string {
   const text = TEXT[language];
-  return message.role === 'user' ? text.user : message.role === 'assistant' ? 'Clive' : text.toolResult(message.name ?? '');
+  return message.role === 'user' ? text.user : message.role === 'assistant' ? 'beat' : text.toolResult(message.name ?? '');
 }
 
 export function compactPrompt(input: { previous: string | null; transcript: string }, language: Language): string {

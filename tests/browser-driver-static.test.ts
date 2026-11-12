@@ -78,7 +78,7 @@ test('起動の選択: ダウンロードを受けない・service worker を止
 
 test('子プロセスの環境変数に .env の鍵・トークンが入らない（許可リストだけ）', () => {
   const env = childEnv({
-    ANTHROPIC_API_KEY: 'sk-ant-secret', OPENAI_API_KEY: 'sk-secret', CLIVE_TOKEN: 'tok', GITHUB_TOKEN: 'ghp', NODE_OPTIONS: '--inspect',
+    ANTHROPIC_API_KEY: 'sk-ant-secret', OPENAI_API_KEY: 'sk-secret', BEAT_TOKEN: 'tok', GITHUB_TOKEN: 'ghp', NODE_OPTIONS: '--inspect',
     PATH: 'C:\\bin', SystemRoot: 'C:\\Windows', TEMP: 'C:\\t', LOCALAPPDATA: 'C:\\l',
   });
   assert.deepEqual(Object.keys(env).sort(), ['LOCALAPPDATA', 'PATH', 'SystemRoot', 'TEMP']);

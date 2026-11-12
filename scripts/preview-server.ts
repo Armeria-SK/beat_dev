@@ -190,7 +190,7 @@ function seedLibrary(app: App): void {
   const name = app.memory.save({ book: 'user', content: 'Prefers short pull requests, one change per branch.', actor: 'review' });
   app.memory.update(name.memory.id, 'Prefers short pull requests: one change per branch, under about 200 lines.', 'user');
   app.memory.save({ book: 'user', content: 'Works in Asia/Tokyo and reads replies in the morning.', actor: 'user', origin: 'user' });
-  const note = app.memory.save({ book: 'notes', content: 'The release notes live in docs/CHANGELOG.md.', actor: 'clive' });
+  const note = app.memory.save({ book: 'notes', content: 'The release notes live in docs/CHANGELOG.md.', actor: 'beat' });
   app.memory.update(note.memory.id, 'The release notes live in docs/CHANGELOG.md; keep the newest entry on top.', 'review');
 
   const skills = app.skills;

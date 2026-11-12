@@ -261,7 +261,7 @@ export class BrowserSession {
     const browser = config.tools.browser;
     let proxy: EgressProxy | undefined;
     try {
-      const username = 'clive';
+      const username = 'beat';
       const password = randomBytes(24).toString('hex');
       proxy = await (this.#d.startProxy ?? startEgressProxy)({ username, password, maxBytesPerMinute: browser.limits.maxMbPerMinute * 1024 * 1024, ...(this.#d.log ? { log: this.#d.log } : {}) });
       const options: LaunchOptions = {

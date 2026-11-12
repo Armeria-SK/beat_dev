@@ -26,7 +26,7 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-const TAILNET = 'clive.tail1234.ts.net';
+const TAILNET = 'beat.tail1234.ts.net';
 
 interface Reply { status: number; body: any }
 function send(port: number, path: string, options: { host?: string; method?: string; headers?: Record<string, string>; body?: unknown } = {}): Promise<Reply> {
@@ -420,7 +420,7 @@ test('A4: モデルの道具（シェル）からは押せない。この PC の
     const outcome = await calling;
     assert.equal(outcome.output.isError, true, command);
     assert.notEqual(outcome.decision, 'allow', `${command}: 確かめなしに通った`);
-    // 断られるのではなく、毎回（今回だけ）の承認を求める。理由は「この PC の中のサーバー（Clive 自身を含む）につなぐ」（code.loopback）
+    // 断られるのではなく、毎回（今回だけ）の承認を求める。理由は「この PC の中のサーバー（beat 自身を含む）につなぐ」（code.loopback）
     assert.ok(asked.length >= 1 && asked.every(a => a.onceOnly), `${command}: 今回だけの承認を求める`);
     assert.ok(asked.some(a => a.reasons.some(reason => reason.includes('It connects to a server on this PC'))), `${command}: 理由は code.loopback`);
   }

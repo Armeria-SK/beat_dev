@@ -1,0 +1,45 @@
+# beat を Linux の systemd で常駐させる（beat ユーザーで /opt/beat に置き、npm ci と npm run build:web を済ませておく）
+#   sudo cp deploy/beat.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now beat
+#   journalctl -u beat -f
+[Unit]
+Description=beat (personal AI agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=beat
+Group=beat
+WorkingDirectory=/opt/beat
+# API キーは /opt/beat/.env（beat だけが読める権限にする）か EnvironmentFile に書く
+EnvironmentFile=-/etc/beat/env
+Environment=NODE_ENV=production
+Environment=BEAT_DATA_DIR=/var/lib/beat
+ExecStart=/usr/bin/node src/main.ts
+Restart=on-failure
+RestartSec=5
+# 終了時は beat が実行中の返事とシェルを止めてから終わる
+KillMode=mixed
+TimeoutStopSec=20
+
+# OS レベルの閉じ込め。beat のシェル実行のガードは文字列の判定なので、beat からこの PC の残りを守るために、ここで書ける場所を絞っておく。
+# beat 自身の設定・人格・記憶（/var/lib/beat）は、beat のシェルと同じユーザーで動くので、この閉じ込めでは守れない
+# （確かめを通ったコードは書き換えられる）。分けるには、シェルの子だけを別のユーザーで動かす仕組みが要る（今後の課題）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/beat
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+# ローカル LLM（127.0.0.1）と外部の API・Web につなぐ
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

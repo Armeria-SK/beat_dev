@@ -117,7 +117,7 @@ export function setupProviderConfig(config: Config, form: ModelForm): { config: 
   return { config: { ...config, providers: [...providers, made] }, providerId: made.id };
 }
 
-const SEEN_KEY = 'clive.onboardingSeen';
+const SEEN_KEY = 'beat.onboardingSeen';
 export function wasSetupShown(storage: Pick<Storage, 'getItem'> | undefined = safeStorage()): boolean {
   try { return storage?.getItem(SEEN_KEY) === '1'; } catch { return false; }
 }

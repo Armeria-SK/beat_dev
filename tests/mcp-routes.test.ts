@@ -11,7 +11,7 @@ import { startApp, waitFor } from './app-setup.ts';
 const ECHO: McpRemoteTool = { name: 'echo', description: '文字を返す', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } };
 const ISSUE: McpRemoteTool = { name: 'Get-Issue', description: '課題を読む', inputSchema: { type: 'object', properties: {} } };
 const TOKEN = 'ghp_Qm5dK2wE7hB4tY1nLp9Xz';
-const ENV_TOKEN = 'CLIVE_MCP_SRV_E_GITHUB_TOKEN_SECRET';
+const ENV_TOKEN = 'BEAT_MCP_SRV_E_GITHUB_TOKEN_SECRET';
 
 interface Fake { input: McpConnectInput; closed: boolean }
 
@@ -69,12 +69,12 @@ test('T-38 作る: .env に 1 行、設定には名前だけ。enabled:true・�
   assert.doesNotMatch(JSON.stringify(await s.list()), /ghp_Qm5d/u);
 });
 
-test('T-38 作る(http): header の値は CLIVE_MCP_<ID>_H_<NAME>_SECRET に書く', async t => {
+test('T-38 作る(http): header の値は BEAT_MCP_<ID>_H_<NAME>_SECRET に書く', async t => {
   const s = await start(t);
   const res = await s.create({ id: 'web', transport: 'http', url: 'https://mcp.example.com/mcp', secrets: { headers: { Authorization: 'Bearer abc123def456' } } });
   assert.equal(res.status, 201);
-  assert.equal(readFileSync(s.paths.env, 'utf8'), 'CLIVE_MCP_WEB_H_AUTHORIZATION_SECRET=Bearer abc123def456\n');
-  assert.deepEqual(s.server('web')!.headers, { Authorization: 'CLIVE_MCP_WEB_H_AUTHORIZATION_SECRET' });
+  assert.equal(readFileSync(s.paths.env, 'utf8'), 'BEAT_MCP_WEB_H_AUTHORIZATION_SECRET=Bearer abc123def456\n');
+  assert.deepEqual(s.server('web')!.headers, { Authorization: 'BEAT_MCP_WEB_H_AUTHORIZATION_SECRET' });
 });
 
 test('T-38 作るときの検査: 悪い id・transport・URL・値・欄の種類は 400、同じ id・上限は 409。断ったものは .env に書かない', async t => {

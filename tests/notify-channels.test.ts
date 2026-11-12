@@ -8,8 +8,8 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { buildPayload, NOTIFY_MAX_PAYLOAD_BYTES, NotifyChannels } from '../src/notify/channels.ts';
 import type { NotificationKind, NotifyEvent, NotifyInput } from '../src/notify/notifications.ts';
 
-const URL_ENV = 'CLIVE_NOTIFY_PHONE_URL_SECRET';
-const TOKEN_ENV = 'CLIVE_NOTIFY_PHONE_TOKEN';
+const URL_ENV = 'BEAT_NOTIFY_PHONE_URL_SECRET';
+const TOKEN_ENV = 'BEAT_NOTIFY_PHONE_TOKEN';
 const SECRET_URL = 'https://hooks.example.com/services/T000/SECRETPATH';
 const SECRET_TOKEN = 'tok-abc-123';
 
@@ -70,13 +70,13 @@ test('T-06 無効・種類にない・noForward は送らない。既定の 4 �
 });
 
 test('T-07 中身はキーの順が固定。リンクは publicBaseUrl があり # / で始まるときだけ', async () => {
-  const s = setup(config({ notify: { publicBaseUrl: 'https://clive.example.ts.net/' } }));
+  const s = setup(config({ notify: { publicBaseUrl: 'https://beat.example.ts.net/' } }));
   await s.channels.deliver(ev('task_failed'));
   const body = s.calls[0]!.init.body as string;
-  assert.equal(body, '{"source":"clive","version":1,"kind":"task_failed","title":"タイトル","link":"https://clive.example.ts.net/#/tasks/7","createdAt":"2026-11-08T00:00:00.000Z"}');
+  assert.equal(body, '{"source":"beat","version":1,"kind":"task_failed","title":"タイトル","link":"https://beat.example.ts.net/#/tasks/7","createdAt":"2026-11-08T00:00:00.000Z"}');
   const none = config();
   assert.ok(!buildPayload(none, none.notify.channels[0]!, ev('task_failed')).includes('"link"'), 'publicBaseUrl が空ならリンクなし');
-  const withBase = config({ notify: { publicBaseUrl: 'https://clive.example.ts.net' } });
+  const withBase = config({ notify: { publicBaseUrl: 'https://beat.example.ts.net' } });
   assert.ok(!buildPayload(withBase, withBase.notify.channels[0]!, ev('task_failed', { link: 'https://evil.example/' })).includes('"link"'), '# / で始まらないリンクは載せない');
   assert.ok(!buildPayload(withBase, withBase.notify.channels[0]!, ev('task_failed', { link: null })).includes('"link"'));
 });
@@ -106,18 +106,18 @@ test('T-08 local_only の通知は、題が決まった文になり、本文は�
     const sent = call.init.body as string;
     assert.doesNotMatch(sent, /PRIVATE/u);
     assert.ok(!sent.includes('"body"'));
-    assert.match(sent, /"title":"Clive: [^"]*work on a local model/u);
+    assert.match(sent, /"title":"beat: [^"]*work on a local model/u);
   }
 });
 
 test('local_only の通知は、publicBaseUrl があってもリンクを送らない（リンクに手元の会話の名前が入りうる）。そうでない通知は送る', async () => {
-  const s = setup(config({ channel: { kinds: ['info', 'task_failed'] }, notify: { publicBaseUrl: 'https://clive.example.ts.net' } }));
+  const s = setup(config({ channel: { kinds: ['info', 'task_failed'] }, notify: { publicBaseUrl: 'https://beat.example.ts.net' } }));
   await s.channels.deliver(ev('info', { title: 'x', link: '#/skills/draft/secret-name-PRIVATE', local_only: 1 }));
   await s.channels.deliver(ev('task_failed', { link: '#/tasks/7' }));
   assert.equal(s.calls.length, 2);
   const [local, normal] = s.calls.map(c => c.init.body as string);
   assert.doesNotMatch(local!, /PRIVATE|"link"/u);
-  assert.match(normal!, /"link":"https:\/\/clive\.example\.ts\.net\/#\/tasks\/7"/u);
+  assert.match(normal!, /"link":"https:\/\/beat\.example\.ts\.net\/#\/tasks\/7"/u);
 });
 
 test('T-09 token があれば Authorization: Bearer。無ければ付けない', async () => {
@@ -253,7 +253,7 @@ test('T-19 test は無効なチャネルにも決まった文を送り、上限�
   const s = setup(config({ channel: { enabled: false }, notify: { limits: { maxSendsPerHour: 1 } } }));
   assert.deepEqual(await s.channels.test('phone'), { ok: true });
   assert.deepEqual(await s.channels.test('phone'), { ok: true });
-  assert.match(s.calls[0]!.init.body as string, /This is a test notification from Clive/u);
+  assert.match(s.calls[0]!.init.body as string, /This is a test notification from beat/u);
   assert.equal(await s.channels.test('nope'), undefined);
   const fail = setup(config(), [500, 500]);
   assert.deepEqual(await fail.channels.test('phone'), { ok: false, reason: 'http_500' });

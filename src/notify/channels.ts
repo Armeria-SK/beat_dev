@@ -178,7 +178,7 @@ export function buildPayload(config: AppConfig, channel: NotifyChannelConfig, n:
   const base = config.notify.publicBaseUrl.replace(/\/+$/u, '');
   const link = base !== '' && !local && n.link?.startsWith('#/') ? `${base}/${n.link}` : undefined;
   const make = (t: string, b: string | undefined): string => JSON.stringify({
-    source: 'clive', version: 1, kind: n.kind, title: t,
+    source: 'beat', version: 1, kind: n.kind, title: t,
     ...(b === undefined ? {} : { body: b }), ...(link === undefined ? {} : { link }),
     createdAt: new Date(n.created_at).toISOString(),
   });

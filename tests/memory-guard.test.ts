@@ -106,12 +106,12 @@ test('memory_save: 1 回の実行で記憶できるのは 5 件まで。6 件目
 test('MemoryStore.save: 実行（runId）ごとに、モデルが作れる記憶は 5 件まで。利用者（actor が user）は数えない', t => {
   const db = openDatabase(':memory:', MIGRATIONS);
   const memory = new MemoryStore(db);
-  for (let i = 1; i <= 5; i++) memory.save({ book: 'user', content: `事実 ${i}`, actor: 'clive', runId: 'run-a' });
-  assert.throws(() => memory.save({ book: 'user', content: '事実 6', actor: 'clive', runId: 'run-a' }), (e: unknown) => e instanceof MemoryError && e.code === 'memory.run_limit' && e.params.max === 5);
+  for (let i = 1; i <= 5; i++) memory.save({ book: 'user', content: `事実 ${i}`, actor: 'beat', runId: 'run-a' });
+  assert.throws(() => memory.save({ book: 'user', content: '事実 6', actor: 'beat', runId: 'run-a' }), (e: unknown) => e instanceof MemoryError && e.code === 'memory.run_limit' && e.params.max === 5);
   assert.throws(() => memory.save({ book: 'user', content: '事実 7', actor: 'review', runId: 'run-a' }), (e: unknown) => e instanceof MemoryError && e.code === 'memory.run_limit', '振り返りの実行も同じ');
-  assert.doesNotThrow(() => memory.save({ book: 'user', content: '事実 6', actor: 'clive', runId: 'run-b' }));
+  assert.doesNotThrow(() => memory.save({ book: 'user', content: '事実 6', actor: 'beat', runId: 'run-b' }));
   assert.doesNotThrow(() => memory.save({ book: 'user', content: '事実 7', actor: 'user', runId: 'run-a' }), '利用者の操作は数えない');
-  assert.doesNotThrow(() => memory.save({ book: 'user', content: '実行の無い保存', actor: 'clive' }));
+  assert.doesNotThrow(() => memory.save({ book: 'user', content: '実行の無い保存', actor: 'beat' }));
 });
 
 test('memory_update / memory_forget: Web や添付を読んだ後は承認制。断れば書き換えも消しもしない（振り返りは外を読まないので影響しない）', async t => {

@@ -23,7 +23,7 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArr
     { id: 'worker', label: 'settings.section.worker', desc: 'settings.desc.worker' },
     { id: 'memory', label: 'settings.section.memory', desc: 'settings.desc.memory' },
   ] },
-  { label: 'settings.group.clive', items: [
+  { label: 'settings.group.beat', items: [
     { id: 'about', label: 'settings.section.about', desc: 'settings.desc.about' },
     { id: 'look', label: 'settings.section.look', desc: 'settings.desc.look' },
   ] },
@@ -40,7 +40,7 @@ export function isSection(value: unknown): value is SettingsSection {
 }
 
 // 開いている節の覚え（セッションの間だけ）。設定の小窓は、開くときにこれを読む
-export const SECTION_KEY = 'clive.settingsSection';
+export const SECTION_KEY = 'beat.settingsSection';
 
 // 設定の小窓を、指定の節で開く
 export function openSettingsSection(section: SettingsSection): void {
@@ -278,7 +278,7 @@ export function keyUsage(config: Config): Array<{ name: string; providers: strin
 type ProviderRow = { id: string; kind: string; apiKeyEnv?: string };
 const providerRows = (config: Config): ProviderRow[] => (Array.isArray(config.providers) ? config.providers as ProviderRow[] : []);
 
-// プロバイダに鍵を入れる環境変数の名前。書かれていればそれ、Anthropic は ANTHROPIC_API_KEY、ほかはサーバーが付ける名前（CLIVE_<ID>_API_KEY）
+// プロバイダに鍵を入れる環境変数の名前。書かれていればそれ、Anthropic は ANTHROPIC_API_KEY、ほかはサーバーが付ける名前（BEAT_<ID>_API_KEY）
 export function providerKeyEnv(config: Config, id: string): string | undefined {
   const providers = providerRows(config);
   const provider = providers.find(p => p.id === id);

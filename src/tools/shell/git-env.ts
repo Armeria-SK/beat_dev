@@ -2,7 +2,7 @@
 // リポジトリの設定は git-repo.ts が調べるが、ホームの ~/.gitconfig・~/.config/git/config・システムの gitconfig（Git for Windows の etc/gitconfig など）は
 // 調べていなかった。そこに core.fsmonitor・alias・core.sshCommand などがあれば、許可された `git status` で動く。
 // 選んだ方法: 見て判定する（Git for Windows のシステム設定は credential.helper など一覧外の項目が普通にあり、すべて今回だけになってしまう）のではなく、
-// 一覧に入る項目だけを写した設定を Clive のデータのフォルダに作り、GIT_CONFIG_GLOBAL でそれだけを読ませ、GIT_CONFIG_NOSYSTEM でシステム設定を読ませない（git 2.32 以上）。
+// 一覧に入る項目だけを写した設定を beat のデータのフォルダに作り、GIT_CONFIG_GLOBAL でそれだけを読ませ、GIT_CONFIG_NOSYSTEM でシステム設定を読ませない（git 2.32 以上）。
 // 名前・メール・autocrlf・認証の補助（manager など）は残るので、commit や push は今までどおり使える。
 // 洗い出した設定のファイルは、シェルを1回動かすごとに、データのフォルダの下の新しい（名前を当てられない）場所に作り、終わったら消す。
 // 決まった場所に置くと、確かめを許したあとの同じコマンドの中でそこへ書き込み、続けて動かす git status に読ませられる
@@ -44,7 +44,7 @@ export function sanitizeGitConfig(texts: readonly string[]): string {
     if (!entries) continue;
     for (const entry of entries) if (allowed(entry) && !/[\r\n]/u.test(entry.value)) kept.push(entry);
   }
-  let out = '# Settings made by Clive: only the entries that cannot run code, copied from the home and system git settings\n';
+  let out = '# Settings made by beat: only the entries that cannot run code, copied from the home and system git settings\n';
   let header = '';
   for (const entry of kept) {
     const parts = entry.key.split('.');

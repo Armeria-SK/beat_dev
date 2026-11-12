@@ -1,4 +1,4 @@
-// ブラウザの実行ファイルの名前の判定。持ち主の決定により、Clive は Edge でブラウザ操作をしない。
+// ブラウザの実行ファイルの名前の判定。持ち主の決定により、beat は Edge でブラウザ操作をしない。
 // フォルダ名は見ず、ファイル名だけで判定する（Windows の \ も POSIX の / も、大文字小文字も、末尾のドット・空白・.exe も吸収）。
 // 種類つきの名前は、msedge-beta のようなハイフン区切りも、macOS の "Microsoft Edge Beta" のような空白区切りも Edge とみなす
 const EDGE_NAME = /^(msedge|microsoft[- ]edge)([- ](stable|beta|dev|canary))?$/u;

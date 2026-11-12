@@ -57,15 +57,15 @@ test('製品の実行の許可フォルダ: 作業フォルダが書ける許可
   assert.deepEqual(u.policy.roots, [...u.plain.roots, { path: u.root, mode: 'write' }]);
   assert.equal(u.write('hello.txt').decision, 'allow', '相対パスは作業フォルダの中');
   assert.equal(u.write(join(u.root, 'sub', 'deep.txt')).decision, 'allow');
-  assert.equal(defaultWorkspace(u.policy, u.paths), u.paths.workspace, 'Clive の置き場（home）は製品のフォルダに替わらない');
+  assert.equal(defaultWorkspace(u.policy, u.paths), u.paths.workspace, 'beat の置き場（home）は製品のフォルダに替わらない');
 });
 
-test('製品の実行の許可フォルダ: 外・..・秘密・Clive のデータは今までどおり。.git の中は今回だけの確かめ。中のジャンクションが外を指せば外', t => {
+test('製品の実行の許可フォルダ: 外・..・秘密・beat のデータは今までどおり。.git の中は今回だけの確かめ。中のジャンクションが外を指せば外', t => {
   const u = unit(t);
   assert.equal(u.write(join(u.outside, 'x.txt')).decision, 'deny', '外');
   assert.equal(u.write(`..${WINDOWS ? '\\' : '/'}elsewhere${WINDOWS ? '\\' : '/'}x.txt`).decision, 'deny', '..で外');
   assert.equal(u.write('.env').decision, 'deny', '.env');
-  assert.equal(u.write(u.paths.database).decision, 'deny', 'Clive の DB');
+  assert.equal(u.write(u.paths.database).decision, 'deny', 'beat の DB');
   assert.equal(u.write(join(u.paths.projects, 'p1', 'x.md')).decision, 'deny', 'data/projects');
   const git = u.write('.git/hooks/pre-commit');
   assert.deepEqual([git.decision, git.onceOnly], ['ask', true]);
@@ -293,7 +293,7 @@ test('2-3 製品の毎回の 1 行: 会話・タスク・子の担当で、1 行
   assert.ok(review.system.frozen.includes('SHOP-RULES'), '製品の振り返りも製品の指示ファイルを持つ');
 });
 
-test('製品の会話の web_download: Clive の置き場の downloads/ を確かめて書き、その絶対パスを返す。製品のフォルダの downloads は使わない', async t => {
+test('製品の会話の web_download: beat の置き場の downloads/ を確かめて書き、その絶対パスを返す。製品のフォルダの downloads は使わない', async t => {
   const network: DownloadNetwork = {
     resolve: async () => ['93.184.216.34'],
     open: async () => ({ status: 200, contentType: 'application/pdf', body: (async function* () { yield Buffer.from('pdf'); })(), close: () => undefined }),
@@ -309,7 +309,7 @@ test('製品の会話の web_download: Clive の置き場の downloads/ を確�
   assert.equal(existsSync(join(outside, 'report.pdf')), false);
   const result = s.app.conversations.messages(uuid(1)).find(m => m.role === 'tool')!;
   assert.ok(result.text.includes(saved), result.text);
-  assert.match(webDownload.description, /downloads folder of Clive/u);
+  assert.match(webDownload.description, /downloads folder of beat/u);
 });
 
 test('製品の会話でダウンロードの置き場（data/workspace/downloads）を読むと、ファイル・探す道具で外を読んだ印が付く', async t => {
@@ -375,10 +375,10 @@ test('#execute の念のための守り: 確かめを通っていない製品の
   assert.ok(sent.ok);
   await settled(s.app, sent.runId);
   const ctx = s.seen[0]!;
-  assert.deepEqual([ctx.workspace, ctx.project], [shop.root, { id: shop.id }], '作業フォルダは控えた場所のまま（Clive の置き場に替えない）');
+  assert.deepEqual([ctx.workspace, ctx.project], [shop.root, { id: shop.id }], '作業フォルダは控えた場所のまま（beat の置き場に替えない）');
   assert.ok(!ctx.policy.roots.some(r => r.path === shop.root));
   assert.ok(s.logs.some(line => line.includes(`product ${shop.id}`)), s.logs.join('\n'));
-  assert.equal(existsSync(join(s.paths.workspace, 'stray.txt')), false, '相対パスの書き込みが Clive の置き場に落ちない');
+  assert.equal(existsSync(join(s.paths.workspace, 'stray.txt')), false, '相対パスの書き込みが beat の置き場に落ちない');
   assert.equal(existsSync(join(shop.root, 'stray.txt')), false);
   const refused = s.app.conversations.messages(uuid(1)).filter(m => m.role === 'tool').at(-1)!;
   assert.match(refused.text, /outside the allowed folders/u);

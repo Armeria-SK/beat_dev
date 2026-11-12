@@ -14,9 +14,9 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const base = realpathSync.native(tempDir(t));
   const dir = (...parts: string[]) => { const path = join(base, ...parts); mkdirSync(path, { recursive: true }); return path; };
   const home = dir('home');
-  const appRoot = dir('clive');
-  dir('clive', 'src');
-  const paths = resolvePaths(dir('clive', 'data'));
+  const appRoot = dir('beat');
+  dir('beat', 'src');
+  const paths = resolvePaths(dir('beat', 'data'));
   const env = {
     APPDATA: dir('home', 'AppData', 'Roaming'), LOCALAPPDATA: dir('home', 'AppData', 'Local'),
     SystemRoot: dir('os', 'Windows'), ProgramFiles: dir('os', 'Program Files'), 'ProgramFiles(x86)': dir('os', 'Program Files (x86)'), ProgramData: dir('os', 'ProgramData'),
@@ -113,19 +113,19 @@ test('checkWorkFolder: この PC の本物の場所でも同じ（ホーム・�
   }
 });
 
-test('checkWorkFolder: Clive 自身のフォルダ（その親・その中も）と、データのフォルダ（その親・その中も）は選べない', t => {
+test('checkWorkFolder: beat 自身のフォルダ（その親・その中も）と、データのフォルダ（その親・その中も）は選べない', t => {
   const f = fixture(t);
-  assert.equal(f.reason(f.appRoot), 'folder_clive');
-  assert.equal(f.reason(join(f.appRoot, 'src')), 'folder_clive');
-  assert.equal(f.reason(f.dir('clive', 'tmp', 'scratch')), 'folder_clive');
-  assert.equal(f.reason(f.paths.data), 'folder_clive');
-  assert.equal(f.reason(f.dir('clive', 'data', 'workspace')), 'folder_clive');
+  assert.equal(f.reason(f.appRoot), 'folder_beat');
+  assert.equal(f.reason(join(f.appRoot, 'src')), 'folder_beat');
+  assert.equal(f.reason(f.dir('beat', 'tmp', 'scratch')), 'folder_beat');
+  assert.equal(f.reason(f.paths.data), 'folder_beat');
+  assert.equal(f.reason(f.dir('beat', 'data', 'workspace')), 'folder_beat');
   const outside = resolvePaths(f.dir('elsewhere', 'store', 'data'));
-  assert.equal(f.reason(outside.data, { paths: outside }), 'folder_clive', '--data-dir で外に置いたデータ');
-  assert.equal(f.reason(join(f.base, 'elsewhere', 'store'), { paths: outside }), 'folder_clive', 'データのフォルダの親');
-  assert.equal(f.reason(f.dir('elsewhere', 'store', 'data', 'projects', 'x'), { paths: outside }), 'folder_clive', 'データのフォルダの中');
-  assert.equal(f.reason(join(APP_ROOT, 'src'), { appRoot: APP_ROOT }), 'folder_clive', '本物の Clive のフォルダの中');
-  assert.equal(f.reason(dirname(APP_ROOT), { appRoot: APP_ROOT }), 'folder_clive', '本物の Clive のフォルダの親');
+  assert.equal(f.reason(outside.data, { paths: outside }), 'folder_beat', '--data-dir で外に置いたデータ');
+  assert.equal(f.reason(join(f.base, 'elsewhere', 'store'), { paths: outside }), 'folder_beat', 'データのフォルダの親');
+  assert.equal(f.reason(f.dir('elsewhere', 'store', 'data', 'projects', 'x'), { paths: outside }), 'folder_beat', 'データのフォルダの中');
+  assert.equal(f.reason(join(APP_ROOT, 'src'), { appRoot: APP_ROOT }), 'folder_beat', '本物の beat のフォルダの中');
+  assert.equal(f.reason(dirname(APP_ROOT), { appRoot: APP_ROOT }), 'folder_beat', '本物の beat のフォルダの親');
 });
 
 test('checkWorkFolder: 秘密の名前のフォルダの中と、設定の拒否の一覧（その中・それを中に含むもの）は選べない', t => {
@@ -172,16 +172,16 @@ test('checkWorkFolder: 設定の許可フォルダとの重なりは通って no
 
 test('checkWorkFolder: 試しとテストだけの抜け道は、渡したフォルダの下だけで効き、渡さなければ効かない。データのフォルダは抜け道の下でも選べない', t => {
   const f = fixture(t);
-  const preview = f.dir('clive', 'tmp', 'preview');
-  const product = f.dir('clive', 'tmp', 'preview', 'products', 'shop');
-  assert.equal(f.reason(product), 'folder_clive', '渡さなければ Clive のフォルダの中');
-  assert.equal(f.reason(product, { exempt: [] }), 'folder_clive');
+  const preview = f.dir('beat', 'tmp', 'preview');
+  const product = f.dir('beat', 'tmp', 'preview', 'products', 'shop');
+  assert.equal(f.reason(product), 'folder_beat', '渡さなければ beat のフォルダの中');
+  assert.equal(f.reason(product, { exempt: [] }), 'folder_beat');
   assert.equal(f.reason(product, { exempt: [preview] }), 'ok');
-  assert.equal(f.reason(join(f.appRoot, 'src'), { exempt: [preview] }), 'folder_clive', '渡したフォルダの外は今までどおり');
+  assert.equal(f.reason(join(f.appRoot, 'src'), { exempt: [preview] }), 'folder_beat', '渡したフォルダの外は今までどおり');
   assert.equal(f.reason(f.home, { exempt: [preview] }), 'folder_home');
-  const data = resolvePaths(f.dir('clive', 'tmp', 'preview', 'data'));
-  assert.equal(f.reason(data.data, { exempt: [preview], paths: data }), 'folder_clive');
-  assert.equal(f.reason(f.dir('clive', 'tmp', 'preview', 'products', '.ssh'), { exempt: [preview] }), 'folder_secret', '秘密の名前は抜け道でも断る');
+  const data = resolvePaths(f.dir('beat', 'tmp', 'preview', 'data'));
+  assert.equal(f.reason(data.data, { exempt: [preview], paths: data }), 'folder_beat');
+  assert.equal(f.reason(f.dir('beat', 'tmp', 'preview', 'products', '.ssh'), { exempt: [preview] }), 'folder_secret', '秘密の名前は抜け道でも断る');
 });
 
 test('listFolders: フォルダの名前だけを返す（ファイルと秘密の名前のフォルダは出さない）。リンク・ジャンクションの子は解かずに link: true', t => {
@@ -244,7 +244,7 @@ test('listFolders: 1 回に 500 件まで（超えたら truncated）。選べ�
   assert.ok(!('reason' in top));
   const byName = Object.fromEntries(top.entries.map(e => [e.name, e]));
   assert.deepEqual({ selectable: byName.home!.selectable, reason: byName.home!.reason }, { selectable: false, reason: 'project.folder_home' });
-  assert.deepEqual({ selectable: byName.clive!.selectable, reason: byName.clive!.reason }, { selectable: false, reason: 'project.folder_clive' });
+  assert.deepEqual({ selectable: byName.beat!.selectable, reason: byName.beat!.reason }, { selectable: false, reason: 'project.folder_beat' });
 });
 
 test('listFolders: 出発点はホーム・ホームのあるドライブの直下・設定の許可フォルダだけ（ドライブを探して回らない）', t => {

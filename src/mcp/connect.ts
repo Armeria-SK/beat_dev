@@ -13,7 +13,7 @@ const LIST_PAGES_MAX = 8;
 
 export async function sdkConnect(input: McpConnectInput): Promise<McpLink> {
   const { server } = input;
-  const client = new Client({ name: 'clive', version: '0.1.0' }, { capabilities: {} });
+  const client = new Client({ name: 'beat', version: '0.1.0' }, { capabilities: {} });
   let stderr = '';
   let closedByUs = false;
   let transport: StdioClientTransport | StreamableHTTPClientTransport;

@@ -168,7 +168,7 @@ export interface SkillDraft {
 export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
 export interface CuriosityItem {
   id: number; topic: string; why: string | null; status: 'open' | 'researching' | 'done' | 'dropped'; result: string | null;
-  task_id: string | null; source: 'clive' | 'user' | 'file'; created_at: number; updated_at: number;
+  task_id: string | null; source: 'beat' | 'user' | 'file'; created_at: number; updated_at: number;
 }
 export interface ReviewJob {
   id: number; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;

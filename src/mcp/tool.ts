@@ -1,4 +1,4 @@
-// MCP サーバーの道具 1 つを、Clive の道具（ToolDef）にする。
+// MCP サーバーの道具 1 つを、beat の道具（ToolDef）にする。
 // 外のサーバーが書いた説明・入力の形・答えは「外から来た文」として扱う: 説明には決まった前置きを付け、答えは [外部の内容] の枠で包む。
 // 効果・外へ送るか・消すかは、持ち主が設定（mcp.servers[].tools）に書いた申告だけを使う。サーバーの申告（annotations）は、厳しい向き（消す・外へ出る）にしか使わない
 import { Kind, TypeRegistry, type TSchema } from '@sinclair/typebox';

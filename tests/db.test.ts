@@ -11,7 +11,7 @@ import { Runs } from '../src/db/runs.ts';
 import { tempDir } from './helpers.ts';
 
 test('マイグレーションは新規でも再オープンでも同じ状態になる', t => {
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   openDatabase(path, MIGRATIONS).close();
   const db = openDatabase(path, MIGRATIONS);
   const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
@@ -20,7 +20,7 @@ test('マイグレーションは新規でも再オープンでも同じ状態�
 });
 
 test('アプリより新しいスキーマは開かない', t => {
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const raw = new DatabaseSync(path);
   raw.exec('PRAGMA user_version = 99');
   raw.close();
@@ -29,7 +29,7 @@ test('アプリより新しいスキーマは開かない', t => {
 
 test('未適用のマイグレーションがあれば、適用前にバックアップを取る', t => {
   const dir = tempDir(t);
-  const path = join(dir, 'clive.db');
+  const path = join(dir, 'beat.db');
   openDatabase(path, MIGRATIONS.slice(0, 1)).close();
   openDatabase(path, [...MIGRATIONS, 'CREATE TABLE extra (id INTEGER) STRICT;'], { backupDir: join(dir, 'backups') }).close();
   assert.equal(readdirSync(join(dir, 'backups')).length, 1);
@@ -93,7 +93,7 @@ test('KV の読み書き', () => {
 });
 
 test('マイグレーション 8: tasks に created_in_conversation が足される。前からある行は NULL', t => {
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 7));
   before.prepare(`INSERT INTO tasks (id, title, status, origin, created_at, updated_at) VALUES ('old', '前からあるタスク', 'ready', 'user', 1, 1)`).run();
   before.close();
@@ -107,7 +107,7 @@ test('マイグレーション 8: tasks に created_in_conversation が足され
 });
 
 test('マイグレーション 7: tasks に cancelled_from が足される。前からある行は NULL（戻せない）で、不正な値は入らない', t => {
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 6));
   before.prepare(`INSERT INTO tasks (id, title, status, origin, created_at, updated_at, completed_at) VALUES ('old', '前に取り消したもの', 'cancelled', 'user', 1, 1, 1)`).run();
   before.close();
@@ -122,7 +122,7 @@ test('マイグレーション 7: tasks に cancelled_from が足される。前
 });
 
 test('マイグレーション 16: 振り返りの会話が、材料にした会話・タスクを自分で覚える。前からあるもので、振り返りの記録から辿れるものは、記録の値で埋める', t => {
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 15));
   const conversation = (id: string, kind: 'chat' | 'task') => before.prepare('INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, ?, 1, 1)').run(id, kind);
   for (const [id, kind] of [['src', 'chat'], ['rv1', 'task'], ['rv2', 'task'], ['rv3', 'task'], ['loose', 'task']] as const) conversation(id, kind);
@@ -151,7 +151,7 @@ test('マイグレーション 9〜20 を続けて当てる: main の段階（8�
   assert.match(String(MIGRATIONS[16]), /skill_registry/u);
   assert.match(String(MIGRATIONS[15]), /source_conversation_id/u);
   assert.match(String(MIGRATIONS[14]), /grant_folder/u);
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const main = openDatabase(path, MIGRATIONS.slice(0, 8));
   for (const [id, kind] of [['src', 'chat'], ['rv', 'task']] as const) main.prepare('INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, ?, 1, 1)').run(id, kind);
   main.prepare("INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, review_conversation_id, created_at) VALUES ('idle', 'k1', 'src', 'rv', 1)").run();
@@ -166,7 +166,7 @@ test('マイグレーション 9〜20 を続けて当てる: main の段階（8�
 });
 
 test('マイグレーション 18: 会話と実行の記録に親の実行 parent_run_id が足される。前からある行は NULL。子の会話は kind task のまま作れ、親の実行を覚える（AU-4）', t => {
-  const path = join(tempDir(t), 'clive.db');
+  const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 17));
   before.prepare('INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, ?, 1, 1)').run('old', 'chat');
   before.prepare("INSERT INTO engine_runs (id, kind, conversation_id, started_at) VALUES ('oldrun', 'chat', 'old', 1)").run();

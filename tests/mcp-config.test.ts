@@ -90,11 +90,11 @@ test('T-21 正規化の規則と、内蔵の道具に mcp_ で始まるものが
 });
 
 test('T-31 env・headers の参照が、プロバイダの鍵・通知の欄・ほかの MCP の欄と重なる設定は断る', () => {
-  const channel = { id: 'phone', kind: 'webhook', urlEnv: 'CLIVE_NOTIFY_PHONE_URL_SECRET' };
+  const channel = { id: 'phone', kind: 'webhook', urlEnv: 'BEAT_NOTIFY_PHONE_URL_SECRET' };
   const cases: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
     ['プロバイダの鍵（env）', { servers: [stdio({ env: { KEY: 'ANTHROPIC_API_KEY' } })] }, {}],
     ['プロバイダの鍵（headers）', { servers: [http({ headers: { Authorization: 'ANTHROPIC_API_KEY' } })] }, {}],
-    ['通知の欄', { servers: [stdio({ env: { KEY: 'CLIVE_NOTIFY_PHONE_URL_SECRET' } })] }, { notify: { channels: [channel] } }],
+    ['通知の欄', { servers: [stdio({ env: { KEY: 'BEAT_NOTIFY_PHONE_URL_SECRET' } })] }, { notify: { channels: [channel] } }],
     ['同じサーバーの別の欄', { servers: [stdio({ env: { A: 'SHARED_TOKEN', B: 'SHARED_TOKEN' } })] }, {}],
     ['別のサーバー', { servers: [stdio({ env: { A: 'SHARED_TOKEN' } }), stdio({ id: 'two', env: { A: 'SHARED_TOKEN' } })] }, {}],
   ];

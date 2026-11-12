@@ -220,7 +220,7 @@ test('ダウンロード: zoneIdentifier は HostUrl の改行を落とす', () 
 });
 
 test('ダウンロード: isUnderDownloads は downloads/ の下を見る', () => {
-  const ws = mkdtempSync(join(tmpdir(), 'clive-dl-'));
+  const ws = mkdtempSync(join(tmpdir(), 'beat-dl-'));
   try {
     const dl = join(ws, 'downloads');
     mkdirSync(dl, { recursive: true });
@@ -234,8 +234,8 @@ test('ダウンロード: isUnderDownloads は downloads/ の下を見る', () =
 });
 
 test('ダウンロード: isUnderDownloads はリンク先も見る', (t) => {
-  const ws = mkdtempSync(join(tmpdir(), 'clive-dl-'));
-  const target = mkdtempSync(join(tmpdir(), 'clive-dl-target-'));
+  const ws = mkdtempSync(join(tmpdir(), 'beat-dl-'));
+  const target = mkdtempSync(join(tmpdir(), 'beat-dl-target-'));
   try {
     writeFileSync(join(target, 'a.png'), 'x');
     const dl = join(ws, 'downloads');

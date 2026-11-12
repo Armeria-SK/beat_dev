@@ -7,13 +7,13 @@ import { SECTION_GROUPS, sectionSlice, type Config } from '../web/src/settings/m
 // AU-5a T-20: 設定の「通知の送り先」の、画面を使わない部分（広がる変更の検出・文言・節の登録）
 
 const channel = (over: Record<string, unknown> = {}) => ({
-  id: 'phone', kind: 'webhook', urlEnv: 'CLIVE_NOTIFY_PHONE_URL_SECRET', kinds: ['task_failed'], enabled: true, includeBody: false, ...over,
+  id: 'phone', kind: 'webhook', urlEnv: 'BEAT_NOTIFY_PHONE_URL_SECRET', kinds: ['task_failed'], enabled: true, includeBody: false, ...over,
 });
 const config = (notify: Record<string, unknown>): Config => ({ notify } as unknown as Config);
 
 test('通知の送り先を足す・宛先を変える・本文を許す・種類を増やす・有効に戻す・リンクの元を決める は、確かめを求める', () => {
   const before = config({ channels: [channel()] });
-  assert.deepEqual(accessWidening(before, config({ channels: [channel(), channel({ id: 'tablet', urlEnv: 'CLIVE_NOTIFY_TABLET_URL_SECRET' })] })), [{ kind: 'notify-channel-added', id: 'tablet' }, { kind: 'notify-channel-kinds', id: 'tablet', kinds: ['task_failed'] }]);
+  assert.deepEqual(accessWidening(before, config({ channels: [channel(), channel({ id: 'tablet', urlEnv: 'BEAT_NOTIFY_TABLET_URL_SECRET' })] })), [{ kind: 'notify-channel-added', id: 'tablet' }, { kind: 'notify-channel-kinds', id: 'tablet', kinds: ['task_failed'] }]);
   // 足すときも、本文を送る・送る種類を並べる
   assert.deepEqual(accessWidening(config({ channels: [] }), config({ channels: [channel({ includeBody: true, kinds: ['info', 'task_failed'] })] })), [
     { kind: 'notify-channel-added', id: 'phone' }, { kind: 'notify-channel-body', id: 'phone' }, { kind: 'notify-channel-kinds', id: 'phone', kinds: ['info', 'task_failed'] },
@@ -22,11 +22,11 @@ test('通知の送り先を足す・宛先を変える・本文を許す・種�
   assert.deepEqual(accessWidening(before, config({ channels: [channel({ includeBody: true })] })), [{ kind: 'notify-channel-body', id: 'phone' }]);
   assert.deepEqual(accessWidening(before, config({ channels: [channel({ kinds: ['task_failed', 'info'] })] })), [{ kind: 'notify-channel-kinds', id: 'phone', kinds: ['info'] }]);
   assert.deepEqual(accessWidening(config({ channels: [channel({ enabled: false })] }), before), [{ kind: 'notify-channel-enabled', id: 'phone' }]);
-  assert.deepEqual(accessWidening(before, config({ channels: [channel()], publicBaseUrl: 'https://clive.example.net' })), [{ kind: 'notify-public-url', url: 'https://clive.example.net' }]);
+  assert.deepEqual(accessWidening(before, config({ channels: [channel()], publicBaseUrl: 'https://beat.example.net' })), [{ kind: 'notify-public-url', url: 'https://beat.example.net' }]);
 });
 
 test('狭める・同じ変更は確かめない（種類を減らす・無効にする・本文を止める・リンクの元を消す）', () => {
-  const wide = config({ channels: [channel({ kinds: ['task_failed', 'info'], includeBody: true })], publicBaseUrl: 'https://clive.example.net' });
+  const wide = config({ channels: [channel({ kinds: ['task_failed', 'info'], includeBody: true })], publicBaseUrl: 'https://beat.example.net' });
   const narrow = config({ channels: [channel({ kinds: ['task_failed'], enabled: false })] });
   assert.deepEqual(accessWidening(wide, narrow), []);
   assert.deepEqual(accessWidening(wide, wide), []);
