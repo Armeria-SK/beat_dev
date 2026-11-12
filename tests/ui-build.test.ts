@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApiError, type Acceptance, type AcceptanceItem, type Coverage, type PlanDoc, type Task } from '../web/src/api.ts';
+import { BuildError } from '../src/projects/build.ts';
+import { domainProblem } from '../src/web/http.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
@@ -160,4 +162,16 @@ test('ui/build: 引かれていない発言の続き: 読み直しのあとに�
   const empty = addPage(first, 1, []);
   assert.equal(empty.exhausted, true);
   assert.equal(pagingCursor(empty, 200), null, '空が返ったらもう続きは無い');
+});
+
+test('ui/build: サーバーの BuildError の本文（domainProblem）をそのまま受けて、知らせの種類と文を決める', () => {
+  const wire = (status: number, error: BuildError) => new ApiError(status, domainProblem(status, 'build', error).body);
+  assert.deepEqual(buildFailure(wire(409, new BuildError('changed'))), { kind: 'changed' });
+  assert.deepEqual(buildFailure(wire(409, new BuildError('running'))), { kind: 'running' });
+  const frozenOut = buildFailure(wire(409, new BuildError('frozen', { version: 3 })));
+  assert.equal(frozenOut.kind, 'frozen');
+  assert.match(frozenOut.kind === 'frozen' ? frozenOut.detail ?? '' : '', /already locked \(version 3\)/u);
+  const noPlan = buildFailure(wire(400, new BuildError('no_plan')));
+  assert.equal(noPlan.kind, 'failed');
+  assert.match(noPlan.kind === 'failed' ? noPlan.detail ?? '' : '', /no plan yet/u);
 });
