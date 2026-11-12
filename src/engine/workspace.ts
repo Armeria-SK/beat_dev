@@ -80,9 +80,10 @@ export function recordFileVersions(db: DatabaseSync, paths: AppPaths, now = Date
   }
 }
 
-const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string; productPlan: string; product: (name: string, root: string) => string }> = {
+const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string; productPlan: string; product: (name: string, root: string) => string; docLanguage: (tag: string) => string }> = {
   en: {
     product: (name, root) => `This conversation belongs to the product "${name}". Product folder: ${root} (relative paths start here).`,
+    docLanguage: tag => `Owner-facing documents of this product (plan, acceptance items, questions, deviation notes) are written in ${tag}.`,
     locale: 'en-US',
     format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
@@ -93,8 +94,8 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
 };
 
 // 毎回組み立てる system の部分（固定の system は変えない）。計画モード（plan）のときだけ、計画の指示を足す
-export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal', product?: { name: string; root: string }, planWrite = false): string {
+export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal', product?: { name: string; root: string; docLanguage?: string | null }, planWrite = false): string {
   const text = DYNAMIC[language];
   const formatted = new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now);
-  return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), text.reply, ...(mode === 'plan' ? [text.plan] : []), ...(mode === 'plan' && product && planWrite ? [text.productPlan] : [])].join('\n');
+  return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), ...(product?.docLanguage ? [text.docLanguage(product.docLanguage)] : []), text.reply, ...(mode === 'plan' ? [text.plan] : []), ...(mode === 'plan' && product && planWrite ? [text.productPlan] : [])].join('\n');
 }

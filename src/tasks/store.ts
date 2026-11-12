@@ -95,6 +95,7 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'curiosity_items', column: 'task_id' },
   { table: 'memory_jobs', column: 'task_id' },
   { table: 'conversations', column: 'source_task_id' },
+  { table: 'acceptance_versions', column: 'build_task_id' },
 ] as const;
 export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:'] as const;
 export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }

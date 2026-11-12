@@ -12,6 +12,7 @@ import { folderGone } from './work-folder.ts';
 export const PROJECT_ID = /^[A-Za-z0-9_-]{6,64}$/u;
 export const PROJECT_NAME_MAX = 100;
 export const CHECK_COMMAND_MAX = 1000;
+export const LANGUAGE_TAG = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}​-‍⁠﻿]/u;
 
 export type ScoutMode = 'off' | 'research' | 'fix';
@@ -24,6 +25,8 @@ export interface ProjectRow {
   check_command: string | null;
   scout_mode: ScoutMode;
   remotes: string;
+  doc_language: string | null;
+  doc_language_pinned: number;
   archived_at: number | null;
   created_at: number;
   updated_at: number;
@@ -44,6 +47,8 @@ export function checkCommandOf(raw: string | null): string | null {
   if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command)) throw new ProjectError('bad_check_command');
   return command || null;
 }
+
+export const languageTagOf = (raw: unknown): string | undefined => typeof raw === 'string' && LANGUAGE_TAG.test(raw) ? raw : undefined;
 
 export function projectDir(projectsDir: string, id: string): string {
   if (!PROJECT_ID.test(id)) throw new ProjectError('unknown');
@@ -107,6 +112,22 @@ export class ProjectStore {
       if (isRootConflict(error)) throw new ProjectError('root_in_use');
       throw error;
     }
+    return this.get(id)!;
+  }
+
+  detectDocLanguage(id: string, tag: string): boolean {
+    this.#db.prepare('INSERT OR IGNORE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(`doc-language:${id}`, JSON.stringify(tag), this.#now());
+    return Number(this.#db.prepare('UPDATE projects SET doc_language = ? WHERE id = ? AND doc_language IS NULL AND doc_language_pinned = 0').run(tag, id).changes) === 1;
+  }
+
+  #detected(id: string): string | null {
+    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(`doc-language:${id}`) as { value: string } | undefined;
+    try { return languageTagOf(row ? JSON.parse(row.value) : undefined) ?? null; } catch { return null; }
+  }
+
+  setDocLanguage(id: string, tag: string | null): ProjectRow {
+    if (!this.get(id)) throw new ProjectError('unknown');
+    this.#db.prepare('UPDATE projects SET doc_language = ?, doc_language_pinned = ?, updated_at = ? WHERE id = ?').run(tag ?? this.#detected(id), tag === null ? 0 : 1, this.#now(), id);
     return this.get(id)!;
   }
 

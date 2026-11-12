@@ -10,7 +10,7 @@ import { reply, tempDir, type Script, type testConfig } from './helpers.ts';
 type Config = ReturnType<typeof testConfig>;
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
-const PROJECT_KEYS = ['archived_at', 'check_command', 'created_at', 'folder_missing', 'has_plan', 'id', 'is_git', 'last_activity_at', 'name', 'remotes', 'root', 'running', 'scout_mode', 'updated_at', 'waiting'];
+const PROJECT_KEYS = ['archived_at', 'check_command', 'created_at', 'doc_language', 'doc_language_pinned', 'folder_missing', 'has_plan', 'id', 'is_git', 'last_activity_at', 'name', 'remotes', 'root', 'running', 'scout_mode', 'updated_at', 'waiting'];
 const NOTES = ['nested_inside', 'contains_product', 'inside_config_root', 'config_root_read_only', 'not_git'];
 
 const call = (name: string, args: unknown): Script => async function* () {

@@ -1,3 +1,4 @@
+import { acceptanceText } from './acceptance.ts';
 import { configText } from './config.ts';
 import { engineText } from './engine.ts';
 import { guardText } from './guard.ts';
@@ -10,4 +11,4 @@ import { storeText } from './stores.ts';
 import { taskText } from './tasks.ts';
 import { toolText } from './tools.ts';
 
-export const CATALOGS = { task: taskText, provider: providerText, engine: engineText, guard: guardText, tool: toolText, store: storeText, http: httpText, config: configText, notify: notifyText, project: projectText, plan: planText } as const;
+export const CATALOGS = { task: taskText, provider: providerText, engine: engineText, guard: guardText, tool: toolText, store: storeText, http: httpText, config: configText, notify: notifyText, project: projectText, plan: planText, acceptance: acceptanceText } as const;
