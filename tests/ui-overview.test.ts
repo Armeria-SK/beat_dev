@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { ChecklistItem, Project, Task } from '../web/src/api.ts';
 import { buildBoard } from '../web/src/ui/kanban.ts';
 import {
-  cardProduct, conversationOwners, finishedSince, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productLookKey, productSection, productTiles, readLastLook,
+  cardProduct, conversationOwners, finishedPaging, finishedSince, hasSomething, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productLookKey, productSection, productTiles, readLastLook,
   runningRows, taskOwners, tiles,
 } from '../web/src/ui/overview.ts';
 
@@ -121,6 +121,32 @@ test('ui/overview: 製品の節は、その製品のタスクの実行と会話�
   assert.deepEqual(none.running.map(row => row.runId), ['r2', 'r3', 'r5'], '製品なしの節に振り返りと製品なしの会話');
   assert.deepEqual(none.failed.map(t => t.id), ['f-none']);
   assert.deepEqual(productSection('p2aaaa', input, owners, done), { running: [], failed: [], finished: 0 });
+});
+
+test('ui/overview: 終わったタスクは、最後に見た時刻より前まで読み足す。上限で止まったら capped（数が少なく見えるのを黙らない）', () => {
+  const at = (...stamps: number[]) => stamps.map((s, i) => task(`t${i}`, 'done', { completed_at: s }));
+  assert.equal(finishedPaging(at(500, 400), false, 100, 2), 'done', '次のページが無ければ終わり');
+  assert.equal(finishedPaging([], true, 100, 2), 'more');
+  assert.equal(finishedPaging(at(500, 400), true, 100, 2), 'more', '最後に見た時刻にまだ届いていない');
+  assert.equal(finishedPaging(at(500, 90), true, 100, 2), 'done', '届いた');
+  assert.equal(finishedPaging(at(90), true, 100, 2), 'more', '届いても、板に要る数までは読む');
+  assert.equal(finishedPaging(at(500, 400, 300), true, 100, 2, 3), 'capped', '上限で止まって、まだ届いていない');
+  assert.equal(finishedPaging(at(500, 400, 90), true, 100, 2, 3), 'done');
+  const reviewer = [...Array.from({ length: 25 }, (_, i) => task(`a${i}`, 'done', { completed_at: 1000 - i, project_id: 'A' })), task('b', 'failed', { completed_at: 900, project_id: 'B' })];
+  let loaded = 0;
+  while (finishedPaging(reviewer.slice(0, loaded), loaded < reviewer.length, 50, 20) === 'more') loaded += 20;
+  const done = finishedSince(reviewer.slice(0, loaded), 50, Number.POSITIVE_INFINITY).tasks;
+  const input = { worker: [], drafts: [], conversations: [], checklists: new Map<string, ChecklistItem[]>() };
+  assert.deepEqual(productSection('B', input, new Map(), done), { running: [], failed: [reviewer[25]], finished: 1 }, '静かな製品の失敗が押し出されない');
+  assert.equal(productSection('A', input, new Map(), done).finished, 25);
+});
+
+test('ui/overview: "No product" の節は、動いている・失敗したものが無くても、最後に見たあとに終わったものがあれば出す', () => {
+  const row = runningRows({ worker: [{ kind: 'review', taskId: null, runId: 'r', title: 'x' }], drafts: [], conversations: [], checklists: new Map() })[0]!;
+  assert.equal(hasSomething({ running: [], failed: [], finished: 0 }), false);
+  assert.equal(hasSomething({ running: [], failed: [], finished: 3 }), true);
+  assert.equal(hasSomething({ running: [row], failed: [], finished: 0 }), true);
+  assert.equal(hasSomething({ running: [], failed: [task('f', 'failed')], finished: 0 }), true);
 });
 
 test('ui/overview: 製品が 5 つ以上なら 1 つの一覧にする。カードの製品はタスクの行か会話の持ち主から', () => {

@@ -5,18 +5,17 @@ import { formatDateTimeSmart, formatElapsed, formatRelative, startOfDay, useT } 
 import { plainLine } from '../../task-meta.ts';
 import type { Waiting } from '../agent-state.ts';
 import { useNow } from '../hooks.ts';
-import { buildBoard, KANBAN_PAGE, RUNS_WINDOW, sessionCards, type Card, type ColumnId } from '../kanban.ts';
+import { buildBoard, KANBAN_PAGE, mergeFinished, RUNS_WINDOW, sessionCards, type Card, type ColumnId } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
 import {
-  cardProduct, conversationOwners, finishedSince, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productSection, readLastLook, taskOwners, tiles, workerLine,
-  type MiniColumn, type ProductSection, type RunningRow, type Tile, type TileId,
+  cardProduct, conversationOwners, finishedPaging, finishedSince, hasSomething, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productSection, readLastLook, taskOwners, tiles, workerLine,
+  type MiniColumn, type Paging, type ProductSection, type RunningRow, type Tile, type TileId,
 } from '../overview.ts';
 import { Avatar, Button, CountBadge, countText, EmptyState, Icon, Notice, Pill } from '../parts.tsx';
 import { overviewOrder, productOf, waitingTotal } from '../products.ts';
 import { routeHash } from '../routes.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
-import { readFinished } from './Kanban.tsx';
 import '../styles/product-home.css';
 
 export interface OverviewProps {
@@ -32,7 +31,24 @@ export interface OverviewProps {
   projectsLoaded: boolean;
 }
 
-interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
+interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; capped: boolean }
+
+const FINISHED_PAGE = 50;
+
+async function readFinishedSince(since: number): Promise<{ tasks: Task[]; next: FinishedCursor | null; total: number; capped: boolean }> {
+  let tasks: Task[] = [];
+  let next: FinishedCursor | null = null;
+  let total = 0;
+  let paging: Paging = 'more';
+  while (paging === 'more') {
+    const page = await api.finishedTasks(next, tasks.length === 0 ? KANBAN_PAGE : FINISHED_PAGE);
+    tasks = mergeFinished(tasks, page.tasks);
+    next = page.next;
+    total = page.total;
+    paging = page.tasks.length === 0 ? 'done' : finishedPaging(tasks, next !== null, since, KANBAN_PAGE);
+  }
+  return { tasks, next, total, capped: paging === 'capped' };
+}
 
 export const RELOAD_DELAY_MS = 150;
 const TILE_LABEL = { proposals: 'ui.overview.proposals', questions: 'ui.overview.questions', pending: 'ui.overview.pending' } as const satisfies Record<TileId, string>;
@@ -184,14 +200,14 @@ export function Overview({ waiting, approvals, conversations, drafts, checklists
   const load = useCallback(async () => {
     const ticket = loads.current.begin();
     try {
-      const [tasks, finished, runs] = await Promise.all([api.tasks(), readFinished(KANBAN_PAGE), api.runs(RUNS_WINDOW)]);
+      const [tasks, finished, runs] = await Promise.all([api.tasks(), readFinishedSince(look.at), api.runs(RUNS_WINDOW)]);
       if (!loads.current.isCurrent(ticket)) return;
-      setData({ active: tasks.active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs });
+      setData({ active: tasks.active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, capped: finished.capped });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
     }
-  }, []);
+  }, [look.at]);
   const { busy, act, stop, retry } = useRunActions(worker, load);
 
   const runKey = drafts.map(d => d.runId).join(',');
@@ -227,9 +243,11 @@ export function Overview({ waiting, approvals, conversations, drafts, checklists
     onWorker(await api.setWorker({ paused }));
     toast({ icon: paused ? 'square' : 'check', title: t(paused ? 'ui.overview.toast.paused' : 'ui.overview.toast.resumed') });
   });
+  const capped = data?.capped ?? false;
+  const finishedText = (n: number): string | false => (capped ? t('ui.home.finishedSinceMore', n, lookText) : n > 0 && t('ui.home.finishedSince', n, lookText));
   const counts = ({ project, finished }: Placed): string => [
     t('ui.home.counts', project.waiting.proposals, project.waiting.questions, project.waiting.pending),
-    finished > 0 && t('ui.home.finishedSince', finished, lookText),
+    finishedText(finished),
   ].filter(Boolean).join(' · ');
   const tagOf = (card: Card): string | null => productOf(projects, cardProduct(card, owners))?.name ?? null;
 
@@ -307,17 +325,24 @@ export function Overview({ waiting, approvals, conversations, drafts, checklists
                 <div className="bt-row__main"><a className="bt-row__sub bt-meta ui-home__line" href={routeHash({ view: 'product', id: p.project.id })}>{counts(p)}</a></div>
                 <Icon name="chevR" />
               </li>
+              {capped && <li className="bt-row"><a className="bt-tool__link bt-meta" href="#/kanban">{t('ui.home.moreOnBoard')}</a></li>}
             </ul>
           </section>
         );
       })}
 
-      {(placed.none.running.length > 0 || placed.none.failed.length > 0) && (
+      {hasSomething(placed.none) && (
         <section className="bt-section bt-rise ui-home__products" style={{ '--bt-i': 5 } as CSSProperties} aria-label={t('ui.section.noProduct')} data-product="none">
           <div className="bt-section__head"><span className="bt-label">{t('ui.section.noProduct')}</span></div>
           <ul className="bt-list">
             <RunningItems rows={placed.none.running} now={now} busy={busy} onStop={stop} sheen={sheenAt === null} />
             {placed.none.failed.map(task => <FinishedItem key={task.id} task={task} now={now} busy={busy} onRetry={retry} />)}
+            {placed.none.finished > 0 && (
+              <li className="bt-row bt-row--link ui-home__more">
+                <div className="bt-row__main"><a className="bt-row__sub bt-meta ui-home__line" href="#/kanban">{finishedText(placed.none.finished)}</a></div>
+                <Icon name="chevR" />
+              </li>
+            )}
           </ul>
         </section>
       )}

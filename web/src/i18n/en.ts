@@ -689,6 +689,8 @@ export const en = {
   'ui.home.counts': (proposals: number, questions: number, pending: number) =>
     `${proposals} ${pluralEn(proposals, { one: 'proposal', other: 'proposals' })} · ${questions} ${pluralEn(questions, { one: 'question', other: 'questions' })} · ${pending} pending`,
   'ui.home.finishedSince': (n: number, time: string) => `${n} finished since ${time}`,
+  'ui.home.finishedSinceMore': (n: number, time: string) => `${n}+ finished since ${time}`,
+  'ui.home.moreOnBoard': 'More on the board',
   'ui.home.nothingWaiting': 'nothing waiting',
   'ui.home.folderMissing': 'folder missing',
   'ui.home.folderMissing.title': 'The folder is not found',

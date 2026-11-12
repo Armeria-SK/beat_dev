@@ -124,6 +124,18 @@ export function productSection(projectId: string | null, input: RunningInput, ta
   return { running: runningRows(scopeRunning(input, projectId, tasks)), failed: mine.filter(task => task.status === 'failed'), finished: mine.length };
 }
 
+export const hasSomething = (section: ProductSection): boolean => section.running.length > 0 || section.failed.length > 0 || section.finished > 0;
+
+export const FINISHED_CAP = 200;
+export type Paging = 'more' | 'done' | 'capped';
+
+export function finishedPaging(loaded: ReadonlyArray<Pick<Task, 'completed_at' | 'updated_at'>>, hasNext: boolean, since: number, min: number, cap = FINISHED_CAP): Paging {
+  if (!hasNext) return 'done';
+  const reached = loaded.length > 0 && loaded.reduce((low, task) => Math.min(low, finishedAt(task)), Number.POSITIVE_INFINITY) <= since;
+  if (reached && loaded.length >= min) return 'done';
+  return loaded.length >= cap ? (reached ? 'done' : 'capped') : 'more';
+}
+
 export const LIST_AFTER = 4;
 export const listsProducts = (count: number): boolean => count > LIST_AFTER;
 
