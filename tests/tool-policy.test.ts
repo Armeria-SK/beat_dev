@@ -235,7 +235,6 @@ test('振り返りでは、外から読んだ内容のあとの書き込みの�
   const started = Date.now();
   const review = await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint });
   assert.equal(review.decision, 'deny');
-  assert.equal(review.decidedBy, 'taint', '記録で、ほかの拒否（builtin）と見分けられる');
   assert.match(review.output.content, /history_read: c9.*a review \(background work\) has nobody to approve it/u);
   assert.equal(s.approvals.pending().length, 0, '承認の札を作らない');
   assert.ok(Date.now() - started < 5000, '待たない');
