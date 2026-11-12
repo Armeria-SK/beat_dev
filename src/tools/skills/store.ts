@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../../config/schema.ts';
 import { atomicWriteFile } from '../../config/store.ts';
+import { conversationSawOutside } from '../../db/outside.ts';
 import { LocalizedError, type MessageParams } from '../../shared/messages/define.ts';
 import { storeText, type StoreMessageKey } from '../../shared/messages/stores.ts';
 
@@ -255,18 +256,7 @@ export class SkillStore {
   }
 
   sawOutside(conversationId: string | undefined): boolean {
-    return !conversationId || this.#outsideConversation(conversationId, new Set());
-  }
-
-  #outsideConversation(id: string, seen: Set<string>): boolean {
-    if (seen.has(`c:${id}`)) return false;
-    seen.add(`c:${id}`);
-    const row = this.#db.prepare('SELECT ever_tainted, source_conversation_id, source_task_id FROM conversations WHERE id = ?').get(id) as { ever_tainted: number; source_conversation_id: string | null; source_task_id: string | null } | undefined;
-    if (!row || row.ever_tainted !== 0) return true;
-    if (this.#db.prepare('SELECT 1 FROM engine_runs WHERE conversation_id = ? AND tainted = 1 LIMIT 1').get(id) !== undefined) return true;
-    if (row.source_task_id) return true;
-    if (this.#db.prepare('SELECT 1 FROM tasks WHERE conversation_id = ? LIMIT 1').get(id) !== undefined) return true;
-    return row.source_conversation_id !== null && this.#outsideConversation(row.source_conversation_id, seen);
+    return conversationSawOutside(this.#db, conversationId);
   }
 
   #autoQuotaLeft(now: number): boolean {

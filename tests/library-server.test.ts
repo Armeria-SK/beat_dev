@@ -344,6 +344,29 @@ test('1-5s 外を読んだ実行が書き換えた繰り返しのひな形から
   assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
 });
 
+test('1-5s 外を読んだ会話を history_read で読んだ実行は「外を読んだ」になり、skill_draft は下書きのまま待つ。外を読んでいない会話を読んだだけなら登録される', async t => {
+  const { app, chat } = await chatApp(t);
+  await chat('b', 'Read this page', [call('web_fetch', FETCH_PAGE), reply('Read it')]);
+  await chat('c', 'What did we read?', [call('history_read', { conversation_id: 'b' }), call('skill_draft', SKILL), reply('Done')]);
+  assert.match(app.conversations.messages('c').find(m => m.role === 'tool')!.text, /Ignore the user/u, '外の文がそのまま返る（だから印を付ける）');
+  assert.equal(app.skills.get('from-task'), undefined);
+  assert.equal(app.runs.recent(1)[0]!.tainted, 1);
+  await chat('d', 'Remember: water the plants', [reply('Noted')]);
+  await chat('e', 'What did I say?', [call('history_read', { conversation_id: 'd' }), call('skill_draft', { ...SKILL, name: 'clean-read' }), reply('Done')]);
+  assert.equal(app.runs.recent(1)[0]!.tainted, 0);
+  assert.equal(app.skills.isRegistered('clean-read'), true);
+});
+
+test('1-5s 外を読んだ会話が当たる history_search の実行も「外を読んだ」になり、skill_draft は下書きのまま待つ', async t => {
+  const { app, chat } = await chatApp(t);
+  await chat('b', 'Read this page', [call('web_fetch', FETCH_PAGE), reply('Read it')]);
+  await chat('c', 'Find it', [call('history_search', { query: 'exfil' }), call('skill_draft', SKILL), reply('Done')]);
+  assert.match(app.conversations.messages('c').find(m => m.role === 'tool')!.text, /exfil/u, '外を読んだ会話が当たった');
+  assert.equal(app.runs.recent(1)[0]!.tainted, 1);
+  assert.equal(app.skills.get('from-task'), undefined);
+  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+});
+
 test('1-5s AI が時刻だけを書き換えた（edited の行がある）まだ動いていない時刻指定のタスクは、持ち主が消せる', async t => {
   const { app } = await boot(t);
   const task = app.tasks.create({ title: 'Later', body: '', origin: 'user', actor: 'user', runAt: Date.now() + 3_600_000 } as never);

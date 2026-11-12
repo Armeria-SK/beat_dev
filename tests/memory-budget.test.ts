@@ -403,6 +403,18 @@ test('整理の振り返り（book_full）: memory_forget と memory_save を渡
   assert.deepEqual(rows.map(r => [r.tool, r.decision, r.ok]), [['memory_update', 'allow', 1], ['memory_forget', 'deny', 0], ['memory_save', 'deny', 0]]);
 });
 
+test('1-5s 整理の振り返り（book_full）には skill_draft も渡さず、聞かずに登録する設定でも呼ばれたら拒否する（元の会話の無い振り返りから登録しない）', async t => {
+  const s = await setup(t, c => { c.models = [model('big', 'fa', 20_000)]; c.skills = { askBeforeRegister: false }; });
+  await s.app.worker.tick();
+  s.fill(6);
+  s.adapter().scripts.push(toolCall('skill_draft', { name: 'tidy-skill', description: 'From memory', body: 'Steps', reason: 'Seen in memory' }), reply('No changes'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(bookFullJobs(s).length, 1);
+  assert.equal(s.adapter().calls[0]!.tools.some(x => x.name === 'skill_draft'), false);
+  assert.equal(s.app.skills.get('tidy-skill'), undefined);
+  assert.deepEqual(s.app.skills.drafts('all'), []);
+});
+
 test('整理の振り返り以外の振り返りは、今までどおり memory_forget と memory_save を使える', async t => {
   const s = await setup(t);
   const conversation = s.app.conversations.create({ kind: 'task' });

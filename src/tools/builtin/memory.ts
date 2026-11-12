@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { conversationSawOutside } from '../../db/outside.ts';
 import { externalModelIds } from '../../engine/local-model.ts';
 import { readHistory, searchHistory } from '../../memory/history.ts';
 import { BOOK_LABELS, MemoryError, prefix, type Book } from '../../memory/store.ts';
@@ -119,7 +120,11 @@ export const historySearch: ToolDef<{ query: string; days?: number; limit?: numb
       const hits = searchHistory(services(ctx).db, input.query, { days: input.days, limit: input.limit ?? 12, excludeConversationId: ctx.conversationId, visibleModelIds: visibleModels(ctx) });
       const language = languageOf(ctx.config);
       if (!hits.length) return { content: toolText(language, 'history.no_hit', { query: input.query, days: input.days ? toolText(language, 'history.days', { days: input.days }) : '' }) };
-      return { content: hits.map(h => toolText(language, 'history.line', { date: fmtDate(h.createdAt), title: h.title ?? toolText(language, 'history.untitled'), cid: h.conversationId, mid: h.messageId, role: h.role, snippet: h.snippet })).join('\n') };
+      const db = services(ctx).db;
+      return {
+        content: hits.map(h => toolText(language, 'history.line', { date: fmtDate(h.createdAt), title: h.title ?? toolText(language, 'history.untitled'), cid: h.conversationId, mid: h.messageId, role: h.role, snippet: h.snippet })).join('\n'),
+        ...([...new Set(hits.map(h => h.conversationId))].some(id => conversationSawOutside(db, id)) ? { fetched: true } : {}),
+      };
     } catch (error) { return fail(error, ctx); }
   },
 };
@@ -138,7 +143,10 @@ export const historyRead: ToolDef<{ conversation_id: string; around_message_id?:
     try {
       const rows = readHistory(services(ctx).db, input.conversation_id, { aroundMessageId: input.around_message_id, limit: input.limit ?? 20, visibleModelIds: visibleModels(ctx) });
       if (!rows.length) return { content: toolText(languageOf(ctx.config), 'history.not_found'), isError: true };
-      return { content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n') };
+      return {
+        content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n'),
+        ...(conversationSawOutside(services(ctx).db, input.conversation_id) ? { fetched: true } : {}),
+      };
     } catch (error) { return fail(error, ctx); }
   },
 };
