@@ -18,6 +18,16 @@
 .bt-root .ui-plan__doc .ui-md h3 { color: var(--ink); }
 .ui-plan__editor { box-sizing: border-box; flex: 1; width: 100%; min-height: 320px; resize: none; }
 .ui-plan__editor:focus { border-color: var(--pulse); outline: none; }
+.ui-acc__outside { display: flex; align-items: center; gap: var(--space-1); margin: 0; }
+.ui-acc .bt-row.ui-acc__row { align-items: flex-start; }
+.ui-acc__id { min-width: 4ch; padding-top: 2px; }
+.ui-acc__text { display: block; color: var(--ink); overflow-wrap: anywhere; }
+.ui-acc__chev { flex: none; margin-top: 2px; }
+.ui-acc__tags { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-1); }
+.ui-acc__detail { display: flex; flex-direction: column; gap: var(--space-2); margin: var(--space-2) 0 0; }
+.ui-acc__pair { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ui-acc__pair dd { margin: 0; color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ui-acc__pair dd.ui-acc__mono { font: 400 12px/18px var(--font-mono); color: var(--ink); }
 .ui-frame > .bt-app.has-panes.is-pane-single > .bt-app__main { display: none; }
 .ui-frame > .bt-app.has-panes.is-pane-single > .ui-panes { display: flex; height: 100%; padding: var(--space-2); }
 .is-pane-single > .ui-panes > .ui-panes__pane { flex: 1 1 auto; min-width: 0; min-height: 0; }
@@ -32,4 +42,5 @@
   .ui-frame > .bt-app .bt-app__bar > .ui-panes__toggle { display: none; }
   .ui-plan .bt-seg__opt, .ui-plan .bt-pane__bar .bt-btn, .ui-panes .bt-tabs__end .bt-btn { height: 40px; }
   .ui-plan .bt-seg__opt { padding: 0 var(--space-3); }
+  .ui-acc__text { min-height: 40px; }
 }
