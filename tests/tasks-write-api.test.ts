@@ -165,10 +165,32 @@ test('DELETE: 消したことのログの行は、題の制御文字・行の区
   assert.equal(s.logs.filter(line => line.includes('Deleted task')).at(-1), `[INFO] Deleted task "p q q q r" (${widthless.id})`, '幅のない文字も落とす');
 });
 
-test('DELETE: 動いている回があるひな形は 409（run_open）。回が終われば消せる。止めたひな形も消せる', async t => {
+test('DELETE: まだ始まっていない回（実行待ち）だけなら、止めたひな形も消せて、その回は取り消して残る（戻せる）', async t => {
+  const s = await taskApp(t);
+  const template = s.userTask('Weather', { cron: '*/2 * * * *', timezone: 'UTC' });
+  const queued = s.app.tasks.spawnNow(template.id)!;
+  s.app.tasks.finish(template.id, 'cancelled', null, 'user');
+  const res = await s.api(`/api/tasks/${template.id}`, undefined, 'DELETE');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.deleted.keptRuns, 1);
+  const kept = s.app.tasks.get(queued.id)!;
+  assert.deepEqual([kept.status, kept.parent_id, kept.cancelled_from], ['cancelled', null, 'ready']);
+  assert.ok(s.events.some(e => e.type === 'task.changed' && e.task.id === queued.id && e.task.status === 'cancelled'), 'ボードから実行待ちの回が消える');
+  assert.equal(await s.app.worker.tick(), 'idle', '取り消した回は動かない');
+  assert.equal(s.adapter().calls.length, 0);
+  assert.equal(s.app.tasks.uncancel(queued.id, 'user').status, 'ready');
+});
+
+test('DELETE: 実行中・返事待ちの回があるひな形は 409（run_open）で何も変えない。その回を取り消せば消せる', async t => {
   const s = await taskApp(t);
   const template = s.userTask('Busy', { cron: '0 9 * * *', timezone: 'UTC' });
   const child = s.app.tasks.spawnNow(template.id)!;
+  assert.ok(s.app.tasks.claim(child.id, 60_000, s.app.conversations.create({ kind: 'task', title: 'Busy' }).id));
+  const waiting = s.userTask('Asks', { cron: '0 10 * * *', timezone: 'UTC' });
+  const asking = s.app.tasks.spawnNow(waiting.id)!;
+  s.app.tasks.setWaiting(asking.id, 'question', 'Which city?');
+  const blocked = await s.api(`/api/tasks/${waiting.id}`, undefined, 'DELETE');
+  assert.deepEqual([blocked.status, blocked.body.code], [409, 'task.error.run_open']);
   const before = snapshot(s);
   const res = await s.api(`/api/tasks/${template.id}`, undefined, 'DELETE');
   assert.equal(res.status, 409);

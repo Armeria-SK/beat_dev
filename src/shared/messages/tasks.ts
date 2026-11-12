@@ -36,6 +36,7 @@ const en = {
   'event.uncancelled': 'The cancellation was undone',
   'summary.done_from_ui': 'Marked as done from the screen',
   'summary.cancelled_from_ui': 'Cancelled from the screen',
+  'summary.cancelled_schedule_deleted': 'Cancelled because its schedule was deleted before this run started',
 
   'reason.no_model': 'Waiting because no model is available: {detail}',
   'reason.local_wait': 'This task came from a conversation that used a local model, so it waits while no local model is available (it is never sent to an external model)',
