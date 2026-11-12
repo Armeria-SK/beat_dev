@@ -1,0 +1,176 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { ApiError, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type Conversation } from '../web/src/api.ts';
+import { t } from '../web/src/i18n/index.ts';
+import {
+  ASK_TEXT, askAfterSave, askSend, askTarget, canEditItems, decisionFailure, diffLabel, editOp, editRequest, formProblem, itemForm, previousVersion, proposalRows, proposalStale, removeOp, saveHint,
+  revealSection, versionDiff, versionSourceLabel, versionsShown,
+} from '../web/src/ui/acceptance.ts';
+
+const item = (id: string, over: Partial<AcceptanceItem> = {}): AcceptanceItem => ({
+  id, result: `Result ${id}`, source: { kind: 'owner_words', quote: 'resume after a restart', messageId: 4, conversationId: 'c1' },
+  check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null, ...over,
+});
+const frozen = { version: 1, hash: 'ah', plan_hash: 'p1', created_at: 5, source: 'build', build_task_id: 'T1' };
+const acc = (over: Partial<Acceptance> = {}): Acceptance => ({ version: 1, language: 'en', items: [], not_doing: [], draft: false, hash: 'ah', frozen, ...over });
+const draft = (over: Partial<Acceptance> = {}): Acceptance => acc({ version: 0, draft: true, frozen: null, ...over });
+const change = (over: Partial<AcceptanceChange> = {}): AcceptanceChange => ({ id: 'ch1', base_version: 1, ops: [], language: 'en', conversation_id: 'c1', tainted: false, created_at: 9, ...over });
+const convo = (id: string, over: Partial<Conversation> = {}): Conversation => ({ id, title: null, created_at: 1, last_message_at: 1, project_id: 'P1', permission_mode: 'plan', ...over });
+const version = (n: number, source = 'build', at = n): AcceptanceVersion => ({ version: n, hash: `h${n}`, plan_hash: null, source, build_task_id: null, created_at: at });
+
+test('ui/acceptance 3-3: 変更の案の行は Added / Changed / Removed と、その出どころ', () => {
+  const a = acc({ items: [item('A-1'), item('A-2', { result: 'Old text' }), item('A-3')] });
+  const rows = proposalRows(a, change({
+    ops: [
+      { op: 'add', item: { result: 'Works offline', check: { kind: 'look' } }, source: { kind: 'ai_added' } },
+      { op: 'change', id: 'A-2', item: { result: 'New text' }, source: { kind: 'owner_words', quote: 'make it new text', messageId: 7, conversationId: 'c1' } },
+      { op: 'remove', id: 'A-3', source: { kind: 'owner_choice', question: 'Keep A-3?', answer: 'no' } },
+    ],
+  }));
+  assert.deepEqual(rows.map(r => [r.kind, r.id, r.result, r.before]), [
+    ['added', null, 'Works offline', null],
+    ['changed', 'A-2', 'New text', 'Old text'],
+    ['removed', 'A-3', 'Result A-3', null],
+  ]);
+  assert.deepEqual(rows.map(r => r.source?.kind), ['ai_added', 'owner_words', 'owner_choice']);
+  assert.deepEqual(rows.map(r => t(diffLabel(r.kind))), ['Added', 'Changed', 'Removed']);
+});
+
+test('ui/acceptance 3-3: 文を変えない Changed は前の文を出さない。確かめ方だけの変更は新しい確かめ方を持つ', () => {
+  const a = acc({ items: [item('A-1')] });
+  const [row] = proposalRows(a, change({ ops: [{ op: 'change', id: 'A-1', item: { check: { kind: 'read' } }, source: { kind: 'ai_added' } }] }));
+  assert.equal(row?.before, null);
+  assert.equal(row?.result, 'Result A-1');
+  assert.deepEqual(row?.check, { kind: 'read' });
+});
+
+test('ui/acceptance 3-3: 案が今の版より前の版に向けたものなら古い案（Approve させない）', () => {
+  assert.equal(proposalStale(acc({ version: 2 }), change({ base_version: 1 })), true);
+  assert.equal(proposalStale(acc({ version: 1 }), change({ base_version: 1 })), false);
+});
+
+test('ui/acceptance 3-3: 版どうしの違い。外した項目は Removed、足した項目は Added、固定の部分が違えば Changed。state と evidence の違いは数えない', () => {
+  const before = [item('A-1'), item('A-2'), item('A-3'), item('A-4', { removedIn: 1 })];
+  const after = [
+    item('A-1', { state: 'met', evidence: ['log'] }),
+    item('A-2', { result: 'Changed text', changedIn: 2 }),
+    item('A-3', { removedIn: 2 }),
+    item('A-5'),
+    item('A-10', { check: { kind: 'look' } }),
+  ];
+  const rows = versionDiff(before, after);
+  assert.deepEqual(rows.map(r => [r.kind, r.id, r.result, r.before]), [
+    ['changed', 'A-2', 'Changed text', 'Result A-2'],
+    ['removed', 'A-3', 'Result A-3', null],
+    ['added', 'A-5', 'Result A-5', null],
+    ['added', 'A-10', 'Result A-10', null],
+  ]);
+});
+
+test('ui/acceptance 3-3: 確かめ方だけが違っても Changed（前の文は出さない）', () => {
+  const rows = versionDiff([item('A-1')], [item('A-1', { check: { kind: 'command', command: 'npm run e2e' } })]);
+  assert.deepEqual(rows.map(r => [r.kind, r.before]), [['changed', null]]);
+});
+
+test('ui/acceptance 3-3: 前の版が無い版（v1）は全部 Added', () => {
+  assert.deepEqual(versionDiff(null, [item('A-2'), item('A-1')]).map(r => [r.kind, r.id]), [['added', 'A-1'], ['added', 'A-2']]);
+});
+
+test('ui/acceptance 3-3: 版の一覧は新しい順。前の版は、その版より小さい中でいちばん大きい版', () => {
+  const list = [version(1), version(3, 'change'), version(2, 'question')];
+  assert.deepEqual(versionsShown(list).map(v => v.version), [3, 2, 1]);
+  assert.equal(previousVersion(list, 3), 2);
+  assert.equal(previousVersion(list, 1), null);
+  assert.equal(previousVersion([version(1), version(4)], 4), 1);
+});
+
+test('ui/acceptance 3-3: 版のどこからの札は Build / Change / Question / Proposal。知らない値は出さない', () => {
+  assert.deepEqual(['build', 'change', 'question', 'proposal'].map(s => { const k = versionSourceLabel(s); return k && t(k); }), ['Build', 'Change', 'Question', 'Proposal']);
+  assert.equal(versionSourceLabel('other'), null);
+});
+
+test('ui/acceptance 3-3: 直す欄の始まりは、その項目の文と確かめ方とコマンド。新しい項目は空で Look', () => {
+  assert.deepEqual(itemForm(item('A-1')), { result: 'Result A-1', check: 'command', command: 'npm test' });
+  assert.deepEqual(itemForm(item('A-1', { check: { kind: 'read' } })), { result: 'Result A-1', check: 'read', command: '' });
+  assert.deepEqual(itemForm(null), { result: '', check: 'look', command: '' });
+});
+
+test('ui/acceptance 3-3: 直す欄の誤り。空の文・長すぎる文・Command なのにコマンドが空・長すぎるコマンド', () => {
+  assert.equal(formProblem({ result: '  ', check: 'look', command: '' }), 'ui.acc.edit.empty');
+  assert.equal(formProblem({ result: 'x'.repeat(301), check: 'look', command: '' }), 'ui.acc.edit.long');
+  assert.equal(formProblem({ result: 'x'.repeat(300), check: 'look', command: '' }), null);
+  assert.equal(formProblem({ result: 'ok', check: 'command', command: ' ' }), 'ui.acc.edit.noCommand');
+  assert.equal(formProblem({ result: 'ok', check: 'command', command: 'x'.repeat(1001) }), 'ui.acc.edit.longCommand');
+  assert.equal(formProblem({ result: 'ok', check: 'read', command: '' }), null);
+});
+
+test('ui/acceptance 3-3: 直しの op。新しい項目は add、変えた項目は change、何も変えなければ送らない。前後の空白は落とす', () => {
+  assert.deepEqual(editOp({ result: ' Works offline ', check: 'look', command: 'ignored' }, null), { op: 'add', item: { result: 'Works offline', check: { kind: 'look' } } });
+  const a1 = item('A-1');
+  assert.equal(editOp({ result: 'Result A-1 ', check: 'command', command: ' npm test' }, a1), null);
+  assert.deepEqual(editOp({ result: 'Result A-1', check: 'command', command: 'npm run e2e' }, a1), { op: 'change', id: 'A-1', item: { result: 'Result A-1', check: { kind: 'command', command: 'npm run e2e' } } });
+  assert.deepEqual(editOp({ result: 'Other', check: 'look', command: 'npm test' }, a1), { op: 'change', id: 'A-1', item: { result: 'Other', check: { kind: 'look' } } });
+  assert.deepEqual(removeOp(a1), { op: 'remove', id: 'A-1' });
+});
+
+test('ui/acceptance 3-3: 直しは表に出している版を baseVersion に載せる（下書きは 0）', () => {
+  const op = removeOp(item('A-1'));
+  assert.deepEqual(editRequest(acc({ version: 3 }), op), { baseVersion: 3, ops: [op] });
+  assert.deepEqual(editRequest(draft(), op), { baseVersion: 0, ops: [op] });
+});
+
+test('ui/acceptance 3-3: 固定のあとの Save は新しい版になると先に出す。下書きでは出さない', () => {
+  assert.equal(saveHint(acc({ version: 2 })), 'Saving makes v3');
+  assert.equal(saveHint(draft()), null);
+});
+
+test('ui/acceptance 3-3: 項目を直せるのは読むときだけ。計画書を書いている最中・Build を送っている最中は直せない', () => {
+  assert.equal(canEditItems({ acc: acc(), state: 'ready', mode: 'read', pending: false }), true);
+  assert.equal(canEditItems({ acc: draft(), state: 'empty', mode: 'read', pending: false }), true);
+  assert.equal(canEditItems({ acc: null, state: 'ready', mode: 'read', pending: false }), false);
+  assert.equal(canEditItems({ acc: acc(), state: 'ready', mode: 'edit', pending: false }), false);
+  assert.equal(canEditItems({ acc: acc(), state: 'writing', mode: 'read', pending: false }), false);
+  assert.equal(canEditItems({ acc: acc(), state: 'ready', mode: 'read', pending: true }), false);
+});
+
+test('ui/acceptance 3-3: Approve / Reject / 直しの失敗。409 は古い版（読み直す）、ほかはサーバーの理由つき', () => {
+  assert.deepEqual(decisionFailure(new ApiError(409, { code: 'acceptance.stale', errorMessage: 'stale' })), { kind: 'stale' });
+  assert.deepEqual(decisionFailure(new ApiError(400, { errorMessage: 'Bad command' })), { kind: 'failed', detail: 'Bad command' });
+  assert.deepEqual(decisionFailure(new Error('network')), { kind: 'failed', detail: null });
+});
+
+test('ui/acceptance 3-3: 「一覧も変えますか」は、固定のあとに計画書を Save したときだけ', () => {
+  assert.equal(askAfterSave(acc()), true);
+  assert.equal(askAfterSave(draft()), false);
+  assert.equal(askAfterSave(null), false);
+});
+
+test('ui/acceptance 3-3: Ask beat の送り先は、その製品のいちばん新しい計画モードの会話。子の会話・アーカイブ・ほかの製品・ほかのモードは使わない', () => {
+  const list = [
+    convo('old', { last_message_at: 10 }),
+    convo('newest', { last_message_at: 30 }),
+    convo('normal', { last_message_at: 99, permission_mode: 'normal' }),
+    convo('other', { last_message_at: 99, project_id: 'P2' }),
+    convo('helper', { last_message_at: 99, parent_run_id: 'r1' }),
+    convo('archived', { last_message_at: 99, archived: 1 }),
+    convo('archivedAt', { last_message_at: 99, archived_at: 5 }),
+  ];
+  assert.equal(askTarget(list, 'P1'), 'newest');
+  assert.equal(askTarget(list.filter(c => c.id !== 'newest' && c.id !== 'old'), 'P1'), null);
+});
+
+test('ui/acceptance 3-3: Ask beat は決まった文を generated: true で送る。会話が無ければ新しい製品の会話を計画モードで作る', () => {
+  const existing = askSend('newest', 'P1', () => 'fresh');
+  assert.deepEqual(existing, { id: 'newest', text: ASK_TEXT, choice: {}, options: { generated: true } });
+  const fresh = askSend(null, 'P1', () => 'fresh');
+  assert.deepEqual(fresh, { id: 'fresh', text: ASK_TEXT, choice: { permissionMode: 'plan' }, options: { projectId: 'P1', generated: true } });
+  assert.match(ASK_TEXT, /acceptance_change/);
+});
+
+test('ui/acceptance: /build の見せ方は、欄の頭（バー）を上にそろえて対応表へフォーカスする。対応表そのものはスクロールさせない（バーが隠れるため）', () => {
+  const calls: string[] = [];
+  const top = { scrollIntoView: (o: ScrollIntoViewOptions) => { calls.push(`top:${o.block}`); } };
+  const section = { scrollIntoView: () => { calls.push('section'); }, focus: (o: FocusOptions) => { calls.push(`focus:${o.preventScroll}`); } };
+  revealSection(top, section);
+  assert.deepEqual(calls, ['top:start', 'focus:true']);
+});
