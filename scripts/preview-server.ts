@@ -131,6 +131,8 @@ function seed(app: App): void {
   tasks.setWaiting(waiting.id, 'question', 'Should the file be called report.csv or export.csv?');
   tasks.create({ title: 'Check the weekly backup', origin: 'user', runAt: now + 3 * 3_600_000, actor: 'preview' });
   tasks.create({ title: 'Morning summary', origin: 'user', cron: '0 9 * * *', timezone: 'Asia/Tokyo', actor: 'preview' });
+  const paused = tasks.create({ title: 'Friday review', origin: 'user', cron: '0 18 * * FRI', timezone: 'Asia/Tokyo', actor: 'preview' });
+  tasks.finish(paused.id, 'cancelled', null, 'preview');
   const done = tasks.create({ title: 'Rename the draft folder', origin: 'user', runAt: now + 86_400_000, actor: 'preview' });
   tasks.finish(done.id, 'done', 'Renamed.', 'preview');
   const failed = tasks.create({ title: 'Fetch the price list', origin: 'user', runAt: now + 86_400_000, actor: 'preview' });
@@ -145,6 +147,8 @@ function seed(app: App): void {
   }
   app.notifications.notify({ kind: 'task_done', title: 'Task finished', body: 'Rename the draft folder', link: `#/tasks/${done.id}` });
   app.notifications.notify({ kind: 'task_waiting', title: 'Waiting for you', body: 'Pick a name for the export file', link: `#/tasks/${waiting.id}` });
+  app.notifications.notify({ kind: 'task_failed', title: 'Task failed', body: 'Fetch the price list', link: `#/tasks/${failed.id}` });
+  app.notifications.notify({ kind: 'info', title: 'Preview data loaded', body: 'Everything here is made up.' });
 }
 
 function refuseServerApply(server: ReturnType<typeof createWebServer>['server']): void {

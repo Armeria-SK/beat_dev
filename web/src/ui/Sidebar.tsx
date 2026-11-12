@@ -116,7 +116,7 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
       <div className="bt-sidebar__foot">
         <span className="bt-side__name bt-meta">{footText(t, foot)}</span>
         <a className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost bt-bell" href="#/notifications" aria-label={t('ui.bell', unread)} aria-current={at('notifications') ? 'page' : undefined}>
-          <Icon name="bell" /><CountBadge n={unread} quiet />
+          <Icon name="bell" /><CountBadge n={unread} />
         </a>
         <a className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" href="#/settings" aria-label={t('ui.nav.settings')} data-settings-button><Icon name="sliders" /></a>
       </div>

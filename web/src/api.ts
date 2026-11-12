@@ -115,7 +115,11 @@ export interface Task {
   cancelled_from?: TaskStatus | null;
 }
 export interface FinishedCursor { beforeT: number; beforeId: string }
-export interface TaskEvent {id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
+export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
+export type RepeatingTask = Task & { last_run: TaskLastRun | null };
+export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned' }
+export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean }>; ranTruncated: boolean }
+export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
 export interface WorkerRun { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
 export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
@@ -246,14 +250,16 @@ export const api = {
   forgetMemory: (id: number) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'DELETE' }),
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
-  tasks: () => call<{ active: Task[]; finished: Task[]; finishedTotal?: number }>('/api/tasks'),
+  tasks: () => call<{ active: Task[]; finished: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>('/api/tasks'),
+  schedule: (from: number, to: number) => call<ScheduleView>(`/api/schedule?from=${from}&to=${to}`),
+  deleteTask: (id: string) => call<{ deleted: { id: string; events: number; keptRuns: number } }>(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   finishedTasks: (before: FinishedCursor | null, limit = 20) =>
     call<{ tasks: Task[]; next: FinishedCursor | null; total: number }>(`/api/tasks/finished?limit=${limit}${before ? `&beforeT=${before.beforeT}&beforeId=${encodeURIComponent(before.beforeId)}` : ''}`),
   unapproveTask: (id: string) => call<{ task: Task }>(`/api/tasks/${id}/unapprove`, { method: 'POST', body: '{}' }),
   cancelTask: (id: string, reason = '') => call<{ task: Task }>(`/api/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}) }),
   task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
   createTask: (task: NewTask) => call<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(task) }),
-  editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null }) =>
+  editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null; repeat?: NewTask['repeat'] }) =>
     call<{ task: Task }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   answerTask: (id: string, text: string) => call<{ task: Task }>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
   taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'uncancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),

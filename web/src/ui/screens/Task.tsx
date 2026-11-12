@@ -15,7 +15,7 @@ import { PRIORITY_KEY } from './Kanban.tsx';
 
 export interface TaskScreenProps {
   id: string;
-  revision: number;
+  revision: string;
   worker: WorkerStatus | null;
 }
 

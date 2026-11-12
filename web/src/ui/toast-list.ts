@@ -28,8 +28,8 @@ export const pauseClock = (clock: ToastClock, now: number): ToastClock =>
 
 export const resumeClock = (clock: ToastClock, now: number): ToastClock => (clock.startedAt === null ? { ...clock, startedAt: now } : clock);
 
-const WAITING_KINDS: ReadonlySet<string> = new Set(['task_waiting', 'approval_needed']);
-const FAILED_KINDS: ReadonlySet<string> = new Set(['task_failed', 'health_alert']);
+export const WAITING_KINDS: ReadonlySet<string> = new Set(['task_waiting', 'approval_needed']);
+export const FAILED_KINDS: ReadonlySet<string> = new Set(['task_failed', 'health_alert']);
 
 export function notificationToast(n: Pick<NotificationItem, 'kind' | 'title' | 'body' | 'link'>): FeedbackItem {
   const body = n.body?.split('\n').find(line => line.trim())?.trim();

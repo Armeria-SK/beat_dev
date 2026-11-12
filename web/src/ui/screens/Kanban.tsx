@@ -32,7 +32,7 @@ const COLUMN_KEY = {
 export const PRIORITY_KEY = { 1: 'ui.task.priority.1', 2: 'ui.task.priority.2', 3: 'ui.task.priority.3' } as const;
 const RELOAD_DELAY_MS = 150;
 
-async function readFinished(count: number): Promise<{ tasks: Task[]; next: FinishedCursor | null; total: number }> {
+export async function readFinished(count: number): Promise<{ tasks: Task[]; next: FinishedCursor | null; total: number }> {
   let tasks: Task[] = [];
   let next: FinishedCursor | null = null;
   let total = 0;

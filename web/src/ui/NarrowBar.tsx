@@ -12,7 +12,7 @@ export function NarrowBar({ title, unread, expanded, covered, menuRef, onMenu }:
       <button ref={menuRef} type="button" className="bt-btn bt-btn--icon bt-btn--ghost" aria-label={t('ui.menu')} aria-expanded={expanded} onClick={onMenu}><Icon name="menu" /></button>
       <span className="ui-narrowbar__title">{title}</span>
       <a className="bt-btn bt-btn--icon bt-btn--ghost bt-bell" href="#/notifications" aria-label={t('ui.bell', unread)}>
-        <Icon name="bell" /><CountBadge n={unread} quiet />
+        <Icon name="bell" /><CountBadge n={unread} />
       </a>
     </header>
   );

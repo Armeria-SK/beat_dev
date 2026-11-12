@@ -11,6 +11,9 @@ import { Icon } from './parts.tsx';
 import { pickFocus } from './focus.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
 import { Kanban } from './screens/Kanban.tsx';
+import { Notifications } from './screens/Notifications.tsx';
+import { Overview } from './screens/Overview.tsx';
+import { Schedule } from './screens/Schedule.tsx';
 import { TaskScreen } from './screens/Task.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
@@ -217,6 +220,7 @@ export function App() {
   const clearNotices = useCallback((id: string) => dispatch({ type: 'clearNotices', conversationId: id }), [dispatch]);
   const interrupt = useCallback((id: string, on: boolean) => dispatch({ type: 'interrupt', conversationId: id, on }), [dispatch]);
   const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);
+  const setUnread = useCallback((count: number) => dispatch({ type: 'unread', count }), [dispatch]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -263,10 +267,16 @@ export function App() {
             {behind.view === 'kanban' ? (
               <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} />
             ) : behind.view === 'task' ? (
-              <TaskScreen key={behind.id} id={behind.id} revision={live.taskRevision + live.epoch + live.approvals.length} worker={worker} />
+              <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.approvals.length}`} worker={worker} />
+            ) : behind.view === 'overview' ? (
+              <Overview waiting={waiting} approvals={live.approvals} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} />
+            ) : behind.view === 'schedule' ? (
+              <Schedule revision={live.taskRevision + live.epoch} />
+            ) : behind.view === 'notifications' ? (
+              <Notifications unread={unread} epoch={live.epoch} onUnread={setUnread} />
             ) : (
               <div className="bt-screen__inner">
-                <header className="bt-screen__head"><h1 className={`bt-screen__title${behind.view === 'overview' ? ' bt-screen__title--lg' : ''}`}>{title}</h1></header>
+                <header className="bt-screen__head"><h1 className="bt-screen__title">{title}</h1></header>
                 <p className="bt-meta">{t('ui.later')}</p>
               </div>
             )}

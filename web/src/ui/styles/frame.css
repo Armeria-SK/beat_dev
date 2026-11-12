@@ -109,6 +109,29 @@
 .ui-event { align-items: flex-start; }
 .ui-event__text { display: block; color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
 
+.ui-narrow-only { display: none; }
+div.bt-stat:hover { box-shadow: none; transform: none; }
+.bt-screen__tools > .bt-meta { align-self: center; }
+.ui-timeline .bt-timeline__body { --bt-gutter: 168px; }
+.ui-timeline .bt-timeline__track { overflow: hidden; }
+.ui-timeline__name { position: sticky; left: 0; z-index: 1; align-self: stretch; min-width: 0; padding-right: var(--space-2); overflow: hidden; background: var(--surface); line-height: 28px; text-overflow: ellipsis; white-space: nowrap; }
+.ui-timeline__band { top: 7px; bottom: 7px; border-radius: var(--radius-xs); }
+.ui-sched { flex-wrap: wrap; align-items: flex-start; }
+.ui-sched .bt-row__main { flex: 1 1 220px; }
+.ui-sched .bt-row__sub { white-space: normal; overflow-wrap: anywhere; }
+.ui-sched__at { flex: none; min-width: 44px; padding-top: 2px; }
+.ui-sched__buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.ui-sched > .ui-sched__buttons { flex: 1 1 100%; justify-content: flex-end; margin-left: 0; }
+.ui-sched__confirm { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+.ui-sched__note { flex: 1 1 200px; overflow-wrap: anywhere; }
+.ui-sched__time { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.ui-sched--form > .ui-newtask { flex: 1; max-width: none; padding: 0; border: 0; }
+.ui-sched__pick { width: auto; }
+.ui-sched__num { width: 72px; }
+.ui-sched .bt-btn:disabled { color: var(--ink-mute); cursor: default; }
+.bt-screen__tools .bt-btn:disabled { color: var(--ink-mute); cursor: default; }
+.ui-notif__quiet { font-weight: 400; }
+
 @media (max-width: 760px) {
   .ui-frame { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
   .ui-narrowbar { display: flex; align-items: center; gap: var(--space-2); flex: none; height: 48px; padding: 0 var(--space-2); border-bottom: 1px solid var(--line); background: var(--ground); }
@@ -141,4 +164,13 @@
   .bt-board .bt-card .bt-btn, .ui-newtask .bt-btn, .ui-field__buttons .bt-btn, .ui-task__reject .bt-btn, .bt-screen__tools .bt-btn { height: 40px; }
   .bt-board .bt-card__actions .bt-btn, .ui-card__reasonrow .bt-btn { flex: 1; }
   .ui-coltabs .bt-tab { height: 40px; }
+  .ui-narrow-only { display: inline-flex; width: 40px; }
+  .ui-timeline .bt-timeline__body { --bt-gutter: 112px; }
+  .ui-notif { flex-wrap: wrap; }
+  .ui-notif .bt-row__main { flex: 1 1 60%; }
+  .ui-notif .bt-row__title, .ui-notif .bt-row__sub { white-space: normal; overflow-wrap: anywhere; }
+  .ui-notif .bt-row__end { flex: 1 1 100%; margin-left: 0; }
+  .ui-notif .bt-row__end .bt-btn { flex: 1; height: 40px; }
+  .ui-sched .bt-btn, .bt-list .bt-row__end .bt-btn { height: 40px; }
+  .bt-stat { min-height: 44px; }
 }

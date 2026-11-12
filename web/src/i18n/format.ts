@@ -75,6 +75,11 @@ export function startOfDay(ms: number, zone = getTimezone()): number {
   return parseZonedInput(`${pad(w.year, 4)}-${pad(w.month)}-${pad(w.day)}T00:00`, zone) ?? ms;
 }
 
+export function formatZonedInput(ms: number, zone = getTimezone()): string {
+  const w = wallClock(ms, zone);
+  return `${pad(w.year, 4)}-${pad(w.month)}-${pad(w.day)}T${pad(w.hour)}:${pad(w.minute)}`;
+}
+
 export function timezoneLabel(zone = getTimezone(), at = Date.now()): string {
   const minutes = Math.round(offsetMs(at, zone) / 60_000);
   const abs = Math.abs(minutes);
