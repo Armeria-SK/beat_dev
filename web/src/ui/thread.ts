@@ -50,7 +50,9 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
   return rows;
 }
 
-const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
+const toolKey = (callId: string | undefined): string | null => (callId ? `t-${callId}` : null);
+
+const hiddenReply =(m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
 export function threadItems({ messages, draft, approvals = [], notices = [] }: ThreadInput): ThreadItem[] {
   const inputs = new Map<string, string>();
@@ -69,7 +71,8 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
   for (const m of visible) {
     const key = `m-${m.id}`;
     if (m.role === 'tool') {
-      tools(key).push({ key, name: m.toolName ?? '', input: inputs.get(m.toolCallId ?? '') ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
+      const rowKey = toolKey(m.toolCallId) ?? key;
+      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: inputs.get(m.toolCallId ?? '') ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
     } else if (m.role === 'user') {
       items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name) });
     } else {
@@ -82,8 +85,9 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
   if (draft) {
     if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text });
     else if (draft.activeTool && waiting.length === 0) {
-      tools(`run-${draft.runId}`).push({
-        key: `run-${draft.runId}-${draft.activeTool}`, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
+      const rowKey = toolKey(draft.toolCallId) ?? `run-${draft.runId}-${draft.activeTool}`;
+      tools(rowKey).push({
+        key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
         running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
       });
     } else if (waiting.length === 0) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '' });

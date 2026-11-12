@@ -60,6 +60,22 @@ test('ui/thread: 返事を作っている最中は、流れている文 → 動�
   assert.deepEqual(waiting.rows.map(r => [r.key, r.approval?.id, r.running]), [['approval-a1', 'a1', undefined]]);
 });
 
+test('ui/thread: 動いている道具の行と、結果が届いたあとの行は同じキー（呼び出しの id）。まとまりのキーも変わらない（行が 2 回現れない）', () => {
+  const base = [msg('user', 'go')];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '' };
+  const running = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run', activeInput: '{"command":"ls"}', toolCallId: 'call_9' } }).at(-1)!;
+  const finished = threadItems({
+    messages: [...base, msg('assistant', '', { toolCalls: [call('call_9', 'shell_run', { command: 'ls' })] }), msg('tool', 'out', { toolName: 'shell_run', toolCallId: 'call_9' })],
+    draft,
+  }).find(i => i.kind === 'tools')!;
+  assert.ok(running.kind === 'tools' && finished.kind === 'tools');
+  assert.deepEqual([running.key, running.rows[0]!.key], ['t-call_9', 't-call_9']);
+  assert.deepEqual([finished.key, finished.rows[0]!.key], [running.key, running.rows[0]!.key]);
+  const unknown = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run' } }).at(-1)!;
+  assert.ok(unknown.kind === 'tools');
+  assert.equal(unknown.rows[0]!.key, 'run-r2-shell_run', '呼び出しの id を知らないとき（つなぎ直しのあと）は今までのキー');
+});
+
 test('ui/thread: お知らせ: 静かなものは続けて並べず 1 行にまとめ、warn はそれぞれ 1 行、失敗（fail）は最後に 1 つだけ', () => {
   const n = (x: Partial<RunNotice> & Pick<RunNotice, 'kind'>): RunNotice => ({ runId: 'r', ...x }) as RunNotice;
   const rows = noticeRows([

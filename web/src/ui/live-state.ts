@@ -4,7 +4,7 @@ import type { Draft, RunEvent } from '../events.ts';
 
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean }
 
-export interface LiveDraft extends Draft { toolStartedAt?: number | undefined }
+export interface LiveDraft extends Draft { toolStartedAt?: number | undefined; toolCallId?: string | undefined }
 
 export type RunNotice = { runId: string; key?: string | undefined } & (
   | { kind: 'switch'; from: string; to: string; reason: string }
@@ -123,7 +123,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       };
     }
     case 'tool.call':
-      return { state: { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: e.name, activeInput: e.input, toolStartedAt: now })) }, effects: [] };
+      return { state: { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: e.name, activeInput: e.input, toolStartedAt: now, toolCallId: e.callId })) }, effects: [] };
     case 'tool.auto': {
       const state = { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, autoChecking: e.state === 'checking' })) };
       return { state: e.state === 'allowed' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'auto', tool: e.name, reason: e.reason ?? '' }) : state, effects: [] };
@@ -134,7 +134,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         effects: [],
       };
     case 'tool.result': {
-      const state = { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined })) };
+      const state = { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined })) };
       return {
         state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
         effects: [],

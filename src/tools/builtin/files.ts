@@ -16,13 +16,13 @@ const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_DELTA_BYTES = 4 * 1024 * 1024;
+const MAX_WRITE_CHARS = 1_000_000;
+
+type Need = 'read' | 'write';
 
 export function previousForDelta(abs: string, io: { size: (path: string) => number; read: (path: string) => string } = { size: p => statSync(p).size, read: p => readFileSync(p, 'utf8') }): string | null {
   try { return io.size(abs) <= MAX_DELTA_BYTES ? io.read(abs) : null; } catch { return null; }
 }
-const MAX_WRITE_CHARS = 1_000_000;
-
-type Need = 'read' | 'write';
 
 export function checkFilePath(input: string, need: Need, ctx: ToolContext): { abs: string; check: PreCheck } {
   const language = languageOf(ctx.config);

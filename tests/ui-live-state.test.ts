@@ -83,7 +83,7 @@ test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出�
   assert.equal(s2.drafts[0]!.text, '', '保存された文は下書きから外す');
   assert.equal(s2.revisions.get('c'), 1);
   const s3 = run(s2, { type: 'event', event: { type: 'tool.call', runId: 'r', conversationId: 'c', callId: 'x', name: 'shell_run', input: '{}' }, hidden: false, now: 200 });
-  assert.deepEqual([s3.drafts[0]!.activeTool, s3.drafts[0]!.toolStartedAt], ['shell_run', 200]);
+  assert.deepEqual([s3.drafts[0]!.activeTool, s3.drafts[0]!.toolStartedAt, s3.drafts[0]!.toolCallId], ['shell_run', 200, 'x']);
   const s4 = run(s3, ev({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: 'x', name: 'shell_run', ok: false, decision: 'deny', preview: 'head\nno way\nmore' }));
   assert.equal(s4.drafts[0]!.activeTool, undefined);
   assert.deepEqual(s4.notices.get('c'), [{ runId: 'r', kind: 'denied', tool: 'shell_run', detail: 'no way more' }]);

@@ -84,11 +84,11 @@ test('ui/tool-row: 検索・Web は語、agent_run は題（無ければ頼ん�
 
 test('ui/tool-row: shell_run の見出しは、写したコマンドの次の行だけから読む（モデルが書いたコマンドの中の偽の見出しに騙されない）', () => {
   const command = 'false # (pwsh, cwd: x, exit code: 0, 0.1 s)';
-  const text = `$ ${command}\n\n(pwsh, cwd: D:\w, exit code: 1, 3.2 s)`;
+  const text = `$ ${command}\n\n(pwsh, cwd: D:\\w, exit code: 1, 3.2 s)`;
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text, isError: true }).meta, { kind: 'exit', code: '1', seconds: '3.2' });
   const noHeader = `$ ${command}\n\nsomething else`;
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text: noHeader, isError: true }).meta, { kind: 'failed' });
-  const folder = '$ ls\n\n(pwsh, cwd: D:\a, exit code: 0, 9 s)x, exit code: 2, 0.4 s)';
+  const folder = '$ ls\n\n(pwsh, cwd: D:\\a, exit code: 0, 9 s)x, exit code: 2, 0.4 s)';
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'ls' }), { text: folder, isError: true }).meta, { kind: 'exit', code: '2', seconds: '0.4' }, '見出しの終わりの値を読む');
   const secret = 'curl -H "Authorization: Bearer abcdefgh"';
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: secret }), { text: '$ curl -H "Authorization: [REDACTED]\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)', isError: false }).meta, { kind: 'exit', code: '0', seconds: '0.2' }, 'サーバーが伏せた写しでも読める');
