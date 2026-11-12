@@ -15,7 +15,7 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[] } = {}) {
   const dir = tempDir(t);
   // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
@@ -37,6 +37,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     ...(options.mcpConnect ? { mcpConnect: options.mcpConnect } : {}),
     ...(options.browserDriver ? { browserDriver: options.browserDriver } : {}),
     ...(options.browserDisplay !== undefined ? { browserDisplay: options.browserDisplay } : {}),
+    ...(options.projectFolderExempt ? { projectFolderExempt: options.projectFolderExempt } : {}),
   });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);

@@ -14,6 +14,7 @@ const en = {
   'item_missing': 'The item was not found',
   'already_researching': 'It is already being looked into',
   'conversation_missing': 'The conversation was not found',
+  'project_missing': 'The product was not found',
   'bad_priority': 'priority must be 1 (high), 2 or 3 (low)',
   'bad_when': '"when" must be a date and time (example: 2026-11-06T09:00:00+09:00)',
   'bad_repeat': 'The repeat setting is not valid (freq is daily / weekday / weekly / hourly / interval; the time is HH:MM)',

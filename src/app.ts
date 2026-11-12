@@ -52,6 +52,7 @@ import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { askBeforeRegister, SkillStore } from './tools/skills/store.ts';
 import { TaskStore, taskView } from './tasks/store.ts';
+import { ProjectStore } from './projects/store.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
 import { ToolRegistry } from './tools/registry.ts';
@@ -95,6 +96,9 @@ export interface AppOptions {
   browserDriver?: BrowserDriver;
   // 試験用: ログイン用の窓（見えるブラウザ）を出せる環境か（書かなければ、この計算機の環境から決める）
   browserDisplay?: boolean;
+  // 試験と試しのサーバーだけ: この下のフォルダは、製品のフォルダに選べるかの確かめ（OS・ホーム・Clive 自身のフォルダの決まり）を見ない。
+  // ふだんの起動では渡さない（設定ファイル・環境変数・API から渡す道は無い）
+  projectFolderExempt?: readonly string[];
 }
 
 export class App {
@@ -114,6 +118,8 @@ export class App {
   readonly approvals: ApprovalBroker;
   readonly memory: MemoryStore;
   readonly tasks: TaskStore;
+  readonly projects: ProjectStore;
+  readonly projectFolderExempt: readonly string[];
   readonly notifications: Notifications;
   readonly channels: NotifyChannels;
   readonly mcp: McpManager;
@@ -173,6 +179,8 @@ export class App {
     });
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
+    this.projects = new ProjectStore(this.db, this.paths.projects, now);
+    this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);

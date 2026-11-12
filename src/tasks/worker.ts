@@ -338,7 +338,7 @@ export class Worker {
     const source = { conversationId: job.conversation_id, taskId: job.task_id };
     const earlier = job.review_conversation_id ? conversations.get(job.review_conversation_id) : undefined;
     if (earlier?.kind === 'task') conversations.setSource(earlier.id, source);
-    const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }), source });
+    const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }), source, projectId: (job.conversation_id ? conversations.projectOf(job.conversation_id) : null) ?? (job.task_id ? this.#d.tasks.get(job.task_id)?.project_id : null) });
     const started = engine.runReview(conversation.id, prompt, { ...(job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {}), ...(local ? { localOnly: true } : {}) });
     if (!started.ok) {
       if (local) return skipLocal();
@@ -394,7 +394,7 @@ export class Worker {
     const { tasks, conversations, engine } = this.#d;
     const c = this.#d.config();
     const language = languageOf(c);
-    const conversationId = task.conversation_id ?? conversations.create({ kind: 'task', title: taskText(language, 'title.task', { title: task.title }) }).id;
+    const conversationId = task.conversation_id ?? conversations.create({ kind: 'task', title: taskText(language, 'title.task', { title: task.title }), projectId: task.project_id }).id;
     if (!tasks.claim(task.id, LEASE_MS, conversationId)) return 'busy';
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language);
     const started = engine.runTask(task, conversationId, prompt);
