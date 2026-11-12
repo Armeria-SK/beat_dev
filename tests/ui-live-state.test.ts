@@ -226,4 +226,5 @@ test('ui/live-state: 結果が届いた道具の覚えは新しい 20 件まで�
   const settled = s.drafts[0]!.settled!;
   assert.equal(settled.length, 20);
   assert.deepEqual([settled[0]!.callId, settled.at(-1)!.callId], ['k4', 'k23']);
+  assert.equal(s.drafts[0]!.settledCount, 23, '外れた分も含めて、その回で結果が届いた数を数える');
 });

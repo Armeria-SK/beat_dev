@@ -282,7 +282,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects }
   };
 
   return (
-    <div className="bt-screen__inner bt-screen__inner--wide">
+    <div className="bt-screen__inner bt-screen__inner--wide ui-kanban">
       <header className="bt-screen__head bt-rise">
         <h1 className="bt-screen__title">{t('ui.nav.kanban')}</h1>
         <div className="bt-screen__tools">
@@ -327,11 +327,13 @@ export function Kanban({ conversations, drafts, checklists, revision, projects }
                     <span className="bt-label">{columnName(t, column.id)}</span>
                     <span className={`bt-count${column.accent ? '' : ' bt-count--quiet'}`} aria-label={t('ui.kanban.count', column.cards.length)}><span className="bt-count__n">{countText(column.cards.length)}</span></span>
                   </div>
-                  {column.cards.map((card, index) => renderCard(card, index, index === firstTask))}
-                  {column.id === 'proposed' && column.cards.length === 0 && <p className="bt-meta ui-col__empty">{t('ui.kanban.noProposals')}</p>}
-                  {(column.id === 'done' || column.id === 'failed') && board.more > 0 && (
-                    <button type="button" className="bt-tool__link bt-meta ui-more" disabled={moreBusy} title={t('ui.kanban.moreHint')} onClick={() => void more()}>{t('ui.kanban.more', board.more)}</button>
-                  )}
+                  <div className="ui-col__cards">
+                    {column.cards.map((card, index) => renderCard(card, index, index === firstTask))}
+                    {column.id === 'proposed' && column.cards.length === 0 && <p className="bt-meta ui-col__empty">{t('ui.kanban.noProposals')}</p>}
+                    {(column.id === 'done' || column.id === 'failed') && board.more > 0 && (
+                      <button type="button" className="bt-tool__link bt-meta ui-more" disabled={moreBusy} title={t('ui.kanban.moreHint')} onClick={() => void more()}>{t('ui.kanban.more', board.more)}</button>
+                    )}
+                  </div>
                 </section>
               );
             })}

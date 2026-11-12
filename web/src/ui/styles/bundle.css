@@ -165,7 +165,7 @@
 .bt-card__kind { display: inline-flex; align-items: center; gap: var(--space-2); }
 .bt-card__title { margin: 0; font: 600 14px/20px var(--font-sans); color: var(--ink); }
 .bt-card__body { margin: 0; font-size: 13px; line-height: 20px; color: var(--ink-soft); }
-.bt-card__meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font: 400 12px/18px var(--font-mono); color: var(--ink-mute); }
+.bt-card__meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font: 400 12px/18px var(--font-sans); color: var(--ink-mute); }
 .bt-card__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 .bt-card__reason { display: none; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); animation: bt-rise var(--dur-base) var(--ease-soft) both; }
 .bt-card.is-rejecting .bt-card__reason { display: flex; }

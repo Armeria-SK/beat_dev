@@ -311,6 +311,14 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   });
 
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const watch = new ResizeObserver(() => { if (stick.current) el.scrollTop = el.scrollHeight; });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
+
   const fail = async (error: unknown, retry: FailAction | null, lost: PendingMessage | null = null) => {
     stick.current = true;
     const failed = sendFailureOf(error, t('ui.fail.send'), models);
