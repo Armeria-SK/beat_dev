@@ -651,7 +651,11 @@ export class ChatEngine {
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
       runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
-      taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
+      taint: (() => {
+        const sources = [...(this.#initialTaint.get(runId) ?? []), ...(project && d.mesh?.acceptanceTainted(project.id) ? [engineText(languageOf(config), 'taint.acceptance')] : [])];
+        this.#initialTaint.delete(runId);
+        return { tainted: sources.length > 0, sources };
+      })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
       services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Language } from '../config/schema.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import type { PlanStore } from '../projects/plan.ts';
-import { projectDir, type ProjectRow, type ProjectStore } from '../projects/store.ts';
+import { languageTagOf, projectDir, type ProjectStore } from '../projects/store.ts';
 import { makeFence, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
@@ -26,7 +26,6 @@ const STATE_BACKUP = /^state-\d+-[0-9a-f]+\.md$/u;
 const OWNER_BACKUP = /^state-owner-\d+-[0-9a-f]+\.md$/u;
 const AI_NOTE = '(AI note) ';
 const HEAD_BYTES = 4096;
-const LANGUAGE_TAG = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/u;
 
 export interface AcceptanceSummary { total: number; met: number; open: number; unverified: number; version: number }
 
@@ -84,7 +83,7 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
     const text = secretFree(scrubText(note.text, 120));
     return text ? [`${note.field}: ${note.by === 'owner' ? '' : AI_NOTE}${text}`] : [];
   });
-  const head = [...(m.docLanguage && LANGUAGE_TAG.test(m.docLanguage) ? [`documents language: ${m.docLanguage}`] : []), ...notes];
+  const head = [...(languageTagOf(m.docLanguage) ? [`documents language: ${m.docLanguage}`] : []), ...notes];
   const shown = m.files.filter(file => safeName(file.path));
   const hiddenCount = m.files.length - shown.length;
   const hiddenLine = hiddenCount ? [`- ${hiddenCount} files with names that cannot be shown`] : [];
@@ -184,6 +183,10 @@ export class Mesh {
     } catch { return { doc: undefined, summary: 'unreadable' }; }
   }
 
+  acceptanceTainted(projectId: string): boolean {
+    return (this.#acceptance(projectId).doc?.taintedRuns?.length ?? 0) > 0;
+  }
+
   #light(projectId: string): Light {
     const dir = this.#dir(projectId);
     const files = listMeshFiles(dir).filter(file => file.rel !== INDEX_FILE && file.rel !== STATE_FILE);
@@ -193,8 +196,7 @@ export class Mesh {
     const { summary: acceptance } = this.#acceptance(projectId);
     const counts = this.#d.projects?.counts(projectId) ?? { questions: 0, proposals: 0 };
     const running = this.#d.tasks?.list({ statuses: ['ready', 'running'], project: projectId, limit: 50 }).map(task => plainLine(task.title, 60)) ?? [];
-    const row = this.#d.projects?.get(projectId) as (ProjectRow & { doc_language?: string | null }) | undefined;
-    const docLanguage = row?.doc_language ?? null;
+    const docLanguage = this.#d.projects?.get(projectId)?.doc_language ?? null;
     const timezone = this.#d.timezone();
     const stateMtime = stateStat ? Math.floor(stateStat.mtimeMs) : null;
     const plan = this.#d.plans.meta(projectId);
