@@ -27,7 +27,6 @@ export interface ConversationRow {
   source_task_id: string | null;
   // 子の担当（agent_run）の会話だけが持つ。親の実行の id。NULL はふつうの会話
   parent_run_id: string | null;
-  // 属する製品。NULL は製品に属さない会話。行を作るときに決まり、あとから変えない
   project_id: string | null;
 }
 
@@ -103,7 +102,6 @@ export class Conversations {
     return this.get(id)!;
   }
 
-  // 会話が属する製品（無い会話・製品に属さない会話は null）
   projectOf(id: string): string | null {
     return (this.db.prepare('SELECT project_id FROM conversations WHERE id = ?').get(id) as { project_id: string | null } | undefined)?.project_id ?? null;
   }
@@ -118,7 +116,6 @@ export class Conversations {
   }
 
   // チャットの会話の一覧（新しい順）。archived: true でアーカイブした会話。query は題の部分一致（大文字小文字を区別しない）
-  // project: その製品の会話だけ（null は製品に属さない会話だけ）
   list(limit = 100, options: { archived?: boolean; query?: string; project?: string | null | undefined } = {}): ConversationListItem[] {
     const query = options.query?.trim();
     const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
@@ -131,8 +128,6 @@ export class Conversations {
     return rows.map(row => ({ ...row, has_summary: row.has_summary === 1 }));
   }
 
-  // しまっていないチャットの会話を、製品に属さないもの（新しい順に LIST_NO_PROJECT_LIMIT 件まで）と、使っている製品ごと（新しい順に LIST_PER_PROJECT_LIMIT 件まで）に切って返す。
-  // more は、上限からはみ出た件数（鍵は製品の id か "none"。0 の鍵は載せない）。しまった製品の会話は載せない
   listByProject(options: { query?: string } = {}): { conversations: ConversationListItem[]; more: Record<string, number> } {
     const query = options.query?.trim();
     const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
@@ -168,7 +163,6 @@ export class Conversations {
   }
 
   // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）。消したばかりの会話は作り直さず、false を返す（見送ったことを記録する）
-  // projectId: 行を作るときだけ書く（もうある会話の製品は変えない）
   ensure(id: string, options: { projectId?: string | null | undefined } = {}): boolean {
     if (this.get(id)) return true;
     if (this.#isDeleted(id)) { this.#log?.(`[WARN] Skipped writing to deleted conversation ${id} (the conversation is not re-created)`); return false; }

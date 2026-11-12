@@ -19,7 +19,6 @@ const call = (name: string, args: unknown): Script => async function* () {
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
-// 製品のフォルダは、データのフォルダとは別の一時フォルダに作る（一時フォルダは AppData の中なので、試しだけの抜け道を渡す）
 async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   const products = realpathSync.native(tempDir(t as never));
   const s = await startApp(t, { models: [fakeModel('m1')], projectFolderExempt: [products], ...options });
@@ -87,6 +86,21 @@ test('製品の API: 選べないフォルダは 400（コードは project.fold
   assert.equal((await s.json('/api/projects', 'GET')).body.projects.length, 1);
 });
 
+test('製品の API: 名前を送らないとき、フォルダの名前が長すぎる・向きを変える文字や幅の無い文字を含むなら、整えた名前を付ける（断らない）', async t => {
+  const s = await setup(t);
+  const bidi = String.fromCharCode(0x202e);
+  const zeroWidth = String.fromCharCode(0x200b);
+  const odd = await s.json('/api/projects', 'POST', { root: s.folder(`shop${bidi}site${zeroWidth}`) });
+  assert.deepEqual([odd.status, odd.body.project?.name], [201, 'shopsite']);
+  const long = await s.json('/api/projects', 'POST', { root: s.folder(`${'n'.repeat(99)} tail-that-is-cut`) });
+  assert.deepEqual([long.status, long.body.project?.name], [201, 'n'.repeat(99)]);
+  const { defaultProjectName } = await import('../src/projects/store.ts');
+  assert.equal(defaultProjectName(join(s.products, bidi)), 'Project', '何も残らないとき');
+  assert.equal(defaultProjectName(join(s.products, 'plain name')), 'plain name');
+  const named = await s.json('/api/projects', 'POST', { root: s.folder('typed'), name: `bad${bidi}name` });
+  assert.deepEqual([named.status, named.body.code], [400, 'project.bad_name'], '打った名前は今までどおり断る');
+});
+
 test('製品の API: 抜け道の引数を渡さない App では、Clive のフォルダの中も一時フォルダも選べない', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')] });
   assert.deepEqual(s.app.projectFolderExempt, []);
@@ -132,7 +146,6 @@ test('製品の API: しまった製品を戻すとき、同じフォルダの�
   const back = await s.json(`/api/projects/${first.id}`, 'PATCH', { archived: false });
   assert.deepEqual([back.status, back.body.error, back.body.code], [409, 'project', 'project.root_in_use']);
   assert.equal(typeof s.app.projects.get(first.id)!.archived_at, 'number', 'しまったまま');
-  // 索引に当たった例外も同じ 409 に直す（先の確かめをすり抜けたとき）
   const { ProjectError } = await import('../src/projects/store.ts');
   assert.throws(() => s.app.projects.create({ name: 'dup', root: second.root, rootKey: s.app.projects.get(second.id)!.root_key, checkCommand: null }), (e: unknown) => e instanceof ProjectError && e.code === 'root_in_use');
   assert.equal(readdirSync(s.paths.projects).length, 2, '断った分のフォルダは作らない');

@@ -102,7 +102,6 @@ export type RunEvent =
   // 実行中に送った待ちの発言が増えた・取り消された・履歴に入った（画面が待ちの一覧を読み直す）
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId: string | null }
-  // 製品ができた・変わった・しまった・戻した（画面が製品の一覧を読み直す）
   | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'task.deleted'; id: string }

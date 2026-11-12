@@ -363,8 +363,6 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   ALTER TABLE notifications ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0;
   `,
-  // 20: 製品（作業フォルダを持つ単位）。会話とタスクが、属する製品 project_id を持つ（NULL = 製品に属さない。前からある行は NULL のまま）。外部キーは張らない（製品は消さず、しまうだけ）。
-  // 同じフォルダ（root_key）の使っている製品は 1 つだけ。tasks.proposed_by は、提案したもの（あとの段が書く）
   `
   CREATE TABLE projects (
     id TEXT PRIMARY KEY,

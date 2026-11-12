@@ -155,7 +155,6 @@ export function createWebServer(app: App): WebServer {
     const query = (url.searchParams.get('q') ?? '').slice(0, 100);
     const search = query.trim() ? { query } : {};
     if (archived) { sendJson(res, 200, { conversations: app.conversations.list(200, { archived, ...search }) }); return; }
-    // ?project=<id> / none と limit（200 まで）: その製品の分だけ。無ければ、製品なし 100 件 + 使っている製品ごと 30 件（はみ出た件数は more）
     const project = projectFilterOf(url);
     if (project === undefined) { sendJson(res, 200, app.conversations.listByProject(search)); return; }
     const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit') ?? 100)) || 100, 1), 200);
@@ -294,7 +293,6 @@ export function createWebServer(app: App): WebServer {
     // 画面が決めた id へ最初の発言を送ると、受け付けたときに会話ができる。作られる id は UUID の形だけ。タスク・振り返りの会話には、ここから送らせない
     if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
     if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
-    // 製品の会話は、最初の発言の projectId で決まる（行を作るときに書き、あとから変えない）。もうある会話に違う製品を送ったら断る
     const projectId = usableProjectId(app, body.projectId);
     if (existing && projectId !== undefined && existing.project_id !== projectId) throw projectProblem(409, new ProjectError('mismatch'));
     const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt, projectId });
@@ -333,7 +331,6 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/runs/active', ({ res }) => sendJson(res, 200, { drafts: app.bus.drafts() }));
   router.add('GET', '/api/runs', ({ res, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
-    // 各行に製品 project_id（会話から引く。会話を消した行は null）。?project=<id> / none で絞り、total も絞ったあとの数
     const project = projectFilterOf(url);
     const filter = projectWhere('engine_runs', project);
     const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)

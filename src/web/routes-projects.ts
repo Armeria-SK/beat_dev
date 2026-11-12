@@ -1,9 +1,7 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
-import { checkCommandOf, folderMissing, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
-import { checkWorkFolder, defaultProjectName, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
+import { checkCommandOf, defaultProjectName, folderMissing, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
 import type { ProjectFilter } from '../tasks/store.ts';
 import { approvalShownIn } from '../tools/approvals.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
@@ -14,7 +12,6 @@ export function projectProblem(status: number, error: ProjectError): HttpProblem
   return domainProblem(status, 'project', error);
 }
 
-// ?project=<id> / none。無ければ絞らない
 export function projectFilterOf(url: URL): ProjectFilter {
   const raw = url.searchParams.get('project');
   if (raw === null) return undefined;
@@ -23,7 +20,6 @@ export function projectFilterOf(url: URL): ProjectFilter {
   return raw;
 }
 
-// 本文の projectId（新しい会話・タスクを入れる製品）。使っている製品だけを通す。null と無しは「製品なし」
 export function usableProjectId(app: App, raw: unknown): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   const project = typeof raw === 'string' ? app.projects.get(raw) : undefined;
@@ -32,7 +28,6 @@ export function usableProjectId(app: App, raw: unknown): string | undefined {
   return project.id;
 }
 
-// 無し → undefined、null・空の文字 → null、ほかは文字（長さを確かめる）
 function optionalText(body: Record<string, unknown>, key: string, max: number): string | null | undefined {
   const value = body[key];
   if (value === undefined) return undefined;
@@ -55,7 +50,7 @@ export function projectWire(app: App, row: ProjectRow) {
   return {
     id: row.id, name: row.name, root: row.root, check_command: row.check_command, scout_mode: row.scout_mode, remotes: remotesOf(row.remotes),
     archived_at: row.archived_at, created_at: row.created_at, updated_at: row.updated_at,
-    is_git: existsSync(join(row.root, '.git')), folder_missing: folderMissing(row),
+    is_git: gitFolder(row.root), folder_missing: folderMissing(row),
     waiting: { proposals: counts.proposals, questions: counts.questions, pending: app.approvals.pending().filter(a => inProject(approvalShownIn(a))).length },
     running: app.engine.activeRuns().filter(r => inProject(r.conversationId)).length,
     last_activity_at: counts.lastActivityAt,
@@ -111,7 +106,6 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 200, { project: projectWire(app, updated) });
   });
 
-  // フォルダを選ぶための一覧（フォルダの名前だけ。ファイルは返さない）。パスを URL に載せないよう POST で受ける
   router.add('POST', '/api/folders/list', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     const path = optionalText(body, 'path', MAX_PATH_CHARS);

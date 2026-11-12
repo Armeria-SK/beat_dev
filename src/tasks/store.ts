@@ -37,9 +37,7 @@ export interface Task {
   created_in_conversation: string | null;
   // 1 = 手元のモデルを選んだ会話から作った（手元のモデルだけで動かす）
   local_only: number;
-  // 属する製品。NULL は製品に属さないタスク
   project_id: string | null;
-  // 提案したもの（あとの段が書く。いまは誰も書かない）
   proposed_by: string | null;
 }
 
@@ -86,7 +84,6 @@ export const SCHEDULE_MIN_SLOT_MS = 60_000;
 
 export type RepeatingTask = Task & { last_run: { id: string; status: TaskStatus; summary: string | null; at: number } | null };
 export interface FinishedCursor { t: number; id: string }
-// 製品での絞り込み: undefined = 全部、null = 製品に属さないものだけ、文字列 = その製品だけ
 export type ProjectFilter = string | null | undefined;
 const byProject = (project: ProjectFilter): { sql: string; args: string[] } =>
   project === undefined ? { sql: '', args: [] } : project === null ? { sql: ' AND project_id IS NULL', args: [] } : { sql: ' AND project_id = ?', args: [project] };

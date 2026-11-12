@@ -96,8 +96,6 @@ export interface AppOptions {
   browserDriver?: BrowserDriver;
   // 試験用: ログイン用の窓（見えるブラウザ）を出せる環境か（書かなければ、この計算機の環境から決める）
   browserDisplay?: boolean;
-  // 試験と試しのサーバーだけ: この下のフォルダは、製品のフォルダに選べるかの確かめ（OS・ホーム・Clive 自身のフォルダの決まり）を見ない。
-  // ふだんの起動では渡さない（設定ファイル・環境変数・API から渡す道は無い）
   projectFolderExempt?: readonly string[];
 }
 

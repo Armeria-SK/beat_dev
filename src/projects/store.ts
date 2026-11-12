@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { projectText, type ProjectMessageKey } from '../shared/messages/projects.ts';
 import { isInside, realish } from '../tools/hooks/scope.ts';
-import { rootKeyOf } from './work-folder.ts';
+import { folderGone } from './work-folder.ts';
 
 export const PROJECT_ID = /^[A-Za-z0-9_-]{6,64}$/u;
 export const PROJECT_NAME_MAX = 100;
@@ -51,10 +51,11 @@ export function projectDir(projectsDir: string, id: string): string {
   return dir;
 }
 
-export function folderMissing(project: Pick<ProjectRow, 'root' | 'root_key'>): boolean {
-  try {
-    return !existsSync(project.root) || !statSync(project.root).isDirectory() || rootKeyOf(realpathSync.native(project.root)) !== project.root_key;
-  } catch { return true; }
+export const folderMissing = (project: Pick<ProjectRow, 'root' | 'root_key'>): boolean => folderGone(project.root, project.root_key);
+
+export function defaultProjectName(root: string): string {
+  const cleaned = (basename(root) || root).replace(new RegExp(UNSAFE_TEXT.source, 'gu'), '').trim().slice(0, PROJECT_NAME_MAX).trim();
+  return cleaned || 'Project';
 }
 
 const isRootConflict = (error: unknown): boolean => error instanceof Error && /UNIQUE constraint failed: projects\.root_key/u.test(error.message);

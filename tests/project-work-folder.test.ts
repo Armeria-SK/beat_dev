@@ -5,12 +5,11 @@ import { dirname, join, parse } from 'node:path';
 import { test } from 'node:test';
 import { parseConfig } from '../src/config/store.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
-import { checkWorkFolder, listFolders, rootKeyOf, type FolderFs, type WorkFolderContext } from '../src/projects/work-folder.ts';
+import { checkWorkFolder, folderGone, gitFolder, listFolders, MAX_LINK_HOPS, rootKeyOf, type FolderFs, type WorkFolderContext } from '../src/projects/work-folder.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 const WINDOWS = process.platform === 'win32';
 
-// 偽のホーム・偽の OS のフォルダ・偽の Clive のフォルダを一時フォルダの中に作る（本物のホームや AppData の決まりに当たらないように）
 function fixture(t: { after: (fn: () => void) => void }) {
   const base = realpathSync.native(tempDir(t));
   const dir = (...parts: string[]) => { const path = join(base, ...parts); mkdirSync(path, { recursive: true }); return path; };
@@ -58,9 +57,9 @@ test('checkWorkFolder: ネットワークのパス・デバイスのパス・デ
   const f = fixture(t);
   const calls: string[] = [];
   const spy: FolderFs = {
-    stat: path => { calls.push(`stat ${path}`); throw new Error('touched'); },
+    lstat: path => { calls.push(`lstat ${path}`); throw new Error('touched'); },
+    readlink: path => { calls.push(`readlink ${path}`); throw new Error('touched'); },
     realpath: path => { calls.push(`realpath ${path}`); throw new Error('touched'); },
-    exists: path => { calls.push(`exists ${path}`); throw new Error('touched'); },
   };
   const cases: Array<[string, string]> = [
     ['\\\\server\\share\\work', 'folder_remote'], ['//server/share/work', 'folder_remote'], ['\\\\?\\C:\\work', 'folder_remote'],
@@ -72,7 +71,8 @@ test('checkWorkFolder: ネットワークのパス・デバイスのパス・デ
     if (WINDOWS) assert.equal(!checked.ok && checked.reason, expected, path);
   }
   assert.deepEqual(calls, []);
-  assert.throws(() => checkWorkFolder(f.dir('home', 'projects', 'site'), f.ctx({ fs: spy })), /touched/u, '前提: ふつうのパスは、この差し替えたファイルの関数を呼ぶ');
+  assert.deepEqual(checkWorkFolder(f.dir('home', 'projects', 'site'), f.ctx({ fs: spy })), { ok: false, reason: 'folder_unreadable' });
+  assert.ok(calls.length > 0, '前提: ふつうのパスは、この差し替えたファイルの関数を呼ぶ');
 });
 
 test('checkWorkFolder: ホームとその親、AppData とその中、OS のフォルダ、ドライブの直下は選べない', t => {
@@ -256,4 +256,95 @@ test('listFolders: 出発点はホーム・ホームのあるドライブの直�
   assert.deepEqual({ path: listing.path, parent: listing.parent, truncated: listing.truncated }, { path: null, parent: null, truncated: false });
   assert.deepEqual(listing.entries.map(e => e.path), [f.home, parse(f.home).root, work]);
   assert.deepEqual(listing.entries.map(e => e.selectable), [false, false, true]);
+});
+
+test('checkWorkFolder: ホームの隣（ほかの利用者のフォルダ・Default・Public）は選べない。ホームの中は通る', t => {
+  const f = fixture(t);
+  assert.equal(f.reason(f.dir('elsewhere')), 'folder_home');
+  assert.equal(f.reason(f.dir('Public', 'Documents', 'site')), 'folder_home');
+  assert.equal(f.reason(f.dir('home', 'projects', 'site')), 'ok');
+  assert.equal(f.reason(f.dir('Public', 'site'), { exempt: [join(f.base, 'Public')] }), 'ok', '試しとテストだけの抜け道の下');
+});
+
+const LOCAL = /^[A-Za-z]:\\/u;
+const w = (text: string) => text.replaceAll('/', '\\');
+
+function linkFs(forward: Record<string, string>) {
+  const links = Object.fromEntries(Object.entries(forward).map(([from, to]) => [w(from), w(to)]));
+  const key = (path: string) => path.replace(/\\+$/u, '').toLowerCase();
+  const table = new Map(Object.entries(links).map(([from, to]) => [key(from), to]));
+  const calls: string[] = [];
+  const reached: string[] = [];
+  const follow = (path: string, final: boolean) => {
+    let current = path;
+    for (let hop = 0; hop < 100; hop++) {
+      if (!LOCAL.test(current)) { reached.push(current); return; }
+      const parts = current.replace(/\\+$/u, '').split('\\');
+      let moved = false;
+      for (let i = 2; i <= parts.length && !moved; i++) {
+        if (i === parts.length && !final) break;
+        const target = table.get(key(parts.slice(0, i).join('\\')));
+        if (target === undefined) continue;
+        current = [target.replace(/\\+$/u, ''), ...parts.slice(i)].join('\\');
+        moved = true;
+      }
+      if (!moved) return;
+    }
+  };
+  const fs: FolderFs = {
+    lstat: path => {
+      calls.push(path); follow(path, false);
+      if (path.endsWith('.missing')) return undefined;
+      const link = table.has(key(path));
+      return { isSymbolicLink: () => link, isDirectory: () => !link };
+    },
+    readlink: path => { calls.push(path); follow(path, false); return table.get(key(path))!; },
+    realpath: path => { calls.push(path); follow(path, true); return path; },
+  };
+  return { fs, calls, reached };
+}
+
+const LINK_CASES: Array<{ label: string; links: Record<string, string>; path: string; reason: string }> = [
+  { label: 'リンクの先がまたリンクで、その先が UNC', links: { 'C:/w/a': 'C:/w/b', 'C:/w/b': '//host/share' }, path: w('C:/w/a'), reason: 'folder_remote' },
+  { label: 'リンクの先が生の NT のパス', links: { 'C:/w/a': '/Device/Mup/host/share' }, path: w('C:/w/a'), reason: 'folder_link' },
+  { label: '途中のフォルダがリンク', links: { 'C:/w/mid': '//host/share' }, path: w('C:/w/mid/leaf'), reason: 'folder_remote' },
+  { label: 'リンクの先のパスが、途中で別のリンクを通る', links: { 'C:/w/a': 'C:/w/mid/x', 'C:/w/mid': '//host/share' }, path: w('C:/w/a'), reason: 'folder_remote' },
+  { label: 'リンクの先が相対パス', links: { 'C:/w/a': '../b' }, path: w('C:/w/a'), reason: 'folder_link' },
+  { label: 'リンクが輪になっている', links: { 'C:/w/a': 'C:/w/b', 'C:/w/b': 'C:/w/a' }, path: w('C:/w/a/leaf'), reason: 'folder_link' },
+];
+
+test('リンクをたどる歩き方: UNC・デバイスのパスへ届く呼び出しを 1 つもしない（checkWorkFolder・listFolders・gitFolder・folderGone）', { skip: !WINDOWS }, t => {
+  const f = fixture(t);
+  for (const c of LINK_CASES) {
+    const checkFs = linkFs(c.links);
+    assert.deepEqual(checkWorkFolder(c.path, f.ctx({ fs: checkFs.fs })), { ok: false, reason: c.reason }, c.label);
+    const listFs = linkFs(c.links);
+    assert.deepEqual(listFolders(c.path, f.ctx({ fs: listFs.fs })), { reason: c.reason }, c.label);
+    const gitFs = linkFs(c.links);
+    assert.equal(gitFolder(c.path, gitFs.fs), false, c.label);
+    const goneFs = linkFs(c.links);
+    assert.equal(folderGone(c.path, rootKeyOf(c.path), goneFs.fs), true, c.label);
+    for (const used of [checkFs, listFs, gitFs, goneFs]) {
+      assert.deepEqual(used.reached, [], `${c.label}: OS がリンクを追って外へ出た`);
+      assert.ok(used.calls.length > 0 && used.calls.every(path => LOCAL.test(path)), `${c.label}: ${used.calls.join(' | ')}`);
+      assert.ok(used.calls.length <= 3 * (MAX_LINK_HOPS + 2), `${c.label}: 呼び出しの数に上限がある`);
+    }
+  }
+});
+
+test('リンクをたどる歩き方: この PC の中を指すリンクは 1 つずつ確かめて通す。.git がリンクでも追わない。無いパスは folder_not_found', { skip: !WINDOWS }, t => {
+  const f = fixture(t);
+  const ok = linkFs({ 'C:/w/a': 'C:/w/b/', 'C:/w/b': 'C:/w/real', 'C:/w/real/.git': '//host/share' });
+  const checked = checkWorkFolder(w('C:/w/a'), f.ctx({ fs: ok.fs }));
+  assert.deepEqual(checked, { ok: true, root: w('C:/w/real'), rootKey: w('c:/w/real'), notes: [], isGit: true });
+  assert.equal(gitFolder(w('C:/w/a'), ok.fs), true);
+  assert.equal(folderGone(w('C:/w/a'), w('c:/w/real'), ok.fs), false);
+  assert.equal(folderGone(w('C:/w/a'), w('c:/w/a'), ok.fs), true, '実体が変わった');
+  assert.deepEqual(ok.reached, []);
+  const missing = linkFs({ 'C:/w/a': 'C:/w/gone.missing' });
+  assert.deepEqual(checkWorkFolder(w('C:/w/a'), f.ctx({ fs: missing.fs })), { ok: false, reason: 'folder_not_found' });
+  const hops = linkFs(Object.fromEntries(Array.from({ length: MAX_LINK_HOPS + 1 }, (_, i) => [`C:/w/l${i}`, `C:/w/l${i + 1}`])));
+  assert.deepEqual(checkWorkFolder(w('C:/w/l0'), f.ctx({ fs: hops.fs })), { ok: false, reason: 'folder_link' }, 'たどる回数の上限');
+  const within = linkFs(Object.fromEntries(Array.from({ length: MAX_LINK_HOPS }, (_, i) => [`C:/w/l${i}`, `C:/w/l${i + 1}`])));
+  assert.equal(checkWorkFolder(w('C:/w/l0'), f.ctx({ fs: within.fs })).ok, true, '上限ちょうどは通る');
 });

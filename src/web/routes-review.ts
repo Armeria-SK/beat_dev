@@ -20,7 +20,6 @@ function domainFailure(error: unknown): never {
 
 const TODAY_COUNTED = { engine_runs: 'started_at', tool_calls: 'created_at', memory_jobs: 'created_at' } as const;
 
-// 記録の行が属する製品（列は持たない。会話から引く。振り返りは、材料の会話が無ければ材料のタスクから）。会話を消した行は NULL
 export function projectOfSql(table: keyof typeof TODAY_COUNTED, alias: string = table): string {
   const viaConversation = `(SELECT pc.project_id FROM conversations pc WHERE pc.id = ${alias}.conversation_id)`;
   return table === 'memory_jobs' ? `COALESCE(${viaConversation}, (SELECT pt.project_id FROM tasks pt WHERE pt.id = ${alias}.task_id))` : viaConversation;

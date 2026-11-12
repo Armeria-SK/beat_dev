@@ -14,7 +14,6 @@ export interface AppPaths {
   // ブラウザ（browser_*）のログイン状態などを置く。Clive の道具から触れない（禁止パス）。バックアップには入れない
   browserProfile: string;
   workspace: string;
-  // 製品ごとの知識のフォルダ（data/projects/<id>/）。Clive の道具から直接は触れない（禁止パス）
   projects: string;
   // API キーを書く .env（起動で読み込むものと同じ。画面から入れた鍵もここに書く）
   env: string;

@@ -59,7 +59,6 @@ export function registerTaskRoutes(router: Router, app: App): void {
     return task;
   };
 
-  // ?project=<id> / none で、その製品のタスクだけ
   router.add('GET', '/api/tasks', ({ res, url }) => {
     const project = projectFilterOf(url);
     sendJson(res, 200, {
@@ -255,7 +254,6 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   // ── 通知 ──
-  // 各行に製品 project_id（リンクの会話・タスクから引く。どちらでもなければ null）
   const projectOfLink = (link: string | null): string | null => {
     if (link?.startsWith('#/c/')) return app.conversations.projectOf(link.slice('#/c/'.length));
     if (link?.startsWith('#/tasks/')) return app.tasks.get(link.slice('#/tasks/'.length))?.project_id ?? null;
