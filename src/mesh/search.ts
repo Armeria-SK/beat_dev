@@ -19,6 +19,7 @@ const fold = (text: string): string => text.normalize('NFKC').toLowerCase();
 const safe = (text: string): string => neutralizeFence(redactSecrets(text).replace(/\r/gu, ' '));
 const label = (text: string): string => scrubText(redactSecrets(text), HEADING_MAX).replaceAll('"', "'");
 const one = (value: unknown): string => String(value ?? '').replace(/\s+/gu, ' ').trim();
+const aiText = (value: unknown): string => one(String(value ?? '').replaceAll('|', '/'));
 
 export function meshBudget(available: number | undefined, outputTokens: number | undefined): number {
   const share = Math.min(4000, Math.max(800, Math.floor((available ?? 0) * 0.1)));
@@ -42,10 +43,10 @@ export function acceptanceLines(doc: AcceptanceDoc): string[] {
     ...items.map(item => {
       const check = (item.check ?? {}) as Record<string, unknown>;
       const removed = item.removedIn ? ` [removed in v${one(item.removedIn)}]` : '';
-      return `${one(item.id)} [${one(item.state)}]${removed} ${one(item.result)} | source: ${sourceText(item.source)} | check: ${one(check.kind)}${check.kind === 'command' ? `: ${one(check.command)}` : ''}`;
+      return `${one(item.id)} [${one(item.state)}]${removed} source: ${sourceText(item.source)} | check: ${one(check.kind)}${check.kind === 'command' ? `: ${one(check.command)}` : ''} | result: ${aiText(item.result)}`;
     }),
     '## Not doing',
-    ...notDoing.map(item => `${one(item.id)} ${one(item.text)} | source: ${sourceText(item.source)}`),
+    ...notDoing.map(item => `${one(item.id)} source: ${sourceText(item.source)} | text: ${aiText(item.text)}`),
   ];
 }
 
