@@ -3,7 +3,7 @@ import { PERMISSION_MODES, type PermissionMode } from '../../../src/shared/permi
 import { api, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import {
-  ATTACH_ACCEPT, attachRoom, composerView, depthOptions, enterAction, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER, queuedLine, slashItems,
+  ATTACH_ACCEPT, attachRoom, composerView, depthOptions, enterAction, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER, queuedLine, slashItems, toastLift,
   type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
 import { menuStep } from './menu.ts';
@@ -91,6 +91,18 @@ export function Composer(props: ComposerProps) {
 
   useEffect(() => {
     if (!matchMedia('(pointer: coarse)').matches) input.current?.focus();
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return undefined;
+    const root = document.documentElement;
+    const measure = () => root.style.setProperty('--ui-toast-lift', `${toastLift(innerHeight, el.getBoundingClientRect().top)}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    addEventListener('resize', measure);
+    return () => { observer.disconnect(); removeEventListener('resize', measure); root.style.removeProperty('--ui-toast-lift'); };
   }, []);
 
   useEffect(() => {

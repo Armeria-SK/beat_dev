@@ -95,6 +95,7 @@ const HELP = [
 function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
   const last = request.messages.at(-1);
   if (last?.role === 'tool') return words(`Done. The tool said:\n\n\`\`\`\n${last.content.slice(0, 400)}\n\`\`\``);
+  if (request.tools.some(tool => tool.name === 'task_complete')) return call('task_complete', { summary: 'Finished by the preview model.' });
   const said = [...request.messages].reverse().find(m => m.role === 'user')?.content ?? '';
   if (said.includes('/demo slow')) return slowWords(request.signal);
   if (said.includes('/demo write')) return call('file_write', { path: join(WORK, 'notes.md'), content: '# Notes\n\nWritten by the preview model.\n' });
@@ -136,6 +137,12 @@ function seed(app: App): void {
   tasks.finish(failed.id, 'failed', 'The page did not answer.', 'preview');
   const cancelled = tasks.create({ title: 'Old idea', origin: 'user', runAt: now + 86_400_000, actor: 'preview' });
   tasks.finish(cancelled.id, 'cancelled', null, 'preview');
+  tasks.create({ title: 'Sort the downloads folder', body: 'Old installers pile up there. I can list what is safe to remove.', origin: 'self', propose: true, actor: 'preview' });
+  tasks.create({ title: 'Draft the weekly report', body: 'A second proposal, to try Reject with a reason.', origin: 'self', propose: true, actor: 'preview' });
+  for (let i = 1; i <= 45; i++) {
+    const old = tasks.create({ title: `Archived chore ${i}`, origin: 'user', runAt: now + 86_400_000, actor: 'preview' });
+    tasks.finish(old.id, i % 9 === 0 ? 'failed' : 'done', i % 9 === 0 ? 'Did not finish.' : 'Finished.', 'preview');
+  }
   app.notifications.notify({ kind: 'task_done', title: 'Task finished', body: 'Rename the draft folder', link: `#/tasks/${done.id}` });
   app.notifications.notify({ kind: 'task_waiting', title: 'Waiting for you', body: 'Pick a name for the export file', link: `#/tasks/${waiting.id}` });
 }

@@ -9,6 +9,8 @@ export interface FeedbackItem {
   body?: string | undefined;
   action?: { label: string; run: () => void };
   durationMs?: number;
+  lead?: 'dot' | undefined;
+  href?: string | undefined;
 }
 
 type Listener = (item: FeedbackItem) => void;

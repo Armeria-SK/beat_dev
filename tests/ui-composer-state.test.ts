@@ -5,8 +5,9 @@ import { SLASH_COMMANDS } from '../web/src/chat-logic.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  attachRoom, composerView, depthOptions, enterAction, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, PLACEHOLDER, queuedLine, replaceTargets, slashAvailable, slashItems, UI_SLASH,
-  type ComposerInput,
+  attachRoom, cancelClearsInterrupt, composerView, depthOptions, enterAction, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, PLACEHOLDER, queuedLine, replaceTargets, slashAvailable, slashItems,
+  submitMessage, toastLift, UI_SLASH,
+  type ComposerInput, type SubmitDeps, type SubmitInput,
 } from '../web/src/ui/composer-state.ts';
 import { EMPTY, reduce, type Action, type LiveState } from '../web/src/ui/live-state.ts';
 import { dropToast, leaveToast, pushToast, toastDuration, type ToastEntry } from '../web/src/ui/toast-list.ts';
@@ -140,4 +141,95 @@ test('ui/live-state: Force で割り込んだ回は、Stopped の代わりに、
   const other = run(flagged, ev({ type: 'run.start', runId: 'x', conversationId: 'd', modelId: 'm' }));
   assert.equal(other.notices.get('d'), undefined);
   assert.ok(other.interrupting.has('c'));
+});
+
+test('ui/live-state: Force の待ちの発言を取り消したら割り込みの印を外す。止まった回は Stopped になり、次のふつうの実行に Interrupted は付かない', () => {
+  const run = (s: LiveState, ...actions: Action[]) => actions.reduce((acc, a) => reduce(acc, a).state, s);
+  const ev = (event: Extract<Action, { type: 'event' }>['event']): Action => ({ type: 'event', event, hidden: false });
+  assert.equal(cancelClearsInterrupt([pend('p1', 'a', true), pend('p2', 'b')], 'p1'), true);
+  assert.equal(cancelClearsInterrupt([pend('p1', 'a', true), pend('p2', 'b')], 'p2'), false);
+  assert.equal(cancelClearsInterrupt([], 'p1'), false);
+  const forced = run(EMPTY, ev({ type: 'run.start', runId: 'r1', conversationId: 'c', modelId: 'm' }), { type: 'interrupt', conversationId: 'c', on: true });
+  const cancelled = run(forced, { type: 'interrupt', conversationId: 'c', on: false }, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'cancelled' }));
+  assert.deepEqual(cancelled.notices.get('c'), [{ runId: 'r1', kind: 'stopped' }]);
+  const next = run(cancelled, ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.equal(next.notices.get('c'), undefined);
+});
+
+function submitHarness(fail: { cancel?: unknown; send?: unknown; rename?: unknown } = {}, queued = true) {
+  const calls: string[] = [];
+  const deps: SubmitDeps = {
+    rename: async (id, title) => { calls.push(`rename ${id} ${title}`); if (fail.rename) throw fail.rename; },
+    cancelPending: async (id, pendingId) => { calls.push(`cancel ${id} ${pendingId}`); if (fail.cancel) throw fail.cancel; },
+    send: async (target, text, files, interrupt) => { calls.push(`send ${target} ${text} [${files.join(',')}]${interrupt ? ' interrupt' : ''}`); if (fail.send) throw fail.send; return { queued }; },
+    isGone: error => error === 'gone',
+    clearNotices: target => { calls.push(`clear ${target}`); },
+    interrupt: (target, on) => { calls.push(`interrupt ${target} ${on ? 'on' : 'off'}`); },
+  };
+  return { calls, deps };
+}
+const input = (extra: Partial<SubmitInput> = {}): SubmitInput => ({ kind: 'send', text: 'hello', attachmentIds: [], conversationId: 'c', target: 'c', running: false, pending: [], ...extra });
+
+test('ui/composer-state: 送る順番。ふつうの送信はお知らせを片づけてから送る。新しい会話は新しい ID へ送る', async () => {
+  const h = submitHarness({}, false);
+  assert.deepEqual(await submitMessage(input({ attachmentIds: ['u1', 'u2'] }), h.deps), { kind: 'sent', queued: false, replaced: null });
+  assert.deepEqual(h.calls, ['clear c', 'send c hello [u1,u2]']);
+  const fresh = submitHarness({}, false);
+  await submitMessage(input({ conversationId: null, target: 'new-id', kind: 'queue', pending: [pend('p', 'x')] }), fresh.deps);
+  assert.deepEqual(fresh.calls, ['clear new-id', 'send new-id hello []'], '会話がまだ無いときは置き換えるものが無い');
+});
+
+test('ui/composer-state: Queue は、前の待ち（割り込みでないもの）を取り消してから送る。もう無かった待ち（404）は置き換えたことにしない', async () => {
+  const pending = [pend('p1', 'old one'), pend('f', 'forced', true), pend('p2', 'old two')];
+  const h = submitHarness();
+  const out = await submitMessage(input({ kind: 'queue', running: true, pending }), h.deps);
+  assert.deepEqual(h.calls, ['cancel c p1', 'cancel c p2', 'clear c', 'send c hello []']);
+  assert.deepEqual(out, { kind: 'sent', queued: true, replaced: pending[2] });
+  const gone = submitHarness({ cancel: 'gone' });
+  assert.deepEqual(await submitMessage(input({ kind: 'queue', running: true, pending }), gone.deps), { kind: 'sent', queued: true, replaced: null });
+  const send = submitHarness();
+  await submitMessage(input({ kind: 'send', pending }), send.deps);
+  assert.deepEqual(send.calls, ['clear c', 'send c hello []'], 'Queue でなければ待ちに触らない');
+});
+
+test('ui/composer-state: 置き換えの途中で失敗したら、消えた前の待ちを結果に入れて返す（画面が「前の文は消えた」と言えるように）', async () => {
+  const pending = [pend('p1', 'old one')];
+  const h = submitHarness({ send: 'boom' });
+  assert.deepEqual(await submitMessage(input({ kind: 'queue', running: true, pending }), h.deps), { kind: 'failed', error: 'boom', replaced: pending[0] });
+  assert.deepEqual(h.calls, ['cancel c p1', 'clear c', 'send c hello []']);
+  const cancel = submitHarness({ cancel: 'server down' });
+  assert.deepEqual(await submitMessage(input({ kind: 'queue', running: true, pending }), cancel.deps), { kind: 'failed', error: 'server down', replaced: null });
+  assert.deepEqual(cancel.calls, ['cancel c p1'], '取り消せなかったら送らない');
+});
+
+test('ui/composer-state: Force は、返事を作っている最中だけ割り込みの印を付けて送る。待たされなかった・失敗したら印を外す', async () => {
+  const h = submitHarness();
+  assert.deepEqual(await submitMessage(input({ kind: 'force', running: true, pending: [pend('p1', 'kept')] }), h.deps), { kind: 'sent', queued: true, replaced: null });
+  assert.deepEqual(h.calls, ['clear c', 'interrupt c on', 'send c hello [] interrupt'], 'Force は前の待ちを消さない');
+  const direct = submitHarness({}, false);
+  await submitMessage(input({ kind: 'force', running: true }), direct.deps);
+  assert.deepEqual(direct.calls, ['clear c', 'interrupt c on', 'send c hello [] interrupt', 'interrupt c off']);
+  const failed = submitHarness({ send: 'boom' });
+  assert.equal((await submitMessage(input({ kind: 'force', running: true }), failed.deps)).kind, 'failed');
+  assert.deepEqual(failed.calls.at(-1), 'interrupt c off');
+  const idle = submitHarness({}, false);
+  await submitMessage(input({ kind: 'force', running: false }), idle.deps);
+  assert.deepEqual(idle.calls, ['clear c', 'send c hello []'], '動いていなければふつうの送信');
+});
+
+test('ui/composer-state: /rename は題を書き換えるだけで送らない。題が無い・会話が無いときは何もしない', async () => {
+  const h = submitHarness();
+  assert.deepEqual(await submitMessage(input({ text: '/rename New title' }), h.deps), { kind: 'renamed' });
+  assert.deepEqual(h.calls, ['rename c New title']);
+  const none = submitHarness();
+  assert.deepEqual(await submitMessage(input({ text: '/rename' }), none.deps), { kind: 'ignored' });
+  assert.deepEqual(await submitMessage(input({ text: '/rename X', conversationId: null }), none.deps), { kind: 'ignored' });
+  assert.deepEqual(none.calls, []);
+  const bad = submitHarness({ rename: 'nope' });
+  assert.deepEqual(await submitMessage(input({ text: '/rename X' }), bad.deps), { kind: 'failed', error: 'nope', replaced: null });
+});
+
+test('ui/composer-state: トーストを入力欄の上へ持ち上げる高さ（画面の下から入力欄の上の端まで）', () => {
+  assert.equal(toastLift(900, 716.4), 184);
+  assert.equal(toastLift(900, 950), 0);
 });

@@ -1,11 +1,11 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
 import { api, ApiError, type Approval, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
-import { isNearBottom, isRenameWithoutTitle, newConversationId, renameTitleOf, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
+import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
-import { queuedLine, replaceTargets, type SubmitKind, type UiSlash } from './composer-state.ts';
+import { cancelClearsInterrupt, queuedLine, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getLanguage, useT } from '../i18n/index.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
@@ -300,9 +300,10 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   });
 
-  const fail = async (error: unknown, retry: FailAction | null) => {
+  const fail = async (error: unknown, retry: FailAction | null, lost: PendingMessage | null = null) => {
     stick.current = true;
-    setFailure({ ...sendFailureOf(error, t('ui.fail.send'), models), retry });
+    const failed = sendFailureOf(error, t('ui.fail.send'), models);
+    setFailure({ ...failed, ...(lost ? { message: [failed.message, t('ui.fail.replacedLost', queuedLine(lost))].filter(Boolean).join(' · ') } : {}), retry });
   };
 
   const choice: Choice = conversation
@@ -311,38 +312,29 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
 
   const submit = async (kind: SubmitKind, text: string, attachments: UploadView[] = [], retry: FailAction | null = null): Promise<boolean> => {
     if (sending) return false;
-    if (isRenameWithoutTitle(text)) return false;
-    const newTitle = renameTitleOf(text);
     setSending(true); setFailure(null);
     stick.current = true;
     const target = id ?? (created.current ??= newConversationId());
-    const force = kind === 'force' && Boolean(draft);
     try {
-      if (newTitle) {
-        if (!id) return false;
-        await api.renameConversation(id, newTitle);
-        await load();
-        return true;
+      const out = await submitMessage({ kind, text, attachmentIds: attachments.map(a => a.id), conversationId: id, target, running: Boolean(draft), pending }, {
+        rename: api.renameConversation, cancelPending: api.cancelPending,
+        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice), interrupt ? { interrupt: true } : {}),
+        isGone: error => error instanceof ApiError && error.status === 404,
+        clearNotices: onClearNotices, interrupt: onInterrupt,
+      });
+      switch (out.kind) {
+        case 'ignored': return false;
+        case 'renamed': await load(); return true;
+        case 'sent':
+          if (out.replaced && out.queued) toast({ kind: 'info', icon: 'refresh', title: t('ui.composer.replaced'), body: queuedLine(out.replaced) });
+          if (!id) location.hash = routeHash({ view: 'chat', id: target });
+          else await load();
+          return true;
+        case 'failed':
+          await fail(out.error, retry, out.replaced);
+          if (id) await load();
+          return false;
       }
-      let replaced: PendingMessage | null = null;
-      if (kind === 'queue' && id) {
-        for (const old of replaceTargets(pending)) {
-          try { await api.cancelPending(id, old.id); replaced = old; } catch (error) { if (!(error instanceof ApiError && error.status === 404)) throw error; }
-        }
-      }
-      onClearNotices(target);
-      if (force) onInterrupt(target, true);
-      const sent = await api.send(target, text, attachments.map(a => a.id), sendChoiceOf(id, choice), force ? { interrupt: true } : {});
-      if (force && !sent.queued) onInterrupt(target, false);
-      if (replaced && sent.queued) toast({ kind: 'info', icon: 'refresh', title: t('ui.composer.replaced'), body: queuedLine(replaced) });
-      if (!id) location.hash = routeHash({ view: 'chat', id: target });
-      else await load();
-      return true;
-    } catch (error) {
-      if (force) onInterrupt(target, false);
-      await fail(error, retry);
-      if (id) await load();
-      return false;
     } finally { setSending(false); }
   };
 
@@ -373,7 +365,11 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
 
   const cancelPending = async (pendingId: string) => {
     if (!id) return;
-    try { await api.cancelPending(id, pendingId); } catch (error) { if (!(error instanceof ApiError && error.status === 404)) changeFailed(error); }
+    const forced = cancelClearsInterrupt(pending, pendingId);
+    try {
+      await api.cancelPending(id, pendingId);
+      if (forced) onInterrupt(id, false);
+    } catch (error) { if (!(error instanceof ApiError && error.status === 404)) changeFailed(error); }
     await load();
   };
 

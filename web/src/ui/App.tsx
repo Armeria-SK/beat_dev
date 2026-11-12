@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type Approval, type Conversation as ConversationRow, type WorkerStatus } from '../api.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
-import { useT } from '../i18n/index.ts';
+import { toast } from '../feedback.ts';
+import { loadServerSettings, useT } from '../i18n/index.ts';
 import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
 import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
@@ -9,7 +10,10 @@ import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Icon } from './parts.tsx';
 import { pickFocus } from './focus.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
+import { Kanban } from './screens/Kanban.tsx';
+import { TaskScreen } from './screens/Task.tsx';
 import { Sidebar } from './Sidebar.tsx';
+import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
 
 const NARROW = '(max-width: 760px)';
@@ -124,6 +128,8 @@ export function App() {
       } else if (effect.kind === 'gone') {
         const now = parseRoute(location.hash);
         if (now.view === 'chat' && now.id === effect.conversationId) location.replace('#/');
+      } else if (effect.kind === 'toast') {
+        toast(notificationToast(effect.notification));
       } else if (effect.kind === 'notifyApproval') {
         if (granted) new Notification(t('browser.approvalNeeded'), { body: effect.title });
       } else if (granted) new Notification(t('browser.notification', effect.title), { body: effect.body });
@@ -174,6 +180,7 @@ export function App() {
 
   useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker'] as const) load[what](); }, [load]);
   useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
+  useEffect(() => { void loadServerSettings(api.settings); }, []);
 
   const onEvent = useCallback((event: RunEvent) => dispatch({ type: 'event', event, hidden: document.hidden, now: Date.now() }), [dispatch]);
   const onResync = useCallback((drafts: Draft[]) => dispatch({ type: 'resync', drafts }), [dispatch]);
@@ -253,10 +260,16 @@ export function App() {
           </main>
         ) : (
           <main className="bt-screen" inert={drawer}>
-            <div className="bt-screen__inner">
-              <header className="bt-screen__head"><h1 className={`bt-screen__title${behind.view === 'overview' ? ' bt-screen__title--lg' : ''}`}>{title}</h1></header>
-              <p className="bt-meta">{t('ui.later')}</p>
-            </div>
+            {behind.view === 'kanban' ? (
+              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} />
+            ) : behind.view === 'task' ? (
+              <TaskScreen key={behind.id} id={behind.id} revision={live.taskRevision + live.epoch + live.approvals.length} worker={worker} />
+            ) : (
+              <div className="bt-screen__inner">
+                <header className="bt-screen__head"><h1 className={`bt-screen__title${behind.view === 'overview' ? ' bt-screen__title--lg' : ''}`}>{title}</h1></header>
+                <p className="bt-meta">{t('ui.later')}</p>
+              </div>
+            )}
           </main>
         )}
       </div>

@@ -113,3 +113,21 @@ test('ui/live-state: 新しい実行が始まると、その会話の前の実�
   assert.equal(next.notices.has('c'), false);
   assert.equal(next.notices.get('d')?.length, 1, 'ほかの会話のお知らせは残す');
 });
+
+test('ui/live-state: タスクの変化と削除で、タスクの画面を読み直す番号が進む。消したタスクは数から外れ、一覧を読み直す（残る過去の実行には task.changed が来ないため）', () => {
+  const changed = reduce(EMPTY, ev({ type: 'task.changed', task: task('a', 'inbox', 5) }));
+  assert.equal(changed.state.taskRevision, 1);
+  const stale = reduce(changed.state, ev({ type: 'task.changed', task: task('a', 'ready', 2) }));
+  assert.equal(stale.state.taskRevision, 1, '古い知らせでは進めない');
+  const deleted = reduce(changed.state, ev({ type: 'task.deleted', id: 'a' }));
+  assert.equal(deleted.state.taskRevision, 2);
+  assert.equal(deleted.state.tasks.has('a'), false);
+  assert.deepEqual(refreshes(deleted.effects), ['tasks', 'worker']);
+});
+
+test('ui/live-state: サーバーの通知はトーストにする手続きを出す。実行の始まりは下書きに時刻を持たせる（Kanban の経過の時間）', () => {
+  const got = reduce(EMPTY, ev({ type: 'notification', notification: note('task_done') }));
+  assert.deepEqual(got.effects.filter(e => e.kind === 'toast'), [{ kind: 'toast', notification: note('task_done') }]);
+  const started = reduce(EMPTY, { type: 'event', event: { type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }, hidden: false, now: 1234 });
+  assert.equal(started.state.drafts[0]!.startedAt, 1234);
+});

@@ -1,11 +1,11 @@
-import type { Approval, ChecklistItem, Conversation, Task, TaskStatus } from '../api.ts';
+import type { Approval, ChecklistItem, Conversation, NotificationItem, Task, TaskStatus } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
 
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean }
 
 export interface SettledTool { callId: string; name: string; input: string }
-export interface LiveDraft extends Draft { toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined }
+export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined }
 
 const SETTLED_MAX = 20;
 const settle = (d: LiveDraft, callId: string): SettledTool[] | undefined =>
@@ -35,12 +35,13 @@ export interface LiveState {
   notices: ReadonlyMap<string, RunNotice[]>;
   revisions: ReadonlyMap<string, number>;
   interrupting: ReadonlySet<string>;
+  taskRevision: number;
   epoch: number;
 }
 
 export const EMPTY: LiveState = {
   conversations: [], approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), interrupting: new Set(), epoch: 0,
+  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, epoch: 0,
 };
 
 export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker';
@@ -50,6 +51,7 @@ export type Effect =
   | { kind: 'checklist'; conversationId: string }
   | { kind: 'notifyApproval'; title: string }
   | { kind: 'notify'; title: string; body: string }
+  | { kind: 'toast'; notification: NotificationItem }
   | { kind: 'gone'; conversationId: string };
 
 export type Action =
@@ -98,7 +100,7 @@ function bump(s: LiveState, conversationId: string): LiveState {
 function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { state: LiveState; effects: Effect[] } {
   switch (e.type) {
     case 'run.start': {
-      const drafts = [...s.drafts.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '' }];
+      const drafts = [...s.drafts.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '', startedAt: now }];
       const known = s.conversations.some(c => c.id === e.conversationId);
       const notices = new Map(s.notices);
       if (s.interrupting.has(e.conversationId)) notices.set(e.conversationId, [{ runId: e.runId, kind: 'interrupted' }]);
@@ -185,11 +187,16 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
       const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true });
-      return { state: { ...s, tasks }, effects: refresh('worker') };
+      return { state: { ...s, tasks, taskRevision: s.taskRevision + 1 }, effects: refresh('worker') };
+    }
+    case 'task.deleted': {
+      const tasks = new Map(s.tasks);
+      tasks.delete(e.id);
+      return { state: { ...s, tasks, taskRevision: s.taskRevision + 1 }, effects: refresh('tasks', 'worker') };
     }
     case 'notification': {
       const notify: Effect[] = hidden && BROWSER_NOTIFY.has(e.notification.kind) ? [{ kind: 'notify', title: e.notification.title, body: e.notification.body ?? '' }] : [];
-      return { state: { ...s, unread: s.unread + 1 }, effects: [...notify, ...refresh('drafts')] };
+      return { state: { ...s, unread: s.unread + 1 }, effects: [...notify, { kind: 'toast', notification: e.notification }, ...refresh('drafts')] };
     }
     case 'notification.read':
       return { state: { ...s, unread: e.unread }, effects: [] };

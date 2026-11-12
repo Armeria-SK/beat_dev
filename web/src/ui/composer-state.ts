@@ -1,6 +1,6 @@
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
 import type { ModelView, PendingMessage } from '../api.ts';
-import { SLASH_COMMANDS } from '../chat-logic.ts';
+import { isRenameWithoutTitle, renameTitleOf, SLASH_COMMANDS } from '../chat-logic.ts';
 
 export const MAX_ATTACHMENTS = 5;
 export const ATTACH_ACCEPT = '.txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*,application/pdf,image/png,image/jpeg,image/gif,image/webp';
@@ -108,6 +108,62 @@ export function slashItems(input: string, ctx: SlashContext, forced = false): Ui
 
 export const replaceTargets = (pending: readonly PendingMessage[]): PendingMessage[] => pending.filter(p => !p.interrupt);
 
-export const queuedLine = (p: Pick<PendingMessage, 'text' | 'attachments'>): string => p.text.replace(/\s+/gu, ' ').trim() || p.attachments.map(a => a.name).join(', ');
+export const cancelClearsInterrupt = (pending: readonly PendingMessage[], pendingId: string): boolean => pending.some(p => p.id === pendingId && p.interrupt);
 
-export const attachRoom = (attached: number, incoming: number): number => Math.max(0, Math.min(incoming, MAX_ATTACHMENTS - attached));
+export interface SubmitInput {
+  kind: SubmitKind;
+  text: string;
+  attachmentIds: string[];
+  conversationId: string | null;
+  target: string;
+  running: boolean;
+  pending: readonly PendingMessage[];
+}
+
+export interface SubmitDeps {
+  rename: (id: string, title: string) => Promise<unknown>;
+  cancelPending: (id: string, pendingId: string) => Promise<unknown>;
+  send: (target: string, text: string, attachmentIds: string[], interrupt: boolean) => Promise<{ queued?: boolean | undefined }>;
+  isGone: (error: unknown) => boolean;
+  clearNotices: (target: string) => void;
+  interrupt: (target: string, on: boolean) => void;
+}
+
+export type SubmitOutcome =
+  | { kind: 'ignored' }
+  | { kind: 'renamed' }
+  | { kind: 'sent'; queued: boolean; replaced: PendingMessage | null }
+  | { kind: 'failed'; error: unknown; replaced: PendingMessage | null };
+
+export async function submitMessage(i: SubmitInput, d: SubmitDeps): Promise<SubmitOutcome> {
+  if (isRenameWithoutTitle(i.text)) return { kind: 'ignored' };
+  const title = renameTitleOf(i.text);
+  const force = i.kind === 'force' && i.running;
+  let replaced: PendingMessage | null = null;
+  try {
+    if (title) {
+      if (!i.conversationId) return { kind: 'ignored' };
+      await d.rename(i.conversationId, title);
+      return { kind: 'renamed' };
+    }
+    if (i.kind === 'queue' && i.conversationId) {
+      for (const old of replaceTargets(i.pending)) {
+        try { await d.cancelPending(i.conversationId, old.id); replaced = old; } catch (error) { if (!d.isGone(error)) throw error; }
+      }
+    }
+    d.clearNotices(i.target);
+    if (force) d.interrupt(i.target, true);
+    const sent = await d.send(i.target, i.text, i.attachmentIds, force);
+    if (force && !sent.queued) d.interrupt(i.target, false);
+    return { kind: 'sent', queued: Boolean(sent.queued), replaced };
+  } catch (error) {
+    if (force) d.interrupt(i.target, false);
+    return { kind: 'failed', error, replaced };
+  }
+}
+
+export const queuedLine =(p: Pick<PendingMessage, 'text' | 'attachments'>): string => p.text.replace(/\s+/gu, ' ').trim() || p.attachments.map(a => a.name).join(', ');
+
+export const toastLift = (viewportHeight: number, composerTop: number): number => Math.max(0, Math.round(viewportHeight - composerTop));
+
+export const attachRoom =(attached: number, incoming: number): number => Math.max(0, Math.min(incoming, MAX_ATTACHMENTS - attached));

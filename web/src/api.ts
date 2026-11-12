@@ -112,8 +112,10 @@ export interface Task {
   cron: string | null; cron_text: string | null; run_at: number | null; parent_id: string | null; waiting_text: string | null;
   conversation_id: string | null; result_summary: string | null; attempts: number; max_attempts: number;
   created_at: number; updated_at: number; completed_at: number | null;
+  cancelled_from?: TaskStatus | null;
 }
-export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
+export interface FinishedCursor { beforeT: number; beforeId: string }
+export interface TaskEvent {id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
 export interface WorkerRun { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
 export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
@@ -244,7 +246,11 @@ export const api = {
   forgetMemory: (id: number) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'DELETE' }),
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
-  tasks: () => call<{ active: Task[]; finished: Task[] }>('/api/tasks'),
+  tasks: () => call<{ active: Task[]; finished: Task[]; finishedTotal?: number }>('/api/tasks'),
+  finishedTasks: (before: FinishedCursor | null, limit = 20) =>
+    call<{ tasks: Task[]; next: FinishedCursor | null; total: number }>(`/api/tasks/finished?limit=${limit}${before ? `&beforeT=${before.beforeT}&beforeId=${encodeURIComponent(before.beforeId)}` : ''}`),
+  unapproveTask: (id: string) => call<{ task: Task }>(`/api/tasks/${id}/unapprove`, { method: 'POST', body: '{}' }),
+  cancelTask: (id: string, reason = '') => call<{ task: Task }>(`/api/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}) }),
   task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
   createTask: (task: NewTask) => call<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(task) }),
   editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null }) =>
