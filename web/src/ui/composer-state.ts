@@ -23,6 +23,7 @@ export interface ComposerInput {
   uploading: boolean;
   sending: boolean;
   product?: boolean;
+  planless?: boolean;
 }
 
 export interface ComposerView {
@@ -35,11 +36,13 @@ export interface ComposerView {
 
 export function composerView(i: ComposerInput): ComposerView {
   const noModel = i.chatModels === 0;
-  const placeholder: Placeholder = noModel ? 'noModel' : i.running ? 'busy' : i.mode === 'plan' ? 'plan' : i.hasConversation ? 'reply' : i.product ? 'build' : 'message';
+  const placeholder: Placeholder = noModel ? 'noModel' : i.running ? 'busy' : i.mode === 'plan' && (i.hasConversation || !i.planless) ? 'plan' : i.hasConversation ? 'reply' : i.product ? 'build' : 'message';
   const filled = i.text.trim() !== '' || i.attachments > 0;
   const free = !noModel && !i.uploading && !i.sending;
   return { placeholder, disabled: noModel, actions: i.running ? 'busy' : 'send', canSubmit: free && filled, canAttach: free && i.attachments < MAX_ATTACHMENTS };
 }
+
+export const firstMode = (product: { has_plan?: boolean } | undefined): PermissionMode => (product?.has_plan === false ? 'plan' : 'normal');
 
 export type SubmitKind = 'send' | 'queue' | 'force';
 
@@ -51,15 +54,6 @@ export function enterAction(e: { key: string; shiftKey: boolean; ctrlKey: boolea
 
 export function escStops(e: { key: string; composing: boolean }, running: boolean, menuOpen: boolean): boolean {
   return e.key === 'Escape' && !e.composing && running && !menuOpen;
-}
-
-export interface ProceedInput {
-  mode: PermissionMode; hasConversation: boolean; running: boolean; sending: boolean; approvals: number;
-  last: { role: string; text: string } | undefined;
-}
-
-export function showProceed(i: ProceedInput): boolean {
-  return i.mode === 'plan' && i.hasConversation && !i.running && !i.sending && i.approvals === 0 && i.last?.role === 'assistant' && i.last.text.trim() !== '';
 }
 
 const usable = (m: ModelView): boolean => m.probe?.status === 'ok';
@@ -86,6 +80,7 @@ export function modelOptions(models: readonly ModelView[], modelId: string | nul
 export const UI_SLASH = [
   { name: 'new', desc: 'ui.slash.new' },
   { name: 'plan', desc: 'ui.slash.plan' },
+  { name: 'build', desc: 'ui.slash.build' },
   { name: 'task', desc: 'ui.slash.task' },
   { name: 'tasks', desc: 'ui.slash.tasks' },
   { name: 'skills', desc: 'ui.slash.skills' },
@@ -95,12 +90,12 @@ export const UI_SLASH = [
   { name: 'rename', desc: 'ui.slash.rename' },
   { name: 'archive', desc: 'ui.slash.archive' },
   { name: 'summary', desc: 'ui.slash.summary' },
-] as const satisfies ReadonlyArray<{ name: (typeof SLASH_COMMANDS)[number]['name'] | 'plan'; desc: string }>;
+] as const satisfies ReadonlyArray<{ name: (typeof SLASH_COMMANDS)[number]['name'] | 'plan' | 'build'; desc: string }>;
 
 export type UiSlash = (typeof UI_SLASH)[number];
 export type UiSlashName = UiSlash['name'];
 
-export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean }
+export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean; product?: boolean }
 
 export function slashAvailable(ctx: SlashContext): UiSlash[] {
   return UI_SLASH.filter(c => {
@@ -109,6 +104,7 @@ export function slashAvailable(ctx: SlashContext): UiSlash[] {
       case 'rename': return ctx.hasConversation;
       case 'archive': return ctx.hasConversation && !ctx.archived;
       case 'summary': return ctx.hasConversation && ctx.hasSummary;
+      case 'build': return ctx.product === true;
       default: return true;
     }
   });

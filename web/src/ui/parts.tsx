@@ -63,8 +63,8 @@ export function EmptyState({ lead, title, text, action }: { lead?: ReactNode; ti
   );
 }
 
-export function Notice({ tone, icon, title, text, action }: {
-  tone?: 'warn' | 'fail'; icon?: UiIconName; title: ReactNode; text?: ReactNode; action?: { label: string; run: () => void };
+export function Notice({ tone, icon, title, text, action, also }: {
+  tone?: 'warn' | 'fail'; icon?: UiIconName; title: ReactNode; text?: ReactNode; action?: { label: string; run: () => void }; also?: { label: string; run: () => void };
 }) {
   if (tone === 'fail') {
     return (
@@ -72,6 +72,7 @@ export function Notice({ tone, icon, title, text, action }: {
         <Icon name={icon ?? 'alert'} />
         <div className="bt-notice__body"><strong>{title}</strong>{text && <p>{text}</p>}</div>
         {action && <Button small onClick={action.run}>{action.label}</Button>}
+        {also && <Button small onClick={also.run}>{also.label}</Button>}
       </div>
     );
   }
@@ -81,6 +82,7 @@ export function Notice({ tone, icon, title, text, action }: {
       {icon && <Icon name={icon} />}
       {title}
       {action && <button type="button" className="bt-notice__action" onClick={action.run}>{action.label}</button>}
+      {also && <button type="button" className="bt-notice__action" onClick={also.run}>{also.label}</button>}
       <span className="bt-notice__rule" />
     </div>
   );

@@ -38,10 +38,45 @@ export interface Project {
   waiting: ProjectWaiting;
   running: number;
   last_activity_at: number | null;
+  has_plan?: boolean;
+  doc_language?: string | null;
+  doc_language_pinned?: boolean;
+}
+export interface PlanDoc {
+  content: string | null; hash: string | null; updated_at: number | null; updated_by: 'ai' | 'owner' | 'outside' | null; tainted: boolean; writing: boolean;
+}
+export type AcceptanceSource =
+  | { kind: 'owner_words'; quote: string; context?: string; messageId?: number; conversationId?: string }
+  | { kind: 'owner_choice'; question: string; answer: string; questionMessageId?: number; answerMessageId?: number; conversationId?: string }
+  | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: 'not_found' | 'too_short' | 'not_next_reply' | 'choice_unverified' | 'scan_budget'; quote?: string; question?: string; answer?: string }
+  | { kind: 'owner_edit' };
+export type AcceptanceCheck = { kind: 'command'; command: string } | { kind: 'look' } | { kind: 'read' };
+export interface AcceptanceItem {
+  id: string; result: string; source: AcceptanceSource; check: AcceptanceCheck; state: 'open' | 'met' | 'unverified'; evidence: unknown[]; changedIn: number | null; removedIn: number | null;
+}
+export interface NotDoingItem { id: string; text: string; source: AcceptanceSource }
+export interface Acceptance {
+  version: number; language: string | null; items: AcceptanceItem[]; not_doing: NotDoingItem[]; draft: boolean; hash: string | null;
+  frozen: { version: number; hash: string; plan_hash: string | null; created_at: number; source: string; build_task_id: string | null } | null;
+  tainted?: boolean;
+  change?: AcceptanceChange | null;
+  unbuilt?: string[];
+  open_build_task_id?: string | null;
+}
+export interface AcceptanceChangeItem { result: string; check: AcceptanceCheck }
+export type OwnerOp = { op: 'add'; item: AcceptanceChangeItem } | { op: 'change'; id: string; item: AcceptanceChangeItem } | { op: 'remove'; id: string };
+export type AcceptanceOp = OwnerOp & { source: AcceptanceSource };
+export interface AcceptanceChange { id: string; base_version: number; ops: AcceptanceOp[]; language: string | null; conversation_id: string | null; tainted: boolean; status: string; created_at: number }
+export interface AcceptanceVersion { project_id: string; version: number; hash: string; plan_hash: string | null; source: string; build_task_id: string | null; created_at: number }
+export interface AcceptanceVersionDetail extends AcceptanceVersion { content: unknown }
+export interface AcceptanceEdit { baseVersion: number; baseHash: string | null; ops: OwnerOp[] }
+export interface UnreferencedMessage { message_id: number; conversation_id: string; text: string; created_at: number }
+export interface Coverage {
+  owner_words: number; owner_choice: number; owner_edit: number; ai_added: number; by_hand: number; unreferenced: UnreferencedMessage[]; unreferenced_total: number;
 }
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
-export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true }
+export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null }
 export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
 export interface FolderList { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
@@ -139,6 +174,7 @@ export interface Task {
   cancelled_from?: TaskStatus | null;
   timezone?: string | null;
   project_id?: string | null;
+  acceptance_items?: string | null;
 }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
@@ -247,6 +283,17 @@ export const api = {
   projects: (archived = false) => call<{ projects: Project[] }>(`/api/projects${archived ? '?archived=1' : ''}`),
   createProject: (input: NewProject) => call<{ project: Project; notes: ProjectNote[] }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   patchProject: (id: string, patch: ProjectPatch) => call<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  plan: (id: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`),
+  acceptance: (id: string, unreferencedBefore?: number) =>
+    call<{ acceptance: Acceptance; coverage?: Coverage }>(`/api/projects/${encodeURIComponent(id)}/acceptance${unreferencedBefore === undefined ? '' : `?unreferencedBefore=${unreferencedBefore}`}`),
+  acceptanceVersions: (id: string) => call<{ versions: AcceptanceVersion[] }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions`),
+  acceptanceVersion: (id: string, version: number) => call<{ version: AcceptanceVersionDetail }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions/${version}`),
+  decideChange: (id: string, changeId: string, decision: 'approve' | 'reject') =>
+    call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/changes/${encodeURIComponent(changeId)}/${decision}`, { method: 'POST', body: '{}' }),
+  editAcceptance: (id: string, edit: AcceptanceEdit) => call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/edit`, { method: 'POST', body: JSON.stringify(edit) }),
+  build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }) =>
+    call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(hashes) }),
+  savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
   listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
   archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
@@ -261,8 +308,8 @@ export const api = {
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
-  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean; projectId?: string } = {}) =>
-    call<{ runId: string; queued?: boolean; pendingId?: string; effortReset?: boolean }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}), ...(options.projectId ? { projectId: options.projectId } : {}) }) }),
+  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean; projectId?: string; generated?: boolean } = {}) =>
+    call<{ runId: string; queued?: boolean; pendingId?: string; effortReset?: boolean }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}), ...(options.projectId ? { projectId: options.projectId } : {}), ...(options.generated ? { generated: true } : {}) }) }),
   chooseMode: (id: string, permissionMode: PermissionMode) => call<{ conversation: Conversation }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ permissionMode }) }),
   chooseModel: (id: string, choice: ModelChoice) => call<{ conversation: Conversation; effortReset?: boolean }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(choice) }),
   upload: async (file: File) => {

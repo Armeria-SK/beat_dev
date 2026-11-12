@@ -27,7 +27,7 @@ export interface ImageRef {
 }
 
 export type ChatMessage =
-  | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[] }
+  | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[]; generated?: true }
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
   // images: 道具の結果に添えた画像（ToolOutput.images。失敗の結果には付けない）。3 つの提供元の変換が、読めるモデルにだけ渡す
   | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[] };
@@ -103,6 +103,8 @@ export type RunEvent =
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId: string | null }
   | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
+  | { type: 'plan.changed'; projectId: string; hash: string; by: 'ai' | 'owner' }
+  | { type: 'acceptance.changed'; projectId: string; version: number; draft: boolean }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'task.deleted'; id: string }
   | { type: 'notification'; notification: Notification }

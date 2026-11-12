@@ -34,13 +34,18 @@ export const TOOL_OUTPUT_LIMIT = 16_000;
 export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
 
 // MCP の道具（外のプログラムが書いた道具）は、効果の申告があっても計画モードには渡さない（申告は持ち主のものでも、中身は外のプログラムが決めるため）
-export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' | 'submits'>): boolean {
+export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' | 'submits' | 'planOk'>): boolean {
+  if (tool.planOk === true && (tool.effect === 'meta' || tool.effect === 'read') && tool.writesFiles !== true && tool.submits !== true && tool.mcp === undefined) return true;
   return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined && tool.submits !== true;
 }
 
 // 手元のモデルの会話（localOnly）に渡してよい道具か。MCP の道具は、持ち主が localOk にしたサーバーのものだけ（それ以外は、手元のモデルに読ませた内容を外のサーバーへ出しうる）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、localAllows を通す
 export function localAllows(tool: Pick<ToolDef, 'mcp'>, localOnly: boolean | undefined): boolean {
   return localOnly !== true || tool.mcp === undefined || tool.mcp.localOk;
+}
+
+export function acceptanceAllows(tool: Pick<ToolDef, 'acceptanceState'>, frozen: boolean): boolean {
+  return tool.acceptanceState === undefined || (tool.acceptanceState === 'frozen') === frozen;
 }
 
 // この呼び出しが外へ出るか（効果が network でない道具の networkCall）。投げたら、迷ったので外へ出るとみなす（印を付ける・毎回確かめる向きにしか倒れない）
@@ -163,6 +168,11 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (truncated) return refuse('deny', 'truncated', truncated.message);
   if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: deps.registry.forRun(ctx.kind).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
+  if (tool.projectOnly === true && !ctx.project) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
+  if (tool.acceptanceState !== undefined) {
+    const frozen = Boolean(ctx.project && ctx.services?.acceptance?.latest(ctx.project.id));
+    if (!acceptanceAllows(tool, frozen)) return refuse('deny', 'registry', toolText(language, frozen ? 'pipeline.acceptance_frozen' : 'pipeline.acceptance_draft', { name: call.name }));
+  }
   // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信、ファイルも書く道具）を使わせない（二重の禁止）
   if (ctx.kind === 'review' && !reviewAllows(tool)) return refuse('deny', 'registry', toolText(language, 'pipeline.review_forbidden', { name: call.name }));
   // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。会話の許可・フックの allow では越えられない

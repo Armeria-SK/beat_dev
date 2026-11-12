@@ -60,6 +60,15 @@ export function messageText(message: ChatMessage): string {
 
 export interface ReviewSource { conversationId?: string | null | undefined; taskId?: string | null | undefined }
 
+export interface SpeechRow { id: number; conversation_id: string; role: 'user' | 'assistant'; text: string; generated: number; created_at?: number }
+
+export function ownerSpeech(db: DatabaseSync, projectId: string): SpeechRow[] {
+  return db.prepare(`SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, COALESCE(json_extract(m.parts, '$.generated'), 0) IS 1 AS generated
+    FROM conversations c JOIN messages m ON m.conversation_id = c.id
+    WHERE c.project_id = ? AND c.kind = 'chat' AND c.parent_run_id IS NULL AND m.role = 'user'
+    ORDER BY m.id`).all(projectId) as unknown as SpeechRow[];
+}
+
 // 消した会話の id を覚えておく時間
 const DELETED_TTL_MS = 10 * 60_000;
 
@@ -163,11 +172,12 @@ export class Conversations {
   }
 
   // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）。消したばかりの会話は作り直さず、false を返す（見送ったことを記録する）
-  ensure(id: string, options: { projectId?: string | null | undefined } = {}): boolean {
+  ensure(id: string, options: { projectId?: string | null | undefined; modelId?: string | null | undefined; effort?: string | null | undefined; permissionMode?: PermissionMode | undefined } = {}): boolean {
     if (this.get(id)) return true;
     if (this.#isDeleted(id)) { this.#log?.(`[WARN] Skipped writing to deleted conversation ${id} (the conversation is not re-created)`); return false; }
     const now = this.now();
-    this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at, project_id) VALUES (?, 'chat', ?, ?, ?)`).run(id, now, now, options.projectId ?? null);
+    this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at, project_id, model_id, effort, permission_mode) VALUES (?, 'chat', ?, ?, ?, ?, ?, ?)`)
+      .run(id, now, now, options.projectId ?? null, options.modelId ?? null, options.effort ?? null, options.permissionMode ?? 'normal');
     return true;
   }
 

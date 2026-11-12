@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { App } from '../src/app.ts';
 import { resolvePaths } from '../src/paths.ts';
-import type { Task } from '../src/tasks/store.ts';
+import { UNTRUSTED_RUN, type Task } from '../src/tasks/store.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { CONVERSATION, fakeModel, settled, startApp, waitFor } from './app-setup.ts';
@@ -625,6 +625,23 @@ test('自動承認（タスク）: よそから来た文を読んだ実行（そ
       assert.equal(s.adapter().calls.filter(isClassifier).length, 1, label);
     }
   }
+});
+
+test('自動承認（タスク）: 実行の記録が無い印（untrusted-input）がタスクの経過にあれば、判定役に見せる依頼は空になり、持ち主に聞く', async t => {
+  const s = await webApp(t);
+  const command = workspaceRead(s);
+  let taskId = '';
+  const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => {
+    const task = s.app.tasks.create({ title: '印の付いたタスク', origin: 'user', actor: 'user' });
+    taskId = task.id;
+    assert.equal(s.app.tasks.judgeRequest(task.id), '印の付いたタスク');
+    s.app.tasks.markUntrusted(task.id, 'build', 'x');
+    assert.equal(s.app.runs.get(UNTRUSTED_RUN), undefined, '印の run id には実行の記録が無い');
+    assert.equal(s.app.tasks.judgeRequest(task.id), '');
+    return task;
+  });
+  assert.equal((await ownerDecides(s, started, 'untrusted-input')).classified, 0);
+  assert.equal(s.app.tasks.judgeRequest(taskId), '');
 });
 
 test('自動承認（タスク）: よそから来た文を読んだ会話（ever_tainted）の実行が作ったタスクも、持ち主に聞く', async t => {

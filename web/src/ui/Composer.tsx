@@ -17,6 +17,7 @@ export interface ComposerProps {
   draftKey: string;
   hasConversation: boolean;
   product?: boolean;
+  planless?: boolean;
   running: boolean;
   sending: boolean;
   pending: PendingMessage[];
@@ -82,7 +83,7 @@ export function Composer(props: ComposerProps) {
   const depthButton = useRef<HTMLButtonElement>(null);
   const submitting = useRef(false);
 
-  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product) });
+  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
   const current = modelInEffect(models ?? [], chatOrder, modelId);
   const depths = depthOptions(current);
   const commands = slashClosed ? [] : slashItems(text, props.slash, slashForced);

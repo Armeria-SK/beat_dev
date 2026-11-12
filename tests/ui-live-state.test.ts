@@ -92,6 +92,22 @@ test('ui/live-state: project.changed は製品の一覧を読み直す（しま�
   }
 });
 
+test('ui/live-state: plan.changed はその製品の計画書の読み直しの数を進め、製品の一覧（has_plan）を読み直す（beat 3-1a-u）', () => {
+  const r = reduce(EMPTY, ev({ type: 'plan.changed', projectId: 'p1aaaa', hash: 'h2', by: 'ai' }));
+  assert.equal(r.state.planRevisions.get('p1aaaa'), 1);
+  assert.equal(r.state.planRevisions.get('p2bbbb'), undefined);
+  assert.deepEqual(refreshes(r.effects), ['projects']);
+  const again = reduce(r.state, ev({ type: 'plan.changed', projectId: 'p1aaaa', hash: 'h3', by: 'owner' }));
+  assert.equal(again.state.planRevisions.get('p1aaaa'), 2);
+});
+
+test('ui/live-state: acceptance.changed はその製品の Plan の欄を読み直させる。ほかは読み直さない（beat 3-1b-u）', () => {
+  const r = reduce(EMPTY, ev({ type: 'acceptance.changed', projectId: 'p1aaaa', version: 0, draft: true }));
+  assert.equal(r.state.planRevisions.get('p1aaaa'), 1);
+  assert.equal(r.state.planRevisions.get('p2bbbb'), undefined);
+  assert.deepEqual(refreshes(r.effects), []);
+});
+
 test('ui/live-state: 製品があるときだけ、タスクと承認の出来事で製品の数を読み直す（製品が無ければ今までと同じ）', () => {
   const events: RunEvent[] = [
     { type: 'task.changed', task: task('t1', 'inbox', 5) },
@@ -227,4 +243,16 @@ test('ui/live-state: 結果が届いた道具の覚えは新しい 20 件まで�
   assert.equal(settled.length, 20);
   assert.deepEqual([settled[0]!.callId, settled.at(-1)!.callId], ['k4', 'k23']);
   assert.equal(s.drafts[0]!.settledCount, 23, '外れた分も含めて、その回で結果が届いた数を数える');
+});
+
+test('ui/live-state: Build のタスク（acceptance_items を持つ）の状態が変わったら、その製品の Plan の欄を読み直す（取り消し・失敗・戻しで unbuilt と open_build_task_id が変わる）', () => {
+  const build = (status: Task['status'], updated: number): Task => ({ ...task('b1', status, updated), project_id: 'p1aaaa', acceptance_items: '["A-1"]' });
+  const started = run(EMPTY, ev({ type: 'task.changed', task: build('ready', 1) }));
+  assert.equal(started.planRevisions.get('p1aaaa'), 1);
+  const cancelled = run(started, ev({ type: 'task.changed', task: build('cancelled', 2) }));
+  assert.equal(cancelled.planRevisions.get('p1aaaa'), 2);
+  const same = run(cancelled, ev({ type: 'task.changed', task: build('cancelled', 3) }));
+  assert.equal(same.planRevisions.get('p1aaaa'), 2, '状態が同じなら読み直さない');
+  const plain = run(EMPTY, ev({ type: 'task.changed', task: { ...task('t1', 'cancelled', 1), project_id: 'p1aaaa', acceptance_items: null } }));
+  assert.equal(plain.planRevisions.get('p1aaaa'), undefined, 'Build でないタスクでは読み直さない');
 });

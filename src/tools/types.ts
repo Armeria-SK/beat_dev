@@ -14,6 +14,10 @@ import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
+import type { PlanStore } from '../projects/plan.ts';
+import type { AcceptanceStore } from '../projects/acceptance.ts';
+import type { ProjectStore } from '../projects/store.ts';
+import type { Mesh } from '../mesh/index.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -105,7 +109,8 @@ export interface ToolContext {
   log: (line: string) => void;
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
-    tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined;
+    tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined; mesh?: Mesh | undefined;
+    acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
@@ -116,6 +121,7 @@ export interface ToolContext {
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。
   // 文字数の上限（pipeline.ts の TOOL_OUTPUT_LIMIT = 16,000 文字）とは別で、先に達した方で切る。無ければ文字数の上限だけ
   outputTokens?: number | undefined;
+  contextAvailable?: number | undefined;
   // いまモデルを呼んでいる（この道具の結果を次に読む）モデル。エンジンが道具を呼ぶ直前に入れる（鎖で替わったら替わる）。vision は設定の models[].vision。無い（試験・ほかの呼び方）なら、画像を読めないとみなす
   model?: { id: string; vision: boolean } | undefined;
   // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
@@ -129,7 +135,7 @@ export interface ToolContext {
   // agent_run: 子の担当を始めて、終わるまで待つ（チャット・許したタスクの実行にだけ付く。子の実行には付かない = 深さ 1）。結果は区切りで包んだ答え。失敗は isError
   agent?: ((input: AgentRunInput, callId?: string) => Promise<ToolOutput>) | undefined;
   // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）
-  parent?: { runId: string; conversationId: string; kind: RunKind; title: string } | undefined;
+  parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
 }
 
 export interface AgentRunInput { task: string; tools?: string[] | undefined; title?: string | undefined }
@@ -163,6 +169,9 @@ export interface ToolDef<I = any> {
   mcp?: { server: string; tool: string; localOk: boolean };
   // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さず（planAllows）、毎回の承認が要る。6a にはこれを付ける道具は無い
   submits?: true;
+  planOk?: true;
+  projectOnly?: true;
+  acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

@@ -1,6 +1,6 @@
 import { Type } from '@sinclair/typebox';
 import { IMAGE_TOKENS } from '../../engine/tokens.ts';
-import { neutralizeFence } from '../../mcp/tool.ts';
+import { neutralizeFence } from '../../shared/fence.ts';
 import { IMAGE_MAX_BYTES } from '../../shared/image-info.ts';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
