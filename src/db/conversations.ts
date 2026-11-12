@@ -30,7 +30,8 @@ export interface ConversationRow {
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
-export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean };
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean; message_count: number; archived_at: number | null };
+const ARCHIVED_AT = 'archived-at:';
 
 export interface StoredMessage {
   id: number;
@@ -106,7 +107,9 @@ export class Conversations {
     const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
     const rows = this.db.prepare(`
       SELECT id, kind, title, archived, created_at, last_message_at, summary_upto, model_id, effort, permission_mode,
-        (summary IS NOT NULL AND summary != '') AS has_summary
+        (summary IS NOT NULL AND summary != '') AS has_summary,
+        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = conversations.id) AS message_count,
+        (SELECT CAST(value AS INTEGER) FROM kv WHERE key = '${ARCHIVED_AT}' || conversations.id) AS archived_at
       FROM conversations WHERE archived = ? AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}
       ORDER BY last_message_at DESC LIMIT ?
     `).all(...[options.archived ? 1 : 0, ...(like ? [like] : []), limit]) as unknown as Array<Omit<ConversationListItem, 'has_summary'> & { has_summary: number }>;
@@ -170,11 +173,16 @@ export class Conversations {
   }
 
   archive(id: string): void {
-    this.db.prepare('UPDATE conversations SET archived = 1 WHERE id = ?').run(id);
+    const changed = Number(this.db.prepare('UPDATE conversations SET archived = 1 WHERE id = ? AND archived = 0').run(id).changes);
+    if (changed > 0) {
+      const now = this.now();
+      this.db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(`${ARCHIVED_AT}${id}`, String(now), now);
+    }
   }
 
   unarchive(id: string): void {
     this.db.prepare('UPDATE conversations SET archived = 0 WHERE id = ?').run(id);
+    this.db.prepare('DELETE FROM kv WHERE key = ?').run(`${ARCHIVED_AT}${id}`);
   }
 
   setSnapshotOnce(id: string, snapshot: string, hash: string): boolean {

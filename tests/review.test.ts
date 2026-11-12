@@ -285,3 +285,19 @@ test('切れた振り返りは失敗にして、見た発言の位置を進め�
   assert.match(job.note ?? '', /cut off by the output limit/u);
   assert.equal(s.app.kv.get('review:upto:c1'), undefined, '切れた振り返りで、見た発言の位置を進めない');
 });
+
+test('1-5s 登録する前に聞かない設定（skills.askBeforeRegister: false）: 振り返りの指示と skill_draft の説明が替わり、振り返りの skill_draft はその場で登録され、通知が 1 つ出る', async t => {
+  const s = await setup(t, c => { c.skills = { askBeforeRegister: false }; });
+  await s.app.worker.tick();
+  s.adapter().scripts.push(reply('はい'));
+  await s.chat('c1', '週報は毎週金曜に書きます');
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.adapter().scripts.push(toolCall('skill_draft', { name: 'weekly-report', description: 'When writing the weekly report', body: '1. Collect', reason: 'Weekly' }), reply('登録しました'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const request = s.adapter().calls.at(-2)!;
+  assert.match(String(request.messages.at(-1)?.content), /registered right away without the user's review/u);
+  assert.doesNotMatch(String(request.messages.at(-1)?.content), /until the user approves/u);
+  assert.match(request.tools.find(tool => tool.name === 'skill_draft')!.description, /registered right away/u);
+  assert.equal(s.app.skills.getRegistered('weekly-report')?.body, '1. Collect');
+  assert.deepEqual(s.app.notifications.list().filter(n => n.title === 'Skill registered without review').map(n => [n.body, n.link]), [['weekly-report', '#/skills/weekly-report']]);
+});

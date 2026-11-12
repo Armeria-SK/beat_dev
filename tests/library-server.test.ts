@@ -1,0 +1,262 @@
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import type { AddressInfo } from 'node:net';
+import { join, relative } from 'node:path';
+import { test } from 'node:test';
+import { App, builtinTools } from '../src/app.ts';
+import { defaultConfig } from '../src/config/store.ts';
+import { openDatabase } from '../src/db/database.ts';
+import { MIGRATIONS } from '../src/db/migrations.ts';
+import { reviewPrompt } from '../src/memory/review.ts';
+import type { NotifyEvent } from '../src/notify/notifications.ts';
+import { resolvePaths } from '../src/paths.ts';
+import { startOfDayIn } from '../src/tasks/schedule.ts';
+import { skillDraft } from '../src/tools/builtin/skills.ts';
+import { ToolRegistry } from '../src/tools/registry.ts';
+import { askBeforeRegister, SKILL_VERSIONS_KEPT, SkillStore } from '../src/tools/skills/store.ts';
+import type { ToolContext } from '../src/tools/types.ts';
+import { createWebServer } from '../src/web/server.ts';
+import { accessWidening } from '../web/src/settings/access.ts';
+import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
+
+// PR 1-5s（steps/p1-ui.md の「サーバーの作業」の Library）: Runs の件数・スキルの版と History・登録する前に聞く / 聞かないの設定・しまった会話の数と時刻
+
+const open: App[] = [];
+async function boot(t: { after: (fn: () => void) => void }, config: Record<string, unknown> | null = testConfig()) {
+  t.after(() => { for (const a of open.splice(0)) { try { a.close(); } catch { /* 閉じ済み */ } } });
+  const root = tempDir(t);
+  const paths = resolvePaths(root);
+  mkdirSync(paths.workspace, { recursive: true });
+  if (config) writeFileSync(paths.config, JSON.stringify(config));
+  const app = new App({ paths, databasePath: join(root, 'clive.db'), log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  open.push(app);
+  const events: NotifyEvent[] = [];
+  app.notifications.listen(event => events.push(event));
+  return { app, paths, root, events };
+}
+
+async function serve(t: { after: (fn: () => void) => void }, app: App) {
+  const web = createWebServer(app);
+  await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
+  web.setOrigins([origin]);
+  t.after(() => { web.server.closeAllConnections(); web.server.close(); });
+  return async (path: string, method = 'GET', body?: unknown) => {
+    const res = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return { status: res.status, body: await res.json() as any };
+  };
+}
+
+const ctxOf = (app: App): ToolContext => ({ config: app.config(), services: { skills: app.skills }, kind: 'review', conversationId: 'c1', runId: 'r1' } as unknown as ToolContext);
+const autoConfig = () => ({ ...testConfig(), skills: { askBeforeRegister: false } });
+const draftInput = (body: string) => ({ name: 'weekly-report', description: 'When writing the weekly report', body, reason: 'Asked every week' });
+
+function bareStore(t: { after: (fn: () => void) => void }, now: () => number = Date.now) {
+  const root = tempDir(t);
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const backups = join(root, 'backups', 'skills');
+  return { skills: new SkillStore(db, join(root, 'skills'), now, () => 'en', () => undefined, backups), backups, root };
+}
+
+test('1-5s 聞かない（askBeforeRegister: false）: skill_draft はその場でスキルになり、下書きは approved、通知が 1 つ（外へ送らない印つき）、前の版は beat-auto で控える', async t => {
+  const { app, events, paths } = await boot(t, autoConfig());
+  app.skills.write({ name: 'weekly-report', description: 'Old', body: 'old steps' });
+  const out = await skillDraft.execute(draftInput('1. Collect\n2. Summarize'), ctxOf(app));
+  assert.ok(!out.isError);
+  assert.match(String(out.content), /Registered the skill "weekly-report" without review/u);
+  assert.equal(app.skills.getRegistered('weekly-report')?.body, '1. Collect\n2. Summarize');
+  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['approved']);
+  assert.equal(app.skills.drafts('pending').length, 0);
+  const auto = events.filter(e => e.title === 'Skill registered without review');
+  assert.equal(auto.length, 1);
+  assert.deepEqual([auto[0]!.kind, auto[0]!.body, auto[0]!.link, auto[0]!.noForward], ['info', 'weekly-report', '#/skills/weekly-report', true]);
+  assert.equal(events.some(e => /review the skill draft/u.test(e.title)), false);
+  const history = app.skills.history('weekly-report');
+  assert.deepEqual(history.map(v => [v.who, v.body]), [['beat-auto', 'old steps']]);
+  const files = readdirSync(join(paths.backups, 'skills', 'weekly-report'));
+  assert.match(files[0]!, /^\d+-beat-auto\.md$/u);
+});
+
+test('1-5s 聞かない: 新しいスキルの自動の登録も History に 1 行残る（前の中身は空 = 行数 0）', async t => {
+  const { app, events } = await boot(t, autoConfig());
+  await skillDraft.execute(draftInput('steps'), ctxOf(app));
+  assert.equal(app.skills.isRegistered('weekly-report'), true);
+  assert.deepEqual(app.skills.history('weekly-report').map(v => [v.who, v.lines, v.body]), [['beat-auto', 0, '']]);
+  assert.equal(events.filter(e => e.title === 'Skill registered without review').length, 1);
+});
+
+test('1-5s 聞く（既定）: 下書きは今と同じく pending で待ち、スキルは作られず、通知は「下書きを見て」。既定の設定ファイルに skills は書かれない', async t => {
+  const { app, events, paths } = await boot(t, null);
+  assert.equal(askBeforeRegister(app.config()), true);
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(paths.config, 'utf8')) as object, 'skills'), false);
+  const out = await skillDraft.execute(draftInput('steps'), ctxOf(app));
+  assert.match(String(out.content), /Created a draft/u);
+  assert.equal(app.skills.get('weekly-report'), undefined);
+  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+  assert.equal(events.some(e => e.title === 'Skill registered without review'), false);
+  assert.equal(events.filter(e => /review the skill draft/u.test(e.title)).length, 1);
+  await app.applyConfig({ ...app.config() }, { probe: false });
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(paths.config, 'utf8')) as object, 'skills'), false, '保存し直しても既定は書き足さない');
+});
+
+test('1-5s 聞く / 聞かないで、モデルに渡す文（skill_draft の説明と振り返りの指示）が替わる。既定は今のまま', () => {
+  const ask = defaultConfig();
+  const auto = { ...defaultConfig(), skills: { askBeforeRegister: false } };
+  const describe = (config: typeof ask) => ToolRegistry.specs(builtinTools().filter(tool => tool.name === 'skill_draft'), config)[0]!.description;
+  assert.equal(describe(ask), skillDraft.description);
+  assert.match(describe(ask), /does not take effect until the user approves it/u);
+  assert.match(describe(auto), /registered right away without the user's review/u);
+  assert.doesNotMatch(describe(auto), /until the user approves/u);
+  assert.equal(ToolRegistry.specs([skillDraft])[0]!.description, skillDraft.description, '設定を渡さなければ今の文');
+  const askText = reviewPrompt({ trigger: 'idle', forgotten: [] });
+  const autoText = reviewPrompt({ trigger: 'idle', forgotten: [], skillsAutoRegister: true });
+  assert.match(askText, /it is not used until the user approves it/u);
+  assert.doesNotMatch(autoText, /until the user approves/u);
+  assert.match(autoText, /registered right away without the user's review/u);
+  assert.equal(askText.split('\n').length, autoText.split('\n').length, '替えるのは 1 行だけ');
+});
+
+test('1-5s 版: 書き換えのたびに前の中身が 1 つ増え（初めての作成と同じ中身の保存は増えない）、you と beat が正しく付く', t => {
+  const { skills } = bareStore(t);
+  skills.write({ name: 'memo', description: 'Memo', body: 'v1' });
+  assert.equal(skills.history('memo').length, 0);
+  skills.write({ name: 'memo', description: 'Memo', body: 'v2' });
+  skills.write({ name: 'memo', description: 'Memo', body: 'v2' });
+  const draft = skills.draft({ name: 'memo', description: 'Memo', body: 'v3' });
+  skills.approve(draft.id);
+  const history = skills.history('memo');
+  assert.deepEqual(history.map(v => [v.who, v.body, v.description]), [['beat', 'v2', 'Memo'], ['you', 'v1', 'Memo']]);
+  assert.equal(history[0]!.lines, 1);
+  assert.ok(history[0]!.at >= history[1]!.at);
+});
+
+test('1-5s 版: スキルごとに新しい 20 個まで。超えたら古いものから消える', t => {
+  let clock = 1_000;
+  const { skills, backups } = bareStore(t, () => clock++);
+  for (let i = 0; i <= SKILL_VERSIONS_KEPT + 2; i++) skills.write({ name: 'memo', description: 'Memo', body: `v${i}` });
+  const history = skills.history('memo');
+  assert.equal(history.length, SKILL_VERSIONS_KEPT);
+  assert.equal(history[0]!.body, `v${SKILL_VERSIONS_KEPT + 1}`);
+  assert.equal(history.at(-1)!.body, 'v2');
+  assert.equal(readdirSync(join(backups, 'memo')).length, SKILL_VERSIONS_KEPT);
+});
+
+test('1-5s 版: 同じミリ秒の 2 回の書き換えで控えが 2 つ（-2 の印）', t => {
+  const { skills, backups } = bareStore(t, () => 5_000);
+  skills.write({ name: 'memo', description: 'Memo', body: 'a' });
+  skills.write({ name: 'memo', description: 'Memo', body: 'b' });
+  skills.write({ name: 'memo', description: 'Memo', body: 'c' });
+  assert.deepEqual(readdirSync(join(backups, 'memo')).sort(), ['5000-you-2.md', '5000-you.md']);
+  assert.deepEqual(skills.history('memo').map(v => v.body), ['b', 'a']);
+});
+
+test('1-5s 版: 控えは data/backups/skills/<名前>/ の中だけに書く', async t => {
+  const { app, paths, root } = await boot(t);
+  app.skills.write({ name: 'memo', description: 'Memo', body: 'a' });
+  app.skills.write({ name: 'memo', description: 'Memo', body: 'b' });
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(e => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
+  const versionFiles = walk(root).filter(file => /\d+-(you|beat|beat-auto)(-\d+)?\.md$/u.test(file)).map(file => relative(paths.backups, file).replace(/\\/gu, '/'));
+  assert.equal(versionFiles.length, 1);
+  assert.match(versionFiles[0]!, /^skills\/memo\/\d+-you\.md$/u);
+});
+
+test('1-5s History の API: 名前をスキルの名前の決まりで先に確かめる（.. や区切りの文字は、スキルが無くても 400）。無い名前は空の一覧', async t => {
+  const { app, paths } = await boot(t);
+  mkdirSync(join(paths.backups, 'outside'), { recursive: true });
+  writeFileSync(join(paths.backups, 'outside', '1-you.md'), '---\nname: x\ndescription: "d"\n---\n\nsecret');
+  mkdirSync(join(paths.backups, 'skills'), { recursive: true });
+  writeFileSync(join(paths.backups, 'skills', '1-you.md'), 'secret');
+  for (const bad of ['..', '.', '', '../outside', '..\\outside', 'a/../../outside']) assert.throws(() => app.skills.history(bad), /lowercase letters/u, JSON.stringify(bad));
+  const api = await serve(t, app);
+  for (const bad of ['..%2Foutside', '..%5Coutside', '%2E%2E%5Coutside', 'a%2F..%2F..%2Foutside', 'Upper', '-dash', 'a%00b']) {
+    const res = await api(`/api/skills/${bad}/history`);
+    assert.equal(res.status, 400, bad);
+    assert.equal(JSON.stringify(res.body).includes('secret'), false, bad);
+  }
+  assert.deepEqual((await api('/api/skills/nothing-here/history')).body, { versions: [] });
+  app.skills.write({ name: 'memo', description: 'Memo', body: 'one' });
+  assert.equal((await api('/api/skills/memo', 'PUT', { description: 'Memo', body: 'two' })).status, 200);
+  const res = await api('/api/skills/memo/history');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.versions.length, 1);
+  const [version] = res.body.versions;
+  assert.deepEqual({ ...version, at: 0, id: '' }, { id: '', at: 0, who: 'you', lines: 1, description: 'Memo', body: 'one' });
+  assert.match(version.id, /^\d+-you$/u);
+});
+
+test('1-5s スキルを消すと控えのフォルダも消え、同じ名前で作り直すと History が空', async t => {
+  const { app, paths } = await boot(t);
+  const api = await serve(t, app);
+  app.skills.write({ name: 'memo', description: 'Memo', body: 'one' });
+  app.skills.write({ name: 'memo', description: 'Memo', body: 'two' });
+  app.skills.write({ name: 'other', description: 'Other', body: 'one' });
+  app.skills.write({ name: 'other', description: 'Other', body: 'two' });
+  const dir = join(paths.backups, 'skills', 'memo');
+  assert.equal(existsSync(dir), true);
+  assert.equal((await api('/api/skills/memo', 'DELETE')).status, 200);
+  assert.equal(existsSync(dir), false);
+  assert.equal(app.skills.history('other').length, 1, 'ほかのスキルの控えは残る');
+  app.skills.write({ name: 'memo', description: 'Memo', body: 'fresh' });
+  assert.deepEqual((await api('/api/skills/memo/history')).body, { versions: [] });
+  assert.equal((await api('/api/skills/..%2Fother', 'DELETE')).status, 400);
+  assert.equal(app.skills.history('other').length, 1);
+});
+
+test('1-5s Runs の件数: /api/runs・/api/tool-calls・/api/reviews の total は今日の全体の数（limit に関わらず、昨日より前は数えない）', async t => {
+  const { app } = await boot(t);
+  const api = await serve(t, app);
+  const now = Date.now();
+  const start = startOfDayIn(app.config().timezone, now);
+  for (const [i, at] of [now, now - 1, start, start - 1, 0].entries()) {
+    app.db.prepare("INSERT INTO engine_runs (id, kind, started_at) VALUES (?, 'chat', ?)").run(`run-${i}`, at);
+    app.db.prepare("INSERT INTO tool_calls (id, run_id, tool, input, decision, decided_by, created_at) VALUES (?, 'r', 'file_read', '{}', 'allow', 'policy', ?)").run(`call-${i}`, at);
+    app.db.prepare("INSERT INTO memory_jobs (trigger, dedup_key, created_at) VALUES ('manual', ?, ?)").run(`job-${i}`, at);
+  }
+  const runs = (await api('/api/runs?limit=1')).body;
+  assert.deepEqual([runs.runs.length, runs.total], [1, 3]);
+  const calls = (await api('/api/tool-calls?limit=1')).body;
+  assert.deepEqual([calls.toolCalls.length, calls.total], [1, 3]);
+  assert.equal((await api('/api/reviews')).body.total, 3);
+});
+
+test('1-5s 今日の始まりは設定のタイムゾーンの 0 時（夏時間の切り替わりの日も）', () => {
+  assert.equal(startOfDayIn('Asia/Tokyo', Date.UTC(2026, 10, 12, 5, 30, 12, 345)), Date.UTC(2026, 10, 11, 15, 0));
+  assert.equal(startOfDayIn('Asia/Tokyo', Date.UTC(2026, 10, 11, 15, 0)), Date.UTC(2026, 10, 11, 15, 0));
+  assert.equal(startOfDayIn('America/New_York', Date.UTC(2026, 10, 1, 15, 0)), Date.UTC(2026, 10, 1, 4, 0), '戻る日: 0 時は夏時間');
+  assert.equal(startOfDayIn('America/New_York', Date.UTC(2026, 2, 8, 14, 0)), Date.UTC(2026, 2, 8, 5, 0), '進む日: 0 時は冬時間');
+});
+
+test('1-5s しまった会話の一覧に、メッセージ数としまった時刻が付く。戻すと時刻は消え、会話を消すと記録も消える', async t => {
+  const { app } = await boot(t);
+  const api = await serve(t, app);
+  const id = '11111111-1111-4111-8111-111111111111';
+  app.conversations.ensure(id);
+  app.conversations.append(id, { role: 'user', content: 'hello' } as never);
+  app.conversations.append(id, { role: 'assistant', content: 'hi' } as never);
+  const before = Date.now();
+  assert.equal((await api(`/api/conversations/${id}`, 'PATCH', { archived: true })).status, 200);
+  const [row] = (await api('/api/conversations?archived=1')).body.conversations;
+  assert.equal(row.message_count, 2);
+  assert.ok(row.archived_at >= before && row.archived_at <= Date.now());
+  assert.equal((await api(`/api/conversations/${id}`, 'PATCH', { archived: false })).status, 200);
+  const [back] = (await api('/api/conversations')).body.conversations;
+  assert.deepEqual([back.message_count, back.archived_at], [2, null]);
+  const kvRows = () => (app.db.prepare("SELECT COUNT(*) AS n FROM kv WHERE key LIKE 'archived-at:%'").get() as { n: number }).n;
+  app.conversations.archive(id);
+  assert.equal(kvRows(), 1);
+  assert.equal((await api(`/api/conversations/${id}`, 'DELETE')).status, 200);
+  assert.equal(kvRows(), 0);
+});
+
+test('1-5s 範囲が広がる変更: askBeforeRegister が true（書いていない）から false になるときだけ skills-auto-register を拾う', () => {
+  const base = { ...defaultConfig() } as Record<string, unknown>;
+  const kinds = (before: Record<string, unknown>, after: Record<string, unknown>) => accessWidening(before, after).map(a => a.kind).filter(k => k === 'skills-auto-register');
+  assert.deepEqual(kinds(base, { ...base, skills: { askBeforeRegister: false } }), ['skills-auto-register']);
+  assert.deepEqual(kinds({ ...base, skills: { askBeforeRegister: true } }, { ...base, skills: { askBeforeRegister: false } }), ['skills-auto-register']);
+  assert.deepEqual(kinds({ ...base, skills: {} }, { ...base, skills: { askBeforeRegister: false } }), ['skills-auto-register']);
+  assert.deepEqual(kinds({ ...base, skills: { askBeforeRegister: false } }, { ...base, skills: { askBeforeRegister: true } }), []);
+  assert.deepEqual(kinds({ ...base, skills: { askBeforeRegister: false } }, { ...base, skills: { askBeforeRegister: false } }), []);
+  assert.deepEqual(kinds({ ...base, skills: { askBeforeRegister: false } }, base), []);
+  assert.deepEqual(kinds(base, base), []);
+});

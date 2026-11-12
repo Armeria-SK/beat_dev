@@ -258,6 +258,9 @@ export const AppConfig = Type.Object({
   }, { additionalProperties: false, default: {} }),
   notify: NotifyConfig,
   mcp: McpConfig,
+  skills: Type.Optional(Type.Object({
+    askBeforeRegister: Type.Optional(Type.Boolean()),
+  }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
 export type ProviderConfig = Static<typeof ProviderConfig>;

@@ -69,6 +69,7 @@ const en = {
   'notify.task_failed': 'Task failed: {title}',
   'notify.approval_needed': 'Approval needed: {title}',
   'notify.skill_draft': 'Please review the skill draft: {name}',
+  'notify.skill_auto': 'Skill registered without review',
 
   'health.auth_title': 'Authentication failed for model "{model}"',
   'health.failing_title': 'Model "{model}" keeps failing ({count} times)',

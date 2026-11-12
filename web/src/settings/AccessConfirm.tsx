@@ -24,6 +24,7 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'web-fetch-on': return t('access.webFetch');
     case 'web-search-on': return t('access.webSearch');
     case 'self-tasks-unapproved': return t('access.selfTasks');
+    case 'skills-auto-register': return t('access.skillsAutoRegister');
     case 'hook-added': return t('access.hookAdded', stage(a.stage), hook(a.hook));
     case 'hook-edited': return t('access.hookEdited', stage(a.stage), hook(a.hook));
     case 'hook-removed': return t('access.hookRemoved', stage(a.stage), hook(a.hook));

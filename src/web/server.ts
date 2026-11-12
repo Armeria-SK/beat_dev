@@ -24,7 +24,7 @@ import { registerMcpRoutes } from './routes-mcp.ts';
 import { registerBrowserRoutes } from './routes-browser.ts';
 import { registerNotifyRoutes } from './routes-notify.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
-import { registerReviewRoutes } from './routes-review.ts';
+import { registerReviewRoutes, todayCount } from './routes-review.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
@@ -317,7 +317,7 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/runs/active', ({ res }) => sendJson(res, 200, { drafts: app.bus.drafts() }));
   router.add('GET', '/api/runs', ({ res, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
-    sendJson(res, 200, { runs: app.runs.recent(limit).map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })) });
+    sendJson(res, 200, { runs: app.runs.recent(limit).map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs') });
   });
 
   // ── 承認とツールの記録 ──
@@ -338,7 +338,7 @@ export function createWebServer(app: App): WebServer {
     // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しには、許可したフォルダ grantFolder を添える（ほかは null）
     const rows = app.db.prepare(`SELECT t.*, a.reasons AS approval_reasons, a.scope AS approval_scope, a.grant_folder AS grant_folder FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id
       ORDER BY t.created_at DESC LIMIT ?`).all(limit) as Array<Record<string, unknown> & { approval_reasons: string | null; approval_scope: string | null; grant_folder: string | null }>;
-    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })) });
+    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })), total: todayCount(app, 'tool_calls') });
   });
 
   // ── 記憶と履歴 ──

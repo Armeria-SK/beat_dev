@@ -141,6 +141,8 @@ export type TaskControl =
 export interface ToolDef<I = any> {
   name: string;
   description: string;
+  // 設定で変わる説明（モデルへ渡すときに description の代わりに使う）
+  describe?: (config: AppConfig) => string;
   input: TSchema;
   effect: ToolEffect;
   allowedIn: readonly RunKind[];

@@ -1,3 +1,4 @@
+import type { AppConfig } from '../config/schema.ts';
 import type { ToolSpec } from '../engine/types.ts';
 import type { RunKind, ToolDef } from './types.ts';
 
@@ -58,7 +59,7 @@ export class ToolRegistry {
     return options.limit === undefined ? [] : this.#candidates(kind, options).slice(options.limit);
   }
 
-  static specs(tools: readonly ToolDef[]): ToolSpec[] {
-    return tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.input as unknown as Record<string, unknown> }));
+  static specs(tools: readonly ToolDef[], config?: AppConfig): ToolSpec[] {
+    return tools.map(t => ({ name: t.name, description: (config && t.describe?.(config)) ?? t.description, inputSchema: t.input as unknown as Record<string, unknown> }));
   }
 }

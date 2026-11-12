@@ -118,6 +118,7 @@ const en = {
   'skill.available': 'Available: {names}',
   'skill.none': 'There are no skills yet',
   'skill.drafted': 'Created a draft to {kind} the skill "{name}" (#{id}). It becomes active when the user approves it on the screen',
+  'skill.registered_auto': 'Registered the skill "{name}" without review ({kind}, #{id}). It is active now. The user can undo it from the skill\'s History',
   'skill.kind_edit': 'edit',
   'skill.kind_new': 'create',
 

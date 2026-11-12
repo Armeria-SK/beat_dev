@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { SkillError, type SkillStore } from '../skills/store.ts';
+import { askBeforeRegister, SkillError, type SkillStore } from '../skills/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 function store(ctx: ToolContext): SkillStore {
@@ -38,13 +38,17 @@ export const skillView: ToolDef<{ name: string }> = {
   },
 };
 
+const DRAFT_HOW = [
+  'To fix an existing skill, write its full text under the same name (prefer fixing an existing skill over making a new one).',
+  'name uses lowercase English letters, digits and hyphens. description is "when to use it" in one sentence. body is the procedure, concretely. reason is why you are making or fixing it.',
+];
+const DRAFT_ASK = ['Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.', ...DRAFT_HOW].join(' ');
+const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
+
 export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string }> = {
   name: 'skill_draft',
-  description: [
-    'Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.',
-    'To fix an existing skill, write its full text under the same name (prefer fixing an existing skill over making a new one).',
-    'name uses lowercase English letters, digits and hyphens. description is "when to use it" in one sentence. body is the procedure, concretely. reason is why you are making or fixing it.',
-  ].join(' '),
+  description: DRAFT_ASK,
+  describe: config => (askBeforeRegister(config) ? DRAFT_ASK : DRAFT_AUTO),
   input: Type.Object({
     name: Type.String({ minLength: 1, maxLength: 63, pattern: '^[a-z0-9][a-z0-9-]*$' }),
     description: Type.String({ minLength: 1, maxLength: 300 }),
@@ -59,7 +63,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
       const existing = s.getRegistered(input.name);
       const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId });
       const language = languageOf(ctx.config);
-      return { content: toolText(language, 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
+      return { content: toolText(language, draft.status === 'approved' ? 'skill.registered_auto' : 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
     } catch (error) { return fail(error, ctx); }
   },
 };

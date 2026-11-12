@@ -5,6 +5,7 @@ import { languageOf } from '../shared/language.ts';
 import { TRIGGER_TEXT } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
 import { defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
+import { startOfDayIn } from '../tasks/schedule.ts';
 import { taskView } from '../tasks/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
@@ -13,6 +14,13 @@ const STATUSES: readonly CuriosityStatus[] = ['open', 'researching', 'done', 'dr
 function domainFailure(error: unknown): never {
   if (error instanceof SkillError || error instanceof CuriosityError) throw domainProblem(400, 'invalid', error);
   throw error;
+}
+
+const TODAY_COUNTED = { engine_runs: 'started_at', tool_calls: 'created_at', memory_jobs: 'created_at' } as const;
+
+export function todayCount(app: App, table: keyof typeof TODAY_COUNTED, now = Date.now()): number {
+  const since = startOfDayIn(app.config().timezone, now);
+  return Number((app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${TODAY_COUNTED[table]} >= ?`).get(since) as { n: number }).n);
 }
 
 function idOf(raw: string): number {
@@ -68,6 +76,9 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const description = requireString(body, 'description', { max: 300 })!;
     const text = requireString(body, 'body', { max: 20_000 })!;
     try { sendJson(res, 200, { skill: app.skills.write({ name: params[0]!, description, body: text }) }); } catch (error) { domainFailure(error); }
+  });
+  router.add('GET', '/api/skills/:name/history', ({ res, params }) => {
+    try { sendJson(res, 200, { versions: app.skills.history(params[0]!) }); } catch (error) { domainFailure(error); }
   });
   router.add('POST', '/api/skills/:name/register', ({ res, params }) => {
     if (!app.skills.get(params[0]!)) throw problem(404, 'not_found', 'skill_missing');
@@ -140,7 +151,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
       ...job, triggerLabel: TRIGGER_TEXT[languageOf(app.config())][job.trigger],
       changes: job.run_id ? app.db.prepare('SELECT * FROM memory_events WHERE run_id = ? ORDER BY id').all(job.run_id) : [],
     }));
-    sendJson(res, 200, { jobs, pending: app.reviews.pendingCount() });
+    sendJson(res, 200, { jobs, pending: app.reviews.pendingCount(), total: todayCount(app, 'memory_jobs') });
   });
   router.add('POST', '/api/reviews', async ({ req, res }) => {
     const body = requireObject(await readJson(req));

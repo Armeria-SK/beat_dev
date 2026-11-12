@@ -22,6 +22,7 @@ export interface Conversation {
   permission_mode?: PermissionMode;
   // 親の担当から任された子の会話か（run の id。無い・null はふつうの会話）と、任せた親の会話。子の会話は読むだけ
   parent_run_id?: string | null; source_conversation_id?: string | null;
+  message_count?: number; archived_at?: number | null;
 }
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
@@ -138,6 +139,7 @@ export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null; status: string; created_at: number;
   current: { description: string; body: string } | null;
 }
+export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
 export interface CuriosityItem {
   id: number; topic: string; why: string | null; status: 'open' | 'researching' | 'done' | 'dropped'; result: string | null;
   task_id: string | null; source: 'clive' | 'user' | 'file'; created_at: number; updated_at: number;
@@ -237,8 +239,8 @@ export const api = {
   },
   retry: (id: string) => call<{ runId: string }>(`/api/conversations/${id}/retry`, { method: 'POST', body: '{}' }),
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
-  runs: (limit = 200) => call<{ runs: RunRow[] }>(`/api/runs?limit=${limit}`),
-  toolCalls: () => call<{ toolCalls: ToolCallRow[] }>('/api/tool-calls?limit=200'),
+  runs: (limit = 200) => call<{ runs: RunRow[]; total: number }>(`/api/runs?limit=${limit}`),
+  toolCalls: () => call<{ toolCalls: ToolCallRow[]; total: number }>('/api/tool-calls?limit=200'),
   settings: () => call<SettingsView>('/api/settings'),
   applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
@@ -272,7 +274,7 @@ export const api = {
   review: () => call<{ skillDrafts: SkillDraft[]; taskProposals: Task[] }>('/api/review'),
   approveDraft: (id: number) => call(`/api/skill-drafts/${id}/approve`, { method: 'POST', body: '{}' }),
   rejectDraft: (id: number) => call(`/api/skill-drafts/${id}/reject`, { method: 'POST', body: '{}' }),
-  reviews: () => call<{ jobs: ReviewJob[]; pending: number }>('/api/reviews'),
+  reviews: () => call<{ jobs: ReviewJob[]; pending: number; total: number }>('/api/reviews'),
   reviewConversation: (conversationId: string) => call<{ queued: boolean }>('/api/reviews', { method: 'POST', body: JSON.stringify({ conversationId }) }),
   tools: () => call<{ tools: ToolInfo[] }>('/api/tools'),
   setToolPolicy: (name: string, policy: ToolPolicy) => call<{ tool: ToolInfo }>(`/api/tools/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ policy }) }),

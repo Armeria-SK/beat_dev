@@ -12,6 +12,7 @@ import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
+import { askBeforeRegister } from '../tools/skills/store.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
 
@@ -295,7 +296,8 @@ export class Worker {
   #reviewInput(job: ReviewJob): string | undefined {
     const { db, conversations, tasks, memory, kv } = this.#d;
     const language = languageOf(this.#d.config());
-    const forgotten = (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
+    const skillsAutoRegister = !askBeforeRegister(this.#d.config());
+    const forgotten =(db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
     if (job.trigger === 'book_full') {
       const budget = this.#d.memoryBudget?.();
       const plan = memory && budget !== undefined ? planBooks(memory.list(), language, budget) : undefined;
@@ -305,14 +307,14 @@ export class Worker {
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
       if (!task) return undefined;
-      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language });
+      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister });
     }
     if (!job.conversation_id) return undefined;
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
     const upto = Number(kv.get(`review:upto:${job.conversation_id}`) ?? 0);
     const messages = conversations.messages(job.conversation_id, 200).filter(m => m.id > upto);
     if (!messages.some(m => m.role === 'user')) return undefined;
-    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language });
+    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language, skillsAutoRegister });
   }
 
   async #review(job: ReviewJob, release: () => void): Promise<TickResult> {

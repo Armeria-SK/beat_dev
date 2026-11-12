@@ -911,7 +911,7 @@ export class ChatEngine {
     const mode: PermissionMode = p.kind === 'chat' || p.kind === 'agent' ? stricterMode(p.startedMode ?? current, current) : 'normal';
     const localOnly = p.kind === 'chat' && isLocalPinned(config, d.conversations.get(p.conversationId)?.model_id);
     const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly);
-    const specs = ToolRegistry.specs(toolDefs);
+    const specs = ToolRegistry.specs(toolDefs, config);
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
     const available = contextAvailable(capacity, model);
     const conversation = d.conversations.get(p.conversationId);

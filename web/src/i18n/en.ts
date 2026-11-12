@@ -403,6 +403,7 @@ export const en = {
   'access.webFetch': 'Turn on fetching web pages',
   'access.webSearch': 'Turn on web search',
   'access.selfTasks': 'Run tasks Clive created itself without asking for approval',
+  'access.skillsAutoRegister': 'Register skills Clive writes without asking you first (each one is announced in Notifications and can be undone from the skill\'s History)',
   'access.hookAdded': (stage: string, hook: string) => `Add a hook (${stage}): ${hook}`,
   'access.hookEdited': (stage: string, hook: string) => `Change a hook (${stage}): ${hook}`,
   'access.hookRemoved': (stage: string, hook: string) => `Remove a hook (${stage}; the kind that can block a tool): ${hook}`,
