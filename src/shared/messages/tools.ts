@@ -212,6 +212,7 @@ const en = {
   'mesh.not_found': 'There is no file "{path}" in the mesh folder. Files: {files}',
   'mesh.no_section': 'There is no section "{section}" in {path}. Sections: {sections}',
   'mesh.continues': '[{path} continues: call mesh_read with offset {offset} to read the rest ({total} characters in all)]',
+  'mesh.continues_section': '[{path} continues: call mesh_read with file "{path}", section "{section}", offset {offset} to read the rest of the section ({total} characters in the section)]',
   'mesh.past_end': 'There is no more of {path} (it has {total} characters)',
   'mesh.acceptance_unreadable': 'acceptance.json cannot be read',
   'mesh.state_saved': 'Updated STATE.md: {fields}',

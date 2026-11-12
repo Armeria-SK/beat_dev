@@ -1,8 +1,10 @@
 import type { Language } from '../config/schema.ts';
 import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
+import { neutralizeFence } from '../mcp/tool.ts';
 import { toolText } from '../shared/messages/tools.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import type { AcceptanceDoc, AcceptanceSource } from './acceptance-stub.ts';
-import { MeshError } from './files.ts';
+import { MeshError, scrubText } from './files.ts';
 
 export interface MeshText { rel: string; lines: string[]; mtime: number; fetched: boolean }
 
@@ -11,7 +13,11 @@ const QUERY_TERMS = 10;
 const EXTERNAL = /, src: external\]$/u;
 const PRIORITY = ['STATE.md', 'MAP.md', 'DECISIONS.md'];
 
+const HEADING_MAX = 60;
+
 const fold = (text: string): string => text.normalize('NFKC').toLowerCase();
+const safe = (text: string): string => neutralizeFence(redactSecrets(text).replace(/\r/gu, ' '));
+const label = (text: string): string => scrubText(redactSecrets(text), HEADING_MAX).replaceAll('"', "'");
 const one = (value: unknown): string => String(value ?? '').replace(/\s+/gu, ' ').trim();
 
 export function meshBudget(available: number | undefined, outputTokens: number | undefined): number {
@@ -68,7 +74,8 @@ export function searchMesh(texts: readonly MeshText[], query: string, budget: nu
   const reserve = estimateTextTokens(framed(language, [head], [toolText(language, 'mesh.more_hits', { count: hits.length })]));
   let used = reserve;
   for (const hit of hits) {
-    const line = `${hit.text.rel}:${hit.line}${hit.heading ? ` [${hit.heading}]` : ''} ${Array.from(hit.value.trim()).slice(0, LINE_MAX).join('')}`;
+    const heading = hit.heading ? Array.from(safe(hit.heading)).slice(0, HEADING_MAX).join('') : '';
+    const line = `${hit.text.rel}:${hit.line}${heading ? ` [${heading}]` : ''} ${Array.from(safe(hit.value.trim())).slice(0, LINE_MAX).join('')}`;
     const cost = estimateTextTokens(line) + 1;
     if (used + cost > budget) break;
     used += cost;
@@ -81,20 +88,24 @@ export function searchMesh(texts: readonly MeshText[], query: string, budget: nu
 
 export function readMesh(text: MeshText, input: { section?: string | undefined; offset?: number | undefined }, budget: number, language: Language): { content: string; fetched: boolean } {
   let lines = text.lines;
+  let section: string | undefined;
   if (input.section !== undefined) {
     const headings = lines.flatMap((line, index) => (/^#+\s/u.test(line) ? [{ index, level: /^#+/u.exec(line)![0].length, title: line.replace(/^#+\s*/u, '').trim() }] : []));
     const wanted = fold(input.section.replace(/^#+\s*/u, '').trim());
     const found = headings.find(h => fold(h.title) === wanted) ?? headings.find(h => fold(h.title).includes(wanted));
-    if (!found || !wanted) throw new MeshError('mesh.no_section', { section: input.section, path: text.rel, sections: headings.map(h => h.title).join(', ') || '-' });
+    if (!found || !wanted) throw new MeshError('mesh.no_section', { section: label(input.section), path: text.rel, sections: headings.map(h => label(h.title)).join(', ') || '-' }, text.fetched);
     const end = headings.find(h => h.index > found.index && h.level <= found.level)?.index ?? lines.length;
     lines = lines.slice(found.index, end);
+    section = label(found.title);
   }
-  const whole = lines.join('\n').replace(/\n+$/u, '');
+  const whole = safe(lines.join('\n').replace(/\n+$/u, ''));
   const total = whole.length;
   const offset = input.offset ?? 0;
-  if (offset > 0 && offset >= total) throw new MeshError('mesh.past_end', { path: text.rel, total });
+  if (offset > 0 && offset >= total) throw new MeshError('mesh.past_end', { path: text.rel, total }, text.fetched);
   const rest = whole.slice(offset);
-  const note = (next: number) => toolText(language, 'mesh.continues', { path: text.rel, offset: next, total });
+  const note = (next: number) => section === undefined
+    ? toolText(language, 'mesh.continues', { path: text.rel, offset: next, total })
+    : toolText(language, 'mesh.continues_section', { path: text.rel, section, offset: next, total });
   const room = budget - estimateTextTokens(framed(language, [], [note(total)]));
   const shown = Math.max(1, prefixLength(rest, Infinity, room));
   const part = rest.slice(0, shown);

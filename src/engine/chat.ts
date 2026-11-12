@@ -188,7 +188,7 @@ export class ChatEngine {
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
   #runMode = new Map<string, PermissionMode>();
   #runFence = new Map<string, string>();
-  #runIndex = new Map<string, { limit: number; body: string }>();
+  #runIndex = new Map<string, string>();
   // 止める操作（stop）を受けた実行
   #stopped = new Set<string>();
   // 子の担当の会話 → それを任せた親の会話（親がチャットのときだけ。子の権限モードは、親の会話のいまのモードに従う）
@@ -980,18 +980,16 @@ export class ChatEngine {
   #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number): string {
     const mesh = this.#d.mesh;
     if (!mesh || !project) return '';
-    const limit = meshIndexLimit(available);
     let body = runId ? this.#runIndex.get(runId) : undefined;
-    if (!body || body.limit !== limit) {
-      let text = '';
-      try { text = mesh.indexBody(project.id, limit); } catch (error) { this.#d.log?.(`[WARN] Could not build the mesh index of product ${project.id}: ${(error as Error).message}`); }
-      body = { limit, body: text };
+    if (body === undefined) {
+      body = '';
+      try { body = mesh.indexBody(project.id, meshIndexLimit(available)); } catch (error) { this.#d.log?.(`[WARN] Could not build the mesh index of product ${project.id}: ${(error as Error).message}`); }
       if (runId) this.#runIndex.set(runId, body);
     }
-    if (!body.body) return '';
+    if (!body) return '';
     let nonce = runId ? this.#runFence.get(runId) : PLACEHOLDER_NONCE;
     if (!nonce) { nonce = newNonce(); this.#runFence.set(runId!, nonce); }
-    return wrapMeshIndex(body.body, nonce);
+    return wrapMeshIndex(body, nonce);
   }
 
   // いまの会話を次に送るとき、モデルへ送る量（トークンの見積もり）。古い発言を削る前の全体で、available（削り始める境目）に対する割合 ratio は 1 を超えうる。

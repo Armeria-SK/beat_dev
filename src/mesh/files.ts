@@ -6,7 +6,8 @@ import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { isInside } from '../tools/hooks/scope.ts';
 
 export class MeshError extends LocalizedError<ToolMessageKey> {
-  constructor(code: ToolMessageKey, params?: MessageParams) { super(toolText, code, params); }
+  readonly fetched: boolean;
+  constructor(code: ToolMessageKey, params?: MessageParams, fetched = false) { super(toolText, code, params); this.fetched = fetched; }
 }
 
 export interface MeshFile { rel: string; abs: string; mtime: number }
@@ -60,7 +61,7 @@ export function listMeshFiles(meshDir: string): MeshFile[] {
       try { stat = statSync(real); } catch { continue; }
       const rel = prefix ? `${prefix}/${name}` : name;
       if (stat.isDirectory()) { if (depth < MAX_DEPTH) walk(real, rel, depth + 1); }
-      else if (stat.isFile() && isMarkdown(name)) out.push({ rel, abs: real, mtime: Math.floor(stat.mtimeMs) });
+      else if (stat.isFile() && stat.nlink === 1 && isMarkdown(name)) out.push({ rel, abs: real, mtime: Math.floor(stat.mtimeMs) });
     }
   };
   walk(root, '', 1);
@@ -84,7 +85,8 @@ export function resolveMeshPath(meshDir: string, input: string, known: () => str
   if (!isInside(root, real)) throw bad();
   const rel = relative(root, real).split(sep).join('/');
   if (!rel || rel.split('/').some(hidden)) throw bad();
-  if (!lstatSync(real).isFile()) throw new MeshError('mesh.not_found', { path: input, files: known().join(', ') || '-' });
+  const stat = lstatSync(real);
+  if (!stat.isFile() || stat.nlink !== 1) throw new MeshError('mesh.not_found', { path: input, files: known().join(', ') || '-' });
   return { abs: real, rel };
 }
 

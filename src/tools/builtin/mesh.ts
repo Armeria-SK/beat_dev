@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { MeshError } from '../../mesh/files.ts';
 import { meshBudget } from '../../mesh/search.ts';
 import type { StatePatch } from '../../mesh/state.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -7,7 +8,7 @@ import { toolText } from '../../shared/messages/tools.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 const fail = (error: unknown, ctx: ToolContext): ToolOutput =>
-  ({ content: toolText(languageOf(ctx.config), 'failed', { detail: errorText(error, languageOf(ctx.config)) }), isError: true });
+  ({ content: toolText(languageOf(ctx.config), 'failed', { detail: errorText(error, languageOf(ctx.config)) }), isError: true, ...(error instanceof MeshError && error.fetched ? { fetched: true } : {}) });
 
 const unavailable = (ctx: ToolContext): ToolOutput => ({ content: toolText(languageOf(ctx.config), 'mesh.unavailable'), isError: true });
 
