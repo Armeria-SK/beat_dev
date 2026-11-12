@@ -10,7 +10,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
-import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
+import { checkFilePath, fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
@@ -210,6 +210,19 @@ test('A3: 振り返りでは ask は拒否として扱う（承認する人が�
 
   const plain = setup(t);
   assert.equal((await plain.call('memory_save', {}, { ...plain.ctx, kind: 'review' })).decision, 'allow', '方針が無ければ振り返りで使える（比べる基準）');
+});
+
+test('スキルのフォルダへの書き込みの確かめの文は、聞かずに登録する設定のときは「画面で承認して登録」と言わない', t => {
+  const ask = setup(t);
+  const asked = checkFilePath('skills/memo/SKILL.md', 'write', ask.ctx).check;
+  assert.deepEqual([asked.decision, asked.askKinds], ['ask', ['persona']]);
+  assert.match(asked.reasons[0]!, /skill_draft to approve and register it on screen/u);
+
+  const auto = setup(t, {}, c => { c.skills = { askBeforeRegister: false }; });
+  const unasked = checkFilePath('skills/memo/SKILL.md', 'write', auto.ctx).check;
+  assert.deepEqual([unasked.decision, unasked.askKinds], ['ask', ['persona']], '確かめそのものは変わらない');
+  assert.match(unasked.reasons[0]!, /skill_draft instead: under the current setting it is registered without the user's review/u);
+  assert.doesNotMatch(unasked.reasons[0]!, /on screen/u);
 });
 
 test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {
