@@ -1,7 +1,11 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, ApiError, type Approval, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelView } from '../api.ts';
-import { isNearBottom, newConversationId, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
+import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
+import { api, ApiError, type Approval, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
+import { isNearBottom, isRenameWithoutTitle, newConversationId, renameTitleOf, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
+import { toast } from '../feedback.ts';
+import { Composer } from './Composer.tsx';
+import { queuedLine, replaceTargets, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getLanguage, useT } from '../i18n/index.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
@@ -13,7 +17,7 @@ import { menuStep } from './menu.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
-import { contextMeter, threadItems, type ThreadItem } from './thread.ts';
+import { contextMeter, isRising, threadItems, type ThreadItem } from './thread.ts';
 import { ToolGroup } from './ToolRow.tsx';
 
 type T = ReturnType<typeof useT>;
@@ -29,9 +33,12 @@ export interface ConversationProps {
   disconnected: boolean;
   onReconnect: () => void;
   onClearNotices: (id: string) => void;
+  onInterrupt: (id: string, on: boolean) => void;
 }
 
-interface Loaded { conversation: ConversationRow; messages: Message[] }
+interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[] }
+interface Choice { modelId: string | null; effort: string | null; permissionMode: PermissionMode }
+const NO_CHOICE: Choice = { modelId: null, effort: null, permissionMode: 'normal' };
 
 const MEMORY_KEY = { create: 'ui.notice.memoryCreate', update: 'ui.notice.memoryUpdate', forget: 'ui.notice.memoryForget' } as const;
 const short = (text: string, max = 80): string => {
@@ -48,6 +55,7 @@ function noticeText(t: T, n: RunNotice): string {
     case 'denied': return n.detail ? `${t('ui.notice.denied', n.tool)} · ${n.detail}` : t('ui.notice.denied', n.tool);
     case 'memory': return t(MEMORY_KEY[n.action], short(n.content));
     case 'stopped': return t('ui.notice.stopped');
+    case 'interrupted': return t('ui.notice.interrupted');
     case 'error': return serverText(n.errorCode, n.errorParams, getLanguage()) ?? n.errorMessage ?? n.errorKind;
   }
 }
@@ -234,17 +242,21 @@ function failNotice(title: string, text: string | null, action: FailAction | nul
   return <Notice tone="fail" title={title} text={text ?? undefined} {...(action ? { action } : {})} />;
 }
 
-export function Conversation({ id, listTitle, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices }: ConversationProps) {
+export function Conversation({ id, listTitle, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
   const [readList, setReadList] = useState<{ items: ChecklistItem[]; tainted: boolean } | null>(null);
   const [models, setModels] = useState<ModelView[]>([]);
-  const [failure, setFailure] = useState<(SendFailure & { retry: FailAction | null }) | null>(null);
+  const [modelsRead, setModelsRead] = useState(false);
+  const [chatOrder, setChatOrder] = useState<string[]>([]);
+  const [draftChoice, setDraftChoice] = useState<Choice>(NO_CHOICE);
+  const [usageTick, setUsageTick] = useState(0);
+  const [failure, setFailure] = useState<(SendFailure & { retry: FailAction | null; title?: string }) | null>(null);
   const [sending, setSending] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
-  const seen = useRef(new Set<string>());
+  const seen = useRef(new Map<string, number>());
   const primed = useRef(false);
   const stick = useRef(true);
   const created = useRef<string | null>(null);
@@ -256,7 +268,7 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
     try {
       const r = await api.messages(id);
       if (!loads.current.isCurrent(ticket)) return;
-      setLoaded({ conversation: r.conversation, messages: r.messages });
+      setLoaded({ conversation: r.conversation, messages: r.messages, pending: r.pending ?? [] });
       setGone(false);
     } catch (error) {
       if (!loads.current.isCurrent(ticket)) return;
@@ -272,12 +284,13 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
     void api.checklist(id).then(r => { if (live) setReadList({ items: r.items, tainted: r.tainted }); }).catch(() => undefined);
     return () => { live = false; };
   }, [id, revision]);
-  useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
-  const usage = useContextUsage(id, draft ? -1 : revision);
+  useEffect(() => { void api.models().then(r => { setModels(r.models); setChatOrder(r.routing.chat); setModelsRead(true); }).catch(() => undefined); }, []);
+  const usage = useContextUsage(id, draft ? -1 : revision + usageTick * 1_000_000);
   const meter = contextMeter(usage?.ratio);
 
   const conversation = loaded?.conversation ?? null;
   const messages = loaded?.messages ?? [];
+  const pending = loaded?.pending ?? [];
   const items = threadItems({ messages, draft, approvals, notices });
   const checklist = liveChecklist ?? readList?.items ?? [];
   const lastIsUser = messages.at(-1)?.role === 'user';
@@ -292,18 +305,91 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
     setFailure({ ...sendFailureOf(error, t('ui.fail.send'), models), retry });
   };
 
-  const pick = async (text: string) => {
-    if (sending) return;
+  const choice: Choice = conversation
+    ? { modelId: conversation.model_id ?? null, effort: conversation.effort ?? null, permissionMode: conversation.permission_mode ?? 'normal' }
+    : draftChoice;
+
+  const submit = async (kind: SubmitKind, text: string, attachments: UploadView[] = [], retry: FailAction | null = null): Promise<boolean> => {
+    if (sending) return false;
+    if (isRenameWithoutTitle(text)) return false;
+    const newTitle = renameTitleOf(text);
     setSending(true); setFailure(null);
+    stick.current = true;
     const target = id ?? (created.current ??= newConversationId());
+    const force = kind === 'force' && Boolean(draft);
     try {
+      if (newTitle) {
+        if (!id) return false;
+        await api.renameConversation(id, newTitle);
+        await load();
+        return true;
+      }
+      let replaced: PendingMessage | null = null;
+      if (kind === 'queue' && id) {
+        for (const old of replaceTargets(pending)) {
+          try { await api.cancelPending(id, old.id); replaced = old; } catch (error) { if (!(error instanceof ApiError && error.status === 404)) throw error; }
+        }
+      }
       onClearNotices(target);
-      await api.send(target, text);
+      if (force) onInterrupt(target, true);
+      const sent = await api.send(target, text, attachments.map(a => a.id), sendChoiceOf(id, choice), force ? { interrupt: true } : {});
+      if (force && !sent.queued) onInterrupt(target, false);
+      if (replaced && sent.queued) toast({ kind: 'info', icon: 'refresh', title: t('ui.composer.replaced'), body: queuedLine(replaced) });
       if (!id) location.hash = routeHash({ view: 'chat', id: target });
       else await load();
+      return true;
     } catch (error) {
-      await fail(error, { label: t('ui.fail.retry'), run: () => void pick(text) });
+      if (force) onInterrupt(target, false);
+      await fail(error, retry);
+      if (id) await load();
+      return false;
     } finally { setSending(false); }
+  };
+
+  const pick = (text: string): void => { void submit('send', text, [], { label: t('ui.fail.retry'), run: () => pick(text) }); };
+
+  const changeFailed = (error: unknown) => {
+    stick.current = true;
+    setFailure({ ...sendFailureOf(error, t('ui.fail.change'), models), retry: null, title: t('ui.fail.change') });
+  };
+
+  const choose = async (next: ModelChoice) => {
+    if (!id) {
+      setDraftChoice(current => ({
+        modelId: next.modelId !== undefined ? next.modelId : current.modelId,
+        effort: next.effort !== undefined ? next.effort : next.modelId !== undefined ? null : current.effort,
+        permissionMode: next.permissionMode ?? current.permissionMode,
+      }));
+      return;
+    }
+    setFailure(null);
+    try {
+      const result = next.permissionMode !== undefined ? await api.chooseMode(id, next.permissionMode) : await api.chooseModel(id, next);
+      setLoaded(current => (current ? { ...current, conversation: { ...current.conversation, ...result.conversation } } : current));
+      setUsageTick(n => n + 1);
+      if ('effortReset' in result && result.effortReset) toast({ kind: 'info', icon: 'refresh', title: t('ui.composer.depthReset') });
+    } catch (error) { changeFailed(error); }
+  };
+
+  const cancelPending = async (pendingId: string) => {
+    if (!id) return;
+    try { await api.cancelPending(id, pendingId); } catch (error) { if (!(error instanceof ApiError && error.status === 404)) changeFailed(error); }
+    await load();
+  };
+
+  const runSlash = (command: UiSlash) => {
+    switch (command.name) {
+      case 'new': location.hash = '#/'; return;
+      case 'plan': void choose({ permissionMode: 'plan' }); return;
+      case 'task': case 'tasks': location.hash = '#/kanban'; return;
+      case 'skills': location.hash = '#/skills'; return;
+      case 'log': location.hash = '#/runs'; return;
+      case 'memory': location.hash = '#/memory'; return;
+      case 'stop': if (draft) void api.stop(draft.runId).catch(changeFailed); return;
+      case 'archive': if (id) void api.archiveConversation(id).then(() => load(), changeFailed); return;
+      case 'summary': setSummaryOpen(true); stick.current = false; scroller.current?.scrollTo({ top: 0 }); return;
+      case 'rename': return;
+    }
   };
 
   const retry = async () => {
@@ -335,12 +421,14 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
   function sendFailure(f: NonNullable<typeof failure>): ReactNode {
     if (f.noModels) return failNotice(t('ui.fail.noModel'), t('ui.fail.noModelText'), openSettings);
     if (f.context) return failNotice(t('ui.fail.context'), f.message, useAlternative(() => f.retry?.run()) ?? openSettings);
-    return failNotice(t('ui.fail.send'), f.message, f.retry);
+    return failNotice(f.title ?? t('ui.fail.send'), f.message, f.retry);
   }
 
-  const rise = (key: string): boolean => primed.current && !seen.current.has(key);
+  const rise = (key: string): boolean => primed.current && isRising(seen.current.get(key), performance.now());
   useEffect(() => {
-    for (const item of items) { seen.current.add(item.key); if (item.kind === 'tools') for (const row of item.rows) seen.current.add(row.key); }
+    const at = primed.current ? performance.now() : Number.NEGATIVE_INFINITY;
+    const mark = (key: string) => { if (!seen.current.has(key)) seen.current.set(key, at); };
+    for (const item of items) { mark(item.key); if (item.kind === 'tools') for (const row of item.rows) mark(row.key); }
     if (loaded !== null || id === null) primed.current = true;
   });
 
@@ -401,6 +489,17 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
         )}
       </div>
       {running && checklist.length > 0 && <Checklist items={checklist} tainted={readList?.tainted ?? false} live className="ui-pinned bt-rise" />}
+      {!gone && !helper && (
+        <Composer
+          hasConversation={id !== null} running={running} sending={sending} pending={pending}
+          models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode}
+          slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1 }}
+          onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}
+          onStop={() => { if (draft) void api.stop(draft.runId).catch(changeFailed); }}
+          onChoose={next => void choose(next)} onCancelPending={pendingId => void cancelPending(pendingId)} onSlash={runSlash}
+          onAttachFailed={error => { stick.current = true; setFailure({ ...sendFailureOf(error, t('ui.fail.attach'), models), retry: null, title: t('ui.fail.attach') }); }}
+        />
+      )}
     </>
   );
 }

@@ -10,6 +10,7 @@ import { Icon } from './parts.tsx';
 import { pickFocus } from './focus.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
 import { Sidebar } from './Sidebar.tsx';
+import { Toasts } from './toasts.tsx';
 
 const NARROW = '(max-width: 760px)';
 const NO_APPROVALS: Approval[] = [];
@@ -207,6 +208,7 @@ export function App() {
 
   const closeSettings = closer.fire;
   const clearNotices = useCallback((id: string) => dispatch({ type: 'clearNotices', conversationId: id }), [dispatch]);
+  const interrupt = useCallback((id: string, on: boolean) => dispatch({ type: 'interrupt', conversationId: id, on }), [dispatch]);
   const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);
 
   useEffect(() => {
@@ -246,7 +248,7 @@ export function App() {
               liveChecklist={chatId ? checklists.get(chatId) : undefined}
               revision={(chatId ? live.revisions.get(chatId) ?? 0 : 0) + live.epoch}
               disconnected={disconnected} onReconnect={reconnect}
-              onClearNotices={clearNotices}
+              onClearNotices={clearNotices} onInterrupt={interrupt}
             />
           </main>
         ) : (
@@ -261,6 +263,7 @@ export function App() {
       {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={settingsOpen} />}
       <TabBar route={behind} kanban={kanban} covered={covered} />
       {settingsOpen && <SettingsShell onClose={closeSettings} />}
+      <Toasts />
     </div>
   );
 }

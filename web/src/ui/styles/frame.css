@@ -54,6 +54,24 @@
 
 .ui-overlay { position: fixed; inset: 0; z-index: 40; }
 
+.bt-composer__input { max-height: 200px; overflow-y: auto; }
+.bt-composer__input:disabled { cursor: default; }
+.bt-composer .bt-btn:disabled, .bt-composer .bt-select:disabled, .bt-composer .bt-seg__opt:disabled { color: var(--ink-mute); cursor: default; }
+.bt-composer .bt-btn--primary:disabled { background: var(--surface-sunk); border-color: var(--line); }
+.ui-composer__picks { display: contents; }
+.ui-select__chev { width: 12px; height: 12px; }
+.ui-pop { position: absolute; left: var(--space-3); bottom: calc(100% + var(--space-2)); z-index: 3; max-width: min(360px, calc(100% - var(--space-6))); max-height: 50vh; overflow-y: auto; }
+.ui-pop__item { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; }
+.ui-pop__item[aria-checked="true"] b::after { content: " ·"; color: var(--pulse); }
+.ui-pop__item:disabled { cursor: default; }
+.ui-pop__item:disabled b { color: var(--ink-mute); }
+.ui-chip { border: 0; cursor: pointer; }
+.ui-chip:hover { color: var(--ink); }
+.ui-toasts { position: fixed; right: var(--space-5); bottom: var(--space-5); z-index: 50; pointer-events: none; }
+.ui-frame:has(.bt-composer) .ui-toasts { bottom: calc(var(--space-5) + 184px); }
+.ui-toasts .bt-toast { pointer-events: auto; }
+.ui-toasts .bt-toast .bt-btn { flex: none; align-self: center; }
+
 @media (max-width: 760px) {
   .ui-frame { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
   .ui-narrowbar { display: flex; align-items: center; gap: var(--space-2); flex: none; height: 48px; padding: 0 var(--space-2); border-bottom: 1px solid var(--line); background: var(--ground); }
@@ -78,4 +96,8 @@
   .ui-frame > .bt-app .bt-app__bar { justify-content: flex-end; }
   .ui-copy { opacity: 1; }
   .ui-approval__actions .bt-btn { height: 40px; }
+  .ui-composer__picks { display: flex; flex-basis: 100%; order: 3; gap: var(--space-1); }
+  .ui-toasts { left: var(--space-3); right: var(--space-3); bottom: calc(56px + var(--space-3)); }
+  .ui-frame:has(.bt-composer) .ui-toasts { bottom: calc(56px + 240px); }
+  .ui-toasts .bt-toasts { width: auto; }
 }

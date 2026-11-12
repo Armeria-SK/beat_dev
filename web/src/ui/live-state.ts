@@ -4,7 +4,12 @@ import type { Draft, RunEvent } from '../events.ts';
 
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean }
 
-export interface LiveDraft extends Draft { toolStartedAt?: number | undefined; toolCallId?: string | undefined }
+export interface SettledTool { callId: string; name: string; input: string }
+export interface LiveDraft extends Draft { toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined }
+
+const SETTLED_MAX = 20;
+const settle = (d: LiveDraft, callId: string): SettledTool[] | undefined =>
+  (d.activeTool && d.toolCallId === callId ? [...(d.settled ?? []), { callId, name: d.activeTool, input: d.activeInput ?? '' }].slice(-SETTLED_MAX) : d.settled);
 
 export type RunNotice = { runId: string; key?: string | undefined } & (
   | { kind: 'switch'; from: string; to: string; reason: string }
@@ -14,6 +19,7 @@ export type RunNotice = { runId: string; key?: string | undefined } & (
   | { kind: 'denied'; tool: string; detail: string }
   | { kind: 'memory'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { kind: 'stopped' }
+  | { kind: 'interrupted' }
   | { kind: 'error'; errorKind: string; errorCode?: string | undefined; errorParams?: Record<string, string | number> | undefined; errorMessage?: string | undefined; hint?: string | undefined; measured?: number | undefined; required?: number | undefined }
 );
 
@@ -28,12 +34,13 @@ export interface LiveState {
   checklists: ReadonlyMap<string, ChecklistItem[]>;
   notices: ReadonlyMap<string, RunNotice[]>;
   revisions: ReadonlyMap<string, number>;
+  interrupting: ReadonlySet<string>;
   epoch: number;
 }
 
 export const EMPTY: LiveState = {
   conversations: [], approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), epoch: 0,
+  notices: new Map(), revisions: new Map(), interrupting: new Set(), epoch: 0,
 };
 
 export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker';
@@ -54,7 +61,8 @@ export type Action =
   | { type: 'unread'; count: number }
   | { type: 'tasks'; tasks: Task[] }
   | { type: 'checklist'; conversationId: string; items: ChecklistItem[] }
-  | { type: 'clearNotices'; conversationId: string };
+  | { type: 'clearNotices'; conversationId: string }
+  | { type: 'interrupt'; conversationId: string; on: boolean };
 
 export const BROWSER_NOTIFY: ReadonlySet<string> = new Set(['task_waiting']);
 
@@ -93,9 +101,10 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       const drafts = [...s.drafts.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '' }];
       const known = s.conversations.some(c => c.id === e.conversationId);
       const notices = new Map(s.notices);
-      notices.delete(e.conversationId);
+      if (s.interrupting.has(e.conversationId)) notices.set(e.conversationId, [{ runId: e.runId, kind: 'interrupted' }]);
+      else notices.delete(e.conversationId);
       return {
-        state: { ...s, drafts, notices },
+        state: { ...s, drafts, notices, interrupting: without(s.interrupting, e.conversationId) },
         effects: [...(known ? [] : refresh('conversations')), { kind: 'checklist', conversationId: e.conversationId }, ...refresh('worker')],
       };
     }
@@ -110,7 +119,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'warning':
       if (e.code === 'compacted') return { state: s, effects: [] };
       return {
-        state: addNotice(s, e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message, params: e.params, ...(e.code === 'context_trimmed' ? { key: 'context_trimmed' } : {}) }),
+        state: addNotice(e.code === 'queued_not_started' ? { ...s, interrupting: without(s.interrupting, e.conversationId) } : s, e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message, params: e.params, ...(e.code === 'context_trimmed' ? { key: 'context_trimmed' } : {}) }),
         effects: [],
       };
     case 'compaction':
@@ -134,7 +143,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         effects: [],
       };
     case 'tool.result': {
-      const state = { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined })) };
+      const state = { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId) })) };
       return {
         state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
         effects: [],
@@ -142,6 +151,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     }
     case 'run.end': {
       let state: LiveState = bump({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }, e.conversationId);
+      if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) return { state, effects: refresh('conversations', 'worker', 'drafts', 'approvals') };
       if (!e.ok && e.errorKind === 'cancelled') state = addNotice(state, e.conversationId, { runId: e.runId, kind: 'stopped' });
       else if (!e.ok) {
         state = addNotice(state, e.conversationId, {
@@ -202,6 +212,13 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
     case 'unread': return { state: { ...s, unread: a.count }, effects: [] };
     case 'tasks': return { state: { ...s, tasks: mergeTasks(s.tasks, a.tasks) }, effects: [] };
     case 'checklist': return { state: { ...s, checklists: new Map(s.checklists).set(a.conversationId, a.items) }, effects: [] };
+    case 'interrupt': {
+      if (a.on) return { state: { ...s, interrupting: new Set(s.interrupting).add(a.conversationId) }, effects: [] };
+      const kept = (s.notices.get(a.conversationId) ?? []).filter(n => n.kind !== 'interrupted');
+      const notices = new Map(s.notices);
+      if (kept.length) notices.set(a.conversationId, kept); else notices.delete(a.conversationId);
+      return { state: { ...s, notices, interrupting: without(s.interrupting, a.conversationId) }, effects: [] };
+    }
     case 'clearNotices': {
       if (!s.notices.has(a.conversationId)) return { state: s, effects: [] };
       const notices = new Map(s.notices);

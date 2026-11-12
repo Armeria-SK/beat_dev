@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { Approval, ChecklistItem, Message } from '../web/src/api.ts';
 import { imageHost } from '../web/src/markdown-image.ts';
 import type { RunNotice } from '../web/src/ui/live-state.ts';
-import { checklistShape, contextMeter, noticeRows, threadItems } from '../web/src/ui/thread.ts';
+import { checklistShape, contextMeter, isRising, noticeRows, threadItems } from '../web/src/ui/thread.ts';
 
 // 新しい画面の会話（p1-ui.md の「会話」）: 発言・返事・道具の行のまとまり・流れている返事・承認の行・お知らせの並びを作る純粋な関数。
 
@@ -71,9 +71,22 @@ test('ui/thread: 動いている道具の行と、結果が届いたあとの行
   assert.ok(running.kind === 'tools' && finished.kind === 'tools');
   assert.deepEqual([running.key, running.rows[0]!.key], ['t-call_9', 't-call_9']);
   assert.deepEqual([finished.key, finished.rows[0]!.key], [running.key, running.rows[0]!.key]);
+  const settled = { ...draft, settled: [{ callId: 'call_9', name: 'shell_run', input: '{"command":"ls"}' }] };
+  const gap = threadItems({ messages: base, draft: settled }).find(i => i.kind === 'tools')!;
+  assert.ok(gap.kind === 'tools');
+  assert.deepEqual([gap.key, gap.rows.map(r => [r.key, r.result, r.running])], ['t-call_9', [['t-call_9', null, undefined]]], '結果が届いてから保存された発言を読むまでのあいだも、行は残る');
+  const after = threadItems({ messages: [...base, msg('tool', 'out', { toolName: 'shell_run', toolCallId: 'call_9' })], draft: settled }).filter(i => i.kind === 'tools');
+  assert.deepEqual(after.flatMap(i => (i.kind === 'tools' ? i.rows.map(r => r.result?.text) : [])), ['out'], '読んだあとは 1 行だけ');
   const unknown = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run' } }).at(-1)!;
   assert.ok(unknown.kind === 'tools');
   assert.equal(unknown.rows[0]!.key, 'run-r2-shell_run', '呼び出しの id を知らないとき（つなぎ直しのあと）は今までのキー');
+});
+
+test('ui/thread: 現れる動きは、初めて見えてから 600ms のあいだ続ける（すぐ次の描き直しで消さない）。開いたときからある行（-∞）は動かさない', () => {
+  assert.equal(isRising(undefined, 1000), true);
+  assert.equal(isRising(900, 1000), true);
+  assert.equal(isRising(400, 1000), false);
+  assert.equal(isRising(Number.NEGATIVE_INFINITY, 0), false);
 });
 
 test('ui/thread: お知らせ: 静かなものは続けて並べず 1 行にまとめ、warn はそれぞれ 1 行、失敗（fail）は最後に 1 つだけ', () => {

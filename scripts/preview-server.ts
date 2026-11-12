@@ -1,4 +1,4 @@
-// Throwaway preview server for screen checks (plans/beat/p1-ui.md, "試しのサーバー").
+// Throwaway preview server for screen checks (plans/beat/steps/p1-ui.md,"試しのサーバー").
 // node scripts/preview-server.ts — takes no arguments. Port 4797, data under <product>/tmp/p1-preview only.
 import { existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -58,6 +58,17 @@ function words(text: string): AsyncGenerator<StreamEvent> {
   })();
 }
 
+function slowWords(signal: AbortSignal): AsyncGenerator<StreamEvent> {
+  return (async function* () {
+    for (let i = 1; i <= 60; i++) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      if (signal.aborted) throw providerError('cancelled', 'cancelled', {}, { retryable: false });
+      yield { type: 'text', delta: `step ${i} ` };
+    }
+    yield { type: 'done', stop: 'end_turn' };
+  })();
+}
+
 function call(name: string, args: Record<string, unknown>): AsyncGenerator<StreamEvent> {
   const toolCall: ToolCall = { id: `call_${Date.now().toString(36)}`, name, arguments: args };
   return (async function* () {
@@ -78,12 +89,14 @@ const HELP = [
   '- `/demo list` and `/demo long-list` write a checklist',
   '- `/demo helper` hands a small job to a helper',
   '- `/demo fail` fails on every model',
+  '- `/demo slow` writes for 15 seconds (to try Queue, Force and Stop)',
 ].join('\n');
 
 function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
   const last = request.messages.at(-1);
   if (last?.role === 'tool') return words(`Done. The tool said:\n\n\`\`\`\n${last.content.slice(0, 400)}\n\`\`\``);
   const said = [...request.messages].reverse().find(m => m.role === 'user')?.content ?? '';
+  if (said.includes('/demo slow')) return slowWords(request.signal);
   if (said.includes('/demo write')) return call('file_write', { path: join(WORK, 'notes.md'), content: '# Notes\n\nWritten by the preview model.\n' });
   if (said.includes('/demo read')) return call('file_read', { path: join(WORK, 'notes.md') });
   if (said.includes('/demo run')) return call('shell_run', { command: 'node -e "console.log(6*7)"', cwd: WORK });
@@ -158,7 +171,7 @@ async function start(): Promise<void> {
   config.server = { host: HOST, port: PORT, origins: [], tailscaleLogins: [] };
   config.providers = [...config.providers, { id: 'preview', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'PREVIEW_KEY', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [
-    { id: 'preview-a', label: 'Preview A', provider: 'preview', model: 'preview-a', contextLength: 65536, minContext: 4096, maxOutputTokens: 2048, vision: false },
+    { id: 'preview-a', label: 'Preview A', provider: 'preview', model: 'preview-a', contextLength: 65536, minContext: 4096, maxOutputTokens: 2048, vision: false, efforts: ['low', 'medium', 'high'] },
     { id: 'preview-b', label: 'Preview B', provider: 'preview', model: 'preview-b', contextLength: 32768, minContext: 4096, maxOutputTokens: 2048, vision: false },
     { id: 'preview-small', label: 'Preview small', provider: 'preview', model: 'preview-small', contextLength: 4096, minContext: 4096, maxOutputTokens: 2048, vision: false },
   ];

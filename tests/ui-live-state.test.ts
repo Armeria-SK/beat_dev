@@ -86,6 +86,7 @@ test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出�
   assert.deepEqual([s3.drafts[0]!.activeTool, s3.drafts[0]!.toolStartedAt, s3.drafts[0]!.toolCallId], ['shell_run', 200, 'x']);
   const s4 = run(s3, ev({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: 'x', name: 'shell_run', ok: false, decision: 'deny', preview: 'head\nno way\nmore' }));
   assert.equal(s4.drafts[0]!.activeTool, undefined);
+  assert.deepEqual(s4.drafts[0]!.settled, [{ callId: 'x', name: 'shell_run', input: '{}' }], '結果が届いた呼び出しは、保存された発言を読むまで行を残すために覚える');
   assert.deepEqual(s4.notices.get('c'), [{ runId: 'r', kind: 'denied', tool: 'shell_run', detail: 'no way more' }]);
   const approval = { id: 'a1', title: 'Write', tool: 'file_write' } as unknown as Extract<RunEvent, { type: 'approval.requested' }>['approval'];
   const s5 = run(s4, ev({ type: 'approval.requested', runId: 'r', conversationId: 'c', approval }));

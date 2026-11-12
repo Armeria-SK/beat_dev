@@ -82,6 +82,10 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
   }
 
   const waiting = approvals;
+  const saved = new Set(messages.map(m => m.toolCallId));
+  for (const done of draft?.settled ?? []) {
+    if (!saved.has(done.callId)) tools(`t-${done.callId}`).push({ key: `t-${done.callId}`, name: done.name, input: done.input, result: null });
+  }
   if (draft) {
     if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text });
     else if (draft.activeTool && waiting.length === 0) {
@@ -98,6 +102,9 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
   noticeRows(notices).forEach((row, i) => items.push({ kind: 'notice', key: `n-${row.notices[0]!.runId}-${i}`, ...row }));
   return items;
 }
+
+export const RISE_MS = 600;
+export const isRising = (firstSeenAt: number | undefined, now: number): boolean => firstSeenAt === undefined || now - firstSeenAt < RISE_MS;
 
 export const CHECKLIST_MAX = 8;
 
