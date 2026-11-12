@@ -5,7 +5,7 @@ import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrot
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
-import { cancelClearsInterrupt, queuedLine, showProceed, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
+import { cancelClearsInterrupt, NEW_DRAFT, queuedLine, showProceed, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getLanguage, useT } from '../i18n/index.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
@@ -323,10 +323,13 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
         clearNotices: onClearNotices, interrupt: onInterrupt,
       });
       switch (out.kind) {
-        case 'ignored': return false;
+        case 'ignored':
+          if (out.why === 'rename_unsent') toast({ kind: 'info', icon: 'alert', title: t('ui.composer.renameUnsent') });
+          return false;
         case 'renamed': await load(); return true;
         case 'sent':
           if (out.replaced && out.queued) toast({ kind: 'info', icon: 'refresh', title: t('ui.composer.replaced'), body: queuedLine(out.replaced) });
+          if (out.effortReset) toast({ kind: 'info', icon: 'refresh', title: t('ui.composer.depthReset') });
           if (!id) location.hash = routeHash({ view: 'chat', id: target });
           else await load();
           return true;
@@ -385,7 +388,9 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
 
   const runSlash = (command: UiSlash) => {
     switch (command.name) {
-      case 'new': location.hash = '#/'; return;
+      case 'new':
+        if (id) location.hash = '#/'; else toast({ kind: 'info', icon: 'check', title: t('ui.composer.alreadyNew') });
+        return;
       case 'plan': void choose({ permissionMode: 'plan' }); return;
       case 'task': case 'tasks': location.hash = '#/kanban'; return;
       case 'skills': location.hash = '#/skills'; return;
@@ -503,7 +508,7 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
       )}
       {!gone && !helper && (
         <Composer
-          hasConversation={id !== null} running={running} sending={sending} pending={pending}
+          draftKey={id ?? NEW_DRAFT} hasConversation={id !== null} running={running} sending={sending} pending={pending}
           models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode}
           slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1 }}
           onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}

@@ -144,3 +144,26 @@ test('ui/live-state: Library の画面を読み直す合図（libraryRevision）
   for (const event of bumps) assert.equal(reduce(EMPTY, ev(event)).state.libraryRevision, 1, event.type);
   assert.equal(reduce(EMPTY, ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'a' })).state.libraryRevision, 0);
 });
+
+test('ui/live-state: 割り込みの発言が始まらなかった知らせ（queued_not_started）で割り込みの印を外す。ほかの警告では外さない', () => {
+  const forced = run(EMPTY, ev({ type: 'run.start', runId: 'r1', conversationId: 'c', modelId: 'm' }), { type: 'interrupt', conversationId: 'c', on: true });
+  const other = run(forced, ev({ type: 'warning', runId: 'r1', conversationId: 'c', code: 'context_trimmed', message: 'x' }));
+  assert.ok(other.interrupting.has('c'));
+  const dropped = run(forced, ev({ type: 'warning', runId: 'r1', conversationId: 'c', code: 'queued_not_started', message: 'not started' }));
+  assert.equal(dropped.interrupting.has('c'), false);
+  assert.deepEqual(dropped.notices.get('c')!.map(n => n.kind), ['warning'], '知らせそのものは出す');
+  const next = run(dropped, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: true }), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.equal(next.notices.get('c'), undefined, '次のふつうの実行に Interrupted は付かない');
+});
+
+test('ui/live-state: 結果が届いた道具の覚えは新しい 20 件まで（古いものから外れる）', () => {
+  let s = run(EMPTY, ev({ type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }));
+  for (let i = 1; i <= 23; i++) {
+    s = run(s,
+      ev({ type: 'tool.call', runId: 'r', conversationId: 'c', callId: `k${i}`, name: 'file_read', input: '{}' }),
+      ev({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: `k${i}`, name: 'file_read', ok: true, decision: 'allow', preview: '' }));
+  }
+  const settled = s.drafts[0]!.settled!;
+  assert.equal(settled.length, 20);
+  assert.deepEqual([settled[0]!.callId, settled.at(-1)!.callId], ['k4', 'k23']);
+});

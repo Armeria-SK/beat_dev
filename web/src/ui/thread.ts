@@ -52,7 +52,7 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
 
 const toolKey = (callId: string | undefined): string | null => (callId ? `t-${callId}` : null);
 
-const hiddenReply =(m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
+const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
 export function threadItems({ messages, draft, approvals = [], notices = [] }: ThreadInput): ThreadItem[] {
   const inputs = new Map<string, string>();
