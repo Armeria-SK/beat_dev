@@ -276,19 +276,22 @@ export class TaskStore {
     return this.#changed(id);
   }
 
-  finish(id: string, status: 'done' | 'failed' | 'cancelled', summary: string | null, actor: string, runId?: string): Task {
+  finish(id: string, status: 'done' | 'failed' | 'cancelled', summary: string | null, actor: string, runId?: string, reason?: string): Task {
     const now = this.#now();
-    if (status === 'cancelled') {
-      // 取り消す直前の状態を覚える（取り消しを戻す先）。質問の文は消さない。もう取り消してあるものを重ねて取り消しても、前の記録を残す
-      const before = this.get(id);
-      const from = before?.status === 'cancelled' ? before.cancelled_from : before && RESTORABLE.includes(before.status) ? before.status : null;
-      this.#db.prepare(`UPDATE tasks SET status = 'cancelled', result_summary = ?, lease_until = NULL, cancelled_from = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
-        .run(summary, from, now, now, id);
-    } else {
-      this.#db.prepare(`UPDATE tasks SET status = ?, result_summary = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = ?, updated_at = ? WHERE id = ?`)
-        .run(status, summary, now, now, id);
-    }
-    this.event(id, status, actor, summary, runId);
+    transaction(this.#db, () => {
+      if (reason) this.event(id, 'reason', actor, reason);
+      if (status === 'cancelled') {
+        // 取り消す直前の状態を覚える（取り消しを戻す先）。質問の文は消さない。もう取り消してあるものを重ねて取り消しても、前の記録を残す
+        const before = this.get(id);
+        const from = before?.status === 'cancelled' ? before.cancelled_from : before && RESTORABLE.includes(before.status) ? before.status : null;
+        this.#db.prepare(`UPDATE tasks SET status = 'cancelled', result_summary = ?, lease_until = NULL, cancelled_from = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
+          .run(summary, from, now, now, id);
+      } else {
+        this.#db.prepare(`UPDATE tasks SET status = ?, result_summary = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = ?, updated_at = ? WHERE id = ?`)
+          .run(status, summary, now, now, id);
+      }
+      this.event(id, status, actor, summary, runId);
+    });
     return this.#changed(id);
   }
 

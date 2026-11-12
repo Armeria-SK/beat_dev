@@ -422,6 +422,19 @@ test('unapprove: 動き出したタスクは 409（already_started）。区切�
 
 // ── cancel の理由 ──
 
+test('cancel: 終わりの知らせと聞き手は DB に書き終わってから動く。聞き手が失敗しても、取り消しと理由は残る', async t => {
+  const s = await taskApp(t);
+  const task = s.userTask('Proposed', { origin: 'self', propose: true });
+  const original = s.app.tasks.onChange;
+  const inTransaction: boolean[] = [];
+  s.app.tasks.onChange = changed => { inTransaction.push(s.app.db.isTransaction); original?.(changed); throw new Error('listener failed'); };
+  const res = await s.api(`/api/tasks/${task.id}/cancel`, { reason: 'Not now' });
+  assert.equal(res.status, 500);
+  assert.deepEqual(inTransaction, [false]);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'cancelled');
+  assert.deepEqual(s.app.tasks.events(task.id).map(e => e.kind), ['cancelled', 'reason', 'created']);
+});
+
 test('cancel の理由は、user の別の行（kind: reason）として経過に入る。理由なしは今までと同じ', async t => {
   const s = await taskApp(t);
   const withReason = s.userTask('Proposed', { origin: 'self', propose: true });

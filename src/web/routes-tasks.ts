@@ -215,10 +215,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
-    const updated = transaction(app.db, () => {
-      if (reason) app.tasks.event(task.id, 'reason', 'user', reason);
-      return app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
-    });
+    const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
     app.worker.stopTask(task.id);
     app.kv.delete(splitKey(task.id));
     sendJson(res, 200, { task: view(updated) });
