@@ -312,6 +312,11 @@ export class TaskStore {
   }
 
   finish(id: string, status: 'done' | 'failed' | 'cancelled', summary: string | null, actor: string, runId?: string, reason?: string): Task {
+    this.#writeFinish(id, status, summary, actor, runId, reason);
+    return this.#changed(id);
+  }
+
+  #writeFinish(id: string, status: 'done' | 'failed' | 'cancelled', summary: string | null, actor: string, runId?: string, reason?: string): void {
     const now = this.#now();
     transaction(this.#db, () => {
       if (reason) this.event(id, 'reason', actor, reason);
@@ -327,7 +332,6 @@ export class TaskStore {
       }
       this.event(id, status, actor, summary, runId);
     });
-    return this.#changed(id);
   }
 
   // 取り消しを、取り消す直前の状態へ戻す。状態が変わっていなければ（まだ取り消したまま）いつでも戻せる
@@ -401,17 +405,23 @@ export class TaskStore {
   }
 
   remove(id: string): RemovedTask {
+    let queued: Array<{ id: string }> = [];
     const removed = transaction(this.#db, () => {
       const task = this.get(id);
       if (!task) throw new TaskError('error.not_found', { id });
       if (task.cron !== null && task.parent_id === null) {
         if (task.conversation_id !== null) throw new TaskError('error.not_deletable');
-        if (this.hasOpenRun(id)) throw new TaskError('error.run_open');
+        if (this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('running', 'waiting')").get(id)) throw new TaskError('error.run_open');
       } else if (!(task.status === 'ready' && task.parent_id === null && task.cron === null && task.run_at !== null && this.#neverRan(task))) {
         throw new TaskError('error.not_deletable');
       }
       for (const ref of TASK_SOFT_REFERENCES) {
         if (this.#db.prepare(`SELECT 1 FROM ${ref.table} WHERE ${ref.column} = ? LIMIT 1`).get(id)) throw new TaskError('error.still_referenced');
+      }
+      queued = this.#db.prepare("SELECT id FROM tasks WHERE parent_id = ? AND status = 'ready'").all(id) as Array<{ id: string }>;
+      for (const run of queued) {
+        this.#writeFinish(run.id, 'cancelled', taskText(this.#language(), 'summary.cancelled_schedule_deleted'), 'user');
+        this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`task-split:${run.id}`);
       }
       const keptRuns = Number(this.#db.prepare(`UPDATE tasks SET parent_id = NULL, origin = CASE WHEN ? IN ('self', 'curiosity') THEN ? ELSE origin END WHERE parent_id = ?`).run(task.origin, task.origin, id).changes);
       const events = Number(this.#db.prepare('DELETE FROM task_events WHERE task_id = ?').run(id).changes);
@@ -419,7 +429,11 @@ export class TaskStore {
       this.#db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
       return { id, title: task.title, events, keptRuns };
     });
-    this.onDeleted?.(removed);
+    try {
+      for (const run of queued) this.#changed(run.id);
+    } finally {
+      this.onDeleted?.(removed);
+    }
     return removed;
   }
 

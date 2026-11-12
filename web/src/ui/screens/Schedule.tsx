@@ -244,6 +244,7 @@ function RepeatingItem({ row, now, actions, product }: { row: RepeatingRow; now:
         <div className="bt-row__end ui-sched__buttons">
           {last?.status === 'running' && <Pill tone="running">{t('ui.kanban.running')}</Pill>}
           {last?.status === 'waiting' && <Pill tone="waiting">{t('ui.kanban.waiting')}</Pill>}
+          {row.runOpen && last && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => runTaskOp('cancel', { id: last.id, title: task.title }))}>{t('ui.schedule.cancelRun')}</Button>}
           {state === 'paused' && <span className="bt-tag">{t('ui.schedule.paused')}</span>}
           {state === 'ended' && <span className="bt-tag">{t('ui.schedule.ended')}</span>}
           {state === 'active' && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.cancelTask(task.id), { title: t('ui.schedule.toast.paused') })}>{t('ui.schedule.pause')}</Button>}
