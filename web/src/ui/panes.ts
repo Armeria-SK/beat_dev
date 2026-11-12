@@ -51,7 +51,18 @@ export const panesWidth = (layout: PaneLayout): number =>
 
 export const maxPanes = (room: number): number => Math.max(0, Math.floor((room - CONVERSATION_MIN - GUTTER) / (PANE_MIN + GUTTER)));
 
-export const showSplit = (views: readonly string[], layout: PaneLayout, room: number): boolean =>
+export const singlePane = (narrow: boolean, room: number): boolean => narrow || maxPanes(room) === 0;
+
+export const keepHidden = (next: PaneLayout, all: PaneLayout, shown: PaneLayout): PaneLayout => [...next, ...all.slice(shown.length)];
+
+export function paneRange(layout: PaneLayout, index: number, room: number): { min: number; max: number } {
+  const pane = layout[index];
+  if (!pane) return { min: PANE_MIN, max: PANE_MIN };
+  if (index === 0) return { min: PANE_MIN, max: room - CONVERSATION_MIN - (panesWidth(layout) - pane.width) };
+  return { min: PANE_MIN, max: pane.width + layout[index - 1]!.width - PANE_MIN };
+}
+
+export const showSplit =(views: readonly string[], layout: PaneLayout, room: number): boolean =>
   views.length >= 2 && maxPanes(room) > layout.length;
 
 export function fitLayout(layout: PaneLayout, room: number): PaneLayout {

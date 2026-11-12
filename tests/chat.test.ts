@@ -373,11 +373,13 @@ test('sendChoiceOf: 権限モードは、新しい会話の最初の発言にだ
   assert.deepEqual(sendChoiceOf(null, { modelId: 'm', effort: 'low', permissionMode: 'auto' }), { modelId: 'm', effort: 'low', permissionMode: 'auto' });
 });
 
-test('sendChoiceOf: 新しい製品の会話の最初の発言は、ふつうも送る（持ち主が選んだ normal を、サーバーが「指定なし」と読んで Plan にしないように。beat 3-1a-u）', () => {
+test('sendChoiceOf（3-1a）: 新しい製品の会話の最初の発言は、ふつうでも権限モードを送る（送らないとサーバーが計画モードにするので、持ち主の選んだふつうを区別する）', () => {
   const none = { modelId: null, effort: null };
   assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'normal' }, undefined, true), { permissionMode: 'normal' });
+  assert.deepEqual(sendChoiceOf(null, none, undefined, true), { permissionMode: 'normal' }, 'モードが分からなければふつうとして送る');
   assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'plan' }, undefined, true), { permissionMode: 'plan' });
-  assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'normal' }, undefined, true), {}, '会話があれば送らない');
+  assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'normal' }, undefined, true), {}, '会話があれば、サーバーが覚えている');
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'normal' }, undefined, false), {}, '製品に属さない会話は今までどおり');
 });
 
 test('newConversationId / sendTarget: 最初の発言は画面が決めた id へ送り（会話を先に作らない）、断られたあとのやり直しは同じ id を使う', () => {

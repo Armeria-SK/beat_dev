@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  CONVERSATION_MIN, closePane, fitLayout, GUTTER, maxPanes, openable, PANE_DEFAULT, PANE_MIN, PANES, panesWidth, parseLayout, resizePane, selectView, showSplit, tabOrder, togglePanes,
+  CONVERSATION_MIN, closePane, fitLayout, GUTTER, keepHidden, maxPanes, openable, PANE_DEFAULT, PANE_MIN, PANES, paneRange, panesWidth, parseLayout, resizePane, selectView, showSplit, singlePane, tabOrder, togglePanes,
   visiblePanes, type PaneLayout,
 } from '../web/src/ui/panes.ts';
 
@@ -33,7 +33,31 @@ test('ui/panes: 閉じる・タブを替えると、その欄だけが変わる'
   const two = [{ view: 'plan', width: 400 }, { view: 'plan', width: 350 }] as PaneLayout;
   assert.deepEqual(closePane(two, 0), [{ view: 'plan', width: 350 }]);
   assert.deepEqual(closePane(two, 5), two, '無い番号は何もしない');
-  assert.deepEqual(selectView(two, 1, 'plan'), two);
+  assert.deepEqual(selectView(two, 1, 'pending' as never), [{ view: 'plan', width: 400 }, { view: 'pending', width: 350 }]);
+});
+
+test('ui/panes: 横に 1 枚も並べられない幅（サイドバーのある 761〜903px、iPad の縦など）では、狭い幅と同じく欄が会話に替わって全幅で開く', () => {
+  const room = (width: number) => width - 248;
+  assert.equal(singlePane(false, room(768)), true);
+  assert.equal(singlePane(false, room(834)), true);
+  assert.equal(singlePane(false, room(903)), true);
+  assert.equal(singlePane(false, room(904)), false, '会話 340px と欄 300px が並ぶ');
+  assert.equal(singlePane(true, room(1400)), true, '狭い幅の決まりはそのまま');
+});
+
+test('ui/panes: 収まらずに見せていない欄は、閉じる・タブを替える・幅を変えるときも覚えた形から消さない', () => {
+  const all = [{ view: 'plan', width: 400 }, { view: 'plan', width: 350 }, { view: 'pending', width: 320 }] as PaneLayout;
+  const shown = all.slice(0, 1);
+  assert.deepEqual(keepHidden(closePane(shown, 0), all, shown), [{ view: 'plan', width: 350 }, { view: 'pending', width: 320 }]);
+  assert.deepEqual(keepHidden(selectView(shown, 0, 'pending' as never), all, shown), [{ view: 'pending', width: 400 }, { view: 'plan', width: 350 }, { view: 'pending', width: 320 }]);
+  assert.deepEqual(keepHidden(resizePane(shown, 0, -20, 2000), all, shown).map(p => p.width), [420, 350, 320]);
+});
+
+test('ui/panes: つまみの範囲（読み上げに渡す）: 最初の欄は 300px から会話が 340px 残るまで、あいだのつまみは隣と分け合える分まで', () => {
+  const room = 1152;
+  const two = [{ view: 'plan', width: 400 }, { view: 'plan', width: 350 }] as PaneLayout;
+  assert.deepEqual(paneRange(two, 0, room), { min: PANE_MIN, max: room - CONVERSATION_MIN - (350 + GUTTER * 3) });
+  assert.deepEqual(paneRange(two, 1, room), { min: PANE_MIN, max: 400 + 350 - PANE_MIN });
 });
 
 test('ui/panes: 見えるのは、今の会話で開ける欄だけ（覚えた形は消さない）', () => {

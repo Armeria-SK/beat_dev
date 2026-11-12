@@ -48,8 +48,9 @@ test('ui/composer-state: 置き場の文字: 新しい会話 Message、会話の
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan' }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', running: true }).placeholder]), 'Reply · Queue waits for the next break, Force interrupts');
-  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false, product: true }).placeholder]), 'Describe what to build', '計画書の無い製品の最初の会話は Plan でも Describe what to build（beat 3-1a-u）');
-  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', product: true }).placeholder]), 'Describe the change to plan');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false, product: true, planless: true }).placeholder]), 'Describe what to build', '計画書の無い製品の最初の会話は Plan でも Describe what to build（beat 3-1a-u）');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false, product: true, planless: false }).placeholder]), 'Describe the change to plan', '計画書のある製品で Plan を選んだら、計画の直し');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', product: true, planless: true }).placeholder]), 'Describe the change to plan', '会話が始まったあと');
 });
 
 test('ui/composer-state: 新しい製品の会話のモードの初めの値: 計画書が無い製品は Plan、ある製品・分からない（古いサーバー）・製品の外は Ask（beat 3-1a-u）', () => {

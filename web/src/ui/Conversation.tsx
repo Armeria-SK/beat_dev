@@ -327,7 +327,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
 
   const choice: Choice = conversation
     ? { modelId: conversation.model_id ?? null, effort: conversation.effort ?? null, permissionMode: conversation.permission_mode ?? 'normal' }
-    : draftChoice;
+    : id ? NO_CHOICE : draftChoice;
 
   const submit = async (kind: SubmitKind, text: string, attachments: UploadView[] = [], retry: FailAction | null = null): Promise<boolean> => {
     if (sending) return false;
@@ -337,7 +337,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
     try {
       const out = await submitMessage({ kind, text, attachmentIds: attachments.map(a => a.id), conversationId: id, target, running: Boolean(draft), pending }, {
         rename: api.renameConversation, cancelPending: api.cancelPending,
-        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice, undefined, Boolean(product)), sendOptions(id, product?.id, interrupt)),
+        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice, undefined, product !== undefined), sendOptions(id, product?.id, interrupt)),
         isGone: error => error instanceof ApiError && error.status === 404,
         clearNotices: onClearNotices, interrupt: onInterrupt,
       });
@@ -519,7 +519,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
         )}
         {summaryOpen && id && <Summary id={id} />}
         {gone && <EmptyState title={t('ui.session.gone')} text={t('ui.session.goneText')} />}
-        {empty && !gone && product && <EmptyState title={t('ui.product.empty.title')} text={t('ui.product.empty.text')} />}
+        {empty && !gone && product && !product.has_plan && <EmptyState title={t('ui.product.empty.title')} text={t('ui.product.empty.text')} />}
         {empty && !gone && !product && (
           <EmptyState title={t('ui.empty.title')} text={t('ui.empty.text')} action={<Suggestions busy={sending} onPick={text => void pick(text)} />} />
         )}
@@ -540,7 +540,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
       )}
       {!gone && !helper && (
         <Composer
-          draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} running={running} sending={sending} pending={pending}
+          draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} planless={startMode === 'plan'} running={running} sending={sending} pending={pending}
           models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode}
           slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1 }}
           onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}

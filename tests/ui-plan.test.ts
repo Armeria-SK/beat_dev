@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Conversation, PlanDoc } from '../web/src/api.ts';
-import { canEdit, canSave, editedBy, keptDraft, PLAN_EDITS, planDirty, planState, runningIn, saveOutcome } from '../web/src/ui/plan.ts';
+import { canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planState, planStays, rebase, runningIn, saveOutcome, startDraft } from '../web/src/ui/plan.ts';
+import { hasUnsavedEdits, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
 // Plan の欄（beat 3-1a-u）。画面を持たない決まり: 状態の決め方・書きかけ・保存の結果（web/src/ui/plan.ts）。
 
@@ -30,19 +31,57 @@ test('ui/plan: 直せるのは 読める・無い のときだけ。Save は書�
   assert.equal(canSave('empty', true, false), true);
 });
 
-test('ui/plan: 書きかけは、読んだ本文と違うときだけ', () => {
-  assert.equal(planDirty(null, doc()), false);
-  assert.equal(planDirty('# Plan\n\nStep one.', doc()), false);
-  assert.equal(planDirty('# Plan\n\nStep two.', doc()), true);
-  assert.equal(planDirty('', doc({ content: null })), false);
-  assert.equal(planDirty('x', doc({ content: null })), true);
-  assert.equal(planDirty('x', null), true);
+test('ui/plan: 書きかけは、直し始めたときの本文と違うときだけ（サーバーの今の本文とは比べない）', () => {
+  const start = startDraft(doc());
+  assert.deepEqual(start, { text: '# Plan\n\nStep one.', base: 'h1', baseText: '# Plan\n\nStep one.' });
+  assert.deepEqual(startDraft(doc({ content: null, hash: null })), { text: '', base: null, baseText: '' });
+  assert.deepEqual(startDraft(null), { text: '', base: null, baseText: '' });
+  assert.equal(planDirty(null), false);
+  assert.equal(planDirty(start), false);
+  assert.equal(planDirty({ ...start, text: '# Plan\n\nStep two.' }), true);
 });
 
-test('ui/plan: 保存の結果: 409 は「その間に変わった」（書きかけは残す）、ほかは失敗', () => {
-  assert.equal(saveOutcome({ status: 409 }), 'changed');
-  assert.equal(saveOutcome({ status: 400 }), 'failed');
-  assert.equal(saveOutcome(new Error('x')), 'failed');
+test('ui/plan: 触っていない書きかけは、AI が計画書を書き換えたら新しい本文と版に替わる。触った書きかけはそのまま（保存は 409 になる）', () => {
+  const start = startDraft(doc());
+  const newer = doc({ content: '# Plan\n\nStep one.\nStep two.', hash: 'h2' });
+  assert.deepEqual(followDoc(start, newer), { text: newer.content, base: 'h2', baseText: newer.content });
+  assert.equal(planDirty(followDoc(start, newer)), false, '本文が変わっても書きかけにはならない');
+  const typed = { ...start, text: 'mine' };
+  assert.deepEqual(followDoc(typed, newer), typed);
+  assert.equal(followDoc(start, doc()), start, '同じ版なら替えない');
+  assert.equal(followDoc(null, newer), null);
+});
+
+test('ui/plan: Reload は新しい版を基にし直し、書きかけの文は残す（そのまま保存すると新しい版を置き換える）', () => {
+  const typed = { text: 'mine', base: 'h1', baseText: '# Plan\n\nStep one.' };
+  const newer = doc({ content: 'newer', hash: 'h2' });
+  assert.deepEqual(rebase(typed, newer), { text: 'mine', base: 'h2', baseText: 'newer', replaces: true }, '印は書きかけと一緒に残り、欄を開き直しても「置き換える」と出し続ける');
+  assert.equal(startDraft(doc()).replaces, undefined);
+  assert.equal(planDirty(rebase(typed, newer)), true);
+  assert.equal(planDirty(rebase({ ...typed, text: 'newer' }, newer)), false, '新しい版と同じ文なら書きかけではない');
+});
+
+test('ui/plan: 保存の結果: 409 は「その間に変わった」（書きかけは残す）、ほかは失敗で、サーバーの理由（秘密・長すぎ・しまった製品）をそのまま見せる', () => {
+  assert.deepEqual(saveOutcome({ status: 409, message: 'x' }), { kind: 'changed' });
+  assert.deepEqual(saveOutcome(Object.assign(new Error('The plan looks like it holds a secret'), { status: 400 })), { kind: 'failed', detail: 'The plan looks like it holds a secret' });
+  assert.deepEqual(saveOutcome(new TypeError('Failed to fetch')), { kind: 'failed', detail: null }, 'サーバーの答えでない失敗は理由を出さない');
+});
+
+test('ui/plan: 同じ製品の会話のあいだを移るとき（新しい会話の最初の送信を含む）は、その製品の計画書の書きかけで「離れますか」を出さない', () => {
+  const known = new Map<string, string | null>([['c1', 'p1'], ['c2', 'p1'], ['c3', 'p2'], ['c4', null]]);
+  const of = (id: string) => (known.has(id) ? known.get(id)! : undefined);
+  assert.equal(planStays({ view: 'productNew', id: 'p1' }, { view: 'chat', id: 'fresh' }, of), 'p1', '送ったばかりの会話はまだ一覧に無い');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c2' }, of), 'p1');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'productNew', id: 'p1' }, of), 'p1');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c3' }, of), null, '別の製品');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c4' }, of), null, '製品の外の会話');
+  assert.equal(planStays({ view: 'productNew', id: 'p1' }, { view: 'chat', id: 'c4' }, of), null, '一覧にある製品の外の会話は、新しい会話の画面からでも持ち越さない');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'fresh' }, of), null, '知らない会話へは、新しい会話の画面からだけ持ち越す');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'kanban' }, of), null);
+  setUnsaved(`${PLAN_EDITS}p1`, true);
+  assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}p1`), false, '持ち越す書きかけは数えない');
+  assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}p10`), true, '名前の頭が同じ別の製品とは区別する');
+  setUnsaved(`${PLAN_EDITS}p1`, false);
 });
 
 test('ui/plan: 最後に直した人の言葉: owner → you、ai → beat、outside → outside', () => {
@@ -54,7 +93,7 @@ test('ui/plan: 最後に直した人の言葉: owner → you、ai → beat、out
 
 test('ui/plan: 欄を閉じても書きかけは残る。書きかけの記録が消えていれば（Discard を押した）、残した文も捨てる', () => {
   assert.equal(PLAN_EDITS.startsWith('screen:'), true, '別の画面へ行くときの確かめに乗る');
-  const kept = { text: 'draft', base: 'h1' };
+  const kept = { text: 'draft', base: 'h1', baseText: '# Plan' };
   assert.deepEqual(keptDraft(kept, true), kept, '書き始めたときの版（baseHash）も一緒に残す。あとから AI が書いても、保存は 409 になる');
   assert.equal(keptDraft(kept, false), null);
   assert.equal(keptDraft(undefined, true), null);

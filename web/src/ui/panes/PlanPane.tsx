@@ -6,7 +6,9 @@ import { Markdown } from '../../Markdown.tsx';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Notice } from '../parts.tsx';
-import { canEdit, canSave, editedBy, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, saveOutcome } from '../plan.ts';
+import {
+  canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, saveOutcome, startDraft, type PlanDraft, type SaveOutcome,
+} from '../plan.ts';
 import { hasUnsavedEdits, setUnsaved } from '../unsaved.ts';
 
 function Meta({ doc, writing }: { doc: PlanDoc | null; writing: boolean }) {
@@ -25,12 +27,10 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
   const key = PLAN_EDITS + productId;
   const [doc, setDoc] = useState<PlanDoc | null>(null);
   const [failed, setFailed] = useState(false);
-  const [kept] = useState(() => keptDraft(planDrafts.get(productId), hasUnsavedEdits(key)));
-  const [draft, setDraft] = useState<string | null>(kept?.text ?? null);
-  const [base, setBase] = useState<string | null>(kept?.base ?? null);
-  const [mode, setMode] = useState<'read' | 'edit'>(kept ? 'edit' : 'read');
+  const [draft, setDraft] = useState<PlanDraft | null>(() => keptDraft(planDrafts.get(productId), hasUnsavedEdits(key)));
+  const [mode, setMode] = useState<'read' | 'edit'>(draft ? 'edit' : 'read');
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState<'changed' | 'failed' | null>(null);
+  const [notice, setNotice] = useState<SaveOutcome | null>(null);
   const loads = useRef(latestOnly());
 
   const load = useCallback(async (): Promise<PlanDoc | null> => {
@@ -48,20 +48,22 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
   }, [productId]);
   useEffect(() => { void load(); }, [load, revision]);
 
-  const dirty = planDirty(draft, doc);
+  useEffect(() => { setDraft(current => followDoc(current, doc)); }, [doc]);
+
+  const dirty = planDirty(draft);
   useEffect(() => {
     setUnsaved(key, dirty);
-    if (dirty && draft !== null) planDrafts.set(productId, { text: draft, base }); else planDrafts.delete(productId);
-  }, [key, dirty, draft, base, productId]);
+    if (dirty && draft) planDrafts.set(productId, draft); else planDrafts.delete(productId);
+  }, [key, dirty, draft, productId]);
 
   const state = planState(doc, failed);
   const writing = state === 'writing';
 
   const save = async () => {
-    if (!canSave(state, dirty, saving)) return;
+    if (!draft || !canSave(state, dirty, saving)) return;
     setSaving(true);
     try {
-      const r = await api.savePlan(productId, draft ?? '', base);
+      const r = await api.savePlan(productId, draft.text, draft.base);
       setDoc(r.plan);
       setDraft(null);
       setMode('read');
@@ -75,11 +77,18 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
     setNotice(null);
     setMode('read');
     const fresh = await load();
-    if (fresh) setBase(fresh.hash);
+    if (fresh) setDraft(current => (current ? rebase(current, fresh) : current));
+  };
+
+  const discard = () => {
+    setDraft(null);
+    setNotice(null);
+    setMode('read');
+    void load();
   };
 
   const edit = () => {
-    if (draft === null) { setDraft(doc?.content ?? ''); setBase(doc?.hash ?? null); }
+    if (draft === null) setDraft(startDraft(doc));
     setMode('edit');
   };
 
@@ -93,11 +102,12 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
         </span>
         {mode === 'edit' && <Button variant="primary" small disabled={!canSave(state, dirty, saving)} onClick={() => void save()}>{t('ui.plan.save')}</Button>}
       </div>
-      {notice === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} />}
-      {notice === 'failed' && <Notice tone="fail" title={t('ui.plan.saveFailed')} />}
+      {notice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} also={{ label: t('ui.plan.discard'), run: discard }} />}
+      {draft?.replaces && dirty && notice?.kind !== 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.rebased')} action={{ label: t('ui.plan.discard'), run: discard }} />}
+      {notice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.saveFailed')} text={notice.detail ?? undefined} />}
       {mode === 'edit' ? (
-        <textarea className="bt-doc bt-doc--edit ui-plan__editor" aria-label={t('ui.plan.editor')} spellCheck={false} value={draft ?? ''}
-          onChange={e => setDraft(e.target.value)}
+        <textarea className="bt-doc bt-doc--edit ui-plan__editor" aria-label={t('ui.plan.editor')} spellCheck={false} value={draft?.text ?? ''}
+          onChange={e => { const text = e.target.value; setDraft(current => ({ ...(current ?? startDraft(doc)), text })); }}
           onKeyDown={e => { if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void save(); } }} />
       ) : state === 'failed' ? (
         <Notice tone="fail" title={t('ui.plan.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />

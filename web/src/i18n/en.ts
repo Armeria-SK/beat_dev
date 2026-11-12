@@ -1369,6 +1369,8 @@ export const en = {
   'ui.plan.emptyText': 'describe what to build in the conversation',
   'ui.plan.changed': 'Changed meanwhile. Reload to see it',
   'ui.plan.reload': 'Reload',
+  'ui.plan.discard': 'Discard my edits',
+  'ui.plan.rebased': 'Your edits are kept. Saving them replaces this version',
   'ui.plan.saveFailed': 'Could not save the plan',
   'ui.plan.loadFailed': 'Could not read the plan',
   'ui.overview.workerRuns': (runs: number, max: number) => `${runs} / ${max} runs this hour`,

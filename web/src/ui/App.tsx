@@ -9,7 +9,7 @@ import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
 import { Panes, usePanes } from './Panes.tsx';
-import { runningIn } from './plan.ts';
+import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
 import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
 import { pickFocus } from './focus.ts';
@@ -189,7 +189,8 @@ export function App() {
     const onHash = () => {
       const next = readRoute();
       const held = behindRef.current;
-      if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS), held, next)) {
+      const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
+      if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
         setLeave(routeHash(next));
         location.replace(routeHash(held));
         return;
@@ -312,8 +313,8 @@ export function App() {
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
       <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} panes={paneToggle} />
-      <div className={convo ? `bt-app${paneCount ? ' has-panes' : ''}` : 'bt-shell'} data-panes={convo ? String(paneCount) : undefined} inert={shut}
-        style={paneCount && !panes.narrow ? { '--ui-panes-w': `${panes.width}px` } as CSSProperties : undefined}>
+      <div className={convo ? `bt-app${paneCount ? ' has-panes' : ''}${paneCount && panes.single ? ' is-pane-single' : ''}` : 'bt-shell'} data-panes={convo ? String(paneCount) : undefined} inert={shut}
+        style={paneCount && !panes.single ? { '--ui-panes-w': `${panes.width}px` } as CSSProperties : undefined}>
         <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={live.projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
         {convo && awaitingProduct(behind, routeProduct) ? (
           <main className="bt-app__main" inert={drawer} />
