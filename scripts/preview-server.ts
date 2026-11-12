@@ -88,6 +88,7 @@ const HELP = [
   '- `/demo edit` and `/demo overwrite` change the note (after `/demo write`)',
   '- `/demo list` and `/demo long-list` write a checklist',
   '- `/demo helper` hands a small job to a helper',
+  '- `/demo skill` drafts a skill (registered at once when Ask before registering is off)',
   '- `/demo fail` fails on every model',
   '- `/demo slow` writes for 15 seconds (to try Queue, Force and Stop)',
 ].join('\n');
@@ -108,6 +109,7 @@ function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
   if (said.includes('/demo long-list')) return call('checklist_write', { items: Array.from({ length: 10 }, (_, i) => ({ text: `Step ${i + 1}`, status: i < 6 ? 'done' : i === 6 ? 'in_progress' : 'pending' })) });
   if (said.includes('/demo list')) return call('checklist_write', { items: [{ text: 'Read the note', status: 'done' }, { text: 'Change one line', status: 'in_progress' }, { text: 'Read it back', status: 'pending' }] });
   if (said.includes('/demo helper')) return call('agent_run', { task: 'Say hello from the helper.', title: 'Say hello', tools: ['file_read'] });
+  if (said.includes('/demo skill')) return call('skill_draft', { name: 'preview-skill', description: 'A skill the preview model wrote', body: '1. Read the note.\n2. Say what it says.', reason: 'To try Ask before registering.' });
   if (said.includes('/demo fail')) return (async function* (): AsyncGenerator<StreamEvent> { throw providerError('timeout', 'timeout', {}, { retryable: false }); })();
   return words(HELP);
 }
