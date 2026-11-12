@@ -161,8 +161,8 @@ test('環境変数の名前: あればその名前、Anthropic は ANTHROPIC_API
   assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['BEAT_A_B_API_KEY'])), 'BEAT_A_B_API_KEY_2');
   assert.equal(keyEnvName({ id: 'a-b', kind: 'openai_compatible' }, new Set(['BEAT_A_B_API_KEY', 'BEAT_A_B_API_KEY_2'])), 'BEAT_A_B_API_KEY_3');
   assert.match(keyEnvName({ id: 'x'.repeat(40), kind: 'openai_compatible' }), /^[A-Z][A-Z0-9_]{0,63}$/u, '一番長い ID でも名前の形に収まる');
-  assert.equal(derivedKeyEnv('anthropic-2', new Set(['ANTHROPIC_API_KEY'])), 'CLIVE_ANTHROPIC_2_API_KEY');
-  assert.equal(derivedKeyEnv('anthropic-2', new Set(['CLIVE_ANTHROPIC_2_API_KEY'])), 'CLIVE_ANTHROPIC_2_API_KEY_2');
+  assert.equal(derivedKeyEnv('anthropic-2', new Set(['ANTHROPIC_API_KEY'])), 'BEAT_ANTHROPIC_2_API_KEY');
+  assert.equal(derivedKeyEnv('anthropic-2', new Set(['BEAT_ANTHROPIC_2_API_KEY'])), 'BEAT_ANTHROPIC_2_API_KEY_2');
 });
 
 test('鍵を持つ名前だけを書く（isSecretEnvName）: PATH などの環境変数は、鍵の名前として書き換えない', () => {

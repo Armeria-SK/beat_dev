@@ -392,15 +392,15 @@ test('Anthropic を足す: 1 つ目は ANTHROPIC_API_KEY、2 つ目からはほ�
   const one = { ...sample(), providers: [...sample().providers, { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 }] };
   const second = newAnthropicProvider(one);
   assert.equal(second.id, 'anthropic-2');
-  assert.equal(second.apiKeyEnv, 'CLIVE_ANTHROPIC_2_API_KEY');
+  assert.equal(second.apiKeyEnv, 'BEAT_ANTHROPIC_2_API_KEY');
   assert.ok(isEnvName(second.apiKeyEnv as string));
   const next = { ...one, providers: [...one.providers, second] };
   assert.deepEqual(sharedKeyWith(next, 'anthropic-2'), []);
   assert.deepEqual(sharedKeyWith(next, 'anthropic'), ['claude']);
 
-  const third = newAnthropicProvider({ ...next, providers: [...next.providers, { id: 'x', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'CLIVE_ANTHROPIC_3_API_KEY', maxParallel: 1, timeoutMs: 1000 }] });
+  const third = newAnthropicProvider({ ...next, providers: [...next.providers, { id: 'x', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'BEAT_ANTHROPIC_3_API_KEY', maxParallel: 1, timeoutMs: 1000 }] });
   assert.equal(third.id, 'anthropic-3');
-  assert.equal(third.apiKeyEnv, 'CLIVE_ANTHROPIC_3_API_KEY_2');
+  assert.equal(third.apiKeyEnv, 'BEAT_ANTHROPIC_3_API_KEY_2');
 });
 
 test('Key variable の欄: 環境変数の名前だけを設定に入れる。鍵を貼ったものは断り、空は外す', () => {

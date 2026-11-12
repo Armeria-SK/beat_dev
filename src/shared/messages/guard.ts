@@ -227,7 +227,7 @@ const en = {
   'pipeline.auto_no_reason': 'No reason was given',
   'pipeline.auto_asked': 'The auto-approve checker decided this needs your approval: {reason}',
   'pipeline.auto_failed': 'The auto-approve checker could not give an answer, so this is checked with you',
-  'pipeline.auto_task_not_owner': "This task's text was not written by you (Clive decided it, or it was written after reading text from elsewhere), so the auto-approve checker is not used and this is checked with you",
+  'pipeline.auto_task_not_owner': "This task's text was not written by you (beat decided it, or it was written after reading text from elsewhere), so the auto-approve checker is not used and this is checked with you",
   'pipeline.auto_human_sends': 'This sends something out (or may send something out), so it is never auto-approved and is checked with you',
   'pipeline.auto_human_removes': 'This deletes something (or may delete something), so it is never auto-approved and is checked with you',
   'pipeline.auto_egress': 'Auto-approve has read something outside the allowed folders in this conversation, so every command and anything sent out is checked with you from now on (later replies and other modes included)',
