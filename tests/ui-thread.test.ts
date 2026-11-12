@@ -32,6 +32,87 @@ test('ui/thread: 続けて呼んだ道具は 1 つのまとまり（bt-tools）�
   assert.deepEqual(tools.rows.map(r => [r.name, JSON.parse(r.input).path, r.result?.text]), [['file_read', 'a.ts', 'content'], ['file_edit', 'a.ts', 'Replaced 1 occurrence(s): a.ts']]);
 });
 
+test('ui/thread: 手元のサーバーが毎回同じ呼び出し番号を返しても、各行はその回の入力を出し、行の key は重ならない', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'look around'),
+      msg('assistant', '', { toolCalls: [call('call_0', 'shell_run', { command: 'Get-Location; Get-ChildItem' })] }),
+      msg('tool', 'D:\\a', { toolName: 'shell_run', toolCallId: 'call_0' }),
+      msg('assistant', '', { toolCalls: [call('call_0', 'shell_run', { command: 'git status' })] }),
+      msg('tool', 'clean', { toolName: 'shell_run', toolCallId: 'call_0' }),
+      msg('assistant', '', { toolCalls: [call('call_0', 'file_read', { path: 'README.md' })] }),
+      msg('tool', '# x', { toolName: 'file_read', toolCallId: 'call_0' }),
+    ],
+  });
+  const tools = items[1]!;
+  assert.ok(tools.kind === 'tools');
+  assert.deepEqual(tools.rows.map(r => [r.name, r.input]), [
+    ['shell_run', JSON.stringify({ command: 'Get-Location; Get-ChildItem' })],
+    ['shell_run', JSON.stringify({ command: 'git status' })],
+    ['file_read', JSON.stringify({ path: 'README.md' })],
+  ]);
+  assert.equal(new Set(items.flatMap(i => (i.kind === 'tools' ? i.rows.map(r => r.key) : [i.key]))).size, items.length - 1 + tools.rows.length);
+});
+
+test('ui/thread: 1 つの返事で同じ呼び出し番号が 2 回出ても、結果は呼んだ順にそれぞれの入力と組む', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'go'),
+      msg('assistant', '', { toolCalls: [call('call_0', 'shell_run', { command: 'ls' }), call('call_0', 'shell_run', { command: 'pwd' })] }),
+      msg('tool', 'a', { toolName: 'shell_run', toolCallId: 'call_0' }),
+      msg('tool', 'b', { toolName: 'shell_run', toolCallId: 'call_0' }),
+    ],
+  });
+  const tools = items[1]!;
+  assert.ok(tools.kind === 'tools');
+  assert.deepEqual(tools.rows.map(r => [JSON.parse(r.input).command, r.result?.text]), [['ls', 'a'], ['pwd', 'b']]);
+});
+
+test('ui/thread: 番号を使い回すとき、動いている行と結果待ちの行も前の行とキーが重ならず、保存されたあとも同じキーのまま', () => {
+  const round1 = [
+    msg('user', 'go', { runId: 'r2' }),
+    msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: 'ls' })] }),
+    msg('tool', 'one', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' }),
+  ];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '' };
+  const running = threadItems({ messages: round1, draft: { ...draft, activeTool: 'shell_run', activeInput: '{"command":"pwd"}', toolCallId: 'call_0', settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"ls"}' }], settledCount: 1 } }).at(-1)!;
+  assert.ok(running.kind === 'tools');
+  const keys = running.rows.map(r => r.key);
+  assert.equal(new Set(keys).size, 2, `キーが重ならない: ${keys}`);
+  const round2 = [...round1, msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: 'pwd' })] }), msg('tool', 'two', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' })];
+  const saved = threadItems({ messages: round2, draft: { ...draft, settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"ls"}' }, { callId: 'call_0', name: 'shell_run', input: '{"command":"pwd"}' }], settledCount: 2 } }).filter(i => i.kind === 'tools').at(-1)!;
+  assert.ok(saved.kind === 'tools');
+  assert.deepEqual(saved.rows.map(r => r.key), keys, '動いていた行が保存された行になっても、キーは変わらない');
+  assert.deepEqual(saved.rows.map(r => r.result?.text), ['one', 'two']);
+});
+
+test('ui/thread: 結果が届いたが保存を読む前の行は、同じ番号の前の行が保存済みでも消さない（その回の保存の数で決める）', () => {
+  const messages = [
+    msg('user', 'go', { runId: 'r2' }),
+    msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: 'ls' })] }),
+    msg('tool', 'one', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' }),
+  ];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '', settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"ls"}' }, { callId: 'call_0', name: 'shell_run', input: '{"command":"pwd"}' }], settledCount: 2 };
+  const tools = threadItems({ messages, draft }).filter(i => i.kind === 'tools').at(-1)!;
+  assert.ok(tools.kind === 'tools');
+  assert.deepEqual(tools.rows.map(r => [JSON.parse(r.input).command, r.result?.text ?? null]), [['ls', 'one'], ['pwd', null]]);
+  const older = [...messages, ...[2, 3, 4].flatMap(n => [msg('assistant', '', { runId: 'r2', toolCalls: [call('call_0', 'shell_run', { command: `c${n}` })] }), msg('tool', `r${n}`, { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_0' })])];
+  const trimmed = { ...draft, settled: [{ callId: 'call_0', name: 'shell_run', input: '{"command":"c4"}' }, { callId: 'call_0', name: 'shell_run', input: '{"command":"c5"}' }], settledCount: 5 };
+  const rows = threadItems({ messages: older, draft: trimmed }).flatMap(i => (i.kind === 'tools' ? i.rows : []));
+  assert.deepEqual(rows.map(r => r.result?.text ?? JSON.parse(r.input).command), ['one', 'r2', 'r3', 'r4', 'c5'], '覚えが古いものから外れていても、まだ保存されていない最後の 1 つだけを出す');
+});
+
+test('ui/thread: 実行の途中から画面を開いた（数え直しになった）ときも、まだ保存されていない番号の結果待ちの行は消さない', () => {
+  const messages = [
+    msg('user', 'go', { runId: 'r2' }),
+    msg('assistant', '', { runId: 'r2', toolCalls: [call('id_1', 'shell_run', { command: 'ls' })] }),
+    msg('tool', 'one', { runId: 'r2', toolName: 'shell_run', toolCallId: 'id_1' }),
+  ];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '', settled: [{ callId: 'id_2', name: 'shell_run', input: '{"command":"pwd"}' }], settledCount: 1 };
+  const rows = threadItems({ messages, draft }).flatMap(i => (i.kind === 'tools' ? i.rows : []));
+  assert.deepEqual(rows.map(r => [r.key, r.result?.text ?? null]), [['t-id_1', 'one'], ['t-id_2', null]]);
+});
+
 test('ui/thread: 返事の文があいだに入ると、道具のまとまりは分かれる。コピーは 1 回の返事の最後の文だけで、その回の文を全部まとめる', () => {
   const items = threadItems({
     messages: [
@@ -116,7 +197,7 @@ test('ui/thread: 動いている道具の行と、結果が届いたあとの行
   const gap = threadItems({ messages: base, draft: settled }).find(i => i.kind === 'tools')!;
   assert.ok(gap.kind === 'tools');
   assert.deepEqual([gap.key, gap.rows.map(r => [r.key, r.result, r.running])], ['t-call_9', [['t-call_9', null, undefined]]], '結果が届いてから保存された発言を読むまでのあいだも、行は残る');
-  const after = threadItems({ messages: [...base, msg('tool', 'out', { toolName: 'shell_run', toolCallId: 'call_9' })], draft: settled }).filter(i => i.kind === 'tools');
+  const after = threadItems({ messages: [...base, msg('tool', 'out', { runId: 'r2', toolName: 'shell_run', toolCallId: 'call_9' })], draft: settled }).filter(i => i.kind === 'tools');
   assert.deepEqual(after.flatMap(i => (i.kind === 'tools' ? i.rows.map(r => r.result?.text) : [])), ['out'], '読んだあとは 1 行だけ');
   const unknown = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run' } }).at(-1)!;
   assert.ok(unknown.kind === 'tools');
@@ -179,4 +260,42 @@ test('Markdown の画像: 読み込まず、http(s) のときだけホストを�
   assert.equal(imageHost('javascript:alert(1)'), null);
   assert.equal(imageHost('ftp://example.com/a.png'), null);
   assert.equal(imageHost(undefined), null);
+});
+
+test('ui/thread: plan_write で計画書を書いた実行が終わると、その実行の最後に「Plan written」の知らせを 1 つ出す。動いている実行・失敗した書き込み・別の道具には出さない', () => {
+  const written = threadItems({
+    messages: [
+      msg('user', 'build me an uploader', { runId: 'p1' }),
+      msg('assistant', '', { runId: 'p1', toolCalls: [call('w1', 'plan_write', { content: '# Plan' }), call('w2', 'plan_write', { content: '# Plan 2' })] }),
+      msg('tool', 'Wrote plan.md', { runId: 'p1', toolName: 'plan_write', toolCallId: 'w1' }),
+      msg('tool', 'Wrote plan.md', { runId: 'p1', toolName: 'plan_write', toolCallId: 'w2' }),
+      msg('assistant', 'The plan is in the Plan pane.', { runId: 'p1' }),
+      msg('user', 'thanks', { runId: 'p2' }),
+      msg('assistant', 'ok', { runId: 'p2' }),
+    ],
+  });
+  assert.deepEqual(written.map(i => i.kind), ['owner', 'tools', 'reply', 'plan', 'owner', 'reply']);
+  assert.equal(written[3]!.key, 'plan-p1');
+
+  const live = threadItems({
+    messages: [
+      msg('user', 'go', { runId: 'p3' }),
+      msg('assistant', '', { runId: 'p3', toolCalls: [call('w3', 'plan_write', { content: '# Plan' })] }),
+      msg('tool', 'Wrote plan.md', { runId: 'p3', toolName: 'plan_write', toolCallId: 'w3' }),
+    ],
+    draft: { runId: 'p3', conversationId: 'c', text: 'writing', activeTool: null } as never,
+  });
+  assert.ok(!live.some(i => i.kind === 'plan'), '実行の終わりまで出さない');
+
+  const failed = threadItems({
+    messages: [
+      msg('user', 'go', { runId: 'p4' }),
+      msg('assistant', '', { runId: 'p4', toolCalls: [call('w4', 'plan_write', { content: 'sk-' })] }),
+      msg('tool', 'Refused', { runId: 'p4', toolName: 'plan_write', toolCallId: 'w4', isError: true }),
+      msg('assistant', '', { runId: 'p4', toolCalls: [call('w5', 'file_read', { path: 'a' })] }),
+      msg('tool', 'x', { runId: 'p4', toolName: 'file_read', toolCallId: 'w5' }),
+      msg('assistant', 'Could not write it.', { runId: 'p4' }),
+    ],
+  });
+  assert.ok(!failed.some(i => i.kind === 'plan'));
 });

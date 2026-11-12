@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
 import type { WorkerStatus } from '../web/src/api.ts';
-import { escStops, showProceed } from '../web/src/ui/composer-state.ts';
+import { escStops } from '../web/src/ui/composer-state.ts';
 import { workerLine } from '../web/src/ui/overview.ts';
 import { mergeRawConfig } from '../web/src/ui/settings/commit.ts';
 import { modelReach, providerReach } from '../web/src/ui/settings/view.ts';
@@ -68,20 +68,6 @@ test('書きかけの記録: タブを閉じる・読み直すとき、書きか
     assert.deepEqual([e.prevented, e.returnValue], [true, ''], key);
     setUnsaved(key, false);
   }
-});
-
-test('Plan モードの「この計画で進める」: 計画の返事が出て、何も動いておらず、承認待ちも無いときだけ出す', () => {
-  const base = { mode: 'plan', hasConversation: true, running: false, sending: false, approvals: 0, last: { role: 'assistant', text: 'Plan: …' } } as const;
-  assert.equal(showProceed(base), true);
-  assert.equal(showProceed({ ...base, mode: 'normal' }), false);
-  assert.equal(showProceed({ ...base, mode: 'auto' }), false);
-  assert.equal(showProceed({ ...base, hasConversation: false }), false);
-  assert.equal(showProceed({ ...base, running: true }), false);
-  assert.equal(showProceed({ ...base, sending: true }), false);
-  assert.equal(showProceed({ ...base, approvals: 1 }), false);
-  assert.equal(showProceed({ ...base, last: { role: 'user', text: 'plan it' } }), false);
-  assert.equal(showProceed({ ...base, last: { role: 'assistant', text: '  ' } }), false);
-  assert.equal(showProceed({ ...base, last: undefined }), false);
 });
 
 test('入力欄の Esc: 返事を作っている最中だけ止める。メニューが開いている・変換中・動いていないときは止めない', () => {

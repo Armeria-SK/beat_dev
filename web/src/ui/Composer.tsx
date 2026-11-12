@@ -17,6 +17,7 @@ export interface ComposerProps {
   draftKey: string;
   hasConversation: boolean;
   product?: boolean;
+  planless?: boolean;
   running: boolean;
   sending: boolean;
   pending: PendingMessage[];
@@ -59,7 +60,7 @@ function PopMenu({ label, opener, onClose, onLeave, children }: { label: string;
 function PopItem({ name, hint, checked, disabled, onPick }: { name: string; hint?: string; checked: boolean; disabled?: boolean; onPick: () => void }) {
   return (
     <li role="none">
-      <button type="button" role="menuitemradio" aria-checked={checked} disabled={disabled} className="bt-menu__item ui-pop__item" onClick={onPick}><b>{name}</b>{hint}</button>
+      <button type="button" role="menuitemradio" aria-checked={checked} disabled={disabled} className="bt-menu__item" onClick={onPick}><b>{name}</b>{hint}{checked && <Icon name="check" />}</button>
     </li>
   );
 }
@@ -82,7 +83,7 @@ export function Composer(props: ComposerProps) {
   const depthButton = useRef<HTMLButtonElement>(null);
   const submitting = useRef(false);
 
-  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product) });
+  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
   const current = modelInEffect(models ?? [], chatOrder, modelId);
   const depths = depthOptions(current);
   const commands = slashClosed ? [] : slashItems(text, props.slash, slashForced);

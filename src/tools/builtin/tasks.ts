@@ -55,7 +55,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
   async execute(input, ctx) {
     try {
       if (input.repeat && !validateCron(input.repeat)) throw new TaskError('error.bad_repeat', { repeat: input.repeat });
-      const self = !input.requested_by_user;
+      const self = !input.requested_by_user || (ctx.task !== undefined && store(ctx).cliveDecided(ctx.task.id));
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,

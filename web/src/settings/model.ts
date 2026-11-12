@@ -1,7 +1,7 @@
 import type { PlainKey } from '../i18n/index.ts';
 import { getLanguage, type Lang } from '../i18n/state.ts';
 import { serverText } from '../server-text.ts';
-import { isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
+import { derivedKeyEnv, isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
 
 // 設定の画面の、画面を使わない部分。節の一覧・変更の数え方・保存に失敗したときの問題の読み取り・設定の書き換え。
 
@@ -209,6 +209,14 @@ export function addProvider(config: Config): { config: Config; id: string } {
   return { config: { ...config, providers: [...config.providers, provider] }, id };
 }
 
+export function newAnthropicProvider(config: Config): Record<string, unknown> {
+  const providers = providerRows(config);
+  const id = uniqueId('anthropic', providers.map(p => p.id));
+  const taken = takenKeyEnvs(providers, id);
+  const apiKeyEnv = taken.has('ANTHROPIC_API_KEY') ? derivedKeyEnv(id, taken) : 'ANTHROPIC_API_KEY';
+  return { id, kind: 'anthropic', apiKeyEnv, maxParallel: 2, timeoutMs: 600_000 };
+}
+
 export const providerInUse = (config: Config, id: string): boolean => (config.models as Array<{ provider: string }>).some(m => m.provider === id);
 
 export function removeProvider(config: Config, id: string): Config {
@@ -264,6 +272,8 @@ export const secondsOf = (ms: unknown): number | undefined => (typeof ms === 'nu
 
 const KEY_ENV = /^[A-Z][A-Z0-9_]{0,63}$/u;
 export const isEnvName = (value: string): boolean => KEY_ENV.test(value);
+
+export const keyEnvPatch = (value: string): { apiKeyEnv: string | undefined } | null => (value && !isEnvName(value) ? null : { apiKeyEnv: value || undefined });
 
 // API キーの環境変数の名前。プロバイダに書かれたもの（Anthropic で書いていなければ ANTHROPIC_API_KEY）。
 export function keyUsage(config: Config): Array<{ name: string; providers: string[] }> {

@@ -9,7 +9,7 @@ export type DeleteBlock = 'run_open' | 'ran' | 'linked';
 export interface RepeatingRow { task: RepeatingTask; state: RepeatState; next: number | null; last: TaskLastRun | null; runOpen: boolean; blocked: DeleteBlock | null }
 export interface TimedRow { task: Task; at: number; blocked: DeleteBlock | null }
 
-const OPEN: ReadonlySet<TaskStatus> = new Set(['ready', 'running', 'waiting']);
+const OPEN: ReadonlySet<TaskStatus> = new Set(['running', 'waiting']);
 const STATE_ORDER: Record<RepeatState, number> = { active: 0, paused: 1, ended: 2 };
 
 export function repeatingRow(task: RepeatingTask): RepeatingRow {

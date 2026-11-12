@@ -10,7 +10,7 @@ import { reply, tempDir, type Script, type testConfig } from './helpers.ts';
 type Config = ReturnType<typeof testConfig>;
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
-const PROJECT_KEYS = ['archived_at', 'check_command', 'created_at', 'folder_missing', 'id', 'is_git', 'last_activity_at', 'name', 'remotes', 'root', 'running', 'scout_mode', 'updated_at', 'waiting'];
+const PROJECT_KEYS = ['archived_at', 'check_command', 'created_at', 'doc_language', 'doc_language_pinned', 'folder_missing', 'has_plan', 'id', 'is_git', 'last_activity_at', 'name', 'remotes', 'root', 'running', 'scout_mode', 'updated_at', 'waiting'];
 const NOTES = ['nested_inside', 'contains_product', 'inside_config_root', 'config_root_read_only', 'not_git'];
 
 const call = (name: string, args: unknown): Script => async function* () {
@@ -31,7 +31,8 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
     return made.body.project as { id: string; name: string; root: string };
   };
   const send = async (id: string, body: Record<string, unknown>) => {
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', body);
+    const fresh = body.projectId !== undefined && body.permissionMode === undefined && !s.app.conversations.get(id);
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', fresh ? { ...body, permissionMode: 'normal' } : body);
     if (sent.status === 202) await settled(s.app, sent.body.runId);
     return sent;
   };
@@ -81,6 +82,9 @@ test('製品の API: 選べないフォルダは 400（コードは project.fold
   assert.deepEqual(await refused({ root: s.folder('named'), name: 'bad‮name' }), [400, 'project', 'project.bad_name']);
   assert.deepEqual(await refused({ root: s.folder('named'), name: 'x'.repeat(101) }), [400, 'project', 'project.bad_name']);
   assert.deepEqual(await refused({ root: s.folder('named'), checkCommand: 'a\nb' }), [400, 'project', 'project.bad_check_command']);
+  for (const hidden of ['­', '⁡', 'ㅤ', String.fromCodePoint(0xE0072), String.fromCharCode(0xA0), String.fromCharCode(0x3000), String.fromCharCode(0x2009), String.fromCharCode(0xFE0F), String.fromCodePoint(0xE0100), String.fromCharCode(0x600), '     ', String.fromCharCode(0x2800), String.fromCharCode(0x115F), String.fromCharCode(0x1160), String.fromCharCode(0xFFA0)]) {
+    assert.deepEqual(await refused({ root: s.folder('named'), checkCommand: `npm${hidden} test` }), [400, 'project', 'project.bad_check_command'], `U+${hidden.codePointAt(0)!.toString(16)}`);
+  }
   assert.equal((await s.json('/api/projects', 'POST', {})).status, 400);
   assert.deepEqual(readdirSync(s.paths.projects), before);
   assert.equal((await s.json('/api/projects', 'GET')).body.projects.length, 1);

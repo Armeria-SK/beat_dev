@@ -25,12 +25,13 @@ test('ui/schedule: ひな形の行は、動いている・止めた（Paused）�
   assert.equal(repeatingRow(template('a', 'failed')).state, 'ended');
 });
 
-test('ui/schedule: ひな形の Delete は、動いている回（実行待ち・実行中・返事待ち）があると押せない。終わった回だけなら押せる', () => {
-  for (const status of ['ready', 'running', 'waiting'] as const) {
+test('ui/schedule: ひな形の Delete は、動いている回（実行中・返事待ち）があると押せない。実行待ちの回や終わった回だけなら押せる', () => {
+  for (const status of ['running', 'waiting'] as const) {
     const row = repeatingRow(template('a', 'scheduled', { last_run: lastRun(status) }));
     assert.deepEqual([row.runOpen, row.blocked], [true, 'run_open'], status);
   }
-  for (const status of ['done', 'failed', 'cancelled'] as const) {
+  assert.equal(repeatingRow(template('a', 'cancelled', { last_run: lastRun('ready') })).blocked, null, '止めたひな形の、上限で待たされている回');
+  for (const status of ['ready', 'done', 'failed', 'cancelled'] as const) {
     const row = repeatingRow(template('a', 'scheduled', { last_run: lastRun(status) }));
     assert.deepEqual([row.runOpen, row.blocked], [false, null], status);
   }

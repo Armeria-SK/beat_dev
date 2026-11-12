@@ -1,13 +1,19 @@
 import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
-import { checkCommandOf, defaultProjectName, folderMissing, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { ownerSpeech } from '../db/conversations.ts';
+import { AcceptanceError, coverageOf, frozenHash, ownerChanges, type AcceptanceChangeRow, type AcceptanceDoc } from '../projects/acceptance.ts';
+import { BuildError, startBuild, unbuilt } from '../projects/build.ts';
+import { PlanError, type PlanView } from '../projects/plan.ts';
+import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
-import type { ProjectFilter } from '../tasks/store.ts';
+import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import { approvalShownIn } from '../tools/approvals.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
 
 const MAX_PATH_CHARS = 4096;
+const ACCEPTANCE_STATUS: Partial<Record<string, number>> = { stale: 409, not_pending: 409, no_change: 404 };
 
 export function projectProblem(status: number, error: ProjectError): HttpProblem {
   return domainProblem(status, 'project', error);
@@ -55,6 +61,8 @@ export function projectWire(app: App, row: ProjectRow) {
     waiting: { proposals: counts.proposals, questions: counts.questions, pending: app.approvals.pending().filter(a => inProject(approvalShownIn(a))).length },
     running: app.engine.activeRuns().filter(r => inProject(r.conversationId)).length,
     last_activity_at: counts.lastActivityAt,
+    has_plan: app.plans.has(row.id),
+    doc_language: row.doc_language, doc_language_pinned: row.doc_language_pinned === 1,
   };
 }
 
@@ -98,15 +106,155 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (body.refreshRemotes !== undefined && body.refreshRemotes !== true) throw projectProblem(400, new ProjectError('bad_refresh'));
     const rawName = requireString(body, 'name', { optional: true, max: 400 });
     const rawCheck = optionalText(body, 'checkCommand', 4000);
-    const updated = guarded(() => app.projects.update(current.id, {
+    const docLanguage = body.docLanguage === null ? null : languageTagOf(body.docLanguage);
+    if (body.docLanguage !== undefined && docLanguage === undefined) throw problem(400, 'invalid_field', 'bad_language', { field: 'docLanguage', params: { field: 'docLanguage' } });
+    const changed = guarded(() => app.projects.update(current.id, {
       ...(rawName !== undefined ? { name: projectName(rawName) } : {}),
       ...(rawCheck !== undefined ? { checkCommand: checkCommandOf(rawCheck) } : {}),
       ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {}),
       ...(body.refreshRemotes === true && !folderMissing(current) ? { remotes: readRemotes(current.root) } : {}),
     }));
+    const updated = docLanguage === undefined ? changed : app.projects.setDocLanguage(current.id, docLanguage);
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
     app.bus.publish({ type: 'project.changed', projectId: current.id, change });
     sendJson(res, 200, { project: projectWire(app, updated) });
+  });
+
+  const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => ({
+    ...view,
+    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId && r.mode === 'plan'),
+  });
+  const planned = <T>(work: () => T): T => {
+    try { return work(); } catch (error) {
+      if (error instanceof PlanError) throw domainProblem(error.code === 'changed' ? 409 : 400, 'plan', error);
+      throw error;
+    }
+  };
+
+  router.add('GET', '/api/projects/:id/plan', ({ res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    sendJson(res, 200, { plan: planned(() => planWire(project.id)) });
+  });
+
+  router.add('PUT', '/api/projects/:id/plan', async ({ req, res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    const body = requireObject(await readJson(req, 1024 * 1024));
+    if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
+    const content = requireString(body, 'content')!;
+    const baseHash = body.baseHash;
+    if (baseHash !== null && typeof baseHash !== 'string') throw problem(400, 'invalid_field', 'required', { field: 'baseHash', params: { field: 'baseHash' } });
+    const saved = planned(() => app.plans.write(project.id, content, { by: 'owner', tainted: false, conversationId: null, runId: null }, baseHash));
+    if (saved.changed) app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: saved.hash, by: 'owner' });
+    const { changed: _changed, ...view } = saved;
+    sendJson(res, 200, { plan: planWire(project.id, view) });
+  });
+
+  const accepted = <T>(work: () => T): T => {
+    try { return work(); } catch (error) {
+      if (error instanceof AcceptanceError) throw domainProblem(ACCEPTANCE_STATUS[error.code] ?? 400, 'acceptance', error);
+      throw error;
+    }
+  };
+  const changeWire = (row: AcceptanceChangeRow | undefined) => row ? {
+    id: row.id, base_version: row.base_version, ops: JSON.parse(row.ops) as unknown, language: row.language, conversation_id: row.conversation_id,
+    tainted: row.tainted === 1, status: row.status, created_at: row.created_at,
+  } : null;
+  const acceptanceWire = (projectId: string, doc: AcceptanceDoc | undefined = accepted(() => app.acceptance.read(projectId))) => {
+    const frozen = app.acceptance.latest(projectId);
+    return {
+      version: doc?.version ?? 0, language: doc?.language ?? null, items: doc?.items ?? [], not_doing: doc?.notDoing ?? [], draft: (doc?.version ?? 0) === 0,
+      hash: doc ? frozenHash(doc) : null, tainted: (doc?.taintedRuns?.length ?? 0) > 0,
+      frozen: frozen ? { version: frozen.version, hash: frozen.hash, plan_hash: frozen.plan_hash, created_at: frozen.created_at, source: frozen.source, build_task_id: frozen.build_task_id } : null,
+      change: changeWire(app.acceptance.pending(projectId)),
+      unbuilt: frozen && doc ? unbuilt(app, projectId, doc) : [],
+      open_build_task_id: app.tasks.openBuild(projectId),
+    };
+  };
+  const projectOr404 = (id: string) => {
+    const project = app.projects.get(id);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    return project;
+  };
+
+  router.add('GET', '/api/projects/:id/acceptance', ({ res, params, url }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    const rawBefore = url.searchParams.get('unreferencedBefore');
+    if (rawBefore !== null && !/^\d{1,16}$/u.test(rawBefore)) throw problem(400, 'invalid_field', 'bad_time', { field: 'unreferencedBefore', params: { field: 'unreferencedBefore' } });
+    const doc = accepted(() => app.acceptance.read(project.id));
+    sendJson(res, 200, {
+      acceptance: acceptanceWire(project.id, doc),
+      coverage: coverageOf(doc, ownerSpeech(app.db, project.id), rawBefore === null ? undefined : Number(rawBefore)),
+    });
+  });
+
+  router.add('GET', '/api/projects/:id/acceptance/versions', ({ res, params }) => {
+    const project = projectOr404(params[0]!);
+    sendJson(res, 200, { versions: app.acceptance.versions(project.id) });
+  });
+
+  router.add('GET', '/api/projects/:id/acceptance/versions/:n', ({ res, params }) => {
+    const project = projectOr404(params[0]!);
+    if (!/^[1-9]\d{0,8}$/u.test(params[1]!)) throw problem(400, 'invalid_id', 'invalid_id');
+    const row = app.acceptance.version(project.id, Number(params[1]));
+    if (!row) throw problem(404, 'not_found', 'item_missing');
+    const { content, ...rest } = row;
+    sendJson(res, 200, { version: { ...rest, content: JSON.parse(content) as unknown } });
+  });
+
+  const decided = (projectId: string, before: string | null, version: number) => {
+    app.bus.publish({ type: 'acceptance.changed', projectId, version, draft: version === 0 });
+    if (app.projects.get(projectId)?.doc_language !== before) app.bus.publish({ type: 'project.changed', projectId, change: 'updated' });
+  };
+
+  router.add('POST', '/api/projects/:id/acceptance/changes/:cid/approve', async ({ req, res, params }) => {
+    const project = projectOr404(params[0]!);
+    requireObject(await readJson(req));
+    const made = accepted(() => app.acceptance.approve(project.id, params[1]!));
+    decided(project.id, project.doc_language, made.version);
+    sendJson(res, 200, { acceptance: acceptanceWire(project.id) });
+  });
+
+  router.add('POST', '/api/projects/:id/acceptance/changes/:cid/reject', async ({ req, res, params }) => {
+    const project = projectOr404(params[0]!);
+    requireObject(await readJson(req));
+    accepted(() => app.acceptance.reject(project.id, params[1]!));
+    decided(project.id, project.doc_language, app.acceptance.latest(project.id)?.version ?? 0);
+    sendJson(res, 200, { acceptance: acceptanceWire(project.id) });
+  });
+
+  router.add('POST', '/api/projects/:id/acceptance/edit', async ({ req, res, params }) => {
+    const project = projectOr404(params[0]!);
+    const body = requireObject(await readJson(req));
+    const baseVersion = body.baseVersion;
+    if (typeof baseVersion !== 'number' || !Number.isInteger(baseVersion) || baseVersion < 0) throw problem(400, 'invalid_field', 'required', { field: 'baseVersion', params: { field: 'baseVersion' } });
+    if (baseVersion === 0 && body.baseHash === undefined) throw problem(400, 'invalid_field', 'required', { field: 'baseHash', params: { field: 'baseHash' } });
+    const baseHash = body.baseHash === undefined || body.baseHash === null ? body.baseHash : requireString(body, 'baseHash', { max: 128 })!;
+    const version = accepted(() => app.acceptance.ownerEdit(project.id, { baseVersion, baseHash, ops: ownerChanges(body.ops) }));
+    decided(project.id, project.doc_language, version);
+    sendJson(res, 200, { acceptance: acceptanceWire(project.id) });
+  });
+
+  router.add('POST', '/api/projects/:id/build', async ({ req, res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    const body = requireObject(await readJson(req));
+    const planHash = requireString(body, 'planHash', { max: 128 })!;
+    const acceptanceHash = body.acceptanceHash === null ? null : requireString(body, 'acceptanceHash', { max: 128 })!;
+    if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
+    if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
+    let built;
+    try {
+      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), now: app.now }, project.id, { planHash, acceptanceHash })));
+    } catch (error) {
+      if (error instanceof BuildError) throw domainProblem(error.code === 'no_plan' ? 400 : 409, 'build', error);
+      if (error instanceof ProjectError) throw projectProblem(400, error);
+      throw error;
+    }
+    app.bus.publish({ type: 'acceptance.changed', projectId: project.id, version: built.version.version, draft: false });
+    sendJson(res, 201, { task: taskView(built.task, languageOf(app.config())), version: built.version.version });
   });
 
   router.add('POST', '/api/folders/list', async ({ req, res }) => {

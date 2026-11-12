@@ -114,8 +114,8 @@ test('計画モード（エンジン）: モデルに渡す道具は読む道具
   const plan = await post(s, '計画して', { permissionMode: 'plan' });
   await settled(s.app, plan.body.runId);
   const planTools = toolNames(s.adapter().calls[0]!);
-  const all = s.app.tools.forRun('chat').map(tool => tool.name).filter(name => name !== 'agent_run' && !isBrowserTool(name)).sort(); // agent_run と browser_* は既定では無効で渡らない
-  assert.deepEqual(planTools, s.app.tools.forRun('chat').filter(tool => planAllows(tool) && !isBrowserTool(tool.name)).map(tool => tool.name).sort());
+  const all = s.app.tools.forRun('chat').filter(tool => !tool.projectOnly).map(tool => tool.name).filter(name => name !== 'agent_run' && !isBrowserTool(name)).sort(); // agent_run と browser_* は既定では無効で渡らない
+  assert.deepEqual(planTools, s.app.tools.forRun('chat').filter(tool => planAllows(tool) && !isBrowserTool(tool.name) && !tool.projectOnly).map(tool => tool.name).sort());
   assert.ok(planTools.includes('file_read') && planTools.includes('file_list') && planTools.includes('web_fetch') && planTools.includes('web_search'));
   for (const gone of ['shell_run', 'file_write', 'file_edit', 'memory_save', 'task_create', 'web_download']) assert.ok(!planTools.includes(gone), `${gone} は渡さない`);
   const normal = await post(s, 'ふつうに', { permissionMode: 'normal' });

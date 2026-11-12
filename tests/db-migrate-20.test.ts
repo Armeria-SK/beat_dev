@@ -44,9 +44,7 @@ test('移し替え 20: 形 19 の DB を今のコードで開いても、行は 
   const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');
   const before = seedV19(path);
-  assert.equal(MIGRATIONS.length, 20);
-
-  const db = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const db = openDatabase(path, MIGRATIONS.slice(0, 20), { backupDir: backups });
   try {
     assert.equal(version(db), 20);
     assert.deepEqual(counts(db), before, '行数が前後で同じ');
@@ -70,7 +68,7 @@ test('移し替え 20: 形 19 の DB を今のコードで開いても、行は 
     assert.ok(!columns(backup, 'conversations').includes('project_id'));
   } finally { backup.close(); }
 
-  const again = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const again = openDatabase(path, MIGRATIONS.slice(0, 20), { backupDir: backups });
   try {
     assert.equal(version(again), 20);
     assert.deepEqual(counts(again), before);

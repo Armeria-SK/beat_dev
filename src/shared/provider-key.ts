@@ -19,7 +19,11 @@ export function keyProblem(key: string): KeyProblem | undefined {
 export function keyEnvName(provider: { id: string; kind: string; apiKeyEnv?: string | undefined }, taken: ReadonlySet<string> = new Set()): string {
   if (provider.apiKeyEnv) return provider.apiKeyEnv;
   if (provider.kind === 'anthropic') return 'ANTHROPIC_API_KEY';
-  const base = `BEAT_${provider.id.toUpperCase().replaceAll('-', '_')}_API_KEY`;
+  return derivedKeyEnv(provider.id, taken);
+}
+
+export function derivedKeyEnv(id: string, taken: ReadonlySet<string> = new Set()): string {
+  const base = `BEAT_${id.toUpperCase().replaceAll('-', '_')}_API_KEY`;
   let name = base;
   for (let n = 2; taken.has(name); n += 1) name = `${base}_${n}`;
   return name;

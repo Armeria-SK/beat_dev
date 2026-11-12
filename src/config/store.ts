@@ -75,7 +75,7 @@ function findings(config: AppConfig): Finding[] {
     providerIds.add(provider.id);
     if (provider.kind === 'openai_compatible' && !provider.baseUrl) add(`providers.${provider.id}.baseUrl`, 'OpenAI-compatible providers need a baseUrl', `providers.${provider.id}`);
     if (provider.baseUrl !== undefined) {
-      const checked = checkBaseUrl(provider.baseUrl, Boolean(provider.apiKeyEnv));
+      const checked = checkBaseUrl(provider.baseUrl, Boolean(provider.apiKeyEnv) || provider.kind === 'anthropic');
       if ('problem' in checked) add(`providers.${provider.id}.baseUrl`, checked.problem);
     }
   }

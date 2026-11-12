@@ -34,13 +34,18 @@ export const TOOL_OUTPUT_LIMIT = 16_000;
 export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
 
 // MCP の道具（外のプログラムが書いた道具）は、効果の申告があっても計画モードには渡さない（申告は持ち主のものでも、中身は外のプログラムが決めるため）
-export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' | 'submits'>): boolean {
+export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' | 'submits' | 'planOk'>): boolean {
+  if (tool.planOk === true && (tool.effect === 'meta' || tool.effect === 'read') && tool.writesFiles !== true && tool.submits !== true && tool.mcp === undefined) return true;
   return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined && tool.submits !== true;
 }
 
 // 手元のモデルの会話（localOnly）に渡してよい道具か。MCP の道具は、持ち主が localOk にしたサーバーのものだけ（それ以外は、手元のモデルに読ませた内容を外のサーバーへ出しうる）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、localAllows を通す
 export function localAllows(tool: Pick<ToolDef, 'mcp'>, localOnly: boolean | undefined): boolean {
   return localOnly !== true || tool.mcp === undefined || tool.mcp.localOk;
+}
+
+export function acceptanceAllows(tool: Pick<ToolDef, 'acceptanceState'>, frozen: boolean): boolean {
+  return tool.acceptanceState === undefined || (tool.acceptanceState === 'frozen') === frozen;
 }
 
 // この呼び出しが外へ出るか（効果が network でない道具の networkCall）。投げたら、迷ったので外へ出るとみなす（印を付ける・毎回確かめる向きにしか倒れない）
@@ -101,8 +106,9 @@ function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPoli
 }
 
 // この呼び出しに効く権限モード: 実行を始めたときのモードと、会話のいまのモードの厳しい方（厳しい向きはその場から、緩む向きは次の実行から）。
-// 会話（チャット）の実行と、それが任せた子の担当（agent。親の会話のモードを見る）だけ。タスク・振り返りは、会話のモードに関係なくふつう
+// 会話（チャット）の実行と、それが任せた子の担当（agent。親の会話のモードを見る）だけ。タスクは実行を始めたときのモードが自動承認なら自動承認、ほかはふつう（会話のモードは見ない）。振り返りは、会話のモードに関係なくふつう
 export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionMode {
+  if (ctx.kind === 'task') return ctx.permissionMode === 'auto' ? 'auto' : 'normal';
   if (ctx.kind !== 'chat' && ctx.kind !== 'agent') return 'normal';
   const start = ctx.permissionMode ?? 'normal';
   let now: PermissionMode = start;
@@ -162,6 +168,11 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (truncated) return refuse('deny', 'truncated', truncated.message);
   if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: deps.registry.forRun(ctx.kind).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
+  if (tool.projectOnly === true && !ctx.project) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
+  if (tool.acceptanceState !== undefined) {
+    const frozen = Boolean(ctx.project && ctx.services?.acceptance?.latest(ctx.project.id));
+    if (!acceptanceAllows(tool, frozen)) return refuse('deny', 'registry', toolText(language, frozen ? 'pipeline.acceptance_frozen' : 'pipeline.acceptance_draft', { name: call.name }));
+  }
   // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信、ファイルも書く道具）を使わせない（二重の禁止）
   if (ctx.kind === 'review' && !reviewAllows(tool)) return refuse('deny', 'registry', toolText(language, 'pipeline.review_forbidden', { name: call.name }));
   // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。会話の許可・フックの allow では越えられない
@@ -259,12 +270,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 送る・消す（と、どちらか分からない）操作は、よそから来た文を読んだかどうかに関わらず、判定役に回さない（1 つ目の関所）。判定役が許すと答えたあとにも、材料を取り直してもう一度見る（2 つ目の関所）。
   // 会話の許可・フォルダの許可・持ち主が札で通したものは、この関所の外（持ち主が決めたこと）
   const humanOnlyNow = (): HumanOnly | undefined => humanOnlyOf({ effect: tool.effect, network, toolRemoves: tool.removes === true, check: first });
-  const autoGate: Omit<AutoGate, 'humanOnly'> = { mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime };
+  const taskAlwaysOwner = ctx.kind === 'task' && tool.escalateOnTaint === true;
+  const autoGate: Omit<AutoGate, 'humanOnly'> = { mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime: everyTime || taskAlwaysOwner };
   const humanOnly = humanOnlyNow();
   const humanOnlyReason = (kind: HumanOnly) => guardText(language, kind === 'sends' ? 'pipeline.auto_human_sends' : 'pipeline.auto_human_removes');
   // 送る・消すのせいで自動承認にならなかったと札で分かるように、理由を添える（このほかの理由で回らないときは添えない）
   if (decision === 'ask' && deps.autoClassify && humanOnly !== undefined && mayClassify({ ...autoGate, humanOnly: undefined })) reasons.push(humanOnlyReason(humanOnly));
-  if (decision === 'ask' && deps.autoClassify && mayClassify({ ...autoGate, humanOnly })) {
+  const taskNotOwner = decision === 'ask' && deps.autoClassify !== undefined && ctx.kind === 'task' && mayClassify({ ...autoGate, humanOnly }) && !(deps.lastUserRequest?.() ?? '').trim();
+  if (taskNotOwner) reasons.push(guardText(language, 'pipeline.auto_task_not_owner'));
+  if (decision === 'ask' && deps.autoClassify && !taskNotOwner && mayClassify({ ...autoGate, humanOnly })) {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
       deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });

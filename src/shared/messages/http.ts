@@ -25,6 +25,8 @@ const en = {
   'bad_cursor': 'beforeT (a time in milliseconds) and beforeId must be sent together',
   'bad_range': 'from and to must be times in milliseconds, with from before to and at most {days} days apart',
   'bad_bool': '{field} must be true or false',
+  'bad_time': '{field} must be a time in milliseconds',
+  'bad_language': '{field} must be a language tag (like ja, en, zh-Hant) or null',
   'bad_ids': 'ids must be an array of notification IDs',
   'empty_name': 'The name is empty',
   'bad_color': 'color must be in the form #RRGGBB',

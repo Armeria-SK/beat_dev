@@ -12,7 +12,7 @@ import { taskApp } from './helpers/task-app.ts';
 // 決まりのある参照（FOREIGN KEY）: remove が自分で片づける（子の parent_id は空にし、経過は消す）
 const HARD = ['task_events.task_id', 'tasks.parent_id'];
 // やわらかい参照（決まりの無い列）: 行があれば remove は 409 で断る
-const SOFT = ['conversations.source_task_id', 'curiosity_items.task_id', 'memory_jobs.task_id'];
+const SOFT = ['acceptance_versions.build_task_id', 'conversations.source_task_id', 'curiosity_items.task_id', 'memory_jobs.task_id'];
 // kv の鍵: remove が一緒に消す
 const KV = ['task-idle:', 'task-split:'];
 // 文字として残すもの（結び付きだけ切れる）: notifications.link の `#/tasks/<ID>` と notifications.dedup_key（approval: / waiting: / stuck: / failed: / split: に ID が入る）

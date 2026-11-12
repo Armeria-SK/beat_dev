@@ -17,7 +17,7 @@ const JAPANESE = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|[　-�
 // 持ち主が「ここを日本語に」と頼んだ鍵は、その表のファイルにここで 1 行足す（理由に「持ち主が日本語を頼んだ鍵」）。
 const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'src/tools/hooks/shell-lex.ts': { strings: ['/[\u{FF01}-\u{FF5E}\u{3000}]/u'], reason: 'FULLWIDTH: 引用符の外の全角の文字を見つける（シェルの見張り。安全）' },
-  'src/mcp/tool.ts': { strings: ['＜', '＞'], reason: 'neutralizeFence: MCP の答えの中の <<< >>> を全角にして枠の偽装を防ぐ（安全）' },
+  'src/shared/fence.ts': { strings: ['＜', '＞'], reason: 'neutralizeFence: MCP・ブラウザ・mesh の中身の <<< >>> を全角にして枠の偽装を防ぐ（安全）' },
   'src/tools/browser/checks.ts': { strings: ['/password|passcode|passwd|パスワード|暗証|one[- ]?time|verification code|認証コード|card number|カード番号|cvc|cvv|security code|セキュリティコード/iu'], reason: 'SECRET_NAME: Web ページの日本語のパスワード欄を見分ける（安全）' },
   'src/shared/pdf-text.ts': { strings: ['/[\\s\u{3000}]+$/u'], reason: 'PDF の本文の行末の全角の空白を落とす' },
   'src/engine/tokens.ts': { strings: ['/[\u{3000}-\u{30FF}\u{3400}-\u{4DBF}\u{4E00}-\u{9FFF}\u{F900}-\u{FAFF}\u{FF00}-\u{FFEF}\u{AC00}-\u{D7AF}]/u'], reason: 'CJK: トークンの見積もりで日本語の文字を数える' },
@@ -121,7 +121,7 @@ test('英語だけの見張り: src と web/src の日本語の文字列は、�
 test('英語だけの見張り: templates/ の初期ファイル（モデルが読むルールと SOUL / USER / CURIOSITY）に日本語が無い', () => {
   const dir = join(ROOT, 'templates');
   const entries = readdirSync(dir, { withFileTypes: true });
-  assert.deepEqual(entries.map(entry => entry.name).sort(), ['CURIOSITY.md', 'SOUL.md', 'USER.md', 'rules.md'], '英語の 4 つだけ（言語ごとのフォルダは無い）');
+  assert.deepEqual(entries.map(entry => entry.name).sort(), ['CURIOSITY.md', 'SOUL.md', 'USER.md', 'requirements.compact.md', 'requirements.md', 'rules.md'], '英語の 6 つだけ（言語ごとのフォルダは無い）');
   for (const entry of entries) {
     const hits = readFileSync(join(dir, entry.name), 'utf8').split(/\r?\n/u).map((line, i) => ({ line: i + 1, text: line })).filter(hit => JAPANESE.test(hit.text));
     assert.deepEqual(hits, [], `templates/${entry.name}`);

@@ -10,7 +10,7 @@ export function clearUnsaved(prefix: string): void {
   for (const key of [...dirty.keys()]) if (key.startsWith(prefix)) dirty.delete(key);
 }
 
-export const hasUnsavedEdits = (prefix = ''): boolean => [...dirty.keys()].some(key => key.startsWith(prefix));
+export const hasUnsavedEdits = (prefix = '', except?: string): boolean => [...dirty.keys()].some(key => key.startsWith(prefix) && key !== except);
 
 export const SCREEN_EDITS = 'screen:';
 

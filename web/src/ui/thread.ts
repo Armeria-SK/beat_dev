@@ -20,7 +20,8 @@ export type ThreadItem =
   | { kind: 'reply'; key: string; text: string; copyText: string | null; at: number; stamped: boolean }
   | { kind: 'tools'; key: string; rows: ToolItem[] }
   | { kind: 'live'; key: string; text: string; since: number | null }
-  | { kind: 'notice'; key: string; weight: NoticeWeight; notices: RunNotice[] };
+  | { kind: 'notice'; key: string; weight: NoticeWeight; notices: RunNotice[] }
+  | { kind: 'plan'; key: string };
 
 export interface ThreadInput {
   messages: readonly Message[];
@@ -51,13 +52,16 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
   return rows;
 }
 
-const toolKey = (callId: string | undefined): string | null => (callId ? `t-${callId}` : null);
-
 const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
 export function threadItems({ messages, draft, approvals = [], notices = [] }: ThreadInput): ThreadItem[] {
-  const inputs = new Map<string, string>();
-  for (const m of messages) for (const call of m.toolCalls ?? []) inputs.set(call.id, call.input);
+  const pending = new Map<string, string[]>();
+  const seen = new Map<string, number>();
+  const rowKeyOf = (callId: string): string => {
+    const n = seen.get(callId) ?? 0;
+    seen.set(callId, n + 1);
+    return n === 0 ? `t-${callId}` : `t-${callId}-${n}`;
+  };
   const visible = messages.filter(m => !hiddenReply(m));
   const turns = replyTurns(visible, draft?.runId ?? null);
   const items: ThreadItem[] = [];
@@ -69,28 +73,45 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
     return group.rows;
   };
 
-  for (const m of visible) {
+  const planRuns = new Set(messages.filter(m => m.role === 'tool' && m.toolName === 'plan_write' && !m.isError && m.runId && m.runId !== draft?.runId).map(m => m.runId!));
+  const lastOfRun = new Map<string, number>();
+  for (const m of visible) if (m.runId && planRuns.has(m.runId)) lastOfRun.set(m.runId, m.id);
+
+  for (const m of messages) {
+    if (m.toolCalls?.length) {
+      const calls = new Map<string, string[]>();
+      for (const call of m.toolCalls) calls.set(call.id, [...(calls.get(call.id) ?? []), call.input]);
+      for (const [id, queue] of calls) pending.set(id, queue);
+    }
+    if (hiddenReply(m)) continue;
     const key = `m-${m.id}`;
     if (m.role === 'tool') {
-      const rowKey = toolKey(m.toolCallId) ?? key;
-      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: inputs.get(m.toolCallId ?? '') ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
+      const rowKey = m.toolCallId ? rowKeyOf(m.toolCallId) : key;
+      const input = m.toolCallId ? pending.get(m.toolCallId)?.shift() : undefined;
+      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
     } else if (m.role === 'user') {
       items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
     } else {
       const turn = turns.get(m.id);
       items.push({ kind: 'reply', key, text: m.text, copyText: turn ? turn.copyText : m.text, at: m.createdAt, stamped: turn ? turn.copyText !== null : true });
     }
+    if (m.runId && lastOfRun.get(m.runId) === m.id) items.push({ kind: 'plan', key: `plan-${m.runId}` });
   }
 
   const waiting = approvals;
-  const saved = new Set(messages.map(m => m.toolCallId));
-  for (const done of draft?.settled ?? []) {
-    if (!saved.has(done.callId)) tools(`t-${done.callId}`).push({ key: `t-${done.callId}`, name: done.name, input: done.input, result: null });
-  }
+  const settled = draft?.settled ?? [];
+  const savedRun = draft ? messages.filter(m => m.role === 'tool' && m.runId === draft.runId) : [];
+  const savedIdsInRun = new Set(savedRun.map(m => m.toolCallId));
+  const firstSettled = (draft?.settledCount ?? settled.length) - settled.length;
+  settled.forEach((done, i) => {
+    if (savedIdsInRun.has(done.callId) && firstSettled + i < savedRun.length) return;
+    const rowKey = rowKeyOf(done.callId);
+    tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null });
+  });
   if (draft) {
     if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
     else if (draft.activeTool && waiting.length === 0) {
-      const rowKey = toolKey(draft.toolCallId) ?? `run-${draft.runId}-${draft.activeTool}`;
+      const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
       tools(rowKey).push({
         key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
         running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },

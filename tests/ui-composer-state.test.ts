@@ -5,7 +5,7 @@ import { SLASH_COMMANDS } from '../web/src/chat-logic.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
+  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, firstMode, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
   slashAvailable, slashItems,
   submitMessage, toastLift, UI_SLASH,
   type ComposerInput, type SubmitDeps, type SubmitInput,
@@ -48,6 +48,16 @@ test('ui/composer-state: 置き場の文字: 新しい会話 Message、会話の
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan' }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', running: true }).placeholder]), 'Reply · Queue waits for the next break, Force interrupts');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false, product: true, planless: true }).placeholder]), 'Describe what to build', '計画書の無い製品の最初の会話は Plan でも Describe what to build（beat 3-1a-u）');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false, product: true, planless: false }).placeholder]), 'Describe the change to plan', '計画書のある製品で Plan を選んだら、計画の直し');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', product: true, planless: true }).placeholder]), 'Describe the change to plan', '会話が始まったあと');
+});
+
+test('ui/composer-state: 新しい製品の会話のモードの初めの値: 計画書が無い製品は Plan、ある製品・分からない（古いサーバー）・製品の外は Ask（beat 3-1a-u）', () => {
+  assert.equal(firstMode({ has_plan: false }), 'plan');
+  assert.equal(firstMode({ has_plan: true }), 'normal');
+  assert.equal(firstMode({}), 'normal');
+  assert.equal(firstMode(undefined), 'normal');
 });
 
 test('ui/composer-state: モードの言葉は Ask / Auto / Plan（持ち主の答え 9。サーバーの normal / auto / plan の順）', () => {
@@ -89,9 +99,9 @@ test('ui/composer-state: スラッシュコマンド: 今の一覧を 1 つも�
   for (const command of SLASH_COMMANDS) assert.ok(names.includes(command.name), command.name);
   assert.ok(names.includes('plan'));
   for (const command of UI_SLASH) assert.equal(typeof t(command.desc), 'string');
-  const none = { hasConversation: false, running: false, hasSummary: false, archived: false };
+  const none = { hasConversation: false, running: false, hasSummary: false, archived: false, product: false };
   assert.deepEqual(slashAvailable(none).map(c => c.name), ['new', 'plan', 'task', 'tasks', 'skills', 'log', 'memory']);
-  const all = { hasConversation: true, running: true, hasSummary: true, archived: false };
+  const all = { hasConversation: true, running: true, hasSummary: true, archived: false, product: true };
   assert.deepEqual(slashAvailable(all).map(c => c.name), names);
   assert.ok(!slashAvailable({ ...all, archived: true }).some(c => c.name === 'archive'));
   assert.deepEqual(slashItems('/ta', all).map(c => c.name), ['task', 'tasks']);
@@ -99,6 +109,16 @@ test('ui/composer-state: スラッシュコマンド: 今の一覧を 1 つも�
   assert.deepEqual(slashItems('hello', all), []);
   assert.deepEqual(slashItems('hello', all, true).map(c => c.name), names, 'ボタンで開いたときは全部');
   assert.deepEqual(slashItems('/', none).length, 7);
+});
+
+test('ui/composer-state: /build は製品の会話でだけ出る（欄を開いて対応表まで送るだけで、作りはしない）', () => {
+  const ctx = { hasConversation: true, running: false, hasSummary: false, archived: false };
+  assert.ok(slashAvailable({ ...ctx, product: true }).some(c => c.name === 'build'));
+  assert.ok(!slashAvailable({ ...ctx, product: false }).some(c => c.name === 'build'));
+  assert.ok(slashAvailable({ ...ctx, hasConversation: false, product: true }).some(c => c.name === 'build'), '新しい製品の会話でも欄は開ける');
+  assert.equal(bareCommand('/build')?.name, 'build');
+  assert.equal(t('ui.slash.build'), 'Review the plan before building');
+  assert.equal(UI_SLASH.find(c => c.name === 'build')?.desc, 'ui.slash.build');
 });
 
 test('ui/composer-state: 待たせる発言は 1 つ: もう一度 Queue するとき取り消すのは、割り込みでない待ちの発言の全部', () => {
