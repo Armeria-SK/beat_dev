@@ -7,8 +7,11 @@ import { builtinTools } from '../src/app.ts';
 import { parseConfig } from '../src/config/store.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { webDownload } from '../src/tools/builtin/download.ts';
 import { checkFilePath } from '../src/tools/builtin/files.ts';
+import type { DownloadNetwork } from '../src/tools/web/public-page.ts';
 import { shellPreCheck } from '../src/tools/builtin/shell.ts';
+import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { findExecutable, scrubEnv } from '../src/tools/shell/runner.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
@@ -114,6 +117,23 @@ test('指示ファイル: 作業フォルダ直下の AGENTS.md・CLAUDE.md を�
   assert.equal(u.write(join(u.root, 'AGENTS.md'), u.ctx({ policy: u.plain, workspace: u.paths.workspace, project: undefined })).decision, 'deny', '製品に属さない実行からは、そもそも外');
 });
 
+test('指示ファイル（指摘 4）: 登録したすべての製品の AGENTS.md・CLAUDE.md は、どの実行から書いても確かめになる（許可フォルダの中に入れ子の製品・設定の許可フォルダの中の製品）', t => {
+  const u = unit(t, (config, root) => { config.tools.roots = [{ path: join(root, '..'), mode: 'write' }]; });
+  const nested = join(u.root, 'sub');
+  const sibling = join(u.base, 'shop2');
+  mkdirSync(sibling);
+  const plain = buildPolicy(u.parsed, u.paths, undefined, [u.root, nested, sibling]);
+  const inShop = buildPolicy(u.parsed, u.paths, { root: u.root }, [u.root, nested, sibling]);
+  for (const [label, c] of [['製品なし', u.ctx({ policy: plain, workspace: u.base, project: undefined })], ['製品 shop', u.ctx({ policy: inShop })]] as const) {
+    for (const file of [join(sibling, 'AGENTS.md'), join(nested, 'CLAUDE.md'), join(u.root, 'AGENTS.md')]) {
+      const check = u.write(file, c);
+      assert.equal(check.decision, 'ask', `${label}: ${file}`);
+      assert.match(check.reasons.join('\n'), /instruction file/u, `${label}: ${file}`);
+    }
+    assert.equal(u.write(join(sibling, 'README.md'), c).decision, 'allow', label);
+  }
+});
+
 test('シェルの実行ファイルの探し方（指摘 13）: 名前だけのコマンドは、作業フォルダに置いた npm.cmd・git.exe などを拾わない（子の PATH は絶対パスの項目だけ）', t => {
   const u = unit(t);
   for (const name of ['npm.cmd', 'git.exe', 'node.exe', 'npm', 'git']) writeFileSync(join(u.root, name), '');
@@ -122,6 +142,32 @@ test('シェルの実行ファイルの探し方（指摘 13）: 名前だけの
     const found = findExecutable(name, env, u.root, { powershell: WINDOWS });
     assert.ok(found === undefined || !found.startsWith(u.root), `${name}: ${found}`);
   }
+});
+
+test('npm の作業フォルダの .npmrc（指摘 1）: npm が起動のときに読む場所に .npmrc があれば、npm はどの形も確かめなしでは動かない', t => {
+  const u = unit(t);
+  const forms = ['npm -v', 'npm --version', 'npm ls', 'npm view left-pad', 'npm outdated'];
+  for (const command of forms) assert.equal(shellPreCheck({ command }, u.ctx()).decision, 'allow', `.npmrc が無ければこれまでどおり: ${command}`);
+  for (const command of ['npx -v', 'npx --version', 'pnpm -v', 'pnpm --version', 'yarn -v', 'yarn --version', 'pnpm ls', 'yarn list']) assert.notEqual(shellPreCheck({ command }, u.ctx()).decision, 'allow', `前から確かめなしでは動かない: ${command}`);
+  writeFileSync(join(u.root, '.npmrc'), 'prefix=.\n');
+  for (const command of forms) {
+    const check = shellPreCheck({ command }, u.ctx());
+    assert.equal(check.decision, 'ask', command);
+    assert.equal(check.onceOnly, true, command);
+  }
+  const sub = u.ctx({ workspace: join(u.root, 'sub') });
+  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow', '下の階に package.json も node_modules も無ければ、npm はその階を使う');
+  writeFileSync(join(u.root, 'package.json'), '{}');
+  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'ask', '上の階の package.json までさかのぼる');
+  mkdirSync(join(u.root, 'sub', 'node_modules'));
+  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow', 'node_modules のある階で止まる');
+  rmSync(join(u.root, 'sub', 'node_modules'), { recursive: true });
+  rmSync(join(u.root, 'package.json'));
+  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow');
+  const bash = (command: string) => checkShellCommand(command, join(u.root, 'sub'), { policy: u.policy, outsideRoots: 'ask', shell: 'bash', windows: WINDOWS }).decision;
+  assert.equal(bash('echo x > ../package.json'), 'allow');
+  assert.equal(bash('npm -v'), 'allow');
+  assert.notEqual(bash('echo x > ../package.json; npm -v'), 'allow', '同じコマンドの前の文で書いてから npm');
 });
 
 // ── 製品の実行（本物の App） ──
@@ -166,7 +212,22 @@ test('製品の会話: 相対パスの file_write は作業フォルダに確か
   assert.deepEqual([s.seen[1]!.workspace, s.seen[1]!.project], [s.paths.workspace, undefined]);
 });
 
-test('製品の会話の子の担当: 親の作業フォルダ・許可フォルダ・home・製品をそのまま使う', async t => {
+test('指示ファイル（指摘 4）: 会話の実行は、しまっていないすべての製品の AGENTS.md・CLAUDE.md を指示ファイルとして持つ', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const other = await s.product('other');
+  const old = await s.product('old');
+  assert.equal((await s.json(`/api/projects/${old.id}`, 'PATCH', { archived: true })).status, 200);
+  const expected = [shop.root, other.root].flatMap(root => ['AGENTS.md', 'CLAUDE.md'].map(name => join(root, name))).sort();
+  s.adapter().scripts = [call('probe_ctx', {}), reply('done')];
+  await s.send(uuid(1), { text: 'plain' });
+  s.adapter().scripts = [call('probe_ctx', {}), reply('done')];
+  await s.send(uuid(2), { text: 'in shop', projectId: shop.id });
+  for (const ctx of s.seen) assert.deepEqual([...(ctx.policy.instructions ?? [])].sort(), expected);
+  assert.equal(s.seen.length, 2);
+});
+
+test('製品の会話の子の担当:親の作業フォルダ・許可フォルダ・home・製品をそのまま使う', async t => {
   const s = await setup(t, { configure: (c: Config) => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });
   const shop = await s.product('shop');
   s.adapter().scripts = [call('agent_run', { task: 'look', tools: ['probe_ctx'] }), call('probe_ctx', {}), reply('child'), reply('parent')];
@@ -177,18 +238,43 @@ test('製品の会話の子の担当: 親の作業フォルダ・許可フォル
   assert.ok(child.policy.roots.some(r => r.path === shop.root && r.mode === 'write'));
 });
 
+test('製品の会話の web_download: Clive の置き場の downloads/ を確かめて書き、その絶対パスを返す。製品のフォルダの downloads は使わない', async t => {
+  const network: DownloadNetwork = {
+    resolve: async () => ['93.184.216.34'],
+    open: async () => ({ status: 200, contentType: 'application/pdf', body: (async function* () { yield Buffer.from('pdf'); })(), close: () => undefined }),
+  };
+  const s = await setup(t, { downloadNetwork: network });
+  const shop = await s.product('shop');
+  const outside = s.folder('elsewhere');
+  symlinkSync(outside, join(shop.root, 'downloads'), WINDOWS ? 'junction' : 'dir');
+  s.adapter().scripts = [call('web_download', { url: 'https://files.example.com/report.pdf' }), reply('done')];
+  await s.send(uuid(1), { text: 'get it', projectId: shop.id });
+  const saved = join(s.paths.workspace, 'downloads', 'report.pdf');
+  assert.equal(readFileSync(saved, 'utf8'), 'pdf');
+  assert.equal(existsSync(join(outside, 'report.pdf')), false);
+  const result = s.app.conversations.messages(uuid(1)).find(m => m.role === 'tool')!;
+  assert.ok(result.text.includes(saved), result.text);
+  assert.match(webDownload.description, /downloads folder of Clive/u);
+});
+
 test('製品の会話でダウンロードの置き場（data/workspace/downloads）を読むと、ファイル・探す道具で外を読んだ印が付く', async t => {
-  const s = await setup(t);
+  const s = await setup(t, { models: [fakeModel('m1', { vision: true })] });
   const shop = await s.product('shop');
   const downloads = join(s.paths.workspace, 'downloads');
   mkdirSync(downloads, { recursive: true });
   writeFileSync(join(downloads, 'page.txt'), 'fetched text');
-  const cases: Array<[string, unknown]> = [['file_read', { path: join(downloads, 'page.txt') }], ['file_search', { path: s.paths.workspace, name: 'page*' }], ['file_list', { path: downloads }]];
+  writeFileSync(join(downloads, 'pic.gif'), Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x03, 0x00, 0x05, 0x00]));
+  const cases: Array<[string, unknown]> = [
+    ['file_read', { path: join(downloads, 'page.txt') }], ['file_search', { path: s.paths.workspace, name: 'page*' }], ['file_list', { path: downloads }],
+    ['file_search', { path: s.paths.workspace, text: 'fetched' }], ['image_view', { path: join(downloads, 'pic.gif') }],
+  ];
   for (const [index, [name, args]] of cases.entries()) {
     s.adapter().scripts = [call(name, args), reply('read')];
     const sent = await s.send(uuid(10 + index), { text: 'read it', projectId: shop.id });
-    assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, name);
+    assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, `${name} ${JSON.stringify(args)}`);
   }
+  const imageResult = s.app.conversations.messages(uuid(14)).find(m => m.role === 'tool')!;
+  assert.match(imageResult.text, /came from the web or a downloaded file/u);
   s.adapter().scripts = [call('file_read', { path: 'notes.txt' }), reply('read')];
   writeFileSync(join(shop.root, 'notes.txt'), 'mine');
   const own = await s.send(uuid(20), { text: 'read mine', projectId: shop.id });
@@ -229,14 +315,18 @@ test('#execute の念のための守り: 確かめを通っていない製品の
   s.adapter().scripts = [reply('first')];
   await s.send(uuid(1), { text: 'hello', projectId: shop.id });
   renameSync(shop.root, `${shop.root}-away`);
-  s.adapter().scripts = [call('probe_ctx', {}), reply('done')];
+  s.adapter().scripts = [call('probe_ctx', {}), call('file_write', { path: 'stray.txt', content: 'x' }), reply('done')];
   const sent = s.app.engine.send(uuid(1), 'direct');
   assert.ok(sent.ok);
   await settled(s.app, sent.runId);
   const ctx = s.seen[0]!;
-  assert.deepEqual([ctx.workspace, ctx.project], [s.paths.workspace, { id: shop.id }]);
+  assert.deepEqual([ctx.workspace, ctx.project], [shop.root, { id: shop.id }], '作業フォルダは控えた場所のまま（Clive の置き場に替えない）');
   assert.ok(!ctx.policy.roots.some(r => r.path === shop.root));
   assert.ok(s.logs.some(line => line.includes(`product ${shop.id}`)), s.logs.join('\n'));
+  assert.equal(existsSync(join(s.paths.workspace, 'stray.txt')), false, '相対パスの書き込みが Clive の置き場に落ちない');
+  assert.equal(existsSync(join(shop.root, 'stray.txt')), false);
+  const refused = s.app.conversations.messages(uuid(1)).filter(m => m.role === 'tool').at(-1)!;
+  assert.match(refused.text, /outside the allowed folders/u);
 });
 
 test('製品のタスク: フォルダが無いあいだは始めず 10 分後へ回し、失敗の回数を数えない。経過に 1 行、通知は 1 つ。戻すと作業フォルダで動く', async t => {
@@ -256,6 +346,8 @@ test('製品のタスク: フォルダが無いあいだは始めず 10 分後�
   assert.equal(await s.app.worker.tick(), 'folder_missing');
   assert.equal(s.app.tasks.get(id)!.attempts, 0);
   assert.equal(s.app.notifications.list().filter(n => n.link === `#/p/${shop.id}`).length, 1, '通知は 1 つにまとまる');
+  const listed = (await s.json('/api/notifications', 'GET')).body.notifications as Array<{ link: string | null; project_id: string | null }>;
+  assert.deepEqual(listed.filter(n => n.link === `#/p/${shop.id}`).map(n => n.project_id), [shop.id], '通知の一覧で製品が分かる（指摘 9）');
   assert.equal((s.app.db.prepare('SELECT COUNT(*) AS n FROM engine_runs').get() as { n: number }).n, 0, '実行は始まっていない');
 
   renameSync(away, shop.root);
@@ -322,11 +414,14 @@ test('push してよい宛先の控え: git のフォルダは作るときに re
   config('');
   const made = await s.json('/api/projects', 'POST', { root: repo });
   assert.equal(made.status, 201);
-  assert.deepEqual(made.body.project.remotes, [{ name: 'origin', url: 'https://me@github.com/me/app.git', push_url: 'git@github.com:me/app.git' }]);
+  assert.deepEqual(made.body.project.remotes, [{ name: 'origin', url: 'https://github.com/me/app.git', push_url: 'git@github.com:me/app.git' }]);
   assert.ok(!JSON.stringify(s.app.projects.get(made.body.project.id)).includes('s3cret'));
-  config('[remote "backup"]\n\turl = D:/backup/app\n');
+  config('[remote "backup"]\n\turl = D:/backup/app\n[remote "tok"]\n\turl = https://ghp_tokenvalue@github.com/me/app.git\n[remote "at"]\n\turl = https://me:pa@ss@host.example/a.git\n[remote "q"]\n\turl = https://host.example/a.git?token=qsecret#frag\n');
   const refreshed = await s.json(`/api/projects/${made.body.project.id}`, 'PATCH', { refreshRemotes: true });
-  assert.deepEqual(refreshed.body.project.remotes.map((r: { name: string }) => r.name), ['origin', 'backup']);
+  assert.deepEqual(refreshed.body.project.remotes.map((r: { name: string; url: string }) => [r.name, r.url]), [
+    ['origin', 'https://github.com/me/app.git'], ['backup', 'D:/backup/app'], ['tok', 'https://github.com/me/app.git'], ['at', 'https://host.example/a.git'], ['q', 'https://host.example/a.git'],
+  ]);
+  for (const secret of ['ghp_tokenvalue', 'pa@ss', 'ss@host', 'qsecret']) assert.ok(!JSON.stringify(s.app.projects.get(made.body.project.id)).includes(secret), secret);
   const plain = await s.product('plain');
   assert.deepEqual(plain.remotes, []);
 });

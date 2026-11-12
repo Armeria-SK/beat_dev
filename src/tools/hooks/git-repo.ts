@@ -4,6 +4,7 @@
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { RepoInfo } from './allowlist-core.ts';
+import { isRemotePath } from './scope.ts';
 
 export interface ConfigEntry { key: string; value: string }
 
@@ -192,6 +193,7 @@ function examine(p: string): Examined {
   const commondir = adminFile(p, 'commondir');
   if (commondir === null || adminFile(p, 'gitdir') === null) return { state: 'broken' };
   const commonDir = commondir === undefined ? p : isAbsolute(commondir) ? commondir : resolve(p, commondir);
+  if (isRemotePath(commonDir)) return { state: 'broken' };
   const objects = kindOf(join(commonDir, 'objects'));
   const refs = kindOf(join(commonDir, 'refs'));
   if (objects === 'dir' && refs === 'dir') return head === 'valid' ? { state: 'ok', commonDir } : { state: 'broken' };
@@ -210,6 +212,7 @@ function viaGitFile(file: string): Found {
     const place = text.slice(8).replace(/[\r\n]+$/u, '');
     if (place === '' || /[\r\n\0]/u.test(place)) return broken;
     const target = isAbsolute(place) ? place : resolve(dirname(file), place);
+    if (isRemotePath(target)) return { gitDir: target, commonDir: target, broken: true };
     const e = examine(target);
     return e.state === 'ok' ? { gitDir: target, commonDir: e.commonDir } : { gitDir: target, commonDir: target, broken: true };
   } catch { return { gitDir: dirname(file), commonDir: dirname(file), broken: true }; }

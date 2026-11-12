@@ -4,11 +4,13 @@ import { languageOf } from '../shared/language.ts';
 import type { AppPaths } from '../paths.ts';
 import { isInside, resolveConfigPath, type ScopePolicy } from './hooks/scope.ts';
 
-export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root: string }): ScopePolicy {
+export const INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+
+export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root: string }, productRoots: readonly string[] = []): ScopePolicy {
   const configured = config.tools.roots.map(r => ({ path: resolveConfigPath(r.path, paths.data), mode: r.mode }));
   const readOnly = project && configured.some(r => r.mode === 'read' && sameFolder(r.path, project.root));
   const roots = project && !readOnly ? [...configured, { path: project.root, mode: 'write' as const }] : configured;
-  const instructions = project ? ['AGENTS.md', 'CLAUDE.md'].map(name => join(project.root, name)) : [];
+  const instructions = [...new Set([...(project ? [project.root] : []), ...productRoots])].flatMap(root => INSTRUCTION_FILES.map(name => join(root, name)));
   const protectedPaths = [
     paths.database, `${paths.database}-wal`, `${paths.database}-shm`, paths.config, `${paths.config}.bak`, paths.backups,
     paths.env, join(paths.data, 'tool_outputs'), paths.browserProfile, paths.projects,

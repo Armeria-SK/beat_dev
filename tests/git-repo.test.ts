@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { appendFileSync, chmodSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
+import { readRemotes } from '../src/projects/remotes.ts';
 import { findGitDir, inspectRepo, insideGitDir, isGitDir, isLocalRemoteUrl, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
 import { tempDir } from './helpers.ts';
 
@@ -522,4 +524,30 @@ test('branch.<名前>.vscode-merge-base はふつう。同じ branch の知ら�
     ['[branch]\n\tvscode-merge-base = origin/main\n', 'branch.vscode-merge-base'], ['[remote "o"]\n\tvscode-merge-base = x\n', 'remote.o.vscode-merge-base'],
     ['[branch "main"]\n\tvscode-merge-base-x = x\n', 'branch.main.vscode-merge-base-x']] as const) assert.equal(unusualKey(parseGitConfig(config)!), key, config);
   assert.equal(inspectRepo(repoWith(t, `${PLAIN}[branch "dev"]\n\tmergeoptions = x\n`)).badKey, 'branch.dev.mergeoptions');
+});
+
+test('commondir・gitdir がネットワークのパス（\\\\host\\share）なら壊れたものとして扱い、そこへは触らない', { skip: process.platform !== 'win32' }, t => {
+  const touched: string[] = [];
+  for (const name of ['statSync', 'lstatSync', 'readFileSync', 'existsSync', 'openSync', 'readdirSync', 'readlinkSync'] as const) {
+    const original = fs[name] as (...a: unknown[]) => unknown;
+    const patched = mock.method(fs, name, ((path: unknown, ...rest: unknown[]) => {
+      if (typeof path === 'string' && /^[\\/]{2}/u.test(path)) { touched.push(`${name} ${path}`); throw Object.assign(new Error('blocked'), { code: 'EACCES' }); }
+      return original(path, ...rest);
+    }) as never);
+    t.after(() => { patched.mock.restore(); syncBuiltinESMExports(); });
+  }
+  syncBuiltinESMExports();
+  const root = tempDir(t);
+  const linked = join(root, 'wt', '.git');
+  mkdirSync(linked, { recursive: true });
+  writeFileSync(join(linked, 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(linked, 'commondir'), '\\\\evil-host\\share\\repo');
+  writeFileSync(join(linked, 'gitdir'), join(root, 'wt', '.git'));
+  assert.equal(insideGitDir(join(linked, 'hooks', 'pre-commit')), true, '壊れたもの（今回だけ）');
+  assert.equal(findGitDir(join(root, 'wt'))?.broken, true);
+  assert.deepEqual(readRemotes(join(root, 'wt')), []);
+  mkdirSync(join(root, 'g'));
+  writeFileSync(join(root, 'g', '.git'), 'gitdir: \\\\evil-host\\share\\other\n');
+  assert.equal(findGitDir(join(root, 'g'))?.broken, true);
+  assert.deepEqual(touched, []);
 });

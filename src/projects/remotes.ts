@@ -9,7 +9,10 @@ const MAX_CONFIG_BYTES = 1_048_576;
 const MAX_REMOTES = 50;
 const MAX_TEXT = 2000;
 
-const withoutPassword = (url: string): string => url.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/[^/@:]*):[^/@]*@/u, '$1@');
+const withoutSecrets = (url: string): string => {
+  const parts = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)(?:[^/?#]*@)?([^?#]*)/u.exec(url);
+  return parts ? `${parts[1]}${parts[2]}` : url;
+};
 
 export function readRemotes(root: string): Remote[] {
   try {
@@ -31,7 +34,7 @@ export function readRemotes(root: string): Remote[] {
       if (parts[0] !== 'remote' || parts.length < 3 || (field !== 'url' && field !== 'pushurl')) continue;
       const name = parts.slice(1, -1).join('.').slice(0, MAX_TEXT);
       const remote = remotes.get(name) ?? { name, url: '', pushUrl: null };
-      const url = withoutPassword(value).slice(0, MAX_TEXT);
+      const url = withoutSecrets(value).slice(0, MAX_TEXT);
       if (field === 'url' && !remote.url) remote.url = url;
       if (field === 'pushurl' && remote.pushUrl === null) remote.pushUrl = url;
       remotes.set(name, remote);

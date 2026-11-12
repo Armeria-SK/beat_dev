@@ -11,7 +11,7 @@ import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 import { worst } from '../hooks/shell-guard.ts';
 import type { PreCheck, ToolDef, ToolOutput } from '../types.ts';
 import { clip, DOWNLOAD_LIMITS, downloadPublic, mediaTypeOf, pageUrl, RetrievalFailure, type DownloadSink } from '../web/public-page.ts';
-import { contentDispositionName, DOWNLOADS_DIR, downloadsDir, numberedName, safeDownloadName, urlFileName, zoneIdentifier } from './downloads-core.ts';
+import { contentDispositionName, downloadsDir, numberedName, safeDownloadName, urlFileName, zoneIdentifier } from './downloads-core.ts';
 import { checkFilePath } from './files.ts';
 import { exfiltrationCheck, webFailure } from './web.ts';
 
@@ -119,7 +119,7 @@ function mergeChecks(first: PreCheck, second: PreCheck): PreCheck {
 
 export const webDownload: ToolDef<{ url: string; name?: string }> = {
   name: 'web_download',
-  description: 'Download a file from the public web and save it in downloads/ in the working folder (the location cannot be chosen; name is a suggested name and is changed into a safe form; if the same name exists, -1 or similar is added and nothing is overwritten). The saved file is external data. Local and LAN addresses cannot be fetched.',
+  description: 'Download a file from the public web and save it in the downloads folder of Clive (downloads/ in the Clive workspace, never in a product folder; the result gives the full path; the location cannot be chosen; name is a suggested name and is changed into a safe form; if the same name exists, -1 or similar is added and nothing is overwritten). The saved file is external data. Local and LAN addresses cannot be fetched.',
   input: Type.Object({
     url: Type.String({ minLength: 1, maxLength: 4096 }),
     name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, description: 'A suggested name to save the file as' })),
@@ -133,7 +133,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
     let url: URL;
     try { url = pageUrl(input.url); } catch (error) { return { decision: 'deny', reasons: [error instanceof RetrievalFailure ? error.text(language) : (error as Error).message] }; }
     const web = exfiltrationCheck(input.url, language, url.search.length > 300 ? [guardText(language, 'web.long_query')] : []);
-    return mergeChecks(web, checkFilePath(DOWNLOADS_DIR, 'write', ctx).check);
+    return mergeChecks(web, checkFilePath(downloadsDir(ctx.home ?? ctx.workspace), 'write', ctx).check);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_download'), body: input.name === undefined ? input.url : `${input.url}\n${input.name}` }),
   async execute(input, ctx) {
@@ -144,7 +144,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
     try {
       mkdirSync(dir, { recursive: true });
       if (lstatSync(dir).isSymbolicLink()) return local(language, 'download.dir_link');
-      if (checkFilePath(DOWNLOADS_DIR, 'write', ctx).check.decision === 'deny') return local(language, 'file.recheck_failed', { detail: DOWNLOADS_DIR });
+      if (checkFilePath(dir, 'write', ctx).check.decision === 'deny') return local(language, 'file.recheck_failed', { detail: dir });
       const free = freeBytesOf(dir);
       if (free < DOWNLOAD_LIMITS.minFreeBytes) return local(language, 'download.disk_low', { free });
 
@@ -173,7 +173,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
       }
       return {
         content: [
-          toolText(language, 'download.saved', { path: `${DOWNLOADS_DIR}/${placed}`, size: downloaded.bytes.toLocaleString('en-US'), type: mediaTypeOf(downloaded.contentType) ?? '?', url: clip(downloaded.url, 200) }),
+          toolText(language, 'download.saved', { path: join(dir, placed), size: downloaded.bytes.toLocaleString('en-US'), type: mediaTypeOf(downloaded.contentType) ?? '?', url: clip(downloaded.url, 200) }),
           toolText(language, 'download.external'),
           picked.renamed ? toolText(language, 'download.renamed') : '',
           zoneFailed === undefined ? '' : toolText(language, 'download.zone_failed', { detail: zoneFailed }),

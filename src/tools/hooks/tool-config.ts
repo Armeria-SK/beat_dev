@@ -2,9 +2,9 @@
 // あとで動く許可済みのコマンド（git status・curl・シェルの起動）に、設定でコードを読み込ませられる。そこへの書き込み・消すこと・名前の変更は、
 // 許可フォルダの中でも外でも、シェルからは今回だけにする。ここは、その場所の一覧と、調べる関数
 
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { isInside } from './scope.ts';
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -106,6 +106,16 @@ export function curlConfigFile(env: Env, cwd?: string): string | undefined {
     ...homes.map(h => join(h, '.config', 'curlrc')),
   ];
   return files.find(hasSettings);
+}
+
+export function npmProjectConfigFile(cwd: string): string | undefined {
+  let prefix = cwd;
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, 'package.json')) || existsSync(join(dir, 'node_modules'))) { prefix = dir; break; }
+    if (dirname(dir) === dir) break;
+  }
+  const file = join(prefix, '.npmrc');
+  return hasSettings(file) ? file : undefined;
 }
 
 // wget が設定として読むファイルのうち、設定が書かれているもの（最初の 1 つ）

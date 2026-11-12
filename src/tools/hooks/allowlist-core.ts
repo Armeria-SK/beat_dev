@@ -34,7 +34,7 @@ export interface MatchCtx {
   // git をホーム・システムの設定の洗い出しつきで動かせるか（git-env.ts。2.32 より古い git は false）。false なら git はすべて今回だけ
   gitIsolated?: boolean | undefined;
   // curl・wget が起動のたびに読む設定ファイル（書かれていれば、その場所）。保存先や送り先を変えられるので、あればその curl・wget は今回だけ（tool-config.ts）
-  toolConfig?: ((tool: 'curl' | 'wget') => ToolRc | undefined) | undefined;
+  toolConfig?: ((tool: 'curl' | 'wget' | 'npm') => ToolRc | undefined) | undefined;
   // 文 1 つの判定が終わるたびに呼ばれる（cd で動いた先を、あとの文の判定で数えるため）
   afterStatement?: ((result: StatementResult) => void) | undefined;
 }

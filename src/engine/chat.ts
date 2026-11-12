@@ -615,14 +615,15 @@ export class ChatEngine {
     let lastRoute: Route = chain[0]!;
     const project = agent ? agent.parent.project : kind === 'review' ? undefined : runProject(d.projects, d.conversations.projectOf(conversationId));
     if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
-    const base = agent ? undefined : buildPolicy(config, d.paths);
-    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }) : base!);
+    const productRoots = agent || kind === 'review' ? [] : d.projects?.list().map(p => p.root) ?? [];
+    const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
+    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
     const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
-      runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? project?.root ?? home, home, ...(project ? { project } : {}),
+      runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),

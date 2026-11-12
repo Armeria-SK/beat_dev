@@ -50,6 +50,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
     requested_by_user: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false }),
   effect: 'meta',
+  escalateOnTaint: true,
   allowedIn: ['chat', 'task'],
   async execute(input, ctx) {
     try {
@@ -100,6 +101,7 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
     status: Type.Optional(Type.Union([Type.Literal('done'), Type.Literal('cancelled')])),
   }, { additionalProperties: false }),
   effect: 'meta',
+  escalateOnTaint: true,
   allowedIn: ['chat', 'task'],
   async execute(input, ctx) {
     try {
