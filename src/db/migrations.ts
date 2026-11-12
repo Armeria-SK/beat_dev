@@ -401,4 +401,19 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   ALTER TABLE tasks ADD COLUMN acceptance_items TEXT;
   `,
+  `
+  CREATE TABLE acceptance_changes (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    base_version INTEGER NOT NULL,
+    ops TEXT NOT NULL,
+    language TEXT,
+    conversation_id TEXT,
+    tainted INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'superseded')),
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER
+  ) STRICT;
+  CREATE INDEX ix_acceptance_changes_project ON acceptance_changes (project_id, status);
+  `,
 ];

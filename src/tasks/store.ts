@@ -355,6 +355,15 @@ export class TaskStore {
     return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting')").get(projectId));
   }
 
+  builds(projectId: string): Array<{ items: string[]; created_at: number }> {
+    const rows = this.#db.prepare('SELECT acceptance_items, created_at FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL').all(projectId) as Array<{ acceptance_items: string; created_at: number }>;
+    return rows.map(row => {
+      let items: unknown;
+      try { items = JSON.parse(row.acceptance_items); } catch { items = []; }
+      return { items: Array.isArray(items) ? items.filter((id): id is string => typeof id === 'string') : [], created_at: row.created_at };
+    });
+  }
+
   markUntrusted(taskId: string, actor: string, note: string): void {
     transaction(this.#db, () => {
       if (this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND run_id = ? AND kind = 'context' LIMIT 1").get(taskId, UNTRUSTED_RUN)) return;

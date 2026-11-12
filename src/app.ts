@@ -194,7 +194,10 @@ export class App {
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
-    this.acceptance = new AcceptanceStore(this.db, this.paths.projects, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null, log: this.log });
+    this.acceptance = new AcceptanceStore(this.db, this.paths.projects, {
+      archived: id => (this.projects.get(id)?.archived_at ?? null) !== null, log: this.log, now, languages: this.projects,
+      planHash: id => { try { return this.plans.view(id).hash; } catch { return null; } },
+    });
     this.acceptance.repairAll(this.log);
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];

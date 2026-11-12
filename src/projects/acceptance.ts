@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -9,7 +9,7 @@ import { acceptanceText, type AcceptanceMessageKey } from '../shared/messages/ac
 import { stripHidden } from '../shared/plain-text.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
 import { stripAttachments } from '../uploads/store.ts';
-import { CHECK_COMMAND_MAX, checkCommandOf, PROJECT_ID, projectDir } from './store.ts';
+import { CHECK_COMMAND_MAX, checkCommandOf, PROJECT_ID, projectDir, type ProjectStore } from './store.ts';
 
 export const ACCEPTANCE_FILE = 'acceptance.json';
 export const ACCEPTANCE_MAX_ITEMS = 60;
@@ -197,6 +197,8 @@ function cleanClaim(claimed: ClaimedSource): ClaimedSource {
   return { kind: 'ai_added' };
 }
 
+export const checkedSource = (speech: Speech, claimed: ClaimedSource): AcceptanceSource => verifySource(speech, cleanClaim(claimed));
+
 function cleanCheck(check: AcceptanceCheck): AcceptanceCheck {
   if (check.kind !== 'command') return { kind: check.kind };
   let command: string | null;
@@ -264,9 +266,103 @@ function overlay(base: AcceptanceDoc, file: AcceptanceDoc | undefined): Acceptan
     ...base,
     items: base.items.map(entry => {
       const current = live.get(entry.id);
-      return current ? { ...entry, state: current.state, evidence: current.evidence } : entry;
+      return current && (entry.changedIn ?? 0) <= file!.version ? { ...entry, state: current.state, evidence: current.evidence } : entry;
     }),
   };
+}
+
+export const ACCEPTANCE_MAX_CHANGES = 60;
+export const ACCEPTANCE_MAX_TOTAL = 200;
+const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
+
+export type ChangeOpKind = 'add' | 'change' | 'remove';
+export interface ChangeItem { result: string; check: AcceptanceCheck }
+export interface ChangeOp { op: ChangeOpKind; id?: string; item?: ChangeItem; source: AcceptanceSource }
+export type OwnerChange = Omit<ChangeOp, 'source'>;
+export type DecisionSource = 'question' | 'proposal';
+
+export interface AcceptanceChangeRow {
+  id: string;
+  project_id: string;
+  base_version: number;
+  ops: string;
+  language: string | null;
+  conversation_id: string | null;
+  tainted: number;
+  status: 'pending' | 'approved' | 'rejected' | 'superseded';
+  created_at: number;
+  decided_at: number | null;
+}
+
+export type AcceptanceVersionSummary = Omit<AcceptanceVersionRow, 'content'>;
+
+const badChange = (detail: string) => new AcceptanceError('bad_change', { detail });
+
+function cleanItem(item: ChangeItem | undefined, op: ChangeOpKind): ChangeItem {
+  if (!item || typeof item.result !== 'string' || !item.check || typeof item.check !== 'object') throw badChange(`${op} needs result and check`);
+  const result = cleanText(item.result, 'result', ACCEPTANCE_RESULT_MAX);
+  if (!result) throw badChange(`${op} needs result and check`);
+  if (!['command', 'look', 'read'].includes(item.check.kind)) throw badChange('check must be command, look or read');
+  return { result, check: cleanCheck(item.check) };
+}
+
+export function cleanChanges(ops: readonly ChangeOp[]): ChangeOp[] {
+  if (ops.length === 0) throw badChange('no changes');
+  if (ops.length > ACCEPTANCE_MAX_CHANGES) throw new AcceptanceError('too_many', { max: ACCEPTANCE_MAX_CHANGES });
+  const seen = new Set<string>();
+  const cleaned = ops.map((op): ChangeOp => {
+    if (op.op === 'add') return { op: 'add', item: cleanItem(op.item, 'add'), source: op.source };
+    if (op.op !== 'change' && op.op !== 'remove') throw badChange('op must be add, change or remove');
+    if (typeof op.id !== 'string' || !ITEM_ID.test(op.id)) throw badChange(`${op.op} needs the id of an item`);
+    if (seen.has(op.id)) throw badChange(`${op.id} appears twice`);
+    seen.add(op.id);
+    return op.op === 'remove' ? { op: 'remove', id: op.id, source: op.source } : { op: 'change', id: op.id, item: cleanItem(op.item, 'change'), source: op.source };
+  });
+  if (sanitizeModelInputText(JSON.stringify(cleaned)).redaction_count > 0) throw new AcceptanceError('secret');
+  return cleaned;
+}
+
+export function applyChanges(doc: AcceptanceDoc, ops: readonly ChangeOp[], next: number | null): AcceptanceItem[] {
+  const items = doc.items.map(entry => ({ ...entry }));
+  let top = items.reduce((max, entry) => Math.max(max, Number(/^A-(\d+)$/u.exec(entry.id)?.[1] ?? 0)), 0);
+  const drop = new Set<string>();
+  for (const op of cleanChanges(ops)) {
+    if (op.op === 'add') {
+      items.push({ id: `A-${++top}`, result: op.item!.result, source: op.source, check: op.item!.check, state: 'open', evidence: [], changedIn: next, removedIn: null });
+      continue;
+    }
+    const target = items.find(entry => entry.id === op.id && entry.removedIn === null);
+    if (!target) throw badChange(`there is no item ${op.id}`);
+    if (op.op === 'remove') {
+      if (next === null) drop.add(target.id); else target.removedIn = next;
+      continue;
+    }
+    Object.assign(target, { result: op.item!.result, check: op.item!.check, source: op.source, state: 'open', evidence: [], changedIn: next });
+  }
+  const out = items.filter(entry => !drop.has(entry.id));
+  if (out.filter(entry => entry.removedIn === null).length > ACCEPTANCE_MAX_ITEMS || out.length > ACCEPTANCE_MAX_TOTAL) throw new AcceptanceError('too_many', { max: ACCEPTANCE_MAX_ITEMS });
+  return out;
+}
+
+export function ownerChanges(raw: unknown): OwnerChange[] {
+  if (!Array.isArray(raw)) throw badChange('ops must be a list');
+  return raw.map((entry): OwnerChange => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw badChange('each op must be an object');
+    const { op, id, item, ...rest } = entry as Record<string, unknown>;
+    if (Object.keys(rest).length > 0) throw badChange(`unknown field ${Object.keys(rest)[0]!.slice(0, 20)}`);
+    if (op !== 'add' && op !== 'change' && op !== 'remove') throw badChange('op must be add, change or remove');
+    if (id !== undefined && typeof id !== 'string') throw badChange('id must be text');
+    let changeItem: ChangeItem | undefined;
+    if (item !== undefined) {
+      const { result, check } = (item ?? {}) as Record<string, unknown>;
+      const kind = (check as Record<string, unknown> | null | undefined)?.kind;
+      const command = (check as Record<string, unknown> | null | undefined)?.command;
+      if (typeof result !== 'string' || (kind !== 'command' && kind !== 'look' && kind !== 'read')) throw badChange(`${op} needs result and check`);
+      if (kind === 'command' && typeof command !== 'string') throw new AcceptanceError('bad_command', { max: CHECK_COMMAND_MAX });
+      changeItem = { result, check: kind === 'command' ? { kind, command: command as string } : { kind } };
+    }
+    return { op, ...(id !== undefined ? { id } : {}), ...(changeItem ? { item: changeItem } : {}) };
+  });
 }
 
 export const UNREFERENCED_PAGE = 50;
@@ -315,6 +411,9 @@ export interface AcceptanceIo {
   renameSync?: (from: string, to: string) => void;
   archived?: (projectId: string) => boolean;
   log?: (line: string) => void;
+  now?: () => number;
+  planHash?: (projectId: string) => string | null;
+  languages?: Pick<ProjectStore, 'get' | 'detectDocLanguage'>;
 }
 
 export class AcceptanceStore {
@@ -324,6 +423,9 @@ export class AcceptanceStore {
   readonly #rename: (from: string, to: string) => void;
   readonly #archived: (projectId: string) => boolean;
   readonly #log: (line: string) => void;
+  readonly #now: () => number;
+  readonly #planHash: (projectId: string) => string | null;
+  readonly #languages: Pick<ProjectStore, 'get' | 'detectDocLanguage'> | undefined;
 
   constructor(db: DatabaseSync, projectsDir: string, io: AcceptanceIo = {}) {
     this.#db = db;
@@ -332,6 +434,119 @@ export class AcceptanceStore {
     this.#rename = io.renameSync ?? renameSync;
     this.#archived = io.archived ?? (() => false);
     this.#log = io.log ?? (() => undefined);
+    this.#now = io.now ?? Date.now;
+    this.#planHash = io.planHash ?? (() => null);
+    this.#languages = io.languages;
+  }
+
+  atomically<T>(work: () => T): T { return transaction(this.#db, work); }
+
+  versions(projectId: string): AcceptanceVersionSummary[] {
+    return this.#db.prepare('SELECT project_id, version, hash, plan_hash, source, build_task_id, created_at FROM acceptance_versions WHERE project_id = ? ORDER BY version').all(projectId) as unknown as AcceptanceVersionSummary[];
+  }
+
+  version(projectId: string, version: number): AcceptanceVersionRow | undefined {
+    return this.#db.prepare('SELECT * FROM acceptance_versions WHERE project_id = ? AND version = ?').get(projectId, version) as AcceptanceVersionRow | undefined;
+  }
+
+  pending(projectId: string): AcceptanceChangeRow | undefined {
+    return this.#db.prepare("SELECT * FROM acceptance_changes WHERE project_id = ? AND status = 'pending' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as AcceptanceChangeRow | undefined;
+  }
+
+  #change(projectId: string, changeId: string): AcceptanceChangeRow {
+    const row = this.#db.prepare('SELECT * FROM acceptance_changes WHERE id = ? AND project_id = ?').get(changeId, projectId) as AcceptanceChangeRow | undefined;
+    if (!row) throw new AcceptanceError('no_change');
+    return row;
+  }
+
+  #pendingChange(projectId: string, changeId: string): AcceptanceChangeRow {
+    const row = this.#change(projectId, changeId);
+    if (row.status !== 'pending') throw new AcceptanceError('not_pending', { status: row.status });
+    return row;
+  }
+
+  #base(projectId: string): { row: AcceptanceVersionRow; doc: AcceptanceDoc } {
+    const row = this.latest(projectId);
+    const stored = row ? docOf(row.content) : undefined;
+    if (!row || !stored) throw new AcceptanceError('not_frozen');
+    let file: AcceptanceDoc | undefined;
+    try { file = this.#readFile(projectId); } catch { file = undefined; }
+    return { row, doc: overlay(stored, file) };
+  }
+
+  propose(projectId: string, ops: readonly ChangeOp[], meta: { language: string | null; conversationId: string | null; tainted: boolean }): AcceptanceChangeRow {
+    if (this.#archived(projectId)) throw new AcceptanceError('archived');
+    const { row, doc } = this.#base(projectId);
+    const cleaned = cleanChanges(ops);
+    applyChanges(doc, cleaned, row.version + 1);
+    const now = this.#now();
+    const made: AcceptanceChangeRow = {
+      id: randomUUID(), project_id: projectId, base_version: row.version, ops: JSON.stringify(cleaned), language: meta.language,
+      conversation_id: meta.conversationId, tainted: meta.tainted ? 1 : 0, status: 'pending', created_at: now, decided_at: null,
+    };
+    transaction(this.#db, () => {
+      this.#db.prepare("UPDATE acceptance_changes SET status = 'superseded', decided_at = ? WHERE project_id = ? AND status = 'pending'").run(now, projectId);
+      this.#db.prepare('INSERT INTO acceptance_changes (id, project_id, base_version, ops, language, conversation_id, tainted, status, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(made.id, made.project_id, made.base_version, made.ops, made.language, made.conversation_id, made.tainted, made.status, made.created_at, made.decided_at);
+    });
+    return made;
+  }
+
+  approve(projectId: string, changeId: string): AcceptanceVersionRow {
+    const change = this.#change(projectId, changeId);
+    if (this.#archived(projectId)) throw new AcceptanceError('archived');
+    const latest = this.latest(projectId);
+    if ((change.status === 'pending' || change.status === 'superseded') && latest?.version !== change.base_version) {
+      this.#db.prepare("UPDATE acceptance_changes SET status = 'superseded', decided_at = ? WHERE id = ? AND status = 'pending'").run(this.#now(), change.id);
+      throw new AcceptanceError('stale', { version: latest?.version ?? 0 });
+    }
+    if (change.status !== 'pending') throw new AcceptanceError('not_pending', { status: change.status });
+    return this.#advance(projectId, JSON.parse(change.ops) as ChangeOp[], 'change', { language: change.language, taint: change.tainted === 1 ? `change:${change.id}` : null, decide: change.id });
+  }
+
+  reject(projectId: string, changeId: string): AcceptanceChangeRow {
+    const change = this.#pendingChange(projectId, changeId);
+    const now = this.#now();
+    this.#db.prepare("UPDATE acceptance_changes SET status = 'rejected', decided_at = ? WHERE id = ? AND status = 'pending'").run(now, change.id);
+    return { ...change, status: 'rejected', decided_at: now };
+  }
+
+  ownerEdit(projectId: string, edit: { baseVersion: number; baseHash?: string | null | undefined; ops: readonly OwnerChange[] }): number {
+    if (this.#archived(projectId)) throw new AcceptanceError('archived');
+    const ops: ChangeOp[] = edit.ops.map(op => ({ ...op, source: { kind: 'owner_edit' } }));
+    this.repair(projectId);
+    const latest = this.latest(projectId);
+    if (!latest) {
+      const current = this.#readFile(projectId);
+      if (edit.baseVersion !== 0 || (edit.baseHash !== undefined && (current ? frozenHash(current) : null) !== edit.baseHash)) throw new AcceptanceError('stale', { version: 0 });
+      const base: AcceptanceDoc = current ?? { schema: 1, version: 0, language: this.#languages?.get(projectId)?.doc_language ?? null, items: [], notDoing: [] };
+      this.writeDraft(projectId, { ...base, version: 0, items: applyChanges(base, ops, null) });
+      return 0;
+    }
+    if (edit.baseVersion !== latest.version || (edit.baseHash !== undefined && edit.baseHash !== latest.hash)) throw new AcceptanceError('stale', { version: latest.version });
+    return this.#advance(projectId, ops, 'change', { language: null, taint: null, decide: null }).version;
+  }
+
+  applyOwnerDecision(projectId: string, ops: readonly ChangeOp[], source: DecisionSource): AcceptanceVersionRow {
+    if (this.#archived(projectId)) throw new AcceptanceError('archived');
+    return this.#advance(projectId, ops, source, { language: null, taint: null, decide: null });
+  }
+
+  #advance(projectId: string, ops: readonly ChangeOp[], source: 'change' | DecisionSource, o: { language: string | null; taint: string | null; decide: string | null }): AcceptanceVersionRow {
+    this.repair(projectId);
+    const { row, doc } = this.#base(projectId);
+    const next = row.version + 1;
+    const items = applyChanges(doc, ops, next);
+    const project = o.language ? this.#languages?.get(projectId) : undefined;
+    const moves = Boolean(o.language && project && project.doc_language_pinned === 0 && project.doc_language !== o.language);
+    const taintedRuns = [...new Set([...(doc.taintedRuns ?? []), ...(o.taint ? [o.taint] : [])])];
+    const made: AcceptanceDoc = { ...doc, version: next, language: moves ? o.language : doc.language, items, taintedRuns };
+    const now = this.#now();
+    return this.freeze(projectId, made, { plan_hash: this.#planHash(projectId), source, created_at: now }, () => {
+      this.#db.prepare("UPDATE acceptance_changes SET status = CASE WHEN id = ? THEN 'approved' ELSE 'superseded' END, decided_at = ? WHERE project_id = ? AND status = 'pending'").run(o.decide ?? '', now, projectId);
+      if (moves) this.#languages!.detectDocLanguage(projectId, o.language!);
+      return null;
+    });
   }
 
   #file(projectId: string): string { return join(projectDir(this.#dir, projectId), ACCEPTANCE_FILE); }

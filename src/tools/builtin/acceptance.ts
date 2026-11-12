@@ -1,7 +1,9 @@
 import { Type, type Static } from '@sinclair/typebox';
 import { ownerSpeech } from '../../db/conversations.ts';
-import { AcceptanceError, buildDraft, prepareSpeech, type AcceptanceCheck, type ClaimedSource } from '../../projects/acceptance.ts';
-import { CHECK_COMMAND_MAX } from '../../projects/store.ts';
+import {
+  AcceptanceError, buildDraft, checkedSource, prepareSpeech, type AcceptanceCheck, type ChangeOp, type ChangeOpKind, type ClaimedSource, type Speech,
+} from '../../projects/acceptance.ts';
+import { CHECK_COMMAND_MAX, languageTagOf } from '../../projects/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { errorText } from '../../shared/messages/define.ts';
 import { toolText } from '../../shared/messages/tools.ts';
@@ -36,6 +38,54 @@ function checkOf(entry: { check: string; command?: string | undefined }): Accept
   if (!entry.command?.trim()) throw new AcceptanceError('bad_command', { max: CHECK_COMMAND_MAX });
   return { kind: 'command', command: entry.command };
 }
+
+const CHANGE_INPUT = Type.Object({
+  changes: Type.Array(Type.Object({
+    op: Type.String(), id: Type.Optional(Type.String()), result: Type.Optional(Type.String()), quote: Type.Optional(Type.String()), check: Type.Optional(Type.String()), command: Type.Optional(Type.String()),
+  })),
+  language: Type.Optional(Type.String()),
+});
+
+type ChangeEntry = Static<typeof CHANGE_INPUT>['changes'][number];
+
+function changeOf(entry: ChangeEntry, speech: Speech): ChangeOp {
+  if (entry.check !== undefined && !['command', 'look', 'read'].includes(entry.check)) throw new AcceptanceError('bad_change', { detail: 'check must be command, look or read' });
+  const source = checkedSource(speech, entry.quote?.trim() ? { kind: 'owner_words', quote: entry.quote } : { kind: 'ai_added' });
+  const item = entry.result !== undefined && entry.check !== undefined ? { result: entry.result, check: checkOf({ check: entry.check, command: entry.command }) } : undefined;
+  return { op: entry.op as ChangeOpKind, ...(entry.id !== undefined ? { id: entry.id } : {}), ...(item ? { item } : {}), source };
+}
+
+export const acceptanceChange: ToolDef<Static<typeof CHANGE_INPUT>> = {
+  name: 'acceptance_change',
+  description: 'Propose changes to the locked acceptance list; nothing changes until the owner approves. op: add, change (id) or remove (id). result, quote, check, command as in acceptance_write; no quote = AI added. language: documents language.',
+  input: CHANGE_INPUT,
+  effect: 'meta',
+  allowedIn: ['chat'],
+  planOk: true,
+  projectOnly: true,
+  async execute(input, ctx) {
+    const language = languageOf(ctx.config);
+    const services = ctx.services;
+    if (!services?.acceptance || !ctx.project) return { content: toolText(language, 'acceptance.no_store'), isError: true };
+    let tainted = ctx.taint.tainted;
+    if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
+    try {
+      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id));
+      const ops = input.changes.map(entry => changeOf(entry, speech));
+      const row = services.acceptance.propose(ctx.project.id, ops, { language: tainted ? null : languageTagOf(input.language) ?? null, conversationId: ctx.conversationId, tainted });
+      services.emit({ type: 'acceptance.changed', projectId: ctx.project.id, version: row.base_version, draft: false });
+      const changed: Record<string, number> = {};
+      for (const { source } of ops) if (source.kind === 'ai_added' && source.reason) changed[source.reason] = (changed[source.reason] ?? 0) + 1;
+      const reasons = Object.entries(changed).map(([reason, n]) => `${reason}: ${n}`).join(', ');
+      return { content: toolText(language, 'acceptance.proposed', {
+        changes: ops.length, version: row.base_version, verified: ops.filter(op => op.source.kind === 'owner_words').length,
+        changed: Object.values(changed).reduce((sum, n) => sum + n, 0), reasons: reasons ? ` (${reasons})` : '',
+      }) };
+    } catch (error) {
+      return { content: toolText(language, 'failed', { detail: errorText(error, language) }), isError: true };
+    }
+  },
+};
 
 export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
   name: 'acceptance_write',
