@@ -23,8 +23,7 @@ export const waitingTotal = (w: Waiting): number => w.approvals + w.proposals + 
 
 export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers'>): number => w.proposals + w.answers;
 
-export function agentState(w: Waiting, working: boolean, workingWins = false): AgentState {
-  if (workingWins && working) return 'working';
+export function agentState(w: Waiting, working: boolean): AgentState {
   if (waitingTotal(w) > 0) return 'waiting';
   return working ? 'working' : 'idle';
 }
@@ -42,9 +41,9 @@ export function checklistStep(items: readonly ChecklistItem[]): { step: number; 
   return { step, total: items.length };
 }
 
-export function footLine(w: Waiting, working: boolean, checklists: ReadonlyArray<readonly ChecklistItem[]>, runningTitle: string | null, workingWins = false): FootLine {
+export function footLine(w: Waiting, working: boolean, checklists: ReadonlyArray<readonly ChecklistItem[]>, runningTitle: string | null): FootLine {
   const n = waitingTotal(w);
-  if (n > 0 && !(workingWins && working)) return { kind: 'waiting', n };
+  if (n > 0) return { kind: 'waiting', n };
   if (!working) return { kind: 'idle' };
   for (const items of checklists) {
     const at = checklistStep(items);

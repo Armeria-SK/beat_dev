@@ -5,7 +5,6 @@ import type { AgentState, FootLine } from './agent-state.ts';
 import { Avatar, CountBadge, Icon } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
 import { routeHash, type Route } from './routes.ts';
-import { B_IDLE_LINE } from './variants.ts';
 
 export interface SidebarProps {
   state: AgentState;
@@ -16,7 +15,6 @@ export interface SidebarProps {
   unread: number;
   conversations: Conversation[];
   running: ReadonlySet<string>;
-  asleep: boolean;
 }
 
 function SideLink({ href, icon, name, active, count, countLabel }: {
@@ -30,12 +28,12 @@ function SideLink({ href, icon, name, active, count, countLabel }: {
   );
 }
 
-function footText(t: ReturnType<typeof useT>, foot: FootLine, asleep: boolean): string {
+function footText(t: ReturnType<typeof useT>, foot: FootLine): string {
   switch (foot.kind) {
     case 'waiting': return t('ui.foot.waiting', foot.n);
     case 'building': return t('ui.foot.building', foot.step, foot.total);
     case 'running': return foot.title ? t('ui.foot.running', foot.title) : t('ui.foot.runningPlain');
-    default: return import.meta.env.DEV && asleep ? B_IDLE_LINE : t('ui.foot.idle');
+    default: return t('ui.foot.idle');
   }
 }
 
@@ -69,7 +67,7 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running, asleep }: SidebarProps) {
+export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running }: SidebarProps) {
   const t = useT();
   const [searching, setSearching] = useState(false);
   const at = (view: Route['view']) => route.view === view;
@@ -113,7 +111,7 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
         <SideLink href="#/archived" icon="archive" name={t('ui.nav.archived')} active={at('archived')} />
       </div>
       <div className="bt-sidebar__foot">
-        <span className="bt-side__name bt-meta">{footText(t, foot, asleep)}</span>
+        <span className="bt-side__name bt-meta">{footText(t, foot)}</span>
         <a className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost bt-bell" href="#/notifications" aria-label={t('ui.bell', unread)} aria-current={at('notifications') ? 'page' : undefined}>
           <Icon name="bell" /><CountBadge n={unread} quiet />
         </a>

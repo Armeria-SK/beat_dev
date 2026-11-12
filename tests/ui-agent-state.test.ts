@@ -50,16 +50,3 @@ test('ui/agent-state: 足の 1 行は、待ち → 一覧のある動き（Build
   assert.deepEqual(footLine(NONE, true, [], null), { kind: 'running', title: null });
   assert.deepEqual(footLine(NONE, false, list, 'x'), { kind: 'idle' });
 });
-
-// T1（p1-ui.md「/preview で触って決めること」）の b: 動いているときは、待ちがあっても「動いている」を出す（プロトタイプ proto.js:297）。
-test('ui/agent-state: T1 の b（?v.agent=b）は、動いていれば待ちがあっても working。動いていなければ a と同じ', () => {
-  const w: Waiting = { ...NONE, approvals: 1 };
-  assert.equal(agentState(w, true, true), 'working');
-  assert.equal(agentState(w, false, true), 'waiting');
-  assert.equal(agentState(NONE, false, true), 'idle');
-  const list = [items('done', 'in_progress', 'pending')];
-  assert.deepEqual(footLine(w, true, list, 'x', true), { kind: 'building', step: 2, total: 3 });
-  assert.deepEqual(footLine(w, true, [], 'Morning summary', true), { kind: 'running', title: 'Morning summary' });
-  assert.deepEqual(footLine(w, false, list, 'x', true), { kind: 'waiting', n: 1 });
-  assert.deepEqual(footLine(w, true, list, 'x', false), { kind: 'waiting', n: 1 });
-});

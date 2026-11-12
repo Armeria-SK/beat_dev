@@ -7,7 +7,6 @@ import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Icon } from './parts.tsx';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, type Route } from './routes.ts';
 import { Sidebar } from './Sidebar.tsx';
-import { variant } from './variants.ts';
 
 const BROWSER_NOTIFY = new Set(['approval_needed', 'task_waiting']);
 const NARROW = '(max-width: 760px)';
@@ -169,11 +168,10 @@ export function App() {
 
   const waiting: Waiting = useMemo(() => ({ approvals, drafts: skillDrafts, ...countTasks(tasks.values()) }), [approvals, skillDrafts, tasks]);
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
-  const workingWins = import.meta.env.DEV && variant('agent') === 'b' ? true : false;
-  const state = agentState(waiting, working, workingWins);
+  const state = agentState(waiting, working);
   const running = useMemo(() => new Set(drafts.map(d => d.conversationId)), [drafts]);
   const runningTitle = worker?.running?.title ?? conversations.find(c => running.has(c.id))?.title ?? null;
-  const foot = footLine(waiting, working, drafts.map(d => checklists.get(d.conversationId) ?? []), runningTitle, workingWins);
+  const foot = footLine(waiting, working, drafts.map(d => checklists.get(d.conversationId) ?? []), runningTitle);
 
   useEffect(() => {
     if ((waiting.approvals || waiting.answers) && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
@@ -202,19 +200,14 @@ export function App() {
   const conversation = behind.view === 'chat' ? conversations.find(c => c.id === behind.id) : undefined;
   const title = viewTitle(t, behind, conversation);
   const kanban = kanbanCount(waiting);
-  const narrowB = import.meta.env.DEV && variant('narrow') === 'b' ? true : false;
-  const asleep = import.meta.env.DEV && variant('idle') === 'b' ? true : false;
-  const marks = import.meta.env.DEV ? [workingWins && 'trial-b-agent', narrowB && 'trial-b-narrow', variant('motion') === 'b' && 'trial-b-motion', asleep && 'trial-b-idle'].filter(Boolean).join(' ') || undefined : undefined;
   const convo = isConversation(behind);
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);
 
   return (
-    <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}${narrowB ? ' is-narrow-b' : ''}`} {...(import.meta.env.DEV ? { 'data-variant-b': marks } : {})}>
-      {narrowB
-        ? <button type="button" className="bt-btn bt-btn--icon bt-btn--ghost ui-menu" aria-label={t('ui.menu')} onClick={e => { menuButton.current = e.currentTarget; setDrawer(true); }}><Icon name="menu" /></button>
-        : <NarrowBar title={title} unread={unread} onMenu={e => { menuButton.current = e; setDrawer(true); }} />}
+    <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
+      <NarrowBar title={title} unread={unread} onMenu={e => { menuButton.current = e; setDrawer(true); }} />
       <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined}>
-        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} asleep={asleep} />
+        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} running={running} />
         {convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`}>
             <header className="bt-app__bar"><span className="bt-app__bar-title">{title}</span></header>
@@ -230,7 +223,7 @@ export function App() {
         )}
       </div>
       {drawer && <div className="ui-navveil" onClick={closeDrawer} />}
-      {!narrowB && <TabBar route={behind} kanban={kanban} />}
+      <TabBar route={behind} kanban={kanban} />
       {route.view === 'settings' && <SettingsShell onClose={closeSettings} />}
     </div>
   );
