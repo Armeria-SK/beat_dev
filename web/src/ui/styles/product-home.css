@@ -1,0 +1,10 @@
+.ui-home__kind { flex-wrap: wrap; min-width: 0; }
+.ui-home__name { font: 600 14px/22px var(--font-sans); text-decoration: none; overflow-wrap: anywhere; }
+.ui-home__root { overflow-wrap: anywhere; }
+.ui-home__title { min-width: 0; }
+.ui-home__line { display: block; color: inherit; text-decoration: none; }
+.ui-home__more a::after { content: ""; position: absolute; inset: 0; }
+
+@media (max-width: 760px) {
+  .ui-home__board { order: 1; }
+}
