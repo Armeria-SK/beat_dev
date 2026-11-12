@@ -59,7 +59,17 @@ export interface Acceptance {
   version: number; language: string | null; items: AcceptanceItem[]; not_doing: NotDoingItem[]; draft: boolean; hash: string | null;
   frozen: { version: number; hash: string; plan_hash: string | null; created_at: number; source: string; build_task_id: string | null } | null;
   tainted?: boolean;
+  change?: AcceptanceChange | null;
+  unbuilt?: string[];
+  open_build_task_id?: string | null;
 }
+export interface AcceptanceChangeItem { result: string; check: AcceptanceCheck }
+export type OwnerOp = { op: 'add'; item: AcceptanceChangeItem } | { op: 'change'; id: string; item: AcceptanceChangeItem } | { op: 'remove'; id: string };
+export type AcceptanceOp = OwnerOp & { source: AcceptanceSource };
+export interface AcceptanceChange { id: string; base_version: number; ops: AcceptanceOp[]; language: string | null; conversation_id: string | null; tainted: boolean; status: string; created_at: number }
+export interface AcceptanceVersion { project_id: string; version: number; hash: string; plan_hash: string | null; source: string; build_task_id: string | null; created_at: number }
+export interface AcceptanceVersionDetail extends AcceptanceVersion { content: unknown }
+export interface AcceptanceEdit { baseVersion: number; baseHash: string | null; ops: OwnerOp[] }
 export interface UnreferencedMessage { message_id: number; conversation_id: string; text: string; created_at: number }
 export interface Coverage {
   owner_words: number; owner_choice: number; owner_edit: number; ai_added: number; by_hand: number; unreferenced: UnreferencedMessage[]; unreferenced_total: number;
@@ -275,6 +285,11 @@ export const api = {
   plan: (id: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`),
   acceptance: (id: string, unreferencedBefore?: number) =>
     call<{ acceptance: Acceptance; coverage?: Coverage }>(`/api/projects/${encodeURIComponent(id)}/acceptance${unreferencedBefore === undefined ? '' : `?unreferencedBefore=${unreferencedBefore}`}`),
+  acceptanceVersions: (id: string) => call<{ versions: AcceptanceVersion[] }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions`),
+  acceptanceVersion: (id: string, version: number) => call<{ version: AcceptanceVersionDetail }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions/${version}`),
+  decideChange: (id: string, changeId: string, decision: 'approve' | 'reject') =>
+    call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/changes/${encodeURIComponent(changeId)}/${decision}`, { method: 'POST', body: '{}' }),
+  editAcceptance: (id: string, edit: AcceptanceEdit) => call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/edit`, { method: 'POST', body: JSON.stringify(edit) }),
   build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }) =>
     call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(hashes) }),
   savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
