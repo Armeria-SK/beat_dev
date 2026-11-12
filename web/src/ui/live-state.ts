@@ -39,13 +39,14 @@ export interface LiveState {
   revisions: ReadonlyMap<string, number>;
   interrupting: ReadonlySet<string>;
   taskRevision: number;
+  planRevisions: ReadonlyMap<string, number>;
   libraryRevision: number;
   epoch: number;
 }
 
 export const EMPTY: LiveState = {
   conversations: [], conversationsMore: {}, projects: [], projectsLoaded: false, approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, libraryRevision: 0, epoch: 0,
+  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
@@ -194,6 +195,8 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       };
     case 'project.changed':
       return { state: s, effects: refresh('projects', ...(e.change === 'archived' || e.change === 'restored' ? ['conversations'] as const : [])) };
+    case 'plan.changed':
+      return { state: { ...s, planRevisions: new Map(s.planRevisions).set(e.projectId, (s.planRevisions.get(e.projectId) ?? 0) + 1) }, effects: refresh('projects') };
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };

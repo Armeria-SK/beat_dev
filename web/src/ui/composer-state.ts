@@ -23,6 +23,7 @@ export interface ComposerInput {
   uploading: boolean;
   sending: boolean;
   product?: boolean;
+  planless?: boolean;
 }
 
 export interface ComposerView {
@@ -35,11 +36,13 @@ export interface ComposerView {
 
 export function composerView(i: ComposerInput): ComposerView {
   const noModel = i.chatModels === 0;
-  const placeholder: Placeholder = noModel ? 'noModel' : i.running ? 'busy' : i.mode === 'plan' ? 'plan' : i.hasConversation ? 'reply' : i.product ? 'build' : 'message';
+  const placeholder: Placeholder = noModel ? 'noModel' : i.running ? 'busy' : i.mode === 'plan' && (i.hasConversation || !i.planless) ? 'plan' : i.hasConversation ? 'reply' : i.product ? 'build' : 'message';
   const filled = i.text.trim() !== '' || i.attachments > 0;
   const free = !noModel && !i.uploading && !i.sending;
   return { placeholder, disabled: noModel, actions: i.running ? 'busy' : 'send', canSubmit: free && filled, canAttach: free && i.attachments < MAX_ATTACHMENTS };
 }
+
+export const firstMode = (product: { has_plan?: boolean } | undefined): PermissionMode => (product?.has_plan === false ? 'plan' : 'normal');
 
 export type SubmitKind = 'send' | 'queue' | 'force';
 
