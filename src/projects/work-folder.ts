@@ -75,7 +75,8 @@ export function walkFolder(input: string, fs: FolderFs = REAL_FS): WalkedFolder 
       if (++hops > MAX_LINK_HOPS) return { ok: false, reason: 'folder_link' };
       const stored = fs.readlink(next);
       if (isRemotePath(stored)) return { ok: false, reason: 'folder_remote' };
-      if (WINDOWS && !DRIVE_ABSOLUTE.test(stored)) return { ok: false, reason: 'folder_link' };      const target = WINDOWS ? stored : resolve(current, stored);
+      if (WINDOWS && !DRIVE_ABSOLUTE.test(stored)) return { ok: false, reason: 'folder_link' };
+      const target = WINDOWS ? stored : resolve(current, stored);
       if (windowsHazard(target) || !isAbsolute(target) || target.split(/[\\/]/u).some(part => part === '.' || part === '..')) return { ok: false, reason: 'folder_link' };
       const targetAbs = resolve(target);
       current = parse(targetAbs).root;
