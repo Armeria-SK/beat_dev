@@ -264,12 +264,18 @@ function manyEntriesWorkspace(t: { after: (fn: () => void) => void }): string {
 }
 for (const [label, segment, decision] of [['全部 *', '*'.repeat(4000), 'ask'], ['* のあとに Z（どの名前にも当たらない）', `${'*'.repeat(3999)}Z`, 'allow']] as const) {
   for (const shell of ['bash', 'powershell'] as const) {
-    test(`${shell}: 1 つのセグメントに * が 4000 個並ぶパターン（${label}）を 3000 個のフォルダに当てても 1 秒未満`, t => {
-      const command = shell === 'bash' ? `cat ${segment}` : `Get-Content '${segment}'`;
+    test(`${shell}: 1 つのセグメントに * が 4000 個並ぶパターン（${label}）を 3000 個のフォルダに当てても、* が 1 個のときの 3 倍 + 0.3 秒に収まる`, t => {
+      const wrap = (pattern: string): string => shell === 'bash' ? `cat ${pattern}` : `Get-Content '${pattern}'`;
+      const command = wrap(segment);
       assert.ok(command.length <= 8000, 'コマンドの長さの上限（8000 文字）に収まる');
-      const { ms, value } = guardTimed(manyEntriesWorkspace(t), command, shell);
+      const ws = manyEntriesWorkspace(t);
+      // PC が混んでいると絶対の秒数は何倍にもなるので、同じフォルダで * が 1 個の同じ形（まとめたあとと同じ仕事）を前後に測り、その遅いほうと比べる
+      const single = wrap(segment.replace(/\*+/u, '*'));
+      const before = guardTimed(ws, single, shell).ms;
+      const { ms, value } = guardTimed(ws, command, shell);
+      const base = Math.max(before, guardTimed(ws, single, shell).ms);
       assert.equal(value, decision);
-      assert.ok(ms < 1000, `${ms}ms`);
+      assert.ok(ms < base * 3 + 300, `${ms}ms（* が 1 個: ${base}ms）`);
     });
   }
 }
