@@ -115,6 +115,7 @@ const en = {
   'guard.write_skill': 'It writes into the skills folder ({path}). A skill with a new name placed here is not used until it is registered on screen. A name that is already registered is used as rewritten',
   'guard.touch_skill': 'It points at the skills folder ({path}). The command is not a read-only one, so it may write there. A skill with a new name placed here is not used until it is registered on screen. A name that is already registered is used as rewritten',
   'guard.write_git': 'It writes into a git folder (.git) ({path}). Git hooks and settings can run commands',
+  'guard.write_instructions': "It rewrites the product's instruction file ({path}). AI runs in this product read it as instructions",
   'guard.touch_git': 'It points at a git folder (.git) ({path}). The command is not a read-only one, so it may write there. Git hooks and settings can run commands',
 
   'code.file_run': 'It runs code written in a file ({path}). Clive can rewrite that file, so it is checked with you every time',
@@ -174,6 +175,7 @@ const en = {
   'file.skill_auto': "This is the skills folder, so it is checked with you before anything is written. A skill with a new name placed here is not used until it is registered (offer it with skill_draft instead: under the current setting it is registered without the user's review, unless this run or this conversation read outside content, this is a task's run, or 5 skills were already registered that way in the last 24 hours; in those cases it waits as a draft for the user). A name that is already registered is used as rewritten",
   'file.skill': 'This is the skills folder, so it is checked with you before anything is written. A skill with a new name placed here is not used until it is registered (offer it as a draft with skill_draft to approve and register it on screen). A name that is already registered is used as rewritten',
   'file.git': 'This is a git folder (.git), so it is checked with you before anything is written. Git hooks and settings can run commands',
+  'file.instructions': "This is the product's instruction file (AGENTS.md / CLAUDE.md), so it is checked with you before it is rewritten. AI runs in this product read it as instructions",
   'file.tool_config': 'This is a tool configuration file (git, curl, wget, npm, shell startup files, PowerShell profiles and the like), so it is checked with you every time before anything is written. Settings can make a command that runs later load code',
 
   'shell.disabled': 'Running the shell is disabled in the settings',

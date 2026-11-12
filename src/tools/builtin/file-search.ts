@@ -98,7 +98,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
         const rel = shown(full, ctx);
         if (!input.text) {
           nameMatches.push(rel);
-          if (isUnderDownloads(full, ctx.workspace)) fetched = true;
+          if (isUnderDownloads(full, ctx.home ?? ctx.workspace)) fetched = true;
           continue;
         }
         let buf: Buffer;
@@ -118,7 +118,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
           const hay = caseFold ? line.toLowerCase() : line;
           if (!hay.includes(needle)) continue;
           found++;
-          if (isUnderDownloads(full, ctx.workspace)) fetched = true;
+          if (isUnderDownloads(full, ctx.home ?? ctx.workspace)) fetched = true;
           textMatches.push(`${rel}:${i + 1}: ${line.trim().slice(0, MAX_LINE_CHARS)}`);
         }
       }

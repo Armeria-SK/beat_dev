@@ -1,6 +1,7 @@
 import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
 import { checkCommandOf, defaultProjectName, folderMissing, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
 import type { ProjectFilter } from '../tasks/store.ts';
 import { approvalShownIn } from '../tools/approvals.ts';
@@ -82,6 +83,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (!checked.ok) throw projectProblem(checked.reason === 'root_in_use' ? 409 : 400, new ProjectError(checked.reason));
     const project = guarded(() => app.projects.create({
       name: projectName(rawName ?? defaultProjectName(checked.root)), root: checked.root, rootKey: checked.rootKey, checkCommand: checkCommandOf(rawCheck ?? null),
+      remotes: checked.isGit ? readRemotes(checked.root) : [],
     }));
     app.bus.publish({ type: 'project.changed', projectId: project.id, change: 'created' });
     sendJson(res, 201, { project: projectWire(app, project), notes: checked.notes });
@@ -100,6 +102,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
       ...(rawName !== undefined ? { name: projectName(rawName) } : {}),
       ...(rawCheck !== undefined ? { checkCommand: checkCommandOf(rawCheck) } : {}),
       ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {}),
+      ...(body.refreshRemotes === true && !folderMissing(current) ? { remotes: readRemotes(current.root) } : {}),
     }));
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
     app.bus.publish({ type: 'project.changed', projectId: current.id, change });

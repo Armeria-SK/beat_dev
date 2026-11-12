@@ -138,7 +138,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_download'), body: input.name === undefined ? input.url : `${input.url}\n${input.name}` }),
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
-    const dir = downloadsDir(ctx.workspace);
+    const dir = downloadsDir(ctx.home ?? ctx.workspace);
     let part: string | undefined;
     let fd: number | undefined;
     try {

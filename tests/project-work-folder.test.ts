@@ -338,8 +338,9 @@ test('リンクをたどる歩き方: この PC の中を指すリンクは 1 �
   const checked = checkWorkFolder(w('C:/w/a'), f.ctx({ fs: ok.fs }));
   assert.deepEqual(checked, { ok: true, root: w('C:/w/real'), rootKey: w('c:/w/real'), notes: [], isGit: true });
   assert.equal(gitFolder(w('C:/w/a'), ok.fs), true);
-  assert.equal(folderGone(w('C:/w/a'), w('c:/w/real'), ok.fs), false);
-  assert.equal(folderGone(w('C:/w/a'), w('c:/w/a'), ok.fs), true, '実体が変わった');
+  assert.equal(folderGone(w('C:/w/real'), w('c:/w/real'), ok.fs), false);
+  assert.equal(folderGone(w('C:/w/a'), w('c:/w/real'), ok.fs), true, '控えたパスの途中にリンクがあれば、すり替わったとみなす（追わない）');
+  assert.equal(folderGone(w('C:/w/real'), w('c:/w/other'), ok.fs), true, '実体が変わった');
   assert.deepEqual(ok.reached, []);
   const missing = linkFs({ 'C:/w/a': 'C:/w/gone.missing' });
   assert.deepEqual(checkWorkFolder(w('C:/w/a'), f.ctx({ fs: missing.fs })), { ok: false, reason: 'folder_not_found' });

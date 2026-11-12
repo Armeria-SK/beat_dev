@@ -79,7 +79,7 @@ const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
 // 外の中身を持ち込む git のサブコマンド（NET のうち、通信するもの。init と worktree は含めない）
 const PULLING_GIT: ReadonlySet<string> = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'submodule']);
 const SHELL_SINKS = new Set(['sh', 'bash', 'zsh', 'pwsh', 'powershell', 'iex', 'invoke-expression', 'cmd', 'python', 'python3', 'node', 'perl', 'ruby']);
-const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git' };
+const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git', instructions: 'guard.write_instructions' };
 const CWD_CMDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir']);
 // 表の理由のうち、効果が他の印（fetch・deletes・書き込み先の調べ）で足りているもの。これ以外の理由は何をするか分からないので、送る・消すの両方とみなす
 const KNOWN_EFFECT_REASONS: ReadonlySet<string> = new Set(['list.ps_write', 'list.download', 'list.redirect', 'list.url_glob', 'list.header', 'code.loopback']);
