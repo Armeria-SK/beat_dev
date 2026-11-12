@@ -18,6 +18,7 @@ import { Kanban } from './screens/Kanban.tsx';
 import { Memory } from './screens/Memory.tsx';
 import { Notifications } from './screens/Notifications.tsx';
 import { Overview } from './screens/Overview.tsx';
+import { ProductHome } from './screens/ProductHome.tsx';
 import { Runs } from './screens/Runs.tsx';
 import { Schedule } from './screens/Schedule.tsx';
 import { Skills } from './screens/Skills.tsx';
@@ -321,7 +322,9 @@ export function App() {
             ) : behind.view === 'task' ? (
               <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.approvals.length}`} worker={worker} />
             ) : behind.view === 'overview' ? (
-              <Overview waiting={waiting} approvals={live.approvals} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} />
+              <Overview waiting={waiting} approvals={live.approvals} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} projects={live.projects} projectsLoaded={live.projectsLoaded} />
+            ) : behind.view === 'product' ? (
+              <ProductHome key={behind.id} id={behind.id} project={productOf(live.projects, behind.id)} approvals={live.approvals} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} revision={live.taskRevision + live.epoch} />
             ) : behind.view === 'schedule' ? (
               <Schedule revision={live.taskRevision + live.epoch} />
             ) : behind.view === 'notifications' ? (
