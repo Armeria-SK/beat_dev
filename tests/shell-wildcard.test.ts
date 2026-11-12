@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
-import { compileWildcard, expandGlob, looseWildcard, segmentRegex, wildcardMatches } from '../src/tools/hooks/path-expand.ts';
+import { compileWildcard, expandGlob, looseWildcard, segmentRegex, tokenize, wildcardMatches } from '../src/tools/hooks/path-expand.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
@@ -256,28 +256,28 @@ for (const flag of ['-Include', '-Exclude']) {
 
 // 審査: コマンドは 8000 文字まで（src/tools/builtin/shell.ts）なので、1 つのセグメントに * が 4000 個並ぶパターンを 3000 個のフォルダに当てられる。* が連続しても意味は 1 つと同じなので、1 つにまとめる。
 // まとめないと、名前ごとに 4000 の状態を 1 文字ずつ進めて 2 秒を超える（まとめる前に測ったのは、全部 *: PowerShell 1.5 秒・bash 2.0 秒、* のあとに Z: どちらも 2.5 秒。長さ 200 の名前なら 11 秒）
-function manyEntriesWorkspace(t: { after: (fn: () => void) => void }): string {
-  const ws = realish(join(tempDir(t), 'workspace'));
-  mkdirSync(ws, { recursive: true });
-  for (let i = 0; i < 3000; i++) writeFileSync(join(ws, `${String(i).padStart(4, '0')}-${'a'.repeat(40)}.txt`), 'x');
-  return ws;
-}
+// 時間は測らない（PC が混んでいると落ちるため）。照合の仕事の量は「名前の長さ × 読み取ったパターンの部品の数」なので、部品の数が * が 1 個のときと同じことを確かめる
 for (const [label, segment, decision] of [['全部 *', '*'.repeat(4000), 'ask'], ['* のあとに Z（どの名前にも当たらない）', `${'*'.repeat(3999)}Z`, 'allow']] as const) {
-  for (const shell of ['bash', 'powershell'] as const) {
-    test(`${shell}: 1 つのセグメントに * が 4000 個並ぶパターン（${label}）を 3000 個のフォルダに当てても、* が 1 個のときの 3 倍 + 0.3 秒に収まる`, t => {
-      const wrap = (pattern: string): string => shell === 'bash' ? `cat ${pattern}` : `Get-Content '${pattern}'`;
-      const command = wrap(segment);
+  test(`1 つのセグメントに * が 4000 個並ぶパターン（${label}）は、* が 1 個のパターンと同じ数の部品にまとまる（判定も変わらない）`, t => {
+    const single = segment.replace(/\*+/u, '*');
+    for (const powershell of [true, false]) {
+      for (const loose of [undefined, () => -1]) {
+        const parts = tokenize(segment, true, powershell, loose);
+        assert.ok(parts, 'パターンとして読める');
+        assert.equal(parts.length, tokenize(single, true, powershell, loose)!.length, `powershell=${powershell} loose=${loose !== undefined}`);
+        assert.equal(parts.length, single.length);
+      }
+    }
+    const ws = realish(join(tempDir(t), 'workspace'));
+    mkdirSync(ws, { recursive: true });
+    for (let i = 0; i < 3000; i++) writeFileSync(join(ws, `${String(i).padStart(4, '0')}-${'a'.repeat(40)}.txt`), 'x');
+    const policy: ScopePolicy = { roots: [{ path: ws, mode: 'write' }], deny: [] };
+    for (const shell of ['bash', 'powershell'] as const) {
+      const command = shell === 'bash' ? `cat ${segment}` : `Get-Content '${segment}'`;
       assert.ok(command.length <= 8000, 'コマンドの長さの上限（8000 文字）に収まる');
-      const ws = manyEntriesWorkspace(t);
-      // PC が混んでいると絶対の秒数は何倍にもなるので、同じフォルダで * が 1 個の同じ形（まとめたあとと同じ仕事）を前後に測り、その遅いほうと比べる
-      const single = wrap(segment.replace(/\*+/u, '*'));
-      const before = guardTimed(ws, single, shell).ms;
-      const { ms, value } = guardTimed(ws, command, shell);
-      const base = Math.max(before, guardTimed(ws, single, shell).ms);
-      assert.equal(value, decision);
-      assert.ok(ms < base * 3 + 300, `${ms}ms（* が 1 個: ${base}ms）`);
-    });
-  }
+      assert.equal(checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' }).decision, decision, shell);
+    }
+  });
 }
 
 test('compileWildcard: 連続する * は 1 つと同じ。まとめても、当たる名前は古い正規表現（segmentRegex）と変わらない', () => {

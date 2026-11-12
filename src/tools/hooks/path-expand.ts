@@ -108,7 +108,7 @@ const bashClose: ClassEnd = (chars, at) => {
 };
 
 // 分からない形（空の [] ・先頭が ] の組・[ の入れ子・逆向きの範囲・[:alpha:]・組の中の \・組の外の ]）は null。loose を渡すと null を返さず、分からない [..] は区切りでない任意の 1 文字、組の外の ] は文字として読む
-function tokenize(seg: string, caseFold: boolean, powershell: boolean, loose?: ClassEnd): Token[] | null {
+export function tokenize(seg: string, caseFold: boolean, powershell: boolean, loose?: ClassEnd): Token[] | null {
   const chars = Array.from(seg);
   const tokens: Token[] = [];
   for (let i = 0; i < chars.length; i++) {
