@@ -43,6 +43,8 @@ test('ui/composer-state: モデルが無いと押せない（置き場の文字�
 test('ui/composer-state: 置き場の文字: 新しい会話 Message、会話の中 Reply、作成中の文、Plan のとき Describe the change to plan', () => {
   assert.equal(t(PLACEHOLDER[composerView({ ...base, hasConversation: false }).placeholder]), 'Message');
   assert.equal(t(PLACEHOLDER[composerView(base).placeholder]), 'Reply');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, hasConversation: false, product: true }).placeholder]), 'Describe what to build', '製品の新しい会話');
+  assert.equal(t(PLACEHOLDER[composerView({ ...base, product: true }).placeholder]), 'Reply', '製品の会話の中は Reply のまま');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan' }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', hasConversation: false }).placeholder]), 'Describe the change to plan');
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', running: true }).placeholder]), 'Reply · Queue waits for the next break, Force interrupts');

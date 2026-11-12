@@ -37,6 +37,7 @@ export function FoldersPanel() {
         <Row k="root:add" title={t('ui.set.folders.add')} desc={t('ui.set.folders.addDesc')}>
           <CommitField value="" label={t('ui.set.folders.addField')} mono placeholder={t('ui.set.folders.addPh')} resetKey={folders.roots.map(r => r.path).join('\n')} onCommit={path => { if (path) setRoots('root:add', c => addRoot(foldersFromConfig(c), path, 'read').roots); }} />
         </Row>
+        <p className="bt-meta">{t('ui.product.foldersNote')}</p>
       </Group>
       <Group title={t('ui.set.folders.limits')}>
         <Row k="folders:deny" title={t('ui.set.folders.deny')} desc={t('ui.set.folders.denyDesc')}

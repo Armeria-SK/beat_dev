@@ -8,9 +8,9 @@ export const ATTACH_ACCEPT = '.txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg
 export const MODE_LABEL = { normal: 'ui.composer.modeAsk', auto: 'ui.composer.modeAuto', plan: 'ui.composer.modePlan' } as const satisfies Record<PermissionMode, string>;
 export const MODE_HINT = { normal: 'mode.normalDesc', auto: 'mode.autoDesc', plan: 'mode.planDesc' } as const satisfies Record<PermissionMode, string>;
 
-export type Placeholder = 'noModel' | 'busy' | 'plan' | 'reply' | 'message';
+export type Placeholder = 'noModel' | 'busy' | 'plan' | 'reply' | 'message' | 'build';
 export const PLACEHOLDER = {
-  noModel: 'ui.composer.noModel', busy: 'ui.composer.busy', plan: 'ui.composer.plan', reply: 'ui.composer.reply', message: 'ui.composer.message',
+  noModel: 'ui.composer.noModel', busy: 'ui.composer.busy', plan: 'ui.composer.plan', reply: 'ui.composer.reply', message: 'ui.composer.message', build: 'ui.product.placeholder',
 } as const satisfies Record<Placeholder, string>;
 
 export interface ComposerInput {
@@ -22,6 +22,7 @@ export interface ComposerInput {
   attachments: number;
   uploading: boolean;
   sending: boolean;
+  product?: boolean;
 }
 
 export interface ComposerView {
@@ -34,7 +35,7 @@ export interface ComposerView {
 
 export function composerView(i: ComposerInput): ComposerView {
   const noModel = i.chatModels === 0;
-  const placeholder: Placeholder = noModel ? 'noModel' : i.running ? 'busy' : i.mode === 'plan' ? 'plan' : i.hasConversation ? 'reply' : 'message';
+  const placeholder: Placeholder = noModel ? 'noModel' : i.running ? 'busy' : i.mode === 'plan' ? 'plan' : i.hasConversation ? 'reply' : i.product ? 'build' : 'message';
   const filled = i.text.trim() !== '' || i.attachments > 0;
   const free = !noModel && !i.uploading && !i.sending;
   return { placeholder, disabled: noModel, actions: i.running ? 'busy' : 'send', canSubmit: free && filled, canAttach: free && i.attachments < MAX_ATTACHMENTS };

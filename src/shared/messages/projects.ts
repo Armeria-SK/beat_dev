@@ -25,7 +25,7 @@ const en = {
   'folder_clive': 'The folder of this app and its data cannot be a product folder',
   'folder_secret': 'Folders that hold secrets cannot be a product folder',
   'folder_denied': 'This folder is on the blocked list in the settings',
-  'folder_link': 'This is a link. Open it to see the folder it points to',
+  'folder_link': 'This link cannot be followed. Paste the full path of the folder it points to',
 } as const;
 
 export type ProjectMessageKey = keyof typeof en;

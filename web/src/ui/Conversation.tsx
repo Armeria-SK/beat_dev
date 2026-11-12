@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
-import { api, ApiError, type Approval, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
+import { api, ApiError, type Approval, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
 import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
@@ -27,6 +27,7 @@ export interface ConversationProps {
   id: string | null;
   listTitle: string | null;
   aiName?: string | undefined;
+  product?: Project | undefined;
   draft: LiveDraft | undefined;
   approvals: Approval[];
   notices: RunNotice[];
@@ -165,8 +166,8 @@ function SessionMenu({ conversation, onRename, onSummary, onClose }: { conversat
   );
 }
 
-function Bar({ conversation: row, readOnly, title, meter, onRenamed, onSummary }: {
-  conversation: ConversationRow | null; readOnly: boolean; title: string; meter: { value: number; high: boolean } | null; onRenamed: (title: string) => void; onSummary: () => void;
+function Bar({ conversation: row, readOnly, title, product, meter, onRenamed, onSummary }: {
+  conversation: ConversationRow | null; readOnly: boolean; title: string; product: Project | undefined; meter: { value: number; high: boolean } | null; onRenamed: (title: string) => void; onSummary: () => void;
 }) {
   const t = useT();
   const conversation = readOnly ? null : row;
@@ -203,6 +204,7 @@ function Bar({ conversation: row, readOnly, title, meter, onRenamed, onSummary }
       ) : conversation ? (
         <button type="button" className="bt-app__bar-title ui-bar__title" title={t('ui.session.rename')} onClick={startRename}>{title}</button>
       ) : <span className="bt-app__bar-title ui-bar__title">{title}</span>}
+      {product && !editing && <a className="bt-meta ui-bar__product" href={routeHash({ view: 'product', id: product.id })}>{product.name}</a>}
       {renameError && <span className="bt-meta ui-danger ui-bar__error" role="alert">{t('ui.session.renameFailed', renameError)}</span>}
       {meter && (
         <span className={`bt-meter${meter.high ? ' bt-meter--high' : ''}`} role="meter" aria-label={t('ui.meter')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={meter.value}
@@ -250,7 +252,7 @@ function failNotice(title: string, text: string | null, action: FailAction | nul
   return <Notice tone="fail" title={title} text={text ?? undefined} {...(action ? { action } : {})} />;
 }
 
-export function Conversation({ id, listTitle, aiName, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt }: ConversationProps) {
+export function Conversation({ id, listTitle, aiName, product, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
@@ -326,7 +328,7 @@ export function Conversation({ id, listTitle, aiName, draft, approvals, notices,
     try {
       const out = await submitMessage({ kind, text, attachmentIds: attachments.map(a => a.id), conversationId: id, target, running: Boolean(draft), pending }, {
         rename: api.renameConversation, cancelPending: api.cancelPending,
-        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice), interrupt ? { interrupt: true } : {}),
+        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice), { ...(interrupt ? { interrupt: true } : {}), ...(!id && product ? { projectId: product.id } : {}) }),
         isGone: error => error instanceof ApiError && error.status === 404,
         clearNotices: onClearNotices, interrupt: onInterrupt,
       });
@@ -496,7 +498,7 @@ export function Conversation({ id, listTitle, aiName, draft, approvals, notices,
 
   return (
     <>
-      <Bar conversation={conversation} readOnly={Boolean(conversation?.parent_run_id)} title={title} meter={gone ? null : meter} onRenamed={() => void load()} onSummary={() => setSummaryOpen(true)} />
+      <Bar conversation={conversation} readOnly={Boolean(conversation?.parent_run_id)} title={title} product={product} meter={gone ? null : meter} onRenamed={() => void load()} onSummary={() => setSummaryOpen(true)} />
       {disconnected && <div className="ui-offline"><Notice tone="warn" icon="alert" title={t('ui.notice.disconnected')} action={{ label: t('ui.notice.reconnect'), run: onReconnect }} /></div>}
       <div ref={scroller} className="bt-thread" onScroll={e => { stick.current = isNearBottom(e.currentTarget); }}>
         {conversation?.archived === 1 && (
@@ -507,7 +509,8 @@ export function Conversation({ id, listTitle, aiName, draft, approvals, notices,
         )}
         {summaryOpen && id && <Summary id={id} />}
         {gone && <EmptyState title={t('ui.session.gone')} text={t('ui.session.goneText')} />}
-        {empty && !gone && (
+        {empty && !gone && product && <EmptyState title={t('ui.product.empty.title')} text={t('ui.product.empty.text')} />}
+        {empty && !gone && !product && (
           <EmptyState title={t('ui.empty.title')} text={t('ui.empty.text')} action={<Suggestions busy={sending} onPick={text => void pick(text)} />} />
         )}
         {items.map(render)}
@@ -527,7 +530,7 @@ export function Conversation({ id, listTitle, aiName, draft, approvals, notices,
       )}
       {!gone && !helper && (
         <Composer
-          draftKey={id ?? NEW_DRAFT} hasConversation={id !== null} running={running} sending={sending} pending={pending}
+          draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} running={running} sending={sending} pending={pending}
           models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode}
           slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1 }}
           onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}

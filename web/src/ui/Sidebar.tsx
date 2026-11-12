@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import { api, type Conversation, type HistoryHit } from '../api.ts';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api, type Conversation, type HistoryHit, type Project } from '../api.ts';
+import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import type { AgentState, FootLine } from './agent-state.ts';
 import { Avatar, CountBadge, Icon } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
+import { productNav } from './product-nav.ts';
 import { routeHash, type Route } from './routes.ts';
 
 export interface SidebarProps {
@@ -14,6 +16,8 @@ export interface SidebarProps {
   drafts: number;
   unread: number;
   conversations: Conversation[];
+  conversationsMore: Readonly<Record<string, number>>;
+  projects: Project[];
   running: ReadonlySet<string>;
   color?: string | undefined;
   setupPending: boolean;
@@ -70,8 +74,38 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, running, color, setupPending, onSetup }: SidebarProps) {
+function SessionRow({ conversation: c, route, running }: { conversation: Conversation; route: Route; running: ReadonlySet<string> }) {
   const t = useT();
+  const active = route.view === 'chat' && route.id === c.id;
+  const live = running.has(c.id);
+  return (
+    <a className={`bt-side bt-side--session${active ? ' is-active' : ''}`} href={routeHash({ view: 'chat', id: c.id })} aria-current={active ? 'page' : undefined}>
+      <span className={`bt-side__state${live ? ' bt-side__state--running' : ''}`} role="img" aria-label={live ? t('ui.session.running') : t('ui.session.idle')} />
+      <span className="bt-side__name">{c.title || t('ui.session.untitled')}</span>
+    </a>
+  );
+}
+
+function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<string, Conversation[]>; expand: (projectId: string) => void } {
+  const t = useT();
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [extra, setExtra] = useState<ReadonlyMap<string, Conversation[]>>(new Map());
+  useEffect(() => {
+    let live = true;
+    for (const id of expanded) {
+      void api.conversationsOf(id).then(r => { if (live) setExtra(old => new Map(old).set(id, r.conversations)); })
+        .catch(() => { if (!live) return; setExpanded(old => { const next = new Set(old); next.delete(id); return next; }); toast({ icon: 'alert', title: t('ui.product.moreFailed') }); });
+    }
+    return () => { live = false; };
+  }, [conversations, expanded, t]);
+  const expand = useCallback((projectId: string) => setExpanded(old => new Set(old).add(projectId)), []);
+  return { extra, expand };
+}
+
+export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup }: SidebarProps) {
+  const t = useT();
+  const { extra, expand } = useMoreSessions(conversations);
+  const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra), [projects, conversations, conversationsMore, extra]);
   const [searching, setSearching] = useState(false);
   const searchButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
@@ -94,21 +128,40 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
         <SideLink href="#/kanban" icon="columns" name={t('ui.nav.kanban')} active={at('kanban')} count={kanban} countLabel={t('ui.count.waiting', kanban)} />
         <SideLink href="#/schedule" icon="calendar" name={t('ui.nav.schedule')} active={at('schedule')} />
 
+        <span className="bt-label bt-sidebar__label">{t('ui.product.section')}</span>
+        {nav.rows.map(row => {
+          const { project } = row;
+          const home = route.view === 'product' && route.id === project.id;
+          const fresh = route.view === 'productNew' && route.id === project.id;
+          return (
+            <Fragment key={project.id}>
+              <div className="bt-side bt-side--product">
+                <a className={`bt-side__ov${home ? ' is-active' : ''}${row.waiting > 0 ? ' has-waiting' : ''}`} href={routeHash({ view: 'product', id: project.id })}
+                  aria-label={row.waiting > 0 ? t('ui.product.overviewWaiting', project.name) : t('ui.product.overviewOf', project.name)} title={t('ui.nav.overview')} aria-current={home ? 'page' : undefined}><Icon name="grid" /></a>
+                <a className="bt-side__name" href={row.nameHref}>{project.name}</a>
+                {project.folder_missing && <span className="bt-meta ui-side-missing">{t('ui.product.folderMissing')}</span>}
+                <CountBadge n={row.waiting} label={t('ui.count.waiting', row.waiting)} />
+              </div>
+              {row.sessions.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} />)}
+              {row.more > 0 && (
+                <button type="button" className="bt-side bt-side--session ui-side-more" onClick={() => expand(project.id)}>
+                  <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
+                </button>
+              )}
+              <a className={`bt-side bt-side--session ui-side-new${fresh ? ' is-active' : ''}`} href={routeHash({ view: 'productNew', id: project.id })} aria-current={fresh ? 'page' : undefined}>
+                <Icon name="plus" /><span className="bt-side__name">{t('ui.session.new')}</span>
+              </a>
+            </Fragment>
+          );
+        })}
+        <SideLink href={routeHash({ view: 'newProduct' })} icon="plus" name={t('ui.product.new')} active={at('newProduct')} />
+
         <div className="ui-sidebar__labelrow">
           <span className="bt-label bt-sidebar__label">{t('ui.section.noProduct')}</span>
           {!searching && <button ref={searchButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.open')} onClick={() => setSearching(true)}><Icon name="search" /></button>}
         </div>
         {searching && <SessionSearch onClose={() => { refocus.current = true; setSearching(false); }} />}
-        {conversations.map(c => {
-          const active = route.view === 'chat' && route.id === c.id;
-          const live = running.has(c.id);
-          return (
-            <a key={c.id} className={`bt-side bt-side--session${active ? ' is-active' : ''}`} href={routeHash({ view: 'chat', id: c.id })} aria-current={active ? 'page' : undefined}>
-              <span className={`bt-side__state${live ? ' bt-side__state--running' : ''}`} role="img" aria-label={live ? t('ui.session.running') : t('ui.session.idle')} />
-              <span className="bt-side__name">{c.title || t('ui.session.untitled')}</span>
-            </a>
-          );
-        })}
+        {nav.none.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} />)}
         <SideLink href="#/" icon="plus" name={t('ui.session.new')} active={at('new')} />
 
         <span className="bt-label bt-sidebar__label">{t('ui.section.library')}</span>
