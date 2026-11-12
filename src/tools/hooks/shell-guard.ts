@@ -10,7 +10,7 @@ import { codeFindings } from './code-guard.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
-import { containsToolConfig, curlConfigFile, isToolConfigPath, wgetConfigFile, type Env } from './tool-config.ts';
+import { containsToolConfig, curlConfigFile, isToolConfigPath, npmProjectConfigFile, wgetConfigFile, type Env } from './tool-config.ts';
 import { expandPath, inDependencies, isInside, isSecretPath, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
 
@@ -79,10 +79,10 @@ const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
 // 外の中身を持ち込む git のサブコマンド（NET のうち、通信するもの。init と worktree は含めない）
 const PULLING_GIT: ReadonlySet<string> = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'submodule']);
 const SHELL_SINKS = new Set(['sh', 'bash', 'zsh', 'pwsh', 'powershell', 'iex', 'invoke-expression', 'cmd', 'python', 'python3', 'node', 'perl', 'ruby']);
-const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git' };
+const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git', instructions: 'guard.write_instructions' };
 const CWD_CMDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir']);
 // 表の理由のうち、効果が他の印（fetch・deletes・書き込み先の調べ）で足りているもの。これ以外の理由は何をするか分からないので、送る・消すの両方とみなす
-const KNOWN_EFFECT_REASONS: ReadonlySet<string> = new Set(['list.ps_write', 'list.download', 'list.redirect', 'list.url_glob', 'list.header', 'code.loopback']);
+const KNOWN_EFFECT_REASONS: ReadonlySet<string> = new Set(['list.ps_write', 'list.download', 'list.redirect', 'list.url_glob', 'list.header', 'code.loopback', 'list.git_moves']);
 
 function isCriticalTarget(abs: string, policy: ScopePolicy): boolean {
   const root = parsePath(abs).root;
@@ -261,12 +261,18 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
     return mergeRepos([...targets].map(inspect));
   };
+  let wroteEarlier = false;
   const toolConfig: MatchCtx['toolConfig'] = tool => {
-    if (!seen.known) return { unknownCwd: true };
-    const file = tool === 'curl' ? seen.cwds.map(c => curlConfigFile(env, c)).find(Boolean) : wgetConfigFile(env);
+    if (!seen.known || (tool === 'npm' && wroteEarlier)) return { unknownCwd: true };
+    const file = tool === 'curl' ? seen.cwds.map(c => curlConfigFile(env, c)).find(Boolean)
+      : tool === 'npm' ? seen.cwds.map(c => npmProjectConfigFile(c, env)).find(Boolean)
+        : wgetConfigFile(env);
     return file ? { file } : undefined;
   };
-  const afterStatement: MatchCtx['afterStatement'] = result => { if (result.cwd) followCd(seen, result.cwd); };
+  const afterStatement: MatchCtx['afterStatement'] = result => {
+    if (result.paths.some(p => p.mode === 'write') || result.copies.length > 0) wroteEarlier = true;
+    if (result.cwd) followCd(seen, result.cwd);
+  };
   const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {

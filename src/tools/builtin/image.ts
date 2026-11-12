@@ -83,7 +83,7 @@ export const imageView: ToolDef<{ path?: string; url?: string }> = {
       return { ...exfiltrationCheck(input.url, language, url.search.length > 300 ? [guardText(language, 'web.long_query')] : []), fetched: true };
     }
     const { abs, check } = checkFilePath(input.path!, 'read', ctx);
-    return check.decision !== 'deny' && isUnderDownloads(abs, ctx.workspace) ? { ...check, fetched: true } : check;
+    return check.decision !== 'deny' && isUnderDownloads(abs, ctx.home ?? ctx.workspace) ? { ...check, fetched: true } : check;
   },
   summarize: input => ({ title: input.path ?? input.url ?? '', body: input.path ?? input.url ?? '' }),
   async execute(input, ctx) {
@@ -101,7 +101,7 @@ export const imageView: ToolDef<{ path?: string; url?: string }> = {
         const read = readImageFile(abs, source, language);
         if (!Buffer.isBuffer(read)) return read;
         bytes = read;
-        external = isUnderDownloads(abs, ctx.workspace);
+        external = isUnderDownloads(abs, ctx.home ?? ctx.workspace);
       } else {
         const page = await fetchPublic(input.url!, ctx.signal, ctx.services?.web?.network ?? imageNetwork, IMAGE_FETCH_MS, IMAGE_TYPES);
         if (page.truncated || page.body.length > IMAGE_MAX_BYTES) return error(toolText(language, 'image.too_big', { size: bytesText(page.body.length), max: bytesText(IMAGE_MAX_BYTES) }));

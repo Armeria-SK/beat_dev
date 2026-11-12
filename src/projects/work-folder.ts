@@ -94,9 +94,17 @@ export function gitFolder(path: string, fs: FolderFs = REAL_FS): boolean {
 }
 
 export function folderGone(root: string, rootKey: string, fs: FolderFs = REAL_FS): boolean {
-  const walked = walkFolder(root, fs);
-  if (!walked.ok || !walked.directory) return true;
-  try { return rootKeyOf(fs.realpath(walked.path)) !== rootKey; } catch { return true; }
+  if (folderTextProblem(root)) return true;
+  const abs = resolve(root);
+  let current = parse(abs).root;
+  try {
+    for (const part of partsOf(abs)) {
+      current = join(current, part);
+      const own = fs.lstat(current);
+      if (!own || own.isSymbolicLink() || !own.isDirectory()) return true;
+    }
+    return rootKeyOf(fs.realpath(abs)) !== rootKey;
+  } catch { return true; }
 }
 
 const overlaps = (a: string, b: string): boolean => isInside(a, b) || isInside(b, a);

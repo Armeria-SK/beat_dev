@@ -164,10 +164,17 @@ function hooksCheck(sub: string, acc: Acc, repo: ReturnType<MatchCtx['repo']>): 
   return true;
 }
 
+const MOVES_CONTENT = new Set(['checkout', 'switch', 'restore', 'merge', 'rebase', 'cherry-pick', 'revert', 'apply', 'am']);
+const STASH_RESTORES = new Set(['push', 'save', 'pop', 'apply', 'branch']);
+
 function writeSub(sub: string, rest: Word[], acc: Acc, ctx: MatchCtx, repo: ReturnType<MatchCtx['repo']>): void {
   const mode = WRITE[sub] ?? 'none';
   const p = parseGnu(spec(sub, WRITE_FLAGS, { numeric: true }), rest, acc, ctx);
   positional(p.pos, 0, mode, acc, `git ${sub}`);
+  const moves = MOVES_CONTENT.has(sub)
+    || (sub === 'reset' && (p.seen.has('--hard') || p.seen.has('--keep')))
+    || (sub === 'stash' && (p.pos.length === 0 || STASH_RESTORES.has(p.pos[0]!.text)));
+  if (moves) acc.add('once', 'list.git_moves', { cmd: sub }, false);
   if (!hooksCheck(sub, acc, repo)) return;
   acc.add('ask', 'list.git_write', { cmd: sub }, false);
 }

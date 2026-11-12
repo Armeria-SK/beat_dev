@@ -900,3 +900,28 @@ test('メモリの道具（Q-C）: memory_save は判定役が決める。memory
   const idle = await setup(t, { tools: [memoryForget], mutate: c => { c.tools.policies = { memory_forget: 'ask' }; } });
   assert.deepEqual((await askedKinds(idle, 'memory_forget', { id: 1, reason: 'x' })).kinds, ['policy'], '比べる基準: 方針の ask は、今までどおり判定役に回らない');
 });
+
+test('2-1b: シェルから Clive 自身の API（製品を作る・製品の会話を送る。書ける場所が広がる）を呼ぶ形は、判定役が何でも allow と答えても、判定役に回さず持ち主に聞く', async t => {
+  const s = await setup(t, { mutate: c => { c.server.origins = ['http://clive.example.ts.net']; } });
+  const body = `'{"root":"D:\\\\x","projectId":"p"}'`;
+  const commands = [
+    `curl.exe -X POST http://127.0.0.1:4797/api/projects -H "Origin: http://127.0.0.1:4797" -H "Content-Type: application/json" -d ${body}`,
+    `curl -X POST http://127.0.0.1.nip.io:4797/api/projects -H "Host: 127.0.0.1:4797" -H "Origin: http://127.0.0.1:4797" -d ${body}`,
+    `curl -X POST http://clive.example.ts.net/api/conversations/aaaaaaaa-0000-4000-8000-000000000001/messages -d ${body}`,
+    `Invoke-RestMethod -Method Post -Uri http://localhost:4797/api/projects -Headers @{Origin='http://localhost:4797'} -Body ${body}`,
+    `node -e "fetch('http://127.0.0.1:4797/api/projects',{method:'POST',headers:{Origin:'http://127.0.0.1:4797'},body:'{}'})"`,
+  ];
+  for (const command of commands) {
+    const running = s.call('shell_run', { command });
+    let done = false;
+    void running.then(() => { done = true; });
+    for (let i = 0; i < 300 && !done && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+    const pending = s.approvals.pending()[0];
+    if (pending) s.approvals.decide(pending.id, 'deny');
+    const outcome = await running;
+    assert.notEqual(outcome.decidedBy, 'auto-mode', command);
+    assert.notEqual(outcome.decision, 'allow', command);
+  }
+  assert.equal(s.prompts.length, 0, '判定役は 1 回も呼ばれない');
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+});

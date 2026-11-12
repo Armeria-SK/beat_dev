@@ -88,6 +88,10 @@ export class Runs {
     return this.db.prepare("SELECT * FROM engine_runs WHERE conversation_id = ? AND kind = 'chat' ORDER BY started_at DESC, rowid DESC LIMIT 1").get(conversationId) as RunRow | undefined;
   }
 
+  anyTaintedTask(conversationId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM engine_runs WHERE conversation_id = ? AND kind = 'task' AND tainted = 1 LIMIT 1").get(conversationId) !== undefined;
+  }
+
   recent(limit = 100): RunRow[] {
     return this.db.prepare('SELECT * FROM engine_runs ORDER BY started_at DESC LIMIT ?').all(limit) as unknown as RunRow[];
   }
