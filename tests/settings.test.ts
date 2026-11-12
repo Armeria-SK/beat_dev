@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
-  addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
+  addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
+  sharedKeyWith,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -382,4 +383,22 @@ test('節「ブラウザ」: 「振る舞い」で MCP の次にあり、設定�
   const problem = parseProblem('/tools/browser/limits/maxTabs: Expected number to be less or equal to 8', saved);
   assert.equal(problem.section, 'browser');
   assert.equal(parseProblem('/tools/deny/0: x', saved).section, 'tools');
+});
+
+test('Anthropic を足す: 1 つ目は ANTHROPIC_API_KEY、2 つ目からはほかと重ならない自分の鍵の名前を持つ', () => {
+  const none = { ...sample(), providers: [sample().providers[0]] };
+  assert.deepEqual(newAnthropicProvider(none), { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 });
+
+  const one = { ...sample(), providers: [...sample().providers, { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 }] };
+  const second = newAnthropicProvider(one);
+  assert.equal(second.id, 'anthropic-2');
+  assert.equal(second.apiKeyEnv, 'CLIVE_ANTHROPIC_2_API_KEY');
+  assert.ok(isEnvName(second.apiKeyEnv as string));
+  const next = { ...one, providers: [...one.providers, second] };
+  assert.deepEqual(sharedKeyWith(next, 'anthropic-2'), []);
+  assert.deepEqual(sharedKeyWith(next, 'anthropic'), ['claude']);
+
+  const third = newAnthropicProvider({ ...next, providers: [...next.providers, { id: 'x', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'CLIVE_ANTHROPIC_3_API_KEY', maxParallel: 1, timeoutMs: 1000 }] });
+  assert.equal(third.id, 'anthropic-3');
+  assert.equal(third.apiKeyEnv, 'CLIVE_ANTHROPIC_3_API_KEY_2');
 });

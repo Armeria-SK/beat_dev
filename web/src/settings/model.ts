@@ -209,7 +209,15 @@ export function addProvider(config: Config): { config: Config; id: string } {
   return { config: { ...config, providers: [...config.providers, provider] }, id };
 }
 
-export const providerInUse = (config: Config, id: string): boolean => (config.models as Array<{ provider: string }>).some(m => m.provider === id);
+export function newAnthropicProvider(config: Config): Record<string, unknown> {
+  const providers = providerRows(config);
+  const id = uniqueId('anthropic', providers.map(p => p.id));
+  const taken = takenKeyEnvs(providers, id);
+  const apiKeyEnv = taken.has('ANTHROPIC_API_KEY') ? keyEnvName({ id, kind: 'openai_compatible' }, taken) : 'ANTHROPIC_API_KEY';
+  return { id, kind: 'anthropic', apiKeyEnv, maxParallel: 2, timeoutMs: 600_000 };
+}
+
+export const providerInUse =(config: Config, id: string): boolean => (config.models as Array<{ provider: string }>).some(m => m.provider === id);
 
 export function removeProvider(config: Config, id: string): Config {
   return { ...config, providers: (config.providers as Array<{ id: string }>).filter(p => p.id !== id) };

@@ -6,7 +6,7 @@ import { isComposing } from '../../keys.ts';
 import { probeMessage } from '../../server-text.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvUnsafe, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, keyEnvUnsafe, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -198,7 +198,7 @@ function AddProvider({ onDone }: { onDone: () => void }) {
     const ok = await ctx.commit('provider:add', c => {
       const taken = (c.providers as Json[]).map(p => p.id as string);
       const entry: Json = kind === 'anthropic'
-        ? { id: uniqueId('anthropic', taken), kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 }
+        ? newAnthropicProvider(c)
         : kind === 'openai'
           ? { id: uniqueId('openai', taken), kind: 'openai_compatible', baseUrl: OPENAI_URL, server: 'openai', maxParallel: 2, timeoutMs: 600_000 }
           : { id: uniqueId('local', taken), kind: 'openai_compatible', baseUrl: url.trim(), server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
