@@ -64,7 +64,8 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
       const autoOk = !ctx.taint?.tainted && !s.sawOutside(ctx.conversationId);
       const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId, autoOk });
       const language = languageOf(ctx.config);
-      return { content: toolText(language, draft.status === 'approved' ? 'skill.registered_auto' : 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
+      if (draft.status === 'approved') return { content: toolText(language, existing ? 'skill.registered_auto_edit' : 'skill.registered_auto_new', { name: draft.name, id: draft.id }) };
+      return { content: toolText(language, 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
     } catch (error) { return fail(error, ctx); }
   },
 };

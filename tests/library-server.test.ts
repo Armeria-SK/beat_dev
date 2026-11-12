@@ -68,7 +68,7 @@ test('1-5s 聞かない（askBeforeRegister: false）: skill_draft はその場�
   app.skills.write({ name: 'weekly-report', description: 'Old', body: 'old steps' });
   const out = await skillDraft.execute(draftInput('1. Collect\n2. Summarize'), ctxOf(app));
   assert.ok(!out.isError);
-  assert.match(String(out.content), /Registered the skill "weekly-report" without review/u);
+  assert.match(String(out.content), /^Replaced the registered skill "weekly-report" with your new text without review \(draft #\d+\)\. It is active now\./u);
   assert.equal(app.skills.getRegistered('weekly-report')?.body, '1. Collect\n2. Summarize');
   assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['approved']);
   assert.equal(app.skills.drafts('pending').length, 0);
@@ -84,7 +84,8 @@ test('1-5s 聞かない（askBeforeRegister: false）: skill_draft はその場�
 
 test('1-5s 聞かない: 新しいスキルの自動の登録も History に 1 行残る（前の中身は空 = 行数 0）', async t => {
   const { app, events } = await boot(t, autoConfig());
-  await skillDraft.execute(draftInput('steps'), ctxOf(app));
+  const out = await skillDraft.execute(draftInput('steps'), ctxOf(app));
+  assert.match(String(out.content), /^Registered the new skill "weekly-report" without review \(draft #\d+\)\. It is active now\./u);
   assert.equal(app.skills.isRegistered('weekly-report'), true);
   assert.deepEqual(app.skills.history('weekly-report').map(v => [v.who, v.lines, v.body]), [['beat-auto', 0, '']]);
   assert.equal(events.filter(e => e.title === 'Skill registered without review').length, 1);
