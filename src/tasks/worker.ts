@@ -15,6 +15,8 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister } from '../tools/skills/store.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
+import { projectFolderGone } from '../projects/run.ts';
+import type { ProjectStore } from '../projects/store.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
@@ -25,7 +27,7 @@ const SPLIT_LIMIT = 3;
 export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 
-export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model';
+export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model' | 'folder_missing';
 
 export interface WorkerDeps {
   db: DatabaseSync;
@@ -42,6 +44,7 @@ export interface WorkerDeps {
   memory?: MemoryStore | undefined;
   curiosity?: CuriosityStore | undefined;
   memoryBudget?: (() => number | undefined) | undefined;
+  projects?: ProjectStore | undefined;
 }
 
 export interface WorkerRunning { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
@@ -398,6 +401,12 @@ export class Worker {
     const language = languageOf(c);
     const conversationId = task.conversation_id ?? conversations.create({ kind: 'task', title: taskText(language, 'title.task', { title: task.title }), projectId: task.project_id }).id;
     if (!tasks.claim(task.id, LEASE_MS, conversationId)) return 'busy';
+    if (this.#d.projects && projectFolderGone(this.#d.projects, task.project_id)) {
+      const name = this.#d.projects.get(task.project_id!)?.name ?? task.project_id!;
+      tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.folder_missing', { name }) });
+      this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}` });
+      return 'folder_missing';
+    }
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language);
     const started = engine.runTask(task, conversationId, prompt);
     if (!started.ok) {

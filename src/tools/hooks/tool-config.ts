@@ -4,8 +4,8 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { isInside } from './scope.ts';
+import { dirname, join, resolve } from 'node:path';
+import { isInside, isRemotePath } from './scope.ts';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -83,9 +83,12 @@ const MAX_RC_BYTES = 1_048_576;
 
 // 空の行・# のコメントだけなら、読まれても何も変わらない
 function hasSettings(file: string): boolean {
+  if (isRemotePath(file)) return true;
   try {
-    if (!statSync(file).isFile()) return false;
-    return readFileSync(file, 'utf8').slice(0, MAX_RC_BYTES).split(/\r?\n/u).some(line => !/^\s*(?:#.*)?$/u.test(line));
+    const st = statSync(file);
+    if (!st.isFile()) return false;
+    if (st.size > MAX_RC_BYTES) return true;
+    return readFileSync(file, 'utf8').split(/\r?\n/u).some(line => !/^\s*(?:#.*)?$/u.test(line));
   } catch (e) {
     return (e as NodeJS.ErrnoException).code !== 'ENOENT' && (e as NodeJS.ErrnoException).code !== 'ENOTDIR';
   }
@@ -106,6 +109,16 @@ export function curlConfigFile(env: Env, cwd?: string): string | undefined {
     ...homes.map(h => join(h, '.config', 'curlrc')),
   ];
   return files.find(hasSettings);
+}
+
+export function npmProjectConfigFile(cwd: string, env: Env): string | undefined {
+  const key = (p: string): string => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+  const own = new Set([key(join(env.HOME || homedir(), '.npmrc')), key(join(homedir(), '.npmrc'))]);
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    const file = join(dir, '.npmrc');
+    if (!own.has(key(file)) && hasSettings(file)) return file;
+    if (dirname(dir) === dir) return undefined;
+  }
 }
 
 // wget が設定として読むファイルのうち、設定が書かれているもの（最初の 1 つ）

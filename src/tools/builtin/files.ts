@@ -13,7 +13,7 @@ import { askBeforeRegister } from '../skills/store.ts';
 import { isUnderDownloads } from './downloads-core.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
-const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git' } as const;
+const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git', instructions: 'file.instructions' } as const;
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_DELTA_BYTES = 4 * 1024 * 1024;
@@ -64,7 +64,7 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
   // downloads/ の下は外の中身なので、読んだ実行に「外から読んだ」印を付ける（doc_read と同じ）。断られた読み取りは印を付けない
   preCheck: (input, ctx) => {
     const { abs, check } = checkFilePath(input.path, 'read', ctx);
-    return check.decision !== 'deny' && isUnderDownloads(abs, ctx.workspace) ? { ...check, fetched: true } : check;
+    return check.decision !== 'deny' && isUnderDownloads(abs, ctx.home ?? ctx.workspace) ? { ...check, fetched: true } : check;
   },
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'read', ctx);
@@ -162,7 +162,7 @@ export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }>
     const skipped = new Set<string>();
     let fetched = false; // downloads/ の下の名前（相手が決めた名前）を一覧に入れたか
     const walk = (dir: string, depth: number, indent: string) => {
-      const inDownloads = isUnderDownloads(dir, ctx.workspace);
+      const inDownloads = isUnderDownloads(dir, ctx.home ?? ctx.workspace);
       for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
         if (lines.length >= 500) return;
         const full = resolve(dir, entry.name);

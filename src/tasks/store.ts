@@ -470,6 +470,7 @@ export class TaskStore {
     const now = this.#now();
     const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
     const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins}
+      AND (project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
       ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at)`;
     if (!options.accept) return this.#db.prepare(`${sql} LIMIT 1`).get(now) as Task | undefined;
     return (this.#db.prepare(sql).all(now) as unknown as Task[]).find(options.accept);

@@ -117,11 +117,12 @@ export interface ScopePolicy {
   askOnWrite?: string[];
   // askOnWrite のうち、スキルのフォルダ（理由の文を分けるため）
   skillsDir?: string;
+  instructions?: string[];
   language?: Language;
 }
 
 // 書き込む前に承認を求める場所の種類。persona: SOUL.md・USER.md、skill: workspace/skills/、git: .git の段があるパス（フックや設定でコマンドを動かせる）
-export type ProtectedKind = 'persona' | 'skill' | 'git';
+export type ProtectedKind = 'persona' | 'skill' | 'git' | 'instructions';
 
 const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fold(part) === '.git');
 
@@ -130,6 +131,8 @@ export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKi
   const real = realish(abs);
   if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || (real !== abs && insideGitDir(real))) return 'git';
   if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
+  const bare = WINDOWS ? abs.replace(/[. ]+$/u, '') : abs;
+  if (policy.instructions?.some(p => isInside(p, real) || isInside(p, abs) || isInside(p, bare))) return 'instructions';
   return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
 }
 

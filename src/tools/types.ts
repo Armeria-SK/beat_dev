@@ -88,6 +88,8 @@ export interface ToolContext {
   paths: AppPaths;
   policy: ScopePolicy;
   workspace: string;
+  home?: string | undefined;
+  project?: { id: string; root?: string | undefined } | undefined;
   taint: { tainted: boolean; sources: string[] };
   // この会話が、これまでの実行のどこかで「よそから来た文を読んだ」ことがあるか（taint はこの実行だけ。これは会話ぜんぶ。読めないときは「ある」側）。
   // 無いとき（試験など）は「ない」として扱う。browser_open の事前の確かめが、この実行で読んでいなくても、会話が読んだあとなら確かめるために見る

@@ -27,6 +27,7 @@ import { registerNotifyRoutes } from './routes-notify.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { projectFilterOf, projectProblem, registerProjectRoutes, usableProjectId } from './routes-projects.ts';
 import { ProjectError } from '../projects/store.ts';
+import { projectFolderGone } from '../projects/run.ts';
 import { projectOfSql, projectWhere, registerReviewRoutes, todayCount } from './routes-review.ts';
 import type { RunRow } from '../db/runs.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
@@ -295,6 +296,7 @@ export function createWebServer(app: App): WebServer {
     if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
     const projectId = usableProjectId(app, body.projectId);
     if (existing && projectId !== undefined && existing.project_id !== projectId) throw projectProblem(409, new ProjectError('mismatch'));
+    if (projectFolderGone(app.projects, projectId ?? existing?.project_id)) throw projectProblem(409, new ProjectError('folder_missing'));
     const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt, projectId });
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     // 実行中だったときは待たせた（queued）。今の実行が次の区切りで読む。取り消すときは pendingId
@@ -309,7 +311,9 @@ export function createWebServer(app: App): WebServer {
   });
   router.add('POST', '/api/conversations/:id/retry', ({ res, params }) => {
     // 子の担当（agent_run）の会話は読むだけ。やり直しで普通の会話として動かさない
-    if (app.conversations.get(params[0]!)?.parent_run_id) throw problem(409, 'conflict', 'not_chat_conversation');
+    const conversation = app.conversations.get(params[0]!);
+    if (conversation?.parent_run_id) throw problem(409, 'conflict', 'not_chat_conversation');
+    if (projectFolderGone(app.projects, conversation?.project_id)) throw projectProblem(409, new ProjectError('folder_missing'));
     const outcome = app.engine.retry(params[0]!);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     sendJson(res, 202, { runId: outcome.runId });
