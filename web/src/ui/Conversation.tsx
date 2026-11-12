@@ -15,6 +15,7 @@ import { Checklist } from './Checklist.tsx';
 import { useNow } from './hooks.ts';
 import { latestOnly } from './latest.ts';
 import { menuStep } from './menu.ts';
+import { sendOptions } from './product-nav.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
@@ -328,7 +329,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
     try {
       const out = await submitMessage({ kind, text, attachmentIds: attachments.map(a => a.id), conversationId: id, target, running: Boolean(draft), pending }, {
         rename: api.renameConversation, cancelPending: api.cancelPending,
-        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice), { ...(interrupt ? { interrupt: true } : {}), ...(!id && product ? { projectId: product.id } : {}) }),
+        send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice), sendOptions(id, product?.id, interrupt)),
         isGone: error => error instanceof ApiError && error.status === 404,
         clearNotices: onClearNotices, interrupt: onInterrupt,
       });

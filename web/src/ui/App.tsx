@@ -12,7 +12,7 @@ import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboardi
 import { opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
 import { pickFocus } from './focus.ts';
 import { productOf, throttled } from './products.ts';
-import { projectLoads, settleLeave } from './product-nav.ts';
+import { awaitingProduct, projectLoads, settleLeave } from './product-nav.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
@@ -307,7 +307,7 @@ export function App() {
       <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} />
       <div className={convo ? 'bt-app' : 'bt-shell'} data-panes={convo ? '0' : undefined} inert={shut}>
         <Sidebar state={state} route={behind} foot={foot} kanban={kanban} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={live.projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
-        {convo && behind.view === 'productNew' && !routeProduct ? (
+        {convo && awaitingProduct(behind, routeProduct) ? (
           <main className="bt-app__main" inert={drawer} />
         ) : convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>

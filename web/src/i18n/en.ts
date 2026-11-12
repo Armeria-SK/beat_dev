@@ -427,7 +427,7 @@ export const en = {
   'ui.np.note.nested': 'This folder is inside another product.',
   'ui.np.note.contains': 'This folder contains another product.',
   'ui.np.note.insideRoot': 'A folder in Settings › Folders already includes this one, so other sessions can use it too.',
-  'ui.np.note.readOnly': 'Settings mark this folder read-only, so each write asks first.',
+  'ui.np.note.readOnly': 'Settings mark this folder read-only, so writes there are refused.',
   'ui.np.note.notGit': 'Not a git folder.',
   'ui.np.archived': 'Archived products',
   'ui.np.restore': 'Restore',

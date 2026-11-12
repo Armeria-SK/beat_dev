@@ -4,7 +4,7 @@ import { ApiError, type Conversation, type FolderEntry, type Project } from '../
 import { t } from '../web/src/i18n/index.ts';
 import { errorBodyText, serverText } from '../web/src/server-text.ts';
 import { entryReason, folderName, nameFor, newProjectInput, noteKeys, upTarget } from '../web/src/ui/folder-pick.ts';
-import { loadProjectList, productNav, projectLoads, settleLeave } from '../web/src/ui/product-nav.ts';
+import { awaitingProduct, loadProjectList, productNav, projectLoads, sendOptions, settleLeave } from '../web/src/ui/product-nav.ts';
 import { parseRoute, routeHash, type Route } from '../web/src/ui/routes.ts';
 import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
@@ -72,6 +72,49 @@ test('ui/product-nav: 作った直後に、作る前に出した GET /api/projec
   assert.deepEqual(applied, [['p1aaaa', 'p2bbbb']]);
 });
 
+test('ui/product-nav: 最初の読み込みが 404 以外で失敗したら、間を空けて読み直す（成功で間隔を戻す。新しい読み込みが出たら古い読み直しはしない）', async () => {
+  const answers: Array<() => Promise<{ projects: Project[] }>> = [
+    async () => { throw new ApiError(500, {}); },
+    async () => { throw new TypeError('Failed to fetch'); },
+    async () => ({ projects: [project('p1aaaa')] }),
+  ];
+  let call = 0;
+  const timers: Array<{ run: () => void; ms: number }> = [];
+  const applied: string[][] = [];
+  const loads = projectLoads(() => answers[call++]!(), projects => applied.push(ids(projects)), (run, ms) => timers.push({ run, ms }), [10, 20]);
+  await loads.load();
+  assert.deepEqual(timers.map(x => x.ms), [10], '失敗したら読み直しを 1 つ積む');
+  loads.supersede();
+  timers.shift()!.run();
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(timers.map(x => x.ms), [20], '2 回目は長く待つ。作った直後（supersede）でも読み直しは止めない');
+  timers.shift()!.run();
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(applied, [['p1aaaa']]);
+  assert.equal(timers.length, 0, '成功したら読み直さない');
+
+  let calls = 0;
+  const later: Array<() => void> = [];
+  const again = projectLoads(async () => { calls += 1; throw new ApiError(503, {}); }, () => undefined, run => later.push(run), [10]);
+  await again.load();
+  await again.load();
+  assert.equal(calls, 2);
+  later[0]!();
+  await new Promise(r => setImmediate(r));
+  assert.equal(calls, 2, '新しい読み込みが出たあとは、古い失敗の読み直しをしない');
+});
+
+test('ui/product-nav: 最初の発言にだけ projectId を載せ、製品の一覧を読み終えるまで新しい製品の会話の入力欄を出さない', () => {
+  assert.deepEqual(sendOptions(null, 'p1aaaa', false), { projectId: 'p1aaaa' });
+  assert.deepEqual(sendOptions(null, 'p1aaaa', true), { interrupt: true, projectId: 'p1aaaa' });
+  assert.deepEqual(sendOptions('c1', 'p1aaaa', false), {}, 'もうある会話には送らない');
+  assert.deepEqual(sendOptions(null, undefined, false), {}, '製品なしの新しい会話');
+  assert.equal(awaitingProduct({ view: 'productNew', id: 'p1aaaa' }, undefined), true);
+  assert.equal(awaitingProduct({ view: 'productNew', id: 'p1aaaa' }, project('p1aaaa')), false);
+  assert.equal(awaitingProduct({ view: 'new' }, undefined), false);
+  assert.equal(awaitingProduct({ view: 'chat', id: 'c1' }, undefined), false);
+});
+
 test('ui/product-nav: 重なった読み込みは、あとに出した方だけを当てる', async () => {
   const pending = [deferred<{ projects: Project[] }>(), deferred<{ projects: Project[] }>()];
   let call = 0;
@@ -125,6 +168,7 @@ test('ui/folder-pick: フォルダの名前・上へ・選べない理由・作�
   assert.deepEqual(newProjectInput(' C:\\work\\a ', ' A ', '  '), { root: 'C:\\work\\a', name: 'A' });
   assert.deepEqual(newProjectInput('C:\\work\\a', '', 'npm test'), { root: 'C:\\work\\a', checkCommand: 'npm test' });
   assert.deepEqual(noteKeys(['nested_inside', 'not_git', 'something_new']).map(k => t(k)), ['This folder is inside another product.', 'Not a git folder.']);
+  assert.match(t(noteKeys(['config_root_read_only'])[0]!), /refused/u, '2-1b は設定で読むだけのフォルダへの書き込みを断る（聞かない）');
 });
 
 test('ui/product-nav: 製品のエラーのコードは画面の文にする。リンクの文は「開いて見る」と言わない（開いても同じ理由で断られるため）', () => {
