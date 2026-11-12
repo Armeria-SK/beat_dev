@@ -255,7 +255,8 @@ test('DELETE: やわらかい参照の表のどれかに行があると 409', as
       insert[ref.table](task.id);
       const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
       assert.equal(res.status, 409, task.title);
-      assert.equal(res.body.code, 'task.error.not_deletable');
+      assert.equal(res.body.code, 'task.error.still_referenced', '「繰り返しか…だけ消せる」ではなく、参照が残っているという別の断り');
+      assert.match(res.body.message, /still refers to this task/u);
       assert.ok(s.app.tasks.get(task.id), task.title);
     }
   }

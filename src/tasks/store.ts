@@ -373,7 +373,7 @@ export class TaskStore {
         throw new TaskError('error.not_deletable');
       }
       for (const ref of TASK_SOFT_REFERENCES) {
-        if (this.#db.prepare(`SELECT 1 FROM ${ref.table} WHERE ${ref.column} = ? LIMIT 1`).get(id)) throw new TaskError('error.not_deletable');
+        if (this.#db.prepare(`SELECT 1 FROM ${ref.table} WHERE ${ref.column} = ? LIMIT 1`).get(id)) throw new TaskError('error.still_referenced');
       }
       const keptRuns = Number(this.#db.prepare('UPDATE tasks SET parent_id = NULL WHERE parent_id = ?').run(id).changes);
       const events = Number(this.#db.prepare('DELETE FROM task_events WHERE task_id = ?').run(id).changes);

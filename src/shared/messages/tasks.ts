@@ -16,6 +16,7 @@ const en = {
   'error.not_template': 'This is not a repeating task, so it has no repeat setting to change',
   'error.template_when': 'A repeating task starts at the times its repeat setting gives, so "when" cannot be set on it (change "repeat" instead)',
   'error.not_deletable': 'Only a repeating task, or a timed task that has never run, can be deleted (cancel this one instead)',
+  'error.still_referenced': 'Another record (a curiosity item, a review, or a review conversation) still refers to this task, so it cannot be deleted (cancel it instead)',
   'error.run_open': 'A run of this repeating task is still active, so it cannot be deleted yet',
   'error.already_started': 'This task has already started, so its approval cannot be undone',
   'error.not_approved': 'This task did not become ready through an approval, so there is no approval to undo',
