@@ -4,7 +4,7 @@ import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  sharedKeyWith,
+  keyEnvPatch, sharedKeyWith,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -401,4 +401,11 @@ test('Anthropic を足す: 1 つ目は ANTHROPIC_API_KEY、2 つ目からはほ�
   const third = newAnthropicProvider({ ...next, providers: [...next.providers, { id: 'x', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'CLIVE_ANTHROPIC_3_API_KEY', maxParallel: 1, timeoutMs: 1000 }] });
   assert.equal(third.id, 'anthropic-3');
   assert.equal(third.apiKeyEnv, 'CLIVE_ANTHROPIC_3_API_KEY_2');
+});
+
+test('Key variable の欄: 環境変数の名前だけを設定に入れる。鍵を貼ったものは断り、空は外す', () => {
+  assert.deepEqual(keyEnvPatch('MY_API_KEY'), { apiKeyEnv: 'MY_API_KEY' });
+  assert.deepEqual(keyEnvPatch(''), { apiKeyEnv: undefined });
+  assert.equal(keyEnvPatch('sk-ant-test-0000000000000000'), null);
+  assert.equal(keyEnvPatch('my_api_key'), null);
 });

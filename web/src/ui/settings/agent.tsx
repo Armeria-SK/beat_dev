@@ -3,10 +3,10 @@ import { api, ApiError, type ProviderKeyState } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatRelative, getLanguage, useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
-import { probeMessage } from '../../server-text.ts';
+import { probeMessage, serverText } from '../../server-text.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvUnsafe, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, keyEnvPatch, keyEnvUnsafe, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -149,7 +149,12 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
             <CommitField value={(provider.baseUrl as string | undefined) ?? ''} label={t('ui.set.provider.url')} mono type="url" placeholder="https://…" onCommit={v => edit({ baseUrl: v || undefined })} />
           </Row>
           <Row k={`${k}:env`} title={t('ui.set.provider.env')} desc={t('ui.set.provider.envDesc')}>
-            <CommitField value={(provider.apiKeyEnv as string | undefined) ?? ''} label={t('ui.set.provider.env')} mono placeholder={t('ui.set.provider.envAuto')} onCommit={v => edit({ apiKeyEnv: v || undefined })} />
+            <CommitField value={(provider.apiKeyEnv as string | undefined) ?? ''} label={t('ui.set.provider.env')} mono placeholder={t('ui.set.provider.envAuto')} onCommit={v => {
+              const patch = keyEnvPatch(v);
+              if (!patch) { ctx.fail(`${k}:env`, serverText('config.pattern.key_env', null, getLanguage()) ?? ''); return; }
+              ctx.clear(`${k}:env`);
+              edit(patch);
+            }} />
           </Row>
           {provider.kind === 'openai_compatible' && (
             <Row k={`${k}:server`} title={t('ui.set.provider.server')}>
