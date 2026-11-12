@@ -12,7 +12,8 @@ const MESH_ACTOR = 'mesh';
 
 const markTask =(output: ToolOutput, ctx: ToolContext): ToolOutput => {
   const tasks = ctx.services?.tasks;
-  if (output.fetched && ctx.task && tasks) tasks.markUntrusted(ctx.task.id, MESH_ACTOR, taskText(languageOf(ctx.config), 'event.read_untrusted'));
+  const taskId = ctx.task?.id ?? ctx.parent?.taskId;
+  if (output.fetched && taskId && tasks) tasks.markUntrusted(taskId, MESH_ACTOR, taskText(languageOf(ctx.config), 'event.read_untrusted'));
   return output;
 };
 
