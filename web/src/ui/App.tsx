@@ -9,7 +9,7 @@ import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
-import { opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
+import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
 import { pickFocus } from './focus.ts';
 import { productOf, throttled } from './products.ts';
 import { awaitingProduct, projectLoads, settleLeave } from './product-nav.ts';
@@ -274,7 +274,7 @@ export function App() {
     setOnboard(null);
     load.profile();
     void loadSetup().catch(() => undefined);
-    location.hash = '#/';
+    location.hash = ONBOARD_DONE_HASH;
   }, [load, loadSetup]);
 
   useEffect(() => {
@@ -326,25 +326,25 @@ export function App() {
         ) : (
           <main className="bt-screen" inert={drawer}>
             {behind.view === 'kanban' ? (
-              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} />
+              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={live.projects} />
             ) : behind.view === 'task' ? (
-              <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.approvals.length}`} worker={worker} />
+              <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.approvals.length}`} worker={worker} projects={live.projects} />
             ) : behind.view === 'overview' ? (
               <Overview waiting={waiting} approvals={live.approvals} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} projects={live.projects} projectsLoaded={live.projectsLoaded} />
             ) : behind.view === 'product' ? (
               <ProductHome key={behind.id} id={behind.id} project={productOf(live.projects, behind.id)} approvals={live.approvals} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} revision={live.taskRevision + live.epoch} />
             ) : behind.view === 'schedule' ? (
-              <Schedule revision={live.taskRevision + live.epoch} />
+              <Schedule revision={live.taskRevision + live.epoch} projects={live.projects} />
             ) : behind.view === 'notifications' ? (
-              <Notifications unread={unread} epoch={live.epoch} onUnread={setUnread} />
+              <Notifications unread={unread} epoch={live.epoch} onUnread={setUnread} projects={live.projects} />
             ) : behind.view === 'memory' ? (
               <Memory revision={live.libraryRevision + live.epoch} />
             ) : behind.view === 'skills' ? (
               <Skills target={behind.target} revision={`${live.libraryRevision}:${live.epoch}:${skillDrafts}`} running={working} onDrafts={setDrafts} />
             ) : behind.view === 'runs' ? (
-              <Runs tab={behind.tab} revision={live.libraryRevision + live.epoch + live.taskRevision} conversations={conversations} />
+              <Runs tab={behind.tab} revision={live.libraryRevision + live.epoch + live.taskRevision} conversations={conversations} projects={live.projects} />
             ) : behind.view === 'archived' ? (
-              <Archived revision={live.libraryRevision + live.epoch} />
+              <Archived revision={live.libraryRevision + live.epoch} projects={live.projects} />
             ) : behind.view === 'newProduct' ? (
               <NewProduct onProject={upsertProject} />
             ) : behind.view === 'productSettings' ? (

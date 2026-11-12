@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { markSetupShown, setupModelConfig, wasSetupShown } from '../web/src/onboarding.ts';
 import {
-  agentInput, canContinue, connectProblem, emptyConnect, modelFormOf, nameInput, ONBOARD_STEPS, opensOnLoad, OPENAI_URL, resumeIndex, setupPending, styleInput,
+  agentInput, canContinue, connectProblem, emptyConnect, modelFormOf, nameInput, ONBOARD_DONE_HASH, ONBOARD_STEPS, opensOnLoad, OPENAI_URL, resumeIndex, setupPending, styleInput,
 } from '../web/src/ui/onboarding-steps.ts';
 import { defaultConfig } from '../src/config/store.ts';
 
@@ -13,6 +13,14 @@ test('ui/onboarding: 5 段で、名前は 1 欄の値を userName と callMe の
   assert.deepEqual([...ONBOARD_STEPS], ['name', 'agent', 'style', 'model', 'hello']);
   assert.deepEqual(nameInput('  Sam '), { userName: 'Sam', callMe: 'Sam' });
   assert.deepEqual(nameInput('   '), {});
+});
+
+test('ui/onboarding: 段 5 のボタンは "New product" で、終わると製品を作る画面を開く（2-2c）', () => {
+  assert.equal(ONBOARD_DONE_HASH, '#/products/new');
+  const screen = readFileSync(new URL('../web/src/ui/Onboarding.tsx', import.meta.url), 'utf8');
+  assert.match(screen, /step === 'hello' \? t\('ui\.product\.new'\)/u);
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /location\.hash = ONBOARD_DONE_HASH;/u);
 });
 
 test('ui/onboarding: AI の名前は変わったときだけ、話し方は「なし」なら送らない', () => {

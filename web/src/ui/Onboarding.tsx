@@ -254,7 +254,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
             <Button variant="ghost" disabled={index === 0 || busy} onClick={() => { setError(null); setIndex(index - 1); }}>{t('ui.ob.back')}</Button>
             <span className="ui-ob__fill" />
             {!replay && <Button variant="ghost" disabled={busy} onClick={onSkip}>{t('ui.ob.skip')}</Button>}
-            <Button variant="primary" data-next disabled={!ready || busy} onClick={() => void next()}>{step === 'hello' ? t('ui.ob.start') : t('ui.ob.continue')}</Button>
+            <Button variant="primary" data-next disabled={!ready || busy} onClick={() => void next()}>{step === 'hello' ? t('ui.product.new') : t('ui.ob.continue')}</Button>
           </div>
           <p className="bt-meta ui-ob__meta">{t(replay ? 'ui.ob.replayNote' : 'ui.ob.skipNote')}</p>
         </div>

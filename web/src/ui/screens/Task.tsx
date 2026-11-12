@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, ApiError, type Approval, type Task, type TaskEvent, type WorkerStatus } from '../../api.ts';
+import { api, ApiError, type Approval, type Project, type Task, type TaskEvent, type WorkerStatus } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
@@ -7,6 +7,7 @@ import { eventKey, ORIGIN_KEY, sheetActions, STATUS_KEY } from '../../task-meta.
 import { PRIORITIES } from '../../task-form.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, EmptyState, Icon, Notice, Pill, type PillTone } from '../parts.tsx';
+import { productOf } from '../products.ts';
 import { routeHash } from '../routes.ts';
 import { answerTaskOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type TaskOp } from '../task-ops.ts';
 import { threadItems } from '../thread.ts';
@@ -17,6 +18,7 @@ export interface TaskScreenProps {
   id: string;
   revision: string;
   worker: WorkerStatus | null;
+  projects: readonly Project[];
 }
 
 interface Detail { task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }
@@ -117,7 +119,7 @@ function Answer({ task, onSent }: { task: Task; onSent: () => void }) {
   );
 }
 
-export function TaskScreen({ id, revision, worker }: TaskScreenProps) {
+export function TaskScreen({ id, revision, worker, projects }: TaskScreenProps) {
   const t = useT();
   const [data, setData] = useState<Detail | null>(null);
   const [missing, setMissing] = useState(false);
@@ -162,6 +164,7 @@ export function TaskScreen({ id, revision, worker }: TaskScreenProps) {
   }
 
   const { task, events, approvals, runs } = data;
+  const product = productOf(projects, task.project_id);
   const mine = worker?.runningAll.find(r => r.taskId === task.id);
   const busyWithOther = (worker?.runningAll.length ?? 0) > 0 && !mine;
   const buttons = taskButtons(task.status, sheetActions(task.status), mine !== undefined);
@@ -198,6 +201,7 @@ export function TaskScreen({ id, revision, worker }: TaskScreenProps) {
           {back}
           <h1 className="bt-screen__title">{task.title}</h1>
           <div className="ui-task__state">
+            {product && <a className="bt-tool__link bt-meta" href={routeHash({ view: 'product', id: product.id })}>{product.name}</a>}
             <Pill {...(STATUS_TONE[task.status] ? { tone: STATUS_TONE[task.status]! } : {})}>{t(task.status === 'cancelled' && task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : STATUS_KEY[task.status])}</Pill>
             <span className="bt-meta">{t('ui.task.updated', formatRelative(task.updated_at))}{task.parent_id !== null && <> · {t('ui.kanban.repeating')}</>}</span>
           </div>
