@@ -32,7 +32,7 @@ export function mcpEnvPrefix(id: string): string {
   return `BEAT_MCP_${id.toUpperCase()}_`;
 }
 
-// BEAT_MCP_<ID>_<E|H>_<NAME>_SECRET（最大 63 文字。SECRET を含むので、鍵の名前の決まりを満たす）
+// BEAT_MCP_<ID>_<E|H>_<NAME>_SECRET（最大 62 文字。SECRET を含むので、鍵の名前の決まりを満たす）
 export function mcpEnvName(id: string, kind: McpSecretKind, name: string): string {
   return `${mcpEnvPrefix(id)}${kind === 'env' ? 'E' : 'H'}_${name.toUpperCase().replaceAll('-', '_')}_SECRET`;
 }
