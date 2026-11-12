@@ -371,6 +371,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   const runningRef = useRef<HTMLSpanElement>(null);
   const focusRunning = useRef(false);
   const [change, setChange] = useState<AcceptanceChange | null>(null);
+  const [sentBuild, setSentBuild] = useState<string | null>(null);
   const [accBusy, setAccBusy] = useState(false);
   const [accNotice, setAccNotice] = useState<{ what: 'edit' | 'change'; failure: DecisionFailure } | null>(null);
   const [asking, setAsking] = useState(false);
@@ -384,6 +385,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       if (!accLoads.current.isCurrent(ticket)) return;
       setAcc(r.acceptance);
       setChange(r.acceptance.change ?? null);
+      setSentBuild(null);
       setCoverage(r.coverage ?? null);
       setAccFailed(false);
       setBuildNotice(current => noticeAfterReload(current, r.acceptance));
@@ -393,7 +395,6 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   }, [productId]);
   useEffect(() => { void loadAcceptance(); }, [loadAcceptance, revision]);
 
-  const [sentBuild, setSentBuild] = useState<string | null>(null);
   const buildTask = watchedBuild(sentBuild, acc);
   useEffect(() => {
     if (!buildTask) { if (!building) setTask(null); return undefined; }

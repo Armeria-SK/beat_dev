@@ -61,6 +61,7 @@ export interface Acceptance {
   tainted?: boolean;
   change?: AcceptanceChange | null;
   unbuilt?: string[];
+  open_build_task_id?: string | null;
 }
 export interface AcceptanceChangeItem { result: string; check: AcceptanceCheck }
 export type OwnerOp = { op: 'add'; item: AcceptanceChangeItem } | { op: 'change'; id: string; item: AcceptanceChangeItem } | { op: 'remove'; id: string };

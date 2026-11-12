@@ -81,7 +81,7 @@ export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: A
   return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' || i.pending === true };
 }
 
-export const watchedBuild = (sent: string | null, acc: Acceptance | null): string | null => sent ?? acc?.frozen?.build_task_id ?? null;
+export const watchedBuild = (sent: string | null, acc: Acceptance | null): string | null => acc?.open_build_task_id ?? sent;
 
 const buildLeft = (acc: Acceptance): boolean => (acc.unbuilt?.length ?? 0) > 0;
 

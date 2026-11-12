@@ -208,9 +208,21 @@ test('ui/acceptance 3-3: 固定のあとの Build の知らせは、読み直し
   assert.deepEqual(noticeAfterReload({ kind: 'changed' }, draft()), { kind: 'changed' });
 });
 
-test('ui/acceptance 3-3: 見張る Build のタスクは、この欄で今送った Build を版の Build より先にする（固定のあとの Build は版を作らない）', () => {
-  assert.equal(watchedBuild('T9', acc()), 'T9');
-  assert.equal(watchedBuild(null, acc()), 'T1');
-  assert.equal(watchedBuild(null, draft()), null);
+test('ui/acceptance 3-3: 見張る Build のタスクは、サーバーの open_build_task_id。読み直しが届くまでは、この欄で今送った Build', () => {
+  assert.equal(watchedBuild(null, acc({ open_build_task_id: 'T7' })), 'T7');
+  assert.equal(watchedBuild('T9', acc({ open_build_task_id: 'T7' })), 'T7', '読み直したあとはサーバーの値を先にする');
+  assert.equal(watchedBuild('T9', acc({ open_build_task_id: null })), 'T9');
+  assert.equal(watchedBuild(null, acc({ open_build_task_id: null })), null);
   assert.equal(watchedBuild(null, null), null);
+});
+
+test('ui/acceptance 3-3: 版の build_task_id には頼らない（approve・edit で作った版では null、v1 のタスクは古い）', () => {
+  assert.equal(watchedBuild(null, acc({ open_build_task_id: null, frozen: { ...frozen, version: 3, build_task_id: null } })), null);
+  assert.equal(watchedBuild(null, acc({ open_build_task_id: null })), null, 'v1 の Build のタスク T1 が版に残っていても見張らない');
+});
+
+test('ui/acceptance 3-3: 固定のあとの Build は unbuilt だけで決まる。版の build_task_id が null の版でも、残りがあれば出す', () => {
+  const v3 = { ...frozen, version: 3, build_task_id: null };
+  assert.deepEqual(buildAction({ state: 'ready', mode: 'read', acc: acc({ version: 3, frozen: v3, unbuilt: ['A-5'], open_build_task_id: null }), task: null, isGit: true }), { kind: 'build', label: 'ui.plan.build', disabled: false });
+  assert.equal(buildAction({ state: 'ready', mode: 'read', acc: acc({ version: 3, frozen: v3, unbuilt: [], open_build_task_id: null }), task: null, isGit: true }), null);
 });
