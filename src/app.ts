@@ -203,8 +203,8 @@ export class App {
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
-      tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, botMemory: this.botMemory, projects: this.projects, tasks: this.tasks,
-      curiosity: this.curiosity, skills: this.skills, log: this.log,
+      tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
+      curiosity: this.curiosity, skills: this.skills, projects: this.projects, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
@@ -214,7 +214,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(),
+      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), projects: this.projects,
     });
     this.tasks.onChange = task => {
       this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });

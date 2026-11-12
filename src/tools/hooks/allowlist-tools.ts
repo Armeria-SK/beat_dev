@@ -614,8 +614,12 @@ const NPM_NAME = /^[@a-z0-9._/-]+$/u;
 const exactForm = (words: readonly Word[], forms: readonly string[][]): boolean =>
   words.slice(1).every(literal) && forms.some(f => f.length === words.length - 1 && f.every((t, i) => words[i + 1]!.text === t));
 
-function langInfo(name: string, words: Word[], acc: Acc): void {
+function langInfo(name: string, words: Word[], acc: Acc, ctx: MatchCtx): void {
   const args = words.slice(1);
+  if (name === 'npm') {
+    const config = ctx.toolConfig?.('npm');
+    if (config) acc.add('once', 'file' in config ? 'list.npm_rc' : 'list.npm_rc_unknown', { cmd: 'npm', path: 'file' in config ? config.file : '' }, false);
+  }
   const rest = args.map(w => w.text).join(' ');
   const installing = /^(?:npm|pnpm|yarn|bun)$/u.test(name)
     ? literal(args[0]) && INSTALL_SUBS.has(args[0]!.text)
@@ -665,9 +669,9 @@ function pipForms(words: Word[], acc: Acc): void {
   bad();
 }
 for (const name of ['node', 'nodejs', 'python', 'python3', 'py', 'deno', 'bun', 'go', 'cargo', 'rustc', 'npm', 'pnpm', 'yarn', 'pip', 'pip3', 'pipx', 'uv', 'poetry', 'conda', 'gem', 'composer', 'pdm', 'hatch']) {
-  register([name], (words, acc) => langInfo(name, words, acc));
+  register([name], (words, acc, ctx) => langInfo(name, words, acc, ctx));
 }
-for (const v of ['python3.8', 'python3.9', 'python3.10', 'python3.11', 'python3.12', 'python3.13']) register([v], (words, acc) => langInfo('python', words, acc));
+for (const v of ['python3.8', 'python3.9', 'python3.10', 'python3.11', 'python3.12', 'python3.13']) register([v], (words, acc, ctx) => langInfo('python', words, acc, ctx));
 register(['tsc'], (words, acc, ctx) => {
   const args = words.slice(1);
   if (exactForm(words, [['--version']])) return;

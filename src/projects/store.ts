@@ -6,6 +6,7 @@ import { transaction } from '../db/database.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { projectText, type ProjectMessageKey } from '../shared/messages/projects.ts';
 import { isInside, realish } from '../tools/hooks/scope.ts';
+import type { Remote } from './remotes.ts';
 import { folderGone } from './work-folder.ts';
 
 export const PROJECT_ID = /^[A-Za-z0-9_-]{6,64}$/u;
@@ -76,13 +77,13 @@ export class ProjectStore {
     return this.#db.prepare(`SELECT * FROM projects WHERE archived_at IS ${options.archived ? 'NOT NULL' : 'NULL'} ORDER BY created_at, rowid`).all() as unknown as ProjectRow[];
   }
 
-  create(input: { name: string; root: string; rootKey: string; checkCommand: string | null }): ProjectRow {
+  create(input: { name: string; root: string; rootKey: string; checkCommand: string | null; remotes?: readonly Remote[] }): ProjectRow {
     const id = randomUUID();
     const now = this.#now();
     try {
       transaction(this.#db, () => {
-        this.#db.prepare('INSERT INTO projects (id, name, root, root_key, check_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(id, input.name, input.root, input.rootKey, input.checkCommand, now, now);
+        this.#db.prepare('INSERT INTO projects (id, name, root, root_key, check_command, remotes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(id, input.name, input.root, input.rootKey, input.checkCommand, JSON.stringify(input.remotes ?? []), now, now);
         mkdirSync(projectDir(this.#dir, id), { recursive: true });
       });
     } catch (error) {
@@ -92,7 +93,7 @@ export class ProjectStore {
     return this.get(id)!;
   }
 
-  update(id: string, patch: { name?: string | undefined; checkCommand?: string | null | undefined; archived?: boolean | undefined }): ProjectRow {
+  update(id: string, patch: { name?: string | undefined; checkCommand?: string | null | undefined; archived?: boolean | undefined; remotes?: readonly Remote[] | undefined }): ProjectRow {
     const current = this.get(id);
     if (!current) throw new ProjectError('unknown');
     const restoring = patch.archived === false && current.archived_at !== null;
@@ -100,8 +101,8 @@ export class ProjectStore {
     const now = this.#now();
     const archivedAt = patch.archived === undefined ? current.archived_at : patch.archived ? current.archived_at ?? now : null;
     try {
-      this.#db.prepare('UPDATE projects SET name = ?, check_command = ?, archived_at = ?, updated_at = ? WHERE id = ?')
-        .run(patch.name ?? current.name, patch.checkCommand === undefined ? current.check_command : patch.checkCommand, archivedAt, now, id);
+      this.#db.prepare('UPDATE projects SET name = ?, check_command = ?, archived_at = ?, remotes = ?, updated_at = ? WHERE id = ?')
+        .run(patch.name ?? current.name, patch.checkCommand === undefined ? current.check_command : patch.checkCommand, archivedAt, patch.remotes ? JSON.stringify(patch.remotes) : current.remotes, now, id);
     } catch (error) {
       if (isRootConflict(error)) throw new ProjectError('root_in_use');
       throw error;

@@ -16,6 +16,8 @@ import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../to
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
 import { localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
+import type { ProjectStore } from '../projects/store.ts';
+import { runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import { stricterMode } from '../shared/permission-mode.ts';
@@ -43,7 +45,7 @@ import { plainLine } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
-import { folderMissing, type ProjectRow, type ProjectStore } from '../projects/store.ts';
+import { folderMissing, type ProjectRow } from '../projects/store.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
 export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
@@ -95,10 +97,10 @@ export interface ChatEngineDeps {
   tools?: { registry: ToolRegistry; approvals: ApprovalBroker };
   memory?: MemoryStore;
   botMemory?: boolean | undefined;
-  projects?: Pick<ProjectStore, 'get'> | undefined;
   tasks?: TaskStore;
   curiosity?: CuriosityStore;
   skills?: SkillStore;
+  projects?: ProjectStore | undefined;
   web?: NonNullable<ToolContext['services']>['web'];
   notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
@@ -400,7 +402,12 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     const control = { value: { outcome: 'none' } as TaskControl };
-    if (this.#checklistCarriesTaint(conversationId)) this.#initialTaint.set(runId, [engineText(languageOf(this.#d.config()), 'taint.checklist')]);
+    const language = languageOf(this.#d.config());
+    const sources = [
+      ...(this.#d.runs.anyTaintedTask(conversationId) ? [engineText(language, 'taint.carried')] : []),
+      ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
+    ];
+    if (sources.length) this.#initialTaint.set(runId, sources);
     this.#start(runId, conversationId, chain.usable, 'task', { task, control });
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
@@ -614,12 +621,17 @@ export class ChatEngine {
     let truncatedStreak = 0;
     let lastEstimate = 0;
     let lastRoute: Route = chain[0]!;
-    const policy = agent?.parent.policy ?? buildPolicy(config, d.paths);
+    const project = agent ? agent.parent.project : kind === 'review' ? undefined : runProject(d.projects, d.conversations.projectOf(conversationId));
+    if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
+    const productRoots = agent || kind === 'review' ? [] : [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
+    const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
+    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
+    const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
-      runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? defaultWorkspace(policy, d.paths),
+      runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
@@ -650,7 +662,7 @@ export class ChatEngine {
       }
     };
     const finishOk = (text: string, stop: StopReason, split?: { split: true }): EngineResult => {
-      if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), localOnly: ctx.localOnly === true });
+      if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), localOnly: ctx.localOnly === true, projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split: true as const } : {}) };
@@ -668,6 +680,7 @@ export class ChatEngine {
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       if (kind === 'chat' || kind === 'agent') { recordTaint(); recordAutoRead(); }
+      if (kind === 'task') recordTaint();
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
@@ -779,7 +792,7 @@ export class ChatEngine {
   // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触ったときだけ書き、そのとき実行中のままの状態（running）も許す
   // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
   // 手元のモデルの会話の実行（localOnly）が書いたタスクは、手元のモデルだけで動かすタスクにする（メモに会話の文が入るため）
-  #handOver(runId: string, text: string, run: { workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean }): void {
+  #handOver(runId: string, text: string, run: { workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean; projectId: string | null }): void {
     const d = this.#d;
     const note = text.trim();
     if (!d.tasks || !note || run.tainted) return;
@@ -790,7 +803,7 @@ export class ChatEngine {
     const language = languageOf(d.config());
     for (const id of targets) {
       const task = d.tasks.get(id);
-      if (!task) continue;
+      if (!task || (task.project_id ?? null) !== run.projectId) continue;
       const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
       if (!open.includes(task.status)) continue;
       d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }) }, 'clive', runId);

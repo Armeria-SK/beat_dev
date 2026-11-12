@@ -134,7 +134,8 @@ test('保存: downloads/ に中身が同じバイトで書かれ、書きかけ�
   assert.ok(!out.output.isError, out.output.content);
   assert.deepEqual(s.listing(), ['report.pdf']);
   assert.ok(readFileSync(join(s.downloads, 'report.pdf')).equals(Buffer.concat(body)));
-  assert.match(out.output.content, /downloads\/report\.pdf \(170,005 bytes, type application\/pdf\)\. Source: https:\/\/files\.example\.com\/report\.pdf/u);
+  assert.ok(out.output.content.includes(`Saved: ${join(s.downloads, 'report.pdf')} (170,005 bytes`), out.output.content);
+  assert.match(out.output.content, /downloads[\\/]report\.pdf \(170,005 bytes, type application\/pdf\)\. Source: https:\/\/files\.example\.com\/report\.pdf/u);
   assert.match(out.output.content, /External content/u);
   assert.equal(s.ctx.taint.tainted, true);
   assert.deepEqual(s.ctx.taint.sources, ['web_download']);
@@ -212,7 +213,7 @@ test('名前: 開くと動く名前（desktop.ini）は .download を付け、�
   const s = setup(t, undefined, w.network);
   const out = await s.call({ url: URL_PDF, name: 'desktop.ini' });
   assert.deepEqual(s.listing(), ['desktop.ini.download']);
-  assert.match(out.output.content, /downloads\/desktop\.ini\.download/u);
+  assert.match(out.output.content, /downloads[\\/]desktop\.ini\.download/u);
   assert.match(out.output.content, /\.download was added to the end of the name/u);
 });
 
@@ -501,7 +502,7 @@ test('Zone.Identifier（Windows）: 印を書けなくても、保存したフ�
   const out = await s.call({ url: 'https://files.example.com/a.pdf' });
   assert.ok(!out.output.isError, out.output.content);
   assert.match(out.output.content, /\(Zone\.Identifier\) could not be added: EINVAL/u);
-  assert.ok(!out.output.content.includes(s.ctx.workspace));
+  assert.ok(out.output.content.split('\n').filter(line => line.includes('Zone.Identifier')).every(line => !line.includes(s.ctx.workspace)));
   assert.deepEqual(s.listing(), ['a.pdf']);
   assert.equal(readFileSync(join(s.downloads, 'a.pdf'), 'utf8'), 'x');
 });
@@ -569,7 +570,7 @@ test('事前の判定: 外を読んだあとは確かめになり（種類 taint
   assert.ok(view.kinds?.includes('taint'));
   assert.match(view.title, /downloads\//u);
   assert.equal(view.body, `${URL_PDF}\nwanted.pdf`);
-  assert.deepEqual(view.paths, [{ input: 'downloads', path: s.downloads, verdict: 'in', mode: 'write' }]);
+  assert.deepEqual(view.paths, [{ input: s.downloads, path: s.downloads, verdict: 'in', mode: 'write' }]);
   assert.deepEqual(w.opens, []);
   assert.equal(existsSync(s.downloads), false);
 });
@@ -579,7 +580,7 @@ test('事前の判定: URL に秘密らしい文字・長い問い合わせが�
   const s = setup(t, undefined, w.network);
   const secret = await s.asked({ url: 'https://files.example.com/a.pdf?k=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' });
   assert.ok(secret.kinds?.includes('web'));
-  assert.ok(secret.paths?.some(p => p.input === 'downloads'));
+  assert.ok(secret.paths?.some(p => p.input === s.downloads));
   const long = await s.asked({ url: `https://files.example.com/a.pdf?${'q=1&'.repeat(100)}` });
   assert.match(long.reasons.join('\n'), /long query string/u);
   for (const url of ['http://localhost/a.bin', 'http://192.168.1.10/a.bin', 'file:///etc/passwd', 'https://user:pw@files.example.com/a.bin']) {
@@ -654,7 +655,7 @@ test('英語の設定: 結果・失敗・断りの文に日本語の文字が無
   fs.rmSync(s.downloads, { recursive: true, force: true });
   symlinkSync(target, s.downloads, process.platform === 'win32' ? 'junction' : 'dir');
   texts.push((await webDownload.execute({ url: URL_PDF }, s.ctx)).content);
-  assert.match(texts[0]!, /Saved: downloads\/desktop\.ini\.download/u);
+  assert.match(texts[0]!, /Saved: \S*downloads[\\/]desktop\.ini\.download/u);
   assert.match(texts[1]!, /compressed form \(br\)/u);
   for (const text of texts) assert.doesNotMatch(text, CJK, text);
   assert.equal(webDownload.summarize!({ url: URL_PDF }, 'en').title, 'Download a file and save it to downloads/');
@@ -692,7 +693,7 @@ test('本物の通信: 24MiB を流しながら書き、保存したファイル
   const s = setup(t, undefined, network);
   const out = await s.call({ url: 'https://files.example.com/download?id=1' });
   assert.ok(!out.output.isError, out.output.content);
-  assert.match(out.output.content, /downloads\/big\.bin \(25,165,824 bytes/u);
+  assert.match(out.output.content, /downloads[\\/]big\.bin \(25,165,824 bytes/u);
   assert.deepEqual(s.listing(), ['big.bin']);
   assert.equal(createHash('sha256').update(readFileSync(join(s.downloads, 'big.bin'))).digest('hex'), sent.digest('hex'));
 });

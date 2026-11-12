@@ -262,6 +262,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   const projectOfLink = (link: string | null): string | null => {
     if (link?.startsWith('#/c/')) return app.conversations.projectOf(link.slice('#/c/'.length));
     if (link?.startsWith('#/tasks/')) return app.tasks.get(link.slice('#/tasks/'.length))?.project_id ?? null;
+    if (link?.startsWith('#/p/')) return app.projects.get(link.slice('#/p/'.length))?.id ?? null;
     return null;
   };
   router.add('GET', '/api/notifications', ({ res }) => sendJson(res, 200, {

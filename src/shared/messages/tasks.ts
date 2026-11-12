@@ -24,6 +24,7 @@ const en = {
   'error.bad_when': '"when" cannot be read as a date and time (example: 2026-11-06T09:00:00+09:00): {when}',
   'error.bad_repeat': 'The cron in "repeat" is not valid: {repeat}',
   'error.tool_not_found': 'Task {id} was not found (check with task_list)',
+  'error.other_project': 'Task {id} belongs to another product, so it cannot be changed from this product',
 
   'event.proposed': 'Created as a proposal',
   'event.repeat': 'Repeat: {cron}',
@@ -38,6 +39,7 @@ const en = {
 
   'reason.no_model': 'Waiting because no model is available: {detail}',
   'reason.local_wait': 'This task came from a conversation that used a local model, so it waits while no local model is available (it is never sent to an external model)',
+  'reason.folder_missing': 'Waiting because the folder of the product "{name}" cannot be found (or it was replaced)',
   'reason.preempted': 'Paused to give priority to the conversation with the user (it will resume from where it left off)',
   'reason.checkpoint': 'Will resume in {minutes} min',
   'reason.no_progress': 'No progress was made, so it will rest for a while and then resume',
@@ -64,6 +66,7 @@ const en = {
   'notify.review_no_model': 'No model is available for the review',
   'notify.memory_tidy': 'Suggestions for tidying up memory',
   'notify.task_no_model': 'No model is available to run the task',
+  'notify.task_folder_missing': 'Tasks of the product "{name}" are waiting: its folder cannot be found',
   'notify.task_done': 'Task finished: {title}',
   'notify.task_question': 'I have a question: {title}',
   'notify.task_consult': 'I need your advice: {title}',
