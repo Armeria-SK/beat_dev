@@ -667,7 +667,7 @@ export class ChatEngine {
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : agent ? { permissionMode: agent.mode } : {}),
-      ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '' } } : {}),
+      ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
     };
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider)) && (agent?.parent.modelsLocal ?? true);
     if (agent?.parent.autoReadOutside) ctx.autoReadOutside = true;
