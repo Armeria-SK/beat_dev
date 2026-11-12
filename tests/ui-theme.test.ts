@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 import {
   applyTheme, DEFAULT_THEME, readReducedMotion, readTheme, REDUCED_MOTION_KEY, saveReducedMotion, saveTheme, THEME_KEY, THEMES, type ThemeStorage,
 } from '../web/src/ui/theme.ts';
@@ -55,7 +56,23 @@ test('動きを減らす: 初めは off、保存して読み戻せる、読め�
   assert.equal(readReducedMotion(broken), false);
 });
 
-test('applyTheme は data-theme を書き直す（古い画面の theme-init.js が書いた dark も）', () => {
+function runInit(storage: { getItem: (key: string) => string | null }): string | undefined {
+  const dataset: Record<string, string> = {};
+  runInNewContext(readFileSync(new URL('../web/public/theme-init.js', import.meta.url), 'utf8'), { document: { documentElement: { dataset } }, localStorage: storage });
+  return dataset.theme;
+}
+
+test('theme-init.js: 最初の描画の前に beat.theme を読む。6 つのどれでもなければ light（前の画面の clive.theme と OS の設定は見ない）', () => {
+  for (const theme of THEMES) assert.equal(runInit(memory({ [THEME_KEY]: theme })), readTheme(memory({ [THEME_KEY]: theme })), theme);
+  assert.equal(runInit(memory({ [THEME_KEY]: 'dusk' })), 'dusk');
+  for (const value of ['dark', 'auto', '']) assert.equal(runInit(memory({ [THEME_KEY]: value })), 'light', value);
+  assert.equal(runInit(memory({ 'clive.theme': 'dark' })), 'light');
+  assert.equal(runInit(memory()), 'light');
+  assert.equal(runInit(broken), 'light');
+  assert.doesNotMatch(readFileSync(new URL('../web/index.html', import.meta.url), 'utf8'), /name="color-scheme"/u);
+});
+
+test('applyTheme は data-theme を書き直す', () => {
   const root = { dataset: { theme: 'dark' } as DOMStringMap };
   applyTheme(root, 'ember');
   assert.equal(root.dataset.theme, 'ember');

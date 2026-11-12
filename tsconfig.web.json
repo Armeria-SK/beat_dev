@@ -11,8 +11,7 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": [],
-    "paths": { "virtual-entry": ["./web/src/legacy-main.tsx"] }
+    "types": []
   },
   "include": ["web/src/**/*.ts", "web/src/**/*.tsx"]
 }

@@ -1,9 +1,9 @@
 (function () {
-  var mode = 'auto';
+  var themes = ['light', 'dusk', 'sand', 'mist', 'moss', 'ember'];
+  var theme = 'light';
   try {
-    var saved = localStorage.getItem('clive.theme');
-    if (saved === 'light' || saved === 'dark') mode = saved;
+    var saved = localStorage.getItem('beat.theme');
+    if (themes.indexOf(saved) !== -1) theme = saved;
   } catch (e) { }
-  var dark = mode === 'dark' || (mode === 'auto' && typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches);
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  document.documentElement.dataset.theme = theme;
 })();

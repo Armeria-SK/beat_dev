@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-// 画面だけの開発サーバー（npm run dev:web）の /api の転送先。新しい画面（VITE_BEAT_UI=1）は、試しのサーバー（4797）にしかつながない。
+// 画面だけの開発サーバー（npm run dev:web）の /api の転送先。試しのとき（VITE_BEAT_UI=1）は、試しのサーバー（4797）にしかつながない（画面の入口は 1 つで、この値が変えるのは転送先だけ）。
 // 持ち主のサーバー（4777。本物のデータと .env）へは、転送が Origin を書き換えるので、サーバーの認証を通ってしまう。
 
 const CONFIG = pathToFileURL(join(import.meta.dirname, '..', 'web', 'vite.config.mjs')).href;
@@ -29,7 +29,7 @@ test('VITE_BEAT_UI=1 で CLIVE_PORT が 4797 以外なら、設定を読む時�
   }
 });
 
-test('今の画面（VITE_BEAT_UI なし）の転送先は今までどおり（既定 4777、CLIVE_PORT で変えられる）', () => {
+test('ふだん（VITE_BEAT_UI なし）の転送先は今までどおり（既定 4777、CLIVE_PORT で変えられる）', () => {
   assert.deepEqual(proxyTarget({}), { target: 'http://127.0.0.1:4777' });
   assert.deepEqual(proxyTarget({ CLIVE_PORT: '4790' }), { target: 'http://127.0.0.1:4790' });
 });

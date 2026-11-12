@@ -1,1 +1,1 @@
-import 'virtual-entry';
+import './ui/main.tsx';
