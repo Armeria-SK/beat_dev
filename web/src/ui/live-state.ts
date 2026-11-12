@@ -1,4 +1,4 @@
-import type { Approval, ChecklistItem, Conversation, NotificationItem, Task, TaskStatus } from '../api.ts';
+import type { Approval, ChecklistItem, Conversation, NotificationItem, Project, Task, TaskStatus } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
 
@@ -25,6 +25,9 @@ export type RunNotice = { runId: string; key?: string | undefined } & (
 
 export interface LiveState {
   conversations: Conversation[];
+  conversationsMore: Readonly<Record<string, number>>;
+  projects: Project[];
+  projectsLoaded: boolean;
   approvals: Approval[];
   skillDrafts: number;
   unread: number;
@@ -41,13 +44,13 @@ export interface LiveState {
 }
 
 export const EMPTY: LiveState = {
-  conversations: [], approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
+  conversations: [], conversationsMore: {}, projects: [], projectsLoaded: false, approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
   notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, libraryRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
 
-export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker';
+export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker' | 'projects' | 'projectCounts';
 
 export type Effect =
   | { kind: 'refresh'; what: Refresh }
@@ -60,7 +63,9 @@ export type Effect =
 export type Action =
   | { type: 'event'; event: RunEvent; hidden: boolean; now?: number }
   | { type: 'resync'; drafts: Draft[] }
-  | { type: 'conversations'; conversations: Conversation[] }
+  | { type: 'conversations'; conversations: Conversation[]; more?: Record<string, number> | undefined }
+  | { type: 'projects'; projects: Project[] }
+  | { type: 'project'; project: Project }
   | { type: 'approvals'; approvals: Approval[] }
   | { type: 'skillDrafts'; count: number }
   | { type: 'unread'; count: number }
@@ -72,6 +77,7 @@ export type Action =
 export const BROWSER_NOTIFY: ReadonlySet<string> = new Set(['task_waiting']);
 
 const refresh = (...what: Refresh[]): Effect[] => what.map(w => ({ kind: 'refresh', what: w }));
+const counts = (s: LiveState): Effect[] => (s.projects.length ? refresh('projectCounts') : []);
 
 export function mergeTasks(prev: ReadonlyMap<string, TaskMark>, snapshot: readonly Task[]): Map<string, TaskMark> {
   const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false }]));
@@ -170,11 +176,11 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       const approval: Approval = { ...e.approval, runId: e.runId, conversationId: e.conversationId };
       return {
         state: { ...s, approvals: [...s.approvals.filter(a => a.id !== approval.id), approval] },
-        effects: [...(hidden ? [{ kind: 'notifyApproval', title: e.approval.title } as const] : []), ...refresh('approvals')],
+        effects: [...(hidden ? [{ kind: 'notifyApproval', title: e.approval.title } as const] : []), ...refresh('approvals'), ...counts(s)],
       };
     }
     case 'approval.resolved':
-      return { state: { ...s, approvals: s.approvals.filter(a => a.id !== e.approvalId) }, effects: refresh('approvals') };
+      return { state: { ...s, approvals: s.approvals.filter(a => a.id !== e.approvalId) }, effects: [...refresh('approvals'), ...counts(s)] };
     case 'memory.changed':
       return { state: addNotice(library(s), e.conversationId, { runId: e.runId, kind: 'memory', action: e.action, content: e.content, eventId: e.eventId }), effects: [] };
     case 'checklist.updated':
@@ -186,16 +192,18 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         state: bump(library(s), e.conversationId),
         effects: e.change === 'deleted' ? [...refresh('conversations', 'unread'), { kind: 'gone', conversationId: e.conversationId }] : refresh('conversations'),
       };
+    case 'project.changed':
+      return { state: s, effects: refresh('projects', ...(e.change === 'archived' || e.change === 'restored' ? ['conversations'] as const : [])) };
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
       const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true });
-      return { state: { ...s, tasks, taskRevision: s.taskRevision + 1 }, effects: refresh('worker') };
+      return { state: { ...s, tasks, taskRevision: s.taskRevision + 1 }, effects: [...refresh('worker'), ...counts(s)] };
     }
     case 'task.deleted': {
       const tasks = new Map(s.tasks);
       tasks.delete(e.id);
-      return { state: { ...s, tasks, taskRevision: s.taskRevision + 1 }, effects: refresh('tasks', 'worker') };
+      return { state: { ...s, tasks, taskRevision: s.taskRevision + 1 }, effects: [...refresh('tasks', 'worker'), ...counts(s)] };
     }
     case 'notification': {
       const notify: Effect[] = hidden && BROWSER_NOTIFY.has(e.notification.kind) ? [{ kind: 'notify', title: e.notification.title, body: e.notification.body ?? '' }] : [];
@@ -214,9 +222,15 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
     case 'resync':
       return {
         state: { ...s, drafts: a.drafts, streaming: new Set(a.drafts.filter(d => d.text).map(d => d.conversationId)), checklists: new Map(), epoch: s.epoch + 1 },
-        effects: [...a.drafts.map(d => ({ kind: 'checklist', conversationId: d.conversationId }) as const), ...refresh('conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker')],
+        effects: [...a.drafts.map(d => ({ kind: 'checklist', conversationId: d.conversationId }) as const), ...refresh('conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker', 'projects')],
       };
-    case 'conversations': return { state: { ...s, conversations: a.conversations }, effects: [] };
+    case 'conversations': return { state: { ...s, conversations: a.conversations, conversationsMore: a.more ?? {} }, effects: [] };
+    case 'projects': return { state: { ...s, projects: a.projects, projectsLoaded: true }, effects: [] };
+    case 'project': {
+      const rest = s.projects.filter(p => p.id !== a.project.id);
+      const projects = a.project.archived_at !== null ? rest : rest.length < s.projects.length ? s.projects.map(p => (p.id === a.project.id ? a.project : p)) : [...rest, a.project];
+      return { state: { ...s, projects }, effects: [] };
+    }
     case 'approvals': return { state: { ...s, approvals: a.approvals }, effects: [] };
     case 'skillDrafts': return { state: { ...s, skillDrafts: a.count }, effects: [] };
     case 'unread': return { state: { ...s, unread: a.count }, effects: [] };
