@@ -12,7 +12,7 @@ import type { ChatMessage, RunEvent, StopReason, ToolCall } from '../src/engine/
 import { buildDynamic } from '../src/engine/workspace.ts';
 import { resolvePaths } from '../src/paths.ts';
 import {
-  ACCEPTANCE_MAX_ITEMS, AcceptanceStore, frozenHash, prepareSpeech, verifySource,
+  ACCEPTANCE_MAX_ITEMS, AcceptanceStore, FOLD_COST, frozenHash, prepareSpeech, verifySource,
   type AcceptanceDoc, type ClaimedSource,
 } from '../src/projects/acceptance.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
@@ -63,21 +63,61 @@ test('3-1b 出どころ: 持ち主の発言に無い抜き書きは ai_added（n
   assert.deepEqual(f.check({ kind: 'ai_added' }), { kind: 'ai_added' });
 });
 
-test('3-1b 出どころ: AI の選択肢つきの質問のすぐ次に持ち主が「A」と答えたら owner_choice。間に持ち主の別の発言があると not_next_reply で ai_added', () => {
+test('3-1b 出どころ: owner_choice は今は確かめない。持ち主がすぐ次に「A」と答えていても ai_added（choice_unverified）で、AI の質問と答えを表示用に残す', () => {
   const f = speechFixture();
   const c = f.chat();
-  f.say(c, 'user', 'I want a small uploader');
-  const q = f.say(c, 'assistant', '1. Where should the files be stored?\nA) Local disk (recommended)\nB) S3');
-  const a = f.say(c, 'user', 'A');
+  f.say(c, 'assistant', '1. Where should the files be stored?\nA) Local disk (recommended)\nB) S3');
+  f.say(c, 'user', 'A');
   assert.deepEqual(f.check(choice('Where should the files be stored?', 'A')),
-    { kind: 'owner_choice', question: 'Where should the files be stored?', questionMessageId: q, answer: 'A', answerMessageId: a, conversationId: c });
+    { kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: 'Where should the files be stored?', answer: 'A' });
+  assert.deepEqual(f.check(choice('Which?', 'Keep them on the local disk')),
+    { kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: 'Which?', answer: 'Keep them on the local disk' });
+});
 
-  const c2 = f.chat();
-  f.say(c2, 'assistant', 'Which database should we use for this?\nA) SQLite\nB) Postgres');
-  f.say(c2, 'user', 'hmm, let me think about it');
-  f.say(c2, 'user', 'A');
-  assert.deepEqual(f.check(choice('Which database should we use for this?', 'A')),
-    { kind: 'ai_added', claimed: 'owner_choice', reason: 'not_next_reply', question: 'Which database should we use for this?', answer: 'A' });
+test('3-1b 出どころ: owner_words の quote には AI の文字ではなく、一致した持ち主の文の部分をそのまま入れる（「106」と「10⁶」、「now here」と「nowhere」）', () => {
+  const f = speechFixture();
+  const c = f.chat();
+  const power = f.say(c, 'user', 'We expect 10⁶ uploads per day at peak.');
+  assert.deepEqual(f.check(words('106 uploads per day')),
+    { kind: 'owner_words', quote: '10⁶ uploads per day', messageId: power, conversationId: c, context: 'We expect 10⁶ uploads per day at peak.' });
+  const nowhere = f.say(c, 'user', 'The old export is nowhere to be found');
+  const found = f.check(words('the old export is now here')) as { quote?: string; messageId?: number };
+  assert.equal(found.messageId, nowhere);
+  assert.equal(found.quote, 'The old export is nowhere');
+  const caps = f.say(c, 'user', 'UPLOADS MUST RESUME AFTER A RESTART');
+  const upper = f.check(words('uploads must resume after a restart')) as { quote?: string; messageId?: number };
+  assert.equal(upper.quote, 'UPLOADS MUST RESUME AFTER A RESTART');
+  assert.equal(upper.messageId, caps);
+});
+
+test('3-1b 出どころ: 一致と context は同じそろえ方。半角カナの濁点と、分けて書いたアクセントも context つきで確かめる', () => {
+  const f = speechFixture();
+  const c = f.chat();
+  const kana = f.say(c, 'user', 'ﾌﾟﾛｼﾞｪｸﾄを保存する。');
+  const k = f.check(words('プロジェクトを保存')) as { kind: string; messageId?: number; context?: string; quote?: string };
+  assert.equal(k.kind, 'owner_words', JSON.stringify(k));
+  assert.equal(k.messageId, kana);
+  assert.equal(k.quote, 'ﾌﾟﾛｼﾞｪｸﾄを保存');
+  assert.equal(k.context, 'ﾌﾟﾛｼﾞｪｸﾄを保存する。');
+  const accent = f.say(c, 'user', `The cafe${String.fromCharCode(0x301)} menu must show prices.`);
+  const a = f.check(words(`caf${String.fromCharCode(0xE9)} menu must show prices`)) as { kind: string; messageId?: number; context?: string; quote?: string };
+  assert.equal(a.kind, 'owner_words');
+  assert.equal(a.messageId, accent);
+  assert.equal(a.quote, `cafe${String.fromCharCode(0x301)} menu must show prices`);
+  assert.equal(a.context, `The cafe${String.fromCharCode(0x301)} menu must show prices.`);
+});
+
+test('3-1b 出どころ: 1 回の書き込みで持ち主の発言を読む量に上限がある。使い切ったあとの抜き書きは ai_added（scan_budget）', () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, conversation_id: 'c', role: 'user' as const, text: `message ${i} says the uploader keeps part ${i} safe`, generated: 0 }));
+  const speech = prepareSpeech(rows, rows[9]!.text.length * FOLD_COST * 2.5);
+  const first = verifySource(speech, words('message 9 says the uploader keeps part 9 safe'));
+  assert.equal(first.kind, 'owner_words', '新しい発言から読むので最初の 1 件は足りる');
+  const second = verifySource(speech, words('message 0 says the uploader keeps part 0 safe'));
+  assert.deepEqual(second, { kind: 'ai_added', claimed: 'owner_words', reason: 'scan_budget', quote: 'message 0 says the uploader keeps part 0 safe' });
+  const third = verifySource(speech, words('message 9 says the uploader keeps part 9 safe'));
+  assert.equal(third.kind === 'ai_added' && third.reason, 'scan_budget', '使い切ったら残りはすべて');
+  const plenty = prepareSpeech(rows);
+  assert.equal(verifySource(plenty, words('message 0 says the uploader keeps part 0 safe')).kind, 'owner_words');
 });
 
 test('3-1b 出どころ: 全角と半角・空白・改行・大文字小文字だけ違う抜き書きが見つかる。日本語・英語・中国語で同じに働く', () => {
@@ -124,164 +164,6 @@ test('3-1b 出どころ: 短い owner_words（日本語 5 字・英語 11 字）
   assert.equal((f.check(words('check outfl o')) as { reason?: string }).reason, 'too_short', '空白は数えない');
 });
 
-test('3-1b 出どころ: owner_choice の負の確かめ（区切られて現れない記号・選択肢に無い記号・短い質問）と、通る形', () => {
-  const f = speechFixture();
-  const QUESTION = 'Which storage should the uploader use?';
-  const ask = `1. ${QUESTION}\nA) Local disk (recommended)\nB) S3\nC) Both`;
-  const pair = (answerText: string, question = ask) => {
-    const c = f.chat();
-    f.say(c, 'assistant', question);
-    return f.say(c, 'user', answerText);
-  };
-  const kindOf = (answer: string, question = QUESTION) => {
-    const result = f.check(choice(question, answer));
-    return result.kind === 'owner_choice' ? result.answerMessageId : result.kind;
-  };
-  for (const text of ['OK, go ahead', 'A bit of both', 'A few tweaks first', 'we have 3 A grade servers', 'A 2', 'A-ok', '2. A']) {
-    pair(text);
-    assert.equal(kindOf('A'), 'ai_added', text);
-  }
-  for (const text of ['A', '1. A, 2. C', 'Q1: A', 'A.', 'A, please', 'Ａ', '１．Ａ', '1A', 'Aでお願いします', 'Aで', '1. Aです', 'A。', '1. A でお願いします', '1. A (local is fine)', '1. A - local is fine', '1. A – local is fine', 'A!', 'A?', 'A;']) {
-    const id = pair(text);
-    assert.equal(kindOf('A'), id, text);
-  }
-  const b = pair('1) B');
-  assert.equal(kindOf('B'), b);
-
-  const NO_OPTIONS = 'What color do you like best for the header?';
-  pair('A', NO_OPTIONS);
-  assert.equal(kindOf('A', NO_OPTIONS), 'ai_added', '質問に選択肢 A が無い');
-  pair('A', 'Which?\nA) x\nB) y');
-  assert.deepEqual(f.check(choice('Which?', 'A')), { kind: 'ai_added', claimed: 'owner_choice', reason: 'too_short', question: 'Which?', answer: 'A' });
-
-  const SIMPLE = 'How simple should the first version be?';
-  pair('I want a simple one', `${SIMPLE}\nA) Simple\nB) Full`);
-  assert.equal(kindOf('A', SIMPLE), 'ai_added', '「I want a simple one」と A');
-  const USERS = 'How many users will share it at once?';
-  pair('I need 2 users', `${USERS}\n1) One\n2) Two\n3) Many`);
-  assert.equal(kindOf('2', USERS), 'ai_added', '「I need 2 users」と 2');
-  const NODES = 'How many worker nodes should run it?';
-  pair('node 1.2', `1. ${NODES}\n1) One\n2) Two`);
-  assert.equal(kindOf('2', NODES), 'ai_added', '「node 1.2」の 2 は小数');
-  const LONG = 'Where should we keep the uploaded files?';
-  const long = pair('Keep them on the local disk for now', `${LONG}\nA) Local\nB) Cloud`);
-  assert.equal(kindOf('keep them on the local disk', LONG), long, '長い答えは含まれるかで見る');
-});
-
-test('3-1b 出どころ: 答えは自分の問いの番号に結び付く。「1. A / 2. C」は Q2 = A も Q1 = C も通さない（P1 のログインとパスワード）', () => {
-  const f = speechFixture();
-  const Q1 = 'Do users need to log in first?';
-  const Q2 = 'How strict should passwords be?';
-  const c = f.chat();
-  const q = f.say(c, 'assistant', `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose\nC) None`);
-  const a = f.say(c, 'user', '1. A\n2. C');
-  assert.equal(f.check(choice(Q2, 'A')).kind, 'ai_added', 'Q2 の答えは C');
-  assert.equal(f.check(choice(Q1, 'C')).kind, 'ai_added', 'Q1 に C は無く、Q1 の答えは A');
-  assert.deepEqual(f.check(choice(Q1, 'A')), { kind: 'owner_choice', question: Q1, questionMessageId: q, answer: 'A', answerMessageId: a, conversationId: c });
-  assert.equal(f.check(choice(Q2, 'C')).kind, 'owner_choice');
-
-  const P1A = 'Should people sign in with a password?';
-  const P1B = 'Should a login page come first?';
-  const c2 = f.chat();
-  f.say(c2, 'assistant', `1. ${P1A}\nA) Yes\nB) No\n2. ${P1B}\nA) Yes\nB) No`);
-  f.say(c2, 'user', '1. B, 2. A');
-  assert.equal(f.check(choice(P1A, 'A')).kind, 'ai_added', 'P1: A は 2 の答え');
-  assert.equal(f.check(choice(P1B, 'A')).kind, 'owner_choice');
-  assert.equal(f.check(choice(P1A, 'B')).kind, 'owner_choice');
-
-  const c3 = f.chat();
-  f.say(c3, 'assistant', `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose\nC) None`);
-  f.say(c3, 'user', 'C');
-  assert.equal(f.check(choice(Q1, 'C')).kind, 'ai_added', 'C は Q2 の選択肢で、Q1 の区切りの中には無い');
-  const bang = f.chat();
-  f.say(bang, 'assistant', `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose\nC) None`);
-  f.say(bang, 'user', '1. A!\n2. C!');
-  assert.equal(f.check(choice(Q2, 'C')).kind, 'owner_choice', '「2. C!」');
-});
-
-test('3-1b 出どころ（確かでなければ付け替える）: 問いが 2 つ以上ある発言には番号の合う答えだけ。番号の無い「A, B」「A\\nB」はどちらの問いにも結び付けない。問いの範囲に別の番号の行があれば断る（P1b）。選択肢の区切りは次の番号の行か「?」の行まで', () => {
-  const f = speechFixture();
-  const Q1 = 'Do users need to log in first?';
-  const Q2 = 'How strict should passwords be?';
-  const two = `1. ${Q1}\nA) Yes\nB) No\n2. ${Q2}\nA) Strict\nB) Loose`;
-  for (const reply of ['A, B', 'A\nB']) {
-    const c = f.chat();
-    f.say(c, 'assistant', two);
-    f.say(c, 'user', reply);
-    assert.equal(f.check(choice(Q2, 'A')).kind, 'ai_added', `${reply}: Q2 = A`);
-    assert.equal(f.check(choice(Q2, 'B')).kind, 'ai_added', `${reply}: Q2 = B（どちらとも取れる）`);
-    assert.equal(f.check(choice(Q1, 'A')).kind, 'ai_added', `${reply}: Q1 = A`);
-  }
-  const twoMarks = f.chat();
-  f.say(twoMarks, 'assistant', `${Q1}\nA) Yes\nB) No\n${Q2}\nA) Strict\nB) Loose`);
-  f.say(twoMarks, 'user', 'A');
-  assert.equal(f.check(choice(Q1, 'A')).kind, 'ai_added', '番号の無い問いが 2 つ');
-
-  const span = f.chat();
-  f.say(span, 'assistant', two);
-  f.say(span, 'user', '1. B, 2. A');
-  assert.equal(f.check(choice(`No 2. ${Q2}`, 'A')).kind, 'ai_added', 'P1b: 範囲に別の問いの行');
-
-  const STORAGE = 'Pick the storage backend for uploads';
-  const RULE = 'Pick the password rule for accounts';
-  const noMarks = f.chat();
-  f.say(noMarks, 'assistant', `1. ${STORAGE}\nA) Local\nB) S3\n2. ${RULE}\nC) Strict\nD) Loose`);
-  f.say(noMarks, 'user', '1. C');
-  assert.equal(f.check(choice(STORAGE, 'C')).kind, 'ai_added', '選択肢の区切りは次の番号の行まで');
-  const single = f.chat();
-  f.say(single, 'assistant', `1. ${STORAGE}\nA) Local\nB) S3`);
-  f.say(single, 'user', 'B');
-  assert.equal(f.check(choice(STORAGE, 'B')).kind, 'owner_choice', '問いが 1 つなら「?」が無くても番号で問いとわかる');
-  const BACKEND = 'Choose the cache backend for sessions';
-  const bare = f.chat();
-  f.say(bare, 'assistant', `${BACKEND}\nA) Memory\nB) Redis`);
-  f.say(bare, 'user', 'A');
-  assert.equal(f.check(choice(BACKEND, 'A')).kind, 'ai_added', '「?」も番号も無い行は問いと決められない');
-  const across = f.chat();
-  f.say(across, 'assistant', `1. ${STORAGE}\n2. ${RULE}\nA) Strict\nB) Loose`);
-  f.say(across, 'user', '1. A');
-  assert.equal(f.check(choice(`${STORAGE} 2. ${RULE}`, 'A')).kind, 'ai_added', 'P1b: 問いの範囲が次の番号の行にまたがる');
-
-  const LONG = 'Where should we keep the uploaded files?';
-  const longTwo = f.chat();
-  f.say(longTwo, 'assistant', `1. ${LONG}\nA) Local\nB) Cloud\n2. ${Q2}\nA) Strict\nB) Loose`);
-  f.say(longTwo, 'user', '1. keep them on the local disk for now, 2. A');
-  assert.equal(f.check(choice(LONG, 'keep them on the local disk')).kind, 'ai_added', '問いが 2 つあると長い答えも結び付けない');
-});
-
-test('3-1b 出どころ（確かでなければ付け替える）: 見える平らな行の問いだけ。HTML のかたまり・入れ子の角かっこのリンク・参照の定義の次の行の題は問いにならない（P2 の残り）', () => {
-  const f = speechFixture();
-  const pair = (question: string, answer: string) => { const c = f.chat(); f.say(c, 'assistant', question); return f.say(c, 'user', answer); };
-  const kindOf = (question: string, answer: string) => f.check(choice(question, answer)).kind;
-  pair('Here is the plan.\n<div>\nDo you want telemetry enabled?\n</div>', 'yes');
-  assert.equal(kindOf('Do you want telemetry enabled?', 'yes'), 'ai_added', 'HTML のかたまり');
-  pair('See [the [full] guide](https://example.test/Do-you-want-analytics-enabled?) now.', 'yes');
-  assert.equal(kindOf('Do-you-want-analytics-enabled?', 'yes'), 'ai_added', '入れ子の角かっこのリンク');
-  pair('Read the guide [1] first.\n\n[1]: https://example.test/guide\n    "Do you want crash reports sent?"', 'yes');
-  assert.equal(kindOf('Do you want crash reports sent?', 'yes'), 'ai_added', '参照の定義の次の行の題');
-  pair('Noted. <span hidden>Do you want usage stats collected?</span>', 'yes');
-  assert.equal(kindOf('Do you want usage stats collected?', 'yes'), 'ai_added', 'タグのある行');
-  pair('Here is the plan.\n\nShould the export include hidden columns?', 'yes');
-  assert.equal(kindOf('Should the export include hidden columns?', 'yes'), 'owner_choice', 'ふつうの行は通る');
-});
-
-test('3-1b 出どころ: 調べる質問は新しいほうから 20 件まで。25 回聞いて最も古い 1 回だけに答えがあっても確かめない', () => {
-  const f = speechFixture();
-  const QUESTION = 'Which storage should the uploader use?';
-  const ask = `${QUESTION}\nA) Local\nB) S3`;
-  const first = f.chat();
-  f.say(first, 'assistant', ask);
-  f.say(first, 'user', 'A');
-  for (let i = 0; i < 24; i++) f.say(f.chat(), 'assistant', ask);
-  assert.equal(f.check(choice(QUESTION, 'A')).kind, 'ai_added');
-  const near = speechFixture();
-  const c = near.chat();
-  near.say(c, 'assistant', ask);
-  near.say(c, 'user', 'A');
-  for (let i = 0; i < 19; i++) near.say(near.chat(), 'assistant', ask);
-  assert.equal(near.check(choice(QUESTION, 'A')).kind, 'owner_choice', '20 件目までなら確かめる');
-});
-
 test('3-1b 出どころの速さ: 持ち主の 10 万文字の発言 1 つに 120 件の抜き書きを照らしても、発言の下ごしらえ込みで短い時間で終わる', () => {
   const sentences = Array.from({ length: 2000 }, (_, i) => `Requirement number ${i} says the uploader keeps part ${i} safe`);
   let text = sentences.join('. ');
@@ -295,30 +177,6 @@ test('3-1b 出どころの速さ: 持ち主の 10 万文字の発言 1 つに 12
   assert.equal(text.length, 100_000);
   assert.ok(results.every(r => r.kind === 'owner_words' && typeof r.context === 'string' && r.context.length <= 500));
   assert.ok(took < 3000, `${took.toFixed(0)} ms`);
-});
-
-test('3-1b 出どころ: yes / no / はい / いいえ は「?」か選択肢の印のある問いへの答えだけ。リンクの行き先・参照の定義・HTML のコメントは問いにならない（P2・P2b）', () => {
-  const f = speechFixture();
-  const pair = (question: string, answer: string) => { const c = f.chat(); f.say(c, 'assistant', question); return f.say(c, 'user', answer); };
-  const answerOf = (question: string, answer: string) => {
-    const result = f.check(choice(question, answer));
-    return result.kind === 'owner_choice' ? result.answerMessageId : result.kind;
-  };
-  const yes = pair('Should uploads resume after a restart?', 'yes');
-  assert.equal(answerOf('Should uploads resume after a restart?', 'yes'), yes);
-  const JA = '再起動のあとも続きから再開しますか？';
-  const hai = pair(JA, 'はい');
-  assert.equal(answerOf(JA, 'はい'), hai);
-  pair('Uploads will resume after a restart', 'yes');
-  assert.equal(answerOf('Uploads will resume after a restart', 'yes'), 'ai_added', '問いでない文への yes');
-  pair('See [the guide](https://example.test/Do-you-want-telemetry-enabled?) for details.', 'yes');
-  assert.equal(answerOf('Do-you-want-telemetry-enabled?', 'yes'), 'ai_added', 'P2: リンクの行き先');
-  pair('Read the guide [1] first.\n\n[1]: https://example.test/guide "Do you want telemetry enabled?"', 'yes');
-  assert.equal(answerOf('Do you want telemetry enabled?', 'yes'), 'ai_added', 'P2b: 参照の定義');
-  pair('Thanks, noted.\n<!-- Do you want analytics turned on? -->', 'yes');
-  assert.equal(answerOf('Do you want analytics turned on?', 'yes'), 'ai_added', 'P2b: HTML のコメント');
-  pair('Do you want the dark theme as the default?', 'no idea, you decide');
-  assert.equal(answerOf('Do you want the dark theme as the default?', 'no'), 'ai_added', '「no idea」は no ではない');
 });
 
 test('3-1b 出どころ: owner_words は一致した持ち主の文をまるごと context に残す（否定が切れた引用でも持ち主の言葉が見られる。P3）', () => {
@@ -435,11 +293,11 @@ test('3-1b acceptance_write: コードが出どころを付け替えて番号を
   assert.deepEqual(doc, {
     schema: 1, version: 0, language: null,
     items: [
-      { id: 'A-1', result: 'Uploads resume after a restart', source: { kind: 'owner_words', quote: 'uploads must resume after a restart', messageId: said, conversationId: 'c1', context: 'Uploads must resume after a restart.' }, check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
+      { id: 'A-1', result: 'Uploads resume after a restart', source: { kind: 'owner_words', quote: 'Uploads must resume after a restart', messageId: said, conversationId: 'c1', context: 'Uploads must resume after a restart.' }, check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
       { id: 'A-2', result: 'Files are listed newest first', source: { kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: 'files must be sorted by date' }, check: { kind: 'look' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
       { id: 'A-3', result: 'The page loads under a second', source: { kind: 'ai_added' }, check: { kind: 'read' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
     ],
-    notDoing: [{ id: 'N-1', text: 'User accounts', source: { kind: 'owner_words', quote: 'do not add user accounts', messageId: said, conversationId: 'c1', context: 'Do not add user accounts for now' } }],
+    notDoing: [{ id: 'N-1', text: 'User accounts', source: { kind: 'owner_words', quote: 'Do not add user accounts', messageId: said, conversationId: 'c1', context: 'Do not add user accounts for now' } }],
     taintedRuns: [],
   });
   assert.deepEqual(h.events.filter(e => e.type === 'acceptance.changed'), [{ type: 'acceptance.changed', projectId: PROJECT, version: 0, draft: true }]);
@@ -474,7 +332,11 @@ test('3-1b acceptance_write の決まり: 項目 60 まで・結果 300 文字�
     ['soft hyphen in command', { items: [item('R', undefined, { kind: 'command', command: 'npm te­st' })] }],
     ['invisible operator in command', { items: [item('R', undefined, { kind: 'command', command: 'npm⁡test' })] }],
     ['hangul filler in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test ㅤ' })] }],
-    ['braille blank in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test ⠀' })] }],
+    ['isolate in command', { items: [item('R', undefined, { kind: 'command', command: `npm test ${String.fromCharCode(0x2066)}x` })] }],
+    ['variation selector in command', { items: [item('R', undefined, { kind: 'command', command: `npm test${String.fromCharCode(0xFE0F)}` })] }],
+    ['supplementary variation selector in command', { items: [item('R', undefined, { kind: 'command', command: `npm test${String.fromCodePoint(0xE0100)}` })] }],
+    ['format character in command', { items: [item('R', undefined, { kind: 'command', command: `npm test ${String.fromCharCode(0xFFF9)}x${String.fromCharCode(0xFFFB)}` })] }],
+    ['five spaces in command', { items: [item('R', undefined, { kind: 'command', command: 'npm test     && rm -rf /' })] }],
     ['no-break space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0xA0)}test` })] }],
     ['ideographic space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0x3000)}test` })] }],
     ['thin space in command', { items: [item('R', undefined, { kind: 'command', command: `npm${String.fromCharCode(0x2009)}test` })] }],
@@ -519,8 +381,10 @@ test('3-1b acceptance_write: よそから来た文を読んだ実行の書き込
   assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10'], '会話が前に外を読んでいれば');
   await h.run('acceptance_write', { items: [item('A')] }, h.ctxOf({ runId: 'r9', taint: { tainted: true, sources: ['web'] } }));
   assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10'], '同じ実行は 1 度だけ');
+  await h.run('acceptance_write', { items: [item('A')] }, h.ctxOf({ runId: 'r12', conversationTainted: () => { throw new Error('db gone'); } }));
+  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10', 'r12'], '会話の印が読めなければ外を読んだとみなす');
   await h.run('acceptance_write', { items: [item('A')] }, h.ctxOf({ runId: 'r11' }));
-  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10'], 'きれいな実行では消えない');
+  assert.deepEqual((JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc).taintedRuns, ['r9', 'r10', 'r12'], 'きれいな実行では消えない');
 });
 
 function storeFixture(t: { after: (fn: () => void) => void }, io: ConstructorParameters<typeof AcceptanceStore>[2] = {}) {

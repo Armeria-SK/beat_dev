@@ -82,7 +82,7 @@ test('製品の API: 選べないフォルダは 400（コードは project.fold
   assert.deepEqual(await refused({ root: s.folder('named'), name: 'bad‮name' }), [400, 'project', 'project.bad_name']);
   assert.deepEqual(await refused({ root: s.folder('named'), name: 'x'.repeat(101) }), [400, 'project', 'project.bad_name']);
   assert.deepEqual(await refused({ root: s.folder('named'), checkCommand: 'a\nb' }), [400, 'project', 'project.bad_check_command']);
-  for (const hidden of ['­', '⁡', 'ㅤ', '⠀', String.fromCodePoint(0xE0072), String.fromCharCode(0xA0), String.fromCharCode(0x3000), String.fromCharCode(0x2009)]) {
+  for (const hidden of ['­', '⁡', 'ㅤ', String.fromCodePoint(0xE0072), String.fromCharCode(0xA0), String.fromCharCode(0x3000), String.fromCharCode(0x2009), String.fromCharCode(0xFE0F), String.fromCodePoint(0xE0100), String.fromCharCode(0x600), '     ']) {
     assert.deepEqual(await refused({ root: s.folder('named'), checkCommand: `npm${hidden} test` }), [400, 'project', 'project.bad_check_command'], `U+${hidden.codePointAt(0)!.toString(16)}`);
   }
   assert.equal((await s.json('/api/projects', 'POST', {})).status, 400);

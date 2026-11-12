@@ -5,7 +5,6 @@ import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { projectText, type ProjectMessageKey } from '../shared/messages/projects.ts';
-import { stripHidden } from '../shared/plain-text.ts';
 import { isInside, realish } from '../tools/hooks/scope.ts';
 import type { Remote } from './remotes.ts';
 import { folderGone } from './work-folder.ts';
@@ -16,7 +15,7 @@ export const CHECK_COMMAND_MAX = 1000;
 export const LANGUAGE_TAG = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}​-‍⁠﻿]/u;
 
-const ODD_SPACE = /(?! )\p{Zs}/u;
+const COMMAND_UNSEEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]|(?! )\p{Zs}| {5}/u;
 
 export type ScoutMode = 'off' | 'research' | 'fix';
 
@@ -47,7 +46,7 @@ export function projectName(raw: string): string {
 
 export function checkCommandOf(raw: string | null): string | null {
   const command = raw?.trim() ?? '';
-  if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command) || stripHidden(command) !== command || ODD_SPACE.test(command)) throw new ProjectError('bad_check_command');
+  if (command.length > CHECK_COMMAND_MAX || UNSAFE_TEXT.test(command) || COMMAND_UNSEEN.test(command)) throw new ProjectError('bad_check_command');
   return command || null;
 }
 

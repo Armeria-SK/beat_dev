@@ -36,7 +36,6 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
     ],
     reason: '過去の移し替えの SQL の中のコメント（履歴なので書き換えない）',
   },
-  'src/projects/acceptance.ts': { strings: ['/^(?:[A-H]|[1-9]|yes|no|Yes|No|YES|NO|はい|いいえ)$/u'], reason: 'SHORT_ANSWER: 持ち主の短い答え（はい / いいえ）を選択肢の答えとして照らす（受け入れの一覧の出どころ）' },
   'web/src/weekdays.ts': { strings: ['月', '火', '水', '木', '金', '土', '日'], reason: 'API に送る曜日の値（src/tasks/schedule.ts の DAY_MAP と対）' },
   'src/tools/builtin/table-core.ts': { strings: ['\u{FF1D}', '\u{FF0B}', '\u{FF0D}', '\u{FF20}'], reason: 'FORMULA_LEADS: 全角の ＝ ＋ － ＠ で始まるセルも式として無害化する（CSV の式の注入。安全）' },
   'src/engine/chat.ts': { strings: ['\u{3000}'], reason: 'toFullWidth: 子の答えの中の区切りを全角にして、区切りの偽装を防ぐ（空白は全角の空白に。安全）' },

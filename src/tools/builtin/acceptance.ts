@@ -39,7 +39,7 @@ function checkOf(entry: { check: string; command?: string | undefined }): Accept
 
 export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
   name: 'acceptance_write',
-  description: 'Replace the draft acceptance list of this product, in the owner-facing documents language: one checkable result per item. source: owner_words with quote (the owner\'s exact words; never translate or paraphrase), owner_choice with question and answer (each quoted exactly), or ai_added. check: command with a command that succeeds only when the item holds, whenever one exists; else look or read. notDoing: what the owner ruled out. Quotes are checked against the conversation.',
+  description: 'Replace the draft acceptance list of this product, in the owner-facing documents language: one checkable result per item. source: owner_words with quote (the owner\'s exact words; never translate or paraphrase), owner_choice with question and answer (each quoted exactly), or ai_added. check: command with a command that succeeds only when the item holds, whenever one exists; else look or read. notDoing: what the owner ruled out. Quotes are checked against the conversation. owner_choice items are recorded as AI added until choices are recorded directly.',
   input: INPUT,
   effect: 'meta',
   allowedIn: ['chat'],

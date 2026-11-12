@@ -65,7 +65,7 @@ export interface SpeechRow { id: number; conversation_id: string; role: 'user' |
 export function ownerSpeech(db: DatabaseSync, projectId: string): SpeechRow[] {
   return db.prepare(`SELECT m.id, m.conversation_id, m.role, m.text, COALESCE(json_extract(m.parts, '$.generated'), 0) IS 1 AS generated
     FROM conversations c JOIN messages m ON m.conversation_id = c.id
-    WHERE c.project_id = ? AND c.kind = 'chat' AND c.parent_run_id IS NULL AND m.role IN ('user', 'assistant')
+    WHERE c.project_id = ? AND c.kind = 'chat' AND c.parent_run_id IS NULL AND m.role = 'user'
     ORDER BY m.id`).all(projectId) as unknown as SpeechRow[];
 }
 
