@@ -68,11 +68,25 @@ export type BuildAction = { kind: 'build'; label: 'ui.plan.build' | 'ui.plan.sta
 
 const ACTIVE: ReadonlySet<Task['status']> = new Set(['ready', 'running', 'waiting']);
 
-export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: Acceptance | null; task: Task | null; isGit: boolean }): BuildAction | null {
+export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: Acceptance | null; task: Task | null; isGit: boolean; pending?: boolean }): BuildAction | null {
   if (!i.acc) return null;
-  if (i.acc.frozen) return i.task && ACTIVE.has(i.task.status) ? { kind: 'building' } : null;
+  const active = i.task !== null && ACTIVE.has(i.task.status);
+  if (i.acc.frozen) return active ? { kind: 'building' } : null;
+  if (active) return { kind: 'building' };
   if (i.mode === 'edit' || (i.state !== 'ready' && i.state !== 'writing')) return null;
-  return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' };
+  return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' || i.pending === true };
+}
+
+export const beforeBuildShown = (i: { mode: 'read' | 'edit'; acc: Acceptance | null; coverage: Coverage | null; action: BuildAction | null }): boolean =>
+  i.mode === 'read' && i.acc !== null && i.coverage !== null && i.action?.kind === 'build';
+
+export type RevealStep = 'none' | 'wait' | 'scroll' | 'drop';
+
+export function revealStep(i: { reveal: boolean; accLoaded: boolean; accFailed: boolean; state: PlanState; shown: boolean }): RevealStep {
+  if (!i.reveal) return 'none';
+  if (i.shown) return 'scroll';
+  if (i.accFailed) return 'drop';
+  return !i.accLoaded || i.state === 'loading' ? 'wait' : 'drop';
 }
 
 export const buildRequest = (doc: PlanDoc | null, acc: Acceptance): { planHash: string; acceptanceHash: string | null } | null =>
@@ -81,12 +95,13 @@ export const buildRequest = (doc: PlanDoc | null, acc: Acceptance): { planHash: 
 export const changedAfterBuild = (doc: PlanDoc | null, acc: Acceptance | null): boolean =>
   Boolean(acc?.frozen && doc?.hash && acc.frozen.plan_hash !== doc.hash);
 
-export type BuildFailure = { kind: 'changed' } | { kind: 'running' } | { kind: 'failed'; detail: string | null };
+export type BuildFailure = { kind: 'changed' } | { kind: 'running' } | { kind: 'frozen'; detail: string | null } | { kind: 'failed'; detail: string | null };
 
 export function buildFailure(error: unknown): BuildFailure {
   const code = (error as { body?: { code?: unknown } } | null)?.body?.code;
   if (code === 'build.changed') return { kind: 'changed' };
   if (code === 'build.running') return { kind: 'running' };
+  if (code === 'build.frozen') return { kind: 'frozen', detail: apiDetail(error) };
   return { kind: 'failed', detail: apiDetail(error) };
 }
 
@@ -124,3 +139,15 @@ export function mergeUnreferenced(loaded: readonly UnreferencedMessage[], page: 
   const seen = new Set(loaded.map(m => m.message_id));
   return [...loaded, ...page.filter(m => !seen.has(m.message_id))];
 }
+
+export const noticeAfterReload = (notice: BuildFailure | null, acc: Acceptance): BuildFailure | null =>
+  (notice && acc.frozen && notice.kind !== 'frozen' ? null : notice);
+
+export interface Paging { list: UnreferencedMessage[]; generation: number; exhausted: boolean }
+
+export const startPaging = (list: readonly UnreferencedMessage[], generation: number): Paging => ({ list: [...list], generation, exhausted: false });
+
+export const pagingCursor = (p: Paging, total: number): number | null => (p.exhausted ? null : unreferencedCursor(p.list, total));
+
+export const addPage = (p: Paging, generation: number, page: readonly UnreferencedMessage[]): Paging =>
+  (generation !== p.generation ? p : { ...p, list: mergeUnreferenced(p.list, page), exhausted: page.length === 0 });

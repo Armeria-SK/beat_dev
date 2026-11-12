@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
-import { api, type Acceptance, type AcceptanceItem, type Coverage, type NotDoingItem, type PlanDoc, type Task, type UnreferencedMessage } from '../../api.ts';
+import { api, type Acceptance, type AcceptanceItem, type Coverage, type NotDoingItem, type PlanDoc, type Task } from '../../api.ts';
 import { formatRelative } from '../../i18n/format.ts';
 import { useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import {
-  acceptanceMeta, buildAction, buildFailure, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups, itemDetails, mergeUnreferenced, outsideContent, showAcceptance, shownItems, shownNotDoing,
-  sourceLabel, stateLabel, unreferencedCursor, type BuildFailure,
+  acceptanceMeta, addPage, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups, itemDetails, noticeAfterReload, outsideContent, pagingCursor,
+  revealStep, showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, type BuildFailure, type Paging,
 } from '../acceptance.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
@@ -104,19 +104,31 @@ function Unreferenced({ productId, coverage }: { productId: string; coverage: Co
   const t = useT();
   const now = useNow(60_000);
   const [open, setOpen] = useState(false);
-  const [list, setList] = useState<UnreferencedMessage[]>(coverage.unreferenced);
+  const generation = useRef(0);
+  const [paging, setPaging] = useState<Paging>(() => startPaging(coverage.unreferenced, 0));
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  useEffect(() => { setList(coverage.unreferenced); setFailed(false); }, [coverage]);
-  const cursor = unreferencedCursor(list, coverage.unreferenced_total);
+  useEffect(() => {
+    generation.current += 1;
+    setPaging(startPaging(coverage.unreferenced, generation.current));
+    setFailed(false);
+    setBusy(false);
+  }, [coverage]);
+  const list = paging.list;
+  const cursor = pagingCursor(paging, coverage.unreferenced_total);
   const more = async () => {
     if (cursor === null || busy) return;
+    const asked = generation.current;
     setBusy(true);
     try {
       const r = await api.acceptance(productId, cursor);
-      setList(current => mergeUnreferenced(current, r.coverage?.unreferenced ?? []));
-      setFailed(false);
-    } catch { setFailed(true); } finally { setBusy(false); }
+      setPaging(current => addPage(current, asked, r.coverage?.unreferenced ?? []));
+      if (asked === generation.current) setFailed(false);
+    } catch {
+      if (asked === generation.current) setFailed(true);
+    } finally {
+      if (asked === generation.current) setBusy(false);
+    }
   };
   return (
     <div className="ui-cov__group">
@@ -153,7 +165,15 @@ function BeforeBuild({ productId, acc, coverage, sectionRef }: { productId: stri
       )}
       {g.words.length > 0 && (
         <Group label={t('ui.acc.source.words')}>
-          {g.words.map(w => <li key={w.item.id} className="bt-row ui-cov__row"><span className="ui-cov__said">{w.quote}</span><span className="ui-cov__arrow" aria-hidden="true">→</span><ItemRef item={w.item} /></li>)}
+          {g.words.map(w => {
+            const link = conversationLink(w.item.source);
+            return (
+              <li key={w.item.id} className="bt-row ui-cov__row">
+                <span className="ui-cov__said">{w.quote}</span><span className="ui-cov__arrow" aria-hidden="true">→</span><ItemRef item={w.item} />
+                {link && <a className="bt-meta" href={link}>{t('ui.acc.showInConversation')}</a>}
+              </li>
+            );
+          })}
         </Group>
       )}
       {g.answers.length > 0 && (
@@ -188,6 +208,8 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   const [building, setBuilding] = useState(false);
   const [buildNotice, setBuildNotice] = useState<BuildFailure | null>(null);
   const coverageRef = useRef<HTMLElement>(null);
+  const runningRef = useRef<HTMLSpanElement>(null);
+  const focusRunning = useRef(false);
 
   const loadAcceptance = useCallback(async () => {
     const ticket = accLoads.current.begin();
@@ -197,6 +219,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       setAcc(r.acceptance);
       setCoverage(r.coverage ?? null);
       setAccFailed(false);
+      setBuildNotice(current => noticeAfterReload(current, r.acceptance));
     } catch {
       if (accLoads.current.isCurrent(ticket)) setAccFailed(true);
     }
@@ -236,14 +259,22 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
 
   const state = planState(doc, failure !== null);
   const writing = state === 'writing';
-  const action = buildAction({ state, mode, acc, task, isGit });
+  const action = buildAction({ state, mode, acc, task, isGit, pending: building });
+  const shown = beforeBuildShown({ mode, acc, coverage, action });
+  const step = revealStep({ reveal, accLoaded: acc !== null, accFailed, state, shown });
 
   useEffect(() => {
-    if (!reveal || !acc) return;
+    if (step === 'none' || step === 'wait') return;
     const section = coverageRef.current;
-    if (section) { section.scrollIntoView({ block: 'start' }); section.focus({ preventScroll: true }); }
+    if (step === 'scroll' && section) { section.scrollIntoView({ block: 'start' }); section.focus({ preventScroll: true }); }
     onRevealed?.();
-  }, [reveal, acc, coverage, onRevealed]);
+  }, [step, onRevealed]);
+
+  useEffect(() => {
+    if (action?.kind !== 'building' || !focusRunning.current) return;
+    focusRunning.current = false;
+    runningRef.current?.focus();
+  }, [action?.kind]);
 
   const build = async () => {
     const hashes = acc ? buildRequest(doc, acc) : null;
@@ -252,15 +283,15 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setBuildNotice(null);
     try {
       const r = await api.build(productId, hashes);
+      focusRunning.current = true;
       setTask(r.task);
     } catch (error) {
       const outcome = buildFailure(error);
       if (outcome.kind !== 'running') setBuildNotice(outcome);
       if (outcome.kind === 'changed') void load();
-    } finally {
-      setBuilding(false);
-      void loadAcceptance();
     }
+    await loadAcceptance();
+    setBuilding(false);
   };
 
   const save = async () => {
@@ -305,11 +336,13 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
           <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} disabled={!canEdit(state) && mode !== 'edit'} onClick={edit}>{t('ui.plan.edit')}</button>
         </span>
         {mode === 'edit' && <Button variant="primary" small disabled={!canSave(state, dirty, saving)} onClick={() => void save()}>{t('ui.plan.save')}</Button>}
-        {action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled || building} onClick={() => void build()}>{t(action.label)}</Button>}
-        {action?.kind === 'building' && <Pill tone="running">{t('ui.plan.building')}</Pill>}
+        {action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
+        {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill tone="running">{t('ui.plan.building')}</Pill></span>}
       </div>
+      {shown && acc && coverage && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
       {changedAfterBuild(doc, acc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
-      {buildNotice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} />}
+      {buildNotice?.kind === 'changed' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} /></div>}
+      {buildNotice?.kind === 'frozen' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} /></div>}
       {buildNotice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.buildFailed')} text={buildNotice.detail ?? undefined} />}
       {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}</p>}
       {notice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} also={{ label: t('ui.plan.discard'), run: discard }} />}
@@ -335,7 +368,6 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       {mode === 'read' && (accFailed
         ? <Notice tone="fail" title={t('ui.acc.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void loadAcceptance() }} />
         : acc && showAcceptance(acc) && <AcceptanceList acc={acc} />)}
-      {mode === 'read' && acc && coverage && action?.kind === 'build' && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
     </div>
   );
 }

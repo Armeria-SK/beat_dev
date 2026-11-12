@@ -1390,6 +1390,7 @@ export const en = {
   'ui.plan.changedAfterBuild': 'changed after the build started',
   'ui.plan.buildChanged': 'The plan or the items changed. Review them again',
   'ui.plan.buildFailed': 'Could not start the build',
+  'ui.plan.buildFrozen': 'The acceptance list is already fixed',
   'ui.plan.written': 'Plan written',
   'ui.plan.openPane': 'open the Plan pane',
   'ui.cov.title': 'Before you build',

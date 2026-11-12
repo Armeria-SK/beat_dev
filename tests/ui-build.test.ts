@@ -4,7 +4,7 @@ import { ApiError, type Acceptance, type AcceptanceItem, type Coverage, type Pla
 import { en } from '../web/src/i18n/en.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  buildAction, buildFailure, buildRequest, changedAfterBuild, coverageCounts, coverageGroups, mergeUnreferenced, unreferencedCursor,
+  addPage, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, coverageCounts, coverageGroups, mergeUnreferenced, noticeAfterReload, pagingCursor, revealStep, startPaging, unreferencedCursor,
 } from '../web/src/ui/acceptance.ts';
 
 const item = (id: string, over: Partial<AcceptanceItem> = {}): AcceptanceItem => ({
@@ -109,4 +109,55 @@ test('ui/build: 仮の "Proceed with this plan" は表から消えている', ()
   const table = en as Record<string, unknown>;
   for (const key of ['ui.plan.proceed', 'ui.plan.proceedHint', 'ui.plan.proceedRequest']) assert.equal(key in table, false, key);
   assert.equal(Object.values(table).some(v => typeof v === 'string' && /Proceed with this plan|go ahead with this plan/u.test(v)), false);
+});
+
+test('ui/build: /build で欄を開いたとき、計画書を読み込んでいるあいだは送り先の節を待つ。節が出たらそこへ送り、出ないと決まってから捨てる', () => {
+  const base = { reveal: true, accLoaded: true, accFailed: false, state: 'loading' as const, shown: false };
+  assert.equal(revealStep(base), 'wait', '一覧が先に届いても、計画書がまだなら捨てない');
+  assert.equal(revealStep({ ...base, accLoaded: false, state: 'ready' }), 'wait');
+  assert.equal(revealStep({ ...base, state: 'ready', shown: true }), 'scroll');
+  assert.equal(revealStep({ ...base, state: 'ready', shown: false }), 'drop', '固定済み・Edit などで節が出ないと決まった');
+  assert.equal(revealStep({ ...base, state: 'empty' }), 'drop');
+  assert.equal(revealStep({ ...base, accLoaded: false, accFailed: true, state: 'ready' }), 'drop');
+  assert.equal(revealStep({ ...base, reveal: false, state: 'ready', shown: true }), 'none');
+});
+
+test('ui/build: "Before you build" は読むとき・Build を出しているとき・coverage があるときだけ', () => {
+  const action = { kind: 'build', label: 'ui.plan.build', disabled: false } as const;
+  assert.equal(beforeBuildShown({ mode: 'read', acc: acc(), coverage: cov(), action }), true);
+  assert.equal(beforeBuildShown({ mode: 'edit', acc: acc(), coverage: cov(), action }), false);
+  assert.equal(beforeBuildShown({ mode: 'read', acc: acc(), coverage: null, action }), false);
+  assert.equal(beforeBuildShown({ mode: 'read', acc: acc(), coverage: cov(), action: { kind: 'building' } }), false);
+  assert.equal(beforeBuildShown({ mode: 'read', acc: null, coverage: cov(), action }), false);
+});
+
+test('ui/build: 押している最中は押せない。Build が通った直後（一覧の読み直しの前）も、返ってきたタスクで Running を出し、押せるボタンに戻らない', () => {
+  assert.deepEqual(buildAction({ state: 'ready', mode: 'read', acc: acc(), task: null, isGit: true, pending: true }), { kind: 'build', label: 'ui.plan.build', disabled: true });
+  assert.deepEqual(buildAction({ state: 'ready', mode: 'read', acc: acc(), task: task('ready'), isGit: true }), { kind: 'building' }, '一覧はまだ下書きでも、動いている Build のタスクがあれば Running');
+  assert.deepEqual(buildAction({ state: 'ready', mode: 'read', acc: acc(), task: task('done'), isGit: true }), { kind: 'build', label: 'ui.plan.build', disabled: false });
+});
+
+test('ui/build: 409 build.frozen（もう固定済み）はサーバーの文で知らせ、読み直しても残す。changed・failed の知らせは、読み直して固定が見えたら消す', () => {
+  const frozenErr = new ApiError(409, { code: 'build.frozen', message: 'The acceptance list is already fixed (version 1). Change it before building again' });
+  assert.deepEqual(buildFailure(frozenErr), { kind: 'frozen', detail: frozenErr.message });
+  const built = acc({ draft: false, version: 1, frozen: frozen() });
+  assert.equal(noticeAfterReload({ kind: 'changed' }, built), null);
+  assert.equal(noticeAfterReload({ kind: 'failed', detail: 'x' }, built), null);
+  assert.deepEqual(noticeAfterReload({ kind: 'frozen', detail: 'y' }, built), { kind: 'frozen', detail: 'y' });
+  assert.deepEqual(noticeAfterReload({ kind: 'changed' }, acc()), { kind: 'changed' }, '固定の前は残す');
+  assert.equal(noticeAfterReload(null, built), null);
+});
+
+test('ui/build: 引かれていない発言の続き: 読み直しのあとに届いた古い続きは捨てる。空のページが返ったら Show more を出さない。50 件を超えるページ（同じ時刻をまとめる）も受ける', () => {
+  const first = startPaging([unref(9, 900), unref(8, 800)], 1);
+  assert.equal(pagingCursor(first, 200), 800);
+  const big = Array.from({ length: 53 }, (_, i) => unref(700 - i, 700));
+  const next = addPage(first, 1, big);
+  assert.equal(next.list.length, 55);
+  assert.equal(pagingCursor(next, 200), 700);
+  const reloaded = startPaging([unref(9, 900)], 2);
+  assert.equal(addPage(reloaded, 1, big), reloaded, '前の世代の続きは無視');
+  const empty = addPage(first, 1, []);
+  assert.equal(empty.exhausted, true);
+  assert.equal(pagingCursor(empty, 200), null, '空が返ったらもう続きは無い');
 });
