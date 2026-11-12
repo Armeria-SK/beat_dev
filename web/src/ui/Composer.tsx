@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { PERMISSION_MODES, type PermissionMode } from '../../../src/shared/permission-mode.ts';
 import { api, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
 import { toast } from '../feedback.ts';
@@ -8,7 +8,7 @@ import {
   queuedLine, queueRow, slashAvailable, slashItems, toastLift,
   type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
-import { menuStep } from './menu.ts';
+import { menuLeft, menuStep } from './menu.ts';
 import { Icon } from './parts.tsx';
 
 const MAX_HEIGHT = 200;
@@ -35,7 +35,7 @@ export interface ComposerProps {
 
 type Pop = 'model' | 'depth' | null;
 
-function PopMenu({ label, onClose, onLeave, children }: { label: string; onClose: () => void; onLeave: () => void; children: ReactNode }) {
+function PopMenu({ label, opener, onClose, onLeave, children }: { label: string; opener: RefObject<HTMLElement | null>; onClose: () => void; onLeave: () => void; children: ReactNode }) {
   const list = useRef<HTMLUListElement>(null);
   useEffect(() => {
     const items = list.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not(:disabled)') ?? [];
@@ -43,7 +43,7 @@ function PopMenu({ label, onClose, onLeave, children }: { label: string; onClose
   }, []);
   return (
     <ul ref={list} className="bt-menu ui-pop" role="menu" aria-label={label}
-      onBlur={e => { if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget)) onLeave(); }}
+      onBlur={e => { if (menuLeft(e.relatedTarget, e.currentTarget.contains(e.relatedTarget), opener.current)) onLeave(); }}
       onKeyDown={e => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); return; }
         const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not(:disabled)')];
@@ -196,7 +196,7 @@ export function Composer(props: ComposerProps) {
         </ul>
       )}
       {pop === 'model' && (
-        <PopMenu label={t('ui.composer.model')} onClose={closePop} onLeave={() => setPop(null)}>
+        <PopMenu label={t('ui.composer.model')} opener={modelButton} onClose={closePop} onLeave={() => setPop(null)}>
           {modelOptions(models ?? [], modelId).map(option => (
             <PopItem key={option.id ?? ''} name={option.name ?? t('ui.composer.auto')} hint={option.id === null ? t('ui.composer.autoHint') : option.disabled ? t('ui.composer.unavailable') : option.hint}
               checked={option.checked} disabled={option.disabled} onPick={() => { closePop(); if (option.id !== modelId) props.onChoose({ modelId: option.id }); }} />
@@ -204,7 +204,7 @@ export function Composer(props: ComposerProps) {
         </PopMenu>
       )}
       {pop === 'depth' && (
-        <PopMenu label={t('ui.composer.depth')} onClose={closePop} onLeave={() => setPop(null)}>
+        <PopMenu label={t('ui.composer.depth')} opener={depthButton} onClose={closePop} onLeave={() => setPop(null)}>
           {[null, ...depths].map(value => (
             <PopItem key={value ?? ''} name={value ?? t('ui.composer.depthDefault')} checked={effort === value} onPick={() => { closePop(); if (value !== effort) props.onChoose({ effort: value }); }} />
           ))}

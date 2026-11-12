@@ -182,16 +182,24 @@ function TimeForm({ task, onClose, onSaved }: { task: Task; onClose: () => void;
   );
 }
 
-function DeleteConfirm({ note, busy, onDelete, onKeep }: { note: string; busy: boolean; onDelete: () => void; onKeep: () => void }) {
+function DeleteConfirm({ note, busy, onDelete, onKeep }: { note: string; busy: boolean; onDelete: () => void; onKeep: (refocus: boolean) => void }) {
   const t = useT();
+  const box = useRef<HTMLDivElement>(null);
+  const keep = useRef(onKeep);
+  keep.current = onKeep;
+  useEffect(() => {
+    const away = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) keep.current(false); };
+    document.addEventListener('pointerdown', away, true);
+    return () => document.removeEventListener('pointerdown', away, true);
+  }, []);
   return (
-    <div className="ui-sched__confirm" role="group" aria-label={t('ui.schedule.deleteWarn')}
-      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onKeep(); } }}>
+    <div ref={box} className="ui-sched__confirm" role="group" aria-label={t('ui.schedule.deleteWarn')}
+      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onKeep(true); } }}>
       <span className="bt-meta ui-danger">{t('ui.schedule.deleteWarn')}</span>
       <span className="bt-meta ui-sched__note">{note}</span>
       <span className="ui-sched__buttons">
         <Button variant="danger" small disabled={busy} onClick={onDelete}>{t('ui.schedule.delete')}</Button>
-        <Button variant="ghost" small autoFocus onClick={onKeep}>{t('ui.schedule.keep')}</Button>
+        <Button variant="ghost" small autoFocus onClick={() => onKeep(true)}>{t('ui.schedule.keep')}</Button>
       </span>
     </div>
   );
@@ -201,7 +209,7 @@ interface RowActions {
   busy: boolean;
   confirming: boolean;
   editing: boolean;
-  onConfirm: (on: boolean) => void;
+  onConfirm: (on: boolean, refocus?: boolean) => void;
   onEdit: (on: boolean) => void;
   onDelete: () => void;
   run: (action: () => Promise<unknown>, done?: { title: string; icon?: 'check' | 'undo' }) => void;
@@ -227,7 +235,7 @@ function RepeatingItem({ row, now, actions }: { row: RepeatingRow; now: number; 
         {blocked && !actions.confirming && <span className="bt-row__sub bt-meta">{t(BLOCK_KEY[blocked])}</span>}
       </div>
       {actions.confirming ? (
-        <DeleteConfirm note={t('ui.schedule.deleteNote.repeating')} busy={actions.busy} onDelete={actions.onDelete} onKeep={() => actions.onConfirm(false)} />
+        <DeleteConfirm note={t('ui.schedule.deleteNote.repeating')} busy={actions.busy} onDelete={actions.onDelete} onKeep={refocus => actions.onConfirm(false, refocus)} />
       ) : (
         <div className="bt-row__end ui-sched__buttons">
           {last?.status === 'running' && <Pill tone="running">{t('ui.kanban.running')}</Pill>}
@@ -259,7 +267,7 @@ function TimedItem({ row, now, actions }: { row: TimedRow; now: number; actions:
       {actions.editing ? (
         <TimeForm task={task} onClose={() => actions.onEdit(false)} onSaved={actions.reload} />
       ) : actions.confirming ? (
-        <DeleteConfirm note={t('ui.schedule.deleteNote.timed')} busy={actions.busy} onDelete={actions.onDelete} onKeep={() => actions.onConfirm(false)} />
+        <DeleteConfirm note={t('ui.schedule.deleteNote.timed')} busy={actions.busy} onDelete={actions.onDelete} onKeep={refocus => actions.onConfirm(false, refocus)} />
       ) : (
         <div className="bt-row__end ui-sched__buttons">
           <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.taskAction(task.id, 'run-now'), { title: t('ui.task.toast.started') })}>{t('ui.task.runNow')}</Button>
@@ -389,7 +397,7 @@ export function Schedule({ revision }: ScheduleProps) {
     busy: busy.has(task.id),
     confirming: confirming === task.id,
     editing: editing === task.id,
-    onConfirm: on => { if (!on) refocus.current = `[data-delete="${CSS.escape(task.id)}"]`; setEditing(null); setConfirming(on ? task.id : null); },
+    onConfirm: (on, back = true) => { if (!on && back) refocus.current = `[data-delete="${CSS.escape(task.id)}"]`; setEditing(null); setConfirming(on ? task.id : null); },
     onEdit: on => { if (!on) refocus.current = `[data-edit="${CSS.escape(task.id)}"]`; setConfirming(null); setEditing(on ? task.id : null); },
     onDelete: () => void withBusy(task.id, async () => {
       try {

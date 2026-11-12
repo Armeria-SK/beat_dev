@@ -144,7 +144,7 @@ export function queueRow(pending: readonly PendingMessage[]): { shown: PendingMe
   return shown ? { shown, more: pending.length - 1 } : null;
 }
 
-export const replaceTargets =(pending: readonly PendingMessage[]): PendingMessage[] => pending.filter(p => !p.interrupt);
+export const replaceTargets = (pending: readonly PendingMessage[]): PendingMessage[] => pending.filter(p => !p.interrupt);
 
 export const cancelClearsInterrupt = (pending: readonly PendingMessage[], pendingId: string): boolean => pending.some(p => p.id === pendingId && p.interrupt);
 

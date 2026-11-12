@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { latestOnly } from '../web/src/ui/latest.ts';
-import { menuStep } from '../web/src/ui/menu.ts';
+import { menuLeft, menuStep } from '../web/src/ui/menu.ts';
 import { staggerOf } from '../web/src/ui/tool-row.ts';
 
 // 会話の画面の小さな決まり（1-2 のコードレビューから）。
@@ -29,4 +29,13 @@ test('ui/menu: 会話のメニューは ↓ ↑ で項目を回り、Home / End 
 test('ui/tool-row: 一緒に届いた道具の行は、新しいものだけ 0, 1, 2… の順で浮かせる（デザインの --bt-i）', () => {
   assert.deepEqual(staggerOf([false, true, true, false, true]), [null, 0, 1, null, 2]);
   assert.deepEqual(staggerOf([]), []);
+});
+
+test('ui/menu: メニューからフォーカスが出たら閉じるが、開いたボタンへ出たときは閉じない（ボタンの押し直しで閉じられる）', () => {
+  const opener = {};
+  const other = {};
+  assert.equal(menuLeft(other, false, opener), true);
+  assert.equal(menuLeft(opener, false, opener), false);
+  assert.equal(menuLeft(other, true, opener), false);
+  assert.equal(menuLeft(null, false, opener), false);
 });
