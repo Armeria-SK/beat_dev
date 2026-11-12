@@ -4,7 +4,7 @@ import type { RepeatingTask, Task } from '../web/src/api.ts';
 import { formatZonedInput, parseZonedInput } from '../web/src/i18n/index.ts';
 import { emptyDraft } from '../web/src/task-form.ts';
 import { WEEKDAYS } from '../web/src/weekdays.ts';
-import { draftFromTask, isTimed, repeatFromCron, repeatingRow, repeatPatch, sameRule, splitSchedule } from '../web/src/ui/schedule.ts';
+import { draftFromTask, isTimed, repeatFromCron, repeatingRow, repeatPatch, sameRule, splitSchedule, timePatch } from '../web/src/ui/schedule.ts';
 
 // 新しい画面の Schedule（steps/p1-ui.md の「画面」の Schedule と PR 1-4b）の決まり。画面を持たない純粋な関数（web/src/ui/schedule.ts）。
 
@@ -89,4 +89,19 @@ test('ui/schedule: 時刻指定の Edit の欄は、サーバーのタイムゾ�
   assert.equal(formatZonedInput(ms, 'Asia/Tokyo'), '2026-11-12T14:30');
   assert.equal(parseZonedInput(formatZonedInput(ms, 'Asia/Tokyo'), 'Asia/Tokyo'), ms);
   assert.equal(formatZonedInput(ms, 'America/New_York'), '2026-11-12T00:30');
+});
+
+test('ui/schedule: 時刻指定の Edit を変えずに Save しても when を送らない（秒の付いた予定・夏時間が戻る夜の 2 回目の時刻がずれない）', () => {
+  const withSeconds = Date.UTC(2026, 10, 12, 5, 30, 45);
+  const tokyo = formatZonedInput(withSeconds, 'Asia/Tokyo');
+  assert.equal(timePatch(tokyo, tokyo, 'Asia/Tokyo'), null);
+  assert.equal(timePatch(tokyo, ` ${tokyo} `, 'Asia/Tokyo'), null);
+  const secondOneThirty = Date.UTC(2026, 10, 1, 6, 30);
+  const ny = formatZonedInput(secondOneThirty, 'America/New_York');
+  assert.equal(ny, '2026-11-01T01:30');
+  assert.notEqual(parseZonedInput(ny, 'America/New_York'), secondOneThirty);
+  assert.equal(timePatch(ny, ny, 'America/New_York'), null);
+  assert.deepEqual(timePatch(tokyo, '2026-11-12T15:00', 'Asia/Tokyo'), { when: new Date(Date.UTC(2026, 10, 12, 6, 0)).toISOString() });
+  assert.equal(timePatch(tokyo, '', 'Asia/Tokyo'), 'invalid');
+  assert.equal(timePatch('', '', 'Asia/Tokyo'), 'invalid');
 });

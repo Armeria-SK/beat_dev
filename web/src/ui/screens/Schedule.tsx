@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { api, ApiError, type RepeatingTask, type ScheduleView, type Task } from '../../api.ts';
 import { toast } from '../../feedback.ts';
-import { formatDateTime, formatDateTimeSmart, formatRelative, formatZonedInput, getTimezone, parseZonedInput, startOfDay, timezoneLabel, useT } from '../../i18n/index.ts';
+import { formatDateTime, formatDateTimeSmart, formatRelative, formatZonedInput, getTimezone, startOfDay, timezoneLabel, useT } from '../../i18n/index.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, FREQS, PRIORITIES, type DraftError, type Freq, type TaskDraft } from '../../task-form.ts';
 import { STATUS_KEY } from '../../task-meta.ts';
 import { WEEKDAYS } from '../../weekdays.ts';
@@ -9,7 +9,7 @@ import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, countText, Notice, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
-import { draftFromTask, repeatPatch, splitSchedule, type DeleteBlock, type RepeatingRow, type TimedRow } from '../schedule.ts';
+import { draftFromTask, repeatPatch, splitSchedule, timePatch, type DeleteBlock, type RepeatingRow, type TimedRow } from '../schedule.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
 import { buildRows, dayHours, nowAt, scrollToNow, windowOf, type Bar, type Range, type Stream, type TimeWindow } from '../timeline.ts';
 import { PRIORITY_KEY } from './Kanban.tsx';
@@ -146,18 +146,19 @@ function ScheduleForm({ task, onClose, onSaved }: { task: RepeatingTask | null; 
 
 function TimeForm({ task, onClose, onSaved }: { task: Task; onClose: () => void; onSaved: () => void }) {
   const t = useT();
-  const [at, setAt] = useState(() => (task.run_at === null ? '' : formatZonedInput(task.run_at)));
+  const [initial] = useState(() => (task.run_at === null ? '' : formatZonedInput(task.run_at)));
+  const [at, setAt] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
-    const ms = parseZonedInput(at);
-    if (ms === null) { setError(t('ui.newtask.needTime')); return; }
+    const patch = timePatch(initial, at);
+    if (patch === 'invalid') { setError(t('ui.newtask.needTime')); return; }
     setBusy(true);
     try {
-      if (ms !== task.run_at) {
-        await api.editTask(task.id, { when: new Date(ms).toISOString() });
+      if (patch) {
+        await api.editTask(task.id, patch);
         toast({ icon: 'check', title: t('ui.task.toast.saved'), body: task.title });
       }
       onSaved();

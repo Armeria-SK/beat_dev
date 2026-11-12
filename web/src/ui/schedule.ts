@@ -1,4 +1,5 @@
 import type { NewTask, RepeatingTask, Task, TaskLastRun, TaskStatus } from '../api.ts';
+import { parseZonedInput } from '../i18n/index.ts';
 import { emptyDraft, FREQS, type Freq, type TaskDraft } from '../task-form.ts';
 import { WEEKDAYS } from '../weekdays.ts';
 
@@ -67,6 +68,12 @@ const FIELDS_OF: Record<Freq, ReadonlyArray<'time' | 'day' | 'minute' | 'interva
 
 export const sameRule = (a: TaskDraft, b: TaskDraft): boolean =>
   a.freq === b.freq && FIELDS_OF[a.freq].every(field => (field === 'day' ? a.day === b.day : field === 'time' ? a.time.trim() === b.time.trim() : Number(a[field]) === Number(b[field])));
+
+export function timePatch(initial: string, input: string, zone?: string): { when: string } | null | 'invalid' {
+  const ms = parseZonedInput(input, zone);
+  if (ms === null) return 'invalid';
+  return input.trim() === initial ? null : { when: new Date(ms).toISOString() };
+}
 
 export interface RepeatPatch { title?: string; body?: string; priority?: number; repeat?: NonNullable<NewTask['repeat']> }
 
