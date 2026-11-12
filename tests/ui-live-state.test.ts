@@ -131,3 +131,16 @@ test('ui/live-state: サーバーの通知はトーストにする手続きを�
   const started = reduce(EMPTY, { type: 'event', event: { type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }, hidden: false, now: 1234 });
   assert.equal(started.state.drafts[0]!.startedAt, 1234);
 });
+
+test('ui/live-state: Library の画面を読み直す合図（libraryRevision）は、記憶の変化・実行の始まりと終わり・道具の結果・会話の変化・通知で進み、文字の流れでは進まない', () => {
+  const bumps: RunEvent[] = [
+    { type: 'memory.changed', runId: 'r', conversationId: 'c', memoryId: 1, book: 'user', action: 'create', content: 'x', eventId: 1 },
+    { type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' },
+    { type: 'tool.result', runId: 'r', conversationId: 'c', callId: 'k', name: 'file_read', ok: true, decision: 'allow', preview: '' },
+    { type: 'run.end', runId: 'r', conversationId: 'c', ok: true },
+    { type: 'conversation.changed', conversationId: 'c', change: 'archived' },
+    { type: 'notification', notification: note('info') },
+  ];
+  for (const event of bumps) assert.equal(reduce(EMPTY, ev(event)).state.libraryRevision, 1, event.type);
+  assert.equal(reduce(EMPTY, ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'a' })).state.libraryRevision, 0);
+});

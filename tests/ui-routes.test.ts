@@ -18,6 +18,7 @@ const ROUTES: Array<[string, Route]> = [
   ['#/skills/tidy', { view: 'skills', target: { kind: 'skill', name: 'tidy' } }],
   ['#/skills/draft/tidy', { view: 'skills', target: { kind: 'draft', name: 'tidy' } }],
   ['#/runs', { view: 'runs' }],
+  ['#/runs/run', { view: 'runs', tab: 'run' }],
   ['#/runs/tools', { view: 'runs', tab: 'tools' }],
   ['#/runs/reviews', { view: 'runs', tab: 'reviews' }],
   ['#/archived', { view: 'archived' }],

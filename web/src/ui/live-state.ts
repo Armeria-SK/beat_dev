@@ -36,13 +36,16 @@ export interface LiveState {
   revisions: ReadonlyMap<string, number>;
   interrupting: ReadonlySet<string>;
   taskRevision: number;
+  libraryRevision: number;
   epoch: number;
 }
 
 export const EMPTY: LiveState = {
   conversations: [], approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, epoch: 0,
+  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, libraryRevision: 0, epoch: 0,
 };
+
+const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
 
 export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker';
 
@@ -106,7 +109,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       if (s.interrupting.has(e.conversationId)) notices.set(e.conversationId, [{ runId: e.runId, kind: 'interrupted' }]);
       else notices.delete(e.conversationId);
       return {
-        state: { ...s, drafts, notices, interrupting: without(s.interrupting, e.conversationId) },
+        state: library({ ...s, drafts, notices, interrupting: without(s.interrupting, e.conversationId) }),
         effects: [...(known ? [] : refresh('conversations')), { kind: 'checklist', conversationId: e.conversationId }, ...refresh('worker')],
       };
     }
@@ -145,14 +148,14 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         effects: [],
       };
     case 'tool.result': {
-      const state = { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId) })) };
+      const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId) })) });
       return {
         state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
         effects: [],
       };
     }
     case 'run.end': {
-      let state: LiveState = bump({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }, e.conversationId);
+      let state: LiveState = bump(library({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }), e.conversationId);
       if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) return { state, effects: refresh('conversations', 'worker', 'drafts', 'approvals') };
       if (!e.ok && e.errorKind === 'cancelled') state = addNotice(state, e.conversationId, { runId: e.runId, kind: 'stopped' });
       else if (!e.ok) {
@@ -173,14 +176,14 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'approval.resolved':
       return { state: { ...s, approvals: s.approvals.filter(a => a.id !== e.approvalId) }, effects: refresh('approvals') };
     case 'memory.changed':
-      return { state: addNotice(s, e.conversationId, { runId: e.runId, kind: 'memory', action: e.action, content: e.content, eventId: e.eventId }), effects: [] };
+      return { state: addNotice(library(s), e.conversationId, { runId: e.runId, kind: 'memory', action: e.action, content: e.content, eventId: e.eventId }), effects: [] };
     case 'checklist.updated':
       return { state: { ...s, checklists: new Map(s.checklists).set(e.conversationId, e.items) }, effects: [] };
     case 'pending.changed':
       return { state: bump(s, e.conversationId), effects: [] };
     case 'conversation.changed':
       return {
-        state: bump(s, e.conversationId),
+        state: bump(library(s), e.conversationId),
         effects: e.change === 'deleted' ? [...refresh('conversations', 'unread'), { kind: 'gone', conversationId: e.conversationId }] : refresh('conversations'),
       };
     case 'task.changed': {
@@ -196,7 +199,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     }
     case 'notification': {
       const notify: Effect[] = hidden && BROWSER_NOTIFY.has(e.notification.kind) ? [{ kind: 'notify', title: e.notification.title, body: e.notification.body ?? '' }] : [];
-      return { state: { ...s, unread: s.unread + 1 }, effects: [...notify, { kind: 'toast', notification: e.notification }, ...refresh('drafts')] };
+      return { state: library({ ...s, unread: s.unread + 1 }), effects: [...notify, { kind: 'toast', notification: e.notification }, ...refresh('drafts')] };
     }
     case 'notification.read':
       return { state: { ...s, unread: e.unread }, effects: [] };

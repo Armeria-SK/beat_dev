@@ -149,6 +149,41 @@ function seed(app: App): void {
   app.notifications.notify({ kind: 'task_waiting', title: 'Waiting for you', body: 'Pick a name for the export file', link: `#/tasks/${waiting.id}` });
   app.notifications.notify({ kind: 'task_failed', title: 'Task failed', body: 'Fetch the price list', link: `#/tasks/${failed.id}` });
   app.notifications.notify({ kind: 'info', title: 'Preview data loaded', body: 'Everything here is made up.' });
+  seedLibrary(app);
+}
+
+function seedLibrary(app: App): void {
+  const name = app.memory.save({ book: 'user', content: 'Prefers short pull requests, one change per branch.', actor: 'review' });
+  app.memory.update(name.memory.id, 'Prefers short pull requests: one change per branch, under about 200 lines.', 'user');
+  app.memory.save({ book: 'user', content: 'Works in Asia/Tokyo and reads replies in the morning.', actor: 'user', origin: 'user' });
+  const note = app.memory.save({ book: 'notes', content: 'The release notes live in docs/CHANGELOG.md.', actor: 'clive' });
+  app.memory.update(note.memory.id, 'The release notes live in docs/CHANGELOG.md; keep the newest entry on top.', 'review');
+
+  const skills = app.skills;
+  skills.write({ name: 'dev-server', description: 'Start the dev server and open the page', body: '1. Run `npm run dev`.\n2. Wait for the port.' }, 'owner', 'you');
+  skills.write({ name: 'dev-server', description: 'Start the dev server and open the page', body: '1. Run `npm run dev`.\n2. Wait for the port.\n3. Open the page.' }, 'approved', 'beat');
+  skills.write({ name: 'dev-server', description: 'Start the dev server, wait for the port, open the page', body: '1. Run `npm run dev`.\n2. Wait for the port to answer.\n3. Open the page in the browser.' }, 'owner', 'you');
+  skills.write({ name: 'small-pull-request', description: 'Branch, commit, push, open', body: '- One change per branch.\n- Run the tests first.' }, 'owner', 'you');
+  skills.write({ name: 'flaky-test-triage', description: 'Run a failing test five times before calling it flaky', body: '1. Run the test five times.\n2. Note how often it fails.' }, 'approved', 'beat-auto');
+  mkdirSync(join(skills.dir, 'found-on-disk'), { recursive: true });
+  writeFileSync(join(skills.dir, 'found-on-disk', 'SKILL.md'), '---\nname: found-on-disk\ndescription: "A skill folder that nobody registered"\n---\n\nSteps written outside beat.\n');
+  skills.draft({ name: 'release-checklist', description: 'Steps before tagging a release', body: '1. Update the changelog.\n2. Run the tests.\n3. Tag the release.', reason: 'Used the same steps twice this week.' });
+  skills.draft({ name: 'small-pull-request', description: 'Branch, commit, push, open', body: '- One change per branch.\n- Keep it under 200 lines.\n- Run the tests first.', reason: 'The owner asked for smaller pull requests.' });
+
+  const conversations = app.conversations;
+  for (const [title, count] of [['Shape the upload queue', 6], ['Try a drag-and-drop zone', 3]] as const) {
+    const c = conversations.create({ title });
+    for (let i = 0; i < count; i++) conversations.append(c.id, i % 2 === 0 ? { role: 'user', content: `Message ${i + 1}` } : { role: 'assistant', content: `Reply ${i + 1}` });
+    conversations.archive(c.id);
+  }
+  const live = conversations.create({ title: 'Plan the export' });
+  conversations.append(live.id, { role: 'user', content: 'Plan the export file.' });
+  const run = (id: string, finish: Parameters<App['runs']['finish']>[1]) => { app.runs.start(id, 'chat', live.id); app.runs.finish(id, finish); };
+  run('preview-run-ok', { ok: true, modelId: 'preview-a', attempts: 1, usage: { inputTokens: 18_200, outputTokens: 640 } });
+  run('preview-run-fallback', { ok: true, modelId: 'preview-b', attempts: 2, usage: { inputTokens: 4_100, outputTokens: 120 }, flags: ['fallback'] });
+  run('preview-run-failed', { ok: false, modelId: 'preview-a', attempts: 1, errorKind: 'timeout', errorMessage: 'The model did not answer in time.' });
+  run('preview-run-stopped', { ok: false, modelId: 'preview-a', attempts: 1, errorKind: 'cancelled', errorMessage: 'Stopped by you.' });
+  app.reviews.enqueue('manual', `preview:${live.id}`, { conversationId: live.id });
 }
 
 function refuseServerApply(server: ReturnType<typeof createWebServer>['server']): void {

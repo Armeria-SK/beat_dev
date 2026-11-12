@@ -1,4 +1,4 @@
-export type RunsTab = 'tools' | 'reviews';
+export type RunsTab = 'run' | 'tools' | 'reviews';
 export type SkillTarget = { kind: 'skill' | 'draft'; name: string };
 
 export type Route =
@@ -35,7 +35,7 @@ export function parseRoute(hash: string): Route {
     if (a === 'draft' && b) return { view: 'skills', target: { kind: 'draft', name: decode(b) } };
     return a ? { view: 'skills', target: { kind: 'skill', name: decode(a) } } : { view: 'skills' };
   }
-  if (head === 'runs') return a === 'tools' || a === 'reviews' ? { view: 'runs', tab: a } : { view: 'runs' };
+  if (head === 'runs') return a === 'run' || a === 'tools' || a === 'reviews' ? { view: 'runs', tab: a } : { view: 'runs' };
   if (head === 'settings') return a ? { view: 'settings', section: decode(a) } : { view: 'settings' };
   return Object.hasOwn(LEGACY, head) ? LEGACY[head]! : HOME;
 }

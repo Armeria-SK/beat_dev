@@ -10,10 +10,14 @@ import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Icon } from './parts.tsx';
 import { pickFocus } from './focus.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
+import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
+import { Memory } from './screens/Memory.tsx';
 import { Notifications } from './screens/Notifications.tsx';
 import { Overview } from './screens/Overview.tsx';
+import { Runs } from './screens/Runs.tsx';
 import { Schedule } from './screens/Schedule.tsx';
+import { Skills } from './screens/Skills.tsx';
 import { TaskScreen } from './screens/Task.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
@@ -221,6 +225,7 @@ export function App() {
   const interrupt = useCallback((id: string, on: boolean) => dispatch({ type: 'interrupt', conversationId: id, on }), [dispatch]);
   const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);
   const setUnread = useCallback((count: number) => dispatch({ type: 'unread', count }), [dispatch]);
+  const setDrafts = useCallback((count: number) => dispatch({ type: 'skillDrafts', count }), [dispatch]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -274,6 +279,14 @@ export function App() {
               <Schedule revision={live.taskRevision + live.epoch} />
             ) : behind.view === 'notifications' ? (
               <Notifications unread={unread} epoch={live.epoch} onUnread={setUnread} />
+            ) : behind.view === 'memory' ? (
+              <Memory revision={live.libraryRevision + live.epoch} />
+            ) : behind.view === 'skills' ? (
+              <Skills target={behind.target} revision={live.libraryRevision + live.epoch + skillDrafts} running={working} onDrafts={setDrafts} />
+            ) : behind.view === 'runs' ? (
+              <Runs tab={behind.tab} revision={live.libraryRevision + live.epoch + live.taskRevision} conversations={conversations} />
+            ) : behind.view === 'archived' ? (
+              <Archived revision={live.libraryRevision + live.epoch} />
             ) : (
               <div className="bt-screen__inner">
                 <header className="bt-screen__head"><h1 className="bt-screen__title">{title}</h1></header>

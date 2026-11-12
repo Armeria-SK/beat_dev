@@ -6,6 +6,7 @@ import './styles/tokens.css';
 import './styles/bundle.css';
 import './styles/markdown.css';
 import './styles/frame.css';
+import './styles/library.css';
 
 const storage = browserStorage();
 applyTheme(document.documentElement, readTheme(storage));
