@@ -597,3 +597,42 @@ test('3-1a 審査: しまった製品の plan_write は、PUT と同じく分か
   assert.equal(existsSync(h.file), false);
   assert.equal(h.events.length, 0);
 });
+
+test('3-1a 再審査 1: beat の外で書かれた計画書と同じ中身を AI が書いても AI の版にしない。その版は AI の実行が続いても控えに残る。持ち主が同じ中身を保存したら持ち主の版になり plan.changed', async t => {
+  const f = storeFixture(t);
+  writeFileSync(f.file, 'hand written');
+  const same = f.store.write(PROJECT, 'hand written', AI);
+  assert.equal(same.changed, false);
+  assert.equal(same.updated_by, 'outside');
+  assert.equal(f.store.view(PROJECT).updated_by, 'outside');
+  assert.equal(f.kv.getJson(`plan:${PROJECT}`), undefined);
+  for (let i = 0; i < 25; i++) f.store.write(PROJECT, `run ${i}`, { ...AI, runId: `r-${i}` });
+  assert.ok(f.backupTexts().includes('hand written'), f.backups().join());
+
+  const h = toolHarness(t);
+  writeFileSync(h.file, 'by hand');
+  await h.run('plan_write', { content: 'by hand' }, h.ctxOf());
+  assert.equal(h.plans.view(PROJECT).updated_by, 'outside');
+  assert.equal(h.events.length, 0);
+  const owner = h.plans.write(PROJECT, 'by hand', { by: 'owner', tainted: false, conversationId: null, runId: null });
+  assert.equal(owner.changed, true);
+  assert.equal(h.plans.view(PROJECT).updated_by, 'owner');
+});
+
+test('3-1a 再審査 2: 同じ中身を外を読んだ実行が書き直したら、tainted と一緒に runId / conversationId もその実行にし、plan.changed を流す', async t => {
+  const h = toolHarness(t);
+  await h.run('plan_write', { content: '# Same' }, h.ctxOf({ runId: 'r3', conversationId: 'c3' }));
+  await h.run('plan_write', { content: '# Same' }, h.ctxOf({ runId: 'r4', conversationId: 'c4', taint: { tainted: true, sources: ['web'] } }));
+  const meta = h.plans.meta(PROJECT)!;
+  assert.deepEqual([meta.tainted, meta.runId, meta.conversationId, meta.by], [true, 'r4', 'c4', 'ai']);
+  assert.equal(h.events.filter(e => e.type === 'plan.changed').length, 2);
+});
+
+test('3-1a 再審査 3: 記録の書き手が知らない値でも、控えの名前には ai / owner / outside しか入らない', t => {
+  const f = storeFixture(t);
+  f.store.write(PROJECT, 'one', AI);
+  f.kv.setJson(`plan:${PROJECT}`, { ...f.store.meta(PROJECT)!, by: '..\\..\\x' });
+  f.store.write(PROJECT, 'two', { ...AI, runId: 'r2' });
+  assert.equal(f.backups().length, 1);
+  assert.match(f.backups()[0]!, /^plan-\d+-[0-9a-f]+-ai\.md$/u);
+});

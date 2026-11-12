@@ -14,6 +14,7 @@ export const PLAN_BACKUPS = 20;
 const BACKUP_NAME = /^plan-\d+-[0-9a-f]+(?:-(ai|owner|outside))?\.md$/u;
 const CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u2028\u2029]/gu;
 const BUSY = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const AUTHORS: ReadonlySet<string> = new Set(['ai', 'owner', 'outside']);
 
 export type PlanAuthor = 'ai' | 'owner';
 
@@ -98,9 +99,11 @@ export class PlanStore {
     const known = this.meta(projectId);
     const author = previous !== undefined && known?.hash === planHash(previous) ? known : undefined;
     if (previous === content && author) {
-      if (by.tainted && !author.tainted) this.#kv.setJson(`plan:${projectId}`, { ...author, tainted: true });
-      return { content, hash, updated_at: author.updatedAt, updated_by: author.by, tainted: author.tainted || by.tainted, changed: false };
+      if (!by.tainted || author.tainted) return { content, hash, updated_at: author.updatedAt, updated_by: author.by, tainted: author.tainted, changed: false };
+      this.#kv.setJson(`plan:${projectId}`, { ...author, tainted: true, conversationId: by.conversationId, runId: by.runId });
+      return { content, hash, updated_at: author.updatedAt, updated_by: author.by, tainted: true, changed: true };
     }
+    if (previous === content && by.by === 'ai') return { ...this.view(projectId), content, hash, changed: false };
     const now = this.#now();
     if (previous !== undefined && previous !== content && !(by.by === 'ai' && author?.by === 'ai' && author.runId !== null && author.runId === by.runId)) {
       this.#backup(projectId, previous, author?.by ?? 'outside', now);
@@ -108,7 +111,7 @@ export class PlanStore {
     if (previous !== content) this.#replace(file, content);
     const meta: PlanMeta = { hash, updatedAt: now, ...by };
     this.#kv.setJson(`plan:${projectId}`, meta);
-    return { content, hash, updated_at: now, updated_by: by.by, tainted: by.tainted, changed: previous !== content };
+    return { content, hash, updated_at: now, updated_by: by.by, tainted: by.tainted, changed: true };
   }
 
   #replace(file: string, content: string): void {
@@ -130,7 +133,8 @@ export class PlanStore {
   #backup(projectId: string, content: string, author: PlanAuthor | 'outside', now: number): void {
     const dir = join(this.#dirs.backups, 'mesh', projectId);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `plan-${String(now).padStart(15, '0')}-${randomBytes(3).toString('hex')}-${author}.md`), content);
+    const label = AUTHORS.has(author) ? author : 'ai';
+    writeFileSync(join(dir, `plan-${String(now).padStart(15, '0')}-${randomBytes(3).toString('hex')}-${label}.md`), content);
     const kept = readdirSync(dir).filter(name => BACKUP_NAME.test(name)).sort();
     const human = kept.findLast(name => /-(?:owner|outside)\.md$/u.test(name));
     for (const name of kept.slice(0, Math.max(0, kept.length - PLAN_BACKUPS))) if (name !== human) rmSync(join(dir, name), { force: true });
