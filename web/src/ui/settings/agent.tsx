@@ -85,22 +85,20 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
     checked && line !== 'none' ? t('ui.set.key.checked', formatRelative(checked)) : null,
   ].filter(Boolean).join(' · ');
 
-  async function send(confirmed: string | null) {
+  async function send(confirmed: string | null): Promise<boolean> {
     const value = trimKey(key);
-    if (!value) return;
+    if (!value) return false;
     const plan = planKey(provider, confirmed);
-    if (plan.kind === 'none') return;
-    if (plan.kind === 'confirm') {
-      ctx.ask({ row: k, items: plan.items, title: t('ui.set.key.confirmTitle'), ok: t('ui.set.key.confirmOk'), run: () => void send(plan.key) });
-      return;
-    }
-    ctx.cancel(); ctx.setBusy(k); ctx.clear(k);
+    if (plan.kind === 'none') return false;
+    if (plan.kind === 'confirm') return ctx.ask({ row: k, items: plan.items, title: t('ui.set.key.confirmTitle'), ok: t('ui.set.key.confirmOk') }, () => send(plan.key));
+    ctx.setBusy(k); ctx.clear(k);
     try {
       setState(await api.setProviderKey(id, value));
       setKey(''); setEntering(false);
       toast({ icon: 'check', title: t('ui.set.key.saved') });
       await ctx.reload();
-    } catch (error) { ctx.fail(k, errorText(error, t('ui.set.key.failed'))); }
+      return true;
+    } catch (error) { ctx.fail(k, errorText(error, t('ui.set.key.failed'))); return false; }
     finally { ctx.setBusy(null); }
   }
 

@@ -18,6 +18,9 @@ function DocEditor({ k, title, desc, text, max, onSave }: { k: string; title: st
   const [value, setValue] = useState(text);
   useEffect(() => { setValue(text); }, [text]);
   const dirty = value !== text;
+  const { setDirty } = ctx;
+  useEffect(() => { setDirty(k, dirty); }, [setDirty, k, dirty]);
+  useEffect(() => () => setDirty(k, false), [setDirty, k]);
   return (
     <Row k={k} title={title} desc={`${desc} · ${t('ui.set.persona.tokens', formatNumber(estimateTokens(value)))}`}
       below={(
@@ -134,10 +137,14 @@ export function AdvancedPanel() {
   const t = useT();
   const ctx = useSet();
   const [text, setText] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<string | null>(null);
   const [bad, setBad] = useState(false);
+  const { setDirty } = ctx;
+  useEffect(() => { setDirty('adv:file', text !== null && text !== loaded); }, [setDirty, text, loaded]);
+  useEffect(() => () => setDirty('adv:file', false), [setDirty]);
   const open = async () => {
     ctx.clear('adv:file');
-    try { setText(JSON.stringify((await api.settings()).config, null, 2)); setBad(false); }
+    try { const fresh = JSON.stringify((await api.settings()).config, null, 2); setText(fresh); setLoaded(fresh); setBad(false); }
     catch (error) { ctx.fail('adv:file', errorText(error, t('ui.set.loadFailed'))); }
   };
   const save = async () => {

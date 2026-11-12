@@ -9,7 +9,8 @@ import { menuStep } from '../menu.ts';
 import { Button, Icon } from '../parts.tsx';
 import { fieldStep, readNumber, type FieldDraft } from './commit.ts';
 
-export interface Pending { row: string; items: Access[]; title?: string; ok?: string; run: () => void }
+export interface Pending { row: string; items: Access[]; title?: string; ok?: string; run: () => void; cancel?: () => void }
+export type Ask = Pick<Pending, 'row' | 'items' | 'title' | 'ok'>;
 
 export interface SetCtx {
   view: SettingsView;
@@ -20,8 +21,9 @@ export interface SetCtx {
   errors: Record<string, string>;
   revision: number;
   commit: (row: string, edit: (config: Config) => Config) => Promise<boolean>;
-  ask: (pending: Pending) => void;
+  ask: (ask: Ask, run: () => Promise<boolean>) => Promise<boolean>;
   cancel: () => void;
+  setDirty: (key: string, dirty: boolean) => void;
   fail: (row: string, message: string) => void;
   clear: (row: string) => void;
   reload: () => Promise<void>;

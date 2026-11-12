@@ -57,10 +57,7 @@ function useMcp(): { view: McpView | 'failed' | null; ops: McpOps } {
     let latest: Config;
     try { latest = (await api.settings()).config; } catch (error) { ctx.fail(row, error instanceof ApiError ? error.message : t('ui.set.mcp.failed')); return false; }
     const list = items(latest);
-    if (list.length > 0 && accessKey(list) !== confirmed) {
-      ctx.ask({ row, items: list, run: () => void go(row, items, op, done, accessKey(list)) });
-      return false;
-    }
+    if (list.length > 0 && accessKey(list) !== confirmed) return ctx.ask({ row, items: list }, () => go(row, items, op, done, accessKey(list)));
     return run(row, op, done);
   }, [ctx, run, t]);
   return { view, ops: { run, guarded } };
