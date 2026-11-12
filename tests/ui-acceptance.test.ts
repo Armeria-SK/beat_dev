@@ -86,6 +86,28 @@ test('ui/acceptance: AI が別の種類を言ったのに確かめられなか�
   assert.deepEqual(itemDetails({ id: 'N-1', text: 'No login', source: { kind: 'owner_words', quote: 'no login needed' } }), [{ label: 'ui.acc.detail.quote', text: 'no login needed' }], 'しないことには確かめ方が無い');
 });
 
+test('ui/acceptance: あなたの言葉の項目は、引用の下にその発言の全文（サーバーが 500 字までに切ったもの）を "You wrote" として文字のまま出す', () => {
+  const withContext = itemDetails(item('A-7', { source: { kind: 'owner_words', quote: 'not slow', context: 'It must be fast, not slow <b>at all</b>.', messageId: 3 } }));
+  assert.deepEqual(withContext.slice(0, 2), [
+    { label: 'ui.acc.detail.quote', text: 'not slow' },
+    { label: 'ui.acc.detail.context', text: 'It must be fast, not slow <b>at all</b>.' },
+  ]);
+  assert.equal(t('ui.acc.detail.context'), 'You wrote');
+  assert.deepEqual(itemDetails(item('A-8')).map(d => d.label), ['ui.acc.detail.quote', 'ui.acc.detail.command'], '全文が無ければ行を出さない');
+});
+
+test('ui/acceptance: 選択肢の答えはまだ確かめない（choice_unverified）。質問と答えは Claimed: Your answer の下に出る', () => {
+  const choice = itemDetails(item('A-9', { source: { kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: 'Which? A) x B) y', answer: 'A' } }));
+  assert.deepEqual(choice.slice(0, 4), [
+    { label: 'ui.acc.detail.claimed', note: 'ui.acc.claimed.choice' },
+    { label: 'ui.acc.detail.why', note: 'ui.acc.reason.choice_unverified' },
+    { label: 'ui.acc.detail.question', text: 'Which? A) x B) y' },
+    { label: 'ui.acc.detail.answer', text: 'A' },
+  ]);
+  assert.equal(t('ui.acc.reason.choice_unverified'), 'choices are not verified yet');
+  assert.equal(t(sourceLabel({ kind: 'owner_choice', question: 'q', answer: 'A' })), 'Your answer', '確かめた選択の札は残す（あとで戻る）');
+});
+
 test('ui/acceptance: 下書きのあいだは "Draft — fixed when you build"、固定のあとは版の番号', () => {
   assert.equal(acceptanceMeta(acc()), 'Draft — fixed when you build');
   assert.equal(acceptanceMeta(acc({ draft: false, version: 2 })), 'v2');
