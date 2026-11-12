@@ -230,6 +230,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     const baseVersion = body.baseVersion;
     if (typeof baseVersion !== 'number' || !Number.isInteger(baseVersion) || baseVersion < 0) throw problem(400, 'invalid_field', 'required', { field: 'baseVersion', params: { field: 'baseVersion' } });
+    if (baseVersion === 0 && body.baseHash === undefined) throw problem(400, 'invalid_field', 'required', { field: 'baseHash', params: { field: 'baseHash' } });
     const baseHash = body.baseHash === undefined || body.baseHash === null ? body.baseHash : requireString(body, 'baseHash', { max: 128 })!;
     const version = accepted(() => app.acceptance.ownerEdit(project.id, { baseVersion, baseHash, ops: ownerChanges(body.ops) }));
     decided(project.id, project.doc_language, version);
@@ -246,7 +247,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
     let built;
     try {
-      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()) }, project.id, { planHash, acceptanceHash })));
+      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), now: app.now }, project.id, { planHash, acceptanceHash })));
     } catch (error) {
       if (error instanceof BuildError) throw domainProblem(error.code === 'no_plan' ? 400 : 409, 'build', error);
       if (error instanceof ProjectError) throw projectProblem(400, error);

@@ -57,7 +57,7 @@ function changeOf(entry: ChangeEntry, speech: Speech): ChangeOp {
 
 export const acceptanceChange: ToolDef<Static<typeof CHANGE_INPUT>> = {
   name: 'acceptance_change',
-  description: 'Propose changes to the locked acceptance list; nothing changes until the owner approves. op: add, change (id) or remove (id). result, quote, check, command as in acceptance_write; no quote = AI added. language: documents language.',
+  description: "Propose changes to the locked acceptance list; nothing changes until the owner approves. Write in the owner-facing documents language and pass its tag as language. op: add, change (id) or remove (id). result: one checkable result, not how to build it. quote: the owner's words copied verbatim (never translate or paraphrase); omit when you add it. check: command (with command) that succeeds only when the item holds, whenever possible; else look or read.",
   input: CHANGE_INPUT,
   effect: 'meta',
   allowedIn: ['chat'],

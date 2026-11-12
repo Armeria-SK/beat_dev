@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { estimateRequest, estimateTextTokens } from '../src/engine/tokens.ts';
-import { AcceptanceStore, frozenHash, type AcceptanceDoc, type ChangeOp } from '../src/projects/acceptance.ts';
+import { AcceptanceStore, applyChanges, frozenHash, type AcceptanceDoc, type ChangeOp } from '../src/projects/acceptance.ts';
 import { BUILD_BODY } from '../src/projects/build.ts';
 import { acceptanceChange, acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
@@ -74,7 +74,12 @@ test('3-3-s acceptance_change の印: meta・planOk・projectOnly・製品の会
   assert.doesNotMatch(acceptanceChange.description, /[^\x20-\x7E]/u);
   assert.match(acceptanceChange.description, /approve/iu);
   const spec = estimateTextTokens(JSON.stringify({ name: acceptanceChange.name, description: acceptanceChange.description, inputSchema: acceptanceChange.input }));
-  assert.ok(spec <= 180, String(spec));
+  assert.doesNotMatch(acceptanceChange.description, /acceptance_write/u, 'acceptance_write とは同時に渡らないので、その説明に頼らない');
+  assert.match(acceptanceChange.description, /documents language/u);
+  assert.match(acceptanceChange.description, /verbatim/u);
+  assert.match(acceptanceChange.description, /never translate or paraphrase/u);
+  assert.match(acceptanceChange.description, /succeeds only when the item holds/u);
+  assert.match(acceptanceChange.description, /look or read/u);
   assert.equal(acceptanceChange.acceptanceState, 'frozen');
   assert.equal(acceptanceWrite.acceptanceState, 'draft');
   const write = estimateTextTokens(JSON.stringify({ name: acceptanceWrite.name, description: acceptanceWrite.description, inputSchema: acceptanceWrite.input }));
@@ -359,7 +364,7 @@ test('3-3-s 持ち主の直し: 固定の前は下書きを直す（版の行を
   const shop = await s.product('shop');
   s.adapter().scripts = [call('acceptance_write', { items: [item('One'), item('Two')] }), reply('ok')];
   await s.send(uuid(1), { text: 'list', projectId: shop.id });
-  const edited = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 0, ops: [
+  const edited = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 0, baseHash: (await s.list(shop.id)).acceptance.hash, ops: [
     { op: 'change', id: 'A-1', item: { result: 'One, edited', check: { kind: 'read' } } },
     { op: 'remove', id: 'A-2' },
     { op: 'add', item: { result: 'Three', check: { kind: 'command', command: 'npm test' } } },
@@ -375,7 +380,8 @@ test('3-3-s 持ち主の直し: 固定の前は下書きを直す（版の行を
   assert.equal(wrongBase.body.code, 'acceptance.stale');
   const wrongHash = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 0, baseHash: 'f'.repeat(64), ops: [{ op: 'remove', id: 'A-1' }] });
   assert.equal(wrongHash.status, 409, '下書きが変わっていれば 409');
-  for (const body of [{}, { baseVersion: 0 }, { baseVersion: '0', ops: [] }, { baseVersion: 0, ops: [{ op: 'add', item: { result: 'x', check: { kind: 'command' } } }] }, { baseVersion: 0, ops: [{ op: 'add', item: { result: 'x', check: { kind: 'look' } }, source: { kind: 'owner_words', quote: 'x', messageId: 1, conversationId: 'c' } }] }]) {
+  assert.throws(() => s.app.acceptance.ownerEdit(shop.id, { baseVersion: 0, ops: [{ op: 'remove', id: 'A-1' }] }), /changed since/u, '下書きの直しは baseHash が要る');
+  for (const body of [{}, { baseVersion: 0 }, { baseVersion: 0, ops: [{ op: 'remove', id: 'A-1' }] }, { baseVersion: '0', ops: [] }, { baseVersion: 0, ops: [{ op: 'add', item: { result: 'x', check: { kind: 'command' } } }] }, { baseVersion: 0, ops: [{ op: 'add', item: { result: 'x', check: { kind: 'look' } }, source: { kind: 'owner_words', quote: 'x', messageId: 1, conversationId: 'c' } }] }]) {
     assert.equal((await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', body)).status, 400, JSON.stringify(body));
   }
 
@@ -467,8 +473,12 @@ test('3-3-s Build をもう一度: 変わった版に受け持つタスクの無
   assert.equal(running.status, 409);
   assert.equal(running.body.code, 'build.running');
   await s.json(`/api/tasks/${shop.task.id}/cancel`, 'POST', {});
+  const retry = await s.build(shop.id);
+  assert.equal(retry.status, 201, '止めた Build は受け持ちに数えない');
+  assert.deepEqual(JSON.parse(retry.body.task.acceptance_items), ['A-1', 'A-2', 'A-3']);
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(retry.body.task.id);
   const none = await s.build(shop.id);
-  assert.equal(none.status, 409, '全部の項目に受け持ちがある');
+  assert.equal(none.status, 409, '終わった Build が全部の項目を受け持つ');
   assert.equal(none.body.code, 'build.frozen');
 
   s.app.acceptance.ownerEdit(shop.id, { baseVersion: 1, ops: [
@@ -487,10 +497,81 @@ test('3-3-s Build をもう一度: 変わった版に受け持つタスクの無
   assert.equal(again.body.task.body, BUILD_BODY(null, ['A-2', 'A-4']));
   assert.match(again.body.task.body, /A-2, A-4/u);
   assert.equal(s.versionCount(shop.id), 2, 'もう一度の Build は版を作らない');
-  await s.json(`/api/tasks/${again.body.task.id}/cancel`, 'POST', {});
+  s.app.db.prepare("UPDATE tasks SET status = 'failed' WHERE id = ?").run(again.body.task.id);
   const third = await s.build(shop.id);
-  assert.equal(third.status, 409);
-  assert.equal(third.body.code, 'build.frozen');
+  assert.equal(third.status, 201, '失敗した Build も受け持ちに数えない');
+  assert.deepEqual(JSON.parse(third.body.task.acceptance_items), ['A-2', 'A-4']);
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(third.body.task.id);
+  const fourth = await s.build(shop.id);
+  assert.equal(fourth.status, 409);
+  assert.equal(fourth.body.code, 'build.frozen');
+});
+
+test('3-3-s Build の受け持ち: 版の時刻はタスクと同じ時計で決める（時計が実時間とずれていても、最初の Build が全部を受け持つ）', async t => {
+  let tick = 1_000_000;
+  const s = await setup(t, { now: () => tick++ });
+  const shop = await s.frozen();
+  assert.equal(s.app.acceptance.latest(shop.id)!.created_at < 2_000_000, true, '版の時刻も App の時計');
+  assert.deepEqual((await s.list(shop.id)).acceptance.unbuilt, []);
+});
+
+test('3-3-s Build をもう一度: 固定した版の DB の taintedRuns も印に入れる（ファイルから印を消しても、もう一度の Build は信用しない扱い）', async t => {
+  const s = await setup(t);
+  const shop = await s.frozen();
+  await s.send(uuid(5), { text: 'hello', projectId: shop.id });
+  s.app.db.prepare('UPDATE conversations SET ever_tainted = 1 WHERE id = ?').run(uuid(5));
+  await s.propose(shop.id, uuid(5), 'change', { changes: [{ op: 'add', result: 'Share links expire', check: 'look' }] });
+  await s.json(`/api/projects/${shop.id}/acceptance/changes/${String(s.rows(shop.id).at(-1)!.id)}/approve`, 'POST', {});
+  const path = join(s.paths.projects, shop.id, 'acceptance.json');
+  const cleaned = s.file(shop.id);
+  assert.ok((cleaned.taintedRuns ?? []).length > 0);
+  cleaned.taintedRuns = [];
+  writeFileSync(path, JSON.stringify(cleaned));
+  assert.equal(s.app.acceptance.read(shop.id)!.taintedRuns!.length, 0);
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(shop.task.id);
+  const again = await s.build(shop.id);
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+  assert.ok(s.app.tasks.events(again.body.task.id).some(e => e.kind === 'context' && e.run_id === 'untrusted-input'));
+});
+
+test('3-3-s 案の中で、足す項目がこれからもらう番号を change / remove で指せない（見せた案と結果がずれる）。同じ番号を 2 回も断る', async t => {
+  const s = await setup(t);
+  const shop = await s.frozen();
+  for (const second of [{ op: 'change', id: 'A-4', result: 'Something else', check: 'look' }, { op: 'remove', id: 'A-4' }]) {
+    await s.propose(shop.id, uuid(2), 'change', { changes: [{ op: 'add', result: 'Share links expire', check: 'look' }, second] });
+    assert.match(s.results().at(-1)!, /there is no item A-4/u);
+  }
+  await s.propose(shop.id, uuid(2), 'change', { changes: [{ op: 'remove', id: 'A-1' }, { op: 'change', id: 'A-1', result: 'x', check: 'look' }] });
+  assert.match(s.results().at(-1)!, /A-1 appears twice/u);
+  assert.equal(s.rows(shop.id).length, 0, '案は積まれない');
+  const owner = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 1, ops: [{ op: 'add', item: { result: 'Two', check: { kind: 'look' } } }, { op: 'remove', id: 'A-4' }] });
+  assert.equal(owner.status, 400);
+  assert.equal(s.versionCount(shop.id), 1);
+});
+
+test('3-3-s 持ち主の直し（固定のあと）: baseHash は持ち主が見た一覧（ファイルを読んだもの）と比べる。手で書き換えたファイルでも直せる。版の番号は DB と比べる', async t => {
+  const s = await setup(t);
+  const shop = await s.frozen();
+  const hacked = s.file(shop.id);
+  hacked.items[0]!.result = 'Hand-edited';
+  writeFileSync(join(s.paths.projects, shop.id, 'acceptance.json'), JSON.stringify(hacked));
+  const shown = (await s.list(shop.id)).acceptance.hash as string;
+  assert.notEqual(shown, s.app.acceptance.latest(shop.id)!.hash);
+  const dbHash = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 1, baseHash: s.app.acceptance.latest(shop.id)!.hash, ops: [{ op: 'remove', id: 'A-3' }] });
+  assert.equal(dbHash.status, 409, '見ていない一覧の hash では直せない');
+  const ok = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 1, baseHash: shown, ops: [{ op: 'remove', id: 'A-3' }] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.acceptance.version, 2);
+  const wrongVersion = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 1, baseHash: (await s.list(shop.id)).acceptance.hash, ops: [{ op: 'remove', id: 'A-2' }] });
+  assert.equal(wrongVersion.status, 409);
+});
+
+test('3-3-s 一覧の数の上限: 外した項目を含めた 200 の上限で断るときは、その上限を言う', () => {
+  const entry = (i: number, removed: boolean) => ({ id: `A-${i}`, result: `R${i}`, source: { kind: 'ai_added' as const }, check: { kind: 'look' as const }, state: 'open' as const, evidence: [], changedIn: null, removedIn: removed ? 1 : null });
+  const doc = { schema: 1, version: 1, language: null, notDoing: [], items: Array.from({ length: 200 }, (_, i) => entry(i + 1, i > 0)) } as unknown as AcceptanceDoc;
+  assert.throws(() => applyChanges(doc, [{ op: 'add', item: { result: 'One more', check: { kind: 'look' } }, source: { kind: 'ai_added' } }], 2), /up to 200 items, removed ones included/u);
+  const live = { ...doc, items: Array.from({ length: 60 }, (_, i) => entry(i + 1, false)) } as AcceptanceDoc;
+  assert.throws(() => applyChanges(live, [{ op: 'add', item: { result: 'One more', check: { kind: 'look' } }, source: { kind: 'ai_added' } }], 2), /up to 60 items/u);
 });
 
 test('3-3-s 一覧の口の unbuilt と open_build_task_id: 固定の前は [] と null。固定のあとは受け持ちの無い「未」の番号と、開いている Build タスク（2 回目の Build も指す。frozen.build_task_id は版を作った Build しか指さない）。Approve・Reject・直しの返事も同じ形', async t => {
@@ -514,12 +595,17 @@ test('3-3-s 一覧の口の unbuilt と open_build_task_id: 固定の前は [] �
   assert.deepEqual(pick(rejected.body.acceptance), { unbuilt: ['A-2', 'A-4'], open_build_task_id: shop.task.id });
 
   await s.json(`/api/tasks/${shop.task.id}/cancel`, 'POST', {});
-  assert.deepEqual(pick((await s.list(shop.id)).acceptance), { unbuilt: ['A-2', 'A-4'], open_build_task_id: null });
+  assert.deepEqual(pick((await s.list(shop.id)).acceptance), { unbuilt: ['A-1', 'A-2', 'A-3', 'A-4'], open_build_task_id: null }, '止めた Build は受け持ちに数えない');
+  const met = s.file(shop.id);
+  met.items.find(entry => entry.id === 'A-1')!.state = 'met';
+  writeFileSync(join(s.paths.projects, shop.id, 'acceptance.json'), JSON.stringify(met));
+  s.app.acceptance.ownerEdit(shop.id, { baseVersion: 3, ops: [{ op: 'remove', id: 'A-3' }] });
+  assert.deepEqual(pick((await s.list(shop.id)).acceptance), { unbuilt: ['A-2', 'A-4'], open_build_task_id: null }, '満たした項目と外した項目は数えない');
   const again = await s.build(shop.id);
   assert.equal(again.status, 201, JSON.stringify(again.body));
   const after = (await s.list(shop.id)).acceptance;
   assert.deepEqual(pick(after), { unbuilt: [], open_build_task_id: again.body.task.id });
-  assert.equal(after.frozen.version, 3);
+  assert.equal(after.frozen.version, 4);
   assert.equal(after.frozen.build_task_id, null, '最新の版（Approve で作った版）は 2 回目の Build を指さない');
   assert.equal(s.app.acceptance.version(shop.id, 1)!.build_task_id, shop.task.id);
 });

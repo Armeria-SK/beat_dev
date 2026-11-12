@@ -252,7 +252,7 @@ export function frozenHash(doc: AcceptanceDoc): string {
   return createHash('sha256').update(canonical(frozen)).digest('hex');
 }
 
-function docOf(raw: string): AcceptanceDoc | undefined {
+export function docOf(raw: string): AcceptanceDoc | undefined {
   try {
     const doc = JSON.parse(raw) as AcceptanceDoc;
     if (doc?.schema !== 1 || !Number.isInteger(doc.version) || doc.version < 0 || !Array.isArray(doc.items) || !Array.isArray(doc.notDoing)) return undefined;
@@ -326,12 +326,13 @@ export function applyChanges(doc: AcceptanceDoc, ops: readonly ChangeOp[], next:
   const items = doc.items.map(entry => ({ ...entry }));
   let top = items.reduce((max, entry) => Math.max(max, Number(/^A-(\d+)$/u.exec(entry.id)?.[1] ?? 0)), 0);
   const drop = new Set<string>();
+  const live = new Set(doc.items.filter(entry => entry.removedIn === null).map(entry => entry.id));
   for (const op of cleanChanges(ops)) {
     if (op.op === 'add') {
       items.push({ id: `A-${++top}`, result: op.item!.result, source: op.source, check: op.item!.check, state: 'open', evidence: [], changedIn: next, removedIn: null });
       continue;
     }
-    const target = items.find(entry => entry.id === op.id && entry.removedIn === null);
+    const target = live.has(op.id!) ? items.find(entry => entry.id === op.id) : undefined;
     if (!target) throw badChange(`there is no item ${op.id}`);
     if (op.op === 'remove') {
       if (next === null) drop.add(target.id); else target.removedIn = next;
@@ -340,7 +341,8 @@ export function applyChanges(doc: AcceptanceDoc, ops: readonly ChangeOp[], next:
     Object.assign(target, { result: op.item!.result, check: op.item!.check, source: op.source, state: 'open', evidence: [], changedIn: next });
   }
   const out = items.filter(entry => !drop.has(entry.id));
-  if (out.filter(entry => entry.removedIn === null).length > ACCEPTANCE_MAX_ITEMS || out.length > ACCEPTANCE_MAX_TOTAL) throw new AcceptanceError('too_many', { max: ACCEPTANCE_MAX_ITEMS });
+  if (out.filter(entry => entry.removedIn === null).length > ACCEPTANCE_MAX_ITEMS) throw new AcceptanceError('too_many', { max: ACCEPTANCE_MAX_ITEMS });
+  if (out.length > ACCEPTANCE_MAX_TOTAL) throw new AcceptanceError('too_many_total', { max: ACCEPTANCE_MAX_TOTAL });
   return out;
 }
 
@@ -496,10 +498,7 @@ export class AcceptanceStore {
     const change = this.#change(projectId, changeId);
     if (this.#archived(projectId)) throw new AcceptanceError('archived');
     const latest = this.latest(projectId);
-    if ((change.status === 'pending' || change.status === 'superseded') && latest?.version !== change.base_version) {
-      this.#db.prepare("UPDATE acceptance_changes SET status = 'superseded', decided_at = ? WHERE id = ? AND status = 'pending'").run(this.#now(), change.id);
-      throw new AcceptanceError('stale', { version: latest?.version ?? 0 });
-    }
+    if ((change.status === 'pending' || change.status === 'superseded') && latest?.version !== change.base_version) throw new AcceptanceError('stale', { version: latest?.version ?? 0 });
     if (change.status !== 'pending') throw new AcceptanceError('not_pending', { status: change.status });
     return this.#advance(projectId, JSON.parse(change.ops) as ChangeOp[], 'change', { language: change.language, taint: change.tainted === 1 ? `change:${change.id}` : null, decide: change.id });
   }
@@ -518,12 +517,16 @@ export class AcceptanceStore {
     const latest = this.latest(projectId);
     if (!latest) {
       const current = this.#readFile(projectId);
-      if (edit.baseVersion !== 0 || (edit.baseHash !== undefined && (current ? frozenHash(current) : null) !== edit.baseHash)) throw new AcceptanceError('stale', { version: 0 });
+      if (edit.baseVersion !== 0 || (current ? frozenHash(current) : null) !== edit.baseHash) throw new AcceptanceError('stale', { version: 0 });
       const base: AcceptanceDoc = current ?? { schema: 1, version: 0, language: this.#languages?.get(projectId)?.doc_language ?? null, items: [], notDoing: [] };
       this.writeDraft(projectId, { ...base, version: 0, items: applyChanges(base, ops, null) });
       return 0;
     }
-    if (edit.baseVersion !== latest.version || (edit.baseHash !== undefined && edit.baseHash !== latest.hash)) throw new AcceptanceError('stale', { version: latest.version });
+    if (edit.baseVersion !== latest.version) throw new AcceptanceError('stale', { version: latest.version });
+    if (edit.baseHash !== undefined) {
+      const shown = this.read(projectId);
+      if ((shown ? frozenHash(shown) : null) !== edit.baseHash) throw new AcceptanceError('stale', { version: latest.version });
+    }
     return this.#advance(projectId, ops, 'change', { language: null, taint: null, decide: null }).version;
   }
 

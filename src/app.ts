@@ -128,6 +128,7 @@ export class App {
   readonly projects: ProjectStore;
   readonly plans: PlanStore;
   readonly acceptance: AcceptanceStore;
+  readonly now: () => number;
   readonly mesh: Mesh;
   readonly projectFolderExempt: readonly string[];
   readonly botMemory: boolean;
@@ -159,6 +160,7 @@ export class App {
     this.#warnIgnoredPolicies(config);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
     const now = options.now ?? Date.now;
+    this.now = now;
     this.conversations = new Conversations(this.db, now, this.log);
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);

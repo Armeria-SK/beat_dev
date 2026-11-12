@@ -3,7 +3,7 @@ import { LocalizedError, type MessageParams } from '../shared/messages/define.ts
 import { buildText, type BuildMessageKey } from '../shared/messages/build.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
-import { frozenHash, type AcceptanceDoc, type AcceptanceStore, type AcceptanceVersionRow } from './acceptance.ts';
+import { docOf, frozenHash, type AcceptanceDoc, type AcceptanceStore, type AcceptanceVersionRow } from './acceptance.ts';
 import type { PlanStore } from './plan.ts';
 import { languageTagOf, ProjectError, type ProjectStore } from './store.ts';
 
@@ -62,7 +62,7 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
   const meta = d.plans.meta(projectId);
   const runs = new Set<string>();
   if (plan.tainted && meta?.runId) runs.add(meta.runId);
-  for (const run of doc.taintedRuns ?? []) runs.add(run);
+  for (const run of [...(doc.taintedRuns ?? []), ...(fixed ? docOf(fixed.content)?.taintedRuns ?? [] : [])]) runs.add(run);
   const untrusted = plan.updated_by === 'outside' || plan.tainted || runs.size > 0;
   const marked = [...runs].filter(run => RUN_ID.test(run)).slice(0, MAX_MARKED_RUNS);
 
