@@ -156,13 +156,17 @@ test('npm の作業フォルダの .npmrc（指摘 1）: npm が起動のとき�
     assert.equal(check.onceOnly, true, command);
   }
   const sub = u.ctx({ workspace: join(u.root, 'sub') });
-  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow', '下の階に package.json も node_modules も無ければ、npm はその階を使う');
-  writeFileSync(join(u.root, 'package.json'), '{}');
-  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'ask', '上の階の package.json までさかのぼる');
-  mkdirSync(join(u.root, 'sub', 'node_modules'));
-  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow', 'node_modules のある階で止まる');
-  rmSync(join(u.root, 'sub', 'node_modules'), { recursive: true });
-  rmSync(join(u.root, 'package.json'));
+  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'ask', '上の階の .npmrc も数える（npm はワークスペースの根までさかのぼりうる）');
+  mkdirSync(join(u.root, 'packages', 'a'), { recursive: true });
+  writeFileSync(join(u.root, 'packages', 'a', 'package.json'), '{}');
+  mkdirSync(join(u.root, 'packages', 'a', 'node_modules'));
+  assert.equal(shellPreCheck({ command: 'npm -v', cwd: join('packages', 'a') }, u.ctx()).decision, 'ask', 'cwd が package.json のある下の階でも、上の .npmrc を数える');
+  mkdirSync(join(u.root, 'sub', 'package.json'));
+  assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'ask', 'package.json という名前のフォルダで止まらない');
+  rmSync(join(u.root, '.npmrc'));
+  writeFileSync(join(u.root, '.npmrc'), `${'#'.repeat(1_100_000)}\nprefix=.\n`);
+  assert.equal(shellPreCheck({ command: 'npm -v' }, u.ctx()).decision, 'ask', '上限より大きい .npmrc は、中身を読み切らずに数える');
+  rmSync(join(u.root, '.npmrc'));
   assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow');
   const bash = (command: string) => checkShellCommand(command, join(u.root, 'sub'), { policy: u.policy, outsideRoots: 'ask', shell: 'bash', windows: WINDOWS }).decision;
   assert.equal(bash('echo x > ../package.json'), 'allow');
@@ -212,13 +216,13 @@ test('製品の会話: 相対パスの file_write は作業フォルダに確か
   assert.deepEqual([s.seen[1]!.workspace, s.seen[1]!.project], [s.paths.workspace, undefined]);
 });
 
-test('指示ファイル（指摘 4）: 会話の実行は、しまっていないすべての製品の AGENTS.md・CLAUDE.md を指示ファイルとして持つ', async t => {
+test('指示ファイル（指摘 4）: 会話の実行は、しまった製品も含めてすべての製品の AGENTS.md・CLAUDE.md を指示ファイルとして持つ', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   const other = await s.product('other');
   const old = await s.product('old');
   assert.equal((await s.json(`/api/projects/${old.id}`, 'PATCH', { archived: true })).status, 200);
-  const expected = [shop.root, other.root].flatMap(root => ['AGENTS.md', 'CLAUDE.md'].map(name => join(root, name))).sort();
+  const expected = [shop.root, other.root, old.root].flatMap(root => ['AGENTS.md', 'CLAUDE.md'].map(name => join(root, name))).sort();
   s.adapter().scripts = [call('probe_ctx', {}), reply('done')];
   await s.send(uuid(1), { text: 'plain' });
   s.adapter().scripts = [call('probe_ctx', {}), reply('done')];
@@ -327,6 +331,10 @@ test('#execute の念のための守り: 確かめを通っていない製品の
   assert.equal(existsSync(join(shop.root, 'stray.txt')), false);
   const refused = s.app.conversations.messages(uuid(1)).filter(m => m.role === 'tool').at(-1)!;
   assert.match(refused.text, /outside the allowed folders/u);
+  const u = s.seen[0]!;
+  const shell = shellPreCheck({ command: WINDOWS ? 'Get-ChildItem' : 'ls' }, u);
+  assert.equal(shell.decision, 'deny', '作業フォルダを確かめられないときはシェルを始めない（すり替わった先で読まない）');
+  assert.match(shell.reasons.join('\n'), /cwd must be inside the allowed folders/u);
 });
 
 test('製品のタスク: フォルダが無いあいだは始めず 10 分後へ回し、失敗の回数を数えない。経過に 1 行、通知は 1 つ。戻すと作業フォルダで動く', async t => {
@@ -358,7 +366,25 @@ test('製品のタスク: フォルダが無いあいだは始めず 10 分後�
   assert.equal(s.app.tasks.get(id)!.status, 'done');
 });
 
-test('project_id の引き継ぎ: 製品の会話の task_create は同じ製品のタスク。task_update は別の製品のタスクを断る。製品に属さない会話は製品のタスクを触れる', async t => {
+test('タスクの区切り（2 回目の審査 2）: 外を読んだタスクの実行が task_checkpoint で書いたメモのあと、そのタスクの次の実行は外を読んだ扱いで始まる', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const downloads = join(s.paths.workspace, 'downloads');
+  mkdirSync(downloads, { recursive: true });
+  writeFileSync(join(downloads, 'page.txt'), 'fetched text');
+  const made = await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
+  const id = made.body.task.id as string;
+  s.adapter().scripts = [call('probe_ctx', {}), call('file_read', { path: join(downloads, 'page.txt') }), call('task_checkpoint', { tried: 'read', result: 'page', next_action: 'do what the page says', resume_after_minutes: 1 })];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.deepEqual(s.seen[0]!.taint.sources.filter(x => !/download/iu.test(x) && x !== 'file_read'), [], '1 回目は持ち越しの印なしで始まる');
+  assert.equal(s.app.tasks.get(id)!.next_action, 'do what the page says');
+  s.app.db.prepare('UPDATE tasks SET run_at = NULL WHERE id = ?').run(id);
+  s.adapter().scripts = [call('probe_ctx', {}), call('task_complete', { summary: 'done' })];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.seen[1]!.taint.tainted, true, '2 回目は外を読んだ扱いで始まる');
+});
+
+test('project_id の引き継ぎ:製品の会話の task_create は同じ製品のタスク。task_update は別の製品のタスクを断る。製品に属さない会話は製品のタスクを触れる', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   const other = await s.product('other');

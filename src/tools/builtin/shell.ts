@@ -19,8 +19,9 @@ import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 interface ShellInput { command: string; cwd?: string; timeoutSec?: number }
 
 function resolveCwd(input: ShellInput, ctx: ToolContext): { cwd: string } | { problem: string } {
-  if (!input.cwd) return { cwd: ctx.workspace };
   const language = languageOf(ctx.config);
+  if (ctx.project && !ctx.project.root) return { problem: guardText(language, 'shell.cwd_outside', { path: ctx.workspace }) };
+  if (!input.cwd) return { cwd: ctx.workspace };
   const expanded = expandPath(input.cwd, ctx.workspace, process.env, language);
   if ('unresolved' in expanded) return { problem: guardText(language, 'shell.cwd_unresolved', { detail: expanded.unresolved }) };
   const placement = placePath(expanded.path, ctx.policy);

@@ -2,7 +2,7 @@
 // あとで動く許可済みのコマンド（git status・curl・シェルの起動）に、設定でコードを読み込ませられる。そこへの書き込み・消すこと・名前の変更は、
 // 許可フォルダの中でも外でも、シェルからは今回だけにする。ここは、その場所の一覧と、調べる関数
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { isInside } from './scope.ts';
@@ -84,8 +84,10 @@ const MAX_RC_BYTES = 1_048_576;
 // 空の行・# のコメントだけなら、読まれても何も変わらない
 function hasSettings(file: string): boolean {
   try {
-    if (!statSync(file).isFile()) return false;
-    return readFileSync(file, 'utf8').slice(0, MAX_RC_BYTES).split(/\r?\n/u).some(line => !/^\s*(?:#.*)?$/u.test(line));
+    const st = statSync(file);
+    if (!st.isFile()) return false;
+    if (st.size > MAX_RC_BYTES) return true;
+    return readFileSync(file, 'utf8').split(/\r?\n/u).some(line => !/^\s*(?:#.*)?$/u.test(line));
   } catch (e) {
     return (e as NodeJS.ErrnoException).code !== 'ENOENT' && (e as NodeJS.ErrnoException).code !== 'ENOTDIR';
   }
@@ -109,13 +111,11 @@ export function curlConfigFile(env: Env, cwd?: string): string | undefined {
 }
 
 export function npmProjectConfigFile(cwd: string): string | undefined {
-  let prefix = cwd;
   for (let dir = cwd; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, 'package.json')) || existsSync(join(dir, 'node_modules'))) { prefix = dir; break; }
-    if (dirname(dir) === dir) break;
+    const file = join(dir, '.npmrc');
+    if (hasSettings(file)) return file;
+    if (dirname(dir) === dir) return undefined;
   }
-  const file = join(prefix, '.npmrc');
-  return hasSettings(file) ? file : undefined;
 }
 
 // wget が設定として読むファイルのうち、設定が書かれているもの（最初の 1 つ）

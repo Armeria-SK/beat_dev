@@ -399,7 +399,12 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     const control = { value: { outcome: 'none' } as TaskControl };
-    if (this.#checklistCarriesTaint(conversationId)) this.#initialTaint.set(runId, [engineText(languageOf(this.#d.config()), 'taint.checklist')]);
+    const language = languageOf(this.#d.config());
+    const sources = [
+      ...(this.#d.runs.latestTask(conversationId)?.tainted === 1 ? [engineText(language, 'taint.carried')] : []),
+      ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
+    ];
+    if (sources.length) this.#initialTaint.set(runId, sources);
     this.#start(runId, conversationId, chain.usable, 'task', { task, control });
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
@@ -615,7 +620,7 @@ export class ChatEngine {
     let lastRoute: Route = chain[0]!;
     const project = agent ? agent.parent.project : kind === 'review' ? undefined : runProject(d.projects, d.conversations.projectOf(conversationId));
     if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
-    const productRoots = agent || kind === 'review' ? [] : d.projects?.list().map(p => p.root) ?? [];
+    const productRoots = agent || kind === 'review' ? [] : [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
     const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
     const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
     const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
