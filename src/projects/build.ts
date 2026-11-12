@@ -8,7 +8,6 @@ import type { PlanStore } from './plan.ts';
 import { languageTagOf, ProjectError, type ProjectStore } from './store.ts';
 
 export const BUILD_ACTOR = 'build';
-export const UNTRUSTED_RUN = 'untrusted-input';
 const RUN_ID = /^[0-9a-f-]{36}$/u;
 const MAX_MARKED_RUNS = 20;
 
@@ -59,8 +58,8 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
       createdInConversation: plan.updated_by === 'ai' ? meta?.conversationId ?? undefined : undefined,
     });
     if (untrusted) {
-      const note = taskText(d.language(), 'event.build_untrusted');
-      for (const run of [...marked, UNTRUSTED_RUN]) d.tasks.event(task.id, 'context', BUILD_ACTOR, note, run);
+      for (const run of marked) d.tasks.event(task.id, 'context', BUILD_ACTOR, null, run);
+      d.tasks.markUntrusted(task.id, BUILD_ACTOR, taskText(d.language(), 'event.build_untrusted'));
     }
     return task.id;
   });

@@ -259,8 +259,13 @@ test('DELETE: やわらかい参照の表のどれかに行があると 409', as
       insert[ref.table](task.id);
       const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
       assert.equal(res.status, 409, task.title);
-      assert.equal(res.body.code, 'task.error.still_referenced', '「繰り返しか…だけ消せる」ではなく、参照が残っているという別の断り');
-      assert.match(res.body.message, /still refers to this task/u);
+      if (ref.table === 'acceptance_versions') {
+        assert.equal(res.body.code, 'task.error.build_locked', '固定した受け入れの一覧の版を理由に言う');
+        assert.match(res.body.message, /locked acceptance list \(version 1\)/u);
+      } else {
+        assert.equal(res.body.code, 'task.error.still_referenced', '「繰り返しか…だけ消せる」ではなく、参照が残っているという別の断り');
+        assert.match(res.body.message, /still refers to this task/u);
+      }
       assert.ok(s.app.tasks.get(task.id), task.title);
     }
   }

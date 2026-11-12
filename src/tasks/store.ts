@@ -100,6 +100,7 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'acceptance_versions', column: 'build_task_id' },
 ] as const;
 export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:'] as const;
+export const UNTRUSTED_RUN = 'untrusted-input';
 export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }
 
 function firstLine(text: string | null): string | null {
@@ -346,12 +347,19 @@ export class TaskStore {
   }
 
   // 同じ予定から作られた実行で、まだ終わっていない（実行待ち・実行中・返事待ち）ものがあるか
+  hasOpenRun(parentId: string): boolean {
+    return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(parentId));
+  }
+
   hasOpenBuild(projectId: string): boolean {
     return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting')").get(projectId));
   }
 
-  hasOpenRun(parentId: string): boolean {
-    return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(parentId));
+  markUntrusted(taskId: string, actor: string, note: string): void {
+    transaction(this.#db, () => {
+      if (this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND run_id = ? AND kind = 'context' LIMIT 1").get(taskId, UNTRUSTED_RUN)) return;
+      this.event(taskId, 'context', actor, note, UNTRUSTED_RUN);
+    });
   }
 
   approve(id: string): Task {
@@ -396,6 +404,8 @@ export class TaskStore {
     const removed = transaction(this.#db, () => {
       const task = this.get(id);
       if (!task) throw new TaskError('error.not_found', { id });
+      const locked = this.#db.prepare('SELECT version FROM acceptance_versions WHERE build_task_id = ? ORDER BY version DESC LIMIT 1').get(id) as { version: number } | undefined;
+      if (locked) throw new TaskError('error.build_locked', { version: locked.version });
       if (task.cron !== null && task.parent_id === null) {
         if (task.conversation_id !== null) throw new TaskError('error.not_deletable');
         if (this.hasOpenRun(id)) throw new TaskError('error.run_open');
