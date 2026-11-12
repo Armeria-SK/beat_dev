@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, type Project, type ProjectPatch } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { useT } from '../../i18n/index.ts';
+import { autoLabel, hasDocLanguage, LANGUAGES, languageName, languagePatch, languagePick, OTHER } from '../doc-language.ts';
 import { Button } from '../parts.tsx';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { routeHash } from '../routes.ts';
@@ -14,11 +15,14 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
   const t = useT();
   const [name, setName] = useState(project.name);
   const [check, setCheck] = useState(project.check_command ?? '');
+  const [lang, setLang] = useState(() => languagePick(project));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
   const savedCheck = project.check_command ?? '';
-  const dirty = name !== project.name || check !== savedCheck;
+  const langShown = hasDocLanguage(project);
+  const langChange = langShown ? languagePatch(project, lang.pick, lang.other) : null;
+  const dirty = name !== project.name || check !== savedCheck || langChange !== null;
 
   useEffect(() => { setUnsaved(EDITS, dirty); }, [dirty]);
   useEffect(() => () => setUnsaved(EDITS, false), []);
@@ -37,8 +41,10 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
     const body: ProjectPatch = {};
     if (name.trim() !== project.name) body.name = name.trim();
     if (check.trim() !== savedCheck) body.checkCommand = check.trim() || null;
-    if (Object.keys(body).length === 0) { setName(project.name); setCheck(savedCheck); return; }
-    void patch(body, next => { setName(next.name); setCheck(next.check_command ?? ''); toast({ icon: 'check', title: t('ui.ps.saved') }); });
+    if (langChange === 'invalid') return;
+    if (langChange) body.docLanguage = langChange.docLanguage;
+    if (Object.keys(body).length === 0) { setName(project.name); setCheck(savedCheck); setLang(languagePick(project)); return; }
+    void patch(body, next => { setName(next.name); setCheck(next.check_command ?? ''); setLang(languagePick(next)); toast({ icon: 'check', title: t('ui.ps.saved') }); });
   };
 
   const archive = () => void patch({ archived: true }, next => {
@@ -68,7 +74,22 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
           <input className="bt-field bt-field--mono" type="text" value={check} spellCheck={false} autoComplete="off" onChange={e => setCheck(e.target.value)} />
           <span className="bt-meta">{t('ui.np.checkHint')}</span>
         </label>
-        <div className="ui-np__actions"><Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim()}>{t('ui.ps.save')}</Button></div>
+        {langShown && (
+          <div className="bt-form-row">
+            <label className="bt-label" htmlFor="ui-ps-lang">{t('ui.ps.lang')}</label>
+            <select id="ui-ps-lang" className="bt-field ui-ps__lang" aria-describedby="ui-ps-lang-hint" value={lang.pick} onChange={e => setLang({ pick: e.target.value, other: e.target.value === OTHER ? lang.other : '' })}>
+              <option value="">{autoLabel(project)}</option>
+              {LANGUAGES.map(tag => <option key={tag} value={tag}>{languageName(tag)}</option>)}
+              <option value={OTHER}>{t('ui.ps.langOther')}</option>
+            </select>
+            {lang.pick === OTHER && (
+              <input className="bt-field bt-field--mono ui-ps__lang" type="text" value={lang.other} aria-label={t('ui.ps.langTag')} placeholder="pt-BR" maxLength={12} spellCheck={false} autoComplete="off"
+                aria-invalid={langChange === 'invalid' && lang.other !== ''} aria-describedby="ui-ps-lang-hint" onChange={e => setLang({ pick: OTHER, other: e.target.value })} />
+            )}
+            <span id="ui-ps-lang-hint" role="status" className={`bt-meta${langChange === 'invalid' && lang.other !== '' ? ' ui-danger' : ''}`}>{langChange === 'invalid' && lang.other !== '' ? t('ui.ps.langInvalid') : t('ui.ps.langHint')}</span>
+          </div>
+        )}
+        <div className="ui-np__actions"><Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim() || langChange === 'invalid'}>{t('ui.ps.save')}</Button></div>
       </form>
 
       <section className="bt-section">

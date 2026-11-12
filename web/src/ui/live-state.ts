@@ -51,6 +51,8 @@ export const EMPTY: LiveState = {
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
 
+const planBump = (s: LiveState, projectId: string): LiveState => ({ ...s, planRevisions: new Map(s.planRevisions).set(projectId, (s.planRevisions.get(projectId) ?? 0) + 1) });
+
 export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker' | 'projects' | 'projectCounts';
 
 export type Effect =
@@ -196,7 +198,9 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'project.changed':
       return { state: s, effects: refresh('projects', ...(e.change === 'archived' || e.change === 'restored' ? ['conversations'] as const : [])) };
     case 'plan.changed':
-      return { state: { ...s, planRevisions: new Map(s.planRevisions).set(e.projectId, (s.planRevisions.get(e.projectId) ?? 0) + 1) }, effects: refresh('projects') };
+      return { state: planBump(s, e.projectId), effects: refresh('projects') };
+    case 'acceptance.changed':
+      return { state: planBump(s, e.projectId), effects: [] };
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };

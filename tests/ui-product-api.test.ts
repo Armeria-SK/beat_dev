@@ -82,3 +82,15 @@ test('web/api: 製品の口が無いサーバーの 404 は「製品なし」と
   capture(500, { message: 'boom' });
   assert.equal(noProductApi(await api.projects().catch((error: unknown) => error)), false);
 });
+
+test('web/api: 受け入れの一覧を読む口と、製品の文書の言語を変える PATCH（beat 3-1b-u）', async () => {
+  const sent = capture(200, { acceptance: {} });
+  await api.acceptance('p1aaaa');
+  await api.patchProject('p1aaaa', { docLanguage: 'ja' });
+  await api.patchProject('p1aaaa', { docLanguage: null });
+  assert.deepEqual(sent, [
+    { url: '/api/projects/p1aaaa/acceptance', method: 'GET', body: undefined },
+    { url: '/api/projects/p1aaaa', method: 'PATCH', body: { docLanguage: 'ja' } },
+    { url: '/api/projects/p1aaaa', method: 'PATCH', body: { docLanguage: null } },
+  ]);
+});

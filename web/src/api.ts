@@ -39,13 +39,30 @@ export interface Project {
   running: number;
   last_activity_at: number | null;
   has_plan?: boolean;
+  doc_language?: string | null;
+  doc_language_pinned?: boolean;
 }
 export interface PlanDoc {
   content: string | null; hash: string | null; updated_at: number | null; updated_by: 'ai' | 'owner' | 'outside' | null; tainted: boolean; writing: boolean;
 }
+export type AcceptanceSource =
+  | { kind: 'owner_words'; quote: string; context?: string; messageId?: number; conversationId?: string }
+  | { kind: 'owner_choice'; question: string; answer: string; questionMessageId?: number; answerMessageId?: number; conversationId?: string }
+  | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: 'not_found' | 'too_short' | 'not_next_reply' | 'choice_unverified' | 'scan_budget'; quote?: string; question?: string; answer?: string }
+  | { kind: 'owner_edit' };
+export type AcceptanceCheck = { kind: 'command'; command: string } | { kind: 'look' } | { kind: 'read' };
+export interface AcceptanceItem {
+  id: string; result: string; source: AcceptanceSource; check: AcceptanceCheck; state: 'open' | 'met' | 'unverified'; evidence: unknown[]; changedIn: number | null; removedIn: number | null;
+}
+export interface NotDoingItem { id: string; text: string; source: AcceptanceSource }
+export interface Acceptance {
+  version: number; language: string | null; items: AcceptanceItem[]; not_doing: NotDoingItem[]; draft: boolean; hash: string | null;
+  frozen: { version: number; hash: string; plan_hash: string | null; created_at: number; source: string; build_task_id: string | null } | null;
+  tainted?: boolean;
+}
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
-export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true }
+export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null }
 export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
 export interface FolderList { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
@@ -252,6 +269,7 @@ export const api = {
   createProject: (input: NewProject) => call<{ project: Project; notes: ProjectNote[] }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   patchProject: (id: string, patch: ProjectPatch) => call<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   plan: (id: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`),
+  acceptance: (id: string) => call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance`),
   savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
   listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
   archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),

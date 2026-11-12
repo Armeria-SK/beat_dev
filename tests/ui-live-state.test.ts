@@ -101,6 +101,13 @@ test('ui/live-state: plan.changed はその製品の計画書の読み直しの�
   assert.equal(again.state.planRevisions.get('p1aaaa'), 2);
 });
 
+test('ui/live-state: acceptance.changed はその製品の Plan の欄を読み直させる。ほかは読み直さない（beat 3-1b-u）', () => {
+  const r = reduce(EMPTY, ev({ type: 'acceptance.changed', projectId: 'p1aaaa', version: 0, draft: true }));
+  assert.equal(r.state.planRevisions.get('p1aaaa'), 1);
+  assert.equal(r.state.planRevisions.get('p2bbbb'), undefined);
+  assert.deepEqual(refreshes(r.effects), []);
+});
+
 test('ui/live-state: 製品があるときだけ、タスクと承認の出来事で製品の数を読み直す（製品が無ければ今までと同じ）', () => {
   const events: RunEvent[] = [
     { type: 'task.changed', task: task('t1', 'inbox', 5) },

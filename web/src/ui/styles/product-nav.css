@@ -18,6 +18,7 @@
 .ui-np__name { color: var(--ink-mute); }
 .ui-np__row.is-chosen { background: var(--surface-sunk); }
 .ui-np__actions { display: flex; gap: var(--space-2); }
+.ui-ps__lang { max-width: 320px; }
 .ui-np__archived { margin-top: var(--space-6); }
 
 @media (max-width: 760px) {
