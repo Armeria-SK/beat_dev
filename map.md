@@ -23,7 +23,7 @@
 - `workspace/`: `SOUL.md` `USER.md` `CURIOSITY.md` と `skills/<名前>/SKILL.md`
 - `tool_outputs/`: 長いシェル出力の全文
 
-ルート直下: `package.json`（`npm run check` は型チェック + テスト + 画面のビルド）、`tsconfig.json`（`src` と `tests` と `scripts`）、`tsconfig.web.json`（`web/src`）、`.env.example`（`.env` の雛形）。開発の資料は `docs/`（git 対象外）。
+ルート直下: `package.json`（`npm run check` は型チェック + テスト + 画面のビルド）、`tsconfig.json`（`src` と `tests` と `scripts`）、`tsconfig.web.json`（`web/src`）、`.env.example`（`.env` の雛形）、`start.ps1` / `start.sh`（Node の版の確認 → 必要なときだけ `npm ci` → `npm run build:web` → `node src/main.ts` を前面で起動。引数はそのまま渡す）、`.gitattributes`（`*.sh` を LF に保つ）。開発の資料は `docs/`（git 対象外）。
 
 ## 部品
 
