@@ -69,6 +69,24 @@ const ORIGIN_ORDER = "CASE origin WHEN 'user' THEN 0 WHEN 'schedule' THEN 1 WHEN
 const ACTIVE: TaskStatus[] = ['inbox', 'ready', 'running', 'waiting', 'scheduled'];
 // 取り消しを元に戻せる状態（取り消す直前がこの中のどれかのときだけ、戻す先を覚える）
 const RESTORABLE: readonly TaskStatus[] = ACTIVE;
+const IS_TEMPLATE = 'cron IS NOT NULL AND parent_id IS NULL';
+const FINISHED = "status IN ('done', 'failed', 'cancelled')";
+const FINISHED_T = 'COALESCE(completed_at, updated_at)';
+
+export const SCHEDULE_MAX_RANGE_MS = 8 * 86_400_000;
+export const SCHEDULE_PLANNED_LIMIT = 200;
+export const SCHEDULE_RAN_LIMIT = 2000;
+export const SCHEDULE_MIN_SLOT_MS = 60_000;
+
+export type RepeatingTask = Task & { last_run: { id: string; status: TaskStatus; summary: string | null; at: number } | null };
+export interface FinishedCursor { t: number; id: string }
+export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned' }
+export interface Schedule { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean }>; ranTruncated: boolean }
+
+function firstLine(text: string | null): string | null {
+  const line = text?.split('\n').find(l => l.trim())?.trim();
+  return line ? line.slice(0, 200) : null;
+}
 
 export class TaskStore {
   readonly #db: DatabaseSync;
@@ -106,6 +124,63 @@ export class TaskStore {
 
   recentlyFinished(limit = 50): Task[] {
     return this.#db.prepare("SELECT * FROM tasks WHERE status IN ('done', 'failed', 'cancelled') ORDER BY COALESCE(completed_at, updated_at) DESC LIMIT ?").all(limit) as unknown as Task[];
+  }
+
+  templates(): RepeatingTask[] {
+    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} ORDER BY created_at, rowid`).all() as unknown as Task[];
+    const last = this.#db.prepare('SELECT id, status, result_summary, COALESCE(completed_at, updated_at) AS at FROM tasks WHERE parent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1');
+    return rows.map(task => {
+      const run = last.get(task.id) as { id: string; status: TaskStatus; result_summary: string | null; at: number } | undefined;
+      return { ...task, last_run: run ? { id: run.id, status: run.status, summary: firstLine(run.result_summary), at: run.at } : null };
+    });
+  }
+
+  finishedTotal(): number {
+    return (this.#db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})`).get() as { n: number }).n;
+  }
+
+  finishedPage(options: { before?: FinishedCursor | undefined; limit: number }): { tasks: Task[]; next: FinishedCursor | null } {
+    const before = options.before;
+    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})
+      ${before ? `AND (${FINISHED_T} < ? OR (${FINISHED_T} = ? AND id < ?))` : ''}
+      ORDER BY ${FINISHED_T} DESC, id DESC LIMIT ?`).all(...(before ? [before.t, before.t, before.id] : []), options.limit + 1) as unknown as Task[];
+    const tasks = rows.slice(0, options.limit);
+    const tail = tasks.at(-1);
+    return { tasks, next: rows.length > options.limit && tail ? { t: tail.completed_at ?? tail.updated_at, id: tail.id } : null };
+  }
+
+  schedule(from: number, to: number): Schedule {
+    const now = this.#now();
+    const slots: ScheduleSlot[] = [];
+    const ran = this.#db.prepare(`SELECT COALESCE(t.parent_id, t.id) AS taskId, t.id AS runTaskId, COALESCE(p.title, t.title) AS title, r.started_at AS start, r.ended_at AS ended
+      FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id LEFT JOIN tasks p ON p.id = t.parent_id
+      WHERE r.kind = 'task' AND r.started_at < ? AND COALESCE(r.ended_at, ?) >= ?
+      ORDER BY r.started_at DESC LIMIT ?`).all(to, now, from, SCHEDULE_RAN_LIMIT + 1) as Array<{ taskId: string; runTaskId: string; title: string; start: number; ended: number | null }>;
+    for (const row of ran.slice(0, SCHEDULE_RAN_LIMIT)) {
+      slots.push({ taskId: row.taskId, runTaskId: row.runTaskId, title: row.title, start: row.start, length: Math.max(0, (row.ended ?? now) - row.start), state: row.ended === null ? 'live' : 'past' });
+    }
+    const lastLength = this.#db.prepare(`SELECT r.ended_at - r.started_at AS length FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id
+      WHERE t.parent_id = ? AND r.kind = 'task' AND r.ended_at IS NOT NULL ORDER BY r.started_at DESC LIMIT 1`);
+    const templates: Schedule['templates'] = [];
+    const active = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} AND status = 'scheduled' ORDER BY created_at, rowid`).all() as unknown as Task[];
+    for (const template of active) {
+      const length = Math.max(SCHEDULE_MIN_SLOT_MS, (lastLength.get(template.id) as { length: number } | undefined)?.length ?? 0);
+      let truncated = false;
+      let count = 0;
+      let at = nextRunAt(template.cron!, template.timezone ?? 'UTC', Math.max(now, from - 1));
+      while (at !== null && at < to) {
+        if (count === SCHEDULE_PLANNED_LIMIT) { truncated = true; break; }
+        slots.push({ taskId: template.id, runTaskId: null, title: template.title, start: at, length, state: 'planned' });
+        count += 1;
+        at = nextRunAt(template.cron!, template.timezone ?? 'UTC', at);
+      }
+      templates.push({ taskId: template.id, title: template.title, cron_text: describeCron(template.cron!, this.#language()), truncated });
+    }
+    const timed = this.#db.prepare(`SELECT id, title, run_at FROM tasks WHERE status = 'ready' AND cron IS NULL AND parent_id IS NULL AND run_at >= ? AND run_at < ? ORDER BY run_at LIMIT ?`)
+      .all(from, to, SCHEDULE_PLANNED_LIMIT) as Array<{ id: string; title: string; run_at: number }>;
+    for (const task of timed) slots.push({ taskId: task.id, runTaskId: task.id, title: task.title, start: task.run_at, length: SCHEDULE_MIN_SLOT_MS, state: 'planned' });
+    slots.sort((a, b) => a.start - b.start);
+    return { from, to, slots, templates, ranTruncated: ran.length > SCHEDULE_RAN_LIMIT };
   }
 
   events(taskId: string, limit = 200): TaskEvent[] {

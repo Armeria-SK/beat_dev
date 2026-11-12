@@ -2,7 +2,7 @@ import type { App } from '../app.ts';
 import { AVATAR_SHAPES } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
-import { TaskError, taskView, type Task } from '../tasks/store.ts';
+import { SCHEDULE_MAX_RANGE_MS, TaskError, taskView, type Task } from '../tasks/store.ts';
 import { splitKey } from '../tasks/worker.ts';
 import { languageOf } from '../shared/language.ts';
 import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
@@ -59,7 +59,28 @@ export function registerTaskRoutes(router: Router, app: App): void {
   router.add('GET', '/api/tasks', ({ res }) => sendJson(res, 200, {
     active: app.tasks.list().map(view),
     finished: app.tasks.recentlyFinished().map(view),
+    finishedTotal: app.tasks.finishedTotal(),
+    repeating: app.tasks.templates().map(task => ({ ...view(task), last_run: task.last_run })),
   }));
+
+  router.add('GET', '/api/tasks/finished', ({ res, url }) => {
+    const beforeT = url.searchParams.get('beforeT');
+    const beforeId = url.searchParams.get('beforeId');
+    if ((beforeT === null) !== (beforeId === null) || (beforeT !== null && !/^\d{1,16}$/u.test(beforeT)) || beforeId === '') {
+      throw problem(400, 'invalid_field', 'bad_cursor', { field: 'beforeT' });
+    }
+    const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit') ?? 20)) || 20, 1), 100);
+    const page = app.tasks.finishedPage({ before: beforeT !== null && beforeId !== null ? { t: Number(beforeT), id: beforeId } : undefined, limit });
+    sendJson(res, 200, { tasks: page.tasks.map(view), next: page.next ? { beforeT: page.next.t, beforeId: page.next.id } : null, total: app.tasks.finishedTotal() });
+  });
+
+  router.add('GET', '/api/schedule', ({ res, url }) => {
+    const [from, to] = ['from', 'to'].map(name => { const raw = url.searchParams.get(name); return raw !== null && /^\d{1,16}$/u.test(raw) ? Number(raw) : Number.NaN; }) as [number, number];
+    if (!(from < to) || to - from > SCHEDULE_MAX_RANGE_MS) {
+      throw problem(400, 'invalid_field', 'bad_range', { field: 'from', params: { days: SCHEDULE_MAX_RANGE_MS / 86_400_000 } });
+    }
+    sendJson(res, 200, app.tasks.schedule(from, to));
+  });
 
   router.add('POST', '/api/tasks', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
