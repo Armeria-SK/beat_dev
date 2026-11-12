@@ -64,4 +64,27 @@ export function latch(run: () => void): { fire: () => void; reset: () => void } 
   };
 }
 
-export const isConversation =(route: Route): boolean => route.view === 'new' || route.view === 'chat';
+export const CLOSE_FALLBACK_MS = 300;
+
+export interface CloseEnv {
+  hasBehind: () => boolean;
+  behindHash: () => string;
+  back: () => void;
+  replace: (hash: string) => void;
+  currentHash: () => string;
+  generation: () => number;
+  later: (run: () => void, ms: number) => void;
+}
+
+export function settingsCloser(env: CloseEnv): { fire: () => void; reset: () => void } {
+  return latch(() => {
+    if (!env.hasBehind()) { env.replace('#/'); return; }
+    const before = env.generation();
+    env.back();
+    env.later(() => {
+      if (env.generation() === before && parseRoute(env.currentHash()).view === 'settings') env.replace(env.behindHash());
+    }, CLOSE_FALLBACK_MS);
+  });
+}
+
+export const isConversation = (route: Route): boolean => route.view === 'new' || route.view === 'chat';

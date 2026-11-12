@@ -6,7 +6,8 @@ import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './a
 import { EMPTY, reduce, type Action, type Effect, type LiveState } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Icon } from './parts.tsx';
-import { isConversation, latch, parseRoute, routeBehind, routeHash, type Route } from './routes.ts';
+import { pickFocus } from './focus.ts';
+import { HOME, isConversation, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from './routes.ts';
 import { Sidebar } from './Sidebar.tsx';
 
 const NARROW = '(max-width: 760px)';
@@ -39,11 +40,11 @@ function readRoute(): Route {
   return route;
 }
 
-const visible = (el: Element | null): el is HTMLElement =>
-  el instanceof HTMLElement && el.isConnected && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
-
 function focusFirst(...candidates: Array<Element | null>): void {
-  requestAnimationFrame(() => { for (const el of candidates) if (visible(el)) { el.focus(); return; } });
+  requestAnimationFrame(() => {
+    const elements = candidates.filter((el): el is HTMLElement => el instanceof HTMLElement);
+    pickFocus(elements, document.body, el => getComputedStyle(el).visibility === 'hidden')?.focus();
+  });
 }
 
 function SettingsShell({ onClose }: { onClose: () => void }) {
@@ -111,16 +112,29 @@ export function App() {
     }
   };
 
-  const closer = useMemo(() => latch(() => {
-    if (behindRef.current) history.back();
-    else location.replace('#/');
+  const hashGeneration = useRef(0);
+  const closer = useMemo(() => settingsCloser({
+    hasBehind: () => behindRef.current !== null,
+    behindHash: () => routeHash(behindRef.current ?? HOME),
+    back: () => history.back(),
+    replace: hash => location.replace(hash),
+    currentHash: () => location.hash,
+    generation: () => hashGeneration.current,
+    later: (run, ms) => { setTimeout(run, ms); },
   }), []);
   const viewRef = useRef(route.view);
   viewRef.current = route.view;
 
   useEffect(() => {
+    const onPop = () => closer.reset();
+    addEventListener('popstate', onPop);
+    return () => removeEventListener('popstate', onPop);
+  }, [closer]);
+
+  useEffect(() => {
     const onHash = () => {
       const next = readRoute();
+      hashGeneration.current += 1;
       closer.reset();
       if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;
       setRoute(next);
@@ -163,10 +177,12 @@ export function App() {
   }, [waiting.approvals, waiting.answers]);
 
   const settingsOpen = route.view === 'settings';
+  const wasSettingsOpen = useRef(settingsOpen);
   useEffect(() => {
-    if (settingsOpen) return;
+    const closed = wasSettingsOpen.current && !settingsOpen;
+    wasSettingsOpen.current = settingsOpen;
+    if (!closed) return;
     const opener = settingsOpener.current;
-    if (!opener) return;
     settingsOpener.current = null;
     focusFirst(opener, document.querySelector('[data-settings-button]'), menuButton.current);
   }, [settingsOpen]);

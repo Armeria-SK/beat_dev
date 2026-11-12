@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HOME, isConversation, latch, parseRoute, routeBehind, routeHash, type Route } from '../web/src/ui/routes.ts';
+import { CLOSE_FALLBACK_MS, HOME, isConversation, latch, parseRoute, routeBehind, routeHash, settingsCloser, type Route } from '../web/src/ui/routes.ts';
 
 // 新しい画面（web/src/ui）の経路。p1-ui.md の「枠」: #/ #/c/<id> #/overview #/kanban #/tasks/<id> #/schedule #/notifications #/memory
 // #/skills[/<名前>|/draft/<名前>] #/runs[/tools|/reviews] #/archived #/settings[/<区分>]。
@@ -76,4 +76,52 @@ test('ui/routes: latch は reset まで 1 回だけ動く（Settings を閉じ�
   closer.reset();
   closer.fire(); closer.fire();
   assert.equal(calls, 2);
+});
+
+function fakeClose(start: string, landing: string, behind = true) {
+  const log: string[] = [];
+  let hash = start;
+  let generation = 0;
+  const timers: Array<() => void> = [];
+  const closer = settingsCloser({
+    hasBehind: () => behind,
+    behindHash: () => '#/kanban',
+    back: () => { log.push('back'); if (landing !== hash) { hash = landing; generation += 1; } },
+    replace: next => { log.push(`replace ${next}`); hash = next; generation += 1; },
+    currentHash: () => hash,
+    generation: () => generation,
+    later: (run, ms) => { assert.equal(ms, CLOSE_FALLBACK_MS); timers.push(run); },
+  });
+  return { closer, log, timers, hash: () => hash, navigate: (next: string) => { hash = next; generation += 1; } };
+}
+
+test('ui/routes: Settings を閉じて戻った先がまだ Settings（アドレス欄で #/settings/ を打った履歴）なら、約 300ms 後に後ろの画面へ置き換える', () => {
+  const f = fakeClose('#/settings', '#/settings');
+  f.closer.fire();
+  for (const run of f.timers) run();
+  assert.deepEqual(f.log, ['back', 'replace #/kanban']);
+  assert.equal(f.hash(), '#/kanban');
+});
+
+test('ui/routes: 戻るで Settings から出られたときは置き換えない（ふだんの閉じ方）', () => {
+  const f = fakeClose('#/settings', '#/kanban');
+  f.closer.fire();
+  for (const run of f.timers) run();
+  assert.deepEqual(f.log, ['back']);
+});
+
+test('ui/routes: 後ろの画面が無い（#/settings を直接開いた）ときは戻らずに新しい会話へ置き換える', () => {
+  const f = fakeClose('#/settings', '#/settings', false);
+  f.closer.fire();
+  assert.deepEqual(f.log, ['replace #/']);
+  assert.equal(f.timers.length, 0);
+});
+
+test('ui/routes: 閉じたあと、待つあいだに別の経路へ動いていれば（generation が変わる）置き換えない', () => {
+  const f = fakeClose('#/settings', '#/kanban');
+  f.closer.fire();
+  f.navigate('#/settings/models');
+  for (const run of f.timers) run();
+  assert.deepEqual(f.log, ['back']);
+  assert.equal(f.hash(), '#/settings/models');
 });
