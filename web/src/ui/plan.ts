@@ -29,10 +29,14 @@ export const rebase = (draft: PlanDraft, doc: PlanDoc): PlanDraft => ({ text: dr
 
 export type SaveOutcome = { kind: 'changed' } | { kind: 'failed'; detail: string | null };
 
+export const typed = (draft: PlanDraft | null, doc: PlanDoc | null, text: string): PlanDraft => ({ ...(draft ?? startDraft(doc)), text });
+
+export const apiDetail = (error: unknown): string | null =>
+  (typeof (error as { status?: unknown } | null)?.status === 'number' && error instanceof Error ? error.message : null);
+
 export function saveOutcome(error: unknown): SaveOutcome {
-  const status = (error as { status?: unknown } | null)?.status;
-  if (status === 409) return { kind: 'changed' };
-  return { kind: 'failed', detail: typeof status === 'number' && error instanceof Error ? error.message : null };
+  if ((error as { status?: unknown } | null)?.status === 409) return { kind: 'changed' };
+  return { kind: 'failed', detail: apiDetail(error) };
 }
 
 export function planStays(held: Route, next: Route, productOf: (conversationId: string) => string | null | undefined): string | null {

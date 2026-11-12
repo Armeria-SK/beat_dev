@@ -72,6 +72,7 @@ export function Notice({ tone, icon, title, text, action, also }: {
         <Icon name={icon ?? 'alert'} />
         <div className="bt-notice__body"><strong>{title}</strong>{text && <p>{text}</p>}</div>
         {action && <Button small onClick={action.run}>{action.label}</Button>}
+        {also && <Button small onClick={also.run}>{also.label}</Button>}
       </div>
     );
   }

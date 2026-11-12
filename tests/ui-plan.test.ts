@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Conversation, PlanDoc } from '../web/src/api.ts';
-import { canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planState, planStays, rebase, runningIn, saveOutcome, startDraft } from '../web/src/ui/plan.ts';
+import { apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planState, planStays, rebase, runningIn, saveOutcome, startDraft, typed } from '../web/src/ui/plan.ts';
 import { hasUnsavedEdits, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
 // Plan の欄（beat 3-1a-u）。画面を持たない決まり: 状態の決め方・書きかけ・保存の結果（web/src/ui/plan.ts）。
@@ -50,6 +50,18 @@ test('ui/plan: 触っていない書きかけは、AI が計画書を書き換�
   assert.deepEqual(followDoc(typed, newer), typed);
   assert.equal(followDoc(start, doc()), start, '同じ版なら替えない');
   assert.equal(followDoc(null, newer), null);
+});
+
+test('ui/plan: 打った文は、画面に出ている書きかけ（その版）に載せる。AI の書き換えより先に届いた打鍵は古い版のままなので、保存は 409 になる', () => {
+  const shown = startDraft(doc());
+  assert.deepEqual(typed(shown, doc({ content: 'newer', hash: 'h2' }), 'mine'), { ...shown, text: 'mine' });
+  assert.deepEqual(typed(null, doc(), 'x'), { text: 'x', base: 'h1', baseText: '# Plan\n\nStep one.' }, '書きかけが無ければ、今の版から始める');
+});
+
+test('ui/plan: 読めない・保存できない理由は、サーバーの答えのときだけ出す（読めないファイルなど）', () => {
+  assert.equal(apiDetail(Object.assign(new Error('plan.md is not a file'), { status: 400 })), 'plan.md is not a file');
+  assert.equal(apiDetail(new TypeError('Failed to fetch')), null);
+  assert.equal(apiDetail(null), null);
 });
 
 test('ui/plan: Reload は新しい版を基にし直し、書きかけの文は残す（そのまま保存すると新しい版を置き換える）', () => {

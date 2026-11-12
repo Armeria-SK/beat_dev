@@ -62,7 +62,7 @@ export function paneRange(layout: PaneLayout, index: number, room: number): { mi
   return { min: PANE_MIN, max: pane.width + layout[index - 1]!.width - PANE_MIN };
 }
 
-export const showSplit =(views: readonly string[], layout: PaneLayout, room: number): boolean =>
+export const showSplit = (views: readonly string[], layout: PaneLayout, room: number): boolean =>
   views.length >= 2 && maxPanes(room) > layout.length;
 
 export function fitLayout(layout: PaneLayout, room: number): PaneLayout {

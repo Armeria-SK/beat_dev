@@ -7,7 +7,7 @@ import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Notice } from '../parts.tsx';
 import {
-  canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, saveOutcome, startDraft, type PlanDraft, type SaveOutcome,
+  apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, saveOutcome, startDraft, typed, type PlanDraft, type SaveOutcome,
 } from '../plan.ts';
 import { hasUnsavedEdits, setUnsaved } from '../unsaved.ts';
 
@@ -26,7 +26,7 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
   const t = useT();
   const key = PLAN_EDITS + productId;
   const [doc, setDoc] = useState<PlanDoc | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<{ detail: string | null } | null>(null);
   const [draft, setDraft] = useState<PlanDraft | null>(() => keptDraft(planDrafts.get(productId), hasUnsavedEdits(key)));
   const [mode, setMode] = useState<'read' | 'edit'>(draft ? 'edit' : 'read');
   const [saving, setSaving] = useState(false);
@@ -39,10 +39,10 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
       const r = await api.plan(productId);
       if (!loads.current.isCurrent(ticket)) return null;
       setDoc(r.plan);
-      setFailed(false);
+      setFailure(null);
       return r.plan;
-    } catch {
-      if (loads.current.isCurrent(ticket)) setFailed(true);
+    } catch (error) {
+      if (loads.current.isCurrent(ticket)) setFailure({ detail: apiDetail(error) });
       return null;
     }
   }, [productId]);
@@ -56,7 +56,7 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
     if (dirty && draft) planDrafts.set(productId, draft); else planDrafts.delete(productId);
   }, [key, dirty, draft, productId]);
 
-  const state = planState(doc, failed);
+  const state = planState(doc, failure !== null);
   const writing = state === 'writing';
 
   const save = async () => {
@@ -107,10 +107,10 @@ export function PlanPane({ productId, revision }: { productId: string; revision:
       {notice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.saveFailed')} text={notice.detail ?? undefined} />}
       {mode === 'edit' ? (
         <textarea className="bt-doc bt-doc--edit ui-plan__editor" aria-label={t('ui.plan.editor')} spellCheck={false} value={draft?.text ?? ''}
-          onChange={e => { const text = e.target.value; setDraft(current => ({ ...(current ?? startDraft(doc)), text })); }}
+          onChange={e => setDraft(typed(draft, doc, e.target.value))}
           onKeyDown={e => { if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void save(); } }} />
       ) : state === 'failed' ? (
-        <Notice tone="fail" title={t('ui.plan.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />
+        <Notice tone="fail" title={t('ui.plan.loadFailed')} text={failure?.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void load() }} />
       ) : state === 'empty' ? (
         <div className="bt-empty ui-plan__empty">
           <h2 className="bt-empty__title">{t('ui.plan.emptyTitle')}</h2>
