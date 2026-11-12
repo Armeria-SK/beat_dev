@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, statSync, type WriteStream } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
-import { isSensitiveName } from '../../shared/redaction.ts';
+import { isSensitiveEnvName } from '../../shared/redaction.ts';
 
 const WINDOWS = process.platform === 'win32';
 
@@ -24,7 +24,7 @@ export function scrubEnv(extraAllow: readonly string[] = [], source: NodeJS.Proc
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined) continue;
     if (!allow.has(WINDOWS ? key.toUpperCase() : key)) continue;
-    if (isSensitiveName(key) || /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/iu.test(key)) continue;
+    if (isSensitiveEnvName(key) ||/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/iu.test(key)) continue;
     out[key] = key.toUpperCase() === 'PATH' ? absolutePathEntries(value) : value;
   }
   return out;

@@ -4,7 +4,7 @@ const SECRET_PATTERNS = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
 ];
 const URL_CREDENTIAL = /(?:https?:\/\/)[^\s/@:]+:[^\s/]+@/gi;
-const URL_USERINFO_PASSWORD = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s/?#@:[]*:)(?:[^\s/?#]+@|(?!\d*[/?#])[^\s@]{1,256}@)/gi;
+const URL_USERINFO_PASSWORD = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s/?#@:[]*:)(?:[^\s/?#]+@|(?!\d*(?:[/?#"',)\]}\\]|$))[^\s@]{1,256}@)/gi;
 const URL_USERINFO_TOKEN = /\b(https?:\/\/)[^\s/?#@:]{20,}@/gi;
 const URL_PARAM = /(?<=[?&#;]|\\u0026)((?:[A-Za-z0-9_.[\]-]|%[0-9A-Fa-f]{2})+)=((?:[^\s&#"'`<>\\]|\\\/)+(?:["'`<>](?=[A-Za-z0-9])(?:[^\s&#"'`<>\\]|\\\/)*)*)/g;
 const ENCODED_URL_PARAM = /(?<=%3F|%26|%23)([A-Za-z0-9_.-]+)%3D(?:(?!%26|%23)[^\s&#"'`<>\\])+/gi;
@@ -13,16 +13,16 @@ const URL_LONG_SECRET_NAME = /^(?:KEY|SIG|CODE)$/;
 const URL_LONG_SECRET_MIN = 16;
 const URL_PARAM_SEPARATOR = /(?:[?&#;]|\\u0026)$/;
 const PRIVATE_KEY_MARKER = /-----(BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----/g;
-const ASSIGNMENT_HEAD = /(?<![A-Za-z0-9_-])[0-9-]*["']?([A-Za-z_][A-Za-z0-9_-]*)(?:\\*["'])?\s*[:=][ \t]*/g;
+const ASSIGNMENT_HEAD = /(?<![A-Za-z0-9_-])[0-9-]*["']?([A-Za-z_][A-Za-z0-9_-]*)(?:\\*["'])?\s*[:=][ \t]*(?:\r?\n[ \t]+)?/g;
 const ASSIGNMENT_VALUE = /\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}\r\n]+/y;
 const AUTH_SCHEME = /^(?:Basic|Bearer|Digest|Negotiate|NTLM|Token)$/i;
 const AUTH_SCHEME_VALUE = /[ \t]+[^\s,;}"'\\]+/y;
 const COOKIE_NAME = /cookies?$/i;
 const COOKIE_VALUE = /[^"'\\\r\n]+/y;
 const FLAG_HEAD = /(?<![A-Za-z0-9_-])--?([A-Za-z][A-Za-z0-9_-]*)[ \t]+(?!-)/g;
-const USER_FLAG = /(?<![A-Za-z0-9_-])((?:-u|--user|--proxy-user)(?:[ \t]+|=)["']?([^\s:"'=]+):)([^\s"']+)/g;
-const FLAG_VALUE = /\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}"'\\]+/y;
-const MYSQL_PASSWORD = /(\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\r\n|;&]{0,300}?\s-p)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s"'-][^\s"']*)/g;
+const USER_FLAG = /(?<![A-Za-z0-9_-])((?:-u|--user|--proxy-user)(?:[ \t]+|=)["']?([^\s:"'=\\]+):)([^\s"'\\]+)/g;
+const FLAG_VALUE = /\\*"[^"\r\n]*"(?=\s|$)|\\*'[^'\r\n]*'(?=\s|$)|[^\s,;}"'\\]+/y;
+const MYSQL_PASSWORD = /(\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\r\n|;&]{0,300}?\s-p)(?:"[^"\r\n]*"(?=\s|$)|'[^'\r\n]*'(?=\s|$)|[^\s"'\\-][^\s"'\\]*)/g;
 const SENSITIVE_NAME =
   /(?:^|_)(?:TOKEN|SECRET|[A-Z]*PASSWORD|[A-Z]*PASSWD|PASSPHRASE|API_?KEY|ACCESS_KEY|SESSION_KEY|SIGNING_KEY|AUTH|AUTHORIZATION|COOKIE|COOKIES|CREDENTIAL|CREDENTIALS|PRIVATE_KEY|JWT|HMAC|OAUTH_VERIFIER)(?:_|$)|[A-Z0-9]_(?:PASS|PWD)$/;
 const NOT_SECRET_SUFFIX = /_(?:TYPE|COUNT|LIMIT|BUDGET|USAGE|ENDPOINT|URL|URI|EXPIRES|EXPIRES_IN|EXPIRY|TTL|LENGTH)$/;
@@ -39,6 +39,10 @@ function normalizeName(input: string): string {
 export function isSensitiveName(input: string): boolean {
   const normalized = normalizeName(input);
   return SENSITIVE_NAME.test(normalized) && !NOT_SECRET_SUFFIX.test(normalized);
+}
+
+export function isSensitiveEnvName(input: string): boolean {
+  return SENSITIVE_NAME.test(normalizeName(input));
 }
 
 function lastNamePart(input: string): string {
@@ -197,15 +201,18 @@ function redactAssignments(input: string): string {
       head.lastIndex = valueStart + '[REDACTED]'.length;
       continue;
     }
-    let end: number;
-    cookie.lastIndex = valueStart;
-    if (COOKIE_NAME.test(match[1]!) && cookie.test(input)) end = cookie.lastIndex;
-    else {
-      value.lastIndex = valueStart;
-      if (!value.test(input)) continue;
-      end = scheme.lastIndex = value.lastIndex;
-      if (AUTH_SCHEME.test(input.slice(valueStart, end)) && scheme.test(input)) end = scheme.lastIndex;
+    value.lastIndex = valueStart;
+    let end = value.test(input) ? value.lastIndex : -1;
+    if (COOKIE_NAME.test(match[1]!)) {
+      cookie.lastIndex = valueStart;
+      const line = cookie.test(input) ? cookie.lastIndex : -1;
+      if (line >= end || /^[\\"']+$/u.test(input.slice(Math.max(line, valueStart), end))) end = line;
+      else if (line >= 0) { cookie.lastIndex = end; if (cookie.test(input)) end = cookie.lastIndex; }
+    } else if (end >= 0 && AUTH_SCHEME.test(input.slice(valueStart, end))) {
+      scheme.lastIndex = end;
+      if (scheme.test(input)) end = scheme.lastIndex;
     }
+    if (end < 0) continue;
     parts.push(input.slice(copied, valueStart), '[REDACTED]');
     copied = head.lastIndex = end;
   }

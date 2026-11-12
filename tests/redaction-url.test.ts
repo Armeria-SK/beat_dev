@@ -4,7 +4,8 @@ import { Type } from '@sinclair/typebox';
 import type { RunEvent, ToolCall } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
 import { transcriptOf } from '../src/memory/review.ts';
-import { redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
+import { isSensitiveEnvName, redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
+import { scrubEnv } from '../src/tools/shell/runner.ts';
 import { toolRow } from '../web/src/ui/tool-row.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { CONVERSATION, startApp } from './app-setup.ts';
@@ -181,6 +182,45 @@ test('伏せ字: 伏せすぎない（短い code・key、token_type、コード
   ]) assert.equal(redactSecrets(plain), plain);
   assert.equal(redactSecrets(`$ run --password=\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)`), '$ run --password=\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)', '値なしで終わる名前は、次の行を食わない');
   assert.equal(redactSecrets('password=\nnext line'), 'password=\nnext line');
+});
+
+const parses = (text: string): boolean => { try { JSON.parse(text); return true; } catch { return false; } };
+
+test('審査 1: Cookie の値が引用符つき・\\ 入りでも、前の版より多く残さない。JSON の閉じの引用符は食わない', () => {
+  assert.equal(redactSecrets('Set-Cookie: sid="SECRETVAL"; Path=/'), 'Set-Cookie: [REDACTED]');
+  assert.equal(redactSecrets('< Set-Cookie: session="eyJhIjoxfQ.SECRETSIG"; HttpOnly; Path=/'), '< Set-Cookie: [REDACTED]');
+  assert.equal(redactSecrets('Cookie: sid=abc\\def; b=2'), 'Cookie: [REDACTED]');
+  assert.equal(redactSecrets('{"h":"Cookie: a=1; b=2"}'), '{"h":"Cookie: [REDACTED]"}');
+  assert.equal(redactSecrets('{"cookie": "abc", "n": 1}'), '{"cookie": [REDACTED], "n": 1}');
+  assert.equal(redactSecrets('{\\"h\\":\\"Cookie: abc\\"}'), '{\\"h\\":\\"Cookie: [REDACTED]\\"}');
+});
+
+test('審査 2・3: -u と mysql -p と --flag は、JSON の中の JSON・次の鍵を壊さない', () => {
+  const user = redactSecrets(JSON.stringify({ result: JSON.stringify({ cmd: 'curl -u bob:hunter2', y: 1 }) }));
+  assert.deepEqual([parses(user), user.includes('hunter2')], [true, false], user);
+  const mysql = redactSecrets(JSON.stringify({ result: JSON.stringify({ cmd: 'mysql -uroot -phunter2', y: 1 }) }));
+  assert.deepEqual([parses(mysql), mysql.includes('hunter2')], [true, false], mysql);
+  for (const text of ['{"cmd":"mysql -u root -p","next":"v"}', '{"cmd":"--token ","next":"v"}']) assert.equal(redactSecrets(text), text);
+});
+
+test('審査 4: userinfo の 2 つ目の読み方は、ポートのあとの引用符・カンマ・かっこをまたいで、うしろの @ まで食わない', () => {
+  for (const text of ['{"a":"http://h:3000","b":"https://c.d/e","mail":"x@y.z"}', 'origins=http://a:3000,https://b/c,me@x.com', 'see (http://a:3000) and https://b/c me@x.com', 'http://a:3000']) {
+    assert.equal(redactSecrets(text), text);
+  }
+});
+
+test('審査 5: 値が次の行にあっても、次の行が字下げされていれば伏せる。行の頭から始まる次の行は食わない', () => {
+  assert.equal(redactSecrets('Password:\n  hunter2secret'), 'Password:\n  [REDACTED]');
+  assert.equal(redactSecrets('secret:\r\n  abc'), 'secret:\r\n  [REDACTED]');
+  assert.equal(redactSecrets('Token:\nSECRETVALUE123'), 'Token:\nSECRETVALUE123', '行の頭から始まる値は残る（分かっている漏れ）');
+  assert.equal(redactSecrets('API_KEY=\nabc'), 'API_KEY=\nabc');
+});
+
+test('審査 6: シェルの子に渡す環境変数は、種類・場所を言う名前（…_URL・…_TYPE など）でも、秘密の名前なら渡さない', () => {
+  const names = ['AUTH_URL', 'BASIC_AUTH_URL', 'MONGO_AUTH_URI', 'HTTP_PROXY_AUTH_ENDPOINT', 'COOKIE_TTL', 'SESSION_COOKIE_EXPIRES', 'PASSWD_TYPE', 'AUTHORIZATION_TYPE'];
+  const source = Object.fromEntries([...names, 'PLAIN_NAME'].map(name => [name, 'v']));
+  assert.deepEqual(Object.keys(scrubEnv([...names, 'PLAIN_NAME'], source)), ['PLAIN_NAME']);
+  for (const name of names) assert.equal(isSensitiveEnvName(name), true, name);
 });
 
 test('伏せ字（redactJsonValue）: 鍵の名前に空白・. ・[] が入る形、名前と値が別々の所にある形も伏せる。短い文字列はそのまま', () => {
