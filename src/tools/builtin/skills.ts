@@ -43,7 +43,7 @@ const DRAFT_HOW = [
   'name uses lowercase English letters, digits and hyphens. description is "when to use it" in one sentence. body is the procedure, concretely. reason is why you are making or fixing it.',
 ];
 const DRAFT_ASK = ['Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.', ...DRAFT_HOW].join(' ');
-const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, unless this run or this conversation read outside content (then it waits for the user's approval), and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
+const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, unless this run or this conversation read outside content or this is a task's run (then it waits for the user's approval), and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
 
 export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string }> = {
   name: 'skill_draft',

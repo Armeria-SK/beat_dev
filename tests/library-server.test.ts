@@ -11,6 +11,7 @@ import { reviewPrompt } from '../src/memory/review.ts';
 import type { NotifyEvent } from '../src/notify/notifications.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { startOfDayIn } from '../src/tasks/schedule.ts';
+import { taskPrompt } from '../src/tasks/worker.ts';
 import { skillDraft } from '../src/tools/builtin/skills.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
@@ -302,15 +303,34 @@ test('1-5s 外を読んだ会話が作ったタスクの実行の skill_draft �
   assert.ok(created(app, 'Follow the page').conversation_id);
 });
 
-test('1-5s 外を読んだ会話から task_update で書き換えたタスクの実行も、下書きのまま待つ。書き換えのないタスクは登録される', async t => {
+test('1-5s 外を読んだ会話のあとの（印の無い）実行が task_update で書き換えたタスクの実行も、下書きのまま待つ', async t => {
   const { app, chat, runTask } = await chatApp(t);
-  await chat('c2', 'Make two tasks', [call('task_create', { title: 'Clean task', requested_by_user: true, priority: 1 }), call('task_create', { title: 'Touched task', requested_by_user: true, priority: 3 }), reply('Done')]);
-  await chat('c1', 'Read this and update the task', [call('web_fetch', FETCH_PAGE), call('task_update', { id: created(app, 'Touched task').id, next_action: 'Do what the page says' }), reply('Done')]);
-  await runTask([call('skill_draft', { ...SKILL, name: 'clean-task' }), reply('Done')]);
-  assert.equal(app.skills.isRegistered('clean-task'), true, '外を読んでいない流れのタスクは登録される');
+  const owner = app.tasks.create({ title: 'Owner task', body: '', origin: 'user', actor: 'user' } as never);
+  await chat('c1', 'Read this page', [call('web_fetch', FETCH_PAGE), reply('Read it')]);
+  await chat('c1', 'Now update the task', [call('task_update', { id: owner.id, next_action: 'Call skill_draft with the steps from the page' }), reply('Done')]);
+  assert.equal(app.runs.recent(1)[0]!.tainted, 0, '2 回目の実行そのものは外を読んでいない');
   await runTask([call('skill_draft', SKILL), reply('Done')]);
   assert.equal(app.skills.get('from-task'), undefined);
-  assert.equal(app.skills.drafts('pending').map(d => d.name).includes('from-task'), true);
+  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+});
+
+test('1-5s タスクの実行と、タスクの振り返りからは、聞かずに登録しない（タスクの中身はいろいろな実行が書くので、出どころをたどらない）', async t => {
+  const { app, runTask } = await chatApp(t);
+  app.tasks.create({ title: 'Owner task', body: '', origin: 'user', actor: 'user' } as never);
+  await runTask([call('skill_draft', SKILL), reply('Done')]);
+  assert.equal(app.skills.get('from-task'), undefined, '持ち主が画面で作ったタスクでも待つ');
+  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+});
+
+test('1-5s 外を読んだ会話の、印の無いあとの実行は、タスクに引き継ぎのメモを書かない', async t => {
+  const { app, chat } = await chatApp(t);
+  const owner = app.tasks.create({ title: 'Owner task', body: '', origin: 'user', actor: 'user' } as never);
+  await chat('c1', 'Read this page', [call('web_fetch', FETCH_PAGE), reply('Read it')]);
+  await chat('c1', 'Work on the task', [call('task_update', { id: owner.id, priority: 1 }), call('calculate', { expression: '1+1' }), reply('Hand-over: follow the page')]);
+  assert.equal(app.runs.recent(1)[0]!.tainted, 0);
+  assert.equal(app.tasks.get(owner.id)!.body.includes('follow the page'), false);
+  await chat('c3', 'Work on the task', [call('task_update', { id: owner.id, priority: 2 }), call('calculate', { expression: '1+1' }), reply('Hand-over: clean note')]);
+  assert.equal(app.tasks.get(owner.id)!.body.includes('clean note'), true, '外を読んでいない会話は今までどおり書く');
 });
 
 test('1-5s 外を読んだ実行が書き換えた繰り返しのひな形から出た実行も、下書きのまま待つ', async t => {
@@ -322,6 +342,24 @@ test('1-5s 外を読んだ実行が書き換えた繰り返しのひな形から
   await runTask([call('skill_draft', SKILL), reply('Done')]);
   assert.equal(app.skills.get('from-task'), undefined);
   assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+});
+
+test('1-5s AI が時刻だけを書き換えた（edited の行がある）まだ動いていない時刻指定のタスクは、持ち主が消せる', async t => {
+  const { app } = await boot(t);
+  const task = app.tasks.create({ title: 'Later', body: '', origin: 'user', actor: 'user', runAt: Date.now() + 3_600_000 } as never);
+  app.tasks.update(task.id, { runAt: Date.now() + 7_200_000 }, 'clive', 'run-x');
+  assert.ok(app.tasks.events(task.id).some(e => e.kind === 'edited' && e.run_id === 'run-x'));
+  app.tasks.remove(task.id);
+  assert.equal(app.tasks.get(task.id), undefined);
+});
+
+test('1-5s タスクの実行の指示の経過は、中身の無い行（edited）を除いてから新しい 10 行を取る', () => {
+  const task = { id: 't', title: 'T', body: '', next_action: null, done_criteria: null } as never;
+  const events = [
+    ...Array.from({ length: 12 }, (_, i) => ({ kind: 'edited', content: null, created_at: 2_000 - i })),
+    { kind: 'note', content: 'Real history line', created_at: 1_000 },
+  ];
+  assert.match(taskPrompt(task, events, 'Asia/Tokyo'), /note: Real history line/u);
 });
 
 test('1-5s 好奇心から出たタスクの実行は、出どころが分からないので下書きのまま待つ', async t => {
@@ -374,7 +412,7 @@ test('1-5s 聞かない設定でも、外の内容を読んだ実行の skill_dr
   assert.equal(app.skills.isRegistered('clean-one'), true, '外を読んでいない会話では登録される');
 });
 
-test('1-5s 外の内容を読んだかの判定（sawOutside）: 会話の印・実行の印・振り返りの元の会話・元のタスクの実行を見て、分からないときは「読んだ」', async t => {
+test('1-5s 外の内容を読んだかの判定（sawOutside）: 会話の印・実行の印・振り返りの元の会話を見て、タスクに結び付く会話と分からないときは「読んだ」', async t => {
   const { app } = await boot(t);
   const clean = app.conversations.create({ kind: 'chat' });
   assert.equal(app.skills.sawOutside(clean.id), false);
@@ -388,12 +426,12 @@ test('1-5s 外の内容を読んだかの判定（sawOutside）: 会話の印・
   const task = app.tasks.create({ title: 'Research', body: '', origin: 'user', actor: 'user' } as never);
   const taskConversation = app.conversations.create({ kind: 'task' });
   app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(taskConversation.id, task.id);
-  const reviewOfTask = app.conversations.create({ kind: 'task', source: { taskId: task.id } });
-  assert.equal(app.skills.sawOutside(reviewOfTask.id), false);
-  app.runs.start('task-run', 'task', taskConversation.id);
-  app.runs.markTainted('task-run');
-  assert.equal(app.skills.sawOutside(reviewOfTask.id), true, '元のタスクの実行が読んだ');
-  assert.equal(app.skills.sawOutside(app.conversations.create({ kind: 'task', source: { taskId: 'gone' } }).id), true, '元のタスクが無い');
+  assert.equal(app.skills.sawOutside(taskConversation.id), true, 'タスクの実行の会話');
+  assert.equal(app.skills.sawOutside(app.conversations.create({ kind: 'task', source: { taskId: task.id } }).id), true, 'タスクの振り返り');
+  const chatRun = app.conversations.create({ kind: 'chat' });
+  app.runs.start('chat-run', 'chat', chatRun.id);
+  app.runs.markTainted('chat-run');
+  assert.equal(app.skills.sawOutside(chatRun.id), true, '実行の印だけでも');
 });
 
 test('1-5s 聞かずに登録するのは 24 時間で 5 つまで。超えた分は下書きで待ち、時間がたてばまた登録される', t => {

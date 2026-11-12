@@ -264,21 +264,9 @@ export class SkillStore {
     const row = this.#db.prepare('SELECT ever_tainted, source_conversation_id, source_task_id FROM conversations WHERE id = ?').get(id) as { ever_tainted: number; source_conversation_id: string | null; source_task_id: string | null } | undefined;
     if (!row || row.ever_tainted !== 0) return true;
     if (this.#db.prepare('SELECT 1 FROM engine_runs WHERE conversation_id = ? AND tainted = 1 LIMIT 1').get(id) !== undefined) return true;
-    if (row.source_conversation_id && this.#outsideConversation(row.source_conversation_id, seen)) return true;
-    if (row.source_task_id && this.#outsideTask(row.source_task_id, seen)) return true;
-    const tasks = this.#db.prepare('SELECT id FROM tasks WHERE conversation_id = ?').all(id) as Array<{ id: string }>;
-    return tasks.some(task => this.#outsideTask(task.id, seen));
-  }
-
-  #outsideTask(id: string, seen: Set<string>): boolean {
-    if (seen.has(`t:${id}`)) return false;
-    seen.add(`t:${id}`);
-    const task = this.#db.prepare('SELECT conversation_id, parent_id, created_in_conversation, curiosity_id FROM tasks WHERE id = ?').get(id) as { conversation_id: string | null; parent_id: string | null; created_in_conversation: string | null; curiosity_id: number | null } | undefined;
-    if (!task || task.curiosity_id !== null) return true;
-    if (this.#db.prepare('SELECT 1 FROM task_events e JOIN engine_runs r ON r.id = e.run_id WHERE e.task_id = ? AND r.tainted = 1 LIMIT 1').get(id) !== undefined) return true;
-    if (task.created_in_conversation && this.#outsideConversation(task.created_in_conversation, seen)) return true;
-    if (task.conversation_id && this.#outsideConversation(task.conversation_id, seen)) return true;
-    return task.parent_id !== null && this.#outsideTask(task.parent_id, seen);
+    if (row.source_task_id) return true;
+    if (this.#db.prepare('SELECT 1 FROM tasks WHERE conversation_id = ? LIMIT 1').get(id) !== undefined) return true;
+    return row.source_conversation_id !== null && this.#outsideConversation(row.source_conversation_id, seen);
   }
 
   #autoQuotaLeft(now: number): boolean {

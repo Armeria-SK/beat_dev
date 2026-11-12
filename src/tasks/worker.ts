@@ -94,7 +94,7 @@ export function inQuietHours(now: number, timezone: string, start: string, end: 
 
 export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
   const text = TASK_TEXT[language];
-  const history = events.slice(0, 10).filter(e => e.content).map(e => `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`);
+  const history = events.filter(e => e.content).slice(0, 10).map(e => `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`);
   return [
     text.intro,
     '',

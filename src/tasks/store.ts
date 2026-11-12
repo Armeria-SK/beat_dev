@@ -332,7 +332,7 @@ export class TaskStore {
   }
 
   #neverRan(task: Task): boolean {
-    return task.conversation_id === null && !this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND run_id IS NOT NULL AND kind <> 'context' LIMIT 1").get(task.id);
+    return task.conversation_id === null && !this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND run_id IS NOT NULL AND kind NOT IN ('context', 'edited') LIMIT 1").get(task.id);
   }
 
   unapprove(id: string): Task {

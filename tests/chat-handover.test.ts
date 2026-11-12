@@ -131,8 +131,8 @@ test('この実行で作った・task_update で触ったタスクには、道�
 
   s.adapter().scripts.push(toolCall('file_write', { path: 'x.md', content: '1' }), reply('x.md を書きました'));
   await s.chat('x.md を書いて');
-  s.adapter().scripts.push(toolCall('web_fetch', { url: 'https://news.example.com/' }), reply('ニュースを読みました'));
-  await s.chat('ニュースを読んで');
+  s.adapter().scripts.push(toolCall('calculate', { expression: '1+1' }), reply('計算しました'));
+  await s.chat('1+1 を計算して');
   assert.deepEqual([s.app.tasks.get(report.id)!.body, s.app.tasks.get(laundry.id)!.body], ['', ''], '関係のない道具を使った実行は、前の実行で作ったタスクに書かない');
 
   s.adapter().scripts.push(toolCall('task_create', { title: '下書きを作る', requested_by_user: true }), toolCall('file_write', { path: 'draft.md', content: '下書き' }), reply('下書きを作って書きました'));
