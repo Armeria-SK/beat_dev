@@ -494,6 +494,7 @@ export const en = {
   'ui.checklist.done': (n: number) => `${n} done`,
   'ui.checklist.tainted': 'Written after reading text from elsewhere',
   'ui.attached': (names: string) => `Attached: ${names}`,
+  'ui.thinking': (seconds: number) => `Thinking · ${seconds}s`,
   'ui.notice.interrupted': 'Interrupted · new instruction',
   'ui.fail.change': 'Not changed',
   'ui.fail.attach': 'Not attached',

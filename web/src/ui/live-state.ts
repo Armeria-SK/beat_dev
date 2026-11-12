@@ -5,7 +5,7 @@ import type { Draft, RunEvent } from '../events.ts';
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean }
 
 export interface SettledTool { callId: string; name: string; input: string }
-export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined }
+export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined; waitingSince?: number | undefined }
 
 const SETTLED_MAX = 20;
 const settle = (d: LiveDraft, callId: string): SettledTool[] | undefined =>
@@ -103,7 +103,7 @@ function bump(s: LiveState, conversationId: string): LiveState {
 function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { state: LiveState; effects: Effect[] } {
   switch (e.type) {
     case 'run.start': {
-      const drafts = [...s.drafts.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '', startedAt: now }];
+      const drafts = [...s.drafts.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '', startedAt: now, waitingSince: now }];
       const known = s.conversations.some(c => c.id === e.conversationId);
       const notices = new Map(s.notices);
       if (s.interrupting.has(e.conversationId)) notices.set(e.conversationId, [{ runId: e.runId, kind: 'interrupted' }]);
@@ -132,7 +132,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'message.saved': {
       const state = bump(s, e.conversationId);
       return {
-        state: e.role === 'assistant' ? { ...state, drafts: draftsWith(state, e.runId, d => ({ ...d, text: '' })) } : state,
+        state: e.role === 'assistant' ? { ...state, drafts: draftsWith(state, e.runId, d => ({ ...d, text: '', waitingSince: now })) } : state,
         effects: e.role === 'user' ? refresh('conversations') : [],
       };
     }
@@ -148,7 +148,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         effects: [],
       };
     case 'tool.result': {
-      const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId) })) });
+      const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId), waitingSince: now })) });
       return {
         state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
         effects: [],

@@ -12,12 +12,13 @@ import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
 import { serverText, warningText } from '../server-text.ts';
 import { useContextUsage } from '../use-context-usage.ts';
 import { Checklist } from './Checklist.tsx';
+import { useNow } from './hooks.ts';
 import { latestOnly } from './latest.ts';
 import { menuStep } from './menu.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
-import { contextMeter, isRising, threadItems, type ThreadItem } from './thread.ts';
+import { contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadItems, type ThreadItem } from './thread.ts';
 import { ToolGroup } from './ToolRow.tsx';
 
 type T = ReturnType<typeof useT>;
@@ -25,6 +26,7 @@ type T = ReturnType<typeof useT>;
 export interface ConversationProps {
   id: string | null;
   listTitle: string | null;
+  aiName?: string | undefined;
   draft: LiveDraft | undefined;
   approvals: Approval[];
   notices: RunNotice[];
@@ -94,9 +96,15 @@ function useThrottledText(text: string): string {
   return drawn;
 }
 
-function LiveReply({ text }: { text: string }) {
+function Thinking({ since }: { since: number }) {
+  const t = useT();
+  const seconds = thinkingSeconds(since, useNow(1000));
+  return seconds === null ? null : <span className="bt-meta ui-thinking">{t('ui.thinking', seconds)}</span>;
+}
+
+function LiveReply({ text, since }: { text: string; since: number | null }) {
   const drawn = useThrottledText(text);
-  if (!drawn) return <div className="bt-msg ui-live"><span className="bt-caret" /></div>;
+  if (!drawn) return <div className="bt-msg ui-live"><span className="bt-caret" />{since !== null && <Thinking since={since} />}</div>;
   return <div className="bt-msg ui-live"><Markdown text={drawn} /></div>;
 }
 
@@ -242,7 +250,7 @@ function failNotice(title: string, text: string | null, action: FailAction | nul
   return <Notice tone="fail" title={title} text={text ?? undefined} {...(action ? { action } : {})} />;
 }
 
-export function Conversation({ id, listTitle, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt }: ConversationProps) {
+export function Conversation({ id, listTitle, aiName, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
@@ -443,23 +451,34 @@ export function Conversation({ id, listTitle, draft, approvals, notices, liveChe
     if (loaded !== null || id === null) primed.current = true;
   });
 
+  const renderedAt = Date.now();
   function render(item: ThreadItem): ReactNode {
     switch (item.kind) {
-      case 'owner':
+      case 'owner': {
+        const stamp = messageStamp(item.at, renderedAt);
         return (
           <div key={item.key} className={`bt-msg bt-msg--owner ui-owner${rise(item.key) ? ' bt-rise' : ''}`}>
             {item.text}
             {item.attachments.length > 0 && <span className="bt-meta ui-owner__files">{t('ui.attached', item.attachments.join(', '))}</span>}
+            {stamp && <time className="bt-meta ui-msg__meta" dateTime={new Date(item.at).toISOString()} title={stamp.title}>{stamp.text}</time>}
           </div>
         );
-      case 'reply':
+      }
+      case 'reply': {
+        const stamp = item.stamped ? messageStamp(item.at, renderedAt) : null;
         return (
           <div key={item.key} className={`bt-msg ui-reply${rise(item.key) ? ' bt-rise' : ''}`}>
             <Markdown text={item.text} />
-            {item.copyText !== null && <CopyButton text={item.copyText} />}
+            {(stamp || item.copyText !== null) && (
+              <div className="ui-reply__foot">
+                {stamp && <time className="bt-meta" dateTime={new Date(item.at).toISOString()} title={stamp.title}>{replyMeta(aiName, stamp)}</time>}
+                {item.copyText !== null && <CopyButton text={item.copyText} />}
+              </div>
+            )}
           </div>
         );
-      case 'live': return <LiveReply key={item.key} text={item.text} />;
+      }
+      case 'live': return <LiveReply key={item.key} text={item.text} since={item.since} />;
       case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} />;
       case 'notice': {
         if (item.weight === 'quiet') return <QuietNotice key={item.key} notices={item.notices} />;

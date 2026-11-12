@@ -156,6 +156,19 @@ test('ui/live-state: 割り込みの発言が始まらなかった知らせ（qu
   assert.equal(next.notices.get('c'), undefined, '次のふつうの実行に Interrupted は付かない');
 });
 
+test('ui/live-state: 返事を待ち始めた時刻（「考え中 N 秒」の元）は、実行の始まり・道具の結果・返事の保存で進む', () => {
+  const at = (event: RunEvent, now: number): Action => ({ type: 'event', event, hidden: false, now });
+  const started = run(EMPTY, at({ type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }, 100));
+  assert.equal(started.drafts[0]!.waitingSince, 100);
+  const called = run(started, at({ type: 'tool.call', runId: 'r', conversationId: 'c', callId: 'k', name: 'file_read', input: '{}' }, 200));
+  assert.equal(called.drafts[0]!.waitingSince, 100);
+  const result = run(called, at({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: 'k', name: 'file_read', ok: true, decision: 'allow', preview: '' }, 300));
+  assert.equal(result.drafts[0]!.waitingSince, 300);
+  const saved = run(result, at({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 1, role: 'assistant' }, 400));
+  assert.equal(saved.drafts[0]!.waitingSince, 400);
+  assert.equal(run(saved, at({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 2, role: 'user' }, 500)).drafts[0]!.waitingSince, 400);
+});
+
 test('ui/live-state: 結果が届いた道具の覚えは新しい 20 件まで（古いものから外れる）', () => {
   let s = run(EMPTY, ev({ type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }));
   for (let i = 1; i <= 23; i++) {
