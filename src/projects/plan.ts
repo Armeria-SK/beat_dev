@@ -116,10 +116,10 @@ export class PlanStore {
     return { content, hash, updated_at: now, updated_by: by.by, tainted: meta.tainted, changed: true };
   }
 
-  review(projectId: string, baseHash: string | null): PlanView & { content: string; hash: string } {
+  review(projectId: string, baseHash: string): PlanView & { content: string; hash: string } {
     if (this.#archived(projectId)) throw new PlanError('archived');
     const content = this.read(projectId);
-    if (content === undefined || baseHash === null || planHash(content) !== baseHash) throw new PlanError('changed');
+    if (content === undefined || planHash(content) !== baseHash) throw new PlanError('changed');
     const known = this.meta(projectId);
     const now = this.#now();
     const meta: PlanMeta = known?.hash === baseHash

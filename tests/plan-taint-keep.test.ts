@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
@@ -93,11 +93,21 @@ test('4-K 計画書の印（置き場）: beat の外で 1 文字直されても
   assert.equal(f.store.view(PROJECT).tainted, false, '前に印が無ければ外の書き換えに印は付かない');
 });
 
+test('4-K 計画書の印（置き場）: 印つきの plan.md を消してから持ち主が新しく書いても tainted のまま。消した版は外せない', t => {
+  const f = storeFixture(t);
+  f.store.write(PROJECT, 'plan by ai', AI_TAINTED);
+  unlinkSync(f.file);
+  assert.throws(() => f.store.review(PROJECT, sha('plan by ai')), (e: Error & { code?: string }) => e.code === 'changed');
+  const saved = f.store.write(PROJECT, 'owner from scratch', OWNER, null);
+  assert.deepEqual([saved.updated_by, saved.tainted], ['owner', true]);
+  assert.deepEqual([f.store.view(PROJECT).updated_by, f.store.view(PROJECT).tainted], ['owner', true]);
+  assert.equal(f.kv.getJson<PlanMeta>(`plan:${PROJECT}`)!.runId, 'r1');
+});
+
 test('4-K 印を外す（置き場）: baseHash が合えば tainted が消えて reviewedAt を記録。違えば changed で変わらない。外で直された版も持ち主の版として外せる', t => {
   const f = storeFixture(t);
   const first = f.store.write(PROJECT, 'plan by ai', AI_TAINTED);
   assert.throws(() => f.store.review(PROJECT, sha('other')), (e: Error & { code?: string }) => e.code === 'changed');
-  assert.throws(() => f.store.review(PROJECT, null), (e: Error & { code?: string }) => e.code === 'changed');
   assert.equal(f.store.view(PROJECT).tainted, true);
   const reviewed = f.store.review(PROJECT, first.hash);
   assert.deepEqual([reviewed.tainted, reviewed.updated_by, reviewed.hash], [false, 'ai', first.hash]);

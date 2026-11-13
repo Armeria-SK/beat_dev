@@ -728,7 +728,7 @@ test('3-1c 審査の直し 10: 外の文のあとに書かれた計画書・手�
   assert.doesNotMatch(readFileSync(join(f.dir, 'INDEX.md'), 'utf8'), /Hand heading/u);
   f.plans.write(PROJECT, '# Clean heading\n', { by: 'owner', tainted: false, conversationId: null, runId: null });
   assert.doesNotMatch(f.mesh.indexBody(PROJECT, 1000), /Clean heading/u, '4-K: 持ち主の保存では印は消えない');
-  f.plans.review(PROJECT, f.plans.view(PROJECT).hash);
+  f.plans.review(PROJECT, f.plans.view(PROJECT).hash!);
   assert.match(f.mesh.indexBody(PROJECT, 1000), /^- plan\.md — Clean heading \(updated/mu);
   f.plans.write(PROJECT, '# AI heading\n', { by: 'ai', tainted: false, conversationId: 'c1', runId: 'r3' });
   assert.match(f.mesh.indexBody(PROJECT, 1000), /^- plan\.md — \(AI note\) AI heading \(updated/mu);
