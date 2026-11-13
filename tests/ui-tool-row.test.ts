@@ -103,3 +103,14 @@ test('ui/tool-row: 対象に出す URL の利用者情報と、鍵らしい名�
   assert.ok(!toolRow('shell_run', JSON.stringify({ command: 'curl https://u:secretpw@h/x' }), null).target.includes('secretpw'));
   assert.equal(maskTarget('npm test -- upload'), 'npm test -- upload');
 });
+
+test('ui/tool-row: 前の伏せ方で保存した結果（写しのコマンドが今の伏せ方と違う）でも、コマンドと同じ行数の写しの次から終了コードと秒を読む', () => {
+  const command = 'curl "https://x.test/?code=JP"';
+  const text = '$ curl "https://x.test/?code=[REDACTED]"\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)\n\nok';
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text, isError: false }).meta, { kind: 'exit', code: '0', seconds: '0.2' });
+  const multi = '$ npm test\n  -- token=[REDACTED]\n\n(pwsh, cwd: w, exit code: 1, 3 s)';
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'npm test\n  -- token=abc' }), { text: multi, isError: true }).meta, { kind: 'exit', code: '1', seconds: '3' });
+  const forged = '$ echo old\n\nhello\n(pwsh, cwd: w, exit code: 0, 0.1 s)';
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'echo new' }), { text: forged, isError: true }).meta, { kind: 'failed' }, '写しの次の行でなければ読まない');
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'ls' }), { text: 'Denied by the owner', isError: true }).meta, { kind: 'failed' });
+});

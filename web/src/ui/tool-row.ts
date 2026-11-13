@@ -98,10 +98,17 @@ function editMeta(name: string, args: Record<string, unknown> | null, result: To
   return null;
 }
 
+function storedEcho(text: string, command: string): string | undefined {
+  if (!text.startsWith('$ ')) return undefined;
+  const lines = text.split('\n');
+  const count = command.split('\n').length;
+  return lines.length > count ? `${lines.slice(0, count).join('\n')}\n` : undefined;
+}
+
 function runMeta(result: ToolResult, command: unknown): ToolMeta {
   const failed: ToolMeta = result.isError ? { kind: 'failed' } : null;
   if (typeof command !== 'string') return failed;
-  const echo = [command, redactSecrets(command)].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e));
+  const echo = [command, redactSecrets(command)].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e)) ?? storedEcho(result.text, command);
   if (!echo) return failed;
   const header = result.text.slice(echo.length).replace(/^\n/u, '').split('\n', 1)[0]!;
   const match = /^\(.*, exit code: ([^,()]+), ([\d.]+) s\)$/u.exec(header);
