@@ -31,6 +31,7 @@ import type { AgentRunInput, RunKind, TaskControl, ToolContext, ToolDef, ToolOut
 import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
+import { CreatedFiles } from '../projects/created.ts';
 import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
@@ -206,7 +207,9 @@ export class ChatEngine {
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
 
-  constructor(deps: ChatEngineDeps) { this.#d = deps; }
+  readonly created: CreatedFiles;
+
+  constructor(deps: ChatEngineDeps) { this.#d = deps; this.created = new CreatedFiles({ kv: deps.kv, dataDir: deps.paths.data, ...(deps.log ? { log: deps.log } : {}) }); }
 
   #busy(key: EngineMessageKey): SendOutcome {
     return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), key), errorCode: `engine.${key}` };
@@ -579,6 +582,7 @@ export class ChatEngine {
         return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail }, retryable: false };
       })
       .then(result => { ended = result; return result; })
+      .finally(() => this.created.end(runId))
       .finally(() => {
         this.#active.delete(runId);
         this.#byConversation.delete(conversationId);
@@ -669,6 +673,8 @@ export class ChatEngine {
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
     };
+    ctx.noteCreated = abs => this.created.note(ctx, abs);
+    if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider)) && (agent?.parent.modelsLocal ?? true);
     if (agent?.parent.autoReadOutside) ctx.autoReadOutside = true;
     ctx.localOnly = agent ? agent.parent.localOnly : kind === 'chat' ? isLocalPinned(config, d.conversations.get(conversationId)?.model_id) : task?.task.local_only === 1;

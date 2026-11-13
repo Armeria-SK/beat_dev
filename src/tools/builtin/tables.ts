@@ -119,6 +119,7 @@ export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | numb
         if (claimed) try { unlinkSync(abs); } catch { }
         throw thrown;
       }
+      if (!stat) ctx.noteCreated?.(abs);
       const cols = input.rows.reduce((max, row) => Math.max(max, row.length), 0);
       const wrote = toolText(language, 'table.wrote', { path, rows: input.rows.length, cols });
       return { content: neutralized > 0 ? `${wrote}\n${toolText(language, 'table.neutralized', { count: neutralized })}` : wrote };

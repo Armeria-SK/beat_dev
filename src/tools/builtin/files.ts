@@ -112,6 +112,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     const next = appending ? current + input.content : input.content;
     const before = appending ? null : exists ? previousForDelta(abs) : '';
     atomicWriteFile(abs, next);
+    if (!exists) ctx.noteCreated?.(abs);
     const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
     const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
     if (!delta) return { content: toolText(language, 'file.wrote', params) };
