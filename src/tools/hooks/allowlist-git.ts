@@ -176,7 +176,8 @@ function writeSub(sub: string, rest: Word[], acc: Acc, ctx: MatchCtx, repo: Retu
     || (sub === 'stash' && (p.pos.length === 0 || STASH_RESTORES.has(p.pos[0]!.text)));
   if (moves) acc.add('once', 'list.git_moves', { cmd: sub }, false);
   if (!hooksCheck(sub, acc, repo)) return;
-  acc.add('ask', 'list.git_write', { cmd: sub }, false);
+  if (sub === 'add' || sub === 'commit') acc.reasons.push({ key: 'list.git_write', id: 'list.git_commit', params: { cmd: sub }, level: 'ask', exempt: false });
+  else acc.add('ask', 'list.git_write', { cmd: sub }, false);
 }
 
 const PUSH_FLAGS = '-u --set-upstream --force-with-lease -f --force --tags --all -n --dry-run -v --verbose -q --quiet --delete --follow-tags --no-verify';

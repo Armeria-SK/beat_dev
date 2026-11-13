@@ -14,6 +14,28 @@ const withoutSecrets = (url: string): string => {
   return parts ? `${parts[1]}${parts[2]}` : url;
 };
 
+const DEFAULT_PORTS: Readonly<Record<string, string>> = { 'ssh:': '22', 'git+ssh:': '22', 'ssh+git:': '22', 'https:': '443', 'http:': '80', 'git:': '9418' };
+
+export function remoteKey(url: string): string {
+  const raw = url.trim();
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.*)$/u.exec(raw);
+  let host: string;
+  let path: string;
+  if (scp && scp[1]!.length > 1) {
+    host = scp[1]!.toLowerCase();
+    path = scp[2]!;
+  } else {
+    let parsed: URL;
+    try { parsed = new URL(raw); } catch { return `local:${raw.replaceAll('\\', '/').replace(/\/+$/u, '')}`; }
+    if (parsed.protocol === 'file:' || !parsed.hostname) return `local:${decodeURIComponent(parsed.pathname).replace(/\/+$/u, '')}`;
+    const port = parsed.port && parsed.port !== DEFAULT_PORTS[parsed.protocol] ? `:${parsed.port}` : '';
+    host = `${parsed.hostname.toLowerCase().replace(/\.+$/u, '')}${port}`;
+    path = parsed.pathname;
+  }
+  const clean = path.split('/').filter(Boolean).join('/').replace(/\.git$/u, '');
+  return `${host}/${clean}`;
+}
+
 export function readRemotes(root: string): Remote[] {
   try {
     const dotGit = join(root, '.git');

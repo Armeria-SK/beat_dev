@@ -64,6 +64,60 @@ export interface ShellVerdict {
   sends: boolean;
   // 消しうる: rm など、確かめの種類 git_write、表が中身を知らない形（sends と同じ）。ファイルの上書き（> cp mv tee sed -i など）は消すに入れない（持ち主の決め）。迷ったら true
   removes: boolean;
+  statements: StatementFacts[];
+  writes: string[];
+  reasonKeys: string[];
+}
+
+export interface FactWord { text: string; dynamic: boolean; glob: boolean }
+export interface DeleteTarget { input: string; path?: string; wild: boolean }
+export interface StatementFacts {
+  program: string;
+  words: FactWord[];
+  urls: Array<{ text: string; dynamic: boolean }>;
+  env: string[];
+  gitGlobal: string[];
+  code: string[];
+  deletes: boolean;
+  targets: DeleteTarget[];
+  writes: string[];
+  cwd: string | null;
+}
+
+interface Said { key: string; text: string }
+
+const URL_IN_WORD = /[a-z][a-z0-9+.-]*:\/\/[^\s'"`]+/giu;
+const CODE_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  node: ['-e', '--eval', '-p', '--print'], nodejs: ['-e', '--eval', '-p', '--print'], bun: ['-e', '--eval', '-p', '--print'], deno: ['eval'],
+  python: ['-c'], python3: ['-c'], py: ['-c'], perl: ['-e', '-E'], ruby: ['-e'], sh: ['-c'], bash: ['-c'], zsh: ['-c'],
+};
+const REST_CODE: ReadonlySet<string> = new Set(['powershell', 'pwsh', 'cmd', 'iex', 'invoke-expression']);
+
+function codeOf(program: string, words: readonly Word[]): string[] {
+  const args = words.slice(1);
+  if (REST_CODE.has(program)) {
+    if (program === 'iex' || program === 'invoke-expression') return args.length ? [args.map(w => w.text).join(' ')] : [];
+    const at = args.findIndex(w => (program === 'cmd' ? /^\/[ck]$/iu.test(w.text) : /^-(?:c|co|com|comm|comma|comman|command|encodedcommand|enc|e|ec)$/iu.test(w.text)));
+    return at >= 0 && at + 1 < args.length ? [args.slice(at + 1).map(w => w.text).join(' ')] : [];
+  }
+  const flags = CODE_FLAGS[program];
+  if (!flags) return [];
+  const out: string[] = [];
+  args.forEach((w, i) => {
+    const eq = flags.find(f => f.startsWith('--') && w.text.startsWith(`${f}=`));
+    if (eq) out.push(w.text.slice(eq.length + 1));
+    else if (flags.includes(w.text) && args[i + 1]) out.push(args[i + 1]!.text);
+  });
+  return out;
+}
+
+function gitGlobalOf(words: readonly Word[]): string[] {
+  const out: string[] = [];
+  for (let i = 1; i < words.length && /^-/u.test(words[i]!.text); i++) {
+    out.push(words[i]!.text);
+    if (['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'].includes(words[i]!.text) && words[i + 1]) out.push(words[++i]!.text);
+  }
+  return out;
 }
 
 const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
@@ -159,8 +213,13 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const shell: ShellKind = opts.shell ?? (windows ? 'powershell' : 'bash');
   const language = opts.language ?? DEFAULT_LANGUAGE;
   const text = (key: GuardMessageKey, params?: Record<string, string | number>) => guardText(language, key, params);
+  const say = (key: GuardMessageKey, params?: Record<string, string | number>): Said => ({ key, text: text(key, params) });
   let decision: Decision = 'allow';
   const reasons: string[] = [];
+  const reasonKeys: string[] = [];
+  const statements: StatementFacts[] = [];
+  const writes: string[] = [];
+  let current: StatementFacts | undefined;
   const paths: CheckedPath[] = [];
   const scripts: string[] = [];
   const askKinds: AskKind[] = [];
@@ -174,13 +233,13 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   let removes = false;
   const unknownEffect = (): void => { sends = true; removes = true; };
   // ask の理由には種類を付ける。付けなければ precheck（細かい種類なし）で、自動承認の判定役には回らない
-  const add = (d: Decision, reason: string, kind: AskKind = 'precheck') => {
+  const add = (d: Decision, said: Said, kind: AskKind = 'precheck') => {
     decision = worst(decision, d);
-    if (!reasons.includes(reason)) reasons.push(reason);
+    if (!reasons.includes(said.text)) { reasons.push(said.text); reasonKeys.push(said.key); }
     if (d === 'ask' && !askKinds.includes(kind)) askKinds.push(kind);
     if (d === 'ask' && kind === 'opaque') unknownEffect();
   };
-  const addCode = (reason: string) => add('ask', reason, 'code');
+  const addCode = (said: Said) => add('ask', said, 'code');
   // コマンドの git が調べたリポジトリ。持ち主が許したときに、そのリポジトリ自身のフックだけを動かせるかを決める
   const repoLog: { repos: RepoInfo[]; unsafe: boolean } = { repos: [], unsafe: false };
   const ownHooksDir = (): string | null => {
@@ -194,7 +253,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (onceOnly) explainWithCodeGuard();
     return {
       decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled,
-      sends: sends || fetched || pulled, removes,
+      sends: sends || fetched || pulled, removes, statements, writes, reasonKeys,
     };
   };
 
@@ -204,7 +263,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const segs = segments(command, { backticks: !windows });
     for (const [i, seg] of segs.entries()) {
       for (const found of codeFindings(seg, { cwd, language, selfHosts, prev: seg.stdin === 'pipe' ? segs[i - 1] : undefined })) {
-        if (!reasons.includes(found.reason)) reasons.push(found.reason);
+        if (!reasons.includes(found.reason)) { reasons.push(found.reason); reasonKeys.push(found.key); }
         for (const file of found.scripts) if (!scripts.includes(file) && scripts.length < 3) scripts.push(file);
       }
       if (CWD_CMDS.has(seg.cmd)) {
@@ -215,9 +274,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
   }
 
-  if (!command.trim()) { add('deny', text('guard.empty')); return done(); }
-  if (FORK_BOMB.test(command)) add('deny', text('guard.fork_bomb'));
-  if (splitCommand(command).some(part => ELEVATE.test(part))) add('deny', text('guard.elevate'));
+  if (!command.trim()) { add('deny', say('guard.empty')); return done(); }
+  if (FORK_BOMB.test(command)) add('deny', say('guard.fork_bomb'));
+  if (splitCommand(command).some(part => ELEVATE.test(part))) add('deny', say('guard.elevate'));
 
   const cwds: string[] = [initialCwd];
   let cwd = initialCwd;
@@ -276,13 +335,14 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
-    add('deny', text('lex.denied', { detail: lexDetail(language, classified.lex) }));
+    add('deny', say('lex.denied', { detail: lexDetail(language, classified.lex) }));
     unknownEffect();
     return done();
   }
-  if (!classified.statements.length) add('deny', text('guard.no_command'));
+  if (!classified.statements.length) add('deny', say('guard.no_command'));
 
   const reasonText = (r: Reason): string => (r.key.startsWith('ask.') ? text('guard.needs_approval', { reason: text(r.key) }) : text(r.key, r.params));
+  const fromReason = (r: Reason): Said => ({ key: r.id ?? r.key, text: reasonText(r) });
   const allowEntries = (opts.allow ?? []).map(parseAllowEntry).filter((e): e is string[] => e !== null);
 
   // 1 つの絶対パスを、書く・読む・消すものとして調べる
@@ -291,47 +351,54 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all'): void => {
     const placement = placePath(abs, opts.policy, secrets);
     if (primary) paths.push({ input, path: abs, placement, write });
-    if (placement.kind === 'deny') { add('deny', placement.reason); return; }
-    if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
+    if (write) {
+      if (!writes.includes(abs)) writes.push(abs);
+      if (current && !current.writes.includes(abs)) current.writes.push(abs);
+    }
+    if (placement.kind === 'deny') { add('deny', { key: 'scope.deny', text: placement.reason }); return; }
+    if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', say('guard.irreversible', { path: abs })); return; }
     // ツールの設定ファイルは、許可フォルダの外（ホームが許可フォルダの外なのが既定）でも、ふつうの確かめではなく今回だけ。外の確かめで戻る前に調べる
-    if (write && isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
+    if (write && isToolConfigPath(abs, env)) addCode(say('list.tool_config', { path: abs }));
     // 許可フォルダの外でも、git のフォルダへの書き込みはフックや設定でコードが動くので、外のふつうの確かめでなく今回だけ
-    if (write && placement.kind === 'outside' && writeApprovalKind(abs, opts.policy) === 'git') addCode(text(WRITE_KEYS.git, { path: abs }));
-    if (placement.kind === 'outside') { add(opts.outsideRoots, text('guard.touches_outside', { path: abs }), intentWrite ? 'outside_write' : 'outside_read'); return; }
-    if (write && placement.mode === 'read') { add('deny', text('guard.write_readonly', { path: abs })); return; }
+    if (write && placement.kind === 'outside' && writeApprovalKind(abs, opts.policy) === 'git') addCode(say(WRITE_KEYS.git, { path: abs }));
+    if (placement.kind === 'outside') { add(opts.outsideRoots, say('guard.touches_outside', { path: abs }), intentWrite ? 'outside_write' : 'outside_read'); return; }
+    if (write && placement.mode === 'read') { add('deny', say('guard.write_readonly', { path: abs })); return; }
     if (!write) return;
     const kind = writeApprovalKind(abs, opts.policy);
-    if (kind) addCode(text(WRITE_KEYS[kind], { path: abs }));
+    if (kind) addCode(say(WRITE_KEYS[kind], { path: abs }));
   };
   // フォルダごと書く・消すとき、その中に守る場所（人格・スキル・.git）まで届くなら今回だけ
   const rangeCheck = (dir: string): void => {
-    if (protectedInside(dir, opts.policy) || containsToolConfig(dir, env)) addCode(text('list.write_ancestor', { path: dir }));
+    if (protectedInside(dir, opts.policy) || containsToolConfig(dir, env)) addCode(say('list.write_ancestor', { path: dir }));
   };
   const dotfiles = isPowerShell(shell);
 
-  const checkPath = (ref: PathRef, deletes: boolean): void => {
+  const checkPath = (ref: PathRef, deletes: boolean, record = true): void => {
     const write = ref.mode === 'write';
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
+    const target = (t: DeleteTarget): void => { if (record && write && current) current.targets.push(t); };
     if (relative && !cwdKnown) {
+      target({ input, wild: false });
       unknownEffect();
-      if (write) addCode(text('list.cwd_unknown', { input })); else add('ask', text('list.cwd_unknown', { input }), 'opaque');
+      if (write) addCode(say('list.cwd_unknown', { input })); else add('ask', say('list.cwd_unknown', { input }), 'opaque');
       return;
     }
     // バッククォートでエスケープした名前（'.en`v' は .env）は、エスケープを外した名前でも調べる。秘密のパスに当たるなら止める
     if (ref.word.unescaped !== undefined) {
       const { unescaped, ...rest } = ref.word;
-      checkPath({ ...ref, word: { ...rest, text: unescaped, dynamic: false, glob: /[*?[]/u.test(unescaped) } }, deletes);
+      checkPath({ ...ref, word: { ...rest, text: unescaped, dynamic: false, glob: /[*?[]/u.test(unescaped) } }, deletes, false);
     }
     for (const base of relative ? cwds : [cwd]) {
       const primary = base === cwd;
       const expanded = resolveWord(ref.word, base, windows, language);
+      if (primary) target(ref.word.glob ? { input, wild: true } : 'unresolved' in expanded || ref.word.dynamic ? { input, wild: false } : { input, path: expanded.path, wild: false });
       if ('unresolved' in expanded) {
         unknownEffect();
         if (primary) paths.push({ input, placement: { kind: 'unresolved', reason: expanded.unresolved }, write });
-        if (write) addCode(text('list.write_dynamic', { input }));
-        else if (ref.strict) addCode(text('list.read_dynamic', { input }));
-        else add('ask', text('list.read_dynamic', { input }), 'opaque');
+        if (write) addCode(say('list.write_dynamic', { input }));
+        else if (ref.strict) addCode(say('list.read_dynamic', { input }));
+        else add('ask', say('list.read_dynamic', { input }), 'opaque');
         continue;
       }
       const globbing = ref.word.glob && !ref.word.dynamic;
@@ -349,7 +416,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false, write, scope);
         if (!globbed.complete) {
           if (write) { unknownEffect(); rangeCheck(globbed.prefix); }
-          else add('ask', text('list.wild_many', { input }), 'opaque');
+          else add('ask', say('list.wild_many', { input }), 'opaque');
         }
       } else if (write && ref.recursive && isDirectory(expanded.path)) rangeCheck(expanded.path);
       if (ref.list) listCheck(ref, base, expanded.path, globbing);
@@ -377,16 +444,16 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
     if (inDeps.size) {
       const shown = [...inDeps].slice(0, 5);
-      addCode(text('list.secret_in_deps', { count: inDeps.size, paths: shown.join(', ') + (inDeps.size > shown.length ? ', …' : '') }));
+      addCode(say('list.secret_in_deps', { count: inDeps.size, paths: shown.join(', ') + (inDeps.size > shown.length ? ', …' : '') }));
     }
-    if (!complete) add('ask', text('list.wild_many', { input: ref.word.text }), 'opaque');
+    if (!complete) add('ask', say('list.wild_many', { input: ref.word.text }), 'opaque');
   };
 
   // cp・mv・Copy-Item・Move-Item・Rename-Item・New-Item: 実際に書かれるパスを組み立てて調べる
   const checkCopy = (use: CopyUse): void => {
     for (const base of cwds) {
       const unresolvedWord = (w: Word | null): boolean => w !== null && 'unresolved' in resolveWord(w, base, windows, language);
-      const dyn = (w: Word | null): void => { unknownEffect(); if (w) addCode(text('list.write_dynamic', { input: w.text })); };
+      const dyn = (w: Word | null): void => { unknownEffect(); if (w) addCode(say('list.write_dynamic', { input: w.text })); };
       if (use.kind === 'join') {
         if (!use.name || use.name.dynamic || unresolvedWord(use.dest)) { dyn(use.name?.dynamic ? use.name : use.dest ?? use.name); continue; }
         const dir = use.dest ? (resolveWord(use.dest, base, windows, language) as { path: string }).path : base;
@@ -414,18 +481,18 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if ('unresolved' in r || source.dynamic) { unknownNames = true; continue; }
         if (/(?:^|[\\/])\.\.?$/u.test(source.text) || source.text === '~') {
           unknownNames = true;
-          if (use.recursive && containsGitDir(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
+          if (use.recursive && containsGitDir(r.path)) addCode(say('list.write_ancestor', { path: r.path }));
           continue;
         }
         if (source.glob) {
           const globbed = expandGlob(patternOf(source, base, windows), dotfiles);
           if (!globbed.complete) { unknownNames = true; continue; }
           names.push(...globbed.matches.map(m => basename(m)));
-          if (use.recursive) for (const m of globbed.matches) if (isDirectory(m) && containsGitDir(m)) addCode(text('list.write_ancestor', { path: m }));
+          if (use.recursive) for (const m of globbed.matches) if (isDirectory(m) && containsGitDir(m)) addCode(say('list.write_ancestor', { path: m }));
           continue;
         }
         names.push(basename(r.path));
-        if (use.recursive && isDirectory(r.path) && containsGitDir(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
+        if (use.recursive && isDirectory(r.path) && containsGitDir(r.path)) addCode(say('list.write_ancestor', { path: r.path }));
       }
       if (destIsDir) {
         for (const name of names) {
@@ -448,7 +515,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     name ||= 'index.html';
     for (const base of cwds) {
       const d = dir ? resolveWord(dir, base, windows, language) : { path: base };
-      if ('unresolved' in d) { addCode(text('list.write_dynamic', { input: dir?.text ?? '' })); continue; }
+      if ('unresolved' in d) { addCode(say('list.write_dynamic', { input: dir?.text ?? '' })); continue; }
       const target = windows ? windowsNames(resolve(d.path, name)) : resolve(d.path, name);
       evalAbs(target, name, true, false, false);
     }
@@ -459,13 +526,20 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const words = st.words.map(w => w.text);
     const first = st.words[0];
     const name = first && !first.dynamic ? (first.text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.exe$/u, '') : '';
+    current = {
+      program: name, words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
+      urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
+      env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: codeOf(name, st.words),
+      deletes: result.deletes, targets: [], writes: [], cwd: cwdKnown ? cwd : null,
+    };
+    statements.push(current);
     const hard = name ? HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined) : undefined;
-    if (hard) add('deny', text('guard.hard_denied', { label: text(hard), cmd: name }));
-    if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a))) add('deny', text('guard.device_write'));
+    if (hard) add('deny', say('guard.hard_denied', { label: text(hard), cmd: name }));
+    if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
-    if (denied) add('deny', text('guard.config_denied', { prefix: denied }));
+    if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;
-    else if (fetched && name && SHELL_SINKS.has(name)) add('deny', text('guard.download_exec'));
+    else if (fetched && name && SHELL_SINKS.has(name)) add('deny', say('guard.download_exec'));
     if (result.deletes) removes = true;
     if (result.sends) sends = true;
 
@@ -479,12 +553,12 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       else if (!KNOWN_EFFECT_REASONS.has(reason.key)) unknownEffect();
       if (reason.exempt && allowedByConfig) { unknownEffect(); continue; }
       if (reason.key === 'list.install' || reason.key === 'list.expand') limits = limits || reason.key === 'list.install';
-      if (reason.level === 'deny') add('deny', reasonText(reason));
-      else if (reason.level === 'once') addCode(reasonText(reason));
-      else add('ask', reasonText(reason), askKindOf(reason.key));
+      if (reason.level === 'deny') add('deny', fromReason(reason));
+      else if (reason.level === 'once') addCode(fromReason(reason));
+      else add('ask', fromReason(reason), askKindOf(reason.key));
     }
     const asked = matchesPrefix(words, opts.ask);
-    if (asked && !allowedByConfig) add('ask', text('guard.needs_approval', { reason: asked }), 'owner');
+    if (asked && !allowedByConfig) add('ask', say('guard.needs_approval', { reason: asked }), 'owner');
 
     for (const ref of result.paths) checkPath(ref, result.deletes);
     for (const use of result.copies) checkCopy(use);
@@ -494,7 +568,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         const resolved = resolveWord({ text: token, dynamic: st.words.some(w => w.text === token && w.dynamic), glob: false, quoted: false, home: token === '~' || token.startsWith('~/'), kind: 'plain' }, cwd, windows, language);
         if ('unresolved' in resolved) continue;
         const placement = placePath(resolved.path, opts.policy);
-        if (placement.kind === 'deny') add('deny', placement.reason);
+        if (placement.kind === 'deny') add('deny', { key: 'scope.deny', text: placement.reason });
       }
     }
 
