@@ -1291,7 +1291,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: npx の引数の & �
   const host = spawnSync('hostname', { encoding: 'utf8' }).stdout.trim();
   assert.ok(host);
   const outcome = await runApproved(s, `npx --version 'x&hostname'`);
-  assert.equal(outcome.decidedBy, 'user', outcome.output.content);
+  assert.ok(outcome.decidedBy === 'user' || outcome.decision === 'deny', outcome.output.content);
   assert.equal(outcome.output.content.split('\n').some(line => line.trim() === host), false, outcome.output.content);
 });
 
@@ -1338,4 +1338,25 @@ test('実機（Windows PowerShell 5.1・制限モード）: npm・pnpm に実行
     }
     assert.equal(ranHost(text), false, `${command}: ${text}`);
   }
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきの名前・npm.cmd・変数の名前で npm を呼んでも、承認しても cmd.exe の & で別のコマンドを動かさない', { skip: (!psAvailable || !which('npm')) && 'Windows の PowerShell か npm が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('n.txt'), 'x&cd>pw2.txt\r\n');
+  const rows: Array<[string, string]> = [
+    ["& 'npm' --version 'x&cd>pw1.txt'", 'pw1.txt'], ['$a = Get-Content n.txt; & \'npm\' --version $a', 'pw2.txt'], ["npm.cmd --version 'x&cd>pw3.txt'", 'pw3.txt'],
+    ["$p = 'npm'; & $p --version 'x&cd>pw4.txt'", 'pw4.txt'],
+  ];
+  for (const [command, file] of rows) {
+    const outcome = await runApproved(s, command);
+    if (outcome.decidedBy === 'pending') {
+      const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
+      assert.ok(row, command);
+      await replayAction(s.pending.claim(row.id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
+    }
+    assert.equal(existsSync(s.files(file)), false, `${command}: ${outcome.output.content}`);
+  }
+  const plain = await runApproved(s, "& 'npm' --version");
+  assert.equal(plain.output.isError, false, plain.output.content);
+  assert.match(plain.output.content, /\b\d+\.\d+\.\d+\b/u);
 });

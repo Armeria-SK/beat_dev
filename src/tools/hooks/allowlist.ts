@@ -103,12 +103,24 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
     return;
   }
   acc.add('once', 'list.command', { cmd: words[0]!.text }, true);
+  unlistedArgs(st, acc, ctx);
+}
+
+function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
+  if (!ctx.windows) return;
+  const name = st.words[0]!;
+  const t = name.text;
+  const cmdFile = name.dynamic || /\.(?:cmd|bat)$/iu.test(t)
+    || (/[\\/:]/u.test(t) ? !/\.(?:exe|com)$/iu.test(t) : ['.cmd', '.bat'].includes(ctx.external?.(t.toLowerCase()).ext ?? '.exe'));
+  if (cmdFile) winArgs(t, st.words, '.cmd', acc);
 }
 
 export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   const acc = new Acc();
   acc.strict = st.inBlock === true;
   const ps = isPowerShell(ctx.shell);
+  const first = st.words[0];
+  const quotedName = ps && st.kind === 'command' && first !== undefined && first.kind === 'plain' && first.quoted && !first.dynamic && !first.home && NAME_RE.test(first.text) && st.shapes.includes('call');
   shapes(st, acc);
   redirects(st, acc, ps);
   if (st.kind === 'control') {
@@ -121,8 +133,12 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
 
   const name = st.words[0]!;
   const text = name.text;
-  const named = name.kind === 'plain' && !name.dynamic && !name.quoted && !name.home && (NAME_RE.test(text) || (ps ? text === '%' || text === '?' : BASH_SPECIAL.has(text)) || text === 'tree.com' || text === 'where.exe');
-  if (!named) { acc.add('once', 'list.command', { cmd: text }, true); return acc.result(); }
+  const named = quotedName || (name.kind === 'plain' && !name.dynamic && !name.quoted && !name.home && (NAME_RE.test(text) || (ps ? text === '%' || text === '?' : BASH_SPECIAL.has(text)) || text === 'tree.com' || text === 'where.exe'));
+  if (!named) {
+    acc.add('once', 'list.command', { cmd: text }, true);
+    if (ps) unlistedArgs(st, acc, ctx);
+    return acc.result();
+  }
   let key = ctx.windows || ps ? text.toLowerCase() : text;
   let exe = false;
   if (ctx.windows && key.endsWith('.exe') && key !== 'where.exe') { key = key.slice(0, -4); exe = true; }
