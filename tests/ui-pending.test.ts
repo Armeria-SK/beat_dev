@@ -4,7 +4,7 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, actionView, byteSize, decidedShown, decidedText, earlierQuery, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, waitingOf, waitingShown, withPendingCounts,
+  acceptanceRows, actionView, byteSize, decidedShown, decidedText, earlierQuery, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
@@ -254,4 +254,19 @@ test('ui/pending: Decided の行も Waiting と同じ actionView から組む（
   assert.deepEqual(decidedText(actionView(row({ tool: 'shell_run', status: 'ran', title: 'Run a command', shown: 'Run a command', parts: erased }))), { title: null, code: 'Run a command', cwd: null });
   assert.deepEqual(decidedText(actionView(row({ tool: 'file_edit', status: 'ran', title: 'Edit a file: a.ts', shown: 'Edit a file: a.ts', parts: erased }))), { title: 'Edit a file: a.ts', code: null, cwd: null });
   assert.deepEqual(decidedText(actionView(row({ tool: 'file_edit', status: 'ran', title: null, shown: 'file_edit', parts: erased }))), { title: null, code: 'file_edit', cwd: null }, '題も無ければ shown を出す');
+});
+
+test('4-4 タスクごとの Pending の数: 待っている行だけを task_id ごとに数え、タスクの無い行と決めた行は数えない', () => {
+  const counts = taskCounts([
+    row({ id: 1, task_id: 't1' }),
+    row({ id: 2, task_id: 't1' }),
+    row({ id: 3, task_id: 't2' }),
+    row({ id: 4, task_id: null }),
+    row({ id: 5, task_id: 't1', status: 'running' }),
+    row({ id: 6, task_id: 't2', status: 'ran', decided_at: 2_000 }),
+    row({ id: 7, task_id: 't3', status: 'rejected', decided_at: 2_000 }),
+  ]);
+  assert.deepEqual([...counts.entries()].sort(), [['t1', 2], ['t2', 1]]);
+  assert.equal(counts.has('t3'), false);
+  assert.equal(taskCounts([]).size, 0);
 });

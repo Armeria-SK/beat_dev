@@ -6,10 +6,10 @@ import { Markdown } from '../../Markdown.tsx';
 import type { Access } from '../../settings/access.ts';
 import { findDraft, orderTools, toolLook } from '../../skills-meta.ts';
 import { lineDelta } from '../../../../src/shared/line-delta.ts';
-import { ASK_MEANS_BLOCK, TOOL_POLICIES, type ToolPolicy } from '../../../../src/tools/tool-policy.ts';
+import type { ToolPolicy } from '../../../../src/tools/tool-policy.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
-import { ROW_LEAVE_MS, skillHistory, toolCounts, toolDecision, type SkillChange } from '../library.ts';
+import { policyChoices, ROW_LEAVE_MS, skillHistory, toolCounts, toolDecision, type SkillChange } from '../library.ts';
 import { Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash, type SkillTarget } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
@@ -327,7 +327,7 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
               </div>
               <div className="bt-row__end">
                 <div className="bt-seg" role="group" aria-label={t('ui.tools.policy', tool.name)}>
-                  {TOOL_POLICIES.filter(policy => policy !== 'ask' || !ASK_MEANS_BLOCK.has(tool.name)).map(policy => (
+                  {policyChoices(tool.name).map(policy => (
                     <button key={policy} type="button" className="bt-seg__opt" data-policy={policy} aria-pressed={tool.policy === policy}
                       disabled={!tool.configurable || busy !== null || asking !== null} onClick={() => choose(tool, policy)}>{t(POLICY_KEY[policy])}</button>
                   ))}

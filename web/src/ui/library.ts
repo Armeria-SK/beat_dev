@@ -1,6 +1,6 @@
 import type { Conversation, JudgedCounts, MemoryEvent, MemoryItem, ReviewJob, RunRow, SkillVersion, ToolCallRow, ToolInfo } from '../api.ts';
 import { lineDelta, type LineDelta } from '../../../src/shared/line-delta.ts';
-import type { ToolPolicy } from '../../../src/tools/tool-policy.ts';
+import { ASK_MEANS_BLOCK, TOOL_POLICIES, type ToolPolicy } from '../../../src/tools/tool-policy.ts';
 import { toolPolicyLoosened, type Access } from '../settings/access.ts';
 import { maskTarget, toolRow } from './tool-row.ts';
 
@@ -87,6 +87,8 @@ export function skillHistory(versions: readonly SkillVersion[], current: SkillCo
 }
 
 export type ToolChoice = { kind: 'save' } | { kind: 'confirm'; item: Access } | { kind: 'none' };
+
+export const policyChoices = (tool: string): ToolPolicy[] => TOOL_POLICIES.filter(policy => policy !== 'ask' || !ASK_MEANS_BLOCK.has(tool));
 
 export function toolChoice(tool: Pick<ToolInfo, 'name' | 'policy' | 'configurable'>, to: ToolPolicy): ToolChoice {
   if (!tool.configurable || tool.policy === to) return { kind: 'none' };

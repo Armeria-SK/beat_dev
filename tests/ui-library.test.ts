@@ -4,7 +4,7 @@ import type { MemoryEvent, ReviewJob, RunRow, SkillVersion, ToolCallRow } from '
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  archivedLine, archivedNothing, callResult, durationText, filterLog, jobResult, judgedLine, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, runResult, skillHistory,
+  archivedLine, archivedNothing, callResult, durationText, filterLog, jobResult, judgedLine, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, policyChoices, runResult, skillHistory,
   tokensText, toolChoice, toolCounts, toolDecision, undoDeletes,
 } from '../web/src/ui/library.ts';
 import { maskTarget } from '../web/src/ui/tool-row.ts';
@@ -189,4 +189,10 @@ test('ui/library: Runs の振り返りの行は、What の列でも秘密を伏�
   assert.equal(maskTarget(job.note!).includes('hunter2secret'), false);
   const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'screens', 'Runs.tsx'), 'utf8');
   assert.equal(source.includes('{job.note}'), false, '詳細に生の note を出さない');
+});
+
+test('4-4 Skills の道具の方針: agent_run には Ask を出さない（Ask は止めると同じ）。ほかの道具は Allow・Ask・Block の 3 つ', () => {
+  assert.deepEqual(policyChoices('agent_run'), ['allow', 'block']);
+  assert.deepEqual(policyChoices('shell_run'), ['allow', 'ask', 'block']);
+  assert.deepEqual(policyChoices('file_write'), ['allow', 'ask', 'block']);
 });
