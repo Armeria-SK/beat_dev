@@ -94,10 +94,31 @@ test('selfTarget: 数字だけの語の見逃しは、origins のポートに 80
   const http = { port: 4790, origins: ['http://10.0.0.5'] };
   const bare = ['curl 10.5/api/pending', 'curl 10.5', 'curl -s 167772165/api/pending', 'wget -qO- 10.5/api/pending', 'curl 0xa000005'];
   assert.deepEqual(bare.filter(command => selfTarget(command, http) === undefined), []);
-  for (const config of [ipServer, { port: 4777, origins: ['http://10.0.0.5:4790'] }, { port: 4790, origins: ['https://10.0.0.5'] }]) {
+  for (const config of [ipServer, { port: 4777, origins: ['http://10.0.0.5:4790'] }]) {
     const tail = ['curl "10.5:[4790-4790]/api/pending"', 'curl 10.5:{4790,4790}', 'curl 10.5/api/pending', 'curl 10.5?x=1', 'curl 10.5#top', 'curl -s 167772165/api/pending', 'curl https://10.5/'];
     assert.deepEqual(tail.filter(command => selfTarget(command, config) === undefined), []);
     const plain = ['sleep 10.5', 'nvm use 10.5', 'npm i lodash@10.5'];
     assert.deepEqual(plain.filter(command => selfTarget(command, config) !== undefined), []);
   }
+  const https = { port: 4790, origins: ['https://10.0.0.5'] };
+  const viaHttps = ['curl --proto-default https 10.5', 'curl 10.5 --request-target /api/pending', 'curl -L 10.5', 'curl 10.5/api/pending', 'curl https://10.5/', 'sleep 10.5'];
+  assert.deepEqual(viaHttps.filter(command => selfTarget(command, https) === undefined), [], '443 が beat のポートのときは、数字だけの語も見逃さない');
+});
+
+test('selfTarget: :// のある語に beat のポートと展開の括弧があれば、ポートが括弧の中でも、括弧の中に何が書かれていても断る', () => {
+  const inside = ['x/y', 'a?b', 'a#b', 'a@127.0.0.1', 'a~b', 'a+b', 'a!b', 'a=b', 'a b', 'a;b', 'a&b', 'a(b', 'a|b', 'a*b', 'a^b', 'a<b', 'a%b'];
+  const reached = [
+    'curl "http://127.0.0.{1:4790,1:4790}/"', 'curl "http://127.0.0.1{:4790,:4790}/"', 'curl "http://127.0.0.{1:4790/a,1:4790/b}"',
+    ...inside.map(part => `curl "http://{127.0.0.1,${part}}:4790/"`),
+    'curl "{http://127.0.0.1,http://localhost}:4790/"',
+    'curl "http://{,x@}127.0.0.[1-1]:4790/"', 'curl "http://{x@,y@}127.0.0.{1,1}:4790/"', 'curl "http://{a/../,}127.0.0.{1,1}:4790/"',
+    'curl "http://a~{b,c}.localhost:4790/"', 'curl "http://a|{b,c}.localhost:4790/"',
+    "curl 'http://{127.0.0.1,a b}:4790/'", 'curl http://127.0.0.{1:0004790,2}/',
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined), []);
+  const free = [
+    'curl "http://{127.0.0.1,x/y}:9/"', 'curl http://[::1]:9/', `echo '{"port":4790}' http://example.com/`, 'curl "http://example.com/{a,b}" -o out:1',
+    `node -e "f({port:4790})"`, 'echo a[0]:4790',
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
 });

@@ -10,7 +10,9 @@ const EXPANDING_HOST = new RegExp(String.raw`(?:^|[\s/@=])((?:${HOST_CHAR}|\{[^{
 const GROUP = /\{[^{}]*\}|\[[^[\]]*\]/gu;
 const BRACE_BODY = new RegExp(`^(?:${HOST_CHAR}|[,:])*$`, 'u');
 const BRACKET_BODY = new RegExp(`^(?:${HOST_CHAR}|:)*$`, 'u');
-const NUMBER_WORD = /^[0-9a-fx.]+$/iu;
+const SHELL_WORD = /(?:[^\s"'`]|"[^"]*"|'[^']*'|`[^`]*`)+/gu;
+const BRACKETED = /\[[^[\]]+\]/gu;
+const NUMBER_WORD =/^[0-9a-fx.]+$/iu;
 const IPV6_LITERAL = /^\[[^[\]]+\]$/u;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
@@ -63,6 +65,11 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
     const at = new RegExp(`(?:^|[^a-z0-9.-])${host.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\.*(?![a-z0-9-])`, 'u').exec(lower);
     if (at) return host;
   }
+  for (const [quoted] of text.matchAll(SHELL_WORD)) {
+    const word = quoted.replace(/["'`]/gu, '');
+    if (!word.includes('://') || !/[{}[\]]/u.test(word.replace(BRACKETED, group => (isIP(group.slice(1, -1)) === 6 ? '' : group)))) continue;
+    for (const match of word.matchAll(PORT)) if (ports.has(Number(match[1]))) return word;
+  }
   for (const match of plain.matchAll(PORT)) {
     if (!ports.has(Number(match[1]))) continue;
     const word = expandingHost(plain.slice(Math.max(0, match.index - 256), match.index));
@@ -73,7 +80,7 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
     if (!host) continue;
     const normal = normalHost(host);
     if (normal === undefined) continue;
-    const plainNumber = scheme === undefined && port === undefined && NUMBER_WORD.test(host) && !ports.has(80) && !/[/?#:]/u.test(plain[match.index + whole.length] ?? '');
+    const plainNumber = scheme === undefined && port === undefined && NUMBER_WORD.test(host) && !ports.has(80) && !ports.has(443) &&!/[/?#:]/u.test(plain[match.index + whole.length] ?? '');
     if (hosts.includes(normal) && !plainNumber) return whole;
     const number = port !== undefined ? Number(port) : scheme ? DEFAULT_PORT[scheme.toLowerCase()] : undefined;
     if (number !== undefined && ports.has(number) && loopbackHost(normal)) return whole;
