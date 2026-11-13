@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ApiError, type Conversation, type FolderEntry, type Project } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
@@ -185,4 +186,12 @@ test('ui/product-nav: 製品のエラーのコードは画面の文にする。�
 test('ui/product-nav: /new は、製品の会話からならその製品の新しい会話へ、製品でなければ #/ へ', () => {
   assert.equal(newSessionHash('p1aaaa'), routeHash({ view: 'productNew', id: 'p1aaaa' }));
   assert.equal(newSessionHash(undefined), '#/');
+});
+
+test('ui/product-nav: 入力欄の /new は newSessionHash を使う（Conversation の配線）', () => {
+  const chat = readFileSync(new URL('../web/src/ui/Conversation.tsx', import.meta.url), 'utf8');
+  const start = chat.indexOf("case 'new':");
+  const slash = chat.slice(start, chat.indexOf("case 'plan':", start));
+  assert.ok(start > 0 && slash.includes('location.hash = newSessionHash(product?.id)'), '/new の行き先は newSessionHash');
+  assert.ok(!slash.includes("location.hash = '#/'"), '製品の会話でも #/ へ決め打ちしない');
 });

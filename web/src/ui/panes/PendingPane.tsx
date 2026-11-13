@@ -245,7 +245,7 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
                 <li key={row.id} className="bt-row" data-decided={row.status}>
                   <Icon name={outcome.kind === 'running' ? 'clock' : ok ? 'check' : outcome.kind === 'failed' || outcome.kind === 'ran' ? 'alert' : 'x'} className={outcome.kind === 'ran' && ok ? 'bt-add' : undefined} />
                   <div className="bt-row__main">
-                    <span className="bt-row__title ui-pending__shown">{line.erased && <span className="ui-pending__title bt-meta">{t('ui.pending.erased')}</span>}{line.title &&<span className="ui-pending__title">{line.title}</span>}{line.code && <code className="ui-pending__code">{line.code}</code>}</span>
+                    <span className="bt-row__title ui-pending__shown">{line.erased && <span className="ui-pending__title bt-meta">{t('ui.pending.erased')}</span>}{line.title && <span className="ui-pending__title">{line.title}</span>}{line.code && <code className="ui-pending__code">{line.code}</code>}</span>
                     <span className="bt-row__sub bt-meta">{[all && row.project_name, line.cwd && `${t('ui.pending.cwd')} ${line.cwd}`, outcomeText(t, outcome)].filter(Boolean).join(' · ')}</span>
                   </div>
                 </li>

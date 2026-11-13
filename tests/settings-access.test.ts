@@ -349,7 +349,9 @@ test('広がりの検出（道具ごとの方針）: 止める → 承認を求�
 
 test('広がりの確かめの文: 道具ごとの方針を緩める行は、道具の名前と前後の方針（辞書の名前）を出す。en の辞書にある', () => {
   assert.equal(typeof en['access.toolPolicy'], 'function');
-  assert.match(en['access.toolPolicy']('shell_run', 'Block', 'Ask for approval'), /shell_run.*Block.*Ask for approval/u);
+  assert.match(en['access.toolPolicy']('shell_run', en['ui.tools.block'], en['ui.tools.ask']), /shell_run.*"Block".*"Ask"/u);
+  assert.ok(en['access.outside'].includes(`"${en['ui.tools.block']}" to "${en['ui.tools.ask']}"`), '外へ届くシェルの行も、Skills の行と同じ方針の名前');
+  assert.ok(en['mode.autoDesc'].includes(`set to "${en['ui.tools.block']}"`) && en['mode.autoDesc'].includes(`set to "${en['ui.tools.ask']}"`), 'Auto の説明も同じ方針の名前');
 });
 
 // ---- AU-6c: ブラウザ ----
