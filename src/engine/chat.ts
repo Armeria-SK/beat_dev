@@ -582,9 +582,9 @@ export class ChatEngine {
         return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail }, retryable: false };
       })
       .then(result => { ended = result; return result; })
-      .finally(() => this.created.end(runId))
       .finally(() => {
         this.#active.delete(runId);
+        void this.created.end(runId);
         this.#byConversation.delete(conversationId);
         this.#preemptedTasks.delete(runId);
         this.#runModel.delete(runId);

@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
-import { builtinTools } from '../src/app.ts';
+import { App, builtinTools } from '../src/app.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { KV } from '../src/db/kv.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
+import { resolvePaths } from '../src/paths.ts';
 import { CreatedFiles } from '../src/projects/created.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 const WINDOWS = process.platform === 'win32';
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -58,6 +59,7 @@ test('作ったもの: 実行の中でシェルが作ったファイルは、そ
   assert.equal(created.isCreated(made, { runId: 'r2' }), true, '次の実行でも作ったもの');
   assert.equal(created.isCreated(made, { runId: 'r9' }), false, '始めていない実行（製品に属さない実行など）は何も「作った」でない');
   assert.equal(created.isCreated(join(s.root, '..', 'shop', 'made.txt'), { runId: 'r2' }), true, '.. を含む書き方もそろえて照らす');
+  writeFileSync(join(s.base, 'made.txt'), 'x');
   assert.equal(created.isCreated(join(s.base, 'made.txt'), { runId: 'r2' }), false, '製品のフォルダの外');
   if (WINDOWS) {
     assert.equal(created.isCreated(made.toUpperCase(), { runId: 'r2' }), true, 'Windows は大文字小文字を問わない');
@@ -225,6 +227,7 @@ test('作ったもの: git でないフォルダは、ファイルの道具が�
   const byShell = s.put('shell.txt');
   assert.equal(created.isCreated(byTool, { runId: 'r1' }), true);
   assert.equal(created.isCreated(byShell, { runId: 'r1' }), false);
+  writeFileSync(join(s.base, 'outside.txt'), 'x');
   created.note({ runId: 'r1' }, join(s.base, 'outside.txt'));
   await created.end('r1');
   assert.deepEqual(created.list(scope), ['tool.txt']);
@@ -255,7 +258,7 @@ test('作ったもの（エンジン）: 製品の会話の実行が作ったフ
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   await settled(s.app, sent.body.runId);
   await waitFor(() => s.app.kv.get(`created:conv:${uuid(1)}`) !== undefined, 'created list written');
-  assert.deepEqual(s.app.kv.getJson(`created:conv:${uuid(1)}`), ['hello.txt']);
+  assert.deepEqual(s.app.engine.created.list({ kind: 'conv', id: uuid(1) }), ['hello.txt']);
 
   s.adapter().scripts = [call('file_write', { path: 'note.txt', content: 'x' }), reply('done')];
   const plain = await s.json(`/api/conversations/${uuid(2)}/messages`, 'POST', { text: 'write' });
@@ -277,5 +280,187 @@ test('作ったもの（エンジン）: git でない製品のフォルダで�
   const sent = await s.json(`/api/conversations/${uuid(3)}/messages`, 'POST', { text: 'write', projectId: made.body.project.id, permissionMode: 'normal' });
   await settled(s.app, sent.body.runId);
   await waitFor(() => s.app.kv.get(`created:conv:${uuid(3)}`) !== undefined, 'created list written');
-  assert.deepEqual(s.app.kv.getJson(`created:conv:${uuid(3)}`), ['new.txt', 'sheet.csv']);
+  assert.deepEqual(s.app.engine.created.list({ kind: 'conv', id: uuid(3) }), ['new.txt', 'sheet.csv']);
+});
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const link = (target: string, path: string) => symlinkSync(target, path, WINDOWS ? 'junction' : 'dir');
+
+test('作ったもの（H1）: 控えの書き終わりを待っているあいだに会話が来ても、終わったタスクを「割り込まれた」にしない', async t => {
+  const paths = resolvePaths(tempDir(t));
+  mkdirSync(paths.data, { recursive: true });
+  const config = testConfig();
+  config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
+  config.memory.review = false;
+  writeFileSync(paths.config, JSON.stringify(config));
+  let adapter!: FakeAdapter;
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  await app.status.probeAll(app.config());
+  t.after(() => app.close());
+  const created = app.engine.created;
+  const realEnd = created.end.bind(created);
+  created.end = async (runId: string) => { await sleep(400); await realEnd(runId); };
+  const ends: string[] = [];
+  app.bus.subscribe(e => { if (e.event.type === 'run.end') ends.push(e.event.runId); });
+  const task = app.tasks.create({ title: 'quick job', origin: 'user', actor: 'user', nextAction: 'finish' });
+  adapter.scripts.push(call('task_complete', { summary: 'finished', notify: false }), reply('done'));
+  const ticking = app.worker.tick();
+  await waitFor(() => ends.length === 1, 'task run ended');
+  adapter.scripts.push(reply('hello'));
+  const sent = app.engine.send('c1', 'hi');
+  assert.ok(sent.ok, JSON.stringify(sent));
+  await ticking;
+  await app.engine.wait(sent.runId);
+  assert.equal(app.engine.wasPreempted(ends[0]!), false);
+  assert.equal(app.tasks.get(task.id)!.status, 'done');
+});
+
+test('作ったもの（H2）: AI が作って消した名前に持ち主が置いたファイル、持ち主が書き換えた AI のファイルは「作った」でなく、一覧から落ちる', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  const notes = s.put('notes.md', 'ai');
+  const draft = s.put('draft.md', 'ai');
+  await created.end('r1');
+  assert.deepEqual(created.list(scope), ['draft.md', 'notes.md']);
+  rmSync(notes);
+  await sleep(20);
+  s.put('notes.md', 'the owner wrote this');
+  writeFileSync(draft, 'the owner edited this draft');
+  await created.begin('r2', scope, s.root);
+  assert.equal(created.isCreated(notes, { runId: 'r2' }), false);
+  assert.equal(created.isCreated(draft, { runId: 'r2' }), false);
+  assert.deepEqual(created.list(scope), []);
+  await created.end('r2');
+});
+
+test('作ったもの（H2）: 実行の中で持ち主が書き換えた一覧のファイルも、その場で「作った」でない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  const draft = s.put('draft.md', 'ai');
+  await created.end('r1');
+  await created.begin('r2', scope, s.root);
+  assert.equal(created.isCreated(draft, { runId: 'r2' }), true);
+  writeFileSync(draft, 'edited by the owner while the run goes on');
+  assert.equal(created.isCreated(draft, { runId: 'r2' }), false);
+  await created.end('r2');
+});
+
+test('作ったもの（H3）: 同じ製品のフォルダで重なった実行は、どちらも一覧に足さず、実行の中でも一覧だけを信じる', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  await created.begin('r2', { kind: 'conv', id: 'c2' }, s.root);
+  const made = s.put('made.txt');
+  assert.equal(created.isCreated(made, { runId: 'r1' }), false);
+  assert.equal(created.isCreated(made, { runId: 'r2' }), false);
+  await created.end('r2');
+  await created.end('r1');
+  assert.deepEqual(created.list(scope), []);
+  assert.deepEqual(created.list({ kind: 'conv', id: 'c2' }), []);
+  assert.ok(s.logs.some(line => line.startsWith('[WARN]')), s.logs.join('\n'));
+});
+
+test('作ったもの（H3）: 実行の頭より前に生まれたファイルを実行の中で運び込んでも「作った」にならない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const outside = join(s.base, 'old.txt');
+  writeFileSync(outside, 'old');
+  const past = new Date(Date.now() - 3_600_000);
+  utimesSync(outside, past, past);
+  await sleep(2500);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  const moved = join(s.root, 'old.txt');
+  renameSync(outside, moved);
+  assert.equal(created.isCreated(moved, { runId: 'r1' }), false);
+  await created.end('r1');
+  assert.deepEqual(created.list(scope), []);
+});
+
+test('作ったもの（M1）: git を使えない実行では、前の一覧にあっても「作った」でない。親のリポジトリの中の製品のフォルダも同じ', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  const made = s.put('made.txt');
+  await created.end('r1');
+  git(s.root, 'config', 'remote.origin.gh-resolved', 'base');
+  await created.begin('r2', scope, s.root);
+  assert.equal(created.isCreated(made, { runId: 'r2' }), false);
+  await created.end('r2');
+  assert.ok(s.logs.some(line => line.startsWith('[WARN]')), s.logs.join('\n'));
+
+  const parent = realpathSync.native(tempDir(t));
+  git(parent, 'init', '-q');
+  const inner = join(parent, 'inner');
+  mkdirSync(inner);
+  await created.begin('r3', scope, inner);
+  const byTool = join(inner, 'tool.txt');
+  writeFileSync(byTool, 'x');
+  created.note({ runId: 'r3' }, byTool);
+  assert.equal(created.isCreated(byTool, { runId: 'r3' }), false);
+  await created.end('r3');
+  assert.equal(created.list(scope).includes('tool.txt'), false);
+});
+
+test('作ったもの（M2・M4・L1・L2）: .git の中、末尾の点や空白、別のデータの流れ、相対のパスは「作った」でない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  assert.equal(created.isCreated(join(s.root, '.git'), { runId: 'r1' }), false);
+  assert.equal(created.isCreated(join(s.root, '.git', 'config'), { runId: 'r1' }), false);
+  assert.equal(created.isCreated(join(s.root, '.git', 'HEAD'), { runId: 'r1' }), false);
+  const made = s.put('made.txt');
+  assert.equal(created.isCreated('made.txt', { runId: 'r1' }), false, '相対のパス');
+  assert.equal(created.isCreated(made, { runId: 'r1' }), true);
+  if (WINDOWS) {
+    assert.equal(created.isCreated(join(s.root, '.GIT', 'HEAD'), { runId: 'r1' }), false);
+    writeFileSync(join(s.root, 'owner.txt'), 'x');
+    await created.end('r1');
+    await created.begin('r2', scope, s.root);
+    for (const name of ['owner.txt.', 'owner.txt  ', 'owner.txt:zone', 'owner.txt::$DATA']) assert.equal(created.isCreated(join(s.root, name), { runId: 'r2' }), false, name);
+    await created.end('r2');
+  } else await created.end('r1');
+});
+
+
+test('作ったもの（M3）: AI のフォルダの中のリンク・フォルダへのリンクは「作った」でなく、終わりの記録はリンクの先へ入らない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const target = join(s.base, 'elsewhere');
+  mkdirSync(target);
+  writeFileSync(join(target, 'secret.txt'), 'owner');
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  s.put(join('gen', 'a.txt'));
+  link(target, join(s.root, 'gen', 'j'));
+  link(target, join(s.root, 'top'));
+  assert.equal(created.isCreated(join(s.root, 'gen'), { runId: 'r1' }), false);
+  assert.equal(created.isCreated(join(s.root, 'gen', 'j'), { runId: 'r1' }), false);
+  assert.equal(created.isCreated(join(s.root, 'top'), { runId: 'r1' }), false);
+  s.put(join('made', 'b.txt'));
+  link(join(s.root, 'made'), join(s.root, 'alias'));
+  assert.equal(created.isCreated(join(s.root, 'made'), { runId: 'r1' }), true);
+  assert.equal(created.isCreated(join(s.root, 'alias'), { runId: 'r1' }), false, 'フォルダへのリンクは、先が作ったものでも false');
+  await created.end('r1');
+  const list = created.list(scope);
+  assert.ok(!list.some(entry => entry.startsWith('top') || entry.startsWith('gen/j')), list.join(', '));
+  await created.begin('r2', scope, s.root);
+  assert.equal(created.isCreated(join(s.root, 'gen'), { runId: 'r2' }), false);
+  assert.equal(created.isCreated(join(s.root, 'gen', 'a.txt'), { runId: 'r2' }), true);
+  await created.end('r2');
+});
+
+test('作ったもの（L6・L3）: HEAD にあって頭の前に索引とフォルダから外したファイルを作り直しても「作った」にならない。頭の控えを kv に書かない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  git(s.root, 'rm', '-q', '--cached', 'tracked.txt');
+  rmSync(join(s.root, 'tracked.txt'));
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  assert.equal(s.kv.db.prepare("SELECT count(*) AS n FROM kv WHERE key LIKE 'created-base:%'").get()!.n, 0);
+  const again = s.put('tracked.txt', 'again');
+  assert.equal(created.isCreated(again, { runId: 'r1' }), false);
+  await created.end('r1');
+  assert.deepEqual(created.list(scope), []);
 });
