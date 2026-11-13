@@ -44,9 +44,26 @@ export const UPSTREAM_KEEP = 2000;
 const UPSTREAM_SHOWN = 200;
 
 // 本文を読む。secrets は、読んだ本文からまず伏せる（切り取りの前）
+const SNIPPET_READ_BYTES = 64 * 1024;
+
+async function readHead(response: Response): Promise<string> {
+  if (!response.body) return await response.text();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < SNIPPET_READ_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) return Buffer.concat(chunks).toString('utf8');
+    chunks.push(value);
+    total += value.length;
+  }
+  await reader.cancel().catch(() => undefined);
+  return Buffer.concat(chunks).subarray(0, SNIPPET_READ_BYTES).toString('utf8');
+}
+
 export async function readSnippet(response: Response, secrets: readonly string[] = [], max = UPSTREAM_KEEP): Promise<string> {
   try {
-    const text = redactExact(await response.text(), secrets).slice(0, max);
+    const text = redactExact(await readHead(response), secrets).slice(0, max);
     try {
       const json = JSON.parse(text) as { error?: unknown; message?: unknown };
       const error = json.error;
