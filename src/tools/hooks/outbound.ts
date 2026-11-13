@@ -187,9 +187,9 @@ function uploadOf(st: StatementFacts): Hit | undefined {
 }
 
 const DRIVE_PATH = /^[A-Za-z]:[\\/]/u;
-const remoteArchive = (name: string): boolean => {
+const remoteArchive = (name: string, drives: boolean): boolean => {
   const colon = name.indexOf(':');
-  if (colon < 0 || (process.platform === 'win32' && DRIVE_PATH.test(name))) return false;
+  if (colon < 0 || (drives && DRIVE_PATH.test(name))) return false;
   const slash = name.indexOf('/');
   return slash < 0 || colon < slash;
 };
@@ -212,7 +212,8 @@ function tarRemote(st: StatementFacts): Hit | undefined {
       if (rest !== '') take(w, rest); else take(args[++i]);
     }
   }
-  const remote = files.find(w => !w.dynamic && remoteArchive(w.text));
+  const drives = st.shell === 'powershell' || st.shell === 'pwsh';
+  const remote = files.find(w => !w.dynamic && remoteArchive(w.text, drives));
   return remote ? hit('send', 'send.upload', { cmd: `tar -f ${remote.text}` }) : undefined;
 }
 

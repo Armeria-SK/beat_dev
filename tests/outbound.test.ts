@@ -428,10 +428,9 @@ test('送る: tar の遠くのアーカイブ（-f host:path）は send。手元
   expectKinds(f.kindOf, 'bash', undefined, [
     'tar -cf out.tar a.txt', 'tar cf out.tar a.txt', 'tar -cf ./a:b.tar a.txt', 'tar -cf dist/a:b.tar a.txt', 'tar --force-local -cf host:out.tar a.txt', 'tar -cf out.tar a:b.txt', 'tar -tf out.tar',
   ]);
-  if (process.platform === 'win32') {
-    expectKinds(f.kindOf, 'powershell', undefined, ['tar -cf C:\\x.tar a.txt', 'tar -cf C:/x.tar a.txt', 'tar --file=D:\\out\\x.tar -c a.txt']);
-    expectKinds(f.kindOf, 'bash', undefined, ['tar -cf C:/x.tar a.txt']);
-  }
+  expectKinds(f.kindOf, 'powershell', undefined, ['tar -cf C:\\x.tar a.txt', 'tar -cf C:/x.tar a.txt', 'tar --file=D:\\out\\x.tar -c a.txt']);
+  expectKinds(f.kindOf, 'bash', 'send', ['tar -cf C:/x.tar a.txt', 'tar -tf q:/nope.tar', 'tar --file=D:/out/x.tar -c a.txt']);
+  expectKinds(f.kindOf, 'bash', undefined, ['tar --force-local -cf C:/x.tar a.txt']);
   expectKinds(f.kindOf, 'powershell', 'send', ['tar -cf host:out.tar a.txt']);
 });
 
