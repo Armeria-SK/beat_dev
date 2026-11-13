@@ -48,7 +48,8 @@ export function rolesOf(config: Config): Roles {
 
 export function setJudge(config: Config, id: string): Config {
   const routing = { ...config.routing };
-  if (id) routing.judge = [id]; else delete routing.judge;
+  const rest = Array.isArray(routing.judge) ? (routing.judge as string[]).filter(x => x !== id) : [];
+  if (id) routing.judge = [id, ...rest]; else delete routing.judge;
   return { ...config, routing };
 }
 

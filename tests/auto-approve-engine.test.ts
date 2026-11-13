@@ -74,6 +74,9 @@ test('自動承認（エンジン）: 外のメモを読むコマンドは、判
   assert.ok(!shown.includes('外のメモの中身'), 'ファイルの中身は見せない');
   const final = JSON.stringify(calls[3]!.messages);
   assert.ok(final.includes('外のメモの中身'), '許したコマンドは実際に動き、その結果を本体が読む');
+  const toolTurn = calls[3]!.messages.find(m => m.role === 'tool' && m.content.includes('外のメモの中身'));
+  assert.ok(toolTurn, '前提: 最後の呼び出しに道具の結果が入っている');
+  assert.equal(calls.flatMap(c => c.messages).some(m => 'gate' in m), false, 'モデルに渡す履歴に道具の行の gate（判定役の理由）を入れない');
   assert.ok(!final.includes('safety checker') && !final.includes('依頼どおりに外のメモを読むだけです'), '判定役のやり取りは会話の履歴に入らない');
   const rows = autoRows(s);
   assert.equal(rows.length, 1);

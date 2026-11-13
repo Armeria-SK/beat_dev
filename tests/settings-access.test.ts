@@ -133,6 +133,30 @@ test('広がりの検出（フック）: 足す・書き換える・使う前の
   assert.deepEqual(accessWidening(before, post), [{ kind: 'hook-added', stage: 'postToolUse', hook: { matcher: 'q', command: ['r'] } }]);
 });
 
+test('広がりの検出（組み込みの Protect files）: 一覧の直し・止める・消すは、どれも確かめを出す（Settings › Hooks の Edit とスイッチと Remove）', () => {
+  const protect = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'] };
+  const before = base();
+  before.tools.hooks = { preToolUse: [protect], postToolUse: [] };
+  const summary = { matcher: '.*', command: ['protect-files'] };
+  const lists: Array<[string, Record<string, unknown>]> = [
+    ['always を減らす', { ...protect, always: [] }],
+    ['always を足す', { ...protect, always: ['.github/workflows/**', 'deploy/**'] }],
+    ['afterOutside を減らす', { ...protect, afterOutside: [] }],
+    ['対象の道具を変える', { ...protect, matcher: 'file_write' }],
+  ];
+  for (const [label, changed] of lists) {
+    const after = structuredClone(before);
+    after.tools.hooks.preToolUse = [changed];
+    assert.deepEqual(accessWidening(before, after).map(a => a.kind), ['hook-edited'], label);
+  }
+  const off = structuredClone(before);
+  off.tools.hooks.preToolUse = [{ ...protect, enabled: false }];
+  assert.deepEqual(accessWidening(before, off), [{ kind: 'hook-disabled', stage: 'preToolUse', hook: summary }]);
+  const removed = structuredClone(before);
+  removed.tools.hooks.preToolUse = [];
+  assert.deepEqual(accessWidening(before, removed), [{ kind: 'hook-removed', stage: 'preToolUse', hook: summary }]);
+});
+
 test('広がりの検出（外からの入口）: 開ける場所を足す・Tailscale の許可を増やす / 空にする・待ち受けを外へ', () => {
   const before = base();
   before.server.tailscaleLogins = ['me@example.com'];
