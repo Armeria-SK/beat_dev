@@ -176,3 +176,27 @@ test('フォルダごとの書き込みで、中に守るファイルとハー�
   assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'dist'))], tainted: true }))).decision, 'ask');
   assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'src'))], tainted: true }))).decision, undefined);
 });
+
+test('大きなフォルダへの書き込み: 守るファイルにハードリンクが 1 つも無ければ、歩かずに何も言わない', async t => {
+  const root = product(t);
+  const dist = join(root, 'dist');
+  mkdirSync(dist);
+  for (let i = 0; i <= 21_000; i++) writeFileSync(join(dist, String(i)), '');
+  const start = performance.now();
+  const result = await run(hook(), payload({ root, paths: [w(dist)], tainted: true }));
+  const took = performance.now() - start;
+  assert.equal(result.decision, undefined, result.reason);
+  assert.ok(took < 150, `${took} ms`);
+});
+
+test('歩く上限は 1 回の呼び出しで分け合う: 守るファイルにハードリンクがあるとき、合わせて上限を超えれば ask', async t => {
+  const root = product(t);
+  linkSync(join(root, 'package.json'), join(root, 'elsewhere.json'));
+  for (const name of ['a', 'b']) {
+    mkdirSync(join(root, name));
+    for (let i = 0; i < 11_000; i++) writeFileSync(join(root, name, String(i)), '');
+  }
+  const result = await run(hook(), payload({ root, paths: [w(join(root, 'a')), w(join(root, 'b'))], tainted: true }));
+  assert.equal(result.decision, 'ask');
+  assert.match(result.reason, /could not check all protected files/u);
+});

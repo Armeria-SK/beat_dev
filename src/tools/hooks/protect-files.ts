@@ -75,12 +75,13 @@ function hits(rule: Rule, target: string, dir: boolean): boolean {
 
 type Inodes = Map<string, string> | 'overflow';
 
-function protectedInodes(rules: Rule[]): Inodes {
+interface Budget { left: number }
+
+function protectedInodes(rules: Rule[], budget: Budget): Inodes {
   const found = new Map<string, string>();
-  let seen = 0;
   const add = (rule: Rule, base: string, file: string): void => {
     if (rule.rest.length && !matchSegs(rule.rest, relSegs(base, file), false)) return;
-    try { const st = statSync(file, { bigint: true }); found.set(`${st.dev}:${st.ino}`, file); } catch { }
+    try { const st = statSync(file, { bigint: true }); if (st.nlink > 1n) found.set(`${st.dev}:${st.ino}`, file); } catch { }
   };
   for (const rule of rules) {
     for (const base of rule.bases) {
@@ -93,7 +94,7 @@ function protectedInodes(rules: Rule[]): Inodes {
         let entries;
         try { entries = readdirSync(current, { withFileTypes: true }); } catch { continue; }
         for (const entry of entries) {
-          if (++seen > WALK_LIMIT) return 'overflow';
+          if (--budget.left < 0) return 'overflow';
           const full = join(current, entry.name);
           if (entry.isDirectory()) queue.push(full);
           else if (entry.isFile()) add(rule, base, full);
@@ -104,16 +105,15 @@ function protectedInodes(rules: Rule[]): Inodes {
   return found;
 }
 
-function linkedFiles(dir: string): Array<{ key: string; file: string }> | 'overflow' {
+function linkedFiles(dir: string, budget: Budget): Array<{ key: string; file: string }> | 'overflow' {
   const out: Array<{ key: string; file: string }> = [];
   const queue = [dir];
-  let seen = 0;
   while (queue.length) {
     const current = queue.shift()!;
     let entries;
     try { entries = readdirSync(current, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
-      if (++seen > WALK_LIMIT) return 'overflow';
+      if (--budget.left < 0) return 'overflow';
       const full = join(current, entry.name);
       if (entry.isDirectory()) { queue.push(full); continue; }
       if (!entry.isFile()) continue;
@@ -136,6 +136,7 @@ export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, l
   const rules = patterns.flatMap(p => rulesOf(p, roots));
   if (!rules.length) return none;
   let inodes: Inodes | undefined;
+  const budget: Budget = { left: WALK_LIMIT };
   const reasons: string[] = [];
   for (const entry of writes) {
     const given = resolve(payload.cwd, entry.path);
@@ -149,11 +150,14 @@ export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, l
     if (rules.some(rule => targets.some(target => hits(rule, target, dir)))) { reasons.push(shown); continue; }
     let st;
     try { st = statSync(real, { bigint: true }); } catch { continue; }
-    const linked = st.isDirectory() ? linkedFiles(real) : st.isFile() && st.nlink > 1n ? [{ key: `${st.dev}:${st.ino}`, file: real }] : [];
-    if (linked !== 'overflow' && !linked.length) continue;
-    inodes ??= protectedInodes(rules);
-    if (linked === 'overflow' || inodes === 'overflow') { reasons.push(guardText(language, 'hook.protected_unchecked', { path: entry.path })); continue; }
-    const same = linked.map(l => inodes instanceof Map ? inodes.get(l.key) : undefined).find(o => o !== undefined);
+    if (!st.isDirectory() && !(st.isFile() && st.nlink > 1n)) continue;
+    inodes ??= protectedInodes(rules, budget);
+    if (inodes === 'overflow') { reasons.push(guardText(language, 'hook.protected_unchecked', { path: entry.path })); continue; }
+    if (!inodes.size) continue;
+    const linked = st.isDirectory() ? linkedFiles(real, budget) : [{ key: `${st.dev}:${st.ino}`, file: real }];
+    if (linked === 'overflow') { reasons.push(guardText(language, 'hook.protected_unchecked', { path: entry.path })); continue; }
+    const known = inodes;
+    const same = linked.map(l => known.get(l.key)).find(o => o !== undefined);
     if (same !== undefined) reasons.push(guardText(language, 'hook.protected_link', { path: entry.path, other: same }));
   }
   if (!reasons.length) return none;
