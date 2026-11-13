@@ -106,6 +106,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (body.root !== undefined) throw projectProblem(400, new ProjectError('root_fixed'));
     if (body.archived !== undefined && typeof body.archived !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
     if (body.refreshRemotes !== undefined && body.refreshRemotes !== true) throw projectProblem(400, new ProjectError('bad_refresh'));
+    if (body.refreshRemotes === true && folderMissing(current)) throw projectProblem(409, new ProjectError('folder_missing'));
     const rawName = requireString(body, 'name', { optional: true, max: 400 });
     const rawCheck = optionalText(body, 'checkCommand', 4000);
     const docLanguage = body.docLanguage === null ? null : languageTagOf(body.docLanguage);
@@ -114,7 +115,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
       ...(rawName !== undefined ? { name: projectName(rawName) } : {}),
       ...(rawCheck !== undefined ? { checkCommand: checkCommandOf(rawCheck) } : {}),
       ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {}),
-      ...(body.refreshRemotes === true && !folderMissing(current) ? { remotes: readRemotes(current.root) } : {}),
+      ...(body.refreshRemotes === true ? { remotes: readRemotes(current.root) } : {}),
     }));
     const updated = docLanguage === undefined ? changed : app.projects.setDocLanguage(current.id, docLanguage);
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
