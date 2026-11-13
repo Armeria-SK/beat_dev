@@ -73,7 +73,8 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
     if (!host) continue;
     const normal = normalHost(host);
     if (normal === undefined) continue;
-    if (hosts.includes(normal) && (scheme !== undefined || port !== undefined || !NUMBER_WORD.test(host))) return whole;
+    const plainNumber = scheme === undefined && port === undefined && NUMBER_WORD.test(host) && !ports.has(80) && !/[/?#:]/u.test(plain[match.index + whole.length] ?? '');
+    if (hosts.includes(normal) && !plainNumber) return whole;
     const number = port !== undefined ? Number(port) : scheme ? DEFAULT_PORT[scheme.toLowerCase()] : undefined;
     if (number !== undefined && ports.has(number) && loopbackHost(normal)) return whole;
   }

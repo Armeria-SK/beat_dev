@@ -89,3 +89,15 @@ test('selfTarget: 展開の決まりは、ホストの形の語で括弧が閉�
   ];
   assert.deepEqual(expanding.filter(command => selfTarget(command, wide) === undefined), []);
 });
+
+test('selfTarget: 数字だけの語の見逃しは、origins のポートに 80 が無く、語のあとに / ? # : が続かないときだけ', () => {
+  const http = { port: 4790, origins: ['http://10.0.0.5'] };
+  const bare = ['curl 10.5/api/pending', 'curl 10.5', 'curl -s 167772165/api/pending', 'wget -qO- 10.5/api/pending', 'curl 0xa000005'];
+  assert.deepEqual(bare.filter(command => selfTarget(command, http) === undefined), []);
+  for (const config of [ipServer, { port: 4777, origins: ['http://10.0.0.5:4790'] }, { port: 4790, origins: ['https://10.0.0.5'] }]) {
+    const tail = ['curl "10.5:[4790-4790]/api/pending"', 'curl 10.5:{4790,4790}', 'curl 10.5/api/pending', 'curl 10.5?x=1', 'curl 10.5#top', 'curl -s 167772165/api/pending', 'curl https://10.5/'];
+    assert.deepEqual(tail.filter(command => selfTarget(command, config) === undefined), []);
+    const plain = ['sleep 10.5', 'nvm use 10.5', 'npm i lodash@10.5'];
+    assert.deepEqual(plain.filter(command => selfTarget(command, config) !== undefined), []);
+  }
+});
