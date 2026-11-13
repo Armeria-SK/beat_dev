@@ -11,7 +11,9 @@ const MAX_TEXT = 2000;
 
 export const withoutSecrets = (url: string): string => {
   const parts = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)(?:[^/?#]*@)?([^?#]*)/u.exec(url);
-  return parts ? `${parts[1]}${parts[2]}` : url;
+  if (parts) return `${parts[1]}${parts[2]}`;
+  const scp = /^[^@/\s]*:[^@/\s]*@([^:/\s]+:(?!\/\/).*)$/u.exec(url);
+  return scp ? scp[1]! : url;
 };
 
 const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:', 'ssh+git:']);

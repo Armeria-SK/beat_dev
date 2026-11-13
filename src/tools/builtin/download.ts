@@ -107,6 +107,7 @@ function local(language: Language, key: ToolMessageKey, params?: MessageParams):
 function mergeChecks(first: PreCheck, second: PreCheck): PreCheck {
   const details = [...(first.details ?? []), ...(second.details ?? [])];
   const askKinds = [...(first.askKinds ?? []), ...(second.askKinds ?? [])];
+  const reasonKeys = [...(first.reasonKeys ?? []), ...(second.reasonKeys ?? [])];
   return {
     decision: worst(first.decision, second.decision),
     reasons: [...first.reasons, ...second.reasons],
@@ -114,6 +115,7 @@ function mergeChecks(first: PreCheck, second: PreCheck): PreCheck {
     ...(second.paths ? { paths: second.paths } : {}),
     ...(first.onceOnly || second.onceOnly ? { onceOnly: true } : {}),
     ...(askKinds.length ? { askKinds } : {}),
+    ...(reasonKeys.length ? { reasonKeys } : {}),
   };
 }
 

@@ -118,7 +118,7 @@ export function ownerHooksPathSet(gitExe: string, cwd: string): boolean {
   const env: Env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^git_/iu.test(k) || /^GIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM)$/iu.test(k)));
   for (const scope of ['--global', '--system']) {
     try {
-      const out = execFileSync(gitExe, ['config', scope, '--get', 'core.hooksPath'], { cwd, env, encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      const out = execFileSync(gitExe, ['config', scope, '--includes', '--get', 'core.hooksPath'], { cwd, env, encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
       if (out.trim() !== '') return true;
     } catch (error) {
       if ((error as { status?: number }).status !== 1) return true;

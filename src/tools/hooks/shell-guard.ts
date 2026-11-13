@@ -493,7 +493,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
       env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: inline.code, codeDynamic: inline.dynamic,
       stdin, shapes: [...st.shapes], reasonKeys: result.reasons.map(r => r.id ?? r.key),
-      deletes: result.deletes, targets: [], writes: [], cwd: cwdKnown ? cwd : null,
+      deletes: result.deletes, targets: [], writes: [], piped: st.pipedIn || st.pipedOut, redirected: st.redirects.length > 0, cwd: cwdKnown ? cwd : null,
     };
     const source = name ? innerSource(name, st.words, shell, stdin) : undefined;
     if (source !== undefined) {

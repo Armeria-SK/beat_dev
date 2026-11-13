@@ -20,6 +20,7 @@ export interface ProductRunInput {
 export type ProductRunResult = { run: ProductRun } | { secret: string } | { secretMessage: true } | undefined;
 
 const RUN_KINDS = new Set(['code', 'git_write']);
+const AWS_KEY = /(?:^|[^A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/u;
 const COMMIT_SECRET = /(?:^|\/)(?:[^/]*(?:secret|credential)[^/]*|[^/]+\.env)$/iu;
 
 const inside = (root: string, path: string): boolean => isInside(root, path) && isInside(realish(root), realish(path));
@@ -49,22 +50,70 @@ const PLACE_FLAGS = new Set(['directory', 'file', 'makefile', 'include-dir', 'ro
   'confcutdir', 'basetemp', 'require', 'workdir', 'toxinidir', 'envdir', 'noxfile', 'project', 'projects', 'dir', 'cwd', 'chdir', 'prefix', 'userconfig', 'globalconfig']);
 const PLACE_SHORT = /^-[A-Za-z]*[CfcpdIrR]/u;
 
+type FlagValue = 'number' | 'word' | 'expr' | null;
+const MAKE_FLAGS: Readonly<Record<string, FlagValue>> = { '-j': 'number', '-k': null, '-s': null, '-n': null };
+const RUNNER_FLAGS: Readonly<Record<string, Readonly<Record<string, FlagValue>>>> = {
+  make: MAKE_FLAGS, gmake: MAKE_FLAGS, nmake: {}, just: {}, rake: {}, ninja: { '-j': 'number', '-v': null },
+  pytest: { '-q': null, '-v': null, '-x': null, '-k': 'expr', '-m': 'expr' },
+  jest: { '--watch=false': null, '-t': 'expr' }, vitest: { '--run': null, '--watch=false': null, '-t': 'expr' },
+  mocha: { '--reporter': 'word' }, tox: { '-e': 'word' }, nox: { '-s': 'word' },
+};
+const VALUE_FORMS: Readonly<Record<'number' | 'word' | 'expr', RegExp>> = { number: /^\d{1,4}$/u, word: /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/u, expr: /^[A-Za-z0-9_ .:()[\]-]+$/u };
+
 const programName = (st: StatementFacts): string => st.program.toLowerCase().replace(/\.(?:cmd|exe|bat|ps1)$/u, '');
-const pathLike = (text: string): boolean => /[\/]/u.test(text) || text.startsWith('.') || text.startsWith('~') || isAbsolute(text);
+const pathLike = (text: string): boolean => /[\\/]/u.test(text) || text.startsWith('.') || text.startsWith('~') || /^[A-Za-z]:/u.test(text) || isAbsolute(text);
+
+const looseInside = (text: string, cwd: string, root: string): boolean => !text.startsWith('~') && !/^[A-Za-z]:(?![\\/])/u.test(text) && inside(root, resolve(cwd, text.replace(/\\/gu, '/')));
+
+function plainPathInside(text: string, cwd: string, root: string): boolean {
+  if (!/^[A-Za-z0-9_.][A-Za-z0-9_./\\:+@,-]*$/u.test(text) || /^[A-Za-z]:/u.test(text) || isAbsolute(text)) return false;
+  const parts = text.split(/[\\/]/u);
+  if (parts.includes('..')) return false;
+  return inside(root, resolve(cwd, parts.join('/')));
+}
+
+function runnerArgsAllowed(st: StatementFacts, root: string, flags: Readonly<Record<string, FlagValue>>): boolean {
+  const words = st.words.slice(1);
+  const valueOk = (kind: FlagValue, value: string | undefined): boolean => kind !== null && value !== undefined && VALUE_FORMS[kind].test(value);
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word.dynamic || word.glob) return false;
+    const text = word.text;
+    if (!text.startsWith('-')) {
+      if (text.includes('=') || !plainPathInside(text, st.cwd!, root)) return false;
+      continue;
+    }
+    if (Object.hasOwn(flags, text)) {
+      const kind = flags[text]!;
+      if (kind === null) continue;
+      const next = words[++i];
+      if (!next || next.dynamic || next.glob || !valueOk(kind, next.text)) return false;
+      continue;
+    }
+    const eq = /^(--[A-Za-z][A-Za-z-]*)=(.*)$/su.exec(text);
+    if (eq && Object.hasOwn(flags, eq[1]!) && valueOk(flags[eq[1]!]!, eq[2])) continue;
+    const short = /^(-[A-Za-z])(.+)$/su.exec(text);
+    if (short && !text.startsWith('--') && Object.hasOwn(flags, short[1]!) && valueOk(flags[short[1]!]!, short[2])) continue;
+    return false;
+  }
+  return true;
+}
 
 function runnerStaysInside(st: StatementFacts, root: string): boolean {
-  const files = RUNNER_FILES[programName(st)];
-  if (files && !files.some(name => statSync(resolve(st.cwd!, name), { throwIfNoEntry: false })?.isFile() === true)) return false;
+  const name = programName(st);
+  const files = RUNNER_FILES[name];
+  if (files && !files.some(file => statSync(resolve(st.cwd!, file), { throwIfNoEntry: false })?.isFile() === true)) return false;
+  if (DEV_RUNNERS.has(name)) return runnerArgsAllowed(st, root, RUNNER_FLAGS[name] ?? {});
   for (const word of st.words.slice(1)) {
     const text = word.text;
     if (text.startsWith('--')) {
       const [name, value] = text.slice(2).split(/=(.*)/su);
       if (PLACE_FLAGS.has(name!.toLowerCase())) return false;
-      if (value !== undefined && pathLike(value) && (value.startsWith('~') || !inside(root, resolve(st.cwd!, value)))) return false;
+      if (value !== undefined && pathLike(value) && !looseInside(value, st.cwd!, root)) return false;
       continue;
     }
     if (text.startsWith('-') && files && PLACE_SHORT.test(text)) return false;
-    if (pathLike(text) && (text.startsWith('~') || !inside(root, resolve(st.cwd!, text)))) return false;
+    if (pathLike(text) && !looseInside(text, st.cwd!, root)) return false;
   }
   return true;
 }
@@ -125,12 +174,12 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
       continue;
     }
     if (others) return undefined;
-    if (st.gitGlobal.length > 0 || ![...own].every(key => key === 'list.git_commit')) return undefined;
+    if (st.gitGlobal.length > 0 || st.piped === true || st.redirected === true || ![...own].every(key => key === 'list.git_commit')) return undefined;
     const sub = st.words[1]?.text;
     if (sub !== 'add' && sub !== 'commit') return undefined;
     const top = git(st.cwd!, ['rev-parse', '--show-toplevel'])?.trim();
     if (!top || !inside(root, resolve(top))) return undefined;
-    if (sub === 'commit' && st.words.slice(2).some(w => !w.dynamic && sanitizeModelInputText(w.text).redaction_count > 0)) return { secretMessage: true };
+    if (sub === 'commit' && st.words.slice(2).some(w => !w.dynamic && (sanitizeModelInputText(w.text).redaction_count > 0 || AWS_KEY.test(w.text)))) return { secretMessage: true };
     if (input.ownerHooks?.() !== false) return undefined;
     if (sub === 'add' && namesFilesOnly(st)) {
       const named = st.words.slice(2).filter(w => !w.text.startsWith('-')).map(w => w.text).find(name => isSecretPath(resolve(st.cwd!, name)) || COMMIT_SECRET.test(name.replace(/\\/gu, '/')));

@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 export interface SelfServer { port: number; origins: readonly string[] }
 
 const LOOPBACK_NAME = /^(?:localhost|(?:[a-z0-9-]+\.)+localhost|localhost\.localdomain|ip6-localhost|ip6-loopback)$/u;
-const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[0-9a-f:.]+\]|[a-z0-9_.-]+)(?::(\d{1,5}))?/giu;
+const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[0-9a-f:.%]+\]|[a-z0-9_.%-]+)(?::(\d{1,5}))?/giu;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
 function loopbackHost(host: string): boolean {
