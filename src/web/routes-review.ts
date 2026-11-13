@@ -4,7 +4,7 @@ import { curiosityText } from '../curiosity/text.ts';
 import { languageOf } from '../shared/language.ts';
 import { TRIGGER_TEXT } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
-import { defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
+import { askReadAsBlock, defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import type { ReviewJob } from '../memory/review.ts';
@@ -56,6 +56,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
   };
   const toolView = (tool: ReturnType<App['tools']['list']>[number], config = app.config()) => ({
     name: tool.name, effect: tool.effect, allowedIn: tool.allowedIn, policy: toolPolicy(config, tool.name), configurable: isPolicyable(tool.name),
+    ...(askReadAsBlock(config).includes(tool.name) ? { askIsBlock: true } : {}),
     ...(tool.mcp ? { mcp: { server: tool.mcp.server }, ...(mcpAsks(tool) ? { asks: mcpAsks(tool) } : {}) } : {}),
   });
   router.add('GET', '/api/tools', ({ res }) => {

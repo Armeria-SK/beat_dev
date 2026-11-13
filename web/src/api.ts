@@ -141,7 +141,7 @@ export interface RunRow {
 export interface ToolInfo {
   name: string; effect: 'read' | 'write' | 'exec' | 'network' | 'meta'; allowedIn: Array<'chat' | 'task' | 'review' | 'agent'>; policy: ToolPolicy; configurable: boolean;
   // 外の MCP サーバーの道具のときだけ。asks は、申告から「確認を求める」理由（聞かないときは無い）
-  mcp?: { server: string }; asks?: 'sends' | 'removes' | 'write';
+  mcp?: { server: string }; asks?: 'sends' | 'removes' | 'write'; askIsBlock?: true;
 }
 
 // POST /api/server/apply の応答。url があるときは、ポートが変わったので、画面はそこへ移る
