@@ -1409,6 +1409,7 @@ export const en = {
   'ui.pending.rejected': (time: string, reason: string | null) => (reason ? `rejected · “${reason}” · ${time}` : `rejected · ${time}`),
   'ui.pending.cancelled': (time: string) => `cancelled · ${time}`,
   'ui.pending.noneDecided': 'nothing decided today',
+  'ui.pending.erased': 'Details removed with the session',
   'ui.pending.earlier': 'Show earlier',
   'ui.pending.noEarlier': 'nothing earlier',
   'ui.pane.split': 'Split',

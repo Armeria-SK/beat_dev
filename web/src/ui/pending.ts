@@ -76,8 +76,10 @@ export function actionView(row: Pick<PendingAction, 'tool' | 'title' | 'shown' |
   return { title: PLAIN_TOOLS.has(row.tool) && body ? null : title, inline: body, block: null, cwd, extra };
 }
 
-export const decidedText = (view: ActionView): { title: string | null; code: string | null; cwd: string | null } =>
-  ({ title: view.title, code: view.inline ?? (view.title ? null : view.block), cwd: view.cwd });
+export function decidedText(view: ActionView): { title: string | null; code: string | null; cwd: string | null; erased?: true } {
+  const line = { title: view.title, code: view.inline ?? (view.title ? null : view.block), cwd: view.cwd };
+  return line.title === null && line.code === null ? { ...line, erased: true } : line;
+}
 
 const UNITS = ['B', 'KB', 'MB', 'GB'] as const;
 
