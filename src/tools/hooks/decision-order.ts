@@ -10,6 +10,7 @@ const REFUSED = [
   'hard.fs_create', 'hard.disk_format', 'hard.disk_ops', 'hard.os_stop', 'hard.os_restart', 'hard.boot', 'hard.shadow', 'hard.exec_policy', 'hard.registry', 'hard.ownership',
   'hard.password', 'hard.user_add', 'hard.user_del', 'hard.net', 'hard.schedule',
   'list.winargs', 'list.winargs_ps',
+  'web.secret_text', 'web.long_query', 'web.fetch_off', 'web.search_off',
   'file.outside', 'file.root_write', 'file.root_read', 'file.root_sep', 'file.readonly', 'file.symlink',
 ] as const;
 
@@ -62,6 +63,10 @@ export const DEV_RUNNERS: ReadonlySet<string> = new Set(['make', 'gmake', 'nmake
 
 export function ownerKeysOf(keys: Iterable<string>): string[] {
   return [...new Set([...keys].filter(key => OWNER_KEYS.has(key)))];
+}
+
+export function refusedKeysOf(keys: Iterable<string>): string[] {
+  return [...new Set([...keys].filter(key => REASON_ORDER.get(key) === 1))];
 }
 
 export function orderOf(key: string): Order {

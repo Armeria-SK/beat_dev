@@ -18,10 +18,10 @@ function web(ctx: ToolContext) {
   return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, network: ctx.services?.web?.network };
 }
 
-export function exfiltrationCheck(text: string, language: Language, extraReasons: string[] = []): PreCheck {
-  const reasons = [...extraReasons];
-  if (sanitizeModelInputText(text).redaction_count > 0) reasons.push(guardText(language, 'web.secret_text'));
-  return reasons.length ? { decision: 'ask', reasons, details: [text.slice(0, 500)], askKinds: ['web'] } : { decision: 'allow', reasons: [] };
+export function exfiltrationCheck(text: string, language: Language, longQuery = false): PreCheck {
+  const keys = [...(longQuery ? ['web.long_query' as const] : []), ...(sanitizeModelInputText(text).redaction_count > 0 ? ['web.secret_text' as const] : [])];
+  const reasons = keys.map(key => guardText(language, key));
+  return reasons.length ? { decision: 'ask', reasons, details: [text.slice(0, 500)], askKinds: ['web'], reasonKeys: keys } : { decision: 'allow', reasons: [] };
 }
 
 const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked', 'download.idle', 'download.disk_low']);
@@ -47,7 +47,7 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
     if (!ctx.config.tools.web.fetch) return { decision: 'deny', reasons: [guardText(language, 'web.fetch_off')] };
     let url: URL;
     try { url = pageUrl(input.url); } catch (error) { return { decision: 'deny', reasons: [error instanceof RetrievalFailure ? error.text(language) : (error as Error).message] }; }
-    return exfiltrationCheck(input.url, language, url.search.length > 300 ? [guardText(language, 'web.long_query')] : []);
+    return exfiltrationCheck(input.url, language, url.search.length > 300);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_fetch'), body: input.url }),
   async execute(input, ctx) {

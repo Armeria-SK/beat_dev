@@ -13,7 +13,7 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { autoDecide, humanOnlyOf, mayClassify, type AutoGate, type ClassifierPrompt, type HumanOnly, type JudgeCall, type JudgeLimits } from './auto-approve.ts';
-import { ownerKeysOf, POLICY_KEYS } from './hooks/decision-order.ts';
+import { ownerKeysOf, POLICY_KEYS, refusedKeysOf } from './hooks/decision-order.ts';
 import type { PendingKind, PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
@@ -358,6 +358,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const sendOrDelete = outbound?.kind === 'send' || outbound?.kind === 'delete' ? outbound : undefined;
     const judgeAll = deps.judgeAll === true && deps.pending !== undefined;
     const keys = first?.reasonKeys ?? [];
+    if (judgeAll && decision === 'ask' && refusedKeysOf(keys).length) return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
     const owned = judgeAll && decision === 'ask' ? ownerKeysOf(keys) : [];
     const ownerPolicy = judgeAll && decision === 'ask' && keys.some(key => POLICY_KEYS.has(key));
     const taskTaint = judgeAll && decision === 'ask' && unattendedRun(ctx) && tool.escalateOnTaint === true && askKinds.has('taint');

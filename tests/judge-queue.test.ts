@@ -193,7 +193,7 @@ test('4-3a: 子の担当の確かめで判定役が見る頼みは、親の会�
 test('4-3a 理由のキーと順の表: 見張りが出しうるキー（文の表のキーと、id で付ける細かいキー）はすべて表にある', () => {
   const root = join(import.meta.dirname, '..');
   const messages = readFileSync(join(root, 'src/shared/messages/guard.ts'), 'utf8');
-  const fromMessages = [...messages.matchAll(/^ {2}'((?:ask|code|file|guard|list|scope|shape|lex|hard)\.[a-z_0-9]+)'/gmu)].map(m => m[1]!);
+  const fromMessages = [...messages.matchAll(/^ {2}'((?:ask|code|file|guard|list|scope|shape|lex|hard|web)\.[a-z_0-9]+)'/gmu)].map(m => m[1]!);
   const sources = ['src/tools/hooks/allowlist-core.ts', 'src/tools/hooks/allowlist-git.ts', 'src/tools/hooks/allowlist-tools.ts', 'src/tools/hooks/allowlist-ps.ts', 'src/tools/hooks/allowlist-pipe.ts', 'src/tools/hooks/shell-guard.ts', 'src/tools/hooks/code-guard.ts']
     .flatMap(file => { try { return [readFileSync(join(root, file), 'utf8')]; } catch { return []; } }).join('\n');
   const fromIds = [...sources.matchAll(/'((?:list|code|guard|file|scope)\.[a-z_]+)'/gu)].map(m => m[1]!);
@@ -206,4 +206,6 @@ test('4-3a 理由のキーと順の表: 見張りが出しうるキー（文の�
   assert.equal(REASON_ORDER.get('code.git_config'), 3);
   assert.equal(REASON_ORDER.get('guard.write_instructions'), 3);
   assert.equal(REASON_ORDER.get('list.npm_script'), 4);
+  assert.equal(REASON_ORDER.get('web.secret_text'), 1, '鍵らしい文字を外へ出すのはシェルと同じく断る');
+  assert.equal(REASON_ORDER.get('web.long_query'), 1);
 });

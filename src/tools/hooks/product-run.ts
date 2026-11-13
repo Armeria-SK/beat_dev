@@ -43,7 +43,8 @@ function namesFilesOnly(st: StatementFacts): boolean {
 function secretToAdd(st: StatementFacts, git: ProductRunInput['git']): string | undefined | null {
   const top = git(st.cwd!, ['rev-parse', '--show-toplevel'])?.trim();
   if (!top) return null;
-  const force = st.words.some(w => w.text === '-f' || w.text === '--force');
+  const end = st.words.findIndex(w => w.text === '--');
+  const force = st.words.slice(2, end < 0 ? undefined : end).some(w => w.text === '--force' || /^-[A-Za-z]*f[A-Za-z]*$/u.test(w.text));
   const status = git(top, ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...(force ? ['--ignored'] : [])]);
   if (status === undefined) return null;
   const parts = status.split('\0');
@@ -67,6 +68,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
   if (verdict.paths.some(p => !p.path || !inside(root, p.path))) return undefined;
   if ([...verdict.writes, ...verdict.scripts].some(p => !inside(root, p))) return undefined;
   let commits = false;
+  let others = false;
   for (const st of verdict.statements) {
     if (!plainStatement(st, root)) return undefined;
     const own = new Set(st.reasonKeys);
@@ -82,12 +84,17 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
       const file = st.words[1]?.text;
       if (!file || !inside(root, resolve(st.cwd!, file))) return undefined;
     }
-    if (st.program !== 'git') continue;
+    if (st.program !== 'git') { others = true; continue; }
+    if (others) return undefined;
     if (st.gitGlobal.length > 0 || ![...own].every(key => key === 'list.git_commit')) return undefined;
     const sub = st.words[1]?.text;
     if (sub !== 'add' && sub !== 'commit') return undefined;
     const top = git(st.cwd!, ['rev-parse', '--show-toplevel'])?.trim();
     if (!top || !inside(root, resolve(top))) return undefined;
+    if (sub === 'add' && namesFilesOnly(st)) {
+      const named = st.words.slice(2).filter(w => !w.text.startsWith('-')).map(w => w.text).find(name => isSecretPath(resolve(st.cwd!, name)) || COMMIT_SECRET.test(name.replace(/\\/gu, '/')));
+      if (named !== undefined) return { secret: named };
+    }
     if (sub === 'add' && !namesFilesOnly(st)) {
       const secret = secretToAdd(st, git);
       if (secret === null) return undefined;

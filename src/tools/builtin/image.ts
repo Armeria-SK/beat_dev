@@ -80,7 +80,7 @@ export const imageView: ToolDef<{ path?: string; url?: string }> = {
       if (!ctx.config.tools.web.fetch) return deny(guardText(language, 'web.fetch_off'));
       let url: URL;
       try { url = pageUrl(input.url); } catch (thrown) { return deny(thrown instanceof RetrievalFailure ? thrown.text(language) : (thrown as Error).message); }
-      return { ...exfiltrationCheck(input.url, language, url.search.length > 300 ? [guardText(language, 'web.long_query')] : []), fetched: true };
+      return { ...exfiltrationCheck(input.url, language, url.search.length > 300), fetched: true };
     }
     const { abs, check } = checkFilePath(input.path!, 'read', ctx);
     return check.decision !== 'deny' && isUnderDownloads(abs, ctx.home ?? ctx.workspace) ? { ...check, fetched: true } : check;
