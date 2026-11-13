@@ -10,8 +10,8 @@
 .ui-pending .bt-pending__actions .bt-btn:disabled { cursor: default; }
 .ui-pending__decided { margin-top: var(--space-2); }
 .ui-pending .bt-row .bt-row__title.ui-pending__shown { font-weight: 400; overflow: visible; overflow-wrap: anywhere; white-space: normal; text-overflow: clip; }
-.ui-pending__shown code { display: block; max-height: 160px; overflow: auto; font: 400 12px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.ui-pending__title { display: block; }
+.ui-pending__code { font: 400 12px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ui-pending__shown .ui-pending__title + .ui-pending__code { display: block; }
 .ui-pending__body { margin: var(--space-1) 0 0; max-height: 160px; font: 400 12px/18px var(--font-mono); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-pending__body code { font: 400 12px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-pending__file { display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-1); min-width: 0; }

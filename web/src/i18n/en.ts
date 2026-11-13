@@ -1381,6 +1381,7 @@ export const en = {
   'ui.pending.from': (title: string) => `from “${title}”`,
   'ui.pending.fromProduct': (product: string, title: string) => `${product} · from “${title}”`,
   'ui.pending.effect': (n: number) => `(${n} ${pluralEn(n, { one: 'file', other: 'files' })})`,
+  'ui.pending.effectMore': (n: number) => `(${n}+ files)`,
   'ui.pending.bytes': (value: string, unit: string) => `${value} ${unit}`,
   'ui.pending.fileNow': (size: string, time: string) => `${size} now · changed ${time}`,
   'ui.pending.dirNow': (files: string, time: string) => `folder · ${files} · newest ${time}`,

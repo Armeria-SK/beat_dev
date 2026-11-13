@@ -6,7 +6,7 @@ import { latestOnly } from '../latest.ts';
 import { ROW_LEAVE_MS } from '../library.ts';
 import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import {
-  acceptanceRows, byteSize, cleanReason, decidedShown, earlierCursor, effectFiles, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
+  acceptanceRows, actionView, byteSize, cleanReason, decidedShown, earlierQuery, effectFiles, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
   type AcceptanceRow, type FileFact, type KindTile, type Outcome,
 } from '../pending.ts';
 import { reportOpError } from '../task-ops.ts';
@@ -46,12 +46,12 @@ function factText(t: T, fact: FileFact): string {
   }
 }
 
-function ActionBody({ row }: { row: PendingAction }) {
+function ActionBody({ row, block }: { row: PendingAction; block: string | null }) {
   const t = useT();
   const facts = fileFacts(row);
   return (
     <>
-      {row.shown && <pre className="ui-pending__body"><code>{row.shown}</code></pre>}
+      {block && <pre className="ui-pending__body"><code>{block}</code></pre>}
       {row.preview.map(file => (
         <div key={file.path} className="ui-pending__file">
           <span className="bt-meta">{t('ui.approval.preview')} · <code>{file.path}</code></span>
@@ -81,12 +81,16 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
   const why = reasonLine(row);
   const locked = busy || leaving;
   const files = effectFiles(row);
+  const view = actionView(row);
   return (
     <div className={`bt-pending${tile === 'delete' ? ' bt-pending--delete' : ''}${leaving ? ' is-leaving' : ' bt-rise'} ui-pending__item`} style={{ '--bt-i': index } as CSSProperties} data-pending={row.id} aria-busy={busy || undefined}>
       <span className="bt-pending__kind" aria-hidden="true"><Icon name={TILE_ICON[tile]} /></span>
       <div className="ui-pending__text">
-        <p className="bt-pending__what"><span className="bt-label">{t(kindLabel(row.kind))}</span>{row.title && <> {row.title}</>}{files !== null && <> {t('ui.pending.effect', files)}</>}</p>
-        <ActionBody row={row} />
+        <p className="bt-pending__what">
+          <span className="bt-label">{t(kindLabel(row.kind))}</span>{view.title && <> {view.title}</>}{view.inline && <> <code className="ui-pending__code">{view.inline}</code></>}
+          {files !== null && <> {files.more ? t('ui.pending.effectMore', files.files) : t('ui.pending.effect', files.files)}</>}
+        </p>
+        <ActionBody row={row} block={view.block} />
         {(why || row.masked > 0) && (
           <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && t('ui.pending.masked', row.masked)].filter(Boolean).join(' · ')}</p>
         )}
@@ -167,10 +171,10 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
 
   const showEarlier = async () => {
     if (earlier === 'loading' || !decided) return;
-    const before = earlierCursor(today);
+    const cursor = earlierQuery(today);
     setEarlier('loading');
     try {
-      const page = await api.pending({ status: 'decided', ...(project ? { project } : {}), ...(before !== undefined ? { before } : {}) });
+      const page = await api.pending({ status: 'decided', ...(project ? { project } : {}), ...cursor });
       setDecided(old => mergeDecided(old ?? [], page.items));
       setEarlier(page.items.length === 0 ? 'none' : 'idle');
     } catch (error) { reportOpError(error); setEarlier('idle'); }
@@ -227,13 +231,14 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
           <ul className="bt-list">
             {today.map(row => {
               const outcome = outcomeOf(row);
+              const view = actionView(row);
               if (!outcome) return null;
               const ok = outcome.kind === 'ran' && (outcome.exit === null || outcome.exit === 0);
               return (
                 <li key={row.id} className="bt-row" data-decided={row.status}>
                   <Icon name={outcome.kind === 'running' ? 'clock' : ok ? 'check' : outcome.kind === 'failed' || outcome.kind === 'ran' ? 'alert' : 'x'} className={outcome.kind === 'ran' && ok ? 'bt-add' : undefined} />
                   <div className="bt-row__main">
-                    <span className="bt-row__title ui-pending__shown">{row.title && <span className="ui-pending__title">{row.title}</span>}{row.shown && <code>{row.shown}</code>}</span>
+                    <span className="bt-row__title ui-pending__shown">{view.title && <span className="ui-pending__title">{view.title}</span>}{view.inline && <code className="ui-pending__code">{view.inline}</code>}</span>
                     <span className="bt-row__sub bt-meta">{[all && row.project_name, outcomeText(t, outcome)].filter(Boolean).join(' · ')}</span>
                   </div>
                 </li>

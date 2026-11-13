@@ -47,9 +47,28 @@ export function waitingShown(waiting: readonly PendingAction[], held: readonly P
   return waitingOf([...waiting.filter(r => !heldIds.has(r.id)), ...held], projectId).filter(r => !gone.has(r.id));
 }
 
-export const earlierCursor = (shown: readonly PendingAction[]): number | undefined => shown.at(-1)?.id;
+export function earlierQuery(shown: readonly PendingAction[]): { before: number } | { earlier: true } {
+  const last = shown.at(-1);
+  return last ? { before: last.id } : { earlier: true };
+}
 
-export const effectFiles = (row: Pick<PendingAction, 'effect'>): number | null => (row.effect && row.effect.files > 0 ? row.effect.files : null);
+export const effectFiles = (row: Pick<PendingAction, 'effect'>): { files: number; more: boolean } | null =>
+  (row.effect && row.effect.files > 0 ? { files: row.effect.files, more: row.effect.more === true } : null);
+
+const CONTENT_TOOLS: ReadonlySet<string> = new Set(['file_write', 'file_edit']);
+const PLAIN_TOOLS: ReadonlySet<string> = new Set(['shell_run']);
+
+export interface ActionView { title: string | null; inline: string | null; block: string | null }
+
+export function actionView(row: Pick<PendingAction, 'tool' | 'title' | 'shown'>): ActionView {
+  const title = row.title?.trim() || null;
+  const body = title && row.shown.startsWith(title) && (row.shown.length === title.length || row.shown[title.length] === '\n')
+    ? row.shown.slice(title.length + 1)
+    : row.shown;
+  const text = body || null;
+  if (CONTENT_TOOLS.has(row.tool)) return { title, inline: null, block: text };
+  return { title: PLAIN_TOOLS.has(row.tool) ? null : title, inline: text, block: null };
+}
 
 const UNITS = ['B', 'KB', 'MB', 'GB'] as const;
 

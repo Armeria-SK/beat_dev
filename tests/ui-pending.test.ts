@@ -4,7 +4,7 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, byteSize, decidedShown, earlierCursor, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, waitingOf, waitingShown, withPendingCounts,
+  acceptanceRows, actionView, byteSize, decidedShown, earlierQuery, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
@@ -180,14 +180,15 @@ test('ui/pending: 消えていく途中の行は、待ちの一覧が先に読�
   assert.deepEqual(waitingShown([], [row({ id: 4, project_id: 'prod02' })], new Set(), 'prod01'), []);
 });
 
-test('ui/pending: Show earlier は、出している Decided のいちばん下の行（決めた時刻のいちばん古い行）の番号を渡す', () => {
+test('ui/pending: Show earlier は、出している Decided のいちばん下の行（決めた時刻のいちばん古い行）の番号を渡す。今日決めたものが無ければ「今日より前」を頼む', () => {
   const shown = decidedShown([row({ id: 2, status: 'ran', decided_at: 900 }), row({ id: 8, status: 'rejected', decided_at: 100 }), row({ id: 5, status: 'ran', decided_at: 500 })], [], [], null);
-  assert.equal(earlierCursor(shown), 8);
-  assert.equal(earlierCursor([]), undefined);
+  assert.deepEqual(earlierQuery(shown), { before: 8 });
+  assert.deepEqual(earlierQuery([]), { earlier: true });
 });
 
 test('ui/pending: 消す行の効き目はファイルの数で出す（0 や無いときは出さない）', () => {
-  assert.equal(effectFiles(row({ effect: { files: 214, bytes: 3_400_000 } })), 214);
+  assert.deepEqual(effectFiles(row({ effect: { files: 214, bytes: 3_400_000 } })), { files: 214, more: false });
+  assert.deepEqual(effectFiles(row({ effect: { files: 50_000, bytes: 9, more: true } })), { files: 50_000, more: true });
   assert.equal(effectFiles(row({ effect: { files: 0, bytes: 0 } })), null);
   assert.equal(effectFiles(row()), null);
   assert.equal(en['ui.pending.effect'](214), '(214 files)');
@@ -207,4 +208,16 @@ test('ui/pending: 送るファイルは、いまの大きさと変えた時刻�
   ]);
   assert.deepEqual([512, 1_536, 3_400_000, 5 * 1024 ** 4].map(byteSize), [{ value: '512', unit: 'B' }, { value: '1.5', unit: 'KB' }, { value: '3.2', unit: 'MB' }, { value: '5120.0', unit: 'GB' }]);
   assert.equal(en['ui.pending.bytes']('1.5', 'KB'), '1.5 KB');
+});
+
+test('ui/pending: 行の見せ方は Design の 1 行（ラベル・コマンド・効き目）。サーバーの shown の頭の題の行は外し、題はコマンドが言わないことを言うときだけ出す', () => {
+  const nl = String.fromCharCode(10);
+  const lines = (...parts: string[]) => parts.join(nl);
+  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown: lines('Run a command', 'rm -rf data/cache/') })), { title: null, inline: 'rm -rf data/cache/', block: null });
+  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown: lines('Run a command', 'echo hi', 'rm -rf ~/x') })), { title: null, inline: lines('echo hi', 'rm -rf ~/x'), block: null }, '改行はそのまま');
+  assert.deepEqual(actionView(row({ tool: 'file_write', title: 'Write to a file: AGENTS.md', shown: lines('Write to a file: AGENTS.md', '# Agents', '') })), { title: 'Write to a file: AGENTS.md', inline: null, block: lines('# Agents', '') }, 'ファイルの中身は下の枠');
+  assert.deepEqual(actionView(row({ tool: 'file_edit', title: 'Edit a file: a.ts', shown: lines('Edit a file: a.ts', '- x', '+ y') })), { title: 'Edit a file: a.ts', inline: null, block: lines('- x', '+ y') });
+  assert.deepEqual(actionView(row({ tool: 'browser_click', title: 'Click in the browser page', shown: lines('Click in the browser page', 'e12') })), { title: 'Click in the browser page', inline: 'e12', block: null }, 'ブラウザは何をするかの題を出す');
+  assert.deepEqual(actionView(row({ tool: 'browser_close', title: 'Close the browser', shown: 'Close the browser' })), { title: 'Close the browser', inline: null, block: null });
+  assert.deepEqual(actionView(row({ tool: 'shell_run', shown: 'npm publish' })), { title: null, inline: 'npm publish', block: null }, '題の無い古い行はそのまま');
 });
