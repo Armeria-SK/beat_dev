@@ -5,7 +5,7 @@ import { isRenameWithoutTitle, renameTitleOf, SLASH_COMMANDS } from '../chat-log
 export const MAX_ATTACHMENTS = 5;
 export const ATTACH_ACCEPT = '.txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*,application/pdf,image/png,image/jpeg,image/gif,image/webp';
 
-export const MODE_LABEL = { auto: 'ui.composer.modeAuto', plan: 'ui.composer.modePlan' } as const satisfies Record<PermissionMode, string>;
+export const MODE_LABEL = { auto: 'ui.composer.modeNormal', plan: 'ui.composer.modePlan' } as const satisfies Record<PermissionMode, string>;
 export const MODE_HINT = { auto: 'mode.autoDesc', plan: 'mode.planDesc' } as const satisfies Record<PermissionMode, string>;
 
 export type Placeholder = 'noModel' | 'busy' | 'plan' | 'reply' | 'message' | 'build';
