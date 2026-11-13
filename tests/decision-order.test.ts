@@ -316,6 +316,52 @@ test('4-3a 順 4 の 2 つ目: 製品のリポジトリ（フック無し）の 
   assert.equal(r.judge.calls.length, 0);
 });
 
+test('4-3a（Q-W1-7）: 製品のリポジトリの git commit の文に鍵らしい文字があれば、判定役を呼ばずに owner で積まれ、理由・行・出来事に鍵の文字が残らない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+  for (const command of [`git commit -m "key ${key}"`, `git commit -am "key ${key}"`, `git commit -m"key ${key}"`, `git commit --message="key ${key}"`, `git commit -m fix -m "key ${key}"`, `git add -A${WIN ? ";" : " &&"} git commit -m "key ${key}"`]) {
+    const r = rig(t);
+    initRepo(r.root);
+    writeFileSync(join(r.root, 'README.md'), 'changed\n');
+    git(r.root, 'add', 'README.md');
+    const events: unknown[] = [];
+    const outcome = await r.shell(command, {}, { emit: e => events.push(e) });
+    assert.equal(outcome.decidedBy, 'pending', `${command}: ${outcome.output.content}`);
+    const row = r.waiting()[0]!;
+    assert.equal(row.kind, 'owner', command);
+    assert.match(row.reason, /the commit message contains text that looks like a secret/u, command);
+    assert.equal(r.judge.calls.length, 0, `${command}: 判定役は呼ばれない`);
+    assert.equal(commits(r.root), '1', `${command}: コミットされていない`);
+    for (const [what, text] of [['理由', row.reason], ['行の理由', row.checks], ['結果', outcome.output.content], ['出来事', JSON.stringify(events)]] as const) {
+      assert.ok(!text.includes('abcdefghijklmnop'), `${command}: ${what}に鍵が残る: ${text}`);
+    }
+  }
+});
+
+test('4-3a（Q-W1-7）: git commit -F・--file・-t・--template は順 4 に乗らず判定役（list.flag）。ふつうの -m・-c・-C は今までどおり順 4', { skip: !gitAvailable && 'git が無い' }, async t => {
+  for (const command of ['git commit -F msg.txt', 'git commit --file msg.txt', 'git commit -t msg.txt', 'git commit --template msg.txt']) {
+    const r = rig(t);
+    initRepo(r.root);
+    writeFileSync(join(r.root, 'msg.txt'), 'from a file\n');
+    writeFileSync(join(r.root, 'README.md'), 'changed\n');
+    git(r.root, 'add', 'README.md');
+    r.judge.answer = '{"decision":"ask","reason":"check"}';
+    const outcome = await r.shell(command);
+    assert.equal(outcome.decidedBy, 'pending', `${command}: ${outcome.output.content}`);
+    assert.equal(r.waiting()[0]!.kind, 'judge', command);
+    assert.equal(r.judge.calls.length, 1, command);
+    assert.match(r.judge.calls[0]!.user, /argument of git commit is not in the list/u, command);
+  }
+  for (const command of ['git commit -m "fix"', 'git commit -C HEAD', 'git commit -c HEAD']) {
+    const r = rig(t);
+    initRepo(r.root);
+    writeFileSync(join(r.root, 'README.md'), 'changed\n');
+    git(r.root, 'add', 'README.md');
+    const outcome = await r.shell(command);
+    assert.equal(outcome.decidedBy, 'product-git', `${command}: ${outcome.output.content}`);
+    assert.equal(r.judge.calls.length, 0, command);
+  }
+});
+
 test('4-3a 順 4 の 2 つ目: 短いオプションのまとまりの中の f（-fA・-Af・-vfA・-nfA）も強制として、無視された秘密のファイルを見る', { skip: !gitAvailable && 'git が無い' }, async t => {
   for (const flag of ['-fA', '-Af', '-vfA', '-nfA', '--force -A']) {
     const r = rig(t);

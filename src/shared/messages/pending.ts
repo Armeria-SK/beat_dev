@@ -92,6 +92,7 @@ const en = {
   'owner_protected_push': 'the push would send changes to protected files: {files}',
   'owner_push_unchecked': 'beat could not check whether the push sends changes to protected files',
   'owner_secret_commit': 'it would add a secret-like file to a commit ({path})',
+  'owner_secret_message': 'the commit message contains text that looks like a secret',
 } as const;
 
 export type PendingMessageKey = keyof typeof en;

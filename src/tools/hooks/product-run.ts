@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { DEV_RUNNERS, PRODUCT_CODE_KEYS, SERVICE_PROGRAMS } from './decision-order.ts';
+import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import { definesCommand } from './outbound.ts';
 import { isInside, isSecretPath, realish } from './scope.ts';
 import type { StatementFacts } from './shell-facts.ts';
@@ -16,7 +17,7 @@ export interface ProductRunInput {
   ownerHooks?: () => boolean;
 }
 
-export type ProductRunResult = { run: ProductRun } | { secret: string } | undefined;
+export type ProductRunResult = { run: ProductRun } | { secret: string } | { secretMessage: true } | undefined;
 
 const RUN_KINDS = new Set(['code', 'git_write']);
 const COMMIT_SECRET = /(?:^|\/)(?:[^/]*(?:secret|credential)[^/]*|[^/]+\.env)$/iu;
@@ -129,6 +130,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     if (sub !== 'add' && sub !== 'commit') return undefined;
     const top = git(st.cwd!, ['rev-parse', '--show-toplevel'])?.trim();
     if (!top || !inside(root, resolve(top))) return undefined;
+    if (sub === 'commit' && st.words.slice(2).some(w => !w.dynamic && sanitizeModelInputText(w.text).redaction_count > 0)) return { secretMessage: true };
     if (input.ownerHooks?.() !== false) return undefined;
     if (sub === 'add' && namesFilesOnly(st)) {
       const named = st.words.slice(2).filter(w => !w.text.startsWith('-')).map(w => w.text).find(name => isSecretPath(resolve(st.cwd!, name)) || COMMIT_SECRET.test(name.replace(/\\/gu, '/')));
