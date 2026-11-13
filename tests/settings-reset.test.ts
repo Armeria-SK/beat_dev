@@ -75,7 +75,7 @@ test('Reset の下見（GET）: 戻したあとの設定を返すだけで、何
   assert.equal(readFileSync(s.paths.config, 'utf8'), before);
   assert.deepEqual(s.backups(), []);
   const kinds = accessWidening(s.app.config(), preview.body.config).map(a => a.kind);
-  assert.deepEqual(kinds.sort(), ['hook-removed', 'provider-key', 'shell-deny-removed', 'tool-policy-loosened'], '試験の設定には Anthropic が無いので、既定のプロバイダが戻るのも並ぶ');
+  assert.deepEqual(kinds.sort(), ['hook-removed', 'hook-removed', 'provider-key', 'shell-deny-removed', 'tool-policy-loosened'], '試験の設定には Anthropic が無いので、既定のプロバイダが戻るのも並ぶ。起動で足した組み込みのフック（4-P）が外れるのも並ぶ');
   const done = await s.json('/api/settings/reset', 'POST', {});
   assert.deepEqual(done.body.config, preview.body.config, '下見と実際は同じ');
 });

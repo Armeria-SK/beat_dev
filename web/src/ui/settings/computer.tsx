@@ -53,7 +53,9 @@ export function FoldersPanel() {
 }
 
 type Stage = 'preToolUse' | 'postToolUse';
-interface Hook { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask'; enabled?: boolean }
+interface Hook { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask'; enabled?: boolean; builtin?: string }
+
+const hookName = (hook: Hook): string => hook.builtin ?? hook.command.join(' ');
 
 function hooksOf(config: Config, stage: Stage): Hook[] {
   const list = config.tools?.hooks?.[stage];
@@ -74,7 +76,7 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
   const busy = ctx.busy !== null;
   const on = hook.enabled !== false;
   return (
-    <Row k={k} title={<code className="bt-meta">{hook.command.join(' ')}</code>} desc={t(on ? 'ui.set.hooks.when' : 'ui.set.hooks.whenOff', hook.matcher)}
+    <Row k={k} title={<code className="bt-meta">{hookName(hook)}</code>} desc={t(on ? 'ui.set.hooks.when' : 'ui.set.hooks.whenOff', hook.matcher)}
       below={(removing || open) && (
         <>
           {removing && <RowConfirm warn={t('ui.set.hooks.removeWarn')} action={t('ui.set.hooks.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).filter((_, i) => i !== index))); }} onKeep={() => setRemoving(false)} />}
@@ -95,8 +97,8 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
           )}
         </>
       )}>
-      <Switch checked={on} label={t('ui.set.hooks.on', hook.command.join(' '))} disabled={busy} onChange={enabled => edit({ enabled })} />
-      <Button small variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>
+      <Switch checked={on} label={t('ui.set.hooks.on', hookName(hook))} disabled={busy} onChange={enabled => edit({ enabled })} />
+      {!hook.builtin && <Button small variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>}
       {!removing && <Button small variant="ghost" disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.hooks.remove')}</Button>}
     </Row>
   );
@@ -135,7 +137,7 @@ export function HooksPanel() {
         return (
           <Group key={stage} title={t(stage === 'preToolUse' ? 'ui.set.hooks.pre' : 'ui.set.hooks.post')}>
             {hooks.length === 0 && <p className="bt-meta">{t('ui.set.hooks.none')}</p>}
-            {hooks.map((hook, i) => <HookRow key={`${i}:${hook.matcher}:${hook.command.join(' ')}`} stage={stage} index={i} hook={hook} />)}
+            {hooks.map((hook, i) => <HookRow key={`${i}:${hook.matcher}:${hookName(hook)}`} stage={stage} index={i} hook={hook} />)}
             <Row k={`hooks:add:${stage}`} title={t('ui.set.hooks.add')} desc={t(stage === 'preToolUse' ? 'ui.set.hooks.preDesc' : 'ui.set.hooks.postDesc')}
               below={adding === stage && <AddHook stage={stage} onDone={() => setAdding(null)} />}>
               {adding !== stage && <Button small onClick={() => setAdding(stage)}>{t('ui.set.hooks.addShort')}</Button>}

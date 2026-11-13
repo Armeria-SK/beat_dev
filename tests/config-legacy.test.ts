@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { App } from '../src/app.ts';
 import { isLocalProvider } from '../src/engine/local-model.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { CONVERSATION, settled, startApp } from './app-setup.ts';
 import { fakeServer, sse, tempDir, testConfig } from './helpers.ts';
@@ -16,6 +17,11 @@ function withToolMode(toolMode: string) {
   const config = testConfig() as unknown as { models: Array<Record<string, unknown>> };
   for (const model of config.models) model.toolMode = toolMode;
   return config;
+}
+
+function withProtectRow<T extends Record<string, any>>(raw: T): T {
+  raw.tools.hooks = { preToolUse: [DEFAULT_PROTECT_FILES], postToolUse: [] };
+  return raw;
 }
 
 function ownerShapedConfig() {
@@ -66,7 +72,7 @@ test('持ち主の形に tools.maxIterations: 0 を足した設定が読め、�
   const dir = tempDir(t);
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(raw, null, 2)}\n`);
+  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
   const before = readFileSync(paths.config);
   const logs: string[] = [];
   const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
@@ -152,7 +158,7 @@ test('持ち主の設定と同じ形（language: "ja"、toolMode: "native"、秘
   const dir = tempDir(t);
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(raw, null, 2)}\n`);
+  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
   const before = readFileSync(paths.config);
   const logs: string[] = [];
   const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
@@ -255,7 +261,7 @@ test('起動のログ: 古い Ollama の設定は「Read old settings in their n
   const dir = tempDir(t);
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(withOldOllama('http://127.0.0.1:11434/'), null, 2)}\n`);
+  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(withOldOllama('http://127.0.0.1:11434/')), null, 2)}\n`);
   const before = readFileSync(paths.config);
   const logs: string[] = [];
   const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
@@ -391,7 +397,7 @@ test('持ち主の形（tools.maxIterations: 0 と SearXNG の tools.web）が�
   const dir = tempDir(t);
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(raw, null, 2)}\n`);
+  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
   const before = readFileSync(paths.config);
   const logs: string[] = [];
   const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });

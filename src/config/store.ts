@@ -11,7 +11,7 @@ import { isSecretEnvName, takenKeyEnvs } from '../shared/provider-key.ts';
 import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
 import { friendlyIssue } from './friendly.ts';
 import { dropLegacy } from './legacy.ts';
-import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
+import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, ToolsConfig as ToolsConfigSchema, type HookConfig, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
 
@@ -321,6 +321,19 @@ export class ConfigStore {
     const target = join(dir, `${basename(this.path)}.reset-${new Date(now).toISOString().replace(/[:.]/gu, '-')}.bak`);
     copyFileSync(this.path, target, constants.COPYFILE_EXCL);
     return target;
+  }
+
+  appendPreToolHook(hook: HookConfig): void {
+    const raw = JSON.parse(readFileSync(this.path, 'utf8')) as Record<string, any>;
+    const tools = (raw.tools ??= {}) as Record<string, any>;
+    const hooks = (tools.hooks ??= {}) as Record<string, any>;
+    hooks.preToolUse = [...(Array.isArray(hooks.preToolUse) ? hooks.preToolUse : []), hook];
+    parseConfig(raw);
+    try { copyFileSync(this.path, `${this.path}.bak`); } catch { }
+    atomicWriteFile(this.path, `${JSON.stringify(raw, null, 2)}
+`);
+    this.#stamp = '';
+    this.load();
   }
 
   save(config: AppConfig): AppConfig {

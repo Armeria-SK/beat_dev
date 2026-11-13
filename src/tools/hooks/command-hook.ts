@@ -1,6 +1,7 @@
 import { DEFAULT_LANGUAGE, type HookConfig, type Language } from '../../config/schema.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { runProcess, scrubEnv } from '../shell/runner.ts';
+import { runProtectFiles } from './protect-files.ts';
 import type { Decision } from './shell-guard.ts';
 
 export interface HookPayload {
@@ -11,11 +12,16 @@ export interface HookPayload {
   cwd: string;
   run_id: string;
   conversation_id: string;
+  paths?: Array<{ path: string; write: boolean }>;
+  tainted?: boolean;
+  run_kind?: string;
+  project_root?: string;
 }
 
 export interface HookResult { hook: string; decision: Decision | undefined; reason: string }
 
 export async function runCommandHook(hook: HookConfig, payload: HookPayload, signal: AbortSignal, language: Language = DEFAULT_LANGUAGE): Promise<HookResult> {
+  if ('builtin' in hook) return runProtectFiles(hook, payload, language);
   const name = hook.command.join(' ');
   const onError = (reason: string): HookResult => ({ hook: name, decision: hook.onError, reason: guardText(language, 'hook.failed', { name, reason }) });
   const [file, ...args] = hook.command;

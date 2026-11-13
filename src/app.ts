@@ -51,6 +51,7 @@ import { BrowserSession } from './tools/browser/session.ts';
 import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
 import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
+import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { askBeforeRegister, SkillStore } from './tools/skills/store.ts';
@@ -210,6 +211,7 @@ export class App {
     this.skills.autoRegister = () => !askBeforeRegister(this.config());
     this.#importCuriosity();
     this.#registerExistingSkills();
+    this.#offerProtectFiles();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
     // ブラウザ 1 つ（全会話で共有）。無効なら何も起動しない。起動は最初の browser_* の呼び出しのとき
     this.browser = new BrowserSession({
@@ -324,6 +326,16 @@ export class App {
     const added = this.skills.registerExisting();
     this.kv.set('skills:registry-seeded', String(Date.now()));
     if (added) this.log(`[INFO] Registered ${added} existing skill(s) (skills placed directly in the folder from now on are not used until you press "Register" on the screen)`);
+  }
+
+  #offerProtectFiles(): void {
+    if (this.kv.get(PROTECT_FILES_OFFERED)) return;
+    if (!hasProtectFiles(this.configStore.current())) {
+      try { this.configStore.appendPreToolHook(DEFAULT_PROTECT_FILES); }
+      catch (error) { this.log(`[WARN] Could not add the built-in protect-files hook to the settings: ${(error as Error).message}`); return; }
+      this.log('[INFO] Added the built-in protect-files hook (writes to .github/workflows, and to package.json after reading text from outside, are checked with you). Change or remove it in Settings › Hooks; it will not be added again');
+    }
+    this.kv.set(PROTECT_FILES_OFFERED, String(Date.now()));
   }
 
   #importCuriosity(): void {
