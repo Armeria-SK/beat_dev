@@ -233,8 +233,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const cwds: string[] = [initialCwd];
   let cwd = initialCwd;
   let cwdKnown = true;
+  const resolved = new Map<string, string | undefined>();
   const external: MatchCtx['external'] = opts.which ? (name: string) => {
-    const found = opts.which!(name);
+    if (!resolved.has(name)) resolved.set(name, opts.which!(name));
+    const found = resolved.get(name);
     if (!found) return { ok: true, ext: '.exe', detail: '' };
     const real = realish(found);
     const roots = [...opts.policy.roots.map(r => r.path), ...(opts.dataDir ? [opts.dataDir] : [])];
@@ -284,7 +286,13 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (result.paths.some(p => p.mode === 'write') || result.copies.length > 0) wroteEarlier = true;
     if (result.cwd) followCd(seen, result.cwd);
   };
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
+  const fileExists = (path: string): boolean => {
+    if (wroteEarlier) return false;
+    if (!seen.known && !parsePath(path).root) return false;
+    const full = resolve(seen.cwd, path);
+    return exists(full) && !isDirectory(full);
+  };
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
     add('deny', say('lex.denied', { detail: lexDetail(language, classified.lex) }));

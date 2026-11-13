@@ -1230,3 +1230,134 @@ test('実機（Windows PowerShell 5.1・制限モード）: Copy-Item -Recurse�
   const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
   await expectSecretFolderBlocked(s, ['Copy-Item -Recurse secrets stuff; Get-Content stuff/token.txt', 'Copy-Item -Recurse proj stuff; Get-Content stuff/secrets/token.txt', 'Move-Item secrets stuff2; Get-Content stuff2/token.txt'], raw);
 });
+
+async function runApproved(s: ReturnType<typeof setup>, command: string) {
+  let settled = false;
+  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
+  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  const request = s.approvals.pending()[0];
+  if (request) s.approvals.decide(request.id, 'once');
+  return pending;
+}
+
+test('実機（Windows PowerShell 5.1・制限モード）: ただの npm は npm.ps1 でなく npm.cmd で動き、npm run も通る', { skip: (!psAvailable || !which('npm')) && 'Windows の PowerShell か npm が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('package.json'), JSON.stringify({ name: 'probe', version: '1.0.0', private: true, scripts: { hello: 'node -e "console.log(41+1)"' } }));
+  const version = await runApproved(s, 'npm --version');
+  assert.equal(version.output.isError, false, version.output.content);
+  assert.match(version.output.content, /\b\d+\.\d+\.\d+\b/u);
+  assert.doesNotMatch(version.output.content, /npm\.ps1|Cannot invoke method/u);
+  const script = await runApproved(s, 'npm run hello');
+  assert.equal(script.output.isError, false, script.output.content);
+  assert.match(script.output.content, /\b42\b/u);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: ただの curl は Invoke-WebRequest の別名でなく curl.exe で動く', { skip: (!psAvailable || !curlExe) && 'Windows の PowerShell か curl が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const outcome = await runApproved(s, 'curl --version');
+  assert.equal(outcome.output.isError, false, outcome.output.content);
+  assert.match(outcome.output.content, /^curl \d+\.\d+/mu);
+  assert.doesNotMatch(outcome.output.content, /Invoke-WebRequest|remote name/u);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: curl と curl.exe でデータを送る形は、どちらも送るとして積まれ、サーバーに届かない', { skip: (!psAvailable || !curlExe) && 'Windows の PowerShell か curl が無い' }, async t => {
+  const echo = await startEcho();
+  t.after(() => echo.close());
+  const s = setup(t, 'powershell');
+  for (const command of [`curl -d x http://127.0.0.1:${echo.port}/a`, `curl.exe -d x http://127.0.0.1:${echo.port}/a`]) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decidedBy, 'pending', `${command}: ${outcome.output.content}`);
+    assert.equal(s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command)?.kind, 'send', command);
+  }
+  assert.deepEqual(echo.seen, []);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: ただの wget は Invoke-WebRequest の別名で動かない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const outcome = await runApproved(s, 'wget --version');
+  assert.doesNotMatch(outcome.output.content, /Invoke-WebRequest|WebCmdlet|remote name/u, outcome.output.content);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: 前置きの変数は持ち主のコマンドに漏れず、数える書き方は 3 になる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const outcome = await runApproved(s, '"vars=[$n][$c][$s]"; 1..3 | ForEach-Object { $n++ }; "count=$n"');
+  assert.equal(outcome.output.isError, false, outcome.output.content);
+  assert.ok(outcome.output.content.includes('vars=[][][]'), outcome.output.content);
+  assert.match(outcome.output.content, /count=3\b/u, outcome.output.content);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: npx の引数の & は、許可しても別のコマンドを動かさない', { skip: (!psAvailable || !which('npx')) && 'Windows の PowerShell か npx が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const host = spawnSync('hostname', { encoding: 'utf8' }).stdout.trim();
+  assert.ok(host);
+  const outcome = await runApproved(s, `npx --version 'x&hostname'`);
+  if (/\.cmd$/iu.test(which('npx') ?? '')) assert.equal(outcome.decision, 'deny', outcome.output.content);
+  else assert.equal(outcome.decidedBy, 'user', outcome.output.content);
+  assert.equal(outcome.output.content.split('\n').some(line => line.trim() === host), false, outcome.output.content);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: 素の node を呼ぶ .cmd の shim は、作業フォルダに置かれた node.cmd を動かさない', { skip: (!psAvailable || !which('node')) && 'Windows の PowerShell か node が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const shims = join(tempDir(t), 'global-npm');
+  mkdirSync(shims, { recursive: true });
+  writeFileSync(join(shims, 'pnpm.ps1'), 'Write-Output from-ps1\r\n');
+  writeFileSync(join(shims, 'pnpm.cmd'), '@node --version\r\n');
+  writeFileSync(s.files('node.cmd'), '@echo HIJACKED\r\n');
+  const saved = { path: process.env.PATH, flag: process.env.NoDefaultCurrentDirectoryInExePath };
+  t.after(() => {
+    process.env.PATH = saved.path;
+    if (saved.flag === undefined) delete process.env.NoDefaultCurrentDirectoryInExePath; else process.env.NoDefaultCurrentDirectoryInExePath = saved.flag;
+  });
+  process.env.PATH = `${shims}${delimiter}${saved.path ?? ''}`;
+  delete process.env.NoDefaultCurrentDirectoryInExePath;
+  const outcome = await runApproved(s, 'pnpm --version');
+  assert.doesNotMatch(outcome.output.content, /HIJACKED/u, outcome.output.content);
+  assert.match(outcome.output.content, /\bv\d+\.\d+\.\d+/u, outcome.output.content);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: npm・pnpm に実行時に決まる引数を渡す形は、承認しても cmd.exe の & で別のコマンドを動かさない', { skip: (!psAvailable || !which('npm')) && 'Windows の PowerShell か npm が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const shims = join(tempDir(t), 'global-pnpm');
+  mkdirSync(shims, { recursive: true });
+  writeFileSync(join(shims, 'pnpm.ps1'), 'Write-Output from-ps1\r\n');
+  writeFileSync(join(shims, 'pnpm.cmd'), '@echo pnpm-args %*\r\n');
+  const savedPath = process.env.PATH;
+  t.after(() => { process.env.PATH = savedPath; });
+  process.env.PATH = `${shims}${delimiter}${savedPath ?? ''}`;
+  writeFileSync(s.files('n.txt'), 'x&hostname\r\n');
+  const host = spawnSync('hostname', { encoding: 'utf8' }).stdout.trim();
+  assert.ok(host);
+  const ranHost = (text: string) => text.split('\n').some(line => line.trim() === host);
+  for (const command of ['npm --version (Get-Content n.txt)', 'npm --version $(Get-Content n.txt)', '$a = Get-Content n.txt; npm --version $a', 'pnpm add (Get-Content n.txt)', '$v = Get-Content n.txt; pnpm --version $v']) {
+    const outcome = await runApproved(s, command);
+    let text = outcome.output.content;
+    if (outcome.decidedBy === 'pending') {
+      const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
+      assert.ok(row, command);
+      const replayed = await replayAction(s.pending.claim(row.id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
+      text += `\n${replayed.output ?? ''}`;
+    }
+    assert.equal(ranHost(text), false, `${command}: ${text}`);
+  }
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきの名前・npm.cmd・変数の名前で npm を呼んでも、承認しても cmd.exe の & で別のコマンドを動かさない', { skip: (!psAvailable || !which('npm')) && 'Windows の PowerShell か npm が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('n.txt'), 'x&cd>pw2.txt\r\n');
+  const rows: Array<[string, string]> = [
+    ["& 'npm' --version 'x&cd>pw1.txt'", 'pw1.txt'], ['$a = Get-Content n.txt; & \'npm\' --version $a', 'pw2.txt'], ["npm.cmd --version 'x&cd>pw3.txt'", 'pw3.txt'],
+    ["$p = 'npm'; & $p --version 'x&cd>pw4.txt'", 'pw4.txt'],
+  ];
+  for (const [command, file] of rows) {
+    const outcome = await runApproved(s, command);
+    if (outcome.decidedBy === 'pending') {
+      const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
+      assert.ok(row, command);
+      await replayAction(s.pending.claim(row.id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
+    }
+    assert.equal(existsSync(s.files(file)), false, `${command}: ${outcome.output.content}`);
+  }
+  const plain = await runApproved(s, "& 'npm' --version");
+  assert.equal(plain.output.isError, false, plain.output.content);
+  assert.match(plain.output.content, /\b\d+\.\d+\.\d+\b/u);
+});

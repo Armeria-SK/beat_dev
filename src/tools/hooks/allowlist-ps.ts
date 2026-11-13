@@ -237,7 +237,10 @@ export function winArgs(name: string, words: readonly Word[], ext: string, acc: 
   for (const w of words.slice(1)) {
     const mangled = w.split ? `${w.text}:` : w.loose ? w.text : !w.dynamic && w.kind === 'plain' && w.text === '' ? "''" : '';
     if (mangled) { acc.add('deny', 'list.winargs_ps', { detail: `${name}: ${mangled}` }, false); return; }
-    if (w.dynamic) continue;
+    if (w.dynamic) {
+      if (cmdFile) { acc.add('deny', 'list.winargs', { detail: `${name}: ${w.text}` }, false); return; }
+      continue;
+    }
     const t = w.text;
     let detail = '';
     if (t.includes('"')) detail = '"';
