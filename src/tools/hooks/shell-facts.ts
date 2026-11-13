@@ -79,14 +79,18 @@ function powershellCode(args: readonly Word[], stdin: boolean): InnerSource {
   return args.length > 0 || stdin ? null : undefined;
 }
 
+const takesValue = (t: string): boolean => SHELL_VALUE_OPTIONS.has(t) || /^[-+][A-Za-z]*[oO][A-Za-z]*$/u.test(t);
+const stdinPath = (p: string): boolean => p === '-' || STDIN_SCRIPT.test(posix.normalize(p));
+
 function shellCode(args: readonly Word[], stdin: boolean): InnerSource {
+  if (stdin) return null;
   const at = args.findIndex(w => !w.dynamic && /^-[A-Za-z]*c[A-Za-z]*$/u.test(w.text));
   if (at >= 0) {
     let j = at + 1;
     while (j < args.length && !args[j]!.dynamic) {
       const t = args[j]!.text;
       if (t === '--') { j++; break; }
-      if (t === '-o' || t === '+o' || t === '-O' || t === '+O') { j += 2; continue; }
+      if (takesValue(t)) { j += 2; continue; }
       if (!/^[-+][A-Za-z]+$/u.test(t)) break;
       j++;
     }
@@ -101,17 +105,16 @@ function shellCode(args: readonly Word[], stdin: boolean): InnerSource {
     if (t === '--') { script = args[j + 1]; break; }
     if (t === '-' || !/^[-+]/u.test(t)) { script = args[j]; break; }
     options.push(args[j]!);
-    if (SHELL_VALUE_OPTIONS.has(t)) j++;
+    if (takesValue(t)) j++;
   }
   if (options.some(w => /^-[A-Za-z]*s[A-Za-z]*$/u.test(w.text))) return null;
-  if (script) return STDIN_SCRIPT.test(script.text) ? null : undefined;
-  return stdin ? null : undefined;
+  return script && stdinPath(script.text) ? null : undefined;
 }
 
 function sourceCode(args: readonly Word[], stdin: boolean): InnerSource {
   const file = args[0]?.text === '--' ? args[1] : args[0];
-  if (!file) return stdin ? null : undefined;
-  return file.dynamic || STDIN_SCRIPT.test(file.text) ? null : undefined;
+  if (stdin) return null;
+  return file && (file.dynamic || stdinPath(file.text)) ? null : undefined;
 }
 
 function cmdCode(args: readonly Word[], stdin: boolean): InnerSource {
@@ -175,7 +178,7 @@ function envCommand(args: readonly Word[], shell: ShellKind): InnerSource {
 }
 
 function prefixCommand(program: string, args: readonly Word[], ps: boolean, shell: ShellKind): InnerSource {
-  const VALUE: Record<string, ReadonlySet<string>> = { exec: new Set(['-a']), time: new Set(['-f', '-o', '--format', '--output']), setsid: new Set(), nohup: new Set(), command: new Set(), unbuffer: new Set(), chronic: new Set(), winpty: new Set(), '!': new Set(), coproc: new Set(), start: new Set() };
+  const VALUE: Record<string, ReadonlySet<string>> = { exec: new Set(['-a']), time: new Set(['-f', '-o', '--format', '--output']), setsid: new Set(), nohup: new Set(), command: new Set(), unbuffer: new Set(), chronic: new Set(), builtin: new Set(), winpty: new Set(), '!': new Set(), coproc: new Set(), start: new Set() };
   if (program === 'command' && args.some(w => w.text === '-v' || w.text === '-V')) return undefined;
   let i = 0;
   while (i < args.length && args[i]!.text.startsWith('-')) {
@@ -281,7 +284,7 @@ export function innerSource(program: string, words: readonly Word[], shell: Shel
   if (program === 'find') return findExec(args, shell);
   if (WRAPPED_VALUE_FLAGS[program]) return wrapped(program, args, ps, shell);
   if (program === 'env') return envCommand(args, shell);
-  if (['exec', 'time', 'setsid', 'nohup', 'command', 'unbuffer', 'chronic', 'winpty', '!', 'coproc'].includes(program) || (program === 'start' && !ps)) return prefixCommand(program, args, ps, shell);
+  if (['exec', 'time', 'setsid', 'nohup', 'command', 'unbuffer', 'chronic', 'winpty', '!', 'coproc', 'builtin'].includes(program) || (program === 'start' && !ps)) return prefixCommand(program, args, ps, shell);
   if (program === 'forfiles') return null;
   if (['npm', 'pnpm', 'yarn', 'npx', 'pnpx'].includes(program)) return packageExec(program, args, shell);
   if (program === 'git') return gitInner(words);
@@ -304,8 +307,8 @@ export function inlineCode(program: string, words: readonly Word[]): { code: str
   if (AWK.test(program)) {
     for (let i = 0; i < args.length; i++) {
       const t = args[i]!.text;
-      if (t === '-f' || t === '--file') { if (STDIN_SCRIPT.test(args[i + 1]?.text ?? '-') || args[i + 1]?.dynamic) dynamic = true; return { code: out, dynamic }; }
-      if (/^(?:-f.|--file=)/u.test(t)) { if (STDIN_SCRIPT.test(t.replace(/^(?:-f|--file=)/u, '')) || args[i]!.dynamic) dynamic = true; return { code: out, dynamic }; }
+      if (t === '-f' || t === '--file') { if (stdinPath(args[i + 1]?.text ?? '-') || args[i + 1]?.dynamic) dynamic = true; return { code: out, dynamic }; }
+      if (/^(?:-f.|--file=)/u.test(t)) { if (stdinPath(t.replace(/^(?:-f|--file=)/u, '')) || args[i]!.dynamic) dynamic = true; return { code: out, dynamic }; }
       if (t === '-e' || t === '--source') { take(args[i + 1]); return { code: out, dynamic }; }
       if (t.startsWith('--source=')) { out.push(t.slice(9)); dynamic ||= args[i]!.dynamic; return { code: out, dynamic }; }
       if (t === '--') { take(args[i + 1]); break; }
