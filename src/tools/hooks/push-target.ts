@@ -49,6 +49,8 @@ export function changesGit(st: StatementFacts): string | undefined {
   return undefined;
 }
 
+export const HASHED_PSEUDO_REFS = ['FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'];
+
 export function pushRepo(st: StatementFacts, before: readonly StatementFacts[]): string | null {
   let dir = st.cwd;
   if (dir === null) return null;

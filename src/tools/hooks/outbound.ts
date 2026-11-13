@@ -4,7 +4,7 @@ import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import type { PreCheck, ToolDef } from '../types.ts';
 import { outboundText, type OutboundMessageKey } from '../../shared/messages/outbound.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
-import { longOption, pushProblem, pushRepo, type PushEnv } from './push-target.ts';
+import { HASHED_PSEUDO_REFS, longOption, pushProblem, pushRepo, type PushEnv } from './push-target.ts';
 import { isInside, realish } from './scope.ts';
 import type { FactWord, StatementFacts } from './shell-guard.ts';
 
@@ -484,6 +484,9 @@ function pushUnconfirmable(st: StatementFacts): boolean {
   const subAt = st.gitGlobal.length + 1;
   if (st.words[subAt]?.text !== 'push') return false;
   const args = st.words.slice(subAt + 1);
+  const positionals = args.filter((w, i) => !w.text.startsWith('-') && !PUSH_OPTION_VALUE.has(args[i - 1]?.text ?? ''));
+  const refspecs = args.some(w => longOption(w.text, '--repo')) ? positionals : positionals.slice(1);
+  if (refspecs.some(w => unhashedSource(w.text.replace(/^\+/u, '').split(':')[0]!.replace(/[~^@].*$/su, '')))) return true;
   return args.some((w, i) => {
     if (w.text.includes('@{')) return true;
     if (!longOption(w.text, '--recurse-submodules')) return false;
@@ -491,3 +494,8 @@ function pushUnconfirmable(st: StatementFacts): boolean {
     return !RECURSE_PINNED.has(at >= 0 ? w.text.slice(at + 1) : args[i + 1]?.text ?? '');
   });
 }
+
+const PUSH_OPTION_VALUE = new Set(['-o', '--push-option']);
+
+const unhashedSource = (source: string): boolean =>
+  (/^[A-Z][A-Z_]*$/u.test(source) && source !== 'HEAD' && !HASHED_PSEUDO_REFS.includes(source)) || /^(?:worktrees|main-worktree)\//u.test(source);

@@ -499,6 +499,13 @@ test('承認（W1-11 改）: 何も動かなければ、積んだ git push は�
   assert.equal(outcome.status, 'ran', outcome.output);
 });
 
+test('承認（W1-11 最終）: HEAD:refs/heads/x は、何も動かなければ動く（対照）', { skip: !gitAvailable }, async t => {
+  const { r, park, q } = pushRig(t);
+  const row = await park(`git push ${q} HEAD:refs/heads/x`);
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+});
+
 test('承認（W1-11 改）: 追跡用の refs/remotes が積んだあとに動いても stale（どの ref も push で名指しできる）', { skip: !gitAvailable }, async t => {
   const { r, git, park, q } = pushRig(t);
   const row = await park(`git push --force-with-lease ${q} feature`);
@@ -527,6 +534,11 @@ const ANY_REF_CASES: Array<[string, (git: Git) => void, string, (git: Git) => vo
     git('fetch', '-q', url, 'feature');
   }, /commits it would push changed/u],
   ['HEAD@{1}', () => undefined, 'git push {U} "HEAD@{1}:refs/heads/x"', () => undefined, /could not confirm what the push would send/u],
+  ['控えない擬似 ref REVERT_HEAD', () => undefined, 'git push {U} REVERT_HEAD:refs/heads/x', () => undefined, /could not confirm what the push would send/u],
+  ['REBASE_HEAD（update-ref で作って動かす）', git => git('update-ref', 'REBASE_HEAD', 'HEAD'), 'git push {U} REBASE_HEAD:refs/heads/x', git => moveRef(git, 'REBASE_HEAD'), /Not run/u],
+  ['CUSTOM_HEAD~0（後ろに ~ を付けた擬似 ref）', git => git('update-ref', 'CUSTOM_HEAD', 'HEAD'), 'git push {U} CUSTOM_HEAD~0:refs/heads/x', git => moveRef(git, 'CUSTOM_HEAD'), /Not run/u],
+  ['CUSTOM_HEAD^{commit}（後ろに ^ を付けた擬似 ref）', git => git('update-ref', 'CUSTOM_HEAD', 'HEAD'), 'git push {U} "CUSTOM_HEAD^{commit}:refs/heads/x"', git => moveRef(git, 'CUSTOM_HEAD'), /Not run/u],
+  ['別の作業ツリーの ref', () => undefined, 'git push {U} worktrees/wt/HEAD:refs/heads/x', () => undefined, /could not confirm what the push would send/u],
   ['--recurse-submodules=on-demand', () => undefined, 'git push --recurse-submodules=on-demand {U} feature', () => undefined, /could not confirm what the push would send/u],
 ];
 
