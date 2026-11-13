@@ -962,6 +962,8 @@ export const en = {
   'ui.runs.result.failed': 'Failed',
   'ui.runs.result.stopped': 'Stopped',
   'ui.runs.result.fallback': 'Fallback',
+  'ui.runs.result.parked': 'Parked',
+  'ui.runs.judged': (allowed: string, parked: string, notRun: string) => `Judge today · ${allowed} passed · ${parked} parked · ${notRun} not run`,
   'ui.runs.footer': (shown: string, total: string) => `${shown} of ${total} · today`,
   'ui.runs.empty': 'Nothing ran yet',
   'ui.runs.openSession': 'Open the session',

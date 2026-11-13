@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { api, type Conversation, type Project, type ReviewJob, type RunRow, type ToolCallRow } from '../../api.ts';
+import { api, type Conversation, type JudgedCounts, type Project, type ReviewJob, type RunRow, type ToolCallRow } from '../../api.ts';
 import { formatDateTime, formatNumber, startOfDay, useT } from '../../i18n/index.ts';
 import { changeLabel, decidedByLabel, decisionLabel, runDetail, runKindLabel } from '../../runlog-meta.ts';
 import { latestOnly } from '../latest.ts';
 import {
-  durationText, filterLog, LOG_FILTERS, logFooter, logRows, tokensText, type LogFilter, type LogResult, type LogRow, type LogTotals,
+  durationText, filterLog, judgedLine, LOG_FILTERS, logFooter, logRows, tokensText, type LogFilter, type LogResult, type LogRow, type LogTotals,
 } from '../library.ts';
 import { EmptyState, Notice, Pill, type PillTone } from '../parts.tsx';
 import { inFilter, optionLabel, settleFilter } from '../product-meta.ts';
@@ -13,15 +13,15 @@ import { routeHash, type RunsTab } from '../routes.ts';
 import { maskTarget } from '../tool-row.ts';
 
 type T = ReturnType<typeof useT>;
-interface Loaded { runs: RunRow[]; calls: ToolCallRow[]; jobs: ReviewJob[]; totals: LogTotals }
+interface Loaded { runs: RunRow[]; calls: ToolCallRow[]; jobs: ReviewJob[]; totals: LogTotals; judged: JudgedCounts }
 
 const FILTER_KEY = { all: 'ui.runs.all', run: 'ui.runs.run', tool: 'ui.runs.tool', review: 'ui.runs.review' } as const satisfies Record<LogFilter, string>;
 const KIND_KEY = { run: 'ui.runs.run', tool: 'ui.runs.tool', review: 'ui.runs.review' } as const;
 const RESULT_KEY = {
   running: 'ui.runs.result.running', queued: 'ui.runs.result.queued', ok: 'ui.runs.result.ok', failed: 'ui.runs.result.failed',
-  stopped: 'ui.runs.result.stopped', fallback: 'ui.runs.result.fallback',
+  stopped: 'ui.runs.result.stopped', fallback: 'ui.runs.result.fallback', parked: 'ui.runs.result.parked',
 } as const satisfies Record<LogResult, string>;
-const RESULT_TONE: Record<LogResult, PillTone | undefined> = { running: 'running', queued: undefined, ok: 'ok', failed: 'danger', stopped: undefined, fallback: 'warn' };
+const RESULT_TONE: Record<LogResult, PillTone | undefined> = { running: 'running', queued: undefined, ok: 'ok', failed: 'danger', stopped: undefined, fallback: 'warn', parked: 'warn' };
 const TAB_OF: Record<LogFilter, RunsTab | undefined> = { all: undefined, run: 'run', tool: 'tools', review: 'reviews' };
 const FILTER_OF = (tab: RunsTab | undefined): LogFilter => (tab === 'run' ? 'run' : tab === 'tools' ? 'tool' : tab === 'reviews' ? 'review' : 'all');
 
@@ -82,7 +82,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
     try {
       const [runs, calls, jobs] = await Promise.all([api.runs(200, project), api.toolCalls(project), api.reviews(project)]);
       if (!loads.current.isCurrent(ticket)) return;
-      setData({ runs: runs.runs, calls: calls.toolCalls, jobs: jobs.jobs, totals: { run: runs.total, tool: calls.total, review: jobs.total } });
+      setData({ runs: runs.runs, calls: calls.toolCalls, jobs: jobs.jobs, totals: { run: runs.total, tool: calls.total, review: jobs.total }, judged: runs.judged });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
@@ -104,6 +104,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
   const shown = useMemo(() => filterLog(rows, filter), [rows, filter]);
   const today = startOfDay(Date.now());
   const footer = data ? logFooter(rows, filter, data.totals, today) : null;
+  const judged = data ? judgedLine(data.judged) : null;
   const pick = (next: LogFilter) => { setOpen(null); location.hash = routeHash({ view: 'runs', ...(TAB_OF[next] ? { tab: TAB_OF[next] } : {}) }); };
 
   return (
@@ -157,6 +158,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
         </div>
       )}
       {footer && <p className="bt-meta bt-rise ui-lib__footer" style={{ '--bt-i': 2 } as CSSProperties}>{t('ui.runs.footer', formatNumber(footer.shown), formatNumber(footer.total))}</p>}
+      {judged && <p className="bt-meta ui-lib__footer">{t('ui.runs.judged', formatNumber(judged.allowed), formatNumber(judged.parked), formatNumber(judged.notRun))}</p>}
     </div>
   );
 }

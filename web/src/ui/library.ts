@@ -1,4 +1,4 @@
-import type { Conversation, MemoryEvent, MemoryItem, ReviewJob, RunRow, SkillVersion, ToolCallRow, ToolInfo } from '../api.ts';
+import type { Conversation, JudgedCounts, MemoryEvent, MemoryItem, ReviewJob, RunRow, SkillVersion, ToolCallRow, ToolInfo } from '../api.ts';
 import { lineDelta, type LineDelta } from '../../../src/shared/line-delta.ts';
 import type { ToolPolicy } from '../../../src/tools/tool-policy.ts';
 import { toolPolicyLoosened, type Access } from '../settings/access.ts';
@@ -111,7 +111,7 @@ export function toolCounts(tools: readonly Pick<ToolInfo, 'policy'>[]): Record<T
 export type LogKind = 'run' | 'tool' | 'review';
 export type LogFilter = 'all' | LogKind;
 export const LOG_FILTERS: readonly LogFilter[] = ['all', 'run', 'tool', 'review'];
-export type LogResult = 'running' | 'queued' | 'ok' | 'failed' | 'stopped' | 'fallback';
+export type LogResult = 'running' | 'queued' | 'ok' | 'failed' | 'stopped' | 'fallback' | 'parked';
 
 export interface LogRow {
   key: string;
@@ -131,6 +131,16 @@ export function runResult(run: Pick<RunRow, 'ok' | 'error_kind' | 'flags'>): Log
   if (run.ok === null) return 'running';
   if (run.ok === 0) return run.error_kind === 'cancelled' ? 'stopped' : 'failed';
   return run.flags.includes('fallback') ? 'fallback' : 'ok';
+}
+
+export function callResult(call: Pick<ToolCallRow, 'ok' | 'decided_by'>): LogResult {
+  if (call.decided_by === 'pending') return 'parked';
+  return call.ok === null ? 'running' : call.ok === 1 ? 'ok' : 'failed';
+}
+
+export function judgedLine(judged: JudgedCounts): { allowed: number; parked: number; notRun: number } | null {
+  const parked = Object.values(judged.parked).reduce((sum, n) => sum + (n ?? 0), 0);
+  return judged.allowed + parked + judged.notParked > 0 ? { allowed: judged.allowed, parked, notRun: judged.notParked } : null;
 }
 
 export function jobResult(status: ReviewJob['status']): LogResult {
@@ -160,7 +170,7 @@ export function logRows({ runs, calls, jobs, runLabel, titleOf }: LogInput): Log
     const target = toolRow(call.tool, call.input, null).target;
     rows.push({
       key: `tool:${call.id}`, kind: 'tool', at: call.created_at, what: target ? `${call.tool} · ${target}` : call.tool,
-      model: null, durationMs: call.duration_ms, tokens: null, result: call.ok === null ? 'running' : call.ok === 1 ? 'ok' : 'failed', call,
+      model: null, durationMs: call.duration_ms, tokens: null, result: callResult(call), call,
     });
   }
   for (const job of jobs) {

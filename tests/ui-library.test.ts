@@ -4,7 +4,7 @@ import type { MemoryEvent, ReviewJob, RunRow, SkillVersion, ToolCallRow } from '
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  archivedLine, archivedNothing, durationText, filterLog, jobResult, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, runResult, skillHistory,
+  archivedLine, archivedNothing, callResult, durationText, filterLog, jobResult, judgedLine, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, runResult, skillHistory,
   tokensText, toolChoice, toolCounts, toolDecision, undoDeletes,
 } from '../web/src/ui/library.ts';
 import { maskTarget } from '../web/src/ui/tool-row.ts';
@@ -101,7 +101,7 @@ const job = (id: number, at: number, status: ReviewJob['status'], extra: Partial
   id, trigger: 'idle', triggerLabel: 'idle', status, note: null, conversation_id: null, task_id: null, run_id: null, created_at: at, finished_at: null, changes: [], ...extra,
 });
 
-test('ui/library: Runs は実行・道具・振り返りを時刻の新しい順に 1 つの表にする。What は題か道具と対象、Result は Running・Ok・Failed・Stopped・Fallback・Queued', () => {
+test('ui/library: Runs は実行・道具・振り返りを時刻の新しい順に 1 つの表にする。What は題か道具と対象、Result は Running・Ok・Failed・Stopped・Fallback・Queued・Parked', () => {
   const rows = logRows({
     runs: [runRow('r1', 100), runRow('r2', 300, { ok: null, conversation_id: null, kind: 'task' }), runRow('r3', 50, { flags: ['fallback'] })],
     calls: [callRow('t1', 200)],
@@ -122,6 +122,12 @@ test('ui/library: Runs は実行・道具・振り返りを時刻の新しい順
   assert.equal(runResult({ ok: 0, error_kind: 'timeout', flags: ['fallback'] }), 'failed');
   assert.equal(runResult({ ok: 0, error_kind: 'cancelled', flags: [] }), 'stopped');
   assert.equal(jobResult('running'), 'running');
+  assert.equal(judgedLine({ allowed: 0, parked: {}, notParked: 0 }), null, '判定役が何もしていない日は出さない');
+  assert.deepEqual(judgedLine({ allowed: 5, parked: { send: 2, judge: 1 }, notParked: 1 }), { allowed: 5, parked: 3, notRun: 1 }, 'Pending に積んだ数は種類をまとめる');
+  assert.equal(callResult({ ok: 1, decided_by: 'pending' }), 'parked', 'Pending に積んだ道具は Parked');
+  assert.equal(callResult({ ok: 0, decided_by: 'pending' }), 'parked');
+  assert.equal(callResult({ ok: 0, decided_by: 'not-parked' }), 'failed', '積めずに動かさなかった道具は Failed');
+  assert.deepEqual(logRows({ runs: [], calls: [callRow('p', 1, { decided_by: 'pending', approval_id: 'pending:12' })], jobs: [], runLabel: k => k, titleOf: () => null }).map(r => r.result), ['parked']);
   assert.equal(jobResult('failed'), 'failed');
 });
 
