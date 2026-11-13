@@ -362,6 +362,27 @@ test('作ったもの（H3）: 同じ製品のフォルダで重なった実行�
   assert.deepEqual(created.list(scope), []);
   assert.deepEqual(created.list({ kind: 'conv', id: 'c2' }), []);
   assert.ok(s.logs.some(line => line.startsWith('[WARN]')), s.logs.join('\n'));
+
+  const inner = join(s.root, 'api');
+  mkdirSync(inner);
+  writeFileSync(join(inner, 'index.ts'), 'x');
+  git(s.root, 'add', 'api/index.ts');
+  git(s.root, 'commit', '-q', '-m', 'api');
+  const outer = { kind: 'conv' as const, id: 'outer' };
+  const task = { kind: 'task' as const, id: 'inner' };
+  for (const [label, first, second] of [['outer first', 'o', 'i'], ['inner first', 'i', 'o']] as const) {
+    const starts = { o: () => created.begin(`o-${label}`, outer, s.root), i: () => created.begin(`i-${label}`, task, inner) };
+    await starts[first]();
+    await starts[second]();
+    const report = join(inner, `report-${first}.json`);
+    writeFileSync(report, '{}');
+    assert.equal(created.isCreated(report, { runId: `o-${label}` }), false, `${label}: the outer run sees the inner run's file`);
+    assert.equal(created.isCreated(report, { runId: `i-${label}` }), false, `${label}: the inner run while overlapping`);
+    await created.end(`o-${label}`);
+    await created.end(`i-${label}`);
+    assert.deepEqual(created.list(outer), [], label);
+    assert.deepEqual(created.list(task), [], label);
+  }
 });
 
 test('作ったもの（H3）: 実行の頭より前に生まれたファイルを実行の中で運び込んでも「作った」にならない', { skip: !gitAvailable }, async t => {

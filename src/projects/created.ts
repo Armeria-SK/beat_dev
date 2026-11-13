@@ -15,6 +15,7 @@ const GIT_TIMEOUT_MS = 60_000;
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const CLOCK_SLACK_MS = 2000;
 const WINDOWS = process.platform === 'win32';
+let birthWarned = false;
 
 interface Known { exact: Set<string>; ancestors: Set<string> }
 interface RunRecord {
@@ -96,7 +97,7 @@ export class CreatedFiles {
     try { real = realpathSync.native(root); } catch { return; }
     const record: RunRecord = { scope, root: real, start, mode: 'unknown', shared: false, noted: new Map() };
     for (const other of this.#runs.values()) {
-      if (fold(other.root) !== fold(real)) continue;
+      if (!isInside(other.root, real) && !isInside(real, other.root)) continue;
       other.shared = true;
       record.shared = true;
     }
@@ -222,6 +223,10 @@ export class CreatedFiles {
   }
 
   #newSince(stat: BigIntStats, start: number): boolean {
+    if (stat.birthtimeNs === 0n && !birthWarned) {
+      birthWarned = true;
+      this.#log('[WARN] This file system does not report when a file was made, so files made by a run cannot be told apart there');
+    }
     return Number(stat.birthtimeMs) >= start && Number(stat.mtimeMs) >= start;
   }
 

@@ -584,7 +584,7 @@ export class ChatEngine {
       .then(result => { ended = result; return result; })
       .finally(() => {
         this.#active.delete(runId);
-        void this.created.end(runId);
+        this.created.end(runId).catch(() => {});
         this.#byConversation.delete(conversationId);
         this.#preemptedTasks.delete(runId);
         this.#runModel.delete(runId);
