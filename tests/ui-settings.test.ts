@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ModelView } from '../web/src/api.ts';
@@ -181,4 +182,14 @@ test('ui/settings view: 役割（会話・予備・裏）は routing の並び�
   assert.deepEqual(setConversation(config, 'c').routing.chat, ['c', 'a', 'b']);
   assert.deepEqual(setFallback(config, ['c']).routing.chat, ['a', 'c']);
   assert.deepEqual(rolesOf({ routing: { chat: [], background: [] } }), { conversation: null, fallback: [], background: [] });
+});
+
+test('ui/settings: 設定を書く口（saveSettings・resetSettings）を呼ぶのは、決まった画面だけ（行ごとの確かめを通る所）', () => {
+  const root = new URL('../web/src/', import.meta.url);
+  const callers = readdirSync(root, { recursive: true, encoding: 'utf8' })
+    .map(file => file.replace(/\\/gu, '/'))
+    .filter(file => /\.tsx?$/u.test(file))
+    .filter(file => /\bapi\.(?:saveSettings|resetSettings)\(/u.test(readFileSync(new URL(file, root), 'utf8')))
+    .sort();
+  assert.deepEqual(callers, ['ui/Onboarding.tsx', 'ui/settings/Settings.tsx', 'ui/settings/customize.tsx']);
 });
