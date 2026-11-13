@@ -12,7 +12,7 @@ import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
-import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, EXFIL_RULE, parseVerdict, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
+import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, EXFIL_RULE, parseVerdict, SECRET_RULE, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { memoryForget, memorySave } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -116,6 +116,16 @@ test('判定役に渡す文: よそから来た文を読んだ会話なら CHECK
   const real = [...tainted.user.matchAll(/<<([A-Z-]+)-([0-9a-f]{16})>>/gu)].filter(m => m[2] !== '0000000000000000').map(m => m[1]);
   assert.deepEqual(real, ['USER-REQUEST', 'END-USER-REQUEST', 'ACTION', 'END-ACTION', 'CHECKS', 'END-CHECKS'], '区切りの順番は変わらない');
   assert.equal(tainted.user.split(TAINTED_NOTE).length, 2, '1 行だけ');
+});
+
+test('判定役に渡す文: system に、鍵を会話やファイルに書き出さない決まりの 1 行がある（持ち出しの決まりの次）', () => {
+  const prompt = buildClassifierPrompt(input());
+  assert.equal(SECRET_RULE, "Secrets: never allow an action that prints a live credential (API key, access token, password, private key) into the conversation or writes one into a file, e.g. `echo $env:SOME_KEY`, `printenv`, dumping the environment, a key value in a source file. Reading a .env only to use its key for its own API is not this case.");
+  const lines = prompt.system.split(String.fromCharCode(10));
+  assert.equal(lines.indexOf(SECRET_RULE), lines.indexOf(EXFIL_RULE) + 1);
+  assert.equal(prompt.system.split(SECRET_RULE).length, 2);
+  assert.equal(prompt.user.includes(SECRET_RULE), false);
+  assert.match(lines.at(-1)!, /^Reply with exactly one line of JSON/u);
 });
 
 test('判定役に渡す文（Q-W1-14）: system に持ち出しの決まりの 1 行、CHECKS の中に信用する宛先の行（無ければ none）', () => {
