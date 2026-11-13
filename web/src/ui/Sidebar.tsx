@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type Conversation, type HistoryHit, type Project } from '../api.ts';
+import { api, type Conversation, type Project } from '../api.ts';
 import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import type { AgentState, FootLine } from './agent-state.ts';
@@ -7,6 +7,7 @@ import { Avatar, CountBadge, Icon } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
 import { productNav } from './product-nav.ts';
 import { routeHash, type Route } from './routes.ts';
+import { searchView, type SearchState } from './search-state.ts';
 
 export interface SidebarProps {
   state: AgentState;
@@ -49,16 +50,15 @@ function footText(t: ReturnType<typeof useT>, foot: FootLine): string {
 function SessionSearch({ onClose }: { onClose: () => void }) {
   const t = useT();
   const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<HistoryHit[] | null>(null);
+  const [search, setSearch] = useState<SearchState>({ kind: 'idle' });
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setHits(null); return undefined; }
+    if (!q) { setSearch({ kind: 'idle' }); return undefined; }
     let live = true;
-    const timer = setTimeout(() => { void api.history(q).then(r => { if (live) setHits(r.hits); }).catch(() => { if (live) setHits([]); }); }, 250);
+    const timer = setTimeout(() => { void api.history(q).then(r => { if (live) setSearch({ kind: 'loaded', hits: r.hits }); }).catch(() => { if (live) setSearch({ kind: 'failed' }); }); }, 250);
     return () => { live = false; clearTimeout(timer); };
   }, [query]);
-  const seen = new Set<string>();
-  const unique = (hits ?? []).filter(h => (seen.has(h.conversationId) ? false : (seen.add(h.conversationId), true)));
+  const view = searchView(search);
   return (
     <div className="ui-search">
       <div className="ui-search__row">
@@ -66,8 +66,11 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
           onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }} />
         <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.close')} onClick={onClose}><Icon name="x" /></button>
       </div>
-      {hits !== null && unique.length === 0 && <span className="bt-meta ui-search__none">{t('ui.search.none')}</span>}
-      {unique.map(h => (
+      <div role="status" className="ui-search__status">
+        {view.note === 'none' && <span className="bt-meta ui-search__none">{t('ui.search.none')}</span>}
+        {view.note === 'failed' && <span className="bt-meta ui-search__none ui-danger">{t('ui.kanban.loadFailed')}</span>}
+      </div>
+      {view.hits.map(h => (
         <a key={h.conversationId} className="bt-side bt-side--session ui-search__hit" href={routeHash({ view: 'chat', id: h.conversationId })}>
           <span className="bt-side__name">{h.title || t('ui.session.untitled')}<span className="bt-meta ui-search__snippet">{h.snippet}</span></span>
         </a>

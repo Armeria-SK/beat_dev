@@ -6,7 +6,7 @@ import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { archivedLine, archivedNothing } from '../library.ts';
 import { Button, Notice } from '../parts.tsx';
-import { productLine } from '../product-meta.ts';
+import { needsShelved, productLine } from '../product-meta.ts';
 import { routeHash } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 
@@ -18,7 +18,7 @@ export function Archived({ revision, projects }: { revision: number; projects: r
   const t = useT();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Conversation[] | null>(null);
-  const [shelved, setShelved] = useState<Project[]>([]);
+  const [shelved, setShelved] = useState<Project[] | null>(null);
   const [loadedFor, setLoadedFor] = useState('');
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -43,7 +43,7 @@ export function Archived({ revision, projects }: { revision: number; projects: r
   const activeKey = projects.map(p => p.id).join(',');
   useEffect(() => {
     if (!hasProducts) return;
-    void api.projects(true).then(r => setShelved(r.projects)).catch(() => undefined);
+    void api.projects(true).then(r => setShelved(r.projects)).catch(() => setShelved(old => old ?? []));
   }, [hasProducts, activeKey, revision]);
 
   const reload = () => setTick(n => n + 1);
@@ -59,7 +59,8 @@ export function Archived({ revision, projects }: { revision: number; projects: r
     try {
       await api.unarchiveConversation(c.id);
       setItems(current => current?.filter(x => x.id !== c.id) ?? current);
-      const line = productLine(c.project_id, projects, shelved);
+      const known = needsShelved(c.project_id, projects, shelved) ? await api.projects(true).then(r => r.projects, () => []) : shelved;
+      const line = productLine(c.project_id, projects, known);
       toast({
         icon: 'undo', title: t('ui.archived.toast.restored'), body: line?.archived ? t('ui.pf.restoredUnder', line.name ?? t('ui.pf.someArchived')) : title(c),
         action: { label: t('ui.toast.undo'), run: () => { void api.archiveConversation(c.id).then(reload).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: failText(error, t) })); } },

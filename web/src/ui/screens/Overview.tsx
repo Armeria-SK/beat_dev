@@ -61,13 +61,14 @@ function readStored(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
 }
 
-export function useLastLook(key: string): { at: number; known: boolean } {
+export function useLastLook(key: string, keep = true): { at: number; known: boolean } {
   const [look] = useState(() => readLastLook(readStored(key), Date.now(), startOfDay));
   useEffect(() => {
+    if (!keep) return undefined;
     const write = () => { try { localStorage.setItem(key, String(Date.now())); } catch { return; } };
     addEventListener('pagehide', write);
     return () => { removeEventListener('pagehide', write); write(); };
-  }, [key]);
+  }, [key, keep]);
   return look;
 }
 
