@@ -406,8 +406,9 @@ test('ネットワーク: 宛先の決まり（C9）と、書き込み先（-o�
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -OutFile a.html -MaximumRedirection 0', 'powershell'), 'once');
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Delete -MaximumRedirection 0', 'powershell'), 'ask');
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Trace -MaximumRedirection 0', 'powershell'), 'once');
-  assert.equal(levelOf('curl https://e -MaximumRedirection 0', 'powershell'), 'allow');
-  assert.equal(levelOf('curl https://e -Method Post -MaximumRedirection 0', 'powershell'), 'ask');
+  for (const args of ['https://e -MaximumRedirection 0', '-sS https://e/', '-q -sS https://e/', '-d x https://e/', '-K cfg https://e/', '-o out.html https://e/', '-L https://e/']) {
+    for (const shell of ['powershell', 'pwsh'] as const) assert.deepEqual(keysOf(`curl ${args}`, shell), keysOf(`curl.exe ${args}`, shell), `${shell}: curl ${args}`);
+  }
   assert.equal(levelOf('wget http://127.0.0.1/', 'powershell'), 'once');
   assert.equal(classify('Invoke-WebRequest -Uri https://e', 'powershell').results[0]!.fetch, true);
 });
@@ -538,18 +539,15 @@ test('beat 自身の API に名前では届かせない: Host・Origin などの
   assert.equal(classify('curl -L https://e.example/').results[0]!.reasons.some(r => r.exempt), true, '転送を追う指定は、持ち主が選んだコマンドとして外せる');
 });
 
-test('Invoke-WebRequest・Invoke-RestMethod（5.1 の curl・wget も）: 転送は既定で追うので、-MaximumRedirection 0 を付けたときだけ許す。-Headers は一覧に無い', () => {
+test('Invoke-WebRequest・Invoke-RestMethod: 転送は既定で追うので、-MaximumRedirection 0 を付けたときだけ許す。-Headers は一覧に無い', () => {
   const once = [
     'Invoke-WebRequest -Uri https://e.example/', 'iwr https://e.example/', 'Invoke-RestMethod https://e.example/api', 'irm https://e.example/', 'iwr https://e.example/ -MaximumRedirection 5', 'iwr https://e.example/ -MaximumRedirection 1',
-    'iwr https://e.example/ -MaximumRedirection $n', 'iwr https://e.example/ -UseBasicParsing', 'curl https://e.example/', 'wget https://e.example/x', 'iwr https://e.example/ -OutFile a.html',
+    'iwr https://e.example/ -MaximumRedirection $n', 'iwr https://e.example/ -UseBasicParsing', 'iwr https://e.example/ -OutFile a.html',
     'iwr https://e.example/ -MaximumRedirection 0 -Headers @{Host="127.0.0.1:7800"}', 'irm https://e.example/ -MaximumRedirection 0 -Headers $h',
     'iwr https://e.example/ -MaximumRedirection 0 -OutFile a.html',
   ];
-  for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
-    const list = shell === 'pwsh' ? once.filter(c => !c.startsWith('curl ') && !c.startsWith('wget ')) : once;
-    assert.deepEqual(list.filter(c => levelOf(c, shell) !== 'once'), [], shell);
-  }
-  const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0', 'curl https://e.example/ -MaximumRedirection 0'];
+  for (const shell of ['powershell', 'pwsh'] as ShellKind[]) assert.deepEqual(once.filter(c => levelOf(c, shell) !== 'once'), [], shell);
+  const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0'];
   assert.deepEqual(allow.filter(c => levelOf(c, 'powershell') !== 'allow'), []);
   assert.equal(levelOf('iwr https://e.example/ -MaximumRedirection 0 -Method Post -Body x', 'powershell'), 'ask', '送る形は、これまでどおりふつうの確かめ');
 });
@@ -880,4 +878,32 @@ test('穴 5（F4）の回帰: @ のない tar と、先頭が @ でない名前�
     }
   }
   assert.deepEqual(wrong, []);
+});
+
+test('PowerShell の npm・pnpm・yarn（.cmd の shim）: 実行時に決まる引数は cmd.exe の記号を調べられないので止める。文字どおりの引数は前と同じ', () => {
+  const cmd = { external: () => ({ ok: true, ext: '.cmd', detail: '' }) };
+  for (const c of ['npm view (Get-Content n.txt)', 'npm view $(Get-Content n.txt)', '$a = Get-Content n.txt; npm view $a', 'pnpm add (Get-Content n.txt)', '$v = Get-Content n.txt; pnpm --version $v', 'yarn add $a']) {
+    assert.equal(levelOf(c, 'powershell', cmd), 'deny', c);
+    assert.ok(keysOf(c, 'powershell', cmd).includes('deny:list.winargs'), c);
+  }
+  for (const [c, want] of [['npm test', 'once'], ['npm run build', 'once'], ['npm --version', 'allow'], ['npm view left-pad', 'allow'], ['pnpm --version', 'once'], ['yarn --version', 'once']] as const) {
+    assert.equal(levelOf(c, 'powershell', cmd), want, c);
+  }
+  assert.equal(levelOf('$a = Get-Content n.txt; git log $a', 'powershell'), levelOf('$a = Get-Content n.txt; git log $a', 'powershell', { external: () => ({ ok: true, ext: '.exe', detail: '' }) }));
+});
+
+test('PowerShell の外部のプログラムの名前: 引用符つき・.cmd を書いた名前・フルパス・実行時に決まる名前でも、cmd.exe に渡る引数は調べる。引用符つきの名前は素の名前の判定に、名前の決まり（C1）の確かめを足したもの', () => {
+  const cmd = { external: (n: string) => ({ ok: true, ext: /^(?:npm|pnpm|yarn)$/u.test(n) ? '.cmd' : '.exe', detail: '' }), fileExists: (p: string) => ['./build.ps1', 'C:\\tools\\x.exe'].includes(p) };
+  const denied = [
+    "& 'npm' --version $a", '& "npm" --version $a', "& 'npm' --version 'x&cd>pw.txt'", '$a = Get-Content n.txt; & \'npm\' --version $a',
+    'npm.cmd --version $a', "npm.cmd --version 'x&y'", "& 'npm.cmd' --version $a", '& "C:\\Program Files\\nodejs\\npm.cmd" --version $a', "& 'C:\\tools\\run.bat' 'x&y'", "& 'C:\\tools\\npm' --version $a",
+    '& $p --version $a', "$p = 'npm'; & $p --version $a", '& (Get-Command npm) --version $a', '& $(Get-Command npm) --version $a', "& $p 'x&y'", "& 'npm.cmd ' --version $a", "& 'NPM.CMD ' --version $a", "& 'npm ' --version $a", "& 'npm.cmd. ' 'x&y'", "./x.ps1 'a b'", "& './x.exe.' 'a&b'", "& './e.ps1.' 'a&b'", "& 'C:/t/x.exe\u3000' 'a&b'", "./b.exe 'a&b'", "& './build.ps1.' 'a b'",
+  ];
+  for (const c of denied) assert.ok(keysOf(c, 'powershell', cmd).includes('deny:list.winargs'), `${c}: ${keysOf(c, 'powershell', cmd).join(' ')}`);
+  for (const [quoted, bare] of [["& 'npm' --version", 'npm --version'], ['& "npm" test', 'npm test'], ["& 'npm' view left-pad", 'npm view left-pad'], ["& 'git' status", 'git status'], ["& 'npm' --version 'x&y'", "npm --version 'x&y'"]] as const) {
+    assert.deepEqual(keysOf(quoted, 'powershell', cmd), ['once:shape.call', ...keysOf(bare, 'powershell', cmd)], quoted);
+  }
+  for (const [c, want] of [['npm test', 'once'], ['npm run build', 'once'], ['npm --version', 'allow'], ['npm view left-pad', 'allow'], ['git status', 'allow'], ['node.exe -e 1', 'once'], ["myprog.exe 'a&b'", 'once'], ["& 'C:\\tools\\x.exe' 'a&b'", 'once'], ['& $p --version', 'once'], ['npm.cmd --version', 'once'], ["./build.ps1 'a b'", 'once'], ['./build.ps1 $v', 'once'], ["& ./build.ps1 'a b'", 'once'], ["./build.ps1 -Config $cfg", 'once'], ["./build.ps1 'メモ'", 'once']] as const) {
+    assert.equal(levelOf(c, 'powershell', cmd), want, `${c}: ${keysOf(c, 'powershell', cmd).join(' ')}`);
+  }
 });

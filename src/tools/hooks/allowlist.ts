@@ -83,7 +83,7 @@ function external(key: string, acc: Acc, ctx: MatchCtx): string {
 function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx): void {
   const words = st.words;
   if (!exe) {
-    const spec = psCmdlet(ctx.shell === 'powershell' && (key === 'curl' || key === 'wget') ? 'iwr' : key);
+    const spec = psCmdlet(key);
     if (spec) {
       const p = parsePs(spec, words, acc, ctx);
       spec.extra?.(p, acc, ctx, st);
@@ -103,12 +103,24 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
     return;
   }
   acc.add('once', 'list.command', { cmd: words[0]!.text }, true);
+  unlistedArgs(st, acc, ctx);
+}
+
+function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
+  if (!ctx.windows) return;
+  const name = st.words[0]!;
+  const cmdTarget = (t: string): boolean => /\.(?:cmd|bat)$/iu.test(t)
+    || (/[\\/:]/u.test(t) ? !(/\.(?:exe|com|ps1)$/iu.test(t) && ctx.fileExists?.(t) === true) : ['.cmd', '.bat'].includes(ctx.external?.(t.toLowerCase()).ext ?? '.exe'));
+  const trimmed = name.text.replace(/[ .]+$/u, '') || name.text;
+  if (name.dynamic || cmdTarget(name.text) || cmdTarget(trimmed)) winArgs(trimmed, st.words, '.cmd', acc);
 }
 
 export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   const acc = new Acc();
   acc.strict = st.inBlock === true;
   const ps = isPowerShell(ctx.shell);
+  const first = st.words[0];
+  const quotedName = ps && st.kind === 'command' && first !== undefined && first.kind === 'plain' && first.quoted && !first.dynamic && !first.home && NAME_RE.test(first.text) && st.shapes.includes('call');
   shapes(st, acc);
   redirects(st, acc, ps);
   if (st.kind === 'control') {
@@ -121,8 +133,12 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
 
   const name = st.words[0]!;
   const text = name.text;
-  const named = name.kind === 'plain' && !name.dynamic && !name.quoted && !name.home && (NAME_RE.test(text) || (ps ? text === '%' || text === '?' : BASH_SPECIAL.has(text)) || text === 'tree.com' || text === 'where.exe');
-  if (!named) { acc.add('once', 'list.command', { cmd: text }, true); return acc.result(); }
+  const named = quotedName || (name.kind === 'plain' && !name.dynamic && !name.quoted && !name.home && (NAME_RE.test(text) || (ps ? text === '%' || text === '?' : BASH_SPECIAL.has(text)) || text === 'tree.com' || text === 'where.exe'));
+  if (!named) {
+    acc.add('once', 'list.command', { cmd: text }, true);
+    if (ps) unlistedArgs(st, acc, ctx);
+    return acc.result();
+  }
   let key = ctx.windows || ps ? text.toLowerCase() : text;
   let exe = false;
   if (ctx.windows && key.endsWith('.exe') && key !== 'where.exe') { key = key.slice(0, -4); exe = true; }
