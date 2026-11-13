@@ -14,11 +14,11 @@ const task = (id: string, status: Task['status'], extra: Partial<Task> = {}): Ta
   parent_id: null, waiting_text: null, conversation_id: null, result_summary: null, attempts: 0, max_attempts: 3, created_at: 0, updated_at: 0, completed_at: null, ...extra,
 });
 
-test('ui/overview: タイルは Proposals・Questions・Pending の 3 つで、0 でも隠さない。Pending は承認を待つ道具の呼び出しの数で、いちばん古いものの会話へ行く', () => {
-  assert.deepEqual(tiles({ proposals: 2, answers: 1 }, [{ conversationId: 'c 1' }, { conversationId: 'c2' }]), [
-    { id: 'proposals', n: 2, href: '#/kanban' }, { id: 'questions', n: 1, href: '#/kanban' }, { id: 'pending', n: 2, href: '#/c/c%201' },
+test('ui/overview: タイルは Proposals・Questions・Pending の 3 つで、0 でも隠さない。Pending は Pending の一覧の数で、全製品の Pending の画面へ行く（4-U1）', () => {
+  assert.deepEqual(tiles({ proposals: 2, answers: 1 }, 2), [
+    { id: 'proposals', n: 2, href: '#/kanban' }, { id: 'questions', n: 1, href: '#/kanban' }, { id: 'pending', n: 2, href: '#/pending' },
   ]);
-  assert.deepEqual(tiles({ proposals: 0, answers: 0 }, []).map(tile => [tile.id, tile.n, tile.href]), [['proposals', 0, '#/kanban'], ['questions', 0, '#/kanban'], ['pending', 0, null]]);
+  assert.deepEqual(tiles({ proposals: 0, answers: 0 }, 0).map(tile => [tile.id, tile.n, tile.href]), [['proposals', 0, '#/kanban'], ['questions', 0, '#/kanban'], ['pending', 0, '#/pending']]);
 });
 
 test('ui/overview: 小さな盤は列ごとに上の 2 枚と "N more"。Done と Failed の N には、まだ読んでいない古い分も入る', () => {
@@ -80,15 +80,14 @@ test('ui/overview: 会話の持ち主の製品は、会話の行とタスクの�
   assert.equal(owners.has('other'), false);
 });
 
-test('ui/overview: ProductHome のタイルは製品の行の待ちの数。Questions はその製品の返事待ちのタスク、Pending はその製品の会話の承認へ。0 も出す', () => {
+test('ui/overview: ProductHome のタイルは製品の行の待ちの数。Questions はその製品の返事待ちのタスク、Pending はその製品の Pending の欄へ（4-U1）。0 も出す', () => {
   const p = project('p1aaaa', { waiting: { proposals: 2, questions: 1, pending: 1 } });
-  const owners = new Map<string, string | null>([['c-other', 'p2aaaa'], ['c-none', null], ['c-mine', 'p1aaaa']]);
   const tasks = [task('q-other', 'waiting', { project_id: 'p2aaaa' }), task('q-none', 'waiting'), task('q-mine', 'waiting', { project_id: 'p1aaaa' })];
-  assert.deepEqual(productTiles(p, [{ conversationId: 'c-other' }, { conversationId: 'c-none' }, { conversationId: 'c-mine' }], owners, tasks), [
-    { id: 'proposals', n: 2, href: '#/kanban' }, { id: 'questions', n: 1, href: '#/tasks/q-mine' }, { id: 'pending', n: 1, href: '#/c/c-mine' },
+  assert.deepEqual(productTiles(p, tasks), [
+    { id: 'proposals', n: 2, href: '#/kanban' }, { id: 'questions', n: 1, href: '#/tasks/q-mine' }, { id: 'pending', n: 1, href: '#/pending/p1aaaa' },
   ]);
-  assert.deepEqual(productTiles(project('p1aaaa'), [{ conversationId: 'c-other' }], owners, tasks.slice(0, 2)), [
-    { id: 'proposals', n: 0, href: '#/kanban' }, { id: 'questions', n: 0, href: '#/kanban' }, { id: 'pending', n: 0, href: null },
+  assert.deepEqual(productTiles(project('p1aaaa'), tasks.slice(0, 2)), [
+    { id: 'proposals', n: 0, href: '#/kanban' }, { id: 'questions', n: 0, href: '#/kanban' }, { id: 'pending', n: 0, href: '#/pending/p1aaaa' },
   ]);
 });
 

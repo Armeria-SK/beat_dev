@@ -1,5 +1,5 @@
 // Throwaway preview server for screen checks (plans/beat/steps/p1-ui.md, "試しのサーバー").
-// node scripts/preview-server.ts — takes no arguments. Port 4797, data under <product>/tmp/p1-preview only.
+// node scripts/preview-server.ts — takes no arguments. Port 4797 (or BEAT_PREVIEW_PORT), data under <product>/tmp/p1-preview only.
 import { existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isAbsolute, join, relative, sep } from 'node:path';
@@ -12,9 +12,10 @@ import { providerError, type ModelRequest, type ProviderAdapter, type StreamEven
 import { isSensitiveName } from '../src/shared/redaction.ts';
 import { BrowserFailure } from '../src/tools/browser/driver.ts';
 import { createWebServer } from '../src/web/server.ts';
+import { previewPending } from './preview-pending.ts';
 
 const HOST = '127.0.0.1';
-const PORT = 4797;
+const PORT = previewPort(process.env.BEAT_PREVIEW_PORT);
 const ROOT = join(APP_ROOT, 'tmp', 'p1-preview');
 const DATA = join(ROOT, 'data');
 const WORK = join(ROOT, 'work');
@@ -29,6 +30,13 @@ const log = (line: string) => process.stdout.write(`${new Date().toISOString()} 
 function stop(reason: string): never {
   process.stderr.write(`Preview server refused to start: ${reason}\n`);
   process.exit(1);
+}
+
+function previewPort(raw: string | undefined): number {
+  if (raw === undefined) return 4797;
+  const port = Number(raw);
+  if (!/^\d{4,5}$/u.test(raw) || port < 1024 || port > 65535 || port === 4777) stop(`BEAT_PREVIEW_PORT must be a port from 1024 to 65535 other than 4777: ${raw}`);
+  return port;
 }
 
 function checkRoot(): void {
@@ -287,6 +295,7 @@ async function start(): Promise<void> {
 
   const web = createWebServer(app);
   refuseServerApply(web.server);
+  previewPending(app, web.server);
   await web.listen({ host: HOST, port: PORT });
   void app.mcp.start().catch(() => undefined);
   app.worker.start();

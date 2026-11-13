@@ -13,6 +13,8 @@ export interface SidebarProps {
   route: Route;
   foot: FootLine;
   kanban: number;
+  pending: number;
+  sessionPending: ReadonlyMap<string, number>;
   drafts: number;
   unread: number;
   conversations: Conversation[];
@@ -74,14 +76,16 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SessionRow({ conversation: c, route, running }: { conversation: Conversation; route: Route; running: ReadonlySet<string> }) {
+function SessionRow({ conversation: c, route, running, pending }: { conversation: Conversation; route: Route; running: ReadonlySet<string>; pending: ReadonlyMap<string, number> }) {
   const t = useT();
+  const waiting = pending.get(c.id) ?? 0;
   const active = route.view === 'chat' && route.id === c.id;
   const live = running.has(c.id);
   return (
     <a className={`bt-side bt-side--session${active ? ' is-active' : ''}`} href={routeHash({ view: 'chat', id: c.id })} aria-current={active ? 'page' : undefined}>
       <span className={`bt-side__state${live ? ' bt-side__state--running' : ''}`} role="img" aria-label={live ? t('ui.session.running') : t('ui.session.idle')} />
       <span className="bt-side__name">{c.title || t('ui.session.untitled')}</span>
+      <CountBadge n={waiting} label={t('ui.count.waiting', waiting)} />
     </a>
   );
 }
@@ -102,7 +106,7 @@ function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<st
   return { extra, expand };
 }
 
-export function Sidebar({ state, route, foot, kanban, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup }: SidebarProps) {
+export function Sidebar({ state, route, foot, kanban, pending, sessionPending, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup }: SidebarProps) {
   const t = useT();
   const { extra, expand } = useMoreSessions(conversations);
   const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra), [projects, conversations, conversationsMore, extra]);
@@ -126,6 +130,7 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
         <span className="bt-label bt-sidebar__label">{t('ui.section.workspace')}</span>
         <SideLink href="#/overview" icon="grid" name={t('ui.nav.overview')} active={at('overview')} />
         <SideLink href="#/kanban" icon="columns" name={t('ui.nav.kanban')} active={at('kanban')} count={kanban} countLabel={t('ui.count.waiting', kanban)} />
+        <SideLink href="#/pending" icon="pause" name={t('ui.nav.pending')} active={at('pending')} count={pending} countLabel={t('ui.count.waiting', pending)} />
         <SideLink href="#/schedule" icon="calendar" name={t('ui.nav.schedule')} active={at('schedule')} />
 
         <span className="bt-label bt-sidebar__label">{t('ui.product.section')}</span>
@@ -142,7 +147,7 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
                 {project.folder_missing && <span className="bt-meta ui-side-missing">{t('ui.product.folderMissing')}</span>}
                 <CountBadge n={row.waiting} label={t('ui.count.waiting', row.waiting)} />
               </div>
-              {row.sessions.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} />)}
+              {row.sessions.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
               {row.more > 0 && (
                 <button type="button" className="bt-side bt-side--session ui-side-more" onClick={() => expand(project.id)}>
                   <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
@@ -161,7 +166,7 @@ export function Sidebar({ state, route, foot, kanban, drafts, unread, conversati
           {!searching && <button ref={searchButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.open')} onClick={() => setSearching(true)}><Icon name="search" /></button>}
         </div>
         {searching && <SessionSearch onClose={() => { refocus.current = true; setSearching(false); }} />}
-        {nav.none.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} />)}
+        {nav.none.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
         <SideLink href="#/" icon="plus" name={t('ui.session.new')} active={at('new')} />
 
         <span className="bt-label bt-sidebar__label">{t('ui.section.library')}</span>

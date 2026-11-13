@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { api, type Approval, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WorkerStatus } from '../../api.ts';
+import { api, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WorkerStatus } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, formatElapsed, formatRelative, startOfDay, useT } from '../../i18n/index.ts';
 import { plainLine } from '../../task-meta.ts';
@@ -20,7 +20,6 @@ import '../styles/product-home.css';
 
 export interface OverviewProps {
   waiting: Waiting;
-  approvals: Approval[];
   conversations: Conversation[];
   drafts: LiveDraft[];
   checklists: ReadonlyMap<string, ChecklistItem[]>;
@@ -189,7 +188,7 @@ export function FinishedItem({ task, now, busy, onRetry }: { task: Task; now: nu
 
 interface Placed extends ProductSection { project: Project }
 
-export function Overview({ waiting, approvals, conversations, drafts, checklists, worker, onWorker, revision, projects, projectsLoaded }: OverviewProps) {
+export function Overview({ waiting, conversations, drafts, checklists, worker, onWorker, revision, projects, projectsLoaded }: OverviewProps) {
   const t = useT();
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
@@ -234,7 +233,7 @@ export function Overview({ waiting, approvals, conversations, drafts, checklists
   }, [worker, drafts, conversations, checklists, data, look.at, projects]);
   const anyRunning = placed.none.running.length > 0 || placed.products.some(p => p.running.length > 0);
   const now = useNow(anyRunning ? 1000 : 30_000);
-  const stats = tiles(waiting, approvals);
+  const stats = tiles(waiting, waiting.pending);
   const line = workerLine(worker, now);
   const sheenAt = placed.products.find(p => p.running.length > 0)?.project.id ?? null;
   const lookText = formatDateTimeSmart(look.at, now);
