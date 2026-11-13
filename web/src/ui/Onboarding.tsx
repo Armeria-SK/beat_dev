@@ -72,6 +72,17 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     return () => { live = false; };
   }, [step, form.provider]);
 
+  useEffect(() => {
+    const onEscape = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const action = escapeAction({ busy, confirming: widen !== null });
+      if (action !== 'close') e.preventDefault();
+      if (action === 'cancelConfirm') setWiden(null);
+    };
+    addEventListener('keydown', onEscape, true);
+    return () => removeEventListener('keydown', onEscape, true);
+  }, [busy, widen]);
+
   const passed = (result !== null && REACHABLE.has(result.status)) || (existing !== null && result === null);
   const ready = canContinue(step, { name, agent, style, passed });
 
@@ -141,12 +152,6 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
   }
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') {
-      const action = escapeAction({ busy, confirming: widen !== null });
-      if (action !== 'close') e.preventDefault();
-      if (action === 'cancelConfirm') setWiden(null);
-      return;
-    }
     if (e.key !== 'Enter' || isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, textarea, .ui-confirm')) return;
