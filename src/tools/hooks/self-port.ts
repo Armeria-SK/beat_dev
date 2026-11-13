@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 export interface SelfServer { port: number; origins: readonly string[] }
 
 const LOOPBACK_NAME = /^(?:localhost|(?:[a-z0-9-]+\.)+localhost|localhost\.localdomain|ip6-localhost|ip6-loopback)$/u;
-const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[0-9a-f:.]+\]|(?:[a-z0-9-]+\.)*localhost(?:\.localdomain)?|ip6-localhost|ip6-loopback|\d{1,3}(?:\.\d{1,3}){3}|0x[0-9a-f]+|\d{8,10})(?::(\d{1,5}))?/giu;
+const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[0-9a-f:.]+\]|[a-z0-9_.-]+)(?::(\d{1,5}))?/giu;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
 function loopbackHost(host: string): boolean {
@@ -14,8 +14,12 @@ function loopbackHost(host: string): boolean {
     return Number.isSafeInteger(value) && (value >>> 24 === 127 || value === 0);
   }
   if (isIP(bare) === 4) return bare.startsWith('127.') || bare === '0.0.0.0';
-  if (isIP(bare) === 6) return /^(?:0{0,4}:){2,7}0{0,4}1?$/u.test(bare) || /^::ffff:127\./u.test(bare) || bare === '::';
+  if (isIP(bare) === 6) return /^(?:0{0,4}:){2,7}0{0,4}1?$/u.test(bare) || /^::ffff:127\./u.test(bare) || /^::ffff:7f[0-9a-f]{2}:/u.test(bare) || bare === '::';
   return false;
+}
+
+function normalHost(host: string): string | undefined {
+  try { return new URL(`http://${host}/`).hostname.replace(/\.+$/u, '').toLowerCase(); } catch { return undefined; }
 }
 
 export function selfPortsOf(server: SelfServer): { ports: Set<number>; hosts: string[] } {
@@ -34,16 +38,18 @@ export function selfPortsOf(server: SelfServer): { ports: Set<number>; hosts: st
 
 export function selfTarget(text: string, server: SelfServer): string | undefined {
   const { ports, hosts } = selfPortsOf(server);
-  const lower = text.toLowerCase();
+  const plain = text.replace(/["'`]/gu, '');
+  const lower = plain.toLowerCase();
   for (const host of hosts) {
-    const at = new RegExp(`(?:^|[^a-z0-9.-])${host.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![a-z0-9-])`, 'u').exec(lower);
+    const at = new RegExp(`(?:^|[^a-z0-9.-])${host.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\.*(?![a-z0-9-])`, 'u').exec(lower);
     if (at) return host;
   }
-  for (const match of text.matchAll(ADDRESS)) {
+  for (const match of plain.matchAll(ADDRESS)) {
     const [whole, scheme, host, port] = match;
-    if (!host || !loopbackHost(host)) continue;
     const number = port !== undefined ? Number(port) : scheme ? DEFAULT_PORT[scheme.toLowerCase()] : undefined;
-    if (number !== undefined && ports.has(number)) return whole;
+    if (number === undefined || !ports.has(number) || !host) continue;
+    const normal = normalHost(host);
+    if (normal !== undefined && loopbackHost(normal)) return whole;
   }
   return undefined;
 }

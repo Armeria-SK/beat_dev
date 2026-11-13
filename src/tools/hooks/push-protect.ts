@@ -26,7 +26,7 @@ export function pushProtectOf(input: PushProtectInput): PushProtect {
     if (st.gitGlobal.length > 0 || st.cwd === null || st.programDynamic) return { unchecked: true };
     const top = input.git(st.cwd, ['rev-parse', '--show-toplevel'])?.trim();
     if (!top) return { unchecked: true };
-    const changed = input.git(top, ['log', '--format=', '--name-only', '-z', '--no-renames', 'HEAD', '--not', '--remotes']);
+    const changed = input.git(top, ['log', '--format=', '--name-only', '-z', '--no-renames', '-m', 'HEAD', '--branches', '--tags', '--not', '--remotes']);
     if (changed === undefined) return { unchecked: true };
     const paths = [...new Set(changed.split(/\0|\r?\n/u).map(name => name.trim()).filter(Boolean))].map(name => ({ path: resolve(top, name), write: true }));
     if (!paths.length) continue;

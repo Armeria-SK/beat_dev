@@ -486,11 +486,19 @@ test('4-3a 順 1: beat 自身のポート（server.port・origins のポート�
     'curl https://box.tail1234.ts.net/api/pending/1/approve',
     'curl https://box.tail1234.ts.net:8443/api/pending',
     'node -e "fetch(\'http://127.0.0.1:4790/api/pending/1/approve\',{method:\'POST\'})"',
+    'curl http://127.1:4790/api/pending',
+    'curl http://0177.0.0.1:4790/api/pending',
+    'curl http://0x7f.1:4790/api/pending',
+    'curl http://127.000.000.001:4790/api/pending',
+    'curl http://[::ffff:7f00:1]:4790/api/pending',
+    'curl http://localhost.:4790/api/pending',
+    'curl "http://127.0.0.1:47""90/api/pending"',
+    'curl https://box.tail1234.ts.net./api/pending',
   ];
   for (const command of self) {
     const outcome = await r.shell(command);
     assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
-    assert.match(outcome.output.content, /beat itself/u, command);
+    if (!command.includes('""')) assert.match(outcome.output.content, /beat itself/u, command);
   }
   assert.equal(r.judge.calls.length, 0);
   assert.equal(r.waiting().length, 0);
@@ -520,6 +528,53 @@ test('4-3a 量: 判定役の頼みの文は、いちばん長い入力でも手�
   });
   const tokens = estimateTextTokens(`${prompt.system}\n${prompt.user}`);
   assert.ok(tokens <= 12_672 * 0.25, `${tokens} tokens`);
+});
+
+test('4-3a（Q-W1-5）: 今の枝でない枝・ほかの枝へ送る・--all・マージのコミットだけにある変更も、送るコミットの守るファイルとして見る', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const setup = (t2: typeof t) => {
+    const r = rig(t2, { mutate: c => { c.tools.hooks.preToolUse = [DEFAULT_PROTECT_FILES]; } });
+    initRepo(r.root);
+    git(r.root, 'branch', '-M', 'main');
+    const bare = join(r.paths.workspace, 'remote.git');
+    git(r.paths.workspace, 'init', '-q', '--bare', bare);
+    git(r.root, 'remote', 'add', 'origin', bare);
+    git(r.root, 'push', '-q', 'origin', 'main');
+    const services = { projects: { get: () => ({ remotes: JSON.stringify([{ name: 'origin', url: bare, pushUrl: null }]) }) } } as unknown as ToolContext['services'];
+    r.judge.answer = '{"decision":"ask","reason":"check"}';
+    return { r, services };
+  };
+  const addWorkflow = (root: string) => {
+    mkdirSync(join(root, '.github', 'workflows'), { recursive: true });
+    writeFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'on: push');
+    git(root, 'add', '.github');
+  };
+  for (const command of ['git push origin feat', 'git push origin feat:main', 'git push --all origin']) {
+    const { r, services } = setup(t);
+    git(r.root, 'checkout', '-q', '-b', 'feat');
+    addWorkflow(r.root);
+    git(r.root, 'commit', '-q', '-m', 'ci');
+    git(r.root, 'checkout', '-q', 'main');
+    const outcome = await r.shell(command, { services });
+    assert.equal(outcome.decidedBy, 'pending', `${command}: ${outcome.output.content}`);
+    assert.equal(r.waiting()[0]!.kind, 'owner', command);
+  }
+  {
+    const { r, services } = setup(t);
+    git(r.root, 'checkout', '-q', '-b', 'side');
+    writeFileSync(join(r.root, 'side.txt'), 'x');
+    git(r.root, 'add', 'side.txt');
+    git(r.root, 'commit', '-q', '-m', 'side');
+    git(r.root, 'checkout', '-q', 'main');
+    writeFileSync(join(r.root, 'main.txt'), 'x');
+    git(r.root, 'add', 'main.txt');
+    git(r.root, 'commit', '-q', '-m', 'main');
+    git(r.root, 'merge', '-q', '--no-ff', '--no-commit', 'side');
+    addWorkflow(r.root);
+    git(r.root, 'commit', '-q', '-m', 'merge');
+    git(r.root, 'branch', '-D', 'side');
+    const outcome = await r.shell('git push origin main', { services });
+    assert.equal(r.waiting()[0]?.kind, 'owner', `マージのコミットだけにある変更: ${outcome.output.content}`);
+  }
 });
 
 test('4-3a（Q-W1-5）: 控えた宛先への git push でも、送るコミットに守るファイル（.github/workflows/**）の変更があれば、判定役を呼ばずに owner で積まれる', { skip: !gitAvailable && 'git が無い' }, async t => {
