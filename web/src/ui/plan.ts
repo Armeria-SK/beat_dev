@@ -26,6 +26,7 @@ export function reviewButton(doc: PlanDoc | null, mode: 'read' | 'edit', busy: b
 }
 
 export function reviewClick(seen: ReviewSeen, hash: string | null): { send: string | null; seen: ReviewSeen } {
+  if (seen.hash !== null && seen.hash !== hash) return { send: null, seen: { hash, changed: true } };
   if (seen.changed || seen.hash !== hash) return { send: null, seen: { hash, changed: false } };
   return { send: seen.hash, seen };
 }

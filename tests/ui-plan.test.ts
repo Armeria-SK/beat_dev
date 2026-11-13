@@ -151,6 +151,7 @@ test('ui/plan: 「読み直して」が出ているあいだの 1 回目の押�
   assert.deepEqual(first, { send: null, seen: { hash: 'h2', changed: false } }, '1 回目は送らない');
   assert.equal(reviewButton(doc(), 'read', false, first.seen.changed), 'on');
   assert.deepEqual(reviewClick(first.seen, 'h2'), { send: 'h2', seen: first.seen }, '2 回目で、読み直した版を送る');
-  assert.deepEqual(reviewClick({ hash: 'h1', changed: false }, 'h2'), { send: null, seen: { hash: 'h2', changed: false } }, '覚えた版と今の版がずれていれば、印が立つ前でも送らない');
+  assert.deepEqual(reviewClick({ hash: 'h1', changed: false }, 'h2'), { send: null, seen: { hash: 'h2', changed: true } }, '覚えた版と今の版がずれていれば（印が立つ 1 描画前の押し）、送らずに「読み直して」を立てる');
+  assert.deepEqual(reviewClick({ hash: null, changed: false }, 'h2'), { send: null, seen: { hash: 'h2', changed: false } }, 'まだ版を覚えていなければ、覚えるだけ');
   assert.deepEqual(reviewClick({ hash: null, changed: false }, null).send, null);
 });
