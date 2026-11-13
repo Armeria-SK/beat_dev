@@ -14,7 +14,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKey } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
-import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, type ModelReach } from './view.ts';
+import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
 type T = ReturnType<typeof useT>;
@@ -348,6 +348,9 @@ export function ModelsPanel() {
       <Group title={t('ui.set.models.roles')}>
         <Row k="roles:conversation" title={t('ui.set.models.conversation')} desc={t('ui.set.models.conversationDesc')}>
           <Select value={roles.conversation} options={modelOptions} label={t('ui.set.models.conversation')} placeholder={t('ui.set.models.auto')} onChange={id => void ctx.commit('roles:conversation', c => setConversation(c, id))} />
+        </Row>
+        <Row k="roles:judge" title={t('ui.set.models.judge')} desc={t('ui.set.models.judgeDesc')}>
+          <Select value={roles.judge} options={[{ value: '', label: t('ui.set.models.judgeSame') }, ...modelOptions]} label={t('ui.set.models.judge')} onChange={id => void ctx.commit('roles:judge', c => setJudge(c, id))} />
         </Row>
         <Row k="roles:fallback" title={t('ui.set.models.fallback')} desc={t('ui.set.models.fallbackDesc')}
           below={<OrderList k="fallback" ids={roles.fallback} label={t('ui.set.models.fallback')} models={models.filter(m => m.id !== roles.conversation)} onChange={ids => void ctx.commit('roles:fallback', c => setFallback(c, ids))} />} />

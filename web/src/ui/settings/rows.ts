@@ -17,8 +17,8 @@ export const GROUP_LABEL: Record<GroupId, PlainKey> = { agent: 'ui.set.group.age
 
 export const CATEGORIES: readonly Category[] = [
   { id: 'models', group: 'agent', icon: 'cpu', label: 'ui.set.cat.models',
-    rows: ['ui.set.models.providers', 'ui.set.models.models', 'ui.set.models.roles', 'ui.set.models.conversation', 'ui.set.models.fallback', 'ui.set.models.background', 'ui.set.models.check', 'ui.set.key.title'],
-    paths: ['providers', 'models', 'routing.chat', 'routing.background'] },
+    rows: ['ui.set.models.providers', 'ui.set.models.models', 'ui.set.models.roles', 'ui.set.models.conversation', 'ui.set.models.judge', 'ui.set.models.fallback', 'ui.set.models.background', 'ui.set.models.check', 'ui.set.key.title'],
+    paths: ['providers', 'models', 'routing.chat', 'routing.judge', 'routing.background'] },
   { id: 'skills', group: 'agent', icon: 'layers', label: 'ui.set.cat.skills',
     rows: ['ui.set.skills.ask', 'ui.set.skills.registered', 'ui.set.skills.tools', 'ui.set.shell.title', 'ui.set.shell.enabled', 'ui.set.shell.kind', 'ui.set.shell.timeout', 'ui.set.shell.allow', 'ui.set.shell.ask', 'ui.set.shell.deny'],
     paths: ['skills.askBeforeRegister', 'tools.policies', 'tools.shell.enabled', 'tools.shell.shell', 'tools.shell.timeoutSec', 'tools.shell.allow', 'tools.shell.ask', 'tools.shell.deny'] },
@@ -56,7 +56,7 @@ export const LATER_HIDDEN: readonly string[] = [
 ];
 
 export const FILE_ONLY: readonly string[] = [
-  'version', 'timezone', 'server.host', 'routing.retriesPerModel', 'routing.judge', 'tools.shell.maxTimeoutSec', 'tools.shell.outputCapBytes',
+  'version', 'timezone', 'server.host', 'routing.retriesPerModel', 'tools.shell.maxTimeoutSec', 'tools.shell.outputCapBytes',
   'tools.shell.envAllow', 'tools.web', 'tools.agent', 'profile.shape', 'profile.motion', 'memory', 'notify', 'mcp.limits', ...LATER_HIDDEN,
 ];
 

@@ -37,12 +37,19 @@ export function keyLine(state: ProviderKeyState | 'failed' | null, unsafe: boole
   return state.source === 'os' ? 'os' : 'set';
 }
 
-export interface Roles { conversation: string | null; fallback: string[]; background: string[] }
+export interface Roles { conversation: string | null; judge: string; fallback: string[]; background: string[] }
 
 export function rolesOf(config: Config): Roles {
   const chat = Array.isArray(config.routing?.chat) ? config.routing.chat as string[] : [];
   const background = Array.isArray(config.routing?.background) ? config.routing.background as string[] : [];
-  return { conversation: chat[0] ?? null, fallback: chat.slice(1), background: [...background] };
+  const judge = Array.isArray(config.routing?.judge) ? config.routing.judge as string[] : [];
+  return { conversation: chat[0] ?? null, judge: judge[0] ?? '', fallback: chat.slice(1), background: [...background] };
+}
+
+export function setJudge(config: Config, id: string): Config {
+  const routing = { ...config.routing };
+  if (id) routing.judge = [id]; else delete routing.judge;
+  return { ...config, routing };
 }
 
 export function setConversation(config: Config, id: string): Config {
