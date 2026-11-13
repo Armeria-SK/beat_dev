@@ -9,7 +9,7 @@ import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { PreCheck, RunKind, ToolDef } from '../tools/types.ts';
 import { identityOf } from '../projects/created.ts';
-import { boundFacts, destinationFacts, fileFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
+import { boundFacts, destinationFacts, fileFacts, pushFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
 export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
 export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
@@ -33,6 +33,8 @@ export interface ParkInput {
   files?: string[] | undefined;
   places?: string[] | undefined;
   created?: string[] | undefined;
+  filesMore?: boolean | undefined;
+  pushes?: Array<{ dir: string; refs: string[] }> | undefined;
   runId: string;
   runKind: RunKind;
   conversationId: string;
@@ -60,9 +62,12 @@ export interface PendingState {
   workspace?: string;
   places?: string[];
   created?: CreatedMark[];
+  filesMore?: true;
+  pushes?: Array<{ dir: string; refs: string[] }>;
+  pushed?: string;
 }
 
-export interface CreatedMark { path: string; id: string }
+export interface CreatedMark { path: string; id: string; inside?: string; more?: true }
 
 export interface PendingParts { body: string | null; cwd: string | null; extra: string | null }
 
@@ -249,7 +254,13 @@ export class PendingStore {
     const targets = (input.targets ?? []).map(t => resolve(input.cwd, t));
     const files = (input.files ?? []).map(f => resolve(input.cwd, f));
     const places = [...new Set((input.places ?? []).map(p => resolve(input.cwd, p)))];
-    const created = (input.created ?? []).flatMap(path => { const id = identityOf(path); return id ? [{ path, id }] : []; });
+    const created = (input.created ?? []).flatMap((path): CreatedMark[] => {
+      const id = identityOf(path);
+      if (!id) return [];
+      const fact = boundFacts([path])[0]!;
+      return [{ path, id, ...(fact.type === 'dir' ? { inside: fact.hash ?? '', ...(fact.more ? { more: true as const } : {}) } : {}) }];
+    });
+    const pushes = input.kind === 'send' ? input.pushes ?? [] : [];
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {
@@ -259,6 +270,8 @@ export class PendingStore {
       ...(input.workspace !== undefined ? { workspace: input.workspace } : {}),
       ...(places.length ? { places } : {}),
       ...(created.length ? { created } : {}),
+      ...(input.filesMore ? { filesMore: true as const } : {}),
+      ...(pushes.length ? { pushes, pushed: await pushFacts(pushes, this.#o.dataDir) } : {}),
       ...(input.check ? { recheck: recheckOf(input.check, toolMask) } : {}),
       ...(input.kind === 'delete' ? { snapshot: await takeSnapshot(input.cwd, targets, this.#o.dataDir) } : {}),
       ...(preview?.length ? { preview: preview.map(p => ({ ...p, text: redactSecrets(toolMask(p.text)) })) } : {}),

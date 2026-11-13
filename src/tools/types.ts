@@ -75,6 +75,8 @@ export interface PreCheck {
   cwd?: string;
   places?: string[];
   created?: string[];
+  readPaths?: string[];
+  pushes?: Array<{ dir: string; refs: string[] }>;
 }
 
 // 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果

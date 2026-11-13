@@ -18,7 +18,7 @@ import type { PreCheck, RunKind, ToolContext, ToolDef, ToolOutput } from '../too
 import { outboundOfCall } from '../tools/hooks/outbound.ts';
 import { hookPaths } from '../tools/pipeline.ts';
 import { identityOf } from '../projects/created.ts';
-import { boundChanged, boundFacts, compareSnapshot, destinationFacts, takeSnapshot, type Change } from './snapshot.ts';
+import { boundChanged, boundFacts, compareSnapshot, destinationFacts, pushFacts, takeSnapshot, type Change } from './snapshot.ts';
 import { newChecks, parkedOutbound, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
 
 export interface ReplayDeps {
@@ -112,7 +112,14 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     const workspace = state.workspace ?? row.cwd;
     if (placePath(resolve(workspace), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: workspace }));
     if (!statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) return end('failed', pendingText('en', 'cwd_missing', { path: workspace }));
-    const created = new Map((state.created ?? []).map(c => [c.path, c.id]));
+    const created = new Map((state.created ?? []).map(c => [c.path, c]));
+    const stillCreated = (path: string): boolean => {
+      const mark = created.get(path);
+      if (!mark || identityOf(path) !== mark.id) return false;
+      if (mark.inside === undefined) return true;
+      const now = boundFacts([path])[0]!;
+      return mark.more !== true && now.more !== true && now.hash === mark.inside;
+    };
     const timeout = AbortSignal.timeout((config.tools.shell.maxTimeoutSec + EXTRA_SECONDS) * 1000);
     const signal = deps.signal ? AbortSignal.any([timeout, deps.signal]) : timeout;
     const runId = randomUUID();
@@ -127,7 +134,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       ...(project ? { project } : {}),
       taint: row.tainted === 1 ? { tainted: true, sources: [pendingText('en', 'taint_parked')] } : { tainted: false, sources: [] },
       conversationTainted,
-      isCreated: path => created.has(path) && identityOf(path) === created.get(path),
+      isCreated: stillCreated,
       ...(row.task_id ? { task: { id: row.task_id, control: { outcome: 'none' as const } } } : {}),
       ...(parent ? { parent } : {}),
       log: deps.log ?? (() => undefined),
@@ -150,6 +157,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const before = state.snapshot ?? { git: null, paths: [] };
       changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
     }
+    const pushedNow = state.pushes?.length ? await pushFacts(state.pushes, deps.paths.data) : undefined;
     const again = await recheck();
     if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
     if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(row.cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
@@ -175,6 +183,8 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const now = destinationFacts(row.cwd, state.places ?? []);
       if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
     }
+    if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', 'changed_commits'));
+    if (state.filesMore) return end('stale', pendingText('en', 'files_unbound'));
     if (state.sent?.length) {
       const now = boundFacts(state.sent.map(f => f.path));
       const moved = state.sent.flatMap((was, i) => {

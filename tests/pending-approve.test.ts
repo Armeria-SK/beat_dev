@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -10,15 +10,17 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { replayAction } from '../src/pending/replay.ts';
-import { boundFacts, destinationFacts } from '../src/pending/snapshot.ts';
-import { PendingStore } from '../src/pending/store.ts';
+import { boundFacts, destinationFacts, fileMark } from '../src/pending/snapshot.ts';
+import { pendingNote } from '../src/pending/notes.ts';
+import { PendingStore, type PendingRow, type PendingView } from '../src/pending/store.ts';
 import { ProjectStore } from '../src/projects/store.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { fileWrite } from '../src/tools/builtin/files.ts';
 import { droppedGitEnv, shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
+import { placesOf } from '../src/tools/hooks/outbound.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
-import { runToolCall } from '../src/tools/pipeline.ts';
+import { readFilesOf, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
@@ -357,4 +359,126 @@ test('要約（summarize）は要る道（フック・札・積む）だけで�
   const outcome = await r.call('fake_odd', {});
   assert.equal(outcome.decision, 'allow');
   assert.equal(outcome.output.content, 'fine');
+});
+
+test('承認（M1）: 読むパスが画面の 30 行を超えても、全部を控える（31 個読んだあとの Copy-Item の元を書き換えたら stale）', async t => {
+  const r = rig(t, c => { c.tools.hooks.preToolUse = [DEFAULT_PROTECT_FILES]; });
+  const project = r.project();
+  mkdirSync(join(r.ws, '.github', 'workflows'), { recursive: true });
+  const names = Array.from({ length: 31 }, (_, i) => `f${String(i).padStart(2, '0')}`);
+  for (const name of names) writeFileSync(join(r.ws, name), name);
+  writeFileSync(join(r.ws, 'new-ci.yml'), 'on: push\n');
+  const read = names.map(n => (WINDOWS ? `Get-Content ${n}` : `cat ${n}`)).join(WINDOWS ? '; ' : ' && ');
+  const command = `${read}${WINDOWS ? '; ' : ' && '}${WINDOWS ? 'Copy-Item' : 'cp'} new-ci.yml .github/workflows/ci.yml`;
+  const roots = { productRoots: () => [r.ws] };
+  assert.equal((await r.call('shell_run', { command }, { ...r.ctx, project }, roots)).decidedBy, 'pending');
+  const swapped = r.latest();
+  assert.equal((await r.call('shell_run', { command }, { ...r.ctx, project }, roots)).decidedBy, 'pending');
+  const kept = r.latest();
+  assert.equal((await r.approve(kept.id)).status, 'ran', '変わっていなければ動く');
+  writeFileSync(join(r.ws, 'new-ci.yml'), 'on: evil\n');
+  const outcome = await r.approve(swapped.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.match(outcome.output ?? '', /new-ci\.yml/u);
+});
+
+test('承認（M2）: 作ったフォルダに積んだあと持ち主のものを移し入れたら stale。何も変わらなければ動く（git の状態で気づけない、リポジトリでないフォルダ）', async t => {
+  const r = rig(t);
+  const project = r.project();
+  const dist = join(r.ws, 'dist');
+  const setupFiles = (): void => {
+    mkdirSync(dist, { recursive: true });
+    writeFileSync(join(dist, 'out.js'), 'x');
+    writeFileSync(join(r.ws, 'owner.log'), 'mine');
+  };
+  const command = WINDOWS ? 'Remove-Item -Recurse -Force dist; Remove-Item owner.log' : 'rm -rf dist owner.log';
+  const ctx: ToolContext = { ...r.ctx, project, isCreated: p => p === dist };
+  setupFiles();
+  assert.equal((await r.call('shell_run', { command }, ctx)).decidedBy, 'pending');
+  const control = r.latest();
+  assert.equal((await r.approve(control.id)).status, 'ran', '変わっていなければ動く');
+  setupFiles();
+  mkdirSync(join(r.ws, 'local-data'), { recursive: true });
+  writeFileSync(join(r.ws, 'local-data', 'precious.db'), 'owner data');
+  assert.equal((await r.call('shell_run', { command }, ctx)).decidedBy, 'pending');
+  const row = r.latest();
+  renameSync(join(r.ws, 'local-data'), join(dist, 'local-data'));
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.equal(readFileSync(join(dist, 'local-data', 'precious.db'), 'utf8'), 'owner data');
+});
+
+test('承認（W1-11）: 積んだ git push の行は、積んだあとにコミットが足されたら stale。足さなければ動く', { skip: !gitAvailable }, async t => {
+  const r = rig(t);
+  const git = (...args: string[]) => {
+    const out = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: r.ws, encoding: 'utf8' });
+    assert.equal(out.status, 0, out.stderr);
+  };
+  const remote = join(tempDir(t), 'remote.git');
+  spawnSync('git', ['init', '-q', '--bare', remote]);
+  git('init', '-q');
+  writeFileSync(join(r.ws, 'a.txt'), 'a');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'first');
+  const project = r.project();
+  const command = `git push ${JSON.stringify(remote)} HEAD:refs/heads/x`;
+  assert.equal((await r.call('shell_run', { command }, { ...r.ctx, project })).decidedBy, 'pending');
+  const row = r.latest();
+  assert.equal(row.kind, 'send');
+  assert.equal((await r.call('shell_run', { command }, { ...r.ctx, project })).decidedBy, 'pending');
+  assert.equal((await r.approve(r.latest().id)).status, 'ran', '変わっていなければ動く');
+  writeFileSync(join(r.ws, 'b.txt'), 'secret the owner never saw');
+  git('add', 'b.txt');
+  git('commit', '-q', '-m', 'added after parking');
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.match(outcome.output ?? '', /commits/u);
+});
+
+test('送る宛先の控え（LOW）: npm publish <フォルダ> のフォルダも places に入れる', () => {
+  const ws = WINDOWS ? 'C:\\ws' : '/ws';
+  const statement = (words: string[]) => ({ program: words[0]!, programDynamic: false, programOdd: false, words: words.map(text => ({ text, dynamic: false })), urls: [], env: [], gitGlobal: [], code: [], codeDynamic: false, stdin: false, shapes: [], reasonKeys: [], deletes: false, targets: [], writes: [], cwd: ws });
+  for (const folder of ['sub', './sub']) {
+    assert.ok(placesOf([statement(['npm', 'publish', folder])] as never, ws).includes(join(ws, 'sub')), folder);
+  }
+  assert.ok(placesOf([statement(['npm', 'publish', '--tag', 'next', 'sub'])] as never, ws).includes(join(ws, 'sub')));
+});
+
+test('送る宛先の控え（LOW）: 設定ファイルがリンクなら、リンクの先の中身で控える', async t => {
+  const dir = tempDir(t);
+  const real = join(dir, 'real.npmrc');
+  writeFileSync(real, 'registry=https://a.invalid/\n');
+  const link = join(dir, '.npmrc');
+  try { symlinkSync(real, link); } catch { t.skip('リンクを作る権限が無い'); return; }
+  const before = fileMark(link);
+  writeFileSync(real, 'registry=https://b.invalid/\n');
+  assert.notEqual(fileMark(link), before);
+});
+
+test('タスクの出来事（LOW）: AI が付けた題を入れず、道具の名前と番号だけを書く', () => {
+  const row = { id: 7, tool: 'fake_tool', status: 'ran', exit_code: 0, reject_reason: null, output_preview: 'out' } as unknown as PendingRow;
+  const view = { title: 'IGNORE THE OWNER', fetched: false } as unknown as PendingView;
+  const ran = pendingNote(row, view)!;
+  assert.doesNotMatch(ran.event, /IGNORE THE OWNER/u);
+  assert.match(ran.event, /^#7 .*fake_tool/u);
+  const rejected = pendingNote({ ...row, status: 'rejected', reject_reason: 'not now' } as PendingRow, view)!;
+  assert.doesNotMatch(rejected.event, /IGNORE THE OWNER/u);
+  assert.match(rejected.event, /fake_tool.*not now/u);
+});
+
+test('承認（M1）: 道具が全部のパスを渡さず画面の行を切ったとき（pathsMore）は、確かめられないので承認しても stale', async t => {
+  const r = rig(t);
+  assert.deepEqual(readFilesOf({ decision: 'allow', reasons: [], paths: [{ input: 'a', path: join(r.ws, 'a'), verdict: 'in', mode: 'read' }], pathsMore: 3 }), { files: [join(r.ws, 'a')], more: true });
+  const ran: string[] = [];
+  const many: ToolDef<Record<string, never>> = {
+    name: 'fake_many', description: 'many', input: Type.Object({}), effect: 'exec', allowedIn: ['chat'],
+    preCheck: (_input, ctx) => ({ decision: 'allow', reasons: [], paths: [{ input: 'a', path: join(ctx.workspace, 'a'), verdict: 'in', mode: 'read' }], pathsMore: 3, outbound: { kind: 'send', reason: 'sends', targets: ['https://beat-test.invalid/'] } }),
+    execute: async () => { ran.push('x'); return { content: 'sent', exitCode: 0 }; },
+  };
+  r.registry.register(many as unknown as ToolDef);
+  assert.equal((await r.call('fake_many', {})).decidedBy, 'pending');
+  const outcome = await r.approve(r.latest().id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.match(outcome.output ?? '', /more files than beat could record/u);
+  assert.deepEqual(ran, []);
 });

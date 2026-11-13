@@ -11,7 +11,7 @@ import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals
 import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
-import { outboundOf, placesOf, type Outbound } from '../hooks/outbound.ts';
+import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv } from '../hooks/outbound-env.ts';
 import { outboundText } from '../../shared/messages/outbound.ts';
 import type { Remote } from '../../projects/remotes.ts';
@@ -132,7 +132,9 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const created = new Set<string>();
   const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, cwd.cwd, ctx, childEnv, gitExe, language, created);
   const places = placesOf(verdict.statements, cwd.cwd);
-  const effects = { sends: verdict.sends, removes: verdict.removes, writes: verdict.writes, cwd: cwd.cwd, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
+  const pushes = pushesOf(verdict.statements, cwd.cwd);
+  const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];
+  const effects = { sends: verdict.sends, removes: verdict.removes, writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));

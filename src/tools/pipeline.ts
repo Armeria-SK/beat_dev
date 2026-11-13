@@ -101,9 +101,10 @@ export function safeProductRoots(deps: Pick<PipelineDeps, 'productRoots'>): stri
   try { return deps.productRoots?.() ?? []; } catch { return []; }
 }
 
-export function readFilesOf(check: PreCheck | undefined): string[] {
+export function readFilesOf(check: PreCheck | undefined): { files: string[]; more: boolean } {
   const writes = new Set(check?.writes ?? []);
-  return [...new Set((check?.paths ?? []).flatMap(p => (p.path && !writes.has(p.path) ? [p.path] : [])))];
+  const all = check?.readPaths ?? (check?.paths ?? []).flatMap(p => (p.path ? [p.path] : []));
+  return { files: [...new Set(all.filter(p => !writes.has(p)))], more: check?.readPaths === undefined && (check?.pathsMore ?? 0) > 0 };
 }
 
 interface ParkRequest {
@@ -113,12 +114,13 @@ interface ParkRequest {
 
 async function parkCall(r: ParkRequest): Promise<number> {
   const { ctx, first, outbound } = r;
+  const read = readFilesOf(first);
   const sendOrDelete = outbound?.kind === 'send' || outbound?.kind === 'delete' ? outbound : undefined;
   const parked = await r.pending.park({
     tool: r.tool.name, input: r.args, cwd: r.cwd, workspace: ctx.workspace, kind: r.kind, reason: r.reason, checks: r.checks, check: first,
     ...(sendOrDelete ? { outbound: { kind: sendOrDelete.kind, reason: sendOrDelete.reason, targets: sendOrDelete.targets } } : {}),
     ...(sendOrDelete?.kind === 'delete' ? { targets: sendOrDelete.targets } : {}),
-    files: readFilesOf(first), places: first?.places, created: first?.created,
+    files: read.files, filesMore: read.more, places: first?.places, created: first?.created, pushes: first?.pushes,
     runId: ctx.runId, runKind: ctx.kind, conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId ?? null, projectId: ctx.project?.id ?? null, tainted: r.tainted,
   });
   return parked.id;

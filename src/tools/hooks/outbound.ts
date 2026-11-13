@@ -454,6 +454,44 @@ export function placesOf(statements: readonly StatementFacts[], cwd: string): st
       const place = resolve(base, value.text);
       out.add(flag === '--manifest-path' ? dirname(place) : place);
     }
+    if (PUBLISHERS.has(st.program) && st.words[1]?.text === 'publish') {
+      for (const word of st.words.slice(2)) if (!word.dynamic && word.text && !word.text.startsWith('-')) out.add(resolve(base, word.text));
+    }
   }
   return [...out];
+}
+
+const PUBLISHERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const PUSH_ALL = ['--all', '--branches', '--tags', '--mirror', '--follow-tags'];
+const PUSH_VALUE = new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec', '--signed', '--force-with-lease']);
+
+export interface PushRefs { dir: string; refs: string[] }
+
+export function pushesOf(statements: readonly StatementFacts[], cwd: string): PushRefs[] {
+  const out: PushRefs[] = [];
+  for (const st of flatten(statements)) {
+    if (st.program !== 'git') continue;
+    let dir = st.cwd ?? cwd;
+    const g = st.gitGlobal;
+    for (let i = 0; i < g.length; i++) if (g[i] === '-C' && g[i + 1] !== undefined) dir = resolve(dir, g[++i]!);
+    const subAt = g.length + 1;
+    if (st.words[subAt]?.text !== 'push') continue;
+    const args = st.words.slice(subAt + 1).map(w => w.text);
+    const refs = new Set<string>(['HEAD']);
+    if (args.some(a => PUSH_ALL.some(n => a === n || longOption(a, n)))) refs.add('--all');
+    const positionals: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!;
+      if (PUSH_VALUE.has(a)) { i++; continue; }
+      if (!a.startsWith('-')) positionals.push(a);
+    }
+    for (let i = 1; i < positionals.length; i++) {
+      const spec = positionals[i]!;
+      if (spec === 'tag' && positionals[i + 1] !== undefined) { refs.add(`refs/tags/${positionals[++i]}`); continue; }
+      const source = spec.replace(/^\+/u, '').split(':')[0]!;
+      if (source) refs.add(source);
+    }
+    out.push({ dir, refs: [...refs] });
+  }
+  return out;
 }

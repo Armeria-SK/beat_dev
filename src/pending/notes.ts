@@ -16,8 +16,8 @@ export function pendingNote(row: PendingRow, view: PendingView): PendingNote | u
   const tool = row.tool.replace(CONTROL, ' ').slice(0, TITLE_MAX);
   const code = row.exit_code === null ? '-' : String(row.exit_code);
   const event = head === 'rejected' && row.reject_reason
-    ? pendingText('en', 'event_rejected_reason', { id: row.id, title, code, reason: row.reject_reason })
-    : pendingText('en', `event_${head}`, { id: row.id, title, code });
+    ? pendingText('en', 'event_rejected_reason', { id: row.id, tool, code, reason: row.reject_reason })
+    : pendingText('en', `event_${head}`, { id: row.id, tool, code });
   const lines = [pendingText('en', `note_${head}`, { id: row.id, tool, code })];
   if (head === 'rejected' && row.reject_reason) lines.push(pendingText('en', 'note_reason', { reason: row.reject_reason }));
   const output = head === 'rejected' ? null : row.output_preview;

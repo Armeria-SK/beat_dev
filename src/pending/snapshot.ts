@@ -82,11 +82,16 @@ const DESTINATION_FILES = [
 const DESTINATION_DEPTH = 40;
 const DESTINATION_MAX_BYTES = 1_048_576;
 
-function fileMark(path: string): string {
+export function fileMark(path: string): string {
+  let own: Stats;
+  try { own = lstatSync(path); } catch { return `${path}\0none`; }
   let st: Stats;
-  try { st = lstatSync(path); } catch { return `${path}\0none`; }
-  if (!st.isFile() || st.size > DESTINATION_MAX_BYTES) return `${path}\0${st.isFile() ? 'big' : 'other'}\0${st.size}\0${st.mtimeMs}`;
-  try { return `${path}\0${createHash('sha256').update(readFileSync(path)).digest('hex')}`; } catch { return `${path}\0unreadable`; }
+  try { st = statSync(path); } catch { return `${path}\0broken-link\0${own.mtimeMs}`; }
+  let real: string;
+  try { real = realpathSync.native(path); } catch { real = path; }
+  const head = `${path}\0${own.isSymbolicLink() ? `link\0${real}` : 'plain'}`;
+  if (!st.isFile() || st.size > DESTINATION_MAX_BYTES) return `${head}\0${st.isFile() ? 'big' : 'other'}\0${st.size}\0${st.mtimeMs}`;
+  try { return `${head}\0${createHash('sha256').update(readFileSync(path)).digest('hex')}`; } catch { return `${head}\0unreadable`; }
 }
 
 export function destinationFacts(cwd: string, places: readonly string[] = []): string {
@@ -168,27 +173,50 @@ export function fileFacts(paths: readonly string[]): PathFact[] {
   });
 }
 
-async function gitFact(cwd: string, dataDir: string): Promise<GitFact | null> {
+type GitRun = (args: string[]) => Promise<string | null>;
+
+async function withGit<T>(cwd: string, dataDir: string, missing: T, unavailable: T, work: (git: GitRun) => Promise<T>): Promise<T> {
   const repo = inspectRepo(cwd);
-  if (!repo.found) return null;
-  const unavailable: GitFact = { head: UNAVAILABLE, branch: UNAVAILABLE, status: UNAVAILABLE };
+  if (!repo.found) return missing;
   if (repo.unreadable || !repo.configOk) return unavailable;
   const base = scrubEnv();
   const gitExe = findExecutable('git', base, cwd);
   if (!gitExe || isInside(cwd, gitExe) || !gitSupportsConfigOverride(gitExe)) return unavailable;
   const prepared = prepareGitRun({ dataDir, env: base, gitExe });
-  const git = async (args: string[]): Promise<string | null> => {
+  const git: GitRun = async args => {
     try {
       const { stdout } = await run(gitExe, ['--no-optional-locks', ...args], { cwd, env: { ...base, ...prepared.env }, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
       return stdout;
     } catch { return null; }
   };
-  try {
+  try { return await work(git); } finally { prepared.cleanup(); }
+}
+
+async function gitFact(cwd: string, dataDir: string): Promise<GitFact | null> {
+  return withGit<GitFact | null>(cwd, dataDir, null, { head: UNAVAILABLE, branch: UNAVAILABLE, status: UNAVAILABLE }, async git => {
     const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
     const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
     const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all']);
     return { head, branch, status: status === null ? UNAVAILABLE : createHash('sha256').update(status).digest('hex') };
-  } finally { prepared.cleanup(); }
+  });
+}
+
+export async function pushFacts(pushes: ReadonlyArray<{ dir: string; refs: readonly string[] }>, dataDir: string): Promise<string> {
+  const lines: string[] = [];
+  for (const push of pushes) {
+    const facts = await withGit<string[]>(push.dir, dataDir, [`${push.dir}\0no-repo`], [`${push.dir}\0${UNAVAILABLE}\0${Date.now()}\0${Math.random()}`], async git => {
+      const out: string[] = [];
+      for (const ref of push.refs) {
+        const value = ref === '--all'
+          ? createHash('sha256').update((await git(['for-each-ref', '--format=%(objectname) %(refname)'])) ?? `${UNAVAILABLE}${Math.random()}`).digest('hex')
+          : (await git(['rev-parse', '--verify', '-q', '--end-of-options', `${ref}^{commit}`]))?.trim() || NO_COMMIT;
+        out.push(`${push.dir}\0${ref}\0${value}`);
+      }
+      return out;
+    });
+    lines.push(...facts);
+  }
+  return createHash('sha256').update(lines.join('\n')).digest('hex');
 }
 
 export async function takeSnapshot(cwd: string, targets: readonly string[], dataDir: string): Promise<Snapshot> {
