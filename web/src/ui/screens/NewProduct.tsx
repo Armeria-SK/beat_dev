@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, type FolderEntry, type FolderList, type Project } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { getLanguage, useT } from '../../i18n/index.ts';
+import { isComposing } from '../../keys.ts';
 import { serverText } from '../../server-text.ts';
 import { entryReason, nameFor, newProjectInput, noteKeys, upTarget } from '../folder-pick.ts';
 import { latestOnly } from '../latest.ts';
@@ -132,7 +133,7 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
           <div className="ui-np__pathrow">
             <input id="ui-np-root" className="bt-field bt-field--mono" type="text" value={root} spellCheck={false} autoComplete="off" placeholder={t('ui.np.folderField')}
               onChange={e => { setRoot(e.target.value); setError(''); }}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); if (root.trim()) void open(root.trim()); } }} />
+              onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); if (root.trim()) void open(root.trim()); } }} />
             <Button small disabled={!root.trim()} onClick={() => void open(root.trim())}>{t('ui.np.open')}</Button>
           </div>
         </div>

@@ -3,6 +3,7 @@ import { PERMISSION_MODES, type PermissionMode } from '../../../src/shared/permi
 import { api, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
 import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
+import { isComposing } from '../keys.ts';
 import {
   ATTACH_ACCEPT, attachLeftOut, attachRoom, bareCommand, composerDrafts, composerView, depthOptions, enterAction, escStops, MAX_ATTACHMENTS, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER,
   queuedLine, queueRow, slashAvailable, slashItems, toastLift,
@@ -167,7 +168,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    const composing = e.nativeEvent.isComposing || e.keyCode === 229;
+    const composing = isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode });
     if (composing) return;
     if (commands.length > 0) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex((active + 1) % commands.length); return; }

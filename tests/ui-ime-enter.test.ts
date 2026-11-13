@@ -20,7 +20,7 @@ function unguardedEnter(text: string): number[] {
     if (!/key [!=]== 'Enter'/u.test(line)) return;
     if (/ctrlKey|metaKey|key === ' '/u.test(line)) return;
     const near = lines.slice(Math.max(0, index - 5), index + 1).join('\n');
-    if (!/composing/iu.test(near)) out.push(index + 1);
+    if (!/isComposing\(/u.test(near)) out.push(index + 1);
   });
   return out;
 }
@@ -35,4 +35,5 @@ test('ui: 変換中の見張りは、確かめの無い Enter を見つけ、Ctr
   assert.deepEqual(unguardedEnter("onKeyDown={e => { if (e.key === 'Enter' && !isComposing(e)) save(); }}"), []);
   assert.deepEqual(unguardedEnter("if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save();"), []);
   assert.deepEqual(unguardedEnter("if (e.key === 'Enter' || e.key === ' ') toggle();"), []);
+  assert.deepEqual(unguardedEnter("onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) save(); }}"), [1]);
 });
