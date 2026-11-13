@@ -120,10 +120,10 @@ test('会話を消すと、その会話の行は数と状態だけ残し、決�
     const text = await (await s.api(`/api/pending?status=${status}`)).text();
     assert.ok(!text.includes(marker), `${status} の一覧に中身が出ない`);
   }
-  const rows = s.app.db.prepare('SELECT id, status, kind, input, shown FROM pending_actions ORDER BY id').all().map(r => ({ ...r }));
+  const rows = s.app.db.prepare('SELECT id, status, kind, input, shown, cwd FROM pending_actions ORDER BY id').all().map(r => ({ ...r }));
   assert.deepEqual(rows, [
-    { id: waiting.id, status: 'cancelled', kind: 'send', input: '', shown: '' },
-    { id: decided.id, status: 'rejected', kind: 'send', input: '', shown: '' },
+    { id: waiting.id, status: 'cancelled', kind: 'send', input: '', shown: '', cwd: null },
+    { id: decided.id, status: 'rejected', kind: 'send', input: '', shown: '', cwd: null },
   ]);
 });
 

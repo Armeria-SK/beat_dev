@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../../config/schema.ts';
@@ -67,6 +67,13 @@ function peek(file: string, language: Language): Peeked {
   return { preview: { path: file, text: redactSecrets(content.slice(0, PREVIEW_CHARS)), truncated: content.length > PREVIEW_CHARS }, fingerprint, content };
 }
 
+function hookFingerprints(dir: string | null | undefined, language: Language): string[] {
+  if (!dir) return [];
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return [`${dir}\0unreadable`]; }
+  return names.filter(name => !name.endsWith('.sample')).sort().map(name => peek(join(dir, name), language).fingerprint);
+}
+
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
   if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')], sends: true, removes: true };
@@ -97,7 +104,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   return {
     decision: verdict.decision, reasons, details, paths, pathsMore, onceOnly: true, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
-    preview: peeked.map(p => p.preview), bind: sha256(peeked.map(p => p.fingerprint).join('\n')),
+    preview: peeked.map(p => p.preview), bind: sha256([...peeked.map(p => p.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };
 }
 

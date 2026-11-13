@@ -172,6 +172,7 @@ export interface ToolDef<I = any> {
   submits?: true;
   planOk?: true;
   replayable?: false;
+  redact?: (text: string) => string;
   projectOnly?: true;
   acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };

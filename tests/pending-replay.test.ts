@@ -29,13 +29,13 @@ import { tempDir, testConfig } from './helpers.ts';
 
 type Seen = { home?: string | undefined; parent?: ToolContext['parent']; task?: string | undefined; tainted: boolean; conversationTainted: boolean };
 
-function setup(t: { after: (fn: () => void) => void }, options: { conversationGone?: boolean; conversationTainted?: boolean; extraRoot?: boolean } = {}) {
+function setup(t: { after: (fn: () => void) => void }, options: { conversationGone?: boolean; conversationTainted?: boolean; extraRoot?: boolean; extraWrite?: boolean } = {}) {
   const dir = tempDir(t);
   const paths = resolvePaths(dir);
   mkdirSync(paths.workspace, { recursive: true });
   mkdirSync(join(paths.data, 'extra'), { recursive: true });
   const raw = testConfig();
-  raw.tools.roots = [{ path: 'workspace', mode: 'write' }, ...(options.extraRoot ? [{ path: 'extra', mode: 'read' as const }] : [])];
+  raw.tools.roots = [{ path: 'workspace', mode: 'write' }, ...(options.extraRoot ? [{ path: 'extra', mode: options.extraWrite ? 'write' as const : 'read' as const }] : [])];
   let config: AppConfig = parseConfig(raw);
   const db = openDatabase(':memory:', MIGRATIONS);
   t.after(() => db.close());
@@ -69,7 +69,17 @@ function setup(t: { after: (fn: () => void) => void }, options: { conversationGo
     preCheck: () => ({ decision: 'ask', reasons: ['sends'], askKinds: ['egress'] }),
     execute: async input => ({ content: `sent ${input.to}`, exitCode: 0 }),
   };
-  const registry = new ToolRegistry().register(counter).register(remover).register(probe).register(fetcher).register(sender)
+  const fullOutput = join(paths.data, 'tool_outputs', 'shell-test.log');
+  const erasing: ToolDef<Record<string, never>> = {
+    name: 'fake_full', description: 'full', input: Type.Object({}), effect: 'exec', allowedIn: ['chat', 'task'],
+    execute: async () => {
+      mkdirSync(join(paths.data, 'tool_outputs'), { recursive: true });
+      writeFileSync(fullOutput, 'long output of the erased conversation');
+      live.delete('conv-1');
+      return { content: 'tail', fullRef: fullOutput, exitCode: 0 };
+    },
+  };
+  const registry = new ToolRegistry().register(counter).register(remover).register(probe).register(fetcher).register(sender).register(erasing)
     .register(fileRead).register(shellRun).register(taskCreate).register(planWrite).register(BROWSER_TOOLS[3]);
   const store = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const tasks = new TaskStore(db);
@@ -92,7 +102,7 @@ function setup(t: { after: (fn: () => void) => void }, options: { conversationGo
     runId: 'run-1', conversationId: 'conv-1', kind: 'chat', signal: new AbortController().signal, config, paths,
     policy: buildPolicy(config, paths), workspace: paths.workspace, taint: { tainted: false, sources: [] }, log: () => undefined, ...over,
   });
-  return { dir, paths, db, store, deps, park, approve, ran, seen, live, tasks, projects, plans, ctxFor, setConfig: (next: AppConfig) => { config = next; }, config: () => config };
+  return { dir, paths, db, store, deps, park, approve, ran, seen, live, fullOutput, tasks, projects, plans, ctxFor, setConfig: (next: AppConfig) => { config = next; }, config: () => config };
 }
 
 test('Approve で 1 回だけ動く: tool_calls に owner-pending の行、結果の末尾と終了コードが行に入る', async t => {
@@ -219,7 +229,7 @@ test('道具を Block にした・ブラウザを切った・入力が道具に�
   s.setConfig(next);
   assert.equal((await s.approve(blocked.id)).status, 'failed');
   assert.match(s.store.view(blocked.id)!.output_preview ?? '', /Block/u);
-  const browser = await s.park({ tool: 'browser_close', input: {} });
+  const browser = await s.park({ tool: 'browser_close', input: {}, check: { decision: 'allow', reasons: [] } });
   assert.equal((await s.approve(browser.id)).status, 'failed');
   assert.match(s.store.view(browser.id)!.output_preview ?? '', /browser is turned off/u);
   const bad = await s.park({ tool: 'fake_probe', input: {} });
@@ -422,4 +432,62 @@ test('スクリプトを動かす行: 書き換えていなければ動き、行
   assert.equal(after.exit_code, 0);
   assert.match(after.output_preview ?? '', /ran-from-pending/u);
   unlinkSync(script);
+});
+
+test('持ち主のフックが動いている間にスクリプトを書き換えた → 動かず stale（確かめはフックのあと、実行の直前）', async t => {
+  const s = setup(t);
+  const outside = join(s.dir, 'elsewhere');
+  mkdirSync(outside);
+  const script = join(outside, 'job.js');
+  writeFileSync(script, "console.log('APPROVED VERSION')");
+  const input = { command: `node "${script}"` };
+  const check = shellPreCheck(input, s.ctxFor());
+  const row = await s.park({ tool: 'shell_run', input, check });
+  const swap = `require('fs').writeFileSync(${JSON.stringify(script)}, "console.log('SWAPPED VERSION')"); setTimeout(() => {}, 300);`;
+  const next = structuredClone(s.config());
+  next.tools.hooks.preToolUse = [{ matcher: 'shell_run', command: [process.execPath, '-e', swap], timeoutMs: 10_000, onError: 'deny' }];
+  s.setConfig(next);
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+  assert.doesNotMatch(s.store.view(row.id)!.output_preview ?? '', /SWAPPED VERSION/u);
+});
+
+test('git のフックの中身を積んだあとに書き換えた → stale（フックの指紋が bind に入る）', async t => {
+  const s = setup(t);
+  const root = repo(s);
+  const hook = join(root, '.git', 'hooks', 'pre-commit');
+  writeFileSync(hook, '#!/bin/sh\necho approved\n');
+  const input = { command: 'git commit --allow-empty -m next', cwd: root };
+  const check = shellPreCheck(input, s.ctxFor());
+  assert.ok(check.bind, '前提: フックのあるリポジトリの git は指紋を付ける');
+  const row = await s.park({ tool: 'shell_run', input, check, cwd: root });
+  writeFileSync(hook, '#!/bin/sh\necho swapped > swapped.txt\n');
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+  assert.ok(!existsSync(join(root, 'swapped.txt')));
+});
+
+test('動いている間に会話を消した → 長い出力の全文ファイルも消す', async t => {
+  const s = setup(t);
+  const row = await s.park({ tool: 'fake_full', input: {} });
+  assert.equal((await s.approve(row.id)).status, 'ran');
+  assert.ok(!existsSync(s.fullOutput), '全文ファイルが残らない');
+  assert.equal(s.store.view(row.id)!.output_preview, null);
+});
+
+test('読む先の親フォルダが、積んだあとに別の許可フォルダへのリンクに替わった → stale（照らしに実際のパスが入る）', async t => {
+  const s = setup(t, { extraRoot: true, extraWrite: true });
+  const sub = join(s.paths.workspace, 'sub');
+  mkdirSync(sub);
+  writeFileSync(join(sub, 'doc.md'), 'mine');
+  writeFileSync(join(s.paths.data, 'extra', 'doc.md'), 'other');
+  const input = { command: `cat "${join(sub, 'doc.md')}"` };
+  const check = shellPreCheck(input, s.ctxFor());
+  assert.equal(check.decision, 'allow', '前提: どちらの場所でも許可フォルダの中');
+  const row = await s.park({ tool: 'shell_run', input, check });
+  renameSync(sub, join(s.paths.workspace, 'sub-old'));
+  symlinkSync(join(s.paths.data, 'extra'), sub, 'junction');
+  assert.equal(shellPreCheck(input, s.ctxFor()).decision, 'allow', '前提: 替えたあとも allow のまま');
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
 });

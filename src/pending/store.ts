@@ -5,6 +5,7 @@ import { LocalizedError, type MessageParams } from '../shared/messages/define.ts
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import type { PreviewFile } from '../tools/approvals.ts';
+import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { PreCheck, RunKind, ToolDef } from '../tools/types.ts';
 import { fileFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
@@ -91,7 +92,6 @@ export interface PendingCounts {
 export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined }
 
 const OUTPUT_TAIL = 2000;
-const DROP_PARTS = "CASE WHEN json_valid(state) THEN json_remove(state, '$.parts') ELSE state END";
 const REASON_MAX = 500;
 const LIST_MAX = 200;
 const MARK = '[REDACTED]';
@@ -117,12 +117,14 @@ export function cleanReason(text: string | undefined): string | null {
 
 const unique = (items: readonly string[]): string[] => [...new Set(items)].sort();
 
+const realOf = (path: string): string => { try { return realish(path); } catch { return path; } };
+
 export function recheckOf(check: PreCheck): Recheck {
   return {
     decision: check.decision,
     kinds: unique(check.askKinds ?? []),
     reasons: unique(check.reasons.map(r => redactSecrets(r))),
-    paths: unique((check.paths ?? []).map(p => redactSecrets(`${p.path ?? p.input}|${p.verdict}|${p.mode ?? ''}`))),
+    paths: unique((check.paths ?? []).map(p => redactSecrets(`${p.path ?? p.input}|${p.path ? realOf(p.path) : ''}|${p.verdict}|${p.mode ?? ''}`))),
   };
 }
 
@@ -147,6 +149,7 @@ export function realCwd(cwd: string): string | null {
 const plain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 function render(tool: ToolDef, input: unknown): { title: string; shown: string; raw: string; parts: PendingParts } {
+  const mask = (text: string): string => redactSecrets(tool.redact ? tool.redact(text) : text);
   let summary: { title: string; body: string; cwd?: string } | undefined;
   try { summary = tool.summarize?.(input as never, 'en'); } catch { summary = undefined; }
   const title = summary?.title ?? tool.name;
@@ -157,30 +160,29 @@ function render(tool: ToolDef, input: unknown): { title: string; shown: string; 
   const bodyKey = keyOf(summary?.body);
   const cwdKey = keyOf(summary?.cwd);
   const raw: string[] = [title];
-  const shown: string[] = [redactSecrets(title)];
+  const shown: string[] = [mask(title)];
   const parts: PendingParts = { ...NO_PARTS };
   if (summary?.cwd !== undefined) {
-    const line = pendingText('en', 'cwd_line', { path: summary.cwd });
-    raw.push(line);
-    shown.push(redactSecrets(line));
+    raw.push(pendingText('en', 'cwd_line', { path: summary.cwd }));
+    shown.push(pendingText('en', 'cwd_line', { path: cwdKey !== undefined ? mask(summary.cwd) : MARK }));
   }
   if (summary && bodyKey !== undefined && plain(input) && plain(masked)) {
     raw.push(summary.body);
-    shown.push(redactSecrets(summary.body));
-    parts.body = redactSecrets(summary.body);
-    parts.cwd = summary.cwd !== undefined ? redactSecrets(summary.cwd) : null;
+    shown.push(mask(summary.body));
+    parts.body = mask(summary.body);
+    parts.cwd = summary.cwd === undefined ? null : cwdKey !== undefined ? mask(summary.cwd) : MARK;
     const rest = Object.keys(input).filter(k => k !== bodyKey && k !== cwdKey);
     if (rest.length) {
       raw.push(JSON.stringify(Object.fromEntries(rest.map(k => [k, input[k]])), null, 2));
-      parts.extra = redactSecrets(JSON.stringify(Object.fromEntries(rest.map(k => [k, masked[k]])), null, 2));
+      parts.extra = mask(JSON.stringify(Object.fromEntries(rest.map(k => [k, masked[k]])), null, 2));
       shown.push(parts.extra);
     }
   } else {
     raw.push(JSON.stringify(input, null, 2));
-    parts.body = redactSecrets(JSON.stringify(masked, null, 2));
+    parts.body = mask(JSON.stringify(masked, null, 2));
     shown.push(parts.body);
   }
-  return { title: redactSecrets(title), shown: shown.join('\n'), raw: raw.join('\n'), parts };
+  return { title: mask(title), shown: shown.join('\n'), raw: raw.join('\n'), parts };
 }
 
 function effectOf(snapshot: Snapshot | undefined): PendingEffect | null {
@@ -221,6 +223,7 @@ export class PendingStore {
     const tool = this.#o.tools.get(input.tool);
     if (!tool) throw new PendingError('unknown_tool', { tool: input.tool });
     if (tool.replayable === false) throw new PendingError('not_replayable', { tool: input.tool });
+    if (tool.preCheck && !input.check) throw new PendingError('check_required', { tool: input.tool });
     const { title, shown, raw, parts } = render(tool, input.input);
     const masked = Math.max(0, marks(shown) - marks(raw));
     const targets = (input.targets ?? []).map(t => resolve(input.cwd, t));
@@ -326,8 +329,7 @@ export class PendingStore {
     if (!current || current.status !== 'running') return current ? this.#view(current) : undefined;
     const erased = current.input === '';
     const state = parseJson<PendingState | null>(current.state, null);
-    const { parts: _parts, ...kept } = state ?? {};
-    const nextState = state ? { ...kept, ...(result.fetched !== undefined ? { fetched: result.fetched } : {}) } : null;
+    const nextState = state && result.fetched !== undefined ? { ...state, fetched: result.fetched } : state;
     const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', state = ?
       WHERE id = ? AND status = 'running'`).run(
       result.status, result.exitCode ?? null, erased || result.output === undefined ? null : outputTail(result.output), erased ? null : result.fullRef ?? null,
@@ -341,7 +343,7 @@ export class PendingStore {
 
   reject(id: number, reason?: string): PendingView {
     const before = this.#require(id);
-    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '', state = ${DROP_PARTS} WHERE id = ? AND status = 'waiting'`).run(cleanReason(reason), this.#now(), id);
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '' WHERE id = ? AND status = 'waiting'`).run(cleanReason(reason), this.#now(), id);
     if (Number(changed.changes) !== 1) throw new PendingError('not_waiting', { id, status: this.row(id)?.status ?? before.status });
     const row = this.row(id)!;
     this.#changed(row);
@@ -353,7 +355,7 @@ export class PendingStore {
     for (const id of ids) {
       const rows = this.#db.prepare("SELECT * FROM pending_actions WHERE conversation_id = ? AND status = 'waiting'").all(id) as unknown as PendingRow[];
       for (const row of rows) {
-        const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '', state = ${DROP_PARTS} WHERE id = ? AND status = 'waiting'`).run(this.#now(), row.id);
+        const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '' WHERE id = ? AND status = 'waiting'`).run(this.#now(), row.id);
         if (Number(changed.changes) === 1) { count += 1; this.#changed(this.row(row.id)!); }
       }
     }
@@ -361,7 +363,7 @@ export class PendingStore {
   }
 
   closeInterrupted(): number {
-    const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '', state = ${DROP_PARTS} WHERE status = 'running'`).run(pendingText('en', 'interrupted'), this.#now());
+    const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '' WHERE status = 'running'`).run(pendingText('en', 'interrupted'), this.#now());
     return Number(result.changes);
   }
 }

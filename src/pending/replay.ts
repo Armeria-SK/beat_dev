@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { rmSync, statSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import type { AppConfig } from '../config/schema.ts';
@@ -72,9 +72,9 @@ async function hookRefusal(tool: ToolDef, args: unknown, ctx: ToolContext, cwd: 
 }
 
 export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<ReplayOutcome> {
-  const end = (status: ReplayOutcome['status'], output: string, extra: Partial<ReplayOutcome> = {}, result: { exitCode?: number | undefined; fullRef?: string | undefined } = {}): ReplayOutcome => {
+  const end = (status: ReplayOutcome['status'], output: string | undefined, extra: Partial<ReplayOutcome> = {}, result: { exitCode?: number | undefined; fullRef?: string | undefined } = {}): ReplayOutcome => {
     deps.store.finish(row.id, { status, output, ...result, ...(extra.fetched !== undefined ? { fetched: extra.fetched } : {}) });
-    return { status, output, ...extra };
+    return { status, ...(output !== undefined ? { output } : {}), ...extra };
   };
   try {
     const config = deps.config();
@@ -121,26 +121,32 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       services: deps.services?.(),
     };
 
-    let again: PreCheck | undefined;
-    if (tool.preCheck) {
-      try { again = await tool.preCheck(args as never, ctx); }
-      catch (error) { again = { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
-      if (again.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
-      if ((again.bind ?? null) !== row.bind) return end('stale', pendingText('en', 'changed_bind'));
-      const fresh = newChecks(state.recheck, again);
-      if (fresh.length) return end('stale', pendingText('en', 'changed_checks', { reasons: fresh.join('\n- ') }));
-    } else if (row.bind !== null) return end('stale', pendingText('en', 'changed_bind'));
-
     const refused = await hookRefusal(tool, args, ctx, row.cwd);
     if (refused !== undefined) return end('failed', pendingText('en', 'hook_denied', { reason: refused }));
 
+    let changes: Change[] = [];
     if (row.kind === 'delete') {
       const before = state.snapshot ?? { git: null, paths: [] };
-      const changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
-      if (changes.length) {
-        const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');
-        return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });
-      }
+      changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
+    }
+
+    let again: PreCheck | undefined;
+    if (tool.preCheck) {
+      try {
+        const checked = tool.preCheck(args as never, ctx);
+        again = checked instanceof Promise ? await checked : checked;
+      } catch (error) { again = { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
+    }
+    if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
+    if (state.cwdReal !== undefined && realCwd(row.cwd) !== state.cwdReal) return end('stale', pendingText('en', 'changed_cwd', { path: row.cwd }));
+    if ((again?.bind ?? null) !== row.bind) return end('stale', pendingText('en', 'changed_bind'));
+    if (again) {
+      const fresh = newChecks(state.recheck, again);
+      if (fresh.length) return end('stale', pendingText('en', 'changed_checks', { reasons: fresh.join('\n- ') }));
+    }
+    if (changes.length) {
+      const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');
+      return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });
     }
 
     const started = Date.now();
@@ -152,6 +158,9 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     const egress = again?.decision === 'ask' && again.askKinds?.includes('egress') === true;
     const fetched = (network && !(output.isError && output.noRemoteContent)) || again?.fetched === true || output.fetched === true || egress;
     const kept = deps.conversationExists(row.conversation_id);
+    if (!kept && output.fullRef && resolve(output.fullRef).startsWith(resolve(join(deps.paths.data, 'tool_outputs')) + sep)) {
+      try { rmSync(output.fullRef, { force: true }); } catch { }
+    }
     const shownInput = kept ? JSON.stringify(redactJsonValue(args)).slice(0, 4000) : '';
     const preview = kept ? redactSecrets(output.content).slice(0, 2000) : null;
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
@@ -159,7 +168,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       randomUUID(), row.run_id, kept ? row.conversation_id : null, row.tool, shownInput, `pending:${row.id}`, output.isError ? 0 : 1, Date.now() - started, preview, kept ? output.fullRef ?? null : null, started,
     );
     const ran = output.exitCode !== undefined || !output.isError;
-    return end(ran ? 'ran' : 'failed', output.content, { fetched }, { exitCode: output.exitCode, fullRef: output.fullRef });
+    return end(ran ? 'ran' : 'failed', kept ? output.content : undefined, { fetched }, kept ? { exitCode: output.exitCode, fullRef: output.fullRef } : { exitCode: output.exitCode });
   } catch (error) {
     deps.log?.(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`);
     return end('failed', pendingText('en', 'exec_error', { detail: (error as Error).message }));

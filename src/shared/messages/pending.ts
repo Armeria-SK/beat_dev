@@ -7,6 +7,7 @@ const en = {
   'invalid_status': 'status must be waiting or decided',
   'invalid_reason': 'reason must be text',
   'unknown_tool': 'The tool {tool} is not available, so it cannot be parked',
+  'check_required': 'The tool {tool} has a check before running, so the first result of that check must be parked with it',
   'not_replayable': 'The tool {tool} cannot wait in Pending: it can only run inside the run that called it',
   'cancelled_conversation': 'Not run: the conversation it came from was deleted',
   'cancelled_project': 'Not run: the product it came from was archived or removed',
