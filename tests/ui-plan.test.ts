@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Conversation, PlanDoc } from '../web/src/api.ts';
-import { apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planState, planStays, rebase, runningIn, saveOutcome, startDraft, typed } from '../web/src/ui/plan.ts';
+import { apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planState, planStays, rebase, reviewButton, reviewSeen, runningIn, saveOutcome, startDraft, typed } from '../web/src/ui/plan.ts';
 import { hasUnsavedEdits, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
 // Plan の欄（beat 3-1a-u）。画面を持たない決まり: 状態の決め方・書きかけ・保存の結果（web/src/ui/plan.ts）。
@@ -116,4 +116,24 @@ test('ui/plan: その製品の会話で動いている実行の数（変われ�
   const drafts = [{ conversationId: 'a' }, { conversationId: 'b' }, { conversationId: 'c' }, { conversationId: 'unknown' }];
   assert.equal(runningIn(drafts, conversations, 'p1'), 1);
   assert.equal(runningIn(drafts, conversations, 'p3'), 0);
+});
+
+test('ui/plan: Mark as reviewed は、読むモードで印のある計画書のときだけ出し、書いている最中と送っている最中は押せない', () => {
+  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h1', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, ...extra });
+  assert.equal(reviewButton(doc(), 'read', false), 'on');
+  assert.equal(reviewButton(doc({ writing: true }), 'read', false), 'off', '書いている最中は押せない');
+  assert.equal(reviewButton(doc(), 'read', true), 'off');
+  assert.equal(reviewButton(doc(), 'edit', false), 'hidden', '直しているあいだは出さない');
+  assert.equal(reviewButton(doc({ tainted: false }), 'read', false), 'hidden');
+  assert.equal(reviewButton(doc({ hash: null }), 'read', false), 'hidden');
+  assert.equal(reviewButton(null, 'read', false), 'hidden');
+});
+
+test('ui/plan: 読み始めた計画書のハッシュを覚え、途中で計画書が変わったら「読み直して」の印を立てる（最初の読み込みでは立てない）', () => {
+  const start = reviewSeen({ hash: null, changed: false }, 'h1');
+  assert.deepEqual(start, { hash: 'h1', changed: false });
+  assert.equal(reviewSeen(start, 'h1'), start, '同じなら変えない');
+  assert.deepEqual(reviewSeen(start, 'h2'), { hash: 'h2', changed: true });
+  assert.deepEqual(reviewSeen(reviewSeen(start, 'h2'), 'h2'), { hash: 'h2', changed: true }, '印は送るまで残る');
+  assert.deepEqual(reviewSeen(start, null), { hash: null, changed: false });
 });

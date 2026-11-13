@@ -165,6 +165,32 @@ test('4-K 確かめ（本物の App）: reviewed を押す → tainted が消え
   assert.notEqual(s.app.tasks.judgeRequest(taskId), '');
 });
 
+test('4-4 印を外す口: 計画モードの会話が計画書を書いているあいだは 409 plan.writing で印が残る（持ち主が見ていない文の印を外さない）', async t => {
+  const s = await setup(t);
+  const product = await s.product('writing');
+  await s.taintedAiPlan(product.id, uuid(64), '# Plan by AI');
+  const current = await s.plan(product.id);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let answer: { status: number; body: { code?: string } } | null = null;
+  s.adapter().scripts = [async function* () {
+    answer = await s.json(`/api/projects/${product.id}/plan/reviewed`, 'POST', { baseHash: current.hash });
+    await gate;
+    yield { type: 'text', delta: 'done' };
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  }];
+  const sent = await s.json(`/api/conversations/${uuid(65)}/messages`, 'POST', { text: 'plan more', projectId: product.id, permissionMode: 'plan' });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  while (!answer) await new Promise(r => setTimeout(r, 5));
+  release();
+  await settled(s.app, sent.body.runId);
+  const got = answer as { status: number; body: { code?: string } };
+  assert.deepEqual([got.status, got.body.code], [409, 'plan.writing']);
+  assert.equal((await s.plan(product.id)).tainted, true);
+  const after = await s.json(`/api/projects/${product.id}/plan/reviewed`, 'POST', { baseHash: current.hash });
+  assert.equal(after.status, 200, '書き終われば外せる');
+});
+
 test('4-K 印を外す口: しまった製品は 400 で印が残る', async t => {
   const s = await setup(t);
   const product = await s.product('archived');

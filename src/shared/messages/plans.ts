@@ -5,6 +5,7 @@ const en = {
   'too_long': 'The plan is too long (up to {max} characters)',
   'secret': 'The plan looks like it contains a secret key or token. Remove it and save again',
   'not_file': 'plan.md in the product folder is not a regular file (a folder or a link). Replace it with a file',
+  'writing': 'The plan is being written right now. Read it again once it is done',
   'archived': 'This product is archived. Restore it before changing the plan',
 } as const;
 

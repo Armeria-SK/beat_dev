@@ -1455,6 +1455,7 @@ export const en = {
   'ui.acc.outside': 'Written after reading text from elsewhere',
   'ui.plan.markReviewed': 'Mark as reviewed',
   'ui.plan.reviewFailed': 'Not marked as reviewed',
+  'ui.plan.changedReadAgain': 'The plan changed — read it again',
   'ui.acc.source.words': 'Your words',
   'ui.acc.source.choice': 'Your answer',
   'ui.acc.source.ai': 'AI added',

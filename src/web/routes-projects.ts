@@ -127,7 +127,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
   });
   const planned = <T>(work: () => T): T => {
     try { return work(); } catch (error) {
-      if (error instanceof PlanError) throw domainProblem(error.code === 'changed' ? 409 : 400, 'plan', error);
+      if (error instanceof PlanError) throw domainProblem(error.code === 'changed' || error.code === 'writing' ? 409 : 400, 'plan', error);
       throw error;
     }
   };
@@ -158,6 +158,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
     const baseHash = requireString(body, 'baseHash', { max: 128 })!;
+    if (planWire(project.id).writing) planned(() => { throw new PlanError('writing'); });
     const view = planned(() => app.plans.review(project.id, baseHash));
     app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: view.hash, by: 'owner' });
     sendJson(res, 200, { plan: planWire(project.id, view) });

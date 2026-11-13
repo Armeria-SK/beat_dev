@@ -12,6 +12,18 @@ export function planState(doc: PlanDoc | null, failed: boolean): PlanState {
   return doc.content ? 'ready' : 'empty';
 }
 
+export interface ReviewSeen { hash: string | null; changed: boolean }
+
+export const reviewSeen = (prev: ReviewSeen, hash: string | null): ReviewSeen =>
+  (prev.hash === hash ? prev : { hash, changed: prev.hash !== null && hash !== null });
+
+export type ReviewButton = 'hidden' | 'off' | 'on';
+
+export function reviewButton(doc: PlanDoc | null, mode: 'read' | 'edit', busy: boolean): ReviewButton {
+  if (!doc?.tainted || !doc.hash || mode !== 'read') return 'hidden';
+  return doc.writing || busy ? 'off' : 'on';
+}
+
 export const canEdit = (state: PlanState): boolean => state === 'ready' || state === 'empty';
 
 export const canSave = (state: PlanState, dirty: boolean, saving: boolean): boolean => canEdit(state) && dirty && !saving;
