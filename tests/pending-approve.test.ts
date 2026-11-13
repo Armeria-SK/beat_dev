@@ -10,7 +10,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { replayAction } from '../src/pending/replay.ts';
-import { boundFacts, destinationFacts, fileMark } from '../src/pending/snapshot.ts';
+import { boundFacts, destinationFacts, fileMark, PUSH_UNCONFIRMED, pushFacts } from '../src/pending/snapshot.ts';
 import { pendingNote } from '../src/pending/notes.ts';
 import { PendingStore, type PendingRow, type PendingView } from '../src/pending/store.ts';
 import { ProjectStore } from '../src/projects/store.ts';
@@ -604,6 +604,7 @@ for (const [name, template] of [
   ['--no-verify', 'git push --no-verify {U} feature'],
   ['--no-ver（略した形）', 'git push --no-ver {U} feature'],
   ['-c core.hooksPath', 'git -c core.hooksPath=x push {U} feature'],
+  ['unset GIT_CONFIG_COUNT', 'unset GIT_CONFIG_COUNT; git push {U} feature'],
   ['背景で動く push', WINDOWS ? 'Start-Job { git push {U} feature }' : 'git push {U} feature > o.txt 2>&1 &'],
 ] as const) {
   test(`承認（W1-11 作り直し）: フックを外しうる形は確かめられない（push_unconfirmed）: ${name}`, { skip: !gitAvailable }, async t => {
@@ -733,6 +734,18 @@ test('承認（W1-11 改）: 何のコマンドか分からない送り（別名
   const row = await park(ALIAS_PUSH.replace('{U}', q));
   const outcome = await r.approve(row.id);
   assert.equal(outcome.status, 'ran', outcome.output);
+});
+
+test('push の控え: for-each-ref --include-root-refs が使えない git でも、ふつうの for-each-ref に戻り、どの行も同じ控えと tips になる', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  const data = tempDir(t);
+  const head = p.git('rev-parse', 'HEAD');
+  for (const parsed of [false, true]) {
+    const first = await pushFacts([{ dir: p.r.ws, parsed }], data, '--no-such-option');
+    assert.ok(!first.fingerprint.startsWith(PUSH_UNCONFIRMED), `parsed=${parsed}`);
+    assert.ok(first.tips?.includes(head), `parsed=${parsed}`);
+    assert.equal((await pushFacts([{ dir: p.r.ws, parsed }], data, '--no-such-option')).fingerprint, first.fingerprint);
+  }
 });
 
 test('承認（W1-11 改）: リポジトリでないフォルダの、何のコマンドか分からない送りは、控えを足さず、いままでどおり動く', async t => {

@@ -17,7 +17,7 @@ export type PushProblem =
 const TAKES_VALUE = new Set(['-o', '--push-option']);
 const REDIRECTING = ['--repo', '--receive-pack', '--exec'];
 const HARMLESS_ENV = /^(?:LC_\w+|LANG|LANGUAGE|TZ|NO_COLOR|FORCE_COLOR|CLICOLOR|TERM|COLUMNS|LINES)$/u;
-const ENV_PROGRAMS = new Set(['source', '.', 'export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx', 'set-variable', 'sv', 'new-variable', 'nv']);
+const ENV_PROGRAMS = new Set(['source', '.', 'export', 'unset', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx', 'set-variable', 'sv', 'new-variable', 'nv']);
 const ENV_ITEM_PROGRAMS = new Set(['set-item', 'si', 'set-content', 'sc', 'new-item', 'ni', 'add-content', 'ac', 'copy-item', 'cp', 'cpi', 'move-item', 'mi', 'rename-item', 'rni', 'remove-item', 'ri']);
 const GIT_READ_CONFIG = new Set(['--get', '--get-all', '--get-regexp', '--list', '-l', '--get-urlmatch', 'get', 'list']);
 

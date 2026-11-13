@@ -208,7 +208,7 @@ export const MAX_TIPS = 10_000;
 
 export interface PushState { fingerprint: string; tips?: string[] }
 
-export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; parsed?: boolean }>, dataDir: string): Promise<PushState> {
+export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; parsed?: boolean }>, dataDir: string, rootRefs = '--include-root-refs'): Promise<PushState> {
   const never = (): PushState => ({ fingerprint: `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}` });
   const lines: string[] = [];
   const tips = new Set<string>();
@@ -217,8 +217,8 @@ export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; pars
     const line = await withGit<string | null>(dir, dataDir, `${dir}\0no-repo`, null, async git => {
       const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
       const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
-      const rooted = await git(['for-each-ref', '--include-root-refs', '--format=%(objectname) %(refname)']);
-      const refs = rooted ?? (parsed ? await git(['for-each-ref', '--format=%(objectname) %(refname)']) : null);
+      const rooted = await git(['for-each-ref', rootRefs, '--format=%(objectname) %(refname)']);
+      const refs = rooted ?? await git(['for-each-ref', '--format=%(objectname) %(refname)']);
       if (refs === null) return null;
       const pseudo: string[] = [];
       for (const name of HASHED_PSEUDO_REFS) pseudo.push(`${name} ${(await git(['rev-parse', '--verify', '-q', '--end-of-options', name]))?.trim() || 'absent'}`);

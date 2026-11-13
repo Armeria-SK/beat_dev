@@ -199,7 +199,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     }
     if (state.pushed !== undefined && (state.pushed.startsWith(PUSH_UNCONFIRMED) || pushedNow?.startsWith(PUSH_UNCONFIRMED))) return end('stale', pendingText('en', 'push_unconfirmed'));
     if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', state.pushes?.every(p => p.parsed) ? 'changed_head' : 'changed_commits'));
-    const pushCheck = state.pushes?.length ? { tips: state.tips ?? [], required: state.pushes.some(p => p.parsed) } : undefined;
+    const pushCheck = state.pushes?.length && state.tips ? { tips: state.tips, required: state.pushes.some(p => p.parsed) } : undefined;
 
     const started = Date.now();
     let output: ToolOutput;
