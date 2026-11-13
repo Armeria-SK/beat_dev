@@ -1230,3 +1230,44 @@ test('実機（Windows PowerShell 5.1・制限モード）: Copy-Item -Recurse�
   const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
   await expectSecretFolderBlocked(s, ['Copy-Item -Recurse secrets stuff; Get-Content stuff/token.txt', 'Copy-Item -Recurse proj stuff; Get-Content stuff/secrets/token.txt', 'Move-Item secrets stuff2; Get-Content stuff2/token.txt'], raw);
 });
+
+async function runApproved(s: ReturnType<typeof setup>, command: string) {
+  let settled = false;
+  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
+  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  const request = s.approvals.pending()[0];
+  if (request) s.approvals.decide(request.id, 'once');
+  return pending;
+}
+
+test('実機（Windows PowerShell 5.1・制限モード）: ただの npm は npm.ps1 でなく npm.cmd で動き、npm run も通る', { skip: (!psAvailable || !which('npm')) && 'Windows の PowerShell か npm が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('package.json'), JSON.stringify({ name: 'probe', version: '1.0.0', private: true, scripts: { hello: 'node -e "console.log(41+1)"' } }));
+  const version = await runApproved(s, 'npm --version');
+  assert.equal(version.output.isError, false, version.output.content);
+  assert.match(version.output.content, /\b\d+\.\d+\.\d+\b/u);
+  assert.doesNotMatch(version.output.content, /npm\.ps1|Cannot invoke method/u);
+  const script = await runApproved(s, 'npm run hello');
+  assert.equal(script.output.isError, false, script.output.content);
+  assert.match(script.output.content, /\b42\b/u);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: ただの curl は Invoke-WebRequest の別名でなく curl.exe で動く', { skip: (!psAvailable || !curlExe) && 'Windows の PowerShell か curl が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const outcome = await runApproved(s, 'curl --version');
+  assert.equal(outcome.output.isError, false, outcome.output.content);
+  assert.match(outcome.output.content, /^curl \d+\.\d+/mu);
+  assert.doesNotMatch(outcome.output.content, /Invoke-WebRequest|remote name/u);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: curl と curl.exe でデータを送る形は、どちらも送るとして積まれ、サーバーに届かない', { skip: (!psAvailable || !curlExe) && 'Windows の PowerShell か curl が無い' }, async t => {
+  const echo = await startEcho();
+  t.after(() => echo.close());
+  const s = setup(t, 'powershell');
+  for (const command of [`curl -d x http://127.0.0.1:${echo.port}/a`, `curl.exe -d x http://127.0.0.1:${echo.port}/a`]) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decidedBy, 'pending', `${command}: ${outcome.output.content}`);
+    assert.equal(s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command)?.kind, 'send', command);
+  }
+  assert.deepEqual(echo.seen, []);
+});
