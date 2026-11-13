@@ -341,7 +341,7 @@ export function createWebServer(app: App): WebServer {
     const filter = projectWhere('engine_runs', project);
     const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
       .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null }>;
-    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app)) });
+    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app), project) });
   });
 
   // ── 承認とツールの記録 ──

@@ -150,6 +150,27 @@ test('4-3a 判定役の時間（実行）: 枠を取ってから答えの上限�
   assert.match(rows[0]!.reason, /did not answer in time/u);
 });
 
+test('4-3a routing.judge: 最初の判定役が時間内に答えなければ、次の判定役に聞く', async t => {
+  ran.length = 0;
+  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2'), fakeModel('m3')], tools: [outsideRead], judgeAll: true, judgeLimits: { chat: { answerMs: 200, slotWaitMs: 5_000 }, unattended: { answerMs: 200 } }, configure: c => { c.routing.judge = ['m2', 'm3']; } });
+  const id = uuid(52);
+  s.app.conversations.create({ id, title: 'next judge' });
+  const judges: string[] = [];
+  s.adapter().scripts = router(req => {
+    if (isJudge(req)) {
+      judges.push(req.model.id);
+      if (req.model.id === 'm2') return (async function* () { await new Promise<void>(resolve => req.signal?.addEventListener('abort', () => resolve(), { once: true })); yield { type: 'done', stop: 'end_turn' as StopReason }; })();
+      return say('{"decision":"allow","reason":"fits"}');
+    }
+    return hasToolResult(req) ? say('done') : toolCall('outside_read', {});
+  });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(judges, ['m2', 'm3']);
+  assert.deepEqual(ran, ['outside_read']);
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
+});
+
 test('4-3a routing.judge: 別のモデルを入れるとそのモデルが判定役になり、空なら実行のモデル', async t => {
   for (const judge of [['m2'], []]) {
     ran.length = 0;

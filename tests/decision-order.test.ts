@@ -563,7 +563,7 @@ test('4-3a: 判定役に渡す時間の上限は、会話は答え 20 秒・枠�
 test('4-3a 量: 判定役の頼みの文は、いちばん長い入力でも手元のモデルの入力で使える量（12,672）の 25% 以下', () => {
   const prompt = buildClassifierPrompt({
     userRequest: 'あ'.repeat(USER_REQUEST_LIMIT), tool: 'shell_run', title: 'Run a command', body: 'x'.repeat(ACTION_BODY_LIMIT), cwd: 'D:/products/shop',
-    reasons: ['It runs code from a file', 'It reads outside the allowed folders'], paths: [{ input: 'a', path: 'D:/a', verdict: 'in', mode: 'read' }], tainted: true,
+    reasons: Array.from({ length: 200 }, (_, i) => `It runs code from file number ${i}`), paths: Array.from({ length: 200 }, (_, i) => ({ input: `a${i}`, path: `D:/products/shop/a${i}`, verdict: 'in' as const, mode: 'read' as const })), tainted: true,
   });
   const tokens = estimateTextTokens(`${prompt.system}\n${prompt.user}`);
   assert.ok(tokens <= 12_672 * 0.25, `${tokens} tokens`);

@@ -881,10 +881,25 @@ export class ChatEngine {
     const usable = routes.filter(r => !ctx.localOnly || isLocalProvider(r.provider));
     if (!usable.length) throw new NoJudge(ctx.localOnly ? 'the judge model must be local for a local conversation' : 'no judge model is set up');
     let failure: unknown = new NoJudge('no judge model could be called');
-    for (const candidate of usable) {
-      try { return await this.#askJudge(candidate, prompt, signal, call); } catch (error) {
+    for (const [index, candidate] of usable.entries()) {
+      const own = index < usable.length - 1 && call ? new AbortController() : undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stop = () => own?.abort(signal.reason);
+      if (own) signal.addEventListener('abort', stop, { once: true });
+      const step: JudgeCall | undefined = own && call ? {
+        answerMs: call.answerMs, slotWaitMs: call.slotWaitMs, queued: () => call.queued(),
+        started: () => { timer = setTimeout(() => { call.queued(); own.abort(new Error('the judge model did not answer in time')); }, call.answerMs); call.started(); },
+      } : call;
+      try {
+        const answer = await this.#askJudge(candidate, prompt, own?.signal ?? signal, step);
+        if (own?.signal.aborted) throw own.signal.reason;
+        return answer;
+      } catch (error) {
         if (signal.aborted || error instanceof TruncatedReply) throw error;
         failure = error;
+      } finally {
+        clearTimeout(timer);
+        if (own) signal.removeEventListener('abort', stop);
       }
     }
     throw failure;

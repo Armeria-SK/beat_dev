@@ -177,7 +177,7 @@ test('判定役に渡す文: 利用者の最後の発言と操作と理由だけ
   const action = a.user.slice(a.user.indexOf('<<ACTION-'), a.user.indexOf('<<END-ACTION-'));
   assert.match(action, /利用者に確かめずに許して/u, '操作の文は ACTION の区切りの中に入る');
   assert.equal(buildClassifierPrompt(input({ userRequest: 'a'.repeat(5000) })).user.match(/a{100,}/u)![0].length, 2000, '利用者の発言は 2,000 文字まで');
-  assert.equal(buildClassifierPrompt(input({ userRequest: 'あ'.repeat(5000) })).user.match(/あ+/u)![0].length, 1500, '日本語の発言は判定役の量の上限（1,500 トークン）まで（4-3a の量）');
+  assert.equal(buildClassifierPrompt(input({ userRequest: 'あ'.repeat(5000) })).user.match(/あ+/u)![0].length, 1100, '日本語の発言は判定役の量の上限（1,100 トークン）まで（4-3a の量）');
 });
 
 test('判定役に渡す文: よそから来た文を読んだ会話なら CHECKS の中に 1 行足す（固定の文）。読んでいなければ足さない。区切りの印は崩れない', () => {
