@@ -25,7 +25,7 @@ const en = {
   'mcp.changed_title': 'The description of the MCP tool "{tool}" changed',
   'mcp.changed_body': 'The description or input shape of the tool "{tool}" of MCP server "{server}" differs from what was checked before. The tool will not be used until you review and accept it.',
   'mcp.failed_title': 'MCP server "{server}" stopped',
-  'mcp.failed_body': 'MCP server "{server}" crashed more than {max} times in an hour, so beat stopped reconnecting. Fix the cause and restart it from the MCP page in settings.',
+  'mcp.failed_body': 'MCP server "{server}" crashed more than {max} times in an hour, so reconnecting to it was stopped. Fix the cause and restart it from the MCP page in settings.',
   'pipeline.mode_plan': 'The tool "{name}" cannot be used in plan mode (only tools that read files and memory, and reading the web, are available). Change nothing: investigate if needed, then present a plan as a list of steps',
   'pipeline.bad_json': 'The arguments could not be read as JSON. Call it again with valid JSON: {raw}',
   'pipeline.bad_args': 'The shape of the arguments is not valid. Fix them and call again:\n- {errors}',

@@ -46,7 +46,7 @@ const en = {
   'snap.files': '{count} files',
   'snap.files_more': 'over {count} files',
   'snap.modified': 'modified {time}',
-  'interrupted': 'beat stopped while this was running, so it may have run only partly',
+  'interrupted': 'beat was stopped while this was running, so it may have run only partly',
   'exec_error': 'The tool failed: {detail}',
   'cancelled_stop': 'Stopped before it finished because beat is shutting down',
   'parked': 'Parked as #{id} in Pending. It has NOT run: it needs the owner\'s OK ({reason}). Do not rely on its result and do not try it another way; carry on with other work. The owner will approve or reject it later.',
