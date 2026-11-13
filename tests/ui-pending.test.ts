@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -254,4 +255,13 @@ test('ui/pending: Decided の行も Waiting と同じ actionView から組む（
   assert.deepEqual(decidedText(actionView(row({ tool: 'shell_run', status: 'ran', title: 'Run a command', shown: 'Run a command', parts: erased }))), { title: null, code: 'Run a command', cwd: null });
   assert.deepEqual(decidedText(actionView(row({ tool: 'file_edit', status: 'ran', title: 'Edit a file: a.ts', shown: 'Edit a file: a.ts', parts: erased }))), { title: 'Edit a file: a.ts', code: null, cwd: null });
   assert.deepEqual(decidedText(actionView(row({ tool: 'file_edit', status: 'ran', title: null, shown: 'file_edit', parts: erased }))), { title: null, code: 'file_edit', cwd: null }, '題も無ければ shown を出す');
+  const gone = row({ tool: 'shell_run', status: 'rejected', decided_at: 900, title: null, shown: '', parts: erased });
+  assert.deepEqual(decidedText(actionView(gone)), { title: null, code: null, cwd: null, erased: true }, '会話を消した行（shown も題も空）は、中身を消したと分かる印を返す');
+  assert.ok(en['ui.pending.erased']);
+});
+
+test('ui/pending: Decided の行は decidedText の erased のときに "Details removed with the session" を出す（PendingPane の配線）', () => {
+  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
+  assert.ok(pane.includes('const line = decidedText(actionView(row));'), 'Decided の行は decidedText から組む');
+  assert.ok(pane.includes(`{line.erased && <span className="ui-pending__title bt-meta">{t('ui.pending.erased')}</span>}`), '中身を消した行に erased の文を出す');
 });

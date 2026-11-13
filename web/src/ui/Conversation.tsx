@@ -16,7 +16,7 @@ import { Checklist } from './Checklist.tsx';
 import { useNow } from './hooks.ts';
 import { latestOnly } from './latest.ts';
 import { menuStep } from './menu.ts';
-import { sendOptions } from './product-nav.ts';
+import { newSessionHash, sendOptions } from './product-nav.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
@@ -422,7 +422,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
   const runSlash = (command: UiSlash) => {
     switch (command.name) {
       case 'new':
-        if (id) location.hash = '#/'; else toast({ kind: 'info', icon: 'check', title: t('ui.composer.alreadyNew') });
+        if (id) location.hash = newSessionHash(product?.id); else toast({ kind: 'info', icon: 'check', title: t('ui.composer.alreadyNew') });
         return;
       case 'plan': void choose({ permissionMode: 'plan' }); return;
       case 'task': case 'tasks': location.hash = '#/kanban'; return;

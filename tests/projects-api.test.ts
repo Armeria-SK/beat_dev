@@ -186,6 +186,8 @@ test('製品の行: フォルダが無くなる・別のフォルダにすり替
 
   rmSync(join(s.products, 'shop'), { recursive: true });
   assert.equal((await row()).folder_missing, true);
+  const refresh = await s.json(`/api/projects/${shop.id}`, 'PATCH', { refreshRemotes: true });
+  assert.deepEqual([refresh.status, refresh.body.code], [409, 'project.folder_missing'], 'フォルダが無いときの取り直しは、古い一覧を 200 で返さず断る');
   mkdirSync(join(s.products, 'shop'));
   assert.equal((await row()).folder_missing, false);
   rmSync(join(s.products, 'shop'), { recursive: true });
