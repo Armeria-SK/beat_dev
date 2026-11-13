@@ -140,7 +140,7 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
     services: { db, memory: undefined as never, emit: e => events.push(e), plans },
   };
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto', 
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
   });
 
   const outside = await run('plan_write', { content: 'x' }, base);
@@ -417,7 +417,7 @@ function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
   });
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
     registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
-    conversationTainted: () => false, 
+    conversationTainted: () => false,
   });
   return { paths, plans, events, ctxOf, run, file: join(paths.projects, PROJECT, 'plan.md') };
 }

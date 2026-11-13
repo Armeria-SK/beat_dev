@@ -45,7 +45,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: taint, sources: taint ? ['A', 'B'] : [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, pending, db, emit: e => events.push(e), 
+    registry, approvals, pending, db, emit: e => events.push(e),
     lastUserRequest: () => 'please do the work', autoClassify: async () => '{"decision":"ask","reason":"not sure"}',
   });
   const parked = async (name: string, args: unknown) => {

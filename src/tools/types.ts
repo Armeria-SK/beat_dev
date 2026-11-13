@@ -66,7 +66,7 @@ export interface PreCheck {
   ownHooksDir?: string;
   // 事前の判定: この呼び出しが外の中身を持ち込む（シェルの取得・doc_read・downloads/ の下を読む道具など。シェルは git の fetch・pull・clone、パッケージの導入を含む）。実行したら、パイプラインは「外から読んだ」印を付ける（通信の道具と同じ）
   fetched?: boolean;
-  // 事前の判定: この呼び出しが外へ送りうる / 消しうる。MCP の道具の申告と、ブラウザの道具の送信（outbound.ts の outboundOfCall が読む）
+  // 事前の判定: この呼び出しが外へ送りうる / 消しうる。MCP の道具の申告（outbound.ts の outboundOfCall が読む）
   sends?: boolean;
   removes?: boolean;
   outbound?: Outbound;

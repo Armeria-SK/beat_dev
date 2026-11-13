@@ -38,7 +38,7 @@ function setup(t: { after: (fn: () => void) => void }, options: { tainted?: bool
   const ctx = makeCtx('r1');
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: () => undefined, 
+      registry, approvals, pending, db, emit: () => undefined,
       lastUserRequest: () => 'please write the notes', autoClassify: async () => { judge.calls++; return judge.answer; },
     });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };

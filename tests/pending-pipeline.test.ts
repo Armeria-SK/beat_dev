@@ -46,7 +46,7 @@ function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => v
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: Record<string, unknown> = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: () => undefined, 
+      registry, approvals, pending, db, emit: () => undefined,
       lastUserRequest: () => 'please do the work', autoClassify: async () => { judge.calls++; return judge.answer; }, ...extra,
     });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };

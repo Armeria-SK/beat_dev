@@ -4,6 +4,7 @@ import { neutralizeFence } from '../../shared/fence.ts';
 import { IMAGE_MAX_BYTES } from '../../shared/image-info.ts';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
+import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
@@ -134,14 +135,15 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
     try { url = pageUrl(input.url); } catch (thrown) { return deny(thrown instanceof RetrievalFailure ? thrown.text(language) : (thrown as Error).message); }
     const base = exfiltrationCheck(input.url, language, url.search.length > 300);
     // 操作の一覧のサイトは、ログイン済みのことがある。開くだけの GET（クエリ付き・よそから来た文を読んだあとに決めた行き先）が操作になりうるので、
-    // 押す承認を迂回させない: 送るに数える（sends。outbound.ts の outboundOfCall が判定役に回さず Pending の send に積む）。一覧外のサイトは読むだけなので今までどおり
+    // 押す承認を迂回させない: 送るに数える（outbound の send。パイプラインが判定役に回さず Pending の send に積む）。一覧外のサイトは読むだけなので今までどおり
     // 「よそから来た文を読んだあと」は、この実行だけでなく会話ぜんぶで見る（前の実行で読んだ文が決めた行き先も、確かめの対象）。会話の印が読めないときは「ある」側に倒す
     let tainted = ctx.taint.tainted;
     if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
     if (!siteAllows(ctx.config.tools.browser.sites, url) || (!tainted && url.search === '')) return base;
     const reason = guardText(language, 'browser.open.listed');
-    if (base.decision !== 'ask') return { decision: 'ask', reasons: [reason], details: [input.url.slice(0, 500)], askKinds: ['web'], sends: true };
-    return { ...base, reasons: [...base.reasons, reason], askKinds: [...(base.askKinds ?? base.reasons.map((): 'web' => 'web')), 'web'], sends: true };
+    const outbound = { kind: 'send' as const, reason: outboundText(language, 'send.browser_open'), targets: [] };
+    if (base.decision !== 'ask') return { decision: 'ask', reasons: [reason], details: [input.url.slice(0, 500)], askKinds: ['web'], outbound };
+    return { ...base, reasons: [...base.reasons, reason], askKinds: [...(base.askKinds ?? base.reasons.map((): 'web' => 'web')), 'web'], outbound };
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.browser_open'), body: input.url }),
   execute(input, ctx) {

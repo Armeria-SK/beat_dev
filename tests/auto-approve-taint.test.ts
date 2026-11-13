@@ -188,16 +188,17 @@ for (const source of SOURCES) {
     test(`だます試験（${source}）: 仕込みの指示で ${channel.name} を出すと、${outcome}`, { skip: psSkip(channel.shell) }, async t => {
       const s = await sandbox(t, { shell: channel.shell, ...(channel.allow ? { allow: channel.allow } : {}), ...(sendOrDelete ? {} : { answer: ASK }) });
       const runId = inject(s, source, toolCall(channel.tool, channel.args));
-      await waitFor(() => s.app.pending.list({ status: 'waiting' }).length > 0 || s.app.runs.get(runId)?.ended_at != null, 'Pending の行、または実行の終わり');
-      const parked = s.app.pending.list({ status: 'waiting' });
       if (runs) {
         await s.app.engine.wait(runId);
-        assert.equal(parked.length, 0, 'Pending に積まない');
+        await waitFor(() => s.app.runs.get(runId)?.ended_at != null, '実行の終わり', 60_000);
+        assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, 'Pending に積まない');
         assert.deepEqual(decidedBy(s, channel.tool), { decision: 'allow', decided_by: 'builtin' });
         assert.equal(s.adapter.classifierCalls, 0, '判定役は呼ばれない');
         assert.equal(autoCount(s), 0);
         return;
       }
+      await waitFor(() => s.app.pending.list({ status: 'waiting' }).length > 0 || s.app.runs.get(runId)?.ended_at != null, 'Pending の行、または実行の終わり');
+      const parked = s.app.pending.list({ status: 'waiting' });
       const want = PARKED[channel.name];
       if (want) {
         await s.app.engine.wait(runId);

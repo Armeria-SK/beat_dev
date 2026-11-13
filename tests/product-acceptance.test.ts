@@ -250,7 +250,7 @@ function toolHarness(t: { after: (fn: () => void) => void }, options: { archived
   });
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
     registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
-    conversationTainted: () => false, 
+    conversationTainted: () => false,
   });
   const say = (conversationId: string, role: 'user' | 'assistant', content: string) => {
     if (!conversations.get(conversationId)) conversations.create({ id: conversationId, projectId: PROJECT });

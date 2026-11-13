@@ -159,7 +159,7 @@ function meshFixture(t: { after: (fn: () => void) => void }) {
   });
   const run = (name: string, args: unknown, ctx: ToolContext = ctxOf()) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
     registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
-    conversationTainted: () => false, 
+    conversationTainted: () => false,
   });
   return { paths, dir, plans, acceptance, mesh, ctxOf, run };
 }

@@ -13,7 +13,7 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
 import { autoDecide, type ClassifierPrompt, type JudgeCall, type JudgeLimits } from './auto-approve.ts';
-import { ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_AFTER_TAINT } from './hooks/decision-order.ts';
+import { ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
 import type { PendingKind, PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
@@ -267,8 +267,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (outbound?.kind === 'deny') return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: outbound.reason }));
   const tainted = ctx.taint.tainted || conversationTainted(deps);
   // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる。拒否は拒否のまま
-  const escalates = tool.escalateOnTaint === true || (SHELL_FETCH_AFTER_TAINT.toJudge && tool.name === 'shell_run' && first?.fetched === true);
-  if (ctx.taint.tainted && escalates && decision !== 'deny') {
+  if (ctx.taint.tainted && tool.escalateOnTaint === true && decision !== 'deny') {
     const sources = ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep'));
     if (ctx.kind === 'review') {
       decision = 'deny';
@@ -278,6 +277,12 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       askKinds.add('taint');
       reasons.push(guardText(language, 'pipeline.taint', { sources }));
     }
+  }
+  const fetchToJudge = SHELL_FETCH_TO_JUDGE.on && tool.name === 'shell_run' && first?.fetched === true && decision !== 'deny';
+  if (fetchToJudge) {
+    decision = worst(decision, 'ask');
+    askKinds.add('egress');
+    reasons.push(guardText(language, 'pipeline.shell_fetch'));
   }
   // 道具ごとの方針 ask: 今の判定に「承認を求める」を足すだけ（拒否は拒否のまま。allow は何もしない）。振り返りには承認する人がいないので拒否として扱う
   if (policy === 'ask' && decision !== 'deny') {
@@ -348,7 +353,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     if (decision === 'ask') {
       if (ctx.kind === 'review') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
       const shellKinds = first?.askKinds ?? [];
-      if (first?.productRun !== undefined && tool.name === 'shell_run' && ctx.project?.root && [...askKinds].every(kind => shellKinds.includes(kind))) {
+      if (!fetchToJudge && first?.productRun !== undefined && tool.name === 'shell_run' && ctx.project?.root && [...askKinds].every(kind => shellKinds.includes(kind))) {
         decision = 'allow';
         decidedBy = first.productRun;
       } else {
