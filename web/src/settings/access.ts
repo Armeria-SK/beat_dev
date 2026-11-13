@@ -138,8 +138,8 @@ function hookChanges(before: Config, after: Config, stage: HookStage): Access[] 
     out.push({ kind: i < oldHooks.length ? 'hook-edited' : 'hook-added', stage, hook: summary(hook) });
   });
   // 書き換えたフックは、どれがどれだったかを決められない。オンだった「使う前」のフックが残っていて、書き換えたあとにオフのものがあれば、オフにしたものとして並べる
-  if (stage === 'preToolUse' && oldHooks.slice(0, newHooks.length).some(on)) {
-    for (const hook of newHooks.slice(0, oldHooks.length)) if (!on(hook)) out.push({ kind: 'hook-disabled', stage, hook: summary(hook) });
+  if (stage === 'preToolUse' && oldHooks.some(on)) {
+    for (const hook of newHooks) if (!on(hook)) out.push({ kind: 'hook-disabled', stage, hook: summary(hook) });
   }
   if (stage === 'preToolUse') for (const hook of oldHooks.slice(newHooks.length)) out.push({ kind: 'hook-removed', stage, hook: summary(hook) });
   return out;

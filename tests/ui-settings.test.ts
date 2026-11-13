@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { COMMIT_ON, fieldStep, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
+import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
 import { CATEGORIES, FILE_ONLY, LATER_HIDDEN, matchCategories, placeOf } from '../web/src/ui/settings/rows.ts';
 import { keyLine, providerReach, rolesOf, setConversation, setFallback } from '../web/src/ui/settings/view.ts';
 
@@ -75,6 +76,26 @@ test('ui/settings commit: D:\\proj を 1 字ずつ打つあいだは保存せず
   const blur = fieldStep({ ...enter.draft, saved: 'D:\\proj' }, { type: 'blur' });
   assert.equal(blur.commit, null, '保存した値と同じなら、離れても送らない');
   assert.equal(fieldStep({ saved: '', text: '  D:\\x  ' }, { type: 'blur' }).commit, 'D:\\x');
+});
+
+test('ui/settings commit: 受けない値（空にした必須の欄・一覧にもうある項目）は保存せず、欄を保存した値に戻す', () => {
+  const required = (value: string) => value !== '';
+  assert.deepEqual(fieldStep({ saved: 'gpt-4o', text: '   ' }, { type: 'blur' }, required), { draft: { saved: 'gpt-4o', text: 'gpt-4o' }, commit: null });
+  assert.deepEqual(fieldStep({ saved: 'gpt-4o', text: '' }, { type: 'key', key: 'Enter', composing: false }, required), { draft: { saved: 'gpt-4o', text: 'gpt-4o' }, commit: null });
+  assert.equal(fieldStep({ saved: 'gpt-4o', text: 'gpt-5' }, { type: 'blur' }, required).commit, 'gpt-5');
+  const items = ['node', 'a.js'];
+  const fresh = (value: string) => !items.includes(value);
+  assert.deepEqual(fieldStep({ saved: '', text: 'node ' }, { type: 'blur' }, fresh), { draft: { saved: '', text: '' }, commit: null });
+  assert.equal(fieldStep({ saved: '', text: 'b.js' }, { type: 'blur' }, fresh).commit, 'b.js');
+});
+
+test('ui/settings commit: コマンドの引数の一覧は同じ語を何度でも足せ、消すのは押した 1 つだけ', () => {
+  const argv = ['node', 'guard.js', '--deny', 'rm'];
+  assert.equal(listAccepts(argv, '--deny', true), true, '引数は繰り返してよい');
+  assert.equal(listAccepts(argv, '--deny'), false, 'ふつうの一覧は同じ項目を受けない');
+  assert.equal(listAccepts(argv, 'curl'), true);
+  const twice = [...argv, '--deny', 'curl'];
+  assert.deepEqual(listWithout(twice, 4), ['node', 'guard.js', '--deny', 'rm', 'curl'], '2 つ目の --deny だけを消す');
 });
 
 test('ui/settings commit: Esc は打った文字を保存した値に戻し、何も保存しない。保存した値が変わると欄も替わる', () => {
@@ -170,4 +191,14 @@ test('ui/settings view: 役割（会話・予備・裏）は routing の並び�
   assert.deepEqual(setConversation(config, 'c').routing.chat, ['c', 'a', 'b']);
   assert.deepEqual(setFallback(config, ['c']).routing.chat, ['a', 'c']);
   assert.deepEqual(rolesOf({ routing: { chat: [], background: [] } }), { conversation: null, fallback: [], background: [] });
+});
+
+test('ui/settings: 設定を書く口（saveSettings・resetSettings）を呼ぶのは、決まった画面だけ（行ごとの確かめを通る所）', () => {
+  const root = new URL('../web/src/', import.meta.url);
+  const callers = readdirSync(root, { recursive: true, encoding: 'utf8' })
+    .map(file => file.replace(/\\/gu, '/'))
+    .filter(file => /\.tsx?$/u.test(file))
+    .filter(file => /\b(?:saveSettings|resetSettings)\b|\/api\/settings\b/u.test(readFileSync(new URL(file, root), 'utf8')))
+    .sort();
+  assert.deepEqual(callers, ['api.ts', 'ui/Onboarding.tsx', 'ui/settings/Settings.tsx', 'ui/settings/customize.tsx']);
 });

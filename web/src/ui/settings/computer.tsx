@@ -85,10 +85,10 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
           {open && hook.builtin === undefined && (
             <div className="ui-set__detail">
               <Row k={`${k}:matcher`} title={t('ui.set.hooks.matcher')} desc={t('ui.set.hooks.matcherDesc')}>
-                <CommitField value={hook.matcher} label={t('ui.set.hooks.matcher')} mono onCommit={matcher => { if (matcher) edit({ matcher }); }} />
+                <CommitField value={hook.matcher} label={t('ui.set.hooks.matcher')} mono required onCommit={matcher => edit({ matcher })} />
               </Row>
               <Row k={`${k}:command`} title={t('ui.set.hooks.command')} desc={t('ui.set.hooks.commandDesc')}
-                below={<ListField items={hook.command} label={t('ui.set.hooks.command')} placeholder="node" disabled={busy} onChange={command => { if (command.length) edit({ command }); }} />} />
+                below={<ListField items={hook.command} allowDuplicates label={t('ui.set.hooks.command')} placeholder="node" disabled={busy} onChange={command => { if (command.length) edit({ command }); }} />} />
               <Row k={`${k}:timeout`} title={t('ui.set.hooks.timeout')} desc={t('ui.set.unit.ms')}>
                 <NumberField k={`${k}:timeout`} value={hook.timeoutMs} min={100} max={120_000} label={t('ui.set.hooks.timeout')} onCommit={v => { if (v !== undefined) edit({ timeoutMs: v }); }} />
               </Row>

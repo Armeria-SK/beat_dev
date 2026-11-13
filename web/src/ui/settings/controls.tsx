@@ -7,7 +7,7 @@ import type { Access } from '../../settings/access.ts';
 import type { Config } from '../../settings/model.ts';
 import { menuFit, menuScrollFor, menuStep, type Box, type MenuFit } from '../menu.ts';
 import { Button, Icon } from '../parts.tsx';
-import { fieldStep, readNumber, type FieldDraft } from './commit.ts';
+import { fieldStep, listAccepts, listWithout, readNumber, type FieldDraft } from './commit.ts';
 
 export interface Pending { row: string; items: Access[]; title?: string; ok?: string; run: () => void; cancel?: () => void }
 export type Ask = Pick<Pending, 'row' | 'items' | 'title' | 'ok'>;
@@ -191,13 +191,13 @@ export function Select<V extends string>({ value, options, label, placeholder, d
   );
 }
 
-function useField(value: string, revision: number, onCommit: (value: string) => void, resetKey: unknown = null) {
+function useField(value: string, revision: number, onCommit: (value: string) => void, resetKey: unknown = null, accept?: (value: string) => boolean) {
   const [draft, setDraft] = useState<FieldDraft>({ saved: value, text: value });
   const latest = useRef(draft);
   latest.current = draft;
   useEffect(() => { setDraft({ saved: value, text: value }); }, [value, revision, resetKey]);
   const run = (event: Parameters<typeof fieldStep>[1]) => {
-    const next = fieldStep(latest.current, event);
+    const next = fieldStep(latest.current, event, accept);
     latest.current = next.draft;
     setDraft(next.draft);
     if (next.commit !== null) onCommit(next.commit);
@@ -215,11 +215,11 @@ function useField(value: string, revision: number, onCommit: (value: string) => 
   };
 }
 
-export function CommitField({ value, label, mono, short, placeholder, type, disabled, resetKey, onCommit }: {
-  value: string; label: string; mono?: boolean; short?: boolean; placeholder?: string; type?: 'text' | 'url'; disabled?: boolean; resetKey?: unknown; onCommit: (value: string) => void;
+export function CommitField({ value, label, mono, short, placeholder, type, disabled, resetKey, required, onCommit }: {
+  value: string; label: string; mono?: boolean; short?: boolean; placeholder?: string; type?: 'text' | 'url'; disabled?: boolean; resetKey?: unknown; required?: boolean; onCommit: (value: string) => void;
 }) {
   const ctx = useSet();
-  const field = useField(value, ctx.revision, onCommit, resetKey);
+  const field = useField(value, ctx.revision, onCommit, resetKey, required ? text => text !== '' : undefined);
   const classes = ['bt-field', mono && 'bt-field--mono', short && 'bt-field--short'].filter(Boolean).join(' ');
   return <input className={classes} type={type ?? 'text'} aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off" disabled={disabled} {...field} />;
 }
@@ -238,19 +238,19 @@ export function NumberField({ k, value, label, min, max, optional, onCommit }: {
   return <input className="bt-field bt-field--mono bt-field--short" inputMode="numeric" aria-label={label} spellCheck={false} autoComplete="off" {...field} />;
 }
 
-export function ListField({ items, label, placeholder, disabled, onChange }: { items: readonly string[]; label: string; placeholder?: string; disabled?: boolean; onChange: (items: string[]) => void }) {
+export function ListField({ items, label, placeholder, disabled, allowDuplicates, onChange }: { items: readonly string[]; label: string; placeholder?: string; disabled?: boolean; allowDuplicates?: boolean; onChange: (items: string[]) => void }) {
   const t = useT();
   const ctx = useSet();
-  const field = useField('', ctx.revision, value => { if (value && !items.includes(value)) onChange([...items, value]); }, items.join('\n'));
+  const field = useField('', ctx.revision, value => onChange([...items, value]), items.join('\n'), value => listAccepts(items, value, allowDuplicates));
   return (
     <div className="ui-set__list">
       {items.length > 0 && (
         <ul className="ui-set__chips" aria-label={label}>
-          {items.map(item => (
-            <li key={item} className="ui-set__chip">
+          {items.map((item, index) => (
+            <li key={`${index}:${item}`} className="ui-set__chip">
               <code>{item}</code>
               <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.set.list.remove', item)} disabled={disabled}
-                onClick={() => onChange(items.filter(x => x !== item))}><Icon name="x" /></button>
+                onClick={() => onChange(listWithout(items, index))}><Icon name="x" /></button>
             </li>
           ))}
         </ul>

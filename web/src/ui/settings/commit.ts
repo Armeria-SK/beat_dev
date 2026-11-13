@@ -17,22 +17,27 @@ export type FieldEvent =
   | { type: 'key'; key: string; composing: boolean }
   | { type: 'saved'; value: string };
 
-export function fieldStep(draft: FieldDraft, event: FieldEvent): { draft: FieldDraft; commit: string | null } {
+export function fieldStep(draft: FieldDraft, event: FieldEvent, accept: (value: string) => boolean = () => true): { draft: FieldDraft; commit: string | null } {
   switch (event.type) {
     case 'input': return { draft: { ...draft, text: event.text }, commit: null };
     case 'saved': return { draft: { saved: event.value, text: event.value }, commit: null };
     case 'key':
       if (event.key === 'Escape') return { draft: { ...draft, text: draft.saved }, commit: null };
       if (event.key !== 'Enter' || event.composing) return { draft, commit: null };
-      return finish(draft);
-    case 'blur': return finish(draft);
+      return finish(draft, accept);
+    case 'blur': return finish(draft, accept);
   }
 }
 
-function finish(draft: FieldDraft): { draft: FieldDraft; commit: string | null } {
+function finish(draft: FieldDraft, accept: (value: string) => boolean): { draft: FieldDraft; commit: string | null } {
   const value = draft.text.trim();
-  return { draft: { ...draft, text: value }, commit: value === draft.saved.trim() ? null : value };
+  if (value === draft.saved.trim()) return { draft: { ...draft, text: value }, commit: null };
+  return accept(value) ? { draft: { ...draft, text: value }, commit: value } : { draft: { ...draft, text: draft.saved }, commit: null };
 }
+
+export const listAccepts = (items: readonly string[], value: string, allowDuplicates = false): boolean => allowDuplicates || !items.includes(value);
+
+export const listWithout = (items: readonly string[], index: number): string[] => items.filter((_, i) => i !== index);
 
 export type NumberRead = { kind: 'value'; value: number | undefined } | { kind: 'bad' };
 

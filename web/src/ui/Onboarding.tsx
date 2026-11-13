@@ -7,7 +7,7 @@ import { accessKey, accessWidening, keyEntryAccess, type Access } from '../setti
 import { deepEqual } from '../settings/merge.ts';
 import type { AgentState } from './agent-state.ts';
 import {
-  agentInput, canContinue, connectProblem, emptyConnect, listPlan, modelFormOf, nameInput, ONBOARD_STEPS, OPENAI_URL, PROVIDERS, REACHABLE, styleInput, STYLES,
+  agentInput, canContinue, connectProblem, emptyConnect, escapeAction, listPlan, modelFormOf, nameInput, ONBOARD_STEPS, OPENAI_URL, PROVIDERS, REACHABLE, styleInput, STYLES,
   type ConnectForm, type ProviderChoice, type StyleId,
 } from './onboarding-steps.ts';
 import { Avatar, Button, Pill } from './parts.tsx';
@@ -71,6 +71,17 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     }).catch(() => undefined);
     return () => { live = false; };
   }, [step, form.provider]);
+
+  useEffect(() => {
+    const onEscape = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const action = escapeAction({ busy, confirming: widen !== null });
+      if (action !== 'close') e.preventDefault();
+      if (action === 'cancelConfirm') setWiden(null);
+    };
+    addEventListener('keydown', onEscape, true);
+    return () => removeEventListener('keydown', onEscape, true);
+  }, [busy, widen]);
 
   const passed = (result !== null && REACHABLE.has(result.status)) || (existing !== null && result === null);
   const ready = canContinue(step, { name, agent, style, passed });
