@@ -10,14 +10,14 @@ import type { ToolDef } from '../src/tools/types.ts';
 import type { JudgeLimitSet } from '../src/tools/pipeline.ts';
 import type { DownloadNetwork } from '../src/tools/web/public-page.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, JudgeAdapter, tempDir, testConfig } from './helpers.ts';
 
 export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelConfig {
   return { id, provider: 'fake', model: `${id}-name`, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...over };
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judgeAll?: boolean; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; now?: () => number } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judgeAll?: boolean; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; now?: () => number } = {}) {
   const dir = tempDir(t);
   // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
@@ -32,7 +32,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
   const logs: string[] = [];
   const app = new App({
     paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, ...(options.env ? { env: options.env } : {}),
-    adapterOverride: provider => { const made = new FakeAdapter(provider); adapters.set(provider.id, made); return made; },
+    adapterOverride: provider => { const made = options.judge === undefined ? new FakeAdapter(provider) : Object.assign(new JudgeAdapter(provider), { judgeAnswer: options.judge }); adapters.set(provider.id, made); return made; },
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
     ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),

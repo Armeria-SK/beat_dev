@@ -8,7 +8,8 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { attachmentBlock, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../src/uploads/store.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 // 画面が決める会話の id は UUID（まだ無い会話への最初の発言は、この形だけ受け付ける）
 const C1 = '00000000-0000-4000-8000-000000000001';
@@ -47,8 +48,8 @@ async function setup(t: { after: (fn: () => void | Promise<void>) => void }, mod
   config.tools.shell.approvalTimeoutSec = 10;
   edit(config);
   writeFileSync(paths.config, JSON.stringify(config));
-  let adapter!: FakeAdapter;
-  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  let adapter!: JudgeAdapter;
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);
   await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
@@ -89,19 +90,19 @@ test('添付の段落は画面では隠し、名前だけを見せる', () => {
   assert.equal(stripAttachments(`読んで\n\n${block}\n\n${block}`), '読んで');
 });
 
-test('API: 添付して送ると、中身はデータとしてモデルに渡り、その実行の書き込みは承認制になる', async t => {
+test('API: 添付して送ると、中身はデータとしてモデルに渡り、その実行の確かめは外を読んだ扱いで判定役に回る', async t => {
   const s = await setup(t);
   const up = await s.upload('議事録.pdf', tinyPdf('Meeting notes: ship on Friday'), 'application/pdf');
   assert.equal(up.status, 201);
-  s.adapter().scripts.push(toolCall('file_write', { path: 'summary.md', content: 'ship on Friday' }), reply('まとめました'));
+  s.adapter().scripts.push(toolCall('shell_run', { command: 'frobnicate --now' }), reply('まとめました'));
   const sent = await s.post(`/api/conversations/${C1}/messages`, { text: 'これをまとめて', attachments: [up.body.upload.id] });
   assert.equal(sent.status, 202);
-  for (let i = 0; i < 300 && !s.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
-  const requested = s.events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }>;
-  assert.ok(requested, '添付を読んだ実行の書き込みは確認する');
-  assert.match(requested.approval.reasons.join(' '), /Attachment "議事録\.pdf"/u);
-  s.app.approvals.decide(requested.approval.id, 'once');
   await s.app.engine.wait(sent.body.runId);
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [['judge', true]], '添付を読んだ実行の確かめは、外を読んだ印つきで積まれる');
+  assert.ok(judgeTextOf(s.adapter().judged[0]!).includes(TAINTED_NOTE), '判定役に外を読んだ 1 行が付く');
+  assert.ok(!judgeTextOf(s.adapter().judged[0]!).includes('ship on Friday'), '添付の中身は判定役に届かない');
   const toModel = String(s.adapter().calls[0]!.messages.at(-1)?.content);
   assert.match(toModel, /これをまとめて[\s\S]*<<<Attachment: 議事録\.pdf \(PDF, 1 page\(s\)\)>>>[\s\S]*ship on Friday/u);
   const view = await (await fetch(`${s.origin}/api/conversations/${C1}/messages`, { headers: { Origin: s.origin } })).json() as any;

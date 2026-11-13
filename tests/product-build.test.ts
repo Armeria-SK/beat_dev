@@ -401,7 +401,7 @@ test('3-2-s Build のあとの汚れ（子の担当）: Build のタスクの実
   }
 });
 
-test('3-2-s Build のあとの汚れ（子の担当・通しで）: 子が汚れた計画書を mesh で読んだあと、親の次の「外を読んだあと」の確かめは判定役に回らず、持ち主に札が出る', async t => {
+test('3-2-s Build のあとの汚れ（子の担当・通しで）: 子が汚れた計画書を mesh で読んだあと、親の次の「外を読んだあと」の確かめは判定役に回らず、頼みが無いので judge_failed（no_request）で Pending に積まれる', async t => {
   const s = await setup(t, { configure: c => { c.tools.agent.enabled = true; c.tools.agent.inTasks = true; c.tools.policies = { agent_run: 'allow' }; } });
   const product = await s.product('child-e2e');
   await s.ownerPlan(product.id, '# Plan');
@@ -428,15 +428,11 @@ test('3-2-s Build のあとの汚れ（子の担当・通しで）: 子が汚れ
     reply('{"decision":"allow","reason":"reading notes the owner asked for"}'),
     reply('done'),
   ];
-  let ended = false;
-  const ran = s.app.worker.tick().finally(() => { ended = true; });
-  await waitFor(() => s.app.approvals.pending().length > 0 || ended, '札か実行の終わり');
-  const cards = s.app.approvals.pending();
-  for (const card of cards) s.app.approvals.decide(card.id, 'deny');
-  assert.equal(await ran, 'ran');
-  assert.equal(cards.length, 1, '持ち主に札が出る');
-  assert.deepEqual([...(cards[0]!.kinds ?? [])], ['taint']);
-  assert.match(cards[0]!.reasons.join('\n'), /task's text was not written by you/u);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(r => [r.tool, r.kind, r.tainted]), [['shell_run', 'judge_failed', true]], '持ち主に聞く（Pending）');
+  assert.match(rows[0]!.reason, /there is no request from the owner to judge it against/u);
   assert.equal(s.adapter().calls.slice(before).filter(isClassifier).length, 0, '判定役を呼ばない');
   assert.equal(s.app.tasks.judgeRequest(taskId), '');
 });

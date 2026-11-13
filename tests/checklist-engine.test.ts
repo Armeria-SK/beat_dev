@@ -11,7 +11,8 @@ import { checklistWrite } from '../src/tools/builtin/checklist.ts';
 import { readChecklist, writeChecklist } from '../src/tools/builtin/checklist-core.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { settled, waitFor } from './app-setup.ts';
-import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 // 段 2-11: 作業の一覧を毎回の system に入れる・外から読んだ実行が書いた一覧は、あとの実行に「外から読んだ」印を引き継ぐ
 
@@ -44,9 +45,9 @@ async function setup(t: { after: (fn: () => void) => void }) {
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;
   writeFileSync(paths.config, JSON.stringify(config));
-  let adapter!: FakeAdapter;
+  let adapter!: JudgeAdapter;
   const tools = [...builtinTools().filter(tool => tool.name !== 'checklist_write'), checklistWrite];
-  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, tools, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, tools, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   mkdirSync(paths.workspace, { recursive: true });
@@ -64,12 +65,14 @@ async function run(s: S, scripts: Script[], text = '進めて'): Promise<string>
   return outcome.runId;
 }
 
-async function expectAsked(s: S, runId: string, reason: RegExp): Promise<void> {
-  await waitFor(() => s.app.approvals.pending().length === 1, '外から読んだあとの書き込みの確かめ');
-  assert.match(s.app.approvals.pending()[0]!.reasons.join(' '), reason);
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+const PROBE = { command: 'frobnicate --now' };
+
+async function expectAsked(s: S, runId: string): Promise<void> {
   await settled(s.app, runId);
-  assert.equal(existsSync(join(s.paths.workspace, 'out.txt')), false, '断ったので書かれない');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [['judge', true]], '印に頼らず判定役に回る操作が、外から読んだ印つきで積まれる');
+  assert.ok(judgeTextOf(s.adapter().judged.at(-1)!).includes(TAINTED_NOTE), '判定役に外から読んだ 1 行が付く');
 }
 
 async function expectWritten(s: S, runId: string): Promise<void> {
@@ -131,12 +134,12 @@ test('使用量の見積もり（contextUsage）にも一覧の分が入る（�
 });
 
 for (const language of ['en'] as const) {
-  test(`外から読んだ実行が書いた一覧のあとの実行は「外から読んだ」で始まる（書き込みは確かめが出る。一覧の見出しにも印の文が付く）（${language}）`, async t => {
+  test(`外から読んだ実行が書いた一覧のあとの実行は「外から読んだ」で始まる（判定役に外から読んだ 1 行が付く。一覧の見出しにも印の文が付く）（${language}）`, async t => {
     const s = await setup(t);
     await run(s, [call('web_fetch', FETCH), call('checklist_write', LIST), reply('written')]);
     assert.equal(readChecklist(s.app.kv, C)?.tainted, true, '前提: 外から読んだ実行が書いた一覧は印付きで保存される');
-    const second = send(s, 'next', [call('file_write', WRITE), reply('done')]);
-    await expectAsked(s, second, /work checklist/u);
+    const second = send(s, 'next', [call('shell_run', PROBE), reply('done')]);
+    await expectAsked(s, second);
     assert.equal(s.app.runs.get(second)!.tainted, 1, '実行の記録にも印が残る');
     const system = s.adapter().calls[3]!.system.dynamic;
     assert.ok(system.includes(toolText(language, 'checklist.section_tainted')), '一覧の見出しに、外から読んだ印の文が付く');
@@ -175,25 +178,25 @@ test('やり直し（retry）も、印付きの一覧が残っていれば「外
   const s = await setup(t);
   await run(s, [call('web_fetch', FETCH), call('checklist_write', LIST), reply('書きました')]);
   s.app.conversations.append(C, { role: 'user', content: 'もう一度' });
-  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
+  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
   const retried = s.app.engine.retry(C);
   assert.ok(retried.ok);
-  await expectAsked(s, retried.runId, /work checklist/u);
+  await expectAsked(s, retried.runId);
 });
 
-test('タスクの会話も同じ: 印付きの一覧が残っていれば、次のタスクの実行は「外から読んだ」で始まる（書き込みは確かめが出る）。印の無い一覧なら出ない', async t => {
+test('タスクの会話も同じ: 印付きの一覧が残っていれば、次のタスクの実行は「外から読んだ」で始まる（判定役に外から読んだ 1 行が付く）。印の無い一覧なら書き込みは確かめなしで通る', async t => {
   const s = await setup(t);
   const runTask = async (listTainted: boolean) => {
     const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user' });
     const conversation = s.app.conversations.create({ kind: 'task' });
     writeChecklist(s.app.kv, conversation.id, [{ text: OPEN, status: 'pending' }], listTainted, 1);
-    s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
+    s.adapter().scripts = [call(listTainted ? 'shell_run' : 'file_write', listTainted ? PROBE : WRITE), reply('おわり')];
     const started = s.app.engine.runTask(task, conversation.id, '続きをやって');
     assert.ok(started.ok);
     return started;
   };
   const tainted = await runTask(true);
-  await expectAsked(s, tainted.runId, /work checklist/u);
+  await expectAsked(s, tainted.runId);
   await tainted.done;
   assert.equal(s.app.runs.get(tainted.runId)!.tainted, 1);
   const clean = await runTask(false);

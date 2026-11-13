@@ -197,14 +197,12 @@ test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ�
   s.adapter().scripts = [call('task_create', { title: 'SPAWNED', requested_by_user: true, when: LATER }), reply('done')];
   const started = s.app.engine.runTask(s.app.tasks.get(id)!, s.app.conversations.create({ kind: 'task' }).id, 'Do the task');
   assert.ok(started.ok);
-  let ended = false;
-  void started.done.finally(() => { ended = true; });
-  await waitFor(() => s.app.approvals.pending().length > 0 || ended, '札か実行の終わり');
-  const cards = s.app.approvals.pending();
-  for (const card of cards) s.app.approvals.decide(card.id, 'deny');
   await started.done;
   assert.equal(s.app.runs.get(started.runId)?.tainted, 1);
-  assert.deepEqual(cards.map(card => [card.tool, [...(card.kinds ?? [])]]), [['task_create', ['taint']]]);
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.tainted]), [['task_create', 'owner', true]], '判定役に回さず持ち主（Pending の owner）に聞く');
+  assert.match(rows[0]!.reason, /this run read outside content, and task_create would change tasks/u);
   assert.equal(s.app.db.prepare("SELECT 1 FROM tasks WHERE title = 'SPAWNED'").get(), undefined);
 });
 

@@ -10,12 +10,14 @@ import type { AttachmentMeta, StopReason, ToolCall } from '../src/engine/types.t
 import { resolvePaths } from '../src/paths.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { settled, waitFor } from './app-setup.ts';
-import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 const C = 'c1';
 const EVIL: AttachmentMeta = { id: 'u1', name: 'evil.txt', kind: 'text' };
 const FETCH = { url: 'https://news.example.com/' };
 const WRITE = { path: 'out.txt', content: 'x' };
+const PROBE = { command: 'frobnicate --now' };
 
 const network: PageNetwork = {
   resolve: async () => ['93.184.216.34'],
@@ -42,8 +44,8 @@ async function setup(t: { after: (fn: () => void) => void }) {
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;
   writeFileSync(paths.config, JSON.stringify(config));
-  let adapter!: FakeAdapter;
-  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  let adapter!: JudgeAdapter;
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   mkdirSync(paths.workspace, { recursive: true });
@@ -76,13 +78,18 @@ async function stopAfterTool(s: S, tool: string, args: unknown, text = '読ん�
   return runId;
 }
 
-// 次の実行の最初の道具（書き込み）が、確かめを求める（外から読んだ扱い）。断って終わらせる
-async function expectAsked(s: S, runId: string, reason: RegExp): Promise<void> {
-  await waitFor(() => s.app.approvals.pending().length === 1, '外から読んだあとの書き込みの確かめ');
-  assert.match(s.app.approvals.pending()[0]!.reasons.join(' '), reason);
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+// 次の実行の最初の道具（印に頼らず判定役に回る一覧に無いコマンド）を判定役が見るとき、外から読んだ 1 行が付き、ask の答えで積まれた行に外から読んだ印が残る
+async function expectAsked(s: S, runId: string, kind: 'judge' | 'judge_failed' = 'judge'): Promise<void> {
   await settled(s.app, runId);
-  assert.equal(existsSync(join(s.paths.workspace, 'out.txt')), false, '断ったので書かれない');
+  await s.app.engine.wait(runId);
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.equal(rows.length, 1, '判定役の ask で 1 行積む');
+  assert.equal(rows[0]!.kind, kind);
+  assert.equal(rows[0]!.tainted, true, '外から読んだ扱いの印');
+  if (kind === 'judge_failed') return;
+  assert.equal(s.adapter().judged.length, 1);
+  assert.ok(judgeTextOf(s.adapter().judged[0]!).includes(TAINTED_NOTE), '判定役に外から読んだ会話だと伝わる');
 }
 // 確かめなしで書き込みが通る（外から読んだ扱いではない）
 async function expectWritten(s: S, runId: string): Promise<void> {
@@ -95,9 +102,9 @@ test('やり直し: 添付を読んだ実行が、道具を使ったあとで止
   const s = await setup(t);
   const first = await stopAfterTool(s, 'file_read', { path: 'a.txt' }, '添付を見て', [EVIL]);
   assert.equal(s.app.runs.get(first)!.ok, 0);
-  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
+  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
   const runId = retry(s);
-  await expectAsked(s, runId, /evil\.txt|前の実行/u);
+  await expectAsked(s, runId);
 });
 
 for (const how of ['retry', 'send'] as const) {
@@ -105,9 +112,9 @@ for (const how of ['retry', 'send'] as const) {
     const s = await setup(t);
     const first = await stopAfterTool(s, 'web_fetch', FETCH);
     assert.equal(s.app.runs.get(first)!.tainted, 1, 'Web を読んだ実行は、終わるとき「外から読んだ」印が残る');
-    s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
+    s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
     const runId = next(s, how);
-    await expectAsked(s, runId, /what an earlier run read/u);
+    await expectAsked(s, runId);
   });
 }
 
@@ -141,8 +148,8 @@ test('印は実行の頭から残る: 外から読んだ実行をやり直して
   await settled(s.app, second);
   await s.app.engine.wait(second);
   assert.equal(s.app.runs.get(second)!.tainted, 1, '引き継いだ印が、この実行にも残る');
-  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, retry(s), /what an earlier run read/u);
+  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
+  await expectAsked(s, retry(s));
 });
 
 test('前からある実行の記録の道具の上限の印（max_iterations）を持つ実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
@@ -155,8 +162,8 @@ test('前からある実行の記録の道具の上限の印（max_iterations）
   assert.equal(s.app.runs.get(first)!.ok, 1);
   assert.match(s.app.runs.get(first)!.flags, /max_iterations/u);
   assert.equal(s.app.conversations.messages(C).at(-1)!.role, 'assistant', '前提: 最後は道具の呼び出しの付かない assistant の発言');
-  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, send(s, '続けて'), /what an earlier run read/u);
+  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
+  await expectAsked(s, send(s, '続けて'));
 });
 
 test('出力の上限で切れた返事で終わった実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
@@ -167,8 +174,8 @@ test('出力の上限で切れた返事で終わった実行も、最後の返�
   await settled(s.app, first);
   await s.app.engine.wait(first);
   assert.match(s.app.runs.get(first)!.flags, /output_truncated/u);
-  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, send(s, '続けて'), /what an earlier run read/u);
+  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
+  await expectAsked(s, send(s, '続けて'));
 });
 
 test('履歴の見方: 道具を呼んだ assistant の発言をまたいで、返事の付いていない添付を数える（実行の記録が無くても）', async t => {
@@ -177,8 +184,8 @@ test('履歴の見方: 道具を呼んだ assistant の発言をまたいで、�
   conversations.append(C, { role: 'user', content: '添付を見て', attachments: [EVIL] });
   conversations.append(C, { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'file_read', arguments: { path: 'a.txt' } }] });
   conversations.append(C, { role: 'tool', toolCallId: 't1', name: 'file_read', content: 'こんにちは' });
-  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, retry(s), /evil\.txt/u);
+  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
+  await expectAsked(s, retry(s));
 });
 
 test('履歴の見方: 返事の付いた添付は数えない。道具を呼んだだけの assistant の発言は返事ではない', async t => {
@@ -202,8 +209,8 @@ test('履歴の見方: 読み出せる行数（500）のなかに最後の返事
     conversations.append(C, { role: 'tool', toolCallId: `t${i}`, name: 'file_read', content: 'こんにちは' });
   }
   assert.ok(conversations.messages(C, 1000).length > 500, '前提: 500 行より長い');
-  s.adapter().scripts = [call('file_write', WRITE), reply('おわり')];
-  await expectAsked(s, retry(s), /a history too long to check/u);
+  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
+  await expectAsked(s, retry(s), 'judge_failed');
 });
 
 test('履歴の見方: 500 行より長くても、そのなかに最後の返事が見つかれば、その後ろだけを見る（確かめきれない扱いにしない）', async t => {
@@ -247,8 +254,8 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   const databasePath = join(dir, 'beat.db');
-  let adapter!: FakeAdapter;
-  const open = () => new App({ judgeAll: false, paths, databasePath, log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  let adapter!: JudgeAdapter;
+  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
   const first = open();
   await first.status.probeAll(first.config());
   adapter.scripts = [call('web_fetch', FETCH), untilStopped];
@@ -265,13 +272,14 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
   try {
     await second.status.probeAll(second.config());
     assert.deepEqual({ ...(second.db.prepare('SELECT ok, error_kind AS kind, tainted FROM engine_runs').get() as object) }, { ok: 0, kind: 'cancelled', tainted: 1 }, '落ちた実行は中断扱いになっても、印は残る');
-    adapter.scripts = [call('file_write', WRITE), reply('おわり')];
+    adapter.scripts = [call('shell_run', PROBE), reply('おわり')];
     const retried = second.engine.retry(C);
     assert.ok(retried.ok);
-    await waitFor(() => second.approvals.pending().length === 1, '再起動後のやり直しの確かめ');
-    assert.match(second.approvals.pending()[0]!.reasons.join(' '), /what an earlier run read/u);
-    second.approvals.decide(second.approvals.pending()[0]!.id, 'deny');
     await settled(second, retried.runId);
     await second.engine.wait(retried.runId);
+    assert.equal(second.approvals.pending().length, 0, '札は出ない');
+    const rows = second.pending.list({ status: 'waiting' });
+    assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [['judge', true]], '再起動後のやり直しも外から読んだ扱いで積まれる');
+    assert.ok(judgeTextOf(adapter.judged[0]!).includes(TAINTED_NOTE));
   } finally { second.close(); await new Promise(resolve => setTimeout(resolve, 50)); }
 });

@@ -20,7 +20,7 @@ import type { ToolContext } from '../src/tools/types.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
-import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, JudgeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 // PR 1-5s（steps/p1-ui.md の「サーバーの作業」の Library）: Runs の件数・スキルの版と History・登録する前に聞く / 聞かないの設定・しまった会話の数と時刻
 
@@ -31,7 +31,7 @@ async function boot(t: { after: (fn: () => void) => void }, config: Record<strin
   const paths = resolvePaths(root);
   mkdirSync(paths.workspace, { recursive: true });
   if (config) writeFileSync(paths.config, JSON.stringify(config));
-  const app = new App({ judgeAll: false, paths, databasePath: join(root, 'beat.db'), log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  const app = new App({ paths, databasePath: join(root, 'beat.db'), log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
   open.push(app);
   app.conversations.ensure('c1');
   const events: NotifyEvent[] = [];
@@ -314,8 +314,8 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
-  let adapter!: FakeAdapter;
-  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: injected, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  let adapter!: JudgeAdapter;
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: injected, adapterOverride: p => (adapter = Object.assign(new JudgeAdapter(p), { judgeAnswer: '{"decision":"allow","reason":"asked for"}' })) });
   const runTask = async (scripts: Script[]) => {
     adapter.scripts.push(...scripts);
     assert.equal(await app.worker.tick(), 'ran');
@@ -326,13 +326,9 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
     adapter.scripts.push(...scripts);
     const outcome = app.engine.send(conversationId, text);
     assert.ok(outcome.ok, JSON.stringify(outcome));
-    if (approve) {
-      for (let i = 0; i < 300 && !app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-      const pending = app.approvals.pending()[0];
-      assert.ok(pending, '承認の依頼が来ていない');
-      app.approvals.decide(pending.id, 'once');
-    }
+    const judgedBefore = adapter.judged.length;
     await app.engine.wait(outcome.runId);
+    if (approve) assert.ok(adapter.judged.length > judgedBefore, '準備の段: 外を読んだあとの道具は判定役が見て（allow）動く');
   };
   return { app, chat, runTask };
 }

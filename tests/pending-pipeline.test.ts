@@ -408,7 +408,7 @@ test('4-2d: ほかの会話の待ちが 200 を超えても、この会話の待
 
 test('4-2d: 製品の会話で、この実行で AI が作ったファイルを消すのは積まず、持ち主のファイルを消すのは Pending に積む', { skip: spawnSync('git', ['--version']).status !== 0 && 'git が無い' }, async t => {
   const products = realpathSync.native(mkdtempSync(join(tmpdir(), 'beat-test-')));
-  const s = await startApp(t, { models: [fakeModel('m1')], tools: builtinTools(), projectFolderExempt: [products] });
+  const s = await startApp(t, { models: [fakeModel('m1')], tools: builtinTools(), projectFolderExempt: [products], judge: '{"decision":"allow","reason":"asked for"}' });
   t.after(() => rmSync(products, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 }));
   const root = join(products, 'shop');
   mkdirSync(root);
@@ -420,14 +420,9 @@ test('4-2d: 製品の会話で、この実行で AI が作ったファイルを�
   s.adapter().scripts = [toolCall('file_write', { path: 'gen.txt', content: 'x' }), toolCall('file_write', { path: 'keep.txt', content: 'x' }), toolCall('shell_run', { command: remove('gen.txt') }), toolCall('shell_run', { command: remove('owner.txt') }), say('done')];
   const sent = await s.json(`/api/conversations/aaaaaaaa-0000-4000-8000-0000000000e1/messages`, 'POST', { text: 'tidy up', projectId: made.body.project.id, permissionMode: 'normal' });
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
-  await waitFor(() => s.app.approvals.pending().length > 0 || s.app.pending.list({ status: 'waiting' }).length > 0, 'a card or a Pending row', 30_000);
-  const card = s.app.approvals.pending()[0];
-  if (card) {
-    assert.match(card.body, /gen\.txt/u, 'AI が作ったものを消すのは今までどおりの札（積まない）');
-    s.app.approvals.decide(card.id, 'once');
-  }
   await waitFor(() => s.app.runs.get(sent.body.runId)?.ended_at != null, 'run ended', 30_000);
-  assert.equal(existsSync(join(root, 'gen.txt')), false, 'AI が作ったものは消えた');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  assert.equal(existsSync(join(root, 'gen.txt')), false, 'AI が作ったものを消すのは積まず、判定役（allow）が通して消えた');
   assert.equal(existsSync(join(root, 'owner.txt')), true, '持ち主のファイルは残る');
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.equal(rows.length, 1, JSON.stringify(rows));

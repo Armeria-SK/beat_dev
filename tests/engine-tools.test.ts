@@ -14,7 +14,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../src/tools/types.ts';
 import { CONVERSATION, fakeModel, startApp } from './app-setup.ts';
-import { fail, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { fail, JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
   return async function* () {
@@ -28,7 +28,7 @@ function textOnly(text: string): Script {
   return async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
 }
 
-async function setup(t: { after: (fn: () => void) => void }, model: Partial<ModelConfig> = {}) {
+async function setup(t: { after: (fn: () => void) => void }, model: Partial<ModelConfig> = {}, judgeAll = true) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -36,8 +36,8 @@ async function setup(t: { after: (fn: () => void) => void }, model: Partial<Mode
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
-  let adapter!: FakeAdapter;
-  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  let adapter!: JudgeAdapter;
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, judgeAll, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
   await app.status.probeAll(app.config());
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));
@@ -66,8 +66,9 @@ test('ツールを使ってから返事を書く（結果は履歴に残り、�
   assert.deepEqual(s.events.filter(e => e.type.startsWith('tool.')).map(e => e.type), ['tool.call', 'tool.result']);
 });
 
+// 前の道（札）: 4-3b-1 で消す
 test('承認を待ってから続ける', async t => {
-  const s = await setup(t);
+  const s = await setup(t, {}, false);
   const outside = join(s.paths.data, 'outside.txt');
   writeFileSync(outside, 'secret-ish');
   const command = process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"`;
@@ -84,7 +85,7 @@ test('承認を待ってから続ける', async t => {
 });
 
 // security-self-api.md の V1: 報告された筋道そのもの。beat が put.js を書いて動かし、API・設定ファイルに手を出そうとする
-test('V1: スクリプトを書いて node で動かす筋道は、中身つきの今回だけの確かめで止まる。拒否すれば何も起きない', async t => {
+test('V1: スクリプトを書いて node で動かす筋道は、製品の外なので判定役に回り、ask なら中身つきで Pending に積まれて何も起きない', async t => {
   const s = await setup(t);
   const configBefore = readFileSync(s.paths.config, 'utf8');
   const marker = join(s.paths.workspace, 'ran.txt');
@@ -97,47 +98,41 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   ].join('\n');
   s.adapter().scripts.push(toolCall('file_write', { path: 'put.js', content: attack }), toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
   const { done } = await s.send('設定を直して');
-  for (let i = 0; i < 300 && !s.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
-  const requests = s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>;
-  assert.equal(requests.length, 1, 'put.js を書くのは作業フォルダの中なので確かめなし。確かめが出るのは動かす node だけ');
-  const request = requests[0]!.approval;
-  assert.equal(request.tool, 'shell_run');
-  assert.equal(request.onceOnly, true);
-  assert.equal(request.preview.length, 1);
-  assert.match(request.preview[0]!.path, /put\.js$/u);
-  assert.match(request.preview[0]!.text, /api\/settings/u, '動かすコードの中身が札に出る');
-  assert.match(request.reasons[0]!, /This code contains text that touches beat itself/u, '理由の先頭に目印');
-  assert.match(request.reasons[0]!, /config\.json/u);
-  assert.ok(request.reasons.some(r => /It runs code written in a file/u.test(r)));
-  assert.equal(existsSync(marker), false, '承認の前には動いていない');
-
-  s.app.approvals.decide(request.id, 'deny');
   const result = await done;
   assert.ok(result.ok);
-  assert.equal(existsSync(marker), false, '拒否したのに動いた');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  assert.equal(s.adapter().judged.length, 1, 'put.js を書くのは作業フォルダの中なので判定役なし。判定役が見るのは動かす node だけ');
+  const judged = judgeTextOf(s.adapter().judged[0]!);
+  assert.match(judged, /This code contains text that touches beat itself/u, '判定役に目印の理由が渡る');
+  assert.match(judged, /It runs code written in a file/u);
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.equal(rows.length, 1);
+  const row = rows[0]!;
+  assert.equal(row.kind, 'judge');
+  assert.equal(row.tool, 'shell_run');
+  assert.equal(row.preview.length, 1);
+  assert.match(row.preview[0]!.path, /put\.js$/u);
+  assert.match(row.preview[0]!.text, /api\/settings/u, '動かすコードの中身が Pending の行に出る');
+  assert.match(row.checks[0]!, /This code contains text that touches beat itself/u, '理由の先頭に目印');
+  assert.match(row.checks[0]!, /config\.json/u);
+  assert.equal(existsSync(marker), false, '積んだだけで動いていない');
   assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore, '設定ファイルが書き換わった');
-  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool' && /refused/u.test(m.text))?.text ?? '', /The user refused to run it/u);
 
-  // 同じ文字のコマンドを、中身を変えてもう一度出しても、また確かめになる（拒否のあとも、許可のあとも）
+  // 同じ文字のコマンドを、中身を変えてもう一度出しても、また判定役が見る（許したあとも）
   writeFileSync(join(s.paths.workspace, 'put.js'), "require('node:fs').writeFileSync('ran.txt', 'harmless');\n");
+  s.adapter().judgeAnswer = '{"decision":"allow","reason":"fits"}';
   s.adapter().scripts.push(toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
-  const again = await s.send('もう一度');
-  for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 2; i++) await new Promise(r => setTimeout(r, 10));
-  const second = (s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>)[1]!;
-  assert.ok(second, '2 回目も確かめが出る');
-  assert.doesNotMatch(second.approval.reasons[0]!, /beat itself/u, '無害な中身には目印が付かない');
-  s.app.approvals.decide(second.approval.id, 'conversation');
-  assert.ok((await again.done).ok);
-  assert.equal(readFileSync(marker, 'utf8'), 'harmless', '許可すれば動く（拒否の確認が空振りでないことの対照）');
+  assert.ok((await (await s.send('もう一度')).done).ok);
+  assert.equal(s.adapter().judged.length, 2, '2 回目も判定役が見る');
+  assert.doesNotMatch(judgeTextOf(s.adapter().judged[1]!), /beat itself/u, '無害な中身には目印が付かない');
+  assert.equal(readFileSync(marker, 'utf8'), 'harmless', '判定役が許せば動く（積んだだけで動かないことの対照）');
   assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore);
 
+  s.adapter().judgeAnswer = '{"decision":"ask","reason":"check"}';
   s.adapter().scripts.push(toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
-  const third = await s.send('もう一度');
-  for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 3; i++) await new Promise(r => setTimeout(r, 10));
-  const last = s.events.filter(e => e.type === 'approval.requested');
-  assert.equal(last.length, 3, '「この会話では許可」を送っても、3 回目もまた確かめになる');
-  s.app.approvals.decide((last[2] as Extract<RunEvent, { type: 'approval.requested' }>).approval.id, 'deny');
-  await third.done;
+  assert.ok((await (await s.send('もう一度')).done).ok);
+  assert.equal(s.adapter().judged.length, 3, '前に判定役が許していても、3 回目もまた判定役が見る');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 2);
 });
 
 test('道具の結果は、モデルのコンテキストに合わせて切る（小さなコンテキストで、大きな一覧 1 つが入りきらなくならない）', async t => {
@@ -253,8 +248,9 @@ test('会話は回数で止まらない: 20 回道具を呼んでから普通に
   assert.equal(s.app.conversations.messages('c1').at(-1)!.text, 'おわり');
 });
 
+// 前の道（札）: 4-3b-1 で消す
 test('承認を待っている間に止めたら、実行せずに中止する', async t => {
-  const s = await setup(t);
+  const s = await setup(t, {}, false);
   s.adapter().scripts.push(toolCall('shell_run', { command: 'npm install left-pad' }), reply('届かない'));
   const { runId, done } = await s.send('入れて');
   for (let i = 0; i < 300 && !s.app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));

@@ -79,6 +79,20 @@ export class FakeAdapter implements ProviderAdapter {
   }
 }
 
+export const isJudgeRequest = (req: ModelRequest): boolean => req.tools.length === 0 && req.system.frozen.includes('safety checker');
+export const judgeTextOf = (req: ModelRequest): string => JSON.stringify(req.messages) + req.system.frozen + req.system.dynamic;
+
+export class JudgeAdapter extends FakeAdapter {
+  judgeAnswer = '{"decision":"ask","reason":"check"}';
+  readonly judged: ModelRequest[] = [];
+  override async *stream(req: ModelRequest): AsyncGenerator<StreamEvent> {
+    if (!isJudgeRequest(req)) { yield* super.stream(req); return; }
+    this.judged.push(req);
+    yield { type: 'text', delta: this.judgeAnswer };
+    yield { type: 'done', stop: 'end_turn' };
+  }
+}
+
 export function reply(text: string, usage: { inputTokens?: number; outputTokens?: number } = {}): Script {
   return async function* () {
     for (const part of text.match(/.{1,5}/gsu) ?? []) yield { type: 'text', delta: part };

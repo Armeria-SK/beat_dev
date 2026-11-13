@@ -94,7 +94,7 @@ async function app(t: { after: (fn: () => void) => void }) {
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const a = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, botMemory: true, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const a = new App({ paths, databasePath: ':memory:', log: () => undefined, botMemory: true, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await a.status.probeAll(a.config());
   const events: RunEvent[] = [];
   a.bus.subscribe(e => events.push(e.event));
@@ -122,15 +122,18 @@ test('会話中に覚えたことは、今の会話の system には入らず、
   assert.match(s.adapter().calls[3]!.system.frozen, /\[u\d+\] ユーザーは紅茶が好き/u);
 });
 
-test('SOUL.md の書き換えは承認制にし、中身が変わったら版を残す', async t => {
+test('SOUL.md の書き換えは判定役に回さず持ち主（Pending の owner）に聞き、Approve で書いたあと中身が変わったら版を残す', async t => {
   const s = await app(t);
   s.adapter().scripts.push(toolCall('file_write', { path: 'SOUL.md', content: '# SOUL\n名前は beat。皮肉屋' }), reply('提案しました'));
-  const done = s.send('c1', '性格を変えて');
-  for (let i = 0; i < 300 && !s.app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const pending = s.app.approvals.pending()[0]!;
-  assert.match(pending.reasons.join(), /persona or profile file/u);
-  s.app.approvals.decide(pending.id, 'once');
-  await done;
+  await s.send('c1', '性格を変えて');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const [row] = s.app.pending.list({ status: 'waiting' });
+  assert.equal(row?.kind, 'owner');
+  assert.match(row!.reason, /persona or profile file/u);
+  assert.equal(s.adapter().calls.filter(c => c.tools.length === 0 && c.system.frozen.includes('safety checker')).length, 0, '判定役は呼ばれない');
+  s.app.replayPending(s.app.pending.claim(row!.id));
+  for (let i = 0; i < 300 && s.app.pending.view(row!.id)?.status !== 'ran'; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(s.app.pending.view(row!.id)?.status, 'ran', 'Approve で書いた');
   s.adapter().scripts.push(reply('はい'));
   await s.send('c2', 'こんにちは');
   const versions = s.app.db.prepare("SELECT content FROM file_versions WHERE name = 'SOUL.md' ORDER BY id").all() as Array<{ content: string }>;

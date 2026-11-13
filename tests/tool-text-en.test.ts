@@ -179,7 +179,7 @@ async function appFor(t: { after: (fn: () => void | Promise<void>) => void }) {
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
-  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
   t.after(() => app.close());
   const parsed = app.config();
   const policy = buildPolicy(parsed, paths);

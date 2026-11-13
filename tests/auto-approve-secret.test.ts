@@ -50,18 +50,21 @@ test('自動承認の判定役が「許す」の理由に API キーをそのま
   assert.ok(!(await dump(s, seen)).includes(KEY), '鍵そのものはどこにも無い');
 });
 
-test('自動承認の判定役が「確かめる」の理由に API キーをそのまま書いても、承認の札（記録・一覧・画面の出来事）に鍵は残らない', async t => {
+test('自動承認の判定役が「確かめる」の理由に API キーをそのまま書いても、Pending の行（理由・行の理由・一覧・画面の出来事）に鍵は残らない', async t => {
   const s = await startApp(t, { env: { FAKE_KEY: KEY } });
   s.adapter().scripts = [toolCall('shell_run', { command: outsideReadCommand(s) }), say(`{"decision":"ask","reason":"鍵 ${KEY} が絡むかもしれない"}`), say('読みました')];
   const seen: RunEvent[] = [];
   s.app.bus.subscribe(e => { seen.push(e.event); });
   const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: '外のメモ（outside.txt）を読んで', permissionMode: 'auto' });
-  await waitFor(() => s.app.approvals.pending().length === 1, '承認の札');
-  const [request] = s.app.approvals.pending();
-  assert.ok(request!.reasons.some(r => r.includes('[REDACTED]')), '判定役の理由は札に載るが、鍵のところは伏せ字');
-  assert.ok(!(await dump(s, seen)).includes(KEY), '鍵そのものはどこにも無い');
-  s.app.approvals.decide(request!.id, 'deny');
   await settled(s.app, sent.body.runId);
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const [row] = s.app.pending.list({ status: 'waiting' });
+  assert.equal(row?.kind, 'judge');
+  assert.ok(row!.reason.includes('[REDACTED]'), '判定役の理由は Pending の行に載るが、鍵のところは伏せ字');
+  const listed = JSON.stringify((await s.json('/api/pending?status=waiting', 'GET')).body);
+  for (const [what, text] of [['理由', row!.reason], ['行の理由', JSON.stringify(row!.checks)], ['一覧', listed], ['DB の行', JSON.stringify(s.app.pending.row(row!.id))], ['記録と出来事', await dump(s, seen)]] as const) {
+    assert.ok(!text.includes(KEY), `${what}に鍵が残る`);
+  }
 });
 
 test('自動承認のモードでも、鍵を入れる API をシェルから呼ぶ形は判定役に回さず、送る操作として Pending に積む。許さなければ鍵は入らない', async t => {

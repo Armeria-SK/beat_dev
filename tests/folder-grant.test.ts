@@ -244,8 +244,9 @@ const toolCall = (name: string, args: unknown): Script => async function* () {
 };
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' }; };
 
+// 前の道（札）: 4-3b-1 で消す
 test('エンジンと API: 添付を読んだ実行の file_write の札に grantFolder が付き、POST /api/approvals/:id の folder で同じフォルダの file_write は札なしで動く。実行ログの API にフォルダが出る。次の実行は札', async t => {
-  const s = await startApp(t);
+  const s = await startApp(t, { judgeAll: false });
   const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
   s.adapter().scripts = [toolCall('file_write', { path: 'notes/a.txt', content: 'A' }), toolCall('file_write', { path: 'notes/b.txt', content: 'B' }), say('書きました')];
   const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: '添付を読んで、メモに書いて', attachments: [upload.id] });

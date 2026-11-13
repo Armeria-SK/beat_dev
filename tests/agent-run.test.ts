@@ -8,7 +8,8 @@ import { agentRun } from '../src/tools/builtin/agent.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { approvalShownIn } from '../src/tools/approvals.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, type Script, testConfig } from './helpers.ts';
+import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
+import { JudgeAdapter, judgeTextOf, reply, type Script, testConfig } from './helpers.ts';
 import { AGENT_RESULT_MAX_CHARS, toFullWidth } from '../src/engine/chat.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
@@ -265,8 +266,9 @@ const pendingCount = (s: Started, n: number) => () => s.app.approvals.pending().
 const isClassifier = (req: { tools: unknown[]; system: { frozen: string } }) => req.tools.length === 0 && req.system.frozen.includes('safety checker');
 const childConversation = (s: Started): string => childRuns(s)[0]!.conversation_id;
 
+// 前の道（札）: 4-3b-1 で消す
 test('T-24 子の札は親の会話に出る（SSE・会話の詳細）。子の会話の詳細には出ない。札から子の会話へ辿れる', async t => {
-  const s = await startApp(t, withAsk());
+  const s = await startApp(t, { ...withAsk(), judgeAll: false });
   s.adapter().scripts = [call('agent_run', { task: '任せる', title: '書き込み役' }), call('ask_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
   const seen: Array<{ type: string; conversationId?: string }> = [];
   s.app.bus.subscribe(e => { seen.push(e.event as { type: string; conversationId?: string }); });
@@ -291,8 +293,9 @@ test('T-24 子の札は親の会話に出る（SSE・会話の詳細）。子の
   assert.match(toolMessages(s, child)[0]!.text, /実行した/u);
 });
 
+// 前の道（札）: 4-3b-1 で消す
 test('T-15 子の札で「この会話では許可」を選んでも今回だけに落ち、同じ呼び出しでまた札が出る', async t => {
-  const s = await startApp(t, withAsk());
+  const s = await startApp(t, { ...withAsk(), judgeAll: false });
   s.adapter().scripts = [call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'a' }), call('ask_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
   const runId = await begin(s, uuid(1), '任せたい');
   await waitFor(pendingCount(s, 1), '1 回目の札');
@@ -305,11 +308,12 @@ test('T-15 子の札で「この会話では許可」を選んでも今回だけ
   assert.equal(s.app.approvals.isGranted(childConversation(s), 'x'), false);
 });
 
+// 前の道（札）: 4-3b-1 で消す
 test('T-14 親の会話で「この会話では許可」にしたものでも、子が同じ入力で呼ぶと札が出る', async t => {
   const s = await startApp(t, withAsk());
   // 親の会話の許可は、方針が ask でない確かめにだけ効く。ask_stub は precheck の確かめなので、この会話では許可が効く道具として使える
   const grantStub: ToolDef<{ key: string }> = { ...askStub, name: 'grant_stub', preCheck: () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['precheck'], sends: false, removes: false }) };
-  const s2 = await startApp(t, { ...withAsk(), tools: [agentRun, grantStub, calculate] });
+  const s2 = await startApp(t, { ...withAsk(), tools: [agentRun, grantStub, calculate], judgeAll: false });
   void s;
   s2.adapter().scripts = [call('grant_stub', { key: 'a' }), call('grant_stub', { key: 'a' }), call('agent_run', { task: '任せる' }), call('grant_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
   const parent = uuid(1);
@@ -324,42 +328,38 @@ test('T-14 親の会話で「この会話では許可」にしたものでも、
   await settled(s2.app, runId);
 });
 
-test('T-27 親が auto モードでも、子の聞く道具は判定役に回らず札になる（親の会話では判定役に回る）', async t => {
+test('T-27 子の聞く道具も、親の会話と同じく判定役に回る（子の 1 つ 1 つの操作を判定役が見る）。ask なら子の Pending に積まれる', async t => {
   const ALLOW = '{"decision":"allow","reason":"依頼どおりです"}';
   // 対照: 親の会話では判定役に回って札なしで通る
-  const control = await startApp(t, withAsk());
-  control.adapter().scripts = [call('ask_stub', { key: 'a' }), reply(ALLOW), reply('親の最後の返事')];
+  const control = await startApp(t, { ...withAsk(), judge: ALLOW });
+  control.adapter().scripts = [call('ask_stub', { key: 'a' }), reply('親の最後の返事')];
   await settled(control.app, await begin(control, uuid(1), '書いて', { permissionMode: 'auto' }));
-  assert.equal(control.adapter().calls.filter(isClassifier).length, 1, '前提: 親では判定役が働く');
+  assert.equal((control.adapter() as JudgeAdapter).judged.length, 1, '前提: 親では判定役が働く');
   assert.equal(control.app.approvals.pending().length, 0);
   // 子
-  const s = await startApp(t, withAsk());
+  const s = await startApp(t, { ...withAsk(), judge: '{"decision":"ask","reason":"check"}' });
   s.adapter().scripts = [call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
   const runId = await begin(s, uuid(1), '任せたい', { permissionMode: 'auto' });
-  await waitFor(pendingCount(s, 1), '子の札');
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 0, '判定役は呼ばれていない');
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'once');
   await settled(s.app, runId);
+  assert.equal((s.adapter() as JudgeAdapter).judged.length, 1, '子の聞く道具も判定役が見る');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind, row.run_kind]), [['ask_stub', 'judge', 'agent']]);
 });
 
-test('T-27b 親がタスク（自動承認）のとき、親の聞く道具は判定役に回り、子の聞く道具は chat の子と同じく判定役に回らず札になる', async t => {
+test('T-27b 親がタスク（自動承認）のとき、親の聞く道具も子の聞く道具も判定役に回る', async t => {
   const ALLOW = '{"decision":"allow","reason":"依頼どおりです"}';
   const taintStub: ToolDef<{ key: string }> = { ...askStub, preCheck: () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['taint'], sends: false, removes: false }) };
   const options = withAsk(c => { c.tools.agent.inTasks = true; });
-  const s = await startApp(t, { ...options, tools: options.tools.map(tool => (tool.name === 'ask_stub' ? taintStub : tool)) });
-  s.adapter().scripts = [call('ask_stub', { key: 'p' }), reply(ALLOW), call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'c' }), reply('子の答え'), reply('タスクの返事')];
+  const s = await startApp(t, { ...options, tools: options.tools.map(tool => (tool.name === 'ask_stub' ? taintStub : tool)), judge: ALLOW });
+  s.adapter().scripts = [call('ask_stub', { key: 'p' }), call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'c' }), reply('子の答え'), reply('タスクの返事')];
   const task = s.app.tasks.create({ title: '任せるタスク', origin: 'user', actor: 'user' });
   const started = s.app.engine.runTask(task, s.app.conversations.create({ kind: 'task' }).id, '任せるタスクをやって');
   assert.ok(started.ok);
-  await waitFor(pendingCount(s, 1), '札');
-  const card = s.app.approvals.pending()[0]!;
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '親の聞く道具は判定役が決めた');
-  assert.equal(card.childConversationId !== undefined, true, '札は子のもの');
-  s.app.approvals.decide(card.id, 'once');
   await started.done;
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '子では判定役を呼ばない');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  assert.equal((s.adapter() as JudgeAdapter).judged.length, 2, '親と子の聞く道具を判定役が決めた');
   const decided = (s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'ask_stub' ORDER BY created_at").all() as Array<{ decided_by: string }>).map(r => r.decided_by);
-  assert.deepEqual(decided, ['auto-mode', 'user']);
+  assert.deepEqual(decided, ['auto-mode', 'auto-mode']);
 });
 
 test('T-28 agent_run 自体は、方針を書かなければ聞かずに動く（既定 allow）。子の curl -F は Pending に積まれ、動かない', async t => {
@@ -396,21 +396,21 @@ test('T-28c フックが agent_run に ask と言うと、積まずに「動か�
   assert.equal(s.app.conversations.messages(uuid(1)).at(-1)?.text, '親の最後の返事', '実行は続く');
 });
 
-test('T-19 親が tainted なら子も tainted で始まり、子の file_write は札になる', async t => {
-  const s = await startApp(t, withAsk());
-  s.adapter().scripts = [call('fetch_stub', {}), call('agent_run', { task: '書く' }), call('file_write', { path: 'a.txt', content: 'x' }), reply('子の答え'), reply('親の最後の返事')];
+test('T-19 親が tainted なら子も tainted で始まり、子の確かめは判定役に外を読んだ 1 行つきで回り、積んだ行に印が残る', async t => {
+  const s = await startApp(t, { ...withAsk(), judge: '{"decision":"ask","reason":"check"}' });
+  s.adapter().scripts = [call('fetch_stub', {}), call('agent_run', { task: '書く' }), call('ask_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
   const runId = await begin(s, uuid(1), '任せたい');
-  await waitFor(pendingCount(s, 1), '子の札');
-  const view = s.app.approvals.pending()[0]!;
-  assert.equal(view.tool, 'file_write');
-  assert.equal(view.childConversationId, childConversation(s));
-  assert.equal(childRuns(s)[0]!.tainted, 1);
-  s.app.approvals.decide(view.id, 'deny');
   await settled(s.app, runId);
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  assert.equal(childRuns(s)[0]!.tainted, 1);
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.run_kind, row.tainted, row.conversation_id]), [['ask_stub', 'judge', 'agent', true, childConversation(s)]]);
+  assert.ok(judgeTextOf((s.adapter() as JudgeAdapter).judged[0]!).includes(TAINTED_NOTE));
 });
 
+// 前の道（札）: 4-3b-1 で消す
 test('T-16 親の「このフォルダへの書き込みを許可」は、子の file_write には効かない', async t => {
-  const s = await startApp(t, withAsk());
+  const s = await startApp(t, { ...withAsk(), judgeAll: false });
   s.adapter().scripts = [call('fetch_stub', {}), call('file_write', { path: 'a.txt', content: 'x' }), call('agent_run', { task: '書く' }), call('file_write', { path: 'b.txt', content: 'y' }), reply('子の答え'), reply('親の最後の返事')];
   const runId = await begin(s, uuid(1), '任せたい');
   await waitFor(pendingCount(s, 1), '親の札');
@@ -465,23 +465,24 @@ test('T-18 方針が block の道具は、子にも渡らない', async t => {
   assert.equal(names(s, 1).includes('shell_run'), false);
 });
 
-test('T-23 親の会話が自動承認で外を読んでいたら、子の会話にも記録され、子の実行・通信の道具は毎回確かめになる', async t => {
+// 4-3b-2: afterAutoRead を消すと順 2
+test('T-23 親の会話が自動承認で外を読んでいたら、子の会話にも記録され、子の実行・通信の道具は毎回判定役に回る', async t => {
   const execStub: ToolDef<{ key: string }> = {
     name: 'exec_stub', description: '動かす（試験用）', input: Type.Object({ key: Type.String() }), effect: 'exec', allowedIn: ['chat', 'task', 'agent'],
     preCheck: () => ({ decision: 'allow', reasons: [], sends: false, removes: false }),
     execute: async () => ({ content: '動かした' }),
   };
-  const s = await startApp(t, { ...withAsk(), tools: [agentRun, execStub, calculate] });
+  const s = await startApp(t, { ...withAsk(), tools: [agentRun, execStub, calculate], judge: '{"decision":"ask","reason":"check"}' });
   s.adapter().scripts = [call('agent_run', { task: '任せる' }), call('exec_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
   const parent = uuid(1);
   s.app.conversations.create({ id: parent, title: '親の会話' });
   s.app.conversations.markAutoRead(parent);
   const sent = await s.json(`/api/conversations/${parent}/messages`, 'POST', { text: '任せたい' });
-  await waitFor(pendingCount(s, 1), '子の札');
-  assert.equal(s.app.approvals.pending()[0]!.tool, 'exec_stub', '外を読んだあとの実行は、許される道具でも確かめになる');
-  assert.equal(s.app.conversations.everAutoRead(childConversation(s)), true);
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
   await settled(s.app, sent.body.runId);
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  assert.equal((s.adapter() as JudgeAdapter).judged.length, 1, '外を読んだあとの実行は、許される道具でも判定役が見る');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['exec_stub', 'judge']]);
+  assert.equal(s.app.conversations.everAutoRead(childConversation(s)), true);
   // 対照: 外を読んでいない親の子は、そのまま動く
   const clean = await startApp(t, { ...withAsk(), tools: [agentRun, execStub, calculate] });
   clean.adapter().scripts = [call('agent_run', { task: '任せる' }), call('exec_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
@@ -611,22 +612,18 @@ test('T-37 子は worker.maxRunsPerHour と worker.maxParallel を減らさな�
 });
 
 // ── タスクの親・削除・振り返り・子の会話への操作（手順 10・11） ──
-test('T-25 親がタスクのとき、子の札はタスクのページと通知に出る', async t => {
-  const s = await startApp(t, withAsk(c => { c.tools.agent.inTasks = true; }));
+test('T-25 親がタスクのとき、子の操作の Pending の行は親のタスクに結び付き、通知に出る', async t => {
+  const s = await startApp(t, { ...withAsk(c => { c.tools.agent.inTasks = true; }), judge: '{"decision":"ask","reason":"check"}' });
   s.adapter().scripts = [call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'a' }), reply('子の答え'), reply('タスクの返事')];
   const task = s.app.tasks.create({ title: '任せるタスク', origin: 'user', actor: 'user' });
-  const tick = s.app.worker.tick();
-  await waitFor(pendingCount(s, 1), '子の札');
-  const conversationId = s.app.tasks.get(task.id)!.conversation_id!;
-  assert.equal(approvalShownIn(s.app.approvals.pending()[0]!), conversationId);
-  const page = await s.json(`/api/tasks/${task.id}`, 'GET');
-  assert.equal(page.body.approvals.length, 1, 'タスクのページに出る');
-  assert.equal(page.body.approvals[0].fromAgent !== null, true);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.run_kind, row.task_id]), [['ask_stub', 'judge', 'agent', task.id]], '子の行は親のタスクを持つ');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting', task: task.id }).map(row => row.id), [rows[0]!.id], 'タスクで絞ると出る');
   const notes = s.app.db.prepare("SELECT kind, link FROM notifications WHERE kind = 'approval_needed'").all() as Array<{ kind: string; link: string }>;
   assert.equal(notes.length, 1, '通知が出る');
-  assert.match(notes[0]!.link, new RegExp(task.id, 'u'));
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'once');
-  await tick;
+  assert.equal(notes[0]!.link, '#/pending');
 });
 
 test('T-38 親の会話を消すと子の会話も消える', async t => {
