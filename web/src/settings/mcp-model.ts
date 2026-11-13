@@ -25,10 +25,9 @@ function withServer(saved: Config, id: string, edit: (server: Json) => void): Co
   return next;
 }
 
-export function previewServer(saved: Config, id: string, patch: { enabled?: boolean; localOk?: boolean }): Config {
+export function previewServer(saved: Config, id: string, patch: { enabled?: boolean }): Config {
   return withServer(saved, id, server => {
     if (patch.enabled !== undefined) server.enabled = patch.enabled;
-    if (patch.localOk !== undefined) server.localOk = patch.localOk;
   });
 }
 
@@ -48,12 +47,12 @@ export function previewTool(saved: Config, id: string, tool: string, patch: Tool
 
 export interface AddSpec { id: string; transport: 'stdio' | 'http'; command?: string[]; cwd?: string; url?: string; secretNames: readonly string[] }
 
-// 追加の API が作るものと同じ形（enabled:true・localOk:false・道具は空・環境変数の名前は自動）
+// 追加の API が作るものと同じ形（enabled:true・道具は空・環境変数の名前は自動）
 export function previewAdd(saved: Config, spec: AddSpec): Config {
   const next = structuredClone(saved);
   const mcp = (next.mcp ??= { servers: [] }) as Json;
   const refs = Object.fromEntries(spec.secretNames.map(name => [name, mcpEnvName(spec.id, spec.transport === 'stdio' ? 'env' : 'header', name)]));
-  const server: Json = { id: spec.id, transport: spec.transport, enabled: true, localOk: false, tools: {}, env: {}, headers: {} };
+  const server: Json = { id: spec.id, transport: spec.transport, enabled: true, tools: {}, env: {}, headers: {} };
   if (spec.command) server.command = [...spec.command];
   if (spec.cwd) server.cwd = spec.cwd;
   if (spec.url) server.url = spec.url;

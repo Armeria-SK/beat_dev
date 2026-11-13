@@ -47,7 +47,6 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'mcp-server-env': return t('access.mcpEnv', a.id, a.names.join(', '));
     case 'mcp-server-secret': return t('access.mcpSecret', a.id, a.name);
     case 'mcp-server-enabled': return t('access.mcpEnabled', a.id);
-    case 'mcp-server-local': return t('access.mcpLocal', a.id);
     case 'mcp-tool-added': return t('access.mcpToolAdded', a.id, a.tool);
     case 'mcp-tool-enabled': return t('access.mcpToolEnabled', a.id, a.tool);
     case 'mcp-tool-loosened': return t('access.mcpToolLoosened', a.id, a.tool);

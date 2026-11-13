@@ -48,13 +48,12 @@ export type Access =
   | { kind: 'notify-channel-kinds'; id: string; kinds: string[] }
   | { kind: 'notify-channel-enabled'; id: string }
   | { kind: 'notify-public-url'; url: string }
-  // 外の MCP サーバー: 足す / 宛先（プログラム・作業フォルダ・URL）を変える / 渡す欄（環境変数・見出し）を足す・変える / 秘密の値を入れる / 止めていたものを動かす / 手元のモデルの会話にも渡す
+  // 外の MCP サーバー: 足す / 宛先（プログラム・作業フォルダ・URL）を変える / 渡す欄（環境変数・見出し）を足す・変える / 秘密の値を入れる / 止めていたものを動かす
   | { kind: 'mcp-server-added'; id: string; transport: string; target: string }
   | { kind: 'mcp-server-target'; id: string; target: string }
   | { kind: 'mcp-server-env'; id: string; names: string[] }
   | { kind: 'mcp-server-secret'; id: string; name: string }
   | { kind: 'mcp-server-enabled'; id: string }
-  | { kind: 'mcp-server-local'; id: string }
   // 道具: 登録する道具を足す / 止めていた道具を動かす / 申告（読むだけ・送らない・消さない）を緩める
   | { kind: 'mcp-tool-added'; id: string; tool: string }
   | { kind: 'mcp-tool-enabled'; id: string; tool: string }
@@ -219,7 +218,6 @@ function mcpChanges(before: Config, after: Config): Access[] {
     }
     if (names.length > 0) out.push({ kind: 'mcp-server-env', id, names });
     if (was && (was.enabled ?? true) === false && (server.enabled ?? true) === true) out.push({ kind: 'mcp-server-enabled', id });
-    if ((was?.localOk ?? false) === false && (server.localOk ?? false) === true) out.push({ kind: 'mcp-server-local', id });
     const prevTools = obj(was?.tools);
     const tools = obj(server.tools);
     for (const tool of Object.keys(tools).sort()) {
