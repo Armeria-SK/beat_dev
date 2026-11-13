@@ -43,7 +43,7 @@ export function Archived({ revision, projects }: { revision: number; projects: r
   const activeKey = projects.map(p => p.id).join(',');
   useEffect(() => {
     if (!hasProducts) return;
-    void api.projects(true).then(r => setShelved(r.projects)).catch(() => setShelved([]));
+    void api.projects(true).then(r => setShelved(r.projects)).catch(() => setShelved(old => old ?? []));
   }, [hasProducts, activeKey, revision]);
 
   const reload = () => setTick(n => n + 1);
