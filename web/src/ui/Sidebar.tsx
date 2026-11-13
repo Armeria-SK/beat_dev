@@ -50,11 +50,12 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
   const t = useT();
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<HistoryHit[] | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setHits(null); return undefined; }
+    if (!q) { setHits(null); setFailed(false); return undefined; }
     let live = true;
-    const timer = setTimeout(() => { void api.history(q).then(r => { if (live) setHits(r.hits); }).catch(() => { if (live) setHits([]); }); }, 250);
+    const timer = setTimeout(() => { void api.history(q).then(r => { if (live) { setHits(r.hits); setFailed(false); } }).catch(() => { if (live) { setHits(null); setFailed(true); } }); }, 250);
     return () => { live = false; clearTimeout(timer); };
   }, [query]);
   const seen = new Set<string>();
@@ -67,6 +68,7 @@ function SessionSearch({ onClose }: { onClose: () => void }) {
         <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.close')} onClick={onClose}><Icon name="x" /></button>
       </div>
       {hits !== null && unique.length === 0 && <span className="bt-meta ui-search__none">{t('ui.search.none')}</span>}
+      {failed && <span className="bt-meta ui-search__none ui-danger" role="status">{t('ui.kanban.loadFailed')}</span>}
       {unique.map(h => (
         <a key={h.conversationId} className="bt-side bt-side--session ui-search__hit" href={routeHash({ view: 'chat', id: h.conversationId })}>
           <span className="bt-side__name">{h.title || t('ui.session.untitled')}<span className="bt-meta ui-search__snippet">{h.snippet}</span></span>
