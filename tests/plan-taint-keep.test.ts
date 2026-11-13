@@ -191,6 +191,32 @@ test('4-4 印を外す口: 計画モードの会話が計画書を書いてい�
   assert.equal(after.status, 200, '書き終われば外せる');
 });
 
+test('4-4 印を外す口: plan_write はどのモードの会話でも使えるので、Normal（auto）の会話が動いているあいだも writing で 409 plan.writing', async t => {
+  const s = await setup(t);
+  const product = await s.product('normal');
+  await s.taintedAiPlan(product.id, uuid(66), '# Plan by AI');
+  const current = await s.plan(product.id);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let seen: { writing: boolean; status: number; code?: string } | null = null;
+  s.adapter().scripts = [async function* () {
+    const plan = await s.json(`/api/projects/${product.id}/plan`, 'GET');
+    const got = await s.json(`/api/projects/${product.id}/plan/reviewed`, 'POST', { baseHash: current.hash });
+    seen = { writing: plan.body.plan.writing, status: got.status, code: got.body.code };
+    await gate;
+    yield { type: 'text', delta: 'done' };
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  }];
+  const sent = await s.json(`/api/conversations/${uuid(67)}/messages`, 'POST', { text: 'go on', projectId: product.id, permissionMode: 'auto' });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  while (!seen) await new Promise(r => setTimeout(r, 5));
+  release();
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(seen, { writing: true, status: 409, code: 'plan.writing' });
+  assert.equal((await s.plan(product.id)).tainted, true);
+  assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'GET')).body.plan.writing, false, '終われば writing は false');
+});
+
 test('4-K 印を外す口: しまった製品は 400 で印が残る', async t => {
   const s = await setup(t);
   const product = await s.product('archived');

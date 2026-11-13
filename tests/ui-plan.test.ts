@@ -14,7 +14,7 @@ test('ui/plan: 状態は 読み込み中 / 計画書が無い / 書いている�
   assert.equal(planState(doc({ content: null, hash: null }), false), 'empty');
   assert.equal(planState(doc({ content: '' }), false), 'empty', '空の文書は無いのと同じ');
   assert.equal(planState(doc({ writing: true }), false), 'writing');
-  assert.equal(planState(doc({ content: null, writing: true }), false), 'writing', 'まだ 1 字も無くても、計画モードの会話が動いていれば書いている最中');
+  assert.equal(planState(doc({ content: null, writing: true }), false), 'writing', 'まだ 1 字も無くても、製品の会話が動いていれば書いている最中');
   assert.equal(planState(doc(), false), 'ready');
 });
 

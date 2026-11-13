@@ -497,7 +497,7 @@ test('3-1a 審査 C1: 名前の付け替えが EPERM / EBUSY / EACCES で一時�
   assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT)), ['plan.md']);
 });
 
-test('3-1a 審査 C2: writing は実行に効いているモードで決まる（計画モードで始めた実行は、途中で会話を自動承認に戻しても writing）', async t => {
+test('3-1a 審査 C2: 計画モードで始めた実行は、途中で会話を自動承認に戻しても writing（4-4 からはモードを問わず、製品の会話が動いていれば writing）', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   let release!: () => void;

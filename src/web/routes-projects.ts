@@ -123,7 +123,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
 
   const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => ({
     ...view,
-    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId && r.mode === 'plan'),
+    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId),
   });
   const planned = <T>(work: () => T): T => {
     try { return work(); } catch (error) {
