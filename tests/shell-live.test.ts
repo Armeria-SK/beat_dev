@@ -1271,3 +1271,26 @@ test('実機（Windows PowerShell 5.1・制限モード）: curl と curl.exe �
   }
   assert.deepEqual(echo.seen, []);
 });
+
+test('実機（Windows PowerShell 5.1・制限モード）: ただの wget は Invoke-WebRequest の別名で動かない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const outcome = await runApproved(s, 'wget --version');
+  assert.doesNotMatch(outcome.output.content, /Invoke-WebRequest|WebCmdlet|remote name/u, outcome.output.content);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: 前置きの変数は持ち主のコマンドに漏れず、数える書き方は 3 になる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const outcome = await runApproved(s, '"vars=[$n][$c][$s]"; 1..3 | ForEach-Object { $n++ }; "count=$n"');
+  assert.equal(outcome.output.isError, false, outcome.output.content);
+  assert.ok(outcome.output.content.includes('vars=[][][]'), outcome.output.content);
+  assert.match(outcome.output.content, /count=3\b/u, outcome.output.content);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: npx の引数の & は、許可しても別のコマンドを動かさない', { skip: (!psAvailable || !which('npx')) && 'Windows の PowerShell か npx が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const host = spawnSync('hostname', { encoding: 'utf8' }).stdout.trim();
+  assert.ok(host);
+  const outcome = await runApproved(s, `npx --version 'x&hostname'`);
+  assert.equal(outcome.decidedBy, 'user', outcome.output.content);
+  assert.equal(outcome.output.content.split('\n').some(line => line.trim() === host), false, outcome.output.content);
+});

@@ -77,7 +77,7 @@ const SH_BOOT = 's=; n=$(printf "\\nx"); n=${n%x}; while IFS= read -r l || [ -n 
 const PS_UTF8 = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;';
 // 文字コードの設定のあと、制限モードにする。.NET の直接呼び出し（[IO.File]::...）・New-Object・Add-Type が止まり、元のモードへ戻すのも止まる
 const PS_CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';";
-const PS_COMMANDS = "Remove-Item Alias:curl,Alias:wget -Force -ErrorAction Ignore;foreach($n in 'npm','npx','pnpm','yarn'){$c=Get-Command $n -CommandType ExternalScript,Application -ErrorAction Ignore|Select-Object -First 1;if($c.CommandType -eq 'ExternalScript'){$s=$c.Path -replace '\\.ps1$','.cmd';if(Test-Path -LiteralPath $s -PathType Leaf){Set-Alias $n $s}}};";
+const PS_COMMANDS = "Remove-Item Alias:curl,Alias:wget -Force -ErrorAction Ignore;&{foreach($n in 'npm','pnpm','yarn'){$c=Get-Command $n -CommandType ExternalScript,Application -ErrorAction Ignore|Select-Object -First 1;if($c.CommandType -eq 'ExternalScript'){$s=$c.Path -replace '\\.ps1$','.cmd';if(Test-Path -LiteralPath $s -PathType Leaf){Set-Alias $n $s -Scope Global}}}};";
 
 export function resolveShell(choice: ShellChoice): ShellSpec {
   const ps = (file: string, name: string): ShellSpec => ({ name, file, args: c => ['-NoProfile', '-NonInteractive', '-Command', `${PS_UTF8}${PS_COMMANDS}${PS_CONSTRAINED}${c}`] });
