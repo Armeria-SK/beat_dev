@@ -147,3 +147,21 @@ test('4-1 知らせ: この PC のモデルを選んだ会話から作ったタ�
   assert.equal(payload.body, '結果の本文');
   assert.match(payload.link, /^https:\/\/beat\.example\.ts\.net\/#\/tasks\//u);
 });
+
+test('4-1 知らせ: スキルの下書きの知らせは、種類 info の外の送り先へ、ほかの知らせと同じに出る', async t => {
+  const sent: string[] = [];
+  const s = await startApp(t, {
+    ...twoProviders([], c => {
+      c.notify = { channels: [{ id: 'phone', kind: 'webhook', urlEnv: 'BEAT_NOTIFY_PHONE_URL_SECRET', kinds: ['info'], includeBody: true }] } as unknown as typeof c.notify;
+    }),
+    env: { BEAT_NOTIFY_PHONE_URL_SECRET: 'https://hooks.example.test/in' },
+    fetch: (async (_url: string | URL | Request, init?: RequestInit) => { sent.push(String(init?.body)); return new Response(null, { status: 204 }); }) as typeof fetch,
+  });
+  s.app.skills.onDraft!({ id: 7, name: 'weekly-report', description: 'd', body: 'b', reason: '毎週まとめるため', status: 'pending', conversation_id: null, run_id: null, created_at: 0, decided_at: null });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(sent.length, 1);
+  const payload = JSON.parse(sent[0]!) as { kind: string; title: string; body: string };
+  assert.equal(payload.kind, 'info');
+  assert.match(payload.title, /weekly-report/u);
+  assert.equal(payload.body, '毎週まとめるため');
+});

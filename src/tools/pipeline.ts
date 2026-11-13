@@ -44,7 +44,6 @@ export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' 
   return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined && tool.submits !== true;
 }
 
-
 export function acceptanceAllows(tool: Pick<ToolDef, 'acceptanceState'>, frozen: boolean): boolean {
   return tool.acceptanceState === undefined || (tool.acceptanceState === 'frozen') === frozen;
 }

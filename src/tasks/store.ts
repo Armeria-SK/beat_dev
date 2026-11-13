@@ -326,7 +326,6 @@ export class TaskStore {
     return this.#changed(id);
   }
 
-
   update(id: string, patch: { title?: string; body?: string; appendNote?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; runAt?: number | null }, actor: string, runId?: string): Task {
     return transaction(this.#db, () => {
       const task = this.get(id);

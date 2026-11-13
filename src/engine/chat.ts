@@ -517,8 +517,6 @@ export class ChatEngine {
     return running < first.provider.maxParallel;
   }
 
-  // 手元のモデルで話した会話の振り返りに使える、手元の裏方モデルがあるか
-
   // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
   // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
   memoryBudget(): number | undefined {
