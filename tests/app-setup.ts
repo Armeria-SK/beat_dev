@@ -36,7 +36,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
     ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
-    judgeAll: options.judgeAll ?? false,
+    judgeAll: options.judgeAll ?? true,
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.mcpConnect ? { mcpConnect: options.mcpConnect } : {}),
     ...(options.browserDriver ? { browserDriver: options.browserDriver } : {}),
