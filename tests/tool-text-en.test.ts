@@ -37,6 +37,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const events: RunEvent[] = [];
   const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
+  if (taint) registry.register(memorySave);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
   const ctx: ToolContext = {
@@ -44,7 +45,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: taint, sources: taint ? ['A', 'B'] : [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false,
+    registry, approvals, pending, db, emit: e => events.push(e), 
     lastUserRequest: () => 'please do the work', autoClassify: async () => '{"decision":"ask","reason":"not sure"}',
   });
   const parked = async (name: string, args: unknown) => {
@@ -97,9 +98,8 @@ test('承認の依頼: 題と理由は英語で書く', async t => {
   assert.deepEqual(request.checks, ['This is a persona or profile file (SOUL.md / USER.md), so it is checked with you before it is rewritten']);
   assert.doesNotMatch(request.reason, CJK, request.reason);
 
-  // 4-3b-2: taintEscalation を消すと順 2
   const tainted = setup(t, undefined, true);
-  const askRequest = await tainted.parked('file_write', { path: 'b.md', content: 'x' });
+  const askRequest = await tainted.parked('memory_save', { book: 'user', content: 'x' });
   assert.deepEqual(askRequest.checks, ['You have just read text that came from somewhere else, such as the web or an attachment (A, B), so this is checked with you to be safe']);
 
   const outsideRead = setup(t);
@@ -129,7 +129,7 @@ test('コードを動かす確かめ: 理由・beat 自身に触れる目印・�
   mkdirSync(join(s.paths.workspace, 'sub'), { recursive: true });
   const command = 'node put.js; node nothere.js; node ./sub';
   const request = await s.parked('shell_run', { command });
-  assert.equal((await shellRun.preCheck!({ command }, s.ctx)).onceOnly, true);
+  assert.equal((await shellRun.preCheck!({ command }, s.ctx)).askKinds?.includes('code'), true);
   assert.equal(request.checks[0], 'This code contains text that touches beat itself (its settings, persona, approvals or memory): /api/, 127.0.0.1 / localhost');
   assert.ok(request.checks.includes('It runs code written in a file (put.js). beat can rewrite that file, so it is checked with you every time'));
   const texts = request.preview.map(p => p.text);

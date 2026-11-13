@@ -37,7 +37,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   };
   const call = (name: string, args: unknown) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false, lastUserRequest: () => 'do the work',
+      registry, approvals, pending, db, emit: () => undefined, conversationTainted: () => false, lastUserRequest: () => 'do the work',
       autoClassify: async prompt => { judged.push(prompt); return '{"decision":"ask","reason":"check it"}'; },
     });
   const asked = async (name: string, args: unknown) => {
@@ -46,7 +46,7 @@ function setup(t: { after: (fn: () => void) => void }) {
     assert.deepEqual([out.decision, out.decidedBy], ['ask', 'pending'], '動かさずに Pending に積む');
     assert.equal(pending.list({ status: 'waiting' }).length, before + 1);
     const check = await registry.get(name)!.preCheck!(args as never, ctx);
-    return { view: { paths: check.paths, details: check.details ?? [], pathsMore: check.pathsMore ?? 0, onceOnly: check.onceOnly }, judged };
+    return { view: { paths: check.paths, details: check.details ?? [], pathsMore: check.pathsMore ?? 0, onceOnly: check.askKinds?.includes('code') }, judged };
   };
   return { paths, ctx, call, approvals, asked };
 }
@@ -164,6 +164,6 @@ test('A8 は判定を変えない: 事前判定の allow / ask / deny と今回�
   ];
   for (const [command, decision, onceOnly] of table) {
     const pre = shellPreCheck({ command }, s.ctx);
-    assert.deepEqual([pre.decision, pre.onceOnly === true], [decision, onceOnly], command);
+    assert.deepEqual([pre.decision, pre.askKinds?.includes('code') === true], [decision, onceOnly], command);
   }
 });

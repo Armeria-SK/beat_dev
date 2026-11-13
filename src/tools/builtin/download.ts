@@ -113,7 +113,6 @@ function mergeChecks(first: PreCheck, second: PreCheck): PreCheck {
     reasons: [...first.reasons, ...second.reasons],
     ...(details.length ? { details } : {}),
     ...(second.paths ? { paths: second.paths } : {}),
-    ...(first.onceOnly || second.onceOnly ? { onceOnly: true } : {}),
     ...(askKinds.length ? { askKinds } : {}),
     ...(reasonKeys.length ? { reasonKeys } : {}),
   };

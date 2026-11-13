@@ -110,9 +110,9 @@ function shellOutbound(command: string, statements: readonly StatementFacts[], c
 
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
-  if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')], sends: true, removes: true };
+  if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
   const cwd = resolveCwd(input, ctx);
-  if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem], sends: true, removes: true };
+  if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem] };
   const shell = ctx.config.tools.shell;
   const spec = resolveShell(shell.shell);
   const powershell = spec.name === 'powershell' || spec.name === 'pwsh';
@@ -126,7 +126,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const touch = checked.decision === 'deny' ? undefined : protectedTouchOf(input.command, checked.statements, ctx.policy, cwd.cwd);
   const verdict = touch && !checked.reasonKeys.includes(touch.key) ? { ...checked, decision: 'ask' as const, reasons: [...checked.reasons, guardText(language, touch.key, { path: touch.path })], reasonKeys: [...checked.reasonKeys, touch.key], askKinds: [...new Set([...checked.askKinds, 'code' as const])] } : checked;
   const self = verdict.decision === 'deny' ? undefined : selfTarget(input.command, ctx.config.server);
-  if (self !== undefined) return { decision: 'deny', reasons: [guardText(language, 'guard.self_port', { target: self })], reasonKeys: ['guard.self_port'], sends: true, removes: true };
+  if (self !== undefined) return { decision: 'deny', reasons: [guardText(language, 'guard.self_port', { target: self })], reasonKeys: ['guard.self_port'] };
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
     input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),
     place: guardText(language, p.placement.kind === 'inside' ? (p.placement.mode === 'write' ? 'shell.place.write' : 'shell.place.read')
@@ -152,7 +152,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const runFacts = pushed ? { ownerReason: 'files' in pushed ? pendingText('en', 'owner_protected_push', { files: pushed.files.join('; ') }) : pendingText('en', 'owner_push_unchecked') }
     : run && 'run' in run ? { productRun: run.run } : run && 'secret' in run ? { ownerReason: pendingText('en', 'owner_secret_commit', { path: run.secret }) }
     : run && 'secretMessage' in run ? { ownerReason: pendingText('en', 'owner_secret_message') } : {};
-  const effects = { sends: verdict.sends, removes: verdict.removes, writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
+  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));
@@ -160,7 +160,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   const reasonKeys = [...(markers.length ? ['code.self_touch'] : []), ...verdict.reasonKeys];
   return {
-    decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, onceOnly: true, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
+    decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
     ...(markers.length && 'productRun' in runFacts ? {} : runFacts),
     preview: peeked.map(p => p.preview), bind: sha256([...peeked.map(p => p.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };

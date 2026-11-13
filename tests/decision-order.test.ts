@@ -67,7 +67,7 @@ function rig(t: { after: (fn: () => void) => void }, options: { project?: boolea
   };
   const judge: Judge = { answer: '{"decision":"allow","reason":"fits the request"}', calls: [], limits: [] };
   const deps = (extra: Partial<PipelineDeps> = {}): PipelineDeps => ({
-    registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false,
+    registry, approvals, pending, db, emit: () => undefined, conversationTainted: () => false,
     lastUserRequest: () => 'please do the work in the product',
     autoClassify: async (prompt, signal, limits) => {
       judge.calls.push(prompt);
@@ -101,22 +101,21 @@ const initRepo = (dir: string) => {
 };
 const commits = (dir: string) => git(dir, 'rev-list', '--count', 'HEAD').trim();
 
-test('4-3a: 確かめになる呼び出しが札で止まる道は、会話（normal / auto）・タスク・子の担当のどれにも無い', async t => {
+test('4-3a: 確かめになる呼び出しが札で止まる道は、会話（auto）・タスク・子の担当のどれにも無い', async t => {
   const r = rig(t, { project: false });
   r.judge.answer = '{"decision":"ask","reason":"not sure"}';
   const cases: Array<Partial<ToolContext>> = [
-    { kind: 'chat', permissionMode: 'normal' },
     { kind: 'chat', permissionMode: 'auto' },
     { kind: 'task', permissionMode: 'auto', task: { id: 't1', control: { outcome: 'none' } } },
-    { kind: 'agent', permissionMode: 'normal', parent: { runId: 'rp', conversationId: 'cp', kind: 'chat', title: 'child' } },
+    { kind: 'agent', permissionMode: 'auto', parent: { runId: 'rp', conversationId: 'cp', kind: 'chat', title: 'child' } },
   ];
   for (const c of cases) {
-    const outcome = await r.call('outside_read', {}, c, { permissionMode: () => c.permissionMode ?? 'normal' });
+    const outcome = await r.call('outside_read', {}, c, { permissionMode: () => c.permissionMode ?? 'auto' });
     assert.equal(outcome.decidedBy, 'pending', `${c.kind}/${c.permissionMode}: ${outcome.output.content}`);
     assert.notEqual(outcome.output.isError, true, '積んだ結果は失敗にしない（実行は続く）');
   }
-  assert.deepEqual(r.waiting().map(row => row.kind), ['judge', 'judge', 'judge', 'judge']);
-  assert.equal(r.judge.calls.length, 4, 'normal の会話も判定役に回る');
+  assert.deepEqual(r.waiting().map(row => row.kind), ['judge', 'judge', 'judge']);
+  assert.equal(r.judge.calls.length, 3, 'どの実行も判定役に回る');
 });
 
 test('4-3a 順 1: 鍵らしい文字や長い問い合わせを外へ出す web の道具は、判定役に回さず断る（シェルと同じ）', async t => {

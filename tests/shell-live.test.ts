@@ -46,7 +46,7 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, {
-    registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false,
+    registry, approvals, pending, db, emit: e => events.push(e), conversationTainted: () => false,
     lastUserRequest: () => 'run the command', autoClassify: async () => '{"decision":"ask","reason":"the owner should look"}',
   });
   const files = (name: string) => join(paths.workspace, name);

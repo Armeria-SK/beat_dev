@@ -91,7 +91,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (args: unknown, c: ToolContext = ctx, mode?: PermissionMode) =>
     runToolCall({ id: `call-${Math.random()}`, name: 'web_download', arguments: args }, c, {
-      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(mode ? { permissionMode: () => mode } : {}),
+      registry, approvals, pending, db, emit: e => events.push(e), ...(mode ? { permissionMode: () => mode } : {}),
       lastUserRequest: () => 'please download the file', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const again = (args: unknown) => {
@@ -556,24 +556,18 @@ test('事前の判定: 計画モードと振り返りでは断る（何も作ら
   assert.equal(existsSync(s.downloads), false);
 });
 
-test('事前の判定: 外を読んだあとは確かめになり（種類 taint）、判定役と Pending に URL と保存先のフォルダが出る。積んだだけでは何も作らない', async t => {
+test('事前の判定: 外を読んだあとでも確かめにならず（R19）、保存先は downloads のフォルダ', async t => {
   const w = world({ [URL_PDF]: { body: () => chunksOf('x') } });
   const s = setup(t, undefined, w.network);
   s.ctx.taint.tainted = true;
   s.ctx.taint.sources.push('web_fetch');
   const args = { url: URL_PDF, name: 'wanted.pdf' };
-  // 4-3b-2: taintEscalation を消すと順 2
-  const out = await s.call(args);
-  assert.equal(out.decidedBy, 'pending', out.output.content);
-  const view = s.waiting()[0]!;
-  assert.equal(view.kind, 'judge');
-  assert.match(view.checks.join('\n'), /came from somewhere else.*web_fetch/u);
-  assert.match(view.title ?? '', /downloads\//u);
-  assert.equal(s.judge.calls.length, 1);
-  assert.ok(s.judge.calls[0]!.user.includes(`${URL_PDF}\nwanted.pdf`));
   assert.deepEqual((await webDownload.preCheck!(args, s.ctx)).paths, [{ input: s.downloads, path: s.downloads, verdict: 'in', mode: 'write' }]);
-  assert.deepEqual(w.opens, []);
-  assert.equal(existsSync(s.downloads), false);
+  const out = await s.call(args);
+  assert.deepEqual([out.decision, out.decidedBy], ['allow', 'builtin'], out.output.content);
+  assert.equal(s.judge.calls.length, 0);
+  assert.equal(s.waiting().length, 0);
+  assert.equal(existsSync(join(s.downloads, 'wanted.pdf')), true);
 });
 
 test('事前の判定: URL に秘密らしい文字・長い問い合わせ・ローカルの宛先・tools.web.fetch が off は断る', async t => {

@@ -50,7 +50,7 @@ function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => v
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: Record<string, unknown> = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false,
+      registry, approvals, pending, db, emit: () => undefined, conversationTainted: () => false,
       lastUserRequest: () => 'please do the work', autoClassify: async () => '{"decision":"ask","reason":"not sure"}', ...extra,
     });
   const deps = (extra: Record<string, unknown> = {}) => ({

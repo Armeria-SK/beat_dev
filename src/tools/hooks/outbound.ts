@@ -14,7 +14,7 @@ export interface Outbound { kind: OutboundKind; reason: string; targets: string[
 export type OutboundFacts =
   | { tool: 'shell'; statements: readonly StatementFacts[] }
   | { tool: 'mcp'; sends?: boolean | undefined; removes?: boolean | undefined }
-  | { tool: 'browser'; submits: boolean }
+  | { tool: 'browser'; submits: boolean; sends?: boolean }
   | { tool: 'other' };
 
 export interface OutboundEnv extends PushEnv {
@@ -411,7 +411,9 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
     case 'mcp':
       if (facts.removes === true) return { kind: 'delete', reason: say(hit('delete', 'delete.tool')), targets: [] };
       return facts.sends === false ? undefined : { kind: 'send', reason: say(hit('send', 'send.tool')), targets: [] };
-    case 'browser': return facts.submits ? { kind: 'send', reason: say(hit('send', 'send.browser_submit')), targets: [] } : undefined;
+    case 'browser':
+      if (facts.submits) return { kind: 'send', reason: say(hit('send', 'send.browser_submit')), targets: [] };
+      return facts.sends ? { kind: 'send', reason: say(hit('send', 'send.browser_open')), targets: [] } : undefined;
     case 'other': return undefined;
     default:
   }
@@ -431,10 +433,11 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
 
 const NO_GIT: OutboundEnv = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
 
-export function outboundOfCall(tool: Pick<ToolDef, 'mcp' | 'submits'>, check: PreCheck | undefined, language: Language): Outbound | undefined {
+export function outboundOfCall(tool: Pick<ToolDef, 'name' | 'mcp' | 'submits'>, check: PreCheck | undefined, language: Language): Outbound | undefined {
   if (check?.outbound) return check.outbound;
   if (tool.mcp) return outboundOf({ tool: 'mcp', sends: check?.sends, removes: check?.removes }, { ...NO_GIT, language });
   if (tool.submits) return outboundOf({ tool: 'browser', submits: true }, { ...NO_GIT, language });
+  if (tool.name === 'browser_open' && check?.sends === true) return outboundOf({ tool: 'browser', submits: false, sends: true }, { ...NO_GIT, language });
   return undefined;
 }
 

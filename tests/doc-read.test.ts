@@ -47,7 +47,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (args: unknown, name = 'doc_read', c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false,
+      registry, approvals, pending, db, emit: e => events.push(e), conversationTainted: () => false,
       lastUserRequest: () => 'please read the document', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });
@@ -384,7 +384,7 @@ test('doc_read: 結果にも失敗の文にも日本語が出ない', async t =>
   assert.match(results[2]!.output.content, /\[Because it is long, the extracted text was cut off at 200,000 characters\]$/u);
 });
 
-test('doc_read: 文書を読んだ実行は「外から読んだ」印を付け、同じ実行のあとの書き込みは確かめを求める（Web の読み取りと同じ）', async t => {
+test('doc_read: 文書を読んだ実行は「外から読んだ」印を付け、同じ実行のあとの書き込みは確かめなしに動く（Web の読み取りと同じ。R19）', async t => {
   const s = setup(t);
   put(s, 'a.docx', docxBytes('hello doc'));
   const read = await s.call({ path: 'a.docx' });
@@ -398,13 +398,10 @@ test('doc_read: 文書を読んだ実行は「外から読んだ」印を付け�
   assert.equal(s.judge.calls.length, 1);
   assert.ok(s.judge.calls[0]!.user.includes(TAINTED_NOTE), '判定役の文に外から読んだ印が載る');
   assert.deepEqual(s.waiting().map(r => [r.kind, r.tainted]), [['judge', true]]);
-  // 印のついた実行で、同じ実行のあとの書き込みは確かめ（ask）になる
-  // 4-3b-2: taintEscalation を消すと順 2
   const write = await s.call({ path: 'out.txt', content: 'x' }, 'file_write');
-  assert.equal(write.decidedBy, 'pending', write.output.content);
-  assert.equal(s.judge.calls.length, 2, '外から読んだあとの書き込みは判定役に回る');
-  assert.match(s.waiting()[0]!.checks.join(' '), /doc_read/u, '確かめの理由に doc_read が載る');
-  assert.equal(existsSync(join(s.ctx.workspace, 'out.txt')), false);
+  assert.equal(write.decidedBy, 'builtin', write.output.content);
+  assert.equal(s.judge.calls.length, 1, '外から読んだあとの書き込みは判定役に回らない');
+  assert.equal(existsSync(join(s.ctx.workspace, 'out.txt')), true);
 });
 
 test('doc_read: パスの確かめで断られた読み取りは「外から読んだ」印を付けない', async t => {

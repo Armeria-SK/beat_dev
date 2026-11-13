@@ -56,7 +56,7 @@ export const LATER_HIDDEN: readonly string[] = [
 ];
 
 export const FILE_ONLY: readonly string[] = [
-  'version', 'timezone', 'server.host', 'routing.retriesPerModel', 'routing.judge', 'tools.taintEscalation', 'tools.shell.maxTimeoutSec', 'tools.shell.outputCapBytes',
+  'version', 'timezone', 'server.host', 'routing.retriesPerModel', 'routing.judge', 'tools.shell.maxTimeoutSec', 'tools.shell.outputCapBytes',
   'tools.shell.envAllow', 'tools.web', 'tools.agent', 'profile.shape', 'profile.motion', 'memory', 'notify', 'mcp.limits', ...LATER_HIDDEN,
 ];
 

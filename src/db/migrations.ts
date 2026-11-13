@@ -464,4 +464,8 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   ALTER TABLE tasks ADD COLUMN owner_request TEXT;
   `,
+  `
+  UPDATE conversations SET permission_mode = 'auto' WHERE permission_mode = 'normal';
+  UPDATE approvals SET status = 'cancelled', decided_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE status = 'pending';
+  `,
 ];

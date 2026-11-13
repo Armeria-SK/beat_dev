@@ -44,7 +44,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const judge = { answer: JUDGE_ASK, calls: 0 };
   const deps = (reg: ToolRegistry = registry, store: PendingStore = pending): PipelineDeps => ({
-    registry: reg, approvals, pending: store, db, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false,
+    registry: reg, approvals, pending: store, db, emit: e => events.push(e), conversationTainted: () => false,
     lastUserRequest: () => 'do the work', autoClassify: async () => { judge.calls++; return judge.answer; },
   });
   const call = (name: string, args: unknown, c: ToolContext = ctx) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, deps());
@@ -239,7 +239,7 @@ test('V8: 道具には、持ち主が Pending で承認した呼び出しだけ�
   const probe: ToolDef<{ mode: 'allow' | 'ask' | 'once' }> = {
     name: 'probe', description: 'x', input: Type.Object({ mode: Type.String() }), effect: 'read', allowedIn: ['chat', 'task'],
     preCheck: input => (input.mode === 'once'
-      ? { decision: 'ask', reasons: ['code'], onceOnly: true, askKinds: ['code'] }
+      ? { decision: 'ask', reasons: ['code'], askKinds: ['code'] }
       : { decision: input.mode, reasons: input.mode === 'ask' ? ['ask'] : [] }),
     execute: async (_input, _ctx, info) => { seen.push(info); return { content: 'ok' }; },
   };
@@ -261,7 +261,7 @@ test('V8: 道具には、持ち主が Pending で承認した呼び出しだけ�
   const ran = await s.approve(parkedRow().id, registry, store);
   assert.equal(ran.status, 'ran', ran.output);
   assert.deepEqual(seen.map(i => i?.approvedOnce), [true]);
-  assert.deepEqual(seen[0]?.check, { decision: 'ask', reasons: ['code'], onceOnly: true, askKinds: ['code'] }, '持ち主に見せた事前の判定を渡す');
+  assert.deepEqual(seen[0]?.check, { decision: 'ask', reasons: ['code'], askKinds: ['code'] }, '持ち主に見せた事前の判定を渡す');
 
   seen.length = 0;
   assert.equal((await call('once')).decidedBy, 'pending');
@@ -400,7 +400,7 @@ test('V2: 表の抜け道は、道具の事前判定でも承認なしでは通�
   const codeRows = BYPASS_TABLE.filter(c => !/^(?:curl -o SOUL|Invoke-WebRequest -OutFile|curl -d@)/u.test(c));
   for (const command of codeRows) {
     const pre = await shellRun.preCheck!({ command }, s.ctx);
-    assert.equal(pre.decision === 'deny' || pre.onceOnly === true, true, `${command} が今回だけの確かめにも止めにもなっていない`);
+    assert.equal(pre.decision === 'deny' || pre.askKinds?.includes('code') === true, true, `${command} が今回だけの確かめにも止めにもなっていない`);
   }
   assert.equal((await shellRun.preCheck!({ command: 'curl -o SOUL.md https://example.com/x' }, s.ctx)).decision, 'ask', '人格への書き込みは、これまでの承認');
   assert.equal((await shellRun.preCheck!({ command: '[IO.File]::WriteAllText("../config.json", "{}")' }, s.ctx)).decision === 'allow', false);
@@ -437,16 +437,13 @@ test('file_list: node_modules・.git など大きなフォルダの中は、下�
   assert.match(all, /Cut off at 500 entries/u, '入ると、枠を使い切る');
 });
 
-// 4-3b-2: taintEscalation を消すと順 2
-test('taint: Web や添付の内容を読んだ後は、書き込みも承認制になる', async t => {
+test('taint: Web や添付の内容を読んだ後でも、許可フォルダの中の書き込みは確かめなしに動く（R19）', async t => {
   const s = setup(t);
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
   const outcome = await s.call('file_write', { path: 'a.md', content: 'x' }, ctx);
-  assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'pending'], outcome.output.content);
-  const request = latest(s);
-  assert.deepEqual([request.kind, request.tainted, s.judge.calls], ['judge', true, 1]);
-  assert.match(request.checks.join(), /text that came from somewhere else/u);
-  assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
+  assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'builtin'], outcome.output.content);
+  assert.equal(s.judge.calls, 0);
+  assert.equal(existsSync(join(s.paths.workspace, 'a.md')), true);
 });
 
 // ── ユーザー定義のフック ─────────────────────────────────
@@ -597,7 +594,7 @@ test('11.7: 入れるもの・.git への書き込みは、事前判定が「今
   for (const command of ['pip install requests', 'pip install -e .', 'npm install', 'npm install ./pkg', 'npm ci', 'pnpm add x', 'cargo install x', 'Set-Content .git/hooks/pre-commit x']) {
     const pre = await shellRun.preCheck!({ command }, s.ctx);
     assert.equal(pre.decision, 'ask', command);
-    assert.equal(pre.onceOnly, true, command);
+    assert.equal(pre.askKinds?.includes('code'), true, command);
     assert.deepEqual(pre.askKinds, ['code'], command);
   }
   const first = await s.call('shell_run', { command: 'npm install' });
@@ -654,7 +651,7 @@ test('git が古い（2.32 より前）と、洗い出せないので git status
   writeFileSync(join(fake, windows ? 'git.cmd' : 'git'), windows ? '@echo off\r\necho git version 2.20.0\r\n' : '#!/bin/sh\necho git version 2.20.0\n', { mode: 0o755 });
   const old = await withGitFirstOnPath(fake, async () => shellRun.preCheck!({ command: 'git status' }, s.ctx));
   assert.equal(old.decision, 'ask');
-  assert.equal(old.onceOnly, true);
+  assert.equal(old.askKinds?.includes('code'), true);
   assert.match(old.reasons.join(), /2\.32/u);
   const real = spawnSync('git', ['--version'], { encoding: 'utf8' });
   if (real.status === 0 && /git version (?:2\.(?:3[2-9]|[4-9]\d)|[3-9])/u.test(real.stdout)) assert.equal((await shellRun.preCheck!({ command: 'git status' }, s.ctx)).decision, 'allow');

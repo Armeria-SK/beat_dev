@@ -249,8 +249,8 @@ function toolHarness(t: { after: (fn: () => void) => void }, options: { archived
     services: { db, memory: undefined as never, emit: e => events.push(e), acceptance }, ...over,
   });
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal',
-    conversationTainted: () => false, conversationAutoRead: () => false,
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
+    conversationTainted: () => false, 
   });
   const say = (conversationId: string, role: 'user' | 'assistant', content: string) => {
     if (!conversations.get(conversationId)) conversations.create({ id: conversationId, projectId: PROJECT });
@@ -487,7 +487,7 @@ test('3-1b 守り: ふつうのファイルの道具とシェルからは accept
   };
   const run = (name: string, args: unknown) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
     registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'edit the list',
-    conversationTainted: () => false, conversationAutoRead: () => false, autoClassify: async () => '{"decision":"allow","reason":"ok"}',
+    conversationTainted: () => false, autoClassify: async () => '{"decision":"allow","reason":"ok"}',
   });
   for (const [name, args] of [['file_read', { path: file }], ['file_write', { path: file, content: 'x' }], ['file_edit', { path: file, old: 'secret', new: 'x' }], ['shell_run', { command: `cat "${file.replaceAll('\\', '/')}"` }]] as const) {
     const result = await run(name, args);
@@ -500,9 +500,9 @@ test('3-1b 守り: ふつうのファイルの道具とシェルからは accept
 test('3-1b 毎回の system: 製品の文書の言語があれば、製品の行のあとに言語の 1 行。無ければ入らない', () => {
   const at = new Date('2026-11-12T00:00:00Z');
   const line = 'Owner-facing documents of this product (plan, acceptance items, questions, deviation notes) are written in ja.';
-  assert.ok(buildDynamic('UTC', 'en', at, 'normal', { name: 'Shop', root: 'C:/shop', docLanguage: 'ja' }).split('\n').includes(line));
-  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'normal', { name: 'Shop', root: 'C:/shop', docLanguage: null }), /Owner-facing/u);
-  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'normal'), /Owner-facing/u);
+  assert.ok(buildDynamic('UTC', 'en', at, 'auto', { name: 'Shop', root: 'C:/shop', docLanguage: 'ja' }).split('\n').includes(line));
+  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'auto', { name: 'Shop', root: 'C:/shop', docLanguage: null }), /Owner-facing/u);
+  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'auto'), /Owner-facing/u);
 });
 
 async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
@@ -527,20 +527,20 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   return { ...s, events, product, send, names, lastTool };
 }
 
-test('3-1b 道具の一覧（本物の App）: acceptance_write は製品の会話（計画・ふつう）にあり、製品のタスク・子の担当・製品に属さない会話には無い', async t => {
+test('3-1b 道具の一覧（本物の App）: acceptance_write は製品の会話（計画・自動承認）にあり、製品のタスク・子の担当・製品に属さない会話には無い', async t => {
   const s = await setup(t, { configure: c => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });
   const shop = await s.product('shop');
   s.adapter().scripts = [reply('a'), reply('b'), reply('c'), reply('d'), reply('e')];
   await s.send(uuid(1), { text: 'plan it', projectId: shop.id, permissionMode: 'plan' });
   assert.ok(s.names().includes('acceptance_write'), s.names().join());
-  await s.send(uuid(2), { text: 'do it', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(2), { text: 'do it', projectId: shop.id, permissionMode: 'auto' });
   assert.ok(s.names().includes('acceptance_write'));
-  for (const [n, mode] of [[3, 'normal'], [4, 'plan'], [5, 'auto']] as const) {
+  for (const [n, mode] of [[3, 'auto'], [4, 'plan']] as const) {
     await s.send(uuid(n), { text: 'hi', permissionMode: mode });
     assert.ok(!s.names().includes('acceptance_write'), mode);
   }
   s.adapter().scripts = [call('agent_run', { task: 'look' }), call('acceptance_write', { items: [] }), reply('child'), reply('parent')];
-  await s.send(uuid(6), { text: 'delegate', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(6), { text: 'delegate', projectId: shop.id, permissionMode: 'auto' });
   const child = s.adapter().calls.at(-3)!.tools.map(tool => tool.name);
   assert.ok(child.length > 0 && !child.includes('acceptance_write'), child.join());
   assert.match(s.adapter().calls.at(-2)!.messages.filter(m => m.role === 'tool').at(-1)!.content, /cannot be used|not allowed|not available/iu, '子の担当が名前で呼んでも断られる');
@@ -677,7 +677,7 @@ test('3-1b 言語（本物の App）: 製品の会話・タスク・子の担当
   await s.json(`/api/projects/${shop.id}`, 'PATCH', { docLanguage: 'ja' });
   const LINE = /Owner-facing documents of this product \(plan, acceptance items, questions, deviation notes\) are written in ja\./u;
   s.adapter().scripts = [call('agent_run', { task: 'look' }), reply('child'), reply('parent'), reply('plain')];
-  await s.send(uuid(1), { text: 'delegate', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(1), { text: 'delegate', projectId: shop.id, permissionMode: 'auto' });
   assert.match(s.adapter().calls.at(-3)!.system.dynamic, LINE, '会話');
   assert.match(s.adapter().calls.at(-2)!.system.dynamic, LINE, '子の担当');
   await s.send(uuid(2), { text: 'hi' });

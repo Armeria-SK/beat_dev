@@ -15,7 +15,7 @@ import { dropToast, leaveToast, pushToast, toastDuration, type ToastEntry } from
 
 // 新しい画面の入力欄（steps/p1-ui.md の「会話」の入力欄と PR 1-3）の決まり。画面を持たない純粋な関数。
 
-const base: ComposerInput = { hasConversation: true, running: false, mode: 'normal', chatModels: 2, text: 'hi', attachments: 0, uploading: false, sending: false };
+const base: ComposerInput = { hasConversation: true, running: false, mode: 'auto', chatModels: 2, text: 'hi', attachments: 0, uploading: false, sending: false };
 const model = (id: string, extra: Partial<ModelView> = {}): ModelView => ({
   id, label: id.toUpperCase(), provider: 'p', model: id, minContext: 0, maxOutputTokens: 0, inChat: true,
   probe: { modelId: id, status: 'ok', server: 's', required: 0, message: '', checkedAt: 0 }, ...extra,
@@ -53,16 +53,16 @@ test('ui/composer-state: 置き場の文字: 新しい会話 Message、会話の
   assert.equal(t(PLACEHOLDER[composerView({ ...base, mode: 'plan', product: true, planless: true }).placeholder]), 'Describe the change to plan', '会話が始まったあと');
 });
 
-test('ui/composer-state: 新しい製品の会話のモードの初めの値: 計画書が無い製品は Plan、ある製品・分からない（古いサーバー）・製品の外は Ask（beat 3-1a-u）', () => {
+test('ui/composer-state: 新しい製品の会話のモードの初めの値: 計画書が無い製品は Plan、ある製品・分からない（古いサーバー）・製品の外は Auto（beat 3-1a-u）', () => {
   assert.equal(firstMode({ has_plan: false }), 'plan');
-  assert.equal(firstMode({ has_plan: true }), 'normal');
-  assert.equal(firstMode({}), 'normal');
-  assert.equal(firstMode(undefined), 'normal');
+  assert.equal(firstMode({ has_plan: true }), 'auto');
+  assert.equal(firstMode({}), 'auto');
+  assert.equal(firstMode(undefined), 'auto');
 });
 
-test('ui/composer-state: モードの言葉は Ask / Auto / Plan（持ち主の答え 9。サーバーの normal / auto / plan の順）', () => {
-  assert.deepEqual(Object.keys(MODE_LABEL), ['normal', 'auto', 'plan']);
-  assert.deepEqual(Object.values(MODE_LABEL).map(k => t(k)), ['Ask', 'Auto', 'Plan']);
+test('ui/composer-state: モードの言葉は Auto / Plan（サーバーの auto / plan の順）', () => {
+  assert.deepEqual(Object.keys(MODE_LABEL), ['auto', 'plan']);
+  assert.deepEqual(Object.values(MODE_LABEL).map(k => t(k)), ['Auto', 'Plan']);
 });
 
 test('ui/composer-state: Enter は送信、Shift+Enter は改行、作成中の Enter は Queue、作成中の Ctrl / ⌘ + Enter は Force。変換中は何もしない', () => {

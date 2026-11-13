@@ -128,7 +128,7 @@ export const recountsUsage = (kind: string): boolean => kind === 'model' || kind
 export function sendChoiceOf(conversationId: string | null, current: { modelId: string | null; effort: string | null; permissionMode?: PermissionMode }, override?: ModelChoice, product = false): ModelChoice {
   if (override) return { ...override };
   if (conversationId) return {};
-  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(product ? { permissionMode: current.permissionMode ?? 'normal' } : current.permissionMode && current.permissionMode !== 'normal' ? { permissionMode: current.permissionMode } : {}) };
+  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(product ? { permissionMode: current.permissionMode ?? 'auto' } : current.permissionMode && current.permissionMode !== 'auto' ? { permissionMode: current.permissionMode } : {}) };
 }
 
 export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';

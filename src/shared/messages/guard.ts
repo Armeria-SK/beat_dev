@@ -227,7 +227,6 @@ const en = {
   'pipeline.policy_ask': 'The tool "{name}" is set to "ask for approval" in the settings, so it is checked with you every time',
   'pipeline.policy_review': 'The tool "{name}" is set to "ask for approval", but a review (background work) has nobody to approve it, so it cannot be used',
   'pipeline.auto_no_reason': 'No reason was given',
-  'pipeline.auto_egress': 'Auto-approve has read something outside the allowed folders in this conversation, so every command and anything sent out is checked with you from now on (later replies and other modes included)',
 
   'hook.failed': 'The hook "{name}" failed ({reason})',
   'hook.spawn': 'Cannot start it: {detail}',

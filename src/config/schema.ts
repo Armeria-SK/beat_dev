@@ -98,7 +98,6 @@ export function ToolsConfig() {
     roots: Type.Array(RootConfig, { default: [{ path: 'workspace', mode: 'write' }] }),
     deny: Type.Array(Type.String({ minLength: 1 }), { default: ['~/.ssh', '~/.aws', '~/.gnupg'] }),
     outsideRoots: Type.Union([Type.Literal('ask'), Type.Literal('deny')], { default: 'ask' }),
-    taintEscalation: Type.Boolean({ default: true }),
     shell: Type.Object({
       enabled: Type.Boolean({ default: true }),
       shell: Type.Union([Type.Literal('auto'), Type.Literal('pwsh'), Type.Literal('powershell'), Type.Literal('bash'), Type.Literal('sh')], { default: 'auto' }),

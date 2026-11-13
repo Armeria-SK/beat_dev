@@ -5,8 +5,8 @@ import { isRenameWithoutTitle, renameTitleOf, SLASH_COMMANDS } from '../chat-log
 export const MAX_ATTACHMENTS = 5;
 export const ATTACH_ACCEPT = '.txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*,application/pdf,image/png,image/jpeg,image/gif,image/webp';
 
-export const MODE_LABEL = { normal: 'ui.composer.modeAsk', auto: 'ui.composer.modeAuto', plan: 'ui.composer.modePlan' } as const satisfies Record<PermissionMode, string>;
-export const MODE_HINT = { normal: 'mode.normalDesc', auto: 'mode.autoDesc', plan: 'mode.planDesc' } as const satisfies Record<PermissionMode, string>;
+export const MODE_LABEL = { auto: 'ui.composer.modeAuto', plan: 'ui.composer.modePlan' } as const satisfies Record<PermissionMode, string>;
+export const MODE_HINT = { auto: 'mode.autoDesc', plan: 'mode.planDesc' } as const satisfies Record<PermissionMode, string>;
 
 export type Placeholder = 'noModel' | 'busy' | 'plan' | 'reply' | 'message' | 'build';
 export const PLACEHOLDER = {
@@ -42,7 +42,7 @@ export function composerView(i: ComposerInput): ComposerView {
   return { placeholder, disabled: noModel, actions: i.running ? 'busy' : 'send', canSubmit: free && filled, canAttach: free && i.attachments < MAX_ATTACHMENTS };
 }
 
-export const firstMode = (product: { has_plan?: boolean } | undefined): PermissionMode => (product?.has_plan === false ? 'plan' : 'normal');
+export const firstMode = (product: { has_plan?: boolean } | undefined): PermissionMode => (product?.has_plan === false ? 'plan' : 'auto');
 
 export type SubmitKind = 'send' | 'queue' | 'force';
 

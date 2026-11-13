@@ -380,28 +380,22 @@ test('T-18 方針が block の道具は、子にも渡らない', async t => {
   assert.equal(names(s, 1).includes('shell_run'), false);
 });
 
-// 4-3b-2: afterAutoRead を消すと順 2
-test('T-23 親の会話が自動承認で外を読んでいたら、子の会話にも記録され、子の実行・通信の道具は毎回判定役に回る', async t => {
+test('T-23 親の会話が外から読んでいても、子の実行の道具は判定役に回らずに動く（R19）', async t => {
   const execStub: ToolDef<{ key: string }> = {
     name: 'exec_stub', description: '動かす（試験用）', input: Type.Object({ key: Type.String() }), effect: 'exec', allowedIn: ['chat', 'task', 'agent'],
-    preCheck: () => ({ decision: 'allow', reasons: [], sends: false, removes: false }),
+    preCheck: () => ({ decision: 'allow', reasons: [] }),
     execute: async () => ({ content: '動かした' }),
   };
   const s = await startApp(t, { ...withAsk(), tools: [agentRun, execStub, calculate], judge: '{"decision":"ask","reason":"check"}' });
   s.adapter().scripts = [call('agent_run', { task: '任せる' }), call('exec_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
   const parent = uuid(1);
   s.app.conversations.create({ id: parent, title: '親の会話' });
-  s.app.conversations.markAutoRead(parent);
+  s.app.conversations.markTainted(parent);
   const sent = await s.json(`/api/conversations/${parent}/messages`, 'POST', { text: '任せたい' });
   await settled(s.app, sent.body.runId);
-  assert.equal((s.adapter() as JudgeAdapter).judged.length, 1, '外を読んだあとの実行は、許される道具でも判定役が見る');
-  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['exec_stub', 'judge']]);
-  assert.equal(s.app.conversations.everAutoRead(childConversation(s)), true);
-  // 対照: 外を読んでいない親の子は、そのまま動く
-  const clean = await startApp(t, { ...withAsk(), tools: [agentRun, execStub, calculate] });
-  clean.adapter().scripts = [call('agent_run', { task: '任せる' }), call('exec_stub', { key: 'a' }), reply('子の答え'), reply('親の最後の返事')];
-  await settled(clean.app, await begin(clean, uuid(1), '任せたい'));
-  assert.match(toolMessages(clean, childConversation(clean))[0]!.text, /動かした/u);
+  assert.equal((s.adapter() as JudgeAdapter).judged.length, 0, '判定役は呼ばれない');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
+  assert.match(toolMessages(s, childConversation(s))[0]!.text, /動かした/u);
 });
 
 // ── 取り消し・時間・割り込み・再起動（手順 9） ──

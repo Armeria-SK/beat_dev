@@ -46,7 +46,7 @@ function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => v
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: Record<string, unknown> = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false,
+      registry, approvals, pending, db, emit: () => undefined, 
       lastUserRequest: () => 'please do the work', autoClassify: async () => { judge.calls++; return judge.answer; }, ...extra,
     });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };
@@ -406,7 +406,7 @@ test('4-2d: 製品の会話で、この実行で AI が作ったファイルを�
   assert.equal(made.status, 201, JSON.stringify(made.body));
   const remove = (name: string) => (process.platform === 'win32' ? `Remove-Item -LiteralPath ${name}` : `rm ${name}`);
   s.adapter().scripts = [toolCall('file_write', { path: 'gen.txt', content: 'x' }), toolCall('file_write', { path: 'keep.txt', content: 'x' }), toolCall('shell_run', { command: remove('gen.txt') }), toolCall('shell_run', { command: remove('owner.txt') }), say('done')];
-  const sent = await s.json(`/api/conversations/aaaaaaaa-0000-4000-8000-0000000000e1/messages`, 'POST', { text: 'tidy up', projectId: made.body.project.id, permissionMode: 'normal' });
+  const sent = await s.json(`/api/conversations/aaaaaaaa-0000-4000-8000-0000000000e1/messages`, 'POST', { text: 'tidy up', projectId: made.body.project.id, permissionMode: 'auto' });
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   await waitFor(() => s.app.runs.get(sent.body.runId)?.ended_at != null, 'run ended', 30_000);
   assert.equal(existsSync(join(root, 'gen.txt')), false, 'AI が作ったものを消すのは積まず、判定役（allow）が通して消えた');

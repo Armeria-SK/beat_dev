@@ -45,7 +45,7 @@ export interface ConversationProps {
 
 interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[] }
 interface Choice { modelId: string | null; effort: string | null; permissionMode: PermissionMode }
-const NO_CHOICE: Choice = { modelId: null, effort: null, permissionMode: 'normal' };
+const NO_CHOICE: Choice = { modelId: null, effort: null, permissionMode: 'auto' };
 
 const MEMORY_KEY = { create: 'ui.notice.memoryCreate', update: 'ui.notice.memoryUpdate', forget: 'ui.notice.memoryForget' } as const;
 const short = (text: string, max = 80): string => {
@@ -349,7 +349,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
   };
 
   const choice: Choice = conversation
-    ? { modelId: conversation.model_id ?? null, effort: conversation.effort ?? null, permissionMode: conversation.permission_mode ?? 'normal' }
+    ? { modelId: conversation.model_id ?? null, effort: conversation.effort ?? null, permissionMode: conversation.permission_mode ?? 'auto' }
     : id ? NO_CHOICE : draftChoice;
 
   const submit = async (kind: SubmitKind, text: string, attachments: UploadView[] = [], retry: FailAction | null = null): Promise<boolean> => {

@@ -102,7 +102,7 @@ test('3-2-s 要件の聞き取りの文: Windows の改行（CRLF）のファイ
   assert.equal(requirementsText({ ...paths, templates }, 100_000), '# Requirements interview\nAsk.');
 });
 
-test('3-2-s 毎回の system（関数）: 製品の計画モードで聞き取りの文があれば、汎用の計画の 1 行と plan_write の 1 行の代わりに入る。製品に属さない計画モード・製品のふつうのモードは今のまま', () => {
+test('3-2-s 毎回の system（関数）: 製品の計画モードで聞き取りの文があれば、汎用の計画の 1 行と plan_write の 1 行の代わりに入る。製品に属さない計画モード・製品の自動承認のモードは今のまま', () => {
   const at = new Date('2026-11-12T00:00:00Z');
   const product = { name: 'Shop', root: 'C:/shop' };
   const text = '# Requirements interview\nAsk.';
@@ -111,19 +111,19 @@ test('3-2-s 毎回の system（関数）: 製品の計画モードで聞き取�
   assert.doesNotMatch(planned, /numbered list of steps|Write the plan with plan_write/u);
   assert.match(buildDynamic('UTC', 'en', at, 'plan', undefined, text), /numbered list of steps/u, '製品に属さない会話には入れない');
   assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', undefined, text), /Requirements interview/u);
-  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'normal', product, text), /Requirements interview|numbered list/u);
+  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'auto', product, text), /Requirements interview|numbered list/u);
   assert.match(buildDynamic('UTC', 'en', at, 'plan', product), /numbered list of steps/u, '文が無い（子の担当）ときは汎用の 1 行');
   assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', product), /Requirements interview/u);
 });
 
-test('3-2-s 毎回の system（本物の App）: 製品の計画モードの会話に聞き取りの文、ふつうのモード・製品に属さない計画モードには無い。使える量が 32,000 より小さいモデルでは小さい形', async t => {
+test('3-2-s 毎回の system（本物の App）: 製品の計画モードの会話に聞き取りの文、自動承認のモード・製品に属さない計画モードには無い。使える量が 32,000 より小さいモデルでは小さい形', async t => {
   const s = await setup(t, { models: [fakeModel('m1'), fakeModel('small', SMALL)] });
   const shop = await s.product('shop');
   s.adapter().scripts = [reply('a'), reply('b'), reply('c'), reply('d')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
   assert.match(s.dynamic(), /# Requirements interview\n/u);
   assert.doesNotMatch(s.dynamic(), /numbered list of steps|\(compact\)/u);
-  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'auto' });
   assert.doesNotMatch(s.dynamic(), /Requirements interview/u);
   await s.send(uuid(3), { text: 'plan', permissionMode: 'plan' });
   assert.doesNotMatch(s.dynamic(), /Requirements interview/u);
@@ -132,7 +132,7 @@ test('3-2-s 毎回の system（本物の App）: 製品の計画モードの会�
   assert.match(s.dynamic(), /# Requirements interview \(compact\)\n/u);
 });
 
-test('3-2-s 量: 計画モードでは mesh_state_set を渡さない（ふつうのモードでは渡す）。acceptance_write の説明は短くし、選んだ答えの扱いを言わない', async t => {
+test('3-2-s 量: 計画モードでは mesh_state_set を渡さない（自動承認のモードでは渡す）。acceptance_write の説明は短くし、選んだ答えの扱いを言わない', async t => {
   assert.notEqual(meshStateSet.planOk, true);
   assert.ok(estimateTextTokens(acceptanceWrite.description) <= 125, String(estimateTextTokens(acceptanceWrite.description)));
   assert.doesNotMatch(acceptanceWrite.description, /owner_choice|your answer/iu);
@@ -142,7 +142,7 @@ test('3-2-s 量: 計画モードでは mesh_state_set を渡さない（ふつ�
   s.adapter().scripts = [reply('a'), reply('b')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
   assert.ok(!s.names().includes('mesh_state_set') && s.names().includes('mesh_read') && s.names().includes('acceptance_write'), s.names().join());
-  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'auto' });
   assert.ok(s.names().includes('mesh_state_set'), s.names().join());
 });
 
@@ -415,7 +415,7 @@ test('3-2-s Build のあとの汚れ（子の担当・通しで）: 子が汚れ
   await s.send(uuid(50), { text: 'rewrite' });
   assert.equal(s.app.plans.view(product.id).tainted, true);
 
-  const file = join(product.dir, 'notes.txt');
+  const file = join(s.paths.data, 'outside-notes.txt');
   writeFileSync(file, 'notes');
   const command = process.platform === 'win32' ? `Get-Content "${file}"` : `cat "${file}"`;
   const isClassifier = (req: { tools: unknown[]; system: { frozen: string } }) => req.tools.length === 0 && req.system.frozen.includes('safety checker');
@@ -477,7 +477,7 @@ test('3-2-s Build の頼み: 外を読んだ会話のきれいな実行が task_
   assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}`, '4-J: 会話を消したあとも、頼みは Build を作ったときの決まった文だけ（メモは入らない）');
 
   mkdirSync(s.paths.workspace, { recursive: true });
-  const file = join(s.paths.workspace, 'notes.txt');
+  const file = join(s.paths.data, 'outside-notes.txt');
   writeFileSync(file, 'notes');
   const command = process.platform === 'win32' ? `Get-Content "${file}"` : `cat "${file}"`;
   const isClassifier = (req: { tools: unknown[]; system: { frozen: string } }) => req.tools.length === 0 && req.system.frozen.includes('safety checker');
@@ -564,7 +564,7 @@ test('3-2-s 対応表の口（coverage）: 出どころごとの数と手で確�
   }), reply('d')];
   await s.send(uuid(1), { text: 'Uploads must resume after a restart', projectId: shop.id });
   await s.send(uuid(1), { text: 'No user accounts for now please' });
-  await s.send(uuid(1), { text: 'Please go ahead with this plan.', generated: true, permissionMode: 'normal' });
+  await s.send(uuid(1), { text: 'Please go ahead with this plan.', generated: true, permissionMode: 'auto' });
   await s.send(uuid(2), { text: 'Also it should be blue', projectId: shop.id });
   const body = await s.list(shop.id);
   assert.deepEqual({ ...body.coverage, unreferenced: undefined }, { owner_words: 1, owner_choice: 0, owner_edit: 0, ai_added: 2, by_hand: 2, unreferenced: undefined, unreferenced_total: 1 });

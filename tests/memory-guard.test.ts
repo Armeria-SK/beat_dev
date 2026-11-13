@@ -37,7 +37,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const judge = { answer: '{"decision":"ask","reason":"the owner should look"}', calls: 0 };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, lastUserRequest: () => 'remember this',
+      registry, approvals, pending, db, emit: () => undefined, lastUserRequest: () => 'remember this',
       autoClassify: async () => { judge.calls++; return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });
@@ -78,13 +78,15 @@ test('memory_save: ふつうは承認なし。Web や添付を読んだ後は承
   assert.deepEqual(s.memory.list().map(m => m.content), ['紅茶が好き', 'ユーザーが確かめた内容']);
 });
 
-test('memory_save: 外から読んだ後でも、読むだけの記憶の道具は確認しない。設定で taintEscalation を切れば確認しない', async t => {
+test('memory_save: 外から読んだ後でも、読むだけの記憶の道具は確認しない。古い設定 taintEscalation: false が残っていても、memory_save は確認する', async t => {
   const s = setup(t);
   const search = await s.call('memory_search', { query: '紅茶' }, tainted(s.ctx));
   assert.equal(search.decision, 'allow');
-  const off = setup(t, c => { c.tools.taintEscalation = false; });
-  const saved = await off.call('memory_save', { book: 'user', content: '設定で切ってある' }, tainted(off.ctx));
-  assert.equal(saved.decision, 'allow');
+  const old = setup(t, c => { (c.tools as unknown as Record<string, unknown>)['taintEscalation'] = false; });
+  assert.equal('taintEscalation' in old.ctx.config.tools, false, '古い設定は読み込みで落ちる');
+  const saved = await old.call('memory_save', { book: 'user', content: '設定で切ったつもり' }, tainted(old.ctx));
+  assert.equal(saved.decision, 'ask');
+  assert.deepEqual(old.memory.list(), []);
 });
 
 // ── 1 回の実行での件数 ──

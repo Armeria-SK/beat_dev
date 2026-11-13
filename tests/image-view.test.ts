@@ -64,9 +64,9 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     model: { id: 'vision-model', vision: true },
     services: { web: { network: net } } as unknown as ToolContext['services'],
   };
-  const call = (args: unknown, c: ToolContext = ctx, autoRead = false) =>
+  const call = (args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name: 'image_view', arguments: args }, c, {
-      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => autoRead,
+      registry, approvals, pending, db, emit: e => events.push(e),
       lastUserRequest: () => 'please look at the image', autoClassify: async () => { judge.calls++; return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });
@@ -517,25 +517,19 @@ test('image_view: 会話の残りの余裕が画像 1 枚分に足りなけれ�
   assert.equal(unlimited.output.images?.length, 1);
 });
 
-test('image_view: 自動承認で外を読んだ会話（ever_auto_read）では URL は毎回の確かめ、path は確かめにならない', async t => {
+test('image_view: よそから来た文を読んだあとでも、path も URL も確かめにならない（判定役にも回らない）', async t => {
   const net = fakeNet({ [URL_PNG]: { body: png(10, 10) } });
   const s = setup(t, undefined, net);
   put(s, 'a.png', png(10, 10));
-  const path = await s.call({ path: 'a.png' }, s.ctx, true);
+  const read = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
+  const path = await s.call({ path: 'a.png' }, read);
   assert.equal(path.decision, 'allow');
   assert.equal(path.output.images?.length, 1);
-  assert.equal(s.judge.calls, 0, 'path は判定役にも回らない');
+  const url = await s.call({ url: URL_PNG }, read);
+  assert.deepEqual([url.decision, url.decidedBy], ['allow', 'builtin'], url.output.content);
+  assert.equal(url.output.images?.length, 1);
+  assert.equal(s.judge.calls, 0, '判定役に回らない');
   assert.equal(s.waiting().length, 0);
-  // 4-3b-2: afterAutoRead を消すと順 2
-  const url = await s.call({ url: URL_PNG }, s.ctx, true);
-  assert.equal(url.decidedBy, 'pending', url.output.content);
-  assert.equal(s.judge.calls, 1, '外を読んだ会話の URL は判定役に回る');
-  assert.deepEqual(s.waiting().map(r => r.kind), ['judge']);
-  assert.match(s.waiting()[0]!.checks.join(' '), /Auto-approve has read something outside the allowed folders/u);
-  assert.deepEqual(net.gets, [], '許されるまで取りに行かない');
-  const normal = await s.call({ url: URL_PNG }, s.ctx, false);
-  assert.equal(normal.decision, 'allow', '外を読んだ会話でなければ確かめにならない');
-  assert.equal(normal.output.images?.length, 1);
 });
 
 test('image_view: 計画モードで使える（効果は read）', async t => {

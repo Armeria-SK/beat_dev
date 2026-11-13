@@ -61,6 +61,8 @@ export const SERVICE_PROGRAMS: ReadonlySet<string> = new Set([
 
 export const DEV_RUNNERS: ReadonlySet<string> = new Set(['make', 'gmake', 'nmake', 'just', 'rake', 'ninja', 'pytest', 'jest', 'vitest', 'mocha', 'tox', 'nox']);
 
+export const SHELL_FETCH_AFTER_TAINT: { readonly toJudge: boolean } = { toJudge: false };
+
 export function ownerKeysOf(keys: Iterable<string>): string[] {
   return [...new Set([...keys].filter(key => OWNER_KEYS.has(key)))];
 }

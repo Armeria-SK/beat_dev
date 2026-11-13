@@ -34,7 +34,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   let judged = 0;
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, lastUserRequest: () => 'make a task',
+      registry, approvals, pending, db, emit: () => undefined, lastUserRequest: () => 'make a task',
       autoClassify: async () => { judged++; return '{"decision":"ask","reason":"the owner should look"}'; },
     });
   return { ctx, call, approvals, tasks, pending, judged: () => judged };

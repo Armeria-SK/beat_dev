@@ -38,7 +38,7 @@ function setup(t: { after: (fn: () => void) => void }, options: { tainted?: bool
   const ctx = makeCtx('r1');
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false,
+      registry, approvals, pending, db, emit: () => undefined, 
       lastUserRequest: () => 'please write the notes', autoClassify: async () => { judge.calls++; return judge.answer; },
     });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };
@@ -54,22 +54,24 @@ async function parked(s: Setup, name: string, args: unknown, c: ToolContext = s.
   return s.pending.list({ status: 'waiting' })[0]!;
 }
 
-test('外から読んだあとの書き込みのうち、保護された場所（人格・.git・道具の設定）・シェル・許可フォルダの外・次の実行は、止まったまま', async t => {
+test('外から読んだあとの書き込みのうち、保護された場所（人格・.git・道具の設定）は止まったまま、許可フォルダの外は断る。ほかの書き込み・シェル・次の実行は確かめなしに動く（R19）', async t => {
   const s = setup(t);
-  for (const [path, kind] of [['SOUL.md', 'owner'], ['.git/config', 'owner'], ['.curlrc', 'owner'], ['sub/.gitattributes', 'judge'], ['.bashrc', 'judge'], ['.yarnrc', 'judge']] as const) {
+  for (const [path, kind] of [['SOUL.md', 'owner'], ['.git/config', 'owner'], ['.curlrc', 'owner']] as const) {
     const row = await parked(s, 'file_write', { path, content: 'x' });
     assert.equal(row.kind, kind, path);
     assert.equal(existsSync(s.write(path)), false, `${path}: 書かれていない`);
   }
-  assert.equal((await parked(s, 'shell_run', { command: 'echo hello' })).kind, 'judge');
-  assert.equal((await parked(s, 'shell_run', { command: 'echo x > sub/s.txt' })).kind, 'judge');
-  assert.equal(existsSync(s.write('sub/s.txt')), false);
+  for (const path of ['sub/.gitattributes', '.bashrc', '.yarnrc']) {
+    assert.equal((await s.call('file_write', { path, content: 'x' })).decidedBy, 'builtin', path);
+    assert.equal(existsSync(s.write(path)), true, path);
+  }
+  assert.equal((await s.call('shell_run', { command: 'echo hello' })).decidedBy, 'builtin');
   const outside = await s.call('file_write', { path: '../outside.txt', content: 'x' });
   assert.deepEqual([outside.decision, outside.decidedBy], ['deny', 'builtin']);
   assert.equal(existsSync(join(s.paths.workspace, '..', 'outside.txt')), false);
   const next = s.makeCtx('r2');
-  assert.equal((await parked(s, 'file_write', { path: 'sub/y.txt', content: 'Y' }, next)).kind, 'judge');
-  assert.equal(existsSync(s.write('sub/y.txt')), false);
+  assert.equal((await s.call('file_write', { path: 'sub/y.txt', content: 'Y' }, next)).decidedBy, 'builtin');
+  assert.equal(s.judge.calls, 0);
 });
 
 test('外から読んでいなくても止まる書き込み（人格・.git）は Pending に積まれ、ふつうの書き込みは止まらない。方針 ask は Pending、鍵らしい文字を含む通信は断る', async t => {
@@ -78,7 +80,7 @@ test('外から読んでいなくても止まる書き込み（人格・.git）�
   assert.equal((await parked(plain, 'file_write', { path: 'SOUL.md', content: 'x' })).kind, 'owner');
   assert.equal(existsSync(plain.write('SOUL.md')), false);
   assert.equal((await parked(plain, 'file_write', { path: '.git/config', content: 'x' })).kind, 'owner');
-  assert.equal((await fileWrite.preCheck!({ path: '.git/config', content: 'x' }, plain.ctx)).onceOnly, true);
+  assert.equal((await fileWrite.preCheck!({ path: '.git/config', content: 'x' }, plain.ctx)).askKinds?.includes('code'), true);
   assert.equal(existsSync(plain.write('.git/config')), false);
   assert.equal(plain.judge.calls, 0, '判定役が許すと答える場合でも、判定役に回さない');
   assert.equal((await plain.call('file_write', { path: 'notes/a.txt', content: 'A' })).decidedBy, 'builtin');

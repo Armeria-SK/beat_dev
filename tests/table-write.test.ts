@@ -45,7 +45,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name: 'table_write', arguments: args }, c, {
-      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false,
+      registry, approvals, pending, db, emit: e => events.push(e), 
       lastUserRequest: () => 'please write the table', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });
@@ -231,7 +231,7 @@ test('table_write: 許可フォルダの外・読むだけのフォルダ・秘�
     const out = await s.call({ path, rows: [['a']] });
     assert.equal(out.decidedBy, 'pending', `${path}: ${out.output.content}`);
     assert.equal(s.waiting()[0]!.kind, 'owner', path);
-    assert.equal((await tableWrite.preCheck!({ path, rows: [['a']] }, s.ctx)).onceOnly === true, path.startsWith('.git'), path);
+    assert.equal((await tableWrite.preCheck!({ path, rows: [['a']] }, s.ctx)).askKinds?.includes('code') === true, path.startsWith('.git'), path);
     assert.equal(existsSync(join(s.paths.workspace, path)), false, `${path} に書かれてしまった`);
   }
   assert.equal(s.judge.calls.length, 0, '判定役は呼ばない');
@@ -346,22 +346,14 @@ test('table_write: 文字の合計は 500 万文字まで。1 セル 32,767 文�
   assert.equal(read(s, 'ok.csv').length, 3 + 152 * (32767 + 2));
 });
 
-test('table_write: 外から読んだあとは、作業フォルダの中でも確かめになり、札には無害化した中身が出る', async t => {
+test('table_write: 外から読んだあとでも、作業フォルダの中なら確かめなしに書き（R19）、中身は無害化する', async t => {
   const s = setup(t);
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
   const args = { path: 'a.csv', rows: [['=cmd', 'x'], ['ok', 1]] };
-  // 4-3b-2: taintEscalation を消すと順 2
-  const denied = await s.call(args, ctx);
-  assert.equal(denied.decidedBy, 'pending');
-  const request = s.waiting()[0]!;
-  assert.equal(request.kind, 'judge');
-  assert.match(request.checks.join(), /text that came from somewhere else/u);
-  assert.equal(request.title, 'Writing a table file: a.csv (2 rows)');
-  assert.ok(s.judge.calls[0]!.user.includes("'=cmd,x\r\nok,1\r\n"), '判定役には無害化した中身を見せる');
-  assert.equal(existsSync(join(s.paths.workspace, 'a.csv')), false);
-  s.judge.answer = '{"decision":"allow","reason":"fits the request"}';
   const approved = await s.call(args, ctx);
-  assert.equal(approved.decidedBy, 'auto-mode');
+  assert.equal(approved.decidedBy, 'builtin');
+  assert.equal(s.judge.calls.length, 0);
+  assert.equal(s.waiting().length, 0);
   assert.ok(!approved.output.isError);
   assert.equal(read(s, 'a.csv').toString('utf8'), `${BOM}'=cmd,x\r\nok,1\r\n`);
 });

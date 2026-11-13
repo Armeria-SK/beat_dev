@@ -78,7 +78,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   for (const def of BROWSER_TOOLS) registry.register((options.plain && (def as ToolDef).submits ? withoutSubmits(def as ToolDef) : def) as never);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
-  const state = { mode: options.mode ?? 'normal' as PermissionMode };
+  const state = { mode: options.mode ?? 'auto' as PermissionMode };
   const ctx = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: state.mode,
@@ -86,7 +86,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   } as unknown as ToolContext;
   const classify = options.classify;
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => false,
+    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => state.mode, 
     ...(classify ? { autoClassify: async (prompt: ClassifierPrompt) => classify(prompt), lastUserRequest: () => 'フォームに入れて', conversationTainted: () => false } : {}),
   });
   const approve = (id: number, tools: ToolRegistry = registry) => replayAction(pending.claim(id), {
@@ -117,7 +117,6 @@ test('T-20: 事前の判定は ask。sends・askKinds web・bind・fetched・札
   assert.equal(check.decision, 'ask');
   assert.equal(check.sends, true);
   assert.deepEqual(check.askKinds, ['web']);
-  assert.equal(check.onceOnly, undefined, '持ち主の決定: onceOnly にしない（会話の許可で通す）');
   assert.equal(check.fetched, true);
   assert.equal(check.bind, JSON.stringify(['t1', PAGE, 'textbox', 'Search', 0, null]));
   const file = check.preview![0]!;
@@ -155,7 +154,7 @@ test('T-20: 名前は 120 文字・改行なしに整え、入れる文字は 20
 
 // ── 4-2d: 押す・入れる（submits）は送る操作なので、会話でも札にせず Pending に積む ──
 
-test('4-2d: browser_click・browser_type は、ふつうのモードでも、会話の許可より前に Pending に積まれ、札は出ず、押さない', async t => {
+test('4-2d: browser_click・browser_type は、自動承認のモードでも、会話の許可より前に Pending に積まれ、札は出ず、押さない', async t => {
   const r = rig(t);
   const page = await opened(r);
   for (const [name, args] of [['browser_type', { ref: 'e1', text: 'abc' }], ['browser_click', { ref: 'e2' }], ['browser_type', { ref: 'e1', text: 'abc' }]] as const) {
@@ -174,7 +173,7 @@ test('4-2d: 人のいない実行（タスク・子の担当）の押す・入�
   const registry = new ToolRegistry().register(submitting);
   for (const kind of ['task', 'agent'] as const) {
     const outcome = await runToolCall({ id: `u-${kind}`, name: 'submit_stub', arguments: { ref: 'e2' } }, { ...r.ctx, kind }, {
-      registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto', conversationAutoRead: () => false,
+      registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto', 
     });
     assert.equal(outcome.decision, 'deny', kind);
     assert.match(outcome.output.content, /submits in the browser, and nobody is watching this run/u, kind);
@@ -242,7 +241,7 @@ function runWithSwapAfterRecheck(r: Rig, onLastPreCheck: () => Promise<void>) {
   const registry = new ToolRegistry();
   registry.register(swapped as never);
   const run = () => runToolCall({ id: 'k', name: 'browser_click', arguments: { ref: 'e2' } }, r.ctx, {
-    registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false,
+    registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto', 
   });
   return { run, registry, calls: () => calls };
 }
@@ -272,6 +271,38 @@ test('T-23: 自動承認モードでも、押す・入れるは送る操作な�
   assert.equal(result.outcome.decidedBy, 'pending');
   assert.equal(classified.length, 0, '判定役には回らない');
   assert.equal(page.acts.length, 0);
+});
+
+test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きか外を読んだあとなら送るに数え、判定役が allow と答える設定でも判定役を呼ばずに send の Pending に積まれる', async t => {
+  const classified: ClassifierPrompt[] = [];
+  const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
+  const query = await r.call('browser_open', { url: 'https://example.com/logout?token=1' });
+  assert.equal(query.decidedBy, 'pending');
+  r.ctx.taint.tainted = true;
+  const tainted = await r.call('browser_open', { url: 'https://example.com/account/delete' });
+  assert.equal(tainted.decidedBy, 'pending');
+  assert.deepEqual(r.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['browser_open', 'send'], ['browser_open', 'send']]);
+  assert.equal(classified.length, 0, '判定役には回らない');
+  assert.equal(r.driver.launches, 0, 'ブラウザは起動しない');
+  r.driver.site('https://example.com/logout?token=1', OTHER_SITE).site('https://example.com/account/delete', OTHER_SITE);
+  for (const row of r.pending.list({ status: 'waiting' })) {
+    const result = await r.approve(row.id);
+    assert.equal(result.status, 'ran', `持ち主が通せば開く: ${JSON.stringify(result)}`);
+  }
+});
+
+test('4-3b-2: 一覧外のサイトの browser_open と、一覧のサイトでもクエリなし・外を読む前の browser_open は、今までどおり積まずに開く', async t => {
+  const classified: ClassifierPrompt[] = [];
+  const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
+  for (const url of ['https://example.com/form', 'https://other.example.org/a?x=1']) {
+    const outcome = await r.call('browser_open', { url });
+    assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'builtin'], url);
+  }
+  r.ctx.taint.tainted = true;
+  const unlisted = await r.call('browser_open', { url: 'https://other.example.org/a' });
+  assert.deepEqual([unlisted.decision, unlisted.decidedBy], ['allow', 'builtin']);
+  assert.equal(r.pending.list({ status: 'waiting' }).length, 0);
+  assert.equal(classified.length, 0);
 });
 
 // ── T-24: サイト一覧 ──

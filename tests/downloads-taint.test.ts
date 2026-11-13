@@ -41,7 +41,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false,
+      registry, approvals, pending, db, emit: e => events.push(e), 
       lastUserRequest: () => 'please look through the files', autoClassify: async () => '{"decision":"ask","reason":"not sure"}',
     });
   return { paths, ctx, call };

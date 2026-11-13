@@ -36,8 +36,29 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation']);
+});
+
+test('tools.taintEscalation: false の古い設定が読め、読んだ設定に残らず、起動のログの Ignored の 1 行に入る', t => {
+  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+  raw.tools.taintEscalation = false;
+  const config = parseConfig(raw);
+  assert.equal('taintEscalation' in config.tools, false);
+  assert.deepEqual(dropLegacy(raw).dropped, ['tools.taintEscalation']);
+
+  const dir = tempDir(t);
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
+  mkdirSync(paths.data, { recursive: true });
+  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}
+`);
+  const before = readFileSync(paths.config);
+  const logs: string[] = [];
+  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
+  t.after(() => app.close());
+  app.config();
+  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: tools.taintEscalation']);
+  assert.deepEqual(readFileSync(paths.config), before);
 });
 
 test('tools.shell.approvalTimeoutSec: 30 の古い設定が読め、読んだ設定に残らず、起動のログの Ignored の 1 行に入る', t => {

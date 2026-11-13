@@ -57,7 +57,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
   const call = (name: string, args: unknown, c: ToolContext = ctx, live?: () => AppConfig) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false, ...(live ? { config: live } : {}),
+      registry, approvals, pending, db, emit: e => events.push(e), conversationTainted: () => false, ...(live ? { config: live } : {}),
       lastUserRequest: () => 'please do the work', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });
@@ -91,17 +91,13 @@ async function decisions(s: ReturnType<typeof setup>): Promise<Array<[string, st
   await note('強い禁止のコマンド', 'shell_run', { command: 'sudo rm -rf /' });
   await note('ふつうに読む', 'file_read', { path: join(s.paths.data, 'reference', 'doc.md') });
   await note('振り返りでは書けない', 'file_write', { path: 'a.md', content: 'x' }, { ...s.ctx, kind: 'review' });
-  // 外から読んだ内容のあとの書き込みは、方針が allow でも確かめる
-  // 4-3b-2: taintEscalation を消すと順 2
   const tainted = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
-  const asked = await s.call('file_write', { path: 'tainted.md', content: 'x' }, tainted);
-  const row = s.waiting()[0]!;
-  rows.push(['外を読んだあと', `${asked.decision}/${asked.decidedBy}/${row.kind}/${row.checks.length}`]);
-  assert.equal(existsSync(join(s.paths.workspace, 'tainted.md')), false);
+  const written = await s.call('file_write', { path: 'tainted.md', content: 'x' }, tainted);
+  rows.push(['外を読んだあと', `${written.decision}/${written.decidedBy}`]);
   return rows;
 }
 
-test('A3: allow（既定でも、明示しても）は判定を緩めない: 拒否・秘密・読むだけ・振り返りの禁止・外を読んだあとの確かめは、方針なしと同じ', async t => {
+test('A3: allow（既定でも、明示しても）は判定を緩めない: 拒否・秘密・読むだけ・振り返りの禁止・外を読んだあとの書き込みは、方針なしと同じ', async t => {
   const plain = await decisions(setup(t));
   const explicit = await decisions(setup(t, { file_write: 'allow', file_read: 'allow', file_edit: 'allow', file_list: 'allow', shell_run: 'allow' }));
   assert.deepEqual(explicit, plain);
@@ -271,14 +267,18 @@ test('A3: ask の理由には種類が付く（外を読む outside_read・外�
   assert.deepEqual(await kindsOf(plain, process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"`), ['outside_read'], '許可フォルダの外を読む');
   writeFileSync(join(plain.paths.workspace, 'put.js'), "console.log('x');\n");
   assert.ok((await kindsOf(plain, 'node put.js')).includes('code'), 'コードを動かす');
-  // 4-3b-2: taintEscalation を消すと順 2
-  const taintedWrite = await plain.call('file_write', { path: 'a.md', content: 'x' }, { ...plain.ctx, taint: { tainted: true, sources: ['web_fetch'] } });
-  assert.equal(taintedWrite.decidedBy, 'pending');
-  assert.equal(plain.judge.calls.length, 1, '外から読んだあとの書き込みは判定役に回る');
+  const readOutside = { ...plain.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
+  plain.registry.register({ ...stub('t_escalate', ['chat'], plain.ran), escalateOnTaint: true });
+  const taintedCall = await plain.call('t_escalate', {}, readOutside);
+  assert.equal(taintedCall.decidedBy, 'pending');
+  assert.equal(plain.judge.calls.length, 1, '外から読んだあとの escalateOnTaint の道具は判定役に回る');
   assert.ok(plain.judge.calls[0]!.user.includes(TAINTED_NOTE));
   assert.deepEqual(plain.waiting().map(r => [r.kind, r.tainted]), [['judge', true]]);
   assert.match(plain.waiting()[0]!.checks.join(' '), /web_fetch/u);
-  assert.equal(existsSync(join(plain.paths.workspace, 'a.md')), false);
+  plain.pending.reject(plain.waiting()[0]!.id);
+  assert.equal((await plain.call('file_write', { path: 'a.md', content: 'x' }, readOutside)).decidedBy, 'builtin', '外から読んだあとの書き込みは確かめない（R19）');
+  assert.equal(plain.judge.calls.length, 1);
+  assert.equal(existsSync(join(plain.paths.workspace, 'a.md')), true);
 
   const parkedKind = async (s: ReturnType<typeof setup>, c: ToolContext = s.ctx) => {
     const outcome = await s.call('file_write', { path: 'a.md', content: 'x' }, c);

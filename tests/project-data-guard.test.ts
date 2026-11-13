@@ -56,7 +56,7 @@ test('ファイルの道具（読む・書く・書き換える・一覧・検�
   };
   let judged = 0;
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the product knowledge', conversationTainted: () => false, conversationAutoRead: () => false,
+    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the product knowledge', conversationTainted: () => false, 
     autoClassify: async () => { judged++; return ALLOW; },
   });
   const file = join(f.dir, 'context.md');

@@ -12,7 +12,6 @@ function base(): Config {
       roots: [{ path: 'workspace', mode: 'write' }, { path: '~/ref', mode: 'read' }],
       deny: ['~/.ssh', '~/.aws', '~/.gnupg', 'mine'],
       outsideRoots: 'ask',
-      taintEscalation: true,
       shell: { enabled: true, allow: ['git status'], ask: ['npm *'], deny: ['rm *'], envAllow: ['PATH'], timeoutSec: 120 },
       hooks: { preToolUse: [{ matcher: 'shell_run', command: ['node', 'guard.js'], timeoutMs: 30000, onError: 'deny' }], postToolUse: [] },
       web: { fetch: true, search: 'duckduckgo' },
@@ -84,24 +83,20 @@ test('広がりの検出（シェル）: 有効にする・承認なしに足す
   ]);
 });
 
-test('広がりの検出（承認まわり・Web）: outsideRoots を止めるから承認に・外の内容のあとの引き上げを切る・取得と検索を入れる・自分で作ったタスクの承認を外す', () => {
+test('広がりの検出（承認まわり・Web）: outsideRoots を止めるから承認に・取得と検索を入れる・自分で作ったタスクの承認を外す', () => {
   const strict = base();
   strict.tools.outsideRoots = 'deny';
   strict.tools.web.fetch = false;
   strict.tools.web.search = 'off';
   const loose = structuredClone(strict);
   loose.tools.outsideRoots = 'ask';
-  loose.tools.taintEscalation = false;
   loose.tools.web.fetch = true;
   loose.tools.web.search = 'duckduckgo';
   loose.worker.selfTasksNeedApproval = false;
-  assert.deepEqual(kinds(strict, loose), ['outside-loosened', 'taint-off', 'web-fetch-on', 'web-search-on', 'self-tasks-unapproved']);
-  const tightened = structuredClone(base());
-  tightened.tools.taintEscalation = true;
-  assert.deepEqual(kinds(base(), tightened), []);
-  const alreadyOff = base();
-  alreadyOff.tools.taintEscalation = false;
-  assert.deepEqual(kinds(alreadyOff, structuredClone(alreadyOff)), [], 'もう切ってあるものは、変えていなければ数えない');
+  assert.deepEqual(kinds(strict, loose), ['outside-loosened', 'web-fetch-on', 'web-search-on', 'self-tasks-unapproved']);
+  const oldKey = structuredClone(base()) as Config & { tools: Record<string, unknown> };
+  oldKey.tools.taintEscalation = false;
+  assert.deepEqual(kinds(base(), oldKey), [], '消した鍵（tools.taintEscalation）を切っても、広がりには数えない');
 });
 
 test('広がりの検出（フック）: 足す・書き換える・使う前のものを外す。同じ中身や並べ替えだけなら無し、使ったあとのフックを外すのは数えない', () => {

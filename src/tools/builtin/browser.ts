@@ -134,7 +134,7 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
     try { url = pageUrl(input.url); } catch (thrown) { return deny(thrown instanceof RetrievalFailure ? thrown.text(language) : (thrown as Error).message); }
     const base = exfiltrationCheck(input.url, language, url.search.length > 300);
     // 操作の一覧のサイトは、ログイン済みのことがある。開くだけの GET（クエリ付き・よそから来た文を読んだあとに決めた行き先）が操作になりうるので、
-    // 押す承認を迂回させない: 確かめる（種類 web・sends で、自動承認の判定役には回さない）。一覧外のサイトは読むだけなので今までどおり
+    // 押す承認を迂回させない: 送るに数える（sends。outbound.ts の outboundOfCall が判定役に回さず Pending の send に積む）。一覧外のサイトは読むだけなので今までどおり
     // 「よそから来た文を読んだあと」は、この実行だけでなく会話ぜんぶで見る（前の実行で読んだ文が決めた行き先も、確かめの対象）。会話の印が読めないときは「ある」側に倒す
     let tainted = ctx.taint.tainted;
     if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }

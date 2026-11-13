@@ -31,7 +31,7 @@ const toolCall = (name: string, args: unknown): Script => async function* () {
 
 test('返事の言語: 動的な部分は、どのモードでも「書いた言語で返す」を含み、English という言葉を含まない', () => {
   const now = new Date('2026-11-04T20:00:00Z');
-  for (const mode of ['normal', 'plan'] as const) {
+  for (const mode of ['auto', 'plan'] as const) {
     const text = buildDynamic('Asia/Tokyo', 'en', now, mode);
     assert.ok(text.split('\n').includes(REPLY_DIRECTIVE), `${mode}: ${text}`);
     assert.doesNotMatch(text, /English/iu, mode);
@@ -200,7 +200,7 @@ test('返事・記録の言語の指示は持ち主の言葉を指し、指示�
     review: reviewPrompt({ trigger: 'heavy_run', forgotten: [] }),
     tidy: reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x' }),
     task: taskPrompt(curiosity, [], 'UTC'),
-    dynamic: buildDynamic('UTC', 'en', now, 'normal'),
+    dynamic: buildDynamic('UTC', 'en', now, 'auto'),
   };
   assert.match(texts.compact, /in the language the user writes in \(the language of the "User:" lines\)/u);
   assert.match(texts.review, /in the language the user writes in: the language of the \[User\] lines in the record below/u);

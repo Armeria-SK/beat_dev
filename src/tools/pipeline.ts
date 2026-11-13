@@ -13,7 +13,7 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
 import { autoDecide, type ClassifierPrompt, type JudgeCall, type JudgeLimits } from './auto-approve.ts';
-import { ownerKeysOf, POLICY_KEYS, refusedKeysOf } from './hooks/decision-order.ts';
+import { ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_AFTER_TAINT } from './hooks/decision-order.ts';
 import type { PendingKind, PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
@@ -74,8 +74,6 @@ export interface PipelineDeps {
   lastUserRequest?: (() => string) | undefined;
   // この会話の実行が、よそから来た文を一度でも読んだことがあるか（会話ごとの印）。あれば、判定役に見せる文に「よそから来た文を読んだ会話」の 1 行を足す。渡さない・読めないときも、あるとみなす
   conversationTainted?: (() => boolean) | undefined;
-  // この会話で、自動承認の判定役が許可フォルダの外を読むのを一度でも許したか（会話ごとの印）。あれば、この会話のシェルのコマンドと通信の道具は、ずっと毎回確かめる。渡さない・読めないときも、あるとみなす
-  conversationAutoRead?: (() => boolean) | undefined;
   // 判定役を待つ時間の上限（ミリ秒。試験用。既定 20 秒）
   autoTimeoutMs?: number | undefined;
   pending?: PendingStore | undefined;
@@ -178,24 +176,18 @@ function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPoli
 }
 
 // この呼び出しに効く権限モード: 実行を始めたときのモードと、会話のいまのモードの厳しい方（厳しい向きはその場から、緩む向きは次の実行から）。
-// 会話（チャット）の実行と、それが任せた子の担当（agent。親の会話のモードを見る）だけ。タスクは実行を始めたときのモードが自動承認なら自動承認、ほかはふつう（会話のモードは見ない）。振り返りは、会話のモードに関係なくふつう
+// 会話（チャット）の実行と、それが任せた子の担当（agent。親の会話のモードを見る）だけ。タスクと振り返りは、会話のモードに関係なく auto
 export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionMode {
-  if (ctx.kind === 'task') return ctx.permissionMode === 'auto' ? 'auto' : 'normal';
-  if (ctx.kind !== 'chat' && ctx.kind !== 'agent') return 'normal';
-  const start = ctx.permissionMode ?? 'normal';
+  if (ctx.kind !== 'chat' && ctx.kind !== 'agent') return 'auto';
+  const start = ctx.permissionMode ?? 'auto';
   let now: PermissionMode = start;
-  if (deps.permissionMode) { try { now = deps.permissionMode(); } catch { now = 'normal'; } }
+  if (deps.permissionMode) { try { now = deps.permissionMode(); } catch { now = start; } }
   return stricterMode(start, now);
 }
 
 function conversationTainted(deps: PipelineDeps): boolean {
   if (!deps.conversationTainted) return true;
   try { return deps.conversationTainted(); } catch { return true; }
-}
-
-function conversationAutoRead(deps: PipelineDeps): boolean {
-  if (!deps.conversationAutoRead) return true;
-  try { return deps.conversationAutoRead(); } catch { return true; }
 }
 
 // truncated: 出力の上限で切れた返事に付いていた呼び出し。動かさず、deny で記録して誤りの結果を返す（message が結果の文、raw が切れた元の文字で、記録の入力欄に 2000 文字まで残す。モデルには送らない）
@@ -250,7 +242,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     return refuse('deny', 'validation', toolText(language, 'pipeline.bad_args', { errors: errors.join('\n- ') }), true);
   }
   if (tool.submits === true && ctx.kind !== 'chat') return refuse('deny', 'mode', pendingText('en', 'unattended_submit', { name: tool.name }));
-  // この呼び出しが外へ出るか（効果が network、または networkCall がそう答えた）。外から読んだ印と、自動承認で外を読んだ会話の毎回の確かめだけがこれを使う
+  // この呼び出しが外へ出るか（効果が network、または networkCall がそう答えた）。外から読んだ印だけがこれを使う
   const network = tool.effect === 'network' || callsNetwork(tool, args);
 
   // ── 実行前フック ──
@@ -275,7 +267,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (outbound?.kind === 'deny') return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: outbound.reason }));
   const tainted = ctx.taint.tainted || conversationTainted(deps);
   // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる。拒否は拒否のまま
-  if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint || tool.writesFiles === true) && decision !== 'deny') {
+  const escalates = tool.escalateOnTaint === true || (SHELL_FETCH_AFTER_TAINT.toJudge && tool.name === 'shell_run' && first?.fetched === true);
+  if (ctx.taint.tainted && escalates && decision !== 'deny') {
     const sources = ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep'));
     if (ctx.kind === 'review') {
       decision = 'deny';
@@ -298,14 +291,6 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     }
   }
   const policyAsk = policy === 'ask' && decision !== 'deny';
-  // 自動承認で許可フォルダの外を読んだ会話では、その実行の残りも、あとの実行も、通信の道具とシェルのコマンドはすべて毎回確かめる（外で読んだ中身は会話の履歴に残るので、確かめなしに外へ送らせない。
-  // 許可の一覧にある curl・Invoke-WebRequest も、URL の後ろの文字で外へ送れるので、取得かどうかで分けない。モードをふつうに戻しても変わらない）
-  const afterAutoRead = (network || tool.effect === 'exec') && decision !== 'deny' && (ctx.autoReadOutside === true || conversationAutoRead(deps));
-  if (afterAutoRead) {
-    decision = worst(decision, 'ask');
-    askKinds.add('egress');
-    reasons.push(guardText(language, 'pipeline.auto_egress'));
-  }
   const hookAsks: string[] = [];
   let summaryMemo: { value: ReturnType<NonNullable<ToolDef['summarize']>> | undefined } | undefined;
   const callSummary = () => (summaryMemo ??= { value: tool.summarize?.(args, language) }).value;
@@ -396,7 +381,6 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons,
         }, why);
         decision = 'allow'; decidedBy = 'auto-mode'; autoWhy = why;
-        if (askKinds.has('outside_read')) ctx.autoReadOutside = true;
         autoEvent('allowed', why);
         judgedId = autoId;
       }
@@ -414,7 +398,6 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。
   // シェルのコマンドが外から取得する・外の中身を持ち込む（curl・Invoke-WebRequest・git clone・npm install など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）。
   // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した呼び出しも、動かしたら付ける。
-  // 自動承認で外を読んだ会話の毎回の確かめ（afterAutoRead）は、ここで言う egress ではない（事前の判定の種類だけを見る）
   const approvedEgress = first?.decision === 'ask' && first.askKinds?.includes('egress') === true;
   // 結果が外の中身を持ち込んだと自分で言ったとき（output.fetched。実行してみないと分からない道具）も付ける。付ける向きにしか働かない。
   if ((network && !(output.isError && output.noRemoteContent)) || first?.fetched === true || output.fetched === true || approvedEgress) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
