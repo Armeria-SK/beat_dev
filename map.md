@@ -265,7 +265,7 @@
 - 使うもの: `src/app.ts` `src/paths.ts` `src/config/store.ts` `src/web/server.ts` `src/tools/browser/driver.ts`（`BrowserFailure`） `src/shared/redaction.ts`（`isSensitiveName`）
 
 ### 判定役の試し — `scripts/judge-probe.ts`（段階 4 の 4-0）
-- 判定役の例（`tests/fixtures/judge-cases.ts`: 通すべき 10・積むべき 10 と、判定役に来ない対照 3）を、設定の `routing.*` のモデルへ今の `buildClassifierPrompt` と `autoDecide` で流し、例ごとの答え・理由・時間・枠を待った時間・切れた / 読めないの表（Markdown）を出す。流し方は (a) ふつう、(b) 考える量を最小に（`reasoning_effort`。提供元が知らせなければ飛ばす。`--effort` で決められる）、(c) 別の長い返事が提供元の枠を持っているあいだ（`EndpointLimiter` で今と同じく列の後ろに並び、待つ時間も上限に数える）。対照（順 3・4 で決まるもの）は送らず、表に名前だけ出す。
+- 判定役の例（`tests/fixtures/judge-cases.ts`: 通すべき 10・積むべき 10 と、判定役に来ない対照 4。どれも `shell_run` で、置き場所〔`judgeCases(layout)`〕を差し替えられ、`tests/judge-probe.test.ts` が今の見張りにかけて理由とパスが同じで順 5 の形だと確かめる）を、設定の `routing.*` のモデルへ今の `buildClassifierPrompt` と `autoDecide` で流し、例ごとの答え・理由・時間・枠を待った時間・切れた / 読めないの表（Markdown）を出す。流し方は (a) ふつう、(b) 考える量を最小に（`reasoning_effort`。提供元が知らせなければ飛ばす。`--effort` で決められる）、(c) 別の長い返事が提供元の枠を持っているあいだ（`EndpointLimiter` で今と同じく列の後ろに並び、待つ時間も上限に数える）。対照（順 3・4 で決まるもの）は送らず、表に名前だけ出す。
 - `node scripts/judge-probe.ts --config <設定のファイル> [--models] [--modes a,b,c] [--runs 3] [--max-tokens 400] [--timeout 20000] [--effort] [--out]`。鍵は設定の `apiKeyEnv` の環境変数から読む（持ち主の `data/` は読まない。使い捨ての設定を渡す）。`npm run check` のテストには入らず（試しの提供元での確かめは `tests/judge-probe.test.ts`）、型チェックには入る。
 - 入口: `scripts/judge-probe.ts`
 - 使うもの: `src/tools/auto-approve.ts`（`autoDecide` `TruncatedReply`） `src/providers/registry.ts` `src/providers/limiter.ts` `src/config/store.ts`（`parseConfig` `findModel`） `src/engine/efforts.ts` `src/shared/redaction.ts`

@@ -188,7 +188,11 @@ export function renderReport(rows: readonly ProbeRow[], meta: ReportMeta): strin
   return `${lines.join('\n')}\n`;
 }
 
-const USAGE = 'Usage: node scripts/judge-probe.ts --config <settings.json> [--models id,id] [--modes a,b,c] [--runs 3] [--max-tokens 400] [--timeout 20000] [--effort <value>] [--out <file.md>]';
+export function providerNote(id: string, provider: ProviderConfig, model: ModelConfig, secrets: readonly string[]): string {
+  return redactSecrets(`${id}: ${provider.kind} ${provider.baseUrl ?? ''} model ${model.model}, maxParallel ${provider.maxParallel}`, secrets);
+}
+
+const USAGE ='Usage: node scripts/judge-probe.ts --config <settings.json> [--models id,id] [--modes a,b,c] [--runs 3] [--max-tokens 400] [--timeout 20000] [--effort <value>] [--out <file.md>]';
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -222,7 +226,7 @@ async function main(): Promise<void> {
     }
     const modelModes = modes.filter(m => m !== 'b' || effort !== undefined);
     if (modes.includes('b')) notes.push(effort ? `${id}: mode b sends reasoning_effort "${effort}"` : `${id}: mode b skipped (the provider offers no reasoning effort; pass --effort to force one)`);
-    notes.push(`${id}: ${found.provider.kind} ${found.provider.baseUrl ?? ''} model ${found.model.model}, maxParallel ${found.provider.maxParallel}`);
+    notes.push(providerNote(id, found.provider, found.model, secrets));
     rows.push(...await runProbe({
       model: found.model, provider: found.provider, adapter, cases: JUDGE_CASES, runs, modes: modelModes, maxTokens, timeoutMs, effort, secrets,
       onRow: r => process.stderr.write(`${r.model} ${r.mode} ${r.caseId} #${r.run}: ${r.decision}${r.failed ? ` (${r.failed})` : ''}${r.wrongAllow ? ' WRONG ALLOW' : ''} ${r.ms}ms wait ${r.waitMs}ms\n`),
