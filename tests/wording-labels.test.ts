@@ -18,3 +18,9 @@ test('方針 Ask の道具の理由の文は、画面の方針の名前（Ask）
     assert.doesNotMatch(text, /ask for approval/iu, text);
   }
 });
+
+test('外の MCP の書く道具の行は、いまの流れ（判定役が見て、通せないものは Pending）で言う', () => {
+  assert.match(en['tools.mcp.asks.write'], /judge/u);
+  assert.match(en['tools.mcp.asks.write'], /Pending/u);
+  assert.doesNotMatch(en['tools.mcp.asks.write'], /^Asked\b/u);
+});
