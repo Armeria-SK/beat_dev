@@ -16,7 +16,7 @@ import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Icon, Notice, Pill } from '../parts.tsx';
 import {
-  apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, reviewButton, reviewSeen, saveOutcome, startDraft, typed, type PlanDraft, type ReviewSeen, type SaveOutcome,
+  apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, reviewButton, reviewClick, reviewSeen, saveOutcome, startDraft, typed, type PlanDraft, type ReviewSeen, type SaveOutcome,
 } from '../plan.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { routeHash } from '../routes.ts';
@@ -562,13 +562,15 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setAccBusy(false);
   };
 
-  const review = reviewButton(doc, mode, reviewing);
+  const review = reviewButton(doc, mode, reviewing, seen.changed);
   const markReviewed = async () => {
-    if (!seen.hash || reviewing) return;
+    if (reviewing) return;
+    const click = reviewClick(seen, doc?.hash ?? null);
+    if (click.send === null) { setSeen(click.seen); return; }
     setReviewing(true);
     setReviewFailed(null);
     try {
-      const r = await api.planReviewed(productId, seen.hash);
+      const r = await api.planReviewed(productId, click.send);
       setSeen({ hash: r.plan.hash, changed: false });
       setDoc(r.plan);
     } catch (error) {
@@ -616,7 +618,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       {asking && askFailed && <Notice tone="fail" title={t('ui.acc.ask.failed')} text={askFailed.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void ask() }} />}
       {shown && acc && coverage && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
       {changedAfterBuild(doc, acc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
-      {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}{review !== 'hidden' && <Button small variant="ghost" disabled={review === 'off'} onClick={() => void markReviewed()}>{t('ui.plan.markReviewed')}</Button>}</p>}
+      {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}{review !== 'hidden' && <Button small variant="ghost" disabled={review === 'off'} onClick={() => void markReviewed()}>{t(review === 'again' ? 'ui.plan.readNewVersion' : 'ui.plan.markReviewed')}</Button>}</p>}
       {review !== 'hidden' && seen.changed && <p className="bt-meta ui-acc__outside" role="status"><Icon name="alert" />{t('ui.plan.changedReadAgain')}</p>}
       {reviewFailed && <Notice tone="fail" title={t('ui.plan.reviewFailed')} text={reviewFailed.detail ?? undefined} />}
       {notice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} also={{ label: t('ui.plan.discard'), run: discard }} />}

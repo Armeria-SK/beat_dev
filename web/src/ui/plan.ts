@@ -17,11 +17,17 @@ export interface ReviewSeen { hash: string | null; changed: boolean }
 export const reviewSeen = (prev: ReviewSeen, hash: string | null): ReviewSeen =>
   (prev.hash === hash ? prev : { hash, changed: prev.hash !== null && hash !== null });
 
-export type ReviewButton = 'hidden' | 'off' | 'on';
+export type ReviewButton = 'hidden' | 'off' | 'again' | 'on';
 
-export function reviewButton(doc: PlanDoc | null, mode: 'read' | 'edit', busy: boolean): ReviewButton {
+export function reviewButton(doc: PlanDoc | null, mode: 'read' | 'edit', busy: boolean, changed: boolean): ReviewButton {
   if (!doc?.tainted || !doc.hash || mode !== 'read') return 'hidden';
-  return doc.writing || busy ? 'off' : 'on';
+  if (doc.writing || busy) return 'off';
+  return changed ? 'again' : 'on';
+}
+
+export function reviewClick(seen: ReviewSeen, hash: string | null): { send: string | null; seen: ReviewSeen } {
+  if (seen.changed || seen.hash !== hash) return { send: null, seen: { hash, changed: false } };
+  return { send: seen.hash, seen };
 }
 
 export const canEdit = (state: PlanState): boolean => state === 'ready' || state === 'empty';

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Conversation, PlanDoc } from '../web/src/api.ts';
-import { apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planState, planStays, rebase, reviewButton, reviewSeen, runningIn, saveOutcome, startDraft, typed } from '../web/src/ui/plan.ts';
+import { apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planState, planStays, rebase, reviewButton, reviewClick, reviewSeen, runningIn, saveOutcome, startDraft, typed } from '../web/src/ui/plan.ts';
 import { hasUnsavedEdits, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
 // Plan の欄（beat 3-1a-u）。画面を持たない決まり: 状態の決め方・書きかけ・保存の結果（web/src/ui/plan.ts）。
@@ -120,13 +120,13 @@ test('ui/plan: その製品の会話で動いている実行の数（変われ�
 
 test('ui/plan: Mark as reviewed は、読むモードで印のある計画書のときだけ出し、書いている最中と送っている最中は押せない', () => {
   const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h1', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, ...extra });
-  assert.equal(reviewButton(doc(), 'read', false), 'on');
-  assert.equal(reviewButton(doc({ writing: true }), 'read', false), 'off', '書いている最中は押せない');
-  assert.equal(reviewButton(doc(), 'read', true), 'off');
-  assert.equal(reviewButton(doc(), 'edit', false), 'hidden', '直しているあいだは出さない');
-  assert.equal(reviewButton(doc({ tainted: false }), 'read', false), 'hidden');
-  assert.equal(reviewButton(doc({ hash: null }), 'read', false), 'hidden');
-  assert.equal(reviewButton(null, 'read', false), 'hidden');
+  assert.equal(reviewButton(doc(), 'read', false, false), 'on');
+  assert.equal(reviewButton(doc({ writing: true }), 'read', false, false), 'off', '書いている最中は押せない');
+  assert.equal(reviewButton(doc(), 'read', true, false), 'off');
+  assert.equal(reviewButton(doc(), 'edit', false, false), 'hidden', '直しているあいだは出さない');
+  assert.equal(reviewButton(doc({ tainted: false }), 'read', false, false), 'hidden');
+  assert.equal(reviewButton(doc({ hash: null }), 'read', false, false), 'hidden');
+  assert.equal(reviewButton(null, 'read', false, false), 'hidden');
 });
 
 test('ui/plan: 読み始めた計画書のハッシュを覚え、途中で計画書が変わったら「読み直して」の印を立てる（最初の読み込みでは立てない）', () => {
@@ -136,4 +136,18 @@ test('ui/plan: 読み始めた計画書のハッシュを覚え、途中で計�
   assert.deepEqual(reviewSeen(start, 'h2'), { hash: 'h2', changed: true });
   assert.deepEqual(reviewSeen(reviewSeen(start, 'h2'), 'h2'), { hash: 'h2', changed: true }, '印は送るまで残る');
   assert.deepEqual(reviewSeen(start, null), { hash: null, changed: false });
+});
+
+test('ui/plan: 「読み直して」が出ているあいだの 1 回目の押しは何も送らず、印を下ろして今の版を覚えるだけ。送るのは読み直したあとの 2 回目', () => {
+  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h2', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, ...extra });
+  const changed = reviewSeen(reviewSeen({ hash: null, changed: false }, 'h1'), 'h2');
+  assert.equal(reviewButton(doc(), 'read', false, changed.changed), 'again', '押す前から「読み直した」の形にする');
+  assert.equal(reviewButton(doc({ writing: true }), 'read', false, true), 'off');
+  assert.equal(reviewButton(doc(), 'edit', false, true), 'hidden');
+  const first = reviewClick(changed, 'h2');
+  assert.deepEqual(first, { send: null, seen: { hash: 'h2', changed: false } }, '1 回目は送らない');
+  assert.equal(reviewButton(doc(), 'read', false, first.seen.changed), 'on');
+  assert.deepEqual(reviewClick(first.seen, 'h2'), { send: 'h2', seen: first.seen }, '2 回目で、読み直した版を送る');
+  assert.deepEqual(reviewClick({ hash: 'h1', changed: false }, 'h2'), { send: null, seen: { hash: 'h2', changed: false } }, '覚えた版と今の版がずれていれば、印が立つ前でも送らない');
+  assert.deepEqual(reviewClick({ hash: null, changed: false }, null).send, null);
 });

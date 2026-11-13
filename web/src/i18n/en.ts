@@ -1456,6 +1456,7 @@ export const en = {
   'ui.plan.markReviewed': 'Mark as reviewed',
   'ui.plan.reviewFailed': 'Not marked as reviewed',
   'ui.plan.changedReadAgain': 'The plan changed — read it again',
+  'ui.plan.readNewVersion': 'I read the new version',
   'ui.acc.source.words': 'Your words',
   'ui.acc.source.choice': 'Your answer',
   'ui.acc.source.ai': 'AI added',
