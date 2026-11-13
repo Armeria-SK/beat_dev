@@ -95,7 +95,7 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
       <section className="bt-section">
         <div className="bt-section__head">
           <span className="bt-label">{t('ui.ps.remotes')}</span>
-          <Button small variant="ghost" disabled={busy || project.folder_missing} onClick={() => void patch({ refreshRemotes: true })}>{t('ui.ps.refresh')}</Button>
+          <Button small variant="ghost" disabled={busy} onClick={() => void patch({ refreshRemotes: true })}>{t('ui.ps.refresh')}</Button>
         </div>
         {project.remotes.length === 0 ? <p className="bt-meta">{project.is_git ? t('ui.ps.remotesNone') : t('ui.np.note.notGit')}</p> : (
           <ul className="bt-list">
