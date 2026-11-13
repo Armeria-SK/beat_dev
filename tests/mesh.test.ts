@@ -17,6 +17,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { PlanStore } from '../src/projects/plan.ts';
 import { PLACEHOLDER_NONCE, makeFence } from '../src/shared/fence.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { meshRead, meshSearch, meshStateSet } from '../src/tools/builtin/mesh.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
@@ -157,7 +158,7 @@ function meshFixture(t: { after: (fn: () => void) => void }) {
     services: { db, memory: undefined as never, emit: () => undefined, plans, mesh }, ...over,
   });
   const run = (name: string, args: unknown, ctx: ToolContext = ctxOf()) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db, () => undefined), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal',
+    registry, approvals: new ApprovalBroker(db, () => undefined), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), judgeAll: true, db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal',
     conversationTainted: () => false, conversationAutoRead: () => false,
   });
   return { paths, dir, plans, acceptance, mesh, ctxOf, run };

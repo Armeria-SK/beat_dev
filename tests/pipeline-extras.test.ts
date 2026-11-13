@@ -8,13 +8,14 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { StopReason } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { PLAN_EFFECTS, planAllows, REVIEW_FORBIDDEN, reviewAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
-import type { AskKind, ToolContext, ToolDef, ToolEffect } from '../src/tools/types.ts';
+import type { ToolContext, ToolDef, ToolEffect } from '../src/tools/types.ts';
 import { CONVERSATION, settled, startApp } from './app-setup.ts';
 import { tempDir, testConfig, type Script } from './helpers.ts';
 
@@ -24,6 +25,7 @@ import { tempDir, testConfig, type Script } from './helpers.ts';
 
 const EFFECTS: ToolEffect[] = ['read', 'write', 'exec', 'network', 'meta'];
 const ALLOW = '{"decision":"allow","reason":"依頼の範囲です"}';
+const ASK = '{"decision":"ask","reason":"持ち主に聞く"}';
 
 function tool(ran: string[], name: string, effect: ToolEffect, over: Partial<ToolDef> = {}): ToolDef {
   return {
@@ -56,34 +58,26 @@ function setup(t: { after: (fn: () => void) => void }, tools: ToolDef[], options
     log: () => undefined, permissionMode: state.mode, ...over,
   });
   const ctx = makeCtx();
-  const classify = options.classify;
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const judge = { answer: ASK, calls: 0 };
+  const classify = options.classify ?? (() => judge.answer);
   const call = (name: string, args: unknown, c: ToolContext = ctx) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-    registry, approvals, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => state.autoRead,
-    ...(classify ? { autoClassify: async (prompt: ClassifierPrompt) => classify(prompt), lastUserRequest: () => 'x を読んで', conversationTainted: () => false } : {}),
+    registry, approvals, pending, db, judgeAll: true, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => state.autoRead,
+    autoClassify: async (prompt: ClassifierPrompt) => { judge.calls++; return classify(prompt); }, lastUserRequest: () => 'x を読んで', conversationTainted: () => false,
   });
-  return { ctx, makeCtx, call, approvals, db, state };
+  return { ctx, makeCtx, call, approvals, db, state, pending, judge };
 }
 
-async function pendingCard(s: Setup, stop: { done: boolean }) {
-  for (let i = 0; i < 300 && !stop.done; i++) {
-    const card = s.approvals.pending()[0];
-    if (card) return card;
-    await new Promise(r => setTimeout(r, 5));
-  }
-  return undefined;
-}
-
-// 呼んでみて、札が出たか（出たら種類・毎回の印・理由を控えて、answer で答える）、出ずに終わったかを返す
-async function observe(s: Setup, name: string, args: unknown, answer: 'once' | 'conversation' | 'deny' = 'deny', c: ToolContext = s.ctx) {
-  const running = s.call(name, args, c);
-  const stop = { done: false };
-  const first = await Promise.race([running.then(outcome => ({ outcome })), pendingCard(s, stop).then(card => ({ card }))]);
-  stop.done = true;
-  if (!('card' in first)) return { asked: false as const, outcome: first.outcome };
-  assert.ok(first.card, `${name}: 札も結果も出なかった`);
-  const seen = { kinds: [...(first.card.kinds ?? [])].sort() as AskKind[], everyTime: first.card.everyTime === true, reasons: first.card.reasons };
-  s.approvals.decide(first.card.id, answer);
-  return { asked: true as const, ...seen, outcome: await running };
+// 呼んでみて、Pending に積まれたか（積まれたら種類・理由を控えて、断る）、積まれずに終わったかを返す
+async function observe(s: Setup, name: string, args: unknown, c: ToolContext = s.ctx) {
+  const before = s.judge.calls;
+  const outcome = await s.call(name, args, c);
+  const judged = s.judge.calls > before;
+  if (outcome.decidedBy !== 'pending') return { asked: false as const, judged, outcome };
+  const row = s.pending.list({ status: 'waiting' })[0];
+  assert.ok(row, `${name}: Pending に行が無い`);
+  s.pending.reject(row.id);
+  return { asked: true as const, judged, kind: row.kind, checks: row.checks, outcome };
 }
 
 const toolRows = (s: Setup) => s.db.prepare('SELECT tool, decision, decided_by FROM tool_calls ORDER BY created_at').all().map(r => ({ ...r }));
@@ -118,7 +112,8 @@ test('X2 計画モード（パイプライン）: 効果 network + writesFiles �
   assert.deepEqual(ranNormal, ['net_writer']);
 });
 
-test('X2 計画モード（途中でモードが替わる）: 自動承認の判定役を待つあいだに計画モードに替わったら、writesFiles の道具は札にもせず断る。writesFiles の無い道具は今までどおり札になる。外へ出る道具（network）は、そもそも判定役に回らない', async t => {
+// 4-3b-2: normal を消すときに消す
+test('X2 計画モード（途中でモードが替わる）: 自動承認の判定役を待つあいだに計画モードに替わったら、writesFiles の道具は Pending にも積まず断る。writesFiles の無い道具は判定役の答えに従う。外へ出る道具（network）も判定役に回る', async t => {
   const preCheck: ToolDef['preCheck'] = () => ({ decision: 'ask', reasons: ['フォルダの外を読みます'], askKinds: ['outside_read'] });
   const ran: string[] = [];
   let classified = 0;
@@ -128,28 +123,28 @@ test('X2 計画モード（途中でモードが替わる）: 自動承認の判
   });
   const writer = await observe(writerSide, 'net_writer', {});
   assert.equal(classified, 1, '判定役には回った（モードが替わったのは判定役を待つあいだ）');
-  assert.equal(writer.asked, false, '札にはしない');
+  assert.equal(writer.asked, false, 'Pending にも積まない');
   assert.equal(writer.outcome.decision, 'deny');
   assert.equal(writer.outcome.decidedBy, 'mode');
   assert.deepEqual(ran, []);
-  assert.equal(writerSide.approvals.pending().length, 0);
+  assert.equal(writerSide.pending.list({ status: 'waiting' }).length, 0);
 
   const plainSide = setup(t, [tool(ran, 'net_plain', 'read', { preCheck })], {
     mode: 'auto', classify: () => { plainSide.state.mode = 'plan'; return ALLOW; },
   });
   const plain = await observe(plainSide, 'net_plain', {});
-  assert.equal(plain.asked, true, '比べる基準: 計画モードで使える道具は、断らず、いつもの札になる（自動では通さない）');
-  assert.deepEqual(plain.asked && plain.kinds, ['outside_read']);
-  assert.deepEqual(ran, []);
+  assert.equal(plain.asked, false, '比べる基準: 計画モードで使える道具は断らず、判定役の答えに従う');
+  assert.deepEqual([plain.outcome.decision, plain.outcome.decidedBy], ['allow', 'auto-mode']);
+  assert.deepEqual(ran, ['net_plain']);
 
-  // 効果が network の道具は外へ出る（送る側）ので、自動承認でも判定役に回さず、いつもの札
   let networkClassified = 0;
-  const netSide = setup(t, [tool(ran, 'net_real', 'network', { preCheck })], { mode: 'auto', classify: () => { networkClassified++; return ALLOW; } });
+  const netSide = setup(t, [tool(ran, 'net_real', 'network', { preCheck })], { mode: 'auto', classify: () => { networkClassified++; return ASK; } });
   const net = await observe(netSide, 'net_real', {});
   assert.equal(net.asked, true);
-  assert.deepEqual(net.asked && net.kinds, ['outside_read']);
-  assert.equal(networkClassified, 0, '効果が network の道具は、判定役を呼ばない');
-  assert.deepEqual(ran, []);
+  assert.equal(net.asked && net.kind, 'judge');
+  assert.ok(net.asked && net.checks.includes('フォルダの外を読みます'), JSON.stringify(net));
+  assert.equal(networkClassified, 1, '効果が network の道具も判定役に回る');
+  assert.deepEqual(ran, ['net_plain']);
 });
 
 test('X2 モデルに渡す道具の一覧（エンジンの #toolsFor）: 計画モードでは writesFiles の道具を外し、読む道具と writesFiles の無い network の道具は残す。ふつうのモードでは全部渡す', async t => {
@@ -169,22 +164,26 @@ test('X2 モデルに渡す道具の一覧（エンジンの #toolsFor）: 計�
   assert.ok(names(1).includes('net_writer') && names(1).includes('net_plain'), 'ふつうのモードは全部');
 });
 
+// 4-3b-2: taintEscalation を消すと順 2
 test('X2 外から読んだ内容のあと: network + writesFiles の道具は、書き込みと同じに確かめる（種類 taint）。writesFiles の無い network の道具・外を読んでいないとき・taintEscalation を切ったときは確かめない', async t => {
   const ran: string[] = [];
   const tools = [tool(ran, 'net_plain', 'network'), tool(ran, 'net_writer', 'network', { writesFiles: true }), tool(ran, 'plain_write', 'write'), tool(ran, 'reader', 'read')];
   const tainted = setup(t, tools, { tainted: true });
-  const asked = await observe(tainted, 'net_writer', {}, 'deny');
+  const asked = await observe(tainted, 'net_writer', {});
   assert.equal(asked.asked, true);
-  assert.deepEqual(asked.asked && asked.kinds, ['taint']);
-  assert.ok(asked.asked && asked.reasons.some(r => /text that came from somewhere else/u.test(r)), '理由は外を読んだあとの確かめ');
-  assert.equal(asked.outcome.decidedBy, 'user');
-  assert.deepEqual(ran, [], '断ったので動かない');
-  const approved = await observe(tainted, 'net_writer', {}, 'once');
-  assert.equal(approved.asked, true);
+  assert.equal(asked.asked && asked.kind, 'judge');
+  assert.ok(asked.asked && asked.checks.some(r => /text that came from somewhere else/u.test(r)), '理由は外を読んだあとの確かめ');
+  assert.equal(asked.judged, true);
+  assert.deepEqual(ran, [], '積んだので動かない');
+  tainted.judge.answer = ALLOW;
+  const approved = await observe(tainted, 'net_writer', {});
+  assert.deepEqual([approved.judged, approved.outcome.decidedBy], [true, 'auto-mode']);
   assert.deepEqual(ran, ['net_writer'], '許せば動く');
+  tainted.judge.answer = ASK;
 
   const plainWrite = await observe(tainted, 'plain_write', {});
-  assert.deepEqual(plainWrite.asked && plainWrite.kinds, ['taint'], '比べる基準: 書き込みの道具は今までどおり taint で確かめる');
+  assert.equal(plainWrite.asked && plainWrite.kind, 'judge', '比べる基準: 書き込みの道具は今までどおり taint で確かめる');
+  assert.ok(plainWrite.asked && plainWrite.checks.some(r => /text that came from somewhere else/u.test(r)));
   for (const name of ['net_plain', 'reader']) {
     const seen = await observe(tainted, name, {});
     assert.equal(seen.asked, false, `${name}: 今までどおり、外を読んだあとでも確かめない`);
@@ -274,32 +273,32 @@ test('X6 外を読んだ印: 札で断った呼び出しは動かないので付
   assert.equal(c.taint.tainted, true, 'noRemoteContent でない失敗には付く（失敗の文にも相手の文字は入りうる）');
 
   const asked = setup(t, [urlTool(ran, { name: 'img_ask', preCheck: () => ({ decision: 'ask', reasons: ['確かめ'] }) })]);
-  const declined = await observe(asked, 'img_ask', REMOTE, 'deny');
+  const declined = await observe(asked, 'img_ask', REMOTE);
   assert.equal(declined.asked, true);
   assert.equal(asked.ctx.taint.tainted, false, '断った呼び出しは動かないので付かない');
 });
 
-test('X6 自動承認で外を読んだ会話（会話の印・この実行の印）: networkCall が true の呼び出しは毎回確かめる（種類 egress・「この会話では許可」でも通らない）。false の呼び出し・networkCall の無い read の道具は確かめない。効果 network の道具は今までどおり確かめる', async t => {
+// 4-3b-2: afterAutoRead を消すと順 2
+test('X6 自動承認で外を読んだ会話（会話の印・この実行の印）: networkCall が true の呼び出しは毎回判定役に回る（種類 egress）。false の呼び出し・networkCall の無い read の道具は確かめない。効果 network の道具は今までどおり確かめる', async t => {
   const ran: string[] = [];
   const tools = [urlTool(ran), tool(ran, 'plain_read', 'read'), tool(ran, 'net_plain', 'network')];
   for (const flag of ['会話の印', 'この実行の印'] as const) {
     const s = setup(t, tools, { autoRead: flag === '会話の印' });
     const ctx = s.makeCtx(flag === 'この実行の印' ? { autoReadOutside: true } : {});
-    const remote = await observe(s, 'img_view', REMOTE, 'conversation', ctx);
+    const remote = await observe(s, 'img_view', REMOTE, ctx);
     assert.equal(remote.asked, true, `${flag}: url ありは確かめる`);
-    assert.deepEqual(remote.asked && remote.kinds, ['egress'], flag);
-    assert.equal(remote.asked && remote.everyTime, true, `${flag}: 毎回の確かめ`);
-    assert.ok(remote.asked && remote.reasons.some(r => /is checked with you from now on/u.test(r)), flag);
-    const again = await observe(s, 'img_view', REMOTE, 'deny', ctx);
-    assert.equal(again.asked, true, `${flag}: 「この会話では許可」にしても、2 回目もまた確かめる`);
-    assert.equal(again.outcome.decidedBy, 'user', flag);
+    assert.deepEqual(remote.asked && [remote.kind, remote.judged], ['judge', true], flag);
+    assert.ok(remote.asked && remote.checks.some(r => /is checked with you from now on/u.test(r)), flag);
+    const again = await observe(s, 'img_view', REMOTE, ctx);
+    assert.equal(again.asked, true, `${flag}: 2 回目もまた確かめる`);
+    assert.equal(again.outcome.decidedBy, 'pending', flag);
     for (const [name, args] of [['img_view', {}], ['plain_read', REMOTE]] as const) {
-      const seen = await observe(s, name, args, 'deny', ctx);
+      const seen = await observe(s, name, args, ctx);
       assert.equal(seen.asked, false, `${flag}: ${name} ${JSON.stringify(args)}: 外へ出ない呼び出しは確かめない`);
       assert.equal(seen.outcome.decision, 'allow', `${flag}: ${name}`);
     }
-    const net = await observe(s, 'net_plain', {}, 'deny', ctx);
-    assert.deepEqual(net.asked && net.kinds, ['egress'], `${flag}: 比べる基準: 効果 network の道具は今までどおり`);
+    const net = await observe(s, 'net_plain', {}, ctx);
+    assert.ok(net.asked && net.checks.some(r => /is checked with you from now on/u.test(r)), `${flag}: 比べる基準: 効果 network の道具は今までどおり`);
   }
   const quiet = setup(t, tools);
   assert.equal((await observe(quiet, 'img_view', REMOTE)).asked, false, '印が無い会話・実行では、url ありでも確かめない');
@@ -319,6 +318,7 @@ test('X6 networkCall が投げる・boolean でない値を返す呼び出しは
   const c = s.makeCtx();
   await s.call('img_false', REMOTE, c);
   assert.equal(c.taint.tainted, false, 'false なら外へ出ない');
+  // 4-3b-2: afterAutoRead を消すと順 2
   const flagged = setup(t, [throwing, junk, falsy], { autoRead: true });
   for (const name of ['img_throw', 'img_junk']) assert.equal((await observe(flagged, name, REMOTE)).asked, true, `${name}: 毎回確かめる`);
   assert.equal((await observe(flagged, 'img_false', REMOTE)).asked, false);
@@ -335,9 +335,11 @@ test('X6 networkCall は、引数の確かめ（既定値を入れたあと）�
   assert.equal(invalid.decision, 'deny');
   assert.equal(invalid.invalidArguments, true);
   assert.deepEqual(seen, [], '引数が合わなければ呼ばない');
-  const ran = await observe(s, 'img_view', {}, 'once');
-  assert.equal(ran.asked, true, '既定値（kind: remote）を入れた引数で答えるので、外へ出る呼び出しとして毎回確かめる');
-  assert.equal(ran.outcome.decision, 'ask');
+  // 4-3b-2: afterAutoRead を消すと順 2
+  s.judge.answer = ALLOW;
+  const ran = await observe(s, 'img_view', {});
+  assert.equal(ran.judged, true, '既定値（kind: remote）を入れた引数で答えるので、外へ出る呼び出しとして毎回判定役に回る');
+  assert.deepEqual([ran.outcome.decision, ran.outcome.decidedBy], ['allow', 'auto-mode']);
   assert.deepEqual(seen, [{ kind: 'remote' }], '1 回だけ（動かして印を付けるところまで、毎回の確かめと同じこの 1 回の答えを使う）');
   assert.equal(s.ctx.taint.tainted, true, '許されて動いたので印が付く');
 });
@@ -389,8 +391,10 @@ test('X1 fetched は印を付ける向きにしか働かない: 失敗の結果�
   assert.deepEqual(already.taint.sources, ['web_fetch']);
 
   const chain = s.makeCtx();
-  assert.equal((await observe(s, 'plain_write', {}, 'deny', chain)).asked, false, '比べる基準: 外を読む前の書き込みは確かめない');
+  assert.equal((await observe(s, 'plain_write', {}, chain)).asked, false, '比べる基準: 外を読む前の書き込みは確かめない');
   await s.call('yes', {}, chain);
-  const after = await observe(s, 'plain_write', {}, 'deny', chain);
-  assert.deepEqual(after.asked && after.kinds, ['taint'], 'fetched で印が付いたあとの書き込みは確かめる');
+  // 4-3b-2: taintEscalation を消すと順 2
+  const after = await observe(s, 'plain_write', {}, chain);
+  assert.equal(after.asked && after.kind, 'judge', 'fetched で印が付いたあとの書き込みは確かめる');
+  assert.ok(after.asked && after.checks.some(r => /text that came from somewhere else/u.test(r)));
 });

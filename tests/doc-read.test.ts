@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import fs, { mkdirSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
@@ -10,15 +10,18 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { zipWrite } from '../src/shared/zip.ts';
-import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { TAINTED_NOTE, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { DOC_MAX_BYTES, docRead } from '../src/tools/builtin/docs.ts';
 import { fileWrite } from '../src/tools/builtin/files.ts';
+import { shellRun } from '../src/tools/builtin/shell.ts';
 import { xlsxBytes } from '../src/tools/builtin/table-core.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
-import { waitFor } from './app-setup.ts';
+
 import { tempDir, testConfig } from './helpers.ts';
 
 // tests/file-search.test.ts の setup を写したもの。registry には docRead だけ
@@ -32,10 +35,10 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
-  const registry = new ToolRegistry().register(docRead).register(fileWrite);
+  const approvals = new ApprovalBroker(db, () => undefined);
+  const registry = new ToolRegistry().register(docRead).register(fileWrite).register(shellRun);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const ctx: ToolContext = {
@@ -43,8 +46,12 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (args: unknown, name = 'doc_read', c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
-  return { paths, ctx, call, events, approvals };
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
+      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false,
+      lastUserRequest: () => 'please read the document', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
+    });
+  const waiting = () => pending.list({ status: 'waiting' });
+  return { paths, ctx, call, events, approvals, pending, waiting, judge };
 }
 
 // tests/uploads.test.ts の tinyPdf を写したもの（その試験を import すると、あちらの試験も動いてしまうため）
@@ -385,13 +392,19 @@ test('doc_read: 文書を読んだ実行は「外から読んだ」印を付け�
   assert.ok(!read.output.isError);
   assert.equal(s.ctx.taint.tainted, true, '文書を読んだ実行は「外から読んだ」印を持つ');
   assert.deepEqual(s.ctx.taint.sources, ['doc_read']);
+  // 印は、同じ実行のあとで判定役に回る呼び出しに持ち越される
+  const probe = await s.call({ command: 'frobnicate --now' }, 'shell_run');
+  assert.equal(probe.decidedBy, 'pending', probe.output.content);
+  assert.equal(s.judge.calls.length, 1);
+  assert.ok(s.judge.calls[0]!.user.includes(TAINTED_NOTE), '判定役の文に外から読んだ印が載る');
+  assert.deepEqual(s.waiting().map(r => [r.kind, r.tainted]), [['judge', true]]);
   // 印のついた実行で、同じ実行のあとの書き込みは確かめ（ask）になる
-  const write = s.call({ path: 'out.txt', content: 'x' }, 'file_write');
-  await waitFor(() => s.approvals.pending().length === 1, '外から読んだあとの書き込みの確かめ');
-  assert.match(s.approvals.pending()[0]!.reasons.join(' '), /doc_read/u, '確かめの理由に doc_read が載る');
-  s.approvals.decide(s.approvals.pending()[0]!.id, 'deny');
-  await write;
-  assert.equal(s.approvals.pending().length, 0);
+  // 4-3b-2: taintEscalation を消すと順 2
+  const write = await s.call({ path: 'out.txt', content: 'x' }, 'file_write');
+  assert.equal(write.decidedBy, 'pending', write.output.content);
+  assert.equal(s.judge.calls.length, 2, '外から読んだあとの書き込みは判定役に回る');
+  assert.match(s.waiting()[0]!.checks.join(' '), /doc_read/u, '確かめの理由に doc_read が載る');
+  assert.equal(existsSync(join(s.ctx.workspace, 'out.txt')), false);
 });
 
 test('doc_read: パスの確かめで断られた読み取りは「外から読んだ」印を付けない', async t => {

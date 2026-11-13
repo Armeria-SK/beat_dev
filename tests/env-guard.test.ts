@@ -6,6 +6,7 @@ import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { fileEdit, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -57,11 +58,12 @@ test('file_write・file_edit: .env（App が書くもの）への書き込みは
   const db = openDatabase(':memory:', MIGRATIONS);
   const registry = new ToolRegistry().register(fileWrite).register(fileEdit).register(shellRun);
   const approvals = new ApprovalBroker(db, () => undefined);
+  const pending = new PendingStore(db, { tools: registry, dataDir: f.paths.data });
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: f.config, paths: f.paths, policy: f.policy,
     workspace: defaultWorkspace(f.policy, f.paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
-  const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, { registry, approvals, db, emit: () => undefined });
+  const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, { registry, approvals, pending, db, judgeAll: true, emit: () => undefined });
   for (const path of [f.paths.env, `${f.paths.env}.bak`, join(f.paths.data, 'app', '.env.9.9.tmp')]) {
     const result = await call('file_write', { path, content: 'FAKE_KEY=stolen\n' });
     assert.match(result.output.content, /denied/u, path);

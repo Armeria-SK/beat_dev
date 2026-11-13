@@ -9,7 +9,8 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
-import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { TAINTED_NOTE, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { checkFilePath, fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -41,9 +42,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
+  const approvals = new ApprovalBroker(db, () => undefined);
   const ran: string[] = [];
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun)
     .register(stub('memory_save', ['chat', 'task', 'review'], ran))
@@ -55,17 +54,14 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
+  const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
   const call = (name: string, args: unknown, c: ToolContext = ctx, live?: () => AppConfig) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(live ? { config: live } : {}) });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
+      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false, ...(live ? { config: live } : {}),
+      lastUserRequest: () => 'please do the work', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
+    });
   const waiting = () => pending.list({ status: 'waiting' });
-  return { paths, ctx, call, approvals, events, db, ran, parsed, controller, registry, pending, waiting };
-}
-
-async function waitPending(s: ReturnType<typeof setup>) {
-  for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const pending = s.approvals.pending()[0];
-  assert.ok(pending, '承認の依頼が来ていない');
-  return pending;
+  return { paths, ctx, call, approvals, events, db, ran, parsed, controller, registry, pending, waiting, judge };
 }
 
 const withPolicy = (s: ReturnType<typeof setup>, policies: Record<string, Policy>): AppConfig => ({ ...s.parsed, tools: { ...s.parsed.tools, policies } });
@@ -96,12 +92,11 @@ async function decisions(s: ReturnType<typeof setup>): Promise<Array<[string, st
   await note('ふつうに読む', 'file_read', { path: join(s.paths.data, 'reference', 'doc.md') });
   await note('振り返りでは書けない', 'file_write', { path: 'a.md', content: 'x' }, { ...s.ctx, kind: 'review' });
   // 外から読んだ内容のあとの書き込みは、方針が allow でも確かめる
+  // 4-3b-2: taintEscalation を消すと順 2
   const tainted = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
-  const asking = s.call('file_write', { path: 'tainted.md', content: 'x' }, tainted);
-  const request = await waitPending(s);
-  rows.push(['外を読んだあと', `ask/${request.reasons.length}`]);
-  s.approvals.decide(request.id, 'deny');
-  await asking;
+  const asked = await s.call('file_write', { path: 'tainted.md', content: 'x' }, tainted);
+  const row = s.waiting()[0]!;
+  rows.push(['外を読んだあと', `${asked.decision}/${asked.decidedBy}/${row.kind}/${row.checks.length}`]);
   assert.equal(existsSync(join(s.paths.workspace, 'tainted.md')), false);
   return rows;
 }
@@ -120,7 +115,7 @@ test('A3: ask は、ふだん確かめなしの呼び出しも札を出さずに
   assert.equal(first.decidedBy, 'pending');
   assert.equal(first.output.isError, undefined, '失敗と読んでやり直さないよう、エラーにしない');
   assert.match(first.output.content, /Parked as #\d+ in Pending\. It has NOT run/u);
-  assert.equal(s.approvals.pending().length, 0, '札は出ない');
+  assert.equal(s.judge.calls.length, 0, '判定役は呼ばない');
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false, '積んだだけで動かない');
   const rows = s.waiting();
   assert.equal(rows.length, 1);
@@ -133,19 +128,6 @@ test('A3: ask は、ふだん確かめなしの呼び出しも札を出さずに
   assert.equal(s.waiting().length, 2, '同じ入力でも、また積む');
 });
 
-test('A3: ask は会話の許可（ほかの理由で前に「この会話では許可」にした同じ入力）も越えて Pending に積む', async t => {
-  const s = setup(t, {}, c => { c.tools.shell.ask = ['echo needs-approval']; });
-  const first = s.call('shell_run', { command: 'echo needs-approval' });
-  s.approvals.decide((await waitPending(s)).id, 'conversation');
-  await first;
-  assert.equal((await s.call('shell_run', { command: 'echo needs-approval' })).decidedBy, 'conversation-grant', '方針が無ければ、会話の許可で済む（比べる基準）');
-
-  const strict = withPolicy(s, { shell_run: 'ask' });
-  const next = await s.call('shell_run', { command: 'echo needs-approval' }, { ...s.ctx, config: strict });
-  assert.equal(next.decidedBy, 'pending', '会話の許可（conversation-grant）では通らない');
-  assert.equal(s.approvals.pending().length, 0);
-  assert.deepEqual(s.waiting().map(r => r.kind), ['policy']);
-});
 
 test('A3: ask は拒否を承認に変えない（拒否は承認を求める前に拒否のまま。承認の依頼も出さない）', async t => {
   const s = setup(t, { file_write: 'ask', shell_run: 'ask', file_read: 'ask' });
@@ -153,7 +135,7 @@ test('A3: ask は拒否を承認に変えない（拒否は承認を求める前
   for (const [name, args] of [['file_write', { path: '.env', content: 'x' }], ['file_read', { path: s.paths.config }], ['shell_run', { command: 'cat .env' }], ['shell_run', { command: 'sudo rm -rf /' }]] as Array<[string, unknown]>) {
     const outcome = await s.call(name, args);
     assert.equal(outcome.decision, 'deny', JSON.stringify(args));
-    assert.equal(s.approvals.pending().length, 0, `${JSON.stringify(args)}: 承認の依頼を出さない`);
+    assert.equal(s.waiting().length, 0, `${JSON.stringify(args)}: Pending にも積まない`);
   }
 });
 
@@ -170,32 +152,21 @@ test('A3: block は実行せず拒否する。承認の依頼も出さず、道�
   assert.equal(blocked.decidedBy, 'policy');
   assert.match(blocked.output.content, /file_write/u);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
-  assert.equal(s.approvals.pending().length, 0);
+  assert.equal(s.waiting().length, 0);
   assert.equal((await s.call('file_write', { path: 'a.md' })).decidedBy, 'policy', '引数が不正でも、ほかの理由より先に止まる');
   assert.deepEqual(s.db.prepare("SELECT tool, decision, decided_by FROM tool_calls WHERE tool = 'file_write' ORDER BY created_at").all().map(r => ({ ...r })), [
     { tool: 'file_write', decision: 'deny', decided_by: 'policy' }, { tool: 'file_write', decision: 'deny', decided_by: 'policy' },
   ]);
   assert.equal((await s.call('file_read', { path: join(s.paths.data, 'reference', 'doc.md') })).decision, 'allow', '方針が無い道具は今までどおり');
-
-  // 前に「この会話では許可」にした入力も、止めたあとは通らない
-  const grant = setup(t, {}, c => { c.tools.shell.ask = ['echo needs-approval']; });
-  const first = grant.call('shell_run', { command: 'echo needs-approval' });
-  grant.approvals.decide((await waitPending(grant)).id, 'conversation');
-  await first;
-  const later = withPolicy(grant, { shell_run: 'block' });
-  const outcome = await grant.call('shell_run', { command: 'echo needs-approval' }, { ...grant.ctx, config: later });
-  assert.equal(outcome.decision, 'deny');
-  assert.equal(outcome.decidedBy, 'policy');
 });
 
 test('A3: 振り返りでは ask は拒否として扱う（承認する人がいない裏の作業なので待たない）。会話では Pending に積む', async t => {
   const s = setup(t, { memory_save: 'ask' });
-  s.ctx.config.tools.shell.approvalTimeoutSec = 1;
   const review = await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' });
   assert.equal(review.decision, 'deny');
   assert.equal(review.decidedBy, 'policy');
   assert.match(review.output.content, /a review \(background work\)/u);
-  assert.equal(s.approvals.pending().length, 0, '待たない');
+
   assert.deepEqual(s.ran, []);
   assert.equal(s.waiting().length, 0, '振り返りは積まない');
   const chat = await s.call('memory_save', {});
@@ -224,23 +195,27 @@ test('スキルのフォルダへの書き込みの確かめの文は、聞か�
 
 test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {
   const s = setup(t);
-  s.ctx.config.tools.shell.approvalTimeoutSec = 1;
   s.registry.register({ ...stub('memory_forget', ['chat', 'review'], s.ran), escalateOnTaint: true });
   const taint = { tainted: true, sources: ['history_read: c9'] };
   const started = Date.now();
   const review = await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint });
   assert.equal(review.decision, 'deny');
   assert.match(review.output.content, /history_read: c9.*a review \(background work\) has nobody to approve it/u);
-  assert.equal(s.approvals.pending().length, 0, '承認の札を作らない');
+  assert.equal(s.waiting().length, 0, '積まない');
+  assert.equal(s.judge.calls.length, 0, '判定役も呼ばない');
   assert.ok(Date.now() - started < 5000, '待たない');
   assert.deepEqual(s.ran, []);
   assert.equal((await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' })).decision, 'allow', '外を読んでいない振り返りは今までどおり使える');
   assert.equal((await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint })).decision, 'allow', '外を読んだあとでも、確かめの対象でない道具は変わらない');
 
-  const chat = s.call('memory_forget', {}, { ...s.ctx, taint });
-  const request = await waitPending(s);
-  s.approvals.decide(request.id, 'once');
-  assert.equal((await chat).decision, 'ask');
+  // 4-3b-2: taintEscalation を消すと順 2
+  const chat = await s.call('memory_forget', {}, { ...s.ctx, taint });
+  assert.equal(chat.decidedBy, 'pending');
+  assert.deepEqual(s.ran, ['memory_forget', 'memory_save'], '判定役が確かめると答えたら動かない');
+  assert.deepEqual(s.waiting().map(r => r.kind), ['judge']);
+  assert.match(s.waiting()[0]!.checks.join(' '), /history_read: c9/u);
+  s.judge.answer = '{"decision":"allow","reason":"fits the request"}';
+  assert.equal((await s.call('memory_forget', {}, { ...s.ctx, taint })).decidedBy, 'auto-mode');
   assert.deepEqual(s.ran, ['memory_forget', 'memory_save', 'memory_forget']);
 });
 
@@ -250,7 +225,7 @@ test('A3: タスクの実行で ask になったら、札を待たずに Pending
   assert.equal(outcome.decision, 'ask');
   assert.equal(outcome.decidedBy, 'pending');
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
-  assert.equal(s.events.filter(e => e.type === 'approval.requested').length, 0);
+
   const rows = s.waiting();
   assert.deepEqual(rows.map(r => [r.kind, r.conversation_id, r.run_kind]), [['policy', 'task-conv', 'task']]);
 });
@@ -263,7 +238,7 @@ test('A3: 方針を持てない道具（task_complete・task_checkpoint・ask_us
     assert.equal(outcome.decision, 'allow', name);
     assert.equal(outcome.output.content, `ran ${name}`);
   }
-  assert.equal(s.approvals.pending().length, 0);
+  assert.equal(s.waiting().length, 0);
 });
 
 test('A3: 実行の途中で設定が厳しくなったら、その場から効く。緩くなったときは、次の実行から（途中では緩めない）', async t => {
@@ -288,27 +263,27 @@ test('A3: ask の理由には種類が付く（外を読む outside_read・外�
   const dir = tempDir(t);
   const askHook = join(dir, 'ask.mjs');
   writeFileSync(askHook, `process.stdin.resume();process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({hookSpecificOutput:{permissionDecision:'ask',permissionDecisionReason:'念のため確認'}}))})`);
-  const kindsOf = async (s: ReturnType<typeof setup>, name: string, args: unknown, c: ToolContext = s.ctx) => {
-    const running = s.call(name, args, c);
-    const request = await waitPending(s);
-    const kinds = [...(request.kinds ?? [])].sort();
-    s.approvals.decide(request.id, 'deny');
-    await running;
-    return kinds;
-  };
+  const kindsOf = async (s: ReturnType<typeof setup>, command: string) => [...((await shellRun.preCheck!({ command }, s.ctx)).askKinds ?? [])].sort();
 
   const plain = setup(t);
   const outside = join(plain.paths.data, 'outside.txt');
   writeFileSync(outside, 'x');
-  assert.deepEqual(await kindsOf(plain, 'shell_run', { command: process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"` }), ['outside_read'], '許可フォルダの外を読む');
+  assert.deepEqual(await kindsOf(plain, process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"`), ['outside_read'], '許可フォルダの外を読む');
   writeFileSync(join(plain.paths.workspace, 'put.js'), "console.log('x');\n");
-  assert.ok((await kindsOf(plain, 'shell_run', { command: 'node put.js' })).includes('code'), 'コードを動かす');
-  assert.deepEqual(await kindsOf(plain, 'file_write', { path: 'a.md', content: 'x' }, { ...plain.ctx, taint: { tainted: true, sources: ['web_fetch'] } }), ['taint']);
+  assert.ok((await kindsOf(plain, 'node put.js')).includes('code'), 'コードを動かす');
+  // 4-3b-2: taintEscalation を消すと順 2
+  const taintedWrite = await plain.call('file_write', { path: 'a.md', content: 'x' }, { ...plain.ctx, taint: { tainted: true, sources: ['web_fetch'] } });
+  assert.equal(taintedWrite.decidedBy, 'pending');
+  assert.equal(plain.judge.calls.length, 1, '外から読んだあとの書き込みは判定役に回る');
+  assert.ok(plain.judge.calls[0]!.user.includes(TAINTED_NOTE));
+  assert.deepEqual(plain.waiting().map(r => [r.kind, r.tainted]), [['judge', true]]);
+  assert.match(plain.waiting()[0]!.checks.join(' '), /web_fetch/u);
+  assert.equal(existsSync(join(plain.paths.workspace, 'a.md')), false);
 
   const parkedKind = async (s: ReturnType<typeof setup>, c: ToolContext = s.ctx) => {
     const outcome = await s.call('file_write', { path: 'a.md', content: 'x' }, c);
     assert.equal(outcome.decidedBy, 'pending');
-    assert.equal(s.approvals.pending().length, 0);
+    assert.equal(s.judge.calls.length, 0, '判定役は呼ばない');
     return s.waiting()[0]!.kind;
   };
   const policy = setup(t, { file_write: 'ask' });

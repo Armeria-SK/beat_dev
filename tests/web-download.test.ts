@@ -15,7 +15,9 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { MemoryStore } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
-import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
+import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { webDownload } from '../src/tools/builtin/download.ts';
 import { webFailure } from '../src/tools/builtin/web.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -76,10 +78,10 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
+  const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry().register(webDownload);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const services: NonNullable<ToolContext['services']> = { db, memory: new MemoryStore(db), emit: () => undefined, web: { ...(network ? { download: network } : {}) } };
@@ -89,7 +91,8 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (args: unknown, c: ToolContext = ctx, mode?: PermissionMode) =>
     runToolCall({ id: `call-${Math.random()}`, name: 'web_download', arguments: args }, c, {
-      registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(mode ? { permissionMode: () => mode } : {}),
+      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false, ...(mode ? { permissionMode: () => mode } : {}),
+      lastUserRequest: () => 'please download the file', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const again = (args: unknown) => {
     ctx.taint.tainted = false;
@@ -98,16 +101,8 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const downloads = join(ctx.workspace, 'downloads');
   const listing = () => (existsSync(downloads) ? readdirSync(downloads).sort() : []);
-  const asked = async (args: unknown, c: ToolContext = ctx) => {
-    const pending = call(args, c);
-    for (let i = 0; i < 300 && !approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-    const view = approvals.pending()[0];
-    assert.ok(view, '承認の依頼が来ていない');
-    approvals.decide(view.id, 'deny');
-    await pending;
-    return view;
-  };
-  return { paths, ctx, call, again, approvals, controller, downloads, listing, asked };
+  const waiting = () => pending.list({ status: 'waiting' });
+  return { paths, ctx, call, again, approvals, controller, downloads, listing, pending, waiting, judge };
 }
 
 // node:fs の関数を一時的に差し替える（ESM の名前つき import にも効かせるため syncBuiltinESMExports を呼ぶ）。テストが終わると戻す
@@ -561,28 +556,42 @@ test('事前の判定: 計画モードと振り返りでは断る（何も作ら
   assert.equal(existsSync(s.downloads), false);
 });
 
-test('事前の判定: 外を読んだあとは確かめになり（種類 taint）、札に URL と保存先のフォルダが出る。断れば何も作らない', async t => {
+test('事前の判定: 外を読んだあとは確かめになり（種類 taint）、判定役と Pending に URL と保存先のフォルダが出る。積んだだけでは何も作らない', async t => {
   const w = world({ [URL_PDF]: { body: () => chunksOf('x') } });
   const s = setup(t, undefined, w.network);
   s.ctx.taint.tainted = true;
   s.ctx.taint.sources.push('web_fetch');
-  const view = await s.asked({ url: URL_PDF, name: 'wanted.pdf' });
-  assert.ok(view.kinds?.includes('taint'));
-  assert.match(view.title, /downloads\//u);
-  assert.equal(view.body, `${URL_PDF}\nwanted.pdf`);
-  assert.deepEqual(view.paths, [{ input: s.downloads, path: s.downloads, verdict: 'in', mode: 'write' }]);
+  const args = { url: URL_PDF, name: 'wanted.pdf' };
+  // 4-3b-2: taintEscalation を消すと順 2
+  const out = await s.call(args);
+  assert.equal(out.decidedBy, 'pending', out.output.content);
+  const view = s.waiting()[0]!;
+  assert.equal(view.kind, 'judge');
+  assert.match(view.checks.join('\n'), /came from somewhere else.*web_fetch/u);
+  assert.match(view.title ?? '', /downloads\//u);
+  assert.equal(s.judge.calls.length, 1);
+  assert.ok(s.judge.calls[0]!.user.includes(`${URL_PDF}\nwanted.pdf`));
+  assert.deepEqual((await webDownload.preCheck!(args, s.ctx)).paths, [{ input: s.downloads, path: s.downloads, verdict: 'in', mode: 'write' }]);
   assert.deepEqual(w.opens, []);
   assert.equal(existsSync(s.downloads), false);
 });
 
-test('事前の判定: URL に秘密らしい文字・長い問い合わせがあれば確かめ。ローカルの宛先・tools.web.fetch が off は断る', async t => {
+test('事前の判定: URL に秘密らしい文字・長い問い合わせ・ローカルの宛先・tools.web.fetch が off は断る', async t => {
   const w = world({});
   const s = setup(t, undefined, w.network);
-  const secret = await s.asked({ url: 'https://files.example.com/a.pdf?k=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' });
-  assert.ok(secret.kinds?.includes('web'));
-  assert.ok(secret.paths?.some(p => p.input === s.downloads));
-  const long = await s.asked({ url: `https://files.example.com/a.pdf?${'q=1&'.repeat(100)}` });
-  assert.match(long.reasons.join('\n'), /long query string/u);
+  s.judge.answer = '{"decision":"allow","reason":"fits the request"}';
+  const secretArgs = { url: 'https://files.example.com/a.pdf?k=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' };
+  const secret = await s.call(secretArgs);
+  assert.equal(secret.decision, 'deny', secret.output.content);
+  assert.match(secret.output.content, /API key/u);
+  const secretCheck = await webDownload.preCheck!(secretArgs, s.ctx);
+  assert.ok(secretCheck.askKinds?.includes('web'));
+  assert.ok(secretCheck.paths?.some(p => p.input === s.downloads));
+  const long = await s.call({ url: `https://files.example.com/a.pdf?${'q=1&'.repeat(100)}` });
+  assert.equal(long.decision, 'deny', long.output.content);
+  assert.match(long.output.content, /long query string/u);
+  assert.equal(s.judge.calls.length, 0, '判定役が許すと答える場合でも、判定役に回さない');
+  assert.equal(s.waiting().length, 0);
   for (const url of ['http://localhost/a.bin', 'http://192.168.1.10/a.bin', 'file:///etc/passwd', 'https://user:pw@files.example.com/a.bin']) {
     const out = await s.call({ url });
     assert.equal(out.decision, 'deny', url);

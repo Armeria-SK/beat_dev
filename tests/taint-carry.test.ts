@@ -42,7 +42,6 @@ async function setup(t: { after: (fn: () => void) => void }) {
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
-  config.tools.shell.approvalTimeoutSec = 10;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: JudgeAdapter;
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
@@ -82,7 +81,6 @@ async function stopAfterTool(s: S, tool: string, args: unknown, text = '読ん�
 async function expectAsked(s: S, runId: string, kind: 'judge' | 'judge_failed' = 'judge'): Promise<void> {
   await settled(s.app, runId);
   await s.app.engine.wait(runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.equal(rows.length, 1, '判定役の ask で 1 行積む');
   assert.equal(rows[0]!.kind, kind);
@@ -94,7 +92,7 @@ async function expectAsked(s: S, runId: string, kind: 'judge' | 'judge_failed' =
 // 確かめなしで書き込みが通る（外から読んだ扱いではない）
 async function expectWritten(s: S, runId: string): Promise<void> {
   await settled(s.app, runId);
-  assert.deepEqual(s.app.approvals.pending(), [], '確かめは出ない');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, '確かめは出ない');
   assert.equal(existsSync(join(s.paths.workspace, 'out.txt')), true, '書き込みが通った');
 }
 
@@ -277,7 +275,6 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
     assert.ok(retried.ok);
     await settled(second, retried.runId);
     await second.engine.wait(retried.runId);
-    assert.equal(second.approvals.pending().length, 0, '札は出ない');
     const rows = second.pending.list({ status: 'waiting' });
     assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [['judge', true]], '再起動後のやり直しも外から読んだ扱いで積まれる');
     assert.ok(judgeTextOf(adapter.judged[0]!).includes(TAINTED_NOTE));

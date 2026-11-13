@@ -11,7 +11,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
-import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { lexShell } from '../src/tools/hooks/shell-lex.ts';
 import { gitVersionAtLeast } from '../src/tools/shell/git-env.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -33,14 +33,10 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
   const config: AppConfig = testConfig();
   config.tools.roots = [{ path: 'workspace', mode: 'write' }];
   config.tools.shell.shell = shell;
-  // 一覧に当たるはずのコマンドが確かめになったときに、長く待たずに落とす
-  config.tools.shell.approvalTimeoutSec = 10;
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
+  const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry().register(shellRun);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
@@ -49,7 +45,10 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
-  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, { registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false });
+  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, {
+    registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false,
+    lastUserRequest: () => 'run the command', autoClassify: async () => '{"decision":"ask","reason":"the owner should look"}',
+  });
   const files = (name: string) => join(paths.workspace, name);
   const seed = () => {
     writeFileSync(files('a.txt'), 'line1\nline2\nline3\n');
@@ -73,25 +72,29 @@ const PARKS: Record<string, 'send' | 'delete'> = {
   'cd gr && git push ../victim HEAD:refs/heads/x': 'send', 'cd gr && git push victim HEAD:refs/heads/x': 'send', 'cd gr && git push up HEAD:refs/heads/x': 'send',
 };
 
+const rowOf = (s: ReturnType<typeof setup>, command: string) => s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
+const approveRow = (s: ReturnType<typeof setup>, id: number) => replayAction(s.pending.claim(id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
+
 async function expectAsk(s: ReturnType<typeof setup>, command: string): Promise<void> {
   const want = PARKS[command];
-  const pending = s.call(command);
-  if (want) {
-    const outcome = await pending;
-    assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（${outcome.output.content}）`);
-    assert.equal(s.approvals.pending().length, 0, `${command}: 札も出た`);
-    const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
-    assert.equal(row?.kind, want, `${command}: 積んだ行の種類`);
-    return;
-  }
-  for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const request = s.approvals.pending()[0];
-  assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
-  assert.equal(request.onceOnly, true, `${command}: 今回だけの確かめでない`);
-  s.approvals.decide(request.id, 'deny');
-  const outcome = await pending;
-  assert.equal(outcome.output.isError, true, command);
-  assert.match(outcome.output.content, /The user refused to run it/u, command);
+  const outcome = await s.call(command);
+  assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（${outcome.output.content}）`);
+  assert.match(outcome.output.content, /It has NOT run/u, command);
+  const row = rowOf(s, command);
+  assert.ok(row, `${command}: 積んだ行が無い`);
+  if (want) { assert.equal(row.kind, want, `${command}: 積んだ行の種類`); return; }
+  s.pending.reject(row.id);
+}
+
+// Pending に積まれたら、持ち主が承認したとして動かす（積まれなければ、そのままの結果）
+async function runApproved(s: ReturnType<typeof setup>, command: string) {
+  const outcome = await s.call(command);
+  if (outcome.decidedBy !== 'pending') return outcome;
+  const row = rowOf(s, command);
+  assert.ok(row, `${command}: 積んだ行が無い`);
+  const ran = await approveRow(s, row.id);
+  const content = ran.output ?? '';
+  return { decision: 'allow' as const, decidedBy: 'owner-pending', output: { content, isError: !(ran.status === 'ran' && /exit code: 0\b/u.test(content)) } };
 }
 
 const psAvailable = process.platform === 'win32' && spawnSync('powershell.exe', ['-NoProfile', '-Command', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
@@ -124,7 +127,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 一覧に当たる�
     const outcome = await s.call(command);
     if (outcome.decidedBy === 'pending') { parked.push(command); continue; }
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
@@ -195,18 +198,15 @@ test('実機（Windows PowerShell 5.1・制限モード）: パイプで流れ�
 
 // 確かめになる（拒否すれば動かない）か、確かめにも進まず止まる。確かめなしで動いたら失敗
 async function expectBlocked(s: ReturnType<typeof setup>, command: string): Promise<void> {
-  let settled = false;
-  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
-  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const request = s.approvals.pending()[0];
-  assert.ok(request || settled, `${command}: 確かめも拒否もなく動いている`);
-  if (request) {
-    assert.equal(request.onceOnly, true, `${command}: 今回だけの確かめでない`);
-    s.approvals.decide(request.id, 'deny');
-  }
-  const outcome = await pending;
+  const outcome = await s.call(command);
   assert.notEqual(outcome.decision, 'allow', command);
-  assert.equal(outcome.output.isError, true, command);
+  if (outcome.decidedBy === 'pending') {
+    const row = rowOf(s, command);
+    assert.ok(row, `${command}: 積んだ行が無い`);
+    s.pending.reject(row.id);
+  } else {
+    assert.equal(outcome.output.isError, true, command);
+  }
   assert.doesNotMatch(outcome.output.content, /SECRET=1|PRIVATE-KEY/u, `${command}: 秘密が出た`);
 }
 
@@ -341,7 +341,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: "…" の中の $( �
     const outcome = await s.call(command);
     if (outcome.decidedBy === 'pending') { parked.push(command); continue; }
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
@@ -406,7 +406,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 代入の左辺の�
   ] as const) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
@@ -454,7 +454,7 @@ test('実機（bash）: "…" の中の \\ を含む読むだけのコマンド�
   for (const [command, expected] of rows) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.equal(outcome.output.content.split('\n\n').slice(2).join('\n\n').trim(), expected, command);
   }
@@ -474,7 +474,7 @@ test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の 
   assert.ok(lexed.ok && lexed.statements.length === 1 && lexed.statements[0]!.words[1]!.text === '\\$(touch made)', 'ガードは、置換のない 1 つの文として読む');
   const outcome = await s.call(dangerous);
   assert.equal(outcome.decision, 'allow', outcome.output.content);
-  assert.equal(outcome.decidedBy !== 'user', true, '承認を求めた');
+  assert.equal(outcome.decidedBy !== 'pending', true, '承認を求めた');
   assert.equal(outcome.output.isError, false, outcome.output.content);
   assert.equal(body(outcome), '\\$(touch made)', 'ガードの読みと同じ文字が出る');
   assert.equal(existsSync(s.files('made')), false, 'beat のシェルで置換の touch が動いた');
@@ -483,7 +483,7 @@ test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の 
   ] as const) {
     const run = await s.call(command);
     assert.equal(run.decision, 'allow', `${command}: ${run.output.content}`);
-    assert.equal(run.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(run.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.equal(body(run), expected, command);
   }
   // 本物の置換（\\ のあとの $( ）は、今までどおり中の文が判定される: コードを動かす文は確かめになり、拒否すれば動かない
@@ -493,13 +493,11 @@ test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の 
 // 最終審査で再現: 空になりうる変数（PowerShell の $1 $0 $é $日 $$ $^ $?、bash の $1 $@ $* $!）を名前に含む読むパスは、文字どおりの名前と読まれて .env の確かめを通り抜けた。
 // 本物のシェルでは .env を読むこと（前提）と、beat のシェルでは確かめなしに読まず、拒否すれば秘密が出ないことを確かめる。ただ出すだけの "$1" は承認なしで動く
 async function expectAskedNotRun(s: ReturnType<typeof setup>, command: string): Promise<void> {
-  let settled = false;
-  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
-  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const request = s.approvals.pending()[0];
-  assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
-  s.approvals.decide(request.id, 'deny');
-  const outcome = await pending;
+  const outcome = await s.call(command);
+  assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（${outcome.output.content}）`);
+  const row = rowOf(s, command);
+  assert.ok(row, `${command}: 積んだ行が無い`);
+  s.pending.reject(row.id);
   assert.notEqual(outcome.decision, 'allow', command);
   assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
 }
@@ -515,7 +513,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: Get-Content ".env$1"
   for (const [command, expected] of [['Write-Output "a$1 b"', /a b/u], ['Write-Output "$1"', /^[\s\S]*$/u], ['Get-Content a.txt -TotalCount 1', /line1/u]] as const) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.match(outcome.output.content, expected, command);
   }
 });
@@ -541,7 +539,7 @@ test('実機（bash）: 値を式として評価する形（[[ x -eq 0 ]]・$((x
   for (const [command, expected] of [['echo $((6*7))', /42/u], ['[[ 5 -gt 3 ]] && echo yes', /yes/u], ['[ "$HOME" ] && [ 1 -eq 1 ] && echo ok', /ok/u], ['[[ -v HOME ]] && echo set', /set/u]] as const) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.match(outcome.output.content, expected, command);
   }
 });
@@ -557,7 +555,7 @@ test('実機（bash）: cat .env$@ や cat ".env$1" は素の bash では .env �
   for (const [command, expected] of [['echo "a$1b" $@', /ab/u], ['cat a.txt', /line1/u]] as const) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.match(outcome.output.content, expected, command);
   }
 });
@@ -599,7 +597,7 @@ test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の 
   for (const [command, expected] of [['if [[ -f a.txt ]]; then echo yes; fi', /yes/u], ['[[ -n x ]] && echo ok || echo no', /ok/u], ['echo "$(echo a#b) $#"', /a#b/u], ['echo $((1 + 2))', /3/u]] as const) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
-    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.decidedBy !== 'pending', true, `${command}: 承認を求めた`);
     assert.match(outcome.output.content, expected, command);
   }
 });
@@ -865,7 +863,7 @@ for (const shell of ['powershell', 'bash'] as const) {
     }
     const clean = await s.call(ps ? 'cd good; git status --short' : 'cd good && git status --short');
     assert.equal(clean.decision, 'allow', clean.output.content);
-    assert.equal(clean.decidedBy !== 'user', true, '問題のないリポジトリで承認を求めた');
+    assert.equal(clean.decidedBy !== 'pending', true, '問題のないリポジトリで承認を求めた');
     assert.equal(clean.output.isError, false, clean.output.content);
     assert.equal(existsSync(marker), false);
   });
@@ -912,7 +910,7 @@ for (const shell of ['powershell', 'bash'] as const) {
     writeFileSync(join(decoy, 'HEAD'), 'ref: refs/heads/main\n');
     const real = await s.call('git -C bare/dec status --short');
     assert.equal(real.decision, 'allow', real.output.content);
-    assert.equal(real.decidedBy !== 'user', true, '本物のリポジトリで承認を求めた');
+    assert.equal(real.decidedBy !== 'pending', true, '本物のリポジトリで承認を求めた');
   });
 }
 
@@ -934,12 +932,10 @@ for (const shell of ['powershell', 'bash'] as const) {
     const command = shell === 'powershell'
       ? `Set-Content -Path '${old}' -Value '[core]', 'fsmonitor = ${fwd(hook)}'; cd gr; git status`
       : `printf '[core]\\nfsmonitor = ${fwd(hook)}\\n' > '${fwd(old)}' && cd gr && git status`;
-    const pending = s.call(command);
-    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-    const request = s.approvals.pending()[0];
-    assert.ok(request, '書き込みが確かめにならず、承認の依頼が来ていない');
-    s.approvals.decide(request.id, 'once');
-    await pending;
+    assert.equal((await s.call(command)).decidedBy, 'pending', '書き込みが確かめにならず、Pending に積まれていない');
+    const request = rowOf(s, command);
+    assert.ok(request, '積んだ行が無い');
+    await approveRow(s, request.id);
     assert.equal(existsSync(marker), false, '同じコマンドで書き換えた設定のコードが動いた');
     // git が読む洗い出した設定の置き場所は、実行のたびに違い、終わると消える
     const origin = async () => /^(\S*git-run\S*hooks)$/mu.exec((await s.call('git config --get core.hooksPath')).output.content)?.[1];
@@ -973,14 +969,15 @@ for (const shell of ['powershell', 'bash'] as const) {
     const marker = join(root, 'hook-ran');
     const writeHook = (exitCode: number): void => writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho ran >> "${fwd(marker)}"\nexit ${exitCode}\n`, { mode: 0o755 });
     const ask = async (command: string, decision: 'once' | 'deny') => {
-      const pending = s.call(command);
-      for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-      const request = s.approvals.pending()[0];
-      assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
-      assert.equal(request.onceOnly, true);
-      assert.match(request.reasons.join('\n'), /Git hooks can run in this repository/u);
-      s.approvals.decide(request.id, decision);
-      return pending;
+      const outcome = await s.call(command);
+      assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（確かめなしで動いた）`);
+      const request = rowOf(s, command);
+      assert.ok(request, `${command}: 積んだ行が無い`);
+      assert.match(request.checks.join('\n'), /Git hooks can run in this repository/u);
+      if (decision === 'deny') { s.pending.reject(request.id); return { decided: 'rejected' as const }; }
+      const ran = await approveRow(s, request.id);
+      const content = ran.output ?? '';
+      return { decided: 'approved' as const, output: { content, isError: !(ran.status === 'ran' && /exit code: 0\b/u.test(content)) } };
     };
     // コマンドの中の git config で、その実行の git に渡った設定を見る
     const commit = 'cd hk; git config --get core.hooksPath; git commit --allow-empty -q -m x';
@@ -989,14 +986,16 @@ for (const shell of ['powershell', 'bash'] as const) {
     writeHook(0);
     // 許さなければ、フックは動かない
     const denied = await ask(commit, 'deny');
-    assert.equal(denied.output.isError, true);
+    assert.equal(denied.decided, 'rejected');
     assert.equal(existsSync(marker), false, '拒否したのにフックが動いた');
+    assert.equal(count(), 0);
     // 確かめなしで動く git は、フックの置き場所が空のフォルダ
     const free = await s.call('cd hk; git config --get core.hooksPath');
     assert.equal(free.decision, 'allow', free.output.content);
     assert.match(free.output.content, /git-run\S*hooks/u);
     // 許せば、持ち主のフックが動く（フックの置き場所の上書きは無い）
     const allowed = await ask(commit, 'once');
+    assert.ok(allowed.output);
     assert.equal(allowed.output.isError, false, allowed.output.content);
     assert.doesNotMatch(allowed.output.content, /git-run/u, '許した実行に、フックの置き場所の上書きがある');
     assert.equal(existsSync(marker), true, '許したのにフックが動かない');
@@ -1005,7 +1004,7 @@ for (const shell of ['powershell', 'bash'] as const) {
     rmSync(marker);
     writeHook(1);
     const blocked = await ask(commit, 'once');
-    assert.equal(blocked.output.isError, true);
+    assert.equal(blocked.output?.isError, true);
     assert.equal(existsSync(marker), true);
     assert.equal(count(), 1, 'フックが拒んだのに commit できた');
   });
@@ -1031,14 +1030,14 @@ for (const shell of ['powershell', 'bash'] as const) {
     mkdirSync(join(repo, '.husky'));
     writeFileSync(join(repo, '.husky', 'pre-commit'), script('husky'), { mode: 0o755 });
     const ask = async (command: string, reason: RegExp) => {
-      const pending = s.call(command);
-      for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-      const request = s.approvals.pending()[0];
-      assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
-      assert.equal(request.onceOnly, true);
-      assert.match(request.reasons.join('\n'), reason);
-      s.approvals.decide(request.id, 'once');
-      return pending;
+      const outcome = await s.call(command);
+      assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（確かめなしで動いた）`);
+      const request = rowOf(s, command);
+      assert.ok(request, `${command}: 積んだ行が無い`);
+      assert.match(request.checks.join('\n'), reason);
+      const ran = await approveRow(s, request.id);
+      const content = ran.output ?? '';
+      return { output: { content, isError: !(ran.status === 'ran' && /exit code: 0\b/u.test(content)) } };
     };
     const count = (): number => Number(git('rev-list', '--all', '--count').stdout.trim() || 0);
     // 設定が .husky を指す: そのフックは、許しても動かない（空のフォルダへ向けたまま）。.git/hooks のフックも、設定に隠れているので動かない
@@ -1108,12 +1107,10 @@ for (const shell of ['powershell', 'bash'] as const) {
     assert.equal(existsSync(marker), false, '断ったのに、偽の git フォルダの設定のコードが動いた');
     // 確かめを許しても、safe.bareRepository=explicit（git 2.38 以上）で、そのフォルダを git のフォルダとして見つけない
     if (!gitVersionAtLeast(spawnSync('git', ['--version'], { encoding: 'utf8' }).stdout, 2, 38)) return;
-    const pending = s.call(command);
-    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-    const request = s.approvals.pending()[0];
-    assert.ok(request, '承認の依頼が来ていない');
-    s.approvals.decide(request.id, 'once');
-    await pending;
+    assert.equal((await s.call(command)).decidedBy, 'pending', 'Pending に積まれていない');
+    const request = rowOf(s, command);
+    assert.ok(request, '積んだ行が無い');
+    await approveRow(s, request.id);
     assert.equal(existsSync(marker), false, '許したあとも、偽の git フォルダの設定のコードが動いた');
   });
 }
@@ -1175,7 +1172,6 @@ for (const shell of ['powershell', 'bash'] as const) {
     // 設定にある名前でも、製品に属さない実行には宛先の控えが無いので、送る操作として Pending に積まれる
     const toOrigin = await s.call(ps ? 'cd gr; git push origin HEAD:refs/heads/x' : 'cd gr && git push origin HEAD:refs/heads/x');
     assert.equal(toOrigin.decidedBy, 'pending');
-    assert.equal(s.approvals.pending().length, 0);
     // 再審査の指摘: url が この PC のフォルダを指す remote への push は、そのフォルダのフックを動かす（フックの上書きは届かない）。ふつうの確かめでなく今回だけ
     const toUp = ps ? 'cd gr; git push up HEAD:refs/heads/x' : 'cd gr && git push up HEAD:refs/heads/x';
     await expectAsk(s, toUp);
@@ -1231,15 +1227,6 @@ test('実機（Windows PowerShell 5.1・制限モード）: Copy-Item -Recurse�
   await expectSecretFolderBlocked(s, ['Copy-Item -Recurse secrets stuff; Get-Content stuff/token.txt', 'Copy-Item -Recurse proj stuff; Get-Content stuff/secrets/token.txt', 'Move-Item secrets stuff2; Get-Content stuff2/token.txt'], raw);
 });
 
-async function runApproved(s: ReturnType<typeof setup>, command: string) {
-  let settled = false;
-  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
-  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const request = s.approvals.pending()[0];
-  if (request) s.approvals.decide(request.id, 'once');
-  return pending;
-}
-
 test('実機（Windows PowerShell 5.1・制限モード）: ただの npm は npm.ps1 でなく npm.cmd で動き、npm run も通る', { skip: (!psAvailable || !which('npm')) && 'Windows の PowerShell か npm が無い' }, async t => {
   const s = setup(t, 'powershell');
   writeFileSync(s.files('package.json'), JSON.stringify({ name: 'probe', version: '1.0.0', private: true, scripts: { hello: 'node -e "console.log(41+1)"' } }));
@@ -1292,7 +1279,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: npx の引数の & �
   assert.ok(host);
   const outcome = await runApproved(s, `npx --version 'x&hostname'`);
   if (/\.cmd$/iu.test(which('npx') ?? '')) assert.equal(outcome.decision, 'deny', outcome.output.content);
-  else assert.equal(outcome.decidedBy, 'user', outcome.output.content);
+  else assert.equal(outcome.decidedBy, 'owner-pending', outcome.output.content);
   assert.equal(outcome.output.content.split('\n').some(line => line.trim() === host), false, outcome.output.content);
 });
 
@@ -1330,13 +1317,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: npm・pnpm に実行
   const ranHost = (text: string) => text.split('\n').some(line => line.trim() === host);
   for (const command of ['npm --version (Get-Content n.txt)', 'npm --version $(Get-Content n.txt)', '$a = Get-Content n.txt; npm --version $a', 'pnpm add (Get-Content n.txt)', '$v = Get-Content n.txt; pnpm --version $v']) {
     const outcome = await runApproved(s, command);
-    let text = outcome.output.content;
-    if (outcome.decidedBy === 'pending') {
-      const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
-      assert.ok(row, command);
-      const replayed = await replayAction(s.pending.claim(row.id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
-      text += `\n${replayed.output ?? ''}`;
-    }
+    const text = outcome.output.content;
     assert.equal(ranHost(text), false, `${command}: ${text}`);
   }
 });
@@ -1350,11 +1331,6 @@ test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきの�
   ];
   for (const [command, file] of rows) {
     const outcome = await runApproved(s, command);
-    if (outcome.decidedBy === 'pending') {
-      const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
-      assert.ok(row, command);
-      await replayAction(s.pending.claim(row.id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
-    }
     assert.equal(existsSync(s.files(file)), false, `${command}: ${outcome.output.content}`);
   }
   const plain = await runApproved(s, "& 'npm' --version");

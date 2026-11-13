@@ -11,6 +11,7 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { MemoryStore } from '../src/memory/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { notifyOwner } from '../src/tools/builtin/notify.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
@@ -32,6 +33,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   let dupe = false;
   const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry().register(notifyOwner);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const ctx: ToolContext = {
@@ -40,7 +42,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     services: { db, memory: new MemoryStore(db), emit: () => undefined, notify: input => { sent.push(input); return dupe ? undefined : { id: sent.length }; } },
   };
   const call = (args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name: 'notify_owner', arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
+    runToolCall({ id: `call-${Math.random()}`, name: 'notify_owner', arguments: args }, c, { registry, approvals, pending, judgeAll: true, db, emit: e => events.push(e), conversationAutoRead: () => false });
   return { ctx, call, sent, setDupe: (v: boolean) => { dupe = v; } };
 }
 

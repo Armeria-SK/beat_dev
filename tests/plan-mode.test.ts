@@ -9,6 +9,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { buildDynamic } from '../src/engine/workspace.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { isBrowserTool } from '../src/tools/browser/names.ts';
 import { PLAN_EFFECTS, planAllows, runToolCall } from '../src/tools/pipeline.ts';
@@ -37,12 +38,13 @@ function pipeline(t: { after: (fn: () => void) => void }, mode: () => Permission
   const ran: string[] = [];
   const registry = new ToolRegistry();
   for (const effect of EFFECTS) registry.register(stub(effect, ran));
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(config, paths);
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, ...(startMode ? { permissionMode: startMode } : {}),
   };
-  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, db, emit: () => undefined, permissionMode: mode, conversationAutoRead: () => false });
+  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, pending, db, judgeAll: true, emit: () => undefined, permissionMode: mode, conversationAutoRead: () => false });
   return { call, ran, db, ctx };
 }
 
@@ -137,13 +139,13 @@ test('計画モード（エンジン）: 毎回組み立てる system の部分�
   assert.equal(first!.system.frozen, second!.system.frozen);
 });
 
-test('計画モード（エンジン）: モデルが書き込みを呼んでも拒否する（道具が一覧に無くても二重に止める）。ファイルは作られず、札も出ない', async t => {
+test('計画モード（エンジン）: モデルが書き込みを呼んでも拒否する（道具が一覧に無くても二重に止める）。ファイルは作られず、Pending にも積まない', async t => {
   const s = await startApp(t);
   s.adapter().scripts = [callTool('file_write', { path: 'a.md', content: 'x' }), callTool('shell_run', { command: 'echo hi' }), say('計画です')];
   const sent = await post(s, '計画して', { permissionMode: 'plan' });
   await settled(s.app, sent.body.runId);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
-  assert.equal(s.app.approvals.pending().length, 0);
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
   assert.deepEqual(s.app.db.prepare('SELECT tool, decision, decided_by FROM tool_calls ORDER BY created_at').all().map(r => ({ ...r })), [
     { tool: 'file_write', decision: 'deny', decided_by: 'mode' }, { tool: 'shell_run', decision: 'deny', decided_by: 'mode' },
   ]);

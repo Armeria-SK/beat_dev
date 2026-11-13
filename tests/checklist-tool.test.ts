@@ -9,6 +9,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { MemoryStore } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { checklistWrite } from '../src/tools/builtin/checklist.ts';
 import { readChecklist } from '../src/tools/builtin/checklist-core.ts';
 import { KV } from '../src/db/kv.ts';
@@ -29,6 +30,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const memory = new MemoryStore(db);
   const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry().register(checklistWrite);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
   const events: RunEvent[] = [];
   const ctx: ToolContext = {
@@ -37,7 +39,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     services: { db, memory, emit: e => events.push(e) },
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, judgeAll: true, db, emit: e => events.push(e), conversationAutoRead: () => false });
   return { ctx, db, call, events, config: parsed };
 }
 

@@ -49,7 +49,10 @@ function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => v
     workspace: ws, taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: Record<string, unknown> = {}) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false, ...extra });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
+      registry, approvals, pending, db, judgeAll: true, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false,
+      lastUserRequest: () => 'please do the work', autoClassify: async () => '{"decision":"ask","reason":"not sure"}', ...extra,
+    });
   const deps = (extra: Record<string, unknown> = {}) => ({
     db, store: pending, registry, config: () => config, paths, projects, conversationExists: () => true, conversationTainted: () => false, log: () => undefined, ...extra,
   }) as unknown as Parameters<typeof replayAction>[1];
@@ -287,9 +290,11 @@ test('作ったものの窓: 開くのは exec・write・ファイルも書く�
   const ctx: ToolContext = { ...r.ctx, toolWindow: () => { opened.push('open'); return () => undefined; } };
   for (const name of ['fake_read', 'fake_web']) assert.equal((await r.call(name, {}, ctx)).decision, 'allow');
   assert.deepEqual(opened, []);
-  const answer = setInterval(() => { for (const card of r.approvals.pending()) r.approvals.decide(card.id, 'once'); }, 10);
-  t.after(() => clearInterval(answer));
-  for (const name of ['fake_save', 'fake_exec']) assert.notEqual((await r.call(name, {}, ctx)).decision, 'deny');
+  const allow = { autoClassify: async () => '{"decision":"allow","reason":"fits the request"}' };
+  for (const name of ['fake_save', 'fake_exec']) {
+    const outcome = await r.call(name, {}, ctx, allow);
+    assert.equal(outcome.decision, 'allow', `${name}: ${outcome.output.content}`);
+  }
   assert.equal(opened.length, 2);
 });
 

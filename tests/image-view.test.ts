@@ -13,14 +13,14 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { IMAGE_MAX_BYTES, IMAGE_MAX_SIDE } from '../src/shared/image-info.ts';
-import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { imageView } from '../src/tools/builtin/image.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
-import { waitFor } from './app-setup.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 type Net = PageNetwork & { resolves: string[]; gets: string[] };
@@ -52,10 +52,10 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
+  const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry().register(imageView);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const ctx: ToolContext = {
@@ -65,8 +65,12 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     services: { web: { network: net } } as unknown as ToolContext['services'],
   };
   const call = (args: unknown, c: ToolContext = ctx, autoRead = false) =>
-    runToolCall({ id: `call-${Math.random()}`, name: 'image_view', arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => autoRead });
-  return { paths, ctx, call, events, approvals, net };
+    runToolCall({ id: `call-${Math.random()}`, name: 'image_view', arguments: args }, c, {
+      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => autoRead,
+      lastUserRequest: () => 'please look at the image', autoClassify: async () => { judge.calls++; return judge.answer; },
+    });
+  const waiting = () => pending.list({ status: 'waiting' });
+  return { paths, ctx, call, events, approvals, net, pending, waiting, judge };
 }
 
 // 見本のバイト。ファイルは置かず、試験の中で作る
@@ -397,20 +401,19 @@ test('image_view: 転送先が LAN・https から http への転送・転送の�
   assert.deepEqual(net.gets, [URL_PNG], '転送先は取りに行かない');
 });
 
-test('image_view: URL に秘密らしい文字・長いクエリがあれば確かめ（ask）にして、断れば取りに行かない', async t => {
+test('image_view: URL に秘密らしい文字・長いクエリがあれば断り、取りに行かない', async t => {
   const net = fakeNet({});
   const s = setup(t, undefined, net);
-  const secret = s.call({ url: 'https://img.example.com/a.png?k=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' });
-  await waitFor(() => s.approvals.pending().length === 1, '秘密らしい文字の確かめ');
-  assert.match(s.approvals.pending()[0]!.reasons.join(' '), /API key/u);
-  s.approvals.decide(s.approvals.pending()[0]!.id, 'deny');
-  const denied = await secret;
+  s.judge.answer = '{"decision":"allow","reason":"fits the request"}';
+  const denied = await s.call({ url: 'https://img.example.com/a.png?k=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' });
+  assert.equal(denied.decision, 'deny');
   assert.equal(denied.output.isError, true);
-  const long = s.call({ url: `https://img.example.com/a.png?q=${'a'.repeat(301)}` });
-  await waitFor(() => s.approvals.pending().length === 1, '長いクエリの確かめ');
-  assert.match(s.approvals.pending()[0]!.reasons.join(' '), /long query string/u);
-  s.approvals.decide(s.approvals.pending()[0]!.id, 'deny');
-  await long;
+  assert.match(denied.output.content, /API key/u);
+  const long = await s.call({ url: `https://img.example.com/a.png?q=${'a'.repeat(301)}` });
+  assert.equal(long.decision, 'deny');
+  assert.match(long.output.content, /long query string/u);
+  assert.equal(s.judge.calls, 0, '判定役が許すと答える場合でも、判定役に回さない');
+  assert.equal(s.waiting().length, 0);
   assert.deepEqual(net.resolves, []);
   assert.deepEqual(net.gets, []);
   assert.equal(s.ctx.taint.tainted, false, '断られたものは印を付けない');
@@ -521,15 +524,15 @@ test('image_view: 自動承認で外を読んだ会話（ever_auto_read）では
   const path = await s.call({ path: 'a.png' }, s.ctx, true);
   assert.equal(path.decision, 'allow');
   assert.equal(path.output.images?.length, 1);
-  assert.equal(s.approvals.pending().length, 0);
-  const url = s.call({ url: URL_PNG }, s.ctx, true);
-  await waitFor(() => s.approvals.pending().length === 1, '外を読んだ会話の URL の毎回の確かめ');
-  assert.deepEqual(s.approvals.pending()[0]!.kinds, ['egress']);
+  assert.equal(s.judge.calls, 0, 'path は判定役にも回らない');
+  assert.equal(s.waiting().length, 0);
+  // 4-3b-2: afterAutoRead を消すと順 2
+  const url = await s.call({ url: URL_PNG }, s.ctx, true);
+  assert.equal(url.decidedBy, 'pending', url.output.content);
+  assert.equal(s.judge.calls, 1, '外を読んだ会話の URL は判定役に回る');
+  assert.deepEqual(s.waiting().map(r => r.kind), ['judge']);
+  assert.match(s.waiting()[0]!.checks.join(' '), /Auto-approve has read something outside the allowed folders/u);
   assert.deepEqual(net.gets, [], '許されるまで取りに行かない');
-  s.approvals.decide(s.approvals.pending()[0]!.id, 'deny');
-  const denied = await url;
-  assert.equal(denied.output.isError, true);
-  assert.deepEqual(net.gets, []);
   const normal = await s.call({ url: URL_PNG }, s.ctx, false);
   assert.equal(normal.decision, 'allow', '外を読んだ会話でなければ確かめにならない');
   assert.equal(normal.output.images?.length, 1);

@@ -115,7 +115,6 @@ test('4-3a: 確かめになる呼び出しが札で止まる道は、会話（no
     assert.equal(outcome.decidedBy, 'pending', `${c.kind}/${c.permissionMode}: ${outcome.output.content}`);
     assert.notEqual(outcome.output.isError, true, '積んだ結果は失敗にしない（実行は続く）');
   }
-  assert.equal(r.approvals.pending().length, 0, '札は 1 枚も出ない');
   assert.deepEqual(r.waiting().map(row => row.kind), ['judge', 'judge', 'judge', 'judge']);
   assert.equal(r.judge.calls.length, 4, 'normal の会話も判定役に回る');
 });
@@ -166,7 +165,6 @@ test('4-3a: 判定役が許せば実行。確かめる・時間切れ・読め�
   assert.match(rows[2]!.reason, /could not be read/u);
   assert.match(rows[3]!.reason, /no judge/u);
   assert.match(rows[4]!.reason, /no request/u);
-  assert.equal(r.approvals.pending().length, 0);
 });
 
 test('4-3a: 振り返りの実行では、確かめになる呼び出しは判定役にも Pending にも行かず断られる', async t => {

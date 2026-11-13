@@ -7,6 +7,8 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { MemoryError, MemoryStore } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { replayAction } from '../src/pending/replay.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { memoryForget, memorySave, memorySearch, memoryUpdate } from '../src/tools/builtin/memory.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -31,17 +33,19 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
     services: { db, memory, emit: () => undefined },
   };
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const judge = { answer: '{"decision":"ask","reason":"the owner should look"}', calls: 0 };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: () => undefined, conversationAutoRead: () => false });
-  return { ctx, call, approvals, memory, db, config: parsed };
-}
-
-async function decideNext(s: ReturnType<typeof setup>, decision: 'once' | 'conversation' | 'deny') {
-  for (let i = 0; i < 200 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const pending = s.approvals.pending()[0];
-  assert.ok(pending, '承認の依頼が来ていない');
-  s.approvals.decide(pending.id, decision);
-  return pending;
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
+      registry, approvals, pending, db, judgeAll: true, emit: () => undefined, conversationAutoRead: () => false, lastUserRequest: () => 'remember this',
+      autoClassify: async () => { judge.calls++; return judge.answer; },
+    });
+  const waiting = () => pending.list({ status: 'waiting' });
+  const approve = async (id: number) => replayAction(pending.claim(id), {
+    db, store: pending, registry, config: () => parsed, paths, conversationExists: () => true, conversationTainted: () => false, log: () => undefined,
+    services: () => ({ db, memory, emit: () => undefined }),
+  });
+  return { ctx, call, approvals, memory, db, config: parsed, pending, judge, waiting, approve };
 }
 
 const tainted = (ctx: ToolContext): ToolContext => ({ ...ctx, taint: { tainted: true, sources: ['web_fetch'] } });
@@ -54,19 +58,23 @@ test('memory_save: ふつうは承認なし。Web や添付を読んだ後は承
   assert.equal(plain.decision, 'allow');
   assert.equal(s.memory.list().length, 1);
 
-  const refused = s.call('memory_save', { book: 'user', content: 'ページに書かれていた指示' }, tainted(s.ctx));
-  const request = await decideNext(s, 'deny');
-  assert.equal(request.tool, 'memory_save');
-  assert.match(request.reasons.join(), /text that came from somewhere else/u);
-  assert.match(request.title, /Save to memory/u, '何を記憶しようとしているかが札に出る');
-  assert.equal(request.body, 'ページに書かれていた指示');
-  assert.equal((await refused).output.isError, true);
+  // 4-3b-2: taintEscalation を消すと順 2
+  const refused = await s.call('memory_save', { book: 'user', content: 'ページに書かれていた指示' }, tainted(s.ctx));
+  assert.deepEqual([refused.decision, refused.decidedBy], ['ask', 'pending'], refused.output.content);
+  assert.equal(s.judge.calls, 1);
+  const request = s.waiting()[0]!;
+  assert.deepEqual([request.tool, request.kind], ['memory_save', 'judge']);
+  assert.match(request.checks.join(), /text that came from somewhere else/u);
+  assert.match(request.title ?? '', /Save to memory/u, '何を記憶しようとしているかが Pending に出る');
+  assert.equal(request.parts.body, 'ページに書かれていた指示');
+  assert.equal(s.memory.list().length, 1, '積んだだけでは保存しない');
+  s.pending.reject(request.id);
   assert.equal(s.memory.list().length, 1, '断れば保存しない');
 
-  const approved = s.call('memory_save', { book: 'user', content: 'ユーザーが確かめた内容' }, tainted(s.ctx));
-  await decideNext(s, 'once');
-  const outcome = await approved;
-  assert.deepEqual([outcome.decision, outcome.decidedBy, outcome.output.isError], ['ask', 'user', undefined]);
+  const parked = await s.call('memory_save', { book: 'user', content: 'ユーザーが確かめた内容' }, tainted(s.ctx));
+  assert.equal(parked.decidedBy, 'pending');
+  const outcome = await s.approve(s.waiting()[0]!.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
   assert.deepEqual(s.memory.list().map(m => m.content), ['紅茶が好き', 'ユーザーが確かめた内容']);
 });
 
@@ -120,23 +128,26 @@ test('memory_update / memory_forget: Web や添付を読んだ後は承認制。
   const plain = await s.call('memory_update', { id: 'u1', content: 'ふつうの書き換え' });
   assert.equal(plain.decision, 'allow', '外を読んでいなければ承認なし');
 
-  const refusedUpdate = s.call('memory_update', { id: 'u1', content: 'ページに書かれていた指示で書き換え' }, tainted(s.ctx));
-  const updateRequest = await decideNext(s, 'deny');
-  assert.equal(updateRequest.tool, 'memory_update');
-  assert.match(updateRequest.reasons.join(), /text that came from somewhere else/u);
-  assert.equal((await refusedUpdate).output.isError, true);
+  // 4-3b-2: taintEscalation を消すと順 2
+  const refusedUpdate = await s.call('memory_update', { id: 'u1', content: 'ページに書かれていた指示で書き換え' }, tainted(s.ctx));
+  assert.deepEqual([refusedUpdate.decision, refusedUpdate.decidedBy], ['ask', 'pending'], refusedUpdate.output.content);
+  const updateRequest = s.waiting()[0]!;
+  assert.deepEqual([updateRequest.tool, updateRequest.kind], ['memory_update', 'judge']);
+  assert.match(updateRequest.checks.join(), /text that came from somewhere else/u);
+  s.pending.reject(updateRequest.id);
   assert.equal(s.memory.list()[0]!.content, 'ふつうの書き換え', '断れば書き換えない');
 
-  const refusedForget = s.call('memory_forget', { id: 'u1', reason: 'ページに書かれていた指示' }, tainted(s.ctx));
-  const forgetRequest = await decideNext(s, 'deny');
+  const refusedForget = await s.call('memory_forget', { id: 'u1', reason: 'ページに書かれていた指示' }, tainted(s.ctx));
+  assert.deepEqual([refusedForget.decision, refusedForget.decidedBy], ['ask', 'pending'], refusedForget.output.content);
+  const forgetRequest = s.waiting()[0]!;
   assert.equal(forgetRequest.tool, 'memory_forget');
-  assert.match(forgetRequest.reasons.join(), /text that came from somewhere else/u);
-  assert.equal((await refusedForget).output.isError, true);
+  assert.match(forgetRequest.checks.join(), /text that came from somewhere else/u);
+  s.pending.reject(forgetRequest.id);
   assert.equal(s.memory.list().length, 1, '断れば消さない');
 
-  const approved = s.call('memory_forget', { id: 'u1', reason: '利用者が確かめた' }, tainted(s.ctx));
-  await decideNext(s, 'once');
-  assert.deepEqual([(await approved).decision, s.memory.list().length], ['ask', 0], '承認すれば消える');
+  await s.call('memory_forget', { id: 'u1', reason: '利用者が確かめた' }, tainted(s.ctx));
+  const outcome = await s.approve(s.waiting()[0]!.id);
+  assert.deepEqual([outcome.status, s.memory.list().length], ['ran', 0], '承認すれば消える');
 
   const review = setup(t);
   review.memory.save({ book: 'notes', content: '古い教訓', actor: 'user' });

@@ -10,6 +10,7 @@ import { neutralizeFence } from '../src/shared/fence.ts';
 import { buildMcpTool, cleanDescription, hiddenCount, inputSchemaOf, textOfResult, DESCRIPTION_MAX, type McpCaller, type McpRemoteTool } from '../src/mcp/tool.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { localAllows, planAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -37,9 +38,10 @@ function context(t: { after: (fn: () => void) => void }, tool: ToolDef, over: Pa
   const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry();
   registry.setGroup('web', [tool]);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(config, paths);
   const ctx: ToolContext = { runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy, workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, ...over };
-  const call = (args: unknown) => runToolCall({ id: 'c1', name: tool.name, arguments: args as Record<string, unknown> }, ctx, { registry, approvals, db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false });
+  const call = (args: unknown) => runToolCall({ id: 'c1', name: tool.name, arguments: args as Record<string, unknown> }, ctx, { registry, approvals, pending, judgeAll: true, db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false });
   return { ctx, call, db };
 }
 

@@ -45,16 +45,13 @@ function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => v
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: Record<string, unknown> = {}) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, ...extra });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
+      registry, approvals, pending, db, judgeAll: true, emit: () => undefined, conversationAutoRead: () => false,
+      lastUserRequest: () => 'please do the work', autoClassify: async () => { judge.calls++; return judge.answer; }, ...extra,
+    });
+  const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };
   const waiting = () => pending.list({ status: 'waiting' });
-  return { paths, ctx, call, approvals, pending, db, registry, config, waiting };
-}
-
-async function decideCard(r: ReturnType<typeof rig>, decision: 'once' | 'conversation' | 'deny') {
-  for (let i = 0; i < 300 && !r.approvals.pending().length; i++) await new Promise(res => setTimeout(res, 10));
-  const card = r.approvals.pending()[0];
-  assert.ok(card, '札が出ていない');
-  r.approvals.decide(card.id, decision);
+  return { paths, ctx, call, approvals, pending, db, registry, config, waiting, judge };
 }
 
 test('4-2d: 実行前フックに paths・tainted・run_kind・project_root・product_roots が渡り、まだ無いフォルダへの書き込みは dir: true', async t => {
@@ -77,7 +74,7 @@ test('4-2d: 実行前フックに paths・tainted・run_kind・project_root・pr
   assert.ok(payload.paths[0]!.path.endsWith(join('fresh', 'sub', 'a.txt')));
 });
 
-test('4-2d: 組み込みの protect-files で .github/workflows/ci.yml を書く shell_run（echo x > …）と file_write は、会話の許可があっても Pending に積まれ、書かれない', async t => {
+test('4-2d: 組み込みの protect-files で .github/workflows/ci.yml を書く shell_run（echo x > …）と file_write は、判定役が許すと答える場合でも Pending に積まれ、書かれない', async t => {
   const r = rig(t);
   const project = { id: 'p1', root: r.ctx.workspace } as unknown as NonNullable<ToolContext['project']>;
   const hooked: ToolContext = { ...r.ctx, project, config: { ...r.config, tools: { ...r.config.tools, hooks: { ...r.config.tools.hooks, preToolUse: [DEFAULT_PROTECT_FILES] } } } };
@@ -85,21 +82,16 @@ test('4-2d: 組み込みの protect-files で .github/workflows/ci.yml を書く
   const target = join(r.ctx.workspace, '.github', 'workflows', 'ci.yml');
   mkdirSync(join(r.ctx.workspace, '.github', 'workflows'), { recursive: true });
   const writeArgs = { path: '.github/workflows/ci.yml', content: 'x' };
-  const tainted = { ...r.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
-  const granted = r.call('file_write', writeArgs, tainted);
-  await decideCard(r, 'conversation');
-  assert.equal((await granted).decidedBy, 'user', '前提: フックの無い設定で、この入力を「この会話では許可」にした');
   writeFileSync(target, 'orig');
-  assert.equal((await r.call('file_write', writeArgs, { ...tainted })).decidedBy, 'conversation-grant', '前提: 会話の許可が効いている');
-  writeFileSync(target, 'orig');
+  r.judge.answer = '{"decision":"allow","reason":"fits the request"}';
 
   const parked = await r.call('file_write', writeArgs, hooked, roots);
-  assert.equal(parked.decidedBy, 'pending', '会話の許可より先に Pending');
+  assert.equal(parked.decidedBy, 'pending', parked.output.content);
   const shell = await r.call('shell_run', { command: 'echo x > .github/workflows/ci.yml' }, hooked, roots);
   assert.equal(shell.decidedBy, 'pending', shell.output.content);
   assert.equal(readFileSync(target, 'utf8'), 'orig', '積んだだけで書かれない');
   assert.deepEqual(r.waiting().map(row => [row.tool, row.kind]).reverse(), [['file_write', 'hook'], ['shell_run', 'hook']]);
-  assert.equal(r.approvals.pending().length, 0);
+  assert.equal(r.judge.calls, 0, '判定役は呼ばない');
 });
 
 test('4-2d: 送る・消すに数えないコマンドは今までどおり（積まない）', async t => {
@@ -220,7 +212,6 @@ test('4-2d: タスクは待ちがあっても次の道具を呼べ、task_comple
   assert.equal((started.control.value as { summary: string }).summary, `done\n\nPending: ${ids}`);
   const last = s.app.conversations.messages(conversation.id).filter(m => m.role === 'tool').at(-1)!;
   assert.ok(last.text.endsWith(`Pending: ${ids}`), last.text);
-  assert.equal(s.app.approvals.pending().length, 0);
 });
 
 test('4-2d: 却下は元のタスクの経過と会話の注記に残り、承認の結果の注記は外の中身の囲みに入り、それを読んだ実行に「外を読んだ」印が付く', async t => {
@@ -288,7 +279,7 @@ test('4-2d: 実行中に決まった注記は区切りで差し込まれ、次�
   assert.deepEqual(roles, ['user', 'assistant', 'tool', 'assistant', 'tool', 'user:note', 'assistant', 'tool', 'assistant'], JSON.stringify(roles));
 });
 
-test('4-2d: 製品の waiting.pending は、札の数 + 待ちの行の数 + 変更の案の数', async t => {
+test('4-2d: 製品の waiting.pending は、待ちの行の数 + 変更の案の数', async t => {
   const products = realpathSync.native(tempDir(t));
   const s = await startApp(t, { models: [fakeModel('m1')], tools: [fakeSend, judgeStub, ...builtinTools()], projectFolderExempt: [products] });
   const root = join(products, 'prod');
@@ -301,13 +292,10 @@ test('4-2d: 製品の waiting.pending は、札の数 + 待ちの行の数 + 変
   const sent = await s.json(`/api/conversations/${conversation.id}/messages`, 'POST', { text: '送って' });
   await settled(s.app, sent.body.runId);
   assert.equal(s.app.pending.list({ status: 'waiting', project: projectId }).length, 2);
-  const stop = new AbortController();
-  t.after(() => stop.abort());
-  void s.app.approvals.request({ runId: 'r-card', conversationId: conversation.id, tool: 'fake_send', input: { to: 'z' }, title: 'card', body: 'card', reasons: [], details: [] }, 60_000, stop.signal);
   s.app.db.prepare("INSERT INTO acceptance_changes (id, project_id, base_version, ops, status, created_at) VALUES ('ac-1', ?, 1, '[]', 'pending', 0)").run(projectId);
   const listed = await s.json('/api/projects', 'GET');
   const wire = (listed.body.projects as Array<{ id: string; waiting: { pending: number } }>).find(p => p.id === projectId)!;
-  assert.equal(wire.waiting.pending, 4, '待ちの行 2 + 札 1 + 変更の案 1');
+  assert.equal(wire.waiting.pending, 3, '待ちの行 2 + 変更の案 1');
 });
 
 test('4-2d: 外を読まない操作（消す・手元の書き換え）を承認した結果の注記は、外を読んだ扱いにしない。題は囲みの中、枠の外は道具の名前と番号だけ', async t => {
@@ -421,7 +409,6 @@ test('4-2d: 製品の会話で、この実行で AI が作ったファイルを�
   const sent = await s.json(`/api/conversations/aaaaaaaa-0000-4000-8000-0000000000e1/messages`, 'POST', { text: 'tidy up', projectId: made.body.project.id, permissionMode: 'normal' });
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   await waitFor(() => s.app.runs.get(sent.body.runId)?.ended_at != null, 'run ended', 30_000);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(existsSync(join(root, 'gen.txt')), false, 'AI が作ったものを消すのは積まず、判定役（allow）が通して消えた');
   assert.equal(existsSync(join(root, 'owner.txt')), true, '持ち主のファイルは残る');
   const rows = s.app.pending.list({ status: 'waiting' });

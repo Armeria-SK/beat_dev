@@ -6,6 +6,7 @@ import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { fileSearch } from '../src/tools/builtin/file-search.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
@@ -48,13 +49,14 @@ test('ファイルの道具（読む・書く・書き換える・一覧・検�
   const db = openDatabase(':memory:', MIGRATIONS);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(fileSearch).register(shellRun);
   const approvals = new ApprovalBroker(db, () => undefined);
+  const pending = new PendingStore(db, { tools: registry, dataDir: f.paths.data });
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: f.config, paths: f.paths, policy: f.policy,
     workspace: defaultWorkspace(f.policy, f.paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto',
   };
   let judged = 0;
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the product knowledge', conversationTainted: () => false, conversationAutoRead: () => false,
+    registry, approvals, pending, db, judgeAll: true, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the product knowledge', conversationTainted: () => false, conversationAutoRead: () => false,
     autoClassify: async () => { judged++; return ALLOW; },
   });
   const file = join(f.dir, 'context.md');
