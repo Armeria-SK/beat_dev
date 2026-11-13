@@ -215,7 +215,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       id, ctx.runId, ctx.conversationId, call.name, shownInput, outcome.decision, outcome.decidedBy, approvalId ?? null,
       output.isError ? 0 : 1, Date.now() - started, output.content.slice(0, 2000), output.fullRef ?? null, started,
     );
-    deps.emit({ type: 'tool.result', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, ok: !output.isError, decision: outcome.decision, preview: output.content.slice(0, 1500), ...(autoWhy !== undefined && outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' ? { autoReason: autoWhy } : {}), ...(gate ? { gate } : {}) });
+    deps.emit({ type: 'tool.result', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, ok: !output.isError, decision: outcome.decision, preview: output.content.slice(0, 1500), ...(gate ? { gate } : {}) });
     return { ...outcome, output, ...(gate ? { gate } : {}) };
   };
   const refuse = (decision: Decision, decidedBy: string, message: string, invalid = false) =>

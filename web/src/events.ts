@@ -8,7 +8,7 @@ export type RunEvent =
   | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, unknown> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: string }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
-  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: string; preview: string; autoReason?: string; gate?: ToolGate }
+  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: string; preview: string; gate?: ToolGate }
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: ChecklistItem[]; tainted: boolean }

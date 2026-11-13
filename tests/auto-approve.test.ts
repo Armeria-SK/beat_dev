@@ -235,8 +235,9 @@ test('自動承認: 許可フォルダの外を読むだけのコマンドは、
   assert.deepEqual([call.decision, call.decided_by, call.ok], ['allow', 'auto-mode', 1]);
   assert.equal(call.approval_id, (s.db.prepare('SELECT id FROM approvals').get() as { id: string }).id, '道具の記録は approvals の行につながる');
   assert.deepEqual(s.events.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state), ['checking', 'allowed']);
-  const result = s.events.find(e => e.type === 'tool.result') as { autoReason?: string };
-  assert.equal(result.autoReason, '依頼の範囲です');
+  const result = s.events.find(e => e.type === 'tool.result') as Record<string, unknown>;
+  assert.deepEqual(result.gate, { by: 'judge', reason: '依頼の範囲です' });
+  assert.equal('autoReason' in result, false, '判定役の理由は gate だけで運ぶ');
   assert.match(s.prompts[0]!.user, /外のメモを読んで/u);
   assert.ok(s.prompts[0]!.user.includes(s.outside), '判定役は操作（コマンド）を見る');
 });

@@ -120,7 +120,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       {body && <p className="bt-card__body">{body}</p>}
       {column === 'progress' && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
       <Meta items={meta} />
-      {pending > 0 && <a className="bt-tool__link bt-meta ui-card__pending" href={routeHash(task.project_id ? { view: 'pending', productId: task.project_id } : { view: 'pending' })}>{t('ui.task.pending', pending)}</a>}
+      {pending > 0 && <a className="bt-tool__link bt-meta" href={routeHash(task.project_id ? { view: 'pending', productId: task.project_id } : { view: 'pending' })}>{t('ui.task.pending', pending)}</a>}
       {column === 'proposed' && (
         <div className="bt-card__actions">
           <Button variant="primary" small disabled={busy} onClick={onApprove}>{t('ui.kanban.approve')}</Button>

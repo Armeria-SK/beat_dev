@@ -57,7 +57,6 @@ interface CommandHook { matcher: string; command: string[]; timeoutMs: number; o
 interface BuiltinHook { matcher: string; builtin: string; always: string[]; afterOutside: string[]; enabled?: boolean; command?: undefined; timeoutMs?: undefined; onError?: undefined }
 type Hook = CommandHook | BuiltinHook;
 
-
 function hooksOf(config: Config, stage: Stage): Hook[] {
   const list = config.tools?.hooks?.[stage];
   return Array.isArray(list) ? list as Hook[] : [];

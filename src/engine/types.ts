@@ -85,7 +85,7 @@ export type RunEvent =
   | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, string | number | MessageParams> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: ChatMessage['role'] }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
-  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string; autoReason?: string; gate?: ToolGate }
+  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string; gate?: ToolGate }
   // 自動承認の判定役に聞いている（checking）/ 判定役が許した（allowed。reason は判定役の短い理由）/ 判定役が確かめると言った・答えられなかった（asked。このあと Pending に積む）
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
