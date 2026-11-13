@@ -1451,6 +1451,8 @@ export const en = {
   'ui.acc.notDoing': 'Not doing',
   'ui.acc.loadFailed': 'Could not read the acceptance items',
   'ui.acc.outside': 'Written after reading text from elsewhere',
+  'ui.plan.markReviewed': 'Mark as reviewed',
+  'ui.plan.reviewFailed': 'Not marked as reviewed',
   'ui.acc.source.words': 'Your words',
   'ui.acc.source.choice': 'Your answer',
   'ui.acc.source.ai': 'AI added',

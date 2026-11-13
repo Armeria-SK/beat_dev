@@ -292,6 +292,7 @@ export const api = {
   editAcceptance: (id: string, edit: AcceptanceEdit) => call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/edit`, { method: 'POST', body: JSON.stringify(edit) }),
   build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }) =>
     call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(hashes) }),
+  planReviewed: (id: string, baseHash: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan/reviewed`, { method: 'POST', body: JSON.stringify({ baseHash }) }),
   savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
   listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
   archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),
