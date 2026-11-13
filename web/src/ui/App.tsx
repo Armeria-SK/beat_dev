@@ -111,8 +111,6 @@ export function App() {
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
   const [leave, setLeave] = useState<string | null>(null);
-  const onboardRef = useRef(onboard);
-  onboardRef.current = onboard;
 
   const behind = routeBehind(route, behindRef.current);
   if (route.view !== 'settings') behindRef.current = route;
