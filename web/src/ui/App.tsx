@@ -254,7 +254,7 @@ export function App() {
 
   const { conversations, drafts, checklists, streaming, skillDrafts, unread } = live;
   const projects = useMemo(() => withPendingCounts(live.projects, live.pendingCounts), [live.projects, live.pendingCounts]);
-  const pendingAll = live.pendingCounts ? pendingTotal(live.pendingCounts) : 0;
+  const pendingAll = live.pendingCounts ? pendingTotal(live.pendingCounts, live.projects) : 0;
   const sessionPending = useMemo(() => sessionCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
   const waiting: Waiting = useMemo(

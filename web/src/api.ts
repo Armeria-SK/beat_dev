@@ -44,8 +44,10 @@ export interface Project {
 }
 export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
 export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
+export interface PendingFact { path: string; exists: boolean; type?: 'file' | 'dir' | 'link' | 'other'; size?: number; mtime?: number; files?: number; newest?: number; more?: boolean }
 export interface PendingAction {
-  id: number; tool: string; shown: string; masked: number; kind: PendingKind; reason: string;
+  id: number; tool: string; title?: string | null; shown: string; masked: number; kind: PendingKind; reason: string;
+  cwd: string | null; preview: ApprovalPreview[]; files: PendingFact[]; effect?: { files: number; bytes: number } | null;
   conversation_id: string; task_id: string | null; project_id: string | null;
   task_title: string | null; project_name: string | null;
   status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
@@ -320,8 +322,8 @@ export const api = {
   pending: (query: PendingQuery) =>
     call<{ items: PendingAction[] }>(`/api/pending?status=${query.status}${inProject(query.project, '&')}${query.before === undefined ? '' : `&before=${query.before}`}`),
   pendingCounts: () => call<PendingCounts>('/api/pending/counts'),
-  approvePending: (id: number) => call(`/api/pending/${id}/approve`, { method: 'POST', body: '{}' }),
-  rejectPending: (id: number, reason: string) => call(`/api/pending/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
+  approvePending: (id: number) => call<{ item?: PendingAction }>(`/api/pending/${id}/approve`, { method: 'POST', body: '{}' }),
+  rejectPending: (id: number, reason: string) => call<{ item?: PendingAction }>(`/api/pending/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
   decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
   send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean; projectId?: string; generated?: boolean } = {}) =>

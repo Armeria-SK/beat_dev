@@ -34,8 +34,41 @@ export function mergeDecided(old: readonly PendingAction[], page: readonly Pendi
   return [...byId.values()].filter(r => r.status !== 'waiting').sort((a, b) => decidedAt(b) - decidedAt(a) || b.id - a.id);
 }
 
-export const decidedShown = (decided: readonly PendingAction[], waiting: readonly PendingAction[], projectId: string | null): PendingAction[] =>
-  mergeDecided(waiting.filter(r => r.status === 'running' && (projectId === null || r.project_id === projectId)), decided);
+const inProject = (projectId: string | null) => (r: PendingAction): boolean => projectId === null || r.project_id === projectId;
+
+export function decidedShown(decided: readonly PendingAction[], waiting: readonly PendingAction[], local: readonly PendingAction[], projectId: string | null): PendingAction[] {
+  const server = mergeDecided(waiting.filter(r => r.status === 'running' && inProject(projectId)(r)), decided);
+  const known = new Set(server.map(r => r.id));
+  return mergeDecided(local.filter(r => !known.has(r.id) && inProject(projectId)(r)), server);
+}
+
+export function waitingShown(waiting: readonly PendingAction[], held: readonly PendingAction[], gone: ReadonlySet<number>, projectId: string | null): PendingAction[] {
+  const heldIds = new Set(held.map(r => r.id));
+  return waitingOf([...waiting.filter(r => !heldIds.has(r.id)), ...held], projectId).filter(r => !gone.has(r.id));
+}
+
+export const earlierCursor = (shown: readonly PendingAction[]): number | undefined => shown.at(-1)?.id;
+
+export const effectFiles = (row: Pick<PendingAction, 'effect'>): number | null => (row.effect && row.effect.files > 0 ? row.effect.files : null);
+
+const UNITS = ['B', 'KB', 'MB', 'GB'] as const;
+
+export function byteSize(bytes: number): { value: string; unit: (typeof UNITS)[number] } {
+  let step = 0;
+  while (step < UNITS.length - 1 && bytes >= 1024 ** (step + 1)) step += 1;
+  return { value: step === 0 ? String(bytes) : (bytes / 1024 ** step).toFixed(1), unit: UNITS[step]! };
+}
+
+export type FileFact =
+  | { path: string; kind: 'file'; bytes: number; at: number | null }
+  | { path: string; kind: 'dir'; files: number; more: boolean; at: number | null }
+  | { path: string; kind: 'missing' };
+
+export const fileFacts = (row: Pick<PendingAction, 'files'>): FileFact[] => row.files.map((f): FileFact => {
+  if (!f.exists) return { path: f.path, kind: 'missing' };
+  if (f.type === 'dir') return { path: f.path, kind: 'dir', files: f.files ?? 0, more: f.more === true, at: f.newest ?? f.mtime ?? null };
+  return { path: f.path, kind: 'file', bytes: f.size ?? 0, at: f.mtime ?? null };
+});
 
 export const fromTitle = (row: Pick<PendingAction, 'task_title' | 'conversation_id'>, titles: ReadonlyMap<string, string | null>): string | null =>
   row.task_title || titles.get(row.conversation_id) || null;
@@ -69,7 +102,7 @@ export const cleanReason = (text: string): string => text.replace(/[\p{Cc}]+/gu,
 
 export const pendingFor = (counts: PendingCounts, projectId: string): number => (counts.byProject[projectId] ?? 0) + (counts.acceptanceChanges[projectId] ?? 0);
 
-export const pendingTotal = (counts: PendingCounts): number => counts.waiting + Object.values(counts.acceptanceChanges).reduce((sum, n) => sum + n, 0);
+export const pendingTotal = (counts: PendingCounts, projects: readonly Project[]): number => counts.waiting + acceptanceRows(counts, projects, null).reduce((sum, r) => sum + r.n, 0);
 
 export function withPendingCounts(projects: Project[], counts: PendingCounts | null): Project[] {
   if (!counts) return projects;

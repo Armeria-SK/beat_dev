@@ -4,7 +4,7 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, decidedShown, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, waitingOf, withPendingCounts,
+  acceptanceRows, byteSize, decidedShown, earlierCursor, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
@@ -13,7 +13,7 @@ import { productNav } from '../web/src/ui/product-nav.ts';
 
 const row = (over: Partial<PendingAction> = {}): PendingAction => ({
   id: 1, tool: 'shell_run', shown: 'rm -rf data/cache/', masked: 0, kind: 'delete', reason: 'deletes files that existed before the run',
-  conversation_id: 'c1', task_id: null, project_id: 'prod01', task_title: null, project_name: 'Shop site',
+  cwd: null, preview: [], files: [], conversation_id: 'c1', task_id: null, project_id: 'prod01', task_title: null, project_name: 'Shop site',
   status: 'waiting', reject_reason: null, exit_code: null, output_preview: null, created_at: 1_000, decided_at: null, ran_at: null, ...over,
 });
 
@@ -89,8 +89,9 @@ test('ui/pending: 製品ごとの数は、待ちの行の数と受け入れの�
   assert.equal(pendingFor(counts(), 'prod02'), 1, '変更の案だけの製品も数える');
   assert.equal(pendingFor(counts({ acceptanceChanges: { prod01: 2 } }), 'prod01'), 4);
   assert.equal(pendingFor(counts(), 'other1'), 0);
-  assert.equal(pendingTotal(counts()), 4);
-  assert.equal(pendingTotal(counts({ waiting: 0, acceptanceChanges: {} })), 0);
+  assert.equal(pendingTotal(counts(), [project('prod01'), project('prod02')]), 4);
+  assert.equal(pendingTotal(counts({ waiting: 0, acceptanceChanges: {} }), []), 0);
+  assert.equal(pendingTotal(counts({ acceptanceChanges: { prod02: 1, gone99: 2, prod03: 4 } }), [project('prod02'), project('prod03', { archived_at: 5 })]), 4, 'しまった製品・知らない製品の変更の案は数えない（行に出ないので）');
 });
 
 test('ui/pending: 数が読めたら、製品の pending を counts の数に置き換える（読めないあいだはサーバーの数のまま）', () => {
@@ -111,7 +112,7 @@ test('ui/pending: 同じ数がサイドバーの製品の行（合計）・欄�
   assert.equal(sidebar, 2 + 1 + tab);
   assert.equal(home, tab);
   assert.equal(waitingTotal(projects[0]!), sidebar);
-  const all = tiles({ proposals: 0, answers: 0 }, pendingTotal(counts())).find(tile => tile.id === 'pending')!;
+  const all = tiles({ proposals: 0, answers: 0 }, pendingTotal(counts(), projects)).find(tile => tile.id === 'pending')!;
   assert.equal(all.n, 4);
   assert.deepEqual(holders(projects, 'pending', all.n), [{ name: 'name-prod01', n: 2 }, { name: 'name-prod02', n: 1 }, { name: null, n: 1 }]);
 });
@@ -149,9 +150,9 @@ test('ui/pending: 承認して動いている行（running）は Waiting に出�
   const waiting = [row({ id: 9, status: 'running', decided_at: 900 }), row({ id: 8 }), row({ id: 7, status: 'running', decided_at: 800, project_id: 'prod02' })];
   const decided = [row({ id: 3, status: 'ran', decided_at: 300 })];
   assert.deepEqual(waitingOf(waiting, null).map(r => r.id), [8]);
-  assert.deepEqual(decidedShown(decided, waiting, null).map(r => [r.id, r.status]), [[9, 'running'], [7, 'running'], [3, 'ran']]);
-  assert.deepEqual(decidedShown(decided, waiting, 'prod01').map(r => r.id), [9, 3]);
-  assert.deepEqual(decidedShown([row({ id: 9, status: 'ran', decided_at: 900 })], waiting, 'prod01').map(r => r.status), ['ran'], '待ちの一覧が古くても、終わった行は終わったまま');
+  assert.deepEqual(decidedShown(decided, waiting, [], null).map(r => [r.id, r.status]), [[9, 'running'], [7, 'running'], [3, 'ran']]);
+  assert.deepEqual(decidedShown(decided, waiting, [], 'prod01').map(r => r.id), [9, 3]);
+  assert.deepEqual(decidedShown([row({ id: 9, status: 'ran', decided_at: 900 })], waiting, [], 'prod01').map(r => r.status), ['ran'], '待ちの一覧が古くても、終わった行は終わったまま');
 });
 
 test('ui/pending: from の題はタスクの題、無ければ会話の題（画面の会話の一覧から）、どちらも無ければ null', () => {
@@ -160,4 +161,50 @@ test('ui/pending: from の題はタスクの題、無ければ会話の題（画
   assert.equal(fromTitle(row({ conversation_id: 'c1' }), titles), 'Clean up');
   assert.equal(fromTitle(row({ conversation_id: 'c2' }), titles), null);
   assert.equal(fromTitle(row({ conversation_id: 'zz' }), titles), null);
+});
+
+test('ui/pending: 画面で先に置いた行（承認・却下の直後）は、サーバーに同じ行があれば必ずサーバーの方を出す（早く終わった実行が running のまま残らない）', () => {
+  const server = [row({ id: 5, status: 'stale', decided_at: 500 })];
+  const local = [row({ id: 5, status: 'running', decided_at: 600 }), row({ id: 6, status: 'rejected', decided_at: 610, reject_reason: 'no' })];
+  assert.deepEqual(decidedShown(server, [], local, null).map(r => [r.id, r.status]), [[6, 'rejected'], [5, 'stale']]);
+  assert.deepEqual(decidedShown([], [row({ id: 5, status: 'running', decided_at: 590 })], local, null).map(r => [r.id, r.status, r.decided_at]), [[6, 'rejected', 610], [5, 'running', 590]], '待ちの一覧の running もサーバーの行');
+  assert.deepEqual(decidedShown([], [row({ id: 5 })], local, null).map(r => [r.id, r.status]), [[6, 'rejected'], [5, 'running']], 'サーバーがまだ待ちと言う行は、画面の行を出す');
+  assert.deepEqual(decidedShown([], [], [row({ id: 7, status: 'running', project_id: 'prod02' })], 'prod01'), [], '別の製品の行は出さない');
+});
+
+test('ui/pending: 消えていく途中の行は、待ちの一覧が先に読み直されても消え終わるまで残す。消え終わった行は一覧が古くても出さない', () => {
+  const held = [row({ id: 4, created_at: 400 })];
+  assert.deepEqual(waitingShown([row({ id: 3, created_at: 300 })], held, new Set(), null).map(r => r.id), [4, 3]);
+  assert.deepEqual(waitingShown([row({ id: 4, created_at: 400 }), row({ id: 3, created_at: 300 })], held, new Set(), null).map(r => r.id), [4, 3], '同じ行を 2 回出さない');
+  assert.deepEqual(waitingShown([row({ id: 4, created_at: 400 }), row({ id: 3, created_at: 300 })], [], new Set([4]), null).map(r => r.id), [3]);
+  assert.deepEqual(waitingShown([], [row({ id: 4, project_id: 'prod02' })], new Set(), 'prod01'), []);
+});
+
+test('ui/pending: Show earlier は、出している Decided のいちばん下の行（決めた時刻のいちばん古い行）の番号を渡す', () => {
+  const shown = decidedShown([row({ id: 2, status: 'ran', decided_at: 900 }), row({ id: 8, status: 'rejected', decided_at: 100 }), row({ id: 5, status: 'ran', decided_at: 500 })], [], [], null);
+  assert.equal(earlierCursor(shown), 8);
+  assert.equal(earlierCursor([]), undefined);
+});
+
+test('ui/pending: 消す行の効き目はファイルの数で出す（0 や無いときは出さない）', () => {
+  assert.equal(effectFiles(row({ effect: { files: 214, bytes: 3_400_000 } })), 214);
+  assert.equal(effectFiles(row({ effect: { files: 0, bytes: 0 } })), null);
+  assert.equal(effectFiles(row()), null);
+  assert.equal(en['ui.pending.effect'](214), '(214 files)');
+  assert.equal(en['ui.pending.effect'](1), '(1 file)');
+});
+
+test('ui/pending: 送るファイルは、いまの大きさと変えた時刻（フォルダはファイルの数、無いものは無いと）で出す', () => {
+  const facts = fileFacts(row({ files: [
+    { path: 'build/a.zip', exists: true, type: 'file', size: 1_536, mtime: 5_000 },
+    { path: 'out', exists: true, type: 'dir', files: 12, more: true, newest: 6_000 },
+    { path: 'gone.txt', exists: false },
+  ] }));
+  assert.deepEqual(facts, [
+    { path: 'build/a.zip', kind: 'file', bytes: 1_536, at: 5_000 },
+    { path: 'out', kind: 'dir', files: 12, more: true, at: 6_000 },
+    { path: 'gone.txt', kind: 'missing' },
+  ]);
+  assert.deepEqual([512, 1_536, 3_400_000, 5 * 1024 ** 4].map(byteSize), [{ value: '512', unit: 'B' }, { value: '1.5', unit: 'KB' }, { value: '3.2', unit: 'MB' }, { value: '5120.0', unit: 'GB' }]);
+  assert.equal(en['ui.pending.bytes']('1.5', 'KB'), '1.5 KB');
 });
