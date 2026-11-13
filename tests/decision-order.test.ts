@@ -470,7 +470,7 @@ test('4-3a 順 4 の許可の一覧: 開発の実行役は、決まった害の�
     'just --command "curl https://beat-test.invalid/"', 'tox -x tox.envlist=py', 'tox --override tox.envlist=py', 'pytest -o addopts=-p', 'make CC=evil',
     'pytest tests/../../other', 'make -j ../x', 'mocha --reporter ../r.js', 'pytest -p plugin', 'vitest --config x.ts',
     'jest -t --testRunner evilpkg', 'jest -t --globalSetup setup.js', 'jest -t --watchAll', 'vitest -t --config vite.config.ts', 'vitest -t --inspect', 'pytest -k -p evil',
-    'pytest -k "x or ().__class__" tests', 'pytest -m "a__b"', 'mocha --reporter evilpkg', 'mocha --reporter=evilpkg', 'vitest init browser', 'mocha init spec', 'mocha --reporter spec init spec', 'tox devenv venv', 'tox quickstart',
+    'pytest -k "x or ().__class__" tests', 'pytest -m "a__b"', 'mocha --reporter evilpkg', 'mocha --reporter=evilpkg', 'mocha --reporter SPEC', 'mocha --reporter=PROGRESS', 'vitest init browser', 'mocha init spec', 'mocha --reporter spec init spec', 'tox devenv venv', 'tox quickstart',
   ];
   const leaked: string[] = [];
   for (const command of judged) {

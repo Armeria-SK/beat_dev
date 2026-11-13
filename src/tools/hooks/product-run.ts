@@ -60,7 +60,7 @@ const RUNNER_FLAGS: Readonly<Record<string, Readonly<Record<string, FlagValue>>>
 };
 const VALUE_FORMS: Readonly<Record<Exclude<FlagValue, null>, RegExp>> = {
   number: /^\d{1,4}$/u, word: /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/u, expr: /^(?!-)(?!.*__)[A-Za-z0-9_ .:()[\]-]+$/u,
-  reporter: /^(?:spec|dot|nyan|tap|landing|list|progress|json|json-stream|min|doc|markdown|xunit|base)$/iu,
+  reporter: /^(?:spec|dot|nyan|tap|landing|list|progress|json|json-stream|min|doc|markdown|xunit|base)$/u,
 };
 const RUNNER_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
   vitest: new Set(['init']), mocha: new Set(['init']), tox: new Set(['devenv', 'd', 'quickstart', 'q', 'exec', 'e']),
