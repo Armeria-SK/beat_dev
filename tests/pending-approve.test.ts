@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -29,8 +29,8 @@ import { tempDir, testConfig } from './helpers.ts';
 const WINDOWS = process.platform === 'win32';
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
-function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => void = () => undefined) {
-  const paths: AppPaths = resolvePaths(tempDir(t));
+function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => void = () => undefined, base?: string) {
+  const paths: AppPaths = resolvePaths(base ? join(tempDir(t), base) : tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   const raw = testConfig();
   raw.tools.roots = [{ path: 'workspace', mode: 'write' }];
@@ -432,11 +432,11 @@ test('承認（W1-11）: 積んだ git push の行は、積んだあとにコミ
   git('commit', '-q', '-m', 'added after parking');
   const outcome = await r.approve(row.id);
   assert.equal(outcome.status, 'stale', outcome.output);
-  assert.match(outcome.output ?? '', /commits/u);
+  assert.match(outcome.output ?? '', /current branch or its commit changed/u);
 });
 
-function pushRig(t: { after: (fn: () => void) => void }) {
-  const r = rig(t);
+function pushRig(t: { after: (fn: () => void) => void }, base?: string) {
+  const r = rig(t, undefined, base);
   const git = (...args: string[]): string => {
     const out = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: r.ws, encoding: 'utf8' });
     assert.equal(out.status, 0, out.stderr);
@@ -460,8 +460,10 @@ function pushRig(t: { after: (fn: () => void) => void }) {
     git('commit', '-q', '-m', 'added after parking');
     git('checkout', '-q', 'side');
   };
+  let project: NonNullable<ToolContext['project']> | undefined;
   const park = async (command: string) => {
-    const parked = await r.call('shell_run', { command }, { ...r.ctx, project: r.project() });
+    project ??= r.project();
+    const parked = await r.call('shell_run', { command }, { ...r.ctx, project });
     assert.equal(parked.decidedBy, 'pending', `${command}\n${parked.output.content}`);
     return r.latest();
   };
@@ -470,90 +472,221 @@ function pushRig(t: { after: (fn: () => void) => void }) {
 
 const AND = WINDOWS ? '; ' : ' && ';
 
-const LATE_CASES: Array<[string, string, string]> = [
-  ['--force-with-lease', 'git push --force-with-lease {U} feature', 'feature'],
-  ['--force-with-lease で HEAD は別のブランチ、main を動かす', 'git push --force-with-lease {U} main', 'main'],
-  ['ワイルドカードの refspec', 'git push {U} "refs/heads/*:refs/heads/*"', 'feature'],
-  ['push.default=matching', 'git push other', 'feature'],
-  ['消すと push を 1 つのコマンドで（行は消すの種類）', `${WINDOWS ? 'Remove-Item owner.log' : 'rm owner.log'}${AND}git push {U} feature`, 'feature'],
-  ['rm -rf dist と push（HEAD は別のブランチ、main を動かす）', `${WINDOWS ? 'Remove-Item -Recurse -Force dist' : 'rm -rf dist'}${AND}git push {U} main`, 'main'],
-];
-
-for (const [name, template, branch] of LATE_CASES) {
-  test(`承認（W1-11 改）: git push はリポジトリ全体を控え、積んだあとにブランチが動いたら stale: ${name}`, { skip: !gitAvailable }, async t => {
-    const { r, git, late, park, q } = pushRig(t);
-    git('remote', 'add', 'other', JSON.parse(q));
-    git('config', 'push.default', 'matching');
-    const row = await park(template.replace('{U}', q));
-    late(branch);
-    const outcome = await r.approve(row.id);
-    assert.equal(outcome.status, 'stale', outcome.output);
-    assert.match(outcome.output ?? '', /commits it would push changed/u);
-  });
-}
-
-test('承認（W1-11 改）: 何も動かなければ、積んだ git push は承認で動く（対照）', { skip: !gitAvailable }, async t => {
-  const { r, park, q } = pushRig(t);
-  const row = await park(`git push --force-with-lease ${q} feature`);
-  const outcome = await r.approve(row.id);
-  assert.equal(outcome.status, 'ran', outcome.output);
-});
-
-test('承認（W1-11 最終）: HEAD:refs/heads/x は、何も動かなければ動く（対照）', { skip: !gitAvailable }, async t => {
-  const { r, park, q } = pushRig(t);
-  const row = await park(`git push ${q} HEAD:refs/heads/x`);
-  const outcome = await r.approve(row.id);
-  assert.equal(outcome.status, 'ran', outcome.output);
-});
-
-test('承認（W1-11 改）: 追跡用の refs/remotes が積んだあとに動いても stale（どの ref も push で名指しできる）', { skip: !gitAvailable }, async t => {
-  const { r, git, park, q } = pushRig(t);
-  const row = await park(`git push --force-with-lease ${q} feature`);
-  git('update-ref', 'refs/remotes/other/side', 'HEAD');
-  const outcome = await r.approve(row.id);
-  assert.equal(outcome.status, 'stale', outcome.output);
-});
-
 type Git = (...args: string[]) => string;
-const moveRef = (git: Git, ref: string): void => {
-  git('update-ref', ref, git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'moved after parking'));
-};
-const ANY_REF_CASES: Array<[string, (git: Git) => void, string, (git: Git) => void, RegExp]> = [
-  ['refs/remotes の ref を送る', git => git('update-ref', 'refs/remotes/origin/feature', 'HEAD'), 'git push {U} refs/remotes/origin/feature:refs/heads/main', git => moveRef(git, 'refs/remotes/origin/feature'), /commits it would push changed/u],
-  ['stash@{0}', git => { writeFileSync(join(git('rev-parse', '--show-toplevel'), 'a.txt'), 'stashed'); git('stash', '-q'); }, 'git push {U} "stash@{0}:refs/heads/x"', () => undefined, /could not confirm what the push would send/u],
-  ['refs/notes/commits', git => git('notes', 'add', '-m', 'one', 'HEAD'), 'git push {U} refs/notes/commits', git => git('notes', 'add', '-f', '-m', 'two', 'HEAD'), /commits it would push changed/u],
-  ['独自の名前空間の ref', git => git('update-ref', 'refs/beat/x', 'HEAD'), 'git push {U} refs/beat/x:refs/heads/x', git => moveRef(git, 'refs/beat/x'), /commits it would push changed/u],
-  ['独自の名前空間 refs/keep', git => git('update-ref', 'refs/keep/feat', 'HEAD'), 'git push {U} refs/keep/feat:refs/heads/feat', git => moveRef(git, 'refs/keep/feat'), /commits it would push changed/u],
-  ['FETCH_HEAD（積んだあとに git fetch）', git => {
-    const url = git('config', '--get', 'remote.other.url');
-    git('push', '-q', url, 'feature');
-    git('fetch', '-q', url, 'feature');
-  }, 'git push {U} FETCH_HEAD:refs/heads/feat', git => {
-    const url = git('config', '--get', 'remote.other.url');
-    git('push', '-q', url, `${git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'upstream moved')}:refs/heads/feature`);
-    git('fetch', '-q', url, 'feature');
-  }, /commits it would push changed/u],
-  ['HEAD@{1}', () => undefined, 'git push {U} "HEAD@{1}:refs/heads/x"', () => undefined, /could not confirm what the push would send/u],
-  ['控えない擬似 ref REVERT_HEAD', () => undefined, 'git push {U} REVERT_HEAD:refs/heads/x', () => undefined, /could not confirm what the push would send/u],
-  ['REBASE_HEAD（update-ref で作って動かす）', git => git('update-ref', 'REBASE_HEAD', 'HEAD'), 'git push {U} REBASE_HEAD:refs/heads/x', git => moveRef(git, 'REBASE_HEAD'), /Not run/u],
-  ['CUSTOM_HEAD~0（後ろに ~ を付けた擬似 ref）', git => git('update-ref', 'CUSTOM_HEAD', 'HEAD'), 'git push {U} CUSTOM_HEAD~0:refs/heads/x', git => moveRef(git, 'CUSTOM_HEAD'), /Not run/u],
-  ['CUSTOM_HEAD^{commit}（後ろに ^ を付けた擬似 ref）', git => git('update-ref', 'CUSTOM_HEAD', 'HEAD'), 'git push {U} "CUSTOM_HEAD^{commit}:refs/heads/x"', git => moveRef(git, 'CUSTOM_HEAD'), /Not run/u],
-  ['別の作業ツリーの ref', () => undefined, 'git push {U} worktrees/wt/HEAD:refs/heads/x', () => undefined, /could not confirm what the push would send/u],
-  ['--recurse-submodules=on-demand', () => undefined, 'git push --recurse-submodules=on-demand {U} feature', () => undefined, /could not confirm what the push would send/u],
+const remoteRefs = (remote: string): string => spawnSync('git', ['--git-dir', remote, 'for-each-ref', '--format=%(objectname) %(refname)'], { encoding: 'utf8' }).stdout;
+const newCommit = (git: Git): string => git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'made after parking');
+const moveRef = (git: Git, ref: string): void => { git('update-ref', ref, newCommit(git)); };
+const writeRoot = (r: { ws: string }, name: string, sha: string): void => writeFileSync(join(r.ws, '.git', name), `${sha}\n`);
+const UNSEEN = /Not sent: the push tried to send commits that were added after it was parked/u;
+
+type Rig = ReturnType<typeof pushRig>;
+const BLOCKED_CASES: Array<[string, (p: Rig) => void, string, (p: Rig) => void]> = [
+  ['--force-with-lease', () => undefined, 'git push --force-with-lease {U} feature', p => p.late('feature')],
+  ['--force-with-lease で HEAD は別のブランチ、main を動かす', () => undefined, 'git push --force-with-lease {U} main', p => p.late('main')],
+  ['ワイルドカードの refspec', () => undefined, 'git push {U} "refs/heads/*:refs/heads/*"', p => p.late('feature')],
+  ['push.default=matching で引数なし', p => { p.git('remote', 'add', 'other', p.remote); p.git('config', 'push.default', 'matching'); p.git('push', '-q', p.remote, 'feature'); }, 'git push other', p => p.late('feature')],
+  ['消すと push を 1 つのコマンドで（行は消すの種類）', () => undefined, `${WINDOWS ? 'Remove-Item owner.log' : 'rm owner.log'}${AND}git push {U} feature`, p => p.late('feature')],
+  ['rm -rf dist と push（HEAD は別のブランチ、main を動かす）', () => undefined, `${WINDOWS ? 'Remove-Item -Recurse -Force dist' : 'rm -rf dist'}${AND}git push {U} main`, p => p.late('main')],
+  ['refs/remotes の ref', p => p.git('update-ref', 'refs/remotes/origin/feature', 'HEAD'), 'git push {U} refs/remotes/origin/feature:refs/heads/main', p => moveRef(p.git, 'refs/remotes/origin/feature')],
+  ['stash@{0}', p => { writeFileSync(join(p.r.ws, 'a.txt'), 'stash one'); p.git('stash', '-q'); }, 'git push {U} "stash@{0}:refs/heads/x"', p => { writeFileSync(join(p.r.ws, 'a.txt'), 'stash two'); p.git('stash', '-q'); }],
+  ['refs/stash', p => { writeFileSync(join(p.r.ws, 'a.txt'), 'stash one'); p.git('stash', '-q'); }, 'git push {U} refs/stash:refs/heads/x', p => { writeFileSync(join(p.r.ws, 'a.txt'), 'stash two'); p.git('stash', '-q'); }],
+  ['refs/notes/commits', p => p.git('notes', 'add', '-m', 'one', 'HEAD'), 'git push {U} refs/notes/commits', p => p.git('notes', 'add', '-f', '-m', 'two', 'HEAD')],
+  ['独自の名前空間 refs/beat', p => p.git('update-ref', 'refs/beat/x', 'HEAD'), 'git push {U} refs/beat/x:refs/heads/x', p => moveRef(p.git, 'refs/beat/x')],
+  ['独自の名前空間 refs/keep', p => p.git('update-ref', 'refs/keep/feat', 'HEAD'), 'git push {U} refs/keep/feat:refs/heads/feat', p => moveRef(p.git, 'refs/keep/feat')],
+  ['REBASE_HEAD', p => p.git('update-ref', 'REBASE_HEAD', 'HEAD'), 'git push {U} REBASE_HEAD:refs/heads/x', p => moveRef(p.git, 'REBASE_HEAD')],
+  ['CUSTOM_HEAD~0', p => p.git('update-ref', 'CUSTOM_HEAD', 'HEAD'), 'git push {U} CUSTOM_HEAD~0:refs/heads/x', p => moveRef(p.git, 'CUSTOM_HEAD')],
+  ['CUSTOM_HEAD^{commit}', p => p.git('update-ref', 'CUSTOM_HEAD', 'HEAD'), 'git push {U} "CUSTOM_HEAD^{commit}:refs/heads/x"', p => moveRef(p.git, 'CUSTOM_HEAD')],
+  ['FETCH_HEAD（積んだあとに fetch）', p => { p.git('push', '-q', p.remote, 'feature'); p.git('fetch', '-q', p.remote, 'feature'); }, 'git push {U} FETCH_HEAD:refs/heads/feat', p => { p.git('push', '-q', p.remote, `${newCommit(p.git)}:refs/heads/feature`); p.git('fetch', '-q', p.remote, 'feature'); }],
+  ['実行時に読む名前（r.txt = HEAD@{1}、reflog だけが動く）', p => writeFileSync(join(p.r.ws, 'r.txt'), 'HEAD@{1}'), 'git push {U} "$(cat r.txt):refs/heads/feat"', p => { const was = p.git('rev-parse', 'HEAD'); p.git('update-ref', 'HEAD', newCommit(p.git)); p.git('update-ref', 'HEAD', was); }],
+  ['.git 直下の X1_HEAD', p => writeRoot(p.r, 'X1_HEAD', p.git('rev-parse', 'HEAD')), 'git push {U} X1_HEAD:refs/heads/x', p => writeRoot(p.r, 'X1_HEAD', newCommit(p.git))],
+  ['.git 直下の X-Y', p => writeRoot(p.r, 'X-Y', p.git('rev-parse', 'HEAD')), 'git push {U} X-Y:refs/heads/x', p => writeRoot(p.r, 'X-Y', newCommit(p.git))],
+  ['.git 直下の foo_head', p => writeRoot(p.r, 'foo_head', p.git('rev-parse', 'HEAD')), 'git push {U} foo_head:refs/heads/x', p => writeRoot(p.r, 'foo_head', newCommit(p.git))],
+  ['新しい注釈付きタグ（前からのコミットを指す）', () => undefined, 'git push {U} v1', p => p.git('tag', '-a', 'v1', '-m', 'v1', 'feature')],
+  ['終わりの値を 0 にしても', () => undefined, WINDOWS ? 'git push {U} feature; exit 0' : 'git push {U} feature || true', p => p.late('feature')],
 ];
 
-for (const [name, setup, template, move, message] of ANY_REF_CASES) {
-  test(`承認（W1-11 最終）: push が名指しできるどの ref も控え、決められない形は確かめられない: ${name}`, { skip: !gitAvailable }, async t => {
-    const { r, git, park, q } = pushRig(t);
-    git('remote', 'add', 'other', JSON.parse(q));
-    setup(git);
-    const row = await park(template.replace('{U}', q));
-    move(git);
-    const outcome = await r.approve(row.id);
-    assert.equal(outcome.status, 'stale', outcome.output);
-    assert.match(outcome.output ?? '', message);
+for (const [name, setup, template, move] of BLOCKED_CASES) {
+  test(`承認（W1-11 作り直し）: 置いたあとのコミットは送る直前に git のフックが止める: ${name}`, { skip: !gitAvailable }, async t => {
+    const p = pushRig(t);
+    setup(p);
+    const row = await p.park(template.replace('{U}', p.q));
+    move(p);
+    const before = remoteRefs(p.remote);
+    const outcome = await p.r.approve(row.id);
+    assert.equal(outcome.status, 'failed', outcome.output);
+    assert.match(outcome.output ?? '', UNSEEN);
+    assert.equal(remoteRefs(p.remote), before, '送り先は変わらない');
   });
 }
+
+test('承認（W1-11 作り直し）: データのフォルダのパスに空白と日本語があっても、フックが動いて止める', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t, 'データ フォルダ');
+  const row = await p.park(`git push --force-with-lease ${p.q} feature`);
+  p.late('feature');
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'failed', outcome.output);
+  assert.match(outcome.output ?? '', UNSEEN);
+  assert.equal(remoteRefs(p.remote), '');
+});
+
+test('承認（W1-11 作り直し）: 何も動かなければ送れる。refs/remotes だけが動いても（fetch）stale にせず送れる（対照）', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  const row = await p.park(`git push --force-with-lease ${p.q} feature`);
+  p.git('update-ref', 'refs/remotes/other/side', newCommit(p.git));
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+  assert.match(remoteRefs(p.remote), new RegExp(`${p.git('rev-parse', 'feature')} refs/heads/feature`, 'u'));
+});
+
+test('承認（W1-11 作り直し）: HEAD のブランチにコミットを足すと、何も動かさずに stale（changed_head）', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  const row = await p.park(`git push ${p.q} side`);
+  p.late('side');
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.match(outcome.output ?? '', /current branch or its commit changed/u);
+  assert.equal(remoteRefs(p.remote), '');
+});
+
+for (const [name, exit, moved, delivered, ownerRan] of [
+  ['確かめが通れば持ち主の pre-push が同じ入力で動く', 0, false, true, true],
+  ['持ち主の pre-push が失敗すれば送られない', 1, false, false, true],
+  ['確かめが止めれば持ち主の pre-push は動かない', 0, true, false, false],
+] as const) {
+  test(`承認（W1-11 作り直し）: 持ち主のフック: ${name}`, { skip: !gitAvailable }, async t => {
+    const p = pushRig(t);
+    writeFileSync(join(p.r.ws, '.git', 'hooks', 'pre-push'), `#!/bin/sh\ncat > owner-input.txt\necho "$1" >> owner-input.txt\nexit ${exit}\n`, { mode: 0o755 });
+    const row = await p.park(`git push ${p.q} feature`);
+    const check = await shellPreCheck({ command: `git push ${p.q} feature` }, { ...p.r.ctx, project: { id: 'x', root: p.r.ws } });
+    assert.ok(check?.ownHooksDir, '持ち主のフックの場所が分かる');
+    if (moved) p.late('feature');
+    const outcome = await p.r.approve(row.id);
+    assert.equal(remoteRefs(p.remote) !== '', delivered, outcome.output);
+    assert.equal(existsSync(join(p.r.ws, 'owner-input.txt')), ownerRan, outcome.output);
+    if (ownerRan) assert.match(readFileSync(join(p.r.ws, 'owner-input.txt'), 'utf8'), /refs\/heads\/feature [0-9a-f]{40}/u);
+    if (moved) assert.match(outcome.output ?? '', UNSEEN);
+  });
+}
+
+test('承認（W1-11 作り直し）: ref を消す push は通る', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  p.git('push', '-q', p.remote, 'feature');
+  p.git('remote', 'add', 'other', p.remote);
+  const row = await p.park('git push other --delete feature');
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+  assert.equal(remoteRefs(p.remote), '');
+});
+
+test('承認（W1-11 作り直し）: 置く前から remote.origin.push があるリポジトリの push は、beat が設定を読まないので送らない', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  p.git('remote', 'add', 'origin', p.remote);
+  p.git('branch', 'hidden');
+  p.git('config', 'remote.origin.push', 'refs/heads/hidden:refs/heads/main');
+  const row = await p.park('git push origin');
+  p.late('hidden');
+  const outcome = await p.r.approve(row.id);
+  assert.notEqual(outcome.status, 'ran', outcome.output);
+  assert.equal(remoteRefs(p.remote), '');
+});
+
+test('承認（W1-11 作り直し）: 置いたあとに remote.origin.push を書くと stale（送り先の控え）', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  p.git('remote', 'add', 'origin', p.remote);
+  const row = await p.park('git push origin feature');
+  p.git('config', 'remote.origin.push', 'refs/heads/side:refs/heads/main');
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.equal(remoteRefs(p.remote), '');
+});
+
+for (const [name, template] of [
+  ['--no-verify', 'git push --no-verify {U} feature'],
+  ['--no-ver（略した形）', 'git push --no-ver {U} feature'],
+  ['-c core.hooksPath', 'git -c core.hooksPath=x push {U} feature'],
+  ['背景で動く push', WINDOWS ? 'Start-Job { git push {U} feature }' : 'git push {U} feature > o.txt 2>&1 &'],
+] as const) {
+  test(`承認（W1-11 作り直し）: フックを外しうる形は確かめられない（push_unconfirmed）: ${name}`, { skip: !gitAvailable }, async t => {
+    const p = pushRig(t);
+    const row = await p.park(template.replace('{U}', p.q));
+    const outcome = await p.r.approve(row.id);
+    assert.equal(outcome.status, 'stale', outcome.output);
+    assert.match(outcome.output ?? '', /could not confirm what the push would send/u);
+    assert.equal(remoteRefs(p.remote), '');
+  });
+}
+
+test('承認（W1-11 作り直し）: フックを置けないと、push は動かず failed（push_check_unavailable）', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  const row = await p.park(`git push ${p.q} feature`);
+  mkdirSync(p.r.paths.data, { recursive: true });
+  rmSync(join(p.r.paths.data, 'git-run'), { recursive: true, force: true });
+  writeFileSync(join(p.r.paths.data, 'git-run'), 'not a folder');
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'failed', outcome.output);
+  assert.match(outcome.output ?? '', /could not set up its check of what the push sends/u);
+  assert.equal(remoteRefs(p.remote), '');
+});
+
+test('承認（W1-11 作り直し）: コマンドが止めの文と同じ文を出しても、送れたなら push_unseen にしない', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  const row = await p.park(`git push ${p.q} feature${AND}echo "Not sent: the push tried to send commits that were added after it was parked"`);
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+  assert.notEqual(remoteRefs(p.remote), '');
+});
+
+test('承認（W1-11 作り直し）: 同じコマンドの中で data/git-run を字で名指すと、置くときに断る', async t => {
+  const r = rig(t);
+  const target = join(r.paths.data, 'git-run', 'x', 'hooks', 'pre-push');
+  const check = await shellPreCheck({ command: WINDOWS ? `Get-Content ${JSON.stringify(target)}` : `cat ${JSON.stringify(target)}` }, r.ctx);
+  assert.equal(check?.decision, 'deny', JSON.stringify(check?.reasons));
+});
+
+test('承認（W1-11 作り直し）: git replace で辿り方をすり替えても、新しいコミットは送れず、tip を送っても新しい中身は届かない', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  const viaFile = await p.park(`git push ${p.q} refs/hidden/n:refs/heads/n`);
+  const tip = await p.park(`git push ${p.q} feature`);
+  writeFileSync(join(p.r.ws, 'secret.txt'), 'never seen by the owner');
+  p.git('add', 'secret.txt');
+  const tree = p.git('write-tree');
+  p.git('reset', '-q');
+  const made = p.git('commit-tree', tree, '-p', 'feature', '-m', 'hidden');
+  p.git('replace', '--graft', p.git('rev-parse', 'feature'), made);
+  p.git('update-ref', 'refs/hidden/n', made);
+  const blocked = await p.r.approve(viaFile.id);
+  assert.equal(blocked.status, 'failed', blocked.output);
+  assert.match(blocked.output ?? '', UNSEEN);
+  const sent = await p.r.approve(tip.id);
+  assert.equal(sent.status, 'ran', sent.output);
+  assert.notEqual(spawnSync('git', ['--git-dir', p.remote, 'cat-file', '-e', made]).status, 0, '新しいコミットは届かない');
+});
+
+test('承認（W1-11 作り直し）: push 以外の git の送り（send-pack）は全体の控えで止める（changed_commits）', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  const row = await p.park(`git send-pack ${p.q} refs/heads/feature`);
+  p.late('feature');
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.match(outcome.output ?? '', /commits it would push changed/u);
+  assert.equal(remoteRefs(p.remote), '');
+});
+
+test('承認（W1-11 作り直し）: commit と push を 1 つの行にすると、コミットは残り push は止まる。push だけを頼み直せば送れる', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  p.git('config', 'user.name', 't');
+  p.git('config', 'user.email', 't@example.invalid');
+  writeFileSync(join(p.r.ws, 'work.txt'), 'new work');
+  const row = await p.park(`git add work.txt${AND}git commit -q -m work${AND}git push ${p.q} side`);
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'failed', outcome.output);
+  assert.match(outcome.output ?? '', UNSEEN);
+  assert.equal(p.git('log', '-1', '--format=%s'), 'work');
+  assert.equal(remoteRefs(p.remote), '');
+  const again = await p.park(`git push ${p.q} side`);
+  assert.equal((await p.r.approve(again.id)).status, 'ran');
+  assert.match(remoteRefs(p.remote), /refs\/heads\/side/u);
+});
 
 const UNPINNED_CASES: Array<[string, string]> = [
   ['--git-dir', 'git --git-dir=.git push {U} feature'],

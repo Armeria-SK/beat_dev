@@ -157,7 +157,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const before = state.snapshot ?? { git: null, paths: [] };
       changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
     }
-    const pushedNow = state.pushes?.length ? await pushFacts(state.pushes, deps.paths.data) : undefined;
+    const pushedNow = state.pushes?.length ? (await pushFacts(state.pushes, deps.paths.data)).fingerprint : undefined;
     const again = await recheck();
     if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
     if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(row.cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
@@ -198,12 +198,14 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });
     }
     if (state.pushed !== undefined && (state.pushed.startsWith(PUSH_UNCONFIRMED) || pushedNow?.startsWith(PUSH_UNCONFIRMED))) return end('stale', pendingText('en', 'push_unconfirmed'));
-    if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', 'changed_commits'));
+    if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', state.pushes?.every(p => p.parsed) ? 'changed_head' : 'changed_commits'));
+    const pushCheck = state.pushes?.length ? { tips: state.tips ?? [], required: state.pushes.some(p => p.parsed) } : undefined;
 
     const started = Date.now();
     let output: ToolOutput;
-    try { output = await tool.execute(args as never, ctx, { approvedOnce: true, ...(again ? { check: again } : {}), ...(again?.bind !== undefined ? { bind: again.bind } : {}) }); }
+    try { output = await tool.execute(args as never, ctx, { approvedOnce: true, ...(again ? { check: again } : {}), ...(again?.bind !== undefined ? { bind: again.bind } : {}), ...(pushCheck ? { pushCheck } : {}) }); }
     catch (error) { output = { content: pendingText('en', 'exec_error', { detail: (error as Error).message }), isError: true }; }
+    if (output.pushCheckUnavailable) return end('failed', pendingText('en', 'push_check_unavailable'));
     if (signal.aborted && deps.signal?.aborted) output = { content: `${output.content}\n\n${pendingText('en', 'cancelled_stop')}`, isError: true };
     const network = tool.effect === 'network' || (() => { try { return tool.networkCall?.(args as never) === true; } catch { return true; } })();
     const egress = again?.decision === 'ask' && again.askKinds?.includes('egress') === true;
@@ -218,6 +220,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       VALUES (?, ?, ?, ?, ?, 'allow', 'owner-pending', ?, ?, ?, ?, ?, ?)`).run(
       randomUUID(), row.run_id, kept ? row.conversation_id : null, row.tool, shownInput, `pending:${row.id}`, output.isError ? 0 : 1, Date.now() - started, preview, kept ? output.fullRef ?? null : null, started,
     );
+    if (output.pushRefused) return end('failed', kept ? `${pendingText('en', 'push_unseen')}\n\n${output.content}` : pendingText('en', 'push_unseen'), { fetched }, kept ? { exitCode: output.exitCode, fullRef: output.fullRef } : { exitCode: output.exitCode });
     const ran = output.exitCode !== undefined || !output.isError;
     return end(ran ? 'ran' : 'failed', kept ? output.content : undefined, { fetched }, kept ? { exitCode: output.exitCode, fullRef: output.fullRef } : { exitCode: output.exitCode });
   } catch (error) {

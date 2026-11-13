@@ -4,7 +4,7 @@ import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import type { PreCheck, ToolDef } from '../types.ts';
 import { outboundText, type OutboundMessageKey } from '../../shared/messages/outbound.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
-import { HASHED_PSEUDO_REFS, longOption, pushProblem, pushRepo, type PushEnv } from './push-target.ts';
+import { longOption, pushProblem, pushRepo, type PushEnv } from './push-target.ts';
 import { isInside, realish } from './scope.ts';
 import type { FactWord, StatementFacts } from './shell-guard.ts';
 
@@ -462,17 +462,22 @@ export function placesOf(statements: readonly StatementFacts[], cwd: string): st
 }
 
 const PUBLISHERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
-export interface RepoBind { dir: string | null }
+export interface RepoBind { dir: string | null; parsed?: boolean }
 
-export function pushesOf(statements: readonly StatementFacts[]): RepoBind[] {
+const DETACHING = new Set(['shape.background', 'code.spawn']);
+
+export function pushesOf(statements: readonly StatementFacts[], reasonKeys: readonly string[] = []): RepoBind[] {
   const out: RepoBind[] = [];
+  const detached = reasonKeys.some(k => DETACHING.has(k)) || flatten(statements).some(st => st.reasonKeys.some(k => DETACHING.has(k)));
   const visit = (list: readonly StatementFacts[], prior: readonly StatementFacts[]): void => list.forEach((st, i) => {
     const before = [...prior, ...list.slice(0, i)];
     if (st.inner) visit(st.inner, [...before, st]);
     if (st.program !== 'git') return;
     const found = gitHit(st, before, NO_GIT);
     if (!found || (found.kind !== 'send' && found.key !== 'delete.git_remote_branch')) return;
-    out.push({ dir: found.key === 'send.git_unknown' || pushUnconfirmable(st) ? null : pushRepo(st, before) });
+    const parsed = found.key !== 'send.git_unknown' && st.words[st.gitGlobal.length + 1]?.text === 'push';
+    const dir = found.key === 'send.git_unknown' || pushUnconfirmable(st) || (parsed && detached) ? null : pushRepo(st, before);
+    out.push(parsed ? { dir, parsed } : { dir });
   });
   visit(statements, []);
   return out;
@@ -484,18 +489,10 @@ function pushUnconfirmable(st: StatementFacts): boolean {
   const subAt = st.gitGlobal.length + 1;
   if (st.words[subAt]?.text !== 'push') return false;
   const args = st.words.slice(subAt + 1);
-  const positionals = args.filter((w, i) => !w.text.startsWith('-') && !PUSH_OPTION_VALUE.has(args[i - 1]?.text ?? ''));
-  const refspecs = args.some(w => longOption(w.text, '--repo')) ? positionals : positionals.slice(1);
-  if (refspecs.some(w => unhashedSource(w.text.replace(/^\+/u, '').split(':')[0]!.replace(/[~^@].*$/su, '')))) return true;
   return args.some((w, i) => {
-    if (w.text.includes('@{')) return true;
+    if (longOption(w.text, '--no-verify')) return true;
     if (!longOption(w.text, '--recurse-submodules')) return false;
     const at = w.text.indexOf('=');
     return !RECURSE_PINNED.has(at >= 0 ? w.text.slice(at + 1) : args[i + 1]?.text ?? '');
   });
 }
-
-const PUSH_OPTION_VALUE = new Set(['-o', '--push-option']);
-
-const unhashedSource = (source: string): boolean =>
-  (/^[A-Z][A-Z_]*$/u.test(source) && source !== 'HEAD' && !HASHED_PSEUDO_REFS.includes(source)) || /^(?:worktrees|main-worktree)\//u.test(source);

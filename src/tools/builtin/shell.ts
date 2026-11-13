@@ -132,7 +132,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const created = new Set<string>();
   const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, cwd.cwd, ctx, childEnv, gitExe, language, created);
   const places = placesOf(verdict.statements, cwd.cwd);
-  const pushes = pushesOf(verdict.statements);
+  const pushes = pushesOf(verdict.statements, verdict.reasonKeys);
   const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];
   const effects = { sends: verdict.sends, removes: verdict.removes, writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects };
@@ -176,14 +176,22 @@ export const shellRun: ToolDef<ShellInput> = {
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
     const child = childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh');
     const ownerHooks = info?.approvedOnce === true ? info.check?.ownHooksDir : undefined;
-    const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ...(ownerHooks ? { ownerHooks } : {}), ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
+    const pushCheck = info?.pushCheck;
+    const prePush = pushCheck ? { prePush: { tips: pushCheck.tips, node: process.execPath, ...(ownerHooks ? { ownerHooks } : {}) } } : {};
+    const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ...(ownerHooks ? { ownerHooks } : {}), ...prePush, ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
+    if (pushCheck?.required && gitRun?.prePushReady !== true) {
+      gitRun?.cleanup();
+      return { content: '', isError: true, pushCheckUnavailable: true };
+    }
     let result;
+    let pushRefused = false;
     try {
       result = await runProcess(shell.file, shell.args(input.command), {
         cwd: cwd.cwd, env: { ...child.env, ...gitRun?.env }, timeoutMs: timeoutSec * 1000, signal: ctx.signal,
         maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
         ...(shell.stdin ? { input: shell.stdin(input.command) } : {}),
       });
+      pushRefused = gitRun?.refused?.() === true;
     } finally { gitRun?.cleanup(); }
     if (result.spawnError) return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: result.spawnError }), isError: true };
     const parts = [`$ ${input.command}`, toolText(language, 'shell.header', { shell: shell.name, cwd: cwd.cwd, code: result.exitCode ?? '—', seconds: (result.durationMs / 1000).toFixed(1) })];
@@ -197,6 +205,7 @@ export const shellRun: ToolDef<ShellInput> = {
       isError: result.timedOut || result.aborted || result.exitCode !== 0,
       ...(result.fullOutputPath ? { fullRef: result.fullOutputPath } : {}),
       ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}),
+      ...(pushRefused ? { pushRefused } : {}),
     };
   },
 };

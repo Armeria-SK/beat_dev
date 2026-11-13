@@ -45,6 +45,8 @@ export interface ToolOutput {
   // この結果に添える画像（image_view）。エンジンが道具の結果の発言に持たせて保存し、画像を読めるモデルにだけ渡す。失敗（isError）の結果の画像は保存しない。tool.result の出来事・tool_calls の行・output_preview には入れない（文字だけ）
   images?: ImageRef[];
   exitCode?: number;
+  pushRefused?: boolean;
+  pushCheckUnavailable?: boolean;
 }
 
 export interface PreCheck {
@@ -76,7 +78,7 @@ export interface PreCheck {
   places?: string[];
   created?: string[];
   readPaths?: string[];
-  pushes?: Array<{ dir: string | null }>;
+  pushes?: Array<{ dir: string | null; parsed?: boolean }>;
 }
 
 // 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
@@ -90,6 +92,7 @@ export interface ExecuteInfo {
   bind?: string;
   // この呼び出しの id（モデルが付けたもの。agent_run が、画面の agent.state をどの呼び出しの行に結ぶかに使う）
   callId?: string;
+  pushCheck?: { tips: readonly string[]; required: boolean };
 }
 
 export interface ToolContext {

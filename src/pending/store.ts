@@ -35,7 +35,7 @@ export interface ParkInput {
   places?: string[] | undefined;
   created?: string[] | undefined;
   filesMore?: boolean | undefined;
-  pushes?: Array<{ dir: string | null }> | undefined;
+  pushes?: Array<{ dir: string | null; parsed?: boolean }> | undefined;
   runId: string;
   runKind: RunKind;
   conversationId: string;
@@ -64,8 +64,9 @@ export interface PendingState {
   places?: string[];
   created?: CreatedMark[];
   filesMore?: true;
-  pushes?: Array<{ dir: string | null }>;
+  pushes?: Array<{ dir: string | null; parsed?: boolean }>;
   pushed?: string;
+  tips?: string[];
 }
 
 export interface CreatedMark { path: string; id: string; inside?: string; more?: true }
@@ -264,6 +265,7 @@ export class PendingStore {
     const outward = (kind: string | undefined): boolean => kind === 'send' || kind === 'delete';
     const leaves = outward(input.kind) || outward(input.outbound?.kind);
     const pushes = input.pushes?.length ? input.pushes : leaves && inspectRepo(input.cwd).found ? [{ dir: input.cwd }] : [];
+    const pushState = pushes.length ? await pushFacts(pushes, this.#o.dataDir) : undefined;
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {
@@ -274,13 +276,13 @@ export class PendingStore {
       ...(places.length ? { places } : {}),
       ...(created.length ? { created } : {}),
       ...(input.filesMore ? { filesMore: true as const } : {}),
-      ...(pushes.length ? { pushes, pushed: await pushFacts(pushes, this.#o.dataDir) } : {}),
+      ...(pushState ? { pushes, pushed: pushState.fingerprint, ...(pushState.tips ? { tips: pushState.tips } : {}) } : {}),
       ...(input.check ? { recheck: recheckOf(input.check, toolMask) } : {}),
       ...(input.kind === 'delete' ? { snapshot: await takeSnapshot(input.cwd, targets, this.#o.dataDir) } : {}),
       ...(preview?.length ? { preview: preview.map(p => ({ ...p, text: redactSecrets(toolMask(p.text)) })) } : {}),
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
       ...(files.length ? { sent: boundFacts(files) } : {}),
-      ...(input.kind === 'send' ? { destination: destinationFacts(input.cwd, places) } : {}),
+      ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(

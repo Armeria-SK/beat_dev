@@ -204,24 +204,33 @@ async function gitFact(cwd: string, dataDir: string): Promise<GitFact | null> {
 
 export const PUSH_UNCONFIRMED = 'unconfirmed:';
 
-export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null }>, dataDir: string): Promise<string> {
-  const never = (): string => `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}`;
+export const MAX_TIPS = 10_000;
+
+export interface PushState { fingerprint: string; tips?: string[] }
+
+export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; parsed?: boolean }>, dataDir: string): Promise<PushState> {
+  const never = (): PushState => ({ fingerprint: `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}` });
   const lines: string[] = [];
-  for (const { dir } of pushes) {
+  const tips = new Set<string>();
+  for (const { dir, parsed } of pushes) {
     if (dir === null) return never();
     const line = await withGit<string | null>(dir, dataDir, `${dir}\0no-repo`, null, async git => {
       const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
       const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
-      const refs = await git(['for-each-ref', '--include-root-refs', '--format=%(objectname) %(refname)']);
+      const rooted = await git(['for-each-ref', '--include-root-refs', '--format=%(objectname) %(refname)']);
+      const refs = rooted ?? (parsed ? await git(['for-each-ref', '--format=%(objectname) %(refname)']) : null);
       if (refs === null) return null;
       const pseudo: string[] = [];
       for (const name of HASHED_PSEUDO_REFS) pseudo.push(`${name} ${(await git(['rev-parse', '--verify', '-q', '--end-of-options', name]))?.trim() || 'absent'}`);
-      return `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).update(pseudo.join('\n')).digest('hex')}`;
+      for (const sha of [head, ...refs.split('\n').map(l => l.split(' ')[0]!), ...pseudo.map(p => p.split(' ')[1]!)]) if (/^[0-9a-f]{40,64}$/u.test(sha)) tips.add(sha);
+      return parsed ? `${dir}\0parsed\0${head}\0${branch}` : `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).update(pseudo.join('\n')).digest('hex')}`;
     });
     if (line === null) return never();
     lines.push(line);
   }
-  return createHash('sha256').update(lines.join('\n')).digest('hex');
+  const fingerprint = createHash('sha256').update(lines.join('\n')).digest('hex');
+  if (tips.size > MAX_TIPS) return pushes.some(p => p.parsed) ? never() : { fingerprint };
+  return { fingerprint, tips: [...tips].sort() };
 }
 
 export async function takeSnapshot(cwd: string, targets: readonly string[], dataDir: string): Promise<Snapshot> {
