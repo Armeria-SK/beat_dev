@@ -40,6 +40,7 @@ export interface Task {
   project_id: string | null;
   proposed_by: string | null;
   acceptance_items: string | null;
+  owner_request: string | null;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -63,6 +64,7 @@ export interface CreateTask {
   localOnly?: boolean | undefined;
   projectId?: string | null | undefined;
   acceptanceItems?: readonly string[] | undefined;
+  ownerRequest?: boolean | undefined;
   actor: string;
 }
 
@@ -105,6 +107,18 @@ export const UNTRUSTED_RUN = 'untrusted-input';
 const TEXT_EVENT_KINDS: readonly string[] = ['context', 'note', 'edited'];
 const TEXT_EVENTS = TEXT_EVENT_KINDS.map(kind => `'${kind}'`).join(', ');
 export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }
+const SOURCE_MARK_ACTORS = ['mesh', 'build'] as const;
+interface OwnerRequest { title: string; body: string; doneCriteria: string | null }
+
+function ownerRequestOf(raw: string | null | undefined): OwnerRequest | undefined {
+  if (!raw) return undefined;
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return undefined; }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const { title, body, doneCriteria } = value as Record<string, unknown>;
+  if (typeof title !== 'string' || typeof body !== 'string' || (doneCriteria !== null && typeof doneCriteria !== 'string')) return undefined;
+  return { title, body, doneCriteria };
+}
 
 function firstLine(text: string | null): string | null {
   const line = text?.split('\n').find(l => l.trim())?.trim();
@@ -231,8 +245,41 @@ export class TaskStore {
 
   judgeRequest(id: string): string {
     const task = this.get(id);
-    if (!task || this.beatDecided(id) || this.#textTainted(task.id, task.parent_id)) return '';
+    if (!task || this.beatDecided(id)) return '';
+    const holder = task.owner_request === null && task.parent_id ? this.get(task.parent_id) : task;
+    const owner = ownerRequestOf(holder?.owner_request);
+    if (owner && holder) {
+      if (this.#sourceTainted(task.id, task.parent_id)) return '';
+      return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria].filter(Boolean).join('\n');
+    }
+    if (this.#textTainted(task.id, task.parent_id)) return '';
     return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
+  }
+
+  ownerEdited(id: string, patch: { title?: string | undefined; body?: string | undefined; doneCriteria?: string | null | undefined }): void {
+    const task = this.get(id);
+    const current = ownerRequestOf(task?.owner_request);
+    if (!task || !current) return;
+    if (patch.body !== undefined && this.textTainted(id)) {
+      this.#db.prepare('UPDATE tasks SET owner_request = NULL WHERE id = ?').run(id);
+      return;
+    }
+    const next: OwnerRequest = {
+      title: patch.title?.trim() || current.title,
+      body: patch.body !== undefined ? patch.body : current.body,
+      doneCriteria: patch.doneCriteria !== undefined ? patch.doneCriteria : current.doneCriteria,
+    };
+    this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(JSON.stringify(next), id);
+  }
+
+  textTainted(id: string): boolean {
+    const task = this.get(id);
+    return task !== undefined && this.#textTainted(task.id, task.parent_id);
+  }
+
+  #sourceTainted(taskId: string, parentId: string | null): boolean {
+    return this.#db.prepare(`SELECT 1 FROM task_events WHERE task_id IN (?, ?) AND run_id = ? AND kind = 'context' AND actor IN (${SOURCE_MARK_ACTORS.map(() => '?').join(', ')}) LIMIT 1`)
+      .get(taskId, parentId ?? taskId, UNTRUSTED_RUN, ...SOURCE_MARK_ACTORS) !== undefined;
   }
 
   #textTainted(taskId: string, parentId: string | null): boolean {
@@ -272,10 +319,11 @@ export class TaskStore {
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, local_only, project_id, acceptance_items, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    const ownerRequest: OwnerRequest | null = input.ownerRequest ? { title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null } : null;
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, local_only, project_id, acceptance_items, owner_request, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.localOnly ? 1 : 0, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.localOnly ? 1 : 0, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, ownerRequest ? JSON.stringify(ownerRequest) : null, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);
@@ -403,7 +451,10 @@ export class TaskStore {
 
   markUntrusted(taskId: string, actor: string, note: string): void {
     transaction(this.#db, () => {
-      if (this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND run_id = ? AND kind = 'context' LIMIT 1").get(taskId, UNTRUSTED_RUN)) return;
+      const mark = this.#db.prepare("SELECT id, actor FROM task_events WHERE task_id = ? AND run_id = ? AND kind = 'context' ORDER BY id LIMIT 1").get(taskId, UNTRUSTED_RUN) as { id: number; actor: string } | undefined;
+      const source = (SOURCE_MARK_ACTORS as readonly string[]).includes(actor);
+      if (mark && source && !(SOURCE_MARK_ACTORS as readonly string[]).includes(mark.actor)) this.#db.prepare('UPDATE task_events SET actor = ?, content = ? WHERE id = ?').run(actor, note, mark.id);
+      if (mark) return;
       this.event(taskId, 'context', actor, note, UNTRUSTED_RUN);
     });
   }

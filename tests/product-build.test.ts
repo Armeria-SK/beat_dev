@@ -479,7 +479,7 @@ test('3-2-s Build の頼み: 外を読んだ会話のきれいな実行が task_
 
   assert.equal((await s.json(`/api/conversations/${uuid(60)}`, 'DELETE')).status, 200);
   assert.equal(s.app.conversations.get(uuid(60)), undefined);
-  assert.equal(s.app.tasks.judgeRequest(taskId), '', '会話を消したあとも、外を読んだ会話の実行が書いた印が残り、判定役に頼みを渡さない');
+  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}`, '4-J: 会話を消したあとも、頼みは Build を作ったときの決まった文だけ（メモは入らない）');
 
   mkdirSync(s.paths.workspace, { recursive: true });
   const file = join(s.paths.workspace, 'notes.txt');
@@ -499,8 +499,12 @@ test('3-2-s Build の頼み: 外を読んだ会話のきれいな実行が task_
   const cards = s.app.approvals.pending();
   for (const card of cards) s.app.approvals.decide(card.id, 'deny');
   await started.done;
-  assert.deepEqual(cards.map(card => [...(card.kinds ?? [])]), [['taint']], '持ち主に聞く札が出る');
-  assert.equal(s.adapter().calls.slice(before).filter(isClassifier).length, 0, '判定役は呼ばれない');
+  const judged = s.adapter().calls.slice(before).filter(isClassifier);
+  assert.equal(cards.length, 0, '4-J: 持ち主の頼みがあるので札は出ない');
+  assert.equal(judged.length, 1, '4-J: 判定役が持ち主の頼みで決める');
+  const seen = judged.map(c => JSON.stringify(c.messages)).join('\n');
+  assert.match(seen, new RegExp(`Build: ${product.name}`, 'u'));
+  assert.doesNotMatch(seen, /NOTE-MARKER/u);
 });
 
 test('3-2-s Build のタスクは版から参照されるので消せない（実行の時刻を付けても）。取り消しはできる', async t => {
