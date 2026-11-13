@@ -465,6 +465,16 @@ const PUBLISHERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 export interface RepoBind { dir: string | null; parsed?: boolean }
 
 const DETACHING = new Set(['shape.background', 'code.spawn']);
+const HOOKLESS_SENDERS = new Set(['send-pack', 'http-push', 'send-email']);
+const LOCATION_PROGRAMS = new Set(['cd', 'set-location', 'push-location', 'pushd']);
+const SUBSTITUTION = /\$\(|`|@\(/u;
+
+function literalLocation(st: StatementFacts): boolean {
+  if (!LOCATION_PROGRAMS.has(st.program) || st.programDynamic || st.env.length || st.inner) return false;
+  const args = st.words.slice(1);
+  const rest = args[0] && /^-(?:path|literalpath)$/iu.test(args[0].text) ? args.slice(1) : args;
+  return rest.length === 1 && !rest[0]!.dynamic && !rest[0]!.glob && !rest[0]!.text.startsWith('-');
+}
 
 export function pushesOf(statements: readonly StatementFacts[], reasonKeys: readonly string[] = []): RepoBind[] {
   const out: RepoBind[] = [];
@@ -475,8 +485,10 @@ export function pushesOf(statements: readonly StatementFacts[], reasonKeys: read
     if (st.program !== 'git') return;
     const found = gitHit(st, before, NO_GIT);
     if (!found || (found.kind !== 'send' && found.key !== 'delete.git_remote_branch')) return;
-    const parsed = found.key !== 'send.git_unknown' && st.words[st.gitGlobal.length + 1]?.text === 'push';
-    const dir = found.key === 'send.git_unknown' || pushUnconfirmable(st) || (parsed && detached) ? null : pushRepo(st, before);
+    const sub = st.words[st.gitGlobal.length + 1]?.text ?? '';
+    const parsed = found.key !== 'send.git_unknown' && sub === 'push';
+    const alone = before.every(literalLocation) && !st.words.some(w => w.dynamic && SUBSTITUTION.test(w.text));
+    const dir = found.key === 'send.git_unknown' || HOOKLESS_SENDERS.has(sub) || pushUnconfirmable(st) || (parsed && (detached || !alone)) ? null : pushRepo(st, before);
     out.push(parsed ? { dir, parsed } : { dir });
   });
   visit(statements, []);
