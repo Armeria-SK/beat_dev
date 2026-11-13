@@ -500,7 +500,6 @@ const BLOCKED_CASES: Array<[string, (p: Rig) => void, string, (p: Rig) => void]>
   ['.git 直下の foo_head', p => writeRoot(p.r, 'foo_head', p.git('rev-parse', 'HEAD')), 'git push {U} foo_head:refs/heads/x', p => writeRoot(p.r, 'foo_head', newCommit(p.git))],
   ['新しい注釈付きタグ（前からのコミットを指す）', () => undefined, 'git push {U} v1', p => p.git('tag', '-a', 'v1', '-m', 'v1', 'feature')],
   ['前に字のパスの cd だけ', p => mkdirSync(join(p.r.ws, 'sub')), `cd sub${AND}git push {U} feature`, p => p.late('feature')],
-  ['終わりの値を 0 にしても', () => undefined, WINDOWS ? 'git push {U} feature; exit 0' : 'git push {U} feature || true', p => p.late('feature')],
 ];
 
 for (const [name, setup, template, move] of BLOCKED_CASES) {
@@ -516,6 +515,15 @@ for (const [name, setup, template, move] of BLOCKED_CASES) {
     assert.equal(remoteRefs(p.remote), before, '送り先は変わらない');
   });
 }
+
+test('承認（W1-11 作り直し）: 前に字のパスの cd だけなら確かめられ、何も動かなければ送れる', { skip: !gitAvailable }, async t => {
+  const p = pushRig(t);
+  mkdirSync(join(p.r.ws, 'sub'));
+  const row = await p.park(`cd sub${AND}git push ${p.q} feature`);
+  const outcome = await p.r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+  assert.match(remoteRefs(p.remote), /refs\/heads\/feature/u);
+});
 
 test('承認（W1-11 作り直し）: 送る元の式に空白があり、その中に tip の sha を書いても、送るコミットで止める', { skip: !gitAvailable }, async t => {
   const p = pushRig(t);
@@ -621,6 +629,9 @@ for (const [name, template] of [
   ['rm -rf dist と push', `${WINDOWS ? 'Remove-Item -Recurse -Force dist' : 'rm -rf dist'}${AND}git push {U} main`],
   ['実行時に読む名前（$(cat r.txt)）', 'git push {U} "$(cat r.txt):refs/heads/feat"'],
   ['パイプの後ろの push', 'echo x | git push {U} feature'],
+  ['後ろに文', 'git push {U} feature; echo ok'],
+  ['終わりの値を 0 にする文', WINDOWS ? 'git push {U} feature; exit 0' : 'git push {U} feature || true'],
+  ['パイプの前の push', WINDOWS ? 'git push {U} feature | ForEach-Object { $_ }' : 'git push {U} feature | tee log.txt'],
   ...(WINDOWS ? [
     ['Clear-Item Env:', 'Clear-Item Env:GIT_CONFIG_COUNT; git push {U} feature'],
     ['cli Env:', 'cli Env:GIT_CONFIG_COUNT; git push {U} feature'],
@@ -630,7 +641,16 @@ for (const [name, template] of [
     ['Get-ChildItem Env: | Remove-Item', 'Get-ChildItem Env:GIT_CONFIG* | Remove-Item; git push {U} feature'],
     ['フックのフォルダを消す', 'Remove-Item -Recurse -Force (Join-Path (Split-Path $env:GIT_CONFIG_GLOBAL) hooks); git push {U} feature'],
     ['@( ) の置き換え', 'git push {U} @("feature")'],
-  ] as const : [] as const),
+    ['パイプの後ろの ForEach-Object -Begin で Env: を消す', 'git push {U} feature | ForEach-Object -Begin { Clear-Item Env:GIT_CONFIG_COUNT } -Process { $_ }'],
+    ['パイプの後ろの % の begin で cli', 'git push {U} feature 2>&1 | % { cli Env:GIT_CONFIG_COUNT } { $_ }'],
+    ['パイプの後ろの Out-String の引数の式で Env: を消す', 'git push {U} feature | Out-String -Width (120 + (Clear-Item Env:GIT_CONFIG_COUNT).Count)'],
+    ['パイプの後ろのスクリプトブロックの begin で Env: を消す', 'git push {U} feature | & { begin { Clear-Item Env:GIT_CONFIG_COUNT } process { $_ } }'],
+    ['パイプの後ろの ForEach-Object -Begin でフックのフォルダを消す', 'git push {U} feature | ForEach-Object -Begin { Remove-Item -Recurse -Force (Join-Path (Split-Path $env:GIT_CONFIG_GLOBAL) hooks) } -Process { $_ }'],
+    ['包みの中の push', '& { git push {U} feature }'],
+  ] as const : [
+    ['パイプの後ろでフックのフォルダを消す', 'git push {U} feature | rm -rf "$(dirname "$GIT_CONFIG_GLOBAL")/hooks"'],
+    ['包みの中の push', 'bash -c "git push {U} feature"'],
+  ] as const),
   ['背景で動く push', WINDOWS ? 'Start-Job { git push {U} feature }' : 'git push {U} feature > o.txt 2>&1 &'],
 ] as const) {
   test(`承認（W1-11 作り直し）: フックを外しうる形は確かめられない（push_unconfirmed）: ${name}`, { skip: !gitAvailable }, async t => {
@@ -658,9 +678,11 @@ test('承認（W1-11 作り直し）: フックを置けないと、push は動�
 
 test('承認（W1-11 作り直し）: コマンドが止めの文と同じ文を出しても、送れたなら push_unseen にしない', { skip: !gitAvailable }, async t => {
   const p = pushRig(t);
-  const row = await p.park(`git push ${p.q} feature${AND}echo "Not sent: the push tried to send commits that were added after it was parked"`);
+  writeFileSync(join(p.remote, 'hooks', 'pre-receive'), '#!/bin/sh\necho "Not sent: the push tried to send commits that were added after it was parked"\nexit 0\n', { mode: 0o755 });
+  const row = await p.park(`git push ${p.q} feature`);
   const outcome = await p.r.approve(row.id);
   assert.equal(outcome.status, 'ran', outcome.output);
+  assert.match(outcome.output ?? '', /remote: Not sent/u);
   assert.notEqual(remoteRefs(p.remote), '');
 });
 

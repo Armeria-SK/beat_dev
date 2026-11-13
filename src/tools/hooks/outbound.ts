@@ -487,7 +487,7 @@ export function pushesOf(statements: readonly StatementFacts[], reasonKeys: read
     if (!found || (found.kind !== 'send' && found.key !== 'delete.git_remote_branch')) return;
     const sub = st.words[st.gitGlobal.length + 1]?.text ?? '';
     const parsed = found.key !== 'send.git_unknown' && sub === 'push';
-    const alone = before.every(literalLocation) && !st.words.some(w => w.dynamic && SUBSTITUTION.test(w.text));
+    const alone = prior.length === 0 && i === list.length - 1 && before.every(literalLocation) && !st.words.some(w => w.dynamic && SUBSTITUTION.test(w.text));
     const dir = found.key === 'send.git_unknown' || HOOKLESS_SENDERS.has(sub) || pushUnconfirmable(st) || (parsed && (detached || !alone)) ? null : pushRepo(st, before);
     out.push(parsed ? { dir, parsed } : { dir });
   });
