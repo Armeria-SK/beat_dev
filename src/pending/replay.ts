@@ -145,15 +145,15 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     if (forHook?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: forHook.reasons.join('\n- ') }));
     const refused = await hookRefusal(tool, args, ctx, { check: forHook, tainted: conversationTainted(), productRoots });
     if (refused !== undefined) return end('failed', pendingText('en', 'hook_denied', { reason: refused }));
-    const again = await recheck();
-    if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
-    if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(row.cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
-
     let changes: Change[] = [];
     if (row.kind === 'delete') {
       const before = state.snapshot ?? { git: null, paths: [] };
       changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
     }
+    const again = await recheck();
+    if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
+    if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(row.cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
+
     const mask = (text: string): string => (tool.redact ? tool.redact(text) : text);
     const outboundNow = outboundOfCall(tool, again, 'en');
     if (outboundNow?.kind === 'deny') return end('failed', pendingText('en', 'denied', { reasons: outboundNow.reason }));

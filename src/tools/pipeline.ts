@@ -301,12 +301,18 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     reasons.push(guardText(language, 'pipeline.auto_egress'));
   }
   const hookAsks: string[] = [];
-  const callSummary = tool.summarize?.(args, language);
-  const callCwd = first?.cwd ?? (callSummary?.cwd ? resolve(ctx.workspace, callSummary.cwd) : ctx.workspace);
+  let summaryMemo: { value: ReturnType<NonNullable<ToolDef['summarize']>> | undefined } | undefined;
+  const callSummary = () => (summaryMemo ??= { value: tool.summarize?.(args, language) }).value;
+  const callCwd = (): string => {
+    if (first?.cwd) return first.cwd;
+    const given = callSummary()?.cwd;
+    return given ? resolve(ctx.workspace, given) : ctx.workspace;
+  };
   for (const hook of ctx.config.tools.hooks.preToolUse) {
     if (hook.enabled === false || !matches(hook.matcher, tool.name) || decision === 'deny') continue;
+    const hookCwd = callCwd();
     const result = await runCommandHook(hook, {
-      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(callCwd) : callCwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(hookCwd) : hookCwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
       paths: hookPaths(tool, first), tainted, run_kind: ctx.kind, ...(ctx.project?.root ? { project_root: ctx.project.root } : {}), product_roots: safeProductRoots(deps),
     }, ctx.signal, language);
     if (result.decision && worst(decision, result.decision) !== decision) { decision = result.decision; decidedBy = `hook:${result.hook}`; }
@@ -325,10 +331,11 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       if (ctx.kind === 'review') return refuse('deny', 'pending', toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
       if (tool.replayable === false) return finish({ output: { content: pendingText('en', 'not_parked', { tool: tool.name, reason: parkAs.reason }), isError: true }, decision: 'ask', decidedBy: 'not-parked', invalidArguments: false });
       if (!deps.pending) return refuse('deny', 'pending', pendingText('en', 'no_pending', { reason: parkAs.reason }));
-      if (/^[\\/]{2}/u.test(callCwd) || /^[\\/]{2}/u.test(ctx.workspace)) return refuse('deny', 'pending', pendingText('en', 'network_cwd', { path: callCwd }));
+      const parkCwd = callCwd();
+      if (/^[\\/]{2}/u.test(parkCwd) || /^[\\/]{2}/u.test(ctx.workspace)) return refuse('deny', 'pending', pendingText('en', 'network_cwd', { path: parkCwd }));
       let parkedId: number;
       try {
-        parkedId = await parkCall({ tool, args, ctx, pending: deps.pending, first, cwd: callCwd, kind: parkAs.kind, reason: parkAs.reason, checks: parkReasons, outbound, tainted });
+        parkedId = await parkCall({ tool, args, ctx, pending: deps.pending, first, cwd: parkCwd, kind: parkAs.kind, reason: parkAs.reason, checks: parkReasons, outbound, tainted });
       } catch (error) {
         return refuse('deny', 'pending', pendingText('en', 'park_failed', { detail: (error as Error).message }));
       }
@@ -361,7 +368,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const taskNotOwner = decision === 'ask' && deps.autoClassify !== undefined && ctx.kind === 'task' && mayClassify({ ...autoGate, humanOnly }) && !(deps.lastUserRequest?.() ?? '').trim();
   if (taskNotOwner) reasons.push(guardText(language, 'pipeline.auto_task_not_owner'));
   if (decision === 'ask' && deps.autoClassify && !taskNotOwner && mayClassify({ ...autoGate, humanOnly })) {
-    const summary = callSummary ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
+    const summary = callSummary() ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
       deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
     autoEvent('checking');
@@ -406,7 +413,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 承認のあとの再判定で比べて一致した bind（実行の直前の探し直しで、道具がもう一度比べる）
   let comparedBind: string | undefined;
   if (decision === 'ask') {
-    const summary = callSummary ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
+    const summary = callSummary() ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
       cwd: summary.cwd, reasons, details, onceOnly, everyTime, kinds: [...askKinds], ...(ctx.parent ? { hostConversationId: ctx.parent.conversationId, childConversationId: ctx.conversationId, childTitle: ctx.parent.title } : {}), preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore, grantFolder: grantTarget?.folder,

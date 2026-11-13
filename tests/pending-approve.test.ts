@@ -325,3 +325,36 @@ test('承認: 積んだときの places にある送り先の設定ファイル�
   assert.equal(outcome.status, 'stale', outcome.output);
   assert.deepEqual(ran, ['x']);
 });
+
+test('承認（W1-9）: 消すの行の控えを取るあいだにスクリプトを書き換えたら stale（最後の確かめと実行のあいだに待ちを挟まない）', { skip: !gitAvailable }, async t => {
+  const r = rig(t);
+  spawnSync('git', ['init', '-q'], { cwd: r.ws });
+  const project = r.project();
+  const dist = join(r.ws, 'dist');
+  mkdirSync(dist, { recursive: true });
+  writeFileSync(join(dist, 'old.js'), 'x');
+  const script = join(r.ws, 'build.js');
+  writeFileSync(script, "console.log('OLD')");
+  const command = WINDOWS ? 'Remove-Item -Recurse -Force dist; node build.js' : 'rm -rf dist && node build.js';
+  assert.equal((await r.call('shell_run', { command }, { ...r.ctx, project })).decidedBy, 'pending');
+  const row = r.latest();
+  assert.equal(row.kind, 'delete');
+  const claimed = r.pending.claim(row.id);
+  setTimeout(() => writeFileSync(script, "console.log('NEW')"), 0);
+  const outcome = await replayAction(claimed, r.deps());
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.doesNotMatch(outcome.output ?? '', /NEW/u);
+});
+
+test('要約（summarize）は要る道（フック・札・積む）だけで呼ぶ: 要約が投げる道具でも、そのまま許される呼び出しは動く', async t => {
+  const r = rig(t);
+  const odd: ToolDef<Record<string, never>> = {
+    name: 'fake_odd', description: 'odd', input: Type.Object({}), effect: 'read', allowedIn: ['chat'],
+    summarize: () => { throw new Error('summarize broke'); },
+    execute: async () => ({ content: 'fine' }),
+  };
+  r.registry.register(odd as unknown as ToolDef);
+  const outcome = await r.call('fake_odd', {});
+  assert.equal(outcome.decision, 'allow');
+  assert.equal(outcome.output.content, 'fine');
+});
