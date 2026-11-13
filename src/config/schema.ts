@@ -69,13 +69,25 @@ export const RootConfig = Type.Object({
   mode: Type.Union([Type.Literal('read'), Type.Literal('write')]),
 }, { additionalProperties: false });
 
-export const HookConfig = Type.Object({
+export const CommandHookConfig = Type.Object({
   matcher: Type.String({ minLength: 1, maxLength: 200 }),
   command: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
   timeoutMs: Type.Integer({ minimum: 100, maximum: 120_000, default: 30_000 }),
   onError: Type.Union([Type.Literal('deny'), Type.Literal('ask')], { default: 'deny' }),
   enabled: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
+
+const ProtectPatterns = Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { maxItems: 200 });
+
+export const BuiltinHookConfig = Type.Object({
+  matcher: Type.String({ minLength: 1, maxLength: 200 }),
+  builtin: Type.Literal('protect-files'),
+  always: ProtectPatterns,
+  afterOutside: ProtectPatterns,
+  enabled: Type.Optional(Type.Boolean()),
+}, { additionalProperties: false });
+
+export const HookConfig = Type.Union([CommandHookConfig, BuiltinHookConfig]);
 
 // tools.browser.sites の 1 件の書き方（小文字のホスト名。先頭の = は「そのホストだけ」）。画面の文（friendly.ts）も同じ式を使う
 export const BROWSER_SITE_PATTERN = '^=?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9-]{2,63}$';
@@ -100,7 +112,7 @@ export function ToolsConfig() {
     }, { additionalProperties: false, default: {} }),
     hooks: Type.Object({
       preToolUse: Type.Array(HookConfig, { default: [] }),
-      postToolUse: Type.Array(HookConfig, { default: [] }),
+      postToolUse: Type.Array(CommandHookConfig, { default: [] }),
     }, { additionalProperties: false, default: {} }),
     web: Type.Object({
       fetch: Type.Boolean({ default: true }),
@@ -269,6 +281,8 @@ export type ModelConfig = Static<typeof ModelConfig>;
 export type AppConfig = Static<typeof AppConfig>;
 export type ToolsConfig = Static<ReturnType<typeof ToolsConfig>>;
 export type HookConfig = Static<typeof HookConfig>;
+export type CommandHookConfig = Static<typeof CommandHookConfig>;
+export type BuiltinHookConfig = Static<typeof BuiltinHookConfig>;
 export type NotifyChannelConfig = Static<typeof NotifyChannelConfig>;
 export type NotifyConfig = Static<typeof NotifyConfig>;
 export type McpConfig = Static<typeof McpConfig>;

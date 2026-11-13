@@ -1,5 +1,6 @@
 import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
+import type { ValueError } from '@sinclair/typebox/errors';
 import { Value } from '@sinclair/typebox/value';
 import { configText } from '../shared/messages/config.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
@@ -9,9 +10,10 @@ import { checkBaseUrl, isSafeOutboundUrl } from '../shared/url.ts';
 import { mcpToolName, MCP_NAME_MAX } from '../mcp/names.ts';
 import { isSecretEnvName, takenKeyEnvs } from '../shared/provider-key.ts';
 import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
+import { DEFAULT_PROTECT_FILES } from '../tools/hooks/protect-files.ts';
 import { friendlyIssue } from './friendly.ts';
 import { dropLegacy } from './legacy.ts';
-import { AppConfig, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
+import { AppConfig, BuiltinHookConfig, CommandHookConfig, HookConfig as HookSchema, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, ToolsConfig as ToolsConfigSchema, type HookConfig, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
 
@@ -60,7 +62,7 @@ export function defaultTools(): ToolsConfig {
 
 export function resetConfig(current: AppConfig): AppConfig {
   const next = defaultConfig();
-  return { ...next, timezone: current.timezone, server: structuredClone(current.server), tools: { ...next.tools, roots: structuredClone(current.tools.roots), deny: [...current.tools.deny] } };
+  return { ...next, timezone: current.timezone, server: structuredClone(current.server), tools: { ...next.tools, roots: structuredClone(current.tools.roots), deny: [...current.tools.deny], hooks: { ...next.tools.hooks, preToolUse: [structuredClone(DEFAULT_PROTECT_FILES)] } } };
 }
 
 interface Finding extends ConfigIssue { text: string }
@@ -228,11 +230,20 @@ function issuePath(pointer: string, raw: unknown): string {
   return segments.join('.');
 }
 
+function hookRowErrors(errors: ValueError[]): ValueError[] {
+  return errors.flatMap(e => {
+    if (e.schema !== HookSchema || typeof e.value !== 'object' || e.value === null) return [e];
+    const variant = 'builtin' in e.value ? BuiltinHookConfig : CommandHookConfig;
+    const inner = [...Value.Errors(variant, Value.Default(variant, Value.Clone(e.value)))].map(x => ({ ...x, path: `${e.path}${x.path}` }));
+    return inner.length ? inner : [e];
+  });
+}
+
 export function parseConfig(raw: unknown): AppConfig {
   const withDefaults = Value.Default(AppConfig, Value.Clone(dropLegacy(raw).config));
   if (!Value.Check(AppConfig, withDefaults)) {
     // 正規表現や「Expected string to match …」はそのまま見せない。項目ごとの友好的な文（src/shared/messages/config.ts）にする
-    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('en', friendly.code, friendly.params) : e.message }; });
+    const errors = hookRowErrors([...Value.Errors(AppConfig, withDefaults)]).slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('en', friendly.code, friendly.params) : e.message }; });
     throw new ConfigError('The settings file is not in the right format',
       errors.map(x => `${x.e.path || '/'}: ${x.message}`),
       errors.map(x => ({ path: issuePath(x.e.path, withDefaults), message: x.message, ...(x.friendly ? { code: `config.${x.friendly.code}`, params: x.friendly.params } : {}) })));
@@ -321,6 +332,18 @@ export class ConfigStore {
     const target = join(dir, `${basename(this.path)}.reset-${new Date(now).toISOString().replace(/[:.]/gu, '-')}.bak`);
     copyFileSync(this.path, target, constants.COPYFILE_EXCL);
     return target;
+  }
+
+  appendPreToolHook(hook: HookConfig): void {
+    const raw = JSON.parse(readFileSync(this.path, 'utf8')) as Record<string, any>;
+    const tools = (raw.tools ??= {}) as Record<string, any>;
+    const hooks = (tools.hooks ??= {}) as Record<string, any>;
+    hooks.preToolUse = [...(Array.isArray(hooks.preToolUse) ? hooks.preToolUse : []), hook];
+    parseConfig(raw);
+    try { copyFileSync(this.path, `${this.path}.bak`); } catch { }
+    atomicWriteFile(this.path, `${JSON.stringify(raw, null, 2)}\n`);
+    this.#stamp = '';
+    this.load();
   }
 
   save(config: AppConfig): AppConfig {

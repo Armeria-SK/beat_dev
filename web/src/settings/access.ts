@@ -122,7 +122,7 @@ function hookChanges(before: Config, after: Config, stage: HookStage): Access[] 
     const same = oldHooks.findIndex(h => deepEqual(h, hook));
     if (same >= 0) oldHooks.splice(same, 1); else changed.push(hook);
   }
-  const summary = (hook: unknown): HookSummary => ({ matcher: String(obj(hook).matcher ?? ''), command: strings(obj(hook).command) });
+  const summary = (hook: unknown): HookSummary => ({ matcher: String(obj(hook).matcher ?? ''), command: typeof obj(hook).builtin === 'string' ? [String(obj(hook).builtin)] : strings(obj(hook).command) });
   const on = (hook: unknown): boolean => obj(hook).enabled !== false;
   const body = (hook: unknown): unknown => { const { enabled: _enabled, ...rest } = obj(hook); return rest; };
   const guardOff = (was: unknown, now: unknown): boolean => stage === 'preToolUse' && on(was) && !on(now);

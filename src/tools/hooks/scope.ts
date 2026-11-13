@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
@@ -67,22 +67,51 @@ export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = 
   return { path: resolve(cwd, p) };
 }
 
-export function realish(abs: string): string {
-  if (isRemotePath(abs)) return abs;
+function danglingTarget(p: string): string | undefined {
+  try { return lstatSync(p).isSymbolicLink() ? readlinkSync(p) : undefined; } catch { return undefined; }
+}
+
+export interface RealPath { path: string; sure: boolean }
+
+const unresolvedPath = (abs: string): string => (WINDOWS ? `\\\\?\\${abs}` : abs);
+
+function resolveReal(abs: string, hops: { left: number }): RealPath {
+  if (isRemotePath(abs)) return { path: abs, sure: true };
   let current = abs;
   const rest: string[] = [];
   for (;;) {
     if (existsSync(current)) {
-      try { return join(realpathSync.native(current), ...rest.reverse()); } catch { return abs; }
+      try { return { path: join(realpathSync.native(current), ...rest.reverse()), sure: true }; } catch { return { path: abs, sure: true }; }
+    }
+    const link = danglingTarget(current);
+    if (link !== undefined) {
+      if (--hops.left < 0) return { path: unresolvedPath(abs), sure: false };
+      if (isRemotePath(link)) return { path: join(link.replaceAll('/', '\\'), ...rest.reverse()), sure: false };
+      const parent = resolveReal(dirname(current), hops);
+      if (!parent.sure) return { path: unresolvedPath(abs), sure: false };
+      return resolveReal(join(resolve(parent.path, link), ...rest.reverse()), hops);
     }
     const parent = dirname(current);
-    if (parent === current) return abs;
+    if (parent === current) return { path: abs, sure: true };
     rest.push(basename(current));
     current = parent;
   }
 }
 
+export function realPath(abs: string): RealPath {
+  return resolveReal(abs, { left: 40 });
+}
+
+export function realish(abs: string): string {
+  return realPath(abs).path;
+}
+
 const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
+
+// 書き込み先に Windows が無視する末尾の . と空白を落とす（SOUL.md. は SOUL.md を指す）
+export function windowsNames(p: string): string {
+  return p.split(sep).map(seg => (seg === '.' || seg === '..' ? seg : seg.replace(/[. ]+$/u, '') || seg)).join(sep);
+}
 
 export function isInside(root: string, target: string): boolean {
   const rel = relative(fold(root), fold(target));
@@ -131,7 +160,7 @@ export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKi
   const real = realish(abs);
   if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || (real !== abs && insideGitDir(real))) return 'git';
   if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
-  const bare = WINDOWS ? abs.replace(/[. ]+$/u, '') : abs;
+  const bare = WINDOWS ? windowsNames(abs) : abs;
   if (policy.instructions?.some(p => isInside(p, real) || isInside(p, abs) || isInside(p, bare))) return 'instructions';
   return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
 }
