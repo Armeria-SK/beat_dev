@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { linkSync, mkdirSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import nodeFs, { linkSync, mkdirSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join, parse } from 'node:path';
 import { test } from 'node:test';
 import type { HookConfig } from '../src/config/schema.ts';
@@ -182,11 +183,18 @@ test('大きなフォルダへの書き込み: 守るファイルにハードリ
   const dist = join(root, 'dist');
   mkdirSync(dist);
   for (let i = 0; i <= 21_000; i++) writeFileSync(join(dist, String(i)), '');
-  const start = performance.now();
-  const result = await run(hook(), payload({ root, paths: [w(dist)], tainted: true }));
-  const took = performance.now() - start;
-  assert.equal(result.decision, undefined, result.reason);
-  assert.ok(took < 150, `${took} ms`);
+  const walked: string[] = [];
+  const original = nodeFs.readdirSync;
+  const spy = t.mock.method(nodeFs, 'readdirSync', ((path: string, ...rest: unknown[]) => { if (isInside(dist, String(path))) walked.push(String(path)); return (original as (...a: unknown[]) => unknown)(path, ...rest); }) as typeof nodeFs.readdirSync);
+  syncBuiltinESMExports();
+  try {
+    const result = await run(hook(), payload({ root, paths: [w(dist)], tainted: true }));
+    assert.equal(result.decision, undefined, result.reason);
+    assert.deepEqual(walked, [], '書き込み先のフォルダは歩かない');
+  } finally {
+    spy.mock.restore();
+    syncBuiltinESMExports();
+  }
 });
 
 test('歩く上限は 1 回の呼び出しで分け合う: 守るファイルにハードリンクがあるとき、合わせて上限を超えれば ask', async t => {
