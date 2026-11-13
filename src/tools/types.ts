@@ -53,7 +53,7 @@ export interface PreCheck {
   decision: Decision;
   reasons: string[];
   details?: string[];
-  // 見つけたパスごとの判定（details と同じ材料を構造で。判定には使わず、承認の札に出すだけ）
+  // 見つけたパスごとの判定（details と同じ材料を構造で。Pending の再実行で、承認のあとに新しい確かめが出たかを比べるのに使う。recheckOf / newChecks）
   paths?: ApprovalPath[];
   pathsMore?: number;
   // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
@@ -84,14 +84,13 @@ export interface PreCheck {
   ownerReason?: string;
 }
 
-// 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
+// 実行の直前に、パイプライン（承認なし）または Pending の再実行（replay.ts）が道具へ渡す、この 1 回の呼び出しの承認の結果
 export interface ExecuteInfo {
   // 持ち主が、この呼び出しの「今回だけ」の確かめ（コードを動かす確かめ）を許した
   approvedOnce: boolean;
   // 許したときに持ち主に見せた事前の判定
   check?: PreCheck;
-  // 札を出して承認を得た呼び出しで、承認のあとの再判定が比べて一致した bind（札で見せたものの指紋）。道具は実行の直前の探し直しで、同じ指紋になることをもう一度確かめて、違えば実行しない。
-  // 会話の許可で札なしに通る呼び出しには付かない（bind を比べない）
+  // Pending で承認された呼び出しで、再実行の前の再判定が比べて一致した bind（承認のときに見せたものの指紋）。道具は実行の直前の探し直しで、同じ指紋になることをもう一度確かめて、違えば実行しない。
   bind?: string;
   // この呼び出しの id（モデルが付けたもの。agent_run が、画面の agent.state をどの呼び出しの行に結ぶかに使う）
   callId?: string;
