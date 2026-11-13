@@ -8,6 +8,7 @@ export const LEGACY_KEYS: readonly LegacyKey[] = [
   { path: 'language', removedIn: 'beat 0-2a-3' },
   { path: 'tools.maxIterations', removedIn: 'beat 0-3b' },
   { path: 'tools.web.searxngUrl', removedIn: 'beat 0-4b' },
+  { path: 'tools.shell.approvalTimeoutSec', removedIn: 'beat 4-3b-1' },
 ];
 
 function isObject(value: unknown): value is Record<string, unknown> {

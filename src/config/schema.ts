@@ -109,7 +109,6 @@ export function ToolsConfig() {
       ask: Type.Array(Type.String({ minLength: 1 }), { default: [] }),
       deny: Type.Array(Type.String({ minLength: 1 }), { default: [] }),
       envAllow: Type.Array(Type.String(), { default: [] }),
-      approvalTimeoutSec: Type.Integer({ minimum: 10, maximum: 3600, default: 600 }),
     }, { additionalProperties: false, default: {} }),
     hooks: Type.Object({
       preToolUse: Type.Array(HookConfig, { default: [] }),

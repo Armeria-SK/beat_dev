@@ -410,9 +410,6 @@ export function SkillsPanel() {
           below={<ListField items={(shell.ask ?? []) as string[]} label={t('ui.set.shell.ask')} placeholder="npm publish" disabled={busy} onChange={list => setShell('shell:ask', { ask: list })} />} />
         <Row k="shell:deny" title={t('ui.set.shell.deny')} desc={t('ui.set.shell.denyDesc')}
           below={<ListField items={(shell.deny ?? []) as string[]} label={t('ui.set.shell.deny')} placeholder="rm -rf" disabled={busy} onChange={deny => setShell('shell:deny', { deny })} />} />
-        <Row k="shell:wait" title={t('ui.set.shell.approvalWait')} desc={t('ui.set.shell.approvalWaitDesc')}>
-          <NumberField k="shell:wait" value={shell.approvalTimeoutSec as number} min={10} max={3600} label={t('ui.set.shell.approvalWait')} onCommit={v => setShell('shell:wait', { approvalTimeoutSec: v })} />
-        </Row>
       </Group>
     </>
   );

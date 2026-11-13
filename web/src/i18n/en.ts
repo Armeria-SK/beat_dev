@@ -1141,8 +1141,6 @@ export const en = {
   'ui.set.shell.askDesc': 'Even when the mode is Auto',
   'ui.set.shell.deny': 'Never run',
   'ui.set.shell.denyDesc': 'Refused without asking',
-  'ui.set.shell.approvalWait': 'Wait for an answer',
-  'ui.set.shell.approvalWaitDesc': 'Seconds before an unanswered approval is refused',
   'ui.set.bg.title': 'Tasks in the background',
   'ui.set.bg.on': 'On',
   'ui.set.bg.onDesc': 'Runs tasks in the background',
