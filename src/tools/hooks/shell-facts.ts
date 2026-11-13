@@ -86,7 +86,7 @@ function shellCode(args: readonly Word[], stdin: boolean): InnerSource {
   if (stdin) return null;
   const at = args.findIndex(w => !w.dynamic && /^-[A-Za-z]*c[A-Za-z]*$/u.test(w.text));
   if (at >= 0) {
-    let j = at + 1;
+    let j = at + (/[oO]/u.test(args[at]!.text) ? 2 : 1);
     while (j < args.length && !args[j]!.dynamic) {
       const t = args[j]!.text;
       if (t === '--') { j++; break; }
@@ -108,13 +108,13 @@ function shellCode(args: readonly Word[], stdin: boolean): InnerSource {
     if (takesValue(t)) j++;
   }
   if (options.some(w => /^-[A-Za-z]*s[A-Za-z]*$/u.test(w.text))) return null;
-  return script && stdinPath(script.text) ? null : undefined;
+  return !script || stdinPath(script.text) ? null : undefined;
 }
 
 function sourceCode(args: readonly Word[], stdin: boolean): InnerSource {
   const file = args[0]?.text === '--' ? args[1] : args[0];
   if (stdin) return null;
-  return file && (file.dynamic || stdinPath(file.text)) ? null : undefined;
+  return !file || file.dynamic || stdinPath(file.text) ? null : undefined;
 }
 
 function cmdCode(args: readonly Word[], stdin: boolean): InnerSource {
@@ -187,6 +187,7 @@ function prefixCommand(program: string, args: readonly Word[], ps: boolean, shel
   }
   const rest = args.slice(i);
   if (rest.length === 0) return program === 'nohup' || program === 'setsid' ? null : undefined;
+  if (program === 'start' && rest.length === 1 && (rest[0]!.text === '.' || rest[0]!.text === '..')) return undefined;
   return { text: joinWords(rest, ps), shell };
 }
 
