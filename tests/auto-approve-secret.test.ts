@@ -55,7 +55,6 @@ test('自動承認の判定役が「確かめる」の理由に API キーをそ
   s.app.bus.subscribe(e => { seen.push(e.event); });
   const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: '外のメモ（outside.txt）を読んで', permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get()!.n, 0, '札は出ない');
   const [row] = s.app.pending.list({ status: 'waiting' });
   assert.equal(row?.kind, 'judge');
   assert.ok(row!.reason.includes('[REDACTED]'), '判定役の理由は Pending の行に載るが、鍵のところは伏せ字');
@@ -72,7 +71,6 @@ test('自動承認のモードでも、鍵を入れる API をシェルから呼
   s.adapter().scripts = [toolCall('shell_run', { command }), say('終わりました')];
   const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'fake の API キーを入れて', permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get()!.n, 0, '札は出ない');
   assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['shell_run', 'send']], '自動では通らず Pending に積む');
   assert.equal(s.adapter().calls.length, 2, '判定役は呼ばれていない（モデルの呼び出しは 2 回だけ）');
   assert.equal((await s.json('/api/providers/fake/key', 'GET')).body.set, false, '許さなければ鍵は入らない');

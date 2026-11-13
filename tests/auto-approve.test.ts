@@ -284,7 +284,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { tools?: 
   return { paths, ctx, call, approvals, events, db, parsed, controller, prompts, state, outside, readOutside, pending, registry };
 }
 
-const cards = (s: Setup): number => Number(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get()!.n);
+const cards = (s: Setup): number => s.pending.list({ status: 'waiting' }).length;
 
 // 確かめの要る呼び出し: 動かずに Pending に積まれたことを確かめ、積んだ行を返す
 async function parked(s: Setup, name: string, args: unknown, c: ToolContext = s.ctx, extra: { noAutoReadFlag?: boolean; noClassifier?: boolean } = {}) {
@@ -306,7 +306,7 @@ test('自動承認: 許可フォルダの外を読むだけのコマンドは、
   assert.equal(outcome.decidedBy, 'auto-mode');
   assert.equal(outcome.output.isError ?? false, false);
   assert.match(outcome.output.content, /外のメモ/u, '実際に動いた');
-  assert.equal(cards(s), 0, '札は出ない');
+  assert.equal(cards(s), 0, 'Pending に積まない');
   assert.equal(s.prompts.length, 1, '判定役は 1 回だけ');
   assert.equal(s.ctx.autoReadOutside, true);
   const rows = s.db.prepare('SELECT status, scope, reasons, tool, run_id FROM approvals').all() as Array<{ status: string; scope: string; reasons: string; tool: string; run_id: string }>;
@@ -405,7 +405,7 @@ test('ふつうのモードでも判定役が決める。計画のモード（�
   assert.equal(effectiveMode({ ...probe.ctx, kind: 'review', permissionMode: 'auto' }, { permissionMode: () => 'auto' } as never), 'normal', '振り返りには効かない');
 });
 
-// 4-3b-2: taintEscalation を消すと順 2
+// 4-3b-2: taintEscalation を消すと、許可フォルダの中を読むシェル・判定役が無い行・removes_stub は順 2。memory_save（escalateOnTaint）は 4-3b-2 後も owner
 test('タスクの実行: よそから来た文を読んだあとの、許可フォルダの中を読むコマンドは判定役が allow なら動く。外読み・消すと言う道具は判定役が決め（ask なら judge の Pending）、escalateOnTaint の道具は owner、判定役が無いときは judge_failed の Pending', async t => {
   const taskCtx = (s: Setup): ToolContext => ({ ...s.ctx, kind: 'task', conversationId: 'task-conv', permissionMode: 'auto', taint: { tainted: true, sources: ['web_fetch'] } });
   const inRoot = (s: Setup) => {
@@ -494,7 +494,7 @@ test('拒否は判定役に送らない: 判定役が何でも allow と答え�
   for (const [name, args] of cases) {
     const outcome = await s.call(name, args);
     assert.equal(outcome.decision, 'deny', JSON.stringify(args));
-    assert.equal(cards(s), 0, `${JSON.stringify(args)}: 札も出さない`);
+    assert.equal(cards(s), 0, `${JSON.stringify(args)}: Pending にも積まない`);
   }
   assert.equal(s.prompts.length, 0, 'どれも判定役に送らない');
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
@@ -521,7 +521,6 @@ test('毎回の確かめ（道具ごとの方針 ask）は、外を読むだけ�
   const s = await setup(t, { mutate: c => { c.tools.policies = { shell_run: 'ask' }; } });
   assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'pending');
   assert.deepEqual(s.pending.list({ status: 'waiting' }).map(row => row.kind), ['policy']);
-  assert.equal(cards(s), 0);
   assert.equal(s.prompts.length, 0);
 });
 
@@ -532,20 +531,19 @@ test('フックの ask は、判定役に回さない（外を読むだけのコ
   const s = await setup(t, { mutate: c => { c.tools.hooks.preToolUse = [{ matcher: 'shell_run', command: [process.execPath, hook], timeoutMs: 10_000, onError: 'deny' }]; } });
   assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'pending');
   assert.deepEqual(s.pending.list({ status: 'waiting' }).map(row => row.kind), ['hook']);
-  assert.equal(cards(s), 0);
   assert.equal(s.prompts.length, 0);
 });
 
 const taintedOf = (s: Setup): ToolContext => ({ ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } });
 
-// 4-3b-2: taintEscalation を消すと順 2
+// 4-3b-2: taintEscalation を消すと file_write の部分は順 2（外を読む shell_run は判定役のまま）
 test('よそから来た文を読んだあと（taint）も、送らず消さない確かめは判定役に回る（Q16）。判定役が allow なら札なしで動き、理由に taint が載る。ask なら judge の Pending。ふつうのモードでも判定役に回る', async t => {
   const s = await setup(t);
   const tainted = taintedOf(s);
   const read = await s.call('shell_run', { command: s.readOutside }, tainted);
   assert.deepEqual([read.decision, read.decidedBy], ['allow', 'auto-mode'], '外を読むだけの確かめに taint が重なっても、判定役が決める');
   assert.equal(s.prompts.length, 1);
-  assert.equal(cards(s), 0, '札は出ない');
+  assert.equal(cards(s), 0, 'Pending に積まない');
   const row = s.db.prepare("SELECT reasons FROM approvals WHERE scope = 'auto'").get() as { reasons: string };
   assert.ok((JSON.parse(row.reasons) as string[]).some(r => /text that came from somewhere else/u.test(r)), 'taint の理由が記録に載る');
   // taint だけの確かめ（新しいファイルを書く）も判定役が決める
@@ -826,7 +824,7 @@ function fake(name: string, effect: ToolDef['effect'], over: Partial<ToolDef> = 
 const said = (what: { sends?: boolean; removes?: boolean }, askKinds?: AskKind[]) => (): PreCheck =>
   askKinds ? { decision: 'ask', reasons: ['確かめ'], askKinds, ...what } : { decision: 'allow', reasons: [], ...what };
 
-// 4-3b-2: taintEscalation を消すと順 2
+// 4-3b-2: taintEscalation を消すと write・exec・writesFiles の行は順 2。t_net_call・t_meta_removes・memory_forget（escalateOnTaint）は 4-3b-2 後も判定役
 test('よそから来た文を読んだあと: 送る・消すと言う道具・何も言わない書く・実行の道具は、判定役に回る。ask なら judge の Pending に、外を読んだ印と理由つきで積まれ、動かない', async t => {
   const s = await setup(t, {
     classify: ASK('送るか消すかもしれません'),
@@ -883,7 +881,7 @@ test('外を読む確かめ（outside_read）に送る・消すと言う道具�
   assert.equal(s.prompts.length, names.length + 1);
 });
 
-// 4-3b-2: taintEscalation を消すと順 2
+// 4-3b-2: taintEscalation を消すと write・exec の行（c_clean_write・c_clean_exec・file_write・shell_run）は順 2。c_meta（escalateOnTaint）は 4-3b-2 後も判定役
 test('よそから来た文を読んだあとでも、送らず消さないと言う道具・メタの道具・ファイルの道具・送らないシェルのコマンドは判定役が決める。判定役の allow は覚えない（次も判定役に回る）', async t => {
   const s = await setup(t, {
     tools: [
@@ -927,7 +925,7 @@ test('2 つ目の関所: 判定役が allow と答えたあとに、材料が「
   assert.equal(s.ctx.autoReadOutside, undefined, '外を読んだ印も付けない');
 });
 
-// 4-3b-2: taintEscalation を消すと順 2
+// escalateOnTaint: 4-3b-2 後も判定役
 test('メモリの道具（Q-C）: memory_save は判定役が決める。memory_forget も、よそから来た文を読んだあとは判定役が決め、ask なら judge の Pending', async t => {
   const s = await setup(t, { tools: [memoryForget, memorySave] });
   const tainted = taintedOf(s);

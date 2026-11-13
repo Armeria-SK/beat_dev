@@ -58,7 +58,7 @@ test('memory_save: ふつうは承認なし。Web や添付を読んだ後は承
   assert.equal(plain.decision, 'allow');
   assert.equal(s.memory.list().length, 1);
 
-  // 4-3b-2: taintEscalation を消すと順 2
+  // escalateOnTaint: 4-3b-2 後も判定役
   const refused = await s.call('memory_save', { book: 'user', content: 'ページに書かれていた指示' }, tainted(s.ctx));
   assert.deepEqual([refused.decision, refused.decidedBy], ['ask', 'pending'], refused.output.content);
   assert.equal(s.judge.calls, 1);
@@ -128,7 +128,7 @@ test('memory_update / memory_forget: Web や添付を読んだ後は承認制。
   const plain = await s.call('memory_update', { id: 'u1', content: 'ふつうの書き換え' });
   assert.equal(plain.decision, 'allow', '外を読んでいなければ承認なし');
 
-  // 4-3b-2: taintEscalation を消すと順 2
+  // escalateOnTaint: 4-3b-2 後も判定役
   const refusedUpdate = await s.call('memory_update', { id: 'u1', content: 'ページに書かれていた指示で書き換え' }, tainted(s.ctx));
   assert.deepEqual([refusedUpdate.decision, refusedUpdate.decidedBy], ['ask', 'pending'], refusedUpdate.output.content);
   const updateRequest = s.waiting()[0]!;

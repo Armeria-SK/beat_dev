@@ -208,7 +208,7 @@ test('振り返りでは、外から読んだ内容のあとの書き込みの�
   assert.equal((await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' })).decision, 'allow', '外を読んでいない振り返りは今までどおり使える');
   assert.equal((await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint })).decision, 'allow', '外を読んだあとでも、確かめの対象でない道具は変わらない');
 
-  // 4-3b-2: taintEscalation を消すと順 2
+  // escalateOnTaint: 4-3b-2 後も判定役
   const chat = await s.call('memory_forget', {}, { ...s.ctx, taint });
   assert.equal(chat.decidedBy, 'pending');
   assert.deepEqual(s.ran, ['memory_forget', 'memory_save'], '判定役が確かめると答えたら動かない');

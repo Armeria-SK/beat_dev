@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -16,11 +16,7 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
-import { CONVERSATION, settled, startApp, waitFor } from './app-setup.ts';
-import { tempDir, testConfig, type Script } from './helpers.ts';
-
-// 外から読んだ内容のあとの書き込みの確かめ（種類が taint だけ）に、「この返事のあいだ、このフォルダ以下への書き込みを許可」を添える。
-// 覆うのは、同じ実行の中の file_write / file_edit で、それ自身の確かめも taint だけのもの。それ以外は、すべて今までどおり
+import { tempDir, testConfig } from './helpers.ts';
 
 function setup(t: { after: (fn: () => void) => void }, options: { tainted?: boolean; mutate?: (c: AppConfig) => void; tools?: ToolDef[] } = {}) {
   const paths = resolvePaths(tempDir(t));
@@ -96,11 +92,3 @@ test('外から読んでいなくても止まる書き込み（人格・.git）�
   assert.equal(fetched.decision, 'deny', fetched.output.content);
   assert.equal(web.pending.list({ status: 'waiting' }).length, 0);
 });
-
-// ── 本物のエンジンと API を通す ──
-
-const toolCall = (name: string, args: unknown): Script => async function* () {
-  yield { type: 'tool_call', call: { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args } };
-  yield { type: 'done', stop: 'tool_use' };
-};
-const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' }; };

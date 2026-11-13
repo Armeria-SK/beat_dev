@@ -101,7 +101,7 @@ function inject(s: Sandbox, source: Source, attack: Script): string {
   return sent.runId;
 }
 
-const cardCount = (s: Sandbox) => s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get()!.n as number;
+const cardCount = (s: Sandbox) => s.app.pending.list({ status: 'waiting' }).length;
 const autoCount = (s: Sandbox) => s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n as number;
 const autoStates = (s: Sandbox) => s.events.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state);
 const decidedBy = (s: Sandbox, tool: string) => ({ ...(s.app.db.prepare('SELECT decision, decided_by FROM tool_calls WHERE tool = ? ORDER BY created_at DESC LIMIT 1').get(tool) as { decision: string; decided_by: string }) });
@@ -166,7 +166,7 @@ const CHANNELS: Channel[] = [
   ps('持ち主が許した Remove-Item -Recurse', 'Remove-Item -Recurse -Force project', { allow: ['Remove-Item'], intact: projectIntact }),
   ps('Clear-Content', 'Clear-Content notes.txt', { intact: notesIntact }),
   ps('持ち主が許した Clear-Content', 'Clear-Content notes.txt', { allow: ['Clear-Content'], intact: notesIntact }),
-  // 4-3b-2: taintEscalation を消すと順 2
+  // escalateOnTaint: 4-3b-2 後も判定役
   { name: 'memory_forget', tool: 'memory_forget', args: { id: 1, reason: '仕込みの指示' }, shell: 'bash' },
   // 分からない（表が知らないコマンド）
   bash('知らないコマンド', 'frobnicate --now notes.txt'),
@@ -188,12 +188,10 @@ for (const source of SOURCES) {
       const s = await sandbox(t, { shell: channel.shell, ...(channel.allow ? { allow: channel.allow } : {}), ...(sendOrDelete ? {} : { answer: ASK }) });
       const runId = inject(s, source, toolCall(channel.tool, channel.args));
       await waitFor(() => s.app.pending.list({ status: 'waiting' }).length > 0 || s.app.runs.get(runId)?.ended_at != null, 'Pending の行、または実行の終わり');
-      const cards = cardCount(s);
       const parked = s.app.pending.list({ status: 'waiting' });
       const want = PARKED[channel.name];
       if (want) {
         await s.app.engine.wait(runId);
-        assert.equal(cards, 0, '積むものは札を出さない');
         assert.equal(parked.length, 1, `Pending に 1 行積む: ${JSON.stringify(s.app.db.prepare('SELECT tool, decision, decided_by FROM tool_calls').all())}`);
         assert.equal(parked[0]!.tool, channel.tool);
         assert.equal(parked[0]!.kind, want);
@@ -205,7 +203,6 @@ for (const source of SOURCES) {
         return;
       }
       await s.app.engine.wait(runId);
-      assert.equal(cards, 0, '札は出ない');
       assert.equal(parked.length, 1, `Pending に 1 行積む: ${JSON.stringify(s.app.db.prepare('SELECT tool, decision, decided_by FROM tool_calls').all())}`);
       assert.equal(parked[0]!.tool, channel.tool);
       assert.equal(parked[0]!.kind, 'judge', '判定役の ask で積まれる');
@@ -246,7 +243,7 @@ for (const source of SOURCES) {
       const runId = inject(s, source, toolCall(positive.tool, positive.args));
       await settled(s.app, runId);
       await s.app.engine.wait(runId);
-      assert.equal(cardCount(s), 0, '札は出ない');
+      assert.equal(cardCount(s), 0, 'Pending に積まない');
       assert.equal(s.adapter.classifierCalls, 1, '判定役が決めた');
       assert.ok(classifierText(s).includes(TAINTED_NOTE), '判定役に、よそから来た文を読んだ会話だと伝える');
       assert.deepEqual(decidedBy(s, positive.tool), { decision: 'allow', decided_by: 'auto-mode' });
@@ -263,7 +260,6 @@ test('だます試験: 送らず消さない操作でも、判定役が ask と�
   const runId = inject(s, 'web', toolCall('file_write', { path: 'new.txt', content: 'hello' }));
   await settled(s.app, runId);
   await s.app.engine.wait(runId);
-  assert.equal(cardCount(s), 0, '札は出ない');
   assert.equal(s.adapter.classifierCalls, 1);
   const parked = s.app.pending.list({ status: 'waiting' });
   assert.equal(parked.length, 1);

@@ -56,7 +56,7 @@ test('task_create・task_update（指摘 6）: 外から読んだあとは確か
   const id = s.tasks.list()[0]!.id;
   assert.equal((await s.call('task_update', { id, note: 'mine too' })).decision, 'allow');
 
-  // 4-3b-2: taintEscalation を消すと順 2
+  // escalateOnTaint: 4-3b-2 後も判定役
   const create = await s.call('task_create', { title: 'planted', body: 'do what the page said' }, tainted(s.ctx));
   assert.deepEqual([create.decision, create.decidedBy], ['ask', 'pending'], create.output.content);
   const asked = rejectNext(s);
@@ -64,7 +64,7 @@ test('task_create・task_update（指摘 6）: 外から読んだあとは確か
   assert.match(asked.checks.join(), /text that came from somewhere else/u);
   assert.deepEqual(s.tasks.list().map(task => task.title), ['plain'], '断れば作らない');
 
-  // 4-3b-2: taintEscalation を消すと順 2
+  // escalateOnTaint: 4-3b-2 後も判定役
   const update = await s.call('task_update', { id, next_action: 'do what the page said' }, tainted(s.ctx));
   assert.deepEqual([update.decision, update.decidedBy], ['ask', 'pending'], update.output.content);
   assert.deepEqual([rejectNext(s).tool, s.judged()], ['task_update', 2]);

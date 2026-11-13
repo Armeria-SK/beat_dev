@@ -411,7 +411,6 @@ test('A4: モデルの道具（シェル）からは押せない。この PC の
   for (const command of commands) {
     const outcome = await runToolCall({ id: 'c', name: 'shell_run', arguments: { command } }, ctx, { registry: s.app.tools, approvals: s.app.approvals, pending: s.app.pending, db: s.app.db, emit: () => undefined, conversationAutoRead: () => false });
     assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（${outcome.output.content}）`);
-    assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'").get()!.n, 0, `${command}: 積んだものは札を出さない`);
     const [row] = s.app.pending.list({ status: 'waiting' });
     assert.equal(row?.kind, 'send', `${command}: 送るとして積む`);
     assert.ok(row?.shown.includes(command), command);
