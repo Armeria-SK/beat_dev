@@ -89,7 +89,7 @@ function cmdCode(args: readonly Word[], stdin: boolean): InnerSource {
   if (at < 0) return stdin || args.length > 0 ? null : undefined;
   const rest = args.slice(at + 1);
   if (rest.length === 0 || anyDynamic(rest) || rest.some(w => /[&|<>^%!()"]/u.test(w.text))) return null;
-  return { text: joinWords(rest, false), shell: 'bash' };
+  return { text: rest.map(w => w.text).join(' '), shell: 'bash' };
 }
 
 function wrapped(program: string, args: readonly Word[], ps: boolean, shell: ShellKind): InnerSource {

@@ -24,7 +24,7 @@ const GIT_READ_CONFIG = new Set(['--get', '--get-all', '--get-regexp', '--list',
 export const longOption = (word: string, name: string): boolean => {
   if (!word.startsWith('--')) return false;
   const base = word.split('=')[0]!;
-  return base === name || (base.length >= 5 && name.startsWith(base));
+  return base === name || (base.length >= 3 && name.startsWith(base));
 };
 
 const unsafeEnv = (names: readonly string[]): string | undefined => names.find(n => !HARMLESS_ENV.test(n.replace(/^env:/iu, '')));

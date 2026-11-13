@@ -59,9 +59,9 @@ const flagValue = (words: readonly FactWord[], i: number, names: readonly string
   return undefined;
 };
 
-const psParam = (word: string, name: string): boolean => {
+const psParam = (word: string, name: string, min = 2): boolean => {
   const m = /^-([a-z]+):?$/iu.exec(word);
-  return !!m && m[1]!.length >= 2 && name.startsWith(m[1]!.toLowerCase());
+  return !!m && m[1]!.length >= min && name.startsWith(m[1]!.toLowerCase());
 };
 
 const TOOL_ENV = new Set(['CURL_HOME', 'WGETRC', 'SYSTEMWGETRC', 'HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'APPDATA']);
@@ -140,8 +140,8 @@ function wgetSends(st: StatementFacts): Hit | undefined {
 function psWebSends(words: readonly FactWord[], cmd: string): Hit | undefined {
   for (let i = 1; i < words.length; i++) {
     const t = words[i]!.text;
-    if (['body', 'infile', 'form'].some(n => psParam(t, n))) return hit('send', 'send.data', { cmd });
-    if (psParam(t, 'method') && !READ_METHODS.test(words[i + 1]?.text ?? '')) return hit('send', 'send.data', { cmd });
+    if (['body', 'infile', 'form'].some(n => psParam(t, n, 1))) return hit('send', 'send.data', { cmd });
+    if ((psParam(t, 'method', 1) || psParam(t, 'custommethod', 1)) && !READ_METHODS.test(words[i + 1]?.text ?? '')) return hit('send', 'send.data', { cmd });
     if (psParam(t, 'outfile') || psParam(t, 'sessionvariable')) { i++; continue; }
     if (words[i]!.dynamic) return hit('send', 'send.dynamic_target', { cmd });
   }
@@ -327,7 +327,7 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
 
 function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv): Hit[] {
   const p = st.program;
-  if (st.programDynamic) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
+  if (st.programDynamic || /[\s'"]/u.test(st.words[0]?.text ?? '')) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
   if (st.inner === null) return [hit('send', 'send.unknown_command', { cmd: p })];
   if (st.inner) return walk(st.inner, [...before, st], env);
   if (!p) return [];
@@ -363,12 +363,15 @@ function walk(list: readonly StatementFacts[], prior: readonly StatementFacts[],
 
 const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? [])]);
 
+const GIT_NETWORK = new Set([...GIT_PULLING, ...GIT_SENDERS, 'push', 'svn', 'p4', 'lfs', 'config']);
+const gitNetwork = (st: StatementFacts): boolean => st.gitGlobal.length > 0 || GIT_NETWORK.has(st.words[1]?.text ?? '') || st.words[1]?.dynamic === true;
+
 const decoded = (text: string): string => {
   try { return decodeURIComponent(text); } catch { return text.replace(/%([0-9a-f]{2})/giu, (_, h: string) => String.fromCharCode(parseInt(h, 16))); }
 };
 
 function secretTarget(st: StatementFacts): string | undefined {
-  const candidates = [...st.urls.filter(u => !u.dynamic).map(u => u.text), ...(SECRET_CHECKED.has(st.program) ? st.words.slice(1).filter(w => !w.dynamic).map(w => w.text) : [])];
+  const candidates = [...st.urls.filter(u => !u.dynamic).map(u => u.text), ...(SECRET_CHECKED.has(st.program) && (st.program !== 'git' || gitNetwork(st)) ? st.words.slice(1).filter(w => !w.dynamic).map(w => w.text) : [])];
   for (const c of candidates) {
     for (const text of new Set([c, decoded(c)])) {
       const clean = sanitizeModelInputText(text);
