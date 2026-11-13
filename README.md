@@ -257,9 +257,9 @@ Ollama は OpenAI 互換の接続（はじめの設定では「OpenAI-compatible
 | 入力検証 | TypeBox |
 | 画面 | React 19 ＋ Vite |
 | テスト | `node:test` |
-| 依存 | `@anthropic-ai/sdk`、TypeBox、`croner`（タイムゾーン対応の cron）、`playwright-core`（ブラウザの操作。Apache-2.0。ブラウザ本体は同梱せず、手元の Chrome（または path で指した Chromium 系）を使う）、`parse5`（HTML の解析）、React 一式、`react-markdown`、画面のフォント（`@fontsource`） |
+| 依存 | `@anthropic-ai/sdk`、TypeBox、`croner`（タイムゾーン対応の cron）、`playwright-core`（ブラウザの操作。Apache-2.0。ブラウザ本体は同梱せず、手元の Chrome（または path で指した Chromium 系）を使う）、`parse5`（HTML の解析）、React 一式、`react-markdown` |
 | ブラウザの通信 | ブラウザの通信は、beat 内の中継（`src/tools/browser/egress-proxy.ts`）だけを通す。中継は公開の IPv4 の宛先にだけつなぐ。ブラウザの要求の横取り（`route.ts`）は副の守りで、本体は中継 |
-| 画面の文字と絵 | Inter（英字）と IBM Plex Sans JP（日本語）の 2 つ（どちらも SIL Open Font License 1.1）を `@fontsource` から同梱し、外部へは取りに行かない。見出しも同じ字体で、太さで分けている。ライセンス文は [`web/fonts-LICENSE.md`](web/fonts-LICENSE.md)。アイコンは Lucide（ISC）で、出どころは `web/src/icon-paths.ts` の先頭に書いてある |
+| 画面の文字と絵 | 書体は OS にあるもの（Segoe UI・Yu Gothic UI・Georgia・Consolas など）だけを使い、書体のファイルは同梱せず、外部へも取りに行かない。アイコンはデザインの形を `web/src/ui/icons.ts` に持つ |
 
 部品ごとの役割・入口のファイル・使っているものは [map.md](map.md) にあります。
 
