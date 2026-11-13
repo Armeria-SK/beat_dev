@@ -133,13 +133,13 @@ export function runResult(run: Pick<RunRow, 'ok' | 'error_kind' | 'flags'>): Log
   return run.flags.includes('fallback') ? 'fallback' : 'ok';
 }
 
-export function callResult(call: Pick<ToolCallRow, 'ok' | 'decided_by'>): LogResult {
-  if (call.decided_by === 'pending') return 'parked';
+export function callResult(call: Pick<ToolCallRow, 'ok' | 'decided_by' | 'decision' | 'approval_id'>): LogResult {
+  if (call.decided_by === 'pending' && call.decision === 'ask' && call.approval_id?.startsWith('pending:')) return 'parked';
   return call.ok === null ? 'running' : call.ok === 1 ? 'ok' : 'failed';
 }
 
 export function judgedLine(judged: JudgedCounts): { allowed: number; parked: number; notRun: number } | null {
-  const parked = Object.values(judged.parked).reduce((sum, n) => sum + (n ?? 0), 0);
+  const parked = (judged.parked.judge ?? 0) + (judged.parked.judge_failed ?? 0);
   return judged.allowed + parked + judged.notParked > 0 ? { allowed: judged.allowed, parked, notRun: judged.notParked } : null;
 }
 

@@ -123,11 +123,14 @@ test('ui/library: Runs は実行・道具・振り返りを時刻の新しい順
   assert.equal(runResult({ ok: 0, error_kind: 'cancelled', flags: [] }), 'stopped');
   assert.equal(jobResult('running'), 'running');
   assert.equal(judgedLine({ allowed: 0, parked: {}, notParked: 0 }), null, '判定役が何もしていない日は出さない');
-  assert.deepEqual(judgedLine({ allowed: 5, parked: { send: 2, judge: 1 }, notParked: 1 }), { allowed: 5, parked: 3, notRun: 1 }, 'Pending に積んだ数は種類をまとめる');
-  assert.equal(callResult({ ok: 1, decided_by: 'pending' }), 'parked', 'Pending に積んだ道具は Parked');
-  assert.equal(callResult({ ok: 0, decided_by: 'pending' }), 'parked');
-  assert.equal(callResult({ ok: 0, decided_by: 'not-parked' }), 'failed', '積めずに動かさなかった道具は Failed');
-  assert.deepEqual(logRows({ runs: [], calls: [callRow('p', 1, { decided_by: 'pending', approval_id: 'pending:12' })], jobs: [], runLabel: k => k, titleOf: () => null }).map(r => r.result), ['parked']);
+  assert.deepEqual(judgedLine({ allowed: 5, parked: { send: 2, judge: 1, judge_failed: 2 }, notParked: 1 }), { allowed: 5, parked: 3, notRun: 1 }, '判定役の数なので、積んだ数は判定役が聞いた種類（judge・judge_failed）だけ。送る・消すは判定役を通らない');
+  assert.equal(judgedLine({ allowed: 0, parked: { send: 4 }, notParked: 0 }), null);
+  const parkedCall = { ok: 1, decided_by: 'pending', decision: 'ask', approval_id: 'pending:12' } as const;
+  assert.equal(callResult(parkedCall), 'parked', 'Pending に積んだ道具は Parked');
+  assert.equal(callResult({ ...parkedCall, ok: 0 }), 'parked');
+  assert.equal(callResult({ ok: 0, decided_by: 'pending', decision: 'deny', approval_id: null }), 'failed', '積む先が無くて断った呼び出し（decided_by は pending でも deny）は Parked にしない');
+  assert.equal(callResult({ ok: 0, decided_by: 'not-parked', decision: 'deny', approval_id: null }), 'failed', '積めずに動かさなかった道具は Failed');
+  assert.deepEqual(logRows({ runs: [], calls: [callRow('p', 1, { decided_by: 'pending', decision: 'ask', approval_id: 'pending:12' }), callRow('d', 0, { decided_by: 'pending', decision: 'deny', approval_id: null, ok: 0 })], jobs: [], runLabel: k => k, titleOf: () => null }).map(r => r.result), ['parked', 'failed']);
   assert.equal(jobResult('failed'), 'failed');
 });
 
