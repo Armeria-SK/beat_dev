@@ -149,4 +149,6 @@ test('PowerShell の .exe・.ps1 のパスは、その文の作業フォルダ�
   assert.equal(winargs("cd tools; ./build.ps1 'a b'"), false, 'cd のあとの作業フォルダで見る');
   assert.equal(winargs("cd ok; ./build.ps1 'a b'"), true);
   assert.equal(winargs("cd $d; ./build.ps1 'a b'"), true, 'cd の先が分からなければ、あるとはみなさない');
+  assert.equal(winargs("Remove-Item tools/build.ps1; ./tools/build.ps1 'a b'"), true, '前の文で消せば、動くときには無い');
+  assert.equal(winargs("Rename-Item tools/build.ps1 x.ps1; ./tools/build.ps1 'a b'"), true, '前の文で名前を変えても同じ');
 });

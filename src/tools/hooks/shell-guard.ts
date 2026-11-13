@@ -287,6 +287,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (result.cwd) followCd(seen, result.cwd);
   };
   const fileExists = (path: string): boolean => {
+    if (wroteEarlier) return false;
     if (!seen.known && !parsePath(path).root) return false;
     const full = resolve(seen.cwd, path);
     return exists(full) && !isDirectory(full);
