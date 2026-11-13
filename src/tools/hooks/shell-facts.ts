@@ -92,8 +92,10 @@ function shellCode(args: readonly Word[], stdin: boolean): InnerSource {
     const code = args[j];
     return !code || code.dynamic ? null : { text: code.text, shell: 'bash' };
   }
-  if (args.some(w => w.dynamic || /^-[A-Za-z]*s[A-Za-z]*$/u.test(w.text))) return null;
-  const script = args.find(w => !w.text.startsWith('-') || w.text === '-');
+  const scriptAt = args.findIndex(w => !w.text.startsWith('-') || w.text === '-');
+  const options = scriptAt < 0 ? args : args.slice(0, scriptAt);
+  if (args.some(w => w.dynamic) || options.some(w => /^-[A-Za-z]*s[A-Za-z]*$/u.test(w.text))) return null;
+  const script = args[scriptAt];
   if (script) return STDIN_SCRIPT.test(script.text) ? null : undefined;
   return stdin ? null : undefined;
 }
@@ -333,6 +335,7 @@ export function gitGlobalOf(words: readonly Word[]): string[] {
 }
 
 export function programOdd(text: string, name: string): boolean {
+  if (text === '.') return false;
   const normal = posix.normalize(text.replaceAll('\\', '/')).replace(/[/. ]+$/u, '');
-  return (posix.basename(normal).toLowerCase().replace(/\.exe$/u, '')) !== name;
+  return (posix.basename(normal).toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, '')) !== name;
 }

@@ -482,7 +482,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const result = classified.results[index]!;
     const words = st.words.map(w => w.text);
     const first = st.words[0];
-    const name = first && !first.dynamic ? (first.text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.exe$/u, '') : '';
+    const name = first && !first.dynamic ? (first.text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, '') : '';
     const stdin = st.pipedIn || st.redirects.some(r => STDIN_OPS.has(r.op));
     const inline = inlineCode(name, st.words);
     current = {
