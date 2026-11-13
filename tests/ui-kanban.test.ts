@@ -166,3 +166,10 @@ test('ui/kanban: カードの製品は、タスクは行の project_id、Session
   const b = board([task('t1', 'inbox', { project_id: 'p2aaaa' }), task('t2', 'inbox')]);
   assert.deepEqual(b.columns[0]!.cards.map(cardProject).sort(), ['p2aaaa', null].sort());
 });
+
+test('kanban: 動いている会話のカードも、終わった会話のカードも、会話の製品を持つ（製品の絞り込みに入る）', () => {
+  const conversations = [{ id: 'live', title: 'Live', project_id: 'p1aaaa' }, { id: 'done', title: 'Done', project_id: 'p2aaaa' }, { id: 'plain', title: 'Plain', project_id: null }];
+  const runs = [runRow('r-live', 'live', { ok: null, duration_ms: null }), runRow('r-done', 'done'), runRow('r-plain', 'plain')];
+  const cards = sessionCards({ conversations, drafts: [{ runId: 'r-live', conversationId: 'live' }], runs, checklists: NONE });
+  assert.deepEqual(cards.map(c => [c.conversationId, cardProject(c)]), [['live', 'p1aaaa'], ['done', 'p2aaaa'], ['plain', null]]);
+});

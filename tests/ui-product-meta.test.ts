@@ -52,3 +52,8 @@ test('ui/product-meta: 製品の名前と、しまった製品の見分け（製
   assert.deepEqual(productLine('p2aaaa', active, archived), { name: 'P2AAAA', archived: true });
   assert.deepEqual(productLine('gone01', active, []), { name: null, archived: true }, '一覧に無い製品を、製品なしと言わない');
 });
+
+test('productLine: 動いている一覧に入っていても、しまった印（archived_at）のある製品はしまった製品として出す', () => {
+  const stale = [project('p1aaaa', { archived_at: 5 })];
+  assert.deepEqual(productLine('p1aaaa', stale, stale), { name: 'P1AAAA', archived: true });
+});
