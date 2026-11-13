@@ -16,6 +16,7 @@ const REFUSED = [
 
 const OWNER = [
   'guard.write_git', 'guard.write_instructions', 'guard.write_persona', 'guard.write_skill',
+  'guard.touch_git', 'guard.touch_instructions', 'guard.touch_persona', 'guard.touch_skill',
   'list.write_ancestor', 'list.tool_config', 'list.secret_in_deps', 'list.git_config', 'code.git_config',
   'file.git', 'file.tool_config', 'file.persona', 'file.skill', 'file.skill_auto', 'file.instructions',
 ] as const;
@@ -28,7 +29,6 @@ const PRODUCT_IF = ['list.external', 'list.command', 'list.git_commit'] as const
 
 const JUDGE = [
   'guard.substitution', 'guard.interpreter', 'guard.cd_unresolved', 'guard.cd_outside', 'guard.relative_unknown', 'guard.touches_outside',
-  'guard.touch_persona', 'guard.touch_skill', 'guard.touch_git',
   'list.flag', 'list.form', 'list.arith', 'list.dynamic', 'list.shape', 'list.env', 'list.install', 'list.git_unreadable', 'list.tool_rc', 'list.tool_rc_cwd',
   'list.git_moves', 'list.npm_rc', 'list.npm_rc_unknown', 'list.git_remote', 'list.git_old', 'list.git_hooks', 'list.git_remote_local', 'list.git_hooks_path', 'list.git_net',
   'list.git_write', 'list.git_push', 'list.ps_write', 'list.ps_pipe', 'list.download', 'list.url_glob', 'list.file_list', 'list.pipe_read', 'list.write_dynamic',

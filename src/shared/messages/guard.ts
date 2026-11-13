@@ -121,6 +121,7 @@ const en = {
   'guard.write_git': 'It writes into a git folder (.git) ({path}). Git hooks and settings can run commands',
   'guard.write_instructions': "It rewrites the product's instruction file ({path}). AI runs in this product read it as instructions",
   'guard.touch_git': 'It points at a git folder (.git) ({path}). The command is not a read-only one, so it may write there. Git hooks and settings can run commands',
+  'guard.touch_instructions': "It points at the product's instruction file ({path}). The command is not a read-only one, so it may rewrite it. AI runs in this product read it as instructions",
 
   'code.file_run': 'It runs code written in a file ({path}). beat can rewrite that file, so it is checked with you every time',
   'code.stdin_run': 'It runs code passed through standard input with {cmd}. The command text does not show what the code is, so it is checked with you every time',

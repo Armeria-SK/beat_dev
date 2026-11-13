@@ -393,6 +393,29 @@ test('4-3a 順 4 の否定: 開発の実行役が製品の外のフォルダ・�
   for (const command of ['make', 'make -j4 test', 'pytest -q tests', 'npm test']) assert.equal((await r.shell(command)).decidedBy, 'product-code', `製品の中で閉じる形は今までどおり: ${command}`);
 });
 
+test('4-3a 順 3: 包んだ形・中の文・.NET の呼び出しで守る場所（.git・AGENTS.md）に届くものも、判定役でなく持ち主へ', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  writeFileSync(join(r.root, 'AGENTS.md'), 'rules');
+  writeFileSync(join(r.root, 'x'), 'echo hi');
+  const commands = [
+    'bash -c "cp x .git/hooks/pre-commit"', 'sh -c "echo >> AGENTS.md"', 'timeout 5 cp x .git/hooks/pre-commit', 'env X=1 cp x AGENTS.md',
+    'find . -name x -exec cp x AGENTS.md +', 'install x .git/hooks/pre-commit', 'dd if=x of=AGENTS.md', 'ln -s x .git/hooks/pre-commit',
+    'rsync x .git/hooks/pre-commit', 'tar -xf a.tar -C .git', 'unzip a.zip -d .git/hooks', 'xargs cp x .git/hooks/pre-commit',
+    '[IO.File]::WriteAllText("AGENTS.md", "x")',
+  ];
+  for (const command of commands) {
+    const before = r.waiting().length;
+    const outcome = await r.shell(command);
+    const parked = r.waiting().length > before ? r.waiting()[0]!.kind : undefined;
+    assert.ok(outcome.decision === 'deny' || parked === 'owner' || parked === 'send' || parked === 'delete', `${command}: ${outcome.decidedBy} ${parked} ${outcome.output.content}`);
+  }
+  assert.equal(r.judge.calls.length, 0, '判定役には回らない');
+  assert.equal(readFileSync(join(r.root, 'AGENTS.md'), 'utf8'), 'rules');
+  assert.equal(existsSync(join(r.root, '.git', 'hooks', 'pre-commit')), false);
+  for (const command of ['cat AGENTS.md', 'git status', 'ls .git']) assert.notEqual(r.waiting().length && (await r.shell(command)).decidedBy, 'pending', `読むだけは持ち主へ回さない: ${command}`);
+});
+
 test('4-3a 順 4 の 2 つ目の否定: フックのあるリポジトリ・git -c・外や上のリポジトリ・秘密らしいファイル・読めない語・ほかの git は乗らない', { skip: !gitAvailable && 'git が無い' }, async t => {
   r_hooks: {
     const r = rig(t);

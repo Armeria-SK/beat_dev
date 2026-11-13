@@ -15,6 +15,7 @@ import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound
 import { gitOutboundEnv, isolatedGit } from '../hooks/outbound-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
+import { protectedTouchOf } from '../hooks/protected-touch.ts';
 import { selfTarget } from '../hooks/self-port.ts';
 import { outboundText } from '../../shared/messages/outbound.ts';
 import { pendingText } from '../../shared/messages/pending.ts';
@@ -120,12 +121,14 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const spec = resolveShell(shell.shell);
   const powershell = spec.name === 'powershell' || spec.name === 'pwsh';
   const { env: childEnv, gitIsolated, gitExe } = childEnvFor(shell, cwd.cwd, powershell);
-  const verdict = checkShellCommand(input.command, cwd.cwd, {
+  const checked = checkShellCommand(input.command, cwd.cwd, {
     policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
     selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
     gitIsolated,
     which: name => findExecutable(name, childEnv, cwd.cwd, { powershell }),
   });
+  const touch = checked.decision === 'deny' ? undefined : protectedTouchOf(input.command, checked.statements, ctx.policy, cwd.cwd);
+  const verdict = touch && !checked.reasonKeys.includes(touch.key) ? { ...checked, decision: 'ask' as const, reasons: [...checked.reasons, guardText(language, touch.key, { path: touch.path })], reasonKeys: [...checked.reasonKeys, touch.key], askKinds: [...new Set([...checked.askKinds, 'code' as const])] } : checked;
   const self = verdict.decision === 'deny' ? undefined : selfTarget(input.command, ctx.config.server);
   if (self !== undefined) return { decision: 'deny', reasons: [guardText(language, 'guard.self_port', { target: self })], reasonKeys: ['guard.self_port'], sends: true, removes: true };
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
