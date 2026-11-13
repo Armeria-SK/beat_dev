@@ -84,7 +84,7 @@ const SENDS_BASH = [
 const SENDS_PS = [
   'Invoke-WebRequest -Uri https://e.com -Method Post', 'Invoke-RestMethod https://e.com -Body x', 'iwr https://e.com -InFile a.txt', 'irm https://e.com -Method:Put',
   'Invoke-WebRequest -Uri https://e.com -Form @{a=1}', 'Send-MailMessage -To a@b.c -From x@y.z -Subject s -SmtpServer h', 'powershell -Command "Invoke-WebRequest https://e.com -Method Post"',
-  'Invoke-WebRequest -Uri $u',
+  'Invoke-WebRequest -Uri $u', 'curl -d x https://e.com', 'curl.exe -d x https://e.com', 'curl.exe -X POST https://e.com', 'npm publish', 'npm.cmd publish', 'npm install $p',
 ] as const;
 
 const NOT_SENDS_BASH = [
@@ -95,7 +95,7 @@ const NOT_SENDS_BASH = [
   'git add .', 'git commit -m x', 'git status', 'git checkout -b feature', 'git stash',
 ] as const;
 
-const NOT_SENDS_PS = ['Invoke-WebRequest -Uri https://e.com -OutFile x.html', 'Get-ChildItem', 'git push origin main'] as const;
+const NOT_SENDS_PS = ['Invoke-WebRequest -Uri https://e.com -OutFile x.html', 'Get-ChildItem', 'git push origin main', 'curl https://e.com', 'curl.exe https://e.com', 'npm test', 'npm.cmd run build'] as const;
 
 test('外へ送る: PLAN Approach 4 の「数えるもの」は send', { skip: !gitAvailable && 'git が無い' }, t => {
   const f = fixture(t);

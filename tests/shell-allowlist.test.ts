@@ -406,8 +406,9 @@ test('ネットワーク: 宛先の決まり（C9）と、書き込み先（-o�
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -OutFile a.html -MaximumRedirection 0', 'powershell'), 'once');
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Delete -MaximumRedirection 0', 'powershell'), 'ask');
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Trace -MaximumRedirection 0', 'powershell'), 'once');
-  assert.equal(levelOf('curl https://e -MaximumRedirection 0', 'powershell'), 'allow');
-  assert.equal(levelOf('curl https://e -Method Post -MaximumRedirection 0', 'powershell'), 'ask');
+  for (const args of ['https://e -MaximumRedirection 0', '-sS https://e/', '-q -sS https://e/', '-d x https://e/', '-K cfg https://e/', '-o out.html https://e/', '-L https://e/']) {
+    for (const shell of ['powershell', 'pwsh'] as const) assert.deepEqual(keysOf(`curl ${args}`, shell), keysOf(`curl.exe ${args}`, shell), `${shell}: curl ${args}`);
+  }
   assert.equal(levelOf('wget http://127.0.0.1/', 'powershell'), 'once');
   assert.equal(classify('Invoke-WebRequest -Uri https://e', 'powershell').results[0]!.fetch, true);
 });
@@ -538,18 +539,15 @@ test('beat 自身の API に名前では届かせない: Host・Origin などの
   assert.equal(classify('curl -L https://e.example/').results[0]!.reasons.some(r => r.exempt), true, '転送を追う指定は、持ち主が選んだコマンドとして外せる');
 });
 
-test('Invoke-WebRequest・Invoke-RestMethod（5.1 の curl・wget も）: 転送は既定で追うので、-MaximumRedirection 0 を付けたときだけ許す。-Headers は一覧に無い', () => {
+test('Invoke-WebRequest・Invoke-RestMethod: 転送は既定で追うので、-MaximumRedirection 0 を付けたときだけ許す。-Headers は一覧に無い', () => {
   const once = [
     'Invoke-WebRequest -Uri https://e.example/', 'iwr https://e.example/', 'Invoke-RestMethod https://e.example/api', 'irm https://e.example/', 'iwr https://e.example/ -MaximumRedirection 5', 'iwr https://e.example/ -MaximumRedirection 1',
-    'iwr https://e.example/ -MaximumRedirection $n', 'iwr https://e.example/ -UseBasicParsing', 'curl https://e.example/', 'wget https://e.example/x', 'iwr https://e.example/ -OutFile a.html',
+    'iwr https://e.example/ -MaximumRedirection $n', 'iwr https://e.example/ -UseBasicParsing', 'iwr https://e.example/ -OutFile a.html',
     'iwr https://e.example/ -MaximumRedirection 0 -Headers @{Host="127.0.0.1:7800"}', 'irm https://e.example/ -MaximumRedirection 0 -Headers $h',
     'iwr https://e.example/ -MaximumRedirection 0 -OutFile a.html',
   ];
-  for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
-    const list = shell === 'pwsh' ? once.filter(c => !c.startsWith('curl ') && !c.startsWith('wget ')) : once;
-    assert.deepEqual(list.filter(c => levelOf(c, shell) !== 'once'), [], shell);
-  }
-  const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0', 'curl https://e.example/ -MaximumRedirection 0'];
+  for (const shell of ['powershell', 'pwsh'] as ShellKind[]) assert.deepEqual(once.filter(c => levelOf(c, shell) !== 'once'), [], shell);
+  const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0'];
   assert.deepEqual(allow.filter(c => levelOf(c, 'powershell') !== 'allow'), []);
   assert.equal(levelOf('iwr https://e.example/ -MaximumRedirection 0 -Method Post -Body x', 'powershell'), 'ask', '送る形は、これまでどおりふつうの確かめ');
 });

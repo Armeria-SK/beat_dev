@@ -83,7 +83,7 @@ function external(key: string, acc: Acc, ctx: MatchCtx): string {
 function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx): void {
   const words = st.words;
   if (!exe) {
-    const spec = psCmdlet(ctx.shell === 'powershell' && (key === 'curl' || key === 'wget') ? 'iwr' : key);
+    const spec = psCmdlet(key);
     if (spec) {
       const p = parsePs(spec, words, acc, ctx);
       spec.extra?.(p, acc, ctx, st);
