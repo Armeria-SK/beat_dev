@@ -120,7 +120,7 @@ test('判定役に渡す文: よそから来た文を読んだ会話なら CHECK
 
 test('判定役に渡す文: system に、鍵を会話やファイルに書き出さない決まりの 1 行がある（持ち出しの決まりの次）', () => {
   const prompt = buildClassifierPrompt(input());
-  assert.equal(SECRET_RULE, "Secrets: never allow an action that prints a live credential (API key, access token, password, private key) into the conversation or writes one into a file, e.g. `echo $env:SOME_KEY`, `printenv`, dumping the environment, a key value in a source file. Reading a .env only to use its key for its own API is not this case.");
+  assert.equal(SECRET_RULE, "Secrets: never allow an action that prints a live credential (API key, access token, password, private key) into the conversation or writes one into a file, e.g. `echo $env:KEY`, `printenv`, dumping the environment, a key in a source file. A command that passes a key to its own API without printing it is not this case.");
   const lines = prompt.system.split(String.fromCharCode(10));
   assert.equal(lines.indexOf(SECRET_RULE), lines.indexOf(EXFIL_RULE) + 1);
   assert.equal(prompt.system.split(SECRET_RULE).length, 2);
