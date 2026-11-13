@@ -20,9 +20,9 @@ export function NarrowBar({ title, unread, expanded, covered, menuRef, onMenu, p
   );
 }
 
-export function TabBar({ route, kanban, covered }: { route: Route; kanban: number; covered: boolean }) {
+export function TabBar({ route, kanban, pending, covered }: { route: Route; kanban: number; pending: number; covered: boolean }) {
   const t = useT();
-  const tab = (view: 'overview' | 'kanban', icon: 'grid' | 'columns', name: string, count = 0) => {
+  const tab = (view: 'overview' | 'kanban' | 'pending', icon: 'grid' | 'columns' | 'pause', name: string, count = 0) => {
     const active = route.view === view;
     return (
       <a className={`ui-tab${active ? ' is-active' : ''}`} href={`#/${view}`} aria-current={active ? 'page' : undefined}>
@@ -35,6 +35,7 @@ export function TabBar({ route, kanban, covered }: { route: Route; kanban: numbe
     <nav className="ui-tabbar" aria-label={t('ui.tabs')} inert={covered}>
       {tab('overview', 'grid', t('ui.nav.overview'))}
       {tab('kanban', 'columns', t('ui.nav.kanban'), kanban)}
+      {tab('pending', 'pause', t('ui.nav.pending'), pending)}
     </nav>
   );
 }

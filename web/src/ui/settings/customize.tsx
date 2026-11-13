@@ -161,7 +161,7 @@ export function AdvancedPanel() {
     const saved = await ctx.commit('adv:file', latest => {
       const merged = mergeRawConfig(base, parsed, latest);
       conflicts = merged.conflicts;
-      return conflicts.length > 0 ? latest : merged.config;
+      return merged.config;
     });
     if (conflicts.length > 0) { ctx.fail('adv:file', t('ui.set.adv.conflict', conflicts.join(', '))); return; }
     if (saved) { toast({ icon: 'check', title: t('ui.set.adv.saved') }); await open(); }

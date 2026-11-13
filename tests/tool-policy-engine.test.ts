@@ -106,24 +106,31 @@ test('A3: モデルが止めた道具を呼んでも（一覧に無いのに呼�
   assert.deepEqual(rows, [{ tool: 'file_write', decision: 'deny', decided_by: 'policy', ok: 0 }]);
 });
 
-test('A3: ask の道具は、会話の中でも毎回承認を求める（「この会話では許可」を送っても、2 回目はまた聞く）', async t => {
+test('A3: ask の道具は、会話の中で呼ぶたびに Pending に積まれ（kind policy）、札は出ず、実行は続く', async t => {
   const s = await setup(t, { file_write: 'ask' });
   s.adapter().scripts.push(
     toolCall('file_write', { path: 'a.md', content: '1' }), toolCall('file_write', { path: 'a.md', content: '2' }), reply('書きました'),
   );
   const { done } = await s.send('a.md を 2 回書いて');
-  const approvals: Array<Extract<RunEvent, { type: 'approval.requested' }>> = [];
-  for (let n = 1; n <= 2; n++) {
-    for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < n; i++) await new Promise(r => setTimeout(r, 10));
-    const requested = s.events.filter(e => e.type === 'approval.requested')[n - 1] as Extract<RunEvent, { type: 'approval.requested' }>;
-    assert.ok(requested, `${n} 回目の承認の依頼`);
-    approvals.push(requested);
-    assert.equal((requested.approval as { everyTime?: boolean }).everyTime, true, '画面に渡す形にも「毎回」の印が付く');
-    s.app.approvals.decide(requested.approval.id, 'conversation');
-  }
   assert.ok((await done).ok);
-  assert.notEqual(approvals[0]!.approval.id, approvals[1]!.approval.id);
-  assert.equal(existsSync(join(s.paths.workspace, 'a.md')), true);
+  assert.equal(s.events.filter(e => e.type === 'approval.requested').length, 0);
+  assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(row => row.kind), ['policy', 'policy']);
+});
+
+test('A3: 自動承認の会話で web_fetch を Ask にすると、事前の判定が allow でも、判定役が許すと答える台本でも、判定役を呼ばずに policy で積む', async t => {
+  const s = await setup(t, { web_fetch: 'ask' });
+  const judged: string[] = [];
+  const allowJudge: Script = async function* (req) { judged.push(req.system.frozen.slice(0, 40)); yield { type: 'text', delta: '{"decision":"allow","reason":"ok"}' }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
+  s.adapter().scripts.push(toolCall('web_fetch', { url: 'https://example.com/' }), allowJudge, reply('積みました'));
+  const outcome = s.app.engine.send('c1', 'example.com を読んで', [], [], { permissionMode: 'auto' });
+  assert.ok(outcome.ok, JSON.stringify(outcome));
+  await s.app.engine.wait(outcome.runId);
+  assert.equal(s.app.conversations.modeOf('c1'), 'auto');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(row => [row.tool, row.kind]), [['web_fetch', 'policy']]);
+  assert.equal(s.adapter().calls.filter(req => req.tools.length === 0).length, 0, '判定役は呼ばれない');
+  assert.equal(s.events.filter(e => e.type === 'approval.requested').length, 0);
 });
 
 test('A3: 実行の途中で持ち主が道具を止めたら、その実行の次の呼び出しから効く（実行を始めたときの設定のままにしない）', async t => {

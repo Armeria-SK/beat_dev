@@ -67,7 +67,7 @@ export function listPlan(latest: Config, form: ConnectForm): { config: Config; p
   return { ...built, items: [...accessWidening(latest, built.config), ...(form.key.trim() && provider ? keyEntryAccess(provider) : [])] };
 }
 
-export const REACHABLE =new Set(['ok', 'too_small', 'exceeds_model', 'unknown']);
+export const REACHABLE = new Set(['ok', 'too_small', 'exceeds_model', 'unknown']);
 
 export const resumeIndex = (steps: OnboardingSteps): number => STEPS.indexOf(resumeStep(steps));
 

@@ -100,3 +100,15 @@ test('モデルの確かめの札: 小さすぎるモデルは Reachable と出�
   const model = (status: string) => ({ id: 'm', provider: 'p', probe: { status } }) as never;
   assert.equal(providerReach('p', [model('too_small')]), 'ok');
 });
+
+test('設定ファイルの直接編集: ぶつかりがあるときは、どの項目も当てずに最新の設定をそのまま返す（何も書かない）', () => {
+  const loaded = defaultConfig() as Json;
+  const edited = structuredClone(loaded);
+  edited.server.port = 4999;
+  edited.worker.maxRunsPerHour = 55;
+  const latest = structuredClone(loaded);
+  latest.server.port = 4888;
+  const merged = mergeRawConfig(loaded, edited, latest);
+  assert.deepEqual(merged.conflicts, ['server.port']);
+  assert.deepEqual(merged.config, latest);
+});

@@ -1,18 +1,13 @@
 import type { CuriosityItem, Task, TaskStatus } from './api.ts';
 import type { PlainKey } from './i18n/types.ts';
-import type { IconName } from './icon-name.ts';
 
 // タスク画面の、画面を使わない部分（分け方・並べ方・どの操作を出すか）。文字は辞書のキーで持ち、表示のときに引く。
 
 export type TaskSection = 'attn' | 'act' | 'sch' | 'done';
-export const SECTION_ORDER: readonly TaskSection[] = ['attn', 'act', 'sch', 'done'];
 
 export const STATUS_KEY: Record<TaskStatus, PlainKey> = {
   inbox: 'task.status.inbox', ready: 'task.status.ready', running: 'task.status.running', waiting: 'task.status.waiting',
   scheduled: 'task.status.scheduled', done: 'task.status.done', failed: 'task.status.failed', cancelled: 'task.status.cancelled',
-};
-export const STATUS_ICON: Record<TaskStatus, IconName> = {
-  inbox: 'sparkles', ready: 'circle', running: 'loader', waiting: 'help', scheduled: 'repeat', done: 'circleCheck', failed: 'circleX', cancelled: 'circleSlash',
 };
 export const ORIGIN_KEY: Record<Task['origin'], PlainKey> = {
   user: 'tasks.origin.user', self: 'tasks.origin.self', schedule: 'tasks.origin.schedule', curiosity: 'tasks.origin.curiosity',
@@ -34,9 +29,8 @@ export function eventKey(kind: string): PlainKey | null {
   return Object.hasOwn(EVENT_KEYS, kind) ? EVENT_KEYS[kind as keyof typeof EVENT_KEYS] : null;
 }
 
-export const isFinished = (status: TaskStatus): boolean => status === 'done' || status === 'failed' || status === 'cancelled';
-export const needsAttention = (status: TaskStatus): boolean => status === 'waiting' || status === 'inbox';
-export const isAccent = (status: TaskStatus): boolean => status === 'running' || status === 'waiting' || status === 'inbox';
+const isFinished = (status: TaskStatus): boolean => status === 'done' || status === 'failed' || status === 'cancelled';
+const needsAttention = (status: TaskStatus): boolean => status === 'waiting' || status === 'inbox';
 
 // 実行待ちで開始の時刻がこれから先のもの（日時指定、再試行までの休み、止めたあとの 20 秒）は「予定」に置く。
 export function sectionOf(task: Task, now: number): TaskSection {

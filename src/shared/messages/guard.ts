@@ -238,6 +238,11 @@ const en = {
   'hook.aborted': 'Stopped',
   'hook.denied': 'The hook "{name}" refused it',
   'hook.exit_code': 'Exit code {code}',
+  'hook.protected': '{path} is on your protected list',
+  'hook.protected_real': '{path} (really {real})',
+  'hook.protected_link': '{path} (the same file as {other})',
+  'hook.protected_unchecked': '{path} (could not check all protected files)',
+  'hook.protected_unsure': '{path} (could not resolve where it really points)',
 };
 
 export const guardText = defineMessages('guard', en);

@@ -200,6 +200,7 @@ export function buildMcpTool(p: BuildToolParams): BuildToolResult {
     ...(removes ? { removes: true as const } : {}),
     mcp: { server: server.id, tool: remote.name, localOk: server.localOk },
     preCheck,
+    redact,
     summarize: (input, lang) => ({ title: toolText(lang, 'mcp.summary_title', label), body: redact(safeJson(input)).slice(0, 2000) }),
     async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput> {
       const lang = languageOf(ctx.config);

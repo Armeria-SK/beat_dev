@@ -99,7 +99,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const projectId = usableProjectId(app, body.projectId);
     try {
       const task = app.tasks.create({
-        title, body: text, priority, origin: 'user', actor: 'user', projectId,
+        title, body: text, priority, origin: 'user', actor: 'user', projectId, ownerRequest: true,
         ...(when ? { runAt: when } : {}), ...(cron ? { cron, timezone: app.config().timezone } : {}),
       });
       // 「今すぐ」頼まれたものは、すぐに実行する（1時間の上限より先に）
@@ -139,6 +139,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
         let next = cron !== undefined ? app.tasks.setSchedule(task.id, cron, app.config().timezone, 'user') : task;
         if (cron === undefined || Object.keys(fields).length) {
           next = app.tasks.update(task.id, fields, 'user');
+          app.tasks.ownerEdited(task.id, { title, body: text, doneCriteria });
           app.tasks.event(task.id, 'edited', 'user');
         }
         return next;

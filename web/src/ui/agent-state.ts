@@ -7,6 +7,7 @@ export interface Waiting {
   proposals: number;
   answers: number;
   drafts: number;
+  pending: number;
 }
 
 export function countTasks(statuses: Iterable<TaskStatus>): { proposals: number; answers: number } {
@@ -19,7 +20,7 @@ export function countTasks(statuses: Iterable<TaskStatus>): { proposals: number;
   return { proposals, answers };
 }
 
-export const waitingTotal = (w: Waiting): number => w.approvals + w.proposals + w.answers + w.drafts;
+export const waitingTotal = (w: Waiting): number => w.approvals + w.proposals + w.answers + w.drafts + w.pending;
 
 export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers'>): number => w.proposals + w.answers;
 

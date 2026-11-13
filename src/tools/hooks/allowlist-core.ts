@@ -9,7 +9,7 @@ export const RANK: Record<Level, number> = { allow: 0, ask: 1, once: 2, deny: 3 
 export const worstLevel = (a: Level, b: Level): Level => (RANK[a] >= RANK[b] ? a : b);
 
 // 判定の理由。exempt: 持ち主が tools.shell.allow に書いたコマンドで外せる（「一覧に無いコマンド・フラグ・形」の確かめだけ。§11.6）
-export interface Reason { key: GuardMessageKey; params: Record<string, string | number>; level: Level; exempt: boolean }
+export interface Reason { key: GuardMessageKey; params: Record<string, string | number>; level: Level; exempt: boolean; id?: string }
 // list: パイプで次のコマンドに流れるファイル（Get-ChildItem の出力など）として読まれる。word は一覧の元のパスで、フォルダなら中のファイル（deep なら下の階層まで）を読むものとして調べる。
 // items: フォルダの中身ではなく、当たったもの自身（Get-Item・Resolve-Path）。include/exclude: 名前の絞り込み（* と ? だけの指定。空 = すべて）
 // skipHidden: 「.」で始まる名前は読まれないものとして飛ばす（rg の既定）
@@ -68,9 +68,9 @@ export class Acc {
   deletes = false;
   cwd?: { word: Word | null };
   readonly remoteNames: Array<{ url: Word; dir: Word | null }> = [];
-  add(level: Level, key: GuardMessageKey, params: Record<string, string | number> = {}, exempt = false): void {
+  add(level: Level, key: GuardMessageKey, params: Record<string, string | number> = {}, exempt = false, id?: string): void {
     if (level === 'allow') return;
-    this.reasons.push({ key, params, level, exempt });
+    this.reasons.push({ key, params, level, exempt, ...(id ? { id } : {}) });
   }
   strict = false;
   read(word: Word, recursive = false): void { this.paths.push({ word, mode: 'read', recursive, ...(this.strict ? { strict: true } : {}) }); }

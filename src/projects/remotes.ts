@@ -14,6 +14,37 @@ const withoutSecrets = (url: string): string => {
   return parts ? `${parts[1]}${parts[2]}` : url;
 };
 
+const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:', 'ssh+git:']);
+const DEFAULT_PORTS: Readonly<Record<string, string>> = { 'ssh:': '22', 'git+ssh:': '22', 'ssh+git:': '22', 'https:': '443', 'http:': '80', 'git:': '9418' };
+
+export function remoteKey(url: string): string {
+  const raw = url.trim();
+  const local = (p: string): string => {
+    const clean = p.replaceAll('\\', '/').replace(/\/+$/u, '');
+    return `local:${process.platform === 'win32' ? clean.toLowerCase() : clean}`;
+  };
+  if (/^[A-Za-z]:(?:[\\/]|$)/u.test(raw)) return local(raw);
+  const scp = /^(?:[^@/:\s]+@)?([^:/\s]+):(?!\/\/)(.*)$/u.exec(raw);
+  let scheme: string;
+  let host: string;
+  let path: string;
+  if (scp) {
+    scheme = 'ssh';
+    host = scp[1]!.toLowerCase();
+    path = scp[2]!;
+  } else {
+    let parsed: URL;
+    try { parsed = new URL(raw); } catch { return local(raw); }
+    if (parsed.protocol === 'file:' || !parsed.hostname) return local(decodeURIComponent(parsed.pathname));
+    scheme = SSH_SCHEMES.has(parsed.protocol) ? 'ssh' : parsed.protocol.slice(0, -1);
+    const port = parsed.port && parsed.port !== DEFAULT_PORTS[parsed.protocol] ? `:${parsed.port}` : '';
+    host = `${parsed.hostname.toLowerCase().replace(/\.+$/u, '')}${port}`;
+    path = parsed.pathname;
+  }
+  const clean = path.split('/').filter(Boolean).join('/').replace(/\.git$/u, '');
+  return `${scheme}://${host}/${clean}`;
+}
+
 export function readRemotes(root: string): Remote[] {
   try {
     const dotGit = join(root, '.git');

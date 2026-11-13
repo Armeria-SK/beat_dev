@@ -7,6 +7,7 @@ import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
 import { cancelClearsInterrupt, firstMode, NEW_DRAFT, queuedLine, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getLanguage, useT } from '../i18n/index.ts';
+import { isComposing } from '../keys.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
 import { serverText, warningText } from '../server-text.ts';
@@ -217,7 +218,7 @@ function Bar({ conversation: row, readOnly, title, product, meter, panes, onRena
       {editing ? (
         <input className="bt-field ui-bar__field" autoFocus value={draft} aria-label={t('ui.session.renameField')} maxLength={200}
           onChange={e => setDraft(e.target.value)} onBlur={() => void save()}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void save(); } else if (e.key === 'Escape') { e.preventDefault(); cancel(); } }} />
+          onKeyDown={e => { if (isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) return; if (e.key === 'Enter') { e.preventDefault(); void save(); } else if (e.key === 'Escape') { e.preventDefault(); cancel(); } }} />
       ) : conversation ? (
         <button type="button" className="bt-app__bar-title ui-bar__title" title={t('ui.session.rename')} onClick={startRename}>{title}</button>
       ) : <span className="bt-app__bar-title ui-bar__title">{title}</span>}

@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
+import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { placePath } from '../src/tools/hooks/scope.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
@@ -50,7 +51,7 @@ test('Reset: 設定ファイルの控えを書いてから既定に戻し、控�
   assert.deepEqual(now.models, []);
   assert.deepEqual(now.providers, fresh.providers);
   assert.deepEqual(now.routing, fresh.routing);
-  assert.deepEqual(now.tools.hooks, { preToolUse: [], postToolUse: [] });
+  assert.deepEqual(now.tools.hooks, { preToolUse: [DEFAULT_PROTECT_FILES], postToolUse: [] }, '組み込みの protect-files の既定の行は戻す（4-P）');
   assert.deepEqual(now.tools.policies, {});
   assert.deepEqual(now.tools.shell, fresh.tools.shell);
   assert.deepEqual(now.profile, fresh.profile);

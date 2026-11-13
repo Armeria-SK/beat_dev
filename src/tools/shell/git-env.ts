@@ -9,9 +9,10 @@
 
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseGitConfig, unusualKey, type ConfigEntry } from '../hooks/git-repo.ts';
 import type { Env } from '../hooks/tool-config.ts';
 
@@ -131,6 +132,44 @@ export interface GitRun {
   env: Record<string, string>;
   // この実行の置き場所（洗い出した設定のファイルがある）を消す
   cleanup: () => void;
+  prePushReady?: boolean;
+  refused?: () => boolean;
+}
+
+export interface PrePush { tips: readonly string[]; node: string; ownerHooks?: string }
+
+const CHECKER = fileURLToPath(new URL('./pre-push-check.mjs', import.meta.url));
+const NODE_VARS = ['NODE_OPTIONS', 'NODE_PATH', 'NODE_PRESERVE_SYMLINKS', 'NODE_REDIRECT_WARNINGS', 'NODE_V8_COVERAGE', 'NODE_ICU_DATA', 'NODE_EXTRA_CA_CERTS', 'NODE_REPL_EXTERNAL_MODULE'];
+const shPath = (path: string): string => `'${path.replaceAll('\\', '/').replaceAll("'", `'\\''`)}'`;
+const POSIX = process.platform !== 'win32';
+
+function runnable(file: string): boolean {
+  if (!POSIX) return true;
+  try { accessSync(file, constants.X_OK); return true; } catch { return false; }
+}
+
+function writeHook(file: string, body: string): boolean {
+  writeFileSync(file, `#!/bin/sh\n${body}`, { encoding: 'utf8', mode: 0o755 });
+  if (POSIX) chmodSync(file, 0o755);
+  return runnable(file);
+}
+
+function writePrePush(dir: string, hooks: string, prePush: PrePush): boolean {
+  writeFileSync(join(dir, 'tips.txt'), `${prePush.tips.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+  let ownerPrePush: string | undefined;
+  if (prePush.ownerHooks) {
+    let names: string[] = [];
+    try { names = readdirSync(prePush.ownerHooks); } catch { names = []; }
+    for (const name of names) {
+      const target = join(prePush.ownerHooks, name);
+      if (name.includes('.') || !statSync(target, { throwIfNoEntry: false })?.isFile() || !runnable(target)) continue;
+      if (name === 'pre-push') { ownerPrePush = target; continue; }
+      if (!writeHook(join(hooks, name), `exec ${shPath(target)} "$@"\n`)) return false;
+    }
+  }
+  const check = `unset ${NODE_VARS.join(' ')}\n${ownerPrePush ? '' : 'exec '}${shPath(prePush.node)} ${shPath(CHECKER)} ${shPath(dir)} || exit 1\n`;
+  const chain = ownerPrePush ? `exec ${shPath(ownerPrePush)} "$@" < ${shPath(join(dir, 'push-input'))}\n` : '';
+  return writeHook(join(hooks, 'pre-push'), check + chain);
 }
 
 function sweepStale(root: string): void {
@@ -145,22 +184,26 @@ function sweepStale(root: string): void {
 }
 
 // シェルを1回動かす分の、洗い出した設定とその環境変数。置き場所は毎回新しい。書けなければ、無いファイルを指すことになり、git は何も読まない（安全側）
-export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: string; ownerHooks?: string }): GitRun {
+export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: string; ownerHooks?: string; prePush?: PrePush }): GitRun {
   const root = join(options.dataDir, RUN_FOLDER);
   const dir = join(root, randomUUID());
   const file = join(dir, 'gitconfig');
-  const hooks = options.ownerHooks ?? join(dir, 'hooks');
+  const hooks = options.prePush ? join(dir, 'hooks') : options.ownerHooks ?? join(dir, 'hooks');
   let helpers: string[] = [];
+  let prePushReady = false;
   try {
-    mkdirSync(options.ownerHooks ? dir : hooks, { recursive: true });
+    mkdirSync(hooks === options.ownerHooks ? dir : hooks, { recursive: true });
     sweepStale(root);
     const texts = gitConfigSources(options.env, options.gitExe).flatMap(source => readSmall(source) ?? []);
     const sanitized = sanitizeGitConfig(texts);
     writeFileSync(file, sanitized, { encoding: 'utf8', mode: 0o600 });
     helpers = (parseGitConfig(sanitized) ?? []).filter(e => e.key === 'credential.helper' && e.value !== '').map(e => e.value);
-  } catch { /* 上のとおり。フックの置き場所が無くても、フックは動かない */ }
+    if (options.prePush) prePushReady = writePrePush(dir, hooks, options.prePush);
+  } catch { prePushReady = false; }
+  const entries = [...overrides(hooks, helpers), ...(options.prePush ? [['push.recurseSubmodules', 'no'] as const] : [])];
   return {
-    env: { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1', ...countEnv(overrides(hooks, helpers)) },
+    env: { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1', ...countEnv(entries) },
     cleanup: () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 残っても、次の実行が古いものを消す */ } },
+    ...(options.prePush ? { prePushReady, refused: () => existsSync(join(dir, 'refused')) } : {}),
   };
 }

@@ -10,6 +10,7 @@ import { expandPath } from './scope.ts';
 // 毎回（今回だけ）確かめる側に倒す。判定は「分からなければ確かめる」。
 
 export interface CodeFinding {
+  key: GuardMessageKey;
   reason: string;
   // 持ち主が tools.shell.allow に書いたコマンドで外せるのは R1.1〜R1.4 だけ
   exemptable: boolean;
@@ -141,7 +142,7 @@ function hasInlineCode(seg: Segment): boolean {
   return seg.args.some(a => /^(?:-e|-E|-p|-c|-r|--eval|--print)$/u.test(a)) || (seg.cmd === 'deno' && seg.args[0] === 'eval');
 }
 
-const finding = (language: Language, key: GuardMessageKey, params: Record<string, string | number>, exemptable: boolean, scripts: string[] = []): CodeFinding => ({ reason: text(language, key, params), exemptable, scripts });
+const finding = (language: Language, key: GuardMessageKey, params: Record<string, string | number>, exemptable: boolean, scripts: string[] = []): CodeFinding => ({ key, reason: text(language, key, params), exemptable, scripts });
 
 // ── R1.1 ファイル・標準入力のコード ──
 function interpreterFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
@@ -205,7 +206,7 @@ function projectToolFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
 }
 
 // ── R1.5 ほかのプロセスを起こす・残す ──
-const WRAPPED_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
+export const WRAPPED_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
   xargs: new Set(['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--replace']),
   timeout: new Set(['-s', '-k', '--signal', '--kill-after']),
   nice: new Set(['-n', '--adjustment']),

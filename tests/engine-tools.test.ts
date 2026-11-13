@@ -255,8 +255,8 @@ test('会話は回数で止まらない: 20 回道具を呼んでから普通に
 
 test('承認を待っている間に止めたら、実行せずに中止する', async t => {
   const s = await setup(t);
-  s.adapter().scripts.push(toolCall('shell_run', { command: 'git push origin main' }), reply('届かない'));
-  const { runId, done } = await s.send('push して');
+  s.adapter().scripts.push(toolCall('shell_run', { command: 'npm install left-pad' }), reply('届かない'));
+  const { runId, done } = await s.send('入れて');
   for (let i = 0; i < 300 && !s.app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
   assert.equal(s.app.approvals.pending().length, 1);
   s.app.engine.stop(runId);

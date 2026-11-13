@@ -14,7 +14,8 @@ import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType } fr
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
-import type { ToolContext } from '../src/tools/types.ts';
+import type { ToolContext, ToolDef } from '../src/tools/types.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { FakeBrowserDriver, type FakePage, type FakeSite } from './helpers/fake-browser.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -55,8 +56,10 @@ const OTHER_SITE: FakeSite = { title: 'Other', text: 'other', snapshot: '- textb
 
 type Rig = ReturnType<typeof rig>;
 
+const withoutSubmits = (def: ToolDef): ToolDef => Object.fromEntries(Object.entries(def).filter(([key]) => key !== 'submits')) as unknown as ToolDef;
+
 function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
-  mutate?: (c: AppConfig) => void; mode?: PermissionMode; classify?: (prompt: ClassifierPrompt) => Promise<string> | string;
+  mutate?: (c: AppConfig) => void; mode?: PermissionMode; classify?: (prompt: ClassifierPrompt) => Promise<string> | string; plain?: boolean;
 } = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
@@ -71,7 +74,8 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   const db = openDatabase(':memory:', MIGRATIONS);
   const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry();
-  for (const def of BROWSER_TOOLS) registry.register(def as never);
+  for (const def of BROWSER_TOOLS) registry.register((options.plain && (def as ToolDef).submits ? withoutSubmits(def as ToolDef) : def) as never);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
   const state = { mode: options.mode ?? 'normal' as PermissionMode };
   const ctx = {
@@ -81,10 +85,10 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   } as unknown as ToolContext;
   const classify = options.classify;
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => false,
+    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => false,
     ...(classify ? { autoClassify: async (prompt: ClassifierPrompt) => classify(prompt), lastUserRequest: () => 'フォームに入れて', conversationTainted: () => false } : {}),
   });
-  return { ctx, call, approvals, db, driver, session, parsed };
+  return { ctx, call, approvals, db, driver, session, parsed, pending };
 }
 
 // ページを開いて、触れるものの一覧を読む（ここは読むだけの道具を直接呼ぶ）
@@ -166,10 +170,41 @@ test('T-20: 名前は 120 文字・改行なしに整え、入れる文字は 20
   assert.equal(over.decision, 'deny');
 });
 
-// ── T-21: 会話の許可（決定どおり） ──
+// ── 4-2d: 押す・入れる（submits）は送る操作なので、会話でも札にせず Pending に積む ──
+
+test('4-2d: browser_click・browser_type は、ふつうのモードでも、会話の許可より前に Pending に積まれ、札は出ず、押さない', async t => {
+  const r = rig(t);
+  const page = await opened(r);
+  for (const [name, args] of [['browser_type', { ref: 'e1', text: 'abc' }], ['browser_click', { ref: 'e2' }], ['browser_type', { ref: 'e1', text: 'abc' }]] as const) {
+    const seen = await observe(r, name, args);
+    assert.equal(seen.asked, false, name);
+    assert.equal(seen.outcome.decidedBy, 'pending', name);
+    assert.equal(seen.outcome.output.isError, undefined);
+  }
+  assert.equal(page.acts.length, 0);
+  assert.deepEqual(r.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]).reverse(), [['browser_type', 'send'], ['browser_click', 'send'], ['browser_type', 'send']]);
+});
+
+test('4-2d: 人のいない実行（タスク・子の担当）の押す・入れるは、積まずに断る', async t => {
+  const r = rig(t);
+  const page = await opened(r);
+  const submitting: ToolDef = { ...(browserClick as unknown as ToolDef), name: 'submit_stub', allowedIn: ['chat', 'task', 'agent'] };
+  const registry = new ToolRegistry().register(submitting);
+  for (const kind of ['task', 'agent'] as const) {
+    const outcome = await runToolCall({ id: `u-${kind}`, name: 'submit_stub', arguments: { ref: 'e2' } }, { ...r.ctx, kind }, {
+      registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto', conversationAutoRead: () => false,
+    });
+    assert.equal(outcome.decision, 'deny', kind);
+    assert.match(outcome.output.content, /submits in the browser, and nobody is watching this run/u, kind);
+  }
+  assert.equal(r.pending.list({ status: 'waiting' }).length, 0);
+  assert.equal(page.acts.length, 0);
+});
+
+// ── T-21: 会話の許可（決定どおり）。札の仕組みは、submits を外した写しで確かめる ──
 
 test('T-21: 「この会話では許可」を出すと、次の同じ入力は札なしで通る（持ち主の決定。入力のハッシュで効く）', async t => {
-  const r = rig(t);
+  const r = rig(t, { plain: true });
   const page = await opened(r);
   const first = await observe(r, 'browser_type', { ref: 'e1', text: 'abc' }, 'conversation');
   assert.equal(first.asked, true);
@@ -192,7 +227,7 @@ test('T-21: 「この会話では許可」を出すと、次の同じ入力は�
 });
 
 test('T-21: 会話の許可で札なしに通っても、実行の直前の探し直しは必ずやる（遷移後・消えた要素には動かない）', async t => {
-  const r = rig(t);
+  const r = rig(t, { plain: true });
   const page = await opened(r);
   await observe(r, 'browser_click', { ref: 'e2' }, 'conversation');
   // e2（Send）が押されて、ページは OTHER へ動いた。表は捨てられている
@@ -206,7 +241,7 @@ test('T-21: 会話の許可で札なしに通っても、実行の直前の探�
 // ── T-22: 承認と実行のあいだに変わったら実行しない ──
 
 test('T-22: 承認のあいだに遷移したら、実行しない（同じ呼び出しの再比較）', async t => {
-  const r = rig(t);
+  const r = rig(t, { plain: true });
   const page = await opened(r);
   const result = await observe(r, 'browser_click', { ref: 'e2' }, 'once', () => { page.navigateTo(OTHER); });
   assert.equal(result.asked, true);
@@ -217,7 +252,7 @@ test('T-22: 承認のあいだに遷移したら、実行しない（同じ呼�
 });
 
 test('T-22: 承認のあいだに同じ番号が別の要素になったら、実行しない（bind の不一致）', async t => {
-  const r = rig(t);
+  const r = rig(t, { plain: true });
   const page = await opened(r);
   const result = await observe(r, 'browser_click', { ref: 'e2' }, 'once', async () => {
     // ページが書き換わり、読み直したら e2 は別の名前のボタンになった（同じ URL）
@@ -250,7 +285,7 @@ test('bind を持つが onceOnly でない道具は、札を出した呼び出�
   await opened(r);
   let calls = 0;
   const original = browserClick.preCheck!;
-  const counted = { ...browserClick, name: 'browser_click', preCheck: (input: never, ctx: ToolContext) => { calls += 1; return (original as (i: unknown, c: ToolContext) => ReturnType<typeof original>)(input, ctx); } };
+  const counted = { ...withoutSubmits(browserClick as unknown as ToolDef), name: 'browser_click', preCheck: (input: never, ctx: ToolContext) => { calls += 1; return (original as (i: unknown, c: ToolContext) => ReturnType<typeof original>)(input, ctx); } };
   const registry = new ToolRegistry();
   registry.register(counted as never);
   const run = (): Promise<unknown> => runToolCall({ id: 'k', name: 'browser_click', arguments: { ref: 'e1' } }, r.ctx, {
@@ -273,7 +308,7 @@ function runWithSwapAfterRecheck(r: Rig, onSecondPreCheck: () => Promise<void>) 
   let calls = 0;
   const original = browserClick.preCheck! as (i: unknown, c: ToolContext) => Promise<import('../src/tools/types.ts').PreCheck>;
   const swapped = {
-    ...browserClick,
+    ...withoutSubmits(browserClick as unknown as ToolDef),
     preCheck: async (input: never, ctx: ToolContext) => {
       calls += 1;
       const result = await original(input, ctx);
@@ -309,7 +344,7 @@ test('承認後の比べのあと、実行の直前に別の要素へ入れ替�
 });
 
 test('会話の許可で札なしに通る道は、bind を比べない（Q3 の範囲）。探し直しの守りだけはかかる', async t => {
-  const r = rig(t);
+  const r = rig(t, { plain: true });
   const page = await opened(r);
   const first = await observe(r, 'browser_click', { ref: 'e2' }, 'conversation');
   assert.equal(first.asked, true);
@@ -324,12 +359,13 @@ test('会話の許可で札なしに通る道は、bind を比べない（Q3 の
 
 // ── T-23: 自動承認 ──
 
-test('T-23: 自動承認モードでも、押す・入れるは network なので判定役に回らず、持ち主の札になる', async t => {
+test('T-23: 自動承認モードでも、押す・入れるは送る操作なので判定役に回らず、Pending に積まれる', async t => {
   const classified: ClassifierPrompt[] = [];
   const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
   const page = await opened(r);
   const result = await observe(r, 'browser_type', { ref: 'e1', text: 'abc' }, 'deny');
-  assert.equal(result.asked, true, '自動承認でも札が出る');
+  assert.equal(result.asked, false, '札は出ない');
+  assert.equal(result.outcome.decidedBy, 'pending');
   assert.equal(classified.length, 0, '判定役には回らない');
   assert.equal(page.acts.length, 0);
 });
@@ -469,16 +505,17 @@ test('T-28: 操作が失敗したら、ポップアップは残さず、短い�
 // ── T-29: tools.policies ──
 
 test('T-29: 方針が allow（既定）でも札は出る。ask は毎回札（会話の許可は効かない）。block は拒否', async t => {
-  const r = rig(t);
+  const r = rig(t, { plain: true });
   await opened(r);
   const asked = await observe(r, 'browser_type', { ref: 'e1', text: 'a' }, 'conversation');
   assert.equal(asked.asked, true);
   assert.equal((await observe(r, 'browser_type', { ref: 'e1', text: 'a' })).asked, false, '既定（allow）: 会話の許可が効く');
 
-  const every = rig(t, { mutate: c => { c.tools.policies = { browser_type: 'ask' }; } });
+  const every = rig(t, { plain: true, mutate: c => { c.tools.policies = { browser_type: 'ask' }; } });
   await opened(every);
-  assert.equal((await observe(every, 'browser_type', { ref: 'e1', text: 'a' }, 'conversation')).asked, true);
-  assert.equal((await observe(every, 'browser_type', { ref: 'e1', text: 'a' }, 'deny')).asked, true, 'ask: 会話の許可があっても毎回');
+  assert.equal((await observe(every, 'browser_type', { ref: 'e1', text: 'a' })).outcome.decidedBy, 'pending', 'ask: Pending に積む');
+  assert.equal((await observe(every, 'browser_type', { ref: 'e1', text: 'a' })).outcome.decidedBy, 'pending', 'ask: 毎回');
+  assert.deepEqual(every.pending.list({ status: 'waiting' }).map(row => row.kind), ['policy', 'policy']);
 
   const blocked = rig(t, { mutate: c => { c.tools.policies = { browser_click: 'block' }; } });
   const page = await opened(blocked);

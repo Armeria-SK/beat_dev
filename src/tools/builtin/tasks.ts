@@ -2,6 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
+import { pendingText } from '../../shared/messages/pending.ts';
 import { describeCron, validateCron } from '../../tasks/schedule.ts';
 import { TaskError, type Task, type TaskStore } from '../../tasks/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -133,6 +134,7 @@ export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_actio
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
+  replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
@@ -147,11 +149,15 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
   input: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4000 }), notify: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
+  replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
-    ctx.task.control = { outcome: 'complete', summary: input.summary, notify: input.notify ?? true };
-    return { content: toolText(language, 'task.completed', { end: toolText(language, 'task.end') }) };
+    const waiting = ctx.services?.db ? (ctx.services.db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(ctx.task.id) as Array<{ id: number }>) : [];
+    const suffix = waiting.length ? pendingText(language, 'task_waiting', { ids: waiting.map(row => `#${row.id}`).join(', ') }) : '';
+    ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true };
+    const done = toolText(language, 'task.completed', { end: toolText(language, 'task.end') });
+    return { content: suffix ? `${done}\n${suffix}` : done };
   },
 };
 
@@ -161,6 +167,7 @@ export const askUser: ToolDef<{ question: string }> = {
   input: Type.Object({ question: Type.String({ minLength: 1, maxLength: 1500 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
+  replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running_chat'), isError: true };

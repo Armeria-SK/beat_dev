@@ -64,19 +64,16 @@ test('自動承認の判定役が「確かめる」の理由に API キーをそ
   await settled(s.app, sent.body.runId);
 });
 
-test('自動承認のモードでも、鍵を入れる API をシェルから呼ぶ形は判定役に回さず、毎回の確かめの札を出す。許さなければ鍵は入らない', async t => {
+test('自動承認のモードでも、鍵を入れる API をシェルから呼ぶ形は判定役に回さず、送る操作として Pending に積む。許さなければ鍵は入らない', async t => {
   const s = await startApp(t);
   const url = `${s.origin}/api/providers/fake/key`;
   const command = process.platform === 'win32' ? `Invoke-RestMethod -Method Put -Uri ${url} -ContentType application/json -Body '{"key":"${KEY}"}'` : `curl -X PUT -H "Content-Type: application/json" -d '{"key":"${KEY}"}' ${url}`;
   s.adapter().scripts = [toolCall('shell_run', { command }), say('終わりました')];
   const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'fake の API キーを入れて', permissionMode: 'auto' });
-  await waitFor(() => s.app.approvals.pending().length === 1, '承認の札');
-  const [request] = s.app.approvals.pending();
-  assert.equal(request!.onceOnly, true, '同じ文字のコマンドの許可を覚えない、今回だけの確かめ');
-  assert.equal(s.adapter().calls.length, 1, '判定役は呼ばれていない');
-  assert.equal(s.app.approvals.pending().length, 1, '自動では通らない');
-  s.app.approvals.decide(request!.id, 'deny');
   await settled(s.app, sent.body.runId);
+  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['shell_run', 'send']], '自動では通らず Pending に積む');
+  assert.equal(s.adapter().calls.length, 2, '判定役は呼ばれていない（モデルの呼び出しは 2 回だけ）');
   assert.equal((await s.json('/api/providers/fake/key', 'GET')).body.set, false, '許さなければ鍵は入らない');
   assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
 });

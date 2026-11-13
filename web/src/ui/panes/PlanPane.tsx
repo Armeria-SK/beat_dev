@@ -5,6 +5,7 @@ import {
 import { newConversationId } from '../../chat-logic.ts';
 import { formatRelative } from '../../i18n/format.ts';
 import { useT } from '../../i18n/index.ts';
+import { isComposing } from '../../keys.ts';
 import { Markdown } from '../../Markdown.tsx';
 import {
   acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
@@ -71,7 +72,7 @@ function ItemEditor({ item, base, editing, onDone }: { item: AcceptanceItem | nu
         <label className="ui-acc__pair">
           <span className="bt-label">{t('ui.acc.edit.command')}</span>
           <input className="bt-field bt-field--mono" spellCheck={false} autoComplete="off" value={form.command} onChange={e => setForm({ ...form, command: e.target.value })} {...invalid('command')}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void save(); } }} />
+            onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); void save(); } }} />
         </label>
       )}
       {shown && <p id={`${id}-problem`} role="alert" className="bt-meta ui-danger ui-acc__problem">{t(shown)}</p>}

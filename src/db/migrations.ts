@@ -429,4 +429,39 @@ export const MIGRATIONS: readonly Migration[] = [
   WHERE t.origin = 'schedule' AND t.parent_id IS NULL
     AND NOT EXISTS (SELECT 1 FROM task_events x WHERE x.task_id = t.id AND x.run_id = 'untrusted-input' AND x.kind = 'context');
   `,
+  `
+  CREATE TABLE pending_actions (
+    id INTEGER PRIMARY KEY,
+    tool TEXT NOT NULL,
+    input TEXT NOT NULL,
+    shown TEXT NOT NULL,
+    masked INTEGER NOT NULL DEFAULT 0,
+    cwd TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('send', 'delete', 'hook', 'policy', 'owner', 'judge', 'judge_failed')),
+    reason TEXT NOT NULL,
+    checks TEXT NOT NULL DEFAULT '[]',
+    bind TEXT,
+    state TEXT,
+    files TEXT,
+    run_id TEXT NOT NULL,
+    run_kind TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    task_id TEXT,
+    project_id TEXT,
+    tainted INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('waiting', 'running', 'ran', 'failed', 'rejected', 'stale', 'cancelled')),
+    reject_reason TEXT,
+    exit_code INTEGER,
+    output_preview TEXT,
+    full_ref TEXT,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    ran_at INTEGER
+  ) STRICT;
+  CREATE INDEX ix_pending_actions_status ON pending_actions (status, created_at DESC);
+  CREATE INDEX ix_pending_actions_project ON pending_actions (project_id, status);
+  `,
+  `
+  ALTER TABLE tasks ADD COLUMN owner_request TEXT;
+  `,
 ];

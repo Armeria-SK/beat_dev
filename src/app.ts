@@ -24,7 +24,7 @@ import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
 import { ApprovalBroker, approvalPublic, approvalShownIn } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
-import { shellRun } from './tools/builtin/shell.ts';
+import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
 import { planWrite } from './tools/builtin/plan.ts';
 import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts';
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
@@ -51,6 +51,7 @@ import { BrowserSession } from './tools/browser/session.ts';
 import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
 import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
+import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { askBeforeRegister, SkillStore } from './tools/skills/store.ts';
@@ -61,8 +62,13 @@ import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
+import { PendingStore, type PendingRow } from './pending/store.ts';
+import { pendingNote } from './pending/notes.ts';
+import { parentOf, replayAction } from './pending/replay.ts';
+import { pendingText } from './shared/messages/pending.ts';
+import { isLocalPinned } from './engine/local-model.ts';
 import { ToolRegistry } from './tools/registry.ts';
-import { ignoredPolicyNames } from './tools/tool-policy.ts';
+import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
 import { redactSecrets } from './shared/redaction.ts';
 import { MemoryStore, renderBooks } from './memory/store.ts';
@@ -123,6 +129,8 @@ export class App {
   readonly limiter: EndpointLimiter;
   readonly tools: ToolRegistry;
   readonly approvals: ApprovalBroker;
+  readonly pending: PendingStore;
+  readonly #replayStop = new AbortController();
   readonly memory: MemoryStore;
   readonly tasks: TaskStore;
   readonly projects: ProjectStore;
@@ -192,6 +200,9 @@ export class App {
         this.notifications.settle('approval_needed', { dedupKey: `approval:${v.id}` });
       }
     });
+    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); } });
+    const interrupted = this.pending.closeInterrupted();
+    if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
@@ -210,6 +221,7 @@ export class App {
     this.skills.autoRegister = () => !askBeforeRegister(this.config());
     this.#importCuriosity();
     this.#registerExistingSkills();
+    this.#offerProtectFiles();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
     // ブラウザ 1 つ（全会話で共有）。無効なら何も起動しない。起動は最初の browser_* の呼び出しのとき
     this.browser = new BrowserSession({
@@ -218,11 +230,11 @@ export class App {
       ...(options.browserDisplay !== undefined ? { canShowWindow: () => options.browserDisplay === true } : {}),
     });
     // 会話を消したら、その会話のタブを閉じる
-    this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); };
+    this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); this.pending.cancelConversations(ids); };
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
-      tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
+      tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
@@ -300,7 +312,7 @@ export class App {
   // 起動直後は承認の札がひとつも無いので、承認待ちは全部。返事待ち・失敗は、タスクが無いか、今その状態でないものだけ既読にする
   settleStaleNotifications(): void {
     const stale = this.notifications.list(0).filter(n => {
-      if (n.kind === 'approval_needed') return true;
+      if (n.kind === 'approval_needed') return !n.dedup_key?.startsWith('pending:') || !this.#pendingScopeWaits(n.dedup_key);
       if (!n.link?.startsWith('#/tasks/')) return false;
       const task = this.tasks.get(n.link.slice('#/tasks/'.length));
       return task === undefined || task.status !== (n.kind === 'task_waiting' ? 'waiting' : 'failed');
@@ -315,6 +327,8 @@ export class App {
   // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
   #warnIgnoredPolicies(config: AppConfig): void {
     for (const name of ignoredPolicyNames(config)) this.log(`[WARN] Ignoring "${name}" in tools.policies: this tool cannot have a policy (it is needed to run tasks)`);
+    for (const name of askReadAsBlock(config)) this.log(`[WARN] ${name} is set to Ask in tools.policies, but it cannot wait in Pending, so it is treated as Block. Set it to Allow or Block in Settings`);
+    for (const name of droppedGitEnv(config)) this.log(`[WARN] Ignoring "${name}" in tools.shell.envAllow: GIT_* variables are never passed to commands`);
   }
 
   // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
@@ -324,6 +338,16 @@ export class App {
     const added = this.skills.registerExisting();
     this.kv.set('skills:registry-seeded', String(Date.now()));
     if (added) this.log(`[INFO] Registered ${added} existing skill(s) (skills placed directly in the folder from now on are not used until you press "Register" on the screen)`);
+  }
+
+  #offerProtectFiles(): void {
+    if (this.kv.get(PROTECT_FILES_OFFERED)) return;
+    if (!hasProtectFiles(this.configStore.current())) {
+      try { this.configStore.appendPreToolHook(DEFAULT_PROTECT_FILES); }
+      catch (error) { this.log(`[WARN] Could not add the built-in protect-files hook to the settings: ${(error as Error).message}`); return; }
+      this.log('[INFO] Added the built-in protect-files hook (writes to .github/workflows, and to package.json after reading text from outside, are checked with you). Change or remove it in Settings › Hooks; it will not be added again');
+    }
+    this.kv.set(PROTECT_FILES_OFFERED, String(Date.now()));
   }
 
   #importCuriosity(): void {
@@ -397,7 +421,53 @@ export class App {
     return JSON.stringify(this.config().server) !== JSON.stringify(this.bootServer);
   }
 
+  #pendingScope(row: PendingRow): { conversationId: string; taskId: string | null; key: string } {
+    const parent = parentOf(this.db, row);
+    const conversationId = parent?.conversationId ?? row.conversation_id;
+    const taskId = row.task_id ?? parent?.taskId ?? this.tasks?.byConversation(conversationId)?.id ?? null;
+    return { conversationId, taskId, key: taskId ? `pending:task:${taskId}` : `pending:conv:${conversationId}` };
+  }
+
+  #pendingScopeWaits(key: string): boolean {
+    const taskId = key.startsWith('pending:task:') ? key.slice('pending:task:'.length) : null;
+    const conversationId = taskId ? this.tasks.get(taskId)?.conversation_id ?? null : key.startsWith('pending:conv:') ? key.slice('pending:conv:'.length) : null;
+    return this.pending.waitingAround(conversationId, taskId).some(row => this.#pendingScope(row).key === key);
+  }
+
+  #pendingChanged(id: number): void {
+    try {
+      const row = this.pending.row(id);
+      const view = this.pending.view(id);
+      if (!row || !view || row.status === 'running') return;
+      const scope = this.#pendingScope(row);
+      const language = languageOf(this.config());
+      const task = scope.taskId ? this.tasks.get(scope.taskId) : undefined;
+      if (row.status === 'waiting') {
+        const localOnly = task ? task.local_only === 1 : isLocalPinned(this.config(), this.conversations.get(scope.conversationId)?.model_id);
+        this.notifications.notify({
+          kind: 'approval_needed', title: task ? pendingText(language, 'notify_title_task', { title: task.title }) : pendingText(language, 'notify_title_conversation'),
+          body: redactSecrets(`#${row.id} ${row.reason}`), link: '#/pending', dedupKey: scope.key, localOnly,
+        });
+        return;
+      }
+      if (!this.#pendingScopeWaits(scope.key)) this.notifications.settle('approval_needed', { dedupKey: scope.key });
+      const note = pendingNote(row, view);
+      if (!note) return;
+      if (task) this.tasks.event(task.id, 'pending', 'owner', note.event);
+      this.engine.addNote(scope.conversationId, note.text, note.fetched);
+    } catch (error) { this.log(`[ERROR] Failed to record the result of pending item #${id}: ${(error as Error).message}`); }
+  }
+
+  replayPending(row: PendingRow): void {
+    void replayAction(row, {
+      db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
+      conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
+      services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, notify: input => this.notifications.notify(input), browser: this.browser, emit: e => this.bus.publish(e) }),
+    }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
+  }
+
   close(): void {
+    this.#replayStop.abort();
     void this.mcp.stop().catch(() => undefined);
     void this.browser.close().catch(() => undefined);
     this.worker.stop();
