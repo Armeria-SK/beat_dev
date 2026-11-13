@@ -879,3 +879,15 @@ test('穴 5（F4）の回帰: @ のない tar と、先頭が @ でない名前�
   }
   assert.deepEqual(wrong, []);
 });
+
+test('PowerShell の npm・pnpm・yarn（.cmd の shim）: 実行時に決まる引数は cmd.exe の記号を調べられないので止める。文字どおりの引数は前と同じ', () => {
+  const cmd = { external: () => ({ ok: true, ext: '.cmd', detail: '' }) };
+  for (const c of ['npm view (Get-Content n.txt)', 'npm view $(Get-Content n.txt)', '$a = Get-Content n.txt; npm view $a', 'pnpm add (Get-Content n.txt)', '$v = Get-Content n.txt; pnpm --version $v', 'yarn add $a']) {
+    assert.equal(levelOf(c, 'powershell', cmd), 'deny', c);
+    assert.ok(keysOf(c, 'powershell', cmd).includes('deny:list.winargs'), c);
+  }
+  for (const [c, want] of [['npm test', 'once'], ['npm run build', 'once'], ['npm --version', 'allow'], ['npm view left-pad', 'allow'], ['pnpm --version', 'once'], ['yarn --version', 'once']] as const) {
+    assert.equal(levelOf(c, 'powershell', cmd), want, c);
+  }
+  assert.equal(levelOf('$a = Get-Content n.txt; git log $a', 'powershell'), levelOf('$a = Get-Content n.txt; git log $a', 'powershell', { external: () => ({ ok: true, ext: '.exe', detail: '' }) }));
+});

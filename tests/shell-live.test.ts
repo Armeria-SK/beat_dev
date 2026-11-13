@@ -1313,3 +1313,29 @@ test('実機（Windows PowerShell 5.1・制限モード）: 素の node を呼�
   assert.doesNotMatch(outcome.output.content, /HIJACKED/u, outcome.output.content);
   assert.match(outcome.output.content, /\bv\d+\.\d+\.\d+/u, outcome.output.content);
 });
+
+test('実機（Windows PowerShell 5.1・制限モード）: npm・pnpm に実行時に決まる引数を渡す形は、承認しても cmd.exe の & で別のコマンドを動かさない', { skip: (!psAvailable || !which('npm')) && 'Windows の PowerShell か npm が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const shims = join(tempDir(t), 'global-pnpm');
+  mkdirSync(shims, { recursive: true });
+  writeFileSync(join(shims, 'pnpm.ps1'), 'Write-Output from-ps1\r\n');
+  writeFileSync(join(shims, 'pnpm.cmd'), '@echo pnpm-args %*\r\n');
+  const savedPath = process.env.PATH;
+  t.after(() => { process.env.PATH = savedPath; });
+  process.env.PATH = `${shims}${delimiter}${savedPath ?? ''}`;
+  writeFileSync(s.files('n.txt'), 'x&hostname\r\n');
+  const host = spawnSync('hostname', { encoding: 'utf8' }).stdout.trim();
+  assert.ok(host);
+  const ranHost = (text: string) => text.split('\n').some(line => line.trim() === host);
+  for (const command of ['npm --version (Get-Content n.txt)', 'npm --version $(Get-Content n.txt)', '$a = Get-Content n.txt; npm --version $a', 'pnpm add (Get-Content n.txt)', '$v = Get-Content n.txt; pnpm --version $v']) {
+    const outcome = await runApproved(s, command);
+    let text = outcome.output.content;
+    if (outcome.decidedBy === 'pending') {
+      const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
+      assert.ok(row, command);
+      const replayed = await replayAction(s.pending.claim(row.id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
+      text += `\n${replayed.output ?? ''}`;
+    }
+    assert.equal(ranHost(text), false, `${command}: ${text}`);
+  }
+});
