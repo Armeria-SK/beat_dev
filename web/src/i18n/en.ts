@@ -1388,6 +1388,8 @@ export const en = {
   'ui.pending.files': (n: number) => `${n} ${pluralEn(n, { one: 'file', other: 'files' })}`,
   'ui.pending.filesMore': (n: number) => `${n}+ files`,
   'ui.pending.missing': 'not there yet',
+  'ui.pending.cwd': 'Working folder:',
+  'ui.pending.extra': 'Other input',
   'ui.pending.sends': 'Sends',
   'ui.pending.masked': (n: number) => `${n} ${pluralEn(n, { one: 'part', other: 'parts' })} hidden`,
   'ui.pending.approve': 'Approve',

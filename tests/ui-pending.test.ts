@@ -186,6 +186,12 @@ test('ui/pending: Show earlier は、出している Decided のいちばん下�
   assert.deepEqual(earlierQuery([]), { earlier: true });
 });
 
+test('ui/pending: Show earlier の目印は、決め終わった行（決めた時刻のある行）だけから取る。running や時刻の無い行しか無ければ「今日より前」', () => {
+  const rows = [row({ id: 8, status: 'ran', decided_at: 800 }), row({ id: 9, status: 'rejected', decided_at: 700 }), row({ id: 12, status: 'running', decided_at: 600 }), row({ id: 13, status: 'stale', decided_at: null })];
+  assert.deepEqual(earlierQuery(rows), { before: 9 });
+  assert.deepEqual(earlierQuery([row({ id: 12, status: 'running', decided_at: 600 })]), { earlier: true });
+});
+
 test('ui/pending: 消す行の効き目はファイルの数で出す（0 や無いときは出さない）', () => {
   assert.deepEqual(effectFiles(row({ effect: { files: 214, bytes: 3_400_000 } })), { files: 214, more: false });
   assert.deepEqual(effectFiles(row({ effect: { files: 50_000, bytes: 9, more: true } })), { files: 50_000, more: true });
@@ -209,15 +215,29 @@ test('ui/pending: 送るファイルは、いまの大きさと変えた時刻�
   assert.deepEqual([512, 1_536, 3_400_000, 5 * 1024 ** 4].map(byteSize), [{ value: '512', unit: 'B' }, { value: '1.5', unit: 'KB' }, { value: '3.2', unit: 'MB' }, { value: '5120.0', unit: 'GB' }]);
   assert.equal(en['ui.pending.bytes']('1.5', 'KB'), '1.5 KB');
 });
-
-test('ui/pending: 行の見せ方は Design の 1 行（ラベル・コマンド・効き目）。サーバーの shown の頭の題の行は外し、題はコマンドが言わないことを言うときだけ出す', () => {
+test('ui/pending: 行は parts から組む（4-2b の render() の出力そのまま）。コマンド・中身は body、作業フォルダは別の行、残りの入力はコマンドに混ぜない', () => {
   const nl = String.fromCharCode(10);
   const lines = (...parts: string[]) => parts.join(nl);
-  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown: lines('Run a command', 'rm -rf data/cache/') })), { title: null, inline: 'rm -rf data/cache/', block: null });
-  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown: lines('Run a command', 'echo hi', 'rm -rf ~/x') })), { title: null, inline: lines('echo hi', 'rm -rf ~/x'), block: null }, '改行はそのまま');
-  assert.deepEqual(actionView(row({ tool: 'file_write', title: 'Write to a file: AGENTS.md', shown: lines('Write to a file: AGENTS.md', '# Agents', '') })), { title: 'Write to a file: AGENTS.md', inline: null, block: lines('# Agents', '') }, 'ファイルの中身は下の枠');
-  assert.deepEqual(actionView(row({ tool: 'file_edit', title: 'Edit a file: a.ts', shown: lines('Edit a file: a.ts', '- x', '+ y') })), { title: 'Edit a file: a.ts', inline: null, block: lines('- x', '+ y') });
-  assert.deepEqual(actionView(row({ tool: 'browser_click', title: 'Click in the browser page', shown: lines('Click in the browser page', 'e12') })), { title: 'Click in the browser page', inline: 'e12', block: null }, 'ブラウザは何をするかの題を出す');
-  assert.deepEqual(actionView(row({ tool: 'browser_close', title: 'Close the browser', shown: 'Close the browser' })), { title: 'Close the browser', inline: null, block: null });
-  assert.deepEqual(actionView(row({ tool: 'shell_run', shown: 'npm publish' })), { title: null, inline: 'npm publish', block: null }, '題の無い古い行はそのまま');
+  const json = (value: unknown) => JSON.stringify(value, null, 2);
+  const cwd = row({ tool: 'shell_run', title: 'Run a command', shown: lines('Run a command', 'Working folder: web', 'rm -rf dist'), parts: { body: 'rm -rf dist', cwd: 'web', extra: null } });
+  assert.deepEqual(actionView(cwd), { title: null, inline: 'rm -rf dist', block: null, cwd: 'web', extra: null });
+  const timeout = row({ tool: 'shell_run', title: 'Run a command', shown: lines('Run a command', 'npm publish', json({ timeoutSec: 120 })), parts: { body: 'npm publish', cwd: null, extra: json({ timeoutSec: 120 }) } });
+  assert.deepEqual(actionView(timeout), { title: null, inline: 'npm publish', block: null, cwd: null, extra: json({ timeoutSec: 120 }) });
+  const write = row({ tool: 'file_write', title: 'Write to a file: AGENTS.md', shown: lines('Write to a file: AGENTS.md', lines('# Agents', ''), json({ path: 'AGENTS.md' })), parts: { body: lines('# Agents', ''), cwd: null, extra: json({ path: 'AGENTS.md' }) } });
+  assert.deepEqual(actionView(write), { title: 'Write to a file: AGENTS.md', inline: null, block: lines('# Agents', ''), cwd: null, extra: json({ path: 'AGENTS.md' }) }, 'ファイルの中身は下の枠、path の残りは別');
+  const masked = lines('{', '  "command": "curl -H x-api-key",', '  "api_key": [REDACTED]', '}');
+  const hidden = row({ tool: 'shell_run', title: 'Run a command', shown: lines('Run a command', masked), parts: { body: masked, cwd: null, extra: null } });
+  assert.deepEqual(actionView(hidden), { title: null, inline: masked, block: null, cwd: null, extra: null }, '伏せた入力全体の JSON（JSON として読めない）は文字のまま本文に出す');
+  const write2 = row({ tool: 'file_write', title: 'Write to a file: a.md', shown: lines('Write to a file: a.md', masked), parts: { body: masked, cwd: null, extra: null } });
+  assert.equal(actionView(write2).block, masked);
+  const click = row({ tool: 'browser_click', title: 'Click in the browser page', shown: lines('Click in the browser page', 'e12'), parts: { body: 'e12', cwd: null, extra: null } });
+  assert.deepEqual(actionView(click), { title: 'Click in the browser page', inline: 'e12', block: null, cwd: null, extra: null }, 'ブラウザは何をするかの題を出す');
+});
+
+test('ui/pending: parts の無い古い行は shown をそのまま出す（題の行も含めて、手を加えない）', () => {
+  const nl = String.fromCharCode(10);
+  const shown = ['Run a command', 'Working folder: web', 'rm -rf dist'].join(nl);
+  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown })), { title: null, inline: shown, block: null, cwd: null, extra: null });
+  assert.deepEqual(actionView(row({ tool: 'file_write', title: 'Write to a file: a.md', shown: 'x' })), { title: null, inline: null, block: 'x', cwd: null, extra: null });
+  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown, status: 'ran', parts: { body: null, cwd: null, extra: null } })), { title: null, inline: shown, block: null, cwd: null, extra: null }, '決めた・消した・取り消した行は parts が全部 null なので、何を動かしたかを shown で出す');
 });

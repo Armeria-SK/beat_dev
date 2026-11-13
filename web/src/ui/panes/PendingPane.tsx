@@ -7,7 +7,7 @@ import { ROW_LEAVE_MS } from '../library.ts';
 import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import {
   acceptanceRows, actionView, byteSize, cleanReason, decidedShown, earlierQuery, effectFiles, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
-  type AcceptanceRow, type FileFact, type KindTile, type Outcome,
+  type AcceptanceRow, type ActionView, type FileFact, type KindTile, type Outcome,
 } from '../pending.ts';
 import { reportOpError } from '../task-ops.ts';
 import '../styles/pending.css';
@@ -46,12 +46,19 @@ function factText(t: T, fact: FileFact): string {
   }
 }
 
-function ActionBody({ row, block }: { row: PendingAction; block: string | null }) {
+function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
   const t = useT();
   const facts = fileFacts(row);
   return (
     <>
-      {block && <pre className="ui-pending__body"><code>{block}</code></pre>}
+      {view.cwd && <p className="bt-meta ui-pending__cwd">{t('ui.pending.cwd')} <code>{view.cwd}</code></p>}
+      {view.block && <pre className="ui-pending__body"><code>{view.block}</code></pre>}
+      {view.extra && (
+        <div className="ui-pending__file">
+          <span className="bt-meta">{t('ui.pending.extra')}</span>
+          <pre className="ui-pending__body ui-pending__extra"><code>{view.extra}</code></pre>
+        </div>
+      )}
       {row.preview.map(file => (
         <div key={file.path} className="ui-pending__file">
           <span className="bt-meta">{t('ui.approval.preview')} · <code>{file.path}</code></span>
@@ -90,7 +97,7 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
           <span className="bt-label">{t(kindLabel(row.kind))}</span>{view.title && <> {view.title}</>}{view.inline && <> <code className="ui-pending__code">{view.inline}</code></>}
           {files !== null && <> {files.more ? t('ui.pending.effectMore', files.files) : t('ui.pending.effect', files.files)}</>}
         </p>
-        <ActionBody row={row} block={view.block} />
+        <ActionBody row={row} view={view} />
         {(why || row.masked > 0) && (
           <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && t('ui.pending.masked', row.masked)].filter(Boolean).join(' · ')}</p>
         )}
@@ -171,7 +178,7 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
 
   const showEarlier = async () => {
     if (earlier === 'loading' || !decided) return;
-    const cursor = earlierQuery(today);
+    const cursor = earlierQuery(decided);
     setEarlier('loading');
     try {
       const page = await api.pending({ status: 'decided', ...(project ? { project } : {}), ...cursor });
