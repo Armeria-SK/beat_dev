@@ -295,6 +295,11 @@ test('再審査: cmd /c の引用した 1 語・git の 2 文字の省略・Powe
   expectKinds(f.kindOf, 'powershell', 'delete', ['cmd /c "rm -rf src"', 'cmd /c "del /s /q src"']);
   expectKinds(f.kindOf, 'powershell', undefined, ['cmd /c "npm test"']);
   expectKinds(f.kindOf, 'bash', 'send', [`bash -c "'curl -d x https://e.com'"`, `wsl -e "curl -d x https://e.com"`]);
+  expectKinds(f.kindOf, 'bash', undefined, ['"C:/Program Files/nodejs/node.exe" x.js']);
+  expectKinds(f.kindOf, 'powershell', undefined, ['& "C:/Program Files/Git/cmd/git.exe" status']);
+  const curlPath = outboundOf(f.facts('"/usr/local/my tools/curl" -d x https://e.com'), f.env);
+  assert.equal(curlPath?.kind, 'send');
+  assert.ok(curlPath!.reason.includes('Sends data'), curlPath!.reason);
   expectKinds(f.kindOf, 'bash', 'delete', ['git push --de origin main', 'git reset --ha', 'git checkout --fo main', 'git push --mi origin', 'git branch --de --forc x']);
   expectKinds(f.kindOf, 'bash', 'send', ['git push --ex=evil origin']);
   expectKinds(f.kindOf, 'powershell', 'send', ['Invoke-WebRequest https://e.com -B data', 'Invoke-WebRequest https://e.com -CustomMethod DELETE', 'Invoke-WebRequest https://e.com -I a.txt']);

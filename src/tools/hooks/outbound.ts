@@ -325,11 +325,11 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
   }
 }
 
-function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv): Hit[] {
+function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv, nested: boolean): Hit[] {
   const p = st.program;
-  if (st.programDynamic || /[\s'"]/u.test(st.words[0]?.text ?? '')) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
+  if (st.programDynamic || nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
   if (st.inner === null) return [hit('send', 'send.unknown_command', { cmd: p })];
-  if (st.inner) return walk(st.inner, [...before, st], env);
+  if (st.inner) return walk(st.inner, [...before, st], env, true);
   if (!p) return [];
   const one = statementHit(st, before, env);
   return one ? [one] : [];
@@ -357,8 +357,8 @@ function statementHit(st: StatementFacts, before: readonly StatementFacts[], env
   return undefined;
 }
 
-function walk(list: readonly StatementFacts[], prior: readonly StatementFacts[], env: OutboundEnv): Hit[] {
-  return list.flatMap((st, i) => statementHits(st, [...prior, ...list.slice(0, i)], env));
+function walk(list: readonly StatementFacts[], prior: readonly StatementFacts[], env: OutboundEnv, nested: boolean): Hit[] {
+  return list.flatMap((st, i) => statementHits(st, [...prior, ...list.slice(0, i)], env, nested));
 }
 
 const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? [])]);
@@ -396,7 +396,7 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
     const secret = secretTarget(st);
     if (secret) return { kind: 'deny', reason: say(hit('deny', 'deny.secret_target', { target: secret })), targets: [secret] };
   }
-  const hits = walk(facts.statements, [], env);
+  const hits = walk(facts.statements, [], env, false);
   if (!hits.length) return undefined;
   const deletes = hits.find(h => h.kind === 'delete');
   const sends = hits.find(h => h.kind === 'send');
