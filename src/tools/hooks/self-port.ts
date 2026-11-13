@@ -5,10 +5,13 @@ export interface SelfServer { port: number; origins: readonly string[] }
 const LOOPBACK_NAME = /^(?:localhost|(?:[a-z0-9-]+\.)+localhost|localhost\.localdomain|ip6-localhost|ip6-loopback)$/u;
 const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[^\]\s]+\]|[^\s:/\\?#@[\]=,;()<>|&*!$^{}~+]+)(?::(\d+))?/giu;
 const PORT = /:(\d+)/gu;
-const HOST_TAIL = /[^\s/\\?#@]*$/u;
-const EXPANDING = /[{}[\]]/u;
+const HOST_CHAR = String.raw`(?:%[0-9A-Fa-f]{2}|[^\s:/\\?#@[\]=,;()<>|&*!^{}~+%])`;
+const EXPANDING_HOST = new RegExp(String.raw`(?:^|[\s/@=])((?:${HOST_CHAR}|\{[^{}\s]*\}|\[[^[\]\s]*\])+)$`, 'u');
+const GROUP = /\{[^{}]*\}|\[[^[\]]*\]/gu;
+const BRACE_BODY = new RegExp(`^(?:${HOST_CHAR}|[,:])*$`, 'u');
+const BRACKET_BODY = new RegExp(`^(?:${HOST_CHAR}|:)*$`, 'u');
 const NUMBER_WORD = /^[0-9a-fx.]+$/iu;
-const IPV6_LITERAL =/^\[[^[\]]+\]$/u;
+const IPV6_LITERAL = /^\[[^[\]]+\]$/u;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
 function loopbackHost(host: string): boolean {
@@ -41,6 +44,17 @@ export function selfPortsOf(server: SelfServer): { ports: Set<number>; hosts: st
   return { ports, hosts };
 }
 
+function expandingHost(before: string): string | undefined {
+  const word = EXPANDING_HOST.exec(before)?.[1];
+  if (word === undefined || (IPV6_LITERAL.test(word) && isIP(word.slice(1, -1)) === 6)) return undefined;
+  const groups = word.match(GROUP) ?? [];
+  const closed = groups.length > 0 && groups.every(group => {
+    const body = group.slice(1, -1);
+    return group.startsWith('{') ? BRACE_BODY.test(body) : BRACKET_BODY.test(body) && /[-.:]/u.test(body);
+  });
+  return closed ? word : undefined;
+}
+
 export function selfTarget(text: string, server: SelfServer): string | undefined {
   const { ports, hosts } = selfPortsOf(server);
   const plain = text.replace(/["'`]/gu, '');
@@ -51,8 +65,8 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
   }
   for (const match of plain.matchAll(PORT)) {
     if (!ports.has(Number(match[1]))) continue;
-    const word = HOST_TAIL.exec(plain.slice(Math.max(0, match.index - 256), match.index))![0];
-    if (EXPANDING.test(word) && !(IPV6_LITERAL.test(word) && isIP(word.slice(1, -1)) === 6)) return `${word}${match[0]}`;
+    const word = expandingHost(plain.slice(Math.max(0, match.index - 256), match.index));
+    if (word !== undefined) return `${word}${match[0]}`;
   }
   for (const match of plain.matchAll(ADDRESS)) {
     const [whole, scheme, host, port] = match;

@@ -75,3 +75,17 @@ test('selfTarget: origins が IP のとき、版や秒の数字は断らず、�
   ];
   assert.deepEqual(self.filter(command => selfTarget(command, ipServer) === undefined), []);
 });
+
+test('selfTarget: 展開の決まりは、ホストの形の語で括弧が閉じているときだけ。JSON・添字・書式の中のポートの数字は断らない', () => {
+  const wide = { port: 4790, origins: ['https://box.tail1234.ts.net', 'http://other.tail1234.ts.net'] };
+  const unrelated = [
+    `echo '{"port":4790}'`, `python -c "print(x[:443])"`, `jq '{count:443}' a.json`, `python -c "print(s[:80])"`, `node -e "console.log({w:80})"`,
+    'echo a[0]:4790', 'jq .[0]:4790', 'git log --format={%h}:4790', `node -e "f({port:4790})"`, 'echo x[i]:443',
+  ];
+  assert.deepEqual(unrelated.filter(command => selfTarget(command, wide) !== undefined), []);
+  const expanding = [
+    'curl "http://127.0.0.[1-1]:4790/"', 'curl "http://{127.0.0.1,127.0.0.1}:4790/"', 'curl "http://127.0.0.{1,2}:4790/"', 'curl "http://[127.0.0.1]:4790/"',
+    'curl ${HOST}:4790', 'curl --url=127.0.0.[1-1]:4790', 'curl "http://user@{localhost,x}:4790/"', 'curl "http://127.0.0.[1-1]:0004790/"', 'curl "https://{localhost}:443/"',
+  ];
+  assert.deepEqual(expanding.filter(command => selfTarget(command, wide) === undefined), []);
+});
