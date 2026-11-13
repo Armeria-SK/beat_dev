@@ -418,3 +418,29 @@ test('pushesOf（W1-11）: 読み取れた push を確かめられるのは、�
     assert.notEqual(dirOf(command, shell), null, `${shell}: ${command}`);
   }
 });
+
+test('送る: tar の遠くのアーカイブ（-f host:path）は send。手元のアーカイブと --force-local は数えない', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    'tar -cf host:out.tar a.txt', 'tar cf host:out.tar a.txt', 'tar -czf user@host:/x/out.tar.gz tracked', 'tar --file=host:out.tar -c a.txt', 'tar -c --file host:out.tar a.txt',
+    'tar -cfhost:out.tar a.txt', 'tar -xf host:in.tar', 'tar -c -v -f host:out.tar a.txt', 'tar -cf C:out.tar a.txt', 'tar --force-loc -cf host:out.tar a.txt',
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'tar -cf out.tar a.txt', 'tar cf out.tar a.txt', 'tar -cf ./a:b.tar a.txt', 'tar -cf dist/a:b.tar a.txt', 'tar --force-local -cf host:out.tar a.txt', 'tar -cf out.tar a:b.txt', 'tar -tf out.tar',
+  ]);
+  if (process.platform === 'win32') {
+    expectKinds(f.kindOf, 'powershell', undefined, ['tar -cf C:\\x.tar a.txt', 'tar -cf C:/x.tar a.txt', 'tar --file=D:\\out\\x.tar -c a.txt']);
+    expectKinds(f.kindOf, 'bash', undefined, ['tar -cf C:/x.tar a.txt']);
+  }
+  expectKinds(f.kindOf, 'powershell', 'send', ['tar -cf host:out.tar a.txt']);
+});
+
+test('消す: truncate で大きさを 0 にするのは delete（Clear-Content と同じ）。git で戻せる・この作業で作ったものは なし', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'delete', [
+    'truncate -s 0 changed.txt', 'truncate -s0 dist/old.js', 'truncate --size=0 changed.txt', 'truncate --size 0 changed.txt', 'truncate -s 0 *.txt', 'truncate -s 0 $F',
+    'truncate -c -s 0K a.txt changed.txt', "truncate -s '<0' changed.txt", `truncate -s 0 ${join(f.outside, 'other.txt').replaceAll(String.fromCharCode(92), '/')}`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, ['truncate -s 0 a.txt', 'truncate -s 0 made.txt', 'truncate -s 100 changed.txt', 'truncate -s +0 changed.txt', 'truncate -s 10K changed.txt']);
+  assert.equal(f.kindOf('truncate -s 0 a.txt', 'bash', f.noProduct), 'delete');
+});

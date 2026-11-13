@@ -186,6 +186,55 @@ function uploadOf(st: StatementFacts): Hit | undefined {
   return undefined;
 }
 
+const DRIVE_PATH = /^[A-Za-z]:[\\/]/u;
+const remoteArchive = (name: string): boolean => {
+  const colon = name.indexOf(':');
+  if (colon < 0 || (process.platform === 'win32' && DRIVE_PATH.test(name))) return false;
+  const slash = name.indexOf('/');
+  return slash < 0 || colon < slash;
+};
+
+function tarRemote(st: StatementFacts): Hit | undefined {
+  const args = st.words.slice(1);
+  if (args.some(w => w.text === '--force-local')) return undefined;
+  const files: FactWord[] = [];
+  const take = (word: FactWord | undefined, text?: string): void => { if (word) files.push(text === undefined ? word : { ...word, text }); };
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i]!;
+    const t = w.text;
+    if (t === '--file') take(args[++i]);
+    else if (t.startsWith('--file=')) take(w, t.slice('--file='.length));
+    else if (t.startsWith('--')) continue;
+    else if (t.startsWith('-') || (i === 0 && /^[A-Za-z]+$/u.test(t))) {
+      const at = t.indexOf('f', t.startsWith('-') ? 1 : 0);
+      if (at < 0) continue;
+      const rest = t.startsWith('-') ? t.slice(at + 1) : '';
+      if (rest !== '') take(w, rest); else take(args[++i]);
+    }
+  }
+  const remote = files.find(w => !w.dynamic && remoteArchive(w.text));
+  return remote ? hit('send', 'send.upload', { cmd: `tar -f ${remote.text}` }) : undefined;
+}
+
+const ZERO_SIZE = /^<?0+[A-Za-z]*$/u;
+
+function truncateTargets(st: StatementFacts): StatementFacts['targets'] | undefined {
+  const args = st.words.slice(1);
+  const names: FactWord[] = [];
+  let zero = false;
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i]!;
+    const t = w.text;
+    const size = t === '-s' || t === '--size' ? args[++i]?.text : t.startsWith('--size=') ? t.slice('--size='.length) : /^-[co]*s./u.test(t) ? t.slice(t.indexOf('s') + 1) : undefined;
+    if (size !== undefined) { zero = ZERO_SIZE.test(size); continue; }
+    if (t === '-r' || t === '--reference') { i++; continue; }
+    if (t === '--') { names.push(...args.slice(i + 1)); break; }
+    if (!t.startsWith('-') || w.dynamic) names.push(w);
+  }
+  if (!zero) return undefined;
+  return names.map(w => (w.dynamic || w.glob || st.cwd === null || /^[~$%]/u.test(w.text) ? { input: w.text, wild: w.glob } : { input: w.text, path: resolve(st.cwd, w.text), wild: false }));
+}
+
 function interpreterHit(st: StatementFacts): Hit | undefined {
   const cmd = st.program;
   if (st.codeDynamic) return hit('send', 'send.inline_code', { cmd });
@@ -361,6 +410,8 @@ function statementHit(st: StatementFacts, before: readonly StatementFacts[], env
   if (WEB_PROGRAMS.has(p)) return psWebSends(st.words, p);
   if (p === 'gh') return ghSends(st.words);
   if (LOOKUP.has(p)) return st.words.slice(1).some(w => w.dynamic) ? hit('send', 'send.dynamic_target', { cmd: p }) : undefined;
+  if (p === 'tar' || p === 'gtar') { const remote = tarRemote(st); if (remote) return remote; }
+  if (p === 'truncate') { const emptied = truncateTargets(st); if (emptied) return deleteHit(emptied, env); }
   if (p === 'find' && st.words.some(w => w.text === '-delete')) return hit('delete', 'delete.unresolved');
   if (DELETE_PROGRAMS.has(p) || st.deletes) {
     if ((p === 'remove-item' || p === 'ri' || p === 'rm' || p === 'del') && st.words.some(w => ['include', 'exclude', 'filter'].some(n => psParam(w.text, n)))) return hit('delete', 'delete.unresolved');
