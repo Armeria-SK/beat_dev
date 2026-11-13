@@ -461,4 +461,7 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_pending_actions_status ON pending_actions (status, created_at DESC);
   CREATE INDEX ix_pending_actions_project ON pending_actions (project_id, status);
   `,
+  `
+  ALTER TABLE tasks ADD COLUMN owner_request TEXT;
+  `,
 ];

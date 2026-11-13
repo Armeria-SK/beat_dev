@@ -69,7 +69,7 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
   let task: Task | undefined;
   const makeTask = () => {
     task = d.tasks.create({
-      title: `Build: ${project.name}`, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId,
+      title: `Build: ${project.name}`, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: !untrusted,
       acceptanceItems: only ?? doc.items.filter(entry => entry.removedIn === null).map(entry => entry.id),
       createdInConversation: plan.updated_by === 'ai' ? meta?.conversationId ?? undefined : undefined,
     });
