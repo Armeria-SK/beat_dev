@@ -435,6 +435,88 @@ test('承認（W1-11）: 積んだ git push の行は、積んだあとにコミ
   assert.match(outcome.output ?? '', /commits/u);
 });
 
+function pushRig(t: { after: (fn: () => void) => void }) {
+  const r = rig(t);
+  const git = (...args: string[]) => {
+    const out = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: r.ws, encoding: 'utf8' });
+    assert.equal(out.status, 0, out.stderr);
+  };
+  const remote = join(tempDir(t), 'remote.git');
+  spawnSync('git', ['init', '-q', '--bare', remote]);
+  git('init', '-q', '-b', 'main');
+  writeFileSync(join(r.ws, 'a.txt'), 'a');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'first');
+  git('branch', 'feature');
+  git('checkout', '-q', '-b', 'side');
+  mkdirSync(join(r.ws, 'dist'), { recursive: true });
+  writeFileSync(join(r.ws, 'dist', 'old.js'), 'x');
+  writeFileSync(join(r.ws, 'owner.log'), 'mine');
+  const late = (branch: string) => {
+    git('checkout', '-q', branch);
+    writeFileSync(join(r.ws, 'late.txt'), `late ${branch}`);
+    git('add', 'late.txt');
+    git('commit', '-q', '-m', 'added after parking');
+    git('checkout', '-q', 'side');
+  };
+  const park = async (command: string) => {
+    const parked = await r.call('shell_run', { command }, { ...r.ctx, project: r.project() });
+    assert.equal(parked.decidedBy, 'pending', `${command}\n${parked.output.content}`);
+    return r.latest();
+  };
+  return { r, git, remote, late, park, q: JSON.stringify(remote) };
+}
+
+const AND = WINDOWS ? '; ' : ' && ';
+
+const LATE_CASES: Array<[string, string, string]> = [
+  ['--force-with-lease', 'git push --force-with-lease {U} feature', 'feature'],
+  ['--force-with-lease で HEAD は別のブランチ、main を動かす', 'git push --force-with-lease {U} main', 'main'],
+  ['ワイルドカードの refspec', 'git push {U} "refs/heads/*:refs/heads/*"', 'feature'],
+  ['push.default=matching', 'git push other', 'feature'],
+  ['消すと push を 1 つのコマンドで（行は消すの種類）', `${WINDOWS ? 'Remove-Item owner.log' : 'rm owner.log'}${AND}git push {U} feature`, 'feature'],
+  ['rm -rf dist と push（HEAD は別のブランチ、main を動かす）', `${WINDOWS ? 'Remove-Item -Recurse -Force dist' : 'rm -rf dist'}${AND}git push {U} main`, 'main'],
+];
+
+for (const [name, template, branch] of LATE_CASES) {
+  test(`承認（W1-11 改）: git push はリポジトリ全体を控え、積んだあとにブランチが動いたら stale: ${name}`, { skip: !gitAvailable }, async t => {
+    const { r, git, late, park, q } = pushRig(t);
+    git('remote', 'add', 'other', JSON.parse(q));
+    git('config', 'push.default', 'matching');
+    const row = await park(template.replace('{U}', q));
+    late(branch);
+    const outcome = await r.approve(row.id);
+    assert.equal(outcome.status, 'stale', outcome.output);
+    assert.match(outcome.output ?? '', /commits it would push changed/u);
+  });
+}
+
+test('承認（W1-11 改）: 何も動かなければ、積んだ git push は承認で動く。追跡用の refs/remotes が動いても（裏の fetch）stale にしない（対照）', { skip: !gitAvailable }, async t => {
+  const { r, git, park, q } = pushRig(t);
+  const row = await park(`git push --force-with-lease ${q} feature`);
+  git('update-ref', 'refs/remotes/other/side', 'HEAD');
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+});
+
+const UNPINNED_CASES: Array<[string, string]> = [
+  ['--git-dir', 'git --git-dir=.git push {U} feature'],
+  ['GIT_DIR', WINDOWS ? "$env:GIT_DIR = '.git'; git push {U} feature" : 'GIT_DIR=.git git push {U} feature'],
+  ['-c alias', 'git -c alias.p=push p {U} feature'],
+  ['知らないサブコマンド（利用者の設定の別名もここに入る）', 'git p {U} feature'],
+];
+
+for (const [name, template] of UNPINNED_CASES) {
+  test(`承認（W1-11 改）: どのリポジトリか決められない git の送りは、何も変わらなくても必ず stale: ${name}`, { skip: !gitAvailable }, async t => {
+    const { r, park, q } = pushRig(t);
+    const row = await park(template.replace('{U}', q));
+    const outcome = await r.approve(row.id);
+    assert.equal(outcome.status, 'stale', outcome.output);
+    assert.match(outcome.output ?? '', /could not confirm what the push would send/u);
+    assert.doesNotMatch(outcome.output ?? '', /commits it would push changed/u);
+  });
+}
+
 test('送る宛先の控え（LOW）: npm publish <フォルダ> のフォルダも places に入れる', () => {
   const ws = WINDOWS ? 'C:\\ws' : '/ws';
   const statement = (words: string[]) => ({ program: words[0]!, programDynamic: false, programOdd: false, words: words.map(text => ({ text, dynamic: false })), urls: [], env: [], gitGlobal: [], code: [], codeDynamic: false, stdin: false, shapes: [], reasonKeys: [], deletes: false, targets: [], writes: [], cwd: ws });

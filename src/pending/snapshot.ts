@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { lstat, readdir } from 'node:fs/promises';
@@ -201,20 +201,21 @@ async function gitFact(cwd: string, dataDir: string): Promise<GitFact | null> {
   });
 }
 
-export async function pushFacts(pushes: ReadonlyArray<{ dir: string; refs: readonly string[] }>, dataDir: string): Promise<string> {
+export const PUSH_UNCONFIRMED = 'unconfirmed:';
+
+export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null }>, dataDir: string): Promise<string> {
+  const never = (): string => `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}`;
   const lines: string[] = [];
-  for (const push of pushes) {
-    const facts = await withGit<string[]>(push.dir, dataDir, [`${push.dir}\0no-repo`], [`${push.dir}\0${UNAVAILABLE}\0${Date.now()}\0${Math.random()}`], async git => {
-      const out: string[] = [];
-      for (const ref of push.refs) {
-        const value = ref === '--all'
-          ? createHash('sha256').update((await git(['for-each-ref', '--format=%(objectname) %(refname)'])) ?? `${UNAVAILABLE}${Math.random()}`).digest('hex')
-          : (await git(['rev-parse', '--verify', '-q', '--end-of-options', `${ref}^{commit}`]))?.trim() || NO_COMMIT;
-        out.push(`${push.dir}\0${ref}\0${value}`);
-      }
-      return out;
+  for (const { dir } of pushes) {
+    if (dir === null) return never();
+    const line = await withGit<string | null>(dir, dataDir, `${dir}\0no-repo`, null, async git => {
+      const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
+      const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
+      const refs = await git(['for-each-ref', '--format=%(objectname) %(refname)', 'refs/heads', 'refs/tags']);
+      return refs === null ? null : `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).digest('hex')}`;
     });
-    lines.push(...facts);
+    if (line === null) return never();
+    lines.push(line);
   }
   return createHash('sha256').update(lines.join('\n')).digest('hex');
 }

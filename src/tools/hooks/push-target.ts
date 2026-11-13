@@ -49,6 +49,21 @@ export function changesGit(st: StatementFacts): string | undefined {
   return undefined;
 }
 
+export function pushRepo(st: StatementFacts, before: readonly StatementFacts[]): string | null {
+  let dir = st.cwd;
+  if (dir === null) return null;
+  for (let i = 0; i < st.gitGlobal.length; i++) {
+    const g = st.gitGlobal[i]!;
+    if (g === '--no-pager') continue;
+    if (g !== '-C' || i + 1 >= st.gitGlobal.length) return null;
+    const value = st.gitGlobal[++i]!;
+    if (st.words.find(x => x.text === value)?.dynamic) return null;
+    dir = resolve(dir, value);
+  }
+  if (unsafeEnv(st.env)) return null;
+  return before.some(prev => changesGit(prev) !== undefined) ? null : dir;
+}
+
 export function pushProblem(st: StatementFacts, subAt: number, before: readonly StatementFacts[], env: PushEnv): PushProblem | undefined {
   if (!env.remotes) return { key: 'send.push_no_product' };
   let dir = st.cwd;

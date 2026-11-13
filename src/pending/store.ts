@@ -34,7 +34,7 @@ export interface ParkInput {
   places?: string[] | undefined;
   created?: string[] | undefined;
   filesMore?: boolean | undefined;
-  pushes?: Array<{ dir: string; refs: string[] }> | undefined;
+  pushes?: Array<{ dir: string | null }> | undefined;
   runId: string;
   runKind: RunKind;
   conversationId: string;
@@ -63,7 +63,7 @@ export interface PendingState {
   places?: string[];
   created?: CreatedMark[];
   filesMore?: true;
-  pushes?: Array<{ dir: string; refs: string[] }>;
+  pushes?: Array<{ dir: string | null }>;
   pushed?: string;
 }
 
@@ -260,7 +260,7 @@ export class PendingStore {
       const fact = boundFacts([path])[0]!;
       return [{ path, id, ...(fact.type === 'dir' ? { inside: fact.hash ?? '', ...(fact.more ? { more: true as const } : {}) } : {}) }];
     });
-    const pushes = input.kind === 'send' ? input.pushes ?? [] : [];
+    const pushes = input.pushes ?? [];
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {

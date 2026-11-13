@@ -18,7 +18,7 @@ import type { PreCheck, RunKind, ToolContext, ToolDef, ToolOutput } from '../too
 import { outboundOfCall } from '../tools/hooks/outbound.ts';
 import { hookPaths } from '../tools/pipeline.ts';
 import { identityOf } from '../projects/created.ts';
-import { boundChanged, boundFacts, compareSnapshot, destinationFacts, pushFacts, takeSnapshot, type Change } from './snapshot.ts';
+import { boundChanged, boundFacts, compareSnapshot, destinationFacts, PUSH_UNCONFIRMED, pushFacts, takeSnapshot, type Change } from './snapshot.ts';
 import { newChecks, parkedOutbound, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
 
 export interface ReplayDeps {
@@ -183,6 +183,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const now = destinationFacts(row.cwd, state.places ?? []);
       if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
     }
+    if (state.pushed !== undefined && (state.pushed.startsWith(PUSH_UNCONFIRMED) || pushedNow?.startsWith(PUSH_UNCONFIRMED))) return end('stale', pendingText('en', 'push_unconfirmed'));
     if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', 'changed_commits'));
     if (state.filesMore) return end('stale', pendingText('en', 'files_unbound'));
     if (state.sent?.length) {
