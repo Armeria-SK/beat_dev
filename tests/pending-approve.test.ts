@@ -613,6 +613,28 @@ test('承認（W1-11 改）: リポジトリでないフォルダの、何のコ
   assert.equal((await r.approve(row.id)).status, 'ran');
 });
 
+for (const [name, template] of [
+  ['宛先の後ろ', 'git push origin main -o "$(cat notes.txt)"'],
+  ['宛先の前', 'git push -o "$(cat notes.txt)" origin main'],
+] as const) {
+  test(`外へ送る（W1-8 の見落とし）: 記録した宛先への push でも、-o の値が実行時に決まるなら Pending に積み、読むファイルを控える: ${name}`, { skip: !gitAvailable }, async t => {
+    const { r, git, remote } = pushRig(t);
+    git('remote', 'add', 'origin', remote);
+    const projects = new ProjectStore(r.db, r.paths.projects);
+    const row = projects.create({ name: 'Recorded', root: r.ws, rootKey: rootKeyOf(r.ws), checkCommand: null, remotes: [{ name: 'origin', url: remote, pushUrl: null }] });
+    const ctx = { ...r.ctx, project: { id: row.id, root: row.root }, services: { projects } } as unknown as ToolContext;
+    writeFileSync(join(r.ws, 'notes.txt'), 'owner notes');
+    const check = await shellPreCheck({ command: template }, ctx);
+    assert.equal(check?.outbound?.kind, 'send', JSON.stringify(check?.outbound));
+    const parked = await r.call('shell_run', { command: template }, ctx);
+    assert.equal(parked.decidedBy, 'pending', parked.output.content);
+    writeFileSync(join(r.ws, 'notes.txt'), 'something else');
+    const outcome = await r.approve(r.latest().id);
+    assert.equal(outcome.status, 'stale', outcome.output);
+    assert.match(outcome.output ?? '', /notes\.txt/u);
+  });
+}
+
 test('送る宛先の控え（LOW）: npm publish <フォルダ> のフォルダも places に入れる', () => {
   const ws = WINDOWS ? 'C:\\ws' : '/ws';
   const statement = (words: string[]) => ({ program: words[0]!, programDynamic: false, programOdd: false, words: words.map(text => ({ text, dynamic: false })), urls: [], env: [], gitGlobal: [], code: [], codeDynamic: false, stdin: false, shapes: [], reasonKeys: [], deletes: false, targets: [], writes: [], cwd: ws });

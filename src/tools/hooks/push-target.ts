@@ -89,6 +89,8 @@ export function pushProblem(st: StatementFacts, subAt: number, before: readonly 
   if (dir === null) return { key: 'send.push_options', detail: 'cd' };
   let remote: string | undefined;
   const args = st.words.slice(subAt + 1);
+  const option = args.find((w, i) => (w.dynamic && (/^-o./u.test(w.text) || longOption(w.text, '--push-option'))) || (TAKES_VALUE.has(w.text) && args[i + 1]?.dynamic === true));
+  if (option) return { key: 'send.push_options', detail: option.text };
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
     if (w.dynamic) return { key: 'send.push_options', detail: w.text };
