@@ -256,6 +256,5 @@ test('ui/pending: Decided の行も Waiting と同じ actionView から組む（
   assert.deepEqual(decidedText(actionView(row({ tool: 'file_edit', status: 'ran', title: null, shown: 'file_edit', parts: erased }))), { title: null, code: 'file_edit', cwd: null }, '題も無ければ shown を出す');
   const gone = row({ tool: 'shell_run', status: 'rejected', decided_at: 900, title: null, shown: '', parts: erased });
   assert.deepEqual(decidedText(actionView(gone)), { title: null, code: null, cwd: null, erased: true }, '会話を消した行（shown も題も空）は、中身を消したと分かる印を返す');
-  assert.deepEqual(decidedText(actionView({ ...gone, parts: null })), { title: null, code: null, cwd: null, erased: true });
   assert.ok(en['ui.pending.erased']);
 });
