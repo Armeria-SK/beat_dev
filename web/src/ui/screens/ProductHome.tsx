@@ -26,7 +26,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
   const t = useT();
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
-  const look = useLastLook(productLookKey(id));
+  const look = useLastLook(productLookKey(id), project !== undefined);
   const loads = useRef(latestOnly());
   const first = useRef(true);
 
