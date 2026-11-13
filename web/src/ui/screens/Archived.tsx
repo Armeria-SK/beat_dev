@@ -18,7 +18,7 @@ export function Archived({ revision, projects }: { revision: number; projects: r
   const t = useT();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Conversation[] | null>(null);
-  const [shelved, setShelved] = useState<Project[]>([]);
+  const [shelved, setShelved] = useState<Project[] | null>(null);
   const [loadedFor, setLoadedFor] = useState('');
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -49,17 +49,18 @@ export function Archived({ revision, projects }: { revision: number; projects: r
   const reload = () => setTick(n => n + 1);
   const title = (c: Conversation): string => c.title || t('ui.session.untitled');
   const productText = (c: Conversation): string | null => {
-    const line = productLine(c.project_id, projects, shelved);
-    if (!line) return null;
+    const line = productLine(c.project_id, projects, shelved ?? []);
+    if (!line || (line.archived && shelved === null)) return null;
     return line.archived ? (line.name ? t('ui.pf.archived', line.name) : t('ui.pf.someArchived')) : line.name;
   };
+  const readShelved = async (): Promise<Project[]> => shelved ?? api.projects(true).then(r => r.projects, () => []);
   const restore = async (c: Conversation) => {
     if (busy) return;
     setBusy(c.id);
     try {
       await api.unarchiveConversation(c.id);
       setItems(current => current?.filter(x => x.id !== c.id) ?? current);
-      const line = productLine(c.project_id, projects, shelved);
+      const line = productLine(c.project_id, projects, await readShelved());
       toast({
         icon: 'undo', title: t('ui.archived.toast.restored'), body: line?.archived ? t('ui.pf.restoredUnder', line.name ?? t('ui.pf.someArchived')) : title(c),
         action: { label: t('ui.toast.undo'), run: () => { void api.archiveConversation(c.id).then(reload).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: failText(error, t) })); } },
