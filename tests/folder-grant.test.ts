@@ -30,7 +30,7 @@ function setup(t: { after: (fn: () => void) => void }, options: { tainted?: bool
   options.mutate?.(config);
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(shellRun).register(webFetch);
   for (const tool of options.tools ?? []) registry.register(tool);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
@@ -42,7 +42,7 @@ function setup(t: { after: (fn: () => void) => void }, options: { tainted?: bool
   const ctx = makeCtx('r1');
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, judgeAll: true, emit: () => undefined, conversationAutoRead: () => false,
+      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false,
       lastUserRequest: () => 'please write the notes', autoClassify: async () => { judge.calls++; return judge.answer; },
     });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };
@@ -104,42 +104,3 @@ const toolCall = (name: string, args: unknown): Script => async function* () {
   yield { type: 'done', stop: 'tool_use' };
 };
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' }; };
-
-// 前の道（札）: 4-3b-1 で消す
-test('エンジンと API: 添付を読んだ実行の file_write の札に grantFolder が付き、POST /api/approvals/:id の folder で同じフォルダの file_write は札なしで動く。実行ログの API にフォルダが出る。次の実行は札', async t => {
-  const s = await startApp(t, { judgeAll: false });
-  const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
-  s.adapter().scripts = [toolCall('file_write', { path: 'notes/a.txt', content: 'A' }), toolCall('file_write', { path: 'notes/b.txt', content: 'B' }), say('書きました')];
-  const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: '添付を読んで、メモに書いて', attachments: [upload.id] });
-  await waitFor(() => s.app.approvals.pending().length === 1, '最初の札');
-  const listed = await s.json('/api/approvals', 'GET');
-  const card = listed.body.approvals[0];
-  assert.ok(card.grantFolder.endsWith('notes'), JSON.stringify(card));
-  assert.deepEqual(card.reasons.length, 1, 'taint の理由だけ');
-  const decided = await s.json(`/api/approvals/${card.id}`, 'POST', { decision: 'folder' });
-  assert.equal(decided.status, 200);
-  await settled(s.app, sent.body.runId);
-  assert.equal(readFileSync(join(s.paths.workspace, 'notes/b.txt'), 'utf8'), 'B', '2 つ目は札なしで書かれた');
-  assert.equal(s.app.approvals.pending().length, 0);
-
-  const logged = await s.json('/api/tool-calls', 'GET');
-  const writes = (logged.body.toolCalls as Array<{ tool: string; decided_by: string; grantFolder: string | null; approval_id: string | null; autoReason: string | null }>).filter(r => r.tool === 'file_write');
-  assert.equal(writes.length, 2);
-  assert.deepEqual(writes.map(w => w.decided_by).sort(), ['folder-grant', 'user']);
-  assert.ok(writes.every(w => w.grantFolder === card.grantFolder && w.approval_id === card.id), '許可した札と、許したフォルダが両方の行に出る');
-  assert.ok(writes.every(w => w.autoReason === null));
-
-  // 次の実行（また添付を読む）は、札から
-  const again = s.app.uploads.save({ name: 'memo2.txt', mime: 'text/plain', body: Buffer.from('別の添付') });
-  s.adapter().scripts = [toolCall('file_write', { path: 'notes/c.txt', content: 'C' }), say('書きました')];
-  const next = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'もう一つ', attachments: [again.id] });
-  await waitFor(() => s.app.approvals.pending().length === 1, '次の実行の札');
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
-  await settled(s.app, next.body.runId);
-  assert.equal(existsSync(join(s.paths.workspace, 'notes/c.txt')), false);
-
-  // 知らない決定は 400（folder を含む一覧で知らせる）
-  const bad = await s.json('/api/approvals/none', 'POST', { decision: 'maybe' });
-  assert.equal(bad.status, 400);
-  assert.equal(bad.body.params.values, 'once / conversation / folder / deny');
-});

@@ -429,7 +429,6 @@ test('3-2-s Build のあとの汚れ（子の担当・通しで）: 子が汚れ
     reply('done'),
   ];
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.deepEqual(rows.map(r => [r.tool, r.kind, r.tainted]), [['shell_run', 'judge_failed', true]], '持ち主に聞く（Pending）');
   assert.match(rows[0]!.reason, /there is no request from the owner to judge it against/u);
@@ -489,14 +488,9 @@ test('3-2-s Build の頼み: 外を読んだ会話のきれいな実行が task_
   s.app.runs.markTainted(uuid(61));
   const started = s.app.engine.runTask(s.app.tasks.get(taskId)!, conversation.id, 'Build it');
   assert.ok(started.ok);
-  let ended = false;
-  void started.done.finally(() => { ended = true; });
-  await waitFor(() => s.app.approvals.pending().length > 0 || ended, '札か実行の終わり');
-  const cards = s.app.approvals.pending();
-  for (const card of cards) s.app.approvals.decide(card.id, 'deny');
   await started.done;
   const judged = s.adapter().calls.slice(before).filter(isClassifier);
-  assert.equal(cards.length, 0, '4-J: 持ち主の頼みがあるので札は出ない');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, '4-J: 持ち主の頼みがあるので Pending に積まれない');
   assert.equal(judged.length, 1, '4-J: 判定役が持ち主の頼みで決める');
   const seen = judged.map(c => JSON.stringify(c.messages)).join('\n');
   assert.match(seen, new RegExp(`Build: ${product.name}`, 'u'));

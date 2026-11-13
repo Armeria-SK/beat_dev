@@ -26,7 +26,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   config.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }];
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const judged: ClassifierPrompt[] = [];
@@ -37,7 +37,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   };
   const call = (name: string, args: unknown) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-      registry, approvals, pending, judgeAll: true, db, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false, lastUserRequest: () => 'do the work',
+      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false, lastUserRequest: () => 'do the work',
       autoClassify: async prompt => { judged.push(prompt); return '{"decision":"ask","reason":"check it"}'; },
     });
   const asked = async (name: string, args: unknown) => {

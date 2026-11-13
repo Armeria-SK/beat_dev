@@ -45,7 +45,7 @@ async function whereIs(s: Awaited<ReturnType<typeof start>>, secret: string, see
   const found: string[] = [];
   const check = (place: string, text: string) => { if (text.includes(secret)) found.push(place); };
   seen.forEach((text, i) => check(`応答 ${i}`, text));
-  for (const path of ['/api/settings', '/api/models', '/api/runs', '/api/tool-calls', '/api/notifications', '/api/health', '/api/tasks', '/api/approvals', '/api/onboarding', '/api/conversations', '/api/memories', '/api/providers/fake/key', '/api/providers/my-llm/key']) {
+  for (const path of ['/api/settings', '/api/models', '/api/runs', '/api/tool-calls', '/api/notifications', '/api/health', '/api/tasks', '/api/onboarding', '/api/conversations', '/api/memories', '/api/providers/fake/key', '/api/providers/my-llm/key']) {
     check(path, await (await s.api(path)).text());
   }
   for (const file of filesUnder(s.paths.data)) {

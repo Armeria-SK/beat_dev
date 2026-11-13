@@ -31,7 +31,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const events: RunEvent[] = [];
   const sent: NotifyInput[] = [];
   let dupe = false;
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(notifyOwner);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
@@ -42,7 +42,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     services: { db, memory: new MemoryStore(db), emit: () => undefined, notify: input => { sent.push(input); return dupe ? undefined : { id: sent.length }; } },
   };
   const call = (args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name: 'notify_owner', arguments: args }, c, { registry, approvals, pending, judgeAll: true, db, emit: e => events.push(e), conversationAutoRead: () => false });
+    runToolCall({ id: `call-${Math.random()}`, name: 'notify_owner', arguments: args }, c, { registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false });
   return { ctx, call, sent, setDupe: (v: boolean) => { dupe = v; } };
 }
 

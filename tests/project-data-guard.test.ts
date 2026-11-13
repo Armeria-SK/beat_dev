@@ -48,7 +48,7 @@ test('ファイルの道具（読む・書く・書き換える・一覧・検�
   const f = fixture(t);
   const db = openDatabase(':memory:', MIGRATIONS);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(fileSearch).register(shellRun);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const pending = new PendingStore(db, { tools: registry, dataDir: f.paths.data });
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: f.config, paths: f.paths, policy: f.policy,
@@ -56,7 +56,7 @@ test('ファイルの道具（読む・書く・書き換える・一覧・検�
   };
   let judged = 0;
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, pending, db, judgeAll: true, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the product knowledge', conversationTainted: () => false, conversationAutoRead: () => false,
+    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the product knowledge', conversationTainted: () => false, conversationAutoRead: () => false,
     autoClassify: async () => { judged++; return ALLOW; },
   });
   const file = join(f.dir, 'context.md');

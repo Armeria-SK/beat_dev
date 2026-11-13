@@ -22,7 +22,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   const parsed = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
   const tasks = new TaskStore(db);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(taskCreate).register(taskUpdate);
   const policy = buildPolicy(parsed, paths);
   const ctx: ToolContext = {
@@ -34,7 +34,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   let judged = 0;
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, judgeAll: true, emit: () => undefined, conversationAutoRead: () => false, lastUserRequest: () => 'make a task',
+      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, lastUserRequest: () => 'make a task',
       autoClassify: async () => { judged++; return '{"decision":"ask","reason":"the owner should look"}'; },
     });
   return { ctx, call, approvals, tasks, pending, judged: () => judged };

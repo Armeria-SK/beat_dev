@@ -61,7 +61,6 @@ test('自動承認（エンジン）: 外のメモを読むコマンドは、判
   await settled(s.app, sent.body.runId);
   const calls = s.adapter().calls;
   assert.equal(calls.length, 4, '本体 2 回 + 判定役 1 回 + 本体の最後 1 回');
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const classifier = calls[2]!;
   assert.ok(isClassifier(classifier), '3 番目は判定役の呼び出し（道具なし）');
   assert.ok(calls.filter(isClassifier).length === 1);
@@ -106,7 +105,6 @@ test('自動承認（エンジン）: ふつうのモードでも判定役が決
   s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), say('読みました')];
   const sent = await post(s, REQUEST);
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
   assert.equal(autoRows(s).length, 1);
@@ -123,7 +121,6 @@ test('自動承認（エンジン）: 実行の途中でモードを替えても
   assert.equal((await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'normal' })).status, 200);
   g.open();
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, 'auto からふつうに替えても判定役');
 
   const t2 = await startApp(t);
@@ -134,7 +131,6 @@ test('自動承認（エンジン）: 実行の途中でモードを替えても
   await t2.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'auto' });
   g2.open();
   await settled(t2.app, second.body.runId);
-  assert.equal(t2.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(t2.adapter().calls.filter(isClassifier).length, 1, 'ふつうから auto に替えても判定役');
 });
 
@@ -144,7 +140,6 @@ test('自動承認（エンジン）: 判定役のモデルの呼び出しが失
   s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), fail(new Error('接続できません')), say('読みました')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const [row] = s.app.pending.list({ status: 'waiting' });
   assert.equal(row?.kind, 'judge_failed');
   assert.match(row!.reason, /the judge could not be called/u);
@@ -160,7 +155,6 @@ test('自動承認（エンジン）: 製品の外でコードを動かす今回
   s.adapter().scripts = [toolCall('shell_run', { command: 'node put.js' }), say(ALLOW), say('おわり')];
   const sent = await post(s, '動かして', { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
   assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'auto-mode');
@@ -172,7 +166,6 @@ test('自動承認（エンジン）: 製品の外でコードを動かす今回
   t2.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
   const attached = await t2.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: REQUEST, attachments: [upload.id], permissionMode: 'auto' });
   await settled(t2.app, attached.body.runId);
-  assert.equal(t2.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(t2.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(t2).includes(TAINTED_NOTE), '判定役に、よそから来た文を読んだ会話だと伝える');
   assert.equal(autoRows(t2).length, 1);
@@ -205,7 +198,7 @@ async function webApp(t: { after: (fn: () => void) => void }) {
   return { app, adapter: () => adapter, command, paths };
 }
 
-test('4-3a 本番の守り: 既定の設定で作った App（judgeAll を渡さない）では、確かめの要る呼び出しは normal の会話でも判定役に回り、Pending に積まれ、札の出来事は出ない', async t => {
+test('4-3a 本番の守り: 既定の設定で作った App では、確かめの要る呼び出しは normal の会話でも判定役に回り、Pending に積まれ、札の出来事は出ない', async t => {
   const s = await webApp(t);
   const seen: RunEvent[] = [];
   s.app.bus.subscribe(e => { seen.push(e.event); });
@@ -215,8 +208,7 @@ test('4-3a 本番の守り: 既定の設定で作った App（judgeAll を渡さ
   await settled(s.app, sent.runId);
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役に回る');
   assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => [r.tool, r.kind]), [['shell_run', 'judge']]);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
-  assert.equal(seen.filter(e => e.type === 'approval.requested').length, 0, '札の出来事は出ない');
+  assert.equal(seen.filter(e => (e.type as string) === 'approval.requested').length, 0, '札の出来事は出ない');
 });
 
 test('自動承認（エンジン）: Web を読んだあとの外読みは、判定役が決める（taint）。allow なら札なしで動く', async t => {
@@ -226,7 +218,6 @@ test('自動承認（エンジン）: Web を読んだあとの外読みは、�
   const sent = s.app.engine.send('c1', 'このページを読んで、外のメモも読んで');
   assert.ok(sent.ok);
   await settled(s.app, sent.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   const rows = s.app.db.prepare("SELECT reasons FROM approvals WHERE scope = 'auto'").all() as Array<{ reasons: string }>;
   assert.equal(rows.length, 1);
@@ -247,7 +238,6 @@ test('自動承認（エンジン）: Web を読んだあとの送る操作は�
     const sent = s.app.engine.send('c1', 'このページを読んで、続けて');
     assert.ok(sent.ok);
     await settled(s.app, sent.runId);
-    assert.equal(s.app.approvals.pending().length, 0, `${label}: 札は出ない`);
     const rows = s.app.pending.list({ status: 'waiting' });
     assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [[kind, true]], label);
     assert.equal(s.adapter().calls.filter(isClassifier).length, judged, label);
@@ -274,7 +264,6 @@ test('自動承認（エンジン）: Web を読んだ実行が止められた�
   const second = s.app.engine.send('c1', '続けて、外のメモも読んで');
   assert.ok(second.ok);
   await settled(s.app, second.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(s).includes(TAINTED_NOTE), '持ち越した印は、判定役に伝わる');
   assert.match((JSON.parse(autoRows(s)[0]!.reasons) as string[]).join('\n'), /text that came from somewhere else/u, '理由に taint が載る（持ち越した印）');
@@ -288,7 +277,6 @@ test('自動承認（エンジン）: 外のメモを自動で読んだあとの
   s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), toolCall('shell_run', { command: fetch }), say(ASK), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 2, '取得も判定役が見る');
   assert.match(judgeShown(s, 1), /outside the allowed folders in this conversation/u, '判定役に、外を読んだ会話の毎回の確かめと伝わる');
   assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge']);
@@ -302,7 +290,6 @@ test('自動承認（エンジン）: シェルで外から取得したら、実
   s.adapter().scripts = [toolCall('shell_run', { command: fetch }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, '実行の記録に印が残る（止めた・落ちた実行の次の実行へ引き継ぐ材料）');
   assert.equal(autoRows(s).length, 1);
@@ -326,7 +313,6 @@ test('自動承認（エンジン）: 一度でもよそから来た文を読ん
   const second = s.app.engine.send('c1', '外のメモも読んで');
   assert.ok(second.ok);
   await settled(s.app, second.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(s).includes(TAINTED_NOTE), '会話の印は、判定役に伝わる');
   const reasons = JSON.parse(autoRows(s)[0]!.reasons) as string[];
@@ -374,7 +360,6 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   stopped.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ASK), say('おわり')];
   const second = await post(stopped, '続けて、もう一度読んで', { permissionMode: 'auto' });
   await settled(stopped.app, second.body.runId);
-  assert.equal(stopped.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(stopped.adapter().calls.filter(isClassifier).length, 2, '持ち越した印のあとも判定役が見る');
   assert.match(judgeShown(stopped, 1), /outside the allowed folders in this conversation/u);
   assert.deepEqual(stopped.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge']);
@@ -391,7 +376,6 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   failing.adapter().scripts = [toolCall('shell_run', { command: outside2.command }), say(ASK), say('おわり')];
   const fourth = await post(failing, '続けて', { permissionMode: 'auto' });
   await settled(failing.app, fourth.body.runId);
-  assert.equal(failing.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(failing.adapter().calls.filter(isClassifier).length, 2, '失敗した実行のあとも判定役が見る');
   assert.match(judgeShown(failing, 1), /outside the allowed folders in this conversation/u);
   assert.deepEqual(failing.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge']);
@@ -404,7 +388,6 @@ test('自動承認（エンジン）: Pending で持ち主が許した git clone
   s.adapter().scripts = [toolCall('shell_run', { command: 'git clone https://beat-test.invalid/x.git' }), say(ASK), say('おわり')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const [row] = s.app.pending.list({ status: 'waiting' });
   assert.equal(row?.kind, 'judge');
   assert.equal(s.app.conversations.everTainted(CONVERSATION), false, 'Pending のあいだは、まだ動いていない');
@@ -447,7 +430,6 @@ test('自動承認（エンジン）: 外のメモを自動で読んだ会話は
   await settled(s.app, third.body.runId);
   assert.equal(s.adapter().calls.filter(isClassifier).length, 3, 'echo も判定役が見る');
   assert.match(judgeShown(s, 2), /outside the allowed folders in this conversation/u);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge', 'judge']);
   assert.equal(autoRows(s).length, 1);
 });
@@ -475,11 +457,8 @@ test('自動承認（タスク）: Web を読んだあとのシェルの読み�
   const s = await webApp(t);
   const command = workspaceRead(s);
   const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), say(ALLOW), say('おわり')]);
-  await waitFor(() => s.app.runs.get(started.runId)?.ended_at != null || s.app.approvals.pending().length > 0, '実行の終わりか札');
-  const cards = s.app.approvals.pending();
-  for (const card of cards) s.app.approvals.decide(card.id, 'deny');
   await started.done;
-  assert.equal(cards.length, 0, '札は出ない');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, 'Pending に積まれない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.ok(classifierText(s).includes('天気を調べる'), '判定役が見る依頼は、持ち主が書いたタスクの題');
   assert.ok(!classifierText(s).includes(TASK_PROMPT), 'ワーカーが組み立てた文は見せない');
@@ -523,7 +502,6 @@ test('自動承認（タスク）: Web を読んだあとの送る操作・消�
 // 実行の終わりを待ち、札が出ず自動でも許していないことを確かめる。判定役を呼んだ回数と、持ち主を待つ Pending の行を返す
 async function parked(s: Awaited<ReturnType<typeof webApp>>, started: { runId: string; done: Promise<unknown> }, label: string) {
   await started.done;
-  assert.equal(s.app.approvals.pending().length, 0, `${label}: 札は出ない`);
   assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, `${label}: 自動では許していない`);
   return { classified: s.adapter().calls.filter(isClassifier).length, rows: s.app.pending.list({ status: 'waiting' }) };
 }
@@ -551,7 +529,6 @@ test('自動承認（タスク）: よそから来た文を読んだあとの、
   const s = await webApp(t);
   const started = await runTaskWith(s, [WEB(), toolCall('shell_run', { command: s.command }), say(ALLOW), say('おわり')]);
   await started.done;
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役が決めた');
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
   assert.ok(classifierText(s).includes(TAINTED_NOTE));
@@ -567,7 +544,6 @@ test('自動承認（タスク）: 判定役に見せる依頼は、持ち主の
     return task;
   });
   await started.done;
-  assert.equal(s.app.approvals.pending().length, 0);
   const shown = classifierText(s);
   for (const marker of ['TITLE-MARKER', 'BODY-MARKER', 'DONE-MARKER']) assert.ok(shown.includes(marker), marker);
   for (const marker of ['NEXT-ACTION-MARKER', 'HISTORY-MARKER', TASK_PROMPT]) assert.ok(!shown.includes(marker), marker);
@@ -629,7 +605,6 @@ test('自動承認（タスク）: よそから来た文を読んだ実行（そ
     if (tainted) assert.equal(await noRequest(s, started, label), 0, label);
     else {
       await started.done;
-      assert.equal(s.app.approvals.pending().length, 0, label);
       assert.equal(s.adapter().calls.filter(isClassifier).length, 1, label);
     }
   }
@@ -671,12 +646,9 @@ test('自動承認（タスク）: 道具を何十回も使った長い実行で
   const command = workspaceRead(s);
   const many = Array.from({ length: 30 }, (_, i) => toolCall('calculate', { expression: `${i}+1` }));
   const started = await runTaskWith(s, [...many, WEB(), toolCall('shell_run', { command }), say(ALLOW), say('おわり')]);
-  await waitFor(() => s.app.runs.get(started.runId)?.ended_at != null || s.app.approvals.pending().length > 0, '実行の終わりか札');
-  const cards = s.app.approvals.pending();
-  for (const card of cards) s.app.approvals.decide(card.id, 'deny');
   await started.done;
   assert.ok(s.app.conversations.messages(s.app.runs.get(started.runId)!.conversation_id!).length > 50, '前提: 会話は 50 件を超える');
-  assert.equal(cards.length, 0, '札は出ない');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, 'Pending に積まれない');
   assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'auto-mode');
 });
 
@@ -687,7 +659,6 @@ test('自動承認（エンジン）: 判定役の返事が max_tokens で途中
   s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutOff(ALLOW), say('読みました')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().calls.filter(isClassifier).length, 1);
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.deepEqual(rows.map(r => r.kind), ['judge_failed']);

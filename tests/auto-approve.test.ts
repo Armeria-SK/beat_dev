@@ -260,7 +260,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { tools?: 
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(shellRun).register(webFetch);
   for (const tool of options.tools ?? []) registry.register(tool);
   const policy = buildPolicy(parsed, paths);
@@ -274,7 +274,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { tools?: 
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: { noClassifier?: boolean; timeoutMs?: number; noConversationFlag?: boolean; noAutoReadFlag?: boolean } = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, judgeAll: true, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで',
+      registry, approvals, pending, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで',
       ...(extra.noClassifier ? {} : { autoClassify: async (prompt: ClassifierPrompt, signal: AbortSignal) => { prompts.push(prompt); return state.classify(prompt, signal); } }),
       ...(extra.timeoutMs ? { autoTimeoutMs: extra.timeoutMs } : {}),
       ...(extra.noConversationFlag ? {} : { conversationTainted: () => { if (state.conversationTainted === 'throws') throw new Error('読めない'); return state.conversationTainted; } }),
@@ -370,7 +370,7 @@ test('自動承認: 判定役が無い（モデルを呼べない）、利用者
   const s = await setup(t);
   const registry = new ToolRegistry().register(shellRun);
   const outcome = await runToolCall({ id: 'k', name: 'shell_run', arguments: { command: s.readOutside } }, s.ctx, {
-    registry, approvals: s.approvals, pending: s.pending, judgeAll: true, db: s.db, emit: e => s.events.push(e), permissionMode: () => 'auto', lastUserRequest: () => '', conversationTainted: () => false, conversationAutoRead: () => false,
+    registry, approvals: s.approvals, pending: s.pending, db: s.db, emit: e => s.events.push(e), permissionMode: () => 'auto', lastUserRequest: () => '', conversationTainted: () => false, conversationAutoRead: () => false,
     autoClassify: async p => { s.prompts.push(p); return ALLOW; },
   });
   assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'pending']);

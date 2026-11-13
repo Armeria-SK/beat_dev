@@ -35,13 +35,13 @@ function context(t: { after: (fn: () => void) => void }, tool: ToolDef, over: Pa
   mkdirSync(paths.workspace, { recursive: true });
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry();
   registry.setGroup('web', [tool]);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(config, paths);
   const ctx: ToolContext = { runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy, workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, ...over };
-  const call = (args: unknown) => runToolCall({ id: 'c1', name: tool.name, arguments: args as Record<string, unknown> }, ctx, { registry, approvals, pending, judgeAll: true, db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false });
+  const call = (args: unknown) => runToolCall({ id: 'c1', name: tool.name, arguments: args as Record<string, unknown> }, ctx, { registry, approvals, pending, db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false });
   return { ctx, call, db };
 }
 

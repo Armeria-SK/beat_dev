@@ -221,7 +221,7 @@ test('製品の会話: 相対パスの file_write は作業フォルダに確か
   s.adapter().scripts = [call('probe_ctx', {}), call('file_write', { path: 'hello.txt', content: 'hi' }), reply('done')];
   assert.equal((await s.send(uuid(1), { text: 'make a file', projectId: shop.id })).status, 202);
   assert.equal(readFileSync(join(shop.root, 'hello.txt'), 'utf8'), 'hi');
-  assert.equal(s.app.approvals.pending().length, 0);
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
   const ctx = s.seen[0]!;
   assert.deepEqual([ctx.workspace, ctx.home, ctx.project], [shop.root, s.paths.workspace, { id: shop.id, root: shop.root }]);
   assert.deepEqual(s.app.config().tools.roots, rootsBefore);

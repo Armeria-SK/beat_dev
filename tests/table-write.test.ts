@@ -33,7 +33,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(tableWrite);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
@@ -45,7 +45,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name: 'table_write', arguments: args }, c, {
-      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false,
+      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false,
       lastUserRequest: () => 'please write the table', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });

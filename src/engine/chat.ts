@@ -118,7 +118,6 @@ export interface ChatEngineDeps {
   // 子の担当の時間切れ（ミリ秒）。試験で短くするためだけの上書き。ふつうは設定 tools.agent.timeoutSec（秒）を使う
   agentTimeoutMs?: number | undefined;
   judgeLimits?: JudgeLimitSet | undefined;
-  judgeAll?: boolean | undefined;
   // maxTools で切られた MCP の道具を、モデルごとに知らせる（空の一覧は「切られていない」）。MCP の管理が、道具の状態を cut にするために使う
   mcpCut?: (modelId: string, names: readonly string[]) => void;
   // ブラウザ 1 つ（全会話で共有）。無ければ browser_* は動かない（ToolContext.services.browser）
@@ -380,8 +379,7 @@ export class ChatEngine {
     return !(last.ok === 1 && !wrappedUp);
   }
 
-  // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは、実行が道具の呼び出しの中で待っているので、区切りに来ない。承認の答えが先）。
-  // 差し込む発言は別の返事の元なので、「この返事のあいだ」のフォルダの許可（ctx.writeGrants）はここで全部終わる。
+  // 実行の区切りで、待っている発言を履歴に入れる。
   // 添付つきの発言は外から来た文なので、この実行の残りも「外から読んだ」扱いにする。
   // 実行が始まったあとにモデルか権限モードを替えて送られた発言（held）は入れない（古いモデル・古いモードの実行へ渡さない）。実行が終わってから新しい実行で読ませる
   #injectPending(runId: string, conversationId: string, ctx: ToolContext): void {
@@ -390,7 +388,6 @@ export class ChatEngine {
     if (!queue?.length) return;
     const injectable = queue.filter(p => !p.held);
     if (!injectable.length) return;
-    ctx.writeGrants = undefined;
     const held = queue.filter(p => p.held);
     if (held.length) this.#pending.set(conversationId, held); else this.#pending.delete(conversationId);
     const language = languageOf(d.config());
@@ -823,7 +820,7 @@ export class ChatEngine {
           lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
             : agent ? (agent.parent.task ? d.tasks?.judgeRequest(agent.parent.task.id) ?? '' : this.#lastUserRequest(agent.parent.conversationId))
             : this.#lastUserRequest(conversationId)),
-          judgeAll: d.judgeAll !== false, judgeLimits: d.judgeLimits,
+          judgeLimits: d.judgeLimits,
           conversationTainted: () => d.conversations.everTainted(conversationId),
           conversationAutoRead: () => d.conversations.everAutoRead(conversationId),
         }, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);

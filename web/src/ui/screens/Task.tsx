@@ -21,7 +21,7 @@ export interface TaskScreenProps {
   projects: readonly Project[];
 }
 
-interface Detail { task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }
+interface Detail { task: Task; events: TaskEvent[]; approvals?: Approval[]; runs: Task[] }
 type FieldName = 'title' | 'body' | 'next' | 'done';
 
 const STATUS_TONE: Partial<Record<Task['status'], PillTone>> = { running: 'running', waiting: 'waiting', inbox: 'waiting', done: 'ok', failed: 'danger' };
@@ -163,7 +163,7 @@ export function TaskScreen({ id, revision, worker, projects }: TaskScreenProps) 
     );
   }
 
-  const { task, events, approvals, runs } = data;
+  const { task, events, approvals = [], runs } = data;
   const product = productOf(projects, task.project_id);
   const mine = worker?.runningAll.find(r => r.taskId === task.id);
   const busyWithOther = (worker?.runningAll.length ?? 0) > 0 && !mine;

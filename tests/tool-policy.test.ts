@@ -42,7 +42,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const ran: string[] = [];
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun)
     .register(stub('memory_save', ['chat', 'task', 'review'], ran))
@@ -57,7 +57,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
   const call = (name: string, args: unknown, c: ToolContext = ctx, live?: () => AppConfig) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false, ...(live ? { config: live } : {}),
+      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false, ...(live ? { config: live } : {}),
       lastUserRequest: () => 'please do the work', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });

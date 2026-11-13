@@ -31,7 +31,6 @@ function outsideReadCommand(s: Started): string {
 const dump = async (s: Started, seen: RunEvent[]): Promise<string> => JSON.stringify([
   s.app.db.prepare('SELECT * FROM approvals').all(),
   (await s.json('/api/tool-calls?limit=50', 'GET')).body,
-  (await s.json('/api/approvals', 'GET')).body,
   seen,
 ]);
 

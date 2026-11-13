@@ -67,51 +67,6 @@ async function setup(t: { after: (fn: () => void | Promise<void>) => void }) {
 
 type Setup = Awaited<ReturnType<typeof setup>>;
 
-// ── 承認 ──
-
-for (const outcome of ['approved', 'denied', 'expired', 'cancelled'] as const) {
-  test(`承認が片づいたら（${outcome}）、その承認の通知だけが既読になり、先頭から外れる。同じタスクのほかの承認・ほかのタスクの承認はそのまま`, async t => {
-    const s = await setup(t);
-    const withConversation = (title: string) => {
-      const task = s.app.tasks.create({ title, origin: 'user', actor: 'user' });
-      const conversation = s.app.conversations.create({ kind: 'task' });
-      assert.ok(s.app.tasks.claim(task.id, 30 * MIN, conversation.id));
-      return conversation.id;
-    };
-    const ask = (conversationId: string, timeoutMs = 60_000) => {
-      const controller = new AbortController();
-      const known = new Set(s.app.approvals.pending().map(p => p.id));
-      void s.app.approvals.request({ runId: 'r', conversationId, tool: 'file_write', input: { path: 'x' }, title: 'Write', body: 'body', reasons: [], details: [] }, timeoutMs, controller.signal);
-      const id = s.app.approvals.pending().find(p => !known.has(p.id))!.id;
-      const noticeId = (s.app.db.prepare('SELECT id FROM notifications WHERE dedup_key = ?').get(`approval:${id}`) as { id: number }).id;
-      const notice = () => s.app.db.prepare('SELECT id, read_at FROM notifications WHERE id = ?').get(noticeId) as { id: number; read_at: number | null };
-      return { id, controller, notice };
-    };
-    const first = withConversation('first');
-    const target = ask(first, outcome === 'expired' ? 20 : 60_000);
-    const sameTask = ask(first);
-    const otherTask = ask(withConversation('other'));
-    assert.equal(s.app.notifications.unread(), 3);
-    assert.deepEqual(s.app.notifications.list().slice(0, 3).map(n => n.kind), ['approval_needed', 'approval_needed', 'approval_needed']);
-
-    if (outcome === 'approved') assert.ok(s.app.approvals.decide(target.id, 'once'));
-    else if (outcome === 'denied') assert.ok(s.app.approvals.decide(target.id, 'deny'));
-    else if (outcome === 'cancelled') target.controller.abort();
-    else await new Promise(r => setTimeout(r, 60));
-
-    const targetNotice = target.notice();
-    assert.notEqual(targetNotice.read_at, null, '片づいた承認の通知は既読');
-    assert.equal(sameTask.notice().read_at, null, '同じタスクのまだ待っている承認の通知はそのまま');
-    assert.equal(otherTask.notice().read_at, null, 'ほかのタスクの承認の通知はそのまま');
-    assert.equal(s.app.notifications.unread(), 2);
-    assert.deepEqual(s.readEvents(), [{ type: 'notification.read', ids: [targetNotice.id], unread: 2 }], '画面へは既読になった id と未読の数を流す');
-
-    s.flood(60);
-    const pinned = s.app.notifications.list().filter(n => n.kind === 'approval_needed').map(n => n.id);
-    assert.deepEqual(pinned, [otherTask.notice().id, sameTask.notice().id].sort((a, b) => b - a), '残るのは待っている 2 件だけ。片づいた古い通知は一覧から消える');
-  });
-}
-
 // ── 返事待ち ──
 
 test('返事待ちが片づいたら（答えた・取り消した）、そのタスクの質問と知らせ直しの通知が既読になる。ほかのタスクの通知と、同じタスクの別の種類の通知はそのまま', async t => {

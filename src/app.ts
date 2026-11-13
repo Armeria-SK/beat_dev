@@ -21,7 +21,7 @@ import { taskText } from './shared/messages/tasks.ts';
 import { EndpointLimiter } from './providers/limiter.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
-import { ApprovalBroker, approvalPublic, approvalShownIn } from './tools/approvals.ts';
+import { ApprovalBroker } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
@@ -105,7 +105,6 @@ export interface AppOptions {
   // 試験用: 子の担当（agent_run）の時間切れ（ミリ秒）。設定 tools.agent.timeoutSec の最小は 60 秒なので、試験だけがこれで縮める。書かなければ設定の値
   agentTimeoutMs?: number;
   judgeLimits?: JudgeLimitSet;
-  judgeAll?: boolean;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
   // 試験用: ブラウザの動かし方（書かなければ playwright-core で、手元の Chrome（か path 指定の Chromium 系）を動かす）
@@ -189,20 +188,7 @@ export class App {
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
     for (const tool of options.tools ?? builtinTools()) if (this.botMemory || !MEMORY_TOOL_NAMES.includes(tool.name)) this.tools.register(tool);
-    this.approvals = new ApprovalBroker(this.db, event => {
-      const v = event.view;
-      if (event.type === 'requested') {
-        this.bus.publish({ type: 'approval.requested', runId: v.runId, conversationId: approvalShownIn(v), approval: approvalPublic(v) });
-        // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
-        const task = this.tasks.byConversation(approvalShownIn(v));
-        if (task) {
-          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: redactSecrets(`${v.title}\n${v.body}`), link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}`, localOnly: task.local_only === 1 });
-        }
-      } else {
-        this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: approvalShownIn(v), approvalId: v.id, outcome: event.outcome });
-        this.notifications.settle('approval_needed', { dedupKey: `approval:${v.id}` });
-      }
-    });
+    this.approvals = new ApprovalBroker(this.db);
     this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); } });
     const interrupted = this.pending.closeInterrupted();
     if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
@@ -245,7 +231,6 @@ export class App {
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
       ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
-      ...(options.judgeAll !== undefined ? { judgeAll: options.judgeAll } : {}),
     });
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
@@ -478,7 +463,6 @@ export class App {
     this.worker.stop();
     this.engine.saveQueued();
     this.engine.stopAll();
-    this.approvals.cancelAll();
     this.db.close();
   }
 }

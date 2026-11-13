@@ -43,7 +43,6 @@ async function setup(t: { after: (fn: () => void) => void }) {
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
-  config.tools.shell.approvalTimeoutSec = 10;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: JudgeAdapter;
   const tools = [...builtinTools().filter(tool => tool.name !== 'checklist_write'), checklistWrite];
@@ -69,7 +68,6 @@ const PROBE = { command: 'frobnicate --now' };
 
 async function expectAsked(s: S, runId: string): Promise<void> {
   await settled(s.app, runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [['judge', true]], '印に頼らず判定役に回る操作が、外から読んだ印つきで積まれる');
   assert.ok(judgeTextOf(s.adapter().judged.at(-1)!).includes(TAINTED_NOTE), '判定役に外から読んだ 1 行が付く');
@@ -77,7 +75,7 @@ async function expectAsked(s: S, runId: string): Promise<void> {
 
 async function expectWritten(s: S, runId: string): Promise<void> {
   await settled(s.app, runId);
-  assert.deepEqual(s.app.approvals.pending(), [], '確かめは出ない');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }), [], '確かめは出ない');
   assert.equal(existsSync(join(s.paths.workspace, 'out.txt')), true, '書き込みが通った');
 }
 
@@ -199,9 +197,10 @@ test('タスクの会話も同じ: 印付きの一覧が残っていれば、次
   await expectAsked(s, tainted.runId);
   await tainted.done;
   assert.equal(s.app.runs.get(tainted.runId)!.tainted, 1);
+  const waitingBefore = s.app.pending.list({ status: 'waiting' }).length;
   const clean = await runTask(false);
   await clean.done;
-  assert.deepEqual(s.app.approvals.pending(), [], '印の無い一覧では確かめが出ない');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, waitingBefore, '印の無い一覧では確かめが出ない');
   assert.equal(existsSync(join(s.paths.workspace, 'out.txt')), true);
   assert.equal(s.app.runs.get(clean.runId)!.tainted, 0);
 });

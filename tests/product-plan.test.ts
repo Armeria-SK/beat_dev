@@ -140,7 +140,7 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
     services: { db, memory: undefined as never, emit: e => events.push(e), plans },
   };
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db, () => undefined), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), judgeAll: true, db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal', conversationAutoRead: () => false,
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal', conversationAutoRead: () => false,
   });
 
   const outside = await run('plan_write', { content: 'x' }, base);
@@ -183,7 +183,7 @@ test('3-1a 守り: ふつうのファイルの道具とシェルからは plan.m
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto', project: { id: PROJECT },
   };
   const run = (name: string, args: unknown) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db, () => undefined), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), judgeAll: true, db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the plan',
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the plan',
     conversationTainted: () => false, conversationAutoRead: () => false, autoClassify: async () => '{"decision":"allow","reason":"ok"}',
   });
   for (const [name, args] of [['file_read', { path: file }], ['file_write', { path: file, content: 'x' }], ['file_edit', { path: file, old: 'secret', new: 'x' }], ['shell_run', { command: `cat "${file.replaceAll('\\', '/')}"` }]] as const) {
@@ -416,7 +416,7 @@ function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
     services: { db, memory: undefined as never, emit: e => events.push(e), plans }, ...over,
   });
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db, () => undefined), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), judgeAll: true, db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal',
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal',
     conversationTainted: () => false, conversationAutoRead: () => false,
   });
   return { paths, plans, events, ctxOf, run, file: join(paths.projects, PROJECT, 'plan.md') };

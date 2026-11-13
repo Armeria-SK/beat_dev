@@ -34,7 +34,7 @@ function pipeline(t: { after: (fn: () => void) => void }, mode: () => Permission
   mkdirSync(paths.workspace, { recursive: true });
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const ran: string[] = [];
   const registry = new ToolRegistry();
   for (const effect of EFFECTS) registry.register(stub(effect, ran));
@@ -44,7 +44,7 @@ function pipeline(t: { after: (fn: () => void) => void }, mode: () => Permission
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, ...(startMode ? { permissionMode: startMode } : {}),
   };
-  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, pending, db, judgeAll: true, emit: () => undefined, permissionMode: mode, conversationAutoRead: () => false });
+  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, pending, db, emit: () => undefined, permissionMode: mode, conversationAutoRead: () => false });
   return { call, ran, db, ctx };
 }
 

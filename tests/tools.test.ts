@@ -33,7 +33,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
   const policy = buildPolicy(parsed, paths);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
@@ -44,7 +44,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const judge = { answer: JUDGE_ASK, calls: 0 };
   const deps = (reg: ToolRegistry = registry, store: PendingStore = pending): PipelineDeps => ({
-    registry: reg, approvals, pending: store, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false,
+    registry: reg, approvals, pending: store, db, emit: e => events.push(e), conversationAutoRead: () => false, conversationTainted: () => false,
     lastUserRequest: () => 'do the work', autoClassify: async () => { judge.calls++; return judge.answer; },
   });
   const call = (name: string, args: unknown, c: ToolContext = ctx) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, deps());

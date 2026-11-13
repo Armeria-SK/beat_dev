@@ -29,7 +29,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(calculate).register(dateCalc);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
@@ -39,7 +39,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, judgeAll: true, db, emit: e => events.push(e), conversationAutoRead: () => false });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false });
   return { paths, ctx, call, approvals, events, db, controller };
 }
 

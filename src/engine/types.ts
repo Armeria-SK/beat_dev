@@ -1,7 +1,6 @@
 import type { Notification } from '../notify/notifications.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import type { TaskView } from '../tasks/store.ts';
-import type { approvalPublic } from '../tools/approvals.ts';
 
 export type EngineErrorKind =
   | 'timeout'
@@ -87,8 +86,6 @@ export type RunEvent =
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string; autoReason?: string }
   // 自動承認の判定役に聞いている（checking）/ 判定役が許した（allowed。reason は判定役の短い理由）/ 判定役が確かめると言った・答えられなかった（asked。このあと承認の札が出る）
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
-  | { type: 'approval.requested'; runId: string; conversationId: string; approval: ReturnType<typeof approvalPublic> }
-  | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: 'approved' | 'denied' | 'expired' | 'cancelled' }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }>; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }

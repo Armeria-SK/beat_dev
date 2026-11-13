@@ -70,7 +70,7 @@ test('4-3a 判定役の順番待ち: 先頭の待ちを取り消すと、あと�
 
 test('4-3a 判定役の順番待ち（実行）: 別の会話が返事を流しているあいだの判定役は、先に並んだ返事より先に枠を取り、答えの時間は枠を取ってから数える', async t => {
   ran.length = 0;
-  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead], judgeAll: true, judgeLimits: { chat: { answerMs: 300, slotWaitMs: 5_000 }, unattended: { answerMs: 300 } } });
+  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead], judgeLimits: { chat: { answerMs: 300, slotWaitMs: 5_000 }, unattended: { answerMs: 300 } } });
   const order: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>(r => { release = r; });
@@ -107,7 +107,7 @@ test('4-3a 判定役の順番待ち（実行）: 別の会話が返事を流し�
 
 test('4-3a 判定役の順番待ち（実行）: 会話では枠を待つ上限を超えると judge_failed で Pending に積まれる', async t => {
   ran.length = 0;
-  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead], judgeAll: true, judgeLimits: { chat: { answerMs: 300, slotWaitMs: 200 }, unattended: { answerMs: 300 } } });
+  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead], judgeLimits: { chat: { answerMs: 300, slotWaitMs: 200 }, unattended: { answerMs: 300 } } });
   let release!: () => void;
   const gate = new Promise<void>(r => { release = r; });
   const [a, b] = [uuid(21), uuid(22)];
@@ -135,7 +135,7 @@ test('4-3a 判定役の順番待ち（実行）: 会話では枠を待つ上限�
 
 test('4-3a 判定役の時間（実行）: 枠を取ってから答えの上限を過ぎても答えなければ、judge_failed（時間切れ）で積まれる', async t => {
   ran.length = 0;
-  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead], judgeAll: true, judgeLimits: { chat: { answerMs: 200, slotWaitMs: 5_000 }, unattended: { answerMs: 200 } } });
+  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead], judgeLimits: { chat: { answerMs: 200, slotWaitMs: 5_000 }, unattended: { answerMs: 200 } } });
   const id = uuid(51);
   s.app.conversations.create({ id, title: 'slow judge' });
   s.adapter().scripts = router(req => {
@@ -152,7 +152,7 @@ test('4-3a 判定役の時間（実行）: 枠を取ってから答えの上限�
 
 test('4-3a routing.judge: 最初の判定役が時間内に答えなければ、次の判定役に聞く', async t => {
   ran.length = 0;
-  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2'), fakeModel('m3')], tools: [outsideRead], judgeAll: true, judgeLimits: { chat: { answerMs: 200, slotWaitMs: 5_000 }, unattended: { answerMs: 200 } }, configure: c => { c.routing.judge = ['m2', 'm3']; } });
+  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2'), fakeModel('m3')], tools: [outsideRead], judgeLimits: { chat: { answerMs: 200, slotWaitMs: 5_000 }, unattended: { answerMs: 200 } }, configure: c => { c.routing.judge = ['m2', 'm3']; } });
   const id = uuid(52);
   s.app.conversations.create({ id, title: 'next judge' });
   const judges: string[] = [];
@@ -174,7 +174,7 @@ test('4-3a routing.judge: 最初の判定役が時間内に答えなければ、
 test('4-3a routing.judge: 別のモデルを入れるとそのモデルが判定役になり、空なら実行のモデル', async t => {
   for (const judge of [['m2'], []]) {
     ran.length = 0;
-    const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2')], tools: [outsideRead], judgeAll: true, configure: c => { c.routing.judge = judge; } });
+    const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2')], tools: [outsideRead], configure: c => { c.routing.judge = judge; } });
     const id = uuid(31);
     s.app.conversations.create({ id, title: 'judge route' });
     const judges: string[] = [];
@@ -191,7 +191,7 @@ test('4-3a routing.judge: 別のモデルを入れるとそのモデルが判定
 
 test('4-3a: 子の担当の確かめで判定役が見る頼みは、親の会話の持ち主の言葉（子への依頼の文ではない）', async t => {
   ran.length = 0;
-  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead, agentRun as unknown as ToolDef], judgeAll: true, configure: c => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });
+  const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead, agentRun as unknown as ToolDef], configure: c => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });
   const id = uuid(41);
   s.app.conversations.create({ id, title: 'parent' });
   const prompts: string[] = [];

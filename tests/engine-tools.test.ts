@@ -28,7 +28,7 @@ function textOnly(text: string): Script {
   return async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
 }
 
-async function setup(t: { after: (fn: () => void) => void }, model: Partial<ModelConfig> = {}, judgeAll = true) {
+async function setup(t: { after: (fn: () => void) => void }, model: Partial<ModelConfig> = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -37,7 +37,7 @@ async function setup(t: { after: (fn: () => void) => void }, model: Partial<Mode
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: JudgeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, judgeAll, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, adapterOverride: p => (adapter = new JudgeAdapter(p)) });
   await app.status.probeAll(app.config());
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));
@@ -66,24 +66,6 @@ test('ツールを使ってから返事を書く（結果は履歴に残り、�
   assert.deepEqual(s.events.filter(e => e.type.startsWith('tool.')).map(e => e.type), ['tool.call', 'tool.result']);
 });
 
-// 前の道（札）: 4-3b-1 で消す
-test('承認を待ってから続ける', async t => {
-  const s = await setup(t, {}, false);
-  const outside = join(s.paths.data, 'outside.txt');
-  writeFileSync(outside, 'secret-ish');
-  const command = process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"`;
-  s.adapter().scripts.push(toolCall('shell_run', { command }), reply('読みました'));
-  const { done } = await s.send('外のファイルを読んで');
-  for (let i = 0; i < 300 && !s.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
-  const requested = s.events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }>;
-  assert.ok(requested);
-  assert.match(requested.approval.body, /outside\.txt/u);
-  s.app.approvals.decide(requested.approval.id, 'once');
-  const result = await done;
-  assert.ok(result.ok);
-  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool')!.text, /secret-ish/u);
-});
-
 // security-self-api.md の V1: 報告された筋道そのもの。beat が put.js を書いて動かし、API・設定ファイルに手を出そうとする
 test('V1: スクリプトを書いて node で動かす筋道は、製品の外なので判定役に回り、ask なら中身つきで Pending に積まれて何も起きない', async t => {
   const s = await setup(t);
@@ -100,7 +82,6 @@ test('V1: スクリプトを書いて node で動かす筋道は、製品の外�
   const { done } = await s.send('設定を直して');
   const result = await done;
   assert.ok(result.ok);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   assert.equal(s.adapter().judged.length, 1, 'put.js を書くのは作業フォルダの中なので判定役なし。判定役が見るのは動かす node だけ');
   const judged = judgeTextOf(s.adapter().judged[0]!);
   assert.match(judged, /This code contains text that touches beat itself/u, '判定役に目印の理由が渡る');
@@ -246,22 +227,6 @@ test('会話は回数で止まらない: 20 回道具を呼んでから普通に
   assert.deepEqual(JSON.parse(s.app.runs.get(runId)!.flags), []);
   assert.deepEqual(s.events.filter(e => e.type === 'warning'), []);
   assert.equal(s.app.conversations.messages('c1').at(-1)!.text, 'おわり');
-});
-
-// 前の道（札）: 4-3b-1 で消す
-test('承認を待っている間に止めたら、実行せずに中止する', async t => {
-  const s = await setup(t, {}, false);
-  s.adapter().scripts.push(toolCall('shell_run', { command: 'npm install left-pad' }), reply('届かない'));
-  const { runId, done } = await s.send('入れて');
-  for (let i = 0; i < 300 && !s.app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  assert.equal(s.app.approvals.pending().length, 1);
-  s.app.engine.stop(runId);
-  const result = await done;
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.errorKind, 'cancelled');
-  assert.equal(s.app.approvals.pending().length, 0);
-  assert.equal(existsSync(join(s.paths.workspace, '.git')), false);
 });
 
 test('使用量: 道具の仕様と道具の往復も数に入り、次の送信の見積もり（est_prompt_tokens）と合う。道具を渡さないモデルでは小さくなる', async t => {

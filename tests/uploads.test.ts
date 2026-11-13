@@ -45,7 +45,6 @@ async function setup(t: { after: (fn: () => void | Promise<void>) => void }, mod
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 131072, minContext: 4096, maxOutputTokens: 1024, vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
-  config.tools.shell.approvalTimeoutSec = 10;
   edit(config);
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: JudgeAdapter;
@@ -98,7 +97,6 @@ test('API: 添付して送ると、中身はデータとしてモデルに渡り
   const sent = await s.post(`/api/conversations/${C1}/messages`, { text: 'これをまとめて', attachments: [up.body.upload.id] });
   assert.equal(sent.status, 202);
   await s.app.engine.wait(sent.body.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [['judge', true]], '添付を読んだ実行の確かめは、外を読んだ印つきで積まれる');
   assert.ok(judgeTextOf(s.adapter().judged[0]!).includes(TAINTED_NOTE), '判定役に外を読んだ 1 行が付く');

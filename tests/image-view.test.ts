@@ -52,7 +52,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(imageView);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: 0 };
@@ -66,7 +66,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (args: unknown, c: ToolContext = ctx, autoRead = false) =>
     runToolCall({ id: `call-${Math.random()}`, name: 'image_view', arguments: args }, c, {
-      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => autoRead,
+      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => autoRead,
       lastUserRequest: () => 'please look at the image', autoClassify: async () => { judge.calls++; return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });

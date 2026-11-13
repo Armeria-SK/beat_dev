@@ -145,8 +145,6 @@ export interface ToolContext {
   permissionMode?: PermissionMode | undefined;
   // 自動承認で「許可フォルダの外を読む」を許した。パイプラインが付け、エンジンが読んだ時点で会話の印（conversations.ever_auto_read）に書く。この実行の残りも、あとの実行も、通信の道具（network）とシェルのコマンド（exec）は毎回確かめる（外で読んだ中身を、確かめなしに外へ送らせない）
   autoReadOutside?: boolean | undefined;
-  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許されたフォルダ（この実行だけ。別の実行には渡らない）と、許可した札の承認の記録の id
-  writeGrants?: Array<{ folder: string; approvalId: string }> | undefined;
   noteCreated?: ((path: string) => void) | undefined;
   isCreated?: ((path: string) => boolean) | undefined;
   toolWindow?: (() => () => void) | undefined;
@@ -175,8 +173,6 @@ export interface ToolDef<I = any> {
   preCheck?: (input: I, ctx: ToolContext) => PreCheck | Promise<PreCheck>;
   // 外から読んだ内容（Web・添付）のあとで確認を求める道具。書き込み・実行の道具は、これが無くても確認する
   escalateOnTaint?: boolean;
-  // 書き込み先のフォルダ単位で、外から読んだ内容のあとの確かめ（理由の種類が taint だけ）を、その実行のあいだ許せる道具（file_write / file_edit）。事前の判定が書き込み先のパスを 1 つ返すこと
-  folderGrant?: boolean;
   // 効果は network のまま、ファイルも書く道具（web_download）。計画モードでは書き込みと同じに断り（planAllows）、振り返りでも断り（reviewAllows。効果が何でも）、外から読んだ内容のあとは書き込みと同じに確かめる
   writesFiles?: true;
   // この呼び出し（引数の確かめを通ったあと）が外へ出るか。true なら、効果が network でなくても、外から読んだ印（動かしたら付く）と、自動承認で外を読んだ会話の毎回の確かめを network と同じにする。効果・計画モード・振り返りの扱いは変えない。投げる・false 以外を返すときは外へ出るとみなす

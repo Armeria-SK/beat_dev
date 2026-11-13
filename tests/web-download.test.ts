@@ -78,7 +78,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(webDownload);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
@@ -91,7 +91,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   };
   const call = (args: unknown, c: ToolContext = ctx, mode?: PermissionMode) =>
     runToolCall({ id: `call-${Math.random()}`, name: 'web_download', arguments: args }, c, {
-      registry, approvals, pending, db, judgeAll: true, emit: e => events.push(e), conversationAutoRead: () => false, ...(mode ? { permissionMode: () => mode } : {}),
+      registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(mode ? { permissionMode: () => mode } : {}),
       lastUserRequest: () => 'please download the file', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
     });
   const again = (args: unknown) => {

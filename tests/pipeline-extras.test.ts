@@ -47,7 +47,7 @@ function setup(t: { after: (fn: () => void) => void }, tools: ToolDef[], options
   options.mutate?.(config);
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry();
   for (const def of tools) registry.register(def);
   const policy = buildPolicy(parsed, paths);
@@ -62,7 +62,7 @@ function setup(t: { after: (fn: () => void) => void }, tools: ToolDef[], options
   const judge = { answer: ASK, calls: 0 };
   const classify = options.classify ?? (() => judge.answer);
   const call = (name: string, args: unknown, c: ToolContext = ctx) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-    registry, approvals, pending, db, judgeAll: true, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => state.autoRead,
+    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => state.autoRead,
     autoClassify: async (prompt: ClassifierPrompt) => { judge.calls++; return classify(prompt); }, lastUserRequest: () => 'x を読んで', conversationTainted: () => false,
   });
   return { ctx, makeCtx, call, approvals, db, state, pending, judge };

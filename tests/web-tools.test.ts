@@ -158,7 +158,6 @@ async function setupApp(t: { after: (fn: () => void) => void }, network: PageNet
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
-  config.tools.shell.approvalTimeoutSec = 10;
   configure?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: JudgeAdapter;
@@ -205,7 +204,6 @@ test('web_fetch: ローカルの宛先は実行前に断り、秘密らしい UR
   assert.match(s.app.conversations.messages('c2').find(m => m.role === 'tool')!.text, /API key/u);
   assert.equal(s.adapter().judged.length, 0, '判定役は呼ばれない');
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, '積まれない');
-  assert.equal(s.app.approvals.pending().length, 0, '札も出ない');
 });
 
 // ── 6c: 検索の失敗を繰り返さない ──
@@ -295,15 +293,11 @@ test('止められたことは、持ち主に 1 日 1 回だけお知らせす�
 type App6c = Awaited<ReturnType<typeof setupApp>>;
 
 async function asksApproval(s: App6c, text: string, conversationId = 'c1'): Promise<boolean> {
+  const judgedBefore = s.adapter().judged.length;
   const outcome = s.app.engine.send(conversationId, text);
   assert.ok(outcome.ok, JSON.stringify(outcome));
-  let finished = false;
-  const done = s.app.engine.wait(outcome.runId)!.then(() => { finished = true; });
-  for (let i = 0; i < 500 && !finished && !s.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
-  const requested = s.events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }> | undefined;
-  if (requested) s.app.approvals.decide(requested.approval.id, 'deny');
-  await done;
-  return Boolean(requested);
+  await s.app.engine.wait(outcome.runId);
+  return s.app.pending.list({ status: 'waiting' }).length > 0 || s.adapter().judged.length > judgedBefore;
 }
 
 const writeNote = () => toolCall('file_write', { path: 'note.md', content: '失敗のあと' });
@@ -313,7 +307,6 @@ async function judgedTainted(s: App6c, text: string, conversationId = 'c1'): Pro
   const outcome = s.app.engine.send(conversationId, text);
   assert.ok(outcome.ok, JSON.stringify(outcome));
   await s.app.engine.wait(outcome.runId);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const rows = s.app.pending.list({ status: 'waiting' });
   const judged = s.adapter().judged.at(-1);
   return rows.length === 1 && rows[0]!.kind === 'judge' && rows[0]!.tainted === true && judged !== undefined && judgeTextOf(judged).includes(TAINTED_NOTE);

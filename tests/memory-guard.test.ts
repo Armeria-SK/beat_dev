@@ -25,7 +25,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const memory = new MemoryStore(db);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(memorySave).register(memoryUpdate).register(memoryForget).register(memorySearch);
   const policy = buildPolicy(parsed, paths);
   const ctx: ToolContext = {
@@ -37,7 +37,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const judge = { answer: '{"decision":"ask","reason":"the owner should look"}', calls: 0 };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, judgeAll: true, emit: () => undefined, conversationAutoRead: () => false, lastUserRequest: () => 'remember this',
+      registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, lastUserRequest: () => 'remember this',
       autoClassify: async () => { judge.calls++; return judge.answer; },
     });
   const waiting = () => pending.list({ status: 'waiting' });

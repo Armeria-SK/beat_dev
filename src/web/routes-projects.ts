@@ -9,7 +9,6 @@ import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
-import { approvalShownIn } from '../tools/approvals.ts';
 import type { PendingCounts } from '../pending/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
 
@@ -59,7 +58,7 @@ export function projectWire(app: App, row: ProjectRow, pending: PendingCounts = 
     id: row.id, name: row.name, root: row.root, check_command: row.check_command, scout_mode: row.scout_mode, remotes: remotesOf(row.remotes),
     archived_at: row.archived_at, created_at: row.created_at, updated_at: row.updated_at,
     is_git: gitFolder(row.root), folder_missing: folderMissing(row),
-    waiting: { proposals: counts.proposals, questions: counts.questions, pending: app.approvals.pending().filter(a => inProject(approvalShownIn(a))).length + (pending.byProject[row.id] ?? 0) + (pending.acceptanceChanges[row.id] ?? 0) },
+    waiting: { proposals: counts.proposals, questions: counts.questions, pending: (pending.byProject[row.id] ?? 0) + (pending.acceptanceChanges[row.id] ?? 0) },
     running: app.engine.activeRuns().filter(r => inProject(r.conversationId)).length,
     last_activity_at: counts.lastActivityAt,
     has_plan: app.plans.has(row.id),

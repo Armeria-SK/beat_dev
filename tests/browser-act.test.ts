@@ -73,7 +73,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [] });
   t.after(() => session.close());
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry();
   for (const def of BROWSER_TOOLS) registry.register((options.plain && (def as ToolDef).submits ? withoutSubmits(def as ToolDef) : def) as never);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
@@ -86,7 +86,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   } as unknown as ToolContext;
   const classify = options.classify;
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, pending, judgeAll: true, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => false,
+    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => false,
     ...(classify ? { autoClassify: async (prompt: ClassifierPrompt) => classify(prompt), lastUserRequest: () => 'フォームに入れて', conversationTainted: () => false } : {}),
   });
   const approve = (id: number, tools: ToolRegistry = registry) => replayAction(pending.claim(id), {
@@ -174,7 +174,7 @@ test('4-2d: 人のいない実行（タスク・子の担当）の押す・入�
   const registry = new ToolRegistry().register(submitting);
   for (const kind of ['task', 'agent'] as const) {
     const outcome = await runToolCall({ id: `u-${kind}`, name: 'submit_stub', arguments: { ref: 'e2' } }, { ...r.ctx, kind }, {
-      registry, approvals: r.approvals, pending: r.pending, judgeAll: true, db: r.db, emit: () => undefined, permissionMode: () => 'auto', conversationAutoRead: () => false,
+      registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto', conversationAutoRead: () => false,
     });
     assert.equal(outcome.decision, 'deny', kind);
     assert.match(outcome.output.content, /submits in the browser, and nobody is watching this run/u, kind);
@@ -242,7 +242,7 @@ function runWithSwapAfterRecheck(r: Rig, onLastPreCheck: () => Promise<void>) {
   const registry = new ToolRegistry();
   registry.register(swapped as never);
   const run = () => runToolCall({ id: 'k', name: 'browser_click', arguments: { ref: 'e2' } }, r.ctx, {
-    registry, approvals: r.approvals, pending: r.pending, judgeAll: true, db: r.db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false,
+    registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false,
   });
   return { run, registry, calls: () => calls };
 }

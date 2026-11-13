@@ -199,7 +199,6 @@ test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ�
   assert.ok(started.ok);
   await started.done;
   assert.equal(s.app.runs.get(started.runId)?.tainted, 1);
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.deepEqual(rows.map(row => [row.tool, row.kind, row.tainted]), [['task_create', 'owner', true]], '判定役に回さず持ち主（Pending の owner）に聞く');
   assert.match(rows[0]!.reason, /this run read outside content, and task_create would change tasks/u);

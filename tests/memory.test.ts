@@ -126,7 +126,6 @@ test('SOUL.md の書き換えは判定役に回さず持ち主（Pending の own
   const s = await app(t);
   s.adapter().scripts.push(toolCall('file_write', { path: 'SOUL.md', content: '# SOUL\n名前は beat。皮肉屋' }), reply('提案しました'));
   await s.send('c1', '性格を変えて');
-  assert.equal(s.app.approvals.pending().length, 0, '札は出ない');
   const [row] = s.app.pending.list({ status: 'waiting' });
   assert.equal(row?.kind, 'owner');
   assert.match(row!.reason, /persona or profile file/u);

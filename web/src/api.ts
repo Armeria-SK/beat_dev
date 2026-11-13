@@ -313,7 +313,7 @@ export const api = {
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
-  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
+  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; activeRun: { runId: string; draft: string } | null; approvals?: Approval[] }>(`/api/conversations/${id}/messages`),
   cancelPending: (id: string, pendingId: string) => call<{ cancelled: true }>(`/api/conversations/${encodeURIComponent(id)}/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }),
   deleteConversation: (id: string) => call<{ deleted: true }>(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),
@@ -360,7 +360,7 @@ export const api = {
     call<{ tasks: Task[]; next: FinishedCursor | null; total: number }>(`/api/tasks/finished?limit=${limit}${before ? `&beforeT=${before.beforeT}&beforeId=${encodeURIComponent(before.beforeId)}` : ''}${inProject(project, '&')}`),
   unapproveTask: (id: string) => call<{ task: Task }>(`/api/tasks/${id}/unapprove`, { method: 'POST', body: '{}' }),
   cancelTask: (id: string, reason = '') => call<{ task: Task }>(`/api/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}) }),
-  task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
+  task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals?: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
   createTask: (task: NewTask) => call<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(task) }),
   editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null; repeat?: NewTask['repeat'] }) =>
     call<{ task: Task }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),

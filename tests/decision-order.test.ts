@@ -53,7 +53,7 @@ function rig(t: { after: (fn: () => void) => void }, options: { project?: boolea
   const config = parseConfig(raw);
   const db = openDatabase(':memory:', MIGRATIONS);
   t.after(() => db.close());
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(shellRun).register(fileWrite).register(outsideRead as unknown as ToolDef).register(fakeTaskCreate as unknown as ToolDef).register(webFetch as unknown as ToolDef).register(webSearch as unknown as ToolDef)
     .register(webDownload as unknown as ToolDef).register(imageView as unknown as ToolDef).register(browserOpen as unknown as ToolDef);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
@@ -67,7 +67,7 @@ function rig(t: { after: (fn: () => void) => void }, options: { project?: boolea
   };
   const judge: Judge = { answer: '{"decision":"allow","reason":"fits the request"}', calls: [], limits: [] };
   const deps = (extra: Partial<PipelineDeps> = {}): PipelineDeps => ({
-    registry, approvals, pending, db, judgeAll: true, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false,
+    registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false, conversationTainted: () => false,
     lastUserRequest: () => 'please do the work in the product',
     autoClassify: async (prompt, signal, limits) => {
       judge.calls.push(prompt);

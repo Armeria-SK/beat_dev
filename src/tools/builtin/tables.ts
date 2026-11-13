@@ -70,7 +70,6 @@ export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | numb
     overwrite: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false }),
   effect: 'write',
-  folderGrant: true,
   allowedIn: ['chat', 'task', 'agent'],
   preCheck(input, ctx) {
     const language = languageOf(ctx.config);
