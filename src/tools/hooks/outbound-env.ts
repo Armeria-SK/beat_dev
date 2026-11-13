@@ -3,6 +3,8 @@ import { readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Language } from '../../config/schema.ts';
 import type { Remote } from '../../projects/remotes.ts';
+import { inspectRepo } from './git-repo.ts';
+import { isInside, realish } from './scope.ts';
 import { prepareGitRun } from '../shell/git-env.ts';
 import type { OutboundEnv } from './outbound.ts';
 import type { Env } from './tool-config.ts';
@@ -16,7 +18,7 @@ export interface GitOutboundOptions {
   workspaceRoots?: readonly string[];
   dataDir: string;
   env?: Env;
-  gitExe?: string;
+  gitExe: string;
   language?: Language;
   isCreated: (path: string) => boolean;
 }
@@ -28,7 +30,9 @@ function filesUnder(dir: string): string[] | undefined {
   const stack = [dir];
   while (stack.length) {
     const current = stack.pop()!;
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
+    let entries;
+    try { entries = readdirSync(current, { withFileTypes: true }); } catch { return undefined; }
+    for (const entry of entries) {
       const full = join(current, entry.name);
       if (entry.isDirectory()) stack.push(full); else out.push(full);
       if (out.length + stack.length > MAX_WALK) return undefined;
@@ -39,10 +43,13 @@ function filesUnder(dir: string): string[] | undefined {
 
 export function gitOutboundEnv(options: GitOutboundOptions): OutboundEnv {
   const base: Env = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([k]) => !/^git_/iu.test(k)));
+  const exe = options.gitExe;
+  const trusted = (dir: string): boolean => isAbsolute(exe) && ![dir, ...(options.productRoot ? [options.productRoot] : [])].some(d => isInside(d, exe) || isInside(realish(d), realish(exe)));
   const git = (dir: string, args: string[]): string | undefined => {
-    const run = prepareGitRun({ dataDir: options.dataDir, env: base, ...(options.gitExe ? { gitExe: options.gitExe } : {}) });
+    if (!trusted(dir)) return undefined;
+    const run = prepareGitRun({ dataDir: options.dataDir, env: base, gitExe: exe });
     try {
-      return execFileSync(options.gitExe ?? 'git', args, { cwd: dir, env: { ...base, ...run.env }, encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+      return execFileSync(exe, args, { cwd: dir, env: { ...base, ...run.env }, encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
     } catch { return undefined; } finally { run.cleanup(); }
   };
   let state: RepoState | null | undefined;
@@ -52,10 +59,15 @@ export function gitOutboundEnv(options: GitOutboundOptions): OutboundEnv {
     if (!options.productRoot) return state;
     const top = git(options.productRoot, ['rev-parse', '--show-toplevel'])?.trim();
     if (!top) return state;
-    const listed = git(top, ['ls-files', '-v', '-z', '--full-name']);
-    const status = git(top, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames']);
+    const repo = inspectRepo(options.productRoot);
+    if (!repo.found || repo.unreadable || !repo.configOk) return state;
+    const listed = git(top, ['ls-files', '-s', '-v', '-z', '--full-name']);
+    const status = git(top, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames', '--ignore-submodules=all']);
     if (listed === undefined || status === undefined) return state;
-    const ok = new Set(listed.split('\0').filter(e => e.startsWith('H ')).map(e => e.slice(2)));
+    const ok = new Set(listed.split('\0').flatMap(e => {
+      const m = /^H (\d+) [0-9a-f]+ 0\t(.*)$/su.exec(e);
+      return m && m[1] !== '160000' ? [m[2]!] : [];
+    }));
     const dirty = status.split('\0').filter(Boolean).map(e => e.slice(3));
     state = { top: resolve(top), ok, dirty };
     return state;
@@ -85,8 +97,7 @@ export function gitOutboundEnv(options: GitOutboundOptions): OutboundEnv {
       const s = load();
       const rel = s && relOf(s, path);
       if (!s || !rel) return false;
-      if (s.ok.has(rel)) return true;
-      if (!isDir(path)) return false;
+      if (!isDir(path)) return s.ok.has(rel);
       const files = filesUnder(path);
       return !!files && files.length > 0 && files.every(f => { const r = relOf(s, f); return !!r && s.ok.has(r); });
     },

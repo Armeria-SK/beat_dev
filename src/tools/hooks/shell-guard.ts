@@ -7,6 +7,7 @@ import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
 import { classifyStatements, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
 import { codeFindings } from './code-guard.ts';
+import { gitGlobalOf, inlineCode, innerSource, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
@@ -37,6 +38,7 @@ export interface ShellGuardOptions {
   env?: Env;
   // git をホーム・システムの設定の洗い出しつきで動かせるか（既定は true。shell.ts は実際の git の版から渡す）
   gitIsolated?: boolean;
+  depth?: number;
 }
 
 // cwd: いま（直前の cd の先）。cwds: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか
@@ -69,57 +71,12 @@ export interface ShellVerdict {
   reasonKeys: string[];
 }
 
-export interface FactWord { text: string; dynamic: boolean; glob: boolean }
-export interface DeleteTarget { input: string; path?: string; wild: boolean }
-export interface StatementFacts {
-  program: string;
-  words: FactWord[];
-  urls: Array<{ text: string; dynamic: boolean }>;
-  env: string[];
-  gitGlobal: string[];
-  code: string[];
-  deletes: boolean;
-  targets: DeleteTarget[];
-  writes: string[];
-  cwd: string | null;
-}
+export type { DeleteTarget, FactWord, StatementFacts } from './shell-facts.ts';
 
 interface Said { key: string; text: string }
+const STDIN_OPS: ReadonlySet<string> = new Set(['<', '<<', '<<<', '<<-']);
 
 const URL_IN_WORD = /[a-z][a-z0-9+.-]*:\/\/[^\s'"`]+/giu;
-const CODE_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  node: ['-e', '--eval', '-p', '--print'], nodejs: ['-e', '--eval', '-p', '--print'], bun: ['-e', '--eval', '-p', '--print'], deno: ['eval'],
-  python: ['-c'], python3: ['-c'], py: ['-c'], perl: ['-e', '-E'], ruby: ['-e'], sh: ['-c'], bash: ['-c'], zsh: ['-c'],
-};
-const REST_CODE: ReadonlySet<string> = new Set(['powershell', 'pwsh', 'cmd', 'iex', 'invoke-expression']);
-
-function codeOf(program: string, words: readonly Word[]): string[] {
-  const args = words.slice(1);
-  if (REST_CODE.has(program)) {
-    if (program === 'iex' || program === 'invoke-expression') return args.length ? [args.map(w => w.text).join(' ')] : [];
-    const at = args.findIndex(w => (program === 'cmd' ? /^\/[ck]$/iu.test(w.text) : /^-(?:c|co|com|comm|comma|comman|command|encodedcommand|enc|e|ec)$/iu.test(w.text)));
-    return at >= 0 && at + 1 < args.length ? [args.slice(at + 1).map(w => w.text).join(' ')] : [];
-  }
-  const flags = CODE_FLAGS[program];
-  if (!flags) return [];
-  const out: string[] = [];
-  args.forEach((w, i) => {
-    const eq = flags.find(f => f.startsWith('--') && w.text.startsWith(`${f}=`));
-    if (eq) out.push(w.text.slice(eq.length + 1));
-    else if (flags.includes(w.text) && args[i + 1]) out.push(args[i + 1]!.text);
-  });
-  return out;
-}
-
-function gitGlobalOf(words: readonly Word[]): string[] {
-  const out: string[] = [];
-  for (let i = 1; i < words.length && /^-/u.test(words[i]!.text); i++) {
-    out.push(words[i]!.text);
-    if (['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'].includes(words[i]!.text) && words[i + 1]) out.push(words[++i]!.text);
-  }
-  return out;
-}
-
 const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
   ['mkfs', 'hard.fs_create'], ['format', 'hard.disk_format'], ['diskpart', 'hard.disk_ops'], ['fdisk', 'hard.disk_ops'],
   ['parted', 'hard.disk_ops'], ['shutdown', 'hard.os_stop'], ['reboot', 'hard.os_restart'], ['halt', 'hard.os_stop'], ['poweroff', 'hard.os_stop'],
@@ -526,12 +483,21 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const words = st.words.map(w => w.text);
     const first = st.words[0];
     const name = first && !first.dynamic ? (first.text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.exe$/u, '') : '';
+    const stdin = st.pipedIn || st.redirects.some(r => STDIN_OPS.has(r.op));
+    const inline = inlineCode(name, st.words);
     current = {
-      program: name, words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
+      program: name, programDynamic: first?.dynamic ?? false, words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
       urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
-      env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: codeOf(name, st.words),
+      env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: inline.code, codeDynamic: inline.dynamic,
+      stdin, shapes: [...st.shapes], reasonKeys: result.reasons.map(r => r.id ?? r.key),
       deletes: result.deletes, targets: [], writes: [], cwd: cwdKnown ? cwd : null,
     };
+    const source = name ? innerSource(name, st.words, shell, stdin) : undefined;
+    if (source !== undefined) {
+      const depth = opts.depth ?? 0;
+      const nested = source && cwdKnown && depth < 3 ? checkShellCommand(source.text, cwd, { ...opts, shell: source.shell, depth: depth + 1 }).statements : [];
+      current.inner = nested.length ? nested : null;
+    }
     statements.push(current);
     const hard = name ? HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined) : undefined;
     if (hard) add('deny', say('guard.hard_denied', { label: text(hard), cmd: name }));

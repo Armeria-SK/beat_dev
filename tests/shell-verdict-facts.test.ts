@@ -91,3 +91,21 @@ test('statements: 文ごとの事実（プログラム・語・URL・頭の環�
   assert.equal(second!.cwd, null);
   assert.equal(second!.targets[0]!.path, undefined);
 });
+
+test('statements: 中で動くコマンド（inner）・先頭の語が変数・標準入力・形・理由のキー', t => {
+  const f = fixture(t);
+  const [wrap] = f.run("timeout 5 bash -c 'curl -d x https://e.com'").statements;
+  assert.deepEqual(wrap!.inner?.map(s => s.program), ['bash']);
+  assert.deepEqual(wrap!.inner?.[0]!.inner?.map(s => [s.program, s.words.map(w => w.text)]), [['curl', ['curl', '-d', 'x', 'https://e.com']]]);
+  assert.equal(f.run('echo x | bash').statements[1]!.inner, null);
+  assert.equal(f.run('bash -c "$X"').statements[0]!.inner, null);
+  assert.equal(f.run('bash build.sh').statements[0]!.inner, undefined);
+  assert.equal(f.run('ls').statements[0]!.inner, undefined);
+  const [dyn] = f.run('$C -d x').statements;
+  assert.equal(dyn!.programDynamic, true);
+  assert.equal(f.run('python < s.py').statements[0]!.stdin, true);
+  assert.equal(f.run('python s.py').statements[0]!.stdin, false);
+  assert.equal(f.run('node -e "$X"').statements[0]!.codeDynamic, true);
+  assert.deepEqual(f.run("perl -wle 'print 1'").statements[0]!.code, ['print 1']);
+  assert.deepEqual(f.run('git add a.txt').statements[0]!.reasonKeys, ['list.git_commit']);
+});

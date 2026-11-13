@@ -206,7 +206,7 @@ function projectToolFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
 }
 
 // ── R1.5 ほかのプロセスを起こす・残す ──
-const WRAPPED_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
+export const WRAPPED_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
   xargs: new Set(['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--replace']),
   timeout: new Set(['-s', '-k', '--signal', '--kill-after']),
   nice: new Set(['-n', '--adjustment']),

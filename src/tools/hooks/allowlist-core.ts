@@ -68,9 +68,9 @@ export class Acc {
   deletes = false;
   cwd?: { word: Word | null };
   readonly remoteNames: Array<{ url: Word; dir: Word | null }> = [];
-  add(level: Level, key: GuardMessageKey, params: Record<string, string | number> = {}, exempt = false): void {
+  add(level: Level, key: GuardMessageKey, params: Record<string, string | number> = {}, exempt = false, id?: string): void {
     if (level === 'allow') return;
-    this.reasons.push({ key, params, level, exempt });
+    this.reasons.push({ key, params, level, exempt, ...(id ? { id } : {}) });
   }
   strict = false;
   read(word: Word, recursive = false): void { this.paths.push({ word, mode: 'read', recursive, ...(this.strict ? { strict: true } : {}) }); }
