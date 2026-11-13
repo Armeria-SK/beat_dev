@@ -98,8 +98,10 @@ function editMeta(name: string, args: Record<string, unknown> | null, result: To
   return null;
 }
 
+const PRIVATE_KEY_BEGIN = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/u;
+
 function storedEcho(text: string, command: string): string | undefined {
-  if (!text.startsWith('$ ')) return undefined;
+  if (!text.startsWith('$ ') || PRIVATE_KEY_BEGIN.test(command)) return undefined;
   const lines = text.split('\n');
   const count = command.split('\n').length;
   return lines.length > count ? `${lines.slice(0, count).join('\n')}\n` : undefined;
@@ -108,11 +110,15 @@ function storedEcho(text: string, command: string): string | undefined {
 function runMeta(result: ToolResult, command: unknown): ToolMeta {
   const failed: ToolMeta = result.isError ? { kind: 'failed' } : null;
   if (typeof command !== 'string') return failed;
-  const echo = [command, redactSecrets(command)].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e)) ?? storedEcho(result.text, command);
+  const exact = [command, redactSecrets(command)].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e));
+  const echo = exact ?? storedEcho(result.text, command);
   if (!echo) return failed;
   const header = result.text.slice(echo.length).replace(/^\n/u, '').split('\n', 1)[0]!;
   const match = /^\(.*, exit code: ([^,()]+), ([\d.]+) s\)$/u.exec(header);
-  return match ? { kind: 'exit', code: match[1]!.trim(), seconds: match[2]! } : failed;
+  if (!match) return failed;
+  const code = match[1]!.trim();
+  if (!exact && (code === '0') !== !result.isError) return failed;
+  return { kind: 'exit', code, seconds: match[2]! };
 }
 
 export function elapsedClock(ms: number): string {

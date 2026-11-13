@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
+import { redactSecrets } from '../src/shared/redaction.ts';
 import { maskTarget, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
 
 // 新しい画面の ToolRow（p1-ui.md の「会話」）: 道具の名前と引数から、動詞・対象・meta を作る。
@@ -113,4 +114,19 @@ test('ui/tool-row: 前の伏せ方で保存した結果（写しのコマンド�
   const forged = '$ echo old\n\nhello\n(pwsh, cwd: w, exit code: 0, 0.1 s)';
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'echo new' }), { text: forged, isError: true }).meta, { kind: 'failed' }, '写しの次の行でなければ読まない');
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command: 'ls' }), { text: 'Denied by the owner', isError: true }).meta, { kind: 'failed' });
+});
+
+test('ui/tool-row: 秘密鍵の BEGIN の印を含むコマンドは、伏せ字が本物の見出しを食うので、写しの突き合わせが外れたら見出しを読まない', () => {
+  const command = 'grep -A3 -- "-----BEGIN RSA PRIVATE KEY-----" deploy/id_rsa';
+  const text = redactSecrets(`$ ${command}\n\n(bash, cwd: /w, exit code: 1, 0.1 s)\n\n-----BEGIN RSA PRIVATE KEY----- -----END RSA PRIVATE KEY-----\n\n(bash, cwd: /w, exit code: 0, 0.1 s)`);
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text, isError: true }).meta, { kind: 'failed' });
+  assert.equal(toolRow('shell_run', JSON.stringify({ command }), { text, isError: false }).meta, null);
+});
+
+test('ui/tool-row: 突き合わせが外れたときの見出しは、終了コードと isError が食い違えば読まない', () => {
+  const command = 'curl "https://x.test/?code=JP"';
+  const zeroButError = '$ curl "https://x.test/?code=[REDACTED]"\n\n(pwsh, cwd: w, exit code: 0, 0.2 s)';
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text: zeroButError, isError: true }).meta, { kind: 'failed' });
+  const failedButOk = '$ curl "https://x.test/?code=[REDACTED]"\n\n(pwsh, cwd: w, exit code: 2, 0.2 s)';
+  assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text: failedButOk, isError: false }).meta, null);
 });
