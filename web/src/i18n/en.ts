@@ -211,9 +211,6 @@ export const en = {
 
 
   // stage 8
-  'tools.policy.allow': 'No approval',
-  'tools.policy.ask': 'Ask for approval',
-  'tools.policy.block': 'Block',
   'tools.mcp.asks.sends': 'Asked every time because it may send data outside',
   'tools.mcp.asks.removes': 'Asked every time because it may delete things',
   'tools.mcp.asks.write': 'Asked because it writes',

@@ -4,7 +4,7 @@ import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import type { Access } from '../../settings/access.ts';
-import { findDraft, orderTools, toolLook } from '../../skills-meta.ts';
+import { findDraft, orderTools, POLICY_LABEL, toolLook } from '../../skills-meta.ts';
 import { lineDelta } from '../../../../src/shared/line-delta.ts';
 import { TOOL_POLICIES, type ToolPolicy } from '../../../../src/tools/tool-policy.ts';
 import { useNow } from '../hooks.ts';
@@ -18,7 +18,6 @@ import { SCREEN_EDITS, setUnsaved } from '../unsaved.ts';
 type T = ReturnType<typeof useT>;
 type Skill = SkillSummary & { body: string };
 
-const POLICY_KEY = { allow: 'ui.tools.allow', ask: 'ui.tools.ask', block: 'ui.tools.block' } as const satisfies Record<ToolPolicy, string>;
 const ASKS_KEY = { sends: 'tools.mcp.asks.sends', removes: 'tools.mcp.asks.removes', write: 'tools.mcp.asks.write' } as const;
 
 const failText = (error: unknown, t: T): string => (error instanceof ApiError ? error.message : t('ui.skills.toast.failed'));
@@ -291,7 +290,7 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
       if (decision.kind === 'none') return;
       const saved = (await api.setToolPolicy(tool.name, to)).tool;
       onSaved(saved);
-      toast({ icon: 'check', title: t('ui.tools.toast.saved', saved.name, t(POLICY_KEY[saved.policy])), ...(saved.policy === 'ask' && saved.allowedIn.includes('review') ? { body: t('tools.policy.reviewNote') } : {}) });
+      toast({ icon: 'check', title: t('ui.tools.toast.saved', saved.name, t(POLICY_LABEL[saved.policy])), ...(saved.policy === 'ask' && saved.allowedIn.includes('review') ? { body: t('tools.policy.reviewNote') } : {}) });
     } catch (failure) {
       toast({ icon: 'alert', title: t('ui.tools.toast.failed'), body: failText(failure, t) });
       onFailed();
@@ -327,7 +326,7 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
                 <div className="bt-seg" role="group" aria-label={t('ui.tools.policy', tool.name)}>
                   {TOOL_POLICIES.map(policy => (
                     <button key={policy} type="button" className="bt-seg__opt" data-policy={policy} aria-pressed={tool.policy === policy}
-                      disabled={!tool.configurable || busy !== null || asking !== null} onClick={() => choose(tool, policy)}>{t(POLICY_KEY[policy])}</button>
+                      disabled={!tool.configurable || busy !== null || asking !== null} onClick={() => choose(tool, policy)}>{t(POLICY_LABEL[policy])}</button>
                   ))}
                 </div>
               </div>
@@ -335,7 +334,7 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
                 <div className="ui-confirm ui-lib__widen" role="alertdialog" aria-label={t('ui.tools.confirm')}
                   onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(asking); } }}>
                   <span className="bt-label">{t('ui.tools.confirm')}</span>
-                  <span className="bt-meta ui-confirm__note">{t('ui.tools.loosen', asking.tool.name, t(POLICY_KEY[asking.tool.policy]), t(POLICY_KEY[asking.to]))}</span>
+                  <span className="bt-meta ui-confirm__note">{t('ui.tools.loosen', asking.tool.name, t(POLICY_LABEL[asking.tool.policy]), t(POLICY_LABEL[asking.to]))}</span>
                   <span className="ui-confirm__buttons">
                     <Button variant="primary" small disabled={busy !== null} onClick={() => void apply(asking.tool, asking.to, asking.item)}>{t('ui.tools.confirmOk')}</Button>
                     <Button variant="ghost" small autoFocus onClick={() => cancel(asking)}>{t('ui.cancel')}</Button>
