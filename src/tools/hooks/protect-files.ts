@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type AppConfig, type BuiltinHookConfig, type Language } from '../../config/schema.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import type { HookPayload, HookResult } from './command-hook.ts';
-import { isInside, realish, windowsNames } from './scope.ts';
+import { isInside, realish, realPath, windowsNames } from './scope.ts';
 
 export const PROTECT_FILES = 'protect-files';
 export const PROTECT_FILES_OFFERED = 'hooks.protect-files.offered';
@@ -35,7 +35,7 @@ function matchSegs(glob: string[], rel: string[], under: boolean): boolean {
     if (known !== undefined) return known;
     let result: boolean;
     if (r === rel.length) result = g === glob.length || under || glob.slice(g).every(s => s === '**');
-    else if (g === glob.length) result = false;
+    else if (g === glob.length) result = true;
     else if (glob[g] === '**') result = go(g + 1, r) || go(g, r + 1);
     else result = segRegex(glob[g]!).test(rel[r]!) && go(g + 1, r + 1);
     memo.set(key, result);
@@ -52,9 +52,10 @@ function rulesOf(pattern: string, roots: string[]): Rule[] {
   const parts = normalized.split('/');
   const first = parts.findIndex(part => GLOB_CHAR.test(part));
   const fixed = (first < 0 ? parts : parts.slice(0, first)).filter((part, i) => part !== '' || (i === 0 && !drive));
-  const rest = (first < 0 ? [] : parts.slice(first)).filter(Boolean).map(fold).filter((s, i, all) => !(s === '**' && all[i - 1] === '**'));
+  const rest = (first < 0 ? [] : parts.slice(first)).filter(Boolean).map(fold);
   const make = (base: string): Rule => ({ bases: [...new Set([base, realish(base)])], rest });
   if (!absolute) return roots.map(root => make(resolve(root, ...fixed)));
+  if (WINDOWS && normalized.startsWith('//')) return [make(`\\\\${fixed.filter(Boolean).join('\\')}`)];
   const head = drive ? `${fixed[0]}/` : '/';
   return [make(resolve(head, ...fixed.slice(drive ? 1 : 0).filter(Boolean)))];
 }
@@ -103,6 +104,25 @@ function protectedInodes(rules: Rule[]): Inodes {
   return found;
 }
 
+function linkedFiles(dir: string): Array<{ key: string; file: string }> | 'overflow' {
+  const out: Array<{ key: string; file: string }> = [];
+  const queue = [dir];
+  let seen = 0;
+  while (queue.length) {
+    const current = queue.shift()!;
+    let entries;
+    try { entries = readdirSync(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (++seen > WALK_LIMIT) return 'overflow';
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) { queue.push(full); continue; }
+      if (!entry.isFile()) continue;
+      try { const st = statSync(full, { bigint: true }); if (st.nlink > 1n) out.push({ key: `${st.dev}:${st.ino}`, file: full }); } catch { }
+    }
+  }
+  return out;
+}
+
 function isDirectory(path: string): boolean {
   try { return statSync(path).isDirectory(); } catch { return false; }
 }
@@ -120,16 +140,20 @@ export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, l
   for (const entry of writes) {
     const given = resolve(payload.cwd, entry.path);
     const lexical = WINDOWS ? windowsNames(given) : given;
-    const real = realish(lexical);
+    const resolved = realPath(lexical);
+    const real = resolved.path;
     const dir = entry.dir === true || /[\\/]$/u.test(entry.path) || isDirectory(real);
     const targets = [...new Set([given, lexical, real])];
     const shown = fold(real) === fold(given) ? entry.path : guardText(language, 'hook.protected_real', { path: entry.path, real });
+    if (!resolved.sure) { reasons.push(guardText(language, 'hook.protected_unsure', { path: entry.path })); continue; }
     if (rules.some(rule => targets.some(target => hits(rule, target, dir)))) { reasons.push(shown); continue; }
     let st;
     try { st = statSync(real, { bigint: true }); } catch { continue; }
-    if (!st.isFile() || st.nlink < 2n) continue;
+    const linked = st.isDirectory() ? linkedFiles(real) : st.isFile() && st.nlink > 1n ? [{ key: `${st.dev}:${st.ino}`, file: real }] : [];
+    if (linked !== 'overflow' && !linked.length) continue;
     inodes ??= protectedInodes(rules);
-    const same = inodes === 'overflow' ? real : inodes.get(`${st.dev}:${st.ino}`);
+    if (linked === 'overflow' || inodes === 'overflow') { reasons.push(guardText(language, 'hook.protected_unchecked', { path: entry.path })); continue; }
+    const same = linked.map(l => inodes instanceof Map ? inodes.get(l.key) : undefined).find(o => o !== undefined);
     if (same !== undefined) reasons.push(guardText(language, 'hook.protected_link', { path: entry.path, other: same }));
   }
   if (!reasons.length) return none;

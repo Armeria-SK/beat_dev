@@ -71,21 +71,39 @@ function danglingTarget(p: string): string | undefined {
   try { return lstatSync(p).isSymbolicLink() ? readlinkSync(p) : undefined; } catch { return undefined; }
 }
 
-export function realish(abs: string, depth = 0): string {
-  if (isRemotePath(abs)) return abs;
+export interface RealPath { path: string; sure: boolean }
+
+const unresolvedPath = (abs: string): string => (WINDOWS ? `\\\\?\\${abs}` : abs);
+
+function resolveReal(abs: string, hops: { left: number }): RealPath {
+  if (isRemotePath(abs)) return { path: abs, sure: true };
   let current = abs;
   const rest: string[] = [];
   for (;;) {
     if (existsSync(current)) {
-      try { return join(realpathSync.native(current), ...rest.reverse()); } catch { return abs; }
+      try { return { path: join(realpathSync.native(current), ...rest.reverse()), sure: true }; } catch { return { path: abs, sure: true }; }
     }
-    const link = depth < 40 ? danglingTarget(current) : undefined;
-    if (link !== undefined && !isRemotePath(link)) return realish(join(resolve(realish(dirname(current), depth + 1), link), ...rest.reverse()), depth + 1);
+    const link = danglingTarget(current);
+    if (link !== undefined) {
+      if (--hops.left < 0) return { path: unresolvedPath(abs), sure: false };
+      if (isRemotePath(link)) return { path: join(link.replaceAll('/', '\\'), ...rest.reverse()), sure: false };
+      const parent = resolveReal(dirname(current), hops);
+      if (!parent.sure) return { path: unresolvedPath(abs), sure: false };
+      return resolveReal(join(resolve(parent.path, link), ...rest.reverse()), hops);
+    }
     const parent = dirname(current);
-    if (parent === current) return abs;
+    if (parent === current) return { path: abs, sure: true };
     rest.push(basename(current));
     current = parent;
   }
+}
+
+export function realPath(abs: string): RealPath {
+  return resolveReal(abs, { left: 40 });
+}
+
+export function realish(abs: string): string {
+  return realPath(abs).path;
 }
 
 const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);

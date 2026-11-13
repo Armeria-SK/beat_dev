@@ -6,7 +6,7 @@ import type { HookConfig } from '../src/config/schema.ts';
 import { ConfigError, defaultConfig, parseConfig, resetConfig } from '../src/config/store.ts';
 import { runCommandHook, type HookPayload } from '../src/tools/hooks/command-hook.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
-import { writeApprovalKind } from '../src/tools/hooks/scope.ts';
+import { isInside, realish, writeApprovalKind } from '../src/tools/hooks/scope.ts';
 import { tempDir } from './helpers.ts';
 
 const WIN = process.platform === 'win32';
@@ -92,8 +92,8 @@ test('ドライブだけの一覧（X:/**）は、そのドライブの根から
 test('** が続いても固まらない', async t => {
   const root = product(t);
   const start = performance.now();
-  const many = hook({ always: [`a/${'**/'.repeat(24)}b`], afterOutside: [] });
-  const result = await run(many, payload({ root, paths: [w(join(root, 'a', ...Array.from({ length: 40 }, () => 'a'), 'c'))] }));
+  const many = hook({ always: [`q/${'**/a/'.repeat(12)}b`], afterOutside: [] });
+  const result = await run(many, payload({ root, paths: [w(join(root, 'q', ...Array.from({ length: 40 }, () => 'a'), 'c'))] }));
   assert.equal(result.decision, undefined);
   assert.ok(performance.now() - start < 500, `${performance.now() - start} ms`);
 });
@@ -125,4 +125,54 @@ test('Reset: 戻したあとの設定にも、既定の protect-files の行が�
   const current = defaultConfig();
   current.tools.hooks.preToolUse = [{ matcher: 'x', command: ['node', 'x.js'], timeoutMs: 1000, onError: 'deny' }];
   assert.deepEqual(resetConfig(current).tools.hooks.preToolUse, [DEFAULT_PROTECT_FILES]);
+});
+
+test('ワイルドカードの一覧がフォルダに当たれば、その中のファイルも守る', async t => {
+  const root = product(t);
+  mkdirSync(join(root, 'src', 'tools', 'hooks'), { recursive: true });
+  const ask = async (pattern: string, path: string) => (await run(hook({ always: [pattern], afterOutside: [] }), payload({ root, paths: [w(path)] }))).decision;
+  assert.equal(await ask('**/hooks', join(root, 'src', 'tools', 'hooks', 'scope.ts')), 'ask');
+  assert.equal(await ask('s*', join(root, 'src', 'app.ts')), 'ask');
+  assert.equal(await ask('**/hooks', join(root, 'src', 'tools', 'other.ts')), undefined);
+});
+
+test('一覧の下を歩ききれないときは、その旨の理由で ask', async t => {
+  const root = product(t);
+  const many = join(root, '.github', 'workflows', 'many');
+  mkdirSync(many);
+  for (let i = 0; i <= 20_000; i++) writeFileSync(join(many, String(i)), '');
+  linkSync(join(root, 'package.json'), join(root, 'notes.txt'));
+  const result = await run(hook(), payload({ root, paths: [w(join(root, 'notes.txt'))] }));
+  assert.equal(result.decision, 'ask');
+  assert.match(result.reason, /could not check all protected files/u);
+  assert.doesNotMatch(result.reason, /the same file as/u);
+});
+
+test('先の無いリンクが深すぎる・解けないときは、閉じる向き（フックは ask、実際のパスは製品の中にしない）', { skip: !WIN }, async t => {
+  const root = product(t);
+  const hops = Array.from({ length: 45 }, (_, i) => join(root, `j${i}`));
+  for (let i = hops.length - 1; i >= 0; i--) {
+    const target = i === hops.length - 1 ? join(root, 'missing') : hops[i + 1]!;
+    symlinkSync(target, hops[i]!, 'junction');
+  }
+  const path = join(hops[0]!, 'ci.yml');
+  const result = await run(hook(), payload({ root, paths: [w(path)] }));
+  assert.equal(result.decision, 'ask');
+  assert.equal(isInside(root, realish(path)), false);
+});
+
+test('UNC の一覧は UNC のまま（今のドライブに読み替えない）', { skip: !WIN }, async () => {
+  const drive = parse(process.cwd()).root.slice(0, 2);
+  const unc = hook({ always: ['//server/share/**'], afterOutside: [] });
+  assert.equal((await run(unc, payload({ paths: [w('\\\\server\\share\\x.yml')] }))).decision, 'ask');
+  assert.equal((await run(unc, payload({ paths: [w(`${drive}\\server\\share\\x.yml`)] }))).decision, undefined);
+});
+
+test('フォルダごとの書き込みで、中に守るファイルとハードリンクでつながったファイルがあれば ask', async t => {
+  const root = product(t);
+  mkdirSync(join(root, 'dist', 'deep'), { recursive: true });
+  linkSync(join(root, 'package.json'), join(root, 'dist', 'deep', 'p.json'));
+  writeFileSync(join(root, 'dist', 'plain.txt'), 'x');
+  assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'dist'))], tainted: true }))).decision, 'ask');
+  assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'src'))], tainted: true }))).decision, undefined);
 });
