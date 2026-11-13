@@ -21,7 +21,6 @@ export function resumeStep(steps: OnboardingSteps): StepId {
 export const SERVER_KINDS = ['generic', 'lmstudio', 'llamacpp', 'tabbyapi', 'vllm', 'openrouter', 'openai'] as const;
 export type ServerKind = (typeof SERVER_KINDS)[number];
 export type ModelSource = 'anthropic' | 'ollama' | 'openai';
-export const MODEL_SOURCES: readonly ModelSource[] = ['anthropic', 'ollama', 'openai'];
 
 export interface ModelForm { source: ModelSource; model: string; baseUrl: string; server: ServerKind; contextLength: string; apiKeyEnv: string }
 
