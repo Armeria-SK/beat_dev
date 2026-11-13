@@ -18,49 +18,31 @@ function snippet(text: string, terms: readonly string[], width = 160): string {
   return `${start > 0 ? '…' : ''}${text.slice(start, start + width).replace(/\s+/gu, ' ').trim()}${start + width < text.length ? '…' : ''}`;
 }
 
-// 外のモデルの実行に見せてよい会話の条件（visibleModelIds を渡したとき）。a は会話の別名。
-// 見せない: 会話で選んだモデル（conversations.model_id）がこの一覧に無い会話（選んでいない会話は出す）と、手元のモデルだけで動かすタスク（tasks.local_only）の会話。
-// 振り返りの会話（振り返りのきっかけの会話の全文が入っている）も、会話自身が覚えているきっかけ（source_conversation_id / source_task_id）の会話が上の決まりで見せない会話か、きっかけのタスクが手元のものなら見せない。
-// 振り返りの記録（memory_jobs）の結び付きは使わない: 記録は振り返りがやり直されると書き換わる
-// 値の差し込み（?）は、見せてよいモデルの id を 2 回（その会話の分と、きっかけの会話の分）この順に渡す
-function visibleSql(alias: string, visible: readonly string[]): string {
-  const own = (a: string, task: string) => `(${a}.model_id IS NULL${visible.length ? ` OR ${a}.model_id IN (${visible.map(() => '?').join(', ')})` : ''}) AND NOT EXISTS (SELECT 1 FROM tasks ${task} WHERE ${task}.conversation_id = ${a}.id AND ${task}.local_only = 1)`;
-  return `${own(alias, 'lt')}
-    AND NOT EXISTS (SELECT 1 FROM conversations s WHERE s.id = ${alias}.source_conversation_id AND NOT (${own('s', 'ls')}))
-    AND NOT EXISTS (SELECT 1 FROM tasks jt WHERE jt.id = ${alias}.source_task_id AND jt.local_only = 1)`;
-}
-
-// visibleModelIds: 渡したとき、上の決まりで見せない会話の発言は出さない。
-// 手元のモデルで話した会話を、外のモデルの実行に見せないため、外と分かっているモデルの一覧を渡す（設定から消えたモデルを選んだ会話も出ない）。画面の検索は渡さない
-export function searchHistory(db: DatabaseSync, query: string, options: { days?: number | undefined; limit?: number; now?: number; excludeConversationId?: string; visibleModelIds?: readonly string[] | undefined } = {}): HistoryHit[] {
+export function searchHistory(db: DatabaseSync, query: string, options: { days?: number | undefined; limit?: number; now?: number; excludeConversationId?: string } = {}): HistoryHit[] {
   const terms = searchTerms(query);
   if (!terms.length) return [];
   const limit = Math.min(options.limit ?? 12, 50);
   const since = options.days ? (options.now ?? Date.now()) - options.days * 86_400_000 : 0;
   const exclude = options.excludeConversationId ?? '';
-  const visible = options.visibleModelIds;
-  // 子の担当（agent_run）の会話は、親の作業の内側のもの。手元のモデルでも外のモデルでも、画面の検索でも出さない（parent_run_id を持つ会話）
-  const hiddenClause = ` AND c.parent_run_id IS NULL${visible ? ` AND ${visibleSql('c', visible)}` : ''}`;
-  const hiddenParams = visible ? [...visible, ...visible] : [];
+  // 子の担当（agent_run）の会話は、親の作業の内側のもの。画面の検索でも出さない（parent_run_id を持つ会話）
+  const hiddenClause = ' AND c.parent_run_id IS NULL';
   const rows = terms.every(t => [...t].length >= 3)
     ? db.prepare(`
         SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title, c.project_id FROM messages_fts f
         JOIN messages m ON m.id = f.rowid JOIN conversations c ON c.id = m.conversation_id
         WHERE messages_fts MATCH ? AND m.created_at >= ? AND m.conversation_id != ?${hiddenClause}
-        ORDER BY m.created_at DESC LIMIT ?`).all(ftsPhrase(terms), since, exclude, ...hiddenParams, limit)
+        ORDER BY m.created_at DESC LIMIT ?`).all(ftsPhrase(terms), since, exclude, limit)
     : db.prepare(`
         SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title, c.project_id FROM messages m JOIN conversations c ON c.id = m.conversation_id
         WHERE ${terms.map(() => "m.text LIKE ? ESCAPE '\\'").join(' AND ')} AND m.created_at >= ? AND m.conversation_id != ?${hiddenClause}
-        ORDER BY m.created_at DESC LIMIT ?`).all(...terms.map(t => `%${likeEscape(t)}%`), since, exclude, ...hiddenParams, limit);
+        ORDER BY m.created_at DESC LIMIT ?`).all(...terms.map(t => `%${likeEscape(t)}%`), since, exclude, limit);
   return (rows as Array<{ id: number; conversation_id: string; role: string; text: string; created_at: number; title: string | null; project_id: string | null }>).map(r => ({
     conversationId: r.conversation_id, projectId: r.project_id, title: r.title, messageId: r.id, role: r.role, createdAt: r.created_at, snippet: snippet(r.text, terms),
   }));
 }
 
-// visibleModelIds: searchHistory と同じ。この会話が見せない会話（手元の会話・手元のタスクの会話・それらの振り返りの会話）なら、無いときと同じ（空）を返す
-export function readHistory(db: DatabaseSync, conversationId: string, options: { aroundMessageId?: number | undefined; limit?: number; visibleModelIds?: readonly string[] | undefined } = {}): Array<{ id: number; role: string; text: string; createdAt: number }> {
+export function readHistory(db: DatabaseSync, conversationId: string, options: { aroundMessageId?: number | undefined; limit?: number } = {}): Array<{ id: number; role: string; text: string; createdAt: number }> {
   if (db.prepare('SELECT 1 FROM conversations WHERE id = ? AND parent_run_id IS NOT NULL').get(conversationId)) return [];
-  if (options.visibleModelIds && !db.prepare(`SELECT 1 FROM conversations c WHERE c.id = ? AND ${visibleSql('c', options.visibleModelIds)}`).get(conversationId, ...options.visibleModelIds, ...options.visibleModelIds)) return [];
   const limit = Math.min(options.limit ?? 20, 60);
   const rows = options.aroundMessageId === undefined
     ? db.prepare('SELECT id, role, text, created_at FROM (SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id').all(conversationId, limit)

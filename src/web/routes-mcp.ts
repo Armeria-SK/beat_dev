@@ -87,7 +87,7 @@ export function registerMcpRoutes(router: Router, app: App): void {
     const transport = body.transport;
     if (transport !== 'stdio' && transport !== 'http') throw problem(400, 'invalid_field', 'invalid_body', { field: 'transport' });
     // 追加は enabled:true・道具は空（クライアントの enabled・tools・env・headers は受け取らない）
-    const server: McpServerConfig = { id, transport, enabled: true, localOk: false, tools: {}, env: {}, headers: {} };
+    const server: McpServerConfig = { id, transport, enabled: true, tools: {}, env: {}, headers: {} };
     if (body.command !== undefined) server.command = command(body.command);
     if (body.cwd !== undefined) server.cwd = text(body.cwd, 'cwd');
     if (body.url !== undefined) server.url = text(body.url, 'url');
@@ -118,7 +118,6 @@ export function registerMcpRoutes(router: Router, app: App): void {
     const next: McpServerConfig = { ...server };
     for (const [key, value] of Object.entries(body)) {
       if (key === 'enabled') next.enabled = bool(value, key);
-      else if (key === 'localOk') next.localOk = bool(value, key);
       else if (key === 'command') next.command = command(value);
       else if (key === 'cwd') { if (value === null) delete next.cwd; else next.cwd = text(value, key); }
       else if (key === 'url') next.url = text(value, key);

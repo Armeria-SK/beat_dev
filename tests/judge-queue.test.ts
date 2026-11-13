@@ -189,6 +189,28 @@ test('4-3a routing.judge: 別のモデルを入れるとそのモデルが判定
   }
 });
 
+test('4-1 routing.judge: この PC のモデルを選んだ会話でも、ほかの提供元のモデルが判定役になれる', async t => {
+  ran.length = 0;
+  const s = await startApp(t, {
+    models: [fakeModel('m1'), fakeModel('ext1', { provider: 'ext' })], tools: [outsideRead],
+    configure: c => {
+      c.providers.push({ id: 'ext', kind: 'openai_compatible', baseUrl: 'https://models.example.test/v1', maxParallel: 1, timeoutMs: 10_000 });
+      c.routing = { chat: ['m1'], background: [], judge: ['ext1'], retriesPerModel: 0 };
+    },
+  });
+  const id = uuid(61);
+  s.app.conversations.create({ id, title: 'outside judge' });
+  s.app.conversations.setChoice(id, { modelId: 'm1' });
+  const judges: string[] = [];
+  s.adapters.get('ext')!.scripts = router(req => { judges.push(`${isJudge(req) ? 'judge' : 'run'}:${req.model.id}`); return say('{"decision":"allow","reason":"fits"}'); });
+  s.adapter().scripts = router(req => hasToolResult(req) ? say('done') : toolCall('outside_read', {}));
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(judges, ['judge:ext1']);
+  assert.deepEqual(ran, ['outside_read']);
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
+});
+
 test('4-3a: 子の担当の確かめで判定役が見る頼みは、親の会話の持ち主の言葉（子への依頼の文ではない）', async t => {
   ran.length = 0;
   const s = await startApp(t, { models: [fakeModel('m1')], tools: [outsideRead, agentRun as unknown as ToolDef], configure: c => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });

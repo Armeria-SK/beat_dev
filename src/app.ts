@@ -66,7 +66,6 @@ import { PendingStore, type PendingRow } from './pending/store.ts';
 import { pendingNote } from './pending/notes.ts';
 import { parentOf, replayAction } from './pending/replay.ts';
 import { pendingText } from './shared/messages/pending.ts';
-import { isLocalPinned } from './engine/local-model.ts';
 import { ToolRegistry } from './tools/registry.ts';
 import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
@@ -279,10 +278,10 @@ export class App {
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
       if (draft.status === 'approved') {
-        this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_auto'), body: draft.name, link: `#/skills/${encodeURIComponent(draft.name)}`, dedupKey: `skill-auto:${draft.id}`, localOnly: true, noForward: true });
+        this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_auto'), body: draft.name, link: `#/skills/${encodeURIComponent(draft.name)}`, dedupKey: `skill-auto:${draft.id}`, noForward: true });
         return;
       }
-      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}`, localOnly: true });
+      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
       // 道具を多く使った重い会話の後に振り返る
@@ -433,10 +432,9 @@ export class App {
       const language = languageOf(this.config());
       const task = scope.taskId ? this.tasks.get(scope.taskId) : undefined;
       if (row.status === 'waiting') {
-        const localOnly = task ? task.local_only === 1 : isLocalPinned(this.config(), this.conversations.get(scope.conversationId)?.model_id);
         this.notifications.notify({
           kind: 'approval_needed', title: task ? pendingText(language, 'notify_title_task', { title: task.title }) : pendingText(language, 'notify_title_conversation'),
-          body: redactSecrets(`#${row.id} ${row.reason}`), link: '#/pending', dedupKey: scope.key, localOnly,
+          body: redactSecrets(`#${row.id} ${row.reason}`), link: '#/pending', dedupKey: scope.key,
         });
         return;
       }

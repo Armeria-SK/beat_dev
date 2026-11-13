@@ -44,7 +44,6 @@ const en = {
   'summary.cancelled_schedule_deleted': 'Cancelled because its schedule was deleted while this run was waiting',
 
   'reason.no_model': 'Waiting because no model is available: {detail}',
-  'reason.local_wait': 'This task came from a conversation that used a local model, so it waits while no local model is available (it is never sent to an external model)',
   'reason.folder_missing': 'Waiting because the folder of the product "{name}" cannot be found (or it was replaced)',
   'reason.preempted': 'Paused to give priority to the conversation with the user (it will resume from where it left off)',
   'reason.checkpoint': 'Will resume in {minutes} min',
@@ -63,7 +62,6 @@ const en = {
   'review.nothing': 'There was nothing to review',
   'review.no_reply': '(no reply)',
   'review.truncated': 'The review reply was cut off by the output limit, so its result was not used (it will be retried next time)',
-  'review.local_skipped': 'This conversation used a local model and no local background model is available, so the review was skipped (it is never sent to an external model)',
   'review.tidy_skipped': 'Memory tidy-up reviews are off for now, so this one was skipped',
 
   'notify.waiting_reminder': 'Waiting for your reply: {title}',

@@ -53,7 +53,6 @@ export interface McpServerStatus {
   id: string;
   transport: McpServerConfig['transport'];
   enabled: boolean;
-  localOk: boolean;
   target: string;
   state: McpServerState;
   // 固定の語（env_missing / connect_failed / timeout / list_failed / too_many_restarts / dropped）
@@ -246,7 +245,7 @@ export class McpManager {
       }));
       const stderr = entry?.link ? entry.link.stderr() : entry?.lastStderr ?? '';
       return {
-        id: server.id, transport: server.transport, enabled: server.enabled, localOk: server.localOk, target: this.#target(server, entry?.secrets ?? []),
+        id: server.id, transport: server.transport, enabled: server.enabled, target: this.#target(server, entry?.secrets ?? []),
         state, ...(entry?.reason ? { reason: entry.reason } : {}), ...(entry?.detail ? { detail: entry.detail } : {}),
         stderr: redactSecrets(stderr.slice(-2 * STDERR_MAX), entry?.secrets ?? []).slice(-STDERR_MAX),
         tools: tools.map(t => (t.state === 'registered' && cut.has(t.registered) ? { ...t, state: 'cut' as const } : t)),

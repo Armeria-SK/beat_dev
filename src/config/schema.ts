@@ -207,8 +207,6 @@ export const McpServerConfig = Type.Object({
   id: Type.String({ pattern: MCP_ID_PATTERN }),
   transport: Type.Union([Type.Literal('stdio'), Type.Literal('http')]),
   enabled: Type.Boolean({ default: true }),
-  // 手元のモデルの会話にも渡すか。既定は渡さない（手元のモデルに読ませた内容を、外のサーバーへ出さないため）
-  localOk: Type.Boolean({ default: false }),
   tools: Type.Record(Type.String({ pattern: MCP_TOOL_KEY_PATTERN }), McpToolEntry, { default: {}, maxProperties: 64 }),
   // stdio: [プログラム, 引数…]。シェルは通さない
   command: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 32 })),

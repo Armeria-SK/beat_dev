@@ -33,15 +33,15 @@ test('T-05 重ねない（dedup）で undefined になったとき、聞き手�
   assert.equal(calls, 1);
 });
 
-test('localOnly は DB に残り、noForward は聞き手にだけ渡る（DB には残らず、返り値にも無い）', () => {
+test('noForward は聞き手にだけ渡る（DB には残らず、返り値にも無い）。列 local_only は残るが、新しい行はいつも 0', () => {
   const { db, notifications } = make();
   const heard: Array<Notification & { noForward?: true }> = [];
   notifications.listen(n => heard.push(n));
-  const local = notifications.notify({ kind: 'info', title: 'L', localOnly: true })!;
+  notifications.notify({ kind: 'info', title: 'L' });
   const plain = notifications.notify({ kind: 'info', title: 'P' })!;
   const quiet = notifications.notify({ kind: 'health_alert', title: 'Q', noForward: true })!;
-  assert.equal(local.local_only, 1);
-  assert.equal(plain.local_only, 0);
+  assert.deepEqual((db.prepare('SELECT local_only FROM notifications ORDER BY id').all() as Array<{ local_only: number }>).map(r => r.local_only), [0, 0, 0]);
+  assert.equal(plain.title, 'P');
   assert.equal('noForward' in quiet, false, '返り値（行）には noForward を載せない');
   assert.deepEqual(heard.map(h => h.noForward === true), [false, false, true]);
   const columns = (db.prepare('PRAGMA table_info(notifications)').all() as Array<{ name: string }>).map(c => c.name);

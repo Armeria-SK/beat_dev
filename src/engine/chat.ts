@@ -14,7 +14,7 @@ import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
-import { acceptanceAllows, localAllows, planAllows, reviewAllows, runToolCall, type JudgeLimitSet } from '../tools/pipeline.ts';
+import { acceptanceAllows, planAllows, reviewAllows, runToolCall, type JudgeLimitSet } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
@@ -38,7 +38,6 @@ import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
 import { ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
-import { isLocalModel, isLocalPinned, isLocalProvider } from './local-model.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, looksLikeTextToolCall } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
@@ -469,14 +468,12 @@ export class ChatEngine {
     return { ok: true, runId };
   }
 
-  // task.local_only: 手元のモデルを選んだ会話から作ったタスク。裏方の順番のうち手元のモデルだけで動かし、使えるものが無ければ（チャットの順番や外のモデルに回さず）始めない（localOnly: true で知らせる）
-  runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string; localOnly?: true } {
+  runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
-    const localOnly = task.local_only === 1;
-    const chain = this.#chain('background', null, localOnly);
+    const chain = this.#chain('background');
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
-      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage, ...(localOnly ? { localOnly: true as const } : {}) };
+      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
     }
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt });
     const runId = randomUUID();
@@ -494,10 +491,9 @@ export class ChatEngine {
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
 
-  // localOnly: 手元のモデルで話した会話の振り返り。裏方の順番のうち手元のモデルだけを使い、無ければ（チャットの順番や外のモデルに回さず）始めない
-  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[]; localOnly?: boolean } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[] } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.review_running') };
-    const chain = this.#chain('background', null, options.localOnly === true);
+    const chain = this.#chain('background');
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
       return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
@@ -513,8 +509,8 @@ export class ChatEngine {
 
   // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
   // 数えるのは、動いている裏の実行の「最初に使う提供元」（道具を動かしている最中で limiter の枠を返しているものも含む）。使えるモデルが無いときは true（始めて、いつもの失敗の道に任せる）
-  backgroundHasRoom(localOnly = false): boolean {
-    const first = this.#chain('background', null, localOnly).usable[0];
+  backgroundHasRoom(): boolean {
+    const first = this.#chain('background').usable[0];
     if (!first) return true;
     let running = 0;
     for (const active of this.#active.values()) if (active.kind !== 'chat' && active.primary === first.provider.id) running += 1;
@@ -522,7 +518,6 @@ export class ChatEngine {
   }
 
   // 手元のモデルで話した会話の振り返りに使える、手元の裏方モデルがあるか
-  localReviewAvailable(): boolean { return this.#chain('background', null, true).usable.length > 0; }
 
   // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
   // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
@@ -593,11 +588,10 @@ export class ChatEngine {
   }
 
   // 会話で選んだモデルがあれば（pinned）、そのモデルだけで鎖を作る。使えなければ、ほかのモデルへ切り替えずに、そのモデルの問題だけを返す
-  // localOnly: 裏方の順番（routing.background）のうち、手元のモデルだけ。順番が空でもチャットの順番や設定のモデル全部には回さない
-  #chain(route: 'chat' | 'background', pinned: string | null = null, localOnly = false): { usable: Route[]; problems: ModelProblem[] } {
+  #chain(route: 'chat' | 'background', pinned: string | null = null): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
     const language = languageOf(config);
-    const ids = localOnly ? config.routing.background.filter(id => isLocalModel(config, id)) : pinned ? [pinned] : candidateModelIds(config, route);
+    const ids = pinned ? [pinned] : candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];
@@ -676,13 +670,12 @@ export class ChatEngine {
   // 「止める」は、パイプラインと同じく、実行を始めたときの設定（started）といまの設定の厳しい方。始めたときに止めていた道具は、途中で緩めても、その実行のあいだは戻らない。
   // 計画モード（plan）の会話では、planAllows を通る道具だけを渡す: 効果が読む（read）か Web の読み取り（network）で、ファイルも書く道具（writesFiles）でないもの（パイプラインの二重の拒否は runToolCall）。
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
-  // 手元のモデルの会話（localOnly）には、localOk でない MCP の道具を渡さない（localAllows。パイプラインも同じに拒む）。
   // maxTools で切られた MCP の道具は、モデルと道具の組ごとに 1 回だけ [WARN] を出し、MCP の管理に知らせる（画面の状態が cut になる）
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', localOnly = false, inProject = false, frozen = false): ToolDef[] {
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
     const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff(config, kind)) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
-      || (mode === 'plan' && !planAllows(t)) || !localAllows(t, localOnly) || (t.projectOnly === true && !inProject) || !acceptanceAllows(t, frozen);
+      || (mode === 'plan' && !planAllows(t)) || (t.projectOnly === true && !inProject) || !acceptanceAllows(t, frozen);
     const options = { limit: model.maxTools, exclude };
     const registry = this.#d.tools.registry;
     if (kind === 'chat' && this.#d.mcpCut) {
@@ -742,8 +735,6 @@ export class ChatEngine {
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
     ctx.toolWindow = () => this.created.open(ctx);
     if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
-    ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider)) && (agent?.parent.modelsLocal ?? true);
-    ctx.localOnly = agent ? agent.parent.localOnly : kind === 'chat' ? isLocalPinned(config, d.conversations.get(conversationId)?.model_id) : task?.task.local_only === 1;
     // 子の担当を任せる道具の入口（設定で有効のときだけ。子は孫を作れない。タスクは tools.agent.inTasks で許したときだけ）
     if (kind !== 'agent' && config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))) {
       ctx.agent = (input, callId) => this.#runAgent({ ctx, routes: chain.slice(index), forbid }, input, callId);
@@ -758,7 +749,7 @@ export class ChatEngine {
       }
     };
     const finishOk = (text: string, stop: StopReason, split?: { split: true }): EngineResult => {
-      if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), localOnly: ctx.localOnly === true, projectId: ctx.project?.id ?? null });
+      if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split: true as const } : {}) };
@@ -863,7 +854,7 @@ export class ChatEngine {
   }
 
   // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。
-  // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。手元のモデルを選んだ会話（ctx.localOnly）は、手元のモデルのときだけ。道具は渡さない。
+  // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。道具は渡さない。
   // 判定役の呼び出しは engine_runs に入れず、会話も作らない
   async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string> {
     const config = this.#d.config();
@@ -875,11 +866,10 @@ export class ChatEngine {
         return model && provider ? [{ model, provider }] : [];
       })
       : [route];
-    const usable = routes.filter(r => !ctx.localOnly || isLocalProvider(r.provider));
-    if (!usable.length) throw new NoJudge(ctx.localOnly ? 'the judge model must be local for a local conversation' : 'no judge model is set up');
+    if (!routes.length) throw new NoJudge('no judge model is set up');
     let failure: unknown = new NoJudge('no judge model could be called');
-    for (const [index, candidate] of usable.entries()) {
-      const own = index < usable.length - 1 && call ? new AbortController() : undefined;
+    for (const [index, candidate] of routes.entries()) {
+      const own = index < routes.length - 1 && call ? new AbortController() : undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const stop = () => own?.abort(signal.reason);
       if (own) signal.addEventListener('abort', stop, { once: true });
@@ -928,8 +918,7 @@ export class ChatEngine {
   // - この実行で作った・task_update で触ったタスク（作る以外の道具を使った実行だけ。作っただけの確認の返事はメモにしない）
   // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触ったときだけ書き、そのとき実行中のままの状態（running）も許す
   // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
-  // 手元のモデルの会話の実行（localOnly）が書いたタスクは、手元のモデルだけで動かすタスクにする（メモに会話の文が入るため）
-  #handOver(runId: string, text: string, run: { workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean; projectId: string | null }): void {
+  #handOver(runId: string, text: string, run: { workCalls: number; touched: ReadonlySet<string>; tainted: boolean; projectId: string | null }): void {
     const d = this.#d;
     const note = text.trim();
     if (!d.tasks || !note || run.tainted) return;
@@ -944,7 +933,6 @@ export class ChatEngine {
       const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
       if (!open.includes(task.status)) continue;
       d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }) }, 'beat', runId);
-      if (run.localOnly) d.tasks.markLocalOnly(id);
     }
   }
 
@@ -1065,8 +1053,7 @@ export class ChatEngine {
     const language = languageOf(config);
     const current = this.#modeOf(p.conversationId);
     const mode: PermissionMode = p.kind === 'chat' || p.kind === 'agent' ? stricterMode(p.startedMode ?? current, current) : 'auto';
-    const localOnly = p.kind === 'chat' && isLocalPinned(config, d.conversations.get(p.conversationId)?.model_id);
-    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly, p.project !== undefined, this.#frozen(p.project?.id));
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, p.project !== undefined, this.#frozen(p.project?.id));
     const specs = ToolRegistry.specs(toolDefs, config);
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
     const available = contextAvailable(capacity, model);
@@ -1160,7 +1147,7 @@ export class ChatEngine {
     if (live >= MAX_LIVE_AGENTS) return fail('agent.busy');
     // 子に渡せる道具 = 親にいま渡る道具 ∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
     const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'auto', this.#modeOf(parent.conversationId)) : 'auto';
-    const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, false, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
+    const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
     const givableNames = new Set(givable.map(t => t.name));
     if (input.tools) {
       const unknown = [...new Set(input.tools)].filter(name => !givableNames.has(name));

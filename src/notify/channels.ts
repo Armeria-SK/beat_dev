@@ -86,7 +86,7 @@ export class NotifyChannels {
     const channel = config.notify.channels.find(c => c.id === id);
     if (!channel) return undefined;
     const now = this.#o.now();
-    const n: NotifyEvent = { id: 0, kind: 'info', title: notifyText(languageOf(config), 'test'), body: null, link: null, dedup_key: null, read_at: null, created_at: now, local_only: 0 };
+    const n: NotifyEvent = { id: 0, kind: 'info', title: notifyText(languageOf(config), 'test'), body: null, link: null, dedup_key: null, read_at: null, created_at: now };
     return this.#send(config, channel, n);
   }
 
@@ -169,14 +169,12 @@ export class NotifyChannels {
   }
 }
 
-// 送る中身。キーの順は固定。手元のモデルだけの仕事（local_only）の通知は、題を決まった文に差し替えて、本文もリンクも送らない（リンクの中のスキル名などが手元の会話に由来するため）
+// 送る中身。キーの順は固定
 export function buildPayload(config: AppConfig, channel: NotifyChannelConfig, n: NotifyEvent): string {
-  const language = languageOf(config);
-  const local = n.local_only === 1;
-  const title = local ? notifyText(language, `local_title.${n.kind}`) : n.title;
-  const body = channel.includeBody && !local && n.body ? n.body.slice(0, NOTIFY_BODY_MAX_CHARS) : undefined;
+  const title = n.title;
+  const body = channel.includeBody && n.body ? n.body.slice(0, NOTIFY_BODY_MAX_CHARS) : undefined;
   const base = config.notify.publicBaseUrl.replace(/\/+$/u, '');
-  const link = base !== '' && !local && n.link?.startsWith('#/') ? `${base}/${n.link}` : undefined;
+  const link = base !== '' && n.link?.startsWith('#/') ? `${base}/${n.link}` : undefined;
   const make = (t: string, b: string | undefined): string => JSON.stringify({
     source: 'beat', version: 1, kind: n.kind, title: t,
     ...(b === undefined ? {} : { body: b }), ...(link === undefined ? {} : { link }),

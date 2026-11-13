@@ -44,10 +44,6 @@ export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles' | 'mcp' 
   return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true && tool.mcp === undefined && tool.submits !== true;
 }
 
-// 手元のモデルの会話（localOnly）に渡してよい道具か。MCP の道具は、持ち主が localOk にしたサーバーのものだけ（それ以外は、手元のモデルに読ませた内容を外のサーバーへ出しうる）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、localAllows を通す
-export function localAllows(tool: Pick<ToolDef, 'mcp'>, localOnly: boolean | undefined): boolean {
-  return localOnly !== true || tool.mcp === undefined || tool.mcp.localOk;
-}
 
 export function acceptanceAllows(tool: Pick<ToolDef, 'acceptanceState'>, frozen: boolean): boolean {
   return tool.acceptanceState === undefined || (tool.acceptanceState === 'frozen') === frozen;
@@ -234,8 +230,6 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。フックの allow では越えられない
   const policy = policyFor(tool.name, ctx, deps);
   if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
-  // 手元のモデルの会話では、localOk でない MCP の道具を使わせない（モデルに渡す一覧からも外している。二重の拒否）
-  if (!localAllows(tool, ctx.localOnly)) return refuse('deny', 'mode', toolText(language, 'pipeline.mcp_local', { name: tool.name }));
   // ブラウザの道具は、設定で無効（既定）のあいだは使わせない（モデルに渡す一覧からも外している。二重の拒否）。設定を読めないときも、止める側に倒す
   if (isBrowserTool(tool.name) && !browserEnabled(ctx, deps)) return refuse('deny', 'mode', guardText(language, 'browser.off'));
   // 計画モードでは、読む道具と Web の読み取りのほかは使わせない（モデルに渡す一覧からも外している。二重の拒否）

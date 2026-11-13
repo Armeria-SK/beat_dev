@@ -125,7 +125,7 @@ test('T-38 作る: 環境変数の名前はクライアントから受け取ら�
   assert.deepEqual(s.server()!.env, { GITHUB_TOKEN: ENV_TOKEN });
 });
 
-test('T-50 on/off: PATCH enabled:false で、その場で切断して道具を外す。on に戻すとつなぎ直す。localOk も PATCH で変わる', async t => {
+test('T-50 on/off: PATCH enabled:false で、その場で切断して道具を外す。on に戻すとつなぎ直す。消した localOk は PATCH で受けない', async t => {
   const s = await start(t, { configure: c => { c.mcp = { servers: [{ id: 'srv', transport: 'stdio', command: ['node', 'x.mjs'], tools: { echo: {} } }] }; } });
   await s.app.mcp.start();
   assert.equal(s.mcp.fakes.length, 1);
@@ -138,9 +138,9 @@ test('T-50 on/off: PATCH enabled:false で、その場で切断して道具を�
   assert.equal((await s.json('/api/mcp/servers/srv', 'PATCH', { enabled: true })).status, 200);
   await waitFor(() => s.mcp.fakes.length === 2, 'reconnect');
   await waitFor(() => s.app.tools.get('mcp_srv_echo') !== undefined, 'registered');
-  assert.equal((await s.json('/api/mcp/servers/srv', 'PATCH', { localOk: true })).status, 200);
-  assert.equal(s.app.tools.get('mcp_srv_echo')!.mcp!.localOk, true);
-  assert.equal(s.mcp.fakes.length, 2, 'localOk だけではつなぎ直さない');
+  assert.equal((await s.json('/api/mcp/servers/srv', 'PATCH', { localOk: true })).status, 400);
+  assert.deepEqual(s.app.tools.get('mcp_srv_echo')!.mcp, { server: 'srv', tool: 'echo' });
+  assert.equal(s.mcp.fakes.length, 2);
 });
 
 test('T-38 PATCH の検査: 型の違い・知らない項目・http の URL は 400。ないサーバーは 404', async t => {

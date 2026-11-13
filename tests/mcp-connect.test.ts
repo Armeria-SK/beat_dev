@@ -14,7 +14,7 @@ import type { McpLink } from '../src/mcp/manager.ts';
 const FIXTURE = new URL('./fixtures/mcp-echo-server.mjs', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/u, '$1');
 
 function stdio(): McpServerConfig {
-  return { id: 'echo', transport: 'stdio', enabled: true, localOk: false, tools: {}, command: [process.execPath, FIXTURE], env: {}, headers: {} };
+  return { id: 'echo', transport: 'stdio', enabled: true, tools: {}, command: [process.execPath, FIXTURE], env: {}, headers: {} };
 }
 
 async function open(t: { after: (fn: () => void) => void }, env: Record<string, string> = {}, onClose: (reason?: string) => void = () => undefined): Promise<McpLink> {
@@ -83,7 +83,7 @@ async function httpServer(t: { after: (fn: () => void) => void }, redirect = fal
 
 test('T-36: 本物の http（Streamable HTTP）で、一覧と呼び出しが通り、持ち主が指した見出しが付く', async t => {
   const { url, seen } = await httpServer(t);
-  const server: McpServerConfig = { id: 'h', transport: 'http', enabled: true, localOk: true, tools: {}, url, env: {}, headers: {} };
+  const server: McpServerConfig = { id: 'h', transport: 'http', enabled: true, tools: {}, url, env: {}, headers: {} };
   const link = await sdkConnect({ server, env: {}, headers: { Authorization: 'Bearer abc' }, onClose: () => undefined });
   t.after(() => { void link.close(); });
   assert.deepEqual((await link.list()).map(x => x.name), ['ping']);
@@ -94,6 +94,6 @@ test('T-36: 本物の http（Streamable HTTP）で、一覧と呼び出しが通
 
 test('T-36b: http のリダイレクトは追わない（見出しを別の宛先に持って行かない）', async t => {
   const { url } = await httpServer(t, true);
-  const server: McpServerConfig = { id: 'h', transport: 'http', enabled: true, localOk: true, tools: {}, url, env: {}, headers: {} };
+  const server: McpServerConfig = { id: 'h', transport: 'http', enabled: true, tools: {}, url, env: {}, headers: {} };
   await assert.rejects(sdkConnect({ server, env: {}, headers: { Authorization: 'Bearer abc' }, onClose: () => undefined }));
 });

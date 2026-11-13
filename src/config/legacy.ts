@@ -10,6 +10,7 @@ export const LEGACY_KEYS: readonly LegacyKey[] = [
   { path: 'tools.web.searxngUrl', removedIn: 'beat 0-4b' },
   { path: 'tools.shell.approvalTimeoutSec', removedIn: 'beat 4-3b-1' },
   { path: 'tools.taintEscalation', removedIn: 'beat 4-3b-2' },
+  { path: 'mcp.servers[].localOk', removedIn: 'beat 4-1' },
 ];
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -20,11 +20,10 @@ test('T-20b 設定に mcp が無ければ、サーバーなし・既定の歯止
   assert.deepEqual(config.mcp.limits, { maxServers: 4, maxToolsPerServer: 32, callTimeoutMs: 60_000, connectTimeoutMs: 15_000, restartsPerHour: 3, resultMaxChars: 15_000 });
 });
 
-test('サーバーの既定: 有効・手元のモデルには渡さない・道具なし・env / headers なし', () => {
+test('サーバーの既定: 有効・道具なし・env / headers なし', () => {
   const config = parseConfig(withMcp({ servers: [stdio(), http()] }));
   const [a, b] = config.mcp.servers;
   assert.equal(a!.enabled, true);
-  assert.equal(a!.localOk, false);
   assert.deepEqual(a!.tools, {});
   assert.deepEqual((a as { env: unknown }).env, {});
   assert.deepEqual((b as { headers: unknown }).headers, {});
