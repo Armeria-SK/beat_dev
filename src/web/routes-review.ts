@@ -30,9 +30,12 @@ export function projectWhere(table: keyof typeof TODAY_COUNTED, project: Project
   return project === null ? { sql: ` AND ${projectOfSql(table, alias)} IS NULL`, args: [] } : { sql: ` AND ${projectOfSql(table, alias)} = ?`, args: [project] };
 }
 
+export function todayStart(app: App, now = Date.now()): number {
+  try { return startOfDayIn(app.config().timezone, now); } catch { return startOfDayIn('UTC', now); }
+}
+
 export function todayCount(app: App, table: keyof typeof TODAY_COUNTED, now = Date.now(), project?: ProjectFilter): number {
-  let since: number;
-  try { since = startOfDayIn(app.config().timezone, now); } catch { since = startOfDayIn('UTC', now); }
+  const since = todayStart(app, now);
   const filter = projectWhere(table, project);
   return Number((app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${TODAY_COUNTED[table]} >= ?${filter.sql}`).get(since, ...filter.args) as { n: number }).n);
 }

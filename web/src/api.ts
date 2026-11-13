@@ -53,6 +53,7 @@ export interface PendingAction {
   status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
   created_at: number; decided_at: number | null; ran_at: number | null;
 }
+export interface JudgedCounts { allowed: number; parked: Partial<Record<PendingKind, number>>; notParked: number }
 export interface PendingCounts { waiting: number; byProject: Record<string, number>; acceptanceChanges: Record<string, number>; judgedToday: { allowed: number; parked: number } }
 export interface PendingQuery { status: 'waiting' | 'decided'; project?: string; before?: number; earlier?: true }
 export interface PlanDoc {
@@ -338,7 +339,7 @@ export const api = {
   },
   retry: (id: string) => call<{ runId: string }>(`/api/conversations/${id}/retry`, { method: 'POST', body: '{}' }),
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
-  runs: (limit = 200, project?: string) => call<{ runs: RunRow[]; total: number }>(`/api/runs?limit=${limit}${inProject(project, '&')}`),
+  runs: (limit = 200, project?: string) => call<{ runs: RunRow[]; total: number; judged: JudgedCounts }>(`/api/runs?limit=${limit}${inProject(project, '&')}`),
   toolCalls: (project?: string) => call<{ toolCalls: ToolCallRow[]; total: number }>(`/api/tool-calls?limit=200${inProject(project, '&')}`),
   settings: () => call<SettingsView>('/api/settings'),
   applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),

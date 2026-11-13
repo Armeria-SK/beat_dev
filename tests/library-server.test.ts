@@ -225,6 +225,18 @@ test('1-5s Runs の件数: /api/runs・/api/tool-calls・/api/reviews の total 
   assert.equal((await api('/api/reviews')).body.total, 3);
 });
 
+test('4-3a Runs の口は判定役の件数を数える: 通した・積んだ（種類ごと）・積めなかった、今日の分だけ', async t => {
+  const { app } = await boot(t);
+  const api = await serve(t, app);
+  const now = Date.now();
+  const start = startOfDayIn(app.config().timezone, now);
+  const call = app.db.prepare("INSERT INTO tool_calls (id, run_id, tool, input, decision, decided_by, created_at) VALUES (?, 'r', 'shell_run', '{}', ?, ?, ?)");
+  const park = app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, status, created_at) VALUES ('shell_run', '{}', 'x', ?, 'r', 'r1', 'chat', 'c1', 'waiting', ?)");
+  for (const [id, decision, by, at] of [['a1', 'allow', 'auto-mode', now], ['a2', 'allow', 'auto-mode', start], ['a3', 'allow', 'auto-mode', start - 1], ['a4', 'deny', 'auto-mode', now], ['a5', 'allow', 'policy', now], ['n1', 'ask', 'not-parked', now], ['n2', 'ask', 'not-parked', start - 1]] as const) call.run(id, decision, by, at);
+  for (const [kind, at] of [['judge', now], ['judge', start], ['judge_failed', now], ['send', now], ['owner', start - 1]] as const) park.run(kind, at);
+  assert.deepEqual((await api('/api/runs')).body.judged, { allowed: 2, parked: { judge: 2, judge_failed: 1, send: 1 }, notParked: 1 });
+});
+
 test('1-5s Runs の件数: 設定のタイムゾーンが正しくない名前でも 500 にならず、UTC の 0 時から数える', async t => {
   const { app } = await boot(t, { ...testConfig(), timezone: 'Not/AZone' });
   const api = await serve(t, app);

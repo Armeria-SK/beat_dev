@@ -28,7 +28,7 @@ import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { projectFilterOf, projectProblem, registerProjectRoutes, usableProjectId } from './routes-projects.ts';
 import { ProjectError } from '../projects/store.ts';
 import { projectFolderGone } from '../projects/run.ts';
-import { projectOfSql, projectWhere, registerReviewRoutes, todayCount } from './routes-review.ts';
+import { projectOfSql, projectWhere, registerReviewRoutes, todayCount, todayStart } from './routes-review.ts';
 import type { RunRow } from '../db/runs.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { registerPendingRoutes } from './routes-pending.ts';
@@ -341,7 +341,7 @@ export function createWebServer(app: App): WebServer {
     const filter = projectWhere('engine_runs', project);
     const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
       .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null }>;
-    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project) });
+    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app)) });
   });
 
   // ── 承認とツールの記録 ──
