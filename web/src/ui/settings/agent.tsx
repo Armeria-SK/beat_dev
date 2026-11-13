@@ -246,7 +246,7 @@ function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boole
           <Row k={`${k}:label`} title={t('ui.set.model.label')}><CommitField value={(model.label as string | undefined) ?? ''} label={t('ui.set.model.label')} onCommit={v => edit({ label: v || undefined })} /></Row>
           <Row k={`${k}:id`} title={t('ui.set.model.id')}><CommitField value={id} label={t('ui.set.model.id')} mono onCommit={rename} /></Row>
           <Row k={`${k}:provider`} title={t('ui.set.model.provider')}><Select value={model.provider as string} options={providers} label={t('ui.set.model.provider')} onChange={provider => edit({ provider })} /></Row>
-          <Row k={`${k}:model`} title={t('ui.set.model.name')} desc={t('ui.set.model.nameDesc')}><CommitField value={model.model as string} label={t('ui.set.model.name')} mono onCommit={v => { if (v) edit({ model: v }); }} /></Row>
+          <Row k={`${k}:model`} title={t('ui.set.model.name')} desc={t('ui.set.model.nameDesc')}><CommitField value={model.model as string} label={t('ui.set.model.name')} mono required onCommit={v => edit({ model: v })} /></Row>
           <Row k={`${k}:ctx`} title={t('ui.set.model.context')} desc={t('ui.set.model.contextDesc')}>
             <NumberField k={`${k}:ctx`} value={model.contextLength as number | undefined} optional min={1024} max={10_000_000} label={t('ui.set.model.context')} onCommit={v => edit({ contextLength: v })} />
           </Row>

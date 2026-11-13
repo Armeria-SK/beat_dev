@@ -191,13 +191,13 @@ export function Select<V extends string>({ value, options, label, placeholder, d
   );
 }
 
-function useField(value: string, revision: number, onCommit: (value: string) => void, resetKey: unknown = null) {
+function useField(value: string, revision: number, onCommit: (value: string) => void, resetKey: unknown = null, accept?: (value: string) => boolean) {
   const [draft, setDraft] = useState<FieldDraft>({ saved: value, text: value });
   const latest = useRef(draft);
   latest.current = draft;
   useEffect(() => { setDraft({ saved: value, text: value }); }, [value, revision, resetKey]);
   const run = (event: Parameters<typeof fieldStep>[1]) => {
-    const next = fieldStep(latest.current, event);
+    const next = fieldStep(latest.current, event, accept);
     latest.current = next.draft;
     setDraft(next.draft);
     if (next.commit !== null) onCommit(next.commit);
@@ -215,11 +215,11 @@ function useField(value: string, revision: number, onCommit: (value: string) => 
   };
 }
 
-export function CommitField({ value, label, mono, short, placeholder, type, disabled, resetKey, onCommit }: {
-  value: string; label: string; mono?: boolean; short?: boolean; placeholder?: string; type?: 'text' | 'url'; disabled?: boolean; resetKey?: unknown; onCommit: (value: string) => void;
+export function CommitField({ value, label, mono, short, placeholder, type, disabled, resetKey, required, onCommit }: {
+  value: string; label: string; mono?: boolean; short?: boolean; placeholder?: string; type?: 'text' | 'url'; disabled?: boolean; resetKey?: unknown; required?: boolean; onCommit: (value: string) => void;
 }) {
   const ctx = useSet();
-  const field = useField(value, ctx.revision, onCommit, resetKey);
+  const field = useField(value, ctx.revision, onCommit, resetKey, required ? text => text !== '' : undefined);
   const classes = ['bt-field', mono && 'bt-field--mono', short && 'bt-field--short'].filter(Boolean).join(' ');
   return <input className={classes} type={type ?? 'text'} aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off" disabled={disabled} {...field} />;
 }
@@ -241,7 +241,7 @@ export function NumberField({ k, value, label, min, max, optional, onCommit }: {
 export function ListField({ items, label, placeholder, disabled, onChange }: { items: readonly string[]; label: string; placeholder?: string; disabled?: boolean; onChange: (items: string[]) => void }) {
   const t = useT();
   const ctx = useSet();
-  const field = useField('', ctx.revision, value => { if (value && !items.includes(value)) onChange([...items, value]); }, items.join('\n'));
+  const field = useField('', ctx.revision, value => onChange([...items, value]), items.join('\n'), value => !items.includes(value));
   return (
     <div className="ui-set__list">
       {items.length > 0 && (

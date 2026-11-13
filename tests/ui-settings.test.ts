@@ -77,6 +77,17 @@ test('ui/settings commit: D:\\proj を 1 字ずつ打つあいだは保存せず
   assert.equal(fieldStep({ saved: '', text: '  D:\\x  ' }, { type: 'blur' }).commit, 'D:\\x');
 });
 
+test('ui/settings commit: 受けない値（空にした必須の欄・一覧にもうある項目）は保存せず、欄を保存した値に戻す', () => {
+  const required = (value: string) => value !== '';
+  assert.deepEqual(fieldStep({ saved: 'gpt-4o', text: '   ' }, { type: 'blur' }, required), { draft: { saved: 'gpt-4o', text: 'gpt-4o' }, commit: null });
+  assert.deepEqual(fieldStep({ saved: 'gpt-4o', text: '' }, { type: 'key', key: 'Enter', composing: false }, required), { draft: { saved: 'gpt-4o', text: 'gpt-4o' }, commit: null });
+  assert.equal(fieldStep({ saved: 'gpt-4o', text: 'gpt-5' }, { type: 'blur' }, required).commit, 'gpt-5');
+  const items = ['node', 'a.js'];
+  const fresh = (value: string) => !items.includes(value);
+  assert.deepEqual(fieldStep({ saved: '', text: 'node ' }, { type: 'blur' }, fresh), { draft: { saved: '', text: '' }, commit: null });
+  assert.equal(fieldStep({ saved: '', text: 'b.js' }, { type: 'blur' }, fresh).commit, 'b.js');
+});
+
 test('ui/settings commit: Esc は打った文字を保存した値に戻し、何も保存しない。保存した値が変わると欄も替わる', () => {
   const step = fieldStep({ saved: 'a', text: 'abc' }, { type: 'key', key: 'Escape', composing: false });
   assert.deepEqual(step, { draft: { saved: 'a', text: 'a' }, commit: null });
