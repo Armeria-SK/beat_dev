@@ -108,7 +108,7 @@ test('3-1a 計画書: beat の外（エクスプローラー）で直された�
   const outside = f.store.view(PROJECT);
   assert.equal(outside.updated_by, 'outside');
   assert.equal(outside.hash, sha('edited by hand'));
-  assert.equal(outside.tainted, false);
+  assert.equal(outside.tainted, true, '4-K: 前が tainted なら外の書き換えも tainted');
   assert.throws(() => f.store.write(PROJECT, 'stale', { by: 'owner', tainted: false, conversationId: null, runId: null }, first.hash), (e: Error & { code?: string }) => e.code === 'changed');
   assert.equal(readFileSync(f.file, 'utf8'), 'edited by hand');
   const owner = f.store.write(PROJECT, 'fresh', { by: 'owner', tainted: false, conversationId: null, runId: null }, outside.hash);
