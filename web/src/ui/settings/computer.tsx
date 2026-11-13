@@ -53,9 +53,11 @@ export function FoldersPanel() {
 }
 
 type Stage = 'preToolUse' | 'postToolUse';
-interface Hook { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask'; enabled?: boolean; builtin?: string }
+interface CommandHook { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask'; enabled?: boolean; builtin?: undefined }
+interface BuiltinHook { matcher: string; builtin: string; always: string[]; afterOutside: string[]; enabled?: boolean; command?: undefined; timeoutMs?: undefined; onError?: undefined }
+type Hook = CommandHook | BuiltinHook;
 
-const hookName = (hook: Hook): string => hook.builtin ?? hook.command.join(' ');
+const hookName = (hook: Hook): string => (hook.builtin !== undefined ? hook.builtin : hook.command.join(' '));
 
 function hooksOf(config: Config, stage: Stage): Hook[] {
   const list = config.tools?.hooks?.[stage];
@@ -72,7 +74,7 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
   const [open, setOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const k = `hook:${stage}:${index}`;
-  const edit = (patch: Partial<Hook>) => void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).map((h, i) => (i === index ? { ...h, ...patch } : h))));
+  const edit = (patch: Partial<Omit<CommandHook, 'builtin'>>) => void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).map((h, i) => (i === index ? { ...h, ...patch } as Hook : h))));
   const busy = ctx.busy !== null;
   const on = hook.enabled !== false;
   return (
@@ -80,7 +82,7 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
       below={(removing || open) && (
         <>
           {removing && <RowConfirm warn={t('ui.set.hooks.removeWarn')} action={t('ui.set.hooks.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).filter((_, i) => i !== index))); }} onKeep={() => setRemoving(false)} />}
-          {open && (
+          {open && hook.builtin === undefined && (
             <div className="ui-set__detail">
               <Row k={`${k}:matcher`} title={t('ui.set.hooks.matcher')} desc={t('ui.set.hooks.matcherDesc')}>
                 <CommitField value={hook.matcher} label={t('ui.set.hooks.matcher')} mono onCommit={matcher => { if (matcher) edit({ matcher }); }} />

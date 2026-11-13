@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, parse as parsePath, resolve } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import type { AskKind } from '../types.ts';
@@ -11,7 +11,7 @@ import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
 import { containsToolConfig, curlConfigFile, isToolConfigPath, npmProjectConfigFile, wgetConfigFile, type Env } from './tool-config.ts';
-import { expandPath, inDependencies, isInside, isSecretPath, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
+import { expandPath, inDependencies, isInside, isSecretPath, placePath, realish, windowsNames, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
 
 export type Decision = 'allow' | 'ask' | 'deny';
@@ -96,11 +96,6 @@ function matchesPrefix(words: readonly string[], prefixes: readonly string[] | u
   if (!prefixes?.length) return undefined;
   const normalized = words.join(' ').toLowerCase();
   return prefixes.find(p => normalized === p.toLowerCase() || normalized.startsWith(`${p.toLowerCase()} `));
-}
-
-// 書き込み先に Windows が無視する末尾の . と空白を落とす（SOUL.md. は SOUL.md を指す）
-function windowsNames(p: string): string {
-  return p.split(sep).map(seg => (seg === '.' || seg === '..' ? seg : seg.replace(/[. ]+$/u, '') || seg)).join(sep);
 }
 
 // expandPath が展開できない変数の形（$1 $0 $@ $* $! $? $$ $^ $: ${1} と非 ASCII の名前）。空になりうるので、含むパスは決まらない

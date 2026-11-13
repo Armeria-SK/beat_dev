@@ -12,10 +12,11 @@ export interface HookPayload {
   cwd: string;
   run_id: string;
   conversation_id: string;
-  paths?: Array<{ path: string; write: boolean }>;
+  paths?: Array<{ path: string; write: boolean; dir?: boolean }>;
   tainted?: boolean;
   run_kind?: string;
   project_root?: string;
+  product_roots?: string[];
 }
 
 export interface HookResult { hook: string; decision: Decision | undefined; reason: string }

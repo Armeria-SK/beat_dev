@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
+import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { placePath } from '../src/tools/hooks/scope.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
@@ -50,7 +51,7 @@ test('Reset: 設定ファイルの控えを書いてから既定に戻し、控�
   assert.deepEqual(now.models, []);
   assert.deepEqual(now.providers, fresh.providers);
   assert.deepEqual(now.routing, fresh.routing);
-  assert.deepEqual(now.tools.hooks, { preToolUse: [], postToolUse: [] });
+  assert.deepEqual(now.tools.hooks, { preToolUse: [DEFAULT_PROTECT_FILES], postToolUse: [] }, '組み込みの protect-files の既定の行は戻す（4-P）');
   assert.deepEqual(now.tools.policies, {});
   assert.deepEqual(now.tools.shell, fresh.tools.shell);
   assert.deepEqual(now.profile, fresh.profile);
@@ -75,7 +76,7 @@ test('Reset の下見（GET）: 戻したあとの設定を返すだけで、何
   assert.equal(readFileSync(s.paths.config, 'utf8'), before);
   assert.deepEqual(s.backups(), []);
   const kinds = accessWidening(s.app.config(), preview.body.config).map(a => a.kind);
-  assert.deepEqual(kinds.sort(), ['hook-removed', 'hook-removed', 'provider-key', 'shell-deny-removed', 'tool-policy-loosened'], '試験の設定には Anthropic が無いので、既定のプロバイダが戻るのも並ぶ。起動で足した組み込みのフック（4-P）が外れるのも並ぶ');
+  assert.deepEqual(kinds.sort(), ['hook-removed', 'provider-key', 'shell-deny-removed', 'tool-policy-loosened'], '試験の設定には Anthropic が無いので、既定のプロバイダが戻るのも並ぶ');
   const done = await s.json('/api/settings/reset', 'POST', {});
   assert.deepEqual(done.body.config, preview.body.config, '下見と実際は同じ');
 });
