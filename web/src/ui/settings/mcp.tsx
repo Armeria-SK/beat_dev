@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, type McpDiffView, type McpEffect, type McpSecretView, type McpServerView, type McpToolView, type McpView } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { useT } from '../../i18n/index.ts';
+import { isComposing } from '../../keys.ts';
 import { accessKey, accessWidening, mcpSecretAccess, type Access } from '../../settings/access.ts';
 import {
   addBody, addProblem, addSpec, emptyAddForm, idFromName, previewAdd, previewServer, previewTool, reasonKey, revealHidden, sameShape, scrubSecrets, summarize, tone,
@@ -163,7 +164,7 @@ function SecretRow({ server, secret, ops }: { server: McpServerView; secret: Mcp
           {entering && (
             <div className="ui-set__form">
               <input className="bt-field bt-field--mono" type="password" aria-label={t('ui.set.mcp.secretLabel', secret.name)} placeholder={t('ui.set.key.paste')} value={value} autoComplete="new-password" spellCheck={false} autoFocus
-                onChange={e => setValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && value) { e.preventDefault(); void send(); } }} />
+                onChange={e => setValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && value && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); void send(); } }} />
               <Button small variant="primary" disabled={busy || !value} onClick={() => void send()}>{t('ui.set.save')}</Button>
               <Button small variant="ghost" onClick={() => { setValue(''); setEntering(false); ctx.cancel(); }}>{t('ui.cancel')}</Button>
             </div>
