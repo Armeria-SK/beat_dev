@@ -67,7 +67,7 @@ function gateMeta(t: T, item: ToolItem, pending: PendingLink | undefined): React
   if (gate.by === 'judge') return <span className="ui-tool__why" title={gate.reason}>{t('ui.tool.judgeReason', gate.reason)}</span>;
   if (gate.by === 'not-parked') return <Pill tone="danger">{t('ui.tool.notRun')}</Pill>;
   const open = pending ? (e: MouseEvent<HTMLAnchorElement>) => { e.preventDefault(); pending.open(gate.id); } : undefined;
-  return <><Pill tone="warn">{t('ui.tool.parked')}</Pill><a className="bt-tool__link" href={routeHash(pending?.route ?? { view: 'pending' })} onClick={open}>{t('ui.tool.openPending', gate.id)}</a></>;
+  return <><Pill tone="warn">{t('ui.tool.parked')}</Pill><a className="bt-tool__link ui-tool__open" href={routeHash(pending?.route ?? { view: 'pending' })} onClick={open}>{t('ui.tool.openPending', gate.id)}</a></>;
 }
 
 function ToolLine({ item, enter, pending }: { item: ToolItem; enter: number | null; pending: PendingLink | undefined }) {
