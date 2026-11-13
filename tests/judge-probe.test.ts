@@ -11,7 +11,8 @@ import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import type { ModelRequest, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
 import { ACTION_BODY_LIMIT, TAINTED_NOTE } from '../src/tools/auto-approve.ts';
 import { guardText, type GuardMessageKey } from '../src/shared/messages/guard.ts';
-import { JUDGE_CASES, JUDGE_CONTROLS, judgeCases, judgeControls, type JudgeLayout } from './fixtures/judge-cases.ts';
+import { sanitizeModelInputText } from '../src/shared/redaction.ts';
+import { JUDGE_CASES, JUDGE_CONTROLS, JUDGE_EXFIL_CASES, judgeCases, judgeControls, judgeExfilCases, type JudgeLayout } from './fixtures/judge-cases.ts';
 import { tempDir } from './helpers.ts';
 
 const provider: ProviderConfig = { id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
@@ -223,6 +224,31 @@ test('判定役の例は、今の見張りに本当にかけると、断られ�
   }
   const key = controls.find(x => x.id === 'control-curl-key')!;
   assert.notEqual(check(key.input.body, key.input.cwd!).decision, 'ask');
+});
+
+test('判定役の持ち出しの例（W-1b）: 20 例とは別に 2 例。どちらも順 5・外を読んだ印・理由は list.redirect・宛先なし・本文は上限の中で鍵の形をしない・id が重ならない', t => {
+  assert.deepEqual(JUDGE_EXFIL_CASES.map(c => [c.id, c.expect]), [['ask-get-exfil-tainted', 'ask'], ['allow-get-public-tainted', 'allow']]);
+  assert.equal(new Set([...JUDGE_CASES, ...JUDGE_CONTROLS, ...JUDGE_EXFIL_CASES].map(c => c.id)).size, JUDGE_CASES.length + JUDGE_CONTROLS.length + 2);
+  const redirect = guardText('en', 'list.redirect', { cmd: 'curl' });
+  for (const c of JUDGE_EXFIL_CASES) {
+    assert.equal(c.step, 5, c.id);
+    assert.equal(c.input.tainted, true, c.id);
+    assert.deepEqual(c.input.reasons, [redirect], c.id);
+    assert.deepEqual(c.input.trusted, [], c.id);
+    assert.ok(c.input.userRequest.trim(), c.id);
+    assert.ok(c.input.body.length <= ACTION_BODY_LIMIT, c.id);
+    assert.match(c.input.body, /^curl -sL /u, c.id);
+    assert.equal(sanitizeModelInputText(c.input.body).text, c.input.body, `${c.id}: 鍵の形をしない（順 1 で断られない）`);
+  }
+  if (process.platform === 'win32') {
+    const layout = judgeLayout(t);
+    const policy = { roots: [{ path: layout.work, mode: 'write' as const }], deny: [] };
+    for (const c of judgeExfilCases(layout)) {
+      const verdict = checkShellCommand(c.input.body, c.input.cwd!, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, env: process.env });
+      assert.equal(verdict.decision, 'ask', c.id);
+      assert.deepEqual(verdict.reasons, c.input.reasons, c.id);
+    }
+  }
 });
 
 test('読めた答えの理由に秘密があっても、行と表には伏せて残す', async () => {
