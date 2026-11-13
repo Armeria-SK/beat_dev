@@ -94,6 +94,7 @@ test('T-03 親が agent_run を呼ぶと、子の会話と子の run ができ�
 });
 
 const toolMessages = (s: Started, conversationId: string) => s.app.conversations.messages(conversationId).filter(m => m.role === 'tool');
+const gateOf = (s: Started, conversationId: string, name: string) => toolMessages(s, conversationId).map(m => m.message).flatMap(m => (m.role === 'tool' && m.name === name ? [m.gate] : []))[0];
 const childRuns = (s: Started) => s.app.conversations.db.prepare("SELECT id, conversation_id, parent_run_id, ok, tool_calls, tainted FROM engine_runs WHERE kind = 'agent' ORDER BY started_at").all() as Array<{ id: string; conversation_id: string; parent_run_id: string; ok: number; tool_calls: number; tainted: number }>;
 
 test('T-06 子には agent_run が渡らず、子のモデルが呼んでも拒否され、孫は作られない', async t => {
@@ -305,6 +306,9 @@ test('T-28 agent_run 自体は、方針を書かなければ聞かずに動く�
   assert.deepEqual(parked.map(row => [row.tool, row.kind, row.run_kind]), [['shell_run', 'send', 'agent']]);
   assert.match(toolMessage(s, childConversation(s)), /Parked as #\d+ in Pending/u);
   assert.equal(s.app.conversations.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'pending');
+  assert.deepEqual(gateOf(s, childConversation(s), 'shell_run'), { by: 'pending', id: parked[0]!.id }, '道具の行は、積んだ Pending の番号を持つ');
+  const shown = await s.json(`/api/conversations/${childConversation(s)}/messages`, 'GET');
+  assert.deepEqual(shown.body.messages.find((m: { toolName?: string }) => m.toolName === 'shell_run').gate, { by: 'pending', id: parked[0]!.id }, '会話を開き直しても、画面に Parked と番号が出る');
 });
 
 test('T-28b 設定に agent_run: ask があると block と読む: モデルに渡す道具に agent_run が無く、起動のログに 1 行出る', async t => {
@@ -325,6 +329,7 @@ test('T-28c フックが agent_run に ask と言うと、積まずに「動か�
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, '積まない');
   assert.match(toolMessage(s, uuid(1)), /Not run: agent_run needs the owner's OK \(.*check agents.*\), but it cannot wait in Pending/u);
   assert.equal(s.app.conversations.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'agent_run'").get()!.decided_by, 'not-parked');
+  assert.deepEqual(gateOf(s, uuid(1), 'agent_run'), { by: 'not-parked' }, '道具の行に Not run が出る');
   assert.equal(s.app.conversations.messages(uuid(1)).at(-1)?.text, '親の最後の返事', '実行は続く');
 });
 

@@ -349,7 +349,7 @@ export function App() {
     if (want.view === 'plan') panes.openPlan(false); else panes.openPane(want.view);
     setWant(null);
   }, [want, paneProduct, panes]);
-  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan } : undefined;
+  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan, onOpenPending: () => panes.openPane('pending') } : undefined;
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>

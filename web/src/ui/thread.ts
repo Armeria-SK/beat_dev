@@ -1,4 +1,4 @@
-import type { ChecklistItem, Message } from '../api.ts';
+import type { ChecklistItem, Message, ToolGate } from '../api.ts';
 import { replyTurns } from '../chat-logic.ts';
 import { formatDateTime, formatDateTimeSmart, timezoneLabel } from '../i18n/index.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
@@ -9,6 +9,7 @@ export interface ToolItem {
   name: string;
   input: string;
   result: ToolResult | null;
+  gate?: ToolGate | undefined;
   running?: { startedAt: number | null; checking: boolean; helperTools: number | null; helperConversation: string | null } | undefined;
 }
 
@@ -86,7 +87,7 @@ export function threadItems({ messages, draft, notices = [] }: ThreadInput): Thr
     if (m.role === 'tool') {
       const rowKey = m.toolCallId ? rowKeyOf(m.toolCallId) : key;
       const input = m.toolCallId ? pending.get(m.toolCallId)?.shift() : undefined;
-      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
+      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) }, ...(m.gate ? { gate: m.gate } : {}) });
     } else if (m.role === 'user') {
       items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
     } else {
@@ -103,7 +104,7 @@ export function threadItems({ messages, draft, notices = [] }: ThreadInput): Thr
   settled.forEach((done, i) => {
     if (savedIdsInRun.has(done.callId) && firstSettled + i < savedRun.length) return;
     const rowKey = rowKeyOf(done.callId);
-    tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null });
+    tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null, ...(done.gate ? { gate: done.gate } : {}) });
   });
   if (draft) {
     if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });

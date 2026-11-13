@@ -14,7 +14,7 @@ import './styles/panes.css';
 const NARROW = '(max-width: 760px)';
 const SIDEBAR = 248;
 
-export interface PanesToggle { open: boolean; onToggle: () => void; onOpenPlan?: ((reveal: boolean) => void) | undefined }
+export interface PanesToggle { open: boolean; onToggle: () => void; onOpenPlan?: ((reveal: boolean) => void) | undefined; onOpenPending?: (() => void) | undefined }
 
 export function PanesButton({ open, onToggle }: PanesToggle) {
   const t = useT();

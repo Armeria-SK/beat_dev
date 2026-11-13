@@ -206,3 +206,5 @@ div.bt-stat:hover { box-shadow: none; transform: none; }
   .ui-sched .bt-btn, .bt-list .bt-row__end .bt-btn { height: 40px; }
   .bt-stat { min-height: 44px; }
 }
+.ui-tool__why { min-width: 0; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; }
+.ui-tool__gate { margin: 0 0 var(--space-2); }

@@ -1,8 +1,8 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { useT } from '../i18n/index.ts';
 import { useNow } from './hooks.ts';
-import { Icon } from './parts.tsx';
-import { routeHash } from './routes.ts';
+import { Icon, Pill } from './parts.tsx';
+import { routeHash, type Route } from './routes.ts';
 import type { ToolItem } from './thread.ts';
 import { elapsedClock, staggerOf, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
 
@@ -59,7 +59,18 @@ function Row({ view, running, meta, children }: { view: ToolRowView; running: bo
   );
 }
 
-function ToolLine({ item, enter }: { item: ToolItem; enter: number | null }) {
+export interface PendingLink { route: Route; open: (id: number) => void }
+
+function gateMeta(t: T, item: ToolItem, pending: PendingLink | undefined): ReactNode {
+  const gate = item.gate;
+  if (!gate) return null;
+  if (gate.by === 'judge') return <span className="ui-tool__why" title={gate.reason}>{t('ui.tool.judgeReason', gate.reason)}</span>;
+  if (gate.by === 'not-parked') return <Pill tone="danger">{t('ui.tool.notRun')}</Pill>;
+  const open = pending ? (e: MouseEvent<HTMLAnchorElement>) => { e.preventDefault(); pending.open(gate.id); } : undefined;
+  return <><Pill tone="warn">{t('ui.tool.parked')}</Pill><a className="bt-tool__link" href={routeHash(pending?.route ?? { view: 'pending' })} onClick={open}>{t('ui.tool.openPending', gate.id)}</a></>;
+}
+
+function ToolLine({ item, enter, pending }: { item: ToolItem; enter: number | null; pending: PendingLink | undefined }) {
   const t = useT();
   const view = toolRow(item.name, item.input, item.result);
   const running = item.running;
@@ -69,12 +80,14 @@ function ToolLine({ item, enter }: { item: ToolItem; enter: number | null }) {
     if (running.checking) meta = t('ui.tool.checking');
     else if (running.helperTools !== null) meta = t('ui.tool.helperTools', running.helperTools);
     else meta = running.startedAt !== null ? t('ui.tool.running', elapsedClock(now - running.startedAt)) : t('ui.tool.runningPlain');
-  } else meta = metaNode(t, view.meta);
+  } else meta = item.gate && item.gate.by !== 'judge' ? gateMeta(t, item, pending) : <>{metaNode(t, view.meta)}{gateMeta(t, item, pending)}</>;
   const helperLink = running?.helperConversation ? <a className="bt-tool__link" href={routeHash({ view: 'chat', id: running.helperConversation })}>{t('ui.tool.openHelper')}</a> : null;
   return (
     <details className={`bt-tool${running ? ' bt-tool--running' : ''}${enterClass(enter)}`} style={enterStyle(enter)} open={running && view.verb === 'helper' ? true : undefined}>
       <Row view={view} running={Boolean(running)} meta={meta}>
         <div className="bt-tool__body">
+          {item.gate?.by === 'judge' && <p className="bt-meta ui-tool__gate">{t('ui.tool.judgeReason', item.gate.reason)}</p>}
+          {item.gate?.by === 'not-parked' && <p className="bt-meta ui-tool__gate">{t('ui.tool.notRunWhy')}</p>}
           {item.result ? <pre className="ui-tool__out">{item.result.text || t('ui.tool.noOutput')}</pre> : <span className="ui-tool__out">{view.target || view.name}</span>}
           {helperLink}
         </div>
@@ -83,11 +96,11 @@ function ToolLine({ item, enter }: { item: ToolItem; enter: number | null }) {
   );
 }
 
-export function ToolGroup({ rows, isNew }: { rows: ToolItem[]; isNew: (key: string) => boolean }) {
+export function ToolGroup({ rows, isNew, pending }: { rows: ToolItem[]; isNew: (key: string) => boolean; pending?: PendingLink | undefined }) {
   const enters = staggerOf(rows.map(r => isNew(r.key)));
   return (
     <div className="bt-tools">
-      {rows.map((item, i) => <ToolLine key={item.key} item={item} enter={enters[i]!} />)}
+      {rows.map((item, i) => <ToolLine key={item.key} item={item} enter={enters[i]!} pending={pending} />)}
     </div>
   );
 }

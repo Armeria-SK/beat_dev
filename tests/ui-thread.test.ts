@@ -213,13 +213,13 @@ test('ui/thread: お知らせ: 静かなものは続けて並べず 1 行にま�
     n({ kind: 'error', errorKind: 'timeout' }),
     n({ kind: 'switch', from: 'a', to: 'b', reason: 'x' }),
     n({ kind: 'stopped' }),
-    n({ kind: 'auto', tool: 'file_read', reason: '' }),
+    n({ kind: 'interrupted' }),
     n({ kind: 'warning', code: 'retrying', message: 'm' }),
   ]);
   assert.deepEqual(rows.map(r => [r.weight, r.notices.map(x => x.kind)]), [
     ['quiet', ['compaction', 'memory']],
     ['warn', ['switch']],
-    ['quiet', ['stopped', 'auto']],
+    ['quiet', ['stopped', 'interrupted']],
     ['warn', ['warning']],
     ['fail', ['error']],
   ]);
@@ -292,4 +292,24 @@ test('ui/thread: plan_write で計画書を書いた実行が終わると、そ�
     ],
   });
   assert.ok(!failed.some(i => i.kind === 'plan'));
+});
+
+test('ui/thread: 保存された道具の結果と、流れている実行の済んだ道具は、どちらも gate（判定役の理由・Pending の番号・Not run）を行に運ぶ', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'go'),
+      msg('assistant', '', { toolCalls: [call('a', 'shell_run', { command: 'ls' }), call('b', 'shell_run', { command: 'npm publish' })] }),
+      msg('tool', 'ok', { toolName: 'shell_run', toolCallId: 'a', gate: { by: 'judge', reason: 'lists files' } }),
+      msg('tool', 'Parked as #12 in Pending', { toolName: 'shell_run', toolCallId: 'b', gate: { by: 'pending', id: 12 } }),
+    ],
+  });
+  const saved = items.find(i => i.kind === 'tools')!;
+  assert.ok(saved.kind === 'tools');
+  assert.deepEqual(saved.rows.map(r => r.gate), [{ by: 'judge', reason: 'lists files' }, { by: 'pending', id: 12 }]);
+  const live = threadItems({
+    messages: [msg('user', 'go', { runId: 'r2' })],
+    draft: { runId: 'r2', conversationId: 'c', modelId: 'm', text: '', settled: [{ callId: 'x', name: 'agent_run', input: '{}', gate: { by: 'not-parked' } }], settledCount: 1 },
+  }).find(i => i.kind === 'tools')!;
+  assert.ok(live.kind === 'tools');
+  assert.deepEqual(live.rows.map(r => r.gate), [{ by: 'not-parked' }]);
 });

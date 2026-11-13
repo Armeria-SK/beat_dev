@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import { prefixLength } from '../engine/tokens.ts';
-import type { RunEvent, ToolCall } from '../engine/types.ts';
+import type { RunEvent, ToolCall, ToolGate } from '../engine/types.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { languageOf } from '../shared/language.ts';
 import { stricterMode, type PermissionMode } from '../shared/permission-mode.ts';
@@ -150,6 +150,7 @@ export interface ToolCallOutcome {
   decision: Decision;
   decidedBy: string;
   invalidArguments: boolean;
+  gate?: ToolGate;
 }
 
 // 文字数の上限（TOOL_OUTPUT_LIMIT）と、残りの余裕から決まるトークンの上限（tokens）の、先に達した方で切る
@@ -205,13 +206,17 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   let autoWhy: string | undefined;
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
     const output = capOutput(outcome.output, language, ctx.outputTokens);
+    const gate: ToolGate | undefined = outcome.decidedBy === 'pending' && approvalId?.startsWith('pending:') ? { by: 'pending', id: Number(approvalId.slice('pending:'.length)) }
+      : outcome.decidedBy === 'not-parked' ? { by: 'not-parked' }
+      : outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' && autoWhy !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300) }
+      : undefined;
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, ctx.runId, ctx.conversationId, call.name, shownInput, outcome.decision, outcome.decidedBy, approvalId ?? null,
       output.isError ? 0 : 1, Date.now() - started, output.content.slice(0, 2000), output.fullRef ?? null, started,
     );
-    deps.emit({ type: 'tool.result', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, ok: !output.isError, decision: outcome.decision, preview: output.content.slice(0, 1500), ...(autoWhy !== undefined && outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' ? { autoReason: autoWhy } : {}) });
-    return { ...outcome, output };
+    deps.emit({ type: 'tool.result', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, ok: !output.isError, decision: outcome.decision, preview: output.content.slice(0, 1500), ...(autoWhy !== undefined && outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' ? { autoReason: autoWhy } : {}), ...(gate ? { gate } : {}) });
+    return { ...outcome, output, ...(gate ? { gate } : {}) };
   };
   const refuse = (decision: Decision, decidedBy: string, message: string, invalid = false) =>
     finish({ output: { content: message, isError: true }, decision, decidedBy, invalidArguments: invalid });

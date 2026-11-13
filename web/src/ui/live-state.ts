@@ -1,21 +1,20 @@
-import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, Task, TaskStatus } from '../api.ts';
+import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, Task, TaskStatus, ToolGate } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
 
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean }
 
-export interface SettledTool { callId: string; name: string; input: string }
+export interface SettledTool { callId: string; name: string; input: string; gate?: ToolGate | undefined }
 export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined; settledCount?: number | undefined; waitingSince?: number | undefined }
 
 const SETTLED_MAX = 20;
-const settle = (d: LiveDraft, callId: string): SettledTool[] | undefined =>
-  (d.activeTool && d.toolCallId === callId ? [...(d.settled ?? []), { callId, name: d.activeTool, input: d.activeInput ?? '' }].slice(-SETTLED_MAX) : d.settled);
+const settle = (d: LiveDraft, callId: string, gate: ToolGate | undefined): SettledTool[] | undefined =>
+  (d.activeTool && d.toolCallId === callId ? [...(d.settled ?? []), { callId, name: d.activeTool, input: d.activeInput ?? '', ...(gate ? { gate } : {}) }].slice(-SETTLED_MAX) : d.settled);
 
 export type RunNotice = { runId: string; key?: string | undefined } & (
   | { kind: 'switch'; from: string; to: string; reason: string }
   | { kind: 'warning'; code: string; message: string; params?: Record<string, unknown> | undefined }
   | { kind: 'compaction'; summarized: number }
-  | { kind: 'auto'; tool: string; reason: string }
   | { kind: 'denied'; tool: string; detail: string }
   | { kind: 'memory'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { kind: 'stopped' }
@@ -149,8 +148,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'tool.call':
       return { state: { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: e.name, activeInput: e.input, toolStartedAt: now, toolCallId: e.callId })) }, effects: [] };
     case 'tool.auto': {
-      const state = { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, autoChecking: e.state === 'checking' })) };
-      return { state: e.state === 'allowed' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'auto', tool: e.name, reason: e.reason ?? '' }) : state, effects: [] };
+      return { state: { ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, autoChecking: e.state === 'checking' })) }, effects: [] };
     }
     case 'agent.state':
       return {
@@ -158,7 +156,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         effects: [],
       };
     case 'tool.result': {
-      const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId), settledCount: (d.settledCount ?? 0) + (d.activeTool && d.toolCallId === e.callId ? 1 : 0), waitingSince: now })) });
+      const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId, e.gate), settledCount: (d.settledCount ?? 0) + (d.activeTool && d.toolCallId === e.callId ? 1 : 0), waitingSince: now })) });
       return {
         state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
         effects: [],

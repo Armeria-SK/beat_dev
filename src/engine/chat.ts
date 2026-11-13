@@ -61,6 +61,13 @@ const TRUNCATION_STRIKES = 2;
 const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
+
+function forModel(message: ChatMessage): ChatMessage {
+  if (message.role !== 'tool' || !message.gate) return message;
+  const copy = { ...message };
+  delete copy.gate;
+  return copy;
+}
 // 人のいない実行（タスク・振り返り・子の担当）を区切る回数
 export const UNATTENDED_ITERATION_CEILING = 100;
 // アプリ全体で同時に動かせる子の担当の数（これを越えたら待たずに busy を返す）
@@ -821,7 +828,7 @@ export class ChatEngine {
         recordTaint();
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
-          role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}),
+          role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
           ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
         }, runId);
         d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
@@ -1074,7 +1081,7 @@ export class ChatEngine {
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), mesh, summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
-    const history = stored.map(m => m.message);
+    const history = stored.map(m => forModel(m.message));
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
     return { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor };

@@ -60,9 +60,9 @@ test('ui/composer-state: 新しい製品の会話のモードの初めの値: �
   assert.equal(firstMode(undefined), 'auto');
 });
 
-test('ui/composer-state: モードの言葉は Auto / Plan（サーバーの auto / plan の順）', () => {
+test('ui/composer-state: モードの言葉は Design の Normal / Plan（サーバーの auto / plan の順）', () => {
   assert.deepEqual(Object.keys(MODE_LABEL), ['auto', 'plan']);
-  assert.deepEqual(Object.values(MODE_LABEL).map(k => t(k)), ['Auto', 'Plan']);
+  assert.deepEqual(Object.values(MODE_LABEL).map(k => t(k)), ['Normal', 'Plan']);
 });
 
 test('ui/composer-state: Enter は送信、Shift+Enter は改行、作成中の Enter は Queue、作成中の Ctrl / ⌘ + Enter は Force。変換中は何もしない', () => {

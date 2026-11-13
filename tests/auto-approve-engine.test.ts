@@ -84,6 +84,11 @@ test('自動承認（エンジン）: 外のメモを読むコマンドは、判
   assert.deepEqual([shell.decision, shell.decided_by, shell.autoReason], ['allow', 'auto-mode', '依頼どおりに外のメモを読むだけです']);
   assert.equal(api.body.toolCalls.find((c: { tool: string }) => c.tool === 'file_read').autoReason, null, 'ほかの呼び出しは null');
   assert.deepEqual(seen.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state), ['checking', 'allowed']);
+  const results = seen.filter(e => e.type === 'tool.result') as Array<{ name: string; gate?: unknown }>;
+  assert.deepEqual(results.map(e => [e.name, e.gate]), [['file_read', undefined], ['shell_run', { by: 'judge', reason: '依頼どおりに外のメモを読むだけです' }]], '判定役が通した行だけ、理由を出来事で運ぶ');
+  const history = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'GET');
+  const gates = (history.body.messages as Array<{ toolName?: string; gate?: unknown }>).filter(m => m.toolName).map(m => [m.toolName, m.gate]);
+  assert.deepEqual(gates, [['file_read', undefined], ['shell_run', { by: 'judge', reason: '依頼どおりに外のメモを読むだけです' }]], '開き直した会話でも、判定役の理由が道具の行に出る');
   assert.equal(s.app.runs.get(sent.body.runId)!.model_id, calls[1]!.model.id);
   assert.equal(s.app.db.prepare('SELECT COUNT(*) AS n FROM engine_runs').get()!.n, 1, '判定役の呼び出しは engine_runs に入れない');
 });

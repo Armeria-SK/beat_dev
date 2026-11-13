@@ -94,10 +94,11 @@ export interface ProjectPatch { name?: string; checkCommand?: string | null; arc
 export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
 export interface FolderList { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
+export type ToolGate = { by: 'judge'; reason: string } | { by: 'pending'; id: number } | { by: 'not-parked' };
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
-  toolName?: string; toolCallId?: string; isError?: boolean;
+  toolName?: string; toolCallId?: string; isError?: boolean; gate?: ToolGate;
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
 }
 // 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す

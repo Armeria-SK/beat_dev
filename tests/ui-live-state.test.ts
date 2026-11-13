@@ -271,3 +271,15 @@ test('ui/live-state: Build のタスク（acceptance_items を持つ）の状態
   const plain = run(EMPTY, ev({ type: 'task.changed', task: { ...task('t1', 'cancelled', 1), project_id: 'p1aaaa', acceptance_items: null } }));
   assert.equal(plain.planRevisions.get('p1aaaa'), undefined, 'Build でないタスクでは読み直さない');
 });
+
+test('ui/live-state: 判定役が通した・Pending に積んだ・動かさなかったは、結果の出来事の gate で道具の行に残り、お知らせの行は足さない', () => {
+  const started = run(EMPTY, ev({ type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }));
+  const step = (s: LiveState, callId: string, gate: { by: 'judge'; reason: string } | { by: 'pending'; id: number } | { by: 'not-parked' } | undefined): LiveState => run(s,
+    ev({ type: 'tool.call', runId: 'r', conversationId: 'c', callId, name: 'shell_run', input: '{}' }),
+    ev({ type: 'tool.auto', runId: 'r', conversationId: 'c', callId, name: 'shell_run', state: 'checking' }),
+    ev({ type: 'tool.auto', runId: 'r', conversationId: 'c', callId, name: 'shell_run', state: 'allowed', reason: 'fine' }),
+    ev({ type: 'tool.result', runId: 'r', conversationId: 'c', callId, name: 'shell_run', ok: true, decision: 'allow', preview: '', ...(gate ? { gate } : {}) }));
+  const s = step(step(step(step(started, 'a', { by: 'judge', reason: 'fine' }), 'b', { by: 'pending', id: 12 }), 'c', { by: 'not-parked' }), 'd', undefined);
+  assert.deepEqual(s.drafts[0]!.settled!.map(x => [x.callId, x.gate]), [['a', { by: 'judge', reason: 'fine' }], ['b', { by: 'pending', id: 12 }], ['c', { by: 'not-parked' }], ['d', undefined]]);
+  assert.equal(s.notices.has('c'), false, '「自動で許した」のお知らせは出さない（理由は道具の行に出る）');
+});
