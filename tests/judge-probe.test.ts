@@ -163,7 +163,7 @@ test('表の数え方: 読めない・切れた・時間切れ・呼べないを
   assert.equal(s.medianMs, 25);
 });
 
-const STEP3_KEYS: readonly GuardMessageKey[] = ['guard.write_persona', 'guard.write_skill', 'guard.write_git', 'guard.write_instructions', 'list.tool_config', 'list.write_ancestor', 'list.secret_in_deps', 'list.git_config', 'list.git_hooks', 'list.git_remote', 'list.git_remote_local', 'file.git', 'file.instructions', 'file.persona', 'file.skill', 'file.skill_auto', 'file.tool_config'];
+const STEP3_KEYS: readonly GuardMessageKey[] = ['guard.write_persona', 'guard.write_skill', 'guard.write_git', 'guard.write_instructions', 'list.tool_config', 'list.write_ancestor', 'list.secret_in_deps', 'list.git_config', 'code.git_config', 'list.git_hooks', 'list.git_remote', 'list.git_remote_local', 'file.git', 'file.instructions', 'file.persona', 'file.skill', 'file.skill_auto', 'file.tool_config'];
 const STEP4_KEYS: readonly GuardMessageKey[] = ['code.file_run', 'code.stdin_run', 'code.cmd_is_file', 'code.arg_file', 'code.project_tool', 'list.command', 'list.external', 'list.git_write'];
 const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const keyOf = (reason: string): GuardMessageKey | undefined => (Object.entries(guardText.tables.en) as Array<[GuardMessageKey, string]>)
@@ -177,6 +177,7 @@ function judgeLayout(t: { after: (fn: () => void) => void }): JudgeLayout {
   for (const dir of [layout.product, layout.shop, join(layout.outside, 'notes'), join(home, 'Documents')]) mkdirSync(dir, { recursive: true });
   writeFileSync(join(layout.product, 'AGENTS.md'), '# rules\n');
   writeFileSync(join(layout.product, 'package.json'), '{"name":"todo"}\n');
+  writeFileSync(join(layout.product, 'map.md'), '# map\n');
   writeFileSync(join(layout.shop, 'package.json'), '{"scripts":{"test":"node t.js"}}\n');
   writeFileSync(join(layout.shop, '.npmrc'), 'registry=https://registry.npmjs.org/\n');
   for (const repo of [layout.product, layout.shop]) {
@@ -191,18 +192,27 @@ test('判定役の例は、今の見張りに本当にかけると、断られ�
   const policy = { roots: [{ path: layout.work, mode: 'write' as const }], deny: [] };
   const env = { ...process.env, HOME: layout.home, USERPROFILE: layout.home, APPDATA: join(layout.home, 'AppData', 'Roaming') };
   const check = (body: string, cwd: string) => checkShellCommand(body, cwd, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, env });
+  const reasonsOf = (v: ReturnType<typeof check>) => v.limits ? [...v.reasons, guardText('en', 'code.limits')] : v.reasons;
+  const step3 = (keys: Array<GuardMessageKey | undefined>) => keys.some(k => k !== undefined && STEP3_KEYS.includes(k));
+  const step4Shape = (cwd: string, v: ReturnType<typeof check>, keys: Array<GuardMessageKey | undefined>) =>
+    [layout.product, layout.shop].some(p => isInside(p, cwd) && v.paths.every(x => x.path !== undefined && isInside(p, x.path)))
+    && keys.filter(k => k !== 'code.limits').every(k => k !== undefined && STEP4_KEYS.includes(k));
   for (const c of judgeCases(layout)) {
     const verdict = check(c.input.body, c.input.cwd!);
     assert.equal(verdict.decision, 'ask', c.id);
-    const reasons = verdict.limits ? [...verdict.reasons, guardText('en', 'code.limits')] : verdict.reasons;
+    const reasons = reasonsOf(verdict);
     assert.deepEqual(reasons, c.input.reasons, c.id);
     assert.deepEqual(approvalPaths(verdict.paths), c.input.paths, c.id);
     const keys = reasons.map(keyOf);
     assert.ok(keys.every(k => k !== undefined), `${c.id}: ${reasons}`);
-    for (const key of keys) assert.ok(!STEP3_KEYS.includes(key!), `${c.id}: ${key}`);
-    const inProduct = [layout.product, layout.shop].some(p => isInside(p, c.input.cwd!) && verdict.paths.every(x => x.path !== undefined && isInside(p, x.path)));
-    assert.ok(!(inProduct && keys.every(k => STEP4_KEYS.includes(k!))), `${c.id} has the step-4 shape`);
+    assert.ok(!step3(keys), `${c.id}: ${keys}`);
+    assert.ok(!step4Shape(c.input.cwd!, verdict, keys), `${c.id} has the step-4 shape`);
   }
+  const mapRun = check('.\\map.md', layout.product);
+  assert.equal(mapRun.decision, 'ask');
+  assert.ok(step4Shape(layout.product, mapRun, reasonsOf(mapRun).map(keyOf)), `map.md: ${reasonsOf(mapRun)}`);
+  const hooksPath = check('git config core.hooksPath hooks', layout.product);
+  assert.ok(step3(reasonsOf(hooksPath).map(keyOf)), `hooksPath: ${hooksPath.reasons}`);
   const controls = judgeControls(layout);
   for (const id of ['control-git-add', 'control-git-commit']) {
     const c = controls.find(x => x.id === id)!;
@@ -213,6 +223,16 @@ test('判定役の例は、今の見張りに本当にかけると、断られ�
   }
   const key = controls.find(x => x.id === 'control-curl-key')!;
   assert.notEqual(check(key.input.body, key.input.cwd!).decision, 'ask');
+});
+
+test('読めた答えの理由に秘密があっても、行と表には伏せて残す', async () => {
+  const adapter = fakeAdapter(() => ({ text: `{"decision":"allow","reason":"fine ${SECRET}"}` }));
+  const cases = [JUDGE_CASES.find(c => c.expect === 'allow')!];
+  const rows = await runProbe({ model, provider, adapter, cases, runs: 1, modes: ['a'], maxTokens: 400, timeoutMs: 2000, secrets: [SECRET] });
+  assert.equal(rows[0]!.decision, 'allow');
+  assert.ok(!rows[0]!.reason.includes(SECRET) && rows[0]!.reason.includes('[REDACTED]'), rows[0]!.reason);
+  assert.ok(!rows[0]!.raw.includes(SECRET));
+  assert.ok(!renderReport(rows, { cases, controls: [], title: 't', notes: [] }).includes(SECRET));
 });
 
 test('表に書く提供元の 1 行: 送り先の URL の利用者名・パスワードと鍵を伏せる', () => {
