@@ -39,6 +39,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
   const [query, setQuery] = useState('');
   const close = useRef<HTMLButtonElement>(null);
   const main = useRef<HTMLDivElement>(null);
+  const modal = useRef<HTMLElement>(null);
   const current: CategoryId = isCategory(section) ? section : DEFAULT_CATEGORY;
 
   const pendingRef = useRef<Pending | null>(null);
@@ -97,15 +98,16 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
   const guard = useCallback((go: () => void) => { if (hasUnsaved(dirty.current)) setLeave(() => go); else go(); }, []);
   const tryClose = useCallback(() => guard(onClose), [guard, onClose]);
   const tryOpen = useCallback((id: string) => guard(() => openCategory(id)), [guard]);
+  const askLeave = useCallback((e: { key: string; defaultPrevented: boolean; preventDefault: () => void }) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !hasUnsaved(dirty.current)) return;
+    e.preventDefault();
+    setLeave(() => onClose);
+  }, [onClose]);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || !hasUnsaved(dirty.current)) return;
-      e.preventDefault();
-      setLeave(() => onClose);
-    };
+    const onKey = (e: KeyboardEvent) => { if (!(e.target instanceof Node && modal.current?.contains(e.target))) askLeave(e); };
     addEventListener('keydown', onKey, true);
     return () => removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  }, [askLeave]);
   const discard = () => { const go = leave; dirty.current.clear(); clearUnsaved('settings:'); setLeave(null); go?.(); };
 
   const ctx = useMemo<SetCtx | null>(() => (view ? {
@@ -142,7 +144,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
   return (
     <div className="ui-overlay">
       <div className="bt-scrim" onClick={e => { if (e.target === e.currentTarget) tryClose(); }}>
-        <section className="bt-modal" role="dialog" aria-modal="true" aria-labelledby="ui-settings-title">
+        <section ref={modal} className="bt-modal" role="dialog" aria-modal="true" aria-labelledby="ui-settings-title" onKeyDown={askLeave}>
           <header className="bt-modal__bar">
             <h2 className="bt-modal__title" id="ui-settings-title">{t('ui.nav.settings')}</h2>
             <span className="bt-meta ui-set__hint">{t('ui.set.escHint')}</span>
