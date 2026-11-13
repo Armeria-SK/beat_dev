@@ -19,7 +19,7 @@ import { protectedTouchOf } from '../hooks/protected-touch.ts';
 import { selfTarget } from '../hooks/self-port.ts';
 import { outboundText } from '../../shared/messages/outbound.ts';
 import { pendingText } from '../../shared/messages/pending.ts';
-import type { Remote } from '../../projects/remotes.ts';
+import { parseRemotes, type Remote } from '../../projects/remotes.ts';
 import type { ShellKind } from '../hooks/shell-lex.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../shell/git-env.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
@@ -89,11 +89,7 @@ function hookFingerprints(dir: string | null | undefined, language: Language): s
 
 function remotesOf(ctx: ToolContext): Remote[] | undefined {
   if (!ctx.project) return undefined;
-  try {
-    const list = JSON.parse(ctx.services?.projects?.get(ctx.project.id)?.remotes ?? '[]') as unknown;
-    if (!Array.isArray(list)) return [];
-    return list.flatMap(r => (r && typeof r.name === 'string' && typeof r.url === 'string' ? [{ name: r.name, url: r.url, pushUrl: typeof r.pushUrl === 'string' ? r.pushUrl : null }] : []));
-  } catch { return []; }
+  try { return parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes); } catch { return []; }
 }
 
 function shellOutbound(command: string, statements: readonly StatementFacts[], cwd: string, ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, language: Language, created: Set<string>): Outbound | undefined {

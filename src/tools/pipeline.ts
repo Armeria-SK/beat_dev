@@ -15,6 +15,7 @@ import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { autoDecide, humanOnlyOf, mayClassify, type AutoGate, type ClassifierPrompt, type HumanOnly, type JudgeCall, type JudgeLimits } from './auto-approve.ts';
 import { ownerKeysOf, POLICY_KEYS, refusedKeysOf } from './hooks/decision-order.ts';
 import type { PendingKind, PendingStore } from '../pending/store.ts';
+import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
 import { outboundOfCall, type Outbound } from './hooks/outbound.ts';
@@ -93,6 +94,11 @@ export const unattendedRun = (ctx: Pick<ToolContext, 'kind' | 'parent'>): boolea
 function judgeLimitsFor(ctx: ToolContext, deps: PipelineDeps): JudgeLimits {
   const base = (deps.judgeLimits ?? JUDGE_LIMITS)[unattendedRun(ctx) ? 'unattended' : 'chat'];
   return deps.autoTimeoutMs !== undefined ? { ...base, answerMs: deps.autoTimeoutMs } : base;
+}
+
+function trustedOf(ctx: ToolContext): string[] {
+  if (!ctx.project) return [];
+  try { return parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes).flatMap(r => [r.url, ...(r.pushUrl ? [r.pushUrl] : [])]); } catch { return []; }
 }
 
 const WINDOWS = process.platform === 'win32';
@@ -384,7 +390,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
         autoEvent('checking');
         const verdict = await autoDecide({
-          userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, paths: first?.paths ?? [], tainted,
+          userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
         }, deps.autoClassify, ctx.signal, judgeLimitsFor(ctx, deps));
         if (ctx.signal.aborted) {
           autoEvent('asked');

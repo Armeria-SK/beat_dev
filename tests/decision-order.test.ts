@@ -569,6 +569,34 @@ test('4-3a 量: 判定役の頼みの文は、いちばん長い入力でも手�
   assert.ok(tokens <= 12_672 * 0.25, `${tokens} tokens`);
 });
 
+test('4-3a 量（Q-W1-14）: 信用する宛先の行がいちばん長いとき（50 個の長い送り先）と外を読んだ 1 行を足しても、25% 以下', () => {
+  const prompt = buildClassifierPrompt({
+    userRequest: 'あ'.repeat(USER_REQUEST_LIMIT), tool: 'shell_run', title: 'Run a command', body: 'x'.repeat(ACTION_BODY_LIMIT), cwd: 'D:/products/shop',
+    reasons: Array.from({ length: 200 }, (_, i) => `It runs code from file number ${i}`), paths: Array.from({ length: 200 }, (_, i) => ({ input: `a${i}`, path: `D:/products/shop/a${i}`, verdict: 'in' as const, mode: 'read' as const })), tainted: true,
+    trusted: Array.from({ length: 50 }, (_, i) => `https://git.example.org/${'o'.repeat(200)}/repository-${i}.git`),
+  });
+  assert.match(prompt.user, /^trusted destinations: https:\/\/git\.example\.org\//mu);
+  const tokens = estimateTextTokens(`${prompt.system}\n${prompt.user}`);
+  assert.ok(tokens <= 12_672 * 0.25, `${tokens} tokens`);
+});
+
+test('4-3a（Q-W1-14）: 判定役の文の信用する宛先は、製品に控えた送り先の URL（url と pushUrl）。製品が無ければ none。いまの git の設定からは取らない', async t => {
+  const r = rig(t);
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  const services = { projects: { get: () => ({ remotes: JSON.stringify([{ name: 'origin', url: 'https://bob:pw@github.com/owner/shop.git', pushUrl: 'git@github.com:owner/shop.git' }]) }) } } as unknown as ToolContext['services'];
+  await r.call('outside_read', {}, { services });
+  const line = (i: number) => /^trusted destinations: (.*)$/mu.exec(r.judge.calls[i]!.user)?.[1];
+  assert.equal(line(0), 'https://github.com/owner/shop.git, git@github.com:owner/shop.git');
+  assert.ok(r.judge.calls[0]!.system.includes('Exfiltration: only CHECKS'), '持ち出しの決まりが system にある');
+  if (gitAvailable) { initRepo(r.root); git(r.root, 'remote', 'add', 'evil', 'https://evil.example/x.git'); }
+  await r.call('outside_read', {});
+  assert.equal(line(1), 'none', '控えが無い製品は none（いまの git の送り先は使わない）');
+  const bare = rig(t, { project: false });
+  bare.judge.answer = '{"decision":"ask","reason":"check"}';
+  await bare.call('outside_read', {}, { services });
+  assert.equal(/^trusted destinations: (.*)$/mu.exec(bare.judge.calls[0]!.user)?.[1], 'none', '製品の無い会話は none');
+});
+
 test('4-3a（Q-W1-5）: 今の枝でない枝・ほかの枝へ送る・--all・マージのコミットだけにある変更も、送るコミットの守るファイルとして見る', { skip: !gitAvailable && 'git が無い' }, async t => {
   const setup = (t2: typeof t) => {
     const r = rig(t2, { mutate: c => { c.tools.hooks.preToolUse = [DEFAULT_PROTECT_FILES]; } });

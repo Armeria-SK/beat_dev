@@ -9,7 +9,7 @@ const MAX_CONFIG_BYTES = 1_048_576;
 const MAX_REMOTES = 50;
 const MAX_TEXT = 2000;
 
-const withoutSecrets = (url: string): string => {
+export const withoutSecrets = (url: string): string => {
   const parts = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)(?:[^/?#]*@)?([^?#]*)/u.exec(url);
   return parts ? `${parts[1]}${parts[2]}` : url;
 };
@@ -43,6 +43,14 @@ export function remoteKey(url: string): string {
   }
   const clean = path.split('/').filter(Boolean).join('/').replace(/\.git$/u, '');
   return `${scheme}://${host}/${clean}`;
+}
+
+export function parseRemotes(raw: string | undefined): Remote[] {
+  try {
+    const list = JSON.parse(raw ?? '[]') as unknown;
+    if (!Array.isArray(list)) return [];
+    return list.flatMap(r => (r && typeof r.name === 'string' && typeof r.url === 'string' ? [{ name: r.name, url: r.url, pushUrl: typeof r.pushUrl === 'string' ? r.pushUrl : null }] : []));
+  } catch { return []; }
 }
 
 export function readRemotes(root: string): Remote[] {
