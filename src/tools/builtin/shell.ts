@@ -11,7 +11,7 @@ import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals
 import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
-import { outboundOf, type Outbound } from '../hooks/outbound.ts';
+import { outboundOf, placesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv } from '../hooks/outbound-env.ts';
 import { outboundText } from '../../shared/messages/outbound.ts';
 import type { Remote } from '../../projects/remotes.ts';
@@ -48,6 +48,10 @@ function selfHostsOf(config: AppConfig): string[] {
 
 // 子プロセスの環境。git には、ホーム・システムの設定からコードを動かせる項目を落とした設定だけを読ませる（git-env.ts。実行のたびに新しい置き場所に作る）。
 // 洗い出せない git（2.32 より古い）、または作業フォルダの中の git は、その版を調べるために動かさず、洗い出していないものとして扱う
+export function droppedGitEnv(config: AppConfig): string[] {
+  return config.tools.shell.envAllow.filter(name => /^git_/iu.test(name));
+}
+
 function childEnvFor(shell: AppConfig['tools']['shell'], cwd: string, powershell: boolean): { env: Record<string, string>; gitIsolated: boolean; gitExe?: string } {
   const base = Object.fromEntries(Object.entries(scrubEnv(shell.envAllow)).filter(([key]) => !/^git_/iu.test(key)));
   const gitExe = findExecutable('git', base, cwd, { powershell });
@@ -87,11 +91,16 @@ function remotesOf(ctx: ToolContext): Remote[] | undefined {
   } catch { return []; }
 }
 
-function shellOutbound(command: string, statements: readonly StatementFacts[], cwd: string, ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, language: Language): Outbound | undefined {
+function shellOutbound(command: string, statements: readonly StatementFacts[], cwd: string, ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, language: Language, created: Set<string>): Outbound | undefined {
   if (!statements.length) return { kind: 'send', reason: outboundText(language, 'send.unknown_command', { cmd: command.trim().slice(0, 80) }), targets: [] };
   const outEnv = gitOutboundEnv({
     productRoot: ctx.project?.root, remotes: remotesOf(ctx), dataDir: ctx.paths.data, env, gitExe: gitExe ?? '', language,
-    isCreated: path => { try { return ctx.isCreated?.(path) === true; } catch { return false; } },
+    isCreated: path => {
+      let yes = false;
+      try { yes = ctx.isCreated?.(path) === true; } catch { yes = false; }
+      if (yes) created.add(path);
+      return yes;
+    },
   });
   try { return outboundOf({ tool: 'shell', statements }, outEnv); } catch (error) {
     return { kind: 'send', reason: outboundText(language, 'send.unknown_command', { cmd: `${command.trim().slice(0, 60)} (${(error as Error).message.slice(0, 60)})` }), targets: [] };
@@ -120,8 +129,10 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   }));
   const paths = approvalPaths(verdict.paths);
   const pathsMore = approvalPathsMore(verdict.paths);
-  const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, cwd.cwd, ctx, childEnv, gitExe, language);
-  const effects = { sends: verdict.sends, removes: verdict.removes, writes: verdict.writes, cwd: cwd.cwd, ...(outbound ? { outbound } : {}) };
+  const created = new Set<string>();
+  const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, cwd.cwd, ctx, childEnv, gitExe, language, created);
+  const places = placesOf(verdict.statements, cwd.cwd);
+  const effects = { sends: verdict.sends, removes: verdict.removes, writes: verdict.writes, cwd: cwd.cwd, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));

@@ -16,7 +16,7 @@ import { autoDecide, humanOnlyOf, mayClassify, type AutoGate, type ClassifierPro
 import type { PendingKind, PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
-import { outboundOf, type Outbound, type OutboundEnv } from './hooks/outbound.ts';
+import { outboundOfCall, type Outbound } from './hooks/outbound.ts';
 import { isInside, placePath, realish, windowsNames, writeApprovalKind } from './hooks/scope.ts';
 import { hasToolConfigName } from './hooks/tool-config.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
@@ -81,15 +81,6 @@ export interface PipelineDeps {
   productRoots?: (() => string[]) | undefined;
 }
 
-const NO_GIT: Omit<OutboundEnv, 'language'> = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
-
-export function outboundOfCall(tool: ToolDef, check: PreCheck | undefined, language: Language): Outbound | undefined {
-  if (check?.outbound) return check.outbound;
-  if (tool.mcp) return outboundOf({ tool: 'mcp', sends: check?.sends, removes: check?.removes }, { ...NO_GIT, language });
-  if (tool.submits) return outboundOf({ tool: 'browser', submits: true }, { ...NO_GIT, language });
-  return undefined;
-}
-
 const WINDOWS = process.platform === 'win32';
 
 export function hookPaths(tool: ToolDef, check: PreCheck | undefined): NonNullable<HookPayload['paths']> {
@@ -106,9 +97,35 @@ export function hookPaths(tool: ToolDef, check: PreCheck | undefined): NonNullab
   return [...out.values()];
 }
 
-function safeProductRoots(deps: PipelineDeps): string[] {
+export function safeProductRoots(deps: Pick<PipelineDeps, 'productRoots'>): string[] {
   try { return deps.productRoots?.() ?? []; } catch { return []; }
 }
+
+export function readFilesOf(check: PreCheck | undefined): string[] {
+  const writes = new Set(check?.writes ?? []);
+  return [...new Set((check?.paths ?? []).flatMap(p => (p.path && !writes.has(p.path) ? [p.path] : [])))];
+}
+
+interface ParkRequest {
+  tool: ToolDef; args: unknown; ctx: ToolContext; pending: PendingStore; first: PreCheck | undefined; cwd: string;
+  kind: PendingKind; reason: string; checks: string[]; outbound: Outbound | undefined; tainted: boolean;
+}
+
+async function parkCall(r: ParkRequest): Promise<number> {
+  const { ctx, first, outbound } = r;
+  const sendOrDelete = outbound?.kind === 'send' || outbound?.kind === 'delete' ? outbound : undefined;
+  const parked = await r.pending.park({
+    tool: r.tool.name, input: r.args, cwd: r.cwd, workspace: ctx.workspace, kind: r.kind, reason: r.reason, checks: r.checks, check: first,
+    ...(sendOrDelete ? { outbound: { kind: sendOrDelete.kind, reason: sendOrDelete.reason, targets: sendOrDelete.targets } } : {}),
+    ...(sendOrDelete?.kind === 'delete' ? { targets: sendOrDelete.targets } : {}),
+    files: readFilesOf(first), places: first?.places, created: first?.created,
+    runId: ctx.runId, runKind: ctx.kind, conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId ?? null, projectId: ctx.project?.id ?? null, tainted: r.tainted,
+  });
+  return parked.id;
+}
+
+const WINDOW_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['exec', 'write']);
+const opensWindow = (tool: ToolDef): boolean => tool.replayable !== false && (WINDOW_EFFECTS.has(tool.effect) || tool.writesFiles === true);
 
 export interface ToolCallOutcome {
   output: ToolOutput;
@@ -284,12 +301,12 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     reasons.push(guardText(language, 'pipeline.auto_egress'));
   }
   const hookAsks: string[] = [];
+  const callSummary = tool.summarize?.(args, language);
+  const callCwd = first?.cwd ?? (callSummary?.cwd ? resolve(ctx.workspace, callSummary.cwd) : ctx.workspace);
   for (const hook of ctx.config.tools.hooks.preToolUse) {
     if (hook.enabled === false || !matches(hook.matcher, tool.name) || decision === 'deny') continue;
-    const summary = tool.summarize?.(args, language);
-    const cwd = first?.cwd ?? (summary?.cwd ? resolve(ctx.workspace, summary.cwd) : ctx.workspace);
     const result = await runCommandHook(hook, {
-      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(cwd) : cwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(callCwd) : callCwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
       paths: hookPaths(tool, first), tainted, run_kind: ctx.kind, ...(ctx.project?.root ? { project_root: ctx.project.root } : {}), product_roots: safeProductRoots(deps),
     }, ctx.signal, language);
     if (result.decision && worst(decision, result.decision) !== decision) { decision = result.decision; decidedBy = `hook:${result.hook}`; }
@@ -308,22 +325,14 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       if (ctx.kind === 'review') return refuse('deny', 'pending', toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
       if (tool.replayable === false) return finish({ output: { content: pendingText('en', 'not_parked', { tool: tool.name, reason: parkAs.reason }), isError: true }, decision: 'ask', decidedBy: 'not-parked', invalidArguments: false });
       if (!deps.pending) return refuse('deny', 'pending', pendingText('en', 'no_pending', { reason: parkAs.reason }));
-      const summaryCwd = tool.summarize?.(args, language).cwd;
-      const cwd = first?.cwd ?? (summaryCwd ? resolve(ctx.workspace, summaryCwd) : ctx.workspace);
-      if (/^[\\/]{2}/u.test(cwd)) return refuse('deny', 'pending', pendingText('en', 'network_cwd', { path: cwd }));
-      let parked;
+      if (/^[\\/]{2}/u.test(callCwd) || /^[\\/]{2}/u.test(ctx.workspace)) return refuse('deny', 'pending', pendingText('en', 'network_cwd', { path: callCwd }));
+      let parkedId: number;
       try {
-        parked = await deps.pending.park({
-          tool: tool.name, input: args, cwd, kind: parkAs.kind, reason: parkAs.reason, checks: parkReasons, check: first,
-          ...(sendOrDelete ? { outbound: { kind: sendOrDelete.kind, reason: sendOrDelete.reason, targets: sendOrDelete.targets } } : {}),
-          ...(sendOrDelete?.kind === 'delete' ? { targets: sendOrDelete.targets } : {}),
-          ...(sendOrDelete?.kind === 'send' ? { files: (first?.paths ?? []).flatMap(p => (p.path && !(first?.writes ?? []).includes(p.path) ? [p.path] : [])) } : {}),
-          runId: ctx.runId, runKind: ctx.kind, conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId ?? null, projectId: ctx.project?.id ?? null, tainted,
-        });
+        parkedId = await parkCall({ tool, args, ctx, pending: deps.pending, first, cwd: callCwd, kind: parkAs.kind, reason: parkAs.reason, checks: parkReasons, outbound, tainted });
       } catch (error) {
         return refuse('deny', 'pending', pendingText('en', 'park_failed', { detail: (error as Error).message }));
       }
-      return finish({ output: { content: pendingText('en', 'parked', { id: parked.id, reason: parkAs.reason }) }, decision: 'ask', decidedBy: 'pending', invalidArguments: false }, `pending:${parked.id}`);
+      return finish({ output: { content: pendingText('en', 'parked', { id: parkedId, reason: parkAs.reason }) }, decision: 'ask', decidedBy: 'pending', invalidArguments: false }, `pending:${parkedId}`);
     }
   }
 
@@ -352,7 +361,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const taskNotOwner = decision === 'ask' && deps.autoClassify !== undefined && ctx.kind === 'task' && mayClassify({ ...autoGate, humanOnly }) && !(deps.lastUserRequest?.() ?? '').trim();
   if (taskNotOwner) reasons.push(guardText(language, 'pipeline.auto_task_not_owner'));
   if (decision === 'ask' && deps.autoClassify && !taskNotOwner && mayClassify({ ...autoGate, humanOnly })) {
-    const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
+    const summary = callSummary ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
       deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
     autoEvent('checking');
@@ -397,7 +406,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 承認のあとの再判定で比べて一致した bind（実行の直前の探し直しで、道具がもう一度比べる）
   let comparedBind: string | undefined;
   if (decision === 'ask') {
-    const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
+    const summary = callSummary ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
       cwd: summary.cwd, reasons, details, onceOnly, everyTime, kinds: [...askKinds], ...(ctx.parent ? { hostConversationId: ctx.parent.conversationId, childConversationId: ctx.conversationId, childTitle: ctx.parent.title } : {}), preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore, grantFolder: grantTarget?.folder,
@@ -430,7 +439,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   // ── 実行 ──
   let output: ToolOutput;
-  const closeWindow = tool.replayable === false ? undefined : ctx.toolWindow?.();
+  const closeWindow = opensWindow(tool) ? ctx.toolWindow?.() : undefined;
   try { output = await tool.execute(args, ctx, { approvedOnce, callId: call.id, ...(approvedOnce && first ? { check: first } : {}), ...(comparedBind !== undefined ? { bind: comparedBind } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   finally { closeWindow?.(); }

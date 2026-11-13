@@ -10,6 +10,7 @@ import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import { approvalShownIn } from '../tools/approvals.ts';
+import type { PendingCounts } from '../pending/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
 
 const MAX_PATH_CHARS = 4096;
@@ -51,9 +52,8 @@ function remotesOf(raw: string): Array<{ name: string; url: string; push_url: st
   } catch { return []; }
 }
 
-export function projectWire(app: App, row: ProjectRow) {
+export function projectWire(app: App, row: ProjectRow, pending: PendingCounts = app.pending.counts(0)) {
   const counts = app.projects.counts(row.id);
-  const pending = app.pending.counts(0);
   const inProject = (conversationId: string) => app.conversations.projectOf(conversationId) === row.id;
   return {
     id: row.id, name: row.name, root: row.root, check_command: row.check_command, scout_mode: row.scout_mode, remotes: remotesOf(row.remotes),
@@ -80,7 +80,8 @@ export function registerProjectRoutes(router: Router, app: App): void {
 
   router.add('GET', '/api/projects', ({ res, url }) => {
     const archived = ['1', 'true'].includes(url.searchParams.get('archived') ?? '');
-    sendJson(res, 200, { projects: app.projects.list({ archived }).map(row => projectWire(app, row)) });
+    const pending = app.pending.counts(0);
+    sendJson(res, 200, { projects: app.projects.list({ archived }).map(row => projectWire(app, row, pending)) });
   });
 
   router.add('POST', '/api/projects', async ({ req, res }) => {

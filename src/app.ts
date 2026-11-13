@@ -24,7 +24,7 @@ import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
 import { ApprovalBroker, approvalPublic, approvalShownIn } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
-import { shellRun } from './tools/builtin/shell.ts';
+import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
 import { planWrite } from './tools/builtin/plan.ts';
 import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts';
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
@@ -63,9 +63,9 @@ import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
 import { PendingStore, type PendingRow } from './pending/store.ts';
+import { pendingNote } from './pending/notes.ts';
 import { parentOf, replayAction } from './pending/replay.ts';
 import { pendingText } from './shared/messages/pending.ts';
-import { neutralizeFence } from './shared/fence.ts';
 import { isLocalPinned } from './engine/local-model.ts';
 import { ToolRegistry } from './tools/registry.ts';
 import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
@@ -328,6 +328,7 @@ export class App {
   #warnIgnoredPolicies(config: AppConfig): void {
     for (const name of ignoredPolicyNames(config)) this.log(`[WARN] Ignoring "${name}" in tools.policies: this tool cannot have a policy (it is needed to run tasks)`);
     for (const name of askReadAsBlock(config)) this.log(`[WARN] ${name} is set to Ask in tools.policies, but it cannot wait in Pending, so it is treated as Block. Set it to Allow or Block in Settings`);
+    for (const name of droppedGitEnv(config)) this.log(`[WARN] Ignoring "${name}" in tools.shell.envAllow: GIT_* variables are never passed to commands`);
   }
 
   // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
@@ -428,10 +429,9 @@ export class App {
   }
 
   #pendingScopeWaits(key: string): boolean {
-    return this.pending.list({ status: 'waiting' }).some(view => {
-      const row = this.pending.row(view.id);
-      return row?.status === 'waiting' && this.#pendingScope(row).key === key;
-    });
+    const taskId = key.startsWith('pending:task:') ? key.slice('pending:task:'.length) : null;
+    const conversationId = taskId ? this.tasks.get(taskId)?.conversation_id ?? null : key.startsWith('pending:conv:') ? key.slice('pending:conv:'.length) : null;
+    return this.pending.waitingAround(conversationId, taskId).some(row => this.#pendingScope(row).key === key);
   }
 
   #pendingChanged(id: number): void {
@@ -451,21 +451,10 @@ export class App {
         return;
       }
       if (!this.#pendingScopeWaits(scope.key)) this.notifications.settle('approval_needed', { dedupKey: scope.key });
-      if (row.status === 'cancelled') return;
-      const title = (view.title ?? row.tool).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ').slice(0, 200);
-      const code = row.exit_code === null ? '-' : String(row.exit_code);
-      const params = { id: row.id, title, code };
-      const head = row.status === 'ran' ? 'ran' : row.status === 'failed' ? 'failed' : row.status === 'stale' ? 'stale' : 'rejected';
-      if (task) {
-        const event = head === 'rejected' && row.reject_reason ? pendingText('en', 'event_rejected_reason', { ...params, reason: row.reject_reason }) : pendingText('en', `event_${head}`, params);
-        this.tasks.event(task.id, 'pending', 'owner', event);
-      }
-      const lines = [pendingText('en', `note_${head}`, params)];
-      if (head === 'rejected' && row.reject_reason) lines.push(pendingText('en', 'note_reason', { reason: row.reject_reason }));
-      const output = head === 'ran' || head === 'failed' || head === 'stale' ? row.output_preview : null;
-      const fetched = (head === 'ran' || head === 'failed') && output !== null;
-      if (output) lines.push(pendingText('en', 'note_output'), '<<<', neutralizeFence(output), '>>>');
-      this.engine.addNote(scope.conversationId, lines.join('\n'), fetched);
+      const note = pendingNote(row, view);
+      if (!note) return;
+      if (task) this.tasks.event(task.id, 'pending', 'owner', note.event);
+      this.engine.addNote(scope.conversationId, note.text, note.fetched);
     } catch (error) { this.log(`[ERROR] Failed to record the result of pending item #${id}: ${(error as Error).message}`); }
   }
 

@@ -64,6 +64,11 @@ function identity(stat: BigIntStats): string {
   return stat.isDirectory() ? `d:${stat.ino}:${stat.birthtimeNs}` : `f:${stat.ino}:${stat.birthtimeNs}:${stat.mtimeNs}:${stat.size}`;
 }
 
+export function identityOf(path: string): string | undefined {
+  const stat = statOf(path);
+  return stat ? identity(stat) : undefined;
+}
+
 function badWindowsName(path: string): boolean {
   if (/:/u.test(path.replace(/^[A-Za-z]:/u, '')) || /[?*"<>|]/u.test(path)) return true;
   return path.split(/[\\/]/u).some(part => part !== '.' && part !== '..' && /[. ]$/u.test(part));

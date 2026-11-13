@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, type Stats } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { lstat, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { findGitDir, inspectRepo } from '../tools/hooks/git-repo.ts';
@@ -21,6 +21,8 @@ export interface PathFact {
   newest?: number;
   more?: boolean;
   unverifiable?: true;
+  hash?: string;
+  real?: string;
 }
 
 export interface GitFact { head: string; branch: string; status: string }
@@ -73,7 +75,10 @@ export async function pathFact(path: string, deep: boolean): Promise<PathFact> {
   return { ...fact, files: inside.files, size: inside.size, newest: Math.max(st.mtimeMs, inside.newest), ...(inside.more ? { more: true } : {}) };
 }
 
-const DESTINATION_FILES = ['.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.curlrc', '_curlrc', '.wgetrc', '.netrc', '_netrc'];
+const DESTINATION_FILES = [
+  '.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.curlrc', '_curlrc', '.wgetrc', '.netrc', '_netrc',
+  join('.cargo', 'config'), join('.cargo', 'config.toml'), 'NuGet.Config', 'nuget.config', join('.hg', 'hgrc'), 'bunfig.toml', '.bunfig.toml',
+];
 const DESTINATION_DEPTH = 40;
 const DESTINATION_MAX_BYTES = 1_048_576;
 
@@ -84,24 +89,74 @@ function fileMark(path: string): string {
   try { return `${path}\0${createHash('sha256').update(readFileSync(path)).digest('hex')}`; } catch { return `${path}\0unreadable`; }
 }
 
-export function destinationFacts(cwd: string): string {
+export function destinationFacts(cwd: string, places: readonly string[] = []): string {
   const marks: string[] = [];
-  let dir = cwd;
-  for (let i = 0; i < DESTINATION_DEPTH; i++) {
-    for (const name of DESTINATION_FILES) marks.push(fileMark(join(dir, name)));
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
+  for (const start of new Set([cwd, ...places])) {
+    let dir = start;
+    for (let i = 0; i < DESTINATION_DEPTH; i++) {
+      for (const name of DESTINATION_FILES) marks.push(fileMark(join(dir, name)));
+      const up = dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+    if (!isRemotePath(start)) {
+      const found = findGitDir(start);
+      if (found) {
+        marks.push(fileMark(join(found.gitDir, 'config')), fileMark(join(found.commonDir, 'config')), fileMark(join(found.gitDir, 'config.worktree')));
+      }
+    }
   }
   const home = homedir();
   for (const name of DESTINATION_FILES) marks.push(fileMark(join(home, name)));
-  if (!isRemotePath(cwd)) {
-    const found = findGitDir(cwd);
-    if (found) {
-      marks.push(fileMark(join(found.gitDir, 'config')), fileMark(join(found.commonDir, 'config')), fileMark(join(found.gitDir, 'config.worktree')));
+  if (process.env.APPDATA) marks.push(fileMark(join(process.env.APPDATA, 'NuGet', 'NuGet.Config')));
+  return createHash('sha256').update([...new Set(marks)].sort().join('\n')).digest('hex');
+}
+
+const CONTENT_MAX_BYTES = 4 * 1_048_576;
+
+function contentHash(path: string, st: Stats): string {
+  if (st.size > CONTENT_MAX_BYTES) return `big:${st.size}:${st.mtimeMs}:${st.ino}`;
+  try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return 'unreadable'; }
+}
+
+function folderHash(dir: string): { hash: string; more: boolean } {
+  const entries: string[] = [];
+  const stack = [dir];
+  let more = false;
+  while (stack.length && !more) {
+    const current = stack.pop()!;
+    let names: string[];
+    try { names = readdirSync(current); } catch { more = true; break; }
+    for (const name of names) {
+      if (entries.length >= WALK_LIMIT) { more = true; break; }
+      const path = join(current, name);
+      let st: Stats;
+      try { st = lstatSync(path); } catch { more = true; break; }
+      entries.push(`${relative(dir, path)}\0${typeOf(st)}\0${st.size}\0${st.mtimeMs}`);
+      if (st.isDirectory()) stack.push(path);
     }
   }
-  return createHash('sha256').update([...new Set(marks)].join('\n')).digest('hex');
+  return { hash: createHash('sha256').update(entries.sort().join('\n')).digest('hex'), more };
+}
+
+export function boundFacts(paths: readonly string[]): PathFact[] {
+  return paths.map(path => {
+    if (isRemotePath(path)) return { path, exists: false, unverifiable: true } as PathFact;
+    let st: Stats;
+    try { st = statSync(path); } catch { return { path, exists: false }; }
+    let real: string;
+    try { real = realpathSync.native(path); } catch { real = path; }
+    if (st.isDirectory()) {
+      const inside = folderHash(path);
+      return { path, exists: true, type: 'dir', real, hash: inside.hash, ...(inside.more ? { more: true } : {}) };
+    }
+    return { path, exists: true, type: st.isFile() ? 'file' : 'other', size: st.size, real, hash: st.isFile() ? contentHash(path, st) : `other:${st.ino}` };
+  });
+}
+
+export function boundChanged(before: PathFact, now: PathFact): boolean {
+  if (before.more || now.more || before.unverifiable || now.unverifiable) return true;
+  return before.exists !== now.exists || before.type !== now.type || before.hash !== now.hash || before.real !== now.real || before.size !== now.size;
 }
 
 export function fileFacts(paths: readonly string[]): PathFact[] {

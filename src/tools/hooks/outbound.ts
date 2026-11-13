@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
+import type { PreCheck, ToolDef } from '../types.ts';
 import { outboundText, type OutboundMessageKey } from '../../shared/messages/outbound.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import { longOption, pushProblem, type PushEnv } from './push-target.ts';
@@ -426,4 +427,33 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
   if (deletes && sends) return { kind: 'delete', reason: `${say(deletes)} / ${say(sends)}`, targets };
   const first = (deletes ?? sends)!;
   return { kind: first.kind, reason: say(first), targets };
+}
+
+const NO_GIT: OutboundEnv = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
+
+export function outboundOfCall(tool: Pick<ToolDef, 'mcp' | 'submits'>, check: PreCheck | undefined, language: Language): Outbound | undefined {
+  if (check?.outbound) return check.outbound;
+  if (tool.mcp) return outboundOf({ tool: 'mcp', sends: check?.sends, removes: check?.removes }, { ...NO_GIT, language });
+  if (tool.submits) return outboundOf({ tool: 'browser', submits: true }, { ...NO_GIT, language });
+  return undefined;
+}
+
+const PLACE_FLAGS = ['--prefix', '-C', '--cwd', '--dir', '--directory', '--manifest-path', '--project', '--working-directory'];
+
+export function placesOf(statements: readonly StatementFacts[], cwd: string): string[] {
+  const out = new Set<string>();
+  for (const st of flatten(statements)) {
+    const base = st.cwd ?? cwd;
+    out.add(base);
+    for (let i = 0; i < st.words.length; i++) {
+      const text = st.words[i]!.text;
+      const flag = PLACE_FLAGS.find(f => text === f || text.startsWith(`${f}=`));
+      if (!flag) continue;
+      const value = text === flag ? st.words[i + 1] : { text: text.slice(flag.length + 1), dynamic: st.words[i]!.dynamic };
+      if (!value || value.dynamic || !value.text) continue;
+      const place = resolve(base, value.text);
+      out.add(flag === '--manifest-path' ? dirname(place) : place);
+    }
+  }
+  return [...out];
 }

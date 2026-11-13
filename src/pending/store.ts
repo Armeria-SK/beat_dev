@@ -8,7 +8,8 @@ import type { PreviewFile } from '../tools/approvals.ts';
 import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { PreCheck, RunKind, ToolDef } from '../tools/types.ts';
-import { destinationFacts, fileFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
+import { identityOf } from '../projects/created.ts';
+import { boundFacts, destinationFacts, fileFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
 export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
 export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
@@ -21,6 +22,7 @@ export interface ParkInput {
   tool: string;
   input: unknown;
   cwd: string;
+  workspace?: string | undefined;
   kind: PendingKind;
   reason: string;
   checks?: string[] | undefined;
@@ -29,6 +31,8 @@ export interface ParkInput {
   preview?: PreviewFile[] | undefined;
   targets?: string[] | undefined;
   files?: string[] | undefined;
+  places?: string[] | undefined;
+  created?: string[] | undefined;
   runId: string;
   runKind: RunKind;
   conversationId: string;
@@ -53,7 +57,12 @@ export interface PendingState {
   outbound?: ParkedOutbound;
   sent?: PathFact[];
   destination?: string;
+  workspace?: string;
+  places?: string[];
+  created?: CreatedMark[];
 }
+
+export interface CreatedMark { path: string; id: string }
 
 export interface PendingParts { body: string | null; cwd: string | null; extra: string | null }
 
@@ -239,18 +248,23 @@ export class PendingStore {
     const masked = Math.max(0, marks(shown) - marks(raw));
     const targets = (input.targets ?? []).map(t => resolve(input.cwd, t));
     const files = (input.files ?? []).map(f => resolve(input.cwd, f));
+    const places = [...new Set((input.places ?? []).map(p => resolve(input.cwd, p)))];
+    const created = (input.created ?? []).flatMap(path => { const id = identityOf(path); return id ? [{ path, id }] : []; });
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {
       title,
       parts,
       cwdReal: realCwd(input.cwd),
+      ...(input.workspace !== undefined ? { workspace: input.workspace } : {}),
+      ...(places.length ? { places } : {}),
+      ...(created.length ? { created } : {}),
       ...(input.check ? { recheck: recheckOf(input.check, toolMask) } : {}),
       ...(input.kind === 'delete' ? { snapshot: await takeSnapshot(input.cwd, targets, this.#o.dataDir) } : {}),
       ...(preview?.length ? { preview: preview.map(p => ({ ...p, text: redactSecrets(toolMask(p.text)) })) } : {}),
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
-      ...(files.length ? { sent: fileFacts(files) } : {}),
-      ...(input.kind === 'send' ? { destination: destinationFacts(input.cwd) } : {}),
+      ...(files.length ? { sent: boundFacts(files) } : {}),
+      ...(input.kind === 'send' ? { destination: destinationFacts(input.cwd, places) } : {}),
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(
@@ -308,6 +322,12 @@ export class PendingStore {
     const order = filter.status === 'waiting' ? 'id DESC' : 'decided_at DESC, id DESC';
     const rows = this.#db.prepare(`SELECT * FROM pending_actions WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ${limit}`).all(...args) as unknown as PendingRow[];
     return rows.map(row => this.#view(row));
+  }
+
+  waitingAround(conversationId: string | null, taskId: string | null): PendingRow[] {
+    return this.#db.prepare(`SELECT * FROM pending_actions WHERE status = 'waiting' AND (task_id = ? OR conversation_id = ?
+      OR conversation_id IN (SELECT c.id FROM conversations c JOIN engine_runs r ON c.parent_run_id = r.id WHERE r.conversation_id = ?)
+      OR run_id IN (SELECT child.id FROM engine_runs child JOIN engine_runs r ON child.parent_run_id = r.id WHERE r.conversation_id = ?))`).all(taskId, conversationId, conversationId, conversationId) as unknown as PendingRow[];
   }
 
   counts(since: number): PendingCounts {

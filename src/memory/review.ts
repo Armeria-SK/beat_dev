@@ -125,6 +125,7 @@ interface ReviewText {
   transcriptHeading: string;
   truncated: string;
   user: string;
+  note: string;
   tool: (name: string) => string;
   line: (label: string, body: string) => string;
 }
@@ -168,6 +169,7 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     transcriptHeading: '# Record of the conversation',
     truncated: '… (truncated)',
     user: 'User',
+    note: 'beat note (not from the user)',
     tool: name => `Tool ${name}`,
     line: (label, body) => `[${label}] ${body}`,
   },
@@ -179,8 +181,9 @@ export function transcriptOf(messages: readonly StoredMessage[], maxChars = 15_0
   const text = REVIEW_TEXT[language];
   const lines: string[] = [];
   for (const m of messages) {
-    const label = m.role === 'user' ? text.user : m.role === 'assistant' ? 'beat' : text.tool(m.message.role === 'tool' ? m.message.name : '');
-    const body = m.role === 'tool' ? clip(m.text, 300, language) : clip(m.text, 3000, language);
+    const note = m.message.role === 'user' && m.message.note !== undefined;
+    const label = note ? text.note : m.role === 'user' ? text.user : m.role === 'assistant' ? 'beat' : text.tool(m.message.role === 'tool' ? m.message.name : '');
+    const body = m.role === 'tool' || note ? clip(m.text, 300, language) : clip(m.text, 3000, language);
     if (body.trim()) lines.push(text.line(label, body));
   }
   // 新しい方を優先して残す

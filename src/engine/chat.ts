@@ -87,6 +87,7 @@ const MAX_COMPACTIONS_PER_RUN = 5;
 // 1 つの会話で、実行中に待たせておける発言の数
 const MAX_PENDING_MESSAGES = 10;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
+const COMPACT_NOTE_CHARS = 300;
 // 実行を始めるとき、添付の有無を見るために読み戻す発言の数（最後の返事がこの中に無ければ、確かめきれないので承認制の側に倒す）
 const TAINT_SCAN_LIMIT = 500;
 
@@ -296,18 +297,27 @@ export class ChatEngine {
   // - 最後の返事を、読み出す発言の数（TAINT_SCAN_LIMIT）の中に見つけられない。添付の有無を確かめきれないので、承認制の側に倒す
   // - 前のチャットの実行が、外から読んだまま、最後まで返事を書かずに終わった（止めた・失敗・取り消し・道具の上限のまとめ）。Web を読んだ分もこれで持ち越す。やり直し・続きは、その実行のやり直し・続きとみなす
   // - 外から読んだ実行が書いた作業の一覧が残っている（一覧は毎回の system に入るため、一覧を空にするまで、その会話の実行は「外から読んだ」で始める）
+  #sinceReply(conversationId: string): { after: ChatMessage[]; unknown: boolean } {
+    const stored = this.#d.conversations.messages(conversationId, TAINT_SCAN_LIMIT);
+    const after: ChatMessage[] = [];
+    for (let i = stored.length - 1; i >= 0; i--) {
+      const message = stored[i]!.message;
+      if (message.role === 'assistant' && !message.toolCalls?.length) return { after, unknown: false };
+      after.unshift(message);
+    }
+    return { after, unknown: stored.length >= TAINT_SCAN_LIMIT };
+  }
+
   #taintFromHistory(runId: string, conversationId: string): void {
     const language = languageOf(this.#d.config());
     const sources: string[] = [];
-    const stored = this.#d.conversations.messages(conversationId, TAINT_SCAN_LIMIT);
-    let replied = false;
-    for (let i = stored.length - 1; i >= 0; i--) {
-      const message = stored[i]!.message;
-      if (message.role === 'assistant' && !message.toolCalls?.length) { replied = true; break; }
-      if (message.role === 'user') sources.unshift(...(message.attachments ?? []).map(a => engineText(language, 'attachment.taint', { name: a.name })));
-      if (message.role === 'user' && message.note && message.fetched) sources.unshift(pendingText(language, 'taint_note'));
+    const since = this.#sinceReply(conversationId);
+    for (const message of since.after) {
+      if (message.role !== 'user') continue;
+      sources.push(...(message.attachments ?? []).map(a => engineText(language, 'attachment.taint', { name: a.name })));
+      if (message.note && message.fetched) sources.push(pendingText(language, 'taint_note'));
     }
-    if (!replied && stored.length >= TAINT_SCAN_LIMIT) sources.push(engineText(language, 'taint.unknown'));
+    if (since.unknown) sources.push(engineText(language, 'taint.unknown'));
     if (this.#previousRunCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
     if (this.#checklistCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.checklist'));
     if (sources.length) this.#initialTaint.set(runId, sources);
@@ -325,6 +335,7 @@ export class ChatEngine {
   }
 
   #saveNote(conversationId: string, note: { content: string; fetched: boolean }, runId?: string): void {
+    if (note.fetched) this.#d.conversations.markTainted(conversationId);
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: note.content, generated: true, note: 'pending', ...(note.fetched ? { fetched: true as const } : {}) }, runId);
     this.#d.bus.publish({ type: 'message.saved', runId: runId ?? '', conversationId, messageId: saved.id, role: 'user' });
   }
@@ -350,13 +361,7 @@ export class ChatEngine {
   }
 
   #noteSinceReply(conversationId: string): boolean {
-    const stored = this.#d.conversations.messages(conversationId, TAINT_SCAN_LIMIT);
-    for (let i = stored.length - 1; i >= 0; i--) {
-      const message = stored[i]!.message;
-      if (message.role === 'assistant' && !message.toolCalls?.length) return false;
-      if (message.role === 'user' && message.note && message.fetched) return true;
-    }
-    return false;
+    return this.#sinceReply(conversationId).after.some(m => m.role === 'user' && m.note !== undefined && m.fetched === true);
   }
 
   #checklistCarriesTaint(conversationId: string): boolean {
@@ -1195,7 +1200,7 @@ export class ChatEngine {
   async #compact(c: { route: Route; adapter: ProviderAdapter; runId: string; conversationId: string; removed: StoredMessage[]; previous: string | null; capacity: number; signal: AbortSignal }): Promise<boolean> {
     const d = this.#d;
     const language = languageOf(d.config());
-    const transcript = c.removed.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
+    const transcript = c.removed.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, m.message.role === 'user' && m.message.note !== undefined ? COMPACT_NOTE_CHARS : 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
     const prompt = compactPrompt({ previous: c.previous, transcript }, language);
     const maxOutputTokens = Math.min(2000, c.route.model.maxOutputTokens);
     if (estimateTextTokens(prompt) * 1.15 + maxOutputTokens > c.capacity * CONTEXT_FILL_RATIO) return false;

@@ -18,6 +18,7 @@ import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
+import { replayAction } from '../src/pending/replay.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { which } from '../src/tools/shell/runner.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -60,15 +61,30 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
     writeFileSync(files('tmp/SOUL.md'), 'evil persona');
   };
   seed();
-  return { paths, call, approvals, files, pending };
+  return { paths, call, approvals, files, pending, db, registry, config: parsed };
 }
 
+const PARKS: Record<string, 'send' | 'delete'> = {
+  'Remove-Item a.txt': 'delete', 'Clear-Content a.txt': 'delete', 'Get-ChildItem *.md | Remove-Item': 'delete', 'Remove-Item -Recurse -Force *': 'delete',
+  'Get-ChildItem -Recurse -File | Clear-Content': 'delete', 'Write-Output "$(Remove-Item a.txt)"': 'delete', 'Get-ChildItem *.txt | ForEach-Object { "$(Remove-Item $_.FullName)" }': 'delete',
+  '$a = @(1,2); $a[$(Remove-Item x; 0)] = 5': 'delete', '$a = @(1,2); $a[$(Remove-Item x; 0)] += 5': 'delete', '$a = @(1,2); $a[($(Remove-Item x; 0))] = 5': 'delete',
+  '$a = @(1,2); $a[0..$(Remove-Item x; 1)] = 5': 'delete', 'rm -rf -- *': 'delete', "Remove-Item 'SOUL.*'": 'delete',
+  'cd gr; git push ../victim HEAD:refs/heads/x': 'send', 'cd gr; git push victim HEAD:refs/heads/x': 'send', 'cd gr; git push up HEAD:refs/heads/x': 'send',
+  'cd gr && git push ../victim HEAD:refs/heads/x': 'send', 'cd gr && git push victim HEAD:refs/heads/x': 'send', 'cd gr && git push up HEAD:refs/heads/x': 'send',
+};
+
 async function expectAsk(s: ReturnType<typeof setup>, command: string): Promise<void> {
+  const want = PARKS[command];
   const pending = s.call(command);
-  let parked = false;
-  void pending.then(outcome => { parked = outcome.decidedBy === 'pending'; });
-  for (let i = 0; i < 300 && !parked && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  if (parked) return;
+  if (want) {
+    const outcome = await pending;
+    assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（${outcome.output.content}）`);
+    assert.equal(s.approvals.pending().length, 0, `${command}: 札も出た`);
+    const row = s.pending.list({ status: 'waiting' }).find(r => r.parts.body === command || r.shown.includes(command));
+    assert.equal(row?.kind, want, `${command}: 積んだ行の種類`);
+    return;
+  }
+  for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
   const request = s.approvals.pending()[0];
   assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
   assert.equal(request.onceOnly, true, `${command}: 今回だけの確かめでない`);
@@ -1170,11 +1186,16 @@ for (const shell of ['powershell', 'bash'] as const) {
     for (const command of ps ? ["Set-Content victim/hooks/pre-receive 'x'", "'x' > victim/hooks/pre-receive", "Copy-Item notes.md victim/hooks/pre-receive"] : ['echo x > victim/hooks/pre-receive', 'cp notes.md victim/hooks/pre-receive', 'tee victim/hooks/update < notes.md']) await expectAsk(s, command);
     assert.equal(readFileSync(hookFile, 'utf8'), before, '裏のリポジトリのフックが書き換わった');
     assert.equal(existsSync(join(victim, 'hooks', 'update')), false);
-    // 送る操作なので、札でなく Pending に積まれ、フックは動かない（持ち主が Pending で承認するまで）
+    // 送る操作なので、札でなく Pending に積まれ、フックは動かない。持ち主が Pending で承認すれば動き、フォルダのフックも動く（承認が関所になっている）
     const pushed = await s.call(toUp);
     assert.equal(pushed.decidedBy, 'pending');
     assert.equal(existsSync(marker), false, '積んだだけで、フォルダのフックが動いた');
-    assert.ok(s.pending.list({ status: 'waiting' }).every(row => row.kind === 'send'));
+    const row = s.pending.list({ status: 'waiting' }).find(r => r.shown.includes(toUp))!;
+    assert.equal(row.kind, 'send');
+    assert.match(row.checks.join(' '), /points to a folder on this PC/u);
+    const ran = await replayAction(s.pending.claim(row.id), { db: s.db, store: s.pending, registry: s.registry, config: () => s.config, paths: s.paths, conversationExists: () => true });
+    assert.equal(ran.status, 'ran', ran.output);
+    assert.equal(existsSync(marker), true, '承認したのに、フォルダのフックが動かない');
   });
 }
 

@@ -10,13 +10,15 @@ import { pendingText } from '../shared/messages/pending.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
 import { runCommandHook } from '../tools/hooks/command-hook.ts';
-import { placePath } from '../tools/hooks/scope.ts';
+import { placePath, windowsNames } from '../tools/hooks/scope.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import type { PreCheck, RunKind, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
-import { outboundOfCall } from '../tools/pipeline.ts';
-import { compareSnapshot, destinationFacts, fileFacts, takeSnapshot, type Change } from './snapshot.ts';
+import { outboundOfCall } from '../tools/hooks/outbound.ts';
+import { hookPaths } from '../tools/pipeline.ts';
+import { identityOf } from '../projects/created.ts';
+import { boundChanged, boundFacts, compareSnapshot, destinationFacts, takeSnapshot, type Change } from './snapshot.ts';
 import { newChecks, parkedOutbound, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
 
 export interface ReplayDeps {
@@ -42,6 +44,7 @@ export interface ReplayOutcome {
 
 const RUN_KINDS: readonly RunKind[] = ['chat', 'task', 'review', 'agent'];
 const EXTRA_SECONDS = 60;
+const WINDOWS = process.platform === 'win32';
 
 const matches = (matcher: string, name: string): boolean => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
 
@@ -59,13 +62,17 @@ export function parentOf(db: DatabaseSync, row: PendingRow): ToolContext['parent
   return { runId: parentRunId, conversationId: parent.conversation_id, kind: parent.kind as RunKind, title: conversation?.title ?? '', ...(task ? { taskId: task.id } : {}) };
 }
 
-async function hookRefusal(tool: ToolDef, args: unknown, ctx: ToolContext, cwd: string): Promise<string | undefined> {
+interface HookFacts { check: PreCheck | undefined; tainted: boolean; productRoots: string[] }
+
+async function hookRefusal(tool: ToolDef, args: unknown, ctx: ToolContext, facts: HookFacts): Promise<string | undefined> {
+  let summaryCwd: string | undefined;
+  try { summaryCwd = tool.summarize?.(args as never, 'en').cwd; } catch { summaryCwd = undefined; }
+  const cwd = facts.check?.cwd ?? (summaryCwd ? resolve(ctx.workspace, summaryCwd) : ctx.workspace);
   for (const hook of ctx.config.tools.hooks.preToolUse) {
     if (hook.enabled === false || !matches(hook.matcher, tool.name)) continue;
-    let summaryCwd: string | undefined;
-    try { summaryCwd = tool.summarize?.(args as never, 'en').cwd; } catch { summaryCwd = undefined; }
     const result = await runCommandHook(hook, {
-      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: summaryCwd ? resolve(cwd, summaryCwd) : cwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(cwd) : cwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      paths: hookPaths(tool, facts.check), tainted: facts.tainted, run_kind: ctx.kind, ...(ctx.project?.root ? { project_root: ctx.project.root } : {}), product_roots: facts.productRoots,
     }, ctx.signal, 'en');
     if (result.decision === 'deny') return result.reason || result.hook;
   }
@@ -102,6 +109,10 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     const productRoots = [...(deps.projects?.list() ?? []), ...(deps.projects?.list({ archived: true }) ?? [])].map(p => p.root);
     const policy = buildPolicy(config, deps.paths, project, productRoots);
     if (placePath(resolve(row.cwd), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: row.cwd }));
+    const workspace = state.workspace ?? row.cwd;
+    if (placePath(resolve(workspace), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: workspace }));
+    if (!statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) return end('failed', pendingText('en', 'cwd_missing', { path: workspace }));
+    const created = new Map((state.created ?? []).map(c => [c.path, c.id]));
     const timeout = AbortSignal.timeout((config.tools.shell.maxTimeoutSec + EXTRA_SECONDS) * 1000);
     const signal = deps.signal ? AbortSignal.any([timeout, deps.signal]) : timeout;
     const runId = randomUUID();
@@ -111,34 +122,38 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     };
     const parent = parentOf(deps.db, row);
     const ctx: ToolContext = {
-      runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace: row.cwd,
+      runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace,
       home: defaultWorkspace(buildPolicy(config, deps.paths, undefined, productRoots), deps.paths),
       ...(project ? { project } : {}),
       taint: row.tainted === 1 ? { tainted: true, sources: [pendingText('en', 'taint_parked')] } : { tainted: false, sources: [] },
       conversationTainted,
+      isCreated: path => created.has(path) && identityOf(path) === created.get(path),
       ...(row.task_id ? { task: { id: row.task_id, control: { outcome: 'none' as const } } } : {}),
       ...(parent ? { parent } : {}),
       log: deps.log ?? (() => undefined),
       services: deps.services?.(),
     };
 
-    const refused = await hookRefusal(tool, args, ctx, row.cwd);
+    const recheck = async (): Promise<PreCheck | undefined> => {
+      if (!tool.preCheck) return undefined;
+      try {
+        const checked = tool.preCheck(args as never, ctx);
+        return checked instanceof Promise ? await checked : checked;
+      } catch (error) { return { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
+    };
+    const forHook = await recheck();
+    if (forHook?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: forHook.reasons.join('\n- ') }));
+    const refused = await hookRefusal(tool, args, ctx, { check: forHook, tainted: conversationTainted(), productRoots });
     if (refused !== undefined) return end('failed', pendingText('en', 'hook_denied', { reason: refused }));
+    const again = await recheck();
+    if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
+    if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(row.cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
 
     let changes: Change[] = [];
     if (row.kind === 'delete') {
       const before = state.snapshot ?? { git: null, paths: [] };
       changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
     }
-
-    let again: PreCheck | undefined;
-    if (tool.preCheck) {
-      try {
-        const checked = tool.preCheck(args as never, ctx);
-        again = checked instanceof Promise ? await checked : checked;
-      } catch (error) { again = { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
-    }
-    if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
     const mask = (text: string): string => (tool.redact ? tool.redact(text) : text);
     const outboundNow = outboundOfCall(tool, again, 'en');
     if (outboundNow?.kind === 'deny') return end('failed', pendingText('en', 'denied', { reasons: outboundNow.reason }));
@@ -148,20 +163,24 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const fresh = newChecks(state.recheck, again, mask);
       if (fresh.length) return end('stale', pendingText('en', 'changed_checks', { reasons: fresh.join('\n- ') }));
     }
+    if (!state.outbound && (outboundNow?.kind === 'send' || outboundNow?.kind === 'delete')) {
+      return end('stale', pendingText('en', 'changed_target', { before: 'none', now: JSON.stringify(parkedOutbound({ kind: outboundNow.kind, reason: outboundNow.reason, targets: outboundNow.targets }, mask)) }));
+    }
     if (state.outbound) {
       const before = JSON.stringify(state.outbound);
       const now = outboundNow ? JSON.stringify(parkedOutbound({ kind: outboundNow.kind, reason: outboundNow.reason, targets: outboundNow.targets }, mask)) : 'none';
       if (now !== before) return end('stale', pendingText('en', 'changed_target', { before, now }));
     }
     if (state.destination !== undefined) {
-      const now = destinationFacts(row.cwd);
+      const now = destinationFacts(row.cwd, state.places ?? []);
       if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
     }
     if (state.sent?.length) {
-      const now = fileFacts(state.sent.map(f => f.path));
+      const now = boundFacts(state.sent.map(f => f.path));
       const moved = state.sent.flatMap((was, i) => {
         const is = now[i]!;
-        return was.exists === is.exists && was.size === is.size && was.mtime === is.mtime && was.type === is.type ? [] : [pendingText('en', 'change_line', { what: was.path, before: String(was.exists ? was.size : 'none'), now: String(is.exists ? is.size : 'none') })];
+        const mark = (fact: typeof was): string => (fact.exists ? `${fact.size ?? fact.type ?? ''} ${(fact.hash ?? '').slice(0, 12)}`.trim() : 'none');
+        return boundChanged(was, is) ? [pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) })] : [];
       });
       if (moved.length) return end('stale', pendingText('en', 'changed_files', { changes: moved.join('\n') }));
     }

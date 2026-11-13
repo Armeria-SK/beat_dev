@@ -73,6 +73,8 @@ export interface PreCheck {
   outbound?: Outbound;
   writes?: string[];
   cwd?: string;
+  places?: string[];
+  created?: string[];
 }
 
 // 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
