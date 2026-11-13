@@ -20,6 +20,7 @@ export const agentRun: ToolDef<AgentRunInput> = {
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task'],
+  replayable: false,
   summarize: (input, language) => ({
     title: toolText(language, 'summary.agent_run'),
     body: input.tools && input.tools.length > 0 ? `${input.task}\n\n${input.tools.join(', ')}` : input.task,

@@ -144,7 +144,7 @@ test('マイグレーション 16: 振り返りの会話が、材料にした会
 });
 
 test('マイグレーション 9〜24 を続けて当てる: main の段階（8）の DB から更新しても、振り返りの会話の材料が埋まり、前からあるすべての会話に外から読んだ印が付く。16 は 15 のあとに、17（スキルの登録簿）は 16 のあとに、18（子の担当の親）は 17 のあとに足される', t => {
-  assert.equal(MIGRATIONS.length, 24);
+  assert.ok(MIGRATIONS.length >= 24);
   assert.match(String(MIGRATIONS[23]), /untrusted-input/u);
   assert.match(String(MIGRATIONS[22]), /CREATE TABLE acceptance_changes/u);
   assert.match(String(MIGRATIONS[21]), /acceptance_items/u);
@@ -160,7 +160,7 @@ test('マイグレーション 9〜24 を続けて当てる: main の段階（8�
   for (const [id, kind] of [['src', 'chat'], ['rv', 'task']] as const) main.prepare('INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, ?, 1, 1)').run(id, kind);
   main.prepare("INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, review_conversation_id, created_at) VALUES ('idle', 'k1', 'src', 'rv', 1)").run();
   main.close();
-  const db = openDatabase(path, MIGRATIONS);
+  const db = openDatabase(path, MIGRATIONS.slice(0, 24));
   try {
     const row = db.prepare('SELECT source_conversation_id AS c, ever_tainted AS tainted, permission_mode AS mode FROM conversations WHERE id = ?').get('rv') as { c: string | null; tainted: number; mode: string };
     assert.deepEqual({ ...row }, { c: 'src', tainted: 1, mode: 'normal' });

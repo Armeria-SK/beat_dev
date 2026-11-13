@@ -43,6 +43,7 @@ export interface ToolOutput {
   fetched?: boolean;
   // この結果に添える画像（image_view）。エンジンが道具の結果の発言に持たせて保存し、画像を読めるモデルにだけ渡す。失敗（isError）の結果の画像は保存しない。tool.result の出来事・tool_calls の行・output_preview には入れない（文字だけ）
   images?: ImageRef[];
+  exitCode?: number;
 }
 
 export interface PreCheck {
@@ -170,6 +171,8 @@ export interface ToolDef<I = any> {
   // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さず（planAllows）、毎回の承認が要る。6a にはこれを付ける道具は無い
   submits?: true;
   planOk?: true;
+  replayable?: false;
+  redact?: (text: string) => string;
   projectOnly?: true;
   acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };

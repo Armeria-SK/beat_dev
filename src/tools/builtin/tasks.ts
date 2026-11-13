@@ -133,6 +133,7 @@ export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_actio
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
+  replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
@@ -147,6 +148,7 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
   input: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4000 }), notify: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
+  replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
@@ -161,6 +163,7 @@ export const askUser: ToolDef<{ question: string }> = {
   input: Type.Object({ question: Type.String({ minLength: 1, maxLength: 1500 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
+  replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running_chat'), isError: true };

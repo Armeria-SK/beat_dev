@@ -68,12 +68,12 @@ test('移し替え 24: 前からある、外を読んだ実行・会話の書い
   const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');
   seedV23(path);
-  assert.equal(MIGRATIONS.length, 24);
+  assert.ok(MIGRATIONS.length >= 24);
   assert.match(String(MIGRATIONS[23]), /untrusted-input/u);
 
   const db = openDatabase(path, MIGRATIONS, { backupDir: backups });
   try {
-    assert.equal(version(db), 24);
+    assert.equal(version(db), MIGRATIONS.length);
     for (const id of ['t-note', 't-run', 't-gone', 'tpl']) assert.equal(count(db, id), 1, id);
     assert.equal(count(db, 't-erased'), 1, '会話を前に消した実行（会話の分からない実行）の書いた経過');
     assert.equal(count(db, 't-orphan'), 1, '予定を前に消した実行のタスク（予定の本文を写したまま証拠が無い）');
@@ -105,7 +105,7 @@ test('移し替え 24: 前からある、外を読んだ実行・会話の書い
   assert.match(readdirSync(backups).join(','), /-v23-.+\.db/u);
   const again = openDatabase(path, MIGRATIONS, { backupDir: backups });
   try {
-    assert.equal(version(again), 24);
+    assert.equal(version(again), MIGRATIONS.length);
     assert.equal(readdirSync(backups).length, 1);
   } finally { again.close(); }
 });
