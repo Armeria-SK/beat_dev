@@ -40,12 +40,17 @@ export interface Recheck { decision: Decision; kinds: string[]; reasons: string[
 
 export interface PendingState {
   title?: string;
+  parts?: PendingParts;
   snapshot?: Snapshot;
   preview?: PreviewFile[];
   recheck?: Recheck;
   cwdReal?: string | null;
   fetched?: boolean;
 }
+
+export interface PendingParts { body: string | null; cwd: string | null; extra: string | null }
+
+const NO_PARTS: PendingParts = { body: null, cwd: null, extra: null };
 
 export interface PendingEffect { files: number; bytes: number; more?: true }
 
@@ -57,7 +62,7 @@ export interface PendingRow {
 }
 
 export interface PendingView {
-  id: number; tool: string; title: string | null; shown: string; masked: number; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
+  id: number; tool: string; title: string | null; shown: string; parts: PendingParts; masked: number; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
   preview: PreviewFile[]; files: PathFact[]; effect: PendingEffect | null; fetched: boolean; run_kind: string; conversation_id: string; task_id: string | null; task_title: string | null;
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
@@ -86,6 +91,7 @@ export interface PendingCounts {
 export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined }
 
 const OUTPUT_TAIL = 2000;
+const DROP_PARTS = "CASE WHEN json_valid(state) THEN json_remove(state, '$.parts') ELSE state END";
 const REASON_MAX = 500;
 const LIST_MAX = 200;
 const MARK = '[REDACTED]';
@@ -140,7 +146,7 @@ export function realCwd(cwd: string): string | null {
 
 const plain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-function render(tool: ToolDef, input: unknown): { title: string; shown: string; raw: string } {
+function render(tool: ToolDef, input: unknown): { title: string; shown: string; raw: string; parts: PendingParts } {
   let summary: { title: string; body: string; cwd?: string } | undefined;
   try { summary = tool.summarize?.(input as never, 'en'); } catch { summary = undefined; }
   const title = summary?.title ?? tool.name;
@@ -152,6 +158,7 @@ function render(tool: ToolDef, input: unknown): { title: string; shown: string; 
   const cwdKey = keyOf(summary?.cwd);
   const raw: string[] = [title];
   const shown: string[] = [redactSecrets(title)];
+  const parts: PendingParts = { ...NO_PARTS };
   if (summary?.cwd !== undefined) {
     const line = pendingText('en', 'cwd_line', { path: summary.cwd });
     raw.push(line);
@@ -160,16 +167,20 @@ function render(tool: ToolDef, input: unknown): { title: string; shown: string; 
   if (summary && bodyKey !== undefined && plain(input) && plain(masked)) {
     raw.push(summary.body);
     shown.push(redactSecrets(summary.body));
+    parts.body = redactSecrets(summary.body);
+    parts.cwd = summary.cwd !== undefined ? redactSecrets(summary.cwd) : null;
     const rest = Object.keys(input).filter(k => k !== bodyKey && k !== cwdKey);
     if (rest.length) {
       raw.push(JSON.stringify(Object.fromEntries(rest.map(k => [k, input[k]])), null, 2));
-      shown.push(redactSecrets(JSON.stringify(Object.fromEntries(rest.map(k => [k, masked[k]])), null, 2)));
+      parts.extra = redactSecrets(JSON.stringify(Object.fromEntries(rest.map(k => [k, masked[k]])), null, 2));
+      shown.push(parts.extra);
     }
   } else {
     raw.push(JSON.stringify(input, null, 2));
-    shown.push(redactSecrets(JSON.stringify(masked, null, 2)));
+    parts.body = redactSecrets(JSON.stringify(masked, null, 2));
+    shown.push(parts.body);
   }
-  return { title: redactSecrets(title), shown: shown.join('\n'), raw: raw.join('\n') };
+  return { title: redactSecrets(title), shown: shown.join('\n'), raw: raw.join('\n'), parts };
 }
 
 function effectOf(snapshot: Snapshot | undefined): PendingEffect | null {
@@ -210,7 +221,7 @@ export class PendingStore {
     const tool = this.#o.tools.get(input.tool);
     if (!tool) throw new PendingError('unknown_tool', { tool: input.tool });
     if (tool.replayable === false) throw new PendingError('not_replayable', { tool: input.tool });
-    const { title, shown, raw } = render(tool, input.input);
+    const { title, shown, raw, parts } = render(tool, input.input);
     const masked = Math.max(0, marks(shown) - marks(raw));
     const targets = (input.targets ?? []).map(t => resolve(input.cwd, t));
     const files = (input.files ?? []).map(f => resolve(input.cwd, f));
@@ -218,6 +229,7 @@ export class PendingStore {
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {
       title,
+      parts,
       cwdReal: realCwd(input.cwd),
       ...(input.check ? { recheck: recheckOf(input.check) } : {}),
       ...(input.kind === 'delete' ? { snapshot: await takeSnapshot(input.cwd, targets, this.#o.dataDir) } : {}),
@@ -248,7 +260,7 @@ export class PendingStore {
     const task = row.task_id ? this.#db.prepare('SELECT title FROM tasks WHERE id = ?').get(row.task_id) as { title: string } | undefined : undefined;
     const project = row.project_id ? this.#db.prepare('SELECT name FROM projects WHERE id = ?').get(row.project_id) as { name: string } | undefined : undefined;
     return {
-      id: row.id, tool: row.tool, title: state.title ?? null, shown: row.shown, masked: row.masked, cwd: row.cwd, kind: row.kind, reason: row.reason, checks: parseJson<string[]>(row.checks, []),
+      id: row.id, tool: row.tool, title: state.title ?? null, shown: row.shown, parts: state.parts ?? { ...NO_PARTS }, masked: row.masked, cwd: row.cwd, kind: row.kind, reason: row.reason, checks: parseJson<string[]>(row.checks, []),
       preview: state.preview ?? [], files: fileFacts(parseJson<string[]>(row.files, [])),
       effect: row.kind === 'delete' ? effectOf(state.snapshot) : null, fetched: state.fetched === true,
       run_kind: row.run_kind, conversation_id: row.conversation_id,
@@ -314,7 +326,8 @@ export class PendingStore {
     if (!current || current.status !== 'running') return current ? this.#view(current) : undefined;
     const erased = current.input === '';
     const state = parseJson<PendingState | null>(current.state, null);
-    const nextState = state && result.fetched !== undefined ? { ...state, fetched: result.fetched } : state;
+    const { parts: _parts, ...kept } = state ?? {};
+    const nextState = state ? { ...kept, ...(result.fetched !== undefined ? { fetched: result.fetched } : {}) } : null;
     const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', state = ?
       WHERE id = ? AND status = 'running'`).run(
       result.status, result.exitCode ?? null, erased || result.output === undefined ? null : outputTail(result.output), erased ? null : result.fullRef ?? null,
@@ -328,7 +341,7 @@ export class PendingStore {
 
   reject(id: number, reason?: string): PendingView {
     const before = this.#require(id);
-    const changed = this.#db.prepare("UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '' WHERE id = ? AND status = 'waiting'").run(cleanReason(reason), this.#now(), id);
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '', state = ${DROP_PARTS} WHERE id = ? AND status = 'waiting'`).run(cleanReason(reason), this.#now(), id);
     if (Number(changed.changes) !== 1) throw new PendingError('not_waiting', { id, status: this.row(id)?.status ?? before.status });
     const row = this.row(id)!;
     this.#changed(row);
@@ -340,7 +353,7 @@ export class PendingStore {
     for (const id of ids) {
       const rows = this.#db.prepare("SELECT * FROM pending_actions WHERE conversation_id = ? AND status = 'waiting'").all(id) as unknown as PendingRow[];
       for (const row of rows) {
-        const changed = this.#db.prepare("UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '' WHERE id = ? AND status = 'waiting'").run(this.#now(), row.id);
+        const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '', state = ${DROP_PARTS} WHERE id = ? AND status = 'waiting'`).run(this.#now(), row.id);
         if (Number(changed.changes) === 1) { count += 1; this.#changed(this.row(row.id)!); }
       }
     }
@@ -348,7 +361,7 @@ export class PendingStore {
   }
 
   closeInterrupted(): number {
-    const result = this.#db.prepare("UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '' WHERE status = 'running'").run(pendingText('en', 'interrupted'), this.#now());
+    const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '', state = ${DROP_PARTS} WHERE status = 'running'`).run(pendingText('en', 'interrupted'), this.#now());
     return Number(result.changes);
   }
 }

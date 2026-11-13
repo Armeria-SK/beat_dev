@@ -167,3 +167,13 @@ test('GET /api/pending?status=decided&earlier=1: 今日決めた行が無くて�
   assert.deepEqual(Object.keys(earlier.body.items[0]).filter((k: string) => k === 'title' || k === 'effect'), ['title', 'effect']);
   assert.equal(earlier.body.items[0].effect, null);
 });
+
+test('会話を消した行は parts も空', async t => {
+  const s = await setup(t);
+  const row = await s.park('erase-parts-marker');
+  assert.equal(row.parts.body, 'erase-parts-marker');
+  await s.api(`/api/conversations/${s.conversation.id}`, { method: 'DELETE' });
+  const text = await (await s.api('/api/pending?status=decided')).text();
+  assert.ok(!text.includes('erase-parts-marker'));
+  assert.deepEqual(s.app.pending.view(row.id)!.parts, { body: null, cwd: null, extra: null });
+});
