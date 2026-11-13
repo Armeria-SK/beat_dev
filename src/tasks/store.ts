@@ -260,12 +260,21 @@ export class TaskStore {
     const task = this.get(id);
     const current = ownerRequestOf(task?.owner_request);
     if (!task || !current) return;
+    if (patch.body !== undefined && this.textTainted(id)) {
+      this.#db.prepare('UPDATE tasks SET owner_request = NULL WHERE id = ?').run(id);
+      return;
+    }
     const next: OwnerRequest = {
       title: patch.title?.trim() || current.title,
-      body: patch.body !== undefined && !this.#textTainted(task.id, task.parent_id) ? patch.body : current.body,
+      body: patch.body !== undefined ? patch.body : current.body,
       doneCriteria: patch.doneCriteria !== undefined ? patch.doneCriteria : current.doneCriteria,
     };
     this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(JSON.stringify(next), id);
+  }
+
+  textTainted(id: string): boolean {
+    const task = this.get(id);
+    return task !== undefined && this.#textTainted(task.id, task.parent_id);
   }
 
   #sourceTainted(taskId: string, parentId: string | null): boolean {

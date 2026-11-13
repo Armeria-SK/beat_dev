@@ -425,6 +425,7 @@ export class ChatEngine {
     const sources = [
       ...(this.#d.runs.anyTaintedTask(conversationId) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
+      ...(this.#d.tasks?.textTainted(task.id) ? [engineText(language, 'taint.carried')] : []),
     ];
     if (sources.length) this.#initialTaint.set(runId, sources);
     this.#start(runId, conversationId, chain.usable, 'task', { task, control });
