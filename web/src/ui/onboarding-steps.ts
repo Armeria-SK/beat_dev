@@ -39,6 +39,11 @@ export function canContinue(step: OnboardStep, state: { name: string; agent: str
   }
 }
 
+export function escapeAction(state: { busy: boolean; confirming: boolean }): 'ignore' | 'cancelConfirm' | 'close' {
+  if (state.busy) return 'ignore';
+  return state.confirming ? 'cancelConfirm' : 'close';
+}
+
 export interface ConnectForm { provider: ProviderChoice; model: string; baseUrl: string; context: string; key: string }
 
 export const emptyConnect = (provider: ProviderChoice = 'anthropic'): ConnectForm =>

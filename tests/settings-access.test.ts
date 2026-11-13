@@ -12,7 +12,6 @@ function base(): Config {
       roots: [{ path: 'workspace', mode: 'write' }, { path: '~/ref', mode: 'read' }],
       deny: ['~/.ssh', '~/.aws', '~/.gnupg', 'mine'],
       outsideRoots: 'ask',
-      taintEscalation: true,
       shell: { enabled: true, allow: ['git status'], ask: ['npm *'], deny: ['rm *'], envAllow: ['PATH'], timeoutSec: 120 },
       hooks: { preToolUse: [{ matcher: 'shell_run', command: ['node', 'guard.js'], timeoutMs: 30000, onError: 'deny' }], postToolUse: [] },
       web: { fetch: true, search: 'duckduckgo' },
@@ -84,24 +83,20 @@ test('広がりの検出（シェル）: 有効にする・承認なしに足す
   ]);
 });
 
-test('広がりの検出（承認まわり・Web）: outsideRoots を止めるから承認に・外の内容のあとの引き上げを切る・取得と検索を入れる・自分で作ったタスクの承認を外す', () => {
+test('広がりの検出（承認まわり・Web）: outsideRoots を止めるから承認に・取得と検索を入れる・自分で作ったタスクの承認を外す', () => {
   const strict = base();
   strict.tools.outsideRoots = 'deny';
   strict.tools.web.fetch = false;
   strict.tools.web.search = 'off';
   const loose = structuredClone(strict);
   loose.tools.outsideRoots = 'ask';
-  loose.tools.taintEscalation = false;
   loose.tools.web.fetch = true;
   loose.tools.web.search = 'duckduckgo';
   loose.worker.selfTasksNeedApproval = false;
-  assert.deepEqual(kinds(strict, loose), ['outside-loosened', 'taint-off', 'web-fetch-on', 'web-search-on', 'self-tasks-unapproved']);
-  const tightened = structuredClone(base());
-  tightened.tools.taintEscalation = true;
-  assert.deepEqual(kinds(base(), tightened), []);
-  const alreadyOff = base();
-  alreadyOff.tools.taintEscalation = false;
-  assert.deepEqual(kinds(alreadyOff, structuredClone(alreadyOff)), [], 'もう切ってあるものは、変えていなければ数えない');
+  assert.deepEqual(kinds(strict, loose), ['outside-loosened', 'web-fetch-on', 'web-search-on', 'self-tasks-unapproved']);
+  const oldKey = structuredClone(base()) as Config & { tools: Record<string, unknown> };
+  oldKey.tools.taintEscalation = false;
+  assert.deepEqual(kinds(base(), oldKey), [], '消した鍵（tools.taintEscalation）を切っても、広がりには数えない');
 });
 
 test('広がりの検出（フック）: 足す・書き換える・使う前のものを外す。同じ中身や並べ替えだけなら無し、使ったあとのフックを外すのは数えない', () => {
@@ -136,6 +131,30 @@ test('広がりの検出（フック）: 足す・書き換える・使う前の
   const post = structuredClone(before);
   post.tools.hooks.postToolUse.push(hook('q', 'r'));
   assert.deepEqual(accessWidening(before, post), [{ kind: 'hook-added', stage: 'postToolUse', hook: { matcher: 'q', command: ['r'] } }]);
+});
+
+test('広がりの検出（組み込みの Protect files）: 一覧の直し・止める・消すは、どれも確かめを出す（Settings › Hooks の Edit とスイッチと Remove）', () => {
+  const protect = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'] };
+  const before = base();
+  before.tools.hooks = { preToolUse: [protect], postToolUse: [] };
+  const summary = { matcher: '.*', command: ['protect-files'] };
+  const lists: Array<[string, Record<string, unknown>]> = [
+    ['always を減らす', { ...protect, always: [] }],
+    ['always を足す', { ...protect, always: ['.github/workflows/**', 'deploy/**'] }],
+    ['afterOutside を減らす', { ...protect, afterOutside: [] }],
+    ['対象の道具を変える', { ...protect, matcher: 'file_write' }],
+  ];
+  for (const [label, changed] of lists) {
+    const after = structuredClone(before);
+    after.tools.hooks.preToolUse = [changed];
+    assert.deepEqual(accessWidening(before, after).map(a => a.kind), ['hook-edited'], label);
+  }
+  const off = structuredClone(before);
+  off.tools.hooks.preToolUse = [{ ...protect, enabled: false }];
+  assert.deepEqual(accessWidening(before, off), [{ kind: 'hook-disabled', stage: 'preToolUse', hook: summary }]);
+  const removed = structuredClone(before);
+  removed.tools.hooks.preToolUse = [];
+  assert.deepEqual(accessWidening(before, removed), [{ kind: 'hook-removed', stage: 'preToolUse', hook: summary }]);
 });
 
 test('広がりの検出（外からの入口）: 開ける場所を足す・Tailscale の許可を増やす / 空にする・待ち受けを外へ', () => {
@@ -349,7 +368,9 @@ test('広がりの検出（道具ごとの方針）: 止める → 承認を求�
 
 test('広がりの確かめの文: 道具ごとの方針を緩める行は、道具の名前と前後の方針（辞書の名前）を出す。en の辞書にある', () => {
   assert.equal(typeof en['access.toolPolicy'], 'function');
-  assert.match(en['access.toolPolicy']('shell_run', 'Block', 'Ask for approval'), /shell_run.*Block.*Ask for approval/u);
+  assert.match(en['access.toolPolicy']('shell_run', en['ui.tools.block'], en['ui.tools.ask']), /shell_run.*"Block".*"Ask"/u);
+  assert.ok(en['access.outside'].includes(`"${en['ui.tools.block']}" to "${en['ui.tools.ask']}"`), '外へ届くシェルの行も、Skills の行と同じ方針の名前');
+  assert.doesNotMatch(en['mode.autoDesc'], /Ask for approval/u, 'Normal の説明も、Skills の行に無い古い方針の名前を使わない');
 });
 
 // ---- AU-6c: ブラウザ ----

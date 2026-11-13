@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApiError, type Acceptance, type AcceptanceItem, type Coverage, type PlanDoc, type Task } from '../web/src/api.ts';
 import { BuildError } from '../src/projects/build.ts';
+import { buildText } from '../src/shared/messages/build.ts';
 import { domainProblem } from '../src/web/http.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { t } from '../web/src/i18n/index.ts';
@@ -14,7 +15,7 @@ const item = (id: string, over: Partial<AcceptanceItem> = {}): AcceptanceItem =>
   check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null, ...over,
 });
 const acc = (over: Partial<Acceptance> = {}): Acceptance => ({ version: 0, language: 'en', items: [], not_doing: [], draft: true, hash: 'ah', frozen: null, ...over });
-const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan', hash: 'p1', updated_at: 1, updated_by: 'ai', tainted: false, writing: false, ...over });
+const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan', hash: 'p1', updated_at: 1, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, ...over });
 const frozen = (over: Partial<NonNullable<Acceptance['frozen']>> = {}): NonNullable<Acceptance['frozen']> =>
   ({ version: 1, hash: 'ah', plan_hash: 'p1', created_at: 5, source: 'build', build_task_id: 'T1', ...over });
 const task = (status: Task['status']): Task => ({
@@ -66,7 +67,8 @@ test('ui/build: Build の失敗の見分け: 409 build.changed は読み直し�
   const missing = new ApiError(409, { code: 'project.folder_missing', message: 'The folder is missing' });
   assert.deepEqual(buildFailure(missing), { kind: 'failed', detail: missing.message });
   assert.ok(missing.message.length > 0);
-  assert.deepEqual(buildFailure(new ApiError(400, { code: 'build.no_plan', message: 'No plan' })), { kind: 'failed', detail: 'No plan' });
+  assert.deepEqual(buildFailure(new ApiError(400, { code: 'build.no_plan', message: 'No plan' })), { kind: 'failed', detail: buildText('en', 'no_plan') }, 'build のコードは画面の文の表で訳す');
+  assert.deepEqual(buildFailure(new ApiError(400, { code: 'build.mystery', message: 'From the server' })), { kind: 'failed', detail: 'From the server' }, '表に無いコードはサーバーの文');
   assert.deepEqual(buildFailure(new Error('network')), { kind: 'failed', detail: null });
 });
 

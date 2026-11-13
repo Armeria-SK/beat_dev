@@ -409,17 +409,8 @@ test('A4: モデルの道具（シェル）からは押せない。この PC の
     `node -e "fetch('http://127.0.0.1:${s.port}/api/server/apply', { method: 'POST', headers: { Origin: 'http://127.0.0.1:${s.port}' } })"`,
   ];
   for (const command of commands) {
-    let finished = false;
-    const asked: Array<{ onceOnly: boolean; reasons: string[] }> = [];
-    const calling = runToolCall({ id: 'c', name: 'shell_run', arguments: { command } }, ctx, { registry: s.app.tools, approvals: s.app.approvals, pending: s.app.pending, db: s.app.db, emit: () => undefined, conversationAutoRead: () => false }).finally(() => { finished = true; });
-    while (!finished) {
-      const pending = s.app.approvals.pending()[0];
-      if (pending) { asked.push({ onceOnly: pending.onceOnly === true, reasons: pending.reasons }); s.app.approvals.decide(pending.id, 'deny'); }
-      await new Promise(r => setTimeout(r, 10));
-    }
-    const outcome = await calling;
+    const outcome = await runToolCall({ id: 'c', name: 'shell_run', arguments: { command } }, ctx, { registry: s.app.tools, approvals: s.app.approvals, pending: s.app.pending, db: s.app.db, emit: () => undefined });
     assert.equal(outcome.decidedBy, 'pending', `${command}: Pending に積まれていない（${outcome.output.content}）`);
-    assert.equal(asked.length, 0, `${command}: 積んだものは札を出さない`);
     const [row] = s.app.pending.list({ status: 'waiting' });
     assert.equal(row?.kind, 'send', `${command}: 送るとして積む`);
     assert.ok(row?.shown.includes(command), command);

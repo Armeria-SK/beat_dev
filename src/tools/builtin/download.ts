@@ -107,13 +107,14 @@ function local(language: Language, key: ToolMessageKey, params?: MessageParams):
 function mergeChecks(first: PreCheck, second: PreCheck): PreCheck {
   const details = [...(first.details ?? []), ...(second.details ?? [])];
   const askKinds = [...(first.askKinds ?? []), ...(second.askKinds ?? [])];
+  const reasonKeys = [...(first.reasonKeys ?? []), ...(second.reasonKeys ?? [])];
   return {
     decision: worst(first.decision, second.decision),
     reasons: [...first.reasons, ...second.reasons],
     ...(details.length ? { details } : {}),
     ...(second.paths ? { paths: second.paths } : {}),
-    ...(first.onceOnly || second.onceOnly ? { onceOnly: true } : {}),
     ...(askKinds.length ? { askKinds } : {}),
+    ...(reasonKeys.length ? { reasonKeys } : {}),
   };
 }
 
@@ -132,7 +133,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
     if (!ctx.config.tools.web.fetch) return { decision: 'deny', reasons: [guardText(language, 'web.fetch_off')] };
     let url: URL;
     try { url = pageUrl(input.url); } catch (error) { return { decision: 'deny', reasons: [error instanceof RetrievalFailure ? error.text(language) : (error as Error).message] }; }
-    const web = exfiltrationCheck(input.url, language, url.search.length > 300 ? [guardText(language, 'web.long_query')] : []);
+    const web = exfiltrationCheck(input.url, language, url.search.length > 300);
     return mergeChecks(web, checkFilePath(downloadsDir(ctx.home ?? ctx.workspace), 'write', ctx).check);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_download'), body: input.name === undefined ? input.url : `${input.url}\n${input.name}` }),

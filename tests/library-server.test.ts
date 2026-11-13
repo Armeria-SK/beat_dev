@@ -20,7 +20,7 @@ import type { ToolContext } from '../src/tools/types.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
-import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, JudgeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 // PR 1-5s（steps/p1-ui.md の「サーバーの作業」の Library）: Runs の件数・スキルの版と History・登録する前に聞く / 聞かないの設定・しまった会話の数と時刻
 
@@ -225,6 +225,23 @@ test('1-5s Runs の件数: /api/runs・/api/tool-calls・/api/reviews の total 
   assert.equal((await api('/api/reviews')).body.total, 3);
 });
 
+test('4-3a Runs の口は判定役の件数を数える: 通した・積んだ（種類ごと）・積めなかった、今日の分だけ', async t => {
+  const { app } = await boot(t);
+  const api = await serve(t, app);
+  const now = Date.now();
+  const start = startOfDayIn(app.config().timezone, now);
+  const call = app.db.prepare("INSERT INTO tool_calls (id, run_id, tool, input, decision, decided_by, created_at) VALUES (?, 'r', 'shell_run', '{}', ?, ?, ?)");
+  const park = app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, status, created_at) VALUES ('shell_run', '{}', 'x', ?, 'r', 'r1', 'chat', 'c1', 'waiting', ?)");
+  for (const [id, decision, by, at] of [['a1', 'allow', 'auto-mode', now], ['a2', 'allow', 'auto-mode', start], ['a3', 'allow', 'auto-mode', start - 1], ['a4', 'deny', 'auto-mode', now], ['a5', 'allow', 'policy', now], ['n1', 'ask', 'not-parked', now], ['n2', 'ask', 'not-parked', start - 1]] as const) call.run(id, decision, by, at);
+  for (const [kind, at] of [['judge', now], ['judge', start], ['judge_failed', now], ['send', now], ['owner', start - 1]] as const) park.run(kind, at);
+  assert.deepEqual((await api('/api/runs')).body.judged, { allowed: 2, parked: { judge: 2, judge_failed: 1, send: 1 }, notParked: 1 });
+  app.db.prepare("INSERT INTO conversations (id, title, created_at, last_message_at, project_id) VALUES ('cp', 'p', ?, ?, 'shop01')").run(now, now);
+  app.db.prepare("INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, created_at) VALUES ('pa', 'r', 'cp', 'shell_run', '{}', 'allow', 'auto-mode', ?)").run(now);
+  app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, project_id, status, created_at) VALUES ('shell_run', '{}', 'x', 'owner', 'r', 'r1', 'chat', 'cp', 'shop01', 'waiting', ?)").run(now);
+  assert.deepEqual((await api('/api/runs?project=shop01')).body.judged, { allowed: 1, parked: { owner: 1 }, notParked: 0 }, '製品で絞る');
+  assert.deepEqual((await api('/api/runs?project=none')).body.judged, { allowed: 2, parked: { judge: 2, judge_failed: 1, send: 1 }, notParked: 1 }, '製品に属さないもの');
+});
+
 test('1-5s Runs の件数: 設定のタイムゾーンが正しくない名前でも 500 にならず、UTC の 0 時から数える', async t => {
   const { app } = await boot(t, { ...testConfig(), timezone: 'Not/AZone' });
   const api = await serve(t, app);
@@ -297,8 +314,8 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
-  let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: injected, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  let adapter!: JudgeAdapter;
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: injected, adapterOverride: p => (adapter = Object.assign(new JudgeAdapter(p), { judgeAnswer: '{"decision":"allow","reason":"asked for"}' })) });
   const runTask = async (scripts: Script[]) => {
     adapter.scripts.push(...scripts);
     assert.equal(await app.worker.tick(), 'ran');
@@ -309,13 +326,9 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
     adapter.scripts.push(...scripts);
     const outcome = app.engine.send(conversationId, text);
     assert.ok(outcome.ok, JSON.stringify(outcome));
-    if (approve) {
-      for (let i = 0; i < 300 && !app.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-      const pending = app.approvals.pending()[0];
-      assert.ok(pending, '承認の依頼が来ていない');
-      app.approvals.decide(pending.id, 'once');
-    }
+    const judgedBefore = adapter.judged.length;
     await app.engine.wait(outcome.runId);
+    if (approve) assert.ok(adapter.judged.length > judgedBefore, '準備の段: 外を読んだあとの道具は判定役が見て（allow）動く');
   };
   return { app, chat, runTask };
 }

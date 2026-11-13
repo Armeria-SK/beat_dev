@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Approval, ChecklistItem, Message } from '../web/src/api.ts';
+import type { ChecklistItem, Message } from '../web/src/api.ts';
 import { imageHost } from '../web/src/markdown-image.ts';
 import type { RunNotice } from '../web/src/ui/live-state.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
@@ -11,9 +11,6 @@ import { checklistShape, contextMeter, isRising, messageStamp, noticeRows, reply
 let next = 1;
 const msg = (role: Message['role'], text: string, extra: Partial<Message> = {}): Message => ({ id: next++, role, text, runId: 'r1', createdAt: 0, ...extra });
 const call = (id: string, name: string, input: unknown) => ({ id, name, input: JSON.stringify(input) });
-const approval = (id: string): Approval => ({
-  id, runId: 'r2', conversationId: 'c', tool: 'file_write', title: 'Write x.txt', body: 'x', reasons: [], details: [], paths: [], expiresAt: 0, onceOnly: false, preview: [],
-});
 
 test('ui/thread: 続けて呼んだ道具は 1 つのまとまり（bt-tools）に入り、文の無い道具だけの返事は出さず、まとまりを切らない', () => {
   const items = threadItems({
@@ -168,7 +165,7 @@ test('ui/thread: 「考え中 N 秒」は待ち始めから 1 秒たってから
   assert.equal(thinkingSeconds(5000, 1000), null, '時計がずれていても負の数は出さない');
 });
 
-test('ui/thread: 返事を作っている最中は、流れている文 → 動いている道具の行 → 何も無ければ caret だけ。承認を待つ間は道具の行の代わりに承認の行', () => {
+test('ui/thread: 返事を作っている最中は、流れている文 → 動いている道具の行 → 何も無ければ caret だけ', () => {
   const base = [msg('user', 'go')];
   const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '' };
   assert.deepEqual(threadItems({ messages: base, draft: { ...draft, text: 'Hel' } }).at(-1), { kind: 'live', key: 'live-r2', text: 'Hel', since: null });
@@ -177,9 +174,6 @@ test('ui/thread: 返事を作っている最中は、流れている文 → 動�
   const running = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run', activeInput: '{"command":"npm test"}', toolStartedAt: 5 } }).at(-1)!;
   assert.ok(running.kind === 'tools');
   assert.deepEqual(running.rows[0]!.running, { startedAt: 5, checking: false, helperTools: null, helperConversation: null });
-  const waiting = threadItems({ messages: base, draft: { ...draft, activeTool: 'file_write' }, approvals: [approval('a1')] }).at(-1)!;
-  assert.ok(waiting.kind === 'tools');
-  assert.deepEqual(waiting.rows.map(r => [r.key, r.approval?.id, r.running]), [['approval-a1', 'a1', undefined]]);
 });
 
 test('ui/thread: 動いている道具の行と、結果が届いたあとの行は同じキー（呼び出しの id）。まとまりのキーも変わらない（行が 2 回現れない）', () => {
@@ -219,13 +213,13 @@ test('ui/thread: お知らせ: 静かなものは続けて並べず 1 行にま�
     n({ kind: 'error', errorKind: 'timeout' }),
     n({ kind: 'switch', from: 'a', to: 'b', reason: 'x' }),
     n({ kind: 'stopped' }),
-    n({ kind: 'auto', tool: 'file_read', reason: '' }),
+    n({ kind: 'interrupted' }),
     n({ kind: 'warning', code: 'retrying', message: 'm' }),
   ]);
   assert.deepEqual(rows.map(r => [r.weight, r.notices.map(x => x.kind)]), [
     ['quiet', ['compaction', 'memory']],
     ['warn', ['switch']],
-    ['quiet', ['stopped', 'auto']],
+    ['quiet', ['stopped', 'interrupted']],
     ['warn', ['warning']],
     ['fail', ['error']],
   ]);
@@ -298,4 +292,24 @@ test('ui/thread: plan_write で計画書を書いた実行が終わると、そ�
     ],
   });
   assert.ok(!failed.some(i => i.kind === 'plan'));
+});
+
+test('ui/thread: 保存された道具の結果と、流れている実行の済んだ道具は、どちらも gate（判定役の理由・Pending の番号・Not run）を行に運ぶ', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'go'),
+      msg('assistant', '', { toolCalls: [call('a', 'shell_run', { command: 'ls' }), call('b', 'shell_run', { command: 'npm publish' })] }),
+      msg('tool', 'ok', { toolName: 'shell_run', toolCallId: 'a', gate: { by: 'judge', reason: 'lists files' } }),
+      msg('tool', 'Parked as #12 in Pending', { toolName: 'shell_run', toolCallId: 'b', gate: { by: 'pending', id: 12 } }),
+    ],
+  });
+  const saved = items.find(i => i.kind === 'tools')!;
+  assert.ok(saved.kind === 'tools');
+  assert.deepEqual(saved.rows.map(r => r.gate), [{ by: 'judge', reason: 'lists files' }, { by: 'pending', id: 12 }]);
+  const live = threadItems({
+    messages: [msg('user', 'go', { runId: 'r2' })],
+    draft: { runId: 'r2', conversationId: 'c', modelId: 'm', text: '', settled: [{ callId: 'x', name: 'agent_run', input: '{}', gate: { by: 'not-parked' } }], settledCount: 1 },
+  }).find(i => i.kind === 'tools')!;
+  assert.ok(live.kind === 'tools');
+  assert.deepEqual(live.rows.map(r => r.gate), [{ by: 'not-parked' }]);
 });

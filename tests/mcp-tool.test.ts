@@ -10,6 +10,7 @@ import { neutralizeFence } from '../src/shared/fence.ts';
 import { buildMcpTool, cleanDescription, hiddenCount, inputSchemaOf, textOfResult, DESCRIPTION_MAX, type McpCaller, type McpRemoteTool } from '../src/mcp/tool.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { localAllows, planAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -34,12 +35,13 @@ function context(t: { after: (fn: () => void) => void }, tool: ToolDef, over: Pa
   mkdirSync(paths.workspace, { recursive: true });
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry();
   registry.setGroup('web', [tool]);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(config, paths);
   const ctx: ToolContext = { runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy, workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, ...over };
-  const call = (args: unknown) => runToolCall({ id: 'c1', name: tool.name, arguments: args as Record<string, unknown> }, ctx, { registry, approvals, db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false });
+  const call = (args: unknown) => runToolCall({ id: 'c1', name: tool.name, arguments: args as Record<string, unknown> }, ctx, { registry, approvals, pending, db, emit: () => undefined, permissionMode: () => 'auto' });
   return { ctx, call, db };
 }
 
@@ -190,10 +192,10 @@ test('承認の形: 申告なしは「外へ送る」で聞く。sends:false だ
     assert.deepEqual([quiet.decision, quiet.sends, quiet.removes], ['allow', false, false], effect);
   }
   const hinted = make({ sends: false }, { remote: { ...REMOTE, annotations: { destructiveHint: true } } });
-  assert.equal(hinted.removes, true);
+  assert.equal((await pre(hinted)).removes, true);
   assert.equal((await pre(hinted)).decision, 'ask');
   const overridden = make({ sends: false, removes: false }, { remote: { ...REMOTE, annotations: { destructiveHint: true } } });
-  assert.equal(overridden.removes, true, 'サーバーの destructive は、持ち主の false で消せない（聞く向きにだけ働く）');
+  assert.equal((await pre(overridden)).removes, true, 'サーバーの destructive は、持ち主の false で消せない（聞く向きにだけ働く）');
   const open = make({ sends: false }, { remote: { ...REMOTE, annotations: { openWorldHint: true } } });
   assert.equal((await pre(open)).sends, true, 'openWorldHint は、持ち主が sends:false と書いても「送る」で聞く');
   assert.equal(make({ sends: false }, { remote: { ...REMOTE, annotations: { readOnlyHint: true } } }).effect, 'network', 'readOnlyHint は効果に使わない');

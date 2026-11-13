@@ -10,7 +10,7 @@ import { ProviderRegistry } from '../src/providers/registry.ts';
 import type { ProviderAdapter } from '../src/providers/types.ts';
 import { redactExact, redactSecrets } from '../src/shared/redaction.ts';
 import { autoDecide, CLASSIFIER_TIMEOUT_MS, TruncatedReply, type AutoVerdict, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
-import { JUDGE_CASES, JUDGE_CONTROLS, type JudgeCase } from '../tests/fixtures/judge-cases.ts';
+import { JUDGE_CASES, JUDGE_CONTROLS, JUDGE_EXFIL_CASES, type JudgeCase } from '../tests/fixtures/judge-cases.ts';
 
 export type ProbeMode = 'a' | 'b' | 'c';
 
@@ -213,6 +213,7 @@ async function main(): Promise<void> {
   registry.reload(config);
   const secrets = registry.secrets();
   const rows: ProbeRow[] = [];
+  const exfilRows: ProbeRow[] = [];
   const notes = [`date: ${new Date().toISOString()}`, `max output tokens: ${maxTokens}, timeout: ${timeoutMs} ms (includes waiting for the provider slot, as now), runs per case: ${runs}`];
   for (const id of ids) {
     const found = findModel(config, id);
@@ -227,12 +228,14 @@ async function main(): Promise<void> {
     const modelModes = modes.filter(m => m !== 'b' || effort !== undefined);
     if (modes.includes('b')) notes.push(effort ? `${id}: mode b sends reasoning_effort "${effort}"` : `${id}: mode b skipped (the provider offers no reasoning effort; pass --effort to force one)`);
     notes.push(providerNote(id, found.provider, found.model, secrets));
-    rows.push(...await runProbe({
-      model: found.model, provider: found.provider, adapter, cases: JUDGE_CASES, runs, modes: modelModes, maxTokens, timeoutMs, effort, secrets,
-      onRow: r => process.stderr.write(`${r.model} ${r.mode} ${r.caseId} #${r.run}: ${r.decision}${r.failed ? ` (${r.failed})` : ''}${r.wrongAllow ? ' WRONG ALLOW' : ''} ${r.ms}ms wait ${r.waitMs}ms\n`),
-    }));
+    const options = {
+      model: found.model, provider: found.provider, adapter, runs, modes: modelModes, maxTokens, timeoutMs, effort, secrets,
+      onRow: (r: ProbeRow) => process.stderr.write(`${r.model} ${r.mode} ${r.caseId} #${r.run}: ${r.decision}${r.failed ? ` (${r.failed})` : ''}${r.wrongAllow ? ' WRONG ALLOW' : ''} ${r.ms}ms wait ${r.waitMs}ms\n`),
+    };
+    rows.push(...await runProbe({ ...options, cases: JUDGE_CASES }));
+    exfilRows.push(...await runProbe({ ...options, cases: JUDGE_EXFIL_CASES }));
   }
-  const report = renderReport(rows, { cases: JUDGE_CASES, controls: JUDGE_CONTROLS, title: 'Judge probe', notes });
+  const report = `${renderReport(rows, { cases: JUDGE_CASES, controls: JUDGE_CONTROLS, title: 'Judge probe', notes })}\n${renderReport(exfilRows, { cases: JUDGE_EXFIL_CASES, controls: [], title: 'Judge probe: exfiltration cases', notes: [] })}`;
   if (values.out) writeFileSync(resolve(values.out), report);
   else process.stdout.write(report);
 }

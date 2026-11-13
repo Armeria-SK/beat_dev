@@ -76,6 +76,7 @@ test('道具の一覧: サーバーの一覧（GET /api/tools。記憶の道具�
     assert.ok(EFFECT_LABEL[tool.effect] in en, `${tool.effect} の辞書`);
   }
   for (const key of Object.values(POLICY_LABEL)) assert.ok(key in en, key);
+  assert.deepEqual([en[POLICY_LABEL.allow], en[POLICY_LABEL.ask], en[POLICY_LABEL.block]], ['Allow', 'Ask', 'Block'], 'Settings の緩める確かめの文も、Skills の行の Allow / Ask / Block と同じ言葉');
   assert.deepEqual(toolLook('mystery_tool'), { icon: 'wrench', desc: null }, 'あとから増えた道具は、汎用の絵で説明なし');
   assert.deepEqual(toolLook('__proto__'), { icon: 'wrench', desc: null }, 'Object の予約された名前も、道具ではない');
 });

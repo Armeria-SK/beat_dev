@@ -4,7 +4,7 @@ import type { MemoryEvent, ReviewJob, RunRow, SkillVersion, ToolCallRow } from '
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  archivedLine, archivedNothing, durationText, filterLog, jobResult, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, runResult, skillHistory,
+  archivedLine, archivedNothing, callResult, durationText, filterLog, jobResult, judgedLine, latestEventByMemory, logFooter, logRows, memoryHistory, memoryStamp, policyChoices, runResult, skillHistory,
   tokensText, toolChoice, toolCounts, toolDecision, undoDeletes,
 } from '../web/src/ui/library.ts';
 import { maskTarget } from '../web/src/ui/tool-row.ts';
@@ -95,13 +95,13 @@ const runRow = (id: string, at: number, extra: Partial<RunRow> = {}): RunRow => 
 });
 const callRow = (id: string, at: number, extra: Partial<ToolCallRow> = {}): ToolCallRow => ({
   id, run_id: 'r1', conversation_id: 'c1', tool: 'shell_run', input: JSON.stringify({ command: 'npm test' }), decision: 'allow', decided_by: 'policy',
-  approval_id: null, ok: 1, duration_ms: 8100, output_preview: null, full_ref: null, created_at: at, autoReason: null, grantFolder: null, ...extra,
+  approval_id: null, ok: 1, duration_ms: 8100, output_preview: null, full_ref: null, created_at: at, autoReason: null, ...extra,
 });
 const job = (id: number, at: number, status: ReviewJob['status'], extra: Partial<ReviewJob> = {}): ReviewJob => ({
   id, trigger: 'idle', triggerLabel: 'idle', status, note: null, conversation_id: null, task_id: null, run_id: null, created_at: at, finished_at: null, changes: [], ...extra,
 });
 
-test('ui/library: Runs は実行・道具・振り返りを時刻の新しい順に 1 つの表にする。What は題か道具と対象、Result は Running・Ok・Failed・Stopped・Fallback・Queued', () => {
+test('ui/library: Runs は実行・道具・振り返りを時刻の新しい順に 1 つの表にする。What は題か道具と対象、Result は Running・Ok・Failed・Stopped・Fallback・Queued・Parked', () => {
   const rows = logRows({
     runs: [runRow('r1', 100), runRow('r2', 300, { ok: null, conversation_id: null, kind: 'task' }), runRow('r3', 50, { flags: ['fallback'] })],
     calls: [callRow('t1', 200)],
@@ -122,6 +122,15 @@ test('ui/library: Runs は実行・道具・振り返りを時刻の新しい順
   assert.equal(runResult({ ok: 0, error_kind: 'timeout', flags: ['fallback'] }), 'failed');
   assert.equal(runResult({ ok: 0, error_kind: 'cancelled', flags: [] }), 'stopped');
   assert.equal(jobResult('running'), 'running');
+  assert.equal(judgedLine({ allowed: 0, parked: {}, notParked: 0 }), null, '判定役が何もしていない日は出さない');
+  assert.deepEqual(judgedLine({ allowed: 5, parked: { send: 2, judge: 1, judge_failed: 2 }, notParked: 1 }), { allowed: 5, parked: 3, notRun: 1 }, '判定役の数なので、積んだ数は判定役が聞いた種類（judge・judge_failed）だけ。送る・消すは判定役を通らない');
+  assert.equal(judgedLine({ allowed: 0, parked: { send: 4 }, notParked: 0 }), null);
+  const parkedCall = { ok: 1, decided_by: 'pending', decision: 'ask', approval_id: 'pending:12' } as const;
+  assert.equal(callResult(parkedCall), 'parked', 'Pending に積んだ道具は Parked');
+  assert.equal(callResult({ ...parkedCall, ok: 0 }), 'parked');
+  assert.equal(callResult({ ok: 0, decided_by: 'pending', decision: 'deny', approval_id: null }), 'failed', '積む先が無くて断った呼び出し（decided_by は pending でも deny）は Parked にしない');
+  assert.equal(callResult({ ok: 0, decided_by: 'not-parked', decision: 'deny', approval_id: null }), 'failed', '積めずに動かさなかった道具は Failed');
+  assert.deepEqual(logRows({ runs: [], calls: [callRow('p', 1, { decided_by: 'pending', decision: 'ask', approval_id: 'pending:12' }), callRow('d', 0, { decided_by: 'pending', decision: 'deny', approval_id: null, ok: 0 })], jobs: [], runLabel: k => k, titleOf: () => null }).map(r => r.result), ['parked', 'failed']);
   assert.equal(jobResult('failed'), 'failed');
 });
 
@@ -180,4 +189,10 @@ test('ui/library: Runs の振り返りの行は、What の列でも秘密を伏�
   assert.equal(maskTarget(job.note!).includes('hunter2secret'), false);
   const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'screens', 'Runs.tsx'), 'utf8');
   assert.equal(source.includes('{job.note}'), false, '詳細に生の note を出さない');
+});
+
+test('4-4 Skills の道具の方針: agent_run には Ask を出さない（Ask は止めると同じ）。ほかの道具は Allow・Ask・Block の 3 つ', () => {
+  assert.deepEqual(policyChoices('agent_run'), ['allow', 'block']);
+  assert.deepEqual(policyChoices('shell_run'), ['allow', 'ask', 'block']);
+  assert.deepEqual(policyChoices('file_write'), ['allow', 'ask', 'block']);
 });

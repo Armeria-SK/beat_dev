@@ -22,7 +22,6 @@ export type Access =
   | { kind: 'shell-deny-removed'; command: string }
   | { kind: 'shell-env-added'; name: string }
   | { kind: 'outside-loosened' }
-  | { kind: 'taint-off' }
   | { kind: 'web-fetch-on' }
   | { kind: 'web-search-on' }
   | { kind: 'self-tasks-unapproved' }
@@ -138,8 +137,8 @@ function hookChanges(before: Config, after: Config, stage: HookStage): Access[] 
     out.push({ kind: i < oldHooks.length ? 'hook-edited' : 'hook-added', stage, hook: summary(hook) });
   });
   // 書き換えたフックは、どれがどれだったかを決められない。オンだった「使う前」のフックが残っていて、書き換えたあとにオフのものがあれば、オフにしたものとして並べる
-  if (stage === 'preToolUse' && oldHooks.slice(0, newHooks.length).some(on)) {
-    for (const hook of newHooks.slice(0, oldHooks.length)) if (!on(hook)) out.push({ kind: 'hook-disabled', stage, hook: summary(hook) });
+  if (stage === 'preToolUse' && oldHooks.some(on)) {
+    for (const hook of newHooks) if (!on(hook)) out.push({ kind: 'hook-disabled', stage, hook: summary(hook) });
   }
   if (stage === 'preToolUse') for (const hook of oldHooks.slice(newHooks.length)) out.push({ kind: 'hook-removed', stage, hook: summary(hook) });
   return out;
@@ -306,7 +305,6 @@ export function accessWidening(before: Config, after: Config): Access[] {
   for (const command of removed(strings(bs.deny), strings(as.deny))) out.push({ kind: 'shell-deny-removed', command });
   for (const name of added(strings(bs.envAllow), strings(as.envAllow))) out.push({ kind: 'shell-env-added', name });
   if ((bt.outsideRoots ?? 'ask') === 'deny' && (at.outsideRoots ?? 'ask') === 'ask') out.push({ kind: 'outside-loosened' });
-  if ((bt.taintEscalation ?? true) === true && (at.taintEscalation ?? true) === false) out.push({ kind: 'taint-off' });
   if ((obj(bt.web).fetch ?? true) === false && (obj(at.web).fetch ?? true) === true) out.push({ kind: 'web-fetch-on' });
   if ((obj(bt.web).search ?? 'duckduckgo') === 'off' && (obj(at.web).search ?? 'duckduckgo') !== 'off') out.push({ kind: 'web-search-on' });
   if ((obj(before.worker).selfTasksNeedApproval ?? false) === true && (obj(after.worker).selfTasksNeedApproval ?? false) === false) out.push({ kind: 'self-tasks-unapproved' });

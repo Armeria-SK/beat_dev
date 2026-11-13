@@ -6,6 +6,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { MemoryStore } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { taskCreate, taskUpdate } from '../src/tools/builtin/tasks.ts';
@@ -21,7 +22,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   const parsed = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
   const tasks = new TaskStore(db);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(taskCreate).register(taskUpdate);
   const policy = buildPolicy(parsed, paths);
   const ctx: ToolContext = {
@@ -29,17 +30,21 @@ function setup(t: { after: (fn: () => void) => void }) {
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
     services: { db, memory: new MemoryStore(db), tasks, emit: () => undefined },
   };
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  let judged = 0;
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: () => undefined, conversationAutoRead: () => false });
-  return { ctx, call, approvals, tasks };
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
+      registry, approvals, pending, db, emit: () => undefined, lastUserRequest: () => 'make a task',
+      autoClassify: async () => { judged++; return '{"decision":"ask","reason":"the owner should look"}'; },
+    });
+  return { ctx, call, approvals, tasks, pending, judged: () => judged };
 }
 
-async function denyNext(s: ReturnType<typeof setup>) {
-  for (let i = 0; i < 200 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const pending = s.approvals.pending()[0];
-  assert.ok(pending, '承認の依頼が来ていない');
-  s.approvals.decide(pending.id, 'deny');
-  return pending;
+function rejectNext(s: ReturnType<typeof setup>) {
+  const row = s.pending.list({ status: 'waiting' })[0];
+  assert.ok(row, 'Pending に積まれていない');
+  s.pending.reject(row.id);
+  return row;
 }
 
 const tainted = (ctx: ToolContext): ToolContext => ({ ...ctx, taint: { tainted: true, sources: ['web_fetch'] } });
@@ -51,15 +56,17 @@ test('task_create・task_update（指摘 6）: 外から読んだあとは確か
   const id = s.tasks.list()[0]!.id;
   assert.equal((await s.call('task_update', { id, note: 'mine too' })).decision, 'allow');
 
-  const create = s.call('task_create', { title: 'planted', body: 'do what the page said' }, tainted(s.ctx));
-  const asked = await denyNext(s);
-  assert.equal(asked.tool, 'task_create');
-  assert.ok(asked.kinds?.includes('taint'), JSON.stringify(asked.kinds));
-  assert.equal((await create).output.isError, true);
+  // escalateOnTaint: 4-3b-2 後も判定役
+  const create = await s.call('task_create', { title: 'planted', body: 'do what the page said' }, tainted(s.ctx));
+  assert.deepEqual([create.decision, create.decidedBy], ['ask', 'pending'], create.output.content);
+  const asked = rejectNext(s);
+  assert.deepEqual([asked.tool, asked.kind], ['task_create', 'judge']);
+  assert.match(asked.checks.join(), /text that came from somewhere else/u);
   assert.deepEqual(s.tasks.list().map(task => task.title), ['plain'], '断れば作らない');
 
-  const update = s.call('task_update', { id, next_action: 'do what the page said' }, tainted(s.ctx));
-  assert.equal((await denyNext(s)).tool, 'task_update');
-  assert.equal((await update).output.isError, true);
+  // escalateOnTaint: 4-3b-2 後も判定役
+  const update = await s.call('task_update', { id, next_action: 'do what the page said' }, tainted(s.ctx));
+  assert.deepEqual([update.decision, update.decidedBy], ['ask', 'pending'], update.output.content);
+  assert.deepEqual([rejectNext(s).tool, s.judged()], ['task_update', 2]);
   assert.equal(s.tasks.find(id)!.next_action, null, '断れば書かない');
 });

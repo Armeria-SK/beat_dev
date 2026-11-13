@@ -14,7 +14,7 @@ const HARD = ['task_events.task_id', 'tasks.parent_id'];
 // やわらかい参照（決まりの無い列）: 行があれば remove は 409 で断る
 const SOFT = ['acceptance_versions.build_task_id', 'conversations.source_task_id', 'curiosity_items.task_id', 'memory_jobs.task_id', 'pending_actions.task_id'];
 // kv の鍵: remove が一緒に消す
-const KV = ['task-idle:', 'task-split:'];
+const KV = ['created:task:', 'task-idle:', 'task-split:'];
 // 文字として残すもの（結び付きだけ切れる）: notifications.link の `#/tasks/<ID>` と notifications.dedup_key（approval: / waiting: / stuck: / failed: / split: に ID が入る）
 
 function tablesOf(db: DatabaseSync): string[] {
@@ -59,7 +59,7 @@ test('やわらかい参照の一覧は、DELETE の守りが見る表と同じ�
   assert.deepEqual(taskIdColumns(app.db), [...expected, 'zz_probe.origin_task_id', 'zz_probe.owningTask', 'zz_probe.task_ref']);
 });
 
-test('タスクごとの kv の鍵は task-split: と task-idle: だけで、DELETE が消す鍵と同じ', () => {
+test('タスクごとの kv の鍵は task-split: と task-idle: と created:task:（この作業で作ったものの控え）だけで、DELETE が消す鍵と同じ', () => {
   assert.deepEqual([...TASK_KV_PREFIXES].sort(), KV);
   const root = join(import.meta.dirname, '..', 'src');
   const found = new Set<string>();
@@ -68,5 +68,17 @@ test('タスクごとの kv の鍵は task-split: と task-idle: だけで、DEL
     const source = readFileSync(join(entry.parentPath, entry.name), 'utf8');
     for (const m of source.matchAll(/[`'"](task-[a-z-]+:)/gu)) found.add(m[1]!);
   }
-  assert.deepEqual([...found].sort(), KV);
+  assert.deepEqual([...found].sort(), KV.filter(prefix => prefix.startsWith('task-')));
+  const created = readFileSync(join(root, 'projects', 'created.ts'), 'utf8');
+  assert.ok(created.includes('`created:${scope.kind}:${scope.id}`'), '控えの鍵の形が変わったら、ここと KV を直す');
+});
+
+test('タスクを消すと、そのタスクの kv（作ったものの控え created:task:<ID> も）が一緒に消える', async t => {
+  const { app } = await taskApp(t);
+  const task = app.tasks.create({ title: 'later', origin: 'user', runAt: Date.now() + 3_600_000, actor: 'test' });
+  for (const prefix of KV) app.kv.setJson(`${prefix}${task.id}`, [['a.txt', 'f:1']]);
+  app.kv.setJson('created:task:other', [['b.txt', 'f:2']]);
+  app.tasks.remove(task.id);
+  for (const prefix of KV) assert.equal(app.kv.getJson(`${prefix}${task.id}`), undefined, prefix);
+  assert.deepEqual(app.kv.getJson('created:task:other'), [['b.txt', 'f:2']], 'ほかのタスクの控えは残す');
 });

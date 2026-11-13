@@ -50,6 +50,7 @@ export const ServerConfig = Type.Object({
 export const RoutingConfig = Type.Object({
   chat: Type.Array(Type.String(), { default: [] }),
   background: Type.Array(Type.String(), { default: [] }),
+  judge: Type.Optional(Type.Array(Type.String())),
   retriesPerModel: Type.Integer({ minimum: 0, maximum: 5, default: 2 }),
 }, { additionalProperties: false });
 
@@ -97,7 +98,6 @@ export function ToolsConfig() {
     roots: Type.Array(RootConfig, { default: [{ path: 'workspace', mode: 'write' }] }),
     deny: Type.Array(Type.String({ minLength: 1 }), { default: ['~/.ssh', '~/.aws', '~/.gnupg'] }),
     outsideRoots: Type.Union([Type.Literal('ask'), Type.Literal('deny')], { default: 'ask' }),
-    taintEscalation: Type.Boolean({ default: true }),
     shell: Type.Object({
       enabled: Type.Boolean({ default: true }),
       shell: Type.Union([Type.Literal('auto'), Type.Literal('pwsh'), Type.Literal('powershell'), Type.Literal('bash'), Type.Literal('sh')], { default: 'auto' }),
@@ -108,7 +108,6 @@ export function ToolsConfig() {
       ask: Type.Array(Type.String({ minLength: 1 }), { default: [] }),
       deny: Type.Array(Type.String({ minLength: 1 }), { default: [] }),
       envAllow: Type.Array(Type.String(), { default: [] }),
-      approvalTimeoutSec: Type.Integer({ minimum: 10, maximum: 3600, default: 600 }),
     }, { additionalProperties: false, default: {} }),
     hooks: Type.Object({
       preToolUse: Type.Array(HookConfig, { default: [] }),

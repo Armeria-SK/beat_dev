@@ -17,7 +17,7 @@ function startOld(db: ReturnType<typeof openDatabase>, id: string, kind: string,
   db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at) VALUES (?, ?, ?, 1)').run(id, kind, conversationId);
 }
 
-// 段 8b（審査の直し）: 会話ごとの「外から読んだことがある」印（Q16 のあとは、判定役を止めず、判定役に見せる文の 1 行だけに使う。送る・消すを止めるのは humanOnlyOf）と、会話ごとの「自動承認で外を読んだことがある」印（その会話のシェルのコマンドと通信は、ずっと毎回確かめる）
+// 段 8b（審査の直し）: 会話ごとの「外から読んだことがある」印（Q16 のあとは、判定役を止めず、判定役に見せる文の 1 行だけに使う。送る・消すを止めるのは outboundOf）
 
 test('マイグレーション 12: conversations に ever_tainted、engine_runs に auto_read_outside が足される。前に外から読んだ実行のある会話は 1 になり、ほかは 0', t => {
   assert.ok(MIGRATIONS.length >= 12);
@@ -56,23 +56,6 @@ test('会話の印: markTainted で付けたら外れない。無い会話は読
     assert.equal(conversations.everTainted('c1'), true);
     assert.equal(conversations.everTainted('missing'), true, '読めないときは、外から読んだことがあるほうに倒す');
     conversations.markTainted('missing');
-  } finally { db.close(); }
-});
-
-test('会話の印: markAutoRead で付けたら外れない。無い会話は読めないので、自動承認で外を読んだことがあるとみなす', t => {
-  const db = openDatabase(join(tempDir(t), 'beat.db'), MIGRATIONS);
-  try {
-    const conversations = new Conversations(db);
-    conversations.create({ id: 'c1' });
-    conversations.create({ id: 'c2' });
-    assert.equal(conversations.everAutoRead('c1'), false);
-    conversations.markAutoRead('c1');
-    conversations.markAutoRead('c1');
-    assert.deepEqual([conversations.everAutoRead('c1'), conversations.everAutoRead('c2')], [true, false]);
-    assert.equal(conversations.everAutoRead('missing'), true, '読めないときは、読んだことがあるほうに倒す');
-    assert.equal((db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get('c1') as { ever_tainted: number }).ever_tainted, 0, '外から読んだ印とは別');
-    const listed = conversations.list().find(c => c.id === 'c1')!;
-    assert.ok(!('ever_auto_read' in listed), '一覧の型には載せない');
   } finally { db.close(); }
 });
 

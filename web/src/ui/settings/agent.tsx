@@ -14,7 +14,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKey } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
-import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, type ModelReach } from './view.ts';
+import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
 type T = ReturnType<typeof useT>;
@@ -246,7 +246,7 @@ function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boole
           <Row k={`${k}:label`} title={t('ui.set.model.label')}><CommitField value={(model.label as string | undefined) ?? ''} label={t('ui.set.model.label')} onCommit={v => edit({ label: v || undefined })} /></Row>
           <Row k={`${k}:id`} title={t('ui.set.model.id')}><CommitField value={id} label={t('ui.set.model.id')} mono onCommit={rename} /></Row>
           <Row k={`${k}:provider`} title={t('ui.set.model.provider')}><Select value={model.provider as string} options={providers} label={t('ui.set.model.provider')} onChange={provider => edit({ provider })} /></Row>
-          <Row k={`${k}:model`} title={t('ui.set.model.name')} desc={t('ui.set.model.nameDesc')}><CommitField value={model.model as string} label={t('ui.set.model.name')} mono onCommit={v => { if (v) edit({ model: v }); }} /></Row>
+          <Row k={`${k}:model`} title={t('ui.set.model.name')} desc={t('ui.set.model.nameDesc')}><CommitField value={model.model as string} label={t('ui.set.model.name')} mono required onCommit={v => edit({ model: v })} /></Row>
           <Row k={`${k}:ctx`} title={t('ui.set.model.context')} desc={t('ui.set.model.contextDesc')}>
             <NumberField k={`${k}:ctx`} value={model.contextLength as number | undefined} optional min={1024} max={10_000_000} label={t('ui.set.model.context')} onCommit={v => edit({ contextLength: v })} />
           </Row>
@@ -349,6 +349,9 @@ export function ModelsPanel() {
         <Row k="roles:conversation" title={t('ui.set.models.conversation')} desc={t('ui.set.models.conversationDesc')}>
           <Select value={roles.conversation} options={modelOptions} label={t('ui.set.models.conversation')} placeholder={t('ui.set.models.auto')} onChange={id => void ctx.commit('roles:conversation', c => setConversation(c, id))} />
         </Row>
+        <Row k="roles:judge" title={t('ui.set.models.judge')} desc={t('ui.set.models.judgeDesc')}>
+          <Select value={roles.judge} options={[{ value: '', label: t('ui.set.models.judgeSame') }, ...modelOptions]} label={t('ui.set.models.judge')} onChange={id => void ctx.commit('roles:judge', c => setJudge(c, id))} />
+        </Row>
         <Row k="roles:fallback" title={t('ui.set.models.fallback')} desc={t('ui.set.models.fallbackDesc')}
           below={<OrderList k="fallback" ids={roles.fallback} label={t('ui.set.models.fallback')} models={models.filter(m => m.id !== roles.conversation)} onChange={ids => void ctx.commit('roles:fallback', c => setFallback(c, ids))} />} />
         <Row k="roles:background" title={t('ui.set.models.background')} desc={t('ui.set.models.backgroundDesc')}
@@ -410,9 +413,6 @@ export function SkillsPanel() {
           below={<ListField items={(shell.ask ?? []) as string[]} label={t('ui.set.shell.ask')} placeholder="npm publish" disabled={busy} onChange={list => setShell('shell:ask', { ask: list })} />} />
         <Row k="shell:deny" title={t('ui.set.shell.deny')} desc={t('ui.set.shell.denyDesc')}
           below={<ListField items={(shell.deny ?? []) as string[]} label={t('ui.set.shell.deny')} placeholder="rm -rf" disabled={busy} onChange={deny => setShell('shell:deny', { deny })} />} />
-        <Row k="shell:wait" title={t('ui.set.shell.approvalWait')} desc={t('ui.set.shell.approvalWaitDesc')}>
-          <NumberField k="shell:wait" value={shell.approvalTimeoutSec as number} min={10} max={3600} label={t('ui.set.shell.approvalWait')} onCommit={v => setShell('shell:wait', { approvalTimeoutSec: v })} />
-        </Row>
       </Group>
     </>
   );

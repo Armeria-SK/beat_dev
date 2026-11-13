@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { segments } from '../src/tools/hooks/parse-cmd.ts';
 import { expandPath, isInside, placePath, realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
-import { checkShellCommand, type Decision } from '../src/tools/hooks/shell-guard.ts';
+import { checkShellCommand, type Decision, type StatementFacts } from '../src/tools/hooks/shell-guard.ts';
 import { findExecutable } from '../src/tools/shell/runner.ts';
 import { tempDir } from './helpers.ts';
+
+const deletesIn = (statements: readonly StatementFacts[]): boolean => statements.some(st => st.deletes || deletesIn(st.inner ?? []));
 
 const WIN = process.platform === 'win32';
 
@@ -177,7 +179,7 @@ test('shell（PowerShell）: 空の here-string のあとの行も、コマン�
   for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
     const v = verdict(command, shell);
     assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
-    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+    if (removes !== null) assert.equal(deletesIn(v.statements), removes, `${shell}: ${JSON.stringify(command)} の消す文`);
   }
 });
 
@@ -220,7 +222,7 @@ test('shell（PowerShell）: 前の語に空白なしでくっついた # は止
   for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
     const v = verdict(command, shell);
     assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
-    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+    if (removes !== null) assert.equal(deletesIn(v.statements), removes, `${shell}: ${JSON.stringify(command)} の消す文`);
   }
 });
 
@@ -258,8 +260,6 @@ test('shell（bash）: 関数定義 name () { … } も、name() { … } と同�
   for (const [command, decision] of rows) for (const shell of ['bash', 'sh'] as const) {
     const v = verdict(command, shell);
     assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
-    if (decision === 'ask') assert.deepEqual([v.sends, v.removes], [true, true], `${shell}: ${JSON.stringify(command)} の sends・removes（理由が分からない確かめは両方立つ）`);
-    if (decision === 'allow') assert.deepEqual([v.sends, v.removes], [false, false], `${shell}: ${JSON.stringify(command)} の sends・removes`);
   }
 });
 
@@ -340,7 +340,7 @@ test('shell（PowerShell）: 式の位置で数・符号・演算子につなが
   for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
     const v = verdict(command, shell);
     assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
-    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+    if (removes !== null) assert.equal(deletesIn(v.statements), removes, `${shell}: ${JSON.stringify(command)} の消す文`);
   }
 });
 
@@ -433,8 +433,8 @@ test('shell: レジストリに問い合わせる形（npm view・npm outdated�
   assert.equal(verdict('npm view left-pad | bash').decision, 'deny');
 });
 
-// npm・pip は、ローカルしか見ない形（ls・list・freeze・--version）も外へ送りうるもの（sends）に数える（レジストリの宛先を作業フォルダの設定が決めるため）。取得ではないので fetched にはしない。fetched にすると、動かしたあとに「よそから来た文を読んだ」印が付き、つないだ node や bash を「取ってきたものを動かす」として止めてしまう
-test('shell: npm と pip のローカルしか見ない形は sends だが fetched ではない。あとにシェルで動かす形をつないでも前と同じ確かめで、レジストリを読む形だけが止まる', t => {
+// npm・pip のローカルしか見ない形（ls・list・freeze・--version）は取得ではないので fetched にはしない。fetched にすると、動かしたあとに「よそから来た文を読んだ」印が付き、つないだ node や bash を「取ってきたものを動かす」として止めてしまう
+test('shell: npm と pip のローカルしか見ない形は fetched ではない。あとにシェルで動かす形をつないでも前と同じ確かめで、レジストリを読む形だけが止まる', t => {
   const f = fixture(t);
   const verdict = (command: string, shell: 'bash' | 'powershell' = 'bash') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
   const local: Array<[string, 'bash' | 'powershell']> = [
@@ -444,7 +444,7 @@ test('shell: npm と pip のローカルしか見ない形は sends だが fetch
   ];
   for (const [command, shell] of local) {
     const v = verdict(command, shell);
-    assert.deepEqual([v.decision, v.fetched, v.sends], ['allow', false, true], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
+    assert.deepEqual([v.decision, v.fetched], ['allow', false], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
   }
   const chains: Array<[string, 'bash' | 'powershell', Decision, boolean]> = [
     ['npm run build && node dist/x.js', 'bash', 'ask', false], ['npm ls; bash y.sh', 'bash', 'ask', false], ['npm ls | bash', 'bash', 'ask', false],
@@ -453,7 +453,7 @@ test('shell: npm と pip のローカルしか見ない形は sends だが fetch
   ];
   for (const [command, shell, decision, fetched] of chains) {
     const v = verdict(command, shell);
-    assert.deepEqual([v.decision, v.fetched, v.sends], [decision, fetched, true], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
+    assert.deepEqual([v.decision, v.fetched], [decision, fetched], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
   }
 });
 

@@ -20,6 +20,8 @@ export interface StatementFacts {
   deletes: boolean;
   targets: DeleteTarget[];
   writes: string[];
+  piped?: boolean;
+  redirected?: boolean;
   cwd: string | null;
   inner?: StatementFacts[] | null;
 }

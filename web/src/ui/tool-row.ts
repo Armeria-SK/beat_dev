@@ -129,11 +129,6 @@ export function elapsedClock(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-export function folderLabel(folder: string): string {
-  const parts = folder.split(/[\\/]+/u).filter(Boolean);
-  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/') || folder;
-}
-
 export function toolRow(name: string, input: string, result: ToolResult | null): ToolRowView {
   const verb = toolVerb(name);
   const args = record(input);

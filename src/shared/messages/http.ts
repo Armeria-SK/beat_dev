@@ -33,7 +33,6 @@ const en = {
   'bad_attachments': 'attachments must be an array of attachment IDs (up to {max})',
   'attachment_missing': 'The attachment was not found (attach it again)',
   'no_vision': 'No model in the chat list can read images (put a model with models[].vision set to true in routing.chat)',
-  'approval_gone': 'This approval has already ended (it may have timed out or been cancelled)',
   'tool_missing': 'There is no tool "{name}"',
   'tool_not_policyable': 'The tool "{name}" is needed to run tasks, so it cannot be set to ask for approval or be turned off',
   'tool_policy_changed': 'The setting of the tool "{name}" was changed somewhere else (it is "{policy}" now). Reload and try again',

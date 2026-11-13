@@ -57,8 +57,6 @@ interface CommandHook { matcher: string; command: string[]; timeoutMs: number; o
 interface BuiltinHook { matcher: string; builtin: string; always: string[]; afterOutside: string[]; enabled?: boolean; command?: undefined; timeoutMs?: undefined; onError?: undefined }
 type Hook = CommandHook | BuiltinHook;
 
-const hookName = (hook: Hook): string => (hook.builtin !== undefined ? hook.builtin : hook.command.join(' '));
-
 function hooksOf(config: Config, stage: Stage): Hook[] {
   const list = config.tools?.hooks?.[stage];
   return Array.isArray(list) ? list as Hook[] : [];
@@ -70,25 +68,37 @@ function setHooks(config: Config, stage: Stage, hooks: Hook[]): Config {
 
 function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Hook }) {
   const t = useT();
+  const name = hook.builtin !== undefined ? t('ui.set.hooks.protect') : hook.command.join(' ');
   const ctx = useSet();
   const [open, setOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const k = `hook:${stage}:${index}`;
-  const edit = (patch: Partial<Omit<CommandHook, 'builtin'>>) => void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).map((h, i) => (i === index ? { ...h, ...patch } as Hook : h))));
+  const edit = (patch: Partial<Omit<CommandHook, 'builtin'>> | Partial<Pick<BuiltinHook, 'always' | 'afterOutside'>>) => void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).map((h, i) => (i === index ? { ...h, ...patch } as Hook : h))));
   const busy = ctx.busy !== null;
   const on = hook.enabled !== false;
   return (
-    <Row k={k} title={<code className="bt-meta">{hookName(hook)}</code>} desc={t(on ? 'ui.set.hooks.when' : 'ui.set.hooks.whenOff', hook.matcher)}
+    <Row k={k} title={hook.builtin !== undefined ? name : <code className="bt-meta">{name}</code>} desc={t(on ? 'ui.set.hooks.when' : 'ui.set.hooks.whenOff', hook.matcher)}
       below={(removing || open) && (
         <>
           {removing && <RowConfirm warn={t('ui.set.hooks.removeWarn')} action={t('ui.set.hooks.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).filter((_, i) => i !== index))); }} onKeep={() => setRemoving(false)} />}
-          {open && hook.builtin === undefined && (
+          {open && hook.builtin !== undefined && (
             <div className="ui-set__detail">
               <Row k={`${k}:matcher`} title={t('ui.set.hooks.matcher')} desc={t('ui.set.hooks.matcherDesc')}>
                 <CommitField value={hook.matcher} label={t('ui.set.hooks.matcher')} mono onCommit={matcher => { if (matcher) edit({ matcher }); }} />
               </Row>
+              <Row k={`${k}:always`} title={t('ui.set.hooks.always')} desc={t('ui.set.hooks.alwaysDesc')}
+                below={<ListField items={hook.always} label={t('ui.set.hooks.always')} placeholder=".github/workflows/**" disabled={busy} onChange={always => edit({ always })} />} />
+              <Row k={`${k}:afterOutside`} title={t('ui.set.hooks.afterOutside')} desc={t('ui.set.hooks.afterOutsideDesc')}
+                below={<ListField items={hook.afterOutside} label={t('ui.set.hooks.afterOutside')} placeholder="package.json" disabled={busy} onChange={afterOutside => edit({ afterOutside })} />} />
+            </div>
+          )}
+          {open && hook.builtin === undefined && (
+            <div className="ui-set__detail">
+              <Row k={`${k}:matcher`} title={t('ui.set.hooks.matcher')} desc={t('ui.set.hooks.matcherDesc')}>
+                <CommitField value={hook.matcher} label={t('ui.set.hooks.matcher')} mono required onCommit={matcher => edit({ matcher })} />
+              </Row>
               <Row k={`${k}:command`} title={t('ui.set.hooks.command')} desc={t('ui.set.hooks.commandDesc')}
-                below={<ListField items={hook.command} label={t('ui.set.hooks.command')} placeholder="node" disabled={busy} onChange={command => { if (command.length) edit({ command }); }} />} />
+                below={<ListField items={hook.command} allowDuplicates label={t('ui.set.hooks.command')} placeholder="node" disabled={busy} onChange={command => { if (command.length) edit({ command }); }} />} />
               <Row k={`${k}:timeout`} title={t('ui.set.hooks.timeout')} desc={t('ui.set.unit.ms')}>
                 <NumberField k={`${k}:timeout`} value={hook.timeoutMs} min={100} max={120_000} label={t('ui.set.hooks.timeout')} onCommit={v => { if (v !== undefined) edit({ timeoutMs: v }); }} />
               </Row>
@@ -99,8 +109,8 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
           )}
         </>
       )}>
-      <Switch checked={on} label={t('ui.set.hooks.on', hookName(hook))} disabled={busy} onChange={enabled => edit({ enabled })} />
-      {!hook.builtin && <Button small variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>}
+      <Switch checked={on} label={t('ui.set.hooks.on', name)} disabled={busy} onChange={enabled => edit({ enabled })} />
+      <Button small variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>
       {!removing && <Button small variant="ghost" disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.hooks.remove')}</Button>}
     </Row>
   );
@@ -139,7 +149,7 @@ export function HooksPanel() {
         return (
           <Group key={stage} title={t(stage === 'preToolUse' ? 'ui.set.hooks.pre' : 'ui.set.hooks.post')}>
             {hooks.length === 0 && <p className="bt-meta">{t('ui.set.hooks.none')}</p>}
-            {hooks.map((hook, i) => <HookRow key={`${i}:${hook.matcher}:${hookName(hook)}`} stage={stage} index={i} hook={hook} />)}
+            {hooks.map((hook, i) => <HookRow key={`${i}:${hook.matcher}:${hook.builtin ?? hook.command.join(' ')}`} stage={stage} index={i} hook={hook} />)}
             <Row k={`hooks:add:${stage}`} title={t('ui.set.hooks.add')} desc={t(stage === 'preToolUse' ? 'ui.set.hooks.preDesc' : 'ui.set.hooks.postDesc')}
               below={adding === stage && <AddHook stage={stage} onDone={() => setAdding(null)} />}>
               {adding !== stage && <Button small onClick={() => setAdding(stage)}>{t('ui.set.hooks.addShort')}</Button>}

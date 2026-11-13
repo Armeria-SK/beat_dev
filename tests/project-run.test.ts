@@ -68,7 +68,7 @@ test('製品の実行の許可フォルダ: 外・..・秘密・beat のデー�
   assert.equal(u.write(u.paths.database).decision, 'deny', 'beat の DB');
   assert.equal(u.write(join(u.paths.projects, 'p1', 'x.md')).decision, 'deny', 'data/projects');
   const git = u.write('.git/hooks/pre-commit');
-  assert.deepEqual([git.decision, git.onceOnly], ['ask', true]);
+  assert.deepEqual([git.decision, git.askKinds?.includes('code')], ['ask', true]);
   symlinkSync(u.outside, join(u.root, 'link'), WINDOWS ? 'junction' : 'dir');
   assert.equal(u.write(join('link', 'x.txt')).decision, 'deny', 'ジャンクション越しは外');
   const shell = shellPreCheck({ command: WINDOWS ? 'echo x > link\\x.txt' : 'echo x > link/x.txt' }, u.ctx());
@@ -154,7 +154,7 @@ test('npm の作業フォルダの .npmrc（指摘 1）: npm が起動のとき�
   for (const command of forms) {
     const check = shellPreCheck({ command }, u.ctx());
     assert.equal(check.decision, 'ask', command);
-    assert.equal(check.onceOnly, true, command);
+    assert.equal(check.askKinds?.includes('code'), true, command);
   }
   const sub = u.ctx({ workspace: join(u.root, 'sub') });
   assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'ask', '上の階の .npmrc も数える（npm はワークスペースの根までさかのぼりうる）');
@@ -207,7 +207,7 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   };
   const send = async (id: string, body: Record<string, unknown>) => {
     const fresh = body.projectId !== undefined && body.permissionMode === undefined && !s.app.conversations.get(id);
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', fresh ? { ...body, permissionMode: 'normal' } : body);
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', fresh ? { ...body, permissionMode: 'auto' } : body);
     if (sent.status === 202) await settled(s.app, sent.body.runId);
     return sent;
   };
@@ -221,7 +221,7 @@ test('製品の会話: 相対パスの file_write は作業フォルダに確か
   s.adapter().scripts = [call('probe_ctx', {}), call('file_write', { path: 'hello.txt', content: 'hi' }), reply('done')];
   assert.equal((await s.send(uuid(1), { text: 'make a file', projectId: shop.id })).status, 202);
   assert.equal(readFileSync(join(shop.root, 'hello.txt'), 'utf8'), 'hi');
-  assert.equal(s.app.approvals.pending().length, 0);
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
   const ctx = s.seen[0]!;
   assert.deepEqual([ctx.workspace, ctx.home, ctx.project], [shop.root, s.paths.workspace, { id: shop.id, root: shop.root }]);
   assert.deepEqual(s.app.config().tools.roots, rootsBefore);

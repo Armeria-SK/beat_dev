@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { markSetupShown, setupModelConfig, wasSetupShown } from '../web/src/onboarding.ts';
 import {
-  agentInput, canContinue, connectProblem, emptyConnect, modelFormOf, nameInput, ONBOARD_DONE_HASH, ONBOARD_STEPS, opensOnLoad, OPENAI_URL, resumeIndex, setupPending, styleInput,
+  agentInput, canContinue, connectProblem, escapeAction, emptyConnect, modelFormOf, nameInput, ONBOARD_DONE_HASH, ONBOARD_STEPS, opensOnLoad, OPENAI_URL, resumeIndex, setupPending, styleInput,
 } from '../web/src/ui/onboarding-steps.ts';
 import { defaultConfig } from '../src/config/store.ts';
 
@@ -88,4 +88,16 @@ test('ui/onboarding: Skip と Esc は「済み」にしない。閉じたあと�
   assert.deepEqual(screen.match(/.*onboardingDone.*/gu)?.map(line => line.trim().startsWith("if (step === 'hello')")), [true], '「済み」にするのは最後の段の Start だけ');
   assert.match(screen, /onClick=\{onSkip\}/u);
   assert.match(app, /if \(onboard\) \{ e\.preventDefault\(\); closeOnboard\(\); return; \}/u);
+});
+
+test('ui/onboarding: 確かめの最中の Esc は全体を閉じない（動いている間は何もしない、広がる確かめが出ていればそれだけを閉じる）', () => {
+  assert.equal(escapeAction({ busy: true, confirming: false }), 'ignore');
+  assert.equal(escapeAction({ busy: true, confirming: true }), 'ignore');
+  assert.equal(escapeAction({ busy: false, confirming: true }), 'cancelConfirm');
+  assert.equal(escapeAction({ busy: false, confirming: false }), 'close');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  const screen = readFileSync(new URL('../web/src/ui/Onboarding.tsx', import.meta.url), 'utf8');
+  assert.ok(screen.includes("addEventListener('keydown', onEscape, true)"), 'フォーカスが枠の外でも止められるよう、window の捕まえる段で見る');
+  assert.ok(screen.includes("removeEventListener('keydown', onEscape, true)"));
+  assert.ok(app.includes("if (e.key !== 'Escape' || e.defaultPrevented) return;"), 'App は止めた Esc では閉じない');
 });

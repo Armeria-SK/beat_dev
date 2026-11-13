@@ -3,7 +3,6 @@ import type { ChecklistItem, TaskStatus } from '../api.ts';
 export type AgentState = 'idle' | 'working' | 'waiting';
 
 export interface Waiting {
-  approvals: number;
   proposals: number;
   answers: number;
   drafts: number;
@@ -20,7 +19,7 @@ export function countTasks(statuses: Iterable<TaskStatus>): { proposals: number;
   return { proposals, answers };
 }
 
-export const waitingTotal = (w: Waiting): number => w.approvals + w.proposals + w.answers + w.drafts + w.pending;
+export const waitingTotal = (w: Waiting): number => w.proposals + w.answers + w.drafts + w.pending;
 
 export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers'>): number => w.proposals + w.answers;
 

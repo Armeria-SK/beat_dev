@@ -57,7 +57,7 @@ async function readHead(response: Response): Promise<{ text: string; cut: boolea
     total += value.length;
   }
   await reader.cancel().catch(() => undefined);
-  return { text: Buffer.concat(chunks).subarray(0, SNIPPET_READ_BYTES).toString('utf8'), cut: true };
+  return { text: new TextDecoder().decode(Buffer.concat(chunks).subarray(0, SNIPPET_READ_BYTES), { stream: true }), cut: true };
 }
 
 const SPACE = /\s/u;

@@ -8,7 +8,8 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
-import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { fileSearch } from '../src/tools/builtin/file-search.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -30,10 +31,9 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun).register(fileSearch);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const ctx: ToolContext = {
@@ -41,7 +41,10 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
+      registry, approvals, pending, db, emit: e => events.push(e),
+      lastUserRequest: () => 'please look through the files', autoClassify: async () => '{"decision":"ask","reason":"not sure"}',
+    });
   return { paths, ctx, call, approvals, events, db, controller };
 }
 

@@ -67,7 +67,7 @@ export function orderTools<T extends { name: string }>(tools: readonly T[]): T[]
 export const toolLook = (name: string): ToolLook => (Object.hasOwn(TOOL_LOOKS, name) ? TOOL_LOOKS[name]! : { icon: 'wrench', desc: null });
 
 // 道具ごとの方針の名前（デザインの「承認なし / 承認を求める / 止める」）
-export const POLICY_LABEL: Record<ToolPolicy, PlainKey> = { allow: 'tools.policy.allow', ask: 'tools.policy.ask', block: 'tools.policy.block' };
+export const POLICY_LABEL: Record<ToolPolicy, PlainKey> = { allow: 'ui.tools.allow', ask: 'ui.tools.ask', block: 'ui.tools.block' };
 
 export const EFFECT_LABEL: Record<ToolEffect, PlainKey> = {
   read: 'tools.effect.read', write: 'tools.effect.write', exec: 'tools.effect.exec', network: 'tools.effect.network', meta: 'tools.effect.meta',

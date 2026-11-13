@@ -8,7 +8,6 @@ import { Conversations } from '../src/db/conversations.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { searchHistory } from '../src/memory/history.ts';
-import { inputHash } from '../src/tools/approvals.ts';
 import { checklistKey } from '../src/tools/builtin/checklist-core.ts';
 import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, type Script } from './helpers.ts';
@@ -67,11 +66,6 @@ async function populate(s: Awaited<ReturnType<typeof startApp>>) {
   const otherReview = app.conversations.create({ kind: 'task', title: '振り返り: 別の会話' });
   app.conversations.append(otherReview.id, { role: 'user', content: '別の会話の振り返り' }, 'run-rv2');
   app.db.prepare(`INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, status, run_id, review_conversation_id, note, created_at, finished_at) VALUES ('idle', ?, ?, 'done', 'run-rv2', ?, '済み', 1, 2)`).run(`idle:${OTHER}:2`, OTHER, otherReview.id);
-  // 承認の「この会話では許可」(メモリ上)
-  const pending = app.approvals.request({ runId: 'run-g', conversationId: TARGET, tool: 'shell_run', input: { command: 'ls' }, title: 't', body: 'b', reasons: [], details: [] }, 60_000, new AbortController().signal);
-  app.approvals.decide(app.approvals.pending()[0]!.id, 'conversation');
-  await pending;
-  assert.equal(app.approvals.isGranted(TARGET, inputHash('shell_run', { command: 'ls' })), true, '前提: 許可を覚えている');
   return { upload, shared, only, fullOutput, otherOutput, taskId: task.id, reviewId: review.id, otherReviewId: otherReview.id };
 }
 
@@ -103,7 +97,6 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   // 承認・道具の記録・実行の記録
   assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM approvals WHERE conversation_id = ?').get(TARGET)!.n, 0);
   assert.equal(app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE id = 'ap2'").get()!.n, 1, 'ほかの会話の承認は残る');
-  assert.equal(app.approvals.isGranted(TARGET, inputHash('shell_run', { command: 'ls' })), false, '「この会話では許可」の覚えも消える');
   const call = app.db.prepare("SELECT * FROM tool_calls WHERE id = 'tc1'").get() as Record<string, unknown>;
   assert.deepEqual({ tool: call.tool, ok: call.ok, duration: call.duration_ms, decision: call.decision, conv: call.conversation_id, input: call.input, preview: call.output_preview, ref: call.full_ref, approval: call.approval_id },
     { tool: 'shell_run', ok: 1, duration: 321, decision: 'ask', conv: null, input: '', preview: null, ref: null, approval: null }, '道具の記録は種類と結果だけ残し、本文と結び付きを消す');

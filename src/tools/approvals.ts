@@ -1,10 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Placement } from './hooks/scope.ts';
-import type { AskKind } from './types.ts';
-
-export type ApprovalDecision = 'once' | 'conversation' | 'folder' | 'deny';
-export type ApprovalOutcome = 'approved' | 'denied' | 'expired' | 'cancelled';
 
 // 確かめの札で見せるコードのファイル（読めないものは text に理由の文を入れる）
 export interface PreviewFile { path: string; text: string; truncated: boolean }
@@ -46,138 +42,26 @@ export function approvalPathsMore(found: readonly PlacedPath[]): number {
   return Math.max(0, distinctPaths(found).length - MAX_APPROVAL_PATHS);
 }
 
-export interface ApprovalRequest {
-  runId: string;
-  conversationId: string;
-  tool: string;
-  input: unknown;
-  title: string;
-  body: string;
-  cwd?: string | undefined;
-  reasons: string[];
-  details: string[];
-  // コードを動かす確かめ。「この会話では許可」を出さず、同じ文字のコマンドの許可を覚えない
-  onceOnly?: boolean | undefined;
-  // 道具ごとの方針が ask の確かめ。毎回承認を求める（「この会話では許可」を出さず、送られても今回だけ）。コードを動かす確かめ（onceOnly）とは別
-  everyTime?: boolean | undefined;
-  // 確かめになった理由の種類（画面には渡さない）
-  kinds?: AskKind[] | undefined;
-  // この札に添える「この返事のあいだ、このフォルダ以下への書き込みを許可」のフォルダ。外から読んだ内容のあとの file_write / file_edit の確かめ（理由の種類が taint だけ）にだけ付く
-  grantFolder?: string | undefined;
-  preview?: PreviewFile[] | undefined;
-  // 子の担当（agent_run）の道具の札だけが持つ。札を出す会話（親の会話。親がタスクならそのタスクの会話）と、子の会話・題（札から子の会話を開くため）。子の札には「この会話では許可」を出さない（decide も今回だけにする）
-  hostConversationId?: string | undefined;
-  childConversationId?: string | undefined;
-  childTitle?: string | undefined;
-  // 見つけたパスごとの判定（details の文と同じものを構造で渡す。無ければ空）
-  paths?: ApprovalPath[] | undefined;
-  // paths に入りきらず、切った行の数
-  pathsMore?: number | undefined;
-}
+export interface AutoRecord { runId: string; conversationId: string; tool: string; input: unknown; reasons: string[] }
 
-export interface ApprovalView extends ApprovalRequest {
-  id: string;
-  inputHash: string;
-  createdAt: number;
-  expiresAt: number;
-}
-
-// 札を出す会話。子の担当の札は親の会話に出す（親の会話の画面・タスクのページ・通知は、どれもこの関数で選ぶ）
-export const approvalShownIn = (v: Pick<ApprovalRequest, 'conversationId' | 'hostConversationId'>): string => v.hostConversationId ?? v.conversationId;
-
-// 画面に渡す承認の形。SSE の知らせ・GET /api/approvals・タスクの詳細で、この 1 か所だけを使う
-export function approvalPublic(v: ApprovalView) {
-  return {
-    id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
-    onceOnly: v.onceOnly === true, everyTime: v.everyTime === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0, grantFolder: v.grantFolder ?? null,
-    fromAgent: v.childConversationId ? { conversationId: v.childConversationId, title: v.childTitle ?? '' } : null,
-  };
-}
-
-// API の応答（GET /api/approvals・会話・タスクの詳細）が返す形。どの実行・会話の承認かを添える
-export function approvalWire(v: ApprovalView) {
-  return { runId: v.runId, conversationId: approvalShownIn(v), ...approvalPublic(v) };
-}
-
-export function inputHash(tool: string, input: unknown): string {
+function inputHash(tool: string, input: unknown): string {
   const stable = (v: unknown): unknown => Array.isArray(v) ? v.map(stable)
     : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v as object).sort().map(k => [k, stable((v as Record<string, unknown>)[k])])) : v;
   return createHash('sha256').update(JSON.stringify([tool, stable(input)])).digest('hex');
 }
 
-interface Pending { view: ApprovalView; resolve: (o: ApprovalOutcome) => void; timer: ReturnType<typeof setTimeout> }
-
-export type ApprovalNotify = (event: { type: 'requested'; view: ApprovalView } | { type: 'resolved'; view: ApprovalView; outcome: ApprovalOutcome }) => void;
-
 export class ApprovalBroker {
-  #pending = new Map<string, Pending>();
-  #conversationGrants = new Set<string>();
   readonly #db: DatabaseSync;
-  readonly #notify: ApprovalNotify;
 
-  constructor(db: DatabaseSync, notify: ApprovalNotify) { this.#db = db; this.#notify = notify; }
-
-  isGranted(conversationId: string, hash: string): boolean { return this.#conversationGrants.has(`${conversationId}:${hash}`); }
-
-  // 会話を消したとき、その会話の「この会話では許可」の覚えも消す
-  forgetConversation(conversationId: string): void {
-    for (const key of [...this.#conversationGrants]) if (key.startsWith(`${conversationId}:`)) this.#conversationGrants.delete(key);
-  }
-
-  request(req: ApprovalRequest, timeoutMs: number, signal: AbortSignal): Promise<ApprovalOutcome> {
-    const now = Date.now();
-    const view: ApprovalView = { ...req, id: randomUUID(), inputHash: inputHash(req.tool, req.input), createdAt: now, expiresAt: now + timeoutMs };
-    this.#db.prepare(`INSERT INTO approvals (id, run_id, conversation_id, tool, input, input_hash, reasons, status, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`).run(view.id, view.runId, view.conversationId, view.tool, JSON.stringify(view.input), view.inputHash, JSON.stringify(view.reasons), now, view.expiresAt);
-    return new Promise(resolve => {
-      const finish = (outcome: ApprovalOutcome, status: string) => {
-        const pending = this.#pending.get(view.id);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this.#pending.delete(view.id);
-        signal.removeEventListener('abort', onAbort);
-        this.#db.prepare('UPDATE approvals SET status = ?, decided_at = ? WHERE id = ?').run(status, Date.now(), view.id);
-        this.#notify({ type: 'resolved', view, outcome });
-        resolve(outcome);
-      };
-      const onAbort = () => finish('cancelled', 'cancelled');
-      const timer = setTimeout(() => finish('expired', 'expired'), timeoutMs);
-      timer.unref?.();
-      this.#pending.set(view.id, { view, resolve: outcome => finish(outcome, outcome === 'approved' ? 'approved' : outcome), timer });
-      signal.addEventListener('abort', onAbort, { once: true });
-      this.#notify({ type: 'requested', view });
-    });
-  }
+  constructor(db: DatabaseSync) { this.#db = db; }
 
   // 自動承認（判定役）が許したことを記録する。札は出さない。status は approved、scope は auto。reasons には、元の確かめの理由のあとに判定役の理由を 1 つ足す（最後の要素）。
   // 戻り値の id を、道具の記録（tool_calls.approval_id）につなぐ
-  recordAuto(req: ApprovalRequest, classifierReason: string): string {
+  recordAuto(req: AutoRecord, classifierReason: string): string {
     const now = Date.now();
     const id = randomUUID();
     this.#db.prepare(`INSERT INTO approvals (id, run_id, conversation_id, tool, input, input_hash, reasons, status, scope, created_at, expires_at, decided_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', 'auto', ?, ?, ?)`).run(id, req.runId, req.conversationId, req.tool, JSON.stringify(req.input), inputHash(req.tool, req.input), JSON.stringify([...req.reasons, classifierReason]), now, now, now);
     return id;
   }
-
-  decide(id: string, decision: ApprovalDecision): boolean {
-    const pending = this.#pending.get(id);
-    if (!pending) return false;
-    // コードを動かす確かめと、方針が ask の確かめは、古い画面から「この会話では許可」が送られても今回だけとして扱う。フォルダの許可を添えていない札に「フォルダ」が送られたときも、今回だけ
-    const scope = decision === 'conversation' && (pending.view.onceOnly || pending.view.everyTime || pending.view.childConversationId) ? 'once'
-      : decision === 'folder' && !pending.view.grantFolder ? 'once' : decision;
-    if (scope === 'conversation') this.#conversationGrants.add(`${pending.view.conversationId}:${pending.view.inputHash}`);
-    this.#db.prepare('UPDATE approvals SET scope = ?, grant_folder = ? WHERE id = ?').run(scope, scope === 'folder' ? pending.view.grantFolder ?? null : null, id);
-    pending.resolve(decision === 'deny' ? 'denied' : 'approved');
-    return true;
-  }
-
-  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札なら、そのフォルダ（記録から読む）
-  grantedFolder(id: string): string | undefined {
-    const row = this.#db.prepare('SELECT grant_folder FROM approvals WHERE id = ?').get(id) as { grant_folder: string | null } | undefined;
-    return row?.grant_folder ?? undefined;
-  }
-
-  pending(): ApprovalView[] { return [...this.#pending.values()].map(p => p.view); }
-
-  cancelAll(): void { for (const p of [...this.#pending.values()]) p.resolve('cancelled'); }
 }

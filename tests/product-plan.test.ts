@@ -13,6 +13,7 @@ import { buildDynamic } from '../src/engine/workspace.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { PLAN_BACKUPS, PLAN_MAX_CHARS, PlanStore } from '../src/projects/plan.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { planWrite } from '../src/tools/builtin/plan.ts';
 import { fileEdit, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -139,7 +140,7 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
     services: { db, memory: undefined as never, emit: e => events.push(e), plans },
   };
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db, () => undefined), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal', conversationAutoRead: () => false,
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
   });
 
   const outside = await run('plan_write', { content: 'x' }, base);
@@ -182,8 +183,8 @@ test('3-1a 守り: ふつうのファイルの道具とシェルからは plan.m
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto', project: { id: PROJECT },
   };
   const run = (name: string, args: unknown) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db, () => undefined), db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the plan',
-    conversationTainted: () => false, conversationAutoRead: () => false, autoClassify: async () => '{"decision":"allow","reason":"ok"}',
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'read the plan',
+    conversationTainted: () => false, autoClassify: async () => '{"decision":"allow","reason":"ok"}',
   });
   for (const [name, args] of [['file_read', { path: file }], ['file_write', { path: file, content: 'x' }], ['file_edit', { path: file, old: 'secret', new: 'x' }], ['shell_run', { command: `cat "${file.replaceAll('\\', '/')}"` }]] as const) {
     const result = await run(name, args);
@@ -199,7 +200,7 @@ test('3-1a 毎回の system: 製品の計画モードの会話にだけ plan_wri
   const line = 'Write the plan with plan_write.';
   assert.match(buildDynamic('UTC', 'en', at, 'plan', product, line), /\nWrite the plan with plan_write\.$/u);
   assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', undefined, line), /plan_write/u);
-  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'normal', product, line), /plan_write/u);
+  assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'auto', product, line), /plan_write/u);
   assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'plan', product), /plan_write/u, '子の担当（plan_write が無い）には入れない');
   assert.equal(buildDynamic('UTC', 'en', at, 'plan', undefined), buildDynamic('UTC', 'en', at, 'plan', undefined, line), '製品に属さない会話の計画モードは今のまま');
 });
@@ -230,15 +231,15 @@ test('3-1a 道具の一覧: 製品の会話には plan_write と mesh_read、製
   s.adapter().scripts = [reply('a'), reply('b'), reply('c'), reply('d')];
   await s.send(uuid(1), { text: 'plan it', projectId: shop.id, permissionMode: 'plan' });
   assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_read'), s.names().join());
-  await s.send(uuid(2), { text: 'do it', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(2), { text: 'do it', projectId: shop.id, permissionMode: 'auto' });
   assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_read'));
-  for (const [n, mode] of [[3, 'normal'], [4, 'plan'], [5, 'auto']] as const) {
+  for (const [n, mode] of [[3, 'auto'], [4, 'plan']] as const) {
     await s.send(uuid(n), { text: 'hi', permissionMode: mode });
     assert.ok(!s.names().some(name => name.startsWith('plan_') || name.startsWith('mesh_')), mode);
   }
 
   s.adapter().scripts = [call('agent_run', { task: 'look' }), reply('child'), reply('parent')];
-  await s.send(uuid(6), { text: 'delegate', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(6), { text: 'delegate', projectId: shop.id, permissionMode: 'auto' });
   const child = s.adapter().calls.at(-2)!.tools.map(tool => tool.name);
   assert.ok(child.includes('mesh_read') && !child.includes('plan_write'), child.join());
 
@@ -260,7 +261,7 @@ test('3-1a 登録の順（maxTools: 12）: (a) 製品の計画モードに plan_
   s.adapter().scripts = [reply('a'), reply('b')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
   assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_read'), s.names().join());
-  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'auto' });
   for (const name of ['file_read', 'file_edit', 'shell_run']) assert.ok(s.names().includes(name), `${name}: ${s.names().join()}`);
   await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
   s.adapter().scripts = [call('task_complete', { summary: 'done' })];
@@ -268,7 +269,7 @@ test('3-1a 登録の順（maxTools: 12）: (a) 製品の計画モードに plan_
   for (const name of ['task_complete', 'file_read', 'file_edit', 'shell_run']) assert.ok(s.names().includes(name), `${name}: ${s.names().join()}`);
 
   const plain = await setup(t, { models: [fakeModel('m1', { maxTools: 12 })], tools: builtinTools().filter(tool => !tool.projectOnly) });
-  for (const [n, mode] of [[3, 'normal'], [4, 'plan'], [5, 'auto']] as const) {
+  for (const [n, mode] of [[3, 'auto'], [4, 'plan']] as const) {
     s.adapter().scripts = [reply('x')];
     plain.adapter().scripts = [reply('x')];
     await s.send(uuid(n), { text: 'hi', permissionMode: mode });
@@ -277,41 +278,41 @@ test('3-1a 登録の順（maxTools: 12）: (a) 製品の計画モードに plan_
   }
 });
 
-test('3-1a 毎回の system（本物の App）: 製品の計画モードの会話にだけ plan_write の 1 行。ふつうのモードと製品に属さない計画モードには無い', async t => {
+test('3-1a 毎回の system（本物の App）: 製品の計画モードの会話にだけ plan_write の 1 行。自動承認のモードと製品に属さない計画モードには無い', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   s.adapter().scripts = [reply('a'), reply('b'), reply('c')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
   assert.match(s.adapter().calls.at(-1)!.system.dynamic, /plan_write/u);
-  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'normal' });
+  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'auto' });
   assert.doesNotMatch(s.adapter().calls.at(-1)!.system.dynamic, /plan_write/u);
   await s.send(uuid(3), { text: 'plan', permissionMode: 'plan' });
   assert.doesNotMatch(s.adapter().calls.at(-1)!.system.dynamic, /plan_write/u);
 });
 
-test('3-1a 製品の会話を計画モードで始める: 計画書の無い製品の新しい会話は、指定なしなら plan、normal を付ければ normal。どちらも INSERT の値で決まり UPDATE が無い', async t => {
+test('3-1a 製品の会話を計画モードで始める: 計画書の無い製品の新しい会話は、指定なしなら plan、auto を付ければ auto。どちらも INSERT の値で決まり UPDATE が無い', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   s.app.db.exec("CREATE TEMP TABLE mode_updates (id TEXT); CREATE TEMP TRIGGER mode_updated AFTER UPDATE OF permission_mode ON main.conversations BEGIN INSERT INTO mode_updates VALUES (new.id); END;");
   s.adapter().scripts = [reply('a'), reply('b'), reply('c'), reply('d'), reply('e'), reply('f')];
   await s.send(uuid(1), { text: 'build a shop', projectId: shop.id });
   assert.equal(s.app.conversations.modeOf(uuid(1)), 'plan');
-  await s.send(uuid(2), { text: 'just chat', projectId: shop.id, permissionMode: 'normal' });
-  assert.equal(s.app.conversations.modeOf(uuid(2)), 'normal');
+  await s.send(uuid(2), { text: 'just chat', projectId: shop.id, permissionMode: 'auto' });
+  assert.equal(s.app.conversations.modeOf(uuid(2)), 'auto');
   await s.send(uuid(3), { text: 'auto', projectId: shop.id, permissionMode: 'auto', modelId: 'm1' });
   assert.equal(s.app.conversations.modeOf(uuid(3)), 'auto');
   assert.equal(s.app.conversations.get(uuid(3))?.model_id, 'm1', 'モデルの選びも INSERT で入る');
   assert.deepEqual(s.app.db.prepare('SELECT id FROM temp.mode_updates').all(), [], '新しい会話のモードは UPDATE しない');
 
   await s.send(uuid(4), { text: 'hello' });
-  assert.equal(s.app.conversations.modeOf(uuid(4)), 'normal', '製品に属さない会話は今までどおり');
+  assert.equal(s.app.conversations.modeOf(uuid(4)), 'auto', '製品に属さない会話は今までどおり');
   await s.send(uuid(1), { text: 'more' });
   assert.equal(s.app.conversations.modeOf(uuid(1)), 'plan', '前からある会話はそのまま');
 
   const put = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
   assert.equal(put.status, 200, JSON.stringify(put.body));
   await s.send(uuid(5), { text: 'next idea', projectId: shop.id });
-  assert.equal(s.app.conversations.modeOf(uuid(5)), 'normal', '計画書のある製品の新しい会話は今までどおり');
+  assert.equal(s.app.conversations.modeOf(uuid(5)), 'auto', '計画書のある製品の新しい会話は今までどおり');
 });
 
 test('3-1a 計画書の口: GET は無い間は空の形、PUT は baseHash が合えば書けて updated_by owner と plan.changed、合わなければ 409 plan.changed で変わらない', async t => {
@@ -320,11 +321,11 @@ test('3-1a 計画書の口: GET は無い間は空の形、PUT は baseHash が�
   assert.equal(shop.has_plan, false);
   const empty = await s.json(`/api/projects/${shop.id}/plan`, 'GET');
   assert.equal(empty.status, 200);
-  assert.deepEqual(empty.body, { plan: { content: null, hash: null, updated_at: null, updated_by: null, tainted: false, writing: false } });
+  assert.deepEqual(empty.body, { plan: { content: null, hash: null, updated_at: null, updated_by: null, tainted: false, writing: false, reviewLocked: false } });
 
   const put = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan\nv1', baseHash: null });
   assert.equal(put.status, 200);
-  assert.deepEqual(Object.keys(put.body.plan).sort(), ['content', 'hash', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.deepEqual(Object.keys(put.body.plan).sort(), ['content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
   assert.equal(put.body.plan.updated_by, 'owner');
   assert.equal(put.body.plan.hash, sha('# Plan\nv1'));
   assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, hash: sha('# Plan\nv1'), by: 'owner' }]);
@@ -388,7 +389,7 @@ test('3-1a 計画書の口: AI の plan_write で plan.changed（by ai）、計�
   await settled(s.app, sent.body.runId);
   assert.deepEqual(seen, [true]);
   const after = (await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan;
-  assert.deepEqual({ ...after, updated_at: 0 }, { content: '# Plan by AI', hash: sha('# Plan by AI'), updated_at: 0, updated_by: 'ai', tainted: false, writing: false });
+  assert.deepEqual({ ...after, updated_at: 0 }, { content: '# Plan by AI', hash: sha('# Plan by AI'), updated_at: 0, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false });
   assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, hash: sha('# Plan by AI'), by: 'ai' }]);
 
   const upload = await (await s.api('/api/uploads?name=notes.txt', { method: 'POST', body: 'outside text', headers: { 'Content-Type': 'text/plain' } })).json() as { upload: { id: string } };
@@ -415,8 +416,8 @@ function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
     services: { db, memory: undefined as never, emit: e => events.push(e), plans }, ...over,
   });
   const run = (name: string, args: unknown, ctx: ToolContext) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db, () => undefined), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'normal',
-    conversationTainted: () => false, conversationAutoRead: () => false,
+    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
+    conversationTainted: () => false,
   });
   return { paths, plans, events, ctxOf, run, file: join(paths.projects, PROJECT, 'plan.md') };
 }
@@ -496,14 +497,14 @@ test('3-1a 審査 C1: 名前の付け替えが EPERM / EBUSY / EACCES で一時�
   assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT)), ['plan.md']);
 });
 
-test('3-1a 審査 C2: writing は実行に効いているモードで決まる（計画モードで始めた実行は、途中で会話をふつうに戻しても writing）', async t => {
+test('3-1a 審査 C2: writing は実行に効いているモードで決まる（計画モードで始めた実行は、途中で会話を自動承認に戻しても writing）', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const seen: boolean[] = [];
   s.adapter().scripts = [async function* () {
-    s.app.conversations.setChoice(uuid(1), { permissionMode: 'normal' });
+    s.app.conversations.setChoice(uuid(1), { permissionMode: 'auto' });
     seen.push((await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan.writing);
     await gate;
     yield { type: 'text', delta: 'done' };
@@ -528,7 +529,7 @@ test('3-1a 審査 C3: 同じ中身の書き直しは控えも plan.changed も�
   const first = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: null });
   const again = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: first.body.plan.hash });
   assert.equal(again.status, 200);
-  assert.deepEqual(Object.keys(again.body.plan).sort(), ['content', 'hash', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.deepEqual(Object.keys(again.body.plan).sort(), ['content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
   assert.equal(s.events.filter(e => e.type === 'plan.changed').length, 1, 'PUT も同じ中身なら流さない');
   const f = storeFixture(t);
   assert.equal(f.store.write(PROJECT, 'x', AI).changed, true);

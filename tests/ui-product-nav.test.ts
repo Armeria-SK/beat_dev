@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ApiError, type Conversation, type FolderEntry, type Project } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
 import { errorBodyText, serverText } from '../web/src/server-text.ts';
 import { entryReason, folderName, nameFor, newProjectInput, noteKeys, upTarget } from '../web/src/ui/folder-pick.ts';
-import { awaitingProduct, loadProjectList, productNav, projectLoads, sendOptions, settleLeave } from '../web/src/ui/product-nav.ts';
+import { awaitingProduct, loadProjectList, newSessionHash, productNav, projectLoads, sendOptions, settleLeave } from '../web/src/ui/product-nav.ts';
 import { parseRoute, routeHash, type Route } from '../web/src/ui/routes.ts';
 import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
@@ -180,4 +181,17 @@ test('ui/product-nav: 製品のエラーのコードは画面の文にする。�
   assert.doesNotMatch(link, /open it/iu);
   assert.match(t('ui.np.link'), /open it/iu, '一覧の行（開けば解ける）の文');
   assert.equal(routeHash({ view: 'productNew', id: 'p1aaaa' }), '#/p/p1aaaa/new');
+});
+
+test('ui/product-nav: /new は、製品の会話からならその製品の新しい会話へ、製品でなければ #/ へ', () => {
+  assert.equal(newSessionHash('p1aaaa'), routeHash({ view: 'productNew', id: 'p1aaaa' }));
+  assert.equal(newSessionHash(undefined), '#/');
+});
+
+test('ui/product-nav: 入力欄の /new は newSessionHash を使う（Conversation の配線）', () => {
+  const chat = readFileSync(new URL('../web/src/ui/Conversation.tsx', import.meta.url), 'utf8');
+  const start = chat.indexOf("case 'new':");
+  const slash = chat.slice(start, chat.indexOf("case 'plan':", start));
+  assert.ok(start > 0 && slash.includes('location.hash = newSessionHash(product?.id)'), '/new の行き先は newSessionHash');
+  assert.ok(!slash.includes("location.hash = '#/'"), '製品の会話でも #/ へ決め打ちしない');
 });

@@ -10,6 +10,7 @@
 .ui-narrowbar > .ui-panes__toggle { display: none; }
 .ui-plan { display: flex; flex-direction: column; gap: var(--space-3); min-height: 100%; }
 .ui-plan > .bt-pane__bar { margin-bottom: 0; }
+.ui-plan__live:empty { position: absolute; }
 .ui-plan .bt-seg__opt:disabled { color: var(--ink-mute); cursor: default; }
 .ui-plan__empty { max-width: none; padding: var(--space-7) 0; }
 .bt-root .ui-plan__doc .ui-md { color: var(--ink-soft); }

@@ -12,9 +12,14 @@ import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
-import { gitOutboundEnv } from '../hooks/outbound-env.ts';
+import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
+import { productRunOf } from '../hooks/product-run.ts';
+import { pushProtectOf } from '../hooks/push-protect.ts';
+import { protectedTouchOf } from '../hooks/protected-touch.ts';
+import { selfTarget } from '../hooks/self-port.ts';
 import { outboundText } from '../../shared/messages/outbound.ts';
-import type { Remote } from '../../projects/remotes.ts';
+import { pendingText } from '../../shared/messages/pending.ts';
+import { parseRemotes, type Remote } from '../../projects/remotes.ts';
 import type { ShellKind } from '../hooks/shell-lex.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../shell/git-env.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
@@ -84,11 +89,7 @@ function hookFingerprints(dir: string | null | undefined, language: Language): s
 
 function remotesOf(ctx: ToolContext): Remote[] | undefined {
   if (!ctx.project) return undefined;
-  try {
-    const list = JSON.parse(ctx.services?.projects?.get(ctx.project.id)?.remotes ?? '[]') as unknown;
-    if (!Array.isArray(list)) return [];
-    return list.flatMap(r => (r && typeof r.name === 'string' && typeof r.url === 'string' ? [{ name: r.name, url: r.url, pushUrl: typeof r.pushUrl === 'string' ? r.pushUrl : null }] : []));
-  } catch { return []; }
+  try { return parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes); } catch { return []; }
 }
 
 function shellOutbound(command: string, statements: readonly StatementFacts[], cwd: string, ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, language: Language, created: Set<string>): Outbound | undefined {
@@ -109,19 +110,23 @@ function shellOutbound(command: string, statements: readonly StatementFacts[], c
 
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
-  if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')], sends: true, removes: true };
+  if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
   const cwd = resolveCwd(input, ctx);
-  if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem], sends: true, removes: true };
+  if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem] };
   const shell = ctx.config.tools.shell;
   const spec = resolveShell(shell.shell);
   const powershell = spec.name === 'powershell' || spec.name === 'pwsh';
   const { env: childEnv, gitIsolated, gitExe } = childEnvFor(shell, cwd.cwd, powershell);
-  const verdict = checkShellCommand(input.command, cwd.cwd, {
+  const checked = checkShellCommand(input.command, cwd.cwd, {
     policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
     selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
     gitIsolated,
     which: name => findExecutable(name, childEnv, cwd.cwd, { powershell }),
   });
+  const touch = checked.decision === 'deny' ? undefined : protectedTouchOf(input.command, checked.statements, ctx.policy, cwd.cwd);
+  const verdict = touch && !checked.reasonKeys.includes(touch.key) ? { ...checked, decision: 'ask' as const, reasons: [...checked.reasons, guardText(language, touch.key, { path: touch.path })], reasonKeys: [...checked.reasonKeys, touch.key], askKinds: [...new Set([...checked.askKinds, 'code' as const])] } : checked;
+  const self = verdict.decision === 'deny' ? undefined : selfTarget(input.command, ctx.config.server);
+  if (self !== undefined) return { decision: 'deny', reasons: [guardText(language, 'guard.self_port', { target: self })], reasonKeys: ['guard.self_port'] };
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
     input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),
     place: guardText(language, p.placement.kind === 'inside' ? (p.placement.mode === 'write' ? 'shell.place.write' : 'shell.place.read')
@@ -134,14 +139,29 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const places = placesOf(verdict.statements, cwd.cwd);
   const pushes = pushesOf(verdict.statements, verdict.reasonKeys);
   const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];
-  const effects = { sends: verdict.sends, removes: verdict.removes, writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
-  if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects };
+  const run = ctx.project?.root && verdict.decision === 'ask' ? productRunOf({
+    root: ctx.project.root, verdict,
+    which: (name, dir) => findExecutable(name, childEnv, dir, { powershell }),
+    git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project.root }) : () => undefined,
+    ownerHooks: () => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data),
+  }) : undefined;
+  const pushed = verdict.decision === 'ask' ? pushProtectOf({
+    config: ctx.config, statements: verdict.statements, projectRoot: ctx.project?.root ?? undefined, productRoots: [], tainted: ctx.taint.tainted || ctx.conversationTainted?.() === true,
+    git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }) : () => undefined,
+  }) : undefined;
+  const runFacts = pushed ? { ownerReason: 'files' in pushed ? pendingText('en', 'owner_protected_push', { files: pushed.files.join('; ') }) : pendingText('en', 'owner_push_unchecked') }
+    : run && 'run' in run ? { productRun: run.run } : run && 'secret' in run ? { ownerReason: pendingText('en', 'owner_secret_commit', { path: run.secret }) }
+    : run && 'secretMessage' in run ? { ownerReason: pendingText('en', 'owner_secret_message') } : {};
+  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
+  if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));
   const base = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
+  const reasonKeys = [...(markers.length ? ['code.self_touch'] : []), ...verdict.reasonKeys];
   return {
-    decision: verdict.decision, reasons, details, paths, pathsMore, onceOnly: true, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
+    decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
+    ...(markers.length && 'productRun' in runFacts ? {} : runFacts),
     preview: peeked.map(p => p.preview), bind: sha256([...peeked.map(p => p.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };
 }

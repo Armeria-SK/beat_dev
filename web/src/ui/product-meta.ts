@@ -19,9 +19,14 @@ export const withProduct = (task: NewTask, projectId: string | null): NewTask =>
 
 export interface ProductLine { name: string | null; archived: boolean }
 
-export function productLine(id: string | null | undefined, active: readonly Project[], archived: readonly Project[]): ProductLine | null {
+const liveProduct = (active: readonly Project[], id: string): Project | undefined => active.find(p => p.id === id && p.archived_at === null);
+
+export function productLine(id: string | null | undefined, active: readonly Project[], archived: readonly Project[] | null): ProductLine | null {
   if (!id) return null;
-  const live = active.find(p => p.id === id && p.archived_at === null);
+  const live = liveProduct(active, id);
   if (live) return { name: live.name, archived: false };
-  return { name: productName(archived, id), archived: true };
+  return archived === null ? null : { name: productName(archived, id), archived: true };
 }
+
+export const needsShelved = (id: string | null | undefined, active: readonly Project[], archived: readonly Project[] | null): boolean =>
+  (id ? archived === null && !liveProduct(active, id) : false);

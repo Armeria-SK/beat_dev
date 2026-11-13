@@ -16,6 +16,7 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { PendingStore } from '../src/pending/store.ts';
+import { replayAction } from '../src/pending/replay.ts';
 import { FakeBrowserDriver, type FakePage, type FakeSite } from './helpers/fake-browser.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -72,12 +73,12 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [] });
   t.after(() => session.close());
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry();
   for (const def of BROWSER_TOOLS) registry.register((options.plain && (def as ToolDef).submits ? withoutSubmits(def as ToolDef) : def) as never);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
-  const state = { mode: options.mode ?? 'normal' as PermissionMode };
+  const state = { mode: options.mode ?? 'auto' as PermissionMode };
   const ctx = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: state.mode,
@@ -85,10 +86,13 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   } as unknown as ToolContext;
   const classify = options.classify;
   const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => state.mode, conversationAutoRead: () => false,
+    registry, approvals, pending, db, emit: () => undefined, permissionMode: () => state.mode,
     ...(classify ? { autoClassify: async (prompt: ClassifierPrompt) => classify(prompt), lastUserRequest: () => 'フォームに入れて', conversationTainted: () => false } : {}),
   });
-  return { ctx, call, approvals, db, driver, session, parsed, pending };
+  const approve = (id: number, tools: ToolRegistry = registry) => replayAction(pending.claim(id), {
+    db, store: pending, registry: tools, config: () => parsed, paths, conversationExists: () => true, services: () => ({ browser: session }) as ToolContext['services'],
+  });
+  return { ctx, call, approvals, db, driver, session, parsed, pending, approve };
 }
 
 // ページを開いて、触れるものの一覧を読む（ここは読むだけの道具を直接呼ぶ）
@@ -98,30 +102,9 @@ async function opened(r: Rig, url = PAGE): Promise<FakePage> {
   return r.driver.current!.pageList[0]!;
 }
 
-const rows = (r: Rig) => r.db.prepare('SELECT tool, decision, decided_by FROM tool_calls ORDER BY created_at').all().map(x => ({ ...x }));
+const observe = async (r: Rig, name: string, args: unknown) => ({ outcome: await r.call(name, args) });
 
-async function pendingCard(r: Rig, stop: { done: boolean }) {
-  for (let i = 0; i < 300 && !stop.done; i++) {
-    const card = r.approvals.pending()[0];
-    if (card) return card;
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-  return undefined;
-}
-
-// 呼んでみて、札が出たら中身を控えて answer で答える。between は、札が出てから答えるまでのあいだに起きること
-async function observe(r: Rig, name: string, args: unknown, answer: 'once' | 'conversation' | 'deny' = 'once', between?: () => Promise<void> | void) {
-  const running = r.call(name, args);
-  const stop = { done: false };
-  const first = await Promise.race([running.then(outcome => ({ outcome })), pendingCard(r, stop).then(card => ({ card }))]);
-  stop.done = true;
-  if (!('card' in first)) return { asked: false as const, outcome: first.outcome };
-  assert.ok(first.card, `${name}: 札も結果も出なかった`);
-  const card = first.card;
-  await between?.();
-  r.approvals.decide(card.id, answer);
-  return { asked: true as const, card, outcome: await running };
-}
+const parkedId = (r: Rig): number => r.pending.list({ status: 'waiting' })[0]!.id;
 
 const preCheck = (r: Rig, tool: typeof browserClick | typeof browserType, input: unknown) => (tool.preCheck as (i: unknown, c: ToolContext) => Promise<import('../src/tools/types.ts').PreCheck>)(input, r.ctx);
 
@@ -134,7 +117,6 @@ test('T-20: 事前の判定は ask。sends・askKinds web・bind・fetched・札
   assert.equal(check.decision, 'ask');
   assert.equal(check.sends, true);
   assert.deepEqual(check.askKinds, ['web']);
-  assert.equal(check.onceOnly, undefined, '持ち主の決定: onceOnly にしない（会話の許可で通す）');
   assert.equal(check.fetched, true);
   assert.equal(check.bind, JSON.stringify(['t1', PAGE, 'textbox', 'Search', 0, null]));
   const file = check.preview![0]!;
@@ -172,12 +154,11 @@ test('T-20: 名前は 120 文字・改行なしに整え、入れる文字は 20
 
 // ── 4-2d: 押す・入れる（submits）は送る操作なので、会話でも札にせず Pending に積む ──
 
-test('4-2d: browser_click・browser_type は、ふつうのモードでも、会話の許可より前に Pending に積まれ、札は出ず、押さない', async t => {
+test('4-2d: browser_click・browser_type は、自動承認のモードでも、会話の許可より前に Pending に積まれ、札は出ず、押さない', async t => {
   const r = rig(t);
   const page = await opened(r);
   for (const [name, args] of [['browser_type', { ref: 'e1', text: 'abc' }], ['browser_click', { ref: 'e2' }], ['browser_type', { ref: 'e1', text: 'abc' }]] as const) {
     const seen = await observe(r, name, args);
-    assert.equal(seen.asked, false, name);
     assert.equal(seen.outcome.decidedBy, 'pending', name);
     assert.equal(seen.outcome.output.isError, undefined);
   }
@@ -192,7 +173,7 @@ test('4-2d: 人のいない実行（タスク・子の担当）の押す・入�
   const registry = new ToolRegistry().register(submitting);
   for (const kind of ['task', 'agent'] as const) {
     const outcome = await runToolCall({ id: `u-${kind}`, name: 'submit_stub', arguments: { ref: 'e2' } }, { ...r.ctx, kind }, {
-      registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto', conversationAutoRead: () => false,
+      registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto',
     });
     assert.equal(outcome.decision, 'deny', kind);
     assert.match(outcome.output.content, /submits in the browser, and nobody is watching this run/u, kind);
@@ -201,67 +182,31 @@ test('4-2d: 人のいない実行（タスク・子の担当）の押す・入�
   assert.equal(page.acts.length, 0);
 });
 
-// ── T-21: 会話の許可（決定どおり）。札の仕組みは、submits を外した写しで確かめる ──
-
-test('T-21: 「この会話では許可」を出すと、次の同じ入力は札なしで通る（持ち主の決定。入力のハッシュで効く）', async t => {
-  const r = rig(t, { plain: true });
-  const page = await opened(r);
-  const first = await observe(r, 'browser_type', { ref: 'e1', text: 'abc' }, 'conversation');
-  assert.equal(first.asked, true);
-  assert.equal(first.outcome.output.isError, undefined, first.outcome.output.content);
-  assert.equal(page.acts.length, 1);
-  // 同じ入力は札なし
-  const second = await observe(r, 'browser_type', { ref: 'e1', text: 'abc' });
-  assert.equal(second.asked, false);
-  assert.equal(page.acts.length, 2);
-  // 入力が違えば、また札
-  const third = await observe(r, 'browser_type', { ref: 'e1', text: 'abcd' }, 'deny');
-  assert.equal(third.asked, true);
-  assert.equal(page.acts.length, 2);
-  // 受け入れたリスク: 読み直して別のページになっても、同じ入力（e1・同じ文字）は札なしで通る。これは決定による
-  await browserOpen.execute({ url: OTHER, tab: 't1' }, r.ctx);
-  assert.equal(page.url(), OTHER);
-  const moved = await observe(r, 'browser_type', { ref: 'e1', text: 'abc' });
-  assert.equal(moved.asked, false);
-  assert.equal(page.acts.length, 3);
-});
-
-test('T-21: 会話の許可で札なしに通っても、実行の直前の探し直しは必ずやる（遷移後・消えた要素には動かない）', async t => {
-  const r = rig(t, { plain: true });
-  const page = await opened(r);
-  await observe(r, 'browser_click', { ref: 'e2' }, 'conversation');
-  // e2（Send）が押されて、ページは OTHER へ動いた。表は捨てられている
-  assert.equal(page.url(), OTHER);
-  const again = await observe(r, 'browser_click', { ref: 'e2' });
-  assert.equal(again.asked, false, '会話の許可があるので札は出ない');
-  assert.equal(again.outcome.output.isError, true, 'でも、表が無いので実行されない');
-  assert.equal(page.acts.length, 1);
-});
-
 // ── T-22: 承認と実行のあいだに変わったら実行しない ──
 
 test('T-22: 承認のあいだに遷移したら、実行しない（同じ呼び出しの再比較）', async t => {
-  const r = rig(t, { plain: true });
+  const r = rig(t);
   const page = await opened(r);
-  const result = await observe(r, 'browser_click', { ref: 'e2' }, 'once', () => { page.navigateTo(OTHER); });
-  assert.equal(result.asked, true);
-  assert.equal(result.outcome.output.isError, true);
-  assert.equal(result.outcome.decision, 'deny');
-  assert.equal(page.acts.length, 0);
-  assert.deepEqual(rows(r).map(x => x.decided_by), ['recheck']);
+  assert.equal((await r.call('browser_type', { ref: 'e1', text: 'abc' })).decidedBy, 'pending');
+  assert.equal((await r.approve(parkedId(r))).status, 'ran', '変わっていなければ、承認で 1 回だけ動く');
+  assert.equal(page.acts.length, 1);
+  assert.equal((await r.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
+  page.navigateTo(OTHER);
+  const result = await r.approve(parkedId(r));
+  assert.equal(result.status, 'failed');
+  assert.match(result.output ?? '', /The page has changed/u);
+  assert.equal(page.acts.length, 1);
 });
 
 test('T-22: 承認のあいだに同じ番号が別の要素になったら、実行しない（bind の不一致）', async t => {
-  const r = rig(t, { plain: true });
+  const r = rig(t);
   const page = await opened(r);
-  const result = await observe(r, 'browser_click', { ref: 'e2' }, 'once', async () => {
-    // ページが書き換わり、読み直したら e2 は別の名前のボタンになった（同じ URL）
-    page.mutate({ ...SITE, snapshot: SNAPSHOT.replace('button "Send"', 'button "Delete account"'), rows: SITE.rows!.map(x => x.name === 'Send' ? { ...x, name: 'Delete account' } : x) });
-    await browserRead.execute({ mode: 'elements' }, r.ctx);
-  });
-  assert.equal(result.asked, true);
-  assert.equal(result.outcome.output.isError, true);
-  assert.equal(result.outcome.decision, 'deny');
+  assert.equal((await r.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
+  // ページが書き換わり、読み直したら e2 は別の名前のボタンになった（同じ URL）
+  page.mutate({ ...SITE, snapshot: SNAPSHOT.replace('button "Send"', 'button "Delete account"'), rows: SITE.rows!.map(x => x.name === 'Send' ? { ...x, name: 'Delete account' } : x) });
+  await browserRead.execute({ mode: 'elements' }, r.ctx);
+  const result = await r.approve(parkedId(r));
+  assert.equal(result.status, 'stale');
   assert.equal(page.acts.length, 0);
 });
 
@@ -280,48 +225,25 @@ test('T-22: 実行の直前の探し直し: 数が変わった・隠れた・無
   assert.equal(page.acts.length, 0);
 });
 
-test('bind を持つが onceOnly でない道具は、札を出した呼び出しでだけ再比較する。bind の無い道具の preCheck は 1 回だけ', async t => {
-  const r = rig(t);
-  await opened(r);
-  let calls = 0;
-  const original = browserClick.preCheck!;
-  const counted = { ...withoutSubmits(browserClick as unknown as ToolDef), name: 'browser_click', preCheck: (input: never, ctx: ToolContext) => { calls += 1; return (original as (i: unknown, c: ToolContext) => ReturnType<typeof original>)(input, ctx); } };
-  const registry = new ToolRegistry();
-  registry.register(counted as never);
-  const run = (): Promise<unknown> => runToolCall({ id: 'k', name: 'browser_click', arguments: { ref: 'e1' } }, r.ctx, {
-    registry, approvals: r.approvals, db: r.db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false,
-  });
-  const running = run();
-  const stop = { done: false };
-  const card = await pendingCard(r, stop);
-  stop.done = true;
-  r.approvals.decide(card!.id, 'conversation');
-  await running;
-  assert.equal(calls, 2, '札を出した呼び出し: 最初と承認のあとの 2 回');
-  calls = 0;
-  await run();
-  assert.equal(calls, 1, '会話の許可で札なしに通る呼び出しは 1 回だけ');
-});
-
-// 札を出した呼び出しの、承認後の比べ（pipeline）から実行（act の探し直し）までのあいだに、ページが書き換わる場合
-function runWithSwapAfterRecheck(r: Rig, onSecondPreCheck: () => Promise<void>) {
+// 積んだ呼び出しの、承認後の比べ（replay）から実行（act の探し直し）までのあいだに、ページが書き換わる場合
+function runWithSwapAfterRecheck(r: Rig, onLastPreCheck: () => Promise<void>) {
   let calls = 0;
   const original = browserClick.preCheck! as (i: unknown, c: ToolContext) => Promise<import('../src/tools/types.ts').PreCheck>;
   const swapped = {
-    ...withoutSubmits(browserClick as unknown as ToolDef),
+    ...(browserClick as unknown as ToolDef),
     preCheck: async (input: never, ctx: ToolContext) => {
       calls += 1;
       const result = await original(input, ctx);
-      if (calls === 2) await onSecondPreCheck();
+      if (calls === 3) await onLastPreCheck();
       return result;
     },
   };
   const registry = new ToolRegistry();
   registry.register(swapped as never);
   const run = () => runToolCall({ id: 'k', name: 'browser_click', arguments: { ref: 'e2' } }, r.ctx, {
-    registry, approvals: r.approvals, db: r.db, emit: () => undefined, permissionMode: () => 'normal', conversationAutoRead: () => false,
+    registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto',
   });
-  return { run, calls: () => calls };
+  return { run, registry, calls: () => calls };
 }
 
 test('承認後の比べのあと、実行の直前に別の要素へ入れ替わったら押さない（bind を act に渡して比べ直す）', async t => {
@@ -332,29 +254,11 @@ test('承認後の比べのあと、実行の直前に別の要素へ入れ替�
     await browserRead.execute({ mode: 'elements' }, r.ctx);
   };
   const rigged = runWithSwapAfterRecheck(r, swap);
-  const running = rigged.run();
-  const stop = { done: false };
-  const card = await pendingCard(r, stop);
-  stop.done = true;
-  r.approvals.decide(card!.id, 'once');
-  const outcome = await running;
-  assert.equal(rigged.calls(), 2);
-  assert.equal(outcome.output.isError, true);
+  assert.equal((await rigged.run()).decidedBy, 'pending');
+  const outcome = await r.approve(parkedId(r), rigged.registry);
+  assert.equal(rigged.calls(), 3, '積む前に 1 回、承認のあとに 2 回');
+  assert.equal(outcome.status, 'failed');
   assert.equal(page.acts.length, 0, '許した要素と違うものには押さない');
-});
-
-test('会話の許可で札なしに通る道は、bind を比べない（Q3 の範囲）。探し直しの守りだけはかかる', async t => {
-  const r = rig(t, { plain: true });
-  const page = await opened(r);
-  const first = await observe(r, 'browser_click', { ref: 'e2' }, 'conversation');
-  assert.equal(first.asked, true);
-  assert.equal(page.acts.length, 1);
-  // 別の要素になっても（読み直した後の同じ番号）、会話の許可で札なしに通る
-  page.mutate({ ...SITE, snapshot: SNAPSHOT.replace('button "Send"', 'button "Delete account"'), rows: SITE.rows!.map(x => x.name === 'Send' ? { ...x, name: 'Delete account' } : x) });
-  await browserRead.execute({ mode: 'elements' }, r.ctx);
-  const second = await r.call('browser_click', { ref: 'e2' });
-  assert.notEqual(second.output.isError, true);
-  assert.equal(page.acts.length, 2);
 });
 
 // ── T-23: 自動承認 ──
@@ -363,11 +267,42 @@ test('T-23: 自動承認モードでも、押す・入れるは送る操作な�
   const classified: ClassifierPrompt[] = [];
   const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
   const page = await opened(r);
-  const result = await observe(r, 'browser_type', { ref: 'e1', text: 'abc' }, 'deny');
-  assert.equal(result.asked, false, '札は出ない');
+  const result = await observe(r, 'browser_type', { ref: 'e1', text: 'abc' });
   assert.equal(result.outcome.decidedBy, 'pending');
   assert.equal(classified.length, 0, '判定役には回らない');
   assert.equal(page.acts.length, 0);
+});
+
+test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きか外を読んだあとなら送るに数え、判定役が allow と答える設定でも判定役を呼ばずに send の Pending に積まれる', async t => {
+  const classified: ClassifierPrompt[] = [];
+  const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
+  const query = await r.call('browser_open', { url: 'https://example.com/logout?token=1' });
+  assert.equal(query.decidedBy, 'pending');
+  r.ctx.taint.tainted = true;
+  const tainted = await r.call('browser_open', { url: 'https://example.com/account/delete' });
+  assert.equal(tainted.decidedBy, 'pending');
+  assert.deepEqual(r.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['browser_open', 'send'], ['browser_open', 'send']]);
+  assert.equal(classified.length, 0, '判定役には回らない');
+  assert.equal(r.driver.launches, 0, 'ブラウザは起動しない');
+  r.driver.site('https://example.com/logout?token=1', OTHER_SITE).site('https://example.com/account/delete', OTHER_SITE);
+  for (const row of r.pending.list({ status: 'waiting' })) {
+    const result = await r.approve(row.id);
+    assert.equal(result.status, 'ran', `持ち主が通せば開く: ${JSON.stringify(result)}`);
+  }
+});
+
+test('4-3b-2: 一覧外のサイトの browser_open と、一覧のサイトでもクエリなし・外を読む前の browser_open は、今までどおり積まずに開く', async t => {
+  const classified: ClassifierPrompt[] = [];
+  const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
+  for (const url of ['https://example.com/form', 'https://other.example.org/a?x=1']) {
+    const outcome = await r.call('browser_open', { url });
+    assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'builtin'], url);
+  }
+  r.ctx.taint.tainted = true;
+  const unlisted = await r.call('browser_open', { url: 'https://other.example.org/a' });
+  assert.deepEqual([unlisted.decision, unlisted.decidedBy], ['allow', 'builtin']);
+  assert.equal(r.pending.list({ status: 'waiting' }).length, 0);
+  assert.equal(classified.length, 0);
 });
 
 // ── T-24: サイト一覧 ──
@@ -384,7 +319,7 @@ test('T-24: サイト一覧に無いサイト・空の一覧は deny（札にし
       assert.equal(out.isError, true);
     }
     const asked = await observe(r, 'browser_click', { ref: 'e2' });
-    assert.equal(asked.asked, false);
+    assert.equal(asked.outcome.decision, 'deny');
     assert.equal(page.acts.length, 0);
   }
 });
@@ -505,11 +440,11 @@ test('T-28: 操作が失敗したら、ポップアップは残さず、短い�
 // ── T-29: tools.policies ──
 
 test('T-29: 方針が allow（既定）でも札は出る。ask は毎回札（会話の許可は効かない）。block は拒否', async t => {
-  const r = rig(t, { plain: true });
-  await opened(r);
-  const asked = await observe(r, 'browser_type', { ref: 'e1', text: 'a' }, 'conversation');
-  assert.equal(asked.asked, true);
-  assert.equal((await observe(r, 'browser_type', { ref: 'e1', text: 'a' })).asked, false, '既定（allow）: 会話の許可が効く');
+  const r = rig(t);
+  const first = await opened(r);
+  assert.equal((await observe(r, 'browser_type', { ref: 'e1', text: 'a' })).outcome.decidedBy, 'pending', '既定（allow）でも Pending に積む');
+  assert.deepEqual(r.pending.list({ status: 'waiting' }).map(row => row.kind), ['send']);
+  assert.equal(first.acts.length, 0);
 
   const every = rig(t, { plain: true, mutate: c => { c.tools.policies = { browser_type: 'ask' }; } });
   await opened(every);
@@ -520,7 +455,7 @@ test('T-29: 方針が allow（既定）でも札は出る。ask は毎回札（�
   const blocked = rig(t, { mutate: c => { c.tools.policies = { browser_click: 'block' }; } });
   const page = await opened(blocked);
   const result = await observe(blocked, 'browser_click', { ref: 'e2' });
-  assert.equal(result.asked, false);
+  assert.equal(result.outcome.decision, 'deny');
   assert.equal(result.outcome.output.isError, true);
   assert.equal(page.acts.length, 0);
 });
@@ -529,12 +464,12 @@ test('T-29: 方針が allow でも、サイト一覧外の deny と password 欄
   const r = rig(t, { mutate: c => { c.tools.policies = { browser_click: 'allow', browser_type: 'allow' }; } });
   const page = await opened(r);
   const secret = await observe(r, 'browser_type', { ref: 'e5', text: 'hunter2' });
-  assert.equal(secret.asked, false);
+  assert.equal(secret.outcome.decision, 'deny');
   assert.equal(secret.outcome.output.isError, true);
   const outside = rig(t, { mutate: c => { c.tools.browser.sites = ['other.example.org']; c.tools.policies = { browser_click: 'allow' }; } });
   const outsidePage = await opened(outside);
   const result = await observe(outside, 'browser_click', { ref: 'e2' });
-  assert.equal(result.asked, false);
+  assert.equal(result.outcome.decision, 'deny');
   assert.equal(result.outcome.output.isError, true);
   assert.equal(page.acts.length + outsidePage.acts.length, 0);
 });

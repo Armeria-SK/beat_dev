@@ -76,8 +76,10 @@ export function actionView(row: Pick<PendingAction, 'tool' | 'title' | 'shown' |
   return { title: PLAIN_TOOLS.has(row.tool) && body ? null : title, inline: body, block: null, cwd, extra };
 }
 
-export const decidedText = (view: ActionView): { title: string | null; code: string | null; cwd: string | null } =>
-  ({ title: view.title, code: view.inline ?? (view.title ? null : view.block), cwd: view.cwd });
+export function decidedText(view: ActionView): { title: string | null; code: string | null; cwd: string | null; erased?: true } {
+  const line = { title: view.title, code: view.inline ?? (view.title ? null : view.block), cwd: view.cwd };
+  return line.title === null && line.code === null ? { ...line, erased: true } : line;
+}
 
 const UNITS = ['B', 'KB', 'MB', 'GB'] as const;
 
@@ -140,6 +142,12 @@ export function withPendingCounts(projects: Project[], counts: PendingCounts | n
 export function sessionCounts(rows: readonly PendingAction[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const r of rows) if (r.status === 'waiting') counts.set(r.conversation_id, (counts.get(r.conversation_id) ?? 0) + 1);
+  return counts;
+}
+
+export function taskCounts(rows: readonly PendingAction[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const r of rows) if (r.status === 'waiting' && r.task_id) counts.set(r.task_id, (counts.get(r.task_id) ?? 0) + 1);
   return counts;
 }
 

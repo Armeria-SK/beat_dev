@@ -40,11 +40,14 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   if (need === 'write' && placement.mode === 'read') return result({ decision: 'deny', reasons: [guardText(language, 'file.readonly', { root: placement.root })] });
   if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return result({ decision: 'deny', reasons: [guardText(language, 'file.symlink')] });
   const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
-  // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
-  if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] });
-  if (protectedKind) return result({ decision: 'ask', reasons: [guardText(language, protectedKind === 'skill' && !askBeforeRegister(ctx.config) ? 'file.skill_auto' : FILE_KEYS[protectedKind])], askKinds: ['persona'] });
+  // .git への書き込みはフックや設定というコードを書くことになるので、コードの確かめ（種類 code）にする。人格・スキルは、中身が引数にあるので今までどおり
+  if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], askKinds: ['code'], reasonKeys: [FILE_KEYS.git] });
+  if (protectedKind) {
+    const key = protectedKind === 'skill' && !askBeforeRegister(ctx.config) ? 'file.skill_auto' : FILE_KEYS[protectedKind];
+    return result({ decision: 'ask', reasons: [guardText(language, key)], askKinds: ['persona'], reasonKeys: [key] });
+  }
   // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる
-  if (need === 'write' && isToolConfigPath(abs)) return result({ decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] });
+  if (need === 'write' && isToolConfigPath(abs)) return result({ decision: 'ask', reasons: [guardText(language, 'file.tool_config')], askKinds: ['code'], reasonKeys: ['file.tool_config'] });
   return result({ decision: 'allow', reasons: [] });
 }
 
@@ -92,9 +95,8 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     mode: Type.Optional(Type.Union([Type.Literal('overwrite'), Type.Literal('append'), Type.Literal('create')])),
   }, { additionalProperties: false }),
   effect: 'write',
-  folderGrant: true,
   allowedIn: ['chat', 'task', 'agent'],
-  preCheck: (input, ctx) => ({ ...checkFilePath(input.path, 'write', ctx).check, sends: false, removes: false }),
+  preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_write', { path: input.path }), body: input.content.slice(0, 4000) }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);
@@ -125,9 +127,8 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
   description: 'Replace part of a file. old must be text that appears exactly once in the file (with all=true, every occurrence is replaced).',
   input: Type.Object({ path: PathArg, old: Type.String({ minLength: 1 }), new: Type.String(), all: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'write',
-  folderGrant: true,
   allowedIn: ['chat', 'task', 'agent'],
-  preCheck: (input, ctx) => ({ ...checkFilePath(input.path, 'write', ctx).check, sends: false, removes: false }),
+  preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_edit', { path: input.path }), body: `- ${input.old.slice(0, 2000)}\n+ ${input.new.slice(0, 2000)}` }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);

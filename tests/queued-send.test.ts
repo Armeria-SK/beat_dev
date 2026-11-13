@@ -7,7 +7,8 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { CONVERSATION, fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import { FakeAdapter, tempDir, testConfig, type Script } from './helpers.ts';
+import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
+import { FakeAdapter, JudgeAdapter, judgeTextOf, tempDir, testConfig, type Script } from './helpers.ts';
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
@@ -122,79 +123,6 @@ test('待っている発言は、差し込まれる前なら取り消せる。�
   await settled(s.app, first.body.runId);
   assert.deepEqual(roles(s), ['user:最初', 'assistant:おわり']);
   assert.equal(runsOf(s).length, 1, '新しい実行は始まらない');
-});
-
-test('承認を待っているあいだは、実行が道具の呼び出しの中にいるので、発言は履歴に入らず、モデルも呼ばれない（承認の答えが先）。承認のあとの区切りで入る', async t => {
-  const s = await startApp(t);
-  const seen: ModelRequest[] = [];
-  s.adapter().scripts = [call('shell_run', { command: 'npm install left-pad' }), spy(say('見ました'), seen)];
-  const first = await post(s, '書いて');
-  await waitFor(() => s.app.approvals.pending().length === 1, '承認の札');
-  const queued = await post(s, '承認の最中に送る');
-  assert.equal(queued.body.queued, true);
-  await new Promise(r => setTimeout(r, 60));
-  assert.deepEqual(roles(s), ['user:書いて', 'assistant:'], '承認を待つあいだは履歴に入らない');
-  assert.equal(s.adapter().calls.length, 1, 'モデルも呼ばれていない');
-  assert.equal(s.app.engine.pending(CONVERSATION).length, 1);
-  const decided = await s.json(`/api/approvals/${s.app.approvals.pending()[0]!.id}`, 'POST', { decision: 'deny' });
-  assert.equal(decided.status, 200);
-  await settled(s.app, first.body.runId);
-  assert.deepEqual(roles(s), ['user:書いて', 'assistant:', 'tool:[shell_run] ', 'user:承認の最中に送る', 'assistant:見ました']);
-  assert.deepEqual(seen[0]!.messages.slice(-2).map(m => m.role), ['tool', 'user']);
-});
-
-// 最終審査の低: 「この返事のあいだ、このフォルダ以下への書き込みを許可」は、持ち主がその札に答えた返事の間だけのもの。実行の途中で待たせた発言が差し込まれると、
-// それは別の発言（別の返事）なので、許可はすべて終わる。残すと、持ち主が見ていない発言の後ろでも、同じフォルダへの書き込みが札なしで通ってしまう
-test('フォルダの許可（この返事のあいだ）は、待たせた発言が差し込まれた時点で終わり、そのあとの同じフォルダへの書き込みはまた札から', async t => {
-  const s = await startApp(t);
-  const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
-  const written = (name: string) => existsSync(join(s.paths.workspace, 'notes', name));
-  s.adapter().scripts = [call('file_write', { path: 'notes/a.txt', content: 'A' }), call('file_write', { path: 'notes/b.txt', content: 'B' }), say('おわり')];
-  const first = await post(s, '添付を読んで書いて', { attachments: [upload.id] });
-  await waitFor(() => s.app.approvals.pending().length === 1, '最初の札');
-  const firstCard = s.app.approvals.pending()[0]!;
-  assert.ok((await s.json('/api/approvals', 'GET')).body.approvals[0].grantFolder.endsWith('notes'), '札にフォルダの許可が添えられる');
-  const queued = await post(s, '待たせる発言');
-  assert.equal(queued.body.queued, true);
-  s.app.approvals.decide(firstCard.id, 'folder');
-  await waitFor(() => s.app.approvals.pending().length === 1 && s.app.approvals.pending()[0]!.id !== firstCard.id, '2 つ目の札（許可は差し込みで終わっている）');
-  assert.equal(written('a.txt'), true, '許可した札の書き込みは通った');
-  assert.equal(written('b.txt'), false, '2 つ目はまだ書かれていない');
-  assert.deepEqual(roles(s).slice(-3), ['tool:[file_write]', 'user:待たせる発言', 'assistant:'], '待たせた発言は、1 つ目の書き込みのあとの区切りで入った');
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
-  await settled(s.app, first.body.runId);
-  assert.equal(written('b.txt'), false);
-  assert.equal(runsOf(s).length, 1, '同じ実行の中');
-});
-
-test('フォルダの許可は、待たせた発言が無ければ、その返事の残りの間つづく（差し込みで終わるのは、発言があったときだけ）', async t => {
-  const s = await startApp(t);
-  const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
-  s.adapter().scripts = [call('file_write', { path: 'notes/a.txt', content: 'A' }), call('file_write', { path: 'notes/b.txt', content: 'B' }), say('おわり')];
-  const first = await post(s, '添付を読んで書いて', { attachments: [upload.id] });
-  await waitFor(() => s.app.approvals.pending().length === 1, '最初の札');
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'folder');
-  await settled(s.app, first.body.runId);
-  assert.equal(existsSync(join(s.paths.workspace, 'notes', 'b.txt')), true, '発言が無ければ、2 つ目は札なしで書かれた');
-  assert.equal(s.app.approvals.pending().length, 0);
-});
-
-test('フォルダの許可は、差し込まれない発言（モデルを替えたあとに待たせた held）では終わらない。差し込まれたときだけ終わる', async t => {
-  const s = await startApp(t);
-  const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
-  s.adapter().scripts = [call('file_write', { path: 'notes/a.txt', content: 'A' }), call('file_write', { path: 'notes/b.txt', content: 'B' }), say('m1 の返事'), say('m2 の返事')];
-  const first = await post(s, '添付を読んで書いて', { attachments: [upload.id], modelId: 'm1' });
-  await waitFor(() => s.app.approvals.pending().length === 1, '最初の札');
-  assert.equal((await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { modelId: 'm2' })).status, 200);
-  assert.equal((await post(s, 'HELD')).body.queued, true);
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'folder');
-  await waitFor(() => existsSync(join(s.paths.workspace, 'notes', 'b.txt')) || s.app.approvals.pending().length > 0, '2 つ目の書き込み');
-  assert.equal(existsSync(join(s.paths.workspace, 'notes', 'b.txt')), true, '差し込まれない発言では許可は終わらず、2 つ目は札なしで書かれた');
-  assert.equal(s.app.approvals.pending().length, 0);
-  await s.app.engine.wait(first.body.runId);
-  const second = s.app.engine.activeRuns().find(r => r.conversationId === CONVERSATION);
-  if (second) await settled(s.app, second.runId);
-  assert.equal(s.adapter().calls.map(c => c.model.id).join(), 'm1,m1,m1,m2', '古いモデルの実行が終わってから、新しいモデルが held を読む');
 });
 
 test('止めて送る（interrupt）: 今の実行を止めてから、待っていた発言と一緒に新しい実行を始める', async t => {
@@ -313,20 +241,19 @@ test('並べ替え: 同時に何件送っても会話の実行は 1 つ。待ち
   assert.equal(roles(s).filter(r => r.startsWith('user:待ち')).length, 10, '10 件とも履歴に入る');
 });
 
-test('添付つきの発言を差し込んだら、その実行の残りは「外から読んだ」扱いになる（シェルの実行は確かめが出る）', async t => {
-  const s = await startApp(t);
+test('添付つきの発言を差し込んだら、その実行の残りは「外から読んだ」扱いになる（判定役に外から読んだ 1 行が付き、積んだ行に印）', async t => {
+  const s = await startApp(t, { judge: '{"decision":"ask","reason":"check"}' });
   await withFile(s);
   const g = gate();
-  s.adapter().scripts = [after(g, call('file_read', { path: 'a.txt' })), call('shell_run', { command: 'node --version' }), say('おわり')];
+  s.adapter().scripts = [after(g, call('file_read', { path: 'a.txt' })), call('shell_run', { command: 'frobnicate --now' }), say('おわり')];
   const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('外から来た文章') });
   const first = await post(s, '読んで');
   const queued = await post(s, '添付を見て', { attachments: [upload.id] });
   assert.equal(queued.body.queued, true);
   g.open();
-  await waitFor(() => s.app.approvals.pending().length === 1, '外から読んだあとの確かめ');
-  assert.match(s.app.approvals.pending()[0]!.reasons.join(' '), /memo\.txt/u, '理由に添付の名前が出る');
-  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
   await settled(s.app, first.body.runId);
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => [r.kind, r.tainted]), [['judge', true]]);
+  assert.ok(judgeTextOf((s.adapter() as JudgeAdapter).judged[0]!).includes(TAINTED_NOTE));
 });
 
 test('入力の検査: interrupt は true / false だけ。待ちの取り消しは、無い会話・無い待ちで 404', async t => {
@@ -390,10 +317,10 @@ test('モデルを替えたあとの発言は、今の実行が失敗しても�
 
 // 添付つきの待っていた発言を、実行を止めて保存だけにしたあと、その履歴の上で始まる実行（もう一度・次の発言）も「外から読んだ」扱いになる
 for (const how of ['retry', 'send'] as const) {
-  test(`添付つきの待っていた発言が保存だけになったあとの実行（${how === 'retry' ? '「もう一度」' : '次の発言'}）も「外から読んだ」扱いになる（書き込みは確かめが出る）`, async t => {
-    const s = await startApp(t);
+  test(`添付つきの待っていた発言が保存だけになったあとの実行（${how === 'retry' ? '「もう一度」' : '次の発言'}）も「外から読んだ」扱いになる（判定役に外から読んだ 1 行が付き、積んだ行に印）`, async t => {
+    const s = await startApp(t, { judge: '{"decision":"ask","reason":"check"}' });
     const g = gate();
-    s.adapter().scripts = [after(g, say('届かない返事')), call('file_write', { path: 'out.txt', content: 'x' }), say('おわり')];
+    s.adapter().scripts = [after(g, say('届かない返事')), call('shell_run', { command: 'frobnicate --now' }), say('おわり')];
     const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('外から来た文章') });
     const first = await post(s, '最初');
     const queued = await post(s, '添付を見て', { attachments: [upload.id] });
@@ -402,13 +329,12 @@ for (const how of ['retry', 'send'] as const) {
     await settled(s.app, first.body.runId);
     await waitFor(() => roles(s).length === 2, '保存');
     assert.equal(runsOf(s).length, 1, '止めたあとに自動で実行しない');
-    assert.deepEqual(s.app.approvals.pending(), []);
+    assert.deepEqual(s.app.pending.list({ status: 'waiting' }), []);
     const next = how === 'retry' ? await s.json(`/api/conversations/${CONVERSATION}/retry`, 'POST', {}) : await post(s, 'これを書いて');
     assert.equal(next.status, 202);
-    await waitFor(() => s.app.approvals.pending().length === 1, '外から読んだあとの書き込みの確かめ');
-    assert.match(s.app.approvals.pending()[0]!.reasons.join(' '), /memo\.txt/u, '理由に添付の名前が出る');
-    s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
     await settled(s.app, next.body.runId);
+    assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => [r.kind, r.tainted]), [['judge', true]]);
+    assert.ok(judgeTextOf((s.adapter() as JudgeAdapter).judged[0]!).includes(TAINTED_NOTE));
   });
 }
 
@@ -422,7 +348,7 @@ test('添付の無い履歴の上で始まる実行（もう一度）は、今�
   const retry = await s.json(`/api/conversations/${CONVERSATION}/retry`, 'POST', {});
   assert.equal(retry.status, 202);
   await settled(s.app, retry.body.runId);
-  assert.deepEqual(s.app.approvals.pending(), [], '返事が付いたあとの添付は、次の実行の確かめには持ち越さない');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }), [], '返事が付いたあとの添付は、次の実行の確かめには持ち越さない');
   assert.equal(roles(s).at(-1), 'assistant:書きました');
 });
 

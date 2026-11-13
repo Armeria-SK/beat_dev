@@ -39,6 +39,9 @@ test('広がりの検出: 使う前のフックをオフにするのは広がり
   const mixed = accessWidening(withHooks([hook('a'), hook('b', false)]), withHooks([{ ...hook('b', true), command: ['node', 'b2.js'] }, { ...hook('a', false), command: ['node', 'a2.js'] }]));
   assert.deepEqual(mixed.map(a => a.kind), ['hook-edited', 'hook-edited', 'hook-disabled'], '並べ替え + 書き換えで、オンだったものがオフになっても、オフは並ぶ');
   assert.deepEqual(mixed.at(-1), { kind: 'hook-disabled', stage: 'preToolUse', hook: { matcher: 'a', command: ['node', 'a2.js'] } });
+  const addedFirst = accessWidening(withHooks([hook('a')]), withHooks([hook('n'), { ...hook('a', false), command: ['node', 'a2.js'] }]));
+  assert.deepEqual(addedFirst.map(a => a.kind), ['hook-edited', 'hook-added', 'hook-disabled'], '新しいフックを前に足し、今あるフックを書き換えてオフにしても、オフは並ぶ');
+  assert.deepEqual(addedFirst.at(-1), { kind: 'hook-disabled', stage: 'preToolUse', hook: { matcher: 'a', command: ['node', 'a2.js'] } });
   assert.match(en['access.hookDisabled']('before a tool runs', 'a → node a.js'), /Turn off a hook/u);
 });
 

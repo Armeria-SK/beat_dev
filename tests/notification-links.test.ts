@@ -71,10 +71,8 @@ for (const language of ['en'] as const) {
     const running = s.app.tasks.create({ title: 'Needs approval', origin: 'user', actor: 'user' });
     const conversation = s.app.conversations.create({ kind: 'task' });
     assert.ok(s.app.tasks.claim(running.id, 30 * MIN, conversation.id));
-    const controller = new AbortController();
-    void s.app.approvals.request({ runId: 'r', conversationId: conversation.id, tool: 'file_write', input: { path: 'x' }, title: 'Write', body: 'body', reasons: [], details: [] }, 60_000, controller.signal);
-    assert.equal(s.linkOf('approval_needed'), `#/tasks/${running.id}`);
-    controller.abort();
+    await s.app.pending.park({ tool: 'file_write', input: { path: 'x', content: 'y' }, cwd: s.app.paths.data, kind: 'judge', reason: 'r', check: { decision: 'ask', reasons: ['r'] }, runId: 'r', runKind: 'task', conversationId: conversation.id, taskId: running.id });
+    assert.equal(s.linkOf('approval_needed'), '#/pending');
 
     // スキルの下書き
     s.app.skills.draft({ name: 'weekly-report', description: 'd', body: 'b', reason: 'r' });
@@ -106,10 +104,10 @@ for (const language of ['en'] as const) {
     const links = [...all(), ...limited.app.notifications.list().map(n => n.link), ...noModel.app.notifications.list().map(n => n.link)];
 
     // 最終的に出てくるリンクは、今ある画面だけ（#/review・#/today・#/curiosity・#/notifications は使わない。#/memory は整理の案の通知だけで、tests/memory-budget.test.ts で見る）
-    const allowed = /^#\/(tasks(\/[0-9a-f-]{36})?|settings|skills\/draft\/[^/]+)$/u;
+    const allowed = /^#\/(tasks(\/[0-9a-f-]{36})?|settings|pending|skills\/draft\/[^/]+)$/u;
     for (const link of links) assert.match(link ?? '', allowed);
     assert.ok(!links.some(link => /#\/(review|today|curiosity|notifications)/u.test(link ?? '')));
-    assert.deepEqual([...new Set(links.map(link => link!.replace(/[0-9a-f-]{36}/u, '<id>').replace(/skills\/draft\/.*/u, 'skills/draft/<name>')))].sort(), ['#/settings', '#/skills/draft/<name>', '#/tasks', '#/tasks/<id>']);
+    assert.deepEqual([...new Set(links.map(link => link!.replace(/[0-9a-f-]{36}/u, '<id>').replace(/skills\/draft\/.*/u, 'skills/draft/<name>')))].sort(), ['#/pending', '#/settings', '#/skills/draft/<name>', '#/tasks', '#/tasks/<id>']);
   });
 
   test(`持ち主への知らせはタスクを指し、同じ題は重ねない（${language}）`, async t => {

@@ -111,6 +111,8 @@ export interface PendingCounts {
   judgedToday: { allowed: number; parked: number };
 }
 
+export interface JudgedCounts { allowed: number; parked: Record<string, number>; notParked: number }
+
 export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined }
 
 const OUTPUT_TAIL = 2000;
@@ -357,6 +359,18 @@ export class PendingStore {
     const allowed = Number((this.#db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'auto-mode' AND decision = 'allow' AND created_at >= ?").get(since) as { n: number }).n);
     const parked = Number((this.#db.prepare("SELECT COUNT(*) AS n FROM pending_actions WHERE kind IN ('judge', 'judge_failed') AND created_at >= ?").get(since) as { n: number }).n);
     return { waiting, byProject, acceptanceChanges, judgedToday: { allowed, parked } };
+  }
+
+  judged(since: number, project?: string | null): JudgedCounts {
+    const callProject = "(SELECT pc.project_id FROM conversations pc WHERE pc.id = tool_calls.conversation_id)";
+    const callWhere = project === undefined ? '' : project === null ? ` AND ${callProject} IS NULL` : ` AND ${callProject} = ?`;
+    const parkWhere = project === undefined ? '' : project === null ? ' AND project_id IS NULL' : ' AND project_id = ?';
+    const args = project ? [since, project] : [since];
+    const allowed = Number((this.#db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'auto-mode' AND decision = 'allow' AND created_at >= ?${callWhere}`).get(...args) as { n: number }).n);
+    const notParked = Number((this.#db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'not-parked' AND created_at >= ?${callWhere}`).get(...args) as { n: number }).n);
+    const parked: Record<string, number> = {};
+    for (const r of this.#db.prepare(`SELECT kind, COUNT(*) AS n FROM pending_actions WHERE created_at >= ?${parkWhere} GROUP BY kind`).all(...args) as Array<{ kind: string; n: number }>) parked[r.kind] = Number(r.n);
+    return { allowed, parked, notParked };
   }
 
   #require(id: number): PendingRow {
