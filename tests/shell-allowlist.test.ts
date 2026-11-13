@@ -893,11 +893,11 @@ test('PowerShell の npm・pnpm・yarn（.cmd の shim）: 実行時に決まる
 });
 
 test('PowerShell の外部のプログラムの名前: 引用符つき・.cmd を書いた名前・フルパス・実行時に決まる名前でも、cmd.exe に渡る引数は調べる。引用符つきの名前は素の名前の判定に、名前の決まり（C1）の確かめを足したもの', () => {
-  const cmd = { external: (n: string) => ({ ok: true, ext: /^(?:npm|pnpm|yarn)$/u.test(n) ? '.cmd' : '.exe', detail: '' }) };
+  const cmd = { external: (n: string) => ({ ok: true, ext: /^(?:npm|pnpm|yarn)$/u.test(n) ? '.cmd' : '.exe', detail: '' }), fileExists: (p: string) => ['./build.ps1', 'C:\\tools\\x.exe'].includes(p) };
   const denied = [
     "& 'npm' --version $a", '& "npm" --version $a', "& 'npm' --version 'x&cd>pw.txt'", '$a = Get-Content n.txt; & \'npm\' --version $a',
     'npm.cmd --version $a', "npm.cmd --version 'x&y'", "& 'npm.cmd' --version $a", '& "C:\\Program Files\\nodejs\\npm.cmd" --version $a', "& 'C:\\tools\\run.bat' 'x&y'", "& 'C:\\tools\\npm' --version $a",
-    '& $p --version $a', "$p = 'npm'; & $p --version $a", '& (Get-Command npm) --version $a', '& $(Get-Command npm) --version $a', "& $p 'x&y'", "& 'npm.cmd ' --version $a", "& 'NPM.CMD ' --version $a", "& 'npm ' --version $a", "& 'npm.cmd. ' 'x&y'",
+    '& $p --version $a', "$p = 'npm'; & $p --version $a", '& (Get-Command npm) --version $a', '& $(Get-Command npm) --version $a', "& $p 'x&y'", "& 'npm.cmd ' --version $a", "& 'NPM.CMD ' --version $a", "& 'npm ' --version $a", "& 'npm.cmd. ' 'x&y'", "./x.ps1 'a b'", "& './x.exe.' 'a&b'", "& './e.ps1.' 'a&b'", "& 'C:/t/x.exe\u3000' 'a&b'", "./b.exe 'a&b'", "& './build.ps1.' 'a b'",
   ];
   for (const c of denied) assert.ok(keysOf(c, 'powershell', cmd).includes('deny:list.winargs'), `${c}: ${keysOf(c, 'powershell', cmd).join(' ')}`);
   for (const [quoted, bare] of [["& 'npm' --version", 'npm --version'], ['& "npm" test', 'npm test'], ["& 'npm' view left-pad", 'npm view left-pad'], ["& 'git' status", 'git status'], ["& 'npm' --version 'x&y'", "npm --version 'x&y'"]] as const) {

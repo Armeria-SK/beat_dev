@@ -286,7 +286,12 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (result.paths.some(p => p.mode === 'write') || result.copies.length > 0) wroteEarlier = true;
     if (result.cwd) followCd(seen, result.cwd);
   };
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
+  const fileExists = (path: string): boolean => {
+    if (!seen.known && !parsePath(path).root) return false;
+    const full = resolve(seen.cwd, path);
+    return exists(full) && !isDirectory(full);
+  };
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
     add('deny', say('lex.denied', { detail: lexDetail(language, classified.lex) }));

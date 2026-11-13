@@ -138,3 +138,15 @@ test('git push の宛先の名前は、cd で動いた先のリポジトリの�
   }
   assert.equal(once(f.run('cd rem; Set-Location ../ok; git push origin main', 'powershell')), true);
 });
+
+test('PowerShell の .exe・.ps1 のパスは、その文の作業フォルダ（cd のあとも）に本当にあるときだけ cmd.exe の調べを外す', t => {
+  const f = fixture(t);
+  mkdirSync(join(f.ws, 'tools'), { recursive: true });
+  writeFileSync(join(f.ws, 'tools', 'build.ps1'), 'Write-Output ok\n');
+  const winargs = (command: string) => f.run(command, 'powershell').reasonKeys.includes('list.winargs');
+  assert.equal(winargs("./build.ps1 'a b'"), true, 'ない .ps1 は、名前に拡張子を足した .cmd が動きうる');
+  assert.equal(winargs("./tools/build.ps1 'a b'"), false);
+  assert.equal(winargs("cd tools; ./build.ps1 'a b'"), false, 'cd のあとの作業フォルダで見る');
+  assert.equal(winargs("cd ok; ./build.ps1 'a b'"), true);
+  assert.equal(winargs("cd $d; ./build.ps1 'a b'"), true, 'cd の先が分からなければ、あるとはみなさない');
+});
