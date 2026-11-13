@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { evaluateContext, errorProbeText } from '../src/providers/context.ts';
 import { providerError } from '../src/providers/types.ts';
+import { CATALOGS } from '../src/shared/messages/index.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { httpText } from '../src/shared/messages/http.ts';
 import { providerText } from '../src/shared/messages/providers.ts';
@@ -23,6 +24,14 @@ test('コードの訳: 画面の言語（英語）の文になり、サーバー
     assert.equal(serverText('http.internal', undefined, language), httpText(language, 'internal'));
   }
   assert.match(serverText('http.required', { field: 'title' }, 'en')!, /title/u);
+});
+
+test('コードの訳: 製品の計画書・受け入れの一覧・Build・Pending の断り（domainProblem で返すコード）も、画面の言語の文になる', () => {
+  assert.equal(serverText('build.running', {}, 'en'), CATALOGS.build('en', 'running'));
+  assert.equal(serverText('build.frozen', { version: 2 }, 'en'), CATALOGS.build('en', 'frozen', { version: 2 }));
+  assert.equal(serverText('plan.changed', {}, 'en'), CATALOGS.plan('en', 'changed'));
+  assert.equal(serverText('acceptance.too_many', { max: 30 }, 'en'), CATALOGS.acceptance('en', 'too_many', { max: 30 }));
+  assert.equal(serverText('pending.not_found', { id: 4 }, 'en'), CATALOGS.pending('en', 'not_found', { id: 4 }));
 });
 
 test('コードの訳: 表に無い・コードの形でない・差し込みの値が足りないときは null（サーバーの文をそのまま出す）', () => {

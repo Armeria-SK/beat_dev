@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApiError, type Acceptance, type AcceptanceItem, type Coverage, type PlanDoc, type Task } from '../web/src/api.ts';
 import { BuildError } from '../src/projects/build.ts';
+import { buildText } from '../src/shared/messages/build.ts';
 import { domainProblem } from '../src/web/http.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { t } from '../web/src/i18n/index.ts';
@@ -66,7 +67,8 @@ test('ui/build: Build の失敗の見分け: 409 build.changed は読み直し�
   const missing = new ApiError(409, { code: 'project.folder_missing', message: 'The folder is missing' });
   assert.deepEqual(buildFailure(missing), { kind: 'failed', detail: missing.message });
   assert.ok(missing.message.length > 0);
-  assert.deepEqual(buildFailure(new ApiError(400, { code: 'build.no_plan', message: 'No plan' })), { kind: 'failed', detail: 'No plan' });
+  assert.deepEqual(buildFailure(new ApiError(400, { code: 'build.no_plan', message: 'No plan' })), { kind: 'failed', detail: buildText('en', 'no_plan') }, 'build のコードは画面の文の表で訳す');
+  assert.deepEqual(buildFailure(new ApiError(400, { code: 'build.mystery', message: 'From the server' })), { kind: 'failed', detail: 'From the server' }, '表に無いコードはサーバーの文');
   assert.deepEqual(buildFailure(new Error('network')), { kind: 'failed', detail: null });
 });
 
