@@ -71,7 +71,7 @@ test('ui/live-state: 未読の数は notification で 1 増え、notification.re
 test('ui/live-state: つなぎ直し（resync）は、サーバーの下書きを入れ、全部を読み直す', () => {
   const r = reduce(EMPTY, { type: 'resync', drafts: [{ runId: 'r', conversationId: 'c', modelId: 'm', text: 'x' }, { runId: 'q', conversationId: 'd', modelId: 'm', text: '' }] });
   assert.deepEqual([...r.state.streaming], ['c']);
-  assert.deepEqual(refreshes(r.effects), ['approvals', 'conversations', 'drafts', 'projects', 'tasks', 'unread', 'worker']);
+  assert.deepEqual(refreshes(r.effects), ['approvals', 'conversations', 'drafts', 'pending', 'projects', 'tasks', 'unread', 'worker']);
   assert.equal(r.effects.filter(e => e.kind === 'checklist').length, 2);
 });
 
@@ -101,11 +101,31 @@ test('ui/live-state: plan.changed はその製品の計画書の読み直しの�
   assert.equal(again.state.planRevisions.get('p1aaaa'), 2);
 });
 
-test('ui/live-state: acceptance.changed はその製品の Plan の欄を読み直させる。ほかは読み直さない（beat 3-1b-u）', () => {
+test('ui/live-state: acceptance.changed はその製品の Plan の欄を読み直させ、Pending の数（変更の案）を読み直す。ほかは読み直さない（beat 3-1b-u・4-U1）', () => {
   const r = reduce(EMPTY, ev({ type: 'acceptance.changed', projectId: 'p1aaaa', version: 0, draft: true }));
   assert.equal(r.state.planRevisions.get('p1aaaa'), 1);
   assert.equal(r.state.planRevisions.get('p2bbbb'), undefined);
-  assert.deepEqual(refreshes(r.effects), []);
+  assert.deepEqual(refreshes(r.effects), ['pending']);
+});
+
+test('ui/live-state: Pending の行の pendingAction.changed は Pending の数と一覧を読み直し、製品の数も読み直す。送る前の発言の pending.changed は今までどおり会話だけ（4-U1）', () => {
+  const withProject = run(EMPTY, { type: 'projects', projects: [project('p1aaaa')] });
+  const r = reduce(withProject, ev({ type: 'pendingAction.changed', id: 12, status: 'ran', projectId: 'p1aaaa', conversationId: 'c1', taskId: null }));
+  assert.equal(r.state.pendingRevision, 1);
+  assert.deepEqual(refreshes(r.effects), ['pending', 'projectCounts']);
+  assert.equal(r.state.revisions.get('c1'), undefined, '会話の読み直しはしない');
+  const queued = reduce(withProject, ev({ type: 'pending.changed', conversationId: 'c1' }));
+  assert.equal(queued.state.pendingRevision, 0);
+  assert.equal(queued.state.revisions.get('c1'), 1);
+  assert.deepEqual(refreshes(queued.effects), []);
+});
+
+test('ui/live-state: Pending の数と待ちの一覧は読み込みで入れ替わる（4-U1）', () => {
+  const counts = { waiting: 1, byProject: { p1aaaa: 1 }, acceptanceChanges: {}, judgedToday: { allowed: 3, parked: 1 } };
+  const s = run(EMPTY, { type: 'pending', counts, waiting: [] });
+  assert.deepEqual(s.pendingCounts, counts);
+  assert.deepEqual(s.pendingWaiting, []);
+  assert.equal(EMPTY.pendingCounts, null, '読めるまでは null（製品の数はサーバーのまま）');
 });
 
 test('ui/live-state: 製品があるときだけ、タスクと承認の出来事で製品の数を読み直す（製品が無ければ今までと同じ）', () => {

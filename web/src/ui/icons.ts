@@ -1,6 +1,6 @@
 import type { IconName } from '../icon-name.ts';
 
-export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code' | 'branch' | 'more' | 'image' | 'slash' | 'hook' | 'window' | 'plug' | 'server' | 'palette' | 'person';
+export type UiIconName = IconName | 'grid' | 'columns' | 'calendar' | 'layers' | 'code' | 'branch' | 'more' | 'image' | 'slash' | 'hook' | 'window' | 'plug' | 'server' | 'palette' | 'person' | 'send' | 'bin';
 
 export const pillGlyph = (tone: string | undefined): 'check' | 'x' | null => (tone === 'ok' ? 'check' : tone === 'danger' ? 'x' : null);
 
@@ -49,4 +49,6 @@ export const GLYPHS: Partial<Record<UiIconName, string>> = {
   server: '<rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><path d="M5 5h.2M5 11h.2"/>',
   palette: '<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11M8 5.5h4.8M8 8h5.5M8 10.5h4.8"/>',
   person: '<circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5a5 5 0 0110 0"/>',
+  send: '<path d="M4 12l8-8M6 4h6v6"/>',
+  bin: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.5 8.5h6l.5-8.5"/>',
 };

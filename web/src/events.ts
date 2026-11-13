@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Approval, ChecklistItem, NotificationItem, Task } from './api.ts';
+import type { Approval, ChecklistItem, NotificationItem, PendingStatus, Task } from './api.ts';
 
 export type RunEvent =
   | { type: 'run.start'; runId: string; conversationId: string; modelId: string }
@@ -18,6 +18,7 @@ export type RunEvent =
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
   | { type: 'agent.state'; runId: string; conversationId: string; callId: string; childRunId: string; childConversationId: string; state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout'; toolCalls: number }
   | { type: 'pending.changed'; conversationId: string }
+  | { type: 'pendingAction.changed'; id: number; status: PendingStatus; projectId: string | null; conversationId: string; taskId: string | null }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId?: string | null }
   | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
   | { type: 'plan.changed'; projectId: string; hash: string; by: 'ai' | 'owner' }

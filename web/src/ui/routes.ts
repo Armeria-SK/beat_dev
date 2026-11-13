@@ -9,6 +9,7 @@ export type Route =
   | { view: 'task'; id: string }
   | { view: 'product'; id: string } | { view: 'productNew'; id: string } | { view: 'productSettings'; id: string }
   | { view: 'newProduct' }
+  | { view: 'pending'; productId?: string }
   | { view: 'skills'; target?: SkillTarget }
   | { view: 'runs'; tab?: RunsTab }
   | { view: 'settings'; section?: string };
@@ -38,6 +39,7 @@ export function parseRoute(hash: string): Route {
     if (!a || !PRODUCT_ID.test(a)) return HOME;
     return { view: b === 'new' ? 'productNew' : b === 'settings' ? 'productSettings' : 'product', id: a };
   }
+  if (head === 'pending') return a && PRODUCT_ID.test(a) ? { view: 'pending', productId: a } : { view: 'pending' };
   if (head === 'products') return a === 'new' ? { view: 'newProduct' } : HOME;
   if ((PLAIN as readonly string[]).includes(head)) return { view: head as typeof PLAIN[number] };
   if (head === 'skills') {
@@ -58,6 +60,7 @@ export function routeHash(route: Route): string {
     case 'productNew': return `#/p/${route.id}/new`;
     case 'productSettings': return `#/p/${route.id}/settings`;
     case 'newProduct': return '#/products/new';
+    case 'pending': return route.productId ? `#/pending/${route.productId}` : '#/pending';
     case 'skills': return route.target ? `#/skills/${route.target.kind === 'draft' ? 'draft/' : ''}${encodeURIComponent(route.target.name)}` : '#/skills';
     case 'runs': return route.tab ? `#/runs/${route.tab}` : '#/runs';
     case 'settings': return route.section ? `#/settings/${encodeURIComponent(route.section)}` : '#/settings';

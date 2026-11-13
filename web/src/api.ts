@@ -42,6 +42,17 @@ export interface Project {
   doc_language?: string | null;
   doc_language_pinned?: boolean;
 }
+export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
+export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
+export interface PendingAction {
+  id: number; tool: string; shown: string; masked: number; kind: PendingKind; reason: string;
+  conversation_id: string; task_id: string | null; project_id: string | null;
+  task_title: string | null; project_name: string | null;
+  status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
+  created_at: number; decided_at: number | null; ran_at: number | null;
+}
+export interface PendingCounts { waiting: number; byProject: Record<string, number>; acceptanceChanges: Record<string, number>; judgedToday: { allowed: number; parked: number } }
+export interface PendingQuery { status: 'waiting' | 'decided'; project?: string; before?: number }
 export interface PlanDoc {
   content: string | null; hash: string | null; updated_at: number | null; updated_by: 'ai' | 'owner' | 'outside' | null; tainted: boolean; writing: boolean;
 }
@@ -306,6 +317,11 @@ export const api = {
   checklist: (id: string) => call<ChecklistData>(`/api/conversations/${encodeURIComponent(id)}/checklist`),
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
+  pending: (query: PendingQuery) =>
+    call<{ items: PendingAction[] }>(`/api/pending?status=${query.status}${inProject(query.project, '&')}${query.before === undefined ? '' : `&before=${query.before}`}`),
+  pendingCounts: () => call<PendingCounts>('/api/pending/counts'),
+  approvePending: (id: number) => call(`/api/pending/${id}/approve`, { method: 'POST', body: '{}' }),
+  rejectPending: (id: number, reason: string) => call(`/api/pending/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
   decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
   send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean; projectId?: string; generated?: boolean } = {}) =>

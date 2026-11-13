@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { api, type Approval, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WorkerStatus } from '../../api.ts';
+import { api, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WorkerStatus } from '../../api.ts';
 import { formatDateTimeSmart, useT } from '../../i18n/index.ts';
 import { useNow } from '../hooks.ts';
 import { buildBoard, KANBAN_PAGE, RUNS_WINDOW, sessionCards } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
-import { conversationOwners, finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners } from '../overview.ts';
+import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners } from '../overview.ts';
 import { CountBadge, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { FinishedItem, MiniBoard, RELOAD_DELAY_MS, RunningItems, StatTile, useLastLook, useRunActions } from './Overview.tsx';
@@ -13,7 +13,6 @@ import { FinishedItem, MiniBoard, RELOAD_DELAY_MS, RunningItems, StatTile, useLa
 export interface ProductHomeProps {
   id: string;
   project: Project | undefined;
-  approvals: Approval[];
   conversations: Conversation[];
   drafts: LiveDraft[];
   checklists: ReadonlyMap<string, ChecklistItem[]>;
@@ -23,7 +22,7 @@ export interface ProductHomeProps {
 
 interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
 
-export function ProductHome({ id, project, approvals, conversations, drafts, checklists, worker, revision }: ProductHomeProps) {
+export function ProductHome({ id, project, conversations, drafts, checklists, worker, revision }: ProductHomeProps) {
   const t = useT();
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
@@ -63,8 +62,8 @@ export function ProductHome({ id, project, approvals, conversations, drafts, che
   );
   const done = useMemo(() => (data ? finishedSince(data.finished, look.at) : null), [data, look.at]);
   const stats = useMemo(
-    () => (project ? productTiles(project, approvals, conversationOwners(conversations, data ? [...data.active, ...data.finished] : []), data?.active ?? []) : []),
-    [project, approvals, conversations, data],
+    () => (project ? productTiles(project, data?.active ?? []) : []),
+    [project, data],
   );
   const now = useNow(running.some(row => row.startedAt !== null) ? 1000 : 30_000);
   const lookText = formatDateTimeSmart(look.at, now);

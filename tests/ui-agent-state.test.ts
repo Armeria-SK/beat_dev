@@ -6,7 +6,7 @@ import { agentState, checklistStep, countTasks, footLine, kanbanCount, waitingTo
 // 新しい画面の状態（is-idle / is-working / is-waiting）と、サイドバーの足の 1 行。p1-ui.md の「枠」:
 // 待ち = 承認待ちの道具・承認待ちの提案（inbox）・返事待ちのタスク（waiting）・登録待ちのスキルの下書き。待ちが動いているより強い。
 
-const NONE: Waiting = { approvals: 0, proposals: 0, answers: 0, drafts: 0 };
+const NONE: Waiting = { approvals: 0, proposals: 0, answers: 0, drafts: 0, pending: 0 };
 const items = (...statuses: ChecklistItem['status'][]): ChecklistItem[] => statuses.map((status, i) => ({ text: `step ${i + 1}`, status }));
 
 test('ui/agent-state: タスクの状態から、提案（inbox）と返事待ち（waiting）だけを数える', () => {
@@ -15,14 +15,14 @@ test('ui/agent-state: タスクの状態から、提案（inbox）と返事待�
   assert.deepEqual(countTasks([]), { proposals: 0, answers: 0 });
 });
 
-test('ui/agent-state: Kanban の数は提案と返事待ちの和、待ちの合計は 4 つの和', () => {
-  const w: Waiting = { approvals: 1, proposals: 2, answers: 3, drafts: 4 };
+test('ui/agent-state: Kanban の数は提案と返事待ちの和、待ちの合計は 5 つの和（Pending の一覧を含む。4-U1）', () => {
+  const w: Waiting = { approvals: 1, proposals: 2, answers: 3, drafts: 4, pending: 5 };
   assert.equal(kanbanCount(w), 5);
-  assert.equal(waitingTotal(w), 10);
+  assert.equal(waitingTotal(w), 15);
 });
 
-test('ui/agent-state: 4 つの待ちのどれか 1 つでもあれば waiting', () => {
-  for (const key of ['approvals', 'proposals', 'answers', 'drafts'] as const) {
+test('ui/agent-state: 5 つの待ちのどれか 1 つでもあれば waiting', () => {
+  for (const key of ['approvals', 'proposals', 'answers', 'drafts', 'pending'] as const) {
     assert.equal(agentState({ ...NONE, [key]: 1 }, false), 'waiting', key);
   }
 });
