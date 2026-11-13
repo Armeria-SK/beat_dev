@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
-import { builtinTools } from '../src/app.ts';
+import { App, builtinTools } from '../src/app.ts';
+import { resolvePaths } from '../src/paths.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { startApp } from './app-setup.ts';
+import { tempDir, testConfig } from './helpers.ts';
 
 const SECRET = 'sk-ant-test-0000000000000000';
 
@@ -38,7 +42,7 @@ async function setup(t: Parameters<typeof startApp>[0]) {
 
 test('GET /api/pending: input は応答のどこにも無く、shown は伏せた形', async t => {
   const s = await setup(t);
-  const row = s.park();
+  const row = await s.park();
   const res = await s.api('/api/pending?status=waiting');
   const text = await res.text();
   assert.equal(res.status, 200);
@@ -56,7 +60,7 @@ test('GET /api/pending: input は応答のどこにも無く、shown は伏せ�
 
 test('POST approve: 同時に 2 回呼んでも 1 回だけ動き、2 回目は 409。すぐ 202 を返し、終わったら出来事', async t => {
   const s = await setup(t);
-  const row = s.park('only once');
+  const row = await s.park('only once');
   const [a, b] = await Promise.all([s.json(`/api/pending/${row.id}/approve`, 'POST', {}), s.json(`/api/pending/${row.id}/approve`, 'POST', {})]);
   assert.deepEqual([a.status, b.status].sort(), [202, 409]);
   assert.equal(await s.settled(row.id), 'ran');
@@ -73,7 +77,7 @@ test('POST approve: 同時に 2 回呼んでも 1 回だけ動き、2 回目は 
 
 test('POST reject: 理由つきで rejected。決めた行は decided の一覧に出る', async t => {
   const s = await setup(t);
-  const row = s.park('reject me');
+  const row = await s.park('reject me');
   const res = await s.json(`/api/pending/${row.id}/reject`, 'POST', { reason: 'not now\u0007' });
   assert.equal(res.status, 200);
   assert.equal(res.body.item.status, 'rejected');
@@ -83,14 +87,14 @@ test('POST reject: 理由つきで rejected。決めた行は decided の一覧�
   assert.deepEqual(decided.body.items.map((i: { id: number }) => i.id), [row.id]);
   const twice = await s.json(`/api/pending/${row.id}/reject`, 'POST', {});
   assert.equal(twice.status, 409);
-  const bad = await s.json(`/api/pending/${s.park().id}/reject`, 'POST', { reason: 5 });
+  const bad = await s.json(`/api/pending/${(await s.park()).id}/reject`, 'POST', { reason: 5 });
   assert.equal(bad.status, 400);
 });
 
 test('GET /api/pending/counts', async t => {
   const s = await setup(t);
-  s.park();
-  s.park();
+  await s.park();
+  await s.park();
   const res = await s.json('/api/pending/counts', 'GET');
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, { waiting: 2, byProject: {}, acceptanceChanges: {}, judgedToday: { allowed: 0, parked: 0 } });
@@ -98,8 +102,47 @@ test('GET /api/pending/counts', async t => {
 
 test('会話を消すと、その会話の待ちの行は cancelled', async t => {
   const s = await setup(t);
-  const row = s.park();
+  const row = await s.park();
   const res = await s.api(`/api/conversations/${s.conversation.id}`, { method: 'DELETE' });
   assert.ok(res.status < 300, String(res.status));
   assert.equal(s.app.pending.view(row.id)!.status, 'cancelled');
+});
+
+test('会話を消すと、その会話の行は数と状態だけ残し、決めた一覧にも待ちの一覧にも中身が出ない', async t => {
+  const s = await setup(t);
+  const marker = 'erase-marker-7f3a';
+  const waiting = await s.park(`echo ${marker} waiting`);
+  const decided = await s.park(`echo ${marker} decided`);
+  s.app.pending.reject(decided.id, `reason ${marker}`);
+  const res = await s.api(`/api/conversations/${s.conversation.id}`, { method: 'DELETE' });
+  assert.ok(res.status < 300, String(res.status));
+  for (const status of ['decided', 'waiting']) {
+    const text = await (await s.api(`/api/pending?status=${status}`)).text();
+    assert.ok(!text.includes(marker), `${status} の一覧に中身が出ない`);
+  }
+  const rows = s.app.db.prepare('SELECT id, status, kind, input, shown FROM pending_actions ORDER BY id').all().map(r => ({ ...r }));
+  assert.deepEqual(rows, [
+    { id: waiting.id, status: 'cancelled', kind: 'send', input: '', shown: '' },
+    { id: decided.id, status: 'rejected', kind: 'send', input: '', shown: '' },
+  ]);
+});
+
+test('起動のとき、前回動いている途中だった行を failed にする', async t => {
+  const dir = tempDir(t);
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
+  mkdirSync(paths.data, { recursive: true });
+  writeFileSync(paths.config, JSON.stringify(testConfig()));
+  const databasePath = join(dir, 'beat.db');
+  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, tools: [...builtinTools(), slowTool([])] });
+  const first = open();
+  const conversation = first.conversations.create({ title: 'c' });
+  const row = await first.pending.park({ tool: 'fake_slow', input: { text: 'x' }, cwd: paths.data, kind: 'owner', reason: 'r', runId: 'run-1', runKind: 'chat', conversationId: conversation.id });
+  first.pending.claim(row.id);
+  first.close();
+  const second = open();
+  try {
+    const after = second.pending.view(row.id)!;
+    assert.equal(after.status, 'failed');
+    assert.match(after.output_preview ?? '', /stopped while this was running/u);
+  } finally { second.close(); }
 });

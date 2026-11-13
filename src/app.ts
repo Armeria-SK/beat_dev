@@ -196,8 +196,7 @@ export class App {
         this.notifications.settle('approval_needed', { dedupKey: `approval:${v.id}` });
       }
     });
-    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now });
-    this.pending.onChange = change => this.bus.publish({ type: 'pendingAction.changed', ...change });
+    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => this.bus.publish({ type: 'pendingAction.changed', ...change }) });
     const interrupted = this.pending.closeInterrupted();
     if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
@@ -408,7 +407,7 @@ export class App {
   replayPending(row: PendingRow): void {
     void replayAction(row, {
       db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
-      conversationExists: id => this.conversations.get(id) !== undefined, signal: this.#replayStop.signal, log: this.log,
+      conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
       services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, notify: input => this.notifications.notify(input), browser: this.browser, emit: e => this.bus.publish(e) }),
     }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
   }

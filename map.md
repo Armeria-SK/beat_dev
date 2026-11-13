@@ -155,8 +155,9 @@
 - `store.ts` の `PendingStore`: 積む（`park`。実行の外で動かせない道具は断る、`shown` は鍵を伏せ切らない、消すの行は控えを取る）・一覧（`list`。`input` は返さない）・数（`counts`）・`claim`（waiting → running を 1 文で取る。2 回目は断る）・`finish`・`reject`（理由は制御文字を除き 500 文字まで）・会話を消したときの `cancelConversations`・起動のときに running のまま残った行を failed にする `closeInterrupted`。変わるたびに `onChange`（App が出来事 `pendingAction.changed` にする）。期限で消すことはしない。
 - `replay.ts` の `replayAction`: Approve した行を、モデルを呼ばずに積んだ入力のまま動かす。元の会話が無い・製品をしまった → cancelled、作業フォルダが無い・道具が無い / Block・事前の判定が今は deny → failed、事前の判定の `bind` が違う・消すの行の控えと今が違う → stale（前と今を返す）。動かしたら `tool_calls` に `decided_by: 'owner-pending'`（`run_id` は積んだ実行、`approval_id` は `pending:<id>`）、結果の末尾 2,000 文字と終了コードを行に書く。
 - `snapshot.ts`: 消すの行の控え（git の HEAD・ブランチ・`git status --porcelain -z` のハッシュ〔隔離した git の設定で、設定の怪しいリポジトリでは動かさない〕、対象のパスごとの有無・大きさ・更新時刻、フォルダは中のファイルの数・合計・いちばん新しい時刻）と比べ、送るファイルの今の大きさと時刻（`fileFacts`）。
+- 積むときの守り（4-2b の直し）: `shown` は題・作業フォルダ・実行するものを切らずに見せ（要約が切れる道具は入力まるごとを `redactJsonValue` で伏せた JSON）、題は `title` で別に返す。積んだときの事前の判定の中身（確かめの種類・理由・パス）と作業フォルダの実際の場所を `state` に覚え、Approve のときに新しい理由が出た・作業フォルダが別の場所を指す → stale、作業フォルダが許可フォルダの外 → failed。持ち主の実行前フックも回し、deny なら failed。git を調べられない・数え切れないフォルダ・ネットワークのパスは「変わった」扱い。動かすときは積んだ実行の素性（外を読んだ印・タスク・ホーム・子の担当の親）を引き継ぐ。決めた行（ran / failed / stale / rejected / cancelled）は生の `input` を消し、会話を消したら（`src/db/erase.ts`）行の状態だけ残して中身を消す。decided の一覧は決めた時刻の順で、`before` もその順で前へ。消すの行は `effect`（ファイルの数と大きさ）、通信した行は `fetched` を見せる。
 - 入口: `src/pending/store.ts`、`src/pending/replay.ts`
-- 使うもの: `db`（`pending_actions` `tool_calls` `tasks` `projects` `acceptance_changes`）、`tools`（`ToolRegistry`・`buildPolicy`・`git-env.ts`・`git-repo.ts`）、`projects`（`ProjectStore`）、`src/shared`（`redaction`・`messages/pending.ts`）
+- 使うもの: `db`（`pending_actions` `tool_calls` `tasks` `projects` `acceptance_changes` `engine_runs` `conversations`）、`tools`（`ToolRegistry`・`buildPolicy`・`placePath`・`command-hook.ts`・`git-env.ts`・`git-repo.ts`）、`projects`（`ProjectStore`）、`src/shared`（`redaction`・`messages/pending.ts`）
 
 ### 好奇心 — `src/curiosity`
 - 好奇心リストの保存と状態（`open` `researching` `done` `dropped`）、タスクにする、終わったタスクの結果を受け取る、取り消したタスクが戻されたときに下ろした興味を調べ中に戻す（`onTaskRestored`）、`CURIOSITY.md` の一度だけの取り込み。

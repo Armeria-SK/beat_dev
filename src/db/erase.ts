@@ -80,6 +80,12 @@ function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: num
   db.prepare("UPDATE memory_jobs SET conversation_id = NULL, dedup_key = 'deleted:' || id WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM notifications WHERE substr(dedup_key, 1, 6) = 'owner:' AND link IN (?, ?)").run(`#/c/${id}`, `#/c/${encodeURIComponent(id)}`);
   db.prepare('UPDATE notifications SET link = NULL WHERE link IS NOT NULL AND instr(link, ?) > 0').run(id);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pending_actions'").get()) {
+    for (const ref of db.prepare('SELECT full_ref FROM pending_actions WHERE conversation_id = ? AND full_ref IS NOT NULL').all(id) as Array<{ full_ref: string }>) {
+      if (inside(deps.toolOutputsDir, ref.full_ref)) files.push(ref.full_ref);
+    }
+    db.prepare("UPDATE pending_actions SET input = '', shown = '', reason = '', checks = '[]', state = NULL, files = NULL, output_preview = NULL, full_ref = NULL, reject_reason = NULL WHERE conversation_id = ?").run(id);
+  }
 
   // 添付は、ほかの会話の発言が使っていなければ消す
   let uploads = 0;

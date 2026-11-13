@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import type { AppConfig } from '../config/schema.ts';
@@ -8,12 +9,14 @@ import { folderMissing, type ProjectStore } from '../projects/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
-import { buildPolicy } from '../tools/policy.ts';
+import { runCommandHook } from '../tools/hooks/command-hook.ts';
+import { placePath } from '../tools/hooks/scope.ts';
+import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
-import type { PreCheck, RunKind, ToolContext, ToolOutput } from '../tools/types.ts';
+import type { PreCheck, RunKind, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
 import { compareSnapshot, takeSnapshot, type Change } from './snapshot.ts';
-import type { PendingRow, PendingState, PendingStatus, PendingStore } from './store.ts';
+import { newChecks, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
 
 export interface ReplayDeps {
   db: DatabaseSync;
@@ -23,6 +26,7 @@ export interface ReplayDeps {
   paths: AppPaths;
   projects?: ProjectStore | undefined;
   conversationExists: (id: string) => boolean;
+  conversationTainted?: ((id: string) => boolean) | undefined;
   services?: (() => ToolContext['services']) | undefined;
   signal?: AbortSignal | undefined;
   log?: ((line: string) => void) | undefined;
@@ -38,9 +42,38 @@ export interface ReplayOutcome {
 const RUN_KINDS: readonly RunKind[] = ['chat', 'task', 'review', 'agent'];
 const EXTRA_SECONDS = 60;
 
+const matches = (matcher: string, name: string): boolean => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
+
+function parentOf(db: DatabaseSync, row: PendingRow): ToolContext['parent'] {
+  if (row.run_kind !== 'agent') return undefined;
+  const run = db.prepare('SELECT parent_run_id AS id FROM engine_runs WHERE id = ?').get(row.run_id) as { id: string | null } | undefined;
+  const conversation = db.prepare('SELECT parent_run_id AS id, title FROM conversations WHERE id = ?').get(row.conversation_id) as { id: string | null; title: string | null } | undefined;
+  const parentRunId = run?.id ?? conversation?.id ?? null;
+  if (!parentRunId) return undefined;
+  const parent = db.prepare('SELECT kind, conversation_id FROM engine_runs WHERE id = ?').get(parentRunId) as { kind: string; conversation_id: string | null } | undefined;
+  if (!parent?.conversation_id || !(RUN_KINDS as readonly string[]).includes(parent.kind)) return undefined;
+  const task = parent.kind === 'task'
+    ? db.prepare('SELECT id FROM tasks WHERE conversation_id = ?').get(parent.conversation_id) as { id: string } | undefined
+    : undefined;
+  return { runId: parentRunId, conversationId: parent.conversation_id, kind: parent.kind as RunKind, title: conversation?.title ?? '', ...(task ? { taskId: task.id } : {}) };
+}
+
+async function hookRefusal(tool: ToolDef, args: unknown, ctx: ToolContext, cwd: string): Promise<string | undefined> {
+  for (const hook of ctx.config.tools.hooks.preToolUse) {
+    if (hook.enabled === false || !matches(hook.matcher, tool.name)) continue;
+    let summaryCwd: string | undefined;
+    try { summaryCwd = tool.summarize?.(args as never, 'en').cwd; } catch { summaryCwd = undefined; }
+    const result = await runCommandHook(hook, {
+      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: summaryCwd ? resolve(cwd, summaryCwd) : cwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+    }, ctx.signal, 'en');
+    if (result.decision === 'deny') return result.reason || result.hook;
+  }
+  return undefined;
+}
+
 export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<ReplayOutcome> {
   const end = (status: ReplayOutcome['status'], output: string, extra: Partial<ReplayOutcome> = {}, result: { exitCode?: number | undefined; fullRef?: string | undefined } = {}): ReplayOutcome => {
-    deps.store.finish(row.id, { status, output, ...result });
+    deps.store.finish(row.id, { status, output, ...result, ...(extra.fetched !== undefined ? { fetched: extra.fetched } : {}) });
     return { status, output, ...extra };
   };
   try {
@@ -54,6 +87,8 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       project = { id: found.id, root: found.root };
     }
     if (!row.cwd || !statSync(row.cwd, { throwIfNoEntry: false })?.isDirectory()) return end('failed', pendingText('en', 'cwd_missing', { path: row.cwd ?? '' }));
+    const state = JSON.parse(row.state ?? '{}') as PendingState;
+    if (state.cwdReal !== undefined && realCwd(row.cwd) !== state.cwdReal) return end('stale', pendingText('en', 'changed_cwd', { path: row.cwd }));
     const kind = (RUN_KINDS as readonly string[]).includes(row.run_kind) ? row.run_kind as RunKind : 'task';
     const tool = deps.registry.get(row.tool);
     if (!tool || tool.replayable === false || !tool.allowedIn.includes(kind)) return end('failed', pendingText('en', 'tool_missing', { tool: row.tool }));
@@ -65,13 +100,23 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
 
     const productRoots = [...(deps.projects?.list() ?? []), ...(deps.projects?.list({ archived: true }) ?? [])].map(p => p.root);
     const policy = buildPolicy(config, deps.paths, project, productRoots);
+    if (placePath(resolve(row.cwd), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: row.cwd }));
     const timeout = AbortSignal.timeout((config.tools.shell.maxTimeoutSec + EXTRA_SECONDS) * 1000);
     const signal = deps.signal ? AbortSignal.any([timeout, deps.signal]) : timeout;
     const runId = randomUUID();
+    const conversationTainted = (): boolean => {
+      if (row.tainted === 1) return true;
+      try { return deps.conversationTainted?.(row.conversation_id) ?? false; } catch { return true; }
+    };
+    const parent = parentOf(deps.db, row);
     const ctx: ToolContext = {
       runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace: row.cwd,
+      home: defaultWorkspace(buildPolicy(config, deps.paths, undefined, productRoots), deps.paths),
       ...(project ? { project } : {}),
-      taint: { tainted: false, sources: [] },
+      taint: row.tainted === 1 ? { tainted: true, sources: [pendingText('en', 'taint_parked')] } : { tainted: false, sources: [] },
+      conversationTainted,
+      ...(row.task_id ? { task: { id: row.task_id, control: { outcome: 'none' as const } } } : {}),
+      ...(parent ? { parent } : {}),
       log: deps.log ?? (() => undefined),
       services: deps.services?.(),
     };
@@ -82,12 +127,16 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       catch (error) { again = { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
       if (again.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
       if ((again.bind ?? null) !== row.bind) return end('stale', pendingText('en', 'changed_bind'));
+      const fresh = newChecks(state.recheck, again);
+      if (fresh.length) return end('stale', pendingText('en', 'changed_checks', { reasons: fresh.join('\n- ') }));
     } else if (row.bind !== null) return end('stale', pendingText('en', 'changed_bind'));
 
+    const refused = await hookRefusal(tool, args, ctx, row.cwd);
+    if (refused !== undefined) return end('failed', pendingText('en', 'hook_denied', { reason: refused }));
+
     if (row.kind === 'delete') {
-      const state = JSON.parse(row.state ?? '{}') as PendingState;
       const before = state.snapshot ?? { git: null, paths: [] };
-      const changes = compareSnapshot(before, takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
+      const changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
       if (changes.length) {
         const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');
         return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });
@@ -100,12 +149,14 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     catch (error) { output = { content: pendingText('en', 'exec_error', { detail: (error as Error).message }), isError: true }; }
     if (signal.aborted && deps.signal?.aborted) output = { content: `${output.content}\n\n${pendingText('en', 'cancelled_stop')}`, isError: true };
     const network = tool.effect === 'network' || (() => { try { return tool.networkCall?.(args as never) === true; } catch { return true; } })();
-    const fetched = (network && !(output.isError && output.noRemoteContent)) || again?.fetched === true || output.fetched === true;
-    const shownInput = JSON.stringify(redactJsonValue(args)).slice(0, 4000);
-    const preview = redactSecrets(output.content);
+    const egress = again?.decision === 'ask' && again.askKinds?.includes('egress') === true;
+    const fetched = (network && !(output.isError && output.noRemoteContent)) || again?.fetched === true || output.fetched === true || egress;
+    const kept = deps.conversationExists(row.conversation_id);
+    const shownInput = kept ? JSON.stringify(redactJsonValue(args)).slice(0, 4000) : '';
+    const preview = kept ? redactSecrets(output.content).slice(0, 2000) : null;
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
       VALUES (?, ?, ?, ?, ?, 'allow', 'owner-pending', ?, ?, ?, ?, ?, ?)`).run(
-      randomUUID(), row.run_id, row.conversation_id, row.tool, shownInput, `pending:${row.id}`, output.isError ? 0 : 1, Date.now() - started, preview.slice(0, 2000), output.fullRef ?? null, started,
+      randomUUID(), row.run_id, kept ? row.conversation_id : null, row.tool, shownInput, `pending:${row.id}`, output.isError ? 0 : 1, Date.now() - started, preview, kept ? output.fullRef ?? null : null, started,
     );
     const ran = output.exitCode !== undefined || !output.isError;
     return end(ran ? 'ran' : 'failed', output.content, { fetched }, { exitCode: output.exitCode, fullRef: output.fullRef });
