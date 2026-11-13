@@ -1124,7 +1124,7 @@ export const en = {
   'ui.set.shell.allow': 'Run without asking',
   'ui.set.shell.allowDesc': 'Commands that start like these',
   'ui.set.shell.ask': 'Always ask',
-  'ui.set.shell.askDesc': 'Even when the mode is Auto',
+  'ui.set.shell.askDesc': 'Even when the mode is Normal',
   'ui.set.shell.deny': 'Never run',
   'ui.set.shell.denyDesc': 'Refused without asking',
   'ui.set.bg.title': 'Tasks in the background',
