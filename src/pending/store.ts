@@ -5,6 +5,7 @@ import { LocalizedError, type MessageParams } from '../shared/messages/define.ts
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import type { PreviewFile } from '../tools/approvals.ts';
+import { inspectRepo } from '../tools/hooks/git-repo.ts';
 import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { PreCheck, RunKind, ToolDef } from '../tools/types.ts';
@@ -260,7 +261,8 @@ export class PendingStore {
       const fact = boundFacts([path])[0]!;
       return [{ path, id, ...(fact.type === 'dir' ? { inside: fact.hash ?? '', ...(fact.more ? { more: true as const } : {}) } : {}) }];
     });
-    const pushes = input.pushes ?? [];
+    const sends = input.kind === 'send' || input.outbound?.kind === 'send';
+    const pushes = input.pushes?.length ? input.pushes : sends && inspectRepo(input.cwd).found ? [{ dir: input.cwd }] : [];
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {

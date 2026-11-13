@@ -517,6 +517,35 @@ for (const [name, template] of UNPINNED_CASES) {
   });
 }
 
+const ALIAS_PUSH = WINDOWS ? 'Set-Alias g git; g push {U} main' : 'g() { git "$@"; }; g push {U} main';
+
+test('承認（W1-11 改）: 何のコマンドか分からない送り（別名の git）でも、作業フォルダのリポジトリを控え、積んだあとにブランチが動いたら stale', { skip: !gitAvailable }, async t => {
+  const { r, late, park, q } = pushRig(t);
+  const row = await park(ALIAS_PUSH.replace('{U}', q));
+  late('main');
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.match(outcome.output ?? '', /commits it would push changed/u);
+});
+
+test('承認（W1-11 改）: 何のコマンドか分からない送り（別名の git）は、何も動かなければ動く（対照）', { skip: !gitAvailable }, async t => {
+  const { r, park, q } = pushRig(t);
+  const row = await park(ALIAS_PUSH.replace('{U}', q));
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+});
+
+test('承認（W1-11 改）: リポジトリでないフォルダの、何のコマンドか分からない送りは、控えを足さず、いままでどおり動く', async t => {
+  const r = rig(t);
+  const command = WINDOWS ? `Set-Alias c curl.exe; c -s -m 2 -d x=1 http://127.0.0.1:9/` : 'c() { curl "$@"; }; c -s -m 2 -d x=1 http://127.0.0.1:9/';
+  const parked = await r.call('shell_run', { command }, { ...r.ctx, project: r.project() });
+  assert.equal(parked.decidedBy, 'pending', parked.output.content);
+  const row = r.latest();
+  const state = (r.db.prepare('SELECT state FROM pending_actions WHERE id = ?').get(row.id) as { state: string }).state;
+  assert.doesNotMatch(state, /"pushe[sd]"/u);
+  assert.equal((await r.approve(row.id)).status, 'ran');
+});
+
 test('送る宛先の控え（LOW）: npm publish <フォルダ> のフォルダも places に入れる', () => {
   const ws = WINDOWS ? 'C:\\ws' : '/ws';
   const statement = (words: string[]) => ({ program: words[0]!, programDynamic: false, programOdd: false, words: words.map(text => ({ text, dynamic: false })), urls: [], env: [], gitGlobal: [], code: [], codeDynamic: false, stdin: false, shapes: [], reasonKeys: [], deletes: false, targets: [], writes: [], cwd: ws });
