@@ -95,4 +95,9 @@ test('ui/onboarding: 確かめの最中の Esc は全体を閉じない（動い
   assert.equal(escapeAction({ busy: true, confirming: true }), 'ignore');
   assert.equal(escapeAction({ busy: false, confirming: true }), 'cancelConfirm');
   assert.equal(escapeAction({ busy: false, confirming: false }), 'close');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  const screen = readFileSync(new URL('../web/src/ui/Onboarding.tsx', import.meta.url), 'utf8');
+  assert.ok(screen.includes("addEventListener('keydown', onEscape, true)"), 'フォーカスが枠の外でも止められるよう、window の捕まえる段で見る');
+  assert.ok(screen.includes("removeEventListener('keydown', onEscape, true)"));
+  assert.ok(app.includes("if (e.key !== 'Escape' || e.defaultPrevented) return;"), 'App は止めた Esc では閉じない');
 });

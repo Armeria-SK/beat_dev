@@ -35,6 +35,10 @@ function finish(draft: FieldDraft, accept: (value: string) => boolean): { draft:
   return accept(value) ? { draft: { ...draft, text: value }, commit: value } : { draft: { ...draft, text: draft.saved }, commit: null };
 }
 
+export const listAccepts = (items: readonly string[], value: string, allowDuplicates = false): boolean => allowDuplicates || !items.includes(value);
+
+export const listWithout = (items: readonly string[], index: number): string[] => items.filter((_, i) => i !== index);
+
 export type NumberRead = { kind: 'value'; value: number | undefined } | { kind: 'bad' };
 
 export function readNumber(text: string, rule: { min?: number; max?: number; optional?: boolean; integer?: boolean }): NumberRead {

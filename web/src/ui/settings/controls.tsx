@@ -7,7 +7,7 @@ import type { Access } from '../../settings/access.ts';
 import type { Config } from '../../settings/model.ts';
 import { menuFit, menuScrollFor, menuStep, type Box, type MenuFit } from '../menu.ts';
 import { Button, Icon } from '../parts.tsx';
-import { fieldStep, readNumber, type FieldDraft } from './commit.ts';
+import { fieldStep, listAccepts, listWithout, readNumber, type FieldDraft } from './commit.ts';
 
 export interface Pending { row: string; items: Access[]; title?: string; ok?: string; run: () => void; cancel?: () => void }
 export type Ask = Pick<Pending, 'row' | 'items' | 'title' | 'ok'>;
@@ -238,19 +238,19 @@ export function NumberField({ k, value, label, min, max, optional, onCommit }: {
   return <input className="bt-field bt-field--mono bt-field--short" inputMode="numeric" aria-label={label} spellCheck={false} autoComplete="off" {...field} />;
 }
 
-export function ListField({ items, label, placeholder, disabled, onChange }: { items: readonly string[]; label: string; placeholder?: string; disabled?: boolean; onChange: (items: string[]) => void }) {
+export function ListField({ items, label, placeholder, disabled, allowDuplicates, onChange }: { items: readonly string[]; label: string; placeholder?: string; disabled?: boolean; allowDuplicates?: boolean; onChange: (items: string[]) => void }) {
   const t = useT();
   const ctx = useSet();
-  const field = useField('', ctx.revision, value => onChange([...items, value]), items.join('\n'), value => !items.includes(value));
+  const field = useField('', ctx.revision, value => onChange([...items, value]), items.join('\n'), value => listAccepts(items, value, allowDuplicates));
   return (
     <div className="ui-set__list">
       {items.length > 0 && (
         <ul className="ui-set__chips" aria-label={label}>
-          {items.map(item => (
-            <li key={item} className="ui-set__chip">
+          {items.map((item, index) => (
+            <li key={`${index}:${item}`} className="ui-set__chip">
               <code>{item}</code>
               <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.set.list.remove', item)} disabled={disabled}
-                onClick={() => onChange(items.filter(x => x !== item))}><Icon name="x" /></button>
+                onClick={() => onChange(listWithout(items, index))}><Icon name="x" /></button>
             </li>
           ))}
         </ul>

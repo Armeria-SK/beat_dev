@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { COMMIT_ON, fieldStep, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
+import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
 import { CATEGORIES, FILE_ONLY, LATER_HIDDEN, matchCategories, placeOf } from '../web/src/ui/settings/rows.ts';
 import { keyLine, providerReach, rolesOf, setConversation, setFallback } from '../web/src/ui/settings/view.ts';
 
@@ -87,6 +87,15 @@ test('ui/settings commit: 受けない値（空にした必須の欄・一覧に
   const fresh = (value: string) => !items.includes(value);
   assert.deepEqual(fieldStep({ saved: '', text: 'node ' }, { type: 'blur' }, fresh), { draft: { saved: '', text: '' }, commit: null });
   assert.equal(fieldStep({ saved: '', text: 'b.js' }, { type: 'blur' }, fresh).commit, 'b.js');
+});
+
+test('ui/settings commit: コマンドの引数の一覧は同じ語を何度でも足せ、消すのは押した 1 つだけ', () => {
+  const argv = ['node', 'guard.js', '--deny', 'rm'];
+  assert.equal(listAccepts(argv, '--deny', true), true, '引数は繰り返してよい');
+  assert.equal(listAccepts(argv, '--deny'), false, 'ふつうの一覧は同じ項目を受けない');
+  assert.equal(listAccepts(argv, 'curl'), true);
+  const twice = [...argv, '--deny', 'curl'];
+  assert.deepEqual(listWithout(twice, 4), ['node', 'guard.js', '--deny', 'rm', 'curl'], '2 つ目の --deny だけを消す');
 });
 
 test('ui/settings commit: Esc は打った文字を保存した値に戻し、何も保存しない。保存した値が変わると欄も替わる', () => {
@@ -189,7 +198,7 @@ test('ui/settings: 設定を書く口（saveSettings・resetSettings）を呼ぶ
   const callers = readdirSync(root, { recursive: true, encoding: 'utf8' })
     .map(file => file.replace(/\\/gu, '/'))
     .filter(file => /\.tsx?$/u.test(file))
-    .filter(file => /\bapi\.(?:saveSettings|resetSettings)\(/u.test(readFileSync(new URL(file, root), 'utf8')))
+    .filter(file => /\b(?:saveSettings|resetSettings)\b|\/api\/settings\b/u.test(readFileSync(new URL(file, root), 'utf8')))
     .sort();
-  assert.deepEqual(callers, ['ui/Onboarding.tsx', 'ui/settings/Settings.tsx', 'ui/settings/customize.tsx']);
+  assert.deepEqual(callers, ['api.ts', 'ui/Onboarding.tsx', 'ui/settings/Settings.tsx', 'ui/settings/customize.tsx']);
 });
