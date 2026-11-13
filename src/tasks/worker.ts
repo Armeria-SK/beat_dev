@@ -405,7 +405,7 @@ export class Worker {
     const fresh = task.conversation_id ?? randomUUID();
     if (!tasks.claim(task.id, LEASE_MS, fresh)) return 'busy';
     const conversationId = tasks.get(task.id)?.conversation_id ?? fresh;
-    if (!task.conversation_id && conversationId === fresh) conversations.create({ id: conversationId, kind: 'task', title: taskText(language, 'title.task', { title: task.title }), projectId: task.project_id });
+    if (!conversations.get(conversationId)) conversations.create({ id: conversationId, kind: 'task', title: taskText(language, 'title.task', { title: task.title }), projectId: task.project_id });
     if (this.#d.projects && projectFolderGone(this.#d.projects, task.project_id)) {
       const name = this.#d.projects.get(task.project_id!)?.name ?? task.project_id!;
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.folder_missing', { name }) });

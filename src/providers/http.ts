@@ -43,27 +43,59 @@ const CONTEXT_PATTERNS = /context[ _-]?length|context window|maximum context|max
 export const UPSTREAM_KEEP = 2000;
 const UPSTREAM_SHOWN = 200;
 
-// 本文を読む。secrets は、読んだ本文からまず伏せる（切り取りの前）
 const SNIPPET_READ_BYTES = 64 * 1024;
 
-async function readHead(response: Response): Promise<string> {
-  if (!response.body) return await response.text();
+async function readHead(response: Response): Promise<{ text: string; cut: boolean }> {
+  if (!response.body) return { text: await response.text(), cut: false };
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   while (total < SNIPPET_READ_BYTES) {
     const { done, value } = await reader.read();
-    if (done) return Buffer.concat(chunks).toString('utf8');
+    if (done) return { text: Buffer.concat(chunks).toString('utf8'), cut: false };
     chunks.push(value);
     total += value.length;
   }
   await reader.cancel().catch(() => undefined);
-  return Buffer.concat(chunks).subarray(0, SNIPPET_READ_BYTES).toString('utf8');
+  return { text: Buffer.concat(chunks).subarray(0, SNIPPET_READ_BYTES).toString('utf8'), cut: true };
 }
 
+const SPACE = /\s/u;
+
+function endsInPart(text: string, from: number, form: string): boolean {
+  let j = 0;
+  let k = from;
+  while (k < text.length) {
+    if (j >= form.length) return false;
+    if (SPACE.test(form[j]!)) {
+      if (!SPACE.test(text[k]!)) return false;
+      while (j < form.length && SPACE.test(form[j]!)) j++;
+      while (k < text.length && SPACE.test(text[k]!)) k++;
+      continue;
+    }
+    if (text[k] !== form[j]) return false;
+    j++;
+    k++;
+  }
+  return true;
+}
+
+function withoutCutSecret(text: string, secrets: readonly string[]): string {
+  const forms = secrets.filter(secret => secret.trim() !== '').flatMap(secret => [secret, JSON.stringify(secret).slice(1, -1)]);
+  if (forms.length === 0) return text;
+  const window = Math.max(...forms.map(form => form.length)) * 2 + 1024;
+  for (let i = Math.max(0, text.length - window); i < text.length; i++) {
+    if (forms.some(form => endsInPart(text, i, form))) return text.slice(0, i);
+  }
+  return text;
+}
+
+// 本文を読む。secrets は、読んだ本文からまず伏せる（切り取りの前）
 export async function readSnippet(response: Response, secrets: readonly string[] = [], max = UPSTREAM_KEEP): Promise<string> {
   try {
-    const text = redactExact(await readHead(response), secrets).slice(0, max);
+    const head = await readHead(response);
+    const masked = redactExact(head.text, secrets);
+    const text = (head.cut ? withoutCutSecret(masked, secrets) : masked).slice(0, max);
     try {
       const json = JSON.parse(text) as { error?: unknown; message?: unknown };
       const error = json.error;

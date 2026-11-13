@@ -27,3 +27,12 @@ test('readSnippet: 頭の中の鍵は、切る前に伏せる（読む量を絞�
   assert.ok(!text.includes(secret), text);
   assert.match(text, /^bad key /u);
 });
+
+test('readSnippet: 頭だけ読むとき、境目で切れた長い鍵のかけらを、伏せ字で縮んだ分だけ前へ引き込まない', async () => {
+  const key = Array.from({ length: 4000 }, (_, i) => 'Zk3qP9xW7mB2vN8cLd5T'[(i * 7) % 20]).join('');
+  const body = `${key} `.repeat(40);
+  const text = await readSnippet(new Response(body, { status: 500 }), [key]);
+  const fragments = Array.from({ length: key.length - 8 }, (_, i) => key.slice(i, i + 8));
+  assert.ok(!fragments.some(part => text.includes(part)), 'no part of the key is left');
+  assert.ok(text.includes('[REDACTED]'));
+});
