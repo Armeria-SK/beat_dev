@@ -590,8 +590,10 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
         {action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
         {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill tone="running">{t('ui.plan.building')}</Pill></span>}
       </div>
-      {buildNotice?.kind === 'changed' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} /></div>}
-      {buildNotice?.kind === 'frozen' && <div role="status"><Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} /></div>}
+      <div role="status" className="ui-plan__live">
+        {buildNotice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} />}
+        {buildNotice?.kind === 'frozen' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} />}
+      </div>
       {buildNotice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.buildFailed')} text={buildNotice.detail ?? undefined} />}
       {asking && !askFailed && <div role="status"><Notice title={t('ui.acc.ask.title')} action={{ label: t('ui.acc.ask.ask'), run: () => void ask() }} also={{ label: t('ui.acc.ask.notNow'), run: () => setAsking(false) }} /></div>}
       {asking && askFailed && <Notice tone="fail" title={t('ui.acc.ask.failed')} text={askFailed.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void ask() }} />}
