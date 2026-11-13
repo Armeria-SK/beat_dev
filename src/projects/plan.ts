@@ -18,7 +18,7 @@ const AUTHORS: ReadonlySet<string> = new Set(['ai', 'owner', 'outside']);
 
 export type PlanAuthor = 'ai' | 'owner';
 
-export interface PlanMeta { hash: string; updatedAt: number; by: PlanAuthor; tainted: boolean; conversationId: string | null; runId: string | null }
+export interface PlanMeta { hash: string; updatedAt: number; by: PlanAuthor; tainted: boolean; conversationId: string | null; runId: string | null; reviewedAt?: number }
 
 export interface PlanView { content: string | null; hash: string | null; updated_at: number | null; updated_by: PlanAuthor | 'outside' | null; tainted: boolean }
 
@@ -85,7 +85,7 @@ export class PlanStore {
     const hash = planHash(content);
     const meta = this.meta(projectId);
     if (meta?.hash === hash) return { content, hash, updated_at: meta.updatedAt, updated_by: meta.by, tainted: meta.tainted === true };
-    return { content, hash, updated_at: Math.floor(stat.mtimeMs), updated_by: 'outside', tainted: false };
+    return { content, hash, updated_at: Math.floor(stat.mtimeMs), updated_by: 'outside', tainted: meta?.tainted === true };
   }
 
   write(projectId: string, raw: string, by: Omit<PlanMeta, 'hash' | 'updatedAt'>, baseHash?: string | null): PlanView & { content: string; hash: string; changed: boolean } {
@@ -109,9 +109,24 @@ export class PlanStore {
       this.#backup(projectId, previous, author?.by ?? 'outside', now);
     }
     if (previous !== content) this.#replace(file, content);
-    const meta: PlanMeta = { hash, updatedAt: now, ...by };
+    const meta: PlanMeta = by.by === 'owner' && !by.tainted && known?.tainted === true
+      ? { hash, updatedAt: now, by: by.by, tainted: true, conversationId: known.conversationId, runId: known.runId }
+      : { hash, updatedAt: now, ...by };
     this.#kv.setJson(`plan:${projectId}`, meta);
-    return { content, hash, updated_at: now, updated_by: by.by, tainted: by.tainted, changed: true };
+    return { content, hash, updated_at: now, updated_by: by.by, tainted: meta.tainted, changed: true };
+  }
+
+  review(projectId: string, baseHash: string | null): PlanView & { content: string; hash: string } {
+    if (this.#archived(projectId)) throw new PlanError('archived');
+    const content = this.read(projectId);
+    if (content === undefined || baseHash === null || planHash(content) !== baseHash) throw new PlanError('changed');
+    const known = this.meta(projectId);
+    const now = this.#now();
+    const meta: PlanMeta = known?.hash === baseHash
+      ? { ...known, tainted: false, reviewedAt: now }
+      : { hash: baseHash, updatedAt: now, by: 'owner', tainted: false, conversationId: null, runId: null, reviewedAt: now };
+    this.#kv.setJson(`plan:${projectId}`, meta);
+    return { content, hash: baseHash, updated_at: meta.updatedAt, updated_by: meta.by, tainted: false };
   }
 
   #replace(file: string, content: string): void {

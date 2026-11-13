@@ -151,6 +151,17 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 200, { plan: planWire(project.id, view) });
   });
 
+  router.add('POST', '/api/projects/:id/plan/reviewed', async ({ req, res, params }) => {
+    const project = app.projects.get(params[0]!);
+    if (!project) throw problem(404, 'not_found', 'project_missing');
+    const body = requireObject(await readJson(req));
+    if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
+    const baseHash = requireString(body, 'baseHash', { max: 128 })!;
+    const view = planned(() => app.plans.review(project.id, baseHash));
+    app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: view.hash, by: 'owner' });
+    sendJson(res, 200, { plan: planWire(project.id, view) });
+  });
+
   const accepted = <T>(work: () => T): T => {
     try { return work(); } catch (error) {
       if (error instanceof AcceptanceError) throw domainProblem(ACCEPTANCE_STATUS[error.code] ?? 400, 'acceptance', error);
