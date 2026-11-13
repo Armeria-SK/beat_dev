@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Project } from '../web/src/api.ts';
-import { inFilter, newTaskProduct, optionLabel, productLine, productName, settleFilter, withProduct } from '../web/src/ui/product-meta.ts';
+import { inFilter, needsShelved, newTaskProduct, optionLabel, productLine, productName, settleFilter, withProduct } from '../web/src/ui/product-meta.ts';
 import { ALL_PRODUCTS, NO_PRODUCT, filterOptions } from '../web/src/ui/products.ts';
 
 // 絞り込みと製品の名前の、画面を持たない関数（web/src/ui/product-meta.ts）。p2-product.md の 2-2c。
@@ -56,4 +56,21 @@ test('ui/product-meta: 製品の名前と、しまった製品の見分け（製
 test('productLine: 動いている一覧に入っていても、しまった印（archived_at）のある製品はしまった製品として出す', () => {
   const stale = [project('p1aaaa', { archived_at: 5 })];
   assert.deepEqual(productLine('p1aaaa', stale, stale), { name: 'P1AAAA', archived: true });
+});
+
+test('productLine: しまった製品の一覧がまだ届いていない（null）なら、動いている一覧に無い製品の札は出さない。動いている製品は出す（backlog 308）', () => {
+  const active = [project('p1aaaa')];
+  assert.equal(productLine('p2aaaa', active, null), null);
+  assert.deepEqual(productLine('p1aaaa', active, null), { name: 'P1AAAA', archived: false });
+  assert.equal(productLine(null, active, null), null);
+  assert.deepEqual(productLine('p2aaaa', active, []), { name: null, archived: true }, '届いて空なら、名前なしのしまった製品');
+});
+
+test('needsShelved: しまった製品の一覧を読みに行くのは、製品つきで、動いている一覧に無く、まだ届いていないときだけ', () => {
+  const active = [project('p1aaaa'), project('p3aaaa', { archived_at: 5 })];
+  assert.equal(needsShelved('p2aaaa', active, null), true);
+  assert.equal(needsShelved('p3aaaa', active, null), true, 'しまった印のある製品は動いている一覧にあっても読む');
+  assert.equal(needsShelved('p1aaaa', active, null), false);
+  assert.equal(needsShelved(null, active, null), false);
+  assert.equal(needsShelved('p2aaaa', active, []), false, '届いていれば読まない');
 });

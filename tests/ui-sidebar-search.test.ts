@@ -2,15 +2,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import type { HistoryHit } from '../web/src/api.ts';
+import { searchView } from '../web/src/ui/search-state.ts';
 
-const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'Sidebar.tsx'), 'utf8');
-const search = source.slice(source.indexOf('function SessionSearch('), source.indexOf('function SessionRow('));
+const hit = (conversationId: string, messageId: number): HistoryHit => ({ conversationId, title: conversationId, messageId, role: 'user', createdAt: 0, snippet: '' });
 
-test('ui/Sidebar: 過去の会話の検索が失敗したら "No matches" ではなく読めなかったことを出す（backlog 242）', () => {
-  assert.ok(search.length > 0, 'SessionSearch がある');
-  assert.doesNotMatch(search, /\.catch\(\(\) => \{ if \(live\) setHits\(\[\]\); \}\)/u, '失敗を「0 件」として扱わない');
-  assert.match(search, /\.catch\(\(\) => \{ if \(live\) \{ setHits\(null\); setFailed\(true\); \} \}\)/u, '失敗の印を立てる');
-  assert.match(search, /\{failed && <span className="bt-meta ui-search__none ui-danger" role="status">\{t\('ui\.kanban\.loadFailed'\)\}<\/span>\}/u, '失敗の文を出す');
-  assert.match(search, /if \(!q\) \{ setHits\(null\); setFailed\(false\); return undefined; \}/u, '空にしたら失敗の印を消す');
-  assert.match(search, /\.then\(r => \{ if \(live\) \{ setHits\(r\.hits\); setFailed\(false\); \} \}\)/u, '読めたら失敗の印を消す');
+test('ui/search-state: 検索の失敗は「0 件」と分けて failed にする。届いた結果は会話ごとに 1 行、0 件なら none（backlog 242）', () => {
+  assert.deepEqual(searchView({ kind: 'idle' }), { hits: [], note: null });
+  assert.deepEqual(searchView({ kind: 'failed' }), { hits: [], note: 'failed' });
+  assert.deepEqual(searchView({ kind: 'loaded', hits: [] }), { hits: [], note: 'none' });
+  assert.deepEqual(searchView({ kind: 'loaded', hits: [hit('a', 1), hit('a', 2), hit('b', 3)] }), { hits: [hit('a', 1), hit('b', 3)], note: null });
+});
+
+test('ui/Sidebar: 検索の失敗を failed にし、知らせは常にある role="status" の入れ物の中に出す', () => {
+  const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'Sidebar.tsx'), 'utf8');
+  assert.match(source, /\.catch\(\s*\(\)\s*=>\s*\{[^}]*kind:\s*'failed'/u, '失敗を failed にする');
+  assert.match(source, /searchView\(/u);
+  assert.match(source, /<div[^>]*role="status"[^>]*>\s*\{view\.note === 'none'[\s\S]*?\{view\.note === 'failed'[\s\S]*?ui\.kanban\.loadFailed[\s\S]*?<\/div>/u, '入れ物は中身より前からある');
 });
