@@ -1,32 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, classifyRun, convMark, isChatGenerating, type RunContext } from '../web/src/conversation-state.ts';
+import { CONVERSATION_LIST_LIMIT, conversationCountLabel, classifyRun, type RunContext } from '../web/src/conversation-state.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { formatElapsed, formatRelativeCompact, setTimezone } from '../web/src/i18n/index.ts';
 import { isComposing } from '../web/src/keys.ts';
 import { notificationIcon, notificationKindLabel } from '../web/src/notification-meta.ts';
 
-// 画面を持たない小さな決まり（会話の印・承認の行き先・相対時刻・変換中のキー・通知の種類）。
+// 画面を持たない小さな決まり（実行の種類・相対時刻・変換中のキー・通知の種類）。
 // 前の画面の枠（タブ・パレット・右のパネル・Esc の順・ステータスバー・幅の CSS）の項は、前の画面と一緒に消した（beat 1-6）。
 
 const reset = () => { setTimezone('Asia/Tokyo'); };
 
-test('convMark: 承認の待ちは返事を作っている最中に起きるので、承認を優先する', () => {
-  const draft = { conversationId: 'c1' };
-  const approval = { conversationId: 'c1' };
-  assert.equal(convMark([draft], [approval], 'c1'), 'approval', '下書きがあっても、承認の待ちが見える');
-  assert.equal(convMark([draft], [], 'c1'), 'generating');
-  assert.equal(convMark([], [approval], 'c1'), 'approval');
-  assert.equal(convMark([draft], [approval], 'c2'), null, '別の会話には出ない');
-  assert.equal(convMark([], [], 'c1'), null);
-});
-
-test('approvalTargetHash / classifyRun: 会話かタスクかは、一覧に載っているかではなく実行の種類で決める', () => {
+test('classifyRun: 会話かタスクかは、一覧に載っているかではなく実行の種類で決める', () => {
   const context = (patch: Partial<RunContext> = {}): RunContext => ({ taskConversations: new Map([['task-conv', 't1']]), running: null, ...patch });
-  assert.equal(approvalTargetHash({ conversationId: 'old-chat', runId: 'r1' }, context()), '#/c/old-chat', '一覧に載っていない古い会話でも会話へ');
-  assert.equal(approvalTargetHash({ conversationId: 'task-conv', runId: 'r1' }, context()), '#/tasks/t1', 'タスクの実行の会話はタスクへ');
-  assert.equal(approvalTargetHash({ conversationId: 'unknown', runId: 'r9' }, context({ running: { kind: 'task', taskId: 't2', runId: 'r9' } })), '#/tasks/t2', 'タスクの会話がまだ分からなくても、実行中の実行なら');
-  assert.equal(approvalTargetHash({ conversationId: 'unknown', runId: 'r9' }, context({ running: { kind: 'review', taskId: null, runId: 'r9' } })), '#/c/unknown', '振り返りの実行はタスクへ送らない');
   const listed = new Set(['listed-chat']);
   assert.equal(classifyRun('r1', 'listed-chat', context(), listed), 'chat', '一覧（chat だけが載る）に載っている会話');
   assert.equal(classifyRun('r1', 'old-chat', context(), listed), 'unknown', '一覧の外の会話は決めつけず、サーバーに会話の種類を尋ねる');
@@ -80,14 +66,4 @@ test('notificationIcon / notificationKindLabel: サーバーの通知の種類�
   assert.equal(notificationIcon('task_failed'), 'circleX');
   assert.equal(notificationIcon('from-the-future'), 'info');
   assert.equal(notificationKindLabel('from-the-future'), null);
-});
-
-test('isChatGenerating: 承認待ちの会話は「返事を作っている」に数えず、タスクと振り返りの実行も数えない', () => {
-  const drafts = [{ runId: 'r1', conversationId: 'c1' }];
-  assert.equal(isChatGenerating(drafts, [], undefined), true);
-  assert.equal(isChatGenerating(drafts, [{ conversationId: 'c1' }], undefined), false, '下書きが残っていても、承認待ちなら作っていない');
-  assert.equal(isChatGenerating(drafts, [{ conversationId: 'other' }], undefined), true, '別の会話の承認待ちは関係ない');
-  assert.equal(isChatGenerating(drafts, [], 'r1'), false, '実行中のタスク・振り返りの実行は数えない');
-  assert.equal(isChatGenerating([...drafts, { runId: 'r2', conversationId: 'c2' }], [{ conversationId: 'c1' }], undefined), true, '承認待ちでない会話が 1 つでもあれば作っている');
-  assert.equal(isChatGenerating([], [], undefined), false);
 });

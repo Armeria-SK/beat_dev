@@ -61,7 +61,7 @@ function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
       )}
       {row.preview.map(file => (
         <div key={file.path} className="ui-pending__file">
-          <span className="bt-meta">{t('ui.approval.preview')} · <code>{file.path}</code></span>
+          <span className="bt-meta">{t('ui.pending.preview')} · <code>{file.path}</code></span>
           <pre className="ui-pending__body"><code>{file.text}</code></pre>
         </div>
       ))}

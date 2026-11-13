@@ -44,7 +44,7 @@ function Detail({ row, t }: { row: LogRow; t: T }) {
     const call = row.call;
     return (
       <div className="ui-lib__more">
-        <span>{t('ui.runs.decision', decisionLabel(call.decision), decidedByLabel(call.decided_by))}{call.autoReason ? ` · ${call.autoReason}` : ''}{call.grantFolder ? ` · ${call.grantFolder}` : ''}</span>
+        <span>{t('ui.runs.decision', decisionLabel(call.decision), decidedByLabel(call.decided_by))}{call.autoReason ? ` · ${call.autoReason}` : ''}</span>
         <span className="bt-label">{t('ui.runs.input')}</span>
         <pre className="ui-lib__pre">{maskTarget(call.input)}</pre>
         {call.output_preview && <><span className="bt-label">{t('ui.runs.output')}</span><pre className="ui-lib__pre">{maskTarget(call.output_preview)}</pre></>}

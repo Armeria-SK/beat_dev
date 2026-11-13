@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
-import { api, ApiError, type Approval, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
+import { api, ApiError, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
 import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
@@ -32,7 +32,6 @@ export interface ConversationProps {
   aiName?: string | undefined;
   product?: Project | undefined;
   draft: LiveDraft | undefined;
-  approvals: Approval[];
   notices: RunNotice[];
   liveChecklist: ChecklistItem[] | undefined;
   revision: number;
@@ -271,7 +270,7 @@ function failNotice(title: string, text: string | null, action: FailAction | nul
   return <Notice tone="fail" title={title} text={text ?? undefined} {...(action ? { action } : {})} />;
 }
 
-export function Conversation({ id, listTitle, aiName, product, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes }: ConversationProps) {
+export function Conversation({ id, listTitle, aiName, product, draft, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
@@ -325,7 +324,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
   const conversation = loaded?.conversation ?? null;
   const messages = loaded?.messages ?? [];
   const pending = loaded?.pending ?? [];
-  const items = threadItems({ messages, draft, approvals, notices });
+  const items = threadItems({ messages, draft, notices });
   const checklist = liveChecklist ?? readList?.items ?? [];
   const lastIsUser = messages.at(-1)?.role === 'user';
 

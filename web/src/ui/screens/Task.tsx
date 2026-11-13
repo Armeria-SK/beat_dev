@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, ApiError, type Approval, type Project, type Task, type TaskEvent, type WorkerStatus } from '../../api.ts';
+import { api, ApiError, type Project, type Task, type TaskEvent, type WorkerStatus } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
@@ -10,8 +10,6 @@ import { Button, EmptyState, Icon, Notice, Pill, type PillTone } from '../parts.
 import { productOf } from '../products.ts';
 import { routeHash } from '../routes.ts';
 import { answerTaskOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type TaskOp } from '../task-ops.ts';
-import { threadItems } from '../thread.ts';
-import { ToolGroup } from '../ToolRow.tsx';
 import { PRIORITY_KEY } from './Kanban.tsx';
 
 export interface TaskScreenProps {
@@ -19,9 +17,10 @@ export interface TaskScreenProps {
   revision: string;
   worker: WorkerStatus | null;
   projects: readonly Project[];
+  pending: number;
 }
 
-interface Detail { task: Task; events: TaskEvent[]; approvals?: Approval[]; runs: Task[] }
+interface Detail { task: Task; events: TaskEvent[]; runs: Task[] }
 type FieldName = 'title' | 'body' | 'next' | 'done';
 
 const STATUS_TONE: Partial<Record<Task['status'], PillTone>> = { running: 'running', waiting: 'waiting', inbox: 'waiting', done: 'ok', failed: 'danger' };
@@ -119,7 +118,7 @@ function Answer({ task, onSent }: { task: Task; onSent: () => void }) {
   );
 }
 
-export function TaskScreen({ id, revision, worker, projects }: TaskScreenProps) {
+export function TaskScreen({ id, revision, worker, projects, pending }: TaskScreenProps) {
   const t = useT();
   const [data, setData] = useState<Detail | null>(null);
   const [missing, setMissing] = useState(false);
@@ -163,12 +162,11 @@ export function TaskScreen({ id, revision, worker, projects }: TaskScreenProps) 
     );
   }
 
-  const { task, events, approvals = [], runs } = data;
+  const { task, events, runs } = data;
   const product = productOf(projects, task.project_id);
   const mine = worker?.runningAll.find(r => r.taskId === task.id);
   const busyWithOther = (worker?.runningAll.length ?? 0) > 0 && !mine;
   const buttons = taskButtons(task.status, sheetActions(task.status), mine !== undefined);
-  const approvalRows = threadItems({ messages: [], approvals }).flatMap(item => (item.kind === 'tools' ? item.rows : []));
 
   const run = async (op: TaskOp, options: { reason?: string } = {}) => {
     if (busy) return;
@@ -227,10 +225,12 @@ export function TaskScreen({ id, revision, worker, projects }: TaskScreenProps) 
 
       {task.status === 'waiting' && <Answer task={task} onSent={() => void load()} />}
 
-      {approvalRows.length > 0 && (
-        <section className="bt-section" aria-label={t('ui.task.approvals')}>
-          <div className="bt-section__head"><span className="bt-section__kind"><span className="bt-dot" aria-hidden="true" /><span className="bt-label">{t('ui.task.approvals')}</span></span></div>
-          <ToolGroup rows={approvalRows} isNew={() => false} />
+      {pending > 0 && (
+        <section className="bt-section" aria-label={t('ui.task.pending', pending)}>
+          <div className="bt-section__head">
+            <span className="bt-section__kind"><span className="bt-dot" aria-hidden="true" /><span className="bt-label">{t('ui.task.pending', pending)}</span></span>
+            <a className="bt-tool__link" href={routeHash(product ? { view: 'pending', productId: product.id } : { view: 'pending' })}>{t('ui.task.openPending')}</a>
+          </div>
         </section>
       )}
 

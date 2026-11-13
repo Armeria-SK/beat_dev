@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { api, type Approval, type Conversation as ConversationRow, type Profile, type Project, type WorkerStatus } from '../api.ts';
+import { api, type Conversation as ConversationRow, type Profile, type Project, type WorkerStatus } from '../api.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
@@ -9,7 +9,7 @@ import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
 import { Panes, usePanes } from './Panes.tsx';
-import { paneTarget, pendingFor, pendingTotal, sessionCounts, withPendingCounts } from './pending.ts';
+import { paneTarget, pendingFor, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
 import type { PaneView } from './panes.ts';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
@@ -39,7 +39,6 @@ import { Button } from './parts.tsx';
 import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, unloadGuard } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
-const NO_APPROVALS: Approval[] = [];
 const NO_NOTICES: RunNotice[] = [];
 const DISCONNECT_GRACE_MS = 3000;
 const PRODUCT_COUNTS_MS = 2000;
@@ -137,7 +136,6 @@ export function App() {
     pending: throttled(() => {
       void Promise.all([api.pendingCounts(), api.pending({ status: 'waiting' })]).then(([counts, list]) => dispatch({ type: 'pending', counts, waiting: list.items })).catch(() => undefined);
     }, PENDING_MS),
-    approvals: () => { void api.approvals().then(r => dispatch({ type: 'approvals', approvals: r.approvals })).catch(() => undefined); },
     tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished] })).catch(() => undefined); },
     drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
     unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
@@ -157,8 +155,6 @@ export function App() {
         if (now.view === 'chat' && now.id === effect.conversationId) location.replace('#/');
       } else if (effect.kind === 'toast') {
         toast(notificationToast(effect.notification));
-      } else if (effect.kind === 'notifyApproval') {
-        if (granted) new Notification(t('browser.approvalNeeded'), { body: effect.title });
       } else if (granted) new Notification(t('browser.notification', effect.title), { body: effect.body });
     }
   };
@@ -238,7 +234,7 @@ export function App() {
     return () => query.removeEventListener('change', onChange);
   }, []);
 
-  useEffect(() => { for (const what of ['conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker', 'profile', 'projects', 'pending'] as const) load[what](); }, [load]);
+  useEffect(() => { for (const what of ['conversations', 'tasks', 'drafts', 'unread', 'worker', 'profile', 'projects', 'pending'] as const) load[what](); }, [load]);
   useEffect(() => {
     settleLeave(route, live.projectsLoaded ? live.projects.map(p => p.id) : null, { clearEdits: () => { clearUnsaved(SCREEN_EDITS); setLeave(null); }, replace: hash => location.replace(hash) });
   }, [route, live.projects, live.projectsLoaded]);
@@ -256,10 +252,11 @@ export function App() {
   const projects = useMemo(() => withPendingCounts(live.projects, live.pendingCounts), [live.projects, live.pendingCounts]);
   const pendingAll = live.pendingCounts ? pendingTotal(live.pendingCounts, live.projects) : 0;
   const sessionPending = useMemo(() => sessionCounts(live.pendingWaiting), [live.pendingWaiting]);
+  const pendingByTask = useMemo(() => taskCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
   const waiting: Waiting = useMemo(
-    () => ({ approvals: live.approvals.length, drafts: skillDrafts, pending: pendingAll, ...countTasks([...live.tasks.values()].map(m => m.status)) }),
-    [live.approvals, skillDrafts, live.tasks, pendingAll],
+    () => ({ drafts: skillDrafts, pending: pendingAll, ...countTasks([...live.tasks.values()].map(m => m.status)) }),
+    [skillDrafts, live.tasks, pendingAll],
   );
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
   const state = agentState(waiting, working);
@@ -268,8 +265,8 @@ export function App() {
   const foot = footLine(waiting, working, drafts.map(d => checklists.get(d.conversationId) ?? []), runningTitle);
 
   useEffect(() => {
-    if ((waiting.approvals || waiting.answers) && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
-  }, [waiting.approvals, waiting.answers]);
+    if ((waiting.pending || waiting.answers) && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
+  }, [waiting.pending, waiting.answers]);
 
   const settingsOpen = route.view === 'settings';
   const wasSettingsOpen = useRef(settingsOpen);
@@ -367,7 +364,6 @@ export function App() {
             <Conversation
               key={chatId ?? (behind.view === 'productNew' ? `new:${behind.id}` : 'new')} id={chatId} listTitle={conversation?.title ?? null} aiName={profile?.name} product={convoProduct}
               draft={chatId ? drafts.find(d => d.conversationId === chatId) : undefined}
-              approvals={chatId ? live.approvals.filter(a => a.conversationId === chatId) : NO_APPROVALS}
               notices={(chatId && live.notices.get(chatId)) || NO_NOTICES}
               liveChecklist={chatId ? checklists.get(chatId) : undefined}
               revision={(chatId ? live.revisions.get(chatId) ?? 0 : 0) + live.epoch}
@@ -378,9 +374,9 @@ export function App() {
         ) : (
           <main className="bt-screen" inert={drawer}>
             {behind.view === 'kanban' ? (
-              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} />
+              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} />
             ) : behind.view === 'task' ? (
-              <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.approvals.length}`} worker={worker} projects={projects} />
+              <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.pendingRevision}`} worker={worker} projects={projects} pending={pendingByTask.get(behind.id) ?? 0} />
             ) : behind.view === 'overview' ? (
               <Overview waiting={waiting} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} />
             ) : behind.view === 'product' ? (

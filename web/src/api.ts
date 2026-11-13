@@ -47,7 +47,7 @@ export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected
 export interface PendingFact { path: string; exists: boolean; type?: 'file' | 'dir' | 'link' | 'other'; size?: number; mtime?: number; files?: number; newest?: number; more?: boolean }
 export interface PendingAction {
   id: number; tool: string; title?: string | null; shown: string; parts?: { body: string | null; cwd: string | null; extra: string | null }; masked: number; kind: PendingKind; reason: string;
-  cwd: string | null; preview: ApprovalPreview[]; files: PendingFact[]; effect?: { files: number; bytes: number; more?: true } | null;
+  cwd: string | null; preview: PendingPreview[]; files: PendingFact[]; effect?: { files: number; bytes: number; more?: true } | null;
   conversation_id: string; task_id: string | null; project_id: string | null;
   task_title: string | null; project_name: string | null;
   status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
@@ -105,21 +105,7 @@ export interface ModelChoice { modelId?: string | null; effort?: string | null; 
 // 実行中に送って、まだ履歴に入っていない発言（今の実行の次の区切りで入る）
 export interface PendingMessage { id: string; text: string; attachments: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>; interrupt: boolean; createdAt: number }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
-export interface ApprovalPreview { path: string; text: string; truncated: boolean }
-// 見つけたパスごとの判定。in は許可フォルダの中（mode はそのフォルダの読み書き / 読むだけ）、out は外、deny は拒否、unknown は判定できない（path が無い）
-export interface ApprovalPathView { input: string; path?: string; verdict: 'in' | 'out' | 'deny' | 'unknown'; mode?: 'read' | 'write' }
-export interface Approval {
-  id: string; runId: string; conversationId: string; tool: string; title: string; body: string; cwd?: string;
-  reasons: string[]; details: string[]; paths: ApprovalPathView[]; pathsMore?: number; expiresAt: number;
-  // コードを動かす確かめ: 毎回確かめる（「この会話では許可」と Enter での許可は無い）。preview は動かすファイルの中身
-  onceOnly: boolean; preview: ApprovalPreview[];
-  // 道具ごとの方針が「承認を求める」の確かめ: 毎回確かめる（「この会話では許可」は無い）。無い古い応答は false 扱い
-  everyTime?: boolean;
-  // 外から読んだ内容のあとの file_write / file_edit の確かめ（理由が「外から読んだ」だけ）に添える、「この返事のあいだ、このフォルダ以下への書き込みを許可」のフォルダ。添えないときは null（無い古い応答も null 扱い）
-  grantFolder?: string | null;
-  // 任せた子の担当から出た確かめ（子の会話の id と題）。子には「この会話では許可」が無い。無い・null は親自身の確かめ
-  fromAgent?: { conversationId: string; title: string } | null;
-}
+export interface PendingPreview { path: string; text: string; truncated: boolean }
 // 会話を次に送るときのコンテキストの使用量。tokens は古い発言を削る前の見積もり、available は削り始める境目、capacity はモデル全体、ratio は tokens / available（1 を超えうる）
 export interface ContextUsage { modelId: string; tokens: number; available: number; capacity: number; ratio: number }
 export interface ContextDetail { reason: string; measured?: number; required?: number; hint?: string }
@@ -166,8 +152,6 @@ export interface ToolCallRow {
   duration_ms: number | null; output_preview: string | null; full_ref: string | null; created_at: number;
   // 自動承認が許した呼び出しで、判定役の短い理由（ほかは null）
   autoReason: string | null;
-  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しで、許可したフォルダ（ほかは null）
-  grantFolder: string | null;
   project_id?: string | null;
 }
 
@@ -313,19 +297,17 @@ export const api = {
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
-  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; activeRun: { runId: string; draft: string } | null; approvals?: Approval[] }>(`/api/conversations/${id}/messages`),
+  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; activeRun: { runId: string; draft: string } | null }>(`/api/conversations/${id}/messages`),
   cancelPending: (id: string, pendingId: string) => call<{ cancelled: true }>(`/api/conversations/${encodeURIComponent(id)}/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }),
   deleteConversation: (id: string) => call<{ deleted: true }>(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),
   checklist: (id: string) => call<ChecklistData>(`/api/conversations/${encodeURIComponent(id)}/checklist`),
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
-  approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   pending: (query: PendingQuery) =>
     call<{ items: PendingAction[] }>(`/api/pending?status=${query.status}${inProject(query.project, '&')}${query.before === undefined ? '' : `&before=${query.before}`}${query.earlier ? '&earlier=1' : ''}`),
   pendingCounts: () => call<PendingCounts>('/api/pending/counts'),
   approvePending: (id: number) => call<{ item?: PendingAction }>(`/api/pending/${id}/approve`, { method: 'POST', body: '{}' }),
   rejectPending: (id: number, reason: string) => call<{ item?: PendingAction }>(`/api/pending/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
-  decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
   send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean; projectId?: string; generated?: boolean } = {}) =>
     call<{ runId: string; queued?: boolean; pendingId?: string; effortReset?: boolean }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}), ...(options.projectId ? { projectId: options.projectId } : {}), ...(options.generated ? { generated: true } : {}) }) }),
@@ -360,7 +342,7 @@ export const api = {
     call<{ tasks: Task[]; next: FinishedCursor | null; total: number }>(`/api/tasks/finished?limit=${limit}${before ? `&beforeT=${before.beforeT}&beforeId=${encodeURIComponent(before.beforeId)}` : ''}${inProject(project, '&')}`),
   unapproveTask: (id: string) => call<{ task: Task }>(`/api/tasks/${id}/unapprove`, { method: 'POST', body: '{}' }),
   cancelTask: (id: string, reason = '') => call<{ task: Task }>(`/api/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}) }),
-  task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals?: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
+  task: (id: string) => call<{ task: Task; events: TaskEvent[]; runs: Task[] }>(`/api/tasks/${id}`),
   createTask: (task: NewTask) => call<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(task) }),
   editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null; repeat?: NewTask['repeat'] }) =>
     call<{ task: Task }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),

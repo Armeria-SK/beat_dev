@@ -1,4 +1,4 @@
-import type { Approval, ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, Task, TaskStatus } from '../api.ts';
+import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, Task, TaskStatus } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
 
@@ -28,7 +28,6 @@ export interface LiveState {
   conversationsMore: Readonly<Record<string, number>>;
   projects: Project[];
   projectsLoaded: boolean;
-  approvals: Approval[];
   skillDrafts: number;
   unread: number;
   tasks: ReadonlyMap<string, TaskMark>;
@@ -48,7 +47,7 @@ export interface LiveState {
 }
 
 export const EMPTY: LiveState = {
-  conversations: [], conversationsMore: {}, projects: [], projectsLoaded: false, approvals: [], skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
+  conversations: [], conversationsMore: {}, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
   notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, epoch: 0,
 };
 
@@ -56,12 +55,11 @@ const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.library
 
 const planBump = (s: LiveState, projectId: string): LiveState => ({ ...s, planRevisions: new Map(s.planRevisions).set(projectId, (s.planRevisions.get(projectId) ?? 0) + 1) });
 
-export type Refresh = 'conversations' | 'approvals' | 'tasks' | 'drafts' | 'unread' | 'worker' | 'projects' | 'projectCounts' | 'pending';
+export type Refresh = 'conversations' | 'tasks' | 'drafts' | 'unread' | 'worker' | 'projects' | 'projectCounts' | 'pending';
 
 export type Effect =
   | { kind: 'refresh'; what: Refresh }
   | { kind: 'checklist'; conversationId: string }
-  | { kind: 'notifyApproval'; title: string }
   | { kind: 'notify'; title: string; body: string }
   | { kind: 'toast'; notification: NotificationItem }
   | { kind: 'gone'; conversationId: string };
@@ -72,7 +70,6 @@ export type Action =
   | { type: 'conversations'; conversations: Conversation[]; more?: Record<string, number> | undefined }
   | { type: 'projects'; projects: Project[] }
   | { type: 'project'; project: Project }
-  | { type: 'approvals'; approvals: Approval[] }
   | { type: 'pending'; counts: PendingCounts; waiting: PendingAction[] }
   | { type: 'skillDrafts'; count: number }
   | { type: 'unread'; count: number }
@@ -169,7 +166,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     }
     case 'run.end': {
       let state: LiveState = bump(library({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }), e.conversationId);
-      if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) return { state, effects: refresh('conversations', 'worker', 'drafts', 'approvals') };
+      if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) return { state, effects: refresh('conversations', 'worker', 'drafts') };
       if (!e.ok && e.errorKind === 'cancelled') state = addNotice(state, e.conversationId, { runId: e.runId, kind: 'stopped' });
       else if (!e.ok) {
         state = addNotice(state, e.conversationId, {
@@ -177,17 +174,8 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
           hint: e.detail?.hint, measured: e.detail?.measured, required: e.detail?.required,
         });
       }
-      return { state, effects: refresh('conversations', 'worker', 'drafts', 'approvals') };
+      return { state, effects: refresh('conversations', 'worker', 'drafts') };
     }
-    case 'approval.requested': {
-      const approval: Approval = { ...e.approval, runId: e.runId, conversationId: e.conversationId };
-      return {
-        state: { ...s, approvals: [...s.approvals.filter(a => a.id !== approval.id), approval] },
-        effects: [...(hidden ? [{ kind: 'notifyApproval', title: e.approval.title } as const] : []), ...refresh('approvals'), ...counts(s)],
-      };
-    }
-    case 'approval.resolved':
-      return { state: { ...s, approvals: s.approvals.filter(a => a.id !== e.approvalId) }, effects: [...refresh('approvals'), ...counts(s)] };
     case 'memory.changed':
       return { state: addNotice(library(s), e.conversationId, { runId: e.runId, kind: 'memory', action: e.action, content: e.content, eventId: e.eventId }), effects: [] };
     case 'checklist.updated':
@@ -237,7 +225,7 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
     case 'resync':
       return {
         state: { ...s, drafts: a.drafts, streaming: new Set(a.drafts.filter(d => d.text).map(d => d.conversationId)), checklists: new Map(), epoch: s.epoch + 1 },
-        effects: [...a.drafts.map(d => ({ kind: 'checklist', conversationId: d.conversationId }) as const), ...refresh('conversations', 'approvals', 'tasks', 'drafts', 'unread', 'worker', 'projects', 'pending')],
+        effects: [...a.drafts.map(d => ({ kind: 'checklist', conversationId: d.conversationId }) as const), ...refresh('conversations', 'tasks', 'drafts', 'unread', 'worker', 'projects', 'pending')],
       };
     case 'conversations': return { state: { ...s, conversations: a.conversations, conversationsMore: a.more ?? {} }, effects: [] };
     case 'projects': return { state: { ...s, projects: a.projects, projectsLoaded: true }, effects: [] };
@@ -246,7 +234,6 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
       const projects = a.project.archived_at !== null ? rest : rest.length < s.projects.length ? s.projects.map(p => (p.id === a.project.id ? a.project : p)) : [...rest, a.project];
       return { state: { ...s, projects }, effects: [] };
     }
-    case 'approvals': return { state: { ...s, approvals: a.approvals }, effects: [] };
     case 'pending': return { state: { ...s, pendingCounts: a.counts, pendingWaiting: a.waiting }, effects: [] };
     case 'skillDrafts': return { state: { ...s, skillDrafts: a.count }, effects: [] };
     case 'unread': return { state: { ...s, unread: a.count }, effects: [] };

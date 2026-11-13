@@ -23,10 +23,9 @@ test('ui/live-state: 会話を消したら未読の数も読み直す（消し�
   }
 });
 
-test('ui/live-state: ブラウザの通知は、承認待ちは approval.requested の 1 回だけ（approval_needed の通知では出さない）、返事待ちは task_waiting で。どちらも画面が隠れているときだけ', () => {
-  const approval = { type: 'approval.requested', runId: 'r', conversationId: 'c', approval: { id: 'a', title: 'Write x' } } as unknown as RunEvent;
-  assert.deepEqual(reduce(EMPTY, ev(approval, true)).effects.filter(e => e.kind !== 'refresh'), [{ kind: 'notifyApproval', title: 'Write x' }]);
-  assert.deepEqual(reduce(EMPTY, ev(approval, false)).effects.filter(e => e.kind !== 'refresh'), []);
+test('ui/live-state: ブラウザの通知は返事待ち（task_waiting）だけで、画面が隠れているときだけ。Pending の行（pendingAction.changed・approval_needed の通知）では出さない', () => {
+  const parked: RunEvent = { type: 'pendingAction.changed', id: 1, status: 'waiting', projectId: null, conversationId: 'c', taskId: null };
+  assert.deepEqual(reduce(EMPTY, ev(parked, true)).effects.filter(e => e.kind !== 'refresh'), []);
   const notified = (kind: string, hidden: boolean) => reduce(EMPTY, ev({ type: 'notification', notification: note(kind) }, hidden)).effects.filter(e => e.kind === 'notify');
   assert.deepEqual(notified('approval_needed', true), []);
   assert.deepEqual(notified('task_waiting', true), [{ kind: 'notify', title: 'T', body: 'B' }]);
@@ -59,7 +58,7 @@ test('ui/live-state: 実行の始まりと終わり（下書き・流れてい�
   const ended = reduce(streaming, ev({ type: 'run.end', runId: 'r1', conversationId: 'c1', ok: true }));
   assert.equal(ended.state.drafts.length, 0);
   assert.equal(ended.state.streaming.has('c1'), false);
-  assert.deepEqual(refreshes(ended.effects), ['approvals', 'conversations', 'drafts', 'worker']);
+  assert.deepEqual(refreshes(ended.effects), ['conversations', 'drafts', 'worker']);
 });
 
 test('ui/live-state: 未読の数は notification で 1 増え、notification.read と読み込みで置き換わる', () => {
@@ -71,7 +70,7 @@ test('ui/live-state: 未読の数は notification で 1 増え、notification.re
 test('ui/live-state: つなぎ直し（resync）は、サーバーの下書きを入れ、全部を読み直す', () => {
   const r = reduce(EMPTY, { type: 'resync', drafts: [{ runId: 'r', conversationId: 'c', modelId: 'm', text: 'x' }, { runId: 'q', conversationId: 'd', modelId: 'm', text: '' }] });
   assert.deepEqual([...r.state.streaming], ['c']);
-  assert.deepEqual(refreshes(r.effects), ['approvals', 'conversations', 'drafts', 'pending', 'projects', 'tasks', 'unread', 'worker']);
+  assert.deepEqual(refreshes(r.effects), ['conversations', 'drafts', 'pending', 'projects', 'tasks', 'unread', 'worker']);
   assert.equal(r.effects.filter(e => e.kind === 'checklist').length, 2);
 });
 
@@ -79,7 +78,7 @@ const project = (id: string, over: Partial<Project> = {}): Project => ({
   id, name: id, root: `C:\\work\\${id}`, check_command: null, scout_mode: 'off', remotes: [], archived_at: null, created_at: 0, updated_at: 0,
   is_git: false, folder_missing: false, waiting: { proposals: 0, questions: 0, pending: 0 }, running: 0, last_activity_at: null, ...over,
 });
-const approvalAsked: RunEvent = { type: 'approval.requested', runId: 'r', conversationId: 'c', approval: { id: 'a', tool: 'file_write', title: 'Write x', body: '', reasons: [], details: [], paths: [], expiresAt: 0, onceOnly: false, preview: [] } };
+
 
 test('ui/live-state: project.changed は製品の一覧を読み直す（しまう・戻すは会話の一覧も）', () => {
   for (const change of ['created', 'updated'] as const) {
@@ -128,12 +127,11 @@ test('ui/live-state: Pending の数と待ちの一覧は読み込みで入れ替
   assert.equal(EMPTY.pendingCounts, null, '読めるまでは null（製品の数はサーバーのまま）');
 });
 
-test('ui/live-state: 製品があるときだけ、タスクと承認の出来事で製品の数を読み直す（製品が無ければ今までと同じ）', () => {
+test('ui/live-state: 製品があるときだけ、タスクと Pending の出来事で製品の数を読み直す（製品が無ければ今までと同じ）', () => {
   const events: RunEvent[] = [
     { type: 'task.changed', task: task('t1', 'inbox', 5) },
     { type: 'task.deleted', id: 't1' },
-    approvalAsked,
-    { type: 'approval.resolved', runId: 'r', conversationId: 'c', approvalId: 'a', outcome: 'once' },
+    { type: 'pendingAction.changed', id: 1, status: 'waiting', projectId: 'p1aaaa', conversationId: 'c', taskId: null },
   ];
   const withProducts = run(EMPTY, { type: 'projects', projects: [project('p1aaaa')] });
   for (const event of events) {
@@ -158,7 +156,7 @@ test('ui/live-state: 製品の一覧と、会話の一覧の more を入れる�
   assert.deepEqual(run(s, { type: 'project', project: project('p1aaaa', { archived_at: 9 }) }).projects.map(p => p.id), ['p2aaaa'], 'しまった製品は一覧から外す');
 });
 
-test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出し・お知らせ・承認の一覧・会話ごとの読み直しの数）', () => {
+test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出し・お知らせ・会話ごとの読み直しの数）', () => {
   const s0 = run(EMPTY, { type: 'conversations', conversations: [conv('c')] }, { type: 'event', event: { type: 'run.start', runId: 'r', conversationId: 'c', modelId: 'm' }, hidden: false, now: 100 });
   const s1 = run(s0, ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'He' }), ev({ type: 'text.delta', runId: 'r', conversationId: 'c', text: 'llo' }));
   assert.equal(s1.drafts[0]!.text, 'Hello');
@@ -171,10 +169,7 @@ test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出�
   assert.equal(s4.drafts[0]!.activeTool, undefined);
   assert.deepEqual(s4.drafts[0]!.settled, [{ callId: 'x', name: 'shell_run', input: '{}' }], '結果が届いた呼び出しは、保存された発言を読むまで行を残すために覚える');
   assert.deepEqual(s4.notices.get('c'), [{ runId: 'r', kind: 'denied', tool: 'shell_run', detail: 'no way more' }]);
-  const approval = { id: 'a1', title: 'Write', tool: 'file_write' } as unknown as Extract<RunEvent, { type: 'approval.requested' }>['approval'];
-  const s5 = run(s4, ev({ type: 'approval.requested', runId: 'r', conversationId: 'c', approval }));
-  assert.deepEqual(s5.approvals.map(a => [a.id, a.conversationId, a.runId]), [['a1', 'c', 'r']]);
-  assert.deepEqual(run(s5, ev({ type: 'approval.resolved', runId: 'r', conversationId: 'c', approvalId: 'a1', outcome: 'once' })).approvals, []);
+  const s5 = s4;
   const failed = reduce(s5, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'timeout', errorMessage: 'slow' }));
   assert.deepEqual(failed.state.notices.get('c')!.at(-1), { runId: 'r', kind: 'error', errorKind: 'timeout', errorCode: undefined, errorParams: undefined, errorMessage: 'slow', hint: undefined, measured: undefined, required: undefined });
   const stopped = run(s5, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'cancelled' }));

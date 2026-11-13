@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Approval, ChecklistItem, Message } from '../web/src/api.ts';
+import type { ChecklistItem, Message } from '../web/src/api.ts';
 import { imageHost } from '../web/src/markdown-image.ts';
 import type { RunNotice } from '../web/src/ui/live-state.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
@@ -11,9 +11,6 @@ import { checklistShape, contextMeter, isRising, messageStamp, noticeRows, reply
 let next = 1;
 const msg = (role: Message['role'], text: string, extra: Partial<Message> = {}): Message => ({ id: next++, role, text, runId: 'r1', createdAt: 0, ...extra });
 const call = (id: string, name: string, input: unknown) => ({ id, name, input: JSON.stringify(input) });
-const approval = (id: string): Approval => ({
-  id, runId: 'r2', conversationId: 'c', tool: 'file_write', title: 'Write x.txt', body: 'x', reasons: [], details: [], paths: [], expiresAt: 0, onceOnly: false, preview: [],
-});
 
 test('ui/thread: 続けて呼んだ道具は 1 つのまとまり（bt-tools）に入り、文の無い道具だけの返事は出さず、まとまりを切らない', () => {
   const items = threadItems({
@@ -168,7 +165,7 @@ test('ui/thread: 「考え中 N 秒」は待ち始めから 1 秒たってから
   assert.equal(thinkingSeconds(5000, 1000), null, '時計がずれていても負の数は出さない');
 });
 
-test('ui/thread: 返事を作っている最中は、流れている文 → 動いている道具の行 → 何も無ければ caret だけ。承認を待つ間は道具の行の代わりに承認の行', () => {
+test('ui/thread: 返事を作っている最中は、流れている文 → 動いている道具の行 → 何も無ければ caret だけ', () => {
   const base = [msg('user', 'go')];
   const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: '' };
   assert.deepEqual(threadItems({ messages: base, draft: { ...draft, text: 'Hel' } }).at(-1), { kind: 'live', key: 'live-r2', text: 'Hel', since: null });
@@ -177,9 +174,6 @@ test('ui/thread: 返事を作っている最中は、流れている文 → 動�
   const running = threadItems({ messages: base, draft: { ...draft, activeTool: 'shell_run', activeInput: '{"command":"npm test"}', toolStartedAt: 5 } }).at(-1)!;
   assert.ok(running.kind === 'tools');
   assert.deepEqual(running.rows[0]!.running, { startedAt: 5, checking: false, helperTools: null, helperConversation: null });
-  const waiting = threadItems({ messages: base, draft: { ...draft, activeTool: 'file_write' }, approvals: [approval('a1')] }).at(-1)!;
-  assert.ok(waiting.kind === 'tools');
-  assert.deepEqual(waiting.rows.map(r => [r.key, r.approval?.id, r.running]), [['approval-a1', 'a1', undefined]]);
 });
 
 test('ui/thread: 動いている道具の行と、結果が届いたあとの行は同じキー（呼び出しの id）。まとまりのキーも変わらない（行が 2 回現れない）', () => {

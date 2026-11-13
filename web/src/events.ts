@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Approval, ChecklistItem, NotificationItem, PendingStatus, Task } from './api.ts';
+import type { ChecklistItem, NotificationItem, PendingStatus, Task } from './api.ts';
 
 export type RunEvent =
   | { type: 'run.start'; runId: string; conversationId: string; modelId: string }
@@ -10,8 +10,6 @@ export type RunEvent =
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: string; preview: string; autoReason?: string }
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
-  | { type: 'approval.requested'; runId: string; conversationId: string; approval: Omit<Approval, 'runId' | 'conversationId'> }
-  | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: ChecklistItem[]; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }

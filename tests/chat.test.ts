@@ -4,11 +4,10 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, checklistCounts, checklistOf, checklistOpen, checklistPhase, checklistToShow, compactTokens, contextPercent, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
-  mergeNotice, recountsUsage, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary, withChecklistEvent,
+  checklistCounts, checklistOf, checklistOpen, checklistPhase, checklistToShow, compactTokens, contextPercent, chatTime, contextCardOf, firstLine, liveRenderDelay, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  mergeNotice, recountsUsage, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary, withChecklistEvent,
   type ChecklistView,
 } from '../web/src/chat-logic.ts';
-import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
 import { isMemoryUndone, undoMemoryEvent } from '../web/src/memory-undo.ts';
@@ -133,16 +132,6 @@ test('firstLine: 結果の最初の空でない行を、長ければ切って返
   assert.equal(firstLine('x'.repeat(200)).length, 161);
 });
 
-test('approvalFraction / formatCountdown: 残り時間の線と mm:ss', () => {
-  assert.equal(approvalFraction(1000 + 300_000, 1000, 600_000), 0.5);
-  assert.equal(approvalFraction(5000, 1000, 600_000) < 0.01, true);
-  assert.equal(approvalFraction(1000, 5000, 600_000), 0, '過ぎたら 0');
-  assert.equal(approvalFraction(10_000_000, 0, 600_000), 1, '全体の長さより多く残っていても 1 まで');
-  assert.equal(approvalFraction(100, 0, 0), 0, '全体の長さが分からなければ 0');
-  assert.equal(formatCountdown(592_000), '09:52');
-  assert.equal(formatCountdown(-5), '00:00');
-});
-
 test('chatTime: 時刻だけを、サーバーのタイムゾーンと表示の言語で 24 時間表記にする', () => {
   const at = Date.UTC(2026, 10, 5, 1, 7);
   assert.equal(chatTime(at, undefined, 'Asia/Tokyo'), '10:07', '言語を書かなければ画面の言語（英語）');
@@ -233,69 +222,6 @@ test('replyTurns: 1 回の返事（同じ runId）は見出し 1 つ。中間の
   const mixed = replyTurns([m(1, 'assistant', 'r1', 'a'), m(2, 'assistant', 'r2', 'b'), m(3, 'assistant', null, 'c'), m(4, 'assistant', null, 'd')]);
   assert.deepEqual([1, 2, 3, 4].map(id => mixed.get(id)?.head), [true, true, true, true], '別の runId・runId の無い文は、それぞれが 1 回の返事');
   assert.deepEqual([1, 2, 3, 4].map(id => mixed.get(id)?.copyText), ['a', 'b', 'c', 'd']);
-});
-
-test('enterApprovalId: Enter で許可できるのは先頭の札だけ。コードを動かす確かめ（onceOnly）は、ボタンを押すまで許可しない', () => {
-  assert.equal(enterApprovalId([]), null);
-  assert.equal(enterApprovalId([{ id: 'a', onceOnly: false }, { id: 'b', onceOnly: true }]), 'a');
-  assert.equal(enterApprovalId([{ id: 'b', onceOnly: true }, { id: 'a', onceOnly: false }]), null, '先頭がコードの確かめなら、後ろの札も Enter で許可しない');
-});
-
-test('approvalEnterAllowed: 空の Enter での承認は、表示している札の id が合い、出てから 1 秒たったあとだけ', () => {
-  let gate = advanceApprovalGate({ id: null, since: 0 }, 'a', 10_000);
-  assert.equal(approvalEnterAllowed(gate, 'a', 10_000 + APPROVAL_ENTER_GRACE_MS - 1), false, '出たばかりの札は、連打の Enter で承認されない');
-  assert.equal(approvalEnterAllowed(gate, 'a', 10_000 + APPROVAL_ENTER_GRACE_MS), true);
-  assert.equal(approvalEnterAllowed(gate, 'b', 99_999), false, '表示している札と違う id には効かない');
-  assert.equal(approvalEnterAllowed(gate, null, 99_999), false, '札が無いとき');
-  gate = advanceApprovalGate(gate, 'a', 50_000);
-  assert.equal(gate.since, 10_000, '同じ札のままなら、出た時刻は変えない');
-  gate = advanceApprovalGate(gate, 'b', 60_000);
-  assert.deepEqual(gate, { id: 'b', since: 60_000 }, '先頭の札が替わったら、数え直す');
-  assert.equal(approvalEnterAllowed(gate, 'b', 60_500), false, '前の札を承認した直後に次の札が出ても、すぐには承認されない');
-  assert.equal(approvalEnterAllowed(gate, 'a', 70_000), false, '古い札の id では通らない');
-  gate = advanceApprovalGate(gate, null, 80_000);
-  assert.equal(approvalEnterAllowed(gate, 'b', 90_000), false);
-});
-
-test('createDecisionTracker: 同じ札への決定は、終わるまで 1 回だけ。失敗したら送り直せる', () => {
-  const tracker = createDecisionTracker();
-  assert.equal(tracker.has('x'), false);
-  assert.equal(tracker.start('x'), true);
-  assert.equal(tracker.start('x'), false, '2 回目は受けない');
-  assert.equal(tracker.start('y'), true, '別の札には効く');
-  assert.equal(tracker.has('x'), true);
-  tracker.release('x');
-  assert.equal(tracker.start('x'), true, '失敗して戻したあとは、もう一度送れる');
-});
-
-test('decideApproval: Enter と札のボタンが同じ札に同時に決定を送っても、サーバーへは 1 回だけ', async () => {
-  const calls: string[] = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push(`${String(url)} ${String(init?.body)}`);
-    await new Promise(resolve => setTimeout(resolve, 5));
-    return String(url).includes('/bad') ? Response.json({ error: 'nope' }, { status: 500 }) : Response.json({ ok: true });
-  }) as typeof fetch;
-  try {
-    const [first, second, other] = await Promise.all([decideApproval('ok1', 'once'), decideApproval('ok1', 'deny'), decideApproval('ok2', 'conversation')]);
-    assert.deepEqual([first, second, other], [true, false, true], '同じ札の 2 つ目は送らない（404 の知らせにならない）');
-    assert.equal(await decideApproval('ok1', 'once'), false, '送れたあとも、札が消えるまでは送らない');
-    assert.deepEqual(calls, ['/api/approvals/ok1 {"decision":"once"}', '/api/approvals/ok2 {"decision":"conversation"}']);
-    await assert.rejects(decideApproval('bad1', 'once'));
-    await assert.rejects(decideApproval('bad1', 'once'), '失敗したときは受け付けを戻すので、もう一度送れる');
-    assert.equal(calls.filter(c => c.includes('/bad1')).length, 2);
-  } finally { globalThis.fetch = original; }
-});
-
-test('restartApprovalGate: 見ていない間に出た札も、画面に戻ってから 1 秒は Enter で承認されない', () => {
-  const arrived = advanceApprovalGate({ id: null, since: 0 }, 'a', 1_000);
-  assert.equal(approvalEnterAllowed(arrived, 'a', 1_000 + 5 * 60_000), true, '何もしなければ、時間がたてば Enter が効く');
-  const returned = restartApprovalGate(arrived, 1_000 + 5 * 60_000);
-  assert.equal(returned.id, 'a', '札は同じまま、数え直すだけ');
-  assert.equal(approvalEnterAllowed(returned, 'a', 1_000 + 5 * 60_000), false, '戻った直後の Enter は効かない');
-  assert.equal(approvalEnterAllowed(returned, 'a', 1_000 + 5 * 60_000 + APPROVAL_ENTER_GRACE_MS - 1), false);
-  assert.equal(approvalEnterAllowed(returned, 'a', 1_000 + 5 * 60_000 + APPROVAL_ENTER_GRACE_MS), true);
-  assert.deepEqual(restartApprovalGate({ id: null, since: 5 }, 9), { id: null, since: 9 }, '札が無いときも壊れない');
 });
 
 test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の行を、同じ状態のモデルの確認（コード付き）から画面の言語で組み立て直す', async () => {
@@ -460,25 +386,6 @@ test('流れている文の間引き: 短い返事は届くたびに描き、続
   long.render(`${base}bc`, 1002);
   assert.equal(long.state.cancelled, 1, '届くたびに前の待ちを止めて置き直す');
   assert.notEqual(long.render('別の文'.repeat(2000), 1003), base, '文が前の続きでなければ、すぐ描き直す');
-});
-
-test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読み書き・読むだけで分かれる）。辞書 en にある', () => {
-  assert.equal(approvalPathKey({ verdict: 'in', mode: 'write' }), 'approval.verdict.inWrite');
-  assert.equal(approvalPathKey({ verdict: 'in', mode: 'read' }), 'approval.verdict.inRead');
-  assert.equal(approvalPathKey({ verdict: 'in' }), 'approval.verdict.inWrite', 'mode が無い古い応答でも落ちない');
-  assert.equal(approvalPathKey({ verdict: 'out' }), 'approval.verdict.out');
-  assert.equal(approvalPathKey({ verdict: 'deny' }), 'approval.verdict.deny');
-  assert.equal(approvalPathKey({ verdict: 'unknown' }), 'approval.verdict.unknown');
-  assert.equal(approvalPathKey({ verdict: 'something-new' as 'in' }), 'approval.verdict.unknown', '知らない判定は「判定できない」');
-  for (const key of ['approval.verdict.inWrite', 'approval.verdict.inRead', 'approval.verdict.out', 'approval.verdict.deny', 'approval.verdict.unknown'] as const) {
-    assert.equal(typeof en[key], 'string', key);
-    assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, `${key}: 英語に日本語が混ざらない`);
-  }
-  assert.equal(approvalPathsMore({ pathsMore: 5 }), 5);
-  assert.equal(approvalPathsMore({}), 0, '古い応答（pathsMore が無い）は 0');
-  assert.equal(approvalPathsMore({ pathsMore: -3 }), 0);
-  assert.deepEqual(approvalPathTone('in'), 'neutral');
-  assert.deepEqual([approvalPathTone('out'), approvalPathTone('deny'), approvalPathTone('unknown')], ['outline', 'outline', 'outline']);
 });
 
 test('使用量の表示: 割合は四捨五入、1 を超えたら「100%+」。数は k / M にまとめる', () => {

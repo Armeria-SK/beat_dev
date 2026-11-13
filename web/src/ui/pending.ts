@@ -143,6 +143,12 @@ export function sessionCounts(rows: readonly PendingAction[]): Map<string, numbe
   return counts;
 }
 
+export function taskCounts(rows: readonly PendingAction[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const r of rows) if (r.status === 'waiting' && r.task_id) counts.set(r.task_id, (counts.get(r.task_id) ?? 0) + 1);
+  return counts;
+}
+
 export interface AcceptanceRow { projectId: string; name: string; n: number }
 
 export function acceptanceRows(counts: PendingCounts | null, projects: readonly Project[], projectId: string | null): AcceptanceRow[] {

@@ -1,4 +1,4 @@
-import type { Approval, ChecklistItem, Message } from '../api.ts';
+import type { ChecklistItem, Message } from '../api.ts';
 import { replyTurns } from '../chat-logic.ts';
 import { formatDateTime, formatDateTimeSmart, timezoneLabel } from '../i18n/index.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
@@ -10,7 +10,6 @@ export interface ToolItem {
   input: string;
   result: ToolResult | null;
   running?: { startedAt: number | null; checking: boolean; helperTools: number | null; helperConversation: string | null } | undefined;
-  approval?: Approval | undefined;
 }
 
 export type NoticeWeight = 'quiet' | 'warn' | 'fail';
@@ -26,7 +25,6 @@ export type ThreadItem =
 export interface ThreadInput {
   messages: readonly Message[];
   draft?: LiveDraft | undefined;
-  approvals?: readonly Approval[];
   notices?: readonly RunNotice[];
 }
 
@@ -54,7 +52,7 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
 
 const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
-export function threadItems({ messages, draft, approvals = [], notices = [] }: ThreadInput): ThreadItem[] {
+export function threadItems({ messages, draft, notices = [] }: ThreadInput): ThreadItem[] {
   const pending = new Map<string, string[]>();
   const seen = new Map<string, number>();
   const rowKeyOf = (callId: string): string => {
@@ -98,7 +96,6 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
     if (m.runId && lastOfRun.get(m.runId) === m.id) items.push({ kind: 'plan', key: `plan-${m.runId}` });
   }
 
-  const waiting = approvals;
   const settled = draft?.settled ?? [];
   const savedRun = draft ? messages.filter(m => m.role === 'tool' && m.runId === draft.runId) : [];
   const savedIdsInRun = new Set(savedRun.map(m => m.toolCallId));
@@ -110,16 +107,13 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
   });
   if (draft) {
     if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
-    else if (draft.activeTool && waiting.length === 0) {
+    else if (draft.activeTool) {
       const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
       tools(rowKey).push({
         key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
         running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
       });
-    } else if (waiting.length === 0) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
-  }
-  for (const approval of waiting) {
-    tools(`approval-${approval.id}`).push({ key: `approval-${approval.id}`, name: approval.tool, input: '', result: null, approval });
+    } else items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
   }
   noticeRows(notices).forEach((row, i) => items.push({ kind: 'notice', key: `n-${row.notices[0]!.runId}-${i}`, ...row }));
   return items;

@@ -95,7 +95,7 @@ const runRow = (id: string, at: number, extra: Partial<RunRow> = {}): RunRow => 
 });
 const callRow = (id: string, at: number, extra: Partial<ToolCallRow> = {}): ToolCallRow => ({
   id, run_id: 'r1', conversation_id: 'c1', tool: 'shell_run', input: JSON.stringify({ command: 'npm test' }), decision: 'allow', decided_by: 'policy',
-  approval_id: null, ok: 1, duration_ms: 8100, output_preview: null, full_ref: null, created_at: at, autoReason: null, grantFolder: null, ...extra,
+  approval_id: null, ok: 1, duration_ms: 8100, output_preview: null, full_ref: null, created_at: at, autoReason: null, ...extra,
 });
 const job = (id: number, at: number, status: ReviewJob['status'], extra: Partial<ReviewJob> = {}): ReviewJob => ({
   id, trigger: 'idle', triggerLabel: 'idle', status, note: null, conversation_id: null, task_id: null, run_id: null, created_at: at, finished_at: null, changes: [], ...extra,

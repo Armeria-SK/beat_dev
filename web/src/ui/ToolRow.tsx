@@ -1,13 +1,10 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
-import { ApiError, type Approval } from '../api.ts';
-import { decideApproval, useDecisionPending, type ApprovalDecision } from '../approval-decide.ts';
-import { approvalPathKey, approvalPathsMore } from '../chat-logic.ts';
+import type { CSSProperties, ReactNode } from 'react';
 import { useT } from '../i18n/index.ts';
 import { useNow } from './hooks.ts';
-import { Button, Icon, Pill } from './parts.tsx';
+import { Icon } from './parts.tsx';
 import { routeHash } from './routes.ts';
 import type { ToolItem } from './thread.ts';
-import { elapsedClock, folderLabel, staggerOf, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
+import { elapsedClock, staggerOf, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
 
 type T = ReturnType<typeof useT>;
 
@@ -86,64 +83,11 @@ function ToolLine({ item, enter }: { item: ToolItem; enter: number | null }) {
   );
 }
 
-function ApprovalLine({ approval, enter }: { approval: Approval; enter: number | null }) {
-  const t = useT();
-  const view = toolRow(approval.tool, '', null);
-  const now = useNow(1000);
-  const busy = useDecisionPending(approval.id);
-  const [error, setError] = useState('');
-  async function decide(decision: ApprovalDecision): Promise<void> {
-    setError('');
-    try { await decideApproval(approval.id, decision); } catch (e) { setError(e instanceof ApiError ? e.message : t('ui.approval.failed')); }
-  }
-  const more = approvalPathsMore(approval);
-  const meta = <><Pill tone="waiting">{t('ui.approval.waiting')}</Pill>{t('ui.approval.left', elapsedClock(approval.expiresAt - now))}</>;
-  return (
-    <details className={`bt-tool ui-approval${enterClass(enter)}`} style={enterStyle(enter)} open>
-      <Row view={{ ...view, target: approval.title }} running={false} meta={meta}>
-        <div className="bt-tool__body ui-approval__body">
-          {approval.body && <pre className="ui-tool__out">{approval.body}</pre>}
-          {approval.fromAgent && <p className="bt-meta">{t('ui.approval.fromHelper', approval.fromAgent.title)}</p>}
-          {approval.onceOnly && <p className="bt-meta">{t('ui.approval.checkCode')}</p>}
-          {approval.preview.map(file => (
-            <div key={file.path} className="ui-approval__file">
-              <span className="bt-meta">{t('ui.approval.preview')} · <code>{file.path}</code></span>
-              <pre className="ui-tool__out">{file.text}</pre>
-            </div>
-          ))}
-          <dl className="ui-approval__facts">
-            {approval.cwd && <><dt>{t('ui.approval.cwd')}</dt><dd><code>{approval.cwd}</code></dd></>}
-            {approval.reasons.length > 0 && <><dt>{t('ui.approval.reasons')}</dt><dd>{approval.reasons.join(' · ')}</dd></>}
-            {(approval.paths.length > 0 || approval.details.length > 0) && (
-              <>
-                <dt>{t('ui.approval.paths')}</dt>
-                <dd>
-                  {approval.paths.length > 0
-                    ? approval.paths.map((p, i) => <span key={`${i}:${p.path ?? p.input}`} className="ui-approval__path"><code>{p.path ?? p.input}</code> · {t(approvalPathKey(p))}</span>)
-                    : approval.details.map(d => <span key={d} className="ui-approval__path"><code>{d}</code></span>)}
-                  {more > 0 && <span className="ui-approval__path">{t('approval.pathsMore', more)}</span>}
-                </dd>
-              </>
-            )}
-          </dl>
-          {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}
-          <div className="ui-approval__actions">
-            <Button variant="ghost" small disabled={busy} onClick={() => void decide('deny')}>{t('ui.approval.deny')}</Button>
-            {!approval.onceOnly && !approval.everyTime && !approval.fromAgent && <Button small disabled={busy} onClick={() => void decide('conversation')}>{t('ui.approval.session')}</Button>}
-            {approval.grantFolder && <Button small disabled={busy} title={approval.grantFolder} onClick={() => void decide('folder')}>{t('ui.approval.folder', folderLabel(approval.grantFolder))}</Button>}
-            <Button variant="primary" small disabled={busy} onClick={() => void decide('once')}>{t('ui.approval.once')}</Button>
-          </div>
-        </div>
-      </Row>
-    </details>
-  );
-}
-
 export function ToolGroup({ rows, isNew }: { rows: ToolItem[]; isNew: (key: string) => boolean }) {
   const enters = staggerOf(rows.map(r => isNew(r.key)));
   return (
     <div className="bt-tools">
-      {rows.map((item, i) => (item.approval ? <ApprovalLine key={item.key} approval={item.approval} enter={enters[i]!} /> : <ToolLine key={item.key} item={item} enter={enters[i]!} />))}
+      {rows.map((item, i) => <ToolLine key={item.key} item={item} enter={enters[i]!} />)}
     </div>
   );
 }
