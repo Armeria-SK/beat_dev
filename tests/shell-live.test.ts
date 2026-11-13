@@ -1294,3 +1294,22 @@ test('実機（Windows PowerShell 5.1・制限モード）: npx の引数の & �
   assert.equal(outcome.decidedBy, 'user', outcome.output.content);
   assert.equal(outcome.output.content.split('\n').some(line => line.trim() === host), false, outcome.output.content);
 });
+
+test('実機（Windows PowerShell 5.1・制限モード）: 素の node を呼ぶ .cmd の shim は、作業フォルダに置かれた node.cmd を動かさない', { skip: (!psAvailable || !which('node')) && 'Windows の PowerShell か node が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const shims = join(tempDir(t), 'global-npm');
+  mkdirSync(shims, { recursive: true });
+  writeFileSync(join(shims, 'pnpm.ps1'), 'Write-Output from-ps1\r\n');
+  writeFileSync(join(shims, 'pnpm.cmd'), '@node --version\r\n');
+  writeFileSync(s.files('node.cmd'), '@echo HIJACKED\r\n');
+  const saved = { path: process.env.PATH, flag: process.env.NoDefaultCurrentDirectoryInExePath };
+  t.after(() => {
+    process.env.PATH = saved.path;
+    if (saved.flag === undefined) delete process.env.NoDefaultCurrentDirectoryInExePath; else process.env.NoDefaultCurrentDirectoryInExePath = saved.flag;
+  });
+  process.env.PATH = `${shims}${delimiter}${saved.path ?? ''}`;
+  delete process.env.NoDefaultCurrentDirectoryInExePath;
+  const outcome = await runApproved(s, 'pnpm --version');
+  assert.doesNotMatch(outcome.output.content, /HIJACKED/u, outcome.output.content);
+  assert.match(outcome.output.content, /\bv\d+\.\d+\.\d+/u, outcome.output.content);
+});

@@ -219,7 +219,7 @@ test('審査 5: 値が次の行にあっても、次の行が字下げされて�
 test('審査 6: シェルの子に渡す環境変数は、種類・場所を言う名前（…_URL・…_TYPE など）でも、秘密の名前なら渡さない', () => {
   const names = ['AUTH_URL', 'BASIC_AUTH_URL', 'MONGO_AUTH_URI', 'HTTP_PROXY_AUTH_ENDPOINT', 'COOKIE_TTL', 'SESSION_COOKIE_EXPIRES', 'PASSWD_TYPE', 'AUTHORIZATION_TYPE'];
   const source = Object.fromEntries([...names, 'PLAIN_NAME'].map(name => [name, 'v']));
-  assert.deepEqual(Object.keys(scrubEnv([...names, 'PLAIN_NAME'], source)), ['PLAIN_NAME']);
+  assert.deepEqual(Object.keys(scrubEnv([...names, 'PLAIN_NAME'], source)).filter(k => k !== 'NoDefaultCurrentDirectoryInExePath'), ['PLAIN_NAME']);
   for (const name of names) assert.equal(isSensitiveEnvName(name), true, name);
 });
 

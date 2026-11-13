@@ -27,6 +27,7 @@ export function scrubEnv(extraAllow: readonly string[] = [], source: NodeJS.Proc
     if (isSensitiveEnvName(key) ||/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/iu.test(key)) continue;
     out[key] = key.toUpperCase() === 'PATH' ? absolutePathEntries(value) : value;
   }
+  if (WINDOWS) out.NoDefaultCurrentDirectoryInExePath = '1';
   return out;
 }
 
