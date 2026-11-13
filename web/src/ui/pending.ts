@@ -64,17 +64,20 @@ export interface ActionView { title: string | null; inline: string | null; block
 
 export function actionView(row: Pick<PendingAction, 'tool' | 'title' | 'shown' | 'parts'>): ActionView {
   const content = CONTENT_TOOLS.has(row.tool);
+  const title = row.title?.trim() || null;
   if (!row.parts || (row.parts.body === null && row.parts.cwd === null && row.parts.extra === null)) {
     const text = row.shown || null;
-    return { title: null, inline: content ? null : text, block: content ? text : null, cwd: null, extra: null };
+    return { title: content ? title : null, inline: content ? null : text, block: content ? text : null, cwd: null, extra: null };
   }
-  const title = row.title?.trim() || null;
   const body = row.parts.body || null;
   const cwd = row.parts.cwd || null;
   const extra = row.parts.extra || null;
   if (content) return { title, inline: null, block: body, cwd, extra };
   return { title: PLAIN_TOOLS.has(row.tool) && body ? null : title, inline: body, block: null, cwd, extra };
 }
+
+export const decidedText = (view: ActionView): { title: string | null; code: string | null; cwd: string | null } =>
+  ({ title: view.title, code: view.inline ?? (view.title ? null : view.block), cwd: view.cwd });
 
 const UNITS = ['B', 'KB', 'MB', 'GB'] as const;
 

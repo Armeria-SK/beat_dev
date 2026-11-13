@@ -4,7 +4,7 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, actionView, byteSize, decidedShown, earlierQuery, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, waitingOf, waitingShown, withPendingCounts,
+  acceptanceRows, actionView, byteSize, decidedShown, decidedText, earlierQuery, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
@@ -238,6 +238,20 @@ test('ui/pending: parts の無い古い行は shown をそのまま出す（題�
   const nl = String.fromCharCode(10);
   const shown = ['Run a command', 'Working folder: web', 'rm -rf dist'].join(nl);
   assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown })), { title: null, inline: shown, block: null, cwd: null, extra: null });
-  assert.deepEqual(actionView(row({ tool: 'file_write', title: 'Write to a file: a.md', shown: 'x' })), { title: null, inline: null, block: 'x', cwd: null, extra: null });
-  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown, status: 'ran', parts: { body: null, cwd: null, extra: null } })), { title: null, inline: shown, block: null, cwd: null, extra: null }, '決めた・消した・取り消した行は parts が全部 null なので、何を動かしたかを shown で出す');
+  assert.deepEqual(actionView(row({ tool: 'file_write', title: 'Write to a file: a.md', shown: 'x' })), { title: 'Write to a file: a.md', inline: null, block: 'x', cwd: null, extra: null }, 'ファイルの行は題を残す');
+  assert.deepEqual(actionView(row({ tool: 'shell_run', title: 'Run a command', shown, status: 'ran', parts: { body: null, cwd: null, extra: null } })), { title: null, inline: shown, block: null, cwd: null, extra: null }, '中身を消した行は parts が全部 null なので、shown で出す');
+});
+
+test('ui/pending: Decided の行も Waiting と同じ actionView から組む（シェルはコマンドだけ、ファイルは題、作業フォルダは小さな行）。消した行でも何もない行にしない', () => {
+  const nl = String.fromCharCode(10);
+  const lines = (...parts: string[]) => parts.join(nl);
+  const json = (value: unknown) => JSON.stringify(value, null, 2);
+  const write = row({ tool: 'file_write', status: 'rejected', decided_at: 900, title: 'Write to a file: AGENTS.md', shown: lines('Write to a file: AGENTS.md', '# Agents', json({ path: 'AGENTS.md' })), parts: { body: '# Agents', cwd: null, extra: json({ path: 'AGENTS.md' }) } });
+  assert.deepEqual(decidedText(actionView(write)), { title: 'Write to a file: AGENTS.md', code: null, cwd: null });
+  const shell = row({ tool: 'shell_run', status: 'ran', decided_at: 900, title: 'Run a command', shown: lines('Run a command', 'Working folder: web', 'rm -rf dist'), parts: { body: 'rm -rf dist', cwd: 'web', extra: null } });
+  assert.deepEqual(decidedText(actionView(shell)), { title: null, code: 'rm -rf dist', cwd: 'web' });
+  const erased = { body: null, cwd: null, extra: null };
+  assert.deepEqual(decidedText(actionView(row({ tool: 'shell_run', status: 'ran', title: 'Run a command', shown: 'Run a command', parts: erased }))), { title: null, code: 'Run a command', cwd: null });
+  assert.deepEqual(decidedText(actionView(row({ tool: 'file_edit', status: 'ran', title: 'Edit a file: a.ts', shown: 'Edit a file: a.ts', parts: erased }))), { title: 'Edit a file: a.ts', code: null, cwd: null });
+  assert.deepEqual(decidedText(actionView(row({ tool: 'file_edit', status: 'ran', title: null, shown: 'file_edit', parts: erased }))), { title: null, code: 'file_edit', cwd: null }, '題も無ければ shown を出す');
 });

@@ -6,7 +6,7 @@ import { latestOnly } from '../latest.ts';
 import { ROW_LEAVE_MS } from '../library.ts';
 import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import {
-  acceptanceRows, actionView, byteSize, cleanReason, decidedShown, earlierQuery, effectFiles, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
+  acceptanceRows, actionView, byteSize, cleanReason, decidedShown, decidedText, earlierQuery, effectFiles, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
   type AcceptanceRow, type ActionView, type FileFact, type KindTile, type Outcome,
 } from '../pending.ts';
 import { reportOpError } from '../task-ops.ts';
@@ -238,15 +238,15 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
           <ul className="bt-list">
             {today.map(row => {
               const outcome = outcomeOf(row);
-              const view = actionView(row);
+              const line = decidedText(actionView(row));
               if (!outcome) return null;
               const ok = outcome.kind === 'ran' && (outcome.exit === null || outcome.exit === 0);
               return (
                 <li key={row.id} className="bt-row" data-decided={row.status}>
                   <Icon name={outcome.kind === 'running' ? 'clock' : ok ? 'check' : outcome.kind === 'failed' || outcome.kind === 'ran' ? 'alert' : 'x'} className={outcome.kind === 'ran' && ok ? 'bt-add' : undefined} />
                   <div className="bt-row__main">
-                    <span className="bt-row__title ui-pending__shown">{view.title && <span className="ui-pending__title">{view.title}</span>}{view.inline && <code className="ui-pending__code">{view.inline}</code>}</span>
-                    <span className="bt-row__sub bt-meta">{[all && row.project_name, outcomeText(t, outcome)].filter(Boolean).join(' · ')}</span>
+                    <span className="bt-row__title ui-pending__shown">{line.title && <span className="ui-pending__title">{line.title}</span>}{line.code && <code className="ui-pending__code">{line.code}</code>}</span>
+                    <span className="bt-row__sub bt-meta">{[all && row.project_name, line.cwd && `${t('ui.pending.cwd')} ${line.cwd}`, outcomeText(t, outcome)].filter(Boolean).join(' · ')}</span>
                   </div>
                 </li>
               );
