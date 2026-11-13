@@ -3,7 +3,11 @@ import { isIP } from 'node:net';
 export interface SelfServer { port: number; origins: readonly string[] }
 
 const LOOPBACK_NAME = /^(?:localhost|(?:[a-z0-9-]+\.)+localhost|localhost\.localdomain|ip6-localhost|ip6-loopback)$/u;
-const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[^\]\s]+\]|[^\s:/\\?#@[\]=,;()<>|&*!$^{}~+]+)(?::(\d{1,5}))?/giu;
+const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[^\]\s]+\]|[^\s:/\\?#@[\]=,;()<>|&*!$^{}~+]+)(?::(\d+))?/giu;
+const PORT = /:(\d+)/gu;
+const HOST_TAIL = /[^\s/\\?#@]*$/u;
+const EXPANDING = /[{}[\]]/u;
+const IPV6_LITERAL = /^\[[^[\]]+\]$/u;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
 function loopbackHost(host: string): boolean {
@@ -43,6 +47,11 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
   for (const host of hosts) {
     const at = new RegExp(`(?:^|[^a-z0-9.-])${host.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\.*(?![a-z0-9-])`, 'u').exec(lower);
     if (at) return host;
+  }
+  for (const match of plain.matchAll(PORT)) {
+    if (!ports.has(Number(match[1]))) continue;
+    const word = HOST_TAIL.exec(plain.slice(Math.max(0, match.index - 256), match.index))![0];
+    if (EXPANDING.test(word) && !(IPV6_LITERAL.test(word) && isIP(word.slice(1, -1)) === 6)) return `${word}${match[0]}`;
   }
   for (const match of plain.matchAll(ADDRESS)) {
     const [whole, scheme, host, port] = match;
