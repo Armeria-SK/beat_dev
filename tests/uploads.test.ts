@@ -48,7 +48,7 @@ async function setup(t: { after: (fn: () => void | Promise<void>) => void }, mod
   edit(config);
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);
   await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));

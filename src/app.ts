@@ -70,6 +70,7 @@ import { isLocalPinned } from './engine/local-model.ts';
 import { ToolRegistry } from './tools/registry.ts';
 import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
+import type { JudgeLimitSet } from './tools/pipeline.ts';
 import { redactSecrets } from './shared/redaction.ts';
 import { MemoryStore, renderBooks } from './memory/store.ts';
 
@@ -103,6 +104,8 @@ export interface AppOptions {
   downloadNetwork?: DownloadNetwork;
   // 試験用: 子の担当（agent_run）の時間切れ（ミリ秒）。設定 tools.agent.timeoutSec の最小は 60 秒なので、試験だけがこれで縮める。書かなければ設定の値
   agentTimeoutMs?: number;
+  judgeLimits?: JudgeLimitSet;
+  judgeAll?: boolean;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
   // 試験用: ブラウザの動かし方（書かなければ playwright-core で、手元の Chrome（か path 指定の Chromium 系）を動かす）
@@ -241,6 +244,8 @@ export class App {
       mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
+      ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
+      ...(options.judgeAll !== undefined ? { judgeAll: options.judgeAll } : {}),
     });
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,

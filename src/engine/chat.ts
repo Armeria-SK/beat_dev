@@ -12,9 +12,9 @@ import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
-import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
+import { NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
-import { acceptanceAllows, localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
+import { acceptanceAllows, localAllows, planAllows, reviewAllows, runToolCall, type JudgeLimitSet } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
@@ -117,6 +117,8 @@ export interface ChatEngineDeps {
   now?: () => Date;
   // 子の担当の時間切れ（ミリ秒）。試験で短くするためだけの上書き。ふつうは設定 tools.agent.timeoutSec（秒）を使う
   agentTimeoutMs?: number | undefined;
+  judgeLimits?: JudgeLimitSet | undefined;
+  judgeAll?: boolean | undefined;
   // maxTools で切られた MCP の道具を、モデルごとに知らせる（空の一覧は「切られていない」）。MCP の管理が、道具の状態を cut にするために使う
   mcpCut?: (modelId: string, names: readonly string[]) => void;
   // ブラウザ 1 つ（全会話で共有）。無ければ browser_* は動かない（ToolContext.services.browser）
@@ -817,8 +819,11 @@ export class ChatEngine {
         const outcome = await runToolCall(toolCall, ctx, {
           registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: () => allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
           permissionMode: () => this.#modeOf(conversationId),
-          autoClassify: (prompt, classifierSignal) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal),
-          lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? '' : this.#lastUserRequest(conversationId)),
+          autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal, judgeCall),
+          lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
+            : agent ? (agent.parent.task ? d.tasks?.judgeRequest(agent.parent.task.id) ?? '' : this.#lastUserRequest(agent.parent.conversationId))
+            : this.#lastUserRequest(conversationId)),
+          judgeAll: d.judgeAll !== false, judgeLimits: d.judgeLimits,
           conversationTainted: () => d.conversations.everTainted(conversationId),
           conversationAutoRead: () => d.conversations.everAutoRead(conversationId),
         }, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
@@ -863,15 +868,38 @@ export class ChatEngine {
   // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。
   // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。手元のモデルを選んだ会話（ctx.localOnly）は、手元のモデルのときだけ。道具は渡さない。
   // 判定役の呼び出しは engine_runs に入れず、会話も作らない
-  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal): Promise<string> {
+  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string> {
+    const config = this.#d.config();
+    const named = config.routing.judge ?? [];
+    const routes: Route[] = named.length
+      ? named.flatMap(id => {
+        const model = config.models.find(m => m.id === id);
+        const provider = model && config.providers.find(p => p.id === model.provider);
+        return model && provider ? [{ model, provider }] : [];
+      })
+      : [route];
+    const usable = routes.filter(r => !ctx.localOnly || isLocalProvider(r.provider));
+    if (!usable.length) throw new NoJudge(ctx.localOnly ? 'the judge model must be local for a local conversation' : 'no judge model is set up');
+    let failure: unknown = new NoJudge('no judge model could be called');
+    for (const candidate of usable) {
+      try { return await this.#askJudge(candidate, prompt, signal, call); } catch (error) {
+        if (signal.aborted || error instanceof TruncatedReply) throw error;
+        failure = error;
+      }
+    }
+    throw failure;
+  }
+
+  async #askJudge(route: Route, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string> {
     const d = this.#d;
     const { model, provider } = route;
-    if (ctx.localOnly && !isLocalProvider(provider)) throw new Error('the classifier model must be local for a local conversation');
     const adapter = d.registry.get(provider.id);
     if (!adapter) throw new Error('no adapter for the classifier model');
     let release: (() => void) | undefined;
     try {
-      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal);
+      call?.queued();
+      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal, true);
+      call?.started();
       let text = '';
       for await (const event of adapter.stream({
         model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,

@@ -50,6 +50,7 @@ export const ServerConfig = Type.Object({
 export const RoutingConfig = Type.Object({
   chat: Type.Array(Type.String(), { default: [] }),
   background: Type.Array(Type.String(), { default: [] }),
+  judge: Type.Optional(Type.Array(Type.String())),
   retriesPerModel: Type.Integer({ minimum: 0, maximum: 5, default: 2 }),
 }, { additionalProperties: false });
 

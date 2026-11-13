@@ -41,10 +41,13 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return result({ decision: 'deny', reasons: [guardText(language, 'file.symlink')] });
   const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
   // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
-  if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] });
-  if (protectedKind) return result({ decision: 'ask', reasons: [guardText(language, protectedKind === 'skill' && !askBeforeRegister(ctx.config) ? 'file.skill_auto' : FILE_KEYS[protectedKind])], askKinds: ['persona'] });
+  if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'], reasonKeys: [FILE_KEYS.git] });
+  if (protectedKind) {
+    const key = protectedKind === 'skill' && !askBeforeRegister(ctx.config) ? 'file.skill_auto' : FILE_KEYS[protectedKind];
+    return result({ decision: 'ask', reasons: [guardText(language, key)], askKinds: ['persona'], reasonKeys: [key] });
+  }
   // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる
-  if (need === 'write' && isToolConfigPath(abs)) return result({ decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] });
+  if (need === 'write' && isToolConfigPath(abs)) return result({ decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'], reasonKeys: ['file.tool_config'] });
   return result({ decision: 'allow', reasons: [] });
 }
 

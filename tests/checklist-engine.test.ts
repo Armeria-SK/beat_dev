@@ -46,7 +46,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const tools = [...builtinTools().filter(tool => tool.name !== 'checklist_write'), checklistWrite];
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, tools, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, tools, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   mkdirSync(paths.workspace, { recursive: true });

@@ -1,3 +1,4 @@
+import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
 import { makeFence } from '../shared/fence.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
@@ -44,6 +45,8 @@ export const CLASSIFIER_TIMEOUT_MS = 20_000;
 export const USER_REQUEST_LIMIT = 2000;
 // 操作の文がこれより長いときは、判定役が全部を見られないので聞かずに確かめる
 export const ACTION_BODY_LIMIT = 4000;
+export const USER_REQUEST_TOKENS = 1_500;
+export const ACTION_BODY_TOKENS = 1_200;
 const REASON_LIMIT = 120;
 
 export interface AutoGate {
@@ -100,7 +103,7 @@ export function buildClassifierPrompt(input: ClassifierInput): ClassifierPrompt 
   const paths = input.paths.map(p => `- ${p.input}${p.path ? ` -> ${p.path}` : ''} [${p.verdict}${p.mode ? `, ${p.mode}` : ''}]`).join('\n');
   const user = [
     fence('USER-REQUEST'),
-    clean(input.userRequest.slice(0, USER_REQUEST_LIMIT)),
+    clean(input.userRequest.slice(0, prefixLength(input.userRequest, USER_REQUEST_LIMIT, USER_REQUEST_TOKENS))),
     fence('END-USER-REQUEST'),
     fence('ACTION'),
     `tool: ${clean(input.tool)}`,
@@ -142,34 +145,58 @@ export function parseVerdict(reply: string): ParsedVerdict | undefined {
 }
 
 // failed: 判定役が答えられなかった理由（error = 呼べない・失敗、timeout = 時間切れ、unparsable = 読めない返事、no_request = 利用者の発言が無い、too_long = 操作の文が長すぎる）。決まった答えのときは付かない
-export type AutoVerdict = { decision: 'allow' | 'ask'; reason: string; failed?: 'error' | 'timeout' | 'unparsable' | 'no_request' | 'too_long' };
+export type AutoVerdict = { decision: 'allow' | 'ask'; reason: string; failed?: 'error' | 'timeout' | 'unparsable' | 'no_request' | 'too_long' | 'slot_timeout' | 'no_judge' };
+
+export interface JudgeLimits { answerMs: number; slotWaitMs?: number | undefined }
+
+export interface JudgeCall extends JudgeLimits { queued(): void; started(): void }
+
+export class NoJudge extends Error {
+  constructor(detail: string) { super(detail); }
+}
 
 // 判定役を 1 回呼ぶ。失敗・時間切れ・読めない返事・利用者の発言が無い・操作の文が長すぎるときは、必ず ask（確かめる）。
 // ask 関数は、判定役のモデルに system と user の文を渡して、返事の文字を返す（呼べなければ投げる）
 export async function autoDecide(
   input: ClassifierInput,
-  ask: (prompt: ClassifierPrompt, signal: AbortSignal) => Promise<string>,
+  ask: (prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall) => Promise<string>,
   signal: AbortSignal,
-  timeoutMs: number = CLASSIFIER_TIMEOUT_MS,
+  limits: JudgeLimits | number = CLASSIFIER_TIMEOUT_MS,
 ): Promise<AutoVerdict> {
   if (!input.userRequest.trim()) return { decision: 'ask', reason: '', failed: 'no_request' };
-  if (input.body.length > ACTION_BODY_LIMIT) return { decision: 'ask', reason: '', failed: 'too_long' };
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const combined = AbortSignal.any([signal, timeout]);
+  if (input.body.length > ACTION_BODY_LIMIT || estimateTextTokens(input.body) > ACTION_BODY_TOKENS) return { decision: 'ask', reason: '', failed: 'too_long' };
+  const staged = typeof limits !== 'number';
+  const answerMs = staged ? limits.answerMs : limits;
+  const stop = new AbortController();
+  let expired: 'timeout' | 'slot_timeout' | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (ms: number | undefined, kind: 'timeout' | 'slot_timeout') => {
+    clearTimeout(timer);
+    timer = ms === undefined || stop.signal.aborted ? undefined : setTimeout(() => { expired = kind; stop.abort(new Error(kind)); }, ms);
+  };
+  arm(answerMs, 'timeout');
+  const call: JudgeCall | undefined = staged
+    ? { answerMs, ...(limits.slotWaitMs !== undefined ? { slotWaitMs: limits.slotWaitMs } : {}), queued: () => arm(limits.slotWaitMs, 'slot_timeout'), started: () => arm(answerMs, 'timeout') }
+    : undefined;
+  const combined = AbortSignal.any([signal, stop.signal]);
+  const failure = (): AutoVerdict => ({ decision: 'ask', reason: '', failed: expired ?? 'error' });
   try {
     const reply = await Promise.race([
-      ask(buildClassifierPrompt(input), combined),
+      call ? ask(buildClassifierPrompt(input), combined, call) : ask(buildClassifierPrompt(input), combined),
       new Promise<never>((_, reject) => {
         if (combined.aborted) reject(combined.reason);
         else combined.addEventListener('abort', () => reject(combined.reason), { once: true });
       }),
     ]);
     // 答えを待っているあいだに実行が取り消された・時間が過ぎたときは、返事が届いていても使わない
-    if (combined.aborted) return { decision: 'ask', reason: '', failed: timeout.aborted ? 'timeout' : 'error' };
+    if (combined.aborted) return failure();
     const parsed = typeof reply === 'string' ? parseVerdict(reply) : undefined;
     return parsed ?? { decision: 'ask', reason: '', failed: 'unparsable' };
   } catch (error) {
     if (error instanceof TruncatedReply) return { decision: 'ask', reason: '', failed: 'unparsable' };
-    return { decision: 'ask', reason: '', failed: timeout.aborted ? 'timeout' : 'error' };
+    if (error instanceof NoJudge && !combined.aborted) return { decision: 'ask', reason: '', failed: 'no_judge' };
+    return failure();
+  } finally {
+    clearTimeout(timer);
   }
 }

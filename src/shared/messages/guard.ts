@@ -29,6 +29,7 @@ const en = {
   'guard.irreversible': 'Deleting here cannot be undone ({path})',
   'guard.touches_outside': 'It touches something outside the allowed folders ({path})',
   'guard.write_readonly': 'It tries to write into a read-only folder ({path})',
+  'guard.self_port': "It talks to beat itself ({target}). Commands that beat runs may not call beat's own server",
   'guard.write_persona': 'It rewrites a persona or profile file ({path})',
 
   'list.command': '{cmd} is not in the list of commands that run without a check',

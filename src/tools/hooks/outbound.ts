@@ -383,7 +383,7 @@ const gitNetwork = (st: StatementFacts): boolean => {
 
 const ALIAS_PROGRAMS = new Set(['alias', 'set-alias', 'new-alias', 'sal', 'nal', 'import-alias', 'ipal']);
 const ITEM_PROGRAMS = new Set(['set-item', 'si', 'new-item', 'ni', 'copy-item', 'cpi', 'rename-item', 'rni']);
-function definesCommand(st: StatementFacts): boolean {
+export function definesCommand(st: StatementFacts): boolean {
   if (ALIAS_PROGRAMS.has(st.program)) return true;
   if (ITEM_PROGRAMS.has(st.program) && st.words.some(w => /^(?:alias|function):/iu.test(w.text))) return true;
   return st.shapes.some(s => s === 'function' || /^control:(?:function|filter|workflow)$/u.test(s));

@@ -79,6 +79,9 @@ export interface PreCheck {
   created?: string[];
   readPaths?: string[];
   pushes?: Array<{ dir: string | null; parsed?: boolean }>;
+  reasonKeys?: string[];
+  productRun?: 'product-code' | 'product-git';
+  ownerReason?: string;
 }
 
 // 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果

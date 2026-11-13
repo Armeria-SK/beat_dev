@@ -43,7 +43,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
   config.tools.shell.approvalTimeoutSec = 10;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   mkdirSync(paths.workspace, { recursive: true });
@@ -248,7 +248,7 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
   writeFileSync(paths.config, JSON.stringify(config));
   const databasePath = join(dir, 'beat.db');
   let adapter!: FakeAdapter;
-  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const open = () => new App({ judgeAll: false, paths, databasePath, log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   const first = open();
   await first.status.probeAll(first.config());
   adapter.scripts = [call('web_fetch', FETCH), untilStopped];

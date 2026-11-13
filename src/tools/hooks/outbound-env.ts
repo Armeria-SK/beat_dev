@@ -41,17 +41,21 @@ function filesUnder(dir: string): string[] | undefined {
   return out;
 }
 
-export function gitOutboundEnv(options: GitOutboundOptions): OutboundEnv {
+export function isolatedGit(options: { dataDir: string; env?: Env | undefined; gitExe: string; productRoot?: string | undefined }): (dir: string, args: string[]) => string | undefined {
   const base: Env = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([k]) => !/^git_/iu.test(k)));
   const exe = options.gitExe;
   const trusted = (dir: string): boolean => isAbsolute(exe) && ![dir, ...(options.productRoot ? [options.productRoot] : [])].some(d => isInside(d, exe) || isInside(realish(d), realish(exe)));
-  const git = (dir: string, args: string[]): string | undefined => {
+  return (dir, args) => {
     if (!trusted(dir)) return undefined;
     const run = prepareGitRun({ dataDir: options.dataDir, env: base, gitExe: exe });
     try {
       return execFileSync(exe, args, { cwd: dir, env: { ...base, ...run.env }, encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
     } catch { return undefined; } finally { run.cleanup(); }
   };
+}
+
+export function gitOutboundEnv(options: GitOutboundOptions): OutboundEnv {
+  const git = isolatedGit(options);
   let state: RepoState | null | undefined;
   const load = (): RepoState | null => {
     if (state !== undefined) return state;

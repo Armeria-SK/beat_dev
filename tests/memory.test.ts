@@ -94,7 +94,7 @@ async function app(t: { after: (fn: () => void) => void }) {
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const a = new App({ paths, databasePath: ':memory:', log: () => undefined, botMemory: true, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const a = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, botMemory: true, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await a.status.probeAll(a.config());
   const events: RunEvent[] = [];
   a.bus.subscribe(e => events.push(e.event));

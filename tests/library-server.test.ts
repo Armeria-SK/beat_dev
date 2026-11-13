@@ -31,7 +31,7 @@ async function boot(t: { after: (fn: () => void) => void }, config: Record<strin
   const paths = resolvePaths(root);
   mkdirSync(paths.workspace, { recursive: true });
   if (config) writeFileSync(paths.config, JSON.stringify(config));
-  const app = new App({ paths, databasePath: join(root, 'beat.db'), log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  const app = new App({ judgeAll: false, paths, databasePath: join(root, 'beat.db'), log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
   open.push(app);
   app.conversations.ensure('c1');
   const events: NotifyEvent[] = [];
@@ -298,7 +298,7 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: injected, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: injected, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   const runTask = async (scripts: Script[]) => {
     adapter.scripts.push(...scripts);
     assert.equal(await app.worker.tick(), 'ran');

@@ -161,7 +161,7 @@ async function setupApp(t: { after: (fn: () => void) => void }, network: PageNet
   configure?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, ...(fetchImpl ? { fetch: fetchImpl } : {}), ...(now ? { now } : {}), adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ judgeAll: false, paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, ...(fetchImpl ? { fetch: fetchImpl } : {}), ...(now ? { now } : {}), adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));
