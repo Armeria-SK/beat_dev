@@ -84,7 +84,7 @@ export type RunEvent =
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: ChatMessage['role'] }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string; autoReason?: string }
-  // 自動承認の判定役に聞いている（checking）/ 判定役が許した（allowed。reason は判定役の短い理由）/ 判定役が確かめると言った・答えられなかった（asked。このあと承認の札が出る）
+  // 自動承認の判定役に聞いている（checking）/ 判定役が許した（allowed。reason は判定役の短い理由）/ 判定役が確かめると言った・答えられなかった（asked。このあと Pending に積む）
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }>; tainted: boolean }

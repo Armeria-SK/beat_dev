@@ -72,7 +72,7 @@ export interface PipelineDeps {
   autoClassify?: ((prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall) => Promise<string>) | undefined;
   // 判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）
   lastUserRequest?: (() => string) | undefined;
-  // この会話の実行が、よそから来た文を一度でも読んだことがあるか（会話ごとの印）。あれば、判定役に見せる文に「よそから来た文を読んだ会話」の 1 行を足す（判定役を慎重にするだけ。守りは humanOnlyOf）。渡さない・読めないときも、あるとみなす
+  // この会話の実行が、よそから来た文を一度でも読んだことがあるか（会話ごとの印）。あれば、判定役に見せる文に「よそから来た文を読んだ会話」の 1 行を足す。渡さない・読めないときも、あるとみなす
   conversationTainted?: (() => boolean) | undefined;
   // この会話で、自動承認の判定役が許可フォルダの外を読むのを一度でも許したか（会話ごとの印）。あれば、この会話のシェルのコマンドと通信の道具は、ずっと毎回確かめる。渡さない・読めないときも、あるとみなす
   conversationAutoRead?: (() => boolean) | undefined;
@@ -234,7 +234,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   }
   // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信、ファイルも書く道具）を使わせない（二重の禁止）
   if (ctx.kind === 'review' && !reviewAllows(tool)) return refuse('deny', 'registry', toolText(language, 'pipeline.review_forbidden', { name: call.name }));
-  // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。会話の許可・フックの allow では越えられない
+  // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。フックの allow では越えられない
   const policy = policyFor(tool.name, ctx, deps);
   if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
   // 手元のモデルの会話では、localOk でない MCP の道具を使わせない（モデルに渡す一覧からも外している。二重の拒否）
@@ -274,7 +274,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const outbound = decision === 'deny' ? undefined : outboundOfCall(tool, first, language);
   if (outbound?.kind === 'deny') return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: outbound.reason }));
   const tainted = ctx.taint.tainted || conversationTainted(deps);
-  // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる（札の理由と、自動承認の判定役に回してよい種類 taint のため。送る・消すは humanOnlyOf が別に止める）。拒否は拒否のまま
+  // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる。拒否は拒否のまま
   if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint || tool.writesFiles === true) && decision !== 'deny') {
     const sources = ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep'));
     if (ctx.kind === 'review') {
@@ -413,7 +413,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   finally { closeWindow?.(); }
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。
   // シェルのコマンドが外から取得する・外の中身を持ち込む（curl・Invoke-WebRequest・git clone・npm install など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）。
-  // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した（札・会話の許可）呼び出しも、動かしたら付ける。
+  // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した呼び出しも、動かしたら付ける。
   // 自動承認で外を読んだ会話の毎回の確かめ（afterAutoRead）は、ここで言う egress ではない（事前の判定の種類だけを見る）
   const approvedEgress = first?.decision === 'ask' && first.askKinds?.includes('egress') === true;
   // 結果が外の中身を持ち込んだと自分で言ったとき（output.fetched。実行してみないと分からない道具）も付ける。付ける向きにしか働かない。

