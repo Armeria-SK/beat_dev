@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import { WRAPPED_VALUE_FLAGS } from './code-guard.ts';
 import type { ShellKind, Word } from './shell-lex.ts';
 
@@ -6,6 +7,7 @@ export interface DeleteTarget { input: string; path?: string; wild: boolean }
 export interface StatementFacts {
   program: string;
   programDynamic: boolean;
+  programOdd: boolean;
   words: FactWord[];
   urls: Array<{ text: string; dynamic: boolean }>;
   env: string[];
@@ -36,6 +38,9 @@ function quote(w: Word | FactWord, ps: boolean): string {
 const joinWords = (words: readonly Word[], ps: boolean): string => words.map(w => quote(w, ps)).join(' ');
 const anyDynamic = (words: readonly Word[]): boolean => words.some(w => w.dynamic);
 
+const STDIN_SCRIPT = /^(?:-|\/dev\/stdin|\/dev\/fd\/0|\/proc\/self\/fd\/0)$/u;
+const XARGS_VALUES: ReadonlySet<string> = new Set([...WRAPPED_VALUE_FLAGS['xargs']!].filter(f => !['-i', '-l', '-e'].includes(f)));
+const PACKAGE_GLOBAL_VALUES = new Set(['--prefix', '-w', '--workspace', '-C', '--dir', '--filter', '-F', '--cwd', '--registry', '--userconfig', '--cache', '--loglevel']);
 const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/u;
 const POWERSHELL = /^(?:powershell|pwsh)$/u;
 const PS_VALUE_PARAMS = ['executionpolicy', 'windowstyle', 'inputformat', 'outputformat', 'version', 'configurationname', 'workingdirectory', 'settingsfile', 'custompipename', 'psconsolefile'];
@@ -63,7 +68,7 @@ function powershellCode(args: readonly Word[], stdin: boolean): InnerSource {
       const rest = args.slice(i + 1);
       return rest.length === 0 || anyDynamic(rest) ? null : { text: rest.map(x => x.text).join(' '), shell: 'powershell' };
     }
-    if (name === 'e' || name === 'ec' || (name.length >= 3 && 'encodedcommand'.startsWith(name))) {
+    if (name === 'e' || name === 'ec' || name.startsWith('en')) {
       const code = args[i + 1] && !args[i + 1]!.dynamic ? decodePs(args[i + 1]!.text) : null;
       return code === null ? null : { text: code, shell: 'powershell' };
     }
@@ -76,11 +81,20 @@ function powershellCode(args: readonly Word[], stdin: boolean): InnerSource {
 function shellCode(args: readonly Word[], stdin: boolean): InnerSource {
   const at = args.findIndex(w => !w.dynamic && /^-[A-Za-z]*c[A-Za-z]*$/u.test(w.text));
   if (at >= 0) {
-    const code = args[at + 1];
+    let j = at + 1;
+    while (j < args.length && !args[j]!.dynamic) {
+      const t = args[j]!.text;
+      if (t === '--') { j++; break; }
+      if (t === '-o' || t === '+o' || t === '-O' || t === '+O') { j += 2; continue; }
+      if (!/^[-+][A-Za-z]+$/u.test(t)) break;
+      j++;
+    }
+    const code = args[j];
     return !code || code.dynamic ? null : { text: code.text, shell: 'bash' };
   }
-  if (args.some(w => w.dynamic)) return null;
-  if (args.some(w => !w.text.startsWith('-'))) return undefined;
+  if (args.some(w => w.dynamic || /^-[A-Za-z]*s[A-Za-z]*$/u.test(w.text))) return null;
+  const script = args.find(w => !w.text.startsWith('-') || w.text === '-');
+  if (script) return STDIN_SCRIPT.test(script.text) ? null : undefined;
   return stdin ? null : undefined;
 }
 
@@ -88,12 +102,12 @@ function cmdCode(args: readonly Word[], stdin: boolean): InnerSource {
   const at = args.findIndex(w => /^\/[ckr]$/iu.test(w.text));
   if (at < 0) return stdin || args.length > 0 ? null : undefined;
   const rest = args.slice(at + 1);
-  if (rest.length === 0 || anyDynamic(rest) || rest.some(w => /[&|<>^%!()"]/u.test(w.text))) return null;
+  if (rest.length === 0 || anyDynamic(rest) || rest.some(w => /[&|<>^%!()"#;,=]/u.test(w.text))) return null;
   return { text: rest.map(w => w.text).join(' '), shell: 'bash' };
 }
 
 function wrapped(program: string, args: readonly Word[], ps: boolean, shell: ShellKind): InnerSource {
-  const valueFlags = WRAPPED_VALUE_FLAGS[program]!;
+  const valueFlags = program === 'xargs' ? XARGS_VALUES : WRAPPED_VALUE_FLAGS[program]!;
   let i = 0;
   while (i < args.length) {
     const a = args[i]!.text;
@@ -111,14 +125,16 @@ function wrapped(program: string, args: readonly Word[], ps: boolean, shell: She
 }
 
 function findExec(args: readonly Word[], shell: ShellKind): InnerSource {
-  const at = args.findIndex(w => /^-(?:exec|execdir|ok|okdir)$/u.test(w.text));
-  if (at < 0) return undefined;
-  const tokens: string[] = [];
-  for (const w of args.slice(at + 1)) {
-    if (w.text === ';' || w.text === '+') break;
-    tokens.push(w.text === '{}' ? PLACEHOLDER : quote(w, false));
+  const parts: string[] = [];
+  let tokens: string[] | undefined;
+  for (const w of args) {
+    if (tokens) {
+      if (w.text === ';' || w.text === '+') { if (!tokens.length) return null; parts.push(tokens.join(' ')); tokens = undefined; continue; }
+      tokens.push(w.text === '{}' ? PLACEHOLDER : quote(w, false));
+    } else if (/^-(?:exec|execdir|ok|okdir)$/u.test(w.text)) tokens = [];
   }
-  return tokens.length ? { text: tokens.join(' '), shell } : null;
+  if (tokens) { if (!tokens.length) return null; parts.push(tokens.join(' ')); }
+  return parts.length ? { text: parts.join(' ; '), shell } : undefined;
 }
 
 function envCommand(args: readonly Word[], shell: ShellKind): InnerSource {
@@ -143,7 +159,7 @@ function envCommand(args: readonly Word[], shell: ShellKind): InnerSource {
 }
 
 function prefixCommand(program: string, args: readonly Word[], ps: boolean, shell: ShellKind): InnerSource {
-  const VALUE: Record<string, ReadonlySet<string>> = { exec: new Set(['-a']), time: new Set(['-f', '-o', '--format', '--output']), setsid: new Set() , nohup: new Set(), command: new Set(), unbuffer: new Set(), chronic: new Set() };
+  const VALUE: Record<string, ReadonlySet<string>> = { exec: new Set(['-a']), time: new Set(['-f', '-o', '--format', '--output']), setsid: new Set(), nohup: new Set(), command: new Set(), unbuffer: new Set(), chronic: new Set(), winpty: new Set(), '!': new Set(), coproc: new Set(), start: new Set() };
   if (program === 'command' && args.some(w => w.text === '-v' || w.text === '-V')) return undefined;
   let i = 0;
   while (i < args.length && args[i]!.text.startsWith('-')) {
@@ -159,7 +175,7 @@ function packageExec(program: string, args: readonly Word[], shell: ShellKind): 
   const npx = program === 'npx' || program === 'pnpx';
   let i = 0;
   if (!npx) {
-    while (i < args.length && args[i]!.text.startsWith('-')) i++;
+    while (i < args.length && args[i]!.text.startsWith('-')) i += PACKAGE_GLOBAL_VALUES.has(args[i]!.text) ? 2 : 1;
     const sub = args[i]?.text;
     if (sub !== 'exec' && !(program === 'npm' && sub === 'x')) return undefined;
     i++;
@@ -215,11 +231,26 @@ function wslCommand(args: readonly Word[]): InnerSource {
   return null;
 }
 
-function submoduleForeach(words: readonly Word[]): InnerSource {
-  const at = words.findIndex(w => w.text === 'submodule');
-  if (at < 0 || words[at + 1]?.text !== 'foreach') return undefined;
-  const rest = words.slice(at + 2).filter(w => w.text !== '--recursive' && w.text !== '-q' && w.text !== '--quiet');
-  return rest.length === 0 || anyDynamic(rest) ? null : { text: rest.map(w => w.text).join(' '), shell: 'bash' };
+function gitInner(words: readonly Word[]): InnerSource {
+  const at = gitGlobalOf(words).length + 1;
+  const sub = words[at]?.text;
+  const args = words.slice(at + 1);
+  const raw = (rest: readonly Word[]): InnerSource => (rest.length === 0 || anyDynamic(rest) ? null : { text: rest.map(w => w.text).join(' '), shell: 'bash' });
+  if (sub === 'submodule') {
+    const fe = args.findIndex(w => !w.text.startsWith('-'));
+    if (fe < 0 || args[fe]!.text !== 'foreach') return undefined;
+    return raw(args.slice(fe + 1).filter(w => w.text !== '--recursive' && w.text !== '-q' && w.text !== '--quiet'));
+  }
+  if (sub === 'bisect') return args[0]?.text === 'run' ? raw(args.slice(1)) : undefined;
+  if (sub === 'difftool' || sub === 'mergetool') {
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i]!.text;
+      if (t === '-x' || t === '--extcmd') return raw(args.slice(i + 1, i + 2));
+      if (t.startsWith('--extcmd=')) return args[i]!.dynamic ? null : { text: t.slice(9), shell: 'bash' };
+      if (/^-x./u.test(t)) return args[i]!.dynamic ? null : { text: t.slice(2), shell: 'bash' };
+    }
+  }
+  return undefined;
 }
 
 export function innerSource(program: string, words: readonly Word[], shell: ShellKind, stdin: boolean): InnerSource {
@@ -232,9 +263,10 @@ export function innerSource(program: string, words: readonly Word[], shell: Shel
   if (program === 'find') return findExec(args, shell);
   if (WRAPPED_VALUE_FLAGS[program]) return wrapped(program, args, ps, shell);
   if (program === 'env') return envCommand(args, shell);
-  if (['exec', 'time', 'setsid', 'nohup', 'command', 'unbuffer', 'chronic'].includes(program)) return prefixCommand(program, args, ps, shell);
+  if (['exec', 'time', 'setsid', 'nohup', 'command', 'unbuffer', 'chronic', 'winpty', '!', 'coproc'].includes(program) || (program === 'start' && !ps)) return prefixCommand(program, args, ps, shell);
+  if (program === 'forfiles') return null;
   if (['npm', 'pnpm', 'yarn', 'npx', 'pnpx'].includes(program)) return packageExec(program, args, shell);
-  if (program === 'git') return submoduleForeach(words);
+  if (program === 'git') return gitInner(words);
   if (START_PROCESS.has(program) && (ps || program !== 'start')) return startProcess(args);
   if (program === 'wsl') return wslCommand(args);
   if (SPAWNERS_WITH_BLOCKS.has(program)) return words.some(w => w.kind === 'block') ? undefined : null;
@@ -252,9 +284,12 @@ export function inlineCode(program: string, words: readonly Word[]): { code: str
   const take = (w: Word | undefined): void => { if (w) { out.push(w.text); dynamic ||= w.dynamic; } else dynamic = true; };
   if (program === 'deno') { if (args[0]?.text === 'eval') take(args[1]); return { code: out, dynamic }; }
   if (AWK.test(program)) {
-    if (args.some(w => /^(?:-f|--file)/u.test(w.text))) return { code: [], dynamic: false };
     for (let i = 0; i < args.length; i++) {
       const t = args[i]!.text;
+      if (t === '-f' || t === '--file') { if (STDIN_SCRIPT.test(args[i + 1]?.text ?? '-') || args[i + 1]?.dynamic) dynamic = true; return { code: out, dynamic }; }
+      if (/^(?:-f.|--file=)/u.test(t)) { if (STDIN_SCRIPT.test(t.replace(/^(?:-f|--file=)/u, '')) || args[i]!.dynamic) dynamic = true; return { code: out, dynamic }; }
+      if (t === '-e' || t === '--source') { take(args[i + 1]); return { code: out, dynamic }; }
+      if (t.startsWith('--source=')) { out.push(t.slice(9)); dynamic ||= args[i]!.dynamic; return { code: out, dynamic }; }
       if (t === '--') { take(args[i + 1]); break; }
       if (t === '-F' || t === '-v') { i++; continue; }
       if (t.startsWith('-')) continue;
@@ -272,6 +307,7 @@ export function inlineCode(program: string, words: readonly Word[]): { code: str
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
     const t = w.text;
+    if (program === 'perl' && /^-[Mm]./u.test(t)) { out.push(t.slice(2)); dynamic ||= w.dynamic; continue; }
     const long = LONG_CODE[program]?.find(f => t === f || t.startsWith(`${f}=`));
     if (long) { if (t === long) take(args[++i]); else { out.push(t.slice(long.length + 1)); dynamic ||= w.dynamic; } continue; }
     const m = /^-([A-Za-z]+)(.*)$/su.exec(t);
@@ -294,4 +330,9 @@ export function gitGlobalOf(words: readonly Word[]): string[] {
     if (GIT_VALUE_GLOBALS.has(words[i]!.text) && words[i + 1]) out.push(words[++i]!.text);
   }
   return out;
+}
+
+export function programOdd(text: string, name: string): boolean {
+  const normal = posix.normalize(text.replaceAll('\\', '/')).replace(/[/. ]+$/u, '');
+  return (posix.basename(normal).toLowerCase().replace(/\.exe$/u, '')) !== name;
 }

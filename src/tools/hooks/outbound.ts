@@ -38,9 +38,9 @@ const FETCHERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3', 'pipx', '
 const SECRET_CHECKED = new Set([...ALWAYS_SEND, ...WEB_PROGRAMS, ...LOOKUP, 'gh', 'git', 'openssl', 'tailscale', 'hg', 'svn', ...FETCHERS]);
 const DELETE_PROGRAMS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'srm', 'del', 'erase', 'rd', 'remove-item', 'ri', 'clear-content', 'clc']);
 const INTERPRETERS = /^(?:node|nodejs|bun|deno|python[\d.]*|py|perl|ruby|php|awk|gawk|mawk|nawk)$/u;
-const NET_API = /\b(?:fetch|https?|net\.connect|tls\.connect|dgram|XMLHttpRequest|WebSocket|requests|urllib\d?|http\.client|socket|Net\.WebClient|HttpClient|Invoke-WebRequest|Invoke-RestMethod|undici|axios|curl|wget|smtplib|ftplib|file_get_contents|fsockopen|stream_socket_client|curl_\w+|Net::HTTP|open-uri|TCPSocket|IO::Socket|LWP|HTTP::Tiny)\b|\/inet\//iu;
+const NET_API = /\b(?:fetch|https?|net\.connect|tls\.connect|dgram|XMLHttpRequest|WebSocket|requests|urllib\d?|http\.client|socket|Net\.WebClient|HttpClient|Invoke-WebRequest|Invoke-RestMethod|undici|axios|curl|wget|smtplib|ftplib|file_get_contents|fsockopen|stream_socket_client|curl_\w+|Net::HTTP|open-uri|TCPSocket|IO::Socket|LWP|HTTP::Tiny|telnetlib|createConnection|http2)\b|\/inet\/|require\(\s*['"](?:node:)?(?:net|dns|tls|dgram|http2?|https)['"]|from\s+['"](?:node:)?(?:net|dns|tls|dgram|http2?|https)['"]/iu;
 const PROCESS_API = /\b(?:child_process|execSync|spawnSync|execFile\w*|spawn|exec|subprocess|os\.system|popen|Start-Process|Deno\.Command|Bun\.spawn|system|shell_exec|passthru|proc_open|getline)\b|`|\|\s*"/u;
-const DELETE_API = /\b(?:rmSync|rmdirSync|unlinkSync|unlink|rmdir|rm|rmtree|os\.remove|Remove-Item|Clear-Content|truncate)\b/u;
+const DELETE_API = /\b(?:rmSync|rmdirSync|unlinkSync|unlink|rmdir|rm|rmtree|os\.remove|removedirs|remove_tree|rm_rf|Remove-Item|Clear-Content|truncate)\b/u;
 const READ_METHODS = /^(?:get|head)$/iu;
 
 const GH_READS: Readonly<Record<string, ReadonlySet<string>>> = {
@@ -188,6 +188,14 @@ function uploadOf(st: StatementFacts): Hit | undefined {
 function interpreterHit(st: StatementFacts): Hit | undefined {
   const cmd = st.program;
   if (st.codeDynamic) return hit('send', 'send.inline_code', { cmd });
+  const loaders = ['--import', '--require', '-r', '--loader', '--experimental-loader'];
+  for (let i = 1; i < st.words.length; i++) {
+    const t = st.words[i]!.text;
+    const flag = loaders.find(l => t === l || t.startsWith(`${l}=`));
+    if (!flag) continue;
+    const value = t === flag ? st.words[i + 1] : { text: t.slice(flag.length + 1), dynamic: st.words[i]!.dynamic };
+    if (!value || value.dynamic || /^(?:data|https?):/iu.test(value.text)) return hit('send', 'send.inline_code', { cmd });
+  }
   for (const code of st.code) {
     if (NET_API.test(code) || PROCESS_API.test(code)) return hit('send', 'send.inline_code', { cmd });
     if (DELETE_API.test(code)) return hit('delete', 'delete.inline_code', { cmd });
@@ -258,6 +266,8 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
   const shortHas = (letter: string): boolean => args.some(a => /^-[a-zA-Z]+$/u.test(a) && a.includes(letter));
   const discard = (cmd: string): Hit => hit('delete', 'delete.git_discard', { cmd });
   if (GIT_PULLING.has(sub) && argWords.some(w => w.dynamic)) return hit('send', 'send.dynamic_target', { cmd: `git ${sub}` });
+  if (args.some(a => ['--upload-pack', '--receive-pack', '--exec'].some(n => longOption(a, n)))) return hit('send', 'send.git_unknown', { detail: `git ${sub}` });
+  if (sub === 'grep' && args.some(a => /^-O/u.test(a) || longOption(a, '--open-files-in-pager'))) return hit('send', 'send.git_unknown', { detail: 'git grep -O' });
   if (GIT_SENDERS.has(sub)) return hit('send', sub === 'send-email' || sub === 'imap-send' ? 'send.git_mail' : 'send.network_program', { cmd: `git ${sub}` });
   const positionals = args.filter(a => !a.startsWith('-'));
   switch (sub) {
@@ -298,6 +308,7 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
       if (has('--', '--force', '--patch', '--ours', '--theirs', '--merge', '--pathspec-from-file') || args.includes('-f') || args.includes('-p') || args.includes('.')) return discard('checkout');
       if (has('--orphan') || args.some(a => /^-[a-zA-Z]*[bB]/u.test(a))) return undefined;
       if (positionals.length >= 2) return discard('checkout');
+      if (positionals.length === 1 && (/[*?[]/u.test(positionals[0]!) || positionals[0]!.startsWith(':') || g.some(x => ['-C', '--git-dir', '--work-tree'].includes(x.split('=')[0]!)))) return discard('checkout');
       const one = argWords.find(w => !w.text.startsWith('-'));
       if (one && (one.glob || one.dynamic || st.cwd === null || existsSync(resolve(st.cwd, one.text)))) return discard('checkout');
       return undefined;
@@ -327,9 +338,9 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
 
 function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv, nested: boolean): Hit[] {
   const p = st.program;
-  if (st.programDynamic || nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
+  if (st.programDynamic || st.programOdd || (nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) || (p && before.some(definesCommand))) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
   if (st.inner === null) return [hit('send', 'send.unknown_command', { cmd: p })];
-  if (st.inner) return walk(st.inner, [...before, st], env, true);
+  if (st.inner) return [...walk(st.inner, [...before, st], env, true), ...[statementHit(st, before, env)].filter((h): h is Hit => !!h)];
   if (!p) return [];
   const one = statementHit(st, before, env);
   return one ? [one] : [];
@@ -363,8 +374,19 @@ function walk(list: readonly StatementFacts[], prior: readonly StatementFacts[],
 
 const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? [])]);
 
-const GIT_NETWORK = new Set([...GIT_PULLING, ...GIT_SENDERS, 'push', 'svn', 'p4', 'lfs', 'config']);
-const gitNetwork = (st: StatementFacts): boolean => st.gitGlobal.length > 0 || GIT_NETWORK.has(st.words[1]?.text ?? '') || st.words[1]?.dynamic === true;
+const GIT_NETWORK = new Set([...GIT_PULLING, ...GIT_SENDERS, 'push', 'svn', 'p4', 'lfs', 'config', 'archive', 'fetch-pack', 'bisect', 'difftool', 'mergetool', 'grep']);
+const gitNetwork = (st: StatementFacts): boolean => {
+  const sub = st.words[st.gitGlobal.length + 1];
+  return st.gitGlobal.length > 0 || !sub || sub.dynamic || GIT_NETWORK.has(sub.text) || !GIT_KNOWN.has(sub.text);
+};
+
+const ALIAS_PROGRAMS = new Set(['alias', 'set-alias', 'new-alias', 'sal', 'nal', 'import-alias', 'ipal']);
+const ITEM_PROGRAMS = new Set(['set-item', 'si', 'new-item', 'ni', 'copy-item', 'cpi', 'rename-item', 'rni']);
+function definesCommand(st: StatementFacts): boolean {
+  if (ALIAS_PROGRAMS.has(st.program)) return true;
+  if (ITEM_PROGRAMS.has(st.program) && st.words.some(w => /^(?:alias|function):/iu.test(w.text))) return true;
+  return st.shapes.some(s => s === 'function' || /^control:(?:function|filter|workflow)$/u.test(s));
+}
 
 const decoded = (text: string): string => {
   try { return decodeURIComponent(text); } catch { return text.replace(/%([0-9a-f]{2})/giu, (_, h: string) => String.fromCharCode(parseInt(h, 16))); }

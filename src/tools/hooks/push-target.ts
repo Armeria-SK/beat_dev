@@ -35,6 +35,7 @@ export function changesGit(st: StatementFacts): string | undefined {
   const p = st.program;
   const words = st.words.map(w => w.text);
   if (ENV_PROGRAMS.has(p)) return p;
+  if (p === 'env' && words.some(w => /^-[A-Za-z]*[iu]|^--(?:unset|ignore-environment)|^-$/u.test(w))) return 'env';
   if (p === 'printf' && words.includes('-v')) return 'printf -v';
   if (ENV_ITEM_PROGRAMS.has(p) && words.some(w => /^env:/iu.test(w) || /[\\/]?env:[\\/]?/iu.test(w))) return `${p} env:`;
   const shape = st.shapes.find(s => /^(?:static|method):|^dot_source$/u.test(s));

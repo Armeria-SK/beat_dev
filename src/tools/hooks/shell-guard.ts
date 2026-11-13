@@ -7,7 +7,7 @@ import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
 import { classifyStatements, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
 import { codeFindings } from './code-guard.ts';
-import { gitGlobalOf, inlineCode, innerSource, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
+import { gitGlobalOf, inlineCode, innerSource, programOdd, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
@@ -486,7 +486,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const stdin = st.pipedIn || st.redirects.some(r => STDIN_OPS.has(r.op));
     const inline = inlineCode(name, st.words);
     current = {
-      program: name, programDynamic: first?.dynamic ?? false, words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
+      program: name, programDynamic: first?.dynamic ?? false, programOdd: !!first && !first.dynamic && programOdd(first.text, name), words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
       urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
       env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: inline.code, codeDynamic: inline.dynamic,
       stdin, shapes: [...st.shapes], reasonKeys: result.reasons.map(r => r.id ?? r.key),
