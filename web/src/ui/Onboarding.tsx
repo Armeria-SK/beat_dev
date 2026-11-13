@@ -7,7 +7,7 @@ import { accessKey, accessWidening, keyEntryAccess, type Access } from '../setti
 import { deepEqual } from '../settings/merge.ts';
 import type { AgentState } from './agent-state.ts';
 import {
-  agentInput, canContinue, connectProblem, emptyConnect, listPlan, modelFormOf, nameInput, ONBOARD_STEPS, OPENAI_URL, PROVIDERS, REACHABLE, styleInput, STYLES,
+  agentInput, canContinue, connectProblem, emptyConnect, escapeAction, listPlan, modelFormOf, nameInput, ONBOARD_STEPS, OPENAI_URL, PROVIDERS, REACHABLE, styleInput, STYLES,
   type ConnectForm, type ProviderChoice, type StyleId,
 } from './onboarding-steps.ts';
 import { Avatar, Button, Pill } from './parts.tsx';
@@ -141,6 +141,12 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
   }
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      const action = escapeAction({ busy, confirming: widen !== null });
+      if (action !== 'close') e.preventDefault();
+      if (action === 'cancelConfirm') setWiden(null);
+      return;
+    }
     if (e.key !== 'Enter' || isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, textarea, .ui-confirm')) return;
