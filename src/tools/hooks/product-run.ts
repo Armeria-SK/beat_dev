@@ -13,6 +13,7 @@ export interface ProductRunInput {
   verdict: Pick<ShellVerdict, 'decision' | 'askKinds' | 'paths' | 'writes' | 'scripts' | 'statements' | 'reasonKeys'>;
   which: (name: string, cwd: string) => string | undefined;
   git: (dir: string, args: string[]) => string | undefined;
+  ownerHooks?: () => boolean;
 }
 
 export type ProductRunResult = { run: ProductRun } | { secret: string } | undefined;
@@ -128,6 +129,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     if (sub !== 'add' && sub !== 'commit') return undefined;
     const top = git(st.cwd!, ['rev-parse', '--show-toplevel'])?.trim();
     if (!top || !inside(root, resolve(top))) return undefined;
+    if (input.ownerHooks?.() !== false) return undefined;
     if (sub === 'add' && namesFilesOnly(st)) {
       const named = st.words.slice(2).filter(w => !w.text.startsWith('-')).map(w => w.text).find(name => isSecretPath(resolve(st.cwd!, name)) || COMMIT_SECRET.test(name.replace(/\\/gu, '/')));
       if (named !== undefined) return { secret: named };

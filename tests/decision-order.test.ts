@@ -416,6 +416,22 @@ test('4-3a 順 3: 包んだ形・中の文・.NET の呼び出しで守る場所
   for (const command of ['cat AGENTS.md', 'git status', 'ls .git']) assert.notEqual(r.waiting().length && (await r.shell(command)).decidedBy, 'pending', `読むだけは持ち主へ回さない: ${command}`);
 });
 
+test('4-3a 順 4 の 2 つ目: 持ち主の全体の git の設定（global・system）に core.hooksPath があれば、製品の中の git commit も判定役へ', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  writeFileSync(join(r.root, 'n.txt'), 'x');
+  assert.equal((await r.shell('git add n.txt')).decidedBy, 'product-git', '前提: 全体の設定が無ければ判定役を飛ばす');
+  const globalConfig = join(r.paths.workspace, 'global.gitconfig');
+  writeFileSync(globalConfig, '[core]\n\thooksPath = /owner/hooks\n');
+  const before = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = globalConfig;
+  t.after(() => { if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = before; });
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  const outcome = await r.shell('git commit -m x');
+  assert.notEqual(outcome.decidedBy, 'product-git', outcome.output.content);
+  assert.equal(r.judge.calls.length, 1);
+});
+
 test('4-3a 順 4 の 2 つ目の否定: フックのあるリポジトリ・git -c・外や上のリポジトリ・秘密らしいファイル・読めない語・ほかの git は乗らない', { skip: !gitAvailable && 'git が無い' }, async t => {
   r_hooks: {
     const r = rig(t);

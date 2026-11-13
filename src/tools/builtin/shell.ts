@@ -12,7 +12,7 @@ import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
-import { gitOutboundEnv, isolatedGit } from '../hooks/outbound-env.ts';
+import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
 import { protectedTouchOf } from '../hooks/protected-touch.ts';
@@ -147,6 +147,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     root: ctx.project.root, verdict,
     which: (name, dir) => findExecutable(name, childEnv, dir, { powershell }),
     git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project.root }) : () => undefined,
+    ownerHooks: () => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data),
   }) : undefined;
   const pushed = verdict.decision === 'ask' ? pushProtectOf({
     config: ctx.config, statements: verdict.statements, projectRoot: ctx.project?.root ?? undefined, productRoots: [], tainted: ctx.taint.tainted || ctx.conversationTainted?.() === true,
