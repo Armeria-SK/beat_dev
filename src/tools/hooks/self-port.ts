@@ -7,7 +7,8 @@ const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[^\]\s]+\]|[^\s:/\\?#@[\]=,;()<>|&*
 const PORT = /:(\d+)/gu;
 const HOST_TAIL = /[^\s/\\?#@]*$/u;
 const EXPANDING = /[{}[\]]/u;
-const IPV6_LITERAL = /^\[[^[\]]+\]$/u;
+const NUMBER_WORD = /^[0-9a-fx.]+$/iu;
+const IPV6_LITERAL =/^\[[^[\]]+\]$/u;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
 function loopbackHost(host: string): boolean {
@@ -58,7 +59,7 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
     if (!host) continue;
     const normal = normalHost(host);
     if (normal === undefined) continue;
-    if (hosts.includes(normal)) return whole;
+    if (hosts.includes(normal) && (scheme !== undefined || port !== undefined || !NUMBER_WORD.test(host))) return whole;
     const number = port !== undefined ? Number(port) : scheme ? DEFAULT_PORT[scheme.toLowerCase()] : undefined;
     if (number !== undefined && ports.has(number) && loopbackHost(normal)) return whole;
   }
