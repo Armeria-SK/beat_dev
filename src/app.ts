@@ -266,6 +266,7 @@ export class App {
     this.channels = new NotifyChannels({
       config: () => this.config(), env: this.env, fetch: options.fetch, now, log: this.log, kv: this.kv,
       alert: input => { this.notifications.notify(input); },
+      secrets: () => this.registry.secrets(),
     });
     this.notifications.listen(event => { void this.channels.deliver(event); });
     // 外の MCP サーバー（start() はふだん main.ts が呼ぶ。呼ぶまでは何もつながない）

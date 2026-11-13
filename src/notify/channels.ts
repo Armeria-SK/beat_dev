@@ -3,6 +3,7 @@ import type { KV } from '../db/kv.ts';
 import type { Env, FetchLike } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
 import { notifyText } from '../shared/messages/notify.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import { isSafeOutboundUrl } from '../shared/url.ts';
 import type { NotificationKind, NotifyEvent, NotifyInput } from './notifications.ts';
 
@@ -45,6 +46,7 @@ export interface NotifyChannelsOptions {
   kv: KV;
   // 送り先の失敗・上限を持ち主へ知らせる通知（外へは送らない印を付けて渡す）
   alert: (input: NotifyInput) => void;
+  secrets?: (() => readonly string[]) | undefined;
   // やり直しの待ち。試験で差し替える
   sleep?: ((ms: number) => Promise<void>) | undefined;
 }
@@ -139,7 +141,7 @@ export class NotifyChannels {
     const token = channel.tokenEnv ? this.#o.env[channel.tokenEnv] : undefined;
     if (token) headers.Authorization = `Bearer ${token}`;
     try {
-      const res = await this.#fetch(url, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(config.notify.limits.timeoutMs), headers, body: buildPayload(config, channel, n) });
+      const res = await this.#fetch(url, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(config.notify.limits.timeoutMs), headers, body: buildPayload(config, channel, n, this.#o.secrets?.() ?? []) });
       // 応答の本文は読まない（読まずに捨てる）
       void res.body?.cancel().catch(() => {});
       if (res.status >= 200 && res.status < 300) return { ok: true };
@@ -170,11 +172,11 @@ export class NotifyChannels {
 }
 
 // 送る中身。キーの順は固定
-export function buildPayload(config: AppConfig, channel: NotifyChannelConfig, n: NotifyEvent): string {
-  const title = n.title;
-  const body = channel.includeBody && n.body ? n.body.slice(0, NOTIFY_BODY_MAX_CHARS) : undefined;
+export function buildPayload(config: AppConfig, channel: NotifyChannelConfig, n: NotifyEvent, secrets: readonly string[] = []): string {
+  const title = redactSecrets(n.title, secrets);
+  const body = channel.includeBody && n.body ? redactSecrets(n.body, secrets).slice(0, NOTIFY_BODY_MAX_CHARS) : undefined;
   const base = config.notify.publicBaseUrl.replace(/\/+$/u, '');
-  const link = base !== '' && n.link?.startsWith('#/') ? `${base}/${n.link}` : undefined;
+  const link = base !== '' && n.link?.startsWith('#/') ? `${base}/${redactSecrets(n.link, secrets)}` : undefined;
   const make = (t: string, b: string | undefined): string => JSON.stringify({
     source: 'beat', version: 1, kind: n.kind, title: t,
     ...(b === undefined ? {} : { body: b }), ...(link === undefined ? {} : { link }),
