@@ -67,7 +67,8 @@ export function planKey(provider: Record<string, any> | undefined, confirmedKey:
 
 export function mergeRawConfig(loaded: Config, edited: Config, latest: Config): { config: Config; conflicts: string[] } {
   const merged = applyEdits(latest, diffConfig(loaded, edited));
-  return { config: merged.config, conflicts: merged.conflicts.map(c => c.path) };
+  const conflicts = merged.conflicts.map(c => c.path);
+  return { config: conflicts.length > 0 ? latest : merged.config, conflicts };
 }
 
 export function parseRawConfig(text: string): Config | null {
