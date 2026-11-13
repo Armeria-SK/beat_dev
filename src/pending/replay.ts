@@ -183,8 +183,6 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const now = destinationFacts(row.cwd, state.places ?? []);
       if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
     }
-    if (state.pushed !== undefined && (state.pushed.startsWith(PUSH_UNCONFIRMED) || pushedNow?.startsWith(PUSH_UNCONFIRMED))) return end('stale', pendingText('en', 'push_unconfirmed'));
-    if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', 'changed_commits'));
     if (state.filesMore) return end('stale', pendingText('en', 'files_unbound'));
     if (state.sent?.length) {
       const now = boundFacts(state.sent.map(f => f.path));
@@ -199,6 +197,8 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');
       return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });
     }
+    if (state.pushed !== undefined && (state.pushed.startsWith(PUSH_UNCONFIRMED) || pushedNow?.startsWith(PUSH_UNCONFIRMED))) return end('stale', pendingText('en', 'push_unconfirmed'));
+    if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', 'changed_commits'));
 
     const started = Date.now();
     let output: ToolOutput;

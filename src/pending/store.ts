@@ -261,8 +261,9 @@ export class PendingStore {
       const fact = boundFacts([path])[0]!;
       return [{ path, id, ...(fact.type === 'dir' ? { inside: fact.hash ?? '', ...(fact.more ? { more: true as const } : {}) } : {}) }];
     });
-    const sends = input.kind === 'send' || input.outbound?.kind === 'send';
-    const pushes = input.pushes?.length ? input.pushes : sends && inspectRepo(input.cwd).found ? [{ dir: input.cwd }] : [];
+    const outward = (kind: string | undefined): boolean => kind === 'send' || kind === 'delete';
+    const leaves = outward(input.kind) || outward(input.outbound?.kind);
+    const pushes = input.pushes?.length ? input.pushes : leaves && inspectRepo(input.cwd).found ? [{ dir: input.cwd }] : [];
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {

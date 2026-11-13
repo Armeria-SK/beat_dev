@@ -528,6 +528,17 @@ test('承認（W1-11 改）: 何のコマンドか分からない送り（別名
   assert.match(outcome.output ?? '', /commits it would push changed/u);
 });
 
+test('承認（W1-11 改）: 消すと何のコマンドか分からない送り（別名の git）を 1 つのコマンドで積んだ消すの行も、作業フォルダのリポジトリを控え、積んだあとにブランチが動いたら stale', { skip: !gitAvailable }, async t => {
+  const { r, late, park, q } = pushRig(t);
+  const command = `${WINDOWS ? 'Remove-Item -Recurse -Force dist' : 'rm -rf dist'}${AND}${ALIAS_PUSH.replace('{U}', q)}`;
+  const row = await park(command);
+  assert.equal(row.kind, 'delete');
+  late('main');
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'stale', outcome.output);
+  assert.match(outcome.output ?? '', /commits it would push changed/u);
+});
+
 test('承認（W1-11 改）: 何のコマンドか分からない送り（別名の git）は、何も動かなければ動く（対照）', { skip: !gitAvailable }, async t => {
   const { r, park, q } = pushRig(t);
   const row = await park(ALIAS_PUSH.replace('{U}', q));
