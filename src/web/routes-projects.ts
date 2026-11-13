@@ -121,10 +121,10 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 200, { project: projectWire(app, updated) });
   });
 
-  const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => ({
-    ...view,
-    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId),
-  });
+  const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => {
+    const chats = app.engine.activeRuns().filter(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId);
+    return { ...view, writing: chats.some(r => r.mode === 'plan'), reviewLocked: chats.length > 0 };
+  };
   const planned = <T>(work: () => T): T => {
     try { return work(); } catch (error) {
       if (error instanceof PlanError) throw domainProblem(error.code === 'changed' || error.code === 'writing' ? 409 : 400, 'plan', error);
@@ -158,7 +158,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
     const baseHash = requireString(body, 'baseHash', { max: 128 })!;
-    if (planWire(project.id).writing) planned(() => { throw new PlanError('writing'); });
+    if (planWire(project.id).reviewLocked) planned(() => { throw new PlanError('writing'); });
     const view = planned(() => app.plans.review(project.id, baseHash));
     app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: view.hash, by: 'owner' });
     sendJson(res, 200, { plan: planWire(project.id, view) });

@@ -6,7 +6,7 @@ import { hasUnsavedEdits, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved
 
 // Plan の欄（beat 3-1a-u）。画面を持たない決まり: 状態の決め方・書きかけ・保存の結果（web/src/ui/plan.ts）。
 
-const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan\n\nStep one.', hash: 'h1', updated_at: 1000, updated_by: 'ai', tainted: false, writing: false, ...over });
+const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan\n\nStep one.', hash: 'h1', updated_at: 1000, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, ...over });
 
 test('ui/plan: 状態は 読み込み中 / 計画書が無い / 書いている最中 / 読める / 読めない', () => {
   assert.equal(planState(null, false), 'loading');
@@ -14,7 +14,7 @@ test('ui/plan: 状態は 読み込み中 / 計画書が無い / 書いている�
   assert.equal(planState(doc({ content: null, hash: null }), false), 'empty');
   assert.equal(planState(doc({ content: '' }), false), 'empty', '空の文書は無いのと同じ');
   assert.equal(planState(doc({ writing: true }), false), 'writing');
-  assert.equal(planState(doc({ content: null, writing: true }), false), 'writing', 'まだ 1 字も無くても、製品の会話が動いていれば書いている最中');
+  assert.equal(planState(doc({ content: null, writing: true }), false), 'writing', 'まだ 1 字も無くても、計画モードの会話が動いていれば書いている最中');
   assert.equal(planState(doc(), false), 'ready');
 });
 
@@ -119,9 +119,12 @@ test('ui/plan: その製品の会話で動いている実行の数（変われ�
 });
 
 test('ui/plan: Mark as reviewed は、読むモードで印のある計画書のときだけ出し、書いている最中と送っている最中は押せない', () => {
-  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h1', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, ...extra });
+  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h1', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, reviewLocked: false, ...extra });
   assert.equal(reviewButton(doc(), 'read', false, false), 'on');
   assert.equal(reviewButton(doc({ writing: true }), 'read', false, false), 'off', '書いている最中は押せない');
+  assert.equal(reviewButton(doc({ reviewLocked: true }), 'read', false, false), 'off', 'Normal の会話が動いているあいだも押せない（plan_write はどのモードでも使える）');
+  assert.equal(planState(doc({ reviewLocked: true }), false), 'ready', 'Normal の会話では「書いている最中」にしない');
+  assert.equal(canEdit(planState(doc({ reviewLocked: true }), false)), true, 'Edit と Build は使える');
   assert.equal(reviewButton(doc(), 'read', true, false), 'off');
   assert.equal(reviewButton(doc(), 'edit', false, false), 'hidden', '直しているあいだは出さない');
   assert.equal(reviewButton(doc({ tainted: false }), 'read', false, false), 'hidden');
@@ -139,7 +142,7 @@ test('ui/plan: 読み始めた計画書のハッシュを覚え、途中で計�
 });
 
 test('ui/plan: 「読み直して」が出ているあいだの 1 回目の押しは何も送らず、印を下ろして今の版を覚えるだけ。送るのは読み直したあとの 2 回目', () => {
-  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h2', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, ...extra });
+  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h2', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, reviewLocked: false, ...extra });
   const changed = reviewSeen(reviewSeen({ hash: null, changed: false }, 'h1'), 'h2');
   assert.equal(reviewButton(doc(), 'read', false, changed.changed), 'again', '押す前から「読み直した」の形にする');
   assert.equal(reviewButton(doc({ writing: true }), 'read', false, true), 'off');

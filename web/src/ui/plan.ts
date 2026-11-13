@@ -21,7 +21,7 @@ export type ReviewButton = 'hidden' | 'off' | 'again' | 'on';
 
 export function reviewButton(doc: PlanDoc | null, mode: 'read' | 'edit', busy: boolean, changed: boolean): ReviewButton {
   if (!doc?.tainted || !doc.hash || mode !== 'read') return 'hidden';
-  if (doc.writing || busy) return 'off';
+  if (doc.writing || doc.reviewLocked || busy) return 'off';
   return changed ? 'again' : 'on';
 }
 

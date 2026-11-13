@@ -57,7 +57,7 @@ export interface JudgedCounts { allowed: number; parked: Partial<Record<PendingK
 export interface PendingCounts { waiting: number; byProject: Record<string, number>; acceptanceChanges: Record<string, number>; judgedToday: { allowed: number; parked: number } }
 export interface PendingQuery { status: 'waiting' | 'decided'; project?: string; before?: number; earlier?: true }
 export interface PlanDoc {
-  content: string | null; hash: string | null; updated_at: number | null; updated_by: 'ai' | 'owner' | 'outside' | null; tainted: boolean; writing: boolean;
+  content: string | null; hash: string | null; updated_at: number | null; updated_by: 'ai' | 'owner' | 'outside' | null; tainted: boolean; writing: boolean; reviewLocked: boolean;
 }
 export type AcceptanceSource =
   | { kind: 'owner_words'; quote: string; context?: string; messageId?: number; conversationId?: string }

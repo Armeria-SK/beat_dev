@@ -157,7 +157,7 @@ test('4-K 確かめ（本物の App）: reviewed を押す → tainted が消え
   const before = s.events.filter(e => e.type === 'plan.changed').length;
   const done = await s.json(`/api/projects/${product.id}/plan/reviewed`, 'POST', { baseHash: current.hash });
   assert.equal(done.status, 200, JSON.stringify(done.body));
-  assert.deepEqual(Object.keys(done.body.plan).sort(), ['content', 'hash', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.deepEqual(Object.keys(done.body.plan).sort(), ['content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
   assert.equal(done.body.plan.tainted, false);
   assert.equal((await s.plan(product.id)).tainted, false);
   assert.deepEqual(s.events.filter(e => e.type === 'plan.changed').slice(before), [{ type: 'plan.changed', projectId: product.id, hash: current.hash, by: 'owner' }]);
@@ -191,18 +191,18 @@ test('4-4 印を外す口: 計画モードの会話が計画書を書いてい�
   assert.equal(after.status, 200, '書き終われば外せる');
 });
 
-test('4-4 印を外す口: plan_write はどのモードの会話でも使えるので、Normal（auto）の会話が動いているあいだも writing で 409 plan.writing', async t => {
+test('4-4 印を外す口: plan_write はどのモードの会話でも使えるので、Normal（auto）の会話が動いているあいだも reviewLocked で 409 plan.writing。writing（書いている最中・Edit と Build を止める）は計画モードだけで、Normal では立てない', async t => {
   const s = await setup(t);
   const product = await s.product('normal');
   await s.taintedAiPlan(product.id, uuid(66), '# Plan by AI');
   const current = await s.plan(product.id);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  let seen: { writing: boolean; status: number; code?: string } | null = null;
+  let seen: { writing: boolean; reviewLocked: boolean; status: number; code?: string } | null = null;
   s.adapter().scripts = [async function* () {
     const plan = await s.json(`/api/projects/${product.id}/plan`, 'GET');
     const got = await s.json(`/api/projects/${product.id}/plan/reviewed`, 'POST', { baseHash: current.hash });
-    seen = { writing: plan.body.plan.writing, status: got.status, code: got.body.code };
+    seen = { writing: plan.body.plan.writing, reviewLocked: plan.body.plan.reviewLocked, status: got.status, code: got.body.code };
     await gate;
     yield { type: 'text', delta: 'done' };
     yield { type: 'done', stop: 'end_turn' as StopReason };
@@ -212,9 +212,9 @@ test('4-4 印を外す口: plan_write はどのモードの会話でも使える
   while (!seen) await new Promise(r => setTimeout(r, 5));
   release();
   await settled(s.app, sent.body.runId);
-  assert.deepEqual(seen, { writing: true, status: 409, code: 'plan.writing' });
+  assert.deepEqual(seen, { writing: false, reviewLocked: true, status: 409, code: 'plan.writing' });
   assert.equal((await s.plan(product.id)).tainted, true);
-  assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'GET')).body.plan.writing, false, '終われば writing は false');
+  assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'GET')).body.plan.reviewLocked, false, '終われば reviewLocked は false');
 });
 
 test('4-K 印を外す口: しまった製品は 400 で印が残る', async t => {

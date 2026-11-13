@@ -321,11 +321,11 @@ test('3-1a 計画書の口: GET は無い間は空の形、PUT は baseHash が�
   assert.equal(shop.has_plan, false);
   const empty = await s.json(`/api/projects/${shop.id}/plan`, 'GET');
   assert.equal(empty.status, 200);
-  assert.deepEqual(empty.body, { plan: { content: null, hash: null, updated_at: null, updated_by: null, tainted: false, writing: false } });
+  assert.deepEqual(empty.body, { plan: { content: null, hash: null, updated_at: null, updated_by: null, tainted: false, writing: false, reviewLocked: false } });
 
   const put = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan\nv1', baseHash: null });
   assert.equal(put.status, 200);
-  assert.deepEqual(Object.keys(put.body.plan).sort(), ['content', 'hash', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.deepEqual(Object.keys(put.body.plan).sort(), ['content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
   assert.equal(put.body.plan.updated_by, 'owner');
   assert.equal(put.body.plan.hash, sha('# Plan\nv1'));
   assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, hash: sha('# Plan\nv1'), by: 'owner' }]);
@@ -389,7 +389,7 @@ test('3-1a 計画書の口: AI の plan_write で plan.changed（by ai）、計�
   await settled(s.app, sent.body.runId);
   assert.deepEqual(seen, [true]);
   const after = (await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan;
-  assert.deepEqual({ ...after, updated_at: 0 }, { content: '# Plan by AI', hash: sha('# Plan by AI'), updated_at: 0, updated_by: 'ai', tainted: false, writing: false });
+  assert.deepEqual({ ...after, updated_at: 0 }, { content: '# Plan by AI', hash: sha('# Plan by AI'), updated_at: 0, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false });
   assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, hash: sha('# Plan by AI'), by: 'ai' }]);
 
   const upload = await (await s.api('/api/uploads?name=notes.txt', { method: 'POST', body: 'outside text', headers: { 'Content-Type': 'text/plain' } })).json() as { upload: { id: string } };
@@ -497,7 +497,7 @@ test('3-1a 審査 C1: 名前の付け替えが EPERM / EBUSY / EACCES で一時�
   assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT)), ['plan.md']);
 });
 
-test('3-1a 審査 C2: 計画モードで始めた実行は、途中で会話を自動承認に戻しても writing（4-4 からはモードを問わず、製品の会話が動いていれば writing）', async t => {
+test('3-1a 審査 C2: writing は実行に効いているモードで決まる（計画モードで始めた実行は、途中で会話を自動承認に戻しても writing）', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   let release!: () => void;
@@ -529,7 +529,7 @@ test('3-1a 審査 C3: 同じ中身の書き直しは控えも plan.changed も�
   const first = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: null });
   const again = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: first.body.plan.hash });
   assert.equal(again.status, 200);
-  assert.deepEqual(Object.keys(again.body.plan).sort(), ['content', 'hash', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.deepEqual(Object.keys(again.body.plan).sort(), ['content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
   assert.equal(s.events.filter(e => e.type === 'plan.changed').length, 1, 'PUT も同じ中身なら流さない');
   const f = storeFixture(t);
   assert.equal(f.store.write(PROJECT, 'x', AI).changed, true);
