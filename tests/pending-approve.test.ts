@@ -437,9 +437,10 @@ test('承認（W1-11）: 積んだ git push の行は、積んだあとにコミ
 
 function pushRig(t: { after: (fn: () => void) => void }) {
   const r = rig(t);
-  const git = (...args: string[]) => {
+  const git = (...args: string[]): string => {
     const out = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: r.ws, encoding: 'utf8' });
     assert.equal(out.status, 0, out.stderr);
+    return out.stdout.trim();
   };
   const remote = join(tempDir(t), 'remote.git');
   spawnSync('git', ['init', '-q', '--bare', remote]);
@@ -491,13 +492,56 @@ for (const [name, template, branch] of LATE_CASES) {
   });
 }
 
-test('承認（W1-11 改）: 何も動かなければ、積んだ git push は承認で動く。追跡用の refs/remotes が動いても（裏の fetch）stale にしない（対照）', { skip: !gitAvailable }, async t => {
+test('承認（W1-11 改）: 何も動かなければ、積んだ git push は承認で動く（対照）', { skip: !gitAvailable }, async t => {
+  const { r, park, q } = pushRig(t);
+  const row = await park(`git push --force-with-lease ${q} feature`);
+  const outcome = await r.approve(row.id);
+  assert.equal(outcome.status, 'ran', outcome.output);
+});
+
+test('承認（W1-11 改）: 追跡用の refs/remotes が積んだあとに動いても stale（どの ref も push で名指しできる）', { skip: !gitAvailable }, async t => {
   const { r, git, park, q } = pushRig(t);
   const row = await park(`git push --force-with-lease ${q} feature`);
   git('update-ref', 'refs/remotes/other/side', 'HEAD');
   const outcome = await r.approve(row.id);
-  assert.equal(outcome.status, 'ran', outcome.output);
+  assert.equal(outcome.status, 'stale', outcome.output);
 });
+
+type Git = (...args: string[]) => string;
+const moveRef = (git: Git, ref: string): void => {
+  git('update-ref', ref, git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'moved after parking'));
+};
+const ANY_REF_CASES: Array<[string, (git: Git) => void, string, (git: Git) => void, RegExp]> = [
+  ['refs/remotes の ref を送る', git => git('update-ref', 'refs/remotes/origin/feature', 'HEAD'), 'git push {U} refs/remotes/origin/feature:refs/heads/main', git => moveRef(git, 'refs/remotes/origin/feature'), /commits it would push changed/u],
+  ['stash@{0}', git => { writeFileSync(join(git('rev-parse', '--show-toplevel'), 'a.txt'), 'stashed'); git('stash', '-q'); }, 'git push {U} "stash@{0}:refs/heads/x"', () => undefined, /could not confirm what the push would send/u],
+  ['refs/notes/commits', git => git('notes', 'add', '-m', 'one', 'HEAD'), 'git push {U} refs/notes/commits', git => git('notes', 'add', '-f', '-m', 'two', 'HEAD'), /commits it would push changed/u],
+  ['独自の名前空間の ref', git => git('update-ref', 'refs/beat/x', 'HEAD'), 'git push {U} refs/beat/x:refs/heads/x', git => moveRef(git, 'refs/beat/x'), /commits it would push changed/u],
+  ['独自の名前空間 refs/keep', git => git('update-ref', 'refs/keep/feat', 'HEAD'), 'git push {U} refs/keep/feat:refs/heads/feat', git => moveRef(git, 'refs/keep/feat'), /commits it would push changed/u],
+  ['FETCH_HEAD（積んだあとに git fetch）', git => {
+    const url = git('config', '--get', 'remote.other.url');
+    git('push', '-q', url, 'feature');
+    git('fetch', '-q', url, 'feature');
+  }, 'git push {U} FETCH_HEAD:refs/heads/feat', git => {
+    const url = git('config', '--get', 'remote.other.url');
+    git('push', '-q', url, `${git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'upstream moved')}:refs/heads/feature`);
+    git('fetch', '-q', url, 'feature');
+  }, /commits it would push changed/u],
+  ['HEAD@{1}', () => undefined, 'git push {U} "HEAD@{1}:refs/heads/x"', () => undefined, /could not confirm what the push would send/u],
+  ['--recurse-submodules=on-demand', () => undefined, 'git push --recurse-submodules=on-demand {U} feature', () => undefined, /could not confirm what the push would send/u],
+];
+
+for (const [name, setup, template, move, message] of ANY_REF_CASES) {
+  test(`承認（W1-11 最終）: push が名指しできるどの ref も控え、決められない形は確かめられない: ${name}`, { skip: !gitAvailable }, async t => {
+    const { r, git, park, q } = pushRig(t);
+    git('remote', 'add', 'other', JSON.parse(q));
+    setup(git);
+    const row = await park(template.replace('{U}', q));
+    move(git);
+    const outcome = await r.approve(row.id);
+    assert.equal(outcome.status, 'stale', outcome.output);
+    assert.match(outcome.output ?? '', message);
+  });
+}
 
 const UNPINNED_CASES: Array<[string, string]> = [
   ['--git-dir', 'git --git-dir=.git push {U} feature'],

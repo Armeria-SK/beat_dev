@@ -202,6 +202,7 @@ async function gitFact(cwd: string, dataDir: string): Promise<GitFact | null> {
 }
 
 export const PUSH_UNCONFIRMED = 'unconfirmed:';
+const PSEUDO_REFS = ['FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'];
 
 export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null }>, dataDir: string): Promise<string> {
   const never = (): string => `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}`;
@@ -211,8 +212,11 @@ export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null }>, d
     const line = await withGit<string | null>(dir, dataDir, `${dir}\0no-repo`, null, async git => {
       const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
       const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
-      const refs = await git(['for-each-ref', '--format=%(objectname) %(refname)', 'refs/heads', 'refs/tags']);
-      return refs === null ? null : `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).digest('hex')}`;
+      const refs = await git(['for-each-ref', '--format=%(objectname) %(refname)']);
+      if (refs === null) return null;
+      const pseudo: string[] = [];
+      for (const name of PSEUDO_REFS) pseudo.push(`${name} ${(await git(['rev-parse', '--verify', '-q', '--end-of-options', name]))?.trim() || 'absent'}`);
+      return `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).update(pseudo.join('\n')).digest('hex')}`;
     });
     if (line === null) return never();
     lines.push(line);

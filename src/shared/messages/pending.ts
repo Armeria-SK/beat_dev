@@ -58,7 +58,7 @@ const en = {
   'changed_target': 'Not run: where it sends or what it deletes changed after it was parked:\n- before: {before}\n- now: {now}',
   'changed_commits': 'Not run: the commits it would push changed after it was parked (a commit was added or a branch moved). Ask again so the owner sees what will be sent.',
   'push_unconfirmed': 'Not run: beat could not confirm what the push would send (it could not tell which repository the git command uses, or could not read that repository). Run it yourself if you want it sent.',
-  'files_unbound':'Not run: it reads or sends more files than beat could record when it was parked, so beat cannot check that they are unchanged. Split it into smaller steps.',
+  'files_unbound': 'Not run: it reads or sends more files than beat could record when it was parked, so beat cannot check that they are unchanged. Split it into smaller steps.',
   'changed_files': 'Not run: the files it reads or sends changed after it was parked:\n{changes}',
   'note_ran': '[beat] The owner approved Pending #{id} ({tool}) and it ran (exit code {code}).',
   'note_failed': '[beat] The owner approved Pending #{id} ({tool}), but it failed or did not run.',

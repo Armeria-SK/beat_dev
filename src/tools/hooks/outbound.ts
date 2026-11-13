@@ -472,8 +472,22 @@ export function pushesOf(statements: readonly StatementFacts[]): RepoBind[] {
     if (st.program !== 'git') return;
     const found = gitHit(st, before, NO_GIT);
     if (!found || (found.kind !== 'send' && found.key !== 'delete.git_remote_branch')) return;
-    out.push({ dir: found.key === 'send.git_unknown' ? null : pushRepo(st, before) });
+    out.push({ dir: found.key === 'send.git_unknown' || pushUnconfirmable(st) ? null : pushRepo(st, before) });
   });
   visit(statements, []);
   return out;
+}
+
+const RECURSE_PINNED = new Set(['no', 'check']);
+
+function pushUnconfirmable(st: StatementFacts): boolean {
+  const subAt = st.gitGlobal.length + 1;
+  if (st.words[subAt]?.text !== 'push') return false;
+  const args = st.words.slice(subAt + 1);
+  return args.some((w, i) => {
+    if (w.text.includes('@{')) return true;
+    if (!longOption(w.text, '--recurse-submodules')) return false;
+    const at = w.text.indexOf('=');
+    return !RECURSE_PINNED.has(at >= 0 ? w.text.slice(at + 1) : args[i + 1]?.text ?? '');
+  });
 }
