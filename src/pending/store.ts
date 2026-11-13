@@ -57,7 +57,7 @@ export interface PendingRow {
 }
 
 export interface PendingView {
-  id: number; tool: string; title: string; shown: string; masked: number; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
+  id: number; tool: string; title: string | null; shown: string; masked: number; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
   preview: PreviewFile[]; files: PathFact[]; effect: PendingEffect | null; fetched: boolean; run_kind: string; conversation_id: string; task_id: string | null; task_title: string | null;
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
@@ -72,6 +72,7 @@ export interface PendingFilter {
   conversation?: string | undefined;
   before?: number | undefined;
   since?: number | undefined;
+  until?: number | undefined;
   limit?: number | undefined;
 }
 
@@ -247,7 +248,7 @@ export class PendingStore {
     const task = row.task_id ? this.#db.prepare('SELECT title FROM tasks WHERE id = ?').get(row.task_id) as { title: string } | undefined : undefined;
     const project = row.project_id ? this.#db.prepare('SELECT name FROM projects WHERE id = ?').get(row.project_id) as { name: string } | undefined : undefined;
     return {
-      id: row.id, tool: row.tool, title: state.title ?? '', shown: row.shown, masked: row.masked, cwd: row.cwd, kind: row.kind, reason: row.reason, checks: parseJson<string[]>(row.checks, []),
+      id: row.id, tool: row.tool, title: state.title ?? null, shown: row.shown, masked: row.masked, cwd: row.cwd, kind: row.kind, reason: row.reason, checks: parseJson<string[]>(row.checks, []),
       preview: state.preview ?? [], files: fileFacts(parseJson<string[]>(row.files, [])),
       effect: row.kind === 'delete' ? effectOf(state.snapshot) : null, fetched: state.fetched === true,
       run_kind: row.run_kind, conversation_id: row.conversation_id,
@@ -268,7 +269,8 @@ export class PendingStore {
         if (!cursor) return [];
         where.push('(decided_at < ? OR (decided_at = ? AND id < ?))');
         args.push(cursor.decided_at, cursor.decided_at, filter.before);
-      } else if (filter.since !== undefined) { where.push('decided_at >= ?'); args.push(filter.since); }
+      } else if (filter.until !== undefined) { where.push('decided_at < ?'); args.push(filter.until); }
+      else if (filter.since !== undefined) { where.push('decided_at >= ?'); args.push(filter.since); }
     }
     if (filter.project !== undefined) { where.push('project_id = ?'); args.push(filter.project); }
     if (filter.task !== undefined) { where.push('task_id = ?'); args.push(filter.task); }

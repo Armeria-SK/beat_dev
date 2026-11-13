@@ -146,3 +146,24 @@ test('起動のとき、前回動いている途中だった行を failed にす
     assert.match(after.output_preview ?? '', /stopped while this was running/u);
   } finally { second.close(); }
 });
+
+test('GET /api/pending?status=decided&earlier=1: 今日決めた行が無くても、昨日までの分を返す', async t => {
+  let clock = Date.UTC(2026, 10, 12, 12);
+  const runs: string[] = [];
+  const s = await startApp(t, { tools: [...builtinTools(), slowTool(runs)], now: () => clock, configure: config => { config.timezone = 'UTC'; } });
+  const conversation = s.app.conversations.create({ title: 'c' });
+  const park = () => s.app.pending.park({ tool: 'fake_slow', input: { text: 'x' }, cwd: s.paths.workspace, kind: 'owner', reason: 'r', runId: 'run-1', runKind: 'chat', conversationId: conversation.id });
+  const a = await park();
+  const b = await park();
+  s.app.pending.reject(a.id);
+  s.app.pending.reject(b.id);
+  clock = Date.UTC(2026, 10, 13, 9);
+  const today = await s.json('/api/pending?status=decided', 'GET');
+  assert.deepEqual(today.body.items, []);
+  const earlier = await s.json('/api/pending?status=decided&earlier=1', 'GET');
+  assert.deepEqual(earlier.body.items.map((i: { id: number }) => i.id), [b.id, a.id]);
+  const next = await s.json(`/api/pending?status=decided&before=${b.id}`, 'GET');
+  assert.deepEqual(next.body.items.map((i: { id: number }) => i.id), [a.id]);
+  assert.deepEqual(Object.keys(earlier.body.items[0]).filter((k: string) => k === 'title' || k === 'effect'), ['title', 'effect']);
+  assert.equal(earlier.body.items[0].effect, null);
+});

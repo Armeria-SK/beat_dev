@@ -26,10 +26,11 @@ export function registerPendingRoutes(router: Router, app: App): void {
     const status = text(url, 'status') ?? 'waiting';
     if (status !== 'waiting' && status !== 'decided') throw domainProblem(400, 'invalid_field', new PendingError('invalid_status'));
     const before = text(url, 'before');
+    const earlier = text(url, 'earlier') === '1';
     sendJson(res, 200, {
       items: app.pending.list({
         status, project: text(url, 'project'), task: text(url, 'task'), conversation: text(url, 'conversation'),
-        ...(before !== undefined ? { before: idOf(before) } : { since: today() }),
+        ...(before !== undefined ? { before: idOf(before) } : earlier ? { until: today() } : { since: today() }),
       }),
     });
   });
