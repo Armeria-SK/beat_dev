@@ -61,6 +61,8 @@ import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
+import { PendingStore, type PendingRow } from './pending/store.ts';
+import { replayAction } from './pending/replay.ts';
 import { ToolRegistry } from './tools/registry.ts';
 import { ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
@@ -123,6 +125,8 @@ export class App {
   readonly limiter: EndpointLimiter;
   readonly tools: ToolRegistry;
   readonly approvals: ApprovalBroker;
+  readonly pending: PendingStore;
+  readonly #replayStop = new AbortController();
   readonly memory: MemoryStore;
   readonly tasks: TaskStore;
   readonly projects: ProjectStore;
@@ -192,6 +196,10 @@ export class App {
         this.notifications.settle('approval_needed', { dedupKey: `approval:${v.id}` });
       }
     });
+    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now });
+    this.pending.onChange = change => this.bus.publish({ type: 'pendingAction.changed', ...change });
+    const interrupted = this.pending.closeInterrupted();
+    if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
@@ -218,7 +226,7 @@ export class App {
       ...(options.browserDisplay !== undefined ? { canShowWindow: () => options.browserDisplay === true } : {}),
     });
     // 会話を消したら、その会話のタブを閉じる
-    this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); };
+    this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); this.pending.cancelConversations(ids); };
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
@@ -397,7 +405,16 @@ export class App {
     return JSON.stringify(this.config().server) !== JSON.stringify(this.bootServer);
   }
 
+  replayPending(row: PendingRow): void {
+    void replayAction(row, {
+      db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
+      conversationExists: id => this.conversations.get(id) !== undefined, signal: this.#replayStop.signal, log: this.log,
+      services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, notify: input => this.notifications.notify(input), browser: this.browser, emit: e => this.bus.publish(e) }),
+    }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
+  }
+
   close(): void {
+    this.#replayStop.abort();
     void this.mcp.stop().catch(() => undefined);
     void this.browser.close().catch(() => undefined);
     this.worker.stop();

@@ -317,6 +317,7 @@ test('DELETE: やわらかい参照の表のどれかに行があると 409', as
     memory_jobs: id => { s.app.db.prepare("INSERT INTO memory_jobs (trigger, dedup_key, task_id, created_at) VALUES ('task', ?, ?, 1)").run(`task:${id}`, id); },
     conversations: id => { s.app.db.prepare('UPDATE conversations SET source_task_id = ? WHERE id = ?').run(id, s.app.conversations.create({ kind: 'task', title: 'Review' }).id); },
     acceptance_versions: id => { s.app.db.prepare("INSERT INTO acceptance_versions (project_id, version, hash, content, source, build_task_id, created_at) VALUES (?, 1, 'h', '{}', 'build', ?, 1)").run(`p-${id}`, id); },
+    pending_actions: id => { s.app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, task_id, status, created_at) VALUES ('shell_run', '{}', 'x', 'send', 'r', 'r1', 'task', 'c1', ?, 'waiting', 1)").run(id); },
   };
   assert.deepEqual(Object.keys(insert).sort(), TASK_SOFT_REFERENCES.map(r => r.table).sort());
   for (const ref of TASK_SOFT_REFERENCES) {

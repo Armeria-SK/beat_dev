@@ -151,6 +151,7 @@ export const shellRun: ToolDef<ShellInput> = {
       content: parts.join('\n\n'),
       isError: result.timedOut || result.aborted || result.exitCode !== 0,
       ...(result.fullOutputPath ? { fullRef: result.fullOutputPath } : {}),
+      ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}),
     };
   },
 };

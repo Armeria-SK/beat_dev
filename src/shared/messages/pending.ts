@@ -1,0 +1,31 @@
+import { defineMessages } from './define.ts';
+
+const en = {
+  'not_found': 'Pending item #{id} was not found',
+  'not_waiting': 'Pending item #{id} is no longer waiting (it is {status})',
+  'invalid_id': 'The pending item id must be a positive whole number',
+  'invalid_status': 'status must be waiting or decided',
+  'invalid_reason': 'reason must be text',
+  'unknown_tool': 'The tool {tool} is not available, so it cannot be parked',
+  'not_replayable': 'The tool {tool} cannot wait in Pending: it can only run inside the run that called it',
+  'cancelled_conversation': 'Not run: the conversation it came from was deleted',
+  'cancelled_project': 'Not run: the product it came from was archived or removed',
+  'project_missing': 'Not run: the folder of the product it came from could not be found',
+  'cwd_missing': 'Not run: the working folder {path} no longer exists',
+  'tool_missing': 'Not run: the tool {tool} is no longer available',
+  'tool_blocked': 'Not run: {tool} is set to Block in Settings',
+  'browser_off': 'Not run: the browser is turned off in Settings',
+  'bad_input': 'Not run: the parked input no longer fits the tool',
+  'denied': 'Not run: the check before running now refuses it:\n- {reasons}',
+  'precheck_failed': 'the check before running failed: {detail}',
+  'changed_bind': 'Not run: what it would run changed after it was parked (a script or a page element is different now)',
+  'changed_state': 'Not run: things changed after it was parked:\n{changes}',
+  'change_line': '- {what}: before {before}, now {now}',
+  'interrupted': 'beat stopped while this was running, so it may have run only partly',
+  'exec_error': 'The tool failed: {detail}',
+  'cancelled_stop': 'Stopped before it finished because beat is shutting down',
+} as const;
+
+export type PendingMessageKey = keyof typeof en;
+
+export const pendingText = defineMessages<PendingMessageKey>('pending', en);

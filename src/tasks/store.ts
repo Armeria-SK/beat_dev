@@ -98,6 +98,7 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'memory_jobs', column: 'task_id' },
   { table: 'conversations', column: 'source_task_id' },
   { table: 'acceptance_versions', column: 'build_task_id' },
+  { table: 'pending_actions', column: 'task_id' },
 ] as const;
 export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:'] as const;
 export const UNTRUSTED_RUN = 'untrusted-input';
