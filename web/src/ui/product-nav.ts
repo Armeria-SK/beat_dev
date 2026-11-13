@@ -29,6 +29,8 @@ export function productNav(
   return { rows, none: groups.none };
 }
 
+export const newSessionHash = (productId: string | undefined): string => routeHash(productId ? { view: 'productNew', id: productId } : HOME);
+
 export function loadProjectList(fetchList: () => Promise<{ projects: Project[] }>): Promise<Project[] | null> {
   return fetchList().then(r => (Array.isArray(r.projects) ? r.projects : null), error => (noProductApi(error) ? [] : null)).catch(() => null);
 }
