@@ -233,8 +233,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const cwds: string[] = [initialCwd];
   let cwd = initialCwd;
   let cwdKnown = true;
+  const resolved = new Map<string, string | undefined>();
   const external: MatchCtx['external'] = opts.which ? (name: string) => {
-    const found = opts.which!(name);
+    if (!resolved.has(name)) resolved.set(name, opts.which!(name));
+    const found = resolved.get(name);
     if (!found) return { ok: true, ext: '.exe', detail: '' };
     const real = realish(found);
     const roots = [...opts.policy.roots.map(r => r.path), ...(opts.dataDir ? [opts.dataDir] : [])];

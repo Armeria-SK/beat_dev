@@ -1291,7 +1291,8 @@ test('実機（Windows PowerShell 5.1・制限モード）: npx の引数の & �
   const host = spawnSync('hostname', { encoding: 'utf8' }).stdout.trim();
   assert.ok(host);
   const outcome = await runApproved(s, `npx --version 'x&hostname'`);
-  assert.ok(outcome.decidedBy === 'user' || outcome.decision === 'deny', outcome.output.content);
+  if (/\.cmd$/iu.test(which('npx') ?? '')) assert.equal(outcome.decision, 'deny', outcome.output.content);
+  else assert.equal(outcome.decidedBy, 'user', outcome.output.content);
   assert.equal(outcome.output.content.split('\n').some(line => line.trim() === host), false, outcome.output.content);
 });
 

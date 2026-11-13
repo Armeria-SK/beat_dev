@@ -109,9 +109,9 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
 function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
   if (!ctx.windows) return;
   const name = st.words[0]!;
-  const t = name.text;
+  const t = name.text.replace(/[\s.]+$/u, '') || name.text;
   const cmdFile = name.dynamic || /\.(?:cmd|bat)$/iu.test(t)
-    || (/[\\/:]/u.test(t) ? !/\.(?:exe|com)$/iu.test(t) : ['.cmd', '.bat'].includes(ctx.external?.(t.toLowerCase()).ext ?? '.exe'));
+    || (/[\\/:]/u.test(t) ? !/\.(?:exe|com|ps1)$/iu.test(t) : ['.cmd', '.bat'].includes(ctx.external?.(t.toLowerCase()).ext ?? '.exe'));
   if (cmdFile) winArgs(t, st.words, '.cmd', acc);
 }
 

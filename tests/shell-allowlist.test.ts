@@ -897,13 +897,13 @@ test('PowerShell の外部のプログラムの名前: 引用符つき・.cmd �
   const denied = [
     "& 'npm' --version $a", '& "npm" --version $a', "& 'npm' --version 'x&cd>pw.txt'", '$a = Get-Content n.txt; & \'npm\' --version $a',
     'npm.cmd --version $a', "npm.cmd --version 'x&y'", "& 'npm.cmd' --version $a", '& "C:\\Program Files\\nodejs\\npm.cmd" --version $a', "& 'C:\\tools\\run.bat' 'x&y'", "& 'C:\\tools\\npm' --version $a",
-    '& $p --version $a', "$p = 'npm'; & $p --version $a", '& (Get-Command npm) --version $a', '& $(Get-Command npm) --version $a', "& $p 'x&y'",
+    '& $p --version $a', "$p = 'npm'; & $p --version $a", '& (Get-Command npm) --version $a', '& $(Get-Command npm) --version $a', "& $p 'x&y'", "& 'npm.cmd ' --version $a", "& 'NPM.CMD ' --version $a", "& 'npm ' --version $a", "& 'npm.cmd. ' 'x&y'",
   ];
   for (const c of denied) assert.ok(keysOf(c, 'powershell', cmd).includes('deny:list.winargs'), `${c}: ${keysOf(c, 'powershell', cmd).join(' ')}`);
   for (const [quoted, bare] of [["& 'npm' --version", 'npm --version'], ['& "npm" test', 'npm test'], ["& 'npm' view left-pad", 'npm view left-pad'], ["& 'git' status", 'git status'], ["& 'npm' --version 'x&y'", "npm --version 'x&y'"]] as const) {
     assert.deepEqual(keysOf(quoted, 'powershell', cmd), ['once:shape.call', ...keysOf(bare, 'powershell', cmd)], quoted);
   }
-  for (const [c, want] of [['npm test', 'once'], ['npm run build', 'once'], ['npm --version', 'allow'], ['npm view left-pad', 'allow'], ['git status', 'allow'], ['node.exe -e 1', 'once'], ["myprog.exe 'a&b'", 'once'], ["& 'C:\\tools\\x.exe' 'a&b'", 'once'], ['& $p --version', 'once'], ['npm.cmd --version', 'once']] as const) {
+  for (const [c, want] of [['npm test', 'once'], ['npm run build', 'once'], ['npm --version', 'allow'], ['npm view left-pad', 'allow'], ['git status', 'allow'], ['node.exe -e 1', 'once'], ["myprog.exe 'a&b'", 'once'], ["& 'C:\\tools\\x.exe' 'a&b'", 'once'], ['& $p --version', 'once'], ['npm.cmd --version', 'once'], ["./build.ps1 'a b'", 'once'], ['./build.ps1 $v', 'once'], ["& ./build.ps1 'a b'", 'once'], ["./build.ps1 -Config $cfg", 'once'], ["./build.ps1 'メモ'", 'once']] as const) {
     assert.equal(levelOf(c, 'powershell', cmd), want, `${c}: ${keysOf(c, 'powershell', cmd).join(' ')}`);
   }
 });
