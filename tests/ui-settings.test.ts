@@ -172,12 +172,16 @@ test('ui/settings view: 役割（会話・予備・裏）は routing の並び�
   assert.deepEqual(rolesOf({ routing: { chat: [], background: [] } }), { conversation: null, judge: '', fallback: [], background: [] });
 });
 
-test('ui/settings view: 判定役は routing.judge の先頭。既定（空）は「会話と同じ」で、選び直すと先頭に来て、ファイルで書いた続きの順は残り、「会話と同じ」に戻すと項目ごと消える', () => {
+test('ui/settings view: 判定役は routing.judge の先頭。既定（空）は「会話と同じ」で、選び直すと先頭だけが替わり、ファイルで書いた続きの順は残り（前の先頭は残さない）、「会話と同じ」に戻すと項目ごと消える', () => {
   const config = { routing: { chat: ['a', 'b'], background: [], judge: ['b', 'c'] } };
   assert.equal(rolesOf(config).judge, 'b');
-  assert.deepEqual(setJudge(config, 'a').routing.judge, ['a', 'b', 'c']);
-  assert.deepEqual(setJudge(config, 'c').routing.judge, ['c', 'b'], '選んだものは重ねない');
+  assert.deepEqual(setJudge(config, 'a').routing.judge, ['a', 'c'], '前の判定役を隠れた予備にしない');
+  assert.deepEqual(setJudge(config, 'c').routing.judge, ['c'], '選んだものは重ねない');
+  assert.deepEqual(setJudge(config, 'b').routing.judge, ['b', 'c']);
   assert.deepEqual(setJudge({ routing: { chat: ['a'], background: [] } }, 'a').routing.judge, ['a']);
+  const cloud = setJudge({ routing: { chat: ['local', 'cloud'], background: [] } }, 'cloud');
+  assert.deepEqual(setJudge(cloud, 'local').routing.judge, ['local'], '2 回選び直したら、画面に見えている 1 つだけ');
+  assert.deepEqual(setJudge(setJudge(config, 'a'), 'b').routing.judge, ['b', 'c']);
   const same = setJudge(config, '');
   assert.equal('judge' in same.routing, false);
   assert.deepEqual(same.routing.chat, ['a', 'b'], 'ほかの役割は変えない');
