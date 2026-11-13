@@ -367,6 +367,32 @@ test('4-3a 順 4 の 2 つ目: 同じコマンドの前の文が書く・名前�
   }
 });
 
+test('4-3a 順 4 の否定: 開発の実行役が製品の外のフォルダ・設定・モジュールを指す形と、上のフォルダの設定へ上る形は判定役へ', async t => {
+  const r = rig(t);
+  for (const name of ['Makefile', 'justfile', 'Rakefile', 'pytest.ini', 'tox.ini', 'build.ninja']) writeFileSync(join(r.root, name), '');
+  writeFileSync(join(r.root, 'package.json'), JSON.stringify({ name: 'p', private: true, scripts: { test: 'node -e 0' } }));
+  const elsewhere = r.paths.workspace;
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  const commands = [
+    'make -C ../other', 'make --directory=..', 'make -f ../Makefile', `make -C ${elsewhere} deploy`, 'pytest ../other', 'pytest C:/Users', 'pytest /etc',
+    'pytest --pyargs requests', 'jest --rootDir ..', 'vitest --root=..', 'mocha ../test', 'tox -c ../tox.ini', 'ninja -C ..', 'just --justfile ../justfile',
+    'rake -f ../Rakefile', 'pytest --rootdir=.. x', 'make ~/x',
+  ];
+  for (const command of commands) {
+    const outcome = await r.shell(command);
+    assert.notEqual(outcome.decidedBy, 'product-code', `${command}: ${outcome.output.content}`);
+  }
+  assert.equal(r.judge.calls.length, commands.length, '全部判定役が見る');
+  const sub = join(r.root, 'sub');
+  mkdirSync(sub, { recursive: true });
+  for (const command of ['npm test', 'npm start', 'make', 'just', 'rake', 'pytest']) {
+    const outcome = await r.call('shell_run', { command, cwd: sub });
+    assert.notEqual(outcome.decidedBy, 'product-code', `sub: ${command}: ${outcome.output.content}`);
+  }
+  assert.equal(r.judge.calls.length, commands.length + 6, '設定の無いフォルダからは上へ上らせない');
+  for (const command of ['make', 'make -j4 test', 'pytest -q tests', 'npm test']) assert.equal((await r.shell(command)).decidedBy, 'product-code', `製品の中で閉じる形は今までどおり: ${command}`);
+});
+
 test('4-3a 順 4 の 2 つ目の否定: フックのあるリポジトリ・git -c・外や上のリポジトリ・秘密らしいファイル・読めない語・ほかの git は乗らない', { skip: !gitAvailable && 'git が無い' }, async t => {
   r_hooks: {
     const r = rig(t);

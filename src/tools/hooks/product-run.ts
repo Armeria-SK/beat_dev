@@ -34,6 +34,39 @@ function plainStatement(st: StatementFacts, root: string): boolean {
     && !definesCommand(st) && !SERVICE_PROGRAMS.has(st.program) && st.cwd !== null && inside(root, st.cwd);
 }
 
+const RUNNER_FILES: Readonly<Record<string, readonly string[]>> = {
+  npm: ['package.json'],
+  make: ['Makefile', 'makefile', 'GNUmakefile'], gmake: ['Makefile', 'makefile', 'GNUmakefile'], nmake: ['Makefile', 'makefile'],
+  just: ['justfile', 'Justfile', '.justfile'], rake: ['Rakefile', 'rakefile', 'Rakefile.rb'], ninja: ['build.ninja'],
+  pytest: ['pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini', 'conftest.py'], tox: ['tox.ini', 'pyproject.toml', 'setup.cfg'], nox: ['noxfile.py'],
+  jest: ['package.json', 'jest.config.js', 'jest.config.ts', 'jest.config.mjs', 'jest.config.cjs', 'jest.config.json'],
+  vitest: ['package.json', 'vitest.config.ts', 'vitest.config.js', 'vitest.config.mts', 'vitest.config.mjs', 'vite.config.ts', 'vite.config.js'],
+  mocha: ['package.json', '.mocharc.js', '.mocharc.cjs', '.mocharc.json', '.mocharc.yml', '.mocharc.yaml', '.mocharc.jsonc'],
+};
+const PLACE_FLAGS = new Set(['directory', 'file', 'makefile', 'include-dir', 'rootdir', 'root', 'config', 'config-file', 'justfile', 'working-directory', 'pyargs',
+  'confcutdir', 'basetemp', 'require', 'workdir', 'toxinidir', 'envdir', 'noxfile', 'project', 'projects', 'dir', 'cwd', 'chdir', 'prefix', 'userconfig', 'globalconfig']);
+const PLACE_SHORT = /^-[A-Za-z]*[CfcpdIrR]/u;
+
+const programName = (st: StatementFacts): string => st.program.toLowerCase().replace(/\.(?:cmd|exe|bat|ps1)$/u, '');
+const pathLike = (text: string): boolean => /[\/]/u.test(text) || text.startsWith('.') || text.startsWith('~') || isAbsolute(text);
+
+function runnerStaysInside(st: StatementFacts, root: string): boolean {
+  const files = RUNNER_FILES[programName(st)];
+  if (files && !files.some(name => statSync(resolve(st.cwd!, name), { throwIfNoEntry: false })?.isFile() === true)) return false;
+  for (const word of st.words.slice(1)) {
+    const text = word.text;
+    if (text.startsWith('--')) {
+      const [name, value] = text.slice(2).split(/=(.*)/su);
+      if (PLACE_FLAGS.has(name!.toLowerCase())) return false;
+      if (value !== undefined && pathLike(value) && (value.startsWith('~') || !inside(root, resolve(st.cwd!, value)))) return false;
+      continue;
+    }
+    if (text.startsWith('-') && files && PLACE_SHORT.test(text)) return false;
+    if (pathLike(text) && (text.startsWith('~') || !inside(root, resolve(st.cwd!, text)))) return false;
+  }
+  return true;
+}
+
 function namesFilesOnly(st: StatementFacts): boolean {
   const named = st.words.slice(2).filter(w => !w.text.startsWith('-'));
   if (named.length === 0 || st.words.slice(2).some(w => w.dynamic || w.glob)) return false;
@@ -84,7 +117,11 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
       const file = st.words[1]?.text;
       if (!file || !inside(root, resolve(st.cwd!, file))) return undefined;
     }
-    if (st.program !== 'git') { others = true; continue; }
+    if (st.program !== 'git') {
+      if (!runnerStaysInside(st, root)) return undefined;
+      others = true;
+      continue;
+    }
     if (others) return undefined;
     if (st.gitGlobal.length > 0 || ![...own].every(key => key === 'list.git_commit')) return undefined;
     const sub = st.words[1]?.text;
