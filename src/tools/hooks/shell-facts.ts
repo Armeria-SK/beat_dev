@@ -39,6 +39,7 @@ const joinWords = (words: readonly Word[], ps: boolean): string => words.map(w =
 const anyDynamic = (words: readonly Word[]): boolean => words.some(w => w.dynamic);
 
 const STDIN_SCRIPT = /^(?:-|\/dev\/stdin|\/dev\/fd\/0|\/proc\/self\/fd\/0)$/u;
+const SHELL_VALUE_OPTIONS = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
 const XARGS_VALUES: ReadonlySet<string> = new Set([...WRAPPED_VALUE_FLAGS['xargs']!].filter(f => !['-i', '-l', '-e'].includes(f)));
 const PACKAGE_GLOBAL_VALUES = new Set(['--prefix', '-w', '--workspace', '-C', '--dir', '--filter', '-F', '--cwd', '--registry', '--userconfig', '--cache', '--loglevel']);
 const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/u;
@@ -92,12 +93,25 @@ function shellCode(args: readonly Word[], stdin: boolean): InnerSource {
     const code = args[j];
     return !code || code.dynamic ? null : { text: code.text, shell: 'bash' };
   }
-  const scriptAt = args.findIndex(w => !w.text.startsWith('-') || w.text === '-');
-  const options = scriptAt < 0 ? args : args.slice(0, scriptAt);
-  if (args.some(w => w.dynamic) || options.some(w => /^-[A-Za-z]*s[A-Za-z]*$/u.test(w.text))) return null;
-  const script = args[scriptAt];
+  if (args.some(w => w.dynamic)) return null;
+  const options: Word[] = [];
+  let script: Word | undefined;
+  for (let j = 0; j < args.length; j++) {
+    const t = args[j]!.text;
+    if (t === '--') { script = args[j + 1]; break; }
+    if (t === '-' || !/^[-+]/u.test(t)) { script = args[j]; break; }
+    options.push(args[j]!);
+    if (SHELL_VALUE_OPTIONS.has(t)) j++;
+  }
+  if (options.some(w => /^-[A-Za-z]*s[A-Za-z]*$/u.test(w.text))) return null;
   if (script) return STDIN_SCRIPT.test(script.text) ? null : undefined;
   return stdin ? null : undefined;
+}
+
+function sourceCode(args: readonly Word[], stdin: boolean): InnerSource {
+  const file = args[0]?.text === '--' ? args[1] : args[0];
+  if (!file) return stdin ? null : undefined;
+  return file.dynamic || STDIN_SCRIPT.test(file.text) ? null : undefined;
 }
 
 function cmdCode(args: readonly Word[], stdin: boolean): InnerSource {
@@ -262,6 +276,8 @@ export function innerSource(program: string, words: readonly Word[], shell: Shel
   if (POWERSHELL.test(program)) return powershellCode(args, stdin);
   if (program === 'cmd') return cmdCode(args, stdin);
   if (program === 'iex' || program === 'invoke-expression') return args.length === 0 || anyDynamic(args) ? null : { text: args.map(w => w.text).join(' '), shell: 'powershell' };
+  if (program === 'eval') return args.length === 0 || anyDynamic(args) ? null : { text: args.map(w => w.text).join(' '), shell };
+  if (program === '.' || program === 'source') return sourceCode(args, stdin);
   if (program === 'find') return findExec(args, shell);
   if (WRAPPED_VALUE_FLAGS[program]) return wrapped(program, args, ps, shell);
   if (program === 'env') return envCommand(args, shell);
