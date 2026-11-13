@@ -78,7 +78,6 @@ const en = {
   'notify.task_consult': 'I need your advice: {title}',
   'notify.task_long': 'Taking a long time: {title}',
   'notify.task_failed': 'Task failed: {title}',
-  'notify.approval_needed': 'Approval needed: {title}',
   'notify.skill_draft': 'Please review the skill draft: {name}',
   'notify.skill_auto': 'Skill registered without review',
 

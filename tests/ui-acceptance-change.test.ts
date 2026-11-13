@@ -196,7 +196,7 @@ test('ui/acceptance 3-3: Ask beat の送り先は、その製品のいちばん�
   const list = [
     convo('old', { last_message_at: 10 }),
     convo('newest', { last_message_at: 30 }),
-    convo('normal', { last_message_at: 99, permission_mode: 'normal' }),
+    convo('auto', { last_message_at: 99, permission_mode: 'auto' }),
     convo('other', { last_message_at: 99, project_id: 'P2' }),
   ];
   assert.equal(askTarget(list, 'P1'), 'newest');

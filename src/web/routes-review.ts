@@ -4,7 +4,7 @@ import { curiosityText } from '../curiosity/text.ts';
 import { languageOf } from '../shared/language.ts';
 import { TRIGGER_TEXT } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
-import { defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
+import { askReadAsBlock, defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import type { ReviewJob } from '../memory/review.ts';
@@ -30,9 +30,12 @@ export function projectWhere(table: keyof typeof TODAY_COUNTED, project: Project
   return project === null ? { sql: ` AND ${projectOfSql(table, alias)} IS NULL`, args: [] } : { sql: ` AND ${projectOfSql(table, alias)} = ?`, args: [project] };
 }
 
+export function todayStart(app: App, now = Date.now()): number {
+  try { return startOfDayIn(app.config().timezone, now); } catch { return startOfDayIn('UTC', now); }
+}
+
 export function todayCount(app: App, table: keyof typeof TODAY_COUNTED, now = Date.now(), project?: ProjectFilter): number {
-  let since: number;
-  try { since = startOfDayIn(app.config().timezone, now); } catch { since = startOfDayIn('UTC', now); }
+  const since = todayStart(app, now);
   const filter = projectWhere(table, project);
   return Number((app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${TODAY_COUNTED[table]} >= ?${filter.sql}`).get(since, ...filter.args) as { n: number }).n);
 }
@@ -53,6 +56,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
   };
   const toolView = (tool: ReturnType<App['tools']['list']>[number], config = app.config()) => ({
     name: tool.name, effect: tool.effect, allowedIn: tool.allowedIn, policy: toolPolicy(config, tool.name), configurable: isPolicyable(tool.name),
+    ...(askReadAsBlock(config).includes(tool.name) ? { askIsBlock: true } : {}),
     ...(tool.mcp ? { mcp: { server: tool.mcp.server }, ...(mcpAsks(tool) ? { asks: mcpAsks(tool) } : {}) } : {}),
   });
   router.add('GET', '/api/tools', ({ res }) => {

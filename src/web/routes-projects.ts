@@ -9,7 +9,6 @@ import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
-import { approvalShownIn } from '../tools/approvals.ts';
 import type { PendingCounts } from '../pending/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
 
@@ -59,7 +58,7 @@ export function projectWire(app: App, row: ProjectRow, pending: PendingCounts = 
     id: row.id, name: row.name, root: row.root, check_command: row.check_command, scout_mode: row.scout_mode, remotes: remotesOf(row.remotes),
     archived_at: row.archived_at, created_at: row.created_at, updated_at: row.updated_at,
     is_git: gitFolder(row.root), folder_missing: folderMissing(row),
-    waiting: { proposals: counts.proposals, questions: counts.questions, pending: app.approvals.pending().filter(a => inProject(approvalShownIn(a))).length + (pending.byProject[row.id] ?? 0) + (pending.acceptanceChanges[row.id] ?? 0) },
+    waiting: { proposals: counts.proposals, questions: counts.questions, pending: (pending.byProject[row.id] ?? 0) + (pending.acceptanceChanges[row.id] ?? 0) },
     running: app.engine.activeRuns().filter(r => inProject(r.conversationId)).length,
     last_activity_at: counts.lastActivityAt,
     has_plan: app.plans.has(row.id),
@@ -123,13 +122,13 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 200, { project: projectWire(app, updated) });
   });
 
-  const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => ({
-    ...view,
-    writing: app.engine.activeRuns().some(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId && r.mode === 'plan'),
-  });
+  const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => {
+    const chats = app.engine.activeRuns().filter(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId);
+    return { ...view, writing: chats.some(r => r.mode === 'plan'), reviewLocked: chats.length > 0 };
+  };
   const planned = <T>(work: () => T): T => {
     try { return work(); } catch (error) {
-      if (error instanceof PlanError) throw domainProblem(error.code === 'changed' ? 409 : 400, 'plan', error);
+      if (error instanceof PlanError) throw domainProblem(error.code === 'changed' || error.code === 'writing' ? 409 : 400, 'plan', error);
       throw error;
     }
   };
@@ -160,6 +159,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
     const baseHash = requireString(body, 'baseHash', { max: 128 })!;
+    if (planWire(project.id).reviewLocked) planned(() => { throw new PlanError('writing'); });
     const view = planned(() => app.plans.review(project.id, baseHash));
     app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: view.hash, by: 'owner' });
     sendJson(res, 200, { plan: planWire(project.id, view) });

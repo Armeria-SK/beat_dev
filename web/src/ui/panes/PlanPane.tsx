@@ -16,7 +16,7 @@ import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Icon, Notice, Pill } from '../parts.tsx';
 import {
-  apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, saveOutcome, startDraft, typed, type PlanDraft, type SaveOutcome,
+  apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, reviewButton, reviewClick, reviewSeen, saveOutcome, startDraft, typed, type PlanDraft, type ReviewSeen, type SaveOutcome,
 } from '../plan.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { routeHash } from '../routes.ts';
@@ -380,6 +380,9 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   const t = useT();
   const key = PLAN_EDITS + productId;
   const [doc, setDoc] = useState<PlanDoc | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewFailed, setReviewFailed] = useState<{ detail: string | null } | null>(null);
+  const [seen, setSeen] = useState<ReviewSeen>({ hash: null, changed: false });
   const [failure, setFailure] = useState<{ detail: string | null } | null>(null);
   const [draft, setDraft] = useState<PlanDraft | null>(() => keptDraft(planDrafts.get(productId), hasUnsavedEdits(key)));
   const [mode, setMode] = useState<'read' | 'edit'>(draft ? 'edit' : 'read');
@@ -447,6 +450,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   useEffect(() => { void load(); }, [load, revision]);
 
   useEffect(() => { setDraft(current => followDoc(current, doc)); }, [doc]);
+  useEffect(() => { setSeen(prev => reviewSeen(prev, doc?.hash ?? null)); }, [doc?.hash]);
 
   const dirty = planDirty(draft);
   useEffect(() => {
@@ -558,6 +562,23 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setAccBusy(false);
   };
 
+  const review = reviewButton(doc, mode, reviewing, seen.changed);
+  const markReviewed = async () => {
+    if (reviewing) return;
+    const click = reviewClick(seen, doc?.hash ?? null);
+    if (click.send === null) { setSeen(click.seen); return; }
+    setReviewing(true);
+    setReviewFailed(null);
+    try {
+      const r = await api.planReviewed(productId, click.send);
+      setSeen({ hash: r.plan.hash, changed: false });
+      setDoc(r.plan);
+    } catch (error) {
+      setReviewFailed({ detail: apiDetail(error) });
+      await load();
+    } finally { setReviewing(false); }
+  };
+
   const ask = async () => {
     if (askBusy) return;
     setAskBusy(true);
@@ -599,7 +620,9 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
       {asking && askFailed && <Notice tone="fail" title={t('ui.acc.ask.failed')} text={askFailed.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void ask() }} />}
       {shown && acc && coverage && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
       {changedAfterBuild(doc, acc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
-      {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}</p>}
+      {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}{review !== 'hidden' && <Button small variant="ghost" disabled={review === 'off'} onClick={() => void markReviewed()}>{t(review === 'again' ? 'ui.plan.readNewVersion' : 'ui.plan.markReviewed')}</Button>}</p>}
+      {review !== 'hidden' && seen.changed && <p className="bt-meta ui-acc__outside" role="status"><Icon name="alert" />{t('ui.plan.changedReadAgain')}</p>}
+      {reviewFailed && <Notice tone="fail" title={t('ui.plan.reviewFailed')} text={reviewFailed.detail ?? undefined} />}
       {notice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} also={{ label: t('ui.plan.discard'), run: discard }} />}
       {draft?.replaces && dirty && notice?.kind !== 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.rebased')} action={{ label: t('ui.plan.discard'), run: discard }} />}
       {notice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.saveFailed')} text={notice.detail ?? undefined} />}

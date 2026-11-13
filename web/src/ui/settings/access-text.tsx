@@ -20,7 +20,6 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'shell-deny-removed': return t('access.shellDeny', a.command);
     case 'shell-env-added': return t('access.shellEnv', a.name);
     case 'outside-loosened': return t('access.outside');
-    case 'taint-off': return t('access.taintOff');
     case 'web-fetch-on': return t('access.webFetch');
     case 'web-search-on': return t('access.webSearch');
     case 'self-tasks-unapproved': return t('access.selfTasks');

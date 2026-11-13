@@ -6,7 +6,7 @@ import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
 import { CATEGORIES, FILE_ONLY, LATER_HIDDEN, matchCategories, placeOf } from '../web/src/ui/settings/rows.ts';
-import { keyLine, providerReach, rolesOf, setConversation, setFallback } from '../web/src/ui/settings/view.ts';
+import { keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
 
 // 新しい画面の Settings（steps/p1-ui.md「Settings」と PR 1-5b）の、画面を持たない決まり。
 
@@ -187,10 +187,26 @@ test('ui/settings view: 鍵の状態の行は、鍵の文字を持たない（�
 
 test('ui/settings view: 役割（会話・予備・裏）は routing の並びのまま読み書きする', () => {
   const config = { routing: { chat: ['a', 'b', 'c'], background: ['b'] } };
-  assert.deepEqual(rolesOf(config), { conversation: 'a', fallback: ['b', 'c'], background: ['b'] });
+  assert.deepEqual(rolesOf(config), { conversation: 'a', judge: '', fallback: ['b', 'c'], background: ['b'] });
   assert.deepEqual(setConversation(config, 'c').routing.chat, ['c', 'a', 'b']);
   assert.deepEqual(setFallback(config, ['c']).routing.chat, ['a', 'c']);
-  assert.deepEqual(rolesOf({ routing: { chat: [], background: [] } }), { conversation: null, fallback: [], background: [] });
+  assert.deepEqual(rolesOf({ routing: { chat: [], background: [] } }), { conversation: null, judge: '', fallback: [], background: [] });
+});
+
+test('ui/settings view: 判定役は routing.judge の先頭。既定（空）は「会話と同じ」で、選び直すと先頭だけが替わり、ファイルで書いた続きの順は残り（前の先頭は残さない）、「会話と同じ」に戻すと項目ごと消える', () => {
+  const config = { routing: { chat: ['a', 'b'], background: [], judge: ['b', 'c'] } };
+  assert.equal(rolesOf(config).judge, 'b');
+  assert.deepEqual(setJudge(config, 'a').routing.judge, ['a', 'c'], '前の判定役を隠れた予備にしない');
+  assert.deepEqual(setJudge(config, 'c').routing.judge, ['c'], '選んだものは重ねない');
+  assert.deepEqual(setJudge(config, 'b').routing.judge, ['b', 'c']);
+  assert.deepEqual(setJudge({ routing: { chat: ['a'], background: [] } }, 'a').routing.judge, ['a']);
+  const cloud = setJudge({ routing: { chat: ['local', 'cloud'], background: [] } }, 'cloud');
+  assert.deepEqual(setJudge(cloud, 'local').routing.judge, ['local'], '2 回選び直したら、画面に見えている 1 つだけ');
+  assert.deepEqual(setJudge(setJudge(config, 'a'), 'b').routing.judge, ['b', 'c']);
+  const same = setJudge(config, '');
+  assert.equal('judge' in same.routing, false);
+  assert.deepEqual(same.routing.chat, ['a', 'b'], 'ほかの役割は変えない');
+  assert.equal(rolesOf(same).judge, '');
 });
 
 test('ui/settings: 設定を書く口（saveSettings・resetSettings）を呼ぶのは、決まった画面だけ（行ごとの確かめを通る所）', () => {

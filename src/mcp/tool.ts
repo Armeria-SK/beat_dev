@@ -197,7 +197,6 @@ export function buildMcpTool(p: BuildToolParams): BuildToolResult {
     allowedIn: ['chat'],
     escalateOnTaint: true,
     networkCall: () => true,
-    ...(removes ? { removes: true as const } : {}),
     mcp: { server: server.id, tool: remote.name, localOk: server.localOk },
     preCheck,
     redact,

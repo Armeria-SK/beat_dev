@@ -1,6 +1,6 @@
 import type { PermissionMode } from '../../src/shared/permission-mode.ts';
-import { ApiError, type ApprovalPathView, type ChecklistItem, type ChecklistStatus, type ModelChoice, type ModelView } from './api.ts';
-import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
+import { ApiError, type ChecklistItem, type ChecklistStatus, type ModelChoice, type ModelView } from './api.ts';
+import { getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
 import type { IconName } from './icon-name.ts';
 import { probeMessage, serverText } from './server-text.ts';
 
@@ -128,7 +128,7 @@ export const recountsUsage = (kind: string): boolean => kind === 'model' || kind
 export function sendChoiceOf(conversationId: string | null, current: { modelId: string | null; effort: string | null; permissionMode?: PermissionMode }, override?: ModelChoice, product = false): ModelChoice {
   if (override) return { ...override };
   if (conversationId) return {};
-  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(product ? { permissionMode: current.permissionMode ?? 'normal' } : current.permissionMode && current.permissionMode !== 'normal' ? { permissionMode: current.permissionMode } : {}) };
+  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(product ? { permissionMode: current.permissionMode ?? 'auto' } : current.permissionMode && current.permissionMode !== 'auto' ? { permissionMode: current.permissionMode } : {}) };
 }
 
 export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
@@ -291,30 +291,6 @@ export function firstLine(value: string, max = 160): string {
   return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
 }
 
-export const formatCountdown = (ms: number): string => formatElapsed(Math.max(0, ms));
-
-// 「この返事のあいだ、このフォルダ以下への書き込みを許可」のボタンに出すフォルダ名: 長い絶対パスは、末尾の 2 つの名前だけ（全部はボタンの title）
-export function grantFolderLabel(folder: string): string {
-  const parts = folder.split(/[\\/]+/u).filter(Boolean);
-  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/') || folder;
-}
-
-// 承認の札の、見つけたパスごとの判定の札。中は読み書き・読むだけで文が分かれ、知らない判定は「判定できない」
-export function approvalPathKey(path: Pick<ApprovalPathView, 'verdict' | 'mode'>): PlainKey {
-  switch (path.verdict) {
-    case 'in': return path.mode === 'read' ? 'approval.verdict.inRead' : 'approval.verdict.inWrite';
-    case 'out': return 'approval.verdict.out';
-    case 'deny': return 'approval.verdict.deny';
-    default: return 'approval.verdict.unknown';
-  }
-}
-
-// サーバーが切って出さなかったパスの行の数（古い応答には無いので 0）
-export const approvalPathsMore = (a: { pathsMore?: number }): number => Math.max(0, Math.floor(a.pathsMore ?? 0));
-
-// 許可フォルダの中は目立たせず、それ以外（外・拒否・判定できない）は縁取りで目立たせる（デザインどおり）
-export const approvalPathTone = (verdict: ApprovalPathView['verdict']): 'neutral' | 'outline' => (verdict === 'in' ? 'neutral' : 'outline');
-
 // コンテキストの使用量の表示。割合は四捨五入し、1 を超えたら「100%+」（輪は 100% で止める）
 export function contextPercent(ratio: number): { text: string; over: boolean; fraction: number } {
   const value = Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
@@ -330,11 +306,6 @@ export function compactTokens(n: number): string {
   return `${Number((Math.round(value / 100) / 10).toFixed(1))}k`;
 }
 
-export function approvalFraction(expiresAt: number, now: number, totalMs: number): number {
-  if (!(totalMs > 0)) return 0;
-  return Math.min(1, Math.max(0, (expiresAt - now) / totalMs));
-}
-
 const clockFormatters = new Map<string, Intl.DateTimeFormat>();
 
 export function chatTime(ms: number, language = getLanguage(), zone = getTimezone()): string {
@@ -345,39 +316,6 @@ export function chatTime(ms: number, language = getLanguage(), zone = getTimezon
     clockFormatters.set(key, formatter);
   }
   return formatter.format(ms);
-}
-
-export const APPROVAL_ENTER_GRACE_MS = 1000;
-
-// Enter で「今回だけ許可」できる先頭の承認。コードを動かす確かめ（onceOnly）は、中身を見てボタンで許可するので Enter では許可しない
-export function enterApprovalId(approvals: ReadonlyArray<{ id: string; onceOnly?: boolean }>): string | null {
-  const front = approvals[0];
-  return front && !front.onceOnly ? front.id : null;
-}
-
-export interface ApprovalGate { id: string | null; since: number }
-
-export function advanceApprovalGate(gate: ApprovalGate, frontId: string | null, now: number): ApprovalGate {
-  return gate.id === frontId ? gate : { id: frontId, since: now };
-}
-
-export function restartApprovalGate(gate: ApprovalGate, now: number): ApprovalGate {
-  return { id: gate.id, since: now };
-}
-
-export function approvalEnterAllowed(gate: ApprovalGate, shownId: string | null, now: number, graceMs = APPROVAL_ENTER_GRACE_MS): boolean {
-  return shownId !== null && gate.id === shownId && now - gate.since >= graceMs;
-}
-
-export interface DecisionTracker { start: (id: string) => boolean; release: (id: string) => void; has: (id: string) => boolean }
-
-export function createDecisionTracker(): DecisionTracker {
-  const pending = new Set<string>();
-  return {
-    start: id => { if (pending.has(id)) return false; pending.add(id); return true; },
-    release: id => { pending.delete(id); },
-    has: id => pending.has(id),
-  };
 }
 
 export function isNearBottom(el: { scrollHeight: number; scrollTop: number; clientHeight: number }, slack = 80): boolean {

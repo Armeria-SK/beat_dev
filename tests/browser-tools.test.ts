@@ -386,12 +386,12 @@ test('browser_screenshot: タブが無ければ、起動せずに失敗する', 
 // R6: 一覧（tools.browser.sites）のサイトは、ログイン済みのことがある。開くだけの GET が操作になりうるので、会話が外を読んだあと・クエリ付きは確かめる
 const TAINTED = { tainted: true, sources: ['web_fetch'] };
 
-test('R6: 一覧のサイト + クエリ付き → ask（web・sends・札に URL）', async t => {
+test('R6: 一覧のサイト + クエリ付き → ask（web・送るに数える・確かめに URL）', async t => {
   const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
   const check = await browserOpen.preCheck!({ url: 'https://example.com/logout?token=1' }, r.ctx());
   assert.equal(check.decision, 'ask');
   assert.deepEqual(check.askKinds, ['web']);
-  assert.equal(check.sends, true);
+  assert.equal(check.outbound?.kind, 'send');
   assert.ok((check.details ?? []).some(d => d.includes('https://example.com/logout?token=1')));
   const sub = await browserOpen.preCheck!({ url: 'https://www.example.com/a?x=1' }, r.ctx());
   assert.equal(sub.decision, 'ask');
@@ -402,7 +402,7 @@ test('R6: 一覧のサイト + 会話が外を読んだあと → ask', async t 
   const check = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: TAINTED }));
   assert.equal(check.decision, 'ask');
   assert.deepEqual(check.askKinds, ['web']);
-  assert.equal(check.sends, true);
+  assert.equal(check.outbound?.kind, 'send');
 });
 
 test('R6: 一覧外のサイトは今までどおり（クエリ付き・taint 済みでも読むだけ）', async t => {
@@ -436,7 +436,7 @@ test('R6(b): この実行が読んでいなくても、会話がすでに外を�
   const check = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => true }));
   assert.equal(check.decision, 'ask');
   assert.deepEqual(check.askKinds, ['web']);
-  assert.equal(check.sends, true);
+  assert.equal(check.outbound?.kind, 'send');
   // 会話も読んでいなければ今までどおり通る
   assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => false }))).decision, 'allow');
   // 会話の印が読めない（例外）ときは「ある」側に倒す

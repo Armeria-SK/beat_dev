@@ -4,7 +4,7 @@
 //   - 番号は、読んだときのページ（URL が同じ表）のものだけ。移動のあとの古い番号は拒否
 //   - 実行の直前に、役割・名前・nth で探し直し、数が読んだときと同じで、見えていて、有効でなければ実行しない
 //   - browser_type は、パスワード・認証コード・カード番号の欄（type=password・autocomplete・名前）に入れない
-// 札を出して承認を得た呼び出しは、承認のあとにパイプラインが preCheck をもう一度走らせ、bind が変わっていたら実行しない（pipeline.ts）
+// Pending で承認された呼び出しは、再実行の前に preCheck をもう一度走らせ、bind が変わっていたら実行しない（src/pending/replay.ts）
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';

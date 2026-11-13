@@ -625,17 +625,19 @@ function langInfo(name: string, words: Word[], acc: Acc, ctx: MatchCtx): void {
     ? literal(args[0]) && INSTALL_SUBS.has(args[0]!.text)
     : args.some(w => literal(w) && INSTALL_SUBS.has(w.text));
   if (PACKAGE_TOOLS.includes(name) && installing) { acc.add('once', 'list.install', { cmd: name }, false); return; }
-  // npm と pip は、ls・list・freeze・--version のようにローカルしか見ない形でも、外へ送りうるものに数える（sends だけ。fetch は立てないので、動かしたあとの印は付かず、シェルで動かす形を止めることもない）。
-  // レジストリ・インデックスの宛先は作業フォルダの設定（.npmrc・pip.conf・pip.ini など）から読まれ、だまされた判定役がモデルにそれを書かせていたら、どの形でもその宛先へ問い合わせが出うる。形からは設定の中身が分からないので、形では分けない
-  if ((name === 'npm' || /^pip3?$/u.test(name)) && args.length > 0) acc.sends = true;
   const info = INFO_FORMS.find(([re]) => re.test(name));
   if (info && exactForm(words, info[1])) return;
   if (name === 'npm' && exactForm(words, [['--version'], ['-v']])) return;
   if (name === 'npm' && args.length > 0) { npmForms(words, acc); return; }
   if (/^pip3?$/u.test(name) && args.length > 0) { pipForms(words, acc); return; }
+  if (LANG_RUNNERS.has(name) && args.length > 0 && args.every(literal) && !isFlagLike(args[0]!) && LANG_FILE.test(args[0]!.text)) { acc.add('once', 'list.form', { cmd: name, detail: rest }, true, 'list.lang_run'); return; }
   formOnce(acc, name, rest);
 }
 // レジストリに問い合わせて、相手の書いた文字（説明・版・作者の文）を読む形。形が一覧の外でも、札で許して動かせば同じなので、検査より先に印を付ける
+const NPM_SCRIPTS = new Set(['test', 't', 'tst', 'run', 'run-script', 'start']);
+const LANG_RUNNERS = new Set(['node', 'nodejs', 'python', 'python3', 'py']);
+const LANG_FILE = /^[A-Za-z0-9_./\\-]+\.(?:js|mjs|cjs|ts|mts|cts|py)$/u;
+const SCRIPT_NAME = /^[A-Za-z0-9:_.-]+$/u;
 const NPM_REGISTRY_READS = new Set(['view', 'info', 'show', 'v', 'outdated', 'search', 's', 'audit']);
 const PIP_REGISTRY_READS = new Set(['download', 'index', 'search']);
 function npmForms(words: Word[], acc: Acc): void {
@@ -651,6 +653,10 @@ function npmForms(words: Word[], acc: Acc): void {
   if (sub.text === 'view') {
     const names = rest.filter(w => !isFlagLike(w));
     if (!names.length || !names.every(w => NPM_NAME.test(w.text)) || !rest.filter(isFlagLike).every(w => w.text === '--json')) bad();
+    return;
+  }
+  if (NPM_SCRIPTS.has(sub.text) && rest.length === (/^run(?:-script)?$/u.test(sub.text) ? 1 : 0) && rest.every(w => SCRIPT_NAME.test(w.text) && !isFlagLike(w))) {
+    acc.add('once', 'list.form', { cmd: 'npm', detail: args.map(w => w.text).join(' ') }, true, 'list.npm_script');
     return;
   }
   bad();

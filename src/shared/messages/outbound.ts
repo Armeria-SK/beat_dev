@@ -18,6 +18,7 @@ const en = {
   'send.tool_config': '{cmd} reads settings from a config file, input or environment that can change what it sends',
   'send.tool': 'This tool can send data outside',
   'send.browser_submit': 'Submits a form in the browser',
+  'send.browser_open': 'Opens a site in the browser operation list, where you may be signed in, with a query or after reading text from elsewhere',
   'delete.files': 'Deletes files that git cannot restore and that this work did not create',
   'delete.unresolved': 'Deletes files that cannot be listed before running (wildcards, variables, computed names or piped input)',
   'delete.outside': 'Deletes files outside the product folder',

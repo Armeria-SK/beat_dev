@@ -22,8 +22,8 @@ import type { Mesh } from '../mesh/index.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
-// 確かめ（ask）になった理由の種類。段 8b の自動承認は、これを見て判定役に回すかを決める。回してよい種類は auto-approve.ts の CLASSIFIABLE_KINDS だけ。
-// precheck: 道具の事前の判定で、細かい種類が付いていない理由（回さない）/ code: コードを動かす / taint: 外から読んだ内容のあと / policy: 道具ごとの方針の ask / hook: 実行前フック。
+// 確かめ（ask）になった理由の種類。パイプラインは、順 4（製品の中で動かす）と、人のいない実行の外を読んだあとの持ち主行きを、これで見分ける。
+// precheck: 道具の事前の判定で、細かい種類が付いていない理由 / code: コードを動かす / taint: 外から読んだ内容のあと / policy: 道具ごとの方針の ask / hook: 実行前フック。
 // 事前の判定が付ける細かい種類 — outside_read: 許可フォルダの外を読む / outside_write: 外に書く / risky_command: サービスの操作・リモートの設定 /
 // egress: 外とやり取りする・外のコードを入れる・外を読んだあとの送信 / git_write: git が書く / opaque: 中身や行き先が判定できない / persona: 人格・スキルの書き込み /
 // owner: 持ち主が書いた確かめ / web: Web の道具の事前の確かめ。
@@ -53,14 +53,12 @@ export interface PreCheck {
   decision: Decision;
   reasons: string[];
   details?: string[];
-  // 見つけたパスごとの判定（details と同じ材料を構造で。判定には使わず、承認の札に出すだけ）
+  // 見つけたパスごとの判定（details と同じ材料を構造で。Pending の再実行で、承認のあとに新しい確かめが出たかを比べるのに使う。recheckOf / newChecks）
   paths?: ApprovalPath[];
   pathsMore?: number;
-  // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
-  onceOnly?: boolean;
   // ask の理由の種類（理由ごとに付ける。付けなければ pipeline が precheck とみなして、自動では通さない）
   askKinds?: AskKind[];
-  // 確かめの札で見せるコードのファイル
+  // 確かめで見せるコードのファイル
   preview?: PreviewFile[];
   // 見せたファイルの中身の指紋。承認のあと実行の前にもう一度判定して、変わっていたら実行しない
   bind?: string;
@@ -68,8 +66,7 @@ export interface PreCheck {
   ownHooksDir?: string;
   // 事前の判定: この呼び出しが外の中身を持ち込む（シェルの取得・doc_read・downloads/ の下を読む道具など。シェルは git の fetch・pull・clone、パッケージの導入を含む）。実行したら、パイプラインは「外から読んだ」印を付ける（通信の道具と同じ）
   fetched?: boolean;
-  // 事前の判定: この呼び出しが外へ送りうる / 消しうる（ファイルの上書きは消すに入れない）。自動承認が判定役に回すかの材料（auto-approve.ts の humanOnlyOf）。
-  // 効果が write・exec・network の道具は、false とはっきり言わなければ true とみなす（迷ったら人）。効果が read・meta の道具は、true と言ったときだけ。シェルは checkShellCommand の sends / removes。file_write・file_edit・table_write は sends: false, removes: false と言う
+  // 事前の判定: この呼び出しが外へ送りうる / 消しうる。MCP の道具の申告（outbound.ts の outboundOfCall が読む）
   sends?: boolean;
   removes?: boolean;
   outbound?: Outbound;
@@ -79,16 +76,18 @@ export interface PreCheck {
   created?: string[];
   readPaths?: string[];
   pushes?: Array<{ dir: string | null; parsed?: boolean }>;
+  reasonKeys?: string[];
+  productRun?: 'product-code' | 'product-git';
+  ownerReason?: string;
 }
 
-// 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
+// 実行の直前に、パイプライン（承認なし）または Pending の再実行（replay.ts）が道具へ渡す、この 1 回の呼び出しの承認の結果
 export interface ExecuteInfo {
   // 持ち主が、この呼び出しの「今回だけ」の確かめ（コードを動かす確かめ）を許した
   approvedOnce: boolean;
   // 許したときに持ち主に見せた事前の判定
   check?: PreCheck;
-  // 札を出して承認を得た呼び出しで、承認のあとの再判定が比べて一致した bind（札で見せたものの指紋）。道具は実行の直前の探し直しで、同じ指紋になることをもう一度確かめて、違えば実行しない。
-  // 会話の許可で札なしに通る呼び出しには付かない（bind を比べない）
+  // Pending で承認された呼び出しで、再実行の前の再判定が比べて一致した bind（承認のときに見せたものの指紋）。道具は実行の直前の探し直しで、同じ指紋になることをもう一度確かめて、違えば実行しない。
   bind?: string;
   // この呼び出しの id（モデルが付けたもの。agent_run が、画面の agent.state をどの呼び出しの行に結ぶかに使う）
   callId?: string;
@@ -138,12 +137,8 @@ export interface ToolContext {
   model?: { id: string; vision: boolean } | undefined;
   // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
   forbiddenTools?: ReadonlySet<string> | undefined;
-  // 会話のチャットの実行が始まったときの権限モード（段 8b）。無ければふつう。実行に効くのは、これと会話のいまのモードの厳しい方（pipeline.ts の effectiveMode）
+  // 会話のチャットの実行が始まったときの権限モード（段 8b）。無ければ auto。実行に効くのは、これと会話のいまのモードの厳しい方（pipeline.ts の effectiveMode）
   permissionMode?: PermissionMode | undefined;
-  // 自動承認で「許可フォルダの外を読む」を許した。パイプラインが付け、エンジンが読んだ時点で会話の印（conversations.ever_auto_read）に書く。この実行の残りも、あとの実行も、通信の道具（network）とシェルのコマンド（exec）は毎回確かめる（外で読んだ中身を、確かめなしに外へ送らせない）
-  autoReadOutside?: boolean | undefined;
-  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許されたフォルダ（この実行だけ。別の実行には渡らない）と、許可した札の承認の記録の id
-  writeGrants?: Array<{ folder: string; approvalId: string }> | undefined;
   noteCreated?: ((path: string) => void) | undefined;
   isCreated?: ((path: string) => boolean) | undefined;
   toolWindow?: (() => () => void) | undefined;
@@ -172,14 +167,10 @@ export interface ToolDef<I = any> {
   preCheck?: (input: I, ctx: ToolContext) => PreCheck | Promise<PreCheck>;
   // 外から読んだ内容（Web・添付）のあとで確認を求める道具。書き込み・実行の道具は、これが無くても確認する
   escalateOnTaint?: boolean;
-  // 書き込み先のフォルダ単位で、外から読んだ内容のあとの確かめ（理由の種類が taint だけ）を、その実行のあいだ許せる道具（file_write / file_edit）。事前の判定が書き込み先のパスを 1 つ返すこと
-  folderGrant?: boolean;
   // 効果は network のまま、ファイルも書く道具（web_download）。計画モードでは書き込みと同じに断り（planAllows）、振り返りでも断り（reviewAllows。効果が何でも）、外から読んだ内容のあとは書き込みと同じに確かめる
   writesFiles?: true;
   // この呼び出し（引数の確かめを通ったあと）が外へ出るか。true なら、効果が network でなくても、外から読んだ印（動かしたら付く）と、自動承認で外を読んだ会話の毎回の確かめを network と同じにする。効果・計画モード・振り返りの扱いは変えない。投げる・false 以外を返すときは外へ出るとみなす
   networkCall?: (input: I) => boolean;
-  // 呼び出しの引数に関わらず、必ず何かを消す道具（memory_forget）。事前の判定が removes を言わなくても、自動承認は判定役に回さない。効果が meta の道具で消すものは、これを付ける（言い忘れると、判定役に回る）
-  removes?: true;
   // 外の MCP サーバーの道具（src/mcp/tool.ts が付ける）。計画モードには渡さず（planAllows）、手元のモデルの会話には localOk のサーバーの道具だけ渡す（localAllows）
   mcp?: { server: string; tool: string; localOk: boolean };
   // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さず（planAllows）、毎回の承認が要る。6a にはこれを付ける道具は無い

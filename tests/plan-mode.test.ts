@@ -9,6 +9,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { buildDynamic } from '../src/engine/workspace.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { isBrowserTool } from '../src/tools/browser/names.ts';
 import { PLAN_EFFECTS, planAllows, runToolCall } from '../src/tools/pipeline.ts';
@@ -33,16 +34,17 @@ function pipeline(t: { after: (fn: () => void) => void }, mode: () => Permission
   mkdirSync(paths.workspace, { recursive: true });
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
-  const approvals = new ApprovalBroker(db, () => undefined);
+  const approvals = new ApprovalBroker(db);
   const ran: string[] = [];
   const registry = new ToolRegistry();
   for (const effect of EFFECTS) registry.register(stub(effect, ran));
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(config, paths);
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, ...(startMode ? { permissionMode: startMode } : {}),
   };
-  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, db, emit: () => undefined, permissionMode: mode, conversationAutoRead: () => false });
+  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, pending, db, emit: () => undefined, permissionMode: mode });
   return { call, ran, db, ctx };
 }
 
@@ -66,14 +68,14 @@ test('計画モード（パイプライン）: 読む道具と Web の読み取�
   ]);
 });
 
-test('計画モード（パイプライン）: 始めたときと今のモードの厳しい方。始めはふつう・いまは計画ならその場から効き、始めは計画・いまはふつうなら、その実行のあいだは計画のまま。タスク・振り返りには効かない', async t => {
-  const tightened = pipeline(t, () => 'plan', 'normal');
+test('計画モード（パイプライン）: 始めたときと今のモードの厳しい方。始めは自動承認・いまは計画ならその場から効き、始めは計画・いまは自動承認なら、その実行のあいだは計画のまま。タスク・振り返りには効かない', async t => {
+  const tightened = pipeline(t, () => 'plan', 'auto');
   assert.equal((await tightened.call('write')).decidedBy, 'mode', '途中で計画にしたら、すぐ効く');
-  const loosened = pipeline(t, () => 'normal', 'plan');
-  assert.equal((await loosened.call('write')).decidedBy, 'mode', '途中でふつうに戻しても、この実行は計画のまま');
+  const loosened = pipeline(t, () => 'auto', 'plan');
+  assert.equal((await loosened.call('write')).decidedBy, 'mode', '途中で自動承認に戻しても、この実行は計画のまま');
   assert.deepEqual(loosened.ran, []);
-  const none = pipeline(t, () => 'normal', undefined);
-  assert.equal((await none.call('write')).decision, 'allow', 'モードが無い（ふつう）');
+  const none = pipeline(t, () => 'auto', undefined);
+  assert.equal((await none.call('write')).decision, 'allow', 'モードが無い（auto）');
   for (const kind of ['task', 'review'] as const) {
     const s = pipeline(t, () => 'plan', 'plan');
     const outcome = await s.call(kind === 'task' ? 'write' : 'meta', { ...s.ctx, kind, conversationId: `${kind}-conv` });
@@ -81,10 +83,9 @@ test('計画モード（パイプライン）: 始めたときと今のモード
   }
 });
 
-test('計画モード: 英語の指示。毎回組み立てる system に入り、ふつうのモードでは何も足さない', () => {
+test('計画モード: 英語の指示。毎回組み立てる system に入り、自動承認のモードでは何も足さない', () => {
   const now = new Date('2026-11-04T20:00:00Z');
   const plain = buildDynamic('Asia/Tokyo', 'en', now);
-  assert.equal(buildDynamic('Asia/Tokyo', 'en', now, 'normal'), plain);
   assert.equal(buildDynamic('Asia/Tokyo', 'en', now, 'auto'), plain);
   const en = buildDynamic('Asia/Tokyo', 'en', now, 'plan');
   assert.ok(en.startsWith(plain));
@@ -108,7 +109,7 @@ const after = (g: { promise: Promise<void> }, script: Script): Script => async f
 const post = (s: Started, text: string, extra: Record<string, unknown> = {}) => s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text, ...extra });
 const toolNames = (req: { tools: Array<{ name: string }> }) => req.tools.map(t => t.name).sort();
 
-test('計画モード（エンジン）: モデルに渡す道具は読む道具と Web の読み取りだけ。ふつうのモードでは書き込み・実行・meta の道具も渡す', async t => {
+test('計画モード（エンジン）: モデルに渡す道具は読む道具と Web の読み取りだけ。自動承認のモードでは書き込み・実行・meta の道具も渡す', async t => {
   const s = await startApp(t);
   s.adapter().scripts = [say('計画です'), say('ふつうです')];
   const plan = await post(s, '計画して', { permissionMode: 'plan' });
@@ -118,9 +119,9 @@ test('計画モード（エンジン）: モデルに渡す道具は読む道具
   assert.deepEqual(planTools, s.app.tools.forRun('chat').filter(tool => planAllows(tool) && !isBrowserTool(tool.name) && !tool.projectOnly).map(tool => tool.name).sort());
   assert.ok(planTools.includes('file_read') && planTools.includes('file_list') && planTools.includes('web_fetch') && planTools.includes('web_search'));
   for (const gone of ['shell_run', 'file_write', 'file_edit', 'memory_save', 'task_create', 'web_download']) assert.ok(!planTools.includes(gone), `${gone} は渡さない`);
-  const normal = await post(s, 'ふつうに', { permissionMode: 'normal' });
+  const normal = await post(s, 'ふつうに', { permissionMode: 'auto' });
   await settled(s.app, normal.body.runId);
-  assert.deepEqual(toolNames(s.adapter().calls[1]!), all, 'ふつうのモードは全部');
+  assert.deepEqual(toolNames(s.adapter().calls[1]!), all, '自動承認のモードは全部');
 });
 
 test('計画モード（エンジン）: 毎回組み立てる system の部分に計画の指示（英語）が入る（固定の system は変わらない）', async t => {
@@ -128,7 +129,7 @@ test('計画モード（エンジン）: 毎回組み立てる system の部分�
   s.adapter().scripts = [say('a'), say('b')];
   const plan = await post(s, 'plan please', { permissionMode: 'plan' });
   await settled(s.app, plan.body.runId);
-  const normal = await post(s, 'now normal', { permissionMode: 'normal' });
+  const normal = await post(s, 'now normal', { permissionMode: 'auto' });
   await settled(s.app, normal.body.runId);
   const [first, second] = s.adapter().calls;
   assert.match(first!.system.dynamic, /plan mode/iu);
@@ -137,19 +138,19 @@ test('計画モード（エンジン）: 毎回組み立てる system の部分�
   assert.equal(first!.system.frozen, second!.system.frozen);
 });
 
-test('計画モード（エンジン）: モデルが書き込みを呼んでも拒否する（道具が一覧に無くても二重に止める）。ファイルは作られず、札も出ない', async t => {
+test('計画モード（エンジン）: モデルが書き込みを呼んでも拒否する（道具が一覧に無くても二重に止める）。ファイルは作られず、Pending にも積まない', async t => {
   const s = await startApp(t);
   s.adapter().scripts = [callTool('file_write', { path: 'a.md', content: 'x' }), callTool('shell_run', { command: 'echo hi' }), say('計画です')];
   const sent = await post(s, '計画して', { permissionMode: 'plan' });
   await settled(s.app, sent.body.runId);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
-  assert.equal(s.app.approvals.pending().length, 0);
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
   assert.deepEqual(s.app.db.prepare('SELECT tool, decision, decided_by FROM tool_calls ORDER BY created_at').all().map(r => ({ ...r })), [
     { tool: 'file_write', decision: 'deny', decided_by: 'mode' }, { tool: 'shell_run', decision: 'deny', decided_by: 'mode' },
   ]);
 });
 
-test('計画モード（エンジン）: 実行の途中で計画にしたら、次にモデルを呼ぶときの道具から書き込みが消える。途中でふつうに戻しても、この実行は計画のまま', async t => {
+test('計画モード（エンジン）: 実行の途中で計画にしたら、次にモデルを呼ぶときの道具から書き込みが消える。途中で自動承認に戻しても、この実行は計画のまま', async t => {
   const s = await startApp(t);
   mkdirSync(s.paths.workspace, { recursive: true });
   writeFileSync(join(s.paths.workspace, 'a.txt'), 'こんにちは');
@@ -160,7 +161,7 @@ test('計画モード（エンジン）: 実行の途中で計画にしたら、
   g.open();
   await settled(s.app, sent.body.runId);
   const [first, second] = s.adapter().calls;
-  assert.ok(toolNames(first!).includes('file_write'), '始めはふつうで、道具を渡した（モデルの呼び出しは、道具を渡したあとにモードが替わった）');
+  assert.ok(toolNames(first!).includes('file_write'), '始めは自動承認で、道具を渡した（モデルの呼び出しは、道具を渡したあとにモードが替わった）');
   assert.ok(!toolNames(second!).includes('file_write'), '途中で計画にしたので、次の呼び出しから書き込みの道具が消える');
 
   const t2 = await startApp(t);
@@ -169,10 +170,10 @@ test('計画モード（エンジン）: 実行の途中で計画にしたら、
   const g2 = gate();
   t2.adapter().scripts = [after(g2, callTool('file_read', { path: 'a.txt' })), say('読みました')];
   const second2 = await post(t2, '読んで', { permissionMode: 'plan' });
-  await t2.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'normal' });
+  await t2.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'auto' });
   g2.open();
   await settled(t2.app, second2.body.runId);
-  assert.ok(t2.adapter().calls.every(c => !toolNames(c).includes('file_write')), '計画で始めた実行は、途中でふつうに戻しても計画のまま');
+  assert.ok(t2.adapter().calls.every(c => !toolNames(c).includes('file_write')), '計画で始めた実行は、途中で自動承認に戻しても計画のまま');
 });
 
 test('計画モード（エンジン）: 使用量の数え方も計画モードの道具の一覧と指示で数える（次の実行と同じ数）', async t => {

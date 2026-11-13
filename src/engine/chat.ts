@@ -12,9 +12,9 @@ import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
-import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
+import { NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
-import { acceptanceAllows, localAllows, planAllows, reviewAllows, runToolCall } from '../tools/pipeline.ts';
+import { acceptanceAllows, localAllows, planAllows, reviewAllows, runToolCall, type JudgeLimitSet } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
@@ -61,6 +61,13 @@ const TRUNCATION_STRIKES = 2;
 const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
+
+function forModel(message: ChatMessage): ChatMessage {
+  if (message.role !== 'tool' || !message.gate) return message;
+  const copy = { ...message };
+  delete copy.gate;
+  return copy;
+}
 // 人のいない実行（タスク・振り返り・子の担当）を区切る回数
 export const UNATTENDED_ITERATION_CEILING = 100;
 // アプリ全体で同時に動かせる子の担当の数（これを越えたら待たずに busy を返す）
@@ -117,6 +124,7 @@ export interface ChatEngineDeps {
   now?: () => Date;
   // 子の担当の時間切れ（ミリ秒）。試験で短くするためだけの上書き。ふつうは設定 tools.agent.timeoutSec（秒）を使う
   agentTimeoutMs?: number | undefined;
+  judgeLimits?: JudgeLimitSet | undefined;
   // maxTools で切られた MCP の道具を、モデルごとに知らせる（空の一覧は「切られていない」）。MCP の管理が、道具の状態を cut にするために使う
   mcpCut?: (modelId: string, names: readonly string[]) => void;
   // ブラウザ 1 つ（全会話で共有）。無ければ browser_* は動かない（ToolContext.services.browser）
@@ -236,7 +244,7 @@ export class ChatEngine {
     // 実行が始まってから会話のモデルや権限モードが替わっていたら（PATCH でも、この送信の modelId・permissionMode でも）、この発言は古いモデル・古いモードの実行に読ませない。
     // 一度保留した発言があれば、あとの発言も順番を守るため保留する
     const held = queue.some(p => p.held) || (this.#d.conversations.get(conversationId)?.model_id ?? null) !== (this.#runModel.get(running) ?? null)
-      || this.#d.conversations.modeOf(conversationId) !== (this.#runMode.get(running) ?? 'normal');
+      || this.#d.conversations.modeOf(conversationId) !== (this.#runMode.get(running) ?? 'auto');
     const pending: PendingMessage = { id: randomUUID(), ...item, interrupt: options.interrupt === true, createdAt: this.#d.now?.().getTime() ?? Date.now(), held, afterStop: this.#stopped.has(running) };
     this.#pending.set(conversationId, [...queue, pending]);
     this.#d.bus.publish({ type: 'pending.changed', conversationId });
@@ -273,7 +281,7 @@ export class ChatEngine {
     if (existing) {
       if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
     } else {
-      const permissionMode = choice.permissionMode ?? (projectId !== undefined && this.#d.plans?.has(projectId) === false ? 'plan' : 'normal');
+      const permissionMode = choice.permissionMode ?? (projectId !== undefined && this.#d.plans?.has(projectId) === false ? 'plan' : 'auto');
       this.#d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode });
     }
     const runId = randomUUID();
@@ -378,8 +386,7 @@ export class ChatEngine {
     return !(last.ok === 1 && !wrappedUp);
   }
 
-  // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは、実行が道具の呼び出しの中で待っているので、区切りに来ない。承認の答えが先）。
-  // 差し込む発言は別の返事の元なので、「この返事のあいだ」のフォルダの許可（ctx.writeGrants）はここで全部終わる。
+  // 実行の区切りで、待っている発言を履歴に入れる。
   // 添付つきの発言は外から来た文なので、この実行の残りも「外から読んだ」扱いにする。
   // 実行が始まったあとにモデルか権限モードを替えて送られた発言（held）は入れない（古いモデル・古いモードの実行へ渡さない）。実行が終わってから新しい実行で読ませる
   #injectPending(runId: string, conversationId: string, ctx: ToolContext): void {
@@ -388,7 +395,6 @@ export class ChatEngine {
     if (!queue?.length) return;
     const injectable = queue.filter(p => !p.held);
     if (!injectable.length) return;
-    ctx.writeGrants = undefined;
     const held = queue.filter(p => p.held);
     if (held.length) this.#pending.set(conversationId, held); else this.#pending.delete(conversationId);
     const language = languageOf(d.config());
@@ -582,7 +588,7 @@ export class ChatEngine {
   activeRuns(): Array<{ runId: string; conversationId: string; kind: RunKind; mode?: PermissionMode }> {
     return [...this.#active.values()].map(a => ({
       runId: a.runId, conversationId: a.conversationId, kind: a.kind,
-      ...(a.kind === 'chat' ? { mode: stricterMode(this.#runMode.get(a.runId) ?? 'normal', this.#d.conversations.modeOf(a.conversationId)) } : {}),
+      ...(a.kind === 'chat' ? { mode: stricterMode(this.#runMode.get(a.runId) ?? 'auto', this.#d.conversations.modeOf(a.conversationId)) } : {}),
     }));
   }
 
@@ -672,7 +678,7 @@ export class ChatEngine {
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
   // 手元のモデルの会話（localOnly）には、localOk でない MCP の道具を渡さない（localAllows。パイプラインも同じに拒む）。
   // maxTools で切られた MCP の道具は、モデルと道具の組ごとに 1 回だけ [WARN] を出し、MCP の管理に知らせる（画面の状態が cut になる）
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal', localOnly = false, inProject = false, frozen = false): ToolDef[] {
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', localOnly = false, inProject = false, frozen = false): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
     const exclude = (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff(config, kind)) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
@@ -729,7 +735,7 @@ export class ChatEngine {
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
-      ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
+      ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'auto' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
@@ -737,7 +743,6 @@ export class ChatEngine {
     ctx.toolWindow = () => this.created.open(ctx);
     if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider)) && (agent?.parent.modelsLocal ?? true);
-    if (agent?.parent.autoReadOutside) ctx.autoReadOutside = true;
     ctx.localOnly = agent ? agent.parent.localOnly : kind === 'chat' ? isLocalPinned(config, d.conversations.get(conversationId)?.model_id) : task?.task.local_only === 1;
     // 子の担当を任せる道具の入口（設定で有効のときだけ。子は孫を作れない。タスクは tools.agent.inTasks で許したときだけ）
     if (kind !== 'agent' && config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))) {
@@ -747,9 +752,6 @@ export class ChatEngine {
     let taintRecorded = false;
     // 会話にも「外から読んだことがある」印を付ける（自動承認の判定役には、この会話は「よそから来た文を読んだ」と伝わる）
     const recordTaint = () => { if (taintRecorded || !ctx.taint.tainted) return; taintRecorded = true; d.runs.markTainted(runId); if (kind === 'chat' || kind === 'agent') d.conversations.markTainted(conversationId); };
-    // 自動承認で許可フォルダの外を読んだ印は、会話に書く（この会話のシェルのコマンドと通信の道具は、あとの実行でもずっと毎回確かめる。実行が止まる・落ちても残るよう、読んだ時点で書く）
-    let autoReadRecorded = false;
-    const recordAutoRead = () => { if (autoReadRecorded || !ctx.autoReadOutside) return; autoReadRecorded = true; d.conversations.markAutoRead(conversationId); };
     const addUsage = (u: Usage) => {
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
@@ -774,8 +776,7 @@ export class ChatEngine {
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       this.#injectNotes(runId, conversationId, ctx);
-      if (kind === 'chat' || kind === 'agent') { recordTaint(); recordAutoRead(); }
-      if (kind === 'task') recordTaint();
+      if (kind === 'chat' || kind === 'agent' || kind === 'task') recordTaint();
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
@@ -817,16 +818,17 @@ export class ChatEngine {
         const outcome = await runToolCall(toolCall, ctx, {
           registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: () => allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
           permissionMode: () => this.#modeOf(conversationId),
-          autoClassify: (prompt, classifierSignal) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal),
-          lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? '' : this.#lastUserRequest(conversationId)),
+          autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal, judgeCall),
+          lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
+            : agent ? (agent.parent.task ? d.tasks?.judgeRequest(agent.parent.task.id) ?? '' : this.#lastUserRequest(agent.parent.conversationId))
+            : this.#lastUserRequest(conversationId)),
+          judgeLimits: d.judgeLimits,
           conversationTainted: () => d.conversations.everTainted(conversationId),
-          conversationAutoRead: () => d.conversations.everAutoRead(conversationId),
         }, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
         recordTaint();
-        recordAutoRead();
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
-          role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}),
+          role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
           ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
         }, runId);
         d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
@@ -863,15 +865,53 @@ export class ChatEngine {
   // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。
   // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。手元のモデルを選んだ会話（ctx.localOnly）は、手元のモデルのときだけ。道具は渡さない。
   // 判定役の呼び出しは engine_runs に入れず、会話も作らない
-  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal): Promise<string> {
+  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string> {
+    const config = this.#d.config();
+    const named = config.routing.judge ?? [];
+    const routes: Route[] = named.length
+      ? named.flatMap(id => {
+        const model = config.models.find(m => m.id === id);
+        const provider = model && config.providers.find(p => p.id === model.provider);
+        return model && provider ? [{ model, provider }] : [];
+      })
+      : [route];
+    const usable = routes.filter(r => !ctx.localOnly || isLocalProvider(r.provider));
+    if (!usable.length) throw new NoJudge(ctx.localOnly ? 'the judge model must be local for a local conversation' : 'no judge model is set up');
+    let failure: unknown = new NoJudge('no judge model could be called');
+    for (const [index, candidate] of usable.entries()) {
+      const own = index < usable.length - 1 && call ? new AbortController() : undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stop = () => own?.abort(signal.reason);
+      if (own) signal.addEventListener('abort', stop, { once: true });
+      const step: JudgeCall | undefined = own && call ? {
+        answerMs: call.answerMs, slotWaitMs: call.slotWaitMs, queued: () => call.queued(),
+        started: () => { timer = setTimeout(() => { call.queued(); own.abort(new Error('the judge model did not answer in time')); }, call.answerMs); call.started(); },
+      } : call;
+      try {
+        const answer = await this.#askJudge(candidate, prompt, own?.signal ?? signal, step);
+        if (own?.signal.aborted) throw own.signal.reason;
+        return answer;
+      } catch (error) {
+        if (signal.aborted || error instanceof TruncatedReply) throw error;
+        failure = error;
+      } finally {
+        clearTimeout(timer);
+        if (own) signal.removeEventListener('abort', stop);
+      }
+    }
+    throw failure;
+  }
+
+  async #askJudge(route: Route, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string> {
     const d = this.#d;
     const { model, provider } = route;
-    if (ctx.localOnly && !isLocalProvider(provider)) throw new Error('the classifier model must be local for a local conversation');
     const adapter = d.registry.get(provider.id);
     if (!adapter) throw new Error('no adapter for the classifier model');
     let release: (() => void) | undefined;
     try {
-      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal);
+      call?.queued();
+      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal, true);
+      call?.started();
       let text = '';
       for await (const event of adapter.stream({
         model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,
@@ -1024,7 +1064,7 @@ export class ChatEngine {
     const config = d.config();
     const language = languageOf(config);
     const current = this.#modeOf(p.conversationId);
-    const mode: PermissionMode = p.kind === 'chat' || p.kind === 'agent' ? stricterMode(p.startedMode ?? current, current) : 'normal';
+    const mode: PermissionMode = p.kind === 'chat' || p.kind === 'agent' ? stricterMode(p.startedMode ?? current, current) : 'auto';
     const localOnly = p.kind === 'chat' && isLocalPinned(config, d.conversations.get(p.conversationId)?.model_id);
     const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, localOnly, p.project !== undefined, this.#frozen(p.project?.id));
     const specs = ToolRegistry.specs(toolDefs, config);
@@ -1041,7 +1081,7 @@ export class ChatEngine {
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), mesh, summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
-    const history = stored.map(m => m.message);
+    const history = stored.map(m => forModel(m.message));
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
     return { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor };
@@ -1119,7 +1159,7 @@ export class ChatEngine {
     for (const active of this.#active.values()) if (active.kind === 'agent') live += 1;
     if (live >= MAX_LIVE_AGENTS) return fail('agent.busy');
     // 子に渡せる道具 = 親にいま渡る道具 ∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
-    const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'normal', this.#modeOf(parent.conversationId)) : 'normal';
+    const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'auto', this.#modeOf(parent.conversationId)) : 'auto';
     const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, false, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
     const givableNames = new Set(givable.map(t => t.name));
     if (input.tools) {
@@ -1135,9 +1175,8 @@ export class ChatEngine {
     const child = d.conversations.create({ title, kind: 'task', source: { conversationId: parent.conversationId }, parentRunId: parent.runId, projectId: d.conversations.projectOf(parent.conversationId) });
     const saved = d.conversations.append(child.id, { role: 'user', content: `${engineText(language, 'agent.preamble')}\n\n${input.task}` });
     d.bus.publish({ type: 'message.saved', runId: childRunId, conversationId: child.id, messageId: saved.id, role: 'user' });
-    // 親が外から読んでいたら、子もその状態で始める。外を読まずに許可フォルダの外を読んだ印も引き継ぐ
+    // 親が外から読んでいたら、子もその状態で始める
     if (parent.taint.tainted || d.conversations.everTainted(parent.conversationId)) this.#initialTaint.set(childRunId, [engineText(language, 'taint.parent')]);
-    if (parent.autoReadOutside || d.conversations.everAutoRead(parent.conversationId)) d.conversations.markAutoRead(child.id);
     if (parent.kind === 'chat') this.#modeHost.set(child.id, parent.conversationId);
     this.#agentSpawned.set(parent.runId, spawned + 1);
 
@@ -1159,7 +1198,6 @@ export class ChatEngine {
     const toolCalls = row?.tool_calls ?? 0;
     // 子が外から読んでいたら、親も外から読んだことにする（結果に fetched を付ける。pipeline が tool 名を sources に足す）
     const fetched = row?.tainted === 1;
-    if (d.conversations.everAutoRead(child.id)) parent.autoReadOutside = true;
     if (why.value === 'timeout') { emit('timeout', toolCalls); return fail('agent.timeout', { sec: Math.round(timeoutMs / 1000) }, fetched); }
     if (why.value === 'parent' || (!result.ok && result.errorKind === 'cancelled')) { emit('cancelled', toolCalls); return fail('agent.stopped', undefined, fetched); }
     if (!result.ok) { emit('failed', toolCalls); return fail('agent.failed', { reason: result.errorMessage }, fetched); }

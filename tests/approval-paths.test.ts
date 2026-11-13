@@ -5,9 +5,10 @@ import { test } from 'node:test';
 import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { ApprovalBroker, approvalPaths, approvalPathsMore, approvalPublic, approvalWire, type ApprovalPath } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
+import { ApprovalBroker, approvalPaths, approvalPathsMore, type ApprovalPath } from '../src/tools/approvals.ts';
+import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -25,36 +26,37 @@ function setup(t: { after: (fn: () => void) => void }) {
   config.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }];
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
-  const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const judged: ClassifierPrompt[] = [];
   const policy = buildPolicy(parsed, paths);
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
-  // 承認の札が出るまで待ち、拒否して、札の中身を返す
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
+      registry, approvals, pending, db, emit: () => undefined, conversationTainted: () => false, lastUserRequest: () => 'do the work',
+      autoClassify: async prompt => { judged.push(prompt); return '{"decision":"ask","reason":"check it"}'; },
+    });
   const asked = async (name: string, args: unknown) => {
-    const pending = call(name, args);
-    for (let i = 0; i < 300 && !approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-    const view = approvals.pending()[0];
-    assert.ok(view, '承認の依頼が来ていない');
-    approvals.decide(view.id, 'deny');
-    await pending;
-    return { view, wire: approvalWire(view), events };
+    const before = pending.list({ status: 'waiting' }).length;
+    const out = await call(name, args);
+    assert.deepEqual([out.decision, out.decidedBy], ['ask', 'pending'], '動かさずに Pending に積む');
+    assert.equal(pending.list({ status: 'waiting' }).length, before + 1);
+    const check = await registry.get(name)!.preCheck!(args as never, ctx);
+    return { view: { paths: check.paths, details: check.details ?? [], pathsMore: check.pathsMore ?? 0, onceOnly: check.askKinds?.includes('code') }, judged };
   };
-  return { paths, ctx, call, approvals, events, asked };
+  return { paths, ctx, call, approvals, asked };
 }
 
 test('シェル: 見つけたパスごとに、許可フォルダの中（読み書き）・中（読むだけ）・外を返す。details の文は今までと同じ', async t => {
   const s = await setup(t);
   const outside = resolve(s.ctx.workspace, '../out.txt');
   const doc = join(s.paths.data, 'reference', 'doc.md');
-  const { view } = await s.asked('shell_run', { command: `cat a.txt; cat ${doc}; cat ../out.txt` });
+  const { view, judged } = await s.asked('shell_run', { command: `cat a.txt; cat ${doc}; cat ../out.txt` });
+  assert.ok(judged.at(-1)!.user.includes(`- ../out.txt -> ${outside} [out]`), '判定役にも見つけたパスの判定を見せる');
   assert.deepEqual(view.paths, [
     { input: '../out.txt', path: outside, verdict: 'out' },
     { input: 'a.txt', path: join(s.ctx.workspace, 'a.txt'), verdict: 'in', mode: 'write' },
@@ -113,19 +115,15 @@ test('シェル: 外・拒否・判定できないは、中より先に並べて
   assert.equal(approvalPathsMore(dup), 14, '重なりは 1 行に数える');
 });
 
-test('シェル: 多くのパスを見つけた承認の札は、危ないものを先に出し、切った数を pathsMore で SSE と API の両方に渡す', async t => {
+test('シェル: 多くのパスを見つけた確かめは、危ないものを先に出し、切った数を pathsMore で数える', async t => {
   const s = await setup(t);
   const reads = Array.from({ length: 34 }, (_, i) => `cat f${i}.txt`).join('; ');
-  const { view, wire } = await s.asked('shell_run', { command: `${reads}; cat ../out.txt` });
+  const { view } = await s.asked('shell_run', { command: `${reads}; cat ../out.txt` });
   assert.equal(view.paths?.length, 30);
   assert.deepEqual([view.paths![0]!.input, view.paths![0]!.verdict], ['../out.txt', 'out'], '外が先頭');
   assert.equal(view.pathsMore, 5, '35 行のうち 30 行を出す');
-  assert.equal(approvalPublic(view).pathsMore, 5);
-  assert.equal(wire.pathsMore, 5);
-  const sse = s.events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }>;
-  assert.equal((sse.approval as { pathsMore?: number }).pathsMore, 5);
   const fewer = await s.asked('shell_run', { command: 'cat a.txt; cat ../out.txt' });
-  assert.equal(fewer.wire.pathsMore, 0, '切らなければ 0');
+  assert.equal(fewer.view.pathsMore, 0, '切らなければ 0');
 });
 
 test('すべての判定の種類: 中（読み書き・読むだけ）・外・拒否・判定できない', () => {
@@ -156,27 +154,6 @@ test('シェル: 今回だけの確かめ（コードを動かす確かめ）に
   assert.deepEqual((view.paths ?? []).map(p => [p.input, p.verdict]), [['../o.txt', 'out']]);
 });
 
-test('パスを持たない承認（外から読んだあとの確かめなど）は paths が空', async t => {
-  const s = await setup(t);
-  s.ctx.taint.tainted = true;
-  s.ctx.taint.sources.push('web_fetch');
-  const { view, wire } = await s.asked('file_write', { path: 'b.md', content: 'x' });
-  assert.equal(view.paths?.length, 1, '書き込み先のパスは出す');
-  const bare = approvalPublic({ ...view, paths: undefined });
-  assert.deepEqual(bare.paths, [], 'パスが無ければ空の配列（画面は details の文に戻る）');
-  assert.deepEqual(wire.paths, view.paths);
-});
-
-test('承認の形は 1 か所: SSE の知らせと API の応答は、同じ paths を同じ形で持つ', async t => {
-  const s = await setup(t);
-  const { view, events } = await s.asked('shell_run', { command: 'cat ../out.txt' });
-  const sse = events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }>;
-  assert.deepEqual(sse.approval.paths, approvalPublic(view).paths);
-  assert.deepEqual(sse.approval, approvalPublic(view));
-  assert.deepEqual(Object.keys(approvalWire(view)).sort(), ['runId', 'conversationId', ...Object.keys(approvalPublic(view))].sort());
-  assert.ok(Object.keys(approvalPublic(view)).includes('paths'));
-});
-
 // A8 の前に本物のガードで取った判定の表。パスを返す側を足しても、allow / ask / deny と「今回だけ」は 1 つも変わらない（この表は赤くならない見張り）
 test('A8 は判定を変えない: 事前判定の allow / ask / deny と今回だけは、パスを返す前に取った表のまま', async t => {
   const s = await setup(t);
@@ -187,6 +164,6 @@ test('A8 は判定を変えない: 事前判定の allow / ask / deny と今回�
   ];
   for (const [command, decision, onceOnly] of table) {
     const pre = shellPreCheck({ command }, s.ctx);
-    assert.deepEqual([pre.decision, pre.onceOnly === true], [decision, onceOnly], command);
+    assert.deepEqual([pre.decision, pre.askKinds?.includes('code') === true], [decision, onceOnly], command);
   }
 });

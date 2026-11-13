@@ -32,7 +32,7 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   };
   const send = async (id: string, body: Record<string, unknown>) => {
     const fresh = body.projectId !== undefined && body.permissionMode === undefined && !s.app.conversations.get(id);
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', fresh ? { ...body, permissionMode: 'normal' } : body);
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', fresh ? { ...body, permissionMode: 'auto' } : body);
     if (sent.status === 202) await settled(s.app, sent.body.runId);
     return sent;
   };

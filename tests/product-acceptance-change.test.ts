@@ -88,11 +88,11 @@ test('3-3-s acceptance_change の印: meta・planOk・projectOnly・製品の会
   assert.equal(names.indexOf('acceptance_change'), names.indexOf('acceptance_write') + 1, 'acceptance_write のすぐ後ろ（shell_run の後ろ）');
 });
 
-test('3-3-s 一覧の状態で道具を出し分ける: 一覧が無い・下書きなら acceptance_write だけ、固定のあとは acceptance_change だけ（計画モードでもふつうのモードでも）。製品に属さない会話にはどちらも無い', async t => {
+test('3-3-s 一覧の状態で道具を出し分ける: 一覧が無い・下書きなら acceptance_write だけ、固定のあとは acceptance_change だけ（計画モードでも自動承認のモードでも）。製品に属さない会話にはどちらも無い', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   const names = () => s.adapter().calls.at(-1)!.tools.map(tool => tool.name);
-  for (const [n, mode] of [[1, 'plan'], [2, 'normal']] as const) {
+  for (const [n, mode] of [[1, 'plan'], [2, 'auto']] as const) {
     s.adapter().scripts = [reply('a')];
     await s.send(uuid(n), { text: 'x', projectId: shop.id, permissionMode: mode });
     assert.ok(names().includes('acceptance_write') && !names().includes('acceptance_change'), `無い ${mode}: ${names().join()}`);
@@ -102,7 +102,7 @@ test('3-3-s 一覧の状態で道具を出し分ける: 一覧が無い・下書
   assert.ok(names().includes('acceptance_write') && !names().includes('acceptance_change'), '下書き');
   await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
   assert.equal((await s.build(shop.id)).status, 201);
-  for (const [n, mode] of [[3, 'plan'], [4, 'normal']] as const) {
+  for (const [n, mode] of [[3, 'plan'], [4, 'auto']] as const) {
     s.adapter().scripts = [reply('a')];
     await s.send(uuid(n), { text: 'x', projectId: shop.id, permissionMode: mode });
     assert.ok(names().includes('acceptance_change') && !names().includes('acceptance_write'), `固定 ${mode}: ${names().join()}`);

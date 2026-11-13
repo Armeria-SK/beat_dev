@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './database.ts';
 import type { ChatMessage } from '../engine/types.ts';
-import type { PermissionMode } from '../shared/permission-mode.ts';
+import { readMode, type PermissionMode } from '../shared/permission-mode.ts';
 
 export interface ConversationRow {
   id: string;
@@ -20,8 +20,6 @@ export interface ConversationRow {
   permission_mode: PermissionMode;
   // 1 = この会話のチャットの実行が、外から読んだ内容（Web・添付・シェルの取得）を一度でも読んだ。付いたら外れない
   ever_tainted: number;
-  // 1 = この会話のどこかの実行で、自動承認の判定役が許可フォルダの外を読むのを許した。付いたら外れない
-  ever_auto_read: number;
   // 記憶の振り返りの会話だけが持つ。振り返りの材料にした会話・タスク（振り返りの会話には、その全文が入る）。外のモデルの履歴の検索・読み出しから隠す決まりに使う
   source_conversation_id: string | null;
   source_task_id: string | null;
@@ -34,7 +32,7 @@ export const LIST_NO_PROJECT_LIMIT = 100;
 export const LIST_PER_PROJECT_LIMIT = 30;
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
-export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean; message_count: number; archived_at: number | null };
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean; message_count: number; archived_at: number | null };
 const ARCHIVED_AT = 'archived-at:';
 type ListRow = Omit<ConversationListItem, 'has_summary'> & { has_summary: number };
 const LIST_COLUMNS = `conversations.id, conversations.kind, conversations.title, conversations.archived, conversations.created_at, conversations.last_message_at, conversations.summary_upto,
@@ -121,7 +119,8 @@ export class Conversations {
   }
 
   get(id: string): ConversationRow | undefined {
-    return this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as ConversationRow | undefined;
+    const row = this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as ConversationRow | undefined;
+    return row && { ...row, permission_mode: readMode(row.permission_mode) };
   }
 
   // チャットの会話の一覧（新しい順）。archived: true でアーカイブした会話。query は題の部分一致（大文字小文字を区別しない）
@@ -134,7 +133,7 @@ export class Conversations {
       FROM conversations WHERE archived = ? AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}${project}
       ORDER BY last_message_at DESC LIMIT ?
     `).all(...[options.archived ? 1 : 0, ...(like ? [like] : []), ...(options.project ? [options.project] : []), limit]) as unknown as ListRow[];
-    return rows.map(row => ({ ...row, has_summary: row.has_summary === 1 }));
+    return rows.map(row => ({ ...row, permission_mode: readMode(row.permission_mode), has_summary: row.has_summary === 1 }));
   }
 
   listByProject(options: { query?: string } = {}): { conversations: ConversationListItem[]; more: Record<string, number> } {
@@ -156,7 +155,7 @@ export class Conversations {
       const over = row.total - (row.project_id === null ? LIST_NO_PROJECT_LIMIT : LIST_PER_PROJECT_LIMIT);
       if (over > 0) more[row.project_id ?? 'none'] = over;
     }
-    return { conversations: rows.map(({ total: _total, ...row }) => ({ ...row, has_summary: row.has_summary === 1 })), more };
+    return { conversations: rows.map(({ total: _total, ...row }) => ({ ...row, permission_mode: readMode(row.permission_mode), has_summary: row.has_summary === 1 })), more };
   }
 
   countChats(project: string | null): number {
@@ -177,7 +176,7 @@ export class Conversations {
     if (this.#isDeleted(id)) { this.#log?.(`[WARN] Skipped writing to deleted conversation ${id} (the conversation is not re-created)`); return false; }
     const now = this.now();
     this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at, project_id, model_id, effort, permission_mode) VALUES (?, 'chat', ?, ?, ?, ?, ?, ?)`)
-      .run(id, now, now, options.projectId ?? null, options.modelId ?? null, options.effort ?? null, options.permissionMode ?? 'normal');
+      .run(id, now, now, options.projectId ?? null, options.modelId ?? null, options.effort ?? null, options.permissionMode ?? 'auto');
     return true;
   }
 
@@ -200,20 +199,9 @@ export class Conversations {
     return row === undefined || row.ever_tainted !== 0;
   }
 
-  // 会話に「自動承認で許可フォルダの外を読んだことがある」印を付ける（一度付いたら外れない）。この会話のシェルのコマンドと通信の道具は、ずっと毎回確かめる
-  markAutoRead(id: string): void {
-    this.db.prepare('UPDATE conversations SET ever_auto_read = 1 WHERE id = ?').run(id);
-  }
-
-  // 自動承認で外を読んだことがある会話か。会話が読めないときは、ある側に倒す
-  everAutoRead(id: string): boolean {
-    const row = this.db.prepare('SELECT ever_auto_read FROM conversations WHERE id = ?').get(id) as { ever_auto_read: number } | undefined;
-    return row === undefined || row.ever_auto_read !== 0;
-  }
-
-  // 会話の権限モード。無い会話はふつう
+  // 会話の権限モード。無い会話と、前の形の normal は auto
   modeOf(id: string): PermissionMode {
-    return (this.db.prepare('SELECT permission_mode FROM conversations WHERE id = ?').get(id) as { permission_mode: PermissionMode } | undefined)?.permission_mode ?? 'normal';
+    return readMode((this.db.prepare('SELECT permission_mode FROM conversations WHERE id = ?').get(id) as { permission_mode: string } | undefined)?.permission_mode);
   }
 
   rename(id: string, title: string): void {

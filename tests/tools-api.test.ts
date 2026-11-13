@@ -60,11 +60,15 @@ test('PATCH /api/tools/agent_run: 既定は allow。ask と書くと Pending で
   assert.equal((await patch(s, 'agent_run', { policy: 'ask' })).status, 200);
   assert.deepEqual(fileOf(s).tools.policies, { agent_run: 'ask' });
   assert.equal(await policyOf(), 'block', 'ask は block として読む');
+  const row = ((await (await s.api('/api/tools')).json()) as { tools: Array<ToolRow & { askIsBlock?: true }> }).tools;
+  assert.deepEqual(row.filter(tool => tool.askIsBlock).map(tool => tool.name), ['agent_run'], '設定に ask と書いてあることを画面が知らせられるよう、印を返す');
   assert.equal((await patch(s, 'agent_run', { policy: 'allow' })).status, 200);
   assert.deepEqual(fileOf(s).tools.policies ?? {}, {}, '既定に戻すと項目を消す');
   assert.equal(await policyOf(), 'allow');
   assert.equal((await patch(s, 'agent_run', { policy: 'block' })).status, 200);
   assert.equal(await policyOf(), 'block');
+  const blocked = ((await (await s.api('/api/tools')).json()) as { tools: Array<ToolRow & { askIsBlock?: true }> }).tools;
+  assert.equal(blocked.some(tool => tool.askIsBlock), false, 'block と書いたときは印を付けない');
 });
 
 test('toolPolicy: agent_run は書かなければ allow、読めない値も allow。ask と書いてあれば block と読み、起動のログに出す名前に入る', () => {

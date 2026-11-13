@@ -7,7 +7,6 @@ import { parseCron } from '../tasks/schedule.ts';
 import { SCHEDULE_MAX_RANGE_MS, TaskError, taskView, type Task } from '../tasks/store.ts';
 import { splitKey } from '../tasks/worker.ts';
 import { languageOf } from '../shared/language.ts';
-import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 import { projectFilterOf, usableProjectId } from './routes-projects.ts';
@@ -110,11 +109,10 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   router.add('GET', '/api/tasks/:id', ({ res, params }) => {
     const task = getTask(params[0]!);
-    const approvals = task.conversation_id ? app.approvals.pending().filter(a => approvalShownIn(a) === task.conversation_id).map(approvalWire) : [];
     const children = task.status === 'scheduled'
       ? app.db.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at DESC LIMIT 20').all(task.id) as unknown as Task[]
       : [];
-    sendJson(res, 200, { task: view(task), events: app.tasks.events(task.id), approvals, runs: children.map(view) });
+    sendJson(res, 200, { task: view(task), events: app.tasks.events(task.id), runs: children.map(view) });
   });
 
   router.add('PATCH', '/api/tasks/:id', async ({ req, res, params }) => {

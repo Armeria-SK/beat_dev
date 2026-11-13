@@ -78,6 +78,21 @@ const en = {
   'notify_title_conversation': 'Waiting in Pending from a conversation',
   'taint_note': 'the result of an approved Pending item',
   'task_waiting': 'Pending: {ids}',
+  'judge_asked': 'the judge wants the owner to decide: {reason}',
+  'judge_asked_no_reason': 'the judge wants the owner to decide',
+  'judge_failed_timeout': 'the judge did not answer in time',
+  'judge_failed_slot_timeout': 'the judge could not start in time because its model was busy',
+  'judge_failed_unparsable': "the judge's answer could not be read",
+  'judge_failed_error': 'the judge could not be called',
+  'judge_failed_no_judge': 'there is no judge model that may be used here',
+  'judge_failed_no_request': 'there is no request from the owner to judge it against',
+  'judge_failed_too_long': 'the action is too long for the judge to read',
+  'owner_protected': 'it changes something beat protects: {reasons}',
+  'owner_task_taint': 'this run read outside content, and {name} would change tasks',
+  'owner_protected_push': 'the push would send changes to protected files: {files}',
+  'owner_push_unchecked': 'beat could not check whether the push sends changes to protected files',
+  'owner_secret_commit': 'it would add a secret-like file to a commit ({path})',
+  'owner_secret_message': 'the commit message contains text that looks like a secret',
 } as const;
 
 export type PendingMessageKey = keyof typeof en;

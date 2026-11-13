@@ -11,7 +11,9 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { xlsxText } from '../src/shared/office-text.ts';
 import { openZip } from '../src/shared/zip.ts';
-import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { PendingStore } from '../src/pending/store.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
+import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { docRead } from '../src/tools/builtin/docs.ts';
 import { TABLE_MAX_TOTAL_CHARS, tableWrite } from '../src/tools/builtin/tables.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -31,10 +33,10 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const parsed = parseConfig(config);
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
-  const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
-    : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
+  const approvals = new ApprovalBroker(db);
   const registry = new ToolRegistry().register(tableWrite);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const judge = { answer: '{"decision":"ask","reason":"not sure"}', calls: [] as ClassifierPrompt[] };
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const ctx: ToolContext = {
@@ -42,16 +44,12 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name: 'table_write', arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
-  return { paths, ctx, call, approvals, events };
-}
-
-async function decideNext(s: ReturnType<typeof setup>, decision: 'once' | 'conversation' | 'folder' | 'deny') {
-  for (let i = 0; i < 200 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-  const pending = s.approvals.pending()[0];
-  assert.ok(pending, '承認の依頼が来ていない');
-  s.approvals.decide(pending.id, decision);
-  return pending;
+    runToolCall({ id: `call-${Math.random()}`, name: 'table_write', arguments: args }, c, {
+      registry, approvals, pending, db, emit: e => events.push(e),
+      lastUserRequest: () => 'please write the table', autoClassify: async prompt => { judge.calls.push(prompt); return judge.answer; },
+    });
+  const waiting = () => pending.list({ status: 'waiting' });
+  return { paths, ctx, call, approvals, events, pending, waiting, judge };
 }
 
 const JAPANESE = /[\u3000-\u9fff\uff00-\uffef]/u;
@@ -230,12 +228,13 @@ test('table_write: 許可フォルダの外・読むだけのフォルダ・秘�
   assert.equal(existsSync(join(s.paths.workspace, 'secrets')), false);
 
   for (const path of ['.git/x.csv', 'skills/evil.csv']) {
-    const pending = s.call({ path, rows: [['a']] });
-    const request = await decideNext(s, 'deny');
-    assert.equal(request.onceOnly, path.startsWith('.git'), path);
-    assert.match((await pending).output.content, /The user refused to run it/u, path);
+    const out = await s.call({ path, rows: [['a']] });
+    assert.equal(out.decidedBy, 'pending', `${path}: ${out.output.content}`);
+    assert.equal(s.waiting()[0]!.kind, 'owner', path);
+    assert.equal((await tableWrite.preCheck!({ path, rows: [['a']] }, s.ctx)).askKinds?.includes('code') === true, path.startsWith('.git'), path);
     assert.equal(existsSync(join(s.paths.workspace, path)), false, `${path} に書かれてしまった`);
   }
+  assert.equal(s.judge.calls.length, 0, '判定役は呼ばない');
 
   const outside = await tableWrite.execute({ path: '../x.csv', rows: [['a']] }, s.ctx);
   assert.equal(outside.isError, true);
@@ -347,39 +346,18 @@ test('table_write: 文字の合計は 500 万文字まで。1 セル 32,767 文�
   assert.equal(read(s, 'ok.csv').length, 3 + 152 * (32767 + 2));
 });
 
-test('table_write: 外から読んだあとは、作業フォルダの中でも確かめになり、札には無害化した中身が出る', async t => {
+test('table_write: 外から読んだあとでも、作業フォルダの中なら確かめなしに書き（R19）、中身は無害化する', async t => {
   const s = setup(t);
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
   const args = { path: 'a.csv', rows: [['=cmd', 'x'], ['ok', 1]] };
-  const denied = s.call(args, ctx);
-  const request = await decideNext(s, 'deny');
-  assert.match(request.reasons.join(), /text that came from somewhere else/u);
-  assert.equal(request.title, 'Writing a table file: a.csv (2 rows)');
-  assert.equal(request.body, "'=cmd,x\r\nok,1\r\n");
-  assert.equal((await denied).output.isError, true);
-  assert.equal(existsSync(join(s.paths.workspace, 'a.csv')), false);
-  const approved = s.call(args, ctx);
-  await decideNext(s, 'once');
-  assert.ok(!(await approved).output.isError);
+  const approved = await s.call(args, ctx);
+  assert.equal(approved.decidedBy, 'builtin');
+  assert.equal(s.judge.calls.length, 0);
+  assert.equal(s.waiting().length, 0);
+  assert.ok(!approved.output.isError);
   assert.equal(read(s, 'a.csv').toString('utf8'), `${BOM}'=cmd,x\r\nok,1\r\n`);
 });
 
-test('table_write: 外から読んだあとの札にはフォルダの許可が添えられ、選ぶと同じ実行の同じフォルダへの書き込みは札なしで動く', async t => {
-  const s = setup(t);
-  const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
-  const first = s.call({ path: 'notes/a.csv', rows: [['a']] }, ctx);
-  const card = await decideNext(s, 'folder');
-  assert.match(card.grantFolder ?? '', /notes$/u);
-  assert.ok(!(await first).output.isError);
-  const second = await s.call({ path: 'notes/b.xlsx', rows: [['b']] }, ctx);
-  assert.equal(second.decidedBy, 'folder-grant');
-  assert.ok(!second.output.isError, second.output.content);
-  assert.equal(s.approvals.pending().length, 0);
-  const other = s.call({ path: 'other/c.csv', rows: [['c']] }, ctx);
-  await decideNext(s, 'deny');
-  assert.equal((await other).output.isError, true);
-  assert.equal(existsSync(join(s.paths.workspace, 'other', 'c.csv')), false);
-});
 
 test('table_write: 札の中身は先頭 20 行・4,000 文字までで、BOM は付けず、題は英語', () => {
   const rows = Array.from({ length: 25 }, (_, i) => [`r${i}`]);
@@ -402,10 +380,9 @@ test('table_write: 振り返りと計画モードの会話では断る', async t
   assert.deepEqual(listing(s), []);
 });
 
-test('table_write: 道具の定義は書き込み・フォルダの許可つきで、format の引数を持たない', () => {
+test('table_write: 道具の定義は書き込みで、format の引数を持たない', () => {
   assert.equal(tableWrite.name, 'table_write');
   assert.equal(tableWrite.effect, 'write');
-  assert.equal(tableWrite.folderGrant, true);
   assert.deepEqual([...tableWrite.allowedIn], ['chat', 'task', 'agent']);
   const properties = (tableWrite.input as unknown as { properties: Record<string, unknown> }).properties;
   assert.deepEqual(Object.keys(properties), ['path', 'rows', 'overwrite']);

@@ -5,11 +5,12 @@ import { PERMISSION_MODES } from '../src/shared/permission-mode.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { MODE_HINT, MODE_LABEL } from '../web/src/ui/composer-state.ts';
 
-// 入力欄の権限モード（Ask / Auto / Plan）の名前と、ボタンの title に出す説明の文
+// 入力欄の権限モード（Normal / Plan。値は auto / plan）の名前と、ボタンの title に出す説明の文
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 
-test('権限モードの画面の文: 3 つのモードそれぞれの名前と説明が英語の辞書にあり、日本語が混ざらない', () => {
+test('権限モードの画面の文: 2 つのモードそれぞれの名前と説明が英語の辞書にあり、日本語が混ざらない。auto の名前は Design の Normal', () => {
+  assert.deepEqual(PERMISSION_MODES.map(mode => en[MODE_LABEL[mode]]), ['Normal', 'Plan']);
   for (const mode of PERMISSION_MODES) {
     for (const key of [MODE_LABEL[mode], MODE_HINT[mode]] as const) {
       assert.ok(key in en, key);
@@ -20,30 +21,24 @@ test('権限モードの画面の文: 3 つのモードそれぞれの名前と�
   assert.match(composer, /className="bt-seg__opt" title=\{t\(MODE_HINT\[value\]\)\}/u, '説明は、入力欄のモードのボタンの title に出す');
 });
 
-test('自動承認と計画の説明は、できること・できないことを隠さない（Web の読み取りが外へ文字を出しうること、コードを動かす確かめ・外への書き込みは自動承認でも人に聞くこと）', () => {
+test('計画の説明は、Web の読み取りが外へ文字を出しうることを隠さない', () => {
   assert.match(en['mode.planDesc'], /reading the web/u);
   assert.match(en['mode.planDesc'], /text in a URL can leave this PC/u);
-  assert.match(en['mode.autoDesc'], /writing and shell commands/u);
-  assert.match(en['mode.autoDesc'], /writing outside the allowed folders are asked of you/u);
   assert.match(en['mode.planDesc'], /URL/u);
-  assert.match(en['mode.autoDesc'], /Running code/u);
 });
 
-test('自動承認の説明（画面と README）は、いま効く範囲を書く: よそから来た文を読んだあとも判断のモデルが決めること、送る・消す・分からない操作は何と答えても必ず聞くこと、「この会話では許可」は効くこと、許可フォルダの外は止めたままであること', () => {
-  assert.match(en['mode.autoDesc'], /text that came from elsewhere/u);
-  assert.match(en['mode.autoDesc'], /web pages/iu);
-  assert.match(en['mode.autoDesc'], /attachments/iu);
-  assert.match(en['mode.autoDesc'], /sends something out/u);
-  assert.match(en['mode.autoDesc'], /deletes/u);
-  assert.match(en['mode.autoDesc'], /whatever the model answers/u);
-  assert.match(en['mode.autoDesc'], /Allow in this chat/u);
-  assert.match(en['mode.autoDesc'], /Block/u);
-  assert.match(en['mode.autoDesc'], /Secret files/u);
-  assert.match(en['mode.autoDesc'], /tools that read web pages are the exception: they can send out a few characters in a URL/u, 'always-asked has an exception (web-reading tools can leak a little via a URL); do not hide it');
-  for (const [name, value] of [['en', en['mode.autoDesc']]] as const) {
-    assert.doesNotMatch(value, /外を読んだ|外から読んだ|外の内容|outside content/iu, `${name}: 分かりにくい言い回しを画面に出さない`);
-    assert.doesNotMatch(value, /毎回あなたに聞きます|asked of you every time/u, `${name}: 「読んだことのある会話は毎回聞く」という古い決まりを書かない`);
-  }
+test('Normal の説明は短い 1 行で、判定役が見ること・送る・消す・判定役が通せないものは Pending で聞くことを書き、前の承認の言い回しを残さない', () => {
+  const desc = en['mode.autoDesc'];
+  assert.doesNotMatch(desc, /\n/u);
+  assert.ok(desc.length <= 140, `${desc.length} 文字`);
+  assert.match(desc, /judge/u);
+  assert.match(desc, /sending out/u);
+  assert.match(desc, /deleting/u);
+  assert.match(desc, /Pending/u);
+  assert.doesNotMatch(desc, /Allow in this chat|approval|asked of you every time/u);
+});
+
+test('README の自動承認の説明は、いま効く範囲を書く', () => {
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const line = readme.split(/\r?\n/u).find(l => l.startsWith('- **自動承認**'));
   assert.ok(line, 'README に自動承認の説明がある');

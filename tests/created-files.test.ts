@@ -269,7 +269,7 @@ test('作ったもの（エンジン）: 製品の会話の実行が作ったフ
   const projectId = made.body.project.id as string;
 
   s.adapter().scripts = [call('file_write', { path: 'hello.txt', content: 'hi' }), reply('done')];
-  const sent = await s.json(`/api/conversations/${uuid(1)}/messages`, 'POST', { text: 'make a file', projectId, permissionMode: 'normal' });
+  const sent = await s.json(`/api/conversations/${uuid(1)}/messages`, 'POST', { text: 'make a file', projectId, permissionMode: 'auto' });
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   await settled(s.app, sent.body.runId);
   await waitFor(() => s.app.kv.get(`created:conv:${uuid(1)}`) !== undefined, 'created list written');
@@ -292,7 +292,7 @@ test('作ったもの（エンジン）: git でない製品のフォルダで�
   const made = await s.json('/api/projects', 'POST', { root });
   assert.equal(made.status, 201, JSON.stringify(made.body));
   s.adapter().scripts = [call('file_write', { path: 'old.txt', content: 'over' }), call('file_write', { path: 'new.txt', content: 'x' }), call('table_write', { path: 'sheet.csv', rows: [['a']] }), reply('done')];
-  const sent = await s.json(`/api/conversations/${uuid(3)}/messages`, 'POST', { text: 'write', projectId: made.body.project.id, permissionMode: 'normal' });
+  const sent = await s.json(`/api/conversations/${uuid(3)}/messages`, 'POST', { text: 'write', projectId: made.body.project.id, permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
   await waitFor(() => s.app.kv.get(`created:conv:${uuid(3)}`) !== undefined, 'created list written');
   assert.deepEqual(s.app.engine.created.list({ kind: 'conv', id: uuid(3) }), ['new.txt', 'sheet.csv']);

@@ -7,13 +7,13 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
-import { PERMISSION_MODES, stricterMode } from '../src/shared/permission-mode.ts';
+import { isPermissionMode, PERMISSION_MODES, readMode, stricterMode } from '../src/shared/permission-mode.ts';
 import { CONVERSATION, settled, startApp } from './app-setup.ts';
 import { tempDir, type Script } from './helpers.ts';
 
-// 段 8b: 入力欄の権限モード（ふつう / 自動承認 / 計画）。会話ごとに覚える。新しい会話はいつも「ふつう」
+// 段 8b: 入力欄の権限モード（自動承認 / 計画）。会話ごとに覚える。新しい会話はいつも auto
 
-test('マイグレーション 11: conversations に permission_mode が足される。前からある会話は normal。知らない値は入れられない', t => {
+test('マイグレーション 11: conversations に permission_mode が足される。前からある会話は normal で入り、27 で auto になる。知らない値は入れられない', t => {
   const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 10));
   before.prepare("INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES ('old', 'chat', '前からある会話', 1, 1)").run();
@@ -21,27 +21,29 @@ test('マイグレーション 11: conversations に permission_mode が足さ�
   const db = openDatabase(path, MIGRATIONS);
   try {
     const row = new Conversations(db).get('old') as unknown as Record<string, unknown>;
-    assert.equal(row.permission_mode, 'normal');
+    assert.equal(row.permission_mode, 'auto');
+    assert.equal((db.prepare("SELECT permission_mode FROM conversations WHERE id = 'old'").get() as { permission_mode: string }).permission_mode, 'auto');
     assert.throws(() => db.prepare("UPDATE conversations SET permission_mode = 'yolo' WHERE id = 'old'").run(), /CHECK|constraint/iu);
     assert.throws(() => db.prepare('UPDATE conversations SET permission_mode = NULL WHERE id = ?').run('old'), /NOT NULL|constraint/iu);
   } finally { db.close(); }
 });
 
-test('モードの強さ: 計画 > ふつう > 自動承認。厳しい方が勝つ', () => {
-  assert.deepEqual([...PERMISSION_MODES], ['normal', 'auto', 'plan']);
-  assert.equal(stricterMode('auto', 'normal'), 'normal');
-  assert.equal(stricterMode('normal', 'auto'), 'normal');
+test('モードの強さ: 計画 > 自動承認。厳しい方が勝つ。normal はもう無く、読むときは auto', () => {
+  assert.deepEqual([...PERMISSION_MODES], ['auto', 'plan']);
   assert.equal(stricterMode('auto', 'plan'), 'plan');
-  assert.equal(stricterMode('plan', 'normal'), 'plan');
+  assert.equal(stricterMode('plan', 'auto'), 'plan');
   assert.equal(stricterMode('auto', 'auto'), 'auto');
+  assert.equal(isPermissionMode('normal'), false);
+  assert.equal(readMode('normal'), 'auto');
+  assert.equal(readMode('plan'), 'plan');
 });
 
 test('PATCH: モードを選ぶと会話に覚え、一覧とメッセージの応答に permission_mode が出る。知らない値・型違いは 400 で、変えない', async t => {
   const s = await startApp(t);
   await s.json('/api/conversations', 'POST', { title: 'モード' });
   const id = s.app.conversations.list()[0]!.id;
-  assert.equal(s.app.conversations.get(id)!.permission_mode, 'normal', '新しい会話はふつうから');
-  for (const mode of ['auto', 'plan', 'normal'] as const) {
+  assert.equal(s.app.conversations.get(id)!.permission_mode, 'auto', '新しい会話は auto から');
+  for (const mode of ['plan', 'auto'] as const) {
     const ok = await s.json(`/api/conversations/${id}`, 'PATCH', { permissionMode: mode });
     assert.equal(ok.status, 200);
     assert.equal(ok.body.conversation.permission_mode, mode);
@@ -49,7 +51,7 @@ test('PATCH: モードを選ぶと会話に覚え、一覧とメッセージの�
     assert.equal((await s.json(`/api/conversations/${id}/messages`, 'GET')).body.conversation.permission_mode, mode);
   }
   await s.json(`/api/conversations/${id}`, 'PATCH', { permissionMode: 'auto' });
-  for (const bad of ['yolo', '', 5, null, true]) {
+  for (const bad of ['normal', 'yolo', '', 5, null, true]) {
     const refused = await s.json(`/api/conversations/${id}`, 'PATCH', { permissionMode: bad });
     assert.equal(refused.status, 400, JSON.stringify(bad));
     assert.equal(refused.body.code, 'http.bad_enum', JSON.stringify(bad));
@@ -60,7 +62,7 @@ test('PATCH: モードを選ぶと会話に覚え、一覧とメッセージの�
   assert.equal(s.app.conversations.get(id)!.title, 'モード', '一緒に送った題の変更も取りやめる');
 });
 
-test('最初の発言でモードを選べて、あとの送信でも覚えている。モードを省いた最初の発言はふつう', async t => {
+test('最初の発言でモードを選べて、あとの送信でも覚えている。モードを省いた最初の発言は auto。normal を送ると 400', async t => {
   const s = await startApp(t);
   s.adapter().scripts = [async function* () { yield { type: 'text', delta: '一つ目' }; yield { type: 'done', stop: 'end_turn' as StopReason }; },
     async function* () { yield { type: 'text', delta: '二つ目' }; yield { type: 'done', stop: 'end_turn' as StopReason }; }];
@@ -74,7 +76,12 @@ test('最初の発言でモードを選べて、あとの送信でも覚えて�
 
   const plain = await s.json(`/api/conversations/aaaaaaaa-0000-4000-8000-000000000002/messages`, 'POST', { text: 'はじめて' });
   await settled(s.app, plain.body.runId);
-  assert.equal(s.app.conversations.get('aaaaaaaa-0000-4000-8000-000000000002')!.permission_mode, 'normal');
+  assert.equal(s.app.conversations.get('aaaaaaaa-0000-4000-8000-000000000002')!.permission_mode, 'auto');
+
+  const normal = await s.json(`/api/conversations/aaaaaaaa-0000-4000-8000-000000000004/messages`, 'POST', { text: 'ふつう', permissionMode: 'normal' });
+  assert.equal(normal.status, 400);
+  assert.equal(normal.body.code, 'http.bad_enum');
+  assert.equal(s.app.conversations.get('aaaaaaaa-0000-4000-8000-000000000004'), undefined);
 
   const bad = await s.json(`/api/conversations/aaaaaaaa-0000-4000-8000-000000000003/messages`, 'POST', { text: 'だめ', permissionMode: 'yolo' });
   assert.equal(bad.status, 400);
@@ -128,8 +135,8 @@ test('実行中にモードを替えて、また元に戻したなら、発言�
   const g = gate();
   s.adapter().scripts = [after(g, toolCall('file_read', { path: 'a.txt' })), say('返事')];
   const first = await post(s, 'a.txt を読んで');
+  await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'plan' });
   await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'auto' });
-  await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { permissionMode: 'normal' });
   assert.equal((await post(s, 'BACK')).body.queued, true);
   g.open();
   await settled(s.app, first.body.runId);

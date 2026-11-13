@@ -571,9 +571,9 @@ function holeFixture(t: { after: (fn: () => void) => void }) {
   return { ro: ro.split('\\').join('/'), guard };
 }
 type GuardVerdict = ReturnType<ReturnType<typeof holeFixture>['guard']>;
-const whyOf = (v: GuardVerdict): string => `${v.decision} once=${v.onceOnly} sends=${v.sends} removes=${v.removes} :: ${v.reasons.join(' / ').slice(0, 140)}`;
-// 毎回確かめ（今回だけ）。理由は KNOWN_EFFECT_REASONS の外なので、送る・消すの両方が付く（Q16）
-const expectOnce = (v: GuardVerdict, label: string): void => assert.deepEqual([v.decision, v.onceOnly, v.sends, v.removes], ['ask', true, true, true], `${label} → ${whyOf(v)}`);
+const whyOf = (v: GuardVerdict): string => `${v.decision} once=${v.onceOnly} :: ${v.reasons.join(' / ').slice(0, 140)}`;
+// 毎回確かめ（今回だけ）
+const expectOnce = (v: GuardVerdict, label: string): void => assert.deepEqual([v.decision, v.onceOnly], ['ask', true], `${label} → ${whyOf(v)}`);
 
 // ループの変数は代入と同じ。bash の for NAME in … と PowerShell の foreach ($v in …) は、NAME・$v に代入する
 const LOOP_ASK: ReadonlyArray<readonly ['bash' | 'powershell', string]> = [
@@ -593,7 +593,7 @@ test('穴 3: ループの変数にも代入と同じ変数名の決まり（C8�
     // 持ち主の許可の一覧に、ループの名前・変数の名前・中のコマンドを入れても、この確かめは外れない
     const allowed = f.guard(command, shell, ['for', 'foreach', 'PATH', 'IFS', 'F', '$PSHOME', '$_', 'ls', 'echo', 'Get-ChildItem']);
     for (const [label, v] of [['', plain], ['（許可の一覧つき）', allowed]] as const) {
-      if (!(v.decision === 'ask' && v.onceOnly && v.sends && v.removes)) wrong.push(`${shell}: ${command}${label} → ${whyOf(v)}`);
+      if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}: ${command}${label} → ${whyOf(v)}`);
     }
     const loopReasons = classify(command, shell).results.flatMap(r => r.reasons).filter(r => r.key === 'list.env');
     if (loopReasons.length !== 1 || !loopReasons.every(r => r.level === 'once' && !r.exempt)) wrong.push(`${shell}: ${command} の list.env は外せない今回だけが 1 つのはず（${loopReasons.map(r => `${r.level}/${r.exempt}`).join(',')}）`);
@@ -647,7 +647,7 @@ test('穴 5: ダッシュなしの tar の束は、f か C が 1 つだけ最後
     for (const shell of ['bash', 'powershell'] as const) {
       for (const allow of [undefined, ['tar']]) {
         const v = f.guard(command, shell, allow);
-        if (!(v.decision === 'ask' && v.onceOnly && v.sends && v.removes)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${row} → ${whyOf(v)}`);
+        if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${row} → ${whyOf(v)}`);
       }
     }
     const bundleReasons = classify(command).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);

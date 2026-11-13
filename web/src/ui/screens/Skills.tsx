@@ -6,10 +6,10 @@ import { Markdown } from '../../Markdown.tsx';
 import type { Access } from '../../settings/access.ts';
 import { findDraft, orderTools, POLICY_LABEL, toolLook } from '../../skills-meta.ts';
 import { lineDelta } from '../../../../src/shared/line-delta.ts';
-import { TOOL_POLICIES, type ToolPolicy } from '../../../../src/tools/tool-policy.ts';
+import type { ToolPolicy } from '../../../../src/tools/tool-policy.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
-import { ROW_LEAVE_MS, skillHistory, toolCounts, toolDecision, type SkillChange } from '../library.ts';
+import { policyChoices, ROW_LEAVE_MS, skillHistory, toolCounts, toolDecision, type SkillChange } from '../library.ts';
 import { Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash, type SkillTarget } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
@@ -311,6 +311,7 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
             tool.mcp ? t('ui.tools.mcp', tool.mcp.server) : null,
             tool.asks ? t(ASKS_KEY[tool.asks]) : null,
             !tool.configurable ? t('ui.tools.fixed') : null,
+            tool.configurable && tool.policy === 'ask' ? t('tools.policy.askNote') : null,
             tool.configurable && tool.policy === 'block' ? t('tools.policy.blockNote') : null,
             tool.configurable && tool.policy === 'ask' && tool.allowedIn.includes('review') ? t('tools.policy.reviewNote') : null,
           ].filter(Boolean).join(' · ');
@@ -320,11 +321,12 @@ function ToolRows({ tools, running, browserOff, onSaved, onFailed }: { tools: To
               <div className="bt-row__main">
                 <span className="bt-row__title"><code>{tool.name}</code></span>
                 {notes && <span className="bt-row__sub bt-meta">{notes}</span>}
+                {tool.askIsBlock && <span className="bt-row__sub bt-meta" role="note">{t('tools.policy.askIsBlock')}</span>}
                 {browserOff && tool.name.startsWith('browser_') && <a className="bt-row__sub bt-meta bt-tool__link" href={routeHash({ view: 'settings', section: 'browser' })}>{t('ui.tools.browserOff')}</a>}
               </div>
               <div className="bt-row__end">
                 <div className="bt-seg" role="group" aria-label={t('ui.tools.policy', tool.name)}>
-                  {TOOL_POLICIES.map(policy => (
+                  {policyChoices(tool.name).map(policy => (
                     <button key={policy} type="button" className="bt-seg__opt" data-policy={policy} aria-pressed={tool.policy === policy}
                       disabled={!tool.configurable || busy !== null || asking !== null} onClick={() => choose(tool, policy)}>{t(POLICY_LABEL[policy])}</button>
                   ))}

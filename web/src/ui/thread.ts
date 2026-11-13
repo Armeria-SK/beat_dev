@@ -1,4 +1,4 @@
-import type { Approval, ChecklistItem, Message } from '../api.ts';
+import type { ChecklistItem, Message, ToolGate } from '../api.ts';
 import { replyTurns } from '../chat-logic.ts';
 import { formatDateTime, formatDateTimeSmart, timezoneLabel } from '../i18n/index.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
@@ -9,8 +9,8 @@ export interface ToolItem {
   name: string;
   input: string;
   result: ToolResult | null;
+  gate?: ToolGate | undefined;
   running?: { startedAt: number | null; checking: boolean; helperTools: number | null; helperConversation: string | null } | undefined;
-  approval?: Approval | undefined;
 }
 
 export type NoticeWeight = 'quiet' | 'warn' | 'fail';
@@ -26,7 +26,6 @@ export type ThreadItem =
 export interface ThreadInput {
   messages: readonly Message[];
   draft?: LiveDraft | undefined;
-  approvals?: readonly Approval[];
   notices?: readonly RunNotice[];
 }
 
@@ -54,7 +53,7 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
 
 const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
-export function threadItems({ messages, draft, approvals = [], notices = [] }: ThreadInput): ThreadItem[] {
+export function threadItems({ messages, draft, notices = [] }: ThreadInput): ThreadItem[] {
   const pending = new Map<string, string[]>();
   const seen = new Map<string, number>();
   const rowKeyOf = (callId: string): string => {
@@ -88,7 +87,7 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
     if (m.role === 'tool') {
       const rowKey = m.toolCallId ? rowKeyOf(m.toolCallId) : key;
       const input = m.toolCallId ? pending.get(m.toolCallId)?.shift() : undefined;
-      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) } });
+      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) }, ...(m.gate ? { gate: m.gate } : {}) });
     } else if (m.role === 'user') {
       items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
     } else {
@@ -98,7 +97,6 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
     if (m.runId && lastOfRun.get(m.runId) === m.id) items.push({ kind: 'plan', key: `plan-${m.runId}` });
   }
 
-  const waiting = approvals;
   const settled = draft?.settled ?? [];
   const savedRun = draft ? messages.filter(m => m.role === 'tool' && m.runId === draft.runId) : [];
   const savedIdsInRun = new Set(savedRun.map(m => m.toolCallId));
@@ -106,20 +104,17 @@ export function threadItems({ messages, draft, approvals = [], notices = [] }: T
   settled.forEach((done, i) => {
     if (savedIdsInRun.has(done.callId) && firstSettled + i < savedRun.length) return;
     const rowKey = rowKeyOf(done.callId);
-    tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null });
+    tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null, ...(done.gate ? { gate: done.gate } : {}) });
   });
   if (draft) {
     if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
-    else if (draft.activeTool && waiting.length === 0) {
+    else if (draft.activeTool) {
       const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
       tools(rowKey).push({
         key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
         running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
       });
-    } else if (waiting.length === 0) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
-  }
-  for (const approval of waiting) {
-    tools(`approval-${approval.id}`).push({ key: `approval-${approval.id}`, name: approval.tool, input: '', result: null, approval });
+    } else items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
   }
   noticeRows(notices).forEach((row, i) => items.push({ kind: 'notice', key: `n-${row.notices[0]!.runId}-${i}`, ...row }));
   return items;

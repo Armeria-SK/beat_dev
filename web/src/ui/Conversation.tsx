@@ -1,6 +1,6 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
-import { api, ApiError, type Approval, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
+import { api, ApiError, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
 import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
@@ -22,7 +22,7 @@ import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
 import { contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadItems, type ThreadItem } from './thread.ts';
-import { ToolGroup } from './ToolRow.tsx';
+import { ToolGroup, type PendingLink } from './ToolRow.tsx';
 
 type T = ReturnType<typeof useT>;
 
@@ -32,7 +32,6 @@ export interface ConversationProps {
   aiName?: string | undefined;
   product?: Project | undefined;
   draft: LiveDraft | undefined;
-  approvals: Approval[];
   notices: RunNotice[];
   liveChecklist: ChecklistItem[] | undefined;
   revision: number;
@@ -45,7 +44,7 @@ export interface ConversationProps {
 
 interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[] }
 interface Choice { modelId: string | null; effort: string | null; permissionMode: PermissionMode }
-const NO_CHOICE: Choice = { modelId: null, effort: null, permissionMode: 'normal' };
+const NO_CHOICE: Choice = { modelId: null, effort: null, permissionMode: 'auto' };
 
 const MEMORY_KEY = { create: 'ui.notice.memoryCreate', update: 'ui.notice.memoryUpdate', forget: 'ui.notice.memoryForget' } as const;
 const short = (text: string, max = 80): string => {
@@ -58,7 +57,6 @@ function noticeText(t: T, n: RunNotice): string {
     case 'switch': return t('ui.notice.switched', n.to);
     case 'warning': return warningText({ code: n.code, message: n.message, ...(n.params ? { params: n.params as Record<string, string | number> } : {}) }, getLanguage());
     case 'compaction': return t('ui.notice.compacted', n.summarized);
-    case 'auto': return t('ui.notice.auto', n.tool);
     case 'denied': return n.detail ? `${t('ui.notice.denied', n.tool)} · ${n.detail}` : t('ui.notice.denied', n.tool);
     case 'memory': return t(MEMORY_KEY[n.action], short(n.content));
     case 'stopped': return t('ui.notice.stopped');
@@ -271,7 +269,17 @@ function failNotice(title: string, text: string | null, action: FailAction | nul
   return <Notice tone="fail" title={title} text={text ?? undefined} {...(action ? { action } : {})} />;
 }
 
-export function Conversation({ id, listTitle, aiName, product, draft, approvals, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes }: ConversationProps) {
+function revealPending(id: number): void {
+  const until = performance.now() + 3000;
+  const look = (): void => {
+    const row = document.querySelector<HTMLElement>(`[data-pending="${id}"]`);
+    if (row && row.getClientRects().length > 0) { row.scrollIntoView({ block: 'nearest' }); return; }
+    if (performance.now() < until) requestAnimationFrame(look);
+  };
+  requestAnimationFrame(look);
+}
+
+export function Conversation({ id, listTitle, aiName, product, draft, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
@@ -280,6 +288,14 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
   const [modelsRead, setModelsRead] = useState(false);
   const [chatOrder, setChatOrder] = useState<string[]>([]);
   const startMode = firstMode(product);
+  const openPending = panes?.onOpenPending;
+  const pendingLink = useMemo((): PendingLink => ({
+    route: { view: 'pending' },
+    open: pendingId => {
+      if (openPending) openPending(); else location.hash = routeHash({ view: 'pending' });
+      revealPending(pendingId);
+    },
+  }), [openPending]);
   const [draftChoice, setDraftChoice] = useState<Choice>({ ...NO_CHOICE, permissionMode: startMode });
   const modeChosen = useRef(false);
   useEffect(() => {
@@ -325,7 +341,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
   const conversation = loaded?.conversation ?? null;
   const messages = loaded?.messages ?? [];
   const pending = loaded?.pending ?? [];
-  const items = threadItems({ messages, draft, approvals, notices });
+  const items = threadItems({ messages, draft, notices });
   const checklist = liveChecklist ?? readList?.items ?? [];
   const lastIsUser = messages.at(-1)?.role === 'user';
 
@@ -349,7 +365,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
   };
 
   const choice: Choice = conversation
-    ? { modelId: conversation.model_id ?? null, effort: conversation.effort ?? null, permissionMode: conversation.permission_mode ?? 'normal' }
+    ? { modelId: conversation.model_id ?? null, effort: conversation.effort ?? null, permissionMode: conversation.permission_mode ?? 'auto' }
     : id ? NO_CHOICE : draftChoice;
 
   const submit = async (kind: SubmitKind, text: string, attachments: UploadView[] = [], retry: FailAction | null = null): Promise<boolean> => {
@@ -505,7 +521,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, approvals,
         );
       }
       case 'live': return <LiveReply key={item.key} text={item.text} since={item.since} />;
-      case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} />;
+      case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} pending={pendingLink} />;
       case 'notice': {
         if (item.weight === 'quiet') return <QuietNotice key={item.key} notices={item.notices} />;
         const n = item.notices[0]!;

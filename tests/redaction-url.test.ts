@@ -248,19 +248,16 @@ test('伏せ字: 足した形（ハイフンの並び・--flag の並び・-u・
   assert.ok(performance.now() - started < 10_000);
 });
 
-test('タスクの実行中の承認の通知: 本文に入る道具の引数の秘密を伏せる（承認の札そのものは変えない）', async t => {
+test('タスクの実行中の Pending の通知: 本文に入る秘密を伏せる', async t => {
   const s = await startApp(t);
   const task = s.app.tasks.create({ title: 'Needs approval', origin: 'user', actor: 'user' });
   const conversation = s.app.conversations.create({ kind: 'task' });
   assert.ok(s.app.tasks.claim(task.id, 30 * 60_000, conversation.id));
-  const controller = new AbortController();
   const body = `curl "https://x.example/p?access_token=${S1}" -d password=${S2}`;
-  void s.app.approvals.request({ runId: 'r', conversationId: conversation.id, tool: 'shell_run', input: { command: body }, title: 'Run', body, reasons: [], details: [] }, 60_000, controller.signal);
+  const row = await s.app.pending.park({ tool: 'shell_run', input: { command: body }, cwd: s.app.paths.data, kind: 'judge', reason: body, check: { decision: 'ask', reasons: [body] }, runId: 'r', runKind: 'task', conversationId: conversation.id, taskId: task.id });
   const note = s.app.notifications.list().find(n => n.kind === 'approval_needed');
   assert.ok(note);
-  assert.equal(note.body, 'Run\ncurl "https://x.example/p?access_token=[REDACTED]" -d password=[REDACTED]');
-  assert.equal(s.app.approvals.pending()[0]?.body, body);
-  controller.abort();
+  assert.equal(note.body, `#${row.id} curl "https://x.example/p?access_token=[REDACTED]" -d password=[REDACTED]`);
 });
 
 const echoTool: ToolDef = {

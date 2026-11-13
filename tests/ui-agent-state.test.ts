@@ -4,9 +4,9 @@ import type { ChecklistItem, TaskStatus } from '../web/src/api.ts';
 import { agentState, checklistStep, countTasks, footLine, kanbanCount, waitingTotal, type Waiting } from '../web/src/ui/agent-state.ts';
 
 // 新しい画面の状態（is-idle / is-working / is-waiting）と、サイドバーの足の 1 行。p1-ui.md の「枠」:
-// 待ち = 承認待ちの道具・承認待ちの提案（inbox）・返事待ちのタスク（waiting）・登録待ちのスキルの下書き。待ちが動いているより強い。
+// 待ち = 承認待ちの提案（inbox）・返事待ちのタスク（waiting）・登録待ちのスキルの下書き・Pending の行。待ちが動いているより強い。
 
-const NONE: Waiting = { approvals: 0, proposals: 0, answers: 0, drafts: 0, pending: 0 };
+const NONE: Waiting = { proposals: 0, answers: 0, drafts: 0, pending: 0 };
 const items = (...statuses: ChecklistItem['status'][]): ChecklistItem[] => statuses.map((status, i) => ({ text: `step ${i + 1}`, status }));
 
 test('ui/agent-state: タスクの状態から、提案（inbox）と返事待ち（waiting）だけを数える', () => {
@@ -15,14 +15,14 @@ test('ui/agent-state: タスクの状態から、提案（inbox）と返事待�
   assert.deepEqual(countTasks([]), { proposals: 0, answers: 0 });
 });
 
-test('ui/agent-state: Kanban の数は提案と返事待ちの和、待ちの合計は 5 つの和（Pending の一覧を含む。4-U1）', () => {
-  const w: Waiting = { approvals: 1, proposals: 2, answers: 3, drafts: 4, pending: 5 };
+test('ui/agent-state: Kanban の数は提案と返事待ちの和、待ちの合計は 4 つの和（Pending の一覧を含む。4-U1）', () => {
+  const w: Waiting = { proposals: 2, answers: 3, drafts: 4, pending: 5 };
   assert.equal(kanbanCount(w), 5);
-  assert.equal(waitingTotal(w), 15);
+  assert.equal(waitingTotal(w), 14);
 });
 
-test('ui/agent-state: 5 つの待ちのどれか 1 つでもあれば waiting', () => {
-  for (const key of ['approvals', 'proposals', 'answers', 'drafts', 'pending'] as const) {
+test('ui/agent-state: 4 つの待ちのどれか 1 つでもあれば waiting', () => {
+  for (const key of ['proposals', 'answers', 'drafts', 'pending'] as const) {
     assert.equal(agentState({ ...NONE, [key]: 1 }, false), 'waiting', key);
   }
 });
@@ -43,7 +43,7 @@ test('ui/agent-state: 作業の一覧の今の段（やっている項目、無�
 
 test('ui/agent-state: 足の 1 行は、待ち → 一覧のある動き（Building）→ 動き（Running）→ Idle の順', () => {
   const list = [items('done', 'in_progress', 'pending')];
-  assert.deepEqual(footLine({ ...NONE, approvals: 2, drafts: 2 }, true, list, 'x'), { kind: 'waiting', n: 4 });
+  assert.deepEqual(footLine({ ...NONE, pending: 2, drafts: 2 }, true, list, 'x'), { kind: 'waiting', n: 4 });
   assert.deepEqual(footLine(NONE, true, list, 'x'), { kind: 'building', step: 2, total: 3 });
   assert.deepEqual(footLine(NONE, true, [[], items('done'), ...list], 'x'), { kind: 'building', step: 2, total: 3 });
   assert.deepEqual(footLine(NONE, true, [items('done')], 'Morning summary'), { kind: 'running', title: 'Morning summary' });

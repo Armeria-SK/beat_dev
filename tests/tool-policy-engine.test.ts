@@ -113,7 +113,6 @@ test('A3: ask の道具は、会話の中で呼ぶたびに Pending に積まれ
   );
   const { done } = await s.send('a.md を 2 回書いて');
   assert.ok((await done).ok);
-  assert.equal(s.events.filter(e => e.type === 'approval.requested').length, 0);
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
   assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(row => row.kind), ['policy', 'policy']);
 });
@@ -130,7 +129,6 @@ test('A3: 自動承認の会話で web_fetch を Ask にすると、事前の判
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.deepEqual(rows.map(row => [row.tool, row.kind]), [['web_fetch', 'policy']]);
   assert.equal(s.adapter().calls.filter(req => req.tools.length === 0).length, 0, '判定役は呼ばれない');
-  assert.equal(s.events.filter(e => e.type === 'approval.requested').length, 0);
 });
 
 test('A3: 実行の途中で持ち主が道具を止めたら、その実行の次の呼び出しから効く（実行を始めたときの設定のままにしない）', async t => {

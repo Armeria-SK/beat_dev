@@ -10,7 +10,6 @@ import { languageOf } from '../shared/language.ts';
 import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
 import { redactJsonValue } from '../shared/redaction.ts';
-import { approvalShownIn, approvalWire } from '../tools/approvals.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
 import { searchHistory } from '../memory/history.ts';
@@ -28,7 +27,7 @@ import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { projectFilterOf, projectProblem, registerProjectRoutes, usableProjectId } from './routes-projects.ts';
 import { ProjectError } from '../projects/store.ts';
 import { projectFolderGone } from '../projects/run.ts';
-import { projectOfSql, projectWhere, registerReviewRoutes, todayCount } from './routes-review.ts';
+import { projectOfSql, projectWhere, registerReviewRoutes, todayCount, todayStart } from './routes-review.ts';
 import type { RunRow } from '../db/runs.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { registerPendingRoutes } from './routes-pending.ts';
@@ -223,7 +222,6 @@ export function createWebServer(app: App): WebServer {
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     if (running()) throw problem(409, 'conflict', 'conversation_running');
     const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
-    app.approvals.forgetConversation(id);
     if (erased.files.failed.length) app.log(`[WARN] Some files could not be deleted after deleting the conversation: ${erased.files.failed.join(', ')}`);
     app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted', projectId: conversation.project_id });
     sendJson(res, 200, { deleted: true, ...erased });
@@ -242,11 +240,10 @@ export function createWebServer(app: App): WebServer {
         ...(m.message.role === 'user' && m.message.attachments?.length ? { attachments: m.message.attachments } : {}),
         ...(m.message.role === 'assistant' && m.message.toolCalls?.length
           ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(redactJsonValue(c.arguments ?? c.raw ?? null)).slice(0, 2000) })) } : {}),
-        ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError) } : {}),
+        ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError), ...(m.message.gate ? { gate: m.message.gate } : {}) } : {}),
       })),
       pending: app.engine.pending(id),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
-      approvals: app.approvals.pending().filter(a => approvalShownIn(a) === id).map(approvalWire),
     });
   });
   // 次に送るときの量。何も書かない（まだ無い会話を作らず、system も固定しない）
@@ -341,30 +338,18 @@ export function createWebServer(app: App): WebServer {
     const filter = projectWhere('engine_runs', project);
     const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
       .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null }>;
-    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project) });
+    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app), project) });
   });
 
-  // ── 承認とツールの記録 ──
-  router.add('GET', '/api/approvals', ({ res }) => sendJson(res, 200, { approvals: app.approvals.pending().map(approvalWire) }));
-  router.add('POST', '/api/approvals/:id', async ({ req, res, params }) => {
-    const body = requireObject(await readJson(req));
-    const decision = body.decision;
-    if (decision !== 'once' && decision !== 'conversation' && decision !== 'folder' && decision !== 'deny') {
-      throw problem(400, 'invalid_field', 'bad_enum', { field: 'decision', params: { field: 'decision', values: 'once / conversation / folder / deny' } });
-    }
-    const ok = app.approvals.decide(params[0]!, decision);
-    if (!ok) throw problem(404, 'not_found', 'approval_gone');
-    sendJson(res, 200, { ok: true });
-  });
+  // ── ツールの記録 ──
   router.add('GET', '/api/tool-calls', ({ res, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
     // 自動承認が許した呼び出しには、判定役の短い理由 autoReason を添える（承認の記録 scope = 'auto' の reasons の最後の要素。ほかは null）。
-    // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しには、許可したフォルダ grantFolder を添える（ほかは null）
     const project = projectFilterOf(url);
     const filter = projectWhere('tool_calls', project, 't');
-    const rows = app.db.prepare(`SELECT t.*, ${projectOfSql('tool_calls', 't')} AS project_id, a.reasons AS approval_reasons, a.scope AS approval_scope, a.grant_folder AS grant_folder FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id
-      WHERE 1 = 1${filter.sql} ORDER BY t.created_at DESC LIMIT ?`).all(...filter.args, limit) as Array<Record<string, unknown> & { approval_reasons: string | null; approval_scope: string | null; grant_folder: string | null }>;
-    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })), total: todayCount(app, 'tool_calls', undefined, project) });
+    const rows = app.db.prepare(`SELECT t.*, ${projectOfSql('tool_calls', 't')} AS project_id, a.reasons AS approval_reasons, a.scope AS approval_scope FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id
+      WHERE 1 = 1${filter.sql} ORDER BY t.created_at DESC LIMIT ?`).all(...filter.args, limit) as Array<Record<string, unknown> & { approval_reasons: string | null; approval_scope: string | null }>;
+    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null })), total: todayCount(app, 'tool_calls', undefined, project) });
   });
 
   // ── 記憶と履歴 ──

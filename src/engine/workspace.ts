@@ -99,7 +99,7 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
 };
 
 // 毎回組み立てる system の部分（固定の system は変えない）。計画モード（plan）のときだけ、計画の指示を足す
-export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal', product?: { name: string; root: string; docLanguage?: string | null }, requirements = ''): string {
+export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'auto', product?: { name: string; root: string; docLanguage?: string | null }, requirements = ''): string {
   const text = DYNAMIC[language];
   const formatted = new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now);
   return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), ...(product?.docLanguage ? [text.docLanguage(product.docLanguage)] : []), text.reply, ...(mode === 'plan' ? [product && requirements ? requirements : text.plan] : [])].join('\n');
