@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, type Stats } from 'node:fs';
+import { lstatSync, readFileSync, type Stats } from 'node:fs';
+import { homedir } from 'node:os';
 import { lstat, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
-import { inspectRepo } from '../tools/hooks/git-repo.ts';
+import { findGitDir, inspectRepo } from '../tools/hooks/git-repo.ts';
 import { isInside, isRemotePath } from '../tools/hooks/scope.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../tools/shell/git-env.ts';
 import { findExecutable, scrubEnv } from '../tools/shell/runner.ts';
@@ -70,6 +71,37 @@ export async function pathFact(path: string, deep: boolean): Promise<PathFact> {
   if (!deep || !st.isDirectory()) return fact;
   const inside = await walk(path);
   return { ...fact, files: inside.files, size: inside.size, newest: Math.max(st.mtimeMs, inside.newest), ...(inside.more ? { more: true } : {}) };
+}
+
+const DESTINATION_FILES = ['.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.curlrc', '_curlrc', '.wgetrc', '.netrc', '_netrc'];
+const DESTINATION_DEPTH = 40;
+const DESTINATION_MAX_BYTES = 1_048_576;
+
+function fileMark(path: string): string {
+  let st: Stats;
+  try { st = lstatSync(path); } catch { return `${path}\0none`; }
+  if (!st.isFile() || st.size > DESTINATION_MAX_BYTES) return `${path}\0${st.isFile() ? 'big' : 'other'}\0${st.size}\0${st.mtimeMs}`;
+  try { return `${path}\0${createHash('sha256').update(readFileSync(path)).digest('hex')}`; } catch { return `${path}\0unreadable`; }
+}
+
+export function destinationFacts(cwd: string): string {
+  const marks: string[] = [];
+  let dir = cwd;
+  for (let i = 0; i < DESTINATION_DEPTH; i++) {
+    for (const name of DESTINATION_FILES) marks.push(fileMark(join(dir, name)));
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  const home = homedir();
+  for (const name of DESTINATION_FILES) marks.push(fileMark(join(home, name)));
+  if (!isRemotePath(cwd)) {
+    const found = findGitDir(cwd);
+    if (found) {
+      marks.push(fileMark(join(found.gitDir, 'config')), fileMark(join(found.commonDir, 'config')), fileMark(join(found.gitDir, 'config.worktree')));
+    }
+  }
+  return createHash('sha256').update([...new Set(marks)].join('\n')).digest('hex');
 }
 
 export function fileFacts(paths: readonly string[]): PathFact[] {

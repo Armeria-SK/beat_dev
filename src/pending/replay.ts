@@ -15,8 +15,9 @@ import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import type { PreCheck, RunKind, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
-import { compareSnapshot, takeSnapshot, type Change } from './snapshot.ts';
-import { newChecks, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
+import { outboundOfCall } from '../tools/pipeline.ts';
+import { compareSnapshot, destinationFacts, fileFacts, takeSnapshot, type Change } from './snapshot.ts';
+import { newChecks, parkedOutbound, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
 
 export interface ReplayDeps {
   db: DatabaseSync;
@@ -44,7 +45,7 @@ const EXTRA_SECONDS = 60;
 
 const matches = (matcher: string, name: string): boolean => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
 
-function parentOf(db: DatabaseSync, row: PendingRow): ToolContext['parent'] {
+export function parentOf(db: DatabaseSync, row: PendingRow): ToolContext['parent'] {
   if (row.run_kind !== 'agent') return undefined;
   const run = db.prepare('SELECT parent_run_id AS id FROM engine_runs WHERE id = ?').get(row.run_id) as { id: string | null } | undefined;
   const conversation = db.prepare('SELECT parent_run_id AS id, title FROM conversations WHERE id = ?').get(row.conversation_id) as { id: string | null; title: string | null } | undefined;
@@ -138,11 +139,31 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       } catch (error) { again = { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
     }
     if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
+    const mask = (text: string): string => (tool.redact ? tool.redact(text) : text);
+    const outboundNow = outboundOfCall(tool, again, 'en');
+    if (outboundNow?.kind === 'deny') return end('failed', pendingText('en', 'denied', { reasons: outboundNow.reason }));
     if (state.cwdReal !== undefined && realCwd(row.cwd) !== state.cwdReal) return end('stale', pendingText('en', 'changed_cwd', { path: row.cwd }));
     if ((again?.bind ?? null) !== row.bind) return end('stale', pendingText('en', 'changed_bind'));
     if (again) {
-      const fresh = newChecks(state.recheck, again);
+      const fresh = newChecks(state.recheck, again, mask);
       if (fresh.length) return end('stale', pendingText('en', 'changed_checks', { reasons: fresh.join('\n- ') }));
+    }
+    if (state.outbound) {
+      const before = JSON.stringify(state.outbound);
+      const now = outboundNow ? JSON.stringify(parkedOutbound({ kind: outboundNow.kind, reason: outboundNow.reason, targets: outboundNow.targets }, mask)) : 'none';
+      if (now !== before) return end('stale', pendingText('en', 'changed_target', { before, now }));
+    }
+    if (state.destination !== undefined) {
+      const now = destinationFacts(row.cwd);
+      if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
+    }
+    if (state.sent?.length) {
+      const now = fileFacts(state.sent.map(f => f.path));
+      const moved = state.sent.flatMap((was, i) => {
+        const is = now[i]!;
+        return was.exists === is.exists && was.size === is.size && was.mtime === is.mtime && was.type === is.type ? [] : [pendingText('en', 'change_line', { what: was.path, before: String(was.exists ? was.size : 'none'), now: String(is.exists ? is.size : 'none') })];
+      });
+      if (moved.length) return end('stale', pendingText('en', 'changed_files', { changes: moved.join('\n') }));
     }
     if (changes.length) {
       const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');

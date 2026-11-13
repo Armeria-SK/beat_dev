@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import { prefixLength } from '../engine/tokens.ts';
@@ -12,8 +13,11 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { autoDecide, humanOnlyOf, mayClassify, type AutoGate, type ClassifierPrompt, type HumanOnly } from './auto-approve.ts';
-import { runCommandHook } from './hooks/command-hook.ts';
-import { isInside, placePath, realish, writeApprovalKind } from './hooks/scope.ts';
+import type { PendingKind, PendingStore } from '../pending/store.ts';
+import { pendingText } from '../shared/messages/pending.ts';
+import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
+import { outboundOf, type Outbound, type OutboundEnv } from './hooks/outbound.ts';
+import { isInside, placePath, realish, windowsNames, writeApprovalKind } from './hooks/scope.ts';
 import { hasToolConfigName } from './hooks/tool-config.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
@@ -73,6 +77,37 @@ export interface PipelineDeps {
   conversationAutoRead?: (() => boolean) | undefined;
   // 判定役を待つ時間の上限（ミリ秒。試験用。既定 20 秒）
   autoTimeoutMs?: number | undefined;
+  pending?: PendingStore | undefined;
+  productRoots?: (() => string[]) | undefined;
+}
+
+const NO_GIT: Omit<OutboundEnv, 'language'> = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
+
+export function outboundOfCall(tool: ToolDef, check: PreCheck | undefined, language: Language): Outbound | undefined {
+  if (check?.outbound) return check.outbound;
+  if (tool.mcp) return outboundOf({ tool: 'mcp', sends: check?.sends, removes: check?.removes }, { ...NO_GIT, language });
+  if (tool.submits) return outboundOf({ tool: 'browser', submits: true }, { ...NO_GIT, language });
+  return undefined;
+}
+
+const WINDOWS = process.platform === 'win32';
+
+export function hookPaths(tool: ToolDef, check: PreCheck | undefined): NonNullable<HookPayload['paths']> {
+  const out = new Map<string, { path: string; write: boolean; dir?: boolean }>();
+  const writeTool = tool.effect === 'write' || tool.writesFiles === true;
+  const add = (given: string, write: boolean): void => {
+    const path = WINDOWS ? windowsNames(given) : given;
+    const before = out.get(path);
+    const isWrite = write || before?.write === true;
+    out.set(path, { path, write: isWrite, ...(isWrite && !existsSync(path) ? { dir: true } : {}) });
+  };
+  for (const path of check?.writes ?? []) add(path, true);
+  for (const p of check?.paths ?? []) if (p.path) add(p.path, check?.writes === undefined && writeTool);
+  return [...out.values()];
+}
+
+function safeProductRoots(deps: PipelineDeps): string[] {
+  try { return deps.productRoots?.() ?? []; } catch { return []; }
 }
 
 export interface ToolCallOutcome {
@@ -190,6 +225,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const errors = [...Value.Errors(tool.input, args)].slice(0, 5).map(e => `${e.path || '/'}: ${e.message}`);
     return refuse('deny', 'validation', toolText(language, 'pipeline.bad_args', { errors: errors.join('\n- ') }), true);
   }
+  if (tool.submits === true && ctx.kind !== 'chat') return refuse('deny', 'mode', pendingText('en', 'unattended_submit', { name: tool.name }));
   // この呼び出しが外へ出るか（効果が network、または networkCall がそう答えた）。外から読んだ印と、自動承認で外を読んだ会話の毎回の確かめだけがこれを使う
   const network = tool.effect === 'network' || callsNetwork(tool, args);
 
@@ -212,6 +248,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       decision = 'deny'; reasons.push(guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message }));
     }
   }
+  const outbound = decision === 'deny' ? undefined : outboundOfCall(tool, first, language);
+  if (outbound?.kind === 'deny') return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: outbound.reason }));
+  const tainted = ctx.taint.tainted || conversationTainted(deps);
   // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる（札の理由と、自動承認の判定役に回してよい種類 taint のため。送る・消すは humanOnlyOf が別に止める）。拒否は拒否のまま
   if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint || tool.writesFiles === true) && decision !== 'deny') {
     const sources = ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep'));
@@ -235,6 +274,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       reasons.push(guardText(language, 'pipeline.policy_ask', { name: tool.name }));
     }
   }
+  const policyAsk = policy === 'ask' && decision !== 'deny';
   // 自動承認で許可フォルダの外を読んだ会話では、その実行の残りも、あとの実行も、通信の道具とシェルのコマンドはすべて毎回確かめる（外で読んだ中身は会話の履歴に残るので、確かめなしに外へ送らせない。
   // 許可の一覧にある curl・Invoke-WebRequest も、URL の後ろの文字で外へ送れるので、取得かどうかで分けない。モードをふつうに戻しても変わらない）
   const afterAutoRead = (network || tool.effect === 'exec') && decision !== 'deny' && (ctx.autoReadOutside === true || conversationAutoRead(deps));
@@ -243,15 +283,48 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     askKinds.add('egress');
     reasons.push(guardText(language, 'pipeline.auto_egress'));
   }
+  const hookAsks: string[] = [];
   for (const hook of ctx.config.tools.hooks.preToolUse) {
     if (hook.enabled === false || !matches(hook.matcher, tool.name) || decision === 'deny') continue;
     const summary = tool.summarize?.(args, language);
+    const cwd = first?.cwd ?? (summary?.cwd ? resolve(ctx.workspace, summary.cwd) : ctx.workspace);
     const result = await runCommandHook(hook, {
-      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: summary?.cwd ?? ctx.workspace, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(cwd) : cwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      paths: hookPaths(tool, first), tainted, run_kind: ctx.kind, ...(ctx.project?.root ? { project_root: ctx.project.root } : {}), product_roots: safeProductRoots(deps),
     }, ctx.signal, language);
     if (result.decision && worst(decision, result.decision) !== decision) { decision = result.decision; decidedBy = `hook:${result.hook}`; }
-    if (result.decision === 'ask') askKinds.add('hook');
+    if (result.decision === 'ask') { askKinds.add('hook'); hookAsks.push(result.reason || result.hook); }
     if (result.reason && result.decision && result.decision !== 'allow') reasons.push(result.reason);
+  }
+
+  if (decision !== 'deny') {
+    const sendOrDelete = outbound?.kind === 'send' || outbound?.kind === 'delete' ? outbound : undefined;
+    const parkAs: { kind: PendingKind; reason: string } | undefined = sendOrDelete ? { kind: sendOrDelete.kind as PendingKind, reason: sendOrDelete.reason }
+      : hookAsks.length ? { kind: 'hook', reason: hookAsks.join('; ') }
+      : policyAsk ? { kind: 'policy', reason: guardText(language, 'pipeline.policy_ask', { name: tool.name }) }
+      : undefined;
+    if (parkAs) {
+      const parkReasons = [...new Set([...(sendOrDelete ? [sendOrDelete.reason] : []), ...reasons])];
+      if (ctx.kind === 'review') return refuse('deny', 'pending', toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
+      if (tool.replayable === false) return finish({ output: { content: pendingText('en', 'not_parked', { tool: tool.name, reason: parkAs.reason }), isError: true }, decision: 'ask', decidedBy: 'not-parked', invalidArguments: false });
+      if (!deps.pending) return refuse('deny', 'pending', pendingText('en', 'no_pending', { reason: parkAs.reason }));
+      const summaryCwd = tool.summarize?.(args, language).cwd;
+      const cwd = first?.cwd ?? (summaryCwd ? resolve(ctx.workspace, summaryCwd) : ctx.workspace);
+      if (/^[\\/]{2}/u.test(cwd)) return refuse('deny', 'pending', pendingText('en', 'network_cwd', { path: cwd }));
+      let parked;
+      try {
+        parked = await deps.pending.park({
+          tool: tool.name, input: args, cwd, kind: parkAs.kind, reason: parkAs.reason, checks: parkReasons, check: first,
+          ...(sendOrDelete ? { outbound: { kind: sendOrDelete.kind, reason: sendOrDelete.reason, targets: sendOrDelete.targets } } : {}),
+          ...(sendOrDelete?.kind === 'delete' ? { targets: sendOrDelete.targets } : {}),
+          ...(sendOrDelete?.kind === 'send' ? { files: (first?.paths ?? []).flatMap(p => (p.path && !(first?.writes ?? []).includes(p.path) ? [p.path] : [])) } : {}),
+          runId: ctx.runId, runKind: ctx.kind, conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId ?? null, projectId: ctx.project?.id ?? null, tainted,
+        });
+      } catch (error) {
+        return refuse('deny', 'pending', pendingText('en', 'park_failed', { detail: (error as Error).message }));
+      }
+      return finish({ output: { content: pendingText('en', 'parked', { id: parked.id, reason: parkAs.reason }) }, decision: 'ask', decidedBy: 'pending', invalidArguments: false }, `pending:${parked.id}`);
+    }
   }
 
   const hash = inputHash(tool.name, args);
@@ -357,8 +430,10 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   // ── 実行 ──
   let output: ToolOutput;
+  const closeWindow = tool.replayable === false ? undefined : ctx.toolWindow?.();
   try { output = await tool.execute(args, ctx, { approvedOnce, callId: call.id, ...(approvedOnce && first ? { check: first } : {}), ...(comparedBind !== undefined ? { bind: comparedBind } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
+  finally { closeWindow?.(); }
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。
   // シェルのコマンドが外から取得する・外の中身を持ち込む（curl・Invoke-WebRequest・git clone・npm install など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）。
   // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した（札・会話の許可）呼び出しも、動かしたら付ける。

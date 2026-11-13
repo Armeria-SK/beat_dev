@@ -127,7 +127,7 @@ test('待っている発言は、差し込まれる前なら取り消せる。�
 test('承認を待っているあいだは、実行が道具の呼び出しの中にいるので、発言は履歴に入らず、モデルも呼ばれない（承認の答えが先）。承認のあとの区切りで入る', async t => {
   const s = await startApp(t);
   const seen: ModelRequest[] = [];
-  s.adapter().scripts = [call('shell_run', { command: 'git push origin main' }), spy(say('見ました'), seen)];
+  s.adapter().scripts = [call('shell_run', { command: 'npm install left-pad' }), spy(say('見ました'), seen)];
   const first = await post(s, '書いて');
   await waitFor(() => s.app.approvals.pending().length === 1, '承認の札');
   const queued = await post(s, '承認の最中に送る');

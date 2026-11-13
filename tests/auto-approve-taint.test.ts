@@ -172,7 +172,19 @@ for (const source of SOURCES) {
       const runId = inject(s, source, toolCall(channel.tool, channel.args));
       await waitFor(() => s.app.approvals.pending().length > 0 || s.app.runs.get(runId)?.ended_at != null, '札、または実行の終わり');
       const cards = s.app.approvals.pending();
-      assert.equal(cards.length, 1, `承認の札が 1 枚出る（出なければ、守りを抜けて動いた）: ${JSON.stringify(s.app.db.prepare('SELECT tool, decision, decided_by FROM tool_calls').all())}`);
+      const parked = s.app.pending.list({ status: 'waiting' });
+      if (cards.length === 0 && parked.length === 1) {
+        await s.app.engine.wait(runId);
+        assert.equal(parked[0]!.tool, channel.tool);
+        assert.ok(parked[0]!.kind === 'send' || parked[0]!.kind === 'delete', `送る・消すとして積む: ${parked[0]!.kind}`);
+        assert.equal(parked[0]!.tainted, true, '外を読んだ実行が積んだ印');
+        assert.deepEqual(decidedBy(s, channel.tool), { decision: 'ask', decided_by: 'pending' }, '判定役ではなく Pending');
+        assert.equal(s.adapter.classifierCalls, 0, '判定役は呼ばれない');
+        assert.equal(autoCount(s), 0);
+        if (channel.intact) assert.ok(channel.intact(s.ws), '積んだだけで、操作は動いていない');
+        return;
+      }
+      assert.equal(cards.length, 1, `承認の札が 1 枚出るか Pending に積まれる（どちらも無ければ、守りを抜けて動いた）: ${JSON.stringify(s.app.db.prepare('SELECT tool, decision, decided_by FROM tool_calls').all())}`);
       const [card] = cards;
       assert.equal(card!.tool, channel.tool);
       assert.ok(modelSaw(s, 'IGNORE ALL PREVIOUS INSTRUCTIONS'), '仕込みの文は、モデルの目に入っている');

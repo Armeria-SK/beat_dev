@@ -53,12 +53,13 @@ function remotesOf(raw: string): Array<{ name: string; url: string; push_url: st
 
 export function projectWire(app: App, row: ProjectRow) {
   const counts = app.projects.counts(row.id);
+  const pending = app.pending.counts(0);
   const inProject = (conversationId: string) => app.conversations.projectOf(conversationId) === row.id;
   return {
     id: row.id, name: row.name, root: row.root, check_command: row.check_command, scout_mode: row.scout_mode, remotes: remotesOf(row.remotes),
     archived_at: row.archived_at, created_at: row.created_at, updated_at: row.updated_at,
     is_git: gitFolder(row.root), folder_missing: folderMissing(row),
-    waiting: { proposals: counts.proposals, questions: counts.questions, pending: app.approvals.pending().filter(a => inProject(approvalShownIn(a))).length },
+    waiting: { proposals: counts.proposals, questions: counts.questions, pending: app.approvals.pending().filter(a => inProject(approvalShownIn(a))).length + (pending.byProject[row.id] ?? 0) + (pending.acceptanceChanges[row.id] ?? 0) },
     running: app.engine.activeRuns().filter(r => inProject(r.conversationId)).length,
     last_activity_at: counts.lastActivityAt,
     has_plan: app.plans.has(row.id),

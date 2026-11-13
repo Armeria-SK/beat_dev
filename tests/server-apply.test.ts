@@ -411,19 +411,24 @@ test('A4: モデルの道具（シェル）からは押せない。この PC の
   for (const command of commands) {
     let finished = false;
     const asked: Array<{ onceOnly: boolean; reasons: string[] }> = [];
-    const calling = runToolCall({ id: 'c', name: 'shell_run', arguments: { command } }, ctx, { registry: s.app.tools, approvals: s.app.approvals, db: s.app.db, emit: () => undefined, conversationAutoRead: () => false }).finally(() => { finished = true; });
+    const calling = runToolCall({ id: 'c', name: 'shell_run', arguments: { command } }, ctx, { registry: s.app.tools, approvals: s.app.approvals, pending: s.app.pending, db: s.app.db, emit: () => undefined, conversationAutoRead: () => false }).finally(() => { finished = true; });
     while (!finished) {
       const pending = s.app.approvals.pending()[0];
       if (pending) { asked.push({ onceOnly: pending.onceOnly === true, reasons: pending.reasons }); s.app.approvals.decide(pending.id, 'deny'); }
       await new Promise(r => setTimeout(r, 10));
     }
     const outcome = await calling;
-    assert.equal(outcome.output.isError, true, command);
     assert.notEqual(outcome.decision, 'allow', `${command}: 確かめなしに通った`);
-    // 断られるのではなく、毎回（今回だけ）の承認を求める。理由は「この PC の中のサーバー（beat 自身を含む）につなぐ」（code.loopback）
+    if (outcome.decidedBy === 'pending') {
+      assert.equal(asked.length, 0, `${command}: 積んだものは札を出さない`);
+      continue;
+    }
+    assert.equal(outcome.output.isError, true, command);
+    // 送る形でなければ、毎回（今回だけ）の承認を求める。理由は「この PC の中のサーバー（beat 自身を含む）につなぐ」（code.loopback）
     assert.ok(asked.length >= 1 && asked.every(a => a.onceOnly), `${command}: 今回だけの承認を求める`);
     assert.ok(asked.some(a => a.reasons.some(reason => reason.includes('It connects to a server on this PC'))), `${command}: 理由は code.loopback`);
   }
+  assert.ok(s.app.pending.list({ status: 'waiting' }).length >= 1, '送る形（curl -X POST）は Pending に積まれる');
   assert.equal(s.app.restartRequired(), true, 'シェルからは反映されていない');
   assert.equal(s.app.bootServer.port, s.port);
   assert.equal(s.web.server.listening, true);

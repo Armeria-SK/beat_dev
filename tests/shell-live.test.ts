@@ -18,6 +18,7 @@ import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { which } from '../src/tools/shell/runner.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
@@ -40,13 +41,14 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
     ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
     : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
   const registry = new ToolRegistry().register(shellRun);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
-  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
+  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, { registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false });
   const files = (name: string) => join(paths.workspace, name);
   const seed = () => {
     writeFileSync(files('a.txt'), 'line1\nline2\nline3\n');
@@ -58,12 +60,15 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
     writeFileSync(files('tmp/SOUL.md'), 'evil persona');
   };
   seed();
-  return { paths, call, approvals, files };
+  return { paths, call, approvals, files, pending };
 }
 
 async function expectAsk(s: ReturnType<typeof setup>, command: string): Promise<void> {
   const pending = s.call(command);
-  for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  let parked = false;
+  void pending.then(outcome => { parked = outcome.decidedBy === 'pending'; });
+  for (let i = 0; i < 300 && !parked && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  if (parked) return;
   const request = s.approvals.pending()[0];
   assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
   assert.equal(request.onceOnly, true, `${command}: 今回だけの確かめでない`);
@@ -98,13 +103,16 @@ test('実機（Windows PowerShell 5.1・制限モード）: 一覧に当たる�
     ['git --version', /git version/u],
     ['Start-Sleep -Milliseconds 100; Write-Output done', /done/u],
   ];
+  const parked: string[] = [];
   for (const [command, expected] of rows) {
     const outcome = await s.call(command);
+    if (outcome.decidedBy === 'pending') { parked.push(command); continue; }
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
     assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
+  assert.deepEqual(parked, ['foreach ($f in Get-ChildItem *.txt) { $f.Name }'], '4-2a の見方で「何を動かすか分からない文」（$f.Name）を含む形は、送るに数えて Pending に積む（backlog）');
   if (which('rg')) assert.match((await s.call('rg --version')).output.content, /ripgrep/u);
 });
 
@@ -312,13 +320,16 @@ test('実機（Windows PowerShell 5.1・制限モード）: "…" の中の $( �
     ['"$(Get-Date -Format yyyy)-$(Get-Item a.txt | ForEach-Object { $_.Name })"', /20[0-9]{2}-a\.txt/u],
     ["Write-Output \"it's $((Get-Item a.txt).Name)\"", /it's a\.txt/u],
   ];
+  const parked: string[] = [];
   for (const [command, expected] of rows) {
     const outcome = await s.call(command);
+    if (outcome.decidedBy === 'pending') { parked.push(command); continue; }
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
     assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
+  assert.deepEqual(parked, ['foreach ($f in Get-ChildItem *.txt) { Write-Host "[$($f.Name)]" }'], '4-2a の見方で $f.Name の文は送るに数えて積む（backlog）');
   const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
   raw('Write-Output "$(Set-Content raw.txt hello)"');
   assert.equal(existsSync(s.files('raw.txt')), true, '前提: 素の PowerShell では、"…" の中の部分式が本当に書く');
@@ -393,7 +404,7 @@ test('実機（bash）: 一覧に当たるコマンドは承認なしで動き�
   const rows: Array<[string, RegExp]> = [
     ['ls', /a\.txt/u], ['cat a.txt | head -n 2', /line1\s+line2/u], ['grep -rn line2 .', /a\.txt/u], ['find . -name "*.txt" -type f | sort', /b\.txt/u], ['wc -l a.txt', /3/u], ['echo hello > out.txt && cat out.txt', /hello/u],
     ['mkdir -p made/inner && ls made', /inner/u], ['cp a.txt c.txt && cmp a.txt c.txt && echo same', /same/u], ['sed -n "2p" a.txt', /line2/u], ['for f in *.txt; do echo "$f"; done', /a\.txt/u], ['git --version', /git version/u],
-    ['sort a.txt | uniq -c | head -n 1', /1 line1/u], ['tar -cf out.tar a.txt && tar -tf out.tar', /a\.txt/u], ['rm -f c.txt && ls', /a\.txt/u],
+    ['sort a.txt | uniq -c | head -n 1', /1 line1/u], ['tar -cf out.tar a.txt && tar -tf out.tar', /a\.txt/u],
   ];
   for (const [command, expected] of rows) {
     const outcome = await s.call(command);
@@ -401,6 +412,9 @@ test('実機（bash）: 一覧に当たるコマンドは承認なしで動き�
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
+  const removing = await s.call('rm -f c.txt && ls');
+  assert.equal(removing.decidedBy, 'pending', '製品に属さない実行の rm は、消すに数えて Pending に積む');
+  assert.equal(existsSync(s.files('c.txt')), true, '積んだだけで消えない');
   for (const command of ['cp tmp/SOUL.md .', 'mv tmp/SOUL.md .', 'cp -r tmp/. .', 'rm -rf -- *', 'echo x > SOUL.md', "node -e 1", 'awk 1 a.txt', 'tar -xf out.tar']) await expectAsk(s, command);
   assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona');
   assert.equal(existsSync(s.files('tmp/SOUL.md')), true);
@@ -1142,14 +1156,10 @@ for (const shell of ['powershell', 'bash'] as const) {
       await expectAsk(s, command);
       assert.equal(existsSync(marker), false, `${command}: 断ったのに、宛先のフォルダのフックが動いた`);
     }
-    // 設定にある名前で、url がこの PC の外を指すものは、ふつうの確かめ（会話の許可で通る。今回だけにはならない）
-    const pending = s.call(ps ? 'cd gr; git push origin HEAD:refs/heads/x' : 'cd gr && git push origin HEAD:refs/heads/x');
-    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-    const request = s.approvals.pending()[0];
-    assert.ok(request, '承認の依頼が来ていない');
-    assert.equal(request.onceOnly, false, '設定にある名前が今回だけの確かめになった');
-    s.approvals.decide(request.id, 'deny');
-    await pending;
+    // 設定にある名前でも、製品に属さない実行には宛先の控えが無いので、送る操作として Pending に積まれる
+    const toOrigin = await s.call(ps ? 'cd gr; git push origin HEAD:refs/heads/x' : 'cd gr && git push origin HEAD:refs/heads/x');
+    assert.equal(toOrigin.decidedBy, 'pending');
+    assert.equal(s.approvals.pending().length, 0);
     // 再審査の指摘: url が この PC のフォルダを指す remote への push は、そのフォルダのフックを動かす（フックの上書きは届かない）。ふつうの確かめでなく今回だけ
     const toUp = ps ? 'cd gr; git push up HEAD:refs/heads/x' : 'cd gr && git push up HEAD:refs/heads/x';
     await expectAsk(s, toUp);
@@ -1160,17 +1170,11 @@ for (const shell of ['powershell', 'bash'] as const) {
     for (const command of ps ? ["Set-Content victim/hooks/pre-receive 'x'", "'x' > victim/hooks/pre-receive", "Copy-Item notes.md victim/hooks/pre-receive"] : ['echo x > victim/hooks/pre-receive', 'cp notes.md victim/hooks/pre-receive', 'tee victim/hooks/update < notes.md']) await expectAsk(s, command);
     assert.equal(readFileSync(hookFile, 'utf8'), before, '裏のリポジトリのフックが書き換わった');
     assert.equal(existsSync(join(victim, 'hooks', 'update')), false);
-    // 許せば、フックは動く（許可が関所になっている）
-    const pushing = s.call(toUp);
-    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
-    const second = s.approvals.pending()[0];
-    assert.ok(second, '承認の依頼が来ていない');
-    assert.equal(second.onceOnly, true);
-    assert.match(second.reasons.join('\n'), /points to a folder on this PC/u);
-    s.approvals.decide(second.id, 'once');
-    const pushed = await pushing;
-    assert.equal(pushed.output.isError, false, pushed.output.content);
-    assert.equal(existsSync(marker), true, '許したのに、フォルダのフックが動かない');
+    // 送る操作なので、札でなく Pending に積まれ、フックは動かない（持ち主が Pending で承認するまで）
+    const pushed = await s.call(toUp);
+    assert.equal(pushed.decidedBy, 'pending');
+    assert.equal(existsSync(marker), false, '積んだだけで、フォルダのフックが動いた');
+    assert.ok(s.pending.list({ status: 'waiting' }).every(row => row.kind === 'send'));
   });
 }
 

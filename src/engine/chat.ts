@@ -32,6 +32,8 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import { CreatedFiles } from '../projects/created.ts';
+import type { PendingStore } from '../pending/store.ts';
+import { pendingText } from '../shared/messages/pending.ts';
 import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
@@ -98,7 +100,7 @@ export interface ChatEngineDeps {
   bus: RunBus;
   limiter: EndpointLimiter;
   paths: AppPaths;
-  tools?: { registry: ToolRegistry; approvals: ApprovalBroker };
+  tools?: { registry: ToolRegistry; approvals: ApprovalBroker; pending?: PendingStore | undefined };
   memory?: MemoryStore;
   botMemory?: boolean | undefined;
   tasks?: TaskStore;
@@ -202,6 +204,7 @@ export class ChatEngine {
   #agentSpawned = new Map<string, number>();
   // 実行中に送られて、まだ履歴に入っていない発言（会話ごと。再起動で消える）
   #pending = new Map<string, PendingMessage[]>();
+  #notes = new Map<string, Array<{ content: string; fetched: boolean }>>();
   // maxTools で切られた MCP の道具の警告を出したもの（モデル id と道具の名前の組。1 組に 1 回だけ）
   #cutWarned = new Set<string>();
   lastUserActivity = 0;
@@ -302,11 +305,58 @@ export class ChatEngine {
       const message = stored[i]!.message;
       if (message.role === 'assistant' && !message.toolCalls?.length) { replied = true; break; }
       if (message.role === 'user') sources.unshift(...(message.attachments ?? []).map(a => engineText(language, 'attachment.taint', { name: a.name })));
+      if (message.role === 'user' && message.note && message.fetched) sources.unshift(pendingText(language, 'taint_note'));
     }
     if (!replied && stored.length >= TAINT_SCAN_LIMIT) sources.push(engineText(language, 'taint.unknown'));
     if (this.#previousRunCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
     if (this.#checklistCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.checklist'));
     if (sources.length) this.#initialTaint.set(runId, sources);
+  }
+
+  addNote(conversationId: string, content: string, fetched: boolean): void {
+    if (!this.#d.conversations.get(conversationId)) return;
+    if (this.#byConversation.has(conversationId)) {
+      const queue = this.#notes.get(conversationId) ?? [];
+      queue.push({ content, fetched });
+      this.#notes.set(conversationId, queue);
+      return;
+    }
+    this.#saveNote(conversationId, { content, fetched });
+  }
+
+  #saveNote(conversationId: string, note: { content: string; fetched: boolean }, runId?: string): void {
+    const saved = this.#d.conversations.append(conversationId, { role: 'user', content: note.content, generated: true, note: 'pending', ...(note.fetched ? { fetched: true as const } : {}) }, runId);
+    this.#d.bus.publish({ type: 'message.saved', runId: runId ?? '', conversationId, messageId: saved.id, role: 'user' });
+  }
+
+  #injectNotes(runId: string, conversationId: string, ctx: ToolContext): void {
+    const queue = this.#notes.get(conversationId);
+    if (!queue?.length) return;
+    this.#notes.delete(conversationId);
+    for (const note of queue) {
+      this.#saveNote(conversationId, note, runId);
+      if (note.fetched) {
+        ctx.taint.tainted = true;
+        ctx.taint.sources.push(pendingText(languageOf(this.#d.config()), 'taint_note'));
+      }
+    }
+  }
+
+  #flushNotes(conversationId: string, runId: string): void {
+    const queue = this.#notes.get(conversationId);
+    if (!queue?.length) return;
+    this.#notes.delete(conversationId);
+    try { for (const note of queue) this.#saveNote(conversationId, note); } catch (error) { this.#d.log?.(`[ERROR] run ${runId}: failed to save a Pending note: ${(error as Error).message}`); }
+  }
+
+  #noteSinceReply(conversationId: string): boolean {
+    const stored = this.#d.conversations.messages(conversationId, TAINT_SCAN_LIMIT);
+    for (let i = stored.length - 1; i >= 0; i--) {
+      const message = stored[i]!.message;
+      if (message.role === 'assistant' && !message.toolCalls?.length) return false;
+      if (message.role === 'user' && message.note && message.fetched) return true;
+    }
+    return false;
   }
 
   #checklistCarriesTaint(conversationId: string): boolean {
@@ -426,6 +476,7 @@ export class ChatEngine {
       ...(this.#d.runs.anyTaintedTask(conversationId) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
       ...(this.#d.tasks?.textTainted(task.id) ? [engineText(language, 'taint.carried')] : []),
+      ...(this.#noteSinceReply(conversationId) ? [pendingText(language, 'taint_note')] : []),
     ];
     if (sources.length) this.#initialTaint.set(runId, sources);
     this.#start(runId, conversationId, chain.usable, 'task', { task, control });
@@ -597,6 +648,7 @@ export class ChatEngine {
         this.#agentSpawned.delete(runId);
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
         // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
+        this.#flushNotes(conversationId, runId);
         if (kind === 'chat') {
           try { this.#drainPending(conversationId, runId, ended); } catch (error) { this.#d.log?.(`[ERROR] Failed to pick up the waiting messages: ${(error as Error).stack ?? error}`); }
         }
@@ -655,7 +707,8 @@ export class ChatEngine {
     const project = kind === 'review' ? undefined : resolved;
     if (project) d.mesh?.persist(project.id);
     if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
-    const productRoots = agent || kind === 'review' ? [] : [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
+    const allRoots = [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
+    const productRoots = agent || kind === 'review' ? [] : allRoots;
     const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
     const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
     const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
@@ -675,6 +728,8 @@ export class ChatEngine {
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
+    ctx.isCreated = abs => this.created.isCreated(abs, ctx);
+    ctx.toolWindow = () => this.created.open(ctx);
     if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider)) && (agent?.parent.modelsLocal ?? true);
     if (agent?.parent.autoReadOutside) ctx.autoReadOutside = true;
@@ -713,6 +768,7 @@ export class ChatEngine {
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
+      this.#injectNotes(runId, conversationId, ctx);
       if (kind === 'chat' || kind === 'agent') { recordTaint(); recordAutoRead(); }
       if (kind === 'task') recordTaint();
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project });
@@ -754,7 +810,7 @@ export class ChatEngine {
         ctx.contextAvailable = budget.available;
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
         const outcome = await runToolCall(toolCall, ctx, {
-          registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
+          registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: () => allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
           permissionMode: () => this.#modeOf(conversationId),
           autoClassify: (prompt, classifierSignal) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal),
           lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? '' : this.#lastUserRequest(conversationId)),
@@ -794,7 +850,7 @@ export class ChatEngine {
     const stored = this.#d.conversations.messages(conversationId, 50);
     for (let i = stored.length - 1; i >= 0; i--) {
       const message = stored[i]!.message;
-      if (message.role === 'user') return stripAttachments(message.content).slice(0, USER_REQUEST_LIMIT);
+      if (message.role === 'user' && !message.generated && !message.note) return stripAttachments(message.content).slice(0, USER_REQUEST_LIMIT);
     }
     return '';
   }

@@ -509,12 +509,19 @@ test('自動承認（タスク）: Web を読んだあとの送る操作・消�
     writeFileSync(target, '古いメモ');
     const next = step ?? toolCall('shell_run', { command: process.platform === 'win32' ? `Remove-Item "${target}"` : `rm "${target}"` });
     const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), next, say(ALLOW), say('おわり')]);
-    await waitFor(() => s.app.approvals.pending().length === 1, `${label}の札`);
+    await waitFor(() => s.app.approvals.pending().length === 1 || s.app.pending.list({ status: 'waiting' }).length === 1, `${label}の札か Pending`);
     const [card] = s.app.approvals.pending();
-    if (reason) assert.ok(card!.reasons.some(r => reason.test(r)), label);
-    assert.equal(s.adapter().calls.filter(isClassifier).length, 0, `${label}: 判定役を呼ばない`);
-    s.app.approvals.decide(card!.id, 'deny');
+    if (step === null) {
+      assert.equal(card, undefined, `${label}: 札は出ない`);
+      const [row] = s.app.pending.list({ status: 'waiting' });
+      assert.equal(row!.kind, 'delete', label);
+      assert.ok(reason!.test(row!.shown), label);
+    } else {
+      if (reason) assert.ok(card!.reasons.some(r => reason.test(r)), label);
+      s.app.approvals.decide(card!.id, 'deny');
+    }
     await started.done;
+    assert.equal(s.adapter().calls.filter(isClassifier).length, 0, `${label}: 判定役を呼ばない`);
     assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, label);
     assert.ok(existsSync(target), `${label}: ファイルは残る`);
   }
