@@ -370,7 +370,7 @@ test('広がりの確かめの文: 道具ごとの方針を緩める行は、道
   assert.equal(typeof en['access.toolPolicy'], 'function');
   assert.match(en['access.toolPolicy']('shell_run', en['ui.tools.block'], en['ui.tools.ask']), /shell_run.*"Block".*"Ask"/u);
   assert.ok(en['access.outside'].includes(`"${en['ui.tools.block']}" to "${en['ui.tools.ask']}"`), '外へ届くシェルの行も、Skills の行と同じ方針の名前');
-  assert.ok(en['mode.autoDesc'].includes(`set to "${en['ui.tools.block']}"`) && en['mode.autoDesc'].includes(`set to "${en['ui.tools.ask']}"`), 'Auto の説明も同じ方針の名前');
+  assert.doesNotMatch(en['mode.autoDesc'], /Ask for approval/u, 'Normal の説明も、Skills の行に無い古い方針の名前を使わない');
 });
 
 // ---- AU-6c: ブラウザ ----
