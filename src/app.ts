@@ -24,7 +24,7 @@ import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
 import { ApprovalBroker, approvalPublic, approvalShownIn } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
-import { shellRun } from './tools/builtin/shell.ts';
+import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
 import { planWrite } from './tools/builtin/plan.ts';
 import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts';
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
@@ -63,9 +63,12 @@ import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
 import { PendingStore, type PendingRow } from './pending/store.ts';
-import { replayAction } from './pending/replay.ts';
+import { pendingNote } from './pending/notes.ts';
+import { parentOf, replayAction } from './pending/replay.ts';
+import { pendingText } from './shared/messages/pending.ts';
+import { isLocalPinned } from './engine/local-model.ts';
 import { ToolRegistry } from './tools/registry.ts';
-import { ignoredPolicyNames } from './tools/tool-policy.ts';
+import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
 import { redactSecrets } from './shared/redaction.ts';
 import { MemoryStore, renderBooks } from './memory/store.ts';
@@ -197,7 +200,7 @@ export class App {
         this.notifications.settle('approval_needed', { dedupKey: `approval:${v.id}` });
       }
     });
-    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => this.bus.publish({ type: 'pendingAction.changed', ...change }) });
+    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); } });
     const interrupted = this.pending.closeInterrupted();
     if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
@@ -231,7 +234,7 @@ export class App {
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
-      tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
+      tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
@@ -309,7 +312,7 @@ export class App {
   // 起動直後は承認の札がひとつも無いので、承認待ちは全部。返事待ち・失敗は、タスクが無いか、今その状態でないものだけ既読にする
   settleStaleNotifications(): void {
     const stale = this.notifications.list(0).filter(n => {
-      if (n.kind === 'approval_needed') return true;
+      if (n.kind === 'approval_needed') return !n.dedup_key?.startsWith('pending:') || !this.#pendingScopeWaits(n.dedup_key);
       if (!n.link?.startsWith('#/tasks/')) return false;
       const task = this.tasks.get(n.link.slice('#/tasks/'.length));
       return task === undefined || task.status !== (n.kind === 'task_waiting' ? 'waiting' : 'failed');
@@ -324,6 +327,8 @@ export class App {
   // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
   #warnIgnoredPolicies(config: AppConfig): void {
     for (const name of ignoredPolicyNames(config)) this.log(`[WARN] Ignoring "${name}" in tools.policies: this tool cannot have a policy (it is needed to run tasks)`);
+    for (const name of askReadAsBlock(config)) this.log(`[WARN] ${name} is set to Ask in tools.policies, but it cannot wait in Pending, so it is treated as Block. Set it to Allow or Block in Settings`);
+    for (const name of droppedGitEnv(config)) this.log(`[WARN] Ignoring "${name}" in tools.shell.envAllow: GIT_* variables are never passed to commands`);
   }
 
   // 更新の時点で既にあるスキルは、持ち主が置いたものとして全部登録する（1 回だけ。以後に直接置かれたものは、画面で登録するまで使わない）
@@ -414,6 +419,43 @@ export class App {
 
   restartRequired(): boolean {
     return JSON.stringify(this.config().server) !== JSON.stringify(this.bootServer);
+  }
+
+  #pendingScope(row: PendingRow): { conversationId: string; taskId: string | null; key: string } {
+    const parent = parentOf(this.db, row);
+    const conversationId = parent?.conversationId ?? row.conversation_id;
+    const taskId = row.task_id ?? parent?.taskId ?? this.tasks?.byConversation(conversationId)?.id ?? null;
+    return { conversationId, taskId, key: taskId ? `pending:task:${taskId}` : `pending:conv:${conversationId}` };
+  }
+
+  #pendingScopeWaits(key: string): boolean {
+    const taskId = key.startsWith('pending:task:') ? key.slice('pending:task:'.length) : null;
+    const conversationId = taskId ? this.tasks.get(taskId)?.conversation_id ?? null : key.startsWith('pending:conv:') ? key.slice('pending:conv:'.length) : null;
+    return this.pending.waitingAround(conversationId, taskId).some(row => this.#pendingScope(row).key === key);
+  }
+
+  #pendingChanged(id: number): void {
+    try {
+      const row = this.pending.row(id);
+      const view = this.pending.view(id);
+      if (!row || !view || row.status === 'running') return;
+      const scope = this.#pendingScope(row);
+      const language = languageOf(this.config());
+      const task = scope.taskId ? this.tasks.get(scope.taskId) : undefined;
+      if (row.status === 'waiting') {
+        const localOnly = task ? task.local_only === 1 : isLocalPinned(this.config(), this.conversations.get(scope.conversationId)?.model_id);
+        this.notifications.notify({
+          kind: 'approval_needed', title: task ? pendingText(language, 'notify_title_task', { title: task.title }) : pendingText(language, 'notify_title_conversation'),
+          body: redactSecrets(`#${row.id} ${row.reason}`), link: '#/pending', dedupKey: scope.key, localOnly,
+        });
+        return;
+      }
+      if (!this.#pendingScopeWaits(scope.key)) this.notifications.settle('approval_needed', { dedupKey: scope.key });
+      const note = pendingNote(row, view);
+      if (!note) return;
+      if (task) this.tasks.event(task.id, 'pending', 'owner', note.event);
+      this.engine.addNote(scope.conversationId, note.text, note.fetched);
+    } catch (error) { this.log(`[ERROR] Failed to record the result of pending item #${id}: ${(error as Error).message}`); }
   }
 
   replayPending(row: PendingRow): void {

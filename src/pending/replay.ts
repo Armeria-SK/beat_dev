@@ -10,13 +10,16 @@ import { pendingText } from '../shared/messages/pending.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
 import { runCommandHook } from '../tools/hooks/command-hook.ts';
-import { placePath } from '../tools/hooks/scope.ts';
+import { placePath, windowsNames } from '../tools/hooks/scope.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import type { PreCheck, RunKind, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
-import { compareSnapshot, takeSnapshot, type Change } from './snapshot.ts';
-import { newChecks, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
+import { outboundOfCall } from '../tools/hooks/outbound.ts';
+import { hookPaths } from '../tools/pipeline.ts';
+import { identityOf } from '../projects/created.ts';
+import { boundChanged, boundFacts, compareSnapshot, destinationFacts, PUSH_UNCONFIRMED, pushFacts, takeSnapshot, type Change } from './snapshot.ts';
+import { newChecks, parkedOutbound, realCwd, type PendingRow, type PendingState, type PendingStatus, type PendingStore } from './store.ts';
 
 export interface ReplayDeps {
   db: DatabaseSync;
@@ -41,10 +44,11 @@ export interface ReplayOutcome {
 
 const RUN_KINDS: readonly RunKind[] = ['chat', 'task', 'review', 'agent'];
 const EXTRA_SECONDS = 60;
+const WINDOWS = process.platform === 'win32';
 
 const matches = (matcher: string, name: string): boolean => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
 
-function parentOf(db: DatabaseSync, row: PendingRow): ToolContext['parent'] {
+export function parentOf(db: DatabaseSync, row: PendingRow): ToolContext['parent'] {
   if (row.run_kind !== 'agent') return undefined;
   const run = db.prepare('SELECT parent_run_id AS id FROM engine_runs WHERE id = ?').get(row.run_id) as { id: string | null } | undefined;
   const conversation = db.prepare('SELECT parent_run_id AS id, title FROM conversations WHERE id = ?').get(row.conversation_id) as { id: string | null; title: string | null } | undefined;
@@ -58,13 +62,17 @@ function parentOf(db: DatabaseSync, row: PendingRow): ToolContext['parent'] {
   return { runId: parentRunId, conversationId: parent.conversation_id, kind: parent.kind as RunKind, title: conversation?.title ?? '', ...(task ? { taskId: task.id } : {}) };
 }
 
-async function hookRefusal(tool: ToolDef, args: unknown, ctx: ToolContext, cwd: string): Promise<string | undefined> {
+interface HookFacts { check: PreCheck | undefined; tainted: boolean; productRoots: string[] }
+
+async function hookRefusal(tool: ToolDef, args: unknown, ctx: ToolContext, facts: HookFacts): Promise<string | undefined> {
+  let summaryCwd: string | undefined;
+  try { summaryCwd = tool.summarize?.(args as never, 'en').cwd; } catch { summaryCwd = undefined; }
+  const cwd = facts.check?.cwd ?? (summaryCwd ? resolve(ctx.workspace, summaryCwd) : ctx.workspace);
   for (const hook of ctx.config.tools.hooks.preToolUse) {
     if (hook.enabled === false || !matches(hook.matcher, tool.name)) continue;
-    let summaryCwd: string | undefined;
-    try { summaryCwd = tool.summarize?.(args as never, 'en').cwd; } catch { summaryCwd = undefined; }
     const result = await runCommandHook(hook, {
-      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: summaryCwd ? resolve(cwd, summaryCwd) : cwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(cwd) : cwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      paths: hookPaths(tool, facts.check), tainted: facts.tainted, run_kind: ctx.kind, ...(ctx.project?.root ? { project_root: ctx.project.root } : {}), product_roots: facts.productRoots,
     }, ctx.signal, 'en');
     if (result.decision === 'deny') return result.reason || result.hook;
   }
@@ -101,6 +109,17 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     const productRoots = [...(deps.projects?.list() ?? []), ...(deps.projects?.list({ archived: true }) ?? [])].map(p => p.root);
     const policy = buildPolicy(config, deps.paths, project, productRoots);
     if (placePath(resolve(row.cwd), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: row.cwd }));
+    const workspace = state.workspace ?? row.cwd;
+    if (placePath(resolve(workspace), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: workspace }));
+    if (!statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) return end('failed', pendingText('en', 'cwd_missing', { path: workspace }));
+    const created = new Map((state.created ?? []).map(c => [c.path, c]));
+    const stillCreated = (path: string): boolean => {
+      const mark = created.get(path);
+      if (!mark || identityOf(path) !== mark.id) return false;
+      if (mark.inside === undefined) return true;
+      const now = boundFacts([path])[0]!;
+      return mark.more !== true && now.more !== true && now.hash === mark.inside;
+    };
     const timeout = AbortSignal.timeout((config.tools.shell.maxTimeoutSec + EXTRA_SECONDS) * 1000);
     const signal = deps.signal ? AbortSignal.any([timeout, deps.signal]) : timeout;
     const runId = randomUUID();
@@ -110,49 +129,83 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     };
     const parent = parentOf(deps.db, row);
     const ctx: ToolContext = {
-      runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace: row.cwd,
+      runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace,
       home: defaultWorkspace(buildPolicy(config, deps.paths, undefined, productRoots), deps.paths),
       ...(project ? { project } : {}),
       taint: row.tainted === 1 ? { tainted: true, sources: [pendingText('en', 'taint_parked')] } : { tainted: false, sources: [] },
       conversationTainted,
+      isCreated: stillCreated,
       ...(row.task_id ? { task: { id: row.task_id, control: { outcome: 'none' as const } } } : {}),
       ...(parent ? { parent } : {}),
       log: deps.log ?? (() => undefined),
       services: deps.services?.(),
     };
 
-    const refused = await hookRefusal(tool, args, ctx, row.cwd);
+    const recheck = async (): Promise<PreCheck | undefined> => {
+      if (!tool.preCheck) return undefined;
+      try {
+        const checked = tool.preCheck(args as never, ctx);
+        return checked instanceof Promise ? await checked : checked;
+      } catch (error) { return { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
+    };
+    const forHook = await recheck();
+    if (forHook?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: forHook.reasons.join('\n- ') }));
+    const refused = await hookRefusal(tool, args, ctx, { check: forHook, tainted: conversationTainted(), productRoots });
     if (refused !== undefined) return end('failed', pendingText('en', 'hook_denied', { reason: refused }));
-
     let changes: Change[] = [];
     if (row.kind === 'delete') {
       const before = state.snapshot ?? { git: null, paths: [] };
       changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
     }
-
-    let again: PreCheck | undefined;
-    if (tool.preCheck) {
-      try {
-        const checked = tool.preCheck(args as never, ctx);
-        again = checked instanceof Promise ? await checked : checked;
-      } catch (error) { again = { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
-    }
+    const pushedNow = state.pushes?.length ? (await pushFacts(state.pushes, deps.paths.data)).fingerprint : undefined;
+    const again = await recheck();
     if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
+    if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(row.cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
+
+    const mask = (text: string): string => (tool.redact ? tool.redact(text) : text);
+    const outboundNow = outboundOfCall(tool, again, 'en');
+    if (outboundNow?.kind === 'deny') return end('failed', pendingText('en', 'denied', { reasons: outboundNow.reason }));
     if (state.cwdReal !== undefined && realCwd(row.cwd) !== state.cwdReal) return end('stale', pendingText('en', 'changed_cwd', { path: row.cwd }));
     if ((again?.bind ?? null) !== row.bind) return end('stale', pendingText('en', 'changed_bind'));
     if (again) {
-      const fresh = newChecks(state.recheck, again);
+      const fresh = newChecks(state.recheck, again, mask);
       if (fresh.length) return end('stale', pendingText('en', 'changed_checks', { reasons: fresh.join('\n- ') }));
+    }
+    if (!state.outbound && (outboundNow?.kind === 'send' || outboundNow?.kind === 'delete')) {
+      return end('stale', pendingText('en', 'changed_target', { before: 'none', now: JSON.stringify(parkedOutbound({ kind: outboundNow.kind, reason: outboundNow.reason, targets: outboundNow.targets }, mask)) }));
+    }
+    if (state.outbound) {
+      const before = JSON.stringify(state.outbound);
+      const now = outboundNow ? JSON.stringify(parkedOutbound({ kind: outboundNow.kind, reason: outboundNow.reason, targets: outboundNow.targets }, mask)) : 'none';
+      if (now !== before) return end('stale', pendingText('en', 'changed_target', { before, now }));
+    }
+    if (state.destination !== undefined) {
+      const now = destinationFacts(row.cwd, state.places ?? []);
+      if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
+    }
+    if (state.filesMore) return end('stale', pendingText('en', 'files_unbound'));
+    if (state.sent?.length) {
+      const now = boundFacts(state.sent.map(f => f.path));
+      const moved = state.sent.flatMap((was, i) => {
+        const is = now[i]!;
+        const mark = (fact: typeof was): string => (fact.exists ? `${fact.size ?? fact.type ?? ''} ${(fact.hash ?? '').slice(0, 12)}`.trim() : 'none');
+        return boundChanged(was, is) ? [pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) })] : [];
+      });
+      if (moved.length) return end('stale', pendingText('en', 'changed_files', { changes: moved.join('\n') }));
     }
     if (changes.length) {
       const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');
       return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });
     }
+    if (state.pushed !== undefined && (state.pushed.startsWith(PUSH_UNCONFIRMED) || pushedNow?.startsWith(PUSH_UNCONFIRMED))) return end('stale', pendingText('en', 'push_unconfirmed'));
+    if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', state.pushes?.every(p => p.parsed) ? 'changed_head' : 'changed_commits'));
+    const pushCheck = state.pushes?.length && state.tips ? { tips: state.tips, required: state.pushes.some(p => p.parsed) } : undefined;
 
     const started = Date.now();
     let output: ToolOutput;
-    try { output = await tool.execute(args as never, ctx, { approvedOnce: true, ...(again ? { check: again } : {}), ...(again?.bind !== undefined ? { bind: again.bind } : {}) }); }
+    try { output = await tool.execute(args as never, ctx, { approvedOnce: true, ...(again ? { check: again } : {}), ...(again?.bind !== undefined ? { bind: again.bind } : {}), ...(pushCheck ? { pushCheck } : {}) }); }
     catch (error) { output = { content: pendingText('en', 'exec_error', { detail: (error as Error).message }), isError: true }; }
+    if (output.pushCheckUnavailable) return end('failed', pendingText('en', 'push_check_unavailable'));
     if (signal.aborted && deps.signal?.aborted) output = { content: `${output.content}\n\n${pendingText('en', 'cancelled_stop')}`, isError: true };
     const network = tool.effect === 'network' || (() => { try { return tool.networkCall?.(args as never) === true; } catch { return true; } })();
     const egress = again?.decision === 'ask' && again.askKinds?.includes('egress') === true;
@@ -167,6 +220,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       VALUES (?, ?, ?, ?, ?, 'allow', 'owner-pending', ?, ?, ?, ?, ?, ?)`).run(
       randomUUID(), row.run_id, kept ? row.conversation_id : null, row.tool, shownInput, `pending:${row.id}`, output.isError ? 0 : 1, Date.now() - started, preview, kept ? output.fullRef ?? null : null, started,
     );
+    if (output.pushRefused) return end('failed', kept ? `${pendingText('en', 'push_unseen')}\n\n${output.content}` : pendingText('en', 'push_unseen'), { fetched }, kept ? { exitCode: output.exitCode, fullRef: output.fullRef } : { exitCode: output.exitCode });
     const ran = output.exitCode !== undefined || !output.isError;
     return end(ran ? 'ran' : 'failed', kept ? output.content : undefined, { fetched }, kept ? { exitCode: output.exitCode, fullRef: output.fullRef } : { exitCode: output.exitCode });
   } catch (error) {

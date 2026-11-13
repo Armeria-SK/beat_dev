@@ -20,6 +20,7 @@ import { ASK_REASON_KINDS } from '../src/tools/hooks/ask-kinds.ts';
 import { effectiveMode, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -235,6 +236,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { tools?: 
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(shellRun).register(webFetch);
   for (const tool of options.tools ?? []) registry.register(tool);
   const policy = buildPolicy(parsed, paths);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const controller = new AbortController();
   const prompts: ClassifierPrompt[] = [];
   const state = { mode: options.mode ?? 'auto' as PermissionMode, classify: options.classify ?? (() => ALLOW), conversationTainted: false as boolean | 'throws', conversationAutoRead: false as boolean | 'throws' };
@@ -244,14 +246,14 @@ async function setup(t: { after: (fn: () => void) => void }, options: { tools?: 
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: { noClassifier?: boolean; timeoutMs?: number; noConversationFlag?: boolean; noAutoReadFlag?: boolean } = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで',
+      registry, approvals, pending, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで',
       ...(extra.noClassifier ? {} : { autoClassify: async (prompt: ClassifierPrompt, signal: AbortSignal) => { prompts.push(prompt); return state.classify(prompt, signal); } }),
       ...(extra.timeoutMs ? { autoTimeoutMs: extra.timeoutMs } : {}),
       ...(extra.noConversationFlag ? {} : { conversationTainted: () => { if (state.conversationTainted === 'throws') throw new Error('読めない'); return state.conversationTainted; } }),
       ...(extra.noAutoReadFlag ? {} : { conversationAutoRead: () => { if (state.conversationAutoRead === 'throws') throw new Error('読めない'); return state.conversationAutoRead; } }),
     });
   const readOutside = process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"`;
-  return { paths, ctx, call, approvals, events, db, parsed, controller, prompts, state, outside, readOutside };
+  return { paths, ctx, call, approvals, events, db, parsed, controller, prompts, state, outside, readOutside, pending };
 }
 
 async function waitPending(s: Setup) {
@@ -507,11 +509,11 @@ test('今回だけの確かめ（code）は、判定役に回さない。判定�
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
 });
 
-test('毎回の確かめ（道具ごとの方針 ask）は、外を読むだけでも判定役に回さない', async t => {
+test('毎回の確かめ（道具ごとの方針 ask）は、外を読むだけでも判定役に回さず Pending に積む', async t => {
   const s = await setup(t, { mutate: c => { c.tools.policies = { shell_run: 'ask' }; } });
-  const seen = await askedKinds(s, 'shell_run', { command: s.readOutside });
-  assert.deepEqual(seen.kinds, ['outside_read', 'policy']);
-  assert.equal(seen.everyTime, true);
+  assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'pending');
+  assert.deepEqual(s.pending.list({ status: 'waiting' }).map(row => row.kind), ['policy']);
+  assert.equal(s.approvals.pending().length, 0);
   assert.equal(s.prompts.length, 0);
 });
 
@@ -520,8 +522,9 @@ test('フックの ask は、判定役に回さない（外を読むだけのコ
   const hook = join(dir, 'ask.mjs');
   writeFileSync(hook, `process.stdin.resume();process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({hookSpecificOutput:{permissionDecision:'ask',permissionDecisionReason:'念のため確認'}}))})`);
   const s = await setup(t, { mutate: c => { c.tools.hooks.preToolUse = [{ matcher: 'shell_run', command: [process.execPath, hook], timeoutMs: 10_000, onError: 'deny' }]; } });
-  const seen = await askedKinds(s, 'shell_run', { command: s.readOutside });
-  assert.deepEqual(seen.kinds, ['hook', 'outside_read']);
+  assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'pending');
+  assert.deepEqual(s.pending.list({ status: 'waiting' }).map(row => row.kind), ['hook']);
+  assert.equal(s.approvals.pending().length, 0);
   assert.equal(s.prompts.length, 0);
 });
 
@@ -675,10 +678,9 @@ test('シェルで外から取得したら、web_fetch と同じに「外から�
     await s.call('shell_run', { command: 'echo hello' });
     assert.equal(s.ctx.taint.tainted, false, `${mode}: 取得でないコマンドには付かない`);
     const sends = process.platform === 'win32' ? 'curl.exe -s -d x https://beat-test.invalid/' : 'curl -s -d x https://beat-test.invalid/';
-    const declined = s.call('shell_run', { command: sends });
-    s.approvals.decide((await waitPending(s)).id, 'deny');
-    await declined;
-    assert.equal(s.ctx.taint.tainted, false, `${mode}: 札で断った取得は動かないので付かない`);
+    const parked = await s.call('shell_run', { command: sends });
+    assert.equal(parked.decidedBy, 'pending', `${mode}: 送る取得は Pending に積まれる`);
+    assert.equal(s.ctx.taint.tainted, false, `${mode}: 積んだ取得は動かないので付かない`);
     const outcome = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
     assert.equal(outcome.decision, 'allow', `${mode}: 許可の一覧にある取得は札なしで動く`);
     assert.equal(outcome.output.isError, true, `${mode}: 名前が引けず失敗しても付く（失敗の文にも相手の文字は入りうる）`);
@@ -808,11 +810,16 @@ test('判定役が allow と言っても通らないもの（範囲の外・拒�
   ];
   for (const [name, args, ctx] of attempts) {
     const running = s.call(name, args, ctx ?? s.ctx);
-    const request = await waitPending(s);
-    s.approvals.decide(request.id, 'deny');
+    let done = false;
+    void running.then(() => { done = true; });
+    for (let i = 0; i < 300 && !done && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+    const request = s.approvals.pending()[0];
+    if (request) s.approvals.decide(request.id, 'deny');
     const outcome = await running;
+    assert.ok(request || outcome.decidedBy === 'pending', `${name}: 札か Pending`);
     if (outcome.decidedBy === 'auto-mode') ran.push(name);
   }
+  assert.deepEqual(s.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['file_read', 'policy']], '毎回（方針の ask）は Pending');
   assert.deepEqual(ran, [], '判定役の allow で動いたものは無い');
   assert.equal(s.prompts.length, 0);
   assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'auto-mode', '範囲の中の外読みだけが回る');
@@ -950,7 +957,8 @@ test('メモリの道具（Q-C）: memory_save は判定役が決める。memory
   assert.ok(seen.reasons.some(r => /This deletes something/u.test(r)));
   assert.equal(s.prompts.length, 1, 'memory_forget は判定役を呼ばない（呼んだのは memory_save の 1 回だけ）');
   const idle = await setup(t, { tools: [memoryForget], mutate: c => { c.tools.policies = { memory_forget: 'ask' }; } });
-  assert.deepEqual((await askedKinds(idle, 'memory_forget', { id: 1, reason: 'x' })).kinds, ['policy'], '比べる基準: 方針の ask は、今までどおり判定役に回らない');
+  assert.equal((await idle.call('memory_forget', { id: 1, reason: 'x' })).decidedBy, 'pending', '比べる基準: 方針の ask は判定役に回らず Pending');
+  assert.equal(idle.prompts.length, 0);
 });
 
 test('2-1b: シェルから beat 自身の API（製品を作る・製品の会話を送る。書ける場所が広がる）を呼ぶ形は、判定役が何でも allow と答えても、判定役に回さず持ち主に聞く', async t => {

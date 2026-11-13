@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
-import { toolPolicy } from '../src/tools/tool-policy.ts';
+import { askReadAsBlock, toolPolicy } from '../src/tools/tool-policy.ts';
 import { toolPolicyLoosened } from '../web/src/settings/access.ts';
 import { startScreenServer } from './screen-server.ts';
 
@@ -13,7 +13,7 @@ const patch = (s: Awaited<ReturnType<typeof startScreenServer>>, name: string, b
   s.api(`/api/tools/${name}`, { method: 'PATCH', body: JSON.stringify(body), headers });
 const fileOf = (s: Awaited<ReturnType<typeof startScreenServer>>) => JSON.parse(readFileSync(s.app.paths.config, 'utf8')) as { tools: { policies?: Record<string, string> } };
 
-test('GET /api/tools: 組み込みの道具のうち記憶の道具を除く 42 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定は agent_run だけ ask、ほかは allow）', async t => {
+test('GET /api/tools: 組み込みの道具のうち記憶の道具を除く 42 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定はすべて allow。agent_run も）', async t => {
   const s = await startScreenServer(t);
   const res = await s.api('/api/tools');
   assert.equal(res.status, 200);
@@ -23,7 +23,7 @@ test('GET /api/tools: 組み込みの道具のうち記憶の道具を除く 42 
   assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(tool => tool.name).filter(name => !name.startsWith('memory_')).sort());
   for (const tool of tools) {
     const def = server.find(d => d.name === tool.name)!;
-    assert.deepEqual([tool.effect, tool.allowedIn, tool.policy], [def.effect, [...def.allowedIn], tool.name === 'agent_run' ? 'ask' : 'allow'], tool.name);
+    assert.deepEqual([tool.effect, tool.allowedIn, tool.policy], [def.effect, [...def.allowedIn], 'allow'], tool.name);
   }
   assert.deepEqual(tools.filter(tool => !tool.configurable).map(tool => tool.name).sort(), ['ask_user', 'task_checkpoint', 'task_complete']);
   assert.deepEqual(tools.find(tool => tool.name === 'history_search')!.allowedIn, ['chat', 'task', 'review'], '振り返りでも使う道具は、allowedIn に review がある（画面の添え書きの元）');
@@ -44,7 +44,7 @@ test('PATCH /api/tools/:name: 方針を 1 つだけ変えて設定に保存す�
   const after = fileOf(s) as Record<string, any>;
   assert.deepEqual({ ...after, tools: { ...after.tools, policies: undefined } }, { ...before, tools: { ...before.tools, policies: undefined } }, 'policies 以外は変わらない');
   const listed = ((await (await s.api('/api/tools')).json()) as { tools: ToolRow[] }).tools;
-  assert.deepEqual(listed.filter(tool => tool.policy !== 'allow').map(tool => `${tool.name}:${tool.policy}`).sort(), ['agent_run:ask', 'file_write:block', 'shell_run:ask']);
+  assert.deepEqual(listed.filter(tool => tool.policy !== 'allow').map(tool => `${tool.name}:${tool.policy}`).sort(), ['file_write:block', 'shell_run:ask']);
   assert.equal(s.app.config().tools.policies.shell_run, 'ask', '再起動なしでエンジンが読む設定に入る');
 
   assert.equal((await patch(s, 'shell_run', { policy: 'allow' })).status, 200);
@@ -52,30 +52,31 @@ test('PATCH /api/tools/:name: 方針を 1 つだけ変えて設定に保存す�
   assert.equal(probes, 0, '道具の方針を変えるだけでは、モデルの確認の通信をしない');
 });
 
-test('PATCH /api/tools/agent_run: 既定は ask。allow にすると「allow」と書いて残り、ask に戻すと項目が消える（書かない状態が既定の ask）。T-28', async t => {
+test('PATCH /api/tools/agent_run: 既定は allow。ask と書くと Pending で待てないので block として読む。allow に戻すと項目が消える', async t => {
   const s = await startScreenServer(t);
   const policyOf = async () => ((await (await s.api('/api/tools')).json()) as { tools: ToolRow[] }).tools.find(tool => tool.name === 'agent_run')!.policy;
-  assert.equal(await policyOf(), 'ask', '書かないときは ask');
+  assert.equal(await policyOf(), 'allow', '書かないときは allow');
   assert.deepEqual(fileOf(s).tools.policies ?? {}, {});
-  assert.equal((await patch(s, 'agent_run', { policy: 'allow' })).status, 200);
-  assert.deepEqual(fileOf(s).tools.policies, { agent_run: 'allow' }, '既定の ask を allow にしたことが設定に残る');
-  assert.equal(await policyOf(), 'allow');
   assert.equal((await patch(s, 'agent_run', { policy: 'ask' })).status, 200);
+  assert.deepEqual(fileOf(s).tools.policies, { agent_run: 'ask' });
+  assert.equal(await policyOf(), 'block', 'ask は block として読む');
+  assert.equal((await patch(s, 'agent_run', { policy: 'allow' })).status, 200);
   assert.deepEqual(fileOf(s).tools.policies ?? {}, {}, '既定に戻すと項目を消す');
-  assert.equal(await policyOf(), 'ask');
+  assert.equal(await policyOf(), 'allow');
   assert.equal((await patch(s, 'agent_run', { policy: 'block' })).status, 200);
   assert.equal(await policyOf(), 'block');
 });
 
-test('toolPolicy: agent_run は書かなければ ask、読めない値も ask（ほかの道具は allow）。画面の「ゆるめる」判定も、既定の ask から allow を緩めると数える。T-28', () => {
+test('toolPolicy: agent_run は書かなければ allow、読めない値も allow。ask と書いてあれば block と読み、起動のログに出す名前に入る', () => {
   const none = { tools: {} };
-  assert.equal(toolPolicy(none, 'agent_run'), 'ask');
+  assert.equal(toolPolicy(none, 'agent_run'), 'allow');
   assert.equal(toolPolicy(none, 'shell_run'), 'allow');
-  assert.equal(toolPolicy({ tools: { policies: { agent_run: 'bogus', shell_run: 'bogus' } } }, 'agent_run'), 'ask');
-  assert.equal(toolPolicy({ tools: { policies: { agent_run: 'bogus', shell_run: 'bogus' } } }, 'shell_run'), 'allow');
-  assert.equal(toolPolicy({ tools: { policies: { agent_run: 'allow' } } }, 'agent_run'), 'allow');
-  assert.deepEqual(toolPolicyLoosened('agent_run', undefined, 'allow'), { kind: 'tool-policy-loosened', tool: 'agent_run', from: 'ask', to: 'allow' });
-  assert.equal(toolPolicyLoosened('agent_run', undefined, 'ask'), null);
+  assert.equal(toolPolicy({ tools: { policies: { agent_run: 'bogus', shell_run: 'bogus' } } }, 'agent_run'), 'allow');
+  assert.equal(toolPolicy({ tools: { policies: { agent_run: 'ask', shell_run: 'ask' } } }, 'agent_run'), 'block');
+  assert.equal(toolPolicy({ tools: { policies: { agent_run: 'ask', shell_run: 'ask' } } }, 'shell_run'), 'ask', 'ほかの道具の ask はそのまま');
+  assert.deepEqual(askReadAsBlock({ tools: { policies: { agent_run: 'ask', shell_run: 'ask' } } }), ['agent_run']);
+  assert.deepEqual(askReadAsBlock({ tools: { policies: { agent_run: 'allow' } } }), []);
+  assert.equal(toolPolicyLoosened('agent_run', undefined, 'allow'), null);
   assert.equal(toolPolicyLoosened('shell_run', undefined, 'allow'), null);
 });
 test('PATCH /api/tools/:name: 同時に別の道具を変えても、どちらも残る（書き換えの取りこぼしが無い）', async t => {
@@ -96,9 +97,10 @@ test('PATCH /api/tools/:name: from（画面が見ていた前の方針）が今�
   assert.equal((await patch(s, 'shell_run', { policy: 'allow', from: 'nope' })).status, 400);
   assert.equal(s.app.config().tools.policies.shell_run, 'block');
   assert.equal((await patch(s, 'shell_run', { policy: 'ask', from: 'block' })).status, 200);
-  assert.equal((await patch(s, 'agent_run', { policy: 'allow', from: 'ask' })).status, 200, '書いていない道具の from は既定の方針と比べる');
+  assert.equal((await patch(s, 'agent_run', { policy: 'block', from: 'ask' })).status, 409, '書いていない道具の from は既定の方針（allow）と比べる');
+  assert.equal((await patch(s, 'agent_run', { policy: 'block', from: 'allow' })).status, 200);
   assert.equal((await patch(s, 'shell_run', { policy: 'allow' })).status, 200, 'from なしは比べない');
-  assert.deepEqual(fileOf(s).tools.policies, { agent_run: 'allow' });
+  assert.deepEqual(fileOf(s).tools.policies, { agent_run: 'block' });
 });
 
 test('PATCH /api/tools/:name: 知らない道具は 404、方針を持てない道具・知らない方針は 400（どれも何も書かない）', async t => {

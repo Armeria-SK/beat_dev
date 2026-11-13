@@ -14,13 +14,15 @@ export const CREATED_LIMIT = 5000;
 const GIT_TIMEOUT_MS = 60_000;
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const CLOCK_SLACK_MS = 2000;
+const WINDOW_BEFORE_MS = 20;
+const WINDOW_AFTER_MS = 5;
 const WINDOWS = process.platform === 'win32';
 let birthWarned = false;
 
 interface Known { exact: Set<string>; ancestors: Set<string> }
 interface RunRecord {
   scope: CreatedScope; root: string; start: number; mode: 'git' | 'plain' | 'unknown'; shared: boolean;
-  untracked?: Known; tracked?: Known; noted: Map<string, string>;
+  untracked?: Known; tracked?: Known; noted: Map<string, string>; windows: Array<{ start: number; end?: number }>;
 }
 interface Item { rel: string; abs: string; folder: boolean }
 
@@ -62,6 +64,11 @@ function identity(stat: BigIntStats): string {
   return stat.isDirectory() ? `d:${stat.ino}:${stat.birthtimeNs}` : `f:${stat.ino}:${stat.birthtimeNs}:${stat.mtimeNs}:${stat.size}`;
 }
 
+export function identityOf(path: string): string | undefined {
+  const stat = statOf(path);
+  return stat ? identity(stat) : undefined;
+}
+
 function badWindowsName(path: string): boolean {
   if (/:/u.test(path.replace(/^[A-Za-z]:/u, '')) || /[?*"<>|]/u.test(path)) return true;
   return path.split(/[\\/]/u).some(part => part !== '.' && part !== '..' && /[. ]$/u.test(part));
@@ -95,7 +102,7 @@ export class CreatedFiles {
     const start = Date.now() - CLOCK_SLACK_MS;
     let real: string;
     try { real = realpathSync.native(root); } catch { return; }
-    const record: RunRecord = { scope, root: real, start, mode: 'unknown', shared: false, noted: new Map() };
+    const record: RunRecord = { scope, root: real, start, mode: 'unknown', shared: false, noted: new Map(), windows: [] };
     for (const other of this.#runs.values()) {
       if (!isInside(other.root, real) && !isInside(real, other.root)) continue;
       other.shared = true;
@@ -134,6 +141,14 @@ export class CreatedFiles {
     if (place) record.noted.set(place.rel, place.real);
   }
 
+  open(run: CreatedRunRef): () => void {
+    const record = this.#runs.get(run.parent?.runId ?? run.runId);
+    if (!record) return () => undefined;
+    const window: { start: number; end?: number } = { start: Date.now() };
+    record.windows.push(window);
+    return () => { window.end ??= Date.now(); };
+  }
+
   isCreated(path: string, run: CreatedRunRef): boolean {
     const record = this.#runs.get(run.parent?.runId ?? run.runId);
     if (!record || record.mode === 'unknown' || !isAbsolute(path)) return false;
@@ -146,7 +161,7 @@ export class CreatedFiles {
       if (record.tracked && knownAt(record.tracked, item.rel)) return false;
       const id = listed.get(item.folder ? `${item.rel}/` : item.rel);
       if (id !== undefined) return id === identity(stat);
-      if (record.shared || !this.#newSince(stat, record.start)) return false;
+      if (record.shared || !this.#newSince(stat, record)) return false;
       if (record.mode === 'git') return !knownAt(record.untracked!, item.rel);
       return !item.folder && record.noted.has(item.rel);
     };
@@ -184,7 +199,7 @@ export class CreatedFiles {
       const added = new Map<string, string>();
       for (const item of items) {
         const stat = statOf(item.abs);
-        if (stat && stat.isDirectory() === item.folder && this.#newSince(stat, record.start)) added.set(item.folder ? `${item.rel}/` : item.rel, identity(stat));
+        if (stat && stat.isDirectory() === item.folder && this.#newSince(stat, record)) added.set(item.folder ? `${item.rel}/` : item.rel, identity(stat));
       }
       if (!added.size) return;
       const merged = new Map([...this.#read(record.scope), ...added]);
@@ -222,12 +237,13 @@ export class CreatedFiles {
     }
   }
 
-  #newSince(stat: BigIntStats, start: number): boolean {
+  #newSince(stat: BigIntStats, record: RunRecord): boolean {
     if (stat.birthtimeNs === 0n && !birthWarned) {
       birthWarned = true;
       this.#log('[WARN] This file system does not report when a file was made, so files made by a run cannot be told apart there');
     }
-    return Number(stat.birthtimeMs) >= start && Number(stat.mtimeMs) >= start;
+    const inWindow = (time: number): boolean => time >= record.start && record.windows.some(w => time >= w.start - WINDOW_BEFORE_MS && time <= (w.end ?? Infinity) + WINDOW_AFTER_MS);
+    return inWindow(Number(stat.birthtimeMs)) && inWindow(Number(stat.mtimeMs));
   }
 
   #entries(output: Buffer): string[] {

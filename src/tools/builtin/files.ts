@@ -32,7 +32,7 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   const abs = expanded.path;
   const placement = placePath(abs, ctx.policy);
   const paths = approvalPaths([{ input, path: abs, placement }]);
-  const result = (check: PreCheck): { abs: string; check: PreCheck } => ({ abs, check: { ...check, paths } });
+  const result = (check: PreCheck): { abs: string; check: PreCheck } => ({ abs, check: { ...check, paths, ...(need === 'write' ? { writes: [abs] } : {}) } });
   if (placement.kind === 'deny') return result({ decision: 'deny', reasons: [placement.reason] });
   if (placement.kind === 'outside') {
     return result({ decision: 'deny', reasons: [guardText(language, 'file.outside', { path: abs, roots: ctx.policy.roots.map(r => guardText(language, r.mode === 'write' ? 'file.root_write' : 'file.root_read', { path: r.path })).join(guardText(language, 'file.root_sep')) })] });

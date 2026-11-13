@@ -11,6 +11,7 @@ import type { SearchThrottle } from './web/search.ts';
 import type { BrowserSession } from './browser/session.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
+import type { Outbound } from './hooks/outbound.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
@@ -44,6 +45,8 @@ export interface ToolOutput {
   // この結果に添える画像（image_view）。エンジンが道具の結果の発言に持たせて保存し、画像を読めるモデルにだけ渡す。失敗（isError）の結果の画像は保存しない。tool.result の出来事・tool_calls の行・output_preview には入れない（文字だけ）
   images?: ImageRef[];
   exitCode?: number;
+  pushRefused?: boolean;
+  pushCheckUnavailable?: boolean;
 }
 
 export interface PreCheck {
@@ -69,6 +72,13 @@ export interface PreCheck {
   // 効果が write・exec・network の道具は、false とはっきり言わなければ true とみなす（迷ったら人）。効果が read・meta の道具は、true と言ったときだけ。シェルは checkShellCommand の sends / removes。file_write・file_edit・table_write は sends: false, removes: false と言う
   sends?: boolean;
   removes?: boolean;
+  outbound?: Outbound;
+  writes?: string[];
+  cwd?: string;
+  places?: string[];
+  created?: string[];
+  readPaths?: string[];
+  pushes?: Array<{ dir: string | null; parsed?: boolean }>;
 }
 
 // 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
@@ -82,6 +92,7 @@ export interface ExecuteInfo {
   bind?: string;
   // この呼び出しの id（モデルが付けたもの。agent_run が、画面の agent.state をどの呼び出しの行に結ぶかに使う）
   callId?: string;
+  pushCheck?: { tips: readonly string[]; required: boolean };
 }
 
 export interface ToolContext {
@@ -134,6 +145,8 @@ export interface ToolContext {
   // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許されたフォルダ（この実行だけ。別の実行には渡らない）と、許可した札の承認の記録の id
   writeGrants?: Array<{ folder: string; approvalId: string }> | undefined;
   noteCreated?: ((path: string) => void) | undefined;
+  isCreated?: ((path: string) => boolean) | undefined;
+  toolWindow?: (() => () => void) | undefined;
   // agent_run: 子の担当を始めて、終わるまで待つ（チャット・許したタスクの実行にだけ付く。子の実行には付かない = 深さ 1）。結果は区切りで包んだ答え。失敗は isError
   agent?: ((input: AgentRunInput, callId?: string) => Promise<ToolOutput>) | undefined;
   // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）

@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
+import type { PreCheck, ToolDef } from '../types.ts';
 import { outboundText, type OutboundMessageKey } from '../../shared/messages/outbound.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
-import { longOption, pushProblem, type PushEnv } from './push-target.ts';
+import { longOption, pushProblem, pushRepo, type PushEnv } from './push-target.ts';
 import { isInside, realish } from './scope.ts';
 import type { FactWord, StatementFacts } from './shell-guard.ts';
 
@@ -426,4 +427,84 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
   if (deletes && sends) return { kind: 'delete', reason: `${say(deletes)} / ${say(sends)}`, targets };
   const first = (deletes ?? sends)!;
   return { kind: first.kind, reason: say(first), targets };
+}
+
+const NO_GIT: OutboundEnv = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
+
+export function outboundOfCall(tool: Pick<ToolDef, 'mcp' | 'submits'>, check: PreCheck | undefined, language: Language): Outbound | undefined {
+  if (check?.outbound) return check.outbound;
+  if (tool.mcp) return outboundOf({ tool: 'mcp', sends: check?.sends, removes: check?.removes }, { ...NO_GIT, language });
+  if (tool.submits) return outboundOf({ tool: 'browser', submits: true }, { ...NO_GIT, language });
+  return undefined;
+}
+
+const PLACE_FLAGS = ['--prefix', '-C', '--cwd', '--dir', '--directory', '--manifest-path', '--project', '--working-directory'];
+
+export function placesOf(statements: readonly StatementFacts[], cwd: string): string[] {
+  const out = new Set<string>();
+  for (const st of flatten(statements)) {
+    const base = st.cwd ?? cwd;
+    out.add(base);
+    for (let i = 0; i < st.words.length; i++) {
+      const text = st.words[i]!.text;
+      const flag = PLACE_FLAGS.find(f => text === f || text.startsWith(`${f}=`));
+      if (!flag) continue;
+      const value = text === flag ? st.words[i + 1] : { text: text.slice(flag.length + 1), dynamic: st.words[i]!.dynamic };
+      if (!value || value.dynamic || !value.text) continue;
+      const place = resolve(base, value.text);
+      out.add(flag === '--manifest-path' ? dirname(place) : place);
+    }
+    if (PUBLISHERS.has(st.program) && st.words[1]?.text === 'publish') {
+      for (const word of st.words.slice(2)) if (!word.dynamic && word.text && !word.text.startsWith('-')) out.add(resolve(base, word.text));
+    }
+  }
+  return [...out];
+}
+
+const PUBLISHERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+export interface RepoBind { dir: string | null; parsed?: boolean }
+
+const DETACHING = new Set(['shape.background', 'code.spawn']);
+const HOOKLESS_SENDERS = new Set(['send-pack', 'http-push', 'send-email']);
+const LOCATION_PROGRAMS = new Set(['cd', 'set-location', 'push-location', 'pushd']);
+const SUBSTITUTION = /\$\(|`|@\(/u;
+
+function literalLocation(st: StatementFacts): boolean {
+  if (!LOCATION_PROGRAMS.has(st.program) || st.programDynamic || st.env.length || st.inner) return false;
+  const args = st.words.slice(1);
+  const rest = args[0] && /^-(?:path|literalpath)$/iu.test(args[0].text) ? args.slice(1) : args;
+  return rest.length === 1 && !rest[0]!.dynamic && !rest[0]!.glob && !rest[0]!.text.startsWith('-');
+}
+
+export function pushesOf(statements: readonly StatementFacts[], reasonKeys: readonly string[] = []): RepoBind[] {
+  const out: RepoBind[] = [];
+  const detached = reasonKeys.some(k => DETACHING.has(k)) || flatten(statements).some(st => st.reasonKeys.some(k => DETACHING.has(k)));
+  const visit = (list: readonly StatementFacts[], prior: readonly StatementFacts[]): void => list.forEach((st, i) => {
+    const before = [...prior, ...list.slice(0, i)];
+    if (st.inner) visit(st.inner, [...before, st]);
+    if (st.program !== 'git') return;
+    const found = gitHit(st, before, NO_GIT);
+    if (!found || (found.kind !== 'send' && found.key !== 'delete.git_remote_branch')) return;
+    const sub = st.words[st.gitGlobal.length + 1]?.text ?? '';
+    const parsed = found.key !== 'send.git_unknown' && sub === 'push';
+    const alone = prior.length === 0 && i === list.length - 1 && before.every(literalLocation) && !st.words.some(w => w.dynamic && SUBSTITUTION.test(w.text));
+    const dir = found.key === 'send.git_unknown' || HOOKLESS_SENDERS.has(sub) || pushUnconfirmable(st) || (parsed && (detached || !alone)) ? null : pushRepo(st, before);
+    out.push(parsed ? { dir, parsed } : { dir });
+  });
+  visit(statements, []);
+  return out;
+}
+
+const RECURSE_PINNED = new Set(['no', 'check']);
+
+function pushUnconfirmable(st: StatementFacts): boolean {
+  const subAt = st.gitGlobal.length + 1;
+  if (st.words[subAt]?.text !== 'push') return false;
+  const args = st.words.slice(subAt + 1);
+  return args.some((w, i) => {
+    if (longOption(w.text, '--no-verify')) return true;
+    if (!longOption(w.text, '--recurse-submodules')) return false;
+    const at = w.text.indexOf('=');
+    return !RECURSE_PINNED.has(at >= 0 ? w.text.slice(at + 1) : args[i + 1]?.text ?? '');
+  });
 }

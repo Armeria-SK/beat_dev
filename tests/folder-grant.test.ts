@@ -15,6 +15,7 @@ import { Type } from '@sinclair/typebox';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
@@ -36,6 +37,7 @@ function setup(t: { after: (fn: () => void) => void }, options: { tainted?: bool
   const approvals = new ApprovalBroker(db, () => undefined);
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(shellRun).register(webFetch);
   for (const tool of options.tools ?? []) registry.register(tool);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
   const makeCtx = (runId: string, tainted = options.tainted !== false): ToolContext => ({
     runId, conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
@@ -43,9 +45,9 @@ function setup(t: { after: (fn: () => void) => void }, options: { tainted?: bool
   });
   const ctx = makeCtx('r1');
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: () => undefined, conversationAutoRead: () => false });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, db, emit: () => undefined, conversationAutoRead: () => false });
   const write = (path: string) => join(paths.workspace, path);
-  return { paths, ctx, makeCtx, call, approvals, db, write };
+  return { paths, ctx, makeCtx, call, approvals, db, write, pending };
 }
 type Setup = ReturnType<typeof setup>;
 
@@ -174,13 +176,12 @@ test('フォルダの許可を添えない札: ほかの理由もある・毎回
   assert.deepEqual([git.seen.kinds, git.seen.grantFolder, git.seen.onceOnly], [['code'], null, true]);
   // 外から読んでいなければ、ふつうの書き込みは札が出ない
   assert.equal((await noCard(plain, 'file_write', { path: 'notes/a.txt', content: 'A' })).decidedBy, 'builtin');
-  // 方針 ask（毎回）
+  // 方針 ask（毎回）: 札にならず Pending に積むので、フォルダの許可は生まれない
   const policy = setup(t, { mutate: c => { c.tools.policies = { file_write: 'ask' }; } });
-  const everyTime = await ask(policy, 'file_write', { path: 'notes/a.txt', content: 'A' }, 'folder');
-  assert.deepEqual([everyTime.seen.kinds, everyTime.seen.grantFolder, everyTime.seen.everyTime], [['policy', 'taint'], null, true]);
-  assert.deepEqual(approvalRow(policy, everyTime.seen.id).scope, 'once');
-  const secondTime = await ask(policy, 'file_write', { path: 'notes/b.txt', content: 'B' }, 'deny');
-  assert.equal(secondTime.outcome.decidedBy, 'user', '送られた folder は許可として残らない');
+  assert.equal((await noCard(policy, 'file_write', { path: 'notes/a.txt', content: 'A' })).decidedBy, 'pending');
+  assert.equal((await noCard(policy, 'file_write', { path: 'notes/b.txt', content: 'B' })).decidedBy, 'pending');
+  assert.equal(policy.ctx.writeGrants, undefined);
+  assert.deepEqual(policy.pending.list({ status: 'waiting' }).map(row => row.kind), ['policy', 'policy']);
   // 通信の道具
   const web = setup(t);
   const fetched = web.call('web_fetch', { url: 'https://example.com/?key=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' });
@@ -221,9 +222,8 @@ test('フォルダの許可を添えない札（道具の側の条件）: 許可
   const hook = join(dir, 'ask.mjs');
   writeFileSync(hook, `process.stdin.resume();process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({hookSpecificOutput:{permissionDecision:'ask',permissionDecisionReason:'念のため確認'}}))})`);
   const hooked = setup(t, { mutate: c => { c.tools.hooks.preToolUse = [{ matcher: 'file_write', command: [process.execPath, hook], timeoutMs: 10_000, onError: 'deny' }]; } });
-  const seen = (await ask(hooked, 'file_write', { path: 'notes/a.txt', content: 'A' }, 'folder')).seen;
-  assert.deepEqual(seen.kinds, ['hook', 'taint']);
-  assert.equal(seen.grantFolder, null);
+  assert.equal((await noCard(hooked, 'file_write', { path: 'notes/a.txt', content: 'A' })).decidedBy, 'pending', 'フックの ask は札にならず Pending');
+  assert.deepEqual(hooked.pending.list({ status: 'waiting' }).map(row => row.kind), ['hook']);
   assert.equal(hooked.ctx.writeGrants, undefined);
 });
 

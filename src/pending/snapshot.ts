@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { lstatSync, type Stats } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
+import { homedir } from 'node:os';
 import { lstat, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
-import { inspectRepo } from '../tools/hooks/git-repo.ts';
+import { findGitDir, inspectRepo } from '../tools/hooks/git-repo.ts';
+import { HASHED_PSEUDO_REFS } from '../tools/hooks/push-target.ts';
 import { isInside, isRemotePath } from '../tools/hooks/scope.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../tools/shell/git-env.ts';
 import { findExecutable, scrubEnv } from '../tools/shell/runner.ts';
@@ -20,6 +22,8 @@ export interface PathFact {
   newest?: number;
   more?: boolean;
   unverifiable?: true;
+  hash?: string;
+  real?: string;
 }
 
 export interface GitFact { head: string; branch: string; status: string }
@@ -72,6 +76,95 @@ export async function pathFact(path: string, deep: boolean): Promise<PathFact> {
   return { ...fact, files: inside.files, size: inside.size, newest: Math.max(st.mtimeMs, inside.newest), ...(inside.more ? { more: true } : {}) };
 }
 
+const DESTINATION_FILES = [
+  '.npmrc', '.yarnrc', '.yarnrc.yml', '.pypirc', '.curlrc', '_curlrc', '.wgetrc', '.netrc', '_netrc',
+  join('.cargo', 'config'), join('.cargo', 'config.toml'), 'NuGet.Config', 'nuget.config', join('.hg', 'hgrc'), 'bunfig.toml', '.bunfig.toml',
+];
+const DESTINATION_DEPTH = 40;
+const DESTINATION_MAX_BYTES = 1_048_576;
+
+export function fileMark(path: string): string {
+  let own: Stats;
+  try { own = lstatSync(path); } catch { return `${path}\0none`; }
+  let st: Stats;
+  try { st = statSync(path); } catch { return `${path}\0broken-link\0${own.mtimeMs}`; }
+  let real: string;
+  try { real = realpathSync.native(path); } catch { real = path; }
+  const head = `${path}\0${own.isSymbolicLink() ? `link\0${real}` : 'plain'}`;
+  if (!st.isFile() || st.size > DESTINATION_MAX_BYTES) return `${head}\0${st.isFile() ? 'big' : 'other'}\0${st.size}\0${st.mtimeMs}`;
+  try { return `${head}\0${createHash('sha256').update(readFileSync(path)).digest('hex')}`; } catch { return `${head}\0unreadable`; }
+}
+
+export function destinationFacts(cwd: string, places: readonly string[] = []): string {
+  const marks: string[] = [];
+  for (const start of new Set([cwd, ...places])) {
+    let dir = start;
+    for (let i = 0; i < DESTINATION_DEPTH; i++) {
+      for (const name of DESTINATION_FILES) marks.push(fileMark(join(dir, name)));
+      const up = dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+    if (!isRemotePath(start)) {
+      const found = findGitDir(start);
+      if (found) {
+        marks.push(fileMark(join(found.gitDir, 'config')), fileMark(join(found.commonDir, 'config')), fileMark(join(found.gitDir, 'config.worktree')));
+      }
+    }
+  }
+  const home = homedir();
+  for (const name of DESTINATION_FILES) marks.push(fileMark(join(home, name)));
+  if (process.env.APPDATA) marks.push(fileMark(join(process.env.APPDATA, 'NuGet', 'NuGet.Config')));
+  return createHash('sha256').update([...new Set(marks)].sort().join('\n')).digest('hex');
+}
+
+const CONTENT_MAX_BYTES = 4 * 1_048_576;
+
+function contentHash(path: string, st: Stats): string {
+  if (st.size > CONTENT_MAX_BYTES) return `big:${st.size}:${st.mtimeMs}:${st.ino}`;
+  try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return 'unreadable'; }
+}
+
+function folderHash(dir: string): { hash: string; more: boolean } {
+  const entries: string[] = [];
+  const stack = [dir];
+  let more = false;
+  while (stack.length && !more) {
+    const current = stack.pop()!;
+    let names: string[];
+    try { names = readdirSync(current); } catch { more = true; break; }
+    for (const name of names) {
+      if (entries.length >= WALK_LIMIT) { more = true; break; }
+      const path = join(current, name);
+      let st: Stats;
+      try { st = lstatSync(path); } catch { more = true; break; }
+      entries.push(`${relative(dir, path)}\0${typeOf(st)}\0${st.size}\0${st.mtimeMs}`);
+      if (st.isDirectory()) stack.push(path);
+    }
+  }
+  return { hash: createHash('sha256').update(entries.sort().join('\n')).digest('hex'), more };
+}
+
+export function boundFacts(paths: readonly string[]): PathFact[] {
+  return paths.map(path => {
+    if (isRemotePath(path)) return { path, exists: false, unverifiable: true } as PathFact;
+    let st: Stats;
+    try { st = statSync(path); } catch { return { path, exists: false }; }
+    let real: string;
+    try { real = realpathSync.native(path); } catch { real = path; }
+    if (st.isDirectory()) {
+      const inside = folderHash(path);
+      return { path, exists: true, type: 'dir', real, hash: inside.hash, ...(inside.more ? { more: true } : {}) };
+    }
+    return { path, exists: true, type: st.isFile() ? 'file' : 'other', size: st.size, real, hash: st.isFile() ? contentHash(path, st) : `other:${st.ino}` };
+  });
+}
+
+export function boundChanged(before: PathFact, now: PathFact): boolean {
+  if (before.more || now.more || before.unverifiable || now.unverifiable) return true;
+  return before.exists !== now.exists || before.type !== now.type || before.hash !== now.hash || before.real !== now.real || before.size !== now.size;
+}
+
 export function fileFacts(paths: readonly string[]): PathFact[] {
   return paths.map(path => {
     if (isRemotePath(path)) return { path, exists: false, unverifiable: true } as PathFact;
@@ -81,27 +174,63 @@ export function fileFacts(paths: readonly string[]): PathFact[] {
   });
 }
 
-async function gitFact(cwd: string, dataDir: string): Promise<GitFact | null> {
+type GitRun = (args: string[]) => Promise<string | null>;
+
+async function withGit<T>(cwd: string, dataDir: string, missing: T, unavailable: T, work: (git: GitRun) => Promise<T>): Promise<T> {
   const repo = inspectRepo(cwd);
-  if (!repo.found) return null;
-  const unavailable: GitFact = { head: UNAVAILABLE, branch: UNAVAILABLE, status: UNAVAILABLE };
+  if (!repo.found) return missing;
   if (repo.unreadable || !repo.configOk) return unavailable;
   const base = scrubEnv();
   const gitExe = findExecutable('git', base, cwd);
   if (!gitExe || isInside(cwd, gitExe) || !gitSupportsConfigOverride(gitExe)) return unavailable;
   const prepared = prepareGitRun({ dataDir, env: base, gitExe });
-  const git = async (args: string[]): Promise<string | null> => {
+  const git: GitRun = async args => {
     try {
       const { stdout } = await run(gitExe, ['--no-optional-locks', ...args], { cwd, env: { ...base, ...prepared.env }, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
       return stdout;
     } catch { return null; }
   };
-  try {
+  try { return await work(git); } finally { prepared.cleanup(); }
+}
+
+async function gitFact(cwd: string, dataDir: string): Promise<GitFact | null> {
+  return withGit<GitFact | null>(cwd, dataDir, null, { head: UNAVAILABLE, branch: UNAVAILABLE, status: UNAVAILABLE }, async git => {
     const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
     const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
     const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all']);
     return { head, branch, status: status === null ? UNAVAILABLE : createHash('sha256').update(status).digest('hex') };
-  } finally { prepared.cleanup(); }
+  });
+}
+
+export const PUSH_UNCONFIRMED = 'unconfirmed:';
+
+export const MAX_TIPS = 10_000;
+
+export interface PushState { fingerprint: string; tips?: string[] }
+
+export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; parsed?: boolean }>, dataDir: string, rootRefs = '--include-root-refs'): Promise<PushState> {
+  const never = (): PushState => ({ fingerprint: `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}` });
+  const lines: string[] = [];
+  const tips = new Set<string>();
+  for (const { dir, parsed } of pushes) {
+    if (dir === null) return never();
+    const line = await withGit<string | null>(dir, dataDir, `${dir}\0no-repo`, null, async git => {
+      const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
+      const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
+      const rooted = await git(['for-each-ref', rootRefs, '--format=%(objectname) %(refname)']);
+      const refs = rooted ?? await git(['for-each-ref', '--format=%(objectname) %(refname)']);
+      if (refs === null) return null;
+      const pseudo: string[] = [];
+      for (const name of HASHED_PSEUDO_REFS) pseudo.push(`${name} ${(await git(['rev-parse', '--verify', '-q', '--end-of-options', name]))?.trim() || 'absent'}`);
+      for (const sha of [head, ...refs.split('\n').map(l => l.split(' ')[0]!), ...pseudo.map(p => p.split(' ')[1]!)]) if (/^[0-9a-f]{40,64}$/u.test(sha)) tips.add(sha);
+      return parsed ? `${dir}\0parsed\0${head}\0${branch}` : `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).update(pseudo.join('\n')).digest('hex')}`;
+    });
+    if (line === null) return never();
+    lines.push(line);
+  }
+  const fingerprint = createHash('sha256').update(lines.join('\n')).digest('hex');
+  if (tips.size > MAX_TIPS) return pushes.some(p => p.parsed) ? never() : { fingerprint };
+  return { fingerprint, tips: [...tips].sort() };
 }
 
 export async function takeSnapshot(cwd: string, targets: readonly string[], dataDir: string): Promise<Snapshot> {

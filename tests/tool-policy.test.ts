@@ -13,6 +13,7 @@ import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
 import { checkFilePath, fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { SKILL_AUTO_PER_DAY } from '../src/tools/skills/store.ts';
@@ -48,14 +49,16 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
     .register(stub('memory_save', ['chat', 'task', 'review'], ran))
     .register(stub('task_complete', ['task'], ran)).register(stub('task_checkpoint', ['task'], ran)).register(stub('ask_user', ['task'], ran));
   const policy = buildPolicy(parsed, paths);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const controller = new AbortController();
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, live?: () => AppConfig) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(live ? { config: live } : {}) });
-  return { paths, ctx, call, approvals, events, db, ran, parsed, controller, registry };
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(live ? { config: live } : {}) });
+  const waiting = () => pending.list({ status: 'waiting' });
+  return { paths, ctx, call, approvals, events, db, ran, parsed, controller, registry, pending, waiting };
 }
 
 async function waitPending(s: ReturnType<typeof setup>) {
@@ -110,47 +113,38 @@ test('A3: allow（既定でも、明示しても）は判定を緩めない: 拒
   assert.deepEqual(plain.filter(([, d]) => d.startsWith('deny')).map(([label]) => label), ['禁止のファイルに書く', '許可フォルダの外に書く', '読むだけのフォルダに書く', '設定を読む', '秘密を読む（シェル）', '強い禁止のコマンド', '振り返りでは書けない'], 'この表の拒否が、方針なしでも拒否のまま（比べる基準が壊れていない）');
 });
 
-test('A3: ask は、ふだん確かめなしの呼び出しにも毎回承認を求める。札は「この会話では許可」を出さず、送られても今回だけ。同じ入力でも次はまた聞く', async t => {
+test('A3: ask は、ふだん確かめなしの呼び出しも札を出さずに Pending に積む（kind policy）。実行しない。同じ入力でも次はまた積む', async t => {
   const s = setup(t, { file_write: 'ask' });
-  const first = s.call('file_write', { path: 'a.md', content: '1' });
-  const request = await waitPending(s);
-  assert.equal(request.everyTime, true, '札に「毎回」の印（画面は「この会話では許可」を出さない）');
-  assert.equal(approvalPublic(request).everyTime, true);
-  assert.equal(approvalPublic(request).onceOnly, false, 'コードを動かす確かめ（onceOnly）とは別');
-  assert.match(request.reasons.join(), /file_write/u);
-  assert.match(request.reasons.join(), /ask for approval/u);
-  assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false, '承認の前は動かない');
-  assert.equal(s.approvals.decide(request.id, 'conversation'), true, '古い画面から「この会話では許可」が送られても');
-  const done = await first;
-  assert.equal(done.decision, 'ask');
-  assert.equal(done.decidedBy, 'user');
-  assert.equal(existsSync(join(s.paths.workspace, 'a.md')), true);
-  assert.deepEqual((s.db.prepare('SELECT scope FROM approvals').all() as Array<{ scope: string }>).map(r => r.scope), ['once'], '会話の許可として覚えない');
+  const first = await s.call('file_write', { path: 'a.md', content: '1' });
+  assert.equal(first.decision, 'ask');
+  assert.equal(first.decidedBy, 'pending');
+  assert.equal(first.output.isError, undefined, '失敗と読んでやり直さないよう、エラーにしない');
+  assert.match(first.output.content, /Parked as #\d+ in Pending\. It has NOT run/u);
+  assert.equal(s.approvals.pending().length, 0, '札は出ない');
+  assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false, '積んだだけで動かない');
+  const rows = s.waiting();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.kind, 'policy');
+  assert.match(rows[0]!.reason, /file_write/u);
+  assert.deepEqual(s.db.prepare("SELECT decision, decided_by, approval_id FROM tool_calls WHERE tool = 'file_write'").all().map(r => ({ ...r })), [{ decision: 'ask', decided_by: 'pending', approval_id: `pending:${rows[0]!.id}` }]);
 
-  const second = s.call('file_write', { path: 'a.md', content: '1' });
-  const again = await waitPending(s);
-  assert.notEqual(again.id, request.id, '同じ入力でも、また承認を求める');
-  s.approvals.decide(again.id, 'deny');
-  const denied = await second;
-  assert.equal(denied.output.isError, true);
-  assert.match(denied.output.content, /refused/u);
+  const second = await s.call('file_write', { path: 'a.md', content: '1' });
+  assert.equal(second.decidedBy, 'pending');
+  assert.equal(s.waiting().length, 2, '同じ入力でも、また積む');
 });
 
-test('A3: ask は会話の許可（ほかの理由で前に「この会話では許可」にした同じ入力）も越える', async t => {
+test('A3: ask は会話の許可（ほかの理由で前に「この会話では許可」にした同じ入力）も越えて Pending に積む', async t => {
   const s = setup(t, {}, c => { c.tools.shell.ask = ['echo needs-approval']; });
   const first = s.call('shell_run', { command: 'echo needs-approval' });
   s.approvals.decide((await waitPending(s)).id, 'conversation');
   await first;
   assert.equal((await s.call('shell_run', { command: 'echo needs-approval' })).decidedBy, 'conversation-grant', '方針が無ければ、会話の許可で済む（比べる基準）');
 
-  // その会話の許可が残っているまま、持ち主が shell_run を「承認を求める」にした（実行の途中の変更でも、次の実行でも）
   const strict = withPolicy(s, { shell_run: 'ask' });
-  const next = s.call('shell_run', { command: 'echo needs-approval' }, { ...s.ctx, config: strict });
-  const request = await waitPending(s);
-  assert.equal(request.everyTime, true);
-  assert.deepEqual([...(request.kinds ?? [])].sort(), ['owner', 'policy'], '許可を覚えた理由（持ち主の確かめ）と方針の理由が重なっている');
-  s.approvals.decide(request.id, 'deny');
-  assert.equal((await next).decidedBy, 'user', '会話の許可（conversation-grant）では通らず、承認を求めた');
+  const next = await s.call('shell_run', { command: 'echo needs-approval' }, { ...s.ctx, config: strict });
+  assert.equal(next.decidedBy, 'pending', '会話の許可（conversation-grant）では通らない');
+  assert.equal(s.approvals.pending().length, 0);
+  assert.deepEqual(s.waiting().map(r => r.kind), ['policy']);
 });
 
 test('A3: ask は拒否を承認に変えない（拒否は承認を求める前に拒否のまま。承認の依頼も出さない）', async t => {
@@ -194,7 +188,7 @@ test('A3: block は実行せず拒否する。承認の依頼も出さず、道�
   assert.equal(outcome.decidedBy, 'policy');
 });
 
-test('A3: 振り返りでは ask は拒否として扱う（承認する人がいない裏の作業なので待たない）。会話では承認を求める', async t => {
+test('A3: 振り返りでは ask は拒否として扱う（承認する人がいない裏の作業なので待たない）。会話では Pending に積む', async t => {
   const s = setup(t, { memory_save: 'ask' });
   s.ctx.config.tools.shell.approvalTimeoutSec = 1;
   const review = await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' });
@@ -203,11 +197,12 @@ test('A3: 振り返りでは ask は拒否として扱う（承認する人が�
   assert.match(review.output.content, /a review \(background work\)/u);
   assert.equal(s.approvals.pending().length, 0, '待たない');
   assert.deepEqual(s.ran, []);
-  const chat = s.call('memory_save', {});
-  const request = await waitPending(s);
-  s.approvals.decide(request.id, 'once');
-  assert.equal((await chat).decision, 'ask');
-  assert.deepEqual(s.ran, ['memory_save']);
+  assert.equal(s.waiting().length, 0, '振り返りは積まない');
+  const chat = await s.call('memory_save', {});
+  assert.equal(chat.decision, 'ask');
+  assert.equal(chat.decidedBy, 'pending');
+  assert.deepEqual(s.ran, []);
+  assert.deepEqual(s.waiting().map(r => r.kind), ['policy']);
 
   const plain = setup(t);
   assert.equal((await plain.call('memory_save', {}, { ...plain.ctx, kind: 'review' })).decision, 'allow', '方針が無ければ振り返りで使える（比べる基準）');
@@ -249,16 +244,15 @@ test('振り返りでは、外から読んだ内容のあとの書き込みの�
   assert.deepEqual(s.ran, ['memory_forget', 'memory_save', 'memory_forget']);
 });
 
-test('A3: タスクの実行で ask になったら、今のシェルの承認と同じ流れ（タスクの承認待ち。時間が過ぎたら動かさない）', async t => {
+test('A3: タスクの実行で ask になったら、札を待たずに Pending に積み、すぐ戻る', async t => {
   const s = setup(t, { file_write: 'ask' });
-  s.ctx.config.tools.shell.approvalTimeoutSec = 1;
   const outcome = await s.call('file_write', { path: 'a.md', content: 'x' }, { ...s.ctx, kind: 'task', conversationId: 'task-conv' });
   assert.equal(outcome.decision, 'ask');
-  assert.match(outcome.output.content, /It was not run because the wait for approval ran out/u);
+  assert.equal(outcome.decidedBy, 'pending');
   assert.equal(existsSync(join(s.paths.workspace, 'a.md')), false);
-  const requested = s.events.filter(e => e.type === 'approval.requested');
-  assert.equal(requested.length, 1);
-  assert.equal(requested[0]!.conversationId, 'task-conv');
+  assert.equal(s.events.filter(e => e.type === 'approval.requested').length, 0);
+  const rows = s.waiting();
+  assert.deepEqual(rows.map(r => [r.kind, r.conversation_id, r.run_kind]), [['policy', 'task-conv', 'task']]);
 });
 
 test('A3: 方針を持てない道具（task_complete・task_checkpoint・ask_user）は、設定に block・ask と書いてあっても無視する（止めるとワーカーが終われなくなる）', async t => {
@@ -285,11 +279,9 @@ test('A3: 実行の途中で設定が厳しくなったら、その場から効�
 
   const asked = setup(t, {});
   const live = withPolicy(asked, { file_write: 'ask' });
-  const pending = asked.call('file_write', { path: 'b.md', content: 'x' }, asked.ctx, () => live);
-  const request = await waitPending(asked);
-  assert.equal(request.everyTime, true, '途中で ask にしても効く');
-  asked.approvals.decide(request.id, 'deny');
-  await pending;
+  const parked = await asked.call('file_write', { path: 'b.md', content: 'x' }, asked.ctx, () => live);
+  assert.equal(parked.decidedBy, 'pending', '途中で ask にしても効く');
+  assert.equal(existsSync(join(asked.paths.workspace, 'b.md')), false);
 });
 
 test('A3: ask の理由には種類が付く（外を読む outside_read・外から読んだ内容 taint・方針 policy・フック hook・コードを動かす code。細かい種類が無い事前の判定は precheck）。付かない理由を自動で通さないための土台', async t => {
@@ -313,10 +305,18 @@ test('A3: ask の理由には種類が付く（外を読む outside_read・外�
   assert.ok((await kindsOf(plain, 'shell_run', { command: 'node put.js' })).includes('code'), 'コードを動かす');
   assert.deepEqual(await kindsOf(plain, 'file_write', { path: 'a.md', content: 'x' }, { ...plain.ctx, taint: { tainted: true, sources: ['web_fetch'] } }), ['taint']);
 
+  const parkedKind = async (s: ReturnType<typeof setup>, c: ToolContext = s.ctx) => {
+    const outcome = await s.call('file_write', { path: 'a.md', content: 'x' }, c);
+    assert.equal(outcome.decidedBy, 'pending');
+    assert.equal(s.approvals.pending().length, 0);
+    return s.waiting()[0]!.kind;
+  };
   const policy = setup(t, { file_write: 'ask' });
-  assert.deepEqual(await kindsOf(policy, 'file_write', { path: 'a.md', content: 'x' }), ['policy']);
-  assert.deepEqual(await kindsOf(policy, 'file_write', { path: 'a.md', content: 'x' }, { ...policy.ctx, taint: { tainted: true, sources: ['web_fetch'] } }), ['policy', 'taint']);
+  assert.equal(await parkedKind(policy), 'policy');
+  const tainted = setup(t, { file_write: 'ask' });
+  assert.equal(await parkedKind(tainted, { ...tainted.ctx, taint: { tainted: true, sources: ['web_fetch'] } }), 'policy');
+  assert.equal(tainted.waiting()[0]!.tainted, true);
 
   const hooked = setup(t, {}, c => { c.tools.hooks.preToolUse = [{ matcher: 'file_write', command: [process.execPath, askHook], timeoutMs: 10_000, onError: 'deny' }]; });
-  assert.deepEqual(await kindsOf(hooked, 'file_write', { path: 'a.md', content: 'x' }), ['hook']);
+  assert.equal(await parkedKind(hooked), 'hook');
 });

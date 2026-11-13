@@ -7,6 +7,7 @@ interface EngineText {
   compactPreviousHeading: string;
   compactTranscriptHeading: string;
   user: string;
+  note: string;
   toolResult: (name: string) => string;
 }
 
@@ -22,6 +23,7 @@ const TEXT: Record<Language, EngineText> = {
     compactPreviousHeading: '# Summary so far (add to this and rewrite it as one summary)',
     compactTranscriptHeading: '# Older part of the conversation',
     user: 'User',
+    note: 'beat note (not from the user)',
     toolResult: name => `Result of tool (${name})`,
   },
 };
@@ -34,9 +36,9 @@ export function compactSystem(language: Language): string {
   return TEXT[language].compactSystem;
 }
 
-export function compactSpeaker(message: { role: string; name?: string }, language: Language): string {
+export function compactSpeaker(message: { role: string; name?: string; note?: string }, language: Language): string {
   const text = TEXT[language];
-  return message.role === 'user' ? text.user : message.role === 'assistant' ? 'beat' : text.toolResult(message.name ?? '');
+  return message.role === 'user' ? (message.note !== undefined ? text.note : text.user) : message.role === 'assistant' ? 'beat' : text.toolResult(message.name ?? '');
 }
 
 export function compactPrompt(input: { previous: string | null; transcript: string }, language: Language): string {

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
+import { compactSpeaker } from '../src/engine/prompts.ts';
 import { reviewPrompt, transcriptOf } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { parseSkillFile, renderSkillFile } from '../src/tools/skills/store.ts';
@@ -127,6 +128,19 @@ test('ユーザーが消した記憶は、振り返りの依頼文で「覚え�
     { id: 2, conversation_id: 'c', run_id: null, role: 'assistant', text: '新しい方', message: { role: 'assistant', content: 'x' }, created_at: 0 },
   ], 20);
   assert.equal(transcript, '[beat] 新しい方', '長すぎるときは新しい方を残す');
+});
+
+test('Pending の注記は、振り返りの記録でも要約の話し手でも持ち主の発言と読まず、道具の結果と同じ 300 文字で切る', () => {
+  const note = { role: 'user' as const, content: 'x', generated: true as const, note: 'pending' as const, fetched: true as const };
+  const transcript = transcriptOf([
+    { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: 'b'.repeat(1000), message: note, created_at: 0 },
+    { id: 2, conversation_id: 'c', run_id: null, role: 'user', text: 'owner words', message: { role: 'user', content: 'owner words' }, created_at: 0 },
+  ]);
+  const [noteLine, ownerLine] = transcript.split('\n');
+  assert.match(noteLine!, /^\[beat note \(not from the user\)\] b{300}… \(truncated\)$/u);
+  assert.equal(ownerLine, '[User] owner words');
+  assert.equal(compactSpeaker(note, 'en'), 'beat note (not from the user)');
+  assert.equal(compactSpeaker({ role: 'user' }, 'en'), 'User');
 });
 
 test('タスクが終わったら振り返る。重い会話の後も振り返る', async t => {

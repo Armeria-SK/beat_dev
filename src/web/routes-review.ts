@@ -72,7 +72,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const now = toolPolicy(current, name);
     if (body.from !== undefined && body.from !== now) throw problem(409, 'conflict', 'tool_policy_changed', { params: { name, policy: now } });
     const policies = { ...current.tools.policies };
-    // 既定に戻すときは書いた項目を消す（既定が ask の agent_run を allow にするときは、allow と書く）
+    // 既定に戻すときは書いた項目を消す（agent_run の既定も allow。ask は Pending に積めないので block として読む）
     if (body.policy === defaultPolicy(name)) delete policies[name]; else policies[name] = body.policy;
     const saved = await app.applyConfig({ ...current, tools: { ...current.tools, policies } }, { probe: false });
     sendJson(res, 200, { tool: toolView(tool, saved) });

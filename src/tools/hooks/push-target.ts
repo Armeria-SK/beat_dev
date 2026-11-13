@@ -17,7 +17,7 @@ export type PushProblem =
 const TAKES_VALUE = new Set(['-o', '--push-option']);
 const REDIRECTING = ['--repo', '--receive-pack', '--exec'];
 const HARMLESS_ENV = /^(?:LC_\w+|LANG|LANGUAGE|TZ|NO_COLOR|FORCE_COLOR|CLICOLOR|TERM|COLUMNS|LINES)$/u;
-const ENV_PROGRAMS = new Set(['source', '.', 'export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx', 'set-variable', 'sv', 'new-variable', 'nv']);
+const ENV_PROGRAMS = new Set(['source', '.', 'export', 'unset', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx', 'set-variable', 'sv', 'new-variable', 'nv']);
 const ENV_ITEM_PROGRAMS = new Set(['set-item', 'si', 'set-content', 'sc', 'new-item', 'ni', 'add-content', 'ac', 'copy-item', 'cp', 'cpi', 'move-item', 'mi', 'rename-item', 'rni', 'remove-item', 'ri']);
 const GIT_READ_CONFIG = new Set(['--get', '--get-all', '--get-regexp', '--list', '-l', '--get-urlmatch', 'get', 'list']);
 
@@ -49,6 +49,23 @@ export function changesGit(st: StatementFacts): string | undefined {
   return undefined;
 }
 
+export const HASHED_PSEUDO_REFS = ['FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'];
+
+export function pushRepo(st: StatementFacts, before: readonly StatementFacts[]): string | null {
+  let dir = st.cwd;
+  if (dir === null) return null;
+  for (let i = 0; i < st.gitGlobal.length; i++) {
+    const g = st.gitGlobal[i]!;
+    if (g === '--no-pager') continue;
+    if (g !== '-C' || i + 1 >= st.gitGlobal.length) return null;
+    const value = st.gitGlobal[++i]!;
+    if (st.words.find(x => x.text === value)?.dynamic) return null;
+    dir = resolve(dir, value);
+  }
+  if (unsafeEnv(st.env)) return null;
+  return before.some(prev => changesGit(prev) !== undefined) ? null : dir;
+}
+
 export function pushProblem(st: StatementFacts, subAt: number, before: readonly StatementFacts[], env: PushEnv): PushProblem | undefined {
   if (!env.remotes) return { key: 'send.push_no_product' };
   let dir = st.cwd;
@@ -72,6 +89,8 @@ export function pushProblem(st: StatementFacts, subAt: number, before: readonly 
   if (dir === null) return { key: 'send.push_options', detail: 'cd' };
   let remote: string | undefined;
   const args = st.words.slice(subAt + 1);
+  const option = args.find((w, i) => (w.dynamic && (/^-o./u.test(w.text) || longOption(w.text, '--push-option'))) || (TAKES_VALUE.has(w.text) && args[i + 1]?.dynamic === true));
+  if (option) return { key: 'send.push_options', detail: option.text };
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
     if (w.dynamic) return { key: 'send.push_options', detail: w.text };

@@ -5,10 +5,12 @@ import { LocalizedError, type MessageParams } from '../shared/messages/define.ts
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import type { PreviewFile } from '../tools/approvals.ts';
+import { inspectRepo } from '../tools/hooks/git-repo.ts';
 import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { PreCheck, RunKind, ToolDef } from '../tools/types.ts';
-import { fileFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
+import { identityOf } from '../projects/created.ts';
+import { boundFacts, destinationFacts, fileFacts, pushFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
 export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
 export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
@@ -21,6 +23,7 @@ export interface ParkInput {
   tool: string;
   input: unknown;
   cwd: string;
+  workspace?: string | undefined;
   kind: PendingKind;
   reason: string;
   checks?: string[] | undefined;
@@ -29,13 +32,20 @@ export interface ParkInput {
   preview?: PreviewFile[] | undefined;
   targets?: string[] | undefined;
   files?: string[] | undefined;
+  places?: string[] | undefined;
+  created?: string[] | undefined;
+  filesMore?: boolean | undefined;
+  pushes?: Array<{ dir: string | null; parsed?: boolean }> | undefined;
   runId: string;
   runKind: RunKind;
   conversationId: string;
   taskId?: string | null | undefined;
   projectId?: string | null | undefined;
   tainted?: boolean | undefined;
+  outbound?: ParkedOutbound | undefined;
 }
+
+export interface ParkedOutbound { kind: string; reason?: string; targets: string[] }
 
 export interface Recheck { decision: Decision; kinds: string[]; reasons: string[]; paths: string[] }
 
@@ -47,7 +57,19 @@ export interface PendingState {
   recheck?: Recheck;
   cwdReal?: string | null;
   fetched?: boolean;
+  outbound?: ParkedOutbound;
+  sent?: PathFact[];
+  destination?: string;
+  workspace?: string;
+  places?: string[];
+  created?: CreatedMark[];
+  filesMore?: true;
+  pushes?: Array<{ dir: string | null; parsed?: boolean }>;
+  pushed?: string;
+  tips?: string[];
 }
+
+export interface CreatedMark { path: string; id: string; inside?: string; more?: true }
 
 export interface PendingParts { body: string | null; cwd: string | null; extra: string | null }
 
@@ -119,20 +141,20 @@ const unique = (items: readonly string[]): string[] => [...new Set(items)].sort(
 
 const realOf = (path: string): string => { try { return realish(path); } catch { return path; } };
 
-export function recheckOf(check: PreCheck): Recheck {
+export function recheckOf(check: PreCheck, mask: (text: string) => string = text => text): Recheck {
   return {
     decision: check.decision,
     kinds: unique(check.askKinds ?? []),
-    reasons: unique(check.reasons.map(r => redactSecrets(r))),
+    reasons: unique(check.reasons.map(r => redactSecrets(mask(r)))),
     paths: unique((check.paths ?? []).map(p => redactSecrets(`${p.path ?? p.input}|${p.path ? realOf(p.path) : ''}|${p.verdict}|${p.mode ?? ''}`))),
   };
 }
 
 const NO_CHECKS: Recheck = { decision: 'allow', kinds: [], reasons: [], paths: [] };
 
-export function newChecks(before: Recheck | undefined, now: PreCheck): string[] {
+export function newChecks(before: Recheck | undefined, now: PreCheck, mask?: (text: string) => string): string[] {
   const was = before ?? NO_CHECKS;
-  const is = recheckOf(now);
+  const is = recheckOf(now, mask);
   const fresh = [
     ...is.reasons.filter(r => !was.reasons.includes(r)),
     ...is.kinds.filter(k => !was.kinds.includes(k)).map(k => `ask: ${k}`),
@@ -140,6 +162,10 @@ export function newChecks(before: Recheck | undefined, now: PreCheck): string[] 
   ];
   if (!fresh.length && was.decision === 'allow' && is.decision !== 'allow') fresh.push(`ask: ${is.reasons.join('; ')}`);
   return fresh;
+}
+
+export function parkedOutbound(outbound: ParkedOutbound, mask: (text: string) => string = text => text): ParkedOutbound {
+  return { kind: outbound.kind, ...(outbound.reason !== undefined ? { reason: redactSecrets(mask(outbound.reason)) } : {}), targets: [...new Set(outbound.targets.map(t => redactSecrets(mask(t))))].sort() };
 }
 
 export function realCwd(cwd: string): string | null {
@@ -224,23 +250,43 @@ export class PendingStore {
     if (!tool) throw new PendingError('unknown_tool', { tool: input.tool });
     if (tool.replayable === false) throw new PendingError('not_replayable', { tool: input.tool });
     if (tool.preCheck && !input.check) throw new PendingError('check_required', { tool: input.tool });
+    const toolMask = (text: string): string => (tool.redact ? tool.redact(text) : text);
     const { title, shown, raw, parts } = render(tool, input.input);
     const masked = Math.max(0, marks(shown) - marks(raw));
     const targets = (input.targets ?? []).map(t => resolve(input.cwd, t));
     const files = (input.files ?? []).map(f => resolve(input.cwd, f));
+    const places = [...new Set((input.places ?? []).map(p => resolve(input.cwd, p)))];
+    const created = (input.created ?? []).flatMap((path): CreatedMark[] => {
+      const id = identityOf(path);
+      if (!id) return [];
+      const fact = boundFacts([path])[0]!;
+      return [{ path, id, ...(fact.type === 'dir' ? { inside: fact.hash ?? '', ...(fact.more ? { more: true as const } : {}) } : {}) }];
+    });
+    const outward = (kind: string | undefined): boolean => kind === 'send' || kind === 'delete';
+    const leaves = outward(input.kind) || outward(input.outbound?.kind);
+    const pushes = input.pushes?.length ? input.pushes : leaves && inspectRepo(input.cwd).found ? [{ dir: input.cwd }] : [];
+    const pushState = pushes.length ? await pushFacts(pushes, this.#o.dataDir) : undefined;
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
     const state: PendingState = {
       title,
       parts,
       cwdReal: realCwd(input.cwd),
-      ...(input.check ? { recheck: recheckOf(input.check) } : {}),
+      ...(input.workspace !== undefined ? { workspace: input.workspace } : {}),
+      ...(places.length ? { places } : {}),
+      ...(created.length ? { created } : {}),
+      ...(input.filesMore ? { filesMore: true as const } : {}),
+      ...(pushState ? { pushes, pushed: pushState.fingerprint, ...(pushState.tips ? { tips: pushState.tips } : {}) } : {}),
+      ...(input.check ? { recheck: recheckOf(input.check, toolMask) } : {}),
       ...(input.kind === 'delete' ? { snapshot: await takeSnapshot(input.cwd, targets, this.#o.dataDir) } : {}),
-      ...(preview?.length ? { preview: preview.map(p => ({ ...p, text: redactSecrets(p.text) })) } : {}),
+      ...(preview?.length ? { preview: preview.map(p => ({ ...p, text: redactSecrets(toolMask(p.text)) })) } : {}),
+      ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
+      ...(files.length ? { sent: boundFacts(files) } : {}),
+      ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(
-      input.tool, JSON.stringify(input.input), shown, masked, input.cwd, input.kind, redactSecrets(input.reason), JSON.stringify((input.checks ?? []).map(c => redactSecrets(c))),
+      input.tool, JSON.stringify(input.input), shown, masked, input.cwd, input.kind, redactSecrets(toolMask(input.reason)), JSON.stringify((input.checks ?? []).map(c => redactSecrets(toolMask(c)))),
       bind ?? null, JSON.stringify(state), files.length ? JSON.stringify(files) : null,
       input.runId, input.runKind, input.conversationId, input.taskId ?? null, input.projectId ?? null, input.tainted ? 1 : 0, this.#now(),
     );
@@ -294,6 +340,12 @@ export class PendingStore {
     const order = filter.status === 'waiting' ? 'id DESC' : 'decided_at DESC, id DESC';
     const rows = this.#db.prepare(`SELECT * FROM pending_actions WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ${limit}`).all(...args) as unknown as PendingRow[];
     return rows.map(row => this.#view(row));
+  }
+
+  waitingAround(conversationId: string | null, taskId: string | null): PendingRow[] {
+    return this.#db.prepare(`SELECT * FROM pending_actions WHERE status = 'waiting' AND (task_id = ? OR conversation_id = ?
+      OR conversation_id IN (SELECT c.id FROM conversations c JOIN engine_runs r ON c.parent_run_id = r.id WHERE r.conversation_id = ?)
+      OR run_id IN (SELECT child.id FROM engine_runs child JOIN engine_runs r ON child.parent_run_id = r.id WHERE r.conversation_id = ?))`).all(taskId, conversationId, conversationId, conversationId) as unknown as PendingRow[];
   }
 
   counts(since: number): PendingCounts {

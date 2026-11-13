@@ -18,8 +18,15 @@ export const POLICYLESS_TOOLS: ReadonlySet<string> = new Set(['task_complete', '
 
 export const isPolicyable = (name: string): boolean => !POLICYLESS_TOOLS.has(name);
 
-// 設定に書かないときの方針が allow ではない道具。agent_run（別の担当に仕事を任せる）は、書かなければ毎回聞く。tools.policies.agent_run: 'allow' と書くと聞かなくなる
-export const DEFAULT_POLICIES: Readonly<Record<string, ToolPolicy>> = { agent_run: 'ask' };
+// 設定に書かないときの方針が allow ではない道具（いまは無い）
+export const DEFAULT_POLICIES: Readonly<Record<string, ToolPolicy>> = {};
+
+export const ASK_MEANS_BLOCK: ReadonlySet<string> = new Set(['agent_run']);
+
+export function askReadAsBlock(config: HasPolicies): string[] {
+  const policies = config.tools.policies ?? {};
+  return Object.keys(policies).filter(name => ASK_MEANS_BLOCK.has(name) && policies[name] === 'ask');
+}
 
 export const defaultPolicy = (name: string): ToolPolicy => (Object.hasOwn(DEFAULT_POLICIES, name) ? DEFAULT_POLICIES[name]! : 'allow');
 
@@ -41,6 +48,7 @@ export function toolPolicy(config: HasPolicies, name: string): ToolPolicy {
   if (!isPolicyable(name)) return 'allow';
   if (!policies || !Object.hasOwn(policies, name)) return defaultPolicy(name);
   const value = policies[name];
+  if (value === 'ask' && ASK_MEANS_BLOCK.has(name)) return 'block';
   return isToolPolicy(value) ? value : defaultPolicy(name);
 }
 

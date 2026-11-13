@@ -30,15 +30,30 @@ function setup(t: Parameters<typeof tempDir>[0], options: { limit?: number; git?
   const dbPath = options.dbFile ? join(base, 'beat.db') : ':memory:';
   const kv = new KV(openDatabase(dbPath, MIGRATIONS));
   const logs: string[] = [];
-  const make = (store: KV = kv) => new CreatedFiles({ kv: store, dataDir, log: line => { logs.push(line); }, ...(options.limit ? { limit: options.limit } : {}) });
+  const live: Array<{ created: CreatedFiles; runs: Set<string> }> = [];
+  const make = (store: KV = kv) => {
+    const created = new CreatedFiles({ kv: store, dataDir, log: line => { logs.push(line); }, ...(options.limit ? { limit: options.limit } : {}) });
+    const runs = new Set<string>();
+    const begin = created.begin.bind(created);
+    const end = created.end.bind(created);
+    created.begin = async (runId, scope, root) => { runs.add(runId); await begin(runId, scope, root); };
+    created.end = async runId => { runs.delete(runId); await end(runId); };
+    live.push({ created, runs });
+    return created;
+  };
+  const asTool = <T>(work: () => T): T => {
+    const closes = live.flatMap(({ created, runs }) => [...runs].map(runId => created.open({ runId })));
+    try { return work(); } finally { for (const close of closes) close(); }
+  };
   if (options.git !== false) {
     git(root, 'init', '-q');
     writeFileSync(join(root, 'tracked.txt'), 'x');
     git(root, 'add', 'tracked.txt');
     git(root, 'commit', '-q', '-m', 'init');
   }
-  const put = (rel: string, text = 'x') => { const file = join(root, rel); mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, text); return file; };
-  return { base, root, dataDir, dbPath, kv, logs, make, put };
+  const own = (rel: string, text = 'x') => { const file = join(root, rel); mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, text); return file; };
+  const put = (rel: string, text = 'x') => asTool(() => own(rel, text));
+  return { base, root, dataDir, dbPath, kv, logs, make, put, own, asTool };
 }
 
 const scope = { kind: 'conv' as const, id: 'c1' };
@@ -482,6 +497,53 @@ test('作ったもの（L6・L3）: HEAD にあって頭の前に索引とフォ
   assert.equal(s.kv.db.prepare("SELECT count(*) AS n FROM kv WHERE key LIKE 'created-base:%'").get()!.n, 0);
   const again = s.put('tracked.txt', 'again');
   assert.equal(created.isCreated(again, { runId: 'r1' }), false);
+  await created.end('r1');
+  assert.deepEqual(created.list(scope), []);
+});
+
+test('作ったもの（W1-7）: 実行の途中で道具の呼び出しの外に持ち主が置いたファイルは、その場でも終わりの記録でも「作った」にならない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  const made = s.put('made.txt');
+  s.put(join('gen', 'a.txt'));
+  await sleep(60);
+  const mine = s.own('mine.txt', 'owner');
+  const mineInGen = s.own(join('gen', 'owner.txt'), 'owner');
+  await sleep(60);
+  const later = s.put('later.txt');
+  assert.equal(created.isCreated(made, { runId: 'r1' }), true);
+  assert.equal(created.isCreated(later, { runId: 'r1' }), true);
+  assert.equal(created.isCreated(mine, { runId: 'r1' }), false, 'placed by the owner between two tool calls');
+  assert.equal(created.isCreated(mineInGen, { runId: 'r1' }), false);
+  assert.equal(created.isCreated(join(s.root, 'gen'), { runId: 'r1' }), false, 'a folder that holds an owner file');
+  await created.end('r1');
+  assert.deepEqual(created.list(scope).sort(), ['gen/a.txt', 'later.txt', 'made.txt'], 'the folder changed outside a tool call, so only the files the tools made are kept');
+  await created.begin('r2', scope, s.root);
+  assert.equal(created.isCreated(join(s.root, 'gen'), { runId: 'r2' }), false);
+  await created.end('r2');
+});
+
+test('作ったもの（W1-7）: 最後の道具の呼び出しのあと、終わりの一覧を取るまでに持ち主が置いたファイルは「作った」にならない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  s.put('made.txt');
+  await sleep(60);
+  const late = s.own('late.txt', 'owner');
+  await created.end('r1');
+  assert.deepEqual(created.list(scope), ['made.txt']);
+  await created.begin('r2', scope, s.root);
+  assert.equal(created.isCreated(late, { runId: 'r2' }), false);
+  await created.end('r2');
+});
+
+test('作ったもの（W1-7）: 道具の呼び出しを一度もしていない実行は、何も「作った」にしない', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const created = s.make();
+  await created.begin('r1', scope, s.root);
+  const file = s.own('quiet.txt');
+  assert.equal(created.isCreated(file, { runId: 'r1' }), false);
   await created.end('r1');
   assert.deepEqual(created.list(scope), []);
 });

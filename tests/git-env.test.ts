@@ -419,3 +419,25 @@ test('本物の git: リポジトリの設定の log.showSignature は、git log
   assert.equal(existsSync(marker), false, '上書きがあっても gpg が動いた');
   run.cleanup();
 });
+
+test('prepareGitRun の prePush: フックの場所を新しいフォルダへ向け、#!/bin/sh の pre-push と tips を書き、子モジュールの push を止める設定を足す', t => {
+  const dataDir = tempDir(t);
+  const run = prepareGitRun({ dataDir, env: {}, prePush: { tips: ['a'.repeat(40)], node: process.execPath } });
+  t.after(run.cleanup);
+  assert.equal(run.prePushReady, true);
+  const keys = Object.entries(run.env).filter(([k]) => k.startsWith('GIT_CONFIG_KEY_')).map(([k, v]) => [v, run.env[k.replace('KEY', 'VALUE')]]);
+  const hooks = keys.find(([k]) => k === 'core.hooksPath')![1]!;
+  assert.ok(hooks.startsWith(join(dataDir, 'git-run')));
+  assert.match(readFileSync(join(hooks, 'pre-push'), 'utf8'), /^#!\/bin\/sh\n/u);
+  assert.equal(readFileSync(join(dirname(hooks), 'tips.txt'), 'utf8').trim(), 'a'.repeat(40));
+  assert.ok(keys.some(([k, v]) => k === 'push.recurseSubmodules' && v === 'no'));
+  assert.equal(run.refused?.(), false);
+});
+
+test('prepareGitRun の prePush: 置き場所を作れなければ prePushReady は false（黙って続けない）', t => {
+  const dataDir = tempDir(t);
+  writeFileSync(join(dataDir, 'git-run'), 'not a folder');
+  const run = prepareGitRun({ dataDir, env: {}, prePush: { tips: [], node: process.execPath } });
+  t.after(run.cleanup);
+  assert.equal(run.prePushReady, false);
+});

@@ -14,6 +14,7 @@ import { ApprovalBroker, approvalPublic, inputHash } from '../src/tools/approval
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
+import { PendingStore } from '../src/pending/store.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../src/tools/shell/runner.ts';
@@ -36,14 +37,15 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
   const policy = buildPolicy(parsed, paths);
+  const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const controller = new AbortController();
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
-  return { paths, ctx, call, approvals, events, db, controller };
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, pending, db, emit: e => events.push(e), conversationAutoRead: () => false });
+  return { paths, ctx, call, approvals, events, db, controller, pending };
 }
 
 async function decideNext(s: ReturnType<typeof setup>, decision: 'once' | 'conversation' | 'deny') {
@@ -162,7 +164,7 @@ test('承認: 今回だけ許可すると1回だけ実行し、拒否なら実�
 });
 
 test('承認: 「この会話では許可」なら同じ入力は聞き直さない。中止したら実行しない', async t => {
-  const s = setup(t, c => { c.tools.shell.ask = ['echo needs-approval']; });
+  const s = setup(t, c => { c.tools.shell.ask = ['echo needs-approval', 'echo other-approval']; });
   const command = 'echo needs-approval';
   const first = s.call('shell_run', { command });
   await decideNext(s, 'conversation');
@@ -170,7 +172,7 @@ test('承認: 「この会話では許可」なら同じ入力は聞き直さな
   const second = await s.call('shell_run', { command });
   assert.equal(second.decidedBy, 'conversation-grant');
 
-  const third = s.call('shell_run', { command: 'git push origin main' });
+  const third = s.call('shell_run', { command: 'echo other-approval' });
   for (let i = 0; i < 200 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
   s.controller.abort();
   const cancelled = await third;
@@ -510,10 +512,16 @@ test('フック: exit 2 で拒否、JSON で ask、タイムアウトは止め�
   assert.match(denied.output.content, /禁止ワード/u);
   assert.equal((await s.call('shell_run', { command: 'echo fine' })).decision, 'allow');
 
-  const asking = s.call('file_write', { path: 'x.md', content: 'x' });
-  const request = await decideNext(s, 'once');
-  assert.match(request.reasons.join(), /念のため確認/u);
-  assert.equal((await asking).decision, 'ask');
+  const asking = await s.call('file_write', { path: 'x.md', content: 'x' });
+  assert.equal(asking.decision, 'ask');
+  assert.equal(asking.decidedBy, 'pending');
+  assert.match(asking.output.content, /Parked as #\d+ in Pending/u);
+  assert.equal(s.approvals.pending().length, 0, '札は出ない');
+  assert.equal(existsSync(join(s.paths.workspace, 'x.md')), false);
+  const parked = s.pending.list({ status: 'waiting' });
+  assert.equal(parked.length, 1);
+  assert.equal(parked[0]!.kind, 'hook');
+  assert.match(parked[0]!.reason, /念のため確認/u);
 
   const timedOut = await s.call('file_read', { path: 'x.md' });
   assert.equal(timedOut.decision, 'deny');
