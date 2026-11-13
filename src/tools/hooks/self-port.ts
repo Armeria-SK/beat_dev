@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 export interface SelfServer { port: number; origins: readonly string[] }
 
 const LOOPBACK_NAME = /^(?:localhost|(?:[a-z0-9-]+\.)+localhost|localhost\.localdomain|ip6-localhost|ip6-loopback)$/u;
-const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[0-9a-f:.%]+\]|[a-z0-9_.%-]+)(?::(\d{1,5}))?/giu;
+const ADDRESS = /(?:\b(https?|wss?):\/\/)?(\[[^\]\s]+\]|[^\s:/\\?#@[\]=,;()<>|&*!$^{}~+]+)(?::(\d{1,5}))?/giu;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
 function loopbackHost(host: string): boolean {
@@ -46,10 +46,12 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
   }
   for (const match of plain.matchAll(ADDRESS)) {
     const [whole, scheme, host, port] = match;
-    const number = port !== undefined ? Number(port) : scheme ? DEFAULT_PORT[scheme.toLowerCase()] : undefined;
-    if (number === undefined || !ports.has(number) || !host) continue;
+    if (!host) continue;
     const normal = normalHost(host);
-    if (normal !== undefined && loopbackHost(normal)) return whole;
+    if (normal === undefined) continue;
+    if (hosts.includes(normal)) return whole;
+    const number = port !== undefined ? Number(port) : scheme ? DEFAULT_PORT[scheme.toLowerCase()] : undefined;
+    if (number !== undefined && ports.has(number) && loopbackHost(normal)) return whole;
   }
   return undefined;
 }

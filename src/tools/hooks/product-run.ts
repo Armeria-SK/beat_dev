@@ -50,15 +50,21 @@ const PLACE_FLAGS = new Set(['directory', 'file', 'makefile', 'include-dir', 'ro
   'confcutdir', 'basetemp', 'require', 'workdir', 'toxinidir', 'envdir', 'noxfile', 'project', 'projects', 'dir', 'cwd', 'chdir', 'prefix', 'userconfig', 'globalconfig']);
 const PLACE_SHORT = /^-[A-Za-z]*[CfcpdIrR]/u;
 
-type FlagValue = 'number' | 'word' | 'expr' | null;
+type FlagValue = 'number' | 'word' | 'expr' | 'reporter' | null;
 const MAKE_FLAGS: Readonly<Record<string, FlagValue>> = { '-j': 'number', '-k': null, '-s': null, '-n': null };
 const RUNNER_FLAGS: Readonly<Record<string, Readonly<Record<string, FlagValue>>>> = {
   make: MAKE_FLAGS, gmake: MAKE_FLAGS, nmake: {}, just: {}, rake: {}, ninja: { '-j': 'number', '-v': null },
   pytest: { '-q': null, '-v': null, '-x': null, '-k': 'expr', '-m': 'expr' },
   jest: { '--watch=false': null, '-t': 'expr' }, vitest: { '--run': null, '--watch=false': null, '-t': 'expr' },
-  mocha: { '--reporter': 'word' }, tox: { '-e': 'word' }, nox: { '-s': 'word' },
+  mocha: { '--reporter': 'reporter' }, tox: { '-e': 'word' }, nox: { '-s': 'word' },
 };
-const VALUE_FORMS: Readonly<Record<'number' | 'word' | 'expr', RegExp>> = { number: /^\d{1,4}$/u, word: /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/u, expr: /^[A-Za-z0-9_ .:()[\]-]+$/u };
+const VALUE_FORMS: Readonly<Record<Exclude<FlagValue, null>, RegExp>> = {
+  number: /^\d{1,4}$/u, word: /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/u, expr: /^(?!-)(?!.*__)[A-Za-z0-9_ .:()[\]-]+$/u,
+  reporter: /^(?:spec|dot|nyan|tap|landing|list|progress|json|json-stream|min|doc|markdown|xunit|base)$/iu,
+};
+const RUNNER_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  vitest: new Set(['init']), mocha: new Set(['init']), tox: new Set(['devenv', 'd', 'quickstart', 'q', 'exec', 'e']),
+};
 
 const programName = (st: StatementFacts): string => st.program.toLowerCase().replace(/\.(?:cmd|exe|bat|ps1)$/u, '');
 const pathLike = (text: string): boolean => /[\\/]/u.test(text) || text.startsWith('.') || text.startsWith('~') || /^[A-Za-z]:/u.test(text) || isAbsolute(text);
@@ -74,12 +80,15 @@ function plainPathInside(text: string, cwd: string, root: string): boolean {
 
 function runnerArgsAllowed(st: StatementFacts, root: string, flags: Readonly<Record<string, FlagValue>>): boolean {
   const words = st.words.slice(1);
+  const subcommands = RUNNER_SUBCOMMANDS[programName(st)];
+  let positionals = 0;
   const valueOk = (kind: FlagValue, value: string | undefined): boolean => kind !== null && value !== undefined && VALUE_FORMS[kind].test(value);
   for (let i = 0; i < words.length; i++) {
     const word = words[i]!;
     if (word.dynamic || word.glob) return false;
     const text = word.text;
     if (!text.startsWith('-')) {
+      if (positionals++ === 0 && subcommands?.has(text.toLowerCase())) return false;
       if (text.includes('=') || !plainPathInside(text, st.cwd!, root)) return false;
       continue;
     }
@@ -153,6 +162,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
   if ([...verdict.writes, ...verdict.scripts].some(p => !inside(root, p))) return undefined;
   let commits = false;
   let others = false;
+  const rerouted = verdict.writes.length > 0 || verdict.statements.some(st => st.piped === true || st.redirected === true);
   for (const st of verdict.statements) {
     if (!plainStatement(st, root)) return undefined;
     const own = new Set(st.reasonKeys);
@@ -174,7 +184,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
       continue;
     }
     if (others) return undefined;
-    if (st.gitGlobal.length > 0 || st.piped === true || st.redirected === true || ![...own].every(key => key === 'list.git_commit')) return undefined;
+    if (st.gitGlobal.length > 0 || rerouted || ![...own].every(key => key === 'list.git_commit')) return undefined;
     const sub = st.words[1]?.text;
     if (sub !== 'add' && sub !== 'commit') return undefined;
     const top = git(st.cwd!, ['rev-parse', '--show-toplevel'])?.trim();
