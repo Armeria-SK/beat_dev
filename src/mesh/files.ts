@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { lstatSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { isInside } from '../tools/hooks/scope.ts';
+import { MeshWriteError } from './map.ts';
 
 export class MeshError extends LocalizedError<ToolMessageKey> {
   readonly fetched: boolean;
@@ -88,6 +89,13 @@ export function resolveMeshPath(meshDir: string, input: string, known: () => str
   const stat = lstatSync(real);
   if (!stat.isFile() || stat.nlink !== 1) throw new MeshError('mesh.not_found', { path: input, files: known().join(', ') || '-' });
   return { abs: real, rel };
+}
+
+export function readOwn(file: string, name: string): string | undefined {
+  const stat = lstatSync(file, { throwIfNoEntry: false });
+  if (!stat) return undefined;
+  if (!stat.isFile() || stat.nlink !== 1) throw new MeshWriteError('file_unusable', { file: name });
+  return readFileSync(file, 'utf8');
 }
 
 export function replaceFile(file: string, content: string): void {

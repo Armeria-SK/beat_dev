@@ -177,3 +177,21 @@ test('ui/build: サーバーの BuildError の本文（domainProblem）をその
   assert.equal(noPlan.kind, 'failed');
   assert.match(noPlan.kind === 'failed' ? noPlan.detail ?? '' : '', /no plan yet/u);
 });
+
+test('ui/build: 質問票の答えの項目（owner_answer）は前の出どころ（was）の組に入れ、知らない種類と was の無いものは出さない（サーバーの数え方と同じ。beat 5-u2）', () => {
+  const a = acc({
+    items: [
+      item('A-1', { source: { kind: 'owner_answer', questionId: 3, answer: 'Keep it', picked: 'text', was: { kind: 'owner_words', quote: 'keep the old file' } } }),
+      item('A-2', { source: { kind: 'owner_answer', questionId: 4, answer: 'B', picked: 'option', was: { kind: 'owner_choice', question: 'Where?', answer: 'A' } } }),
+      item('A-3', { source: { kind: 'owner_answer', questionId: 5, answer: 'x', picked: 'text', was: { kind: 'ai_added' } } }),
+      item('A-4', { source: { kind: 'owner_answer', questionId: 6, answer: 'y', picked: 'text' } }),
+      item('A-5', { source: { kind: 'from_the_future' } as unknown as AcceptanceItem['source'] }),
+      item('A-6', { source: { kind: 'owner_edit' } }),
+    ],
+  });
+  const g = coverageGroups(a);
+  assert.deepEqual(g.words.map(w => [w.quote, w.item.id]), [['keep the old file', 'A-1']]);
+  assert.deepEqual(g.answers.map(w => [w.question, w.answer, w.item.id]), [['Where?', 'A', 'A-2']]);
+  assert.deepEqual(g.ai.map(i => i.id), ['A-3']);
+  assert.deepEqual(g.edited.map(i => i.id), ['A-6']);
+});

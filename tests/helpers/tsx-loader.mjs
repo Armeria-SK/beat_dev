@@ -8,6 +8,7 @@ let esbuild;
 
 registerHooks({
   load(url, context, nextLoad) {
+    if (url.startsWith('file:') && url.endsWith('.css')) return { format: 'module', source: '', shortCircuit: true };
     if (!url.startsWith('file:') || !url.endsWith('.tsx')) return nextLoad(url, context);
     esbuild ??= require('esbuild');
     const file = fileURLToPath(url);

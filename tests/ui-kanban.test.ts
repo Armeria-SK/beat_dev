@@ -173,3 +173,17 @@ test('kanban: 動いている会話のカードも、終わった会話のカー
   const cards = sessionCards({ conversations, drafts: [{ runId: 'r-live', conversationId: 'live' }], runs, checklists: NONE });
   assert.deepEqual(cards.map(c => [c.conversationId, cardProject(c)]), [['live', 'p1aaaa'], ['done', 'p2aaaa'], ['plain', null]]);
 });
+
+test('ui/kanban: Pending の承認を待つタスクは「Waiting on Pending #12」の番号と、製品の Pending への行き先を持つ（beat 5-u2）', async () => {
+  const { pendingWait } = await import('../web/src/ui/kanban.ts');
+  const { routeHash } = await import('../web/src/ui/routes.ts');
+  const { t } = await import('../web/src/i18n/index.ts');
+  const wait = pendingWait({ status: 'waiting', waiting_kind: 'approval', waiting_text: '#12, #13, #12', project_id: 'prod-abc123' });
+  assert.ok(wait);
+  assert.equal(t('ui.kanban.waitingPending', wait.refs), 'Waiting on Pending #12, #13');
+  assert.equal(routeHash(wait.route), '#/pending/prod-abc123');
+  assert.equal(routeHash(pendingWait({ status: 'waiting', waiting_kind: 'approval', waiting_text: null, project_id: null })!.route), '#/pending');
+  assert.equal(t('ui.kanban.waitingPending', pendingWait({ status: 'waiting', waiting_kind: 'approval', waiting_text: null })!.refs), 'Waiting on Pending');
+  assert.equal(pendingWait({ status: 'waiting', waiting_kind: 'question', waiting_text: '#12' }), null, '質問の返事待ちは Pending 待ちではない');
+  assert.equal(pendingWait({ status: 'ready', waiting_kind: null, waiting_text: null }), null);
+});
