@@ -3,7 +3,7 @@ import type { Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { pendingText } from '../../shared/messages/pending.ts';
-import { CHECK_FAIL_LIMIT, CHECK_TEXT, productCheck, runProductCheck } from '../../projects/check-run.ts';
+import { CHECK_FAIL_LIMIT, CHECK_TEXT, checkSignal, productCheck, runProductCheck } from '../../projects/check-run.ts';
 import { describeCron, validateCron } from '../../tasks/schedule.ts';
 import { TaskError, type Task, type TaskStore } from '../../tasks/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -114,6 +114,13 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
       const task = s.find(input.id);
       if (!task) throw new TaskError('error.tool_not_found', { id: input.id });
       if (ctx.project && task.project_id !== ctx.project.id) throw new TaskError('error.other_project', { id: input.id });
+      if (input.status === 'done') {
+        const text = CHECK_TEXT[languageOf(ctx.config)];
+        const children = s.openChildren(task.id);
+        const refused = ctx.task?.id === task.id ? text.selfDone : children > 0 ? text.doneChildren(children)
+          : task.spawned_by === null && productCheck(ctx.services?.projects, task.project_id) !== undefined ? text.doneCheck : undefined;
+        if (refused) return { content: refused, isError: true };
+      }
       let updated = s.update(task.id, {
         ...(input.note ? { appendNote: input.note } : {}), ...(input.next_action ? { nextAction: input.next_action } : {}),
         ...(input.priority ? { priority: input.priority } : {}), ...(input.when ? { runAt: parseWhen(input.when) ?? null } : {}),
@@ -158,26 +165,31 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
     const end = toolText(language, 'task.end');
     const text = CHECK_TEXT[language];
+    if (ctx.task.control.outcome !== 'none') return { content: text.already };
+    const taskId = ctx.task.id;
     const tasks = ctx.services?.tasks;
-    const children = tasks?.openChildren(ctx.task.id) ?? 0;
+    const children = tasks?.openChildren(taskId) ?? 0;
     if (children > 0) {
       ctx.task.control = { outcome: 'yield', reason: text.yieldReason(children) };
       return { content: `${text.childrenLeft(children)} ${end}` };
     }
-    const own = tasks?.get(ctx.task.id);
+    const own = tasks?.get(taskId);
     const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id) : undefined;
+    if (check === 'invalid') return { content: text.invalid, isError: true };
     let passed = '';
     if (tasks && check) {
-      const run = await runProductCheck(check, { config: ctx.config, signal: ctx.signal });
+      const stop = checkSignal(ctx.signal, () => tasks.get(taskId)?.status === 'running');
+      let run;
+      try { run = await runProductCheck(check, { config: ctx.config, dataDir: ctx.paths.data, signal: stop.signal }); } finally { stop.dispose(); }
       if (!run.ok && run.reason === 'aborted') return { content: text.stopped, isError: true };
       if (!run.ok) {
-        tasks.event(ctx.task.id, 'check_failed', 'beat', text.event(run), ctx.runId);
-        const failures = tasks.checkFailures(ctx.task.id).count;
-        if (failures < CHECK_FAIL_LIMIT) return { content: text.failed(check.command, run, failures), isError: true };
+        const attempt = tasks.checkFailures(taskId).count + 1;
+        tasks.event(taskId, 'check_failed', 'beat', text.event(run, attempt), ctx.runId);
+        if (attempt < CHECK_FAIL_LIMIT) return { content: text.failed(check.command, run, attempt), isError: true };
         ctx.task.control = { outcome: 'failed', reason: text.reason(run) };
         return { content: `${text.gaveUp(check.command, run)}\n${end}`, isError: true };
       }
-      tasks.event(ctx.task.id, 'check_passed', 'beat', null, ctx.runId);
+      tasks.event(taskId, 'check_passed', 'beat', null, ctx.runId);
       passed = text.passed(check.command);
     }
     const waiting = ctx.services?.db ? (ctx.services.db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(ctx.task.id) as Array<{ id: number }>) : [];

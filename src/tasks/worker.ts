@@ -441,7 +441,7 @@ export class Worker {
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
     if (tasks.get(task.id)?.status !== 'running') { this.#d.kv.delete(splitKey(task.id)); return; }
     // 割り込みは、やり直しと同じに数える（区切りの数を消しも増やしもしない）
-    if (this.#d.engine.wasPreempted(runId)) {
+    if (this.#d.engine.wasPreempted(runId) && control.outcome !== 'complete' && control.outcome !== 'failed') {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }

@@ -102,13 +102,15 @@ export function resolveShell(choice: ShellChoice): ShellSpec {
 }
 
 export function killTree(child: ChildProcess): void {
-  if (child.pid === undefined || child.exitCode !== null) return;
+  if (child.pid === undefined) return;
   if (WINDOWS) {
-    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-  } else {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { } }
+    if (child.exitCode === null && child.signalCode === null) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    return;
   }
+  try { process.kill(-child.pid, 'SIGKILL'); } catch { if (child.exitCode === null) { try { child.kill('SIGKILL'); } catch { } } }
 }
+
+const SETTLE_GRACE_MS = 500;
 
 export interface RunOptions {
   cwd: string;
@@ -119,6 +121,7 @@ export interface RunOptions {
   fullOutputDir?: string;
   outputId?: string;
   input?: string;
+  tailBytes?: number;
 }
 
 export interface RunResult {
@@ -132,6 +135,8 @@ export interface RunResult {
   durationMs: number;
   fullOutputPath?: string;
   spawnError?: string;
+  stdoutTail?: string;
+  stderrTail?: string;
 }
 
 export function runProcess(file: string, args: readonly string[], opts: RunOptions): Promise<RunResult> {
@@ -150,8 +155,13 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
     let stdout = ''; let stderr = ''; let kept = 0; let total = 0; let truncated = false;
     let full: WriteStream | undefined; let fullPath: string | undefined;
     const backlog: Array<[string, Buffer]> = [];
+    const tails = { out: Buffer.alloc(0), err: Buffer.alloc(0) };
     const onData = (stream: 'out' | 'err') => (chunk: Buffer) => {
       total += chunk.length;
+      if (opts.tailBytes) {
+        const joined = Buffer.concat([tails[stream], chunk]);
+        tails[stream] = joined.length > opts.tailBytes ? joined.subarray(joined.length - opts.tailBytes) : joined;
+      }
       if (kept < opts.maxBytes) {
         const part = chunk.subarray(0, opts.maxBytes - kept);
         kept += part.length;
@@ -178,19 +188,42 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
     }
 
     let timedOut = false; let aborted = false; let spawnError: string | undefined;
-    const timer = setTimeout(() => { timedOut = true; killTree(child); }, opts.timeoutMs);
-    const onAbort = () => { aborted = true; killTree(child); };
-    opts.signal.addEventListener('abort', onAbort, { once: true });
-    if (opts.signal.aborted) onAbort();
-    child.on('error', error => { spawnError = error.message; });
-    child.on('close', code => {
+    let settled = false; let killed = false; let exited = false; let grace: ReturnType<typeof setTimeout> | undefined;
+    const settle = (code: number | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      clearTimeout(grace);
       opts.signal.removeEventListener('abort', onAbort);
       full?.end();
       resolve({
         exitCode: code, stdout, stderr, truncated, totalBytes: total, timedOut, aborted, durationMs: Date.now() - started,
         ...(fullPath ? { fullOutputPath: fullPath } : {}), ...(spawnError ? { spawnError } : {}),
+        ...(opts.tailBytes ? { stdoutTail: tails.out.toString('utf8'), stderrTail: tails.err.toString('utf8') } : {}),
       });
+    };
+    const settleSoon = () => {
+      if (settled || grace) return;
+      grace = setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        settle(child.exitCode);
+      }, SETTLE_GRACE_MS);
+    };
+    const kill = () => {
+      killed = true;
+      killTree(child);
+      if (exited) settleSoon();
+    };
+    const timer = setTimeout(() => { timedOut = true; kill(); }, opts.timeoutMs);
+    const onAbort = () => { aborted = true; kill(); };
+    opts.signal.addEventListener('abort', onAbort, { once: true });
+    if (opts.signal.aborted) onAbort();
+    child.on('error', error => { spawnError = error.message; });
+    child.on('exit', () => {
+      exited = true;
+      if (killed) settleSoon();
     });
+    child.on('close', code => settle(code));
   });
 }
