@@ -247,6 +247,24 @@ test('5-P 実行の途中で行が決まったら、その回の checkpoint は�
   assert.equal(task.run_at, s.clock.now);
 });
 
+test('5-P 実行の前に決まった行は、次の回の checkpoint を今すぐにしない（時間で起きる。回りっぱなしにならない）', async t => {
+  const s = await setup(t);
+  const id = s.task();
+  const [row] = await s.parkedRun(id);
+  s.clock.now += 5 * MIN;
+  s.app.pending.reject(row!.id);
+  assert.equal(s.app.tasks.get(id)!.run_at, s.clock.now);
+  s.clock.now += 1 * MIN;
+  s.adapter().scripts = [call('fake_work', { text: 'more' }), checkpoint(30)];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(id)!.run_at, s.clock.now + 30 * MIN);
+  s.clock.now += 31 * MIN;
+  await s.idleRun();
+  const task = s.app.tasks.get(id)!;
+  assert.equal(task.status, 'ready');
+  assert.equal(task.run_at, s.clock.now + 30 * MIN);
+});
+
 test('5-P 起きたときの経過の文に、決めの結果が入る。見回りの文は、結果が残っていないことと確かめることを言う', async t => {
   const s = await setup(t);
   const id = s.task();
@@ -340,6 +358,8 @@ test('5-P 作業の決まりの文に、積まれても待たなくてよいこ�
   const { taskPrompt } = await import('../src/tasks/worker.ts');
   const prompt = taskPrompt({ id: 'aaaaaaaa-0000', title: 'T', origin: 'user', body: '', next_action: null, done_criteria: null } as never, [], 'UTC');
   const line = prompt.split('\n').find(l => l.includes('Pending'))!;
+  assert.match(line, /^- You do not need to wait for a call held in Pending/u);
+  assert.match(line, /resumes the task as soon as the user decides/u);
   assert.match(line, /task_complete only when nothing left in the task depends on/u);
   assert.match(line, /task_checkpoint/u);
 });
