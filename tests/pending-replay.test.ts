@@ -123,8 +123,8 @@ test('Approve で 1 回だけ動く: tool_calls に owner-pending の行、結�
   assert.ok(after.ran_at && after.decided_at);
   assert.equal(after.fetched, false);
   assert.equal(s.store.row(row.id)!.input, '', '動いたあとは生の入力を持たない');
-  const calls = s.db.prepare("SELECT run_id, conversation_id, tool, decision, decided_by, approval_id, ok FROM tool_calls WHERE decided_by = 'owner-pending'").all();
-  assert.deepEqual(calls.map(c => ({ ...c })), [{ run_id: 'run-1', conversation_id: 'conv-1', tool: 'fake_count', decision: 'allow', decided_by: 'owner-pending', approval_id: `pending:${row.id}`, ok: 1 }]);
+  const calls = s.db.prepare("SELECT run_id, conversation_id, tool, decision, decided_by, approval_id, ok, evidence_no FROM tool_calls WHERE decided_by = 'owner-pending'").all();
+  assert.deepEqual(calls.map(c => ({ ...c })), [{ run_id: 'run-1', conversation_id: 'conv-1', tool: 'fake_count', decision: 'allow', decided_by: 'owner-pending', approval_id: `pending:${row.id}`, ok: 1, evidence_no: null }]);
 });
 
 const ownerPendingCount = (s: ReturnType<typeof setup>): number =>
