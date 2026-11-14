@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findGitDir, parseGitConfig } from '../tools/hooks/git-repo.ts';
 import { isRemotePath } from '../tools/hooks/scope.ts';
@@ -64,7 +64,7 @@ export function readRemotes(root: string): Remote[] {
     const found = findGitDir(root);
     if (!found || found.broken || (own.isDirectory() && found.gitDir !== dotGit)) return [];
     const file = join(found.commonDir, 'config');
-    const st = statSync(file, { throwIfNoEntry: false });
+    const st = lstatSync(file, { throwIfNoEntry: false });
     if (!st?.isFile() || st.size > MAX_CONFIG_BYTES) return [];
     const entries = parseGitConfig(readFileSync(file, 'utf8'));
     if (!entries) return [];

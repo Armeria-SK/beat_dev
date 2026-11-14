@@ -1,7 +1,7 @@
 // git のリポジトリの設定を調べる（security-self-api.md §11.3.3）。git は起こさず、ファイルを読むだけ。
 // 設定の項目がすべて「ふつうの設定」の一覧に入っていなければ、そのリポジトリでの git はすべて今回だけ（設定でコードを動かせるため）。
 
-import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, statSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { RepoInfo } from './allowlist-core.ts';
 import { isRemotePath } from './remote-path.ts';
@@ -138,8 +138,12 @@ export function unusualKey(entries: readonly ConfigEntry[]): string | null {
 }
 
 // ── リポジトリの見つけ方（git と同じ: 各階層で .git → その階層自身が裸のリポジトリ → 上）──
-const isDir = (p: string): boolean => { try { return statSync(p).isDirectory(); } catch { return false; } };
-const isFile = (p: string): boolean => { try { return statSync(p).isFile(); } catch { return false; } };
+function ownKind(p: string): 'dir' | 'file' | 'link' | 'none' {
+  try {
+    const st = lstatSync(p);
+    return st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'none';
+  } catch { return 'none'; }
+}
 interface Found { gitDir: string; commonDir: string; broken?: boolean }
 
 const MAX_ADMIN_FILE = 4096;
@@ -159,7 +163,7 @@ function adminFile(dir: string, name: string): string | undefined | null {
 
 // フォルダ / フォルダでない（ファイルなど、調べられないものも含む）/ 無い
 function kindOf(p: string): 'dir' | 'other' | 'none' {
-  try { return statSync(p).isDirectory() ? 'dir' : 'other'; } catch (error) {
+  try { return lstatSync(p).isDirectory() ? 'dir' : 'other'; } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return code === 'ENOENT' || code === 'ENOTDIR' ? 'none' : 'other';
   }
@@ -193,7 +197,7 @@ function examine(p: string): Examined {
   const commondir = adminFile(p, 'commondir');
   if (commondir === null || adminFile(p, 'gitdir') === null) return { state: 'broken' };
   const commonDir = commondir === undefined ? p : isAbsolute(commondir) ? commondir : resolve(p, commondir);
-  if (isRemotePath(commonDir)) return { state: 'broken' };
+  if (isRemotePath(commonDir) || (commondir !== undefined && ownKind(commonDir) === 'link')) return { state: 'broken' };
   const objects = kindOf(join(commonDir, 'objects'));
   const refs = kindOf(join(commonDir, 'refs'));
   if (objects === 'dir' && refs === 'dir') return head === 'valid' ? { state: 'ok', commonDir } : { state: 'broken' };
@@ -206,13 +210,13 @@ function examine(p: string): Examined {
 function viaGitFile(file: string): Found {
   try {
     const broken: Found = { gitDir: dirname(file), commonDir: dirname(file), broken: true };
-    if (statSync(file).size > MAX_ADMIN_FILE) return broken;
+    if (lstatSync(file).size > MAX_ADMIN_FILE) return broken;
     const text = readFileSync(file, 'utf8');
     if (!text.startsWith('gitdir: ')) return broken;
     const place = text.slice(8).replace(/[\r\n]+$/u, '');
     if (place === '' || /[\r\n\0]/u.test(place)) return broken;
     const target = isAbsolute(place) ? place : resolve(dirname(file), place);
-    if (isRemotePath(target)) return { gitDir: target, commonDir: target, broken: true };
+    if (isRemotePath(target) || ownKind(target) === 'link') return { gitDir: target, commonDir: target, broken: true };
     const e = examine(target);
     return e.state === 'ok' ? { gitDir: target, commonDir: e.commonDir } : { gitDir: target, commonDir: target, broken: true };
   } catch { return { gitDir: dirname(file), commonDir: dirname(file), broken: true }; }
@@ -240,8 +244,10 @@ export function findGitDir(start: string): Found | null {
   let dir = resolve(start);
   for (let depth = 0; depth < 64; depth++) {
     const dotGit = join(dir, '.git');
-    if (isFile(dotGit)) return viaGitFile(dotGit);
-    if (isDir(dotGit)) {
+    const own = ownKind(dotGit);
+    if (own === 'link') return { gitDir: dotGit, commonDir: dotGit, broken: true };
+    if (own === 'file') return viaGitFile(dotGit);
+    if (own === 'dir') {
       const inner = examine(dotGit);
       if (inner.state === 'ok') return { gitDir: dotGit, commonDir: inner.commonDir };
       if (inner.state === 'broken') return { gitDir: dotGit, commonDir: dotGit, broken: true };
@@ -302,18 +308,42 @@ function danglingRemote(entries: readonly ConfigEntry[], remotes: readonly strin
   return null;
 }
 
+const MAX_ALTERNATES_BYTES = 65_536;
+const MAX_ALTERNATE_DEPTH = 5;
+
+function alternatesUnsafe(objectsDir: string, depth = 0): boolean {
+  if (ownKind(join(objectsDir, 'info')) === 'link') return true;
+  const file = join(objectsDir, 'info', 'alternates');
+  let st;
+  try { st = lstatSync(file); } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
+  if (!st.isFile() || st.size > MAX_ALTERNATES_BYTES || depth >= MAX_ALTERNATE_DEPTH) return true;
+  let text: string;
+  try { text = readFileSync(file, 'utf8'); } catch { return true; }
+  for (const line of text.split(/\r?\n/u)) {
+    if (line === '' || line.startsWith('#')) continue;
+    if (line.startsWith('"') || line.includes('\0') || isRemotePath(line)) return true;
+    const target = isAbsolute(line) ? line : resolve(objectsDir, line);
+    if (isRemotePath(target) || ownKind(target) === 'link' || alternatesUnsafe(target, depth + 1)) return true;
+  }
+  return false;
+}
+
 export function inspectRepo(start: string): RepoInfo {
   const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [], localRemotes: [] };
   const found = findGitDir(start);
   if (!found) return none;
   if (found.broken) return { ...none, found: true, unreadable: true };
   const commonDir = found.commonDir;
+  if (alternatesUnsafe(join(commonDir, 'objects'))) return { ...none, found: true, unreadable: true };
   const files = [...new Set([join(commonDir, 'config'), join(found.gitDir, 'config'), join(found.gitDir, 'config.worktree'), join(commonDir, 'config.worktree')])];
   const entries: ConfigEntry[] = [];
   for (const file of files) {
-    if (!existsSync(file)) continue;
     try {
-      const st = statSync(file);
+      const st = lstatSync(file, { throwIfNoEntry: false });
+      if (!st) continue;
       if (!st.isFile() || st.size > MAX_CONFIG_BYTES) return { ...none, found: true, unreadable: true };
       const parsed = parseGitConfig(readFileSync(file, 'utf8'));
       if (!parsed) return { ...none, found: true, unreadable: true };
@@ -323,7 +353,7 @@ export function inspectRepo(start: string): RepoInfo {
   const remotes = remoteNames(entries);
   const bad = unusualKey(entries) ?? danglingRemote(entries, remotes);
   let hooksFiles = false;
-  try { hooksFiles = readdirSync(join(commonDir, 'hooks')).some(name => !name.endsWith('.sample')); } catch { /* hooks フォルダが無い */ }
+  try { hooksFiles = ownKind(join(commonDir, 'hooks')) === 'link' || readdirSync(join(commonDir, 'hooks')).some(name => !name.endsWith('.sample')); } catch { /* hooks フォルダが無い */ }
   return {
     found: true, configOk: bad === null, badKey: bad ?? '', unreadable: false, remotes, localRemotes: localRemoteNames(entries),
     hooksPath: entries.some(e => e.key === 'core.hookspath'), hooksFiles, hooksDir: join(commonDir, 'hooks'),

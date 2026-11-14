@@ -572,3 +572,87 @@ test('git-repo.ts は scope.ts を読み込まない（互いに読み込む輪�
   assert.equal(/from '\.\/scope\.ts'/u.test(source), false);
   assert.equal(isRemotePath, isRemotePathInScope);
 });
+
+function watchFs(t: { after: (fn: () => void) => void }, names: ReadonlyArray<'statSync' | 'lstatSync' | 'readFileSync' | 'existsSync' | 'openSync' | 'readdirSync' | 'readlinkSync'>, hit: (path: string) => boolean): string[] {
+  const seen: string[] = [];
+  for (const name of names) {
+    const original = fs[name] as (...a: unknown[]) => unknown;
+    const patched = mock.method(fs, name, ((path: unknown, ...rest: unknown[]) => {
+      if (typeof path === 'string' && hit(path)) seen.push(`${name} ${path}`);
+      return original(path, ...rest);
+    }) as never);
+    t.after(() => { patched.mock.restore(); syncBuiltinESMExports(); });
+  }
+  syncBuiltinESMExports();
+  return seen;
+}
+
+test('.git・objects・refs がリンクなら、たどらずに「読めない」（今回だけ）にする', t => {
+  const root = tempDir(t);
+  const real = makeGitDir(join(root, 'real'), PLAIN);
+  const linkedGit = join(root, 'a');
+  mkdirSync(linkedGit);
+  symlinkSync(real, join(linkedGit, '.git'), 'junction');
+  const linkedObjects = join(root, 'b');
+  makeGitDir(join(linkedObjects, '.git'), PLAIN);
+  rmSync(join(linkedObjects, '.git', 'objects'), { recursive: true });
+  symlinkSync(join(real, 'objects'), join(linkedObjects, '.git', 'objects'), 'junction');
+  const linkedRefs = join(root, 'c');
+  makeGitDir(join(linkedRefs, '.git'), PLAIN);
+  rmSync(join(linkedRefs, '.git', 'refs'), { recursive: true });
+  symlinkSync(join(real, 'refs'), join(linkedRefs, '.git', 'refs'), 'junction');
+  const linkedHooks = join(root, 'd');
+  makeGitDir(join(linkedHooks, '.git'), PLAIN);
+  mkdirSync(join(real, 'hooks'));
+  symlinkSync(join(real, 'hooks'), join(linkedHooks, '.git', 'hooks'), 'junction');
+  const links = [join(linkedGit, '.git'), join(linkedObjects, '.git', 'objects'), join(linkedRefs, '.git', 'refs'), join(linkedHooks, '.git', 'hooks')];
+  const followed = watchFs(t, ['statSync', 'existsSync', 'readdirSync'], path => links.some(link => path.startsWith(link)));
+  for (const folder of [linkedGit, linkedObjects, linkedRefs]) {
+    assert.equal(findGitDir(folder)?.broken, true, folder);
+    assert.equal(inspectRepo(folder).unreadable, true, folder);
+    assert.equal(insideGitDir(join(folder, '.git', 'hooks', 'pre-commit')), true, folder);
+  }
+  assert.equal(inspectRepo(linkedHooks).hooksFiles, true, 'hooks がリンクなら、フックがあるものとして扱う');
+  assert.deepEqual(followed, []);
+  assert.equal(inspectRepo(join(root, 'real')).unreadable, false, 'リンクでないふつうのリポジトリはそのまま');
+});
+
+test('設定ファイル（config）がリンクなら、読まずに「読めない」（今回だけ）にする', t => {
+  const root = tempDir(t);
+  makeGitDir(join(root, '.git'), PLAIN);
+  const elsewhere = join(root, 'elsewhere-config');
+  writeFileSync(elsewhere, PLAIN);
+  rmSync(join(root, '.git', 'config'));
+  try { symlinkSync(elsewhere, join(root, '.git', 'config'), 'file'); } catch { t.skip('ファイルへのリンクを作れない環境'); return; }
+  const followed = watchFs(t, ['statSync', 'existsSync', 'readFileSync'], path => path === join(root, '.git', 'config'));
+  assert.equal(inspectRepo(root).unreadable, true);
+  assert.deepEqual(readRemotes(root), []);
+  assert.deepEqual(followed, []);
+});
+
+test('objects/info/alternates がネットワークの場所を指すなら「読めない」（今回だけ）にし、そこへは触らない', { skip: process.platform !== 'win32' }, t => {
+  const root = tempDir(t);
+  const repo = (name: string, alternates: string): string => {
+    const dir = join(root, name);
+    makeGitDir(join(dir, '.git'), PLAIN);
+    mkdirSync(join(dir, '.git', 'objects', 'info'), { recursive: true });
+    writeFileSync(join(dir, '.git', 'objects', 'info', 'alternates'), alternates);
+    return dir;
+  };
+  const local = join(root, 'store', 'objects');
+  mkdirSync(local, { recursive: true });
+  const relay = join(root, 'relay', 'objects');
+  mkdirSync(join(relay, 'info'), { recursive: true });
+  writeFileSync(join(relay, 'info', 'alternates'), '//evil-host/share/objects\n');
+  const touched = watchFs(t, ['statSync', 'lstatSync', 'readFileSync', 'existsSync', 'openSync', 'readdirSync', 'readlinkSync'], path => /^[\/]{2}/u.test(path));
+  assert.equal(inspectRepo(repo('plain', `${local}\n`)).unreadable, false, 'この PC の中の場所はそのまま');
+  assert.equal(inspectRepo(repo('comment', `# note\n\n${local}\n`)).unreadable, false);
+  for (const [name, text] of [
+    ['unc', '\\\\evil-host\\share\\objects\n'], ['slashes', '//evil-host/share/objects\n'], ['second', `${local}\n\\\\evil-host\\share\\objects\n`],
+    ['chain', `${relay}\n`], ['quoted', '"\\\\\\\\evil-host\\\\share\\\\objects"\n'], ['device', '\\??\\UNC\\evil-host\\share\\objects\n'],
+  ] as const) assert.equal(inspectRepo(repo(name, text)).unreadable, true, name);
+  const looped = repo('loop', '');
+  writeFileSync(join(looped, '.git', 'objects', 'info', 'alternates'), `${join(looped, '.git', 'objects')}\n`);
+  assert.equal(inspectRepo(looped).unreadable, true, '自分を指し続ける並びは、深さの上限で止める');
+  assert.deepEqual(touched, []);
+});
