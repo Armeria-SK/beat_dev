@@ -18,6 +18,7 @@ import type { Task, TaskStore } from './store.ts';
 import { projectFolderGone } from '../projects/run.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
+import { decidedDuring, openPendingIds } from './pending-wake.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
@@ -91,6 +92,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
       '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
       '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
       '- Use ask_user only for what you cannot move forward on without checking with the user',
+      '- You do not need to wait for a call held in Pending for the user to decide: keep going with whatever else you can do. beat resumes the task as soon as the user decides, so there is no need to check on it. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
       "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
     ],
     time: (ms, timezone) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms),
@@ -155,6 +157,7 @@ export class Worker {
     if (recovered) this.#d.log(`[INFO] Put ${recovered} task(s) that had stopped midway back in the queue`);
     const reviews = this.#d.reviews?.recoverRunning() ?? 0;
     if (reviews) this.#d.log(`[INFO] Re-queued ${reviews} review(s) that had stopped midway`);
+    this.#d.pendingWake?.();
     this.poke();
   }
 
@@ -237,7 +240,7 @@ export class Worker {
       tasks.spawnDueSchedules();
       this.#d.pendingWake?.();
       const remindMs = c.worker.remindAfterHours * 3_600_000;
-      for (const t of tasks.waitingSince(remindMs)) {
+      for (const t of tasks.waitingSince(remindMs).filter(waiting => waiting.waiting_kind !== 'approval')) {
         this.#d.notifications.notify({ kind: 'task_waiting', title: taskText(languageOf(c), 'notify.waiting_reminder', { title: t.title }), body: t.waiting_text ?? undefined, link: `#/tasks/${t.id}`, dedupKey: `remind:${t.id}:${Math.floor(now / remindMs)}`, projectId: t.project_id });
       }
       this.#detectReviewTriggers(c, now);
@@ -455,6 +458,18 @@ export class Worker {
     }
     if (control.outcome === 'checkpoint') {
       this.#d.kv.delete(idleKey);
+      const decided = decidedDuring(this.#d.db, task.id, runId);
+      if (decided) {
+        tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
+        tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.pending_decided', { id: decided.id, status: decided.status }) });
+        return;
+      }
+      const open = result.ok && result.workCalls === 0 ? openPendingIds(this.#d.db, task.id) : [];
+      if (open.length) {
+        tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction, runAt: null }, 'beat', runId);
+        tasks.setWaiting(task.id, 'approval', open.map(id => `#${id}`).join(', '), runId);
+        return;
+      }
       tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
       tasks.setReady(task.id, { runAt: now + Math.min(Math.max(control.resumeAfterMinutes, 1), 10_080) * 60_000, reason: taskText(language, 'reason.checkpoint', { minutes: control.resumeAfterMinutes }) });
       return;
