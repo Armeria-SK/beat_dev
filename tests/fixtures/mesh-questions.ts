@@ -14,6 +14,7 @@ export const PRODUCT_NAME = 'bento';
 
 export const PRODUCT_FILES: Readonly<Record<string, string>> = {
   'README.md': '# bento\n\nLunch pre-orders for office teams.\n',
+  'AGENTS.md': '# bento\n\nRun the tests with `npm test`. Keep prices in yen as integers.\n',
   'package.json': '{ "name": "bento", "private": true, "type": "module" }\n',
   'server/routes/orders.ts': 'export function orderRoutes() { return ["POST /api/orders", "GET /api/orders/:id"]; }\n',
   'server/routes/menu.ts': 'export function menuRoutes() { return ["GET /api/menu"]; }\n',
