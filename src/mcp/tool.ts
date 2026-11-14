@@ -156,7 +156,7 @@ export function textOfResult(result: unknown): { text: string; media: number; is
 }
 
 export interface BuildToolParams {
-  server: Pick<McpServerConfig, 'id' | 'localOk'>;
+  server: Pick<McpServerConfig, 'id'>;
   remote: McpRemoteTool;
   entry: McpToolEntry;
   language: Language;
@@ -197,7 +197,7 @@ export function buildMcpTool(p: BuildToolParams): BuildToolResult {
     allowedIn: ['chat'],
     escalateOnTaint: true,
     networkCall: () => true,
-    mcp: { server: server.id, tool: remote.name, localOk: server.localOk },
+    mcp: { server: server.id, tool: remote.name },
     preCheck,
     redact,
     summarize: (input, lang) => ({ title: toolText(lang, 'mcp.summary_title', label), body: redact(safeJson(input)).slice(0, 2000) }),

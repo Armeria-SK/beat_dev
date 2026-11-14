@@ -3,6 +3,7 @@ import type { KV } from '../db/kv.ts';
 import type { Env, FetchLike } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
 import { notifyText } from '../shared/messages/notify.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import { isSafeOutboundUrl } from '../shared/url.ts';
 import type { NotificationKind, NotifyEvent, NotifyInput } from './notifications.ts';
 
@@ -45,6 +46,7 @@ export interface NotifyChannelsOptions {
   kv: KV;
   // 送り先の失敗・上限を持ち主へ知らせる通知（外へは送らない印を付けて渡す）
   alert: (input: NotifyInput) => void;
+  secrets?: (() => readonly string[]) | undefined;
   // やり直しの待ち。試験で差し替える
   sleep?: ((ms: number) => Promise<void>) | undefined;
 }
@@ -86,7 +88,7 @@ export class NotifyChannels {
     const channel = config.notify.channels.find(c => c.id === id);
     if (!channel) return undefined;
     const now = this.#o.now();
-    const n: NotifyEvent = { id: 0, kind: 'info', title: notifyText(languageOf(config), 'test'), body: null, link: null, dedup_key: null, read_at: null, created_at: now, local_only: 0 };
+    const n: NotifyEvent = { id: 0, kind: 'info', title: notifyText(languageOf(config), 'test'), body: null, link: null, dedup_key: null, read_at: null, created_at: now };
     return this.#send(config, channel, n);
   }
 
@@ -139,7 +141,7 @@ export class NotifyChannels {
     const token = channel.tokenEnv ? this.#o.env[channel.tokenEnv] : undefined;
     if (token) headers.Authorization = `Bearer ${token}`;
     try {
-      const res = await this.#fetch(url, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(config.notify.limits.timeoutMs), headers, body: buildPayload(config, channel, n) });
+      const res = await this.#fetch(url, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(config.notify.limits.timeoutMs), headers, body: buildPayload(config, channel, n, this.#o.secrets?.() ?? []) });
       // 応答の本文は読まない（読まずに捨てる）
       void res.body?.cancel().catch(() => {});
       if (res.status >= 200 && res.status < 300) return { ok: true };
@@ -169,14 +171,12 @@ export class NotifyChannels {
   }
 }
 
-// 送る中身。キーの順は固定。手元のモデルだけの仕事（local_only）の通知は、題を決まった文に差し替えて、本文もリンクも送らない（リンクの中のスキル名などが手元の会話に由来するため）
-export function buildPayload(config: AppConfig, channel: NotifyChannelConfig, n: NotifyEvent): string {
-  const language = languageOf(config);
-  const local = n.local_only === 1;
-  const title = local ? notifyText(language, `local_title.${n.kind}`) : n.title;
-  const body = channel.includeBody && !local && n.body ? n.body.slice(0, NOTIFY_BODY_MAX_CHARS) : undefined;
+// 送る中身。キーの順は固定
+export function buildPayload(config: AppConfig, channel: NotifyChannelConfig, n: NotifyEvent, secrets: readonly string[] = []): string {
+  const title = redactSecrets(n.title, secrets);
+  const body = channel.includeBody && n.body ? redactSecrets(n.body, secrets).slice(0, NOTIFY_BODY_MAX_CHARS) : undefined;
   const base = config.notify.publicBaseUrl.replace(/\/+$/u, '');
-  const link = base !== '' && !local && n.link?.startsWith('#/') ? `${base}/${n.link}` : undefined;
+  const link = base !== '' && n.link?.startsWith('#/') ? `${base}/${redactSecrets(n.link, secrets)}` : undefined;
   const make = (t: string, b: string | undefined): string => JSON.stringify({
     source: 'beat', version: 1, kind: n.kind, title: t,
     ...(b === undefined ? {} : { body: b }), ...(link === undefined ? {} : { link }),

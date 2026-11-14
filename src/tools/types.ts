@@ -109,10 +109,6 @@ export interface ToolContext {
   // この会話が、これまでの実行のどこかで「よそから来た文を読んだ」ことがあるか（taint はこの実行だけ。これは会話ぜんぶ。読めないときは「ある」側）。
   // 無いとき（試験など）は「ない」として扱う。browser_open の事前の確かめが、この実行で読んでいなくても、会話が読んだあとなら確かめるために見る
   conversationTainted?: (() => boolean) | undefined;
-  // この実行が使うモデルが、すべて手元（提供元の接続先がループバック）か。そうでなければ、手元のモデルを選んだ会話の履歴は、検索にも読み出しにも出さない
-  modelsLocal?: boolean | undefined;
-  // この実行が作る・触るタスクを、手元のモデルだけで動かすか。手元のモデルを選んだ会話の実行と、手元のモデルだけで動かすタスクの実行が true
-  localOnly?: boolean | undefined;
   // この実行で、検索が自動アクセスの判定（ボット判定）で続けて止められた回数（成功・別の失敗で 0 に戻る）
   searchBlocks?: number | undefined;
   // この実行で、task_create で作った・task_update で触ったタスクの id（会話の実行が終わるとき、会話で進んだ分を渡す先を決める）
@@ -123,7 +119,7 @@ export interface ToolContext {
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined; mesh?: Mesh | undefined;
     acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
-    notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string; localOnly?: boolean }) => unknown) | undefined;
+    notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
     // ブラウザの道具（browser_*）が使う、全会話で 1 つのブラウザ。無ければ道具は「ブラウザが無い」で失敗する
     browser?: BrowserSession | undefined;
@@ -171,8 +167,8 @@ export interface ToolDef<I = any> {
   writesFiles?: true;
   // この呼び出し（引数の確かめを通ったあと）が外へ出るか。true なら、効果が network でなくても、外から読んだ印（動かしたら付く）と、自動承認で外を読んだ会話の毎回の確かめを network と同じにする。効果・計画モード・振り返りの扱いは変えない。投げる・false 以外を返すときは外へ出るとみなす
   networkCall?: (input: I) => boolean;
-  // 外の MCP サーバーの道具（src/mcp/tool.ts が付ける）。計画モードには渡さず（planAllows）、手元のモデルの会話には localOk のサーバーの道具だけ渡す（localAllows）
-  mcp?: { server: string; tool: string; localOk: boolean };
+  // 外の MCP サーバーの道具（src/mcp/tool.ts が付ける）。計画モードには渡さない（planAllows）
+  mcp?: { server: string; tool: string };
   // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さず（planAllows）、毎回の承認が要る。6a にはこれを付ける道具は無い
   submits?: true;
   planOk?: true;

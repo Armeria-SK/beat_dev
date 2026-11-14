@@ -12,7 +12,7 @@ import { SECTION_GROUPS, sectionSlice, type Config } from '../web/src/settings/m
 // AU-5b-2: 設定の「MCP サーバー」の、画面を使わない部分（広がる変更の検出・追加フォームの組み立て・失敗の扱い・節の登録・文言）
 
 const server = (over: Record<string, unknown> = {}) => ({
-  id: 'files', transport: 'stdio', enabled: true, localOk: false, tools: {}, command: ['node', 'srv.mjs'], env: {}, headers: {}, ...over,
+  id: 'files', transport: 'stdio', enabled: true, tools: {}, command: ['node', 'srv.mjs'], env: {}, headers: {}, ...over,
 });
 const config = (...servers: Array<Record<string, unknown>>): Config => ({ mcp: { servers, limits: { maxServers: 4 } } } as unknown as Config);
 
@@ -24,13 +24,6 @@ test('サーバーを off → on にするときだけ確かめる', () => {
   const on = config(server());
   assert.deepEqual(accessWidening(on, previewServer(on, 'files', { enabled: false })), []);
   assert.deepEqual(accessWidening(on, previewServer(on, 'files', { enabled: true })), []);
-});
-
-test('「手元のモデルの会話にも使う」を on にするときだけ確かめる', () => {
-  const closed = config(server());
-  assert.deepEqual(accessWidening(closed, previewServer(closed, 'files', { localOk: true })), [{ kind: 'mcp-server-local', id: 'files' }]);
-  const open = config(server({ localOk: true }));
-  assert.deepEqual(accessWidening(open, previewServer(open, 'files', { localOk: false })), []);
 });
 
 test('道具を on にする: 設定に無い道具を足す・enabled:false から戻すは確かめる。off にするのは確かめない', () => {

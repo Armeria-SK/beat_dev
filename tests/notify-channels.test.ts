@@ -23,7 +23,7 @@ function config(over: { channel?: Record<string, unknown>; channels?: unknown[];
 }
 
 function ev(kind: NotificationKind, over: Partial<NotifyEvent> = {}): NotifyEvent {
-  return { id: 1, kind, title: 'タイトル', body: '本文です', link: '#/tasks/7', dedup_key: null, read_at: null, created_at: Date.UTC(2026, 10, 8, 0, 0, 0), local_only: 0, ...over };
+  return { id: 1, kind, title: 'タイトル', body: '本文です', link: '#/tasks/7', dedup_key: null, read_at: null, created_at: Date.UTC(2026, 10, 8, 0, 0, 0), ...over };
 }
 
 function setup(cfg: AppConfig, responses: Array<number | Error | (() => Response)> = [204], env: Record<string, string | undefined> = { [URL_ENV]: SECRET_URL, [TOKEN_ENV]: SECRET_TOKEN }, nowMs = () => 1_000_000) {
@@ -96,27 +96,27 @@ test('中身が大きすぎれば本文を外す（8KB 以内）', () => {
   assert.ok(Buffer.byteLength(json) <= NOTIFY_MAX_PAYLOAD_BYTES);
 });
 
-test('T-08 local_only の通知は、題が決まった文になり、本文は送らない（includeBody でも）', async () => {
+test('4-1 前の印（local_only = 1）が行に残っていても、題はそのまま、本文も includeBody なら送る', async () => {
   const s = setup(config({ channel: { includeBody: true, kinds: ['task_done', 'task_waiting', 'task_failed', 'approval_needed', 'health_alert', 'info'] } }));
   for (const kind of ['task_done', 'task_waiting', 'task_failed', 'approval_needed', 'health_alert', 'info'] as const) {
-    await s.channels.deliver(ev(kind, { title: '秘密の題 PRIVATE', body: '秘密の本文 PRIVATE', local_only: 1 }));
+    await s.channels.deliver({ ...ev(kind, { title: '題 PRIVATE', body: '本文 PRIVATE' }), local_only: 1 } as NotifyEvent);
   }
   assert.equal(s.calls.length, 6);
   for (const call of s.calls) {
     const sent = call.init.body as string;
-    assert.doesNotMatch(sent, /PRIVATE/u);
-    assert.ok(!sent.includes('"body"'));
-    assert.match(sent, /"title":"beat: [^"]*work on a local model/u);
+    const json = JSON.parse(sent) as { title: string; body: string };
+    assert.equal(json.title, '題 PRIVATE');
+    assert.equal(json.body, '本文 PRIVATE');
   }
 });
 
-test('local_only の通知は、publicBaseUrl があってもリンクを送らない（リンクに手元の会話の名前が入りうる）。そうでない通知は送る', async () => {
+test('4-1 前の印（local_only = 1）が行に残っていても、publicBaseUrl があればリンクを送る', async () => {
   const s = setup(config({ channel: { kinds: ['info', 'task_failed'] }, notify: { publicBaseUrl: 'https://beat.example.ts.net' } }));
-  await s.channels.deliver(ev('info', { title: 'x', link: '#/skills/draft/secret-name-PRIVATE', local_only: 1 }));
+  await s.channels.deliver({ ...ev('info', { title: 'x', link: '#/skills/draft/some-name' }), local_only: 1 } as NotifyEvent);
   await s.channels.deliver(ev('task_failed', { link: '#/tasks/7' }));
   assert.equal(s.calls.length, 2);
   const [local, normal] = s.calls.map(c => c.init.body as string);
-  assert.doesNotMatch(local!, /PRIVATE|"link"/u);
+  assert.match(local!, /"link":"https:\/\/beat\.example\.ts\.net\/#\/skills\/draft\/some-name"/u);
   assert.match(normal!, /"link":"https:\/\/beat\.example\.ts\.net\/#\/tasks\/7"/u);
 });
 

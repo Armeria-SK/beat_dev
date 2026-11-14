@@ -300,7 +300,7 @@ test('作業フォルダが鍵の名前の項目から来るときは、作業�
 test('MCP の道具: 入力まるごとを見せるときも、サーバーに渡した秘密の値をそのまま伏せる', async t => {
   const s = setup(t);
   const built = buildMcpTool({
-    server: { id: 'web', localOk: false }, remote: { name: 'search', inputSchema: { type: 'object', properties: { q: { type: 'string' }, n: { type: 'number' } } } },
+    server: { id: 'web' }, remote: { name: 'search', inputSchema: { type: 'object', properties: { q: { type: 'string' }, n: { type: 'number' } } } },
     entry: {}, language: 'en', limits: { callTimeoutMs: 1000, resultMaxChars: 1000 }, caller: () => undefined, secrets: () => ['plainvalue123'],
   });
   assert.ok(built.ok);

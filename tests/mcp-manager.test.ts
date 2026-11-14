@@ -19,7 +19,7 @@ const ECHO: McpRemoteTool = { name: 'echo', description: '文字を返す', inpu
 const OTHER: McpRemoteTool = { name: 'other', description: 'ほか', inputSchema: { type: 'object', properties: {} } };
 
 function server(over: Partial<McpServerConfig> = {}): McpServerConfig {
-  const base = { id: 'srv', transport: 'stdio', enabled: true, localOk: false, tools: { echo: {} }, env: {}, headers: {}, ...(over.transport === 'http' ? {} : { command: ['node', 'x.mjs'] }), ...over };
+  const base = { id: 'srv', transport: 'stdio', enabled: true, tools: { echo: {} }, env: {}, headers: {}, ...(over.transport === 'http' ? {} : { command: ['node', 'x.mjs'] }), ...over };
   return base as McpServerConfig;
 }
 
@@ -67,7 +67,7 @@ test('T-21: つながると、tools に書かれて on の道具だけが mcp_<i
   assert.deepEqual(s.manager.status()[0]!.tools.map(t => [t.name, t.state]), [['echo', 'registered'], ['other', 'unlisted']]);
   assert.equal(s.fakes.length, 1, '道具の設定が変わっただけでは、つなぎ直さない');
   const tool = s.registry.get('mcp_srv_echo')!;
-  assert.deepEqual(tool.mcp, { server: 'srv', tool: 'echo', localOk: false });
+  assert.deepEqual(tool.mcp, { server: 'srv', tool: 'echo' });
 });
 
 test('T-22: 登録した道具を呼ぶと、つながっているサーバーに渡る', async () => {

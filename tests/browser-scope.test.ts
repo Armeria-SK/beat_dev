@@ -12,7 +12,7 @@ import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, type Script, testConfig } from './helpers.ts';
 import { FakeBrowserDriver } from './helpers/fake-browser.ts';
 
-// T-09 / T-12: ブラウザの道具が渡る場面（既定は無効、localOnly でも渡る、計画モードでは submits の道具は外す）と、プロファイルの置き場所
+// T-09 / T-12: ブラウザの道具が渡る場面（既定は無効、モデルを選んだ会話でも渡る、計画モードでは submits の道具は外す）と、プロファイルの置き場所
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
@@ -46,13 +46,13 @@ test('T-09 組み込みの道具に browser_open / read / screenshot / close / c
   assert.ok(names(s, 0).includes('file_read'), '前提: ほかの道具は渡っている');
 });
 
-test('T-09 有効にするとチャットの実行に 6 つとも渡る。手元のモデルを選んだ会話（localOnly）でも渡る', async t => {
+test('T-09 有効にするとチャットの実行に 6 つとも渡る。モデルを選んだ会話でも渡る', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')], configure: enable });
   s.adapter().scripts = [reply('こんにちは'), reply('こんにちは')];
   await chat(s, uuid(1), 'やあ');
   assert.deepEqual(browserNames(s, 0), ALL);
   await chat(s, uuid(2), 'やあ', 'm1');
-  assert.deepEqual(browserNames(s, 1), ALL, 'localOnly でも渡る');
+  assert.deepEqual(browserNames(s, 1), ALL, 'モデルを選んだ会話でも渡る');
 });
 
 test('T-09 計画モードには、読むだけの browser_* は渡り、送信になりうる道具（submits）は渡らない', async t => {

@@ -185,18 +185,17 @@ test('T-11 URL・token は、応答・設定・お知らせ・ログ・DB のど
   for (const table of tables) { try { seen.push(JSON.stringify(s.app.db.prepare(`SELECT * FROM "${table}"`).all())); } catch { /* 仮想表など */ } }
   for (const text of seen) assert.doesNotMatch(text, /Zk3qP9xW7mB2vN8c|Qm5dK2wE7hB4tY1nLp9/u);
 });
-test('配線: お知らせが作られると送り先へ届く（手元だけの仕事は決まった題）。送り先の失敗の警告は外へ送らない', async t => {
+test('配線: お知らせが作られると送り先へ届く（題はそのまま）。送り先の失敗の警告は外へ送らない', async t => {
   const s = await start(t, {
     status: () => 500,
     configure: c => { c.notify = { channels: [{ id: 'phone', kind: 'webhook', urlEnv: ENV_URL, kinds: ['task_failed', 'health_alert'] }], limits: { retries: 0, failsBeforeAlert: 2 } }; },
     env: { [ENV_URL]: URL1 },
   });
-  s.app.notifications.notify({ kind: 'task_failed', title: '秘密の題 PRIVATE', localOnly: true });
+  s.app.notifications.notify({ kind: 'task_failed', title: '1 つ目の題' });
   s.app.notifications.notify({ kind: 'task_failed', title: '公開の題' });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(s.sent.length, 2);
-  assert.doesNotMatch(s.sent[0]!.body, /PRIVATE/u);
-  assert.match(s.sent[0]!.body, /work on a local model/u);
+  assert.match(s.sent[0]!.body, /1 つ目の題/u);
   assert.match(s.sent[1]!.body, /公開の題/u);
   // 2 回続けて失敗したので、health_alert が 1 件できるが、それは外へ送られない（送り先がまた失敗する連鎖にしない）
   const alerts = s.app.notifications.list(50).filter(n => n.kind === 'health_alert');

@@ -190,7 +190,7 @@ function ServerRow({ server, ops, max }: { server: McpServerView; ops: McpOps; m
   const sum = summarize(server);
   const pillTone = TONE[tone(server.state)];
   const busy = ctx.busy !== null;
-  const setServer = (patch: { enabled?: boolean; localOk?: boolean }) =>
+  const setServer = (patch: { enabled?: boolean }) =>
     void ops.guarded(k, latest => accessWidening(latest, previewServer(latest, server.id, patch)), () => api.patchMcpServer(server.id, patch));
   const desc = [
     t('ui.set.mcp.tools', sum.registered, server.tools.length),
@@ -208,9 +208,6 @@ function ServerRow({ server, ops, max }: { server: McpServerView; ops: McpOps; m
               <Row k={`${k}:target`} title={t('ui.set.mcp.target')} desc={<code className="bt-meta">{server.target}</code>}>
                 <Button small variant="ghost" disabled={busy || !server.enabled} onClick={() => void ops.run(k, () => api.restartMcpServer(server.id), t('ui.set.mcp.restarted'))}>{t('ui.set.mcp.restart')}</Button>
                 {!removing && <Button small variant="ghost" disabled={busy} onClick={() => setRemoving(true)}>{t('ui.lib.delete')}</Button>}
-              </Row>
-              <Row k={`${k}:local`} title={t('ui.set.mcp.local')} desc={t('ui.set.mcp.localDesc')}>
-                <Switch checked={server.localOk} label={t('ui.set.mcp.local')} disabled={busy} onChange={localOk => setServer({ localOk })} />
               </Row>
               {server.secrets.map(secret => <SecretRow key={`${secret.kind}:${secret.name}`} server={server} secret={secret} ops={ops} />)}
               {server.tools.length === 0 && <p className="bt-meta">{server.state === 'ready' ? t('ui.set.mcp.noTools') : t('ui.set.mcp.notConnected')}</p>}

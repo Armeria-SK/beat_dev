@@ -35,7 +35,7 @@ export const notifyOwner: ToolDef<{ title: string; body?: string }> = {
       const link = ctx.kind === 'task' && ctx.task ? `#/tasks/${ctx.task.id}` : `#/c/${encodeURIComponent(ctx.conversationId)}`;
       const notifTitle = toolText(language, ctx.taint.tainted ? 'notify_owner.title_tainted' : 'notify_owner.title', { title });
       const dedupKey = `owner:${createHash('sha256').update(`${ctx.conversationId}\n${title}\n${body}`).digest('hex').slice(0, 32)}`;
-      const result = notify({ kind: 'info', title: notifTitle, link, dedupKey, localOnly: ctx.localOnly === true, ...(body ? { body } : {}) });
+      const result = notify({ kind: 'info', title: notifTitle, link, dedupKey, ...(body ? { body } : {}) });
       if (result === undefined) {
         return { content: toolText(language, 'notify_owner.duplicate') };
       }

@@ -6,7 +6,6 @@ import { dropLegacy, LEGACY_KEYS } from '../src/config/legacy.ts';
 import { ConfigError, ConfigStore, defaultConfig, parseConfig } from '../src/config/store.ts';
 import type { AddressInfo } from 'node:net';
 import { App } from '../src/app.ts';
-import { isLocalProvider } from '../src/engine/local-model.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { createWebServer } from '../src/web/server.ts';
@@ -36,8 +35,17 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk']);
+});
+
+test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残らず、入力は書き換えない', () => {
+  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+  raw.mcp = { servers: [{ id: 'a', transport: 'stdio', command: ['node', 'a.mjs'], localOk: true }, { id: 'b', transport: 'stdio', command: ['node', 'b.mjs'] }] };
+  const config = parseConfig(raw);
+  assert.deepEqual(config.mcp.servers.map(server => [server.id, 'localOk' in server]), [['a', false], ['b', false]]);
+  assert.deepEqual(dropLegacy(raw).dropped, ['mcp.servers[].localOk']);
+  assert.equal(raw.mcp.servers[0].localOk, true);
 });
 
 test('tools.taintEscalation: false の古い設定が読め、読んだ設定に残らず、起動のログの Ignored の 1 行に入る', t => {
@@ -314,11 +322,11 @@ test('起動のログ: 古い Ollama の設定は「Read old settings in their n
   assert.deepEqual(readFileSync(paths.config), before);
 });
 
-test('読み替えたあとの手元の判定: baseUrl の無い古い Ollama は手元、LAN の古い Ollama は手元でない', () => {
+test('読み替えたあとの接続先: baseUrl の無い古い Ollama はこの PC、LAN の古い Ollama は書いてあった宛先', () => {
   const local = parseConfig(withOldOllama()).providers.find(p => p.id === 'ollama')!;
   const lan = parseConfig(withOldOllama('http://192.168.1.20:11434')).providers.find(p => p.id === 'ollama')!;
-  assert.equal(isLocalProvider(local), true);
-  assert.equal(isLocalProvider(lan), false);
+  assert.equal(local.baseUrl, 'http://127.0.0.1:11434/v1');
+  assert.equal(lan.baseUrl, 'http://192.168.1.20:11434/v1');
 });
 
 test('古い Ollama の提供元のモデルで会話を送ると、OpenAI 互換の POST /v1/chat/completions が届き、返事が保存される', async t => {

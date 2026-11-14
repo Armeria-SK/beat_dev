@@ -239,7 +239,7 @@ export type McpEffect = 'read' | 'write' | 'network';
 export interface McpToolView { name: string; registered: string; state: McpToolState; reason?: string; description: string }
 export interface McpSecretView { kind: 'env' | 'header'; name: string; set: boolean; source?: 'os' }
 export interface McpServerView {
-  id: string; transport: 'stdio' | 'http'; enabled: boolean; localOk: boolean; target: string; state: McpServerState;
+  id: string; transport: 'stdio' | 'http'; enabled: boolean; target: string; state: McpServerState;
   reason?: string; detail?: string; stderr: string; tools: McpToolView[]; secrets: McpSecretView[];
 }
 export interface McpLimits { maxServers: number; maxToolsPerServer: number; callTimeoutMs: number; connectTimeoutMs: number; restartsPerHour: number; resultMaxChars: number }
@@ -397,7 +397,7 @@ export const api = {
   browserClose: () => call<BrowserStatusView>('/api/browser/close', { method: 'POST', body: '{}' }),
   browserProfileReset: () => call<BrowserStatusView>('/api/browser/profile/reset', { method: 'POST', body: '{}' }),
   addMcpServer: (input: McpAddInput) => call<McpView>('/api/mcp/servers', { method: 'POST', body: JSON.stringify(input) }),
-  patchMcpServer: (id: string, patch: { enabled?: boolean; localOk?: boolean }) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  patchMcpServer: (id: string, patch: { enabled?: boolean }) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteMcpServer: (id: string) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   restartMcpServer: (id: string) => call<McpView>(`/api/mcp/servers/${encodeURIComponent(id)}/restart`, { method: 'POST', body: '{}' }),
   setMcpSecret: (id: string, kind: 'env' | 'header', name: string, value: string) => call<{ set: boolean }>(`/api/mcp/servers/${encodeURIComponent(id)}/secrets/${kind}/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ value }) }),

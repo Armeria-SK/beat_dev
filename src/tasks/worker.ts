@@ -4,7 +4,6 @@ import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schem
 import type { Conversations } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts';
-import { isLocalPinned } from '../engine/local-model.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
@@ -235,7 +234,7 @@ export class Worker {
       tasks.spawnDueSchedules();
       const remindMs = c.worker.remindAfterHours * 3_600_000;
       for (const t of tasks.waitingSince(remindMs)) {
-        this.#d.notifications.notify({ kind: 'task_waiting', title: taskText(languageOf(c), 'notify.waiting_reminder', { title: t.title }), body: t.waiting_text ?? undefined, link: `#/tasks/${t.id}`, dedupKey: `remind:${t.id}:${Math.floor(now / remindMs)}`, localOnly: t.local_only === 1 });
+        this.#d.notifications.notify({ kind: 'task_waiting', title: taskText(languageOf(c), 'notify.waiting_reminder', { title: t.title }), body: t.waiting_text ?? undefined, link: `#/tasks/${t.id}`, dedupKey: `remind:${t.id}:${Math.floor(now / remindMs)}` });
       }
       this.#detectReviewTriggers(c, now);
       if (this.paused) { reschedule(); return 'paused'; }
@@ -245,12 +244,12 @@ export class Worker {
       let task: Task | undefined;
       // 提供元の空きは、動いている裏の実行それぞれの「最初に使う提供元」で数える（計画の「各実行の providers で数える」より意図して狭い:
       // 全部で数えると、まだ使っていない鎖の後ろの提供元の枠まで塞ぐ。後ろへ回った分の同時数は limiter が抑える）
-      const roomFor = (t: Task): boolean => this.#d.engine.backgroundHasRoom(t.local_only === 1);
+      const roomFor = (): boolean => this.#d.engine.backgroundHasRoom();
       for (const id of [...this.#forced]) {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
         // 提供元が満杯のあいだは覚えておく（空けば、終わった実行の onRunEnd で拾う）
-        if (!roomFor(forced)) continue;
+        if (!roomFor()) continue;
         this.#forced.delete(id);
         task = forced;
         break;
@@ -335,21 +334,16 @@ export class Worker {
     if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
     const prompt = this.#reviewInput(job);
     if (!prompt) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
-    // 手元のモデルで話した会話（選んだモデルが設定から消えた会話も）と、手元のモデルだけで動かすタスクの振り返りは、手元の裏方モデルだけで行う。使えるものが無ければ、外のモデルに回さず、その振り返りを飛ばす
-    const local = isLocalPinned(this.#d.config(), job.conversation_id ? conversations.get(job.conversation_id)?.model_id : null) || (job.task_id !== null && this.#d.tasks.get(job.task_id)?.local_only === 1);
-    const skipLocal = () => { reviews.finish(job.id, 'done', taskText(language, 'review.local_skipped')); return 'idle' as const; };
-    if (local && !engine.localReviewAvailable()) return skipLocal();
     // 先に使う提供元が満杯なら、まだ claim せずに待つ（終わった実行の onRunEnd で呼び直される）
-    if (!engine.backgroundHasRoom(local)) return 'busy';
+    if (!engine.backgroundHasRoom()) return 'busy';
     const lastMessageId = job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
     // 止められて・再起動でやり直す振り返りは、前の回の振り返りの会話に続きを書く（新しく作ると、前の回の会話が記録から外れる）。会話は作るときに材料も覚える
     const source = { conversationId: job.conversation_id, taskId: job.task_id };
     const earlier = job.review_conversation_id ? conversations.get(job.review_conversation_id) : undefined;
     if (earlier?.kind === 'task') conversations.setSource(earlier.id, source);
     const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }), source, projectId: (job.conversation_id ? conversations.projectOf(job.conversation_id) : null) ?? (job.task_id ? this.#d.tasks.get(job.task_id)?.project_id : null) });
-    const started = engine.runReview(conversation.id, prompt, { ...(job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {}), ...(local ? { localOnly: true } : {}) });
+    const started = engine.runReview(conversation.id, prompt, job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {});
     if (!started.ok) {
-      if (local) return skipLocal();
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.review_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-review' });
       return 'no_model';
     }
@@ -378,7 +372,7 @@ export class Worker {
   #proposeTidy(job: ReviewJob, reply: string, language: Language): void {
     const text = reply.trim();
     if (!text || isNoProposal(text)) return;
-    this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.memory_tidy'), body: text.slice(0, 1000), link: '#/memory', dedupKey: `memory-tidy:${job.dedup_key}`, localOnly: true });
+    this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.memory_tidy'), body: text.slice(0, 1000), link: '#/memory', dedupKey: `memory-tidy:${job.dedup_key}` });
   }
 
   #spawnCuriosity(c: AppConfig, now: number): Task | undefined {
@@ -415,11 +409,6 @@ export class Worker {
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language);
     const started = engine.runTask(task, conversationId, prompt);
     if (!started.ok) {
-      // 手元のモデルだけで動かすタスクは、使える手元のモデルが無いあいだ、外のモデルに回さず待つ（回数は数えない。不調の通知も出さない: 設定のせいではなく、約束どおりの待ち）
-      if (started.localOnly) {
-        tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.local_wait') });
-        return 'no_model';
-      }
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.no_model', { detail: started.errorMessage.split('\n')[0]! }) });
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-tasks' });
       return 'no_model';
@@ -451,12 +440,12 @@ export class Worker {
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'done', control.summary, 'beat', runId);
-      if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, localOnly: task.local_only === 1 });
+      if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link });
       return;
     }
     if (control.outcome === 'question') {
       tasks.setWaiting(task.id, 'question', control.question, runId);
-      notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, localOnly: task.local_only === 1 });
+      notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}` });
       return;
     }
     if (control.outcome === 'checkpoint') {
@@ -471,7 +460,7 @@ export class Worker {
       const splits = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
       this.#d.kv.setJson(splitKey(task.id), splits);
       if (splits === SPLIT_LIMIT) {
-        notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}`, localOnly: task.local_only === 1 });
+        notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}` });
       }
       tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
       return;
@@ -485,7 +474,7 @@ export class Worker {
         this.#d.kv.delete(idleKey);
         const question = taskText(language, 'stuck.question', { title: task.title, strikes });
         tasks.setWaiting(task.id, 'question', question, runId);
-        notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_consult', { title: task.title }), body: question, link, dedupKey: `stuck:${task.id}`, localOnly: task.local_only === 1 });
+        notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_consult', { title: task.title }), body: question, link, dedupKey: `stuck:${task.id}` });
       } else {
         tasks.setReady(task.id, { runAt: now + 15 * 60_000 * 2 ** (strikes - 1), reason: taskText(language, 'reason.no_progress') });
       }
@@ -498,7 +487,7 @@ export class Worker {
     const attempts = task.attempts + 1;
     if (attempts >= task.max_attempts) {
       tasks.finish(task.id, 'failed', result.errorMessage, 'worker', runId);
-      notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: result.errorMessage, link, dedupKey: `failed:${task.id}`, localOnly: task.local_only === 1 });
+      notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: result.errorMessage, link, dedupKey: `failed:${task.id}` });
       return;
     }
     const delay = RETRY_DELAYS_MIN[Math.min(attempts - 1, RETRY_DELAYS_MIN.length - 1)]!;
