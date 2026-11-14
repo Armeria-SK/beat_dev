@@ -103,3 +103,11 @@ test('記録の store: 機能の根拠は、その似ているものの行の UR
   const both = store.addFeature(run.id, { label: 'Live preview', evidence: [{ similar: b.id, url: 'https://EXAMPLE.com/p2/', quote: 'has live preview' }] });
   assert.deepEqual([both.row.default_checked, both.row.default_reason, JSON.parse(both.row.products)], [1, 'standard', [a.id, b.id]]);
 });
+
+test('記録の store: 選択肢には裸のドメインの決まりが効かない（Socket.IO・ASP.NET Core・draw.io export）が、問いには効く', t => {
+  const { store } = setup(t);
+  const libs = store.start({ projectId: 'p1', phase: 'libraries', mode: 'batch' });
+  const row = store.addChoice(libs.id, { label: 'Realtime library', options: ['Socket.IO', 'ASP.NET Core', 'draw.io export'] });
+  assert.deepEqual(JSON.parse(row.options!), ['Socket.IO', 'ASP.NET Core', 'draw.io export']);
+  assert.equal(codeOf(() => store.addChoice(libs.id, { label: 'Use Socket.IO', options: ['Yes', 'No'] })), 'label_url');
+});

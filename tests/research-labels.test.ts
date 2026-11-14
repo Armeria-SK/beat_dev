@@ -82,6 +82,25 @@ test('名前の形: 見えない文字（私用領域・サロゲート・未割
   }
 });
 
-test('名前の形: 鍵らしい代入（api_key=… や password: …）も断る', () => {
-  for (const label of ['api_key=abcd1234efgh', 'password: hunter22', 'token=0123456789abcdef']) assert.equal(codeOf(() => checkLabel('feature', label)), 'label_secret', label);
+test('名前の形: = でつないだ鍵らしい代入（api_key=…・token=…）は断り、「Password: …」のような見出しの形の名前は通す', () => {
+  for (const label of ['api_key=abcd1234efgh', 'token=0123456789abcdef', 'Set api_key=abcd1234efgh here']) assert.equal(codeOf(() => checkLabel('feature', label)), 'label_secret', label);
+  for (const label of ['Auth: OAuth login', 'Password: reset by email', 'Token: refresh on expiry', 'Cookie: consent banner', 'Login with --password flag', 'Theme=dark mode']) assert.equal(codeOf(() => checkLabel('feature', label)), 'ok', label);
+});
+
+test('名前の形: 語のあとの「:」「?」「#」は、続けて文字があるときだけ URL とみなす（ふつうの名前は通す）', () => {
+  for (const label of ['Data: import', 'File: export to PDF', 'Git: commit history', 'HTTP: client', 'Use Node.js?', 'Python 3.12?', 'Node.js: support', 'v1.10: new API']) {
+    assert.equal(codeOf(() => checkLabel('feature', label)), 'ok', label);
+  }
+  for (const label of ['example.com?x=1', 'example.com#top', 'example.com:8080', `example.com${String.fromCharCode(92)}path`, 'example.com/x', 'data:text/html', 'git:repo']) {
+    assert.equal(codeOf(() => checkLabel('similar', label)), 'label_url', label);
+  }
+});
+
+test('名前の形: 裸のドメインの決まりは機能の名前と問いだけで、選択肢（option）には効かない', () => {
+  for (const label of ['Socket.IO', 'ASP.NET Core', 'draw.io export']) {
+    assert.equal(codeOf(() => checkLabel('option', label)), 'ok', label);
+    assert.equal(codeOf(() => checkLabel('choice', label)), 'label_url', label);
+    assert.equal(codeOf(() => checkLabel('feature', label)), 'label_url', label);
+  }
+  assert.equal(codeOf(() => checkLabel('option', 'example.com/x')), 'label_url');
 });

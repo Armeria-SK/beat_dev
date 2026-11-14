@@ -1,23 +1,23 @@
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { researchText, type ResearchMessageKey } from '../shared/messages/research.ts';
 import { stripHidden } from '../shared/plain-text.ts';
-import { redactSecrets } from '../shared/redaction.ts';
+import { redactSecrets, sanitizeModelInputText } from '../shared/redaction.ts';
 
 export class ResearchError extends LocalizedError<ResearchMessageKey> {
   constructor(code: ResearchMessageKey, params?: MessageParams) { super(researchText, code, params); }
 }
 
-export type LabelKind = 'similar' | 'feature' | 'choice' | 'library';
+export type LabelKind = 'similar' | 'feature' | 'choice' | 'library' | 'option';
 
-export const LABEL_MAX: Record<LabelKind, number> = { similar: 60, feature: 80, choice: 80, library: 80 };
+export const LABEL_MAX: Record<LabelKind, number> = { similar: 60, feature: 80, choice: 80, library: 80, option: 80 };
 
 const LINE_BREAK = /[\n\r\u{85}\u{2028}\u{2029}]/u;
 const CONTROL = /[\p{Cc}\p{Cf}]/u;
 const HIDDEN = /[\p{Co}\p{Cs}\p{Cn}\u{E0100}-\u{E01EF}\u{3164}\u{1160}\u{2800}]/u;
 const URL_LIKE = [
   /:\/\/|www\.|\/\/[\p{L}\p{N}]/iu,
-  /[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]{2,}[/\\?#:]/iu,
-  /(?<![\p{L}\p{N}])(?:mailto|javascript|data|vbscript|file|ftps?|sftp|ssh|tel|sms|blob|about|chrome|intent|magnet|irc|git|wss?|https?|ms-[a-z-]+):/iu,
+  /[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]{2,}(?:[/\\]|[?#:](?=\S))/iu,
+  /(?<![\p{L}\p{N}])(?:mailto|javascript|data|vbscript|file|ftps?|sftp|ssh|tel|sms|blob|about|chrome|intent|magnet|irc|git|wss?|https?|ms-[a-z-]+):(?=\S)/iu,
   /@[\p{L}\p{N}-]+\.[\p{L}\p{N}-]{2,}/iu,
   /(?<![\p{N}.])\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?[/\\?#]/u,
 ];
@@ -39,6 +39,6 @@ export function checkLabel(kind: LabelKind, raw: string): string {
   if (CODE.test(trimmed)) throw new ResearchError('label_code');
   if (MARKUP.test(trimmed)) throw new ResearchError('label_markup');
   if (SHELL.test(trimmed)) throw new ResearchError('label_shell');
-  if (redactSecrets(trimmed) !== trimmed) throw new ResearchError('label_secret');
+  if (sanitizeModelInputText(trimmed).redaction_count > 0 || (trimmed.match(/\S+=\S+/gu) ?? []).some(token => redactSecrets(token) !== token)) throw new ResearchError('label_secret');
   return trimmed;
 }

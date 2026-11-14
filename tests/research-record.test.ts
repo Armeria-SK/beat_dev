@@ -294,3 +294,25 @@ test('定番: 行が同じページを指していれば（表に直接入った
   ] });
   assert.deepEqual([row.default_checked, JSON.parse(row.products)], [0, [a, b]]);
 });
+
+test('ページの同じさ（pageKey）: ホストの末尾の . とポートの違いも同じページ', () => {
+  const keys = ['https://example.com./acme/notes', 'https://example.com:8443/acme/notes', 'http://EXAMPLE.com.:80/Acme/Notes/'].map(pageKey);
+  assert.deepEqual(new Set(keys), new Set(['example.com/acme/notes']));
+});
+
+test('定番: 漢字・かなだけの名前は 2 字以上のときだけ当てる（1 字の「表」は当てない）', async t => {
+  const { store } = setup(t);
+  const run = store.start({ projectId: 'p1', runId: 'run-z', phase: 'products', mode: 'batch' });
+  const a = store.addSource(run.id, { kind: 'similar', name: 'A', url: 'https://a.example.com/x', evidence: {} });
+  const b = store.addSource(run.id, { kind: 'similar', name: 'B', url: 'https://b.example.com/x', evidence: {} });
+  const evidence = (word: string) => [
+    { similar: a.id, url: 'https://a.example.com/x', quote: `ここに${word}の機能があります` },
+    { similar: b.id, url: 'https://b.example.com/x', quote: `こちらにも${word}を用意しています` },
+  ];
+  assert.equal(store.addFeature(run.id, { label: '表', evidence: evidence('表') }).row.default_checked, 0);
+  assert.equal(store.addFeature(run.id, { label: '表計算', evidence: evidence('表計算') }).row.default_checked, 1);
+  assert.equal(store.addFeature(run.id, { label: 'X', evidence: [
+    { similar: a.id, url: 'https://a.example.com/x', quote: 'Export X to a file today' },
+    { similar: b.id, url: 'https://b.example.com/x', quote: 'The X button saves it all' },
+  ] }).row.default_checked, 1);
+});

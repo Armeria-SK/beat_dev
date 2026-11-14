@@ -6,6 +6,8 @@ import { test } from 'node:test';
 import { checkToolchain, VERSION_TIMEOUT_MS, type VersionRunner } from '../src/research/toolchain.ts';
 import { tempDir } from './helpers.ts';
 
+const BS = String.fromCharCode(92);
+
 const spy = () => {
   const calls: Array<{ file: string; args: readonly string[]; options: unknown }> = [];
   const run: VersionRunner = async (file, args, options) => { calls.push({ file, args, options }); return 'tool 1.2.3\nmore'; };
@@ -92,4 +94,30 @@ test('PC の道具の確かめ: リンクの先が WindowsApps の下なら（8.
   const [python, ruby] = await checkToolchain(['python', 'ruby'], { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE' }, run, readlink: file => targets[file] ?? null });
   assert.deepEqual([python!.state, ruby!.state], ['alias', 'installed']);
   assert.deepEqual(calls.map(c => c.file), [join(dir, 'ruby.exe')]);
+});
+
+test('PC の道具の確かめ: リンクを 8 段までたどり（相対の先はリンクのフォルダから）、先が WindowsApps なら alias。くり返し・上限を超えるリンクも alias で、どれも動かさない', async t => {
+  const dir = tempDir(t);
+  for (const name of ['python', 'ruby', 'php', 'deno', 'bun']) writeFileSync(join(dir, `${name}.exe`), '');
+  const apps = ['C:', 'Program Files', 'WindowsApps', 'Microsoft.DesktopAppInstaller_1.0_x64__8wekyb3d8bbwe', 'AppInstallerPythonRedirector.exe'].join(BS);
+  const hop = (n: number) => join(dir, 'hops', `h${n}.exe`);
+  const links = new Map<string, string>([
+    [join(dir, 'python.exe'), ['hops', 'h1.exe'].join(BS)],
+    [hop(1), ['..', 'hops', 'h2.exe'].join(BS)],
+    [hop(2), apps],
+    [join(dir, 'ruby.exe'), join(dir, 'loop-a.exe')],
+    [join(dir, 'loop-a.exe'), join(dir, 'LOOP-B.exe')],
+    [join(dir, 'loop-b.exe'), join(dir, 'loop-a.exe')],
+    [join(dir, 'php.exe'), join(dir, 'deep', 'd1.exe')],
+    ...Array.from({ length: 9 }, (_, i) => [join(dir, 'deep', `d${i + 1}.exe`), join(dir, 'deep', `d${i + 2}.exe`)] as [string, string]),
+    [join(dir, 'deno.exe'), join(dir, 'chain', 'c1.exe')],
+    ...Array.from({ length: 7 }, (_, i) => [join(dir, 'chain', `c${i + 1}.exe`), join(dir, 'chain', `c${i + 2}.exe`)] as [string, string]),
+  ]);
+  let loopReads = 0;
+  const lower = new Map([...links].map(([k, v]) => [k.toLowerCase(), v]));
+  const { calls, run } = spy();
+  const result = await checkToolchain(['python', 'ruby', 'php', 'deno', 'bun'], { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE' }, run, readlink: file => { if (/loop-/iu.test(file)) loopReads++; return lower.get(file.toLowerCase()) ?? null; } });
+  assert.deepEqual(result.map(r => [r.name, r.state]), [['python', 'alias'], ['ruby', 'alias'], ['php', 'alias'], ['deno', 'installed'], ['bun', 'installed']]);
+  assert.deepEqual(calls.map(c => c.file), [join(dir, 'deno.exe'), join(dir, 'bun.exe')]);
+  assert.ok(loopReads <= 2, `the loop is read ${loopReads} times`);
 });

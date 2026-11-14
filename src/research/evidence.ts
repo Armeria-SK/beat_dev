@@ -14,7 +14,7 @@ export function pageKey(raw: string): string | null {
   const href = normalizeUrl(raw);
   if (href === null) return null;
   const url = new URL(href);
-  return `${url.host}${url.pathname.toLowerCase().replace(/\/+$/u, '')}`;
+  return `${url.hostname.replace(/\.$/u, '')}${url.pathname.toLowerCase().replace(/\/+$/u, '')}`;
 }
 
 export class OpenedPages {
@@ -64,6 +64,8 @@ const joins = (a: string | undefined, b: string | undefined): boolean =>
 export function quoteHasName(quote: string, name: string): boolean {
   const label = spaced(name);
   if (!label) return false;
+  const bare = [...label.replace(/\s/gu, '')];
+  if (bare.length < 2 && bare.every(char => WIDE.test(char))) return false;
   const text = spaced(quote);
   const first = [...label][0];
   const last = [...label].at(-1);

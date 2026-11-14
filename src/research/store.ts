@@ -9,7 +9,7 @@ export type ResearchPhase = 'products' | 'libraries';
 export type ResearchMode = 'batch' | 'one_by_one';
 export type ResearchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'skipped' | 'confirmed';
 export type ResearchEnd = 'done' | 'failed' | 'cancelled' | 'skipped';
-export type ItemKind = LabelKind;
+export type ItemKind = Exclude<LabelKind, 'option'>;
 
 export const ITEM_LIMITS: Record<ItemKind, number> = { similar: 8, feature: 40, choice: 6, library: 20 };
 const PHASE_KINDS: Record<ResearchPhase, readonly ItemKind[]> = { products: ['similar', 'feature'], libraries: ['choice', 'library'] };
@@ -162,7 +162,7 @@ export class ResearchStore {
   addChoice(researchId: string, item: ChoiceItem): ResearchItemRow {
     return transaction(this.#db, () => {
       const label = checkLabel('choice', item.label);
-      const options = item.options.map(o => checkLabel('choice', o));
+      const options = item.options.map(o => checkLabel('option', o));
       this.#open(researchId, 'choice');
       if (options.length < 2 || options.length > 4) throw new ResearchError('options_count');
       const recommended = item.recommended !== undefined && item.recommended !== null && item.recommended >= 0 && item.recommended < options.length ? item.recommended : null;
