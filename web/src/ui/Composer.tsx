@@ -75,7 +75,7 @@ export function Composer(props: ComposerProps) {
   const setAttached = (next: (list: UploadView[]) => UploadView[]) => {
     const files = next(composerDrafts.files(props.draftKey));
     composerDrafts.setFiles(props.draftKey, files);
-    showAttached(composerDrafts.files(props.draftKey));
+    showAttached(files);
   };
   const [uploading, setUploading] = useState(false);
   const [pop, setPop] = useState<Pop>(null);

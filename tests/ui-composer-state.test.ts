@@ -269,9 +269,6 @@ test('ui/composer-state: 添付も会話ごとに覚える（別の会話へ移�
   assert.deepEqual(drafts.files('b').map(f => f.id), ['u3']);
   drafts.setFiles('b', []);
   assert.deepEqual(drafts.files('b'), [], '送ったら（空にしたら）残らない');
-  drafts.setFiles('a', [file('late')]);
-  drafts.set('a', 'late text');
-  assert.deepEqual([drafts.files('a'), drafts.get('a')], [[], ''], '消した会話へ、あとから届いた添付（送っている途中だったもの）や文を足さない');
 });
 
 test('ui/composer-state: 知っているコマンド名とちょうど同じ文は、今は出していないコマンドでも発言として送らない', () => {

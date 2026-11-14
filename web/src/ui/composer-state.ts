@@ -135,13 +135,12 @@ export interface DraftStore {
 export function createDrafts(): DraftStore {
   const kept = new Map<string, string>();
   const attached = new Map<string, UploadView[]>();
-  const gone = new Set<string>();
   return {
     get: key => kept.get(key) ?? '',
-    set: (key, text) => { if (text && !gone.has(key)) kept.set(key, text); else kept.delete(key); },
+    set: (key, text) => { if (text) kept.set(key, text); else kept.delete(key); },
     files: key => attached.get(key) ?? [],
-    setFiles: (key, files) => { if (files.length && !gone.has(key)) attached.set(key, files); else attached.delete(key); },
-    forget: key => { gone.add(key); kept.delete(key); attached.delete(key); },
+    setFiles: (key, files) => { if (files.length) attached.set(key, files); else attached.delete(key); },
+    forget: key => { kept.delete(key); attached.delete(key); },
   };
 }
 
