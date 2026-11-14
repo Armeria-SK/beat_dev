@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Language } from '../config/schema.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import type { PlanStore } from '../projects/plan.ts';
-import { projectDir, type ProjectStore } from '../projects/store.ts';
+import { folderMissing, projectDir, type ProjectStore } from '../projects/store.ts';
 import { makeFence, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
@@ -12,6 +12,9 @@ import type { TaskStore } from '../tasks/store.ts';
 import type { AcceptanceDoc } from '../projects/acceptance.ts';
 import { dateIn, isMarkdown, listMeshFiles, MeshError, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
 import { acceptanceLines, readMesh, searchMesh, type MeshText } from './search.ts';
+import { cleanRelPath, dotted, EMPTY_HASH, fileInside, folderExists, listingHash, pathExists, scanFolders, type FolderScan } from './folders.ts';
+import { cleanTerm, GLOSSARY_FILE, GLOSSARY_LINE_MAX, glossaryContent, parseGlossary, upsertGlossary } from './glossary.ts';
+import { cleanWhat, MAP_FILE, MAP_LINE_MAX, mapContent, MeshWriteError, parseMap, unlisted, upsertMap, type MapRow, type Writer } from './map.ts';
 import { applyPatch, hasForeignLines, parseNotes, renderState, STATE_FILE, type NoteAuthor, type StateNote, type StatePatch } from './state.ts';
 
 const MESH_GUIDE = "Before naming a file or the plan, look in the MESH index below; if it is not there, call mesh_search. Never guess a path. Answer the owner in the owner's language.";
@@ -26,6 +29,11 @@ const STATE_BACKUP = /^state-\d+-[0-9a-f]+\.md$/u;
 const OWNER_BACKUP = /^state-owner-\d+-[0-9a-f]+\.md$/u;
 const AI_NOTE = '(AI note) ';
 const HEAD_BYTES = 4096;
+const REFRESH_MS = 30_000;
+const UNLISTED_SHOWN = 6;
+const LISTED_IN_ERROR = 40;
+
+export interface MapSummary { parts: number; stale: number; missing: number; unreadable: number }
 
 export interface AcceptanceSummary { total: number; met: number; open: number; unverified: number; version: number }
 
@@ -37,6 +45,9 @@ export interface IndexMaterials {
   files: Array<{ path: string; updatedAt: number; heading: string | null }>;
   counts: { questions: number; proposals: number };
   timezone: string;
+  map?: MapSummary | null;
+  glossary?: { names: number; unreadable: number } | null;
+  unlisted?: string[] | null;
 }
 
 export const meshIndexLimit = (available: number): number => Math.min(MESH_INDEX_MAX, Math.max(MESH_INDEX_MIN, Math.floor(available * 0.02)));
@@ -76,6 +87,11 @@ function acceptanceText(a: IndexMaterials['acceptance'], compact: boolean): stri
   return compact ? `${counts}, ${version}` : `${counts} (${version})`;
 }
 
+function mapText(map: MapSummary): string {
+  const notes = [map.stale ? `${map.stale} stale` : '', map.missing ? `${map.missing} missing` : '', map.unreadable ? `${map.unreadable} lines cannot be read` : ''].filter(Boolean);
+  return `${map.parts} parts${notes.length ? ` (${notes.join(', ')})` : ''}`;
+}
+
 export function composeIndex(m: IndexMaterials, limit: number): string {
   const date = (ms: number) => dateIn(ms, m.timezone);
   const notes = m.notes.filter(note => !note.external && (note.field === 'now' || note.field === 'next')).flatMap(note => {
@@ -89,8 +105,9 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
   const heading = m.plan?.clean && m.plan.heading ? secretFree(safeText(m.plan.heading, 60)) : undefined;
   const planLine = m.plan ? `plan.md${heading ? ` — ${m.plan.ai ? AI_NOTE : ''}${heading}` : ''} (updated ${date(m.plan.updatedAt)})` : 'plan.md — not written yet';
 
+  const special = (path: string) => (path === MAP_FILE && m.map) || (path === GLOSSARY_FILE && m.glossary);
   if (limit > MESH_INDEX_MIN) {
-    const fileLines = shown.map(file => {
+    const fileLines = shown.filter(file => !special(file.path)).map(file => {
       const note = file.heading ? secretFree(safeText(file.heading, 80)) : undefined;
       return `- ${file.path}${note ? ` — ${note}` : ''} (updated ${date(file.updatedAt)})`;
     });
@@ -99,8 +116,14 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
       ...(m.state ? [`- STATE.md — where we are (updated ${date(m.state.updatedAt)})`] : []),
       `- ${planLine}`,
       `- acceptance.json — ${acceptanceText(m.acceptance, false)}`,
+      ...(m.map ? [`- ${MAP_FILE} — ${mapText(m.map)}`] : []),
+      ...(m.glossary ? [`- ${GLOSSARY_FILE} — ${m.glossary.names} names${m.glossary.unreadable ? ` (${m.glossary.unreadable} lines cannot be read)` : ''}`] : []),
     ];
-    const tail = [`questions: ${m.counts.questions} unanswered (tasks waiting for an answer) / proposals: ${m.counts.proposals}`];
+    const open = m.unlisted ?? [];
+    const tail = [
+      `questions: ${m.counts.questions} unanswered (tasks waiting for an answer) / proposals: ${m.counts.proposals}`,
+      ...(open.length ? [`not in MAP yet: ${open.slice(0, UNLISTED_SHOWN).join(', ')}${open.length > UNLISTED_SHOWN ? ` and ${open.length - UNLISTED_SHOWN} more` : ''}`] : []),
+    ];
     const body = largest(fileLines.length, keep => {
       const more = fileLines.length - keep;
       return [...top, ...fileLines.slice(0, keep), ...(more ? [`- ${more} more files (mesh_search finds them)`] : []), ...hiddenLine, ...tail].join('\n');
@@ -138,6 +161,18 @@ interface Light {
   counts: IndexMaterials['counts'];
   running: string[];
   timezone: string;
+  map: MapSummary | null;
+  glossary: { names: number; unreadable: number } | null;
+  unlisted: string[] | null;
+}
+
+interface MapFresh { scan: FolderScan; marks: Map<string, 'missing' | 'stale'>; at: number }
+
+function readOwn(file: string, name: string): string | undefined {
+  const stat = lstatSync(file, { throwIfNoEntry: false });
+  if (!stat) return undefined;
+  if (!stat.isFile() || stat.nlink !== 1) throw new MeshWriteError('file_unusable', { file: name });
+  return readFileSync(file, 'utf8');
 }
 
 function summarize(doc: AcceptanceDoc | undefined): AcceptanceSummary | null {
@@ -166,6 +201,9 @@ export class Mesh {
   readonly #d: MeshDeps;
   readonly #cache = new Map<string, { key: string; limit: number; body: string }>();
   readonly #persisted = new Map<string, string>();
+  readonly #fresh = new Map<string, MapFresh>();
+  readonly #refreshing = new Map<string, Promise<void>>();
+  readonly #writes = new Map<string, number>();
   #builds = 0;
 
   constructor(deps: MeshDeps) { this.#d = deps; }
@@ -193,8 +231,12 @@ export class Mesh {
     const timezone = this.#d.timezone();
     const stateMtime = stateStat ? Math.floor(stateStat.mtimeMs) : null;
     const plan = this.#d.plans.meta(projectId);
-    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan ?? null]);
-    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone };
+    const { map, unlisted: open } = this.#mapSummary(projectId, dir);
+    const glossaryText = regular(join(dir, GLOSSARY_FILE)) ? readFileSync(join(dir, GLOSSARY_FILE), 'utf8') : undefined;
+    const parsedGlossary = glossaryText === undefined ? undefined : parseGlossary(glossaryText);
+    const glossary = parsedGlossary ? { names: parsedGlossary.rows.length, unreadable: parsedGlossary.unreadable } : null;
+    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan ?? null, map, glossary, open]);
+    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, map, glossary, unlisted: open };
   }
 
   #materials(projectId: string, light: Light): IndexMaterials {
@@ -207,7 +249,122 @@ export class Mesh {
       files: light.files.filter(file => file.rel !== PLAN_FILE).map(file => ({ path: file.rel, updatedAt: file.mtime, heading: firstHeading(file.abs) })),
       counts: light.counts,
       timezone: light.timezone,
+      map: light.map,
+      glossary: light.glossary,
+      unlisted: light.unlisted,
     };
+  }
+
+  #mapRows(dir: string): ReturnType<typeof parseMap> | undefined {
+    const file = join(dir, MAP_FILE);
+    return regular(file) ? parseMap(readFileSync(file, 'utf8')) : undefined;
+  }
+
+  #mapSummary(projectId: string, dir: string): { map: MapSummary | null; unlisted: string[] | null } {
+    const parsed = this.#mapRows(dir);
+    const fresh = this.#fresh.get(projectId);
+    const rows = parsed?.rows ?? [];
+    const count = (mark: 'missing' | 'stale') => rows.filter(row => fresh?.marks.get(row.path) === mark).length;
+    const map = parsed ? { parts: rows.length, stale: count('stale'), missing: count('missing'), unreadable: parsed.unreadable } : null;
+    return { map, unlisted: fresh ? unlisted(fresh.scan.folders, rows) : null };
+  }
+
+  get #dataDir(): string { return dirname(this.#d.projectsDir); }
+
+  #root(projectId: string): string | undefined {
+    const project = this.#d.projects?.get(projectId);
+    return project && project.archived_at === null && !folderMissing(project) ? project.root : undefined;
+  }
+
+  refreshMap(projectId: string, root = this.#root(projectId)): Promise<void> {
+    if (!root) return Promise.resolve();
+    const before = this.#refreshing.get(projectId) ?? Promise.resolve();
+    const writes = this.#writes.get(projectId) ?? 0;
+    const job: Promise<void> = before.then(() => scanFolders(root, this.#dataDir)).then(scan => {
+      if ((this.#writes.get(projectId) ?? 0) === writes) this.#fresh.set(projectId, this.#freshFrom(projectId, root, scan));
+    }).catch(error => { this.#d.log?.(`[WARN] Could not check the map of product ${projectId}: ${(error as Error).message}`); }).finally(() => { if (this.#refreshing.get(projectId) === job) this.#refreshing.delete(projectId); });
+    this.#refreshing.set(projectId, job);
+    return job;
+  }
+
+  #refreshSoon(projectId: string): void {
+    const fresh = this.#fresh.get(projectId);
+    const now = this.#d.now?.() ?? Date.now();
+    if (this.#refreshing.has(projectId) || (fresh && now - fresh.at < REFRESH_MS)) return;
+    void this.refreshMap(projectId);
+  }
+
+  #freshFrom(projectId: string, root: string, scan: FolderScan): MapFresh {
+    const rows = this.#mapRows(this.#dir(projectId))?.rows ?? [];
+    const marks = new Map<string, 'missing' | 'stale'>();
+    for (const row of rows) {
+      if (!folderExists(root, row.path) || (row.entry !== null && !fileInside(root, row.path, row.entry))) { marks.set(row.path, 'missing'); continue; }
+      if (row.at?.startsWith('dir:')) { if (listingHash(root, row.path) !== row.at.slice(4)) marks.set(row.path, 'stale'); continue; }
+      if (row.at?.startsWith('git:') && scan.mode === 'git' && (scan.hashes.get(row.path) ?? EMPTY_HASH) !== row.at.slice(4)) marks.set(row.path, 'stale');
+    }
+    return { scan, marks, at: this.#d.now?.() ?? Date.now() };
+  }
+
+  async setMapRow(projectId: string, root: string, input: { path: string; what: string; entry?: string | undefined }, writer: Writer): Promise<string> {
+    const scan = await scanFolders(root, this.#dataDir);
+    const dir = this.#dir(projectId);
+    const file = join(dir, MAP_FILE);
+    const existing = readOwn(file, MAP_FILE);
+    const path = cleanRelPath(input.path);
+    if (!path || !scan.folders.includes(path)) {
+      const open = unlisted(scan.folders, parseMap(existing ?? '').rows);
+      const more = open.length > LISTED_IN_ERROR ? ` and ${open.length - LISTED_IN_ERROR} more` : '';
+      throw new MeshWriteError('map_bad_path', { path: scrubText(input.path, 80), folders: open.length ? `${open.slice(0, LISTED_IN_ERROR).join(', ')}${more}` : '-' });
+    }
+    const asked = input.entry?.trim() ? input.entry : undefined;
+    const entry = asked === undefined ? null : cleanRelPath(asked) ?? null;
+    if (asked !== undefined && (entry === null || !fileInside(root, path, entry))) throw new MeshWriteError('map_bad_entry', { entry: scrubText(asked, 80), path });
+    const what = cleanWhat(input.what, entry);
+    const length = Array.from(mapContent({ path, what, entry })).length;
+    if (length > MAP_LINE_MAX) throw new MeshWriteError('map_too_long', { path, length, max: MAP_LINE_MAX });
+    const hash = scan.mode === 'git' ? null : listingHash(root, path);
+    const at = scan.mode === 'git' ? `git:${scan.hashes.get(path) ?? EMPTY_HASH}` : hash ? `dir:${hash}` : null;
+    const row: MapRow = { path, what, entry, by: writer.by, at, external: writer.external };
+    const { content } = upsertMap(existing, row);
+    mkdirSync(dir, { recursive: true });
+    if (existing !== undefined) this.#backupAs(projectId, 'map', existing);
+    replaceFile(file, content);
+    this.#writes.set(projectId, (this.#writes.get(projectId) ?? 0) + 1);
+    this.#fresh.set(projectId, this.#freshFrom(projectId, root, scan));
+    return path;
+  }
+
+  setGlossary(projectId: string, root: string, input: { term: string; points_to: string }, writer: Writer): string {
+    const term = cleanTerm(input.term);
+    const rel = cleanRelPath(input.points_to);
+    let target = rel && !dotted(rel) && pathExists(root, rel) ? rel : undefined;
+    if (!target && !(rel && dotted(rel))) {
+      try {
+        const found = this.#resolve(projectId, input.points_to);
+        if (cleanRelPath(found.rel) === found.rel) target = `[${found.rel}](${found.rel})`;
+      } catch { target = undefined; }
+    }
+    if (!target) throw new MeshWriteError('glossary_bad_target', { target: scrubText(input.points_to, 80) });
+    const length = Array.from(glossaryContent({ term, target })).length;
+    if (length > GLOSSARY_LINE_MAX) throw new MeshWriteError('glossary_too_long', { length, max: GLOSSARY_LINE_MAX });
+    const dir = this.#dir(projectId);
+    const file = join(dir, GLOSSARY_FILE);
+    const existing = readOwn(file, GLOSSARY_FILE);
+    const { content } = upsertGlossary(existing, { term, target, by: writer.by, external: writer.external });
+    mkdirSync(dir, { recursive: true });
+    if (existing !== undefined) this.#backupAs(projectId, 'glossary', existing);
+    replaceFile(file, content);
+    return term;
+  }
+
+  #backupAs(projectId: string, kind: 'map' | 'glossary', content: string): void {
+    const dir = join(this.#d.backupsDir, 'mesh', projectId);
+    mkdirSync(dir, { recursive: true });
+    const now = this.#d.now?.() ?? Date.now();
+    writeFileSync(join(dir, `${kind}-${String(now).padStart(15, '0')}-${randomBytes(3).toString('hex')}.md`), content);
+    const ring = new RegExp(`^${kind}-\\d+-[0-9a-f]+\\.md$`, 'u');
+    const kept = readdirSync(dir).filter(name => ring.test(name)).sort();
+    for (const name of kept.slice(0, Math.max(0, kept.length - STATE_BACKUPS))) rmSync(join(dir, name), { force: true });
   }
 
   #status(projectId: string, light: Light): string[] {
@@ -230,6 +387,7 @@ export class Mesh {
   }
 
   persist(projectId: string): void {
+    try { this.#refreshSoon(projectId); } catch (error) { this.#d.log?.(`[WARN] Could not check the map of product ${projectId}: ${(error as Error).message}`); }
     try {
       let light = this.#light(projectId);
       if (this.#persisted.get(projectId) === light.key) return;
@@ -286,7 +444,13 @@ export class Mesh {
       const view = this.#d.plans.view(projectId);
       return { rel: PLAN_FILE, lines: (view.content ?? '').split(/\r?\n/u), mtime, fetched: view.tainted || view.updated_by === 'outside' };
     }
-    return { rel, lines: readFileSync(abs, 'utf8').split(/\r?\n/u), mtime, fetched: false };
+    const lines = readFileSync(abs, 'utf8').split(/\r?\n/u);
+    const marks = rel === MAP_FILE ? this.#fresh.get(projectId)?.marks : undefined;
+    if (marks?.size) {
+      const parsed = parseMap(lines.join('\n'));
+      parsed.rows.forEach((row, i) => { const mark = marks.get(row.path); if (mark) lines[parsed.at[i]!] += ` [${mark}]`; });
+    }
+    return { rel, lines, mtime, fetched: false };
   }
 
   #known(projectId: string): string[] {
