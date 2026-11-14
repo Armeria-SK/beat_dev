@@ -88,7 +88,7 @@ export class NotifyChannels {
     const channel = config.notify.channels.find(c => c.id === id);
     if (!channel) return undefined;
     const now = this.#o.now();
-    const n: NotifyEvent = { id: 0, kind: 'info', title: notifyText(languageOf(config), 'test'), body: null, link: null, dedup_key: null, read_at: null, created_at: now };
+    const n: NotifyEvent = { id: 0, kind: 'info', title: notifyText(languageOf(config), 'test'), body: null, link: null, dedup_key: null, read_at: null, created_at: now, project_id: null, action: null };
     return this.#send(config, channel, n);
   }
 
