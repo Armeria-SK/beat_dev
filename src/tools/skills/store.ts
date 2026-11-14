@@ -14,7 +14,7 @@ const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
 export interface Skill { name: string; description: string; body: string; uses: number; lastUsedAt: number | null; updatedAt: number; registered: boolean }
 export type SkillSource = 'approved' | 'owner' | 'upgrade';
 export interface SkillDraft {
-  id: number; name: string; description: string; body: string; reason: string | null;
+  id: number; name: string; description: string; body: string; reason: string | null; change_summary: string | null;
   status: 'pending' | 'approved' | 'rejected'; conversation_id: string | null; run_id: string | null; created_at: number; decided_at: number | null;
 }
 
@@ -271,15 +271,15 @@ export class SkillStore {
     this.#db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(AUTO_LOG_KEY, JSON.stringify(recent), now);
   }
 
-  draft(input: { name: string; description: string; body: string; reason?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean }): SkillDraft {
+  draft(input: { name: string; description: string; body: string; reason?: string | undefined; change?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean }): SkillDraft {
     validate(input);
     const pending = this.#db.prepare("SELECT COUNT(*) AS n FROM skill_drafts WHERE status = 'pending'").get() as { n: number };
     if (pending.n >= 20) throw new SkillError('skill.too_many_drafts');
     // 同じ名前の承認待ちは、新しいもので置き換える（古い方は却下扱い）
     const now = this.#now();
     this.#db.prepare("UPDATE skill_drafts SET status = 'rejected', decided_at = ? WHERE name = ? AND status = 'pending'").run(now, input.name);
-    const result = this.#db.prepare('INSERT INTO skill_drafts (name, description, body, reason, conversation_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(input.name, input.description.trim(), input.body.trim(), input.reason?.trim() || null, input.conversationId ?? null, input.runId ?? null, now);
+    const result = this.#db.prepare('INSERT INTO skill_drafts (name, description, body, reason, change_summary, conversation_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(input.name, input.description.trim(), input.body.trim(), input.reason?.trim() || null, input.change?.trim() || null, input.conversationId ?? null, input.runId ?? null, now);
     const id = Number(result.lastInsertRowid);
     if (input.autoOk === true && this.autoRegister?.() === true) {
       try { if (this.#autoQuotaLeft(now)) { this.approve(id, 'beat-auto'); this.#countAuto(now); } } catch (error) { this.#log(`[WARN] Could not register skill "${input.name}" without review, so it waits as a draft: ${(error as Error).message}`); }
