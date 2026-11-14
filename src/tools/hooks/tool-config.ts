@@ -4,7 +4,7 @@
 
 import { lstatSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 import { isInside, isRemotePath } from './scope.ts';
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -83,16 +83,29 @@ const MAX_RC_BYTES = 1_048_576;
 const MAX_RC_LINK_HOPS = 40;
 
 // 空の行・# のコメントだけなら、読まれても何も変わらない
+function withoutLinks(file: string): string | undefined {
+  const abs = resolve(file);
+  let current = parse(abs).root;
+  const rest = abs.slice(current.length).split(/[\\/]/u).filter(Boolean);
+  let hops = 0;
+  while (rest.length > 0) {
+    const next = join(current, rest.shift()!);
+    if (!lstatSync(next).isSymbolicLink()) { current = next; continue; }
+    if (++hops > MAX_RC_LINK_HOPS) return undefined;
+    const stored = readlinkSync(next);
+    const target = resolve(current, stored);
+    if (isRemotePath(stored) || isRemotePath(target)) return undefined;
+    current = parse(target).root;
+    rest.unshift(...target.slice(current.length).split(/[\\/]/u).filter(Boolean));
+  }
+  return current;
+}
+
 function hasSettings(file: string): boolean {
   if (isRemotePath(file)) return true;
   try {
-    let target = file;
-    for (let hops = 0; lstatSync(target).isSymbolicLink(); hops++) {
-      if (hops >= MAX_RC_LINK_HOPS) return true;
-      const stored = readlinkSync(target);
-      target = resolve(dirname(target), stored);
-      if (isRemotePath(stored) || isRemotePath(target)) return true;
-    }
+    const target = withoutLinks(file);
+    if (target === undefined) return true;
     const st = statSync(target);
     if (!st.isFile()) return false;
     if (st.size > MAX_RC_BYTES) return true;

@@ -359,7 +359,8 @@ test('設定ファイルがリンクで、先がネットワークの場所な�
   mkdirSync(cwd, { recursive: true });
   const link = join(cwd, '.npmrc');
   const hop = join(cwd, 'hop');
-  const targets = new Map([[link, 'hop'], [hop, '//evil-host/share/npmrc']]);
+  const folder = join(cwd, 'shared');
+  const targets = new Map([[link, 'hop'], [hop, '//evil-host/share/npmrc'], [folder, '//evil-host/share/folder']]);
   const touched: string[] = [];
   const fake = { isSymbolicLink: () => true, isFile: () => false, isDirectory: () => false, size: 0 };
   for (const name of ['lstatSync', 'readlinkSync', 'statSync', 'readFileSync'] as const) {
@@ -377,5 +378,6 @@ test('設定ファイルがリンクで、先がネットワークの場所な�
   }
   syncBuiltinESMExports();
   assert.equal(npmProjectConfigFile(cwd, { HOME: join(base, 'home') }), link);
+  assert.equal(npmProjectConfigFile(join(folder, 'app'), { HOME: join(base, 'home') }), join(folder, 'app', '.npmrc'), '途中のフォルダがリンクのときも同じ');
   assert.deepEqual(touched, []);
 });
