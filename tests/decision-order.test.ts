@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -891,4 +891,92 @@ test('p4-build-judge P1-2（bash）: 環境変数を前に置いた node --test 
 
 test('p4-build-judge P1-3: list.node_test は順 4', () => {
   assert.equal(REASON_ORDER.get('list.node_test'), 4);
+});
+
+const fwd = (path: string): string => path.replace(/\\/gu, '/');
+const linkDir = (target: string, path: string): void => symlinkSync(target, path, WIN ? 'junction' : 'dir');
+const OUTSIDE_GIT: Record<string, (nested: string, outside: string) => void> = {
+  gitdirOutside: (nested, outside) => { initRepo(outside); mkdirSync(nested, { recursive: true }); writeFileSync(join(nested, '.git'), `gitdir: ${fwd(join(outside, '.git'))}\n`); },
+  gitLinkOutside: (nested, outside) => { initRepo(outside); mkdirSync(nested, { recursive: true }); linkDir(join(outside, '.git'), join(nested, '.git')); },
+  commonDirOutside: (nested, outside) => {
+    initRepo(outside);
+    mkdirSync(join(nested, '.git'), { recursive: true });
+    writeFileSync(join(nested, '.git', 'HEAD'), readFileSync(join(outside, '.git', 'HEAD'), 'utf8'));
+    writeFileSync(join(nested, '.git', 'commondir'), `${fwd(join(outside, '.git'))}\n`);
+  },
+  gitDirOutsideCommonInside: (nested, outside) => {
+    initRepo(outside);
+    initRepo(join(nested, '..', 'inner'));
+    mkdirSync(join(outside, 'gd'), { recursive: true });
+    writeFileSync(join(outside, 'gd', 'HEAD'), readFileSync(join(nested, '..', 'inner', '.git', 'HEAD'), 'utf8'));
+    writeFileSync(join(outside, 'gd', 'commondir'), fwd(join(nested, '..', 'inner', '.git')) + '\n');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, '.git'), 'gitdir: ' + fwd(join(outside, 'gd')) + '\n');
+  },
+  linkedWorktree: (nested, outside) => { initRepo(outside); git(outside, 'worktree', 'add', '-q', '-b', 'wt', nested); },
+};
+
+test('p4-build-judge D1: git の置き場（.git のファイルの gitdir・リンク・commondir・ほかのリポジトリの worktree）が製品の外にあるフォルダの git add / git commit は、cwd の綴りでも判定役を飛ばさない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const leaked: string[] = [];
+  for (const [name, build] of Object.entries(OUTSIDE_GIT)) {
+    for (const command of ['git add -A', 'git add n.txt', 'git commit -m x']) {
+      const r = rig(t);
+      initRepo(r.root);
+      const nested = join(r.root, 'nested');
+      const outside = join(r.paths.workspace, 'other');
+      build(nested, outside);
+      assert.match(spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: nested, encoding: 'utf8' }).stdout, /nested/u, `${name}: git はこのフォルダをリポジトリとして読める`);
+      writeFileSync(join(nested, 'n.txt'), 'x');
+      if (command.includes('commit')) spawnSync('git', ['add', 'n.txt'], { cwd: nested });
+      const before = commits(outside);
+      r.judge.answer = '{"decision":"ask","reason":"check"}';
+      const outcome = await r.call('shell_run', { command, cwd: nested });
+      if (outcome.decidedBy === 'product-git' || outcome.decidedBy === 'product-code') leaked.push(`${name}: ${command} -> ${outcome.decidedBy}`);
+      if (commits(outside) !== before) leaked.push(`${name}: ${command} -> 製品の外のリポジトリにコミットが増えた`);
+    }
+  }
+  assert.deepEqual(leaked, [], '判定役を飛ばした形');
+});
+
+test('p4-build-judge D1: 製品のリポジトリ（.git のフォルダが製品の中）と、製品の中の入れ子のリポジトリは今までどおり product-git', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  initRepo(join(r.root, 'nested'));
+  mkdirSync(join(r.root, 'store'), { recursive: true });
+  mkdirSync(join(r.root, 'pointed'), { recursive: true });
+  git(join(r.root, 'store'), 'init', '-q', '--separate-git-dir', join(r.root, 'store-git'), join(r.root, 'pointed'));
+  git(join(r.root, 'pointed'), 'config', 'user.name', 'beat test');
+  git(join(r.root, 'pointed'), 'config', 'user.email', 'beat@test.invalid');
+  for (const dir of ['.', 'nested', 'pointed']) {
+    const cwd = join(r.root, dir);
+    writeFileSync(join(cwd, 'n.txt'), 'x');
+    const added = await r.call('shell_run', { command: 'git add n.txt', cwd });
+    assert.equal(added.decidedBy, 'product-git', `${dir}: ${added.output.content}`);
+    const committed = await r.call('shell_run', { command: 'git commit -m n', cwd });
+    assert.equal(committed.decidedBy, 'product-git', `${dir}: ${committed.output.content}`);
+    assert.match(git(cwd, 'log', '-1', '--format=%s'), /^n/u, dir);
+  }
+  assert.equal(r.judge.calls.length, 0);
+});
+
+test('p4-build-judge D1: GIT_DIR・GIT_COMMON_DIR・GIT_WORK_TREE を文の前や前の文で置いた git add は判定役を飛ばさない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const shells = [...(WIN ? [undefined] : []), ...(bashAvailable ? ['bash' as const] : [])];
+  const leaked: string[] = [];
+  for (const shell of shells) {
+    for (const name of ['GIT_DIR', 'GIT_COMMON_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY']) {
+      const forms = shell === 'bash'
+        ? [`${name}=../other/.git git add -A`, `export ${name}=../other/.git; git add -A`, `${name}=../other/.git; export ${name}; git add -A`, `env ${name}=../other/.git git add -A`]
+        : [`$env:${name}='../other/.git'; git add -A`, `Set-Item env:${name} '../other/.git'; git add -A`, `[Environment]::SetEnvironmentVariable('${name}','../other/.git'); git add -A`];
+      for (const command of forms) {
+        const r = rig(t, shell ? { mutate: c => { c.tools.shell.shell = shell; } } : {});
+        initRepo(r.root);
+        initRepo(join(r.paths.workspace, 'other'));
+        writeFileSync(join(r.root, 'n.txt'), 'x');
+        r.judge.answer = '{"decision":"ask","reason":"check"}';
+        const outcome = await r.shell(command);
+        if (outcome.decidedBy === 'product-git' || outcome.decidedBy === 'product-code') leaked.push(`${shell ?? 'default'}: ${command} -> ${outcome.decidedBy}`);
+      }
+    }
+  }
+  assert.deepEqual(leaked, [], '判定役を飛ばした形');
 });

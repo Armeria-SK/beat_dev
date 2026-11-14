@@ -152,6 +152,11 @@ function secretToAdd(st: StatementFacts, git: ProductRunInput['git']): string | 
   return undefined;
 }
 
+function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
+  const places = git(dir, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'])?.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  return places?.length === 3 && places.every(place => inside(root, resolve(dir, place)));
+}
+
 export function productRunOf(input: ProductRunInput): ProductRunResult {
   const { root, verdict, which, git } = input;
   if (verdict.decision !== 'ask' || !verdict.statements.length) return undefined;
@@ -191,8 +196,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     if (st.gitGlobal.length > 0 || rerouted || ![...own].every(key => key === 'list.git_commit')) return undefined;
     const sub = st.words[1]?.text;
     if (sub !== 'add' && sub !== 'commit') return undefined;
-    const top = git(st.cwd!, ['rev-parse', '--show-toplevel'])?.trim();
-    if (!top || !inside(root, resolve(top))) return undefined;
+    if (!repoInside(st.cwd!, root, git)) return undefined;
     if (sub === 'commit' && st.words.slice(2).some(w => !w.dynamic && (sanitizeModelInputText(w.text).redaction_count > 0 || AWS_KEY.test(w.text)))) return { secretMessage: true };
     if (input.ownerHooks?.() !== false) return undefined;
     if (sub === 'add' && namesFilesOnly(st)) {
