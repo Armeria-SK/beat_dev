@@ -138,7 +138,7 @@ test('線の判定: 効いた・3 問の境目・作ったパスの半分の境�
   assert.equal(compareSets(base, setSummary({ correct: 2, madeUp: 10 }), { base: 1000, next: 1300 }).verdict, 'harm: correct fell, made-up paths rose, tokens 1.3x');
   const zero = compareSets(base, setSummary({ correct: 6, madeUp: 0 }), { base: 0, next: 100 });
   assert.deepEqual([zero.tokenRatio, zero.verdict], [null, 'n/a: no base request size']);
-  assert.equal(compareSets(base, setSummary({ correct: 6, madeUp: 0, failed: 2 }), sizes).verdict, 'n/a: 2 failed calls');
+  assert.equal(compareSets(base, setSummary({ correct: 6, madeUp: 0, failed: 2 }), sizes).verdict, 'n/a: 2 failed questions');
   assert.equal(compareSets(setSummary({ correct: 10, madeUp: 0 }), setSummary({ correct: 11, madeUp: 0 }), sizes, 'beats').verdict, 'beats the base');
   assert.equal(compareSets(setSummary({ correct: 10, madeUp: 0 }), setSummary({ correct: 10, madeUp: 0 }), sizes, 'beats').verdict, 'does not beat the base: drop the map');
 });
@@ -192,5 +192,5 @@ test('相手に届かないモデルでも最後まで走り、どの問いも�
   assert.match(result.notes.join('\n'), /compaction failed/u);
   const report = renderReport(result.rows, { title: 'Mesh probe', notes: result.notes, requests: { [model.id]: result.request } });
   assert.match(report, /^\| fake-model \| c \| 0 \/ 12 .*\| 0 \/ n\/a \| n\/a \| \d+ \(\d+ \+ \d+\) \| 12 \|$/mu);
-  assert.match(report, /\| fake-model \| a -> c \| 0 \| 0 -> 0 \| [\d.]+ \| n\/a: 24 failed calls \|/u);
+  assert.match(report, /\| fake-model \| a -> c \| 0 \| 0 -> 0 \| [\d.]+ \| n\/a: 24 failed questions \|/u);
 });

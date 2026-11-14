@@ -366,7 +366,7 @@ export function compareSets(base: SetSummary, next: SetSummary, request: { base:
   const moreCorrect = next.correct - base.correct;
   const madeUp = `${base.madeUp} -> ${next.madeUp}`;
   const tokenRatio = request.base > 0 ? Math.round((request.next / request.base) * 100) / 100 : null;
-  if (base.failed || next.failed) return { moreCorrect, madeUp, tokenRatio, verdict: `n/a: ${base.failed + next.failed} failed calls` };
+  if (base.failed || next.failed) return { moreCorrect, madeUp, tokenRatio, verdict: `n/a: ${base.failed + next.failed} failed questions` };
   if (tokenRatio === null) return { moreCorrect, madeUp, tokenRatio, verdict: 'n/a: no base request size' };
   const harms = [
     ...(moreCorrect < 0 ? ['correct fell'] : []),
