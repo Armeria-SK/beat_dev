@@ -251,6 +251,39 @@ export function winArgs(name: string, words: readonly Word[], ext: string, acc: 
   }
 }
 
+const START_PROCESS = new Set(['start-process', 'saps', 'start']);
+const START_PARAMS = ['filepath', 'argumentlist', 'workingdirectory', 'verb', 'windowstyle', 'wait', 'passthru', 'nonewwindow', 'redirectstandardinput', 'redirectstandardoutput', 'redirectstandarderror', 'credential', 'loaduserprofile', 'usenewenvironment', 'environment'];
+const START_SWITCHES = new Set(['wait', 'passthru', 'nonewwindow', 'loaduserprofile', 'usenewenvironment']);
+const isCmdExe = (t: string): boolean => /^cmd(?:\.exe)?$/iu.test(t.replace(/^.*[\\/]/u, '').replace(/[ .]+$/u, ''));
+
+export function cmdHostArgs(name: string, words: readonly Word[], cmdTarget: (t: string) => boolean, acc: Acc): void {
+  const deny = (w: Word) => acc.add('deny', 'list.winargs', { detail: `${name}: ${w.text}` }, false);
+  if (isCmdExe(name)) {
+    const w = words.slice(1).find(x => x.dynamic);
+    if (w) deny(w);
+    return;
+  }
+  if (!START_PROCESS.has(name.toLowerCase())) return;
+  let file: Word | undefined;
+  const list: Word[] = [];
+  const positional: Word[] = [];
+  let mode: 'file' | 'args' | 'skip' | undefined;
+  for (const w of words.slice(1)) {
+    const m = !w.dynamic && !w.quoted ? /^-([A-Za-z]+):?$/u.exec(w.text) : null;
+    const param = m ? START_PARAMS.find(p => p.startsWith(m[1]!.toLowerCase())) : undefined;
+    if (param) { mode = param === 'filepath' ? 'file' : param === 'argumentlist' ? 'args' : START_SWITCHES.has(param) ? undefined : 'skip'; continue; }
+    if (mode === 'file') { file = w; mode = undefined; continue; }
+    if (mode === 'args') { list.push(w); continue; }
+    if (mode === 'skip') { mode = undefined; continue; }
+    positional.push(w);
+  }
+  if (!file) file = positional.shift();
+  if (list.length === 0) list.push(...positional);
+  if (!file || !(file.dynamic || isCmdExe(file.text) || cmdTarget(file.text))) return;
+  const w = list.find(x => x.dynamic || /[&|<>^%!]/u.test(x.text));
+  if (w) deny(w);
+}
+
 // ── PowerShell だけの外部: findstr・where.exe・tree.com・whoami・hostname・ipconfig ──
 export function runFindstr(words: Word[], acc: Acc, ctx: MatchCtx): void {
   const flags = flagMap('/s /i /n /r /l /m /v /x /b /e /o /c:s /f:path-r /g:path-r /d:s', true);
