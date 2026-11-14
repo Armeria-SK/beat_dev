@@ -200,16 +200,20 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
   let autoWhy: string | undefined;
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
-    const output = capOutput(outcome.output, language, ctx.outputTokens);
+    const capped = capOutput(outcome.output, language, ctx.outputTokens);
     const gate: ToolGate | undefined = outcome.decidedBy === 'pending' && approvalId?.startsWith('pending:') ? { by: 'pending', id: Number(approvalId.slice('pending:'.length)) }
       : outcome.decidedBy === 'not-parked' ? { by: 'not-parked' }
       : outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' && autoWhy !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300) }
       : undefined;
-    deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    const tagged = ctx.kind === 'task' ? 1 : 0;
+    const row = deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, evidence_no, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN (SELECT COALESCE(MAX(evidence_no), 0) + 1 FROM tool_calls WHERE conversation_id = ? AND evidence_no IS NOT NULL) END, ?)
+      RETURNING evidence_no`).get(
       id, ctx.runId, ctx.conversationId, call.name, shownInput, outcome.decision, outcome.decidedBy, approvalId ?? null,
-      output.isError ? 0 : 1, Date.now() - started, output.content.slice(0, 2000), output.fullRef ?? null, started,
-    );
+      capped.isError ? 0 : 1, Date.now() - started, capped.content.slice(0, 2000), capped.fullRef ?? null, tagged, ctx.conversationId, started,
+    ) as { evidence_no: number | null } | undefined;
+    const evidenceNo = row?.evidence_no ?? null;
+    const output: ToolOutput = evidenceNo === null ? capped : { ...capped, content: `${capped.content}\n[E-${evidenceNo}]` };
     deps.emit({ type: 'tool.result', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, ok: !output.isError, decision: outcome.decision, preview: output.content.slice(0, 1500), ...(gate ? { gate } : {}) });
     return { ...outcome, output, ...(gate ? { gate } : {}) };
   };
