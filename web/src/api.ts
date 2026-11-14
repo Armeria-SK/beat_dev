@@ -270,7 +270,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
   });
-  const body = await res.json().catch(() => ({}));
+  const body = await res.json().catch((error: unknown) => { if (init.signal?.aborted) throw error; return {}; });
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;
 }
