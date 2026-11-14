@@ -28,7 +28,7 @@ test('appendDelta: 足す書き込みは前の中身と突き合わせず数え�
   for (const [before, appended] of cases) assert.deepEqual(appendDelta(before, appended), lineDelta(before, before + appended), JSON.stringify([before, appended]));
 });
 
-test('lineDiff: 前と後の行を、同じ・足した・消したで並べる（順を保ち、行の足し引きの数は lineDelta と同じ）', () => {
+test('lineDiff: 前と後の行を、順を保って同じ・足した・消したで並べる（この例では印の数が lineDelta と同じ）', () => {
   const before = '1. Fetch wttr.in\n2. Read the days\n3. Answer\n';
   const after = '1. Fetch wttr.in\n2. For next week, open the 10-day page\n2. Read the days\n3. Answer with the source\n';
   const diff = lineDiff(before, after);
@@ -53,4 +53,21 @@ test('lineDiff: とても長い前後は突き合わせを省き、前を全部�
   assert.equal(diff.length, 4202);
   assert.equal(diff.some(line => line.kind === 'same'), false, '同じ行があっても突き合わせない');
   assert.deepEqual([diff[0], diff[2100], diff[2101]], [{ kind: 'del', text: 'old 0' }, { kind: 'del', text: 'shared' }, { kind: 'add', text: 'shared' }]);
+});
+
+test('lineDiff: 前後で同じ頭と尻の行は先に除くので、上限を超える長さでも同じ・ほぼ同じ本文は全部変わった扱いにならない', () => {
+  const body = Array.from({ length: 2100 }, (_, i) => `step ${i}`);
+  const same = lineDiff(body.join('\n'), body.join('\n'));
+  assert.equal(same.length, 2100);
+  assert.equal(same.every(line => line.kind === 'same'), true);
+  const changed = [...body];
+  changed[1000] = 'step 1000, then check the result';
+  const near = lineDiff(body.join('\n'), changed.join('\n'));
+  assert.deepEqual(near.filter(line => line.kind !== 'same'), [{ kind: 'del', text: 'step 1000' }, { kind: 'add', text: 'step 1000, then check the result' }]);
+  assert.equal(near.length, 2101);
+});
+
+test('lineDiff と lineDelta: 行を入れ替えただけのとき、差分には印が付くが、行の足し引きは 0（画面の数は lineDelta で出す）', () => {
+  assert.deepEqual(lineDiff('A\nB', 'B\nA'), [{ kind: 'del', text: 'A' }, { kind: 'same', text: 'B' }, { kind: 'add', text: 'A' }]);
+  assert.deepEqual(lineDelta('A\nB', 'B\nA'), { added: 0, removed: 0 });
 });

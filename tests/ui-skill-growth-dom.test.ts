@@ -83,3 +83,10 @@ test('スキルの成長（DOM）: change も理由も無い直す下書きは�
   const fresh = await show({ ...base, current: null });
   assert.equal(fresh.querySelector('.bt-diff'), null);
 });
+
+test('スキルの成長（DOM）: 差分の頭の数は行の +n −n と同じ数え方（行を入れ替えただけなら +0 −0）', async () => {
+  const container = await show({ ...base, change_summary: CHANGE, current: { description: base.description, body: 'A\nB' }, body: 'B\nA' });
+  await click(byText(container, 'button', 'Show the whole skill'));
+  assert.equal(container.querySelector('.bt-diff__file')?.textContent, 'Steps · registered → draft+0 −0');
+  assert.equal(container.querySelectorAll('.bt-diff__line--add').length, 1);
+});

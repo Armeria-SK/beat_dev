@@ -27,6 +27,7 @@
 .ui-lib__detail { margin: var(--space-4) 0 var(--space-2); }
 .ui-lib__growth { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin: var(--space-3) 0; }
 .ui-lib__diff { margin: 0 0 var(--space-3); }
+.ui-lib__diff .bt-diff__line { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-lib__growthtext { margin: 0; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; }
 .ui-lib__widen { justify-content: flex-start; padding: var(--space-2) 0; }
 .ui-lib__table tbody tr.ui-lib__logrow { cursor: pointer; }

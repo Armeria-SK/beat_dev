@@ -222,9 +222,8 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
 
 function DraftDiff({ before, after }: { before: string; after: string }) {
   const t = useT();
-  const lines = lineDiff(before, after);
-  const added = lines.filter(line => line.kind === 'add').length;
-  const removed = lines.filter(line => line.kind === 'del').length;
+  const lines = useMemo(() => lineDiff(before, after), [before, after]);
+  const { added, removed } = useMemo(() => lineDelta(before, after), [before, after]);
   return (
     <div className="bt-diff ui-lib__diff">
       <div className="bt-diff__file"><span>{t('ui.skills.diff')}</span><span><span className="bt-add">+{added}</span> <span className="bt-del">−{removed}</span></span></div>

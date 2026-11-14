@@ -35,8 +35,17 @@ export interface DiffLine { kind: 'same' | 'add' | 'del'; text: string }
 const DIFF_CELLS = 4_000_000;
 
 export function lineDiff(before: string, after: string): DiffLine[] {
-  const a = lines(before);
-  const b = lines(after);
+  const all = lines(before);
+  const next = lines(after);
+  let head = 0;
+  while (head < all.length && head < next.length && all[head] === next[head]) head++;
+  let tail = 0;
+  while (tail < all.length - head && tail < next.length - head && all[all.length - 1 - tail] === next[next.length - 1 - tail]) tail++;
+  const same = (text: string): DiffLine => ({ kind: 'same', text });
+  return [...all.slice(0, head).map(same), ...middleDiff(all.slice(head, all.length - tail), next.slice(head, next.length - tail)), ...all.slice(all.length - tail).map(same)];
+}
+
+function middleDiff(a: string[], b: string[]): DiffLine[] {
   if (a.length * b.length > DIFF_CELLS) return [...a.map((text): DiffLine => ({ kind: 'del', text })), ...b.map((text): DiffLine => ({ kind: 'add', text }))];
   const width = b.length + 1;
   const common = new Uint32Array((a.length + 1) * width);
