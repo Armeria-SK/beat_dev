@@ -7,7 +7,7 @@ import { probeMessage, serverText } from '../../server-text.ts';
 import type { Access } from '../../settings/access.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvPatch, keyEnvProblem, keyEnvUnsafe, kindPatch, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, keyEnvPatch, keyEnvProblem, keyEnvUnsafe, kindPatch, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -60,7 +60,7 @@ function OrderList({ k, ids, label, models, onChange }: { k: string; ids: readon
   );
 }
 
-function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boolean; onToggle: () => void }) {
+function ProviderRow({ provider, open, onToggle, onRenamed }: { provider: Json; open: boolean; onToggle: () => void; onRenamed: (id: string) => void }) {
   const t = useT();
   const ctx = useSet();
   const id = provider.id as string;
@@ -124,7 +124,7 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
     const slug = slugId(text, 'provider');
     if (!slug) { ctx.fail(k, t('ui.set.id.none')); return; }
     const next = uniqueSlug(slug, (ctx.config.providers as Json[]).map(p => p.id as string).filter(x => x !== id), 'provider');
-    if (next !== id) void ctx.commit(k, c => renameProvider(c, id, next));
+    if (next !== id) void ctx.commit(k, c => renameProvider(c, id, next)).then(ok => { if (ok) onRenamed(next); });
   };
   const inUse = providerInUse(ctx.config, id);
   const canKey = line === 'none' || line === 'set' || line === 'failed';
@@ -226,7 +226,7 @@ function AddProvider({ onDone }: { onDone: () => void }) {
   );
 }
 
-function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boolean; onToggle: () => void; probing: boolean }) {
+function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; open: boolean; onToggle: () => void; onRenamed: (id: string) => void; probing: boolean }) {
   const t = useT();
   const ctx = useSet();
   const id = model.id as string;
@@ -240,7 +240,7 @@ function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boole
     const slug = slugId(text, 'model');
     if (!slug) { ctx.fail(k, t('ui.set.id.none')); return; }
     const next = uniqueSlug(slug, (ctx.config.models as Json[]).map(m => m.id as string).filter(x => x !== id), 'model');
-    if (next !== id) void ctx.commit(k, c => renameModel(c, id, next));
+    if (next !== id) void ctx.commit(k, c => renameModel(c, id, next)).then(ok => { if (ok) onRenamed(next); });
   };
   const providers: Option<string>[] = (ctx.config.providers as Json[]).map(p => ({ value: p.id as string, label: p.id as string }));
   const status = probing ? t('ui.set.models.checking') : probe ? probeMessage(probe, getLanguage()) || probe.status : t('ui.set.models.unchecked');
@@ -335,14 +335,14 @@ export function ModelsPanel() {
   return (
     <>
       <Group title={t('ui.set.models.providers')}>
-        {providers.map(p => <ProviderRow key={p.id as string} provider={p} open={open === `p:${p.id}`} onToggle={() => toggle(`p:${p.id}`)} />)}
+        {providers.map(p => <ProviderRow key={p.id as string} provider={p} open={open === `p:${p.id}`} onToggle={() => toggle(`p:${p.id}`)} onRenamed={next => setOpen(now => openAfterRename(now, `p:${p.id}`, `p:${next}`))} />)}
         <Row k="provider:add" title={t('ui.set.provider.add')} desc={t('ui.set.provider.addDesc')} below={adding === 'provider' && <AddProvider onDone={() => setAdding(null)} />}>
           {adding !== 'provider' && <Button small onClick={() => setAdding('provider')}>{t('ui.set.provider.addShort')}</Button>}
         </Row>
       </Group>
       <Group title={t('ui.set.models.models')}>
         {models.length === 0 && <p className="bt-meta">{t('ui.set.models.none')}</p>}
-        {models.map(m => <ModelRow key={m.id as string} model={m} probing={probing} open={open === `m:${m.id}`} onToggle={() => toggle(`m:${m.id}`)} />)}
+        {models.map(m => <ModelRow key={m.id as string} model={m} probing={probing} open={open === `m:${m.id}`} onToggle={() => toggle(`m:${m.id}`)} onRenamed={next => setOpen(now => openAfterRename(now, `m:${m.id}`, `m:${next}`))} />)}
         <Row k="model:add" title={t('ui.set.model.add')} desc={t('ui.set.model.addDesc')} below={adding === 'model' && <AddModel onDone={id => { setAdding(null); if (id) setOpen(`m:${id}`); }} />}>
           {adding !== 'model' && <Button small disabled={providers.length === 0} onClick={() => setAdding('model')}>{t('ui.set.model.addShort')}</Button>}
         </Row>

@@ -267,6 +267,8 @@ export function addTag(list: readonly string[], draft: string): string[] {
   return !value || list.includes(value) ? [...list] : [...list, value];
 }
 
+export const openAfterRename = (open: string | null, from: string, to: string): string | null => (open === from ? to : open);
+
 export const secondsOf = (ms: unknown): number | undefined => (typeof ms === 'number' ? Math.round(ms / 1000) : undefined);
 
 const KEY_ENV = /^[A-Z][A-Z0-9_]{0,63}$/u;
