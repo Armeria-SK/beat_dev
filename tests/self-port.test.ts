@@ -123,6 +123,13 @@ test('selfTarget: :// のある語に beat のポートと展開の括弧があ�
   assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
 });
 
+test('selfTarget: IPv6 のゾーン付きの書き方（[::1%25lo]）も beat 自身として見つける', () => {
+  const reached = ['curl "http://[::1%25lo]:4790/api/pending"', 'curl "http://[::1%lo]:4791/"', 'curl "http://[::1%251]:4790/"', 'curl "http://[::ffff:127.0.0.1%25lo]:4790/"'];
+  assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined), []);
+  const free = ['curl "http://[fe80::1%25eth0]:4790/"', 'curl "http://[::1%25lo]:9/"', 'ping fe80::1%eth0'];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
+});
+
 test('selfTarget: 閉じない括弧が並ぶ長い文でも、読む量が長さの 2 乗にならない', () => {
   for (const text of [`${'[a'.repeat(50_000)}:4790`, `${'{a'.repeat(50_000)}:4790`, `${'{a,b}'.repeat(4_000)}:4790`]) {
     const started = performance.now();

@@ -13,6 +13,7 @@ const BRACKET_BODY = new RegExp(`^(?:${HOST_CHAR}|:)*$`, 'u');
 const SHELL_WORD = /(?:[^\s"'`]|"[^"]*"|'[^']*'|`[^`]*`)+/gu;
 const BRACKETED = /\[[^[\]]+\]/gu;
 const NUMBER_WORD =/^[0-9a-fx.]+$/iu;
+const ZONE = /^(\[[^%\]]+)%[^\]]*\]$/u;
 const IPV6_LITERAL = /^\[[^[\]]+\]$/u;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
@@ -78,7 +79,7 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
   for (const match of plain.matchAll(ADDRESS)) {
     const [whole, scheme, host, port] = match;
     if (!host) continue;
-    const normal = normalHost(host);
+    const normal = normalHost(host.replace(ZONE, '$1]'));
     if (normal === undefined) continue;
     const plainNumber = scheme === undefined && port === undefined && NUMBER_WORD.test(host) && !ports.has(80) && !ports.has(443) &&!/[/?#:]/u.test(plain[match.index + whole.length] ?? '');
     if (hosts.includes(normal) && !plainNumber) return whole;
