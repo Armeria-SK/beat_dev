@@ -170,7 +170,7 @@ test('製品の API: 形の合わない ID・無い ID は 404 で、フォル�
   assert.equal(projectDir(s.paths.projects, before[0]!), join(s.paths.projects, before[0]!));
 });
 
-test('製品の行: フォルダが無くなる・別のフォルダにすり替わると folder_missing。待ちの数は、提案・返事待ちのタスクと承認待ち', async t => {
+test('製品の行: フォルダが無くなる・別のフォルダにすり替わると folder_missing。待ちの数は、提案・質問票の Open の質問と承認待ち', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   const other = await s.product('other');
@@ -178,6 +178,8 @@ test('製品の行: フォルダが無くなる・別のフォルダにすり替
   s.app.tasks.create({ title: 'idea', origin: 'self', propose: true, actor: 'test', projectId: shop.id });
   const asked = s.app.tasks.create({ title: 'ask', origin: 'user', actor: 'test', runAt: Date.now() + 3_600_000, projectId: shop.id });
   s.app.tasks.setWaiting(asked.id, 'question', 'Which one?');
+  s.app.questions.add({ projectId: shop.id, taskId: asked.id, question: 'Which one?', options: ['a', 'b'], blocking: true });
+  s.app.questions.answer(s.app.questions.add({ projectId: shop.id, question: 'Done already?', options: ['a', 'b'], chosen: 0 }).id, { choice: 0 });
   s.app.tasks.create({ title: 'elsewhere', origin: 'self', propose: true, actor: 'test' });
   s.app.conversations.create({ id: uuid(1), projectId: shop.id });
   assert.deepEqual((await row()).waiting, { proposals: 1, questions: 1, pending: 0 });
