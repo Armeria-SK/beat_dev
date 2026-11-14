@@ -21,7 +21,7 @@ import type { PlanStore } from '../projects/plan.ts';
 import { meshIndexLimit, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
 import { newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
-import { runProject } from '../projects/run.ts';
+import { rootsLister, runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import { stricterMode } from '../shared/permission-mode.ts';
@@ -708,11 +708,7 @@ export class ChatEngine {
     const project = kind === 'review' ? undefined : resolved;
     if (project) d.mesh?.persist(project.id);
     if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
-    const rootsSeen = new Set<string>();
-    const allRoots = (): string[] => {
-      for (const p of [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])]) rootsSeen.add(p.root);
-      return [...rootsSeen];
-    };
+    const allRoots = rootsLister(d.projects);
     allRoots();
     const productRoots = agent || kind === 'review' ? [] : allRoots;
     const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
