@@ -84,6 +84,7 @@ test('5-P2 承認した行が failed で終わると、done のタスクが実�
   assert.match(events[0]!.content!, new RegExp(`#${row}\\b`, 'u'));
   assert.match(events[0]!.content!, /ended as failed/u);
   assert.match(events[0]!.content!, /Check what relied on its result/u);
+  assert.match(events[0]!.content!, /If a check refused it, do not try the same thing another way/u);
   assert.doesNotMatch(events[0]!.content!, /boom/u);
   assert.equal(s.app.notifications.list(100).length, notices);
   s.adapter().scripts = [complete()];
@@ -151,7 +152,7 @@ test('5-P2 done でないタスク（failed・cancelled・時刻つきの実行�
   for (const id of [failed.id, cancelled.id, later.id]) assert.equal(s.reopened(id).length, 0);
 });
 
-test('5-P2 同じ行の出来事が 2 回来ても、同じタスクの行が 2 つ失敗しても、開き直すのは 1 回だけ', async t => {
+test('5-P2 開き直したあと（ready）に同じ行の出来事がもう一度来ても、同じタスクの別の行が失敗しても、何もしない（開き直しは 1 回）', async t => {
   const s = await setup(t);
   const id = s.app.tasks.create({ title: 'Two', origin: 'user', actor: 'user' }).id;
   s.adapter().scripts = [call('fake_park', { text: 'fail' }), call('fake_park', { text: 'fail' }), complete()];
@@ -184,6 +185,31 @@ test('5-P2 繰り返しのひな形には触らない', async t => {
   s.app.pending.finish(row, { status: 'failed' });
   assert.equal(s.app.tasks.get(id)!.status, 'done');
   assert.equal(s.reopened(id).length, 0);
+});
+
+test('5-P2 予定の実行（parent_id あり）は、同じ予定の別の実行がまだ開いていれば開き直さない。開いていなければ開き直す', async t => {
+  const s = await setup(t);
+  const template = s.app.tasks.create({ title: 'Daily', origin: 'user', actor: 'user', cron: '0 9 * * *' }).id;
+  const first = s.app.tasks.spawnNow(template)!.id;
+  s.adapter().scripts = [call('fake_park', { text: 'fail' }), complete()];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(first)!.status, 'done');
+  const [row] = s.rows(first);
+  const second = s.app.tasks.spawnNow(template)!.id;
+  assert.equal(s.app.tasks.get(second)!.status, 'ready');
+  await s.approve(row!.id);
+  assert.equal(s.app.pending.view(row!.id)!.status, 'failed');
+  assert.equal(s.app.tasks.get(first)!.status, 'done');
+  assert.equal(s.reopened(first).length, 0);
+  const open = s.app.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(template) as { n: number };
+  assert.equal(Number(open.n), 1);
+  s.adapter().scripts = [call('fake_park', { text: 'fail' }), complete()];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(second)!.status, 'done');
+  const [later] = s.rows(second);
+  await s.approve(later!.id);
+  assert.equal(s.app.tasks.get(second)!.status, 'ready');
+  assert.equal(s.reopened(second).length, 1);
 });
 
 test('5-P2 子の担当（agent_run）が積んだ行が失敗すると、親のタスクを開き直す', async t => {

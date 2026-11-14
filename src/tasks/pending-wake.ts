@@ -53,6 +53,10 @@ function reopenAfterFailure(deps: PendingWakeDeps, task: Task, change: PendingCh
     if (code === null || code === 0) return;
     reason = pendingText(deps.language(), 'reopen_exit', { id: change.id, code });
   } else return;
+  if (task.parent_id && deps.tasks.hasOpenRun(task.parent_id)) {
+    deps.log(`[INFO] Did not reopen task ${task.id} after approved Pending item #${change.id} ended as ${change.status}: another run of the same schedule is still open`);
+    return;
+  }
   deps.tasks.reopen(task.id, 'beat', reason);
   deps.log(`[INFO] Reopened task ${task.id} because approved Pending item #${change.id} ended as ${change.status}`);
 }
