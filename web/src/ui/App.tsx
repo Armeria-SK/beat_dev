@@ -37,7 +37,7 @@ import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
 import { Button, Notice } from './parts.tsx';
-import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, SCREEN_EDITS, unloadGuard, type LeaveEnv } from './unsaved.ts';
+import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_NOTICES: RunNotice[] = [];
@@ -111,8 +111,9 @@ export function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
-  const [leave, setLeave] = useState<{ to: string; moved: number | null } | null>(null);
+  const [leave, setLeave] = useState<HeldLeave | null>(null);
   const entryIndex = useRef(historyIndex());
+  const entryHash = useRef(location.hash);
 
   const behind = routeBehind(route, behindRef.current);
   if (route.view !== 'settings') behindRef.current = route;
@@ -198,11 +199,11 @@ export function App() {
     const to = leave;
     clearUnsaved(SCREEN_EDITS);
     setLeave(null);
-    if (to !== null) followLeave(to.moved, to.to, LEAVE_ENV);
+    if (to !== null) followLeave(to, historyIndex(), LEAVE_ENV);
   }, [leave]);
 
   useEffect(() => {
-    const onPop = () => closer.reset();
+    const onPop = () => { closer.reset(); entryIndex.current = popIndex(entryIndex.current, entryHash.current, location.hash, historyIndex()); };
     addEventListener('popstate', onPop);
     return () => removeEventListener('popstate', onPop);
   }, [closer]);
@@ -214,11 +215,12 @@ export function App() {
       const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
       if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
         const moved = leaveMove(entryIndex.current, historyIndex());
-        setLeave({ to: routeHash(next), moved });
+        setLeave({ to: routeHash(next), moved, at: entryIndex.current });
         holdLeave(moved, routeHash(held), LEAVE_ENV);
         return;
       }
       entryIndex.current = historyIndex();
+      entryHash.current = location.hash;
       hashGeneration.current += 1;
       closer.reset();
       if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;
