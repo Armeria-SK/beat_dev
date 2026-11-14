@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
@@ -157,6 +158,37 @@ test('消す: PLAN の「積まれる」もの（PLAN:555 の列挙）は delete
     'rm -rf dist && npm run build', 'npm run build && rm a.txt dist/old.js', 'rmdir dist', 'unlink dist/old.js', `node -e "require('fs').rmSync('x')"`,
   ]);
   expectKinds(f.kindOf, 'powershell', 'delete', ['Remove-Item dist -Recurse', 'Remove-Item *.txt', 'Remove-Item . -Include *.js -Recurse', 'Clear-Content changed.txt', 'Get-ChildItem dist | Remove-Item']);
+});
+
+test('消す: サブモジュール（gitlink）の場所は、フォルダでなくなっていても git で戻せるものに数えない', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  assert.equal(f.kindOf('rm -rf sub'), 'delete', 'フォルダのまま');
+  rmSync(join(f.prod, 'sub'), { recursive: true, force: true });
+  writeFileSync(join(f.prod, 'sub'), 'x');
+  assert.equal(f.kindOf('rm sub', 'bash', f.makeEnv()), 'delete', 'ファイルに置き換わった gitlink');
+  assert.equal(f.kindOf('rm a.txt', 'bash', f.makeEnv()), undefined, 'ほかの追っているファイルは今までどおり');
+});
+
+test('消す: 追っているフォルダの中が読めない（readdir の失敗）ときは、戻せるものに数えず delete', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  mkdirSync(join(f.prod, 'tracked', 'inner'));
+  writeFileSync(join(f.prod, 'tracked', 'inner', 'z.txt'), 'x');
+  writeFileSync(join(f.prod, 'tracked', '.gitignore'), '*.log');
+  f.git('add', 'tracked');
+  f.git('commit', '-q', '-m', 'inner');
+  assert.equal(f.kindOf('rm -r tracked', 'bash', f.makeEnv()), undefined, '読めるときは戻せる');
+  writeFileSync(join(f.prod, 'tracked', 'inner', 'secret.log'), 'x');
+  assert.equal(f.kindOf('rm -r tracked', 'bash', f.makeEnv()), 'delete', '追っていない（無視される）ファイルがあれば戻せない');
+  const real = fs.readdirSync;
+  const blocked = join(f.prod, 'tracked', 'inner');
+  t.after(() => { fs.readdirSync = real; syncBuiltinESMExports(); });
+  fs.readdirSync = ((path: Parameters<typeof real>[0], ...rest: unknown[]) => {
+    if (String(path) === blocked) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    return (real as (...a: unknown[]) => unknown)(path, ...rest);
+  }) as typeof real;
+  syncBuiltinESMExports();
+  assert.equal(f.kindOf('rm -r tracked', 'bash', f.makeEnv()), 'delete');
+  assert.equal(f.kindOf('Remove-Item tracked -Recurse', 'powershell', f.makeEnv()), 'delete');
 });
 
 test('消す: 製品に属さない実行の rm はどれも delete', { skip: !gitAvailable && 'git が無い' }, t => {

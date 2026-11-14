@@ -18,5 +18,8 @@ test('ui/Sidebar: 検索の失敗を failed にし、知らせは常にある ro
   const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'Sidebar.tsx'), 'utf8');
   assert.match(source, /\.catch\(\s*\(\)\s*=>\s*\{[^}]*kind:\s*'failed'/u, '失敗を failed にする');
   assert.match(source, /searchView\(/u);
-  assert.match(source, /<div[^>]*role="status"[^>]*>\s*\{view\.note === 'none'[\s\S]*?\{view\.note === 'failed'[\s\S]*?ui\.kanban\.loadFailed[\s\S]*?<\/div>/u, '入れ物は中身より前からある');
+  const status = /<div[^>]*role="status"[^>]*>((?:(?!<\/?div\b)[\s\S])*)<\/div>/u.exec(source);
+  assert.ok(status, '入れ物は中身より前からある');
+  assert.match(status[1]!, /^\s*\{view\.note === 'none'[^\n]*ui\.search\.none/u, '0 件の知らせは入れ物の中');
+  assert.match(status[1]!, /\{view\.note === 'failed'[^\n]*ui\.kanban\.loadFailed/u, '失敗の知らせは入れ物の中');
 });
