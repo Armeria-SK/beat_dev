@@ -124,6 +124,7 @@ const en = {
   'skill.registered_auto_edit': 'Replaced the registered skill "{name}" with your new text without review (draft #{id}). It is active now. The user can undo it from the skill\'s History',
   'skill.kind_edit': 'edit',
   'skill.kind_new': 'create',
+  'skill.change_missing': 'The skill "{name}" is already registered, so add change: 1 to 3 short lines on what it did before and what it does now (before → now). Nothing was saved',
 
   'curiosity.added': 'Added to the curiosity list {line}',
   'curiosity.updated': 'Updated {line}',
