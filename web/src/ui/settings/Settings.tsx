@@ -72,15 +72,15 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
     confirmable(answer => showPending({ ...what, run: () => { pendingRef.current = null; setPending(null); answer.confirm(); }, cancel: answer.cancel }), run), [showPending]);
 
   const commit = useCallback(function run(row: string, edit: (config: Config) => Config, confirmed: string | null = null): Promise<boolean> {
-    return enqueue(async (): Promise<boolean | { items: Access[]; key: string }> => {
+    return enqueue(async (signal): Promise<boolean | { items: Access[]; key: string }> => {
       setBusy(row); setErrors(old => (old[row] ? { ...old, [row]: '' } : old));
       let latest: Config | null = null;
       try {
-        latest = (await api.settings()).config;
+        latest = (await api.settings(signal)).config;
         const plan = planSave(latest, edit, confirmed);
         if (plan.kind === 'same') return true;
         if (plan.kind === 'confirm') return { items: plan.items, key: plan.key };
-        const result = await api.saveSettings(plan.config);
+        const result = await api.saveSettings(plan.config, signal);
         setView(result); setModels(result.models); applyServerSettings(result);
         onSaved();
         return true;
@@ -90,7 +90,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
         setRevision(n => n + 1);
         return false;
       } finally { setBusy(null); }
-    }).then(result => (typeof result === 'boolean' ? result : ask({ row, items: result.items }, () => run(row, edit, result.key))));
+    }).then(result => (typeof result === 'boolean' ? result : ask({ row, items: result.items }, () => run(row, edit, result.key))), () => false);
   }, [enqueue, ask, onSaved, t]);
 
   const setDirty = useCallback((key: string, on: boolean) => { dirty.current.set(key, on); setUnsaved(`settings:${key}`, on); }, []);

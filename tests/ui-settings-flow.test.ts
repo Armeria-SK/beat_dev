@@ -69,3 +69,29 @@ test('Settings の Esc の順番（配線）: 枠の中の Esc は枠の onKeyDo
   assert.ok(ask.includes("addEventListener('keydown', onKey, true);") && ask.includes("removeEventListener('keydown', onKey, true);"), '枠の外は捕まえる段（App の閉じるより先）');
   assert.ok(app.includes("if (e.key !== 'Escape' || e.defaultPrevented) return;"), 'App は受け済みの Esc で Settings を閉じない');
 });
+
+test('ui/settings flow: 読み取りや保存が返ってこなくても、時間切れで次の保存へ進む。返ってこなかった操作は失敗で終わり、その通信は止める（backlog 196）', async () => {
+  const enqueue = serial(20);
+  let seen: AbortSignal | null = null;
+  const stuck = enqueue(signal => { seen = signal; return new Promise<string>(() => undefined); });
+  const next = enqueue(async () => 'next');
+  const late = new Promise<string>(resolve => setTimeout(() => resolve('still waiting'), 500));
+  assert.equal(await Promise.race([next, late]), 'next', '後ろの保存が待ち続けない');
+  await assert.rejects(stuck);
+  assert.equal((seen as AbortSignal | null)?.aborted, true, '時間切れの通信は止める');
+  const quick = serial(20);
+  let kept: AbortSignal | null = null;
+  assert.equal(await quick(async signal => { kept = signal; return 'ok'; }), 'ok');
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal((kept as AbortSignal | null)?.aborted, false, '間に合った操作は止めない');
+});
+
+test('ui/settings flow: 時間切れで止めた操作が自分で終われば、その結果（失敗の表示など）で終わり、それから次が始まる（backlog 196）', async () => {
+  const enqueue = serial(20);
+  const log: string[] = [];
+  const stopped = enqueue(signal => new Promise<string>(resolve => { signal.addEventListener('abort', () => { log.push('a:stopped'); resolve('failed shown'); }); }));
+  const next = enqueue(async () => { log.push('b:start'); return 'b'; });
+  assert.equal(await stopped, 'failed shown');
+  assert.equal(await next, 'b');
+  assert.deepEqual(log, ['a:stopped', 'b:start'], '止めた操作の後片付けが、次の保存より先');
+});

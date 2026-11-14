@@ -10,10 +10,20 @@ export function confirmable(open: (answer: Answer) => void, run: () => Promise<b
   });
 }
 
-export function serial(): <T>(job: () => Promise<T>) => Promise<T> {
+export const SAVE_LIMIT_MS = 30_000;
+
+export function serial(limitMs = SAVE_LIMIT_MS): <T>(job: (signal: AbortSignal) => Promise<T>) => Promise<T> {
   let tail: Promise<unknown> = Promise.resolve();
-  return <T>(job: () => Promise<T>): Promise<T> => {
-    const next = tail.then(job, job);
+  return <T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const start = () => new Promise<T>((resolve, reject) => {
+      const stop = new AbortController();
+      let timer = setTimeout(() => {
+        stop.abort();
+        timer = setTimeout(() => reject(new Error('Timed out')), limitMs);
+      }, limitMs);
+      job(stop.signal).then(resolve, reject).finally(() => clearTimeout(timer));
+    });
+    const next = tail.then(start, start);
     tail = next.then(() => undefined, () => undefined);
     return next;
   };
