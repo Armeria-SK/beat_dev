@@ -77,6 +77,7 @@ export interface PreCheck {
   created?: string[];
   readPaths?: string[];
   pushes?: Array<{ dir: string | null; parsed?: boolean }>;
+  gitStaging?: true;
   reasonKeys?: string[];
   productRun?: 'product-code' | 'product-git';
   ownerReason?: string;

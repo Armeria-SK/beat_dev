@@ -84,8 +84,8 @@ button.bt-menu__item { width: 100%; margin: 0; border: 0; background: transparen
 .bt-screen .bt-board { grid-auto-columns: minmax(168px, 1fr); gap: var(--space-3); }
 @keyframes ui-head-solid { from { opacity: 0; } to { opacity: 1; } }
 @media (width > 760px) {
-  .bt-screen > .bt-screen__inner > .bt-screen__head { position: sticky; top: calc(var(--space-7) * -1); z-index: 3; margin-top: calc(var(--space-7) * -1); margin-bottom: calc(var(--space-3) * -1); padding-top: var(--space-7); padding-bottom: var(--space-3); }
-  .bt-screen > .bt-screen__inner > .bt-screen__head::before { content: ""; position: absolute; z-index: -1; inset: 0; background: var(--ground); box-shadow: 0 1px 0 var(--line); pointer-events: none; }
+  .bt-screen > .bt-screen__inner > .bt-screen__head { position: sticky; top: calc(var(--space-7) * -1); z-index: 3; margin-top: calc(var(--space-7) * -1); margin-bottom: calc(var(--space-3) * -1); padding-top: var(--space-7); padding-bottom: var(--space-3); animation-fill-mode: backwards; }
+  .bt-screen > .bt-screen__inner > .bt-screen__head::before { content: ""; position: absolute; z-index: -1; inset: 0; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: 0 1px 0 var(--line); pointer-events: none; }
   @supports (animation-timeline: scroll()) {
     .bt-screen > .bt-screen__inner > .bt-screen__head::before { opacity: 0; animation: ui-head-solid linear both; animation-timeline: scroll(nearest block); animation-range: 0 var(--space-5); }
   }
