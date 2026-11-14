@@ -419,7 +419,7 @@ test('Anthropic: 暗号化なしの http:// の外の送り先には、鍵を付
     assert.notEqual(probed.status, 'ok');
     assert.ok(!JSON.stringify(probed).includes('sk-ant-test'));
   }
-  assert.deepEqual(sent, [], '外の http:// へは 1 回も通信しない');
+  assert.equal(sent.length, 0, '外の http:// へは 1 回も通信しない');
 
   const local = new AnthropicAdapter({ ...anthropicProvider, baseUrl: 'http://127.0.0.1:8080' }, env, fetchImpl);
   await rejection(collect(local.stream(request(model()))));
