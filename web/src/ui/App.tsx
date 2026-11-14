@@ -18,7 +18,7 @@ import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending }
 import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
 import { awaitingProduct, productsMissing, projectLoads, settleLeave } from './product-nav.ts';
-import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, type Route } from './routes.ts';
+import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settingsDepth, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
 import { Memory } from './screens/Memory.tsx';
@@ -108,6 +108,7 @@ export function App() {
   drawerRef.current = drawer;
   const menuButton = useRef<HTMLButtonElement | null>(null);
   const settingsOpener = useRef<Element | null>(null);
+  const settingsStart = useRef<number | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
@@ -169,7 +170,8 @@ export function App() {
   const closer = useMemo(() => settingsCloser({
     hasBehind: () => behindRef.current !== null,
     behindHash: () => routeHash(behindRef.current ?? HOME),
-    back: () => history.back(),
+    depth: () => settingsDepth(settingsStart.current, historyIndex()),
+    back: by => history.go(-by),
     replace: hash => location.replace(hash),
     currentHash: () => location.hash,
     generation: () => hashGeneration.current,
@@ -231,7 +233,7 @@ export function App() {
       entryHash.current = location.hash;
       hashGeneration.current += 1;
       closer.reset();
-      if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;
+      if (next.view === 'settings' && viewRef.current !== 'settings') { settingsOpener.current = document.activeElement; settingsStart.current = historyIndex(); }
       setRoute(next);
       if (drawerRef.current) {
         setDrawer(false);

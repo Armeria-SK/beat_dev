@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CLOSE_FALLBACK_MS, HOME, isConversation, latch, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settleRoute, type Route } from '../web/src/ui/routes.ts';
+import { CLOSE_FALLBACK_MS, HOME, isConversation, latch, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settingsDepth, settleRoute, type Route } from '../web/src/ui/routes.ts';
 
 // 新しい画面（web/src/ui）の経路。p1-ui.md の「枠」: #/ #/c/<id> #/overview #/kanban #/tasks/<id> #/schedule #/notifications #/memory
 // #/skills[/<名前>|/draft/<名前>] #/runs[/tools|/reviews] #/archived #/settings[/<区分>]。
@@ -123,6 +123,7 @@ function fakeClose(start: string, landing: string, behind = true) {
   const closer = settingsCloser({
     hasBehind: () => behind,
     behindHash: () => '#/kanban',
+    depth: () => null,
     back: () => { log.push('back'); if (landing !== hash) { hash = landing; generation += 1; } },
     replace: next => { log.push(`replace ${next}`); hash = next; generation += 1; },
     currentHash: () => hash,
@@ -161,4 +162,39 @@ test('ui/routes: 閉じたあと、待つあいだに別の経路へ動いてい
   for (const run of f.timers) run();
   assert.deepEqual(f.log, ['back']);
   assert.equal(f.hash(), '#/settings/models');
+});
+
+test('ui/routes: アドレス欄で #/settings/<区分> を何度も打って履歴を積んでも、閉じると Settings の前の画面へ戻る（積んだ分だけ戻る。backlog 181）', () => {
+  assert.equal(settingsDepth(4, 6), 3, 'Settings を開いた位置から今までの 3 つ');
+  assert.equal(settingsDepth(4, 4), 1);
+  assert.equal(settingsDepth(null, 6), null, '履歴の位置が分からなければ数えない');
+  assert.equal(settingsDepth(6, 4), null);
+  const log: string[] = [];
+  let hash = '#/settings/models';
+  const closer = settingsCloser({
+    hasBehind: () => true,
+    behindHash: () => '#/kanban',
+    depth: () => 3,
+    back: by => { log.push(`back ${by}`); hash = '#/kanban'; },
+    replace: next => { log.push(`replace ${next}`); hash = next; },
+    currentHash: () => hash,
+    generation: () => 0,
+    later: () => undefined,
+  });
+  closer.fire();
+  assert.deepEqual(log, ['back 3']);
+  const once: string[] = [];
+  settingsCloser({
+    hasBehind: () => true, behindHash: () => '#/kanban', depth: () => null,
+    back: by => { once.push(`back ${by}`); }, replace: () => undefined, currentHash: () => '#/kanban', generation: () => 0, later: () => undefined,
+  }).fire();
+  assert.deepEqual(once, ['back 1'], '数えられなければ 1 つ戻る（あとは置き換えの保険）');
+});
+
+test('ui/routes の配線: App は Settings を開いた履歴の位置を覚え、閉じるときに積んだ分だけ戻る（backlog 181）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  assert.ok(app.includes('depth: () => settingsDepth(settingsStart.current, historyIndex()),'));
+  assert.ok(app.includes('back: by => history.go(-by),'));
+  assert.ok(/if \(next\.view === 'settings' && viewRef\.current !== 'settings'\) \{ settingsOpener\.current = document\.activeElement; settingsStart\.current = historyIndex\(\); \}/u.test(app), 'Settings を開いたときの位置');
 });
