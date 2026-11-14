@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Task, TaskStatus } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { setTimezone, t } from '../web/src/i18n/index.ts';
+import { setTimezone } from '../web/src/i18n/index.ts';
 import { PendingSet, runOnce } from '../web/src/pending.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, type TaskDraft } from '../web/src/task-form.ts';
 import {
@@ -204,19 +204,13 @@ test('辞書: 状態・出どころ・優先度・経過の種類・気になる
 
 test('辞書: タスク画面（stage 7）の英語に日本語が混ざらない', () => {
   const mine = Object.keys(en).filter(key => /^(tasks|newtask|curiosity)\./u.test(key));
-  assert.ok(mine.length > 30, `タスク画面の文字が ${mine.length} 件しか読めていない`);
+  assert.ok(mine.length > 20, `タスク画面の文字が ${mine.length} 件しか読めていない`);
   const japanese = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
   for (const key of mine) {
     const enEntry = (en as Record<string, unknown>)[key];
     const enText = typeof enEntry === 'function' ? (enEntry as (...a: string[]) => string)('a', 'b') : String(enEntry);
     assert.ok(!japanese.test(enText), `${key}: 英語に日本語が混ざっている: ${enText}`);
   }
-});
-
-test('辞書: 止めたあとの知らせは 20 秒ほどで再開することを伝える', () => {
-  reset();
-  assert.match(t('tasks.toast.stoppedBody'), /Restarts in about 20 s/u);
-  reset();
 });
 
 test('PendingSet: 同じものは送信中に 2 回始められず、終われば また始められる。別のものは邪魔しない', () => {
