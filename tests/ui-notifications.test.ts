@@ -50,3 +50,21 @@ test('ui/notifications: 開いた行だけ（または全部）を既読にす�
   assert.equal(lastNotificationAt(list), 10 * DAY + 3);
   assert.equal(lastNotificationAt([]), null);
 });
+
+test('ui/notifications: 行のボタンは 1 つで決める場所へ。Pending・Questions は製品の一覧へ、サーバーの行き先（action）を先に使い、知らない値は読み飛ばす（beat 5-u2）', async () => {
+  const { notificationGo } = await import('../web/src/ui/notifications.ts');
+  const P = 'prod-abc123';
+  assert.deepEqual(notificationGo(item(1, 'approval_needed', { link: '#/pending', project_id: P })), { hash: `#/pending/${P}`, label: 'ui.notifications.open.pending' });
+  assert.deepEqual(notificationGo(item(1, 'approval_needed', { link: '#/pending' })), { hash: '#/pending', label: 'ui.notifications.open.pending' });
+  assert.deepEqual(notificationGo(item(1, 'approval_needed')), { hash: '#/pending', label: 'ui.notifications.open.pending' }, 'リンクが無くても種類から');
+  assert.deepEqual(notificationGo(item(1, 'question_new', { project_id: P })), { hash: `#/questions/${P}`, label: 'ui.notifications.open.questions' });
+  assert.deepEqual(notificationGo(item(1, 'question_new', { action: 'questions', link: `#/questions/${P}` })), { hash: `#/questions/${P}`, label: 'ui.notifications.open.questions' });
+  assert.deepEqual(notificationGo(item(1, 'task_done', { action: 'kanban', link: '#/tasks/t1' })), { hash: '#/kanban', label: 'ui.notifications.open.kanban' });
+  assert.deepEqual(notificationGo(item(1, 'task_failed', { action: 'retry', link: '#/tasks/t1' })), { hash: '#/tasks/t1', label: 'ui.notifications.retry' });
+  assert.deepEqual(notificationGo(item(1, 'task_failed', { action: 'retry' })), { hash: '#/kanban', label: 'ui.notifications.retry' });
+  assert.deepEqual(notificationGo(item(1, 'task_failed', { action: 'launch', link: '#/tasks/t1' })), { hash: '#/tasks/t1', label: 'ui.notifications.open.task' }, '知らない行き先は読み飛ばす');
+  assert.deepEqual(notificationGo(item(1, 'task_waiting', { link: '#/tasks/t1', project_id: P })), { hash: '#/tasks/t1', label: 'ui.notifications.open.task' });
+  assert.equal(notificationGo(item(1, 'approval_needed', { project_id: '../x' }))?.hash, '#/pending', '製品の番号の形でないものは使わない');
+  assert.equal(notificationGo(item(1, 'info')), null);
+  assert.equal(markOf(item(1, 'question_new')), 'dot', '新しい質問は持ち主を待つ印');
+});

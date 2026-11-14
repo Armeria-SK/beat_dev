@@ -1,7 +1,10 @@
 import type { NotificationItem } from '../api.ts';
-import { parseRoute, routeHash, type View } from './routes.ts';
-import { FAILED_KINDS, WAITING_KINDS } from './toast-list.ts';
+import { parseRoute, PRODUCT_ID, routeHash, type Route, type View } from './routes.ts';
 
+export const WAITING_KINDS: ReadonlySet<string> = new Set(['task_waiting', 'approval_needed', 'question_new']);
+export const FAILED_KINDS: ReadonlySet<string> = new Set(['task_failed', 'health_alert']);
+
+export type NotificationAction = 'pending' | 'questions' | 'kanban' | 'retry';
 export type NotificationFilter = 'unread' | 'all';
 export type NotificationMark = 'dot' | 'alert' | 'plain';
 export type DayGroupId = 'today' | 'yesterday' | 'earlier';
@@ -41,3 +44,40 @@ export const lastNotificationAt = (items: ReadonlyArray<Pick<NotificationItem, '
 
 export const markRead = <T extends Item>(items: readonly T[], ids: readonly number[] | null, now: number): T[] =>
   items.map(n => (n.read_at === null && (ids === null || ids.includes(n.id)) ? { ...n, read_at: now } : n));
+
+export type GoLabel =
+  | 'ui.notifications.open' | 'ui.notifications.open.task' | 'ui.notifications.open.kanban' | 'ui.notifications.open.session' | 'ui.notifications.open.skills'
+  | 'ui.notifications.open.overview' | 'ui.notifications.open.pending' | 'ui.notifications.open.questions' | 'ui.notifications.retry';
+
+const VIEW_LABEL: Partial<Record<View, GoLabel>> = {
+  task: 'ui.notifications.open.task', kanban: 'ui.notifications.open.kanban', chat: 'ui.notifications.open.session', skills: 'ui.notifications.open.skills',
+  overview: 'ui.notifications.open.overview', pending: 'ui.notifications.open.pending', questions: 'ui.notifications.open.questions',
+};
+const ACTION_LABEL: Record<NotificationAction, GoLabel> = {
+  pending: 'ui.notifications.open.pending', questions: 'ui.notifications.open.questions', kanban: 'ui.notifications.open.kanban', retry: 'ui.notifications.retry',
+};
+const KIND_ACTION: Partial<Record<string, NotificationAction>> = { approval_needed: 'pending', question_new: 'questions' };
+
+export interface NotificationGo { hash: string; label: GoLabel }
+
+const isAction = (value: unknown): value is NotificationAction => typeof value === 'string' && Object.hasOwn(ACTION_LABEL, value);
+
+function actionRoute(action: NotificationAction, linked: Route | null, productId: string | null): Route {
+  if (action === 'pending' || action === 'questions') {
+    if ((linked?.view === 'pending' || linked?.view === 'questions') && linked.view === action && linked.productId) return linked;
+    return productId ? { view: action, productId } : { view: action };
+  }
+  if (action === 'retry' && linked?.view === 'task') return linked;
+  return { view: 'kanban' };
+}
+
+export function notificationGo(n: Pick<NotificationItem, 'kind' | 'link' | 'project_id' | 'action'>): NotificationGo | null {
+  const target = notificationTarget(n.link);
+  const linked = target ? parseRoute(target.hash) : null;
+  const action = isAction(n.action) ? n.action : linked?.view === 'pending' || linked?.view === 'questions' ? linked.view : linked ? undefined : KIND_ACTION[n.kind];
+  if (action) {
+    const productId = n.project_id && PRODUCT_ID.test(n.project_id) ? n.project_id : null;
+    return { hash: routeHash(actionRoute(action, linked, productId)), label: ACTION_LABEL[action] };
+  }
+  return target ? { hash: target.hash, label: VIEW_LABEL[target.view] ?? 'ui.notifications.open' } : null;
+}

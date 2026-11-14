@@ -12,6 +12,7 @@ import { productOf } from '../products.ts';
 import { routeHash } from '../routes.ts';
 import { answerTaskOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type TaskOp } from '../task-ops.ts';
 import { SCREEN_EDITS } from '../unsaved.ts';
+import { pendingWait } from '../kanban.ts';
 import { PRIORITY_KEY } from './Kanban.tsx';
 
 export interface TaskScreenProps {
@@ -174,6 +175,7 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
   const product = productOf(projects, task.project_id);
   const mine = worker?.runningAll.find(r => r.taskId === task.id);
   const busyWithOther = (worker?.runningAll.length ?? 0) > 0 && !mine;
+  const onPending = pendingWait(task);
   const buttons = taskButtons(task.status, sheetActions(task.status), mine !== undefined);
 
   const run = async (op: TaskOp, options: { reason?: string } = {}) => {
@@ -231,12 +233,12 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
         </form>
       )}
 
-      {task.status === 'waiting' && <Answer task={task} onSent={() => void load()} />}
+      {task.status === 'waiting' && !onPending && <Answer task={task} onSent={() => void load()} />}
 
-      {pending > 0 && (
-        <section className="bt-section" aria-label={t('ui.task.pending', pending)}>
+      {(pending > 0 || onPending) && (
+        <section className="bt-section" aria-label={onPending ? t('ui.kanban.waitingPending', onPending.refs) : t('ui.task.pending', pending)}>
           <div className="bt-section__head">
-            <span className="bt-section__kind"><span className="bt-dot" aria-hidden="true" /><span className="bt-label">{t('ui.task.pending', pending)}</span></span>
+            <span className="bt-section__kind"><span className="bt-dot" aria-hidden="true" /><span className="bt-label">{onPending ? t('ui.kanban.waitingPending', onPending.refs) : t('ui.task.pending', pending)}</span></span>
             <a className="bt-tool__link" href={routeHash(product ? { view: 'pending', productId: product.id } : { view: 'pending' })}>{t('ui.task.openPending')}</a>
           </div>
         </section>

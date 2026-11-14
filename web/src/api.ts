@@ -74,7 +74,8 @@ export type AcceptanceSource =
   | { kind: 'owner_words'; quote: string; context?: string; messageId?: number; conversationId?: string }
   | { kind: 'owner_choice'; question: string; answer: string; questionMessageId?: number; answerMessageId?: number; conversationId?: string }
   | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: 'not_found' | 'too_short' | 'not_next_reply' | 'choice_unverified' | 'scan_budget'; quote?: string; question?: string; answer?: string }
-  | { kind: 'owner_edit' };
+  | { kind: 'owner_edit' }
+  | { kind: 'owner_answer'; questionId: number; answer: string; picked: 'option' | 'text'; was?: AcceptanceSource };
 export type AcceptanceCheck = { kind: 'command'; command: string } | { kind: 'look' } | { kind: 'read' };
 export interface AcceptanceItem {
   id: string; result: string; source: AcceptanceSource; check: AcceptanceCheck; state: 'open' | 'met' | 'unverified'; evidence: unknown[]; changedIn: number | null; removedIn: number | null;
@@ -185,6 +186,7 @@ export interface Task {
   timezone?: string | null;
   project_id?: string | null;
   acceptance_items?: string | null;
+  waiting_kind?: 'question' | 'approval' | null;
 }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
@@ -197,7 +199,7 @@ export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
   running: WorkerRun | null; runningAll: WorkerRun[]; maxParallel: number; nextWakeAt: number | null; runsLastHour: number; maxRunsPerHour: number;
 }
-export interface NotificationItem { id: number; kind: string; title: string; body: string | null; link: string | null; read_at: number | null; created_at: number; project_id?: string | null }
+export interface NotificationItem { id: number; kind: string; title: string; body: string | null; link: string | null; read_at: number | null; created_at: number; project_id?: string | null; action?: string | null }
 export type Motion = 'auto' | 'none' | 'float' | 'sway' | 'pulse';
 export interface Profile { name: string; shape: string; color: string; motion: Motion; shapes: string[]; motions: Motion[] }
 export interface NewTask {

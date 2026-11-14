@@ -1,6 +1,6 @@
 import type { NotificationItem } from '../api.ts';
 import type { FeedbackItem } from '../feedback.ts';
-import { parseRoute, routeHash } from './routes.ts';
+import { FAILED_KINDS, notificationGo, WAITING_KINDS } from './notifications.ts';
 
 export interface ToastLimits { max: number; ms: number; undoMs: number; tag: string }
 export const TOAST_A: ToastLimits = { max: 2, ms: 5000, undoMs: 6000, tag: 'a' };
@@ -37,15 +37,13 @@ export function holdChange(hold: ToastHold, part: keyof ToastHold, on: boolean):
   return { hold: next, flip: isHeld(next) === isHeld(hold) ? null : isHeld(next) };
 }
 
-export const WAITING_KINDS: ReadonlySet<string> = new Set(['task_waiting', 'approval_needed']);
-export const FAILED_KINDS: ReadonlySet<string> = new Set(['task_failed', 'health_alert']);
-
-export function notificationToast(n: Pick<NotificationItem, 'kind' | 'title' | 'body' | 'link'>): FeedbackItem {
+export function notificationToast(n: Pick<NotificationItem, 'kind' | 'title' | 'body' | 'link' | 'project_id' | 'action'>): FeedbackItem {
+  const go = notificationGo(n);
   const body = n.body?.split('\n').find(line => line.trim())?.trim();
   return {
     title: n.title,
     ...(body ? { body } : {}),
     ...(WAITING_KINDS.has(n.kind) ? { lead: 'dot' as const } : { icon: FAILED_KINDS.has(n.kind) ? 'alert' as const : 'check' as const }),
-    ...(n.link?.startsWith('#') ? { href: routeHash(parseRoute(n.link)) } : {}),
+    ...(go ? { href: go.hash } : {}),
   };
 }
