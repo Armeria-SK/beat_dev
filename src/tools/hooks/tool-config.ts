@@ -2,7 +2,7 @@
 // あとで動く許可済みのコマンド（git status・curl・シェルの起動）に、設定でコードを読み込ませられる。そこへの書き込み・消すこと・名前の変更は、
 // 許可フォルダの中でも外でも、シェルからは今回だけにする。ここは、その場所の一覧と、調べる関数
 
-import { readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { isInside, isRemotePath } from './scope.ts';
@@ -80,15 +80,23 @@ export function containsToolConfig(dir: string, env: Env = process.env): boolean
 // wget のシステムの設定（/etc/wgetrc）は、管理者が置いたもの（書き換えは上の見張りで今回だけ）で、Debian では既定でも有効な行があるので、調べない
 
 const MAX_RC_BYTES = 1_048_576;
+const MAX_RC_LINK_HOPS = 40;
 
 // 空の行・# のコメントだけなら、読まれても何も変わらない
 function hasSettings(file: string): boolean {
   if (isRemotePath(file)) return true;
   try {
-    const st = statSync(file);
+    let target = file;
+    for (let hops = 0; lstatSync(target).isSymbolicLink(); hops++) {
+      if (hops >= MAX_RC_LINK_HOPS) return true;
+      const stored = readlinkSync(target);
+      target = resolve(dirname(target), stored);
+      if (isRemotePath(stored) || isRemotePath(target)) return true;
+    }
+    const st = statSync(target);
     if (!st.isFile()) return false;
     if (st.size > MAX_RC_BYTES) return true;
-    return readFileSync(file, 'utf8').split(/\r?\n/u).some(line => !/^\s*(?:#.*)?$/u.test(line));
+    return readFileSync(target, 'utf8').split(/\r?\n/u).some(line => !/^\s*(?:#.*)?$/u.test(line));
   } catch (e) {
     return (e as NodeJS.ErrnoException).code !== 'ENOENT' && (e as NodeJS.ErrnoException).code !== 'ENOTDIR';
   }
@@ -111,12 +119,12 @@ export function curlConfigFile(env: Env, cwd?: string): string | undefined {
   return files.find(hasSettings);
 }
 
-export function npmProjectConfigFile(cwd: string, env: Env): string | undefined {
+export function npmProjectConfigFile(cwd: string, env: Env, allowed: readonly string[] = []): string | undefined {
   const key = (p: string): string => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
   const own = new Set([key(join(env.HOME || homedir(), '.npmrc')), key(join(homedir(), '.npmrc'))]);
   for (let dir = cwd; ; dir = dirname(dir)) {
     const file = join(dir, '.npmrc');
-    if (!own.has(key(file)) && hasSettings(file)) return file;
+    if ((!own.has(key(file)) || allowed.some(root => isInside(root, file))) && hasSettings(file)) return file;
     if (dirname(dir) === dir) return undefined;
   }
 }

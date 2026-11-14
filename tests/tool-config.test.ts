@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { isToolConfigPath, wgetConfigFile } from '../src/tools/hooks/tool-config.ts';
+import { isToolConfigPath, npmProjectConfigFile, wgetConfigFile } from '../src/tools/hooks/tool-config.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
@@ -333,4 +334,48 @@ test('Python の user-site（.pth・sitecustomize.py・usercustomize.py）と Go
   }
   assert.equal(run('echo x > notes.md').decision, 'allow');
   assert.equal(run('echo x > model.pth').decision, 'allow', 'PyTorch の .pth は対象外');
+});
+
+test('npm の .npmrc: ホームの .npmrc は、許可フォルダの中にあるときは数える（HOME が製品のフォルダの中を指す設定）', t => {
+  const base = realish(tempDir(t));
+  const product = join(base, 'product');
+  const home = join(product, 'home');
+  const cwd = join(home, 'app');
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(home, '.npmrc'), 'script-shell=./evil.sh\n');
+  const env = { HOME: home };
+  assert.equal(npmProjectConfigFile(cwd, env), undefined, '許可フォルダを渡さなければ、ホームの .npmrc は数えない');
+  assert.equal(npmProjectConfigFile(cwd, env, [cwd, join(base, 'elsewhere')]), undefined, 'ホームが許可フォルダの外なら数えない');
+  assert.equal(npmProjectConfigFile(cwd, env, [product]), join(home, '.npmrc'));
+  const run = (root: string) => checkShellCommand('npm -v', cwd, { policy: { roots: [{ path: root, mode: 'write' }], deny: [] }, outsideRoots: 'ask', shell: 'bash', windows: false, env });
+  assert.equal(JSON.stringify(run(cwd)).includes('.npmrc'), false, JSON.stringify(run(cwd)));
+  assert.notEqual(run(product).decision, 'allow');
+  assert.equal(JSON.stringify(run(product)).includes('.npmrc'), true, JSON.stringify(run(product)));
+});
+
+test('設定ファイルがリンクで、先がネットワークの場所なら、たどらずに「設定がある」として扱う', { skip: process.platform !== 'win32' }, t => {
+  const base = realish(tempDir(t));
+  const cwd = join(base, 'app');
+  mkdirSync(cwd, { recursive: true });
+  const link = join(cwd, '.npmrc');
+  const hop = join(cwd, 'hop');
+  const targets = new Map([[link, 'hop'], [hop, '//evil-host/share/npmrc']]);
+  const touched: string[] = [];
+  const fake = { isSymbolicLink: () => true, isFile: () => false, isDirectory: () => false, size: 0 };
+  for (const name of ['lstatSync', 'readlinkSync', 'statSync', 'readFileSync'] as const) {
+    const original = fs[name] as (...a: unknown[]) => unknown;
+    const patched = mock.method(fs, name, ((path: unknown, ...rest: unknown[]) => {
+      if (typeof path === 'string' && /^[/\x5c]{2}/u.test(path)) { touched.push(`${name} ${path}`); throw Object.assign(new Error('blocked'), { code: 'EACCES' }); }
+      if (typeof path === 'string' && targets.has(path)) {
+        if (name === 'lstatSync') return fake;
+        if (name === 'readlinkSync') return targets.get(path);
+        touched.push(`${name} ${path}`);
+      }
+      return original(path, ...rest);
+    }) as never);
+    t.after(() => { patched.mock.restore(); syncBuiltinESMExports(); });
+  }
+  syncBuiltinESMExports();
+  assert.equal(npmProjectConfigFile(cwd, { HOME: join(base, 'home') }), link);
+  assert.deepEqual(touched, []);
 });
