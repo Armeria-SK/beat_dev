@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, type Hash } from 'node:crypto';
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { stripHidden } from '../shared/plain-text.ts';
@@ -14,13 +14,14 @@ const GIT_TIMEOUT_MS = 15_000;
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const WALK_MAX = 5000;
 const DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$|clock\$)(\..*)?$/iu;
-const PATH_CHARS = /^[\p{L}\p{N}\-_./]+$/u;
+const PATH_CHARS = /^[\p{L}\p{N}\p{Mn}\p{Mc}\-_./]+$/u;
+const SELECTORS = /[\u034F\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u;
 
-export interface FolderScan { mode: 'git' | 'plain'; folders: string[]; files: string[] }
+export interface FolderScan { mode: 'git' | 'plain'; folders: string[]; hashes: Map<string, string> }
 
 export function cleanRelPath(input: string, max = 160): string | undefined {
   const path = input.trim().replaceAll('\\', '/').replace(/^(\.\/)+/u, '').replace(/\/+$/u, '');
-  if (!path || Array.from(path).length > max || !PATH_CHARS.test(path) || stripHidden(path) !== path) return undefined;
+  if (!path || Array.from(path).length > max || !PATH_CHARS.test(path) || SELECTORS.test(path) || stripHidden(path) !== path) return undefined;
   const parts = path.split('/');
   if (parts.some(part => part === '' || part === '.' || part === '..' || /[. ]$/u.test(part) || DEVICE.test(part) || /~\d/u.test(part))) return undefined;
   return path;
@@ -58,10 +59,23 @@ export function pathExists(root: string, rel: string): boolean {
 
 export const dotted = (rel: string): boolean => rel.split('/').some(part => part.startsWith('.'));
 
-export function namesHash(files: readonly string[], rel: string): string {
-  const names = files.filter(file => file.startsWith(`${rel}/`)).sort();
-  return createHash('sha256').update(names.join('\0')).digest('hex').slice(0, 16);
+export function groupFiles(files: readonly string[]): { found: Set<string>; hashes: Map<string, string> } {
+  const sums = new Map<string, Hash>();
+  for (const file of [...files].sort()) {
+    const parts = file.split('/').slice(0, -1);
+    for (let depth = 1; depth <= Math.min(MAP_DEPTH, parts.length); depth++) {
+      if (parts[depth - 1]!.startsWith('.')) break;
+      const rel = parts.slice(0, depth).join('/');
+      const sum = sums.get(rel);
+      if (sum) sum.update(`\0${file}`);
+      else sums.set(rel, createHash('sha256').update(file));
+    }
+  }
+  const hashes = new Map([...sums].map(([rel, sum]) => [rel, sum.digest('hex').slice(0, 16)]));
+  return { found: new Set(hashes.keys()), hashes };
 }
+
+export const EMPTY_HASH = createHash('sha256').update('').digest('hex').slice(0, 16);
 
 export function listingHash(root: string, rel: string): string | null {
   const real = realInside(root, rel);
@@ -131,18 +145,10 @@ export async function scanFolders(root: string, dataDir: string): Promise<Folder
   const viaGit = await withGit(root, dataDir, async git => {
     const listed = await git(['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
     if (!listed) return undefined;
-    const files = [...new Set(listed.toString('utf8').split('\0').filter(Boolean))];
-    const found = new Set<string>();
-    for (const file of files) {
-      const parts = file.split('/').slice(0, -1);
-      for (let depth = 1; depth <= Math.min(MAP_DEPTH, parts.length); depth++) {
-        if (parts[depth - 1]!.startsWith('.')) break;
-        found.add(parts.slice(0, depth).join('/'));
-      }
-    }
+    const { found, hashes } = groupFiles([...new Set(listed.toString('utf8').split('\0').filter(Boolean))]);
     const existing = new Set([...found].filter(rel => folderExists(root, rel)));
-    return { mode: 'git' as const, folders: pick(existing), files };
+    return { mode: 'git' as const, folders: pick(existing), hashes };
   });
   if (viaGit) return viaGit;
-  return { mode: 'plain', folders: pick(walkPlain(root)), files: [] };
+  return { mode: 'plain', folders: pick(walkPlain(root)), hashes: new Map() };
 }

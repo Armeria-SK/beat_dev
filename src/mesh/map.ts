@@ -18,7 +18,7 @@ export interface MapRow { path: string; what: string; entry: string | null; by: 
 export interface ParsedRows<T> { rows: T[]; lines: string[]; at: number[]; unreadable: number }
 
 const MAP_HEAD = ['# MAP', '', 'Parts of the product folder, one line each. beat lists the folders; the lines are written with mesh_map_set.', ''];
-const ROW = /^- (\S+) — (.+?)(?:\. entry: (\S+))?(?: \[by (conversation|task|child)(?:, at ((?:git|dir):[0-9a-f]+))?(, src: external)?\])?$/u;
+const ROW = /^- (\S+) — (.+?)(?:\. entry: (\S+))?(?: \\?\[by (conversation|task|child)(?:, at ((?:git|dir):[0-9a-f]+))?(, src: external)?\\?\])?$/u;
 
 export const marker = (by: RowAuthor, at: string | null, external: boolean): string =>
   by === 'owner' ? '' : ` [by ${by}${at ? `, at ${at}` : ''}${external ? ', src: external' : ''}]`;

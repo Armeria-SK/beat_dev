@@ -7,7 +7,7 @@ export const GLOSSARY_LINE_MAX = 200;
 export interface GlossaryRow { term: string; target: string; by: RowAuthor; external: boolean }
 
 const HEAD = ['# GLOSSARY', '', 'Names the owner uses, and what they point to. Written with mesh_glossary_set.', ''];
-const ROW = /^- (.+?) → (\S+)(?: \[by (conversation|task|child)(, src: external)?\])?$/u;
+const ROW = /^- (.+?) → (\S+)(?: \\?\[by (conversation|task|child)(, src: external)?\\?\])?$/u;
 
 export const termKey = (term: string): string => term.normalize('NFKC').toLowerCase();
 

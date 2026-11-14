@@ -73,7 +73,7 @@ function fixture(t: Parameters<typeof tempDir>[0]) {
   });
   const mapText = () => readFileSync(join(dir, 'MAP.md'), 'utf8');
   const backups = (kind: string) => { const at = join(paths.backups, 'mesh', PROJECT); return existsSync(at) ? readdirSync(at).filter(name => name.startsWith(`${kind}-`)) : []; };
-  return { base, root, paths, dir, mesh, ctxOf, run, mapText, backups };
+  return { base, root, paths, dir, mesh, plans, acceptance, ctxOf, run, mapText, backups };
 }
 
 const materials = (over: Partial<IndexMaterials> = {}): IndexMaterials => ({
@@ -361,7 +361,7 @@ test('5-5a 審査の直し: mesh_read の頁が外を読んだ行の途中で切
 
 test('5-5a 審査の直し: 見えない字・空白に見える字の名前、全角の角かっこ・entry:・矢印、点で始まるパスは使わない', async t => {
   const f = fixture(t);
-  for (const bad of ['aㅤb', 'a͏b', 'x️', 'é']) assert.equal(cleanRelPath(bad), undefined, JSON.stringify(bad));
+  for (const bad of ['aㅤb', 'a͏b', 'x️']) assert.equal(cleanRelPath(bad), undefined, JSON.stringify(bad));
   assert.match((await f.run('mesh_map_set', { path: 'docs', what: 'notes ［by owner］' })).output.content, /square brackets/u);
   assert.match((await f.run('mesh_map_set', { path: 'docs', what: 'notes ｅｎｔｒｙ： README.md' })).output.content, /cannot contain "entry:"/u);
   assert.match((await f.run('mesh_glossary_set', { term: 'a ⟶ b', points_to: 'docs' })).output.content, /cannot contain "→"/u);
@@ -391,4 +391,42 @@ test('5-5a 場所の形: 区切りは / にそろえ、頭の ./ と末尾の / 
   assert.equal(cleanRelPath('./src\\web\\'), 'src/web');
   for (const bad of ['', '..', 'a/../b', 'C:/x', '/abs', 'a//b', 'has space', 'nul', 'a/b.', 'PROGRA~1', 'x<y']) assert.equal(cleanRelPath(bad), undefined, bad);
   assert.equal(cleanRelPath('請求書/2026'), '請求書/2026');
+});
+
+test('5-5a 再審査の直し: 地図の見直しが途中で失敗しても約束は解決し、ログに残す（落ちない）', async t => {
+  const f = fixture(t);
+  const logs: string[] = [];
+  const mesh = new Mesh({ projectsDir: f.paths.projects, backupsDir: f.paths.backups, plans: f.plans, acceptance: f.acceptance, timezone: () => 'UTC', log: line => logs.push(line) });
+  await mesh.refreshMap('../../..', f.root);
+  assert.equal(logs.length, 1, logs.join('\n'));
+  assert.match(logs[0]!, /^\[WARN\] Could not check the map of product/u);
+});
+
+test('5-5a 再審査の直し: 書き込みより前に始まった地図の見直しの結果は捨てる', { skip: !gitAvailable }, async t => {
+  const f = fixture(t);
+  const other = join(f.base, 'other');
+  mkdirSync(other, { recursive: true });
+  git(other, 'init', '-q');
+  const first = f.mesh.refreshMap(PROJECT, other);
+  const second = f.mesh.refreshMap(PROJECT, other);
+  const out = await f.run('mesh_map_set', { path: 'docs', what: 'The notes' });
+  assert.equal(out.output.isError, undefined, out.output.content);
+  await Promise.all([first, second]);
+  assert.match((await f.run('mesh_read', { file: 'MAP.md' })).output.content, /- docs — The notes \[by task, at dir:[0-9a-f]+\]$/mu);
+});
+
+test('5-5a 再審査の直し: 編集ソフトが角かっこを \\ で逃がしても、外を読んだ行は外を読んだ行のまま', () => {
+  const line = '- web — Hostile \u005c[by task, at dir:0123456789abcdef, src: external\u005c]';
+  const map = parseMap(`# MAP\n\n${line}\n`).rows[0]!;
+  assert.equal(map.by, 'task');
+  assert.equal(map.external, true);
+  assert.equal(readMesh({ rel: 'MAP.md', lines: ['# MAP', '', line], mtime: 0, fetched: false }, {}, 4000, 'en').fetched, true);
+  const gloss = parseGlossary('# GLOSSARY\n\n- API → docs \u005c[by task, src: external\u005c]\n').rows[0]!;
+  assert.equal(gloss.by, 'task');
+  assert.equal(gloss.external, true);
+});
+
+test('5-5a 再審査の直し: 結合文字を使う名前（デーヴァナーガリー・濁点を分けた日本語・母音記号付きのアラビア文字）は通し、異体字セレクタと U+034F は断る', () => {
+  for (const good of ['cafe\u0301', 'हिन्दी', 'か\u3099な', 'كَتَبَ', 'docs/मराठी']) assert.equal(cleanRelPath(good), good, JSON.stringify(good));
+  for (const bad of ['x\uFE0F', 'x\uFE00', 'a\u034Fb', 'x\u{E0100}', 'x\u{E01EF}']) assert.equal(cleanRelPath(bad), undefined, JSON.stringify(bad));
 });
