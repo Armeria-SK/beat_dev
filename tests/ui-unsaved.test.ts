@@ -207,3 +207,13 @@ test('書きかけの確かめ: App は、動きを受け入れるたびに履�
   assert.match(app, /entryIndex\.current = historyIndex\(\);\s*entryHash\.current = location\.hash;/u);
   assert.match(app, /popIndex\(entryIndex\.current, entryHash\.current, location\.hash, historyIndex\(\)\)/u);
 });
+
+test('設定ファイルの直接編集: モデルの並びだけを変えて保存すると、その並びが書かれる（何も書かずに "Saved" と出さない。backlog 265）', () => {
+  const loaded = defaultConfig() as Json;
+  loaded.providers = [{ id: 'a', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1' }, { id: 'b', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:2/v1' }];
+  const edited = structuredClone(loaded);
+  edited.providers.reverse();
+  const merged = mergeRawConfig(loaded, edited, structuredClone(loaded));
+  assert.deepEqual(merged.conflicts, []);
+  assert.deepEqual(merged.config.providers.map((p: Json) => p.id), ['b', 'a']);
+});
