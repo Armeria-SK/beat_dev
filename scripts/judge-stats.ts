@@ -20,13 +20,18 @@ export function renderStats(stats: JudgeStats): string {
     ...section('By ask kind', stats.askKinds.map(k => [k.kind, k])),
     ...section('By day', stats.days.map(d => [d.day, d])),
     ...section('By judge model', stats.models.map(m => [m.model ?? '(not reported)', m])),
+    ...section('Failed, by reason (before model = never reached a judge model)', stats.failures.map(f => [`${f.reason}${f.beforeModel ? ' (before model)' : ''}`, f])),
     ...section('By run', stats.runs.map(r => [`${r.runId} ${r.runKind}${r.projectId ? ` ${r.projectId}` : ''}`, r])),
   ].join('\n');
 }
 
-export function readStats(path: string, options: { days: number; timezone: string; project?: string | null | undefined; runs: number; now?: number | undefined }): JudgeStats {
+export function openReadOnly(path: string): DatabaseSync {
   if (!existsSync(path)) throw new Error(`no database at ${path}`);
-  const db = new DatabaseSync(path, { readOnly: true });
+  return new DatabaseSync(path, { readOnly: true });
+}
+
+export function readStats(path: string, options: { days: number; timezone: string; project?: string | null | undefined; runs: number; now?: number | undefined }): JudgeStats {
+  const db = openReadOnly(path);
   try {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'judge_calls'").get()) throw new Error('this database has no judge_calls table yet (start beat once with this version)');
     const now = options.now ?? Date.now();

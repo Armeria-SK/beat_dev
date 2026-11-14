@@ -19,6 +19,7 @@ export interface JudgeCallInput {
 const KEY = /^[a-z][a-z0-9_.-]{0,79}$/u;
 const KEYS_MAX = 32;
 const FAILED: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['error', 'timeout', 'unparsable', 'no_request', 'too_long', 'slot_timeout', 'no_judge']);
+export const BEFORE_MODEL: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['no_judge', 'no_request', 'too_long', 'slot_timeout']);
 
 const keysOf = (keys: readonly string[]): string[] => [...new Set(keys.filter(key => KEY.test(key)))].sort().slice(0, KEYS_MAX);
 const count = (value: number | undefined): number | null => value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -45,11 +46,12 @@ export interface JudgeStats {
   keys: Array<{ key: string } & JudgeTotals>;
   askKinds: Array<{ kind: string } & JudgeTotals>;
   models: Array<{ model: string | null } & JudgeTotals>;
+  failures: Array<{ reason: string; beforeModel: boolean } & JudgeTotals>;
 }
 
 export interface JudgeStatsQuery { since: number; until?: number | undefined; project?: string | null | undefined; timezone?: string | undefined; runLimit?: number | undefined }
 
-interface Row { run_id: string; run_kind: string; project_id: string | null; reason_keys: string; ask_kinds: string; outcome: JudgeOutcome; judge_model: string | null; input_tokens: number | null; output_tokens: number | null; duration_ms: number; created_at: number }
+interface Row { failed: string | null; run_id: string; run_kind: string; project_id: string | null; reason_keys: string; ask_kinds: string; outcome: JudgeOutcome; judge_model: string | null; input_tokens: number | null; output_tokens: number | null; duration_ms: number; created_at: number }
 
 const empty = (): JudgeTotals => ({ calls: 0, allow: 0, ask: 0, failed: 0, inputTokens: 0, outputTokens: 0, ms: 0 });
 
@@ -78,7 +80,7 @@ export function judgeStats(db: DatabaseSync, query: JudgeStatsQuery): JudgeStats
   const args: Array<string | number> = [query.since, until];
   if (query.project === null) where.push('project_id IS NULL');
   else if (query.project !== undefined) { where.push('project_id = ?'); args.push(query.project); }
-  const rows = db.prepare(`SELECT run_id, run_kind, project_id, reason_keys, ask_kinds, outcome, judge_model, input_tokens, output_tokens, duration_ms, created_at FROM judge_calls WHERE ${where.join(' AND ')} ORDER BY created_at, id`).all(...args) as unknown as Row[];
+  const rows = db.prepare(`SELECT failed, run_id, run_kind, project_id, reason_keys, ask_kinds, outcome, judge_model, input_tokens, output_tokens, duration_ms, created_at FROM judge_calls WHERE ${where.join(' AND ')} ORDER BY created_at, id`).all(...args) as unknown as Row[];
   const format = dayFormat(query.timezone);
   const totals = empty();
   const days = new Map<string, { day: string } & JudgeTotals>();
@@ -86,6 +88,7 @@ export function judgeStats(db: DatabaseSync, query: JudgeStatsQuery): JudgeStats
   const keys = new Map<string, { key: string } & JudgeTotals>();
   const kinds = new Map<string, { kind: string } & JudgeTotals>();
   const models = new Map<string | null, { model: string | null } & JudgeTotals>();
+  const failures = new Map<string, { reason: string; beforeModel: boolean } & JudgeTotals>();
   for (const row of rows) {
     add(totals, row);
     const day = format.format(Number(row.created_at));
@@ -94,6 +97,10 @@ export function judgeStats(db: DatabaseSync, query: JudgeStatsQuery): JudgeStats
     for (const key of listOf(row.reason_keys)) add(keys.get(key) ?? keys.set(key, { key, ...empty() }).get(key)!, row);
     for (const kind of listOf(row.ask_kinds)) add(kinds.get(kind) ?? kinds.set(kind, { kind, ...empty() }).get(kind)!, row);
     add(models.get(row.judge_model) ?? models.set(row.judge_model, { model: row.judge_model, ...empty() }).get(row.judge_model)!, row);
+    if (row.outcome === 'failed') {
+      const reason = row.failed ?? 'error';
+      add(failures.get(reason) ?? failures.set(reason, { reason, beforeModel: BEFORE_MODEL.has(reason), ...empty() }).get(reason)!, row);
+    }
   }
   const runLimit = Math.min(Math.max(1, query.runLimit ?? 50), 500);
   return {
@@ -103,5 +110,6 @@ export function judgeStats(db: DatabaseSync, query: JudgeStatsQuery): JudgeStats
     keys: [...keys.values()].sort(byCalls(k => k.key)),
     askKinds: [...kinds.values()].sort(byCalls(k => k.kind)),
     models: [...models.values()].sort(byCalls(m => m.model ?? '')),
+    failures: [...failures.values()].sort(byCalls(f => f.reason)),
   };
 }

@@ -44,12 +44,13 @@ test('判定役の記録の移し替え: 前の版の DB に当てると空の j
   } finally { again.close(); }
 });
 
-test('判定役の記録の移し替え: 答えと実行の種類は決まった値だけ入る', t => {
+test('判定役の記録の移し替え: 答えは決まった値だけ入り、実行の種類は新しい種類でも落とさない', t => {
   const db = openDatabase(join(tempDir(t), 'beat.db'), MIGRATIONS);
   try {
     const insert = (kind: string, outcome: string) => db.prepare('INSERT INTO judge_calls (run_id, run_kind, tool, outcome, duration_ms, created_at) VALUES (?, ?, ?, ?, 0, 0)').run('r', kind, 't', outcome);
     assert.throws(() => insert('chat', 'maybe'), /CHECK/u);
-    assert.throws(() => insert('cron', 'allow'), /CHECK/u);
+    insert('a-future-kind', 'allow');
     insert('task', 'failed');
+    assert.deepEqual(db.prepare('SELECT run_kind FROM judge_calls ORDER BY id').all().map(r => r.run_kind), ['a-future-kind', 'task']);
   } finally { db.close(); }
 });

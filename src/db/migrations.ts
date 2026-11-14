@@ -519,7 +519,7 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE TABLE judge_calls (
     id INTEGER PRIMARY KEY,
     run_id TEXT NOT NULL,
-    run_kind TEXT NOT NULL CHECK (run_kind IN ('chat', 'task', 'agent', 'review')),
+    run_kind TEXT NOT NULL,
     project_id TEXT,
     tool TEXT NOT NULL,
     reason_keys TEXT NOT NULL DEFAULT '[]',

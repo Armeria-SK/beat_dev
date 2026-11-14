@@ -18,7 +18,7 @@ import { buildPolicy } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { readStats, renderStats } from '../scripts/judge-stats.ts';
+import { openReadOnly, readStats, renderStats } from '../scripts/judge-stats.ts';
 import type { StopReason } from '../src/engine/types.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
@@ -108,6 +108,23 @@ test('5-J1: 記録に命令の文・入力・頼みの文・理由の文が入�
   assert.deepEqual(Object.keys(rows[0]!).sort(), ['ask_kinds', 'created_at', 'duration_ms', 'failed', 'id', 'input_tokens', 'judge_model', 'outcome', 'output_tokens', 'project_id', 'reason_keys', 'run_id', 'run_kind', 'tool']);
 });
 
+test('5-J1: 記録の表が無い・書けないときも、道具の呼び出しは同じ結果になる', async t => {
+  const run = async (dropTable: boolean) => {
+    const r = rig(t);
+    if (dropTable) r.db.exec('DROP TABLE judge_calls');
+    const outcomes: unknown[] = [];
+    for (const answer of ['{"decision":"allow","reason":"fits"}', '{"decision":"ask","reason":"no"}']) {
+      r.judge.answer = answer;
+      const outcome = await r.call('judged_tool');
+      outcomes.push([outcome.decision, outcome.decidedBy, outcome.output.content.replace(/\d+/gu, 'N'), outcome.output.isError ?? false]);
+    }
+    return outcomes;
+  };
+  const withTable = await run(false);
+  assert.deepEqual(withTable.map(o => (o as unknown[])[1]), ['auto-mode', 'pending']);
+  assert.deepEqual(await run(true), withTable);
+});
+
 test('5-J1: 判定役を呼ばない道（順 1 で断る・順 3 で持ち主へ積む・順 4 で動かす・確かめの要らない呼び出し）は記録しない', async t => {
   const r = rig(t);
   assert.equal((await r.call('refused_tool')).decision, 'deny');
@@ -126,7 +143,12 @@ test('5-J1: 集計は日・実行・キー・種類・モデルごとの数と�
   recordJudgeCall(db, { ...base, runId: 'a', projectId: 'p1', reasonKeys: ['list.flag'], outcome: 'allow', spend: { ms: 100, model: 'm1', inputTokens: 500, outputTokens: 10 } }, day1);
   recordJudgeCall(db, { ...base, runId: 'a', projectId: 'p1', reasonKeys: ['list.flag', 'ask.curl'], askKinds: ['taint', 'egress'], outcome: 'ask', spend: { ms: 200, model: 'm1', inputTokens: 600, outputTokens: 20 } }, day1);
   recordJudgeCall(db, { ...base, runId: 'b', runKind: 'task', projectId: null, reasonKeys: ['ask.curl'], outcome: 'failed', failed: 'timeout', spend: { ms: 300 } }, day2);
+  recordJudgeCall(db, { ...base, runId: 'c', runKind: 'task', projectId: 'p2', reasonKeys: ['ask.curl'], outcome: 'failed', failed: 'no_request', spend: { ms: 0 } }, day2 + 3_600_000);
+  recordJudgeCall(db, { ...base, runId: 'c', runKind: 'task', projectId: 'p2', reasonKeys: ['ask.curl'], outcome: 'failed', failed: 'no_request', spend: { ms: 0 } }, day2 + 3_600_000);
+  assert.deepEqual(judgeStats(db, { since: 0, project: 'p2' }).failures.map(f => [f.reason, f.beforeModel, f.calls]), [['no_request', true, 2]]);
+  db.prepare("DELETE FROM judge_calls WHERE run_id = 'c'").run();
   const all = judgeStats(db, { since: day1 - 86_400_000, until: day2 + 1, timezone: 'UTC' });
+  assert.deepEqual(all.failures.map(f => [f.reason, f.beforeModel, f.calls, f.ms]), [['timeout', false, 1, 300]]);
   assert.deepEqual(all.totals, { calls: 3, allow: 1, ask: 1, failed: 1, inputTokens: 1100, outputTokens: 30, ms: 600 });
   assert.deepEqual(all.keys.map(k => [k.key, k.calls, k.inputTokens]), [['ask.curl', 2, 600], ['list.flag', 2, 1100]]);
   assert.deepEqual(all.askKinds.map(k => [k.kind, k.calls]), [['taint', 3], ['egress', 1]]);
@@ -178,6 +200,11 @@ test('5-J1: scripts/judge-stats.ts は DB を読むだけで、表を書く', t 
   assert.match(text, /^ask\.curl\t1\t0\t1\t0\t3\t2\t7$/mu);
   assert.match(text, /^taint\t1\t/mu);
   assert.equal(statSync(path).mtimeMs, before, 'DB を書き換えない');
+  assert.match(text, /^## Failed, by reason/mu);
+  const handle = openReadOnly(path);
+  try {
+    assert.throws(() => handle.prepare("INSERT INTO judge_calls (run_id, run_kind, tool, outcome, duration_ms, created_at) VALUES ('x', 'chat', 't', 'ask', 0, 0)").run(), /readonly/iu);
+  } finally { handle.close(); }
   assert.throws(() => readStats(join(tempDir(t), 'missing.db'), { days: 7, timezone: 'UTC', runs: 5 }), /no database/u);
 });
 
@@ -228,4 +255,51 @@ test('5-J1 (b): Settings で判定役に別のモデル（この PC のモデル
   const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
   await settled(s.app, sent.body.runId);
   assert.deepEqual(s.app.db.prepare('SELECT judge_model, input_tokens, output_tokens FROM judge_calls').all().map(r => ({ ...r })), [{ judge_model: 'local-judge', input_tokens: 50, output_tokens: 5 }]);
+});
+
+type JudgeEnd = 'truncated' | 'hang' | 'broken' | 'answer';
+
+function failingJudge(ends: Record<string, JudgeEnd>): Script[] {
+  const one: Script = (req: ModelRequest) => (async function* () {
+    if (isJudgeRequest(req)) {
+      const end = ends[req.model.id] ?? 'answer';
+      yield { type: 'usage', usage: { inputTokens: 900, outputTokens: 1 } };
+      if (end === 'answer') { yield { type: 'text', delta: '{"decision":"allow","reason":"fits"}' }; yield { type: 'usage', usage: { outputTokens: 12 } }; yield { type: 'done', stop: 'end_turn' as StopReason }; return; }
+      yield { type: 'text', delta: '{"decision":"al' };
+      yield { type: 'usage', usage: { outputTokens: 400 } };
+      if (end === 'truncated') { yield { type: 'done', stop: 'max_tokens' as StopReason }; return; }
+      if (end === 'broken') throw new Error('the stream broke');
+      await new Promise<void>(resolve => req.signal?.addEventListener('abort', () => resolve(), { once: true }));
+      throw new Error('aborted');
+    }
+    if (req.messages.some(m => m.role === 'tool')) { yield { type: 'text', delta: 'done' }; yield { type: 'done', stop: 'end_turn' as StopReason }; return; }
+    yield { type: 'tool_call', call: { id: `call_${Math.random().toString(36).slice(2)}`, name: 'outside_read', arguments: {} } };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  })();
+  return Array.from({ length: 20 }, () => one);
+}
+
+test('5-J1: 料金のかかった失敗（max_tokens で切れた・答えの途中で時間切れ・途中で壊れた）も、それまでのトークンとモデルを記録する', async t => {
+  const cases: Array<[JudgeEnd, string]> = [['truncated', 'unparsable'], ['hang', 'timeout'], ['broken', 'error']];
+  for (const [end, failed] of cases) {
+    const s = await startApp(t, { models: [fakeModel('m1')], tools: [engineRead as unknown as ToolDef], judgeLimits: { chat: { answerMs: 300, slotWaitMs: 5_000 }, unattended: { answerMs: 300 } } });
+    const id = uuid(80);
+    s.app.conversations.create({ id, title: end });
+    s.adapter().scripts = failingJudge({ m1: end });
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
+    await settled(s.app, sent.body.runId);
+    assert.deepEqual(s.app.db.prepare('SELECT outcome, failed, judge_model, input_tokens, output_tokens FROM judge_calls').all().map(r => ({ ...r })),
+      [{ outcome: 'failed', failed, judge_model: 'm1', input_tokens: 900, output_tokens: 400 }], end);
+  }
+});
+
+test('5-J1: 判定役を順に替えたときは、各モデルで使ったトークンを足し、答えたモデルを記録する', async t => {
+  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2'), fakeModel('m3')], tools: [engineRead as unknown as ToolDef], judgeLimits: { chat: { answerMs: 300, slotWaitMs: 5_000 }, unattended: { answerMs: 300 } }, configure: c => { c.routing.judge = ['m2', 'm3']; } });
+  const id = uuid(81);
+  s.app.conversations.create({ id, title: 'fallback' });
+  s.adapter().scripts = failingJudge({ m2: 'hang', m3: 'answer' });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(s.app.db.prepare('SELECT outcome, judge_model, input_tokens, output_tokens FROM judge_calls').all().map(r => ({ ...r })),
+    [{ outcome: 'allow', judge_model: 'm3', input_tokens: 1800, output_tokens: 412 }]);
 });

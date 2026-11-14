@@ -892,7 +892,7 @@ export class ChatEngine {
       const stop = () => own?.abort(signal.reason);
       if (own) signal.addEventListener('abort', stop, { once: true });
       const step: JudgeCall | undefined = own && call ? {
-        answerMs: call.answerMs, slotWaitMs: call.slotWaitMs, queued: () => call.queued(),
+        answerMs: call.answerMs, slotWaitMs: call.slotWaitMs, queued: () => call.queued(), used: (id, usage) => call.used?.(id, usage),
         started: () => { timer = setTimeout(() => { call.queued(); own.abort(new Error('the judge model did not answer in time')); }, call.answerMs); call.started(); },
       } : call;
       try {
@@ -926,7 +926,7 @@ export class ChatEngine {
         model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,
       })) {
         if (event.type === 'text') text += event.delta;
-        else if (event.type === 'usage') usage = { ...usage, ...event.usage };
+        else if (event.type === 'usage') { usage = { ...usage, ...event.usage }; call?.used?.(model.id, usage); }
         else if (event.type === 'done' && event.stop === 'max_tokens') throw new TruncatedReply();
       }
       // 返事の短い理由は承認の記録・画面の出来事・実行ログの API に出るので、API キーそのものは、読む前に伏せる
