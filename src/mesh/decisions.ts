@@ -34,7 +34,7 @@ function clip(text: string, max: number): string {
 }
 
 const one = (text: string): string => plainLine(redactSecrets(text), Infinity);
-const QUOTES = /["“”„‟＂«»]/gu;
+const QUOTES = /["\u201C\u201D\u201E\u201F\uFF02\u00AB\u00BB]/gu;
 const aiText = (text: string): string => one(text.normalize('NFKC')).replace(QUOTES, "'");
 
 export function decisionLine(d: OwnerDecision): string {
