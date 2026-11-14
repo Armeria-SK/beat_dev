@@ -11,13 +11,16 @@ import { tempDir } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
-function fixture(t: { after: (fn: () => void) => void }) {
+function fixture(t: { after: (fn: () => void) => void }, windows = false) {
   const base = tempDir(t);
   const root = realish(join(base, 'prod'));
   mkdirSync(join(root, 'sub'), { recursive: true });
   mkdirSync(join(root, 'sub,-C,x'), { recursive: true });
   mkdirSync(join(root, 'tests'), { recursive: true });
   writeFileSync(join(root, 'tests', 'a.test.js'), '');
+  writeFileSync(join(root, 'tests', 'b.test.js'), '');
+  writeFileSync(join(root, 'package.json'), '{}');
+  writeFileSync(join(root, 'pytest.ini'), '');
   const run = (...args: string[]) => {
     const out = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
     assert.equal(out.status, 0, `git ${args.join(' ')}: ${out.stderr}`);
@@ -29,7 +32,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   run('add', 'README.md');
   run('commit', '-q', '-m', 'init');
   const policy: ScopePolicy = { roots: [{ path: root, mode: 'write' }], deny: [], askOnWrite: [], skillsDir: join(base, 'skills') };
-  const check = (command: string, shell: ShellKind = 'pwsh'): ShellVerdict => checkShellCommand(command, root, { policy, outsideRoots: 'ask', shell, windows: false });
+  const check = (command: string, shell: ShellKind = 'pwsh'): ShellVerdict => checkShellCommand(command, root, { policy, outsideRoots: 'ask', shell, windows });
   const stepFour = (verdict: ShellVerdict) => productRunOf({
     root, verdict, which: () => undefined, ownerHooks: () => false,
     git: (dir, args) => {
@@ -50,7 +53,6 @@ test('Windows でない PowerShell でも、空白のあるカンマの並びの
   for (const shell of ['pwsh', 'powershell'] as const) {
     assert.equal(f.reached('git -C sub add -A', shell), 'product-git', `${shell}: ふつうの -C は順 4（土台の確かめ）`);
     assert.equal(f.reached('git -c user.name=a commit --allow-empty -m x', shell), 'product-git', `${shell}: 名乗りの -c は順 4（土台の確かめ）`);
-    assert.equal(f.reached('git -C sub,-C,x add -A', shell), 'product-git', `${shell}: きっちりつないだカンマの語は 1 つのフォルダ名（土台の確かめ）`);
     assert.equal(f.reached('node --test tests/a.test.js', shell), 'product-code', `${shell}: node --test は順 4（土台の確かめ）`);
     const commands = [
       'git -c user.name=a, -c, core.fsmonitor=x commit -m x',
@@ -93,5 +95,24 @@ test('順 4 の git は、許可の一覧と食い違う -c のキーを自分�
     const swapped: ShellVerdict = { ...verdict, statements: verdict.statements.map(st => ({ ...st, words: st.words.map(w => (w.text === 'user.name=a' ? { ...w, text: key } : w)) })) };
     assert.ok(swapped.statements[0]!.words.some(w => w.text === key), `${key}: 語を差し替えた`);
     assert.equal(f.stepFour(swapped), undefined, `${key}: 順 4 にしない`);
+  }
+});
+
+test('順 4 は、カンマを含むパス・-c・-C の値を、きっちりつないだ形でも引用符つきでも受けない（PowerShell 7 の渡し方を測っていないので閉じる）', { skip: !gitAvailable && 'git が無い' }, t => {
+  for (const [shell, windows] of [['pwsh', false], ['pwsh', true], ['powershell', true]] as const) {
+    const f = fixture(t, windows);
+    const label = (text: string) => `${shell}${windows ? ' (Windows)' : ''}: ${text}`;
+    for (const [command, run] of [
+      ['node --test tests/a.test.js tests/b.test.js', 'product-code'], ['vitest tests', 'product-code'], ['jest tests', 'product-code'], ['mocha tests', 'product-code'], ['pytest tests', 'product-code'],
+      ['git -C sub add -A', 'product-git'], ['git -c user.name=a commit --allow-empty -m x', 'product-git'],
+    ] as const) assert.equal(f.reached(command, shell), run, label(`カンマの無い形は順 4（土台の確かめ）: ${command}`));
+    const commands = [
+      'node --test tests/a.test.js,tests/b.test.js', 'node --test tests,--import,./x.mjs', "node --test 'tests/a.test.js','--import','./x.mjs'",
+      'vitest tests,--root,..', 'vitest tests, --root, ..', 'jest tests,--rootDir,..', 'mocha tests,--require,./x.cjs', 'pytest tests,--rootdir,..',
+      "git -c 'user.name=a','-c','core.fsmonitor=x' commit -m x", 'git -c user.name=a,-c,core.fsmonitor=x commit -m x', "git -c 'user.name=a,b' commit -m x",
+      'git -C sub,-C,x add -A', "git -C 'sub','-C','x' add -A", 'git -C "sub,-C,x" commit -m x',
+    ];
+    const leaked = commands.flatMap(command => { const step = f.reached(command, shell); return step ? [`${command} -> ${step}`] : []; });
+    assert.deepEqual(leaked, [], label('順 4 に乗った形'));
   }
 });

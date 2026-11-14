@@ -73,7 +73,7 @@ const pathLike = (text: string): boolean => /[\\/]/u.test(text) || text.startsWi
 const looseInside = (text: string, cwd: string, root: string): boolean => !text.startsWith('~') && !/^[A-Za-z]:(?![\\/])/u.test(text) && inside(root, resolve(cwd, text.replace(/\\/gu, '/')));
 
 function plainPathInside(text: string, cwd: string, root: string): boolean {
-  if (!/^[A-Za-z0-9_.][A-Za-z0-9_./\\:+@,-]*$/u.test(text) || /^[A-Za-z]:/u.test(text) || isAbsolute(text)) return false;
+  if (!/^[A-Za-z0-9_.][A-Za-z0-9_./\\:+@-]*$/u.test(text) || /^[A-Za-z]:/u.test(text) || isAbsolute(text)) return false;
   const parts = text.split(/[\\/]/u);
   if (parts.includes('..')) return false;
   return inside(root, resolve(cwd, parts.join('/')));
@@ -135,7 +135,7 @@ function gitTarget(st: StatementFacts, root: string): { dir: string; subAt: numb
   for (let i = 1; i < subAt; i += 2) {
     const flag = st.words[i]!;
     const value = st.words[i + 1];
-    if (flag.dynamic || flag.glob || !value || i + 1 >= subAt || value.dynamic || value.glob) return undefined;
+    if (flag.dynamic || flag.glob || !value || i + 1 >= subAt || value.dynamic || value.glob || value.text.includes(',')) return undefined;
     if (flag.text === '-C') {
       if (dir !== undefined || /^(?:~|[\\/]{2})/u.test(value.text) || /^[A-Za-z]:(?![\\/])/u.test(value.text)) return undefined;
       dir = resolve(st.cwd!, value.text);
