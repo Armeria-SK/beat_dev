@@ -77,7 +77,7 @@ for (const language of ['en'] as const) {
     // スキルの下書き
     s.app.skills.draft({ name: 'weekly-report', description: 'd', body: 'b', reason: 'r' });
     assert.equal(s.linkOf('info'), '#/skills/draft/weekly-report');
-    s.app.skills.onDraft!({ id: 99, name: 'a b/é', description: 'd', body: 'b', reason: null, status: 'pending', conversation_id: null, run_id: null, created_at: 0, decided_at: null });
+    s.app.skills.onDraft!({ id: 99, name: 'a b/é', description: 'd', body: 'b', reason: null, change_summary: null, status: 'pending', conversation_id: null, run_id: null, created_at: 0, decided_at: null });
     const newest = s.app.notifications.list().reduce((a, b) => (b.id > a.id ? b : a));
     assert.equal(newest.link, `#/skills/draft/${encodeURIComponent('a b/é')}`, '名前は URL 用に符号化する');
 

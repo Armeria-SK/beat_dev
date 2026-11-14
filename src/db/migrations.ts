@@ -510,6 +510,9 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE acceptance_versions ADD COLUMN item_states TEXT;
   `,
   `
+  ALTER TABLE skill_drafts ADD COLUMN change_summary TEXT;
+  `,
+  `
   UPDATE tasks SET status = 'inbox', lease_until = NULL, updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE origin = 'curiosity' AND status IN ('ready', 'running');
   `,
 ];

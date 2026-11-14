@@ -326,7 +326,7 @@ test('未登録の同じ名前の下書きは、承認の画面でも「新規�
   t.after(() => { web.server.closeAllConnections(); web.server.close(); });
   place(paths.workspace, 'dup', '直接置いた', '直接置いた手順');
   app.skills.write({ name: 'reg', description: '登録済み', body: '登録済みの手順' });
-  for (const name of ['dup', 'reg']) assert.ok(!(await skillDraft.execute({ name, description: '下書き', body: '下書きの手順', reason: 'r' }, ctxOf(app))).isError);
+  for (const name of ['dup', 'reg']) assert.ok(!(await skillDraft.execute({ name, description: '下書き', body: '下書きの手順', reason: 'r', change: 'c' }, ctxOf(app))).isError);
   const review = await (await fetch(`${origin}/api/review`, { headers: { Origin: origin } })).json() as any;
   const byName = Object.fromEntries(review.skillDrafts.map((d: any) => [d.name, d.current]));
   assert.equal(byName.dup, null, 'skill_draft が「新規」と答えたものに、画面が「改訂」と差分を出さない');
