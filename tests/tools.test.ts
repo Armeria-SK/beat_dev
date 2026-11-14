@@ -571,7 +571,7 @@ const powershellAuto = process.platform === 'win32' && /^(?:powershell|pwsh)$/u.
 
 test('PowerShell の前置き: npm・pnpm・yarn の .ps1 の shim には、ガードと同じ探し方で見つけた .cmd への別名を固定の文で置く', { skip: process.platform !== 'win32' && 'Windows の PATHEXT の探し方' }, t => {
   const root = tempDir(t);
-  const both = join(root, "it's ‘q’");
+  const both = join(root, "it's ‘q’‚r‛");
   const ps1Only = join(root, 'ps1-only');
   mkdirSync(both, { recursive: true });
   mkdirSync(ps1Only, { recursive: true });
@@ -583,17 +583,33 @@ test('PowerShell の前置き: npm・pnpm・yarn の .ps1 の shim には、ガ�
   t.after(() => { process.env.PATH = saved; });
   process.env.PATH = `${ps1Only}${delimiter}${both}`;
   const script = resolveShell('powershell').args('x')[3]!;
-  const quoted = join(both, 'pnpm.cmd').replace(/['‘’]/gu, '$&$&');
+  const quoted = join(both, 'pnpm.cmd').replace(/['‘’‚‛]/gu, '$&$&');
   assert.ok(script.includes(`Set-Alias pnpm '${quoted}' -Scope Global;`), script);
   assert.equal(findExecutable('pnpm', scrubEnv(), root, { powershell: true }), join(both, 'pnpm.cmd'), 'ガードが見るファイルと同じ');
   assert.ok(!/Set-Alias npm /u.test(script), '先に .ps1 だけのフォルダがあれば別名を置かない（PowerShell も先にそれを選ぶ）');
   assert.ok(!/Set-Alias yarn /u.test(script), '.ps1 の無い .cmd には別名は要らない');
 });
 
+test('PowerShell の前置き: 別名の先のパスに [ ] があるとき・ドライブ文字が無いときは、別名を置かない', { skip: process.platform !== 'win32' && 'Windows の PATHEXT の探し方' }, t => {
+  const root = tempDir(t);
+  const saved = process.env.PATH;
+  t.after(() => { process.env.PATH = saved; });
+  const shims = (dir: string) => { mkdirSync(dir, { recursive: true }); for (const name of ['pnpm.cmd', 'pnpm.ps1']) writeFileSync(join(dir, name), ''); return dir; };
+  const bracket = shims(join(root, 'b[r]acket'));
+  const plain = shims(join(root, 'plain'));
+  for (const dir of [bracket, `\\\\?\\${plain}`]) {
+    process.env.PATH = dir;
+    assert.ok(findExecutable('pnpm', scrubEnv(), root, { powershell: true }), `${dir}: 探せる`);
+    assert.ok(!/Set-Alias pnpm /u.test(resolveShell('powershell').args('x')[3]!), dir);
+  }
+  process.env.PATH = plain;
+  assert.ok(/Set-Alias pnpm /u.test(resolveShell('powershell').args('x')[3]!), '対照: ふつうのパスなら置く');
+});
+
 test('PowerShell（実機）: 終了コードは最後の外部コマンドのものになる', { skip: !powershellAuto && 'Windows の PowerShell ではない' }, async t => {
   const dir = tempDir(t);
   const run = (command: string) => runProcess(autoShell.file, autoShell.args(command), { cwd: dir, env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 20_000 });
-  for (const [command, code] of [['node -e "process.exit(4)"', 4], ['node -e "process.exit(3)" # comment', 3], ['node -e "process.exit(4)"; Write-Output hi', 0], ['Get-Item no-such-file-here', 1], ['exit 7', 7], ['Write-Output ok', 0]] as const) {
+  for (const [command, code] of [['node -e "process.exit(4)"', 4], ['node -e "process.exit(3)" # comment', 3], ['node -e "process.exit(4)"; Write-Output hi', 0], ['Get-Item no-such-file-here', 1], ["$LASTEXITCODE = '0'; Get-Item no-such-file-here", 1], ['exit 7', 7], ['Write-Output ok', 0]] as const) {
     assert.equal((await run(command)).exitCode, code, command);
   }
 });

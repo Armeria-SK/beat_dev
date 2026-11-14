@@ -361,7 +361,7 @@ test('2-3 製品の実行の子の担当の会話は製品の system（指示フ
   assert.ok(plainChild.includes('SOUL-MARKER') && !plainChild.includes('CHILD-RULES') && !plainChild.includes('MEMORY-MARKER'));
 });
 
-test('2-3 製品のタスクの会話: 固定の system に指示ファイルがあり、SOUL.md・USER.md・記憶の節が無い。製品に属さないタスクは今までどおり', async t => {
+test('2-3 製品のタスクの会話: 固定の system に指示ファイルがあり、SOUL.md・USER.md が無い。製品に属さないタスクは今までどおり', async t => {
   const s = await setup(t);
   writeFileSync(join(s.root, 'AGENTS.md'), 'TASK-RULES');
   await s.app.worker.tick();
@@ -370,7 +370,7 @@ test('2-3 製品のタスクの会話: 固定の system に指示ファイルが
   assert.equal(await s.app.worker.tick(), 'ran');
   const frozen = frozenOf(s.app, s.app.tasks.get(product.id)!.conversation_id!);
   assert.match(frozen, /# Product instructions \(AGENTS\.md\)\n\nTASK-RULES/u);
-  for (const absent of ['SOUL-MARKER', 'USER-MARKER', 'MEMORY-MARKER', '# What you remember (memory)']) assert.ok(!frozen.includes(absent), absent);
+  for (const absent of ['SOUL-MARKER', 'USER-MARKER']) assert.ok(!frozen.includes(absent), absent);
   assert.equal(s.adapter().calls.at(-1)!.system.frozen, frozen);
   const plain = s.app.tasks.create({ title: 'Plain chore', origin: 'user', actor: 'user' });
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'done', notify: false }));

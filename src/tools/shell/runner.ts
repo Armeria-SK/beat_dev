@@ -59,7 +59,7 @@ export function findExecutable(name: string, env: Record<string, string>, cwd: s
     const dir = raw === '' || raw === '.' ? cwd : raw;
     for (const candidate of names) {
       const file = join(dir, candidate);
-      try { if (statSync(file).isFile()) return file; } catch { /* 無い */ }
+      try { if (statSync(file, { throwIfNoEntry: false })?.isFile()) return file; } catch { /* 無い */ }
     }
   }
   return undefined;
@@ -79,14 +79,14 @@ const PS_UTF8 = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputE
 // 文字コードの設定のあと、制限モードにする。.NET の直接呼び出し（[IO.File]::...）・New-Object・Add-Type が止まり、元のモードへ戻すのも止まる
 const PS_CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';";
 const PS_UNALIAS = 'Remove-Item Alias:curl,Alias:wget -Force -ErrorAction Ignore;';
-const PS_EXIT = '\n;if(-not $?){if($LASTEXITCODE){exit $LASTEXITCODE};exit 1}';
+const PS_EXIT = '\n;if(-not $?){if($LASTEXITCODE -is [int] -and $LASTEXITCODE){exit $LASTEXITCODE};exit 1}';
 
 function psShimAliases(): string {
   const env = scrubEnv();
   let out = '';
   for (const name of ['npm', 'pnpm', 'yarn']) {
     const file = findExecutable(name, env, process.cwd(), { powershell: true });
-    if (!file || /\.ps1$/iu.test(file) || !existsSync(join(dirname(file), `${name}.ps1`))) continue;
+    if (!file || /\.ps1$/iu.test(file) || /[[\]]/u.test(file) || (WINDOWS && !/^[A-Za-z]:[\\/]/u.test(file)) || !existsSync(join(dirname(file), `${name}.ps1`))) continue;
     out += `Set-Alias ${name} '${file.replace(/['‘’‚‛]/gu, '$&$&')}' -Scope Global;`;
   }
   return out;
