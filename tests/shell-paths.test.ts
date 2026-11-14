@@ -243,7 +243,7 @@ test('bash の引用符つきのコマンド名（"ln"・"cp"・"curl"）は、�
 test('リンクを作るコマンド: cmd /c の引用符でまとめた中身・@・/s・くっついた /c と、cp の略した長いオプション（--li・--sy）も今回だけ', t => {
   const f = fixture(t);
   const allow = [...PS_WRITER_ALLOW, 'cmd', 'mklink', 'cp'];
-  for (const command of ['cmd /c "mklink /H link notes.md"', 'cmd /s /c "mklink /H link notes.md"', 'cmd /c @mklink /J link docs', 'cmd /c "@mklink /H link notes.md"', 'cmd /cmklink /H link notes.md']) {
+  for (const command of ['cmd /c "mklink /H link notes.md"', 'cmd /s /c "mklink /H link notes.md"', 'cmd /c @mklink /J link docs', 'cmd /c "@mklink /H link notes.md"', 'cmd /cmklink /H link notes.md', 'cmd /c "call mklink /H link notes.md"', 'cmd /c "(mklink /H link notes.md)"', 'cmd /c "( call mklink /J link docs )"']) {
     const v = f.ps(command, { allow });
     assert.notEqual(v.decision, 'allow', `${command}: ${v.decision}`);
   }

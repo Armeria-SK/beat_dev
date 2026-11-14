@@ -51,7 +51,7 @@ export function pushProtectOf(input: PushProtectInput): PushProtect {
       if (!commit || !/^[0-9a-f]{40,64}$/u.test(commit)) return { unchecked: true };
       revisions.push(commit);
     }
-    const changed = input.git(top, ['log', '--format=', '--name-only', '-z', '--no-renames', '-m', 'HEAD', ...(st.words.some(w => w.text === '--mirror') ? [] : ['--exclude=refs/prefetch/*', '--exclude=refs/original/*']), '--all', ...stashes.split(/\s+/u).filter(Boolean), ...revisions, '--not', '--remotes']);
+    const changed = input.git(top, ['log', '--format=', '--name-only', '-z', '--no-renames', '-m', 'HEAD', ...(st.words.some(w => w.text.length >= 3 && '--mirror'.startsWith(w.text)) ? [] : ['--exclude=refs/prefetch/*', '--exclude=refs/original/*']), '--all', ...stashes.split(/\s+/u).filter(Boolean), ...revisions, '--not', '--remotes']);
     if (changed === undefined) return { unchecked: true };
     const paths = [...new Set(changed.split(/\0|\r?\n/u).map(name => name.trim()).filter(Boolean))].map(name => ({ path: resolve(top, name), write: true }));
     if (!paths.length) continue;

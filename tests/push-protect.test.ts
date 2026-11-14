@@ -90,6 +90,8 @@ test('push の守るファイル: refs/prefetch・refs/original の下だけに�
   r.git('update-ref', 'refs/prefetch/remotes/origin/main', commit);
   r.git('update-ref', 'refs/original/refs/heads/main', commit);
   assert.equal(r.protectOf('git push origin main'), undefined);
-  const mirror = r.protectOf('git push --mirror origin');
-  assert.ok(mirror && 'files' in mirror && mirror.files.some(f => f.includes('ci.yml')), `--mirror は refs/prefetch・refs/original も送る: ${JSON.stringify(mirror)}`);
+  for (const flag of ['--mirror', '--mir', '--mirr']) {
+    const mirror = r.protectOf(`git push ${flag} origin`);
+    assert.ok(mirror && 'files' in mirror && mirror.files.some(f => f.includes('ci.yml')), `${flag} は refs/prefetch・refs/original も送る: ${JSON.stringify(mirror)}`);
+  }
 });

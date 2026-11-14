@@ -123,7 +123,8 @@ function linkFormOf(key: string, words: readonly Word[], ps: boolean): string | 
   if (key === 'cmd') {
     const at = args.findIndex(w => /^\/[ckr]/iu.test(w.text));
     if (at < 0 || args.slice(at).some(w => w.dynamic)) return undefined;
-    const tokens = [args[at]!.text.slice(2), ...args.slice(at + 1).map(w => w.text)].join(' ').split(/\s+/u).map(t => t.replace(/^["@]+|"+$/gu, '')).filter(Boolean);
+    const tokens = [args[at]!.text.slice(2), ...args.slice(at + 1).map(w => w.text)].join(' ').split(/\s+/u).map(t => t.replace(/^["@(]+|"+$/gu, '')).filter(Boolean);
+    while (tokens[0]?.toLowerCase() === 'call') tokens.shift();
     const inner = tokens.map((text): Word => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' }));
     return inner[0] ? linkFormOf(inner[0].text.toLowerCase().replace(/\.exe$/u, ''), inner, false) : undefined;
   }
