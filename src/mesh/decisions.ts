@@ -1,9 +1,7 @@
-import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
-import { replaceFile } from './files.ts';
-import { MeshWriteError } from './map.ts';
+import { readOwn, replaceFile } from './files.ts';
 
 export const DECISIONS_FILE = 'DECISIONS.md';
 export const DECISIONS_OLD_FILE = 'DECISIONS-old.md';
@@ -36,13 +34,14 @@ function clip(text: string, max: number): string {
 }
 
 const one = (text: string): string => plainLine(redactSecrets(text), Infinity);
+const aiText = (text: string): string => one(text).replaceAll('"', "'");
 
 export function decisionLine(d: OwnerDecision): string {
   const what = d.kept ? 'kept the assumed answer' : `changed the answer${d.item ? `, reopened ${d.item}` : ''}`;
   const head = `- ${d.date} question #${d.questionId}: ${what}. Owner ${d.picked === 'option' ? 'picked' : 'wrote'}: "`;
   const tail = d.external ? EXTERNAL_MARK : '';
-  const answer = one(d.answer);
-  const question = one(d.question);
+  const answer = d.picked === 'option' ? aiText(d.answer) : one(d.answer);
+  const question = aiText(d.question);
   const asked = (q: string) => (q ? `. AI asked: "${q}"` : '');
   const frame = chars(asked('-')) - 1;
   const room = DECISIONS_LINE_MAX - chars(head) - chars(tail) - 1;
@@ -54,13 +53,6 @@ export function decisionLine(d: OwnerDecision): string {
 }
 
 export const decisionRows = (content: string): number => content.split(/\r?\n/u).filter(line => line.startsWith('- ')).length;
-
-function readOwn(file: string, name: string): string | undefined {
-  const stat = lstatSync(file, { throwIfNoEntry: false });
-  if (!stat) return undefined;
-  if (!stat.isFile() || stat.nlink !== 1) throw new MeshWriteError('file_unusable', { file: name });
-  return readFileSync(file, 'utf8');
-}
 
 function withRows(existing: string | undefined, head: readonly string[], added: readonly string[]): string {
   if (existing === undefined) return `${[...head, ...added].join('\n')}\n`;

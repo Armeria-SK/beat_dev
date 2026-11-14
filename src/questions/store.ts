@@ -105,6 +105,7 @@ export interface QuestionAnswered {
   resumedTaskId: string | null;
   repeated: boolean;
   reopenedItem: string | null;
+  warning: string | null;
 }
 
 export interface QuestionChange { id: number; projectId: string | null; status: QuestionStatus }
@@ -248,12 +249,22 @@ export class QuestionStore {
     const tasks = this.options.tasks;
     if (!tasks) throw new Error('QuestionStore needs the task store to take answers');
     const acceptance = this.options.acceptance;
-    const item = kind === 'changed' && row.acceptance_item && row.project_id && acceptance?.hasLiveItem(row.project_id, row.acceptance_item) ? row.acceptance_item : null;
     const result = transaction(this.db, () => {
       const blockedTask = row.blocking === 1 && row.task_id ? tasks.get(row.task_id) : undefined;
       if (blockedTask?.status === 'running') throw new QuestionError('task_running', { id });
       const done = this.db.prepare("UPDATE questions SET status = 'answered', answer = ?, answer_kind = ?, answered_at = ? WHERE id = ? AND status = 'open'").run(answerText, kind, this.#now(), id);
       if (Number(done.changes) !== 1) return undefined;
+      let reopenedItem: string | null = null;
+      let warning: string | null = null;
+      if (kind === 'changed' && row.acceptance_item && row.project_id && acceptance) {
+        try {
+          const taint = text === null && row.tainted === 1 ? `question:${id}` : null;
+          if (acceptance.reopenForAnswer(row.project_id, row.acceptance_item, { questionId: id, answer: answerText, picked: text === null ? 'option' : 'text', taint })) reopenedItem = row.acceptance_item;
+        } catch (error) {
+          if (!(error instanceof AcceptanceError)) throw error;
+          warning = `Question ${id} was answered, but acceptance item ${row.acceptance_item} of product ${row.project_id} was not reopened: ${error.message}`;
+        }
+      }
       let fixTaskId: string | null = null;
       let reopenedTaskId: string | null = null;
       let resumedTaskId: string | null = null;
@@ -269,20 +280,11 @@ export class QuestionStore {
           reopenedTaskId = row.task_id;
         }
       } else if (kind === 'changed') {
-        fixTaskId = this.#fixTask(tasks, row, options, answerText, text !== null, item);
+        fixTaskId = this.#fixTask(tasks, row, options, answerText, text !== null, reopenedItem);
       }
       const follow = fixTaskId ?? reopenedTaskId;
       if (follow) this.db.prepare('UPDATE questions SET fix_task_id = ? WHERE id = ?').run(follow, id);
-      let reopenedItem: string | null = null;
-      if (item && acceptance) {
-        try {
-          const taint = text === null && row.tainted === 1 ? `question:${id}` : null;
-          if (acceptance.reopenForAnswer(row.project_id!, item, { questionId: id, answer: answerText, picked: text === null ? 'option' : 'text', taint })) reopenedItem = item;
-        } catch (error) {
-          if (!(error instanceof AcceptanceError)) throw error;
-        }
-      }
-      return { fixTaskId, reopenedTaskId, resumedTaskId, reopenedItem };
+      return { fixTaskId, reopenedTaskId, resumedTaskId, reopenedItem, warning };
     });
     const latest = this.get(id)!;
     if (!result) return this.#answered(latest);
@@ -294,7 +296,7 @@ export class QuestionStore {
     const reopened = REOPEN_KINDS.includes(row.kind);
     return {
       question: this.view(row.id)!, kind: row.answer_kind ?? 'kept',
-      fixTaskId: reopened ? null : row.fix_task_id, reopenedTaskId: reopened ? row.fix_task_id : null, resumedTaskId: null, reopenedItem: null, repeated: true,
+      fixTaskId: reopened ? null : row.fix_task_id, reopenedTaskId: reopened ? row.fix_task_id : null, resumedTaskId: null, reopenedItem: null, warning: null, repeated: true,
     };
   }
 

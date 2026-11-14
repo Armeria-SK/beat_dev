@@ -262,6 +262,7 @@ export function docOf(raw: string): AcceptanceDoc | undefined {
 }
 
 function overlay(base: AcceptanceDoc, file: AcceptanceDoc | undefined): AcceptanceDoc {
+  if (file && file.version > base.version) return base;
   const live = new Map((file?.items ?? []).map(entry => [entry.id, entry]));
   return {
     ...base,
@@ -595,7 +596,7 @@ export class AcceptanceStore {
   #behind(projectId: string): { file: AcceptanceDoc | undefined; doc: AcceptanceDoc } | undefined {
     const row = this.latest(projectId);
     const file = this.#readFile(projectId);
-    if (!row || (file && file.version >= row.version)) return undefined;
+    if (!row || (file && file.version === row.version)) return undefined;
     const stored = docOf(row.content);
     return stored ? { file, doc: overlay(stored, file) } : undefined;
   }

@@ -44,6 +44,7 @@ export function registerQuestionRoutes(router: Router, app: App): void {
     }
     if (!result) throw domainProblem(404, 'not_found', new QuestionError('not_found', { id }));
     if (!result.repeated) {
+      if (result.warning) app.log(`[WARN] ${result.warning}`);
       const row = app.questions.get(id);
       if (row?.project_id) {
         try {

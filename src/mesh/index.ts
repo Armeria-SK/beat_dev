@@ -10,7 +10,7 @@ import { plainLine } from '../shared/plain-text.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import type { AcceptanceDoc } from '../projects/acceptance.ts';
-import { dateIn, isMarkdown, listMeshFiles, MeshError, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
+import { dateIn, isMarkdown, listMeshFiles, MeshError, readOwn, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
 import { acceptanceLines, readMesh, searchMesh, type MeshText } from './search.ts';
 import { cleanRelPath, dotted, EMPTY_HASH, fileInside, folderExists, listingHash, pathExists, scanFolders, type FolderScan } from './folders.ts';
 import { appendDecision, DECISIONS_FILE, DECISIONS_OLD_FILE, decisionLine, decisionRows, type OwnerDecision } from './decisions.ts';
@@ -172,13 +172,6 @@ interface Light {
 }
 
 interface MapFresh { scan: FolderScan; marks: Map<string, 'missing' | 'stale'>; at: number }
-
-function readOwn(file: string, name: string): string | undefined {
-  const stat = lstatSync(file, { throwIfNoEntry: false });
-  if (!stat) return undefined;
-  if (!stat.isFile() || stat.nlink !== 1) throw new MeshWriteError('file_unusable', { file: name });
-  return readFileSync(file, 'utf8');
-}
 
 function summarize(doc: AcceptanceDoc | undefined): AcceptanceSummary | null {
   if (!doc) return null;
