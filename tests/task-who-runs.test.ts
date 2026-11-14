@@ -316,7 +316,12 @@ test('5-1: 承認していない beat の繰り返しを「もう一度」で開
   assert.ok(s.app.tasks.events(rejected.id).some(e => e.kind === 'approved'));
 
   const ended = s.app.tasks.create({ title: 'AI ended', origin: 'curiosity', propose: true, cron: '0 9 * * *', timezone: 'UTC', actor: 'worker' });
-  s.app.tasks.finish(ended.id, 'done', 'ended by beat', 'beat');
+  assert.throws(() => s.app.tasks.finish(ended.id, 'done', 'ended by beat', 'beat'), /cannot be marked done/u);
+  assert.equal(s.app.tasks.get(ended.id)!.status, 'inbox');
+  s.app.tasks.approve(ended.id);
+  s.app.tasks.unapprove(ended.id);
+  assert.throws(() => s.app.tasks.finish(ended.id, 'done', null, 'beat'), /cannot be marked done/u);
+  assert.equal(s.app.tasks.finish(ended.id, 'cancelled', null, 'beat').status, 'cancelled');
   const restarted = s.app.tasks.reopen(ended.id, 'user');
   assert.deepEqual([restarted.status, restarted.origin, restarted.proposed_by], ['scheduled', 'user', 'curiosity']);
 
@@ -325,4 +330,10 @@ test('5-1: 承認していない beat の繰り返しを「もう一度」で開
   s.app.tasks.finish(legacy.id, 'cancelled', null, 'user');
   const reopened = s.app.tasks.reopen(legacy.id, 'beat');
   assert.deepEqual([reopened.status, reopened.origin, reopened.proposed_by], ['scheduled', 'self', null]);
+
+  const oldDone = s.app.tasks.create({ title: 'Ended before 5-1', origin: 'self', cron: '0 9 * * *', timezone: 'UTC', actor: 'beat' });
+  s.app.tasks.finish(oldDone.id, 'done', null, 'user');
+  const restartedOld = s.app.tasks.reopen(oldDone.id, 'user');
+  assert.deepEqual([restartedOld.status, restartedOld.origin, restartedOld.owner_request], ['scheduled', 'self', null]);
+  assert.equal(s.app.tasks.judgeRequest(restartedOld.id), '');
 });

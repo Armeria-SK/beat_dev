@@ -402,6 +402,8 @@ export class TaskStore {
   }
 
   finish(id: string, status: 'done' | 'failed' | 'cancelled', summary: string | null, actor: string, runId?: string, reason?: string): Task {
+    const before = this.get(id);
+    if (status === 'done' && actor !== 'user' && before && this.#unapprovedTemplate(before)) throw new TaskError('error.proposal_not_done');
     this.#writeFinish(id, status, summary, actor, runId, reason);
     return this.#changed(id);
   }
@@ -506,6 +508,12 @@ export class TaskStore {
       this.#db.prepare("UPDATE tasks SET origin = 'user', proposed_by = ?, owner_request = ? WHERE id = ?").run(task.origin, request, task.id);
     }
     this.event(task.id, 'approved', 'user');
+  }
+
+  #unapprovedTemplate(task: Task): boolean {
+    if (task.cron === null || task.parent_id !== null || (task.origin !== 'self' && task.origin !== 'curiosity')) return false;
+    const last = this.#db.prepare("SELECT kind FROM task_events WHERE task_id = ? AND kind IN ('approved', 'unapproved') ORDER BY id DESC LIMIT 1").get(task.id) as { kind: string } | undefined;
+    return last?.kind !== 'approved';
   }
 
   #neverRan(task: Task): boolean {
@@ -633,10 +641,10 @@ export class TaskStore {
     const isTemplate = task.cron !== null && task.parent_id === null;
     const nextRun = isTemplate ? nextRunAt(task.cron!, task.timezone ?? 'UTC', now) : null;
     if (isTemplate && nextRun === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
-    const unapproved = isTemplate && (task.origin === 'self' || task.origin === 'curiosity') && !this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'approved' LIMIT 1").get(id);
+    const unapproved = this.#unapprovedTemplate(task);
     if (unapproved && actor !== 'user') throw new TaskError('error.needs_approval');
     transaction(this.#db, () => {
-      if (unapproved) this.#adopt(task);
+      if (unapproved && task.status === 'cancelled') this.#adopt(task);
       this.#db.prepare(`UPDATE tasks SET status = ?, attempts = 0, run_at = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
         .run(isTemplate ? 'scheduled' : 'ready', nextRun, now, id);
       this.event(id, 'reopened', actor, reason ?? null);
