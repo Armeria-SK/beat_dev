@@ -56,6 +56,7 @@
 - 移し替え 24（判定役の印の付け直し）: 前からあるタスクの経過（`context` `note` `edited` に `run_id`）のうち、読んだ実行・読んだ会話の実行・会話の分からない実行（記録が無い、または会話を前に消して `conversation_id` が NULL）が書いたものがあるタスクに、印 `untrusted-input`（`context`、actor `system`）を 1 つ足す。予定を前に消して残った実行のタスク（`origin = 'schedule'` で `parent_id` が NULL。予定の本文を写したまま証拠が無い）にも足す。前の版では印を書いた時点で付けていなかったので、会話を消すと AI の文が判定役に届いていた。予定に付いた印は、予定を消すときに `remove` が実行のタスクへ移す（予定があるあいだは実行のタスクは予定の経過も見る）。すでに印のあるタスクには足さない。`unapprove` の「いちばん新しい経過が承認か」は印の行を数えない
 - 移し替え 25（beat 4-2b）: 表 `pending_actions`（Pending に積んだ操作。実行に使う生の入力 `input`・画面に出す伏せた形 `shown` と伏せた数 `masked`・種類 `kind`・状態 `status`〔waiting → running → ran / failed / stale、ほかに rejected / cancelled〕・事前の判定の `bind`・消すの行の控え `state`・結果の末尾）と索引 2 つ。読み書きは `src/pending/store.ts` だけ。
 - 移し替え 27（beat 4-3b-2）: 会話の `permission_mode` が `normal` のものを `auto` にし、待っている承認（`approvals` の `pending`）を `cancelled` にする（消したモードで積んだ確かめを残さない）。列 `ever_auto_read` は残す
+- 移し替え 28: 移し替え 27 のあとに列の既定値（`normal` のまま。SQLite は表を作り直さないと既定値を変えられない）で書かれた会話の `permission_mode` を `auto` にする。`Conversations.create` は、モードを渡さない行（タスク・子・振り返り）にも `auto` を書くので、新しい行に `normal` は入らない。
 - 移し替え 26（beat 4-J）: `tasks.owner_request`（NULL 可。持ち主が作ったタスクの頼み〔題・本文・終わりの条件の JSON〕。書くのは画面の `POST /api/tasks`〔繰り返しのひな形も〕と、汚れていない計画書の Build だけ。前からあるタスクは NULL）
 - 入口: `src/db/database.ts`（`openDatabase`）
 - 使うもの: `node:sqlite` だけ（型として `engine/types.ts` を参照）
