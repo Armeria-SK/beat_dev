@@ -608,6 +608,7 @@ export class AcceptanceStore {
   repair(projectId: string): boolean {
     const behind = this.#behind(projectId);
     if (!behind) return false;
+    if (behind.file && behind.file.version > behind.doc.version) this.#log(`[WARN] acceptance.json of product ${projectId} was at version ${behind.file.version}, ahead of the saved version ${behind.doc.version}. Restored the saved version`);
     this.#replace(this.#file(projectId), behind.doc);
     return true;
   }

@@ -34,7 +34,8 @@ function clip(text: string, max: number): string {
 }
 
 const one = (text: string): string => plainLine(redactSecrets(text), Infinity);
-const aiText = (text: string): string => one(text).replaceAll('"', "'");
+const QUOTES = /["“”„‟＂«»]/gu;
+const aiText = (text: string): string => one(text.normalize('NFKC')).replace(QUOTES, "'");
 
 export function decisionLine(d: OwnerDecision): string {
   const what = d.kept ? 'kept the assumed answer' : `changed the answer${d.item ? `, reopened ${d.item}` : ''}`;

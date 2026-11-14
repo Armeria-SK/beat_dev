@@ -45,6 +45,8 @@ export function registerQuestionRoutes(router: Router, app: App): void {
     if (!result) throw domainProblem(404, 'not_found', new QuestionError('not_found', { id }));
     if (!result.repeated) {
       if (result.warning) app.log(`[WARN] ${result.warning}`);
+      const reopenedIn = result.reopenedItem && result.question.project_id ? app.acceptance.latest(result.question.project_id) : undefined;
+      if (reopenedIn) app.bus.publish({ type: 'acceptance.changed', projectId: reopenedIn.project_id, version: reopenedIn.version, draft: false });
       const row = app.questions.get(id);
       if (row?.project_id) {
         try {
