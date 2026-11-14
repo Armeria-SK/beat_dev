@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
-import { outboundOf, pushesOf, type OutboundEnv } from '../src/tools/hooks/outbound.ts';
+import { outboundOf, pushesOf, systemTarFirst, type OutboundEnv } from '../src/tools/hooks/outbound.ts';
 import { gitOutboundEnv } from '../src/tools/hooks/outbound-env.ts';
 import { remoteKey } from '../src/projects/remotes.ts';
 import { findExecutable } from '../src/tools/shell/runner.ts';
@@ -428,7 +428,7 @@ test('送る: tar の遠くのアーカイブ（-f host:path）は send。手元
   expectKinds(f.kindOf, 'bash', undefined, [
     'tar -cf out.tar a.txt', 'tar cf out.tar a.txt', 'tar -cf ./a:b.tar a.txt', 'tar -cf dist/a:b.tar a.txt', 'tar --force-local -cf host:out.tar a.txt', 'tar -cf out.tar a:b.txt', 'tar -tf out.tar',
   ]);
-  expectKinds(f.kindOf, 'powershell', undefined, ['tar -cf C:\\x.tar a.txt', 'tar -cf C:/x.tar a.txt', 'tar --file=D:\\out\\x.tar -c a.txt']);
+  expectKinds((command, shell) => f.kindOf(command, shell, { ...f.env, tarDrivesLocal: true }), 'powershell', undefined, ['tar -cf C:\\x.tar a.txt', 'tar -cf C:/x.tar a.txt', 'tar --file=D:\\out\\x.tar -c a.txt']);
   expectKinds(f.kindOf, 'bash', 'send', ['tar -cf C:/x.tar a.txt', 'tar -tf q:/nope.tar', 'tar --file=D:/out/x.tar -c a.txt']);
   expectKinds(f.kindOf, 'bash', undefined, ['tar --force-local -cf C:/x.tar a.txt']);
   expectKinds(f.kindOf, 'powershell', 'send', ['tar -cf host:out.tar a.txt']);
@@ -442,4 +442,78 @@ test('消す: truncate で大きさを 0 にするのは delete（Clear-Content 
   ]);
   expectKinds(f.kindOf, 'bash', undefined, ['truncate -s 0 a.txt', 'truncate -s 0 made.txt', 'truncate -s 100 changed.txt', 'truncate -s +0 changed.txt', 'truncate -s 10K changed.txt']);
   assert.equal(f.kindOf('truncate -s 0 a.txt', 'bash', f.noProduct), 'delete');
+});
+
+test('送る: tar の遠くのアーカイブの取りこぼし（変数の名前・TAPE・値を取るオプションのあとの --force-local・古い書き方の値の順・bsdtar）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    'tar -cf $DEST a.txt', 'tar -xf "$A"', 'tar --file=$DEST -c a.txt', 'TAPE=host:x tar -c a.txt', 'tar -c --exclude --force-local -f host:out.tar a.txt',
+    'tar -c -X --force-local -f host:out.tar a.txt', 'tar -cX --force-local -f host:out.tar a.txt', 'bsdtar -cf host:out.tar a.txt', 'tar cbf 20 host:out.tar a.txt',
+    'tar -c -b 20 -f host:out.tar a.txt', 'tar cfb host:out.tar 20 a.txt', 'tar -c --exclude-f --force-local -f host:out.tar a.txt',
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'tar -cCfoo:bar -f out.tar a.txt', 'tar -c --exclude=a:b -f out.tar a.txt', 'tar -c --exclude a:b -f out.tar a.txt', 'tar cbf 20 out.tar a.txt', 'tar -czf out.tar.gz tracked',
+    'tar -c --force-local -f host:out.tar a.txt', 'tar --force-local -cf $DEST a.txt', 'TAPE=host:x tar -cf out.tar a.txt', 'tar -xzf dist/in.tar.gz -C dist', 'tar -c -b 20 -f out.tar a.txt',
+    'tar cfb out.tar 20 host:x',
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'tar -cLf host:x a.txt', 'tar -cHf host:x a.txt', 'tar -cTf host:x a.txt', 'tar -cIf host:x a.txt', 'tar -cbf host:x a.txt', 'tar -cCf host:x a.txt', 'tar -cL10f host:x a.txt',
+    'tar cLf host:x a.txt', 'tar cLf host:x 10 a.txt', 'ls | xargs --replace X ssh h',
+  ]);
+});
+
+test('送る: PowerShell の tar のドライブの形のアーカイブは、PATH で先に見つかる tar が System32 のものでなければ send', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  const drive = ['tar -cf C:\\x.tar a.txt', 'tar -cf C:/x.tar a.txt', 'tar --file=D:\\out\\x.tar -c a.txt'];
+  for (const command of drive) {
+    assert.equal(f.kindOf(command, 'powershell', { ...f.env, tarDrivesLocal: true }), undefined, command);
+    assert.equal(f.kindOf(command, 'powershell', { ...f.env, tarDrivesLocal: false }), 'send', command);
+  }
+  for (const local of [true, false]) {
+    assert.equal(f.kindOf('tar -cf out.tar a.txt', 'powershell', { ...f.env, tarDrivesLocal: local }), undefined);
+    assert.equal(f.kindOf('tar -cf host:out.tar a.txt', 'powershell', { ...f.env, tarDrivesLocal: local }), 'send');
+  }
+});
+
+test('systemTarFirst: PATH で最初に見つかる tar が System32 のものかどうか', { skip: process.platform !== 'win32' && 'Windows だけ' }, t => {
+  const base = realish(tempDir(t));
+  const system = join(base, 'Windows', 'System32');
+  const other = join(base, 'usr', 'bin');
+  const empty = join(base, 'empty');
+  for (const dir of [system, other, empty]) mkdirSync(dir, { recursive: true });
+  for (const dir of [system, other]) writeFileSync(join(dir, 'tar.exe'), '');
+  const env = (...dirs: string[]) => ({ SystemRoot: join(base, 'Windows'), Path: dirs.join(';') });
+  assert.equal(systemTarFirst(env(empty, system, other)), true);
+  assert.equal(systemTarFirst(env(`"${system}"`, other)), true);
+  assert.equal(systemTarFirst(env(other, system)), false);
+  assert.equal(systemTarFirst(env(empty)), false);
+  assert.equal(systemTarFirst({ Path: system }), false);
+});
+
+test('消す: truncate で中身をほぼ残さない書き方の取りこぼし（-cs 0・--si=0・-r /dev/null・-s -9G・-s /9G・-s <1）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'delete', [
+    'truncate -cs 0 changed.txt', 'truncate --si=0 changed.txt', 'truncate --s 0 changed.txt', 'truncate --siz=0 changed.txt', 'truncate -r /dev/null changed.txt',
+    'truncate --reference=/dev/null changed.txt', 'truncate --ref /dev/null changed.txt', 'truncate -cr /dev/null changed.txt', 'truncate -s -9G changed.txt', 'truncate -s /9G changed.txt',
+    "truncate -s '<1' changed.txt", 'truncate -s 1 changed.txt', 'truncate -s -4096 changed.txt', 'truncate -os0 changed.txt', 'truncate -s 100 -s 0 changed.txt',
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'truncate -s -1 changed.txt', 'truncate -s /512 changed.txt', "truncate -s '<4K' changed.txt", 'truncate -r a.txt changed.txt', 'truncate -s %4K changed.txt',
+    "truncate -s '>1M' changed.txt", 'truncate -cs 100 changed.txt', 'truncate -cs 0 made.txt', 'truncate -r /dev/null a.txt', 'truncate -s +9G changed.txt', 'truncate -s 2 changed.txt',
+  ]);
+});
+
+test('送る: 一覧の取りこぼし（git grep のまとめた -O・git clone -u・python -m http.server・ssh-copy-id・finger・certreq -Post）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    'git grep -iO foo', 'git grep -nOless foo', 'git clone -u /tmp/x.sh https://example.com/r.git', 'git clone -qu x https://example.com/r.git', 'git ls-remote -u ./x origin',
+    'python -m http.server', 'python3 -m http.server 8000', 'py -m SimpleHTTPServer', 'python -u -m http.server', 'ssh-copy-id user@host', 'finger user@host',
+  ]);
+  expectKinds(f.kindOf, 'powershell', 'send', ['certreq -Post -config https://example.com/x a.req', 'certreq.exe /post a.req', 'python -m http.server']);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'git grep -i foo', 'git grep -n -e Old', 'git grep -eOK', 'git grep -A3 -i Other', 'git clone https://github.com/owner/repo.git', 'git clone -b u https://github.com/owner/repo.git',
+    'git clone -q https://github.com/owner/repo.git', 'git ls-remote origin', 'git fetch -u origin', 'python -m venv .venv', 'python -m pytest -q', 'python -m json.tool a.txt',
+    'ssh-keygen -t ed25519 -f k',
+  ]);
+  expectKinds(f.kindOf, 'powershell', undefined, ['certreq -new a.inf a.req', 'certutil -hashfile a.txt']);
 });

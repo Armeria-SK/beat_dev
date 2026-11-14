@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import type { PreCheck, ToolDef } from '../types.ts';
 import { outboundText, type OutboundMessageKey } from '../../shared/messages/outbound.ts';
@@ -21,6 +21,7 @@ export interface OutboundEnv extends PushEnv {
   language?: Language;
   productRoot?: string | undefined;
   workspaceRoots?: readonly string[];
+  tarDrivesLocal?: boolean;
   isTracked(path: string): boolean;
   isClean(path: string): boolean;
   isCreated(path: string): boolean;
@@ -31,7 +32,7 @@ const hit = (kind: OutboundKind, key: OutboundMessageKey, params: Record<string,
 
 const ALWAYS_SEND = new Set([
   'ssh', 'scp', 'sftp', 'rsync', 'ftp', 'tftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'aws', 'gcloud', 'gsutil', 'az', 'rclone', 's3cmd', 'http', 'https', 'xh',
-  'send-mailmessage', 'mail', 'mailx', 'sendmail', 'bitsadmin', 'start-bitstransfer', 'pscp', 'plink', 'psftp',
+  'send-mailmessage', 'mail', 'mailx', 'sendmail', 'bitsadmin', 'start-bitstransfer', 'pscp', 'plink', 'psftp', 'ssh-copy-id', 'finger',
 ]);
 const WEB_PROGRAMS = new Set(['curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);
 const LOOKUP = new Set(['nslookup', 'dig', 'host', 'ping', 'tracert', 'traceroute', 'resolve-dnsname', 'test-netconnection', 'test-connection']);
@@ -182,42 +183,84 @@ function uploadOf(st: StatementFacts): Hit | undefined {
   if (p === 'hg' && (sub === 'push' || sub === 'email')) return up(`hg ${sub}`);
   if (p === 'svn' && ['commit', 'ci', 'import'].includes(sub)) return up(`svn ${sub}`);
   if (p === 'openssl' && sub === 's_client') return hit('send', 'send.network_program', { cmd: 'openssl s_client' });
+  if (/^(?:python[\d.]*|py)$/u.test(p) && w.includes('-m') && ['http.server', 'simplehttpserver'].includes(w[w.indexOf('-m') + 1] ?? '')) return hit('send', 'send.network_program', { cmd: 'python -m http.server' });
+  if (p === 'certreq' && w.slice(1).some(a => a === '-post' || a === '/post')) return hit('send', 'send.network_program', { cmd: 'certreq -post' });
   if (p === 'tailscale' && sub === 'file' && w[2] === 'cp') return up('tailscale file cp');
   return undefined;
 }
 
+export function systemTarFirst(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  const lookup = (name: string): string | undefined => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
+  const root = lookup('SYSTEMROOT');
+  if (process.platform !== 'win32' || !root) return false;
+  for (const entry of (lookup('PATH') ?? '').split(';')) {
+    const dir = entry.replace(/^"|"$/gu, '');
+    if (dir && ['tar.com', 'tar.exe', 'tar.bat', 'tar.cmd'].some(name => existsSync(join(dir, name)))) return resolve(dir).toLowerCase() === resolve(root, 'System32').toLowerCase();
+  }
+  return false;
+}
+
 const DRIVE_PATH = /^[A-Za-z]:[\\/]/u;
-const remoteArchive = (name: string, drives: boolean): boolean => {
+const remoteArchive = (name: string, drives: () => boolean): boolean => {
   const colon = name.indexOf(':');
-  if (colon < 0 || (drives && DRIVE_PATH.test(name))) return false;
+  if (colon < 0 || (DRIVE_PATH.test(name) && drives())) return false;
   const slash = name.indexOf('/');
   return slash < 0 || colon < slash;
 };
 
-function tarRemote(st: StatementFacts): Hit | undefined {
+const TAR_PROGRAMS = new Set(['tar', 'gtar', 'gnutar', 'bsdtar']);
+const TAR_SHORT_VALUES = new Set([...'bCfFgHIKLNTVX']);
+const TAR_LONG_VALUES = [
+  '--add-file', '--after-date', '--blocking-factor', '--checkpoint-action', '--directory', '--exclude', '--exclude-from', '--exclude-tag', '--exclude-tag-all', '--exclude-tag-under',
+  '--files-from', '--format', '--group', '--group-map', '--hole-detection', '--info-script', '--label', '--level', '--listed-incremental', '--mode', '--mtime', '--new-volume-script',
+  '--newer', '--newer-mtime', '--no-quote-chars', '--owner', '--owner-map', '--pax-option', '--quote-chars', '--quoting-style', '--record-size', '--rmt-command', '--rsh-command', '--sort',
+  '--sparse-version', '--starting-file', '--strip-components', '--suffix', '--tape-length', '--to-command', '--transform', '--use-compress-program', '--volno-file', '--warning',
+  '--xattrs-exclude', '--xattrs-include', '--xform',
+];
+const tarValueAt = (text: string): number => [...text].findIndex((letter, k) => k > 0 && TAR_SHORT_VALUES.has(letter));
+const tarTakesNext = (text: string | undefined): boolean => {
+  if (text === undefined || !text.startsWith('-')) return false;
+  if (text.startsWith('--')) return text.length > 2 && !text.includes('=') && TAR_LONG_VALUES.some(name => name.startsWith(text));
+  return tarValueAt(text) === text.length - 1;
+};
+
+function tarRemote(st: StatementFacts, env: OutboundEnv): Hit | undefined {
   const args = st.words.slice(1);
-  if (args.some(w => w.text === '--force-local')) return undefined;
   const files: FactWord[] = [];
   const take = (word: FactWord | undefined, text?: string): void => { if (word) files.push(text === undefined ? word : { ...word, text }); };
+  let local = false;
+  let bundled = 0;
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
     const t = w.text;
-    if (t === '--file') take(args[++i]);
+    if (t === '--force-local') local ||= (bundled === 0 || i > bundled) && !tarTakesNext(args[i - 1]?.text);
+    else if (t === '--file') take(args[++i]);
     else if (t.startsWith('--file=')) take(w, t.slice('--file='.length));
     else if (t.startsWith('--')) continue;
-    else if (t.startsWith('-') || (i === 0 && /^[A-Za-z]+$/u.test(t))) {
-      const at = t.indexOf('f', t.startsWith('-') ? 1 : 0);
-      if (at < 0) continue;
-      const rest = t.startsWith('-') ? t.slice(at + 1) : '';
-      if (rest !== '') take(w, rest); else take(args[++i]);
+    else if (i === 0 && /^[A-Za-z]+$/u.test(t)) {
+      for (const letter of t) if (TAR_SHORT_VALUES.has(letter) && ++bundled && letter === 'f') take(args[bundled]);
+    } else if (t.startsWith('-')) {
+      const at = tarValueAt(t);
+      if (at < 0 || t[at] !== 'f') continue;
+      if (t.length > at + 1) take(w, t.slice(at + 1)); else take(args[++i]);
     }
   }
-  const drives = st.shell === 'powershell' || st.shell === 'pwsh';
+  if (local) return undefined;
+  const drives = (): boolean => (st.shell === 'powershell' || st.shell === 'pwsh') && (env.tarDrivesLocal ?? systemTarFirst());
   const remote = files.find(w => !w.dynamic && remoteArchive(w.text, drives));
-  return remote ? hit('send', 'send.upload', { cmd: `tar -f ${remote.text}` }) : undefined;
+  if (remote) return hit('send', 'send.upload', { cmd: `tar -f ${remote.text}` });
+  const unknown = files.some(w => w.dynamic) || (files.length === 0 && st.env.some(name => name.replace(/^env:/iu, '').toUpperCase() === 'TAPE'));
+  return unknown ? hit('send', 'send.dynamic_target', { cmd: st.program }) : undefined;
 }
 
-const ZERO_SIZE = /^<?0+[A-Za-z]*$/u;
+const TRUNCATE_SIZE = /^([-+<>/%]?)(\d+)([A-Za-z]*)$/u;
+const truncateEmpties = (size: string): boolean => {
+  const m = TRUNCATE_SIZE.exec(size);
+  if (!m) return false;
+  const amount = Number(m[2]);
+  if (m[1] === '' || m[1] === '<') return amount === 0 || (amount === 1 && m[3] === '');
+  return (m[1] === '-' || m[1] === '/') && amount > 0 && (m[3] !== '' || amount >= 1024);
+};
 
 function truncateTargets(st: StatementFacts): StatementFacts['targets'] | undefined {
   const args = st.words.slice(1);
@@ -226,9 +269,14 @@ function truncateTargets(st: StatementFacts): StatementFacts['targets'] | undefi
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
     const t = w.text;
-    const size = t === '-s' || t === '--size' ? args[++i]?.text : t.startsWith('--size=') ? t.slice('--size='.length) : /^-[co]*s./u.test(t) ? t.slice(t.indexOf('s') + 1) : undefined;
-    if (size !== undefined) { zero = ZERO_SIZE.test(size); continue; }
-    if (t === '-r' || t === '--reference') { i++; continue; }
+    const long = /^--([a-z]+)(?:=(.*))?$/u.exec(t);
+    const short = /^-[co]*([sr])(.*)$/u.exec(t);
+    const flag = long ? ['size', 'reference'].find(name => name.startsWith(long[1]!))?.[0] : short?.[1];
+    if (flag) {
+      const value = (long ? long[2] : short![2] || undefined) ?? args[++i]?.text ?? '';
+      zero ||= flag === 's' ? truncateEmpties(value) : value === '/dev/null';
+      continue;
+    }
     if (t === '--') { names.push(...args.slice(i + 1)); break; }
     if (!t.startsWith('-') || w.dynamic) names.push(w);
   }
@@ -318,7 +366,8 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
   const discard = (cmd: string): Hit => hit('delete', 'delete.git_discard', { cmd });
   if (GIT_PULLING.has(sub) && argWords.some(w => w.dynamic)) return hit('send', 'send.dynamic_target', { cmd: `git ${sub}` });
   if (args.some(a => ['--upload-pack', '--receive-pack', '--exec'].some(n => longOption(a, n)))) return hit('send', 'send.git_unknown', { detail: `git ${sub}` });
-  if (sub === 'grep' && args.some(a => /^-O/u.test(a) || longOption(a, '--open-files-in-pager'))) return hit('send', 'send.git_unknown', { detail: 'git grep -O' });
+  if ((sub === 'clone' || sub === 'ls-remote') && args.some(a => /^-[^-=bocj]*u/u.test(a))) return hit('send', 'send.git_unknown', { detail: `git ${sub} -u` });
+  if (sub === 'grep' && args.some(a => /^-[^-=efABCmO]*O/u.test(a) || longOption(a, '--open-files-in-pager'))) return hit('send', 'send.git_unknown', { detail: 'git grep -O' });
   if (GIT_SENDERS.has(sub)) return hit('send', sub === 'send-email' || sub === 'imap-send' ? 'send.git_mail' : 'send.network_program', { cmd: `git ${sub}` });
   const positionals = args.filter(a => !a.startsWith('-'));
   switch (sub) {
@@ -411,7 +460,7 @@ function statementHit(st: StatementFacts, before: readonly StatementFacts[], env
   if (WEB_PROGRAMS.has(p)) return psWebSends(st.words, p);
   if (p === 'gh') return ghSends(st.words);
   if (LOOKUP.has(p)) return st.words.slice(1).some(w => w.dynamic) ? hit('send', 'send.dynamic_target', { cmd: p }) : undefined;
-  if (p === 'tar' || p === 'gtar') { const remote = tarRemote(st); if (remote) return remote; }
+  if (TAR_PROGRAMS.has(p)) { const remote = tarRemote(st, env); if (remote) return remote; }
   if (p === 'truncate') { const emptied = truncateTargets(st); if (emptied) return deleteHit(emptied, env); }
   if (p === 'find' && st.words.some(w => w.text === '-delete')) return hit('delete', 'delete.unresolved');
   if (DELETE_PROGRAMS.has(p) || st.deletes) {
