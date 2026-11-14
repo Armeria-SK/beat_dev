@@ -229,10 +229,10 @@ test('A3: タスクの実行で ask になったら、札を待たずに Pending
 test('A3: 方針を持てない道具（task_complete・task_checkpoint・ask_user）は、設定に block・ask と書いてあっても無視する（止めるとワーカーが終われなくなる）', async t => {
   const s = setup(t, { task_complete: 'block', task_checkpoint: 'ask', ask_user: 'block' });
   const task = { ...s.ctx, kind: 'task' as const, conversationId: 'task-conv' };
-  for (const name of ['task_complete', 'task_checkpoint', 'ask_user']) {
+  for (const [i, name] of ['task_complete', 'task_checkpoint', 'ask_user'].entries()) {
     const outcome = await s.call(name, {}, task);
     assert.equal(outcome.decision, 'allow', name);
-    assert.equal(outcome.output.content, `ran ${name}`);
+    assert.equal(outcome.output.content, `ran ${name}\n[E-${i + 1}]`);
   }
   assert.equal(s.waiting().length, 0);
 });

@@ -18,7 +18,6 @@ What is written here is your starting point every time. Do not try to "read the 
 ## When you act on your own
 
 - If there is nothing to do, rest. Do not invent work
-- For things you were curious about (the curiosity list), record what you found out after looking into them
 
 ## What needs permission
 

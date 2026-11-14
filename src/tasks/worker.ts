@@ -10,6 +10,7 @@ import { curiosityText } from '../curiosity/text.ts';
 import { bookPressureText, isNoProposal, reviewPrompt, TIDY_FORBIDDEN_TOOLS, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
 import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
+import { BLOCKING_QUESTION_KEY } from '../shared/notification-list.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister } from '../tools/skills/store.ts';
@@ -278,17 +279,16 @@ export class Worker {
       const idleEnough = now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
       const allowSelf = c.worker.autonomy && !this.quiet() && idleEnough;
       task ??= tasks.pickNext({ allowSelf, accept: roomFor });
-      // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りや好奇心にも回さず）、終わった実行の onRunEnd を待つ
+      // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りにも回さず）、終わった実行の onRunEnd を待つ
       // （poke が来ない道〔止まっている・自動の予定が無い〕に備えて、保険の予定は 1 分後に置く。終わった実行の poke はそれより早い）
       if (!task && (this.#forced.size > 0 || tasks.pickNext({ allowSelf }))) { reschedule(now + 60_000); return 'busy'; }
-      // 実行するタスクが無ければ、振り返り → 好奇心の順に見る
+      // 実行するタスクが無ければ、振り返りを見る
       const job = !task && c.memory.review ? this.#d.reviews?.next() : undefined;
       if (job) {
         const outcome = await this.#review(job, release);
         reschedule(outcome === 'busy' ? now + 60_000 : now);
         return outcome;
       }
-      if (!task && allowSelf) task = this.#spawnCuriosity(c, now);
       if (!task) { reschedule(tasks.nextWakeAt({ allowSelf })); return 'idle'; }
       const outcome = await this.#run(task, release);
       reschedule(now);
@@ -453,7 +453,9 @@ export class Worker {
     }
     if (control.outcome === 'question') {
       tasks.setWaiting(task.id, 'question', control.question, runId);
-      notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, projectId });
+      const unread = new Set(notifications.unreadOf('question_new').map(n => n.dedup_key));
+      const recorded = this.#d.questions?.list({ status: 'open', taskId: task.id }).some(q => q.blocking && q.question === control.question && unread.has(`${BLOCKING_QUESTION_KEY}${q.id}`)) ?? false;
+      if (!recorded) notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, projectId });
       return;
     }
     if (control.outcome === 'checkpoint') {

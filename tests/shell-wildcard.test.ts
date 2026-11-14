@@ -201,8 +201,11 @@ test('compileWildcard: 分からない形は null（空の組・先頭が ] の�
 });
 
 // 子プロセスで測る: 退行して指数回帰に戻っても、テスト全体が固まらずに、この試験だけが落ちる
-function timedInChild(body: string, args: string[], limitMs = 8000): { ms: number; value: any } {
-  const code = `const timed = f => { const t0 = performance.now(); const value = f(); return { ms: performance.now() - t0, value }; };\n${body}`;
+const STEP_CAP = 100_000;
+function countedInChild(body: string, args: string[], limitMs = 8000): { steps: number; value: any } {
+  const code = `const exec = RegExp.prototype.exec; let steps = 0;
+RegExp.prototype.exec = function (s) { if (this.source === '^Z$' && ++steps > ${STEP_CAP}) throw new Error('steps > ${STEP_CAP}'); return exec.call(this, s); };
+const counted = f => { steps = 0; const value = f(); return { steps, value }; };\n${body}`;
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', code, ...args], { encoding: 'utf8', timeout: limitMs });
   assert.equal(r.error, undefined, `${limitMs}ms で終わらなかった（指数回帰）: ${r.error?.message}`);
   assert.equal(r.status, 0, r.stderr);
@@ -213,44 +216,48 @@ const STARS = '*?*?*?*?*?*?*?*?*?*?Z';
 
 // 呼ぶ側（wildcardMatches・expandGlob を通る checkShellCommand）も、本物のファイル名（a が 60 個）に * が並ぶパターンを当てて固まらないこと。ファイルが実際にフォルダにあるときだけ、照合が走る
 const LONG_NAME = 'a'.repeat(60);
+const zStepsWithin = (steps: number, max: number, label: string): void => {
+  assert.ok(steps <= max, `${label}: Z の比べが ${steps} 回（上限 ${max}）`);
+  if (process.platform === 'win32') assert.ok(steps > 0, `${label}: 数えられていない`);
+};
 function heavyWorkspace(t: { after: (fn: () => void) => void }): string {
   const ws = realish(join(tempDir(t), 'workspace'));
   mkdirSync(join(ws, 'sub'), { recursive: true });
   for (const dir of [ws, join(ws, 'sub')]) writeFileSync(join(dir, LONG_NAME), 'x');
   return ws;
 }
-function guardTimed(ws: string, command: string, shell: 'bash' | 'powershell'): { ms: number; value: string } {
-  return timedInChild(
+function guardCounted(ws: string, command: string, shell: 'bash' | 'powershell'): { steps: number; value: string } {
+  return countedInChild(
     `const [guard, ws, command, shell] = process.argv.slice(1); const { checkShellCommand } = await import(guard);
 const policy = { roots: [{ path: ws, mode: 'write' }], deny: [] };
-console.log(JSON.stringify(timed(() => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' }).decision)));`,
+console.log(JSON.stringify(counted(() => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' }).decision)));`,
     [hooksUrl('shell-guard.ts'), ws, command, shell],
   );
 }
 
-test('wildcardMatches: * が並ぶパターンを、200 文字の a に当てても 1 秒未満', () => {
-  const { ms, value } = timedInChild(`const { wildcardMatches } = await import(process.argv[1]); console.log(JSON.stringify(timed(() => wildcardMatches('a'.repeat(200), process.argv[2]))));`, [hooksUrl('path-expand.ts'), STARS]);
+test('wildcardMatches: * が並ぶパターンを 200 文字の a に当てても、Z の比べは名前の長さの回数まで', () => {
+  const { steps, value } = countedInChild(`const { wildcardMatches } = await import(process.argv[1]); console.log(JSON.stringify(counted(() => wildcardMatches('a'.repeat(200), process.argv[2]))));`, [hooksUrl('path-expand.ts'), STARS]);
   assert.equal(value, false);
-  assert.ok(ms < 1000, `${ms}ms`);
+  zStepsWithin(steps, 200, 'wildcardMatches');
 });
 
-test('bash の ls *?*?…Z（展開）は、a が 60 個のファイルがあっても 1 秒未満で返る', t => {
-  const { ms, value } = guardTimed(heavyWorkspace(t), `ls ${STARS}`, 'bash');
+test('bash の ls *?*?…Z（展開）は、a が 60 個のファイルがあっても、Z の比べはファイルの名前の長さの合計まで', t => {
+  const { steps, value } = guardCounted(heavyWorkspace(t), `ls ${STARS}`, 'bash');
   assert.equal(value, 'allow');
-  assert.ok(ms < 1000, `${ms}ms`);
+  zStepsWithin(steps, 2 * LONG_NAME.length, 'guard');
 });
 
-test('PowerShell の Get-ChildItem *?*?…Z（展開）は、a が 60 個のファイルがあっても 1 秒未満で返る', t => {
-  const { ms, value } = guardTimed(heavyWorkspace(t), `Get-ChildItem ${STARS}`, 'powershell');
+test('PowerShell の Get-ChildItem *?*?…Z（展開）は、a が 60 個のファイルがあっても、Z の比べはファイルの名前の長さの合計まで', t => {
+  const { steps, value } = guardCounted(heavyWorkspace(t), `Get-ChildItem ${STARS}`, 'powershell');
   assert.equal(value, 'allow');
-  assert.ok(ms < 1000, `${ms}ms`);
+  zStepsWithin(steps, 2 * LONG_NAME.length, 'guard');
 });
 
 for (const flag of ['-Include', '-Exclude']) {
-  test(`PowerShell の Get-ChildItem -Recurse ${flag} *?*?…Z | Get-Content（流れるファイルの絞り込み）は、a が 60 個のファイルがあっても 1 秒未満で返る`, t => {
-    const { ms, value } = guardTimed(heavyWorkspace(t), `Get-ChildItem -Recurse ${flag} '${STARS}' | Get-Content`, 'powershell');
+  test(`PowerShell の Get-ChildItem -Recurse ${flag} *?*?…Z | Get-Content（流れるファイルの絞り込み）は、a が 60 個のファイルがあっても、Z の比べはファイルの名前の長さの合計まで`, t => {
+    const { steps, value } = guardCounted(heavyWorkspace(t), `Get-ChildItem -Recurse ${flag} '${STARS}' | Get-Content`, 'powershell');
     assert.equal(value, 'allow');
-    assert.ok(ms < 1000, `${ms}ms`);
+    zStepsWithin(steps, 2 * LONG_NAME.length, 'guard');
   });
 }
 
@@ -290,11 +297,12 @@ test('compileWildcard: 連続する * は 1 つと同じ。まとめても、当
   }
 });
 
-test('compileWildcard: * が 10 個並ぶパターンを、200 文字の a に当てても 1 秒未満（古い正規表現は固まる）', () => {
+test('compileWildcard: * が 10 個並ぶパターンを 200 文字の a に当てても、Z の比べは名前の長さの回数まで（古い正規表現は固まる）', () => {
   for (const [pattern, want] of [[STARS, false], ['*a*a*a*a*a*a*a*a*a*a*Z', false], ['*?*?*?*?*?*?*?*?*?*?', true], ['[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*Z', false]] as const) {
-    const { ms, value } = timedInChild(`const { compileWildcard } = await import(process.argv[1]); const match = compileWildcard(process.argv[2], true, true); console.log(JSON.stringify(timed(() => match('a'.repeat(200)))));`, [hooksUrl('path-expand.ts'), pattern]);
+    const { steps, value } = countedInChild(`const { compileWildcard } = await import(process.argv[1]); const match = compileWildcard(process.argv[2], true, true); console.log(JSON.stringify(counted(() => match('a'.repeat(200)))));`, [hooksUrl('path-expand.ts'), pattern]);
     assert.equal(value, want, pattern);
-    assert.ok(ms < 1000, `${pattern}: ${ms}ms`);
+    assert.ok(steps <= 200, `${pattern}: Z の比べが ${steps} 回`);
+    if (pattern.endsWith('Z')) assert.ok(steps > 0, `${pattern}: 数えられていない`);
   }
 });
 

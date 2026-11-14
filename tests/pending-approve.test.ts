@@ -62,7 +62,7 @@ function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => v
     const row = projects.create({ name: 'P', root: ws, rootKey: rootKeyOf(ws), checkCommand: null });
     return { id: row.id, root: row.root };
   };
-  return { paths, ws, ctx, call, pending, db, registry, config, approve, latest, deps, project, approvals };
+  return { paths, ws, ctx, call, pending, db, registry, config, approve, latest, deps, project, approvals, projects };
 }
 
 const sendTo = WINDOWS ? 'curl.exe -s -m 2 -d x=1 http://127.0.0.1:9/' : 'curl -s -m 2 -d x=1 http://127.0.0.1:9/';
@@ -440,8 +440,8 @@ test('承認（W1-11）: 積んだ git push の行は、積んだあとにコミ
   assert.match(outcome.output ?? '', /current branch or its commit changed/u);
 });
 
-function pushRig(t: { after: (fn: () => void) => void }, base?: string) {
-  const r = rig(t, undefined, base);
+function pushRig(t: { after: (fn: () => void) => void }, base?: string, mutate?: (c: AppConfig) => void) {
+  const r = rig(t, mutate, base);
   const git = (...args: string[]): string => {
     const out = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: r.ws, encoding: 'utf8' });
     assert.equal(out.status, 0, out.stderr);
@@ -505,6 +505,7 @@ const BLOCKED_CASES: Array<[string, (p: Rig) => void, string, (p: Rig) => void]>
   ['.git 直下の foo_head', p => writeRoot(p.r, 'foo_head', p.git('rev-parse', 'HEAD')), 'git push {U} foo_head:refs/heads/x', p => writeRoot(p.r, 'foo_head', newCommit(p.git))],
   ['新しい注釈付きタグ（前からのコミットを指す）', () => undefined, 'git push {U} v1', p => p.git('tag', '-a', 'v1', '-m', 'v1', 'feature')],
   ['前に字のパスの cd だけ', p => mkdirSync(join(p.r.ws, 'sub')), `cd sub${AND}git push {U} feature`, p => p.late('feature')],
+  ['ほかの worktree の HEAD（worktrees/<名前>/HEAD）', p => p.git('worktree', 'add', '-q', join(p.r.ws, '..', 'wt'), 'feature'), 'git push {U} worktrees/wt/HEAD:refs/heads/x', p => { writeFileSync(join(p.r.ws, '..', 'wt', 'late.txt'), 'late'); spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-am', 'x', '--allow-empty'], { cwd: join(p.r.ws, '..', 'wt') }); }],
 ];
 
 for (const [name, setup, template, move] of BLOCKED_CASES) {
@@ -622,6 +623,39 @@ test('承認（W1-11 作り直し）: 置いたあとに remote.origin.push を�
   const outcome = await p.r.approve(row.id);
   assert.equal(outcome.status, 'stale', outcome.output);
   assert.equal(remoteRefs(p.remote), '');
+});
+
+async function parkPolicyPush(t: { after: (fn: () => void) => void }) {
+  const p = pushRig(t, undefined, c => { c.tools.policies = { shell_run: 'ask' }; });
+  p.git('remote', 'add', 'origin', p.remote);
+  const made = p.r.projects.create({ name: 'P', root: p.r.ws, rootKey: rootKeyOf(p.r.ws), checkCommand: null, remotes: [{ name: 'origin', url: p.remote, pushUrl: null }] });
+  const services = { projects: p.r.projects } as unknown as NonNullable<ToolContext['services']>;
+  const parked = await p.r.call('shell_run', { command: 'git push origin feature' }, { ...p.r.ctx, project: { id: made.id, root: made.root }, services });
+  assert.equal(parked.decidedBy, 'pending', parked.output.content);
+  const row = p.r.latest();
+  assert.equal(row.kind, 'policy');
+  return { p, approve: () => p.r.approve(row.id, { services: () => services }) };
+}
+
+for (const [name, key, value, reason] of [
+  ['remote.origin.push', 'remote.origin.push', 'refs/heads/side:refs/heads/main', /remote\.origin\.push/u],
+  ['コードを動かさない設定（remote.origin.tagOpt）', 'remote.origin.tagOpt', '--no-tags', /where it sends or what it deletes changed after it was parked:\n- before: (?!none)/u],
+] as const) {
+  test(`承認（W1-11 作り直し、計画の 18）: 方針 Ask で積んだ記録した宛先への push も、置いたあとに .git/config を書くと stale: ${name}`, { skip: !gitAvailable }, async t => {
+    const { p, approve } = await parkPolicyPush(t);
+    p.git('config', key, value);
+    const outcome = await approve();
+    assert.equal(outcome.status, 'stale', outcome.output);
+    assert.match(outcome.output ?? '', reason);
+    assert.equal(remoteRefs(p.remote), '');
+  });
+}
+
+test('承認（W1-11 作り直し、計画の 18 の対照）: 方針 Ask で積んだ記録した宛先への push は、何も変わらなければ送れる', { skip: !gitAvailable }, async t => {
+  const { p, approve } = await parkPolicyPush(t);
+  const outcome = await approve();
+  assert.equal(outcome.status, 'ran', outcome.output);
+  assert.match(remoteRefs(p.remote), /refs\/heads\/feature/u);
 });
 
 for (const [name, template] of [

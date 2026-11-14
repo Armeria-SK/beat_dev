@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { arrangeNotifications, NOTIFICATION_LIST_LIMIT, PINNED_KINDS } from '../shared/notification-list.ts';
+import { actionOf, arrangeNotifications, BLOCKING_QUESTION_KEY, NOTIFICATION_LIST_LIMIT, PINNED_KINDS, type NotificationAction } from '../shared/notification-list.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 
-export type NotificationKind = 'task_done' | 'task_waiting' | 'task_failed' | 'approval_needed' | 'health_alert' | 'info';
+export type NotificationKind = 'task_done' | 'task_waiting' | 'task_failed' | 'approval_needed' | 'question_new' | 'health_alert' | 'info';
 
 export interface Notification {
   id: number;
@@ -13,7 +13,13 @@ export interface Notification {
   dedup_key: string | null;
   read_at: number | null;
   created_at: number;
+  project_id: string | null;
+  action: NotificationAction | null;
 }
+
+type NotificationRow = Omit<Notification, 'action'>;
+
+const withAction = (row: NotificationRow): Notification => ({ ...row, project_id: row.project_id ?? null, action: actionOf(row.kind) });
 
 // 聞き手に渡す値。noForward は DB に残さず、外の送り先へ送らない通知の印（health_alert など、送り先の失敗を知らせる通知が自分で連鎖しないように）
 export type NotifyEvent = Notification & { noForward?: true };
@@ -53,7 +59,7 @@ export class Notifications {
     const secrets = this.#secrets();
     const result = this.#db.prepare('INSERT INTO notifications (kind, title, body, link, dedup_key, created_at, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(input.kind, redactSecrets(input.title, secrets).slice(0, 200), input.body !== undefined ? redactSecrets(input.body, secrets).slice(0, 2000) : null, input.link ?? null, input.dedupKey ?? null, now, input.projectId ?? null);
-    const n = this.#db.prepare('SELECT * FROM notifications WHERE id = ?').get(Number(result.lastInsertRowid)) as unknown as Notification;
+    const n = withAction(this.#db.prepare('SELECT * FROM notifications WHERE id = ?').get(Number(result.lastInsertRowid)) as unknown as NotificationRow);
     const event: NotifyEvent = input.noForward ? { ...n, noForward: true } : n;
     for (const listener of this.#listeners) {
       try { listener(event); } catch (error) { this.#log(`[ERROR] A notification listener failed: ${(error as Error).message}`); }
@@ -64,8 +70,12 @@ export class Notifications {
   list(limit = NOTIFICATION_LIST_LIMIT): Notification[] {
     const kinds = PINNED_KINDS.map(() => '?').join(', ');
     const rows = this.#db.prepare(`SELECT * FROM notifications WHERE id IN (SELECT id FROM notifications ORDER BY id DESC LIMIT ?)
-      OR (read_at IS NULL AND kind IN (${kinds})) ORDER BY id DESC`).all(limit, ...PINNED_KINDS) as unknown as Notification[];
-    return arrangeNotifications(rows, limit);
+      OR (read_at IS NULL AND (kind IN (${kinds}) OR (kind = 'question_new' AND dedup_key LIKE ?))) ORDER BY id DESC`).all(limit, ...PINNED_KINDS, `${BLOCKING_QUESTION_KEY}%`) as unknown as NotificationRow[];
+    return arrangeNotifications(rows.map(withAction), limit);
+  }
+
+  unreadOf(kind: NotificationKind): Notification[] {
+    return (this.#db.prepare('SELECT * FROM notifications WHERE read_at IS NULL AND kind = ? ORDER BY id DESC').all(kind) as unknown as NotificationRow[]).map(withAction);
   }
 
   unread(): number {
