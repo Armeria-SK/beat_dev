@@ -1,14 +1,17 @@
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { projectDir } from '../projects/store.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { readOwn, replaceFile } from './files.ts';
+import { MeshWriteError, type Writer } from './map.ts';
 
 export const DECISIONS_FILE = 'DECISIONS.md';
 export const DECISIONS_OLD_FILE = 'DECISIONS-old.md';
 export const DECISIONS_ROWS_MAX = 30;
 export const DECISIONS_LINE_MAX = 200;
 
-const HEAD = ['# DECISIONS', '', `Decisions the owner made, oldest first. beat writes a line when the owner answers a question. Older lines move to ${DECISIONS_OLD_FILE}.`, ''];
+const HEAD = ['# DECISIONS', '', `Decisions, oldest first. beat writes a line when the owner answers a question. Lines marked [by task] are decisions the AI recorded, not the owner. Older lines move to ${DECISIONS_OLD_FILE}.`, ''];
 const OLD_HEAD = ['# DECISIONS (older)', '', `Lines moved out of ${DECISIONS_FILE}, oldest first.`, ''];
 const EXTERNAL_MARK = ' [src: external]';
 const ELLIPSIS = '…';
@@ -53,7 +56,31 @@ export function decisionLine(d: OwnerDecision): string {
   return `${head}${quoted}"${asked(shownQuestion)}${tail}`;
 }
 
-export const decisionRows = (content: string): number => content.split(/\r?\n/u).filter(line => line.startsWith('- ')).length;
+export interface AiDecision { date: string; text: string; writer: Writer }
+
+const AI_EXTERNAL = / \\?\[by (?:conversation|task|child), src: external\\?\]$/u;
+
+export function aiDecisionLine(d: AiDecision): { line: string; hidden: boolean } {
+  const folded = d.text.normalize('NFKC');
+  if (/[[\]]/u.test(folded)) throw new MeshWriteError('decision_marks');
+  const text = aiText(d.text);
+  if (!text.trim()) throw new MeshWriteError('decision_empty');
+  const head = `- ${d.date} AI decided: "`;
+  const tail = `" [by ${d.writer.by}${d.writer.external ? ', src: external' : ''}]`;
+  const max = DECISIONS_LINE_MAX - chars(head) - chars(tail);
+  if (chars(text) > max) throw new MeshWriteError('decision_too_long', { length: chars(text), max });
+  return { line: `${head}${text}${tail}`, hidden: one(folded) !== plainLine(folded, Infinity) };
+}
+
+export function addAiDecision(projectsDir: string, projectId: string, d: AiDecision): { hidden: boolean } {
+  const { line, hidden } = aiDecisionLine(d);
+  const dir = projectDir(projectsDir, projectId);
+  mkdirSync(dir, { recursive: true });
+  appendDecision(dir, line);
+  return { hidden };
+}
+
+export const decisionRows = (content: string): number => content.split(/\r?\n/u).filter(line => line.startsWith('- ') && !AI_EXTERNAL.test(line)).length;
 
 function withRows(existing: string | undefined, head: readonly string[], added: readonly string[]): string {
   if (existing === undefined) return `${[...head, ...added].join('\n')}\n`;

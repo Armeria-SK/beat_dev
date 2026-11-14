@@ -22,6 +22,13 @@ const en = {
   'glossary_full': 'GLOSSARY.md already has {max} names. Use a name that is already there',
   'glossary_saved': 'Updated GLOSSARY.md: {term}',
   'glossary_saved_external': 'Updated GLOSSARY.md: {term}. This run has read text from elsewhere, so the line is marked as such',
+  'decision_empty': 'Give the decision in one short English line',
+  'decision_marks': 'The decision cannot contain square brackets',
+  'decision_too_long': 'The decision is too long ({length} characters, up to {max}). Shorten it; put details in a note',
+  'decision_closed': 'This product is archived, so no decision is recorded',
+  'decision_saved': 'Added a line to DECISIONS.md, marked as recorded by the AI',
+  'decision_saved_external': 'Added a line to DECISIONS.md, marked as recorded by the AI. This run has read text from elsewhere, so the line is also marked as such and is not counted in the Mesh',
+  'decision_hidden': 'Part of it looked like a secret key or token, so it was hidden',
 } as const;
 
 export type MeshWriteMessageKey = keyof typeof en;
