@@ -1531,6 +1531,8 @@ export const en = {
   'ui.ob.continue': 'Continue',
   'ui.ob.failed': 'Not saved',
   'ui.ob.replayNote': 'Esc closes',
+  'ui.ob.loadFailed': 'Could not check first-run setup',
+  'ui.ob.loadRetry': 'Trying again shortly.',
   'ui.ob.skip': 'Skip for now',
   'ui.ob.skipNote': 'Esc closes · continue later from the sidebar',
   'ui.ob.resume': 'Continue setup',

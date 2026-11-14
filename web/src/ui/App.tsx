@@ -13,7 +13,7 @@ import { paneTarget, pendingFor, pendingTotal, sessionCounts, taskCounts, withPe
 import type { PaneView } from './panes.ts';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
-import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
+import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending } from './onboarding-steps.ts';
 import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
 import { awaitingProduct, projectLoads, settleLeave } from './product-nav.ts';
@@ -237,7 +237,15 @@ export function App() {
     settleLeave(route, live.projectsLoaded ? live.projects.map(p => p.id) : null, { clearEdits: () => { clearUnsaved(SCREEN_EDITS); setLeave(null); }, replace: hash => location.replace(hash) });
   }, [route, live.projects, live.projectsLoaded]);
   const loadSetup = useCallback(() => api.onboarding().then(state => { setSetup(state); return state; }), []);
-  useEffect(() => { void loadSetup().then(state => { if (opensOnLoad(state.done, wasSetupShown())) setOnboard(old => old ?? 'first'); }).catch(() => undefined); }, [loadSetup]);
+  useEffect(() => {
+    const loads = setupLoads(
+      () => api.onboarding(),
+      state => { setSetup(state); if (opensOnLoad(state.done, wasSetupShown())) setOnboard(old => old ?? 'first'); },
+      () => toast({ kind: 'info', icon: 'alert', title: t('ui.ob.loadFailed'), body: t('ui.ob.loadRetry') }),
+    );
+    void loads.load();
+    return loads.stop;
+  }, []);
   useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
   useEffect(() => { void loadServerSettings(api.settings); }, []);
 

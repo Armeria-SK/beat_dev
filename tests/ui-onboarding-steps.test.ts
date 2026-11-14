@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { markSetupShown, setupModelConfig, wasSetupShown } from '../web/src/onboarding.ts';
 import {
-  agentInput, canContinue, connectProblem, escapeAction, emptyConnect, modelFormOf, nameInput, ONBOARD_DONE_HASH, ONBOARD_STEPS, opensOnLoad, OPENAI_URL, resumeIndex, setupPending, styleInput,
+  agentInput, canContinue, connectProblem, escapeAction, emptyConnect, modelFormOf, nameInput, ONBOARD_DONE_HASH, ONBOARD_STEPS, opensOnLoad, OPENAI_URL, resumeIndex, setupLoads, setupPending, styleInput,
 } from '../web/src/ui/onboarding-steps.ts';
 import { defaultConfig } from '../src/config/store.ts';
 
@@ -100,4 +100,35 @@ test('ui/onboarding: 確かめの最中の Esc は全体を閉じない（動い
   assert.ok(screen.includes("addEventListener('keydown', onEscape, true)"), 'フォーカスが枠の外でも止められるよう、window の捕まえる段で見る');
   assert.ok(screen.includes("removeEventListener('keydown', onEscape, true)"));
   assert.ok(app.includes("if (e.key !== 'Escape' || e.defaultPrevented) return;"), 'App は止めた Esc では閉じない');
+});
+
+test('ui/onboarding: はじめの設定の読み取りに失敗したら 1 回だけ知らせ、間を空けて読み直す（届いたら当てる。止めたら読み直さない）', async () => {
+  const answers: Array<() => Promise<{ done: boolean }>> = [
+    async () => { throw new Error('500'); },
+    async () => { throw new TypeError('Failed to fetch'); },
+    async () => ({ done: false }),
+  ];
+  let call = 0;
+  let told = 0;
+  const applied: boolean[] = [];
+  const timers: Array<{ run: () => void; ms: number }> = [];
+  const loads = setupLoads(() => answers[call++]!(), state => applied.push(state.done), () => { told += 1; }, (run, ms) => timers.push({ run, ms }), [10, 20]);
+  await loads.load();
+  assert.equal(told, 1, '失敗を黙って飲まない');
+  assert.deepEqual(timers.map(x => x.ms), [10]);
+  timers.shift()!.run();
+  await new Promise(r => setImmediate(r));
+  assert.equal(told, 1, '読み直しのたびには知らせない');
+  assert.deepEqual(timers.map(x => x.ms), [20]);
+  timers.shift()!.run();
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(applied, [false], '届いたら当てる（済んでいなければ、はじめの設定が開く）');
+  assert.equal(timers.length, 0);
+
+  const stopped = setupLoads(async () => { throw new Error('500'); }, () => applied.push(true), () => undefined, (run, ms) => timers.push({ run, ms }), [10]);
+  await stopped.load();
+  stopped.stop();
+  timers.shift()!.run();
+  await new Promise(r => setImmediate(r));
+  assert.equal(timers.length, 0, '画面を閉じたあとは読み直さない');
 });
