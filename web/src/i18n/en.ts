@@ -398,6 +398,8 @@ export const en = {
   'ui.product.folderMissing': 'folder missing',
   'ui.product.more': (n: number) => `${n} more`,
   'ui.product.moreFailed': 'Could not load more sessions',
+  'ui.product.listFailed': 'Could not load your products',
+  'ui.product.listRetry': 'Trying again shortly.',
   'ui.product.empty.title': 'No plan yet',
   'ui.product.empty.text': 'Describe what you want. beat will ask, then write the plan.',
   'ui.product.placeholder': 'Describe what to build',

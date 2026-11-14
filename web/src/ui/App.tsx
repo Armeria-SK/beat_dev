@@ -17,7 +17,7 @@ import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboardi
 import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending } from './onboarding-steps.ts';
 import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
-import { awaitingProduct, projectLoads, settleLeave } from './product-nav.ts';
+import { awaitingProduct, productsMissing, projectLoads, settleLeave } from './product-nav.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
@@ -36,7 +36,7 @@ import { Settings } from './settings/Settings.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
-import { Button } from './parts.tsx';
+import { Button, Notice } from './parts.tsx';
 import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, SCREEN_EDITS, unloadGuard, type LeaveEnv } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
@@ -125,7 +125,8 @@ export function App() {
     runRef.current(next.effects);
   }, []);
 
-  const projectList = useMemo(() => projectLoads(() => api.projects(), projects => dispatch({ type: 'projects', projects })), [dispatch]);
+  const [projectsFailing, setProjectsFailing] = useState(false);
+  const projectList = useMemo(() => projectLoads(() => api.projects(), projects => dispatch({ type: 'projects', projects }), undefined, undefined, setProjectsFailing), [dispatch]);
   const upsertProject = useCallback((project: Project) => {
     projectList.supersede();
     dispatch({ type: 'project', project });
@@ -369,7 +370,13 @@ export function App() {
       <div className={convo ? `bt-app${paneCount ? ' has-panes' : ''}${paneCount && panes.single ? ' is-pane-single' : ''}` : 'bt-shell'} data-panes={convo ? String(paneCount) : undefined} inert={shut}
         style={paneCount && !panes.single ? { '--ui-panes-w': `${panes.width}px` } as CSSProperties : undefined}>
         <Sidebar state={state} route={behind} foot={foot} kanban={kanban} pending={pendingAll} sessionPending={sessionPending} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
-        {convo && awaitingProduct(behind, routeProduct) ? (
+        {productsMissing(behind, live.projectsLoaded, projectsFailing) ? (
+          <main className={convo ? 'bt-app__main' : 'bt-screen'} inert={drawer}>
+            <div className="bt-screen__inner">
+              <Notice tone="warn" icon="alert" title={t('ui.product.listFailed')} text={t('ui.product.listRetry')} action={{ label: t('ui.fail.retry'), run: load.projects }} />
+            </div>
+          </main>
+        ) : convo && awaitingProduct(behind, routeProduct) ? (
           <main className="bt-app__main" inert={drawer} />
         ) : convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>
