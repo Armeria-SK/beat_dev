@@ -19,6 +19,7 @@ import type { PlanStore } from '../projects/plan.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { Mesh } from '../mesh/index.ts';
+import type { QuestionStore } from '../questions/store.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -117,7 +118,7 @@ export interface ToolContext {
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined; mesh?: Mesh | undefined;
-    acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined;
+    acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined; questions?: QuestionStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
@@ -140,6 +141,7 @@ export interface ToolContext {
   toolWindow?: (() => () => void) | undefined;
   // agent_run: 子の担当を始めて、終わるまで待つ（チャット・許したタスクの実行にだけ付く。子の実行には付かない = 深さ 1）。結果は区切りで包んだ答え。失敗は isError
   agent?: ((input: AgentRunInput, callId?: string) => Promise<ToolOutput>) | undefined;
+  runTool?: ((name: string, input: unknown) => Promise<ToolOutput>) | undefined;
   // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
 }
@@ -150,7 +152,9 @@ export type TaskControl =
   | { outcome: 'none' }
   | { outcome: 'complete'; summary: string; notify: boolean }
   | { outcome: 'checkpoint'; note: string; nextAction: string; resumeAfterMinutes: number }
-  | { outcome: 'question'; question: string };
+  | { outcome: 'question'; question: string }
+  | { outcome: 'yield'; reason: string }
+  | { outcome: 'failed'; reason: string };
 
 export interface ToolDef<I = any> {
   name: string;

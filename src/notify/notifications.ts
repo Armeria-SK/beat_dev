@@ -24,6 +24,7 @@ export interface NotifyInput {
   link?: string | undefined;
   dedupKey?: string | undefined;
   noForward?: true | undefined;
+  projectId?: string | null | undefined;
 }
 
 export const DEDUP_MS = 24 * 3_600_000;
@@ -47,8 +48,8 @@ export class Notifications {
       const recent = this.#db.prepare('SELECT 1 FROM notifications WHERE dedup_key = ? AND created_at > ?').get(input.dedupKey, now - DEDUP_MS);
       if (recent) return undefined;
     }
-    const result = this.#db.prepare('INSERT INTO notifications (kind, title, body, link, dedup_key, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(input.kind, input.title.slice(0, 200), input.body?.slice(0, 2000) ?? null, input.link ?? null, input.dedupKey ?? null, now);
+    const result = this.#db.prepare('INSERT INTO notifications (kind, title, body, link, dedup_key, created_at, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(input.kind, input.title.slice(0, 200), input.body?.slice(0, 2000) ?? null, input.link ?? null, input.dedupKey ?? null, now, input.projectId ?? null);
     const n = this.#db.prepare('SELECT * FROM notifications WHERE id = ?').get(Number(result.lastInsertRowid)) as unknown as Notification;
     const event: NotifyEvent = input.noForward ? { ...n, noForward: true } : n;
     for (const listener of this.#listeners) {

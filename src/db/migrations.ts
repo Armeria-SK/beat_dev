@@ -468,4 +468,45 @@ export const MIGRATIONS: readonly Migration[] = [
   UPDATE conversations SET permission_mode = 'auto' WHERE permission_mode = 'normal';
   UPDATE approvals SET status = 'cancelled', decided_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE status = 'pending';
   `,
+  `
+  UPDATE conversations SET permission_mode = 'auto' WHERE permission_mode = 'normal';
+  `,
+  `
+  CREATE TABLE questions (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT,
+    task_id TEXT,
+    conversation_id TEXT,
+    kind TEXT NOT NULL DEFAULT 'ai' CHECK (kind IN ('ai', 'stuck', 'check_failed', 'submit_refused')),
+    question TEXT NOT NULL,
+    why TEXT,
+    options TEXT NOT NULL DEFAULT '[]',
+    chosen INTEGER,
+    blocking INTEGER NOT NULL DEFAULT 0 CHECK (blocking IN (0, 1)),
+    acceptance_item TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'answered')),
+    answer TEXT,
+    answer_kind TEXT CHECK (answer_kind IN ('kept', 'changed')),
+    fix_task_id TEXT,
+    tainted INTEGER NOT NULL DEFAULT 0 CHECK (tainted IN (0, 1)),
+    created_at INTEGER NOT NULL,
+    answered_at INTEGER
+  ) STRICT;
+  CREATE INDEX ix_questions_status ON questions (status, created_at DESC);
+  CREATE INDEX ix_questions_project ON questions (project_id, status);
+  CREATE INDEX ix_questions_task ON questions (task_id);
+  `,
+  `
+  ALTER TABLE tasks ADD COLUMN spawned_by TEXT;
+  CREATE INDEX ix_tasks_spawned_by ON tasks (spawned_by) WHERE spawned_by IS NOT NULL;
+  `,
+  `
+  ALTER TABLE notifications ADD COLUMN project_id TEXT;
+  `,
+  `
+  ALTER TABLE tasks ADD COLUMN check_state TEXT CHECK (check_state IN ('awaiting', 'checked'));
+  ALTER TABLE tool_calls ADD COLUMN evidence_no INTEGER;
+  CREATE INDEX ix_tool_calls_evidence ON tool_calls (conversation_id, evidence_no) WHERE evidence_no IS NOT NULL;
+  ALTER TABLE acceptance_versions ADD COLUMN item_states TEXT;
+  `,
 ];

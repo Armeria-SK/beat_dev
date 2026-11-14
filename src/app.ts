@@ -28,6 +28,9 @@ import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
 import { planWrite } from './tools/builtin/plan.ts';
 import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts';
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
+import { meshDecisionAdd, meshGlossarySet, meshMapSet } from './tools/builtin/mesh-write.ts';
+import { questionAdd, questionList } from './tools/builtin/questions.ts';
+import { deviationAdd } from './tools/builtin/deviations.ts';
 import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
 import { sdkConnect } from './mcp/connect.ts';
 import { McpManager, type McpConnect } from './mcp/manager.ts';
@@ -61,8 +64,10 @@ import { PlanStore } from './projects/plan.ts';
 import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
+import { pendingDecided, sweepPendingWaits, type PendingWakeDeps } from './tasks/pending-wake.ts';
+import { QuestionStore } from './questions/store.ts';
 import { Uploads } from './uploads/store.ts';
-import { PendingStore, type PendingRow } from './pending/store.ts';
+import { PendingStore, type PendingChange, type PendingRow } from './pending/store.ts';
 import { pendingNote } from './pending/notes.ts';
 import { parentOf, replayAction } from './pending/replay.ts';
 import { pendingText } from './shared/messages/pending.ts';
@@ -85,6 +90,7 @@ export function builtinTools(): ToolDef[] {
     checklistWrite, notifyOwner, docRead, tableWrite,
     imageView, webDownload,
     agentRun,
+    questionAdd, questionList, deviationAdd, meshMapSet, meshGlossarySet, meshDecisionAdd,
     ...BROWSER_TOOLS,
   ];
 }
@@ -137,6 +143,7 @@ export class App {
   readonly projects: ProjectStore;
   readonly plans: PlanStore;
   readonly acceptance: AcceptanceStore;
+  readonly questions: QuestionStore;
   readonly now: () => number;
   readonly mesh: Mesh;
   readonly projectFolderExempt: readonly string[];
@@ -188,7 +195,7 @@ export class App {
     this.tools = new ToolRegistry();
     for (const tool of options.tools ?? builtinTools()) if (this.botMemory || !MEMORY_TOOL_NAMES.includes(tool.name)) this.tools.register(tool);
     this.approvals = new ApprovalBroker(this.db);
-    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); } });
+    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); this.#pendingWake(change); } });
     const interrupted = this.pending.closeInterrupted();
     if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
@@ -200,6 +207,7 @@ export class App {
       planHash: id => { try { return this.plans.view(id).hash; } catch { return null; } },
     });
     this.acceptance.repairAll(this.log);
+    this.questions = new QuestionStore(this.db, { now, onChange: change => this.bus.publish({ type: 'question.changed', ...change }) });
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log);
@@ -223,7 +231,7 @@ export class App {
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
-      curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, log: this.log,
+      curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, questions: this.questions, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       mcpCut: (modelId, names) => this.mcp.cut(modelId, names), browser: this.browser,
@@ -235,6 +243,7 @@ export class App {
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), projects: this.projects,
+      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()),
     });
     this.tasks.onChange = task => {
       this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
@@ -447,11 +456,20 @@ export class App {
     } catch (error) { this.log(`[ERROR] Failed to record the result of pending item #${id}: ${(error as Error).message}`); }
   }
 
+  #wakeDeps(): PendingWakeDeps {
+    return { db: this.db, tasks: this.tasks, pending: this.pending, now: this.now, language: () => languageOf(this.config()), log: this.log };
+  }
+
+  #pendingWake(change: PendingChange): void {
+    if (!this.tasks) return;
+    try { pendingDecided(this.#wakeDeps(), change); } catch (error) { this.log(`[ERROR] Failed to wake the task of pending item #${change.id}: ${(error as Error).message}`); }
+  }
+
   replayPending(row: PendingRow): void {
     void replayAction(row, {
       db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
       conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
-      services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, notify: input => this.notifications.notify(input), browser: this.browser, emit: e => this.bus.publish(e) }),
+      services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, questions: this.questions, notify: input => this.notifications.notify(input), browser: this.browser, emit: e => this.bus.publish(e) }),
     }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
   }
 

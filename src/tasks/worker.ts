@@ -17,6 +17,7 @@ import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
 import { projectFolderGone } from '../projects/run.ts';
 import type { ProjectStore } from '../projects/store.ts';
+import type { QuestionStore } from '../questions/store.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
@@ -46,6 +47,8 @@ export interface WorkerDeps {
   curiosity?: CuriosityStore | undefined;
   memoryBudget?: (() => number | undefined) | undefined;
   projects?: ProjectStore | undefined;
+  questions?: QuestionStore | undefined;
+  pendingWake?: (() => unknown) | undefined;
 }
 
 export interface WorkerRunning { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
@@ -232,9 +235,10 @@ export class Worker {
 
       // 予定から実行用のタスクを作る・返事待ちを知らせ直す（どちらもモデルは呼ばない）
       tasks.spawnDueSchedules();
+      this.#d.pendingWake?.();
       const remindMs = c.worker.remindAfterHours * 3_600_000;
       for (const t of tasks.waitingSince(remindMs)) {
-        this.#d.notifications.notify({ kind: 'task_waiting', title: taskText(languageOf(c), 'notify.waiting_reminder', { title: t.title }), body: t.waiting_text ?? undefined, link: `#/tasks/${t.id}`, dedupKey: `remind:${t.id}:${Math.floor(now / remindMs)}` });
+        this.#d.notifications.notify({ kind: 'task_waiting', title: taskText(languageOf(c), 'notify.waiting_reminder', { title: t.title }), body: t.waiting_text ?? undefined, link: `#/tasks/${t.id}`, dedupKey: `remind:${t.id}:${Math.floor(now / remindMs)}`, projectId: t.project_id });
       }
       this.#detectReviewTriggers(c, now);
       if (this.paused) { reschedule(); return 'paused'; }
@@ -403,7 +407,7 @@ export class Worker {
     if (this.#d.projects && projectFolderGone(this.#d.projects, task.project_id)) {
       const name = this.#d.projects.get(task.project_id!)?.name ?? task.project_id!;
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.folder_missing', { name }) });
-      this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}` });
+      this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}`, projectId: task.project_id });
       return 'folder_missing';
     }
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language);
@@ -427,6 +431,7 @@ export class Worker {
     const { tasks, notifications } = this.#d;
     const now = this.#now();
     const link = `#/tasks/${task.id}`;
+    const projectId = task.project_id;
     const language = this.#language();
     const idleKey = `task-idle:${task.id}`;
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
@@ -440,12 +445,12 @@ export class Worker {
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'done', control.summary, 'beat', runId);
-      if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link });
+      if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, projectId });
       return;
     }
     if (control.outcome === 'question') {
       tasks.setWaiting(task.id, 'question', control.question, runId);
-      notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}` });
+      notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, projectId });
       return;
     }
     if (control.outcome === 'checkpoint') {
@@ -460,7 +465,7 @@ export class Worker {
       const splits = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
       this.#d.kv.setJson(splitKey(task.id), splits);
       if (splits === SPLIT_LIMIT) {
-        notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}` });
+        notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}`, projectId });
       }
       tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
       return;
@@ -474,7 +479,7 @@ export class Worker {
         this.#d.kv.delete(idleKey);
         const question = taskText(language, 'stuck.question', { title: task.title, strikes });
         tasks.setWaiting(task.id, 'question', question, runId);
-        notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_consult', { title: task.title }), body: question, link, dedupKey: `stuck:${task.id}` });
+        notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_consult', { title: task.title }), body: question, link, dedupKey: `stuck:${task.id}`, projectId });
       } else {
         tasks.setReady(task.id, { runAt: now + 15 * 60_000 * 2 ** (strikes - 1), reason: taskText(language, 'reason.no_progress') });
       }
@@ -487,7 +492,7 @@ export class Worker {
     const attempts = task.attempts + 1;
     if (attempts >= task.max_attempts) {
       tasks.finish(task.id, 'failed', result.errorMessage, 'worker', runId);
-      notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: result.errorMessage, link, dedupKey: `failed:${task.id}` });
+      notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: result.errorMessage, link, dedupKey: `failed:${task.id}`, projectId });
       return;
     }
     const delay = RETRY_DELAYS_MIN[Math.min(attempts - 1, RETRY_DELAYS_MIN.length - 1)]!;
