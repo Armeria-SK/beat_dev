@@ -17,14 +17,14 @@ function setup(t: { after: (fn: () => void) => void }) {
   const logs: string[] = [];
   const app = new App({ paths, databasePath: ':memory:', log: line => logs.push(line), now: () => clock.now, workerTimers: false });
   t.after(() => app.close());
-  const project = (name: string) => {
+  const project = (name: string, ids = ['A-1', 'A-2', 'A-3']) => {
     const root = join(dir, name);
     mkdirSync(root, { recursive: true });
     const made = app.projects.create({ name, root, rootKey: rootKeyOf(root), checkCommand: null });
     mkdirSync(join(paths.projects, made.id), { recursive: true });
     const doc: AcceptanceDoc = {
-      schema: 1, version: 1, language: null, notDoing: [],
-      items: ['Lists files', 'Uploads resume', 'Old files go'].map((result, i) => ({ id: `A-${i + 1}`, result, source: { kind: 'owner_edit' as const }, check: { kind: 'command' as const, command: `npm test -- ${i + 1}` }, state: 'met' as const, evidence: ['hand'], changedIn: null, removedIn: null })),
+      schema: 1, version: 1, language: null, notDoing: [], taintedRuns: ['run-1'],
+      items: ['Lists files', 'Uploads resume', 'Old files go'].map((result, i) => ({ id: ids[i]!, result, source: { kind: 'owner_edit' as const }, check: i === 2 ? { kind: 'look' as const } : { kind: 'command' as const, command: `npm test -- ${i + 1}` }, state: 'met' as const, evidence: ['hand'], changedIn: null, removedIn: null })),
     };
     app.acceptance.freeze(made.id, doc, { plan_hash: null, source: 'build', created_at: clock.now }, () => null);
     const task = app.tasks.create({ title: 'Build', origin: 'user', actor: 'user', projectId: made.id });
@@ -97,7 +97,7 @@ test('5-3b-st 持ち主の口（ownerCheck）: met だけを書き、前の証�
   const shop = s.project('shop');
   s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task, items: [{ id: 'A-2', state: 'unverified', evidence: [{ token: 5 }] }] });
   s.clock.now += 1000;
-  const doc = s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'A-2' });
+  const doc = s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'A-2', version: 1 });
   assert.deepEqual(s.states(doc), [['A-1', 'open'], ['A-2', 'met'], ['A-3', 'open']]);
   assert.deepEqual(s.app.acceptance.itemStates(shop.id)['A-2'], { state: 'met', evidence: [{ token: 5 }], by: 'owner', taskId: shop.task, at: s.clock.now });
   assert.equal(s.file(shop.id).items[1]!.state, 'met');
@@ -111,7 +111,7 @@ test('5-3b-st 2 つの口は断る: 固定の前・別の製品のタスク・�
   const draft = s.app.projects.create({ name: 'draft', root: join(s.path(shop.id), '..', 'd'), rootKey: rootKeyOf(join(s.path(shop.id), '..', 'd')), checkCommand: null });
   assert.throws(() => s.app.acceptance.markItems(draft.id, { version: 0, taskId: shop.task, items: [] }), /not locked yet/u);
   assert.throws(mark({ taskId: other.task }), /no such task/u);
-  assert.throws(() => s.app.acceptance.ownerCheck(shop.id, { taskId: other.task, itemId: 'A-1' }), /no such task/u);
+  assert.throws(() => s.app.acceptance.ownerCheck(shop.id, { taskId: other.task, itemId: 'A-1', version: 1 }), /no such task/u);
   assert.throws(mark({ taskId: 'nope' }), /no such task/u);
   assert.throws(mark({ items: [{ id: 'A-9', state: 'met', evidence: [] }] }), /no item A-9/u);
   assert.throws(mark({ items: [{ id: '__proto__', state: 'met', evidence: [] }] }), /no item __proto__/u);
@@ -124,7 +124,7 @@ test('5-3b-st 2 つの口は断る: 固定の前・別の製品のタスク・�
   assert.deepEqual(s.app.acceptance.itemStates(shop.id), {}, '断ったときは何も書かない');
   s.app.projects.update(shop.id, { archived: true });
   assert.throws(mark({ version: 2 }), /archived/u);
-  assert.throws(() => s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'A-1' }), /archived/u);
+  assert.throws(() => s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'A-1', version: 2 }), /archived/u);
 });
 
 test('5-3b-st 新しい版: 変わった項目は open・証拠なし、変わらない項目は DB の値（だれが・タスク・時刻も）を持ち越す。手で書いたファイルの state は持ち越さない', t => {
@@ -163,4 +163,45 @@ test('5-3b-st 前からあるデータ: item_states が NULL の版は、中身�
     s.app.db.prepare('UPDATE acceptance_versions SET item_states = ? WHERE project_id = ?').run(bad, shop.id);
     assert.deepEqual(s.states(s.app.acceptance.read(shop.id)), [['A-1', 'open'], ['A-2', 'open'], ['A-3', 'open']], bad);
   }
+});
+
+test('5-3b-st 持ち主の口も版で照らす: 持ち主の直しで項目が変わったあとに、前の版を見て押した確かめは stale で断り、今の版なら通る', t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  s.app.acceptance.ownerEdit(shop.id, { baseVersion: 1, ops: [{ op: 'change', id: 'A-1', item: { result: 'Lists only my files', check: { kind: 'look' } } }] });
+  assert.throws(() => s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'A-1', version: 1 }), /now version 2/u);
+  assert.deepEqual(s.app.acceptance.itemStates(shop.id), {});
+  assert.equal(s.states(s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'A-1', version: 2 }))[0]![1], 'met');
+});
+
+test('5-3b-st 門の口は、確かめ方が look / read の項目を met にできない（unverified・open は書ける）。持ち主の口は met にできる', t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  assert.throws(() => s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task, items: [{ id: 'A-3', state: 'met', evidence: [] }] }), /A-3 is checked by look or read/u);
+  assert.deepEqual(s.app.acceptance.itemStates(shop.id), {});
+  s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task, items: [{ id: 'A-3', state: 'unverified', evidence: [{ token: 2 }] }, { id: 'A-1', state: 'met', evidence: [] }] });
+  assert.deepEqual(s.states(s.app.acceptance.read(shop.id)), [['A-1', 'met'], ['A-2', 'open'], ['A-3', 'unverified']]);
+  assert.equal(s.states(s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'A-3', version: 1 }))[2]![1], 'met');
+});
+
+test('5-3b-st 外を読んだ印（taintedRuns）は同じ版でも DB の値を読み、ファイルで消したり変えたりしても戻る', t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  for (const runs of [undefined, [], ['clean-run']]) {
+    const hacked = s.file(shop.id);
+    if (runs === undefined) delete hacked.taintedRuns; else hacked.taintedRuns = runs;
+    writeFileSync(s.path(shop.id), JSON.stringify(hacked));
+    assert.equal(s.app.acceptance.verifyFrozen(shop.id), 'ok', 'taintedRuns はハッシュに入らない');
+    assert.deepEqual(s.app.acceptance.read(shop.id)!.taintedRuns, ['run-1'], JSON.stringify(runs));
+    assert.equal(s.app.acceptance.repair(shop.id), true);
+    assert.deepEqual(s.file(shop.id).taintedRuns, ['run-1']);
+  }
+});
+
+test('5-3b-st 番号の形でない項目（手で書いた下書きを固定した版）は、門の口でも持ち主の口でも書けない', t => {
+  const s = setup(t);
+  const shop = s.project('shop', ['A-1', '__proto__', 'X-1']);
+  assert.throws(() => s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task, items: [{ id: '__proto__', state: 'unverified', evidence: [] }] }), /no item __proto__/u);
+  assert.throws(() => s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'X-1', version: 1 }), /no item X-1/u);
+  assert.equal(s.raw(shop.id), '{}');
 });

@@ -526,7 +526,7 @@ test('3-3-s Build をもう一度: 固定した版の DB の taintedRuns も印�
   assert.ok((cleaned.taintedRuns ?? []).length > 0);
   cleaned.taintedRuns = [];
   writeFileSync(path, JSON.stringify(cleaned));
-  assert.equal(s.app.acceptance.read(shop.id)!.taintedRuns!.length, 0);
+  assert.deepEqual(s.app.acceptance.read(shop.id)!.taintedRuns, JSON.parse(s.app.acceptance.latest(shop.id)!.content).taintedRuns, '5-3b-st: 同じ版でも読む印は DB の値');
   s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(shop.task.id);
   const again = await s.build(shop.id);
   assert.equal(again.status, 201, JSON.stringify(again.body));

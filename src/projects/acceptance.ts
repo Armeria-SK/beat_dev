@@ -298,7 +298,7 @@ const withStates = (doc: AcceptanceDoc, states: ItemStates): AcceptanceDoc => ({
   ...doc, items: doc.items.map(entry => (isItem(entry) ? { ...entry, ...stateIn(states, entry.id) } : entry)),
 });
 
-const statesText = (doc: AcceptanceDoc): string => canonical(doc.items.map(entry => (isItem(entry) ? [entry.state, entry.evidence] : null)));
+const statesText = (doc: AcceptanceDoc): string => canonical([doc.taintedRuns, doc.items.map(entry => (isItem(entry) ? [entry.state, entry.evidence] : null))]);
 
 export type ChangeOpKind = 'add' | 'change' | 'remove';
 export interface ChangeItem { result: string; check: AcceptanceCheck }
@@ -489,17 +489,17 @@ export class AcceptanceStore {
     return this.#mark(projectId, 'gate', mark.taskId, mark.version, mark.items);
   }
 
-  ownerCheck(projectId: string, mark: { taskId: string; itemId: string }): AcceptanceDoc {
-    return this.#mark(projectId, 'owner', mark.taskId, null, [{ id: mark.itemId, state: 'met', evidence: null }]);
+  ownerCheck(projectId: string, mark: { taskId: string; itemId: string; version: number }): AcceptanceDoc {
+    return this.#mark(projectId, 'owner', mark.taskId, mark.version, [{ id: mark.itemId, state: 'met', evidence: null }]);
   }
 
-  #mark(projectId: string, by: ItemMarker, taskId: string, version: number | null, marks: ReadonlyArray<{ id: string; state: AcceptanceState; evidence: unknown[] | null }>): AcceptanceDoc {
+  #mark(projectId: string, by: ItemMarker, taskId: string, version: number, marks: ReadonlyArray<{ id: string; state: AcceptanceState; evidence: unknown[] | null }>): AcceptanceDoc {
     if (this.#archived(projectId)) throw new AcceptanceError('archived');
     const doc = transaction(this.#db, () => {
       const row = this.latest(projectId);
       const truth = row && this.#truth(row);
       if (!row || !truth) throw new AcceptanceError('not_frozen');
-      if (version !== null && version !== row.version) throw new AcceptanceError('stale', { version: row.version });
+      if (version !== row.version) throw new AcceptanceError('stale', { version: row.version });
       if (typeof taskId !== 'string' || !this.#db.prepare('SELECT 1 FROM tasks WHERE id = ? AND project_id = ?').get(taskId, projectId)) throw badChange('there is no such task for this product');
       const states = itemStatesOf(row.item_states);
       const at = this.#now();
@@ -508,6 +508,7 @@ export class AcceptanceStore {
         const target = typeof id === 'string' && ITEM_ID.test(id) ? truth.items.find(entry => entry.id === id && entry.removedIn === null) : undefined;
         if (!target) throw badChange(`there is no item ${String(id).slice(0, 20)}`);
         if (!STATES.has(mark.state)) throw badChange('state must be open, met or unverified');
+        if (by === 'gate' && mark.state === 'met' && target.check.kind !== 'command') throw badChange(`${target.id} is checked by look or read, so only the owner can mark it met`);
         const evidence = mark.evidence ?? target.evidence;
         if (!Array.isArray(evidence)) throw badChange('evidence must be a list');
         if (JSON.stringify(evidence).length > EVIDENCE_MAX) throw new AcceptanceError('too_long', { field: 'evidence', max: EVIDENCE_MAX });
@@ -669,7 +670,8 @@ export class AcceptanceStore {
     const doc = row && this.#truth(row);
     if (!row || !doc) return file && { doc: file };
     if (!file || file.version !== row.version) return { doc, write: doc, ...(file && file.version > row.version ? { ahead: file.version } : {}) };
-    const copy = withStates(file, itemStatesOf(row.item_states));
+    const { taintedRuns: _fileRuns, ...rest } = withStates(file, itemStatesOf(row.item_states));
+    const copy: AcceptanceDoc = { ...rest, ...(doc.taintedRuns ? { taintedRuns: doc.taintedRuns } : {}) };
     return statesText(copy) === statesText(file) ? { doc: copy } : { doc: copy, write: copy };
   }
 
