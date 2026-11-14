@@ -1083,6 +1083,7 @@ export const en = {
   'ui.set.provider.env': 'Key variable',
   'ui.set.provider.envDesc': 'The .env name the key is stored under',
   'ui.set.provider.envAuto': 'chosen for you',
+  'ui.set.provider.envUnsafe': 'Write the name of a variable that holds a key, not the key itself: the name must contain KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL',
   'ui.set.provider.server': 'Server',
   'ui.set.provider.parallel': 'Requests at the same time',
   'ui.set.provider.timeout': 'Timeout',

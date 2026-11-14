@@ -6,7 +6,7 @@ import { isComposing } from '../../keys.ts';
 import { probeMessage, serverText } from '../../server-text.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvPatch, keyEnvUnsafe, kindPatch, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, keyEnvPatch, keyEnvProblem, keyEnvUnsafe, kindPatch, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -151,7 +151,7 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
           <Row k={`${k}:env`} title={t('ui.set.provider.env')} desc={t('ui.set.provider.envDesc')}>
             <CommitField value={(provider.apiKeyEnv as string | undefined) ?? ''} label={t('ui.set.provider.env')} mono placeholder={t('ui.set.provider.envAuto')} onCommit={v => {
               const patch = keyEnvPatch(v);
-              if (!patch) { ctx.fail(`${k}:env`, serverText('config.pattern.key_env', null, getLanguage()) ?? ''); return; }
+              if (!patch) { ctx.fail(`${k}:env`, keyEnvProblem(v) === 'unsafe' ? t('ui.set.provider.envUnsafe') : serverText('config.pattern.key_env', null, getLanguage()) ?? ''); return; }
               ctx.clear(`${k}:env`);
               edit(patch);
             }} />

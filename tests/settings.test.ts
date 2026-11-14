@@ -4,7 +4,7 @@ import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  keyEnvPatch, kindPatch, sharedKeyWith,
+  keyEnvPatch, keyEnvProblem, kindPatch, sharedKeyWith,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -430,4 +430,15 @@ test('Key variable の欄: 環境変数の名前だけを設定に入れる。�
   assert.deepEqual(keyEnvPatch(''), { apiKeyEnv: undefined });
   assert.equal(keyEnvPatch('sk-ant-test-0000000000000000'), null);
   assert.equal(keyEnvPatch('my_api_key'), null);
+});
+
+test('Key variable の欄: 大文字と数字だけの鍵らしい文字列は、名前の形に合っていても設定に入れない（鍵を持つ名前だけ通す）', () => {
+  assert.equal(keyEnvPatch('ABCD1234EFGH5678IJKL9012MNOP3456'), null);
+  assert.equal(keyEnvProblem('ABCD1234EFGH5678IJKL9012MNOP3456'), 'unsafe');
+  assert.equal(keyEnvPatch('PATH'), null);
+  assert.equal(keyEnvProblem('sk-ant-test-0000000000000000'), 'pattern');
+  assert.equal(keyEnvProblem('MY_API_KEY'), null);
+  assert.equal(keyEnvProblem('OPENROUTER_TOKEN'), null);
+  assert.equal(keyEnvProblem(''), null);
+  assert.match(en['ui.set.provider.envUnsafe'] as string, /KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL/u);
 });

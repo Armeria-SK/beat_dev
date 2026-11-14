@@ -272,7 +272,9 @@ export const secondsOf = (ms: unknown): number | undefined => (typeof ms === 'nu
 const KEY_ENV = /^[A-Z][A-Z0-9_]{0,63}$/u;
 export const isEnvName = (value: string): boolean => KEY_ENV.test(value);
 
-export const keyEnvPatch = (value: string): { apiKeyEnv: string | undefined } | null => (value && !isEnvName(value) ? null : { apiKeyEnv: value || undefined });
+export const keyEnvProblem = (value: string): 'pattern' | 'unsafe' | null => (value === '' ? null : !isEnvName(value) ? 'pattern' : isSecretEnvName(value) ? null : 'unsafe');
+
+export const keyEnvPatch = (value: string): { apiKeyEnv: string | undefined } | null => (keyEnvProblem(value) ? null : { apiKeyEnv: value || undefined });
 
 // API キーの環境変数の名前。プロバイダに書かれたもの（Anthropic で書いていなければ ANTHROPIC_API_KEY）。
 export function keyUsage(config: Config): Array<{ name: string; providers: string[] }> {
