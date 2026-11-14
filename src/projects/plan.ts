@@ -5,7 +5,8 @@ import type { KV } from '../db/kv.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { planText, type PlanMessageKey } from '../shared/messages/plans.ts';
 import { stripHidden } from '../shared/plain-text.ts';
-import { sanitizeModelInputText } from '../shared/redaction.ts';
+import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
+import { redactSecrets, sanitizeModelInputText } from '../shared/redaction.ts';
 import { projectDir } from './store.ts';
 
 export const PLAN_FILE = 'plan.md';
@@ -39,6 +40,34 @@ export function cleanPlan(raw: string): string {
   if (content.length > PLAN_MAX_CHARS) throw new PlanError('too_long', { max: PLAN_MAX_CHARS });
   if (sanitizeModelInputText(content).redaction_count > 0) throw new PlanError('secret');
   return content;
+}
+
+const GIST_HEAD_SHARE = 0.7;
+const GIST_HEADING = /^#{1,6} /u;
+const GIST_HEADING_CHARS = 80;
+const GIST_LATER = 'Later sections:';
+
+export function planGist(content: string, roomChars: number, roomTokens: number): string {
+  const text = redactSecrets(content).split(/\r?\n/u).map(line => line.trimEnd()).join('\n').replace(/\n{3,}/gu, '\n\n').trim();
+  const fits = (value: string): boolean => value.length <= roomChars && estimateTextTokens(value) <= roomTokens;
+  if (fits(text)) return text;
+  const lineCut = (chars: number, tokens: number): number => {
+    const length = prefixLength(text, chars, tokens);
+    const at = text.lastIndexOf('\n', length);
+    return at > 0 ? at : length;
+  };
+  const headEnd = lineCut(Math.floor(roomChars * GIST_HEAD_SHARE), Math.floor(roomTokens * GIST_HEAD_SHARE));
+  const headings = text.slice(headEnd).split('\n').filter(line => GIST_HEADING.test(line)).map(line => [...line].slice(0, GIST_HEADING_CHARS).join(''));
+  if (headings.length === 0) return text.slice(0, lineCut(roomChars, roomTokens)).trimEnd();
+  const head = text.slice(0, headEnd).trimEnd();
+  let gist = [head, GIST_LATER].filter(Boolean).join('\n');
+  if (!fits(`${gist}\n${headings[0]}`)) return fits(head) ? head : '';
+  for (const heading of headings) {
+    const next = `${gist}\n${heading}`;
+    if (!fits(next)) break;
+    gist = next;
+  }
+  return gist;
 }
 
 export class PlanStore {

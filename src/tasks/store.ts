@@ -62,6 +62,7 @@ export interface CreateTask {
   projectId?: string | null | undefined;
   acceptanceItems?: readonly string[] | undefined;
   ownerRequest?: boolean | undefined;
+  ownerPlan?: string | undefined;
   actor: string;
 }
 
@@ -105,16 +106,17 @@ const TEXT_EVENT_KINDS: readonly string[] = ['context', 'note', 'edited'];
 const TEXT_EVENTS = TEXT_EVENT_KINDS.map(kind => `'${kind}'`).join(', ');
 export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }
 const SOURCE_MARK_ACTORS = ['mesh', 'build'] as const;
-interface OwnerRequest { title: string; body: string; doneCriteria: string | null }
+export const PLAN_GIST_LABEL = 'Plan the owner approved for this build (excerpt):';
+interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string }
 
 function ownerRequestOf(raw: string | null | undefined): OwnerRequest | undefined {
   if (!raw) return undefined;
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return undefined; }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const { title, body, doneCriteria } = value as Record<string, unknown>;
+  const { title, body, doneCriteria, plan } = value as Record<string, unknown>;
   if (typeof title !== 'string' || typeof body !== 'string' || (doneCriteria !== null && typeof doneCriteria !== 'string')) return undefined;
-  return { title, body, doneCriteria };
+  return { title, body, doneCriteria, ...(typeof plan === 'string' && plan ? { plan } : {}) };
 }
 
 function firstLine(text: string | null): string | null {
@@ -247,7 +249,7 @@ export class TaskStore {
     const owner = ownerRequestOf(holder?.owner_request);
     if (owner && holder) {
       if (this.#sourceTainted(task.id, task.parent_id)) return '';
-      return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria].filter(Boolean).join('\n');
+      return [owner.title, holder.acceptance_items === null ? owner.body : '', ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : []), owner.doneCriteria].filter(Boolean).join('\n');
     }
     if (this.#textTainted(task.id, task.parent_id)) return '';
     return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
@@ -265,6 +267,7 @@ export class TaskStore {
       title: patch.title?.trim() || current.title,
       body: patch.body !== undefined ? patch.body : current.body,
       doneCriteria: patch.doneCriteria !== undefined ? patch.doneCriteria : current.doneCriteria,
+      ...(current.plan ? { plan: current.plan } : {}),
     };
     this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(JSON.stringify(next), id);
   }
@@ -316,7 +319,7 @@ export class TaskStore {
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
-    const ownerRequest: OwnerRequest | null = input.ownerRequest ? { title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null } : null;
+    const ownerRequest: OwnerRequest | null = input.ownerRequest ? { title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null, ...(input.ownerPlan ? { plan: input.ownerPlan } : {}) } : null;
     this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
