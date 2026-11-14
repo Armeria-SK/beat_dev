@@ -139,6 +139,32 @@ test('5-5a-d 上限は 5-2c-s と同じ: 1 行 200 文字（長いと断り、�
   assert.match(s.rows(shop.id, 'DECISIONS-old.md')[0]!, /"y+" \[by task\]$/u);
 });
 
+test('5-5a-d 30 行があふれたら AI の古い行から DECISIONS-old.md へ。タスクが 40 個書いても持ち主の行は全部 DECISIONS.md に残る。持ち主の行だけになったら持ち主の古い行が移る', async t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  const ownerRows = (name?: string) => s.rows(shop.id, name).filter(row => /question #\d+:/u.test(row));
+  for (let i = 0; i < 5; i++) {
+    s.owner(shop.id, i === 2);
+    await s.add(shop.id, `Early decision ${i}`, i === 1 ? { taint: { tainted: true, sources: ['web_fetch'] } } : {});
+  }
+  for (let i = 0; i < 40; i++) assert.equal((await s.add(shop.id, `Task decision ${i}`)).isError, undefined);
+  const rows = s.rows(shop.id);
+  assert.equal(rows.length, DECISIONS_ROWS_MAX);
+  assert.equal(ownerRows().length, 5, rows.join('\n'));
+  assert.equal(ownerRows('DECISIONS-old.md').length, 0);
+  const old = s.rows(shop.id, 'DECISIONS-old.md');
+  assert.equal(old.length, 20);
+  assert.match(old[0]!, /"Early decision 0" \[by task\]$/u);
+  assert.match(old[1]!, /"Early decision 1" \[by task, src: external\]$/u);
+  assert.match(old.at(-1)!, /"Task decision 14" \[by task\]$/u);
+  assert.match(rows.at(-1)!, /"Task decision 39" \[by task\]$/u);
+  assert.match(rows[0]!, /^- .* question #3: /u, 'the oldest owner line keeps its place at the top');
+  for (let i = 0; i < 26; i++) s.owner(shop.id);
+  assert.equal(ownerRows().length, DECISIONS_ROWS_MAX, 'all AI lines moved out before any owner line');
+  assert.equal(ownerRows('DECISIONS-old.md').length, 1);
+  assert.equal(s.rows(shop.id, 'DECISIONS-old.md').length, 46);
+});
+
 test('5-5a-d しまった製品・知らない製品には書かない', async t => {
   const s = setup(t);
   const gone = s.project('gone');

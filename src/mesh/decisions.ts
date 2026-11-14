@@ -59,6 +59,7 @@ export function decisionLine(d: OwnerDecision): string {
 export interface AiDecision { date: string; text: string; writer: Writer }
 
 const AI_EXTERNAL = / \\?\[by (?:conversation|task|child), src: external\\?\]$/u;
+const AI_ROW = / \\?\[by (?:conversation|task|child)(?:, src: external)?\\?\]$/u;
 
 export function aiDecisionLine(d: AiDecision): { line: string; hidden: boolean } {
   const folded = d.text.normalize('NFKC');
@@ -98,8 +99,10 @@ export function appendDecision(dir: string, line: string): { moved: number } {
   const extra = Math.max(0, rowAt.length - DECISIONS_ROWS_MAX);
   if (extra > 0) {
     const old = join(dir, DECISIONS_OLD_FILE);
-    const moving = new Set(rowAt.slice(0, extra));
-    replaceFile(old, withRows(readOwn(old, DECISIONS_OLD_FILE), OLD_HEAD, rowAt.slice(0, extra).map(index => next[index]!)));
+    const ai = rowAt.filter(index => AI_ROW.test(next[index]!));
+    const moved = [...ai, ...rowAt.filter(index => !AI_ROW.test(next[index]!))].slice(0, extra).sort((a, b) => a - b);
+    const moving = new Set(moved);
+    replaceFile(old, withRows(readOwn(old, DECISIONS_OLD_FILE), OLD_HEAD, moved.map(index => next[index]!)));
     replaceFile(file, next.filter((_text, index) => !moving.has(index)).join('\n'));
   } else {
     replaceFile(file, next.join('\n'));
