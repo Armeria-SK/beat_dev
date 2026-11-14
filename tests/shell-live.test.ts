@@ -135,6 +135,22 @@ test('実機（Windows PowerShell 5.1・制限モード）: 一覧に当たる�
   if (which('rg')) assert.match((await s.call('rg --version')).output.content, /ripgrep/u);
 });
 
+test('実機（Windows PowerShell 5.1・制限モード）: 入れ子の深い読むだけの形は承認なしで本当に動き、深い所で消す形は動かさずに積む', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const deep = "Get-ChildItem -Recurse -File | ForEach-Object { if ($_.Length -gt 0) { if ($_.Name.EndsWith('.txt')) { $n = @($_.Name.Split('.')).Count; if ($n -gt 1) { Write-Output ($_.Name.ToUpper()) } } } }";
+  const outcome = await s.call(deep);
+  assert.notEqual(outcome.decidedBy, 'pending', outcome.output.content);
+  assert.equal(outcome.output.isError, false, outcome.output.content);
+  assert.match(outcome.output.content, /A\.TXT/u, outcome.output.content);
+  assert.match(outcome.output.content, /B\.TXT/u, outcome.output.content);
+  const del = deep.replace('Write-Output ($_.Name.ToUpper())', 'Remove-Item ($_.FullName.Trim())');
+  const parked = await s.call(del);
+  assert.equal(parked.decidedBy, 'pending', parked.output.content);
+  assert.match(parked.output.content, /It has NOT run/u);
+  assert.ok(existsSync(s.files('a.txt')));
+  assert.ok(existsSync(s.files('sub/b.txt')));
+});
+
 // 6 回目の審査の後: PowerShell でファイルを書く・作る・移す・消すコマンドレットとリダイレクトは、書き込み先が決まっていても毎回確かめる（§11.13）。拒否すれば何も起きない
 test('実機（Windows PowerShell 5.1・制限モード）: 書く・作る・移す・消すコマンドレットとリダイレクトは、パスが決まっていても確かめになり、拒否すれば何も起きない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
