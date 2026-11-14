@@ -3,7 +3,7 @@ import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig 
 import type { ChatMessage, ImageRef, StopReason } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { contextHint, errorProbeText, evaluateContext } from './context.ts';
-import { classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
+import { checkBaseUrl, classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
 import { ProviderError, providerError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
 type Block = Anthropic.ContentBlockParam;
@@ -84,6 +84,10 @@ export class AnthropicAdapter implements ProviderAdapter {
   #secrets(): string[] { return providerSecrets(this.provider, this.#env); }
 
   #clientFor(): Anthropic {
+    if (this.provider.baseUrl !== undefined) {
+      const checked = checkBaseUrl(this.provider.baseUrl, true);
+      if ('problem' in checked) throw new ProviderError('provider_error', `providers.${this.provider.id}.baseUrl: ${checked.problem}`, { retryable: false });
+    }
     const key = requireApiKey({ ...this.provider, apiKeyEnv: this.provider.apiKeyEnv ?? 'ANTHROPIC_API_KEY' }, this.#env);
     if (!this.#client || this.#clientKey !== key) {
       this.#client = new Anthropic({

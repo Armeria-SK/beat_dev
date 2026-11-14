@@ -398,3 +398,31 @@ test('道具の結果の画像: 実際に送る本文にも、2 つの提供元�
   await collect(new OpenAiCompatibleAdapter(compat(blindServer.url), {}).stream(request(model({ vision: false }), { messages: history })));
   assert.deepEqual(roles(blindServer.requests[0]!.body.messages), ['system', 'user', 'assistant', 'tool', 'tool']);
 });
+
+test('Anthropic: 暗号化なしの http:// の外の送り先には、鍵を付けた通信を出さない（設定の検査を通らずに来た設定でも）', async () => {
+  const sent: Array<{ url: string; key: string | null }> = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push({ url: String(input instanceof Request ? input.url : input), key: new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('x-api-key') });
+    return new Response('{"type":"error","error":{"type":"not_found_error","message":"no"}}', { status: 404, headers: { 'content-type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  const env = { ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000' };
+  for (const provider of [
+    { ...anthropicProvider, baseUrl: 'http://192.168.1.5:8080' },
+    { ...anthropicProvider, baseUrl: 'http://proxy.example.net', apiKeyEnv: 'ANTHROPIC_API_KEY' },
+  ]) {
+    const adapter = new AnthropicAdapter(provider, env, fetchImpl);
+    const error = await rejection(collect(adapter.stream(request(model()))));
+    assert.equal(error.retryable, false);
+    assert.match(error.message, /baseUrl/u);
+    assert.ok(!error.message.includes('sk-ant-test'), '鍵は失敗の文に出ない');
+    const probed = await adapter.probe(model({ contextLength: undefined } as unknown as Partial<ModelConfig>), 65536);
+    assert.notEqual(probed.status, 'ok');
+    assert.ok(!JSON.stringify(probed).includes('sk-ant-test'));
+  }
+  assert.deepEqual(sent, [], '外の http:// へは 1 回も通信しない');
+
+  const local = new AnthropicAdapter({ ...anthropicProvider, baseUrl: 'http://127.0.0.1:8080' }, env, fetchImpl);
+  await rejection(collect(local.stream(request(model()))));
+  assert.equal(sent.length, 1, 'この PC の中の http:// は今までどおり通す');
+  assert.equal(sent[0]!.key, 'sk-ant-test-0000000000000000');
+});
