@@ -114,6 +114,7 @@ test('Settings の Reset も保存の順番待ちを通る: 先に並んだ保�
   let confirm: () => void = () => undefined;
   const reset = checkThenRun(enqueue,
     async () => { log.push('check'); return ['wider']; },
+    items => items.join(','),
     (items, go) => new Promise<boolean>(resolve => { log.push(`ask:${items.join(',')}`); confirm = () => { void go().then(resolve); }; }),
     async () => { log.push('reset'); return true; });
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -130,17 +131,43 @@ test('Settings の Reset も保存の順番待ちを通る: 先に並んだ保�
   hold();
   await later;
   assert.equal(await reset, true);
-  assert.deepEqual(log.slice(-3), ['later:start', 'later:end', 'reset']);
+  assert.deepEqual(log.slice(-4), ['later:start', 'later:end', 'check', 'reset'], 'Reset の直前に確かめの材料を読み直す');
   const quiet: string[] = [];
-  assert.equal(await checkThenRun(enqueue, async () => [], async () => { quiet.push('ask'); return false; }, async () => { quiet.push('reset'); return true; }), true);
+  let jobs = 0;
+  const counted: typeof enqueue = job => { jobs += 1; return enqueue(job); };
+  assert.equal(await checkThenRun(counted, async () => [], items => items.join(','), async () => { quiet.push('ask'); return false; }, async () => { quiet.push('reset'); return true; }), true);
   assert.deepEqual(quiet, ['reset'], '広がる変更が無ければ聞かずに Reset');
+  assert.equal(jobs, 1, '確かめの材料と Reset は 1 つの順番で走る');
+});
+
+test('Settings の Reset: 確かめのあいだに広がる中身が変わったら、Reset の前にもう一度聞く（保存の planSave と同じ。レビューの直し）', async () => {
+  const enqueue = serial();
+  const found = [['a'], ['a', 'b'], ['a', 'b']];
+  const asked: string[] = [];
+  let resets = 0;
+  const done = await checkThenRun(enqueue, async () => found.shift() ?? [], items => items.join(','),
+    (items, go) => { asked.push(items.join(',')); return go(); },
+    async () => { resets += 1; return true; });
+  assert.equal(done, true);
+  assert.deepEqual(asked, ['a', 'a,b'], '変わった中身で聞き直す');
+  assert.equal(resets, 1, '確かめた中身と同じになってから 1 回だけ Reset');
 });
 
 test('Settings › Advanced の Reset の配線: 確かめの材料と Reset を ctx.queue（保存の順番待ち）で走らせる（backlog 279）', () => {
   const page = readFileSync(new URL('../web/src/ui/settings/customize.tsx', import.meta.url), 'utf8');
   const reset = page.slice(page.indexOf('const reset = async () => {'), page.indexOf('const broken = '));
   assert.ok(reset.includes('await checkThenRun(ctx.queue,'), 'Reset は checkThenRun と ctx.queue を通す');
+  assert.ok(reset.includes('}, accessKey, (items, go) =>'), '確かめた中身は accessKey で比べる');
+  assert.ok(reset.includes('api.resetSettings(signal)') && reset.includes('api.settings(signal), api.resetPreview(signal)'), 'Reset の通信は時間切れで止められる');
   assert.ok(!/await run\(\)/u.test(reset), '順番待ちの外で Reset を呼ばない');
   const settings = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
   assert.ok(settings.includes('commit, queue: enqueue,'), 'ctx.queue は保存と同じ順番待ち');
+});
+
+test('Settings の保存の配線: 保存の読み直しと書き込みは、順番待ちの signal を通して時間切れで止められる（backlog 196、レビューの直し）', () => {
+  const page = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
+  const commit = page.slice(page.indexOf('const commit = useCallback('), page.indexOf('const setDirty = '));
+  assert.ok(commit.includes('return enqueue(async (signal): Promise<'), '順番待ちの signal を受ける');
+  assert.ok(commit.includes('latest = (await api.settings(signal)).config;'));
+  assert.ok(commit.includes('const result = await api.saveSettings(plan.config, signal);'));
 });

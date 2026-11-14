@@ -27,3 +27,11 @@ test('Settings › Hooks の配線: 行の編集と削除は editListItem を通
   assert.ok(row.includes("t('ui.set.hooks.moved')") && row.includes('ctx.reload()'), '当たらなければ知らせて一覧を読み直す');
   assert.equal(typeof en['ui.set.hooks.moved'], 'string');
 });
+
+test('Settings › Hooks の配線: 当たらなかったときだけ知らせて読み直す（gone の向き。レビューの直し）', () => {
+  const source = readFileSync(new URL('../web/src/ui/settings/computer.tsx', import.meta.url), 'utf8');
+  const row = source.slice(source.indexOf('function HookRow('), source.indexOf('function AddHook('));
+  assert.ok(row.includes('gone = next === null;'), '当たらないときが gone');
+  assert.ok(row.includes('return next === null ? c : setHooks(c, stage, next);'), '当たらなければ書かない');
+  assert.ok(/\.then\(\(\) => \{ if \(gone\) \{ toast\(/u.test(row), '知らせるのは gone のときだけ');
+});

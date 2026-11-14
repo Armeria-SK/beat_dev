@@ -31,14 +31,19 @@ export function serial(limitMs = SAVE_LIMIT_MS): Enqueue {
   };
 }
 
-export async function checkThenRun<T>(
+export function checkThenRun<T>(
   enqueue: Enqueue,
   check: (signal: AbortSignal) => Promise<readonly T[]>,
+  keyOf: (items: readonly T[]) => string,
   ask: (items: readonly T[], run: () => Promise<boolean>) => Promise<boolean>,
   run: (signal: AbortSignal) => Promise<boolean>,
 ): Promise<boolean> {
-  const items = await enqueue(check);
-  return items.length > 0 ? ask(items, () => enqueue(run)) : enqueue(run);
+  const step = (confirmed: string | null): Promise<boolean> => enqueue(async (signal): Promise<boolean | { items: readonly T[] }> => {
+    const items = await check(signal);
+    if (items.length > 0 && keyOf(items) !== confirmed) return { items };
+    return run(signal);
+  }).then(result => (typeof result === 'boolean' ? result : ask(result.items, () => step(keyOf(result.items)))));
+  return step(null);
 }
 
 export const hasUnsaved = (dirty: ReadonlyMap<string, boolean>): boolean => [...dirty.values()].some(Boolean);

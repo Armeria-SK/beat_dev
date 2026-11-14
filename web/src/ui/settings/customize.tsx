@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type PersonaView } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatNumber, useT } from '../../i18n/index.ts';
-import { accessWidening } from '../../settings/access.ts';
+import { accessKey, accessWidening } from '../../settings/access.ts';
 import { issueMessage } from '../../settings/model.ts';
 import { estimateTokens, overPersonaBudget } from '../../tokens.ts';
 import { Button } from '../parts.tsx';
@@ -186,7 +186,7 @@ export function AdvancedPanel() {
       await checkThenRun(ctx.queue, async signal => {
         const [latest, preview] = await Promise.all([api.settings(signal), api.resetPreview(signal)]);
         return accessWidening(latest.config, preview.config);
-      }, (items, go) => ctx.ask({ row: 'adv:reset', items: [...items], title: t('ui.set.adv.resetWiden'), ok: t('ui.set.adv.reset') }, go), run);
+      }, accessKey, (items, go) => ctx.ask({ row: 'adv:reset', items: [...items], title: t('ui.set.adv.resetWiden'), ok: t('ui.set.adv.reset') }, go), run);
     } catch (error) { ctx.fail('adv:reset', errorText(error, t('ui.set.adv.resetFailed'))); }
   };
   const broken = ctx.view.configError;
