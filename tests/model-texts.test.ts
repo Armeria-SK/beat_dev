@@ -257,10 +257,9 @@ const EN_REVIEW_POLICY = [
   '- Facts about the user that were missed (preferences, plans, relationships, environment): memory_save (book=user). Your own lessons: book=notes',
   '- Add at most 3 items from a single record',
   '- If you find a procedure that looks reusable, use skill_draft (it is not used until the user approves it). Prefer fixing an existing skill over creating a new one',
-  '- If something caught your interest but you have not looked into it, use curiosity_add',
   '- If there is nothing to do, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)',
   '- At the end, report what you did in one or two sentences',
-  "- Write memories, skill drafts, curiosity items and your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English",
+  "- Write memories, skill drafts and your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English",
 ];
 const EN_TIDY_POLICY = [
   '',
