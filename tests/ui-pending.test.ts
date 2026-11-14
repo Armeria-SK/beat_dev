@@ -5,8 +5,9 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, actionView, byteSize, decidedMore, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
+  acceptanceRows, actionView, byteSize, decidedMore, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingRouteReady, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
+import { EMPTY, reduce } from '../web/src/ui/live-state.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
 
@@ -145,6 +146,18 @@ test('ui/pending: 製品の Pending の欄を開く先は、その製品のい�
   ];
   assert.deepEqual(paneTarget('prod01', conversations), { view: 'chat', id: 'new' });
   assert.deepEqual(paneTarget('prod03', conversations), { view: 'productNew', id: 'prod03' });
+});
+
+test('ui/pending: #/pending/<製品> は、会話の一覧を読み終える（か、読めないと分かる）まで行き先を決めない（読む前に決めると新しい会話へ行ってしまう）', () => {
+  assert.equal(EMPTY.conversationsSettled, false);
+  assert.equal(pendingRouteReady(true, EMPTY.conversationsSettled), false, '会話の一覧がまだ無い');
+  const loaded = reduce(EMPTY, { type: 'conversations', conversations: [{ id: 'new', title: null, created_at: 0, last_message_at: 20, project_id: 'prod01' }] }).state;
+  assert.equal(pendingRouteReady(true, loaded.conversationsSettled), true);
+  assert.deepEqual(paneTarget('prod01', loaded.conversations), { view: 'chat', id: 'new' });
+  assert.equal(pendingRouteReady(false, loaded.conversationsSettled), false, '製品の一覧も要る');
+  const failed = reduce(EMPTY, { type: 'conversationsFailed' }).state;
+  assert.equal(pendingRouteReady(true, failed.conversationsSettled), true, '読めなかったときは待ち続けない（前と同じく新しい会話へ）');
+  assert.deepEqual(failed.conversations, []);
 });
 
 test('ui/pending: 承認して動いている行（running）は Waiting に出さず、Decided の頭に出す（サーバーは待ちの一覧に running を含める）', () => {

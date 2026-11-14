@@ -1,4 +1,5 @@
 import type { NewTask, Project } from '../api.ts';
+import { languagePick, type LanguagePick } from './doc-language.ts';
 import { ALL_PRODUCTS, matchesFilter, NO_PRODUCT, productOf, type ProductFilter, type ProductOption } from './products.ts';
 
 export const inFilter = <R extends { project_id?: string | null }>(rows: readonly R[], filter: ProductFilter): R[] => rows.filter(row => matchesFilter(row.project_id, filter));
@@ -32,3 +33,17 @@ export function productLine(id: string | null | undefined, active: readonly Proj
 
 export const needsShelved = (id: string | null | undefined, active: readonly Project[], archived: readonly Project[] | null): boolean =>
   (id ? archived === null && !liveProduct(active, id) : false);
+
+export interface ProductForm { name: string; check: string; lang: LanguagePick }
+
+export const formOf = (project: Project): ProductForm => ({ name: project.name, check: project.check_command ?? '', lang: languagePick(project) });
+
+export function followProduct(typed: ProductForm, was: Project, now: Project): ProductForm {
+  const old = formOf(was);
+  const next = formOf(now);
+  return {
+    name: typed.name === old.name ? next.name : typed.name,
+    check: typed.check === old.check ? next.check : typed.check,
+    lang: typed.lang.pick === old.lang.pick && typed.lang.other === old.lang.other ? next.lang : typed.lang,
+  };
+}

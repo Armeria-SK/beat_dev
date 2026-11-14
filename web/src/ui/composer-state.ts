@@ -1,5 +1,5 @@
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
-import type { ModelView, PendingMessage } from '../api.ts';
+import type { ModelView, PendingMessage, UploadView } from '../api.ts';
 import { isRenameWithoutTitle, renameTitleOf, SLASH_COMMANDS } from '../chat-logic.ts';
 
 export const MAX_ATTACHMENTS = 5;
@@ -124,13 +124,23 @@ export function bareCommand(text: string): UiSlash | null {
 
 export const NEW_DRAFT = 'new';
 
-export interface DraftStore { get: (key: string) => string; set: (key: string, text: string) => void }
+export interface DraftStore {
+  get: (key: string) => string;
+  set: (key: string, text: string) => void;
+  files: (key: string) => UploadView[];
+  setFiles: (key: string, files: UploadView[]) => void;
+  forget: (key: string) => void;
+}
 
 export function createDrafts(): DraftStore {
   const kept = new Map<string, string>();
+  const attached = new Map<string, UploadView[]>();
   return {
     get: key => kept.get(key) ?? '',
     set: (key, text) => { if (text) kept.set(key, text); else kept.delete(key); },
+    files: key => attached.get(key) ?? [],
+    setFiles: (key, files) => { if (files.length) attached.set(key, files); else attached.delete(key); },
+    forget: key => { kept.delete(key); attached.delete(key); },
   };
 }
 

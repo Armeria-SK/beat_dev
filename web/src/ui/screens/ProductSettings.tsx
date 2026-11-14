@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type Project, type ProjectPatch } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { useT } from '../../i18n/index.ts';
 import { autoLabel, hasDocLanguage, LANGUAGES, languageName, languagePatch, languagePick, OTHER } from '../doc-language.ts';
 import { Button } from '../parts.tsx';
+import { followProduct } from '../product-meta.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { routeHash } from '../routes.ts';
 import { SCREEN_EDITS, setUnsaved } from '../unsaved.ts';
@@ -19,6 +20,14 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const synced = useRef(project);
+  useEffect(() => {
+    const was = synced.current;
+    if (was === project) return;
+    synced.current = project;
+    const next = followProduct({ name, check, lang }, was, project);
+    setName(next.name); setCheck(next.check); setLang(next.lang);
+  }, [project]);
   const savedCheck = project.check_command ?? '';
   const langShown = hasDocLanguage(project);
   const langChange = langShown ? languagePatch(project, lang.pick, lang.other) : null;
@@ -114,7 +123,7 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
       {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}
       <section className="bt-section">
         {confirming
-          ? <RowConfirm warn={t('ui.ps.archiveConfirm')} note={t('ui.ps.archiveNote')} action={t('ui.ps.archive')} busy={busy} onConfirm={archive} onKeep={() => setConfirming(false)} />
+          ? <RowConfirm warn={t('ui.ps.archiveConfirm')} note={t(dirty ? 'ui.ps.archiveUnsaved' : 'ui.ps.archiveNote')} action={t('ui.ps.archive')} busy={busy} onConfirm={archive} onKeep={() => setConfirming(false)} />
           : <div><Button variant="danger" small disabled={busy} onClick={() => setConfirming(true)}>{t('ui.ps.archive')}</Button></div>}
       </section>
     </div>
