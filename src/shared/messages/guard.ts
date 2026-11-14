@@ -83,7 +83,7 @@ const en = {
   'lex.space': 'a non-ASCII space or an invisible character {detail}',
   'lex.fullwidth': 'a full-width character outside quotes {detail} (Windows reads it as ASCII)',
   'lex.control': 'a control character {detail}',
-  'lex.depth': 'nesting is deeper than 4 levels',
+  'lex.depth': 'nesting is deeper than {detail} levels',
   'lex.unclosed': 'an unclosed {detail}',
   'lex.backtick': 'a backtick (it can split a name or escape a character)',
   'lex.backslash': 'a backslash (it can split a name or escape a character)',
