@@ -803,6 +803,55 @@ test('2 つ目の関所: 判定役が allow と答えたあとに、材料が「
   assert.deepEqual(s.events.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state), ['checking', 'asked']);
 });
 
+function twice(name: string, second: () => PreCheck): { tool: ToolDef; ran: () => number; checked: () => number } {
+  let checks = 0;
+  let ran = 0;
+  const tool = fake(name, 'write', {
+    preCheck: () => (++checks === 1 ? { decision: 'ask', reasons: ['確かめ'], askKinds: ['outside_read'], removes: false, sends: false } as PreCheck : second()),
+    execute: async () => { ran++; return { content: 'ran' }; },
+  });
+  return { tool, ran: () => ran, checked: () => checks };
+}
+
+test('2 つ目の関所は事前の判定をやり直す: 判定役を待つあいだに「送る」になっていたら（ただの値でも）send の Pending に積み、動かない', async t => {
+  const flip = twice('t_twice_send', () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['outside_read'], removes: false, sends: false, outbound: { kind: 'send', reason: 'This sends something out', targets: [] } }) as PreCheck);
+  const s = await setup(t, { tools: [flip.tool] });
+  const row = await parked(s, 't_twice_send', {});
+  assert.equal(row.kind, 'send');
+  assert.equal(s.prompts.length, 1);
+  assert.equal(flip.checked(), 2, '判定役のあとにもう一度確かめた');
+  assert.equal(flip.ran(), 0);
+});
+
+test('2 つ目の関所: 判定役を待つあいだに拒否・新しい確かめ・判定の失敗になっていたら、動かさずに断り、もう一度呼ぶよう伝える', async t => {
+  const cases: Array<[string, () => PreCheck, RegExp]> = [
+    ['t_twice_deny', () => ({ decision: 'deny', reasons: ['now refused'] }) as PreCheck, /changed while it was being judged[\s\S]*now refused/u],
+    ['t_twice_new', () => ({ decision: 'ask', reasons: ['確かめ', 'a new check'], askKinds: ['outside_read'] }) as PreCheck, /changed while it was being judged[\s\S]*a new check/u],
+    ['t_twice_throw', () => { throw new Error('boom'); }, /changed while it was being judged[\s\S]*boom/u],
+  ];
+  for (const [name, second, message] of cases) {
+    const flip = twice(name, second);
+    const s = await setup(t, { tools: [flip.tool] });
+    const outcome = await s.call(name, {});
+    assert.equal(outcome.decision, 'deny', name);
+    assert.match(outcome.output.content, message, name);
+    assert.equal(outcome.output.isError, true, name);
+    assert.equal(flip.ran(), 0, name);
+    assert.equal(cards(s), 0, name);
+    assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, name);
+    assert.deepEqual(s.events.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state), ['checking', 'asked'], name);
+  }
+});
+
+test('2 つ目の関所: 判定役のあとも事前の判定が同じなら、そのまま動く', async t => {
+  const same = twice('t_twice_same', () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['outside_read'], removes: false, sends: false }) as PreCheck);
+  const s = await setup(t, { tools: [same.tool] });
+  const outcome = await s.call('t_twice_same', {});
+  assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'auto-mode'], outcome.output.content);
+  assert.equal(same.checked(), 2);
+  assert.equal(same.ran(), 1);
+});
+
 // escalateOnTaint: 4-3b-2 後も判定役
 test('メモリの道具（Q-C）: memory_save は判定役が決める。memory_forget も、よそから来た文を読んだあとは判定役が決め、ask なら judge の Pending', async t => {
   const s = await setup(t, { tools: [memoryForget, memorySave] });

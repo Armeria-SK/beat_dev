@@ -14,7 +14,7 @@ import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
 import { autoDecide, type ClassifierPrompt, type JudgeCall, type JudgeLimits } from './auto-approve.ts';
 import { ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
-import type { PendingKind, PendingStore } from '../pending/store.ts';
+import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
@@ -376,6 +376,16 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           if (verdict.failed) return park('judge_failed', pendingText('en', `judge_failed_${verdict.failed}`));
           return park('judge', verdict.reason ? pendingText('en', 'judge_asked', { reason: verdict.reason }) : pendingText('en', 'judge_asked_no_reason'));
         }
+        let changed: string[] | undefined;
+        if (tool.preCheck) {
+          const before = first;
+          try {
+            first = await tool.preCheck(args, ctx);
+            const fresh = first.decision === 'deny' ? first.reasons : newChecks(before && recheckOf(before), first);
+            if (first.decision === 'deny' || fresh.length) changed = fresh;
+          } catch (error) { changed = [guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message })]; }
+        }
+        if (changed) { autoEvent('asked'); return refuse('deny', decidedBy, toolText(language, 'pipeline.changed_judging', { reasons: changed.join('\n- ') })); }
         const late = outboundOfCall(tool, first, language);
         if (late?.kind === 'deny') { autoEvent('asked'); return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: late.reason })); }
         if (late?.kind === 'send' || late?.kind === 'delete') { autoEvent('asked'); return park(late.kind, late.reason, late); }

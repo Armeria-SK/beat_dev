@@ -30,6 +30,7 @@ const en = {
   'pipeline.bad_args': 'The shape of the arguments is not valid. Fix them and call again:\n- {errors}',
   'pipeline.denied': 'Not run (denied):\n- {reasons}\nThink of another way, or ask the user',
   'pipeline.changed': 'It was not run because the contents of the code file the user checked changed after the approval. Run it again so it is checked again',
+  'pipeline.changed_judging': 'Not run: the action changed while it was being judged:\n- {reasons}\nCall the tool again if it is still needed',
   'pipeline.cancelled': 'Stopped',
   'pipeline.exec_error': 'An error occurred while running the tool: {detail}',
   'pipeline.truncated': '[The output was long, so only {shown} of {total} characters were returned. {note}]',
