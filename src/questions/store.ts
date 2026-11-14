@@ -6,7 +6,7 @@ import { questionText, type QuestionMessageKey } from '../shared/messages/questi
 import { taskText } from '../shared/messages/tasks.ts';
 import { plainBlock, plainLine, stripHidden } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
-import type { AcceptanceStore } from '../projects/acceptance.ts';
+import { AcceptanceError, ITEM_ID, type AcceptanceStore } from '../projects/acceptance.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { TaskStore } from '../tasks/store.ts';
 
@@ -105,6 +105,7 @@ export interface QuestionAnswered {
   resumedTaskId: string | null;
   repeated: boolean;
   reopenedItem: string | null;
+  warning: string | null;
 }
 
 export interface QuestionChange { id: number; projectId: string | null; status: QuestionStatus }
@@ -180,6 +181,8 @@ export class QuestionStore {
     if (chosen === null && !blocking) throw new QuestionError('chosen_required');
     if (chosen !== null && (!Number.isInteger(chosen) || chosen < 0 || chosen >= options.length)) throw new QuestionError('chosen_range', { max: options.length - 1 });
     const taskId = input.taskId ?? null;
+    const item = input.acceptanceItem ?? null;
+    if (item !== null && (!ITEM_ID.test(item) || !input.projectId || !this.options.acceptance?.hasLiveItem(input.projectId, item))) throw new QuestionError('no_item', { item: plainLine(item, 20) });
     const id = transaction(this.db, () => {
       if (taskId && kind === 'ai') {
         const same = this.db.prepare("SELECT id FROM questions WHERE task_id = ? AND status = 'open' AND question = ? LIMIT 1").get(taskId, question) as { id: number } | undefined;
@@ -189,7 +192,7 @@ export class QuestionStore {
       }
       return Number(this.db.prepare(`INSERT INTO questions (project_id, task_id, conversation_id, kind, question, why, options, chosen, blocking, acceptance_item, tainted, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        input.projectId ?? null, taskId, input.conversationId ?? null, kind, question, why, JSON.stringify(options), chosen, blocking ? 1 : 0, input.acceptanceItem ?? null, input.tainted ? 1 : 0, this.#now(),
+        input.projectId ?? null, taskId, input.conversationId ?? null, kind, question, why, JSON.stringify(options), chosen, blocking ? 1 : 0, item, input.tainted ? 1 : 0, this.#now(),
       ).lastInsertRowid);
     });
     const row = this.get(id)!;
@@ -245,11 +248,23 @@ export class QuestionStore {
     const kind: QuestionAnswerKind = text === null && answer.choice === row.chosen ? 'kept' : 'changed';
     const tasks = this.options.tasks;
     if (!tasks) throw new Error('QuestionStore needs the task store to take answers');
+    const acceptance = this.options.acceptance;
     const result = transaction(this.db, () => {
       const blockedTask = row.blocking === 1 && row.task_id ? tasks.get(row.task_id) : undefined;
       if (blockedTask?.status === 'running') throw new QuestionError('task_running', { id });
       const done = this.db.prepare("UPDATE questions SET status = 'answered', answer = ?, answer_kind = ?, answered_at = ? WHERE id = ? AND status = 'open'").run(answerText, kind, this.#now(), id);
       if (Number(done.changes) !== 1) return undefined;
+      let reopenedItem: string | null = null;
+      let warning: string | null = null;
+      if (kind === 'changed' && row.acceptance_item && row.project_id && acceptance) {
+        try {
+          const taint = text === null && row.tainted === 1 ? `question:${id}` : null;
+          if (acceptance.reopenForAnswer(row.project_id, row.acceptance_item, { questionId: id, answer: answerText, picked: text === null ? 'option' : 'text', taint })) reopenedItem = row.acceptance_item;
+        } catch (error) {
+          if (!(error instanceof AcceptanceError)) throw error;
+          warning = `Question ${id} was answered, but acceptance item ${row.acceptance_item} of product ${row.project_id} was not reopened: ${error.message}`;
+        }
+      }
       let fixTaskId: string | null = null;
       let reopenedTaskId: string | null = null;
       let resumedTaskId: string | null = null;
@@ -265,31 +280,31 @@ export class QuestionStore {
           reopenedTaskId = row.task_id;
         }
       } else if (kind === 'changed') {
-        fixTaskId = this.#fixTask(tasks, row, options, answerText, text !== null);
+        fixTaskId = this.#fixTask(tasks, row, options, answerText, text !== null, reopenedItem);
       }
       const follow = fixTaskId ?? reopenedTaskId;
       if (follow) this.db.prepare('UPDATE questions SET fix_task_id = ? WHERE id = ?').run(follow, id);
-      return { fixTaskId, reopenedTaskId, resumedTaskId };
+      return { fixTaskId, reopenedTaskId, resumedTaskId, reopenedItem, warning };
     });
     const latest = this.get(id)!;
     if (!result) return this.#answered(latest);
     this.options.onChange?.({ id, projectId: latest.project_id, status: 'answered' });
-    return { question: this.view(id)!, kind, ...result, reopenedItem: null, repeated: false };
+    return { question: this.view(id)!, kind, ...result, repeated: false };
   }
 
   #answered(row: QuestionRow): QuestionAnswered {
     const reopened = REOPEN_KINDS.includes(row.kind);
     return {
       question: this.view(row.id)!, kind: row.answer_kind ?? 'kept',
-      fixTaskId: reopened ? null : row.fix_task_id, reopenedTaskId: reopened ? row.fix_task_id : null, resumedTaskId: null, reopenedItem: null, repeated: true,
+      fixTaskId: reopened ? null : row.fix_task_id, reopenedTaskId: reopened ? row.fix_task_id : null, resumedTaskId: null, reopenedItem: null, warning: null, repeated: true,
     };
   }
 
-  #fixTask(tasks: TaskStore, row: QuestionRow, options: readonly string[], answerText: string, ownerWrote: boolean): string {
+  #fixTask(tasks: TaskStore, row: QuestionRow, options: readonly string[], answerText: string, ownerWrote: boolean, item: string | null): string {
     const language = DEFAULT_LANGUAGE;
     const assumed = row.chosen !== null ? options[row.chosen] ?? questionText(language, 'assumed_none') : questionText(language, 'assumed_none');
     const title = plainLine(questionText(language, 'fix_title', { id: row.id, question: row.question }), TITLE_MAX);
-    const body = [questionText(language, 'fix_body', { question: row.question, assumed, answer: answerText }), row.kind === 'submit_refused' ? questionText(language, 'fix_send') : ''].filter(Boolean).join('\n');
+    const body = [questionText(language, 'fix_body', { question: row.question, assumed, answer: answerText }), row.kind === 'submit_refused' ? questionText(language, 'fix_send') : '', item ? questionText(language, 'fix_item', { item }) : ''].filter(Boolean).join('\n');
     const ownerText = ownerWrote || row.tainted === 0 ? answerText : null;
     const task = tasks.create({ title, body, origin: 'user', actor: 'user', projectId: row.project_id, ownerRequest: ownerText !== null });
     if (ownerText !== null) tasks.ownerEdited(task.id, { title: ownerText, body: '' });
