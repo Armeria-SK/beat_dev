@@ -10,7 +10,7 @@ import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
 import { Panes, usePanes } from './Panes.tsx';
-import { paneTarget, pendingFor, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
+import { paneTarget, pendingFor, pendingRouteReady, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
 import type { PaneView } from './panes.ts';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
@@ -134,7 +134,7 @@ export function App() {
   const load = useMemo(() => ({
     projects: () => { void projectList.load(); },
     projectCounts: throttled(() => { void projectList.load(); }, PRODUCT_COUNTS_MS),
-    conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations, more: r.more })).catch(() => undefined); },
+    conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations, more: r.more })).catch(() => dispatch({ type: 'conversationsFailed' })); },
     pending: throttled(() => {
       void Promise.all([api.pendingCounts(), api.pending({ status: 'waiting' })]).then(([counts, list]) => dispatch({ type: 'pending', counts, waiting: list.items })).catch(() => undefined);
     }, PENDING_MS),
@@ -353,10 +353,10 @@ export function App() {
   const openPlanOf = useCallback((productId: string) => openPaneOf(productId, 'plan'), [openPaneOf]);
   const pendingProduct = route.view === 'pending' ? route.productId ?? null : null;
   useEffect(() => {
-    if (pendingProduct === null || !live.projectsLoaded) return;
+    if (pendingProduct === null || !pendingRouteReady(live.projectsLoaded, live.conversationsSettled)) return;
     if (productOf(projects, pendingProduct)) openPaneOf(pendingProduct, 'pending');
     else location.replace(routeHash({ view: 'pending' }));
-  }, [pendingProduct, live.projectsLoaded, projects, openPaneOf]);
+  }, [pendingProduct, live.projectsLoaded, live.conversationsSettled, projects, openPaneOf]);
   useEffect(() => {
     if (!want || paneProduct !== want.productId) return;
     if (want.view === 'plan') panes.openPlan(false); else panes.openPane(want.view);

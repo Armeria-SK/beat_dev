@@ -183,6 +183,8 @@ export function acceptanceRows(counts: PendingCounts | null, projects: readonly 
     .filter(r => r.n > 0);
 }
 
+export const pendingRouteReady = (projectsLoaded: boolean, conversationsSettled: boolean): boolean => projectsLoaded && conversationsSettled;
+
 export function paneTarget(projectId: string, conversations: readonly Conversation[]): Route {
   const latest = latestConversation(conversations, projectId);
   return latest ? { view: 'chat', id: latest.id } : { view: 'productNew', id: projectId };

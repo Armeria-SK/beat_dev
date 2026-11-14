@@ -25,6 +25,7 @@ export type RunNotice = { runId: string; key?: string | undefined } & (
 export interface LiveState {
   conversations: Conversation[];
   conversationsMore: Readonly<Record<string, number>>;
+  conversationsSettled: boolean;
   projects: Project[];
   projectsLoaded: boolean;
   skillDrafts: number;
@@ -46,7 +47,7 @@ export interface LiveState {
 }
 
 export const EMPTY: LiveState = {
-  conversations: [], conversationsMore: {}, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
+  conversations: [], conversationsMore: {}, conversationsSettled: false, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
   notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, epoch: 0,
 };
 
@@ -67,6 +68,7 @@ export type Action =
   | { type: 'event'; event: RunEvent; hidden: boolean; now?: number }
   | { type: 'resync'; drafts: Draft[] }
   | { type: 'conversations'; conversations: Conversation[]; more?: Record<string, number> | undefined }
+  | { type: 'conversationsFailed' }
   | { type: 'projects'; projects: Project[] }
   | { type: 'project'; project: Project }
   | { type: 'pending'; counts: PendingCounts; waiting: PendingAction[] }
@@ -225,7 +227,8 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
         state: { ...s, drafts: a.drafts, streaming: new Set(a.drafts.filter(d => d.text).map(d => d.conversationId)), checklists: new Map(), epoch: s.epoch + 1 },
         effects: [...a.drafts.map(d => ({ kind: 'checklist', conversationId: d.conversationId }) as const), ...refresh('conversations', 'tasks', 'drafts', 'unread', 'worker', 'projects', 'pending')],
       };
-    case 'conversations': return { state: { ...s, conversations: a.conversations, conversationsMore: a.more ?? {} }, effects: [] };
+    case 'conversations': return { state: { ...s, conversations: a.conversations, conversationsMore: a.more ?? {}, conversationsSettled: true }, effects: [] };
+    case 'conversationsFailed': return { state: s.conversationsSettled ? s : { ...s, conversationsSettled: true }, effects: [] };
     case 'projects': return { state: { ...s, projects: a.projects, projectsLoaded: true }, effects: [] };
     case 'project': {
       const rest = s.projects.filter(p => p.id !== a.project.id);
