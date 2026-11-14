@@ -121,12 +121,16 @@ function linkFormOf(key: string, words: readonly Word[], ps: boolean): string | 
   const args = words.slice(1);
   if (key === 'ln' || key === 'mklink') return key;
   if (key === 'cmd') {
-    const at = args.findIndex(w => /^\/[ckr]$/iu.test(w.text));
-    const inner = at < 0 ? undefined : args[at + 1];
-    return inner && !inner.dynamic ? linkFormOf(inner.text.toLowerCase().replace(/\.exe$/u, ''), args.slice(at + 1), false) : undefined;
+    const at = args.findIndex(w => /^\/[ckr]/iu.test(w.text));
+    if (at < 0 || args.slice(at).some(w => w.dynamic)) return undefined;
+    const tokens = [args[at]!.text.slice(2), ...args.slice(at + 1).map(w => w.text)].join(' ').split(/\s+/u).map(t => t.replace(/^["@]+|"+$/gu, '')).filter(Boolean);
+    const inner = tokens.map((text): Word => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' }));
+    return inner[0] ? linkFormOf(inner[0].text.toLowerCase().replace(/\.exe$/u, ''), inner, false) : undefined;
   }
   if (key === 'fsutil') return args.find(w => w.dynamic || w.text.toLowerCase() === 'hardlink')?.text;
-  if (key === 'cp' && !ps) return args.find(w => !w.dynamic && (/^--(?:link|symbolic-link)$/u.test(w.text) || /^-[A-Za-z]*[ls]/u.test(w.text)))?.text;
+  if (key === 'cp' && !ps) {
+    return args.find(w => !w.dynamic && ((w.text.length >= 3 && '--link'.startsWith(w.text)) || (w.text.length >= 4 && '--symbolic-link'.startsWith(w.text)) || /^-[A-Za-z]*[ls]/u.test(w.text)))?.text;
+  }
   return undefined;
 }
 

@@ -86,3 +86,18 @@ test('秘密鍵: 印を 1 つ書いただけの文も、伏せた 1 件として
     assert.ok(!out.text.includes('PRIVATE KEY'), out.text);
   }
 });
+
+test('秘密鍵: 閉じない BEGIN が何千行も続いても、伏せる時間は行数に比例する（16,000 行が 1 秒より十分短い）', () => {
+  const shapes = [
+    Array.from({ length: 16_000 }, () => BEGIN).join('\n'),
+    Array.from({ length: 16_000 }, (_, i) => (i % 3 === 2 ? END : BEGIN)).join('\n'),
+    Array.from({ length: 16_000 }, (_, i) => (i % 2 === 0 ? BEGIN : LINE1)).join('\n'),
+  ];
+  for (const [i, text] of shapes.entries()) {
+    const started = performance.now();
+    const out = sanitizeModelInputText(text);
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `shape ${i}: ${took} ms`);
+    assert.ok(!out.text.includes('PRIVATE KEY') && !out.text.includes(LINE1), `shape ${i}`);
+  }
+});

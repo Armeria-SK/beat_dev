@@ -207,3 +207,49 @@ test('リンクを作るコマンド（ln・mklink・fsutil hardlink・cp -l/-s/
   for (const command of ['cp notes.md copy.md', 'cp -r tmp/nested t3']) assert.equal(f.bash(command, { allow }).decision, 'allow', command);
   assert.equal(f.ps('fsutil fsinfo drives', { allow: [...PS_WRITER_ALLOW, ...allow] }).decision, 'allow');
 });
+
+test('New-Item: 引用符の中の -Value はパラメータとして読まず、値を取るパラメータはどれも次の語を値として使う。共通のパラメータ（-ErrorAction・-Verbose など）は確かめにしない', t => {
+  const f = fixture(t);
+  const outside = join(f.base, 'outside.txt');
+  writeFileSync(outside, 'x');
+  for (const command of [
+    `New-Item '-Value' -ItemType h -Target ${outside}`, `New-Item "-Value" -ItemType h -Target ${outside}`, `New-Item -Name x -ItemType h -Path link -Value ${outside}`,
+    `New-Item -ErrorAction SilentlyContinue -ItemType h -Path link -Value ${outside}`, `New-Item -Verbose -it h -Path link -Value ${outside}`,
+  ]) {
+    const v = f.ps(command);
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision}`);
+  }
+  for (const command of [
+    'New-Item -Path a5.md -ErrorAction SilentlyContinue', 'New-Item -Path a6.md -ea Stop -Verbose', 'New-Item -Path a7.md -WarningVariable w -OutVariable o -InformationAction Ignore',
+    'New-Item -Path a8.md -Force -WhatIf', 'New-Item -Path a9.md -ItemType File -Debug -pv p',
+  ]) {
+    const v = f.ps(command);
+    assert.equal(v.decision, 'allow', `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+  }
+});
+
+test('bash の引用符つきのコマンド名（"ln"・"cp"・"curl"）は、持ち主の許可の一覧の項目に当たらない', t => {
+  const f = fixture(t);
+  const outside = join(f.base, 'outside.txt');
+  writeFileSync(outside, 'x');
+  const allow = ['ln', 'cp', 'curl'];
+  for (const command of [`"ln" ${outside} link`, `'ln' -s ${outside} link`, '"cp" -l notes.md link', '"cp" notes.md SOUL.md', `"cp" notes.md ${outside}`, `"curl" -o ${outside} https://example.com/`]) {
+    const v = f.bash(command, { allow });
+    assert.notEqual(v.decision, 'allow', `${command}: ${v.decision}`);
+  }
+  assert.equal(f.bash('cp notes.md copy2.md', { allow }).decision, 'allow');
+});
+
+test('リンクを作るコマンド: cmd /c の引用符でまとめた中身・@・/s・くっついた /c と、cp の略した長いオプション（--li・--sy）も今回だけ', t => {
+  const f = fixture(t);
+  const allow = [...PS_WRITER_ALLOW, 'cmd', 'mklink', 'cp'];
+  for (const command of ['cmd /c "mklink /H link notes.md"', 'cmd /s /c "mklink /H link notes.md"', 'cmd /c @mklink /J link docs', 'cmd /c "@mklink /H link notes.md"', 'cmd /cmklink /H link notes.md']) {
+    const v = f.ps(command, { allow });
+    assert.notEqual(v.decision, 'allow', `${command}: ${v.decision}`);
+  }
+  for (const command of ['cp --l notes.md link', 'cp --li notes.md link', 'cp --lin notes.md link', 'cp --sy notes.md link', 'cp --symb notes.md link']) {
+    const v = f.bash(command, { allow: ['cp'] });
+    assert.notEqual(v.decision, 'allow', `${command}: ${v.decision}`);
+  }
+  assert.equal(f.ps('cmd /c "echo hi"', { allow }).decision, 'allow');
+});

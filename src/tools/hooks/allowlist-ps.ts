@@ -178,8 +178,13 @@ const joinName: PsCmd['extra'] = (p, acc) => {
 };
 const NEW_ITEM_PARAMS: ReadonlyArray<readonly [string, string]> = [
   ['path', 'path'], ['name', 'name'], ['itemtype', 'itemtype'], ['type', 'itemtype'], ['value', 'value'], ['target', 'value'], ['force', 'force'], ['credential', 'credential'],
-  ['whatif', 'whatif'], ['wi', 'whatif'], ['confirm', 'confirm'], ['cf', 'confirm'],
+  ['whatif', 'whatif'], ['wi', 'whatif'], ['confirm', 'confirm'], ['cf', 'confirm'], ['verbose', 'verbose'], ['vb', 'verbose'], ['debug', 'debug'], ['db', 'debug'],
+  ['erroraction', 'erroraction'], ['ea', 'erroraction'], ['warningaction', 'warningaction'], ['wa', 'warningaction'], ['errorvariable', 'errorvariable'], ['ev', 'errorvariable'],
+  ['warningvariable', 'warningvariable'], ['wv', 'warningvariable'], ['outvariable', 'outvariable'], ['ov', 'outvariable'], ['outbuffer', 'outbuffer'], ['ob', 'outbuffer'],
+  ['informationaction', 'informationaction'], ['infa', 'informationaction'], ['informationvariable', 'informationvariable'], ['iv', 'informationvariable'],
+  ['pipelinevariable', 'pipelinevariable'], ['pv', 'pipelinevariable'],
 ];
+const NEW_ITEM_SWITCHES = new Set(['force', 'whatif', 'confirm', 'verbose', 'debug']);
 const PLAIN_ITEM_TYPES = ['directory', 'container', 'file'];
 function newItemParam(text: string): string | undefined {
   const name = text.slice(1).replace(/:$/u, '').toLowerCase();
@@ -196,13 +201,13 @@ writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force'
   let odd: Word | undefined;
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!;
-    if (w.attached || w.dynamic || !w.text.startsWith('-')) continue;
+    if (w.attached || w.dynamic || w.quoted || !w.text.startsWith('-')) continue;
     const param = newItemParam(w.text);
     if (param === undefined) { odd ??= w; continue; }
-    if (param !== 'itemtype' && param !== 'value') continue;
     const value = words[i + 1];
-    if (!value) continue;
-    (param === 'itemtype' ? types : values).push(value);
+    if (!value || (NEW_ITEM_SWITCHES.has(param) && !value.attached)) continue;
+    if (param === 'itemtype') types.push(value);
+    if (param === 'value') values.push(value);
     i++;
   }
   const link = types.find(w => w.dynamic || w.text === '' || !PLAIN_ITEM_TYPES.some(t => t.startsWith(w.text.toLowerCase())));
