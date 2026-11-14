@@ -312,17 +312,18 @@ test('DELETE: 会話が無く経過に実行の印も無い時刻指定のタス
 
 test('DELETE: やわらかい参照の表のどれかに行があると 409', async t => {
   const s = await taskApp(t);
-  const insert: Record<(typeof TASK_SOFT_REFERENCES)[number]['table'], (id: string) => void> = {
+  const insert: Record<(typeof TASK_SOFT_REFERENCES)[number]['table'], (id: string, column: string) => void> = {
     curiosity_items: id => { s.app.db.prepare('INSERT INTO curiosity_items (topic, task_id, created_at, updated_at) VALUES (?, ?, 1, 1)').run('topic', id); },
     memory_jobs: id => { s.app.db.prepare("INSERT INTO memory_jobs (trigger, dedup_key, task_id, created_at) VALUES ('task', ?, ?, 1)").run(`task:${id}`, id); },
     conversations: id => { s.app.db.prepare('UPDATE conversations SET source_task_id = ? WHERE id = ?').run(id, s.app.conversations.create({ kind: 'task', title: 'Review' }).id); },
     acceptance_versions: id => { s.app.db.prepare("INSERT INTO acceptance_versions (project_id, version, hash, content, source, build_task_id, created_at) VALUES (?, 1, 'h', '{}', 'build', ?, 1)").run(`p-${id}`, id); },
     pending_actions: id => { s.app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, task_id, status, created_at) VALUES ('shell_run', '{}', 'x', 'send', 'r', 'r1', 'task', 'c1', ?, 'waiting', 1)").run(id); },
+    questions: (id, column) => { s.app.db.prepare(`INSERT INTO questions (question, ${column === 'fix_task_id' ? 'fix_task_id' : 'task_id'}, created_at) VALUES ('q', ?, 1)`).run(id); },
   };
-  assert.deepEqual(Object.keys(insert).sort(), TASK_SOFT_REFERENCES.map(r => r.table).sort());
+  assert.deepEqual(Object.keys(insert).sort(), [...new Set(TASK_SOFT_REFERENCES.map(r => r.table))].sort());
   for (const ref of TASK_SOFT_REFERENCES) {
-    for (const task of [s.userTask(`timed ${ref.table}`, { runAt: s.clock.now + HOUR }), s.userTask(`template ${ref.table}`, { cron: '0 9 * * *', timezone: 'UTC' })]) {
-      insert[ref.table](task.id);
+    for (const task of [s.userTask(`timed ${ref.table}.${ref.column}`, { runAt: s.clock.now + HOUR }), s.userTask(`template ${ref.table}.${ref.column}`, { cron: '0 9 * * *', timezone: 'UTC' })]) {
+      insert[ref.table](task.id, ref.column);
       const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
       assert.equal(res.status, 409, task.title);
       if (ref.table === 'acceptance_versions') {

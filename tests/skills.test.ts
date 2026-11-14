@@ -65,8 +65,10 @@ test('道具の一覧: サーバーの一覧（GET /api/tools。記憶の道具�
   const s = await startScreenServer(t);
   const { tools } = (await (await s.api('/api/tools')).json()) as { tools: Array<{ name: string; effect: keyof typeof EFFECT_LABEL }> };
   const server = builtinTools();
-  assert.equal(tools.length, server.length - 4);
-  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(def => def.name).filter(name => !name.startsWith('memory_')).sort());
+  const listed = server.filter(def => !def.name.startsWith('memory_') && def.allowedIn.length > 0);
+  assert.equal(tools.length, listed.length);
+  assert.equal(listed.length, server.length - 10);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), listed.map(def => def.name).sort());
   assert.deepEqual(Object.keys(TOOL_LOOKS).sort(), server.map(def => def.name).sort(), '絵と説明の辞書は、サーバーの道具と同じ名前');
   for (const tool of tools) {
     const look = toolLook(tool.name);

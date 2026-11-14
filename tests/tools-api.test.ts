@@ -13,14 +13,17 @@ const patch = (s: Awaited<ReturnType<typeof startScreenServer>>, name: string, b
   s.api(`/api/tools/${name}`, { method: 'PATCH', body: JSON.stringify(body), headers });
 const fileOf = (s: Awaited<ReturnType<typeof startScreenServer>>) => JSON.parse(readFileSync(s.app.paths.config, 'utf8')) as { tools: { policies?: Record<string, string> } };
 
-test('GET /api/tools: 組み込みの道具のうち記憶の道具を除く 48 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定はすべて allow。agent_run も）', async t => {
+test('GET /api/tools: 組み込みの道具のうち記憶の道具と、どの実行にも渡らない道具を除く 42 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定はすべて allow。agent_run も）', async t => {
   const s = await startScreenServer(t);
   const res = await s.api('/api/tools');
   assert.equal(res.status, 200);
   const { tools } = (await res.json()) as { tools: ToolRow[] };
   const server = builtinTools();
-  assert.equal(tools.length, 48);
-  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(tool => tool.name).filter(name => !name.startsWith('memory_')).sort());
+  assert.equal(tools.length, 42);
+  const hidden = server.filter(tool => tool.allowedIn.length === 0).map(tool => tool.name);
+  assert.deepEqual(hidden, ['question_add', 'question_list', 'deviation_add', 'mesh_map_set', 'mesh_glossary_set', 'mesh_decision_add']);
+  for (const name of hidden) assert.ok(!tools.some(tool => tool.name === name), name);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(tool => tool.name).filter(name => !name.startsWith('memory_') && !hidden.includes(name)).sort());
   for (const tool of tools) {
     const def = server.find(d => d.name === tool.name)!;
     assert.deepEqual([tool.effect, tool.allowedIn, tool.policy], [def.effect, [...def.allowedIn], 'allow'], tool.name);

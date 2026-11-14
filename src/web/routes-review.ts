@@ -61,7 +61,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
   });
   router.add('GET', '/api/tools', ({ res }) => {
     const config = app.config();
-    sendJson(res, 200, { tools: app.tools.list().map(tool => toolView(tool, config)) });
+    sendJson(res, 200, { tools: app.tools.list().filter(tool => tool.allowedIn.length > 0).map(tool => toolView(tool, config)) });
   });
   // 1 つの道具の方針だけを変える（設定を読み直して policies の 1 つを書き換えて保存）。緩める変更の確かめは画面の側（設定の「広がる変更」と同じ文）で、サーバーは PUT /api/settings と同じ人だけが呼べる
   router.add('PATCH', '/api/tools/:name', async ({ req, res, params }) => {
