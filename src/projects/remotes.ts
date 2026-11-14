@@ -9,17 +9,24 @@ const MAX_CONFIG_BYTES = 1_048_576;
 const MAX_REMOTES = 50;
 const MAX_TEXT = 2000;
 
+export const HIDDEN_URL = '(hidden)';
+const HOST_PORT = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d*)?$/u;
+const SCP_PLAIN = /^(?:[^@/\s:?#]+@)?[^@/\s:?#]+:(?!\/\/)[^@?#]*$/u;
+const SCP_NAMED = /^[^@/\s:.?#]+:[^@/\s?#]*@([^@/\s:?#]+:(?!\/\/)[^@?#]*)$/u;
+
 export const withoutSecrets = (url: string): string => {
-  const parts = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)(.*)$/su.exec(url);
+  if (/^[A-Za-z]:[\\/]/u.test(url) || /^\/(?!\/)/u.test(url)) return url;
+  const parts = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)([^?#]*)/u.exec(url);
   if (parts) {
-    const rest = parts[2]!;
-    const authority = /^[^/?#]*/u.exec(rest)![0];
-    const from = /[@:]/u.test(authority) ? rest.lastIndexOf('@') + 1 : 0;
-    return `${parts[1]}${/^[^?#]*/u.exec(rest.slice(from))![0]}`;
+    const authority = parts[2]!;
+    const host = authority.slice(authority.lastIndexOf('@') + 1);
+    if (!HOST_PORT.test(host)) return url.includes('@') ? HIDDEN_URL : `${parts[1]}${authority}${parts[3]}`;
+    const named = host.startsWith('[') || host.includes('.') || /^localhost(?::|$)/iu.test(host);
+    const after = url.slice(parts[1]!.length + authority.length);
+    return named || !after.includes('@') ? `${parts[1]}${host}${parts[3]}` : HIDDEN_URL;
   }
-  if (/^[A-Za-z]:[\\/]/u.test(url)) return url;
-  const scp = /^[^@/\s:]*:.*@([^@]*)$/su.exec(url);
-  return scp ? scp[1]! : url;
+  if (!/[@?#]/u.test(url) || SCP_PLAIN.test(url)) return url;
+  return SCP_NAMED.exec(url)?.[1] ?? HIDDEN_URL;
 };
 
 const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:', 'ssh+git:']);

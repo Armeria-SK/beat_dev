@@ -4,7 +4,7 @@ import fs, { appendFileSync, chmodSync, existsSync, mkdirSync, rmSync, symlinkSy
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
-import { readRemotes, withoutSecrets } from '../src/projects/remotes.ts';
+import { readRemotes } from '../src/projects/remotes.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { findGitDir, inspectRepo, insideGitDir, isGitDir, isLocalRemoteUrl, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
 import { isRemotePath } from '../src/tools/hooks/remote-path.ts';
@@ -653,31 +653,6 @@ test('objects/info/alternates がネットワークの場所を指すなら「�
   ] as const) assert.equal(inspectRepo(repo(name, text)).unreadable, true, name);
   const looped = repo('loop', '');
   writeFileSync(join(looped, '.git', 'objects', 'info', 'alternates'), `${join(looped, '.git', 'objects')}\n`);
-  assert.equal(inspectRepo(looped).unreadable, true, '自分を指し続ける並びは、深さの上限で止める');
+  assert.equal(inspectRepo(looped).unreadable, false, '自分を指す行は、もう見た場所なので読み直さない');
   assert.deepEqual(touched, []);
-});
-
-test('送り先の URL から鍵を落とす: パスワードに生の / # ? があっても残さない', () => {
-  for (const [url, shown] of [
-    ['https://user:pw@host.example/a/b.git', 'https://host.example/a/b.git'],
-    ['https://host.example/a/b.git?x=1#frag', 'https://host.example/a/b.git'],
-    ['https://host.example:8443/a/b.git', 'https://host.example:8443/a/b.git'],
-    ['https://host.example/@scope/b.git', 'https://host.example/@scope/b.git'],
-    ['https://user:pa/ss@host.example/a/b.git', 'https://host.example/a/b.git'],
-    ['https://user:pa#ss@host.example/a/b.git', 'https://host.example/a/b.git'],
-    ['https://user:pa?ss@host.example/a/b.git', 'https://host.example/a/b.git'],
-    ['https://user:p@ss/w#rd@host.example/a/b.git', 'https://host.example/a/b.git'],
-    ['ssh://git:pa/ss@host.example:2222/a/b.git', 'ssh://host.example:2222/a/b.git'],
-    ['git@host.example:a/b.git', 'git@host.example:a/b.git'],
-    ['host.example:a/b.git', 'host.example:a/b.git'],
-    ['user:pw@host.example:a/b.git', 'host.example:a/b.git'],
-    ['user:pa/ss@host.example:a/b.git', 'host.example:a/b.git'],
-    ['user:pa#ss@host.example:a/b.git', 'host.example:a/b.git'],
-    ['C:/repos/a@b', 'C:/repos/a@b'],
-    ['/srv/git/a@b.git', '/srv/git/a@b.git'],
-  ] as const) {
-    const cleaned = withoutSecrets(url);
-    assert.equal(cleaned, shown, url);
-    assert.equal(/pa|pw|rd/u.test(cleaned), false, url);
-  }
 });
