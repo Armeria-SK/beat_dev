@@ -275,6 +275,28 @@ test('道具を使いきって答えが出ない問いは、失敗ではなく�
   assert.match(report, /^\| fake-model \| b \| L1 \| no \| .*\| 220 \| TURN LIMIT \|$/mu);
 });
 
+test('表の答え: 対照の答えは手で確かめるので全文を出し、ほかの答えは 160 文字で切る', async t => {
+  const tail = 'ただし src/loyalty/points-card.ts に作れます';
+  const long = `${'x'.repeat(200)} ${tail}`;
+  const adapter: ProviderAdapter = {
+    provider,
+    async *stream(request: ModelRequest) {
+      if (request.system.frozen === compactSystem('en')) { yield { type: 'text', delta: SUMMARY }; yield { type: 'done', stop: 'end_turn' }; return; }
+      yield { type: 'text', delta: long };
+      yield { type: 'done', stop: 'end_turn' };
+    },
+    async probe() { throw new Error('not used'); },
+  };
+  const questions = [MESH_QUESTIONS.find(q => q.kind === 'location')!, MESH_QUESTIONS.find(q => q.kind === 'control')!];
+  const result = await runProbe({ model, adapter, sets: ['a'], questions, base: realpathSync.native(tempDir(t)), maxTurns: 2, maxTokens: 100, timeoutMs: 10_000 });
+  const control = result.rows.find(r => r.question === questions[1]!.id)!;
+  const location = result.rows.find(r => r.question === questions[0]!.id)!;
+  assert.equal(control.answer, long);
+  assert.equal(location.answer.length, 160);
+  const report = renderReport(result.rows, { title: 't', notes: result.notes, requests: { [model.id]: result.request } });
+  assert.ok(report.includes(`| ${questions[1]!.id} |`) && report.includes(tail), report);
+});
+
 test('土台の頼み: 本物の App の製品チャットが送る道具（mesh_* を除く）と固定の system の文と、名前もトークンの数も同じ。設定の道具の方針に従う', async t => {
   const products = realpathSync.native(tempDir(t));
   const s = await startApp(t, { models: [fakeModel('m1')], projectFolderExempt: [products], tools: builtinTools(), configure: c => { c.tools.policies = { ...c.tools.policies, web_fetch: 'block' }; } });

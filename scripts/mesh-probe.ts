@@ -375,7 +375,7 @@ async function ask(env: ProductEnv, question: MeshQuestion, system: { frozen: st
     model: options.model.id, set: env.set, question: question.id, kind: question.kind, lang: question.lang,
     correct, saidUnknown, firstSearchHit: env.set === 'a' || question.kind !== 'location' ? null : firstSearchHit ?? false,
     madeUp: madeUp.map(path => oneLine(path, secrets, CELL_SHOWN)), trustedStale, toolCalls: used.length, tools: used.map(name => oneLine(name, secrets, CELL_SHOWN)),
-    inputTokens, measured, turns, answer: oneLine(answer, secrets), turnLimit, ...(failed ? { failed } : {}),
+    inputTokens, measured, turns, answer: oneLine(answer, secrets, question.kind === 'control' ? Infinity : ANSWER_SHOWN), turnLimit, ...(failed ? { failed } : {}),
   };
 }
 
