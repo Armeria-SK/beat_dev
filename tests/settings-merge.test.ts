@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyEdits, deepEqual, diffConfig, editPath, profilePatch } from '../web/src/settings/merge.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
-import { countChanges, sectionSlice, type Config } from '../web/src/settings/model.ts';
+import { countChanges, type Config } from '../web/src/settings/model.ts';
 
 function sample(): Config {
   return {
@@ -274,7 +274,6 @@ test('フォルダ（tools.roots）の編集: 保存の流れで差になり、�
   (draft.tools as { roots: unknown[] }).roots = [{ path: 'workspace', mode: 'write' }, { path: '~/Documents/notes', mode: 'read' }];
 
   assert.deepEqual(diffConfig(saved, draft).map(e => e.path.join('.')), ['tools.roots']);
-  assert.notEqual(JSON.stringify(sectionSlice(saved, 'tools')), JSON.stringify(sectionSlice(draft, 'tools')), '「道具」の節に変更の印が付く');
   assert.equal(countChanges(saved, draft), 1);
 
   const clean = merge(saved, draft, sample());

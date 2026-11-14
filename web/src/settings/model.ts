@@ -33,26 +33,6 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArr
   ] },
 ];
 
-export const SECTION_IDS: readonly SettingsSection[] = SECTION_GROUPS.flatMap(g => g.items.map(i => i.id));
-
-// 節ごとの、設定のうちその節が持つ部分（変更の印と、元に戻すかどうかの判定に使う）。
-export function sectionSlice(config: Config, section: SettingsSection): unknown {
-  switch (section) {
-    case 'models': return [config.models, config.routing];
-    case 'providers': return config.providers;
-    // ブラウザは自分の節で扱うので、「道具」の変更の印には数えない
-    case 'tools': { const { browser: _browser, ...rest } = (config.tools ?? {}) as Record<string, unknown>; return config.tools === undefined ? undefined : rest; }
-    case 'notify': return config.notify;
-    case 'mcp': return config.mcp;
-    case 'browser': return config.tools?.browser;
-    case 'worker': return config.worker;
-    case 'memory': return config.memory;
-    case 'look': return config.profile;
-    case 'server': return config.server;
-    default: return undefined;
-  }
-}
-
 export const isPlain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const hasIds = (list: unknown[]): list is Array<Record<string, unknown> & { id: string }> => list.every(item => isPlain(item) && typeof item.id === 'string');
 

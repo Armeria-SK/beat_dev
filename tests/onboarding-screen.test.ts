@@ -23,7 +23,7 @@ test('resumeStep: 左の一覧の「続ける」は、済んでいない最初�
 const form = (patch: Partial<ModelForm> = {}): ModelForm => ({ source: 'openai', model: 'qwen3-27b', baseUrl: 'http://127.0.0.1:1234/v1', server: 'generic', contextLength: '32768', apiKeyEnv: '', ...patch });
 
 const base = () => ({
-  providers: [{ id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600000 }, { id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 600000 }],
+  providers: [{ id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600000 }, { id: 'ollama', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 600000 }],
   models: [] as Array<Record<string, unknown>>,
   routing: { chat: [] as string[], background: [] as string[], retriesPerModel: 2 },
 });

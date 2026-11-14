@@ -6,7 +6,7 @@ import { copyText } from '../web/src/clipboard.ts';
 import {
   addModel, countChanges, isEnvName, newAnthropicProvider, parseProblem, problemsOf, providerInUse, pruned,
   keyEnvEdit, keyEnvProblem, kindPatch, openAfterRename,
-  removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionSlice, secondsOf, uniqueId,
+  removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, secondsOf, uniqueId,
   updateAt, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
 
@@ -33,8 +33,6 @@ function sample(): Config {
 
 test('設定の節: 13 つ・4 グループで、名前と説明が en にある', () => {
   assert.equal(SECTION_GROUPS.length, 4);
-  assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'notify', 'mcp', 'browser', 'worker', 'memory', 'about', 'look', 'server', 'file']);
-  assert.equal(new Set(SECTION_IDS).size, SECTION_IDS.length);
   for (const group of SECTION_GROUPS) {
     for (const key of [group.label, ...group.items.flatMap(i => [i.label, i.desc])]) {
       assert.ok(en[key].length > 0, key);
@@ -77,15 +75,6 @@ test('変更の数: 並び（文字列の一覧）は 1 件、models / providers
   const swapped = structuredClone(saved);
   swapped.models.reverse();
   assert.equal(countChanges(saved, swapped), 0, 'models の並びは id で見るので、並べ替えだけは変更に数えない');
-});
-
-test('節の変更の印: 触った節だけに付く', () => {
-  const saved = sample();
-  const draft = updateAt(saved, 'worker', { enabled: true });
-  const marks = SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(draft, id)));
-  assert.deepEqual(marks, ['worker']);
-  const key = updateListItem(saved, 'providers', 'local', { apiKeyEnv: 'OTHER' });
-  assert.deepEqual(SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(key, id))), ['providers'], '鍵の節は設定に持ち物を持たないので、変更の印は付かない');
 });
 
 test('問題の読み取り: 形の検査の /models/0/contextLength は、位置を id に置き換えて節と行を指す', () => {
@@ -258,16 +247,8 @@ test('節「ブラウザ」: 「振る舞い」で MCP の次にあり、設定�
   const behavior = SECTION_GROUPS.find(g => g.label === 'settings.group.behavior')!;
   const ids = behavior.items.map(i => i.id);
   assert.equal(ids[ids.indexOf('mcp') + 1], 'browser');
-  assert.ok(SECTION_IDS.includes('browser'));
   const saved = sample();
   saved.tools.browser = { enabled: false, sites: [], limits: { maxTabs: 3 } };
-  assert.deepEqual(sectionSlice(saved, 'browser'), saved.tools.browser);
-  const draft = structuredClone(saved);
-  draft.tools.browser.enabled = true;
-  assert.deepEqual(SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(draft, id))), ['browser'], 'ブラウザの変更の印は「ブラウザ」だけに付く（「道具」には付かない）');
-  const shell = structuredClone(saved);
-  shell.tools.deny = ['.env', 'x'];
-  assert.deepEqual(SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(shell, id))), ['tools']);
   const problem = parseProblem('/tools/browser/limits/maxTabs: Expected number to be less or equal to 8', saved);
   assert.equal(problem.section, 'browser');
   assert.equal(parseProblem('/tools/deny/0: x', saved).section, 'tools');
