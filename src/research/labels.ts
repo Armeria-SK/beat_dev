@@ -19,7 +19,7 @@ const URL_LIKE = [
   /[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]{2,}(?:[/\\]|[?#:](?=\S))/iu,
   /(?<![\p{L}\p{N}])(?:mailto|javascript|data|vbscript|file|ftps?|sftp|ssh|tel|sms|blob|about|chrome|intent|magnet|irc|git|wss?|https?|ms-[a-z-]+):(?=\S)/iu,
   /@[\p{L}\p{N}-]+\.[\p{L}\p{N}-]{2,}/iu,
-  /(?<![\p{N}.])\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?[/\\?#]/u,
+  /(?<![\p{N}.])\d{1,3}(?:\.\d{1,3}){3}(?::\d+|[/\\?#])/u,
 ];
 const BARE_DOMAIN = /[\p{L}\p{N}_-]\.(?:com|net|org|io|dev|app|ai|co|me|info|xyz|ru|cn|jp|uk|de|fr|us|biz|site|online|top|link|page|cloud|sh|ly|gg|to|tv|cc|tk)(?![\p{L}\p{N}])/iu;
 const BARE_DOMAIN_KINDS: ReadonlySet<LabelKind> = new Set(['feature', 'choice']);
@@ -39,6 +39,6 @@ export function checkLabel(kind: LabelKind, raw: string): string {
   if (CODE.test(trimmed)) throw new ResearchError('label_code');
   if (MARKUP.test(trimmed)) throw new ResearchError('label_markup');
   if (SHELL.test(trimmed)) throw new ResearchError('label_shell');
-  if (sanitizeModelInputText(trimmed).redaction_count > 0 || (trimmed.match(/\S+=\S+/gu) ?? []).some(token => redactSecrets(token) !== token)) throw new ResearchError('label_secret');
+  if (sanitizeModelInputText(trimmed).redaction_count > 0 || (trimmed.match(/\S+\s*=\s*\S+|\S+:\S+/gu) ?? []).some(token => redactSecrets(token) !== token)) throw new ResearchError('label_secret');
   return trimmed;
 }

@@ -121,3 +121,18 @@ test('PC の道具の確かめ: リンクを 8 段までたどり（相対の先
   assert.deepEqual(calls.map(c => c.file), [join(dir, 'deno.exe'), join(dir, 'bun.exe')]);
   assert.ok(loopReads <= 2, `the loop is read ${loopReads} times`);
 });
+
+test('PC の道具の確かめ: 動かす前に本当のパス（realpath）を見て、WindowsApps の下か、見られないときは alias とし、動かさない', async t => {
+  const dir = tempDir(t);
+  for (const name of ['python', 'ruby', 'go']) writeFileSync(join(dir, `${name}.exe`), '');
+  const apps = ['C:', 'Program Files', 'WindowsApps', 'Pkg_1.0_x64__abc', 'python.exe'].join(BS);
+  const { calls, run } = spy();
+  const realpath = (file: string): string => {
+    if (file.endsWith('python.exe')) return apps;
+    if (file.endsWith('ruby.exe')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    return file;
+  };
+  const result = await checkToolchain(['python', 'ruby', 'go'], { platform: 'win32', env: { PATH: dir, PATHEXT: '.EXE' }, run, readlink: () => null, realpath });
+  assert.deepEqual(result.map(r => [r.name, r.state]), [['python', 'alias'], ['ruby', 'alias'], ['go', 'installed']]);
+  assert.deepEqual(calls.map(c => c.file), [join(dir, 'go.exe')]);
+});

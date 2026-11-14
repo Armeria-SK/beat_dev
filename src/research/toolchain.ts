@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstatSync, readlinkSync } from 'node:fs';
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { posix, win32 } from 'node:path';
 
@@ -21,6 +21,7 @@ export interface ToolchainOptions {
   env?: NodeJS.ProcessEnv | undefined;
   run?: VersionRunner | undefined;
   readlink?: ((file: string) => string | null) | undefined;
+  realpath?: ((file: string) => string) | undefined;
 }
 
 const runVersion: VersionRunner = (file, args, options) => new Promise((resolve, reject) => {
@@ -67,15 +68,20 @@ function storeAlias(file: string, readlink: (file: string) => string | null): bo
   return true;
 }
 
+function realAlias(file: string, realpath: (file: string) => string): boolean {
+  try { return underWindowsApps(realpath(file)); } catch { return true; }
+}
+
 export async function checkToolchain(names: readonly string[] = TOOLCHAIN, options: ToolchainOptions = {}): Promise<ToolCheck[]> {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const run = options.run ?? runVersion;
   const readlink = options.readlink ?? linkTarget;
+  const realpath = options.realpath ?? realpathSync.native;
   return Promise.all(names.map(async (name): Promise<ToolCheck> => {
     const file = /^[A-Za-z0-9_-]+$/u.test(name) ? findExecutable(name, platform, env) : null;
     if (file === null) return { name, state: 'missing', path: null, version: null };
-    if (platform === 'win32' && storeAlias(file, readlink)) return { name, state: 'alias', path: file, version: null };
+    if (platform === 'win32' && (storeAlias(file, readlink) || realAlias(file, realpath))) return { name, state: 'alias', path: file, version: null };
     if (platform === 'win32' && !/\.(?:exe|com)$/iu.test(file)) return { name, state: 'found', path: file, version: null };
     try {
       const out = await run(file, VERSION_ARGS.get(name) ?? ['--version'], { timeout: VERSION_TIMEOUT_MS, shell: false, windowsHide: true, cwd: homedir(), env: { ...env, GOTOOLCHAIN: 'local' } });

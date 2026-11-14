@@ -104,3 +104,13 @@ test('名前の形: 裸のドメインの決まりは機能の名前と問いだ
   }
   assert.equal(codeOf(() => checkLabel('option', 'example.com/x')), 'label_url');
 });
+
+test('名前の形: 空白を挟んだ = や、空白なしの : でつないだ鍵らしい代入も断り、「Ratio 16:9 export」などは通す', () => {
+  for (const label of ['api_key = abcd1234efgh', 'api_key:abcd1234efgh', 'PASSWORD = hunter22']) assert.equal(codeOf(() => checkLabel('feature', label)), 'label_secret', label);
+  for (const label of ['Auth: OAuth login', 'Password: reset by email', 'Theme=dark mode', 'Ratio 16:9 export', 'Data: import']) assert.equal(codeOf(() => checkLabel('feature', label)), 'ok', label);
+});
+
+test('名前の形: IPv4 のあとのポートも URL とみなし（10.0.0.1:8080）、ただの「Version 1.2.3.4」は通す', () => {
+  for (const label of ['10.0.0.1:8080', 'open 192.168.0.10:3000 now']) assert.equal(codeOf(() => checkLabel('similar', label)), 'label_url', label);
+  assert.equal(codeOf(() => checkLabel('feature', 'Version 1.2.3.4')), 'ok');
+});
