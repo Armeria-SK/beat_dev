@@ -175,9 +175,11 @@ function secretToAdd(args: readonly FactWord[], dir: string, git: ProductRunInpu
   return undefined;
 }
 
+const REPO_PARTS = ['objects', 'refs', 'index', 'HEAD'];
+
 function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
-  const places = git(dir, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'])?.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  return places?.length === 3 && places.every(place => inside(root, resolve(dir, place)));
+  const places = git(dir, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir', ...REPO_PARTS.flatMap(part => ['--git-path', part])])?.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  return places?.length === 3 + REPO_PARTS.length && places.every(place => inside(root, resolve(dir, place)));
 }
 
 export function productRunOf(input: ProductRunInput): ProductRunResult {

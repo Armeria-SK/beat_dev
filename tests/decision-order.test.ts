@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -895,6 +895,12 @@ test('p4-build-judge P1-3: list.node_test は順 4', () => {
 
 const fwd = (path: string): string => path.replace(/\\/gu, '/');
 const linkDir = (target: string, path: string): void => symlinkSync(target, path, WIN ? 'junction' : 'dir');
+const relink = (nested: string, outside: string, name: string): void => {
+  rmSync(join(nested, '.git', name), { recursive: true, force: true });
+  linkDir(join(outside, '.git', name), join(nested, '.git', name));
+};
+const countOf = (dir: string): string => spawnSync('git', ['rev-list', '--count', '--all'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+const treeOf = (dir: string): string[] => (readdirSync(dir, { recursive: true }) as string[]).map(String).sort();
 const OUTSIDE_GIT: Record<string, (nested: string, outside: string) => void> = {
   gitdirOutside: (nested, outside) => { initRepo(outside); mkdirSync(nested, { recursive: true }); writeFileSync(join(nested, '.git'), `gitdir: ${fwd(join(outside, '.git'))}\n`); },
   gitLinkOutside: (nested, outside) => { initRepo(outside); mkdirSync(nested, { recursive: true }); linkDir(join(outside, '.git'), join(nested, '.git')); },
@@ -913,6 +919,9 @@ const OUTSIDE_GIT: Record<string, (nested: string, outside: string) => void> = {
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(nested, '.git'), 'gitdir: ' + fwd(join(outside, 'gd')) + '\n');
   },
+  objectsAndRefsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, 'objects'); relink(nested, outside, 'refs'); },
+  objectsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, 'objects'); },
+  refsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, 'refs'); },
   linkedWorktree: (nested, outside) => { initRepo(outside); git(outside, 'worktree', 'add', '-q', '-b', 'wt', nested); },
 };
 
@@ -928,11 +937,11 @@ test('p4-build-judge D1: git の置き場（.git のファイルの gitdir・リ
       assert.match(spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: nested, encoding: 'utf8' }).stdout, /nested/u, `${name}: git はこのフォルダをリポジトリとして読める`);
       writeFileSync(join(nested, 'n.txt'), 'x');
       if (command.includes('commit')) spawnSync('git', ['add', 'n.txt'], { cwd: nested });
-      const before = commits(outside);
+      const before = countOf(outside);
       r.judge.answer = '{"decision":"ask","reason":"check"}';
       const outcome = await r.call('shell_run', { command, cwd: nested });
       if (outcome.decidedBy === 'product-git' || outcome.decidedBy === 'product-code') leaked.push(`${name}: ${command} -> ${outcome.decidedBy}`);
-      if (commits(outside) !== before) leaked.push(`${name}: ${command} -> 製品の外のリポジトリにコミットが増えた`);
+      if (countOf(outside) !== before) leaked.push(`${name}: ${command} -> 製品の外のリポジトリにコミットが増えた`);
     }
   }
   assert.deepEqual(leaked, [], '判定役を飛ばした形');
@@ -1206,4 +1215,42 @@ test('p4-build-judge P2-7: git -c user.name=… commit は、順 4 に乗ると�
   }
   assert.deepEqual(p.waiting().map(row => row.kind), ['owner', 'owner', 'owner'], '製品の中でも、順 4 に乗らない -c の形は今までどおり持ち主へ');
   assert.equal(p.judge.calls.length, 0);
+});
+
+test('p4-build-judge D1: .git の中の index か HEAD が製品の外へのリンクなら判定役を飛ばさない（リンクを作れない環境では飛ばす）', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const leaked: string[] = [];
+  let made = 0;
+  for (const name of ['index', 'HEAD']) {
+    for (const command of ['git add -A', 'git commit -m x']) {
+      const r = rig(t);
+      initRepo(r.root);
+      const outside = join(r.paths.workspace, 'other');
+      initRepo(outside);
+      rmSync(join(r.root, '.git', name), { force: true });
+      try { symlinkSync(join(outside, '.git', name), join(r.root, '.git', name), 'file'); } catch { continue; }
+      made++;
+      writeFileSync(join(r.root, 'n.txt'), 'x');
+      r.judge.answer = '{"decision":"ask","reason":"check"}';
+      const outcome = await r.shell(command);
+      if (outcome.decidedBy === 'product-git' || outcome.decidedBy === 'product-code') leaked.push(`${name}: ${command} -> ${outcome.decidedBy}`);
+    }
+  }
+  if (made === 0) { t.skip('ファイルのリンクを作れない'); return; }
+  assert.deepEqual(leaked, [], '判定役を飛ばした形');
+});
+
+test('p4-build-judge D1: objects/info/alternates が製品の外を指すリポジトリは順 4 のまま。git は外の objects を読むだけで、add / commit は外に何も書かない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  const outside = join(r.paths.workspace, 'other');
+  initRepo(outside);
+  writeFileSync(join(r.root, '.git', 'objects', 'info', 'alternates'), `${fwd(join(outside, '.git', 'objects'))}\n`);
+  const before = { tree: treeOf(join(outside, '.git')), count: countOf(outside) };
+  writeFileSync(join(r.root, 'n.txt'), 'new content for the product only');
+  const added = await r.shell('git add n.txt');
+  assert.equal(added.decidedBy, 'product-git', added.output.content);
+  const committed = await r.shell('git commit -m alternates');
+  assert.equal(committed.decidedBy, 'product-git', committed.output.content);
+  assert.equal(commits(r.root), '2', '製品のリポジトリにコミットができた');
+  assert.deepEqual({ tree: treeOf(join(outside, '.git')), count: countOf(outside) }, before, '外のリポジトリの .git は 1 ファイルも増えず、コミットも増えていない');
 });
