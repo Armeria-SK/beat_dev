@@ -87,6 +87,16 @@ function hookFingerprints(dir: string | null | undefined, language: Language): s
   return names.filter(name => !name.endsWith('.sample')).sort().map(name => peek(join(dir, name), language).fingerprint);
 }
 
+const GIT_STAGING = new Set(['add', 'commit']);
+
+function gitStagingOnly(statements: readonly StatementFacts[]): boolean {
+  return statements.length > 0 && statements.every(st => {
+    const sub = st.words[st.gitGlobal.length + 1];
+    return st.program === 'git' && !st.programDynamic && !st.programOdd && !st.inner && !st.piped && !st.redirected
+      && sub !== undefined && GIT_STAGING.has(sub.text) && !st.words.some(w => w.dynamic);
+  });
+}
+
 function remotesOf(ctx: ToolContext): Remote[] | undefined {
   if (!ctx.project) return undefined;
   try { return parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes); } catch { return []; }
@@ -152,7 +162,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const runFacts = pushed ? { ownerReason: 'files' in pushed ? pendingText('en', 'owner_protected_push', { files: pushed.files.join('; ') }) : pendingText('en', 'owner_push_unchecked') }
     : run && 'run' in run ? { productRun: run.run } : run && 'secret' in run ? { ownerReason: pendingText('en', 'owner_secret_commit', { path: run.secret }) }
     : run && 'secretMessage' in run ? { ownerReason: pendingText('en', 'owner_secret_message') } : {};
-  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
+  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(gitStagingOnly(verdict.statements) ? { gitStaging: true as const } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));

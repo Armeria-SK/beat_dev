@@ -23,6 +23,7 @@ export interface PathFact {
   more?: boolean;
   unverifiable?: true;
   hash?: string;
+  relaxed?: string;
   real?: string;
 }
 
@@ -125,16 +126,17 @@ function contentHash(path: string, st: Stats): string {
   try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return 'unreadable'; }
 }
 
-const INDEX_MAX_BYTES = 64 * 1_048_576;
+const INDEX_WALK_BYTES = 64 * 1_048_576;
+const INDEX_PATH_MAX = 4096;
 const INDEX_STAT_BYTES = 40;
 const INDEX_MODE_AT = 24;
-const INDEX_STAT_EXTENSIONS: ReadonlySet<string> = new Set(['UNTR', 'FSMN', 'EOIE', 'IEOT']);
+const INDEX_CACHE_EXTENSIONS: ReadonlySet<string> = new Set(['UNTR', 'FSMN']);
 
 function stagedEntries(data: Buffer, version: number, count: number, idBytes: number): string | null {
   const end = data.length - idBytes;
   const digest = createHash('sha256');
   let pos = 12;
-  let previous: Buffer = Buffer.alloc(0);
+  let previous = 0;
   for (let i = 0; i < count; i++) {
     const start = pos;
     const flagsAt = start + INDEX_STAT_BYTES + idBytes;
@@ -147,65 +149,69 @@ function stagedEntries(data: Buffer, version: number, count: number, idBytes: nu
       extended = data.readUInt16BE(pos);
       pos += 2;
     }
-    let path: Buffer;
+    const rawAt = pos;
+    let strip = previous;
     if (version === 4) {
       let byte = data[pos++]!;
-      let strip = byte & 0x7f;
+      strip = byte & 0x7f;
       while (byte & 0x80) {
-        if (pos >= end || strip > 0xffffff) return null;
+        if (pos >= end || strip > INDEX_PATH_MAX) return null;
         byte = data[pos++]!;
         strip = ((strip + 1) << 7) + (byte & 0x7f);
       }
-      const nul = data.indexOf(0, pos);
-      if (nul < 0 || nul >= end || strip > previous.length) return null;
-      path = Buffer.concat([previous.subarray(0, previous.length - strip), data.subarray(pos, nul)]);
-      pos = nul + 1;
-    } else {
-      const nul = data.indexOf(0, pos);
-      if (nul < 0 || nul >= end) return null;
-      path = data.subarray(pos, nul);
-      pos = start + ((nul - start + 8) & ~7);
-      if (pos > end || data.subarray(nul, pos).some(b => b !== 0)) return null;
+      if (strip > previous) return null;
     }
-    if (!path.length || (flags & 0xfff) !== Math.min(path.length, 0xfff)) return null;
-    previous = path;
+    const nul = data.indexOf(0, pos);
+    if (nul < 0 || nul >= end) return null;
+    const length = previous - strip + (nul - pos);
+    if (!length || length > INDEX_PATH_MAX || (flags & 0xfff) !== Math.min(length, 0xfff)) return null;
+    previous = length;
     digest.update(data.subarray(start + INDEX_MODE_AT, start + INDEX_MODE_AT + 4)).update(data.subarray(start + INDEX_STAT_BYTES, flagsAt))
-      .update(`${flags & 0xf000}:${extended}:${path.length}:`).update(path);
+      .update(`${flags & 0xf000}:${extended}:${nul - rawAt}:`).update(data.subarray(rawAt, nul));
+    if (version === 4) { pos = nul + 1; continue; }
+    pos = start + ((nul - start + 8) & ~7);
+    if (pos > end || data.subarray(nul, pos).some(b => b !== 0)) return null;
   }
-  digest.update(`${count}`);
+  digest.update(`${version}:${count}`);
   while (pos < end) {
     if (pos + 8 > end) return null;
     const name = data.toString('latin1', pos, pos + 4);
     const next = pos + 8 + data.readUInt32BE(pos + 4);
     if (name === 'link' || next > end) return null;
-    if (!INDEX_STAT_EXTENSIONS.has(name)) digest.update(`${name}:${next - pos - 8}:`).update(data.subarray(pos + 8, next));
+    if (!INDEX_CACHE_EXTENSIONS.has(name)) digest.update(`${name}:${next - pos - 8}:`).update(data.subarray(pos + 8, next));
     pos = next;
   }
   return digest.digest('hex');
 }
 
-function stagedHash(gitDir: string): string | null {
+function stagedHash(gitDir: string, budget: number): { hash: string | null; bytes: number } {
   let data: Buffer;
   try {
     const file = join(gitDir, 'index');
     const st = lstatSync(file);
-    if (!st.isFile() || st.size > INDEX_MAX_BYTES) return null;
+    if (!st.isFile()) return { hash: null, bytes: 0 };
+    if (st.size > budget) return { hash: null, bytes: st.size };
     data = readFileSync(file);
-  } catch { return null; }
-  if (data.length < 12 || data.toString('latin1', 0, 4) !== 'DIRC') return null;
+  } catch { return { hash: null, bytes: 0 }; }
+  const none = { hash: null, bytes: data.length };
+  if (data.length > budget || data.length < 12 || data.toString('latin1', 0, 4) !== 'DIRC') return none;
   const version = data.readUInt32BE(4);
-  if (version < 2 || version > 4) return null;
-  return stagedEntries(data, version, data.readUInt32BE(8), 20) ?? stagedEntries(data, version, data.readUInt32BE(8), 32);
+  if (version < 2 || version > 4) return none;
+  return { hash: stagedEntries(data, version, data.readUInt32BE(8), 20) ?? stagedEntries(data, version, data.readUInt32BE(8), 32), bytes: data.length };
 }
 
-function folderHash(dir: string): { hash: string; more: boolean } {
+function folderHash(dir: string): { hash: string; relaxed?: string; more: boolean } {
   const entries: string[] = [];
+  const swaps: Array<[number, string]> = [];
   const stack = [dir];
   const staged = new Map<string, string>();
+  let budget = INDEX_WALK_BYTES;
   const noteGitDir = (path: string): boolean => {
-    const hash = basename(path) === '.git' ? stagedHash(path) : null;
-    if (hash !== null) staged.set(path, hash);
-    return hash !== null;
+    if (basename(path) !== '.git' || budget < 0) return false;
+    const found = stagedHash(path, budget);
+    budget -= found.bytes;
+    if (found.hash !== null && budget >= 0) staged.set(path, found.hash);
+    return staged.has(path);
   };
   noteGitDir(dir);
   let more = false;
@@ -219,13 +225,17 @@ function folderHash(dir: string): { hash: string; more: boolean } {
       let st: Stats;
       try { st = lstatSync(path); } catch { more = true; break; }
       const stagedHere = name === 'index' && st.isFile() ? staged.get(current) : undefined;
-      if (stagedHere !== undefined) entries.push(`${relative(dir, path)}\0staged\0${stagedHere}`);
-      else if (st.isDirectory() && noteGitDir(path)) entries.push(`${relative(dir, path)}\0git\0${st.size}`);
-      else entries.push(`${relative(dir, path)}\0${typeOf(st)}\0${st.size}\0${st.mtimeMs}`);
+      if (stagedHere !== undefined) swaps.push([entries.length, `${relative(dir, path)}\0staged\0${stagedHere}`]);
+      else if (st.isDirectory() && noteGitDir(path)) swaps.push([entries.length, `${relative(dir, path)}\0git\0${st.size}`]);
+      entries.push(`${relative(dir, path)}\0${typeOf(st)}\0${st.size}\0${st.mtimeMs}`);
       if (st.isDirectory()) stack.push(path);
     }
   }
-  return { hash: createHash('sha256').update(entries.sort().join('\n')).digest('hex'), more };
+  const mark = (list: string[]): string => createHash('sha256').update(list.sort().join('\n')).digest('hex');
+  if (more || budget < 0 || !staged.size) return { hash: mark(entries), more };
+  const loose = [...entries];
+  for (const [at, entry] of swaps) loose[at] = entry;
+  return { hash: mark(entries), relaxed: mark(loose), more };
 }
 
 export function boundFacts(paths: readonly string[]): PathFact[] {
@@ -237,15 +247,17 @@ export function boundFacts(paths: readonly string[]): PathFact[] {
     try { real = realpathSync.native(path); } catch { real = path; }
     if (st.isDirectory()) {
       const inside = folderHash(path);
-      return { path, exists: true, type: 'dir', real, hash: inside.hash, ...(inside.more ? { more: true } : {}) };
+      return { path, exists: true, type: 'dir', real, hash: inside.hash, ...(inside.relaxed !== undefined ? { relaxed: inside.relaxed } : {}), ...(inside.more ? { more: true } : {}) };
     }
     return { path, exists: true, type: st.isFile() ? 'file' : 'other', size: st.size, real, hash: st.isFile() ? contentHash(path, st) : `other:${st.ino}` };
   });
 }
 
-export function boundChanged(before: PathFact, now: PathFact): boolean {
+export function boundChanged(before: PathFact, now: PathFact, gitStaging = false): boolean {
   if (before.more || now.more || before.unverifiable || now.unverifiable) return true;
-  return before.exists !== now.exists || before.type !== now.type || before.hash !== now.hash || before.real !== now.real || before.size !== now.size;
+  if (before.exists !== now.exists || before.type !== now.type || before.real !== now.real || before.size !== now.size) return true;
+  if (before.hash === now.hash) return false;
+  return !(gitStaging && before.relaxed !== undefined && before.relaxed === now.relaxed);
 }
 
 export function fileFacts(paths: readonly string[]): PathFact[] {
