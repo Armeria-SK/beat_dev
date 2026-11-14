@@ -3,6 +3,7 @@ import type { Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { pendingText } from '../../shared/messages/pending.ts';
+import { CHECK_FAIL_LIMIT, CHECK_TEXT, productCheck, runProductCheck } from '../../projects/check-run.ts';
 import { describeCron, validateCron } from '../../tasks/schedule.ts';
 import { TaskError, type Task, type TaskStore } from '../../tasks/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -147,7 +148,7 @@ export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_actio
 
 export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
   name: 'task_complete',
-  description: 'Finish the task you are working on now. Write the result in summary. If there is nothing to tell the user, notify=false (finish quietly).',
+  description: 'Finish the task you are working on now. Write the result in summary. If there is nothing to tell the user, notify=false (finish quietly). While tasks you made from this task are unfinished (including ones set to start later with when), this only pauses the task until they finish. If the product has a check command, beat runs it first; when it fails, fix the cause and call this again.',
   input: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4000 }), notify: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
@@ -155,11 +156,35 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
+    const end = toolText(language, 'task.end');
+    const text = CHECK_TEXT[language];
+    const tasks = ctx.services?.tasks;
+    const children = tasks?.openChildren(ctx.task.id) ?? 0;
+    if (children > 0) {
+      ctx.task.control = { outcome: 'yield', reason: text.yieldReason(children) };
+      return { content: `${text.childrenLeft(children)} ${end}` };
+    }
+    const own = tasks?.get(ctx.task.id);
+    const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id) : undefined;
+    let passed = '';
+    if (tasks && check) {
+      const run = await runProductCheck(check, { config: ctx.config, signal: ctx.signal });
+      if (!run.ok && run.reason === 'aborted') return { content: text.stopped, isError: true };
+      if (!run.ok) {
+        tasks.event(ctx.task.id, 'check_failed', 'beat', text.event(run), ctx.runId);
+        const failures = tasks.checkFailures(ctx.task.id).count;
+        if (failures < CHECK_FAIL_LIMIT) return { content: text.failed(check.command, run, failures), isError: true };
+        ctx.task.control = { outcome: 'failed', reason: text.reason(run) };
+        return { content: `${text.gaveUp(check.command, run)}\n${end}`, isError: true };
+      }
+      tasks.event(ctx.task.id, 'check_passed', 'beat', null, ctx.runId);
+      passed = text.passed(check.command);
+    }
     const waiting = ctx.services?.db ? (ctx.services.db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(ctx.task.id) as Array<{ id: number }>) : [];
     const suffix = waiting.length ? pendingText(language, 'task_waiting', { ids: waiting.map(row => `#${row.id}`).join(', ') }) : '';
     ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true };
-    const done = toolText(language, 'task.completed', { end: toolText(language, 'task.end') });
-    return { content: suffix ? `${done}\n${suffix}` : done };
+    const done = toolText(language, 'task.completed', { end });
+    return { content: [passed, done, suffix].filter(Boolean).join('\n') };
   },
 };
 

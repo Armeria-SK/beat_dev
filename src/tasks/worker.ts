@@ -16,6 +16,7 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister } from '../tools/skills/store.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
+import { CHECK_FAIL_LIMIT, CHECK_KEEP, CHECK_OPTIONS, CHECK_TEXT } from '../projects/check-run.ts';
 import { projectFolderGone } from '../projects/run.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
@@ -257,7 +258,7 @@ export class Worker {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
         // 提供元が満杯のあいだは覚えておく（空けば、終わった実行の onRunEnd で拾う）
-        if (!roomFor()) continue;
+        if (!roomFor() || tasks.productBusy(forced)) continue;
         this.#forced.delete(id);
         task = forced;
         break;
@@ -449,6 +450,22 @@ export class Worker {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'done', control.summary, 'beat', runId);
       if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, projectId });
+      return;
+    }
+    if (control.outcome === 'yield') {
+      this.#d.kv.delete(idleKey);
+      tasks.setReady(task.id, { reason: control.reason });
+      return;
+    }
+    if (control.outcome === 'failed') {
+      this.#d.kv.delete(idleKey);
+      tasks.finish(task.id, 'failed', control.reason, 'beat', runId);
+      const failures = tasks.checkFailures(task.id);
+      if (failures.count >= CHECK_FAIL_LIMIT) {
+        const text = CHECK_TEXT[language];
+        this.#d.questions?.add({ kind: 'check_failed', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: text.question(task.title), why: text.why(failures.last), options: CHECK_OPTIONS, chosen: CHECK_KEEP });
+      }
+      notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: control.reason, link, dedupKey: `failed:${task.id}:${now}`, projectId });
       return;
     }
     if (control.outcome === 'question') {
