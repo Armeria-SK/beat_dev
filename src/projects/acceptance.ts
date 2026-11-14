@@ -508,7 +508,7 @@ export class AcceptanceStore {
         const target = typeof id === 'string' && ITEM_ID.test(id) ? truth.items.find(entry => entry.id === id && entry.removedIn === null) : undefined;
         if (!target) throw badChange(`there is no item ${String(id).slice(0, 20)}`);
         if (!STATES.has(mark.state)) throw badChange('state must be open, met or unverified');
-        if (by === 'gate' && mark.state === 'met' && target.check.kind !== 'command') throw badChange(`${target.id} is checked by look or read, so only the owner can mark it met`);
+        if (by === 'gate' && mark.state === 'met' && target.check?.kind !== 'command') throw badChange(`${target.id} is checked by look or read, so only the owner can mark it met`);
         const evidence = mark.evidence ?? target.evidence;
         if (!Array.isArray(evidence)) throw badChange('evidence must be a list');
         if (JSON.stringify(evidence).length > EVIDENCE_MAX) throw new AcceptanceError('too_long', { field: 'evidence', max: EVIDENCE_MAX });

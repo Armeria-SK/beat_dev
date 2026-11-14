@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { AcceptanceStore, EVIDENCE_MAX, frozenHash, itemStatesOf, type AcceptanceDoc } from '../src/projects/acceptance.ts';
+import { AcceptanceError, AcceptanceStore, EVIDENCE_MAX, frozenHash, itemStatesOf, type AcceptanceDoc } from '../src/projects/acceptance.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -204,4 +204,17 @@ test('5-3b-st 番号の形でない項目（手で書いた下書きを固定し
   assert.throws(() => s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task, items: [{ id: '__proto__', state: 'unverified', evidence: [] }] }), /no item __proto__/u);
   assert.throws(() => s.app.acceptance.ownerCheck(shop.id, { taskId: shop.task, itemId: 'X-1', version: 1 }), /no item X-1/u);
   assert.equal(s.raw(shop.id), '{}');
+});
+
+test('5-3b-st 確かめ方（check）が欠けた・null の項目を DB の版に持っていても、門の met は TypeError ではなく AcceptanceError で断る', t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  const content = JSON.parse(s.app.acceptance.latest(shop.id)!.content) as AcceptanceDoc;
+  for (const check of [undefined, null]) {
+    const broken = { ...content, items: content.items.map(entry => (entry.id === 'A-1' ? { ...entry, check: check as never } : entry)) };
+    s.app.db.prepare('UPDATE acceptance_versions SET content = ? WHERE project_id = ?').run(JSON.stringify(broken), shop.id);
+    assert.throws(() => s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task, items: [{ id: 'A-1', state: 'met', evidence: [] }] }),
+      (error: Error) => error instanceof AcceptanceError && /A-1 is checked by look or read/u.test(error.message), String(check));
+  }
+  assert.deepEqual(s.app.acceptance.itemStates(shop.id), {});
 });
