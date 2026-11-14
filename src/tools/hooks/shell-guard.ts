@@ -272,12 +272,14 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         : wgetConfigFile(env);
     return file ? { file } : undefined;
   };
-  const afterStatement: MatchCtx['afterStatement'] = result => {
+  let enclosedEarlier = false;
+  const afterStatement: MatchCtx['afterStatement'] = (result, st) => {
     if (result.paths.some(p => p.mode === 'write') || result.copies.length > 0) wroteEarlier = true;
+    if (st.shapes.some(s => s.startsWith('control:'))) enclosedEarlier = true;
     if (result.cwd) followCd(seen, result.cwd);
   };
   const fileExists = (path: string): boolean => {
-    if (wroteEarlier) return false;
+    if (wroteEarlier || enclosedEarlier) return false;
     if (!seen.known && !parsePath(path).root) return false;
     const full = resolve(seen.cwd, path);
     return exists(full) && !isDirectory(full);

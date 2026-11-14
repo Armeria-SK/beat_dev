@@ -9,7 +9,8 @@ type Path = readonly string[];
 export type Edit =
   | { type: 'set'; path: Path; before: unknown; after: unknown }
   | { type: 'addItem'; path: Path; id: string; item: Record<string, unknown> }
-  | { type: 'removeItem'; path: Path; id: string; before: Record<string, unknown> };
+  | { type: 'removeItem'; path: Path; id: string; before: Record<string, unknown> }
+  | { type: 'order'; path: Path; before: string[]; after: string[] };
 
 export interface Conflict { path: string; edit: Edit }
 export interface MergeResult { config: Config; conflicts: Conflict[] }
@@ -27,7 +28,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   return keys.length === defined(right).length && keys.every(k => deepEqual(left[k], right[k]));
 }
 
-// id を持つ一覧（models / providers）は id で突き合わせ、追加・削除・項目の中の編集に分ける。
+// id を持つ一覧（models / providers）は id で突き合わせ、追加・削除・項目の中の編集・並べ替えに分ける。
 // それ以外の一覧（タグ・順番・フック・フォルダ）は 1 つの値として扱う。
 export function diffConfig(saved: Config, draft: Config): Edit[] {
   const edits: Edit[] = [];
@@ -49,6 +50,9 @@ function walk(before: unknown, after: unknown, path: Path, edits: Edit[]): void 
       else edits.push({ type: 'addItem', path, id: item.id, item });
     }
     for (const item of before) if (!after.some(other => other.id === item.id)) edits.push({ type: 'removeItem', path, id: item.id, before: item });
+    const order = after.map(item => item.id);
+    const kept = before.map(item => item.id).filter(id => order.includes(id));
+    if (!deepEqual([...kept, ...order.filter(id => !kept.includes(id))], order)) edits.push({ type: 'order', path, before: kept, after: order });
     return;
   }
   edits.push({ type: 'set', path, before, after });
@@ -62,7 +66,7 @@ export function profilePatch(edits: readonly Edit[]): Record<string, unknown> | 
   return Object.fromEntries(sets.map(e => [e.path[1]!, e.after]));
 }
 
-export const editPath = (edit: Edit): string => (edit.type === 'set' ? edit.path : [...edit.path, edit.id]).join('.');
+export const editPath = (edit: Edit): string => (edit.type === 'set' || edit.type === 'order' ? edit.path : [...edit.path, edit.id]).join('.');
 
 export function applyEdits(latest: Config, edits: readonly Edit[]): MergeResult {
   const config = structuredClone(latest) as Config;
@@ -104,6 +108,7 @@ function applyOne(config: Config, edit: Edit): boolean {
   }
   const list = locate(config, edit.path, false);
   if (!Array.isArray(list)) return false;
+  if (edit.type === 'order') return reorder(list, edit.before, edit.after);
   const at = list.findIndex(x => isPlain(x) && x.id === edit.id);
   if (edit.type === 'addItem') {
     if (at >= 0) return deepEqual(list[at], edit.item);
@@ -113,5 +118,18 @@ function applyOne(config: Config, edit: Edit): boolean {
   if (at < 0) return true;
   if (!deepEqual(list[at], edit.before)) return false;
   list.splice(at, 1);
+  return true;
+}
+
+function reorder(list: unknown[], before: readonly string[], after: readonly string[]): boolean {
+  const idOf = (x: unknown): string | null => (isPlain(x) && typeof x.id === 'string' ? x.id : null);
+  const present = list.map(idOf);
+  const wanted = after.filter(id => present.includes(id));
+  const current = present.filter((id): id is string => id !== null && wanted.includes(id));
+  if (deepEqual(current, wanted)) return true;
+  if (!deepEqual(current.filter(id => before.includes(id)), before.filter(id => current.includes(id)))) return false;
+  const items = wanted.map(id => list[present.indexOf(id)]);
+  let next = 0;
+  present.forEach((id, slot) => { if (id !== null && wanted.includes(id)) list[slot] = items[next++]; });
   return true;
 }

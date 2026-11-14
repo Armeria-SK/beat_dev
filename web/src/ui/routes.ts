@@ -85,18 +85,21 @@ export const CLOSE_FALLBACK_MS = 300;
 export interface CloseEnv {
   hasBehind: () => boolean;
   behindHash: () => string;
-  back: () => void;
+  depth: () => number | null;
+  back: (by: number) => void;
   replace: (hash: string) => void;
   currentHash: () => string;
   generation: () => number;
   later: (run: () => void, ms: number) => void;
 }
 
+export const settingsDepth = (start: number | null, now: number | null): number | null => (start === null || now === null || now < start ? null : now - start + 1);
+
 export function settingsCloser(env: CloseEnv): { fire: () => void; reset: () => void } {
   return latch(() => {
     if (!env.hasBehind()) { env.replace('#/'); return; }
     const before = env.generation();
-    env.back();
+    env.back(env.depth() ?? 1);
     env.later(() => {
       if (env.generation() === before && parseRoute(env.currentHash()).view === 'settings') env.replace(env.behindHash());
     }, CLOSE_FALLBACK_MS);

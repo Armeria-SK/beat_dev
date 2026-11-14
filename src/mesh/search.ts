@@ -10,7 +10,7 @@ export interface MeshText { rel: string; lines: string[]; mtime: number; fetched
 
 const LINE_MAX = 300;
 const QUERY_TERMS = 10;
-const EXTERNAL = /, src: external\]$/u;
+const EXTERNAL = /src: external\\?\]/u;
 const PRIORITY = ['STATE.md', 'MAP.md', 'DECISIONS.md'];
 
 const HEADING_MAX = 60;
@@ -112,6 +112,9 @@ export function readMesh(text: MeshText, input: { section?: string | undefined; 
   const room = budget - estimateTextTokens(framed(language, [], [note(total)]));
   const shown = Math.max(1, prefixLength(rest, Infinity, room));
   const part = rest.slice(0, shown);
-  const fetched = text.fetched || part.split('\n').some(line => EXTERNAL.test(line));
+  const lineEnd = rest.indexOf('\n', shown);
+  const lineStart = whole.lastIndexOf('\n', offset) + 1;
+  const touched = whole.slice(lineStart, lineEnd < 0 ? whole.length : offset + lineEnd);
+  const fetched = text.fetched || touched.split('\n').some(line => EXTERNAL.test(line));
   return { content: framed(language, [part], shown < rest.length ? [note(offset + shown)] : []), fetched };
 }

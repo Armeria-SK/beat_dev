@@ -10,13 +10,45 @@ export function confirmable(open: (answer: Answer) => void, run: () => Promise<b
   });
 }
 
-export function serial(): <T>(job: () => Promise<T>) => Promise<T> {
+export const SAVE_LIMIT_MS = 30_000;
+
+export type Enqueue = <T>(job: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+
+export function serial(limitMs = SAVE_LIMIT_MS): Enqueue {
   let tail: Promise<unknown> = Promise.resolve();
-  return <T>(job: () => Promise<T>): Promise<T> => {
-    const next = tail.then(job, job);
+  return <T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const start = () => new Promise<T>((resolve, reject) => {
+      const stop = new AbortController();
+      let timer = setTimeout(() => {
+        stop.abort();
+        timer = setTimeout(() => reject(new Error('Timed out')), limitMs);
+      }, limitMs);
+      job(stop.signal).then(resolve, reject).finally(() => clearTimeout(timer));
+    });
+    const next = tail.then(start, start);
     tail = next.then(() => undefined, () => undefined);
     return next;
   };
+}
+
+export function checkThenRun<T>(
+  enqueue: Enqueue,
+  check: (signal: AbortSignal) => Promise<readonly T[]>,
+  keyOf: (items: readonly T[]) => string,
+  ask: (items: readonly T[], run: () => Promise<boolean>) => Promise<boolean>,
+  run: (signal: AbortSignal) => Promise<boolean>,
+): Promise<boolean> {
+  const step = (confirmed: string | null): Promise<boolean> => enqueue(async (signal): Promise<boolean | { items: readonly T[] }> => {
+    const items = await check(signal);
+    if (items.length > 0 && keyOf(items) !== confirmed) return { items };
+    return run(signal);
+  }).then(result => {
+    if (typeof result === 'boolean') return result;
+    let failed: { error: unknown } | null = null;
+    return ask(result.items, () => step(keyOf(result.items)).catch((error: unknown) => { failed = { error }; throw error; }))
+      .then(ok => { if (failed) throw failed.error; return ok; });
+  });
+  return step(null);
 }
 
 export const hasUnsaved = (dirty: ReadonlyMap<string, boolean>): boolean => [...dirty.values()].some(Boolean);

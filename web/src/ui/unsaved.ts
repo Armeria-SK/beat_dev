@@ -1,4 +1,4 @@
-import { routeHash, type Route } from './routes.ts';
+import { parseRoute, routeHash, type Route } from './routes.ts';
 
 const dirty = new Map<string, true>();
 
@@ -13,6 +13,14 @@ export function clearUnsaved(prefix: string): void {
 export const hasUnsavedEdits = (prefix = '', except?: string): boolean => [...dirty.keys()].some(key => key.startsWith(prefix) && key !== except);
 
 export const SCREEN_EDITS = 'screen:';
+
+export const SETTINGS_EDITS = 'settings:';
+
+export function settingsHold(unsaved: boolean, fromView: string, fromHash: string, next: Route, from: number | null, now: number | null): { leave: HeldLeave; back: string } | null {
+  const to = routeHash(next);
+  if (!unsaved || fromView !== 'settings' || to === routeHash(parseRoute(fromHash))) return null;
+  return { leave: { to, moved: leaveMove(from, now), at: from }, back: fromHash };
+}
 
 export function leaveAsks(unsaved: boolean, current: Route, next: Route): boolean {
   return unsaved && next.view !== 'settings' && routeHash(next) !== routeHash(current);

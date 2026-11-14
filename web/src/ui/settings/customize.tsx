@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type PersonaView } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatNumber, useT } from '../../i18n/index.ts';
-import { accessWidening } from '../../settings/access.ts';
+import { accessKey, accessWidening } from '../../settings/access.ts';
 import { issueMessage } from '../../settings/model.ts';
 import { estimateTokens, overPersonaBudget } from '../../tokens.ts';
 import { Button } from '../parts.tsx';
@@ -10,6 +10,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { applyTheme, browserStorage, readReducedMotion, readTheme, saveReducedMotion, saveTheme, THEMES, type Theme } from '../theme.ts';
 import { mergeRawConfig, parseRawConfig } from './commit.ts';
 import { CommitField, Group, Row, Switch, useSet } from './controls.tsx';
+import { checkThenRun } from './flow.ts';
 
 const errorText = (error: unknown, fallback: string): string => (error instanceof ApiError ? error.message : fallback);
 const HEX = /^#[0-9a-fA-F]{6}$/u;
@@ -170,10 +171,10 @@ export function AdvancedPanel() {
   const [backup, setBackup] = useState<string | null>(null);
   const reset = async () => {
     setResetting(false); ctx.clear('adv:reset');
-    const run = async (): Promise<boolean> => {
+    const run = async (signal: AbortSignal): Promise<boolean> => {
       ctx.setBusy('adv:reset');
       try {
-        const done = await api.resetSettings();
+        const done = await api.resetSettings(signal);
         setBackup(done.backup); setText(null);
         await ctx.reload(); ctx.onProfile();
         toast({ icon: 'check', title: t('ui.set.adv.resetDone') });
@@ -182,10 +183,10 @@ export function AdvancedPanel() {
       finally { ctx.setBusy(null); }
     };
     try {
-      const [latest, preview] = await Promise.all([api.settings(), api.resetPreview()]);
-      const items = accessWidening(latest.config, preview.config);
-      if (items.length > 0) await ctx.ask({ row: 'adv:reset', items, title: t('ui.set.adv.resetWiden'), ok: t('ui.set.adv.reset') }, run);
-      else await run();
+      await checkThenRun(ctx.queue, async signal => {
+        const [latest, preview] = await Promise.all([api.settings(signal), api.resetPreview(signal)]);
+        return accessWidening(latest.config, preview.config);
+      }, accessKey, (items, go) => ctx.ask({ row: 'adv:reset', items: [...items], title: t('ui.set.adv.resetWiden'), ok: t('ui.set.adv.reset') }, go), run);
     } catch (error) { ctx.fail('adv:reset', errorText(error, t('ui.set.adv.resetFailed'))); }
   };
   const broken = ctx.view.configError;
@@ -206,7 +207,7 @@ export function AdvancedPanel() {
             <span className="ui-confirm__buttons">
               <Button small variant="primary" disabled={ctx.busy !== null} onClick={() => void save()}>{t('ui.set.save')}</Button>
               <Button small variant="ghost" disabled={ctx.busy !== null} onClick={() => void open()}>{t('ui.set.revert')}</Button>
-              <Button small variant="ghost" onClick={() => { setText(null); ctx.cancel(); }}>{t('ui.close')}</Button>
+              <Button small variant="ghost" onClick={() => ctx.guard(() => { setText(null); ctx.cancel(); })}>{t('ui.close')}</Button>
             </span>
           </div>
         )}>

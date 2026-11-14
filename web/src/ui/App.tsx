@@ -18,7 +18,7 @@ import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending }
 import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
 import { awaitingProduct, productsMissing, projectLoads, settleLeave } from './product-nav.ts';
-import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, type Route } from './routes.ts';
+import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settingsDepth, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
 import { Memory } from './screens/Memory.tsx';
@@ -37,7 +37,7 @@ import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
 import { Button, Notice } from './parts.tsx';
-import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
+import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, SETTINGS_EDITS, settingsHold, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_NOTICES: RunNotice[] = [];
@@ -108,10 +108,13 @@ export function App() {
   drawerRef.current = drawer;
   const menuButton = useRef<HTMLButtonElement | null>(null);
   const settingsOpener = useRef<Element | null>(null);
+  const settingsStart = useRef<number | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
   const [leave, setLeave] = useState<HeldLeave | null>(null);
+  const [settingsLeave, setSettingsLeave] = useState<HeldLeave | null>(null);
+  const settingsHeld = useMemo(() => (settingsLeave ? () => { setSettingsLeave(null); followLeave(settingsLeave, historyIndex(), LEAVE_ENV); } : null), [settingsLeave]);
   const entryIndex = useRef(historyIndex());
   const entryHash = useRef(location.hash);
 
@@ -167,7 +170,8 @@ export function App() {
   const closer = useMemo(() => settingsCloser({
     hasBehind: () => behindRef.current !== null,
     behindHash: () => routeHash(behindRef.current ?? HOME),
-    back: () => history.back(),
+    depth: () => settingsDepth(settingsStart.current, historyIndex()),
+    back: by => history.go(-by),
     replace: hash => location.replace(hash),
     currentHash: () => location.hash,
     generation: () => hashGeneration.current,
@@ -211,6 +215,8 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       const next = readRoute();
+      const hold = settingsHold(hasUnsavedEdits(SETTINGS_EDITS), viewRef.current, entryHash.current, next, entryIndex.current, historyIndex());
+      if (hold) { setSettingsLeave(hold.leave); holdLeave(hold.leave.moved, hold.back, LEAVE_ENV); return; }
       const held = behindRef.current;
       const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
       if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
@@ -223,7 +229,7 @@ export function App() {
       entryHash.current = location.hash;
       hashGeneration.current += 1;
       closer.reset();
-      if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;
+      if (next.view === 'settings' && viewRef.current !== 'settings') { settingsOpener.current = document.activeElement; settingsStart.current = historyIndex(); }
       setRoute(next);
       if (drawerRef.current) {
         setDrawer(false);
@@ -289,6 +295,7 @@ export function App() {
     const closed = wasSettingsOpen.current && !settingsOpen;
     wasSettingsOpen.current = settingsOpen;
     if (!closed) return;
+    setSettingsLeave(null);
     const opener = settingsOpener.current;
     settingsOpener.current = null;
     focusFirst(opener, document.querySelector('[data-settings-button]'), menuButton.current);
@@ -437,7 +444,7 @@ export function App() {
       {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={shut} />}
       <TabBar route={behind} kanban={kanban} pending={pendingAll} covered={covered} />
       {settingsOpen && onboard === null && (
-        <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
+        <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} held={settingsHeld} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
       )}
       {onboard !== null && <Onboarding profile={profile} replay={onboard === 'replay'} start={onboard === 'first' && setup ? resumeIndex(setup.steps) : 0} onProfile={load.profile} onDone={finishOnboard} onSkip={closeOnboard} />}
       {leave !== null && (
