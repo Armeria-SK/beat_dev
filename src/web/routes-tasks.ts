@@ -162,6 +162,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const task = getTask(params[0]!);
     const text = requireString(requireObject(await readJson(req)), 'text', { max: 20_000 })!;
     if (task.status !== 'waiting') throw problem(409, 'task', 'not_waiting');
+    if (task.waiting_kind === 'approval') taskProblem(new TaskError('error.waiting_pending'));
     app.tasks.event(task.id, 'answer', 'user', taskText(languageOf(app.config()), 'event.answer', { question: task.waiting_text ?? '', text }));
     const updated = app.tasks.setReady(task.id, { actor: 'user' });
     app.kv.delete(splitKey(task.id));
@@ -173,7 +174,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     let task = getTask(params[0]!);
     try {
       if (task.status === 'running') throw new TaskError('error.running');
-      if (task.status === 'waiting') throw new TaskError('error.waiting_answer');
+      if (task.status === 'waiting') throw new TaskError(task.waiting_kind === 'approval' ? 'error.waiting_pending' : 'error.waiting_answer');
       if (task.status === 'scheduled') {
         const child = app.tasks.spawnNow(task.id);
         if (!child) throw new TaskError('error.previous_unfinished');
