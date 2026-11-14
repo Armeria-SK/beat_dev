@@ -58,3 +58,9 @@ test('ui/agent-state: 足の 1 行は、待ち → 一覧のある動き（Build
   assert.deepEqual(footLine(NONE, true, [], null), { kind: 'running', title: null });
   assert.deepEqual(footLine(NONE, false, list, 'x'), { kind: 'idle' });
 });
+
+test('ui/agent-state: Pending の承認を待つタスクは返事待ちに数えない（Pending の数で 1 つだけ数える。beat 5-u2）', () => {
+  const tasks = [['t1', 'waiting', 'approval'], ['t2', 'waiting', 'question'], ['t3', 'waiting']] as const;
+  assert.deepEqual(countTasks(tasks), { proposals: 0, answers: 2 });
+  assert.equal(waitingTotal({ ...NONE, ...countTasks([['t1', 'waiting', 'approval']]), pending: 1 }), 1, 'Pending の 1 行で止まったタスクは合計 1');
+});

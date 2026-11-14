@@ -23,6 +23,16 @@ export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id'>): Col
 
 export const questionsRoute = (task: Pick<Task, 'project_id'>): Route => (task.project_id ? { view: 'questions', productId: task.project_id } : { view: 'questions' });
 
+export const pendingRoute = (task: Pick<Task, 'project_id'>): Route => (task.project_id ? { view: 'pending', productId: task.project_id } : { view: 'pending' });
+
+export const waitsOnPending = (task: Pick<Task, 'status' | 'waiting_kind'>): boolean => task.status === 'waiting' && task.waiting_kind === 'approval';
+
+export function pendingWait(task: Pick<Task, 'status' | 'waiting_kind' | 'waiting_text' | 'project_id'>): { refs: string; route: Route } | null {
+  if (!waitsOnPending(task)) return null;
+  const refs = [...new Set(task.waiting_text?.match(/#\d+/gu) ?? [])].join(', ');
+  return { refs, route: pendingRoute(task) };
+}
+
 export const finishedAt = (task: Pick<Task, 'completed_at' | 'updated_at'>): number => task.completed_at ?? task.updated_at;
 
 export interface Step { step: number; total: number }
