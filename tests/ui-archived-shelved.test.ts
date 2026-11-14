@@ -7,7 +7,10 @@ const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 
 
 test('ui/Archived: しまった製品の一覧は届くまで null のまま札を決め、読めなければ空にする。Restore は要るときだけ読みに行く（backlog 308）', () => {
   assert.match(source, /useState<Project\[\] \| null>\(null\)/u, '届いていないことを空の一覧と分ける');
-  assert.match(source, /productLine\(c\.project_id, projects, shelved\)/u, '札は届いた一覧（または null）で決める');
+  assert.match(source, /productLine\(c\.project_id, projects, shelved, projectsLoaded\)/u, '札は届いた一覧（または null）で決める。動いている製品の一覧が届く前は決めない（backlog 502）');
+  assert.match(source, /productLine\(c\.project_id, projects, known, projectsLoaded\)/u, 'Restore のあとの文も同じ');
+  const app = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'App.tsx'), 'utf8');
+  assert.ok(app.includes('<Archived revision={live.libraryRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} />'), 'App が届いたかどうかを渡す');
   assert.match(source, /api\.projects\(true\)\.then\(r => setShelved\(r\.projects\)\)\.catch\(\(\) => setShelved\(old => old \?\? \[\]\)\)/u, '初めて読めなければ名前なしの札に戻し、前に読めた一覧は消さない');
   assert.match(source, /needsShelved\(c\.project_id, projects, shelved\)/u, 'Restore で読みに行くかは needsShelved で決める');
 });
