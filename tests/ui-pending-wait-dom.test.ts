@@ -123,3 +123,12 @@ test('ui/Kanban（DOM）: Pending 待ちのカードは「Waiting on Pending #12
     g.matchMedia = before;
   }
 });
+
+const { ToolGroup } = await loadTsx<{ ToolGroup: ComponentType<{ rows: unknown[]; isNew: (key: string) => boolean }> }>('../web/src/ui/ToolRow.tsx', import.meta.url);
+
+test('ui/ToolRow（DOM）: 結果が [E-n] の行だけなら「No output」を出し、中身があれば [E-n] ごとそのまま出す（5-3b-t の印）', async () => {
+  const row = (key: string, text: string) => ({ key, name: 'shell_run', input: JSON.stringify({ command: 'true' }), result: { text, isError: false } });
+  const { container } = await render(createElement(ToolGroup, { rows: [row('a', '\n[E-1]'), row('b', 'done\n[E-2]')], isNew: () => false }));
+  const outs = [...container.querySelectorAll('pre.ui-tool__out')].map(p => p.textContent);
+  assert.deepEqual(outs, ['No output', 'done\n[E-2]']);
+});

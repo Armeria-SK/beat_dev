@@ -234,7 +234,7 @@ export interface PersonaView { soul: string; user: string; tokens: { soul: numbe
 // source: 'os' は、鍵が .env ではなく OS の環境変数にある（ここからは消せない。末尾 4 文字も無い）
 export interface ProviderKeyState { set: boolean; last4?: string | null; source?: 'os' }
 // 外への通知（webhook）の送り先。URL・token の値は返らない（入っているかだけ）
-export type NotifyKind = 'task_done' | 'task_waiting' | 'task_failed' | 'approval_needed' | 'health_alert' | 'info';
+export type NotifyKind = 'task_done' | 'task_waiting' | 'task_failed' | 'approval_needed' | 'question_new' | 'health_alert' | 'info';
 export interface NotifyChannelView {
   id: string; kind: 'webhook'; enabled: boolean; kinds: NotifyKind[]; includeBody: boolean;
   urlEnv: string; tokenEnv: string | null; urlSet: boolean; tokenSet: boolean;
