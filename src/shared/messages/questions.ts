@@ -19,11 +19,11 @@ const en = {
   'invalid_choice': 'Choice {choice} is not one of the options',
   'fix_title': 'Answer to question #{id}: {question}',
   'fix_body': 'The owner answered a question from a task.\nQuestion: {question}\nAssumed answer: {assumed}\nOwner answer: {answer}\nChange the work so that it follows the owner answer.',
-  'fix_send': 'The owner answered that it may be sent.',
   'fix_item': 'This answer reopened acceptance item {item}. Its text and check stay as they are. If they no longer fit the answer, say in your summary which item and what should change, so the owner can change the list.',
   'no_item': 'There is no item {item} in the locked acceptance list of this product. Give the number of an item in that list (such as A-3), or leave item out',
   'assumed_none': '(none)',
   'untrusted_note': 'The question came from a run that read text from elsewhere, so this task carries text from elsewhere, and an option the owner picked is not used as the owner request.',
+  'untrusted_note_owner': 'The question came from a run that read text from elsewhere, so this task carries text from elsewhere. The owner answer is used as the owner request.',
   'reopen_reason': 'The owner answered question #{id}: {answer}',
   'list_open': 'Open questions:',
   'list_answered': 'Recent answers:',
@@ -32,13 +32,16 @@ const en = {
   'list_answered_line': '#{id} {question} (assumed: {assumed}; answer: {answer})',
   'submit_question': 'Send the form at {url}?',
   'submit_question_unknown': 'Send the form in the browser ({tool}; the page is not known)?',
-  'submit_why': '{tool} would submit a form, and nobody was watching this run to approve it, so it was not sent.',
+  'submit_why': '{tool} would submit a form, and nobody was watching this run to approve it, so it was not sent. beat cannot send it later on its own: to send it, open a conversation and send it there yourself.',
+  'submit_yourself': 'The owner answered "{answer}" to: {question} beat does not send it on its own. To send it, the owner opens a conversation and sends it there.',
   'submit_send': 'Send it',
   'submit_keep': 'Do not send',
   'legacy_why': 'The task was already waiting for your reply before questions were kept here.',
   'legacy_go': 'Go ahead',
   'legacy_stop': 'Stop here',
   'legacy_none': 'The task is waiting for your reply.',
+  'legacy_stopped': 'The owner chose to stop here.',
+
 } as const;
 
 export type QuestionMessageKey = keyof typeof en;

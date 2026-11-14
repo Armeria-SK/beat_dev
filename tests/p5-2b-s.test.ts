@@ -276,21 +276,151 @@ test('5-2b-s 前からある返事待ちのタスクを、起動時に 1 回 blo
   } finally { fourth.app.close(); }
 });
 
-test('5-2b-s 外を読んだ会話の古い返事待ちは、写した行も外を読んだ印を持つ', async t => {
+test('5-2b-s 写した行はいつも外を読んだ印を持つ: 外を読んだ印がタスクの実行（engine_runs）にだけあり、会話にも経過の文にも無くても', async t => {
   const { paths, databasePath } = prepare(t);
   const first = open(paths, databasePath);
   const conversation = first.app.conversations.create({ kind: 'task' });
   const task = first.app.tasks.create({ title: 'Read the web', origin: 'user', actor: 'user' });
   first.app.tasks.claim(task.id, 30 * MIN, conversation.id);
-  first.app.tasks.setWaiting(task.id, 'question', 'Follow the page?');
-  first.app.db.prepare('UPDATE conversations SET ever_tainted = 1 WHERE id = ?').run(conversation.id);
+  first.app.runs.start('run-web', 'task', conversation.id);
+  first.app.runs.markTainted('run-web');
+  first.app.tasks.setWaiting(task.id, 'question', 'Follow the page?', 'run-web');
   first.app.kv.delete('questions:legacy-waits-copied');
   first.app.close();
   const second = open(paths, databasePath);
   try {
+    assert.equal(second.app.conversations.everTainted(conversation.id), false, '会話には印が無い');
+    assert.equal(second.app.tasks.textTainted(task.id), false, '経過の文にも印が無い');
     const [row] = second.app.questions.list({ status: 'open', taskId: task.id });
     assert.equal(second.app.questions.get(row!.id)!.tainted, 1);
   } finally { second.app.close(); }
+});
+
+const taskRows = (app: App): string => JSON.stringify(app.db.prepare('SELECT * FROM tasks ORDER BY id').all());
+
+for (const count of [0, 1, 4]) {
+  test(`5-2b-s 古い返事待ちの写し（${count} 件）: 1 件ずつ 1 行に写し、タスクの行は 1 つも変えない。外を読んだ実行の待ちも同じ`, async t => {
+    const { paths, databasePath } = prepare(t);
+    const first = open(paths, databasePath);
+    const ids: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const conversation = first.app.conversations.create({ kind: 'task' });
+      const task = first.app.tasks.create({ title: `Wait ${i}`, origin: 'user', actor: 'user' });
+      first.app.tasks.claim(task.id, 30 * MIN, conversation.id);
+      if (i === 1) { first.app.runs.start(`run-${i}`, 'task', conversation.id); first.app.runs.markTainted(`run-${i}`); }
+      first.app.tasks.setWaiting(task.id, 'question', `Question ${i}?`);
+      ids.push(task.id);
+    }
+    first.app.tasks.create({ title: 'Not waiting', origin: 'user', actor: 'user' });
+    first.app.kv.delete('questions:legacy-waits-copied');
+    const before = taskRows(first.app);
+    first.app.close();
+    const second = open(paths, databasePath);
+    try {
+      assert.ok(second.logs.includes(`[INFO] Copied ${count} task(s) waiting for an answer into Questions (answer them there)`), second.logs.join('\n'));
+      assert.equal(taskRows(second.app), before, 'タスクの行は変えない');
+      for (const [i, id] of ids.entries()) {
+        const rows = second.app.questions.list({ status: 'open', taskId: id });
+        assert.deepEqual(rows.map(row => [row.question, row.blocking, second.app.questions.get(row.id)!.tainted]), [[`Question ${i}?`, true, 1]]);
+      }
+      assert.equal((second.app.db.prepare('SELECT COUNT(*) AS n FROM questions').get() as { n: number }).n, count);
+    } finally { second.app.close(); }
+  });
+}
+
+test('5-2b-s 見えない字だけの古い返事待ちでも起動は止まらず、決まりの文で写す', async t => {
+  const { paths, databasePath } = prepare(t);
+  const first = open(paths, databasePath);
+  const task = first.app.tasks.create({ title: 'Hidden wait', origin: 'user', actor: 'user' });
+  first.app.tasks.setWaiting(task.id, 'question', '​​');
+  first.app.kv.delete('questions:legacy-waits-copied');
+  first.app.close();
+  const second = open(paths, databasePath);
+  try {
+    assert.ok(second.logs.includes('[INFO] Copied 1 task(s) waiting for an answer into Questions (answer them there)'), second.logs.join('\n'));
+    assert.deepEqual(second.app.questions.list({ status: 'open', taskId: task.id }).map(row => row.question), ['The task is waiting for your reply.']);
+  } finally { second.app.close(); }
+});
+
+test('5-2b-s 写せない行があっても、ログに書いて飛ばし、ほかの行は写す', async t => {
+  const s = await setup(t);
+  const bad = s.app.tasks.create({ title: 'Bad wait', origin: 'user', actor: 'user' });
+  s.app.tasks.setWaiting(bad.id, 'question', 'Bad?');
+  const good = s.app.tasks.create({ title: 'Good wait', origin: 'user', actor: 'user' });
+  s.app.tasks.setWaiting(good.id, 'question', 'Good?');
+  const get = s.app.tasks.get.bind(s.app.tasks);
+  s.app.tasks.get = (id: string) => { if (id === bad.id) throw new Error('broken row'); return get(id); };
+  const logs: string[] = [];
+  let copied: number;
+  try { copied = s.app.questions.copyLegacyWaits(line => { logs.push(line); }); } finally { s.app.tasks.get = get; }
+  assert.equal(copied, 1);
+  assert.deepEqual(logs, [`[WARN] Could not copy the wait of task ${bad.id} into Questions: broken row`]);
+  assert.deepEqual(s.app.questions.list({ status: 'open', taskId: good.id }).map(row => row.question), ['Good?']);
+  assert.equal(s.app.questions.list({ status: 'open', taskId: bad.id }).length, 0);
+});
+
+test('5-2b-s 写した行で「Stop here」を選ぶと、返事待ちのタスクは取り消し、取り消し・完了のタスクは答えを残すだけ。直しのタスクは作らない（Go ahead は今までどおり）', async t => {
+  const s = await setup(t);
+  const make = (title: string) => {
+    const task = s.app.tasks.create({ title, origin: 'user', actor: 'user' });
+    s.app.tasks.setWaiting(task.id, 'question', `${title}?`);
+    return task;
+  };
+  const waiting = make('Keep going');
+  const held = make('Held');
+  const done = make('Finished');
+  const doneGo = make('Finished too');
+  assert.equal(s.app.questions.copyLegacyWaits(), 4);
+  s.app.tasks.finish(held.id, 'cancelled', null, 'user');
+  s.app.tasks.finish(done.id, 'done', 'finished', 'user');
+  s.app.tasks.finish(doneGo.id, 'done', 'finished', 'user');
+  const rowOf = (id: string) => s.app.questions.list({ status: 'open', taskId: id })[0]!;
+  const before = taskCount(s);
+
+  const stopped = await s.json(`/api/questions/${rowOf(waiting.id).id}/answer`, 'POST', { choice: 1 });
+  assert.equal(stopped.status, 200);
+  assert.deepEqual([stopped.body.fixTaskId, stopped.body.resumedTaskId], [null, null]);
+  assert.equal(s.app.tasks.get(waiting.id)!.status, 'cancelled', '返事待ちは取り消す');
+  assert.ok(s.app.tasks.events(waiting.id).some(e => e.kind === 'answer' && /Stop here/u.test(e.content ?? '')));
+
+  const heldAnswer = await s.json(`/api/questions/${rowOf(held.id).id}/answer`, 'POST', { choice: 1 });
+  assert.deepEqual([heldAnswer.body.fixTaskId, heldAnswer.body.resumedTaskId], [null, null]);
+  assert.equal(s.app.tasks.get(held.id)!.status, 'cancelled');
+
+  const doneAnswer = await s.json(`/api/questions/${rowOf(done.id).id}/answer`, 'POST', { choice: 1 });
+  assert.equal(doneAnswer.body.fixTaskId, null);
+  assert.equal(s.app.tasks.get(done.id)!.status, 'done');
+  assert.equal(taskCount(s), before, 'Stop here ではタスクを作らない');
+
+  const go = await s.json(`/api/questions/${rowOf(doneGo.id).id}/answer`, 'POST', { choice: 0 });
+  assert.notEqual(go.body.fixTaskId, null, 'Go ahead は今までどおり（終わったタスクには直しのタスク）');
+});
+
+test('5-2b-s stuck の行は、外を読んだタスクの実行の印を引き継ぐ', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Web job', origin: 'user', actor: 'user' });
+  for (const wait of [15 * MIN, 30 * MIN, 0]) {
+    s.adapter().scripts.push(reply('thinking'));
+    await s.app.worker.tick();
+    if (wait === 15 * MIN) s.app.db.prepare("UPDATE engine_runs SET tainted = 1 WHERE conversation_id = ? AND kind = 'task'").run(s.app.tasks.get(task.id)!.conversation_id);
+    s.clock.now += wait;
+  }
+  const [row] = s.app.questions.list({ status: 'open', taskId: task.id });
+  assert.equal(row!.kind, 'stuck');
+  assert.equal(s.app.questions.get(row!.id)!.tainted, 1);
+});
+
+test('5-2b-s 取り消したタスクの開いた急ぐ質問の知らせは、読むまで上に残る', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Cancel me', origin: 'user', actor: 'user' });
+  s.adapter().scripts.push(s.blocking('Which colour?'));
+  await s.app.worker.tick();
+  const pinned = () => s.app.notifications.list(0).filter(n => n.kind === 'question_new');
+  assert.equal(pinned().length, 1);
+  await s.json(`/api/tasks/${task.id}/cancel`, 'POST');
+  s.app.settleStaleNotifications();
+  assert.equal(s.app.tasks.get(task.id)!.status, 'cancelled');
+  assert.deepEqual(pinned().map(n => n.read_at), [null]);
 });
 
 test('5-2b-s 人のいない実行のフォームの送信は断り、質問票に 1 行（仮の選択 = 送らない）。同じ URL で 2 行にならず、違う URL なら別の行', async t => {
@@ -317,7 +447,7 @@ test('5-2b-s 人のいない実行のフォームの送信は断り、質問票�
   assert.deepEqual(rows.map(r => r.question), ['Send the form at https://example.com/other?', 'Send the form at https://example.com/book?']);
 });
 
-test('5-2b-s 送信を断った行は、ページが分からないときも 1 行（道具の名前で書く）。外を読んだ行で「Send it」を選んでも、直しのタスクの頼みは持ち主の答え（コードの選択肢）', async t => {
+test('5-2b-s 送信を断った行は、ページが分からないときも 1 行（道具の名前で書く）。「Send it」を選んでも直しのタスクは作らず、会話から自分で送るよう経過に書く', async t => {
   sent.length = 0;
   const s = await setup(t, [...builtinTools(), formSend]);
   const task = s.app.tasks.create({ title: 'Send it', origin: 'user', actor: 'user' });
@@ -327,8 +457,25 @@ test('5-2b-s 送信を断った行は、ページが分からないときも 1 �
   const rows = s.app.questions.list({ status: 'open', taskId: task.id });
   assert.deepEqual(rows.map(r => r.question), ['Send the form in the browser (form_send; the page is not known)?']);
   assert.equal(s.app.questions.get(rows[0]!.id)!.tainted, 1);
+  const before = taskCount(s);
   const answered = await s.json(`/api/questions/${rows[0]!.id}/answer`, 'POST', { choice: 0 });
-  const fix = s.app.tasks.get(answered.body.fixTaskId)!;
-  assert.match(fix.body, /The owner answered that it may be sent\./u);
-  assert.equal(s.app.tasks.judgeRequest(fix.id), 'Send it');
+  assert.equal(answered.status, 200);
+  assert.equal(answered.body.fixTaskId, null);
+  assert.equal(taskCount(s), before, '直しのタスクを作らない');
+  assert.ok(s.app.tasks.events(task.id).some(e => e.kind === 'answer' && /opens a conversation and sends it there/u.test(e.content ?? '')));
+  assert.match(s.app.questions.get(rows[0]!.id)!.why ?? '', /send it there yourself/u);
 });
+
+test('5-2b-s 送信を断った行の URL は送り先とパスだけ（問い合わせ・#・利用者名を外す）。同じページなら 1 行で、外を読んだ印は足す。1 タスク 10 行まで', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Many forms', origin: 'user', actor: 'user' });
+  const add = (url: string, tainted: boolean) => s.app.questions.addSubmitRefused({ taskId: task.id, projectId: null, conversationId: null, tool: 'form_send', url, tainted });
+  const first = add('https://someone:hunter2@example.com/book?token=abc123#step', false);
+  assert.equal(first.row.question, 'Send the form at https://example.com/book?');
+  assert.equal(first.row.tainted, 0);
+  const again = add('https://example.com/book?token=other', true);
+  assert.deepEqual([again.added, again.row.id, again.row.tainted], [false, first.row.id, 1]);
+  for (let i = 0; i < 15; i += 1) add(`https://example.com/page${i}`, false);
+  assert.equal((s.app.db.prepare("SELECT COUNT(*) AS n FROM questions WHERE task_id = ? AND kind = 'submit_refused'").get(task.id) as { n: number }).n, 10);
+});
+

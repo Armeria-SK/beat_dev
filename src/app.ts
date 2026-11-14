@@ -355,8 +355,15 @@ export class App {
 
   #copyLegacyWaits(): void {
     if (this.kv.get(LEGACY_WAITS_COPIED)) return;
-    const copied = this.questions.copyLegacyWaits(id => this.conversations.everTainted(id));
+    let copied: number;
+    try {
+      copied = this.questions.copyLegacyWaits(this.log);
+    } catch (error) {
+      this.log(`[WARN] Could not copy tasks waiting for an answer into Questions: ${(error as Error).message}`);
+      return;
+    }
     this.kv.set(LEGACY_WAITS_COPIED, String(Date.now()));
+
     this.log(`[INFO] Copied ${copied} task(s) waiting for an answer into Questions (answer them there)`);
   }
 

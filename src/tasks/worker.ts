@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schema.ts';
 import type { Conversations } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
+import { Runs } from '../db/runs.ts';
 import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
@@ -195,7 +196,13 @@ export class Worker {
     this.#timer.unref?.();
   }
 
+  #taskTainted(taskId: string): boolean {
+    const conversationId = this.#d.tasks.get(taskId)?.conversation_id ?? null;
+    return this.#d.tasks.textTainted(taskId) || (conversationId !== null && new Runs(this.#d.db).anyTaintedTask(conversationId));
+  }
+
   runsLastHour(): number {
+
     // タスクと振り返り（どちらも裏で動く実行）を数える。会話は数えない
     return (this.#d.db.prepare("SELECT COUNT(*) AS n FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ?").get(this.#now() - 3_600_000) as { n: number }).n;
   }
@@ -458,7 +465,7 @@ export class Worker {
       const failures = tasks.checkFailures(task.id);
       if (failures.count >= CHECK_FAIL_LIMIT) {
         const text = CHECK_TEXT[language];
-        this.#d.questions?.add({ kind: 'check_failed', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: text.question(task.title), why: text.why(failures.last), options: CHECK_OPTIONS, chosen: CHECK_KEEP });
+        this.#d.questions?.add({ kind: 'check_failed', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: text.question(task.title), why: text.why(failures.last), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
       }
       notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: control.reason, link, dedupKey: `failed:${task.id}:${now}`, projectId });
       return;
@@ -505,7 +512,7 @@ export class Worker {
         this.#d.kv.delete(idleKey);
         const reason = taskText(language, 'stuck.reason', { strikes });
         tasks.finish(task.id, 'failed', reason, 'beat', runId);
-        this.#d.questions?.add({ kind: 'stuck', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: taskText(language, 'stuck.question', { title: task.title, strikes }), why: taskText(language, 'stuck.why'), options: CHECK_OPTIONS, chosen: CHECK_KEEP });
+        this.#d.questions?.add({ kind: 'stuck', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: taskText(language, 'stuck.question', { title: task.title, strikes }), why: taskText(language, 'stuck.why'), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
         notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: reason, link, dedupKey: `failed:${task.id}:${now}`, projectId });
       } else {
         tasks.setReady(task.id, { runAt: now + 15 * 60_000 * 2 ** (strikes - 1), reason: taskText(language, 'reason.no_progress') });
