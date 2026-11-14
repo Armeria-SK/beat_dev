@@ -1,6 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { questionText, type QuestionMessageKey } from '../shared/messages/questions.ts';
+import type { AcceptanceStore } from '../projects/acceptance.ts';
+import type { ProjectStore } from '../projects/store.ts';
+import type { TaskStore } from '../tasks/store.ts';
 
 export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
 export type QuestionStatus = 'open' | 'answered';
@@ -102,6 +105,9 @@ export interface QuestionChange { id: number; projectId: string | null; status: 
 export interface QuestionStoreOptions {
   now?: (() => number) | undefined;
   onChange?: ((change: QuestionChange) => void) | undefined;
+  tasks?: TaskStore | undefined;
+  projects?: ProjectStore | undefined;
+  acceptance?: AcceptanceStore | undefined;
 }
 
 export class QuestionStore {

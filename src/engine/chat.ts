@@ -777,14 +777,14 @@ export class ChatEngine {
     if (kind === 'task' && tools) {
       let inner = false;
       ctx.runTool = async (name, input) => {
-        if (inner) return { content: gateText(languageOf(config), 'run_tool.nested'), isError: true };
+        if (inner) return { output: { content: gateText(languageOf(config), 'run_tool.nested'), isError: true }, decision: 'deny', decidedBy: 'run_tool' };
         inner = true;
         try {
           counters.toolCalls++;
           if (!name.startsWith('task_')) counters.workCalls++;
-          const outcome = await callTool({ id: `code_${randomUUID()}`, name, arguments: input });
+          const { output, decision, decidedBy, gate } = await callTool({ id: `code_${randomUUID()}`, name, arguments: input });
           recordTaint();
-          return outcome.output;
+          return { output, decision, decidedBy, ...(gate ? { gate } : {}) };
         } finally { inner = false; }
       };
     }

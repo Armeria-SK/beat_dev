@@ -207,7 +207,7 @@ export class App {
       planHash: id => { try { return this.plans.view(id).hash; } catch { return null; } },
     });
     this.acceptance.repairAll(this.log);
-    this.questions = new QuestionStore(this.db, { now, onChange: change => this.bus.publish({ type: 'question.changed', ...change }) });
+    this.questions = new QuestionStore(this.db, { now, onChange: change => this.bus.publish({ type: 'question.changed', ...change }), tasks: this.tasks, projects: this.projects, acceptance: this.acceptance });
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log, () => this.registry.secrets());
