@@ -23,7 +23,7 @@ const ROW = /^- (\S+) — (.+?)(?:\. entry: (\S+))?(?: \\?\[by (conversation|tas
 export const marker = (by: RowAuthor, at: string | null, external: boolean): string =>
   by === 'owner' ? '' : ` [by ${by}${at ? `, at ${at}` : ''}${external ? ', src: external' : ''}]`;
 
-export const cleanLine = (raw: string): string => plainLine(raw, Infinity);
+export const cleanLine = (raw: string): string => plainLine(raw, Infinity).replace(/-{5,}/gu, '----');
 
 export function refuseSecret(text: string, field: string): void {
   if (sanitizeModelInputText(text).redaction_count > 0) throw new MeshWriteError('secret', { field });

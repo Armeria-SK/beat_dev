@@ -430,3 +430,21 @@ test('5-5a 再審査の直し: 結合文字を使う名前（デーヴァナー�
   for (const good of ['cafe\u0301', 'हिन्दी', 'か\u3099な', 'كَتَبَ', 'docs/मराठी']) assert.equal(cleanRelPath(good), good, JSON.stringify(good));
   for (const bad of ['x\uFE0F', 'x\uFE00', 'a\u034Fb', 'x\u{E0100}', 'x\u{E01EF}']) assert.equal(cleanRelPath(bad), undefined, JSON.stringify(bad));
 });
+
+test('5-5a-d 審査の直し 1（MAP.md・GLOSSARY.md）: 鍵の囲みの印を 2 つの行に分けても、間の持ち主の行は mesh_read で伏せられない', async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.dir, 'plan.md'), '# plan\n');
+  assert.equal((await f.run('mesh_map_set', { path: 'docs', what: 'Notes -----BEGIN RSA PRIVATE KEY----- here' })).output.isError, undefined);
+  writeFileSync(join(f.dir, 'MAP.md'), `${f.mapText().replace(/\n*$/u, '')}\n- web — The owner's screens\n`);
+  assert.equal((await f.run('mesh_map_set', { path: 'src', what: 'Code -----END RSA PRIVATE KEY----- there' })).output.isError, undefined);
+  assert.doesNotMatch(f.mapText(), /-{5}/u, f.mapText());
+  const map = await f.run('mesh_read', { file: 'MAP.md' });
+  assert.match(map.output.content, /- web — The owner's screens/u, map.output.content);
+  assert.equal((await f.run('mesh_glossary_set', { term: 'start -----BEGIN PRIVATE KEY-----', points_to: 'docs' })).output.isError, undefined);
+  const glossary = join(f.dir, 'GLOSSARY.md');
+  writeFileSync(glossary, `${readFileSync(glossary, 'utf8').replace(/\n*$/u, '')}\n- the shop → web\n`);
+  assert.equal((await f.run('mesh_glossary_set', { term: 'end -----END PRIVATE KEY-----', points_to: 'plan.md' })).output.isError, undefined);
+  assert.doesNotMatch(readFileSync(glossary, 'utf8'), /-{5}/u);
+  const read = await f.run('mesh_read', { file: 'GLOSSARY.md' });
+  assert.match(read.output.content, /- the shop → web/u, read.output.content);
+});

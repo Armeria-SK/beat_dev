@@ -74,8 +74,10 @@ export const meshDecisionAdd: ToolDef<{ decision: string }> = {
     const by = writer(ctx);
     if (!by.external && ctx.task) by.external = ctx.services?.tasks?.textTainted(ctx.task.id) === true;
     try {
-      const { hidden } = addAiDecision(ctx.paths.projects, ctx.project.id, { date: dateIn(Date.now(), ctx.config.timezone), text: input.decision, writer: by });
-      const saved = meshWriteText(language, by.external ? 'decision_saved_external' : 'decision_saved');
+      const { hidden, lineMoved } = addAiDecision(ctx.paths.projects, ctx.project.id, { date: dateIn(Date.now(), ctx.config.timezone), text: input.decision, writer: by });
+      const saved = lineMoved
+        ? `${meshWriteText(language, 'decision_saved_old')}${by.external ? `. ${meshWriteText(language, 'decision_external_note')}` : ''}`
+        : meshWriteText(language, by.external ? 'decision_saved_external' : 'decision_saved');
       return { content: hidden ? `${saved}. ${meshWriteText(language, 'decision_hidden')}` : saved };
     } catch (error) {
       if (error instanceof MeshWriteError) return { content: errorText(error, language), isError: true };
