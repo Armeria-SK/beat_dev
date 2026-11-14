@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
@@ -46,7 +46,9 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
     adapterOverride: p => (adapter = new FakeAdapter(p)),
   });
   await app.status.probeAll(app.config());
-  t.after(() => app.close());
+  let closed = false;
+  const close = () => { if (!closed) { closed = true; app.close(); } };
+  t.after(close);
   const product = (name: string, checkCommand: string | null = 'node check.js') => {
     const root = join(tempDir(t), name);
     mkdirSync(root, { recursive: true });
@@ -59,7 +61,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
     return app.conversations.messages(cid).filter(m => m.role === 'tool').map(m => ({ text: m.text, isError: (m.message as { isError?: boolean }).isError === true }));
   };
   const events = (taskId: string, kind: string) => app.tasks.events(taskId).filter(e => e.kind === kind);
-  return { app, adapter: () => adapter, clock, product, runs, toolTexts, events, dataDir: paths.data };
+  return { app, adapter: () => adapter, clock, product, runs, toolTexts, events, dataDir: paths.data, close };
 }
 
 async function runTask(s: Awaited<ReturnType<typeof setup>>, id: string, scripts: Script[]) {
@@ -507,15 +509,15 @@ test('5-3a: 読めない check_command は完了させず、持ち主に直し�
   await runTask(s, task.id, [toolCall('task_complete', { summary: 'x', notify: false })]);
   const last = s.toolTexts(task.id).at(-1)!;
   assert.equal(last.isError, true);
-  assert.match(last.text, /check command in the project settings is not valid/u);
+  assert.match(last.text, /check command cannot run/u);
   assert.notEqual(s.app.tasks.get(task.id)!.status, 'done');
   assert.equal(s.runs(root), 0);
 });
 
-test('5-3a: 会話に譲ったあとでも、持ち主がタスクを取り消すと動いている確かめは止まる', async t => {
+test('5-3a: 会話に譲ったあとでも、持ち主がタスクを取り消すと動いている確かめは止まる', { timeout: 30_000 }, async t => {
   const s = await setup(t);
   const { row, root } = s.product('shop', 'node hang.js');
-  writeFileSync(join(root, 'hang.js'), "require('fs').writeFileSync('started', ''); setInterval(() => {}, 1000);");
+  writeFileSync(join(root, 'hang.js'), "require('fs').writeFileSync('started', ''); setTimeout(() => process.exit(0), 20000);");
   const task = s.app.tasks.create({ title: 'slow', origin: 'user', projectId: row.id, actor: 'user' });
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'done?', notify: false }));
   s.app.worker.requestRun(task.id);
@@ -533,4 +535,67 @@ test('5-3a: 会話に譲ったあとでも、持ち主がタスクを取り消�
   assert.ok(Date.now() - start < 5000, `took ${Date.now() - start} ms`);
   assert.equal(s.app.tasks.get(task.id)!.status, 'cancelled');
   assert.equal(s.events(task.id, 'check_failed').length + s.events(task.id, 'check_passed').length, 0);
+});
+
+async function preemptDuringCheck(s: Awaited<ReturnType<typeof setup>>, script: string) {
+  const { row, root } = s.product('shop', 'node hold.js');
+  writeFileSync(join(root, 'hold.js'), script);
+  const task = s.app.tasks.create({ title: 'slow', origin: 'user', projectId: row.id, actor: 'user' });
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'finished', notify: false }));
+  s.app.worker.requestRun(task.id);
+  const ticking = s.app.worker.tick();
+  await until(() => existsSync(join(root, 'started')), 'check started');
+  const runId = s.app.worker.status().runningAll[0]!.runId;
+  s.adapter().scripts.push(reply('hi'));
+  const sent = s.app.engine.send('owner-chat', 'hello');
+  assert.ok(sent.ok, JSON.stringify(sent));
+  await s.app.engine.wait(sent.runId);
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(s.app.engine.wasPreempted(runId), true);
+  return { root, task, runId, ticking };
+}
+
+const within = <T>(p: Promise<T>, ms: number, what: string) => Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(what)), ms).unref())]);
+
+test('5-3a: 会話に譲ったあとに持ち主が実行を止めると、確かめは止まり、タスクは完了にならない', { timeout: 30_000 }, async t => {
+  const s = await setup(t);
+  const { root, task, runId, ticking } = await preemptDuringCheck(s, "require('fs').writeFileSync('started', ''); setTimeout(() => process.exit(0), 3000);");
+  const start = Date.now();
+  assert.equal(s.app.engine.stop(runId), true);
+  assert.equal(await within(ticking, 10_000, 'run ended'), 'ran');
+  assert.ok(Date.now() - start < 2500, `took ${Date.now() - start} ms`);
+  assert.notEqual(s.app.tasks.get(task.id)!.status, 'done');
+  assert.equal(s.events(task.id, 'check_passed').length, 0);
+  assert.match(s.toolTexts(task.id).at(-1)!.text, /check command was stopped/u);
+  assert.ok(existsSync(root));
+});
+
+test('5-3a: 会話に譲ったあとに beat を閉じると、確かめのプロセスも止まる', { timeout: 30_000 }, async t => {
+  const s = await setup(t);
+  const { root, ticking } = await preemptDuringCheck(s, "const fs = require('fs'); fs.writeFileSync('started', ''); const armed = setInterval(() => { if (fs.existsSync('arm')) { clearInterval(armed); setTimeout(() => fs.writeFileSync('late.txt', 'x'), 400); } }, 20); setTimeout(() => process.exit(0), 20000);");
+  writeFileSync(join(root, 'arm'), '');
+  s.close();
+  await within(ticking.catch(() => 'closed'), 10_000, 'run ended');
+  await new Promise(r => setTimeout(r, 1500));
+  assert.equal(existsSync(join(root, 'late.txt')), false, 'the check outlived beat');
+});
+
+test('5-3a: 確かめのコマンドがあるのに製品のフォルダが無いときは、完了にも done にもしない', async t => {
+  const s = await setup(t);
+  const { row, root } = s.product('shop');
+  const viaRun = s.app.tasks.create({ title: 'run', origin: 'user', projectId: row.id, actor: 'user' });
+  await runTask(s, viaRun.id, [toolCall('task_complete', { summary: 'x', notify: false }, () => rmSync(root, { recursive: true, force: true }))]);
+  const last = s.toolTexts(viaRun.id).at(-1)!;
+  assert.equal(last.isError, true);
+  assert.match(last.text, /check command cannot run/u);
+  assert.notEqual(s.app.tasks.get(viaRun.id)!.status, 'done');
+  const viaChat = s.app.tasks.create({ title: 'chat', origin: 'user', projectId: row.id, actor: 'user' });
+  s.adapter().scripts.push(toolCall('task_update', { id: viaChat.id, status: 'done' }), reply('ok'));
+  const sent = s.app.engine.send('owner-chat', 'close it');
+  assert.ok(sent.ok, JSON.stringify(sent));
+  await s.app.engine.wait(sent.runId);
+  const refused = chatTools(s, 'owner-chat').at(-1)!;
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /has a check command/u);
+  assert.equal(s.app.tasks.get(viaChat.id)!.status, 'ready');
 });

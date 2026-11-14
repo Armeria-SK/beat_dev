@@ -101,6 +101,7 @@ export interface ToolContext {
   conversationId: string;
   kind: RunKind;
   signal: AbortSignal;
+  stopSignal?: AbortSignal | undefined;
   config: AppConfig;
   paths: AppPaths;
   policy: ScopePolicy;

@@ -122,6 +122,7 @@ export interface RunOptions {
   outputId?: string;
   input?: string;
   tailBytes?: number;
+  settleOnExit?: boolean;
 }
 
 export interface RunResult {
@@ -202,9 +203,10 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
         ...(opts.tailBytes ? { stdoutTail: tails.out.toString('utf8'), stderrTail: tails.err.toString('utf8') } : {}),
       });
     };
-    const settleSoon = () => {
+    const settleSoon = (reap = false) => {
       if (settled || grace) return;
       grace = setTimeout(() => {
+        if (reap) killTree(child);
         child.stdout?.destroy();
         child.stderr?.destroy();
         settle(child.exitCode);
@@ -222,7 +224,7 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
     child.on('error', error => { spawnError = error.message; });
     child.on('exit', () => {
       exited = true;
-      if (killed) settleSoon();
+      if (killed || opts.settleOnExit) settleSoon(!killed);
     });
     child.on('close', code => settle(code));
   });

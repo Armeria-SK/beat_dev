@@ -52,3 +52,17 @@ test('runProcess: tailBytes keeps the real end of output past the cap', async t 
   assert.match(result.stderrTail ?? '', /FINAL ERR LINE\n$/u);
   assert.ok((result.stdoutTail ?? '').length <= 2048);
 });
+
+for (const code of [0, 1]) {
+  test(`runProcess: settleOnExit returns the real exit code (${code}) soon after the command exits, even if a grandchild keeps stdout`, { timeout: 30_000 }, async () => {
+    const script = `require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], { stdio: 'inherit', detached: true }).unref(); console.log('leader done'); process.exit(${code});`;
+    const started = Date.now();
+    const result = await runProcess(process.execPath, ['-e', script], { cwd: process.cwd(), env: scrubEnv(), timeoutMs: 6000, signal: new AbortController().signal, maxBytes: 10_000, settleOnExit: true });
+    const took = Date.now() - started;
+    assert.ok(took < 4000, `took ${took} ms`);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.aborted, false);
+    assert.equal(result.exitCode, code);
+    assert.match(result.stdout, /leader done/u);
+  });
+}

@@ -1,5 +1,4 @@
-import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schema.ts';
-import { engineText } from '../shared/messages/engine.ts';
+import type { AppConfig, Language } from '../config/schema.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { isInside } from '../tools/hooks/scope.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../tools/shell/git-env.ts';
@@ -25,10 +24,11 @@ export type CheckResult =
 export function productCheck(projects: ProjectStore | undefined, projectId: string | null): ProductCheck | 'invalid' | undefined {
   if (!projectId) return undefined;
   const row = projects?.get(projectId);
-  if (!row || folderMissing(row)) return undefined;
+  if (!row) return undefined;
   let command: string | null;
   try { command = checkCommandOf(row.check_command); } catch { return 'invalid'; }
-  return command ? { command, root: row.root } : undefined;
+  if (!command) return undefined;
+  return folderMissing(row) ? 'invalid' : { command, root: row.root };
 }
 
 const tailOf = (text: string): string => {
@@ -52,11 +52,11 @@ export async function runProductCheck(check: ProductCheck, options: { config: Ap
   let result;
   try {
     result = await runProcess(shell.file, shell.args(check.command), {
-      cwd: check.root, env, timeoutMs: options.timeoutMs ?? CHECK_TIMEOUT_MS, signal: options.signal, maxBytes: HEAD_BYTES, tailBytes: TAIL_BYTES,
+      cwd: check.root, env, timeoutMs: options.timeoutMs ?? CHECK_TIMEOUT_MS, signal: options.signal, maxBytes: HEAD_BYTES, tailBytes: TAIL_BYTES, settleOnExit: true,
       ...(shell.stdin ? { input: shell.stdin(check.command) } : {}),
     });
   } finally { cleanup(); }
-  if (result.aborted) return { ok: false, reason: 'aborted' };
+  if (result.aborted || options.signal.aborted) return { ok: false, reason: 'aborted' };
   if (!result.spawnError && !result.timedOut && result.exitCode === 0) return { ok: true, durationMs: result.durationMs };
   const out = result.stdoutTail ?? result.stdout;
   const err = result.stderrTail ?? result.stderr;
@@ -64,20 +64,19 @@ export async function runProductCheck(check: ProductCheck, options: { config: Ap
   return { ok: false, reason: result.spawnError ? 'spawn' : result.timedOut ? 'timeout' : 'failed', exitCode: result.exitCode, tail: parts.join('\n'), durationMs: result.durationMs };
 }
 
-const PREEMPTED = engineText(DEFAULT_LANGUAGE, 'run.preempted');
 const OWNER_POLL_MS = 1000;
 
-export function checkSignal(run: AbortSignal, stillRunning: () => boolean): { signal: AbortSignal; dispose: () => void } {
+export function checkSignal(stop: AbortSignal, stillRunning: () => boolean): { signal: AbortSignal; dispose: () => void } {
   const own = new AbortController();
-  const fromRun = () => { if (!(run.reason instanceof Error && run.reason.message === PREEMPTED)) own.abort(run.reason); };
+  const fromStop = () => own.abort(stop.reason);
   const poll = setInterval(() => {
     let running = false;
     try { running = stillRunning(); } catch { running = false; }
     if (!running) own.abort(new Error('task no longer running'));
   }, OWNER_POLL_MS);
   poll.unref?.();
-  if (run.aborted) fromRun(); else run.addEventListener('abort', fromRun, { once: true });
-  return { signal: own.signal, dispose: () => { clearInterval(poll); run.removeEventListener('abort', fromRun); } };
+  if (stop.aborted) fromStop(); else stop.addEventListener('abort', fromStop, { once: true });
+  return { signal: own.signal, dispose: () => { clearInterval(poll); stop.removeEventListener('abort', fromStop); } };
 }
 
 type Failed = Extract<CheckResult, { reason: 'failed' | 'timeout' | 'spawn' }>;
@@ -120,7 +119,7 @@ export const CHECK_TEXT: Record<Language, CheckText> = {
     ].join('\n'),
     reason: failed => `The product's check command failed ${CHECK_FAIL_LIMIT} times in a row (${CHECK_TEXT.en.outcome(failed)})`,
     event: (failed, attempt) => [`Check command failed (failure ${attempt} of ${CHECK_FAIL_LIMIT} in a row): ${CHECK_TEXT.en.outcome(failed)}`, failed.tail.length > EVENT_TAIL_CHARS ? `…${failed.tail.slice(-EVENT_TAIL_CHARS)}` : failed.tail].filter(Boolean).join('\n'),
-    invalid: "The product's check command in the project settings is not valid, so the task cannot be completed. Ask the owner to fix it in the project settings.",
+    invalid: "The product's check command cannot run (the command in the project settings is not valid, or the product folder is missing), so the task cannot be completed. Ask the owner to fix it in the project settings.",
     already: 'This run has already recorded how the task ends. End this run here (do no further work).',
     selfDone: 'Use task_complete to finish the task you are working on; task_update cannot mark it done.',
     doneChildren: count => `${count} task(s) made from this task are not finished yet, so it cannot be marked done.`,

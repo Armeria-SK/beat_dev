@@ -178,7 +178,7 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
     if (check === 'invalid') return { content: text.invalid, isError: true };
     let passed = '';
     if (tasks && check) {
-      const stop = checkSignal(ctx.signal, () => tasks.get(taskId)?.status === 'running');
+      const stop = checkSignal(ctx.stopSignal ?? ctx.signal, () => tasks.get(taskId)?.status === 'running');
       let run;
       try { run = await runProductCheck(check, { config: ctx.config, dataDir: ctx.paths.data, signal: stop.signal }); } finally { stop.dispose(); }
       if (!run.ok && run.reason === 'aborted') return { content: text.stopped, isError: true };
