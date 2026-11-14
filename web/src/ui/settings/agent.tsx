@@ -4,6 +4,7 @@ import { toast } from '../../feedback.ts';
 import { formatRelative, getLanguage, useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
 import { probeMessage, serverText } from '../../server-text.ts';
+import type { Access } from '../../settings/access.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
   addModel, keyEnvPatch, keyEnvProblem, keyEnvUnsafe, kindPatch, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
@@ -12,7 +13,7 @@ import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
-import { planKey } from './commit.ts';
+import { planKeyFor } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
 import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
 
@@ -89,18 +90,22 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
   async function send(confirmed: string | null): Promise<boolean> {
     const value = trimKey(key);
     if (!value) return false;
-    const plan = planKey(provider, confirmed);
-    if (plan.kind === 'none') return false;
-    if (plan.kind === 'confirm') return ctx.ask({ row: k, items: plan.items, title: t('ui.set.key.confirmTitle'), ok: t('ui.set.key.confirmOk') }, () => send(plan.key));
     ctx.setBusy(k); ctx.clear(k);
+    let confirm: { items: Access[]; key: string };
     try {
-      setState(await api.setProviderKey(id, value));
-      setKey(''); setEntering(false);
-      toast({ icon: 'check', title: t('ui.set.key.saved') });
-      await ctx.reload();
-      return true;
+      const plan = planKeyFor((await api.settings()).config, id, confirmed);
+      if (plan.kind === 'none') { ctx.fail(k, t('ui.set.key.failed')); return false; }
+      if (plan.kind === 'send') {
+        setState(await api.setProviderKey(id, value));
+        setKey(''); setEntering(false);
+        toast({ icon: 'check', title: t('ui.set.key.saved') });
+        await ctx.reload();
+        return true;
+      }
+      confirm = plan;
     } catch (error) { ctx.fail(k, errorText(error, t('ui.set.key.failed'))); return false; }
     finally { ctx.setBusy(null); }
+    return ctx.ask({ row: k, items: confirm.items, title: t('ui.set.key.confirmTitle'), ok: t('ui.set.key.confirmOk') }, () => send(confirm.key));
   }
 
   async function removeKey() {
