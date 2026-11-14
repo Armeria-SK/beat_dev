@@ -9,14 +9,8 @@ export const en = {
 
 
 
-  'toast.actionFailed': 'That did not work',
 
   // stage 5
-  'chat.archive.done': 'Archived',
-  'chat.archive.failed': 'Could not archive the chat',
-  'chat.archive.undo': 'Undo',
-  'chat.unarchive.done': 'Chat restored',
-  'chat.unarchive.failed': 'Could not restore the chat',
   'slash.new': 'Start a new chat',
   'slash.task': 'Create a task (opens the Tasks page)',
   'slash.tasks': 'Open the task list',
@@ -331,18 +325,6 @@ export const en = {
   'runs.reviews.change.forget': 'Deleted',
   'runs.reviews.change.restore': 'Restored',
   // stage 7
-  'tasks.toast.runStarted': 'Started running',
-  'tasks.toast.runNext': 'Will run next',
-  'tasks.toast.stopped': 'Stopped',
-  'tasks.toast.stoppedBody': 'Restarts in about 20 s',
-  'tasks.toast.done': 'Marked as done',
-  'tasks.toast.cancelled': 'Cancelled',
-  'tasks.toast.undo': 'Undo',
-  'tasks.toast.restored': 'Restored',
-  'tasks.toast.approved': 'Proposal approved',
-  'tasks.toast.skipped': 'Skipped',
-  'tasks.toast.answered': 'Answer sent',
-  'tasks.toast.answeredBody': 'It is queued to continue.',
   'tasks.origin.user': 'You',
   'tasks.origin.self': 'beat',
   'tasks.origin.schedule': 'Schedule',

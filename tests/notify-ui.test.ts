@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { NOTIFICATION_KINDS } from '../src/config/schema.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { accessWidening, secretEntryAccess } from '../web/src/settings/access.ts';
 import { SECTION_GROUPS, sectionSlice, type Config } from '../web/src/settings/model.ts';
@@ -58,7 +59,7 @@ test('通知の節は「動き」の組に入り、設定の notify を切り出
   assert.ok(ids.includes('notify'));
   assert.deepEqual(sectionSlice(config({ channels: [] }), 'notify'), { channels: [] });
   const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('notifications.kind.')).sort();
-  assert.ok(keys(en).length >= 6);
+  assert.deepEqual(keys(en), NOTIFICATION_KINDS.map(k => `notifications.kind.${k}`).sort());
   for (const k of keys(en)) {
     const v = (en as Record<string, unknown>)[k];
     const text = typeof v === 'function' ? (v as (...a: unknown[]) => string)('x', 'y') : String(v);
