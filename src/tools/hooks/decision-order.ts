@@ -23,7 +23,7 @@ const OWNER = [
 
 const POLICY = ['guard.needs_approval'] as const;
 
-const PRODUCT_CODE = ['code.file_run', 'code.stdin_run', 'code.cmd_is_file', 'code.arg_file', 'code.project_tool', 'list.lang_run', 'list.npm_script'] as const;
+const PRODUCT_CODE = ['code.file_run', 'code.stdin_run', 'code.cmd_is_file', 'code.arg_file', 'code.project_tool', 'list.lang_run', 'list.node_test', 'list.npm_script'] as const;
 
 const PRODUCT_IF = ['list.external', 'list.command', 'list.git_commit'] as const;
 

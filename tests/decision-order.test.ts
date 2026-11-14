@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -19,6 +19,7 @@ import { browserOpen } from '../src/tools/builtin/browser.ts';
 import { webDownload } from '../src/tools/builtin/download.ts';
 import { imageView } from '../src/tools/builtin/image.ts';
 import { webFetch, webSearch } from '../src/tools/builtin/web.ts';
+import { REASON_ORDER } from '../src/tools/hooks/decision-order.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { runToolCall, type PipelineDeps } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
@@ -824,4 +825,70 @@ test('4-3a（Q-W1-5）: 控えた宛先への git push でも、送るコミッ�
   assert.equal(r.waiting()[0]!.kind, 'owner');
   assert.match(r.waiting()[0]!.reason, /protected files/u);
   assert.equal(r.judge.calls.length, 1, '判定役は呼ばれない');
+});
+
+test('p4-build-judge P1-1: 製品のフォルダの中の node --test と node --test <製品の中のファイル> は判定役を呼ばずに動く（product-code）', async t => {
+  const r = rig(t);
+  mkdirSync(join(r.root, 'tests'), { recursive: true });
+  writeFileSync(join(r.root, 'tests', 'a.test.js'), "require('node:fs').writeFileSync(require('node:path').join(__dirname, '..', 'ran-' + Date.now() + '-' + process.pid + '.txt'), '1');\n");
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  for (const command of ['node --test', 'node --test tests/a.test.js']) {
+    const outcome = await r.shell(command);
+    assert.equal(outcome.decidedBy, 'product-code', `${command}: ${outcome.output.content}`);
+  }
+  assert.equal(readdirSync(r.root).filter(name => name.startsWith('ran-')).length, 2, '2 回ともテストが実際に動いた');
+  assert.equal(r.judge.calls.length, 0);
+  assert.equal(r.waiting().length, 0);
+});
+
+test('p4-build-judge P1-2: node --test でも、ほかのオプション・製品の外のパス・パターン・実行時に決まる語・環境変数・製品の外の cwd は判定役を飛ばさない', async t => {
+  const r = rig(t);
+  mkdirSync(join(r.root, 'tests'), { recursive: true });
+  writeFileSync(join(r.root, 'tests', 'a.test.js'), '');
+  writeFileSync(join(r.root, 'x.mjs'), '');
+  writeFileSync(join(r.paths.workspace, 'x.test.js'), '');
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  const outsideFile = join(r.paths.workspace, 'x.test.js').replace(/\\/gu, '/');
+  const commands = [
+    'node --test --import ./x.mjs', 'node --test --import=./x.mjs', 'node --import ./x.mjs --test', 'node --test --require ./x.mjs', 'node --test -r ./x.mjs', 'node -r ./x.mjs --test',
+    'node --test --experimental-loader ./x.mjs', 'node --test --loader ./x.mjs', 'node --test --loader=./x.mjs', 'node --test --env-file=x.mjs', 'node --test --env-file x.mjs',
+    'node --test --test-reporter-destination=out.txt', 'node --test --test-reporter=spec --test-reporter-destination out.txt', 'node --test --watch', 'node --watch --test',
+    'node --test tests/a.test.js --watch', 'node --test --test-only', 'node --test --test-reporter=spec', 'node --test --experimental-test-coverage', 'node --test -- tests/a.test.js',
+    'node --test=1', 'node --test --test', 'node --TEST',
+    'node --test ../x.test.js', 'node --test tests/../../x.test.js', `node --test ${outsideFile}`, 'node --test /etc', 'node --test ~/x', 'node --test D:x',
+    'node --test tests/*.test.js', 'node --test "tests/**/*.test.js"', "node --test 'tests/?.test.js'", 'node --test "tests/{a,b}.test.js"', 'node --test $X', 'node --test "$X"',
+    WIN ? "$env:NODE_OPTIONS='--import=./x.mjs'; node --test" : 'NODE_OPTIONS=--import=./x.mjs node --test',
+    WIN ? '$X = "tests"; node --test $X' : 'X=tests; node --test $X',
+  ];
+  const leaked: string[] = [];
+  for (const command of commands) {
+    const outcome = await r.shell(command);
+    if (outcome.decidedBy === 'product-code' || outcome.decidedBy === 'product-git') leaked.push(`${command} -> ${outcome.decidedBy}`);
+  }
+  const outside = await r.call('shell_run', { command: 'node --test', cwd: r.paths.workspace });
+  if (outside.decidedBy === 'product-code') leaked.push('cwd outside the product');
+  const free = rig(t, { project: false });
+  free.judge.answer = '{"decision":"ask","reason":"check"}';
+  const noProduct = await free.shell('node --test');
+  if (noProduct.decidedBy === 'product-code') leaked.push('no product');
+  assert.equal(noProduct.decidedBy, 'pending', noProduct.output.content);
+  assert.equal(free.judge.calls.length, 1, '製品に属さない会話の node --test は判定役へ');
+  assert.deepEqual(leaked, [], '判定役を飛ばした形');
+});
+
+test('p4-build-judge P1-2（bash）: 環境変数を前に置いた node --test は判定役を飛ばさない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const r = rig(t, { mutate: c => { c.tools.shell.shell = 'bash'; } });
+  writeFileSync(join(r.root, 'x.mjs'), '');
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  const leaked: string[] = [];
+  for (const command of ['NODE_OPTIONS=--import=./x.mjs node --test', 'NODE_OPTIONS= node --test', 'export NODE_OPTIONS=--import=./x.mjs; node --test', 'node --test $(echo ../x)', 'node --test tests/*.js', 'node --test > out.txt; git add -A']) {
+    const outcome = await r.shell(command);
+    if (outcome.decidedBy === 'product-code' || outcome.decidedBy === 'product-git') leaked.push(`${command} -> ${outcome.decidedBy}`);
+  }
+  assert.deepEqual(leaked, [], '判定役を飛ばした形');
+  assert.equal((await r.shell('node --test')).decidedBy, 'product-code', 'bash でも素の形は順 4');
+});
+
+test('p4-build-judge P1-3: list.node_test は順 4', () => {
+  assert.equal(REASON_ORDER.get('list.node_test'), 4);
 });

@@ -178,6 +178,10 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
       const file = st.words[1]?.text;
       if (!file || !inside(root, resolve(st.cwd!, file))) return undefined;
     }
+    if (own.has('list.node_test')) {
+      const [flag, ...files] = st.words.slice(1);
+      if (!flag || flag.dynamic || flag.text !== '--test' || files.some(w => w.dynamic || w.glob || !plainPathInside(w.text, st.cwd!, root))) return undefined;
+    }
     if (st.program !== 'git') {
       if (!runnerStaysInside(st, root)) return undefined;
       others = true;
