@@ -23,6 +23,7 @@ export type ProductRunResult = { run: ProductRun } | { secret: string } | { secr
 const RUN_KINDS = new Set(['code', 'git_write']);
 const AWS_KEY = /(?:^|[^A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/u;
 const COMMIT_SECRET = /(?:^|\/)(?:[^/]*(?:secret|credential)[^/]*|[^/]+\.env)$/iu;
+const MESSAGE_FLAGS = new Set(['-m', '--message']);
 
 const inside = (root: string, path: string): boolean => isInside(root, path) && isInside(realish(root), realish(path));
 
@@ -249,6 +250,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     const sub = subWord?.dynamic ? undefined : subWord?.text;
     const args = st.words.slice(target.subAt + 1);
     if (sub !== 'add' && sub !== 'commit') return undefined;
+    if (st.words.slice(1).some((w, i, all) => w.text.includes(',') && !(i > 0 && MESSAGE_FLAGS.has(all[i - 1]!.text) && !w.text.includes(',-')))) return undefined;
     if (!repoInside(dir, root, git)) return undefined;
     if (sub === 'commit' && st.words.slice(1).some(w => !w.dynamic && (sanitizeModelInputText(w.text).redaction_count > 0 || AWS_KEY.test(w.text)))) return { secretMessage: true };
     if (input.ownerHooks?.() !== false) return undefined;

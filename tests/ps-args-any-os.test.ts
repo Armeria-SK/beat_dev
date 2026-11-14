@@ -104,13 +104,14 @@ test('順 4 は、カンマを含むパス・-c・-C の値を、きっちりつ
     const label = (text: string) => `${shell}${windows ? ' (Windows)' : ''}: ${text}`;
     for (const [command, run] of [
       ['node --test tests/a.test.js tests/b.test.js', 'product-code'], ['vitest tests', 'product-code'], ['jest tests', 'product-code'], ['mocha tests', 'product-code'], ['pytest tests', 'product-code'],
-      ['git -C sub add -A', 'product-git'], ['git -c user.name=a commit --allow-empty -m x', 'product-git'],
+      ['git -C sub add -A', 'product-git'], ['git -c user.name=a commit --allow-empty -m x', 'product-git'], ['git commit --allow-empty -m "a, b"', 'product-git'], ['git commit --allow-empty --message "a,b"', 'product-git'],
     ] as const) assert.equal(f.reached(command, shell), run, label(`カンマの無い形は順 4（土台の確かめ）: ${command}`));
     const commands = [
       'node --test tests/a.test.js,tests/b.test.js', 'node --test tests,--import,./x.mjs', "node --test 'tests/a.test.js','--import','./x.mjs'",
       'vitest tests,--root,..', 'vitest tests, --root, ..', 'jest tests,--rootDir,..', 'mocha tests,--require,./x.cjs', 'pytest tests,--rootdir,..',
       "git -c 'user.name=a','-c','core.fsmonitor=x' commit -m x", 'git -c user.name=a,-c,core.fsmonitor=x commit -m x', "git -c 'user.name=a,b' commit -m x",
       'git -C sub,-C,x add -A', "git -C 'sub','-C','x' add -A", 'git -C "sub,-C,x" commit -m x',
+      'git add README.md,-f,.env', 'git add -- README.md,-f,.env', 'git commit README.md,-F,../secret.txt', 'git commit -m a,-F,../secret.txt', 'git commit --message=a,b', 'git commit -ma,-F,x',
     ];
     const leaked = commands.flatMap(command => { const step = f.reached(command, shell); return step ? [`${command} -> ${step}`] : []; });
     assert.deepEqual(leaked, [], label('順 4 に乗った形'));
