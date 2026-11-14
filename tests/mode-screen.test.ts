@@ -38,17 +38,21 @@ test('Normal の説明は短い 1 行で、判定役が見ること・送る・�
   assert.doesNotMatch(desc, /Allow in this chat|approval|asked of you every time/u);
 });
 
-test('README の自動承認の説明は、いま効く範囲を書く', () => {
+test('README の「判定役と Pending」の説明は、決まる順・Pending・判定役のモデル・残る危険を書く', () => {
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
-  const line = readme.split(/\r?\n/u).find(l => l.startsWith('- **自動承認**'));
-  assert.ok(line, 'README に自動承認の説明がある');
+  const line = readme.split(/\r?\n/u).find(l => l.startsWith('- **判定役と Pending**'));
+  assert.ok(line, 'README に「判定役と Pending」の説明がある');
+  assert.doesNotMatch(readme, /自動承認|この会話では許可|承認の札/u, '前の承認の言い回しを残さない');
+  for (const step of ['(1) **拒否**', '(2) **確かめなし**', '(3) **あなたに聞く = Pending に積む**', '(4) **製品の実行**', '(5) **判定役**']) assert.ok(line.includes(step), step);
+  assert.match(line, /\(1\).*\(2\).*\(3\).*\(4\).*\(5\)/u, '決まる順は 1 から 5 の順に書く');
+  assert.match(line, /`routing\.judge`/u);
+  assert.match(line, /許す側には倒さない/u);
   assert.doesNotMatch(line, /サービスの操作|リモートの設定|開くと理由/u);
   assert.match(line, /tools\.outsideRoots/u);
   assert.match(line, /よそから来た文を読んだあとの確かめ/u);
   assert.match(line, /何と答えても必ずあなたに聞く/u);
-  assert.match(line, /この会話では許可/u);
-  assert.doesNotMatch(line, /一度でも Web・添付|判断のモデルを使わず、毎回あなたに確かめる/u, 'よそから来た文を読んだ会話は判断のモデルを使わない、という古い決まりを書かない');
-  assert.match(line, /自動承認の残る危険/u);
+  assert.match(line, /判定役の残る危険/u);
+  assert.match(readme, /判定役がだまされたときの残る危険は、上の「判定役と Pending」の項に書いた/u, '「残る危険」の項から指す');
   assert.match(line, /`Clear-Content`（「このファイルを空にする」と名指しするので消す扱い。`>` や `sed -i` で空にする書き方は上書き）/u, 'Clear-Content は消す、リダイレクトや sed で空にするのは上書き、と書く');
   assert.match(line, /`web_fetch` `web_search`/u, '残る危険: Web の読み取りは読んだあとも確かめなしで動き、URL で少し外へ出せる');
   assert.match(line, /`package\.json`/u, '残る危険: 判断のモデルがだまされると、あとで動くファイルも書き換えられる');
