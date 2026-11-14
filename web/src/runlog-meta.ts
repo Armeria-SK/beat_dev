@@ -2,12 +2,6 @@ import type { ReviewJob, RunRow, ToolCallRow } from './api.ts';
 import type { IconName } from './icon-name.ts';
 import { formatList, formatNumber, t, type PlainKey } from './i18n/index.ts';
 
-export type LogView = 'runs' | 'tools' | 'reviews';
-export const LOG_VIEWS: readonly LogView[] = ['runs', 'tools', 'reviews'];
-
-// 表の件数の上限（API に渡している limit と同じ）。これだけ出ているときは、古い分が隠れていると知らせる。
-export const LOG_LIMIT = 200;
-
 export type Tone = 'ok' | 'bad' | 'wait' | 'plain';
 export interface Status { icon: IconName; tone: Tone; label: string }
 
@@ -66,10 +60,6 @@ export function runDetail(run: RunRow): string {
 
 export const decisionLabel = (decision: ToolCallRow['decision']): string => (DECISION[decision] ? t(DECISION[decision]) : decision);
 
-// 見た目の種類: 拒否は枠だけ、承認を求めたものは色付き、許可は目立たせない（デザインどおり）。
-export const decisionTag = (decision: ToolCallRow['decision']): string =>
-  (decision === 'deny' ? 'tag-outline' : decision === 'ask' ? 'tag-accent' : 'tag-neutral');
-
 export function decidedByLabel(by: string): string {
   if (DECIDED_BY[by]) return t(DECIDED_BY[by]!);
   if (by.startsWith('hook:')) return t('runs.by.hook', by.slice('hook:'.length));
@@ -84,8 +74,3 @@ export function toolStatus(ok: number | null): Status {
 export const jobStatusLabel = (status: ReviewJob['status']): string => t(JOB_STATUS[status]);
 export const jobTriggerLabel = (trigger: string): string => (TRIGGER[trigger] ? t(TRIGGER[trigger]!) : trigger);
 export const changeLabel = (action: string): string => (CHANGE[action] ? t(CHANGE[action]!) : action);
-
-export const jobTag = (status: ReviewJob['status']): string =>
-  (status === 'failed' ? 'tag-outline' : status === 'running' ? 'tag-accent' : 'tag-neutral');
-
-export const logHash = (view: LogView): string => (view === 'runs' ? '#/runs' : `#/runs/${view}`);

@@ -40,23 +40,6 @@ export function sectionOf(task: Task, now: number): TaskSection {
   return 'act';
 }
 
-const fold = (text: string): string => text.normalize('NFKC').toLowerCase();
-const matches = (task: Task, query: string): boolean => fold(`${task.title}\n${task.body}\n${task.next_action ?? ''}\n${task.waiting_text ?? ''}`).includes(query);
-
-const byPriority = (a: Task, b: Task): number => a.priority - b.priority || b.updated_at - a.updated_at;
-const first = (wanted: TaskStatus) => (a: Task, b: Task): number => Number(b.status === wanted) - Number(a.status === wanted);
-
-export function groupTasks(tasks: readonly Task[], now: number, query = ''): Record<TaskSection, Task[]> {
-  const q = fold(query.trim());
-  const groups: Record<TaskSection, Task[]> = { attn: [], act: [], sch: [], done: [] };
-  for (const task of tasks) if (!q || matches(task, q)) groups[sectionOf(task, now)].push(task);
-  groups.attn.sort((a, b) => first('waiting')(a, b) || byPriority(a, b));
-  groups.act.sort((a, b) => first('running')(a, b) || byPriority(a, b));
-  groups.sch.sort((a, b) => (a.run_at ?? Infinity) - (b.run_at ?? Infinity) || byPriority(a, b));
-  groups.done.sort((a, b) => (b.completed_at ?? b.updated_at) - (a.completed_at ?? a.updated_at));
-  return groups;
-}
-
 export interface TaskSummary { attention: number; running: number; ready: number; scheduled: number }
 
 export function summarize(tasks: readonly Task[], now: number): TaskSummary {
@@ -84,36 +67,6 @@ export function plainLine(text: string | null | undefined, max = 160): string {
   return [...line].length > max ? `${[...line].slice(0, max).join('')}…` : line;
 }
 
-export type RowSub =
-  | { kind: 'question'; text: string }
-  | { kind: 'next'; text: string }
-  | { kind: 'text'; text: string }
-  | { kind: 'nextRun' }
-  | { kind: 'none' };
-
-export function rowSub(task: Task): RowSub {
-  const some = (text: string, kind: 'question' | 'next' | 'text'): RowSub => (text ? { kind, text } : { kind: 'none' });
-  if (task.status === 'waiting') return some(plainLine(task.waiting_text), 'question');
-  if (isFinished(task.status)) return some(plainLine(task.result_summary), 'text');
-  if (task.status === 'scheduled') return task.run_at !== null ? { kind: 'nextRun' } : some(plainLine(task.body), 'text');
-  if (task.status === 'inbox') return some(plainLine(task.body), 'text');
-  const next = plainLine(task.next_action);
-  return next ? { kind: 'next', text: next } : some(plainLine(task.body), 'text');
-}
-
-export type QuickKind = 'run' | 'runNow' | 'stop' | 'retry';
-
-// 行の右の 1 つ目のボタン。「止める」は、いまワーカーが実際に動かしている実行（runId のあるもの）にだけ出す。
-export function quickOf(task: Task, runningHere: boolean, now: number): QuickKind | null {
-  switch (task.status) {
-    case 'ready': return task.run_at !== null && task.run_at > now ? 'runNow' : 'run';
-    case 'scheduled': return 'runNow';
-    case 'running': return runningHere ? 'stop' : null;
-    case 'failed': return 'retry';
-    default: return null;
-  }
-}
-
 export type SheetAction = 'approve' | 'runNow' | 'retry' | 'done' | 'cancel';
 export interface SheetActionSpec { action: SheetAction; primary: boolean }
 
@@ -131,5 +84,3 @@ export function sheetActions(status: TaskStatus): SheetActionSpec[] {
     case 'cancelled': return [spec('retry', status === 'failed')];
   }
 }
-
-export const ROW_ACTION_API = { approve: 'approve', skip: 'cancel', run: 'run-now', runNow: 'run-now', retry: 'run-now', done: 'done', cancel: 'cancel' } as const;
