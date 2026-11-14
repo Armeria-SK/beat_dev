@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -12,6 +12,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { MemoryStore } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { replayAction, type ReplayDeps } from '../src/pending/replay.ts';
+import { boundFacts } from '../src/pending/snapshot.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { PlanStore } from '../src/projects/plan.ts';
 import { ProjectStore } from '../src/projects/store.ts';
@@ -21,6 +22,7 @@ import { BROWSER_TOOLS } from '../src/tools/builtin/browser.ts';
 import { fileRead } from '../src/tools/builtin/files.ts';
 import { planWrite } from '../src/tools/builtin/plan.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
+import { readFilesOf } from '../src/tools/pipeline.ts';
 import { taskCreate } from '../src/tools/builtin/tasks.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -490,4 +492,144 @@ test('読む先の親フォルダが、積んだあとに別の許可フォル�
   assert.equal(shellPreCheck(input, s.ctxFor()).decision, 'allow', '前提: 替えたあとも allow のまま');
   const outcome = await s.approve(row.id);
   assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+});
+
+async function parkShell(s: ReturnType<typeof setup>, root: string, command: string) {
+  const input = { command, cwd: root };
+  const check = shellPreCheck(input, s.ctxFor());
+  const read = readFilesOf(check);
+  return s.park({ tool: 'shell_run', input, check, cwd: root, workspace: s.paths.workspace, files: read.files, filesMore: read.more, places: check.places, created: check.created, pushes: check.pushes });
+}
+
+function gitRepo(s: ReturnType<typeof setup>, ...init: string[]) {
+  const root = join(s.paths.workspace, 'repo');
+  mkdirSync(join(root, 'src', 'deep'), { recursive: true });
+  git(root, 'init', '-q', ...init);
+  git(root, 'config', 'user.name', 't');
+  git(root, 'config', 'user.email', 't@example.com');
+  for (const name of ['kept.txt', join('src', 'a.txt'), join('src', 'deep', 'b.txt'), join('src', 'deep', 'c.txt')]) writeFileSync(join(root, name), name);
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'first');
+  writeFileSync(join(root, 'kept.txt'), 'kept, edited');
+  git(root, 'add', 'kept.txt');
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(join(root, 'src', 'a.txt'), past, past);
+  return root;
+}
+
+function ownerRunsStatus(root: string): void {
+  const index = join(root, '.git', 'index');
+  const before = lstatSync(index).mtimeMs;
+  git(root, 'status');
+  assert.notEqual(lstatSync(index).mtimeMs, before, '前提: git status が .git/index を書き直す');
+}
+
+const COMMIT_ALL = 'git add . ; git commit -m next';
+const folderMark = (root: string): string => boundFacts([root])[0]!.hash!;
+const lastSubject = (root: string): string => execFileSync('git', ['log', '--format=%s', '-1'], { cwd: root, encoding: 'utf8' }).trim();
+
+test('積んだ git commit: 持ち主が間に git status を打っただけでは stale にならず、Approve で動く', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const row = await parkShell(s, root, COMMIT_ALL);
+  assert.ok(JSON.parse(s.store.row(row.id)!.state!).sent?.length, '前提: リポジトリのフォルダが控えに入る');
+  ownerRunsStatus(root);
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'ran', s.store.view(row.id)!.output_preview ?? '');
+  assert.equal(lastSubject(root), 'next');
+});
+
+for (const [name, change] of [
+  ['別の git add', (root: string) => git(root, 'add', '-f', 'extra.bin')],
+  ['index から外す（git rm --cached）', (root: string) => git(root, 'rm', '-q', '--cached', join('src', 'deep', 'c.txt'))],
+  ['別のコミット', (root: string) => git(root, 'commit', '-q', '-m', 'other')],
+  ['枝を替える', (root: string) => git(root, 'checkout', '-q', '-b', 'other')],
+  ['.git/config を書き換える', (root: string) => git(root, 'config', 'core.editor', 'true')],
+  ['フックを足す', (root: string) => writeFileSync(join(root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho hooked > hooked.txt\n')],
+] as const) test(`積んだ git commit: 積んだあとに${name} → stale`, async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  writeFileSync(join(root, '.gitignore'), 'extra.bin\n');
+  writeFileSync(join(root, 'extra.bin'), 'extra');
+  const row = await parkShell(s, root, COMMIT_ALL);
+  change(root);
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+  assert.notEqual(lastSubject(root), 'next');
+  assert.ok(!existsSync(join(root, 'hooked.txt')));
+});
+
+for (const [name, init, version] of [['v2', [], '2'], ['v4', [], '4'], ['sha256', ['--object-format=sha256'], '2']] as const) {
+  test(`フォルダの控え（index ${name}）: git status では変わらず、積んだ中身・印が変われば変わる`, async t => {
+    const s = setup(t);
+    const root = gitRepo(s, ...init);
+    git(root, 'update-index', '--index-version', version);
+    const before = folderMark(root);
+    ownerRunsStatus(root);
+    assert.equal(folderMark(root), before, 'git status だけでは同じ');
+    const steps: Array<[string, () => void]> = [
+      ['最後の行の中身', () => { writeFileSync(join(root, 'src', 'deep', 'c.txt'), 'c, staged'); git(root, 'add', join('src', 'deep', 'c.txt')); }],
+      ['実行の印', () => git(root, 'update-index', '--chmod=+x', join('src', 'a.txt'))],
+      ['assume-unchanged', () => git(root, 'update-index', '--assume-unchanged', join('src', 'deep', 'b.txt'))],
+      ['skip-worktree', () => git(root, 'update-index', '--skip-worktree', 'kept.txt')],
+      ['index から外す', () => git(root, 'rm', '-q', '--cached', join('src', 'a.txt'))],
+    ];
+    let last = before;
+    for (const [what, step] of steps) {
+      step();
+      const now = folderMark(root);
+      assert.notEqual(now, last, what);
+      last = now;
+    }
+  });
+}
+
+test('フォルダの控え: index の中身だけが違う（大きさも時刻も同じ）→ 変わる', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const index = join(root, '.git', 'index');
+  const fixed = new Date(1_700_000_000_000);
+  const pin = (): void => { for (const path of [index, join(root, '.git')]) utimesSync(path, fixed, fixed); };
+  pin();
+  const st = lstatSync(index);
+  const before = folderMark(root);
+  git(root, 'update-index', '--assume-unchanged', 'kept.txt');
+  pin();
+  assert.equal(lstatSync(index).size, st.size, '前提: 大きさは同じ');
+  assert.equal(lstatSync(index).mtimeMs, st.mtimeMs, '前提: 時刻も同じ');
+  assert.notEqual(folderMark(root), before);
+});
+
+test('フォルダの控え: index の木の控え（TREE）だけを書き換えた（大きさも時刻も同じ）→ 変わる', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  git(root, 'commit', '-q', '-m', 'second');
+  const index = join(root, '.git', 'index');
+  const fixed = new Date(1_700_000_000_000);
+  const pin = (): void => { for (const path of [index, join(root, '.git')]) utimesSync(path, fixed, fixed); };
+  pin();
+  const before = folderMark(root);
+  const data = readFileSync(index);
+  const at = data.indexOf('TREE', 12, 'latin1');
+  assert.ok(at > 0, '前提: コミットのあとの index に TREE がある');
+  data[at + 8 + data.readUInt32BE(at + 4) - 1]! ^= 0xff;
+  writeFileSync(index, data);
+  pin();
+  assert.notEqual(folderMark(root), before);
+});
+
+test('フォルダの控え: 読めない index は前と同じ（時刻で比べる）。控えを取るだけではリポジトリに何も書かない', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const index = join(root, '.git', 'index');
+  const all = (): string => (readdirSync(root, { recursive: true }) as string[]).sort().map(name => `${name}:${lstatSync(join(root, name)).mtimeMs}`).join('\n');
+  const listed = all();
+  const before = folderMark(root);
+  assert.equal(folderMark(root), before);
+  assert.equal(all(), listed, '控えの前と後で、中の物の数も時刻も同じ');
+  writeFileSync(index, 'not an index');
+  const broken = folderMark(root);
+  const later = new Date(Date.now() + 60_000);
+  utimesSync(index, later, later);
+  assert.notEqual(folderMark(root), broken, '読めない index は時刻が変われば変わる');
 });

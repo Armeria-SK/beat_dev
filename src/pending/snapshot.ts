@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { lstat, readdir } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { findGitDir, inspectRepo } from '../tools/hooks/git-repo.ts';
@@ -125,9 +125,89 @@ function contentHash(path: string, st: Stats): string {
   try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return 'unreadable'; }
 }
 
+const INDEX_MAX_BYTES = 64 * 1_048_576;
+const INDEX_STAT_BYTES = 40;
+const INDEX_MODE_AT = 24;
+const INDEX_STAT_EXTENSIONS: ReadonlySet<string> = new Set(['UNTR', 'FSMN', 'EOIE', 'IEOT']);
+
+function stagedEntries(data: Buffer, version: number, count: number, idBytes: number): string | null {
+  const end = data.length - idBytes;
+  const digest = createHash('sha256');
+  let pos = 12;
+  let previous: Buffer = Buffer.alloc(0);
+  for (let i = 0; i < count; i++) {
+    const start = pos;
+    const flagsAt = start + INDEX_STAT_BYTES + idBytes;
+    if (flagsAt + 2 > end) return null;
+    const flags = data.readUInt16BE(flagsAt);
+    pos = flagsAt + 2;
+    let extended = 0;
+    if (flags & 0x4000) {
+      if (version < 3 || pos + 2 > end) return null;
+      extended = data.readUInt16BE(pos);
+      pos += 2;
+    }
+    let path: Buffer;
+    if (version === 4) {
+      let byte = data[pos++]!;
+      let strip = byte & 0x7f;
+      while (byte & 0x80) {
+        if (pos >= end || strip > 0xffffff) return null;
+        byte = data[pos++]!;
+        strip = ((strip + 1) << 7) + (byte & 0x7f);
+      }
+      const nul = data.indexOf(0, pos);
+      if (nul < 0 || nul >= end || strip > previous.length) return null;
+      path = Buffer.concat([previous.subarray(0, previous.length - strip), data.subarray(pos, nul)]);
+      pos = nul + 1;
+    } else {
+      const nul = data.indexOf(0, pos);
+      if (nul < 0 || nul >= end) return null;
+      path = data.subarray(pos, nul);
+      pos = start + ((nul - start + 8) & ~7);
+      if (pos > end || data.subarray(nul, pos).some(b => b !== 0)) return null;
+    }
+    if (!path.length || (flags & 0xfff) !== Math.min(path.length, 0xfff)) return null;
+    previous = path;
+    digest.update(data.subarray(start + INDEX_MODE_AT, start + INDEX_MODE_AT + 4)).update(data.subarray(start + INDEX_STAT_BYTES, flagsAt))
+      .update(`${flags & 0xf000}:${extended}:${path.length}:`).update(path);
+  }
+  digest.update(`${count}`);
+  while (pos < end) {
+    if (pos + 8 > end) return null;
+    const name = data.toString('latin1', pos, pos + 4);
+    const next = pos + 8 + data.readUInt32BE(pos + 4);
+    if (name === 'link' || next > end) return null;
+    if (!INDEX_STAT_EXTENSIONS.has(name)) digest.update(`${name}:${next - pos - 8}:`).update(data.subarray(pos + 8, next));
+    pos = next;
+  }
+  return digest.digest('hex');
+}
+
+function stagedHash(gitDir: string): string | null {
+  let data: Buffer;
+  try {
+    const file = join(gitDir, 'index');
+    const st = lstatSync(file);
+    if (!st.isFile() || st.size > INDEX_MAX_BYTES) return null;
+    data = readFileSync(file);
+  } catch { return null; }
+  if (data.length < 12 || data.toString('latin1', 0, 4) !== 'DIRC') return null;
+  const version = data.readUInt32BE(4);
+  if (version < 2 || version > 4) return null;
+  return stagedEntries(data, version, data.readUInt32BE(8), 20) ?? stagedEntries(data, version, data.readUInt32BE(8), 32);
+}
+
 function folderHash(dir: string): { hash: string; more: boolean } {
   const entries: string[] = [];
   const stack = [dir];
+  const staged = new Map<string, string>();
+  const noteGitDir = (path: string): boolean => {
+    const hash = basename(path) === '.git' ? stagedHash(path) : null;
+    if (hash !== null) staged.set(path, hash);
+    return hash !== null;
+  };
+  noteGitDir(dir);
   let more = false;
   while (stack.length && !more) {
     const current = stack.pop()!;
@@ -138,7 +218,10 @@ function folderHash(dir: string): { hash: string; more: boolean } {
       const path = join(current, name);
       let st: Stats;
       try { st = lstatSync(path); } catch { more = true; break; }
-      entries.push(`${relative(dir, path)}\0${typeOf(st)}\0${st.size}\0${st.mtimeMs}`);
+      const stagedHere = name === 'index' && st.isFile() ? staged.get(current) : undefined;
+      if (stagedHere !== undefined) entries.push(`${relative(dir, path)}\0staged\0${stagedHere}`);
+      else if (st.isDirectory() && noteGitDir(path)) entries.push(`${relative(dir, path)}\0git\0${st.size}`);
+      else entries.push(`${relative(dir, path)}\0${typeOf(st)}\0${st.size}\0${st.mtimeMs}`);
       if (st.isDirectory()) stack.push(path);
     }
   }
