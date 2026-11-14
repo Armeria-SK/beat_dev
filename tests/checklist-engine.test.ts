@@ -3,14 +3,13 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App, builtinTools } from '../src/app.ts';
-import type { Language } from '../src/config/schema.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
 import { checklistWrite } from '../src/tools/builtin/checklist.ts';
 import { readChecklist, writeChecklist } from '../src/tools/builtin/checklist-core.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
-import { settled, waitFor } from './app-setup.ts';
+import { settled } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
 import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script } from './helpers.ts';
 

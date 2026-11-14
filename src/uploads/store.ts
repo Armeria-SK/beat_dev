@@ -98,7 +98,6 @@ export class Uploads {
 }
 
 export const ATTACHMENT_OPEN = storeText(DEFAULT_LANGUAGE, 'attachment.open');
-export const ATTACHMENT_CLOSE = storeText(DEFAULT_LANGUAGE, 'attachment.close');
 
 // 添付の名前と中身の <<< >>> を全角にして、枠の印（英語・前の日本語のどれも <<< で始まる）を偽装させない
 const neutralizeMarkers = (value: string): string => value.replace(/<{3,}/gu, m => '\u{FF1C}'.repeat(m.length)).replace(/>{3,}/gu, m => '\u{FF1E}'.repeat(m.length));

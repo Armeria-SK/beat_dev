@@ -3,7 +3,6 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
-import { en } from '../web/src/i18n/en.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { CONVERSATION, fakeModel, settled, startApp } from './app-setup.ts';
 import type { ModelRequest } from '../src/providers/types.ts';

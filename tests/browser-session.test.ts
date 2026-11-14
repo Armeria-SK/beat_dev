@@ -39,7 +39,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, change: (co
   return { session, driver, config, notes, clock, advance };
 }
 
-const call = (r: Rig, conversationId = 'c1', signal: AbortSignal = new AbortController().signal) => ({ conversationId, signal });
+const call = (_r: Rig, conversationId = 'c1', signal: AbortSignal = new AbortController().signal) => ({ conversationId, signal });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test('1 回目の呼び出しで起動する（それまでは起動しない）。起動の選択は固定の形で渡る', async t => {

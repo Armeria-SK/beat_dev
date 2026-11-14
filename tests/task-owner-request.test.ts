@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { PLAN_GIST_LABEL } from '../src/tasks/store.ts';
-import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, type Script } from './helpers.ts';
 
 const LATER = '2099-01-01T00:00:00Z';

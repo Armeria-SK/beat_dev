@@ -213,10 +213,6 @@ function mcpFindings(config: AppConfig, add: (path: string, message: string, lab
   }
 }
 
-export function semanticProblems(config: AppConfig): string[] {
-  return findings(config).map(f => f.text);
-}
-
 // 形式の検査の場所（JSON Pointer。/models/0/contextLength）を、ID で書いた場所（models.<id>.contextLength）に直す。
 // 番号が指す項目に id が無いとき、models と providers 以外の一覧は、番号のまま点で結ぶ
 function issuePath(pointer: string, raw: unknown): string {

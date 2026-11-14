@@ -262,7 +262,6 @@ async function begin(s: Started, id: string, text: string, extra: Record<string,
   assert.equal(sent.status, 202);
   return sent.body.runId as string;
 }
-const isClassifier = (req: { tools: unknown[]; system: { frozen: string } }) => req.tools.length === 0 && req.system.frozen.includes('safety checker');
 const childConversation = (s: Started): string => childRuns(s)[0]!.conversation_id;
 
 test('T-27 子の聞く道具も、親の会話と同じく判定役に回る（子の 1 つ 1 つの操作を判定役が見る）。ask なら子の Pending に積まれる', async t => {

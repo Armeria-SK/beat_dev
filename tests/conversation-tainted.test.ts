@@ -63,7 +63,6 @@ test('マイグレーション 13: conversations に ever_auto_read が足され
   assert.ok(MIGRATIONS.length >= 13);
   const path = join(tempDir(t), 'beat.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 12));
-  const runs = new Runs(before);
   for (const id of ['clean', 'read-outside', 'later']) insertOldConversation(before, id);
   startOld(before, 'r-clean', 'chat', 'clean');
   startOld(before, 'r-outside', 'chat', 'read-outside');

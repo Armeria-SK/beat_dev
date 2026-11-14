@@ -9,7 +9,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { searchHistory } from '../src/memory/history.ts';
 import { checklistKey } from '../src/tools/builtin/checklist-core.ts';
-import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
+import { startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, type Script } from './helpers.ts';
 
 const TARGET = uuid(10);
