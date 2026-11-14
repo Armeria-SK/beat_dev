@@ -456,6 +456,10 @@ test('送る: tar の遠くのアーカイブの取りこぼし（変数の名�
     'tar -c --force-local -f host:out.tar a.txt', 'tar --force-local -cf $DEST a.txt', 'TAPE=host:x tar -cf out.tar a.txt', 'tar -xzf dist/in.tar.gz -C dist', 'tar -c -b 20 -f out.tar a.txt',
     'tar cfb out.tar 20 host:x',
   ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'tar -cLf host:x a.txt', 'tar -cHf host:x a.txt', 'tar -cTf host:x a.txt', 'tar -cIf host:x a.txt', 'tar -cbf host:x a.txt', 'tar -cCf host:x a.txt', 'tar -cL10f host:x a.txt',
+    'tar cLf host:x a.txt', 'tar cLf host:x 10 a.txt', 'ls | xargs --replace X ssh h',
+  ]);
 });
 
 test('送る: PowerShell の tar のドライブの形のアーカイブは、PATH で先に見つかる tar が System32 のものでなければ send', { skip: !gitAvailable && 'git が無い' }, t => {
