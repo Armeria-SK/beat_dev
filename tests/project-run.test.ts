@@ -11,6 +11,7 @@ import { webDownload } from '../src/tools/builtin/download.ts';
 import { checkFilePath } from '../src/tools/builtin/files.ts';
 import type { DownloadNetwork } from '../src/tools/web/public-page.ts';
 import { shellPreCheck } from '../src/tools/builtin/shell.ts';
+import { writeApprovalKind } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { findExecutable, scrubEnv } from '../src/tools/shell/runner.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
@@ -245,6 +246,35 @@ test('指示ファイル（指摘 4）: 会話の実行は、しまった製品�
   await s.send(uuid(2), { text: 'in shop', projectId: shop.id });
   for (const ctx of s.seen) assert.deepEqual([...(ctx.policy.instructions ?? [])].sort(), expected);
   assert.equal(s.seen.length, 2);
+});
+
+test('指示ファイル: 実行が始まったあとで登録した製品の AGENTS.md・CLAUDE.md も、その実行の指示ファイルに入る', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [call('probe_ctx', {}), reply('done')];
+  await s.send(uuid(1), { text: 'in shop', projectId: shop.id });
+  const policy = s.seen[0]!.policy;
+  const files = (root: string) => ['AGENTS.md', 'CLAUDE.md'].map(name => join(root, name));
+  assert.deepEqual([...(policy.instructions ?? [])].sort(), files(shop.root).sort());
+  const late = await s.product('late');
+  assert.deepEqual([...(policy.instructions ?? [])].sort(), [...files(shop.root), ...files(late.root)].sort());
+  for (const file of files(late.root)) assert.ok(policy.askOnWrite?.includes(file), file);
+});
+
+test('buildPolicy: 製品の一覧を関数で渡すと、指示ファイルの守りは呼ぶたびに今の一覧を見る。一覧が読めないときは、それまでに見たものを使う', t => {
+  const u = unit(t);
+  let roots: string[] | undefined = [u.root];
+  const policy = buildPolicy(u.parsed, u.paths, undefined, () => { if (!roots) throw new Error('closed'); return roots; });
+  const late = join(u.outside, 'AGENTS.md');
+  assert.equal(writeApprovalKind(late, policy), undefined);
+  roots = [u.root, u.outside];
+  assert.equal(writeApprovalKind(late, policy), 'instructions');
+  roots = [];
+  assert.equal(writeApprovalKind(late, policy), 'instructions', '一覧から消えても、この実行の間は守る');
+  assert.equal(writeApprovalKind(join(u.root, 'CLAUDE.md'), policy), 'instructions');
+  roots = undefined;
+  assert.equal(writeApprovalKind(late, policy), 'instructions');
+  assert.ok(policy.askOnWrite?.includes(late));
 });
 
 test('製品の会話の子の担当:親の作業フォルダ・許可フォルダ・home・製品をそのまま使う', async t => {

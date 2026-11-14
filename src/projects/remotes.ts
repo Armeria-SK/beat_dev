@@ -10,9 +10,15 @@ const MAX_REMOTES = 50;
 const MAX_TEXT = 2000;
 
 export const withoutSecrets = (url: string): string => {
-  const parts = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)(?:[^/?#]*@)?([^?#]*)/u.exec(url);
-  if (parts) return `${parts[1]}${parts[2]}`;
-  const scp = /^[^@/\s]*:[^@/\s]*@([^:/\s]+:(?!\/\/).*)$/u.exec(url);
+  const parts = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)(.*)$/su.exec(url);
+  if (parts) {
+    const rest = parts[2]!;
+    const authority = /^[^/?#]*/u.exec(rest)![0];
+    const from = /[@:]/u.test(authority) ? rest.lastIndexOf('@') + 1 : 0;
+    return `${parts[1]}${/^[^?#]*/u.exec(rest.slice(from))![0]}`;
+  }
+  if (/^[A-Za-z]:[\\/]/u.test(url)) return url;
+  const scp = /^[^@/\s:]*:.*@([^@]*)$/su.exec(url);
   return scp ? scp[1]! : url;
 };
 

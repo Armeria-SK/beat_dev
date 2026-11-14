@@ -709,7 +709,12 @@ export class ChatEngine {
     const project = kind === 'review' ? undefined : resolved;
     if (project) d.mesh?.persist(project.id);
     if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
-    const allRoots = [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
+    const rootsSeen = new Set<string>();
+    const allRoots = (): string[] => {
+      for (const p of [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])]) rootsSeen.add(p.root);
+      return [...rootsSeen];
+    };
+    allRoots();
     const productRoots = agent || kind === 'review' ? [] : allRoots;
     const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
     const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
@@ -805,7 +810,7 @@ export class ChatEngine {
         ctx.contextAvailable = budget.available;
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
         const outcome = await runToolCall(toolCall, ctx, {
-          registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: () => allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
+          registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
           permissionMode: () => this.#modeOf(conversationId),
           autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal, judgeCall),
           lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
