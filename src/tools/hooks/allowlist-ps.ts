@@ -176,7 +176,15 @@ const joinName: PsCmd['extra'] = (p, acc) => {
   const name = first(p, 'name')[0];
   if (name) acc.copies.push({ kind: 'join', sources: [], dest: first(p, 'path')[0] ?? null, name, recursive: false, dirFlag: false, noTargetDir: false });
 };
-writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', joinName);
+writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', (p, acc, ctx, st) => {
+  joinName(p, acc, ctx, st);
+  const type = first(p, 'itemtype')[0];
+  const link = st.words.slice(1).find(w => /^(?:-[A-Za-z]+:)?(?:hardlink|symboliclink|junction)$/iu.test(w.text));
+  if (link || (type && (type.dynamic || !/^(?:file|directory)$/iu.test(type.text)))) {
+    acc.add('once', 'list.form', { cmd: st.words[0]!.text, detail: (link ?? type)!.text }, false);
+    for (const w of first(p, 'value')) acc.write(w);
+  }
+});
 // 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数
 writer('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
 writer('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');

@@ -125,8 +125,48 @@ function privateKeyRanges(input: string, opened: boolean): { ranges: Array<reado
   return { ranges, open: start !== undefined };
 }
 
+const PEM_HEADER = /^[A-Za-z][A-Za-z0-9-]*:/u;
+
+function openKeyEnd(input: string, from: number): number {
+  let body = false;
+  let end = input.length;
+  for (let pos = from; ;) {
+    const newline = input.indexOf('\n', pos);
+    const lineEnd = newline < 0 ? input.length : newline;
+    const line = input.slice(pos, lineEnd).trim();
+    if (line === '' && body) return end;
+    if (line !== '') {
+      if (!PEM_HEADER.test(line)) body = true;
+      end = input[lineEnd - 1] === '\r' ? lineEnd - 1 : lineEnd;
+    }
+    if (newline < 0) return input.length;
+    pos = newline + 1;
+  }
+}
+
+function strayEndStart(input: string, at: number, floor: number): number {
+  let start = at;
+  let lineEnd = at;
+  for (;;) {
+    const lineStart = Math.max(floor, input.lastIndexOf('\n', lineEnd - 1) + 1);
+    if (lineEnd !== at && input.slice(lineStart, lineEnd).trim() === '') return start;
+    start = lineStart;
+    if (lineStart <= floor) return start;
+    lineEnd = lineStart - 1;
+  }
+}
+
 function redactPrivateKeys(input: string): SanitizedModelInputText {
-  return replaceRanges(input, privateKeyRanges(input, false).ranges);
+  const ranges: Array<readonly [number, number]> = [];
+  let open: { start: number; bodyFrom: number } | undefined;
+  for (const match of input.matchAll(PRIVATE_KEY_MARKER)) {
+    const end = match.index + match[0].length;
+    if (match[1] === 'BEGIN') { open ??= { start: match.index, bodyFrom: end }; continue; }
+    ranges.push([open?.start ?? strayEndStart(input, match.index, ranges.at(-1)?.[1] ?? 0), end]);
+    open = undefined;
+  }
+  if (open) ranges.push([open.start, openKeyEnd(input, open.bodyFrom)]);
+  return replaceRanges(input, ranges);
 }
 
 export function redactKeyEcho(echo: string): { text: string; open: boolean } {

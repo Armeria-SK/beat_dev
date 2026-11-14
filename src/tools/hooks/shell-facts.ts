@@ -188,6 +188,8 @@ function prefixCommand(program: string, args: readonly Word[], ps: boolean, shel
     if (args[i]!.text === '--') { i++; break; }
     i += VALUE[program]!.has(args[i]!.text) ? 2 : 1;
   }
+  const title = args[i];
+  if (program === 'start' && title?.quoted && !title.dynamic && (title.text === '' || /\s/u.test(title.text))) i++;
   const rest = args.slice(i);
   if (rest.length === 0) return program === 'nohup' || program === 'setsid' ? null : undefined;
   if (program === 'start' && rest.length === 1 && (rest[0]!.text === '.' || rest[0]!.text === '..')) return undefined;

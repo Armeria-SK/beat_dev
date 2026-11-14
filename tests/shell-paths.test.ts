@@ -167,3 +167,22 @@ test('PowerShell: 引用符で始まる引数は閉じたところで終わる�
   assert.equal(f.ps("Set-Content 'a'SOUL.md hi").decision, 'allow', "'a' と SOUL.md の 2 つ（パスは a、値は SOUL.md と hi）");
 }
 );
+
+test('New-Item のリンク（HardLink・SymbolicLink・Junction）は、リンクのもと（-Value）も書き込み先として調べ、持ち主の許可でも今回だけ', t => {
+  const f = fixture(t);
+  const outside = join(f.base, 'outside.txt');
+  writeFileSync(outside, 'x');
+  for (const command of [
+    `New-Item -ItemType HardLink -Path link -Value ${outside}`, 'New-Item -ItemType HardLink -Path link -Value SOUL.md', `New-Item -ItemType SymbolicLink -Path link -Value ${f.base}`,
+    `New-Item -ItemType Junction -Path link -Value ${f.base}`, `New-Item -Path link -ItemType:HardLink -Value ${outside}`, `ni -it hardlink link -Value ${outside}`,
+    `New-Item -Type HardLink link -Value ${outside}`, 'New-Item -ItemType HardLink -Path link -Value notes.md', 'New-Item -ItemType $t -Path link',
+  ]) {
+    const v = f.ps(command);
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+  }
+  const value = f.ps(`New-Item -ItemType HardLink -Path link -Value ${outside}`);
+  assert.ok(value.paths.some(p => p.write && p.input === outside), JSON.stringify(value.paths));
+  for (const command of ['New-Item -ItemType File -Path a.md -Value hello', 'New-Item -ItemType Directory out', 'New-Item -Path docs -Name b.md']) {
+    assert.equal(f.ps(command).decision, 'allow', command);
+  }
+});

@@ -110,7 +110,7 @@ function storedEcho(text: string, command: string): string | undefined {
 function runMeta(result: ToolResult, command: unknown): ToolMeta {
   const failed: ToolMeta = result.isError ? { kind: 'failed' } : null;
   if (typeof command !== 'string') return failed;
-  const exact = [command, redactSecrets(command)].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e));
+  const exact = [command, ...(PRIVATE_KEY_BEGIN.test(command) ? [] : [redactSecrets(command)])].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e));
   const echo = exact ?? storedEcho(result.text, command);
   if (!echo) return failed;
   const header = result.text.slice(echo.length).replace(/^\n/u, '').split('\n', 1)[0]!;
