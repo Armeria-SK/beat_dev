@@ -315,7 +315,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   }
 
   let judgedId: string | undefined;
-  const park = async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound): Promise<ToolCallOutcome> => {
+  let earlier: PreCheck | undefined;
+  const park =async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound): Promise<ToolCallOutcome> => {
     const sendOrDelete = parkOutbound?.kind === 'send' || parkOutbound?.kind === 'delete' ? parkOutbound : undefined;
     const parkReasons = [...new Set([...(sendOrDelete ? [sendOrDelete.reason] : []), ...reasons])];
     if (ctx.kind === 'review') return refuse('deny', 'pending', toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
@@ -378,17 +379,25 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         }
         let changed: string[] | undefined;
         if (tool.preCheck) {
-          const before = first;
+          const before = earlier = first;
           try {
-            first = await tool.preCheck(args, ctx);
-            const fresh = first.decision === 'deny' ? first.reasons : newChecks(before && recheckOf(before), first);
-            if (first.decision === 'deny' || fresh.length) changed = fresh;
+            const again = first = await tool.preCheck(args, ctx);
+            const refused = again.decision === 'deny' || refusedKeysOf(again.reasonKeys ?? []).length > 0;
+            const moved = (again.bind ?? null) !== (before?.bind ?? null) || JSON.stringify(again.pushes ?? null) !== JSON.stringify(before?.pushes ?? null);
+            const fresh = refused ? again.reasons : [...newChecks(before && recheckOf(before), again), ...(moved ? [toolText(language, 'pipeline.changed_target')] : [])];
+            if (refused || fresh.length) changed = fresh;
           } catch (error) { changed = [guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message })]; }
         }
         if (changed) { autoEvent('asked'); return refuse('deny', decidedBy, toolText(language, 'pipeline.changed_judging', { reasons: changed.join('\n- ') })); }
         const late = outboundOfCall(tool, first, language);
         if (late?.kind === 'deny') { autoEvent('asked'); return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: late.reason })); }
         if (late?.kind === 'send' || late?.kind === 'delete') { autoEvent('asked'); return park(late.kind, late.reason, late); }
+        const keysNow = first?.reasonKeys ?? [];
+        const ownerNow: { kind: PendingKind; reason: string } | undefined = keysNow.some(key => POLICY_KEYS.has(key)) ? { kind: 'policy', reason: reasons.join('; ') }
+          : first?.ownerReason !== undefined ? { kind: 'owner', reason: first.ownerReason }
+          : ownerKeysOf(keysNow).length ? { kind: 'owner', reason: pendingText('en', 'owner_protected', { reasons: reasons.join('; ') }) }
+          : undefined;
+        if (ownerNow) { autoEvent('asked'); return park(ownerNow.kind, ownerNow.reason); }
         const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
         const autoId = deps.approvals.recordAuto({
           runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons,
@@ -411,9 +420,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。
   // シェルのコマンドが外から取得する・外の中身を持ち込む（curl・Invoke-WebRequest・git clone・npm install など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）。
   // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した呼び出しも、動かしたら付ける。
-  const approvedEgress = first?.decision === 'ask' && first.askKinds?.includes('egress') === true;
+  const approvedEgress = [first, earlier].some(check => check?.decision === 'ask' && check.askKinds?.includes('egress') === true);
   // 結果が外の中身を持ち込んだと自分で言ったとき（output.fetched。実行してみないと分からない道具）も付ける。付ける向きにしか働かない。
-  if ((network && !(output.isError && output.noRemoteContent)) || first?.fetched === true || output.fetched === true || approvedEgress) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
+  if ((network && !(output.isError && output.noRemoteContent)) || first?.fetched === true || earlier?.fetched === true || output.fetched === true || approvedEgress) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 
   // ── 実行後フック（記録用。結果は変えない） ──
   for (const hook of ctx.config.tools.hooks.postToolUse) {
