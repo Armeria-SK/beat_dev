@@ -74,7 +74,7 @@ function actionRoute(action: NotificationAction, linked: Route | null, productId
 export function notificationGo(n: Pick<NotificationItem, 'kind' | 'link' | 'project_id' | 'action'>): NotificationGo | null {
   const target = notificationTarget(n.link);
   const linked = target ? parseRoute(target.hash) : null;
-  const action = isAction(n.action) ? n.action : linked?.view === 'pending' || linked?.view === 'questions' ? linked.view : linked ? undefined : KIND_ACTION[n.kind];
+  const action = isAction(n.action) ? n.action : linked?.view === 'pending' || linked?.view === 'questions' ? linked.view : linked || !Object.hasOwn(KIND_ACTION, n.kind) ? undefined : KIND_ACTION[n.kind];
   if (action) {
     const productId = n.project_id && PRODUCT_ID.test(n.project_id) ? n.project_id : null;
     return { hash: routeHash(actionRoute(action, linked, productId)), label: ACTION_LABEL[action] };

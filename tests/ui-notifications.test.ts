@@ -68,3 +68,8 @@ test('ui/notifications: 行のボタンは 1 つで決める場所へ。Pending�
   assert.equal(notificationGo(item(1, 'info')), null);
   assert.equal(markOf(item(1, 'question_new')), 'dot', '新しい質問は持ち主を待つ印');
 });
+
+test('ui/notifications: Object の持つ名前（constructor・toString）の種類でも行き先を作らない（beat 5-u2）', async () => {
+  const { notificationGo } = await import('../web/src/ui/notifications.ts');
+  for (const kind of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) assert.equal(notificationGo(item(1, kind)), null, kind);
+});

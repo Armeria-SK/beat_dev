@@ -139,11 +139,11 @@ export interface CoverageGroups {
 export function coverageGroups(acc: Acceptance): CoverageGroups {
   const g: CoverageGroups = { words: [], answers: [], ai: [], edited: [] };
   for (const item of shownItems(acc)) {
-    const s = item.source;
-    if (s.kind === 'owner_words') g.words.push({ quote: s.quote, item });
-    else if (s.kind === 'owner_choice') g.answers.push({ question: s.question, answer: s.answer, item });
-    else if (s.kind === 'ai_added') g.ai.push(item);
-    else g.edited.push(item);
+    const s = item.source.kind === 'owner_answer' ? item.source.was : item.source;
+    if (s?.kind === 'owner_words') g.words.push({ quote: s.quote, item });
+    else if (s?.kind === 'owner_choice') g.answers.push({ question: s.question, answer: s.answer, item });
+    else if (s?.kind === 'ai_added') g.ai.push(item);
+    else if (s?.kind === 'owner_edit') g.edited.push(item);
   }
   return g;
 }

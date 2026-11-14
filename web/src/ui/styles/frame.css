@@ -203,8 +203,9 @@ div.bt-stat:hover { box-shadow: none; transform: none; }
   .ui-notif { flex-wrap: wrap; }
   .ui-notif .bt-row__main { flex: 1 1 60%; }
   .ui-notif .bt-row__title, .ui-notif .bt-row__sub { white-space: normal; overflow-wrap: anywhere; }
-  .ui-notif .bt-row__end { flex: 1 1 100%; margin-left: 0; padding-left: calc(16px + var(--space-3)); }
-  .ui-notif .bt-row__end .bt-btn { flex: 1; height: 40px; }
+  .ui-notif .bt-row__end { flex: 1 1 100%; flex-wrap: wrap; margin-left: 0; }
+  .ui-notif .bt-row__end > .bt-meta { padding-left: calc(16px + var(--space-3)); }
+  .ui-notif .bt-row__end .bt-btn { flex: 1 1 100%; height: 40px; }
   .ui-sched .bt-btn, .bt-list .bt-row__end .bt-btn { height: 40px; }
   .bt-stat { min-height: 44px; }
 }

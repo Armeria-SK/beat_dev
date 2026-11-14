@@ -55,6 +55,7 @@ test('ui/Task（DOM）: Pending の承認を待つタスクには Answer の欄�
   assert.equal(byText(container, 'button', 'Send answer'), undefined);
   assert.ok(byText(container, '.bt-label', 'Waiting on Pending #12, #13'));
   assert.equal(byText(container, 'a', 'Open Pending')?.getAttribute('href'), `#/pending/${PRODUCT}`);
+  assert.equal(container.querySelector('.ui-task__state .bt-pill')?.textContent, 'Waiting on Pending', '状態の札も同じ言い方');
 });
 
 test('ui/Task（DOM）: 質問の返事待ちのタスクには、今までどおり Answer の欄を出す', async () => {

@@ -157,3 +157,10 @@ test('ui/acceptance: 質問票の答えの出どころ（owner_answer）は「Yo
   const oddClaim = item('A-3', { source: { kind: 'ai_added', claimed: 'owner_dream', reason: 'mystery' } as unknown as AcceptanceItem['source'] });
   assert.ok(itemDetails(oddClaim).every(d => typeof t(d.label) === 'string' && ('text' in d || typeof d.note === 'string')), '知らない claimed で空の札を作らない');
 });
+
+test('ui/acceptance: claimed は分かるが reason が知らない値なら、理由は not_found の文で出す（空の札にしない。beat 5-u2）', () => {
+  const odd = item('A-4', { source: { kind: 'ai_added', claimed: 'owner_words', reason: 'mystery', quote: 'q' } as unknown as AcceptanceItem['source'] });
+  const why = itemDetails(odd).find(d => d.label === 'ui.acc.detail.why');
+  assert.ok(why && 'note' in why);
+  assert.equal(why.note, 'ui.acc.reason.not_found');
+});
