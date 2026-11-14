@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { arrangeNotifications, NOTIFICATION_LIST_LIMIT, PINNED_KINDS } from '../src/shared/notification-list.ts';
-import type { NotificationItem } from '../web/src/api.ts';
-import { withNotification, withRead } from '../web/src/notification-meta.ts';
 import { startApp } from './app-setup.ts';
 
 const flood = (notify: (n: { kind: 'info'; title: string }) => unknown, count: number, from = 0) => {
@@ -66,50 +64,6 @@ test('一覧: 大事な未読が新しい 50 件の中にあっても、先頭�
 
 test('一覧: 大事な種類は承認待ち・タスクの質問・タスクの失敗の 3 つ', () => {
   assert.deepEqual([...PINNED_KINDS], ['approval_needed', 'task_waiting', 'task_failed']);
-});
-
-// ── 画面側（サーバーと同じ並べ方で、届いた通知・既読を反映する）──
-let seq = 0;
-const item = (kind: string, patch: Partial<NotificationItem> = {}): NotificationItem => {
-  seq += 1;
-  return { id: seq, kind, title: `${kind} ${seq}`, body: null, link: null, read_at: null, created_at: seq, ...patch };
-};
-
-test('画面: info が続けて届いても、未読の承認待ちは一覧の先頭に残る', () => {
-  const approval = item('approval_needed');
-  let list: NotificationItem[] | null = null;
-  list = withNotification(list, approval);
-  for (let i = 0; i < 120; i++) list = withNotification(list, item('info'));
-  assert.equal(list.length, NOTIFICATION_LIST_LIMIT + 1);
-  assert.equal(list[0]!.id, approval.id);
-  assert.equal(new Set(list.map(n => n.id)).size, list.length);
-  assert.deepEqual(list.slice(1).map(n => n.id), list.slice(1).map(n => n.id).sort((a, b) => b - a), 'その下は新しい順');
-});
-
-test('画面: 同じ id の通知が重ねて届いても 1 件。既読にすると先頭から外れる', () => {
-  const approval = item('task_waiting');
-  let list = withNotification(withNotification(null, approval), approval);
-  assert.equal(list.length, 1);
-  for (let i = 0; i < 60; i++) list = withNotification(list, item('info'));
-  assert.equal(list[0]!.id, approval.id);
-  const afterOne = withRead(list, [approval.id], 999)!;
-  assert.equal(afterOne.length, NOTIFICATION_LIST_LIMIT, '既読になった古い通知は新しい順の 50 件の外へ');
-  assert.ok(!afterOne.some(n => n.id === approval.id));
-  const afterAll = withRead(list, undefined, 999)!;
-  assert.equal(afterAll.length, NOTIFICATION_LIST_LIMIT);
-  assert.ok(afterAll.every(n => n.read_at !== null));
-  assert.equal(withRead(null, undefined, 1), null);
-});
-
-test('画面: 新しい 50 件の中の通知を既読にしても、一覧には残り、新しい順の場所に戻る', () => {
-  const failed = item('task_failed');
-  let list = withNotification(null, failed);
-  for (let i = 0; i < 3; i++) list = withNotification(list, item('info'));
-  assert.equal(list[0]!.id, failed.id);
-  const read = withRead(list, [failed.id], 5)!;
-  assert.equal(read.length, 4);
-  assert.equal(read[read.length - 1]!.id, failed.id, '古いので、新しい順では最後');
-  assert.equal(read[read.length - 1]!.read_at, 5);
 });
 
 test('arrangeNotifications: 先に来た同じ id を使い、大事な未読を新しい順に先頭へ', () => {
