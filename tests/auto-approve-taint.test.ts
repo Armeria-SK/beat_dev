@@ -252,7 +252,7 @@ for (const source of SOURCES) {
     test(`だます試験（${source}）: よそから来た文を読んだあとの ${positive.name} は、${how}`, { skip: psSkip(positive.shell) }, async t => {
       const s = await sandbox(t, { shell: positive.shell });
       const runId = inject(s, source, toolCall(positive.tool, positive.args));
-      await settled(s.app, runId);
+      await waitFor(() => s.app.runs.get(runId)?.ended_at != null, '実行の終わり', 60_000);
       await s.app.engine.wait(runId);
       assert.equal(cardCount(s), 0, 'Pending に積まない');
       if (positive.judged) {

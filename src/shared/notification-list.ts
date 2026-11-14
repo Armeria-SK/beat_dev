@@ -3,9 +3,20 @@
 export const NOTIFICATION_LIST_LIMIT = 50;
 export const PINNED_KINDS = ['approval_needed', 'task_waiting', 'task_failed'] as const;
 
-export interface Listed { id: number; kind: string; read_at: number | null }
+export const BLOCKING_QUESTION_KEY = 'question-blocking:';
 
-export const isPinned = (n: Listed): boolean => n.read_at === null && (PINNED_KINDS as readonly string[]).includes(n.kind);
+export type NotificationAction = 'pending' | 'questions' | 'kanban' | 'retry';
+
+const ACTIONS: Readonly<Record<string, NotificationAction>> = {
+  approval_needed: 'pending', question_new: 'questions', task_done: 'kanban', task_failed: 'retry',
+};
+
+export const actionOf = (kind: string): NotificationAction | null => (Object.hasOwn(ACTIONS, kind) ? ACTIONS[kind]! : null);
+
+export interface Listed { id: number; kind: string; read_at: number | null; dedup_key?: string | null | undefined }
+
+export const isPinned = (n: Listed): boolean => n.read_at === null
+  && ((PINNED_KINDS as readonly string[]).includes(n.kind) || (n.kind === 'question_new' && n.dedup_key?.startsWith(BLOCKING_QUESTION_KEY) === true));
 
 // 新しい順に limit 件 + 先頭に出す未読をすべて。同じ id は、先に来たほうを使う
 export function arrangeNotifications<T extends Listed>(items: readonly T[], limit: number): T[] {
