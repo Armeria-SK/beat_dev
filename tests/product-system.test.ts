@@ -255,6 +255,21 @@ test('2-3 製品のフォルダがジャンクションにすり替わってい�
   assert.ok(!s.adapter().calls[0]!.system.dynamic.includes('relative paths start here'));
 });
 
+test('2-3 製品のフォルダの名前に行の区切りが入っていたら（前に登録された行）、毎回の 1 行にフォルダを入れず、指示ファイルも読まない', async t => {
+  const s = await setup(t);
+  const odd = `${s.root}-a\u{2028}b`;
+  mkdirSync(odd);
+  writeFileSync(join(odd, 'AGENTS.md'), 'ODD-RULES');
+  const real = realpathSync.native(odd);
+  const project = s.app.projects.create({ name: 'Odd', root: real, rootKey: rootKeyOf(real), checkCommand: null });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send('p1', 'hello', project.id);
+  const call = s.adapter().calls[0]!;
+  assert.ok(!call.system.dynamic.includes('relative paths start here'), call.system.dynamic);
+  assert.ok(!call.system.dynamic.includes('\u{2028}'));
+  assert.ok(!frozenOf(s.app, 'p1').includes('ODD-RULES'));
+});
+
 test('2-3 使用量の見積もり: まだ固定していない製品の会話は、製品の指示ファイルと製品の 1 行を入れた量で数える', async t => {
   const s = await setup(t);
   s.app.conversations.ensure('p', { projectId: s.project.id });
