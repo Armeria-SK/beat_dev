@@ -58,7 +58,7 @@ const en = {
   'list.git_identity': 'This git commit sets the author name or address for this one commit (-c user.name / -c user.email)',
   'list.git_push': 'Sending to a remote (git push)',
   'list.winargs': 'The arguments do not follow the rules for passing them to a program on Windows ({detail})',
-  'list.winargs_ps': 'Windows PowerShell 5.1 does not pass this argument to the program as written (an empty argument is dropped, -name:value stays one argument, and a comma list with spaces or empty items becomes separate arguments): {detail}',
+  'list.winargs_ps': 'PowerShell does not reliably pass this argument to the program as written (an empty argument is dropped, -name:value stays one argument, and a comma list with spaces or empty items becomes separate arguments): {detail}',
   'list.ps_write': 'In PowerShell, "{cmd}" writes, creates, moves or deletes files, so it is not run without a check (you are asked every time). To write without a check, use the file_write tool',
   'list.ps_pipe': 'A value that comes through the pipe can bind to an argument of "{cmd}" (where it writes or connects to), so where it acts is unknown',
   'list.download': '{cmd} saves to a file. A { } [ ] in the URL or a #1 in -o changes where it saves, so it is not run without a check even when the destination is fixed',
