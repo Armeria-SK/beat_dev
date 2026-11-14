@@ -171,7 +171,7 @@ export class TaskStore {
 
   templates(project?: ProjectFilter): RepeatingTask[] {
     const filter = byProject(project);
-    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE}${filter.sql} ORDER BY created_at, rowid`).all(...filter.args) as unknown as Task[];
+    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${IS_TEMPLATE} AND status != 'inbox'${filter.sql} ORDER BY created_at, rowid`).all(...filter.args) as unknown as Task[];
     const last = this.#db.prepare('SELECT id, status, result_summary, COALESCE(completed_at, updated_at) AS at FROM tasks WHERE parent_id = ? ORDER BY rowid DESC LIMIT 1');
     return rows.map(task => {
       const run = last.get(task.id) as { id: string; status: TaskStatus; result_summary: string | null; at: number } | undefined;
@@ -250,8 +250,11 @@ export class TaskStore {
     const task = this.get(id);
     if (!task || this.beatDecided(id)) return '';
     if (task.spawned_by) {
-      const root = this.#spawnRoot(task);
-      return root ? this.#ownerText(root) ?? '' : '';
+      const chain = this.#spawnChain(task);
+      const root = chain?.at(-1);
+      if (!chain || !root || this.beatDecided(root.id)) return '';
+      if (chain.some(link => this.#sourceTainted(link.id, link.parent_id) || this.#textTainted(link.id, link.parent_id))) return '';
+      return this.#ownerText(root) ?? '';
     }
     const owner = this.#ownerText(task);
     if (owner !== undefined) return owner;
@@ -267,17 +270,17 @@ export class TaskStore {
     return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria, ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : [])].filter(Boolean).join('\n');
   }
 
-  #spawnRoot(task: Task): Task | undefined {
-    const seen = new Set<string>([task.id]);
+  #spawnChain(task: Task): Task[] | undefined {
+    const chain = [task];
     let current = task;
     while (current.spawned_by) {
-      if (seen.has(current.spawned_by) || seen.size > 100) return undefined;
+      if (chain.length > 100) return undefined;
       const parent = this.get(current.spawned_by);
       if (!parent) return undefined;
-      seen.add(parent.id);
+      chain.push(parent);
       current = parent;
     }
-    return current;
+    return chain;
   }
 
   ownerEdited(id: string, patch: { title?: string | undefined; body?: string | undefined; doneCriteria?: string | null | undefined }): void {
@@ -480,16 +483,17 @@ export class TaskStore {
     });
   }
 
-  approve(id: string): Task {
+  approve(id: string, seenVersion?: number): Task {
     transaction(this.#db, () => {
       const task = this.get(id);
       if (!task || task.status !== 'inbox') throw new TaskError('error.not_proposal');
+      if (seenVersion !== undefined && seenVersion !== task.updated_at) throw new TaskError('error.proposal_changed');
       const now = this.#now();
       const template = task.cron !== null && task.parent_id === null;
       const next = template ? nextRunAt(task.cron!, task.timezone ?? 'UTC', now) : null;
       if (template && next === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
       if (task.origin !== 'user' && task.proposed_by === null) {
-        const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: task.done_criteria } satisfies OwnerRequest);
+        const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: null } satisfies OwnerRequest);
         this.#db.prepare("UPDATE tasks SET origin = 'user', proposed_by = ?, owner_request = ? WHERE id = ?").run(task.origin, request, id);
       }
       this.event(id, 'approved', 'user');

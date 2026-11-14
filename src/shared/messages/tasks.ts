@@ -5,6 +5,7 @@ const en = {
   'error.bad_cron': 'The repeat setting (cron) is not valid: {cron}',
   'error.not_found': 'Task {id} was not found',
   'error.not_proposal': 'This is not a proposal waiting for approval',
+  'error.proposal_changed': 'The proposal changed after you opened it. Read it again, then approve',
   'error.not_schedule': 'This is not a schedule',
   'error.running': 'It is running',
   'error.schedule_cannot_run': 'A schedule cannot be run as it is (use "Run now")',
