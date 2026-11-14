@@ -4,8 +4,8 @@ import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import type { Access } from '../../settings/access.ts';
-import { findDraft, orderTools, POLICY_LABEL, toolLook } from '../../skills-meta.ts';
-import { lineDelta } from '../../../../src/shared/line-delta.ts';
+import { draftGrowth, findDraft, orderTools, POLICY_LABEL, toolLook } from '../../skills-meta.ts';
+import { lineDelta, lineDiff } from '../../../../src/shared/line-delta.ts';
 import type { ToolPolicy } from '../../../../src/tools/tool-policy.ts';
 import { DiscardConfirm, useDiscardAsk } from '../Discard.tsx';
 import { useNow } from '../hooks.ts';
@@ -220,8 +220,26 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
   );
 }
 
-function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open: boolean; now: number; onDone: () => void }) {
+function DraftDiff({ before, after }: { before: string; after: string }) {
   const t = useT();
+  const lines = useMemo(() => lineDiff(before, after), [before, after]);
+  const { added, removed } = useMemo(() => lineDelta(before, after), [before, after]);
+  return (
+    <div className="bt-diff ui-lib__diff">
+      <div className="bt-diff__file"><span>{t('ui.skills.diff')}</span><span><span className="bt-add">+{added}</span> <span className="bt-del">−{removed}</span></span></div>
+      {lines.map((line, i) => (
+        <span key={i} className={line.kind === 'same' ? 'bt-diff__line' : `bt-diff__line bt-diff__line--${line.kind}`} title={line.text}>
+          {line.kind === 'add' ? '+ ' : line.kind === 'del' ? '− ' : '  '}{line.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open: boolean; now: number; onDone: () => void }) {
+  const t = useT();
+  const growth = draftGrowth(draft);
+  const [whole, setWhole] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
@@ -267,7 +285,15 @@ function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open: boole
         <li className="bt-row ui-lib__open">
           <div className="bt-row__main">
             {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}
-            {open && <article className="bt-doc"><p className="bt-meta">{draft.description}</p>{draft.reason && <p className="bt-meta">{draft.reason}</p>}<Markdown text={draft.body} /></article>}
+            {open && growth && (
+              <div className="ui-lib__growth">
+                <span className="bt-label">{t(growth.kind === 'change' ? 'ui.skills.growth' : 'ui.skills.growthReason')}</span>
+                <p className="ui-lib__growthtext">{growth.text}</p>
+                <Button small variant="ghost" aria-expanded={whole} onClick={() => setWhole(shown => !shown)}>{t(whole ? 'ui.skills.hideWhole' : 'ui.skills.showWhole')}</Button>
+              </div>
+            )}
+            {open && (!growth || whole) && draft.current && <DraftDiff before={draft.current.body} after={draft.body} />}
+            {open && (!growth || whole) && <article className="bt-doc"><p className="bt-meta">{draft.description}</p>{draft.reason && growth?.kind !== 'reason' && <p className="bt-meta">{draft.reason}</p>}<Markdown text={draft.body} /></article>}
           </div>
         </li>
       )}

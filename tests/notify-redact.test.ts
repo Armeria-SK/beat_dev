@@ -96,7 +96,7 @@ test('notify_owner の知らせ: 題と本文の鍵は、外の送り先へ伏�
 
 test('スキルの下書きの知らせ: 理由の鍵は、外の送り先へ伏せて出る。ふつうの下書きはそのまま', async t => {
   const s = await start(t);
-  const draft = { description: 'd', body: 'b', status: 'pending' as const, conversation_id: null, run_id: null, created_at: 0, decided_at: null };
+  const draft = { description: 'd', body: 'b', change_summary: null, status: 'pending' as const, conversation_id: null, run_id: null, created_at: 0, decided_at: null };
   s.app.skills.onDraft!({ ...draft, id: 7, name: 'deploy-notes', reason: `uses ${KEY} and ${GH} with Authorization: ${BEARER}` });
   s.app.skills.onDraft!({ ...draft, id: 8, name: 'weekly-report', reason: 'summarise every week' });
   const info = await s.delivered();
@@ -106,4 +106,14 @@ test('スキルの下書きの知らせ: 理由の鍵は、外の送り先へ伏
   assert.equal(info[1]!.body, 'summarise every week');
   assert.match(info[1]!.title, /weekly-report/u);
   assert.equal(info[1]!.link, 'https://beat.example.ts.net/#/skills/draft/weekly-report');
+});
+
+test('スキルの下書きの知らせ: 直す下書きの本文は change_summary で、その中の鍵も外の送り先へ伏せて出る', async t => {
+  const s = await start(t);
+  const draft = { description: 'd', body: 'b', reason: 'r', status: 'pending' as const, conversation_id: null, run_id: null, created_at: 0, decided_at: null };
+  s.app.skills.onDraft!({ ...draft, id: 9, name: 'deploy-notes', change_summary: `used ${KEY} → use ${GH}` });
+  const info = await s.delivered();
+  assert.equal(info.length, 1);
+  assert.doesNotMatch(JSON.stringify(info), LEAK);
+  assert.match(info[0]!.body!, /^used \[REDACTED\]/u);
 });

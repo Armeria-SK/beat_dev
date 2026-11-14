@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFil
 import type { AddressInfo } from 'node:net';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
+import { Value } from '@sinclair/typebox/value';
 import { App, builtinTools } from '../src/app.ts';
 import { defaultConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
@@ -66,7 +67,7 @@ function bareStore(t: { after: (fn: () => void) => void }, now: () => number = D
 test('1-5s 聞かない（askBeforeRegister: false）: skill_draft はその場でスキルになり、下書きは approved、通知が 1 つ（外へ送らない印つき）、前の版は beat-auto で控える', async t => {
   const { app, events, paths } = await boot(t, autoConfig());
   app.skills.write({ name: 'weekly-report', description: 'Old', body: 'old steps' });
-  const out = await skillDraft.execute(draftInput('1. Collect\n2. Summarize'), ctxOf(app));
+  const out = await skillDraft.execute({ ...draftInput('1. Collect\n2. Summarize'), change: 'Old steps → collect, then summarize' }, ctxOf(app));
   assert.ok(!out.isError);
   assert.match(String(out.content), /^Replaced the registered skill "weekly-report" with your new text without review \(draft #\d+\)\. It is active now\./u);
   assert.equal(app.skills.getRegistered('weekly-report')?.body, '1. Collect\n2. Summarize');
@@ -74,7 +75,7 @@ test('1-5s 聞かない（askBeforeRegister: false）: skill_draft はその場�
   assert.equal(app.skills.drafts('pending').length, 0);
   const auto = events.filter(e => e.title === 'Skill registered without review');
   assert.equal(auto.length, 1);
-  assert.deepEqual([auto[0]!.kind, auto[0]!.body, auto[0]!.link, auto[0]!.noForward], ['info', 'weekly-report', '#/skills/weekly-report', true]);
+  assert.deepEqual([auto[0]!.kind, auto[0]!.body, auto[0]!.link, auto[0]!.noForward], ['info', 'weekly-report: Old steps → collect, then summarize', '#/skills/weekly-report', true]);
   assert.equal(events.some(e => /review the skill draft/u.test(e.title)), false);
   const history = app.skills.history('weekly-report');
   assert.deepEqual(history.map(v => [v.who, v.body]), [['beat-auto', 'old steps']]);
@@ -103,6 +104,59 @@ test('1-5s 聞く（既定）: 下書きは今と同じく pending で待ち、�
   assert.equal(events.filter(e => /review the skill draft/u.test(e.title)).length, 1);
   await app.applyConfig({ ...app.config() }, { probe: false });
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(paths.config, 'utf8')) as object, 'skills'), false, '保存し直しても既定は書き足さない');
+});
+
+test('スキルの成長: 登録したスキルを直す skill_draft は change（前 → 今）が要る。無い・空・空白・null なら何も残さず断り、あれば下書きと /api/review に change_summary が載る。知らせの本文も change', async t => {
+  const { app, events } = await boot(t, null);
+  const api = await serve(t, app);
+  app.skills.write({ name: 'weekly-report', description: 'Old', body: 'old steps' });
+  const missing = await skillDraft.execute(draftInput('new steps'), ctxOf(app));
+  assert.equal(missing.isError, true);
+  assert.match(String(missing.content), /already registered, so add change/u);
+  for (const change of ['', '   ', null]) {
+    const blank = await skillDraft.execute({ ...draftInput('new steps'), change }, ctxOf(app));
+    assert.equal(blank.isError, true, `change ${JSON.stringify(change)} も断る`);
+  }
+  assert.equal(app.skills.drafts('all').length, 0, '断ったときは下書きを残さない');
+  const change = 'wttr.in gives only 3 days → use the 10-day page, and search again if its URL is 404';
+  const ok = await skillDraft.execute({ ...draftInput('new steps'), change: `  ${change}  ` }, ctxOf(app));
+  assert.ok(!ok.isError);
+  assert.equal(app.skills.drafts('pending')[0]!.change_summary, change);
+  assert.deepEqual(events.filter(e => /review the skill draft/u.test(e.title)).map(e => e.body), [change], '待つ下書きの知らせの本文は、理由ではなく change');
+  const review = (await api('/api/review')).body.skillDrafts as Array<{ name: string; change_summary: string | null }>;
+  assert.deepEqual(Object.fromEntries(review.map(d => [d.name, d.change_summary])), { 'weekly-report': change });
+  assert.match(skillDraft.description, /When fixing one, change is required/u);
+  assert.match(ToolRegistry.specs(builtinTools().filter(tool => tool.name === 'skill_draft'), { ...defaultConfig(), skills: { askBeforeRegister: false } })[0]!.description, /change is required/u, '聞かない設定の説明にも載る');
+});
+
+test('スキルの成長: 新しいスキルは change が無い・空・空白・null でも下書きになり、書いた change は残さない（知らせの本文は理由のまま）', async t => {
+  const { app, events } = await boot(t, null);
+  const inputs = [{}, { change: '' }, { change: '   ' }, { change: null }, { change: 'something → else' }];
+  for (const [i, extra] of inputs.entries()) {
+    const out = await skillDraft.execute({ ...draftInput('steps'), name: `new-${i}`, ...extra }, ctxOf(app));
+    assert.ok(!out.isError, JSON.stringify(extra));
+  }
+  assert.deepEqual(app.skills.drafts('pending').map(d => d.change_summary), [null, null, null, null, null]);
+  assert.deepEqual(events.filter(e => /review the skill draft/u.test(e.title)).map(e => e.body), inputs.map(() => 'Asked every week'));
+});
+
+test('スキルの成長: フォルダに置かれただけで登録していない同じ名前は「新しいスキル」なので、change が無くても下書きになる', async t => {
+  const { app, paths } = await boot(t, null);
+  mkdirSync(join(paths.workspace, 'skills', 'weekly-report'), { recursive: true });
+  writeFileSync(join(paths.workspace, 'skills', 'weekly-report', 'SKILL.md'), '---\nname: weekly-report\ndescription: "Placed"\n---\n\nplaced steps\n');
+  assert.ok(app.skills.get('weekly-report'));
+  assert.equal(app.skills.isRegistered('weekly-report'), false);
+  const out = await skillDraft.execute(draftInput('new steps'), ctxOf(app));
+  assert.ok(!out.isError);
+  assert.equal(app.skills.drafts('pending')[0]!.change_summary, null);
+});
+
+test('スキルの成長: change は 400 字まで（401 字は道具の入力の決まりで通らない）', () => {
+  const input = (change: string) => ({ ...draftInput('steps'), change });
+  assert.equal(Value.Check(skillDraft.input, input('a'.repeat(400))), true);
+  assert.equal(Value.Check(skillDraft.input, input('a'.repeat(401))), false);
+  assert.equal(Value.Check(skillDraft.input, { ...draftInput('steps'), change: null }), true);
+  assert.equal(Value.Check(skillDraft.input, input('')), true, '空の change は入力の誤りにしない（新しいスキルで通る）');
 });
 
 test('1-5s 聞く / 聞かないで、モデルに渡す文（skill_draft の説明と振り返りの指示）が替わる。既定は今のまま', () => {
