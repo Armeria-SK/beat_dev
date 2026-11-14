@@ -1,6 +1,6 @@
-import type { ChecklistItem, Conversation, Project, Task, WorkerRun, WorkerStatus } from '../api.ts';
+import type { ChecklistItem, Conversation, PendingCounts, Project, QuestionCounts, Task, WorkerRun, WorkerStatus } from '../api.ts';
 import { checklistStep } from './agent-state.ts';
-import { finishedAt, isTemplate, type Board, type Card, type ColumnId, type Step } from './kanban.ts';
+import { finishedAt, isTemplate, KANBAN_PAGE, type Board, type Card, type ColumnId, type Step } from './kanban.ts';
 import { overviewOrder } from './products.ts';
 import { routeHash } from './routes.ts';
 
@@ -82,13 +82,6 @@ export function readLastLook(raw: string | null, now: number, dayStart: (ms: num
 
 export type Owners = ReadonlyMap<string, string | null>;
 
-export function conversationOwners(conversations: ReadonlyArray<Pick<Conversation, 'id' | 'project_id'>>, tasks: ReadonlyArray<Pick<Task, 'conversation_id' | 'project_id'>>): Map<string, string | null> {
-  const owners = new Map<string, string | null>();
-  for (const task of tasks) if (task.conversation_id) owners.set(task.conversation_id, task.project_id ?? null);
-  for (const c of conversations) owners.set(c.id, c.project_id ?? null);
-  return owners;
-}
-
 export const taskOwners = (tasks: ReadonlyArray<Pick<Task, 'id' | 'project_id'>>): Map<string, string | null> =>
   new Map(tasks.map(task => [task.id, task.project_id ?? null]));
 
@@ -100,35 +93,53 @@ export function productTiles(project: Pick<Project, 'id' | 'waiting'>): Tile[] {
   ];
 }
 
-export function holders(projects: readonly Project[], id: TileId, total: number): Array<{ name: string | null; n: number }> {
+export function holders(projects: readonly Project[], id: TileId, none: number): Array<{ name: string | null; n: number }> {
   const named: Array<{ name: string | null; n: number }> = overviewOrder(projects).map(p => ({ name: p.name, n: p.waiting[id] })).filter(h => h.n > 0);
-  const rest = total - named.reduce((sum, h) => sum + h.n, 0);
-  return named.length > 0 && rest > 0 ? [...named, { name: null, n: rest }] : named;
+  return named.length > 0 && none > 0 ? [...named, { name: null, n: none }] : named;
 }
 
-export function scopeRunning(input: RunningInput, projectId: string | null, tasks: Owners): RunningInput {
+const sum = (counts: Record<string, number>): number => Object.values(counts).reduce((total, n) => total + n, 0);
+
+export function unownedWaits(active: ReadonlyArray<Pick<Task, 'status' | 'project_id'>> | null, questions: QuestionCounts | null, pending: PendingCounts | null): Record<TileId, number> {
+  return {
+    proposals: active ? active.filter(task => task.status === 'inbox' && !task.project_id).length : 0,
+    questions: questions ? Math.max(0, questions.open - sum(questions.byProject)) : 0,
+    pending: pending ? Math.max(0, pending.waiting - sum(pending.byProject)) : 0,
+  };
+}
+
+const placed = (owner: string | null | undefined, listed: ReadonlySet<string> | undefined): string | null =>
+  (owner && (!listed || listed.has(owner)) ? owner : null);
+
+export function scopeRunning(input: RunningInput, projectId: string | null, tasks: Owners | null, listed?: ReadonlySet<string>): RunningInput {
   return {
     ...input,
-    worker: input.worker.filter(run => (run.kind === 'task' && run.taskId ? tasks.get(run.taskId) ?? null : null) === projectId),
-    conversations: input.conversations.filter(c => (c.project_id ?? null) === projectId),
+    worker: input.worker.filter(run => {
+      if (run.kind !== 'task' || !run.taskId) return projectId === null;
+      return tasks !== null && placed(tasks.get(run.taskId), listed) === projectId;
+    }),
+    conversations: input.conversations.filter(c => placed(c.project_id, listed) === projectId),
   };
 }
 
 export interface ProductSection { running: RunningRow[]; failed: Task[]; finished: number }
 
-export function productSection(projectId: string | null, input: RunningInput, tasks: Owners, done: readonly Task[]): ProductSection {
-  const mine = done.filter(task => (task.project_id ?? null) === projectId);
-  return { running: runningRows(scopeRunning(input, projectId, tasks)), failed: mine.filter(task => task.status === 'failed'), finished: mine.length };
+export function productSection(projectId: string | null, input: RunningInput, tasks: Owners | null, done: readonly Task[], listed?: ReadonlySet<string>): ProductSection {
+  const mine = done.filter(task => placed(task.project_id, listed) === projectId);
+  return { running: runningRows(scopeRunning(input, projectId, tasks, listed)), failed: mine.filter(task => task.status === 'failed'), finished: mine.length };
 }
+
+export const ticksEverySecond = (rows: readonly RunningRow[]): boolean => rows.some(row => row.startedAt !== null);
 
 export const hasSomething = (section: ProductSection): boolean => section.running.length > 0 || section.failed.length > 0 || section.finished > 0;
 
 export const FINISHED_CAP = 200;
 export type Paging = 'more' | 'done' | 'capped';
 
-export function finishedPaging(loaded: ReadonlyArray<Pick<Task, 'completed_at' | 'updated_at'>>, hasNext: boolean, since: number, min: number, cap = FINISHED_CAP): Paging {
+export function finishedPaging(loaded: ReadonlyArray<Pick<Task, 'completed_at' | 'updated_at'>>, hasNext: boolean, since: number, min: number, cap = FINISHED_CAP, grew = true): Paging {
   if (!hasNext) return 'done';
   const reached = loaded.length > 0 && loaded.reduce((low, task) => Math.min(low, finishedAt(task)), Number.POSITIVE_INFINITY) <= since;
+  if (!grew) return reached ? 'done' : 'capped';
   if (reached && loaded.length >= min) return 'done';
   return loaded.length >= cap ? (reached ? 'done' : 'capped') : 'more';
 }
@@ -136,6 +147,6 @@ export function finishedPaging(loaded: ReadonlyArray<Pick<Task, 'completed_at' |
 export const LIST_AFTER = 4;
 export const listsProducts = (count: number): boolean => count > LIST_AFTER;
 
-export function cardProduct(card: Card, owners: Owners): string | null {
-  return card.kind === 'task' ? card.task.project_id ?? null : owners.get(card.conversationId) ?? null;
+export function boardFinished<T>(finished: readonly T[], hasNext: boolean, page = KANBAN_PAGE): { finished: T[]; hasMore: boolean } {
+  return { finished: finished.slice(0, page), hasMore: hasNext || finished.length > page };
 }
