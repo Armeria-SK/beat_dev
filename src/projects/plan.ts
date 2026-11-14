@@ -46,9 +46,101 @@ const GIST_HEAD_SHARE = 0.7;
 const GIST_HEADING = /^#{1,6} /u;
 const GIST_HEADING_CHARS = 80;
 const GIST_LATER = 'Later sections:';
+const FENCE_OPEN = /^(`{3,}|~{3,})(.*)$/u;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u;
+const FENCE_MARK = /^ {0,3}(?:`{3,}|~{3,})/u;
+const CONTAINER = /^[ \t]*(?:(?:[-+*>]|\d{1,9}[.)])[ \t]*)*/u;
+const HTML_KINDS: readonly (readonly [RegExp, RegExp | null])[] = [
+  [/^<!--/u, /-->/u],
+  [/^<\?/u, /\?>/u],
+  [/^<!\[CDATA\[/u, /\]\]>/u],
+  [/^<![A-Za-z]/u, />/u],
+  [/^<(?:script|pre|style|textarea)(?=[\s>]|$)/iu, /<\/(?:script|pre|style|textarea)>/iu],
+  [/^<\/?[A-Za-z]/u, null],
+];
+const HTML_SPAN_OPEN = /<!--|<\?|<!\[CDATA\[|<![A-Za-z]/u;
+const HTML_TAG = /<\/?[A-Za-z][^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*>/gu;
+const LINK_DEFINITION = /(^|\n)[ \t]*(?:(?:[-+*>]|\d{1,9}[.)])[ \t]*)*\[(?:\\[\s\S]|[^[\]\\])*\]:[^\n]*(?:\n[^\n]*\S[^\n]*)*/gu;
+
+function fenceAfter(open: string, line: string): string {
+  if (open) {
+    const close = FENCE_CLOSE.exec(line);
+    return close && close[1]![0] === open[0] && close[1]!.length >= open.length ? '' : open;
+  }
+  const start = FENCE_OPEN.exec(line);
+  return start && !(start[1]![0] === '`' && start[2]!.includes('`')) ? start[1]! : '';
+}
+
+function shownToOwner(content: string): string {
+  const out: { text: string; code: boolean }[] = [];
+  let fence = '';
+  let hide: { end: RegExp | null; strict: boolean } | undefined;
+  for (const line of content.split(/\r\n|\n|\r/u)) {
+    if (fence) {
+      out.push({ text: line, code: true });
+      fence = fenceAfter(fence, line);
+      continue;
+    }
+    const body = line.slice(CONTAINER.exec(line)![0].length);
+    const kind = HTML_KINDS.findIndex(([start]) => start.test(body));
+    if (hide) {
+      if (hide.end === null) {
+        if (line.trim() === '') {
+          hide = undefined;
+          out.push({ text: '', code: false });
+        } else if (FENCE_MARK.test(line) || (kind >= 0 && kind < 5)) break;
+        continue;
+      }
+      if (hide.strict && (FENCE_MARK.test(line) || kind >= 0)) break;
+      if (hide.end.test(line)) hide = undefined;
+      continue;
+    }
+    fence = fenceAfter('', line);
+    if (fence) {
+      out.push({ text: line, code: true });
+      continue;
+    }
+    if (kind >= 0) {
+      const [start, end] = HTML_KINDS[kind]!;
+      if (end === null || !end.test(body.slice(start.exec(body)![0].length))) hide = { end, strict: body.length !== line.length };
+      continue;
+    }
+    let rest = line;
+    let kept = '';
+    for (;;) {
+      const open = HTML_SPAN_OPEN.exec(rest);
+      if (!open) {
+        kept += rest;
+        break;
+      }
+      kept += rest.slice(0, open.index);
+      const end = HTML_KINDS.find(([start]) => start.test(open[0]))![1]!;
+      const tail = rest.slice(open.index + open[0].length);
+      const close = end.exec(tail);
+      if (!close) {
+        hide = { end, strict: true };
+        break;
+      }
+      rest = tail.slice(close.index + close[0].length);
+    }
+    out.push({ text: kept, code: false });
+  }
+  const parts: string[] = [];
+  for (let at = 0; at < out.length;) {
+    if (out[at]!.code) {
+      parts.push(out[at++]!.text);
+      continue;
+    }
+    let until = at;
+    while (until < out.length && !out[until]!.code) until++;
+    parts.push(out.slice(at, until).map(entry => entry.text).join('\n').replace(LINK_DEFINITION, '$1').replace(HTML_TAG, ''));
+    at = until;
+  }
+  return parts.join('\n');
+}
 
 export function planGist(content: string, roomChars: number, roomTokens: number): string {
-  const text = redactSecrets(content).split(/\r?\n/u).map(line => line.trimEnd()).join('\n').replace(/\n{3,}/gu, '\n\n').trim();
+  const text = redactSecrets(shownToOwner(content)).split('\n').map(line => line.trimEnd()).join('\n').replace(/\n{3,}/gu, '\n\n').trim();
   const fits = (value: string): boolean => value.length <= roomChars && estimateTextTokens(value) <= roomTokens;
   if (fits(text)) return text;
   const lineCut = (chars: number, tokens: number): number => {
@@ -57,7 +149,15 @@ export function planGist(content: string, roomChars: number, roomTokens: number)
     return at > 0 ? at : length;
   };
   const headEnd = lineCut(Math.floor(roomChars * GIST_HEAD_SHARE), Math.floor(roomTokens * GIST_HEAD_SHARE));
-  const headings = text.slice(headEnd).split('\n').filter(line => GIST_HEADING.test(line)).map(line => [...line].slice(0, GIST_HEADING_CHARS).join(''));
+  const headings: string[] = [];
+  let fence = '';
+  let at = 0;
+  for (const line of text.split('\n')) {
+    const code = fence !== '';
+    fence = fenceAfter(fence, line);
+    if (at >= headEnd && !code && !fence && GIST_HEADING.test(line)) headings.push([...line].slice(0, GIST_HEADING_CHARS).join(''));
+    at += line.length + 1;
+  }
   if (headings.length === 0) return text.slice(0, lineCut(roomChars, roomTokens)).trimEnd();
   const head = text.slice(0, headEnd).trimEnd();
   let gist = [head, GIST_LATER].filter(Boolean).join('\n');

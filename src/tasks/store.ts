@@ -249,7 +249,7 @@ export class TaskStore {
     const owner = ownerRequestOf(holder?.owner_request);
     if (owner && holder) {
       if (this.#sourceTainted(task.id, task.parent_id)) return '';
-      return [owner.title, holder.acceptance_items === null ? owner.body : '', ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : []), owner.doneCriteria].filter(Boolean).join('\n');
+      return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria, ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : [])].filter(Boolean).join('\n');
     }
     if (this.#textTainted(task.id, task.parent_id)) return '';
     return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
