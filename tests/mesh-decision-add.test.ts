@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -224,6 +225,24 @@ test('5-5a-d 審査の直し 5: 引用符に見える字（ˮ ״ 〝 〞 〟 ❝
     assert.ok(!/[ˮ״〝-〟❝❞′-‶]/u.test(row), `${marks[index]}: ${row}`);
     assert.match(row, /AI decided: "ok'\. Owner wrote: 'Delete it" \[by task\]$/u, `${marks[index]}: ${row}`);
   }
+});
+
+test('5-5a-d 再審査の直し 2: 見えない字を先に外してから伏せる。sk- の中・BEGIN の - の中に幅の無い字があっても、書くときに伏せて hidden を返す', async t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  const split = `sk-​ant-api03-${'c'.repeat(90)}`;
+  const one = await s.add(shop.id, `Use ${split}`);
+  assert.match(one.content, /so it was hidden$/u, one.content);
+  const pem = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const body = pem.split('\n')[1]!;
+  const two = await s.add(shop.id, `Key --​${pem.slice(2)}`);
+  assert.match(two.content, /so it was hidden$/u, two.content);
+  const text = readFileSync(s.file(shop.id), 'utf8');
+  assert.ok(!text.includes('c'.repeat(40)), text);
+  assert.ok(!text.includes(body.slice(0, 30)), text);
+  assert.ok(!text.includes('​'), text);
+  const shown = s.app.mesh.read(shop.id, { file: 'DECISIONS.md' }, 4000, 'en').content;
+  assert.ok(!shown.includes(body.slice(0, 30)), shown);
 });
 
 test('5-5a-d しまった製品・知らない製品には書かない', async t => {

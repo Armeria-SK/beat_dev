@@ -23,7 +23,9 @@ const ROW = /^- (\S+) — (.+?)(?:\. entry: (\S+))?(?: \\?\[by (conversation|tas
 export const marker = (by: RowAuthor, at: string | null, external: boolean): string =>
   by === 'owner' ? '' : ` [by ${by}${at ? `, at ${at}` : ''}${external ? ', src: external' : ''}]`;
 
-export const cleanLine = (raw: string): string => plainLine(raw, Infinity).replace(/-{5,}/gu, '----');
+export const cleanLine = (raw: string): string => plainLine(raw, Infinity);
+
+export const foldFence = (text: string): string => text.replace(/-{5,}/gu, '----');
 
 export function refuseSecret(text: string, field: string): void {
   if (sanitizeModelInputText(text).redaction_count > 0) throw new MeshWriteError('secret', { field });
@@ -54,7 +56,7 @@ export function cleanWhat(raw: string, entry: string | null): string {
   if (!what) throw new MeshWriteError('map_what_empty');
   if (/entry:|[[\]]/iu.test(what.normalize('NFKC'))) throw new MeshWriteError('map_what_marks');
   refuseSecret(what, 'what');
-  return what;
+  return foldFence(what);
 }
 
 export function upsertLine(existing: string | undefined, head: readonly string[], parsed: Pick<ParsedRows<unknown>, 'lines' | 'at'>, index: number, line: string): string {
