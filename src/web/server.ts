@@ -12,6 +12,7 @@ import { engineText } from '../shared/messages/engine.ts';
 import { redactJsonValue } from '../shared/redaction.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
+import { judgeStats } from '../tools/judge-stats.ts';
 import { searchHistory } from '../memory/history.ts';
 import { join } from 'node:path';
 import { MemoryError, planBooks } from '../memory/store.ts';
@@ -340,6 +341,13 @@ export function createWebServer(app: App): WebServer {
     const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
       .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null }>;
     sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app), project) });
+  });
+
+  router.add('GET', '/api/judge/stats', ({ res, url }) => {
+    const days = Math.min(Math.max(Math.floor(Number(url.searchParams.get('days') ?? 7)) || 7, 1), 90);
+    const project = projectFilterOf(url);
+    const now = Date.now();
+    sendJson(res, 200, judgeStats(app.db, { since: todayStart(app, now - (days - 1) * 86_400_000), until: now + 1, project, timezone: app.config().timezone }));
   });
 
   // ── ツールの記録 ──

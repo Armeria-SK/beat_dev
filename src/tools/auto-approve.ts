@@ -109,6 +109,36 @@ export type AutoVerdict = { decision: 'allow' | 'ask'; reason: string; failed?: 
 
 export interface JudgeLimits { answerMs: number; slotWaitMs?: number | undefined }
 
+export interface JudgeReply { text: string; model?: string | undefined; usage?: { inputTokens?: number | undefined; outputTokens?: number | undefined } | undefined }
+
+export interface JudgeSpend { ms: number; model?: string; inputTokens?: number; outputTokens?: number }
+
+type JudgeAsk = (prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall) => Promise<string | JudgeReply>;
+
+const tokenCount = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
+export async function judgeOnce(
+  input: ClassifierInput,
+  ask: JudgeAsk,
+  signal: AbortSignal,
+  limits: JudgeLimits | number = CLASSIFIER_TIMEOUT_MS,
+): Promise<{ verdict: AutoVerdict; spend: JudgeSpend }> {
+  const started = Date.now();
+  const spent: Omit<JudgeSpend, 'ms'> = {};
+  const counted = async (prompt: ClassifierPrompt, combined: AbortSignal, call?: JudgeCall): Promise<string> => {
+    const reply = await (call ? ask(prompt, combined, call) : ask(prompt, combined));
+    if (typeof reply !== 'object' || reply === null) return reply;
+    if (typeof reply.model === 'string' && reply.model) spent.model = reply.model.slice(0, 200);
+    const inputTokens = tokenCount(reply.usage?.inputTokens);
+    const outputTokens = tokenCount(reply.usage?.outputTokens);
+    if (inputTokens !== undefined) spent.inputTokens = inputTokens;
+    if (outputTokens !== undefined) spent.outputTokens = outputTokens;
+    return reply.text;
+  };
+  const verdict = await autoDecide(input, counted, signal, limits);
+  return { verdict, spend: { ms: Math.max(0, Date.now() - started), ...spent } };
+}
+
 export interface JudgeCall extends JudgeLimits { queued(): void; started(): void }
 
 export class NoJudge extends Error {

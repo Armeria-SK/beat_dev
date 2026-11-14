@@ -515,4 +515,24 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   UPDATE tasks SET status = 'inbox', lease_until = NULL, updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE origin = 'curiosity' AND status IN ('ready', 'running');
   `,
+  `
+  CREATE TABLE judge_calls (
+    id INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    run_kind TEXT NOT NULL CHECK (run_kind IN ('chat', 'task', 'agent', 'review')),
+    project_id TEXT,
+    tool TEXT NOT NULL,
+    reason_keys TEXT NOT NULL DEFAULT '[]',
+    ask_kinds TEXT NOT NULL DEFAULT '[]',
+    outcome TEXT NOT NULL CHECK (outcome IN ('allow', 'ask', 'failed')),
+    failed TEXT,
+    judge_model TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    duration_ms INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX ix_judge_calls_created ON judge_calls (created_at);
+  CREATE INDEX ix_judge_calls_run ON judge_calls (run_id);
+  `,
 ];
