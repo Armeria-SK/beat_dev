@@ -5,7 +5,7 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, actionView, byteSize, decidedShown, decidedText, earlierQuery, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
+  acceptanceRows, actionView, byteSize, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
@@ -279,4 +279,35 @@ test('4-4 タスクごとの Pending の数: 待っている行だけを task_id
   assert.deepEqual([...counts.entries()].sort(), [['t1', 2], ['t2', 1]]);
   assert.equal(counts.has('t3'), false);
   assert.equal(taskCounts([]).size, 0);
+});
+
+test('ui/pending: Other input は、題の終わりにもう出ている path を繰り返さない。残りの入力はそのまま出し、JSON として読めないもの（伏せた入力）には手を加えない', () => {
+  const json = (value: unknown) => JSON.stringify(value, null, 2);
+  assert.equal(extraShown('Write to a file: .github/workflows/ci.yml', json({ path: '.github/workflows/ci.yml' })), null, 'path だけなら欄ごと出さない');
+  assert.equal(extraShown('Write to a file: a.md', json({ path: 'a.md', mode: 'append' })), json({ mode: 'append' }), 'path 以外は残す');
+  assert.equal(extraShown('Run a command', json({ timeoutSec: 120 })), json({ timeoutSec: 120 }));
+  assert.equal(extraShown('Write to a file: a.md', json({ path: 'b.md' })), json({ path: 'b.md' }), '題に出ていない path は消さない');
+  assert.equal(extraShown('Write to a file: xa.md', json({ path: 'a.md' })), json({ path: 'a.md' }), '題の終わりの語とちょうど同じときだけ');
+  assert.equal(extraShown(null, json({ path: 'a.md' })), json({ path: 'a.md' }), '題が無ければ消さない');
+  assert.equal(extraShown('Write to a file: a.md', json({ path: '' })), json({ path: '' }));
+  assert.equal(extraShown('Write to a file: a.md', json({ target: 'a.md' })), json({ target: 'a.md' }), 'path の鍵だけ');
+  const masked = ['{', '  "path": "a.md",', '  "token": [REDACTED]', '}'].join(String.fromCharCode(10));
+  assert.equal(extraShown('Write to a file: a.md', masked), masked);
+  assert.equal(extraShown('Write to a file: a.md', '["a.md"]'), '["a.md"]');
+  assert.equal(extraShown('Write to a file: a.md', null), null);
+});
+
+test('ui/pending: 行の Approve / Reject は見出しの横（1 段目）、中身（コマンド・書く中身・理由・パス・出どころ）は下の段で欄の幅いっぱい（持ち主 2026-11-14。PendingPane と pending.css の配線）', () => {
+  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../web/src/ui/styles/pending.css', import.meta.url), 'utf8');
+  const item = pane.slice(pane.indexOf('function PendingItem('), pane.indexOf('function AcceptanceItem('));
+  const at = (text: string) => { const i = item.indexOf(text); assert.ok(i >= 0, `${text} が PendingItem にある`); return i; };
+  assert.ok(at('className="bt-pending__what"') < at('className="bt-pending__actions"'), 'ボタンは見出しのすぐあと');
+  assert.ok(at('className="bt-pending__actions"') < at('className="ui-pending__detail"'), '中身はボタンのあとの段');
+  const detail = item.slice(at('className="ui-pending__detail"'));
+  for (const part of ['ui-pending__code', '<ActionBody', 'ui-pending__why', 'bt-pending__from']) assert.ok(detail.includes(part), `${part} は下の段の中`);
+  assert.ok(!item.slice(at('className="bt-pending__what"'), at('className="bt-pending__actions"')).includes('view.inline'), 'コマンドは見出しの行に入れない');
+  assert.match(css, /\.ui-pending__detail \{[^}]*grid-column: 1 \/ -1;/u, '下の段は列を全部使う');
+  assert.match(css, /\.ui-pending__reject \{[^}]*grid-column: 1 \/ -1;/u, 'Reject の理由の欄も幅いっぱい');
+  assert.ok(pane.includes('extraShown(row.title, view.extra)'), 'Other input は extraShown を通す');
 });

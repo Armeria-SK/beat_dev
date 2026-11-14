@@ -6,7 +6,7 @@ import { latestOnly } from '../latest.ts';
 import { ROW_LEAVE_MS } from '../library.ts';
 import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import {
-  acceptanceRows, actionView, byteSize, cleanReason, decidedShown, decidedText, earlierQuery, effectFiles, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
+  acceptanceRows, actionView, byteSize, cleanReason, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
   type AcceptanceRow, type ActionView, type FileFact, type KindTile, type Outcome,
 } from '../pending.ts';
 import { reportOpError } from '../task-ops.ts';
@@ -49,14 +49,15 @@ function factText(t: T, fact: FileFact): string {
 function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
   const t = useT();
   const facts = fileFacts(row);
+  const extra = extraShown(row.title, view.extra);
   return (
     <>
       {view.cwd && <p className="bt-meta ui-pending__cwd">{t('ui.pending.cwd')} <code>{view.cwd}</code></p>}
       {view.block && <pre className="ui-pending__body"><code>{view.block}</code></pre>}
-      {view.extra && (
+      {extra && (
         <div className="ui-pending__file">
           <span className="bt-meta">{t('ui.pending.extra')}</span>
-          <pre className="ui-pending__body ui-pending__extra"><code>{view.extra}</code></pre>
+          <pre className="ui-pending__body ui-pending__extra"><code>{extra}</code></pre>
         </div>
       )}
       {row.preview.map(file => (
@@ -92,17 +93,10 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
   return (
     <div className={`bt-pending${tile === 'delete' ? ' bt-pending--delete' : ''}${leaving ? ' is-leaving' : ' bt-rise'} ui-pending__item`} style={{ '--bt-i': index } as CSSProperties} data-pending={row.id} aria-busy={busy || undefined}>
       <span className="bt-pending__kind" aria-hidden="true"><Icon name={TILE_ICON[tile]} /></span>
-      <div className="ui-pending__text">
-        <p className="bt-pending__what">
-          <span className="bt-label">{t(kindLabel(row.kind))}</span>{view.title && <> {view.title}</>}{view.inline && <> <code className="ui-pending__code">{view.inline}</code></>}
-          {files !== null && <> {files.more ? t('ui.pending.effectMore', files.files) : t('ui.pending.effect', files.files)}</>}
-        </p>
-        <ActionBody row={row} view={view} />
-        {(why || row.masked > 0) && (
-          <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && t('ui.pending.masked', row.masked)].filter(Boolean).join(' · ')}</p>
-        )}
-        <div className="bt-pending__from bt-meta"><span>{fromText(t, row, withProduct, titles)}</span><span>{formatRelative(row.created_at, now)}</span></div>
-      </div>
+      <p className="bt-pending__what">
+        <span className="bt-label">{t(kindLabel(row.kind))}</span>{view.title && <> {view.title}</>}
+        {files !== null && <> {files.more ? t('ui.pending.effectMore', files.files) : t('ui.pending.effect', files.files)}</>}
+      </p>
       {!asking && (
         <div className="bt-pending__actions">
           <Button small disabled={locked} onClick={() => onApprove(row)}>{t('ui.pending.approve')}</Button>
@@ -120,6 +114,14 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
           </span>
         </form>
       )}
+      <div className="ui-pending__detail">
+        {view.inline && <code className="ui-pending__code ui-pending__command">{view.inline}</code>}
+        <ActionBody row={row} view={view} />
+        {(why || row.masked > 0) && (
+          <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && t('ui.pending.masked', row.masked)].filter(Boolean).join(' · ')}</p>
+        )}
+        <div className="bt-pending__from bt-meta"><span>{fromText(t, row, withProduct, titles)}</span><span>{formatRelative(row.created_at, now)}</span></div>
+      </div>
     </div>
   );
 }
