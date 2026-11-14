@@ -5,7 +5,7 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, actionView, byteSize, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
+  acceptanceRows, actionView, byteSize, decidedMore, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
@@ -310,4 +310,27 @@ test('ui/pending: 行の Approve / Reject は見出しの横（1 段目）、中
   assert.match(css, /\.ui-pending__detail \{[^}]*grid-column: 1 \/ -1;/u, '下の段は列を全部使う');
   assert.match(css, /\.ui-pending__reject \{[^}]*grid-column: 1 \/ -1;/u, 'Reject の理由の欄も幅いっぱい');
   assert.ok(pane.includes('extraShown(row.title, view.extra)'), 'Other input は extraShown を通す');
+});
+
+test('ui/pending: Decided の行を開くと、却下の理由の全文と、実行の出力の頭が出る。出すものが無い行は開けない（backlog 489）', () => {
+  const nl = String.fromCharCode(10);
+  const out = ['line 1', 'not allowed now', ''].join(nl);
+  assert.deepEqual(decidedMore(row({ status: 'ran', exit_code: 0, output_preview: out })), { reason: null, output: ['line 1', 'not allowed now'].join(nl) });
+  assert.deepEqual(decidedMore(row({ status: 'failed', output_preview: out })), { reason: null, output: ['line 1', 'not allowed now'].join(nl) });
+  assert.equal(decidedMore(row({ status: 'failed', output_preview: 'not allowed now' })), null, '1 行だけの失敗は、行の文にもう出ている');
+  assert.deepEqual(decidedMore(row({ status: 'ran', output_preview: 'ok' })), { reason: null, output: 'ok' }, '実行した行の文には出力が無いので、1 行でも出す');
+  assert.deepEqual(decidedMore(row({ status: 'rejected', reject_reason: '  wrong host  ' })), { reason: 'wrong host', output: null });
+  assert.equal(decidedMore(row({ status: 'rejected', reject_reason: null })), null);
+  assert.equal(decidedMore(row({ status: 'ran', exit_code: 0, output_preview: null })), null);
+  assert.equal(decidedMore(row({ status: 'ran', output_preview: nl })), null);
+  assert.equal(decidedMore(row({ status: 'stale', output_preview: null })), null);
+  assert.equal(decidedMore(row({ status: 'running', output_preview: 'x' })), null, '動いている最中は出さない');
+  assert.equal(decidedMore(row({ status: 'waiting', output_preview: 'x' })), null);
+  assert.equal(en['ui.pending.more'], 'Details');
+  assert.equal(en['ui.pending.output'], 'Output');
+  assert.equal(en['ui.pending.reasonGiven'], 'Reason');
+  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
+  assert.ok(pane.includes('const more = decidedMore(row);'), 'Decided の行は decidedMore から開く中身を組む');
+  assert.ok(pane.includes(`<summary className="bt-meta">{t('ui.pending.more')}</summary>`), 'details で開く');
+  assert.ok(pane.includes('<pre className="ui-pending__body"><code>{more.output}</code></pre>'), '出力は Waiting の中身と同じ枠');
 });

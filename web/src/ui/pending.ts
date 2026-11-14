@@ -137,6 +137,17 @@ export function outcomeOf(row: PendingAction): Outcome | null {
   }
 }
 
+export function decidedMore(row: Pick<PendingAction, 'status' | 'reject_reason' | 'output_preview'>): { reason: string | null; output: string | null } | null {
+  if (row.status === 'rejected') {
+    const reason = row.reject_reason?.trim() || null;
+    return reason ? { reason, output: null } : null;
+  }
+  if (row.status !== 'ran' && row.status !== 'failed') return null;
+  const output = row.output_preview?.trimEnd() ?? '';
+  if (!output.trim() || (row.status === 'failed' && !output.includes('\n'))) return null;
+  return { reason: null, output };
+}
+
 export const REASON_MAX = 500;
 
 export const cleanReason = (text: string): string => text.replace(/[\p{Cc}]+/gu, ' ').replace(/ {2,}/gu, ' ').trim().slice(0, REASON_MAX);

@@ -21,6 +21,8 @@
 .ui-pending__extra, .ui-pending__extra code { color: var(--ink-mute); }
 .ui-pending__file { display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-1); min-width: 0; }
 .ui-pending__facts { display: flex; flex-direction: column; gap: 2px; margin: var(--space-1) 0 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
+.ui-pending__more { min-width: 0; }
+.ui-pending__more > summary { width: fit-content; cursor: pointer; }
 .ui-pending__none { margin: 0; }
 .ui-pending__earlier { align-self: flex-start; }
 .bt-screen > .bt-screen__inner.ui-pending-screen { padding-left: max(var(--space-7), calc((100% - 720px) / 2)); padding-right: max(var(--space-7), calc((100% - 720px) / 2)); }

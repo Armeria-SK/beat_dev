@@ -6,7 +6,7 @@ import { latestOnly } from '../latest.ts';
 import { ROW_LEAVE_MS } from '../library.ts';
 import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import {
-  acceptanceRows, actionView, byteSize, cleanReason, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
+  acceptanceRows, actionView, byteSize, cleanReason, decidedMore, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, kindLabel, kindTile, mergeDecided, outcomeOf, REASON_MAX, reasonLine, waitingShown,
   type AcceptanceRow, type ActionView, type FileFact, type KindTile, type Outcome,
 } from '../pending.ts';
 import { reportOpError } from '../task-ops.ts';
@@ -241,6 +241,7 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
             {today.map(row => {
               const outcome = outcomeOf(row);
               const line = decidedText(actionView(row));
+              const more = decidedMore(row);
               if (!outcome) return null;
               const ok = outcome.kind === 'ran' && (outcome.exit === null || outcome.exit === 0);
               return (
@@ -249,6 +250,18 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
                   <div className="bt-row__main">
                     <span className="bt-row__title ui-pending__shown">{line.erased && <span className="ui-pending__title bt-meta">{t('ui.pending.erased')}</span>}{line.title && <span className="ui-pending__title">{line.title}</span>}{line.code && <code className="ui-pending__code">{line.code}</code>}</span>
                     <span className="bt-row__sub bt-meta">{[all && row.project_name, line.cwd && `${t('ui.pending.cwd')} ${line.cwd}`, outcomeText(t, outcome)].filter(Boolean).join(' · ')}</span>
+                    {more && (
+                      <details className="ui-pending__more">
+                        <summary className="bt-meta">{t('ui.pending.more')}</summary>
+                        {more.reason && <p className="bt-meta ui-pending__why">{t('ui.pending.reasonGiven')}: {more.reason}</p>}
+                        {more.output && (
+                          <div className="ui-pending__file">
+                            <span className="bt-meta">{t('ui.pending.output')}</span>
+                            <pre className="ui-pending__body"><code>{more.output}</code></pre>
+                          </div>
+                        )}
+                      </details>
+                    )}
                   </div>
                 </li>
               );
