@@ -4,7 +4,7 @@
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { RepoInfo } from './allowlist-core.ts';
-import { isRemotePath } from './scope.ts';
+import { isRemotePath } from './remote-path.ts';
 
 export interface ConfigEntry { key: string; value: string }
 

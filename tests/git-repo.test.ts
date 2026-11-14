@@ -7,6 +7,8 @@ import { mock, test } from 'node:test';
 import { readRemotes } from '../src/projects/remotes.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { findGitDir, inspectRepo, insideGitDir, isGitDir, isLocalRemoteUrl, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
+import { isRemotePath } from '../src/tools/hooks/remote-path.ts';
+import { isRemotePath as isRemotePathInScope } from '../src/tools/hooks/scope.ts';
 import { tempDir } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -563,4 +565,10 @@ test('commondir・gitdir がネットワークのパス（\\\\host\\share）な�
     assert.notEqual(verdict.decision, 'allow', command);
     assert.deepEqual(touched, [], `シェルの判定（3 回目の審査 2・4）: ${command}`);
   }
+});
+
+test('git-repo.ts は scope.ts を読み込まない（互いに読み込む輪を作らない）', () => {
+  const source = fs.readFileSync(new URL('../src/tools/hooks/git-repo.ts', import.meta.url), 'utf8');
+  assert.equal(/from '\.\/scope\.ts'/u.test(source), false);
+  assert.equal(isRemotePath, isRemotePathInScope);
 });

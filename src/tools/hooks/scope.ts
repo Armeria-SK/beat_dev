@@ -4,6 +4,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { insideGitDir } from './git-repo.ts';
+import { isRemotePath } from './remote-path.ts';
+
+export { isRemotePath };
 
 export type RootMode = 'read' | 'write';
 export interface ResolvedRoot { path: string; mode: RootMode }
@@ -27,14 +30,6 @@ const DEPENDENCY_FOLDER = /(?:^|\/)node_modules(?:\/|$)/iu;
 const DEVICE_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 
 export type Expanded = { path: string } | { unresolved: string };
-
-// ネットワークのパス（UNC: \\サーバー\共有）か、デバイスのパス（\\?\ \\.\ \??\）か。Windows は / を \ と同じに読む。
-// ネットワークの先は、このPCの中で確かめられず（管理共有 \\localhost\C$ は同じ PC のファイルを指す）、デバイスのパスは * や ? などの書き方の決まりを避けられるので、どれも扱わない
-export function isRemotePath(p: string): boolean {
-  if (!WINDOWS) return false;
-  const normalized = p.replaceAll('/', '\\');
-  return normalized.startsWith('\\\\') || normalized.startsWith('\\??\\');
-}
 
 export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = process.env, language: Language = DEFAULT_LANGUAGE): Expanded {
   let p = input.replace(/^["']|["']$/gu, '');
