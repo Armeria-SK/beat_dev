@@ -442,14 +442,18 @@ test('Anthropic: 転送（リダイレクト）は追わない。転送先に鍵
   } finally { await first.close(); await other.close(); }
 });
 
-test('Anthropic: baseUrl を書いていなければ、環境変数 ANTHROPIC_BASE_URL があっても送り先は api.anthropic.com のまま', async () => {
+test('Anthropic: 環境変数 ANTHROPIC_BASE_URL・ANTHROPIC_AUTH_TOKEN は使わない（送り先は api.anthropic.com のまま、Authorization の見出しも付けない）', async () => {
   const lure = await fakeServer((_req, _body, res) => { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{}'); });
   const before = process.env.ANTHROPIC_BASE_URL;
+  const beforeToken = process.env.ANTHROPIC_AUTH_TOKEN;
   process.env.ANTHROPIC_BASE_URL = lure.url;
+  process.env.ANTHROPIC_AUTH_TOKEN = 'fake-auth-token-0000';
   try {
     const urls: string[] = [];
-    const fetchImpl = (async (input: RequestInfo | URL) => {
+    const bearers: Array<string | null> = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       urls.push(String(input instanceof Request ? input.url : input));
+      bearers.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization'));
       return new Response('{"type":"error","error":{"type":"not_found_error","message":"no"}}', { status: 404, headers: { 'content-type': 'application/json' } });
     }) as unknown as typeof fetch;
     const adapter = new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000' }, fetchImpl);
@@ -458,7 +462,9 @@ test('Anthropic: baseUrl を書いていなければ、環境変数 ANTHROPIC_BA
     assert.equal(urls.length, 2);
     for (const url of urls) assert.ok(url.startsWith('https://api.anthropic.com/'), url);
     assert.equal(lure.requests.length, 0);
+    assert.deepEqual(bearers, [null, null], 'probe にも stream にも Authorization は付かない');
   } finally {
+    if (beforeToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN; else process.env.ANTHROPIC_AUTH_TOKEN = beforeToken;
     if (before === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = before;
     await lure.close();
   }

@@ -93,6 +93,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     if (!this.#client || this.#clientKey !== key) {
       this.#client = new Anthropic({
         apiKey: key ?? null,
+        authToken: null,
         maxRetries: 0, // 再試行はエンジン側で一本化する（試行回数を engine_runs に正しく残すため）
         timeout: this.provider.timeoutMs,
         baseURL: this.provider.baseUrl ?? ANTHROPIC_URL,

@@ -286,8 +286,6 @@ export function keyEnvEdit(value: string): KeyEnvEdit {
   return { patch: { apiKeyEnv: value || undefined } };
 }
 
-export const keyEnvPatch = (value: string): { apiKeyEnv: string | undefined } | null => (keyEnvProblem(value) ? null : { apiKeyEnv: value || undefined });
-
 // API キーの環境変数の名前。プロバイダに書かれたもの（Anthropic で書いていなければ ANTHROPIC_API_KEY）。
 export function keyUsage(config: Config): Array<{ name: string; providers: string[] }> {
   const names = new Map<string, string[]>();

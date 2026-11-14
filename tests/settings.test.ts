@@ -5,7 +5,7 @@ import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  keyEnvEdit, keyEnvPatch, keyEnvProblem, kindPatch, openAfterRename, sharedKeyWith,
+  keyEnvEdit, keyEnvProblem, kindPatch, openAfterRename, sharedKeyWith,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -473,16 +473,16 @@ test('Key variable の欄の結果（keyEnvEdit）: 鍵を持てない名前と�
 });
 
 test('Key variable の欄: 環境変数の名前だけを設定に入れる。鍵を貼ったものは断り、空は外す', () => {
-  assert.deepEqual(keyEnvPatch('MY_API_KEY'), { apiKeyEnv: 'MY_API_KEY' });
-  assert.deepEqual(keyEnvPatch(''), { apiKeyEnv: undefined });
-  assert.equal(keyEnvPatch('sk-ant-test-0000000000000000'), null);
-  assert.equal(keyEnvPatch('my_api_key'), null);
+  assert.deepEqual(keyEnvEdit('MY_API_KEY'), { patch: { apiKeyEnv: 'MY_API_KEY' } });
+  assert.deepEqual(keyEnvEdit(''), { patch: { apiKeyEnv: undefined } });
+  assert.ok('fail' in keyEnvEdit('sk-ant-test-0000000000000000'));
+  assert.ok('fail' in keyEnvEdit('my_api_key'));
 });
 
 test('Key variable の欄: 大文字と数字だけの鍵らしい文字列は、名前の形に合っていても設定に入れない（鍵を持つ名前だけ通す）', () => {
-  assert.equal(keyEnvPatch('ABCD1234EFGH5678IJKL9012MNOP3456'), null);
+  assert.ok('fail' in keyEnvEdit('ABCD1234EFGH5678IJKL9012MNOP3456'));
   assert.equal(keyEnvProblem('ABCD1234EFGH5678IJKL9012MNOP3456'), 'unsafe');
-  assert.equal(keyEnvPatch('PATH'), null);
+  assert.ok('fail' in keyEnvEdit('PATH'));
   assert.equal(keyEnvProblem('sk-ant-test-0000000000000000'), 'pattern');
   assert.equal(keyEnvProblem('MY_API_KEY'), null);
   assert.equal(keyEnvProblem('OPENROUTER_TOKEN'), null);
