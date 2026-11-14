@@ -56,7 +56,7 @@ export async function runProductCheck(check: ProductCheck, options: { config: Ap
       ...(shell.stdin ? { input: shell.stdin(check.command) } : {}),
     });
   } finally { cleanup(); }
-  if (result.aborted || options.signal.aborted) return { ok: false, reason: 'aborted' };
+  if (result.aborted) return { ok: false, reason: 'aborted' };
   if (!result.spawnError && !result.timedOut && result.exitCode === 0) return { ok: true, durationMs: result.durationMs };
   const out = result.stdoutTail ?? result.stdout;
   const err = result.stderrTail ?? result.stderr;

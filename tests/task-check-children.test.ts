@@ -570,14 +570,16 @@ test('5-3a: 会話に譲ったあとに持ち主が実行を止めると、確�
   assert.ok(existsSync(root));
 });
 
-test('5-3a: 会話に譲ったあとに beat を閉じると、確かめのプロセスも止まる', { timeout: 30_000 }, async t => {
+test('5-3a: 会話に譲ったあとに beat を閉じると、閉じる呼び出しが返る時には確かめのプロセスが止まっている', { timeout: 30_000 }, async t => {
   const s = await setup(t);
-  const { root, ticking } = await preemptDuringCheck(s, "const fs = require('fs'); fs.writeFileSync('started', ''); const armed = setInterval(() => { if (fs.existsSync('arm')) { clearInterval(armed); setTimeout(() => fs.writeFileSync('late.txt', 'x'), 400); } }, 20); setTimeout(() => process.exit(0), 20000);");
-  writeFileSync(join(root, 'arm'), '');
+  const { root, ticking } = await preemptDuringCheck(s, "const fs = require('fs'); fs.writeFileSync('pid', String(process.pid)); fs.writeFileSync('started', ''); setTimeout(() => process.exit(0), 20000);");
+  const pid = Number(readFileSync(join(root, 'pid'), 'utf8'));
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  assert.equal(alive(), true);
   s.close();
+  const afterClose = alive();
   await within(ticking.catch(() => 'closed'), 10_000, 'run ended');
-  await new Promise(r => setTimeout(r, 1500));
-  assert.equal(existsSync(join(root, 'late.txt')), false, 'the check outlived beat');
+  assert.equal(afterClose, false, 'the check was still running when close() returned');
 });
 
 test('5-3a: 確かめのコマンドがあるのに製品のフォルダが無いときは、完了にも done にもしない', async t => {
