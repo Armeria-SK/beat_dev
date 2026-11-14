@@ -58,7 +58,39 @@ test('差: 値の編集・キーの削除・id を持つ一覧の追加 / 削除
   ]);
   const reordered = structuredClone(saved);
   reordered.models.reverse();
-  assert.deepEqual(diffConfig(saved, reordered), [], 'models の並べ替えだけは編集にしない');
+  assert.deepEqual(diffConfig(saved, reordered).map(e => `${e.type}:${editPath(e)}`), ['order:models'], 'models の並べ替えも 1 つの編集（backlog 265）');
+});
+
+test('保存の合流: id を持つ一覧の並べ替えだけでも当たる。ほかが足した項目は残し、ほかが先に並べ替えていたら衝突（backlog 265）', () => {
+  const saved = sample();
+  const draft = structuredClone(saved);
+  draft.models.reverse();
+  draft.providers.reverse();
+  const plain = merge(saved, draft, structuredClone(saved));
+  assert.deepEqual(plain.conflicts, []);
+  assert.deepEqual(plain.config.models.map((m: { id: string }) => m.id), ['sonnet', 'big']);
+  assert.deepEqual(plain.config.providers.map((p: { id: string }) => p.id), ['claude', 'local']);
+
+  const added = structuredClone(saved);
+  added.models.push({ id: 'theirs', provider: 'local', model: 'x' });
+  const kept = merge(saved, draft, added);
+  assert.deepEqual(kept.conflicts, []);
+  assert.deepEqual(kept.config.models.map((m: { id: string }) => m.id), ['sonnet', 'big', 'theirs'], 'ほかが足した項目はその場所のまま');
+
+  const moved = structuredClone(saved);
+  moved.models.push({ id: 'third', provider: 'local', model: 't' });
+  const mine = structuredClone(moved);
+  mine.models = [mine.models[2], mine.models[0], mine.models[1]];
+  const theirs = structuredClone(moved);
+  theirs.models = [theirs.models[1], theirs.models[0], theirs.models[2]];
+  assert.deepEqual(merge(moved, mine, theirs).conflicts.map(c => c.path), ['models'], 'ほかが先に並べ替えていたら衝突');
+
+  const inserted = structuredClone(saved);
+  inserted.models.splice(1, 0, { id: 'mid', provider: 'local', model: 'm' });
+  assert.deepEqual(merge(saved, inserted, structuredClone(saved)).config.models.map((m: { id: string }) => m.id), ['big', 'mid', 'sonnet'], '足した場所も保つ');
+  const appended = structuredClone(saved);
+  appended.models.push({ id: 'end', provider: 'local', model: 'e' });
+  assert.deepEqual(diffConfig(saved, appended).map(e => e.type), ['addItem'], '末尾に足しただけなら並べ替えの編集は出ない');
 });
 
 test('保存の合流（自発行動の場面）: 右のパネルが先に変えた worker.autonomy を、設定の保存が巻き戻さない', () => {

@@ -18,6 +18,7 @@ import { CATEGORIES, categoryById, DEFAULT_CATEGORY, GROUP_LABEL, isCategory, ma
 export interface SettingsProps {
   section: string | undefined;
   onClose: () => void;
+  held: (() => void) | null;
   onReplay: () => void;
   onSaved: () => void;
   onProfile: () => void;
@@ -27,7 +28,7 @@ const GROUPS: readonly GroupId[] = ['agent', 'computer', 'customize'];
 
 export const openCategory = (id: string): void => location.replace(routeHash({ view: 'settings', section: id }));
 
-export function Settings({ section, onClose, onReplay, onSaved, onProfile }: SettingsProps) {
+export function Settings({ section, onClose, held, onReplay, onSaved, onProfile }: SettingsProps) {
   const t = useT();
   const [view, setView] = useState<SettingsView | null>(null);
   const [failed, setFailed] = useState(false);
@@ -54,6 +55,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
   }, []);
 
   useEffect(() => { close.current?.focus(); }, []);
+  useEffect(() => () => { const open = pendingRef.current; pendingRef.current = null; open?.cancel?.(); }, []);
   useEffect(() => { main.current?.scrollTo({ top: 0 }); showPending(null); }, [current, showPending]);
 
   const reload = useCallback(async () => {
@@ -72,15 +74,15 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
     confirmable(answer => showPending({ ...what, run: () => { pendingRef.current = null; setPending(null); answer.confirm(); }, cancel: answer.cancel }), run), [showPending]);
 
   const commit = useCallback(function run(row: string, edit: (config: Config) => Config, confirmed: string | null = null): Promise<boolean> {
-    return enqueue(async (): Promise<boolean | { items: Access[]; key: string }> => {
+    return enqueue(async (signal): Promise<boolean | { items: Access[]; key: string }> => {
       setBusy(row); setErrors(old => (old[row] ? { ...old, [row]: '' } : old));
       let latest: Config | null = null;
       try {
-        latest = (await api.settings()).config;
+        latest = (await api.settings(signal)).config;
         const plan = planSave(latest, edit, confirmed);
         if (plan.kind === 'same') return true;
         if (plan.kind === 'confirm') return { items: plan.items, key: plan.key };
-        const result = await api.saveSettings(plan.config);
+        const result = await api.saveSettings(plan.config, signal);
         setView(result); setModels(result.models); applyServerSettings(result);
         onSaved();
         return true;
@@ -90,13 +92,14 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
         setRevision(n => n + 1);
         return false;
       } finally { setBusy(null); }
-    }).then(result => (typeof result === 'boolean' ? result : ask({ row, items: result.items }, () => run(row, edit, result.key))));
+    }).then(result => (typeof result === 'boolean' ? result : ask({ row, items: result.items }, () => run(row, edit, result.key))), () => false);
   }, [enqueue, ask, onSaved, t]);
 
   const setDirty = useCallback((key: string, on: boolean) => { dirty.current.set(key, on); setUnsaved(`settings:${key}`, on); }, []);
   useEffect(() => () => clearUnsaved('settings:'), []);
   const guard = useCallback((go: () => void) => { if (hasUnsaved(dirty.current)) setLeave(() => go); else go(); }, []);
   const tryClose = useCallback(() => guard(onClose), [guard, onClose]);
+  useEffect(() => { if (held) setLeave(() => held); }, [held]);
   const tryOpen = useCallback((id: string) => guard(() => openCategory(id)), [guard]);
   const askLeave = useCallback((e: { key: string; defaultPrevented: boolean; preventDefault: () => void }) => {
     if (!escAsksLeave(e, hasUnsaved(dirty.current))) return;
@@ -112,8 +115,8 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
 
   const ctx = useMemo<SetCtx | null>(() => (view ? {
     view, config: view.config, models, busy, pending, errors, revision,
-    commit, ask, cancel, setDirty, fail, clear, reload, setBusy, onProfile, openCategory: tryOpen,
-  } : null), [view, models, busy, pending, errors, revision, commit, ask, cancel, setDirty, fail, clear, reload, onProfile, tryOpen]);
+    commit, queue: enqueue, ask, cancel, setDirty, guard, fail, clear, reload, setBusy, onProfile, openCategory: tryOpen,
+  } : null), [view, models, busy, pending, errors, revision, commit, enqueue, ask, cancel, setDirty, guard, fail, clear, reload, onProfile, tryOpen]);
 
   const matches = useMemo(() => matchCategories(query, key => t(key)), [query, t]);
   const search = (text: string) => {
@@ -135,7 +138,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
       case 'browser': body = <BrowserPanel />; break;
       case 'mcp': body = <McpPanel />; break;
       case 'server': body = <ServerPanel />; break;
-      case 'persona': body = <PersonaPanel onReplay={onReplay} />; break;
+      case 'persona': body = <PersonaPanel onReplay={() => guard(onReplay)} />; break;
       case 'appearance': body = <AppearancePanel />; break;
       case 'advanced': body = <AdvancedPanel />; break;
     }
