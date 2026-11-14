@@ -275,12 +275,20 @@ export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) 
   let unknown = false;
   let splat: Word | undefined;
   let mode: 'file' | 'args' | 'skip' | undefined;
+  let owner: 'file' | 'args' | 'skip' = 'skip';
   for (const w of words.slice(1)) {
+    if (w.attached) {
+      if (owner === 'file') files.push(w);
+      else if (owner === 'args') list.push(w);
+      mode = undefined;
+      continue;
+    }
     if (w.kind === 'splat') { splat = w; mode = undefined; continue; }
     const m = !w.dynamic && !w.quoted ? /^-([A-Za-z]+):?$/u.exec(w.text) : null;
     if (m) {
       const param = START_PARAMS.find(p => p.startsWith(m[1]!.toLowerCase()));
       if (!param) unknown = true;
+      owner = param === 'filepath' ? 'file' : param === 'argumentlist' ? 'args' : 'skip';
       mode = param === 'filepath' ? 'file' : param === 'argumentlist' ? 'args' : !param || START_SWITCHES.has(param) ? undefined : 'skip';
       continue;
     }

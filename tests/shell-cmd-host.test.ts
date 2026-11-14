@@ -51,3 +51,10 @@ test('PowerShell の Start-Process: パラメータの結び付きが読みき�
     assert.equal(levelOf(c), 'once', `${c}: ${keysOf(c).join(' ')}`);
   }
 });
+
+test('PowerShell の Start-Process: -名前:値 の値はそのパラメータのもの。起こす先の候補にしない', () => {
+  for (const c of ['Start-Process -Wait:1 npm.cmd $a', 'Start-Process -PassThru:1 npm.cmd $a', "Start-Process -Wait:1 cmd '/c calc & calc'", "Start-Process -NoNewWindow:1 npm.cmd 'x&y'", "Start-Process -UseNewEnvironment:1 npm.cmd 'x&y'", "Start-Process -LoadUserProfile:0 npm.cmd 'x&y'", "Start-Process -Wa:1 npm.cmd 'x&y'", 'Start-Process -FilePath:npm.cmd -ArgumentList:$a', "Start-Process -WorkingDirectory:sub npm.cmd 'x&y'"]) {
+    assert.ok(keysOf(c).includes('deny:list.winargs'), `${c}: ${keysOf(c).join(' ')}`);
+  }
+  for (const c of ['Start-Process -Wait:1 notepad $a', 'Start-Process -Wait:1 npm.cmd test']) assert.equal(levelOf(c), 'once', `${c}: ${keysOf(c).join(' ')}`);
+});
