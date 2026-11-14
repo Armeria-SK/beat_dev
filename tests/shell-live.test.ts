@@ -137,7 +137,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 一覧に当たる�
 
 test('実機（Windows PowerShell 5.1・制限モード）: 入れ子の深い読むだけの形は承認なしで本当に動き、深い所で消す形は動かさずに積む', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
   const s = setup(t, 'powershell');
-  const deep = "Get-ChildItem -Recurse -File | ForEach-Object { if ($_.Length -gt 0) { if ($_.Name.EndsWith('.txt')) { $n = @($_.Name.Split('.')).Count; if ($n -gt 1) { Write-Output ($_.Name.ToUpper()) } } } }";
+  const deep = "Get-ChildItem -Recurse -File | ForEach-Object { if ($_.Length -gt 0) { if ($_.Name.EndsWith('.txt')) { $n = @($_.Name.Split('.')).Count; if ($n -gt 1) { if ($true) { if ($true) { Write-Output ($_.Name.ToUpper()) } } } } } }";
   const outcome = await s.call(deep);
   assert.notEqual(outcome.decidedBy, 'pending', outcome.output.content);
   assert.equal(outcome.output.isError, false, outcome.output.content);
