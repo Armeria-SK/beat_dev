@@ -1,53 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Task, TaskStatus } from '../web/src/api.ts';
+import type { TaskStatus } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
 import { PendingSet, runOnce } from '../web/src/pending.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, type TaskDraft } from '../web/src/task-form.ts';
 import {
-  CURIOSITY_STATUS_KEY, eventKey, ORIGIN_KEY, plainLine, priorityKey, sectionOf, sheetActions, STATUS_KEY, summarize,
+  CURIOSITY_STATUS_KEY, eventKey, ORIGIN_KEY, plainLine, priorityKey, sheetActions, STATUS_KEY,
 } from '../web/src/task-meta.ts';
 
-const NOW = Date.UTC(2026, 10, 5, 3, 0, 0);
 const reset = () => { setTimezone('Asia/Tokyo'); };
-
-let seq = 0;
-function task(status: TaskStatus, patch: Partial<Task> = {}): Task {
-  seq += 1;
-  return {
-    id: `t${seq}`, title: `task ${seq}`, body: '', next_action: null, done_criteria: null, status, origin: 'user', priority: 2, cron: null, cron_text: null,
-    run_at: null, parent_id: null, waiting_text: null, conversation_id: null, result_summary: null, attempts: 0, max_attempts: 3,
-    created_at: NOW - 10_000, updated_at: NOW - 5_000, completed_at: null, ...patch,
-  };
-}
-
-test('sectionOf: 返事待ち・提案は対応が必要、完了・失敗・取り消しは完了、日時指定と繰り返しは予定', () => {
-  assert.equal(sectionOf(task('waiting'), NOW), 'attn');
-  assert.equal(sectionOf(task('inbox'), NOW), 'attn');
-  assert.equal(sectionOf(task('running'), NOW), 'act');
-  assert.equal(sectionOf(task('ready'), NOW), 'act');
-  assert.equal(sectionOf(task('ready', { run_at: NOW - 1 }), NOW), 'act', '開始の時刻を過ぎた実行待ちは、実行待ちの節');
-  assert.equal(sectionOf(task('scheduled', { cron: '0 9 * * *' }), NOW), 'sch');
-  assert.equal(sectionOf(task('ready', { run_at: NOW + 60_000 }), NOW), 'sch', '日時指定のタスク');
-  for (const status of ['done', 'failed', 'cancelled'] as const) assert.equal(sectionOf(task(status), NOW), 'done');
-});
-
-test('止めたタスク（実行待ちで 20 秒後に開始）は予定に置かれ、20 秒たつと実行待ちの節に戻る', () => {
-  const stopped = task('ready', { run_at: NOW + 20_000 });
-  assert.equal(sectionOf(stopped, NOW), 'sch');
-  assert.equal(sectionOf(stopped, NOW + 19_999), 'sch');
-  assert.equal(sectionOf(stopped, NOW + 20_001), 'act');
-});
-
-test('summarize: 対応が必要・実行中・実行待ち・予定の件数（終わったものは数えない）', () => {
-  const list = [
-    task('waiting'), task('inbox'), task('running'), task('ready'), task('ready', { run_at: NOW + 1_000 }),
-    task('scheduled'), task('done'), task('failed'), task('cancelled'),
-  ];
-  assert.deepEqual(summarize(list, NOW), { attention: 2, running: 1, ready: 1, scheduled: 2 });
-  assert.deepEqual(summarize([], NOW), { attention: 0, running: 0, ready: 0, scheduled: 0 });
-});
 
 test('plainLine: Markdown と改行を 1 行に平らにし、長いものは切る', () => {
   assert.equal(plainLine('## 結果\n- **3 件** 見つけた\n- [記事](https://example.com/a) を読んだ'), '結果 3 件 見つけた 記事 を読んだ');

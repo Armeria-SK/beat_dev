@@ -1,9 +1,7 @@
 import type { CuriosityItem, Task, TaskStatus } from './api.ts';
 import type { PlainKey } from './i18n/types.ts';
 
-// タスク画面の、画面を使わない部分（分け方・並べ方・どの操作を出すか）。文字は辞書のキーで持ち、表示のときに引く。
-
-export type TaskSection = 'attn' | 'act' | 'sch' | 'done';
+// タスク画面の、画面を使わない部分（行の補足の 1 行・どの操作を出すか）。文字は辞書のキーで持ち、表示のときに引く。
 
 export const STATUS_KEY: Record<TaskStatus, PlainKey> = {
   inbox: 'task.status.inbox', ready: 'task.status.ready', running: 'task.status.running', waiting: 'task.status.waiting',
@@ -27,31 +25,6 @@ const EVENT_KEYS = {
 } as const satisfies Record<string, PlainKey>;
 export function eventKey(kind: string): PlainKey | null {
   return Object.hasOwn(EVENT_KEYS, kind) ? EVENT_KEYS[kind as keyof typeof EVENT_KEYS] : null;
-}
-
-const isFinished = (status: TaskStatus): boolean => status === 'done' || status === 'failed' || status === 'cancelled';
-const needsAttention = (status: TaskStatus): boolean => status === 'waiting' || status === 'inbox';
-
-// 実行待ちで開始の時刻がこれから先のもの（日時指定、再試行までの休み、止めたあとの 20 秒）は「予定」に置く。
-export function sectionOf(task: Task, now: number): TaskSection {
-  if (needsAttention(task.status)) return 'attn';
-  if (isFinished(task.status)) return 'done';
-  if (task.status === 'scheduled' || (task.status === 'ready' && task.run_at !== null && task.run_at > now)) return 'sch';
-  return 'act';
-}
-
-export interface TaskSummary { attention: number; running: number; ready: number; scheduled: number }
-
-export function summarize(tasks: readonly Task[], now: number): TaskSummary {
-  const summary: TaskSummary = { attention: 0, running: 0, ready: 0, scheduled: 0 };
-  for (const task of tasks) {
-    const section = sectionOf(task, now);
-    if (section === 'attn') summary.attention += 1;
-    else if (section === 'sch') summary.scheduled += 1;
-    else if (task.status === 'running') summary.running += 1;
-    else if (section === 'act') summary.ready += 1;
-  }
-  return summary;
 }
 
 // 行の補足の 1 行。Markdown や改行は平らにして、長い本文も 1 行に収まる長さで切る。
