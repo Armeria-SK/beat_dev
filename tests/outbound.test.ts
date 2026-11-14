@@ -498,3 +498,18 @@ test('消す: truncate で中身をほぼ残さない書き方の取りこぼし
     "truncate -s '>1M' changed.txt", 'truncate -cs 100 changed.txt', 'truncate -cs 0 made.txt', 'truncate -r /dev/null a.txt', 'truncate -s +9G changed.txt', 'truncate -s 2 changed.txt',
   ]);
 });
+
+test('送る: 一覧の取りこぼし（git grep のまとめた -O・git clone -u・python -m http.server・ssh-copy-id・finger・certreq -Post）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    'git grep -iO foo', 'git grep -nOless foo', 'git clone -u /tmp/x.sh https://example.com/r.git', 'git clone -qu x https://example.com/r.git', 'git ls-remote -u ./x origin',
+    'python -m http.server', 'python3 -m http.server 8000', 'py -m SimpleHTTPServer', 'python -u -m http.server', 'ssh-copy-id user@host', 'finger user@host',
+  ]);
+  expectKinds(f.kindOf, 'powershell', 'send', ['certreq -Post -config https://example.com/x a.req', 'certreq.exe /post a.req', 'python -m http.server']);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'git grep -i foo', 'git grep -n -e Old', 'git grep -eOK', 'git grep -A3 -i Other', 'git clone https://github.com/owner/repo.git', 'git clone -b u https://github.com/owner/repo.git',
+    'git clone -q https://github.com/owner/repo.git', 'git ls-remote origin', 'git fetch -u origin', 'python -m venv .venv', 'python -m pytest -q', 'python -m json.tool a.txt',
+    'ssh-keygen -t ed25519 -f k',
+  ]);
+  expectKinds(f.kindOf, 'powershell', undefined, ['certreq -new a.inf a.req', 'certutil -hashfile a.txt']);
+});

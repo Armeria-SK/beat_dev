@@ -32,7 +32,7 @@ const hit = (kind: OutboundKind, key: OutboundMessageKey, params: Record<string,
 
 const ALWAYS_SEND = new Set([
   'ssh', 'scp', 'sftp', 'rsync', 'ftp', 'tftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'aws', 'gcloud', 'gsutil', 'az', 'rclone', 's3cmd', 'http', 'https', 'xh',
-  'send-mailmessage', 'mail', 'mailx', 'sendmail', 'bitsadmin', 'start-bitstransfer', 'pscp', 'plink', 'psftp',
+  'send-mailmessage', 'mail', 'mailx', 'sendmail', 'bitsadmin', 'start-bitstransfer', 'pscp', 'plink', 'psftp', 'ssh-copy-id', 'finger',
 ]);
 const WEB_PROGRAMS = new Set(['curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);
 const LOOKUP = new Set(['nslookup', 'dig', 'host', 'ping', 'tracert', 'traceroute', 'resolve-dnsname', 'test-netconnection', 'test-connection']);
@@ -183,6 +183,8 @@ function uploadOf(st: StatementFacts): Hit | undefined {
   if (p === 'hg' && (sub === 'push' || sub === 'email')) return up(`hg ${sub}`);
   if (p === 'svn' && ['commit', 'ci', 'import'].includes(sub)) return up(`svn ${sub}`);
   if (p === 'openssl' && sub === 's_client') return hit('send', 'send.network_program', { cmd: 'openssl s_client' });
+  if (/^(?:python[\d.]*|py)$/u.test(p) && w.includes('-m') && ['http.server', 'simplehttpserver'].includes(w[w.indexOf('-m') + 1] ?? '')) return hit('send', 'send.network_program', { cmd: 'python -m http.server' });
+  if (p === 'certreq' && w.slice(1).some(a => a === '-post' || a === '/post')) return hit('send', 'send.network_program', { cmd: 'certreq -post' });
   if (p === 'tailscale' && sub === 'file' && w[2] === 'cp') return up('tailscale file cp');
   return undefined;
 }
@@ -364,7 +366,8 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
   const discard = (cmd: string): Hit => hit('delete', 'delete.git_discard', { cmd });
   if (GIT_PULLING.has(sub) && argWords.some(w => w.dynamic)) return hit('send', 'send.dynamic_target', { cmd: `git ${sub}` });
   if (args.some(a => ['--upload-pack', '--receive-pack', '--exec'].some(n => longOption(a, n)))) return hit('send', 'send.git_unknown', { detail: `git ${sub}` });
-  if (sub === 'grep' && args.some(a => /^-O/u.test(a) || longOption(a, '--open-files-in-pager'))) return hit('send', 'send.git_unknown', { detail: 'git grep -O' });
+  if ((sub === 'clone' || sub === 'ls-remote') && args.some(a => /^-[^-=bocj]*u/u.test(a))) return hit('send', 'send.git_unknown', { detail: `git ${sub} -u` });
+  if (sub === 'grep' && args.some(a => /^-[^-=efABCmO]*O/u.test(a) || longOption(a, '--open-files-in-pager'))) return hit('send', 'send.git_unknown', { detail: 'git grep -O' });
   if (GIT_SENDERS.has(sub)) return hit('send', sub === 'send-email' || sub === 'imap-send' ? 'send.git_mail' : 'send.network_program', { cmd: `git ${sub}` });
   const positionals = args.filter(a => !a.startsWith('-'));
   switch (sub) {
