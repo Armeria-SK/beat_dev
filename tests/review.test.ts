@@ -62,7 +62,8 @@ test('振り返りの実行では、シェルもファイルも渡さず、呼�
   assert.equal(await s.app.worker.tick(), 'ran');
   const request = s.adapter().calls.at(-2)!;
   const names = request.tools.map(t => t.name);
-  assert.ok(names.includes('skill_draft') && names.includes('curiosity_add'));
+  assert.ok(names.includes('skill_draft'));
+  assert.ok(!names.some(name => name.startsWith('curiosity_')), names.join(','));
   assert.ok(!names.some(name => name.startsWith('memory_')), names.join(','));
   for (const forbidden of ['shell_run', 'file_write', 'file_edit', 'file_read', 'task_create', 'web_fetch', 'web_search']) assert.ok(!names.includes(forbidden), forbidden);
   assert.match(String(request.messages.at(-1)?.content), /\[Review\]/u);
@@ -205,36 +206,38 @@ test('SKILL.md の読み書き（先頭の --- の中の name と description）
   assert.deepEqual(parseSkillFile('本文だけ'), { body: '本文だけ' });
 });
 
-test('好奇心から調べるタスクを作り、結果を書き戻す（自発行動・上限・静かな時間帯を守る）', async t => {
-  const s = await setup(t, c => { c.memory.review = false; c.worker.curiosityPerDay = 1; c.worker.idleMinutes = 0; c.worker.quietStart = '23:00'; c.worker.quietEnd = '07:00'; });
-  s.app.curiosity.add({ topic: 'node:sqlite の FTS5', why: '日本語検索に使えるか', source: 'beat' });
-  s.app.curiosity.add({ topic: 'croner のタイムゾーン', source: 'beat' });
-  assert.equal(await s.app.worker.tick(), 'idle', '自発行動がオフ');
-  await s.app.applyConfig({ ...s.app.config(), worker: { ...s.app.config().worker, autonomy: true } });
-  s.adapter().scripts.push(toolCall('task_complete', { summary: 'trigram で日本語も検索できる', notify: true }));
-  assert.equal(await s.app.worker.tick(), 'ran');
-  const done = s.app.curiosity.list({ includeClosed: true }).find(i => i.topic === 'node:sqlite の FTS5')!;
-  assert.equal(done.status, 'done');
-  assert.equal(done.result, 'trigram で日本語も検索できる');
-  assert.equal(await s.app.worker.tick(), 'idle', '24 時間に 1 件まで');
-  s.clock.now = Date.parse('2026-11-05T15:00:00Z'); // 翌日の日本時間 00:00（静かな時間帯）
-  s.clock.now += 0;
-  assert.equal(await s.app.worker.tick(), 'idle', '静かな時間帯');
-  s.clock.now = Date.parse('2026-11-06T01:30:00Z'); // 翌日の 10:30
-  s.adapter().scripts.push(toolCall('task_complete', { summary: 'IANA 名で指定できる', notify: false }));
-  assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.curiosity.list().length, 0);
+test('7-4c ワーカーは好奇心からタスクを作らない: 自発行動がオン・待ち 0 分・1 日 2 件・開いた行が 2 つでも idle。承認制でも提案に積まない', async t => {
+  const s = await setup(t, c => { c.memory.review = false; c.worker.autonomy = true; c.worker.curiosityPerDay = 2; c.worker.idleMinutes = 0; });
+  const a = s.app.curiosity.add({ topic: 'node:sqlite の FTS5', why: '日本語検索に使えるか', source: 'beat' });
+  const b = s.app.curiosity.add({ topic: 'croner のタイムゾーン', source: 'beat' });
+  const curiosityTasks = () => (s.app.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE origin = 'curiosity'").get() as { n: number }).n;
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(curiosityTasks(), 0);
+  await s.app.applyConfig({ ...s.app.config(), worker: { ...s.app.config().worker, selfTasksNeedApproval: true } });
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(curiosityTasks(), 0);
+  assert.deepEqual(s.app.tasks.list({ statuses: ['inbox'] }), []);
+  assert.deepEqual([s.app.curiosity.get(a.id)!.status, s.app.curiosity.get(b.id)!.status], ['open', 'open']);
+  assert.equal(s.adapter().calls.length, 0);
 });
 
-test('自発タスクを承認制にしているとき、断ったら好奇心は「やめた」になる', async t => {
-  const s = await setup(t, c => { c.memory.review = false; c.worker.autonomy = true; c.worker.idleMinutes = 0; c.worker.selfTasksNeedApproval = true; });
-  const item = s.app.curiosity.add({ topic: 'WebGPU', source: 'beat' });
-  assert.equal(await s.app.worker.tick(), 'idle');
-  const proposal = s.app.tasks.list({ statuses: ['inbox'] })[0]!;
-  assert.equal(proposal.origin, 'curiosity');
-  s.app.tasks.finish(proposal.id, 'cancelled', null, 'user');
-  assert.equal(s.app.curiosity.get(item.id)!.status, 'dropped');
-  assert.equal(s.adapter().calls.length, 0);
+test('持ち主が好奇心の行から作ったタスク（POST /api/curiosity/:id/task）は、終わると結果を行に書き戻す', async t => {
+  const s = await setup(t, c => { c.memory.review = false; c.worker.autonomy = true; c.worker.idleMinutes = 0; });
+  const web = createWebServer(s.app);
+  await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
+  web.setOrigins([origin]);
+  t.after(() => { web.server.closeAllConnections(); web.server.close(); });
+  const item = s.app.curiosity.add({ topic: 'node:sqlite の FTS5', source: 'user' });
+  const made = await fetch(`${origin}/api/curiosity/${item.id}/task`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(made.status, 201);
+  assert.equal(((await made.json()) as any).task.origin, 'curiosity');
+  assert.equal(s.app.curiosity.get(item.id)!.status, 'researching');
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'trigram で日本語も検索できる', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const done = s.app.curiosity.get(item.id)!;
+  assert.deepEqual([done.status, done.result], ['done', 'trigram で日本語も検索できる']);
 });
 
 test('初回だけ CURIOSITY.md の箇条書きを取り込む', async t => {

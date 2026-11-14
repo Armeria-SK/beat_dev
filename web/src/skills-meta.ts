@@ -100,6 +100,16 @@ export function findDraft(drafts: readonly SkillDraft[], name: string): SkillDra
   return drafts.filter(d => d.name === name && d.status === 'pending').sort((a, b) => b.created_at - a.created_at)[0];
 }
 
+export type DraftGrowth = { kind: 'change' | 'reason'; text: string };
+
+export function draftGrowth(draft: Pick<SkillDraft, 'current' | 'change_summary' | 'reason'>): DraftGrowth | null {
+  if (!draft.current) return null;
+  const change = draft.change_summary?.trim();
+  if (change) return { kind: 'change', text: change };
+  const reason = draft.reason?.trim();
+  return reason ? { kind: 'reason', text: reason } : null;
+}
+
 // SKILL.md の中身（サーバーの renderSkillFile と同じ形）。
 export function skillFileText(skill: { name: string; description: string; body: string }): string {
   const description = skill.description.replace(/\r?\n/gu, ' ').trim();
