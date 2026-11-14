@@ -327,3 +327,11 @@ test('ui/thread: 会話の列は 1 つ（幅と左端が同じ）。持ち主の
   assert.match(css, /\.bt-app__main > \.ui-offline \{[^}]*width: calc\(100% - 2 \* var\(--ui-gutter, 0px\)\);/u);
   assert.ok(page.includes("el.parentElement?.style.setProperty('--ui-gutter', `${threadGutter(el)}px`)"), '空きの幅は発言の欄から測って渡す');
 });
+
+test('ui/parts: 静かな知らせ・warn の知らせも、渡された text を題のあとに出す（Build が凍ったときの理由、フォルダが無い製品の説明。backlog 500）', () => {
+  const parts = readFileSync(new URL('../web/src/ui/parts.tsx', import.meta.url), 'utf8');
+  const quiet = parts.slice(parts.indexOf('<div className={`bt-notice${tone ?'), parts.indexOf('export function Toast('));
+  assert.ok(quiet.includes('{text ? <span className="ui-notice__text">{title} · {text}</span> : title}'), 'fail 以外でも text を描く');
+  const plan = readFileSync(new URL('../web/src/ui/panes/PlanPane.tsx', import.meta.url), 'utf8');
+  assert.ok(plan.includes(`<Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} />`), '凍ったときの理由を渡している');
+});
