@@ -200,3 +200,10 @@ test('書きかけの確かめ: 同じ経路どうしの履歴を行き来して
   assert.equal(popIndex(2, '#/memory', '#/kanban', 1), 2, '経路が変わる動きは hashchange の側で決める（ここでは変えない）');
   assert.equal(popIndex(2, '#/memory', '#/memory', null), null);
 });
+
+test('書きかけの確かめ: App は、動きを受け入れるたびに履歴の位置と経路を一緒に覚え直す（経路を覚え忘れると、同じ経路どうしの行き来で位置がずれる）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /entryIndex\.current = historyIndex\(\);\s*entryHash\.current = location\.hash;/u);
+  assert.match(app, /popIndex\(entryIndex\.current, entryHash\.current, location\.hash, historyIndex\(\)\)/u);
+});
