@@ -249,11 +249,12 @@ export class TaskStore {
   judgeRequest(id: string): string {
     const task = this.get(id);
     if (!task || this.beatDecided(id)) return '';
-    if (task.spawned_by) {
-      const chain = this.#spawnChain(task);
+    const start = task.spawned_by ? task : task.parent_id ? this.get(task.parent_id) : undefined;
+    if (start?.spawned_by) {
+      const chain = this.#spawnChain(start);
       const root = chain?.at(-1);
       if (!chain || !root || this.beatDecided(root.id)) return '';
-      if (chain.some(link => this.#sourceTainted(link.id, link.parent_id) || this.#textTainted(link.id, link.parent_id))) return '';
+      if ([task, ...chain].some(link => this.#sourceTainted(link.id, link.parent_id) || this.#textTainted(link.id, link.parent_id))) return '';
       return this.#ownerText(root) ?? '';
     }
     const owner = this.#ownerText(task);
@@ -492,15 +493,19 @@ export class TaskStore {
       const template = task.cron !== null && task.parent_id === null;
       const next = template ? nextRunAt(task.cron!, task.timezone ?? 'UTC', now) : null;
       if (template && next === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
-      if (task.origin !== 'user' && task.proposed_by === null) {
-        const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: null } satisfies OwnerRequest);
-        this.#db.prepare("UPDATE tasks SET origin = 'user', proposed_by = ?, owner_request = ? WHERE id = ?").run(task.origin, request, id);
-      }
-      this.event(id, 'approved', 'user');
+      this.#adopt(task);
       if (template) this.#db.prepare("UPDATE tasks SET status = 'scheduled', run_at = ?, lease_until = NULL, updated_at = ? WHERE id = ?").run(next, now, id);
       else this.#db.prepare("UPDATE tasks SET status = 'ready', lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, run_at = NULL, updated_at = ? WHERE id = ?").run(now, id);
     });
     return this.#changed(id);
+  }
+
+  #adopt(task: Task): void {
+    if (task.origin !== 'user' && task.proposed_by === null) {
+      const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: null } satisfies OwnerRequest);
+      this.#db.prepare("UPDATE tasks SET origin = 'user', proposed_by = ?, owner_request = ? WHERE id = ?").run(task.origin, request, task.id);
+    }
+    this.event(task.id, 'approved', 'user');
   }
 
   #neverRan(task: Task): boolean {
@@ -628,9 +633,14 @@ export class TaskStore {
     const isTemplate = task.cron !== null && task.parent_id === null;
     const nextRun = isTemplate ? nextRunAt(task.cron!, task.timezone ?? 'UTC', now) : null;
     if (isTemplate && nextRun === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
-    this.#db.prepare(`UPDATE tasks SET status = ?, attempts = 0, run_at = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
-      .run(isTemplate ? 'scheduled' : 'ready', nextRun, now, id);
-    this.event(id, 'reopened', actor, reason ?? null);
+    const unapproved = isTemplate && (task.origin === 'self' || task.origin === 'curiosity') && !this.#db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'approved' LIMIT 1").get(id);
+    if (unapproved && actor !== 'user') throw new TaskError('error.needs_approval');
+    transaction(this.#db, () => {
+      if (unapproved) this.#adopt(task);
+      this.#db.prepare(`UPDATE tasks SET status = ?, attempts = 0, run_at = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
+        .run(isTemplate ? 'scheduled' : 'ready', nextRun, now, id);
+      this.event(id, 'reopened', actor, reason ?? null);
+    });
     return this.#changed(id);
   }
 

@@ -266,3 +266,63 @@ test('5-1: spawned_by をたどる守り: 輪・100 段を超える鎖・消え�
     assert.equal(s.app.tasks.judgeRequest(forged.id), '', origin);
   }
 });
+
+test('5-1: 持ち主のタスクの実行の中で作った繰り返しは、その回の判定役の頼みが元のタスクの頼み。ひな形か回に印があれば空', async t => {
+  const s = await setup(t);
+  const parent = s.app.tasks.create({ title: 'Owner job', body: 'owner words', origin: 'user', actor: 'user', ownerRequest: true });
+  await taskMakes(s, parent.id, { title: 'AI weekly', body: 'AI text', repeat: '0 9 * * MON' });
+  const template = s.byTitle('AI weekly')!;
+  assert.deepEqual([template.origin, template.status, template.spawned_by, template.owner_request], ['user', 'scheduled', parent.id, null]);
+  const run = s.app.tasks.spawnNow(template.id as string)!;
+  assert.equal(run.spawned_by, null);
+  assert.equal(s.app.tasks.judgeRequest(run.id), 'Owner job\nowner words');
+  s.app.tasks.markUntrusted(run.id, 'beat', 'replayed');
+  assert.equal(s.app.tasks.judgeRequest(run.id), '');
+  s.app.tasks.finish(run.id, 'done', null, 'user');
+  const next = s.app.tasks.spawnNow(template.id as string)!;
+  assert.equal(s.app.tasks.judgeRequest(next.id), 'Owner job\nowner words');
+  s.app.tasks.markUntrusted(template.id as string, 'mesh', 'read notes');
+  assert.equal(s.app.tasks.judgeRequest(next.id), '');
+});
+
+test('5-1: 予定の回から切り出した子は、予定のひな形に外を読んだ実行の文があれば判定役の頼みが空', async t => {
+  const s = await setup(t);
+  const template = s.app.tasks.create({ title: 'Weekly', origin: 'user', actor: 'user', cron: '0 9 * * MON', ownerRequest: true });
+  const run = s.app.tasks.spawnNow(template.id)!;
+  const child = s.app.tasks.create({ title: 'child of run', origin: 'user', actor: 'beat', spawnedBy: run.id });
+  assert.equal(s.app.tasks.judgeRequest(child.id), 'Weekly');
+  s.app.tasks.update(template.id, { appendNote: 'from the page' }, 'beat', s.taintedRun());
+  assert.equal(s.app.tasks.judgeRequest(child.id), '');
+});
+
+test('5-1: beat が決めたタスクの中で作った繰り返しは、selfTasksNeedApproval が false でも提案になる', async t => {
+  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = false; c.worker.autonomy = false; });
+  const parent = s.app.tasks.create({ title: 'beat job', origin: 'self', actor: 'beat' });
+  await taskMakes(s, parent.id, { title: 'self repeat', repeat: '0 9 * * *' });
+  await taskMakes(s, s.app.tasks.create({ title: 'beat job 2', origin: 'self', actor: 'beat' }).id, { title: 'self once' });
+  assert.deepEqual([s.byTitle('self repeat')?.origin, s.byTitle('self repeat')?.status], ['self', 'inbox']);
+  assert.deepEqual([s.byTitle('self once')?.origin, s.byTitle('self once')?.status], ['self', 'ready']);
+});
+
+test('5-1: 承認していない beat の繰り返しを「もう一度」で開き直すと、持ち主の承認と同じ扱いになる。持ち主でなければ断る', async t => {
+  const s = await setup(t);
+  const rejected = s.app.tasks.create({ title: 'Rejected repeat', body: 'daily', origin: 'self', propose: true, cron: '0 9 * * *', timezone: 'UTC', actor: 'beat' });
+  s.app.tasks.finish(rejected.id, 'cancelled', null, 'user');
+  assert.throws(() => s.app.tasks.reopen(rejected.id, 'beat'), /only the owner can restart/u);
+  assert.equal(s.app.tasks.get(rejected.id)!.status, 'cancelled');
+  const back = s.app.tasks.reopen(rejected.id, 'user');
+  assert.deepEqual([back.status, back.origin, back.proposed_by], ['scheduled', 'user', 'self']);
+  assert.equal(s.app.tasks.judgeRequest(rejected.id), 'Rejected repeat\ndaily');
+  assert.ok(s.app.tasks.events(rejected.id).some(e => e.kind === 'approved'));
+
+  const ended = s.app.tasks.create({ title: 'AI ended', origin: 'curiosity', propose: true, cron: '0 9 * * *', timezone: 'UTC', actor: 'worker' });
+  s.app.tasks.finish(ended.id, 'done', 'ended by beat', 'beat');
+  const restarted = s.app.tasks.reopen(ended.id, 'user');
+  assert.deepEqual([restarted.status, restarted.origin, restarted.proposed_by], ['scheduled', 'user', 'curiosity']);
+
+  const legacy = s.app.tasks.create({ title: 'Approved before 5-1', origin: 'self', cron: '0 9 * * *', timezone: 'UTC', actor: 'beat' });
+  s.app.tasks.event(legacy.id, 'approved', 'user');
+  s.app.tasks.finish(legacy.id, 'cancelled', null, 'user');
+  const reopened = s.app.tasks.reopen(legacy.id, 'beat');
+  assert.deepEqual([reopened.status, reopened.origin, reopened.proposed_by], ['scheduled', 'self', null]);
+});

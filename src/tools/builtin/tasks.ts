@@ -62,7 +62,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
-        origin: self ? 'self' : 'user', propose: self && (!inTask || ctx.config.worker.selfTasksNeedApproval), spawnedBy: parent,
+        origin: self ? 'self' : 'user', propose: self && (!inTask || input.repeat !== undefined || ctx.config.worker.selfTasksNeedApproval), spawnedBy: parent,
         actor: 'beat', createdInConversation: ctx.conversationId, projectId: ctx.project?.id,
       });
       ctx.touchedTasks?.add(task.id);
