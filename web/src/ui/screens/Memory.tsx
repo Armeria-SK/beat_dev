@@ -5,6 +5,7 @@ import { formatDateTime, formatNumber, formatRelative, useT } from '../../i18n/i
 import { Markdown } from '../../Markdown.tsx';
 import { memoryRef } from '../../memory-page.ts';
 import { DiscardConfirm, useDiscardAsk, useUnsaved } from '../Discard.tsx';
+import { pickFocus } from '../focus.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { latestEventByMemory, memoryHistory, memoryStamp, undoDeletes, type MemoryVersion } from '../library.ts';
@@ -88,6 +89,8 @@ function Detail({ item, revision, now, onChanged, onGone, leave }: {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
   const deleteButton = useRef<HTMLButtonElement>(null);
+  const confirmOpener = useRef<Element | null>(null);
+  const askDelete = () => { confirmOpener.current = document.activeElement; setConfirming(true); };
   const loads = useRef(latestOnly());
 
   useEffect(() => {
@@ -113,7 +116,7 @@ function Detail({ item, revision, now, onChanged, onGone, leave }: {
     toast({ kind: 'memory', icon: 'check', title: t('ui.memory.toast.saved'), body: result.memory.content, action: undoAction(t, result.eventId, reload) });
   });
   const restore = (version: MemoryVersion) => void run(async () => {
-    if (undoDeletes(version)) { setConfirming(true); return; }
+    if (undoDeletes(version)) { askDelete(); return; }
     if (version.action === 'undo') {
       await api.undoMemory(version.event.id);
       reload();
@@ -143,11 +146,14 @@ function Detail({ item, revision, now, onChanged, onGone, leave }: {
             <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>{t('ui.lib.edit')}</button>
           </div>
           {mode === 'edit' && <Button small disabled={busy || !draft.trim()} onClick={save}>{t('ui.lib.save')}</Button>}
-          {!confirming && <Button ref={deleteButton} small variant="ghost" disabled={busy} onClick={() => setConfirming(true)}>{t('ui.lib.delete')}</Button>}
+          {!confirming && <Button ref={deleteButton} small variant="ghost" disabled={busy} onClick={askDelete}>{t('ui.lib.delete')}</Button>}
         </div>
         {confirming && (
           <RowConfirm warn={t('ui.memory.deleteWarn')} note={t('ui.memory.deleteNote')} action={t('ui.lib.delete')} busy={busy}
-            onConfirm={remove} onKeep={refocus => { setConfirming(false); if (refocus) requestAnimationFrame(() => deleteButton.current?.focus()); }} />
+            onConfirm={remove} onKeep={refocus => {
+              setConfirming(false);
+              if (refocus) requestAnimationFrame(() => pickFocus([confirmOpener.current as HTMLElement | null, deleteButton.current], document.body, () => false)?.focus());
+            }} />
         )}
         {mode === 'edit' ? (
           <textarea className="bt-doc bt-doc--edit ui-lib__editor" autoFocus value={draft} maxLength={MAX} rows={5} aria-label={t('ui.memory.field')}
