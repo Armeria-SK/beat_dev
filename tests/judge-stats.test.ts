@@ -19,7 +19,10 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { readStats, renderStats } from '../scripts/judge-stats.ts';
-import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
+import type { StopReason } from '../src/engine/types.ts';
+import type { ModelRequest } from '../src/providers/types.ts';
+import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { FakeAdapter, isJudgeRequest, tempDir, testConfig, type Script } from './helpers.ts';
 
 const SECRET_INPUT = 'INPUT-MARK-7f3a';
 const REQUEST_TEXT = 'REQUEST-MARK-91bc';
@@ -176,4 +179,53 @@ test('5-J1: scripts/judge-stats.ts は DB を読むだけで、表を書く', t 
   assert.match(text, /^taint\t1\t/mu);
   assert.equal(statSync(path).mtimeMs, before, 'DB を書き換えない');
   assert.throws(() => readStats(join(tempDir(t), 'missing.db'), { days: 7, timezone: 'UTC', runs: 5 }), /no database/u);
+});
+
+const engineRead: ToolDef<Record<string, never>> = {
+  name: 'outside_read', description: 'reads outside (test)', input: Type.Object({}), effect: 'read', allowedIn: ['chat', 'task', 'agent'],
+  preCheck: () => ({ decision: 'ask', reasons: [REASON_TEXT], askKinds: ['outside_read'], reasonKeys: ['file.outside_read_test'] }),
+  execute: async () => ({ content: 'read it' }),
+};
+
+function engineScripts(judgeUsage: Record<string, number>): Script[] {
+  const one: Script = (req: ModelRequest) => (async function* () {
+    if (isJudgeRequest(req)) {
+      yield { type: 'text', delta: '{"decision":"allow","reason":"fits"}' };
+      yield { type: 'usage', usage: { inputTokens: judgeUsage.input!, outputTokens: 1 } };
+      yield { type: 'usage', usage: { outputTokens: judgeUsage.output! } };
+      yield { type: 'done', stop: 'end_turn' as StopReason };
+      return;
+    }
+    if (req.messages.some(m => m.role === 'tool')) { yield { type: 'text', delta: 'done' }; yield { type: 'done', stop: 'end_turn' as StopReason }; return; }
+    yield { type: 'tool_call', call: { id: `call_${Math.random().toString(36).slice(2)}`, name: 'outside_read', arguments: {} } };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  })();
+  return Array.from({ length: 20 }, () => one);
+}
+
+test('5-J1: 会話のエンジンから、判定役の提供元が返した使った量（入力・出力のトークン）とモデルが記録に入る', async t => {
+  const s = await startApp(t, { models: [fakeModel('m1')], tools: [engineRead as unknown as ToolDef] });
+  const id = uuid(71);
+  s.app.conversations.create({ id, title: 'judge usage' });
+  s.adapter().scripts = engineScripts({ input: 1234, output: 17 });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: `please read the outside file ${REQUEST_TEXT}` });
+  await settled(s.app, sent.body.runId);
+  const rows = s.app.db.prepare('SELECT * FROM judge_calls').all().map(r => ({ ...r })) as Array<Record<string, unknown>>;
+  assert.deepEqual(rows.map(r => [r.run_id, r.run_kind, r.tool, r.outcome, r.judge_model, r.input_tokens, r.output_tokens, r.reason_keys, r.ask_kinds]),
+    [[sent.body.runId, 'chat', 'outside_read', 'allow', 'm1', 1234, 17, '["file.outside_read_test"]', '["outside_read"]']]);
+  for (const [column, value] of Object.entries(rows[0]!)) for (const mark of [REQUEST_TEXT, REASON_TEXT]) assert.ok(!String(value).toLowerCase().includes(mark.toLowerCase()), `${column} に ${mark}`);
+  assert.equal((await s.json('/api/judge/stats', 'GET')).body.models[0].model, 'm1');
+});
+
+test('5-J1 (b): Settings で判定役に別のモデル（この PC のモデルなど）を選ぶと、記録の判定役のモデルがそれになる', async t => {
+  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('local-judge')], tools: [engineRead as unknown as ToolDef] });
+  const config = (await s.json('/api/settings', 'GET')).body.config;
+  const put = await s.json('/api/settings', 'PUT', { config: { ...config, routing: { ...config.routing, judge: ['local-judge'] } } });
+  assert.equal(put.status, 200, JSON.stringify(put.body).slice(0, 300));
+  const id = uuid(72);
+  s.app.conversations.create({ id, title: 'local judge' });
+  s.adapter().scripts = engineScripts({ input: 50, output: 5 });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(s.app.db.prepare('SELECT judge_model, input_tokens, output_tokens FROM judge_calls').all().map(r => ({ ...r })), [{ judge_model: 'local-judge', input_tokens: 50, output_tokens: 5 }]);
 });
