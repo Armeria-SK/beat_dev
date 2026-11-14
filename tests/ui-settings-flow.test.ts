@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { confirmable, escAsksLeave, hasUnsaved, serial, type Answer } from '../web/src/ui/settings/flow.ts';
+import { checkThenRun, confirmable, escAsksLeave, hasUnsaved, serial, type Answer } from '../web/src/ui/settings/flow.ts';
 
 // Settings の保存の流れ（1-5b のセキュリティ審査の直し）。確かめを挟んだ保存が「確かめたあとの結果」で終わること、
 // 同時の保存が 1 つずつ順に走ること（互いに上書きしない）、書きかけがあれば閉じる前に聞くこと。
@@ -104,4 +104,43 @@ test('Settings を確かめの行が出たまま閉じると、その確かめ�
   void confirmable(a => { cancel = a.cancel; }, async () => true).then(v => { answered = v; });
   cancel();
   return Promise.resolve().then(() => { assert.equal(answered, false, 'cancel で待ちは false で終わる'); });
+});
+
+test('Settings の Reset も保存の順番待ちを通る: 先に並んだ保存が終わってから確かめの材料を読み、確かめのあとの Reset も、そのあいだに並んだ保存の後ろで走る（backlog 279）', async () => {
+  const enqueue = serial();
+  const log: string[] = [];
+  let release: () => void = () => undefined;
+  const save = enqueue(() => new Promise<void>(resolve => { log.push('save:start'); release = () => { log.push('save:end'); resolve(); }; }));
+  let confirm: () => void = () => undefined;
+  const reset = checkThenRun(enqueue,
+    async () => { log.push('check'); return ['wider']; },
+    (items, go) => new Promise<boolean>(resolve => { log.push(`ask:${items.join(',')}`); confirm = () => { void go().then(resolve); }; }),
+    async () => { log.push('reset'); return true; });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(log, ['save:start'], '保存が終わるまで Reset の確かめの材料を読まない');
+  release();
+  await save;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(log, ['save:start', 'save:end', 'check', 'ask:wider']);
+  let hold: () => void = () => undefined;
+  const later = enqueue(() => new Promise<void>(resolve => { log.push('later:start'); hold = () => { log.push('later:end'); resolve(); }; }));
+  confirm();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(log.includes('reset'), false, '確かめのあいだに並んだ保存の後ろで待つ');
+  hold();
+  await later;
+  assert.equal(await reset, true);
+  assert.deepEqual(log.slice(-3), ['later:start', 'later:end', 'reset']);
+  const quiet: string[] = [];
+  assert.equal(await checkThenRun(enqueue, async () => [], async () => { quiet.push('ask'); return false; }, async () => { quiet.push('reset'); return true; }), true);
+  assert.deepEqual(quiet, ['reset'], '広がる変更が無ければ聞かずに Reset');
+});
+
+test('Settings › Advanced の Reset の配線: 確かめの材料と Reset を ctx.queue（保存の順番待ち）で走らせる（backlog 279）', () => {
+  const page = readFileSync(new URL('../web/src/ui/settings/customize.tsx', import.meta.url), 'utf8');
+  const reset = page.slice(page.indexOf('const reset = async () => {'), page.indexOf('const broken = '));
+  assert.ok(reset.includes('await checkThenRun(ctx.queue,'), 'Reset は checkThenRun と ctx.queue を通す');
+  assert.ok(!/await run\(\)/u.test(reset), '順番待ちの外で Reset を呼ばない');
+  const settings = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
+  assert.ok(settings.includes('commit, queue: enqueue,'), 'ctx.queue は保存と同じ順番待ち');
 });

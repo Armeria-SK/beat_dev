@@ -12,7 +12,9 @@ export function confirmable(open: (answer: Answer) => void, run: () => Promise<b
 
 export const SAVE_LIMIT_MS = 30_000;
 
-export function serial(limitMs = SAVE_LIMIT_MS): <T>(job: (signal: AbortSignal) => Promise<T>) => Promise<T> {
+export type Enqueue = <T>(job: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+
+export function serial(limitMs = SAVE_LIMIT_MS): Enqueue {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     const start = () => new Promise<T>((resolve, reject) => {
@@ -27,6 +29,16 @@ export function serial(limitMs = SAVE_LIMIT_MS): <T>(job: (signal: AbortSignal) 
     tail = next.then(() => undefined, () => undefined);
     return next;
   };
+}
+
+export async function checkThenRun<T>(
+  enqueue: Enqueue,
+  check: (signal: AbortSignal) => Promise<readonly T[]>,
+  ask: (items: readonly T[], run: () => Promise<boolean>) => Promise<boolean>,
+  run: (signal: AbortSignal) => Promise<boolean>,
+): Promise<boolean> {
+  const items = await enqueue(check);
+  return items.length > 0 ? ask(items, () => enqueue(run)) : enqueue(run);
 }
 
 export const hasUnsaved = (dirty: ReadonlyMap<string, boolean>): boolean => [...dirty.values()].some(Boolean);

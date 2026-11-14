@@ -113,8 +113,8 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
 
   const ctx = useMemo<SetCtx | null>(() => (view ? {
     view, config: view.config, models, busy, pending, errors, revision,
-    commit, ask, cancel, setDirty, fail, clear, reload, setBusy, onProfile, openCategory: tryOpen,
-  } : null), [view, models, busy, pending, errors, revision, commit, ask, cancel, setDirty, fail, clear, reload, onProfile, tryOpen]);
+    commit, queue: enqueue, ask, cancel, setDirty, fail, clear, reload, setBusy, onProfile, openCategory: tryOpen,
+  } : null), [view, models, busy, pending, errors, revision, commit, enqueue, ask, cancel, setDirty, fail, clear, reload, onProfile, tryOpen]);
 
   const matches = useMemo(() => matchCategories(query, key => t(key)), [query, t]);
   const search = (text: string) => {

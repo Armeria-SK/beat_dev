@@ -8,6 +8,7 @@ import type { Config } from '../../settings/model.ts';
 import { menuFit, menuScrollFor, menuStep, type Box, type MenuFit } from '../menu.ts';
 import { Button, Icon } from '../parts.tsx';
 import { fieldStep, listAccepts, listWithout, readNumber, type FieldDraft } from './commit.ts';
+import type { Enqueue } from './flow.ts';
 
 export interface Pending { row: string; items: Access[]; title?: string; ok?: string; run: () => void; cancel?: () => void }
 export type Ask = Pick<Pending, 'row' | 'items' | 'title' | 'ok'>;
@@ -21,6 +22,7 @@ export interface SetCtx {
   errors: Record<string, string>;
   revision: number;
   commit: (row: string, edit: (config: Config) => Config) => Promise<boolean>;
+  queue: Enqueue;
   ask: (ask: Ask, run: () => Promise<boolean>) => Promise<boolean>;
   cancel: () => void;
   setDirty: (key: string, dirty: boolean) => void;
