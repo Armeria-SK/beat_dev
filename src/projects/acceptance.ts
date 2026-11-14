@@ -24,11 +24,12 @@ export type ClaimedSource =
   | { kind: 'owner_words'; quote: string }
   | { kind: 'owner_choice'; question: string; answer: string }
   | { kind: 'ai_added' };
-export type AcceptanceSource =
+export type FirstSource =
   | { kind: 'owner_words'; quote: string; messageId: number; conversationId: string; context?: string }
   | { kind: 'owner_choice'; question: string; questionMessageId: number; answer: string; answerMessageId: number; conversationId: string }
   | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: UncheckedReason; quote?: string; question?: string; answer?: string }
   | { kind: 'owner_edit' };
+export type AcceptanceSource = FirstSource | { kind: 'owner_answer'; questionId: number; answer: string; picked: 'option' | 'text'; was: FirstSource };
 
 export interface AcceptanceItem {
   id: string;
@@ -389,9 +390,14 @@ function clip(text: string): string {
 export function coverageOf(doc: AcceptanceDoc | undefined, rows: readonly SpeechRow[], before?: number): Coverage {
   const items = (doc?.items ?? []).filter(entry => entry.removedIn === null);
   const counts = { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0 };
-  for (const entry of items) if (Object.hasOwn(counts, entry.source?.kind)) counts[entry.source.kind]++;
+  const origin = (source: AcceptanceSource | undefined): FirstSource | undefined => (source?.kind === 'owner_answer' ? source.was : source);
+  for (const entry of items) {
+    const kind = origin(entry.source)?.kind;
+    if (kind !== undefined && Object.hasOwn(counts, kind)) counts[kind]++;
+  }
   const cited = new Set<number>();
-  for (const { source } of [...items, ...(doc?.notDoing ?? [])]) {
+  for (const entry of [...items, ...(doc?.notDoing ?? [])]) {
+    const source = origin(entry.source);
     if (source?.kind === 'owner_words') cited.add(source.messageId);
     if (source?.kind === 'owner_choice') cited.add(source.answerMessageId);
   }
@@ -530,9 +536,29 @@ export class AcceptanceStore {
     return this.#advance(projectId, ops, 'change', { language: null, taint: null, decide: null }).version;
   }
 
-  applyOwnerDecision(projectId: string, ops: readonly ChangeOp[], source: DecisionSource): AcceptanceVersionRow {
+  applyOwnerDecision(projectId: string, ops: readonly ChangeOp[], source: DecisionSource, taint: string | null = null): AcceptanceVersionRow {
     if (this.#archived(projectId)) throw new AcceptanceError('archived');
-    return this.#advance(projectId, ops, source, { language: null, taint: null, decide: null });
+    return this.#advance(projectId, ops, source, { language: null, taint, decide: null });
+  }
+
+  #liveItem(projectId: string, itemId: string): AcceptanceItem | undefined {
+    return this.#base(projectId).doc.items.find(entry => entry.id === itemId && entry.removedIn === null);
+  }
+
+  hasLiveItem(projectId: string, itemId: string): boolean {
+    if (this.#archived(projectId)) return false;
+    try { return this.#liveItem(projectId, itemId) !== undefined; } catch (error) {
+      if (error instanceof AcceptanceError) return false;
+      throw error;
+    }
+  }
+
+  reopenForAnswer(projectId: string, itemId: string, answer: { questionId: number; answer: string; picked: 'option' | 'text'; taint: string | null }): AcceptanceVersionRow | undefined {
+    const target = this.#liveItem(projectId, itemId);
+    if (!target) return undefined;
+    const was = target.source.kind === 'owner_answer' ? target.source.was : target.source;
+    const source: AcceptanceSource = { kind: 'owner_answer', questionId: answer.questionId, answer: answer.answer, picked: answer.picked, was };
+    return this.applyOwnerDecision(projectId, [{ op: 'change', id: itemId, item: { result: target.result, check: target.check }, source }], 'question', answer.taint);
   }
 
   #advance(projectId: string, ops: readonly ChangeOp[], source: 'change' | DecisionSource, o: { language: string | null; taint: string | null; decide: string | null }): AcceptanceVersionRow {

@@ -20,6 +20,8 @@ const en = {
   'fix_title': 'Answer to question #{id}: {question}',
   'fix_body': 'The owner answered a question from a task.\nQuestion: {question}\nAssumed answer: {assumed}\nOwner answer: {answer}\nChange the work so that it follows the owner answer.',
   'fix_send': 'The owner answered that it may be sent.',
+  'fix_item': 'This answer reopened acceptance item {item}. Its text and check stay as they are. If they no longer fit the answer, say in your summary which item and what should change, so the owner can change the list.',
+  'no_item': 'There is no item {item} in the locked acceptance list of this product. Give the number of an item in that list (such as A-3), or leave item out',
   'assumed_none': '(none)',
   'untrusted_note': 'The question came from a run that read text from elsewhere, so this task carries text from elsewhere, and an option the owner picked is not used as the owner request.',
   'reopen_reason': 'The owner answered question #{id}: {answer}',

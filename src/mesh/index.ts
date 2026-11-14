@@ -13,6 +13,7 @@ import type { AcceptanceDoc } from '../projects/acceptance.ts';
 import { dateIn, isMarkdown, listMeshFiles, MeshError, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
 import { acceptanceLines, readMesh, searchMesh, type MeshText } from './search.ts';
 import { cleanRelPath, dotted, EMPTY_HASH, fileInside, folderExists, listingHash, pathExists, scanFolders, type FolderScan } from './folders.ts';
+import { appendDecision, DECISIONS_FILE, DECISIONS_OLD_FILE, decisionLine, decisionRows, type OwnerDecision } from './decisions.ts';
 import { cleanTerm, GLOSSARY_FILE, GLOSSARY_LINE_MAX, glossaryContent, parseGlossary, upsertGlossary } from './glossary.ts';
 import { cleanWhat, MAP_FILE, MAP_LINE_MAX, mapContent, MeshWriteError, parseMap, unlisted, upsertMap, type MapRow, type Writer } from './map.ts';
 import { applyPatch, hasForeignLines, parseNotes, renderState, STATE_FILE, type NoteAuthor, type StateNote, type StatePatch } from './state.ts';
@@ -47,6 +48,7 @@ export interface IndexMaterials {
   timezone: string;
   map?: MapSummary | null;
   glossary?: { names: number; unreadable: number } | null;
+  decisions?: { rows: number } | null;
   unlisted?: string[] | null;
 }
 
@@ -99,13 +101,14 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
     return text ? [`${note.field}: ${note.by === 'owner' ? '' : AI_NOTE}${text}`] : [];
   });
   const head = notes;
-  const shown = m.files.filter(file => safeName(file.path));
-  const hiddenCount = m.files.length - shown.length;
+  const listed = m.files.filter(file => file.path !== DECISIONS_OLD_FILE);
+  const shown = listed.filter(file => safeName(file.path));
+  const hiddenCount = listed.length - shown.length;
   const hiddenLine = hiddenCount ? [`- ${hiddenCount} files with names that cannot be shown`] : [];
   const heading = m.plan?.clean && m.plan.heading ? secretFree(safeText(m.plan.heading, 60)) : undefined;
   const planLine = m.plan ? `plan.md${heading ? ` — ${m.plan.ai ? AI_NOTE : ''}${heading}` : ''} (updated ${date(m.plan.updatedAt)})` : 'plan.md — not written yet';
 
-  const special = (path: string) => (path === MAP_FILE && m.map) || (path === GLOSSARY_FILE && m.glossary);
+  const special = (path: string) => (path === MAP_FILE && m.map) || (path === GLOSSARY_FILE && m.glossary) || (path === DECISIONS_FILE && m.decisions);
   if (limit > MESH_INDEX_MIN) {
     const fileLines = shown.filter(file => !special(file.path)).map(file => {
       const note = file.heading ? secretFree(safeText(file.heading, 80)) : undefined;
@@ -118,10 +121,11 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
       `- acceptance.json — ${acceptanceText(m.acceptance, false)}`,
       ...(m.map ? [`- ${MAP_FILE} — ${mapText(m.map)}`] : []),
       ...(m.glossary ? [`- ${GLOSSARY_FILE} — ${m.glossary.names} names${m.glossary.unreadable ? ` (${m.glossary.unreadable} lines cannot be read)` : ''}`] : []),
+      ...(m.decisions ? [`- ${DECISIONS_FILE} — ${m.decisions.rows} decisions`] : []),
     ];
     const open = m.unlisted ?? [];
     const tail = [
-      `questions: ${m.counts.questions} unanswered (tasks waiting for an answer) / proposals: ${m.counts.proposals}`,
+      `questions: ${m.counts.questions} unanswered (question_list) / proposals: ${m.counts.proposals}`,
       ...(open.length ? [`not in MAP yet: ${open.slice(0, UNLISTED_SHOWN).join(', ')}${open.length > UNLISTED_SHOWN ? ` and ${open.length - UNLISTED_SHOWN} more` : ''}`] : []),
     ];
     const body = largest(fileLines.length, keep => {
@@ -163,6 +167,7 @@ interface Light {
   timezone: string;
   map: MapSummary | null;
   glossary: { names: number; unreadable: number } | null;
+  decisions: { rows: number } | null;
   unlisted: string[] | null;
 }
 
@@ -235,8 +240,9 @@ export class Mesh {
     const glossaryText = regular(join(dir, GLOSSARY_FILE)) ? readFileSync(join(dir, GLOSSARY_FILE), 'utf8') : undefined;
     const parsedGlossary = glossaryText === undefined ? undefined : parseGlossary(glossaryText);
     const glossary = parsedGlossary ? { names: parsedGlossary.rows.length, unreadable: parsedGlossary.unreadable } : null;
-    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan ?? null, map, glossary, open]);
-    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, map, glossary, unlisted: open };
+    const decisions = regular(join(dir, DECISIONS_FILE)) ? { rows: decisionRows(readFileSync(join(dir, DECISIONS_FILE), 'utf8')) } : null;
+    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan ?? null, map, glossary, decisions, open]);
+    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, map, glossary, decisions, unlisted: open };
   }
 
   #materials(projectId: string, light: Light): IndexMaterials {
@@ -251,6 +257,7 @@ export class Mesh {
       timezone: light.timezone,
       map: light.map,
       glossary: light.glossary,
+      decisions: light.decisions,
       unlisted: light.unlisted,
     };
   }
@@ -355,6 +362,15 @@ export class Mesh {
     if (existing !== undefined) this.#backupAs(projectId, 'glossary', existing);
     replaceFile(file, content);
     return term;
+  }
+
+  recordDecision(projectId: string, decision: Omit<OwnerDecision, 'date'>): boolean {
+    const project = this.#d.projects?.get(projectId);
+    if (!project || project.archived_at !== null) return false;
+    const dir = this.#dir(projectId);
+    mkdirSync(dir, { recursive: true });
+    appendDecision(dir, decisionLine({ ...decision, date: dateIn(this.#d.now?.() ?? Date.now(), this.#d.timezone()) }));
+    return true;
   }
 
   #backupAs(projectId: string, kind: 'map' | 'glossary', content: string): void {

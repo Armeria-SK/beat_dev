@@ -44,6 +44,14 @@ export function registerQuestionRoutes(router: Router, app: App): void {
     }
     if (!result) throw domainProblem(404, 'not_found', new QuestionError('not_found', { id }));
     if (!result.repeated) {
+      const row = app.questions.get(id);
+      if (row?.project_id) {
+        try {
+          app.mesh.recordDecision(row.project_id, {
+            questionId: id, question: row.question, answer: row.answer ?? '', picked: input.text?.trim() ? 'text' : 'option', kept: result.kind === 'kept', item: result.reopenedItem, external: row.tainted === 1,
+          });
+        } catch (error) { app.log(`[WARN] Could not write DECISIONS.md of product ${row.project_id}: ${(error as Error).message}`); }
+      }
       if (result.resumedTaskId) app.kv.delete(splitKey(result.resumedTaskId));
       for (const taskId of [result.resumedTaskId, result.reopenedTaskId, result.fixTaskId]) if (taskId) app.worker.requestRun(taskId);
     }
