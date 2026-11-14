@@ -84,7 +84,7 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
           {open && hook.builtin !== undefined && (
             <div className="ui-set__detail">
               <Row k={`${k}:matcher`} title={t('ui.set.hooks.matcher')} desc={t('ui.set.hooks.matcherDesc')}>
-                <CommitField value={hook.matcher} label={t('ui.set.hooks.matcher')} mono onCommit={matcher => { if (matcher) edit({ matcher }); }} />
+                <CommitField value={hook.matcher} label={t('ui.set.hooks.matcher')} mono required onCommit={matcher => edit({ matcher })} />
               </Row>
               <Row k={`${k}:always`} title={t('ui.set.hooks.always')} desc={t('ui.set.hooks.alwaysDesc')}
                 below={<ListField items={hook.always} label={t('ui.set.hooks.always')} placeholder=".github/workflows/**" disabled={busy} onChange={always => edit({ always })} />} />

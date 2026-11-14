@@ -205,7 +205,7 @@ export const en = {
   // stage 8
   'tools.mcp.asks.sends': 'Always waits in Pending because it may send data outside',
   'tools.mcp.asks.removes': 'Always waits in Pending because it may delete things',
-  'tools.mcp.asks.write': 'Asked because it writes',
+  'tools.mcp.asks.write': 'The judge checks it because it writes; what the judge cannot clear waits in Pending',
   'tools.policy.blockNote': 'This tool is not given to beat',
   'tools.policy.askNote': 'Always asks you in Pending',
   'tools.policy.askIsBlock': "Can't be set to Ask because it can't wait in Pending. It is stopped now; choose Allow to use it.",
@@ -1124,7 +1124,7 @@ export const en = {
   'ui.set.shell.allow': 'Run without asking',
   'ui.set.shell.allowDesc': 'Commands that start like these',
   'ui.set.shell.ask': 'Always ask',
-  'ui.set.shell.askDesc': 'Even when the mode is Auto',
+  'ui.set.shell.askDesc': 'Even when the mode is Normal',
   'ui.set.shell.deny': 'Never run',
   'ui.set.shell.denyDesc': 'Refused without asking',
   'ui.set.bg.title': 'Tasks in the background',

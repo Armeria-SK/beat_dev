@@ -225,8 +225,8 @@ const en = {
   'pipeline.taint_review': 'This review read text that came from somewhere else, such as the web or an attachment ({sources}). Writing after that needs an approval, but a review (background work) has nobody to approve it, so it cannot be used in this review',
   'pipeline.taint_sep': ', ',
   'pipeline.shell_fetch': 'This command fetches something from outside, so it is checked before it runs',
-  'pipeline.policy_ask': 'The tool "{name}" is set to "ask for approval" in the settings, so it is checked with you every time',
-  'pipeline.policy_review': 'The tool "{name}" is set to "ask for approval", but a review (background work) has nobody to approve it, so it cannot be used',
+  'pipeline.policy_ask': 'The tool "{name}" is set to "Ask" in the settings, so it is checked with you every time',
+  'pipeline.policy_review': 'The tool "{name}" is set to "Ask", but a review (background work) has nobody to approve it, so it cannot be used',
   'pipeline.auto_no_reason': 'No reason was given',
 
   'hook.failed': 'The hook "{name}" failed ({reason})',

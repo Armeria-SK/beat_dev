@@ -23,6 +23,7 @@ export interface StatementFacts {
   piped?: boolean;
   redirected?: boolean;
   cwd: string | null;
+  shell?: ShellKind;
   inner?: StatementFacts[] | null;
 }
 
