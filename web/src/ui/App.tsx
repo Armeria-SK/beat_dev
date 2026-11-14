@@ -294,8 +294,8 @@ export function App() {
   const foot = footLine(waiting, working, drafts.map(d => checklists.get(d.conversationId) ?? []), runningTitle);
 
   useEffect(() => {
-    if ((waiting.pending || waiting.answers) && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
-  }, [waiting.pending, waiting.answers]);
+    if ((waiting.pending || waiting.answers || waiting.questions) && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
+  }, [waiting.pending, waiting.answers, waiting.questions]);
 
   const settingsOpen = route.view === 'settings';
   const wasSettingsOpen = useRef(settingsOpen);

@@ -182,6 +182,7 @@ test('ui/questions の配線: App は数の口の数を製品の行・サイド�
   assert.ok(/<Kanban [^>]*questionsByTask=\{questionsByTask\}/u.test(app), 'Kanban のカード');
   assert.ok(app.includes('count: questionsFor(live.questionCounts, paneProduct)'), '欄のタブ');
   assert.ok(app.includes('questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status] as const), questionsByTask)'), '待ちの合計');
+  assert.ok(app.includes("if ((waiting.pending || waiting.answers || waiting.questions) && 'Notification' in window"),'急ぎの質問で止まったときもブラウザの知らせの許可を聞く');
   const pane = readFileSync(new URL('../web/src/ui/panes/QuestionsPane.tsx', import.meta.url), 'utf8');
   assert.ok(pane.includes('if (!sendOnce(sent.current, q.id)) return;'), '二度押しの守り');
 });
