@@ -98,7 +98,8 @@ const GIT_STAGING = new Set(['add', 'commit']);
 function gitStagingOnly(statements: readonly StatementFacts[]): boolean {
   return statements.length > 0 && statements.every(st => {
     const sub = st.words[st.gitGlobal.length + 1];
-    return st.program === 'git' && !st.programDynamic && !st.programOdd && !st.inner && !st.piped && !st.redirected
+    return st.program === 'git' && st.words[0]?.text === 'git' && !st.programDynamic && !st.programOdd && !st.inner && !st.piped && !st.redirected
+      && !st.env.length && !st.gitGlobal.length && !st.shapes.length && !st.reasonKeys.some(key => key.startsWith('shape.') || key.startsWith('code.'))
       && sub !== undefined && GIT_STAGING.has(sub.text) && !st.words.some(w => w.dynamic);
   });
 }
