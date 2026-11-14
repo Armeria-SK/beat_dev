@@ -854,6 +854,22 @@ test('2 つ目の関所: 判定役のあとも事前の判定が同じなら、�
   assert.equal(same.ran(), 1);
 });
 
+test('2 つ目の関所: 事前の判定の gitStaging（git の add / commit だけの行の印）は比べる対象ではなく、付いていても「判定のあいだに変わった」で断らない', async t => {
+  const cases: Array<[string, PreCheck, PreCheck]> = [
+    ['t_twice_staging', { ...BASE_CHECK, gitStaging: true }, { ...BASE_CHECK, gitStaging: true }],
+    ['t_twice_staging_gone', { ...BASE_CHECK, gitStaging: true }, BASE_CHECK],
+    ['t_twice_staging_new', BASE_CHECK, { ...BASE_CHECK, gitStaging: true }],
+  ];
+  for (const [name, first, second] of cases) {
+    const same = twice(name, () => second, first);
+    const s = await setup(t, { tools: [same.tool] });
+    const outcome = await s.call(name, {});
+    assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'auto-mode'], `${name}: ${outcome.output.content}`);
+    assert.equal(same.checked(), 2, name);
+    assert.equal(same.ran(), 1, name);
+  }
+});
+
 test('2 つ目の関所: 文は同じでも、持ち主に聞く理由（ownerReason・守る場所のキー）が新しく付いていたら owner の Pending に積み、動かない', async t => {
   const cases: Array<[string, PreCheck, RegExp]> = [
     ['t_twice_owner', { ...BASE_CHECK, ownerReason: 'A protected file would be pushed' }, /A protected file would be pushed/u],
