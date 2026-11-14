@@ -4,9 +4,10 @@ import type { Project, Question, QuestionCounts } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { questionsRoute } from '../web/src/ui/kanban.ts';
 import { productTiles, tiles } from '../web/src/ui/overview.ts';
+import { countTasks, waitingTotal as workspaceTotal } from '../web/src/ui/agent-state.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import {
-  answeredToast, answerOf, assumedText, BUTTON_KEY, buttonOf, choiceOrder, earlierCursor, firstPick, fixPill, headKey, historyOf, isRetry, leaveChoice, mergeAnswered, openedId, openShown, OTHER, questionsFor, resultLine, retryChoice, taskQuestions, withQuestionCounts,
+  answeredToast, answerOf, assumedText, BUTTON_KEY, buttonOf, choiceOrder, earlierCursor, firstPick, fixPill, headKey, historyOf, isRetry, leaveChoice, mergeAnswered, openedId, openShown, OTHER, questionsFor, resultLine, retryChoice, sendOnce, taskQuestions, withQuestionCounts,
 } from '../web/src/ui/questions.ts';
 import { routeHash } from '../web/src/ui/routes.ts';
 
@@ -62,9 +63,9 @@ test('ui/questions: ボタンの文は選択に合わせる。仮の選択 → K
 test('ui/questions: 押す前の結果の 1 行。違う答えは「直しが始まる」、受け入れの項目に結ばれた質問はその項目が開き直されると言う', () => {
   const text = (line: ReturnType<typeof resultLine>) => (line.key === 'ui.q.result.fixItem' ? en[line.key](line.item) : en[line.key]);
   assert.equal(text(resultLine(q(), 0)), 'Built with this choice. Nothing to redo.');
-  assert.equal(text(resultLine(q(), 1)), 'Differs from the assumption. Starts a fix.');
-  assert.equal(text(resultLine(q(), OTHER)), 'Differs from the assumption. Starts a fix.');
-  assert.equal(text(resultLine(q({ acceptance_item: 'A-3' }), 1)), 'Differs from the assumption. Starts a fix and reopens item A-3.');
+  assert.equal(text(resultLine(q(), 1)), 'Differs from the assumption. Triggers a fix.');
+  assert.equal(text(resultLine(q(), OTHER)), 'Differs from the assumption. Triggers a fix.');
+  assert.equal(text(resultLine(q({ acceptance_item: 'A-3' }), 1)), 'Differs from the assumption. Triggers a fix and reopens item A-3.');
   assert.equal(text(resultLine(q({ acceptance_item: 'A-3' }), 0)), 'Built with this choice. Nothing to redo.', '仮の選択のままなら項目は開き直さない');
   assert.equal(text(resultLine(q({ blocking: true }), 1)), 'The task goes on with this answer.');
   assert.equal(text(resultLine(q({ kind: 'stuck' }), 0)), 'Retry reopens the task. Leave it closes this question.');
@@ -109,8 +110,9 @@ test('ui/questions: Answered はめくりで足す（同じ番号は新しい方
   assert.equal(earlierCursor([]), null);
 });
 
-test('ui/questions: 「6 answered · 1 led to a fix」。読み切った Answered の行から数える。読み切っていなければ全製品は数の口から、製品の欄は出さない', () => {
-  assert.deepEqual(historyOf(counts(), [], true, false), { answered: 6, changed: 1 });
+test('ui/questions: 「6 answered · 1 led to a fix」。読み切った Answered の行から数える。読み切っていなければ全製品は数の口の answered だけ、製品の欄は出さない', () => {
+  assert.deepEqual(historyOf(counts(), [], true, false), { answered: 6, changed: 0 }, '読み切る前は数の口の changed（直しを作らない答えも入る）を led to a fix に出さない');
+  assert.equal(en['ui.q.history'](6, 0), '6 answered');
   assert.equal(historyOf(counts({ answered: 0, changed: 0 }), [], true, true), null);
   assert.equal(historyOf(null, [], true, true), null);
   const rows = [q({ id: 3, answer_kind: 'changed', fix_task_id: 'f3' }), q({ id: 4, answer_kind: 'changed', blocking: true }), q({ id: 2, answer_kind: 'kept' })];
@@ -150,4 +152,36 @@ test('ui/questions: 答えたあとのトーストは起きたことに合わせ
   assert.equal(en[answeredToast({ ...base, reopenedTaskId: 't1' })], 'Task reopened');
   assert.equal(en[answeredToast({ ...base, resumedTaskId: 't1' })], 'The task goes on');
   assert.equal(en[answeredToast(base)], 'Answer saved');
+});
+
+test('ui/questions: 急ぎの質問で止まったタスク 1 つは、Workspace の待ちの合計でも製品の行の合計でも 1', () => {
+  const c = counts({ open: 1, byProject: { prod01: 1 }, byTask: { t1: 1 } });
+  const [row] = withQuestionCounts([project('prod01')], c);
+  const workspace = workspaceTotal({ drafts: 0, pending: 0, questions: c.open, ...countTasks([['t1', 'waiting']], taskQuestions(c)) });
+  assert.equal(workspace, 1);
+  assert.equal(waitingTotal(row!), 1);
+  assert.equal(workspace, waitingTotal(row!), 'Workspace の合計は製品の行の和と同じ');
+});
+
+test('ui/questions: 同じ質問は答えが返るまで 2 度は送らない。失敗して外せばもう一度送れる', () => {
+  const sent = new Set<number>();
+  assert.equal(sendOnce(sent, 4), true);
+  assert.equal(sendOnce(sent, 4), false, '二度押しは送らない');
+  assert.equal(sendOnce(sent, 5), true, '別の質問は送れる');
+  sent.delete(4);
+  assert.equal(sendOnce(sent, 4), true);
+});
+
+test('ui/questions の配線: App は数の口の数を製品の行・サイドバー・スマホのタブ・Kanban・欄・待ちの合計へ渡す', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  assert.ok(app.includes('withQuestionCounts(withPendingCounts(live.projects, live.pendingCounts), live.questionCounts)'), '製品の行の数');
+  assert.ok(app.includes('const questionsAll = live.questionCounts?.open ?? 0;'));
+  assert.ok(/<Sidebar [^>]*questions=\{questionsAll\}[^>]*projects=\{projects\}/u.test(app), 'サイドバー');
+  assert.ok(/<TabBar [^>]*questions=\{questionsAll\}/u.test(app), 'スマホのタブ');
+  assert.ok(/<Kanban [^>]*questionsByTask=\{questionsByTask\}/u.test(app), 'Kanban のカード');
+  assert.ok(app.includes('count: questionsFor(live.questionCounts, paneProduct)'), '欄のタブ');
+  assert.ok(app.includes('questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status] as const), questionsByTask)'), '待ちの合計');
+  const pane = readFileSync(new URL('../web/src/ui/panes/QuestionsPane.tsx', import.meta.url), 'utf8');
+  assert.ok(pane.includes('if (!sendOnce(sent.current, q.id)) return;'), '二度押しの守り');
 });

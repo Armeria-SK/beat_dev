@@ -10,12 +10,12 @@ export interface Waiting {
   questions: number;
 }
 
-export function countTasks(statuses: Iterable<TaskStatus>): { proposals: number; answers: number } {
+export function countTasks(tasks: Iterable<readonly [string, TaskStatus]>, asked: ReadonlyMap<string, number> = new Map()): { proposals: number; answers: number } {
   let proposals = 0;
   let answers = 0;
-  for (const status of statuses) {
+  for (const [id, status] of tasks) {
     if (status === 'inbox') proposals += 1;
-    else if (status === 'waiting') answers += 1;
+    else if (status === 'waiting' && !asked.has(id)) answers += 1;
   }
   return { proposals, answers };
 }

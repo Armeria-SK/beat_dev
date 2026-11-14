@@ -11,8 +11,16 @@ const items = (...statuses: ChecklistItem['status'][]): ChecklistItem[] => statu
 
 test('ui/agent-state: タスクの状態から、提案（inbox）と返事待ち（waiting）だけを数える', () => {
   const statuses: TaskStatus[] = ['inbox', 'inbox', 'waiting', 'ready', 'running', 'scheduled', 'done', 'failed', 'cancelled'];
-  assert.deepEqual(countTasks(statuses), { proposals: 2, answers: 1 });
+  assert.deepEqual(countTasks(statuses.map((s, i) => [`t${i}`, s] as const)), { proposals: 2, answers: 1 });
   assert.deepEqual(countTasks([]), { proposals: 0, answers: 0 });
+});
+
+test('ui/agent-state: 急ぎの質問で待っているタスクは返事待ちに数えない（質問の数で 1 つだけ数える。5-2-u）', () => {
+  const tasks = [['t1', 'waiting'], ['t2', 'waiting']] as const;
+  const asked = new Map([['t1', 1]]);
+  const counted = countTasks(tasks, asked);
+  assert.deepEqual(counted, { proposals: 0, answers: 1 });
+  assert.equal(waitingTotal({ ...NONE, ...countTasks([['t1', 'waiting']], asked), questions: 1 }), 1, '1 つの急ぎの質問で止まったタスクは合計 1');
 });
 
 test('ui/agent-state: Kanban の数は提案と返事待ちの和、待ちの合計は 5 つの和（Pending の一覧と Open の質問を含む。4-U1・5-2-u）', () => {

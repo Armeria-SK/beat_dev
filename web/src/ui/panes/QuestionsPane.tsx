@@ -7,7 +7,7 @@ import { latestOnly } from '../latest.ts';
 import { ROW_LEAVE_MS } from '../library.ts';
 import { Button, EmptyState, Notice, Pill } from '../parts.tsx';
 import {
-  ANSWERED_PAGE, answeredToast, answerOf, assumedText, BUTTON_KEY, buttonOf, choiceOrder, earlierCursor, firstPick, fixPill, headKey, historyOf, isRetry, leaveChoice, mergeAnswered, openedId, openShown, OTHER, resultLine, retryChoice,
+  ANSWERED_PAGE, answeredToast, answerOf, assumedText, BUTTON_KEY, buttonOf, choiceOrder, earlierCursor, firstPick, fixPill, headKey, historyOf, isRetry, leaveChoice, mergeAnswered, openedId, openShown, OTHER, resultLine, retryChoice, sendOnce,
   type Picked,
 } from '../questions.ts';
 import { routeHash } from '../routes.ts';
@@ -128,7 +128,9 @@ export function QuestionsList({ projectId, counts, revision, fixRevision }: Ques
   const [open, setOpen] = useState<Question[] | null>(null);
   const [answered, setAnswered] = useState<Question[] | null>(null);
   const [complete, setComplete] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [openFailed, setOpenFailed] = useState(false);
+  const [answeredFailed, setAnsweredFailed] = useState(false);
+  const failed = openFailed || answeredFailed;
   const [earlier, setEarlier] = useState<'idle' | 'loading' | 'none'>('idle');
   const [picked, setPicked] = useState<number | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<number>>(new Set());
@@ -145,9 +147,9 @@ export function QuestionsList({ projectId, counts, revision, fixRevision }: Ques
       const page = await api.questions({ status: 'open', ...(project ? { projectId: project } : {}) });
       if (!opens.current.isCurrent(ticket)) return;
       setOpen(page.items);
-      setFailed(false);
+      setOpenFailed(false);
     } catch {
-      if (opens.current.isCurrent(ticket)) setFailed(true);
+      if (opens.current.isCurrent(ticket)) setOpenFailed(true);
     }
   }, [project]);
   const loadAnswered = useCallback(async () => {
@@ -157,8 +159,9 @@ export function QuestionsList({ projectId, counts, revision, fixRevision }: Ques
       if (!answers.current.isCurrent(ticket)) return;
       setAnswered(old => mergeAnswered(old ?? [], page.items));
       setComplete(old => old || page.items.length < ANSWERED_PAGE);
+      setAnsweredFailed(false);
     } catch {
-      if (answers.current.isCurrent(ticket)) setFailed(true);
+      if (answers.current.isCurrent(ticket)) setAnsweredFailed(true);
     }
   }, [project]);
   useEffect(() => { void loadOpen(); }, [loadOpen, revision]);
@@ -178,8 +181,7 @@ export function QuestionsList({ projectId, counts, revision, fixRevision }: Ques
 
   const mark = (set: typeof setBusy, id: number, on: boolean) => set(old => { const next = new Set(old); if (on) next.add(id); else next.delete(id); return next; });
   const submit = async (q: Question, answer: QuestionAnswer) => {
-    if (sent.current.has(q.id)) return;
-    sent.current.add(q.id);
+    if (!sendOnce(sent.current, q.id)) return;
     mark(setBusy, q.id, true);
     try {
       const result = await api.answerQuestion(q.id, answer);

@@ -88,9 +88,15 @@ export const ANSWERED_PAGE = 50;
 export interface History { answered: number; changed: number }
 
 export function historyOf(counts: QuestionCounts | null, rows: readonly Question[], all: boolean, complete: boolean): History | null {
-  if (!complete) return all && counts && counts.answered > 0 ? { answered: counts.answered, changed: counts.changed } : null;
+  if (!complete) return all && counts && counts.answered > 0 ? { answered: counts.answered, changed: 0 } : null;
   if (rows.length === 0) return null;
   return { answered: rows.length, changed: rows.filter(q => q.fix_task_id !== null).length };
+}
+
+export function sendOnce(sent: Set<number>, id: number): boolean {
+  if (sent.has(id)) return false;
+  sent.add(id);
+  return true;
 }
 
 export const openShown = (rows: readonly Question[], gone: ReadonlySet<number>): Question[] => newestFirst(rows.filter(q => !gone.has(q.id)));
