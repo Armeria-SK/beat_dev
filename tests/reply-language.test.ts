@@ -184,7 +184,7 @@ test('添付の枠: 日本語の枠の添付の中身は、会話の履歴の AP
 
 test('振り返り: 「変更なし」の合図は英語の "No changes" のまま返させ（訳すと整理の案の通知になる）、前の日本語の合図も読む', () => {
   for (const trigger of ['idle', 'book_full'] as const) {
-    const prompt = reviewPrompt({ trigger, forgotten: [], ...(trigger === 'book_full' ? { bookPressure: 'x' } : {}) });
+    const prompt = reviewPrompt({ trigger, forgotten: [], ...(trigger === 'book_full' ? { bookPressure: 'x', memory: true } : {}) });
     assert.match(prompt, /reply only "No changes" \(exactly these English words, whatever language you write in otherwise\)/u, trigger);
     assert.match(prompt, /Only the reply "No changes" stays in English/u, trigger);
   }
@@ -198,7 +198,7 @@ test('返事・記録の言語の指示は持ち主の言葉を指し、指示�
   const texts = {
     compact: compactPrompt({ previous: null, transcript: 'User: こんにちは' }, 'en'),
     review: reviewPrompt({ trigger: 'heavy_run', forgotten: [] }),
-    tidy: reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x' }),
+    tidy: reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x', memory: true }),
     task: taskPrompt(curiosity, [], 'UTC'),
     dynamic: buildDynamic('UTC', 'en', now, 'auto'),
   };
