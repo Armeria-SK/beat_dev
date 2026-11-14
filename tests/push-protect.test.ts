@@ -60,3 +60,34 @@ test('push の守るファイル: stash（古い stash@{1} も）や refs/heads 
   const custom = r.protectOf('git push origin refs/custom/y');
   assert.ok(custom && 'files' in custom && custom.files.some(f => f.includes('ci.yml')), JSON.stringify(custom));
 });
+
+test('push の守るファイル: どの ref からも届かない送り元（HEAD@{1}・ORIG_HEAD・commit-tree の生の番号）も見る。引けない送り元は確かめられない扱い', { skip: !gitAvailable && 'git が無い' }, t => {
+  const r = repo(t);
+  writeFileSync(join(r.root, '.github', 'workflows', 'ci.yml'), 'on: workflow_dispatch\n');
+  r.git('commit', '-q', '-am', 'change ci');
+  r.git('reset', '-q', '--hard', 'HEAD~1');
+  assert.equal(r.protectOf('git push origin main'), undefined, '枝に無いコミットは送らない');
+  for (const command of ["git push origin 'HEAD@{1}:main'", 'git push -f origin ORIG_HEAD:main', "git push origin '+HEAD@{1}:refs/heads/x'"]) {
+    const out = r.protectOf(command);
+    assert.ok(out && 'files' in out && out.files.some(f => f.includes('ci.yml')), `${command}: ${JSON.stringify(out)}`);
+  }
+  writeFileSync(join(r.root, '.github', 'workflows', 'ci.yml'), 'on: schedule\n');
+  r.git('add', '-A');
+  const loose = r.git('commit-tree', r.git('write-tree').trim(), '-p', 'HEAD', '-m', 'loose').trim();
+  r.git('reset', '-q', '--hard', 'HEAD');
+  const raw = r.protectOf(`git push origin ${loose}:refs/heads/y`);
+  assert.ok(raw && 'files' in raw && raw.files.some(f => f.includes('ci.yml')), JSON.stringify(raw));
+  assert.deepEqual(r.protectOf('git push origin nosuch:main'), { unchecked: true });
+  assert.equal(r.protectOf('git push origin :old'), undefined, '消すだけの refspec は送り元が無い');
+});
+
+test('push の守るファイル: refs/prefetch・refs/original の下だけにあるコミットでは確かめにしない', { skip: !gitAvailable && 'git が無い' }, t => {
+  const r = repo(t);
+  writeFileSync(join(r.root, '.github', 'workflows', 'ci.yml'), 'on: workflow_dispatch\n');
+  r.git('add', '-A');
+  const commit = r.git('commit-tree', r.git('write-tree').trim(), '-p', 'HEAD', '-m', 'fetched').trim();
+  r.git('reset', '-q', '--hard', 'HEAD');
+  r.git('update-ref', 'refs/prefetch/remotes/origin/main', commit);
+  r.git('update-ref', 'refs/original/refs/heads/main', commit);
+  assert.equal(r.protectOf('git push origin main'), undefined);
+});

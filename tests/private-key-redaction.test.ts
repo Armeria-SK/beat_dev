@@ -65,3 +65,24 @@ test('秘密鍵: 印の無いふつうの文はそのまま。印を書いただ
   const code = `const begin = '${BEGIN}';\nconst x = 1;\n\nfunction next() { return 2; }`;
   assert.equal(redactSecrets(code), "const begin = '[REDACTED]\n\nfunction next() { return 2; }");
 });
+
+test('秘密鍵: END の無い鍵が 2 つ続いても（head で 2 つのファイル）、2 つ目の BEGIN と中身も伏せる', () => {
+  const out = sanitizeModelInputText(`==> a.txt <==\n${BEGIN}\n${LINE1}\n${LINE2}\n\n==> b.txt <==\n${BEGIN}\n${LINE3}\n${LINE1}x`);
+  hidden(out.text);
+  assert.equal(out.text, '==> a.txt <==\n[REDACTED]\n\n==> b.txt <==\n[REDACTED]');
+  assert.equal(out.redaction_count, 2);
+});
+
+test('秘密鍵: 差分の中で空の文脈の行をはさんで END の無い鍵が 2 つあっても、どちらの中身も伏せる', () => {
+  const text = redactSecrets(`@@ -1,7 +1,7 @@\n-${BEGIN}\n-${LINE1}\n \n+${BEGIN}\n+${LINE2}\n+${LINE3}`);
+  hidden(text);
+  assert.equal(text, '@@ -1,7 +1,7 @@\n-[REDACTED]\n \n+[REDACTED]');
+});
+
+test('秘密鍵: 印を 1 つ書いただけの文も、伏せた 1 件として数える（注意深い向き。記録や計画の書き込みの関門は、これを鍵らしい文として断る）', () => {
+  for (const marker of [BEGIN, END]) {
+    const out = sanitizeModelInputText(`The file starts with ${marker}`);
+    assert.equal(out.redaction_count, 1, marker);
+    assert.ok(!out.text.includes('PRIVATE KEY'), out.text);
+  }
+});

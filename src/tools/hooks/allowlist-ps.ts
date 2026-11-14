@@ -176,13 +176,39 @@ const joinName: PsCmd['extra'] = (p, acc) => {
   const name = first(p, 'name')[0];
   if (name) acc.copies.push({ kind: 'join', sources: [], dest: first(p, 'path')[0] ?? null, name, recursive: false, dirFlag: false, noTargetDir: false });
 };
+const NEW_ITEM_PARAMS: ReadonlyArray<readonly [string, string]> = [
+  ['path', 'path'], ['name', 'name'], ['itemtype', 'itemtype'], ['type', 'itemtype'], ['value', 'value'], ['target', 'value'], ['force', 'force'], ['credential', 'credential'],
+  ['whatif', 'whatif'], ['wi', 'whatif'], ['confirm', 'confirm'], ['cf', 'confirm'],
+];
+const PLAIN_ITEM_TYPES = ['directory', 'container', 'file'];
+function newItemParam(text: string): string | undefined {
+  const name = text.slice(1).replace(/:$/u, '').toLowerCase();
+  const exact = NEW_ITEM_PARAMS.find(([alias]) => alias === name);
+  if (exact) return exact[1];
+  const hits = new Set(NEW_ITEM_PARAMS.filter(([alias]) => name !== '' && alias.startsWith(name)).map(([, param]) => param));
+  return hits.size === 1 ? [...hits][0] : undefined;
+}
 writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', (p, acc, ctx, st) => {
   joinName(p, acc, ctx, st);
-  const type = first(p, 'itemtype')[0];
-  const link = st.words.slice(1).find(w => /^(?:-[A-Za-z]+:)?(?:hardlink|symboliclink|junction)$/iu.test(w.text));
-  if (link || (type && (type.dynamic || !/^(?:file|directory)$/iu.test(type.text)))) {
-    acc.add('once', 'list.form', { cmd: st.words[0]!.text, detail: (link ?? type)!.text }, false);
-    for (const w of first(p, 'value')) acc.write(w);
+  const words = st.words.slice(1);
+  const types: Word[] = [];
+  const values: Word[] = [];
+  let odd: Word | undefined;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (w.attached || w.dynamic || !w.text.startsWith('-')) continue;
+    const param = newItemParam(w.text);
+    if (param === undefined) { odd ??= w; continue; }
+    if (param !== 'itemtype' && param !== 'value') continue;
+    const value = words[i + 1];
+    if (!value) continue;
+    (param === 'itemtype' ? types : values).push(value);
+    i++;
+  }
+  const link = types.find(w => w.dynamic || w.text === '' || !PLAIN_ITEM_TYPES.some(t => t.startsWith(w.text.toLowerCase())));
+  if (link || odd) {
+    acc.add('once', 'list.form', { cmd: st.words[0]!.text, detail: (link ?? odd)!.text }, false);
+    for (const w of values) acc.write(w);
   }
 });
 // 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数

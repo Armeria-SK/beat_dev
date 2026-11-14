@@ -176,13 +176,34 @@ test('New-Item のリンク（HardLink・SymbolicLink・Junction）は、リン�
     `New-Item -ItemType HardLink -Path link -Value ${outside}`, 'New-Item -ItemType HardLink -Path link -Value SOUL.md', `New-Item -ItemType SymbolicLink -Path link -Value ${f.base}`,
     `New-Item -ItemType Junction -Path link -Value ${f.base}`, `New-Item -Path link -ItemType:HardLink -Value ${outside}`, `ni -it hardlink link -Value ${outside}`,
     `New-Item -Type HardLink link -Value ${outside}`, 'New-Item -ItemType HardLink -Path link -Value notes.md', 'New-Item -ItemType $t -Path link',
+    'New-Item -it h -Path link -Value SOUL.md', `New-Item -Type sym -Path link -Value ${f.base}`, `ni -ItemT j -Path link -Value ${f.base}`, `New-Item -ItemType h -Path link -Target ${outside}`,
+    `New-Item -it:h -Path link -Value ${outside}`, `New-Item -I h -Path link -Value ${outside}`,
   ]) {
     const v = f.ps(command);
     assert.equal(v.decision, 'ask', `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
   }
   const value = f.ps(`New-Item -ItemType HardLink -Path link -Value ${outside}`);
   assert.ok(value.paths.some(p => p.write && p.input === outside), JSON.stringify(value.paths));
-  for (const command of ['New-Item -ItemType File -Path a.md -Value hello', 'New-Item -ItemType Directory out', 'New-Item -Path docs -Name b.md']) {
+  for (const command of [`New-Item -it h -Path link -Value ${outside}`, `New-Item -Type sym -Path link -Target ${outside}`]) {
+    const v = f.ps(command);
+    assert.ok(v.paths.some(p => p.write && p.input === outside), `${command}: ${JSON.stringify(v.paths)}`);
+  }
+  for (const command of ['New-Item -ItemType File -Path a.md -Value hello', 'New-Item -ItemType Directory out', 'New-Item -Path docs -Name b.md', 'New-Item -ItemType f -Path a2.md', 'New-Item -it dir -Path d2', 'New-Item -Type d d3']) {
     assert.equal(f.ps(command).decision, 'allow', command);
   }
+});
+
+test('リンクを作るコマンド（ln・mklink・fsutil hardlink・cp -l/-s/--link/--symbolic-link）は、持ち主が許可の一覧に入れても今回だけ', t => {
+  const f = fixture(t);
+  const allow = ['ln', 'cp', 'cmd', 'mklink', 'fsutil', 'curl', 'wget'];
+  for (const command of ['ln notes.md link', 'ln -s notes.md link', 'ln -sf ../x link', 'cp -l notes.md link', 'cp -s notes.md link', 'cp -al tmp t2', 'cp --link notes.md link', 'cp --symbolic-link notes.md link']) {
+    const v = f.bash(command, { allow });
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision}`);
+  }
+  for (const command of ['fsutil hardlink create link notes.md', 'cmd /c mklink /H link notes.md', 'cmd /c mklink /J link docs']) {
+    const v = f.ps(command, { allow: [...PS_WRITER_ALLOW, ...allow] });
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision}`);
+  }
+  for (const command of ['cp notes.md copy.md', 'cp -r tmp/nested t3']) assert.equal(f.bash(command, { allow }).decision, 'allow', command);
+  assert.equal(f.ps('fsutil fsinfo drives', { allow: [...PS_WRITER_ALLOW, ...allow] }).decision, 'allow');
 });

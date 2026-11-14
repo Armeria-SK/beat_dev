@@ -117,6 +117,19 @@ function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
   else cmdHostArgs(trimmed, st, cmdTarget, acc);
 }
 
+function linkFormOf(key: string, words: readonly Word[], ps: boolean): string | undefined {
+  const args = words.slice(1);
+  if (key === 'ln' || key === 'mklink') return key;
+  if (key === 'cmd') {
+    const at = args.findIndex(w => /^\/[ckr]$/iu.test(w.text));
+    const inner = at < 0 ? undefined : args[at + 1];
+    return inner && !inner.dynamic ? linkFormOf(inner.text.toLowerCase().replace(/\.exe$/u, ''), args.slice(at + 1), false) : undefined;
+  }
+  if (key === 'fsutil') return args.find(w => w.dynamic || w.text.toLowerCase() === 'hardlink')?.text;
+  if (key === 'cp' && !ps) return args.find(w => !w.dynamic && (/^--(?:link|symbolic-link)$/u.test(w.text) || /^-[A-Za-z]*[ls]/u.test(w.text)))?.text;
+  return undefined;
+}
+
 export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   const acc = new Acc();
   acc.strict = st.inBlock === true;
@@ -144,6 +157,8 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   let key = ctx.windows || ps ? text.toLowerCase() : text;
   let exe = false;
   if (ctx.windows && key.endsWith('.exe') && key !== 'where.exe') { key = key.slice(0, -4); exe = true; }
+  const link = linkFormOf(key, st.words, ps);
+  if (link !== undefined) acc.add('once', 'list.form', { cmd: text, detail: link }, false);
   if (ps) { runPs(key, exe, st, acc, ctx); return acc.result(); }
 
   if (key === 'git') {

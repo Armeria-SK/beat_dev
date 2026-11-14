@@ -161,7 +161,15 @@ function redactPrivateKeys(input: string): SanitizedModelInputText {
   let open: { start: number; bodyFrom: number } | undefined;
   for (const match of input.matchAll(PRIVATE_KEY_MARKER)) {
     const end = match.index + match[0].length;
-    if (match[1] === 'BEGIN') { open ??= { start: match.index, bodyFrom: end }; continue; }
+    if (match[1] === 'BEGIN') {
+      if (open) {
+        const openEnd = openKeyEnd(input, open.bodyFrom);
+        if (match.index < openEnd) continue;
+        ranges.push([open.start, openEnd]);
+      }
+      open = { start: match.index, bodyFrom: end };
+      continue;
+    }
     ranges.push([open?.start ?? strayEndStart(input, match.index, ranges.at(-1)?.[1] ?? 0), end]);
     open = undefined;
   }
