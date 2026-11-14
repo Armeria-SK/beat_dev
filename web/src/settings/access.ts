@@ -124,10 +124,19 @@ function hookChanges(before: Config, after: Config, stage: HookStage): Access[] 
   const on = (hook: unknown): boolean => obj(hook).enabled !== false;
   const body = (hook: unknown): unknown => { const { enabled: _enabled, ...rest } = obj(hook); return rest; };
   const guardOff = (was: unknown, now: unknown): boolean => stage === 'preToolUse' && on(was) && !on(now);
+  const covers = (was: unknown, now: unknown): boolean => { const kept = new Set(strings(now)); return strings(was).every(p => kept.has(p)); };
+  const onlyProtectsMore = (was: unknown, now: unknown): boolean => {
+    const a = obj(was);
+    const b = obj(now);
+    return a.builtin === 'protect-files' && !(on(was) && !on(now)) && covers(a.always, b.always) && covers(a.afterOutside, b.afterOutside)
+      && deepEqual(body({ ...b, always: a.always, afterOutside: a.afterOutside }), body(was));
+  };
   const out: Access[] = [];
   const newHooks: unknown[] = [];
   for (const hook of changed) {
     const same = oldHooks.findIndex(h => deepEqual(body(h), body(hook)));
+    const stronger = same < 0 ? oldHooks.findIndex(h => onlyProtectsMore(h, hook)) : -1;
+    if (stronger >= 0) { oldHooks.splice(stronger, 1); continue; }
     if (same < 0) { newHooks.push(hook); continue; }
     if (guardOff(oldHooks[same], hook)) out.push({ kind: 'hook-disabled', stage, hook: summary(hook) });
     oldHooks.splice(same, 1);

@@ -21,11 +21,13 @@ export interface ProductLine { name: string | null; archived: boolean }
 
 const liveProduct = (active: readonly Project[], id: string): Project | undefined => active.find(p => p.id === id && p.archived_at === null);
 
-export function productLine(id: string | null | undefined, active: readonly Project[], archived: readonly Project[] | null): ProductLine | null {
+export function productLine(id: string | null | undefined, active: readonly Project[], archived: readonly Project[] | null, activeLoaded = true): ProductLine | null {
   if (!id) return null;
   const live = liveProduct(active, id);
   if (live) return { name: live.name, archived: false };
-  return archived === null ? null : { name: productName(archived, id), archived: true };
+  if (archived === null) return null;
+  if (!activeLoaded && !archived.some(p => p.id === id && p.archived_at !== null)) return null;
+  return { name: productName(archived, id), archived: true };
 }
 
 export const needsShelved = (id: string | null | undefined, active: readonly Project[], archived: readonly Project[] | null): boolean =>

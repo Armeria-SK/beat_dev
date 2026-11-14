@@ -80,7 +80,7 @@ export function Notice({ tone, icon, title, text, action, also }: {
     <div className={`bt-notice${tone ? ` bt-notice--${tone}` : ''} bt-rise`}>
       <span className="bt-notice__rule" />
       {icon && <Icon name={icon} />}
-      {title}
+      {text ? <span className="ui-notice__text">{title} · {text}</span> : title}
       {action && <button type="button" className="bt-notice__action" onClick={action.run}>{action.label}</button>}
       {also && <button type="button" className="bt-notice__action" onClick={also.run}>{also.label}</button>}
       <span className="bt-notice__rule" />

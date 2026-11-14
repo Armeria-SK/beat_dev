@@ -76,6 +76,17 @@ export function actionView(row: Pick<PendingAction, 'tool' | 'title' | 'shown' |
   return { title: PLAIN_TOOLS.has(row.tool) && body ? null : title, inline: body, block: null, cwd, extra };
 }
 
+export function extraShown(title: string | null | undefined, extra: string | null): string | null {
+  if (extra === null || !title) return extra;
+  let parsed: unknown;
+  try { parsed = JSON.parse(extra); } catch { return extra; }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return extra;
+  const path = (parsed as Record<string, unknown>).path;
+  if (typeof path !== 'string' || !path || !title.endsWith(path) || !/\s$/u.test(title.slice(0, -path.length))) return extra;
+  const rest = Object.entries(parsed).filter(([key]) => key !== 'path');
+  return rest.length ? JSON.stringify(Object.fromEntries(rest), null, 2) : null;
+}
+
 export function decidedText(view: ActionView): { title: string | null; code: string | null; cwd: string | null; erased?: true } {
   const line = { title: view.title, code: view.inline ?? (view.title ? null : view.block), cwd: view.cwd };
   return line.title === null && line.code === null ? { ...line, erased: true } : line;
@@ -124,6 +135,17 @@ export function outcomeOf(row: PendingAction): Outcome | null {
     case 'rejected': return { kind: 'rejected', at, reason: row.reject_reason?.trim() || null };
     case 'cancelled': return { kind: 'cancelled', at };
   }
+}
+
+export function decidedMore(row: Pick<PendingAction, 'status' | 'reject_reason' | 'output_preview'>): { reason: string | null; output: string | null } | null {
+  if (row.status === 'rejected') {
+    const reason = row.reject_reason?.trim() || null;
+    return reason ? { reason, output: null } : null;
+  }
+  if (row.status !== 'ran' && row.status !== 'failed') return null;
+  const output = row.output_preview?.trimEnd() ?? '';
+  if (!output.trim() || (row.status === 'failed' && !output.includes('\n'))) return null;
+  return { reason: null, output };
 }
 
 export const REASON_MAX = 500;

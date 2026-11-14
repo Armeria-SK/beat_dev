@@ -390,7 +390,7 @@ export function App() {
             ) : behind.view === 'runs' ? (
               <Runs tab={behind.tab} revision={live.libraryRevision + live.epoch + live.taskRevision} conversations={conversations} projects={projects} />
             ) : behind.view === 'archived' ? (
-              <Archived revision={live.libraryRevision + live.epoch} projects={projects} />
+              <Archived revision={live.libraryRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} />
             ) : behind.view === 'pending' ? (
               behind.productId ? <div className="bt-screen__inner" /> : <PendingScreen waiting={live.pendingWaiting} counts={live.pendingCounts} projects={projects} conversations={conversations} revision={pendingRevision} onOpenPlan={openPlanOf} />
             ) : behind.view === 'newProduct' ? (

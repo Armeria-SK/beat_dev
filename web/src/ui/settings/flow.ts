@@ -20,3 +20,5 @@ export function serial(): <T>(job: () => Promise<T>) => Promise<T> {
 }
 
 export const hasUnsaved = (dirty: ReadonlyMap<string, boolean>): boolean => [...dirty.values()].some(Boolean);
+
+export const escAsksLeave = (e: { key: string; defaultPrevented: boolean }, unsaved: boolean): boolean => e.key === 'Escape' && !e.defaultPrevented && unsaved;

@@ -46,6 +46,8 @@ export function rolesOf(config: Config): Roles {
   return { conversation: chat[0] ?? null, judge: judge[0] ?? '', fallback: chat.slice(1), background: [...background] };
 }
 
+export const judgeBackups = (config: Config): string[] => (Array.isArray(config.routing?.judge) ? (config.routing.judge as string[]).slice(1) : []);
+
 export function setJudge(config: Config, id: string): Config {
   const routing = { ...config.routing };
   const tail = Array.isArray(routing.judge) ? (routing.judge as string[]).slice(1).filter(x => x !== id) : [];

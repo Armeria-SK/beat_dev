@@ -53,6 +53,15 @@ test('ui/product-meta: 製品の名前と、しまった製品の見分け（製
   assert.deepEqual(productLine('gone01', active, []), { name: null, archived: true }, '一覧に無い製品を、製品なしと言わない');
 });
 
+test('productLine: 動いている製品の一覧がまだ届いていないあいだは、しまった一覧に無い製品を「しまった製品」と決めない（backlog 502）', () => {
+  const shelved = [project('p2aaaa', { archived_at: 5 })];
+  assert.equal(productLine('p1aaaa', [], shelved, false), null, '動いている製品かもしれないので、札を出さない');
+  assert.deepEqual(productLine('p2aaaa', [], shelved, false), { name: 'P2AAAA', archived: true }, 'しまった一覧にあるものは決められる');
+  assert.deepEqual(productLine('p1aaaa', [], shelved, true), { name: null, archived: true }, '届いたあとは、どちらにも無ければこれまでどおり');
+  assert.deepEqual(productLine('p1aaaa', [], shelved), { name: null, archived: true }, '渡さなければ届いているとみなす');
+  assert.equal(needsShelved('p1aaaa', [], null), true);
+});
+
 test('productLine: 動いている一覧に入っていても、しまった印（archived_at）のある製品はしまった製品として出す', () => {
   const stale = [project('p1aaaa', { archived_at: 5 })];
   assert.deepEqual(productLine('p1aaaa', stale, stale), { name: 'P1AAAA', archived: true });

@@ -14,7 +14,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKey } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
-import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
+import { judgeBackups, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
 type T = ReturnType<typeof useT>;
@@ -327,6 +327,8 @@ export function ModelsPanel() {
     try { await api.probe(); await ctx.reload(); } catch (error) { ctx.fail('models:check', errorText(error, t('ui.set.models.checkFailed'))); } finally { setProbing(false); }
   };
   const modelOptions: Option<string>[] = models.map(m => ({ value: m.id as string, label: (m.label as string) || (m.id as string) }));
+  const backups = judgeBackups(ctx.config);
+  const modelName = (id: string): string => modelOptions.find(o => o.value === id)?.label ?? id;
   return (
     <>
       <Group title={t('ui.set.models.providers')}>
@@ -349,7 +351,8 @@ export function ModelsPanel() {
         <Row k="roles:conversation" title={t('ui.set.models.conversation')} desc={t('ui.set.models.conversationDesc')}>
           <Select value={roles.conversation} options={modelOptions} label={t('ui.set.models.conversation')} placeholder={t('ui.set.models.auto')} onChange={id => void ctx.commit('roles:conversation', c => setConversation(c, id))} />
         </Row>
-        <Row k="roles:judge" title={t('ui.set.models.judge')} desc={t('ui.set.models.judgeDesc')}>
+        <Row k="roles:judge" title={t('ui.set.models.judge')} desc={t('ui.set.models.judgeDesc')}
+          below={backups.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', backups.map(modelName).join(', '))}</span>}>
           <Select value={roles.judge} options={[{ value: '', label: t('ui.set.models.judgeSame') }, ...modelOptions]} label={t('ui.set.models.judge')} onChange={id => void ctx.commit('roles:judge', c => setJudge(c, id))} />
         </Row>
         <Row k="roles:fallback" title={t('ui.set.models.fallback')} desc={t('ui.set.models.fallbackDesc')}

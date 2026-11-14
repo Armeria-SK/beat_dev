@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { confirmable, hasUnsaved, serial, type Answer } from '../web/src/ui/settings/flow.ts';
+import { confirmable, escAsksLeave, hasUnsaved, serial, type Answer } from '../web/src/ui/settings/flow.ts';
 
 // Settings の保存の流れ（1-5b のセキュリティ審査の直し）。確かめを挟んだ保存が「確かめたあとの結果」で終わること、
 // 同時の保存が 1 つずつ順に走ること（互いに上書きしない）、書きかけがあれば閉じる前に聞くこと。
@@ -48,4 +49,23 @@ test('ui/settings flow: 書きかけ（SOUL.md・USER.md・設定ファイル）
   assert.equal(hasUnsaved(new Map()), false);
   assert.equal(hasUnsaved(new Map([['persona:soul', false]])), false);
   assert.equal(hasUnsaved(new Map([['persona:soul', false], ['adv:file', true]])), true);
+});
+
+test('Settings の Esc の順番: 入れ子の部品が先に受けた Esc（preventDefault 済み）では「書きかけが消えます」を出さない。書きかけがあるときの Esc だけ出す（78107a7、backlog 479）', () => {
+  assert.equal(escAsksLeave({ key: 'Escape', defaultPrevented: false }, true), true, '書きかけがあり、誰も受けていない Esc');
+  assert.equal(escAsksLeave({ key: 'Escape', defaultPrevented: true }, true), false, '確かめの行・一覧・欄の取り消しが先に受けた');
+  assert.equal(escAsksLeave({ key: 'Escape', defaultPrevented: false }, false), false, '書きかけが無ければ、そのまま閉じる（App の Esc）');
+  assert.equal(escAsksLeave({ key: 'Enter', defaultPrevented: false }, true), false);
+});
+
+test('Settings の Esc の順番（配線）: 枠の中の Esc は枠の onKeyDown（入れ子のあと）で受け、枠の外の Esc だけ window の捕まえる段で受ける。受けたら preventDefault して App の「閉じる」へ渡さない', () => {
+  const page = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  assert.ok(page.includes('aria-labelledby="ui-settings-title" onKeyDown={askLeave}>'), '枠は泡の段で受ける（入れ子の onKeyDown が先）');
+  assert.ok(page.includes('if (!escAsksLeave(e, hasUnsaved(dirty.current))) return;'), '出すかどうかは escAsksLeave で決める');
+  const ask = page.slice(page.indexOf('const askLeave = useCallback('), page.indexOf('const discard = '));
+  assert.ok(ask.indexOf('e.preventDefault();') < ask.indexOf('setLeave(() => onClose);'), '帯を出すときは Esc を受けたことにする');
+  assert.ok(ask.includes('const onKey = (e: KeyboardEvent) => { if (!(e.target instanceof Node && modal.current?.contains(e.target))) askLeave(e); };'), 'window では枠の外の Esc だけ見る');
+  assert.ok(ask.includes("addEventListener('keydown', onKey, true);") && ask.includes("removeEventListener('keydown', onKey, true);"), '枠の外は捕まえる段（App の閉じるより先）');
+  assert.ok(app.includes("if (e.key !== 'Escape' || e.defaultPrevented) return;"), 'App は受け済みの Esc で Settings を閉じない');
 });
