@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
+import { PLAN_GIST_LABEL } from '../src/tasks/store.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, type Script } from './helpers.ts';
 
@@ -98,10 +99,10 @@ test('4-J 確かめ: Build のタスクの owner_request は決まった文で�
   assert.equal(built.status, 201, JSON.stringify(built.body));
   const taskId = built.body.task.id as string;
   assert.notEqual(s.ownerRequest(taskId), null);
-  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}`);
+  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}\n${PLAN_GIST_LABEL}\n# Plan`);
 
   s.app.tasks.update(taskId, { appendNote: 'AI-NOTE' }, 'beat', s.taintedRun());
-  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}`);
+  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}\n${PLAN_GIST_LABEL}\n# Plan`);
 });
 
 test('4-J 確かめ: 汚れた計画書の Build は owner_request を持たず、頼みは今までどおり空', async t => {

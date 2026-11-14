@@ -13,7 +13,7 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
 import { autoDecide, type ClassifierPrompt, type JudgeCall, type JudgeLimits } from './auto-approve.ts';
-import { ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
+import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
 import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
@@ -337,7 +337,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const sendOrDelete = outbound?.kind === 'send' || outbound?.kind === 'delete' ? outbound : undefined;
     const keys = first?.reasonKeys ?? [];
     if (decision === 'ask' && refusedKeysOf(keys).length) return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
-    const owned = decision === 'ask' ? ownerKeysOf(keys) : [];
+    const stepFour = !fetchToJudge && first?.productRun !== undefined && tool.name === 'shell_run' && Boolean(ctx.project?.root) && [...askKinds].every(kind => (first?.askKinds ?? []).includes(kind));
+    const owned = decision === 'ask' ? ownerKeysOf(keys).filter(key => !(stepFour && key === GIT_IDENTITY_KEY)) : [];
     const ownerPolicy = decision === 'ask' && keys.some(key => POLICY_KEYS.has(key));
     const taskTaint = decision === 'ask' && unattendedRun(ctx) && tool.escalateOnTaint === true && askKinds.has('taint');
     const parkAs: { kind: PendingKind; reason: string } | undefined = sendOrDelete ? { kind: sendOrDelete.kind as PendingKind, reason: sendOrDelete.reason }
@@ -351,8 +352,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     if (parkAs) return park(parkAs.kind, parkAs.reason);
     if (decision === 'ask') {
       if (ctx.kind === 'review') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
-      const shellKinds = first?.askKinds ?? [];
-      if (!fetchToJudge && first?.productRun !== undefined && tool.name === 'shell_run' && ctx.project?.root && [...askKinds].every(kind => shellKinds.includes(kind))) {
+      if (stepFour && first?.productRun !== undefined) {
         decision = 'allow';
         decidedBy = first.productRun;
       } else {

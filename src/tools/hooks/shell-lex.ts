@@ -1025,7 +1025,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         const next = argument(depth, st);
         if (isFail(next)) return next;
         if (!next) return fail('unexpected', ',');
-        const loose: boolean = word.loose === true || comma.sp || newline || after?.sp === true || word.text === '' || next.text === '';
+        const loose: boolean = word.loose === true || next.loose === true || comma.sp || newline || after?.sp === true || word.text === '' || next.text === '';
         word = { ...word, text: `${word.text},${next.text}`, dynamic: word.dynamic || next.dynamic, glob: word.glob || next.glob, ...(loose ? { loose: true } : {}) };
       }
     }

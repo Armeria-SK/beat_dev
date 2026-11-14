@@ -630,6 +630,7 @@ function langInfo(name: string, words: Word[], acc: Acc, ctx: MatchCtx): void {
   if (name === 'npm' && exactForm(words, [['--version'], ['-v']])) return;
   if (name === 'npm' && args.length > 0) { npmForms(words, acc); return; }
   if (/^pip3?$/u.test(name) && args.length > 0) { pipForms(words, acc); return; }
+  if (/^node(?:js)?$/u.test(name) && args.length > 0 && args.every(literal) && args[0]!.text === '--test' && !args.slice(1).some(isFlagLike)) { acc.add('once', 'list.form', { cmd: name, detail: rest }, true, 'list.node_test'); return; }
   if (LANG_RUNNERS.has(name) && args.length > 0 && args.every(literal) && !isFlagLike(args[0]!) && LANG_FILE.test(args[0]!.text)) { acc.add('once', 'list.form', { cmd: name, detail: rest }, true, 'list.lang_run'); return; }
   formOnce(acc, name, rest);
 }
