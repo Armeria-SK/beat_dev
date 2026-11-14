@@ -2,7 +2,7 @@
 // 設定の項目がすべて「ふつうの設定」の一覧に入っていなければ、そのリポジトリでの git はすべて今回だけ（設定でコードを動かせるため）。
 
 import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { RepoInfo } from './allowlist-core.ts';
 import { isRemotePath } from './remote-path.ts';
 
@@ -144,6 +144,21 @@ function ownKind(p: string): 'dir' | 'file' | 'link' | 'none' {
     return st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'none';
   } catch { return 'none'; }
 }
+const foldCase = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
+
+function linkOnWay(base: string, target: string): boolean {
+  const from = resolve(base).split(/[\\/]/u);
+  const to = resolve(target).split(/[\\/]/u);
+  let shared = 0;
+  while (shared < from.length && shared < to.length && foldCase(from[shared]!) === foldCase(to[shared]!)) shared++;
+  for (let i = Math.max(shared, 1); i < to.length; i++) {
+    try { if (lstatSync(to.slice(0, i + 1).join(sep)).isSymbolicLink()) return true; } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code !== 'ENOENT' && code !== 'ENOTDIR';
+    }
+  }
+  return false;
+}
 interface Found { gitDir: string; commonDir: string; broken?: boolean }
 
 const MAX_ADMIN_FILE = 4096;
@@ -197,7 +212,7 @@ function examine(p: string): Examined {
   const commondir = adminFile(p, 'commondir');
   if (commondir === null || adminFile(p, 'gitdir') === null) return { state: 'broken' };
   const commonDir = commondir === undefined ? p : isAbsolute(commondir) ? commondir : resolve(p, commondir);
-  if (isRemotePath(commonDir) || (commondir !== undefined && ownKind(commonDir) === 'link')) return { state: 'broken' };
+  if (isRemotePath(commonDir) || (commondir !== undefined && linkOnWay(p, commonDir))) return { state: 'broken' };
   const objects = kindOf(join(commonDir, 'objects'));
   const refs = kindOf(join(commonDir, 'refs'));
   if (objects === 'dir' && refs === 'dir') return head === 'valid' ? { state: 'ok', commonDir } : { state: 'broken' };
@@ -216,7 +231,7 @@ function viaGitFile(file: string): Found {
     const place = text.slice(8).replace(/[\r\n]+$/u, '');
     if (place === '' || /[\r\n\0]/u.test(place)) return broken;
     const target = isAbsolute(place) ? place : resolve(dirname(file), place);
-    if (isRemotePath(target) || ownKind(target) === 'link') return { gitDir: target, commonDir: target, broken: true };
+    if (isRemotePath(target) || linkOnWay(dirname(file), target)) return { gitDir: target, commonDir: target, broken: true };
     const e = examine(target);
     return e.state === 'ok' ? { gitDir: target, commonDir: e.commonDir } : { gitDir: target, commonDir: target, broken: true };
   } catch { return { gitDir: dirname(file), commonDir: dirname(file), broken: true }; }
@@ -310,8 +325,12 @@ function danglingRemote(entries: readonly ConfigEntry[], remotes: readonly strin
 
 const MAX_ALTERNATES_BYTES = 65_536;
 const MAX_ALTERNATE_DEPTH = 5;
+const MAX_ALTERNATE_LINES = 256;
 
-function alternatesUnsafe(objectsDir: string, depth = 0): boolean {
+function alternatesUnsafe(objectsDir: string, seen = new Set<string>(), budget = { lines: MAX_ALTERNATE_LINES }, depth = 0): boolean {
+  const key = foldCase(resolve(objectsDir));
+  if (seen.has(key)) return false;
+  seen.add(key);
   if (ownKind(join(objectsDir, 'info')) === 'link') return true;
   const file = join(objectsDir, 'info', 'alternates');
   let st;
@@ -324,9 +343,9 @@ function alternatesUnsafe(objectsDir: string, depth = 0): boolean {
   try { text = readFileSync(file, 'utf8'); } catch { return true; }
   for (const line of text.split(/\r?\n/u)) {
     if (line === '' || line.startsWith('#')) continue;
-    if (line.startsWith('"') || line.includes('\0') || isRemotePath(line)) return true;
+    if (--budget.lines < 0 || line.startsWith('"') || line.includes('\0') || isRemotePath(line)) return true;
     const target = isAbsolute(line) ? line : resolve(objectsDir, line);
-    if (isRemotePath(target) || ownKind(target) === 'link' || alternatesUnsafe(target, depth + 1)) return true;
+    if (isRemotePath(target) || linkOnWay(objectsDir, target) || alternatesUnsafe(target, seen, budget, depth + 1)) return true;
   }
   return false;
 }
