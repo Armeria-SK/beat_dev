@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
+import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planKeyFor, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
 import { CATEGORIES, FILE_ONLY, LATER_HIDDEN, matchCategories, placeOf } from '../web/src/ui/settings/rows.ts';
 import { judgeBackups, keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
 
@@ -162,6 +162,28 @@ test('ui/settings commit: 鍵をこの PC の外へ送るときだけ確かめ�
   assert.equal(planKey({ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1' }, null).kind, 'send');
   assert.equal(planKey({ id: 'anthropic', kind: 'anthropic' }, null).kind, 'send');
   assert.equal(planKey(undefined, null).kind, 'none');
+});
+
+test('ui/settings commit: 鍵を送る確かめは、送る直前に読み直した設定の送り先で数える（画面が持っている古い送り先では数えない）', () => {
+  const latest = { providers: [
+    { id: 'local', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1' },
+    { id: 'home', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1' },
+  ] };
+  const moved = planKeyFor(latest, 'local', null);
+  assert.equal(moved.kind, 'confirm', '画面では 127.0.0.1 に見えていても、今の設定が外なら確かめる');
+  if (moved.kind === 'confirm') {
+    assert.deepEqual(moved.items, [{ kind: 'provider-key-send', id: 'local', url: 'https://api.example.com/v1' }]);
+    assert.equal(planKeyFor(latest, 'local', moved.key).kind, 'send');
+    const again = { providers: [{ id: 'local', kind: 'openai_compatible', baseUrl: 'https://other.example.net/v1' }] };
+    assert.equal(planKeyFor(again, 'local', moved.key).kind, 'confirm', '確かめのあいだに送り先がまた変わったら、もう一度確かめる');
+  }
+  assert.equal(planKeyFor(latest, 'home', null).kind, 'send');
+  assert.equal(planKeyFor(latest, 'gone', null).kind, 'none', '消えた提供元には送らない');
+  assert.equal(planKeyFor({}, 'local', null).kind, 'none');
+
+  const screen = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
+  assert.ok(screen.includes('planKeyFor((await api.settings()).config, id, confirmed)'));
+  assert.ok(!screen.includes('planKey(provider'));
 });
 
 const probe = (status: string) => ({ modelId: 'm', status, server: '', required: 0, message: '', checkedAt: 1 });

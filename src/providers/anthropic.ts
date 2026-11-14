@@ -3,11 +3,12 @@ import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig 
 import type { ChatMessage, ImageRef, StopReason } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { contextHint, errorProbeText, evaluateContext } from './context.ts';
-import { classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
+import { checkBaseUrl, classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
 import { ProviderError, providerError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
 type Block = Anthropic.ContentBlockParam;
 const EPHEMERAL = { type: 'ephemeral' } as const;
+const ANTHROPIC_URL = 'https://api.anthropic.com';
 
 const imageBlock = (img: ImageRef): Anthropic.ImageBlockParam => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType as 'image/png', data: img.data } });
 
@@ -84,13 +85,19 @@ export class AnthropicAdapter implements ProviderAdapter {
   #secrets(): string[] { return providerSecrets(this.provider, this.#env); }
 
   #clientFor(): Anthropic {
+    if (this.provider.baseUrl !== undefined) {
+      const checked = checkBaseUrl(this.provider.baseUrl, true);
+      if ('problem' in checked) throw new ProviderError('provider_error', `providers.${this.provider.id}.baseUrl: ${checked.problem}`, { retryable: false });
+    }
     const key = requireApiKey({ ...this.provider, apiKeyEnv: this.provider.apiKeyEnv ?? 'ANTHROPIC_API_KEY' }, this.#env);
     if (!this.#client || this.#clientKey !== key) {
       this.#client = new Anthropic({
         apiKey: key ?? null,
+        authToken: null,
         maxRetries: 0, // 再試行はエンジン側で一本化する（試行回数を engine_runs に正しく残すため）
         timeout: this.provider.timeoutMs,
-        ...(this.provider.baseUrl ? { baseURL: this.provider.baseUrl } : {}),
+        baseURL: this.provider.baseUrl ?? ANTHROPIC_URL,
+        fetchOptions: { redirect: 'error' },
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
       });
       this.#clientKey = key;
