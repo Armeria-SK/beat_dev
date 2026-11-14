@@ -1,4 +1,4 @@
-import type { ChecklistItem, TaskStatus } from '../api.ts';
+import type { ChecklistItem, Task, TaskStatus } from '../api.ts';
 
 export type AgentState = 'idle' | 'working' | 'waiting';
 
@@ -10,12 +10,12 @@ export interface Waiting {
   questions: number;
 }
 
-export function countTasks(tasks: Iterable<readonly [string, TaskStatus]>, asked: ReadonlyMap<string, number> = new Map()): { proposals: number; answers: number } {
+export function countTasks(tasks: Iterable<readonly [string, TaskStatus, Task['waiting_kind']?]>, asked: ReadonlyMap<string, number> = new Map()): { proposals: number; answers: number } {
   let proposals = 0;
   let answers = 0;
-  for (const [id, status] of tasks) {
+  for (const [id, status, waitingKind] of tasks) {
     if (status === 'inbox') proposals += 1;
-    else if (status === 'waiting' && !asked.has(id)) answers += 1;
+    else if (status === 'waiting' && waitingKind !== 'approval' && !asked.has(id)) answers += 1;
   }
   return { proposals, answers };
 }

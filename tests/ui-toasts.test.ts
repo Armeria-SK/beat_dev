@@ -80,3 +80,11 @@ test('ui/toasts: サーバーの通知をトーストにする。待ちは点、
   assert.deepEqual(notificationToast({ kind: 'task_done', title: 'D', body: 'x', link: '#/tasks' }), { title: 'D', body: 'x', icon: 'check', href: '#/kanban' });
   assert.equal(notificationToast({ kind: 'info', title: 'I', body: null, link: 'https://example.com/' }).href, undefined, '外の URL へは飛ばさない');
 });
+
+test('ui/toasts: トーストを押した行き先は、知らせの一覧の行のボタンと同じ（Pending は製品の一覧へ。新しい質問は点。beat 5-u2）', () => {
+  assert.deepEqual(notificationToast({ kind: 'approval_needed', title: 'Parked', body: '#12 git commit', link: '#/pending', project_id: 'prod-abc123' }),
+    { title: 'Parked', body: '#12 git commit', lead: 'dot', href: '#/pending/prod-abc123' });
+  assert.deepEqual(notificationToast({ kind: 'question_new', title: 'New question', body: null, link: null, project_id: 'prod-abc123' }),
+    { title: 'New question', lead: 'dot', href: '#/questions/prod-abc123' });
+  assert.equal(notificationToast({ kind: 'task_failed', title: 'F', body: null, link: '#/tasks/t1', action: 'retry' }).href, '#/tasks/t1');
+});

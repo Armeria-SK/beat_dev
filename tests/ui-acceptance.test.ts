@@ -144,3 +144,23 @@ test('ui/acceptance: 外の文を読んだあとに書いた計画書か一覧�
   assert.equal(outsideContent(doc(), acc({ tainted: true })), true);
   assert.equal(t('ui.acc.outside'), 'Written after reading text from elsewhere');
 });
+
+test('ui/acceptance: 質問票の答えの出どころ（owner_answer）は「Your answer」の札と答えの文、前の出どころを出す。知らない種類でも落ちない（beat 5-u2）', () => {
+  const was = { kind: 'owner_words' as const, quote: 'resume after a restart' };
+  const answered = item('A-1', { source: { kind: 'owner_answer', questionId: 7, answer: 'Keep the old file', picked: 'text', was } });
+  assert.equal(t(sourceLabel(answered.source)), 'Your answer');
+  const shown = itemDetails(answered).map(d => [t(d.label), 'text' in d ? d.text : t(d.note)]);
+  assert.deepEqual(shown.slice(0, 3), [['Answer', 'Keep the old file'], ['Before your answer', 'Your words'], ['Quote', 'resume after a restart']]);
+  const strange = item('A-2', { source: { kind: 'from_the_future', quote: 'still shown' } as unknown as AcceptanceItem['source'] });
+  assert.equal(t(sourceLabel(strange.source)), 'Other');
+  assert.deepEqual(itemDetails(strange).slice(0, 1).map(d => 'text' in d ? d.text : ''), ['still shown']);
+  const oddClaim = item('A-3', { source: { kind: 'ai_added', claimed: 'owner_dream', reason: 'mystery' } as unknown as AcceptanceItem['source'] });
+  assert.ok(itemDetails(oddClaim).every(d => typeof t(d.label) === 'string' && ('text' in d || typeof d.note === 'string')), '知らない claimed で空の札を作らない');
+});
+
+test('ui/acceptance: claimed は分かるが reason が知らない値なら、理由は not_found の文で出す（空の札にしない。beat 5-u2）', () => {
+  const odd = item('A-4', { source: { kind: 'ai_added', claimed: 'owner_words', reason: 'mystery', quote: 'q' } as unknown as AcceptanceItem['source'] });
+  const why = itemDetails(odd).find(d => d.label === 'ui.acc.detail.why');
+  assert.ok(why && 'note' in why);
+  assert.equal(why.note, 'ui.acc.reason.not_found');
+});

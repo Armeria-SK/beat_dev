@@ -79,9 +79,11 @@ export function toolVerb(name: string): ToolVerb {
 
 const num = (text: string): number => Number(text.replace(/,/gu, ''));
 
+export const emptyOutput = (text: string): boolean => /^\s*(?:\[E-\d+\]\s*)?$/u.test(text);
+
 function editMeta(name: string, args: Record<string, unknown> | null, result: ToolResult): ToolMeta {
   if (name === 'file_write') {
-    const counted = /; \+([\d,]+) -([\d,]+) lines\)\s*$/u.exec(result.text);
+    const counted = /; \+([\d,]+) -([\d,]+) lines\)(?:\s*\n\[E-\d+\])?\s*$/u.exec(result.text);
     if (counted) return { kind: 'lines', added: num(counted[1]!), removed: num(counted[2]!) };
     const content = args?.['content'];
     if (/^Created: /u.test(result.text) && typeof content === 'string') return { kind: 'lines', ...lineDelta('', content) };

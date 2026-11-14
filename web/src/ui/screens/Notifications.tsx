@@ -4,19 +4,15 @@ import { formatDateTime, formatRelative, startOfDay, useT } from '../../i18n/ind
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import {
-  groupByDay, lastNotificationAt, markOf, markRead, notificationTarget, visibleNotifications, type DayGroupId, type NotificationFilter,
+  groupByDay, lastNotificationAt, markOf, markRead, notificationGo, visibleNotifications, type DayGroupId, type NotificationFilter,
 } from '../notifications.ts';
 import { Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
 import { productName } from '../product-meta.ts';
 import { reportOpError } from '../task-ops.ts';
-import type { View } from '../routes.ts';
 
 export interface NotificationsProps { unread: number; epoch: number; onUnread: (count: number) => void; projects: readonly Project[] }
 
 const GROUP_KEY = { today: 'ui.notifications.today', yesterday: 'ui.notifications.yesterday', earlier: 'ui.notifications.earlier' } as const satisfies Record<DayGroupId, string>;
-const OPEN_KEY: Partial<Record<View, 'ui.notifications.open.task' | 'ui.notifications.open.kanban' | 'ui.notifications.open.session' | 'ui.notifications.open.skills' | 'ui.notifications.open.overview'>> = {
-  task: 'ui.notifications.open.task', kanban: 'ui.notifications.open.kanban', chat: 'ui.notifications.open.session', skills: 'ui.notifications.open.skills', overview: 'ui.notifications.open.overview',
-};
 
 const firstLine = (text: string | null): string => text?.split('\n').find(line => line.trim())?.trim() ?? '';
 
@@ -85,12 +81,12 @@ export function Notifications({ unread, epoch, onUnread, projects }: Notificatio
           <ul className="bt-list">
             {group.items.map(item => {
               const mark = markOf(item);
-              const target = notificationTarget(item.link);
+              const go = notificationGo(item);
               const isUnread = item.read_at === null;
               const body = [productName(projects, item.project_id), firstLine(item.body)].filter(Boolean).join(' · ');
-              const active = target !== null || isUnread;
+              const active = go !== null || isUnread;
               return (
-                <li key={item.id} className={`bt-row ui-notif${active ? ' bt-row--link' : ''}`} data-read={isUnread ? '0' : '1'} onClick={active ? () => open(item, target?.hash ?? null) : undefined}>
+                <li key={item.id} className={`bt-row ui-notif${active ? ' bt-row--link' : ''}`} data-read={isUnread ? '0' : '1'} onClick={active ? () => open(item, go?.hash ?? null) : undefined}>
                   {mark === 'dot' ? <span className="bt-dot" role="img" aria-label={t('ui.notifications.unread')} />
                     : <Icon name={mark === 'alert' ? 'alert' : item.kind === 'task_done' ? 'check' : 'bell'} className={mark === 'alert' ? 'bt-del' : undefined} />}
                   <div className="bt-row__main">
@@ -99,7 +95,7 @@ export function Notifications({ unread, epoch, onUnread, projects }: Notificatio
                   </div>
                   <div className="bt-row__end">
                     <span className="bt-meta" title={formatDateTime(item.created_at, 'full')}>{formatRelative(item.created_at, now)}</span>
-                    {target ? <Button small>{t(OPEN_KEY[target.view] ?? 'ui.notifications.open')}</Button> : isUnread ? <Button small variant="ghost">{t('ui.notifications.markRead')}</Button> : null}
+                    {go ? <Button small>{t(go.label)}</Button> : isUnread ? <Button small variant="ghost">{t('ui.notifications.markRead')}</Button> : null}
                   </div>
                 </li>
               );
