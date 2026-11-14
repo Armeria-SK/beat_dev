@@ -2,7 +2,7 @@
 // 表そのもの（コマンドごとのフラグ）は allowlist-tools.ts（bash と外部の道具）・allowlist-git.ts（git）・allowlist-ps.ts（PowerShell のコマンドレット）にある。
 
 import type { GuardMessageKey } from '../../shared/messages/guard.ts';
-import type { ShellKind, Word } from './shell-lex.ts';
+import type { ShellKind, Statement, Word } from './shell-lex.ts';
 
 export type Level = 'allow' | 'ask' | 'once' | 'deny';
 export const RANK: Record<Level, number> = { allow: 0, ask: 1, once: 2, deny: 3 };
@@ -37,7 +37,7 @@ export interface MatchCtx {
   // curl・wget が起動のたびに読む設定ファイル（書かれていれば、その場所）。保存先や送り先を変えられるので、あればその curl・wget は今回だけ（tool-config.ts）
   toolConfig?: ((tool: 'curl' | 'wget' | 'npm') => ToolRc | undefined) | undefined;
   // 文 1 つの判定が終わるたびに呼ばれる（cd で動いた先を、あとの文の判定で数えるため）
-  afterStatement?: ((result: StatementResult) => void) | undefined;
+  afterStatement?: ((result: StatementResult, st: Statement) => void) | undefined;
 }
 
 // file: 読まれる設定ファイルの場所。unknownCwd: cd の先が分からず、調べられない

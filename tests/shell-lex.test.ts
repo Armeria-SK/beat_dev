@@ -28,11 +28,24 @@ test('字句 11.2.1: どちらのシェルでも、曲がった引用符・ハ�
   }
 });
 
-test('字句 11.2.1: 入れ子が 4 段より深い・引用符や括弧の閉じ忘れは止める', () => {
+test('字句 11.2.1: ふつうの PowerShell の書き方（ブロック・if・括弧・メソッドの呼び出しの重なり）は、入れ子の深さで止めない', () => {
+  const commands = [
+    'Get-ChildItem | ForEach-Object { if ($_.PSIsContainer) { Get-ChildItem $_.FullName | ForEach-Object { if ($_.Length -gt 1MB) { Write-Output ("{0} {1}" -f $_.Name, [math]::Round($_.Length / 1MB, 2)) } } } }',
+    "$x = [string]::Join(',', (Get-ChildItem | ForEach-Object { $_.Name.ToUpper() }))",
+    'Get-ChildItem src | ForEach-Object { if ($_.Name.EndsWith(\'.ts\')) { $n = @(Get-Content $_.FullName | Where-Object { $_.Trim().StartsWith(\'import\') }).Count; "$($_.Name) $n" } }',
+  ];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of commands) assert.equal(failure(command, shell), null, `${shell}: ${command}`);
+  const inner = read('Get-ChildItem | ForEach-Object { if ($_.PSIsContainer) { Get-ChildItem $_.FullName | ForEach-Object { if ($_.Length -gt 1MB) { Remove-Item ($_.FullName.Trim()) } } } }', 'powershell');
+  assert.ok(inner.some(s => s.words[0]?.text === 'Remove-Item' && s.inBlock === true), '深い所の文も文の並びに入る');
+});
+
+test('字句 11.2.1: 入れ子が深すぎる（bash は 4 段、PowerShell は 8 段より深い）・引用符や括弧の閉じ忘れは止める', () => {
   assert.equal(failure('echo $(echo $(echo $(echo $(echo $(echo hi)))))', 'bash'), 'depth');
   assert.equal(failure('echo $(echo $(echo hi))', 'bash'), null);
-  assert.equal(failure('(((((ls)))))', 'powershell'), 'depth');
-  assert.equal(failure('ls | % { if ($true) { ls | % { if ($true) { ls | % { ls } } } } }', 'powershell'), 'depth');
+  assert.equal(failure('(((((((((ls)))))))))', 'powershell'), 'depth');
+  assert.equal(failure('((((((((ls))))))))', 'powershell'), null);
+  assert.equal(failure('ls | % { if ($true) { ls | % { if ($true) { ls | % { if ($true) { ls | % { if ($true) { ls | % { ls } } } } } } } } }', 'powershell'), 'depth');
+  assert.equal(failure('ls | % { if ($true) { ls | % { if ($true) { ls | % { if ($true) { ls | % { if ($true) { ls } } } } } } } }', 'powershell'), null);
   for (const shell of SHELLS) {
     assert.equal(failure('echo "abc', shell), 'unclosed', shell);
     assert.equal(failure("echo 'abc", shell), 'unclosed', shell);
