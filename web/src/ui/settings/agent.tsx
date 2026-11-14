@@ -7,7 +7,7 @@ import { probeMessage, serverText } from '../../server-text.ts';
 import type { Access } from '../../settings/access.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvPatch, keyEnvProblem, keyEnvUnsafe, kindPatch, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, keyEnvEdit, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -148,17 +148,17 @@ function ProviderRow({ provider, open, onToggle, onRenamed }: { provider: Json; 
           <Row k={`${k}:kind`} title={t('ui.set.provider.kind')}>
             <Seg value={provider.kind as string} label={t('ui.set.provider.kind')} disabled={busy}
               options={[...new Set(['anthropic', 'openai_compatible', provider.kind as string])].map(kind => ({ value: kind, label: kindLabel(t, kind) }))}
-              onChange={kind => void ctx.commit(k, c => updateListItem(c, 'providers', id, kindPatch(c, id, kind)))} />
+              onChange={kind => edit({ kind })} />
           </Row>
           <Row k={`${k}:url`} title={t('ui.set.provider.url')} desc={t('ui.set.provider.urlDesc')}>
             <CommitField value={(provider.baseUrl as string | undefined) ?? ''} label={t('ui.set.provider.url')} mono type="url" placeholder="https://…" onCommit={v => edit({ baseUrl: v || undefined })} />
           </Row>
           <Row k={`${k}:env`} title={t('ui.set.provider.env')} desc={t('ui.set.provider.envDesc')}>
             <CommitField value={(provider.apiKeyEnv as string | undefined) ?? ''} label={t('ui.set.provider.env')} mono placeholder={t('ui.set.provider.envAuto')} onCommit={v => {
-              const patch = keyEnvPatch(v);
-              if (!patch) { ctx.fail(`${k}:env`, keyEnvProblem(v) === 'unsafe' ? t('ui.set.provider.envUnsafe') : serverText('config.pattern.key_env', null, getLanguage()) ?? ''); return; }
+              const result = keyEnvEdit(v);
+              if ('fail' in result) { ctx.fail(`${k}:env`, 'key' in result.fail ? t(result.fail.key) : serverText(result.fail.code, null, getLanguage()) ?? ''); return; }
               ctx.clear(`${k}:env`);
-              edit(patch);
+              edit(result.patch);
             }} />
           </Row>
           {provider.kind === 'openai_compatible' && (

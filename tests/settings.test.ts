@@ -5,7 +5,7 @@ import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  keyEnvPatch, keyEnvProblem, kindPatch, openAfterRename, sharedKeyWith,
+  keyEnvEdit, keyEnvPatch, keyEnvProblem, kindPatch, openAfterRename, sharedKeyWith,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -449,6 +449,27 @@ test('種類を Anthropic に変える: 鍵の名前が無く、ANTHROPIC_API_KE
 
   const alone = { ...base, providers: [base.providers[1]!] };
   assert.deepEqual(kindPatch(alone, 'local', 'anthropic'), { kind: 'anthropic' }, 'ほかに使う提供元が無ければ ANTHROPIC_API_KEY でよい');
+});
+
+test('提供元の編集（updateListItem）: 種類を Anthropic に変える編集は、どの呼び出しからでも鍵を共有させない', () => {
+  const base = { ...sample(), providers: [
+    { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
+    { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 },
+  ] };
+  const changed = updateListItem(base, 'providers', 'local', { kind: 'anthropic' });
+  assert.equal((changed.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, 'BEAT_LOCAL_API_KEY');
+  assert.deepEqual(sharedKeyWith(changed, 'local'), []);
+  const other = updateListItem(base, 'providers', 'local', { maxParallel: 2 });
+  assert.equal((other.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, undefined, '種類を変えない編集は鍵の名前に触らない');
+  const named = updateListItem(base, 'providers', 'local', { kind: 'anthropic', apiKeyEnv: 'MY_API_KEY' });
+  assert.equal((named.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, 'MY_API_KEY', '編集が名前を持っていればそれを使う');
+});
+
+test('Key variable の欄の結果（keyEnvEdit）: 鍵を持てない名前と、名前の形でないものとで、出す文を分ける', () => {
+  assert.deepEqual(keyEnvEdit('MY_API_KEY'), { patch: { apiKeyEnv: 'MY_API_KEY' } });
+  assert.deepEqual(keyEnvEdit(''), { patch: { apiKeyEnv: undefined } });
+  assert.deepEqual(keyEnvEdit('ABCD1234EFGH5678IJKL9012MNOP3456'), { fail: { key: 'ui.set.provider.envUnsafe' } });
+  assert.deepEqual(keyEnvEdit('sk-ant-test-0000000000000000'), { fail: { code: 'config.pattern.key_env' } });
 });
 
 test('Key variable の欄: 環境変数の名前だけを設定に入れる。鍵を貼ったものは断り、空は外す', () => {

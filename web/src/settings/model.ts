@@ -166,7 +166,8 @@ export function pruned<T extends Record<string, unknown>>(value: T): T {
 }
 
 export function updateListItem(config: Config, root: 'models' | 'providers', id: string, patch: Record<string, unknown>): Config {
-  return { ...config, [root]: (config[root] as Array<Record<string, unknown>>).map(item => (item.id === id ? pruned({ ...item, ...patch }) : item)) };
+  const full = root === 'providers' && typeof patch.kind === 'string' && !patch.apiKeyEnv ? { ...patch, ...kindPatch(config, id, patch.kind) } : patch;
+  return { ...config, [root]: (config[root] as Array<Record<string, unknown>>).map(item => (item.id === id ? pruned({ ...item, ...full }) : item)) };
 }
 
 export function uniqueId(base: string, taken: readonly string[]): string {
@@ -275,6 +276,15 @@ const KEY_ENV = /^[A-Z][A-Z0-9_]{0,63}$/u;
 export const isEnvName = (value: string): boolean => KEY_ENV.test(value);
 
 export const keyEnvProblem = (value: string): 'pattern' | 'unsafe' | null => (value === '' ? null : !isEnvName(value) ? 'pattern' : isSecretEnvName(value) ? null : 'unsafe');
+
+export type KeyEnvEdit = { patch: { apiKeyEnv: string | undefined } } | { fail: { key: 'ui.set.provider.envUnsafe' } | { code: 'config.pattern.key_env' } };
+
+export function keyEnvEdit(value: string): KeyEnvEdit {
+  const problem = keyEnvProblem(value);
+  if (problem === 'unsafe') return { fail: { key: 'ui.set.provider.envUnsafe' } };
+  if (problem === 'pattern') return { fail: { code: 'config.pattern.key_env' } };
+  return { patch: { apiKeyEnv: value || undefined } };
+}
 
 export const keyEnvPatch = (value: string): { apiKeyEnv: string | undefined } | null => (keyEnvProblem(value) ? null : { apiKeyEnv: value || undefined });
 
