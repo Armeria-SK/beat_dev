@@ -171,3 +171,16 @@ test('Settings の保存の配線: 保存の読み直しと書き込みは、順
   assert.ok(commit.includes('latest = (await api.settings(signal)).config;'));
   assert.ok(commit.includes('const result = await api.saveSettings(plan.config, signal);'));
 });
+
+test('Settings の Reset: 確かめのあとの読み直しが失敗したら、黙って何もしないのではなく失敗を返す（呼ぶ側が行の下に出す。レビューの直し）', async () => {
+  const enqueue = serial();
+  let checks = 0;
+  let resets = 0;
+  const done = checkThenRun(enqueue,
+    async () => { checks += 1; if (checks > 1) throw new Error('offline'); return ['wider']; },
+    items => items.join(','),
+    (_items, go) => confirmable(answer => { answer.confirm(); }, go),
+    async () => { resets += 1; return true; });
+  await assert.rejects(done, /offline/u);
+  assert.equal(resets, 0, 'Reset は走らない');
+});

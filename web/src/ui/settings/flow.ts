@@ -42,7 +42,12 @@ export function checkThenRun<T>(
     const items = await check(signal);
     if (items.length > 0 && keyOf(items) !== confirmed) return { items };
     return run(signal);
-  }).then(result => (typeof result === 'boolean' ? result : ask(result.items, () => step(keyOf(result.items)))));
+  }).then(result => {
+    if (typeof result === 'boolean') return result;
+    let failed: { error: unknown } | null = null;
+    return ask(result.items, () => step(keyOf(result.items)).catch((error: unknown) => { failed = { error }; throw error; }))
+      .then(ok => { if (failed) throw failed.error; return ok; });
+  });
   return step(null);
 }
 
