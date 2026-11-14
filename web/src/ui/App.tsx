@@ -37,7 +37,7 @@ import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
 import { Button, Notice } from './parts.tsx';
-import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, SETTINGS_EDITS, settingsLeaveAsks, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
+import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, SETTINGS_EDITS, settingsHold, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_NOTICES: RunNotice[] = [];
@@ -215,12 +215,8 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       const next = readRoute();
-      if (settingsLeaveAsks(hasUnsavedEdits(SETTINGS_EDITS), viewRef.current, next)) {
-        const moved = leaveMove(entryIndex.current, historyIndex());
-        setSettingsLeave({ to: routeHash(next), moved, at: entryIndex.current });
-        holdLeave(moved, entryHash.current, LEAVE_ENV);
-        return;
-      }
+      const hold = settingsHold(hasUnsavedEdits(SETTINGS_EDITS), viewRef.current, entryHash.current, next, entryIndex.current, historyIndex());
+      if (hold) { setSettingsLeave(hold.leave); holdLeave(hold.leave.moved, hold.back, LEAVE_ENV); return; }
       const held = behindRef.current;
       const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
       if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
