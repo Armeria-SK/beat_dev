@@ -113,7 +113,7 @@ test('memory_save: 1 回の実行で記憶できるのは 5 件まで。6 件目
   assert.equal(over.output.content, 'At most 5 memories can be saved in a single run. Save the rest in a later conversation');
 });
 
-test('MemoryStore.save: 実行（runId）ごとに、モデルが作れる記憶は 5 件まで。利用者（actor が user）は数えない', t => {
+test('MemoryStore.save: 実行（runId）ごとに、モデルが作れる記憶は 5 件まで。利用者（actor が user）は数えない', () => {
   const db = openDatabase(':memory:', MIGRATIONS);
   const memory = new MemoryStore(db);
   for (let i = 1; i <= 5; i++) memory.save({ book: 'user', content: `事実 ${i}`, actor: 'beat', runId: 'run-a' });

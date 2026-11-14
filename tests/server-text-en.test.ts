@@ -10,7 +10,7 @@ import { ProviderError, providerError } from '../src/providers/types.ts';
 import { describeCron } from '../src/tasks/schedule.ts';
 import { TaskError } from '../src/tasks/store.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { CONTEXT_HINTS, contextHint, evaluateContext } from '../src/providers/context.ts';
+import { contextHint, evaluateContext } from '../src/providers/context.ts';
 import { classifyFetchError, classifyHttpFailure, requireApiKey } from '../src/providers/http.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
 import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
@@ -250,7 +250,7 @@ const compatProvider = (baseUrl: string, over: Partial<ProviderConfig> = {}): Pr
 
 test('モデルの確認: 言語を渡さない呼び出しは英語の文', () => {
   const facts = { modelId: 'm', server: 'generic', required: 65536 };
-  const tooSmall = evaluateContext({ ...facts, measured: 4096, hint: CONTEXT_HINTS.generic(65536) });
+  const tooSmall = evaluateContext({ ...facts, measured: 4096, hint: contextHint('en', 'generic', 65536) });
   assert.equal(tooSmall.message, 'The context length is too small: measured 4,096 < required 65,536 (measured 4,096)');
   assert.equal(tooSmall.hint, 'Set the context length on the server to 65,536 or more, and set contextLength in the config to match');
   assert.equal(evaluateContext({ ...facts, declared: 8192, hint: 'x' }).message, 'The context length is too small: measured 8,192 < required 65,536 (configured 8,192)');
@@ -263,11 +263,11 @@ test('モデルの確認: 言語を渡さない呼び出しは英語の文', () 
   assert.equal(unknown.hint, 'In the config, write the length you set on the server under models[].contextLength');
   assert.equal(evaluateContext({ ...facts, declared: 70000 }).message, 'Usable: 70,000 tokens');
   assert.equal(evaluateContext({ ...facts, declared: 70000, unmeasuredNote: 'probe.note.use_config' }).message, 'Usable: 70,000 tokens (The length cannot be fetched from the server, so the configured value is used)');
-  assert.equal(CONTEXT_HINTS.hosted(65536), 'Choose a model whose context length is 65,536 or more');
-  assert.equal(CONTEXT_HINTS.lmstudio(65536), 'Reload the model in LM Studio with a Context Length of 65,536 or more, and set contextLength to match');
-  assert.equal(CONTEXT_HINTS.llamacpp(65536), 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
-  assert.equal(CONTEXT_HINTS.vllm(65536), 'Start vLLM with --max-model-len 65,536 or more');
-  assert.equal(CONTEXT_HINTS.tabbyapi(65536), 'Set max_seq_len (under model) in the TabbyAPI config.yml to 65,536 or more, reload the model, and set contextLength to match (and make cache_size the same or larger)');
+  assert.equal(contextHint('en', 'hosted', 65536), 'Choose a model whose context length is 65,536 or more');
+  assert.equal(contextHint('en', 'lmstudio', 65536), 'Reload the model in LM Studio with a Context Length of 65,536 or more, and set contextLength to match');
+  assert.equal(contextHint('en', 'llamacpp', 65536), 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
+  assert.equal(contextHint('en', 'vllm', 65536), 'Start vLLM with --max-model-len 65,536 or more');
+  assert.equal(contextHint('en', 'tabbyapi', 65536), 'Set max_seq_len (under model) in the TabbyAPI config.yml to 65,536 or more, reload the model, and set contextLength to match (and make cache_size the same or larger)');
 });
 
 test('モデルの確認: messageParams には言語で書いた文を入れず、小さなコードと値を入れる', () => {

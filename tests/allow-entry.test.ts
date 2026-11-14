@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { entryMatches, parseAllowEntry } from '../src/tools/hooks/allow-entry.ts';
 import { lexShell } from '../src/tools/hooks/shell-lex.ts';
-import { ConfigError, defaultConfig, parseConfig, semanticProblems } from '../src/config/store.ts';
+import { ConfigError, defaultConfig, parseConfig } from '../src/config/store.ts';
 import { allowEntryRunsCode } from '../src/tools/hooks/listed-commands.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
 
@@ -52,17 +52,15 @@ test('当て方: 文の語の頭が項目とちょうど同じとき。コマン
 test('設定を読むとき: 書けない項目は ConfigError で、場所つきで断る', () => {
   const config = defaultConfig();
   config.tools.shell.allow = ['npm test', 'npm test; rm -rf .', 'node $x'];
-  const problems = semanticProblems(config);
-  assert.equal(problems.filter(p => p.startsWith('tools.shell.allow:')).length, 2);
-  assert.match(problems.join('\n'), /Entry 2 "npm test; rm -rf \."/u);
-  assert.match(problems.join('\n'), /Entry 3 "node \$x"/u);
   assert.throws(() => parseConfig(JSON.parse(JSON.stringify(config))), (error: unknown) => {
     assert.ok(error instanceof ConfigError);
     assert.equal(error.problems.length, 2);
+    assert.equal(error.problems.filter(p => p.startsWith('tools.shell.allow:')).length, 2);
+    assert.match(error.problems.join('\n'), /Entry 2 "npm test; rm -rf \."/u);
+    assert.match(error.problems.join('\n'), /Entry 3 "node \$x"/u);
     return true;
   });
   config.tools.shell.allow = ['npm test', 'git status', 'make build'];
-  assert.deepEqual(semanticProblems(config).filter(p => p.startsWith('tools.shell.allow')), []);
   assert.doesNotThrow(() => parseConfig(JSON.parse(JSON.stringify(config))));
 });
 

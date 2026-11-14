@@ -12,7 +12,6 @@ const en = {
   'run.internal': 'Internal error: {detail}',
   'run.no_model': 'There was no model that could run',
   'run.no_provider': 'There is no provider "{id}"',
-  'run.unexpected': 'Unexpected error: {detail}',
   'problem.not_in_config': 'Not found in the settings',
   'problem.unchecked': 'Not checked yet',
   'problem.hint_suffix': ' ({hint})',

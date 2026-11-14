@@ -80,7 +80,6 @@ test('長さ・数の範囲・形・必須・知らない項目も、友好的�
 });
 
 test('スキーマの形の決まり（pattern・長さ・数の範囲・個数）を持つ項目はすべて、友好的な文がある（足し忘れたら、ここで落ちる）', () => {
-  const found: string[] = [];
   const walk = (node: any, path: string, visit: (node: any, path: string) => void) => {
     if (node === null || typeof node !== 'object') return;
     visit(node, path);

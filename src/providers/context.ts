@@ -67,15 +67,6 @@ export function contextHint(language: Language, kind: HintKind, required: number
   return providerText(language, `hint.${kind}`, { required: fmt(required) });
 }
 
-export const CONTEXT_HINTS = {
-  lmstudio: (required: number) => contextHint(DEFAULT_LANGUAGE, 'lmstudio', required),
-  llamacpp: (required: number) => contextHint(DEFAULT_LANGUAGE, 'llamacpp', required),
-  vllm: (required: number) => contextHint(DEFAULT_LANGUAGE, 'vllm', required),
-  tabbyapi: (required: number) => contextHint(DEFAULT_LANGUAGE, 'tabbyapi', required),
-  generic: (required: number) => contextHint(DEFAULT_LANGUAGE, 'generic', required),
-  hosted: (required: number) => contextHint(DEFAULT_LANGUAGE, 'hosted', required),
-} as const;
-
 export function errorProbeText(error: ProviderError, language: Language): Pick<ProbeResult, 'message' | 'messageCode' | 'messageParams'> {
   return { message: error.text(language), ...(error.code ? { messageCode: `provider.${error.code}`, messageParams: error.params } : {}) };
 }
