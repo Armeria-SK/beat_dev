@@ -4,6 +4,7 @@ import type { Env, FetchLike } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
 import { notifyText } from '../shared/messages/notify.ts';
 import { redactSecrets } from '../shared/redaction.ts';
+import { BLOCKING_QUESTION_KEY } from '../shared/notification-list.ts';
 import { isSafeOutboundUrl } from '../shared/url.ts';
 import type { NotificationKind, NotifyEvent, NotifyInput } from './notifications.ts';
 
@@ -73,7 +74,7 @@ export class NotifyChannels {
     try {
       if (n.noForward) return;
       const config = this.#o.config();
-      const targets = config.notify.channels.filter(c => c.enabled && c.kinds.includes(n.kind));
+      const targets = config.notify.channels.filter(c => c.enabled && (c.kinds.includes(n.kind) || (isBlockingQuestion(n) && c.kinds.includes('task_waiting'))));
       if (targets.length === 0) return;
       const sendable = targets.filter(() => this.#reserve(config));
       await Promise.all(sendable.map(c => this.#send(config, c, n)));
@@ -188,3 +189,4 @@ export function buildPayload(config: AppConfig, channel: NotifyChannelConfig, n:
   if (Buffer.byteLength(json) > NOTIFY_MAX_PAYLOAD_BYTES) json = make(title.slice(0, 50), undefined);
   return json;
 }
+const isBlockingQuestion = (n: NotifyEvent): boolean => n.kind === 'question_new' && n.dedup_key?.startsWith(BLOCKING_QUESTION_KEY) === true;

@@ -8,7 +8,7 @@ export const BLOCKING_QUESTION_KEY = 'question-blocking:';
 export type NotificationAction = 'pending' | 'questions' | 'kanban' | 'retry';
 
 const ACTIONS: Readonly<Record<string, NotificationAction>> = {
-  approval_needed: 'pending', question_new: 'questions', task_waiting: 'questions', task_done: 'kanban', task_failed: 'retry',
+  approval_needed: 'pending', question_new: 'questions', task_done: 'kanban', task_failed: 'retry',
 };
 
 export const actionOf = (kind: string): NotificationAction | null => (Object.hasOwn(ACTIONS, kind) ? ACTIONS[kind]! : null);

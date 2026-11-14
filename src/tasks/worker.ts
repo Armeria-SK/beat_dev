@@ -452,7 +452,8 @@ export class Worker {
     }
     if (control.outcome === 'question') {
       tasks.setWaiting(task.id, 'question', control.question, runId);
-      notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, projectId });
+      const recorded = this.#d.questions?.list({ status: 'open', taskId: task.id }).some(q => q.blocking && q.question === control.question) ?? false;
+      if (!recorded) notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, projectId });
       return;
     }
     if (control.outcome === 'checkpoint') {

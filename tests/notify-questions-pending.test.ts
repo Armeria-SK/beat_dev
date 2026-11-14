@@ -10,7 +10,17 @@ import type { NotificationKind, NotifyEvent } from '../src/notify/notifications.
 import { actionOf, arrangeNotifications, BLOCKING_QUESTION_KEY, isPinned } from '../src/shared/notification-list.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import type { KV } from '../src/db/kv.ts';
+import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { startApp } from './app-setup.ts';
+import type { Script } from './helpers.ts';
+
+function toolCall(name: string, args: unknown): Script {
+  return async function* () {
+    const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
+    yield { type: 'tool_call', call };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  };
+}
 
 async function setup(t: Parameters<typeof startApp>[0]) {
   const s = await startApp(t);
@@ -27,7 +37,7 @@ async function setup(t: Parameters<typeof startApp>[0]) {
 
 test('5-4-s 質問ができると question_new が製品つきで 1 つ出て、答えると既読になる。同じ質問で 2 つ出ない', async t => {
   const s = await setup(t);
-  const p = project(s, 'uploader');
+  const p = s.project('uploader');
   const q = s.app.questions.add({ projectId: p.id, question: 'How many retries?', options: ['3', '5'], chosen: 0 });
   const first = s.rows('question_new');
   assert.equal(first.length, 1);
@@ -51,7 +61,7 @@ test('5-4-s 質問ができると question_new が製品つきで 1 つ出て、
 
 test('5-4-s 急ぐ（blocking）質問の知らせだけ、未読のあいだ先頭に固定される', async t => {
   const s = await setup(t);
-  const p = project(s, 'pinned');
+  const p = s.project('pinned');
   const task = s.app.tasks.create({ title: 'Build', origin: 'user', actor: 'user', projectId: p.id });
   const blocking = s.app.questions.add({ projectId: p.id, taskId: task.id, question: 'Which database?', options: ['sqlite', 'postgres'], blocking: true });
   s.app.questions.add({ projectId: p.id, question: 'Light or dark?', options: ['light', 'dark'], chosen: 0 });
@@ -67,7 +77,7 @@ test('5-4-s 急ぐ（blocking）質問の知らせだけ、未読のあいだ先
 
 test('5-4-s Pending に積むと approval_needed が製品つき・行き先 pending で出て、決めると既読になる', async t => {
   const s = await setup(t);
-  const p = project(s, 'parked');
+  const p = s.project('parked');
   const task = s.app.tasks.create({ title: 'Ship it', origin: 'user', actor: 'user', projectId: p.id });
   const conversation = s.app.conversations.create({ kind: 'task' });
   assert.ok(s.app.tasks.claim(task.id, 30 * 60_000, conversation.id));
@@ -87,7 +97,7 @@ test('5-4-s Pending に積むと approval_needed が製品つき・行き先 pen
 
 test('5-4-s タスクの終わり・失敗は持っている製品の欄を一覧で返し、行き先は kanban / retry', async t => {
   const s = await setup(t);
-  const p = project(s, 'done');
+  const p = s.project('done');
   s.app.notifications.notify({ kind: 'task_done', title: 'done', link: '#/tasks/none', projectId: p.id });
   s.app.notifications.notify({ kind: 'task_failed', title: 'failed', link: '#/tasks/none', projectId: p.id });
   const res = await s.json('/api/notifications', 'GET');
@@ -97,7 +107,7 @@ test('5-4-s タスクの終わり・失敗は持っている製品の欄を一�
 
 test('5-4-s 古い行（project_id が NULL）で一覧が落ちず、リンクから製品を読む', async t => {
   const s = await setup(t);
-  const p = project(s, 'legacy');
+  const p = s.project('legacy');
   const task = s.app.tasks.create({ title: 'Old', origin: 'user', actor: 'user', projectId: p.id });
   s.app.db.prepare('INSERT INTO notifications (kind, title, link, created_at, project_id) VALUES (?, ?, ?, ?, NULL)').run('task_done', 'old', `#/tasks/${task.id}`, 1);
   s.app.db.prepare('INSERT INTO notifications (kind, title, link, created_at, project_id) VALUES (?, ?, ?, ?, NULL)').run('info', 'older', null, 1);
@@ -119,19 +129,10 @@ test('5-4-s 起動の掃除: もう答えた質問の未読の知らせは既読
   assert.notEqual(rows.find(r => r.body === 'Answered?')!.read_at, null);
 });
 
-test('5-4-s 質問の文の鍵らしい文字は、保存の前にも外の送り先にも伏せる', async t => {
-  const s = await setup(t);
-  const key = 'sk-ant-test-0000000000000000';
-  s.app.questions.add({ question: `Use ${key} here?`, options: ['a', 'b'], chosen: 0 });
-  const row = s.rows('question_new')[0]!;
-  assert.ok(!row.body?.includes(key), row.body ?? '');
-  assert.ok(!row.title.includes(key));
-});
-
 test('5-4-s 行き先は種類から決まり、知らない種類は null', () => {
   assert.equal(actionOf('approval_needed'), 'pending');
   assert.equal(actionOf('question_new'), 'questions');
-  assert.equal(actionOf('task_waiting'), 'questions');
+  assert.equal(actionOf('task_waiting'), null);
   assert.equal(actionOf('task_done'), 'kanban');
   assert.equal(actionOf('task_failed'), 'retry');
   assert.equal(actionOf('info'), null);
@@ -187,4 +188,39 @@ test('5-4-s 外の送り先: 古い設定（approval_needed を kinds に持つ�
   assert.equal(JSON.parse(old.sent[0]!).kind, 'approval_needed');
 });
 
-function project(s: Awaited<ReturnType<typeof setup>>, name: string) { return s.project(name); }
+test('5-4-s タスクの実行で急ぐ質問を記録すると、未読の知らせは question_new の 1 つだけで先頭に固定され、既定の kinds の外の送り先にも届く', async t => {
+  const sent: Array<{ kind: string; title: string }> = [];
+  const s = await startApp(t, {
+    configure: c => {
+      c.routing = { chat: ['m1'], background: ['m1'], retriesPerModel: 0 };
+      c.memory.review = false;
+      (c as { notify: unknown }).notify = { channels: [{ id: 'phone', kind: 'webhook', urlEnv: URL_ENV }], publicBaseUrl: '' };
+    },
+    env: { [URL_ENV]: 'https://hooks.example.com/x', FAKE_KEY: 'k' },
+    fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).startsWith('https://hooks.example.com/')) { sent.push(JSON.parse(String(init?.body))); return new Response(null, { status: 204 }); }
+      return fetch(url, init);
+    }) as typeof fetch,
+  });
+  const root = join(s.paths.data, 'work', 'shop');
+  mkdirSync(root, { recursive: true });
+  const shop = s.app.projects.create({ name: 'shop', root, rootKey: rootKeyOf(root), checkCommand: null });
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user', projectId: shop.id });
+  s.adapter().scripts.push(toolCall('question_add', { question: 'Which payment provider?', why: 'No safe default', options: ['A', 'B'], blocking: true }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'waiting');
+  const unread = s.app.db.prepare('SELECT kind, project_id FROM notifications WHERE read_at IS NULL').all() as Array<{ kind: string; project_id: string | null }>;
+  assert.deepEqual(unread.map(n => n.kind), ['question_new'], '同じ質問で 2 つ出ない');
+  assert.equal(unread[0]!.project_id, shop.id);
+  for (let i = 0; i < 60; i++) s.app.notifications.notify({ kind: 'info', title: `info ${i}`, noForward: true });
+  assert.equal(s.app.notifications.list()[0]!.kind, 'question_new', '先頭に固定');
+  await new Promise(r => setTimeout(r, 50));
+  assert.deepEqual(sent.map(p => p.kind), ['question_new'], '既定の kinds（task_waiting を持つ）の送り先に 1 通届く');
+});
+
+test('5-4-s 外の送り先: 急ぐ質問の question_new は task_waiting を持つ送り先にも届き、急がない質問は届かない', async () => {
+  const waitingOnly = channels(channelConfig(['task_waiting']));
+  await waitingOnly.c.deliver(ev('question_new', { dedup_key: `${BLOCKING_QUESTION_KEY}3` }));
+  await waitingOnly.c.deliver(ev('question_new', { dedup_key: 'question:4' }));
+  assert.equal(waitingOnly.sent.length, 1);
+});

@@ -6,7 +6,7 @@ const en = {
   'channel_failing': 'Notification target "{id}" has failed {fails} times in a row ({reason}). Check Settings > Notifications',
   'question_new': 'Question recorded',
   'question_new_blocking': 'A task is waiting for your answer',
-  'cap_reached':'External notifications reached the hourly limit ({max}); no more will be sent this hour (settings: notify.limits.maxSendsPerHour)',
+  'cap_reached': 'External notifications reached the hourly limit ({max}); no more will be sent this hour (settings: notify.limits.maxSendsPerHour)',
 };
 
 export const notifyText = defineMessages('notify', en);

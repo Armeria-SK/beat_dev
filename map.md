@@ -220,6 +220,7 @@
 - 秘密の欄（`src/shared/secret-slots.ts`、`src/web/routes-notify.ts`）: 画面から URL と token を入れる口。変数名はサーバーが決める（`BEAT_NOTIFY_<ID>_URL_SECRET` / `_TOKEN`。クライアントからは受け取らない）。値は `.env` に書き（`env-file.ts`）、応答は `{ set }` だけ（末尾の文字も返さない）。プロバイダの鍵の変数と重なる名前は 409。設定を変えるときは、await を挟まずに「検査 → `.env` → `applyConfig(probe:false)`」で、失敗したら `.env` と `app.env` を戻す。削除は、自動名でほかから指されていない秘密と記録だけを消し、持ち主が自分で書いた名前は残す。OS の環境変数由来の値は消せない（`source: 'os'`）。
 - 知らせの製品（beat 5-0）: `notify` は `projectId` を受けて `notifications.project_id` に書く。読む側（一覧・画面・外の送り先）はまだ使わない
 - 知らせに製品・新しい種類（beat 5-4-s）: 通知の値に `project_id` と行き先 `action`（`pending` / `questions` / `kanban` / `retry`。種類から `notification-list.ts` の `actionOf` が決める。知らない種類は `null`）を付けて、SSE と `GET /api/notifications` に出す（一覧の口は持っている欄を使い、NULL の古い行だけリンクから読む）。新しい種類 `question_new`: 質問ができると `App` が 1 つ出す（題は `notifyText`、本文は質問の文、リンク `#/questions/<製品>`、`dedupKey` は `question:<ID>`、急ぐ質問は `question-blocking:<ID>` で、未読のあいだ一覧の先頭に固定）。答えると既読。起動の掃除で、もう Open でない質問の未読も既読にする（`unreadOf`）。Pending に積んだ知らせは `approval_needed` のまま、製品とリンク `#/pending/<製品>` を足す。外の送り先の `kinds` に `question_new` を足せる（既定の 4 つには入れない。題・本文は今までどおり `redactSecrets`）
+- 急ぐ質問の知らせは 1 つ（beat 5-4-s の審査の直し）: タスクの実行で急ぐ質問を記録して返事待ちになったとき、ワーカーの `#finalize` は `task_waiting` を出さない（`ask_user` の返事待ちだけ出す）。外の送り先は、急ぐ質問の `question_new` を `kinds` に `task_waiting` を持つ送り先にも送る（既定の kinds のままで外へ届く）。`task_waiting` の行き先は今は null（5-2b-s で `questions`）
 - 入口: `src/notify/notifications.ts`（`Notifications`）、`src/notify/channels.ts`（`NotifyChannels`）
 
 ### 外の MCP サーバー — `src/mcp`（AU-5b-1。F8）

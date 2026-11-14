@@ -445,7 +445,7 @@ export class App {
       const language = languageOf(this.config());
       const task = scope.taskId ? this.tasks.get(scope.taskId) : undefined;
       if (row.status === 'waiting') {
-        const projectId = task?.project_id ?? this.conversations.projectOf(scope.conversationId);
+        const projectId = row.project_id ?? task?.project_id ?? this.conversations.projectOf(scope.conversationId);
         this.notifications.notify({
           kind: 'approval_needed', title: task ? pendingText(language, 'notify_title_task', { title: task.title }) : pendingText(language, 'notify_title_conversation'),
           body: redactSecrets(`#${row.id} ${row.reason}`), link: projectId ? `#/pending/${projectId}` : '#/pending', dedupKey: scope.key, projectId,
