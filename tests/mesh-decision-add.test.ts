@@ -245,6 +245,19 @@ test('5-5a-d 再審査の直し 2: 見えない字を先に外してから伏せ
   assert.ok(!shown.includes(body.slice(0, 30)), shown);
 });
 
+test('5-5a-d 再々審査の直し: 空白に変わる字（タブ・改行など）で BEGIN と PRIVATE を割っても、1 行にまとめてから伏せる', async t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  for (const gap of ['\t', '\n', '\r', '\u0001', ' ', '\u0085', ' ']) {
+    const pem = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const body = pem.split('\n')[1]!;
+    const out = await s.add(shop.id, `Key ${pem.replace('BEGIN PRIVATE', `BEGIN${gap}PRIVATE`)}`);
+    assert.match(out.content, /so it was hidden$/u, JSON.stringify(gap));
+    assert.ok(!readFileSync(s.file(shop.id), 'utf8').includes(body.slice(0, 30)), JSON.stringify(gap));
+    assert.ok(!s.app.mesh.read(shop.id, { file: 'DECISIONS.md' }, 4000, 'en').content.includes(body.slice(0, 30)), JSON.stringify(gap));
+  }
+});
+
 test('5-5a-d しまった製品・知らない製品には書かない', async t => {
   const s = setup(t);
   const gone = s.project('gone');

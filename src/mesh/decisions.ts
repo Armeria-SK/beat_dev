@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { projectDir } from '../projects/store.ts';
-import { plainLine, stripHidden } from '../shared/plain-text.ts';
+import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { readOwn, replaceFile } from './files.ts';
 import { MeshWriteError, type Writer } from './map.ts';
@@ -37,7 +37,7 @@ function clip(text: string, max: number): string {
   return list.length <= max ? text : `${list.slice(0, Math.max(0, max - 1)).join('')}${ELLIPSIS}`;
 }
 
-const one = (text: string): string => plainLine(redactSecrets(stripHidden(text)), Infinity);
+const one = (text: string): string => redactSecrets(plainLine(text, Infinity));
 const QUOTES = /["\u201C\u201D\u201E\u201F\uFF02\u00AB\u00BB\u02EE\u05F4\u301D-\u301F\u275D\u275E\u2033\u2035\u2036]/gu;
 const aiText = (text: string): string => one(text.replace(QUOTES, "'").normalize('NFKC')).replace(QUOTES, "'").replace(/-{5,}/gu, '----');
 
