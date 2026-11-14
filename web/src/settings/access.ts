@@ -286,13 +286,6 @@ function browserChanges(before: Config, after: Config): Access[] {
   return out;
 }
 
-// 通知の送り先の URL を入れ直す（設定の保存とは別の操作）ときの確かめ。通知の中身が、新しい宛先へ送られるようになる。token は同じ宛先に付くだけなので数えない
-export function secretEntryAccess(slot: { id: string; field: 'url' | 'token' }, config: Config): Access[] {
-  if (slot.field !== 'url') return [];
-  const channels = obj(config.notify).channels;
-  return Array.isArray(channels) && channels.some(c => obj(c).id === slot.id) ? [{ kind: 'notify-channel-target', id: slot.id }] : [];
-}
-
 // MCP サーバーの秘密（子の環境変数・HTTP の見出し）の値を入れる・変える（設定の保存とは別の操作）ときの確かめ。値は、そのサーバーへ渡される
 export function mcpSecretAccess(slot: { id: string; kind: 'env' | 'header'; name: string }, config: Config): Access[] {
   const servers = obj(config.mcp).servers;

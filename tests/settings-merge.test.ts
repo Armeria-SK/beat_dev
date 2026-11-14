@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyEdits, deepEqual, diffConfig, editPath, profilePatch } from '../web/src/settings/merge.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
-import { blockUnload, countChanges, sectionChanged, type Config } from '../web/src/settings/model.ts';
+import { countChanges, sectionSlice, type Config } from '../web/src/settings/model.ts';
 
 function sample(): Config {
   return {
@@ -267,13 +267,6 @@ test('合流は入力を書き換えない', () => {
   assert.deepEqual(draft.models.at(-1).nested.a, [1], '返した設定を触っても、編集中の設定は変わらない');
 });
 
-test('ページを閉じる前の確認: 既定の動きを止め、returnValue を空文字にする（ブラウザが確認を出す条件）', () => {
-  const event = { prevented: false, returnValue: undefined as unknown, preventDefault() { this.prevented = true; } };
-  blockUnload(event);
-  assert.equal(event.prevented, true);
-  assert.equal(event.returnValue, '');
-});
-
 // 触れてよいフォルダ（tools.roots）は、設定の「道具」の節で編集する。保存・広がる変更の確かめ・ほかの場所とのぶつかりは、設定の保存の流れ 1 つだけ
 test('フォルダ（tools.roots）の編集: 保存の流れで差になり、広がる確かめが出て、ほかの場所の変更とぶつかれば止まる', () => {
   const saved = sample();
@@ -281,7 +274,7 @@ test('フォルダ（tools.roots）の編集: 保存の流れで差になり、�
   (draft.tools as { roots: unknown[] }).roots = [{ path: 'workspace', mode: 'write' }, { path: '~/Documents/notes', mode: 'read' }];
 
   assert.deepEqual(diffConfig(saved, draft).map(e => e.path.join('.')), ['tools.roots']);
-  assert.equal(sectionChanged(saved, draft, 'tools'), true, '「道具」の節に変更の印が付く');
+  assert.notEqual(JSON.stringify(sectionSlice(saved, 'tools')), JSON.stringify(sectionSlice(draft, 'tools')), '「道具」の節に変更の印が付く');
   assert.equal(countChanges(saved, draft), 1);
 
   const clean = merge(saved, draft, sample());

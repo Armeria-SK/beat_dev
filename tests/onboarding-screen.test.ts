@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import {
-  emptyModelForm, isOutsideUrl, markSetupShown, modelFormProblem, resumeStep, setupModelConfig, STEPS, wasSetupShown,
+  markSetupShown, resumeStep, setupModelConfig, STEPS, wasSetupShown,
   type ModelForm, type OnboardingSteps,
 } from '../web/src/onboarding.ts';
 import { estimateTokens, overPersonaBudget } from '../web/src/tokens.ts';
@@ -20,25 +20,7 @@ test('resumeStep: 左の一覧の「続ける」は、済んでいない最初�
   assert.equal(resumeStep(steps({ model: true })), 'you', '飛ばした手順があれば、そこへ戻る');
 });
 
-const form = (patch: Partial<ModelForm> = {}): ModelForm => ({ ...emptyModelForm('openai'), model: 'qwen3-27b', baseUrl: 'http://127.0.0.1:1234/v1', ...patch });
-
-test('modelFormProblem / isOutsideUrl: 入力の誤りを入れる前に見つけ、この PC の外の送り先には知らせる', () => {
-  assert.equal(modelFormProblem(form()), null);
-  assert.equal(modelFormProblem(form({ model: '  ' })), 'model');
-  assert.equal(modelFormProblem(form({ baseUrl: 'localhost:1234' })), 'baseUrl');
-  assert.equal(modelFormProblem(form({ contextLength: '100' })), 'contextLength');
-  assert.equal(modelFormProblem(form({ contextLength: '' })), null, 'コンテキスト長は空でもよい（サーバーから確かめる）');
-  assert.equal(modelFormProblem(form({ apiKeyEnv: 'my key' })), 'apiKeyEnv');
-  assert.equal(modelFormProblem(form({ apiKeyEnv: 'MY_API_KEY' })), null);
-  assert.equal(modelFormProblem({ ...emptyModelForm('anthropic'), model: 'claude-x' }), null, 'Anthropic はモデル名だけ');
-  assert.equal(modelFormProblem({ ...emptyModelForm('ollama'), model: '' }), 'model');
-  assert.equal(isOutsideUrl('http://127.0.0.1:8000/v1'), false);
-  assert.equal(isOutsideUrl('http://localhost:8000'), false);
-  assert.equal(isOutsideUrl('http://[::1]:8000'), false);
-  assert.equal(isOutsideUrl('https://api.example.com/v1'), true);
-  assert.equal(isOutsideUrl('http://192.168.1.5:8000/v1'), true);
-  assert.equal(isOutsideUrl('not a url'), false);
-});
+const form = (patch: Partial<ModelForm> = {}): ModelForm => ({ source: 'openai', model: 'qwen3-27b', baseUrl: 'http://127.0.0.1:1234/v1', server: 'generic', contextLength: '32768', apiKeyEnv: '', ...patch });
 
 const base = () => ({
   providers: [{ id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600000 }, { id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 600000 }],
@@ -57,13 +39,11 @@ test('setupModelConfig（OpenAI 互換）: 送り先・サーバーの種類・�
   assert.equal('apiKeyEnv' in noKey.providers.at(-1), false, '鍵を使わないときは apiKeyEnv を書かない');
 });
 
-test('setupModelConfig: Anthropic と Ollama は、すでにあるプロバイダを使い（無ければ決まった形で足し）、同じモデルをもう一度確かめるときは項目を直す', () => {
-  const anthropic = setupModelConfig(base(), { ...emptyModelForm('anthropic'), model: 'claude-sonnet-x' }, null);
+test('setupModelConfig: Anthropic は、すでにあるプロバイダを使い、同じモデルをもう一度確かめるときは項目を直す', () => {
+  const anthropic = setupModelConfig(base(), { source: 'anthropic', model: 'claude-sonnet-x', baseUrl: '', server: 'generic', contextLength: '', apiKeyEnv: '' }, null);
   assert.equal(anthropic.config.models[0].provider, 'anthropic');
   assert.equal('contextLength' in anthropic.config.models[0], false, 'Anthropic は長さを書かない');
   assert.equal(anthropic.config.providers.length, 2, '足さずに、あるものを使う');
-  const ollama = setupModelConfig({ ...base(), providers: [] }, { ...emptyModelForm('ollama'), model: 'llama3' }, null);
-  assert.deepEqual(ollama.config.providers, [{ id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 600000 }]);
 
   const first = setupModelConfig(base(), form({ contextLength: '32768' }), null);
   const again = setupModelConfig(first.config, form({ baseUrl: 'http://127.0.0.1:5000/v1', model: 'qwen3-27b', contextLength: '16384' }), first.modelId);

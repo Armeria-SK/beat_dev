@@ -4,7 +4,7 @@ import { MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_ID_PATTERN } from '.
 import { en } from '../web/src/i18n/en.ts';
 import { accessWidening, mcpSecretAccess } from '../web/src/settings/access.ts';
 import {
-  addBody, addProblem, argsFromText, attempt, emptyAddForm, idFromName, previewAdd, previewServer, previewTool, reasonKey, revealHidden, sameShape, scrubSecrets, shapeChanges, summarize, tone,
+  addBody, addProblem, argsFromText, attempt, emptyAddForm, idFromName, previewAdd, previewServer, previewTool, reasonKey, revealHidden, sameShape, scrubSecrets, summarize, tone,
   PATTERNS,
 } from '../web/src/settings/mcp-model.ts';
 import { SECTION_GROUPS, sectionSlice, type Config } from '../web/src/settings/model.ts';
@@ -235,17 +235,6 @@ test('sameShape: 説明・入力の形・消す語・外へ出る申告・落と
   assert.equal(sameShape(a, { ...a, stripped: 3 }), false);
   assert.equal(sameShape(undefined, undefined), true);
   assert.equal(sameShape(undefined, a), false);
-});
-
-test('shapeChanges: 前が無ければ全部が新しい。あれば変わった所だけ', () => {
-  const a = { description: 'x'.repeat(500), schema: '{}', destructive: false, openWorld: false, stripped: 0 };
-  const none = { description: false, schema: false, destructive: false, openWorld: false, stripped: false };
-  assert.deepEqual(shapeChanges({ after: a }), { ...none, description: true, schema: true });
-  assert.deepEqual(shapeChanges({ after: { ...a, openWorld: true, stripped: 4 } }), { ...none, description: true, schema: true, openWorld: true, stripped: true });
-  assert.deepEqual(shapeChanges({ before: a, after: { ...a, description: `${a.description}!` } }), { ...none, description: true });
-  assert.deepEqual(shapeChanges({ before: a, after: { ...a, destructive: true } }), { ...none, destructive: true });
-  assert.deepEqual(shapeChanges({ before: a, after: { ...a, openWorld: true } }), { ...none, openWorld: true });
-  assert.deepEqual(shapeChanges({ before: a, after: { ...a, stripped: 2 } }), { ...none, stripped: true });
 });
 
 test('revealHidden: 見えない文字・向きを変える文字・タグ文字は u{…} の見える文字にし、ふつうの文字・改行・タブ・絵文字はそのまま', () => {

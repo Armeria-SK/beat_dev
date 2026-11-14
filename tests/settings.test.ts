@@ -4,10 +4,10 @@ import { readFileSync } from 'node:fs';
 import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
-  addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  keyEnvEdit, keyEnvProblem, kindPatch, openAfterRename, sharedKeyWith,
-  removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
-  updateAt, updateIn, updateListItem, type Config,
+  addModel, countChanges, isEnvName, newAnthropicProvider, parseProblem, problemsOf, providerInUse, pruned,
+  keyEnvEdit, keyEnvProblem, kindPatch, openAfterRename,
+  removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionSlice, secondsOf, uniqueId,
+  updateAt, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
 
 function sample(): Config {
@@ -40,9 +40,6 @@ test('設定の節: 13 つ・4 グループで、名前と説明が en にある
       assert.ok(en[key].length > 0, key);
     }
   }
-  assert.equal(isSection('tools'), true);
-  assert.equal(isSection('nope'), false);
-  assert.equal(isSection(null), false);
 });
 
 test('辞書: 設定の画面の文字は en にある', () => {
@@ -82,22 +79,13 @@ test('変更の数: 並び（文字列の一覧）は 1 件、models / providers
   assert.equal(countChanges(saved, swapped), 0, 'models の並びは id で見るので、並べ替えだけは変更に数えない');
 });
 
-test('language は画面では触らない: サーバーの設定に language があっても無くても「見た目」の節の変更にならない', () => {
-  const saved = sample();
-  const draft = { ...saved, language: 'en' };
-  assert.equal(sectionChanged(saved, draft, 'look'), false);
-  assert.equal(sectionChanged(saved, draft, 'models'), false);
-});
-
 test('節の変更の印: 触った節だけに付く', () => {
   const saved = sample();
   const draft = updateAt(saved, 'worker', { enabled: true });
-  const marks = SECTION_IDS.filter(id => sectionChanged(saved, draft, id));
+  const marks = SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(draft, id)));
   assert.deepEqual(marks, ['worker']);
-  const route = moveInRoute(saved, 'chat', 0, 1);
-  assert.deepEqual(SECTION_IDS.filter(id => sectionChanged(saved, route, id)), ['models']);
   const key = updateListItem(saved, 'providers', 'local', { apiKeyEnv: 'OTHER' });
-  assert.deepEqual(SECTION_IDS.filter(id => sectionChanged(saved, key, id)), ['providers'], '鍵の節は設定に持ち物を持たないので、変更の印は付かない');
+  assert.deepEqual(SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(key, id))), ['providers'], '鍵の節は設定に持ち物を持たないので、変更の印は付かない');
 });
 
 test('問題の読み取り: 形の検査の /models/0/contextLength は、位置を id に置き換えて節と行を指す', () => {
@@ -148,8 +136,6 @@ test('設定の書き換え: 元の設定は変えず、空欄（undefined）の
   assert.equal(next.models[1], config.models[1], '触っていない項目は同じもの');
   assert.deepEqual(pruned({ a: 1, b: undefined }), { a: 1 });
   assert.deepEqual(updateAt(config, 'worker', { enabled: true }).worker, { enabled: true, autonomy: false });
-  assert.deepEqual(updateIn(config, 'tools', 'shell', { enabled: false }).tools.shell, { enabled: false, allow: ['git status'] });
-  assert.deepEqual(updateIn({}, 'tools', 'shell', { enabled: true }).tools, { shell: { enabled: true } });
 });
 
 test('モデル・プロバイダの追加と削除', () => {
@@ -160,9 +146,7 @@ test('モデル・プロバイダの追加と削除', () => {
   const second = addModel(first.config);
   assert.deepEqual([first.id, second.id], ['new-model', 'new-model-2']);
   assert.equal(first.config.models.at(-1).provider, 'local', '最初のプロバイダを使う');
-  const providerFirst = addProvider(config);
-  assert.equal(providerFirst.id, 'new-provider');
-  assert.equal(addProvider(providerFirst.config).id, 'new-provider-2');
+  const providerFirst = { config: { ...config, providers: [...config.providers, { id: 'new-provider', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 }] } };
 
   const without = removeModel(config, 'big');
   assert.deepEqual(without.models.map((m: { id: string }) => m.id), ['sonnet']);
@@ -173,45 +157,13 @@ test('モデル・プロバイダの追加と削除', () => {
   assert.deepEqual(removeProvider(providerFirst.config, 'new-provider').providers.map((p: { id: string }) => p.id), ['local', 'claude']);
 });
 
-test('順番（チャット・裏方）: 入れ替え・足す・外す', () => {
-  const config = sample();
-  assert.deepEqual(moveInRoute(config, 'chat', 0, 1).routing.chat, ['sonnet', 'big']);
-  assert.deepEqual(moveInRoute(config, 'chat', 1, -1).routing.chat, ['sonnet', 'big']);
-  assert.equal(moveInRoute(config, 'chat', 0, -1), config, '先頭を上へは何も起きない');
-  assert.equal(moveInRoute(config, 'chat', 1, 1), config, '末尾を下へは何も起きない');
-  assert.equal(moveInRoute(config, 'chat', 5, -1), config);
-  assert.deepEqual(addToRoute(config, 'background', 'sonnet').routing.background, ['big', 'sonnet']);
-  assert.equal(addToRoute(config, 'background', 'big'), config, '重複は足さない');
-  assert.deepEqual(removeFromRoute(config, 'chat', 'big').routing.chat, ['sonnet']);
-  assert.deepEqual(config.routing.chat, ['big', 'sonnet'], '元は変わらない');
-});
-
-test('数の欄と、タグの欄', () => {
-  assert.equal(parseNumber(''), undefined);
-  assert.equal(parseNumber('   '), undefined);
-  assert.equal(parseNumber(' 12 '), 12);
-  assert.equal(parseNumber('-3.5'), -3.5);
-  assert.equal(parseNumber('1e3'), 1000);
-  assert.equal(parseNumber('abc'), null);
-  assert.equal(parseNumber('Infinity'), null);
-  assert.deepEqual(addTag(['a'], ' b '), ['a', 'b']);
-  assert.deepEqual(addTag(['a'], 'a'), ['a']);
-  assert.deepEqual(addTag(['a'], '   '), ['a']);
+test('秒の欄: ミリ秒を秒に丸め、数でなければ未設定', () => {
   assert.equal(secondsOf(600000), 600);
   assert.equal(secondsOf(1500), 2);
   assert.equal(secondsOf(undefined), undefined);
 });
 
-test('API キーの環境変数: プロバイダの apiKeyEnv と、Anthropic の既定、重複のまとめ', () => {
-  assert.deepEqual(keyUsage(sample()), [
-    { name: 'LOCAL_KEY', providers: ['local'] },
-    { name: 'ANTHROPIC_API_KEY', providers: ['claude'] },
-  ]);
-  const shared = { providers: [
-    { id: 'a', kind: 'openai_compatible', apiKeyEnv: 'K' }, { id: 'b', kind: 'openai_compatible', apiKeyEnv: 'K' }, { id: 'c', kind: 'ollama' },
-    { id: 'd', kind: 'anthropic', apiKeyEnv: 'MINE' },
-  ] };
-  assert.deepEqual(keyUsage(shared), [{ name: 'K', providers: ['a', 'b'] }, { name: 'MINE', providers: ['d'] }]);
+test('API キーの環境変数の名前の形（isEnvName）', () => {
   assert.equal(isEnvName('OPENAI_API_KEY'), true);
   for (const bad of ['', 'lower', '1ABC', 'A-B', 'A B', 'A'.repeat(65)]) assert.equal(isEnvName(bad), false, bad);
 });
@@ -243,13 +195,6 @@ test('コピー: clipboard が使えればそれで、使えない・断られ�
   assert.deepEqual(fallback, ['b', 'c'], 'http の画面など clipboard が無いときも切り替える');
   assert.equal(await copyText('d', { clipboard: undefined, selectionCopy: () => false }), false, 'どちらもできなければ false（コピーしたと言わない）');
   assert.equal(await copyText('e', { clipboard: { writeText: async () => { throw new Error('denied'); } }, selectionCopy: () => false }), false);
-});
-
-test('closeAction: 設定のモーダルを閉じるとき、保存していない変更があれば確かめ、保存している最中は待つ', () => {
-  assert.equal(closeAction({ dirty: 0, busy: false }), 'close', '変更が無ければそのまま閉じる');
-  assert.equal(closeAction({ dirty: 3, busy: false }), 'confirm', '変更があれば、捨てる前に確かめる');
-  assert.equal(closeAction({ dirty: 0, busy: true }), 'wait', '保存している最中は閉じない');
-  assert.equal(closeAction({ dirty: 2, busy: true }), 'wait');
 });
 
 
@@ -314,16 +259,15 @@ test('節「ブラウザ」: 「振る舞い」で MCP の次にあり、設定�
   const ids = behavior.items.map(i => i.id);
   assert.equal(ids[ids.indexOf('mcp') + 1], 'browser');
   assert.ok(SECTION_IDS.includes('browser'));
-  assert.equal(isSection('browser'), true);
   const saved = sample();
   saved.tools.browser = { enabled: false, sites: [], limits: { maxTabs: 3 } };
   assert.deepEqual(sectionSlice(saved, 'browser'), saved.tools.browser);
   const draft = structuredClone(saved);
   draft.tools.browser.enabled = true;
-  assert.deepEqual(SECTION_IDS.filter(id => sectionChanged(saved, draft, id)), ['browser'], 'ブラウザの変更の印は「ブラウザ」だけに付く（「道具」には付かない）');
+  assert.deepEqual(SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(draft, id))), ['browser'], 'ブラウザの変更の印は「ブラウザ」だけに付く（「道具」には付かない）');
   const shell = structuredClone(saved);
   shell.tools.deny = ['.env', 'x'];
-  assert.deepEqual(SECTION_IDS.filter(id => sectionChanged(saved, shell, id)), ['tools']);
+  assert.deepEqual(SECTION_IDS.filter(id => JSON.stringify(sectionSlice(saved, id)) !== JSON.stringify(sectionSlice(shell, id))), ['tools']);
   const problem = parseProblem('/tools/browser/limits/maxTabs: Expected number to be less or equal to 8', saved);
   assert.equal(problem.section, 'browser');
   assert.equal(parseProblem('/tools/deny/0: x', saved).section, 'tools');
@@ -339,8 +283,6 @@ test('Anthropic を足す: 1 つ目は ANTHROPIC_API_KEY、2 つ目からはほ�
   assert.equal(second.apiKeyEnv, 'BEAT_ANTHROPIC_2_API_KEY');
   assert.ok(isEnvName(second.apiKeyEnv as string));
   const next = { ...one, providers: [...one.providers, second] };
-  assert.deepEqual(sharedKeyWith(next, 'anthropic-2'), []);
-  assert.deepEqual(sharedKeyWith(next, 'anthropic'), ['claude']);
 
   const third = newAnthropicProvider({ ...next, providers: [...next.providers, { id: 'x', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'BEAT_ANTHROPIC_3_API_KEY', maxParallel: 1, timeoutMs: 1000 }] });
   assert.equal(third.id, 'anthropic-3');
@@ -379,9 +321,6 @@ test('種類を Anthropic に変える: 鍵の名前が無く、ANTHROPIC_API_KE
     { id: 'named', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1', apiKeyEnv: 'EXAMPLE_API_KEY', maxParallel: 1, timeoutMs: 600_000 },
   ] };
   assert.deepEqual(kindPatch(base, 'local', 'anthropic'), { kind: 'anthropic', apiKeyEnv: 'BEAT_LOCAL_API_KEY' });
-  const changed = updateListItem(base, 'providers', 'local', kindPatch(base, 'local', 'anthropic'));
-  assert.deepEqual(sharedKeyWith(changed, 'local'), []);
-  assert.deepEqual(sharedKeyWith(changed, 'anthropic'), []);
 
   assert.deepEqual(kindPatch(base, 'named', 'anthropic'), { kind: 'anthropic' }, '書いてある鍵の名前はそのまま');
   assert.deepEqual(kindPatch(base, 'anthropic', 'openai_compatible'), { kind: 'openai_compatible' });
@@ -401,7 +340,6 @@ test('提供元の編集（updateListItem）: 種類を Anthropic に変える�
   ] };
   const changed = updateListItem(base, 'providers', 'local', { kind: 'anthropic' });
   assert.equal((changed.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, 'BEAT_LOCAL_API_KEY');
-  assert.deepEqual(sharedKeyWith(changed, 'local'), []);
   const other = updateListItem(base, 'providers', 'local', { maxParallel: 2 });
   assert.equal((other.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, undefined, '種類を変えない編集は鍵の名前に触らない');
   const named = updateListItem(base, 'providers', 'local', { kind: 'anthropic', apiKeyEnv: 'MY_API_KEY' });

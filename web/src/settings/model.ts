@@ -35,10 +35,6 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArr
 
 export const SECTION_IDS: readonly SettingsSection[] = SECTION_GROUPS.flatMap(g => g.items.map(i => i.id));
 
-export function isSection(value: unknown): value is SettingsSection {
-  return typeof value === 'string' && (SECTION_IDS as readonly string[]).includes(value);
-}
-
 // 節ごとの、設定のうちその節が持つ部分（変更の印と、元に戻すかどうかの判定に使う）。
 export function sectionSlice(config: Config, section: SettingsSection): unknown {
   switch (section) {
@@ -56,9 +52,6 @@ export function sectionSlice(config: Config, section: SettingsSection): unknown 
     default: return undefined;
   }
 }
-
-export const sectionChanged = (saved: Config, draft: Config, section: SettingsSection): boolean =>
-  JSON.stringify(sectionSlice(saved, section)) !== JSON.stringify(sectionSlice(draft, section));
 
 export const isPlain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const hasIds = (list: unknown[]): list is Array<Record<string, unknown> & { id: string }> => list.every(item => isPlain(item) && typeof item.id === 'string');
@@ -156,10 +149,6 @@ export function updateAt(config: Config, root: string, patch: Record<string, unk
   return { ...config, [root]: { ...(config[root] ?? {}), ...patch } };
 }
 
-export function updateIn(config: Config, root: string, key: string, patch: Record<string, unknown>): Config {
-  return { ...config, [root]: { ...(config[root] ?? {}), [key]: { ...((config[root] ?? {})[key] ?? {}), ...patch } } };
-}
-
 // 値が undefined（空欄）のキーは、設定から外す。
 export function pruned<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
@@ -195,12 +184,6 @@ export function removeModel(config: Config, id: string): Config {
   };
 }
 
-export function addProvider(config: Config): { config: Config; id: string } {
-  const id = uniqueId('new-provider', (config.providers as Array<{ id: string }>).map(p => p.id));
-  const provider = { id, kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
-  return { config: { ...config, providers: [...config.providers, provider] }, id };
-}
-
 export function newAnthropicProvider(config: Config): Record<string, unknown> {
   const providers = providerRows(config);
   const id = uniqueId('anthropic', providers.map(p => p.id));
@@ -223,51 +206,6 @@ export function removeProvider(config: Config, id: string): Config {
   return { ...config, providers: (config.providers as Array<{ id: string }>).filter(p => p.id !== id) };
 }
 
-export type Route = 'chat' | 'background';
-
-export function moveInRoute(config: Config, route: Route, index: number, delta: -1 | 1): Config {
-  const list = [...(config.routing[route] as string[])];
-  const to = index + delta;
-  if (index < 0 || index >= list.length || to < 0 || to >= list.length) return config;
-  [list[index], list[to]] = [list[to]!, list[index]!];
-  return { ...config, routing: { ...config.routing, [route]: list } };
-}
-
-export function addToRoute(config: Config, route: Route, id: string): Config {
-  const list = config.routing[route] as string[];
-  return list.includes(id) ? config : { ...config, routing: { ...config.routing, [route]: [...list, id] } };
-}
-
-export function removeFromRoute(config: Config, route: Route, id: string): Config {
-  return { ...config, routing: { ...config.routing, [route]: (config.routing[route] as string[]).filter(m => m !== id) } };
-}
-
-// 設定のモーダルを閉じようとしたとき（× ・Esc・背景）にどうするか。保存している最中は待つ。保存していない変更があれば、捨てる前に確かめる。
-export function closeAction(state: { dirty: number; busy: boolean }): 'close' | 'confirm' | 'wait' {
-  if (state.busy) return 'wait';
-  return state.dirty > 0 ? 'confirm' : 'close';
-}
-
-// 保存していない編集があるまま、ページを閉じる・読み直すときに、ブラウザの確認を出させる（beforeunload）。
-export function blockUnload(event: { preventDefault: () => void; returnValue?: unknown }): void {
-  event.preventDefault();
-  event.returnValue = '';
-}
-
-// 数の欄: 空欄は「未設定」、数でないものは null（直前の値を保つ呼び出し側の判断に使う）。
-export function parseNumber(text: string): number | undefined | null {
-  const trimmed = text.trim();
-  if (trimmed === '') return undefined;
-  const n = Number(trimmed);
-  return Number.isFinite(n) ? n : null;
-}
-
-// タグの欄（触れないパス・コマンドなど）への追加。空・重複は足さない。
-export function addTag(list: readonly string[], draft: string): string[] {
-  const value = draft.trim();
-  return !value || list.includes(value) ? [...list] : [...list, value];
-}
-
 export const openAfterRename = (open: string | null, from: string, to: string): string | null => (open === from ? to : open);
 
 export const secondsOf = (ms: unknown): number | undefined => (typeof ms === 'number' ? Math.round(ms / 1000) : undefined);
@@ -286,16 +224,6 @@ export function keyEnvEdit(value: string): KeyEnvEdit {
   return { patch: { apiKeyEnv: value || undefined } };
 }
 
-// API キーの環境変数の名前。プロバイダに書かれたもの（Anthropic で書いていなければ ANTHROPIC_API_KEY）。
-export function keyUsage(config: Config): Array<{ name: string; providers: string[] }> {
-  const names = new Map<string, string[]>();
-  for (const p of config.providers as Array<{ id: string; kind: string; apiKeyEnv?: string }>) {
-    const name = p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined);
-    if (name) names.set(name, [...(names.get(name) ?? []), p.id]);
-  }
-  return [...names].map(([name, providers]) => ({ name, providers }));
-}
-
 type ProviderRow = { id: string; kind: string; apiKeyEnv?: string };
 const providerRows = (config: Config): ProviderRow[] => (Array.isArray(config.providers) ? config.providers as ProviderRow[] : []);
 
@@ -310,22 +238,6 @@ export function providerKeyEnv(config: Config, id: string): string | undefined {
 export function keyEnvUnsafe(config: Config, id: string): string | undefined {
   const name = providerKeyEnv(config, id);
   return name !== undefined && !isSecretEnvName(name) ? name : undefined;
-}
-
-// 同じ環境変数を使うほかのプロバイダ（鍵を入れ直す・消すと、そちらにも効く）。まだ名前を付けていない非 Anthropic は、ほかと重ならない
-export function sharedKeyWith(config: Config, id: string): string[] {
-  const providers = providerRows(config);
-  const provider = providers.find(p => p.id === id);
-  const name = provider?.apiKeyEnv ?? (provider?.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined);
-  if (!name) return [];
-  return providers.filter(p => p.id !== id && (p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)) === name).map(p => p.id);
-}
-
-// 鍵を入れられるのは、保存済みで、編集中の変更が無いプロバイダだけ（鍵は、サーバーが覚えている保存済みの設定の送り先に送られるため）
-export function keyReady(saved: Config, draft: Config, id: string): boolean {
-  const before = providerRows(saved).find(p => p.id === id);
-  const after = providerRows(draft).find(p => p.id === id);
-  return before !== undefined && after !== undefined && JSON.stringify(before) === JSON.stringify(after);
 }
 
 // 貼り付けた鍵の前後の空白・改行を取り除く（途中は触らない）
