@@ -277,6 +277,26 @@ test('buildPolicy: 製品の一覧を関数で渡すと、指示ファイルの�
   assert.ok(policy.askOnWrite?.includes(late));
 });
 
+test('タスクの実行: 前の実行が外を読んでいて、タスクの文も外を読んだ実行が書いたものでも、「前の実行が読んだもの」は理由に 1 回だけ入る', async t => {
+  const s = await setup(t);
+  const carried = 'what an earlier run read';
+  const run = async (earlierRun: boolean, taskText: boolean) => {
+    s.seen.length = 0;
+    const restore = [t.mock.method(s.app.runs, 'anyTaintedTask', () => earlierRun), t.mock.method(s.app.tasks, 'textTainted', () => taskText)];
+    s.adapter().scripts = [call('probe_ctx', {}), reply('done')];
+    const task = s.app.tasks.create({ title: 'job', origin: 'user', actor: 'user' });
+    const started = s.app.engine.runTask(task, s.app.conversations.create({ kind: 'task' }).id, 'do the job');
+    assert.ok(started.ok);
+    await started.done;
+    for (const m of restore) m.mock.restore();
+    return s.seen[0]!.taint.sources.filter(source => source === carried);
+  };
+  assert.deepEqual(await run(true, true), [carried]);
+  assert.deepEqual(await run(true, false), [carried]);
+  assert.deepEqual(await run(false, true), [carried]);
+  assert.deepEqual(await run(false, false), []);
+});
+
 test('製品の会話の子の担当:親の作業フォルダ・許可フォルダ・home・製品をそのまま使う', async t => {
   const s = await setup(t, { configure: (c: Config) => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });
   const shop = await s.product('shop');

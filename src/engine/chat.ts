@@ -481,9 +481,8 @@ export class ChatEngine {
     const control = { value: { outcome: 'none' } as TaskControl };
     const language = languageOf(this.#d.config());
     const sources = [
-      ...(this.#d.runs.anyTaintedTask(conversationId) ? [engineText(language, 'taint.carried')] : []),
+      ...(this.#d.runs.anyTaintedTask(conversationId) || this.#d.tasks?.textTainted(task.id) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
-      ...(this.#d.tasks?.textTainted(task.id) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#noteSinceReply(conversationId) ? [pendingText(language, 'taint_note')] : []),
     ];
     if (sources.length) this.#initialTaint.set(runId, sources);
