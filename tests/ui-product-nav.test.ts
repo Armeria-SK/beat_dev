@@ -5,7 +5,7 @@ import { ApiError, type Conversation, type FolderEntry, type Project } from '../
 import { t } from '../web/src/i18n/index.ts';
 import { errorBodyText, serverText } from '../web/src/server-text.ts';
 import { entryReason, folderName, nameFor, newProjectInput, noteKeys, upTarget } from '../web/src/ui/folder-pick.ts';
-import { awaitingProduct, loadProjectList, newSessionHash, productNav, projectLoads, sendOptions, settleLeave } from '../web/src/ui/product-nav.ts';
+import { awaitingProduct, loadProjectList, newSessionHash, productNav, productsMissing, projectLoads, sendOptions, settleLeave } from '../web/src/ui/product-nav.ts';
 import { parseRoute, routeHash, type Route } from '../web/src/ui/routes.ts';
 import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
@@ -103,6 +103,30 @@ test('ui/product-nav: 最初の読み込みが 404 以外で失敗したら、�
   later[0]!();
   await new Promise(r => setImmediate(r));
   assert.equal(calls, 2, '新しい読み込みが出たあとは、古い失敗の読み直しをしない');
+});
+
+test('ui/product-nav: 製品の一覧が 404 以外で読めないあいだ、製品の画面は真っ白にせず「読めなかった」と出す（届いたら消す）', async () => {
+  const answers: Array<() => Promise<{ projects: Project[] }>> = [
+    async () => { throw new ApiError(500, {}); },
+    async () => ({ projects: [project('p1aaaa')] }),
+  ];
+  let call = 0;
+  const failing: boolean[] = [];
+  const timers: Array<() => void> = [];
+  const loads = projectLoads(() => answers[call++]!(), () => undefined, run => timers.push(run), [10], on => failing.push(on));
+  await loads.load();
+  assert.deepEqual(failing, [true]);
+  timers.shift()!();
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(failing, [true, false], '届いたら知らせを消す');
+
+  for (const route of [{ view: 'product', id: 'p1aaaa' }, { view: 'productNew', id: 'p1aaaa' }, { view: 'productSettings', id: 'p1aaaa' }, { view: 'pending', productId: 'p1aaaa' }] as const) {
+    assert.equal(productsMissing(route, false, true), true, route.view);
+    assert.equal(productsMissing(route, false, false), false, '読んでいる途中は出さない');
+    assert.equal(productsMissing(route, true, true), false, '前に読めた一覧があれば、その一覧で描く');
+  }
+  assert.equal(productsMissing({ view: 'pending' }, false, true), false);
+  assert.equal(productsMissing({ view: 'kanban' }, false, true), false, '製品の一覧が要らない画面');
 });
 
 test('ui/product-nav: 最初の発言にだけ projectId を載せ、製品の一覧を読み終えるまで新しい製品の会話の入力欄を出さない', () => {

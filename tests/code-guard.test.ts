@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand, type Decision, type ShellGuardOptions } from '../src/tools/hooks/shell-guard.ts';
+import { codeFindings } from '../src/tools/hooks/code-guard.ts';
+import { segments } from '../src/tools/hooks/parse-cmd.ts';
 import { tempDir } from './helpers.ts';
 
 // security-self-api.md の L1（R1.1〜R1.10）。§1.2 の表の「allow だった行」は、すべて毎回確かめになることを、行ごとに確かめる
@@ -478,4 +480,11 @@ test('git の洗い出しができない環境（gitIsolated: false）では、g
   assert.match(off.reasons.join(), /2\.32/u);
   assert.equal(f.bash('git status', { gitIsolated: true }).decision, 'allow');
   assert.equal(f.bash('git status').decision, 'allow');
+});
+
+test('xargs の -i -l -e は次の語を値として取らない: 起こす先のコマンドを飛ばさずに見る', () => {
+  const keys = (command: string): string[] => segments(command).flatMap(seg => codeFindings(seg, { cwd: process.cwd(), language: 'en', selfHosts: [] })).map(found => found.key);
+  for (const command of ['xargs -i python {}', 'xargs -i node {}', 'xargs -l bash', 'xargs -e node', 'xargs -i -l python', 'xargs --replace python {}']) assert.deepEqual(keys(command), ['code.file_run'], command);
+  for (const command of ['xargs -I {} python {}', 'xargs -L 1 python', 'xargs -E end node', 'xargs -n1 node']) assert.deepEqual(keys(command), ['code.file_run'], command);
+  for (const command of ['xargs -i echo {}', 'xargs -i rm {}', 'xargs -l grep foo', 'xargs -I % echo %', 'xargs -e cat', 'xargs --replace echo {}']) assert.deepEqual(keys(command), [], command);
 });

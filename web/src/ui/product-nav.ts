@@ -40,6 +40,7 @@ export const PROJECT_RETRY_MS = [2_000, 5_000, 15_000, 60_000] as const;
 export function projectLoads(
   fetchList: () => Promise<{ projects: Project[] }>, apply: (projects: Project[]) => void,
   later: (run: () => void, ms: number) => unknown = setTimeout, retryMs: readonly number[] = PROJECT_RETRY_MS,
+  failing: (on: boolean) => void = () => undefined,
 ): { load: () => Promise<void>; supersede: () => void } {
   let generation = 0;
   let started = 0;
@@ -52,10 +53,12 @@ export function projectLoads(
         if (turn !== started) return;
         const wait = retryMs[Math.min(failures, retryMs.length - 1)]!;
         failures += 1;
+        failing(true);
         later(() => { if (turn === started) void load(); }, wait);
         return;
       }
       failures = 0;
+      failing(false);
       if (mine === generation) apply(list);
     });
   };
@@ -64,6 +67,11 @@ export function projectLoads(
 
 export function sendOptions(conversationId: string | null, productId: string | undefined, interrupt: boolean): { interrupt?: true; projectId?: string } {
   return { ...(interrupt ? { interrupt: true } : {}), ...(conversationId === null && productId ? { projectId: productId } : {}) };
+}
+
+export function productsMissing(route: Route, loaded: boolean, failing: boolean): boolean {
+  const needs = route.view === 'product' || route.view === 'productNew' || route.view === 'productSettings' || (route.view === 'pending' && route.productId !== undefined);
+  return needs && failing && !loaded;
 }
 
 export const awaitingProduct = (route: Route, product: Project | undefined): boolean => route.view === 'productNew' && product === undefined;

@@ -3,11 +3,11 @@
 .bt-sidebar, .bt-app__main, .bt-screen { overflow: clip; }
 
 .bt-app__main .bt-thread > .bt-msg:not(.bt-msg--owner), .bt-app__main .bt-thread > .bt-notice, .bt-app__main .bt-thread > .bt-checklist, .bt-app__main .bt-thread > .bt-tools, .bt-app__main .bt-thread > .bt-empty, .bt-app__main .bt-thread > .ui-summary, .bt-app__main > .ui-pinned { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }
-.bt-app__main .bt-thread > .bt-msg--owner { margin-right: max(0px, calc((100% - 720px) / 2)); }
+.bt-app__main .bt-thread > .bt-msg--owner { max-width: calc(min(100%, 720px) * 0.85); margin-right: max(0px, calc((100% - 720px) / 2)); }
 .bt-app__main .bt-thread { scrollbar-gutter: stable both-edges; }
-.bt-app__main .bt-composer { position: relative; flex: none; width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }
+.bt-app__main .bt-composer { position: relative; flex: none; width: calc(100% - 2 * var(--ui-gutter, 0px)); max-width: 720px; margin-left: auto; margin-right: auto; }
 
-.bt-app__main > .ui-pinned { flex: none; margin-bottom: var(--space-3); max-height: 40vh; overflow-y: auto; }
+.bt-app__main > .ui-pinned { flex: none; width: calc(100% - 2 * var(--ui-gutter, 0px)); margin-bottom: var(--space-3); max-height: 40vh; overflow-y: auto; }
 .ui-owner { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-owner__files { display: block; margin-top: var(--space-1); }
 .ui-msg__meta { display: block; margin-top: var(--space-1); text-align: right; }
@@ -22,7 +22,7 @@
 .ui-live .ui-md >:last-child::after { content: ""; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--pulse); animation: bt-caret var(--dur-beat) steps(1) infinite; }
 .ui-notice__text { overflow-wrap: anywhere; text-align: center; }
 .ui-danger { color: var(--danger); }
-.bt-app__main > .ui-offline { flex: none; width: 100%; max-width: 720px; margin: 0 auto var(--space-2); }
+.bt-app__main > .ui-offline { flex: none; width: calc(100% - 2 * var(--ui-gutter, 0px)); max-width: 720px; margin: 0 auto var(--space-2); }
 .ui-suggest { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
 .ui-suggest .bt-btn { height: auto; min-height: 32px; text-align: left; white-space: normal; }
 .ui-summary { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--surface-sunk); }

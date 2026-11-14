@@ -133,17 +133,42 @@ test('広がりの検出（フック）: 足す・書き換える・使う前の
   assert.deepEqual(accessWidening(before, post), [{ kind: 'hook-added', stage: 'postToolUse', hook: { matcher: 'q', command: ['r'] } }]);
 });
 
-test('広がりの検出（組み込みの Protect files）: 一覧の直し・止める・消すは、どれも確かめを出す（Settings › Hooks の Edit とスイッチと Remove）', () => {
+test('広がりの検出（組み込みの Protect files）: 一覧を減らす・対象の道具を変える・止める・消すは確かめを出す。一覧に足すだけ（守りを強めるだけ）なら出さない（Settings › Hooks の Edit とスイッチと Remove、backlog 520）', () => {
   const protect = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'] };
   const before = base();
   before.tools.hooks = { preToolUse: [protect], postToolUse: [] };
   const summary = { matcher: '.*', command: ['protect-files'] };
   const lists: Array<[string, Record<string, unknown>]> = [
     ['always を減らす', { ...protect, always: [] }],
-    ['always を足す', { ...protect, always: ['.github/workflows/**', 'deploy/**'] }],
+    ['always から afterOutside へ移す', { ...protect, always: [], afterOutside: ['package.json', '.github/workflows/**'] }],
     ['afterOutside を減らす', { ...protect, afterOutside: [] }],
     ['対象の道具を変える', { ...protect, matcher: 'file_write' }],
+    ['足すのと一緒に対象の道具を変える', { ...protect, matcher: 'file_write', always: ['.github/workflows/**', 'deploy/**'] }],
+    ['足すのと一緒に別のものを減らす', { ...protect, always: ['.github/workflows/**', 'deploy/**'], afterOutside: [] }],
   ];
+  const stronger: Array<[string, Record<string, unknown>]> = [
+    ['always を足す', { ...protect, always: ['.github/workflows/**', 'deploy/**'] }],
+    ['afterOutside を足す', { ...protect, afterOutside: ['package.json', 'tsconfig.json'] }],
+    ['両方に足す（並びが変わっても）', { ...protect, always: ['deploy/**', '.github/workflows/**'], afterOutside: ['tsconfig.json', 'package.json'] }],
+  ];
+  for (const [label, changed] of stronger) {
+    const after = structuredClone(before);
+    after.tools.hooks.preToolUse = [changed];
+    assert.deepEqual(accessWidening(before, after), [], label);
+  }
+  const wasOff = structuredClone(before);
+  wasOff.tools.hooks.preToolUse = [{ ...protect, enabled: false }];
+  const onAndMore = structuredClone(before);
+  onAndMore.tools.hooks.preToolUse = [{ ...protect, always: ['.github/workflows/**', 'deploy/**'] }];
+  assert.deepEqual(accessWidening(wasOff, onAndMore), [], '止めていたものを動かして足すのも、守りが強くなるだけ');
+  const offAndMore = structuredClone(before);
+  offAndMore.tools.hooks.preToolUse = [{ ...protect, always: ['.github/workflows/**', 'deploy/**'], enabled: false }];
+  assert.ok(accessWidening(before, offAndMore).length > 0, '足しても、止めるなら確かめを出す');
+  const withCommand = structuredClone(before);
+  withCommand.tools.hooks.preToolUse = [{ matcher: 'b', command: ['y'] }, protect];
+  const commandEdited = structuredClone(before);
+  commandEdited.tools.hooks.preToolUse = [{ matcher: 'b', command: ['y', '--loose'] }, { ...protect, always: ['.github/workflows/**', 'deploy/**'] }];
+  assert.deepEqual(accessWidening(withCommand, commandEdited), [{ kind: 'hook-edited', stage: 'preToolUse', hook: { matcher: 'b', command: ['y', '--loose'] } }], '一緒に直したコマンドのフックは、これまでどおり出す');
   for (const [label, changed] of lists) {
     const after = structuredClone(before);
     after.tools.hooks.preToolUse = [changed];

@@ -1,5 +1,5 @@
 import type { Config } from './settings/model.ts';
-import { uniqueId } from './settings/model.ts';
+import { newAnthropicProvider, uniqueId } from './settings/model.ts';
 
 // はじめの設定の、画面を使わない部分: 手順・続きの位置・モデルの入力から設定への書き換え。
 
@@ -51,12 +51,11 @@ export function isOutsideUrl(baseUrl: string): boolean {
 
 const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9_.-]+/gu, '-').replace(/^[^a-z0-9]+/u, '').replace(/-+$/u, '').slice(0, 40) || 'model';
 
-const DEFAULTS = {
-  anthropic: { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
-  ollama: { id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 600_000 },
-} as const;
+const OLLAMA = { id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 600_000 } as const;
 
 type Entry = Record<string, unknown> & { id: string };
+
+const defaultProvider = (config: Config, kind: 'anthropic' | 'ollama'): Entry => (kind === 'anthropic' ? newAnthropicProvider(config) as Entry : { ...OLLAMA });
 
 // 入力を設定に反映する。同じモデルをもう一度確かめるとき（modelId）は、その項目を直す。
 // 順番（チャット・裏方）が両方空なら、設定のモデル全部と足したモデルを入れる。すでに順番があれば、足したモデルを最後に足す。
@@ -84,7 +83,7 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     const kind = form.source;
     const found = providers.find(p => p.kind === kind);
     if (found) providerId = found.id;
-    else { providerId = DEFAULTS[kind].id; providers.push({ ...DEFAULTS[kind] }); }
+    else { const made = defaultProvider({ ...config, providers }, kind); providerId = made.id; providers.push(made); }
   }
 
   const length = Number(form.contextLength);
@@ -112,7 +111,7 @@ export function setupProviderConfig(config: Config, form: ModelForm): { config: 
   if (found) return { config, providerId: found.id };
   const made: Entry = form.source === 'openai'
     ? { id: uniqueId('local', providers.map(p => p.id)), kind: 'openai_compatible', baseUrl: url, server: form.server, maxParallel: 1, timeoutMs: 600_000 }
-    : { ...DEFAULTS[form.source] };
+    : defaultProvider(config, form.source);
   return { config: { ...config, providers: [...providers, made] }, providerId: made.id };
 }
 

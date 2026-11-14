@@ -122,3 +122,72 @@ test('selfTarget: :// のある語に beat のポートと展開の括弧があ�
   ];
   assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
 });
+
+test('selfTarget: ポートやホストが展開の括弧で組み立てられる書き方も、展開した結果が beat 自身なら断る', () => {
+  const reached = [
+    'curl "http://127.0.0.1:{4790,4790}/"', 'curl "http://127.0.0.1:[4790-4790]/"', 'curl "http://127.0.0.1:[4789-4791]/"', 'curl "http://127.0.0.1:[4789-4791:1]/"',
+    'curl "http://127.0.0.1:47{90,90}/"', 'curl "http://127.0.0.1{:,:}4790/"', 'curl "http://127.0.0.1:4[7-7]90/"', 'curl "http://127.0.0.1:[04790-04790]/"',
+    'curl "127.0.0.{1:4790,1:4790}/"', 'curl "http:/{127.0.0.1,x/y}:4790/"', 'curl "http://[::1]:{4791,4791}/"', 'curl "http://127.0.0.1:[1-65535]/"',
+    'curl http://127.0.0.1:{4789..4791}/', 'curl http://localhost:{1..65535}/', 'curl "https://box.tail1234.ts.{net,net}/api/pending"', 'curl "https://127.0.0.1:[440-450]/"',
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined), []);
+  const free = [
+    'curl "http://127.0.0.1:{8080,9090}/"', 'curl "http://127.0.0.1:[3000-3002]/health"', 'curl "http://localhost:[5000-6000]/"', 'curl http://127.0.0.1:{3000..3005}/',
+    'curl "http://example.com/img[1-100000].png"', 'curl "https://example.com/{a,b}/[1-3].json"', `echo '{"host":"localhost","port":4790}'`,
+    `node -e "const o={host:'127.0.0.1',port:4790}"`, `jq '{a:.x[0],port:4790}' a.json`, 'echo {1..4790}', 'echo [4790-4790] {4790,4791}', 'ls src/{a,b}/[0-9]*.ts',
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
+});
+
+test('selfTarget: スラッシュが 1 本・3 本の URL（http:/host）も、既定のポートが beat のポートなら断る', () => {
+  const http = { port: 4790, origins: ['http://10.0.0.5'] };
+  assert.deepEqual(['curl http:/localhost/api/pending', 'curl http:///127.0.0.1/api/pending', 'curl HTTP:/127.0.0.1'].filter(command => selfTarget(command, http) === undefined), []);
+  assert.deepEqual(['curl https:/127.0.0.1/api/pending', 'curl https:///localhost/'].filter(command => selfTarget(command, server) === undefined), []);
+  const free = ['curl http:/localhost/api/pending', 'curl http:/127.0.0.1:9/', 'curl https:/example.com/', 'echo http:localhost', 'ls C:/localhost'];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
+});
+
+test('selfTarget: IPv6 のゾーン付きの書き方（[::1%25lo]）も beat 自身として見つける', () => {
+  const reached = ['curl "http://[::1%25lo]:4790/api/pending"', 'curl "http://[::1%lo]:4791/"', 'curl "http://[::1%251]:4790/"', 'curl "http://[::ffff:127.0.0.1%25lo]:4790/"'];
+  assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined), []);
+  const free = ['curl "http://[fe80::1%25eth0]:4790/"', 'curl "http://[::1%25lo]:9/"', 'ping fe80::1%eth0'];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
+});
+
+test('selfTarget: 閉じない括弧が並ぶ長い文でも、読む量が長さの 2 乗にならない', () => {
+  for (const text of [`${'[a'.repeat(50_000)}:4790`, `${'{a'.repeat(50_000)}:4790`, `${'{a,b}'.repeat(4_000)}:4790`]) {
+    const started = performance.now();
+    selfTarget(text, server);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 700, `${text.slice(0, 6)}… に ${Math.round(elapsed)}ms`);
+  }
+});
+
+test('selfTarget: 途方もなく大きい数の範囲・深く重なった括弧・縮めた JSON でも、1 回の確かめの仕事量は決まった上限まで', () => {
+  const nest = (depth: number): string => (depth === 0 ? '1' : `{"a":${nest(depth - 1)},"b":${nest(depth - 1)},"c":${nest(depth - 1)},"d":${nest(depth - 1)}}`);
+  const lock = JSON.stringify({ name: 'x', lockfileVersion: 3, packages: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`node_modules/p${i}`, { version: `1.${i}.0`, resolved: `https://registry.npmjs.org/p${i}/-/p${i}-1.${i}.0.tgz`, integrity: 'sha512-AAAA', dependencies: { a: '^1.0.0', b: '^2.0.0' }, engines: { node: '>=18' } }])) });
+  const heavy = [
+    'echo {9007199254740993..9007199254740993}', 'echo {100000000000000000000..100000000000000000001}', 'curl "http://example.com/img[99999999999999999999-99999999999999999999].png"',
+    'echo {1..3..99999999999999999999999}', 'curl x[1-60][1-60]{[1-60][1-60]}{{[1-60][1-60]}}', `curl -d '${nest(4)}' http://example.com/`, `echo '${lock}' > l.json`,
+    `echo ${'{a,b}'.repeat(4_000)}`, Array.from({ length: 3_000 }, (_, i) => `x{${i},b}`).join(' '),
+  ];
+  for (const text of heavy) {
+    const started = performance.now();
+    assert.equal(selfTarget(text, server), undefined, text.slice(0, 60));
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 500, `${text.slice(0, 60)}… に ${Math.round(elapsed)}ms`);
+  }
+});
+
+test('selfTarget: 形が上限を超える語は、括弧を 1 つずつ動かして確かめる。重い語が先にあっても、あとの短い語は確かめる', () => {
+  const tails = '{a,b}'.repeat(9);
+  const decoys = Array.from({ length: 600 }, (_, i) => 5000 + i).join(',');
+  const nest = (depth: number): string => (depth === 0 ? '1' : `{"a":${nest(depth - 1)},"b":${nest(depth - 1)},"c":${nest(depth - 1)},"d":${nest(depth - 1)}}`);
+  const reached = [
+    `curl "127.0.0.1:{4790,4789}/${tails}"`, `curl "127.0.0.1:{4789,4790}/${tails}"`, `curl "127.0.0.1:{${decoys},4790}/"`, 'curl {a,{b,{c,{d,127.0.0.1}}}}:4790',
+    'curl 127.0.0.1:{4813..4750..23}', 'curl 127.0.0.1:{4791..4700..1}', `curl -d '${nest(4)}' "127.0.0.1:{4790,4790}/"`, `curl "127.0.0.1:{4790,4790}/" -d '${nest(4)}'`,
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined).map(command => command.slice(0, 50)), []);
+  const free = [`curl "127.0.0.1:{8080,9090}/${tails}"`, `curl "127.0.0.1:{${decoys},9}/"`, 'curl 127.0.0.1:{4813..4750..21}', 'curl {a,{b,{c,{d,127.0.0.1}}}}:9', 'echo {4750..4813..23}'];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined).map(command => command.slice(0, 50)), []);
+});

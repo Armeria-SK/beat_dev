@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { arrangeNotifications, NOTIFICATION_LIST_LIMIT, PINNED_KINDS } from '../shared/notification-list.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 
 export type NotificationKind = 'task_done' | 'task_waiting' | 'task_failed' | 'approval_needed' | 'health_alert' | 'info';
 
@@ -33,11 +34,12 @@ export class Notifications {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
   readonly #log: (line: string) => void;
+  readonly #secrets: () => readonly string[];
   readonly #listeners: Array<(n: NotifyEvent) => void> = [];
   // 聞かれていたことが片づいて既読にした通知の id（持ち主が読んだときの markRead では呼ばない）
   onSettled: ((ids: number[]) => void) | undefined;
 
-  constructor(db: DatabaseSync, now: () => number = Date.now, log: (line: string) => void = () => {}) { this.#db = db; this.#now = now; this.#log = log; }
+  constructor(db: DatabaseSync, now: () => number = Date.now, log: (line: string) => void = () => {}, secrets: () => readonly string[] = () => []) { this.#db = db; this.#now = now; this.#log = log; this.#secrets = secrets; }
 
   // 新しい通知を聞く（画面への配信、外の送り先）。1 本が throw しても、通知の作成と残りの聞き手は止めない
   listen(listener: (n: NotifyEvent) => void): void { this.#listeners.push(listener); }
@@ -48,8 +50,9 @@ export class Notifications {
       const recent = this.#db.prepare('SELECT 1 FROM notifications WHERE dedup_key = ? AND created_at > ?').get(input.dedupKey, now - DEDUP_MS);
       if (recent) return undefined;
     }
+    const secrets = this.#secrets();
     const result = this.#db.prepare('INSERT INTO notifications (kind, title, body, link, dedup_key, created_at, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(input.kind, input.title.slice(0, 200), input.body?.slice(0, 2000) ?? null, input.link ?? null, input.dedupKey ?? null, now, input.projectId ?? null);
+      .run(input.kind, redactSecrets(input.title, secrets).slice(0, 200), input.body !== undefined ? redactSecrets(input.body, secrets).slice(0, 2000) : null, input.link ?? null, input.dedupKey ?? null, now, input.projectId ?? null);
     const n = this.#db.prepare('SELECT * FROM notifications WHERE id = ?').get(Number(result.lastInsertRowid)) as unknown as Notification;
     const event: NotifyEvent = input.noForward ? { ...n, noForward: true } : n;
     for (const listener of this.#listeners) {

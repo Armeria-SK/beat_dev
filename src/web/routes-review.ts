@@ -113,7 +113,8 @@ export function registerReviewRoutes(router: Router, app: App): void {
   router.add('GET', '/api/review', ({ res }) => {
     const drafts = app.skills.drafts('pending').map(d => {
       const current = app.skills.getRegistered(d.name);
-      return { ...d, current: current ? { description: current.description, body: current.body } : null };
+      const from = d.conversation_id ? app.conversations.get(d.conversation_id) : undefined;
+      return { ...d, current: current ? { description: current.description, body: current.body } : null, from_title: from?.title || null };
     });
     sendJson(res, 200, {
       skillDrafts: drafts,

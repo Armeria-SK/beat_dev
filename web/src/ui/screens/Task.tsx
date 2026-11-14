@@ -5,11 +5,13 @@ import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import { eventKey, ORIGIN_KEY, sheetActions, STATUS_KEY } from '../../task-meta.ts';
 import { PRIORITIES } from '../../task-form.ts';
+import { DiscardConfirm, useDiscardAsk, useUnsaved } from '../Discard.tsx';
 import { latestOnly } from '../latest.ts';
 import { Button, EmptyState, Icon, Notice, Pill, type PillTone } from '../parts.tsx';
 import { productOf } from '../products.ts';
 import { routeHash } from '../routes.ts';
 import { answerTaskOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type TaskOp } from '../task-ops.ts';
+import { SCREEN_EDITS } from '../unsaved.ts';
 import { PRIORITY_KEY } from './Kanban.tsx';
 
 export interface TaskScreenProps {
@@ -55,6 +57,10 @@ function Field({ task, field, onSaved }: { task: Task; field: FieldName; onSaved
   const value = fieldValue(task, field);
   const label = t(spec.label);
   const close = () => { setEditing(false); setError(''); requestAnimationFrame(() => editButton.current?.focus()); };
+  const changed = editing && draft !== opened;
+  useUnsaved(`${SCREEN_EDITS}task:${task.id}:${field}`, changed);
+  const ask = useDiscardAsk(() => changed);
+  const cancel = () => ask.attempt(close);
   const save = async (e?: FormEvent) => {
     e?.preventDefault();
     if (busy || (spec.required && !draft.trim())) return;
@@ -68,8 +74,9 @@ function Field({ task, field, onSaved }: { task: Task; field: FieldName; onSaved
   if (editing) {
     return (
       <li className="bt-row ui-field">
-        <form className="ui-field__form" onSubmit={e => void save(e)} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } }}>
+        <form className="ui-field__form" onSubmit={e => void save(e)} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } }}>
           <span className="bt-label">{label}</span>
+          <DiscardConfirm ask={ask} />
           {spec.multiline
             ? <textarea className="bt-field" autoFocus rows={4} value={draft} maxLength={spec.max} aria-label={label} onChange={e => setDraft(e.target.value)} />
             : <input className="bt-field" autoFocus value={draft} maxLength={spec.max} aria-label={label} onChange={e => setDraft(e.target.value)} />}
@@ -77,7 +84,7 @@ function Field({ task, field, onSaved }: { task: Task; field: FieldName; onSaved
           {error && <span className="bt-meta ui-danger" role="alert">{error}</span>}
           <span className="ui-field__buttons">
             <Button type="submit" variant="primary" small disabled={busy || (spec.required && !draft.trim())}>{t('ui.task.save')}</Button>
-            <Button variant="ghost" small onClick={close}>{t('ui.cancel')}</Button>
+            <Button variant="ghost" small onClick={cancel}>{t('ui.cancel')}</Button>
           </span>
         </form>
       </li>
@@ -100,6 +107,7 @@ function Answer({ task, onSent }: { task: Task; onSent: () => void }) {
   const t = useT();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  useUnsaved(`${SCREEN_EDITS}task:${task.id}:answer`, text.trim() !== '');
   const send = async (e: FormEvent) => {
     e.preventDefault();
     if (busy || !text.trim()) return;

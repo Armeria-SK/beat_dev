@@ -4,17 +4,18 @@ import { toast } from '../../feedback.ts';
 import { formatRelative, getLanguage, useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
 import { probeMessage, serverText } from '../../server-text.ts';
+import type { Access } from '../../settings/access.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvPatch, keyEnvUnsafe, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, keyEnvEdit, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
-import { planKey } from './commit.ts';
+import { planKeyFor } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
-import { keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
+import { judgeBackups, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
 type T = ReturnType<typeof useT>;
@@ -59,7 +60,7 @@ function OrderList({ k, ids, label, models, onChange }: { k: string; ids: readon
   );
 }
 
-function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boolean; onToggle: () => void }) {
+function ProviderRow({ provider, open, onToggle, onRenamed }: { provider: Json; open: boolean; onToggle: () => void; onRenamed: (id: string) => void }) {
   const t = useT();
   const ctx = useSet();
   const id = provider.id as string;
@@ -89,18 +90,22 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
   async function send(confirmed: string | null): Promise<boolean> {
     const value = trimKey(key);
     if (!value) return false;
-    const plan = planKey(provider, confirmed);
-    if (plan.kind === 'none') return false;
-    if (plan.kind === 'confirm') return ctx.ask({ row: k, items: plan.items, title: t('ui.set.key.confirmTitle'), ok: t('ui.set.key.confirmOk') }, () => send(plan.key));
     ctx.setBusy(k); ctx.clear(k);
+    let confirm: { items: Access[]; key: string };
     try {
-      setState(await api.setProviderKey(id, value));
-      setKey(''); setEntering(false);
-      toast({ icon: 'check', title: t('ui.set.key.saved') });
-      await ctx.reload();
-      return true;
+      const plan = planKeyFor((await api.settings()).config, id, confirmed);
+      if (plan.kind === 'none') { ctx.fail(k, t('ui.set.key.failed')); return false; }
+      if (plan.kind === 'send') {
+        setState(await api.setProviderKey(id, value));
+        setKey(''); setEntering(false);
+        toast({ icon: 'check', title: t('ui.set.key.saved') });
+        await ctx.reload();
+        return true;
+      }
+      confirm = plan;
     } catch (error) { ctx.fail(k, errorText(error, t('ui.set.key.failed'))); return false; }
     finally { ctx.setBusy(null); }
+    return ctx.ask({ row: k, items: confirm.items, title: t('ui.set.key.confirmTitle'), ok: t('ui.set.key.confirmOk') }, () => send(confirm.key));
   }
 
   async function removeKey() {
@@ -119,7 +124,7 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
     const slug = slugId(text, 'provider');
     if (!slug) { ctx.fail(k, t('ui.set.id.none')); return; }
     const next = uniqueSlug(slug, (ctx.config.providers as Json[]).map(p => p.id as string).filter(x => x !== id), 'provider');
-    if (next !== id) void ctx.commit(k, c => renameProvider(c, id, next));
+    if (next !== id) void ctx.commit(k, c => renameProvider(c, id, next)).then(ok => { if (ok) onRenamed(next); });
   };
   const inUse = providerInUse(ctx.config, id);
   const canKey = line === 'none' || line === 'set' || line === 'failed';
@@ -150,10 +155,10 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
           </Row>
           <Row k={`${k}:env`} title={t('ui.set.provider.env')} desc={t('ui.set.provider.envDesc')}>
             <CommitField value={(provider.apiKeyEnv as string | undefined) ?? ''} label={t('ui.set.provider.env')} mono placeholder={t('ui.set.provider.envAuto')} onCommit={v => {
-              const patch = keyEnvPatch(v);
-              if (!patch) { ctx.fail(`${k}:env`, serverText('config.pattern.key_env', null, getLanguage()) ?? ''); return; }
+              const result = keyEnvEdit(v);
+              if ('fail' in result) { ctx.fail(`${k}:env`, 'key' in result.fail ? t(result.fail.key) : serverText(result.fail.code, null, getLanguage()) ?? ''); return; }
               ctx.clear(`${k}:env`);
-              edit(patch);
+              edit(result.patch);
             }} />
           </Row>
           {provider.kind === 'openai_compatible' && (
@@ -221,7 +226,7 @@ function AddProvider({ onDone }: { onDone: () => void }) {
   );
 }
 
-function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boolean; onToggle: () => void; probing: boolean }) {
+function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; open: boolean; onToggle: () => void; onRenamed: (id: string) => void; probing: boolean }) {
   const t = useT();
   const ctx = useSet();
   const id = model.id as string;
@@ -235,13 +240,17 @@ function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boole
     const slug = slugId(text, 'model');
     if (!slug) { ctx.fail(k, t('ui.set.id.none')); return; }
     const next = uniqueSlug(slug, (ctx.config.models as Json[]).map(m => m.id as string).filter(x => x !== id), 'model');
-    if (next !== id) void ctx.commit(k, c => renameModel(c, id, next));
+    if (next !== id) void ctx.commit(k, c => renameModel(c, id, next)).then(ok => { if (ok) onRenamed(next); });
   };
   const providers: Option<string>[] = (ctx.config.providers as Json[]).map(p => ({ value: p.id as string, label: p.id as string }));
+  const name = (model.label as string) || id;
   const status = probing ? t('ui.set.models.checking') : probe ? probeMessage(probe, getLanguage()) || probe.status : t('ui.set.models.unchecked');
   return (
-    <Row k={k} title={(model.label as string) || id} desc={<><code>{model.provider as string} · {model.model as string}</code> · {status}</>}
-      below={open && (
+    <Row k={k} title={name} desc={<><code>{model.provider as string} · {model.model as string}</code> · {status}</>}
+      below={(open || removing) && (
+        <>
+        {removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => removeModel(c, id)); }} onKeep={() => setRemoving(false)} />}
+        {open && (
         <div className="ui-set__detail">
           <Row k={`${k}:label`} title={t('ui.set.model.label')}><CommitField value={(model.label as string | undefined) ?? ''} label={t('ui.set.model.label')} onCommit={v => edit({ label: v || undefined })} /></Row>
           <Row k={`${k}:id`} title={t('ui.set.model.id')}><CommitField value={id} label={t('ui.set.model.id')} mono onCommit={rename} /></Row>
@@ -260,13 +269,12 @@ function ModelRow({ model, open, onToggle, probing }: { model: Json; open: boole
             <NumberField k={`${k}:tools`} value={model.maxTools as number | undefined} optional min={0} max={128} label={t('ui.set.model.maxTools')} onCommit={v => edit({ maxTools: v })} />
           </Row>
           <Row k={`${k}:vision`} title={t('ui.set.model.vision')}><Switch checked={Boolean(model.vision)} label={t('ui.set.model.vision')} disabled={busy} onChange={vision => edit({ vision })} /></Row>
-          <Row k={`${k}:remove`} title={t('ui.set.model.remove')}
-            below={removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => removeModel(c, id)); }} onKeep={() => setRemoving(false)} />}>
-            {!removing && <Button small variant="ghost" disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.model.remove')}</Button>}
-          </Row>
         </div>
+        )}
+        </>
       )}>
       {reach && <Pill tone={REACH[reach].tone}>{t(REACH[reach].key)}</Pill>}
+      {!removing && <Button small variant="ghost" aria-label={t('ui.set.list.remove', name)} disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.model.removeShort')}</Button>}
       <Button small variant="ghost" aria-expanded={open} onClick={onToggle}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>
     </Row>
   );
@@ -327,17 +335,19 @@ export function ModelsPanel() {
     try { await api.probe(); await ctx.reload(); } catch (error) { ctx.fail('models:check', errorText(error, t('ui.set.models.checkFailed'))); } finally { setProbing(false); }
   };
   const modelOptions: Option<string>[] = models.map(m => ({ value: m.id as string, label: (m.label as string) || (m.id as string) }));
+  const backups = judgeBackups(ctx.config);
+  const modelName = (id: string): string => modelOptions.find(o => o.value === id)?.label ?? id;
   return (
     <>
       <Group title={t('ui.set.models.providers')}>
-        {providers.map(p => <ProviderRow key={p.id as string} provider={p} open={open === `p:${p.id}`} onToggle={() => toggle(`p:${p.id}`)} />)}
+        {providers.map(p => <ProviderRow key={p.id as string} provider={p} open={open === `p:${p.id}`} onToggle={() => toggle(`p:${p.id}`)} onRenamed={next => setOpen(now => openAfterRename(now, `p:${p.id}`, `p:${next}`))} />)}
         <Row k="provider:add" title={t('ui.set.provider.add')} desc={t('ui.set.provider.addDesc')} below={adding === 'provider' && <AddProvider onDone={() => setAdding(null)} />}>
           {adding !== 'provider' && <Button small onClick={() => setAdding('provider')}>{t('ui.set.provider.addShort')}</Button>}
         </Row>
       </Group>
       <Group title={t('ui.set.models.models')}>
         {models.length === 0 && <p className="bt-meta">{t('ui.set.models.none')}</p>}
-        {models.map(m => <ModelRow key={m.id as string} model={m} probing={probing} open={open === `m:${m.id}`} onToggle={() => toggle(`m:${m.id}`)} />)}
+        {models.map(m => <ModelRow key={m.id as string} model={m} probing={probing} open={open === `m:${m.id}`} onToggle={() => toggle(`m:${m.id}`)} onRenamed={next => setOpen(now => openAfterRename(now, `m:${m.id}`, `m:${next}`))} />)}
         <Row k="model:add" title={t('ui.set.model.add')} desc={t('ui.set.model.addDesc')} below={adding === 'model' && <AddModel onDone={id => { setAdding(null); if (id) setOpen(`m:${id}`); }} />}>
           {adding !== 'model' && <Button small disabled={providers.length === 0} onClick={() => setAdding('model')}>{t('ui.set.model.addShort')}</Button>}
         </Row>
@@ -349,7 +359,8 @@ export function ModelsPanel() {
         <Row k="roles:conversation" title={t('ui.set.models.conversation')} desc={t('ui.set.models.conversationDesc')}>
           <Select value={roles.conversation} options={modelOptions} label={t('ui.set.models.conversation')} placeholder={t('ui.set.models.auto')} onChange={id => void ctx.commit('roles:conversation', c => setConversation(c, id))} />
         </Row>
-        <Row k="roles:judge" title={t('ui.set.models.judge')} desc={t('ui.set.models.judgeDesc')}>
+        <Row k="roles:judge" title={t('ui.set.models.judge')} desc={t('ui.set.models.judgeDesc')}
+          below={backups.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', backups.map(modelName).join(', '))}</span>}>
           <Select value={roles.judge} options={[{ value: '', label: t('ui.set.models.judgeSame') }, ...modelOptions]} label={t('ui.set.models.judge')} onChange={id => void ctx.commit('roles:judge', c => setJudge(c, id))} />
         </Row>
         <Row k="roles:fallback" title={t('ui.set.models.fallback')} desc={t('ui.set.models.fallbackDesc')}

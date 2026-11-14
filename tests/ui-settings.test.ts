@@ -4,9 +4,9 @@ import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
+import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planKeyFor, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
 import { CATEGORIES, FILE_ONLY, LATER_HIDDEN, matchCategories, placeOf } from '../web/src/ui/settings/rows.ts';
-import { keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
+import { judgeBackups, keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
 
 // 新しい画面の Settings（steps/p1-ui.md「Settings」と PR 1-5b）の、画面を持たない決まり。
 
@@ -164,6 +164,28 @@ test('ui/settings commit: 鍵をこの PC の外へ送るときだけ確かめ�
   assert.equal(planKey(undefined, null).kind, 'none');
 });
 
+test('ui/settings commit: 鍵を送る確かめは、送る直前に読み直した設定の送り先で数える（画面が持っている古い送り先では数えない）', () => {
+  const latest = { providers: [
+    { id: 'local', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1' },
+    { id: 'home', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1' },
+  ] };
+  const moved = planKeyFor(latest, 'local', null);
+  assert.equal(moved.kind, 'confirm', '画面では 127.0.0.1 に見えていても、今の設定が外なら確かめる');
+  if (moved.kind === 'confirm') {
+    assert.deepEqual(moved.items, [{ kind: 'provider-key-send', id: 'local', url: 'https://api.example.com/v1' }]);
+    assert.equal(planKeyFor(latest, 'local', moved.key).kind, 'send');
+    const again = { providers: [{ id: 'local', kind: 'openai_compatible', baseUrl: 'https://other.example.net/v1' }] };
+    assert.equal(planKeyFor(again, 'local', moved.key).kind, 'confirm', '確かめのあいだに送り先がまた変わったら、もう一度確かめる');
+  }
+  assert.equal(planKeyFor(latest, 'home', null).kind, 'send');
+  assert.equal(planKeyFor(latest, 'gone', null).kind, 'none', '消えた提供元には送らない');
+  assert.equal(planKeyFor({}, 'local', null).kind, 'none');
+
+  const screen = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
+  assert.ok(screen.includes('planKeyFor((await api.settings()).config, id, confirmed)'));
+  assert.ok(!screen.includes('planKey(provider'));
+});
+
 const probe = (status: string) => ({ modelId: 'm', status, server: '', required: 0, message: '', checkedAt: 1 });
 const model = (id: string, provider: string, status: string | null): ModelView =>
   ({ id, label: id, provider, model: id, minContext: 1, maxOutputTokens: 1, inChat: true, probe: status ? probe(status) : null });
@@ -191,6 +213,16 @@ test('ui/settings view: 役割（会話・予備・裏）は routing の並び�
   assert.deepEqual(setConversation(config, 'c').routing.chat, ['c', 'a', 'b']);
   assert.deepEqual(setFallback(config, ['c']).routing.chat, ['a', 'c']);
   assert.deepEqual(rolesOf({ routing: { chat: [], background: [] } }), { conversation: null, judge: '', fallback: [], background: [] });
+});
+
+test('ui/settings view: 設定ファイルで routing.judge に 2 つ以上書いてあるとき、先頭のあとの判定役も画面に出す（backlog 522）', () => {
+  assert.deepEqual(judgeBackups({ routing: { chat: ['a'], background: [], judge: ['b', 'c', 'd'] } }), ['c', 'd']);
+  assert.deepEqual(judgeBackups({ routing: { chat: ['a'], background: [], judge: ['b'] } }), []);
+  assert.deepEqual(judgeBackups({ routing: { chat: ['a'], background: [] } }), []);
+  assert.deepEqual(judgeBackups({}), []);
+  assert.equal(en['ui.set.models.judgeBackups']('Local, Cloud'), 'Then, in this order (set in the config file): Local, Cloud');
+  const page = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
+  assert.ok(page.includes(`below={backups.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', backups.map(modelName).join(', '))}</span>}`), 'Judge の行の下に出す');
 });
 
 test('ui/settings view: 判定役は routing.judge の先頭。既定（空）は「会話と同じ」で、選び直すと先頭だけが替わり、ファイルで書いた続きの順は残り（前の先頭は残さない）、「会話と同じ」に戻すと項目ごと消える', () => {

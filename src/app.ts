@@ -210,7 +210,7 @@ export class App {
     this.questions = new QuestionStore(this.db, { now, onChange: change => this.bus.publish({ type: 'question.changed', ...change }) });
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
-    this.notifications = new Notifications(this.db, now, this.log);
+    this.notifications = new Notifications(this.db, now, this.log, () => this.registry.secrets());
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
     this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'));

@@ -14,7 +14,7 @@ type T = ReturnType<typeof useT>;
 
 const failText = (error: unknown, t: T): string | undefined => (error instanceof ApiError ? error.message : undefined);
 
-export function Archived({ revision, projects }: { revision: number; projects: readonly Project[] }) {
+export function Archived({ revision, projects, projectsLoaded }: { revision: number; projects: readonly Project[]; projectsLoaded: boolean }) {
   const t = useT();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Conversation[] | null>(null);
@@ -49,7 +49,7 @@ export function Archived({ revision, projects }: { revision: number; projects: r
   const reload = () => setTick(n => n + 1);
   const title = (c: Conversation): string => c.title || t('ui.session.untitled');
   const productText = (c: Conversation): string | null => {
-    const line = productLine(c.project_id, projects, shelved);
+    const line = productLine(c.project_id, projects, shelved, projectsLoaded);
     if (!line) return null;
     return line.archived ? (line.name ? t('ui.pf.archived', line.name) : t('ui.pf.someArchived')) : line.name;
   };
@@ -60,7 +60,7 @@ export function Archived({ revision, projects }: { revision: number; projects: r
       await api.unarchiveConversation(c.id);
       setItems(current => current?.filter(x => x.id !== c.id) ?? current);
       const known = needsShelved(c.project_id, projects, shelved) ? await api.projects(true).then(r => r.projects, () => []) : shelved;
-      const line = productLine(c.project_id, projects, known);
+      const line = productLine(c.project_id, projects, known, projectsLoaded);
       toast({
         icon: 'undo', title: t('ui.archived.toast.restored'), body: line?.archived ? t('ui.pf.restoredUnder', line.name ?? t('ui.pf.someArchived')) : title(c),
         action: { label: t('ui.toast.undo'), run: () => { void api.archiveConversation(c.id).then(reload).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: failText(error, t) })); } },
