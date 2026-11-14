@@ -199,6 +199,7 @@ export interface SkillSummary { name: string; description: string; uses: number;
 export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null; status: string; created_at: number;
   current: { description: string; body: string } | null;
+  from_title?: string | null;
 }
 export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
 export interface CuriosityItem {

@@ -70,6 +70,11 @@ export function planKey(provider: Record<string, any> | undefined, confirmedKey:
   return { kind: 'send' };
 }
 
+export function planKeyFor(latest: Config, id: string, confirmedKey: string | null): ReturnType<typeof planKey> {
+  const providers = Array.isArray(latest.providers) ? latest.providers as Array<Record<string, any>> : [];
+  return planKey(providers.find(p => p.id === id), confirmedKey);
+}
+
 export function mergeRawConfig(loaded: Config, edited: Config, latest: Config): { config: Config; conflicts: string[] } {
   const merged = applyEdits(latest, diffConfig(loaded, edited));
   const conflicts = merged.conflicts.map(c => c.path);

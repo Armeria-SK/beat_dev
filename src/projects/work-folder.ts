@@ -10,6 +10,7 @@ const WINDOWS = process.platform === 'win32';
 const DRIVE_ABSOLUTE = /^[A-Za-z]:[\\/]/u;
 export const FOLDER_LIST_LIMIT = 500;
 export const MAX_LINK_HOPS = 40;
+const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 
 export type FolderReason = Extract<ProjectMessageKey, `folder_${string}` | 'root_in_use'>;
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
@@ -47,7 +48,7 @@ export const rootKeyOf = (real: string): string => (WINDOWS ? real.toLowerCase()
 
 export function folderTextProblem(input: string): FolderReason | undefined {
   if (isRemotePath(input)) return 'folder_remote';
-  if (windowsHazard(input)) return 'folder_hazard';
+  if (windowsHazard(input) || LINE_BREAKING.test(input)) return 'folder_hazard';
   if (!isAbsolute(input) || input.split(/[\\/]/u).some(part => part === '.' || part === '..')) return 'folder_not_absolute';
   return undefined;
 }
@@ -120,7 +121,7 @@ export function checkWorkFolder(input: string, ctx: WorkFolderContext): WorkFold
   let real: string;
   try { real = fs.realpath(walked.path); } catch { return refuse('folder_unreadable'); }
   if (isRemotePath(real)) return refuse('folder_remote');
-  if (windowsHazard(real)) return refuse('folder_hazard');
+  if (windowsHazard(real) || LINE_BREAKING.test(real)) return refuse('folder_hazard');
   const realOf = (path: string): string => { try { return fs.realpath(path); } catch { return resolve(path); } };
   const zone = (paths: ReadonlyArray<string | undefined>): string[] => paths.filter((p): p is string => Boolean(p && isAbsolute(p))).map(realOf);
 

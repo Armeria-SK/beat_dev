@@ -254,6 +254,23 @@ test('ui/composer-state: 書きかけの文は会話ごとに覚える（別の�
   assert.equal(drafts.get('a'), '', '送ったら（空にしたら）残らない');
 });
 
+test('ui/composer-state: 添付も会話ごとに覚える（別の会話へ移っても残る）。消した会話の書きかけは文も添付も忘れる', () => {
+  const drafts = createDrafts();
+  const file = (id: string) => ({ id, name: `${id}.txt`, mime: 'text/plain', kind: 'text' as const, size: 1, chars: 1, pages: null });
+  assert.deepEqual(drafts.files('a'), []);
+  drafts.setFiles('a', [file('u1'), file('u2')]);
+  drafts.set('a', 'see attached');
+  assert.deepEqual(drafts.files('a').map(f => f.id), ['u1', 'u2'], '移って戻っても添付が残る');
+  assert.deepEqual(drafts.files('b'), [], 'ほかの会話には出ない');
+  drafts.setFiles('b', [file('u3')]);
+  drafts.forget('a');
+  assert.equal(drafts.get('a'), '');
+  assert.deepEqual(drafts.files('a'), [], '消した会話の書きかけは残さない');
+  assert.deepEqual(drafts.files('b').map(f => f.id), ['u3']);
+  drafts.setFiles('b', []);
+  assert.deepEqual(drafts.files('b'), [], '送ったら（空にしたら）残らない');
+});
+
 test('ui/composer-state: 知っているコマンド名とちょうど同じ文は、今は出していないコマンドでも発言として送らない', () => {
   assert.equal(bareCommand('/archive')?.name, 'archive');
   assert.equal(bareCommand('  /Stop ')?.name, 'stop');

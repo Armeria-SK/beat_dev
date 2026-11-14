@@ -21,7 +21,7 @@ import type { PlanStore } from '../projects/plan.ts';
 import { meshIndexLimit, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
 import { newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
-import { runProject } from '../projects/run.ts';
+import { rootsLister, runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import { stricterMode } from '../shared/permission-mode.ts';
@@ -481,9 +481,8 @@ export class ChatEngine {
     const control = { value: { outcome: 'none' } as TaskControl };
     const language = languageOf(this.#d.config());
     const sources = [
-      ...(this.#d.runs.anyTaintedTask(conversationId) ? [engineText(language, 'taint.carried')] : []),
+      ...(this.#d.runs.anyTaintedTask(conversationId) || this.#d.tasks?.textTainted(task.id) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
-      ...(this.#d.tasks?.textTainted(task.id) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#noteSinceReply(conversationId) ? [pendingText(language, 'taint_note')] : []),
     ];
     if (sources.length) this.#initialTaint.set(runId, sources);
@@ -709,7 +708,8 @@ export class ChatEngine {
     const project = kind === 'review' ? undefined : resolved;
     if (project) d.mesh?.persist(project.id);
     if (project && !project.root && !agent) d.log?.(`[WARN] The folder of product ${project.id} could not be confirmed, so run ${runId} does not get it as a writable folder`);
-    const allRoots = [...(d.projects?.list() ?? []), ...(d.projects?.list({ archived: true }) ?? [])].map(p => p.root);
+    const allRoots = rootsLister(d.projects);
+    allRoots();
     const productRoots = agent || kind === 'review' ? [] : allRoots;
     const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
     const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
@@ -805,7 +805,7 @@ export class ChatEngine {
         ctx.contextAvailable = budget.available;
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
         const outcome = await runToolCall(toolCall, ctx, {
-          registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: () => allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
+          registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
           permissionMode: () => this.#modeOf(conversationId),
           autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal, judgeCall),
           lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
@@ -1260,10 +1260,12 @@ export class ChatEngine {
   #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void) {
     const d = this.#d;
     const product = d.conversations.projectOf(conversationId) !== null;
+    const root = project?.root;
+    const rootKey = root ? d.projects?.get(project.id)?.root_key : undefined;
     return buildSnapshot(d.paths, {
       ...(d.botMemory && d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
-      ...(product ? { persona: false, instructions: project?.root && instructionsSection(readInstructions(project.root, instructionsBudget(this.#smallestAvailable()), log)) } : {}),
+      ...(product ? { persona: false, instructions: root && rootKey ? instructionsSection(readInstructions(root, instructionsBudget(this.#smallestAvailable()), log, rootKey)) : undefined } : {}),
     }, language);
   }
 

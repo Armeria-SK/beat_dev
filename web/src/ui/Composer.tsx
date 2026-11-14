@@ -71,7 +71,12 @@ export function Composer(props: ComposerProps) {
   const t = useT();
   const [text, setText] = useState(() => composerDrafts.get(props.draftKey));
   const write = (value: string) => { composerDrafts.set(props.draftKey, value); setText(value); };
-  const [attached, setAttached] = useState<UploadView[]>([]);
+  const [attached, showAttached] = useState<UploadView[]>(() => composerDrafts.files(props.draftKey));
+  const setAttached = (next: (list: UploadView[]) => UploadView[]) => {
+    const files = next(composerDrafts.files(props.draftKey));
+    composerDrafts.setFiles(props.draftKey, files);
+    showAttached(files);
+  };
   const [uploading, setUploading] = useState(false);
   const [pop, setPop] = useState<Pop>(null);
   const [slashForced, setSlashForced] = useState(false);
@@ -146,7 +151,7 @@ export function Composer(props: ComposerProps) {
     }
     submitting.current = true;
     try {
-      if (await props.onSubmit(kind, text.trim(), attached)) { write(''); setAttached([]); }
+      if (await props.onSubmit(kind, text.trim(), attached)) { write(''); setAttached(() => []); }
     } finally { submitting.current = false; }
     input.current?.focus();
   };

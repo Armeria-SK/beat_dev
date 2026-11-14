@@ -81,3 +81,21 @@ export const opensOnLoad = (done: boolean, putOff: boolean): boolean => !done &&
 export const setupPending = (done: boolean | null, open: boolean): boolean => done === false && !open;
 
 export const ONBOARD_DONE_HASH = routeHash({ view: 'newProduct' });
+
+export const SETUP_RETRY_MS = [2_000, 5_000, 15_000, 60_000] as const;
+
+export function setupLoads<S>(
+  fetchState: () => Promise<S>, apply: (state: S) => void, failed: () => void,
+  later: (run: () => void, ms: number) => unknown = setTimeout, retryMs: readonly number[] = SETUP_RETRY_MS,
+): { load: () => Promise<void>; stop: () => void } {
+  let failures = 0;
+  let stopped = false;
+  const load = (): Promise<void> => fetchState().then(state => { if (!stopped) apply(state); }, () => {
+    if (stopped) return;
+    if (failures === 0) failed();
+    const wait = retryMs[Math.min(failures, retryMs.length - 1)]!;
+    failures += 1;
+    later(() => { if (!stopped) void load(); }, wait);
+  });
+  return { load, stop: () => { stopped = true; } };
+}

@@ -154,6 +154,23 @@ test('2-3 指示ファイル: ハードリンクの AGENTS.md は読まない', 
   assert.equal(readInstructions(root, 2000), undefined);
 });
 
+test('2-3 指示ファイル: 中身がほかのファイルの名前 1 つだけ（リンクがふつうのファイルとして取り出されたもの）なら、指示にしない', t => {
+  const root = join(tempDir(t), 'root');
+  mkdirSync(root);
+  writeFileSync(join(root, 'CLAUDE.md'), 'claude rules');
+  for (const stub of ['CLAUDE.md', 'CLAUDE.md\n', './CLAUDE.md', '../shared/AGENTS.md', 'docs/rules.MD\r\n']) {
+    writeFileSync(join(root, 'AGENTS.md'), stub);
+    const lines: string[] = [];
+    assert.equal(readInstructions(root, 2000, line => lines.push(line)), undefined, JSON.stringify(stub));
+    assert.equal(lines.length, 1, JSON.stringify(stub));
+    assert.match(lines[0]!, /^\[INFO\] Did not read AGENTS\.md/u);
+  }
+  for (const text of ['See CLAUDE.md', 'CLAUDE.md\nand more', 'Run npm test before a commit', 'notes.txt']) {
+    writeFileSync(join(root, 'AGENTS.md'), text);
+    assert.equal(readInstructions(root, 2000)?.text, text, text);
+  }
+});
+
 test('2-3 指示ファイル: 調べるところで失敗しても投げず、指示なしで始め、[WARN] を 1 行残す。切ったときは [INFO] を 1 行', t => {
   const base = tempDir(t);
   const lines: string[] = [];
@@ -236,6 +253,62 @@ test('2-3 製品のフォルダがジャンクションにすり替わってい�
   const frozen = frozenOf(s.app, 'p1');
   for (const absent of ['SWAPPED-RULES', 'REAL-RULES', 'Product instructions', 'SOUL-MARKER', 'USER-MARKER']) assert.ok(!frozen.includes(absent), absent);
   assert.ok(!s.adapter().calls[0]!.system.dynamic.includes('relative paths start here'));
+});
+
+test('2-3 製品のフォルダの名前に行の区切りが入っていたら（前に登録された行）、毎回の 1 行にフォルダを入れず、指示ファイルも読まない', async t => {
+  const s = await setup(t);
+  const odd = `${s.root}-a\u{2028}b`;
+  mkdirSync(odd);
+  writeFileSync(join(odd, 'AGENTS.md'), 'ODD-RULES');
+  const real = realpathSync.native(odd);
+  const project = s.app.projects.create({ name: 'Odd', root: real, rootKey: rootKeyOf(real), checkCommand: null });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send('p1', 'hello', project.id);
+  const call = s.adapter().calls[0]!;
+  assert.ok(!call.system.dynamic.includes('relative paths start here'), call.system.dynamic);
+  assert.ok(!call.system.dynamic.includes('\u{2028}'));
+  assert.ok(!frozenOf(s.app, 'p1').includes('ODD-RULES'));
+});
+
+test('2-3 指示ファイル: 読んだあとにフォルダの実体が登録のものと違えば、読んだ中身を使わない', t => {
+  const base = realpathSync.native(tempDir(t));
+  const root = join(base, 'root');
+  mkdirSync(root);
+  writeFileSync(join(root, 'AGENTS.md'), 'RULES');
+  assert.equal(readInstructions(root, 2000, () => undefined, rootKeyOf(root))?.text, 'RULES');
+  const lines: string[] = [];
+  assert.equal(readInstructions(root, 2000, line => lines.push(line), rootKeyOf(join(base, 'other'))), undefined);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /^.WARN. /u);
+  const other = join(base, 'other');
+  mkdirSync(other);
+  writeFileSync(join(other, 'AGENTS.md'), 'SWAPPED');
+  renameSync(root, join(base, 'moved'));
+  symlinkSync(other, root, 'junction');
+  assert.equal(readInstructions(root, 2000, () => undefined, rootKeyOf(root)), undefined, 'リンク越しになったフォルダ');
+});
+
+test('2-3 製品のフォルダが、実行の始めの確かめと指示ファイルを読むあいだにすり替わったら、すり替わった先の指示ファイルを使わない', async t => {
+  const s = await setup(t);
+  writeFileSync(join(s.root, 'AGENTS.md'), 'REAL-RULES');
+  const other = `${s.root}-other`;
+  mkdirSync(other);
+  writeFileSync(join(other, 'AGENTS.md'), 'SWAPPED-RULES');
+  const skills = s.app.skills;
+  const index = skills.index.bind(skills);
+  let swapped = 0;
+  skills.index = ((...args: Parameters<typeof index>) => {
+    if (swapped++ === 0) {
+      renameSync(s.root, `${s.root}-moved`);
+      symlinkSync(other, s.root, 'junction');
+    }
+    return index(...args);
+  }) as typeof skills.index;
+  s.adapter().scripts.push(reply('ok'));
+  await s.send('p1', 'hello', s.project.id);
+  assert.ok(swapped > 0);
+  const frozen = frozenOf(s.app, 'p1');
+  for (const absent of ['SWAPPED-RULES', 'REAL-RULES', 'Product instructions']) assert.ok(!frozen.includes(absent), absent);
 });
 
 test('2-3 使用量の見積もり: まだ固定していない製品の会話は、製品の指示ファイルと製品の 1 行を入れた量で数える', async t => {

@@ -349,3 +349,27 @@ test('リンクをたどる歩き方: この PC の中を指すリンクは 1 �
   const within = linkFs(Object.fromEntries(Array.from({ length: MAX_LINK_HOPS }, (_, i) => [`C:/w/l${i}`, `C:/w/l${i + 1}`])));
   assert.equal(checkWorkFolder(w('C:/w/l0'), f.ctx({ fs: within.fs })).ok, true, '上限ちょうどは通る');
 });
+
+test('checkWorkFolder: 改行・行の区切り・制御文字の入ったパスは断り、登録済みでも「無い」として扱う（向きを変える印・幅の無い文字は今までどおり通る）', t => {
+  const f = fixture(t);
+  for (const mark of ['\u{2028}', '\u{2029}', '\u{85}']) {
+    const odd = f.dir('home', 'projects', `a${mark}b`);
+    assert.equal(f.reason(odd), 'folder_hazard', JSON.stringify(odd));
+    assert.equal(folderGone(odd, rootKeyOf(odd)), true, JSON.stringify(odd));
+    assert.deepEqual(listFolders(odd, f.ctx()), { reason: 'folder_hazard' });
+    assert.equal(f.reason(f.dir('home', 'projects', `a${mark}b`, 'inner')), 'folder_hazard', '途中の階にあっても断る');
+  }
+  assert.equal(f.reason(join(f.home, 'projects', 'a\nb')), 'folder_hazard');
+  assert.equal(f.reason(join(f.home, 'projects', 'a\tb')), 'folder_hazard');
+  const plain = f.dir('home', 'projects', 'plain');
+  assert.equal(folderGone(plain, rootKeyOf(plain)), false);
+  const link = join(f.home, 'projects', 'link');
+  for (const mark of ['\u{202E}', '\u{200B}', '\u{FEFF}']) assert.equal(f.reason(f.dir('home', 'projects', `k${mark}k`)), 'ok');
+  const hidden = f.dir('elsewhere', 'x\u{2028}y');
+  const fake: FolderFs = {
+    lstat: path => ({ isDirectory: () => true, isSymbolicLink: () => false, ...(path === link ? {} : {}) }),
+    readlink: () => { throw new Error('not a link'); },
+    realpath: path => (path === link ? hidden : path),
+  };
+  assert.equal(f.reason(link, { fs: fake }), 'folder_hazard', '実体のパスに入っていても断る');
+});

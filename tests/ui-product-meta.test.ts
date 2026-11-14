@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Project } from '../web/src/api.ts';
-import { inFilter, needsShelved, newTaskProduct, optionLabel, productLine, productName, settleFilter, withProduct } from '../web/src/ui/product-meta.ts';
+import { followProduct, formOf, inFilter, needsShelved, newTaskProduct, optionLabel, productLine, productName, settleFilter, withProduct } from '../web/src/ui/product-meta.ts';
 import { ALL_PRODUCTS, NO_PRODUCT, filterOptions } from '../web/src/ui/products.ts';
 
 // 絞り込みと製品の名前の、画面を持たない関数（web/src/ui/product-meta.ts）。p2-product.md の 2-2c。
@@ -53,6 +53,15 @@ test('ui/product-meta: 製品の名前と、しまった製品の見分け（製
   assert.deepEqual(productLine('gone01', active, []), { name: null, archived: true }, '一覧に無い製品を、製品なしと言わない');
 });
 
+test('productLine: 動いている製品の一覧がまだ届いていないあいだは、しまった一覧に無い製品を「しまった製品」と決めない（backlog 502）', () => {
+  const shelved = [project('p2aaaa', { archived_at: 5 })];
+  assert.equal(productLine('p1aaaa', [], shelved, false), null, '動いている製品かもしれないので、札を出さない');
+  assert.deepEqual(productLine('p2aaaa', [], shelved, false), { name: 'P2AAAA', archived: true }, 'しまった一覧にあるものは決められる');
+  assert.deepEqual(productLine('p1aaaa', [], shelved, true), { name: null, archived: true }, '届いたあとは、どちらにも無ければこれまでどおり');
+  assert.deepEqual(productLine('p1aaaa', [], shelved), { name: null, archived: true }, '渡さなければ届いているとみなす');
+  assert.equal(needsShelved('p1aaaa', [], null), true);
+});
+
 test('productLine: 動いている一覧に入っていても、しまった印（archived_at）のある製品はしまった製品として出す', () => {
   const stale = [project('p1aaaa', { archived_at: 5 })];
   assert.deepEqual(productLine('p1aaaa', stale, stale), { name: 'P1AAAA', archived: true });
@@ -73,4 +82,19 @@ test('needsShelved: しまった製品の一覧を読みに行くのは、製品
   assert.equal(needsShelved('p1aaaa', active, null), false);
   assert.equal(needsShelved(null, active, null), false);
   assert.equal(needsShelved('p2aaaa', active, []), false, '届いていれば読まない');
+});
+
+test('ui/product-meta: 製品の設定の欄は、触っていなければ別の所での変更に追いつく（書きかけ扱いにしない）。触った欄はそのまま', () => {
+  const was = project('p1aaaa', { name: 'Shop', check_command: 'npm test' });
+  const renamed = project('p1aaaa', { name: 'Shop v2', check_command: 'npm run check' });
+  assert.deepEqual(followProduct(formOf(was), was, renamed), formOf(renamed), '触っていない欄は新しい値になる（Save で相手の変更を戻さない）');
+
+  const typing = { ...formOf(was), name: 'My shop' };
+  const kept = followProduct(typing, was, renamed);
+  assert.equal(kept.name, 'My shop', '書きかけの名前は消さない');
+  assert.equal(kept.check, 'npm run check', '触っていない確かめのコマンドは追いつく');
+
+  const pinned = project('p1aaaa', { name: 'Shop', check_command: 'npm test', doc_language: 'ja', doc_language_pinned: true });
+  assert.deepEqual(followProduct(formOf(was), was, pinned).lang, { pick: 'ja', other: '' });
+  assert.deepEqual(followProduct({ ...formOf(was), lang: { pick: 'fr', other: '' } }, was, pinned).lang, { pick: 'fr', other: '' }, '選びかけの言語はそのまま');
 });

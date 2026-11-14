@@ -129,3 +129,23 @@ test('はじめの設定の一覧: 鍵を入れて外の送り先の一覧を取
   assert.deepEqual(listPlan(latest, { ...form, baseUrl: 'http://127.0.0.1:8000/v1' }).items, []);
   assert.deepEqual(listPlan(outside.config, form).items, [{ kind: 'provider-key-send', id: 'local', url: 'https://far.example/v1' }], '保存済みの外のプロバイダに鍵を入れるときも並べる');
 });
+
+test('はじめの設定: Anthropic を足すとき、ANTHROPIC_API_KEY や anthropic の ID をほかの提供元が使っていれば、重ならない名前にする', () => {
+  const form: ModelForm = { source: 'anthropic', model: 'claude-test', baseUrl: '', server: 'generic', contextLength: '', apiKeyEnv: '' };
+  const routing = { chat: [], background: [], retriesPerModel: 2 };
+  const borrowed = { providers: [{ id: 'proxy', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 1, timeoutMs: 600000 }], models: [], routing };
+  for (const built of [setupProviderConfig(borrowed, form).config, setupModelConfig(borrowed, form, null).config]) {
+    const made = (built.providers as Array<Record<string, unknown>>).find(p => p.kind === 'anthropic')!;
+    assert.equal(made.id, 'anthropic');
+    assert.equal(made.apiKeyEnv, 'BEAT_ANTHROPIC_API_KEY');
+  }
+  const sameId = { providers: [{ id: 'anthropic', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600000 }], models: [], routing };
+  const second = setupProviderConfig(sameId, form);
+  assert.equal(second.providerId, 'anthropic-2');
+  assert.equal((second.config.providers as Array<Record<string, unknown>>).filter(p => p.id === 'anthropic').length, 1);
+  const model = setupModelConfig(sameId, form, null);
+  assert.equal((model.config.models as Array<Record<string, unknown>>)[0]!.provider, 'anthropic-2');
+
+  const plain = setupProviderConfig({ providers: [], models: [], routing }, form);
+  assert.deepEqual(plain.config.providers, [{ id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 }]);
+});

@@ -5,8 +5,9 @@ import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
 import {
-  acceptanceRows, actionView, byteSize, decidedShown, decidedText, earlierQuery, effectFiles, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
+  acceptanceRows, actionView, byteSize, decidedMore, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingRouteReady, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
+import { EMPTY, reduce } from '../web/src/ui/live-state.ts';
 import { waitingTotal } from '../web/src/ui/products.ts';
 import { productNav } from '../web/src/ui/product-nav.ts';
 
@@ -147,6 +148,18 @@ test('ui/pending: 製品の Pending の欄を開く先は、その製品のい�
   assert.deepEqual(paneTarget('prod03', conversations), { view: 'productNew', id: 'prod03' });
 });
 
+test('ui/pending: #/pending/<製品> は、会話の一覧を読み終える（か、読めないと分かる）まで行き先を決めない（読む前に決めると新しい会話へ行ってしまう）', () => {
+  assert.equal(EMPTY.conversationsSettled, false);
+  assert.equal(pendingRouteReady(true, EMPTY.conversationsSettled), false, '会話の一覧がまだ無い');
+  const loaded = reduce(EMPTY, { type: 'conversations', conversations: [{ id: 'new', title: null, created_at: 0, last_message_at: 20, project_id: 'prod01' }] }).state;
+  assert.equal(pendingRouteReady(true, loaded.conversationsSettled), true);
+  assert.deepEqual(paneTarget('prod01', loaded.conversations), { view: 'chat', id: 'new' });
+  assert.equal(pendingRouteReady(false, loaded.conversationsSettled), false, '製品の一覧も要る');
+  const failed = reduce(EMPTY, { type: 'conversationsFailed' }).state;
+  assert.equal(pendingRouteReady(true, failed.conversationsSettled), true, '読めなかったときは待ち続けない（前と同じく新しい会話へ）');
+  assert.deepEqual(failed.conversations, []);
+});
+
 test('ui/pending: 承認して動いている行（running）は Waiting に出さず、Decided の頭に出す（サーバーは待ちの一覧に running を含める）', () => {
   const waiting = [row({ id: 9, status: 'running', decided_at: 900 }), row({ id: 8 }), row({ id: 7, status: 'running', decided_at: 800, project_id: 'prod02' })];
   const decided = [row({ id: 3, status: 'ran', decided_at: 300 })];
@@ -279,4 +292,58 @@ test('4-4 タスクごとの Pending の数: 待っている行だけを task_id
   assert.deepEqual([...counts.entries()].sort(), [['t1', 2], ['t2', 1]]);
   assert.equal(counts.has('t3'), false);
   assert.equal(taskCounts([]).size, 0);
+});
+
+test('ui/pending: Other input は、題の終わりにもう出ている path を繰り返さない。残りの入力はそのまま出し、JSON として読めないもの（伏せた入力）には手を加えない', () => {
+  const json = (value: unknown) => JSON.stringify(value, null, 2);
+  assert.equal(extraShown('Write to a file: .github/workflows/ci.yml', json({ path: '.github/workflows/ci.yml' })), null, 'path だけなら欄ごと出さない');
+  assert.equal(extraShown('Write to a file: a.md', json({ path: 'a.md', mode: 'append' })), json({ mode: 'append' }), 'path 以外は残す');
+  assert.equal(extraShown('Run a command', json({ timeoutSec: 120 })), json({ timeoutSec: 120 }));
+  assert.equal(extraShown('Write to a file: a.md', json({ path: 'b.md' })), json({ path: 'b.md' }), '題に出ていない path は消さない');
+  assert.equal(extraShown('Write to a file: xa.md', json({ path: 'a.md' })), json({ path: 'a.md' }), '題の終わりの語とちょうど同じときだけ');
+  assert.equal(extraShown(null, json({ path: 'a.md' })), json({ path: 'a.md' }), '題が無ければ消さない');
+  assert.equal(extraShown('Write to a file: a.md', json({ path: '' })), json({ path: '' }));
+  assert.equal(extraShown('Write to a file: a.md', json({ target: 'a.md' })), json({ target: 'a.md' }), 'path の鍵だけ');
+  const masked = ['{', '  "path": "a.md",', '  "token": [REDACTED]', '}'].join(String.fromCharCode(10));
+  assert.equal(extraShown('Write to a file: a.md', masked), masked);
+  assert.equal(extraShown('Write to a file: a.md', '["a.md"]'), '["a.md"]');
+  assert.equal(extraShown('Write to a file: a.md', null), null);
+});
+
+test('ui/pending: 行の Approve / Reject は見出しの横（1 段目）、中身（コマンド・書く中身・理由・パス・出どころ）は下の段で欄の幅いっぱい（持ち主 2026-11-14。PendingPane と pending.css の配線）', () => {
+  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../web/src/ui/styles/pending.css', import.meta.url), 'utf8');
+  const item = pane.slice(pane.indexOf('function PendingItem('), pane.indexOf('function AcceptanceItem('));
+  const at = (text: string) => { const i = item.indexOf(text); assert.ok(i >= 0, `${text} が PendingItem にある`); return i; };
+  assert.ok(at('className="bt-pending__what"') < at('className="bt-pending__actions"'), 'ボタンは見出しのすぐあと');
+  assert.ok(at('className="bt-pending__actions"') < at('className="ui-pending__detail"'), '中身はボタンのあとの段');
+  const detail = item.slice(at('className="ui-pending__detail"'));
+  for (const part of ['ui-pending__code', '<ActionBody', 'ui-pending__why', 'bt-pending__from']) assert.ok(detail.includes(part), `${part} は下の段の中`);
+  assert.ok(!item.slice(at('className="bt-pending__what"'), at('className="bt-pending__actions"')).includes('view.inline'), 'コマンドは見出しの行に入れない');
+  assert.match(css, /\.ui-pending__detail \{[^}]*grid-column: 1 \/ -1;/u, '下の段は列を全部使う');
+  assert.match(css, /\.ui-pending__reject \{[^}]*grid-column: 1 \/ -1;/u, 'Reject の理由の欄も幅いっぱい');
+  assert.ok(pane.includes('extraShown(row.title, view.extra)'), 'Other input は extraShown を通す');
+});
+
+test('ui/pending: Decided の行を開くと、却下の理由の全文と、実行の出力の頭が出る。出すものが無い行は開けない（backlog 489）', () => {
+  const nl = String.fromCharCode(10);
+  const out = ['line 1', 'not allowed now', ''].join(nl);
+  assert.deepEqual(decidedMore(row({ status: 'ran', exit_code: 0, output_preview: out })), { reason: null, output: ['line 1', 'not allowed now'].join(nl) });
+  assert.deepEqual(decidedMore(row({ status: 'failed', output_preview: out })), { reason: null, output: ['line 1', 'not allowed now'].join(nl) });
+  assert.equal(decidedMore(row({ status: 'failed', output_preview: 'not allowed now' })), null, '1 行だけの失敗は、行の文にもう出ている');
+  assert.deepEqual(decidedMore(row({ status: 'ran', output_preview: 'ok' })), { reason: null, output: 'ok' }, '実行した行の文には出力が無いので、1 行でも出す');
+  assert.deepEqual(decidedMore(row({ status: 'rejected', reject_reason: '  wrong host  ' })), { reason: 'wrong host', output: null });
+  assert.equal(decidedMore(row({ status: 'rejected', reject_reason: null })), null);
+  assert.equal(decidedMore(row({ status: 'ran', exit_code: 0, output_preview: null })), null);
+  assert.equal(decidedMore(row({ status: 'ran', output_preview: nl })), null);
+  assert.equal(decidedMore(row({ status: 'stale', output_preview: null })), null);
+  assert.equal(decidedMore(row({ status: 'running', output_preview: 'x' })), null, '動いている最中は出さない');
+  assert.equal(decidedMore(row({ status: 'waiting', output_preview: 'x' })), null);
+  assert.equal(en['ui.pending.more'], 'Details');
+  assert.equal(en['ui.pending.output'], 'Output');
+  assert.equal(en['ui.pending.reasonGiven'], 'Reason');
+  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
+  assert.ok(pane.includes('const more = decidedMore(row);'), 'Decided の行は decidedMore から開く中身を組む');
+  assert.ok(pane.includes(`<summary className="bt-meta">{t('ui.pending.more')}</summary>`), 'details で開く');
+  assert.ok(pane.includes('<pre className="ui-pending__body"><code>{more.output}</code></pre>'), '出力は Waiting の中身と同じ枠');
 });
