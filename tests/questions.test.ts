@@ -219,6 +219,105 @@ test('答え: 持ち主が書いた文は owner_request に入る。外を読ん
   const writtenFix = s.app.tasks.get(written.body.fixTaskId)!;
   assert.deepEqual(JSON.parse(writtenFix.owner_request!), { title: 'Use DD.MM', body: '', doneCriteria: null });
   assert.equal(s.app.tasks.judgeRequest(writtenFix.id), 'Use DD.MM');
+  assert.equal(s.app.tasks.textTainted(pickedFix.id), true);
+  assert.equal(s.app.tasks.textTainted(writtenFix.id), true, '題と本文に外を読んだ実行の質問の文が入るので、持ち主が書いた答えでも直しのタスクは外の印を持つ');
+  s.app.tasks.finish(task.id, 'done', null, 'beat');
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'a', notify: false }), toolCall('task_complete', { summary: 'b', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(pickedFix.id)!.status, 'done');
+  assert.equal(s.app.tasks.get(writtenFix.id)!.status, 'done');
+  const runs = s.app.db.prepare("SELECT tainted FROM engine_runs WHERE kind = 'task'").all() as Array<{ tainted: number }>;
+  assert.deepEqual(runs.map(r => r.tainted), [1, 1], '直しのタスクの実行は、外を読んだ実行として始まる');
+});
+
+test('question_add: 外を読んだことのある会話・外の文が入ったタスクの質問も tainted になる', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user' });
+  await questionAdd.execute({ ...ask, question: 'clean' } as never, ctxFor(s, task.id));
+  await questionAdd.execute({ ...ask, question: 'conversation' } as never, { ...ctxFor(s, task.id), conversationTainted: () => true });
+  s.app.tasks.markUntrusted(task.id, 'test', 'read outside');
+  await questionAdd.execute({ ...ask, question: 'task text' } as never, ctxFor(s, task.id));
+  const rows = s.app.db.prepare('SELECT question, tainted FROM questions ORDER BY id').all() as Array<{ question: string; tainted: number }>;
+  assert.deepEqual(rows.map(r => [r.question, r.tainted]), [['clean', 0], ['conversation', 1], ['task text', 1]]);
+});
+
+test('鍵を幅の無い文字で割っても、外してから伏せるので残らない', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user' });
+  const key = `sk-ant-api03-${'b'.repeat(45)}​${'b'.repeat(45)}`;
+  await questionAdd.execute({ ...ask, question: `Key ${key}` } as never, ctxFor(s, task.id));
+  const [row] = s.app.questions.list({ status: 'open' });
+  assert.ok(!row!.question.includes('b'.repeat(45)) && row!.question.includes('[REDACTED]'), row!.question);
+});
+
+test('blocking: 別の質問を待っているタスクは、古い質問の答えでは戻らない（答えは経過に残る）。待っている質問の答えで戻る', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user' });
+  const q1 = s.app.questions.add({ taskId: task.id, question: 'First?', options: ['a', 'b'], blocking: true });
+  const q2 = s.app.questions.add({ taskId: task.id, question: 'Second?', options: ['c', 'd'], blocking: true });
+  s.app.tasks.setWaiting(task.id, 'question', 'Second?');
+  const stale = await s.http(`/api/questions/${q1.id}/answer`, { choice: 0 });
+  assert.equal(stale.status, 200);
+  assert.equal(stale.body.resumedTaskId, null);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'waiting', '待っているのは Second? なので戻さない');
+  assert.ok(s.app.tasks.events(task.id).some(e => e.kind === 'answer' && /First\?/u.test(e.content ?? '')), '古い質問の答えも経過に残る');
+  const fresh = await s.http(`/api/questions/${q2.id}/answer`, { choice: 1 });
+  assert.equal(fresh.body.resumedTaskId, task.id);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
+  assert.ok(s.app.tasks.events(task.id).some(e => e.kind === 'answer' && /Second\?[\s\S]*d/u.test(e.content ?? '')));
+});
+
+test('blocking: 実行中のタスクの質問は 409 で断り、Open のまま。終わったタスクの質問に違う答えなら直しのタスク。承認待ちのタスクは戻さず経過に書く', async t => {
+  const s = await setup(t);
+  const running = s.app.tasks.create({ title: 'R', origin: 'user', actor: 'user' });
+  const q = s.app.questions.add({ taskId: running.id, question: 'Now?', options: ['a', 'b'], blocking: true });
+  assert.ok(s.app.tasks.claim(running.id, 60_000, 'conv-r'));
+  const refused = await s.http(`/api/questions/${q.id}/answer`, { choice: 1 });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.code, 'question.task_running');
+  assert.equal(s.app.questions.get(q.id)!.status, 'open');
+  s.app.tasks.setWaiting(running.id, 'question', 'Now?');
+  assert.equal((await s.http(`/api/questions/${q.id}/answer`, { choice: 1 })).body.resumedTaskId, running.id);
+
+  const finished = s.app.tasks.create({ title: 'F', origin: 'user', actor: 'user' });
+  const late = s.app.questions.add({ taskId: finished.id, question: 'Late?', options: ['a', 'b'], blocking: true });
+  const keptLate = s.app.questions.add({ taskId: finished.id, question: 'Late kept?', options: ['a', 'b'], chosen: 0, blocking: true });
+  s.app.tasks.finish(finished.id, 'done', null, 'beat');
+  const fixed = await s.http(`/api/questions/${late.id}/answer`, { choice: 1 });
+  assert.equal(fixed.body.kind, 'changed');
+  assert.ok(fixed.body.fixTaskId, '止まっていたタスクがもう終わっているなら、違う答えは直しのタスクになる');
+  assert.equal(s.app.tasks.get(fixed.body.fixTaskId)!.status, 'ready');
+  assert.equal((await s.http(`/api/questions/${keptLate.id}/answer`, { choice: 0 })).body.fixTaskId, null);
+
+  const approval = s.app.tasks.create({ title: 'A', origin: 'user', actor: 'user' });
+  const qa = s.app.questions.add({ taskId: approval.id, question: 'Which?', options: ['a', 'b'], blocking: true });
+  s.app.tasks.setWaiting(approval.id, 'approval', '#3');
+  const noted = await s.http(`/api/questions/${qa.id}/answer`, { choice: 0 });
+  assert.equal(noted.body.resumedTaskId, null);
+  assert.equal(noted.body.fixTaskId, null);
+  assert.equal(s.app.tasks.get(approval.id)!.status, 'waiting');
+  assert.ok(s.app.tasks.events(approval.id).some(e => e.kind === 'answer' && /Which\?/u.test(e.content ?? '')));
+});
+
+test('答えの口: 戻したタスクの分けの印を消し、動かすタスクをワーカーに回す。2 回目の答えでは回さない', async t => {
+  const s = await setup(t);
+  const calls: string[] = [];
+  const original = s.app.worker.requestRun.bind(s.app.worker);
+  s.app.worker.requestRun = (id: string) => { calls.push(id); original(id); };
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user', runAt: s.clock.now + 3_600_000 });
+  const q = s.app.questions.add({ taskId: task.id, question: 'Go?', options: ['a', 'b'], blocking: true });
+  s.app.tasks.setWaiting(task.id, 'question', 'Go?');
+  s.app.kv.set(`task-split:${task.id}`, '1');
+  await s.http(`/api/questions/${q.id}/answer`, { choice: 0 });
+  assert.equal(s.app.kv.get(`task-split:${task.id}`), undefined);
+  assert.deepEqual(calls, [task.id]);
+  const other = s.app.questions.add({ taskId: task.id, question: 'Color?', options: ['a', 'b'], chosen: 0 });
+  const changed = await s.http(`/api/questions/${other.id}/answer`, { choice: 1 });
+  assert.deepEqual(calls, [task.id, changed.body.fixTaskId]);
+  await s.http(`/api/questions/${other.id}/answer`, { choice: 1 });
+  await s.http(`/api/questions/${q.id}/answer`, { choice: 1 });
+  assert.deepEqual(calls, [task.id, changed.body.fixTaskId], '2 回目の答えでは、ワーカーに回し直さない');
 });
 
 test('答え: 入力の形を確かめる（選択肢の外・空・両方・知らない番号）', async t => {

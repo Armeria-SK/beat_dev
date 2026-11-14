@@ -38,13 +38,15 @@ export function registerQuestionRoutes(router: Router, app: App): void {
     try {
       result = app.questions.answer(id, input);
     } catch (error) {
-      if (error instanceof QuestionError) throw domainProblem(400, 'invalid_field', error);
+      if (error instanceof QuestionError) throw error.code === 'task_running' ? domainProblem(409, 'task', error) : domainProblem(400, 'invalid_field', error);
       if (error instanceof TaskError) throw domainProblem(409, 'task', error);
       throw error;
     }
     if (!result) throw domainProblem(404, 'not_found', new QuestionError('not_found', { id }));
-    if (result.resumedTaskId) app.kv.delete(splitKey(result.resumedTaskId));
-    for (const taskId of [result.resumedTaskId, result.reopenedTaskId, result.fixTaskId]) if (taskId) app.worker.requestRun(taskId);
+    if (!result.repeated) {
+      if (result.resumedTaskId) app.kv.delete(splitKey(result.resumedTaskId));
+      for (const taskId of [result.resumedTaskId, result.reopenedTaskId, result.fixTaskId]) if (taskId) app.worker.requestRun(taskId);
+    }
     sendJson(res, 200, result);
   });
 }

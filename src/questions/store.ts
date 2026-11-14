@@ -103,6 +103,7 @@ export interface QuestionAnswered {
   fixTaskId: string | null;
   reopenedTaskId: string | null;
   resumedTaskId: string | null;
+  repeated: boolean;
   reopenedItem: string | null;
 }
 
@@ -116,7 +117,7 @@ export interface QuestionStoreOptions {
   acceptance?: AcceptanceStore | undefined;
 }
 
-export const QUESTIONS_PER_TASK = 10;
+const QUESTIONS_PER_TASK = 10;
 const TEXT_MAX = 1500;
 const OPTION_MAX = 300;
 const ANSWER_MAX = 4000;
@@ -125,6 +126,7 @@ const ANSWERED_LIMIT = 50;
 const ANSWERED_MAX = 200;
 const OPEN_MAX = 1000;
 const REOPEN_KINDS: readonly QuestionKind[] = ['stuck', 'check_failed'];
+const FINISHED: readonly string[] = ['done', 'failed', 'cancelled'];
 
 const cleanBlock = (text: string, max: number): string => plainBlock(redactSecrets(stripHidden(text)), max).trim();
 const cleanLine = (text: string, max: number): string => plainLine(redactSecrets(stripHidden(text)), max);
@@ -223,10 +225,6 @@ export class QuestionStore {
     return { open: totals.open, byProject: group('project_id'), byTask: group('task_id'), answered: totals.answered, changed: totals.changed };
   }
 
-  openFor(projectId: string): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM questions WHERE project_id = ? AND status = 'open'").get(projectId) as { n: number }).n;
-  }
-
   answer(id: number, answer: QuestionAnswer): QuestionAnswered | undefined {
     const row = this.get(id);
     if (!row) return undefined;
@@ -248,17 +246,18 @@ export class QuestionStore {
     const tasks = this.options.tasks;
     if (!tasks) throw new Error('QuestionStore needs the task store to take answers');
     const result = transaction(this.db, () => {
+      const blockedTask = row.blocking === 1 && row.task_id ? tasks.get(row.task_id) : undefined;
+      if (blockedTask?.status === 'running') throw new QuestionError('task_running', { id });
       const done = this.db.prepare("UPDATE questions SET status = 'answered', answer = ?, answer_kind = ?, answered_at = ? WHERE id = ? AND status = 'open'").run(answerText, kind, this.#now(), id);
       if (Number(done.changes) !== 1) return undefined;
       let fixTaskId: string | null = null;
       let reopenedTaskId: string | null = null;
       let resumedTaskId: string | null = null;
-      if (row.blocking === 1) {
-        const task = row.task_id ? tasks.get(row.task_id) : undefined;
-        if (task && task.status === 'waiting' && task.waiting_kind === 'question') {
-          tasks.event(task.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
-          tasks.setReady(task.id, { actor: 'user' });
-          resumedTaskId = task.id;
+      if (blockedTask && !FINISHED.includes(blockedTask.status)) {
+        tasks.event(blockedTask.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
+        if (blockedTask.status === 'waiting' && blockedTask.waiting_kind === 'question' && blockedTask.waiting_text === row.question) {
+          tasks.setReady(blockedTask.id, { actor: 'user' });
+          resumedTaskId = blockedTask.id;
         }
       } else if (kind === 'changed' && REOPEN_KINDS.includes(row.kind)) {
         if (row.task_id) {
@@ -275,14 +274,14 @@ export class QuestionStore {
     const latest = this.get(id)!;
     if (!result) return this.#answered(latest);
     this.options.onChange?.({ id, projectId: latest.project_id, status: 'answered' });
-    return { question: this.view(id)!, kind, ...result, reopenedItem: null };
+    return { question: this.view(id)!, kind, ...result, reopenedItem: null, repeated: false };
   }
 
   #answered(row: QuestionRow): QuestionAnswered {
     const reopened = REOPEN_KINDS.includes(row.kind);
     return {
       question: this.view(row.id)!, kind: row.answer_kind ?? 'kept',
-      fixTaskId: reopened ? null : row.fix_task_id, reopenedTaskId: reopened ? row.fix_task_id : null, resumedTaskId: null, reopenedItem: null,
+      fixTaskId: reopened ? null : row.fix_task_id, reopenedTaskId: reopened ? row.fix_task_id : null, resumedTaskId: null, reopenedItem: null, repeated: true,
     };
   }
 
@@ -294,7 +293,7 @@ export class QuestionStore {
     const ownerText = ownerWrote || row.tainted === 0 ? answerText : null;
     const task = tasks.create({ title, body, origin: 'user', actor: 'user', projectId: row.project_id, ownerRequest: ownerText !== null });
     if (ownerText !== null) tasks.ownerEdited(task.id, { title: ownerText, body: '' });
-    else tasks.markUntrusted(task.id, 'question', questionText(language, 'untrusted_note'));
+    if (row.tainted === 1) tasks.markUntrusted(task.id, 'question', questionText(language, 'untrusted_note'));
     return task.id;
   }
 }
