@@ -339,6 +339,12 @@
 - 入口: `scripts/judge-probe.ts`
 - 使うもの: `src/tools/auto-approve.ts`（`autoDecide` `TruncatedReply`） `src/providers/registry.ts` `src/providers/limiter.ts` `src/config/store.ts`（`parseConfig` `findModel`） `src/engine/efforts.ts` `src/shared/redaction.ts`
 
+### 地図の試し — `scripts/mesh-probe.ts`（段階 5 の 5-5b の準備）
+- 小さな偽の製品（`tests/fixtures/mesh-questions.ts`: 弁当の注文のアプリのファイル・計画・状態のメモ・地図の 9 行・用語 4 つと、場所 6・計画と状態 3・画面の部品 3 の 12 問。9 問は持ち主の言語、3 問は別の言語。2 問は、名前を変えて古くした地図の行〔`[missing]` と `[stale]`〕に当たる）を、組ごとに作業フォルダへ書き、本物の `Mesh` で地図を読み直す。組は A（mesh なし）・B（目次 + STATE）・C（B + MAP）と、それぞれ用語の表つき（`bg` `cg`）。会話を一度圧縮した要約を毎回の頼みに入れ、本物の道具（`file_list` `file_read`、B と C は `mesh_search` `mesh_read`）を `runToolCall` で動かして、問いごとの正答・作ったパス・古い行を信じたか・道具の数・入力の枠・最初の `mesh_search` で当てたかの表（Markdown）と、mesh-plan.md 第 6 節の線（効いた・害なし・害）を出す。
+- `node scripts/mesh-probe.ts --config <設定のファイル> [--models] [--sets a,b,bg,c,cg] [--questions] [--turns 6] [--max-tokens 1500] [--timeout 120000] [--work] [--out]`。作業フォルダは `--work`（無ければ OS の一時フォルダ）の下に作り、終わりに消す。鍵は設定の `apiKeyEnv` の環境変数から読み、表では隠す。`npm run check` のテストには入らず（試しの提供元と届かない提供元での確かめは `tests/mesh-probe.test.ts`）、型チェックには入る。
+- 入口: `scripts/mesh-probe.ts`
+- 使うもの: `src/mesh/index.ts`（`Mesh` `wrapMeshIndex` `meshIndexLimit`） `src/tools/builtin/mesh.ts` `src/tools/builtin/files.ts` `src/tools/pipeline.ts` `src/engine/prompts.ts`（圧縮の頼み） `src/engine/workspace.ts` `src/projects/plan.ts` `src/projects/acceptance.ts` `src/providers/registry.ts` `src/config/store.ts`
+
 ### 常駐の設定 — `deploy/`
 - `beat.service`: Linux の systemd の設定。beat が書ける場所をデータのフォルダ（`/var/lib/beat`）だけに絞り、シェルの道具に対する OS 側の閉じ込めにもなる。
 - 入口: `deploy/beat.service`
