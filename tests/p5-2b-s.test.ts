@@ -478,4 +478,3 @@ test('5-2b-s 送信を断った行の URL は送り先とパスだけ（問い�
   for (let i = 0; i < 15; i += 1) add(`https://example.com/page${i}`, false);
   assert.equal((s.app.db.prepare("SELECT COUNT(*) AS n FROM questions WHERE task_id = ? AND kind = 'submit_refused'").get(task.id) as { n: number }).n, 10);
 });
-

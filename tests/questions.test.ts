@@ -357,7 +357,6 @@ test('答え: stuck・check_failed の行は、選び直すと元のタスクを
   assert.equal(sent.body.fixTaskId, null);
   assert.equal(total(), before, '送ってよいと答えてもタスクは増えない');
   assert.ok(s.app.tasks.events(browse.id).some(e => e.kind === 'answer' && /https:\/\/example\.com\/form[\s\S]*opens a conversation/u.test(e.content ?? '')));
-
   const left = s.app.questions.add({ kind: 'stuck', taskId: stuck.id, question: 'again', options: ['Retry', 'Leave it'], chosen: 1 });
   s.app.tasks.finish(stuck.id, 'failed', null, 'beat');
   assert.equal((await s.http(`/api/questions/${left.id}/answer`, { choice: 1 })).body.kind, 'kept');

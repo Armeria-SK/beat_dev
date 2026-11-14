@@ -363,7 +363,6 @@ export class App {
       return;
     }
     this.kv.set(LEGACY_WAITS_COPIED, String(Date.now()));
-
     this.log(`[INFO] Copied ${copied} task(s) waiting for an answer into Questions (answer them there)`);
   }
 

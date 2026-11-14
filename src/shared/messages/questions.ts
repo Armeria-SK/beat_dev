@@ -41,7 +41,6 @@ const en = {
   'legacy_stop': 'Stop here',
   'legacy_none': 'The task is waiting for your reply.',
   'legacy_stopped': 'The owner chose to stop here.',
-
 } as const;
 
 export type QuestionMessageKey = keyof typeof en;

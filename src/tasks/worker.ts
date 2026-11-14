@@ -202,7 +202,6 @@ export class Worker {
   }
 
   runsLastHour(): number {
-
     // タスクと振り返り（どちらも裏で動く実行）を数える。会話は数えない
     return (this.#d.db.prepare("SELECT COUNT(*) AS n FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ?").get(this.#now() - 3_600_000) as { n: number }).n;
   }

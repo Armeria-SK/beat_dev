@@ -408,11 +408,10 @@ export class QuestionStore {
     const assumed = row.chosen !== null ? options[row.chosen] ?? questionText(language, 'assumed_none') : questionText(language, 'assumed_none');
     const title = plainLine(questionText(language, 'fix_title', { id: row.id, question: row.question }), TITLE_MAX);
     const body = [questionText(language, 'fix_body', { question: row.question, assumed, answer: answerText }), item ? questionText(language, 'fix_item', { item }) : ''].filter(Boolean).join('\n');
-    const ownerText = ownerWrote || row.tainted === 0 || row.kind !== 'ai' ? answerText : null;
+    const ownerText = ownerWrote || row.tainted === 0 ? answerText : null;
     const task = tasks.create({ title, body, origin: 'user', actor: 'user', projectId: row.project_id, ownerRequest: ownerText !== null });
     if (ownerText !== null) tasks.ownerEdited(task.id, { title: ownerText, body: '' });
     if (row.tainted === 1) tasks.markUntrusted(task.id, 'question', questionText(language, ownerText === null ? 'untrusted_note' : 'untrusted_note_owner'));
-
     return task.id;
   }
 }
