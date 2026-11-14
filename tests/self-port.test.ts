@@ -162,3 +162,32 @@ test('selfTarget: 閉じない括弧が並ぶ長い文でも、読む量が長�
     assert.ok(elapsed < 700, `${text.slice(0, 6)}… に ${Math.round(elapsed)}ms`);
   }
 });
+
+test('selfTarget: 途方もなく大きい数の範囲・深く重なった括弧・縮めた JSON でも、1 回の確かめの仕事量は決まった上限まで', () => {
+  const nest = (depth: number): string => (depth === 0 ? '1' : `{"a":${nest(depth - 1)},"b":${nest(depth - 1)},"c":${nest(depth - 1)},"d":${nest(depth - 1)}}`);
+  const lock = JSON.stringify({ name: 'x', lockfileVersion: 3, packages: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`node_modules/p${i}`, { version: `1.${i}.0`, resolved: `https://registry.npmjs.org/p${i}/-/p${i}-1.${i}.0.tgz`, integrity: 'sha512-AAAA', dependencies: { a: '^1.0.0', b: '^2.0.0' }, engines: { node: '>=18' } }])) });
+  const heavy = [
+    'echo {9007199254740993..9007199254740993}', 'echo {100000000000000000000..100000000000000000001}', 'curl "http://example.com/img[99999999999999999999-99999999999999999999].png"',
+    'echo {1..3..99999999999999999999999}', 'curl x[1-60][1-60]{[1-60][1-60]}{{[1-60][1-60]}}', `curl -d '${nest(4)}' http://example.com/`, `echo '${lock}' > l.json`,
+    `echo ${'{a,b}'.repeat(4_000)}`, Array.from({ length: 3_000 }, (_, i) => `x{${i},b}`).join(' '),
+  ];
+  for (const text of heavy) {
+    const started = performance.now();
+    assert.equal(selfTarget(text, server), undefined, text.slice(0, 60));
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 500, `${text.slice(0, 60)}… に ${Math.round(elapsed)}ms`);
+  }
+});
+
+test('selfTarget: 形が上限を超える語は、括弧を 1 つずつ動かして確かめる。重い語が先にあっても、あとの短い語は確かめる', () => {
+  const tails = '{a,b}'.repeat(9);
+  const decoys = Array.from({ length: 600 }, (_, i) => 5000 + i).join(',');
+  const nest = (depth: number): string => (depth === 0 ? '1' : `{"a":${nest(depth - 1)},"b":${nest(depth - 1)},"c":${nest(depth - 1)},"d":${nest(depth - 1)}}`);
+  const reached = [
+    `curl "127.0.0.1:{4790,4789}/${tails}"`, `curl "127.0.0.1:{4789,4790}/${tails}"`, `curl "127.0.0.1:{${decoys},4790}/"`, 'curl {a,{b,{c,{d,127.0.0.1}}}}:4790',
+    'curl 127.0.0.1:{4813..4750..23}', 'curl 127.0.0.1:{4791..4700..1}', `curl -d '${nest(4)}' "127.0.0.1:{4790,4790}/"`, `curl "127.0.0.1:{4790,4790}/" -d '${nest(4)}'`,
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined).map(command => command.slice(0, 50)), []);
+  const free = [`curl "127.0.0.1:{8080,9090}/${tails}"`, `curl "127.0.0.1:{${decoys},9}/"`, 'curl 127.0.0.1:{4813..4750..21}', 'curl {a,{b,{c,{d,127.0.0.1}}}}:9', 'echo {4750..4813..23}'];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined).map(command => command.slice(0, 50)), []);
+});
