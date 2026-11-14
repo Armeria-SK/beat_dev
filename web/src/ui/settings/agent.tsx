@@ -243,10 +243,14 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
     if (next !== id) void ctx.commit(k, c => renameModel(c, id, next)).then(ok => { if (ok) onRenamed(next); });
   };
   const providers: Option<string>[] = (ctx.config.providers as Json[]).map(p => ({ value: p.id as string, label: p.id as string }));
+  const name = (model.label as string) || id;
   const status = probing ? t('ui.set.models.checking') : probe ? probeMessage(probe, getLanguage()) || probe.status : t('ui.set.models.unchecked');
   return (
-    <Row k={k} title={(model.label as string) || id} desc={<><code>{model.provider as string} · {model.model as string}</code> · {status}</>}
-      below={open && (
+    <Row k={k} title={name} desc={<><code>{model.provider as string} · {model.model as string}</code> · {status}</>}
+      below={(open || removing) && (
+        <>
+        {removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => removeModel(c, id)); }} onKeep={() => setRemoving(false)} />}
+        {open && (
         <div className="ui-set__detail">
           <Row k={`${k}:label`} title={t('ui.set.model.label')}><CommitField value={(model.label as string | undefined) ?? ''} label={t('ui.set.model.label')} onCommit={v => edit({ label: v || undefined })} /></Row>
           <Row k={`${k}:id`} title={t('ui.set.model.id')}><CommitField value={id} label={t('ui.set.model.id')} mono onCommit={rename} /></Row>
@@ -265,13 +269,12 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
             <NumberField k={`${k}:tools`} value={model.maxTools as number | undefined} optional min={0} max={128} label={t('ui.set.model.maxTools')} onCommit={v => edit({ maxTools: v })} />
           </Row>
           <Row k={`${k}:vision`} title={t('ui.set.model.vision')}><Switch checked={Boolean(model.vision)} label={t('ui.set.model.vision')} disabled={busy} onChange={vision => edit({ vision })} /></Row>
-          <Row k={`${k}:remove`} title={t('ui.set.model.remove')}
-            below={removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => removeModel(c, id)); }} onKeep={() => setRemoving(false)} />}>
-            {!removing && <Button small variant="ghost" disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.model.remove')}</Button>}
-          </Row>
         </div>
+        )}
+        </>
       )}>
       {reach && <Pill tone={REACH[reach].tone}>{t(REACH[reach].key)}</Pill>}
+      {!removing && <Button small variant="ghost" aria-label={t('ui.set.list.remove', name)} disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.model.removeShort')}</Button>}
       <Button small variant="ghost" aria-expanded={open} onClick={onToggle}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>
     </Row>
   );

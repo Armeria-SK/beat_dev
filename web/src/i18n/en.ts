@@ -1106,6 +1106,7 @@ export const en = {
   'ui.set.model.maxToolsDesc': 'Empty sends every tool',
   'ui.set.model.vision': 'Reads images',
   'ui.set.model.remove': 'Remove model',
+  'ui.set.model.removeShort': 'Remove',
   'ui.set.skills.title': 'Skills',
   'ui.set.skills.ask': 'Ask before registering',
   'ui.set.skills.askOn': 'Drafts wait on the Skills screen',
