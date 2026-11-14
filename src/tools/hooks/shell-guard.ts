@@ -485,9 +485,20 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       deletes: result.deletes, targets: [], writes: [], piped: st.pipedIn || st.pipedOut, redirected: st.redirects.length > 0, cwd: cwdKnown ? cwd : null, shell,
     };
     const source = name ? innerSource(name, st.words, shell, stdin) : undefined;
+    const matchedEntries = allowEntries.filter(entry => entryMatches(entry, st.words, windows));
+    const allowedByConfig = matchedEntries.length > 0;
+    let wrapped: ShellVerdict | undefined;
     if (source !== undefined) {
       const depth = opts.depth ?? 0;
-      const nested = source && cwdKnown && depth < 3 ? checkShellCommand(source.text, cwd, { ...opts, shell: source.shell, depth: depth + 1 }).statements : [];
+      const checkInner = (allow: readonly string[]) => checkShellCommand(source!.text, cwd, { ...opts, allow, shell: source!.shell, depth: depth + 1 });
+      wrapped = source && cwdKnown && depth < 3 ? checkInner(opts.allow ?? []) : undefined;
+      const head = wrapped?.statements[0]?.words.map(w => w.text) ?? [];
+      const tails = matchedEntries.flatMap(entry => {
+        for (let p = 1; p < entry.length; p++) if (entry.slice(p).every((e, i) => head[i] === e)) return [entry.slice(p).join(' ')];
+        return [];
+      });
+      if (wrapped && tails.length) wrapped = checkInner([...(opts.allow ?? []), ...tails]);
+      const nested = wrapped?.statements ?? [];
       current.inner = nested.length ? nested : null;
     }
     statements.push(current);
@@ -499,7 +510,6 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (result.fetch) fetched = true;
     else if (fetched && name && SHELL_SINKS.has(name)) add('deny', say('guard.download_exec'));
 
-    const allowedByConfig = allowEntries.some(entry => entryMatches(entry, st.words, windows));
     for (const reason of result.reasons) {
       if (hard || denied) break;
       if (reason.key === 'list.install' || (reason.key === 'list.git_net' && PULLING_GIT.has(String(reason.params.cmd)))) pulled = true;
@@ -508,6 +518,19 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       if (reason.level === 'deny') add('deny', fromReason(reason));
       else if (reason.level === 'once') addCode(fromReason(reason));
       else add('ask', fromReason(reason), askKindOf(reason.key));
+    }
+    if (allowedByConfig && source !== undefined && !hard && !denied) {
+      if (!wrapped || wrapped.statements.length === 0) addCode(say('code.wrapped_unknown', { cmd: name }));
+      else {
+        decision = worst(decision, wrapped.decision);
+        wrapped.reasons.forEach((reason, i) => { if (!reasons.includes(reason)) { reasons.push(reason); reasonKeys.push(wrapped!.reasonKeys[i]!); } });
+        for (const kind of wrapped.askKinds) if (!askKinds.includes(kind)) askKinds.push(kind);
+        paths.push(...wrapped.paths);
+        writes.push(...wrapped.writes);
+        for (const file of wrapped.scripts) if (!scripts.includes(file) && scripts.length < 3) scripts.push(file);
+        fetched ||= wrapped.fetched;
+        limits ||= wrapped.limits;
+      }
     }
     const asked = matchesPrefix(words, opts.ask);
     if (asked && !allowedByConfig) add('ask', say('guard.needs_approval', { reason: asked }), 'owner');
