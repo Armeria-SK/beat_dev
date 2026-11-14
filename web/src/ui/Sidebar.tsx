@@ -14,6 +14,7 @@ export interface SidebarProps {
   route: Route;
   foot: FootLine;
   kanban: number;
+  questions: number;
   pending: number;
   sessionPending: ReadonlyMap<string, number>;
   drafts: number;
@@ -109,7 +110,7 @@ function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<st
   return { extra, expand };
 }
 
-export function Sidebar({ state, route, foot, kanban, pending, sessionPending, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup }: SidebarProps) {
+export function Sidebar({ state, route, foot, kanban, questions, pending, sessionPending, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup }: SidebarProps) {
   const t = useT();
   const { extra, expand } = useMoreSessions(conversations);
   const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra), [projects, conversations, conversationsMore, extra]);
@@ -133,6 +134,7 @@ export function Sidebar({ state, route, foot, kanban, pending, sessionPending, d
         <span className="bt-label bt-sidebar__label">{t('ui.section.workspace')}</span>
         <SideLink href="#/overview" icon="grid" name={t('ui.nav.overview')} active={at('overview')} />
         <SideLink href="#/kanban" icon="columns" name={t('ui.nav.kanban')} active={at('kanban')} count={kanban} countLabel={t('ui.count.waiting', kanban)} />
+        <SideLink href="#/questions" icon="help" name={t('ui.nav.questions')} active={at('questions')} count={questions} countLabel={t('ui.count.open', questions)} />
         <SideLink href="#/pending" icon="pause" name={t('ui.nav.pending')} active={at('pending')} count={pending} countLabel={t('ui.count.waiting', pending)} />
         <SideLink href="#/schedule" icon="calendar" name={t('ui.nav.schedule')} active={at('schedule')} />
 

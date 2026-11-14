@@ -7,19 +7,20 @@ export interface Waiting {
   answers: number;
   drafts: number;
   pending: number;
+  questions: number;
 }
 
-export function countTasks(statuses: Iterable<TaskStatus>): { proposals: number; answers: number } {
+export function countTasks(tasks: Iterable<readonly [string, TaskStatus]>, asked: ReadonlyMap<string, number> = new Map()): { proposals: number; answers: number } {
   let proposals = 0;
   let answers = 0;
-  for (const status of statuses) {
+  for (const [id, status] of tasks) {
     if (status === 'inbox') proposals += 1;
-    else if (status === 'waiting') answers += 1;
+    else if (status === 'waiting' && !asked.has(id)) answers += 1;
   }
   return { proposals, answers };
 }
 
-export const waitingTotal = (w: Waiting): number => w.proposals + w.answers + w.drafts + w.pending;
+export const waitingTotal = (w: Waiting): number => w.proposals + w.answers + w.drafts + w.pending + w.questions;
 
 export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers'>): number => w.proposals + w.answers;
 

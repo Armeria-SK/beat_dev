@@ -17,6 +17,7 @@ export type RunEvent =
   | { type: 'agent.state'; runId: string; conversationId: string; callId: string; childRunId: string; childConversationId: string; state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout'; toolCalls: number }
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'pendingAction.changed'; id: number; status: PendingStatus; projectId: string | null; conversationId: string; taskId: string | null }
+  | { type: 'question.changed'; id: number; projectId: string | null; status: 'open' | 'answered' }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId?: string | null }
   | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
   | { type: 'plan.changed'; projectId: string; hash: string; by: 'ai' | 'owner' }
