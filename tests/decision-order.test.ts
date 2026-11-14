@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -20,6 +21,7 @@ import { webDownload } from '../src/tools/builtin/download.ts';
 import { imageView } from '../src/tools/builtin/image.ts';
 import { webFetch, webSearch } from '../src/tools/builtin/web.ts';
 import { REASON_ORDER } from '../src/tools/hooks/decision-order.ts';
+import { gitDirLinkFree } from '../src/tools/hooks/product-run.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { runToolCall, type PipelineDeps } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
@@ -897,10 +899,13 @@ const fwd = (path: string): string => path.replace(/\\/gu, '/');
 const linkDir = (target: string, path: string): void => symlinkSync(target, path, WIN ? 'junction' : 'dir');
 const relink = (nested: string, outside: string, name: string): void => {
   rmSync(join(nested, '.git', name), { recursive: true, force: true });
-  linkDir(join(outside, '.git', name), join(nested, '.git', name));
+  linkDir(join(outside, '.git', name.endsWith(join('a', 'b')) ? join('refs', 'heads', 'b') : name), join(nested, '.git', name));
 };
 const countOf = (dir: string): string => spawnSync('git', ['rev-list', '--count', '--all'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
-const treeOf = (dir: string): string[] => (readdirSync(dir, { recursive: true }) as string[]).map(String).sort();
+const bytesOf = (dir: string): Record<string, string> => Object.fromEntries((readdirSync(dir, { recursive: true }) as string[]).map(String).sort().map(name => {
+  const path = join(dir, name);
+  return [fwd(name), statSync(path).isDirectory() ? 'dir' : createHash('sha256').update(readFileSync(path)).digest('hex')];
+}));
 const OUTSIDE_GIT: Record<string, (nested: string, outside: string) => void> = {
   gitdirOutside: (nested, outside) => { initRepo(outside); mkdirSync(nested, { recursive: true }); writeFileSync(join(nested, '.git'), `gitdir: ${fwd(join(outside, '.git'))}\n`); },
   gitLinkOutside: (nested, outside) => { initRepo(outside); mkdirSync(nested, { recursive: true }); linkDir(join(outside, '.git'), join(nested, '.git')); },
@@ -922,6 +927,19 @@ const OUTSIDE_GIT: Record<string, (nested: string, outside: string) => void> = {
   objectsAndRefsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, 'objects'); relink(nested, outside, 'refs'); },
   objectsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, 'objects'); },
   refsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, 'refs'); },
+  refsHeadsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, join('refs', 'heads')); },
+  objectsFanoutLinked: (nested, outside) => {
+    initRepo(outside);
+    initRepo(nested);
+    for (let i = 0; i < 256; i++) {
+      const name = i.toString(16).padStart(2, '0');
+      mkdirSync(join(outside, '.git', 'objects', name), { recursive: true });
+      relink(nested, outside, join('objects', name));
+    }
+  },
+  logsLinked: (nested, outside) => { initRepo(outside); initRepo(nested); git(outside, 'config', 'core.logAllRefUpdates', 'true'); git(nested, 'config', 'core.logAllRefUpdates', 'true'); mkdirSync(join(outside, '.git', 'logs'), { recursive: true }); relink(nested, outside, 'logs'); },
+  objectsPackLinked: (nested, outside) => { initRepo(outside); initRepo(nested); relink(nested, outside, join('objects', 'pack')); },
+  refsDeepLinked: (nested, outside) => { initRepo(outside); initRepo(nested); mkdirSync(join(nested, '.git', 'refs', 'heads', 'a'), { recursive: true }); mkdirSync(join(outside, '.git', 'refs', 'heads', 'b'), { recursive: true }); relink(nested, outside, join('refs', 'heads', 'a', 'b')); },
   linkedWorktree: (nested, outside) => { initRepo(outside); git(outside, 'worktree', 'add', '-q', '-b', 'wt', nested); },
 };
 
@@ -1245,12 +1263,56 @@ test('p4-build-judge D1: objects/info/alternates が製品の外を指すリポ�
   const outside = join(r.paths.workspace, 'other');
   initRepo(outside);
   writeFileSync(join(r.root, '.git', 'objects', 'info', 'alternates'), `${fwd(join(outside, '.git', 'objects'))}\n`);
-  const before = { tree: treeOf(join(outside, '.git')), count: countOf(outside) };
+  const before = bytesOf(join(outside, '.git'));
+  assert.ok(Object.keys(before).length > 10 && Object.values(before).some(value => value !== 'dir'));
   writeFileSync(join(r.root, 'n.txt'), 'new content for the product only');
   const added = await r.shell('git add n.txt');
   assert.equal(added.decidedBy, 'product-git', added.output.content);
   const committed = await r.shell('git commit -m alternates');
   assert.equal(committed.decidedBy, 'product-git', committed.output.content);
   assert.equal(commits(r.root), '2', '製品のリポジトリにコミットができた');
-  assert.deepEqual({ tree: treeOf(join(outside, '.git')), count: countOf(outside) }, before, '外のリポジトリの .git は 1 ファイルも増えず、コミットも増えていない');
+  assert.deepEqual(bytesOf(join(outside, '.git')), before, '外のリポジトリの .git は、どのファイルの中身も 1 バイトも変わっていない');
+});
+
+test('p4-build-judge D1: 製品の中で git worktree add した作業フォルダと、refs をまとめた（packed-refs の）リポジトリは今までどおり product-git', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  git(r.root, 'tag', 'v1');
+  git(r.root, 'pack-refs', '--all');
+  assert.ok(existsSync(join(r.root, '.git', 'packed-refs')));
+  git(r.root, 'worktree', 'add', '-q', '-b', 'side', join(r.root, 'side'));
+  for (const dir of ['.', 'side']) {
+    const cwd = join(r.root, dir);
+    writeFileSync(join(cwd, 'n.txt'), 'x');
+    const added = await r.call('shell_run', { command: 'git add n.txt', cwd });
+    assert.equal(added.decidedBy, 'product-git', `${dir}: ${added.output.content}`);
+    const committed = await r.call('shell_run', { command: 'git commit -m n', cwd });
+    assert.equal(committed.decidedBy, 'product-git', `${dir}: ${committed.output.content}`);
+    assert.match(git(cwd, 'log', '-1', '--format=%s'), /^n/u, dir);
+  }
+  assert.equal(r.judge.calls.length, 0);
+});
+
+test('p4-build-judge D1: git の置き場のリンクの見回りは、refs が 3,000 個あっても速く終わり、数の上限を超えたら順 4 にしない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  const head = git(r.root, 'rev-parse', 'HEAD').trim();
+  for (let i = 0; i < 3000; i++) {
+    const dir = join(r.root, '.git', 'refs', 'tags', `g${i % 30}`);
+    if (i < 30) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `t${i}`), `${head}\n`);
+  }
+  const gitDir = join(r.root, '.git');
+  assert.equal(gitDirLinkFree(gitDir), true);
+  const started = performance.now();
+  for (let i = 0; i < 5; i++) assert.equal(gitDirLinkFree(gitDir), true);
+  const each = (performance.now() - started) / 5;
+  t.diagnostic(`link walk over 3,000 refs: ${each.toFixed(1)} ms`);
+  assert.ok(each < 500, `${each} ms`);
+  assert.equal(gitDirLinkFree(gitDir, 2000), false, '上限を超えたら false');
+  writeFileSync(join(r.root, 'n.txt'), 'x');
+  const added = await r.call('shell_run', { command: 'git add n.txt', cwd: r.root });
+  assert.equal(added.decidedBy, 'product-git', added.output.content);
+  linkDir(join(r.paths.workspace), join(gitDir, 'refs', 'tags', 'g7', 'out'));
+  assert.equal(gitDirLinkFree(gitDir), false, '深いところのリンクも見つける');
 });

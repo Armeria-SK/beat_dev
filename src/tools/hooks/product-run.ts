@@ -1,5 +1,5 @@
-import { statSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { lstatSync, readdirSync, statSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { GIT_IDENTITY } from './allowlist-git.ts';
 import { DEV_RUNNERS, GIT_IDENTITY_KEY, PRODUCT_CODE_KEYS, SERVICE_PROGRAMS } from './decision-order.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
@@ -177,9 +177,32 @@ function secretToAdd(args: readonly FactWord[], dir: string, git: ProductRunInpu
 
 const REPO_PARTS = ['objects', 'refs', 'index', 'HEAD'];
 
+const LINK_WALK_CAP = 20_000;
+const LINK_WALK_DEEP = new Set(['refs', 'logs']);
+
+export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
+  let seen = 0;
+  const clean = (dir: string, depth: number): boolean => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (++seen > cap || entry.isSymbolicLink()) return false;
+      if (!entry.isDirectory()) continue;
+      const name = entry.name.toLowerCase();
+      const below = depth > 0 ? depth - 1 : LINK_WALK_DEEP.has(name) ? Infinity : name === 'objects' ? 1 : 0;
+      if (below > 0 && !clean(join(dir, entry.name), below)) return false;
+    }
+    return true;
+  };
+  try {
+    return !lstatSync(gitDir).isSymbolicLink() && clean(gitDir, 0);
+  } catch {
+    return false;
+  }
+}
+
 function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
   const places = git(dir, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir', ...REPO_PARTS.flatMap(part => ['--git-path', part])])?.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  return places?.length === 3 + REPO_PARTS.length && places.every(place => inside(root, resolve(dir, place)));
+  if (places?.length !== 3 + REPO_PARTS.length || !places.every(place => inside(root, resolve(dir, place)))) return false;
+  return [...new Set([places[1]!, places[2]!].map(place => resolve(dir, place)))].every(place => gitDirLinkFree(place));
 }
 
 export function productRunOf(input: ProductRunInput): ProductRunResult {
