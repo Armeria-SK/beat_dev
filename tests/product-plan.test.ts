@@ -20,7 +20,7 @@ import { shellRun } from '../src/tools/builtin/shell.ts';
 import { planAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
-import type { ToolContext, ToolDef } from '../src/tools/types.ts';
+import type { ToolContext } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, testConfig, type Script } from './helpers.ts';
 

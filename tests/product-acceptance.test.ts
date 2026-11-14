@@ -24,7 +24,8 @@ import { planAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
-import { ATTACHMENT_CLOSE, ATTACHMENT_OPEN } from '../src/uploads/store.ts';
+import { storeText } from '../src/shared/messages/stores.ts';
+import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, testConfig, type Script } from './helpers.ts';
 
@@ -137,7 +138,7 @@ test('3-1b 出どころ: 全角と半角・空白・改行・大文字小文字�
 test('3-1b 出どころ: 添付の中だけの文・別の製品・製品に属さない会話・タスクと子の担当の会話・generated の発言は見つからない。しまった会話は探す', () => {
   const f = speechFixture();
   const own = f.chat();
-  f.say(own, 'user', `please read this\n${ATTACHMENT_OPEN}: notes.txt (text)>>>\nthe attachment says resume uploads always\n${ATTACHMENT_CLOSE}`);
+  f.say(own, 'user', `please read this\n${ATTACHMENT_OPEN}: notes.txt (text)>>>\nthe attachment says resume uploads always\n${storeText('en', 'attachment.close')}`);
   f.say(own, 'user', 'see the old file\n<<<添付ファイル: old.txt>>>\nlegacy frame says keep every version\n<<<添付ファイルここまで>>>');
   f.say(f.chat(OTHER), 'user', 'the other product wants dark mode everywhere');
   f.say(f.chat(null), 'user', 'a plain chat wants weekly reports');

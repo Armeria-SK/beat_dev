@@ -41,7 +41,6 @@ export class MemoryError extends LocalizedError<StoreMessageKey> {
 export const BOOK_LABELS: Record<Language, Record<Book, string>> = {
   en: { user: 'Memories about the user', notes: "beat's notes and lessons" },
 };
-export const BOOK_LABEL = BOOK_LABELS.en;
 const MEMORY_HEADING: Record<Language, string> = { en: '# What you remember (memory)' };
 
 const MAX_ITEM_CHARS = 600;

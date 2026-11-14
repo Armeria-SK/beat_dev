@@ -2,7 +2,6 @@ import { Type } from '@sinclair/typebox';
 import { conversationSawOutside } from '../../db/outside.ts';
 import { readHistory, searchHistory } from '../../memory/history.ts';
 import { BOOK_LABELS, MemoryError, prefix, type Book } from '../../memory/store.ts';
-import { errorText } from '../../shared/messages/define.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';

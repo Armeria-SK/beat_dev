@@ -15,7 +15,7 @@ export const stripHidden = (text: string): string =>
     .replace(BIDI, '')
     .replace(ZERO_WIDTH, '')
     .replace(INVISIBLE, '')
-    .replace(TAGS, (m, flag) => flag ?? '');
+    .replace(TAGS, (_m, flag) => flag ?? '');
 
 const cleanLine = (line: string): string =>
   stripHidden(line)

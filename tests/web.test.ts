@@ -6,7 +6,6 @@ import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO } from '../src/engine/chat.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
-import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { WebAuth } from '../src/web/auth.ts';
 import { createWebServer } from '../src/web/server.ts';

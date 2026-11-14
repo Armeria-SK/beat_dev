@@ -10,9 +10,7 @@ import { needsShelved, productLine } from '../product-meta.ts';
 import { routeHash } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 
-type T = ReturnType<typeof useT>;
-
-const failText = (error: unknown, t: T): string | undefined => (error instanceof ApiError ? error.message : undefined);
+const failText = (error: unknown): string | undefined => (error instanceof ApiError ? error.message : undefined);
 
 export function Archived({ revision, projects, projectsLoaded }: { revision: number; projects: readonly Project[]; projectsLoaded: boolean }) {
   const t = useT();
@@ -63,10 +61,10 @@ export function Archived({ revision, projects, projectsLoaded }: { revision: num
       const line = productLine(c.project_id, projects, known, projectsLoaded);
       toast({
         icon: 'undo', title: t('ui.archived.toast.restored'), body: line?.archived ? t('ui.pf.restoredUnder', line.name ?? t('ui.pf.someArchived')) : title(c),
-        action: { label: t('ui.toast.undo'), run: () => { void api.archiveConversation(c.id).then(reload).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: failText(error, t) })); } },
+        action: { label: t('ui.toast.undo'), run: () => { void api.archiveConversation(c.id).then(reload).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: failText(error) })); } },
       });
       reload();
-    } catch (error) { toast({ icon: 'alert', title: t('ui.archived.toast.failed'), body: failText(error, t) }); } finally { setBusy(null); }
+    } catch (error) { toast({ icon: 'alert', title: t('ui.archived.toast.failed'), body: failText(error) }); } finally { setBusy(null); }
   };
   const remove = async (c: Conversation) => {
     if (busy) return;
@@ -77,7 +75,7 @@ export function Archived({ revision, projects, projectsLoaded }: { revision: num
       setItems(current => current?.filter(x => x.id !== c.id) ?? current);
       toast({ icon: 'x', title: t('ui.archived.toast.deleted'), body: title(c) });
       reload();
-    } catch (error) { toast({ icon: 'alert', title: t('ui.archived.toast.failed'), body: failText(error, t) }); } finally { setBusy(null); }
+    } catch (error) { toast({ icon: 'alert', title: t('ui.archived.toast.failed'), body: failText(error) }); } finally { setBusy(null); }
   };
   const keep = (id: string, refocus: boolean) => { setConfirming(null); if (refocus) requestAnimationFrame(() => deleteButtons.current.get(id)?.focus()); };
   const nothing = archivedNothing(items, loadedFor, query);
