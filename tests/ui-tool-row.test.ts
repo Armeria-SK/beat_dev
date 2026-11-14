@@ -130,3 +130,15 @@ test('ui/tool-row: 突き合わせが外れたときの見出しは、終了コ�
   const failedButOk = '$ curl "https://x.test/?code=[REDACTED]"\n\n(pwsh, cwd: w, exit code: 2, 0.2 s)';
   assert.deepEqual(toolRow('shell_run', JSON.stringify({ command }), { text: failedButOk, isError: false }).meta, null);
 });
+
+test('ui/tool-row: タスクの道具の結果の末尾にコードが足す [E-n] の行があっても、file_write の行数（上書き・追記）を読む。[E-n] だけの結果は出力なし（5-3b-t）', async () => {
+  const { emptyOutput } = await import('../web/src/ui/tool-row.ts');
+  const input = JSON.stringify({ path: 'a.md', content: 'x' });
+  assert.deepEqual(toolRow('file_write', input, { text: 'Overwritten: a.md (3 characters; +1 -3 lines)\n[E-4]', isError: false }).meta, { kind: 'lines', added: 1, removed: 3 });
+  assert.deepEqual(toolRow('file_write', input, { text: 'Appended: a.md (2 characters; +2 -0 lines)\n[E-12]\n', isError: false }).meta, { kind: 'lines', added: 2, removed: 0 });
+  assert.equal(toolRow('file_write', input, { text: 'Overwritten: a.md (3 characters; +1 -3 lines) [E-4] extra', isError: false }).meta, null);
+  assert.equal(emptyOutput('\n[E-1]'), true);
+  assert.equal(emptyOutput(''), true);
+  assert.equal(emptyOutput('done\n[E-1]'), false);
+  assert.equal(emptyOutput('[E-x]'), false);
+});

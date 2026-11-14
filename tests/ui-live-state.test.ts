@@ -294,3 +294,11 @@ test('ui/live-state: 判定役が通した・Pending に積んだ・動かさな
   assert.deepEqual(s.drafts[0]!.settled!.map(x => [x.callId, x.gate]), [['a', { by: 'judge', reason: 'fine' }], ['b', { by: 'pending', id: 12 }], ['c', { by: 'not-parked' }], ['d', undefined]]);
   assert.equal(s.notices.has('c'), false, '「自動で許した」のお知らせは出さない（理由は道具の行に出る）');
 });
+
+test('ui/live-state: タスクの印は返事待ちの種類（質問か Pending の承認か）を持つ。読み込みでも task.changed でも（beat 5-u2）', () => {
+  const s = run(EMPTY, { type: 'tasks', tasks: [{ ...task('t1', 'waiting', 100), waiting_kind: 'approval' }, task('t2', 'waiting', 100)] });
+  assert.equal(s.tasks.get('t1')?.waitingKind, 'approval');
+  assert.equal(s.tasks.get('t2')?.waitingKind, undefined);
+  const live = run(s, ev({ type: 'task.changed', task: { ...task('t2', 'waiting', 200), waiting_kind: 'question' } }));
+  assert.equal(live.tasks.get('t2')?.waitingKind, 'question');
+});
