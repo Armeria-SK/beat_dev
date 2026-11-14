@@ -147,6 +147,7 @@
   - `hooks/push-protect.ts`: `pushProtectOf` が、守るファイルのフックがあるとき、git push で押し出すコミット（まだ送っていないすべての枝とタグ。マージのコミットも `-m` で見る）の変わったファイルを `runProtectFiles` に通す（Q-W1-5）。当たれば `owner_protected_push`、確かめられなければ `owner_push_unchecked`。`hooks/outbound-env.ts` の `isolatedGit` を使う。
   - `builtin/shell.ts` と `builtin/files.ts` は判定の結果に `reasonKeys`（と順 4 の `productRun`、持ち主の理由 `ownerReason`）を載せる。
 - 段階 5 の骨組みの道具（beat 5-0）: `builtin/questions.ts`（`question_add` `question_list`）、`builtin/deviations.ts`（`deviation_add`）、`builtin/mesh-write.ts`（`mesh_map_set` `mesh_glossary_set` `mesh_decision_add`）。6 つとも `allowedIn: []` なので、どの実行のモデルにも渡らず、呼ばれてもパイプラインが断る。`execute` は「まだ使えない」の誤りを返すだけで、説明と入力の形は仮。`app.ts` の `builtinTools()` では `agent_run` のあと、ブラウザの道具の前に並ぶ。`types.ts` の `TaskControl` に終わり方 `yield`（区切る）と `failed`（理由つきの失敗）の型を足した（まだだれも出さない）
+- 質問の道具（beat 5-2a-s）: `builtin/questions.ts` の 2 つは `allowedIn: ['task']`（タスクの実行だけ。会話・子の担当・振り返りには出ない。効果は `meta` で `planOk` が無いので計画モードも通らない）。`question_add`（入力 `question` `why` `options`〔2〜4〕`chosen`〔仮の選択の位置。`blocking` でなければ必須〕`blocking`。`kind` は入力に無く、いつも `ai`）は質問票に記録して「仮の選択で続ける」を返すだけで、`control` は変えない。`blocking` だけが `control.outcome = 'question'`（今の返事待ちの道。`waiting_text` は質問の文）。外を読んだ実行・外を読んだことのある会話・外の文が入ったタスクの質問は `tainted`。`question_list` はその製品（製品が無ければそのタスク）の Open と最近の答え 10 件を返し、`tainted` の行が入るときは外から読んだ印（`fetched`）を付ける。タスクの実行の道具の並びでは 39 個中 37・38 番目（0 から）なので、`maxTools` が 38 より小さいモデルでは切られる
 - 入口: `src/tools/pipeline.ts`（`runToolCall`）。道具の一覧は `src/app.ts` の `builtinTools()`。
 - 使うもの: `config`、`memory`、`tasks`（`schedule`）、`curiosity`、`paths`、`src/shared`（`redaction` `url` `pdf-text` `zip` `office-text`）、`@sinclair/typebox`、`parse5`
 
@@ -167,6 +168,7 @@
 - `remotes.ts` の `remoteKey`（beat 4-2a）: 送り先の URL を比べる形にそろえる（利用者名・末尾の `.git` と `/`・ホストの大文字小文字・既定のポートを落とし、`git@host:path` と `ssh://git@host/path` と `https://host/path` を同じにする）。`git push` の宛先の照らし（`tools/hooks/push-target.ts`）が使う
 - `remoteKey` の直し（beat 4-2a）: 方式を残す（scp・ssh・git+ssh は同じ ssh、https とは別）。scp の形の利用者名に `:` を含めない。手元のパスはドライブ名を残し、Windows では大文字小文字をそろえる
 - 入口: `src/projects/store.ts`
+- 製品の数の質問（beat 5-2a-s）: `ProjectStore.counts` の `questions` は、返事待ちのタスクの数ではなく、表 `questions` のその製品の Open の数（製品の行の `waiting.questions` と mesh の目次の数）
 - 使うもの: `src/db`、`src/paths.ts`、`src/tools/hooks/scope.ts`（`realish` など。`instructions.ts` は `isRemotePath` `isSecretPath` `windowsHazard`）、`src/tools/hooks/git-repo.ts`（`.git` の設定の読み方）、`src/tools/policy.ts`（`INSTRUCTION_FILES`）、`src/shared/messages/projects.ts`、`src/shared/messages/plans.ts`（`plan.ts`）、`src/shared/messages/acceptance.ts`（`acceptance.ts`）、`src/shared/messages/build.ts` と `src/tasks/store.ts`（`build.ts`）、`src/uploads/store.ts` の `stripAttachments`（`acceptance.ts`）、`src/db/kv.ts`（`plan.ts` の付帯の記録）、`src/shared/plain-text.ts` と `src/shared/redaction.ts`（`plan.ts` の中身の確かめ）、`src/engine/tokens.ts`（`instructions.ts` の見積もり）
 
 ### 製品の資料の目次 — `src/mesh`（beat 3-1c）
@@ -181,6 +183,7 @@
 - `store.ts` の `QuestionStore`: `add`（今は「まだ使えない」で投げる）・`get` / `view`（今は無し）・`list`（今は空）・`counts`（今は 0）・`answer`（今は無し）。行・画面に返す形・数・答えの入力と結果・変化の知らせ（`QuestionChange`）の型と、誤り `QuestionError` を持つ。`App` が作り、変化は出来事 `question.changed` で流す。`App` は `tasks`・`projects`・`acceptance` の store も渡してある（`options` に持つだけで、今は使わない。あとの段が `app.ts` を開き直さないため）
 - 入口: `src/questions/store.ts`
 - 使うもの: `db`（表 `questions`）、`shared/messages/questions.ts`。型だけ: `tasks/store.ts`、`projects/store.ts`、`projects/acceptance.ts`
+- 中身（beat 5-2a-s）: `add` は文を保存の前に整える（見えない文字を外し `redactSecrets` で鍵らしい文字を伏せる）。`kind: 'ai'` の行は同じタスクで同じ文の Open を断り、1 タスク 10 個まで（`QUESTIONS_PER_TASK`）。`list` は新しい順（Open は全部、Answered は `before` の id の続きで 50 件ずつ）で、製品の名前・タスクの題・直しのタスクの進み（`fix`）を付ける。`counts` は Open の数（製品ごと・タスクごと）と答えた数・違う答えの数。`answer`（`{ choice, text? }`。どちらか一方）: 仮の選択と同じなら `kept`、ほかは `changed`。`blocking` の行は、タスクが動いている間は断る（`task_running`、409。質問は Open のまま）。まだ終わっていないタスクには答えを経過（`answer`）に書き、そのタスクがこの質問の文で返事待ちのときだけ実行待ちに戻す（直しのタスクは作らない）。タスクがもう終わっていれば、ふつうの質問と同じに扱う。`changed` のとき `stuck`・`check_failed` は元のタスクを `reopen`、`ai`・`submit_refused` は直しのタスク（`origin: 'user'`・`ready`。本文は質問・仮の選択・答えをコードが組む。`submit_refused` は「送ってよいと答えた」の 1 行つき）。直しのタスクの `owner_request` は持ち主の答えの文だけ（自分で書いた文、または外を読んでいない質問で選んだ選択肢の文）。外を読んだ質問で選択肢を選んだときは `owner_request` を入れない。外を読んだ質問の直しのタスクには、答え方によらず外の印（`markUntrusted`。`ownerEdited` のあと）を付ける（題と本文に質問の文が入るため。選択肢を選んだときは判定役の頼みも空になる）。2 回目の答えは前の結果を返すだけ（`repeated: true`。口はワーカーに回し直さない）。使うもの: `tasks/store.ts`（`create` `ownerEdited` `markUntrusted` `reopen` `setReady` `event`）、`shared/plain-text.ts`、`shared/redaction.ts`、`shared/messages/tasks.ts`（経過の答えの文）
 
 ### Pending（承認待ちの操作） — `src/pending`（beat 4-2b）
 - 持ち主の OK が要る操作を、実行せずに積んでおき、Approve で 1 回だけ動かす所。パイプラインから積む（4-2d、下）。
@@ -252,6 +255,7 @@
 - 1-5c の口: `POST /api/settings/reset`（`server.ts`。設定ファイルの控えを書いてから `resetConfig` の設定を保存し、`{ backup, …設定とモデル }` を返す。控えを書けなければ 409 `reset_no_backup` で戻さない。`.env`・会話・記憶・スキルには触らない）、`GET /api/settings/reset`（戻したあとの設定を返すだけ。画面が「広がる変更」を数える）、`GET /api/providers/:id/models`（`routes-keys.ts`。設定にあるプロバイダだけ。`{ models, truncated }`。失敗は 502 `models_unavailable` で、鍵を伏せた 1 行の文）。`App.fetch` は外への通信の差し替え口（試験と試しのサーバー用）。
 - Pending の口（beat 4-2b、`routes-pending.ts`）: `GET /api/pending?status=waiting|decided&project=&task=&conversation=&before=`（`input` は返さない。decided は設定のタイムゾーンの今日の分、`earlier=1` で今日より前の分、`before` で前へ）、`GET /api/pending/counts`、`POST /api/pending/:id/approve`（すぐ 202。2 回目は 409。動かすのは `App.replayPending`）、`POST /api/pending/:id/reject`（`{ reason? }`）。
 - `routes-questions.ts`（beat 5-0。骨組み）: `GET /api/questions`（今は空の一覧）、`GET /api/questions/counts`（今は 0）、`POST /api/questions/:id/answer`（今は 404）。`routes-review.ts` の `GET /api/tools` は、`allowedIn` が空の道具（どの実行にも渡らない道具）を一覧から外す
+- `routes-questions.ts` の答えの口（beat 5-2a-s）: `POST /api/questions/:id/answer` は `QuestionStore.answer` を呼び、`{ question, kind, fixTaskId, reopenedTaskId, resumedTaskId, reopenedItem, repeated }` を返す（形の誤りは 400、開き直せないタスクは 409、知らない番号は 404）。動かすタスク（戻した・開き直した・直しの）はワーカーにすぐ回す（`requestRun`）
 - 入口: `src/web/server.ts`
 - 使うもの: `App`、`config`、`memory`、`tasks`、`tools`（承認・スキル）、`curiosity`、`uploads`、`engine`（`bus`）、`projects`、`src/shared`
 
@@ -365,5 +369,6 @@
 - `helpers.ts`: モデルが要るテストの出発点になる設定（`testConfig`。`defaultConfig` はモデルを持たない）、一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。`JudgeAdapter` は判定役の呼び出し（道具なし・system に `safety checker`）だけに決まった答え（`judgeAnswer`。既定は `ask`）を返し、`judged` に残して台本を減らさない（`startApp` の `judge` で使う）。判定役の呼び出しの見分けは `isJudgeRequest`、見せた文は `judgeTextOf`。
 - 1-5c の試験: `hook-enabled`（`enabled` の形・古い設定の読み込み・オフの広がりの検出と保存の手順）、`settings-reset`（控え・戻す中身・残すもの・`.env` に触らない・控えを書けないとき）、`provider-models`（送り先は設定だけ・鍵を応答とログに出さない・時間切れ・上限・`setupProviderConfig`）。オフのフックが動かないことは `tools`。
 - 段階 5 の骨組みの試験（beat 5-0）: `db-migrate-32`（形 27 の DB を 32 に上げて行が減らない・控え・2 回目は何もしない・番号ごとに足す欄・決めた値だけ受ける）、`p5-seams`（決まりで確かめる: `allowedIn` が空の道具は、登録してもどの実行のモデルへの頼みも変えず、どの実行にも渡らず、`GET /api/tools` に出ず、呼ばれても断られる。試験の中で足す空の道具 `probe_hidden` で確かめるので、骨組みの道具を使えるようにしてもこの試験は直さなくてよい。ほかに `ctx.runTool` はモデルの呼び出しと同じ判定と記録・返りで「積まれた」「判定役が通した」を見分けられる・`workCalls`・知らせの製品・見回りの口）、`questions-skeleton`（質問の口と store の骨組み。質問票の中身を入れる段がこの試験を持つ）。`tools-api` と `skills` の道具の一覧は、数や名前を決め打ちせず「記憶の道具でなく、`allowedIn` が空でない道具」から導く
+- 質問票の試験（beat 5-2a-s）: `questions`（道具の記録と断り・`kind` を選べない・鍵と見えない文字・出る実行と出ない実行・`blocking` の返事待ちと戻り・`kept` / `changed`・直しのタスクの `owner_request` と判定役の頼み・`stuck` などの開き直し・数と一覧・`question_list` の外の印）。`questions-skeleton` は口の形（空の一覧・0・404・400・出来事）
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）
