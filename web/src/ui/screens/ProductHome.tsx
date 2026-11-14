@@ -62,8 +62,8 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
   );
   const done = useMemo(() => (data ? finishedSince(data.finished, look.at) : null), [data, look.at]);
   const stats = useMemo(
-    () => (project ? productTiles(project, data?.active ?? []) : []),
-    [project, data],
+    () => (project ? productTiles(project) : []),
+    [project],
   );
   const now = useNow(running.some(row => row.startedAt !== null) ? 1000 : 30_000);
   const lookText = formatDateTimeSmart(look.at, now);

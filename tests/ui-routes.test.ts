@@ -30,7 +30,15 @@ const ROUTES: Array<[string, Route]> = [
   ['#/products/new', { view: 'newProduct' }],
   ['#/pending', { view: 'pending' }],
   ['#/pending/prod_01-AB', { view: 'pending', productId: 'prod_01-AB' }],
+  ['#/questions', { view: 'questions' }],
+  ['#/questions/prod_01-AB', { view: 'questions', productId: 'prod_01-AB' }],
 ];
+
+test('ui/routes: Questions の経路（5-2-u）。形の合わない製品の ID は全製品の Questions。製品の画面でも会話でもない', () => {
+  for (const hash of ['#/questions/short', '#/questions/has.dot1', '#/questions/..%2Fxxxx']) assert.deepEqual(parseRoute(hash), { view: 'questions' }, hash);
+  assert.equal(routeProductId({ view: 'questions', productId: 'prod_01-AB' }), null);
+  assert.equal(isConversation({ view: 'questions' }), false);
+});
 
 test('ui/routes: Pending の経路（4-U1）。形の合わない製品の ID は全製品の Pending', () => {
   for (const hash of ['#/pending/short', '#/pending/has.dot1', '#/pending/..%2Fxxxx']) assert.deepEqual(parseRoute(hash), { view: 'pending' }, hash);

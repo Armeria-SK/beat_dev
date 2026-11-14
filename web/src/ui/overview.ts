@@ -7,10 +7,10 @@ import { routeHash } from './routes.ts';
 export type TileId = 'proposals' | 'questions' | 'pending';
 export interface Tile { id: TileId; n: number; href: string | null }
 
-export function tiles(counts: { proposals: number; answers: number }, pending: number): Tile[] {
+export function tiles(counts: { proposals: number; questions: number }, pending: number): Tile[] {
   return [
     { id: 'proposals', n: counts.proposals, href: '#/kanban' },
-    { id: 'questions', n: counts.answers, href: '#/kanban' },
+    { id: 'questions', n: counts.questions, href: routeHash({ view: 'questions' }) },
     { id: 'pending', n: pending, href: routeHash({ view: 'pending' }) },
   ];
 }
@@ -92,11 +92,10 @@ export function conversationOwners(conversations: ReadonlyArray<Pick<Conversatio
 export const taskOwners = (tasks: ReadonlyArray<Pick<Task, 'id' | 'project_id'>>): Map<string, string | null> =>
   new Map(tasks.map(task => [task.id, task.project_id ?? null]));
 
-export function productTiles(project: Pick<Project, 'id' | 'waiting'>, tasks: ReadonlyArray<Pick<Task, 'id' | 'status' | 'project_id'>>): Tile[] {
-  const question = tasks.find(task => task.status === 'waiting' && task.project_id === project.id);
+export function productTiles(project: Pick<Project, 'id' | 'waiting'>): Tile[] {
   return [
     { id: 'proposals', n: project.waiting.proposals, href: '#/kanban' },
-    { id: 'questions', n: project.waiting.questions, href: question ? routeHash({ view: 'task', id: question.id }) : '#/kanban' },
+    { id: 'questions', n: project.waiting.questions, href: routeHash({ view: 'questions', productId: project.id }) },
     { id: 'pending', n: project.waiting.pending, href: routeHash({ view: 'pending', productId: project.id }) },
   ];
 }

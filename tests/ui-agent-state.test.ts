@@ -6,23 +6,31 @@ import { agentState, checklistStep, countTasks, footLine, kanbanCount, waitingTo
 // 新しい画面の状態（is-idle / is-working / is-waiting）と、サイドバーの足の 1 行。p1-ui.md の「枠」:
 // 待ち = 承認待ちの提案（inbox）・返事待ちのタスク（waiting）・登録待ちのスキルの下書き・Pending の行。待ちが動いているより強い。
 
-const NONE: Waiting = { proposals: 0, answers: 0, drafts: 0, pending: 0 };
+const NONE: Waiting = { proposals: 0, answers: 0, drafts: 0, pending: 0, questions: 0 };
 const items = (...statuses: ChecklistItem['status'][]): ChecklistItem[] => statuses.map((status, i) => ({ text: `step ${i + 1}`, status }));
 
 test('ui/agent-state: タスクの状態から、提案（inbox）と返事待ち（waiting）だけを数える', () => {
   const statuses: TaskStatus[] = ['inbox', 'inbox', 'waiting', 'ready', 'running', 'scheduled', 'done', 'failed', 'cancelled'];
-  assert.deepEqual(countTasks(statuses), { proposals: 2, answers: 1 });
+  assert.deepEqual(countTasks(statuses.map((s, i) => [`t${i}`, s] as const)), { proposals: 2, answers: 1 });
   assert.deepEqual(countTasks([]), { proposals: 0, answers: 0 });
 });
 
-test('ui/agent-state: Kanban の数は提案と返事待ちの和、待ちの合計は 4 つの和（Pending の一覧を含む。4-U1）', () => {
-  const w: Waiting = { proposals: 2, answers: 3, drafts: 4, pending: 5 };
-  assert.equal(kanbanCount(w), 5);
-  assert.equal(waitingTotal(w), 14);
+test('ui/agent-state: 急ぎの質問で待っているタスクは返事待ちに数えない（質問の数で 1 つだけ数える。5-2-u）', () => {
+  const tasks = [['t1', 'waiting'], ['t2', 'waiting']] as const;
+  const asked = new Map([['t1', 1]]);
+  const counted = countTasks(tasks, asked);
+  assert.deepEqual(counted, { proposals: 0, answers: 1 });
+  assert.equal(waitingTotal({ ...NONE, ...countTasks([['t1', 'waiting']], asked), questions: 1 }), 1, '1 つの急ぎの質問で止まったタスクは合計 1');
 });
 
-test('ui/agent-state: 4 つの待ちのどれか 1 つでもあれば waiting', () => {
-  for (const key of ['proposals', 'answers', 'drafts', 'pending'] as const) {
+test('ui/agent-state: Kanban の数は提案と返事待ちの和、待ちの合計は 5 つの和（Pending の一覧と Open の質問を含む。4-U1・5-2-u）', () => {
+  const w: Waiting = { proposals: 2, answers: 3, drafts: 4, pending: 5, questions: 6 };
+  assert.equal(kanbanCount(w), 5, 'Open の質問は Kanban の数に入れない');
+  assert.equal(waitingTotal(w), 20);
+});
+
+test('ui/agent-state: 5 つの待ちのどれか 1 つでもあれば waiting', () => {
+  for (const key of ['proposals', 'answers', 'drafts', 'pending', 'questions'] as const) {
     assert.equal(agentState({ ...NONE, [key]: 1 }, false), 'waiting', key);
   }
 });
