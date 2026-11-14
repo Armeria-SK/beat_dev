@@ -30,3 +30,30 @@ export function lineDelta(before: string, after: string): LineDelta {
   for (const n of left.values()) removed += n;
   return { added, removed };
 }
+
+export interface DiffLine { kind: 'same' | 'add' | 'del'; text: string }
+const DIFF_CELLS = 4_000_000;
+
+export function lineDiff(before: string, after: string): DiffLine[] {
+  const a = lines(before);
+  const b = lines(after);
+  if (a.length * b.length > DIFF_CELLS) return [...a.map((text): DiffLine => ({ kind: 'del', text })), ...b.map((text): DiffLine => ({ kind: 'add', text }))];
+  const width = b.length + 1;
+  const common = new Uint32Array((a.length + 1) * width);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      common[i * width + j] = a[i] === b[j] ? common[(i + 1) * width + j + 1]! + 1 : Math.max(common[(i + 1) * width + j]!, common[i * width + j + 1]!);
+    }
+  }
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { out.push({ kind: 'same', text: a[i]! }); i++; j++; }
+    else if (common[(i + 1) * width + j]! >= common[i * width + j + 1]!) out.push({ kind: 'del', text: a[i++]! });
+    else out.push({ kind: 'add', text: b[j++]! });
+  }
+  while (i < a.length) out.push({ kind: 'del', text: a[i++]! });
+  while (j < b.length) out.push({ kind: 'add', text: b[j++]! });
+  return out;
+}

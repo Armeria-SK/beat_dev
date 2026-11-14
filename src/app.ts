@@ -288,10 +288,10 @@ export class App {
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
       if (draft.status === 'approved') {
-        this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_auto'), body: draft.name, link: `#/skills/${encodeURIComponent(draft.name)}`, dedupKey: `skill-auto:${draft.id}`, noForward: true });
+        this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_auto'), body: draft.change_summary ? `${draft.name}: ${draft.change_summary}` : draft.name, link: `#/skills/${encodeURIComponent(draft.name)}`, dedupKey: `skill-auto:${draft.id}`, noForward: true });
         return;
       }
-      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
+      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.change_summary ?? draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
       // 道具を多く使った重い会話の後に振り返る

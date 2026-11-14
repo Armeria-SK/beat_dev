@@ -894,6 +894,7 @@ export const en = {
   'ui.skills.growthReason': 'Why it changes',
   'ui.skills.showWhole': 'Show the whole skill',
   'ui.skills.hideWhole': 'Hide the whole skill',
+  'ui.skills.diff': 'Steps · registered → draft',
   'ui.skills.discardWarn': 'Discard · cannot be undone',
   'ui.skills.discardNote': 'The draft is dropped. Registered skills stay as they are.',
   'ui.skills.used': (n: number) => `used ${n}×`,

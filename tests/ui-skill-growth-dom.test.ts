@@ -60,3 +60,26 @@ test('draftGrowth: 直す下書きは change_summary、無ければ理由、ど�
   assert.equal(draftGrowth({ ...base, reason: null }), null);
   assert.equal(draftGrowth({ ...base, current: null, change_summary: CHANGE }), null);
 });
+
+test('スキルの成長（DOM）: 「Show the whole skill」で、登録した手順と下書きの手順の行の差分（足した行・消した行の印つき）も出る。押す前は出ない', async () => {
+  const current = { description: base.description, body: '1. Use wttr.in\n2. Answer' };
+  const container = await show({ ...base, change_summary: CHANGE, current, body: `1. ${BODY}\n2. Answer` });
+  assert.equal(container.querySelector('.bt-diff'), null, '押す前は差分も閉じたまま');
+  await click(byText(container, 'button', 'Show the whole skill'));
+  const lines = [...container.querySelectorAll('.bt-diff__line')].map(el => [el.className, el.textContent]);
+  assert.deepEqual(lines, [
+    ['bt-diff__line bt-diff__line--del', '− 1. Use wttr.in'],
+    ['bt-diff__line bt-diff__line--add', `+ 1. ${BODY}`],
+    ['bt-diff__line', '  2. Answer'],
+  ]);
+  assert.equal(container.querySelector('.bt-diff__file')?.textContent, 'Steps · registered → draft+1 −1');
+});
+
+test('スキルの成長（DOM）: change も理由も無い直す下書きは、差分と全文をそのまま見せる。新しいスキルの下書きには差分が無い', async () => {
+  const bare = await show({ ...base, reason: null });
+  assert.equal(bare.querySelectorAll('.bt-diff__line--add').length, 1);
+  assert.equal(bare.textContent?.includes(BODY), true);
+  await cleanup();
+  const fresh = await show({ ...base, current: null });
+  assert.equal(fresh.querySelector('.bt-diff'), null);
+});

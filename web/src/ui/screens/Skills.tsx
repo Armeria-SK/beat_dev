@@ -5,7 +5,7 @@ import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import type { Access } from '../../settings/access.ts';
 import { draftGrowth, findDraft, orderTools, POLICY_LABEL, toolLook } from '../../skills-meta.ts';
-import { lineDelta } from '../../../../src/shared/line-delta.ts';
+import { lineDelta, lineDiff } from '../../../../src/shared/line-delta.ts';
 import type { ToolPolicy } from '../../../../src/tools/tool-policy.ts';
 import { DiscardConfirm, useDiscardAsk } from '../Discard.tsx';
 import { useNow } from '../hooks.ts';
@@ -220,6 +220,23 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
   );
 }
 
+function DraftDiff({ before, after }: { before: string; after: string }) {
+  const t = useT();
+  const lines = lineDiff(before, after);
+  const added = lines.filter(line => line.kind === 'add').length;
+  const removed = lines.filter(line => line.kind === 'del').length;
+  return (
+    <div className="bt-diff ui-lib__diff">
+      <div className="bt-diff__file"><span>{t('ui.skills.diff')}</span><span><span className="bt-add">+{added}</span> <span className="bt-del">−{removed}</span></span></div>
+      {lines.map((line, i) => (
+        <span key={i} className={line.kind === 'same' ? 'bt-diff__line' : `bt-diff__line bt-diff__line--${line.kind}`} title={line.text}>
+          {line.kind === 'add' ? '+ ' : line.kind === 'del' ? '− ' : '  '}{line.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open: boolean; now: number; onDone: () => void }) {
   const t = useT();
   const growth = draftGrowth(draft);
@@ -276,6 +293,7 @@ export function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open
                 <Button small variant="ghost" aria-expanded={whole} onClick={() => setWhole(shown => !shown)}>{t(whole ? 'ui.skills.hideWhole' : 'ui.skills.showWhole')}</Button>
               </div>
             )}
+            {open && (!growth || whole) && draft.current && <DraftDiff before={draft.current.body} after={draft.body} />}
             {open && (!growth || whole) && <article className="bt-doc"><p className="bt-meta">{draft.description}</p>{draft.reason && growth?.kind !== 'reason' && <p className="bt-meta">{draft.reason}</p>}<Markdown text={draft.body} /></article>}
           </div>
         </li>

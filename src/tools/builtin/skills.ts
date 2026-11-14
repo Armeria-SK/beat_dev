@@ -41,12 +41,12 @@ export const skillView: ToolDef<{ name: string }> = {
 const DRAFT_HOW = [
   'To fix an existing skill, write its full text under the same name (prefer fixing an existing skill over making a new one).',
   'name uses lowercase English letters, digits and hyphens. description is "when to use it" in one sentence. body is the procedure, concretely. reason is why you are making or fixing it.',
-  'When fixing an existing skill, change is required: 1 to 3 short lines on what the skill did before and what it does now, written as "before → now" (for example: "Next week\'s weather: wttr.in gives only 3 days → use the 10-day forecast page, and search again if its URL is 404"). The user reads it first, so name only what grows. Leave change out for a new skill.',
+  'When fixing one, change is required: 1-3 short lines, "before → now" (e.g. "3-day forecast only → use a 10-day page").',
 ];
 const DRAFT_ASK = ['Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.', ...DRAFT_HOW].join(' ');
 const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, unless this run or this conversation read outside content or this is a task's run (then it waits for the user's approval), and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
 
-export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string; change?: string }> = {
+export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string; change?: string | null }> = {
   name: 'skill_draft',
   description: DRAFT_ASK,
   describe: config => (askBeforeRegister(config) ? DRAFT_ASK : DRAFT_AUTO),
@@ -55,7 +55,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
     description: Type.String({ minLength: 1, maxLength: 300 }),
     body: Type.String({ minLength: 1, maxLength: 20_000 }),
     reason: Type.String({ minLength: 1, maxLength: 1000 }),
-    change: Type.Optional(Type.String({ minLength: 1, maxLength: 400 })),
+    change: Type.Optional(Type.Union([Type.String({ maxLength: 400 }), Type.Null()])),
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
@@ -63,9 +63,10 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
     try {
       const s = store(ctx);
       const existing = s.getRegistered(input.name);
-      if (existing && !input.change?.trim()) return { content: toolText(languageOf(ctx.config), 'skill.change_missing', { name: input.name }), isError: true };
+      const change = input.change?.trim() ?? '';
+      if (existing && !change) return { content: toolText(languageOf(ctx.config), 'skill.change_missing', { name: input.name }), isError: true };
       const autoOk = !ctx.taint?.tainted && !s.sawOutside(ctx.conversationId);
-      const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId, autoOk });
+      const draft = s.draft({ name: input.name, description: input.description, body: input.body, reason: input.reason, ...(existing ? { change } : {}), conversationId: ctx.conversationId, runId: ctx.runId, autoOk });
       const language = languageOf(ctx.config);
       if (draft.status === 'approved') return { content: toolText(language, existing ? 'skill.registered_auto_edit' : 'skill.registered_auto_new', { name: draft.name, id: draft.id }) };
       return { content: toolText(language, 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
