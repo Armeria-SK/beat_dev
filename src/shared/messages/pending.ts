@@ -78,6 +78,8 @@ const en = {
   'notify_title_conversation': 'Waiting in Pending from a conversation',
   'taint_note': 'the result of an approved Pending item',
   'task_waiting': 'Pending: {ids}',
+  'reopen_failed': 'Reopened: the owner approved Pending item #{id} after this task was done, and it ended as {status}. Check what relied on its result before you go on.',
+  'reopen_exit': 'Reopened: the owner approved Pending item #{id} after this task was done, and it ran but ended with exit code {code}. Check what relied on its result before you go on.',
   'judge_asked': 'the judge wants the owner to decide: {reason}',
   'judge_asked_no_reason': 'the judge wants the owner to decide',
   'judge_failed_timeout': 'the judge did not answer in time',
