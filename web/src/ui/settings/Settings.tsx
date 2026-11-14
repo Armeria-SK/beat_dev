@@ -10,7 +10,7 @@ import { planSave } from './commit.ts';
 import { clearUnsaved, setUnsaved } from '../unsaved.ts';
 import { BrowserPanel, FoldersPanel, HooksPanel, ServerPanel } from './computer.tsx';
 import { Loading, SettingsContext, type Ask, type Pending, type SetCtx } from './controls.tsx';
-import { confirmable, hasUnsaved, serial } from './flow.ts';
+import { confirmable, escAsksLeave, hasUnsaved, serial } from './flow.ts';
 import { AdvancedPanel, AppearancePanel, PersonaPanel } from './customize.tsx';
 import { McpPanel } from './mcp.tsx';
 import { CATEGORIES, categoryById, DEFAULT_CATEGORY, GROUP_LABEL, isCategory, matchCategories, type CategoryId, type GroupId } from './rows.ts';
@@ -99,7 +99,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
   const tryClose = useCallback(() => guard(onClose), [guard, onClose]);
   const tryOpen = useCallback((id: string) => guard(() => openCategory(id)), [guard]);
   const askLeave = useCallback((e: { key: string; defaultPrevented: boolean; preventDefault: () => void }) => {
-    if (e.key !== 'Escape' || e.defaultPrevented || !hasUnsaved(dirty.current)) return;
+    if (!escAsksLeave(e, hasUnsaved(dirty.current))) return;
     e.preventDefault();
     setLeave(() => onClose);
   }, [onClose]);

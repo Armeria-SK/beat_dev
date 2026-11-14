@@ -7,6 +7,7 @@ import type { Access } from '../../settings/access.ts';
 import { findDraft, orderTools, POLICY_LABEL, toolLook } from '../../skills-meta.ts';
 import { lineDelta } from '../../../../src/shared/line-delta.ts';
 import type { ToolPolicy } from '../../../../src/tools/tool-policy.ts';
+import { DiscardConfirm, useDiscardAsk } from '../Discard.tsx';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { policyChoices, ROW_LEAVE_MS, skillHistory, toolCounts, toolDecision, type SkillChange } from '../library.ts';
@@ -45,6 +46,8 @@ function NewSkill({ existing, onSaved, onClose }: { existing: readonly string[];
   const ready = name.trim() && description.trim() && body.trim();
   const typed = name !== '' || description !== '' || body !== '';
   useEffect(() => { setUnsaved(`${SCREEN_EDITS}skill-new`, typed); return () => setUnsaved(`${SCREEN_EDITS}skill-new`, false); }, [typed]);
+  const ask = useDiscardAsk(() => typed);
+  const close = () => ask.attempt(onClose);
   const taken = existing.includes(name.trim());
   const save = async () => {
     if (busy || !ready) return;
@@ -58,8 +61,9 @@ function NewSkill({ existing, onSaved, onClose }: { existing: readonly string[];
   };
   return (
     <section className="bt-pane bt-rise ui-lib__pane" aria-label={t('ui.skills.new')}
-      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); } }}>
+      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } }}>
       <div className="bt-pane__body ui-lib__form">
+        <DiscardConfirm ask={ask} />
         <label className="ui-lib__label"><span className="bt-label">{t('ui.skills.field.name')}</span>
           <input className="bt-field bt-field--mono" autoFocus value={name} maxLength={63} spellCheck={false} placeholder={t('ui.skills.namePlaceholder')} onChange={e => setName(e.target.value)} />
         </label>
@@ -73,7 +77,7 @@ function NewSkill({ existing, onSaved, onClose }: { existing: readonly string[];
         {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}
         <span className="ui-lib__buttons">
           <Button variant="primary" small disabled={busy || !ready} onClick={() => void save()}>{t(taken ? 'ui.skills.replace' : 'ui.lib.save')}</Button>
-          <Button variant="ghost" small onClick={onClose}>{t('ui.cancel')}</Button>
+          <Button variant="ghost" small onClick={close}>{t('ui.cancel')}</Button>
         </span>
       </div>
     </section>
@@ -243,7 +247,7 @@ function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open: boole
         <div className="bt-row__main">
           <button type="button" className="bt-row__title ui-rowbtn" aria-expanded={open}><code>{draft.name}</code></button>
           <span className="bt-row__sub bt-meta" title={formatDateTime(draft.created_at, 'full')}>
-            {t('ui.skills.drafted', formatRelative(draft.created_at, now))} · {t(draft.current ? 'ui.skills.draftUpdate' : 'ui.skills.draftNew')}
+            {draft.from_title ? t('ui.skills.draftedFrom', draft.from_title, formatRelative(draft.created_at, now)) : t('ui.skills.drafted', formatRelative(draft.created_at, now))} · {t(draft.current ? 'ui.skills.draftUpdate' : 'ui.skills.draftNew')}
             {delta && <Delta {...delta} />}
           </span>
         </div>

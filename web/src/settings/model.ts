@@ -166,7 +166,8 @@ export function pruned<T extends Record<string, unknown>>(value: T): T {
 }
 
 export function updateListItem(config: Config, root: 'models' | 'providers', id: string, patch: Record<string, unknown>): Config {
-  return { ...config, [root]: (config[root] as Array<Record<string, unknown>>).map(item => (item.id === id ? pruned({ ...item, ...patch }) : item)) };
+  const full = root === 'providers' && typeof patch.kind === 'string' && !patch.apiKeyEnv ? { ...patch, ...kindPatch(config, id, patch.kind) } : patch;
+  return { ...config, [root]: (config[root] as Array<Record<string, unknown>>).map(item => (item.id === id ? pruned({ ...item, ...full }) : item)) };
 }
 
 export function uniqueId(base: string, taken: readonly string[]): string {
@@ -206,6 +207,14 @@ export function newAnthropicProvider(config: Config): Record<string, unknown> {
   const taken = takenKeyEnvs(providers, id);
   const apiKeyEnv = taken.has('ANTHROPIC_API_KEY') ? derivedKeyEnv(id, taken) : 'ANTHROPIC_API_KEY';
   return { id, kind: 'anthropic', apiKeyEnv, maxParallel: 2, timeoutMs: 600_000 };
+}
+
+export function kindPatch(config: Config, id: string, kind: string): { kind: string; apiKeyEnv?: string } {
+  const providers = providerRows(config);
+  const provider = providers.find(p => p.id === id);
+  if (kind !== 'anthropic' || !provider || provider.apiKeyEnv) return { kind };
+  const taken = takenKeyEnvs(providers, id);
+  return taken.has('ANTHROPIC_API_KEY') ? { kind, apiKeyEnv: derivedKeyEnv(id, taken) } : { kind };
 }
 
 export const providerInUse = (config: Config, id: string): boolean => (config.models as Array<{ provider: string }>).some(m => m.provider === id);
@@ -259,12 +268,23 @@ export function addTag(list: readonly string[], draft: string): string[] {
   return !value || list.includes(value) ? [...list] : [...list, value];
 }
 
+export const openAfterRename = (open: string | null, from: string, to: string): string | null => (open === from ? to : open);
+
 export const secondsOf = (ms: unknown): number | undefined => (typeof ms === 'number' ? Math.round(ms / 1000) : undefined);
 
 const KEY_ENV = /^[A-Z][A-Z0-9_]{0,63}$/u;
 export const isEnvName = (value: string): boolean => KEY_ENV.test(value);
 
-export const keyEnvPatch = (value: string): { apiKeyEnv: string | undefined } | null => (value && !isEnvName(value) ? null : { apiKeyEnv: value || undefined });
+export const keyEnvProblem = (value: string): 'pattern' | 'unsafe' | null => (value === '' ? null : !isEnvName(value) ? 'pattern' : isSecretEnvName(value) ? null : 'unsafe');
+
+export type KeyEnvEdit = { patch: { apiKeyEnv: string | undefined } } | { fail: { key: 'ui.set.provider.envUnsafe' } | { code: 'config.pattern.key_env' } };
+
+export function keyEnvEdit(value: string): KeyEnvEdit {
+  const problem = keyEnvProblem(value);
+  if (problem === 'unsafe') return { fail: { key: 'ui.set.provider.envUnsafe' } };
+  if (problem === 'pattern') return { fail: { code: 'config.pattern.key_env' } };
+  return { patch: { apiKeyEnv: value || undefined } };
+}
 
 // API キーの環境変数の名前。プロバイダに書かれたもの（Anthropic で書いていなければ ANTHROPIC_API_KEY）。
 export function keyUsage(config: Config): Array<{ name: string; providers: string[] }> {

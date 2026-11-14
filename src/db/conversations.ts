@@ -104,7 +104,7 @@ export class Conversations {
   create(input: { title?: string; kind?: 'chat' | 'task'; id?: string; source?: ReviewSource; parentRunId?: string; projectId?: string | null | undefined } = {}): ConversationRow {
     const now = this.now();
     const id = input.id ?? randomUUID();
-    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at, source_conversation_id, source_task_id, parent_run_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at, source_conversation_id, source_task_id, parent_run_id, project_id, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'auto')`)
       .run(id, input.kind ?? 'chat', input.title ?? null, now, now, input.source?.conversationId ?? null, input.source?.taskId ?? null, input.parentRunId ?? null, input.projectId ?? null);
     return this.get(id)!;
   }

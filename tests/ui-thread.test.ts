@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { ChecklistItem, Message } from '../web/src/api.ts';
 import { imageHost } from '../web/src/markdown-image.ts';
 import type { RunNotice } from '../web/src/ui/live-state.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
-import { checklistShape, contextMeter, isRising, messageStamp, noticeRows, replyMeta, thinkingSeconds, threadItems } from '../web/src/ui/thread.ts';
+import { checklistShape, contextMeter, isRising, messageStamp, noticeRows, replyMeta, thinkingSeconds, threadGutter, threadItems } from '../web/src/ui/thread.ts';
 
 // 新しい画面の会話（p1-ui.md の「会話」）: 発言・返事・道具の行のまとまり・流れている返事・承認の行・お知らせの並びを作る純粋な関数。
 
@@ -312,4 +313,25 @@ test('ui/thread: 保存された道具の結果と、流れている実行の済
   }).find(i => i.kind === 'tools')!;
   assert.ok(live.kind === 'tools');
   assert.deepEqual(live.rows.map(r => r.gate), [{ by: 'not-parked' }]);
+});
+
+test('ui/thread: 会話の列は 1 つ（幅と左端が同じ）。持ち主の吹き出しは列の 85% まで、入力欄は発言の欄の両わきのスクロールバーの分だけ内へ寄せる（backlog 533、持ち主 2026-11-14）', () => {
+  assert.equal(threadGutter({ offsetWidth: 600, clientWidth: 580 }), 10, '両わきに同じ幅の空きがあるので半分');
+  assert.equal(threadGutter({ offsetWidth: 600, clientWidth: 600 }), 0, '重ねて出るスクロールバーなら 0');
+  assert.equal(threadGutter({ offsetWidth: 600, clientWidth: 601 }), 0, '負にしない');
+  const css = readFileSync(new URL('../web/src/ui/styles/frame.css', import.meta.url), 'utf8');
+  const page = readFileSync(new URL('../web/src/ui/Conversation.tsx', import.meta.url), 'utf8');
+  assert.match(css, /\.bt-app__main \.bt-thread > \.bt-msg--owner \{[^}]*max-width: calc\(min\(100%, 720px\) \* 0\.85\);/u, '吹き出しの幅は発言の欄ではなく列（720px まで）の 85%');
+  assert.match(css, /\.bt-app__main \.bt-composer \{[^}]*width: calc\(100% - 2 \* var\(--ui-gutter, 0px\)\);/u, '入力欄は発言の列と同じ幅');
+  assert.match(css, /\.bt-app__main > \.ui-pinned \{[^}]*width: calc\(100% - 2 \* var\(--ui-gutter, 0px\)\);/u);
+  assert.match(css, /\.bt-app__main > \.ui-offline \{[^}]*width: calc\(100% - 2 \* var\(--ui-gutter, 0px\)\);/u);
+  assert.ok(page.includes("el.parentElement?.style.setProperty('--ui-gutter', `${threadGutter(el)}px`)"), '空きの幅は発言の欄から測って渡す');
+});
+
+test('ui/parts: 静かな知らせ・warn の知らせも、渡された text を題のあとに出す（Build が凍ったときの理由、フォルダが無い製品の説明。backlog 500）', () => {
+  const parts = readFileSync(new URL('../web/src/ui/parts.tsx', import.meta.url), 'utf8');
+  const quiet = parts.slice(parts.indexOf('<div className={`bt-notice${tone ?'), parts.indexOf('export function Toast('));
+  assert.ok(quiet.includes('{text ? <span className="ui-notice__text">{title} · {text}</span> : title}'), 'fail 以外でも text を描く');
+  const plan = readFileSync(new URL('../web/src/ui/panes/PlanPane.tsx', import.meta.url), 'utf8');
+  assert.ok(plan.includes(`<Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} />`), '凍ったときの理由を渡している');
 });

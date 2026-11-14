@@ -21,7 +21,7 @@ import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
-import { contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadItems, type ThreadItem } from './thread.ts';
+import { contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem } from './thread.ts';
 import { ToolGroup, type PendingLink } from './ToolRow.tsx';
 
 type T = ReturnType<typeof useT>;
@@ -353,7 +353,10 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   useEffect(() => {
     const el = scroller.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const watch = new ResizeObserver(() => { if (stick.current) el.scrollTop = el.scrollHeight; });
+    const watch = new ResizeObserver(() => {
+      el.parentElement?.style.setProperty('--ui-gutter', `${threadGutter(el)}px`);
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
     watch.observe(el);
     return () => watch.disconnect();
   }, []);

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  keyEnvPatch, sharedKeyWith,
+  keyEnvEdit, keyEnvProblem, kindPatch, openAfterRename, sharedKeyWith,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -403,9 +404,88 @@ test('Anthropic を足す: 1 つ目は ANTHROPIC_API_KEY、2 つ目からはほ�
   assert.equal(third.apiKeyEnv, 'BEAT_ANTHROPIC_3_API_KEY_2');
 });
 
+test('ID を変えても開いていた行は開いたまま: 開いている行の覚えを新しい ID へ付け替える', () => {
+  assert.equal(openAfterRename('p:local', 'p:local', 'p:home'), 'p:home');
+  assert.equal(openAfterRename('m:qwen', 'm:qwen', 'm:qwen3'), 'm:qwen3');
+  assert.equal(openAfterRename('m:other', 'm:qwen', 'm:qwen3'), 'm:other', 'ほかの行を開いていたら動かさない');
+  assert.equal(openAfterRename('m:local', 'p:local', 'p:home'), 'm:local', '同じ ID のモデルの行と取り違えない');
+  assert.equal(openAfterRename(null, 'p:local', 'p:home'), null);
+
+  const screen = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
+  assert.ok(screen.includes('renameProvider(c, id, next)).then(ok => { if (ok) onRenamed(next); })'));
+  assert.ok(screen.includes('renameModel(c, id, next)).then(ok => { if (ok) onRenamed(next); })'));
+  assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `p:${p.id}`, `p:${next}`))}'));
+  assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `m:${m.id}`, `m:${next}`))}'));
+});
+
+test('モデルを消すボタンは、Edit を開かなくても行の頭に見える（詳しい欄の一番下に埋めない）', () => {
+  const screen = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
+  const row = screen.slice(screen.indexOf('function ModelRow('), screen.indexOf('function AddModel('));
+  const head = row.slice(row.indexOf('{reach && <Pill'));
+  assert.ok(head.includes("aria-label={t('ui.set.list.remove', name)}") && head.includes('onClick={() => setRemoving(true)}'), '行の頭に Remove がある');
+  assert.ok(!row.includes('`${k}:remove`'), '詳しい欄の中の行は無くす（消す口は 1 つ）');
+  assert.ok(row.includes('below={(open || removing) && ('), '確かめは Edit を開いていなくても行の下に出る');
+  assert.ok(row.includes("<RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')}"), '消す前の確かめは今までどおり');
+  assert.equal(en['ui.set.model.removeShort'], 'Remove');
+});
+
+test('種類を Anthropic に変える: 鍵の名前が無く、ANTHROPIC_API_KEY をほかの提供元が使っていれば、自分の鍵の名前を持たせる（鍵を共有しない）', () => {
+  const base = { ...sample(), providers: [
+    { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
+    { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 },
+    { id: 'named', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1', apiKeyEnv: 'EXAMPLE_API_KEY', maxParallel: 1, timeoutMs: 600_000 },
+  ] };
+  assert.deepEqual(kindPatch(base, 'local', 'anthropic'), { kind: 'anthropic', apiKeyEnv: 'BEAT_LOCAL_API_KEY' });
+  const changed = updateListItem(base, 'providers', 'local', kindPatch(base, 'local', 'anthropic'));
+  assert.deepEqual(sharedKeyWith(changed, 'local'), []);
+  assert.deepEqual(sharedKeyWith(changed, 'anthropic'), []);
+
+  assert.deepEqual(kindPatch(base, 'named', 'anthropic'), { kind: 'anthropic' }, '書いてある鍵の名前はそのまま');
+  assert.deepEqual(kindPatch(base, 'anthropic', 'openai_compatible'), { kind: 'openai_compatible' });
+  assert.deepEqual(kindPatch(base, 'anthropic', 'anthropic'), { kind: 'anthropic' }, '1 つ目の Anthropic は ANTHROPIC_API_KEY のまま');
+
+  const implicit = { ...base, providers: [{ id: 'claude', kind: 'anthropic', maxParallel: 2, timeoutMs: 600_000 }, base.providers[1]!] };
+  assert.deepEqual(kindPatch(implicit, 'local', 'anthropic'), { kind: 'anthropic', apiKeyEnv: 'BEAT_LOCAL_API_KEY' }, '書いていない Anthropic の既定の名前とも重ねない');
+
+  const alone = { ...base, providers: [base.providers[1]!] };
+  assert.deepEqual(kindPatch(alone, 'local', 'anthropic'), { kind: 'anthropic' }, 'ほかに使う提供元が無ければ ANTHROPIC_API_KEY でよい');
+});
+
+test('提供元の編集（updateListItem）: 種類を Anthropic に変える編集は、どの呼び出しからでも鍵を共有させない', () => {
+  const base = { ...sample(), providers: [
+    { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
+    { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 },
+  ] };
+  const changed = updateListItem(base, 'providers', 'local', { kind: 'anthropic' });
+  assert.equal((changed.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, 'BEAT_LOCAL_API_KEY');
+  assert.deepEqual(sharedKeyWith(changed, 'local'), []);
+  const other = updateListItem(base, 'providers', 'local', { maxParallel: 2 });
+  assert.equal((other.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, undefined, '種類を変えない編集は鍵の名前に触らない');
+  const named = updateListItem(base, 'providers', 'local', { kind: 'anthropic', apiKeyEnv: 'MY_API_KEY' });
+  assert.equal((named.providers as Array<Record<string, unknown>>)[1]!.apiKeyEnv, 'MY_API_KEY', '編集が名前を持っていればそれを使う');
+});
+
+test('Key variable の欄の結果（keyEnvEdit）: 鍵を持てない名前と、名前の形でないものとで、出す文を分ける', () => {
+  assert.deepEqual(keyEnvEdit('MY_API_KEY'), { patch: { apiKeyEnv: 'MY_API_KEY' } });
+  assert.deepEqual(keyEnvEdit(''), { patch: { apiKeyEnv: undefined } });
+  assert.deepEqual(keyEnvEdit('ABCD1234EFGH5678IJKL9012MNOP3456'), { fail: { key: 'ui.set.provider.envUnsafe' } });
+  assert.deepEqual(keyEnvEdit('sk-ant-test-0000000000000000'), { fail: { code: 'config.pattern.key_env' } });
+});
+
 test('Key variable の欄: 環境変数の名前だけを設定に入れる。鍵を貼ったものは断り、空は外す', () => {
-  assert.deepEqual(keyEnvPatch('MY_API_KEY'), { apiKeyEnv: 'MY_API_KEY' });
-  assert.deepEqual(keyEnvPatch(''), { apiKeyEnv: undefined });
-  assert.equal(keyEnvPatch('sk-ant-test-0000000000000000'), null);
-  assert.equal(keyEnvPatch('my_api_key'), null);
+  assert.deepEqual(keyEnvEdit('MY_API_KEY'), { patch: { apiKeyEnv: 'MY_API_KEY' } });
+  assert.deepEqual(keyEnvEdit(''), { patch: { apiKeyEnv: undefined } });
+  assert.ok('fail' in keyEnvEdit('sk-ant-test-0000000000000000'));
+  assert.ok('fail' in keyEnvEdit('my_api_key'));
+});
+
+test('Key variable の欄: 大文字と数字だけの鍵らしい文字列は、名前の形に合っていても設定に入れない（鍵を持つ名前だけ通す）', () => {
+  assert.ok('fail' in keyEnvEdit('ABCD1234EFGH5678IJKL9012MNOP3456'));
+  assert.equal(keyEnvProblem('ABCD1234EFGH5678IJKL9012MNOP3456'), 'unsafe');
+  assert.ok('fail' in keyEnvEdit('PATH'));
+  assert.equal(keyEnvProblem('sk-ant-test-0000000000000000'), 'pattern');
+  assert.equal(keyEnvProblem('MY_API_KEY'), null);
+  assert.equal(keyEnvProblem('OPENROUTER_TOKEN'), null);
+  assert.equal(keyEnvProblem(''), null);
+  assert.match(en['ui.set.provider.envUnsafe'] as string, /KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL/u);
 });

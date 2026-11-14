@@ -6,7 +6,7 @@ import type { AppConfig, Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { redactSecrets } from '../../shared/redaction.ts';
+import { redactKeyEcho, redactOpenKey, redactSecrets } from '../../shared/redaction.ts';
 import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals.ts';
 import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
@@ -26,6 +26,12 @@ import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/run
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
 interface ShellInput { command: string; cwd?: string; timeoutSec?: number }
+
+export function shellTranscript(command: string, header: string, body: readonly string[]): string {
+  const echo = redactKeyEcho(`$ ${command}`);
+  const rest = body.join('\n\n');
+  return [echo.text, header, ...(body.length ? [echo.open ? redactOpenKey(rest) : rest] : [])].join('\n\n');
+}
 
 function resolveCwd(input: ShellInput, ctx: ToolContext): { cwd: string } | { problem: string } {
   const language = languageOf(ctx.config);
@@ -224,14 +230,15 @@ export const shellRun: ToolDef<ShellInput> = {
       pushRefused = gitRun?.refused?.() === true;
     } finally { gitRun?.cleanup(); }
     if (result.spawnError) return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: result.spawnError }), isError: true };
-    const parts = [`$ ${input.command}`, toolText(language, 'shell.header', { shell: shell.name, cwd: cwd.cwd, code: result.exitCode ?? '—', seconds: (result.durationMs / 1000).toFixed(1) })];
+    const header = toolText(language, 'shell.header', { shell: shell.name, cwd: cwd.cwd, code: result.exitCode ?? '—', seconds: (result.durationMs / 1000).toFixed(1) });
+    const parts: string[] = [];
     if (result.stdout.trim()) parts.push(result.stdout.trimEnd());
     if (result.stderr.trim()) parts.push(`[stderr]\n${result.stderr.trimEnd()}`);
     if (result.truncated) parts.push(toolText(language, 'shell.truncated', { total: result.totalBytes.toLocaleString('en-US'), cap: settings.outputCapBytes.toLocaleString('en-US'), tail: result.fullOutputPath ? toolText(language, 'shell.truncated_tail', { path: result.fullOutputPath }) : '' }));
     if (result.timedOut) parts.push(toolText(language, 'shell.timeout', { seconds: timeoutSec }));
     if (result.aborted) parts.push(toolText(language, 'shell.aborted'));
     return {
-      content: parts.join('\n\n'),
+      content: shellTranscript(input.command, header, parts),
       isError: result.timedOut || result.aborted || result.exitCode !== 0,
       ...(result.fullOutputPath ? { fullRef: result.fullOutputPath } : {}),
       ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}),

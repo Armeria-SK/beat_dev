@@ -4,19 +4,20 @@ import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
 import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
+import { composerDrafts } from './composer-state.ts';
 import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
 import { Panes, usePanes } from './Panes.tsx';
-import { paneTarget, pendingFor, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
+import { paneTarget, pendingFor, pendingRouteReady, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
 import type { PaneView } from './panes.ts';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
-import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupPending } from './onboarding-steps.ts';
+import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending } from './onboarding-steps.ts';
 import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
-import { awaitingProduct, projectLoads, settleLeave } from './product-nav.ts';
+import { awaitingProduct, productsMissing, projectLoads, settleLeave } from './product-nav.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
@@ -35,14 +36,15 @@ import { Settings } from './settings/Settings.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
-import { Button } from './parts.tsx';
-import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, unloadGuard } from './unsaved.ts';
+import { Button, Notice } from './parts.tsx';
+import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_NOTICES: RunNotice[] = [];
 const DISCONNECT_GRACE_MS = 3000;
 const PRODUCT_COUNTS_MS = 2000;
 const PENDING_MS = 500;
+const LEAVE_ENV: LeaveEnv = { go: by => history.go(by), replace: hash => location.replace(hash), push: hash => { location.hash = hash; } };
 
 function useDisconnected(connected: boolean): boolean {
   const [shown, setShown] = useState(false);
@@ -109,7 +111,9 @@ export function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
-  const [leave, setLeave] = useState<string | null>(null);
+  const [leave, setLeave] = useState<HeldLeave | null>(null);
+  const entryIndex = useRef(historyIndex());
+  const entryHash = useRef(location.hash);
 
   const behind = routeBehind(route, behindRef.current);
   if (route.view !== 'settings') behindRef.current = route;
@@ -122,7 +126,8 @@ export function App() {
     runRef.current(next.effects);
   }, []);
 
-  const projectList = useMemo(() => projectLoads(() => api.projects(), projects => dispatch({ type: 'projects', projects })), [dispatch]);
+  const [projectsFailing, setProjectsFailing] = useState(false);
+  const projectList = useMemo(() => projectLoads(() => api.projects(), projects => dispatch({ type: 'projects', projects }), undefined, undefined, setProjectsFailing), [dispatch]);
   const upsertProject = useCallback((project: Project) => {
     projectList.supersede();
     dispatch({ type: 'project', project });
@@ -130,7 +135,7 @@ export function App() {
   const load = useMemo(() => ({
     projects: () => { void projectList.load(); },
     projectCounts: throttled(() => { void projectList.load(); }, PRODUCT_COUNTS_MS),
-    conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations, more: r.more })).catch(() => undefined); },
+    conversations: () => { void api.conversations().then(r => dispatch({ type: 'conversations', conversations: r.conversations, more: r.more })).catch(() => dispatch({ type: 'conversationsFailed' })); },
     pending: throttled(() => {
       void Promise.all([api.pendingCounts(), api.pending({ status: 'waiting' })]).then(([counts, list]) => dispatch({ type: 'pending', counts, waiting: list.items })).catch(() => undefined);
     }, PENDING_MS),
@@ -149,6 +154,7 @@ export function App() {
         const id = effect.conversationId;
         void api.checklist(id).then(r => dispatch({ type: 'checklist', conversationId: id, items: r.items })).catch(() => undefined);
       } else if (effect.kind === 'gone') {
+        composerDrafts.forget(effect.conversationId);
         const now = parseRoute(location.hash);
         if (now.view === 'chat' && now.id === effect.conversationId) location.replace('#/');
       } else if (effect.kind === 'toast') {
@@ -193,11 +199,11 @@ export function App() {
     const to = leave;
     clearUnsaved(SCREEN_EDITS);
     setLeave(null);
-    if (to !== null) location.hash = to;
+    if (to !== null) followLeave(to, historyIndex(), LEAVE_ENV);
   }, [leave]);
 
   useEffect(() => {
-    const onPop = () => closer.reset();
+    const onPop = () => { closer.reset(); entryIndex.current = popIndex(entryIndex.current, entryHash.current, location.hash, historyIndex()); };
     addEventListener('popstate', onPop);
     return () => removeEventListener('popstate', onPop);
   }, [closer]);
@@ -208,10 +214,13 @@ export function App() {
       const held = behindRef.current;
       const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
       if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
-        setLeave(routeHash(next));
-        location.replace(routeHash(held));
+        const moved = leaveMove(entryIndex.current, historyIndex());
+        setLeave({ to: routeHash(next), moved, at: entryIndex.current });
+        holdLeave(moved, routeHash(held), LEAVE_ENV);
         return;
       }
+      entryIndex.current = historyIndex();
+      entryHash.current = location.hash;
       hashGeneration.current += 1;
       closer.reset();
       if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;
@@ -237,7 +246,15 @@ export function App() {
     settleLeave(route, live.projectsLoaded ? live.projects.map(p => p.id) : null, { clearEdits: () => { clearUnsaved(SCREEN_EDITS); setLeave(null); }, replace: hash => location.replace(hash) });
   }, [route, live.projects, live.projectsLoaded]);
   const loadSetup = useCallback(() => api.onboarding().then(state => { setSetup(state); return state; }), []);
-  useEffect(() => { void loadSetup().then(state => { if (opensOnLoad(state.done, wasSetupShown())) setOnboard(old => old ?? 'first'); }).catch(() => undefined); }, [loadSetup]);
+  useEffect(() => {
+    const loads = setupLoads(
+      () => api.onboarding(),
+      state => { setSetup(state); if (opensOnLoad(state.done, wasSetupShown())) setOnboard(old => old ?? 'first'); },
+      () => toast({ kind: 'info', icon: 'alert', title: t('ui.ob.loadFailed'), body: t('ui.ob.loadRetry') }),
+    );
+    void loads.load();
+    return loads.stop;
+  }, []);
   useEffect(() => { const timer = setInterval(load.worker, 30_000); return () => clearInterval(timer); }, [load]);
   useEffect(() => { void loadServerSettings(api.settings); }, []);
 
@@ -338,10 +355,10 @@ export function App() {
   const openPlanOf = useCallback((productId: string) => openPaneOf(productId, 'plan'), [openPaneOf]);
   const pendingProduct = route.view === 'pending' ? route.productId ?? null : null;
   useEffect(() => {
-    if (pendingProduct === null || !live.projectsLoaded) return;
+    if (pendingProduct === null || !pendingRouteReady(live.projectsLoaded, live.conversationsSettled)) return;
     if (productOf(projects, pendingProduct)) openPaneOf(pendingProduct, 'pending');
     else location.replace(routeHash({ view: 'pending' }));
-  }, [pendingProduct, live.projectsLoaded, projects, openPaneOf]);
+  }, [pendingProduct, live.projectsLoaded, live.conversationsSettled, projects, openPaneOf]);
   useEffect(() => {
     if (!want || paneProduct !== want.productId) return;
     if (want.view === 'plan') panes.openPlan(false); else panes.openPane(want.view);
@@ -355,7 +372,13 @@ export function App() {
       <div className={convo ? `bt-app${paneCount ? ' has-panes' : ''}${paneCount && panes.single ? ' is-pane-single' : ''}` : 'bt-shell'} data-panes={convo ? String(paneCount) : undefined} inert={shut}
         style={paneCount && !panes.single ? { '--ui-panes-w': `${panes.width}px` } as CSSProperties : undefined}>
         <Sidebar state={state} route={behind} foot={foot} kanban={kanban} pending={pendingAll} sessionPending={sessionPending} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
-        {convo && awaitingProduct(behind, routeProduct) ? (
+        {productsMissing(behind, live.projectsLoaded, projectsFailing) ? (
+          <main className={convo ? 'bt-app__main' : 'bt-screen'} inert={drawer}>
+            <div className="bt-screen__inner">
+              <Notice tone="warn" icon="alert" title={t('ui.product.listFailed')} text={t('ui.product.listRetry')} action={{ label: t('ui.fail.retry'), run: load.projects }} />
+            </div>
+          </main>
+        ) : convo && awaitingProduct(behind, routeProduct) ? (
           <main className="bt-app__main" inert={drawer} />
         ) : convo ? (
           <main className={`bt-app__main${isStreaming ? ' is-streaming' : ''}`} inert={drawer}>
@@ -390,7 +413,7 @@ export function App() {
             ) : behind.view === 'runs' ? (
               <Runs tab={behind.tab} revision={live.libraryRevision + live.epoch + live.taskRevision} conversations={conversations} projects={projects} />
             ) : behind.view === 'archived' ? (
-              <Archived revision={live.libraryRevision + live.epoch} projects={projects} />
+              <Archived revision={live.libraryRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} />
             ) : behind.view === 'pending' ? (
               behind.productId ? <div className="bt-screen__inner" /> : <PendingScreen waiting={live.pendingWaiting} counts={live.pendingCounts} projects={projects} conversations={conversations} revision={pendingRevision} onOpenPlan={openPlanOf} />
             ) : behind.view === 'newProduct' ? (

@@ -137,6 +137,8 @@ export function thinkingSeconds(since: number | null, now: number): number | nul
   return seconds >= 1 ? seconds : null;
 }
 
+export const threadGutter = (el: { offsetWidth: number; clientWidth: number }): number => Math.max(0, (el.offsetWidth - el.clientWidth) / 2);
+
 export const RISE_MS = 600;
 export const isRising = (firstSeenAt: number | undefined, now: number): boolean => firstSeenAt === undefined || now - firstSeenAt < RISE_MS;
 

@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { prefixLength } from '../engine/tokens.ts';
 import { isRemotePath, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
 import { INSTRUCTION_FILES } from '../tools/policy.ts';
+import { folderGone } from './work-folder.ts';
 
 export const INSTRUCTIONS_BUDGET_RATIO = 0.05;
 export const INSTRUCTIONS_DEFAULT_TOKENS = 2000;
@@ -10,6 +11,7 @@ export const INSTRUCTIONS_BYTES_PER_TOKEN = 14;
 
 const WINDOWS = process.platform === 'win32';
 const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\u{0}-\u{8}\u{B}\u{C}\u{E}-\u{1F}\u{7F}-\u{9F}\u{2028}\u{2029}]/gu;
+const LINK_STUB = /^\S+\.md$/iu;
 
 export interface Instructions {
   name: (typeof INSTRUCTION_FILES)[number];
@@ -57,7 +59,7 @@ function readHead(path: string, maxBytes: number): { text: string; whole: boolea
   } finally { closeSync(fd); }
 }
 
-export function readInstructions(root: string, budgetTokens: number, log: Log = () => undefined): Instructions | undefined {
+export function readInstructions(root: string, budgetTokens: number, log: Log = () => undefined, rootKey?: string): Instructions | undefined {
   for (const name of INSTRUCTION_FILES) {
     const path = join(root, name);
     try {
@@ -70,11 +72,19 @@ export function readInstructions(root: string, budgetTokens: number, log: Log = 
         return undefined;
       }
       const clean = stripInvisible(head.text).trim();
+      if (head.whole && LINK_STUB.test(clean)) {
+        log(`[INFO] Did not read ${name} in the product folder ${root}: its content is only the name of another file (a link that was checked out as a plain file), so it is not used as instructions`);
+        return undefined;
+      }
       const keep = prefixLength(clean, clean.length, budgetTokens);
       const text = clean.slice(0, keep).trimEnd();
       if (!text) return undefined;
       const truncated = !head.whole || keep < clean.length;
       if (truncated) log(`[INFO] ${name} in the product folder ${root} is longer than the limit (about ${budgetTokens} tokens), so only its beginning is used`);
+      if (rootKey !== undefined && folderGone(root, rootKey)) {
+        log(`[WARN] Did not use ${name} in the product folder ${root}: the folder is no longer the one that was registered`);
+        return undefined;
+      }
       return { name, text, truncated };
     } catch (error) {
       log(`[WARN] Could not read ${name} in the product folder ${root} (${(error as NodeJS.ErrnoException).code ?? 'error'}), so the conversation starts without it`);
