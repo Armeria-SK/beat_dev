@@ -4,6 +4,7 @@ import { useT } from '../i18n/index.ts';
 import { useMedia } from './hooks.ts';
 import { PendingList, type PendingListProps } from './panes/PendingPane.tsx';
 import { PlanPane } from './panes/PlanPane.tsx';
+import { QuestionsList, type QuestionsListProps } from './panes/QuestionsPane.tsx';
 import {
   closePane, fitLayout, keepHidden, KEY_STEP, openable, openView, PANE_MIN, paneDef, paneRange, panesWidth, parseLayout, resizePane, selectView, showSplit, singlePane, STORE_KEY, tabOrder, togglePanes, visiblePanes,
   type PaneLayout, type PaneView,
@@ -135,13 +136,19 @@ function Handle({ index, width, panes }: { index: number; width: number; panes: 
 
 export type PanePending = Omit<PendingListProps, 'projectId' | 'onOpenPlan'> & { count: number };
 
-export function Panes({ panes, productId, scope, revision, taskRevision, isGit, inert, pending }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; isGit: boolean; inert: boolean; pending: PanePending }) {
+export type PaneQuestions = Omit<QuestionsListProps, 'projectId'> & { count: number };
+
+export function Panes({ panes, productId, scope, revision, taskRevision, isGit, inert, pending, questions }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions }) {
   const t = useT();
   const body = (view: PaneView, index: number): ReactNode => {
     switch (view) {
       case 'pending': {
         const { count: _count, ...list } = pending;
         return <PendingList key={productId} projectId={productId} {...list} onOpenPlan={() => panes.select(index, 'plan')} />;
+      }
+      case 'questions': {
+        const { count: _count, ...list } = questions;
+        return <QuestionsList key={productId} projectId={productId} {...list} />;
       }
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} />;
     }
@@ -161,7 +168,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, isGit, 
           <section id={paneId(i)} className="bt-pane ui-panes__pane" style={panes.single ? undefined : { flexBasis: pane.width }}>
             <div className="bt-tabs" role="tablist">
               {tabs.map(view => (
-                <button key={view} type="button" className="bt-tab" role="tab" aria-selected={pane.view === view} onClick={() => panes.select(i, view)}>{t(paneDef(view).label)}{view === 'pending' && <> <CountBadge n={pending.count} label={t('ui.count.waiting', pending.count)} /></>}</button>
+                <button key={view} type="button" className="bt-tab" role="tab" aria-selected={pane.view === view} onClick={() => panes.select(i, view)}>{t(paneDef(view).label)}{view === 'pending' && <> <CountBadge n={pending.count} label={t('ui.count.waiting', pending.count)} /></>}{view === 'questions' && <> <CountBadge n={questions.count} label={t('ui.count.open', questions.count)} /></>}</button>
               ))}
               <span className="bt-tabs__end">
                 {splittable && <Button variant="ghost" small icon="columns" aria-label={t('ui.pane.split')} title={t('ui.pane.split')} onClick={() => panes.split(i)} />}

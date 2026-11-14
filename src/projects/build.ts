@@ -2,9 +2,11 @@ import type { Language } from '../config/schema.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { buildText, type BuildMessageKey } from '../shared/messages/build.ts';
 import { taskText } from '../shared/messages/tasks.ts';
-import type { Task, TaskStore } from '../tasks/store.ts';
+import { estimateTextTokens } from '../engine/tokens.ts';
+import { PLAN_GIST_LABEL, type Task, type TaskStore } from '../tasks/store.ts';
+import { USER_REQUEST_LIMIT, USER_REQUEST_TOKENS } from '../tools/auto-approve.ts';
 import { docOf, frozenHash, type AcceptanceDoc, type AcceptanceStore, type AcceptanceVersionRow } from './acceptance.ts';
-import type { PlanStore } from './plan.ts';
+import { planGist, type PlanStore } from './plan.ts';
 import { languageTagOf, ProjectError, type ProjectStore } from './store.ts';
 
 export const BUILD_ACTOR = 'build';
@@ -66,10 +68,14 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
   const untrusted = plan.updated_by === 'outside' || plan.tainted || runs.size > 0;
   const marked = [...runs].filter(run => RUN_ID.test(run)).slice(0, MAX_MARKED_RUNS);
 
+  const title = `Build: ${project.name}`;
+  const lead = `${title}\n${PLAN_GIST_LABEL}\n`;
+  const gist = untrusted ? '' : planGist(plan.content, Math.max(0, USER_REQUEST_LIMIT - lead.length), Math.max(0, USER_REQUEST_TOKENS - estimateTextTokens(lead)));
+
   let task: Task | undefined;
   const makeTask = () => {
     task = d.tasks.create({
-      title: `Build: ${project.name}`, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: !untrusted,
+      title, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: !untrusted, ownerPlan: gist,
       acceptanceItems: only ?? doc.items.filter(entry => entry.removedIn === null).map(entry => entry.id),
       createdInConversation: plan.updated_by === 'ai' ? meta?.conversationId ?? undefined : undefined,
     });

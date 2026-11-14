@@ -25,8 +25,6 @@ export const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
   en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory has grown large', manual: 'Manual' },
 };
 
-export const TRIGGER_LABEL = TRIGGER_TEXT.en;
-
 // 整理の振り返り（book_full）では、記憶を消さず・新しく覚えず、案を知らせる。この実行には渡さず、呼ばれても拒否する道具
 export const TIDY_FORBIDDEN_TOOLS: readonly string[] = ['memory_forget', 'memory_save', 'skill_draft'];
 

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
-import { en } from '../web/src/i18n/en.ts';
 import { commitPendingId, idFromInput, ID_RULES, slugId, uniqueSlug } from '../web/src/settings/ids.ts';
 
 // 段 9f（追加）: プロバイダの「名前（ID）」とモデルの ID の欄は、打った文字を受けて、ID の決まりに直す

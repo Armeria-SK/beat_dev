@@ -273,7 +273,7 @@ function decoy(t: { after: (fn: () => void) => void }, head: string | Buffer): {
 test('HEAD の中身: 本物の git が b を git のフォルダとするときだけ、ガードも b をふつうの git のフォルダとする。そうでなければ今回だけ（読めない）か、上を使う', { skip: !gitAvailable && 'git が無い' }, t => {
   const wrong: string[] = [];
   for (const [label, head] of HEADS) {
-    const { a, b } = decoy(t, label.includes('UTF-8') ? head : Buffer.from(head, 'latin1'));
+    const { b } = decoy(t, label.includes('UTF-8') ? head : Buffer.from(head, 'latin1'));
     const real = spawnSync('git', ['-C', b, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim().replaceAll('\\', '/');
     const gitUsesB = real.replace(/\/+$/u, '') === b.replaceAll('\\', '/');
     const found = findGitDir(b);

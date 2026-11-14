@@ -1,4 +1,4 @@
-import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, Task, TaskStatus, ToolGate } from '../api.ts';
+import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, QuestionCounts, Task, TaskStatus, ToolGate } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
 
@@ -43,19 +43,21 @@ export interface LiveState {
   pendingCounts: PendingCounts | null;
   pendingWaiting: PendingAction[];
   pendingRevision: number;
+  questionCounts: QuestionCounts | null;
+  questionRevision: number;
   epoch: number;
 }
 
 export const EMPTY: LiveState = {
   conversations: [], conversationsMore: {}, conversationsSettled: false, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, epoch: 0,
+  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
 
 const planBump = (s: LiveState, projectId: string): LiveState => ({ ...s, planRevisions: new Map(s.planRevisions).set(projectId, (s.planRevisions.get(projectId) ?? 0) + 1) });
 
-export type Refresh = 'conversations' | 'tasks' | 'drafts' | 'unread' | 'worker' | 'projects' | 'projectCounts' | 'pending';
+export type Refresh = 'conversations' | 'tasks' | 'drafts' | 'unread' | 'worker' | 'projects' | 'projectCounts' | 'pending' | 'questions';
 
 export type Effect =
   | { kind: 'refresh'; what: Refresh }
@@ -72,6 +74,7 @@ export type Action =
   | { type: 'projects'; projects: Project[] }
   | { type: 'project'; project: Project }
   | { type: 'pending'; counts: PendingCounts; waiting: PendingAction[] }
+  | { type: 'questions'; counts: QuestionCounts }
   | { type: 'skillDrafts'; count: number }
   | { type: 'unread'; count: number }
   | { type: 'tasks'; tasks: Task[] }
@@ -182,6 +185,8 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       return { state: { ...s, checklists: new Map(s.checklists).set(e.conversationId, e.items) }, effects: [] };
     case 'pendingAction.changed':
       return { state: { ...s, pendingRevision: s.pendingRevision + 1 }, effects: [...refresh('pending'), ...counts(s)] };
+    case 'question.changed':
+      return { state: { ...s, questionRevision: s.questionRevision + 1 }, effects: [...refresh('questions'), ...counts(s)] };
     case 'pending.changed':
       return { state: bump(s, e.conversationId), effects: [] };
     case 'conversation.changed':
@@ -225,7 +230,7 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
     case 'resync':
       return {
         state: { ...s, drafts: a.drafts, streaming: new Set(a.drafts.filter(d => d.text).map(d => d.conversationId)), checklists: new Map(), epoch: s.epoch + 1 },
-        effects: [...a.drafts.map(d => ({ kind: 'checklist', conversationId: d.conversationId }) as const), ...refresh('conversations', 'tasks', 'drafts', 'unread', 'worker', 'projects', 'pending')],
+        effects: [...a.drafts.map(d => ({ kind: 'checklist', conversationId: d.conversationId }) as const), ...refresh('conversations', 'tasks', 'drafts', 'unread', 'worker', 'projects', 'pending', 'questions')],
       };
     case 'conversations': return { state: { ...s, conversations: a.conversations, conversationsMore: a.more ?? {}, conversationsSettled: true }, effects: [] };
     case 'conversationsFailed': return { state: s.conversationsSettled ? s : { ...s, conversationsSettled: true }, effects: [] };
@@ -236,6 +241,7 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
       return { state: { ...s, projects }, effects: [] };
     }
     case 'pending': return { state: { ...s, pendingCounts: a.counts, pendingWaiting: a.waiting }, effects: [] };
+    case 'questions': return { state: { ...s, questionCounts: a.counts }, effects: [] };
     case 'skillDrafts': return { state: { ...s, skillDrafts: a.count }, effects: [] };
     case 'unread': return { state: { ...s, unread: a.count }, effects: [] };
     case 'tasks': return { state: { ...s, tasks: mergeTasks(s.tasks, a.tasks) }, effects: [] };

@@ -8,7 +8,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent, StopReason } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
-import { MemoryError, MemoryStore, renderBooks } from '../src/memory/store.ts';
+import { MemoryStore, renderBooks } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 

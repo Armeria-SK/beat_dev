@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Language } from '../config/schema.ts';
 import type { PendingChange, PendingStore } from '../pending/store.ts';
+import { pendingText } from '../shared/messages/pending.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import type { Task, TaskStore } from './store.ts';
 
@@ -33,6 +34,7 @@ export function pendingDecided(deps: PendingWakeDeps, change: PendingChange): vo
   if (change.status === 'waiting' || change.status === 'running' || !change.taskId) return;
   const task = deps.tasks.get(change.taskId);
   if (!task) return;
+  if (task.status === 'done') { reopenAfterFailure(deps, task, change); return; }
   const now = deps.now();
   const reason = taskText(deps.language(), 'reason.pending_decided', { id: change.id, status: change.status });
   if (waitingOnPending(task)) {
@@ -40,6 +42,23 @@ export function pendingDecided(deps: PendingWakeDeps, change: PendingChange): vo
     return;
   }
   if (task.status === 'ready' && task.run_at !== null && task.run_at > now) deps.tasks.setReady(task.id, { runAt: now, reason });
+}
+
+function reopenAfterFailure(deps: PendingWakeDeps, task: Task, change: PendingChange): void {
+  if (task.cron !== null && task.parent_id === null) return;
+  let reason: string;
+  if (change.status === 'failed' || change.status === 'stale') reason = pendingText(deps.language(), 'reopen_failed', { id: change.id, status: change.status });
+  else if (change.status === 'ran') {
+    const code = deps.pending.row(change.id)?.exit_code ?? null;
+    if (code === null || code === 0) return;
+    reason = pendingText(deps.language(), 'reopen_exit', { id: change.id, code });
+  } else return;
+  if (task.parent_id && deps.tasks.hasOpenRun(task.parent_id)) {
+    deps.log(`[INFO] Did not reopen task ${task.id} after approved Pending item #${change.id} ended as ${change.status}: another run of the same schedule is still open`);
+    return;
+  }
+  deps.tasks.reopen(task.id, 'beat', reason);
+  deps.log(`[INFO] Reopened task ${task.id} because approved Pending item #${change.id} ended as ${change.status}`);
 }
 
 export function sweepPendingWaits(deps: PendingWakeDeps): number {

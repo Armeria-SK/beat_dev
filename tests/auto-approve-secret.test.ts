@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
-import { CONVERSATION, settled, startApp, waitFor } from './app-setup.ts';
+import { CONVERSATION, settled, startApp } from './app-setup.ts';
 import type { Script } from './helpers.ts';
 
 // 段 9f（API キーを DB・ログ・画面の出来事・API の応答のどこにも残さない）と、段 8b（自動承認の判定役）の取り込み。

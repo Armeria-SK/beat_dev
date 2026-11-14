@@ -1,11 +1,15 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
 import { join } from 'node:path';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 import type { KV } from '../db/kv.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { planText, type PlanMessageKey } from '../shared/messages/plans.ts';
 import { stripHidden } from '../shared/plain-text.ts';
-import { sanitizeModelInputText } from '../shared/redaction.ts';
+import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
+import { redactSecrets, sanitizeModelInputText } from '../shared/redaction.ts';
 import { projectDir } from './store.ts';
 
 export const PLAN_FILE = 'plan.md';
@@ -39,6 +43,116 @@ export function cleanPlan(raw: string): string {
   if (content.length > PLAN_MAX_CHARS) throw new PlanError('too_long', { max: PLAN_MAX_CHARS });
   if (sanitizeModelInputText(content).redaction_count > 0) throw new PlanError('secret');
   return content;
+}
+
+const GIST_HEAD_SHARE = 0.7;
+const GIST_HEADING_CHARS = 80;
+const GIST_LATER = 'Later sections:';
+
+interface MarkNode {
+  type: string;
+  children?: MarkNode[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
+  identifier?: string;
+  alt?: string | null;
+  depth?: number;
+}
+const MARKDOWN = unified().use(remarkParse).use(remarkGfm);
+const SHOWN_AS_WRITTEN = new Set(['text', 'inlineCode']);
+const NEVER_SHOWN = new Set(['html', 'definition']);
+const GAP_LETTERS = /\[[xX]\]|\p{L}+/gu;
+const CODE_FENCE = /^(`{3,}|~{3,})[^\n]*/u;
+
+function spanOf(node: MarkNode): [number, number] {
+  const from = node.position?.start.offset;
+  const to = node.position?.end.offset;
+  if (from === undefined || to === undefined || to < from) throw new Error('markdown node without a place');
+  return [from, to];
+}
+
+function each(node: MarkNode, visit: (node: MarkNode) => boolean): void {
+  if (visit(node)) for (const child of node.children ?? []) each(child, visit);
+}
+
+function shownToOwner(source: string): string {
+  const tree = MARKDOWN.parse(source) as unknown as MarkNode;
+  const notes = new Map<string, MarkNode>();
+  const noteKey = (node: MarkNode): string => String(node.identifier).toUpperCase();
+  each(tree, node => {
+    if (node.type === 'footnoteDefinition' && !notes.has(noteKey(node))) notes.set(noteKey(node), node);
+    return true;
+  });
+  const shownNotes = new Set<MarkNode>();
+  const follow = (node: MarkNode): boolean => {
+    if (node.type === 'footnoteDefinition' || NEVER_SHOWN.has(node.type)) return false;
+    const note = node.type === 'footnoteReference' ? notes.get(noteKey(node)) : undefined;
+    if (note && !shownNotes.has(note)) {
+      shownNotes.add(note);
+      for (const child of note.children ?? []) each(child, follow);
+    }
+    return true;
+  };
+  each(tree, follow);
+
+  const gap = (from: number, to: number): string => source.slice(from, to).replace(GAP_LETTERS, found => (found.startsWith('[') ? found : ''));
+  const render = (node: MarkNode): string => {
+    const [from, to] = spanOf(node);
+    if (NEVER_SHOWN.has(node.type) || (node.type === 'footnoteDefinition' && !shownNotes.has(node))) return '';
+    if (node.type === 'image' || node.type === 'imageReference') return node.alt ?? '';
+    if (node.type === 'code') {
+      const raw = source.slice(from, to);
+      const fence = CODE_FENCE.exec(raw);
+      return fence ? fence[1]! + raw.slice(fence[0].length) : raw;
+    }
+    if (!node.children) return SHOWN_AS_WRITTEN.has(node.type) ? source.slice(from, to) : gap(from, to);
+    const link = node.type === 'link' || node.type === 'linkReference';
+    let out = '';
+    let at = from;
+    node.children.forEach((child, index) => {
+      const [start, end] = spanOf(child);
+      if (start < at || end > to) throw new Error('markdown node out of place');
+      if (!(link && index === 0)) out += gap(at, start);
+      out += render(child);
+      at = end;
+    });
+    return link ? out : out + gap(at, to);
+  };
+  return render(tree);
+}
+
+export function planGist(content: string, roomChars: number, roomTokens: number): string {
+  if (content.length > PLAN_MAX_CHARS) return '';
+  try {
+    const text = redactSecrets(shownToOwner(content)).split(/\r\n|\n|\r/u).map(line => line.trimEnd()).join('\n').replace(/\n{3,}/gu, '\n\n').trim();
+    const fits = (value: string): boolean => value.length <= roomChars && estimateTextTokens(value) <= roomTokens;
+    if (fits(text)) return text;
+    const lineCut = (chars: number, tokens: number): number => {
+      const length = prefixLength(text, chars, tokens);
+      const at = text.lastIndexOf('\n', length);
+      return at > 0 ? at : length;
+    };
+    const headEnd = lineCut(Math.floor(roomChars * GIST_HEAD_SHARE), Math.floor(roomTokens * GIST_HEAD_SHARE));
+    const headings: string[] = [];
+    each(MARKDOWN.parse(text) as unknown as MarkNode, node => {
+      if (node.type !== 'heading') return true;
+      const [from, to] = spanOf(node);
+      const line = text.slice(from, to).split('\n')[0]!;
+      if (from >= headEnd) headings.push([...(line.startsWith('#') ? line : `${'#'.repeat(node.depth ?? 1)} ${line}`)].slice(0, GIST_HEADING_CHARS).join(''));
+      return false;
+    });
+    if (headings.length === 0) return text.slice(0, lineCut(roomChars, roomTokens)).trimEnd();
+    const head = text.slice(0, headEnd).trimEnd();
+    let gist = [head, GIST_LATER].filter(Boolean).join('\n');
+    if (!fits(`${gist}\n${headings[0]}`)) return fits(head) ? head : '';
+    for (const heading of headings) {
+      const next = `${gist}\n${heading}`;
+      if (!fits(next)) break;
+      gist = next;
+    }
+    return gist;
+  } catch {
+    return '';
+  }
 }
 
 export class PlanStore {
