@@ -163,7 +163,7 @@ export function classifyStatements(command: string, ctx: MatchCtx): Classified {
   if (!lexed.ok) return { level: 'deny', lex: lexed.fail, results: [], statements: [] };
   const results = lexed.statements.map(st => {
     const result = matchStatement(st, ctx);
-    ctx.afterStatement?.(result);
+    ctx.afterStatement?.(result, st);
     return result;
   });
   return { level: results.reduce<Level>((l, r) => worstLevel(l, r.level), 'allow'), results, statements: lexed.statements };
