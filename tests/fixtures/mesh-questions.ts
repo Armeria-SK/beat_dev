@@ -1,4 +1,4 @@
-export type MeshQuestionKind = 'location' | 'plan' | 'screen';
+export type MeshQuestionKind = 'location' | 'plan' | 'control';
 
 export interface MeshQuestion {
   id: string;
@@ -6,11 +6,11 @@ export interface MeshQuestion {
   lang: 'ja' | 'es';
   text: string;
   answers: readonly string[];
+  mapRow?: string;
   stale?: string;
 }
 
 export const PRODUCT_NAME = 'bento';
-export const OWNER_LANGUAGE = 'ja';
 
 export const PRODUCT_FILES: Readonly<Record<string, string>> = {
   'README.md': '# bento\n\nLunch pre-orders for office teams.\n',
@@ -27,7 +27,6 @@ export const PRODUCT_FILES: Readonly<Record<string, string>> = {
   'web/screens/MenuList.tsx': 'export function MenuList() { return null; }\n',
   'web/screens/Checkout.tsx': 'export function Checkout() { return null; }\n',
   'web/components/CartBadge.tsx': 'export function CartBadge(props: { count: number }) { return props.count; }\n',
-  'web/components/AllergyFilter.tsx': 'export function AllergyFilter() { return null; }\n',
   'web/i18n/ja.ts': 'export const ja = { checkout: "注文する" };\n',
   'tests/orders.test.ts': 'import "../server/routes/orders.ts";\n',
 };
@@ -94,16 +93,16 @@ export const FILLER: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>
 ];
 
 export const MESH_QUESTIONS: readonly MeshQuestion[] = [
-  { id: 'L1', kind: 'location', lang: 'ja', text: '注文の表の形（列）を決めているファイルはどれ？パスで教えて。', answers: ['server/db/schema.ts'] },
-  { id: 'L2', kind: 'location', lang: 'ja', text: '返金の処理はどのファイルに書いてある？', answers: ['server/payments/refunds.ts'] },
-  { id: 'L3', kind: 'location', lang: 'ja', text: '領収書のメールの文を作っているファイルは？', answers: ['server/mail/receipt.ts'] },
-  { id: 'L4', kind: 'location', lang: 'ja', text: 'クーポンの割引を計算しているのは、いまどのファイル？', answers: ['server/discounts/apply.ts'], stale: 'server/coupons' },
-  { id: 'L5', kind: 'location', lang: 'es', text: '¿Qué archivo genera el informe diario de pedidos para la cocina?', answers: ['jobs/daily-report.ts'], stale: 'cleanup.ts' },
-  { id: 'L6', kind: 'location', lang: 'ja', text: '注文を受け付ける API の入口はどのファイル？', answers: ['server/routes/orders.ts'] },
+  { id: 'L1', kind: 'location', lang: 'ja', text: '注文の表の形（列）を決めているファイルはどれ？パスで教えて。', answers: ['server/db/schema.ts'], mapRow: 'server/db' },
+  { id: 'L2', kind: 'location', lang: 'ja', text: '返金の処理はどのファイルに書いてある？', answers: ['server/payments/refunds.ts'], mapRow: 'server/payments' },
+  { id: 'L3', kind: 'location', lang: 'ja', text: 'カートの数を出しているバッジの部品はどのファイル？', answers: ['web/components/CartBadge.tsx'], mapRow: 'web/components' },
+  { id: 'L4', kind: 'location', lang: 'ja', text: 'クーポンの割引を計算しているのは、いまどのファイル？', answers: ['server/discounts/apply.ts'], mapRow: 'server/discounts', stale: 'server/coupons' },
+  { id: 'L5', kind: 'location', lang: 'es', text: '¿Qué archivo genera el informe diario de pedidos para la cocina?', answers: ['jobs/daily-report.ts'], mapRow: 'jobs', stale: 'cleanup.ts' },
+  { id: 'L6', kind: 'location', lang: 'ja', text: '注文を受け付ける API の入口はどのファイル？', answers: ['server/routes/orders.ts'], mapRow: 'server/routes' },
   { id: 'P1', kind: 'plan', lang: 'ja', text: '次にやることは何だっけ？', answers: ['アレルギー', 'allerg'] },
   { id: 'P2', kind: 'plan', lang: 'ja', text: 'いま何の作業の途中？', answers: ['クーポン', '割引', 'coupon', 'discount'] },
   { id: 'P3', kind: 'plan', lang: 'es', text: '¿Cuál es el objetivo del plan de este producto?', answers: ['10:00', '10 h', '10h', 'diez'] },
-  { id: 'U1', kind: 'screen', lang: 'ja', text: 'カートの数を出しているバッジの部品はどのファイル？', answers: ['web/components/CartBadge.tsx'] },
-  { id: 'U2', kind: 'screen', lang: 'ja', text: 'アレルギーで絞り込む部品はどこにある？', answers: ['web/components/AllergyFilter.tsx'] },
-  { id: 'U3', kind: 'screen', lang: 'es', text: '¿Dónde está la pantalla de pago?', answers: ['web/screens/Checkout.tsx'] },
+  { id: 'K1', kind: 'control', lang: 'ja', text: 'アレルギーで絞り込む画面の部品はどのファイル？', answers: [] },
+  { id: 'K2', kind: 'control', lang: 'ja', text: 'ポイントカードの残高を計算しているファイルはどれ？', answers: [] },
+  { id: 'K3', kind: 'control', lang: 'es', text: '¿Qué archivo envía las notificaciones push a los móviles?', answers: [] },
 ];
