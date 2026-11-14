@@ -292,6 +292,31 @@ test('deviation_add: 鍵の囲みの印（-----BEGIN … PRIVATE KEY-----）は�
   assert.ok(!readFileSync(fileOf(s, shop.id), 'utf8').includes('-----BEGIN'));
 });
 
+test('deviation_add: BEGIN から END までそろった鍵は伏せる（ファイル・mesh_read・読む口のどれにも本体が出ない）', async t => {
+  const s = await setup(t);
+  const shop = s.project('shop');
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user', projectId: shop.id });
+  const body = 'MIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu';
+  const keys = [
+    `-----BEGIN RSA PRIVATE KEY-----\n${body}\n-----END RSA PRIVATE KEY-----`,
+    `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}x\n-----END OPENSSH PRIVATE KEY-----`,
+    `-----BEGIN PRIVATE KEY-----\n${body}y\n-----END PRIVATE KEY-----`,
+  ];
+  for (const [i, key] of keys.entries()) {
+    const out = await deviationAdd.execute({ what: `Kept key ${i}`, why: `The file holds ${key}` } as never, ctxFor(s, task.id, shop.id));
+    assert.equal(out.isError, undefined, out.content);
+    assert.match(out.content, /looked like a secret key or token were hidden/u);
+  }
+  const text = readFileSync(fileOf(s, shop.id), 'utf8');
+  assert.ok(!text.includes(body), text);
+  assert.equal(text.match(/\[REDACTED\]/gu)?.length, 3);
+  const read = s.app.mesh.read(shop.id, { file: 'deviations.md' }, 4000, 'en');
+  assert.ok(!read.content.includes(body));
+  const got = await s.get(`/api/projects/${shop.id}/deviations`);
+  assert.ok(!JSON.stringify(got.body).includes(body));
+  assert.equal(got.body.deviations.rows.length, 3);
+});
+
 test('読む口: deviations.md がふつうのファイルでなければ unusable', async t => {
   const s = await setup(t);
   const shop = s.project('shop');

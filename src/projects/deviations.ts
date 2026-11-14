@@ -6,7 +6,7 @@ import { LocalizedError, type MessageParams } from '../shared/messages/define.ts
 import { deviationText, type DeviationMessageKey } from '../shared/messages/deviations.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
-import type { AcceptanceDoc } from './acceptance.ts';
+import { ITEM_ID, type AcceptanceDoc } from './acceptance.ts';
 import { projectDir } from './store.ts';
 
 export const DEVIATIONS_FILE = 'deviations.md';
@@ -14,7 +14,6 @@ export const DEVIATION_TEXT_MAX = 400;
 export const DEVIATIONS_MAX = 200;
 const NO_ITEM = 'general';
 const ITEMS_IN_ERROR = 40;
-const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
 
 export class DeviationError extends LocalizedError<DeviationMessageKey> {
   constructor(code: DeviationMessageKey, params?: MessageParams) { super(deviationText, code, params); }
@@ -57,12 +56,12 @@ export function parseDeviations(content: string): DeviationLog {
 }
 
 export function cleanDeviationText(raw: string, field: 'what' | 'why'): { text: string; hidden: boolean } {
-  const plain = neutralizeFence(plainLine(raw, Infinity).replaceAll('|', '/').replaceAll('[', '(').replaceAll(']', ')').replace(/-{5,}/gu, '----'));
+  const plain = neutralizeFence(plainLine(raw, Infinity).replaceAll('|', '/').replaceAll('[', '(').replaceAll(']', ')'));
   if (!plain) throw new DeviationError('empty', { field });
   const length = Array.from(plain).length;
   if (length > DEVIATION_TEXT_MAX) throw new DeviationError('too_long', { field, length, max: DEVIATION_TEXT_MAX });
-  const text = redactSecrets(plain);
-  return { text, hidden: text !== plain };
+  const redacted = redactSecrets(plain);
+  return { text: redacted.replace(/-{5,}/gu, '----'), hidden: redacted !== plain };
 }
 
 export function itemOf(raw: string | undefined, doc: DeviationMeta['acceptance']): string | null {

@@ -273,7 +273,7 @@ function overlay(base: AcceptanceDoc, file: AcceptanceDoc | undefined): Acceptan
 
 export const ACCEPTANCE_MAX_CHANGES = 60;
 export const ACCEPTANCE_MAX_TOTAL = 200;
-const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
+export const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
 
 export type ChangeOpKind = 'add' | 'change' | 'remove';
 export interface ChangeItem { result: string; check: AcceptanceCheck }
