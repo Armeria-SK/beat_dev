@@ -1,16 +1,6 @@
-import { JSDOM } from 'jsdom';
+import { window } from './dom-env.ts';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-
-const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
-const { window } = dom;
-const host = globalThis as Record<string, unknown>;
-
-for (const key of Object.getOwnPropertyNames(window)) {
-  if (key in globalThis) continue;
-  Object.defineProperty(globalThis, key, { configurable: true, get: () => (window as unknown as Record<string, unknown>)[key] });
-}
-host.IS_REACT_ACT_ENVIRONMENT = true;
 
 export interface Rendered { container: HTMLElement; root: Root }
 
@@ -35,16 +25,28 @@ export async function click(element: Element | null | undefined): Promise<void> 
   await act(async () => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })); });
 }
 
+export async function input(element: Element | null | undefined, value: string): Promise<void> {
+  if (!(element instanceof window.HTMLInputElement || element instanceof window.HTMLTextAreaElement)) throw new Error('input: no input element');
+  const proto = element instanceof window.HTMLInputElement ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(element, value);
+    element.dispatchEvent(new window.Event('input', { bubbles: true }));
+  });
+}
+
 export function byText(container: ParentNode, selector: string, text: string): HTMLElement | undefined {
   return [...container.querySelectorAll<HTMLElement>(selector)].find(el => el.textContent?.trim() === text);
 }
 
 export async function cleanup(): Promise<void> {
-  for (const { container, root } of mounted) {
-    await act(async () => { root.unmount(); });
+  const all = [...mounted];
+  mounted.clear();
+  let first: unknown;
+  for (const { container, root } of all) {
+    try { await act(async () => { root.unmount(); }); } catch (error) { first ??= error; }
     container.remove();
   }
-  mounted.clear();
+  if (first !== undefined) throw first;
 }
 
 export const loadTsx = <T>(path: string, from: string): Promise<T> => import(new URL(path, from).href) as Promise<T>;
