@@ -18,7 +18,7 @@ import type { Task, TaskStore } from './store.ts';
 import { projectFolderGone } from '../projects/run.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
-import { openPendingIds } from './pending-wake.ts';
+import { decidedDuring, openPendingIds } from './pending-wake.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
@@ -92,7 +92,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
       '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
       '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
       '- Use ask_user only for what you cannot move forward on without checking with the user',
-      '- A call held in Pending for the user to decide does not need to be waited for: keep going with whatever else you can do, and if that call is all that is left, call task_complete',
+      '- A call held in Pending for the user to decide does not need to be waited for: keep going with whatever else you can do. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
       "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
     ],
     time: (ms, timezone) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms),
@@ -458,6 +458,12 @@ export class Worker {
     }
     if (control.outcome === 'checkpoint') {
       this.#d.kv.delete(idleKey);
+      const decided = decidedDuring(this.#d.db, task.id, runId);
+      if (decided) {
+        tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
+        tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.pending_decided', { id: decided.id, status: decided.status }) });
+        return;
+      }
       const open = result.ok && result.workCalls === 0 ? openPendingIds(this.#d.db, task.id) : [];
       if (open.length) {
         tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction, runAt: null }, 'beat', runId);

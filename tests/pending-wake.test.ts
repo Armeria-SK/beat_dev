@@ -23,7 +23,7 @@ const checkpoint = (minutes = 30) => call('task_checkpoint', { tried: 'tried', r
 
 function fakeTools(runs: string[]): ToolDef[] {
   const park: ToolDef<{ text: string }> = {
-    name: 'fake_park', description: 'Test tool: needs approval.', input: Type.Object({ text: Type.String() }), effect: 'exec', allowedIn: ['task'],
+    name: 'fake_park', description: 'Test tool: needs approval.', input: Type.Object({ text: Type.String() }), effect: 'exec', allowedIn: ['task', 'agent'],
     summarize: input => ({ title: 'Park', body: input.text }),
     async execute(input) { runs.push(input.text); return { content: `ran ${input.text}`, exitCode: 0 }; },
   };
@@ -34,12 +34,16 @@ function fakeTools(runs: string[]): ToolDef[] {
   return [park as unknown as ToolDef, work as unknown as ToolDef];
 }
 
-async function setup(t: Parameters<typeof startApp>[0]) {
+async function setup(t: Parameters<typeof startApp>[0], agents = false) {
   const clock = { now: START };
   const runs: string[] = [];
   const s = await startApp(t, {
     models: [fakeModel('m1')], tools: [...builtinTools(), ...fakeTools(runs)], now: () => clock.now,
-    configure: c => { c.tools.policies = { fake_park: 'ask', fake_work: 'allow' }; c.memory.review = false; },
+    configure: c => {
+      c.tools.policies = { fake_park: 'ask', fake_work: 'allow', ...(agents ? { agent_run: 'allow' as const } : {}) };
+      c.memory.review = false;
+      if (agents) { c.tools.agent.enabled = true; c.tools.agent.inTasks = true; }
+    },
   });
   const task = (title = 'Build') => s.app.tasks.create({ title, origin: 'user', actor: 'user' }).id;
   const rows = (taskId: string) => s.app.db.prepare('SELECT id, status FROM pending_actions WHERE task_id = ? ORDER BY id').all(taskId) as Array<{ id: number; status: string }>;
@@ -81,10 +85,14 @@ test('5-P 何もしなかった回の checkpoint で待ちの行がある → wa
   assert.equal(task.run_at, null);
   assert.match(task.body, /tried/u);
   assert.equal(task.next_action, 'next');
+  const asks = s.task('Asks');
+  s.app.tasks.setWaiting(asks, 'question', 'Which?');
   const calls = s.adapter().calls.length;
-  for (let i = 0; i < 12; i++) { s.clock.now += 60 * MIN; await s.app.worker.tick(); }
+  for (let i = 0; i < 14; i++) { s.clock.now += 60 * MIN; await s.app.worker.tick(); }
   assert.equal(s.adapter().calls.length, calls);
-  assert.equal(s.app.notifications.list(50).filter(n => n.kind === 'task_waiting').length, 0, '承認待ちは知らせ直さない');
+  const reminders = s.app.notifications.list(50).filter(n => n.kind === 'task_waiting').map(n => n.link);
+  assert.ok(reminders.includes(`#/tasks/${asks}`), '同じ時間で、質問の返事待ちは知らせ直される');
+  assert.ok(!reminders.includes(`#/tasks/${id}`), '承認待ちは知らせ直さない');
 });
 
 test('5-P 待ちの行が無いときの何もしない checkpoint は、前と同じに時間で起きる', async t => {
@@ -199,17 +207,71 @@ test('5-P 質問の返事待ちへの /answer は前と同じに通る', async t
   assert.equal(s.app.tasks.get(id)!.status, 'ready');
 });
 
-test('5-P 子の担当が積んだ行の決めでも、親のタスクが起きる', async t => {
+test('5-P 子の担当（agent_run）が積んだ行は親のタスクの番号を持ち、その決めで親のタスクが起きる', async t => {
+  const s = await setup(t, true);
+  const id = s.task();
+  s.adapter().scripts = [call('agent_run', { task: 'commit it' }), call('fake_park', { text: 'child' }), reply('child done'), checkpoint(30)];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const parked = s.app.db.prepare('SELECT id, run_kind, task_id FROM pending_actions').all() as Array<{ id: number; run_kind: string; task_id: string }>;
+  assert.deepEqual(parked.map(r => [r.run_kind, r.task_id]), [['agent', id]]);
+  assert.equal(s.app.tasks.get(id)!.run_at, START + 30 * MIN);
+  s.app.pending.reject(parked[0]!.id);
+  assert.equal(s.app.tasks.get(id)!.run_at, s.clock.now);
+});
+
+test('5-P 決めは、質問の返事待ちのタスクには触らない', async t => {
   const s = await setup(t);
   const id = s.task();
-  s.app.tasks.update(id, { title: 'Build' }, 'user');
-  const conversation = s.app.conversations.create({ kind: 'task', title: 'child' });
-  const child = await s.app.pending.park({ tool: 'fake_park', input: { text: 'child' }, cwd: s.paths.workspace, kind: 'policy', reason: 'r', runId: 'child-run', runKind: 'agent', conversationId: conversation.id, taskId: id });
-  s.adapter().scripts = [checkpoint(30)];
+  const conversation = s.app.conversations.create({ kind: 'task', title: 'x' });
+  const row = await s.app.pending.park({ tool: 'fake_park', input: { text: 'x' }, cwd: s.paths.workspace, kind: 'policy', reason: 'r', runId: 'r1', runKind: 'task', conversationId: conversation.id, taskId: id });
+  s.app.tasks.setWaiting(id, 'question', 'Which one?');
+  s.app.pending.reject(row.id);
+  const task = s.app.tasks.get(id)!;
+  assert.equal(task.status, 'waiting');
+  assert.equal(task.waiting_kind, 'question');
+  assert.equal(task.waiting_text, 'Which one?');
+});
+
+test('5-P 実行の途中で行が決まったら、その回の checkpoint は時間を待たずに今すぐ続く', async t => {
+  const s = await setup(t);
+  const id = s.task();
+  const rejectThenCheckpoint: Script = async function* (req) {
+    s.app.pending.reject(s.rows(id)[0]!.id);
+    yield* checkpoint(45)(req);
+  };
+  s.adapter().scripts = [call('fake_park', { text: 'commit' }), call('fake_work', { text: 'more' }), rejectThenCheckpoint];
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.tasks.get(id)!.waiting_kind, 'approval');
-  s.app.pending.reject(child.id);
-  assert.equal(s.app.tasks.get(id)!.status, 'ready');
+  assert.deepEqual(s.rows(id).map(r => r.status), ['rejected']);
+  const task = s.app.tasks.get(id)!;
+  assert.equal(task.status, 'ready');
+  assert.equal(task.run_at, s.clock.now);
+});
+
+test('5-P 起きたときの経過の文に、決めの結果が入る。見回りの文は、結果が残っていないことと確かめることを言う', async t => {
+  const s = await setup(t);
+  const id = s.task();
+  const [row] = await s.parkedRun(id);
+  s.clock.now += 31 * MIN;
+  await s.idleRun();
+  s.app.pending.cancelConversations([s.app.tasks.get(id)!.conversation_id!]);
+  const woke = s.app.tasks.events(id).find(e => e.kind === 'requeued')!;
+  assert.match(woke.content!, new RegExp(`#${row!.id}`, 'u'));
+  assert.match(woke.content!, /cancelled/u);
+  s.app.tasks.finish(id, 'done', 'x', 'user');
+  const other = s.task('Other');
+  s.adapter().scripts = parkAndWorkScripts();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  s.clock.now += 31 * MIN;
+  await s.idleRun();
+  assert.equal(s.app.tasks.get(other)!.waiting_kind, 'approval');
+  const [late] = s.rows(other);
+  s.app.pending.claim(late!.id);
+  s.app.pending.closeInterrupted();
+  s.adapter().scripts = [call('task_complete', { summary: 'done', notify: false })];
+  await s.app.worker.tick();
+  const swept = s.app.tasks.events(other).find(e => e.kind === 'requeued' && /result/u.test(e.content ?? ''));
+  assert.ok(swept, JSON.stringify(s.app.tasks.events(other).map(e => e.content)));
+  assert.match(swept!.content!, /check/u);
 });
 
 test('5-P 見回り: 再実行の途中で落ちた行だけが残った承認待ちのタスクは、見回りで起きる', async t => {
@@ -272,9 +334,12 @@ test('5-P 見回りは、待ちの行が残っている承認待ちと、質問�
   assert.equal(s.app.tasks.get(asks)!.waiting_kind, 'question');
 });
 
-test('5-P 作業の決まりの文に、積まれても待たなくてよいことが 1 文ある', async () => {
+const parkAndWorkScripts = () => [call('fake_park', { text: 'commit' }), call('fake_work', { text: 'more' }), checkpoint(30)];
+
+test('5-P 作業の決まりの文に、積まれても待たなくてよいことが 1 文ある（task_complete は、その結果に頼る作業が残っていないときだけ）', async () => {
   const { taskPrompt } = await import('../src/tasks/worker.ts');
   const prompt = taskPrompt({ id: 'aaaaaaaa-0000', title: 'T', origin: 'user', body: '', next_action: null, done_criteria: null } as never, [], 'UTC');
-  assert.match(prompt, /Pending/u);
-  assert.match(prompt, /task_complete/u);
+  const line = prompt.split('\n').find(l => l.includes('Pending'))!;
+  assert.match(line, /task_complete only when nothing left in the task depends on/u);
+  assert.match(line, /task_checkpoint/u);
 });
