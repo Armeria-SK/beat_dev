@@ -20,9 +20,10 @@ const en = {
   'label_shell': 'The name has shell symbols',
   'label_markup': 'The name has a Markdown link, heading or HTML tag',
   'label_secret': 'The name looks like it holds a key or password',
-  'recorded': 'Recorded as #{id}. Unknown (not found word for word on the page): {unknown}',
+  'recorded': 'Recorded as #{id}. Unknown (too short, or not found word for word on the page; quote the whole sentence): {unknown}',
   'recorded_all': 'Recorded as #{id}.',
   'merged': 'Added to #{id}. Products seen with it: {count}',
+  'evidence_dropped': 'Evidence not kept: {dropped} of {given} ({not_row} with a url that is not a similar row of this research, {not_on_page} too short or not found word for word on that page; quote the whole sentence).',
 } as const;
 
 export type ResearchMessageKey = keyof typeof en;

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { beginPages, endPages, normalizeUrl, OpenedPages, pagesOf } from '../src/research/evidence.ts';
+import { beginPages, endPages, normalizeUrl, OpenedPages, pageKey, pagesOf } from '../src/research/evidence.ts';
 import { ResearchStore } from '../src/research/store.ts';
 import { researchRecord } from '../src/tools/builtin/research.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -44,9 +44,9 @@ test('URL の正規化: スキームとホストを小文字に、末尾の / �
 test('開けたページの表: 抜き書きは NFKC・大文字小文字・空白をそろえて当て、表に無いページ・空の抜き書きは当たらない', () => {
   const pages = new OpenedPages();
   pages.add('https://example.com/a', 'Released under the  MIT\nLicense.');
-  assert.ok(pages.quoted('https://EXAMPLE.com/a/', 'mit license'));
-  assert.ok(pages.quoted('https://example.com/a', 'ＭＩＴ　License'));
-  assert.ok(!pages.quoted('https://example.com/a', 'Apache License'));
+  assert.ok(pages.quoted('https://EXAMPLE.com/a/', 'released under the mit license'));
+  assert.ok(pages.quoted('https://example.com/a', 'Released under the ＭＩＴ　License'));
+  assert.ok(!pages.quoted('https://example.com/a', 'Released under the Apache License'));
   assert.ok(!pages.quoted('https://example.com/a', '   '));
   assert.ok(!pages.quoted('https://example.com/b', 'MIT License'));
   assert.ok(!pages.has('https://example.com/b'));
@@ -54,10 +54,24 @@ test('開けたページの表: 抜き書きは NFKC・大文字小文字・空�
 
 test('開けたページの表: 1 ページ 20,000 字まで（そのあとの文は当たらない）', () => {
   const pages = new OpenedPages();
-  pages.add('https://example.com/long', `${'x'.repeat(20_000)}TAILWORD`);
-  assert.ok(!pages.quoted('https://example.com/long', 'TAILWORD'));
-  pages.add('https://example.com/short', `${'y'.repeat(100)}TAILWORD`);
-  assert.ok(pages.quoted('https://example.com/short', 'tailword'));
+  pages.add('https://example.com/long', `${'x'.repeat(20_000)}TAILWORD SENTENCE`);
+  assert.ok(!pages.quoted('https://example.com/long', 'TAILWORD SENTENCE'));
+  pages.add('https://example.com/short', `${'y'.repeat(100)}TAILWORD SENTENCE`);
+  assert.ok(pages.quoted('https://example.com/short', 'tailword sentence'));
+});
+
+test('開けたページの表: 短すぎる抜き書き（3-1b と同じ重さの下限）は当たらない。「MIT」は commits の中、「Rust」は trust の中、「2」は 1,234 の中に当たらない', () => {
+  const pages = new OpenedPages();
+  pages.add('https://example.com/a', 'See all commits. We trust our users. Stars: 1,234.');
+  for (const quote of ['MIT', 'Rust', '2', 'commits']) assert.ok(!pages.quoted('https://example.com/a', quote), quote);
+  assert.ok(pages.quoted('https://example.com/a', 'We trust our users.'));
+});
+
+test('ページの同じさ（pageKey）: スキーム・クエリ・パスの大文字小文字・末尾の / を見ない', () => {
+  const keys = ['https://example.com/Acme/Notes?a=1', 'http://EXAMPLE.com/acme/notes/?b=2', 'https://example.com/acme/notes#x'].map(pageKey);
+  assert.deepEqual(new Set(keys), new Set(['example.com/acme/notes']));
+  assert.notEqual(pageKey('https://example.com/acme/other'), keys[0]);
+  assert.equal(pageKey('mailto:x'), null);
 });
 
 test('research_record: 開けていない URL の候補は断られ、何も書かれない', async t => {
@@ -72,12 +86,12 @@ test('research_record: 開けていない URL の候補は断られ、何も書�
 test('research_record: リダイレクトのあとの URL で開いたページは当たる。大文字のホスト・末尾の / も同じ', async t => {
   const { db, store, research, pages } = setup(t);
   pages.add('https://github.com/acme/notes', PAGE_A);
-  const out = await record(db, { kind: 'similar', name: 'Acme Notes', url: 'HTTPS://GitHub.com/acme/notes/', license: 'MIT License', updated: '2026-10-01', language: 'TypeScript' });
+  const out = await record(db, { kind: 'similar', name: 'Acme Notes', url: 'HTTPS://GitHub.com/acme/notes/', license: 'Released under the MIT License.', updated: 'Last updated 2026-10-01.', language: 'Written in TypeScript.' });
   assert.equal(out.isError, undefined, out.content);
   const [row] = store.items(research.id);
   assert.equal(row!.url, 'https://github.com/acme/notes');
-  assert.deepEqual([row!.license, row!.updated, row!.language], ['MIT License', '2026-10-01', 'TypeScript']);
-  assert.deepEqual(JSON.parse(row!.evidence), { url: 'https://github.com/acme/notes', license: 'MIT License', updated: '2026-10-01', language: 'TypeScript' });
+  assert.deepEqual([row!.license, row!.updated, row!.language], ['Released under the MIT License.', 'Last updated 2026-10-01.', 'Written in TypeScript.']);
+  assert.deepEqual(JSON.parse(row!.evidence), { url: 'https://github.com/acme/notes', license: 'Released under the MIT License.', updated: 'Last updated 2026-10-01.', language: 'Written in TypeScript.' });
 });
 
 test('research_record: 別の実行で開いた URL は当たらない（表は実行ごと）', async t => {
@@ -95,11 +109,20 @@ test('research_record: 別の実行で開いた URL は当たらない（表は�
 test('research_record: 抜き書きが合わないライセンス・日付・言語は「不明」（NULL）で載り、候補は落ちない', async t => {
   const { db, store, research, pages } = setup(t);
   pages.add('https://example.com/a', PAGE_A);
-  const out = await record(db, { kind: 'similar', name: 'Typora', url: 'https://example.com/a', license: 'Apache-2.0', updated: '2026-10-01', language: 'Go' });
-  assert.match(out.content, /Unknown \(not found word for word on the page\): license, language/u);
+  const out = await record(db, { kind: 'similar', name: 'Typora', url: 'https://example.com/a', license: 'Released under the Apache License.', updated: 'Last updated 2026-10-01.', language: 'Written in Go.' });
+  assert.match(out.content, /Unknown \(too short, or not found word for word on the page; quote the whole sentence\): license, language/u);
   const [row] = store.items(research.id);
-  assert.deepEqual([row!.license, row!.updated, row!.language], [null, '2026-10-01', null]);
-  assert.deepEqual(JSON.parse(row!.evidence), { url: 'https://example.com/a', updated: '2026-10-01' });
+  assert.deepEqual([row!.license, row!.updated, row!.language], [null, 'Last updated 2026-10-01.', null]);
+  assert.deepEqual(JSON.parse(row!.evidence), { url: 'https://example.com/a', updated: 'Last updated 2026-10-01.' });
+});
+
+test('research_record: 単語だけの抜き書きは「不明」。「MIT」は commits だけのページ、「Rust」は trust だけのページ、「2」は 1,234 だけのページに当たらない', async t => {
+  const { db, store, research, pages } = setup(t);
+  pages.add('https://example.com/c', 'See all commits. We trust our users. Stars: 1,234.');
+  pages.add('https://example.com/a', PAGE_A);
+  await record(db, { kind: 'similar', name: 'Commits App', url: 'https://example.com/c', license: 'MIT', language: 'Rust', updated: '2' });
+  await record(db, { kind: 'similar', name: 'Typora', url: 'https://example.com/a', license: 'MIT', language: 'TypeScript', updated: '2026-10-01' });
+  assert.deepEqual(store.items(research.id).map(r => [r.license, r.updated, r.language]), [[null, null, null], [null, null, null]]);
 });
 
 test('research_record: 抜き書きの無い欄（モデルの記憶だけの値）は載らない', async t => {
@@ -196,4 +219,78 @@ test('定番: 抜き書きがページに無ければ根拠に数えず、名前
   feature = store.items(research.id).find(i => i.kind === 'feature')!;
   assert.deepEqual([feature.default_checked, feature.default_reason], [1, 'standard']);
   assert.equal(store.items(research.id).filter(i => i.kind === 'feature').length, 1);
+});
+
+test('同じページ: クエリだけ・スキームだけ・パスの大文字小文字だけが違う URL は同じページとして 2 つ目の行を断る（定番を作れない）', async t => {
+  const { db, store, research, pages } = setup(t);
+  const urls = ['https://example.com/acme/notes?a=1', 'https://example.com/acme/notes?b=2', 'http://example.com/acme/notes', 'https://example.com/ACME/Notes/'];
+  for (const url of urls) pages.add(url, PAGE_A);
+  const first = await record(db, { kind: 'similar', name: 'Acme Notes', url: urls[0] });
+  assert.equal(first.isError, undefined, first.content);
+  for (const [i, url] of urls.slice(1).entries()) {
+    const out = await record(db, { kind: 'similar', name: `Acme Copy ${i}`, url });
+    assert.equal(out.isError, true, url);
+    assert.match(out.content, /already has a row/u);
+  }
+  const out = await record(db, { kind: 'feature', name: 'Live preview', evidence: urls.map(url => ({ url, quote: 'Features: Live preview' })) });
+  assert.doesNotMatch(out.content, /Products seen/u);
+  const feature = store.items(research.id).find(i => i.kind === 'feature')!;
+  assert.deepEqual([feature.default_checked, JSON.parse(feature.products)], [0, [1]]);
+});
+
+test('定番: 名前は語の切れ目で当てる。「Mit」は commits を含む抜き書きでは定番にならず、「Live preview」は語として入れば当たる', async t => {
+  const { store } = setup(t);
+  const run = store.start({ projectId: 'p1', runId: 'run-x', phase: 'products', mode: 'batch' });
+  const a = store.addSource(run.id, { kind: 'similar', name: 'A', url: 'https://a.example.com/x', evidence: {} });
+  const b = store.addSource(run.id, { kind: 'similar', name: 'B', url: 'https://b.example.com/x', evidence: {} });
+  const mit = store.addFeature(run.id, { label: 'Mit', evidence: [
+    { similar: a.id, url: 'https://a.example.com/x', quote: 'See all the commits here' },
+    { similar: b.id, url: 'https://b.example.com/x', quote: 'Summit notes are shared' },
+  ] });
+  assert.deepEqual([mit.row.default_checked, mit.row.default_reason], [0, null]);
+  const live = store.addFeature(run.id, { label: 'Live preview', evidence: [
+    { similar: a.id, url: 'https://a.example.com/x', quote: 'It has (live preview) built in' },
+    { similar: b.id, url: 'https://b.example.com/x', quote: 'Live  Preview, tables and more' },
+  ] });
+  assert.deepEqual([live.row.default_checked, live.row.default_reason], [1, 'standard']);
+  const glued = store.addFeature(run.id, { label: 'preview', evidence: [
+    { similar: a.id, url: 'https://a.example.com/x', quote: 'The previews are fast now' },
+    { similar: b.id, url: 'https://b.example.com/x', quote: 'A preview pane is included' },
+  ] });
+  assert.equal(glued.row.default_checked, 0);
+  const left = store.addFeature(run.id, { label: 'view', evidence: [
+    { similar: a.id, url: 'https://a.example.com/x', quote: 'A preview pane is included' },
+    { similar: b.id, url: 'https://b.example.com/x', quote: 'The preview is live everywhere' },
+  ] });
+  assert.equal(left.row.default_checked, 0);
+  const wide = store.addFeature(run.id, { label: '目次', evidence: [
+    { similar: a.id, url: 'https://a.example.com/x', quote: '見出しから目次を作ります' },
+    { similar: b.id, url: 'https://b.example.com/x', quote: '自動の目次があります' },
+  ] });
+  assert.equal(wide.row.default_checked, 1);
+});
+
+test('research_record: 機能の根拠を落としたときは、落とした数と理由を返す', async t => {
+  const { db } = await twoProducts(t);
+  const out = await record(db, { kind: 'feature', name: 'Table editor', evidence: [
+    { url: 'https://a.example.com/notes', quote: 'Live preview, Table editor, Export to PDF' },
+    { url: 'https://a.example.com/notes', quote: 'Table editor' },
+    { url: 'https://z.example.com/notes', quote: 'It has a table editor' },
+  ] });
+  assert.match(out.content, /^Recorded as #3\. Evidence not kept: 2 of 3 \(1 with a url that is not a similar row of this research, 1 too short or not found word for word on that page; quote the whole sentence\)\.$/u);
+  const all = await record(db, { kind: 'feature', name: 'Export to PDF', evidence: [{ url: 'https://b.example.com/notes', quote: 'Export to PDF' }] });
+  assert.match(all.content, /Evidence not kept: 1 of 1/u);
+});
+
+test('定番: 行が同じページを指していれば（表に直接入った ?a と ?b の行でも）1 つに数える', async t => {
+  const { db, store } = setup(t);
+  const run = store.start({ projectId: 'p1', runId: 'run-y', phase: 'products', mode: 'batch' });
+  const insert = db.prepare("INSERT INTO research_items (research_id, kind, name_or_label, url) VALUES (?, 'similar', ?, ?)");
+  const a = Number(insert.run(run.id, 'A', 'https://example.com/notes?a=1').lastInsertRowid);
+  const b = Number(insert.run(run.id, 'B', 'http://example.com/Notes?b=2').lastInsertRowid);
+  const { row } = store.addFeature(run.id, { label: 'Live preview', evidence: [
+    { similar: a, url: 'https://example.com/notes?a=1', quote: 'Features: Live preview' },
+    { similar: b, url: 'http://example.com/Notes?b=2', quote: 'It has a live preview' },
+  ] });
+  assert.deepEqual([row.default_checked, JSON.parse(row.products)], [0, [a, b]]);
 });

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
 import { normalizeQuote } from '../projects/acceptance.ts';
-import { normalizeUrl, quoteHasName } from './evidence.ts';
+import { normalizeUrl, pageKey, quoteHasName } from './evidence.ts';
 import { checkLabel, ResearchError, type LabelKind } from './labels.ts';
 
 export type ResearchPhase = 'products' | 'libraries';
@@ -127,7 +127,7 @@ export class ResearchStore {
       const items = this.#open(researchId, item.kind);
       const url = normalizeUrl(item.url);
       if (url === null) throw new ResearchError('url_invalid');
-      if (items.some(i => i.kind === item.kind && (i.url === url || normalizeQuote(i.name_or_label) === normalizeQuote(name)))) throw new ResearchError('duplicate', { what: name });
+      if (items.some(i => i.kind === item.kind && (pageKey(i.url ?? '') === pageKey(url) || normalizeQuote(i.name_or_label) === normalizeQuote(name)))) throw new ResearchError('duplicate', { what: name });
       const id = this.#db.prepare('INSERT INTO research_items (research_id, kind, name_or_label, detail, url, license, updated, language, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(researchId, item.kind, name, item.detail ?? null, url, item.license ?? null, item.updated ?? null, item.language ?? null, JSON.stringify({ ...item.evidence, url })).lastInsertRowid;
       return this.#item(Number(id));
@@ -146,7 +146,7 @@ export class ResearchStore {
       const existing = items.find(i => i.kind === 'feature' && normalizeQuote(i.name_or_label) === normalizeQuote(label));
       const evidence = [...(existing ? JSON.parse(existing.evidence) as FeatureEvidence[] : []), ...fresh];
       const products = [...new Set(evidence.map(e => e.similar))].sort((a, b) => a - b);
-      const urls = new Set(evidence.filter(e => quoteHasName(e.quote, label)).map(e => similar.get(e.similar)?.url).filter(u => u !== undefined));
+      const urls = new Set(evidence.filter(e => quoteHasName(e.quote, label)).map(e => pageKey(similar.get(e.similar)?.url ?? '')).filter(u => u !== null));
       const standard = urls.size >= STANDARD_PRODUCTS;
       if (existing) {
         this.#db.prepare("UPDATE research_items SET evidence = ?, products = ?, default_checked = ?, default_reason = ? WHERE id = ?")

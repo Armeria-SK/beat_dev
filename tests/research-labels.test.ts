@@ -43,7 +43,7 @@ test('名前の形: 外れを 1 つずつ断る（URL・ドメイン・$( )・�
   for (const [label, code] of cases) assert.equal(codeOf(() => checkLabel('feature', label)), code, JSON.stringify(label));
 });
 
-test('名前の形: 字数の上限は種類ごと（似ているもの 60、機能と選択肢 80）。全角も NFKC のあとの 1 字で数える', () => {
+test('名前の形: 字数の上限は種類ごと（似ているもの 60、機能と選択肢 80）\u3002全角も NFKC のあとの 1 字で数える', () => {
   assert.equal(codeOf(() => checkLabel('similar', 'a'.repeat(60))), 'ok');
   assert.equal(codeOf(() => checkLabel('similar', 'a'.repeat(61))), 'label_long');
   assert.equal(codeOf(() => checkLabel('feature', 'あ'.repeat(80))), 'ok');
@@ -53,4 +53,35 @@ test('名前の形: 字数の上限は種類ごと（似ているもの 60、機
 
 test('名前の形: 全角の記号も NFKC のあとで確かめる（＄・；・｜・＜）', () => {
   for (const label of ['run ＄(x)', 'a；b', 'a｜b', '＜script']) assert.notEqual(codeOf(() => checkLabel('feature', label)), 'ok', label);
+});
+
+test('名前の形: URL やドメインらしい形を断る（パスの始まり・スキーム・@ホスト・//ホスト・パスつき IPv4・全角の句点）', () => {
+  const cases = [
+    'example.com?x=1', 'example.com#top', 'example.com:8080', `example.com${String.fromCharCode(92)}path`,
+    'mailto:me', 'javascript:alert(1)', 'data:text/html,hi', 'vbscript:x', 'file:c', 'ms-settings:privacy',
+    'mail user@evil.example', 'go //evil', '10.0.0.1/admin', '192.168.1.1:80/x', 'example\u3002com/x', 'example\u3002com?x',
+  ];
+  for (const label of cases) for (const kind of ['similar', 'feature'] as const) assert.equal(codeOf(() => checkLabel(kind, label)), 'label_url', `${kind} ${JSON.stringify(label)}`);
+});
+
+test('名前の形: 裸のドメイン（よくある TLD）は機能と選択肢の名前だけで断り、似ているものと部品の名前（ASP.NET・Socket.IO・draw.io）は通す', () => {
+  for (const label of ['visit evil.com', 'Sync with notes.io', 'see x.ai', 'Get it at shop.co', 'open bad.xyz', 'site.jp', 'notes\u3002com']) {
+    assert.equal(codeOf(() => checkLabel('feature', label)), 'label_url', label);
+    assert.equal(codeOf(() => checkLabel('choice', label)), 'label_url', label);
+  }
+  for (const label of ['ASP.NET', 'Socket.IO', 'draw.io', 'Vue.js', 'evil.com']) {
+    assert.equal(codeOf(() => checkLabel('similar', label)), 'ok', label);
+    assert.equal(codeOf(() => checkLabel('library', label)), 'ok', label);
+  }
+  for (const label of ['Export to PDF', 'Node.js support', 'Step 2. Configure', 'v1.2 format']) assert.equal(codeOf(() => checkLabel('feature', label)), 'ok', label);
+});
+
+test('名前の形: 見えない文字（私用領域・サロゲート・未割り当て・異体字セレクタ・ハングルの埋め字・点字の空白）を断る', () => {
+  for (const label of ['a\u{E000}b', 'a\uD800b', 'a\u{0378}b', 'a\u{E0100}b', 'a\u3164b', 'a\u1160b', 'a\u2800b', 'a\u{E0041}b', 'a\u115Fb', 'a\u034Fb', 'a\uFE00b', 'a\u17B4b']) {
+    assert.equal(codeOf(() => checkLabel('feature', label)), 'label_control', JSON.stringify(label));
+  }
+});
+
+test('名前の形: 鍵らしい代入（api_key=… や password: …）も断る', () => {
+  for (const label of ['api_key=abcd1234efgh', 'password: hunter22', 'token=0123456789abcdef']) assert.equal(codeOf(() => checkLabel('feature', label)), 'label_secret', label);
 });

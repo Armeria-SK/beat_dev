@@ -23,7 +23,7 @@ interface ResearchRecordInput {
 
 export const researchRecord: ToolDef<ResearchRecordInput> = {
   name: 'research_record',
-  description: 'Record one row of the research. similar / library: name, the url of the page you opened with web_fetch in this run, and license, updated, language copied word for word from that page (a value not found on the page is kept as unknown). feature: name, and evidence: for each similar product that has it, the url of its row and a sentence copied word for word from that page. Names are one short plain line.',
+  description: 'Record one row of the research. similar / library: name, the url of the page you opened with web_fetch in this run, and license, updated, language: for each, copy the whole sentence from that page word for word (such as "Released under the MIT License", not just "MIT"); a short quote or one not found on the page is kept as unknown. feature: name, and evidence: for each similar product that has it, the url of its row and the whole sentence from that page that names the feature, copied word for word. Names are one short plain line.',
   input: Type.Object({
     kind: Type.Union([Type.Literal('similar'), Type.Literal('feature'), Type.Literal('library')]),
     name: Type.String({ minLength: 1, maxLength: 200 }),
@@ -48,14 +48,19 @@ export const researchRecord: ToolDef<ResearchRecordInput> = {
       if (input.kind === 'feature') {
         const similar = new Map(research.items(run.id).filter(i => i.kind === 'similar').map(i => [i.url, i.id]));
         const evidence: FeatureEvidence[] = [];
+        let notRow = 0;
+        let notOnPage = 0;
         for (const e of input.evidence ?? []) {
           const url = normalizeUrl(e.url);
           const id = url === null ? undefined : similar.get(url);
-          if (url !== null && id !== undefined && pages.quoted(url, e.quote)) evidence.push({ similar: id, url, quote: e.quote });
+          if (url === null || id === undefined) notRow++;
+          else if (!pages.quoted(url, e.quote)) notOnPage++;
+          else evidence.push({ similar: id, url, quote: e.quote });
         }
         const { row, merged } = research.addFeature(run.id, { label: input.name, detail: input.detail, evidence });
-        if (merged) return { content: researchText(language, 'merged', { id: row.id, count: (JSON.parse(row.products) as number[]).length }) };
-        return { content: researchText(language, 'recorded_all', { id: row.id }) };
+        const head = merged ? researchText(language, 'merged', { id: row.id, count: (JSON.parse(row.products) as number[]).length }) : researchText(language, 'recorded_all', { id: row.id });
+        const dropped = notRow + notOnPage ? ` ${researchText(language, 'evidence_dropped', { dropped: notRow + notOnPage, given: (input.evidence ?? []).length, not_row: notRow, not_on_page: notOnPage })}` : '';
+        return { content: head + dropped };
       }
       if (input.url === undefined) return { content: researchText(language, 'url_required'), isError: true };
       if (normalizeUrl(input.url) === null) return { content: researchText(language, 'url_invalid'), isError: true };
