@@ -112,9 +112,6 @@ export function readMesh(text: MeshText, input: { section?: string | undefined; 
   const room = budget - estimateTextTokens(framed(language, [], [note(total)]));
   const shown = Math.max(1, prefixLength(rest, Infinity, room));
   const part = rest.slice(0, shown);
-  const lineEnd = rest.indexOf('\n', shown);
-  const lineStart = whole.lastIndexOf('\n', offset) + 1;
-  const touched = whole.slice(lineStart, lineEnd < 0 ? whole.length : offset + lineEnd);
-  const fetched = text.fetched || touched.split('\n').some(line => EXTERNAL.test(line));
+  const fetched = text.fetched || lines.some(line => EXTERNAL.test(line));
   return { content: framed(language, [part], shown < rest.length ? [note(offset + shown)] : []), fetched };
 }
