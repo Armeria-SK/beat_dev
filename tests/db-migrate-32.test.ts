@@ -50,9 +50,9 @@ test('移し替え 28〜32: 形 27 の DB を 32 に上げても、前からあ�
   const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');
   const before = seedV27(path);
-  assert.equal(MIGRATIONS.length, 32);
+  assert.ok(MIGRATIONS.length >= 32);
 
-  const db = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const db = openDatabase(path, MIGRATIONS.slice(0, 32), { backupDir: backups });
   try {
     assert.equal(version(db), 32);
     assert.deepEqual(counts(db), { ...before.counts, questions: 0 });
@@ -74,7 +74,7 @@ test('移し替え 28〜32: 形 27 の DB を 32 に上げても、前からあ�
     assert.deepEqual(counts(restored), before.counts);
   } finally { restored.close(); }
 
-  const again = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const again = openDatabase(path, MIGRATIONS.slice(0, 32), { backupDir: backups });
   try {
     assert.equal(version(again), 32);
     assert.deepEqual(counts(again), { ...before.counts, questions: 0 });

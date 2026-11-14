@@ -66,7 +66,7 @@ function bareStore(t: { after: (fn: () => void) => void }, now: () => number = D
 test('1-5s 聞かない（askBeforeRegister: false）: skill_draft はその場でスキルになり、下書きは approved、通知が 1 つ（外へ送らない印つき）、前の版は beat-auto で控える', async t => {
   const { app, events, paths } = await boot(t, autoConfig());
   app.skills.write({ name: 'weekly-report', description: 'Old', body: 'old steps' });
-  const out = await skillDraft.execute(draftInput('1. Collect\n2. Summarize'), ctxOf(app));
+  const out = await skillDraft.execute({ ...draftInput('1. Collect\n2. Summarize'), change: 'Old steps → collect, then summarize' }, ctxOf(app));
   assert.ok(!out.isError);
   assert.match(String(out.content), /^Replaced the registered skill "weekly-report" with your new text without review \(draft #\d+\)\. It is active now\./u);
   assert.equal(app.skills.getRegistered('weekly-report')?.body, '1. Collect\n2. Summarize');
@@ -103,6 +103,39 @@ test('1-5s 聞く（既定）: 下書きは今と同じく pending で待ち、�
   assert.equal(events.filter(e => /review the skill draft/u.test(e.title)).length, 1);
   await app.applyConfig({ ...app.config() }, { probe: false });
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(paths.config, 'utf8')) as object, 'skills'), false, '保存し直しても既定は書き足さない');
+});
+
+test('スキルの成長: 登録したスキルを直す skill_draft は change（前 → 今）が要る。無ければ何も残さず断り、あれば下書きと /api/review に change_summary が載る。新しいスキルには要らない', async t => {
+  const { app } = await boot(t, null);
+  const api = await serve(t, app);
+  app.skills.write({ name: 'weekly-report', description: 'Old', body: 'old steps' });
+  const missing = await skillDraft.execute(draftInput('new steps'), ctxOf(app));
+  assert.equal(missing.isError, true);
+  assert.match(String(missing.content), /already registered, so add change/u);
+  assert.equal(app.skills.drafts('all').length, 0, '断ったときは下書きを残さない');
+  const blank = await skillDraft.execute({ ...draftInput('new steps'), change: '   ' }, ctxOf(app));
+  assert.equal(blank.isError, true, '空白だけの change も断る');
+  const change = 'wttr.in gives only 3 days → use the 10-day page, and search again if its URL is 404';
+  const ok = await skillDraft.execute({ ...draftInput('new steps'), change: `  ${change}  ` }, ctxOf(app));
+  assert.ok(!ok.isError);
+  assert.equal(app.skills.drafts('pending')[0]!.change_summary, change);
+  const fresh = await skillDraft.execute({ ...draftInput('steps'), name: 'csv-import' }, ctxOf(app));
+  assert.ok(!fresh.isError, '新しいスキルは change なしで下書きになる');
+  const review = (await api('/api/review')).body.skillDrafts as Array<{ name: string; change_summary: string | null }>;
+  assert.deepEqual(Object.fromEntries(review.map(d => [d.name, d.change_summary])), { 'weekly-report': change, 'csv-import': null });
+  assert.match(skillDraft.description, /When fixing an existing skill, change is required/u);
+  assert.match(ToolRegistry.specs(builtinTools().filter(tool => tool.name === 'skill_draft'), { ...defaultConfig(), skills: { askBeforeRegister: false } })[0]!.description, /change is required/u, '聞かない設定の説明にも載る');
+});
+
+test('スキルの成長: 移し替えの前からある下書きは change_summary が空のまま残り、中身は変わらない', t => {
+  const path = join(tempDir(t), 'beat.db');
+  const before = openDatabase(path, MIGRATIONS.slice(0, MIGRATIONS.length - 1));
+  before.prepare("INSERT INTO skill_drafts (name, description, body, reason, conversation_id, run_id, created_at) VALUES ('old', 'd', 'b', 'r', NULL, NULL, 1)").run();
+  before.close();
+  const db = openDatabase(path, MIGRATIONS);
+  const row = { ...(db.prepare("SELECT name, reason, change_summary FROM skill_drafts WHERE name = 'old'").get() as object) };
+  db.close();
+  assert.deepEqual(row, { name: 'old', reason: 'r', change_summary: null });
 });
 
 test('1-5s 聞く / 聞かないで、モデルに渡す文（skill_draft の説明と振り返りの指示）が替わる。既定は今のまま', () => {
