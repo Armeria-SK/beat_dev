@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, statSync, type WriteStream } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { isSensitiveEnvName } from '../../shared/redaction.ts';
 
 const WINDOWS = process.platform === 'win32';
@@ -78,10 +78,22 @@ const SH_BOOT = 's=; n=$(printf "\\nx"); n=${n%x}; while IFS= read -r l || [ -n 
 const PS_UTF8 = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;';
 // 文字コードの設定のあと、制限モードにする。.NET の直接呼び出し（[IO.File]::...）・New-Object・Add-Type が止まり、元のモードへ戻すのも止まる
 const PS_CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';";
-const PS_COMMANDS = "Remove-Item Alias:curl,Alias:wget -Force -ErrorAction Ignore;&{foreach($n in 'npm','pnpm','yarn'){$c=Get-Command $n -CommandType ExternalScript,Application -ErrorAction Ignore|Select-Object -First 1;if($c.CommandType -eq 'ExternalScript'){$s=$c.Path -replace '\\.ps1$','.cmd';if(Test-Path -LiteralPath $s -PathType Leaf){Set-Alias $n $s -Scope Global}}}};";
+const PS_UNALIAS = 'Remove-Item Alias:curl,Alias:wget -Force -ErrorAction Ignore;';
+const PS_EXIT = '\n;if(-not $?){if($LASTEXITCODE){exit $LASTEXITCODE};exit 1}';
+
+function psShimAliases(): string {
+  const env = scrubEnv();
+  let out = '';
+  for (const name of ['npm', 'pnpm', 'yarn']) {
+    const file = findExecutable(name, env, process.cwd(), { powershell: true });
+    if (!file || /\.ps1$/iu.test(file) || !existsSync(join(dirname(file), `${name}.ps1`))) continue;
+    out += `Set-Alias ${name} '${file.replace(/['‘’‚‛]/gu, '$&$&')}' -Scope Global;`;
+  }
+  return out;
+}
 
 export function resolveShell(choice: ShellChoice): ShellSpec {
-  const ps = (file: string, name: string): ShellSpec => ({ name, file, args: c => ['-NoProfile', '-NonInteractive', '-Command', `${PS_UTF8}${PS_COMMANDS}${PS_CONSTRAINED}${c}`] });
+  const ps = (file: string, name: string): ShellSpec => ({ name, file, args: c => ['-NoProfile', '-NonInteractive', '-Command', `${PS_UTF8}${PS_UNALIAS}${psShimAliases()}${PS_CONSTRAINED}${c}${PS_EXIT}`] });
   const posix = (file: string, name: string): ShellSpec => ({ name, file, args: () => (name === 'bash' ? ['--noprofile', '--norc', '-c', BASH_BOOT] : ['-c', SH_BOOT]), stdin: c => c });
   if (choice === 'pwsh' || (choice === 'auto' && WINDOWS && which('pwsh'))) return ps(which('pwsh') ?? 'pwsh', 'pwsh');
   if (choice === 'powershell' || (choice === 'auto' && WINDOWS)) return ps(which('powershell') ?? 'powershell.exe', 'powershell');

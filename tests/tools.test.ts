@@ -558,7 +558,8 @@ test('PowerShell の引数: 文字コードの設定のあと、コマンドの�
     const utf8 = script.indexOf('[Console]::OutputEncoding');
     const mode = script.indexOf("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';");
     assert.ok(utf8 >= 0 && mode > utf8, `${choice}: 文字コードのあとに制限モード`);
-    assert.ok(script.endsWith(';Get-Date') && script.indexOf('Get-Date') > mode, `${choice}: コマンドは制限モードのあと`);
+    assert.ok(script.includes(";Get-Date\n;if(-not $?)") && script.indexOf('Get-Date') > mode, `${choice}: コマンドは制限モードのあと、終了コードの行の前`);
+    assert.ok(!script.includes('Get-Command'), `${choice}: 起動のたびに Get-Command で探さない`);
   }
   assert.deepEqual(resolveShell('bash').args('ls'), ['--noprofile', '--norc', '-c', "IFS= read -r -d '' s; [ -n \"$s\" ] || exit 127; eval \"$s\""]);
   assert.equal(resolveShell('bash').stdin?.('ls'), 'ls', 'スクリプトは標準入力で渡す（引数の読み直しで変わらない）');
@@ -567,6 +568,35 @@ test('PowerShell の引数: 文字コードの設定のあと、コマンドの�
 
 const autoShell = resolveShell('auto');
 const powershellAuto = process.platform === 'win32' && /^(?:powershell|pwsh)$/u.test(autoShell.name);
+
+test('PowerShell の前置き: npm・pnpm・yarn の .ps1 の shim には、ガードと同じ探し方で見つけた .cmd への別名を固定の文で置く', { skip: process.platform !== 'win32' && 'Windows の PATHEXT の探し方' }, t => {
+  const root = tempDir(t);
+  const both = join(root, "it's ‘q’");
+  const ps1Only = join(root, 'ps1-only');
+  mkdirSync(both, { recursive: true });
+  mkdirSync(ps1Only, { recursive: true });
+  for (const name of ['pnpm.cmd', 'pnpm.ps1', 'yarn.cmd']) writeFileSync(join(both, name), '');
+  writeFileSync(join(ps1Only, 'npm.ps1'), '');
+  writeFileSync(join(both, 'npm.cmd'), '');
+  writeFileSync(join(both, 'npm.ps1'), '');
+  const saved = process.env.PATH;
+  t.after(() => { process.env.PATH = saved; });
+  process.env.PATH = `${ps1Only}${delimiter}${both}`;
+  const script = resolveShell('powershell').args('x')[3]!;
+  const quoted = join(both, 'pnpm.cmd').replace(/['‘’]/gu, '$&$&');
+  assert.ok(script.includes(`Set-Alias pnpm '${quoted}' -Scope Global;`), script);
+  assert.equal(findExecutable('pnpm', scrubEnv(), root, { powershell: true }), join(both, 'pnpm.cmd'), 'ガードが見るファイルと同じ');
+  assert.ok(!/Set-Alias npm /u.test(script), '先に .ps1 だけのフォルダがあれば別名を置かない（PowerShell も先にそれを選ぶ）');
+  assert.ok(!/Set-Alias yarn /u.test(script), '.ps1 の無い .cmd には別名は要らない');
+});
+
+test('PowerShell（実機）: 終了コードは最後の外部コマンドのものになる', { skip: !powershellAuto && 'Windows の PowerShell ではない' }, async t => {
+  const dir = tempDir(t);
+  const run = (command: string) => runProcess(autoShell.file, autoShell.args(command), { cwd: dir, env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 20_000 });
+  for (const [command, code] of [['node -e "process.exit(4)"', 4], ['node -e "process.exit(3)" # comment', 3], ['node -e "process.exit(4)"; Write-Output hi', 0], ['Get-Item no-such-file-here', 1], ['exit 7', 7], ['Write-Output ok', 0]] as const) {
+    assert.equal((await run(command)).exitCode, code, command);
+  }
+});
 
 test('PowerShell の制限モード（実機）: .NET の直接呼び出しは止まり、戻せず、ふつうのコマンドと日本語の出力は動く', { skip: !powershellAuto && 'Windows の PowerShell ではない' }, async t => {
   const dir = tempDir(t);
