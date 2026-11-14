@@ -1265,10 +1265,12 @@ export class ChatEngine {
   #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void) {
     const d = this.#d;
     const product = d.conversations.projectOf(conversationId) !== null;
+    const root = project?.root;
+    const rootKey = root ? d.projects?.get(project.id)?.root_key : undefined;
     return buildSnapshot(d.paths, {
       ...(d.botMemory && d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
-      ...(product ? { persona: false, instructions: project?.root && instructionsSection(readInstructions(project.root, instructionsBudget(this.#smallestAvailable()), log)) } : {}),
+      ...(product ? { persona: false, instructions: root && rootKey ? instructionsSection(readInstructions(root, instructionsBudget(this.#smallestAvailable()), log, rootKey)) : undefined } : {}),
     }, language);
   }
 

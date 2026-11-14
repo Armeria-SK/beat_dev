@@ -270,6 +270,47 @@ test('2-3 製品のフォルダの名前に行の区切りが入っていたら�
   assert.ok(!frozenOf(s.app, 'p1').includes('ODD-RULES'));
 });
 
+test('2-3 指示ファイル: 読んだあとにフォルダの実体が登録のものと違えば、読んだ中身を使わない', t => {
+  const base = realpathSync.native(tempDir(t));
+  const root = join(base, 'root');
+  mkdirSync(root);
+  writeFileSync(join(root, 'AGENTS.md'), 'RULES');
+  assert.equal(readInstructions(root, 2000, () => undefined, rootKeyOf(root))?.text, 'RULES');
+  const lines: string[] = [];
+  assert.equal(readInstructions(root, 2000, line => lines.push(line), rootKeyOf(join(base, 'other'))), undefined);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /^.WARN. /u);
+  const other = join(base, 'other');
+  mkdirSync(other);
+  writeFileSync(join(other, 'AGENTS.md'), 'SWAPPED');
+  renameSync(root, join(base, 'moved'));
+  symlinkSync(other, root, 'junction');
+  assert.equal(readInstructions(root, 2000, () => undefined, rootKeyOf(root)), undefined, 'リンク越しになったフォルダ');
+});
+
+test('2-3 製品のフォルダが、実行の始めの確かめと指示ファイルを読むあいだにすり替わったら、すり替わった先の指示ファイルを使わない', async t => {
+  const s = await setup(t);
+  writeFileSync(join(s.root, 'AGENTS.md'), 'REAL-RULES');
+  const other = `${s.root}-other`;
+  mkdirSync(other);
+  writeFileSync(join(other, 'AGENTS.md'), 'SWAPPED-RULES');
+  const skills = s.app.skills;
+  const index = skills.index.bind(skills);
+  let swapped = 0;
+  skills.index = ((...args: Parameters<typeof index>) => {
+    if (swapped++ === 0) {
+      renameSync(s.root, `${s.root}-moved`);
+      symlinkSync(other, s.root, 'junction');
+    }
+    return index(...args);
+  }) as typeof skills.index;
+  s.adapter().scripts.push(reply('ok'));
+  await s.send('p1', 'hello', s.project.id);
+  assert.ok(swapped > 0);
+  const frozen = frozenOf(s.app, 'p1');
+  for (const absent of ['SWAPPED-RULES', 'REAL-RULES', 'Product instructions']) assert.ok(!frozen.includes(absent), absent);
+});
+
 test('2-3 使用量の見積もり: まだ固定していない製品の会話は、製品の指示ファイルと製品の 1 行を入れた量で数える', async t => {
   const s = await setup(t);
   s.app.conversations.ensure('p', { projectId: s.project.id });

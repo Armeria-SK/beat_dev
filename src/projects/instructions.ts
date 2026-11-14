@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { prefixLength } from '../engine/tokens.ts';
 import { isRemotePath, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
 import { INSTRUCTION_FILES } from '../tools/policy.ts';
+import { folderGone } from './work-folder.ts';
 
 export const INSTRUCTIONS_BUDGET_RATIO = 0.05;
 export const INSTRUCTIONS_DEFAULT_TOKENS = 2000;
@@ -58,7 +59,7 @@ function readHead(path: string, maxBytes: number): { text: string; whole: boolea
   } finally { closeSync(fd); }
 }
 
-export function readInstructions(root: string, budgetTokens: number, log: Log = () => undefined): Instructions | undefined {
+export function readInstructions(root: string, budgetTokens: number, log: Log = () => undefined, rootKey?: string): Instructions | undefined {
   for (const name of INSTRUCTION_FILES) {
     const path = join(root, name);
     try {
@@ -80,6 +81,10 @@ export function readInstructions(root: string, budgetTokens: number, log: Log = 
       if (!text) return undefined;
       const truncated = !head.whole || keep < clean.length;
       if (truncated) log(`[INFO] ${name} in the product folder ${root} is longer than the limit (about ${budgetTokens} tokens), so only its beginning is used`);
+      if (rootKey !== undefined && folderGone(root, rootKey)) {
+        log(`[WARN] Did not use ${name} in the product folder ${root}: the folder is no longer the one that was registered`);
+        return undefined;
+      }
       return { name, text, truncated };
     } catch (error) {
       log(`[WARN] Could not read ${name} in the product folder ${root} (${(error as NodeJS.ErrnoException).code ?? 'error'}), so the conversation starts without it`);
