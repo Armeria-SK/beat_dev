@@ -154,6 +154,23 @@ test('2-3 指示ファイル: ハードリンクの AGENTS.md は読まない', 
   assert.equal(readInstructions(root, 2000), undefined);
 });
 
+test('2-3 指示ファイル: 中身がほかのファイルの名前 1 つだけ（リンクがふつうのファイルとして取り出されたもの）なら、指示にしない', t => {
+  const root = join(tempDir(t), 'root');
+  mkdirSync(root);
+  writeFileSync(join(root, 'CLAUDE.md'), 'claude rules');
+  for (const stub of ['CLAUDE.md', 'CLAUDE.md\n', './CLAUDE.md', '../shared/AGENTS.md', 'docs/rules.MD\r\n']) {
+    writeFileSync(join(root, 'AGENTS.md'), stub);
+    const lines: string[] = [];
+    assert.equal(readInstructions(root, 2000, line => lines.push(line)), undefined, JSON.stringify(stub));
+    assert.equal(lines.length, 1, JSON.stringify(stub));
+    assert.match(lines[0]!, /^\[INFO\] Did not read AGENTS\.md/u);
+  }
+  for (const text of ['See CLAUDE.md', 'CLAUDE.md\nand more', 'Run npm test before a commit', 'notes.txt']) {
+    writeFileSync(join(root, 'AGENTS.md'), text);
+    assert.equal(readInstructions(root, 2000)?.text, text, text);
+  }
+});
+
 test('2-3 指示ファイル: 調べるところで失敗しても投げず、指示なしで始め、[WARN] を 1 行残す。切ったときは [INFO] を 1 行', t => {
   const base = tempDir(t);
   const lines: string[] = [];
