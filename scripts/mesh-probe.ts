@@ -59,6 +59,8 @@ const HTTP_VERB = /^(?:get|post|put|patch|delete|head|options)$/u;
 const UNKNOWN = new RegExp([
   '[分わ]か(?:りません|らない)', '見つか(?:りません|らな)', '見つけられ(?:ません|なかった|ない)', '見当た(?:りません|らな)', '存在(?:しません|しない|していません|していない)',
   '(?:ファイル|部品|処理|もの|機能|コード|実装|場所)(?:は|が|も)?(?:まだ)?(?:ありません|ない|無い|なさそう)', 'なさそう', '[な無]いよう', '確認でき(?:ません|なかった|ない)', 'まだ[無な]い', '作られてい(?:ない|ません)',
+  '(?:実装|作成)(?:さ|し)れ?てい(?:ません|ない)', '作(?:られ|っ)てい(?:ません|ない)', '不明', '(?:情報|記載|該当)[^。、\\n]{0,8}?(?:ありません|ない|なし)', '含まれてい(?:ません|ない)', 'できてい(?:ません|ない)',
+  'desconozco', 'no tengo información', 'ningún', 'ninguna', 'no file', 'none of', "(?:isn't|is not) in",
   'no (?:se )?encuentr', 'no he encontrado', 'no (?:lo )?encontr', 'no exist(?:e|en)', 'no hay (?:ningún|ninguna|ningun|archivo|un archivo|tal)', '(?:todavía|aún) no (?:existe|hay)', 'no sé',
   'not found', "(?:does|do)(?:n't| not) exist", 'no such', "(?:couldn't|could not|can't|cannot) find", "(?:don't|do not) know", 'there is no',
 ].join('|'), 'iu');
@@ -114,9 +116,9 @@ const CONTENTS = norm([...Object.values(PRODUCT_FILES), ...PRODUCT_CHANGES.map(c
 const MESH_NAMES = new Set(MESH_FILES.map(norm));
 const MESH_TOOL_PREFIX = 'mesh_';
 
-export function probeConfig(model: ModelConfig, provider: ProviderConfig, source?: AppConfig): AppConfig {
+export function probeConfig(model: ModelConfig, provider: ProviderConfig): AppConfig {
   const base = defaultConfig();
-  return { ...base, ...(source ? { tools: source.tools } : {}), timezone: TIMEZONE, providers: [provider], models: [model], routing: { ...base.routing, chat: [model.id], background: [model.id] } };
+  return { ...base, timezone: TIMEZONE, providers: [provider], models: [model], routing: { ...base.routing, chat: [model.id], background: [model.id] } };
 }
 
 export interface ChatRequest { frozen: string; baseTools: string[]; meshTools: string[]; baseTokens: number; meshSpecTokens: number; mapWriteTokens: number; glossaryWriteTokens: number }
@@ -150,7 +152,7 @@ export async function buildProduct(base: string, set: ProbeSet, model: ModelConf
   for (const [rel, content] of Object.entries(PRODUCT_FILES)) write(join(root, rel), content);
   const paths = resolvePaths(join(top, 'data'));
   ensureWorkspace(paths);
-  const config = probeConfig(model, provider, source);
+  const config = probeConfig(model, provider);
   const db = openDatabase(':memory:', MIGRATIONS);
   const plans = new PlanStore(new KV(db), { projects: paths.projects, backups: paths.backups });
   const acceptance = new AcceptanceStore(db, paths.projects);
@@ -191,7 +193,7 @@ export async function buildProduct(base: string, set: ProbeSet, model: ModelConf
     return { content: outcome.output.content, isError: outcome.output.isError === true };
   };
   const body = mesh ? mesh.indexBody(PROJECT_ID, meshIndexLimit(available)) : '';
-  const request = productChatRequest(config, paths, model, root, 'en', available);
+  const request = productChatRequest(source ? { ...config, tools: source.tools } : config, paths, model, root, 'en', available);
   return {
     set, root, config, paths, tools, run, ctx, request,
     frozen: request.frozen,
@@ -448,7 +450,7 @@ export function renderReport(rows: readonly ProbeRow[], meta: ReportMeta): strin
     const parts = part ? `${part.index} + ${part.meshTools} + ${part.writeTools}` : 'n/a';
     lines.push(`| ${s.model} | ${s.set} | ${s.correct} / ${s.questions} | ${s.location} | ${s.plan} | ${s.controlUnknown} | ${s.controlConfident} | ${s.firstSearchHits ?? '-'} | ${s.madeUp} | ${s.trustedStale} | ${s.toolCalls} / ${shown(s.medianToolCalls)} | ${shown(s.medianTokens)} | ${size} | ${parts} | ${s.failed} |`);
   }
-  lines.push('', '## Lines (mesh-plan.md section 6)', '', 'helped = at least 3 more correct than the base, made-up paths at most half, request tokens at most 1.2x. harm = fewer correct, more made-up paths, or request tokens above 1.2x. b -> c: C must beat B (strictly more correct) or the map is dropped. Request tokens = the product chat request without mesh (frozen system text + tool specs) plus what the set adds (mesh index + mesh tool specs). Correct counts a control only when it said unknown without a made-up path.', '');
+  lines.push('', '## Lines (mesh-plan.md section 6)', '', 'helped = at least 3 more correct than the base, made-up paths at most half, request tokens at most 1.2x. harm = fewer correct, more made-up paths, or request tokens above 1.2x. b -> c: C must beat B (strictly more correct) or the map is dropped. Request tokens = the product chat request without mesh (frozen system text + tool specs) plus what the set adds (mesh index + mesh tool specs). Correct counts a control only when it said unknown without naming any path. Hand-check the control answers (K1-K3, 3 per set) in the Answers table: the unknown check is a phrase list.', '');
   lines.push('| model | base -> set | more correct | made-up paths | request token ratio | verdict |', '|---|---|---|---|---|---|');
   for (const model of [...new Set(summary.map(s => s.model))]) {
     const request = meta.requests[model];

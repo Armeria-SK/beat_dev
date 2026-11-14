@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { addedTokens, buildProduct, compareSets, madeUpPaths, probeConfig, productChatRequest, productPaths, renderReport, runProbe, scoreAnswer, searchHit, summarize, type SetSummary } from '../scripts/mesh-probe.ts';
+import { addedTokens, buildProduct, compareSets, madeUpPaths, productChatRequest, productPaths, renderReport, runProbe, scoreAnswer, searchHit, summarize, type SetSummary } from '../scripts/mesh-probe.ts';
 import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import { builtinTools } from '../src/app.ts';
 import { contextAvailable } from '../src/engine/context-budget.ts';
 import { compactSystem } from '../src/engine/prompts.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
+import { defaultConfig } from '../src/config/store.ts';
 import { languageOf } from '../src/shared/language.ts';
 import type { ModelRequest, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
 import { MESH_QUESTIONS, PLAN_TEXT, PRODUCT_CHANGES, PRODUCT_FILES, type MeshQuestion } from './fixtures/mesh-questions.ts';
@@ -19,7 +20,7 @@ const model: ModelConfig = { id: 'fake-model', provider: 'fake', model: 'fake', 
 const SUMMARY = '- The owner is moving the coupon logic; next is allergy labels.';
 const SECRET = 'zq-mesh-secret-4b8e2d7a';
 const MESH_GUIDE_MARK = 'The text between the MESH markers';
-const ROOT = 'C:\work\bento';
+const ROOT = 'C:\\work\\bento';
 const score = (q: MeshQuestion, answer: string) => {
   const madeUp = madeUpPaths(answer, ROOT);
   return { ...scoreAnswer(q, answer, { madeUp, named: productPaths(answer, ROOT) }), madeUp };
@@ -126,6 +127,15 @@ test('対照の採点: 製品のファイルやフォルダを 1 つも挙げず
     [k3, 'No existe ningún archivo de notificaciones.'],
     [k3, 'No se encuentra ningún archivo para eso.'],
     [k3, 'No he encontrado nada parecido en el producto.'],
+    [k2, 'ポイントカードの残高の計算は不明です。'],
+    [k2, 'その情報はありません。'],
+    [k1, '該当する部品は含まれていません。'],
+    [k1, 'まだ作っていません。計画では次の作業です。'],
+    [k1, 'アレルギーの絞り込みはまだ実装されていません。'],
+    [k3, 'Desconozco qué archivo hace eso.'],
+    [k3, 'No tengo información sobre notificaciones push en este producto.'],
+    [k3, 'Ningún archivo envía notificaciones push.'],
+    [k3, 'No file in this product sends push notifications.'],
   ];
   for (const [q, answer] of honest) assert.deepEqual(score(q, answer), { correct: true, saidUnknown: true, trustedStale: false, madeUp: [] }, answer);
   const wrong: Array<[MeshQuestion, string]> = [
@@ -289,5 +299,26 @@ test('土台の頼み: 本物の App の製品チャットが送る道具（mesh
   assert.ok(!probe.baseTools.includes('web_fetch') && probe.meshTools.length > 0);
   assert.equal(probe.baseTokens, estimateTextTokens(real.system.frozen) + estimateTextTokens(JSON.stringify(baseSpecs)));
   assert.equal(probe.meshSpecTokens, estimateTextTokens(JSON.stringify(real.tools)) - estimateTextTokens(JSON.stringify(baseSpecs)));
-  assert.equal(probeConfig(m1, config.providers[0]!, config).tools, config.tools);
+});
+
+test('持ち主の設定の道具（場所・フック・方針）は、本物の頼みの大きさを測るときだけ使い、試しの道具の動きには入れない', async t => {
+  const base = realpathSync.native(tempDir(t));
+  const outside = join(base, 'owner-dev');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'x.md'), 'owner secret notes');
+  const owner = defaultConfig();
+  owner.tools.roots = [{ path: outside, mode: 'write' }];
+  owner.tools.hooks.preToolUse = [{ matcher: 'file_read', command: [process.execPath, '-e', 'process.exit(0)'], timeoutMs: 10_000, onError: 'deny' }];
+  owner.tools.policies = { ...owner.tools.policies, web_fetch: 'block' };
+  const env = await buildProduct(join(base, 'p'), 'c', model, provider, owner);
+  try {
+    const ctx = env.ctx(new AbortController().signal);
+    assert.deepEqual(ctx.config.tools, defaultConfig().tools);
+    assert.ok(!JSON.stringify(ctx.config.tools.hooks).includes('process.exit(0)'));
+    const read = await env.run({ id: 'r1', name: 'file_read', arguments: { path: join(outside, 'x.md') } }, ctx);
+    assert.doesNotMatch(read.content, /owner secret notes/u);
+    const inside = await env.run({ id: 'r2', name: 'file_read', arguments: { path: join(env.root, 'README.md') } }, ctx);
+    assert.match(inside.content, /Lunch pre-orders/u);
+    assert.ok(!env.request.baseTools.includes('web_fetch'), env.request.baseTools.join());
+  } finally { env.close(); }
 });
