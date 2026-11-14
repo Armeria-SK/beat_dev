@@ -360,7 +360,7 @@ test('タスクの実行: よそから来た文を読んだあとでも、許可
   };
   const r = await setup(t, { tools: [writer], classify: ASK('書く操作です') });
   const wrote = await r.call('writer_stub', { key: 'a' }, taskCtx(r));
-  assert.deepEqual([wrote.decision, wrote.decidedBy, wrote.output.content], ['allow', 'builtin', '書いた']);
+  assert.deepEqual([wrote.decision, wrote.decidedBy, wrote.output.content], ['allow', 'builtin', '書いた\n[E-1]']);
   assert.equal(r.prompts.length, 0);
 });
 

@@ -6,7 +6,7 @@ import { buildNewTask, emptyDraft, PRIORITIES, type TaskDraft } from '../../task
 import { plainLine } from '../../task-meta.ts';
 import { useMedia, useNow } from '../hooks.ts';
 import {
-  buildBoard, cardProject, COLUMN_TABS_MEDIA, KANBAN_PAGE, mergeFinished, pagesToReload, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
+  buildBoard, cardProject, COLUMN_TABS_MEDIA, KANBAN_PAGE, mergeFinished, pagesToReload, pendingRoute, pendingWait, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
   type Card, type ColumnId, type SessionCard, type Step, type TaskCard,
 } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
@@ -107,7 +107,8 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
     : task.status === 'waiting' ? <Pill tone="waiting">{t('ui.kanban.waiting')}</Pill>
     : task.status === 'failed' ? <Pill tone="danger">{t('ui.kanban.failed')}</Pill>
     : task.status === 'cancelled' ? <span className="bt-tag">{t(task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : 'ui.kanban.cancelled')}</span> : undefined;
-  const body = column === 'proposed' ? plainLine(task.body, 200) : task.status === 'waiting' ? plainLine(task.waiting_text, 200) : column === 'failed' ? plainLine(task.result_summary, 120) : '';
+  const onPending = pendingWait(task);
+  const body = column === 'proposed' ? plainLine(task.body, 200) : onPending ? '' : task.status === 'waiting' ? plainLine(task.waiting_text, 200) : column === 'failed' ? plainLine(task.result_summary, 120) : '';
   const timed = task.run_at !== null && task.run_at > now;
   const meta: Array<string | false | null> = column === 'approved'
     ? [timed ? t('ui.kanban.starts', formatDateTimeSmart(task.run_at, now)) : first && t('ui.kanban.next'), card.repeating && t('ui.kanban.repeating')]
@@ -119,9 +120,10 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       <Head label={label} dot={card.waiting} right={right} product={running ? null : product} />
       <h3 className="bt-card__title"><a className="ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a></h3>
       {body && <p className="bt-card__body">{body}</p>}
+      {onPending && <p className="bt-card__body"><a className="bt-tool__link" href={routeHash(onPending.route)} data-pending-wait={task.id}>{t('ui.kanban.waitingPending', onPending.refs)}</a></p>}
       {column === 'progress' && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
       <Meta items={meta} />
-      {pending > 0 && <a className="bt-tool__link bt-meta" href={routeHash(task.project_id ? { view: 'pending', productId: task.project_id } : { view: 'pending' })}>{t('ui.task.pending', pending)}</a>}
+      {pending > 0 && !onPending && <a className="bt-tool__link bt-meta" href={routeHash(pendingRoute(task))}>{t('ui.task.pending', pending)}</a>}
       {questions > 0 && <a className="bt-tool__link bt-meta" href={routeHash(questionsRoute(task))} data-questions={questions}>{t('ui.task.questions', questions)}</a>}
       {column === 'proposed' && (
         <div className="bt-card__actions">

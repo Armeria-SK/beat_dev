@@ -4,7 +4,7 @@ import { useNow } from './hooks.ts';
 import { Icon, Pill } from './parts.tsx';
 import { routeHash, type Route } from './routes.ts';
 import type { ToolItem } from './thread.ts';
-import { elapsedClock, staggerOf, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
+import { elapsedClock, emptyOutput, staggerOf, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
 
 type T = ReturnType<typeof useT>;
 
@@ -88,7 +88,7 @@ function ToolLine({ item, enter, pending }: { item: ToolItem; enter: number | nu
         <div className="bt-tool__body">
           {item.gate?.by === 'judge' && <p className="bt-meta ui-tool__gate">{t('ui.tool.judgeReason', item.gate.reason)}</p>}
           {item.gate?.by === 'not-parked' && <p className="bt-meta ui-tool__gate">{t('ui.tool.notRunWhy')}</p>}
-          {item.result ? <pre className="ui-tool__out">{item.result.text || t('ui.tool.noOutput')}</pre> : <span className="ui-tool__out">{view.target || view.name}</span>}
+          {item.result ? <pre className="ui-tool__out">{emptyOutput(item.result.text) ? t('ui.tool.noOutput') : item.result.text}</pre> : <span className="ui-tool__out">{view.target || view.name}</span>}
           {helperLink}
         </div>
       </Row>

@@ -211,7 +211,7 @@ test('4-2d: タスクは待ちがあっても次の道具を呼べ、task_comple
   assert.equal(started.control.value.outcome, 'complete');
   assert.equal((started.control.value as { summary: string }).summary, `done\n\nPending: ${ids}`);
   const last = s.app.conversations.messages(conversation.id).filter(m => m.role === 'tool').at(-1)!;
-  assert.ok(last.text.endsWith(`Pending: ${ids}`), last.text);
+  assert.match(last.text, new RegExp(`Pending: ${ids}\\n\\[E-\\d+\\]$`, 'u'), last.text);
 });
 
 test('4-2d: 却下は元のタスクの経過と会話の注記に残り、承認の結果の注記は外の中身の囲みに入り、それを読んだ実行に「外を読んだ」印が付く', async t => {
