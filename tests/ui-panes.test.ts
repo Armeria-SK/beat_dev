@@ -10,11 +10,12 @@ import {
 const product = { productId: 'p1' };
 const loose = { productId: null };
 
-test('ui/panes: 欄の表は、あとの段が 1 行ずつ足せる形（名前・数を持つか・開ける条件）。Plan と Pending（4-U1）で、製品の会話でだけ開ける', () => {
-  assert.deepEqual(PANES.map(p => p.view), ['plan', 'pending']);
+test('ui/panes: 欄の表は、あとの段が 1 行ずつ足せる形（名前・数を持つか・開ける条件）。Plan・Questions（5-2-u）・Pending（4-U1）で、製品の会話でだけ開ける', () => {
+  assert.deepEqual(PANES.map(p => p.view), ['plan', 'questions', 'pending']);
   assert.equal(PANES[0]!.counted, false, 'Plan は数を持たない（数は Questions・Kanban・Pending だけ）');
-  assert.equal(PANES[1]!.counted, true, 'Pending は数を持つ');
-  assert.deepEqual(openable(product), ['plan', 'pending']);
+  assert.equal(PANES[1]!.counted, true, 'Questions は数を持つ');
+  assert.equal(PANES[2]!.counted, true, 'Pending は数を持つ');
+  assert.deepEqual(openable(product), ['plan', 'questions', 'pending'], 'Panes のボタンで最初に開くのは Plan のまま');
   assert.deepEqual(openable(loose), [], '製品に属さない会話には開ける欄が無い（Panes のボタンを出さない）');
 });
 

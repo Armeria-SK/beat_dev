@@ -70,7 +70,7 @@ test('ui/live-state: 未読の数は notification で 1 増え、notification.re
 test('ui/live-state: つなぎ直し（resync）は、サーバーの下書きを入れ、全部を読み直す', () => {
   const r = reduce(EMPTY, { type: 'resync', drafts: [{ runId: 'r', conversationId: 'c', modelId: 'm', text: 'x' }, { runId: 'q', conversationId: 'd', modelId: 'm', text: '' }] });
   assert.deepEqual([...r.state.streaming], ['c']);
-  assert.deepEqual(refreshes(r.effects), ['conversations', 'drafts', 'pending', 'projects', 'tasks', 'unread', 'worker']);
+  assert.deepEqual(refreshes(r.effects), ['conversations', 'drafts', 'pending', 'projects', 'questions', 'tasks', 'unread', 'worker']);
   assert.equal(r.effects.filter(e => e.kind === 'checklist').length, 2);
 });
 
@@ -117,6 +117,18 @@ test('ui/live-state: Pending の行の pendingAction.changed は Pending の数�
   assert.equal(queued.state.pendingRevision, 0);
   assert.equal(queued.state.revisions.get('c1'), 1);
   assert.deepEqual(refreshes(queued.effects), []);
+});
+
+test('ui/live-state: question.changed は質問の数を読み直し、製品の数も読み直す。欄の一覧は questionRevision で読み直す（5-2-u）', () => {
+  const before = reduce(EMPTY, ev({ type: 'question.changed', id: 3, projectId: null, status: 'open' }));
+  assert.equal(before.state.questionRevision, 1);
+  assert.deepEqual(refreshes(before.effects), ['questions'], '製品がまだ無ければ製品の数は読まない');
+  const withProject = run(EMPTY, { type: 'projects', projects: [project('p1aaaa')] });
+  const r = reduce(withProject, ev({ type: 'question.changed', id: 3, projectId: 'p1aaaa', status: 'answered' }));
+  assert.equal(r.state.questionRevision, 1);
+  assert.deepEqual(refreshes(r.effects), ['projectCounts', 'questions']);
+  const counts = { open: 2, byProject: { p1aaaa: 2 }, byTask: { t1: 1 }, answered: 6, changed: 1 };
+  assert.deepEqual(reduce(r.state, { type: 'questions', counts }).state.questionCounts, counts);
 });
 
 test('ui/live-state: Pending の数と待ちの一覧は読み込みで入れ替わる（4-U1）', () => {

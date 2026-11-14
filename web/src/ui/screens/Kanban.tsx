@@ -6,7 +6,7 @@ import { buildNewTask, emptyDraft, PRIORITIES, type TaskDraft } from '../../task
 import { plainLine } from '../../task-meta.ts';
 import { useMedia, useNow } from '../hooks.ts';
 import {
-  buildBoard, cardProject, COLUMN_TABS_MEDIA, KANBAN_PAGE, mergeFinished, pagesToReload, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
+  buildBoard, cardProject, COLUMN_TABS_MEDIA, KANBAN_PAGE, mergeFinished, pagesToReload, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
   type Card, type ColumnId, type SessionCard, type Step, type TaskCard,
 } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
@@ -27,6 +27,7 @@ export interface KanbanProps {
   revision: number;
   projects: readonly Project[];
   pendingByTask: ReadonlyMap<string, number>;
+  questionsByTask: ReadonlyMap<string, number>;
 }
 
 interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
@@ -92,8 +93,8 @@ function SessionCardView({ card, now, index, product }: { card: SessionCard; now
   );
 }
 
-function TaskCardView({ card, now, index, first, busy, rejecting, product, pending, onApprove, onReject, onRejecting }: {
-  card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean; product: string | null; pending: number;
+function TaskCardView({ card, now, index, first, busy, rejecting, product, pending, questions, onApprove, onReject, onRejecting }: {
+  card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean; product: string | null; pending: number; questions: number;
   onApprove: () => void; onReject: (reason: string) => void; onRejecting: (on: boolean) => void;
 }) {
   const t = useT();
@@ -121,6 +122,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       {column === 'progress' && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
       <Meta items={meta} />
       {pending > 0 && <a className="bt-tool__link bt-meta" href={routeHash(task.project_id ? { view: 'pending', productId: task.project_id } : { view: 'pending' })}>{t('ui.task.pending', pending)}</a>}
+      {questions > 0 && <a className="bt-tool__link bt-meta" href={routeHash(questionsRoute(task))} data-questions={questions}>{t('ui.task.questions', questions)}</a>}
       {column === 'proposed' && (
         <div className="bt-card__actions">
           <Button variant="primary" small disabled={busy} onClick={onApprove}>{t('ui.kanban.approve')}</Button>
@@ -200,7 +202,7 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
 
 function columnName(t: T, id: ColumnId): string { return t(COLUMN_KEY[id]); }
 
-export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask }: KanbanProps) {
+export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask, questionsByTask }: KanbanProps) {
   const t = useT();
   const [picked, setPicked] = useState<ProductFilter>(ALL_PRODUCTS);
   const filter = settleFilter(picked, projects);
@@ -276,7 +278,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     if (card.kind === 'session') return <SessionCardView key={card.key} card={card} now={now} index={index} product={product} />;
     const { task } = card;
     return (
-      <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product} pending={pendingByTask.get(task.id) ?? 0}
+      <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product} pending={pendingByTask.get(task.id) ?? 0} questions={questionsByTask.get(task.id) ?? 0}
         onApprove={() => void act(task.id, () => runTaskOp('approve', task))}
         onReject={reason => void act(task.id, async () => { const ok = await runTaskOp('reject', task, { reason }); if (ok) setRejecting(null); return ok; })}
         onRejecting={on => setRejecting(on ? task.id : null)} />

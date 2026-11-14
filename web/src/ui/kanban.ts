@@ -1,5 +1,6 @@
 import type { ChecklistItem, Conversation, RunRow, Task } from '../api.ts';
 import { checklistStep } from './agent-state.ts';
+import type { Route } from './routes.ts';
 
 export type ColumnId = 'proposed' | 'approved' | 'progress' | 'done' | 'failed';
 export const COLUMNS: readonly ColumnId[] = ['proposed', 'approved', 'progress', 'done', 'failed'];
@@ -20,7 +21,9 @@ export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id'>): Col
   }
 }
 
-export const finishedAt = (task: Pick<Task, 'completed_at' | 'updated_at'>): number => task.completed_at ?? task.updated_at;
+export const questionsRoute = (task: Pick<Task, 'project_id'>): Route => (task.project_id ? { view: 'questions', productId: task.project_id } : { view: 'questions' });
+
+export const finishedAt =(task: Pick<Task, 'completed_at' | 'updated_at'>): number => task.completed_at ?? task.updated_at;
 
 export interface Step { step: number; total: number }
 

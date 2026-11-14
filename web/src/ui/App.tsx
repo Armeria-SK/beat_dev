@@ -12,6 +12,7 @@ import { Onboarding } from './Onboarding.tsx';
 import { Panes, usePanes } from './Panes.tsx';
 import { paneTarget, pendingFor, pendingRouteReady, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
 import type { PaneView } from './panes.ts';
+import { questionsFor, taskQuestions, withQuestionCounts } from './questions.ts';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
 import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboarding.ts';
 import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending } from './onboarding-steps.ts';
@@ -27,6 +28,7 @@ import { Notifications } from './screens/Notifications.tsx';
 import { ProductSettings } from './screens/ProductSettings.tsx';
 import { Overview } from './screens/Overview.tsx';
 import { PendingScreen } from './screens/Pending.tsx';
+import { QuestionsScreen } from './screens/Questions.tsx';
 import { ProductHome } from './screens/ProductHome.tsx';
 import { Runs } from './screens/Runs.tsx';
 import { Schedule } from './screens/Schedule.tsx';
@@ -76,6 +78,7 @@ function viewTitle(t: T, route: Route, conversation: ConversationRow | undefined
     case 'archived': return t('ui.nav.archived');
     case 'task': return t('ui.nav.task');
     case 'pending': return t('ui.nav.pending');
+    case 'questions': return t('ui.nav.questions');
     case 'settings': return t('ui.nav.settings');
   }
 }
@@ -142,6 +145,7 @@ export function App() {
     pending: throttled(() => {
       void Promise.all([api.pendingCounts(), api.pending({ status: 'waiting' })]).then(([counts, list]) => dispatch({ type: 'pending', counts, waiting: list.items })).catch(() => undefined);
     }, PENDING_MS),
+    questions: throttled(() => { void api.questionCounts().then(counts => dispatch({ type: 'questions', counts })).catch(() => undefined); }, PENDING_MS),
     tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished] })).catch(() => undefined); },
     drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
     unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
@@ -247,7 +251,7 @@ export function App() {
     return () => query.removeEventListener('change', onChange);
   }, []);
 
-  useEffect(() => { for (const what of ['conversations', 'tasks', 'drafts', 'unread', 'worker', 'profile', 'projects', 'pending'] as const) load[what](); }, [load]);
+  useEffect(() => { for (const what of ['conversations', 'tasks', 'drafts', 'unread', 'worker', 'profile', 'projects', 'pending', 'questions'] as const) load[what](); }, [load]);
   useEffect(() => {
     settleLeave(route, live.projectsLoaded ? live.projects.map(p => p.id) : null, { clearEdits: () => { clearUnsaved(SCREEN_EDITS); setLeave(null); }, replace: hash => location.replace(hash) });
   }, [route, live.projects, live.projectsLoaded]);
@@ -270,14 +274,18 @@ export function App() {
   const disconnected = useDisconnected(connected);
 
   const { conversations, drafts, checklists, streaming, skillDrafts, unread } = live;
-  const projects = useMemo(() => withPendingCounts(live.projects, live.pendingCounts), [live.projects, live.pendingCounts]);
+  const projects = useMemo(() => withQuestionCounts(withPendingCounts(live.projects, live.pendingCounts), live.questionCounts), [live.projects, live.pendingCounts, live.questionCounts]);
+  const questionsAll = live.questionCounts?.open ?? 0;
+  const questionsByTask = useMemo(() => taskQuestions(live.questionCounts), [live.questionCounts]);
+  const questionRevision = `${live.questionRevision}:${live.epoch}`;
+  const fixRevision = `${live.taskRevision}:${live.epoch}`;
   const pendingAll = live.pendingCounts ? pendingTotal(live.pendingCounts, live.projects) : 0;
   const sessionPending = useMemo(() => sessionCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingByTask = useMemo(() => taskCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
   const waiting: Waiting = useMemo(
-    () => ({ drafts: skillDrafts, pending: pendingAll, ...countTasks([...live.tasks.values()].map(m => m.status)) }),
-    [skillDrafts, live.tasks, pendingAll],
+    () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks.values()].map(m => m.status)) }),
+    [skillDrafts, live.tasks, pendingAll, questionsAll],
   );
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
   const state = agentState(waiting, working);
@@ -360,12 +368,13 @@ export function App() {
     location.replace(routeHash(paneTarget(productId, conversations)));
   }, [conversations]);
   const openPlanOf = useCallback((productId: string) => openPaneOf(productId, 'plan'), [openPaneOf]);
-  const pendingProduct = route.view === 'pending' ? route.productId ?? null : null;
+  const paneRoute = route.view === 'pending' || route.view === 'questions' ? route.view : null;
+  const paneRouteProduct = route.view === 'pending' || route.view === 'questions' ? route.productId ?? null : null;
   useEffect(() => {
-    if (pendingProduct === null || !pendingRouteReady(live.projectsLoaded, live.conversationsSettled)) return;
-    if (productOf(projects, pendingProduct)) openPaneOf(pendingProduct, 'pending');
-    else location.replace(routeHash({ view: 'pending' }));
-  }, [pendingProduct, live.projectsLoaded, live.conversationsSettled, projects, openPaneOf]);
+    if (paneRoute === null || paneRouteProduct === null || !pendingRouteReady(live.projectsLoaded, live.conversationsSettled)) return;
+    if (productOf(projects, paneRouteProduct)) openPaneOf(paneRouteProduct, paneRoute);
+    else location.replace(routeHash({ view: paneRoute }));
+  }, [paneRoute, paneRouteProduct, live.projectsLoaded, live.conversationsSettled, projects, openPaneOf]);
   useEffect(() => {
     if (!want || paneProduct !== want.productId) return;
     if (want.view === 'plan') panes.openPlan(false); else panes.openPane(want.view);
@@ -378,7 +387,7 @@ export function App() {
       <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} panes={paneToggle} />
       <div className={convo ? `bt-app${paneCount ? ' has-panes' : ''}${paneCount && panes.single ? ' is-pane-single' : ''}` : 'bt-shell'} data-panes={convo ? String(paneCount) : undefined} inert={shut}
         style={paneCount && !panes.single ? { '--ui-panes-w': `${panes.width}px` } as CSSProperties : undefined}>
-        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} pending={pendingAll} sessionPending={sessionPending} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
+        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} questions={questionsAll} pending={pendingAll} sessionPending={sessionPending} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
         {productsMissing(behind, live.projectsLoaded, projectsFailing) ? (
           <main className={convo ? 'bt-app__main' : 'bt-screen'} inert={drawer}>
             <div className="bt-screen__inner">
@@ -402,7 +411,7 @@ export function App() {
         ) : (
           <main className="bt-screen" inert={drawer}>
             {behind.view === 'kanban' ? (
-              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} />
+              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} questionsByTask={questionsByTask} />
             ) : behind.view === 'task' ? (
               <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.pendingRevision}`} worker={worker} projects={projects} pending={pendingByTask.get(behind.id) ?? 0} />
             ) : behind.view === 'overview' ? (
@@ -423,6 +432,8 @@ export function App() {
               <Archived revision={live.libraryRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} />
             ) : behind.view === 'pending' ? (
               behind.productId ? <div className="bt-screen__inner" /> : <PendingScreen waiting={live.pendingWaiting} counts={live.pendingCounts} projects={projects} conversations={conversations} revision={pendingRevision} onOpenPlan={openPlanOf} />
+            ) : behind.view === 'questions' ? (
+              behind.productId ? <div className="bt-screen__inner" /> : <QuestionsScreen counts={live.questionCounts} revision={questionRevision} fixRevision={fixRevision} />
             ) : behind.view === 'newProduct' ? (
               <NewProduct onProject={upsertProject} />
             ) : behind.view === 'productSettings' ? (
@@ -438,11 +449,12 @@ export function App() {
         {paneProduct && paneCount > 0 && (
           <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`}
-            pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }} />
+            pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }}
+            questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }} />
         )}
       </div>
       {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={shut} />}
-      <TabBar route={behind} kanban={kanban} pending={pendingAll} covered={covered} />
+      <TabBar route={behind} kanban={kanban} questions={questionsAll} pending={pendingAll} covered={covered} />
       {settingsOpen && onboard === null && (
         <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} held={settingsHeld} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
       )}
