@@ -39,6 +39,8 @@ export interface ShellGuardOptions {
   // git をホーム・システムの設定の洗い出しつきで動かせるか（既定は true。shell.ts は実際の git の版から渡す）
   gitIsolated?: boolean;
   depth?: number;
+  // 包むコマンドの中を調べるとき、それより前の文が外から取得したか
+  fetchedBefore?: boolean;
 }
 
 // cwd: いま（直前の cd の先）。cwds: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか
@@ -62,6 +64,8 @@ export interface ShellVerdict {
   ownHooksDir: string | null;
   // コマンドのどれかが外から取得する（curl・wget・Invoke-WebRequest など）か、外の中身を持ち込む（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）。実行すると外の中身を読むので、パイプラインは「外から読んだ」印を付ける
   fetched: boolean;
+  // fetched のうち、外から取得するもの（curl・wget など）だけ。git の取得やパッケージの導入は含めない（取ってきたものを動かす形の禁止に使う）
+  downloaded: boolean;
   statements: StatementFacts[];
   writes: string[];
   reasonKeys: string[];
@@ -152,9 +156,7 @@ function suspectPaths(words: readonly Word[]): string[] {
   return out;
 }
 
-const runsShellSink = (sts: readonly StatementFacts[]): boolean => sts.some(s => SHELL_SINKS.has(s.program) || (!!s.inner && runsShellSink(s.inner)));
-
-const lexDetail =(language: Language, fail: LexFail): string => guardText(language, `lex.${fail.code}`, { detail: fail.detail });
+const lexDetail = (language: Language, fail: LexFail): string => guardText(language, `lex.${fail.code}`, { detail: fail.detail });
 
 export function checkShellCommand(command: string, initialCwd: string, opts: ShellGuardOptions): ShellVerdict {
   const windows = opts.windows ?? process.platform === 'win32';
@@ -174,7 +176,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const selfHosts = opts.selfHosts ?? [];
   const env: Env = opts.env ?? process.env;
   let limits = false;
-  let fetched = false;
+  let fetched = opts.fetchedBefore ?? false;
   // 外の中身を持ち込むコマンド（git の取得・パッケージの導入）。curl などと違い、取ってきたものを動かす形を新しく止める（download_exec）ことはしないので、fetched とは別に持つ
   let pulled = false;
   // ask の理由には種類を付ける。付けなければ precheck（細かい種類なし）で、自動承認の判定役には回らない
@@ -196,7 +198,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
     return {
-      decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled,
+      decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled, downloaded: fetched,
       statements, writes, reasonKeys,
     };
   };
@@ -489,19 +491,19 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const source = name ? innerSource(name, st.words, shell, stdin) : undefined;
     const matchedEntries = allowEntries.filter(entry => entryMatches(entry, st.words, windows));
     const allowedByConfig = matchedEntries.length > 0;
+    const depth = opts.depth ?? 0;
     let wrapped: ShellVerdict | undefined;
     if (source !== undefined) {
-      const depth = opts.depth ?? 0;
-      const checkInner = (allow: readonly string[]) => checkShellCommand(source!.text, cwd, { ...opts, allow, shell: source!.shell, depth: depth + 1 });
-      wrapped = source && cwdKnown && depth < 3 ? checkInner(opts.allow ?? []) : undefined;
+      const checkInner = (allow: readonly string[]) => checkShellCommand(source!.text, cwd, { ...opts, allow, shell: source!.shell, depth: depth + 1, fetchedBefore: fetched });
+      wrapped = source && depth < 3 ? checkInner(opts.allow ?? []) : undefined;
+      if (wrapped && wrapped.statements.length === 0) wrapped = undefined;
       const head = wrapped?.statements[0]?.words.map(w => w.text) ?? [];
       const tails = matchedEntries.flatMap(entry => {
         for (let p = 1; p < entry.length; p++) if (entry.slice(p).every((e, i) => head[i] === e)) return [entry.slice(p).join(' ')];
         return [];
       });
       if (wrapped && tails.length) wrapped = checkInner([...(opts.allow ?? []), ...tails]);
-      const nested = wrapped?.statements ?? [];
-      current.inner = nested.length ? nested : null;
+      current.inner = wrapped && cwdKnown ? wrapped.statements : null;
     }
     statements.push(current);
     const hard = name ? HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined) : undefined;
@@ -510,7 +512,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;
-    else if (fetched && name && (SHELL_SINKS.has(name) || (wrapped && runsShellSink(wrapped.statements)))) add('deny', say('guard.download_exec'));
+    else if (fetched && name && SHELL_SINKS.has(name)) add('deny', say('guard.download_exec'));
 
     for (const reason of result.reasons) {
       if (hard || denied) break;
@@ -521,21 +523,26 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       else if (reason.level === 'once') addCode(fromReason(reason));
       else add('ask', fromReason(reason), askKindOf(reason.key));
     }
-    if (allowedByConfig && source !== undefined && !hard && !denied) {
-      if (!wrapped || wrapped.statements.length === 0) addCode(say('code.wrapped_unknown', { cmd: name }));
-      else {
+    if (source !== undefined && !hard && !denied) {
+      const innerReasons = () => wrapped!.reasons.forEach((reason, i) => { if (!reasons.includes(reason)) { reasons.push(reason); reasonKeys.push(wrapped!.reasonKeys[i]!); } });
+      if (!wrapped) {
+        if (fetched) add('deny', say('guard.download_exec'));
+        else if (depth >= 3 && !allowedByConfig) add('deny', say('code.wrapped_unknown', { cmd: name }));
+        else if (allowedByConfig) addCode(say('code.wrapped_unknown', { cmd: name }));
+      } else if (allowedByConfig && cwdKnown) {
         decision = worst(decision, wrapped.decision);
-        wrapped.reasons.forEach((reason, i) => { if (!reasons.includes(reason)) { reasons.push(reason); reasonKeys.push(wrapped!.reasonKeys[i]!); } });
+        innerReasons();
         for (const kind of wrapped.askKinds) if (!askKinds.includes(kind)) askKinds.push(kind);
         paths.push(...wrapped.paths);
         writes.push(...wrapped.writes);
         for (const file of wrapped.scripts) if (!scripts.includes(file) && scripts.length < 3) scripts.push(file);
-        fetched ||= wrapped.fetched;
         limits ||= wrapped.limits;
+      } else {
+        if (allowedByConfig) addCode(say('code.wrapped_unknown', { cmd: name }));
+        if (wrapped.decision === 'deny') decision = 'deny';
+        if (wrapped.decision === 'deny' || (cwdKnown && result.level !== 'allow')) innerReasons();
       }
-    } else if (wrapped?.decision === 'deny' && !hard && !denied) {
-      decision = 'deny';
-      wrapped.reasons.forEach((reason, i) => { if (!reasons.includes(reason)) { reasons.push(reason); reasonKeys.push(wrapped!.reasonKeys[i]!); } });
+      if (wrapped) { fetched ||= wrapped.downloaded; pulled ||= wrapped.fetched; }
     }
     const asked = matchesPrefix(words, opts.ask);
     if (asked && !allowedByConfig) add('ask', say('guard.needs_approval', { reason: asked }), 'owner');
