@@ -44,7 +44,7 @@ async function setup(t: Parameters<typeof startApp>[0]) {
   return { ...s, product, send, task, items };
 }
 
-test('7-4c 好奇心の道具はどの実行にも渡らない: 会話・計画・製品の会話・製品の計画・子の担当・タスク・振り返りの頼みに curiosity_* が無く、system に CURIOSITY.md の中身も curiosity の語も無い', async t => {
+test('7-4c 好奇心の道具はどの実行にも渡らない: 会話・計画・製品の会話・製品の計画・タスク・振り返りの頼みに curiosity_* が無く、system に CURIOSITY.md の中身も curiosity の語も無い（子の担当〔agent_run〕と CURIOSITY.md の目印は、変更の前から通る見張りだけ）', async t => {
   const s = await setup(t);
   writeFileSync(join(s.app.paths.workspace, 'CURIOSITY.md'), `# CURIOSITY\n\n- ${MARK}\n`);
   const shop = await s.product('shop');

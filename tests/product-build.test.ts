@@ -14,7 +14,7 @@ import { toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import { acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { meshStateSet } from '../src/tools/builtin/mesh.ts';
-import type { TaskStore } from '../src/tasks/store.ts';
+import { PLAN_GIST_LABEL, type TaskStore } from '../src/tasks/store.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, tempDir, type Script } from './helpers.ts';
 
@@ -474,7 +474,7 @@ test('3-2-s Build の頼み: 外を読んだ会話のきれいな実行が task_
 
   assert.equal((await s.json(`/api/conversations/${uuid(60)}`, 'DELETE')).status, 200);
   assert.equal(s.app.conversations.get(uuid(60)), undefined);
-  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}`, '4-J: 会話を消したあとも、頼みは Build を作ったときの決まった文だけ（メモは入らない）');
+  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}\n${PLAN_GIST_LABEL}\n# Plan`, '4-J: 会話を消したあとも、頼みは Build を作ったときの決まった文（題と、承認した計画書の要点）だけ（メモは入らない）');
 
   mkdirSync(s.paths.workspace, { recursive: true });
   const file = join(s.paths.data, 'outside-notes.txt');

@@ -94,7 +94,9 @@ test('5-0 allowedIn が空の道具: どの種類の実行にも渡らず、道�
   const s = await setup(t, { tools: all });
   const hidden = emptyNames(all);
   assert.ok(hidden.includes('probe_hidden'));
-  for (const tool of builtinTools().filter(def => def.allowedIn.length === 0 && !def.name.startsWith('curiosity_'))) {
+  const skeletons = builtinTools().filter(def => def.allowedIn.length === 0 && !def.name.startsWith('curiosity_'));
+  assert.ok(skeletons.length > 0);
+  for (const tool of skeletons) {
     const out = await tool.execute({}, { config: s.app.config() } as ToolContext);
     assert.equal(out.isError, true, tool.name);
     assert.match(out.content, /not available yet/u, tool.name);

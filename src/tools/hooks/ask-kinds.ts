@@ -20,6 +20,7 @@ export const ASK_REASON_KINDS: Readonly<Record<string, AskKind>> = {
   'list.lan': 'egress',
   'list.git_push': 'egress',
   'list.git_write': 'git_write',
+  'list.git_identity': 'git_write',
 };
 
 export const askKindOf = (key: string): AskKind => ASK_REASON_KINDS[key] ?? 'precheck';

@@ -22,11 +22,6 @@ const toolCall = (name: string, args: unknown, before = ''): Script => async fun
   yield { type: 'tool_call', call };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
-function gate() { let open!: () => void; const promise = new Promise<void>(resolve => { open = resolve; }); return { promise, open }; }
-const after = (g: { promise: Promise<void> }, script: Script): Script => async function* (req) {
-  await Promise.race([g.promise, new Promise<never>((_, reject) => { req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }); })]);
-  yield* script(req);
-};
 
 const ALLOW = '{"decision":"allow","reason":"依頼どおりに外のメモを読むだけです"}';
 const ASK = '{"decision":"ask","reason":"check"}';

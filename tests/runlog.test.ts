@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { TRIGGER_LABEL, TRIGGER_TEXT } from '../src/memory/review.ts';
+import { TRIGGER_TEXT } from '../src/memory/review.ts';
 import type { ReviewJob, RunRow, ToolCallRow } from '../web/src/api.ts';
 import { parseRoute, routeHash } from '../web/src/ui/routes.ts';
 import {
@@ -93,8 +93,8 @@ test('コードの網羅: サーバーが作る種類は、すべて辞書に訳
   assert.ok(decidedBy.size >= 5, `決めた人の値を読めた: ${[...decidedBy].join(',')}`);
   for (const by of decidedBy) assert.notEqual(decidedByLabel(by), by, `${by} の訳`);
   assert.ok(source('src/tools/pipeline.ts').includes('`hook:${result.hook}`'), 'フックの名前は hook:<名前> の形');
-  for (const trigger of Object.keys(TRIGGER_LABEL)) {
-    assert.equal(jobTriggerLabel(trigger), TRIGGER_TEXT.en[trigger as keyof typeof TRIGGER_LABEL], `${trigger}: 画面の訳はサーバーの英語と同じ`);
+  for (const trigger of Object.keys(TRIGGER_TEXT.en)) {
+    assert.equal(jobTriggerLabel(trigger), TRIGGER_TEXT.en[trigger as keyof typeof TRIGGER_TEXT.en], `${trigger}: 画面の訳はサーバーの英語と同じ`);
     assert.notEqual(jobTriggerLabel(trigger), trigger);
   }
 });

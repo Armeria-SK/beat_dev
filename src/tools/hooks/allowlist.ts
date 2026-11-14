@@ -4,7 +4,7 @@
 import { Acc, bashVarOk, envAssignOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
 import { runGit } from './allowlist-git.ts';
 import { pipeBound } from './allowlist-pipe.ts';
-import { cmdHostArgs, parsePs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
+import { cmdHostArgs, parsePs, psArgs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
 import { toolFor } from './allowlist-tools.ts';
 import { isPowerShell, lexShell, type LexFail, type ShellKind, type Statement, type Word } from './shell-lex.ts';
 
@@ -100,6 +100,7 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
     else if (PS_SIMPLE.has(simple)) runPsSimple(simple, literalGlob, acc, ctx);
     else toolFor(key)!.run(literalGlob, acc, ctx);
     if (ctx.windows) winArgs(key, words, ext, acc);
+    else psArgs(key, words, acc);
     return;
   }
   acc.add('once', 'list.command', { cmd: words[0]!.text }, true);

@@ -5,7 +5,7 @@ import { App } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { fail, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { fail, FakeAdapter, tempDir, type Script, testConfig } from './helpers.ts';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;

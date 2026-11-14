@@ -65,11 +65,14 @@ function positional(words: readonly Word[], ddAt: number, mode: 'rev' | 'path' |
 
 const spec = (sub: string, flags: string, over: Partial<GnuSpec> = {}): GnuSpec => ({ names: [`git ${sub}`], flags, pos: ['x…'], ...over });
 
+export const GIT_IDENTITY = /^user\.(name|email)=[^\r\n]*$/iu;
+
 export function runGit(words: Word[], acc: Acc, ctx: MatchCtx): void {
   const args = words.slice(1);
   if (args.length === 1 && literal(args[0]) && args[0]!.text === '--version') return;
   let i = 0;
   let dashC: Word | undefined;
+  let identity = false;
   for (; i < args.length && isFlagLike(args[i]!); i++) {
     const t = args[i]!.text;
     if (t === '-C') {
@@ -77,9 +80,14 @@ export function runGit(words: Word[], acc: Acc, ctx: MatchCtx): void {
       if (!v || dashC) { acc.add('once', 'list.form', { cmd: 'git', detail: '-C' }, true); return; }
       dashC = v;
       acc.read(v);
+    } else if (t === '-c' && literal(args[i + 1]) && GIT_IDENTITY.test(args[i + 1]!.text)) {
+      i++;
+      identity = true;
     } else if (t !== '--no-pager' && t !== '-P' && t !== '--no-optional-locks') { acc.add('once', 'list.flag', { cmd: 'git', flag: t }, true); return; }
   }
   const subWord = args[i];
+  if (identity && !(literal(subWord) && subWord!.text === 'commit')) { acc.add('once', 'list.flag', { cmd: 'git', flag: '-c' }, true); return; }
+  if (identity) acc.add('ask', 'list.git_identity', {}, false);
   if (!subWord || !literal(subWord)) { acc.add('once', 'list.form', { cmd: 'git', detail: subWord?.text ?? '' }, true); return; }
   const sub = subWord.text;
   const rest = [words[0]!, ...args.slice(i + 1)];

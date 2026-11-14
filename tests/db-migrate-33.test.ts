@@ -12,7 +12,8 @@ const tables = (db: DatabaseSync): string[] => (db.prepare("SELECT name FROM sql
 const counts = (db: DatabaseSync): Record<string, number> => Object.fromEntries(tables(db).map(name => [name, Number((db.prepare(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number }).n)]));
 const rowsOf = (db: DatabaseSync, sql: string): Array<Record<string, unknown>> => db.prepare(sql).all().map(r => ({ ...r }));
 
-const TASKS = 'SELECT id, status, origin, curiosity_id, updated_at FROM tasks ORDER BY id';
+const TASKS = 'SELECT id, status, origin, curiosity_id, lease_until, updated_at FROM tasks ORDER BY id';
+const MOVED = ['c-ready', 'c-ready-2', 'c-running'];
 const ITEMS = 'SELECT * FROM curiosity_items ORDER BY id';
 const EVENTS = 'SELECT * FROM task_events ORDER BY id';
 
@@ -28,6 +29,8 @@ function seedV32(path: string) {
     task.run('c-ready', 'Look into: FTS5', 'ready', 'curiosity', 1);
     task.run('c-ready-2', 'Look into: Croner', 'ready', 'curiosity', 2);
     for (const status of ['inbox', 'running', 'waiting', 'done', 'failed', 'cancelled']) task.run(`c-${status}`, status, status, 'curiosity', null);
+    db.prepare("UPDATE tasks SET lease_until = 99 WHERE id = 'c-running'").run();
+    task.run('s-running', 'Self running', 'running', 'self', null);
     task.run('s-ready', 'Self', 'ready', 'self', null);
     task.run('u-ready', 'User', 'ready', 'user', null);
     task.run('x-ready', 'Scheduled run', 'ready', 'schedule', null);
@@ -36,7 +39,7 @@ function seedV32(path: string) {
   } finally { db.close(); }
 }
 
-test('移し替え 33: 好奇心の ready のタスクだけを inbox に移し、更新の時刻を今の ms にする。ほかのタスク・好奇心の行・経過の行・ほかの表の数は変わらず、控えが 1 つでき、2 回目は何もしない', t => {
+test('移し替え 33: 好奇心の ready と running のタスクだけを inbox に移し（running の lease_until は空に）、更新の時刻を今の ms にする。ほかのタスク・好奇心の行・経過の行・ほかの表の数は変わらず、控えが 1 つでき、2 回目は何もしない', t => {
   const dir = tempDir(t);
   const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');
@@ -52,17 +55,18 @@ test('移し替え 33: 好奇心の ready のタスクだけを inbox に移し�
     assert.deepEqual(rowsOf(db, ITEMS), before.items);
     assert.deepEqual(rowsOf(db, EVENTS), before.events);
     const after = rowsOf(db, TASKS);
-    moved = after.filter(r => r.id === 'c-ready' || r.id === 'c-ready-2');
-    assert.deepEqual(moved.map(r => [r.id, r.status]), [['c-ready', 'inbox'], ['c-ready-2', 'inbox']]);
+    moved = after.filter(r => MOVED.includes(String(r.id)));
+    assert.deepEqual(moved.map(r => [r.id, r.status, r.lease_until]), [['c-ready', 'inbox', null], ['c-ready-2', 'inbox', null], ['c-running', 'inbox', null]]);
     for (const r of moved) assert.ok(Number(r.updated_at) >= Math.floor(started / 1000) * 1000 && Number(r.updated_at) <= Date.now(), String(r.updated_at));
-    assert.deepEqual(after.filter(r => !moved.includes(r)), before.tasks.filter(r => r.id !== 'c-ready' && r.id !== 'c-ready-2'));
+    assert.deepEqual(after.filter(r => !moved.includes(r)), before.tasks.filter(r => !MOVED.includes(String(r.id))));
+    assert.deepEqual(after.filter(r => ['c-waiting', 'c-failed', 'c-cancelled', 'c-done', 's-running'].includes(String(r.id))).map(r => [r.id, r.status]), [['c-cancelled', 'cancelled'], ['c-done', 'done'], ['c-failed', 'failed'], ['c-waiting', 'waiting'], ['s-running', 'running']]);
   } finally { db.close(); }
   assert.deepEqual(readdirSync(backups).map(name => /-v(\d+)-/u.exec(name)?.[1]), ['32']);
 
   const again = openDatabase(path, MIGRATIONS.slice(0, 33), { backupDir: backups });
   try {
     assert.equal(version(again), 33);
-    assert.deepEqual(rowsOf(again, TASKS).filter(r => r.id === 'c-ready' || r.id === 'c-ready-2'), moved);
+    assert.deepEqual(rowsOf(again, TASKS).filter(r => MOVED.includes(String(r.id))), moved);
     assert.equal(readdirSync(backups).length, 1);
   } finally { again.close(); }
 });
