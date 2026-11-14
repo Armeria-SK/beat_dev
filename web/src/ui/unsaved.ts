@@ -14,6 +14,10 @@ export const hasUnsavedEdits = (prefix = '', except?: string): boolean => [...di
 
 export const SCREEN_EDITS = 'screen:';
 
+export const SETTINGS_EDITS = 'settings:';
+
+export const settingsLeaveAsks = (unsaved: boolean, fromView: string, next: Route): boolean => unsaved && fromView === 'settings' && next.view !== 'settings';
+
 export function leaveAsks(unsaved: boolean, current: Route, next: Route): boolean {
   return unsaved && next.view !== 'settings' && routeHash(next) !== routeHash(current);
 }

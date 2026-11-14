@@ -26,6 +26,7 @@ export interface SetCtx {
   ask: (ask: Ask, run: () => Promise<boolean>) => Promise<boolean>;
   cancel: () => void;
   setDirty: (key: string, dirty: boolean) => void;
+  guard: (go: () => void) => void;
   fail: (row: string, message: string) => void;
   clear: (row: string) => void;
   reload: () => Promise<void>;

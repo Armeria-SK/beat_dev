@@ -207,7 +207,7 @@ export function AdvancedPanel() {
             <span className="ui-confirm__buttons">
               <Button small variant="primary" disabled={ctx.busy !== null} onClick={() => void save()}>{t('ui.set.save')}</Button>
               <Button small variant="ghost" disabled={ctx.busy !== null} onClick={() => void open()}>{t('ui.set.revert')}</Button>
-              <Button small variant="ghost" onClick={() => { setText(null); ctx.cancel(); }}>{t('ui.close')}</Button>
+              <Button small variant="ghost" onClick={() => ctx.guard(() => { setText(null); ctx.cancel(); })}>{t('ui.close')}</Button>
             </span>
           </div>
         )}>

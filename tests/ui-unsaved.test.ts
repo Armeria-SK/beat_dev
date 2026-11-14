@@ -6,7 +6,7 @@ import { escStops } from '../web/src/ui/composer-state.ts';
 import { workerLine } from '../web/src/ui/overview.ts';
 import { mergeRawConfig } from '../web/src/ui/settings/commit.ts';
 import { modelReach, providerReach } from '../web/src/ui/settings/view.ts';
-import { clearUnsaved, discardGate, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, setUnsaved, unloadGuard } from '../web/src/ui/unsaved.ts';
+import { clearUnsaved, discardGate, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, setUnsaved, settingsLeaveAsks, SETTINGS_EDITS, unloadGuard } from '../web/src/ui/unsaved.ts';
 
 // 1-6 の前の突き合わせで見つけた「黙って失う・行き止まりになる」所の決まり（前の画面にあった動きを新しい画面に戻したもの）。
 
@@ -216,4 +216,28 @@ test('設定ファイルの直接編集: モデルの並びだけを変えて保
   const merged = mergeRawConfig(loaded, edited, structuredClone(loaded));
   assert.deepEqual(merged.conflicts, []);
   assert.deepEqual(merged.config.providers.map((p: Json) => p.id), ['b', 'a']);
+});
+
+test('Settings の書きかけ: ブラウザの戻るなどで Settings の外へ動くときも聞く。Settings の中の区分の行き来では聞かない（backlog 194）', () => {
+  clearUnsaved('');
+  assert.equal(settingsLeaveAsks(hasUnsavedEdits(SETTINGS_EDITS), 'settings', { view: 'kanban' }), false, '書きかけが無ければ聞かない');
+  setUnsaved(`${SETTINGS_EDITS}adv:file`, true);
+  assert.equal(settingsLeaveAsks(hasUnsavedEdits(SETTINGS_EDITS), 'settings', { view: 'kanban' }), true, 'Settings の外へ');
+  assert.equal(settingsLeaveAsks(hasUnsavedEdits(SETTINGS_EDITS), 'settings', { view: 'settings', section: 'models' }), false, '区分の行き来は Settings の確かめが受け持つ');
+  assert.equal(settingsLeaveAsks(hasUnsavedEdits(SETTINGS_EDITS), 'kanban', { view: 'skills' }), false, 'Settings を開いていないとき');
+  clearUnsaved(SETTINGS_EDITS);
+});
+
+test('Settings の書きかけの配線: App は Settings の外へ動く前に戻して確かめを Settings に渡し、Replay と設定ファイルの欄の Close も確かめを通す（backlog 194）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  const onHash = app.slice(app.indexOf('const onHash = () => {'), app.indexOf("addEventListener('hashchange', onHash);"));
+  assert.ok(onHash.includes('if (settingsLeaveAsks(hasUnsavedEdits(SETTINGS_EDITS), viewRef.current, next)) {'), 'Settings の書きかけを見る');
+  assert.ok(onHash.indexOf('holdLeave(moved, entryHash.current, LEAVE_ENV);') > onHash.indexOf('settingsLeaveAsks('), 'Settings の経路へ戻す');
+  assert.ok(app.includes('held={settingsHeld}'), '確かめは Settings の帯で出す');
+  const page = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
+  assert.ok(page.includes('useEffect(() => { if (held) setLeave(() => held); }, [held]);'), 'Settings は渡された動きを帯で聞く');
+  assert.ok(page.includes('<PersonaPanel onReplay={() => guard(onReplay)} />'), 'Replay も確かめを通す');
+  const custom = readFileSync(new URL('../web/src/ui/settings/customize.tsx', import.meta.url), 'utf8');
+  assert.ok(custom.includes("onClick={() => ctx.guard(() => { setText(null); ctx.cancel(); })}>{t('ui.close')}"), '設定ファイルの欄の Close も確かめを通す');
 });

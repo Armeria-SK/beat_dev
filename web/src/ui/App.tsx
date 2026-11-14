@@ -37,7 +37,7 @@ import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
 import { Button, Notice } from './parts.tsx';
-import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
+import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, SETTINGS_EDITS, settingsLeaveAsks, unloadGuard, type HeldLeave, type LeaveEnv } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_NOTICES: RunNotice[] = [];
@@ -112,6 +112,8 @@ export function App() {
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
   const [leave, setLeave] = useState<HeldLeave | null>(null);
+  const [settingsLeave, setSettingsLeave] = useState<HeldLeave | null>(null);
+  const settingsHeld = useMemo(() => (settingsLeave ? () => { setSettingsLeave(null); followLeave(settingsLeave, historyIndex(), LEAVE_ENV); } : null), [settingsLeave]);
   const entryIndex = useRef(historyIndex());
   const entryHash = useRef(location.hash);
 
@@ -211,6 +213,12 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       const next = readRoute();
+      if (settingsLeaveAsks(hasUnsavedEdits(SETTINGS_EDITS), viewRef.current, next)) {
+        const moved = leaveMove(entryIndex.current, historyIndex());
+        setSettingsLeave({ to: routeHash(next), moved, at: entryIndex.current });
+        holdLeave(moved, entryHash.current, LEAVE_ENV);
+        return;
+      }
       const held = behindRef.current;
       const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
       if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
@@ -289,6 +297,7 @@ export function App() {
     const closed = wasSettingsOpen.current && !settingsOpen;
     wasSettingsOpen.current = settingsOpen;
     if (!closed) return;
+    setSettingsLeave(null);
     const opener = settingsOpener.current;
     settingsOpener.current = null;
     focusFirst(opener, document.querySelector('[data-settings-button]'), menuButton.current);
@@ -437,7 +446,7 @@ export function App() {
       {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={shut} />}
       <TabBar route={behind} kanban={kanban} pending={pendingAll} covered={covered} />
       {settingsOpen && onboard === null && (
-        <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
+        <Settings section={route.view === 'settings' ? route.section : undefined} onClose={closeSettings} held={settingsHeld} onReplay={replay} onSaved={load.worker} onProfile={load.profile} />
       )}
       {onboard !== null && <Onboarding profile={profile} replay={onboard === 'replay'} start={onboard === 'first' && setup ? resumeIndex(setup.steps) : 0} onProfile={load.profile} onDone={finishOnboard} onSkip={closeOnboard} />}
       {leave !== null && (
