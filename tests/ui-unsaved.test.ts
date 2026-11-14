@@ -6,7 +6,7 @@ import { escStops } from '../web/src/ui/composer-state.ts';
 import { workerLine } from '../web/src/ui/overview.ts';
 import { mergeRawConfig } from '../web/src/ui/settings/commit.ts';
 import { modelReach, providerReach } from '../web/src/ui/settings/view.ts';
-import { clearUnsaved, discardGate, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, setUnsaved, unloadGuard } from '../web/src/ui/unsaved.ts';
+import { clearUnsaved, discardGate, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, popIndex, SCREEN_EDITS, setUnsaved, settingsHold, SETTINGS_EDITS, unloadGuard } from '../web/src/ui/unsaved.ts';
 
 // 1-6 の前の突き合わせで見つけた「黙って失う・行き止まりになる」所の決まり（前の画面にあった動きを新しい画面に戻したもの）。
 
@@ -206,4 +206,43 @@ test('書きかけの確かめ: App は、動きを受け入れるたびに履�
   const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /entryIndex\.current = historyIndex\(\);\s*entryHash\.current = location\.hash;/u);
   assert.match(app, /popIndex\(entryIndex\.current, entryHash\.current, location\.hash, historyIndex\(\)\)/u);
+});
+
+test('設定ファイルの直接編集: モデルの並びだけを変えて保存すると、その並びが書かれる（何も書かずに "Saved" と出さない。backlog 265）', () => {
+  const loaded = defaultConfig() as Json;
+  loaded.providers = [{ id: 'a', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1' }, { id: 'b', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:2/v1' }];
+  const edited = structuredClone(loaded);
+  edited.providers.reverse();
+  const merged = mergeRawConfig(loaded, edited, structuredClone(loaded));
+  assert.deepEqual(merged.conflicts, []);
+  assert.deepEqual(merged.config.providers.map((p: Json) => p.id), ['b', 'a']);
+});
+
+test('Settings の書きかけ: ブラウザの戻る・アドレス欄で Settings の外へ動くときも、Settings の別の区分へ動くときも、元の経路へ戻して聞く（backlog 194、レビューの直し）', () => {
+  clearUnsaved('');
+  const from = '#/settings/advanced';
+  assert.equal(settingsHold(hasUnsavedEdits(SETTINGS_EDITS), 'settings', from, { view: 'kanban' }, 5, 4), null, '書きかけが無ければ聞かない');
+  setUnsaved(`${SETTINGS_EDITS}adv:file`, true);
+  assert.deepEqual(settingsHold(hasUnsavedEdits(SETTINGS_EDITS), 'settings', from, { view: 'kanban' }, 5, 4), { leave: { to: '#/kanban', moved: -1, at: 5 }, back: from }, 'Settings の外へ（戻るで 1 つ下がった）');
+  assert.deepEqual(settingsHold(hasUnsavedEdits(SETTINGS_EDITS), 'settings', from, { view: 'settings', section: 'persona' }, 5, 4), { leave: { to: '#/settings/persona', moved: -1, at: 5 }, back: from }, 'Settings の別の区分へ（戻る・アドレス欄）');
+  assert.deepEqual(settingsHold(hasUnsavedEdits(SETTINGS_EDITS), 'settings', from, { view: 'settings', section: 'models' }, 5, 6)?.leave.moved, 1, 'アドレス欄で打った（1 つ積んだ）');
+  assert.equal(settingsHold(hasUnsavedEdits(SETTINGS_EDITS), 'settings', from, { view: 'settings', section: 'advanced' }, 5, 5), null, '同じ経路（元へ戻したときの hashchange）では聞かない');
+  assert.equal(settingsHold(hasUnsavedEdits(SETTINGS_EDITS), 'kanban', '#/kanban', { view: 'skills' }, 5, 6), null, 'Settings を開いていないとき');
+  clearUnsaved(SETTINGS_EDITS);
+});
+
+test('Settings の書きかけの配線: App は settingsHold で止め、行き先を覚えて元の経路へ戻し、Settings の帯の Discard で followLeave する。Replay と設定ファイルの欄の Close も確かめを通す（backlog 194）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
+  const onHash = app.slice(app.indexOf('const onHash = () => {'), app.indexOf("addEventListener('hashchange', onHash);"));
+  assert.ok(onHash.includes('const hold = settingsHold(hasUnsavedEdits(SETTINGS_EDITS), viewRef.current, entryHash.current, next, entryIndex.current, historyIndex());'), 'Settings の書きかけを見る');
+  assert.ok(onHash.includes('if (hold) { setSettingsLeave(hold.leave); holdLeave(hold.leave.moved, hold.back, LEAVE_ENV); return; }'), '行き先を覚え、元の経路へ戻して止める');
+  assert.ok(onHash.indexOf('const hold = settingsHold(') < onHash.indexOf('setRoute(next);'), '経路を変える前に止める');
+  assert.ok(app.includes('const settingsHeld = useMemo(() => (settingsLeave ? () => { setSettingsLeave(null); followLeave(settingsLeave, historyIndex(), LEAVE_ENV); } : null), [settingsLeave]);'), 'Discard で行き先へ動き直す');
+  assert.ok(app.includes('held={settingsHeld}'), '確かめは Settings の帯で出す');
+  const page = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
+  assert.ok(page.includes('useEffect(() => { if (held) setLeave(() => held); }, [held]);'), 'Settings は渡された動きを帯で聞く');
+  assert.ok(page.includes('<PersonaPanel onReplay={() => guard(onReplay)} />'), 'Replay も確かめを通す');
+  const custom = readFileSync(new URL('../web/src/ui/settings/customize.tsx', import.meta.url), 'utf8');
+  assert.ok(custom.includes("onClick={() => ctx.guard(() => { setText(null); ctx.cancel(); })}>{t('ui.close')}"), '設定ファイルの欄の Close も確かめを通す');
 });

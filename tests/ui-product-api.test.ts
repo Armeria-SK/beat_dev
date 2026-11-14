@@ -94,3 +94,15 @@ test('web/api: 受け入れの一覧を読む口と、製品の文書の言語�
     { url: '/api/projects/p1aaaa', method: 'PATCH', body: { docLanguage: null } },
   ]);
 });
+
+test('web/api: タスクの取り消しと、その取り消しを戻す口・会話のアーカイブの口', async () => {
+  const sent = capture(200, { task: { id: 't1' } });
+  await api.taskAction('t1', 'cancel');
+  await api.taskAction('t1', 'uncancel');
+  await api.archiveConversation('c1');
+  assert.deepEqual(sent, [
+    { url: '/api/tasks/t1/cancel', method: 'POST', body: {} },
+    { url: '/api/tasks/t1/uncancel', method: 'POST', body: {} },
+    { url: '/api/conversations/c1', method: 'PATCH', body: { archived: true } },
+  ]);
+});

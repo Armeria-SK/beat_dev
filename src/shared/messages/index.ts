@@ -1,17 +1,21 @@
 import { acceptanceText } from './acceptance.ts';
 import { buildText } from './build.ts';
 import { configText } from './config.ts';
+import { deviationText } from './deviations.ts';
 import { engineText } from './engine.ts';
+import { gateText } from './gate.ts';
 import { guardText } from './guard.ts';
 import { httpText } from './http.ts';
+import { meshWriteText } from './mesh-write.ts';
 import { notifyText } from './notify.ts';
 import { outboundText } from './outbound.ts';
 import { pendingText } from './pending.ts';
 import { planText } from './plans.ts';
 import { projectText } from './projects.ts';
 import { providerText } from './providers.ts';
+import { questionText } from './questions.ts';
 import { storeText } from './stores.ts';
 import { taskText } from './tasks.ts';
 import { toolText } from './tools.ts';
 
-export const CATALOGS = { task: taskText, provider: providerText, engine: engineText, guard: guardText, tool: toolText, store: storeText, http: httpText, config: configText, notify: notifyText, project: projectText, plan: planText, acceptance: acceptanceText, build: buildText, pending: pendingText, outbound: outboundText } as const;
+export const CATALOGS = { task: taskText, provider: providerText, engine: engineText, guard: guardText, tool: toolText, store: storeText, http: httpText, config: configText, notify: notifyText, project: projectText, plan: planText, acceptance: acceptanceText, build: buildText, pending: pendingText, outbound: outboundText, question: questionText, deviation: deviationText, meshwrite: meshWriteText, gate: gateText } as const;

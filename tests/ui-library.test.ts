@@ -196,3 +196,11 @@ test('4-4 Skills の道具の方針: agent_run には Ask を出さない（Ask 
   assert.deepEqual(policyChoices('shell_run'), ['allow', 'ask', 'block']);
   assert.deepEqual(policyChoices('file_write'), ['allow', 'ask', 'block']);
 });
+
+test('Skills: 開いた行の中の囲み（SKILL.md の欄）は、行の左右の余白（--space-4）と同じすき間を上と下にも取り、どの枠にも触れない（持ち主 2026-11-14）', () => {
+  const css = readFileSync(new URL('../web/src/ui/styles/library.css', import.meta.url), 'utf8');
+  const bundle = readFileSync(new URL('../web/src/ui/styles/bundle.css', import.meta.url), 'utf8');
+  assert.match(bundle, /\.bt-row \{[^}]*padding: var\(--space-2\) var\(--space-4\);/u, '行の余白は上下 --space-2・左右 --space-4');
+  assert.match(css, /\.ui-lib__open \{[^}]*padding-top: 0;/u, '開いた行は上の余白を持たない');
+  assert.match(css, /\.ui-lib__detail \{ margin: var\(--space-4\) 0 var\(--space-2\); \}/u, '上は --space-4、下は行の --space-2 と合わせて --space-4');
+});

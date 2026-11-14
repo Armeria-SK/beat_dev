@@ -63,6 +63,7 @@ const SEPARATOR_LIKE = /[\u0080-\u009f\u2028\u2029]/u;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const FULLWIDTH = /[！-～　]/u;
 const MAX_DEPTH = 4;
+const PS_MAX_DEPTH = 8;
 
 const fail = (code: LexCode, detail = ''): LexFail => ({ code, detail });
 const isFail = (x: unknown): x is LexFail => typeof x === 'object' && x !== null && 'code' in x && 'detail' in x && !('words' in x);
@@ -277,7 +278,7 @@ function closeParenQuoted(src: string, start: number): number {
 }
 
 function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): LexFail | null {
-  if (depth > MAX_DEPTH) return fail('depth');
+  if (depth > MAX_DEPTH) return fail('depth', String(MAX_DEPTH));
   const n = src.length;
   let i = 0;
   let cur = blank();
@@ -738,7 +739,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
           if (next === '{') return fail('ps_expand', '${');
           if (next === '$' && src[j + 2] === '(') return fail('ps_expand', '$$(');
           if (next === '(') {
-            if (level >= MAX_DEPTH) return fail('depth');
+            if (level >= MAX_DEPTH) return fail('depth', String(MAX_DEPTH));
             const inner = scanPs(src, shell, j + 2, level + 1, true);
             if (isFail(inner)) return inner;
             if (naiveSubEnd(src, j + 2) !== inner.end) return fail('ps_expand', '$(');
@@ -833,7 +834,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
   const skipNl = () => { while (peek()?.t === 'p' && peek()!.v === '\n') k++; };
 
   const statements = (close: string | null, depth: number): LexFail | null => {
-    if (depth > MAX_DEPTH) return fail('depth');
+    if (depth > PS_MAX_DEPTH) return fail('depth', String(PS_MAX_DEPTH));
     for (;;) {
       while (isSep(peek())) k++;
       const t = peek();
@@ -1104,14 +1105,14 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       k++;
       const inner = stringSubs(t, depth);
       if (inner) return inner;
-      if (level > MAX_DEPTH + 2) return fail('depth');
+      if (level > PS_MAX_DEPTH + 2) return fail('depth', String(PS_MAX_DEPTH));
     }
     void depth;
     return finish(st);
   };
 
   const element = (depth: number): Statement | LexFail => {
-    if (depth > MAX_DEPTH) return fail('depth');
+    if (depth > PS_MAX_DEPTH) return fail('depth', String(PS_MAX_DEPTH));
     const t = peek();
     if (!t) return fail('unexpected', '');
     const st = blank();

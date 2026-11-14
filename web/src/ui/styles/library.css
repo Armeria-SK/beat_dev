@@ -24,7 +24,7 @@
 .ui-lib__confirmcell { display: flex; flex: 1 1 100%; }
 .ui-lib__open { display: block; padding-top: 0; }
 .ui-lib__open.bt-row + .bt-row, .bt-row + .ui-lib__open { border-top: 0; }
-.ui-lib__detail { margin: 0 0 var(--space-2); }
+.ui-lib__detail { margin: var(--space-4) 0 var(--space-2); }
 .ui-lib__widen { justify-content: flex-start; padding: var(--space-2) 0; }
 .ui-lib__table tbody tr.ui-lib__logrow { cursor: pointer; }
 .ui-lib__table tbody tr.is-open { background: var(--surface-sunk); }

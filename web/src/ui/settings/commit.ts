@@ -39,6 +39,13 @@ export const listAccepts = (items: readonly string[], value: string, allowDuplic
 
 export const listWithout = (items: readonly string[], index: number): string[] => items.filter((_, i) => i !== index);
 
+export function editListItem<T>(list: readonly T[], index: number, shown: T, change: (item: T) => T | null): T[] | null {
+  const at = deepEqual(list[index], shown) ? index : list.findIndex(item => deepEqual(item, shown));
+  if (at < 0) return null;
+  const next = change(list[at]!);
+  return next === null ? list.filter((_, i) => i !== at) : list.map((item, i) => (i === at ? next : item));
+}
+
 export type NumberRead = { kind: 'value'; value: number | undefined } | { kind: 'bad' };
 
 export function readNumber(text: string, rule: { min?: number; max?: number; optional?: boolean; integer?: boolean }): NumberRead {

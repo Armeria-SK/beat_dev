@@ -189,7 +189,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const moved = state.sent.flatMap((was, i) => {
         const is = now[i]!;
         const mark = (fact: typeof was): string => (fact.exists ? `${fact.size ?? fact.type ?? ''} ${(fact.hash ?? '').slice(0, 12)}`.trim() : 'none');
-        return boundChanged(was, is) ? [pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) })] : [];
+        return boundChanged(was, is, again?.gitStaging === true) ? [pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) })] : [];
       });
       if (moved.length) return end('stale', pendingText('en', 'changed_files', { changes: moved.join('\n') }));
     }

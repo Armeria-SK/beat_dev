@@ -270,7 +270,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
   });
-  const body = await res.json().catch(() => ({}));
+  const body = await res.json().catch((error: unknown) => { if (init.signal?.aborted) throw error; return {}; });
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;
 }
@@ -326,9 +326,9 @@ export const api = {
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
   runs: (limit = 200, project?: string) => call<{ runs: RunRow[]; total: number; judged: JudgedCounts }>(`/api/runs?limit=${limit}${inProject(project, '&')}`),
   toolCalls: (project?: string) => call<{ toolCalls: ToolCallRow[]; total: number }>(`/api/tool-calls?limit=200${inProject(project, '&')}`),
-  settings: () => call<SettingsView>('/api/settings'),
+  settings: (signal?: AbortSignal) => call<SettingsView>('/api/settings', { signal: signal ?? null }),
   applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
-  saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
+  saveSettings: (config: unknown, signal?: AbortSignal) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }), signal: signal ?? null }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
   memories: () => call<{ books: Record<Book, BookView>; context: MemoryContext | null }>('/api/memories'),
@@ -380,8 +380,8 @@ export const api = {
   onboardingDone: () => call<OnboardingView>('/api/onboarding/done', { method: 'POST', body: '{}' }),
   onboardingPersona: (input: PersonaWrite) => call<OnboardingView & { profile: Profile }>('/api/onboarding/persona', { method: 'POST', body: JSON.stringify(input) }),
   providerModels: (id: string) => call<{ models: string[]; truncated: boolean }>(`/api/providers/${encodeURIComponent(id)}/models`),
-  resetPreview: () => call<{ config: Record<string, any> }>('/api/settings/reset'),
-  resetSettings: () => call<SettingsView & { models: ModelView[]; backup: string }>('/api/settings/reset', { method: 'POST', body: '{}' }),
+  resetPreview: (signal?: AbortSignal) => call<{ config: Record<string, any> }>('/api/settings/reset', { signal: signal ?? null }),
+  resetSettings: (signal?: AbortSignal) => call<SettingsView & { models: ModelView[]; backup: string }>('/api/settings/reset', { method: 'POST', body: '{}', signal: signal ?? null }),
   providerKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`),
   setProviderKey: (id: string, key: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'PUT', body: JSON.stringify({ key }) }),
   deleteProviderKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'DELETE' }),

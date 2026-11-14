@@ -21,6 +21,7 @@ import type { PlanStore } from '../projects/plan.ts';
 import { meshIndexLimit, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
 import { newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
+import type { QuestionStore } from '../questions/store.ts';
 import { rootsLister, runProject } from '../projects/run.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
@@ -34,6 +35,7 @@ import type { Task, TaskStore } from '../tasks/store.ts';
 import { CreatedFiles } from '../projects/created.ts';
 import type { PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
+import { gateText } from '../shared/messages/gate.ts';
 import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
@@ -117,6 +119,7 @@ export interface ChatEngineDeps {
   plans?: PlanStore | undefined;
   mesh?: Mesh | undefined;
   acceptance?: AcceptanceStore | undefined;
+  questions?: QuestionStore | undefined;
   web?: NonNullable<ToolContext['services']>['web'];
   notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
@@ -722,7 +725,7 @@ export class ChatEngine {
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
@@ -750,7 +753,7 @@ export class ChatEngine {
       if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
-      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split: true as const } : {}) };
+      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, workCalls: counters.workCalls, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split: true as const } : {}) };
     };
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
@@ -759,6 +762,32 @@ export class ChatEngine {
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), ...(f.detail ? { detail: f.detail } : {}) });
       return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
+
+    const tools = d.tools;
+    const callTool = (toolCall: ToolCall, truncated?: { message: string; raw: string }) => runToolCall(toolCall, ctx, {
+      registry: tools!.registry, approvals: tools!.approvals, pending: tools!.pending, productRoots: allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
+      permissionMode: () => this.#modeOf(conversationId),
+      autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal, judgeCall),
+      lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
+        : agent ? (agent.parent.task ? d.tasks?.judgeRequest(agent.parent.task.id) ?? '' : this.#lastUserRequest(agent.parent.conversationId))
+        : this.#lastUserRequest(conversationId)),
+      judgeLimits: d.judgeLimits,
+      conversationTainted: () => d.conversations.everTainted(conversationId),
+    }, truncated);
+    if (kind === 'task' && tools) {
+      let inner = false;
+      ctx.runTool = async (name, input) => {
+        if (inner) return { output: { content: gateText(languageOf(config), 'run_tool.nested'), isError: true }, decision: 'deny', decidedBy: 'run_tool' };
+        inner = true;
+        try {
+          counters.toolCalls++;
+          if (!name.startsWith('task_')) counters.workCalls++;
+          const { output, decision, decidedBy, gate } = await callTool({ id: `code_${randomUUID()}`, name, arguments: input });
+          recordTaint();
+          return { output, decision, decidedBy, ...(gate ? { gate } : {}) };
+        } finally { inner = false; }
+      };
+    }
 
     const ceiling = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
@@ -804,16 +833,7 @@ export class ChatEngine {
         ctx.outputTokens = budget.tokens;
         ctx.contextAvailable = budget.available;
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
-        const outcome = await runToolCall(toolCall, ctx, {
-          registry: d.tools.registry, approvals: d.tools.approvals, pending: d.tools.pending, productRoots: allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
-          permissionMode: () => this.#modeOf(conversationId),
-          autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal, judgeCall),
-          lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
-            : agent ? (agent.parent.task ? d.tasks?.judgeRequest(agent.parent.task.id) ?? '' : this.#lastUserRequest(agent.parent.conversationId))
-            : this.#lastUserRequest(conversationId)),
-          judgeLimits: d.judgeLimits,
-          conversationTainted: () => d.conversations.everTainted(conversationId),
-        }, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
+        const outcome = await callTool(toolCall, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
         recordTaint();
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {

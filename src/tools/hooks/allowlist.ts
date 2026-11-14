@@ -4,7 +4,7 @@
 import { Acc, bashVarOk, envAssignOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
 import { runGit } from './allowlist-git.ts';
 import { pipeBound } from './allowlist-pipe.ts';
-import { parsePs, psArgs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
+import { cmdHostArgs, parsePs, psArgs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
 import { toolFor } from './allowlist-tools.ts';
 import { isPowerShell, lexShell, type LexFail, type ShellKind, type Statement, type Word } from './shell-lex.ts';
 
@@ -114,6 +114,7 @@ function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
     || (/[\\/:]/u.test(t) ? !(/\.(?:exe|com|ps1)$/iu.test(t) && ctx.fileExists?.(t) === true) : ['.cmd', '.bat'].includes(ctx.external?.(t.toLowerCase()).ext ?? '.exe'));
   const trimmed = name.text.replace(/[ .]+$/u, '') || name.text;
   if (name.dynamic || cmdTarget(name.text) || cmdTarget(trimmed)) winArgs(trimmed, st.words, '.cmd', acc);
+  else cmdHostArgs(trimmed, st, cmdTarget, acc);
 }
 
 export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
@@ -164,7 +165,7 @@ export function classifyStatements(command: string, ctx: MatchCtx): Classified {
   if (!lexed.ok) return { level: 'deny', lex: lexed.fail, results: [], statements: [] };
   const results = lexed.statements.map(st => {
     const result = matchStatement(st, ctx);
-    ctx.afterStatement?.(result);
+    ctx.afterStatement?.(result, st);
     return result;
   });
   return { level: results.reduce<Level>((l, r) => worstLevel(l, r.level), 'allow'), results, statements: lexed.statements };

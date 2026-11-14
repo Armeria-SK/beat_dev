@@ -31,7 +31,7 @@ const JUDGE = [
   'guard.substitution', 'guard.interpreter', 'guard.cd_unresolved', 'guard.cd_outside', 'guard.relative_unknown', 'guard.touches_outside',
   'list.flag', 'list.form', 'list.arith', 'list.dynamic', 'list.shape', 'list.env', 'list.install', 'list.git_unreadable', 'list.tool_rc', 'list.tool_rc_cwd',
   'list.git_moves', 'list.npm_rc', 'list.npm_rc_unknown', 'list.git_remote', 'list.git_old', 'list.git_hooks', 'list.git_remote_local', 'list.git_hooks_path', 'list.git_net',
-  'list.git_write', 'list.git_push', 'list.ps_write', 'list.ps_pipe', 'list.download', 'list.url_glob', 'list.file_list', 'list.pipe_read', 'list.write_dynamic',
+  'list.git_write', 'list.git_push', 'list.cmd_syntax', 'list.ps_write', 'list.ps_pipe', 'list.download', 'list.url_glob', 'list.file_list', 'list.pipe_read', 'list.write_dynamic',
   'list.protected_write', 'list.expand', 'list.lan', 'list.redirect', 'list.header', 'list.send', 'list.read_dynamic', 'list.wild_many', 'list.cwd_unknown',
   'shape.call', 'shape.dot_source', 'shape.splat', 'shape.background', 'shape.function', 'shape.process_out', 'shape.pipe_stderr', 'shape.control', 'shape.script_block',
   'shape.static', 'shape.cast', 'shape.method', 'shape.expr', 'shape.replace_block',

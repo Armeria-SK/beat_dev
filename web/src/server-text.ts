@@ -2,12 +2,16 @@ import { format } from '../../src/shared/messages/define.ts';
 import { acceptanceText } from '../../src/shared/messages/acceptance.ts';
 import { buildText } from '../../src/shared/messages/build.ts';
 import { configText } from '../../src/shared/messages/config.ts';
+import { deviationText } from '../../src/shared/messages/deviations.ts';
 import { engineText } from '../../src/shared/messages/engine.ts';
+import { gateText } from '../../src/shared/messages/gate.ts';
 import { httpText } from '../../src/shared/messages/http.ts';
+import { meshWriteText } from '../../src/shared/messages/mesh-write.ts';
 import { pendingText } from '../../src/shared/messages/pending.ts';
 import { planText } from '../../src/shared/messages/plans.ts';
 import { projectText } from '../../src/shared/messages/projects.ts';
 import { providerText } from '../../src/shared/messages/providers.ts';
+import { questionText } from '../../src/shared/messages/questions.ts';
 import { storeText } from '../../src/shared/messages/stores.ts';
 import { taskText } from '../../src/shared/messages/tasks.ts';
 import type { Lang } from './i18n/state.ts';
@@ -17,7 +21,7 @@ import type { Lang } from './i18n/state.ts';
 // 画面の訳が食い違わない。コードが表に無い・差し込みの値が足りないときは null を返し、呼ぶ側はサーバーが書いた文（message）を出す。
 
 type Catalog = { readonly tables: Record<Lang, Record<string, string>> };
-const DOMAINS: Record<string, Catalog> = { http: httpText, task: taskText, store: storeText, provider: providerText, engine: engineText, config: configText, project: projectText, plan: planText, acceptance: acceptanceText, build: buildText, pending: pendingText };
+const DOMAINS: Record<string, Catalog> = { http: httpText, task: taskText, store: storeText, provider: providerText, engine: engineText, config: configText, project: projectText, plan: planText, acceptance: acceptanceText, build: buildText, pending: pendingText, question: questionText, deviation: deviationText, meshwrite: meshWriteText, gate: gateText };
 
 export type Params = Record<string, unknown> | undefined | null;
 

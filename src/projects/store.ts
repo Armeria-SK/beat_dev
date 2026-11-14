@@ -134,8 +134,8 @@ export class ProjectStore {
   }
 
   counts(id: string): { proposals: number; questions: number; lastActivityAt: number | null } {
-    const tasks = this.#db.prepare(`SELECT COALESCE(SUM(status = 'inbox'), 0) AS proposals, COALESCE(SUM(status = 'waiting' AND waiting_kind = 'question'), 0) AS questions, MAX(updated_at) AS last
-      FROM tasks WHERE project_id = ?`).get(id) as { proposals: number; questions: number; last: number | null };
+    const tasks = this.#db.prepare(`SELECT COALESCE(SUM(status = 'inbox'), 0) AS proposals, (SELECT COUNT(*) FROM questions WHERE project_id = ?1 AND status = 'open') AS questions, MAX(updated_at) AS last
+      FROM tasks WHERE project_id = ?1`).get(id) as { proposals: number; questions: number; last: number | null };
     const chats = this.#db.prepare('SELECT MAX(last_message_at) AS last FROM conversations WHERE project_id = ?').get(id) as { last: number | null };
     const last = Math.max(tasks.last ?? 0, chats.last ?? 0);
     return { proposals: tasks.proposals, questions: tasks.questions, lastActivityAt: last > 0 ? last : null };
