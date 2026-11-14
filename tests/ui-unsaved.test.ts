@@ -6,7 +6,7 @@ import { escStops } from '../web/src/ui/composer-state.ts';
 import { workerLine } from '../web/src/ui/overview.ts';
 import { mergeRawConfig } from '../web/src/ui/settings/commit.ts';
 import { modelReach, providerReach } from '../web/src/ui/settings/view.ts';
-import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, SCREEN_EDITS, setUnsaved, unloadGuard } from '../web/src/ui/unsaved.ts';
+import { clearUnsaved, discardGate, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, SCREEN_EDITS, setUnsaved, unloadGuard } from '../web/src/ui/unsaved.ts';
 
 // 1-6 の前の突き合わせで見つけた「黙って失う・行き止まりになる」所の決まり（前の画面にあった動きを新しい画面に戻したもの）。
 
@@ -153,4 +153,25 @@ test('書きかけの確かめ: ブラウザの「戻る」で出たとき、戻
   assert.equal(old.entries[old.index], '#/kanban');
   assert.equal(historyIndex({ currentEntry: null }), null);
   assert.equal(historyIndex({ currentEntry: { index: -1 } }), null);
+});
+
+test('書きかけの確かめ（画面の中）: 書きかけがあるときは、閉じる・別の行を開く前に聞く。Discard でその操作を続け、Keep では何もしない', () => {
+  const asked: boolean[] = [];
+  const ran: string[] = [];
+  const gate = discardGate(on => asked.push(on));
+  assert.equal(gate.attempt(false, () => ran.push('close')), true, '書きかけが無ければそのまま進む');
+  assert.deepEqual([ran, asked], [['close'], []]);
+
+  assert.equal(gate.attempt(true, () => ran.push('open other row')), false);
+  assert.deepEqual([ran, asked], [['close'], [true]], '書きかけがあれば、進まずに聞く');
+  gate.keep();
+  assert.deepEqual([ran, asked], [['close'], [true, false]], 'Keep: 書きかけはそのまま');
+  gate.confirm();
+  assert.deepEqual(ran, ['close'], 'Keep のあとに Discard が来ても、前の操作は走らない');
+
+  gate.attempt(true, () => ran.push('cancel'));
+  gate.attempt(true, () => ran.push('new'));
+  gate.confirm();
+  assert.deepEqual(ran, ['close', 'new'], 'Discard: 最後に頼んだ操作だけを続ける');
+  assert.equal(asked.at(-1), false);
 });

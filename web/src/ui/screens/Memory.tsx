@@ -4,6 +4,7 @@ import { toast } from '../../feedback.ts';
 import { formatDateTime, formatNumber, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
 import { memoryRef } from '../../memory-page.ts';
+import { DiscardConfirm, useDiscardAsk, useUnsaved } from '../Discard.tsx';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { latestEventByMemory, memoryHistory, memoryStamp, undoDeletes, type MemoryVersion } from '../library.ts';
@@ -11,6 +12,7 @@ import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 import type { UiIconName } from '../icons.ts';
+import { hasUnsavedEdits, SCREEN_EDITS } from '../unsaved.ts';
 
 type T = ReturnType<typeof useT>;
 interface Loaded { books: Record<Book, BookView>; context: MemoryContext | null; events: MemoryEvent[] }
@@ -20,6 +22,7 @@ const BOOK_KEY = { user: 'ui.memory.user', notes: 'ui.memory.notes' } as const s
 const ACTION_KEY = { create: 'ui.memory.action.create', update: 'ui.memory.action.update', forget: 'ui.memory.action.forget', restore: 'ui.memory.action.restore' } as const;
 const ACTION_ICON: Record<string, UiIconName> = { create: 'plus', update: 'pencil', forget: 'x', restore: 'undo' };
 const MAX = 600;
+const EDITS = `${SCREEN_EDITS}memory`;
 
 const failText = (error: unknown, t: T): string => (error instanceof ApiError ? error.message : t('ui.memory.toast.failed'));
 const whoText = (t: T, who: 'you' | 'beat'): string => t(who === 'you' ? 'ui.lib.you' : 'ui.lib.beat');
@@ -73,7 +76,9 @@ function History({ item, events, failed, now, busy, onRun }: {
   );
 }
 
-function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; revision: number; now: number; onChanged: (select?: number) => void; onGone: () => void }) {
+function Detail({ item, revision, now, onChanged, onGone, leave }: {
+  item: MemoryItem; revision: number; now: number; onChanged: (select?: number) => void; onGone: () => void; leave: (run: () => void) => void;
+}) {
   const t = useT();
   const [mode, setMode] = useState<'read' | 'edit'>('read');
   const [draft, setDraft] = useState(item.content);
@@ -91,6 +96,8 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
       .catch(() => { if (loads.current.isCurrent(ticket)) setHistoryFailed(true); });
   }, [item.id, item.updated_at, revision]);
   useEffect(() => { if (mode === 'read') setDraft(item.content); }, [item.content, mode]);
+  useUnsaved(`${EDITS}:${item.id}`, mode === 'edit' && draft !== item.content);
+  const toRead = () => leave(() => { setMode('read'); setError(''); });
 
   const reload = () => onChanged(item.id);
   const run = async (work: () => Promise<void>) => {
@@ -132,7 +139,7 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
         <div className="bt-pane__bar">
           <span className="bt-meta">{ref}</span>
           <div className="bt-seg" role="group" aria-label={t('ui.lib.mode')}>
-            <button type="button" className="bt-seg__opt" aria-pressed={mode === 'read'} onClick={() => { setMode('read'); setError(''); }}>{t('ui.lib.read')}</button>
+            <button type="button" className="bt-seg__opt" aria-pressed={mode === 'read'} onClick={toRead}>{t('ui.lib.read')}</button>
             <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>{t('ui.lib.edit')}</button>
           </div>
           {mode === 'edit' && <Button small disabled={busy || !draft.trim()} onClick={save}>{t('ui.lib.save')}</Button>}
@@ -146,7 +153,7 @@ function Detail({ item, revision, now, onChanged, onGone }: { item: MemoryItem; 
           <textarea className="bt-doc bt-doc--edit ui-lib__editor" autoFocus value={draft} maxLength={MAX} rows={5} aria-label={t('ui.memory.field')}
             onChange={e => setDraft(e.target.value)}
             onKeyDown={e => {
-              if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMode('read'); }
+              if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); toRead(); }
               if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
             }} />
         ) : (
@@ -165,6 +172,7 @@ function NewMemory({ book, onSaved, onClose }: { book: Book; onSaved: (id: numbe
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  useUnsaved(`${EDITS}-new`, text !== '');
   const save = async () => {
     if (busy || !text.trim()) return;
     setBusy(true); setError('');
@@ -222,7 +230,8 @@ export function Memory({ revision }: { revision: number }) {
   const latest = useMemo(() => latestEventByMemory(data?.events ?? []), [data]);
   const current = items.find(item => item.id === selected) ?? (creating ? undefined : items[0]);
   const changed = (select?: number) => { if (select !== undefined) setSelected(select); setTick(n => n + 1); };
-  const pickBook = (next: Book) => { setBook(next); setSelected(null); setCreating(false); };
+  const ask = useDiscardAsk(() => hasUnsavedEdits(EDITS));
+  const pickBook = (next: Book) => { if (next !== book) ask.attempt(() => { setBook(next); setSelected(null); setCreating(false); }); };
   const usage = data ? (data.context === null ? t('ui.memory.notUsed') : data.context.budget === null
     ? t('ui.memory.usage', formatNumber(data.books[book].used), formatNumber(data.context.tokens))
     : t('ui.memory.usageBudget', formatNumber(data.books[book].used), formatNumber(data.context.tokens), formatNumber(data.context.budget))) : '';
@@ -235,7 +244,7 @@ export function Memory({ revision }: { revision: number }) {
           <div className="bt-seg" role="group" aria-label={t('ui.memory.book')}>
             {BOOKS.map(id => <button key={id} type="button" className="bt-seg__opt" aria-pressed={book === id} onClick={() => pickBook(id)}>{t(BOOK_KEY[id])}</button>)}
           </div>
-          <Button onClick={() => { setCreating(true); setSelected(null); }}>{t('ui.memory.new')}</Button>
+          <Button onClick={() => { if (!creating) ask.attempt(() => { setCreating(true); setSelected(null); }); }}>{t('ui.memory.new')}</Button>
         </div>
       </header>
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
@@ -247,13 +256,14 @@ export function Memory({ revision }: { revision: number }) {
       {data && items.length === 0 && !creating && (
         <EmptyState title={t('ui.memory.empty')} text={t('ui.memory.emptyText')} action={<Button onClick={() => setCreating(true)}>{t('ui.memory.new')}</Button>} />
       )}
+      <DiscardConfirm ask={ask} />
       {data && (items.length > 0 || creating) && (
         <div className="bt-split ui-lib__split">
           <ul className="bt-list bt-rise" style={{ '--bt-i': 1 } as CSSProperties} aria-label={t('ui.memory.list')}>
             {items.map(item => {
               const stamp = memoryStamp(item, latest.get(item.id));
               const active = !creating && current?.id === item.id;
-              const pick = () => { setCreating(false); setSelected(item.id); };
+              const pick = () => { if (!active) ask.attempt(() => { setCreating(false); setSelected(item.id); }); };
               return (
                 <li key={item.id} className={`bt-row bt-row--link${active ? ' is-active' : ''}`} onClick={pick}>
                   <div className="bt-row__main">
@@ -267,8 +277,8 @@ export function Memory({ revision }: { revision: number }) {
             })}
           </ul>
           {creating
-            ? <NewMemory book={book} onSaved={id => { setCreating(false); changed(id); }} onClose={() => setCreating(false)} />
-            : current && <Detail key={current.id} item={current} revision={revision + tick} now={now} onChanged={changed} onGone={() => { setSelected(null); changed(); }} />}
+            ? <NewMemory book={book} onSaved={id => { setCreating(false); changed(id); }} onClose={() => ask.attempt(() => setCreating(false))} />
+            : current && <Detail key={current.id} item={current} revision={revision + tick} now={now} onChanged={changed} onGone={() => { setSelected(null); changed(); }} leave={ask.attempt} />}
         </div>
       )}
     </div>

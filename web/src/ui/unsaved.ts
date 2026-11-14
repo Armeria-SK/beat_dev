@@ -40,3 +40,19 @@ export function holdLeave(moved: number | null, heldHash: string, env: LeaveEnv)
 export function followLeave(moved: number | null, toHash: string, env: LeaveEnv): void {
   if (moved) env.go(moved); else env.push(toHash);
 }
+
+export interface DiscardGate { attempt: (dirty: boolean, run: () => void) => boolean; confirm: () => void; keep: () => void }
+
+export function discardGate(onAsk: (asking: boolean) => void): DiscardGate {
+  let held: (() => void) | null = null;
+  return {
+    attempt: (dirty, run) => {
+      if (!dirty) { run(); return true; }
+      held = run;
+      onAsk(true);
+      return false;
+    },
+    confirm: () => { const run = held; held = null; onAsk(false); run?.(); },
+    keep: () => { held = null; onAsk(false); },
+  };
+}
