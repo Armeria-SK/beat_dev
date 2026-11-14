@@ -1,14 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useMemo, type CSSProperties } from 'react';
 import { api, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WorkerStatus } from '../../api.ts';
 import { formatDateTimeSmart, useT } from '../../i18n/index.ts';
 import { useNow } from '../hooks.ts';
 import { buildBoard, KANBAN_PAGE, RUNS_WINDOW, sessionCards } from '../kanban.ts';
-import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
-import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners } from '../overview.ts';
+import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners, ticksEverySecond } from '../overview.ts';
 import { CountBadge, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
-import { FinishedItem, MiniBoard, RELOAD_DELAY_MS, RunningItems, StatTile, useLastLook, useRunActions } from './Overview.tsx';
+import { FinishedItem, MiniBoard, RunningItems, StatTile, useHomeLoad, useLastLook, useRunActions } from './home-parts.tsx';
 
 export interface ProductHomeProps {
   id: string;
@@ -24,31 +23,13 @@ interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null
 
 export function ProductHome({ id, project, conversations, drafts, checklists, worker, revision }: ProductHomeProps) {
   const t = useT();
-  const [data, setData] = useState<Loaded | null>(null);
-  const [failed, setFailed] = useState(false);
   const look = useLastLook(productLookKey(id), project !== undefined);
-  const loads = useRef(latestOnly());
-  const first = useRef(true);
-
-  const load = useCallback(async () => {
-    const ticket = loads.current.begin();
-    try {
-      const [tasks, finished, runs] = await Promise.all([api.tasks(id), api.finishedTasks(null, KANBAN_PAGE, id), api.runs(RUNS_WINDOW, id)]);
-      if (!loads.current.isCurrent(ticket)) return;
-      setData({ active: tasks.active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs });
-      setFailed(false);
-    } catch {
-      if (loads.current.isCurrent(ticket)) setFailed(true);
-    }
+  const read = useCallback(async (): Promise<Loaded> => {
+    const [tasks, finished, runs] = await Promise.all([api.tasks(id), api.finishedTasks(null, KANBAN_PAGE, id), api.runs(RUNS_WINDOW, id)]);
+    return { active: tasks.active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs };
   }, [id]);
+  const { data, failed, load } = useHomeLoad(read, revision, drafts);
   const { busy, stop, retry } = useRunActions(worker, load);
-
-  const runKey = drafts.map(d => d.runId).join(',');
-  useEffect(() => {
-    const timer = setTimeout(() => void load(), first.current ? 0 : RELOAD_DELAY_MS);
-    first.current = false;
-    return () => clearTimeout(timer);
-  }, [load, revision, runKey]);
 
   const mine = useMemo(() => conversations.filter(c => c.project_id === id), [conversations, id]);
   const mini = useMemo(() => {
@@ -57,7 +38,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
     return miniBoard(buildBoard({ active: data.active, finished: data.finished, hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }));
   }, [data, mine, drafts, checklists]);
   const running = useMemo(
-    () => runningRows(scopeRunning({ worker: worker?.runningAll ?? [], drafts, conversations, checklists }, id, taskOwners(data?.active ?? []))),
+    () => runningRows(scopeRunning({ worker: worker?.runningAll ?? [], drafts, conversations, checklists }, id, data ? taskOwners(data.active) : null)),
     [worker, drafts, conversations, checklists, id, data],
   );
   const done = useMemo(() => (data ? finishedSince(data.finished, look.at) : null), [data, look.at]);
@@ -65,7 +46,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
     () => (project ? productTiles(project) : []),
     [project],
   );
-  const now = useNow(running.some(row => row.startedAt !== null) ? 1000 : 30_000);
+  const now = useNow(ticksEverySecond(running) ? 1000 : 30_000);
   const lookText = formatDateTimeSmart(look.at, now);
 
   if (!project) return <div className="bt-screen__inner ui-home" />;

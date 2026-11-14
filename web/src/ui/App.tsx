@@ -415,7 +415,7 @@ export function App() {
             ) : behind.view === 'task' ? (
               <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.pendingRevision}`} worker={worker} projects={projects} pending={pendingByTask.get(behind.id) ?? 0} />
             ) : behind.view === 'overview' ? (
-              <Overview waiting={waiting} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} />
+              <Overview waiting={waiting} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} questionCounts={live.questionCounts} pendingCounts={live.pendingCounts} />
             ) : behind.view === 'product' ? (
               <ProductHome key={behind.id} id={behind.id} project={productOf(projects, behind.id)} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} revision={live.taskRevision + live.epoch} />
             ) : behind.view === 'schedule' ? (

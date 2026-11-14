@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { holders, productTiles, tiles } from '../web/src/ui/overview.ts';
+import { holders, productTiles, tiles, unownedWaits } from '../web/src/ui/overview.ts';
 import {
   acceptanceRows, actionView, byteSize, decidedMore, decidedShown, decidedText, earlierQuery, effectFiles, extraShown, fileFacts, fromTitle, cleanReason, kindLabel, kindTile, mergeDecided, newestFirst, outcomeOf, paneTarget, pendingFor, pendingRouteReady, pendingTotal, REASON_MAX, reasonLine, sessionCounts, taskCounts, waitingOf, waitingShown, withPendingCounts,
 } from '../web/src/ui/pending.ts';
@@ -116,7 +116,7 @@ test('ui/pending: 同じ数がサイドバーの製品の行（合計）・欄�
   assert.equal(waitingTotal(projects[0]!), sidebar);
   const all = tiles({ proposals: 0, questions: 0 }, pendingTotal(counts(), projects)).find(tile => tile.id === 'pending')!;
   assert.equal(all.n, 4);
-  assert.deepEqual(holders(projects, 'pending', all.n), [{ name: 'name-prod01', n: 2 }, { name: 'name-prod02', n: 1 }, { name: null, n: 1 }]);
+  assert.deepEqual(holders(projects, 'pending', unownedWaits(null, null, counts()).pending), [{ name: 'name-prod01', n: 2 }, { name: 'name-prod02', n: 1 }, { name: null, n: 1 }]);
 });
 
 test('ui/pending: タイルの行き先は Pending（全製品は #/pending、製品はその製品の Pending の欄）。Kanban はそのまま', () => {
