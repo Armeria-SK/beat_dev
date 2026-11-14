@@ -112,9 +112,9 @@ function redactJwt(input: string): SanitizedModelInputText {
   return replaceRanges(input, ranges);
 }
 
-function redactPrivateKeys(input: string): SanitizedModelInputText {
+function privateKeyRanges(input: string, opened: boolean): { ranges: Array<readonly [number, number]>; open: boolean } {
   const ranges: Array<readonly [number, number]> = [];
-  let start: number | undefined;
+  let start: number | undefined = opened ? 0 : undefined;
   for (const match of input.matchAll(PRIVATE_KEY_MARKER)) {
     if (match[1] === 'BEGIN' && start === undefined) start = match.index;
     else if (match[1] === 'END' && start !== undefined) {
@@ -122,7 +122,21 @@ function redactPrivateKeys(input: string): SanitizedModelInputText {
       start = undefined;
     }
   }
-  return replaceRanges(input, ranges);
+  return { ranges, open: start !== undefined };
+}
+
+function redactPrivateKeys(input: string): SanitizedModelInputText {
+  return replaceRanges(input, privateKeyRanges(input, false).ranges);
+}
+
+export function redactKeyEcho(echo: string): { text: string; open: boolean } {
+  const { ranges, open } = privateKeyRanges(echo, false);
+  return { text: replaceRanges(echo, ranges).text.replace(PRIVATE_KEY_MARKER, '[REDACTED]'), open };
+}
+
+export function redactOpenKey(output: string): string {
+  const first = privateKeyRanges(output, true).ranges[0];
+  return first ? `[REDACTED]${output.slice(first[1])}` : output;
 }
 function replaceRanges(input: string, ranges: readonly (readonly [number, number])[]): SanitizedModelInputText {
   if (ranges.length === 0) return { text: input, redaction_count: 0 };

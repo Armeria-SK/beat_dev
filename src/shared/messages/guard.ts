@@ -99,7 +99,7 @@ const en = {
   'lex.here_string': '@" … "@',
   'lex.ansi_c': '$\'…\' or $"…"',
   'lex.unexpected': 'a form that cannot be read ({detail})',
-  'lex.chain_op': 'this PowerShell (5.1) does not know {detail}',
+  'lex.chain_op': 'this PowerShell (5.1) does not know {detail} (separate the commands with ";" or make separate calls instead)',
   'lex.bash_sub': 'a # comment, a parenthesis inside quotes, or a case inside $( … ) (the guard and bash would find a different end of the $( … ))',
   'shape.call': 'the call operator & (the target is unknown)',
   'shape.dot_source': 'dot-sourcing (. file)',
