@@ -251,7 +251,14 @@ function tarRemote(st: StatementFacts, env: OutboundEnv): Hit | undefined {
   return unknown ? hit('send', 'send.dynamic_target', { cmd: st.program }) : undefined;
 }
 
-const ZERO_SIZE = /^<?0+[A-Za-z]*$/u;
+const TRUNCATE_SIZE = /^([-+<>/%]?)(\d+)([A-Za-z]*)$/u;
+const truncateEmpties = (size: string): boolean => {
+  const m = TRUNCATE_SIZE.exec(size);
+  if (!m) return false;
+  const amount = Number(m[2]);
+  if (m[1] === '' || m[1] === '<') return amount === 0 || (amount === 1 && m[3] === '');
+  return (m[1] === '-' || m[1] === '/') && amount > 0 && (m[3] !== '' || amount >= 1024);
+};
 
 function truncateTargets(st: StatementFacts): StatementFacts['targets'] | undefined {
   const args = st.words.slice(1);
@@ -260,9 +267,14 @@ function truncateTargets(st: StatementFacts): StatementFacts['targets'] | undefi
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
     const t = w.text;
-    const size = t === '-s' || t === '--size' ? args[++i]?.text : t.startsWith('--size=') ? t.slice('--size='.length) : /^-[co]*s./u.test(t) ? t.slice(t.indexOf('s') + 1) : undefined;
-    if (size !== undefined) { zero = ZERO_SIZE.test(size); continue; }
-    if (t === '-r' || t === '--reference') { i++; continue; }
+    const long = /^--([a-z]+)(?:=(.*))?$/u.exec(t);
+    const short = /^-[co]*([sr])(.*)$/u.exec(t);
+    const flag = long ? ['size', 'reference'].find(name => name.startsWith(long[1]!))?.[0] : short?.[1];
+    if (flag) {
+      const value = (long ? long[2] : short![2] || undefined) ?? args[++i]?.text ?? '';
+      zero ||= flag === 's' ? truncateEmpties(value) : value === '/dev/null';
+      continue;
+    }
     if (t === '--') { names.push(...args.slice(i + 1)); break; }
     if (!t.startsWith('-') || w.dynamic) names.push(w);
   }

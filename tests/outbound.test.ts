@@ -485,3 +485,16 @@ test('systemTarFirst: PATH で最初に見つかる tar が System32 のもの�
   assert.equal(systemTarFirst(env(empty)), false);
   assert.equal(systemTarFirst({ Path: system }), false);
 });
+
+test('消す: truncate で中身をほぼ残さない書き方の取りこぼし（-cs 0・--si=0・-r /dev/null・-s -9G・-s /9G・-s <1）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'delete', [
+    'truncate -cs 0 changed.txt', 'truncate --si=0 changed.txt', 'truncate --s 0 changed.txt', 'truncate --siz=0 changed.txt', 'truncate -r /dev/null changed.txt',
+    'truncate --reference=/dev/null changed.txt', 'truncate --ref /dev/null changed.txt', 'truncate -cr /dev/null changed.txt', 'truncate -s -9G changed.txt', 'truncate -s /9G changed.txt',
+    "truncate -s '<1' changed.txt", 'truncate -s 1 changed.txt', 'truncate -s -4096 changed.txt', 'truncate -os0 changed.txt', 'truncate -s 100 -s 0 changed.txt',
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    'truncate -s -1 changed.txt', 'truncate -s /512 changed.txt', "truncate -s '<4K' changed.txt", 'truncate -r a.txt changed.txt', 'truncate -s %4K changed.txt',
+    "truncate -s '>1M' changed.txt", 'truncate -cs 100 changed.txt', 'truncate -cs 0 made.txt', 'truncate -r /dev/null a.txt', 'truncate -s +9G changed.txt', 'truncate -s 2 changed.txt',
+  ]);
+});
