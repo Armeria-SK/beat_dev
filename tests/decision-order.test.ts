@@ -1316,3 +1316,31 @@ test('p4-build-judge D1: git の置き場のリンクの見回りは、refs が 
   linkDir(join(r.paths.workspace), join(gitDir, 'refs', 'tags', 'g7', 'out'));
   assert.equal(gitDirLinkFree(gitDir), false, '深いところのリンクも見つける');
 });
+
+test('p4-build-judge 合流: 順 4 の呼び出し（node --test・git add・名乗りつきの git commit）は判定役も、判定のあとの 2 回目の確かめも通らない。判定役へ回る呼び出しだけが 2 回確かめられる', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  mkdirSync(join(r.root, 'tests'), { recursive: true });
+  writeFileSync(join(r.root, 'tests', 'a.test.js'), "require('node:test')('ok', () => {});");
+  writeFileSync(join(r.root, 'n.txt'), 'x');
+  const outside = join(r.paths.workspace, 'other');
+  OUTSIDE_GIT.refsHeadsLinked!(join(r.root, 'nested'), outside);
+  writeFileSync(join(r.root, 'nested', 'n.txt'), 'x');
+  const tool = shellRun as unknown as { preCheck: (...args: unknown[]) => unknown };
+  const real = tool.preCheck;
+  let checks = 0;
+  tool.preCheck = (...args) => { checks++; return real.apply(tool, args); };
+  t.after(() => { tool.preCheck = real; });
+  for (const [command, by] of [['node --test tests/a.test.js', 'product-code'], ['git add n.txt', 'product-git'], ['git -c user.name=Builder -c user.email=builder@example.invalid commit -m work', 'product-git']] as const) {
+    checks = 0;
+    const outcome = await r.call('shell_run', { command, cwd: r.root });
+    assert.equal(outcome.decidedBy, by, `${command}: ${outcome.output.content}`);
+    assert.equal(checks, 1, `${command}: 確かめは 1 回だけ`);
+  }
+  assert.equal(r.judge.calls.length, 0, '順 4 は判定役を呼ばない');
+  checks = 0;
+  const judged = await r.call('shell_run', { command: 'git add n.txt', cwd: join(r.root, 'nested') });
+  assert.equal(r.judge.calls.length, 1, '置き場にリンクのあるリポジトリは判定役へ');
+  assert.notEqual(judged.decidedBy, 'product-git');
+  assert.equal(checks, 2, '判定役が許したあとに 2 回目の確かめが走る');
+});
