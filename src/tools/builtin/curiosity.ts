@@ -27,7 +27,7 @@ export const curiosityAdd: ToolDef<{ topic: string; why?: string }> = {
     why: Type.Optional(Type.String({ maxLength: 500 })),
   }, { additionalProperties: false }),
   effect: 'meta',
-  allowedIn: ['chat', 'task', 'review'],
+  allowedIn: [],
   async execute(input, ctx) {
     try {
       const item = store(ctx).add({ topic: input.topic, why: input.why, source: 'beat' });
@@ -41,7 +41,7 @@ export const curiosityList: ToolDef<{ include_closed?: boolean }> = {
   description: 'View the curiosity list (items you are curious about or looking into). With include_closed=true, also the ones you finished looking into or dropped.',
   input: Type.Object({ include_closed: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'read',
-  allowedIn: ['chat', 'task', 'review'],
+  allowedIn: [],
   async execute(input, ctx) {
     try {
       const items = store(ctx).list({ includeClosed: Boolean(input.include_closed), limit: 50 });
@@ -60,7 +60,7 @@ export const curiosityUpdate: ToolDef<{ id: number; status?: 'open' | 'done' | '
     result: Type.Optional(Type.String({ maxLength: 4000 })),
   }, { additionalProperties: false }),
   effect: 'meta',
-  allowedIn: ['chat', 'task'],
+  allowedIn: [],
   async execute(input, ctx) {
     try {
       const item = store(ctx).update(input.id, { ...(input.status ? { status: input.status } : {}), ...(input.result !== undefined ? { result: input.result } : {}) });

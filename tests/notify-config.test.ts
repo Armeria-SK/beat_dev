@@ -17,7 +17,7 @@ test('T-01 設定に notify が無ければ既定の値になる（送り先な�
 });
 
 test('T-02 NotificationKindSchema は NotificationKind と一致する', () => {
-  const all: Record<NotificationKind, true> = { task_done: true, task_waiting: true, task_failed: true, approval_needed: true, health_alert: true, info: true };
+  const all: Record<NotificationKind, true> = { task_done: true, task_waiting: true, task_failed: true, approval_needed: true, question_new: true, health_alert: true, info: true };
   assert.deepEqual([...NOTIFICATION_KINDS].sort(), Object.keys(all).sort());
   for (const kind of Object.keys(all)) assert.ok(Value.Check(NotificationKindSchema, kind), kind);
   assert.ok(!Value.Check(NotificationKindSchema, 'other'));

@@ -20,9 +20,12 @@ export const shownItems = (acc: Acceptance): AcceptanceItem[] => acc.items.filte
 
 export const shownNotDoing = (acc: Acceptance): NotDoingItem[] => [...acc.not_doing].sort(byId);
 
-const SOURCE = { owner_words: 'ui.acc.source.words', owner_choice: 'ui.acc.source.choice', ai_added: 'ui.acc.source.ai', owner_edit: 'ui.acc.source.edit' } as const;
+const SOURCE = {
+  owner_words: 'ui.acc.source.words', owner_choice: 'ui.acc.source.choice', owner_answer: 'ui.acc.source.choice', ai_added: 'ui.acc.source.ai', owner_edit: 'ui.acc.source.edit',
+} as const;
 
-export const sourceLabel = (source: AcceptanceSource): (typeof SOURCE)[keyof typeof SOURCE] => SOURCE[source.kind];
+export const sourceLabel = (source: AcceptanceSource): (typeof SOURCE)[keyof typeof SOURCE] | 'ui.acc.source.other' =>
+  (Object.hasOwn(SOURCE, source.kind) ? SOURCE[source.kind] : 'ui.acc.source.other');
 
 const CHECK = { command: 'ui.acc.check.command', look: 'ui.acc.check.look', read: 'ui.acc.check.read' } as const;
 
@@ -36,12 +39,17 @@ const CLAIMED = { owner_words: 'ui.acc.claimed.words', owner_choice: 'ui.acc.cla
 
 const REASON = { not_found: 'ui.acc.reason.not_found', too_short: 'ui.acc.reason.too_short', not_next_reply: 'ui.acc.reason.not_next_reply', choice_unverified: 'ui.acc.reason.choice_unverified', scan_budget: 'ui.acc.reason.scan_budget' } as const;
 
-function sourceDetails(source: AcceptanceSource): Detail[] {
+function sourceDetails(source: AcceptanceSource, nested = false): Detail[] {
   if (source.kind === 'owner_edit') return [];
   const out: Detail[] = [];
-  if (source.kind === 'ai_added' && source.claimed) {
+  if (source.kind === 'ai_added' && source.claimed && Object.hasOwn(CLAIMED, source.claimed)) {
     out.push({ label: 'ui.acc.detail.claimed', note: CLAIMED[source.claimed] });
-    out.push({ label: 'ui.acc.detail.why', note: REASON[source.reason ?? 'not_found'] });
+    out.push({ label: 'ui.acc.detail.why', note: REASON[source.reason && Object.hasOwn(REASON, source.reason) ? source.reason : 'not_found'] });
+  }
+  if (source.kind === 'owner_answer') {
+    if (source.answer) out.push({ label: 'ui.acc.detail.answer', text: source.answer });
+    if (source.was && !nested) out.push({ label: 'ui.acc.detail.was', note: sourceLabel(source.was) }, ...sourceDetails(source.was, true));
+    return out;
   }
   if ('quote' in source && source.quote) out.push({ label: 'ui.acc.detail.quote', text: source.quote });
   if (source.kind === 'owner_words' && source.context) out.push({ label: 'ui.acc.detail.context', text: source.context });
@@ -131,11 +139,11 @@ export interface CoverageGroups {
 export function coverageGroups(acc: Acceptance): CoverageGroups {
   const g: CoverageGroups = { words: [], answers: [], ai: [], edited: [] };
   for (const item of shownItems(acc)) {
-    const s = item.source;
-    if (s.kind === 'owner_words') g.words.push({ quote: s.quote, item });
-    else if (s.kind === 'owner_choice') g.answers.push({ question: s.question, answer: s.answer, item });
-    else if (s.kind === 'ai_added') g.ai.push(item);
-    else g.edited.push(item);
+    const s = item.source.kind === 'owner_answer' ? item.source.was : item.source;
+    if (s?.kind === 'owner_words') g.words.push({ quote: s.quote, item });
+    else if (s?.kind === 'owner_choice') g.answers.push({ question: s.question, answer: s.answer, item });
+    else if (s?.kind === 'ai_added') g.ai.push(item);
+    else if (s?.kind === 'owner_edit') g.edited.push(item);
   }
   return g;
 }
