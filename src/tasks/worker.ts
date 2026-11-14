@@ -278,17 +278,16 @@ export class Worker {
       const idleEnough = now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
       const allowSelf = c.worker.autonomy && !this.quiet() && idleEnough;
       task ??= tasks.pickNext({ allowSelf, accept: roomFor });
-      // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りや好奇心にも回さず）、終わった実行の onRunEnd を待つ
+      // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りにも回さず）、終わった実行の onRunEnd を待つ
       // （poke が来ない道〔止まっている・自動の予定が無い〕に備えて、保険の予定は 1 分後に置く。終わった実行の poke はそれより早い）
       if (!task && (this.#forced.size > 0 || tasks.pickNext({ allowSelf }))) { reschedule(now + 60_000); return 'busy'; }
-      // 実行するタスクが無ければ、振り返り → 好奇心の順に見る
+      // 実行するタスクが無ければ、振り返りを見る
       const job = !task && c.memory.review ? this.#d.reviews?.next() : undefined;
       if (job) {
         const outcome = await this.#review(job, release);
         reschedule(outcome === 'busy' ? now + 60_000 : now);
         return outcome;
       }
-      if (!task && allowSelf) task = this.#spawnCuriosity(c, now);
       if (!task) { reschedule(tasks.nextWakeAt({ allowSelf })); return 'idle'; }
       const outcome = await this.#run(task, release);
       reschedule(now);

@@ -509,4 +509,7 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_tool_calls_evidence ON tool_calls (conversation_id, evidence_no) WHERE evidence_no IS NOT NULL;
   ALTER TABLE acceptance_versions ADD COLUMN item_states TEXT;
   `,
+  `
+  UPDATE tasks SET status = 'inbox', updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE origin = 'curiosity' AND status = 'ready';
+  `,
 ];
