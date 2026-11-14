@@ -34,9 +34,8 @@ export const deviationAdd: ToolDef<DeviationAddInput> = {
   replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
-    if (!ctx.task) return { content: deviationText(language, 'not_in_task'), isError: true };
-    const projectId = ctx.project?.id ?? ctx.services?.tasks?.get(ctx.task.id)?.project_id ?? null;
-    if (!projectId) return { content: deviationText(language, 'not_in_task'), isError: true };
+    if (!ctx.task || !ctx.project) return { content: deviationText(language, 'not_in_task'), isError: true };
+    const projectId = ctx.project.id;
     const external = tainted(ctx, ctx.task.id);
     try {
       const { row, hidden } = addDeviation(ctx.paths.projects, projectId, input, {

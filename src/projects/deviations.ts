@@ -1,6 +1,6 @@
 import { lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { dateIn, replaceFile } from '../mesh/files.ts';
+import { replaceFile } from '../mesh/files.ts';
 import { neutralizeFence } from '../shared/fence.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { deviationText, type DeviationMessageKey } from '../shared/messages/deviations.ts';
@@ -14,6 +14,7 @@ export const DEVIATION_TEXT_MAX = 400;
 export const DEVIATIONS_MAX = 200;
 const NO_ITEM = 'general';
 const ITEMS_IN_ERROR = 40;
+const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
 
 export class DeviationError extends LocalizedError<DeviationMessageKey> {
   constructor(code: DeviationMessageKey, params?: MessageParams) { super(deviationText, code, params); }
@@ -27,7 +28,14 @@ export interface DeviationInput { item?: string | undefined; what: string; why: 
 
 export interface DeviationMeta { taskId: string; external: boolean; now: number; timezone: string; language: string | null; acceptance: AcceptanceDoc | undefined | 'unreadable' }
 
-const ROW = /^- (A-\d{1,4}|general) \| ([^|]+?) \| why: ([^|]+?)(?:( \[by task)(?: ([A-Za-z0-9-]{1,64}))?(?:, (\d{4}-\d{2}-\d{2}))?(, src: external)?\])?$/u;
+const ROW = /^- (A-[1-9]\d{0,3}|general) \| ([^|]+?) \| why: ([^|]+?)(?:( \[by task)(?: ([A-Za-z0-9-]{1,64}))?(?:, (\d{4}-\d{2}-\d{2}))?(, src: external)?\])?$/u;
+
+export function isoDate(ms: number, timezone: string): string {
+  const parts = (zone: string) => Object.fromEntries(new Intl.DateTimeFormat('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: zone }).formatToParts(ms).map(part => [part.type, part.value]));
+  let p: Record<string, string>;
+  try { p = parts(timezone); } catch { p = parts('UTC'); }
+  return `${p.year}-${p.month}-${p.day}`;
+}
 
 const head = (language: string | null): string[] => [
   '# Deviations from the plan',
@@ -49,7 +57,7 @@ export function parseDeviations(content: string): DeviationLog {
 }
 
 export function cleanDeviationText(raw: string, field: 'what' | 'why'): { text: string; hidden: boolean } {
-  const plain = neutralizeFence(plainLine(raw, Infinity).replaceAll('|', '/').replaceAll('[', '(').replaceAll(']', ')'));
+  const plain = neutralizeFence(plainLine(raw, Infinity).replaceAll('|', '/').replaceAll('[', '(').replaceAll(']', ')').replace(/-{5,}/gu, '----'));
   if (!plain) throw new DeviationError('empty', { field });
   const length = Array.from(plain).length;
   if (length > DEVIATION_TEXT_MAX) throw new DeviationError('too_long', { field, length, max: DEVIATION_TEXT_MAX });
@@ -61,10 +69,10 @@ export function itemOf(raw: string | undefined, doc: DeviationMeta['acceptance']
   const asked = raw?.trim();
   if (!asked) return null;
   if (doc === 'unreadable') throw new DeviationError('items_unreadable');
-  const items = (Array.isArray(doc?.items) ? doc.items : []).filter(entry => !entry.removedIn).map(entry => entry.id);
+  const items = (Array.isArray(doc?.items) ? doc.items : []).filter(entry => !entry.removedIn).map(entry => entry.id).filter(id => ITEM_ID.test(id));
   if (!doc || !items.length) throw new DeviationError('no_items');
   const id = asked.toUpperCase();
-  if (!items.includes(id)) {
+  if (!ITEM_ID.test(id) || !items.includes(id)) {
     const more = items.length > ITEMS_IN_ERROR ? ` and ${items.length - ITEMS_IN_ERROR} more` : '';
     throw new DeviationError('bad_item', { item: plainLine(asked, 20).replaceAll('"', "'"), items: `${items.slice(0, ITEMS_IN_ERROR).join(', ')}${more}` });
   }
@@ -98,7 +106,7 @@ export function addDeviation(projectsDir: string, projectId: string, input: Devi
   if (log.rows.length + log.unreadable >= DEVIATIONS_MAX) throw new DeviationError('full', { max: DEVIATIONS_MAX });
   if (log.rows.some(row => row.item === item && fold(row.what) === fold(what.text))) throw new DeviationError('duplicate', { item: item ?? NO_ITEM });
   const task = /^[A-Za-z0-9-]{1,64}$/u.test(meta.taskId) ? ` ${meta.taskId}` : '';
-  const date = dateIn(meta.now, meta.timezone);
+  const date = isoDate(meta.now, meta.timezone);
   const line = `- ${item ?? NO_ITEM} | ${what.text} | why: ${why.text} [by task${task}, ${date}${meta.external ? ', src: external' : ''}]`;
   const lines = existing === undefined ? head(meta.language) : existing.replace(/\n+$/u, '').split(/\r?\n/u);
   mkdirSync(dir, { recursive: true });

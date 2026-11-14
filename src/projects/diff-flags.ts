@@ -10,7 +10,7 @@ export interface CheckFileChange { path: string; change: FileChange; scripts?: s
 
 export type DiffFlags =
   | { checked: false; reason: 'no_git' | 'git_unusable' | 'failed' | 'folder_missing' }
-  | { checked: true; since: 'build' | 'head'; testsDeleted: string[]; checkChanged: CheckFileChange[] };
+  | { checked: true; since: 'build' | 'head'; testsDeleted: string[]; testsDeletedMore: number; checkChanged: CheckFileChange[]; checkChangedMore: number };
 
 const SHOWN_MAX = 50;
 const PACKAGE_MAX = 1024 * 1024;
@@ -99,7 +99,7 @@ function readCurrent(root: string, rel: string): string | undefined {
 
 const shown = (path: string): string => plainLine(path, 300);
 
-export function flagsFrom(entries: readonly NameStatus[], command: string | null, packageScripts: (path: string) => string[]): { testsDeleted: string[]; checkChanged: CheckFileChange[] } {
+export function flagsFrom(entries: readonly NameStatus[], command: string | null, packageScripts: (path: string) => string[]): { testsDeleted: string[]; testsDeletedMore: number; checkChanged: CheckFileChange[]; checkChangedMore: number } {
   const named = new Set(filesNamed(command).map(path => path.toLowerCase()));
   const make = /^(make|gmake|mingw32-make)$/u.test(words(command ?? '')[0] ?? '');
   const isCheckFile = (path: string): boolean => CHECK_CONFIG.test(path) || named.has(path.toLowerCase()) || (make && /^(GNU)?makefile$/iu.test(path));
@@ -118,14 +118,17 @@ export function flagsFrom(entries: readonly NameStatus[], command: string | null
       }
     }
   }
-  return { testsDeleted: testsDeleted.slice(0, SHOWN_MAX), checkChanged: checkChanged.slice(0, SHOWN_MAX) };
+  return {
+    testsDeleted: testsDeleted.slice(0, SHOWN_MAX), testsDeletedMore: Math.max(0, testsDeleted.length - SHOWN_MAX),
+    checkChanged: checkChanged.slice(0, SHOWN_MAX), checkChangedMore: Math.max(0, checkChanged.length - SHOWN_MAX),
+  };
 }
 
 export async function diffFlags(root: string, command: string | null, dataDir: string, since: number | null): Promise<DiffFlags> {
   if (!gitFolder(root)) return { checked: false, reason: 'no_git' };
   const result = await withGit(root, dataDir, async git => {
     const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.toString('utf8').trim();
-    if (!head) return { checked: true as const, since: 'head' as const, testsDeleted: [], checkChanged: [] };
+    if (!head) return { checked: true as const, since: 'head' as const, testsDeleted: [], testsDeletedMore: 0, checkChanged: [], checkChangedMore: 0 };
     const before = since === null ? '' : (await git(['rev-list', '-1', `--before=${Math.floor(since / 1000)}`, 'HEAD']))?.toString('utf8').trim() ?? '';
     const base = /^[0-9a-f]{40,64}$/u.test(before) ? before : 'HEAD';
     const listed = await git(['diff', '--name-status', '-z', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules', '--find-renames', base, '--']);

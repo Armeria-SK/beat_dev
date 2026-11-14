@@ -9,7 +9,7 @@ import { parseConfig } from '../src/config/store.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import type { AcceptanceDoc } from '../src/projects/acceptance.ts';
-import { parseDeviations } from '../src/projects/deviations.ts';
+import { isoDate, itemOf, parseDeviations } from '../src/projects/deviations.ts';
 import { diffFlags } from '../src/projects/diff-flags.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { deviationAdd } from '../src/tools/builtin/deviations.ts';
@@ -212,10 +212,10 @@ test('差分の印: 試験のファイルの削除・scripts.test の変更・�
   git(root, ['add', '-A']);
   git(root, ['commit', '-q', '-m', 'one']);
   const clean = await diffFlags(root, 'npm test', s.app.paths.data, null);
-  assert.deepEqual(clean, { checked: true, since: 'head', testsDeleted: [], checkChanged: [] });
+  assert.deepEqual(clean, { checked: true, since: 'head', testsDeleted: [], testsDeletedMore: 0, checkChanged: [], checkChangedMore: 0 });
   writeFileSync(join(root, 'package.json'), pkg('npm run unit', 'y'));
   rmSync(join(root, 'src', 'main.ts'));
-  assert.deepEqual(await diffFlags(root, 'npm test', s.app.paths.data, null), { checked: true, since: 'head', testsDeleted: [], checkChanged: [] }, 'test に関わらない script と試験でないファイルは印なし');
+  assert.deepEqual(await diffFlags(root, 'npm test', s.app.paths.data, null), { checked: true, since: 'head', testsDeleted: [], testsDeletedMore: 0, checkChanged: [], checkChangedMore: 0 }, 'test に関わらない script と試験でないファイルは印なし');
   rmSync(join(root, 'tests', 'a.test.ts'));
   git(root, ['mv', 'src/cart.spec.js', 'src/cart.js']);
   writeFileSync(join(root, 'vitest.config.ts'), 'e');
@@ -241,6 +241,109 @@ test('差分の印: 一覧を固めた時刻があれば、その前の最後の
   git(root, ['commit', '-q', '-am', 'two'], { GIT_COMMITTER_DATE: '2026-11-12T00:00:00Z', GIT_AUTHOR_DATE: '2026-11-12T00:00:00Z' });
   const frozen = Date.parse('2026-11-11T00:00:00Z');
   const since = await diffFlags(root, 'make check', s.app.paths.data, frozen);
-  assert.deepEqual(since, { checked: true, since: 'build', testsDeleted: ['test/old_test.go'], checkChanged: [{ path: 'Makefile', change: 'modified' }] });
-  assert.deepEqual(await diffFlags(root, 'make check', s.app.paths.data, null), { checked: true, since: 'head', testsDeleted: [], checkChanged: [] }, '時刻が無ければ HEAD からの差分だけ');
+  assert.deepEqual(since, { checked: true, since: 'build', testsDeleted: ['test/old_test.go'], testsDeletedMore: 0, checkChanged: [{ path: 'Makefile', change: 'modified' }], checkChangedMore: 0 });
+  assert.deepEqual(await diffFlags(root, 'make check', s.app.paths.data, null), { checked: true, since: 'head', testsDeleted: [], testsDeletedMore: 0, checkChanged: [], checkChangedMore: 0 }, '時刻が無ければ HEAD からの差分だけ');
+});
+
+test('deviation_add: タスクの文が外を読んだ印を持つ・会話の印が読めないときも src: external', async t => {
+  const s = await setup(t);
+  const shop = s.project('shop');
+  const marked = s.app.tasks.create({ title: 'From a page', origin: 'user', actor: 'user', projectId: shop.id });
+  s.app.tasks.markUntrusted(marked.id, 'web', 'read a page');
+  assert.equal(s.app.tasks.textTainted(marked.id), true);
+  await deviationAdd.execute({ what: 'From tainted text', why: 'w' } as never, ctxFor(s, marked.id, shop.id));
+  const plain = s.app.tasks.create({ title: 'Plain', origin: 'user', actor: 'user', projectId: shop.id });
+  await deviationAdd.execute({ what: 'Conversation unknown', why: 'w' } as never, { ...ctxFor(s, plain.id, shop.id), conversationTainted: () => { throw new Error('gone'); } });
+  await deviationAdd.execute({ what: 'Clean one', why: 'w' } as never, { ...ctxFor(s, plain.id, shop.id), conversationTainted: () => false });
+  const rows = parseDeviations(readFileSync(fileOf(s, shop.id), 'utf8')).rows;
+  assert.deepEqual(rows.map(r => [r.what, r.external]), [['From tainted text', true], ['Conversation unknown', true], ['Clean one', false]]);
+});
+
+test('mesh_read: 外を読んだ行は、伏せる処理で印が消える形（Cookie: で終わる・行をまたぐ鍵の囲み）でも外を読んだ扱い。STATE.md も同じ', async t => {
+  const s = await setup(t);
+  const shop = s.project('shop');
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user', projectId: shop.id });
+  await deviationAdd.execute({ what: 'Changed the login', why: 'The page needs Cookie:' } as never, ctxFor(s, task.id, shop.id, { tainted: true }));
+  const cookie = s.app.mesh.read(shop.id, { file: 'deviations.md' }, 2000, 'en');
+  assert.equal(cookie.fetched, true, cookie.content);
+  const dir = join(s.app.paths.projects, shop.id);
+  writeFileSync(fileOf(s, shop.id), [
+    '# Deviations from the plan', '',
+    '- general | Note one | why: -----BEGIN PRIVATE KEY-----',
+    '- general | Note two | why: from a page [by task abc, 2026-11-14, src: external]',
+    '- general | Note three | why: -----END PRIVATE KEY-----', '',
+  ].join('\n'));
+  const pem = s.app.mesh.read(shop.id, { file: 'deviations.md' }, 2000, 'en');
+  assert.ok(!pem.content.includes('from a page'), '間の行は伏せられている');
+  assert.equal(pem.fetched, true);
+  const clean = s.project('clean');
+  mkdirSync(join(s.app.paths.projects, clean.id), { recursive: true });
+  writeFileSync(join(s.app.paths.projects, clean.id, 'deviations.md'), '# Deviations from the plan\n\n- general | Plain | why: Cookie:\n');
+  assert.equal(s.app.mesh.read(clean.id, { file: 'deviations.md' }, 2000, 'en').fetched, false, '印の無い行は外を読んだ扱いにしない');
+  writeFileSync(join(dir, 'STATE.md'), '# STATE\n\n## Notes (mesh_state_set)\n- now: login needs Cookie: [by task, src: external]\n');
+  assert.equal(s.app.mesh.read(shop.id, { file: 'STATE.md' }, 2000, 'en').fetched, true);
+});
+
+test('deviation_add: 鍵の囲みの印（-----BEGIN … PRIVATE KEY-----）は書くときに崩す', async t => {
+  const s = await setup(t);
+  const shop = s.project('shop');
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user', projectId: shop.id });
+  await deviationAdd.execute({ what: 'Kept the key file', why: 'It starts with -----BEGIN PRIVATE KEY-----' } as never, ctxFor(s, task.id, shop.id));
+  assert.ok(!readFileSync(fileOf(s, shop.id), 'utf8').includes('-----BEGIN'));
+});
+
+test('読む口: deviations.md がふつうのファイルでなければ unusable', async t => {
+  const s = await setup(t);
+  const shop = s.project('shop');
+  mkdirSync(join(s.app.paths.projects, shop.id), { recursive: true });
+  const other = join(s.dir, 'elsewhere.md');
+  writeFileSync(other, '- general | x | why: y\n');
+  linkSync(other, fileOf(s, shop.id));
+  const got = await s.get(`/api/projects/${shop.id}/deviations`);
+  assert.equal(got.status, 200);
+  assert.deepEqual(got.body.deviations, { rows: [], unreadable: 0, unusable: true });
+  unlinkSync(fileOf(s, shop.id));
+});
+
+test('差分の印: 固めた時刻より古いコミットが無ければ HEAD から比べ、読む口は since: head を返す', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const shop = s.project('shop');
+  mkdirSync(join(shop.root, 'tests'), { recursive: true });
+  git(shop.root, ['init', '-q']);
+  writeFileSync(join(shop.root, 'tests', 'a.test.js'), 'a');
+  git(shop.root, ['add', '-A']);
+  git(shop.root, ['commit', '-q', '-m', 'one'], { GIT_COMMITTER_DATE: '2026-11-12T00:00:00Z', GIT_AUTHOR_DATE: '2026-11-12T00:00:00Z' });
+  rmSync(join(shop.root, 'tests', 'a.test.js'));
+  const frozen = Date.parse('2026-11-11T00:00:00Z');
+  assert.deepEqual(await diffFlags(shop.root, null, s.app.paths.data, frozen), { checked: true, since: 'head', testsDeleted: ['tests/a.test.js'], testsDeletedMore: 0, checkChanged: [], checkChangedMore: 0 });
+  s.app.db.prepare("INSERT INTO acceptance_versions (project_id, version, hash, content, plan_hash, source, build_task_id, created_at) VALUES (?, 1, 'h', '{}', NULL, 'build', NULL, ?)").run(shop.id, frozen);
+  const got = await s.get(`/api/projects/${shop.id}/deviations`);
+  assert.equal(got.body.flags.since, 'head');
+  assert.deepEqual(got.body.flags.testsDeleted, ['tests/a.test.js']);
+});
+
+test('差分の印: 50 件を超えた分は数で返す', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const root = join(s.dir, 'many');
+  mkdirSync(join(root, 'tests'), { recursive: true });
+  git(root, ['init', '-q']);
+  for (let i = 0; i < 53; i++) writeFileSync(join(root, 'tests', `t${String(i).padStart(2, '0')}.test.js`), String(i));
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-q', '-m', 'one']);
+  for (let i = 0; i < 53; i++) rmSync(join(root, 'tests', `t${String(i).padStart(2, '0')}.test.js`));
+  const flags = await diffFlags(root, null, s.app.paths.data, null);
+  assert.equal(flags.checked, true);
+  if (!flags.checked) return;
+  assert.equal(flags.testsDeleted.length, 50);
+  assert.equal(flags.testsDeletedMore, 3);
+  assert.equal(flags.checkChangedMore, 0);
+});
+
+test('ずれの行: 項目の番号は A-<1〜9999> の形だけ。日付は年-月-日', () => {
+  assert.equal(parseDeviations('- A-0 | x | why: y\n').unreadable, 1);
+  assert.equal(parseDeviations('- A-01 | x | why: y\n').unreadable, 1);
+  assert.deepEqual(parseDeviations('- A-12 | x | why: y [by task t1, 2026-01-02]\n').rows.map(r => [r.item, r.date]), [['A-12', '2026-01-02']]);
+  assert.throws(() => itemOf('A-01', doc([{ id: 'A-1' }, { id: 'A-01' }])), /no acceptance item "A-01".*Items: A-1\./u);
+  assert.equal(isoDate(Date.parse('2026-11-14T20:00:00Z'), 'Asia/Tokyo'), '2026-11-15');
+  assert.equal(isoDate(Date.parse('2026-11-14T20:00:00Z'), 'Not/AZone'), '2026-11-14');
 });
