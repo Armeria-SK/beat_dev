@@ -91,6 +91,7 @@ const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
 const PULLING_GIT: ReadonlySet<string> = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'submodule']);
 const SHELL_SINKS = new Set(['sh', 'bash', 'zsh', 'pwsh', 'powershell', 'iex', 'invoke-expression', 'cmd', 'python', 'python3', 'node', 'perl', 'ruby']);
 const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git', instructions: 'guard.write_instructions' };
+const START_PROCESS_NAMES: ReadonlySet<string> = new Set(['start-process', 'saps', 'start']);
 const CWD_CMDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir']);
 
 function isCriticalTarget(abs: string, policy: ScopePolicy): boolean {
@@ -496,14 +497,14 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (source !== undefined) {
       const checkInner = (allow: readonly string[]) => checkShellCommand(source!.text, cwd, { ...opts, allow, shell: source!.shell, depth: depth + 1, fetchedBefore: fetched });
       wrapped = source && depth < 3 ? checkInner(opts.allow ?? []) : undefined;
-      if (wrapped && wrapped.statements.length === 0) wrapped = undefined;
+      if (wrapped && wrapped.statements.length === 0 && (name === 'cmd' || (isPowerShell(shell) && START_PROCESS_NAMES.has(name)))) wrapped = undefined;
       const head = wrapped?.statements[0]?.words.map(w => w.text) ?? [];
       const tails = matchedEntries.flatMap(entry => {
         for (let p = 1; p < entry.length; p++) if (entry.slice(p).every((e, i) => head[i] === e)) return [entry.slice(p).join(' ')];
         return [];
       });
       if (wrapped && tails.length) wrapped = checkInner([...(opts.allow ?? []), ...tails]);
-      current.inner = wrapped && cwdKnown ? wrapped.statements : null;
+      current.inner = wrapped?.statements.length && cwdKnown ? wrapped.statements : null;
     }
     statements.push(current);
     const hard = name ? HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined) : undefined;
@@ -527,7 +528,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       const innerReasons = () => wrapped!.reasons.forEach((reason, i) => { if (!reasons.includes(reason)) { reasons.push(reason); reasonKeys.push(wrapped!.reasonKeys[i]!); } });
       if (!wrapped) {
         if (fetched) add('deny', say('guard.download_exec'));
-        else if (depth >= 3 && !allowedByConfig) add('deny', say('code.wrapped_unknown', { cmd: name }));
+        else if (depth >= 3) add('deny', say('code.wrapped_unknown', { cmd: name }));
         else if (allowedByConfig) addCode(say('code.wrapped_unknown', { cmd: name }));
       } else if (allowedByConfig && cwdKnown) {
         decision = worst(decision, wrapped.decision);
@@ -539,8 +540,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         limits ||= wrapped.limits;
       } else {
         if (allowedByConfig) addCode(say('code.wrapped_unknown', { cmd: name }));
-        if (wrapped.decision === 'deny') decision = 'deny';
-        if (wrapped.decision === 'deny' || (cwdKnown && result.level !== 'allow')) innerReasons();
+        decision = worst(decision, wrapped.decision);
+        if (wrapped.decision === 'deny' || result.level !== 'allow') innerReasons();
+        if (cwdKnown) { paths.push(...wrapped.paths); writes.push(...wrapped.writes); }
       }
       if (wrapped) { fetched ||= wrapped.downloaded; pulled ||= wrapped.fetched; }
     }

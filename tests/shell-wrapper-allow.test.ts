@@ -115,7 +115,6 @@ test('中のコマンドが読み取れないときは、許しでは消えな�
   for (const [command, allow] of [
     ['nohup', ['nohup']],
     ['cd $D; nohup true', ['cd', 'nohup', 'true']],
-    ['nohup timeout 5 nice stdbuf -oL true', ['nohup', 'timeout', 'nice', 'stdbuf', 'true']],
   ] as const) {
     const v = f.run(command, 'bash', [...allow]);
     assert.equal(v.decision, 'ask', `${command}: ${show(v)}`);
@@ -235,4 +234,49 @@ test('中の文がシェルとして読めないときは止めず、分から�
   const allowed = f.run(`cmd /c echo "it's"`, 'powershell', ['cmd /c']);
   assert.equal(allowed.decision, 'ask', show(allowed));
   assert.ok(allowed.reasonKeys.includes('code.wrapped_unknown'), show(allowed));
+});
+
+test('入れ子の上限では、包むコマンドを許していても止める', t => {
+  const f = fixture(t);
+  for (const [command, allow, deny] of [
+    ['nohup timeout 5 nice stdbuf -oL true', ['nohup', 'timeout', 'nice', 'stdbuf', 'true'], []],
+    ['nohup nohup nohup nohup shutdown', ['nohup'], []],
+    ['nohup nohup nohup nohup fakedeny', ['nohup'], ['fakedeny']],
+    ['nohup nohup nohup nohup fakedeny', [], ['fakedeny']],
+  ] as const) {
+    const v = f.run(command, 'bash', [...allow], { deny: [...deny] });
+    assert.equal(v.decision, 'deny', `${command} [${allow.join(',')}]: ${show(v)}`);
+  }
+});
+
+test('中の文が読めなくても、包み直しで崩れない形（bash -c など）は中の判定を使う', t => {
+  const f = fixture(t);
+  const direct = f.run('shutdown now; ls ~root', 'bash', []);
+  assert.equal(direct.decision, 'deny', show(direct));
+  assert.equal(f.run("bash -c 'shutdown now; ls ~root'", 'bash', []).decision, 'deny');
+  const v = f.run("bash -c 'sudo id; ls ~root'", 'bash', ['bash -c']);
+  assert.equal(v.decision, 'deny', show(v));
+  assert.ok(v.reasonKeys.includes('guard.elevate'), show(v));
+});
+
+test('cd の先が分からなくても、中の持ち主の確かめと守る場所の確かめは残る', t => {
+  const f = fixture(t);
+  const owner = f.run('cd $X; nohup npm publish', 'bash', [], { ask: ['npm publish'] });
+  assert.equal(owner.decision, 'ask', show(owner));
+  assert.ok(owner.reasonKeys.includes('guard.needs_approval'), show(owner));
+  const hook = `${f.ws.split('\\').join('/')}/.git/hooks/pre-commit`;
+  const git = f.run(`cd $X; nohup cp main.ts ${hook}`, 'bash', []);
+  assert.notEqual(git.decision, 'allow', show(git));
+  assert.ok(git.reasonKeys.includes('guard.write_git'), show(git));
+});
+
+test('包むコマンドの中で書く先は、許していてもいなくても、書き込みとパスに持ち帰る', t => {
+  const f = fixture(t);
+  for (const allow of [[], ['nohup']]) {
+    const v = f.run(`nohup cp main.ts ${f.outside}`, 'bash', allow);
+    const target = f.outside.toLowerCase();
+    const norm = (p: string) => p.split('\\').join('/').toLowerCase();
+    assert.ok(v.writes.some(w => norm(w) === target), `writes [${allow.join(',')}]: ${v.writes.join(' ')}`);
+    assert.ok(v.paths.some(p => p.path !== undefined && norm(p.path) === target), `paths [${allow.join(',')}]: ${v.paths.map(p => p.path).join(' ')}`);
+  }
 });
