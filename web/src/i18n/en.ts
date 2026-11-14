@@ -1041,6 +1041,7 @@ export const en = {
   'ui.set.models.judge': 'Judge',
   'ui.set.models.judgeDesc': 'Decides what is safe to run. A model at another provider sees your last message and each action',
   'ui.set.models.judgeSame': 'Same as the conversation',
+  'ui.set.models.judgeBackups': (names: string) => `Then, in this order (set in the config file): ${names}`,
   'ui.set.models.fallback': 'Fallback',
   'ui.set.models.fallbackDesc': 'Used in this order when the model is unreachable',
   'ui.set.models.background': 'Background',

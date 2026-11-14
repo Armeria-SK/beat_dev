@@ -6,7 +6,7 @@ import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
 import { CATEGORIES, FILE_ONLY, LATER_HIDDEN, matchCategories, placeOf } from '../web/src/ui/settings/rows.ts';
-import { keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
+import { judgeBackups, keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
 
 // 新しい画面の Settings（steps/p1-ui.md「Settings」と PR 1-5b）の、画面を持たない決まり。
 
@@ -191,6 +191,16 @@ test('ui/settings view: 役割（会話・予備・裏）は routing の並び�
   assert.deepEqual(setConversation(config, 'c').routing.chat, ['c', 'a', 'b']);
   assert.deepEqual(setFallback(config, ['c']).routing.chat, ['a', 'c']);
   assert.deepEqual(rolesOf({ routing: { chat: [], background: [] } }), { conversation: null, judge: '', fallback: [], background: [] });
+});
+
+test('ui/settings view: 設定ファイルで routing.judge に 2 つ以上書いてあるとき、先頭のあとの判定役も画面に出す（backlog 522）', () => {
+  assert.deepEqual(judgeBackups({ routing: { chat: ['a'], background: [], judge: ['b', 'c', 'd'] } }), ['c', 'd']);
+  assert.deepEqual(judgeBackups({ routing: { chat: ['a'], background: [], judge: ['b'] } }), []);
+  assert.deepEqual(judgeBackups({ routing: { chat: ['a'], background: [] } }), []);
+  assert.deepEqual(judgeBackups({}), []);
+  assert.equal(en['ui.set.models.judgeBackups']('Local, Cloud'), 'Then, in this order (set in the config file): Local, Cloud');
+  const page = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
+  assert.ok(page.includes(`below={backups.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', backups.map(modelName).join(', '))}</span>}`), 'Judge の行の下に出す');
 });
 
 test('ui/settings view: 判定役は routing.judge の先頭。既定（空）は「会話と同じ」で、選び直すと先頭だけが替わり、ファイルで書いた続きの順は残り（前の先頭は残さない）、「会話と同じ」に戻すと項目ごと消える', () => {
