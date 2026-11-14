@@ -447,6 +447,7 @@ export const en = {
   'ui.ps.archive': 'Archive product',
   'ui.ps.archiveConfirm': 'Archive · hides it from the list',
   'ui.ps.archiveNote': 'Sessions and tasks stay. Restore it from New product.',
+  'ui.ps.archiveUnsaved': 'Unsaved edits on this page will be lost. Sessions and tasks stay.',
   'ui.ps.archivedToast': (name: string) => `Archived ${name}`,
   'ui.ps.lang': 'Documents language',
   'ui.ps.langHint': 'The language of the plan, acceptance items and questions',
