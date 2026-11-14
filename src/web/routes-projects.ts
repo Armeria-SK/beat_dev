@@ -4,6 +4,8 @@ import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJE
 import { ownerSpeech } from '../db/conversations.ts';
 import { AcceptanceError, coverageOf, frozenHash, ownerChanges, type AcceptanceChangeRow, type AcceptanceDoc } from '../projects/acceptance.ts';
 import { BuildError, startBuild, unbuilt } from '../projects/build.ts';
+import { DeviationError, readDeviations } from '../projects/deviations.ts';
+import { diffFlags } from '../projects/diff-flags.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
 import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
@@ -216,6 +218,18 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (!row) throw problem(404, 'not_found', 'item_missing');
     const { content, ...rest } = row;
     sendJson(res, 200, { version: { ...rest, content: JSON.parse(content) as unknown } });
+  });
+
+  router.add('GET', '/api/projects/:id/deviations', async ({ res, params }) => {
+    const project = projectOr404(params[0]!);
+    let log;
+    try { log = { ...readDeviations(app.paths.projects, project.id), unusable: false }; } catch (error) {
+      if (!(error instanceof DeviationError)) throw error;
+      log = { rows: [], unreadable: 0, unusable: true };
+    }
+    const since = app.acceptance.versions(project.id)[0]?.created_at ?? null;
+    const flags = folderMissing(project) ? { checked: false as const, reason: 'folder_missing' as const } : await diffFlags(project.root, project.check_command, app.paths.data, since);
+    sendJson(res, 200, { deviations: log, flags });
   });
 
   const decided = (projectId: string, before: string | null, version: number) => {
