@@ -122,3 +122,12 @@ test('selfTarget: :// のある語に beat のポートと展開の括弧があ�
   ];
   assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
 });
+
+test('selfTarget: 閉じない括弧が並ぶ長い文でも、読む量が長さの 2 乗にならない', () => {
+  for (const text of [`${'[a'.repeat(50_000)}:4790`, `${'{a'.repeat(50_000)}:4790`, `${'{a,b}'.repeat(4_000)}:4790`]) {
+    const started = performance.now();
+    selfTarget(text, server);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 700, `${text.slice(0, 6)}… に ${Math.round(elapsed)}ms`);
+  }
+});
