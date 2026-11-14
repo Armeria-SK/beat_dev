@@ -509,4 +509,7 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_tool_calls_evidence ON tool_calls (conversation_id, evidence_no) WHERE evidence_no IS NOT NULL;
   ALTER TABLE acceptance_versions ADD COLUMN item_states TEXT;
   `,
+  `
+  ALTER TABLE skill_drafts ADD COLUMN change_summary TEXT;
+  `,
 ];
