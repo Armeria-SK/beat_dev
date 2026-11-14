@@ -152,7 +152,9 @@ function suspectPaths(words: readonly Word[]): string[] {
   return out;
 }
 
-const lexDetail = (language: Language, fail: LexFail): string => guardText(language, `lex.${fail.code}`, { detail: fail.detail });
+const runsShellSink = (sts: readonly StatementFacts[]): boolean => sts.some(s => SHELL_SINKS.has(s.program) || (!!s.inner && runsShellSink(s.inner)));
+
+const lexDetail =(language: Language, fail: LexFail): string => guardText(language, `lex.${fail.code}`, { detail: fail.detail });
 
 export function checkShellCommand(command: string, initialCwd: string, opts: ShellGuardOptions): ShellVerdict {
   const windows = opts.windows ?? process.platform === 'win32';
@@ -508,7 +510,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;
-    else if (fetched && name && SHELL_SINKS.has(name)) add('deny', say('guard.download_exec'));
+    else if (fetched && name && (SHELL_SINKS.has(name) || (wrapped && runsShellSink(wrapped.statements)))) add('deny', say('guard.download_exec'));
 
     for (const reason of result.reasons) {
       if (hard || denied) break;
@@ -531,6 +533,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         fetched ||= wrapped.fetched;
         limits ||= wrapped.limits;
       }
+    } else if (wrapped?.decision === 'deny' && !hard && !denied) {
+      decision = 'deny';
+      wrapped.reasons.forEach((reason, i) => { if (!reasons.includes(reason)) { reasons.push(reason); reasonKeys.push(wrapped!.reasonKeys[i]!); } });
     }
     const asked = matchesPrefix(words, opts.ask);
     if (asked && !allowedByConfig) add('ask', say('guard.needs_approval', { reason: asked }), 'owner');
