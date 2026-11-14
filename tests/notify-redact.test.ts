@@ -28,7 +28,7 @@ function config(): AppConfig {
 }
 
 function ev(over: Partial<NotifyEvent>): NotifyEvent {
-  return { id: 1, kind: 'info', title: 'Task finished', body: 'Renamed the draft folder', link: '#/tasks/7', dedup_key: null, read_at: null, created_at: Date.UTC(2026, 10, 14), ...over };
+  return { id: 1, kind: 'info', title: 'Task finished', body: 'Renamed the draft folder', link: '#/tasks/7', dedup_key: null, read_at: null, project_id: null, action: null, created_at: Date.UTC(2026, 10, 14), ...over };
 }
 
 async function start(t: Parameters<typeof startApp>[0]) {

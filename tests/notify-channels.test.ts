@@ -23,7 +23,7 @@ function config(over: { channel?: Record<string, unknown>; channels?: unknown[];
 }
 
 function ev(kind: NotificationKind, over: Partial<NotifyEvent> = {}): NotifyEvent {
-  return { id: 1, kind, title: 'タイトル', body: '本文です', link: '#/tasks/7', dedup_key: null, read_at: null, created_at: Date.UTC(2026, 10, 8, 0, 0, 0), ...over };
+  return { id: 1, kind, title: 'タイトル', body: '本文です', link: '#/tasks/7', dedup_key: null, read_at: null, project_id: null, action: null, created_at: Date.UTC(2026, 10, 8, 0, 0, 0), ...over };
 }
 
 function setup(cfg: AppConfig, responses: Array<number | Error | (() => Response)> = [204], env: Record<string, string | undefined> = { [URL_ENV]: SECRET_URL, [TOKEN_ENV]: SECRET_TOKEN }, nowMs = () => 1_000_000) {

@@ -152,8 +152,8 @@ export function ToolsConfig() {
   }, { additionalProperties: false, default: {} });
 }
 
-// 通知の種類（src/notify/notifications.ts の NotificationKind と同じ 6 つ。tests/notify-config.test.ts が一致を確かめる）
-export const NOTIFICATION_KINDS = ['task_done', 'task_waiting', 'task_failed', 'approval_needed', 'health_alert', 'info'] as const;
+// 通知の種類（src/notify/notifications.ts の NotificationKind と同じ 7 つ。tests/notify-config.test.ts が一致を確かめる）
+export const NOTIFICATION_KINDS = ['task_done', 'task_waiting', 'task_failed', 'approval_needed', 'question_new', 'health_alert', 'info'] as const;
 export const NotificationKindSchema = Type.Union(NOTIFICATION_KINDS.map(k => Type.Literal(k)));
 // 外の送り先へ送る種類の既定（持ち主の手が要るもの）
 export const DEFAULT_NOTIFY_KINDS = ['task_waiting', 'task_failed', 'approval_needed', 'health_alert'] as const;
@@ -164,7 +164,7 @@ export const NotifyChannelConfig = Type.Object({
   kind: Type.Union([Type.Literal('webhook')]),
   urlEnv: Type.String({ pattern: '^[A-Z][A-Z0-9_]{0,63}$' }),
   tokenEnv: Type.Optional(Type.String({ pattern: '^[A-Z][A-Z0-9_]{0,63}$' })),
-  kinds: Type.Array(NotificationKindSchema, { minItems: 1, maxItems: 6, uniqueItems: true, default: [...DEFAULT_NOTIFY_KINDS] }),
+  kinds: Type.Array(NotificationKindSchema, { minItems: 1, maxItems: NOTIFICATION_KINDS.length, uniqueItems: true, default: [...DEFAULT_NOTIFY_KINDS] }),
   enabled: Type.Boolean({ default: true }),
   includeBody: Type.Boolean({ default: false }),
 }, { additionalProperties: false });

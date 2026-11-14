@@ -39,6 +39,7 @@ export const en = {
   'notifications.kind.task_waiting': 'Waiting for reply',
   'notifications.kind.task_failed': 'Failed',
   'notifications.kind.approval_needed': 'Approval needed',
+  'notifications.kind.question_new': 'New question',
   'notifications.kind.health_alert': 'Health alert',
   'notifications.kind.info': 'Notice',
 
