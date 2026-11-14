@@ -123,6 +123,30 @@ test('selfTarget: :// のある語に beat のポートと展開の括弧があ�
   assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
 });
 
+test('selfTarget: ポートやホストが展開の括弧で組み立てられる書き方も、展開した結果が beat 自身なら断る', () => {
+  const reached = [
+    'curl "http://127.0.0.1:{4790,4790}/"', 'curl "http://127.0.0.1:[4790-4790]/"', 'curl "http://127.0.0.1:[4789-4791]/"', 'curl "http://127.0.0.1:[4789-4791:1]/"',
+    'curl "http://127.0.0.1:47{90,90}/"', 'curl "http://127.0.0.1{:,:}4790/"', 'curl "http://127.0.0.1:4[7-7]90/"', 'curl "http://127.0.0.1:[04790-04790]/"',
+    'curl "127.0.0.{1:4790,1:4790}/"', 'curl "http:/{127.0.0.1,x/y}:4790/"', 'curl "http://[::1]:{4791,4791}/"', 'curl "http://127.0.0.1:[1-65535]/"',
+    'curl http://127.0.0.1:{4789..4791}/', 'curl http://localhost:{1..65535}/', 'curl "https://box.tail1234.ts.{net,net}/api/pending"', 'curl "https://127.0.0.1:[440-450]/"',
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined), []);
+  const free = [
+    'curl "http://127.0.0.1:{8080,9090}/"', 'curl "http://127.0.0.1:[3000-3002]/health"', 'curl "http://localhost:[5000-6000]/"', 'curl http://127.0.0.1:{3000..3005}/',
+    'curl "http://example.com/img[1-100000].png"', 'curl "https://example.com/{a,b}/[1-3].json"', `echo '{"host":"localhost","port":4790}'`,
+    `node -e "const o={host:'127.0.0.1',port:4790}"`, `jq '{a:.x[0],port:4790}' a.json`, 'echo {1..4790}', 'echo [4790-4790] {4790,4791}', 'ls src/{a,b}/[0-9]*.ts',
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
+});
+
+test('selfTarget: スラッシュが 1 本・3 本の URL（http:/host）も、既定のポートが beat のポートなら断る', () => {
+  const http = { port: 4790, origins: ['http://10.0.0.5'] };
+  assert.deepEqual(['curl http:/localhost/api/pending', 'curl http:///127.0.0.1/api/pending', 'curl HTTP:/127.0.0.1'].filter(command => selfTarget(command, http) === undefined), []);
+  assert.deepEqual(['curl https:/127.0.0.1/api/pending', 'curl https:///localhost/'].filter(command => selfTarget(command, server) === undefined), []);
+  const free = ['curl http:/localhost/api/pending', 'curl http:/127.0.0.1:9/', 'curl https:/example.com/', 'echo http:localhost', 'ls C:/localhost'];
+  assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined), []);
+});
+
 test('selfTarget: IPv6 のゾーン付きの書き方（[::1%25lo]）も beat 自身として見つける', () => {
   const reached = ['curl "http://[::1%25lo]:4790/api/pending"', 'curl "http://[::1%lo]:4791/"', 'curl "http://[::1%251]:4790/"', 'curl "http://[::ffff:127.0.0.1%25lo]:4790/"'];
   assert.deepEqual(reached.filter(command => selfTarget(command, server) === undefined), []);
