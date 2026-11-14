@@ -174,9 +174,9 @@ const PARKED: Record<string, 'send' | 'delete'> = {
   'Clear-Content': 'delete', '持ち主が許した Clear-Content': 'delete',
 };
 
-// 確かめの要らない操作。よそから来た文を読んだあとも、判定役を呼ばずに動く（Q-W1-15 の仮の答え・Claude Code の狭い allow と同じ）
+// 確かめの要らない操作。よそから来た文を読んだあとも、判定役を呼ばずに動く（Claude Code の狭い allow と同じ。curl の GET は 5-J2 から判定役）
 const RUNS: ReadonlySet<string> = new Set([
-  'curl の GET（URL のクエリ）', 'curl.exe の GET（URL のクエリ）', 'npm ls', 'npm --version', 'pip list', 'pip freeze', 'web_download（よそのあと）', '持ち主が許した知らないコマンド',
+  'npm ls', 'npm --version', 'pip list', 'pip freeze', 'web_download（よそのあと）', '持ち主が許した知らないコマンド',
 ]);
 
 for (const source of SOURCES) {
