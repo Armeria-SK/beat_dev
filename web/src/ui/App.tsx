@@ -4,6 +4,7 @@ import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
 import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
+import { composerDrafts } from './composer-state.ts';
 import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
@@ -151,6 +152,7 @@ export function App() {
         const id = effect.conversationId;
         void api.checklist(id).then(r => dispatch({ type: 'checklist', conversationId: id, items: r.items })).catch(() => undefined);
       } else if (effect.kind === 'gone') {
+        composerDrafts.forget(effect.conversationId);
         const now = parseRoute(location.hash);
         if (now.view === 'chat' && now.id === effect.conversationId) location.replace('#/');
       } else if (effect.kind === 'toast') {
