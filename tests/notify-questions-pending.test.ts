@@ -69,6 +69,9 @@ test('5-4-s 急ぐ（blocking）質問の知らせだけ、未読のあいだ先
   const list = s.app.notifications.list();
   assert.equal(list[0]!.kind, 'question_new');
   assert.equal(list[0]!.body, 'Which database?');
+  assert.equal(list[0]!.title, 'I have a question: Build', '急ぐ質問の題は、前の task_waiting と同じくタスクの題を持つ');
+  assert.equal(list.find(n => n.body === 'Light or dark?'), undefined);
+  assert.equal(s.rows('question_new').find(r => r.body === 'Light or dark?')!.title, 'Question recorded');
   assert.equal(list.filter(n => n.kind === 'question_new').length, 1, '急がない質問は件数の上限で押し出される');
   assert.ok(list[0]!.dedup_key?.startsWith(BLOCKING_QUESTION_KEY));
   s.app.questions.answer(blocking.id, { choice: 0 });
@@ -216,6 +219,24 @@ test('5-4-s タスクの実行で急ぐ質問を記録すると、未読の知�
   assert.equal(s.app.notifications.list()[0]!.kind, 'question_new', '先頭に固定');
   await new Promise(r => setTimeout(r, 50));
   assert.deepEqual(sent.map(p => p.kind), ['question_new'], '既定の kinds（task_waiting を持つ）の送り先に 1 通届く');
+  assert.equal(sent[0]!.title, 'I have a question: Build the page');
+});
+
+test('5-4-s 急ぐ質問の知らせを持ち主が読んだあと、同じ文の ask_user で待つと、task_waiting が 1 つ未読で出る', async t => {
+  const s = await startApp(t, { configure: c => { c.routing = { chat: ['m1'], background: ['m1'], retriesPerModel: 0 }; c.memory.review = false; } });
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const text = 'Which payment provider?';
+  s.adapter().scripts.push(toolCall('question_add', { question: text, why: 'No safe default', options: ['A', 'B'], blocking: true }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'waiting');
+  const answered = await s.json(`/api/tasks/${task.id}/answer`, 'POST', { text: 'A' });
+  assert.equal(answered.status, 200);
+  s.app.notifications.markRead();
+  s.adapter().scripts.push(toolCall('ask_user', { question: text }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'waiting');
+  const unread = s.app.db.prepare('SELECT kind FROM notifications WHERE read_at IS NULL').all() as Array<{ kind: string }>;
+  assert.deepEqual(unread.map(n => n.kind), ['task_waiting']);
 });
 
 test('5-4-s 外の送り先: 急ぐ質問の question_new は task_waiting を持つ送り先にも届き、急がない質問は届かない', async () => {

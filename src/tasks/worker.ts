@@ -10,6 +10,7 @@ import { curiosityText } from '../curiosity/text.ts';
 import { bookPressureText, isNoProposal, reviewPrompt, TIDY_FORBIDDEN_TOOLS, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
 import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
+import { BLOCKING_QUESTION_KEY } from '../shared/notification-list.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister } from '../tools/skills/store.ts';
@@ -452,7 +453,8 @@ export class Worker {
     }
     if (control.outcome === 'question') {
       tasks.setWaiting(task.id, 'question', control.question, runId);
-      const recorded = this.#d.questions?.list({ status: 'open', taskId: task.id }).some(q => q.blocking && q.question === control.question) ?? false;
+      const unread = new Set(notifications.unreadOf('question_new').map(n => n.dedup_key));
+      const recorded = this.#d.questions?.list({ status: 'open', taskId: task.id }).some(q => q.blocking && q.question === control.question && unread.has(`${BLOCKING_QUESTION_KEY}${q.id}`)) ?? false;
       if (!recorded) notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, projectId });
       return;
     }

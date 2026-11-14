@@ -466,8 +466,10 @@ export class App {
       if (!row) return;
       const dedupKey = questionKey(row);
       if (change.status === 'answered') { this.notifications.settle('question_new', { dedupKey }); return; }
+      const language = languageOf(this.config());
+      const task = row.blocking === 1 && row.task_id ? this.tasks.get(row.task_id) : undefined;
       this.notifications.notify({
-        kind: 'question_new', title: notifyText(languageOf(this.config()), row.blocking === 1 ? 'question_new_blocking' : 'question_new'), body: row.question,
+        kind: 'question_new', title: task ? taskText(language, 'notify.task_question', { title: task.title }) : notifyText(language, row.blocking === 1 ? 'question_new_blocking' : 'question_new'), body: row.question,
         link: row.project_id ? `#/questions/${row.project_id}` : '#/questions', dedupKey, projectId: row.project_id,
       });
     } catch (error) { this.log(`[ERROR] Failed to notify about question #${change.id}: ${(error as Error).message}`); }
