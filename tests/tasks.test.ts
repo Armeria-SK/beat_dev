@@ -208,21 +208,19 @@ test('チャットが来るとタスクの実行を中断し、あとで続き�
   assert.equal(resumed.length, 2, '同じタスクの会話に続けて依頼文を足す（前の経過が見える）');
 });
 
-test('質問（ask_user）で返事待ちになり、通知が出る', async t => {
+test('急ぐ質問（question_add の blocking）で返事待ちになり、知らせは質問の 1 つだけ。長く待っても知らせ直さない', async t => {
   const s = await setup(t);
   const task = s.userTask('資料を作る');
-  s.adapter().scripts.push(toolCall('ask_user', { question: 'PDF と Markdown のどちらにしますか？' }));
+  s.adapter().scripts.push(toolCall('question_add', { question: 'PDF と Markdown のどちらにしますか？', why: '形式で作り方が変わる', options: ['PDF', 'Markdown'], blocking: true }));
   assert.equal(await s.app.worker.tick(), 'ran');
   const waiting = s.app.tasks.get(task.id)!;
   assert.equal(waiting.status, 'waiting');
   assert.equal(waiting.waiting_text, 'PDF と Markdown のどちらにしますか？');
-  assert.equal(s.app.notifications.list()[0]?.kind, 'task_waiting');
+  assert.deepEqual(s.app.notifications.list().map(n => n.kind), ['question_new']);
   assert.equal(await s.app.worker.tick(), 'idle', '返事が来るまで動かない');
   s.clock.now += 13 * HOUR;
   await s.app.worker.tick();
-  assert.equal(s.app.notifications.list().filter(n => n.kind === 'task_waiting').length, 2, '長く待つとリマインドする');
-  await s.app.worker.tick();
-  assert.equal(s.app.notifications.list().filter(n => n.kind === 'task_waiting').length, 2, 'リマインドは重ねて出さない');
+  assert.deepEqual(s.app.notifications.list().map(n => n.kind), ['question_new'], '知らせ直しは無い');
 });
 
 test('途中経過（task_checkpoint）を残すと、指定の時間まで休む', async t => {
@@ -260,7 +258,7 @@ test('失敗は時間をおいて再試行し、上限を超えたら失敗に�
   assert.equal(s.app.notifications.list()[0]?.kind, 'task_failed');
 });
 
-test('道具で終え方を決めないまま 3 回続いたら、ユーザーに相談する', async t => {
+test('道具で終え方を決めないまま 3 回続いたら、理由つきの failed にして質問票に stuck の行を足す', async t => {
   const s = await setup(t);
   const task = s.userTask('ふわっとした仕事');
   for (let i = 0; i < 3; i++) s.adapter().scripts.push(reply(`考えました ${i}`));
@@ -272,9 +270,13 @@ test('道具で終え方を決めないまま 3 回続いたら、ユーザー�
   s.clock.now += 30 * MIN;
   assert.equal(await s.app.worker.tick(), 'ran');
   const stuck = s.app.tasks.get(task.id)!;
-  assert.equal(stuck.status, 'waiting');
-  assert.match(stuck.waiting_text ?? '', /3 times/u);
+  assert.equal(stuck.status, 'failed');
+  assert.match(stuck.result_summary ?? '', /3 runs in a row without progress/u);
+  assert.equal(stuck.waiting_kind, null);
   assert.match(stuck.body, /考えました 0/u, '返事はメモとして残す');
+  const [row] = s.app.questions.list({ status: 'open', taskId: task.id });
+  assert.deepEqual([row?.kind, row?.blocking, row?.options, row?.chosen], ['stuck', false, ['Retry', 'Leave it'], 1]);
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined);
 });
 
 // ── 人のいない実行の 100 往復の区切り（M1 の持ち主の決定 B: 止めずに続け、3 回続いたら 1 回だけ知らせる） ──
@@ -353,6 +355,7 @@ test('区切りでない終わり・持ち主の操作（run-now・PATCH・answe
   assert.equal((await request(`/api/tasks/${task.id}`, { priority: 1 }, 'PATCH')).status, 200);
   assert.equal(s.app.kv.get(splitKey), undefined, 'PATCH で消える');
   s.app.kv.setJson(splitKey, 2);
+  s.app.questions.add({ taskId: task.id, question: 'どうする？', options: ['a', 'b'], blocking: true });
   s.app.tasks.setWaiting(task.id, 'question', 'どうする？');
   assert.equal((await request(`/api/tasks/${task.id}/answer`, { text: '続けて' })).status, 200);
   assert.equal(s.app.kv.get(splitKey), undefined, 'answer で消える');
@@ -368,7 +371,7 @@ test('区切りでない終わり・持ち主の操作（run-now・PATCH・answe
   assert.equal(s.app.kv.get(splitKey), undefined, '完了にすると消える');
 });
 
-test('区切りと返事だけの終わりが交互に続くタスクは、今までどおり進展なし 3 回で相談に届く（長く続いているの知らせは出ない）', async t => {
+test('区切りと返事だけの終わりが交互に続くタスクは、今までどおり進展なし 3 回で質問票に届く（長く続いているの知らせは出ない）', async t => {
   const s = await setup(t, c => { c.worker.maxRunsPerHour = 50; });
   const task = s.userTask('行ったり来たり');
   for (let i = 0; i < 3; i++) {
@@ -383,9 +386,9 @@ test('区切りと返事だけの終わりが交互に続くタスクは、今�
     }
   }
   const stuck = s.app.tasks.get(task.id)!;
-  assert.equal(stuck.status, 'waiting');
-  assert.match(stuck.waiting_text ?? '', /3 times/u);
-  assert.equal(s.app.notifications.list().filter(n => n.kind === 'task_waiting').length, 1, '相談の知らせ');
+  assert.equal(stuck.status, 'failed');
+  assert.equal(s.app.questions.list({ status: 'open', taskId: task.id }).filter(q => q.kind === 'stuck').length, 1, '質問票の行');
+  assert.equal(s.app.notifications.list().filter(n => n.kind === 'task_waiting').length, 0);
   assert.equal(longNotes(s).length, 0);
 });
 
@@ -553,7 +556,7 @@ test('API: タスク・ワーカー・通知・プロフィール', async t => {
   assert.equal((await api(`/api/tasks/${id}/answer`, { text: 'はい' })).status, 409, '返事待ちではない');
 
   // 返事待ち → 回答 → 再開
-  s.adapter().scripts.push(toolCall('ask_user', { question: 'いつ行く？' }));
+  s.adapter().scripts.push(toolCall('question_add', { question: 'いつ行く？', why: 'w', options: ['朝', '夜'], blocking: true }));
   await s.app.worker.tick();
   assert.equal((await api(`/api/tasks/${id}`)).body.task.status, 'waiting');
   const answered = await api(`/api/tasks/${id}/answer`, { text: '明日の朝' });

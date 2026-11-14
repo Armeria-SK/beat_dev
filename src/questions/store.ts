@@ -8,7 +8,7 @@ import { plainBlock, plainLine, stripHidden } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { AcceptanceError, ITEM_ID, type AcceptanceStore } from '../projects/acceptance.ts';
 import type { ProjectStore } from '../projects/store.ts';
-import type { TaskStore } from '../tasks/store.ts';
+import type { Task, TaskStore } from '../tasks/store.ts';
 
 export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
 export type QuestionStatus = 'open' | 'answered';
@@ -82,6 +82,15 @@ export interface QuestionAdd {
   blocking?: boolean | undefined;
   acceptanceItem?: string | null | undefined;
   tainted?: boolean | undefined;
+}
+
+export interface SubmitRefused {
+  taskId: string;
+  projectId: string | null;
+  conversationId: string | null;
+  tool: string;
+  url: string | undefined;
+  tainted: boolean;
 }
 
 export interface QuestionFilter {
@@ -169,6 +178,12 @@ export class QuestionStore {
   #now(): number { return this.options.now?.() ?? Date.now(); }
 
   add(input: QuestionAdd): QuestionRow {
+    const row = this.#insert(input, false);
+    this.options.onChange?.({ id: row.id, projectId: row.project_id, status: 'open' });
+    return row;
+  }
+
+  #insert(input: QuestionAdd, copy: boolean): QuestionRow {
     const kind = input.kind ?? 'ai';
     const question = cleanBlock(input.question, TEXT_MAX);
     if (!question) throw new QuestionError('empty');
@@ -184,7 +199,7 @@ export class QuestionStore {
     const item = input.acceptanceItem ?? null;
     if (item !== null && (!ITEM_ID.test(item) || !input.projectId || !this.options.acceptance?.hasLiveItem(input.projectId, item))) throw new QuestionError('no_item', { item: plainLine(item, 20) });
     const id = transaction(this.db, () => {
-      if (taskId && kind === 'ai') {
+      if (taskId && kind === 'ai' && !copy) {
         const same = this.db.prepare("SELECT id FROM questions WHERE task_id = ? AND status = 'open' AND question = ? LIMIT 1").get(taskId, question) as { id: number } | undefined;
         if (same) throw new QuestionError('duplicate', { id: same.id });
         const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM questions WHERE task_id = ? AND kind = 'ai'").get(taskId) as { n: number };
@@ -195,9 +210,64 @@ export class QuestionStore {
         input.projectId ?? null, taskId, input.conversationId ?? null, kind, question, why, JSON.stringify(options), chosen, blocking ? 1 : 0, item, input.tainted ? 1 : 0, this.#now(),
       ).lastInsertRowid);
     });
-    const row = this.get(id)!;
-    this.options.onChange?.({ id, projectId: row.project_id, status: 'open' });
-    return row;
+    return this.get(id)!;
+  }
+
+  addSubmitRefused(input: SubmitRefused): { row: QuestionRow; added: boolean } {
+    const language = DEFAULT_LANGUAGE;
+    const question = input.url ? questionText(language, 'submit_question', { url: input.url }) : questionText(language, 'submit_question_unknown', { tool: input.tool });
+    const same = this.db.prepare("SELECT id FROM questions WHERE task_id = ? AND kind = 'submit_refused' AND question = ? ORDER BY id LIMIT 1").get(input.taskId, cleanBlock(question, TEXT_MAX)) as { id: number } | undefined;
+    if (same) return { row: this.get(same.id)!, added: false };
+    const row = this.add({
+      kind: 'submit_refused', projectId: input.projectId, taskId: input.taskId, conversationId: input.conversationId, question,
+      why: questionText(language, 'submit_why', { tool: input.tool }), options: [questionText(language, 'submit_send'), questionText(language, 'submit_keep')], chosen: 1, tainted: input.tainted,
+    });
+    return { row, added: true };
+  }
+
+  copyLegacyWaits(conversationTainted: (id: string) => boolean): number {
+    const tasks = this.options.tasks;
+    if (!tasks) return 0;
+    const language = DEFAULT_LANGUAGE;
+    const waiting = this.db.prepare(`SELECT id FROM tasks WHERE waiting_kind = 'question' AND (status = 'waiting' OR (status = 'cancelled' AND cancelled_from = 'waiting')) ORDER BY created_at, id`).all() as Array<{ id: string }>;
+    let copied = 0;
+    transaction(this.db, () => {
+      for (const { id } of waiting) {
+        const task = tasks.get(id);
+        if (!task) continue;
+        const question = task.waiting_text?.trim() ? task.waiting_text : questionText(language, 'legacy_none');
+        const latest = this.#waitedOn(task.id);
+        const held = latest === undefined ? undefined : this.get(latest);
+        if (held && held.status === 'open' && held.question === cleanBlock(question, TEXT_MAX)) continue;
+        this.#insert({
+          kind: 'ai', projectId: task.project_id, taskId: task.id, conversationId: task.conversation_id, question, why: questionText(language, 'legacy_why'),
+          options: [questionText(language, 'legacy_go'), questionText(language, 'legacy_stop')], chosen: null, blocking: true,
+          tainted: tasks.textTainted(task.id) || (task.conversation_id !== null && conversationTainted(task.conversation_id)),
+        }, true);
+        copied += 1;
+      }
+    });
+    return copied;
+  }
+
+  #waitedOn(taskId: string): number | undefined {
+    const row = this.db.prepare('SELECT MAX(id) AS id FROM questions WHERE task_id = ? AND blocking = 1').get(taskId) as { id: number | null } | undefined;
+    return row?.id ?? undefined;
+  }
+
+  waitingQuestion(taskId: string): QuestionRow | undefined {
+    const id = this.#waitedOn(taskId);
+    const row = id === undefined ? undefined : this.get(id);
+    return row?.status === 'open' ? row : undefined;
+  }
+
+  resumeAnswered(task: Task): boolean {
+    const tasks = this.options.tasks;
+    if (!tasks || task.status !== 'waiting' || task.waiting_kind !== 'question') return false;
+    const id = this.#waitedOn(task.id);
+    if (id === undefined || this.get(id)?.status !== 'answered') return false;
+    tasks.setReady(task.id, { actor: 'user' });
+    return true;
   }
 
   get(id: number): QuestionRow | undefined {
@@ -268,9 +338,11 @@ export class QuestionStore {
       let fixTaskId: string | null = null;
       let reopenedTaskId: string | null = null;
       let resumedTaskId: string | null = null;
-      if (blockedTask && !FINISHED.includes(blockedTask.status)) {
+      const waitedOn = blockedTask !== undefined && this.#waitedOn(blockedTask.id) === row.id;
+      const heldByCancel = waitedOn && blockedTask.status === 'cancelled' && blockedTask.cancelled_from === 'waiting' && blockedTask.waiting_kind === 'question';
+      if (blockedTask && (!FINISHED.includes(blockedTask.status) || heldByCancel)) {
         tasks.event(blockedTask.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
-        if (blockedTask.status === 'waiting' && blockedTask.waiting_kind === 'question' && blockedTask.waiting_text === row.question) {
+        if (blockedTask.status === 'waiting' && blockedTask.waiting_kind === 'question' && waitedOn) {
           tasks.setReady(blockedTask.id, { actor: 'user' });
           resumedTaskId = blockedTask.id;
         }
@@ -305,7 +377,7 @@ export class QuestionStore {
     const assumed = row.chosen !== null ? options[row.chosen] ?? questionText(language, 'assumed_none') : questionText(language, 'assumed_none');
     const title = plainLine(questionText(language, 'fix_title', { id: row.id, question: row.question }), TITLE_MAX);
     const body = [questionText(language, 'fix_body', { question: row.question, assumed, answer: answerText }), row.kind === 'submit_refused' ? questionText(language, 'fix_send') : '', item ? questionText(language, 'fix_item', { item }) : ''].filter(Boolean).join('\n');
-    const ownerText = ownerWrote || row.tainted === 0 ? answerText : null;
+    const ownerText = ownerWrote || row.tainted === 0 || row.kind !== 'ai' ? answerText : null;
     const task = tasks.create({ title, body, origin: 'user', actor: 'user', projectId: row.project_id, ownerRequest: ownerText !== null });
     if (ownerText !== null) tasks.ownerEdited(task.id, { title: ownerText, body: '' });
     if (row.tainted === 1) tasks.markUntrusted(task.id, 'question', questionText(language, 'untrusted_note'));

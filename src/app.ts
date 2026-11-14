@@ -31,7 +31,7 @@ import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
 import { meshDecisionAdd, meshGlossarySet, meshMapSet } from './tools/builtin/mesh-write.ts';
 import { questionAdd, questionList } from './tools/builtin/questions.ts';
 import { deviationAdd } from './tools/builtin/deviations.ts';
-import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
+import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
 import { sdkConnect } from './mcp/connect.ts';
 import { McpManager, type McpConnect } from './mcp/manager.ts';
 import { NotifyChannels } from './notify/channels.ts';
@@ -82,7 +82,7 @@ import { MemoryStore, renderBooks } from './memory/store.ts';
 
 export function builtinTools(): ToolDef[] {
   return [
-    taskComplete, taskCheckpoint, askUser,
+    taskComplete, taskCheckpoint, questionAdd,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun,
     planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
     taskCreate, taskList, taskUpdate,
@@ -92,7 +92,7 @@ export function builtinTools(): ToolDef[] {
     checklistWrite, notifyOwner, docRead, tableWrite,
     imageView, webDownload,
     agentRun,
-    questionAdd, questionList, deviationAdd, meshMapSet, meshGlossarySet, meshDecisionAdd,
+    questionList, deviationAdd, meshMapSet, meshGlossarySet, meshDecisionAdd,
     ...BROWSER_TOOLS,
   ];
 }
@@ -218,6 +218,7 @@ export class App {
     this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'));
     this.skills.autoRegister = () => !askBeforeRegister(this.config());
     this.#importCuriosity();
+    this.#copyLegacyWaits();
     this.#registerExistingSkills();
     this.#offerProtectFiles();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
@@ -261,7 +262,7 @@ export class App {
       }
       this.worker.poke();
     };
-    this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
+    this.tasks.onUncancelled = task => { this.curiosity.onTaskRestored(task); this.questions.resumeAnswered(task); };
     this.tasks.onDeleted = removed => {
       const title = removed.title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
       this.log(`[INFO] Deleted task "${title}" (${removed.id})`);
@@ -350,6 +351,13 @@ export class App {
       this.log('[INFO] Added the built-in protect-files hook (writes to .github/workflows, and to package.json after reading text from outside, are checked with you). Change or remove it in Settings › Hooks; it will not be added again');
     }
     this.kv.set(PROTECT_FILES_OFFERED, String(Date.now()));
+  }
+
+  #copyLegacyWaits(): void {
+    if (this.kv.get(LEGACY_WAITS_COPIED)) return;
+    const copied = this.questions.copyLegacyWaits(id => this.conversations.everTainted(id));
+    this.kv.set(LEGACY_WAITS_COPIED, String(Date.now()));
+    this.log(`[INFO] Copied ${copied} task(s) waiting for an answer into Questions (answer them there)`);
   }
 
   #importCuriosity(): void {
@@ -502,6 +510,8 @@ export class App {
     this.db.close();
   }
 }
+
+const LEGACY_WAITS_COPIED = 'questions:legacy-waits-copied';
 
 const questionKey = (row: Pick<QuestionRow, 'id' | 'blocking'>): string => `${row.blocking === 1 ? BLOCKING_QUESTION_KEY : 'question:'}${row.id}`;
 

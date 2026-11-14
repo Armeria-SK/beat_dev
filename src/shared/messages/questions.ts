@@ -30,6 +30,15 @@ const en = {
   'list_none': 'No questions yet',
   'list_open_line': '#{id} {question} (assumed: {assumed})',
   'list_answered_line': '#{id} {question} (assumed: {assumed}; answer: {answer})',
+  'submit_question': 'Send the form at {url}?',
+  'submit_question_unknown': 'Send the form in the browser ({tool}; the page is not known)?',
+  'submit_why': '{tool} would submit a form, and nobody was watching this run to approve it, so it was not sent.',
+  'submit_send': 'Send it',
+  'submit_keep': 'Do not send',
+  'legacy_why': 'The task was already waiting for your reply before questions were kept here.',
+  'legacy_go': 'Go ahead',
+  'legacy_stop': 'Stop here',
+  'legacy_none': 'The task is waiting for your reply.',
 } as const;
 
 export type QuestionMessageKey = keyof typeof en;

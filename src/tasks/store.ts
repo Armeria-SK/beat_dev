@@ -691,8 +691,4 @@ export class TaskStore {
   createdSince(origin: TaskOrigin, since: number): number {
     return (this.#db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE (origin = ? OR proposed_by = ?) AND created_at > ?').get(origin, origin, since) as { n: number }).n;
   }
-
-  waitingSince(olderThanMs: number): Task[] {
-    return this.#db.prepare("SELECT * FROM tasks WHERE status = 'waiting' AND updated_at < ?").all(this.#now() - olderThanMs) as unknown as Task[];
-  }
 }

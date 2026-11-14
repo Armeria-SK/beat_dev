@@ -59,7 +59,9 @@ const en = {
   'reason.split': 'Reached {max} rounds of tool calls in one run, so it continues in a new run',
   'note.memo': 'Note: {text}',
   'note.memo_truncated': 'Note (the reply was cut off by the output limit and is incomplete): {text}',
-  'stuck.question': 'I tried to work on "{title}" {strikes} times but could not decide how to proceed. Please tell me what to do (cancel it if you would rather drop it)',
+  'stuck.question': '"{title}" ran {strikes} times in a row without making progress, so it was stopped. Run the task again?',
+  'stuck.why': 'Each of those runs ended with a reply only, without task_complete, task_checkpoint or a question.',
+  'stuck.reason': 'Stopped after {strikes} runs in a row without progress (each ended with a reply only). The owner is asked in Questions.',
   'split.long_body': '"{title}" has run {runs} times in a row ({max} rounds of tool calls each) without finishing. It keeps going; cancel it if it is stuck',
 
   'title.review': 'Review: {label}',
@@ -70,7 +72,6 @@ const en = {
   'review.truncated': 'The review reply was cut off by the output limit, so its result was not used (it will be retried next time)',
   'review.tidy_skipped': 'Memory tidy-up reviews are off for now, so this one was skipped',
 
-  'notify.waiting_reminder': 'Waiting for your reply: {title}',
   'notify.budget.title': 'The hourly run limit was reached, so tasks are being held back for a while',
   'notify.budget.body': 'The limit is {max} run(s) per hour (worker.maxRunsPerHour in the settings). Urgent tasks can be started with "Run now"',
   'notify.review_no_model': 'No model is available for the review',
@@ -79,7 +80,6 @@ const en = {
   'notify.task_folder_missing': 'Tasks of the product "{name}" are waiting: its folder cannot be found',
   'notify.task_done': 'Task finished: {title}',
   'notify.task_question': 'I have a question: {title}',
-  'notify.task_consult': 'I need your advice: {title}',
   'notify.task_long': 'Taking a long time: {title}',
   'notify.task_failed': 'Task failed: {title}',
   'notify.skill_draft': 'Please review the skill draft: {name}',

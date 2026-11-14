@@ -26,7 +26,7 @@ test('GET /api/tools: 組み込みの道具のうち記憶の道具と、どの�
     const def = server.find(d => d.name === tool.name)!;
     assert.deepEqual([tool.effect, tool.allowedIn, tool.policy], [def.effect, [...def.allowedIn], 'allow'], tool.name);
   }
-  assert.deepEqual(tools.filter(tool => !tool.configurable).map(tool => tool.name).sort(), ['ask_user', 'task_checkpoint', 'task_complete']);
+  assert.deepEqual(tools.filter(tool => !tool.configurable).map(tool => tool.name).sort(), ['task_checkpoint', 'task_complete']);
   assert.deepEqual(tools.find(tool => tool.name === 'history_search')!.allowedIn, ['chat', 'task', 'review'], '振り返りでも使う道具は、allowedIn に review がある（画面の添え書きの元）');
 });
 
@@ -115,7 +115,7 @@ test('PATCH /api/tools/:name: 知らない道具は 404、方針を持てない�
   const unknown = await patch(s, 'no_such_tool', { policy: 'ask' });
   assert.equal(unknown.status, 404);
   assert.equal(((await unknown.json()) as { code: string }).code, 'http.tool_missing');
-  for (const name of ['task_complete', 'task_checkpoint', 'ask_user']) {
+  for (const name of ['task_complete', 'task_checkpoint']) {
     const res = await patch(s, name, { policy: 'block' });
     assert.equal(res.status, 400, name);
     assert.equal(((await res.json()) as { code: string }).code, 'http.tool_not_policyable');

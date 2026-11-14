@@ -120,7 +120,7 @@ function Answer({ task, onSent }: { task: Task; onSent: () => void }) {
       <div className="bt-section__head"><span className="bt-section__kind"><span className="bt-dot" aria-hidden="true" /><span className="bt-label">{t('ui.task.question')}</span></span></div>
       <form className="ui-answer" onSubmit={e => void send(e)}>
         <p className="ui-answer__q">{task.waiting_text || t('ui.task.noQuestion')}</p>
-        <textarea className="bt-field" rows={3} value={text} maxLength={20_000} aria-label={t('ui.task.answer')} placeholder={t('ui.task.answer')} onChange={e => setText(e.target.value)} />
+        <textarea className="bt-field" rows={3} value={text} maxLength={4000} aria-label={t('ui.task.answer')} placeholder={t('ui.task.answer')} onChange={e => setText(e.target.value)} />
         <div className="ui-field__buttons"><Button type="submit" variant="primary" small disabled={busy || !text.trim()}>{t('ui.task.sendAnswer')}</Button></div>
       </form>
     </section>

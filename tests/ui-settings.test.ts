@@ -23,8 +23,8 @@ test('ui/settings rows: 今の設定の形のどの項目も、区分か「設�
   assert.deepEqual(homeless, []);
 });
 
-test('ui/settings rows: worker の 4 項目は Background、答え 8 の 5 項目（静かな時間帯は 2 つの鍵）は設定ファイルだけ', () => {
-  for (const key of ['enabled', 'maxRunsPerHour', 'maxParallel', 'remindAfterHours']) assert.equal(placeOf(`worker.${key}`), 'background', key);
+test('ui/settings rows: worker の 3 項目は Background、答え 8 の 5 項目（静かな時間帯は 2 つの鍵）は設定ファイルだけ', () => {
+  for (const key of ['enabled', 'maxRunsPerHour', 'maxParallel']) assert.equal(placeOf(`worker.${key}`), 'background', key);
   assert.deepEqual([...LATER_HIDDEN], ['worker.autonomy', 'worker.idleMinutes', 'worker.quietStart', 'worker.quietEnd', 'worker.selfTasksNeedApproval', 'worker.curiosityPerDay']);
   for (const path of LATER_HIDDEN) assert.equal(placeOf(path), 'file', path);
   assert.equal(placeOf('notify.channels'), 'file', '通知の送り先は画面に出さない（future.md）');
