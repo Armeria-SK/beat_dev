@@ -39,6 +39,7 @@ export interface Task {
   proposed_by: string | null;
   acceptance_items: string | null;
   owner_request: string | null;
+  spawned_by: string | null;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -63,6 +64,7 @@ export interface CreateTask {
   acceptanceItems?: readonly string[] | undefined;
   ownerRequest?: boolean | undefined;
   ownerPlan?: string | undefined;
+  spawnedBy?: string | undefined;
   actor: string;
 }
 
@@ -247,14 +249,35 @@ export class TaskStore {
   judgeRequest(id: string): string {
     const task = this.get(id);
     if (!task || this.beatDecided(id)) return '';
-    const holder = task.owner_request === null && task.parent_id ? this.get(task.parent_id) : task;
-    const owner = ownerRequestOf(holder?.owner_request);
-    if (owner && holder) {
-      if (this.#sourceTainted(task.id, task.parent_id)) return '';
-      return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria, ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : [])].filter(Boolean).join('\n');
+    if (task.spawned_by) {
+      const root = this.#spawnRoot(task);
+      return root ? this.#ownerText(root) ?? '' : '';
     }
+    const owner = this.#ownerText(task);
+    if (owner !== undefined) return owner;
     if (this.#textTainted(task.id, task.parent_id)) return '';
     return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
+  }
+
+  #ownerText(task: Task): string | undefined {
+    const holder = task.owner_request === null && task.parent_id ? this.get(task.parent_id) : task;
+    const owner = ownerRequestOf(holder?.owner_request);
+    if (!owner || !holder) return undefined;
+    if (this.#sourceTainted(task.id, task.parent_id)) return '';
+    return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria, ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : [])].filter(Boolean).join('\n');
+  }
+
+  #spawnRoot(task: Task): Task | undefined {
+    const seen = new Set<string>([task.id]);
+    let current = task;
+    while (current.spawned_by) {
+      if (seen.has(current.spawned_by) || seen.size > 100) return undefined;
+      const parent = this.get(current.spawned_by);
+      if (!parent) return undefined;
+      seen.add(parent.id);
+      current = parent;
+    }
+    return current;
   }
 
   ownerEdited(id: string, patch: { title?: string | undefined; body?: string | undefined; doneCriteria?: string | null | undefined }): void {
@@ -319,13 +342,14 @@ export class TaskStore {
       const tz = input.timezone ?? 'UTC';
       runAt = nextRunAt(input.cron, tz, now);
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
-      status = 'scheduled';
+      if (input.propose) runAt = null;
+      else status = 'scheduled';
     }
     const ownerRequest: OwnerRequest | null = input.ownerRequest ? { title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null, ...(input.ownerPlan ? { plan: input.ownerPlan } : {}) } : null;
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, spawned_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, ownerRequest ? JSON.stringify(ownerRequest) : null, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, ownerRequest ? JSON.stringify(ownerRequest) : null, input.spawnedBy ?? null, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);
@@ -457,10 +481,22 @@ export class TaskStore {
   }
 
   approve(id: string): Task {
-    const task = this.get(id);
-    if (!task || task.status !== 'inbox') throw new TaskError('error.not_proposal');
-    this.event(id, 'approved', 'user');
-    return this.setReady(id);
+    transaction(this.#db, () => {
+      const task = this.get(id);
+      if (!task || task.status !== 'inbox') throw new TaskError('error.not_proposal');
+      const now = this.#now();
+      const template = task.cron !== null && task.parent_id === null;
+      const next = template ? nextRunAt(task.cron!, task.timezone ?? 'UTC', now) : null;
+      if (template && next === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
+      if (task.origin !== 'user' && task.proposed_by === null) {
+        const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: task.done_criteria } satisfies OwnerRequest);
+        this.#db.prepare("UPDATE tasks SET origin = 'user', proposed_by = ?, owner_request = ? WHERE id = ?").run(task.origin, request, id);
+      }
+      this.event(id, 'approved', 'user');
+      if (template) this.#db.prepare("UPDATE tasks SET status = 'scheduled', run_at = ?, lease_until = NULL, updated_at = ? WHERE id = ?").run(next, now, id);
+      else this.#db.prepare("UPDATE tasks SET status = 'ready', lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, run_at = NULL, updated_at = ? WHERE id = ?").run(now, id);
+    });
+    return this.#changed(id);
   }
 
   #neverRan(task: Task): boolean {
@@ -473,8 +509,11 @@ export class TaskStore {
       if (!task) throw new TaskError('error.not_found', { id });
       if (task.status === 'running' || task.status === 'waiting' || !this.#neverRan(task)) throw new TaskError('error.already_started');
       const newest = this.#db.prepare('SELECT kind FROM task_events WHERE task_id = ? AND run_id IS NOT ? ORDER BY id DESC LIMIT 1').get(id, UNTRUSTED_RUN) as { kind: string } | undefined;
-      if (task.status !== 'ready' || newest?.kind !== 'approved') throw new TaskError('error.not_approved');
-      this.#db.prepare("UPDATE tasks SET status = 'inbox', updated_at = ? WHERE id = ?").run(this.#now(), id);
+      const template = task.cron !== null && task.parent_id === null;
+      if (template && this.#db.prepare('SELECT 1 FROM tasks WHERE parent_id = ? LIMIT 1').get(id)) throw new TaskError('error.already_started');
+      if (task.status !== (template ? 'scheduled' : 'ready') || newest?.kind !== 'approved') throw new TaskError('error.not_approved');
+      if (task.proposed_by !== null) this.#db.prepare('UPDATE tasks SET origin = ?, proposed_by = NULL, owner_request = NULL WHERE id = ?').run(task.proposed_by, id);
+      this.#db.prepare(`UPDATE tasks SET status = 'inbox'${template ? ', run_at = NULL' : ''}, updated_at = ? WHERE id = ?`).run(this.#now(), id);
       this.event(id, 'unapproved', 'user');
     });
     return this.#changed(id);
@@ -610,7 +649,7 @@ export class TaskStore {
   }
 
   createdSince(origin: TaskOrigin, since: number): number {
-    return (this.#db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE origin = ? AND created_at > ?').get(origin, since) as { n: number }).n;
+    return (this.#db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE (origin = ? OR proposed_by = ?) AND created_at > ?').get(origin, origin, since) as { n: number }).n;
   }
 
   waitingSince(olderThanMs: number): Task[] {
