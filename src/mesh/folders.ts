@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { stripHidden } from '../shared/plain-text.ts';
 import { inspectRepo } from '../tools/hooks/git-repo.ts';
 import { isInside } from '../tools/hooks/scope.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../tools/shell/git-env.ts';
@@ -13,14 +14,13 @@ const GIT_TIMEOUT_MS = 15_000;
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const WALK_MAX = 5000;
 const DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$|clock\$)(\..*)?$/iu;
-const PATH_CHARS = /^[\p{L}\p{N}\p{M}\-_./]+$/u;
-const COMMIT = /^[0-9a-f]{40,64}$/u;
+const PATH_CHARS = /^[\p{L}\p{N}\-_./]+$/u;
 
-export interface FolderScan { mode: 'git' | 'plain'; head: string | null; folders: string[]; hidden: number }
+export interface FolderScan { mode: 'git' | 'plain'; folders: string[]; files: string[] }
 
 export function cleanRelPath(input: string, max = 160): string | undefined {
   const path = input.trim().replaceAll('\\', '/').replace(/^(\.\/)+/u, '').replace(/\/+$/u, '');
-  if (!path || Array.from(path).length > max || !PATH_CHARS.test(path)) return undefined;
+  if (!path || Array.from(path).length > max || !PATH_CHARS.test(path) || stripHidden(path) !== path) return undefined;
   const parts = path.split('/');
   if (parts.some(part => part === '' || part === '.' || part === '..' || /[. ]$/u.test(part) || DEVICE.test(part) || /~\d/u.test(part))) return undefined;
   return path;
@@ -54,6 +54,13 @@ export function pathExists(root: string, rel: string): boolean {
   const real = realInside(root, rel);
   if (!real) return false;
   try { const stat = lstatSync(real); return stat.isFile() || stat.isDirectory(); } catch { return false; }
+}
+
+export const dotted = (rel: string): boolean => rel.split('/').some(part => part.startsWith('.'));
+
+export function namesHash(files: readonly string[], rel: string): string {
+  const names = files.filter(file => file.startsWith(`${rel}/`)).sort();
+  return createHash('sha256').update(names.join('\0')).digest('hex').slice(0, 16);
 }
 
 export function listingHash(root: string, rel: string): string | null {
@@ -96,11 +103,10 @@ export async function withGit<T>(root: string, dataDir: string, use: (git: (args
   }
 }
 
-function pick(found: Set<string>): { folders: string[]; hidden: number } {
-  const all = [...found].sort();
-  const shown = all.filter(shownName);
+function pick(found: Set<string>): string[] {
+  const shown = [...found].sort().filter(shownName);
   const deep = shown.length > MAP_PARTS_MAX ? shown.filter(rel => !rel.includes('/')) : shown;
-  return { folders: deep.slice(0, MAP_PARTS_MAX), hidden: all.length - shown.length };
+  return deep.slice(0, MAP_PARTS_MAX);
 }
 
 function walkPlain(root: string): Set<string> {
@@ -123,30 +129,20 @@ function walkPlain(root: string): Set<string> {
 
 export async function scanFolders(root: string, dataDir: string): Promise<FolderScan> {
   const viaGit = await withGit(root, dataDir, async git => {
-    const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.toString('utf8').trim() ?? '';
-    const files = await git(['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
-    if (!files) return undefined;
+    const listed = await git(['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+    if (!listed) return undefined;
+    const files = [...new Set(listed.toString('utf8').split('\0').filter(Boolean))];
     const found = new Set<string>();
-    for (const file of files.toString('utf8').split('\0')) {
+    for (const file of files) {
       const parts = file.split('/').slice(0, -1);
-      for (let depth = 1; depth <= Math.min(MAP_DEPTH, parts.length); depth++) found.add(parts.slice(0, depth).join('/'));
+      for (let depth = 1; depth <= Math.min(MAP_DEPTH, parts.length); depth++) {
+        if (parts[depth - 1]!.startsWith('.')) break;
+        found.add(parts.slice(0, depth).join('/'));
+      }
     }
     const existing = new Set([...found].filter(rel => folderExists(root, rel)));
-    return { mode: 'git' as const, head: COMMIT.test(head) ? head : null, ...pick(existing) };
+    return { mode: 'git' as const, folders: pick(existing), files };
   });
   if (viaGit) return viaGit;
-  return { mode: 'plain', head: null, ...pick(walkPlain(root)) };
-}
-
-export async function changedFolders(root: string, dataDir: string, commits: readonly string[]): Promise<Map<string, string[] | null>> {
-  const out = new Map<string, string[] | null>();
-  const wanted = [...new Set(commits)].filter(commit => COMMIT.test(commit));
-  if (!wanted.length) return out;
-  await withGit(root, dataDir, async git => {
-    for (const commit of wanted) {
-      const diff = await git(['diff', '--name-only', '-z', '--no-ext-diff', '--no-renames', '--diff-filter=AD', commit, '--']);
-      out.set(commit, diff ? diff.toString('utf8').split('\0').filter(Boolean) : null);
-    }
-  });
-  return out;
+  return { mode: 'plain', folders: pick(walkPlain(root)), files: [] };
 }

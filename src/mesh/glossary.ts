@@ -31,7 +31,7 @@ export const glossaryContent = (row: Pick<GlossaryRow, 'term' | 'target'>): stri
 export function cleanTerm(raw: string): string {
   const term = cleanLine(raw);
   if (!term) throw new MeshWriteError('glossary_term_empty');
-  if (term.includes('→')) throw new MeshWriteError('glossary_term_arrow');
+  if (/[→⟶]/u.test(term.normalize('NFKC'))) throw new MeshWriteError('glossary_term_arrow');
   refuseSecret(term, 'term');
   return term;
 }
@@ -39,6 +39,7 @@ export function cleanTerm(raw: string): string {
 export function upsertGlossary(existing: string | undefined, row: GlossaryRow): { content: string; added: boolean } {
   const parsed = parseGlossary(existing ?? '');
   const index = parsed.rows.findIndex(r => termKey(r.term) === termKey(row.term));
+  if (index >= 0 && parsed.rows[index]!.by === 'owner') throw new MeshWriteError('glossary_owner_row');
   if (index < 0 && parsed.rows.length >= GLOSSARY_ROWS_MAX) throw new MeshWriteError('glossary_full', { max: GLOSSARY_ROWS_MAX });
   return { content: upsertLine(existing, HEAD, parsed, index, `${glossaryContent(row)}${marker(row.by, null, row.external)}`), added: index < 0 };
 }

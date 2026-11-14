@@ -12,7 +12,7 @@ import type { TaskStore } from '../tasks/store.ts';
 import type { AcceptanceDoc } from '../projects/acceptance.ts';
 import { dateIn, isMarkdown, listMeshFiles, MeshError, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
 import { acceptanceLines, readMesh, searchMesh, type MeshText } from './search.ts';
-import { changedFolders, cleanRelPath, fileInside, folderExists, listingHash, pathExists, scanFolders, type FolderScan } from './folders.ts';
+import { cleanRelPath, dotted, fileInside, folderExists, listingHash, namesHash, pathExists, scanFolders, type FolderScan } from './folders.ts';
 import { cleanTerm, GLOSSARY_FILE, GLOSSARY_LINE_MAX, glossaryContent, parseGlossary, upsertGlossary } from './glossary.ts';
 import { cleanWhat, MAP_FILE, MAP_LINE_MAX, mapContent, MeshWriteError, parseMap, unlisted, upsertMap, type MapRow, type Writer } from './map.ts';
 import { applyPatch, hasForeignLines, parseNotes, renderState, STATE_FILE, type NoteAuthor, type StateNote, type StatePatch } from './state.ts';
@@ -203,6 +203,7 @@ export class Mesh {
   readonly #persisted = new Map<string, string>();
   readonly #fresh = new Map<string, MapFresh>();
   readonly #refreshing = new Map<string, Promise<void>>();
+  readonly #writes = new Map<string, number>();
   #builds = 0;
 
   constructor(deps: MeshDeps) { this.#d = deps; }
@@ -278,8 +279,9 @@ export class Mesh {
   refreshMap(projectId: string, root = this.#root(projectId)): Promise<void> {
     if (!root) return Promise.resolve();
     const before = this.#refreshing.get(projectId) ?? Promise.resolve();
-    const job: Promise<void> = before.then(() => this.#computeFresh(projectId, root)).then(
-      fresh => { this.#fresh.set(projectId, fresh); },
+    const writes = this.#writes.get(projectId) ?? 0;
+    const job: Promise<void> = before.then(() => scanFolders(root, this.#dataDir)).then(
+      scan => { if ((this.#writes.get(projectId) ?? 0) === writes) this.#fresh.set(projectId, this.#freshFrom(projectId, root, scan)); },
       error => { this.#d.log?.(`[WARN] Could not check the map of product ${projectId}: ${(error as Error).message}`); },
     ).finally(() => { if (this.#refreshing.get(projectId) === job) this.#refreshing.delete(projectId); });
     this.#refreshing.set(projectId, job);
@@ -293,18 +295,13 @@ export class Mesh {
     void this.refreshMap(projectId);
   }
 
-  async #computeFresh(projectId: string, root: string): Promise<MapFresh> {
-    const scan = await scanFolders(root, this.#dataDir);
+  #freshFrom(projectId: string, root: string, scan: FolderScan): MapFresh {
     const rows = this.#mapRows(this.#dir(projectId))?.rows ?? [];
-    const commits = rows.flatMap(row => (row.at?.startsWith('git:') ? [row.at.slice(4)] : []));
-    const changes = scan.mode === 'git' ? await changedFolders(root, this.#dataDir, commits) : new Map<string, string[] | null>();
     const marks = new Map<string, 'missing' | 'stale'>();
     for (const row of rows) {
       if (!folderExists(root, row.path) || (row.entry !== null && !fileInside(root, row.path, row.entry))) { marks.set(row.path, 'missing'); continue; }
       if (row.at?.startsWith('dir:')) { if (listingHash(root, row.path) !== row.at.slice(4)) marks.set(row.path, 'stale'); continue; }
-      if (!row.at?.startsWith('git:')) continue;
-      const changed = changes.get(row.at.slice(4));
-      if (changed === null || changed?.some(file => file.startsWith(`${row.path}/`))) marks.set(row.path, 'stale');
+      if (row.at?.startsWith('git:') && scan.mode === 'git' && namesHash(scan.files, row.path) !== row.at.slice(4)) marks.set(row.path, 'stale');
     }
     return { scan, marks, at: this.#d.now?.() ?? Date.now() };
   }
@@ -326,23 +323,23 @@ export class Mesh {
     const what = cleanWhat(input.what, entry);
     const length = Array.from(mapContent({ path, what, entry })).length;
     if (length > MAP_LINE_MAX) throw new MeshWriteError('map_too_long', { path, length, max: MAP_LINE_MAX });
-    const head = scan.mode === 'git' ? scan.head : null;
-    const hash = head ? null : listingHash(root, path);
-    const at = head ? `git:${head}` : hash ? `dir:${hash}` : null;
+    const hash = scan.mode === 'git' ? null : listingHash(root, path);
+    const at = scan.mode === 'git' ? `git:${namesHash(scan.files, path)}` : hash ? `dir:${hash}` : null;
     const row: MapRow = { path, what, entry, by: writer.by, at, external: writer.external };
     const { content } = upsertMap(existing, row);
     mkdirSync(dir, { recursive: true });
     if (existing !== undefined) this.#backupAs(projectId, 'map', existing);
     replaceFile(file, content);
-    await this.refreshMap(projectId, root);
+    this.#writes.set(projectId, (this.#writes.get(projectId) ?? 0) + 1);
+    this.#fresh.set(projectId, this.#freshFrom(projectId, root, scan));
     return path;
   }
 
   setGlossary(projectId: string, root: string, input: { term: string; points_to: string }, writer: Writer): string {
     const term = cleanTerm(input.term);
     const rel = cleanRelPath(input.points_to);
-    let target = rel && pathExists(root, rel) ? rel : undefined;
-    if (!target) {
+    let target = rel && !dotted(rel) && pathExists(root, rel) ? rel : undefined;
+    if (!target && !(rel && dotted(rel))) {
       try {
         const found = this.#resolve(projectId, input.points_to);
         if (cleanRelPath(found.rel) === found.rel) target = `[${found.rel}](${found.rel})`;
