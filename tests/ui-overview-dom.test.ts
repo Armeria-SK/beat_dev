@@ -50,11 +50,15 @@ const worker = (runs: WorkerStatus['runningAll']): WorkerStatus => ({
 
 interface Server { active: Task[]; finished: (url: URL) => { tasks: Task[]; next: { beforeT: number; beforeId: string } | null; total: number }; hold?: Promise<void> }
 
+const limits: string[] = [];
+
 function serve(server: Server): string[] {
   const seen: string[] = [];
+  limits.length = 0;
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = new URL(String(input), 'http://localhost/');
     seen.push(url.pathname);
+    if (url.pathname === '/api/tasks/finished') limits.push(url.searchParams.get('limit') ?? '');
     if (server.hold) await server.hold;
     const body = url.pathname === '/api/tasks' ? { active: server.active, finished: [] }
       : url.pathname === '/api/tasks/finished' ? server.finished(url)
@@ -79,7 +83,8 @@ const settle = () => update(() => new Promise(resolve => setTimeout(resolve, 20)
 test('Overview（DOM）: 読み込みが終わる前は、タスクの実行を「No product」に出さない。しまった製品の動くタスクは「No product」に Stop つきで出る（backlog 303）', async () => {
   let release!: () => void;
   const hold = new Promise<void>(resolve => { release = resolve; });
-  serve({ active: [task('t-mine', 'running', { project_id: 'p1aaaa' }), task('t-gone', 'running', { project_id: 'gone11' })], finished: noFinished, hold });
+  const goneFailed = task('f-gone', 'failed', { project_id: 'gone11', title: 'Gone failure', completed_at: Date.now() - 1000, updated_at: Date.now() - 1000 });
+  serve({ active: [task('t-mine', 'running', { project_id: 'p1aaaa' }), task('t-gone', 'running', { project_id: 'gone11' })], finished: () => ({ tasks: [goneFailed], next: null, total: 1 }), hold });
   const runs = worker([{ kind: 'task', taskId: 't-mine', runId: 'r1', title: 'Mine run' }, { kind: 'task', taskId: 't-gone', runId: 'r2', title: 'Gone run' }]);
   const { container } = await render(createElement(Overview, props({ worker: runs, projects: [project('p1aaaa')] })));
   await settle();
@@ -91,6 +96,26 @@ test('Overview（DOM）: 読み込みが終わる前は、タスクの実行を�
   const none = container.querySelector('[data-product="none"]');
   assert.match(none?.textContent ?? '', /Gone run/u);
   assert.ok([...(none?.querySelectorAll('button') ?? [])].some(b => b.textContent === 'Stop'));
+  assert.equal(none?.querySelector('[data-archived]')?.textContent, 'archived product', 'しまった製品の動くものには印をつける');
+  assert.equal(container.querySelector('[data-product="p1aaaa"] [data-archived]'), null);
+  assert.equal([...container.querySelectorAll('.ui-home__products')].some(el => el.textContent?.includes('Gone failure')), false, 'しまった製品の失敗は Retry ごと出さない');
+  assert.equal([...(none?.querySelectorAll('button') ?? [])].some(b => b.textContent === 'Retry'), false);
+  assert.equal(none?.textContent?.includes('finished since'), false, 'しまった製品の終わった数は数えない');
+});
+
+test('Overview（DOM）: 製品の一覧を読み終える前（読めないままのときも）は、製品の動くもの・会話・失敗・終わった数を「No product」に出さない（B12 の審査）', async () => {
+  const failedMine = task('f-mine', 'failed', { project_id: 'p1aaaa', title: 'Mine failure', completed_at: Date.now() - 1000, updated_at: Date.now() - 1000 });
+  const doneMine = task('d-mine', 'done', { project_id: 'p1aaaa', title: 'Mine done', completed_at: Date.now() - 2000, updated_at: Date.now() - 2000 });
+  serve({ active: [task('t-mine', 'running', { project_id: 'p1aaaa' })], finished: () => ({ tasks: [failedMine, doneMine], next: null, total: 2 }) });
+  const { container } = await render(createElement(Overview, props({
+    projects: [], projectsLoaded: false, worker: worker([{ kind: 'task', taskId: 't-mine', runId: 'r1', title: 'Mine run' }]),
+    conversations: [{ id: 'c1', title: 'Mine chat', project_id: 'p1aaaa' } as OverviewProps['conversations'][number]],
+    drafts: [{ runId: 'r9', conversationId: 'c1', startedAt: Date.now() - 5000 } as OverviewProps['drafts'][number]],
+  })));
+  await settle();
+  assert.ok(container.querySelector('[data-col]'), '読み込みは終わっている');
+  assert.equal(container.querySelector('[data-product="none"]'), null);
+  for (const text of ['Mine run', 'Mine chat', 'Mine failure', 'finished since']) assert.equal([...container.querySelectorAll('.ui-home__products')].some(el => el.textContent?.includes(text)), false, text);
 });
 
 test('Overview（DOM）: 製品が 5 つ以上の一覧の形でも、動いている製品の行が光る（backlog 306）', async () => {
@@ -131,6 +156,7 @@ test('Overview（DOM）: 行の増えないページが続いても読み足し�
   const { container } = await render(createElement(Overview, props({ projects: [project('p1aaaa')] })));
   await settle();
   assert.equal(seen.filter(path => path === '/api/tasks/finished').length, 3, '行が増えないページで止まる');
+  assert.deepEqual(limits, ['20', '100', '100'], '最初は Kanban の 1 ページ、そのあとは 100 件ずつ');
   const section = container.querySelector('[data-product="p1aaaa"]');
   assert.ok(section);
   assert.equal(section.textContent?.includes('0+'), false);
@@ -153,4 +179,17 @@ test('Overview（DOM）: タスクだけが動いているときは毎秒の時�
   }))));
   await settle();
   assert.equal(delays.includes(1000), true);
+});
+
+test('Overview（DOM）: 一覧の形（製品が 5 つ以上）では、製品の行に時間を出さないので、製品の会話が動いていても毎秒の時計を回さない（B12 の審査）', async () => {
+  const delays: number[] = [];
+  globalThis.setInterval = ((fn: () => void, ms?: number) => { delays.push(ms ?? 0); return realInterval(fn, ms); }) as typeof setInterval;
+  serve({ active: [], finished: noFinished });
+  const projects = ['p1aaaa', 'p2aaaa', 'p3aaaa', 'p4aaaa', 'p5aaaa'].map((id, i) => project(id, { created_at: i }));
+  await render(createElement(Overview, props({
+    projects, conversations: [{ id: 'c1', title: 'Chat', project_id: 'p1aaaa' } as OverviewProps['conversations'][number]],
+    drafts: [{ runId: 'r9', conversationId: 'c1', startedAt: Date.now() - 5000 } as OverviewProps['drafts'][number]],
+  })));
+  await settle();
+  assert.equal(delays.includes(1000), false);
 });

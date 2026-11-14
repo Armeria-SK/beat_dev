@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { ChecklistItem, Project, Task } from '../web/src/api.ts';
 import { buildBoard, cardProject } from '../web/src/ui/kanban.ts';
 import {
-  boardFinished, finishedPaging, finishedSince, hasSomething, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productLookKey, productSection, productTiles, readLastLook,
+  boardFinished, FINISHED_PAGE, finishedPaging, finishedSince, hasSomething, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productLookKey, productSection, productTiles, readLastLook,
   runningRows, scopeRunning, taskOwners, ticksEverySecond, tiles, unownedWaits,
 } from '../web/src/ui/overview.ts';
 
@@ -122,8 +122,8 @@ test('ui/overview: 終わったタスクは、最後に見た時刻より前ま�
   assert.equal(finishedPaging(at(500, 400), true, 100, 2), 'more', '最後に見た時刻にまだ届いていない');
   assert.equal(finishedPaging(at(500, 90), true, 100, 2), 'done', '届いた');
   assert.equal(finishedPaging(at(90), true, 100, 2), 'more', '届いても、板に要る数までは読む');
-  assert.equal(finishedPaging(at(500, 400, 300), true, 100, 2, 3), 'capped', '上限で止まって、まだ届いていない');
-  assert.equal(finishedPaging(at(500, 400, 90), true, 100, 2, 3), 'done');
+  assert.equal(finishedPaging(at(500, 400, 300), true, 100, 2, { cap: 3 }), 'capped', '上限で止まって、まだ届いていない');
+  assert.equal(finishedPaging(at(500, 400, 90), true, 100, 2, { cap: 3 }), 'done');
   const reviewer = [...Array.from({ length: 25 }, (_, i) => task(`a${i}`, 'done', { completed_at: 1000 - i, project_id: 'A' })), task('b', 'failed', { completed_at: 900, project_id: 'B' })];
   let loaded = 0;
   while (finishedPaging(reviewer.slice(0, loaded), loaded < reviewer.length, 50, 20) === 'more') loaded += 20;
@@ -160,22 +160,26 @@ test('ui/overview: 「No product N」は製品の無い待ちだけを数える�
   assert.deepEqual(unownedWaits(null, null, null), { proposals: 0, questions: 0, pending: 0 }, '読み込む前は数えない');
 });
 
-test('ui/overview: 読み込む前はタスクの実行をどこにも置かない。一覧に無い製品（しまった製品）のタスク・会話・失敗は「No product」の節に置く（backlog 303）', () => {
+test('ui/overview: 読み込む前はタスクの実行をどこにも置かない。一覧に無い製品（しまった製品）の動いているタスク・会話は「No product」の節に archived の印つきで置き、失敗と終わった数は出さない（backlog 303・B12 の審査）', () => {
   const input = {
     worker: [{ kind: 'task' as const, taskId: 't-mine', runId: 'r1', title: 'Mine' }, { kind: 'task' as const, taskId: 't-gone', runId: 'r2', title: 'Gone' }, { kind: 'review' as const, taskId: null, runId: 'r3', title: 'review' }],
     drafts: [{ runId: 'r4', conversationId: 'c-gone' }],
     conversations: [{ id: 'c-gone', title: 'Chat gone', project_id: 'gone11' }],
     checklists: new Map<string, ChecklistItem[]>(),
   };
-  const listed = new Set(['p1aaaa']);
-  assert.deepEqual(scopeRunning(input, null, null, listed).worker.map(run => run.runId), ['r3'], '持ち主の分からないタスクの実行は「No product」に出さない');
-  assert.deepEqual(scopeRunning(input, 'p1aaaa', null, listed).worker, []);
+  const shown = new Set(['p1aaaa']);
+  assert.deepEqual(scopeRunning(input, null, null, shown).worker.map(run => run.runId), ['r3'], '持ち主の分からないタスクの実行は「No product」に出さない');
+  assert.deepEqual(scopeRunning(input, 'p1aaaa', null, shown).worker, []);
   const owners = taskOwners([task('t-mine', 'running', { project_id: 'p1aaaa' }), task('t-gone', 'running', { project_id: 'gone11' })]);
-  const done = [task('f-gone', 'failed', { project_id: 'gone11' })];
-  const none = productSection(null, input, owners, done, listed);
-  assert.deepEqual(none.running.map(row => row.runId), ['r2', 'r3', 'r4']);
-  assert.deepEqual(none.failed.map(t => t.id), ['f-gone']);
-  assert.deepEqual(productSection('p1aaaa', input, owners, done, listed).running.map(row => row.runId), ['r1']);
+  const done = [task('f-gone', 'failed', { project_id: 'gone11' }), task('d-gone', 'done', { project_id: 'gone11' }), task('f-none', 'failed')];
+  const none = productSection(null, input, owners, done, shown);
+  assert.deepEqual(none.running.map(row => [row.runId, row.archived ?? false]), [['r2', true], ['r3', false], ['r4', true]]);
+  assert.deepEqual(none.failed.map(t => t.id), ['f-none'], 'しまった製品の失敗は Retry ごと出さない');
+  assert.equal(none.finished, 1, 'しまった製品の終わったものは数えない');
+  assert.deepEqual(productSection('p1aaaa', input, owners, done, shown).running.map(row => [row.runId, row.archived ?? false]), [['r1', false]]);
+  const unknown = productSection(null, input, owners, done);
+  assert.deepEqual(unknown.running.map(row => row.runId), ['r3'], '製品の一覧を読む前は、製品のものを No product に置かない');
+  assert.deepEqual(unknown.failed.map(t => t.id), ['f-none']);
 });
 
 test('ui/overview: 毎秒の時計は、始まった時刻を出す行があるときだけ（backlog 304）', () => {
@@ -187,8 +191,9 @@ test('ui/overview: 毎秒の時計は、始まった時刻を出す行がある�
 
 test('ui/overview: 読み足しは、行が増えないページで止める（届いていなければ capped）。小さな盤は Kanban の最初のページと同じ数だけ（backlog 341）', () => {
   const at = (...stamps: number[]) => stamps.map((s, i) => task(`t${i}`, 'done', { completed_at: s }));
-  assert.equal(finishedPaging(at(500, 400), true, 100, 2, 200, false), 'capped');
-  assert.equal(finishedPaging(at(500, 90), true, 100, 1, 200, false), 'done');
+  assert.equal(finishedPaging(at(500, 400), true, 100, 2, { grew: false }), 'capped');
+  assert.equal(finishedPaging(at(500, 90), true, 100, 1, { grew: false }), 'done');
+  assert.equal(FINISHED_PAGE, 100, '2 ページ目からはサーバーの上限の 100 件ずつ');
   const many = at(...Array.from({ length: 45 }, (_, i) => 1000 - i));
   assert.deepEqual(boardFinished(many, false, 20), { finished: many.slice(0, 20), hasMore: true });
   assert.deepEqual(boardFinished(many.slice(0, 5), false, 20), { finished: many.slice(0, 5), hasMore: false });

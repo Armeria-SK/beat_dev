@@ -108,25 +108,39 @@ export function unownedWaits(active: ReadonlyArray<Pick<Task, 'status' | 'projec
   };
 }
 
-const placed = (owner: string | null | undefined, listed: ReadonlySet<string> | undefined): string | null =>
-  (owner && (!listed || listed.has(owner)) ? owner : null);
+const ARCHIVED = Symbol('archived');
+type Place = string | null | typeof ARCHIVED;
 
-export function scopeRunning(input: RunningInput, projectId: string | null, tasks: Owners | null, listed?: ReadonlySet<string>): RunningInput {
+const placeOf = (owner: string | null | undefined, shown: ReadonlySet<string> | undefined): Place =>
+  (!owner ? null : !shown || shown.has(owner) ? owner : ARCHIVED);
+
+const fits = (place: Place, projectId: string | null): boolean => place === projectId || (projectId === null && place === ARCHIVED);
+
+export function scopeRunning(input: RunningInput, projectId: string | null, tasks: Owners | null, shown?: ReadonlySet<string>): RunningInput {
   return {
     ...input,
     worker: input.worker.filter(run => {
       if (run.kind !== 'task' || !run.taskId) return projectId === null;
-      return tasks !== null && placed(tasks.get(run.taskId), listed) === projectId;
+      return tasks !== null && fits(placeOf(tasks.get(run.taskId), shown), projectId);
     }),
-    conversations: input.conversations.filter(c => placed(c.project_id, listed) === projectId),
+    conversations: input.conversations.filter(c => fits(placeOf(c.project_id, shown), projectId)),
   };
 }
 
-export interface ProductSection { running: RunningRow[]; failed: Task[]; finished: number }
+export type PlacedRow = RunningRow & { archived?: boolean };
+export interface ProductSection { running: PlacedRow[]; failed: Task[]; finished: number }
 
-export function productSection(projectId: string | null, input: RunningInput, tasks: Owners | null, done: readonly Task[], listed?: ReadonlySet<string>): ProductSection {
-  const mine = done.filter(task => placed(task.project_id, listed) === projectId);
-  return { running: runningRows(scopeRunning(input, projectId, tasks, listed)), failed: mine.filter(task => task.status === 'failed'), finished: mine.length };
+export function productSection(projectId: string | null, input: RunningInput, tasks: Owners | null, done: readonly Task[], shown?: ReadonlySet<string>): ProductSection {
+  const mine = done.filter(task => placeOf(task.project_id, shown) === projectId);
+  const scoped = scopeRunning(input, projectId, tasks, shown);
+  const archived = new Set<string>();
+  if (projectId === null) {
+    for (const run of scoped.worker) if (run.taskId && tasks && placeOf(tasks.get(run.taskId), shown) === ARCHIVED) archived.add(run.runId);
+    const gone = new Set(scoped.conversations.filter(c => placeOf(c.project_id, shown) === ARCHIVED).map(c => c.id));
+    for (const draft of scoped.drafts) if (gone.has(draft.conversationId)) archived.add(draft.runId);
+  }
+  const running = runningRows(scoped).map((row): PlacedRow => (archived.has(row.runId) ? { ...row, archived: true } : row));
+  return { running, failed: mine.filter(task => task.status === 'failed'), finished: mine.length };
 }
 
 export const ticksEverySecond = (rows: readonly RunningRow[]): boolean => rows.some(row => row.startedAt !== null);
@@ -136,7 +150,9 @@ export const hasSomething = (section: ProductSection): boolean => section.runnin
 export const FINISHED_CAP = 200;
 export type Paging = 'more' | 'done' | 'capped';
 
-export function finishedPaging(loaded: ReadonlyArray<Pick<Task, 'completed_at' | 'updated_at'>>, hasNext: boolean, since: number, min: number, cap = FINISHED_CAP, grew = true): Paging {
+export const FINISHED_PAGE = 100;
+
+export function finishedPaging(loaded: ReadonlyArray<Pick<Task, 'completed_at' | 'updated_at'>>, hasNext: boolean, since: number, min: number, { cap = FINISHED_CAP, grew = true }: { cap?: number; grew?: boolean } = {}): Paging {
   if (!hasNext) return 'done';
   const reached = loaded.length > 0 && loaded.reduce((low, task) => Math.min(low, finishedAt(task)), Number.POSITIVE_INFINITY) <= since;
   if (!grew) return reached ? 'done' : 'capped';

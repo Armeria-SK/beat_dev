@@ -7,7 +7,7 @@ import { useNow } from '../hooks.ts';
 import { buildBoard, cardProject, KANBAN_PAGE, mergeFinished, RUNS_WINDOW, sessionCards, type Card } from '../kanban.ts';
 import type { LiveDraft } from '../live-state.ts';
 import {
-  boardFinished, finishedPaging, finishedSince, hasSomething, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productSection, taskOwners, ticksEverySecond, tiles, unownedWaits, workerLine,
+  boardFinished, FINISHED_PAGE, finishedPaging, finishedSince, hasSomething, holders, LAST_LOOK_KEY, listsProducts, miniBoard, productSection, taskOwners, ticksEverySecond, tiles, unownedWaits, workerLine,
   type Paging, type ProductSection,
 } from '../overview.ts';
 import { Avatar, Button, CountBadge, EmptyState, Icon, Notice } from '../parts.tsx';
@@ -32,8 +32,6 @@ export interface OverviewProps {
 
 interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; capped: boolean }
 
-const FINISHED_PAGE = 100;
-
 async function readFinishedSince(since: number): Promise<{ tasks: Task[]; next: FinishedCursor | null; total: number; capped: boolean }> {
   let tasks: Task[] = [];
   let next: FinishedCursor | null = null;
@@ -45,7 +43,7 @@ async function readFinishedSince(since: number): Promise<{ tasks: Task[]; next: 
     tasks = mergeFinished(tasks, page.tasks);
     next = page.next;
     total = page.total;
-    paging = finishedPaging(tasks, next !== null, since, KANBAN_PAGE, undefined, tasks.length > before);
+    paging = finishedPaging(tasks, next !== null, since, KANBAN_PAGE, { grew: tasks.length > before });
   }
   return { tasks, next, total, capped: paging === 'capped' };
 }
@@ -73,19 +71,19 @@ export function Overview({ waiting, conversations, drafts, checklists, worker, o
     const tasks = data ? taskOwners(data.active) : null;
     const done = data ? finishedSince(data.finished, look.at, Number.POSITIVE_INFINITY).tasks : [];
     const order = overviewOrder(projects);
-    const listed = new Set(order.map(p => p.id));
+    const shown = projectsLoaded ? new Set(order.map(p => p.id)) : undefined;
     return {
-      products: order.map((project): Placed => ({ project, ...productSection(project.id, input, tasks, done, listed) })),
-      none: productSection(null, input, tasks, done, listed),
+      products: order.map((project): Placed => ({ project, ...productSection(project.id, input, tasks, done, shown) })),
+      none: productSection(null, input, tasks, done, shown),
     };
-  }, [worker, drafts, conversations, checklists, data, look.at, projects]);
-  const now = useNow(ticksEverySecond([...placed.none.running, ...placed.products.flatMap(p => p.running)]) ? 1000 : 30_000);
+  }, [worker, drafts, conversations, checklists, data, look.at, projects, projectsLoaded]);
+  const asList = listsProducts(placed.products.length);
+  const now = useNow(ticksEverySecond([...placed.none.running, ...(asList ? [] : placed.products.flatMap(p => p.running))]) ? 1000 : 30_000);
   const stats = tiles(waiting, waiting.pending);
   const unowned = unownedWaits(data?.active ?? null, questionCounts, pendingCounts);
   const line = workerLine(worker, now);
   const sheenAt = placed.products.find(p => p.running.length > 0)?.project.id ?? null;
   const lookText = formatDateTimeSmart(look.at, now);
-  const listed = listsProducts(placed.products.length);
 
   const setPaused = (paused: boolean) => void act('worker', async () => {
     onWorker(await api.setWorker({ paused }));
@@ -135,7 +133,7 @@ export function Overview({ waiting, conversations, drafts, checklists, worker, o
         />
       )}
 
-      {listed ? (
+      {asList ? (
         <section className="bt-section bt-rise ui-home__products" style={{ '--bt-i': 4 } as CSSProperties} aria-label={t('ui.home.products', placed.products.length)}>
           <ul className="bt-list">
             {placed.products.map(p => {

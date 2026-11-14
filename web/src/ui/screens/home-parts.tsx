@@ -6,12 +6,12 @@ import { plainLine } from '../../task-meta.ts';
 import type { Card, ColumnId } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
-import { readLastLook, type MiniColumn, type RunningRow, type Tile, type TileId } from '../overview.ts';
+import { readLastLook, type MiniColumn, type PlacedRow, type RunningRow, type Tile, type TileId } from '../overview.ts';
 import { Button, countText, Icon, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
 
-export const RELOAD_DELAY_MS = 150;
+const RELOAD_DELAY_MS = 150;
 const TILE_LABEL = { proposals: 'ui.overview.proposals', questions: 'ui.overview.questions', pending: 'ui.overview.pending' } as const satisfies Record<TileId, string>;
 const TILE_SOME = { proposals: 'ui.overview.proposals.some', questions: 'ui.overview.questions.some', pending: 'ui.overview.pending.some' } as const satisfies Record<TileId, string>;
 const TILE_NONE = { proposals: 'ui.overview.proposals.none', questions: 'ui.overview.questions.none', pending: 'ui.overview.pending.none' } as const satisfies Record<TileId, string>;
@@ -137,7 +137,7 @@ export function MiniBoard({ columns, label, index, className, tagOf }: { columns
   );
 }
 
-export function RunningItems({ rows, now, busy, onStop, sheen }: { rows: RunningRow[]; now: number; busy: ReadonlySet<string>; onStop: (row: RunningRow) => void; sheen: boolean }) {
+export function RunningItems({ rows, now, busy, onStop, sheen }: { rows: PlacedRow[]; now: number; busy: ReadonlySet<string>; onStop: (row: RunningRow) => void; sheen: boolean }) {
   const t = useT();
   const title = (row: RunningRow): string => (row.kind === 'review' ? t('ui.overview.review') : row.title || t('ui.session.untitled'));
   const meta = (row: RunningRow): string => [
@@ -153,6 +153,7 @@ export function RunningItems({ rows, now, busy, onStop, sheen }: { rows: Running
         <span className="bt-row__sub bt-meta">{meta(row)}</span>
       </div>
       <div className="bt-row__end">
+        {row.archived && <span className="bt-tag" data-archived>{t('ui.pf.someArchived')}</span>}
         <Pill tone="running">{t('ui.kanban.running')}</Pill>
         <Button variant="ghost" small disabled={busy.has(row.key)} onClick={() => onStop(row)}>{t('ui.task.stop')}</Button>
       </div>
