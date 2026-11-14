@@ -113,7 +113,7 @@ function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
     || (/[\\/:]/u.test(t) ? !(/\.(?:exe|com|ps1)$/iu.test(t) && ctx.fileExists?.(t) === true) : ['.cmd', '.bat'].includes(ctx.external?.(t.toLowerCase()).ext ?? '.exe'));
   const trimmed = name.text.replace(/[ .]+$/u, '') || name.text;
   if (name.dynamic || cmdTarget(name.text) || cmdTarget(trimmed)) winArgs(trimmed, st.words, '.cmd', acc);
-  else cmdHostArgs(trimmed, st.words, cmdTarget, acc);
+  else cmdHostArgs(trimmed, st, cmdTarget, acc);
 }
 
 export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {

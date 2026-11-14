@@ -57,6 +57,7 @@ const en = {
   'list.git_write': 'This is a git operation that writes ({cmd})',
   'list.git_push': 'Sending to a remote (git push)',
   'list.winargs': 'The arguments do not follow the rules for passing them to a program on Windows ({detail})',
+  'list.cmd_syntax': 'cmd.exe reads {detail} as its own syntax (it can chain another command, redirect or expand a variable), so it is checked every time and the allow list does not lift it',
   'list.winargs_ps': 'Windows PowerShell 5.1 does not pass this argument to the program as written (an empty argument is dropped, -name:value stays one argument, and a comma list with spaces or empty items becomes separate arguments): {detail}',
   'list.ps_write': 'In PowerShell, "{cmd}" writes, creates, moves or deletes files, so it is not run without a check (you are asked every time). To write without a check, use the file_write tool',
   'list.ps_pipe': 'A value that comes through the pipe can bind to an argument of "{cmd}" (where it writes or connects to), so where it acts is unknown',
