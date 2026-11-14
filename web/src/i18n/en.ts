@@ -899,6 +899,7 @@ export const en = {
   'ui.skills.register': 'Register',
   'ui.skills.discard': 'Discard',
   'ui.skills.drafted': (when: string) => `drafted ${when}`,
+  'ui.skills.draftedFrom': (title: string, when: string) => `drafted from “${title}” · ${when}`,
   'ui.skills.draftNew': 'new skill',
   'ui.skills.draftUpdate': 'changes a registered skill',
   'ui.skills.discardWarn': 'Discard · cannot be undone',
