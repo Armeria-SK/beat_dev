@@ -8,6 +8,7 @@ import { ProviderError, providerError, type Env, type FetchLike, type ModelReque
 
 type Block = Anthropic.ContentBlockParam;
 const EPHEMERAL = { type: 'ephemeral' } as const;
+const ANTHROPIC_URL = 'https://api.anthropic.com';
 
 const imageBlock = (img: ImageRef): Anthropic.ImageBlockParam => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType as 'image/png', data: img.data } });
 
@@ -94,7 +95,8 @@ export class AnthropicAdapter implements ProviderAdapter {
         apiKey: key ?? null,
         maxRetries: 0, // 再試行はエンジン側で一本化する（試行回数を engine_runs に正しく残すため）
         timeout: this.provider.timeoutMs,
-        ...(this.provider.baseUrl ? { baseURL: this.provider.baseUrl } : {}),
+        baseURL: this.provider.baseUrl ?? ANTHROPIC_URL,
+        fetchOptions: { redirect: 'error' },
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
       });
       this.#clientKey = key;

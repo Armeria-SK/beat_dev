@@ -426,3 +426,40 @@ test('Anthropic: 暗号化なしの http:// の外の送り先には、鍵を付
   assert.equal(sent.length, 1, 'この PC の中の http:// は今までどおり通す');
   assert.equal(sent[0]!.key, 'sk-ant-test-0000000000000000');
 });
+
+test('Anthropic: 転送（リダイレクト）は追わない。転送先に鍵が届かない（probe と stream の両方）', async () => {
+  const other = await fakeServer((_req, _body, res) => { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{}'); });
+  const first = await fakeServer((req, _body, res) => { res.writeHead(307, { Location: `${other.url.replace('127.0.0.1', 'localhost')}${req.url ?? '/'}` }); res.end(); });
+  try {
+    const adapter = new AnthropicAdapter({ ...anthropicProvider, baseUrl: first.url }, { ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000' });
+    const probed = await adapter.probe(model({ contextLength: undefined } as unknown as Partial<ModelConfig>), 65536);
+    assert.notEqual(probed.status, 'ok');
+    const error = await rejection(collect(adapter.stream(request(model()))));
+    assert.ok(!error.message.includes('sk-ant-test'));
+    assert.equal(first.requests.length, 2, '設定の送り先には probe と stream が 1 回ずつ届く');
+    assert.equal(first.requests[0]!.headers['x-api-key'], 'sk-ant-test-0000000000000000');
+    assert.equal(other.requests.length, 0, '転送先には何も届かない');
+  } finally { await first.close(); await other.close(); }
+});
+
+test('Anthropic: baseUrl を書いていなければ、環境変数 ANTHROPIC_BASE_URL があっても送り先は api.anthropic.com のまま', async () => {
+  const lure = await fakeServer((_req, _body, res) => { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{}'); });
+  const before = process.env.ANTHROPIC_BASE_URL;
+  process.env.ANTHROPIC_BASE_URL = lure.url;
+  try {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      urls.push(String(input instanceof Request ? input.url : input));
+      return new Response('{"type":"error","error":{"type":"not_found_error","message":"no"}}', { status: 404, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const adapter = new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000' }, fetchImpl);
+    await adapter.probe(model({ contextLength: undefined } as unknown as Partial<ModelConfig>), 65536);
+    await rejection(collect(adapter.stream(request(model()))));
+    assert.equal(urls.length, 2);
+    for (const url of urls) assert.ok(url.startsWith('https://api.anthropic.com/'), url);
+    assert.equal(lure.requests.length, 0);
+  } finally {
+    if (before === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = before;
+    await lure.close();
+  }
+});
