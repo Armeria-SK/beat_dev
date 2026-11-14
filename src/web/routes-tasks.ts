@@ -266,7 +266,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     return null;
   };
   router.add('GET', '/api/notifications', ({ res }) => sendJson(res, 200, {
-    notifications: app.notifications.list().map(n => ({ ...n, project_id: projectOfLink(n.link) })), unread: app.notifications.unread(),
+    notifications: app.notifications.list().map(n => ({ ...n, project_id: n.project_id ?? projectOfLink(n.link) })), unread: app.notifications.unread(),
   }));
   router.add('POST', '/api/notifications/read', async ({ req, res }) => {
     const body = requireObject(await readJson(req));

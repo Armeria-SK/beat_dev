@@ -65,12 +65,14 @@ import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
 import { pendingDecided, sweepPendingWaits, type PendingWakeDeps } from './tasks/pending-wake.ts';
-import { QuestionStore } from './questions/store.ts';
+import { QuestionStore, type QuestionChange, type QuestionRow } from './questions/store.ts';
 import { Uploads } from './uploads/store.ts';
 import { PendingStore, type PendingChange, type PendingRow } from './pending/store.ts';
 import { pendingNote } from './pending/notes.ts';
 import { parentOf, replayAction } from './pending/replay.ts';
 import { pendingText } from './shared/messages/pending.ts';
+import { notifyText } from './shared/messages/notify.ts';
+import { BLOCKING_QUESTION_KEY } from './shared/notification-list.ts';
 import { ToolRegistry } from './tools/registry.ts';
 import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
@@ -207,7 +209,7 @@ export class App {
       planHash: id => { try { return this.plans.view(id).hash; } catch { return null; } },
     });
     this.acceptance.repairAll(this.log);
-    this.questions = new QuestionStore(this.db, { now, onChange: change => this.bus.publish({ type: 'question.changed', ...change }), tasks: this.tasks, projects: this.projects, acceptance: this.acceptance });
+    this.questions = new QuestionStore(this.db, { now, onChange: change => { this.bus.publish({ type: 'question.changed', ...change }); this.#questionChanged(change); }, tasks: this.tasks, projects: this.projects, acceptance: this.acceptance });
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log, () => this.registry.secrets());
@@ -310,8 +312,9 @@ export class App {
   // もう答えようのない大事な未読を既読にする（片づいたときに既読にする仕組みの前からあった通知と、落ちて承認の札ごと消えた通知）。
   // 起動直後は承認の札がひとつも無いので、承認待ちは全部。返事待ち・失敗は、タスクが無いか、今その状態でないものだけ既読にする
   settleStaleNotifications(): void {
-    const stale = this.notifications.list(0).filter(n => {
+    const stale = [...this.notifications.list(0).filter(n => n.kind !== 'question_new'), ...this.notifications.unreadOf('question_new')].filter(n => {
       if (n.kind === 'approval_needed') return !n.dedup_key?.startsWith('pending:') || !this.#pendingScopeWaits(n.dedup_key);
+      if (n.kind === 'question_new') return this.questions.get(questionIdOf(n.dedup_key))?.status !== 'open';
       if (!n.link?.startsWith('#/tasks/')) return false;
       const task = this.tasks.get(n.link.slice('#/tasks/'.length));
       return task === undefined || task.status !== (n.kind === 'task_waiting' ? 'waiting' : 'failed');
@@ -442,9 +445,10 @@ export class App {
       const language = languageOf(this.config());
       const task = scope.taskId ? this.tasks.get(scope.taskId) : undefined;
       if (row.status === 'waiting') {
+        const projectId = row.project_id ?? task?.project_id ?? this.conversations.projectOf(scope.conversationId);
         this.notifications.notify({
           kind: 'approval_needed', title: task ? pendingText(language, 'notify_title_task', { title: task.title }) : pendingText(language, 'notify_title_conversation'),
-          body: redactSecrets(`#${row.id} ${row.reason}`), link: '#/pending', dedupKey: scope.key,
+          body: redactSecrets(`#${row.id} ${row.reason}`), link: projectId ? `#/pending/${projectId}` : '#/pending', dedupKey: scope.key, projectId,
         });
         return;
       }
@@ -454,6 +458,21 @@ export class App {
       if (task) this.tasks.event(task.id, 'pending', 'owner', note.event);
       this.engine.addNote(scope.conversationId, note.text, note.fetched);
     } catch (error) { this.log(`[ERROR] Failed to record the result of pending item #${id}: ${(error as Error).message}`); }
+  }
+
+  #questionChanged(change: QuestionChange): void {
+    try {
+      const row = this.questions.get(change.id);
+      if (!row) return;
+      const dedupKey = questionKey(row);
+      if (change.status === 'answered') { this.notifications.settle('question_new', { dedupKey }); return; }
+      const language = languageOf(this.config());
+      const task = row.blocking === 1 && row.task_id ? this.tasks.get(row.task_id) : undefined;
+      this.notifications.notify({
+        kind: 'question_new', title: task ? taskText(language, 'notify.task_question', { title: task.title }) : notifyText(language, row.blocking === 1 ? 'question_new_blocking' : 'question_new'), body: row.question,
+        link: row.project_id ? `#/questions/${row.project_id}` : '#/questions', dedupKey, projectId: row.project_id,
+      });
+    } catch (error) { this.log(`[ERROR] Failed to notify about question #${change.id}: ${(error as Error).message}`); }
   }
 
   #wakeDeps(): PendingWakeDeps {
@@ -482,4 +501,11 @@ export class App {
     this.engine.stopAll();
     this.db.close();
   }
+}
+
+const questionKey = (row: Pick<QuestionRow, 'id' | 'blocking'>): string => `${row.blocking === 1 ? BLOCKING_QUESTION_KEY : 'question:'}${row.id}`;
+
+function questionIdOf(key: string | null): number {
+  const id = Number(key?.slice(key.lastIndexOf(':') + 1));
+  return Number.isSafeInteger(id) ? id : 0;
 }
