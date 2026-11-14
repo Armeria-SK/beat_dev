@@ -980,3 +980,230 @@ test('p4-build-judge D1: GIT_DIR・GIT_COMMON_DIR・GIT_WORK_TREE を文の前�
   }
   assert.deepEqual(leaked, [], '判定役を飛ばした形');
 });
+
+const authorOf = (dir: string): string => git(dir, 'log', '-1', '--format=%an <%ae>').trim();
+const leaksOf = async (run: (command: string) => Promise<{ decidedBy: string }>, commands: readonly string[]): Promise<string[]> => {
+  const leaked: string[] = [];
+  for (const command of commands) {
+    const outcome = await run(command);
+    if (outcome.decidedBy === 'product-git' || outcome.decidedBy === 'product-code') leaked.push(`${command} -> ${outcome.decidedBy}`);
+  }
+  return leaked;
+};
+
+test('p4-build-judge P2-1: git -C <製品の中のフォルダ> の add と、-c user.name / -c user.email を付けた commit は判定役を呼ばずに動く（product-git）', { skip: !gitAvailable && 'git が無い' }, async t => {
+  for (const shell of [undefined, 'bash'] as const) {
+    if (shell === 'bash' && !bashAvailable) continue;
+    const bash = shell === 'bash' || !WIN;
+    const r = rig(t, shell ? { mutate: c => { c.tools.shell.shell = shell; } } : {});
+    initRepo(r.root);
+    mkdirSync(join(r.root, 'sub'), { recursive: true });
+    mkdirSync(join(r.root, 'my app'), { recursive: true });
+    r.judge.answer = '{"decision":"ask","reason":"check"}';
+    const root = fwd(r.root);
+    const label = (text: string) => `${shell ?? 'default'}: ${text}`;
+    writeFileSync(join(r.root, 'a.txt'), 'x');
+    const first = await r.shell(`git -C "${root}" add -A ${bash ? '&&' : ';'} git -C "${root}" -c user.name=Beat -c user.email=beat@example.invalid commit -m "first"`);
+    assert.equal(first.decidedBy, 'product-git', label(first.output.content));
+    assert.equal(commits(r.root), '2', label('コミットができている'));
+    assert.equal(authorOf(r.root), 'Beat <beat@example.invalid>', label('-c の名前とアドレスで書かれている'));
+    writeFileSync(join(r.root, 'my app', 'b.txt'), 'x');
+    const spaced = await r.shell(`git -C "${root}/my app" add b.txt`);
+    assert.equal(spaced.decidedBy, 'product-git', label(spaced.output.content));
+    const named = await r.shell(`git -C "my app" -c "user.name=Beat Bot" commit -m "second"`);
+    assert.equal(named.decidedBy, 'product-git', label(named.output.content));
+    assert.equal(authorOf(r.root), 'Beat Bot <beat@test.invalid>', label('空白を含む名前'));
+    writeFileSync(join(r.root, 'sub', 'c.txt'), 'x');
+    const sub = await r.shell(`git -C sub add -A ${bash ? '&&' : ';'} git -C sub -c USER.EMAIL=sub@example.invalid commit -m third`);
+    assert.equal(sub.decidedBy, 'product-git', label(sub.output.content));
+    assert.equal(authorOf(r.root), 'beat test <sub@example.invalid>', label('サブフォルダへの -C'));
+    writeFileSync(join(r.root, 'd.txt'), 'x');
+    const up = await r.call('shell_run', { command: `git -C .. add d.txt ${bash ? '&&' : ';'} git -C .. commit -m fourth`, cwd: join(r.root, 'sub') });
+    assert.equal(up.decidedBy, 'product-git', label(up.output.content));
+    const only = await r.shell('git -c user.name=Solo commit --allow-empty -m fifth');
+    assert.equal(only.decidedBy, 'product-git', label(only.output.content));
+    assert.equal(commits(r.root), '6', label('5 つのコミット'));
+    assert.equal(r.judge.calls.length, 0, label('判定役は呼ばれない'));
+    assert.equal(r.waiting().length, 0, label('Pending に積まれない'));
+  }
+});
+
+test('p4-build-judge P2-2: -c のほかのキー・= の無い形・実行時に決まる値・1 語の -cuser.name=x・--config-env・commit でないサブコマンドは判定役を飛ばさない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  writeFileSync(join(r.root, 'README.md'), 'changed\n');
+  git(r.root, 'add', 'README.md');
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  const keys = ['core.hooksPath=x', 'core.sshCommand=x', 'core.editor=x', 'core.fsmonitor=x', 'alias.x=status', 'credential.helper=x', 'include.path=x', 'user.signingkey=x', 'gpg.program=x', 'commit.gpgsign=true',
+    'user.namex=a', 'user.name.x=a', 'xuser.name=a', 'user.name', 'user.email', 'user.=a', 'user.useConfigOnly=true'];
+  const commands = [
+    ...keys.map(key => `git -c ${key} commit -m x`),
+    ...keys.slice(0, 10).map(key => `git -c user.name=a -c ${key} commit -m x`),
+    ...keys.slice(0, 10).map(key => `git -c ${key} -c user.email=a@b.invalid commit -m x`),
+    'git -cuser.name=x commit -m x', 'git -c user.name=a -cuser.email=b commit -m x', 'git --config-env=user.name=V commit -m x', 'git --config-env user.name=V commit -m x',
+    'git -c user.name=$X commit -m x', 'git -c "user.name=$X" commit -m x', 'git -c "user.name=$(whoami)" commit -m x', 'git -c $X commit -m x', 'git -c user.name=a* commit -m x',
+    'git -c user.name=a -c user.name=b commit -m x', 'git -c user.email=a -c user.email=b commit -m x', 'git -c user.name=a -c USER.NAME=b commit -m x',
+    'git -c user.name=a add -A', 'git -c user.name=a add README.md', 'git -c user.name=a push', 'git -c user.name=a config user.name b', 'git -c user.name=a rebase main', 'git -c user.name=a status',
+    'git -c user.name=a log', 'git -c user.name=a', 'git -c user.name=a commit-tree HEAD', 'git -c user.name=a merge x', 'git -c user.name=a -c user.email=b tag v1', 'git -c user.email=b stash',
+    'git -c user.name=a $X -m x', 'git -c user.name=a "commit" -m x --amend --reset-author -F msg.txt',
+    'git --no-pager -c user.name=a commit -m x', 'git -P -c user.name=a commit -m x', 'git --no-optional-locks -c user.name=a commit -m x', 'git -c user.name=a --no-pager commit -m x',
+    'git --exec-path=x -c user.name=a commit -m x', 'git -c user.email=a --git-dir=.git commit -m x', 'git -c user.name=a --work-tree=. commit -m x', 'git -c user.name=a -c commit -m x',
+  ];
+  assert.deepEqual(await leaksOf(r.shell, commands), [], '判定役を飛ばした形');
+  assert.equal(commits(r.root), '1', '何もコミットされていない');
+});
+
+test('p4-build-judge P2-3: -C が製品の外・外へ出るリンク・無いフォルダ・実行時に決まる語・パターン・UNC・~・ドライブ相対・2 つの -C、--git-dir・--work-tree・--namespace は判定役を飛ばさない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t);
+  initRepo(r.root);
+  const other = join(r.paths.workspace, 'other');
+  initRepo(other);
+  mkdirSync(join(r.root, 'sub'), { recursive: true });
+  linkDir(other, join(r.root, 'link'));
+  writeFileSync(join(r.root, 'n.txt'), 'x');
+  writeFileSync(join(other, 'n.txt'), 'x');
+  writeFileSync(join(r.root, 'file.txt'), 'x');
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  const drive = /^[A-Za-z]:/u.exec(r.root)?.[0] ?? 'C:';
+  const targets = [
+    `-C "${fwd(other)}"`, '-C ../other', '-C sub/../../other', '-C link', `-C "${fwd(r.root)}/link"`, '-C missing', '-C sub/missing', '-C file.txt', '-C $X', '-C "$X"', '-C su*', '-C s?b',
+    '-C //server/share/x', '-C \\\\server\\share\\x', '-C "\\\\?\\C:\\Windows"', '-C ~', '-C ~/x', `-C ${drive}sub`, `-C ${drive}`, '-C sub -C ..', '-C . -C .', '-C sub -C sub',
+    '--git-dir=.git', '--git-dir .git', '--work-tree=.', '--work-tree .', '--namespace=x', '--namespace x', '-C sub --git-dir=../.git', '--git-dir=.git -C sub', '-C sub --work-tree=..',
+    '--exec-path=x', '-C', '-Csub', '--attr-source=HEAD', '--super-prefix=x', '-C sub --no-pager', '--no-pager -C sub', '-P -C sub', '--no-optional-locks -C sub', '--bare -C sub', '-C sub -p',
+  ];
+  const commands = targets.flatMap(target => [`git ${target} add -A`, `git ${target} add n.txt`, `git ${target} commit -m x`, `git ${target} -c user.name=a commit -m x`]);
+  assert.deepEqual(await leaksOf(r.shell, commands), [], '判定役を飛ばした形');
+  assert.equal(commits(r.root), '1', '製品のリポジトリは変わっていない');
+  assert.equal(commits(other), '1', '製品の外のリポジトリは変わっていない');
+  assert.equal(git(other, 'diff', '--cached', '--name-only').trim(), '', '製品の外のリポジトリに何も足されていない');
+  assert.equal(git(r.root, 'diff', '--cached', '--name-only').trim(), '', '製品のリポジトリに何も足されていない');
+  for (const command of ['git -C sub add -A', `git -C "${fwd(r.root)}" commit -m ok`]) assert.equal((await r.shell(command)).decidedBy, 'product-git', `製品の中の -C は順 4: ${command}`);
+});
+
+test('p4-build-judge P2-4: -C の先が、フックの置き場の設定・フックのファイル・ふつうでない設定のあるリポジトリか、.git のファイルが製品の外を指すフォルダなら判定役を飛ばさない', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const make: Record<string, (nested: string, outside: string) => void> = {
+    hooksPath: nested => { initRepo(nested); git(nested, 'config', 'core.hooksPath', 'myhooks'); },
+    hookFile: nested => { initRepo(nested); writeFileSync(join(nested, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 0\n'); },
+    oddConfig: nested => { initRepo(nested); git(nested, 'config', 'core.fsmonitor', 'x'); },
+    gitdirOutside: (nested, outside) => { initRepo(outside); mkdirSync(nested, { recursive: true }); writeFileSync(join(nested, '.git'), `gitdir: ${fwd(join(outside, '.git'))}\n`); },
+  };
+  const leaked: string[] = [];
+  for (const [name, build] of Object.entries(make)) {
+    for (const command of ['git -C nested add -A', 'git -C nested add n.txt', 'git -C nested commit -m x', 'git -C nested -c user.name=a commit -m x', 'git -C nested/deep add -A', 'git -C nested/deep commit -m x', 'cwd: git add -A', 'cwd: git add n.txt', 'cwd: git commit -m x']) {
+      const r = rig(t);
+      initRepo(r.root);
+      const nested = join(r.root, 'nested');
+      const outside = join(r.paths.workspace, 'other');
+      build(nested, outside);
+      mkdirSync(join(nested, 'deep'), { recursive: true });
+      writeFileSync(join(nested, 'n.txt'), 'x');
+      writeFileSync(join(nested, 'deep', 'n.txt'), 'x');
+      if (command.includes('commit')) spawnSync('git', ['add', 'n.txt'], { cwd: nested });
+      r.judge.answer = '{"decision":"ask","reason":"check"}';
+      const outcome = command.startsWith('cwd: ') ? await r.call('shell_run', { command: command.slice(5), cwd: nested }) : await r.shell(command);
+      if (outcome.decidedBy === 'product-git' || outcome.decidedBy === 'product-code') leaked.push(`${name}: ${command} -> ${outcome.decidedBy}`);
+    }
+  }
+  assert.deepEqual(leaked, [], '判定役を飛ばした形');
+  const r = rig(t);
+  initRepo(r.root);
+  initRepo(join(r.root, 'nested'));
+  writeFileSync(join(r.root, 'nested', 'n.txt'), 'x');
+  const plain = await r.shell('git -C nested add -A');
+  assert.equal(plain.decidedBy, 'product-git', `製品の中の、ふつうの入れ子のリポジトリは順 4: ${plain.output.content}`);
+  assert.equal(git(join(r.root, 'nested'), 'diff', '--cached', '--name-only').trim(), 'n.txt');
+});
+
+test('p4-build-judge P2-5: 新しい綴りでも、秘密らしいファイルを足す形と鍵らしい文字のあるコミットは、判定役を呼ばずに owner で積まれる（-C のフォルダから調べる）', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+  const cases: Array<{ name: string; command: string; cwd?: string; reason: RegExp | null; setup?: (root: string) => void; repo?: string }> = [
+    { name: '名前を書いた .env', command: 'git -C .. add prod.env', cwd: 'sub', reason: /secret/u, setup: root => writeFileSync(join(root, 'prod.env'), 'TOKEN=1') },
+    { name: '無視される場所の、名前を書いた秘密', command: 'git -C .. add keys/deploy-credentials.json', cwd: 'sub', reason: /secret/u,
+      setup: root => { writeFileSync(join(root, '.gitignore'), 'keys/\n'); git(root, 'add', '.gitignore'); git(root, 'commit', '-q', '-m', 'ignore'); mkdirSync(join(root, 'keys')); writeFileSync(join(root, 'keys', 'deploy-credentials.json'), '{}'); } },
+    { name: 'add -A と追跡されていない .env', command: 'git -C .. add -A', cwd: 'sub', reason: /secret/u, setup: root => writeFileSync(join(root, '.env'), 'TOKEN=1') },
+    { name: '入れ子のリポジトリの追跡されていない .env', command: 'git -C inner add -A', reason: /secret/u, repo: 'inner', setup: root => { initRepo(join(root, 'inner')); writeFileSync(join(root, 'inner', '.env'), 'TOKEN=1'); } },
+    { name: '入れ子のリポジトリの、無視された .env を強制で足す', command: 'git -C inner add -f -A', reason: /secret/u, repo: 'inner',
+      setup: root => { initRepo(join(root, 'inner')); writeFileSync(join(root, 'inner', '.gitignore'), '.env\n'); git(join(root, 'inner'), 'add', '.gitignore'); git(join(root, 'inner'), 'commit', '-q', '-m', 'ignore'); writeFileSync(join(root, 'inner', '.env'), 'TOKEN=1'); } },
+    { name: '鍵らしい文字のコミットの文', command: `git -C .. -c user.name=x commit -m "key ${key}"`, cwd: 'sub', reason: null },
+    { name: '鍵らしい文字の -c user.name', command: `git -c "user.name=${key}" commit -m fix`, reason: null },
+    { name: '鍵らしい文字の -c user.email', command: `git -C . -c user.name=x -c "user.email=${key}" commit -m fix`, reason: null },
+    { name: 'AWS の鍵の形の -c user.name', command: 'git -c user.name=AKIAIOSFODNN7EXAMPLE commit -m fix', reason: /the commit message contains text that looks like a secret/u },
+  ];
+  for (const c of cases) {
+    const r = rig(t);
+    initRepo(r.root);
+    mkdirSync(join(r.root, 'sub'), { recursive: true });
+    writeFileSync(join(r.root, 'README.md'), 'changed\n');
+    git(r.root, 'add', 'README.md');
+    c.setup?.(r.root);
+    const repo = c.repo ? join(r.root, c.repo) : r.root;
+    const before = { count: commits(repo), staged: git(repo, 'diff', '--cached', '--name-only') };
+    const events: unknown[] = [];
+    const outcome = await r.call('shell_run', { command: c.command, ...(c.cwd ? { cwd: join(r.root, c.cwd) } : {}) }, {}, { emit: e => events.push(e) });
+    assert.equal(r.judge.calls.length, 0, `${c.name}: 判定役は呼ばれない`);
+    if (c.reason === null) {
+      assert.equal(outcome.decision, 'deny', `${c.name}: git の全体のオプションがある文の鍵らしい文字は、順 4 より前で断られる: ${outcome.output.content}`);
+      assert.equal(r.waiting().length, 0, c.name);
+    } else {
+      assert.equal(outcome.decidedBy, 'pending', `${c.name}: ${outcome.output.content}`);
+      assert.equal(r.waiting()[0]!.kind, 'owner', c.name);
+      assert.match(r.waiting()[0]!.reason, c.reason, c.name);
+    }
+    assert.deepEqual({ count: commits(repo), staged: git(repo, 'diff', '--cached', '--name-only') }, before, `${c.name}: 何も足されず、コミットもされていない`);
+    for (const text of [...r.waiting().flatMap(row => [row.reason, row.checks]), outcome.output.content, JSON.stringify(events)]) assert.ok(!text.includes('abcdefghijklmnop'), `${c.name}: 鍵が残る: ${text}`);
+  }
+});
+
+test('p4-build-judge P2-6: 新しい綴りでも、向き先を変える git の文と、ほかの文のあとの git は判定役を飛ばさない', { skip: (!gitAvailable || !bashAvailable) && 'git か bash が無い' }, async t => {
+  const prepare = () => {
+    const r = rig(t, { mutate: c => { c.tools.shell.shell = 'bash'; } });
+    initRepo(r.root);
+    writeFileSync(join(r.root, 'n.txt'), 'x');
+    writeFileSync(join(r.root, 'clear.js'), '');
+    return { r, R: `"${fwd(r.root)}"` };
+  };
+  for (const command of ['add n.txt', 'commit -m fix', '-c user.name=a commit -m fix']) {
+    const { r, R } = prepare();
+    if (command.includes('commit')) git(r.root, 'add', 'n.txt');
+    assert.equal((await r.shell(`git -C ${R} ${command}`)).decidedBy, 'product-git', `向き先を変えない形は順 4: ${command}`);
+  }
+  const forms = (R: string) => [`git -C ${R} add -A > .gitignore`, `git -C ${R} add -A 2> .gitignore`, `git -C ${R} add -A | tee .gitignore`, `git -C ${R} commit -m x > .gitignore && git -C ${R} add -A`,
+    `git -C ${R} status | git -C ${R} add -A`, `{ git -C ${R} add -A && git -C ${R} commit -m x; } > .gitignore`, `(git -C ${R} add -A; git -C ${R} commit -m x) > .gitignore`,
+    `{ git -C ${R} add -A; } 2> .gitignore`, `(git -C ${R} add -A) | tee .gitignore`, `{ git -C ${R} add -A; } | tee .gitignore`,
+    `node clear.js && git -C ${R} add -A`, `node --test && git -C ${R} add -A`, `git -C ${R} -c user.name=a commit -m x > .gitignore`, `git -c user.name=a commit -m x | tee x.txt`,
+    `git -C ${R} -c user.name=a -c user.email=b commit -m x 2> .gitignore`, `: > .gitignore && git -C ${R} add -A`, `rm .gitignore; git -C ${R} add -A && git -C ${R} -c user.name=a commit -m x`];
+  const leaked: string[] = [];
+  for (let i = 0; i < forms('').length; i++) {
+    const { r, R } = prepare();
+    r.judge.answer = '{"decision":"ask","reason":"check"}';
+    const command = forms(R)[i]!;
+    const outcome = await r.shell(command);
+    if (outcome.decidedBy === 'product-git' || outcome.decidedBy === 'product-code') leaked.push(`${command} -> ${outcome.decidedBy}`);
+  }
+  assert.deepEqual(leaked, [], '判定役を飛ばした形');
+});
+
+test('p4-build-judge P2-7: git -c user.name=… commit は、順 4 に乗るとき以外は今までどおり持ち主へ（製品に属さない会話・製品の中で順 4 に乗らない形）', { skip: !gitAvailable && 'git が無い' }, async t => {
+  const r = rig(t, { project: false });
+  initRepo(r.paths.workspace);
+  r.judge.answer = '{"decision":"ask","reason":"check"}';
+  for (const command of ['git commit --allow-empty -m x', 'git -c user.name=a commit --allow-empty -m x']) {
+    const outcome = await r.shell(command);
+    assert.equal(outcome.decidedBy, 'pending', `${command}: ${outcome.output.content}`);
+  }
+  assert.deepEqual(r.waiting().map(row => row.kind), ['owner', 'judge'], '-c の付いた形は今までどおり持ち主へ、ふつうのコミットは判定役へ');
+  assert.equal(r.judge.calls.length, 1);
+  assert.equal(commits(r.paths.workspace), '1');
+  const p = rig(t);
+  initRepo(p.root);
+  initRepo(join(p.paths.workspace, 'other'));
+  writeFileSync(join(p.root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh');
+  p.judge.answer = '{"decision":"ask","reason":"check"}';
+  const inProduct = ['git -c user.name=a commit --allow-empty -m x', 'git -C ../other -c user.name=a commit --allow-empty -m x', 'git -c user.name=a -c user.name=b commit --allow-empty -m x'];
+  for (const command of inProduct) {
+    const outcome = await p.shell(command);
+    assert.equal(outcome.decidedBy, 'pending', `${command}: ${outcome.output.content}`);
+  }
+  assert.deepEqual(p.waiting().map(row => row.kind), ['owner', 'owner', 'owner'], '製品の中でも、順 4 に乗らない -c の形は今までどおり持ち主へ');
+  assert.equal(p.judge.calls.length, 0);
+});

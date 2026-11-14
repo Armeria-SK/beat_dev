@@ -17,7 +17,7 @@ const REFUSED = [
 const OWNER = [
   'guard.write_git', 'guard.write_instructions', 'guard.write_persona', 'guard.write_skill',
   'guard.touch_git', 'guard.touch_instructions', 'guard.touch_persona', 'guard.touch_skill',
-  'list.write_ancestor', 'list.tool_config', 'list.secret_in_deps', 'list.git_config', 'code.git_config',
+  'list.write_ancestor', 'list.tool_config', 'list.secret_in_deps', 'list.git_config', 'list.git_identity', 'code.git_config',
   'file.git', 'file.tool_config', 'file.persona', 'file.skill', 'file.skill_auto', 'file.instructions',
 ] as const;
 
@@ -49,6 +49,7 @@ export const REASON_ORDER: ReadonlyMap<string, Order> = new Map<string, Order>([
   ...JUDGE.map(key => [key, 5] as const),
 ]);
 
+export const GIT_IDENTITY_KEY = 'list.git_identity';
 export const OWNER_KEYS: ReadonlySet<string> = new Set(OWNER);
 export const POLICY_KEYS: ReadonlySet<string> = new Set(POLICY);
 export const PRODUCT_CODE_KEYS: ReadonlySet<string> = new Set(PRODUCT_CODE);

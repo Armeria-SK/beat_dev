@@ -55,6 +55,7 @@ const en = {
   'list.git_hooks_path': 'This repository sets core.hooksPath, but those hooks do not run in the git that beat runs (even when you allow it; only the hooks in .git/hooks run, and only when you allow it)',
   'list.git_net': 'git {cmd} can run code through arguments, templates or hooks, so it is checked',
   'list.git_write': 'This is a git operation that writes ({cmd})',
+  'list.git_identity': 'This git commit sets the author name or address for this one commit (-c user.name / -c user.email)',
   'list.git_push': 'Sending to a remote (git push)',
   'list.winargs': 'The arguments do not follow the rules for passing them to a program on Windows ({detail})',
   'list.winargs_ps': 'Windows PowerShell 5.1 does not pass this argument to the program as written (an empty argument is dropped, -name:value stays one argument, and a comma list with spaces or empty items becomes separate arguments): {detail}',

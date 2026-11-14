@@ -907,3 +907,17 @@ test('PowerShell の外部のプログラムの名前: 引用符つき・.cmd �
     assert.equal(levelOf(c, 'powershell', cmd), want, `${c}: ${keysOf(c, 'powershell', cmd).join(' ')}`);
   }
 });
+
+test('p4-build-judge P2-7（一覧の段）: git -c user.name / user.email の commit だけは list.flag にならず、持ち主のキー list.git_identity とふつうのコミットの確かめになる。ほかの -c と commit 以外は今までどおり list.flag', () => {
+  const found = { repo: repo() };
+  for (const c of ['git -c user.name=a commit -m x', 'git -c user.email=a@b.invalid commit -m x', 'git -c user.name=a -c user.email=b commit -m x', 'git -C sub -c "user.name=A B" commit -m x', 'git -c USER.NAME=a commit -m x']) {
+    assert.deepEqual(keysOf(c, 'bash', found), ['ask:list.git_identity', 'ask:list.git_write'], c);
+    assert.deepEqual(classify(c, 'bash', found).results[0]!.reasons.map(r => r.id ?? r.key), ['list.git_identity', 'list.git_commit'], c);
+  }
+  for (const c of ['git -c core.hooksPath=x commit -m x', 'git -c user.name=a push', 'git -c user.name=a add -A', 'git -c user.name=a status', 'git -c user.name=a', 'git -c user.name commit -m x', 'git -cuser.name=a commit -m x',
+    'git -c user.name=a -c core.editor=x commit -m x', 'git -c user.signingkey=x commit -m x', 'git -c user.name=$X commit -m x', 'git -c user.name=a $X -m x']) {
+    assert.deepEqual(keysOf(c, 'bash', found), ['once:list.flag'], c);
+  }
+  assert.deepEqual(keysOf('git -c user.name=a commit -m x', 'bash', { repo: repo({ hooksFiles: true }) }), ['ask:list.git_identity', 'once:list.git_hooks']);
+  assert.deepEqual(keysOf('git commit -m x', 'bash', found), ['ask:list.git_write'], 'ふつうのコミットは今までどおり');
+});
