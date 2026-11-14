@@ -36,13 +36,14 @@ import { Sidebar } from './Sidebar.tsx';
 import { notificationToast } from './toast-list.ts';
 import { Toasts } from './toasts.tsx';
 import { Button } from './parts.tsx';
-import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, unloadGuard } from './unsaved.ts';
+import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, SCREEN_EDITS, unloadGuard, type LeaveEnv } from './unsaved.ts';
 
 const NARROW = '(max-width: 760px)';
 const NO_NOTICES: RunNotice[] = [];
 const DISCONNECT_GRACE_MS = 3000;
 const PRODUCT_COUNTS_MS = 2000;
 const PENDING_MS = 500;
+const LEAVE_ENV: LeaveEnv = { go: by => history.go(by), replace: hash => location.replace(hash), push: hash => { location.hash = hash; } };
 
 function useDisconnected(connected: boolean): boolean {
   const [shown, setShown] = useState(false);
@@ -109,7 +110,8 @@ export function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [onboard, setOnboard] = useState<'first' | 'replay' | null>(null);
   const [setup, setSetup] = useState<OnboardingState | null>(null);
-  const [leave, setLeave] = useState<string | null>(null);
+  const [leave, setLeave] = useState<{ to: string; moved: number | null } | null>(null);
+  const entryIndex = useRef(historyIndex());
 
   const behind = routeBehind(route, behindRef.current);
   if (route.view !== 'settings') behindRef.current = route;
@@ -193,7 +195,7 @@ export function App() {
     const to = leave;
     clearUnsaved(SCREEN_EDITS);
     setLeave(null);
-    if (to !== null) location.hash = to;
+    if (to !== null) followLeave(to.moved, to.to, LEAVE_ENV);
   }, [leave]);
 
   useEffect(() => {
@@ -208,10 +210,12 @@ export function App() {
       const held = behindRef.current;
       const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
       if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
-        setLeave(routeHash(next));
-        location.replace(routeHash(held));
+        const moved = leaveMove(entryIndex.current, historyIndex());
+        setLeave({ to: routeHash(next), moved });
+        holdLeave(moved, routeHash(held), LEAVE_ENV);
         return;
       }
+      entryIndex.current = historyIndex();
       hashGeneration.current += 1;
       closer.reset();
       if (next.view === 'settings' && viewRef.current !== 'settings') settingsOpener.current = document.activeElement;

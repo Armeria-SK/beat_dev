@@ -23,3 +23,20 @@ export function unloadGuard(event: { preventDefault: () => void; returnValue?: u
   event.preventDefault();
   event.returnValue = '';
 }
+
+export function historyIndex(nav: { currentEntry?: { index: number } | null } | undefined = (globalThis as { navigation?: { currentEntry?: { index: number } | null } }).navigation): number | null {
+  const index = nav?.currentEntry?.index;
+  return typeof index === 'number' && index >= 0 ? index : null;
+}
+
+export const leaveMove = (from: number | null, to: number | null): number | null => (from === null || to === null ? null : to - from);
+
+export interface LeaveEnv { go: (by: number) => void; replace: (hash: string) => void; push: (hash: string) => void }
+
+export function holdLeave(moved: number | null, heldHash: string, env: LeaveEnv): void {
+  if (moved) env.go(-moved); else env.replace(heldHash);
+}
+
+export function followLeave(moved: number | null, toHash: string, env: LeaveEnv): void {
+  if (moved) env.go(moved); else env.push(toHash);
+}

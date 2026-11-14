@@ -6,7 +6,7 @@ import { escStops } from '../web/src/ui/composer-state.ts';
 import { workerLine } from '../web/src/ui/overview.ts';
 import { mergeRawConfig } from '../web/src/ui/settings/commit.ts';
 import { modelReach, providerReach } from '../web/src/ui/settings/view.ts';
-import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, setUnsaved, unloadGuard } from '../web/src/ui/unsaved.ts';
+import { clearUnsaved, followLeave, hasUnsavedEdits, historyIndex, holdLeave, leaveAsks, leaveMove, SCREEN_EDITS, setUnsaved, unloadGuard } from '../web/src/ui/unsaved.ts';
 
 // 1-6 の前の突き合わせで見つけた「黙って失う・行き止まりになる」所の決まり（前の画面にあった動きを新しい画面に戻したもの）。
 
@@ -111,4 +111,46 @@ test('設定ファイルの直接編集: ぶつかりがあるときは、どの
   const merged = mergeRawConfig(loaded, edited, latest);
   assert.deepEqual(merged.conflicts, ['server.port']);
   assert.deepEqual(merged.config, latest);
+});
+
+function fakeHistory(entries: string[], index: number) {
+  const h = {
+    entries, index,
+    go(by: number) { const to = h.index + by; if (to >= 0 && to < h.entries.length) h.index = to; },
+    replace(hash: string) { h.entries[h.index] = hash; },
+    push(hash: string) { h.entries.splice(h.index + 1, Infinity, hash); h.index += 1; },
+  };
+  return h;
+}
+
+test('書きかけの確かめ: ブラウザの「戻る」で出たとき、戻った先の履歴を今の画面で上書きしない（元の位置へ戻すだけ。Discard で同じ所へ行き直す）', () => {
+  const back = fakeHistory(['#/kanban', '#/skills/notes'], 1);
+  back.go(-1);
+  const moved = leaveMove(1, historyIndex({ currentEntry: { index: back.index } }));
+  assert.equal(moved, -1);
+  holdLeave(moved, '#/skills/notes', back);
+  assert.deepEqual([back.entries, back.index], [['#/kanban', '#/skills/notes'], 1], '戻る先（#/kanban）は消えない');
+  followLeave(moved, '#/kanban', back);
+  assert.deepEqual([back.entries, back.index], [['#/kanban', '#/skills/notes'], 0], 'Discard は「戻る」をやり直す（履歴を足さない）');
+
+  const link = fakeHistory(['#/kanban', '#/skills/notes'], 1);
+  link.push('#/memory');
+  const forward = leaveMove(1, link.index);
+  holdLeave(forward, '#/skills/notes', link);
+  assert.deepEqual([link.entries, link.index], [['#/kanban', '#/skills/notes', '#/memory'], 1], 'リンクで動いたときも、書きかけの画面の履歴を 2 つにしない');
+  followLeave(forward, '#/memory', link);
+  assert.equal(link.entries[link.index], '#/memory');
+
+  const swapped = fakeHistory(['#/kanban', '#/memory'], 1);
+  holdLeave(leaveMove(1, 1), '#/skills/notes', swapped);
+  assert.deepEqual(swapped.entries, ['#/kanban', '#/skills/notes'], '同じ位置で置き換わった（location.replace）ときは、その場で元へ置き換える');
+
+  const old = fakeHistory(['#/kanban', '#/skills/notes'], 0);
+  assert.equal(leaveMove(1, historyIndex(undefined)), null, '履歴の位置が分からないブラウザ');
+  holdLeave(null, '#/skills/notes', old);
+  assert.deepEqual(old.entries, ['#/skills/notes', '#/skills/notes'], '位置が分からなければ、前と同じく置き換える');
+  followLeave(null, '#/kanban', old);
+  assert.equal(old.entries[old.index], '#/kanban');
+  assert.equal(historyIndex({ currentEntry: null }), null);
+  assert.equal(historyIndex({ currentEntry: { index: -1 } }), null);
 });
