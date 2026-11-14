@@ -257,7 +257,7 @@ Ollama は OpenAI 互換の接続（はじめの設定では「OpenAI-compatible
 | 入力検証 | TypeBox |
 | 画面 | React 19 ＋ Vite |
 | テスト | `node:test` |
-| 依存 | `@anthropic-ai/sdk`、TypeBox、`croner`（タイムゾーン対応の cron）、`playwright-core`（ブラウザの操作。Apache-2.0。ブラウザ本体は同梱せず、手元の Chrome（または path で指した Chromium 系）を使う）、`parse5`（HTML の解析）、React 一式、`react-markdown` |
+| 依存 | `@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`（外の MCP サーバーとのつなぎ）、TypeBox、`croner`（タイムゾーン対応の cron）、`playwright-core`（ブラウザの操作。Apache-2.0。ブラウザ本体は同梱せず、手元の Chrome（または path で指した Chromium 系）を使う）、`parse5`（HTML の解析）、React 一式、`react-markdown` と `remark-gfm`（Markdown の表示。表・取り消し線などの GFM） |
 | ブラウザの通信 | ブラウザの通信は、beat 内の中継（`src/tools/browser/egress-proxy.ts`）だけを通す。中継は公開の IPv4 の宛先にだけつなぐ。ブラウザの要求の横取り（`route.ts`）は副の守りで、本体は中継 |
 | 画面の文字と絵 | 書体は OS にあるもの（Segoe UI・Yu Gothic UI・Georgia・Consolas など）だけを使い、書体のファイルは同梱せず、外部へも取りに行かない。アイコンはデザインの形を `web/src/ui/icons.ts` に持つ |
 
