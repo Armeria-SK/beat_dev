@@ -54,6 +54,7 @@ export function Settings({ section, onClose, onReplay, onSaved, onProfile }: Set
   }, []);
 
   useEffect(() => { close.current?.focus(); }, []);
+  useEffect(() => () => { const open = pendingRef.current; pendingRef.current = null; open?.cancel?.(); }, []);
   useEffect(() => { main.current?.scrollTo({ top: 0 }); showPending(null); }, [current, showPending]);
 
   const reload = useCallback(async () => {

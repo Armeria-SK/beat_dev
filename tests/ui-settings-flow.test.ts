@@ -95,3 +95,13 @@ test('ui/settings flow: 時間切れで止めた操作が自分で終われば�
   assert.equal(await next, 'b');
   assert.deepEqual(log, ['a:stopped', 'b:start'], '止めた操作の後片付けが、次の保存より先');
 });
+
+test('Settings を確かめの行が出たまま閉じると、その確かめを取り消して待ちを終える（配線、backlog 197）', () => {
+  const page = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
+  assert.ok(page.includes('useEffect(() => () => { const open = pendingRef.current; pendingRef.current = null; open?.cancel?.(); }, []);'), '閉じる（外す）ときに出ている確かめの cancel を呼ぶ');
+  let answered: boolean | null = null;
+  let cancel: () => void = () => undefined;
+  void confirmable(a => { cancel = a.cancel; }, async () => true).then(v => { answered = v; });
+  cancel();
+  return Promise.resolve().then(() => { assert.equal(answered, false, 'cancel で待ちは false で終わる'); });
+});
