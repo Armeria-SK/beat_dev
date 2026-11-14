@@ -1181,6 +1181,7 @@ export const en = {
   'ui.set.hooks.afterOutside': 'After reading from elsewhere',
   'ui.set.hooks.afterOutsideDesc': 'Once the conversation has read a web page or an attachment, writing a file that matches waits in Pending',
   'ui.set.hooks.removeWarn': 'Remove hook',
+  'ui.set.hooks.moved': 'This hook changed elsewhere · nothing saved · the list was reloaded',
   'ui.set.hooks.on': (command: string) => `Run ${command}`,
   'ui.set.hooks.whenOff': (matcher: string) => `when ${matcher} · off`,
   'access.hookDisabled': (stage: string, hook: string) => `Turn off a hook (${stage}; the kind that can block a tool): ${hook}`,

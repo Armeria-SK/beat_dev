@@ -7,6 +7,7 @@ import { applyFailure, applyStep } from '../../settings/server-apply.ts';
 import { addRoot, foldersFromConfig, removeRoot, setRootMode, type RootMode } from '../../skills-meta.ts';
 import { Button } from '../parts.tsx';
 import { RowConfirm } from '../RowConfirm.tsx';
+import { editListItem } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Switch, useSet } from './controls.tsx';
 
 type Json = Record<string, any>;
@@ -73,14 +74,22 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
   const [open, setOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const k = `hook:${stage}:${index}`;
-  const edit = (patch: Partial<Omit<CommandHook, 'builtin'>> | Partial<Pick<BuiltinHook, 'always' | 'afterOutside'>>) => void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).map((h, i) => (i === index ? { ...h, ...patch } as Hook : h))));
+  const change = (make: (item: Hook) => Hook | null) => {
+    let gone = false;
+    void ctx.commit(k, c => {
+      const next = editListItem(hooksOf(c, stage), index, hook, make);
+      gone = next === null;
+      return next === null ? c : setHooks(c, stage, next);
+    }).then(() => { if (gone) { toast({ kind: 'info', icon: 'alert', title: t('ui.set.hooks.moved') }); void ctx.reload(); } });
+  };
+  const edit = (patch: Partial<Omit<CommandHook, 'builtin'>> | Partial<Pick<BuiltinHook, 'always' | 'afterOutside'>>) => change(h => ({ ...h, ...patch } as Hook));
   const busy = ctx.busy !== null;
   const on = hook.enabled !== false;
   return (
     <Row k={k} title={hook.builtin !== undefined ? name : <code className="bt-meta">{name}</code>} desc={t(on ? 'ui.set.hooks.when' : 'ui.set.hooks.whenOff', hook.matcher)}
       below={(removing || open) && (
         <>
-          {removing && <RowConfirm warn={t('ui.set.hooks.removeWarn')} action={t('ui.set.hooks.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => setHooks(c, stage, hooksOf(c, stage).filter((_, i) => i !== index))); }} onKeep={() => setRemoving(false)} />}
+          {removing && <RowConfirm warn={t('ui.set.hooks.removeWarn')} action={t('ui.set.hooks.remove')} busy={busy} onConfirm={() => { setRemoving(false); change(() => null); }} onKeep={() => setRemoving(false)} />}
           {open && hook.builtin !== undefined && (
             <div className="ui-set__detail">
               <Row k={`${k}:matcher`} title={t('ui.set.hooks.matcher')} desc={t('ui.set.hooks.matcherDesc')}>
