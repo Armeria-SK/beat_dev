@@ -4,7 +4,7 @@ import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
   addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, newAnthropicProvider, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
-  keyEnvPatch, sharedKeyWith,
+  keyEnvPatch, kindPatch, sharedKeyWith,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, sectionSlice, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -401,6 +401,28 @@ test('Anthropic を足す: 1 つ目は ANTHROPIC_API_KEY、2 つ目からはほ�
   const third = newAnthropicProvider({ ...next, providers: [...next.providers, { id: 'x', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'BEAT_ANTHROPIC_3_API_KEY', maxParallel: 1, timeoutMs: 1000 }] });
   assert.equal(third.id, 'anthropic-3');
   assert.equal(third.apiKeyEnv, 'BEAT_ANTHROPIC_3_API_KEY_2');
+});
+
+test('種類を Anthropic に変える: 鍵の名前が無く、ANTHROPIC_API_KEY をほかの提供元が使っていれば、自分の鍵の名前を持たせる（鍵を共有しない）', () => {
+  const base = { ...sample(), providers: [
+    { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
+    { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 },
+    { id: 'named', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1', apiKeyEnv: 'EXAMPLE_API_KEY', maxParallel: 1, timeoutMs: 600_000 },
+  ] };
+  assert.deepEqual(kindPatch(base, 'local', 'anthropic'), { kind: 'anthropic', apiKeyEnv: 'BEAT_LOCAL_API_KEY' });
+  const changed = updateListItem(base, 'providers', 'local', kindPatch(base, 'local', 'anthropic'));
+  assert.deepEqual(sharedKeyWith(changed, 'local'), []);
+  assert.deepEqual(sharedKeyWith(changed, 'anthropic'), []);
+
+  assert.deepEqual(kindPatch(base, 'named', 'anthropic'), { kind: 'anthropic' }, '書いてある鍵の名前はそのまま');
+  assert.deepEqual(kindPatch(base, 'anthropic', 'openai_compatible'), { kind: 'openai_compatible' });
+  assert.deepEqual(kindPatch(base, 'anthropic', 'anthropic'), { kind: 'anthropic' }, '1 つ目の Anthropic は ANTHROPIC_API_KEY のまま');
+
+  const implicit = { ...base, providers: [{ id: 'claude', kind: 'anthropic', maxParallel: 2, timeoutMs: 600_000 }, base.providers[1]!] };
+  assert.deepEqual(kindPatch(implicit, 'local', 'anthropic'), { kind: 'anthropic', apiKeyEnv: 'BEAT_LOCAL_API_KEY' }, '書いていない Anthropic の既定の名前とも重ねない');
+
+  const alone = { ...base, providers: [base.providers[1]!] };
+  assert.deepEqual(kindPatch(alone, 'local', 'anthropic'), { kind: 'anthropic' }, 'ほかに使う提供元が無ければ ANTHROPIC_API_KEY でよい');
 });
 
 test('Key variable の欄: 環境変数の名前だけを設定に入れる。鍵を貼ったものは断り、空は外す', () => {

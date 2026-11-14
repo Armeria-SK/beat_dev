@@ -208,6 +208,14 @@ export function newAnthropicProvider(config: Config): Record<string, unknown> {
   return { id, kind: 'anthropic', apiKeyEnv, maxParallel: 2, timeoutMs: 600_000 };
 }
 
+export function kindPatch(config: Config, id: string, kind: string): { kind: string; apiKeyEnv?: string } {
+  const providers = providerRows(config);
+  const provider = providers.find(p => p.id === id);
+  if (kind !== 'anthropic' || !provider || provider.apiKeyEnv) return { kind };
+  const taken = takenKeyEnvs(providers, id);
+  return taken.has('ANTHROPIC_API_KEY') ? { kind, apiKeyEnv: derivedKeyEnv(id, taken) } : { kind };
+}
+
 export const providerInUse = (config: Config, id: string): boolean => (config.models as Array<{ provider: string }>).some(m => m.provider === id);
 
 export function removeProvider(config: Config, id: string): Config {

@@ -6,7 +6,7 @@ import { isComposing } from '../../keys.ts';
 import { probeMessage, serverText } from '../../server-text.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvPatch, keyEnvUnsafe, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, keyEnvPatch, keyEnvUnsafe, kindPatch, newAnthropicProvider, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -143,7 +143,7 @@ function ProviderRow({ provider, open, onToggle }: { provider: Json; open: boole
           <Row k={`${k}:kind`} title={t('ui.set.provider.kind')}>
             <Seg value={provider.kind as string} label={t('ui.set.provider.kind')} disabled={busy}
               options={[...new Set(['anthropic', 'openai_compatible', provider.kind as string])].map(kind => ({ value: kind, label: kindLabel(t, kind) }))}
-              onChange={kind => edit({ kind })} />
+              onChange={kind => void ctx.commit(k, c => updateListItem(c, 'providers', id, kindPatch(c, id, kind)))} />
           </Row>
           <Row k={`${k}:url`} title={t('ui.set.provider.url')} desc={t('ui.set.provider.urlDesc')}>
             <CommitField value={(provider.baseUrl as string | undefined) ?? ''} label={t('ui.set.provider.url')} mono type="url" placeholder="https://…" onCommit={v => edit({ baseUrl: v || undefined })} />
