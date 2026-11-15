@@ -301,7 +301,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       reasons.push(guardText(language, 'pipeline.taint', { sources }));
     }
   }
-  const fetchToJudge = SHELL_FETCH_TO_JUDGE.on && tool.name === 'shell_run' && first?.fetched === true && decision !== 'deny';
+  const fetchToJudge = SHELL_FETCH_TO_JUDGE.on && ctx.taint.tainted && tool.name === 'shell_run' && first?.fetched === true && decision !== 'deny';
   if (fetchToJudge) {
     decision = worst(decision, 'ask');
     askKinds.add('egress');
