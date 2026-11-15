@@ -81,8 +81,13 @@ export type WaitResult = 'done' | 'timeout' | 'aborted';
 export type JobFilter = { conversationId: string } | { projectId: string } | { taskId: string };
 
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b\n]*(?:\u0007|\u001b\\)?|\u001b[PX^_][^\u001b\n]*(?:\u001b\\)?|\u001b[ -/]*[0-~]|\u009b[0-?]*[ -/]*[@-~]/gu;
-const PRIVATE_KEY_MARKER = /-----(BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----/gu;
+const KEY_BEGIN = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/u;
+const KEY_END = /-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/u;
+const PEM_BODY_LINE = /^[A-Za-z0-9+/=]+$/u;
+const PEM_HEADER_LINE = /^[A-Za-z][A-Za-z0-9-]*:[ \t]/u;
 const OPEN_ASSIGNMENT = /(?<![A-Za-z0-9_-])["']?([A-Za-z_][A-Za-z0-9_-]*)["']?[ \t]*[:=][ \t]*\r?$/u;
+const SENSITIVE_TAIL = /(?:(?<![A-Za-z0-9_.-])(["']?)([A-Za-z_][A-Za-z0-9_.-]*)\1[ \t]*[:=][ \t]*["']?|(?<![A-Za-z0-9_-])(?:Bearer|Basic|Token)[ \t]+["']?|(?<![A-Za-z0-9_-])--?([A-Za-z][A-Za-z0-9_-]*)(?:[ \t]+|=)["']?)[ \t]*$/iu;
+const LEAD_TOKEN = /^[^\s,;"'<>(){}[\]]+/u;
 const REDACTED = '[REDACTED]';
 
 export function stripAnsi(text: string): string {
@@ -93,27 +98,43 @@ export function cleanOutput(text: string): string {
   return redactSecrets(stripAnsi(text));
 }
 
-function openKeyAt(text: string): number {
-  let open = -1;
-  for (const match of text.matchAll(PRIVATE_KEY_MARKER)) {
-    if (match[1] === 'BEGIN') { if (open < 0) open = match.index; } else open = -1;
-  }
-  return open;
-}
-
-function keyEndAfter(text: string): number {
-  for (const match of text.matchAll(PRIVATE_KEY_MARKER)) {
-    if (match[1] === 'END') return match.index + match[0].length;
-  }
-  return -1;
-}
-
 function lastSeparator(text: string): number {
   for (let i = text.length - 1; i >= 0; i -= 1) {
     const c = text.charCodeAt(i);
     if (c === 0x20 || c === 0x09 || c === 0x0d || c === 0x2c) return i;
   }
   return -1;
+}
+
+function sensitiveTailStart(text: string): number {
+  const match = SENSITIVE_TAIL.exec(text);
+  if (!match) return -1;
+  if (match[2] !== undefined && !isSensitiveName(match[2])) return -1;
+  if (match[3] !== undefined && !isSensitiveName(match[3])) return -1;
+  return match.index;
+}
+
+type KeyExtent = { kind: 'closed' | 'stopped'; at: number } | { kind: 'open'; at: number; sawBody: boolean };
+
+function keyExtent(buf: string, from: number, final: boolean, sawBody: boolean): KeyExtent {
+  let seen = sawBody;
+  for (let pos = from; ;) {
+    if (pos >= buf.length) return final ? { kind: 'stopped', at: buf.length } : { kind: 'open', at: pos, sawBody: seen };
+    const nl = buf.indexOf('\n', pos);
+    const line = buf.slice(pos, nl < 0 ? buf.length : nl);
+    const end = KEY_END.exec(line);
+    if (end) return { kind: 'closed', at: pos + end.index + end[0].length };
+    const trimmed = line.trim();
+    if (nl < 0 && !final) {
+      const maybe = trimmed === '' || PEM_BODY_LINE.test(trimmed) || trimmed.startsWith('-') || (!seen && (PEM_HEADER_LINE.test(trimmed) || /^[A-Za-z][A-Za-z0-9-]*:?$/u.test(trimmed)));
+      return maybe ? { kind: 'open', at: pos, sawBody: seen } : { kind: 'stopped', at: pos };
+    }
+    if (trimmed === '') { if (seen) return { kind: 'stopped', at: pos }; }
+    else if (PEM_BODY_LINE.test(trimmed)) seen = true;
+    else if (seen || !PEM_HEADER_LINE.test(trimmed)) return { kind: 'stopped', at: pos };
+    if (nl < 0) return { kind: 'stopped', at: buf.length };
+    pos = nl + 1;
+  }
 }
 
 export interface GateUnit {
@@ -124,7 +145,9 @@ export interface GateUnit {
 export class LineGate {
   #pending = '';
   #inKey = false;
+  #sawBody = false;
   #midLine = false;
+  #redactLead = false;
   readonly #partialLineBytes: number;
   readonly #keyHoldBytes: number;
 
@@ -143,45 +166,73 @@ export class LineGate {
     this.#pending = '';
     for (;;) {
       if (this.#inKey) {
-        const end = keyEndAfter(buf);
-        if (end < 0) {
-          const tail = final ? '' : buf.slice(buf.lastIndexOf('\n') + 1);
+        const ext = keyExtent(buf, 0, final, this.#sawBody);
+        if (ext.kind === 'open') {
+          this.#sawBody = ext.sawBody;
+          const tail = buf.slice(ext.at);
           this.#pending = tail.length > 256 ? tail.slice(-256) : tail;
           return out;
         }
-        buf = buf.slice(end);
         this.#inKey = false;
+        buf = ext.kind === 'closed' ? buf.slice(ext.at).replace(/^[ \t]*\r?\n/u, '') : buf.slice(ext.at);
         continue;
       }
-      let cut = final ? buf.length : buf.lastIndexOf('\n') + 1;
-      const begin = final ? -1 : openKeyAt(buf);
+      const begin = KEY_BEGIN.exec(buf)?.index ?? -1;
       if (begin >= 0) {
-        const lineAt = buf.lastIndexOf('\n', begin - 1) + 1;
-        if (buf.length - lineAt > this.#keyHoldBytes) {
-          this.#emit(out, `${buf.slice(0, begin)}${REDACTED}`);
-          this.#inKey = true;
-          buf = buf.slice(begin + 1);
+        const lineEnd = buf.indexOf('\n', begin);
+        const ext: KeyExtent = lineEnd >= 0 ? keyExtent(buf, lineEnd + 1, final, false)
+          : final ? { kind: 'stopped', at: buf.length } : { kind: 'open', at: buf.length, sawBody: false };
+        if (ext.kind !== 'open') {
+          this.#emit(out, `${buf.slice(0, begin)}${REDACTED}${ext.kind === 'stopped' ? '\n' : ''}`);
+          buf = buf.slice(ext.at);
           continue;
         }
-        cut = Math.min(cut, lineAt);
-      } else if (!final && cut > 0) {
+        const lineAt = buf.lastIndexOf('\n', begin - 1) + 1;
+        if (buf.length - lineAt > this.#keyHoldBytes) {
+          this.#emit(out, `${buf.slice(0, begin)}${REDACTED}\n`);
+          this.#inKey = true;
+          this.#sawBody = ext.sawBody;
+          buf = lineEnd >= 0 ? buf.slice(lineEnd + 1) : '';
+          continue;
+        }
+        if (lineAt > 0) this.#emit(out, buf.slice(0, lineAt));
+        this.#pending = buf.slice(lineAt);
+        return out;
+      }
+      let cut = final ? buf.length : buf.lastIndexOf('\n') + 1;
+      if (!final && cut > 0) {
         const lineAt = buf.lastIndexOf('\n', cut - 2) + 1;
         const head = OPEN_ASSIGNMENT.exec(stripAnsi(buf.slice(lineAt, cut - 1)));
         if (head && isSensitiveName(head[1]!) && buf.length - lineAt <= this.#keyHoldBytes) cut = lineAt;
       }
-      if (!final && begin < 0 && buf.length - cut > this.#partialLineBytes) {
+      let lead = false;
+      if (!final && buf.length - cut > this.#partialLineBytes) {
         const tail = buf.slice(cut);
         const at = lastSeparator(tail);
-        cut += at > 0 ? at + 1 : tail.length;
+        let end = tail.length;
+        lead = true;
+        if (at > 0) {
+          const head = sensitiveTailStart(tail.slice(0, at + 1));
+          end = head < 0 ? at + 1 : head;
+          lead = false;
+          if (end === 0 && tail.length > this.#keyHoldBytes) { end = tail.length; lead = true; }
+        }
+        cut += end;
       }
       if (cut > 0) this.#emit(out, buf.slice(0, cut));
+      if (lead) this.#redactLead = true;
       this.#pending = buf.slice(cut);
       return out;
     }
   }
 
   #emit(out: GateUnit[], text: string): void {
-    out.push({ text: cleanOutput(text), continues: this.#midLine });
+    let raw = text;
+    if (this.#redactLead) {
+      raw = raw.replace(LEAD_TOKEN, REDACTED);
+      this.#redactLead = false;
+    }
+    out.push({ text: cleanOutput(raw), continues: this.#midLine });
     this.#midLine = !text.endsWith('\n');
   }
 }
@@ -315,7 +366,7 @@ export class BackgroundJobs {
         stdio: [input.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
-      job.spawnError = (error as Error).message;
+      job.spawnError = redactSecrets((error as Error).message);
       this.#finish(job);
       return { id: job.id };
     }
@@ -327,7 +378,7 @@ export class BackgroundJobs {
       child.stdin?.end(input.stdin);
     }
     child.on('error', error => {
-      job.spawnError ??= error.message;
+      job.spawnError ??= redactSecrets(error.message);
       if (child.pid === undefined) this.#finish(job);
     });
     child.on('exit', code => {
@@ -392,7 +443,7 @@ export class BackgroundJobs {
   stop(id: string, by: 'model', conversationId: string): Promise<JobView | undefined>;
   stop(id: string, by: 'owner' | 'system'): Promise<JobView | undefined>;
   async stop(id: string, by: StopBy, conversationId?: string): Promise<JobView | undefined> {
-    const job = by === 'model' ? this.#owned(id, conversationId ?? '') : this.#jobs.get(id);
+    const job = by === 'owner' || by === 'system' ? this.#jobs.get(id) : this.#owned(id, conversationId ?? '');
     if (!job) return undefined;
     await this.#halt(job, by);
     return this.#view(job);

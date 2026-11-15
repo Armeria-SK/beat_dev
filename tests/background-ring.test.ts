@@ -121,7 +121,7 @@ test('gate: a private key longer than the hold is released as one [REDACTED] and
     ...gate.push(`before\n-----BEGIN RSA PRIVATE KEY-----\n${BODY.repeat(5)}`),
     ...gate.push(BODY.repeat(5)),
   ];
-  assert.equal(joinText(parts), 'before\n[REDACTED]');
+  assert.equal(joinText(parts), 'before\n[REDACTED]\n');
   assert.ok(gate.held < 300, `held ${gate.held}`);
   parts.push(...gate.push(`${BODY}-----END RSA PRIVATE KEY-----\nafter\n`));
   assert.equal(joinText(parts), 'before\n[REDACTED]\nafter\n');
@@ -203,4 +203,72 @@ test('ring: tiny appends stay cheap (head index, merging of small appends)', () 
   assert.equal(merged.total, 800_000);
   assert.ok(plainMs < 3000 && mergedMs < 3000, `plain ${plainMs.toFixed(0)} ms, merged ${mergedMs.toFixed(0)} ms`);
   assert.equal(merged.readFrom(merged.total - 10).chunks.length, 1);
+});
+
+test('gate: a stray BEGIN without END ends at the first line that is not key-shaped, and the stream goes on', () => {
+  const gate = new LineGate();
+  const parts = [
+    ...gate.push(`boot ok\n-----BEGIN PRIVATE KEY-----\n${BODY}MIIEtrunc`),
+    ...gate.push('ated\nserver ready on http://localhost:3000\n'),
+  ];
+  for (let i = 0; i < 1000; i += 1) parts.push(...gate.push(`GET /item/${i} 200\n`));
+  parts.push(...gate.push('', true));
+  const out = joinText(parts);
+  assert.doesNotMatch(out, /QQQQ|MIIE/u);
+  assert.match(out, /^boot ok\n\[REDACTED\]\nserver ready on http:\/\/localhost:3000\nGET \/item\/0 200\n/u);
+  assert.match(out, /GET \/item\/999 200\n$/u);
+  assert.equal(gate.held, 0);
+});
+
+test('gate: a key ends at a blank line after its body, and a final open key keeps the lines after it', () => {
+  const gate = new LineGate();
+  const out = joinText([...gate.push(`-----BEGIN PRIVATE KEY-----\n${BODY}\nnext line\n`), ...gate.push('tail', true)]);
+  assert.equal(out, '[REDACTED]\n\nnext line\ntail');
+});
+
+test('gate: an encrypted key with headers and a blank line before the body stays redacted over several writes', () => {
+  const gate = new LineGate();
+  const out = joinText([
+    ...gate.push('-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n'),
+    ...gate.push('DEK-Info: AES-128-CBC,0123456789ABCDEF\n\n'),
+    ...gate.push(BODY),
+    ...gate.push(`${BODY}-----END RSA PRIVATE KEY-----\nafter\n`),
+  ]);
+  assert.doesNotMatch(out, /QQQQ|DEK-Info/u);
+  assert.equal(out, '[REDACTED]\nafter\n');
+});
+
+test('gate: past the hold, only the key is redacted and the first line that is not key-shaped resumes the stream', () => {
+  const gate = new LineGate(4096, 200);
+  const parts = [...gate.push(`-----BEGIN PRIVATE KEY-----\n${BODY.repeat(5)}`), ...gate.push(BODY.repeat(20))];
+  assert.equal(joinText(parts), '[REDACTED]\n');
+  parts.push(...gate.push('GET / 200\n'), ...gate.push('', true));
+  assert.equal(joinText(parts), '[REDACTED]\nGET / 200\n');
+});
+
+for (const [name, head, value] of [
+  ['JSON', `{"pad":"${'p'.repeat(5000)}", "password": `, '"hunter2-very-secret-value"}\n'],
+  ['Python repr', `{'pad': '${'p'.repeat(5000)}', 'DB_PASSWORD': `, "'Zq9xYvB7nM2kL4pR8sT1'}\n"],
+  ['Bearer', `${'p'.repeat(5000)} Authorization: Bearer `, 'abcDEF1234567890ghiJKL\n'],
+  ['flag', `${'p'.repeat(5000)} run --token `, 'tok_9f8e7d6c5b4a3210 now\n'],
+] as const) {
+  test(`gate: a release past the limit never separates a sensitive name from its value (${name})`, () => {
+    const gate = new LineGate();
+    const first = gate.push(head);
+    const out = joinText([...first, ...gate.push(value)]);
+    const secret = /hunter2|Zq9x|abcDEF|tok_9f/u;
+    assert.doesNotMatch(out, secret, out.slice(-120));
+    assert.ok(first.length === 1 && !secret.test(first[0]!.text));
+  });
+}
+
+test('gate: a run with no separator split into three pieces never shows the key tail', () => {
+  const gate = new LineGate();
+  const out = joinText([
+    ...gate.push(`${'a'.repeat(4200)}&access_token=sk-ant-api03-${'K'.repeat(12)}`),
+    ...gate.push('K'.repeat(5000)),
+    ...gate.push(`${'K'.repeat(20)} done\n`),
+  ]);
+  assert.doesNotMatch(out, /KKKK/u);
+  assert.match(out, / done\n$/u);
 });

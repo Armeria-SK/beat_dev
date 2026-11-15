@@ -209,7 +209,7 @@ test('stopWhere: stops only the matching commands and waits for them', async t =
 
 test('the command never stalls when nobody reads its output', async t => {
   const { jobs, start } = setup(t);
-  const id = start("process.stdout.write('z'.repeat(2 * 1024 * 1024) + '\\nEND\\n');");
+  const id = start("process.stdout.write(('z'.repeat(1000) + '\\n').repeat(2100) + 'END\\n');");
   assert.equal(await jobs.wait(id, 'c1', 30, new AbortController().signal), 'done');
   const read = jobs.read(id, 'c1')!;
   assert.equal(read.exitCode, 0);
@@ -459,4 +459,48 @@ test('a spawn that throws at once ends as exited with the error and runs onExit 
   assert.equal(view.state, 'exited');
   assert.ok(view.spawnError);
   assert.equal(exits, 1);
+});
+
+test('read: a stray BEGIN in the output does not silence the rest of the stream', async t => {
+  const { jobs, start } = setup(t);
+  const id = start("console.log('boot ok'); console.log('-----BEGIN PRIVATE KEY-----'); console.log('MIIE' + 'Q'.repeat(60)); setTimeout(() => { console.log('server ready on http://localhost:3000'); for (let i = 0; i < 1000; i += 1) console.log('GET /item/' + i + ' 200'); }, 300); setTimeout(() => {}, 800);");
+  const reads: string[] = [];
+  await until(() => { reads.push(jobs.read(id, 'c1')!.text); return reads.join('').includes('server ready') || undefined; });
+  await jobs.wait(id, 'c1', 10, new AbortController().signal);
+  reads.push(jobs.read(id, 'c1')!.text);
+  const joined = reads.join('');
+  assert.doesNotMatch(joined, /QQQQ/u);
+  assert.match(joined, /boot ok\n\[REDACTED\]\nserver ready/u);
+  assert.match(joined, /GET \/item\/999 200\n$/u);
+});
+
+test('read: a value written after a long line was released is still redacted (real command)', async t => {
+  const { jobs, start } = setup(t);
+  const id = start(`process.stdout.write('{"pad":"' + 'p'.repeat(5000) + '", "password": '); setTimeout(() => process.stdout.write('"hunter2-very-secret-value"}\\n'), 400); setTimeout(() => {}, 900);`);
+  const reads: string[] = [];
+  await until(() => { reads.push(jobs.read(id, 'c1')!.text); return reads.join('').length > 5000 || undefined; });
+  await jobs.wait(id, 'c1', 10, new AbortController().signal);
+  reads.push(jobs.read(id, 'c1')!.text);
+  assert.doesNotMatch(reads.join(''), /hunter2/u);
+  assert.doesNotMatch(jobs.peek(id, 0)!.text, /hunter2/u);
+  assert.match(reads.join(''), /"password": \[REDACTED\]/u);
+});
+
+test('the spawn error is redacted', async t => {
+  const { jobs } = setup(t);
+  const result = jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: [`${KEY}\u0000`], env: scrubEnv(), fetched: false });
+  assert.ok('id' in result);
+  const error = jobs.get(result.id)!.spawnError!;
+  assert.ok(error.length > 0);
+  assert.doesNotMatch(error, /BBBBBBBB/u);
+});
+
+test('stop: anything other than owner or system needs the owning conversation', async t => {
+  const { jobs, start } = setup(t);
+  const id = start(SLEEP);
+  const loose = jobs.stop as unknown as (id: string, by: unknown, conversationId?: string) => Promise<unknown>;
+  assert.equal(await loose.call(jobs, id, undefined), undefined);
+  assert.equal(await loose.call(jobs, id, 'Model'), undefined);
+  assert.equal(await loose.call(jobs, id, 'Model', 'c2'), undefined);
+  assert.equal(jobs.get(id)!.state, 'running');
 });
