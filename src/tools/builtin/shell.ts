@@ -15,7 +15,7 @@ import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
-import { protectedTouchOf } from '../hooks/protected-touch.ts';
+import { installTouchOf, protectedTouchOf } from '../hooks/protected-touch.ts';
 import { selfTarget } from '../hooks/self-port.ts';
 import { outboundText } from '../../shared/messages/outbound.ts';
 import { pendingText } from '../../shared/messages/pending.ts';
@@ -170,9 +170,12 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     : run && 'run' in run ? { productRun: run.run } : run && 'secret' in run ? { ownerReason: pendingText('en', 'owner_secret_commit', { path: run.secret }) }
     : run && 'secretMessage' in run ? { ownerReason: pendingText('en', 'owner_secret_message') } : {};
   const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(gitStagingOnly(verdict.statements) ? { gitStaging: true as const } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
+  const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
+  if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
   const peeked = verdict.scripts.map(file => peek(file, language));
-  const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));
+  const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
+  const markers = [...selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config)), ...(peekTouch ? [peekTouch] : [])];
   const base = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   const reasonKeys = [...(markers.length ? ['code.self_touch'] : []), ...verdict.reasonKeys];

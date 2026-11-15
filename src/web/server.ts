@@ -13,6 +13,7 @@ import { redactJsonValue } from '../shared/redaction.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
 import { judgeStats } from '../tools/judge-stats.ts';
+import { judgeOff } from '../tools/pipeline.ts';
 import { searchHistory } from '../memory/history.ts';
 import { join } from 'node:path';
 import { MemoryError, planBooks } from '../memory/store.ts';
@@ -345,7 +346,7 @@ export function createWebServer(app: App): WebServer {
     const filter = projectWhere('engine_runs', project);
     const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
       .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null }>;
-    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app), project) });
+    sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app), project), judgeOff: judgeOff(app.config()) });
   });
 
   router.add('GET', '/api/judge/stats', ({ res, url }) => {
@@ -440,7 +441,11 @@ export function createWebServer(app: App): WebServer {
       if (error instanceof ConfigError) throw configProblem(error);
       throw error;
     }
-    await app.applyConfig(next);
+    try { await app.applyConfig(next); }
+    catch (error) {
+      if (error instanceof ConfigError) throw configProblem(error);
+      throw error;
+    }
     sendJson(res, 200, { ...settingsView(app), ...modelsView(app) });
   });
   router.add('GET', '/api/settings/reset', ({ res }) => sendJson(res, 200, { config: resetConfig(app.config()) }));

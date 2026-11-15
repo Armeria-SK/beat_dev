@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import type { McpConnect } from '../src/mcp/manager.ts';
-import { resolvePaths } from '../src/paths.ts';
+import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import type { BrowserDriver } from '../src/tools/browser/driver.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import type { JudgeLimitSet } from '../src/tools/pipeline.ts';
@@ -17,10 +17,11 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; botMemory?: boolean } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths; botMemory?: boolean } = {}) {
   const dir = tempDir(t);
   // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
-  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
+  const base = { ...resolvePaths(dir), env: join(dir, '.env') };
+  const paths = options.paths ? options.paths(base) : base;
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
