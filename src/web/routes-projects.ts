@@ -4,6 +4,7 @@ import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJE
 import { ownerSpeech } from '../db/conversations.ts';
 import { AcceptanceError, coverageOf, frozenHash, ownerChanges, type AcceptanceChangeRow, type AcceptanceDoc } from '../projects/acceptance.ts';
 import { BuildError, startBuild, unbuilt } from '../projects/build.ts';
+import { settleAwaiting } from '../projects/gate.ts';
 import { DeviationError, readDeviations } from '../projects/deviations.ts';
 import { diffFlags } from '../projects/diff-flags.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
@@ -233,6 +234,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
   });
 
   const decided = (projectId: string, before: string | null, version: number) => {
+    settleAwaiting(app.db, app.tasks, projectId);
     app.bus.publish({ type: 'acceptance.changed', projectId, version, draft: version === 0 });
     if (app.projects.get(projectId)?.doc_language !== before) app.bus.publish({ type: 'project.changed', projectId, change: 'updated' });
   };

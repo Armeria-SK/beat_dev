@@ -110,3 +110,10 @@ test('辞書: タスク画面（stage 7）の英語に日本語が混ざらな�
     assert.ok(!japanese.test(enText), `${key}: 英語に日本語が混ざっている: ${enText}`);
   }
 });
+
+test('R13 経過 owner_fix の名前: 質問の答えから作った直しは "Fix for your answer"、持ち主の確かめからは今までどおり', () => {
+  assert.equal(en[eventKey('owner_fix', JSON.stringify({ question: 4, item: 'A-1' }))!], 'Fix for your answer');
+  assert.equal(en[eventKey('owner_fix', JSON.stringify({ task: 't1', item: 'A-1' }))!], 'Fix for your check');
+  assert.equal(en[eventKey('owner_fix', 'not json')!], 'Fix for your check');
+  assert.equal(en[eventKey('owner_fix')!], 'Fix for your check');
+});

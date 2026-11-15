@@ -278,6 +278,7 @@ export const en = {
   'tasks.event.check_passed': 'Check command passed',
   'tasks.event.owner_check': 'Your check',
   'tasks.event.owner_fix': 'Fix for your check',
+  'tasks.event.owner_fix_answer': 'Fix for your answer',
   // p0-5
   // p0-6
   'ui.wordmark': 'beat',
@@ -1650,4 +1651,7 @@ export const en = {
   'ui.ob.hello.title': (name: string) => `Hello, ${name}. What should we build?`,
   'ui.ob.hello.there': 'there',
   'ui.ob.hello.meta': 'connected · no products yet',
+
+  'ui.tool.judgeSame': 'Allowed (same as an earlier call in this run)',
+  'runs.by.judgeReuse': 'Auto-approve (earlier answer in this run)',
 };

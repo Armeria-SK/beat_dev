@@ -8,7 +8,8 @@ import { plainBlock, plainLine, stripHidden } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { AcceptanceError, ITEM_ID, type AcceptanceStore } from '../projects/acceptance.ts';
 import type { ProjectStore } from '../projects/store.ts';
-import type { Task, TaskStore } from '../tasks/store.ts';
+import { settleAwaiting } from '../projects/gate.ts';
+import { OWNER_FIX, type Task, type TaskStore } from '../tasks/store.ts';
 
 export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
 export type QuestionStatus = 'open' | 'answered';
@@ -392,6 +393,7 @@ export class QuestionStore {
       } else if (kind === 'changed') {
         fixTaskId = this.#fixTask(tasks, row, options, answerText, text !== null, reopenedItem);
       }
+      if (reopenedItem) settleAwaiting(this.db, tasks, row.project_id);
       const follow = fixTaskId ?? reopenedTaskId;
       if (follow) this.db.prepare('UPDATE questions SET fix_task_id = ? WHERE id = ?').run(follow, id);
       return { fixTaskId, reopenedTaskId, resumedTaskId, reopenedItem, warning };
@@ -416,7 +418,8 @@ export class QuestionStore {
     const title = plainLine(questionText(language, 'fix_title', { id: row.id, question: row.question }), TITLE_MAX);
     const body = [questionText(language, 'fix_body', { question: row.question, assumed, answer: answerText }), item ? questionText(language, 'fix_item', { item }) : ''].filter(Boolean).join('\n');
     const ownerText = ownerWrote || row.tainted === 0 ? answerText : null;
-    const task = tasks.create({ title, body, origin: 'user', actor: 'user', projectId: row.project_id, ownerRequest: ownerText !== null });
+    const task = tasks.create({ title, body, origin: 'user', actor: 'user', projectId: row.project_id, ownerRequest: ownerText !== null, ...(item ? { acceptanceItems: [item] } : {}) });
+    if (item) tasks.event(task.id, OWNER_FIX, 'user', JSON.stringify({ question: row.id, item }));
     if (ownerText !== null) tasks.ownerEdited(task.id, { title: ownerText, body: '' });
     if (row.tainted === 1) tasks.markUntrusted(task.id, 'question', questionText(language, ownerText === null ? 'untrusted_note' : 'untrusted_note_owner'));
     return task.id;

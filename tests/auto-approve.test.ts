@@ -757,7 +757,7 @@ test('外を読む確かめ（outside_read）に送る・消すと言う道具�
   assert.equal(s.prompts.length, names.length + 1);
 });
 
-test('よそから来た文を読んだあとでも、送らず消さないと言う道具・ファイルの道具・送らないシェルのコマンドは確かめなしに動き、escalateOnTaint のメタの道具は判定役が決める。判定役の allow は覚えない（次も判定役に回る）', async t => {
+test('よそから来た文を読んだあとでも、送らず消さないと言う道具・ファイルの道具・送らないシェルのコマンドは確かめなしに動き、escalateOnTaint のメタの道具は判定役が決める。判定役の allow は同じ実行の中だけ使い回し（J-3）、別の実行では次も判定役に回る', async t => {
   const s = await setup(t, {
     tools: [
       fake('c_clean_write', 'write', { preCheck: said({ sends: false, removes: false }) }),
@@ -777,8 +777,9 @@ test('よそから来た文を読んだあとでも、送らず消さないと�
   assert.deepEqual([(await s.call('c_meta', {}, tainted)).decidedBy, s.prompts.length], ['auto-mode', 1]);
   assert.equal(cards(s), 0);
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 1);
-  // 判定役が allow でも、同じ入力は次も判定役に回る（覚えていない）
-  assert.equal((await s.call('c_meta', {}, tainted)).decidedBy, 'auto-mode');
+  assert.equal((await s.call('c_meta', {}, tainted)).decidedBy, 'judge-reuse');
+  assert.equal(s.prompts.length, 1);
+  assert.equal((await s.call('c_meta', {}, { ...tainted, runId: 'r2' })).decidedBy, 'auto-mode');
   assert.equal(s.prompts.length, 2);
 });
 
