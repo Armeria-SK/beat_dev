@@ -1,5 +1,5 @@
 import { Type } from '@sinclair/typebox';
-import { QuestionError, type QuestionView } from '../../questions/store.ts';
+import { QUESTION_CATEGORIES, QuestionError, type QuestionCategory, type QuestionView } from '../../questions/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { errorText } from '../../shared/messages/define.ts';
 import { questionText } from '../../shared/messages/questions.ts';
@@ -8,11 +8,11 @@ import type { ToolDef } from '../types.ts';
 
 const RECENT_ANSWERS = 10;
 
-interface QuestionAddInput { question: string; why: string; options: string[]; chosen?: number; blocking?: boolean; item?: string }
+interface QuestionAddInput { question: string; why: string; options: string[]; chosen?: number; blocking?: boolean; item?: string; category?: QuestionCategory }
 
 export const questionAdd: ToolDef<QuestionAddInput> = {
   name: 'question_add',
-  description: 'Record a question for the owner and keep working with the option you assume (chosen: the number of that option, from 0). The owner answers later; a different answer starts a follow-up task. If you can go ahead with an assumption, do not set blocking. Set blocking only when no assumption is safe: the task then waits for the answer. item: the acceptance item the question is about (such as A-3); a different answer reopens it.',
+  description: 'Record a question for the owner and keep working with the option you assume (chosen: the number of that option, from 0). The owner answers later; a different answer starts a follow-up task. If you can go ahead with an assumption, do not set blocking. Set blocking only when no assumption is safe: the task then waits for the answer. item: the acceptance item the question is about (such as A-3); a different answer reopens it. category: scope (what to build), ui, data, naming, tech, security, or other.',
   input: Type.Object({
     question: Type.String({ minLength: 1, maxLength: 1500 }),
     why: Type.String({ minLength: 1, maxLength: 1500 }),
@@ -20,6 +20,7 @@ export const questionAdd: ToolDef<QuestionAddInput> = {
     chosen: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })),
     blocking: Type.Optional(Type.Boolean()),
     item: Type.Optional(Type.String({ pattern: '^A-[1-9][0-9]{0,3}$', maxLength: 6 })),
+    category: Type.Optional(Type.Unsafe<QuestionCategory>(Type.String({ pattern: `^(${QUESTION_CATEGORIES.join('|')})$` }))),
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
@@ -34,7 +35,7 @@ export const questionAdd: ToolDef<QuestionAddInput> = {
     try {
       const row = questions.add({
         kind: 'ai', projectId, taskId: ctx.task.id, conversationId: ctx.conversationId, question: input.question, why: input.why,
-        options: input.options, chosen: input.chosen, blocking: input.blocking, acceptanceItem: input.item, tainted,
+        options: input.options, chosen: input.chosen, blocking: input.blocking, acceptanceItem: input.item, category: input.category, tainted,
       });
       if (row.blocking === 1) {
         ctx.task.control = { outcome: 'question', question: row.question };

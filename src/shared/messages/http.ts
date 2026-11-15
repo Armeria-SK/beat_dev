@@ -27,6 +27,7 @@ const en = {
   'bad_bool': '{field} must be true or false',
   'bad_time': '{field} must be a time in milliseconds',
   'bad_language': '{field} must be a language tag (like ja, en, zh-Hant) or null',
+  'bad_month': 'month must be a year and month (example: 2026-11)',
   'bad_ids': 'ids must be an array of notification IDs',
   'empty_name': 'The name is empty',
   'bad_color': 'color must be in the form #RRGGBB',

@@ -114,7 +114,7 @@ test('移し替え 28〜32 のあと: questions と check_state は決めた値�
     const id = Number(db.prepare("INSERT INTO questions (question, created_at) VALUES ('Which date format?', 5)").run().lastInsertRowid);
     assert.deepEqual(rowsOf(db, `SELECT * FROM questions WHERE id = ${id}`), [{
       id, project_id: null, task_id: null, conversation_id: null, kind: 'ai', question: 'Which date format?', why: null, options: '[]', chosen: null, blocking: 0,
-      acceptance_item: null, status: 'open', answer: null, answer_kind: null, fix_task_id: null, tainted: 0, created_at: 5, answered_at: null,
+      acceptance_item: null, status: 'open', answer: null, answer_kind: null, fix_task_id: null, tainted: 0, created_at: 5, answered_at: null, category: 'other',
     }]);
     for (const kind of ['ai', 'stuck', 'check_failed', 'submit_refused']) db.prepare('INSERT INTO questions (question, kind, created_at) VALUES (?, ?, 1)').run('q', kind);
     assert.throws(() => db.prepare("INSERT INTO questions (question, kind, created_at) VALUES ('q', 'owner', 1)").run(), /CHECK/u);

@@ -33,6 +33,7 @@ import type { RunRow } from '../db/runs.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { registerPendingRoutes } from './routes-pending.ts';
 import { registerQuestionRoutes } from './routes-questions.ts';
+import { registerGrowthRoutes } from './routes-growth.ts';
 import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
@@ -414,6 +415,7 @@ export function createWebServer(app: App): WebServer {
   registerTaskRoutes(router, app);
   registerPendingRoutes(router, app);
   registerQuestionRoutes(router, app);
+  registerGrowthRoutes(router, app);
   // ── スキル・レビュー・好奇心・振り返り ──
   registerReviewRoutes(router, app);
   // ── はじめの設定・名前と話し方（SOUL.md / USER.md）・.env の読み直し ──
