@@ -7,6 +7,7 @@ import type { LiveDraft } from '../live-state.ts';
 import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners, ticksEverySecond } from '../overview.ts';
 import { CountBadge, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
+import { GrowthSection } from './GrowthSection.tsx';
 import { FinishedItem, MiniBoard, RunningItems, StatTile, useHomeLoad, useLastLook, useRunActions } from './home-parts.tsx';
 
 export interface ProductHomeProps {
@@ -89,6 +90,8 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
           </ul>
         )}
       </section>
+
+      <GrowthSection key={id} id={id} createdAt={project.created_at} revision={revision} index={7} />
     </div>
   );
 }
