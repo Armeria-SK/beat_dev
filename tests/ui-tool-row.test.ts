@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
-import { redactSecrets } from '../src/shared/redaction.ts';
+import { mcpToolName } from '../src/mcp/names.ts';
+import { redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
+import { en } from '../web/src/i18n/en.ts';
 import { maskTarget, toolLabel, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
 
 // 新しい画面の ToolRow（p1-ui.md の「会話」）: 道具の名前と引数から、動詞・対象・meta を作る。
@@ -81,7 +83,6 @@ test('ui/tool-row: 検索・Web は語、agent_run は題（無ければ頼ん�
   assert.equal(toolRow('agent_run', JSON.stringify({ task: 'Find flaky tests\nand more' }), null).target, 'Find flaky tests and more');
   assert.deepEqual(toolRow('agent_run', JSON.stringify({ task: 't', title: 'Flaky' }), { text: 'answer', isError: false }), { verb: 'helper', name: 'agent_run', icon: 'branch', target: 'Flaky', meta: { kind: 'returned' } });
   assert.equal(toolRow('memory_save', JSON.stringify({ book: 'notes', content: 'Likes tea' }), null).target, 'Likes tea');
-  assert.equal(toolRow('calculate', JSON.stringify({ expression: 1 }), null).target, '');
 });
 
 test('ui/tool-row: shell_run の見出しは、写したコマンドの次の行だけから読む（モデルが書いたコマンドの中の偽の見出しに騙されない）', () => {
@@ -163,7 +164,7 @@ const REAL: Record<string, [unknown, string, string]> = {
   shell_run: [{ command: 'npm test' }, 'Run', 'npm test'],
   plan_write: [{ content: '# Plan\n1. Upload' }, 'Write plan', 'plan.md'],
   acceptance_write: [{ items: [{ result: 'a', source: 'ai_added', check: 'look' }, { result: 'b', source: 'ai_added', check: 'look' }] }, 'Draft acceptance', '2 items'],
-  acceptance_change: [{ changes: [{ op: 'add', result: 'c' }] }, 'Propose change', '1 change'],
+  acceptance_change: [{ changes: [{ op: 'add', result: 'c' }] }, 'Propose', '1 acceptance change'],
   mesh_search: [{ query: 'upload', file: 'plan.md' }, 'Search', '"upload" in plan.md'],
   mesh_read: [{ file: 'plan.md', section: 'Steps' }, 'Search', 'plan.md › Steps'],
   mesh_state_set: [{ now: 'Writing tests', next: 'Run them' }, 'Note status', 'Writing tests'],
@@ -181,7 +182,7 @@ const REAL: Record<string, [unknown, string, string]> = {
   curiosity_update: [{ id: 3, status: 'done' }, 'Update curiosity', '#3'],
   file_search: [{ text: 'uploadFile', path: 'src' }, 'Search', '"uploadFile" in src'],
   calculate: [{ expression: '12*(3+4)' }, 'Calculate', '12*(3+4)'],
-  date_calc: [{ op: 'diff', date: '2026-11-15', to: '2026-12-25' }, 'Work out date', 'diff 2026-11-15 2026-12-25'],
+  date_calc: [{ op: 'diff', date: '2026-11-15', to: '2026-12-25' }, 'Work out date', '2026-11-15 → 2026-12-25'],
   checklist_write: [{ items: [{ text: 'Find code', status: 'done' }, { text: 'Make the change', status: 'in_progress' }, { text: 'Run tests', status: 'pending' }] }, 'Update checklist', 'Make the change'],
   notify_owner: [{ title: 'Build finished' }, 'Notify owner', 'Build finished'],
   doc_read: [{ path: 'report.pdf' }, 'Search', 'report.pdf'],
@@ -196,8 +197,8 @@ const REAL: Record<string, [unknown, string, string]> = {
   browser_read: [{}, 'Search', 'current page'],
   browser_screenshot: [{ tab: 't2' }, 'Screenshot', 'tab t2'],
   browser_close: [{}, 'Close tab', 'all tabs'],
-  browser_click: [{ ref: 'e12' }, 'Click', 'e12'],
-  browser_type: [{ ref: 'e7', text: 'hello' }, 'Type text', 'e7'],
+  browser_click: [{ ref: 'e12' }, 'Click', 'element e12'],
+  browser_type: [{ ref: 'e7', text: 'hello' }, 'Type text', 'element e7'],
 };
 
 test('ui/tool-row: 組み込みの道具のどれも、ふつうの引数なら行に人の言葉の名前と空でない対象が出る（snake_case の名前を出さない）', () => {
@@ -212,16 +213,17 @@ test('ui/tool-row: 組み込みの道具のどれも、ふつうの引数なら�
   }
 });
 
-test('ui/tool-row: 対象の言い方（節・範囲・数・作業中の項目・番号・タブ）', () => {
+test('ui/tool-row: 対象の言い方（節・範囲・数・作業中の項目・番号・タブ・要素・日付）', () => {
   const target = (name: string, args: unknown) => toolRow(name, JSON.stringify(args), null).target;
   assert.equal(target('mesh_read', { file: 'notes/ideas.md' }), 'notes/ideas.md');
   assert.equal(target('mesh_search', { query: 'upload' }), 'upload');
+  assert.equal(target('mesh_search', { query: 'say "hi"', file: 'plan.md' }), '“say "hi"” in plan.md');
   assert.equal(target('file_list', { path: 'src' }), 'src');
   assert.equal(target('file_search', { name: '*.ts' }), '*.ts');
   assert.equal(target('file_search', { name: '*.ts', path: 'web' }), '"*.ts" in web');
   assert.equal(target('file_search', {}), 'working folder');
   assert.equal(target('acceptance_write', { items: [{ result: 'a' }] }), '1 item');
-  assert.equal(target('acceptance_change', { changes: [{ op: 'a' }, { op: 'b' }] }), '2 changes');
+  assert.equal(target('acceptance_change', { changes: [{ op: 'a' }, { op: 'b' }] }), '2 acceptance changes');
   assert.equal(target('checklist_write', { items: [{ text: 'a', status: 'done' }, { text: 'b', status: 'pending' }] }), '2 steps');
   assert.equal(target('checklist_write', { items: [{ text: 'a', status: 'done' }] }), '1 step');
   assert.equal(target('task_list', { include_finished: true }), 'all tasks');
@@ -229,19 +231,90 @@ test('ui/tool-row: 対象の言い方（節・範囲・数・作業中の項目�
   assert.equal(target('browser_read', { tab: 't3' }), 'tab t3');
   assert.equal(target('browser_close', { tab: 't3' }), 'tab t3');
   assert.equal(target('browser_screenshot', {}), 'current page');
+  assert.equal(target('mesh_state_set', { goal: 'Ship upload', now: 'Writing tests' }), 'Writing tests');
+  assert.equal(target('mesh_state_set', { goal: 'Ship upload' }), 'Ship upload');
+  assert.equal(target('date_calc', { op: 'add', date: '2026-11-15', days: 3, months: -1 }), '2026-11-15 +3 days −1 month');
+  assert.equal(target('date_calc', { op: 'convert', datetime: '2026-11-15 09:00', timezone: 'Asia/Tokyo', to_timezone: 'Europe/London' }), '2026-11-15 09:00 Asia/Tokyo → Europe/London');
+  assert.equal(target('date_calc', { op: 'now' }), 'now');
 });
 
-test('ui/tool-row: 知らない道具（MCP など）は、読める名前と、引数の中の最初の空でない文字の値を 1 行で出す', () => {
-  assert.equal(toolLabel('mcp__github__create_issue'), 'github · create issue');
+test('ui/tool-row: 自分の言い方を持つ道具は、それが空でも、ほかの引数を代わりに出さない（決まった言葉を出す）', () => {
+  const target = (name: string, args: unknown) => toolRow(name, JSON.stringify(args), null).target;
+  assert.equal(target('browser_type', { ref: '', text: 'my secret words' }), 'no details');
+  assert.equal(target('shell_run', { command: '', cwd: 'D:/private/folder' }), 'no details');
+  assert.equal(target('calculate', { expression: 1 }), 'no details');
+});
+
+test('ui/tool-row: MCP の道具（mcp_<サーバー>_<道具>）は「サーバー · 道具」の読める名前、それ以外の知らない道具は _ を空白に', () => {
+  assert.equal(toolLabel(mcpToolName('github', 'create_issue')), 'github · create issue');
+  assert.equal(toolLabel(mcpToolName('fs2', 'Read-File')), 'fs2 · read file');
   assert.equal(toolLabel('some_tool'), 'some tool');
-  assert.equal(toolRow('mcp__github__create_issue', JSON.stringify({ count: 2, repo: '', body: 'Line one\n  line two' }), null).target, 'Line one line two');
-  assert.equal(toolRow('mcp__x__y', JSON.stringify({ n: 1 }), null).target, '');
+  assert.equal(toolLabel('mcp_Bad_x'), 'mcp Bad x');
 });
 
-test('ui/tool-row: 知らない道具の対象でも、鍵らしい値は伏せ、鍵らしい名前の引数は使わない', () => {
-  const masked = toolRow('mcp__x__call', JSON.stringify({ header: 'Authorization: Bearer abcdefghijklmnop1234' }), null).target;
+test('ui/tool-row: 知らない道具は、説明に使う引数の名前（決まった一覧）の値だけを 1 行で出し、無ければ決まった言葉', () => {
+  const target = (args: unknown) => toolRow(mcpToolName('x', 'call'), JSON.stringify(args), null).target;
+  assert.equal(target({ count: 2, repo: '', body: 'Line one\n  line two' }), 'Line one line two');
+  assert.equal(target({ n: 1 }), 'no details');
+  assert.equal(target({ description: 'List files', cmd: 'rm -rf ~' }), 'rm -rf ~', '説明より、実際に動くコマンドを出す');
+  for (const secret of [{ pass: 'hunter2', user: 'sam' }, { otp: '839201' }, { key: 'AKIAABCDEFGHIJKLMNOP' }, { pwd: 'x9y8z7', pin: '1234', code: '5678', passcode: '0000' }]) {
+    const shown = target(secret);
+    assert.equal(shown, 'no details', JSON.stringify(secret));
+  }
+});
+
+test('ui/tool-row: 知らない道具の対象でも、鍵らしい値は伏せる', () => {
+  const masked = toolRow(mcpToolName('x', 'call'), JSON.stringify({ description: 'Authorization: Bearer abcdefghijklmnop1234' }), null).target;
   assert.ok(!masked.includes('abcdefghijklmnop1234'), masked);
   assert.ok(masked.includes('[REDACTED]'), masked);
-  assert.equal(toolRow('mcp__x__login', JSON.stringify({ password: 'hunter2hunter2', user: 'sam' }), null).target, 'sam');
-  assert.ok(!toolRow('mcp__x__fetch', JSON.stringify({ endpoint: 'https://u:pw123@h.test/?token=abc' }), null).target.includes('pw123'));
+  assert.ok(!toolRow(mcpToolName('x', 'fetch'), JSON.stringify({ url: 'https://u:pw123@h.test/?token=abc' }), null).target.includes('pw123'));
+});
+
+test('ui/tool-row: 対象から制御文字と向きを変える文字を消す', () => {
+  assert.equal(toolRow('file_read', JSON.stringify({ path: 'a\u202Efdp.exe' }), null).target, 'afdp.exe');
+  assert.equal(toolRow('file_read', JSON.stringify({ path: 'a\u2066b\u2069c\u0007d\u0000e' }), null).target, 'abc d e');
+});
+
+test('ui/tool-row: ui.toolLabel の項目は、動詞の 4 種類に入らない組み込みの道具とちょうど同じ', () => {
+  const keys = Object.keys(en).filter(key => key.startsWith('ui.toolLabel.')).map(key => key.slice('ui.toolLabel.'.length)).sort();
+  const tools = builtinTools().map(tool => tool.name).filter(name => toolVerb(name) === 'tool').sort();
+  assert.deepEqual(keys, tools);
+});
+
+const LONG = 'word '.repeat(1000);
+const LONG_CASES: Array<[string, Record<string, unknown>, RegExp]> = [
+  ['file_write', { path: 'docs/notes.md', content: LONG }, /^docs\/notes\.md$/u],
+  ['file_edit', { path: 'src/q.ts', old: LONG, new: LONG }, /^src\/q\.ts$/u],
+  ['table_write', { path: 'out.csv', rows: Array.from({ length: 400 }, (_, i) => [`row ${i}`, 'value']) }, /^out\.csv$/u],
+  ['plan_write', { content: LONG }, /^plan\.md$/u],
+  ['checklist_write', { items: Array.from({ length: 30 }, (_, i) => ({ text: `Step ${i} ${'y'.repeat(150)}`, status: 'pending' })) }, /^\d+\+ steps$/u],
+  ['checklist_write', { items: [{ text: 'First thing', status: 'in_progress' }, ...Array.from({ length: 30 }, () => ({ text: 'z'.repeat(190), status: 'pending' }))] }, /^First thing$/u],
+  ['acceptance_write', { items: Array.from({ length: 40 }, (_, i) => ({ result: `Result ${i} ${'r'.repeat(120)}`, source: 'ai_added', check: 'look' })) }, /^\d+\+ items$/u],
+  ['acceptance_change', { changes: Array.from({ length: 40 }, (_, i) => ({ op: 'add', result: `R ${i} ${'r'.repeat(120)}` })) }, /^\d+\+ acceptance changes$/u],
+  ['task_complete', { summary: `Done. ${LONG}` }, /^Done\. [a-z ]+…$/u],
+  ['shell_run', { command: `echo ${LONG}` }, /^echo [a-z ]+…$/u],
+];
+
+test('ui/tool-row: サーバーが途中で切った引数（2,000 字・4,000 字）でも、対象を空にせず、切れた値は「…」で終える', () => {
+  for (const limit of [2000, 4000]) {
+    for (const [name, args, expected] of LONG_CASES) {
+      const input = JSON.stringify(redactJsonValue(args)).slice(0, limit);
+      assert.throws(() => JSON.parse(input), SyntaxError, `${name} は切れている`);
+      const target = toolRow(name, input, null).target;
+      assert.match(target, expected, `${name} ${limit}: ${target}`);
+    }
+  }
+});
+
+test('ui/tool-row: 切れた引数の値でも鍵らしい値は伏せ、文字の逃がし（\\ と \\u）の途中で切れても壊れない', () => {
+  const secret = JSON.stringify({ summary: `Token: Bearer abcdefghijklmnop1234 ${'x'.repeat(3000)}` }).slice(0, 2000);
+  const shown = toolRow('task_complete', secret, null).target;
+  assert.ok(!shown.includes('abcdefghijklmnop1234') && shown !== '', shown);
+  assert.equal(toolRow('task_complete', '{"summary":"ab\\', null).target, 'ab…');
+  assert.equal(toolRow('task_complete', '{"summary":"ab\\u00', null).target, 'ab…');
+  assert.equal(toolRow('task_complete', '{"summary":"ab\\\\', null).target, 'ab\\…');
+  assert.equal(toolRow('file_write', '{"path":"a.md","conte', null).target, 'a.md');
+  assert.equal(toolRow('file_write', 'not json', null).target, '');
+  assert.equal(toolRow('plan_write', 'not json', null).target, 'plan.md');
+  assert.equal(toolRow('question_list', '', null).target, 'this product');
 });
