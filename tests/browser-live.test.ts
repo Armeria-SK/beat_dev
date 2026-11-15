@@ -155,11 +155,11 @@ test('T-44(1)(3)(4): example.com を開いて本文が読め、押せて、起�
   const read = await session.run(call, async api => {
     const tab = await api.openTab();
     await tab.page.goto('https://example.com/', LAUNCH_TIMEOUT_MS);
-    return { url: tab.page.url(), text: await tab.page.text(5000), links: await tab.page.countRole('link', 'Learn more') };
+    return { url: tab.page.url(), text: await tab.page.text(5000), links: (await tab.page.locate({ role: 'link', name: 'Learn more', nth: 0, count: 1 })) !== undefined };
   });
   assert.match(read.url, /^https:\/\/example\.com\//u);
   assert.match(read.text, /documentation examples/u);
-  assert.equal(read.links, 1, '「Learn more」のリンクが見える');
+  assert.equal(read.links, true, '「Learn more」のリンクが見える');
 
   // 起動したブラウザのコマンド行（プロファイルの置き場で選ぶ）
   const lines = commandLines(profileDir);

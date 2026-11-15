@@ -3,7 +3,6 @@
 import type { Language } from '../../config/schema.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { pageUrl as publicPageUrl } from '../web/public-page.ts';
-import type { ElementState, PageHandle } from './driver.ts';
 
 export const NUMBERED_ROLES: ReadonlySet<string> = new Set([
   'link', 'button', 'textbox', 'searchbox', 'checkbox', 'radio', 'combobox', 'listbox', 'option',
@@ -104,13 +103,4 @@ export function formatElements(table: ElementTable, language: Language): string 
   const lines = table.items.map(e => [e.ref, e.role, shown(e.name), ...e.states.map(s => `[${s}]`), ...(e.href ? [`→ ${e.href}`] : [])].join(' '));
   if (table.omitted > 0) lines.push(toolText(language, 'browser.more_elements', { count: table.omitted }));
   return lines.join('\n');
-}
-
-export type Relocated = { ok: true; state: ElementState } | { ok: false; reason: 'changed' };
-
-// 役割・名前（完全一致）・nth で探し直す。読んだときと数が違う・無い → 実行しない（ページが変わった）
-export async function relocate(page: PageHandle, element: ElementRef): Promise<Relocated> {
-  if (await page.countRole(element.role, element.name) !== element.count) return { ok: false, reason: 'changed' };
-  const state = await page.stateOf(element.role, element.name, element.nth);
-  return state ? { ok: true, state } : { ok: false, reason: 'changed' };
 }

@@ -52,11 +52,6 @@ function noCodeRun(seg: Segment): boolean {
   if (READ_ONLY_CMDS.has(seg.cmd)) return true;
   return seg.cmd === 'git' && GIT_READ_SUBS.has(seg.args.find(a => !a.startsWith('-')) ?? '');
 }
-// 引数の場所に書き込まないコマンド（R1.8）。tar・zip などは展開先（-C skills/）に書くので、読むだけには数えない
-const ARCHIVERS = new Set(['tar', 'zip', 'unzip', 'gzip', 'gunzip', '7z', 'expand-archive', 'compress-archive']);
-export function readOnlyInvocation(seg: Segment): boolean {
-  return noCodeRun(seg) && !ARCHIVERS.has(seg.cmd);
-}
 
 const PACKAGE_TOOLS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const PACKAGE_READONLY_SUB = new Set(['ls', 'list', 'll', 'la', 'view', 'info', 'show', 'outdated', 'why', 'explain', 'help', 'audit', 'version', 'bin', 'root', 'prefix']);

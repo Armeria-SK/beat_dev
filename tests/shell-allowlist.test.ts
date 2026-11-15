@@ -572,8 +572,6 @@ function holeFixture(t: { after: (fn: () => void) => void }) {
 }
 type GuardVerdict = ReturnType<ReturnType<typeof holeFixture>['guard']>;
 const whyOf = (v: GuardVerdict): string => `${v.decision} once=${v.onceOnly} :: ${v.reasons.join(' / ').slice(0, 140)}`;
-// 毎回確かめ（今回だけ）
-const expectOnce = (v: GuardVerdict, label: string): void => assert.deepEqual([v.decision, v.onceOnly], ['ask', true], `${label} → ${whyOf(v)}`);
 
 // ループの変数は代入と同じ。bash の for NAME in … と PowerShell の foreach ($v in …) は、NAME・$v に代入する
 const LOOP_ASK: ReadonlyArray<readonly ['bash' | 'powershell', string]> = [

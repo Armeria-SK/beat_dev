@@ -160,10 +160,6 @@ export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKi
   return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
 }
 
-export function needsWriteApproval(abs: string, policy: ScopePolicy): boolean {
-  return writeApprovalKind(abs, policy) !== undefined;
-}
-
 export type Placement =
   | { kind: 'deny'; reason: string }
   | { kind: 'inside'; mode: RootMode; root: string }
