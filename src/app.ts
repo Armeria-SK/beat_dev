@@ -257,9 +257,10 @@ export class App {
       if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
         this.curiosity.onTaskFinished(task);
         // 実行したタスクが終わったら振り返る（実行の記録があるものだけ）
-        if (task.status !== 'cancelled' && task.conversation_id && this.config().memory.review) {
+        if (task.status !== 'cancelled' && task.conversation_id && this.worker.memoryReviewsOn()) {
           this.reviews.enqueue('task', `task:${task.id}`, { taskId: task.id, conversationId: task.conversation_id });
         }
+        if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task);
       }
       this.worker.poke();
     };
@@ -298,7 +299,11 @@ export class App {
       this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.change_summary ?? draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
-      if (run.kind === 'chat' && this.config().memory.review) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
+      if (run.kind === 'chat') {
+        if (this.worker.memoryReviewsOn()) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
+        if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillIfDue(run.conversationId);
+        else this.reviews.skipSkillReading(run.conversationId);
+      }
       this.worker.poke();
     };
   }

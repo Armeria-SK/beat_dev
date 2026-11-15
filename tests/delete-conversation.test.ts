@@ -247,7 +247,8 @@ test('削除: この会話の振り返りが動いている最中なら、止め
     yield { type: 'text', delta: `${SECRET} を覚えようとしています` };
     await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
   }];
-  app.reviews.enqueue('manual', `manual:${TARGET}`, { conversationId: TARGET });
+  app.engine.lastUserActivity = 0;
+  app.reviews.enqueue('manual', `manual:${TARGET}`, { conversationId: TARGET, kind: 'skill' });
   const tick = app.worker.tick();
   try {
     await waitFor(() => app.engine.activeRuns().some(r => r.kind === 'review'), '振り返りの実行');
@@ -289,8 +290,9 @@ test('削除: 動いている振り返りを止めて待っているあいだに
     await released;
     throw req.signal.reason;
   }];
-  app.reviews.enqueue('manual', `manual:${TARGET}`, { conversationId: TARGET });
-  const queued = app.reviews.enqueue('idle', `idle:${TARGET}:9`, { conversationId: TARGET })!;
+  app.engine.lastUserActivity = 0;
+  app.reviews.enqueue('manual', `manual:${TARGET}`, { conversationId: TARGET, kind: 'skill' });
+  const queued = app.reviews.enqueue('idle', `idle:${TARGET}:9`, { conversationId: TARGET, kind: 'skill' })!;
   const tick = app.worker.tick();
   try {
     await waitFor(() => app.engine.activeRuns().some(r => r.kind === 'review'), '振り返りの実行');
@@ -299,7 +301,8 @@ test('削除: 動いている振り返りを止めて待っているあいだに
     assert.equal(app.reviews.get(queued.id), undefined, '待っている振り返りは、止めた実行の終わりを待つより前に外してある');
     assert.equal(app.reviews.next(), undefined, 'ワーカーが選べる振り返りは残っていない');
     // 待っているあいだに積まれた振り返りも、消す前に外す
-    const late = app.reviews.enqueue('manual', `manual:late:${TARGET}`, { conversationId: TARGET })!;
+    app.engine.lastUserActivity = 0;
+    const late = app.reviews.enqueue('manual', `manual:late:${TARGET}`, { conversationId: TARGET, kind: 'skill' })!;
     release();
     const res = await deleting;
     assert.equal(res.status, 200);

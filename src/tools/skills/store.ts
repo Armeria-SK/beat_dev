@@ -5,6 +5,7 @@ import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../../config/sc
 import { atomicWriteFile } from '../../config/store.ts';
 import { conversationSawOutside } from '../../db/outside.ts';
 import { LocalizedError, type MessageParams } from '../../shared/messages/define.ts';
+import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import { storeText, type StoreMessageKey } from '../../shared/messages/stores.ts';
 
 const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
@@ -33,6 +34,7 @@ export type SkillAuthor = 'you' | 'beat' | 'beat-auto';
 export interface SkillVersion { id: string; at: number; who: SkillAuthor; lines: number; description: string; body: string }
 export const SKILL_VERSIONS_KEPT = 20;
 export const SKILL_AUTO_PER_DAY = 5;
+export const SKILL_REVIEW_PENDING_MAX = 10;
 const AUTO_LOG_KEY = 'skills:auto-registered';
 const DAY_MS = 86_400_000;
 const VERSION_FILE = /^(\d{1,16})-(you|beat-auto|beat)(?:-(\d{1,4}))?\.md$/u;
@@ -71,12 +73,13 @@ export function renderSkillFile(skill: { name: string; description: string; body
   return `---\nname: ${skill.name}\ndescription: ${JSON.stringify(description)}\n---\n\n${skill.body.trim()}\n`;
 }
 
-function validate(input: { name: string; description: string; body: string }): void {
+function validate(input: { name: string; description: string; body: string; reason?: string | null | undefined; change?: string | null | undefined }): void {
   if (!SKILL_NAME.test(input.name)) throw new SkillError('skill.bad_name');
   if (!input.description.trim()) throw new SkillError('skill.empty_description');
   if (input.description.length > MAX_DESCRIPTION) throw new SkillError('skill.long_description', { max: MAX_DESCRIPTION });
   if (!input.body.trim()) throw new SkillError('skill.empty_body');
   if (input.body.length > MAX_BODY) throw new SkillError('skill.long_body', { max: MAX_BODY });
+  if (sanitizeModelInputText([input.name, input.description, input.body, input.reason ?? '', input.change ?? ''].join('\n')).redaction_count > 0) throw new SkillError('skill.secret');
 }
 
 export class SkillStore {
@@ -275,16 +278,22 @@ export class SkillStore {
     this.#db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(AUTO_LOG_KEY, JSON.stringify(recent), now);
   }
 
-  draft(input: { name: string; description: string; body: string; reason?: string | undefined; change?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean }): SkillDraft {
+  draft(input: { name: string; description: string; body: string; reason?: string | undefined; change?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean; fromReview?: boolean }): SkillDraft {
     if (!this.#grow()) throw new SkillError('skill.growth_off');
     validate(input);
     const pending = this.#db.prepare("SELECT COUNT(*) AS n FROM skill_drafts WHERE status = 'pending'").get() as { n: number };
     if (pending.n >= 20) throw new SkillError('skill.too_many_drafts');
+    if (input.fromReview) {
+      const fromReview = "EXISTS (SELECT 1 FROM engine_runs r WHERE r.id = d.run_id AND r.kind = 'review')";
+      if (this.#db.prepare(`SELECT 1 FROM skill_drafts d WHERE d.name = ? AND d.status = 'pending' AND NOT ${fromReview}`).get(input.name)) throw new SkillError('skill.pending_from_chat', { name: input.name });
+      const mine = this.#db.prepare(`SELECT COUNT(*) AS n FROM skill_drafts d WHERE d.status = 'pending' AND ${fromReview}`).get() as { n: number };
+      if (mine.n >= SKILL_REVIEW_PENDING_MAX) throw new SkillError('skill.too_many_review_drafts', { max: SKILL_REVIEW_PENDING_MAX });
+    }
     // 同じ名前の承認待ちは、新しいもので置き換える（古い方は却下扱い）
     const now = this.#now();
     this.#db.prepare("UPDATE skill_drafts SET status = 'rejected', decided_at = ? WHERE name = ? AND status = 'pending'").run(now, input.name);
-    const result = this.#db.prepare('INSERT INTO skill_drafts (name, description, body, reason, change_summary, conversation_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(input.name, input.description.trim(), input.body.trim(), input.reason?.trim() || null, input.change?.trim() || null, input.conversationId ?? null, input.runId ?? null, now);
+    const result = this.#db.prepare('INSERT INTO skill_drafts (name, description, body, reason, change_summary, conversation_id, run_id, created_at, outside) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(input.name, input.description.trim(), input.body.trim(), input.reason?.trim() || null, input.change?.trim() || null, input.conversationId ?? null, input.runId ?? null, now, input.autoOk === true ? 0 : 1);
     const id = Number(result.lastInsertRowid);
     if (input.autoOk === true && this.autoRegister?.() === true) {
       try { if (this.#autoQuotaLeft(now)) { this.approve(id, 'beat-auto'); this.#countAuto(now); } } catch (error) { this.#log(`[WARN] Could not register skill "${input.name}" without review, so it waits as a draft: ${(error as Error).message}`); }

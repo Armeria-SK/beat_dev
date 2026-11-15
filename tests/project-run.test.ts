@@ -334,7 +334,8 @@ test('2-3 製品の毎回の 1 行: 会話・タスク・子の担当で、1 行
   assert.equal(runCalls.length, 12);
   for (const request of runCalls) assert.equal(productLine(request.system.dynamic), shop.root, request.system.dynamic);
 
-  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1), kind: 'skill' });
   s.adapter().scripts = [reply('No changes')];
   assert.equal(await s.app.worker.tick(), 'ran');
   const review = s.adapter().calls.at(-1)!;
