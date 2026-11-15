@@ -8,7 +8,7 @@ import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { compactSpeaker } from '../src/engine/prompts.ts';
-import { reviewPrompt, transcriptOf } from '../src/memory/review.ts';
+import { reviewPrompt, reviewWindow } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { parseSkillFile, renderSkillFile } from '../src/tools/skills/store.ts';
 import { createWebServer } from '../src/web/server.ts';
@@ -125,19 +125,19 @@ test('振り返りで記憶をまとめても、取り消せる', async t => {
 test('ユーザーが消した記憶は、振り返りの依頼文で「覚え直さない」と伝える', () => {
   const prompt = reviewPrompt({ trigger: 'idle', transcript: '【ユーザー】こんにちは', forgotten: ['猫を飼っている'], memory: true });
   assert.match(prompt, /Memories the user deleted[\s\S]*猫を飼っている/u);
-  const transcript = transcriptOf([
-    { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: 'a'.repeat(50), message: { role: 'user', content: 'x' }, created_at: 0 },
-    { id: 2, conversation_id: 'c', run_id: null, role: 'assistant', text: '新しい方', message: { role: 'assistant', content: 'x' }, created_at: 0 },
-  ], 20);
-  assert.equal(transcript, '[beat] 新しい方', '長すぎるときは新しい方を残す');
+  const window = reviewWindow([
+    { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: '古い方', message: { role: 'user', content: 'x' }, created_at: 0 },
+    { id: 2, conversation_id: 'c', run_id: null, role: 'assistant', text: 'a'.repeat(50), message: { role: 'assistant', content: 'x' }, created_at: 0 },
+  ], { maxChars: 20 });
+  assert.deepEqual([window.transcript, window.lastId, window.full], ['[User] 古い方', 1, true], '長すぎるときは古い方から窓に入るところまで');
 });
 
 test('Pending の注記は、振り返りの記録でも要約の話し手でも持ち主の発言と読まず、道具の結果と同じ 300 文字で切る', () => {
   const note = { role: 'user' as const, content: 'x', generated: true as const, note: 'pending' as const, fetched: true as const };
-  const transcript = transcriptOf([
+  const { transcript } = reviewWindow([
     { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: 'b'.repeat(1000), message: note, created_at: 0 },
     { id: 2, conversation_id: 'c', run_id: null, role: 'user', text: 'owner words', message: { role: 'user', content: 'owner words' }, created_at: 0 },
-  ]);
+  ], { maxChars: 15_000 });
   const [noteLine, ownerLine] = transcript.split('\n');
   assert.match(noteLine!, /^\[beat note \(not from the user\)\] b{300}… \(truncated\)$/u);
   assert.equal(ownerLine, '[User] owner words');
@@ -145,8 +145,8 @@ test('Pending の注記は、振り返りの記録でも要約の話し手でも
   assert.equal(compactSpeaker({ role: 'user' }, 'en'), 'User');
 });
 
-test('タスクが終わったら振り返る。重い会話の後も振り返る', async t => {
-  const s = await setup(t, c => { c.memory.reviewAfterToolCalls = 1; });
+test('タスクが終わったら振り返る（タスクの節に会話の ID）。道具を多く使っただけの会話では、たまった分の振り返りを積まない', async t => {
+  const s = await setup(t);
   await s.app.worker.tick();
   const task = s.app.tasks.create({ title: '調べもの', origin: 'user', actor: 'user' });
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'わかった', notify: false }));
@@ -156,10 +156,12 @@ test('タスクが終わったら振り返る。重い会話の後も振り返�
   s.adapter().scripts.push(reply('変更なし'));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.match(String(s.adapter().calls.at(-1)!.messages.at(-1)?.content), /Finished task[\s\S]*わかった/u);
+  assert.ok(String(s.adapter().calls.at(-1)!.messages.at(-1)?.content).includes(`Conversation ID: ${s.app.tasks.get(task.id)!.conversation_id}`), 'タスクの節に会話の ID');
 
-  s.adapter().scripts.push(toolCall('memory_search', { query: 'コーヒー' }), reply('ありませんでした'));
-  const runId = await s.chat('c2', 'コーヒーの記憶ある？');
-  assert.ok(s.app.reviews.list().some(j => j.trigger === 'heavy_run' && j.dedup_key === `run:${runId}`));
+  s.adapter().scripts.push(toolCall('calculate', { expression: '1+1' }), toolCall('calculate', { expression: '2+2' }), toolCall('calculate', { expression: '3+3' }), reply('6 です'));
+  await s.chat('c2', '計算して');
+  assert.ok(s.app.runs.latestChat('c2')!.tool_calls >= 3, '前提: 道具を多く使った');
+  assert.deepEqual(s.app.reviews.list().filter(j => j.trigger === 'heavy_run'), []);
 });
 
 test('振り返りを切ると、きっかけがあっても積まない', async t => {

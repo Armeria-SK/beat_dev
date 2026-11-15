@@ -9,7 +9,7 @@ import type { SendChoice } from '../src/engine/chat.ts';
 import { contextAvailable } from '../src/engine/context-budget.ts';
 import { estimateMessageTokens, IMAGE_TOKENS } from '../src/engine/tokens.ts';
 import type { ChatMessage, ImageRef, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
-import { transcriptOf } from '../src/memory/review.ts';
+import { REVIEW_WINDOW_CHARS, reviewWindow } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../src/tools/types.ts';
@@ -342,7 +342,7 @@ test('道具の結果の画像: 出来事・道具の記録・画面の API に�
   assert.equal(listing.includes(MARK), false, 'GET /api/conversations/:id/messages の応答に画像（base64）が無い');
   const stored = s.app.conversations.messages(CONVERSATION);
   assert.equal(JSON.stringify(stored.map(m => m.text)).includes(MARK), false, 'text の列（検索の索引・要約・振り返りの材料）に画像が入らない');
-  assert.equal(transcriptOf(stored).includes(MARK), false, '振り返りの記録に画像が入らない');
+  assert.equal(reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }).transcript.includes(MARK), false, '振り返りの記録に画像が入らない');
 });
 
 test('道具の結果の画像: 古い画像つきのやり取りを要約に回しても、要約の依頼に画像は入らない（原文は DB に残る）', async t => {

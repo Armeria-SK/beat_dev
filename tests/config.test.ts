@@ -140,7 +140,7 @@ test('起動: --data-dir は今までどおり読み、そのフォルダの設�
 });
 
 test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書いてあっても読めて、初期値にはもう書かない', () => {
-  assert.deepEqual(Object.keys(defaultConfig().memory).sort(), ['review', 'reviewAfterToolCalls', 'reviewIdleMinutes']);
+  assert.deepEqual(Object.keys(defaultConfig().memory).sort(), ['review', 'reviewIdleMinutes']);
   const old = parseConfig({ version: 1, server: {}, routing: {}, memory: { userMaxChars: 2000, notesMaxChars: 3000, review: false } });
   assert.equal(old.memory.review, false);
   assert.equal(old.memory.userMaxChars, 2000, '読めるが、使わない');

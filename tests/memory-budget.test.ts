@@ -476,10 +476,10 @@ test('整理の振り返りの依頼文: 消さずに案を書く方針になる
   const tidy = reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x', memory: true });
   assert.match(tidy, /memory_forget is not available/u);
   assert.match(tidy, /in your final reply, one per line/u);
-  assert.doesNotMatch(tidy, /drop the one you no longer need with memory_forget/u, '消す指示は残さない');
+  assert.doesNotMatch(tidy, /To remove, use memory_forget/u, '消す指示は残さない');
   assert.doesNotMatch(tidy, /memory_save \(book=user\)/u, '新しく覚える指示も残さない');
   const other = reviewPrompt({ trigger: 'idle', forgotten: [], memory: true });
-  assert.match(other, /drop the one you no longer need with memory_forget/u);
+  assert.match(other, /To remove, use memory_forget/u);
   const en = reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x', language: 'en', memory: true });
   assert.match(en, /memory_forget is not available/u);
   assert.doesNotMatch(en, CJK);

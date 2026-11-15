@@ -260,7 +260,6 @@ export const AppConfig = Type.Object({
     notesMaxChars: Type.Optional(Type.Integer()),
     review: Type.Boolean({ default: true }),
     reviewIdleMinutes: Type.Integer({ minimum: 5, maximum: 1440, default: 30 }),
-    reviewAfterToolCalls: Type.Integer({ minimum: 1, maximum: 200, default: 8 }),
   }, { additionalProperties: false, default: {} }),
   notify: NotifyConfig,
   mcp: McpConfig,

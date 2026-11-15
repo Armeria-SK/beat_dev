@@ -1,8 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { StoredMessage } from '../db/conversations.ts';
+import { KV } from '../db/kv.ts';
 import type { Task, TaskEvent } from '../tasks/store.ts';
-import { estimateTextTokens } from '../engine/tokens.ts';
+import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
 import { prefix, type Memory } from './store.ts';
 
 export type ReviewTrigger = 'task' | 'idle' | 'heavy_run' | 'book_full' | 'manual';
@@ -22,8 +23,25 @@ export interface ReviewJob {
 }
 
 export const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
-  en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory has grown large', manual: 'Manual' },
+  en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Long conversation not reviewed yet', book_full: 'Memory has grown large', manual: 'Manual' },
 };
+
+export const REVIEW_WINDOW_CHARS = 15_000;
+export const REVIEW_WINDOW_RATIO = 0.4;
+const WINDOW_PAGE = 200;
+
+export interface WindowLimits { maxChars: number; maxTokens?: number | undefined }
+
+export type WindowMessage = Pick<StoredMessage, 'id' | 'role' | 'text'> & { message: { role: string; note?: unknown; name?: string } };
+
+export interface ReviewWindow { transcript: string; messages: WindowMessage[]; lastId: number | undefined; full: boolean }
+
+export const reviewWindowLimits = (available: number | undefined): WindowLimits => ({
+  maxChars: REVIEW_WINDOW_CHARS,
+  ...(available !== undefined ? { maxTokens: Math.floor(available * REVIEW_WINDOW_RATIO) } : {}),
+});
+
+export const reviewUptoKey = (conversationId: string): string => `review:upto:${conversationId}`;
 
 // 整理の振り返り（book_full）では、記憶を消さず・新しく覚えず、案を知らせる。この実行には渡さず、呼ばれても拒否する道具
 export const TIDY_FORBIDDEN_TOOLS: readonly string[] = ['memory_forget', 'memory_save', 'skill_draft'];
@@ -48,10 +66,17 @@ export class ReviewJobs {
 
   // 古い順に、まだ始まっていない振り返りを 1 本。同じ会話の振り返りがもう動いているものは飛ばす
   // （worker.maxParallel が 2 以上でも、同じ発言を 2 本が同時に振り返って記憶を二重に書かないため。飛ばした分は実行待ちのまま、先の分が終われば選ばれる）
-  next(): ReviewJob | undefined {
+  next(options: { skipPiled?: boolean } = {}): ReviewJob | undefined {
     return this.#db.prepare(`SELECT * FROM memory_jobs j WHERE j.status = 'pending'
       AND (j.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM memory_jobs r WHERE r.status = 'running' AND r.conversation_id = j.conversation_id))
+      ${options.skipPiled ? "AND j.trigger != 'heavy_run'" : ''}
       ORDER BY j.id LIMIT 1`).get() as ReviewJob | undefined;
+  }
+
+  enqueueIfPiled(conversationId: string, limits: WindowLimits): ReviewJob | undefined {
+    const upto = Number(new KV(this.#db).get(reviewUptoKey(conversationId)) ?? 0);
+    if (!conversationWindow(this.#db, conversationId, upto, limits).full) return undefined;
+    return this.enqueue('heavy_run', `conv:${conversationId}:${upto}`, { conversationId });
   }
 
   pendingCount(): number {
@@ -101,13 +126,15 @@ export class ReviewJobs {
   }
 }
 
-const MEMORY_POLICY_LINES: ReadonlySet<number> = new Set([1, 2, 3, 4]);
+export type PolicyTag = 'memory' | 'skill' | 'format' | 'language' | 'guide';
+
+export interface PolicyLine { tag: PolicyTag; memoryOnly?: true; text: string }
 
 interface ReviewText {
   intro: (trigger: string) => string;
   skillIntro: (trigger: string) => string;
   policyHeading: string;
-  policy: readonly string[];
+  policy: readonly PolicyLine[];
   skillAuto: string;
   tidyPolicy: readonly string[];
   forgottenHeading: string;
@@ -120,6 +147,7 @@ interface ReviewText {
   taskResult: string;
   taskNotes: string;
   taskEvents: string;
+  taskConversation: (id: string) => string;
   transcriptHeading: string;
   truncated: string;
   user: string;
@@ -134,15 +162,16 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     skillIntro: trigger => `[Review] Trigger: ${trigger}. Read the record below and look for procedures worth keeping as skills (this is not a conversation with the user; your reply is only saved to the record).`,
     policyHeading: '# Policy',
     policy: [
-      '- Keep only "lessons and facts that will help next time". Do not keep a log of events',
-      '- Do not add what is already in memory. Merge overlapping memories into one with memory_update, and drop the one you no longer need with memory_forget',
-      '- If two memories contradict, keep the newer one',
-      '- Facts about the user that were missed (preferences, plans, relationships, environment): memory_save (book=user). Your own lessons: book=notes',
-      '- Add at most 3 items from a single record',
-      '- If you find a procedure that looks reusable, use skill_draft (it is not used until the user approves it). Prefer fixing an existing skill over creating a new one',
-      '- If there is nothing to do, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)',
-      '- At the end, report what you did in one or two sentences',
-      "- Write memories, skill drafts and your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English",
+      { tag: 'guide', text: '- Keep only "lessons and facts that will help next time". Do not keep a log of events' },
+      { tag: 'guide', memoryOnly: true, text: '- Your main job is to check the memories you already have against the record and keep them tidy: correct them, merge overlapping ones into one, and remove the ones that are wrong or no longer needed' },
+      { tag: 'guide', memoryOnly: true, text: "- Add something new only when the record confirms it and it cannot be found in the product's files, the plan or a search of past conversations" },
+      { tag: 'guide', memoryOnly: true, text: '- If memories contradict each other, check the record and correct the wrong one. If the record cannot settle it, start the memory with "Unverified:"' },
+      { tag: 'guide', memoryOnly: true, text: '- If the user asked in the record for something to be remembered and it is not saved yet, save it (in plan mode it could not be saved, so it is picked up here)' },
+      { tag: 'memory', text: '- To correct or merge, use memory_update. To remove, use memory_forget. To add, use memory_save' },
+      { tag: 'skill', text: '- If you find a procedure that looks reusable, use skill_draft (it is not used until the user approves it). Prefer fixing an existing skill over creating a new one' },
+      { tag: 'format', text: '- If there is nothing to do, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)' },
+      { tag: 'format', text: '- At the end, report what you did in one or two sentences' },
+      { tag: 'language', text: "- Write memories, skill drafts and your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English" },
     ],
     skillAuto: "- If you find a procedure that looks reusable, use skill_draft (it is registered right away without the user's review unless the record read outside content or is about a task, in which case it waits for the user's approval; the user can undo it from the skill's History). Prefer fixing an existing skill over creating a new one",
     tidyPolicy: [
@@ -163,6 +192,7 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     taskResult: 'Result',
     taskNotes: 'Notes',
     taskEvents: 'History',
+    taskConversation: id => `Conversation ID: ${id} (read the run with history_read)`,
     transcriptHeading: '# Record of the conversation',
     truncated: '… (truncated)',
     user: 'User',
@@ -172,26 +202,53 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
   },
 };
 
+export const reviewPolicyLines = (language: Language = DEFAULT_LANGUAGE): readonly PolicyLine[] => REVIEW_TEXT[language].policy;
+
 const clip = (text: string, max: number, language: Language = DEFAULT_LANGUAGE) => (text.length > max ? `${text.slice(0, max)}${REVIEW_TEXT[language].truncated}` : text);
 
-export function transcriptOf(messages: readonly StoredMessage[], maxChars = 15_000, language: Language = DEFAULT_LANGUAGE): string {
+function transcriptLine(m: WindowMessage, language: Language): string | undefined {
   const text = REVIEW_TEXT[language];
+  const note = m.message.role === 'user' && m.message.note !== undefined;
+  const label = note ? text.note : m.role === 'user' ? text.user : m.role === 'assistant' ? 'beat' : text.tool(m.message.role === 'tool' ? m.message.name ?? '' : '');
+  const body = m.role === 'tool' || note ? clip(m.text, 300, language) : clip(m.text, 3000, language);
+  return body.trim() ? text.line(label, body) : undefined;
+}
+
+export function reviewWindow(messages: readonly (StoredMessage | WindowMessage)[], limits: WindowLimits, language: Language = DEFAULT_LANGUAGE): ReviewWindow {
   const lines: string[] = [];
+  const taken: WindowMessage[] = [];
+  let chars = 0;
+  let tokens = 0;
   for (const m of messages) {
-    const note = m.message.role === 'user' && m.message.note !== undefined;
-    const label = note ? text.note : m.role === 'user' ? text.user : m.role === 'assistant' ? 'beat' : text.tool(m.message.role === 'tool' ? m.message.name : '');
-    const body = m.role === 'tool' || note ? clip(m.text, 300, language) : clip(m.text, 3000, language);
-    if (body.trim()) lines.push(text.line(label, body));
+    const line = transcriptLine(m, language);
+    if (line !== undefined) {
+      const lineChars = line.length + (lines.length ? 1 : 0);
+      const lineTokens = estimateTextTokens(line) + 1;
+      if (chars + lineChars > limits.maxChars || (limits.maxTokens !== undefined && tokens + lineTokens > limits.maxTokens)) {
+        if (lines.length === 0) {
+          lines.push(line.slice(0, prefixLength(line, limits.maxChars, limits.maxTokens ?? Infinity)));
+          taken.push(m);
+        }
+        break;
+      }
+      lines.push(line);
+      chars += lineChars;
+      tokens += lineTokens;
+    }
+    taken.push(m);
   }
-  // 新しい方を優先して残す
-  const kept: string[] = [];
-  let total = 0;
-  for (const line of lines.reverse()) {
-    if (total + line.length > maxChars) break;
-    kept.unshift(line);
-    total += line.length;
+  return { transcript: lines.join('\n'), messages: taken, lastId: taken.at(-1)?.id, full: taken.length < messages.length };
+}
+
+export function conversationWindow(db: DatabaseSync, conversationId: string, upto: number, limits: WindowLimits, language: Language = DEFAULT_LANGUAGE): ReviewWindow {
+  const page = db.prepare("SELECT id, role, text, json_extract(parts, '$.role') AS message_role, json_extract(parts, '$.note') AS note, json_extract(parts, '$.name') AS name FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?");
+  const loaded: WindowMessage[] = [];
+  for (;;) {
+    const rows = page.all(conversationId, loaded.at(-1)?.id ?? upto, WINDOW_PAGE) as unknown as Array<Pick<StoredMessage, 'id' | 'role' | 'text'> & { message_role: string; note: unknown; name: string | null }>;
+    loaded.push(...rows.map(({ message_role, note, name, ...row }) => ({ ...row, message: { role: message_role, ...(note !== null ? { note } : {}), ...(name !== null ? { name } : {}) } })));
+    const window = reviewWindow(loaded, limits, language);
+    if (window.full || rows.length < WINDOW_PAGE) return window;
   }
-  return kept.join('\n');
 }
 
 // 記憶が会話に入りきらないときの、振り返りへの知らせ。入りきらない記憶を古い順に挙げる（挙げる量も、会話に入れる量と同じ予算まで。最初の 1 件は必ず挙げる）。
@@ -218,7 +275,7 @@ export function bookPressureText(input: { tokens: number; budget: number; outsid
 export function reviewPrompt(input: {
   trigger: ReviewTrigger;
   transcript?: string;
-  task?: Pick<Task, 'title' | 'status' | 'result_summary' | 'body'> | undefined;
+  task?: (Pick<Task, 'title' | 'status' | 'result_summary' | 'body'> & Partial<Pick<Task, 'conversation_id'>>) | undefined;
   taskEvents?: readonly Pick<TaskEvent, 'kind' | 'content'>[];
   forgotten: readonly string[];
   bookPressure?: string | undefined;
@@ -228,8 +285,9 @@ export function reviewPrompt(input: {
 }): string {
   const language = input.language ?? DEFAULT_LANGUAGE;
   const text = REVIEW_TEXT[language];
-  const kept = input.memory ? text.policy : text.policy.filter((_, i) => !MEMORY_POLICY_LINES.has(i));
-  const policy = input.skillsAutoRegister ? kept.map(line => (line.includes('skill_draft') ? text.skillAuto : line)) : kept;
+  const policy = text.policy
+    .filter(line => input.memory || (line.tag !== 'memory' && !line.memoryOnly))
+    .map(line => (input.skillsAutoRegister && line.tag === 'skill' ? text.skillAuto : line.text));
   const parts = [
     (input.memory ? text.intro : text.skillIntro)(TRIGGER_TEXT[language][input.trigger]),
     '',
@@ -242,6 +300,7 @@ export function reviewPrompt(input: {
   if (input.bookPressure) parts.push('', `${text.pressureHeading}\n${input.bookPressure}`);
   if (input.task) {
     parts.push('', text.taskHeading, `${text.taskTitle}: ${input.task.title}`, `${text.taskResult}: ${input.task.status}${input.task.result_summary ? ` — ${clip(input.task.result_summary, 2000, language)}` : ''}`);
+    if (input.task.conversation_id) parts.push(text.taskConversation(input.task.conversation_id));
     if (input.task.body) parts.push(`${text.taskNotes}:\n${clip(input.task.body, 3000, language)}`);
     if (input.taskEvents?.length) parts.push(`${text.taskEvents}:`, ...input.taskEvents.slice(0, 15).filter(e => e.content).map(e => `- ${e.kind}: ${clip(e.content ?? '', 300, language)}`));
   }
