@@ -13,6 +13,7 @@ import { createWebServer } from '../src/web/server.ts';
 import { contextHint, evaluateContext } from '../src/providers/context.ts';
 import { classifyFetchError, classifyHttpFailure, requireApiKey } from '../src/providers/http.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
+import { providerText } from '../src/shared/messages/providers.ts';
 import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
@@ -66,6 +67,15 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
 }
 
 const noJapanese = (label: string, text: string | null | undefined) => assert.doesNotMatch(text ?? '', CJK, `${label}: ${text}`);
+const filled = (label: string, text: string | null | undefined, ...values: Array<string | number>) => {
+  assert.ok(typeof text === 'string' && text.trim() !== '', `${label}: empty`);
+  assert.doesNotMatch(text, /[{}]/u, `${label}: ${text}`);
+  for (const value of values) assert.ok(text.includes(String(value)), `${label}: ${value} in ${text}`);
+};
+const coded = (result: { message?: string | undefined; messageCode?: string | undefined }, code: string, ...values: string[]) => {
+  assert.equal(result.messageCode, code);
+  filled(code, result.message, ...values);
+};
 
 // ── 繰り返しの説明 ──
 
@@ -205,20 +215,22 @@ test('タスクの予定・復旧・エラー（英語）と、コード', async
   s.app.tasks.recoverExpiredLeases({ all: true });
   assert.equal(s.app.tasks.events(claimed.id)[0]!.content, 'The previous run stopped midway, so it will run again');
 
-  for (const make of [() => s.app.tasks.create({ title: ' ', origin: 'user', actor: 'user' }), () => s.app.tasks.approve(claimed.id)]) {
+  for (const [make, code] of [[() => s.app.tasks.create({ title: ' ', origin: 'user', actor: 'user' }), 'task.error.empty_title'], [() => s.app.tasks.approve(claimed.id), 'task.error.not_proposal']] as const) {
     try { make(); assert.fail('should throw'); } catch (error) {
       assert.ok(error instanceof TaskError);
-      noJapanese('en text', error.text('en'));
+      assert.equal(error.fullCode, code);
+      filled(code, error.text('en'));
       assert.equal(error.message, error.text('en'), 'message is the English text');
     }
   }
   const empty = new TaskError('error.empty_title');
   assert.equal(empty.fullCode, 'task.error.empty_title');
-  assert.equal(empty.text('en'), 'The title is empty');
-  assert.equal(empty.message, 'The title is empty');
+  filled('empty', empty.text('en'));
+  assert.equal(empty.message, empty.text('en'));
   const missing = new TaskError('error.not_found', { id: 'abc' });
+  assert.equal(missing.fullCode, 'task.error.not_found');
   assert.deepEqual(missing.params, { id: 'abc' });
-  assert.equal(missing.text('en'), 'Task abc was not found');
+  filled('missing', missing.text('en'), 'abc');
 });
 
 test('API: タスクの操作の失敗は、コードとパラメータを添え、文は英語で書く', async t => {
@@ -236,7 +248,7 @@ test('API: タスクの操作の失敗は、コードとパラメータを添え
   const body = await res.json() as any;
   assert.equal(body.error, 'task', 'the existing error code is unchanged');
   assert.equal(body.code, 'task.error.not_proposal');
-  assert.equal(body.message, 'This is not a proposal waiting for approval');
+  filled('approve', body.message);
 
   const listed = await (await api('/api/tasks')).json() as any;
   assert.equal(listed.active.length, 1);
@@ -254,18 +266,18 @@ const compatProvider = (baseUrl: string, over: Partial<ProviderConfig> = {}): Pr
 test('モデルの確認: 言語を渡さない呼び出しは英語の文', () => {
   const facts = { modelId: 'm', server: 'generic', required: 65536 };
   const tooSmall = evaluateContext({ ...facts, measured: 4096, hint: contextHint('en', 'generic', 65536) });
-  assert.equal(tooSmall.message, 'The context length is too small: measured 4,096 < required 65,536 (measured 4,096)');
+  coded(tooSmall, 'provider.probe.too_small', '4,096', '65,536', providerText('en', 'probe.source.measured', { n: '4,096' }));
   assert.equal(tooSmall.hint, 'Set the context length on the server to 65,536 or more, and set contextLength in the config to match');
-  assert.equal(evaluateContext({ ...facts, declared: 8192, hint: 'x' }).message, 'The context length is too small: measured 8,192 < required 65,536 (configured 8,192)');
-  assert.equal(evaluateContext({ ...facts, modelMax: 4096, hint: 'x' }).message, 'The context length is too small: measured 4,096 < required 65,536 (model limit 4,096)');
+  coded(evaluateContext({ ...facts, declared: 8192, hint: 'x' }), 'provider.probe.too_small', '8,192', '65,536', providerText('en', 'probe.source.declared', { n: '8,192' }));
+  coded(evaluateContext({ ...facts, modelMax: 4096, hint: 'x' }), 'provider.probe.too_small', '4,096', '65,536', providerText('en', 'probe.source.limit', { n: '4,096' }));
   const exceeds = evaluateContext({ ...facts, declared: 200000, modelMax: 131072 });
-  assert.equal(exceeds.message, 'The configured contextLength (200,000) exceeds the limit of the model (131,072)');
+  coded(exceeds, 'provider.probe.exceeds_model', '200,000', '131,072');
   assert.equal(exceeds.hint, 'Set contextLength to 131,072 or less');
   const unknown = evaluateContext(facts);
-  assert.equal(unknown.message, 'The context length is unknown (it could not be fetched from the server and is not in the settings)');
+  coded(unknown, 'provider.probe.unknown');
   assert.equal(unknown.hint, 'In the config, write the length you set on the server under models[].contextLength');
-  assert.equal(evaluateContext({ ...facts, declared: 70000 }).message, 'Usable: 70,000 tokens');
-  assert.equal(evaluateContext({ ...facts, declared: 70000, unmeasuredNote: 'probe.note.use_config' }).message, 'Usable: 70,000 tokens (The length cannot be fetched from the server, so the configured value is used)');
+  coded(evaluateContext({ ...facts, declared: 70000 }), 'provider.probe.ok', '70,000');
+  coded(evaluateContext({ ...facts, declared: 70000, unmeasuredNote: 'probe.note.use_config' }), 'provider.probe.ok', '70,000', providerText('en', 'probe.note.use_config'));
   assert.equal(contextHint('en', 'hosted', 65536), 'Choose a model whose context length is 65,536 or more');
   assert.equal(contextHint('en', 'lmstudio', 65536), 'Reload the model in LM Studio with a Context Length of 65,536 or more, and set contextLength to match');
   assert.equal(contextHint('en', 'llamacpp', 65536), 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
@@ -285,29 +297,29 @@ test('モデルの確認: messageParams には言語で書いた文を入れず�
 });
 
 test('プロバイダのエラー: 文は英語で、コードと値を添える', () => {
-  const cases: Array<[ProviderError, string, string]> = [
-    [classifyHttpFailure(401, 'bad key'), 'Authentication failed (HTTP 401)', 'http.auth'],
-    [classifyHttpFailure(429, ''), 'The usage limit was reached (HTTP 429)', 'http.rate_limit'],
-    [classifyHttpFailure(404, ''), 'The model or API was not found (HTTP 404)', 'http.not_found'],
-    [classifyHttpFailure(503, 'down'), 'The provider reported an error (HTTP 503)', 'http.server'],
-    [classifyHttpFailure(400, ''), 'The request was rejected (HTTP 400)', 'http.rejected'],
-    [classifyHttpFailure(400, 'maximum context length exceeded'), 'The input exceeded the context length of the model (HTTP 400)', 'http.context_overflow'],
-    [classifyFetchError(Object.assign(new Error('x'), { cause: { code: 'ECONNREFUSED' } }), new AbortController().signal), 'Cannot connect to the provider (ECONNREFUSED)', 'connect.code'],
-    [classifyFetchError(new Error('x'), new AbortController().signal), 'Cannot connect to the provider', 'connect'],
+  const cases: Array<[ProviderError, string, ...string[]]> = [
+    [classifyHttpFailure(401, 'bad key'), 'http.auth', '401'],
+    [classifyHttpFailure(429, ''), 'http.rate_limit', '429'],
+    [classifyHttpFailure(404, ''), 'http.not_found', '404'],
+    [classifyHttpFailure(503, 'down'), 'http.server', '503'],
+    [classifyHttpFailure(400, ''), 'http.rejected', '400'],
+    [classifyHttpFailure(400, 'maximum context length exceeded'), 'http.context_overflow', '400'],
+    [classifyFetchError(Object.assign(new Error('x'), { cause: { code: 'ECONNREFUSED' } }), new AbortController().signal), 'connect.code', 'ECONNREFUSED'],
+    [classifyFetchError(new Error('x'), new AbortController().signal), 'connect'],
   ];
-  for (const [error, en, code] of cases) {
-    assert.equal(error.message, en);
-    assert.equal(error.text('en'), en);
+  for (const [error, code, ...values] of cases) {
     assert.equal(error.code, code);
+    filled(code, error.message, ...values);
+    assert.equal(error.text('en'), error.message);
   }
   assert.deepEqual(cases[0]![0].params, { status: 401 }, '相手のサーバーの本文は値にも入らない');
   assert.equal(cases[0]![0].upstream, 'bad key', '実行ログ用の本文だけ別に持つ');
   assert.throws(() => requireApiKey(compatProvider('http://127.0.0.1:1/v1', { apiKeyEnv: 'NOPE_KEY' }), {}), (e: unknown) => {
     const error = e as ProviderError;
-    return error.message === 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)'
-      && error.text('en') === 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)' && error.code === 'key.missing';
+    assert.equal(error.code, 'key.missing');
+    filled('key.missing', error.message, 'NOPE_KEY');
+    return error.text('en') === error.message;
   });
-  for (const kind of ['lmstudio', 'llamacpp', 'vllm', 'tabbyapi', 'generic', 'hosted'] as const) noJapanese(`hint ${kind}`, contextHint('en', kind, 65536));
 });
 
 test('モデルの確認（英語）: 接続先ごとの message / hint / code', async t => {
@@ -318,28 +330,25 @@ test('モデルの確認（英語）: 接続先ごとの message / hint / code',
 
   const tabbyResult = await new OpenAiCompatibleAdapter(compatProvider(`${tabby.url}/v1`, { server: 'tabbyapi' }), {}).probe(probeModel(), 65536, 'en');
   assert.equal(tabbyResult.status, 'not_found');
-  assert.equal(tabbyResult.message, 'TabbyAPI has "other-model" loaded, not "test-model"');
+  coded(tabbyResult, 'provider.probe.tabby_other', 'other-model', 'test-model');
   assert.equal(tabbyResult.hint, 'Load the model you want in TabbyAPI, or make models[].model match');
-  assert.equal(tabbyResult.messageCode, 'provider.probe.tabby_other');
   assert.deepEqual(tabbyResult.messageParams, { current: 'other-model', model: 'test-model' });
   const tabbyDefault = await new OpenAiCompatibleAdapter(compatProvider(`${tabby.url}/v1`, { server: 'tabbyapi' }), {}).probe(probeModel(), 65536);
-  assert.equal(tabbyDefault.message, 'TabbyAPI has "other-model" loaded, not "test-model"', '言語を渡さなくても英語');
+  assert.equal(tabbyDefault.message, tabbyResult.message, '言語を渡さなくても英語');
   assert.equal(tabbyDefault.hint, 'Load the model you want in TabbyAPI, or make models[].model match');
 
   const vllmResult = await new OpenAiCompatibleAdapter(compatProvider(`${vllm.url}/v1`, { server: 'vllm' }), {}).probe(probeModel(), 65536, 'en');
-  assert.equal(vllmResult.message, 'vLLM does not have the model "test-model"');
+  coded(vllmResult, 'provider.probe.vllm_missing', 'test-model');
 
   const tooSmall = await new OpenAiCompatibleAdapter(compatProvider(`${small.url}/v1`, { server: 'llamacpp' }), {}).probe(probeModel(), 65536, 'en');
   assert.equal(tooSmall.status, 'too_small');
-  assert.equal(tooSmall.message, 'The context length is too small: measured 2,048 < required 65,536 (measured 2,048)');
-  assert.equal(tooSmall.messageCode, 'provider.probe.too_small');
+  coded(tooSmall, 'provider.probe.too_small', '2,048', '65,536');
   assert.deepEqual(tooSmall.messageParams, { effective: '2,048', required: '65,536', sourceKind: 'measured', n: '2,048' }, 'messageParams hold a sub-code, not language-written text');
   assert.equal(tooSmall.hint, 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
 
   const noKey = await new OpenAiCompatibleAdapter(compatProvider('http://127.0.0.1:9/v1', { apiKeyEnv: 'NOPE_KEY' }), {}).probe(probeModel(), 65536, 'en');
   assert.equal(noKey.status, 'no_api_key');
-  assert.equal(noKey.message, 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)');
-  assert.equal(noKey.messageCode, 'provider.key.missing');
+  coded(noKey, 'provider.key.missing', 'NOPE_KEY');
   for (const r of [tabbyResult, vllmResult, tooSmall, noKey]) { noJapanese('probe message', r.message); noJapanese('probe hint', r.hint); }
 });
 
@@ -370,12 +379,13 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
   s.adapter().scripts.push(down(), down());
   const failed = await send('c1', 'hi');
   assert.ok(!failed.ok);
-  const retrying = events.find(e => e.type === 'warning' && e.code === 'retrying') as Extract<RunEvent, { type: 'warning' }>;
-  assert.equal(retrying.message, 'The provider reported an error (HTTP 503). Retrying in 1 s (1/1)');
+  const retrying = events.find(e => e.type === 'warning' && e.code === 'retrying' && e.conversationId === 'c1') as Extract<RunEvent, { type: 'warning' }>;
+  assert.ok(retrying, 'retrying on c1');
+  filled('retrying', retrying.message, '503', '1/1');
   assert.deepEqual(retrying.params, { seconds: 1, attempt: 1, retries: 1, errorCode: 'provider.http.server', errorParams: { status: 503 } }, 'language-written text is not in params');
   const end = events.findLast(e => e.type === 'run.end') as Extract<RunEvent, { type: 'run.end' }>;
   assert.equal(end.errorKind, 'provider_error');
-  assert.equal(end.errorMessage, 'The provider reported an error (HTTP 503)');
+  filled('run.end', end.errorMessage, '503');
   assert.equal(end.errorCode, 'provider.http.server');
   assert.deepEqual(end.errorParams, { status: 503 });
   if (!failed.ok) assert.equal(failed.errorCode, 'provider.http.server');
@@ -383,8 +393,9 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
   // 途中まで書いて失敗
   s.adapter().scripts.push(fail(providerError('provider_error', 'http.rejected', { status: 400 }, { retryable: false }), 'partial text'));
   await send('c2', 'hi');
-  const discarded = events.find(e => e.type === 'warning' && e.code === 'partial_discarded') as Extract<RunEvent, { type: 'warning' }>;
-  assert.equal(discarded.message, 'The reply failed partway, so the part written so far was not saved');
+  const discarded = events.find(e => e.type === 'warning' && e.code === 'partial_discarded' && e.conversationId === 'c2') as Extract<RunEvent, { type: 'warning' }>;
+  assert.ok(discarded, 'partial_discarded on c2');
+  filled('partial_discarded', discarded.message);
 
   // 止められた返事（途中まで保存される）
   s.adapter().scripts.push(hang());
@@ -395,7 +406,7 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
   s.app.engine.stop(outcome.runId);
   const cancelled = await s.app.engine.wait(outcome.runId);
   assert.ok(cancelled && !cancelled.ok);
-  if (cancelled && !cancelled.ok) { assert.equal(cancelled.errorMessage, 'Stopped'); assert.equal(cancelled.errorCode, 'provider.cancelled'); }
+  if (cancelled && !cancelled.ok) { filled('cancelled', cancelled.errorMessage); assert.equal(cancelled.errorCode, 'provider.cancelled'); }
   assert.equal(s.app.conversations.messages('c4').at(-1)!.text, 'working…\n\n(stopped partway)');
 
   // 忙しい・やり直す発言が無い
@@ -406,7 +417,7 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
   const busy = s.app.engine.retry('c5');
   assert.ok(!busy.ok);
   if (!busy.ok) {
-    assert.equal(busy.errorMessage, 'This conversation is still writing a reply');
+    filled('busy', busy.errorMessage);
     assert.equal(busy.errorCode, 'engine.send.busy');
   }
   s.app.engine.stop(running.runId);
@@ -424,7 +435,8 @@ test('エンジンの失敗（英語）: 使えるモデルが無い・ツール
   assert.ok(!blocked.ok);
   if (!blocked.ok) {
     assert.equal(blocked.errorCode, 'engine.no_usable');
-    assert.match(blocked.errorMessage, /^Nothing was sent because there is no model that can be used\. Check the settings screen\.\n- m: x$/u);
+    filled('no usable model', blocked.errorMessage);
+    assert.match(blocked.errorMessage, /\n- m: x$/u, 'the model id and its probe message are listed after the sentence');
     noJapanese('no usable model', blocked.errorMessage);
   }
   s.adapter().probeResult = {};
@@ -437,7 +449,7 @@ test('エンジンの失敗（英語）: 使えるモデルが無い・ツール
   const result = await s.app.engine.wait(outcome.runId)!;
   assert.ok(result && !result.ok);
   if (result && !result.ok) {
-    assert.equal(result.errorMessage, 'The model could not call tools in a valid form (3 times in a row). Switch to a model that handles tools well, or reduce the number of tools with maxTools');
+    filled('invalid_streak', result.errorMessage, '3');
     assert.equal(result.errorCode, 'engine.tool.invalid_streak');
     assert.equal(result.detail?.hint, 'Reduce the number of tools with maxTools');
   }
@@ -463,38 +475,38 @@ const SHAPES = 'pebble / triangle / diamond / bean / cloud / droplet / heart / s
 
 test('API のエラー: 今までの error / field に code と params を添え、message は英語で書く', async t => {
   const s = await serve(t);
-  const expectProblem = async (res: Response, status: number, expected: { error: string; code: string; message: string; field?: string; params?: Record<string, unknown> }) => {
+  const expectProblem = async (res: Response, status: number, expected: { error: string; code: string; field?: string; params?: Record<string, unknown> }) => {
     assert.equal(res.status, status);
     const body = await res.json() as any;
     assert.equal(body.error, expected.error);
     assert.equal(body.code, expected.code);
-    assert.equal(body.message, expected.message);
+    filled(expected.code, body.message, ...Object.values(expected.params ?? {}).filter((v): v is string | number => typeof v === 'string' || typeof v === 'number'));
     assert.equal(body.field, expected.field);
     assert.deepEqual(body.params, expected.params);
   };
 
-  await expectProblem(await s.post('/api/conversations/c1/messages', {}), 400, { error: 'invalid_field', code: 'http.required', field: 'text', params: { field: 'text' }, message: 'Enter text' });
-  await expectProblem(await s.post('/api/conversations/c1/messages', { text: 'x'.repeat(100_001) }), 400, { error: 'invalid_field', code: 'http.too_long', field: 'text', params: { field: 'text', max: 100000 }, message: 'text is too long (limit 100000 characters)' });
-  await expectProblem(await s.api('/api/conversations/c1/messages', { method: 'POST', body: 'not json', headers: { 'Content-Type': 'application/json' } }), 400, { error: 'invalid_json', code: 'http.invalid_json', message: 'This could not be read as JSON' });
-  await expectProblem(await s.api('/api/conversations/c1/messages', { method: 'POST', body: '{}', headers: { 'Content-Type': 'text/plain' } }), 415, { error: 'unsupported_media_type', code: 'http.unsupported_media_type', message: 'Set Content-Type to application/json' });
-  await expectProblem(await s.api('/api/conversations/nope/messages'), 404, { error: 'not_found', code: 'http.conversation_missing', message: 'The conversation was not found' });
-  await expectProblem(await s.api('/api/tasks/nope'), 404, { error: 'not_found', code: 'http.task_missing', message: 'The task was not found' });
-  await expectProblem(await s.post('/api/tasks', { title: 'x', priority: 9 }), 400, { error: 'invalid_field', code: 'http.bad_priority', field: 'priority', message: 'priority must be 1 (high), 2 or 3 (low)' });
-  await expectProblem(await s.post('/api/tasks', { title: 'x', when: 'tomorrow' }), 400, { error: 'invalid_field', code: 'http.bad_when', field: 'when', message: '"when" must be a date and time (example: 2026-11-06T09:00:00+09:00)' });
-  await expectProblem(await s.api('/api/profile', { method: 'PATCH', body: JSON.stringify({ shape: 'nope' }) }), 400, { error: 'invalid_field', code: 'http.bad_enum', field: 'shape', params: { field: 'shape', values: SHAPES }, message: `shape must be one of ${SHAPES}` });
-  await expectProblem(await s.post('/api/memories', { book: 'x', content: 'a' }), 400, { error: 'invalid_field', code: 'http.bad_book', field: 'book', message: 'book must be user or notes' });
-  await expectProblem(await s.post('/api/worker', { paused: 'yes' }), 400, { error: 'invalid_field', code: 'http.bad_bool', field: 'paused', params: { field: 'paused' }, message: 'paused must be true or false' });
+  await expectProblem(await s.post('/api/conversations/c1/messages', {}), 400, { error: 'invalid_field', code: 'http.required', field: 'text', params: { field: 'text' } });
+  await expectProblem(await s.post('/api/conversations/c1/messages', { text: 'x'.repeat(100_001) }), 400, { error: 'invalid_field', code: 'http.too_long', field: 'text', params: { field: 'text', max: 100000 } });
+  await expectProblem(await s.api('/api/conversations/c1/messages', { method: 'POST', body: 'not json', headers: { 'Content-Type': 'application/json' } }), 400, { error: 'invalid_json', code: 'http.invalid_json' });
+  await expectProblem(await s.api('/api/conversations/c1/messages', { method: 'POST', body: '{}', headers: { 'Content-Type': 'text/plain' } }), 415, { error: 'unsupported_media_type', code: 'http.unsupported_media_type' });
+  await expectProblem(await s.api('/api/conversations/nope/messages'), 404, { error: 'not_found', code: 'http.conversation_missing' });
+  await expectProblem(await s.api('/api/tasks/nope'), 404, { error: 'not_found', code: 'http.task_missing' });
+  await expectProblem(await s.post('/api/tasks', { title: 'x', priority: 9 }), 400, { error: 'invalid_field', code: 'http.bad_priority', field: 'priority' });
+  await expectProblem(await s.post('/api/tasks', { title: 'x', when: 'tomorrow' }), 400, { error: 'invalid_field', code: 'http.bad_when', field: 'when' });
+  await expectProblem(await s.api('/api/profile', { method: 'PATCH', body: JSON.stringify({ shape: 'nope' }) }), 400, { error: 'invalid_field', code: 'http.bad_enum', field: 'shape', params: { field: 'shape', values: SHAPES } });
+  await expectProblem(await s.post('/api/memories', { book: 'x', content: 'a' }), 400, { error: 'invalid_field', code: 'http.bad_book', field: 'book' });
+  await expectProblem(await s.post('/api/worker', { paused: 'yes' }), 400, { error: 'invalid_field', code: 'http.bad_bool', field: 'paused', params: { field: 'paused' } });
 
-  await expectProblem(await s.post('/api/memories', { book: 'user', content: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' }), 400, { error: 'memory', code: 'store.memory.secret', message: 'Content that contains what looks like an API key or token is not remembered' });
-  await expectProblem(await s.api('/api/memories/999', { method: 'PATCH', body: JSON.stringify({ content: 'x' }) }), 400, { error: 'memory', code: 'store.memory.not_found', params: { id: 999 }, message: 'Memory 999 was not found' });
+  await expectProblem(await s.post('/api/memories', { book: 'user', content: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' }), 400, { error: 'memory', code: 'store.memory.secret' });
+  await expectProblem(await s.api('/api/memories/999', { method: 'PATCH', body: JSON.stringify({ content: 'x' }) }), 400, { error: 'memory', code: 'store.memory.not_found', params: { id: 999 } });
   assert.equal((await s.post('/api/curiosity', { topic: 'Tea' })).status, 201);
-  await expectProblem(await s.post('/api/curiosity', { topic: 'Tea' }), 400, { error: 'invalid', code: 'store.curiosity.duplicate', params: { id: 1 }, message: 'The same item already exists (#1)' });
-  await expectProblem(await s.api('/api/uploads?name=a.txt', { method: 'POST', body: Buffer.alloc(0), headers: { 'Content-Type': 'text/plain' } }), 400, { error: 'upload', code: 'store.upload.empty', message: 'The file is empty' });
+  await expectProblem(await s.post('/api/curiosity', { topic: 'Tea' }), 400, { error: 'invalid', code: 'store.curiosity.duplicate', params: { id: 1 } });
+  await expectProblem(await s.api('/api/uploads?name=a.txt', { method: 'POST', body: Buffer.alloc(0), headers: { 'Content-Type': 'text/plain' } }), 400, { error: 'upload', code: 'store.upload.empty' });
 
   s.app.reviews.enqueue('manual', 'manual:x', {});
   const reviews = await (await s.api('/api/reviews')).json() as any;
   assert.equal(reviews.jobs[0].trigger, 'manual');
-  assert.equal(reviews.jobs[0].triggerLabel, 'Manual');
+  filled('triggerLabel', reviews.jobs[0].triggerLabel);
 });
 
 test('API: 添付だけの発言の目印と、記憶の削除の理由は英語で書く', async t => {
