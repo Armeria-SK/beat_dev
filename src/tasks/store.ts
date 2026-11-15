@@ -677,7 +677,9 @@ export class TaskStore {
 
   awaiting(project?: ProjectFilter): Task[] {
     const filter = byProject(project);
-    return this.#db.prepare(`SELECT * FROM tasks WHERE status = 'done' AND check_state = 'awaiting'${filter.sql} ORDER BY COALESCE(completed_at, updated_at) DESC`).all(...filter.args) as unknown as Task[];
+    return this.#db.prepare(`SELECT * FROM tasks WHERE status = 'done' AND check_state = 'awaiting'${filter.sql}
+      AND (project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
+      ORDER BY COALESCE(completed_at, updated_at) DESC LIMIT 200`).all(...filter.args) as unknown as Task[];
   }
 
   family(id: string): string[] {

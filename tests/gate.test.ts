@@ -736,3 +736,22 @@ test('5-3c-u GET /api/tasks の awaiting: 終わったタスクの新しい 50 �
   await api(`/api/tasks/${old.id}/check`, 'POST', { version: 1 });
   assert.deepEqual(((await api(`/api/tasks?project=${p.id}`, 'GET')).body.awaiting as unknown[]), [], '確かめが済めば外れる');
 });
+
+test('5-3c-u GET /api/tasks の awaiting: しまった製品の確かめ待ちは返さない（持ち主が片づけられないので）。多くても 200 件まで', async t => {
+  const s = await setup(t);
+  const api = await s.serve();
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const q = s.product('notes', [{ result: 'Notes are saved', check: look }]);
+  const shelved = s.task(q.id, ['A-1'], 'Build: notes');
+  await s.run(shelved.id, [echo('notes'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  assert.equal(s.app.tasks.get(shelved.id)!.check_state, 'awaiting');
+  assert.deepEqual((await api('/api/tasks', 'GET')).body.awaiting.map((row: { id: string }) => row.id), [shelved.id]);
+  s.app.projects.update(q.id, { archived: true });
+  assert.deepEqual((await api('/api/tasks', 'GET')).body.awaiting, [], 'しまった製品のものは出さない');
+  const mark = s.app.db.prepare("UPDATE tasks SET status = 'done', check_state = 'awaiting', completed_at = ?, updated_at = ? WHERE id = ?");
+  for (let i = 0; i < 205; i++) {
+    const row = s.app.tasks.create({ title: `old ${i}`, origin: 'user', actor: 'user', projectId: p.id });
+    mark.run(s.clock.now + i, s.clock.now + i, row.id);
+  }
+  assert.equal(((await api('/api/tasks', 'GET')).body.awaiting as unknown[]).length, 200, 'active と同じく 200 件まで');
+});

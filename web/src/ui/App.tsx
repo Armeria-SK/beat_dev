@@ -284,8 +284,8 @@ export function App() {
   const pendingByTask = useMemo(() => taskCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
   const waiting: Waiting = useMemo(
-    () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask), checks: countChecks(live.tasks.values()) }),
-    [skillDrafts, live.tasks, pendingAll, questionsAll, questionsByTask],
+    () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask), checks: countChecks(live.tasks.values(), new Set(live.projectsLoaded ? live.projects.map(p => p.id) : [])) }),
+    [skillDrafts, live.tasks, live.projects, live.projectsLoaded, pendingAll, questionsAll, questionsByTask],
   );
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
   const state = agentState(waiting, working);

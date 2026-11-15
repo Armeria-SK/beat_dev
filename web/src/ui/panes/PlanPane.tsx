@@ -509,14 +509,15 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   const [deviations, setDeviations] = useState<Deviations | null>(null);
   const built = acc?.frozen != null;
   const devAt = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (!built) { setDeviations(null); return undefined; }
-    let live = true;
-    const read = () => { devAt.current = Date.now(); void api.deviations(productId).then(r => { if (live) setDeviations(r); }, () => { if (live) setDeviations(null); }); };
+    const read = () => { devAt.current = Date.now(); void api.deviations(productId).then(r => { if (mounted.current) setDeviations(r); }, () => { if (mounted.current) setDeviations(null); }); };
     const wait = devAt.current + DEVIATIONS_GAP_MS - Date.now();
-    if (wait <= 0) { read(); return () => { live = false; }; }
+    if (wait <= 0) { read(); return undefined; }
     const timer = setTimeout(read, wait);
-    return () => { live = false; clearTimeout(timer); };
+    return () => { clearTimeout(timer); };
   }, [productId, built, revision, taskRevision]);
   const differs = useMemo(() => new Set((deviations?.deviations.rows ?? []).flatMap(row => (row.item ? [row.item] : []))), [deviations]);
 

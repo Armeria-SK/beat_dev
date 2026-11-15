@@ -230,12 +230,15 @@ test('ui/PlanPane（DOM）: 項目ごとに Met / Open / Unverified、計画と�
 
 const { countChecks, kanbanCount } = await import('../web/src/ui/agent-state.ts');
 const { mergeTasks } = await import('../web/src/ui/live-state.ts');
+const ACTIVE: ReadonlySet<string> = new Set([PRODUCT]);
 
 test('ui/agent-state: Kanban の数は Proposed と Awaiting check（確かめ待ちの終わったタスク）を数える。確かめが済めば数えない', () => {
   const marks = mergeTasks(new Map(), [awaiting({ id: 'a' }), task({ id: 'b', check_state: 'checked' }), task({ id: 'c' })]);
   assert.equal(marks.get('a')?.checkState, 'awaiting', '一覧の行の check_state を覚える');
-  assert.equal(countChecks(marks.values()), 1);
-  assert.equal(kanbanCount({ proposals: 2, answers: 0, checks: countChecks(marks.values()) }), 3);
+  assert.equal(countChecks(marks.values(), ACTIVE), 1);
+  assert.equal(kanbanCount({ proposals: 2, answers: 0, checks: countChecks(marks.values(), ACTIVE) }), 3);
+  assert.equal(countChecks(marks.values(), new Set(['other-product'])), 0, 'しまった製品（いまの製品の一覧に無い）の確かめ待ちは数えない');
+  assert.equal(countChecks(mergeTasks(new Map(), [awaiting({ id: 'n', project_id: null })]).values(), new Set()), 1, '製品の無いタスクは数える');
 });
 
 const { agentState, footLine, waitingTotal } = await import('../web/src/ui/agent-state.ts');
@@ -252,10 +255,11 @@ test('ui/agent-state: 確かめ待ちは「待ち」の合計に入り、ほか�
 test('ui/live-state: task.changed の check_state を覚え、確かめが済めば checked に変わる（数が減る）', () => {
   const first = reduce(EMPTY, { type: 'event', event: { type: 'task.changed', task: awaiting({ updated_at: 5 }) }, hidden: false, now: 1 }).state;
   assert.equal(first.tasks.get('t1')?.checkState, 'awaiting');
-  assert.equal(countChecks(first.tasks.values()), 1);
+  assert.equal(countChecks(first.tasks.values(), ACTIVE), 1);
+  assert.equal(countChecks(first.tasks.values(), new Set()), 0, 'task.changed でも製品を覚え、しまった製品のものは数えない');
   const next = reduce(first, { type: 'event', event: { type: 'task.changed', task: task({ check_state: 'checked', updated_at: 6 }) }, hidden: false, now: 2 }).state;
   assert.equal(next.tasks.get('t1')?.checkState, 'checked');
-  assert.equal(countChecks(next.tasks.values()), 0);
+  assert.equal(countChecks(next.tasks.values(), ACTIVE), 0);
 });
 
 test('ui/Kanban（DOM）: 終わったタスクの新しい 50 件にもめくった分にも無い確かめ待ちも、/api/tasks の awaiting から Awaiting check に出る', async () => {

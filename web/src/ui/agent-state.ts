@@ -25,8 +25,8 @@ export const waitingTotal = (w: Waiting): number => w.proposals + w.answers + w.
 
 export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers' | 'checks'>): number => w.proposals + w.answers + w.checks;
 
-export const countChecks = (marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state'] }>): number =>
-  [...marks].filter(m => m.status === 'done' && m.checkState === 'awaiting').length;
+export const countChecks = (marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state']; projectId?: string | null }>, products: ReadonlySet<string>): number =>
+  [...marks].filter(m => m.status === 'done' && m.checkState === 'awaiting' && (!m.projectId || products.has(m.projectId))).length;
 
 export function agentState(w: Waiting, working: boolean): AgentState {
   if (waitingTotal(w) > 0) return 'waiting';
