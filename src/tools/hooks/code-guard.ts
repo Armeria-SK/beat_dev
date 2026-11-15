@@ -207,13 +207,13 @@ function projectToolFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
 
 // ── R1.5 ほかのプロセスを起こす・残す ──
 export const WRAPPED_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
-  xargs: new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs']),
+  xargs: new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--max-chars', '--process-slot-var']),
   timeout: new Set(['-s', '-k', '--signal', '--kill-after']),
   nice: new Set(['-n', '--adjustment']),
-  ionice: new Set(['-c', '-n', '-p', '-P', '-u']),
-  stdbuf: new Set(['-i', '-o', '-e']),
-  watch: new Set(['-n', '-d', '--interval', '--differences']),
-  parallel: new Set(['-j', '-S', '-a', '-N', '-n', '--jobs', '--sshlogin']),
+  ionice: new Set(['-c', '-n', '-p', '-P', '-u', '--class', '--classdata', '--pid', '--pgid', '--uid']),
+  stdbuf: new Set(['-i', '-o', '-e', '--input', '--output', '--error']),
+  watch: new Set(['-n', '--interval']),
+  parallel: new Set(['-j', '-S', '-a', '-N', '-n', '-I', '-C', '-d', '-E', '--jobs', '--sshlogin', '--arg-file', '--max-args', '--max-replace-args', '--colsep', '--delimiter', '--joblog', '--results', '--timeout', '--workdir', '--tmpdir', '--sshloginfile', '--env', '--delay', '--retries', '--halt', '--tagstring']),
   busybox: new Set(),
 };
 

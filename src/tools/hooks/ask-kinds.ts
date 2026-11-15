@@ -1,9 +1,9 @@
 import type { AskKind } from '../types.ts';
 
 // 許可の一覧（allowlist*.ts）が、ふつうの確かめ（level 'ask'）として返す理由のキー → 確かめの種類（段 8b）。
-// 自動承認の判定役に回してよいのは、種類が outside_read（シェルが許可フォルダの外を読む。これは shell-guard.ts がパスから決める）・
-// risky_command（サービスの操作・リモートの設定）・taint（よそから来た文を読んだあと。pipeline.ts が足す）のときだけ。ここに無いキーは precheck（細かい種類なし）になり、自動では通らない。
-// 外とやり取りする・外のコードを入れるもの（ask.package ほか）は egress で、判定役には回さない
+// ここに無いキーは precheck（細かい種類なし）。種類は承認の依頼に kinds として運ぶ（pipeline.ts の順 4〔製品の中で動かす〕の判定などに使う）。
+// 判定役に回すかは種類では決めない: pipeline.ts が、持ち主の鍵・方針の鍵・送る/消す・フックの確かめを持ち主の Pending に、断る鍵を拒否にし、
+// 残りの確かめは種類に関わらず（code・precheck・egress も）自動承認の判定役に回す
 export const ASK_REASON_KINDS: Readonly<Record<string, AskKind>> = {
   'ask.service': 'risky_command',
   'ask.git_remote': 'risky_command',
