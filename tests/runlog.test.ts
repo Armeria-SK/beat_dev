@@ -88,7 +88,9 @@ test('画面が使う API: 実行・道具・振り返りの記録を、画面�
   s.app.reviews.finish(s.app.reviews.next()!.id, 'done', '変えるものはありませんでした');
 
   const runs = ((await (await s.api('/api/runs?limit=200')).json()) as { runs: RunRow[] }).runs;
+  assert.equal(runs.find(r => r.id === 'r-live')!.ok, null);
   const failed = runs.find(r => r.id === 'r-fail')!;
+  assert.deepEqual([failed.ok, failed.error_kind], [0, 'context_overflow']);
   assert.ok(Array.isArray(failed.flags), 'flags は配列で来る');
   assert.equal(runKindLabel(failed.kind), 'Task');
   assert.equal(runDetail(failed), '長さが足りません · 2 attempts · est. 70.0k · server_truncation_suspected');
@@ -96,12 +98,15 @@ test('画面が使う API: 実行・道具・振り返りの記録を、画面�
   const calls = ((await (await s.api('/api/tool-calls?limit=200')).json()) as { toolCalls: ToolCallRow[] }).toolCalls;
   assert.deepEqual(calls.map(c => c.id), ['k2', 'k1'], '新しい順');
   const denied = calls.find(c => c.id === 'k2')!;
+  assert.equal(denied.ok, 0);
   assert.deepEqual([decisionLabel(denied.decision), decidedByLabel(denied.decided_by)], ['Denied', 'Hook no-lan']);
   const asked = calls.find(c => c.id === 'k1')!;
+  assert.equal(asked.ok, null);
   assert.deepEqual([decisionLabel(asked.decision), decidedByLabel(asked.decided_by)], ['Asked for approval', 'You']);
 
   const reviews = (await (await s.api('/api/reviews')).json()) as { jobs: ReviewJob[]; pending: number };
   assert.equal(reviews.jobs.length, 1);
+  assert.deepEqual([reviews.jobs[0]!.trigger, reviews.jobs[0]!.status], ['idle', 'done']);
   assert.equal(reviews.pending, 0);
   assert.ok(readFileSync(new URL('../web/src/api.ts', import.meta.url), 'utf8').includes('/api/tool-calls?limit=200'));
 });
