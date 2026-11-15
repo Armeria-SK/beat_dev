@@ -422,7 +422,10 @@ export class Worker {
       return 'folder_missing';
     }
     const project = this.#d.projects && needsSnapshot(this.#d.db, task) ? this.#d.projects.get(task.project_id!) : undefined;
-    if (project) tasks.event(task.id, SNAPSHOT_EVENT, 'beat', snapshotLine(await snapshotBeforeBuild(project.root, task.id, dirname(this.#d.projects!.dir))));
+    if (project) {
+      tasks.event(task.id, SNAPSHOT_EVENT, 'beat', snapshotLine(await snapshotBeforeBuild(project.root, task.id, dirname(this.#d.projects!.dir))));
+      if (tasks.get(task.id)?.status !== 'running') return 'idle';
+    }
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
     const started = engine.runTask(task, conversationId, prompt);
     if (!started.ok) {

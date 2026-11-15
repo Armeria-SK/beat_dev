@@ -95,3 +95,15 @@ test('push の守るファイル: refs/prefetch・refs/original の下だけに�
     assert.ok(mirror && 'files' in mirror && mirror.files.some(f => f.includes('ci.yml')), `${flag} は refs/prefetch・refs/original も送る: ${JSON.stringify(mirror)}`);
   }
 });
+
+test('push の守るファイル（6-0）: Build の前の控え（refs/beat/snapshots）の下だけにあるコミットでは確かめにしない。--mirror は見る', { skip: !gitAvailable && 'git が無い' }, t => {
+  const r = repo(t);
+  writeFileSync(join(r.root, '.github', 'workflows', 'ci.yml'), 'on: workflow_dispatch\n');
+  r.git('add', '-A');
+  const commit = r.git('commit-tree', r.git('write-tree').trim(), '-p', 'HEAD', '-m', 'snapshot').trim();
+  r.git('reset', '-q', '--hard', 'HEAD');
+  r.git('update-ref', 'refs/beat/snapshots/aaaaaaaa-0000-4000-8000-00000000c0de', commit);
+  assert.equal(r.protectOf('git push origin main'), undefined);
+  const mirror = r.protectOf('git push --mirror origin');
+  assert.ok(mirror && 'files' in mirror && mirror.files.some(f => f.includes('ci.yml')), JSON.stringify(mirror));
+});
