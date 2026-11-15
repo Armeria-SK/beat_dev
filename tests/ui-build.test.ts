@@ -15,7 +15,7 @@ const item = (id: string, over: Partial<AcceptanceItem> = {}): AcceptanceItem =>
   check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null, ...over,
 });
 const acc = (over: Partial<Acceptance> = {}): Acceptance => ({ version: 0, language: 'en', items: [], not_doing: [], draft: true, hash: 'ah', frozen: null, ...over });
-const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan', hash: 'p1', updated_at: 1, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, ...over });
+const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan', hash: 'p1', updated_at: 1, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, built_hash: null, ...over });
 const frozen = (over: Partial<NonNullable<Acceptance['frozen']>> = {}): NonNullable<Acceptance['frozen']> =>
   ({ version: 1, hash: 'ah', plan_hash: 'p1', created_at: 5, source: 'build', build_task_id: 'T1', ...over });
 const task = (status: Task['status']): Task => ({
@@ -52,12 +52,11 @@ test('ui/build: Build に送るのは、表に出している計画書と一覧�
   assert.equal(buildRequest(null, acc()), null);
 });
 
-test('ui/build: Build のあとで計画書を直すと "changed after the build started"', () => {
-  const built = acc({ draft: false, version: 1, frozen: frozen({ plan_hash: 'p1' }) });
-  assert.equal(changedAfterBuild(doc(), built), false);
-  assert.equal(changedAfterBuild(doc({ hash: 'p2' }), built), true);
-  assert.equal(changedAfterBuild(doc({ hash: 'p2' }), acc()), false, '固定の前は出さない');
-  assert.equal(changedAfterBuild(null, built), false);
+test('ui/build: Build のあとで計画書を直すと "changed after the build started"。比べるのはこの会話の Build の印（built_hash）', () => {
+  assert.equal(changedAfterBuild(doc({ built_hash: 'p1' })), false);
+  assert.equal(changedAfterBuild(doc({ hash: 'p2', built_hash: 'p1' })), true);
+  assert.equal(changedAfterBuild(doc({ hash: 'p2' })), false, 'この会話で Build していなければ出さない（別の会話の Build の版とは比べない）');
+  assert.equal(changedAfterBuild(null), false);
   assert.equal(t('ui.plan.changedAfterBuild'), 'changed after the build started');
 });
 

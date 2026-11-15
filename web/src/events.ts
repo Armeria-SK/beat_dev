@@ -20,7 +20,7 @@ export type RunEvent =
   | { type: 'question.changed'; id: number; projectId: string | null; status: 'open' | 'answered' }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId?: string | null }
   | { type: 'project.changed'; projectId: string; change: 'created' | 'updated' | 'archived' | 'restored' }
-  | { type: 'plan.changed'; projectId: string; hash: string; by: 'ai' | 'owner' }
+  | { type: 'plan.changed'; projectId: string; conversationId: string; hash: string; by: 'ai' | 'owner' }
   | { type: 'acceptance.changed'; projectId: string; version: number; draft: boolean }
   | { type: 'task.changed'; task: Task }
   | { type: 'task.deleted'; id: string }

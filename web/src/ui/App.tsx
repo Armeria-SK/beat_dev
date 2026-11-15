@@ -222,7 +222,7 @@ export function App() {
       const hold = settingsHold(hasUnsavedEdits(SETTINGS_EDITS), viewRef.current, entryHash.current, next, entryIndex.current, historyIndex());
       if (hold) { setSettingsLeave(hold.leave); holdLeave(hold.leave.moved, hold.back, LEAVE_ENV); return; }
       const held = behindRef.current;
-      const kept = held ? planStays(held, next, id => { const c = liveRef.current.conversations.find(x => x.id === id); return c ? c.project_id ?? null : undefined; }) : null;
+      const kept = held ? planStays(held, next) : null;
       if (held && leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), held, next)) {
         const moved = leaveMove(entryIndex.current, historyIndex());
         setLeave({ to: routeHash(next), moved, at: entryIndex.current });

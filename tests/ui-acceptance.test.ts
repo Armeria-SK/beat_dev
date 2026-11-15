@@ -13,7 +13,7 @@ const item = (id: string, over: Partial<AcceptanceItem> = {}): AcceptanceItem =>
 const acc = (over: Partial<Acceptance> = {}): Acceptance => ({
   version: 0, language: 'en', items: [], not_doing: [], draft: true, hash: 'h', frozen: null, ...over,
 });
-const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan', hash: 'p1', updated_at: 1, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, ...over });
+const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan', hash: 'p1', updated_at: 1, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, built_hash: null, ...over });
 
 test('ui/acceptance: 項目は番号の数の順（A-2 は A-10 より前）。外した項目は出さない', () => {
   const a = acc({ items: [item('A-10'), item('A-2'), item('A-1'), item('A-3', { removedIn: 2 })] });

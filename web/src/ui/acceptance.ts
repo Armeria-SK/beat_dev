@@ -1,5 +1,5 @@
 import type {
-  Acceptance, AcceptanceChange, AcceptanceCheck, AcceptanceEdit, AcceptanceItem, AcceptanceSource, AcceptanceVersion, AcceptanceVersionDetail, Conversation, Coverage, ModelChoice, NotDoingItem, OwnerOp, PlanDoc, Task, UnreferencedMessage,
+  Acceptance, AcceptanceChange, AcceptanceCheck, AcceptanceEdit, AcceptanceItem, AcceptanceSource, AcceptanceVersion, AcceptanceVersionDetail, Coverage, ModelChoice, NotDoingItem, OwnerOp, PlanDoc, Task, UnreferencedMessage,
 } from '../api.ts';
 import { sendChoiceOf } from '../chat-logic.ts';
 import { t, type PlainKey } from '../i18n/index.ts';
@@ -144,8 +144,8 @@ export function revealStep(i: { reveal: boolean; accLoaded: boolean; accFailed: 
 export const buildRequest = (doc: PlanDoc | null, acc: Acceptance): { planHash: string; acceptanceHash: string | null } | null =>
   (doc?.hash ? { planHash: doc.hash, acceptanceHash: acc.hash } : null);
 
-export const changedAfterBuild = (doc: PlanDoc | null, acc: Acceptance | null): boolean =>
-  Boolean(acc?.frozen && doc?.hash && acc.frozen.plan_hash !== doc.hash);
+export const changedAfterBuild = (doc: PlanDoc | null): boolean =>
+  Boolean(doc?.built_hash && doc.hash && doc.built_hash !== doc.hash);
 
 export type BuildFailure = { kind: 'changed' } | { kind: 'running' } | { kind: 'frozen'; detail: string | null } | { kind: 'failed'; detail: string | null };
 
@@ -337,11 +337,6 @@ export const decisionFailure = (error: unknown): DecisionFailure =>
 export const askAfterSave = (acc: Acceptance | null): boolean => acc?.frozen != null;
 
 export const ASK_TEXT = 'I changed the plan. Check whether the acceptance items still match it, and propose any changes they need with acceptance_change.';
-
-export function askTarget(list: readonly Conversation[], productId: string): string | null {
-  const mine = list.filter(c => c.project_id === productId && c.permission_mode === 'plan');
-  return mine.sort((a, b) => b.last_message_at - a.last_message_at)[0]?.id ?? null;
-}
 
 export function askSend(target: string | null, productId: string, newId: () => string): { id: string; text: string; choice: ModelChoice; options: { projectId?: string; generated: true } } {
   return {

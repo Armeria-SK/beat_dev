@@ -6,7 +6,7 @@ import { hasUnsavedEdits, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved
 
 // Plan の欄（beat 3-1a-u）。画面を持たない決まり: 状態の決め方・書きかけ・保存の結果（web/src/ui/plan.ts）。
 
-const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan\n\nStep one.', hash: 'h1', updated_at: 1000, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, ...over });
+const doc = (over: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# Plan\n\nStep one.', hash: 'h1', updated_at: 1000, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, built_hash: null, ...over });
 
 test('ui/plan: 状態は 読み込み中 / 計画書が無い / 書いている最中 / 読める / 読めない', () => {
   assert.equal(planState(null, false), 'loading');
@@ -79,20 +79,15 @@ test('ui/plan: 保存の結果: 409 は「その間に変わった」（書き�
   assert.deepEqual(saveOutcome(new TypeError('Failed to fetch')), { kind: 'failed', detail: null }, 'サーバーの答えでない失敗は理由を出さない');
 });
 
-test('ui/plan: 同じ製品の会話のあいだを移るとき（新しい会話の最初の送信を含む）は、その製品の計画書の書きかけで「離れますか」を出さない', () => {
-  const known = new Map<string, string | null>([['c1', 'p1'], ['c2', 'p1'], ['c3', 'p2'], ['c4', null]]);
-  const of = (id: string) => (known.has(id) ? known.get(id)! : undefined);
-  assert.equal(planStays({ view: 'productNew', id: 'p1' }, { view: 'chat', id: 'fresh' }, of), 'p1', '送ったばかりの会話はまだ一覧に無い');
-  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c2' }, of), 'p1');
-  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'productNew', id: 'p1' }, of), 'p1');
-  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c3' }, of), null, '別の製品');
-  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c4' }, of), null, '製品の外の会話');
-  assert.equal(planStays({ view: 'productNew', id: 'p1' }, { view: 'chat', id: 'c4' }, of), null, '一覧にある製品の外の会話は、新しい会話の画面からでも持ち越さない');
-  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'fresh' }, of), null, '知らない会話へは、新しい会話の画面からだけ持ち越す');
-  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'kanban' }, of), null);
-  setUnsaved(`${PLAN_EDITS}p1`, true);
-  assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}p1`), false, '持ち越す書きかけは数えない');
-  assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}p10`), true, '名前の頭が同じ別の製品とは区別する');
+test('ui/plan (R2): 計画の書きかけは会話ごと。同じ会話の中だけ「離れますか」を出さず、同じ製品の別の会話・新しい会話へ移るときは出す', () => {
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c1' }), 'c1');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'chat', id: 'c2' }), null, '同じ製品の別の会話には、その会話の計画がある');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'productNew', id: 'p1' }), null, '新しい会話の計画は空');
+  assert.equal(planStays({ view: 'productNew', id: 'p1' }, { view: 'chat', id: 'fresh' }), null, '新しい会話の画面には計画の書きかけが無い');
+  assert.equal(planStays({ view: 'chat', id: 'c1' }, { view: 'kanban' }), null);
+  setUnsaved(`${PLAN_EDITS}c1`, true);
+  assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}c1`), false, '持ち越す書きかけは数えない');
+  assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}c10`), true, '名前の頭が同じ別の会話とは区別する');
   setUnsaved(`${PLAN_EDITS}p1`, false);
 });
 
@@ -119,7 +114,7 @@ test('ui/plan: その製品の会話で動いている実行の数（変われ�
 });
 
 test('ui/plan: Mark as reviewed は、読むモードで印のある計画書のときだけ出し、書いている最中と送っている最中は押せない', () => {
-  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h1', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, reviewLocked: false, ...extra });
+  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h1', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, reviewLocked: false, built_hash: null, ...extra });
   assert.equal(reviewButton(doc(), 'read', false, false), 'on');
   assert.equal(reviewButton(doc({ writing: true }), 'read', false, false), 'off', '書いている最中は押せない');
   assert.equal(reviewButton(doc({ reviewLocked: true }), 'read', false, false), 'off', 'Normal の会話が動いているあいだも押せない（plan_write はどのモードでも使える）');
@@ -142,7 +137,7 @@ test('ui/plan: 読み始めた計画書のハッシュを覚え、途中で計�
 });
 
 test('ui/plan: 「読み直して」が出ているあいだの 1 回目の押しは何も送らず、印を下ろして今の版を覚えるだけ。送るのは読み直したあとの 2 回目', () => {
-  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h2', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, reviewLocked: false, ...extra });
+  const doc = (extra: Partial<PlanDoc> = {}): PlanDoc => ({ content: '# P', hash: 'h2', updated_at: 1, updated_by: 'ai', tainted: true, writing: false, reviewLocked: false, built_hash: null, ...extra });
   const changed = reviewSeen(reviewSeen({ hash: null, changed: false }, 'h1'), 'h2');
   assert.equal(reviewButton(doc(), 'read', false, changed.changed), 'again', '押す前から「読み直した」の形にする');
   assert.equal(reviewButton(doc({ writing: true }), 'read', false, true), 'off');

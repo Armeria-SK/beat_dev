@@ -1523,6 +1523,7 @@ export const en = {
   'ui.plan.save': 'Save',
   'ui.plan.editor': 'Plan markdown',
   'ui.plan.emptyTitle': 'No plan yet',
+  'ui.plan.noConversation': 'No plan for this conversation yet',
   'ui.plan.emptyText': 'describe what to build in the conversation',
   'ui.plan.changed': 'Changed meanwhile. Reload to see it',
   'ui.plan.reload': 'Reload',

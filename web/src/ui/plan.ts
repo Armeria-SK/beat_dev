@@ -58,16 +58,8 @@ export function saveOutcome(error: unknown): SaveOutcome {
   return { kind: 'failed', detail: apiDetail(error) };
 }
 
-export function planStays(held: Route, next: Route, productOf: (conversationId: string) => string | null | undefined): string | null {
-  const of = (route: Route, unknown: string | null): string | null => {
-    if (route.view === 'productNew') return route.id;
-    if (route.view !== 'chat') return null;
-    const product = productOf(route.id);
-    return product === undefined ? unknown : product;
-  };
-  const from = of(held, null);
-  return from !== null && of(next, held.view === 'productNew' ? from : null) === from ? from : null;
-}
+export const planStays = (held: Route, next: Route): string | null =>
+  (held.view === 'chat' && next.view === 'chat' && held.id === next.id ? held.id : null);
 
 const BY = { owner: 'ui.plan.byYou', ai: 'ui.plan.byAi', outside: 'ui.plan.byOutside' } as const;
 
