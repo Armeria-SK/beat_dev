@@ -89,10 +89,13 @@ export class SkillStore {
   readonly #language: () => Language;
   readonly #log: (line: string) => void;
   readonly #backups: string | null;
+  readonly #grow: () => boolean;
 
-  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined, backups: string | null = null) {
-    this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log; this.#backups = backups;
+  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined, backups: string | null = null, grow: () => boolean = () => true) {
+    this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log; this.#backups = backups; this.#grow = grow;
   }
+
+  get growing(): boolean { return this.#grow(); }
 
   get dir(): string { return this.#dir; }
 

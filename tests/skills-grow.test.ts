@@ -80,7 +80,7 @@ for (const grow of [false, true]) {
   });
 }
 
-test('Grow skills Off without memory: reviews have nothing to do, so they finish without calling the model', async t => {
+test('Grow skills Off without memory: reviews wait (nothing is used up) and run once Grow skills is back on', async t => {
   const s = await setup(t, false, false);
   s.adapter().scripts = [reply('hello')];
   await s.send(uuid(1), 'hi there');
@@ -88,8 +88,21 @@ test('Grow skills Off without memory: reviews have nothing to do, so they finish
   const job = s.app.reviews.enqueue('manual', 'manual:none', { conversationId: uuid(1) })!;
   s.adapter().scripts = [reply('No changes')];
   assert.equal(await s.app.worker.tick(), 'idle');
-  assert.equal(s.app.reviews.get(job.id)!.status, 'done');
+  assert.equal(s.app.reviews.get(job.id)!.status, 'pending');
   assert.equal(s.adapter().calls.length, 1, 'only the chat reply called the model');
+  await s.app.applyConfig({ ...s.app.config(), skills: {} }, { probe: false });
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.reviews.get(job.id)!.status, 'done');
+  assert.ok(s.app.db.prepare("SELECT 1 FROM engine_runs WHERE kind = 'review'").get(), 'the review called the model');
+});
+
+test('Grow skills turned Off while a run is going: skill_draft is refused from then on, even though the run started with it On', async t => {
+  const s = await setup(t, true);
+  const started = s.app.config();
+  await s.app.applyConfig({ ...started, skills: { grow: false } }, { probe: false });
+  const out = await skillDraft.execute({ name: 'late-one', description: 'd', body: 'b', reason: 'r' }, { config: started, services: { skills: s.app.skills }, conversationId: uuid(3), runId: 'r' } as unknown as ToolContext);
+  assert.equal(out.isError, true);
+  assert.deepEqual(s.app.skills.drafts('pending', 10).map(d => d.name), []);
 });
 
 test('Grow skills Off: a skill_draft call made anyway is refused and no draft is made; existing drafts stay', async t => {

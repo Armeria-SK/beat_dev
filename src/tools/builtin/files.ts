@@ -9,7 +9,7 @@ import { toolText } from '../../shared/messages/tools.ts';
 import { approvalPaths } from '../approvals.ts';
 import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
 import { isToolConfigPath } from '../hooks/tool-config.ts';
-import { askBeforeRegister } from '../skills/store.ts';
+import { askBeforeRegister, growSkills } from '../skills/store.ts';
 import { isUnderDownloads } from './downloads-core.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
@@ -43,7 +43,7 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   // .git への書き込みはフックや設定というコードを書くことになるので、コードの確かめ（種類 code）にする。人格・スキルは、中身が引数にあるので今までどおり
   if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], askKinds: ['code'], reasonKeys: [FILE_KEYS.git] });
   if (protectedKind) {
-    const key = protectedKind === 'skill' && !askBeforeRegister(ctx.config) ? 'file.skill_auto' : FILE_KEYS[protectedKind];
+    const key = protectedKind === 'skill' && !growSkills(ctx.config) ? 'file.skill_off' : protectedKind === 'skill' && !askBeforeRegister(ctx.config) ? 'file.skill_auto' : FILE_KEYS[protectedKind];
     return result({ decision: 'ask', reasons: [guardText(language, key)], askKinds: ['persona'], reasonKeys: [key] });
   }
   // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる

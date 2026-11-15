@@ -307,8 +307,9 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
           <h1 className="bt-screen__title">{task.title}</h1>
           <div className="ui-task__state">
             {product && <a className="bt-tool__link bt-meta" href={routeHash({ view: 'product', id: product.id })}>{product.name}</a>}
-            {awaitsCheck(task) ? <Pill tone="waiting">{t('ui.kanban.col.check')}</Pill> : <Pill {...(STATUS_TONE[task.status] ? { tone: STATUS_TONE[task.status]! } : {})}>{onPending ? t('ui.kanban.waiting') : task.status === 'ready' && worker?.waiting?.[task.id] ? t('ui.wait.queued', waitText(worker.waiting[task.id]!)) : t(task.status === 'cancelled' && task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : STATUS_KEY[task.status])}</Pill>}
+            {awaitsCheck(task) ? <Pill tone="waiting">{t('ui.kanban.col.check')}</Pill> : <Pill {...(STATUS_TONE[task.status] ? { tone: STATUS_TONE[task.status]! } : {})}>{onPending ? t('ui.kanban.waiting') : t(task.status === 'cancelled' && task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : STATUS_KEY[task.status])}</Pill>}
             <span className="bt-meta">{t('ui.task.updated', formatRelative(task.updated_at))}{task.parent_id !== null && <> · {t('ui.kanban.repeating')}</>}</span>
+            {task.status === 'ready' && worker?.waiting?.[task.id] && <span className="bt-meta" data-wait>{waitText(worker.waiting[task.id]!)}</span>}
           </div>
         </div>
         <div className="bt-screen__tools">

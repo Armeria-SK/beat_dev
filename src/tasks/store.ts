@@ -110,7 +110,8 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'questions', column: 'task_id' },
   { table: 'questions', column: 'fix_task_id' },
 ] as const;
-export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:', 'created:task:'] as const;
+export const OWNER_RUN_KV = 'task-owner-run:';
+export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:', 'created:task:', OWNER_RUN_KV] as const;
 export const UNTRUSTED_RUN = 'untrusted-input';
 const TEXT_EVENT_KINDS: readonly string[] = ['context', 'note', 'edited'];
 const TEXT_EVENTS = TEXT_EVENT_KINDS.map(kind => `'${kind}'`).join(', ');
@@ -429,6 +430,7 @@ export class TaskStore {
           .run(status, summary, now, now, id);
       }
       this.event(id, status, actor, summary, runId);
+      this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`${OWNER_RUN_KV}${id}`);
     });
   }
 

@@ -60,7 +60,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
   async execute(input, ctx) {
-    if (!growSkills(ctx.config)) return { content: toolText(languageOf(ctx.config), 'skill.growth_off'), isError: true };
+    if (!growSkills(ctx.config) || ctx.services?.skills?.growing === false) return { content: toolText(languageOf(ctx.config), 'skill.growth_off'), isError: true };
     try {
       const s = store(ctx);
       const existing = s.getRegistered(input.name);

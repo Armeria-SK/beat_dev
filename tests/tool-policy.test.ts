@@ -187,6 +187,12 @@ test('スキルのフォルダへの書き込みの確かめの文は、聞か�
   assert.match(unasked.reasons[0]!, /skill_draft instead: under the current setting it is registered without the user's review/u);
   assert.doesNotMatch(unasked.reasons[0]!, /on screen/u);
   assert.ok(unasked.reasons[0]!.includes(`or ${SKILL_AUTO_PER_DAY} skills were already registered that way in the last 24 hours; in those cases it waits as a draft`), '1 日の上限に達したら下書きで待つことも言う');
+
+  const off = setup(t, {}, c => { c.skills = { grow: false, askBeforeRegister: false }; });
+  const grown = checkFilePath('skills/memo/SKILL.md', 'write', off.ctx).check;
+  assert.deepEqual([grown.decision, grown.askKinds], ['ask', ['persona']], 'Grow skills Off keeps the check');
+  assert.match(grown.reasons[0]!, /Grow skills is off/u);
+  assert.doesNotMatch(grown.reasons[0]!, /offer it/u, 'it does not point at skill_draft, which is refused while Off');
 });
 
 test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {

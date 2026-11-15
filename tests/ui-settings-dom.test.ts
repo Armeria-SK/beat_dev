@@ -250,6 +250,8 @@ test('Settings › Skills（DOM）: Grow skills sits above Ask before registerin
   const sw = (label: string) => container.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
   assert.equal(sw('Grow skills').getAttribute('aria-checked'), 'true', 'missing key reads as On');
   assert.equal(sw('Ask before registering').disabled, false);
+  const dim = () => sw('Ask before registering').parentElement?.getAttribute('data-grow');
+  assert.equal(dim(), 'on', 'not dimmed while growth is On');
   await click(sw('Grow skills'));
   await settle();
   await settle();
@@ -259,6 +261,7 @@ test('Settings › Skills（DOM）: Grow skills sits above Ask before registerin
   assert.deepEqual(put?.body?.config.skills, { askBeforeRegister: false, grow: false });
   assert.equal(sw('Grow skills').getAttribute('aria-checked'), 'false');
   assert.equal(sw('Ask before registering').disabled, true, 'dimmed while growth is Off');
+  assert.equal(dim(), 'off');
   assert.equal(sw('Ask before registering').getAttribute('aria-checked'), 'false', 'its value is kept');
   const text = container.querySelector('[data-row="skills:grow"]')!.textContent!;
   assert.match(text, /^Grow skillsbeat only uses the skills you already have/u);

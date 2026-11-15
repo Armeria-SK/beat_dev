@@ -17,7 +17,7 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister, growSkills } from '../tools/skills/store.ts';
 import { resolveConfigPath } from '../tools/hooks/scope.ts';
 import type { TaskControl } from '../tools/types.ts';
-import type { Task, TaskStore } from './store.ts';
+import { OWNER_RUN_KV, type Task, type TaskStore } from './store.ts';
 import { CHECK_FAIL_LIMIT, CHECK_KEEP, CHECK_OPTIONS, CHECK_TEXT } from '../projects/check-run.ts';
 import { GATE_LIMIT, itemSummary, workAgreement } from '../projects/gate.ts';
 import { gateText } from '../shared/messages/gate.ts';
@@ -60,7 +60,7 @@ export interface WorkerDeps {
   pendingWake?: (() => unknown) | undefined;
 }
 
-export type WaitReason = { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
+export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 
 export interface WorkerRunning { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
 
@@ -181,6 +181,7 @@ export class Worker {
 
   requestRun(taskId: string): void {
     this.#forced.add(taskId);
+    this.#d.kv.set(`${OWNER_RUN_KV}${taskId}`, '1');
     this.poke();
   }
 
@@ -221,7 +222,17 @@ export class Worker {
     return inQuietHours(this.#now(), c.timezone, c.worker.quietStart, c.worker.quietEnd);
   }
 
-  #ownerWork(task: Task): boolean { return this.#forced.has(task.id) || !this.#d.tasks.beatDecided(task.id); }
+  #ownerWork(task: Task): boolean {
+    if (this.#forced.has(task.id) || this.#d.kv.get(`${OWNER_RUN_KV}${task.id}`) !== undefined) return true;
+    return !this.#d.tasks.beatDecided(task.id) && !this.#beatSchedule(task);
+  }
+
+  #beatSchedule(task: Task): boolean {
+    if (!task.parent_id) return false;
+    return Boolean(this.#d.db.prepare(`SELECT 1 FROM tasks p WHERE p.id = ? AND p.cron IS NOT NULL
+      AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = p.id AND e.kind = 'created' AND e.actor = 'beat')
+      AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = p.id AND e.kind = 'approved')`).get(task.parent_id));
+  }
 
   #budgetFreeAt(c: AppConfig, now: number): number | undefined {
     const over = this.runsLastHour() - c.worker.maxRunsPerHour;
@@ -239,21 +250,29 @@ export class Worker {
   waitReason(task: Task): WaitReason | null {
     const c = this.#d.config();
     const now = this.#now();
-    if (task.status !== 'ready' || (task.run_at !== null && task.run_at > now) || task.attempts >= task.max_attempts || !this.#ownerWork(task)) return null;
-    const hold = this.#hold();
+    return this.#waitReason(task, c, now, this.#hold(), this.#budgetFreeAt(c, now), this.#d.engine.backgroundHasRoom());
+  }
+
+  #waitReason(task: Task, c: AppConfig, now: number, hold: 'paused' | 'chat' | undefined, budgetAt: number | undefined, room: boolean): WaitReason | null {
+    if (task.status !== 'ready' || (task.run_at !== null && task.run_at > now) || task.attempts >= task.max_attempts) return null;
+    if (!this.#ownerWork(task)) return c.worker.enabled ? null : { kind: 'off' };
+    if (this.#d.tasks.openChildren(task.id) > 0) return null;
     if (hold) return { kind: hold };
-    const freeAt = this.#forced.has(task.id) ? undefined : this.#budgetFreeAt(c, now);
-    if (freeAt !== undefined) return { kind: 'budget', at: freeAt };
+    if (budgetAt !== undefined && !this.#forced.has(task.id)) return { kind: 'budget', at: budgetAt };
     if (this.#d.tasks.productBusy(task)) return { kind: 'product' };
-    if (this.#running.size >= c.worker.maxParallel || !this.#d.engine.backgroundHasRoom()) return { kind: 'slots' };
+    if (this.#running.size >= c.worker.maxParallel || !room) return { kind: 'slots' };
     return null;
   }
 
   status() {
     const c = this.#d.config();
+    const now = this.#now();
+    const hold = this.#hold();
+    const budgetAt = this.#budgetFreeAt(c, now);
+    const room = this.#d.engine.backgroundHasRoom();
     const waiting: Record<string, WaitReason> = {};
     for (const task of this.#d.tasks.list({ statuses: ['ready'] })) {
-      const reason = this.waitReason(task);
+      const reason = this.#waitReason(task, c, now, hold, budgetAt, room);
       if (reason) waiting[task.id] = reason;
     }
     return {
@@ -284,6 +303,8 @@ export class Worker {
       };
       const own = c.worker.enabled;
       const eligible = (t: Task): boolean => own || this.#ownerWork(t);
+      const pick = (selfOk: boolean, accept: (t: Task) => boolean): Task | undefined =>
+        tasks.pickNext({ allowSelf: true, accept: t => eligible(t) && (selfOk || (t.origin !== 'self' && t.origin !== 'curiosity') || this.#ownerWork(t)) && accept(t) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
 
@@ -313,7 +334,7 @@ export class Worker {
       if (!task && freeAt !== undefined) {
         const idleSelf = own && c.worker.autonomy && !this.quiet() && now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
         // 「今すぐ実行」で提供元の空きを待っているタスクは、上限より先に動くもの（空き待ちであって上限待ちではない）なので、上限の知らせの数に入れない
-        if (tasks.pickNext({ allowSelf: idleSelf, accept: t => eligible(t) && !this.#forced.has(t.id) })) {
+        if (pick(idleSelf, t => !this.#forced.has(t.id))) {
           this.#d.notifications.notify({
             kind: 'info', title: taskText(languageOf(c), 'notify.budget.title'),
             body: taskText(languageOf(c), 'notify.budget.body', { max: c.worker.maxRunsPerHour }),
@@ -326,13 +347,13 @@ export class Worker {
 
       const idleEnough = now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
       const allowSelf = own && c.worker.autonomy && !this.quiet() && idleEnough;
-      task ??= tasks.pickNext({ allowSelf, accept: t => eligible(t) && roomFor() });
+      task ??= pick(allowSelf, roomFor);
       // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りにも回さず）、終わった実行の onRunEnd を待つ
       // （poke が来ない道〔止まっている・自動の予定が無い〕に備えて、保険の予定は 1 分後に置く。終わった実行の poke はそれより早い）
-      if (!task && (this.#forced.size > 0 || tasks.pickNext({ allowSelf, accept: eligible }))) { reschedule(now + 60_000); return 'busy'; }
+      if (!task && (this.#forced.size > 0 || pick(allowSelf, () => true))) { reschedule(now + 60_000); return 'busy'; }
       // 実行するタスクが無ければ、振り返りを見る
       const holdPiled = this.runsLastHour() >= Math.ceil(c.worker.maxRunsPerHour / 2);
-      const reviewing = own && c.memory.review;
+      const reviewing = own && c.memory.review && (this.#d.botMemory === true || growSkills(c));
       const job = !task && reviewing ? this.#d.reviews?.next({ skipPiled: holdPiled }) : undefined;
       if (!task && !job && holdPiled && reviewing && this.#d.reviews?.next()) { reschedule(Math.min(now + 10 * 60_000, tasks.nextWakeAt({ allowSelf }) ?? Infinity)); return 'budget'; }
       if (job) {
@@ -398,7 +419,6 @@ export class Worker {
     if (!reviews) return 'idle';
     const language = this.#language();
     if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
-    if (!this.#d.botMemory && !growSkills(this.#d.config())) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
     const { prompt, upto } = this.#reviewInput(job);
     if (!prompt) {
       reviews.finish(job.id, 'done', taskText(language, 'review.nothing'));

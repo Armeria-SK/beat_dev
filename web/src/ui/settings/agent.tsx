@@ -398,12 +398,12 @@ export function SkillsPanel() {
           })} />
         </Row>
         <Row k="skills:ask" title={t('ui.set.skills.ask')} desc={!grow ? t('ui.set.skills.askGrowOff') : ask ? t('ui.set.skills.askOn') : t('ui.set.skills.askOff')}>
-          <Switch checked={ask} label={t('ui.set.skills.ask')} disabled={busy || !grow} onChange={next => void ctx.commit('skills:ask', c => {
+          <span data-grow={grow ? 'on' : 'off'}><Switch checked={ask} label={t('ui.set.skills.ask')} disabled={busy || !grow} onChange={next => void ctx.commit('skills:ask', c => {
             const { askBeforeRegister: _drop, ...rest } = (c.skills ?? {}) as Json;
             const skills = next ? rest : { ...rest, askBeforeRegister: false };
             const { skills: _old, ...others } = c;
             return Object.keys(skills).length ? { ...others, skills } : others;
-          })} />
+          })} /></span>
         </Row>
         <Row k="skills:registered" title={t('ui.set.skills.registered')} desc={counts ? t('ui.set.skills.counts', counts.skills, counts.drafts) : undefined}>
           <Button small onClick={goSkills}>{t('ui.set.skills.open')}</Button>

@@ -51,9 +51,10 @@ const task = (status: Task['status'], extra: Partial<Task> = {}): Task => ({
 
 const AT = Date.now() + 25 * 60_000;
 const REASONS: Array<[WaitReason, string]> = [
+  [{ kind: 'off' }, 'Work on its own is off'],
   [{ kind: 'paused' }, 'paused'],
   [{ kind: 'chat' }, 'waiting for the chat reply to finish'],
-  [{ kind: 'budget', at: AT }, `hourly limit reached, next at ${formatDateTimeSmart(AT)}`],
+  [{ kind: 'budget', at: AT }, `hourly limit reached · can start at ${formatDateTimeSmart(AT)}`],
   [{ kind: 'product' }, 'another task of this product is running'],
   [{ kind: 'slots' }, 'waiting for running work to finish'],
 ];
@@ -88,7 +89,7 @@ const acceptance: Acceptance = {
   frozen: { version: 1, hash: 'ah', plan_hash: 'p1', created_at: 1, source: 'build', build_task_id: 'b1' }, open_build_task_id: 'b1',
 };
 
-test('ui/PlanPane（DOM）: the Queued pill carries the reason ("Queued · hourly limit reached, next at …"); Running is unchanged', async () => {
+test('ui/PlanPane（DOM）: the pill stays "Queued" and the reason is a meta line under the bar; Running shows no reason', async () => {
   let status: Task['status'] = 'ready';
   serve(path => {
     if (path === `/api/projects/${PRODUCT}/plan`) return { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false } };
@@ -101,15 +102,19 @@ test('ui/PlanPane（DOM）: the Queued pill carries the reason ("Queued · hourl
   const { root } = await render(createElement(PlanPane, { ...props, taskRevision: '0' }));
   await settle(); await settle();
   const pill = () => document.body.querySelector('[role="status"] .bt-pill');
+  const why = () => document.body.querySelector('.ui-plan__live [data-wait]')?.textContent ?? null;
   assert.equal(pill()?.textContent, 'Queued');
+  assert.equal(why(), null);
   for (const [reason, text] of REASONS) {
     await update(() => root.render(createElement(PlanPane, { ...props, taskRevision: '0', waits: { b1: reason } })));
-    assert.equal(pill()?.textContent, `Queued · ${text}`, reason.kind);
+    assert.equal(pill()?.textContent, 'Queued', reason.kind);
+    assert.equal(why(), text, reason.kind);
   }
   status = 'running';
   await update(() => root.render(createElement(PlanPane, { ...props, taskRevision: '1', waits: { b1: { kind: 'paused' } } })));
   await settle();
-  assert.equal(pill()?.textContent, 'Running', 'a running task shows no waiting reason');
+  assert.equal(pill()?.textContent, 'Running');
+  assert.equal(why(), null, 'a running task shows no waiting reason');
 });
 
 const worker = (waits: Record<string, WaitReason>): WorkerStatus => ({
@@ -117,14 +122,17 @@ const worker = (waits: Record<string, WaitReason>): WorkerStatus => ({
 });
 const project = { id: PRODUCT, name: 'Parser' } as Project;
 
-test('ui/Task（DOM）: the state pill of a queued task carries the reason ("Queued · paused")', async () => {
+test('ui/Task（DOM）: a queued task keeps the "Queued" pill and shows the reason as a meta line ("paused")', async () => {
   serve(path => (path === '/api/tasks/b1' ? { task: task('ready'), events: [], runs: [] } : undefined));
   const { container, root } = await render(createElement(TaskScreen, { id: 'b1', revision: '0', worker: worker({}), projects: [project], pending: 0 }));
   await settle();
   const pill = () => container.querySelector('.ui-task__state .bt-pill')?.textContent;
+  const why = () => container.querySelector('.ui-task__state [data-wait]')?.textContent ?? null;
   assert.equal(pill(), 'Queued');
+  assert.equal(why(), null);
   await update(() => root.render(createElement(TaskScreen, { id: 'b1', revision: '0', worker: worker({ b1: { kind: 'paused' } }), projects: [project], pending: 0 })));
-  assert.equal(pill(), 'Queued · paused');
+  assert.equal(pill(), 'Queued');
+  assert.equal(why(), 'paused');
 });
 
 test('ui/Kanban（DOM）: an Approved card says why it is waiting ("another task of this product is running")', async () => {
@@ -143,4 +151,21 @@ test('ui/Kanban（DOM）: an Approved card says why it is waiting ("another task
   assert.ok(!card()!.textContent!.includes('another task of this product is running'));
   await update(() => root.render(createElement(Kanban, { ...props, waits: { b1: { kind: 'product' } } })));
   assert.ok(card()!.textContent!.includes('another task of this product is running'), card()!.textContent!);
+});
+
+test('ui/Kanban（DOM）: while Work on its own is Off, a beat task says so and "next in queue" goes to the owner task that will run', async () => {
+  serve(path => {
+    if (path === '/api/tasks') return { active: [task('ready', { id: 's1', title: 'Tidy the notes', origin: 'self', priority: 1 }), task('ready', { title: 'Build: Parser' })], finished: [] };
+    if (path === '/api/tasks/finished?limit=20') return { tasks: [], next: null, total: 0 };
+    if (path === '/api/runs?limit=500') return { runs: [], total: 0, judged: {} };
+    return undefined;
+  });
+  g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+  const props: KanbanProps = { conversations: [], drafts: [], checklists: new Map<string, never[]>(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map(), waits: { s1: { kind: 'off' } } };
+  const { container } = await render(createElement(Kanban, props));
+  await settle();
+  const card = (title: string) => [...container.querySelectorAll('.bt-card')].find(c => c.textContent?.includes(title))!.textContent!;
+  assert.ok(card('Tidy the notes').includes('Work on its own is off'), card('Tidy the notes'));
+  assert.ok(!card('Tidy the notes').includes('next in queue'), card('Tidy the notes'));
+  assert.ok(card('Build: Parser').includes('next in queue'), card('Build: Parser'));
 });

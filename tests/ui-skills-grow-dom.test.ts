@@ -27,7 +27,10 @@ test('ui/Skills（DOM）: with Grow skills Off the screen says so in one quiet l
     await settle();
     const line = container.querySelector('[data-grow="off"]');
     assert.equal(line !== null, shown, JSON.stringify(skills));
-    if (line) assert.equal(line.textContent, 'Growing skills is off, so beat makes no new drafts · Settings › Skills');
+    if (line) {
+      assert.equal(line.textContent, 'Growing skills is off, so beat makes no new drafts · Skills & tools');
+      assert.equal(line.querySelector('a')?.getAttribute('href'), '#/settings/skills');
+    }
     await cleanup();
   }
 });

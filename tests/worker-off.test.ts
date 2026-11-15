@@ -15,6 +15,12 @@ const complete: Script = async function* (req) {
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
+const checkpoint: Script = async function* (req) {
+  const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name: 'task_checkpoint', arguments: { tried: 'read the notes', result: 'half done', next_action: 'finish the rest', resume_after_minutes: 1 } };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
+  yield { type: 'done', stop: 'tool_use' as StopReason };
+};
+
 function gated(): { script: Script; release: () => void } {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -103,7 +109,8 @@ test('worker Off: tasks beat started on its own, curiosity and memory reviews do
   assert.equal(s.app.tasks.get(curious.id)!.status, 'ready');
   assert.equal(s.app.reviews.get(job.id)!.status, 'pending');
   assert.equal(s.adapter().calls.length, 0);
-  assert.equal(s.app.worker.waitReason(s.app.tasks.get(self.id)!), null, 'no waiting reason is shown for beat\'s own work');
+  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(self.id)!), { kind: 'off' }, 'beat\'s own work says the switch holds it');
+  assert.deepEqual(s.app.worker.status().waiting[curious.id], { kind: 'off' });
 });
 
 test('worker Off: the owner pressing Run now on a task beat started runs it', async t => {
@@ -183,4 +190,61 @@ test('waiting reasons match what the worker does: paused, chat reply, hourly lim
   g.release();
   assert.equal(await first, 'ran');
   assert.equal(reason(), null);
+});
+
+test('worker Off: a task beat started that the owner pressed keeps going after it pauses midway, and the mark goes when it finishes', async t => {
+  const s = await setup(t);
+  const self = s.app.tasks.create({ title: 'tidy the notes', origin: 'self', actor: 'worker' });
+  s.app.worker.requestRun(self.id);
+  s.adapter().scripts.push(checkpoint);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(self.id)!.status, 'ready', 'the first run paused midway');
+  s.clock.now += 2 * 60_000;
+  s.app.worker.setPaused(true);
+  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(self.id)!), { kind: 'paused' }, 'it still counts as the owner work');
+  s.app.worker.setPaused(false);
+  s.adapter().scripts.push(complete);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(self.id)!.status, 'done');
+  assert.equal(s.app.kv.get(`task-owner-run:${self.id}`), undefined);
+});
+
+test('worker Off: runs of a repeating task beat set up (inside a Build, or in chat for the owner) do not run; the owner pressing Run now on one does', async t => {
+  const s = await setup(t);
+  const build = s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user' });
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(build.id);
+  const inBuild = s.app.tasks.create({ title: 'check the shop daily', origin: 'user', actor: 'beat', cron: '* * * * *', timezone: 'UTC', spawnedBy: build.id });
+  const inChat = s.app.tasks.create({ title: 'post a summary', origin: 'user', actor: 'beat', cron: '* * * * *', timezone: 'UTC' });
+  for (const id of [inBuild.id, inChat.id]) s.app.db.prepare("UPDATE tasks SET status = 'scheduled', run_at = ? WHERE id = ?").run(s.clock.now - 1000, id);
+  assert.equal(await s.app.worker.tick(), 'idle');
+  const runOf = (id: string) => s.app.db.prepare('SELECT id, status FROM tasks WHERE parent_id = ?').get(id) as { id: string; status: string };
+  assert.equal(runOf(inBuild.id).status, 'ready');
+  assert.equal(runOf(inChat.id).status, 'ready');
+  assert.equal(s.adapter().calls.length, 0);
+  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(runOf(inBuild.id).id)!), { kind: 'off' });
+  s.app.worker.requestRun(runOf(inChat.id).id);
+  s.adapter().scripts.push(complete);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(runOf(inChat.id).status, 'done');
+  assert.equal(runOf(inBuild.id).status, 'ready');
+});
+
+test('hourly limit: the worker wakes again when the limit frees up, not on the fixed poll', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 2; }, true);
+  s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user' });
+  const insert = s.app.db.prepare("INSERT INTO engine_runs (id, kind, started_at) VALUES (?, 'task', ?)");
+  insert.run('r1', s.clock.now - 58 * 60_000);
+  insert.run('r2', s.clock.now - 20 * 60_000);
+  s.app.worker.start();
+  await waitFor(() => s.app.worker.status().nextWakeAt === s.clock.now + 2 * 60_000, 'the next wake is when the older run leaves the hour', 2000);
+});
+
+test('a Build whose own sub-task is running shows no waiting reason (it is working through its parts)', async t => {
+  const s = await setup(t);
+  const projectId = s.project();
+  const parent = s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user', projectId });
+  const child = s.app.tasks.create({ title: 'part 1', origin: 'user', actor: 'beat', projectId, spawnedBy: parent.id });
+  s.app.db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(child.id);
+  assert.equal(s.app.worker.waitReason(s.app.tasks.get(parent.id)!), null);
+  assert.equal(s.app.worker.status().waiting[parent.id], undefined);
 });

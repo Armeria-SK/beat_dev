@@ -707,9 +707,10 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
         </span>
         {mode === 'edit' && <Button variant="primary" small disabled={!canSave(state, dirty, saving)} onClick={() => void save()}>{t('ui.plan.save')}</Button>}
         {action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
-        {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill {...(pill.tone ? { tone: pill.tone } : {})}>{wait ? t('ui.wait.queued', waitText(wait)) : t(pill.label)}</Pill></span>}
+        {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill {...(pill.tone ? { tone: pill.tone } : {})}>{t(pill.label)}</Pill></span>}
       </div>
       <div role="status" className="ui-plan__live">
+        {action?.kind === 'building' && wait && <p className="bt-meta" data-wait>{waitText(wait)}</p>}
         {buildNotice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} />}
         {buildNotice?.kind === 'frozen' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} />}
       </div>
