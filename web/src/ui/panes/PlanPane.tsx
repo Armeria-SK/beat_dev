@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import {
-  api, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type OwnerOp, type Coverage, type NotDoingItem, type PlanDoc, type Task,
+  api, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type OwnerOp, type Coverage, type Deviations, type NotDoingItem, type PlanDoc, type Task,
 } from '../../api.ts';
 import { newConversationId } from '../../chat-logic.ts';
 import { formatRelative } from '../../i18n/format.ts';
@@ -10,7 +10,7 @@ import { Markdown } from '../../Markdown.tsx';
 import {
   acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
   decisionFailure, diffLabel, editAccess, editBase, editHint, editOp, editRequest, formProblem, itemDetails, itemForm, loadedAcceptance, noticeAfterReload, outsideContent, pagingCursor, previousVersion, problemField, proposalRows, proposalStale, removeOp, revealSection, revealStep,
-  showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type EditBase, type ItemForm, type Paging,
+  showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, stateTone, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type EditBase, type ItemForm, type Paging,
 } from '../acceptance.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
@@ -87,7 +87,7 @@ function ItemEditor({ item, base, editing, onDone }: { item: AcceptanceItem | nu
 
 type RowMode = { kind: 'view' } | { kind: 'edit' | 'remove'; base: EditBase };
 
-function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing?: Editing | undefined }) {
+function Row({ entry, editing, differs = false }: { entry: AcceptanceItem | NotDoingItem; editing?: Editing | undefined; differs?: boolean }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<RowMode>({ kind: 'view' });
@@ -117,12 +117,13 @@ function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing
         <span className="ui-acc__tags">
           <span className="bt-chip">{t(sourceLabel(entry.source))}</span>
           {item && <span className="bt-chip">{t(checkLabel(item.check))}</span>}
+          {differs && <span className="bt-chip" data-differs>{t('ui.dev.chip')}</span>}
         </span>
         {open && mode.kind === 'edit' && item && editing && <ItemEditor item={item} base={mode.base} editing={editing} onDone={() => back('edit')} />}
         {open && mode.kind !== 'edit' && (
           <dl className="ui-acc__detail" onClick={e => e.stopPropagation()}>
-            {details.map(d => (
-              <div key={d.label} className="ui-acc__pair">
+            {details.map((d, i) => (
+              <div key={`${d.label}:${i}`} className="ui-acc__pair">
                 <dt className="bt-label">{t(d.label)}</dt>
                 <dd className={'text' in d && d.mono ? 'ui-acc__mono' : undefined}>{'text' in d ? d.text : t(d.note)}</dd>
               </div>
@@ -140,7 +141,7 @@ function Row({ entry, editing }: { entry: AcceptanceItem | NotDoingItem; editing
           </dl>
         )}
       </div>
-      {state && <span className="bt-row__end"><Pill>{t(state)}</Pill></span>}
+      {state && <span className="bt-row__end"><Pill {...(item && stateTone(item.state) ? { tone: stateTone(item.state)! } : {})}>{t(state)}</Pill></span>}
       {opens && <Icon name={open ? 'chevD' : 'chevR'} className="ui-acc__chev" />}
     </li>
   );
@@ -239,7 +240,7 @@ function Versions({ productId, latest }: { productId: string; latest: number }) 
   );
 }
 
-function AcceptanceList({ acc, editing }: { acc: Acceptance; editing: Editing | undefined }) {
+function AcceptanceList({ acc, editing, differs }: { acc: Acceptance; editing: Editing | undefined; differs: ReadonlySet<string> }) {
   const t = useT();
   const [adding, setAdding] = useState<EditBase | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -258,7 +259,7 @@ function AcceptanceList({ acc, editing }: { acc: Acceptance; editing: Editing | 
           <span className="bt-label">{t('ui.acc.title')}</span>
           <span className="bt-meta">{acceptanceMeta(acc)}</span>
         </div>
-        {items.length > 0 && <ul className="bt-list">{items.map(i => <Row key={i.id} entry={i} editing={editing} />)}</ul>}
+        {items.length > 0 && <ul className="bt-list">{items.map(i => <Row key={i.id} entry={i} editing={editing} differs={differs.has(i.id)} />)}</ul>}
         {editing && (adding
           ? <ItemEditor item={null} base={adding} editing={editing} onDone={() => { refocus.current = true; setAdding(null); }} />
           : <span className="ui-acc__buttons"><Button ref={addButton} variant="ghost" small icon="plus" disabled={editing.busy || editing.locked} onClick={() => setAdding(editing.base)}>{t('ui.acc.edit.add')}</Button></span>)}
@@ -270,6 +271,85 @@ function AcceptanceList({ acc, editing }: { acc: Acceptance; editing: Editing | 
         </section>
       )}
     </>
+  );
+}
+
+const DEVIATIONS_GAP_MS = 10_000;
+
+const NOT_COMPARED = {
+  no_git: 'ui.dev.notChecked.no_git', git_unusable: 'ui.dev.notChecked.git_unusable', failed: 'ui.dev.notChecked.failed', folder_missing: 'ui.dev.notChecked.folder_missing',
+} as const;
+const CHANGE = { added: ['+', 'bt-add', 'ui.dev.change.added'], modified: ['~', '', 'ui.dev.change.modified'], deleted: ['−', 'bt-del', 'ui.dev.change.deleted'] } as const;
+
+function FileRow({ path, change, scripts }: { path: string; change: keyof typeof CHANGE; scripts?: string[] | undefined }) {
+  const t = useT();
+  const [sign, tone, label] = CHANGE[change];
+  return (
+    <li className="bt-row ui-acc__row">
+      <span className={`ui-acc__sign ${tone}`} title={t(label)}>{sign}</span>
+      <div className="bt-row__main">
+        <span className="ui-acc__text ui-acc__mono">{path}</span>
+        {scripts && scripts.length > 0 && <span className="bt-meta">{t('ui.dev.scripts', scripts.join(', '))}</span>}
+      </div>
+    </li>
+  );
+}
+
+function DiffFlagsView({ flags }: { flags: Deviations['flags'] }) {
+  const t = useT();
+  if (!flags.checked) return <p className="bt-meta ui-acc__problem">{t(NOT_COMPARED[flags.reason])}</p>;
+  if (flags.testsDeleted.length === 0 && flags.checkChanged.length === 0) return flags.since === 'build' ? <p className="bt-meta ui-acc__problem">{t('ui.dev.noFlags')}</p> : null;
+  return (
+    <>
+      {flags.testsDeleted.length > 0 && (
+        <Group label={t('ui.dev.testsDeleted')}>
+          {flags.testsDeleted.map(path => <FileRow key={path} path={path} change="deleted" />)}
+          {flags.testsDeletedMore > 0 && <li className="bt-row bt-meta">{t('ui.kanban.more', flags.testsDeletedMore)}</li>}
+        </Group>
+      )}
+      {flags.checkChanged.length > 0 && (
+        <Group label={t('ui.dev.checkChanged')}>
+          {flags.checkChanged.map(file => <FileRow key={file.path} path={file.path} change={file.change} scripts={file.scripts} />)}
+          {flags.checkChangedMore > 0 && <li className="bt-row bt-meta">{t('ui.kanban.more', flags.checkChangedMore)}</li>}
+        </Group>
+      )}
+    </>
+  );
+}
+
+function Differs({ data }: { data: Deviations }) {
+  const t = useT();
+  const { rows, unreadable, unusable } = data.deviations;
+  const { flags } = data;
+  return (
+    <section className="bt-section ui-acc" aria-label={t('ui.dev.title')}>
+      <div className="bt-section__head">
+        <span className="bt-label">{t('ui.dev.title')}</span>
+        {flags.checked && <span className="bt-meta">{t(flags.since === 'build' ? 'ui.dev.since.build' : 'ui.dev.since.head')}</span>}
+      </div>
+      {rows.length > 0 && (
+        <ul className="bt-list">
+          {rows.map((row, i) => (
+            <li key={i} className="bt-row ui-acc__row">
+              <span className="bt-tag ui-acc__id">{row.item ?? t('ui.dev.general')}</span>
+              <div className="bt-row__main">
+                <span className="ui-acc__text">{row.what}</span>
+                <span className="bt-meta ui-acc__was">{t('ui.dev.why', row.why)}</span>
+                <span className="ui-acc__tags">
+                  {row.by === 'task' && row.task ? <a className="bt-chip" href={routeHash({ view: 'task', id: row.task })}>{t('ui.dev.byTask')}</a> : <span className="bt-chip">{t(row.by === 'owner' ? 'ui.dev.byOwner' : 'ui.dev.byTask')}</span>}
+                  {row.date && <span className="bt-meta">{row.date}</span>}
+                  {row.external && <span className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.dev.outside')}</span>}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {rows.length === 0 && !unusable && <p className="bt-meta ui-acc__problem">{t('ui.dev.none')}</p>}
+      {unusable && <p className="bt-meta ui-danger ui-acc__problem">{t('ui.dev.unusable')}</p>}
+      {unreadable > 0 && <p className="bt-meta ui-acc__problem">{t('ui.dev.unreadable', unreadable)}</p>}
+      <DiffFlagsView flags={flags} />
+    </section>
   );
 }
 
@@ -425,6 +505,21 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     }
   }, [productId]);
   useEffect(() => { void loadAcceptance(); }, [loadAcceptance, revision]);
+
+  const [deviations, setDeviations] = useState<Deviations | null>(null);
+  const built = acc?.frozen != null;
+  const devAt = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    if (!built) { setDeviations(null); return undefined; }
+    const read = () => { devAt.current = Date.now(); void api.deviations(productId).then(r => { if (mounted.current) setDeviations(r); }, () => { if (mounted.current) setDeviations(null); }); };
+    const wait = devAt.current + DEVIATIONS_GAP_MS - Date.now();
+    if (wait <= 0) { read(); return undefined; }
+    const timer = setTimeout(read, wait);
+    return () => { clearTimeout(timer); };
+  }, [productId, built, revision, taskRevision]);
+  const differs = useMemo(() => new Set((deviations?.deviations.rows ?? []).flatMap(row => (row.item ? [row.item] : []))), [deviations]);
 
   const buildTask = watchedBuild(sentBuild, acc);
   useEffect(() => {
@@ -650,7 +745,8 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
             {accNotice?.failure.kind === 'stale' && <div role="status"><Notice tone="warn" icon="alert" title={t(accNotice.what === 'edit' ? 'ui.acc.edit.stale' : 'ui.acc.change.staleNotice')} /></div>}
             {accNotice?.failure.kind === 'failed' && <Notice tone="fail" title={t(accNotice.what === 'edit' ? 'ui.acc.edit.failed' : 'ui.acc.change.failed')} text={accNotice.failure.detail ?? undefined} />}
             {change && <ProposedChange acc={acc} change={change} busy={accBusy} onDecide={decision => void decide(decision)} />}
-            {showAcceptance(acc) && <AcceptanceList acc={acc} editing={editing} />}
+            {showAcceptance(acc) && <AcceptanceList acc={acc} editing={editing} differs={differs} />}
+            {deviations && <Differs data={deviations} />}
             {acc.frozen && <Versions productId={productId} latest={acc.frozen.version} />}
           </>
         ))}

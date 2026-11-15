@@ -48,7 +48,7 @@ const worker = (runs: WorkerStatus['runningAll']): WorkerStatus => ({
   enabled: true, autonomy: false, paused: false, quiet: false, running: runs[0] ?? null, runningAll: runs, maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 10,
 });
 
-interface Server { active: Task[]; finished: (url: URL) => { tasks: Task[]; next: { beforeT: number; beforeId: string } | null; total: number }; hold?: Promise<void> }
+interface Server { active: Task[]; awaiting?: Task[]; finished: (url: URL) => { tasks: Task[]; next: { beforeT: number; beforeId: string } | null; total: number }; hold?: Promise<void> }
 
 const limits: string[] = [];
 
@@ -60,7 +60,7 @@ function serve(server: Server): string[] {
     seen.push(url.pathname);
     if (url.pathname === '/api/tasks/finished') limits.push(url.searchParams.get('limit') ?? '');
     if (server.hold) await server.hold;
-    const body = url.pathname === '/api/tasks' ? { active: server.active, finished: [] }
+    const body = url.pathname === '/api/tasks' ? { active: server.active, finished: [], awaiting: server.awaiting ?? [] }
       : url.pathname === '/api/tasks/finished' ? server.finished(url)
       : url.pathname === '/api/runs' ? { runs: [], total: 0, judged: {} }
       : {};
@@ -71,9 +71,19 @@ function serve(server: Server): string[] {
 
 const noFinished = () => ({ tasks: [], next: null, total: 0 });
 
+test('Overview（DOM）: 小さな盤の Awaiting check は /api/tasks の awaiting から数える（終わったタスクの新しい分に無くても）。数は Proposed と違って静か（Design の AllProducts）', async () => {
+  serve({ active: [task('p-1', 'inbox')], awaiting: [task('a-old', 'done', { check_state: 'awaiting', completed_at: 1, updated_at: 1 })], finished: noFinished });
+  const { container } = await render(createElement(Overview, props({})));
+  await settle();
+  const check = container.querySelector('[data-col="check"] .bt-count');
+  assert.equal(check?.textContent, '1');
+  assert.ok(check?.classList.contains('bt-count--quiet'), 'Awaiting check の数は静か');
+  assert.equal(container.querySelector('[data-col="proposed"] .bt-count')?.classList.contains('bt-count--quiet'), false, 'Proposed だけ光る');
+});
+
 function props(over: Partial<OverviewProps>): OverviewProps {
   return {
-    waiting: { proposals: 0, answers: 0, drafts: 0, pending: 0, questions: 0 }, conversations: [], drafts: [], checklists: new Map(), worker: null, onWorker: () => undefined,
+    waiting: { proposals: 0, answers: 0, drafts: 0, pending: 0, questions: 0, checks: 0 }, conversations: [], drafts: [], checklists: new Map(), worker: null, onWorker: () => undefined,
     revision: 0, projects: [], projectsLoaded: true, questionCounts: null, pendingCounts: null, ...over,
   };
 }
@@ -132,7 +142,7 @@ test('Overview（DOM）: 「No product N」は製品の無い問いだけ。し�
   serve({ active: [], finished: noFinished });
   const questionCounts: QuestionCounts = { open: 4, byProject: { p1aaaa: 1, gone11: 2 }, byTask: {}, answered: 0, changed: 0 };
   const { container } = await render(createElement(Overview, props({
-    waiting: { proposals: 0, answers: 0, drafts: 0, pending: 0, questions: 4 }, questionCounts, projects: [project('p1aaaa', { waiting: { proposals: 0, questions: 1, pending: 0 } })],
+    waiting: { proposals: 0, answers: 0, drafts: 0, pending: 0, questions: 4, checks: 0 }, questionCounts, projects: [project('p1aaaa', { waiting: { proposals: 0, questions: 1, pending: 0 } })],
   })));
   await settle();
   assert.equal(container.querySelector('[data-tile="questions"] .bt-meta')?.textContent, 'p1aaaa 1 · No product 1');

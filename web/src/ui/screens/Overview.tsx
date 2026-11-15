@@ -30,7 +30,7 @@ export interface OverviewProps {
   pendingCounts: PendingCounts | null;
 }
 
-interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; capped: boolean }
+interface Loaded { active: Task[]; awaiting: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; capped: boolean }
 
 async function readFinishedSince(since: number): Promise<{ tasks: Task[]; next: FinishedCursor | null; total: number; capped: boolean }> {
   let tasks: Task[] = [];
@@ -55,7 +55,7 @@ export function Overview({ waiting, conversations, drafts, checklists, worker, o
   const look = useLastLook(LAST_LOOK_KEY);
   const read = useCallback(async (): Promise<Loaded> => {
     const [tasks, finished, runs] = await Promise.all([api.tasks(), readFinishedSince(look.at), api.runs(RUNS_WINDOW)]);
-    return { active: tasks.active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, capped: finished.capped };
+    return { active: tasks.active, awaiting: tasks.awaiting ?? [], finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, capped: finished.capped };
   }, [look.at]);
   const { data, failed, load } = useHomeLoad(read, revision, drafts);
   const { busy, act, stop, retry } = useRunActions(worker, load);
@@ -64,7 +64,7 @@ export function Overview({ waiting, conversations, drafts, checklists, worker, o
   const mini = useMemo(() => {
     if (!data) return null;
     const page = boardFinished(data.finished, data.next !== null);
-    return miniBoard(buildBoard({ active: data.active, finished: page.finished, hasMore: page.hasMore, finishedTotal: data.total, sessions, checklists }));
+    return miniBoard(buildBoard({ active: [...data.active, ...data.awaiting], finished: page.finished, hasMore: page.hasMore, finishedTotal: data.total, sessions, checklists }));
   }, [data, sessions, checklists]);
   const placed = useMemo(() => {
     const input = { worker: worker?.runningAll ?? [], drafts, conversations, checklists };

@@ -187,7 +187,16 @@ export interface Task {
   project_id?: string | null;
   acceptance_items?: string | null;
   waiting_kind?: 'question' | 'approval' | null;
+  check_state?: 'awaiting' | 'checked' | null;
+  items?: TaskItems;
 }
+export interface TaskItems { owned: number; met: number; remaining: string[] }
+export interface DeviationRow { item: string | null; what: string; why: string; task: string | null; date: string | null; by: 'task' | 'owner'; external: boolean }
+export interface CheckFileChange { path: string; change: 'added' | 'modified' | 'deleted'; scripts?: string[] }
+export type DiffFlags =
+  | { checked: false; reason: 'no_git' | 'git_unusable' | 'failed' | 'folder_missing' }
+  | { checked: true; since: 'build' | 'head'; testsDeleted: string[]; testsDeletedMore: number; checkChanged: CheckFileChange[]; checkChangedMore: number };
+export interface Deviations { deviations: { rows: DeviationRow[]; unreadable: number; unusable: boolean }; flags: DiffFlags }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
 export type RepeatingTask = Task & { last_run: TaskLastRun | null };
@@ -299,6 +308,7 @@ export const api = {
   plan: (id: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`),
   acceptance: (id: string, unreferencedBefore?: number) =>
     call<{ acceptance: Acceptance; coverage?: Coverage }>(`/api/projects/${encodeURIComponent(id)}/acceptance${unreferencedBefore === undefined ? '' : `?unreferencedBefore=${unreferencedBefore}`}`),
+  deviations: (id: string) => call<Deviations>(`/api/projects/${encodeURIComponent(id)}/deviations`),
   acceptanceVersions: (id: string) => call<{ versions: AcceptanceVersion[] }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions`),
   acceptanceVersion: (id: string, version: number) => call<{ version: AcceptanceVersionDetail }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions/${version}`),
   decideChange: (id: string, changeId: string, decision: 'approve' | 'reject') =>
@@ -355,7 +365,7 @@ export const api = {
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
   recentMemoryEvents: () => call<{ events: MemoryEvent[] }>('/api/memory-events'),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
-  tasks: (project?: string) => call<{ active: Task[]; finished: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>(`/api/tasks${inProject(project, '?')}`),
+  tasks: (project?: string) => call<{ active: Task[]; finished: Task[]; awaiting?: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>(`/api/tasks${inProject(project, '?')}`),
   schedule: (from: number, to: number) => call<ScheduleView>(`/api/schedule?from=${from}&to=${to}`),
   deleteTask: (id: string) => call<{ deleted: { id: string; events: number; keptRuns: number } }>(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   finishedTasks: (before: FinishedCursor | null, limit = 20, project?: string) =>
@@ -367,6 +377,9 @@ export const api = {
   editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null; repeat?: NewTask['repeat'] }) =>
     call<{ task: Task }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   answerTask: (id: string, text: string) => call<{ task: Task }>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
+  checkItem: (id: string, item: string, body: { result: 'checked' | 'insufficient'; version: number; note?: string }) =>
+    call<{ task: Task; fix?: Task }>(`/api/tasks/${encodeURIComponent(id)}/items/${encodeURIComponent(item)}/check`, { method: 'POST', body: JSON.stringify(body) }),
+  checkTask: (id: string, version: number) => call<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}/check`, { method: 'POST', body: JSON.stringify({ version }) }),
   taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'uncancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
   worker: () => call<WorkerStatus>('/api/worker'),
   setWorker: (patch: { paused?: boolean; autonomy?: boolean }) => call<WorkerStatus>('/api/worker', { method: 'POST', body: JSON.stringify(patch) }),
