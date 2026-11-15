@@ -42,7 +42,8 @@ test('当て方: 文の語の頭が項目とちょうど同じとき。コマン
   assert.equal(entryMatches(entry, words('NPM test'), false), false);
   assert.equal(entryMatches(entry, words('NPM test'), true), true);
   assert.equal(entryMatches(entry, words('npm Test'), true), false);
-  assert.equal(entryMatches(entry, words('"npm" test'), false), true, '引用符を外した語が同じなら同じ語');
+  assert.equal(entryMatches(entry, words('"npm" test'), false), false, '引用符つきのコマンド名は、bash では一覧のコマンドとして読まれないので当てない');
+  assert.equal(entryMatches(entry, words('npm "test"'), false), true, '引数は引用符を外した語が同じなら同じ語');
   assert.equal(entryMatches(entry, words('$c test'), false), false);
   assert.equal(entryMatches(['make'], words('make build'), false), true);
   assert.equal(entryMatches(['make'], words('makefile'), false), false);

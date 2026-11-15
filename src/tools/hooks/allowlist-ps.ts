@@ -176,7 +176,46 @@ const joinName: PsCmd['extra'] = (p, acc) => {
   const name = first(p, 'name')[0];
   if (name) acc.copies.push({ kind: 'join', sources: [], dest: first(p, 'path')[0] ?? null, name, recursive: false, dirFlag: false, noTargetDir: false });
 };
-writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', joinName);
+const NEW_ITEM_PARAMS: ReadonlyArray<readonly [string, string]> = [
+  ['path', 'path'], ['name', 'name'], ['itemtype', 'itemtype'], ['type', 'itemtype'], ['value', 'value'], ['target', 'value'], ['force', 'force'], ['credential', 'credential'],
+  ['whatif', 'whatif'], ['wi', 'whatif'], ['confirm', 'confirm'], ['cf', 'confirm'], ['verbose', 'verbose'], ['vb', 'verbose'], ['debug', 'debug'], ['db', 'debug'],
+  ['erroraction', 'erroraction'], ['ea', 'erroraction'], ['warningaction', 'warningaction'], ['wa', 'warningaction'], ['errorvariable', 'errorvariable'], ['ev', 'errorvariable'],
+  ['warningvariable', 'warningvariable'], ['wv', 'warningvariable'], ['outvariable', 'outvariable'], ['ov', 'outvariable'], ['outbuffer', 'outbuffer'], ['ob', 'outbuffer'],
+  ['informationaction', 'informationaction'], ['infa', 'informationaction'], ['informationvariable', 'informationvariable'], ['iv', 'informationvariable'],
+  ['pipelinevariable', 'pipelinevariable'], ['pv', 'pipelinevariable'],
+];
+const NEW_ITEM_SWITCHES = new Set(['force', 'whatif', 'confirm', 'verbose', 'debug']);
+const PLAIN_ITEM_TYPES = ['directory', 'container', 'file'];
+function newItemParam(text: string): string | undefined {
+  const name = text.slice(1).replace(/:$/u, '').toLowerCase();
+  const exact = NEW_ITEM_PARAMS.find(([alias]) => alias === name);
+  if (exact) return exact[1];
+  const hits = new Set(NEW_ITEM_PARAMS.filter(([alias]) => name !== '' && alias.startsWith(name)).map(([, param]) => param));
+  return hits.size === 1 ? [...hits][0] : undefined;
+}
+writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', (p, acc, ctx, st) => {
+  joinName(p, acc, ctx, st);
+  const words = st.words.slice(1);
+  const types: Word[] = [];
+  const values: Word[] = [];
+  let odd: Word | undefined;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (w.attached || w.dynamic || w.quoted || !w.text.startsWith('-')) continue;
+    const param = newItemParam(w.text);
+    if (param === undefined) { odd ??= w; continue; }
+    const value = words[i + 1];
+    if (!value || (NEW_ITEM_SWITCHES.has(param) && !value.attached)) continue;
+    if (param === 'itemtype') types.push(value);
+    if (param === 'value') values.push(value);
+    i++;
+  }
+  const link = types.find(w => w.dynamic || w.text === '' || !PLAIN_ITEM_TYPES.some(t => t.startsWith(w.text.toLowerCase())));
+  if (link || odd) {
+    acc.add('once', 'list.form', { cmd: st.words[0]!.text, detail: (link ?? odd)!.text }, false);
+    for (const w of values) acc.write(w);
+  }
+});
 // 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数
 writer('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
 writer('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');
