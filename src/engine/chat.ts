@@ -95,7 +95,15 @@ class AllBut extends Set<string> {
   readonly #forbidden: ReadonlySet<string>;
   constructor(allowed: ReadonlySet<string>, forbidden: readonly string[]) { super(); this.#allowed = allowed; this.#forbidden = new Set(forbidden); }
   override has(name: string): boolean { return !this.#allowed.has(name) || this.#forbidden.has(name); }
+  override get size(): number { return unlisted(); }
+  override [Symbol.iterator](): ReturnType<Set<string>['values']> { return unlisted(); }
+  override values(): ReturnType<Set<string>['values']> { return unlisted(); }
+  override keys(): ReturnType<Set<string>['values']> { return unlisted(); }
+  override entries(): ReturnType<Set<string>['entries']> { return unlisted(); }
+  override forEach(): void { unlisted(); }
 }
+
+function unlisted(): never { throw new Error('An allow-list of tools cannot be listed, only checked with has()'); }
 
 const COMPACT_MIN_MESSAGES = 4;
 // 1 回の実行で要約を重ねられる回数。外す発言が増えるたびに要約し直すが、無限には繰り返さない

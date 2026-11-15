@@ -55,6 +55,7 @@ export interface WorkerDeps {
   curiosity?: CuriosityStore | undefined;
   memoryBudget?: (() => number | undefined) | undefined;
   backgroundAvailable?: (() => number | undefined) | undefined;
+  secrets?: (() => readonly string[]) | undefined;
   projects?: ProjectStore | undefined;
   questions?: QuestionStore | undefined;
   pendingWake?: (() => unknown) | undefined;
@@ -417,7 +418,7 @@ export class Worker {
     if (!job.conversation_id) return {};
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
     const upto = kind === 'skill' ? skillUpto(db, job.conversation_id) : Number(kv.get(reviewUptoKey(job.conversation_id)) ?? 0);
-    const window = conversationWindow(db, job.conversation_id, upto, this.#reviewLimits(), language, kind);
+    const window = conversationWindow(db, job.conversation_id, upto, this.#reviewLimits(), language, kind, this.#d.secrets?.() ?? []);
     const owner = window.messages.some(m => m.message.role === 'user' && m.message.note === undefined);
     if (!owner && (kind === 'memory' || !window.messages.some(m => m.role === 'tool'))) return { upto: window.lastId };
     return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, language, skillsAutoRegister, kind }), upto: window.lastId };

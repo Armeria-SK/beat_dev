@@ -33,7 +33,7 @@ export const skillView: ToolDef<{ name: string }> = {
       }
       // 振り返りで読んだだけでは「使った」に数えない
       if (ctx.kind !== 'review') s.recordUse(skill.name);
-      return { content: `# ${skill.name}\n${skill.description}\n\n${skill.body}` };
+      return { content: `# ${skill.name}\n${skill.description}\n\n${skill.body}`, ...(s.fromOutside(skill.name) ? { fetched: true } : {}) };
     } catch (error) { return fail(error, ctx); }
   },
 };

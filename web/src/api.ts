@@ -231,6 +231,7 @@ export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null; change_summary?: string | null; status: string; created_at: number;
   current: { description: string; body: string } | null;
   from_title?: string | null;
+  outside?: 0 | 1;
 }
 export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
 export interface CuriosityItem {

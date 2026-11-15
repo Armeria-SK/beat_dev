@@ -947,6 +947,7 @@ export const en = {
   'ui.skills.draftedFrom': (title: string, when: string) => `drafted from “${title}” · ${when}`,
   'ui.skills.draftNew': 'new skill',
   'ui.skills.draftUpdate': 'changes a registered skill',
+  'ui.skills.draftOutside': 'made after reading outside content',
   'ui.skills.growth': 'What changes',
   'ui.skills.growthReason': 'Why it changes',
   'ui.skills.showWhole': 'Show the whole skill',

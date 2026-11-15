@@ -10,7 +10,7 @@ import { tempDir } from './helpers.ts';
 const AT = MIGRATIONS.findIndex(m => typeof m === 'string' && m.includes('ALTER TABLE memory_jobs ADD COLUMN kind'));
 const version = (db: DatabaseSync): number => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
 
-test('migration 38: memory_jobs.kind (old rows become memory, skill can be queued, other values are refused) and skill_drafts.outside (old rows 0)', t => {
+test('migration 38: memory_jobs.kind (old rows become memory, skill can be queued, other values are refused), skill_drafts.outside and skill_registry.outside (old rows 0)', t => {
   assert.equal(AT, 37, 'the kind column is migration 38');
   const dir = tempDir(t);
   const path = join(dir, 'beat.db');
@@ -19,6 +19,7 @@ test('migration 38: memory_jobs.kind (old rows become memory, skill can be queue
   try {
     seed.prepare("INSERT INTO memory_jobs (trigger, dedup_key, created_at) VALUES ('idle', 'idle:old:1', 1)").run();
     seed.prepare("INSERT INTO skill_drafts (name, description, body, created_at) VALUES ('old-one', 'd', 'b', 1)").run();
+    seed.prepare("INSERT INTO skill_registry (name, source, registered_at) VALUES ('old-one', 'approved', 1)").run();
   } finally { seed.close(); }
 
   const db = openDatabase(path, MIGRATIONS.slice(0, AT + 1), { backupDir: backups });
@@ -29,6 +30,8 @@ test('migration 38: memory_jobs.kind (old rows become memory, skill can be queue
     assert.throws(() => db.prepare("INSERT INTO memory_jobs (kind, trigger, dedup_key, created_at) VALUES ('other', 'task', 'x', 3)").run(), /CHECK/u);
     assert.deepEqual({ ...db.prepare('SELECT name, outside FROM skill_drafts').get() }, { name: 'old-one', outside: 0 });
     assert.throws(() => db.prepare("INSERT INTO skill_drafts (name, description, body, created_at, outside) VALUES ('n', 'd', 'b', 1, 2)").run(), /CHECK/u);
+    assert.deepEqual({ ...db.prepare('SELECT name, outside FROM skill_registry').get() }, { name: 'old-one', outside: 0 });
+    assert.throws(() => db.prepare("INSERT INTO skill_registry (name, source, registered_at, outside) VALUES ('n', 'owner', 1, 2)").run(), /CHECK/u);
   } finally { db.close(); }
   assert.deepEqual(readdirSync(backups).map(name => /-v(\d+)-/u.exec(name)?.[1]), [String(AT)]);
 });

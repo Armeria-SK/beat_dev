@@ -219,6 +219,7 @@ export class App {
     this.curiosity = new CuriosityStore(this.db, now);
     this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'), () => growSkills(this.config()));
     this.skills.autoRegister = () => !askBeforeRegister(this.config());
+    this.skills.secrets = () => this.registry.secrets();
     this.#importCuriosity();
     this.#copyLegacyWaits();
     this.#registerExistingSkills();
@@ -247,7 +248,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), projects: this.projects,
+      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()),
     });
     this.tasks.onChange = task => {
@@ -261,10 +262,10 @@ export class App {
         if (task.status !== 'cancelled' && task.conversation_id && this.worker.memoryReviewsOn()) {
           this.reviews.enqueue('task', `task:${task.id}`, { taskId: task.id, conversationId: task.conversation_id });
         }
-        if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task);
       }
       this.worker.poke();
     };
+    this.tasks.onFinished = task => { if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task); };
     this.tasks.onUncancelled = task => { this.curiosity.onTaskRestored(task); this.questions.resumeAnswered(task); };
     this.tasks.onDeleted = removed => {
       const title = removed.title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');

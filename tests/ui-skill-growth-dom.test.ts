@@ -90,3 +90,11 @@ test('スキルの成長（DOM）: 差分の頭の数は行の +n −n と同じ
   assert.equal(container.querySelector('.bt-diff__file')?.textContent, 'Steps · registered → draft+0 −0');
   assert.equal(container.querySelectorAll('.bt-diff__line--add').length, 1);
 });
+
+test('Skill drafts (DOM): a draft made after reading outside content says so in its row; others do not', async () => {
+  const outside = await show({ ...base, outside: 1 });
+  assert.match(outside.querySelector('.bt-row__sub')?.textContent ?? '', /changes a registered skill · made after reading outside content/u);
+  cleanup();
+  const clean = await show({ ...base, outside: 0 });
+  assert.equal(clean.textContent?.includes('outside content'), false);
+});
