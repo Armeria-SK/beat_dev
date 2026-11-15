@@ -15,12 +15,12 @@ export const SNAPSHOT_EVENT = 'snapshot';
 export const SNAPSHOT_TIMEOUT_MS = 30_000;
 const TASK_ID = /^[0-9a-f-]{36}$/u;
 const LINKED_GIT_FILES = ['commondir', 'gitdir'];
-const WRITTEN_GIT_DIRS = ['objects', 'refs', 'refs/beat', 'refs/beat/snapshots', 'logs', 'reftable'];
+const WRITTEN_GIT_DIRS = ['objects', 'refs', 'refs/beat', 'refs/beat/snapshots', 'logs', 'logs/refs', 'logs/refs/beat', 'logs/refs/beat/snapshots', 'reftable'];
 const LISTED_GIT_DIRS = ['objects', 'reftable'];
 const CHUNK = 500;
 
 export type SnapshotResult =
-  | { kind: 'taken'; hash: string; ref: string }
+  | { kind: 'taken'; hash: string; ref: string; root: string; archive: string }
   | { kind: 'not_git' }
   | { kind: 'unavailable' }
   | { kind: 'timeout' }
@@ -31,9 +31,11 @@ export function needsSnapshot(db: DatabaseSync, task: Task): boolean {
   return !db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? LIMIT 1').get(task.id, SNAPSHOT_EVENT);
 }
 
+const shown = (path: string): string => (process.platform === 'win32' ? path.replaceAll('\\', '/') : path);
+
 export function snapshotLine(result: SnapshotResult): string {
   switch (result.kind) {
-    case 'taken': return buildText('en', 'snapshot_taken', { hash: result.hash, ref: result.ref });
+    case 'taken': return buildText('en', 'snapshot_taken', { hash: result.hash, ref: result.ref, root: shown(result.root), archive: shown(result.archive) });
     case 'not_git': return buildText('en', 'snapshot_not_git');
     case 'unavailable': return buildText('en', 'snapshot_unavailable');
     case 'timeout': return buildText('en', 'snapshot_timeout', { seconds: SNAPSHOT_TIMEOUT_MS / 1000 });
@@ -62,7 +64,7 @@ function gitDirSafe(gitDir: string, taskId: string): boolean {
     try { entries = readdirSync(join(gitDir, name)); } catch { entries = []; }
     if (entries.some(entry => lstatOf(join(gitDir, name, entry))?.isSymbolicLink() !== false)) return false;
   }
-  return lstatOf(join(gitDir, ...SNAPSHOT_REF.split('/').filter(Boolean), taskId))?.isSymbolicLink() !== true;
+  return ['', 'logs'].every(base => lstatOf(join(gitDir, base, ...SNAPSHOT_REF.split('/').filter(Boolean), taskId))?.isSymbolicLink() !== true);
 }
 
 function safePath(real: string, rel: string, seen: Map<string, boolean>): boolean {
@@ -84,7 +86,7 @@ function safePath(real: string, rel: string, seen: Map<string, boolean>): boolea
   return true;
 }
 
-export async function stagingPlan(real: string, listed: readonly string[], deadline: number): Promise<{ add: string[]; drop: string[] } | 'timeout'> {
+export async function stagingPlan(real: string, listed: readonly string[], deadline: number, deny: readonly string[] = []): Promise<{ add: string[]; drop: string[] } | 'timeout'> {
   const seen = new Map<string, boolean>();
   const add: string[] = [];
   const drop: string[] = [];
@@ -98,13 +100,13 @@ export async function stagingPlan(real: string, listed: readonly string[], deadl
     const abs = join(real, ...rel.split('/'));
     const st = lstatOf(abs);
     const ownRepo = st?.isDirectory() === true && lstatOf(join(abs, '.git')) !== undefined;
-    if (st === undefined || !safePath(real, rel, seen) || (st?.isDirectory() === true && !ownRepo)) drop.push(rel);
+    if (st === undefined || !safePath(real, rel, seen) || (st?.isDirectory() === true && !ownRepo) || deny.some(dir => isInside(dir, abs))) drop.push(rel);
     else add.push(rel);
   }
   return { add, drop };
 }
 
-export async function snapshotBeforeBuild(root: string, taskId: string, dataDir: string, timeoutMs = SNAPSHOT_TIMEOUT_MS): Promise<SnapshotResult> {
+export async function snapshotBeforeBuild(root: string, taskId: string, dataDir: string, deny: readonly string[] = [], timeoutMs = SNAPSHOT_TIMEOUT_MS): Promise<SnapshotResult> {
   const deadline = Date.now() + timeoutMs;
   let real: string;
   try { real = realpathSync.native(root); } catch { return { kind: 'unavailable' }; }
@@ -123,6 +125,7 @@ export async function snapshotBeforeBuild(root: string, taskId: string, dataDir:
   let timedOut = false;
   try {
     mkdirSync(indexDir, { recursive: true });
+    mkdirSync(join(dataDir, 'snapshots'), { recursive: true });
     const childEnv = {
       ...env, ...run.env, GIT_DIR: gitDir, GIT_WORK_TREE: real, GIT_INDEX_FILE: join(indexDir, 'index'), GIT_CEILING_DIRECTORIES: dirname(real), GIT_OPTIONAL_LOCKS: '0',
       GIT_LITERAL_PATHSPECS: '1', GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'beat', GIT_AUTHOR_EMAIL: 'beat@localhost', GIT_COMMITTER_NAME: 'beat', GIT_COMMITTER_EMAIL: 'beat@localhost',
@@ -143,7 +146,8 @@ export async function snapshotBeforeBuild(root: string, taskId: string, dataDir:
     if (head && await git(['read-tree', head]) === null) return end();
     const listed = await git(['ls-files', '-z', '-c', '-o', '-d', '--exclude-standard']);
     if (listed === null) return end();
-    const plan = await stagingPlan(real, [...new Set(listed.split('\0').filter(Boolean))], deadline);
+    const denied = deny.map(dir => { try { return realpathSync.native(dir); } catch { return dir; } });
+    const plan = await stagingPlan(real, [...new Set(listed.split('\0').filter(Boolean))], deadline, denied);
     if (plan === 'timeout') return { kind: 'timeout' };
     const stdin = (paths: readonly string[]): string => paths.map(path => `${path}\0`).join('');
     if (plan.drop.length && await git(['update-index', '--force-remove', '-z', '--stdin'], stdin(plan.drop)) === null) return end();
@@ -154,7 +158,7 @@ export async function snapshotBeforeBuild(root: string, taskId: string, dataDir:
     const hash = (await git(['commit-tree', '--no-gpg-sign', treeHash, ...(head ? ['-p', head] : []), '-m', `beat: snapshot before Build (task ${taskId})`]))?.trim();
     if (!hash) return end();
     if (await git(['update-ref', '--no-deref', '-m', 'beat: snapshot before Build', ref, hash, '0'.repeat(hash.length)]) === null) return end();
-    return { kind: 'taken', hash, ref };
+    return { kind: 'taken', hash, ref, root: real, archive: join(dataDir, 'snapshots', `${taskId}-${hash.slice(0, 12)}.zip`) };
   } catch {
     return { kind: 'failed' };
   } finally {

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
+import { inflateRawSync } from 'node:zlib';
 import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { pushFacts } from '../src/pending/snapshot.ts';
@@ -85,21 +86,51 @@ test('6-0 控え: 作業の木・index・HEAD・枝を中身で比べて変え�
   assert.equal(r.git('rev-parse', `${result.hash}^`), r.git('rev-parse', 'HEAD'), '親は HEAD');
 });
 
-test('6-0 控え: 控えのあとに書き換えても、経過の 1 文の戻し方で控えの時点の中身に戻る', { skip: !gitAvailable }, async t => {
+function unzip(file: string): Map<string, Buffer> {
+  const buf = readFileSync(file);
+  const end = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const out = new Map<string, Buffer>();
+  let at = buf.readUInt32LE(end + 16);
+  for (let i = 0; i < buf.readUInt16LE(end + 10); i++) {
+    const nameLen = buf.readUInt16LE(at + 28);
+    const name = buf.toString('utf8', at + 46, at + 46 + nameLen);
+    const local = buf.readUInt32LE(at + 42);
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const raw = buf.subarray(start, start + buf.readUInt32LE(at + 20));
+    if (!name.endsWith('/')) out.set(name, buf.readUInt16LE(at + 10) === 8 ? inflateRawSync(raw) : Buffer.from(raw));
+    at += 46 + nameLen + buf.readUInt16LE(at + 30) + buf.readUInt16LE(at + 32);
+  }
+  return out;
+}
+
+function runHint(line: string, cwd: string): void {
+  const command = /`([^`]+)`/u.exec(line)![1]!;
+  const args = command.match(/(?:[^\s"]+|"[^"]*")+/gu)!.map(arg => arg.replaceAll('"', ''));
+  assert.equal(args.shift(), 'git');
+  const out = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8' });
+  assert.equal(out.status, 0, out.stderr);
+}
+
+test('6-0 控え: 控えのあとに書き換えても、経過の 1 文の命令で控えの時点の中身を製品の外の zip に取り出せ、製品のフォルダは変わらない', { skip: !gitAvailable }, async t => {
   const r = seeded(t);
   const original = tree(r.dir);
-  const result = await snapshotBeforeBuild(r.dir, TASK, tempDir(t));
+  const data = realpathSync.native(tempDir(t));
+  const result = await snapshotBeforeBuild(r.dir, TASK, data);
   assert.equal(result.kind, 'taken');
   if (result.kind !== 'taken') return;
   writeFileSync(join(r.dir, 'a.txt'), 'broken by build\n');
   writeFileSync(join(r.dir, 'new', 'b.txt'), 'broken too\n');
   r.git('rm', '-q', '-f', 'staged.txt');
+  const before = state(r);
   const line = snapshotLine(result);
   assert.match(line, new RegExp(`^Snapshot before Build: ${result.hash}\\. `, 'u'));
-  const command = /`git ([^`]+)`/u.exec(line)![1]!.split(' ');
-  r.git(...command);
-  const now = tree(r.dir);
-  for (const [file, hash] of Object.entries(original)) assert.equal(now[file], hash, file);
+  assert.doesNotMatch(line, /restore/u);
+  runHint(line, tempDir(t));
+  assert.deepEqual(state(r), before, '製品のフォルダ・index・HEAD・枝は変わらない');
+  assert.equal(dirname(result.archive), join(data, 'snapshots'));
+  const zip = unzip(result.archive);
+  assert.deepEqual([...zip.keys()].sort(), Object.keys(original).filter(f => f !== 'secret.txt').sort());
+  for (const [file, content] of zip) assert.equal(createHash('sha256').update(content).digest('hex'), original[file], file);
 });
 
 test('6-0 控え: 履歴の無いリポジトリでも、親の無い控えができる', { skip: !gitAvailable }, async t => {
@@ -145,7 +176,7 @@ test('6-0 控え: git でないフォルダは not_git。時間の上限を超�
   assert.deepEqual(await snapshotBeforeBuild(plain, TASK, tempDir(t)), { kind: 'not_git' });
   assert.equal(existsSync(join(plain, '.git')), false);
   const r = seeded(t);
-  const slow = await snapshotBeforeBuild(r.dir, TASK, tempDir(t), 1);
+  const slow = await snapshotBeforeBuild(r.dir, TASK, tempDir(t), [], 1);
   assert.equal(slow.kind, 'timeout', JSON.stringify(slow));
   assert.equal(r.git('for-each-ref', 'refs/beat'), '');
   assert.match(snapshotLine(slow), /took longer than .* without a snapshot/u);
@@ -219,7 +250,7 @@ test('6-0 控え: 無視したフォルダの中の追っているファイル�
   assert.equal(r.git('show', `${result.hash}:ign/t.log`), 'v2');
 });
 
-test('6-0 控え: 追っている秘密らしいファイルも控えに入れず、経過の戻し方（--overlay）はそれを持ち主の書き換えのまま残し、ほかのファイルを戻す', { skip: !gitAvailable }, async t => {
+test('6-0 控え: 追っている秘密らしいファイルも控えに入れず、取り出した zip にも入らない。取り出しても製品のファイルは変わらない', { skip: !gitAvailable }, async t => {
   const r = repo(t);
   writeFileSync(join(r.dir, '.env.example'), 'KEY=committed\n');
   writeFileSync(join(r.dir, 'app.txt'), 'v1\n');
@@ -231,11 +262,61 @@ test('6-0 控え: 追っている秘密らしいファイルも控えに入れ�
   if (result.kind !== 'taken') return;
   assert.deepEqual(r.git('ls-tree', '-r', '--name-only', result.hash).split('\n'), ['app.txt']);
   writeFileSync(join(r.dir, 'app.txt'), 'changed by build\n');
-  const line = snapshotLine(result);
-  assert.match(line, /--overlay/u);
-  r.git(.../`git ([^`]+)`/u.exec(line)![1]!.split(' '));
-  assert.equal(readFileSync(join(r.dir, 'app.txt'), 'utf8'), 'v1\n');
-  assert.equal(readFileSync(join(r.dir, '.env.example'), 'utf8'), 'KEY=owner edit\n');
+  const before = state(r);
+  runHint(snapshotLine(result), tempDir(t));
+  assert.deepEqual(state(r), before);
+  const zip = unzip(result.archive);
+  assert.deepEqual([...zip.keys()], ['app.txt']);
+  assert.equal(zip.get('app.txt')!.toString('utf8'), 'v1\n');
+});
+
+test('6-0 控え: 持ち主が道具の設定で禁じたフォルダ（tools.deny）の中は、追っていても控えに入れない', { skip: !gitAvailable }, async t => {
+  const r = repo(t);
+  mkdirSync(join(r.dir, 'private'));
+  writeFileSync(join(r.dir, 'private', 'tracked.txt'), 't\n');
+  writeFileSync(join(r.dir, 'app.txt'), 'v1\n');
+  r.git('add', '-A');
+  r.git('commit', '-q', '-m', 'first');
+  writeFileSync(join(r.dir, 'private', 'notes.txt'), 'owner notes\n');
+  const result = await snapshotBeforeBuild(r.dir, TASK, tempDir(t), [join(r.dir, 'private')]);
+  assert.equal(result.kind, 'taken', JSON.stringify(result));
+  if (result.kind !== 'taken') return;
+  assert.deepEqual(r.git('ls-tree', '-r', '--name-only', result.hash).split('\n'), ['app.txt']);
+});
+
+test('6-0 控え: 製品の設定に clean のフィルタがあれば控えを取らず、フィルタを動かさない', { skip: !gitAvailable }, async t => {
+  const r = seeded(t);
+  const marker = join(realpathSync.native(tempDir(t)), 'ran');
+  r.git('config', 'filter.x.clean', `sh -c "echo ran > '${marker.replaceAll('\\', '/')}'; cat"`);
+  writeFileSync(join(r.dir, '.gitattributes'), '* filter=x\n');
+  assert.deepEqual(await snapshotBeforeBuild(r.dir, TASK, tempDir(t)), { kind: 'unavailable' });
+  assert.equal(existsSync(marker), false);
+  r.git('add', 'a.txt');
+  assert.ok(existsSync(marker), '対照: ふつうの git ではフィルタが動く');
+});
+
+test('6-0 控え: PATH で見つかる git が製品の中にあれば控えを取らない', { skip: !gitAvailable }, async t => {
+  const r = seeded(t);
+  const key = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH';
+  const saved = process.env[key];
+  const tools = join(r.dir, 'tools');
+  let bin: string;
+  if (process.platform === 'win32') {
+    link(join(spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim(), '..', '..', '..'), tools);
+    bin = join(tools, 'cmd');
+  } else {
+    mkdirSync(tools);
+    const real = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(join(tools, 'git'), `#!/bin/sh\nexec "${real}" "$@"\n`, { mode: 0o755 });
+    bin = tools;
+  }
+  try {
+    process.env[key] = `${bin}${process.platform === 'win32' ? ';' : ':'}${saved ?? ''}`;
+    assert.deepEqual(await snapshotBeforeBuild(r.dir, TASK, tempDir(t)), { kind: 'unavailable' });
+  } finally {
+    process.env[key] = saved;
+    if (process.platform === 'win32') rmdirSync(tools);
+  }
 });
 
 test('6-0 控え: 中に自分のコミットを持つリポジトリはフォルダごと 1 つの印（gitlink）で控える', { skip: !gitAvailable }, async t => {
@@ -272,9 +353,10 @@ for (const name of ['commondir', 'gitdir']) {
   });
 }
 
-for (const at of ['refs/beat', 'refs/beat/snapshots', `refs/beat/snapshots/${TASK}`, 'logs', 'objects/pack', 'reftable']) {
+for (const at of ['refs/beat', 'refs/beat/snapshots', `refs/beat/snapshots/${TASK}`, 'logs', 'logs/refs', 'logs/refs/beat', 'logs/refs/beat/snapshots', `logs/refs/beat/snapshots/${TASK}`, 'objects/pack', 'reftable']) {
   test(`6-0 控え: .git/${at} が外へのリンクなら控えを取らず、外に書かない`, { skip: !gitAvailable }, async t => {
     const r = seeded(t);
+    r.git('config', 'core.logAllRefUpdates', 'always');
     const outside = realpathSync.native(tempDir(t));
     const path = join(r.dir, '.git', ...at.split('/'));
     mkdirSync(dirname(path), { recursive: true });
@@ -296,7 +378,7 @@ test('6-0 控え: 動いている git を時間の上限で止める（控えな
   big(r.dir);
   const data = tempDir(t);
   const started = Date.now();
-  const slow = await snapshotBeforeBuild(r.dir, TASK, data, 1000);
+  const slow = await snapshotBeforeBuild(r.dir, TASK, data, [], 1000);
   const took = Date.now() - started;
   assert.equal(slow.kind, 'timeout', JSON.stringify(slow));
   assert.ok(took < 3500, `git を止めずに待った: ${took} ms`);
@@ -316,7 +398,10 @@ test('6-0 控え: 直しのタスク（owner_fix）も根なら取る。控え�
   const project = s.app.projects.create({ name: 'fixme', root: projectsDir, rootKey: projectsDir.toLowerCase(), checkCommand: null });
   const fix = s.app.tasks.create({ title: 'Fix A-1', origin: 'user', actor: 'user', projectId: project.id, acceptanceItems: ['A-1'] });
   s.app.tasks.event(fix.id, OWNER_FIX, 'user', '{}');
-  assert.equal(needsSnapshot(s.app.db, s.app.tasks.get(fix.id)!), true);
+  const task = s.app.tasks.get(fix.id)!;
+  assert.equal(needsSnapshot(s.app.db, task), true);
+  assert.equal(needsSnapshot(s.app.db, { ...task, parent_id: fix.id }), false, '繰り返しの回');
+  assert.equal(needsSnapshot(s.app.db, { ...task, acceptance_items: null }), false, 'Build でないタスク');
   s.app.tasks.event(fix.id, SNAPSHOT_EVENT, 'beat', 'x');
   assert.equal(needsSnapshot(s.app.db, s.app.tasks.get(fix.id)!), false);
 });
@@ -410,4 +495,19 @@ test('6-0 ワーカー: 控えを取っているあいだに取り消された�
   assert.equal(s.adapter().calls.length, 0, 'モデルを呼ばない');
   assert.equal(s.app.tasks.get(p.task)?.status, 'cancelled');
   assert.equal(s.snaps(p.task).length, 1);
+});
+
+test('6-0 ワーカー: 持ち主が tools.deny で禁じた製品の中のフォルダは、控えに入れない', { skip: !gitAvailable }, async t => {
+  const s = await buildRig(t);
+  const p = await s.product('shop', true);
+  const config = s.app.config();
+  config.tools.deny = [...config.tools.deny, join(p.dir, 'private')];
+  await s.app.applyConfig(config, { probe: false });
+  mkdirSync(join(p.dir, 'private'));
+  writeFileSync(join(p.dir, 'private', 'notes.txt'), 'owner notes\n');
+  s.adapter().scripts = [reply('built')];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const hash = s.refs(p.dir).split(' ')[0]!;
+  assert.match(hash, /^[0-9a-f]{40,64}$/u);
+  assert.deepEqual(spawnSync('git', ['ls-tree', '-r', '--name-only', hash], { cwd: p.dir, encoding: 'utf8' }).stdout.trim().split('\n'), ['app.txt']);
 });

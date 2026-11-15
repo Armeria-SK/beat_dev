@@ -15,6 +15,7 @@ import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister } from '../tools/skills/store.ts';
+import { resolveConfigPath } from '../tools/hooks/scope.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
 import { CHECK_FAIL_LIMIT, CHECK_KEEP, CHECK_OPTIONS, CHECK_TEXT } from '../projects/check-run.ts';
@@ -423,7 +424,8 @@ export class Worker {
     }
     const project = this.#d.projects && needsSnapshot(this.#d.db, task) ? this.#d.projects.get(task.project_id!) : undefined;
     if (project) {
-      tasks.event(task.id, SNAPSHOT_EVENT, 'beat', snapshotLine(await snapshotBeforeBuild(project.root, task.id, dirname(this.#d.projects!.dir))));
+      const dataDir = dirname(this.#d.projects!.dir);
+      tasks.event(task.id, SNAPSHOT_EVENT, 'beat', snapshotLine(await snapshotBeforeBuild(project.root, task.id, dataDir, c.tools.deny.map(p => resolveConfigPath(p, dataDir)))));
       if (tasks.get(task.id)?.status !== 'running') return 'idle';
     }
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));

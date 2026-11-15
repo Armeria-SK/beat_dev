@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
@@ -50,7 +50,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
   const port = (web.server.address() as AddressInfo).port;
   const origin = `http://127.0.0.1:${port}`;
   web.setOrigins([origin]);
-  t.after(async () => { web.server.closeAllConnections(); await new Promise(r => web.server.close(r)); app.close(); });
+  t.after(async () => { web.server.closeAllConnections(); await new Promise(r => web.server.close(r)); app.close(); rmSync(dir, { recursive: true, force: true }); });
   const api = (path: string, init: RequestInit = {}) => fetch(`${origin}${path}`, {
     ...init, headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), Origin: origin, ...init.headers },
   });
