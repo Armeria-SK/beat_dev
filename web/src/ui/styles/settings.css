@@ -9,6 +9,7 @@
 .ui-set__items { flex: 1 1 100%; margin: 0; padding-left: var(--space-5); overflow-wrap: anywhere; }
 .ui-set__items li + li { margin-top: var(--space-1); }
 .ui-confirm .sk-warn { display: block; color: var(--danger); }
+.ui-set__still { display: block; }
 .ui-set__select { position: relative; display: inline-flex; align-self: flex-start; }
 .ui-set__menu { position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 5; max-height: min(280px, var(--ui-menu-room, 280px)); min-width: min(240px, var(--ui-menu-width, 240px)); max-width: var(--ui-menu-width, none); }
 .ui-set__menu--up { top: auto; bottom: calc(100% + var(--space-1)); }

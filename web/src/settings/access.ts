@@ -25,6 +25,7 @@ export type Access =
   | { kind: 'web-fetch-on' }
   | { kind: 'web-search-on' }
   | { kind: 'self-tasks-unapproved' }
+  | { kind: 'judge-off' }
   | { kind: 'skills-auto-register' }
   | { kind: 'hook-added'; stage: HookStage; hook: HookSummary }
   | { kind: 'hook-edited'; stage: HookStage; hook: HookSummary }
@@ -308,6 +309,7 @@ export function accessWidening(before: Config, after: Config): Access[] {
   if ((obj(bt.web).search ?? 'duckduckgo') === 'off' && (obj(at.web).search ?? 'duckduckgo') !== 'off') out.push({ kind: 'web-search-on' });
   if ((obj(before.worker).selfTasksNeedApproval ?? false) === true && (obj(after.worker).selfTasksNeedApproval ?? false) === false) out.push({ kind: 'self-tasks-unapproved' });
   if (obj(before.skills).askBeforeRegister !== false && obj(after.skills).askBeforeRegister === false) out.push({ kind: 'skills-auto-register' });
+  if (obj(before.routing).judgeMode !== 'off' && obj(after.routing).judgeMode === 'off') out.push({ kind: 'judge-off' });
   out.push(...hookChanges(before, after, 'preToolUse'), ...hookChanges(before, after, 'postToolUse'));
   out.push(...providerChanges(before, after));
   out.push(...toolPolicyChanges(before, after));

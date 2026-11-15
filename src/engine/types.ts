@@ -31,7 +31,7 @@ export type ChatMessage =
   // images: 道具の結果に添えた画像（ToolOutput.images。失敗の結果には付けない）。3 つの提供元の変換が、読めるモデルにだけ渡す
   | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; gate?: ToolGate };
 
-export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' };
+export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' };
 
 export interface Usage {
   inputTokens?: number;
