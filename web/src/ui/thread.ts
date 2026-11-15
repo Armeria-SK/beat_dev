@@ -100,7 +100,7 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
   };
 
   for (const m of messages) {
-    placeBuilds(m.createdAt);
+    if (m.role !== 'tool' && !hiddenReply(m)) placeBuilds(m.createdAt);
     if (m.toolCalls?.length) {
       const calls = new Map<string, string[]>();
       for (const call of m.toolCalls) calls.set(call.id, [...(calls.get(call.id) ?? []), call.input]);
@@ -121,7 +121,6 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
     if (m.runId && lastOfRun.get(m.runId) === m.id) items.push({ kind: 'plan', key: `plan-${m.runId}` });
   }
 
-  placeBuilds(Number.POSITIVE_INFINITY);
   const settled = draft?.settled ?? [];
   const savedRun = draft ? messages.filter(m => m.role === 'tool' && m.runId === draft.runId) : [];
   const savedIdsInRun = new Set(savedRun.map(m => m.toolCallId));
@@ -131,16 +130,16 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
     const rowKey = rowKeyOf(done.callId);
     tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null, ...(done.gate ? { gate: done.gate } : {}) });
   });
-  if (draft) {
-    if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
-    else if (draft.activeTool) {
-      const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
-      tools(rowKey).push({
-        key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
-        running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
-      });
-    } else items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
+  if (draft && !draft.text && draft.activeTool) {
+    const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
+    tools(rowKey).push({
+      key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
+      running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
+    });
   }
+  placeBuilds(Number.POSITIVE_INFINITY);
+  if (draft?.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
+  else if (draft && !draft.activeTool) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
   noticeRows(notices).forEach((row, i) => items.push({ kind: 'notice', key: `n-${row.notices[0]!.runId}-${i}`, ...row }));
   return items;
 }

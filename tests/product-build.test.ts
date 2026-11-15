@@ -14,6 +14,7 @@ import { toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import { acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { meshStateSet } from '../src/tools/builtin/mesh.ts';
+import { writeChecklist } from '../src/tools/builtin/checklist-core.ts';
 import { PLAN_GIST_LABEL, type TaskStore } from '../src/tasks/store.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, tempDir, type Script, withLoad, offered } from './helpers.ts';
@@ -93,14 +94,15 @@ test('3-2-s 要件の聞き取りの文: ふつうの形は 700 トークン以�
   assert.equal(section.trim().split('\n').length, 2, '一覧を書く節は見出しと 1 行だけ（決まりは道具の説明にある）');
 });
 
-test('要件の聞き取りの文: ファイルを書くのは Build で、持ち主が Plan の欄の Build で始める。コードを貼る・別の環境を勧めることはせず、始めてと言われたら Build を押すよう言う', t => {
+test('要件の聞き取りの文: ファイルを書くのは Build で、計画を書いたあと持ち主が Plan の欄の本当のボタン（git でない製品は Start）で始める。コードを貼る・別の環境を勧めることはせず、始めてと言われたら、計画があればボタンを、無ければ先に計画を書く', t => {
   const paths = resolvePaths(tempDir(t));
   for (const text of [requirementsText(paths, 100_000), requirementsText(paths, 12_672)]) {
     assert.match(text, /files are written by Build/iu);
-    assert.match(text, /owner starts it with Build in the Plan pane/iu);
+    assert.match(text, /"Build with this plan" in the Plan pane/u);
+    assert.match(text, /"Start with this plan"[^.]*not a git repo/u);
     assert.match(text, /never offer to paste code/iu);
     assert.match(text, /another (tool or )?environment/iu);
-    assert.match(text, /if (the owner|they) asks? (you )?to start[^.]*press Build/iu);
+    assert.match(text, /ask(s|ed) (you )?to start[^.]*plan is written[^.]*press that button[^.]*no plan[^.]*write the plan first/iu);
   }
 });
 
@@ -302,6 +304,32 @@ test('Build の会話: Plan の欄の会話から押した Build は、持ち主
   s.adapter().scripts = [call('task_create', { title: 'Side job', requested_by_user: true }), reply('made')];
   await s.send(uuid(1), { text: 'make a task', projectId: shop.id });
   assert.deepEqual((await s.json(`/api/conversations/${uuid(1)}/messages`, 'GET')).body.builds.map((b: { id: string }) => b.id), [task.id], 'AI が作ったタスクは Build に数えない');
+});
+
+test('Build の会話: 製品のタスクの会話の id は押した会話として記録しない。builds の Checklist はタスクの会話のもの。builds は新しい 50 件（古い順に並べて返す）', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('hi')];
+  await s.send(uuid(1), { text: 'hello', projectId: shop.id });
+  s.app.conversations.create({ id: uuid(7), kind: 'task', projectId: shop.id });
+  await s.ownerPlan(shop.id, '# Plan');
+  const built = await s.build(shop.id, { planHash: (await s.plan(shop.id)).hash, acceptanceHash: null, conversationId: uuid(7) });
+  assert.equal(built.status, 201, JSON.stringify(built.body));
+  assert.equal(built.body.task.created_in_conversation, null, 'タスクの会話は押した会話ではない');
+
+  const first = s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user', projectId: shop.id, acceptanceItems: [], createdInConversation: uuid(1) });
+  s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(uuid(7), first.id);
+  writeChecklist(s.app.kv, uuid(7), [{ text: 'Write the page', status: 'in_progress' }], false, 1);
+  writeChecklist(s.app.kv, uuid(1), [{ text: 'Chat list', status: 'done' }], false, 1);
+  const one = (await s.json(`/api/conversations/${uuid(1)}/messages`, 'GET')).body.builds;
+  assert.deepEqual(one.map((b: { id: string; checklist: unknown }) => [b.id, b.checklist]), [[first.id, { items: [{ text: 'Write the page', status: 'in_progress' }], tainted: false }]]);
+
+  const ids = [first.id];
+  for (let i = 0; i < 51; i++) ids.push(s.app.tasks.create({ title: `Build ${i}`, origin: 'user', actor: 'user', projectId: shop.id, acceptanceItems: [], createdInConversation: uuid(1) }).id);
+  const many = (await s.json(`/api/conversations/${uuid(1)}/messages`, 'GET')).body.builds.map((b: { id: string }) => b.id);
+  assert.equal(many.length, 50);
+  assert.equal(many.at(-1), ids.at(-1), 'いちばん新しい Build が入る');
+  assert.deepEqual(many, ids.slice(2), '古い 2 件が外れ、古い順');
 });
 
 test('3-2-s Build の汚れ: 外を読んだ実行が書いた計画書・一覧、外で書き換えた計画書、記録の無い計画書では、タスクの経過に印が付き、判定役が題と本文を持ち主の頼みとして使えない。固定した DB の中身に taintedRuns が残る', async t => {

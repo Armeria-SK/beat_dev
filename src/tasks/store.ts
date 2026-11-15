@@ -465,7 +465,7 @@ export class TaskStore {
   }
 
   buildsFrom(conversationId: string): Task[] {
-    return this.#db.prepare('SELECT * FROM tasks WHERE created_in_conversation = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL ORDER BY created_at, rowid LIMIT 50').all(conversationId) as unknown as Task[];
+    return (this.#db.prepare('SELECT * FROM tasks WHERE created_in_conversation = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 50').all(conversationId) as unknown as Task[]).reverse();
   }
 
   hasOpenBuild(projectId: string): boolean {

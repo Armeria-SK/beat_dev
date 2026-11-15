@@ -63,12 +63,12 @@ export function EmptyState({ lead, title, text, action }: { lead?: ReactNode; ti
   );
 }
 
-export function Notice({ tone, icon, title, text, action, also }: {
-  tone?: 'warn' | 'fail'; icon?: UiIconName; title: ReactNode; text?: ReactNode; action?: { label: string; run: () => void }; also?: { label: string; run: () => void };
+export function Notice({ tone, icon, title, text, action, also, alert = true }: {
+  tone?: 'warn' | 'fail'; icon?: UiIconName; title: ReactNode; text?: ReactNode; action?: { label: string; run: () => void }; also?: { label: string; run: () => void }; alert?: boolean;
 }) {
   if (tone === 'fail') {
     return (
-      <div className="bt-notice bt-notice--fail bt-rise" role="alert">
+      <div className="bt-notice bt-notice--fail bt-rise" role={alert ? 'alert' : undefined}>
         <Icon name={icon ?? 'alert'} />
         <div className="bt-notice__body"><strong>{title}</strong>{text && <p>{text}</p>}</div>
         {action && <Button small onClick={action.run}>{action.label}</Button>}

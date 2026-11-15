@@ -351,3 +351,24 @@ test('ui/thread: Build の段は、状態と返事待ちの種類・確かめ待
   ];
   for (const [over, stage] of cases) assert.equal(buildStage(chatBuild('b', over.status, 1, over)), stage, JSON.stringify(over));
 });
+
+test('ui/thread: 会話の返事が道具を続けて呼んでいる途中に押した Build は、道具の行のまとまりを切らず、そのまとまりの後ろに入る', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'go', { createdAt: 10 }),
+      msg('assistant', '', { createdAt: 20, toolCalls: [call('a', 'file_read', { path: 'a.ts' })] }),
+      msg('tool', 'one', { createdAt: 25, toolName: 'file_read', toolCallId: 'a' }),
+      msg('assistant', '', { createdAt: 35, toolCalls: [call('b', 'file_read', { path: 'b.ts' })] }),
+      msg('tool', 'two', { createdAt: 40, toolName: 'file_read', toolCallId: 'b' }),
+      msg('assistant', 'Done.', { createdAt: 50 }),
+    ],
+    builds: [chatBuild('b1', 'ready', 30)],
+  });
+  assert.deepEqual(items.map(i => (i.kind === 'tools' ? `tools:${i.rows.length}` : i.kind)), ['owner', 'tools:2', 'build', 'reply']);
+  const live = threadItems({
+    messages: [msg('user', 'go', { createdAt: 10, runId: 'r7' }), msg('assistant', '', { createdAt: 20, runId: 'r7', toolCalls: [call('c', 'file_read', { path: 'c.ts' })] }), msg('tool', 'one', { createdAt: 25, runId: 'r7', toolName: 'file_read', toolCallId: 'c' })],
+    builds: [chatBuild('b2', 'ready', 30)],
+    draft: { runId: 'r7', conversationId: 'c', modelId: 'm', text: '', activeTool: 'file_read', activeInput: '{}', toolCallId: 'd' },
+  });
+  assert.deepEqual(live.map(i => (i.kind === 'tools' ? `tools:${i.rows.length}` : i.kind)), ['owner', 'tools:2', 'build'], '動いている道具の行も同じまとまりに入る');
+});

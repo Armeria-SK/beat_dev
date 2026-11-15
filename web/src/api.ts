@@ -189,6 +189,7 @@ export interface Task {
   waiting_kind?: 'question' | 'approval' | null;
   check_state?: 'awaiting' | 'checked' | null;
   created_in_conversation?: string | null;
+  spawned_by?: string | null;
   items?: TaskItems;
 }
 export interface ChatBuild {

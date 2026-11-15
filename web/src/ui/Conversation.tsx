@@ -107,7 +107,7 @@ const BUILD_TEXT = {
   check: 'ui.build.check', done: 'ui.build.done', stopped: 'ui.build.stopped', failed: 'ui.build.failed',
 } as const;
 
-function BuildRow({ build, openPending }: { build: ChatBuild; openPending: (() => void) | undefined }) {
+function BuildRow({ build, openPending, alert }: { build: ChatBuild; openPending: (() => void) | undefined; alert: boolean }) {
   const t = useT();
   const stage = buildStage(build);
   const go = (hash: string) => () => { location.hash = hash; };
@@ -116,8 +116,8 @@ function BuildRow({ build, openPending }: { build: ChatBuild; openPending: (() =
   const place = stage === 'approval' ? { label: t('ui.notifications.open.pending'), run: openPending ?? go(routeHash({ view: 'pending', ...product })) }
     : stage === 'question' ? { label: t('ui.notifications.open.questions'), run: go(routeHash({ view: 'questions', ...product })) } : null;
   const list = stage !== 'running' && build.checklist.items.length > 0 ? <Checklist items={build.checklist.items} tainted={build.checklist.tainted} live={false} /> : null;
-  if (stage === 'failed') return <div data-build={build.id}><Notice tone="fail" title={t('ui.build.failed')} text={t('ui.build.failedText')} action={openTask} />{list}</div>;
-  return <div data-build={build.id}><Notice title={t(BUILD_TEXT[stage])} {...(place ? { action: place, also: openTask } : { action: openTask })} />{list}</div>;
+  if (stage === 'failed') return <><Notice tone="fail" alert={alert} title={t('ui.build.failed')} text={t('ui.build.failedText')} action={openTask} />{list}</>;
+  return <><Notice title={t(BUILD_TEXT[stage])} {...(place ? { action: place, also: openTask } : { action: openTask })} />{list}</>;
 }
 
 interface FailAction { label: string; run: () => void }
@@ -362,6 +362,8 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   const builds = loaded?.builds ?? [];
   const items = threadItems({ messages, draft, notices, builds });
   const runningBuild = builds.find(b => b.status === 'running' && b.checklist.items.length > 0);
+  const unfinished = useRef(new Set<string>());
+  useEffect(() => { for (const b of builds) if (b.status !== 'failed') unfinished.current.add(b.id); });
   const checklist = liveChecklist ?? readList?.items ?? [];
   const lastIsUser = messages.at(-1)?.role === 'user';
 
@@ -552,7 +554,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         return <Notice key={item.key} tone="warn" icon="alert" title={noticeText(t, n)} />;
       }
       case 'plan': return <PlanWritten key={item.key} onOpen={panes?.onOpenPlan ? () => panes.onOpenPlan?.(false) : undefined} rising={rise(item.key)} />;
-      case 'build': return <BuildRow key={item.key} build={item.build} openPending={openPending} />;
+      case 'build': return <BuildRow key={item.key} build={item.build} openPending={openPending} alert={unfinished.current.has(item.build.id)} />;
     }
   }
 
