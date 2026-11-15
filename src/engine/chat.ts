@@ -208,7 +208,7 @@ export class ChatEngine {
   #runMode = new Map<string, PermissionMode>();
   #runFence = new Map<string, string>();
   #runIndex = new Map<string, string>();
-  #loaded = new Map<string, Set<string>>();
+  #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
   // 止める操作（stop）を受けた実行
   #stopped = new Set<string>();
   #hardStops = new Map<string, AbortController>();
@@ -221,6 +221,7 @@ export class ChatEngine {
   #notes = new Map<string, Array<{ content: string; fetched: boolean }>>();
   // maxTools で切られた MCP の道具の警告を出したもの（モデル id と道具の名前の組。1 組に 1 回だけ）
   #cutWarned = new Set<string>();
+  #cappedWarned = new Set<string>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
 
@@ -759,13 +760,15 @@ export class ChatEngine {
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
     ctx.toolWindow = () => this.created.open(ctx);
-    if (this.#defers(kind, forbid, config, chain.map(route => route.model))) {
+    ctx.reachable = () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined, this.#frozen(ctx.project?.id));
+    if (this.#defers(kind, forbid, config)) {
       const loaded = new Set<string>();
-      this.#loaded.set(runId, loaded);
+      const sent = new Set<string>();
+      this.#loaded.set(runId, { loaded, sent });
       ctx.deferred = {
         loaded,
+        sent,
         list: () => this.#deferred(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined, this.#frozen(ctx.project?.id)),
-        reachable: () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined, this.#frozen(ctx.project?.id)),
         load: names => { for (const name of names) loaded.add(name); },
       };
     }
@@ -1011,6 +1014,15 @@ export class ChatEngine {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
         const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
+        const run = this.#loaded.get(p.runId);
+        if (run) {
+          run.sent.clear();
+          for (const tool of toolDefs) run.sent.add(tool.name);
+          if (model.maxTools !== undefined && !this.#cappedWarned.has(model.id)) {
+            this.#cappedWarned.add(model.id);
+            d.log?.(`[WARN] Model "${model.id}" has a tool limit (maxTools ${model.maxTools}), so its requests carry up to ${model.maxTools} tools in full, without tool_search or the list of tools to load`);
+          }
+        }
         const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name)]);
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
@@ -1107,7 +1119,7 @@ export class ChatEngine {
     const language = languageOf(config);
     const mode = this.#modeFor(p.kind, p.conversationId, p.startedMode);
     const frozen = this.#frozen(p.project?.id);
-    const loaded = p.runId ? this.#loaded.get(p.runId) : this.#defers(p.kind, p.forbid, p.started, [model]) ? new Set<string>() : undefined;
+    const loaded = model.maxTools !== undefined ? undefined : p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>() : undefined;
     const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen, loaded);
     const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
@@ -1272,10 +1284,10 @@ export class ChatEngine {
     return kind === 'chat' || kind === 'agent' ? stricterMode(startedMode ?? current, current) : 'auto';
   }
 
-  #defers(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined, models: readonly ModelConfig[]): boolean {
+  #defers(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined): boolean {
     const search = this.#d.tools?.registry.get('tool_search');
     return (kind === 'chat' || kind === 'task') && search !== undefined && search.mcp === undefined && search.allowedIn.includes(kind)
-      && !this.#excluded(kind, forbid, started)(search) && models.every(model => model.maxTools === undefined);
+      && !this.#excluded(kind, forbid, started)(search);
   }
 
   #finishCancelled(runId: string, conversationId: string, counters: { attempts: number; iterations: number; toolCalls: number }, route: Route, partial: string): EngineResult {

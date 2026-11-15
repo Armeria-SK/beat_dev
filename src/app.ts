@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AppConfig, ProviderConfig } from './config/schema.ts';
+import type { AppConfig, ModelConfig, ProviderConfig } from './config/schema.ts';
 import { ConfigStore } from './config/store.ts';
 import { Conversations } from './db/conversations.ts';
 import { openDatabase } from './db/database.ts';
@@ -192,7 +192,7 @@ export class App {
     });
     this.registry.reload(config);
     this.botMemory = options.botMemory === true;
-    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: () => this.baseTokens(), memoryTokens: () => this.memoryTokens(), log: this.log });
+    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: model => this.baseTokens(model), memoryTokens: () => this.memoryTokens(), log: this.log });
     this.bus = new RunBus();
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
@@ -404,14 +404,16 @@ export class App {
     this.#rewrittenReported = rewritten;
   }
 
-  baseTokens(): number {
+  baseTokens(model?: ModelConfig): number {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
     // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
-    const all = this.tools?.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen' }) ?? [];
-    const defers = all.some(tool => tool.name === 'tool_search' && tool.mcp === undefined);
-    const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : estimateToolTokens(ToolRegistry.specs(all.filter(tool => tool.name !== 'tool_search'), config));
+    const exclude = (tool: ToolDef) => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen';
+    const all = this.tools?.forRun('chat', { exclude }) ?? [];
+    const defers = model?.maxTools === undefined && all.some(tool => tool.name === 'tool_search' && tool.mcp === undefined);
+    const full = model?.maxTools === 0 ? [] : this.tools?.forRun('chat', { limit: model?.maxTools, exclude: tool => exclude(tool) || tool.name === 'tool_search' }) ?? [];
+    const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : full.length ? estimateToolTokens(ToolRegistry.specs(full, config)) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }

@@ -5,12 +5,14 @@ import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
 import { builtinTools } from '../src/app.ts';
 import { DEFERRED_HEADER, matchTools } from '../src/tools/builtin/tool-search.ts';
+import { estimateRequest } from '../src/engine/tokens.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
+import { ProviderError } from '../src/providers/types.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { fail, reply, tempDir, type Script } from './helpers.ts';
 
 // T-1: 毎回渡すのは核の道具と tool_search だけ。ほかは system の毎回の部分の一覧に名前を出し、tool_search で読み込んだ実行の中だけ渡す
 
@@ -398,4 +400,101 @@ test('T-1 読み込んだ名前は実行が終わると手放す（実行をま�
   assert.ok(held, 'the probe ran');
   for (let i = 0; i < 10 && held.deref(); i++) { await new Promise(r => setTimeout(r, 20)); gc(); }
   assert.equal(held.deref(), undefined);
+});
+
+test('T-1 後回しはその要求を受けるモデルで決める: 上限の無い先頭のモデルは、上限のある控えのモデルが鎖にあっても後回しにする', async t => {
+  const s = await setup(t, { models: [fakeModel('m1'), fakeModel('m2', { maxTools: 40 })] });
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'hi' });
+  const first = s.calls()[0]!;
+  assert.equal(first.model.id, 'm1');
+  assert.ok(s.names(first).includes('tool_search'));
+  assert.ok(!s.names(first).includes('table_write'));
+  assert.ok(listed(first, 'table_write'));
+  assert.ok(!s.logs.some(line => line.includes('tool limit')), 'no warning while the uncapped model serves');
+});
+
+test('T-1 上限のあるモデルへ途中で替わると、その要求は今までどおりの上限つきの一覧（tool_search も一覧も無し）。渡した道具は断らずに動き、「読み込んだ」とは言わない', async t => {
+  const s = await setup(t, { models: [fakeModel('m1'), fakeModel('m2', { maxTools: 40 })] });
+  s.adapter().scripts = [fail(new ProviderError('provider_error', '503', { retryable: false })), call('tool_search', { query: 'calculate' }), call('calculate', { expression: '1+2' }), reply('ok')];
+  const runId = await s.send(uuid(1), { text: 'add' });
+  const served = s.calls().filter(req => req.model.id === 'm2');
+  assert.ok(served.length >= 2, 'the backup served the rest of the run');
+  for (const req of served) {
+    assert.ok(req.tools.length <= 40);
+    assert.ok(!s.names(req).includes('tool_search'));
+    assert.ok(s.names(req).includes('calculate'));
+    assert.ok(!req.system.dynamic.includes(DEFERRED_HEADER));
+  }
+  const [searched, added] = s.toolResults();
+  assert.doesNotMatch(searched!, /Loaded/u);
+  assert.match(added!, /3/u);
+  assert.doesNotMatch(added!, /not loaded/u);
+  const row = s.app.db.prepare("SELECT decision FROM tool_calls WHERE run_id = ? AND tool = 'calculate'").get(runId) as { decision: string };
+  assert.notEqual(row.decision, 'deny');
+  const warned = s.logs.filter(line => line.includes('tool limit'));
+  assert.equal(warned.length, 1, warned.join('\n'));
+  assert.match(warned[0]!, /^\[WARN\] Model "m2"/u);
+  s.adapter().scripts = [fail(new ProviderError('provider_error', '503', { retryable: false })), reply('again')];
+  await s.send(uuid(1), { text: 'again' });
+  assert.equal(s.logs.filter(line => line.includes('tool limit')).length, 1, 'the warning is written once per model');
+});
+
+test('T-1 使用量（contextUsage）と起動の見積もり（baseTokens）は、本当の要求と同じ決まりで数える（m1 は上限なし、m2 は maxTools 10）', async t => {
+  const s = await setup(t, { models: [fakeModel('m1'), fakeModel('m2', { maxTools: 10 })] });
+  for (const [index, id] of [[1, 'm1'], [2, 'm2']] as const) {
+    const usage = (await s.json(`/api/conversations/${uuid(index)}/context?modelId=${id}`, 'GET')).body.tokens as number;
+    s.adapter().scripts = [reply('ok')];
+    await s.send(uuid(index), { text: 'x', modelId: id });
+    const req = s.calls().find(c => c.model.id === id)!;
+    const real = estimateRequest(`${req.system.frozen}\n${req.system.dynamic}`, [], req.tools).tokens;
+    assert.ok(Math.abs(usage - real) < 64, `${id}: contextUsage ${usage} vs the real request ${real}`);
+    const model = s.app.config().models.find(m => m.id === id)!;
+    const base = s.app.baseTokens(model);
+    assert.ok(Math.abs(base - real) < real * 0.2, `${id}: baseTokens ${base} vs the real request ${real}`);
+  }
+  assert.equal(s.calls().find(c => c.model.id === 'm2')!.tools.length, 10);
+  assert.ok(s.names(s.calls().find(c => c.model.id === 'm1')!).includes('tool_search'));
+});
+
+test('T-1 すでに渡っている核の道具を名前で探すと、言葉で別の道具を読み込まず、そのまま呼べると答える', async t => {
+  const s = await setup(t);
+  s.adapter().scripts = [search('file_read'), search('shell_run'), reply('ok')];
+  await s.send(uuid(1), { text: 'x' });
+  const [read, shell] = s.toolResults();
+  assert.match(read!, /Already available[^\n]*file_read/u);
+  assert.match(shell!, /Already available[^\n]*shell_run/u);
+  const last = s.calls().at(-1)!;
+  assert.ok(!s.names(last).includes('doc_read'), 'doc_read is not loaded by the word "read"');
+  assert.ok(!s.names(last).includes('agent_run'));
+});
+
+test('T-1 matchTools: MCP の道具の名前の当たりは、組み込みの道具の当たり（説明の当たりも）より低く数える', () => {
+  const mcp = (name: string): ToolDef => ({ ...mcpNotes, name, mcp: { server: 'srv', tool: name } });
+  const tools = [...builtinTools(), mcp('mcp_srv_csv'), mcp('mcp_srv_table')];
+  const names = (query: string) => matchTools(tools, query).map(tool => tool.name);
+  assert.deepEqual(names('table'), ['table_write']);
+  assert.deepEqual(names('csv'), ['table_write'], 'a description hit of a builtin beats an MCP name hit');
+  assert.deepEqual(names('srv'), ['mcp_srv_csv', 'mcp_srv_table'], 'an MCP tool is still found when no builtin matches');
+});
+
+test('T-1 後回しにしない実行（振り返り・上限のあるモデル）でも、無い道具の「使える道具」に外した道具の名前を出さない', async t => {
+  const s = await setup(t);
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'hello' });
+  s.adapter().scripts = [call('no_such_tool', {}), reply('No changes')];
+  const started = s.app.engine.runReview(uuid(1), 'review this');
+  assert.ok(started.ok);
+  await started.done;
+  const review = s.lastResult();
+  assert.match(review, /There is no tool "no_such_tool"/u);
+  assert.match(review, /skill_view/u);
+  for (const name of ['file_write', 'shell_run', 'browser_open', 'agent_run', 'tool_search']) assert.ok(!review.includes(name), `review: ${name}`);
+
+  const capped = await setup(t, { models: [fakeModel('m1', { maxTools: 40 })] });
+  capped.adapter().scripts = [call('no_such_tool', {}), reply('ok')];
+  await capped.send(uuid(1), { text: 'x' });
+  const text = capped.lastResult();
+  assert.match(text, /There is no tool "no_such_tool"/u);
+  for (const name of ['browser_open', 'agent_run', 'mesh_state_set', 'acceptance_change']) assert.ok(!text.includes(name), `capped: ${name}`);
 });

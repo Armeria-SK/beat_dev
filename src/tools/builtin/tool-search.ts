@@ -16,21 +16,25 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   'would', 'could', 'should', 'have', 'has', 'are', 'was', 'were', 'will', 'your', 'mine', 'its', 'all', 'not', 'but', 'out', 'one',
 ]);
 
-export const DEFERRED_HEADER = 'Tools you can load (name and a short summary; this list stays the same for the whole run). To use one you have not loaded yet, first call tool_search with its name; once loaded it stays usable for the rest of this run:';
+export const DEFERRED_HEADER = 'Tools you can load (name and a short summary). To use one you have not loaded yet, first call tool_search with its name, then call it:';
 
 const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 
-export function matchTools(tools: readonly ToolDef[], query: string): ToolDef[] {
-  const raw = query.toLowerCase().replace(/^\s*select:/u, '');
-  const names = raw.split(/[\s,]+/u).filter(Boolean);
+const rawOf = (query: string): string => query.toLowerCase().replace(/^\s*select:/u, '');
+export const namesOf = (query: string): string[] => rawOf(query).split(/[\s,]+/u).filter(Boolean);
+
+export function matchTools(tools: readonly ToolDef[], query: string, ready: ReadonlySet<string> = new Set()): ToolDef[] {
+  const raw = rawOf(query);
+  const names = namesOf(query);
   const exact = tools.filter(t => names.includes(t.name));
   if (exact.length) return exact.slice(0, MAX_EXACT);
+  if (names.some(name => ready.has(name))) return [];
   const terms = [...new Set(wordsOf(raw))].filter(term => term.length >= MIN_TERM && !STOP_WORDS.has(term));
   const scored = tools
     .map(t => {
       const name = new Set(wordsOf(t.name));
       const description = t.mcp ? new Set<string>() : new Set(wordsOf(t.description));
-      return { t, score: terms.reduce((sum, term) => sum + (name.has(term) ? 2 : 0) + (description.has(term) ? 1 : 0), 0) };
+      return { t, score: terms.reduce((sum, term) => sum + (name.has(term) ? (t.mcp ? 0.5 : 2) : 0) + (description.has(term) ? 1 : 0), 0) };
     })
     .filter(m => m.score > 0);
   const top = Math.max(0, ...scored.map(m => m.score));
@@ -65,9 +69,15 @@ export const toolSearch: ToolDef<{ query: string }> = {
   replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
-    if (!ctx.deferred) return { content: toolText(language, 'tool_search.unavailable'), isError: true };
-    const found = matchTools(ctx.deferred.list(), input.query);
-    if (!found.length) return { content: toolText(language, 'tool_search.none') };
+    if (!ctx.deferred?.sent.has('tool_search')) return { content: toolText(language, 'tool_search.unavailable'), isError: true };
+    const list = ctx.deferred.list();
+    const listedNames = new Set(list.map(t => t.name));
+    const ready = (ctx.reachable?.() ?? []).filter(t => !listedNames.has(t.name)).map(t => t.name);
+    const found = matchTools(list, input.query, new Set(ready));
+    if (!found.length) {
+      const asked = namesOf(input.query).filter(name => ready.includes(name));
+      return { content: asked.length ? toolText(language, 'tool_search.ready', { names: asked.join(', ') }) : toolText(language, 'tool_search.none') };
+    }
     ctx.deferred.load(found.map(t => t.name));
     const byName = new Map(found.map(t => [t.name, t]));
     const specs = ToolRegistry.specs(found, ctx.config);
