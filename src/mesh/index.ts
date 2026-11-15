@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import type { Language } from '../config/schema.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
-import { CONVERSATION_PLANS, type PlanStore, type PlanView } from '../projects/plan.ts';
+import { CONVERSATION_PLANS, conversationPlanFile, type PlanStore, type PlanView } from '../projects/plan.ts';
 import { projectDir, type ProjectStore } from '../projects/store.ts';
 import { makeFence, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import { plainLine } from '../shared/plain-text.ts';
@@ -154,6 +154,13 @@ function summarize(doc: AcceptanceDoc | undefined): AcceptanceSummary | null {
   return { total: items.length, met: count('met'), open: count('open'), unverified: count('unverified'), version: Number(doc.version) || 0 };
 }
 
+function statOf(file: string): [number, number] | null {
+  try {
+    const stat = lstatSync(file);
+    return [stat.mtimeMs, stat.size];
+  } catch { return null; }
+}
+
 function regular(file: string): { mtimeMs: number } | undefined {
   try {
     const stat = lstatSync(file);
@@ -183,7 +190,11 @@ export class Mesh {
 
   #dir(projectId: string): string { return projectDir(this.#d.projectsDir, projectId); }
 
-  #files(dir: string): ReturnType<typeof listMeshFiles> { return listMeshFiles(dir).filter(file => !RETIRED_FILES.has(file.rel) && !planPath(file.rel)); }
+  #files(dir: string): ReturnType<typeof listMeshFiles> {
+    let root: string;
+    try { root = realpathSync.native(dir); } catch { return []; }
+    return listMeshFiles(dir).filter(file => !RETIRED_FILES.has(file.rel) && !planPath(file.rel) && !planPath(relative(root, file.abs)));
+  }
 
   #plan(projectId: string, conversationId: string | null | undefined): string | null { return this.#d.plans.conversationOf(conversationId, projectId); }
 
@@ -206,8 +217,9 @@ export class Mesh {
     const timezone = this.#d.timezone();
     const stateMtime = stateStat ? Math.floor(stateStat.mtimeMs) : null;
     const planMeta = plan ? this.#d.plans.meta(projectId, plan) ?? null : null;
+    const planStat = plan ? statOf(conversationPlanFile(this.#d.projectsDir, projectId, plan)) : null;
     const decisions = regular(join(dir, DECISIONS_FILE)) ? { rows: decisionRows(readFileSync(join(dir, DECISIONS_FILE), 'utf8')) } : null;
-    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan === undefined ? 'none' : plan, planMeta, decisions]);
+    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan === undefined ? 'none' : plan, planMeta, planStat, decisions]);
     return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, decisions };
   }
 

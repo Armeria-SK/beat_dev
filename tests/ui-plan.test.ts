@@ -88,7 +88,7 @@ test('ui/plan (R2): 計画の書きかけは会話ごと。同じ会話の中だ
   setUnsaved(`${PLAN_EDITS}c1`, true);
   assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}c1`), false, '持ち越す書きかけは数えない');
   assert.equal(hasUnsavedEdits(SCREEN_EDITS, `${PLAN_EDITS}c10`), true, '名前の頭が同じ別の会話とは区別する');
-  setUnsaved(`${PLAN_EDITS}p1`, false);
+  setUnsaved(`${PLAN_EDITS}c1`, false);
 });
 
 test('ui/plan: 最後に直した人の言葉: owner → you、ai → beat、outside → outside', () => {

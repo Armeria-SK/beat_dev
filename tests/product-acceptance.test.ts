@@ -567,7 +567,7 @@ test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_w
   assert.deepEqual(fixed.frozen, { version: 1, hash: frozenHash(v1), plan_hash: 'ph', created_at: 77, source: 'build', build_task_id: 'task-1' });
 });
 
-test('3-1b 一覧の口: よそから来た文を読んだ実行が書いたら tainted: true、あとできれいな会話が書き直しても true のまま。言語は製品のものを使う', async t => {
+test('3-1b 一覧の口: よそから来た文を読んだ実行が書いたら tainted: true、別の会話の下書きは別のもので、その印を引き継がない。言語は製品のものを使う', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   await s.json(`/api/projects/${shop.id}`, 'PATCH', { docLanguage: 'ja' });

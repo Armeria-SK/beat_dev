@@ -2,7 +2,7 @@ import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSy
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type { KV } from '../db/kv.ts';
-import { CONVERSATION_PLANS, conversationDraftFile, conversationPlanFile, isPlanConversation, PLAN_FILE, planConversationOf, planHash, type PlanMeta } from './plan.ts';
+import { CONVERSATION_PLANS, conversationDraftFile, conversationPlanFile, isPlanConversation, PLAN_FILE, planConversationOf, type PlanMeta } from './plan.ts';
 import { PROJECT_ID, projectDir } from './store.ts';
 
 const ACCEPTANCE_FILE = 'acceptance.json';
@@ -13,7 +13,7 @@ export interface AdoptIo {
   copyFileSync?: (from: string, to: string) => void;
 }
 
-export interface AdoptRecord { conversationId: string; hash: string | null; draftHash: string | null }
+export interface AdoptRecord { conversationId: string }
 
 export interface AdoptResult { projectId: string; conversationId: string | null; plan: 'moved' | 'kept' | 'conflict' | 'none'; draft: 'moved' | 'kept' | 'conflict' | 'none' }
 
@@ -71,7 +71,7 @@ export function adoptLegacyPlans(deps: { kv: KV; projectsDir: string; backupsDir
       const result = adoptOne(deps.kv, projectId, deps.projectsDir, deps.backupsDir, io, now, deps.log);
       if (result) results.push(result);
     } catch (error) {
-      deps.log(`[WARN] Could not move the plan of product ${projectId} to its conversation: ${(error as Error).message}. It stays where it is and is tried again at the next start`);
+      deps.log(`[WARN] Could not move the plan of product ${projectId} to its conversation: ${(error as Error).message}. What was not finished is tried again at the next start`);
     }
   }
   return results;
@@ -100,7 +100,7 @@ function adoptOne(kv: KV, projectId: string, projectsDir: string, backupsDir: st
   if (!conversationId) {
     conversationId = chooseConversation(kv, projectId);
     if (!conversationId) return { projectId, conversationId: null, plan: hasPlan ? 'kept' : 'none', draft: hasDraft ? 'kept' : 'none' };
-    kv.setJson(recordKey(projectId), { conversationId, hash: hasPlan ? planHash(readFileSync(legacyPlan, 'utf8')) : null, draftHash: hasDraft ? planHash(readFileSync(legacyAcceptance, 'utf8')) : null } satisfies AdoptRecord);
+    kv.setJson(recordKey(projectId), { conversationId } satisfies AdoptRecord);
   }
   const backups = join(backupsDir, 'mesh', projectId);
   const move = (from: string, to: string, label: string): boolean => {
@@ -110,7 +110,7 @@ function adoptOne(kv: KV, projectId: string, projectsDir: string, backupsDir: st
       return false;
     }
   };
-  const adopt = (from: string, to: string, backupName: string, label: string): { outcome: 'moved' | 'kept' | 'conflict'; copied: boolean } => {
+  const adopt = (from: string, to: string, backupName: string, label: string, copiedFirst: () => void = () => undefined): 'moved' | 'kept' | 'conflict' => {
     mkdirSync(join(to, '..'), { recursive: true });
     const there = regularFile(to);
     if (there === false) throw new Error(`the ${label} of conversation ${conversationId} is not a regular file`);
@@ -121,19 +121,22 @@ function adoptOne(kv: KV, projectId: string, projectsDir: string, backupsDir: st
       outcome = 'conflict';
       log(`[WARN] Conversation ${conversationId} of product ${projectId} already has its own ${label}, so the old one was not copied over it. The old one is kept in the backups`);
     } else copied = true;
-    return { outcome: move(from, join(backups, backupName), label) ? outcome : 'kept', copied };
+    if (copied) copiedFirst();
+    return move(from, join(backups, backupName), label) ? outcome : 'kept';
   };
   let plan: AdoptResult['plan'] = 'none';
   if (hasPlan) {
-    const { outcome, copied } = adopt(legacyPlan, conversationPlanFile(projectsDir, projectId, conversationId), `plan-legacy-${stamp(now())}.md`, 'plan');
-    const meta = kv.getJson<PlanMeta>(`plan:${projectId}`);
-    const key = `plan:${projectId}:${conversationId}`;
-    if (copied && meta && kv.get(key) === undefined) kv.setJson(key, meta);
+    const target = conversationId;
+    const outcome = adopt(legacyPlan, conversationPlanFile(projectsDir, projectId, target), `plan-legacy-${stamp(now())}.md`, 'plan', () => {
+      const meta = kv.getJson<PlanMeta>(`plan:${projectId}`);
+      const key = `plan:${projectId}:${target}`;
+      if (meta && kv.get(key) === undefined) kv.setJson(key, meta);
+    });
     if (outcome !== 'kept') kv.delete(`plan:${projectId}`);
     plan = outcome;
   } else if (kv.get(`plan:${projectId}`) !== undefined) kv.delete(`plan:${projectId}`);
   let draft: AdoptResult['draft'] = 'none';
-  if (hasDraft) draft = adopt(legacyAcceptance, conversationDraftFile(projectsDir, projectId, conversationId), `acceptance-legacy-${stamp(now())}.json`, 'draft acceptance list').outcome;
+  if (hasDraft) draft = adopt(legacyAcceptance, conversationDraftFile(projectsDir, projectId, conversationId), `acceptance-legacy-${stamp(now())}.json`, 'draft acceptance list');
   if (plan !== 'kept' && draft !== 'kept') kv.delete(recordKey(projectId));
   log(`[INFO] Moved the plan of product ${projectId} to conversation ${conversationId} (plan: ${plan}, draft acceptance list: ${draft})`);
   return { projectId, conversationId, plan, draft };

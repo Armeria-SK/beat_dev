@@ -188,7 +188,7 @@ function SessionMenu({ conversation, onRename, onSummary, onClose }: { conversat
       )}
       {confirming ? (
         <li role="none" className="ui-menu__confirm">
-          <span className="bt-meta">{t('ui.session.deleteWhat')}</span>
+          <span className="bt-meta">{t(conversation.project_id ? 'ui.session.deleteWhatProduct' : 'ui.session.deleteWhat')}</span>
           <span className="ui-menu__confirmrow">
             <Button ref={confirm} role="menuitem" variant="danger" small disabled={busy} onClick={() => void act(() => api.deleteConversation(conversation.id), () => location.replace('#/'))}>{t('ui.session.deleteConfirm')}</Button>
             <Button role="menuitem" variant="ghost" small onClick={() => setConfirming(false)}>{t('ui.session.keep')}</Button>

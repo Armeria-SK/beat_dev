@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { builtinTools } from '../src/app.ts';
+import { App, builtinTools } from '../src/app.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { KV } from '../src/db/kv.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
@@ -14,7 +14,7 @@ import { AcceptanceStore } from '../src/projects/acceptance.ts';
 import { adoptLegacyPlans, type AdoptIo } from '../src/projects/plan-adopt.ts';
 import { planConversationOf, PlanStore, type PlanMeta } from '../src/projects/plan.ts';
 import { fakeModel, settled, startApp } from './app-setup.ts';
-import { reply, tempDir, type Script, withLoad } from './helpers.ts';
+import { reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 const P1 = 'aaaaaaaa-0000-4000-8000-0000000000a1';
 const P2 = 'aaaaaaaa-0000-4000-8000-0000000000a2';
@@ -230,7 +230,7 @@ test('plan-per-conv adopt (R4): the target is recorded first and kept on the nex
   f.adopt();
   assert.equal(readFileSync(f.own(P1, A), 'utf8'), '# keep me', 'the copy is in place');
   assert.equal(readFileSync(f.legacy(P1), 'utf8'), '# keep me', 'EXDEV: the old file stays');
-  assert.deepEqual(f.kv.getJson(`plan-adopt:${P1}`), { conversationId: A, hash: sha('# keep me'), draftHash: null });
+  assert.deepEqual(f.kv.getJson(`plan-adopt:${P1}`), { conversationId: A });
   assert.ok(f.logs.some(line => /Could not move the old plan/u.test(line)));
   f.kv.delete(`plan:${P1}:${A}`);
   f.kv.setJson(`plan:${P1}`, { hash: sha('# keep me'), updatedAt: 5, by: 'ai', tainted: false, conversationId: null, runId: 'r0' });
@@ -244,6 +244,21 @@ test('plan-per-conv adopt (R4): the target is recorded first and kept on the nex
   assert.equal(f.kv.getJson<PlanMeta>(`plan:${P1}:${A}`)?.hash, sha('# keep me'), 'the record is copied on the resumed start');
 });
 
+test('plan-per-conv adopt: the old record is copied to the conversation before the old file moves to the backups, so a stop between the two keeps it', t => {
+  const seen: unknown[] = [];
+  const f = fixture(t, {
+    renameSync: (from, to) => {
+      if (to.includes('plan-legacy-')) seen.push(f.kv.getJson<PlanMeta>(`plan:${P1}:${A}`)?.by);
+      renameSync(from, to);
+    },
+  });
+  f.chat(A, P1, 10);
+  seedLegacy(f, P1, '# owner reviewed', { conversationId: A, by: 'owner', tainted: true });
+  f.adopt();
+  assert.deepEqual(seen, ['owner']);
+  assert.equal(f.plans.view(P1, A).tainted, true, 'the taint mark survives the move');
+});
+
 test('plan-per-conv adopt: a crash after the move (only the new body and the old record left) is finished; one failing product does not stop the others', t => {
   const f = fixture(t);
   f.chat(A, P1);
@@ -251,7 +266,7 @@ test('plan-per-conv adopt: a crash after the move (only the new body and the old
   writeFileSync(f.own(P1, A), '# moved');
   writeFileSync(join(f.paths.projects, P1, 'conversation-plans', `${A}.md.tmp-abc123`), 'half');
   f.kv.setJson(`plan:${P1}`, { hash: 'x' });
-  f.kv.setJson(`plan-adopt:${P1}`, { conversationId: A, hash: 'x', draftHash: null });
+  f.kv.setJson(`plan-adopt:${P1}`, { conversationId: A });
   const B2 = 'cccccccc-0000-4000-8000-0000000000b2';
   f.chat(B2, P2);
   seedLegacy(f, P2, '# second');
@@ -294,6 +309,11 @@ test('plan-per-conv: deleting a conversation deletes its plan, its record and it
   s.app.plans.write(made.id, a, '# A2', OWNER);
   s.app.plans.write(made.id, b, '# B', AI(b));
   s.app.plans.markBuilt(made.id, a, sha('# A2'));
+  const draftOf = (conversation: string) => join(s.paths.projects, made.id, 'conversation-plans', `${conversation}.acceptance.json`);
+  writeFileSync(draftOf(a), '{"draft":"A"}');
+  writeFileSync(draftOf(b), '{"draft":"B"}');
+  const frozen = join(s.paths.projects, made.id, 'acceptance.json');
+  writeFileSync(frozen, '{"frozen":true}');
   assert.ok(existsSync(join(s.paths.backups, 'mesh', made.id, 'plans', a)));
   const deleted = await s.json(`/api/conversations/${a}`, 'DELETE');
   assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
@@ -303,6 +323,9 @@ test('plan-per-conv: deleting a conversation deletes its plan, its record and it
   assert.equal(s.app.kv.get(`plan:${made.id}:${a}`), undefined);
   assert.equal(s.app.kv.get(`plan-built:${made.id}:${a}`), undefined);
   assert.equal(s.app.plans.view(made.id, b).content, '# B');
+  assert.equal(existsSync(draftOf(a)), false, 'the draft list of A goes with A');
+  assert.equal(readFileSync(draftOf(b), 'utf8'), '{"draft":"B"}', 'the draft list of B stays');
+  assert.equal(readFileSync(frozen, 'utf8'), '{"frozen":true}', 'the locked list of the product stays');
 });
 
 function meshFixture(t: { after: (fn: () => void) => void }) {
@@ -334,16 +357,32 @@ test('plan-per-conv mesh: the plan of A is in the index, search and plan.md of A
   assert.doesNotMatch(f.mesh.indexBody(P1, 1000, A), /conversation-plans/u);
 });
 
+test('plan-per-conv mesh: a hand edit of the conversation plan file rebuilds the index of that conversation', t => {
+  const f = meshFixture(t);
+  f.plans.write(P1, A, '# Clean heading\n', AI(A));
+  assert.match(f.mesh.indexBody(P1, 1000, A), /^- plan\.md — \(AI note\) Clean heading/mu);
+  const before = f.mesh.builds;
+  const file = f.own(P1, A);
+  writeFileSync(file, '# Outside heading from editor\n');
+  utimesSync(file, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000));
+  const after = f.mesh.indexBody(P1, 1000, A);
+  assert.equal(f.mesh.builds, before + 1, 'rebuilt');
+  assert.doesNotMatch(after, /AI note|Clean heading|Outside heading/u);
+  assert.match(after, /^- plan\.md \(updated /mu);
+});
+
 test('plan-per-conv mesh (R1): conversation-plans/ is never read by path, in any spelling, by mesh_read or by mesh_search with file', t => {
   const f = meshFixture(t);
   f.plans.write(P1, A, '# Alpha\nsecret-alpha-step\n', { ...AI(A), tainted: true });
-  for (const path of [`conversation-plans/${A}.md`, `Conversation-Plans/${A}.md`, `CONVERSATION-PLANS\${A}.md`, `./conversation-plans/${A}.md`, `conversation-plans/${A.toUpperCase()}.md`, 'conversation-plans']) {
+  symlinkSync(join(f.paths.projects, P1, 'conversation-plans'), join(f.paths.projects, P1, 'a-link'), 'junction');
+  for (const path of [`conversation-plans/${A}.md`, `Conversation-Plans/${A}.md`, `CONVERSATION-PLANS\\${A}.md`, `conversation-plans\\${A}.md`, `./conversation-plans/${A}.md`, `a-link/${A}.md`, `a-link\\${A}.md`, `conversation-plans/${A.toUpperCase()}.md`, 'conversation-plans']) {
     for (const as of [B, A, null]) {
       assert.throws(() => f.mesh.read(P1, { file: path }, 4000, 'en', as), (e: Error) => !/secret-alpha-step/u.test(e.message), `${path} as ${as}`);
       assert.throws(() => f.mesh.search(P1, { query: 'secret', file: path }, 4000, 'en', as), (e: Error) => !/secret-alpha-step/u.test(e.message), `search ${path} as ${as}`);
     }
   }
-  assert.doesNotMatch(f.mesh.search(P1, { query: 'secret-alpha-step' }, 4000, 'en', B).content, /secret-alpha-step/u, 'not through the folder walk either');
+  assert.doesNotMatch(f.mesh.search(P1, { query: 'secret-alpha-step' }, 4000, 'en', B).content, /secret-alpha-step/u, 'not through the folder walk either, even through a junction');
+  assert.doesNotMatch(f.mesh.indexBody(P1, 1000, B), /a-link|cccccccc/u, 'the junction alias is not listed in the index');
   assert.equal(f.mesh.read(P1, { file: 'plan.md' }, 4000, 'en', A).fetched, true, 'A still reads its own plan by name, with its mark');
 });
 
@@ -436,4 +475,23 @@ test('plan-per-conv P2b adopt: an old draft acceptance.json (version 0, never lo
   assert.ok(backup && readFileSync(join(f.paths.backups, 'mesh', P1, backup)).equals(draftBytes));
   assert.equal(readFileSync(join(f.paths.projects, P2, 'acceptance.json'), 'utf8'), locked);
   assert.equal(existsSync(join(f.paths.projects, P2, 'conversation-plans')), false);
+});
+
+test('plan-per-conv adopt (R5): on start beat also rewrites INDEX.md of archived products', t => {
+  const paths = resolvePaths(tempDir(t));
+  mkdirSync(paths.data, { recursive: true });
+  writeFileSync(paths.config, JSON.stringify(testConfig()));
+  const open = () => new App({ paths, log: () => undefined, workerTimers: false });
+  const first = open();
+  const made = first.projects.create({ name: 'old', root: tempDir(t), rootKey: 'old-key', checkCommand: null });
+  const chat = first.conversations.create({ projectId: made.id }).id;
+  first.projects.update(made.id, { archived: true });
+  first.close();
+  const dir = join(paths.projects, made.id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'plan.md'), '# Old heading');
+  writeFileSync(join(dir, 'INDEX.md'), '# Mesh\n- plan.md — Old heading (updated 2026-11-01)\n');
+  open().close();
+  assert.equal(readFileSync(join(dir, 'conversation-plans', `${chat}.md`), 'utf8'), '# Old heading');
+  assert.doesNotMatch(readFileSync(join(dir, 'INDEX.md'), 'utf8'), /plan\.md|Old heading/u);
 });

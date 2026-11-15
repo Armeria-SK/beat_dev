@@ -412,6 +412,7 @@ export const en = {
   'ui.session.delete': 'Delete',
   'ui.session.deleteConfirm': 'Delete · cannot be undone',
   'ui.session.deleteWhat': 'Removes the messages, attachments, summary and approvals. Usage numbers, tasks and memories stay.',
+  'ui.session.deleteWhatProduct': 'Removes the messages, attachments, summary and approvals, and the plan of this conversation with its saved versions and its draft acceptance list. Usage numbers, tasks and memories stay.',
   'ui.session.keep': 'Keep',
   'ui.session.gone': 'This session no longer exists',
   'ui.session.goneText': 'It was deleted, or the link is wrong.',
