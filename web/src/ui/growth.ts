@@ -10,7 +10,7 @@ export function monthKey(ms: number, zone: string): string {
 }
 
 export function growthMonths(since: number, now: number, zone: string, max = GROWTH_MONTHS_MAX): string[] {
-  const first = monthKey(Math.min(since, now), zone);
+  const first = monthKey(since, zone);
   let [year, month] = monthKey(now, zone).split('-').map(Number) as [number, number];
   const months: string[] = [];
   while (months.length < max) {
@@ -38,6 +38,19 @@ export function emptyGrowthBucket(month: string, projectId: string | null): Grow
 
 export function growthBucket(stats: GrowthStats, month: string, projectId: string): GrowthBucket {
   return stats.buckets.find(b => b.month === month && b.projectId === projectId) ?? emptyGrowthBucket(month, projectId);
+}
+
+export interface AiQuestions { asked: number; answered: number; kept: number; keptRate: number | null; noAssumption: number; others: number }
+
+export function aiQuestions(bucket: GrowthBucket): AiQuestions {
+  const sum = { asked: 0, answered: 0, kept: 0, noAssumption: 0 };
+  for (const c of bucket.questions.byCategory) {
+    sum.asked += c.asked;
+    sum.answered += c.answered;
+    sum.kept += c.kept;
+    sum.noAssumption += c.noAssumption;
+  }
+  return { ...sum, keptRate: sum.answered > 0 ? sum.kept / sum.answered : null, others: Math.max(0, bucket.questions.asked - sum.asked) };
 }
 
 export const percentText = (rate: number | null): string => (rate === null ? '—' : `${Math.round(rate * 100)}%`);

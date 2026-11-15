@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GrowthStats } from '../web/src/api.ts';
-import { growthBucket, growthMonths, monthKey, monthLabel, percentText, perTaskText } from '../web/src/ui/growth.ts';
+import { aiQuestions, emptyGrowthBucket, growthBucket, growthMonths, monthKey, monthLabel, percentText, perTaskText } from '../web/src/ui/growth.ts';
 
 test('ui/growth: 月はタイムゾーンで決める（UTC の月末でも東京では次の月）', () => {
   const at = Date.UTC(2026, 9, 31, 20, 0);
@@ -43,4 +43,16 @@ test('ui/growth: その月・その製品の箱だけを使う。無ければ 0 
   assert.equal(empty.tasks, 0);
   assert.equal(empty.questions.keptRate, null);
   assert.equal(growthBucket(stats, '2026-11', 'p2').tasks, 0);
+});
+
+const emptyGrowthBucketFor = (month: string) => emptyGrowthBucket(month, 'p1');
+
+test('ui/growth: 仮の答えの当たりは AI の質問（種類の行）だけで数える。ほかの質問は「ほかに N」', () => {
+  const b = emptyGrowthBucketFor('2026-11');
+  b.questions = {
+    asked: 9, perTask: null, answered: 6, kept: 5, keptRate: 5 / 6, noAssumption: 4,
+    byCategory: [{ category: 'scope', asked: 4, answered: 3, kept: 1, keptRate: 1 / 3, noAssumption: 1 }, { category: 'tech', asked: 2, answered: 1, kept: 1, keptRate: 1, noAssumption: 1 }],
+  };
+  assert.deepEqual(aiQuestions(b), { asked: 6, answered: 4, kept: 2, keptRate: 0.5, noAssumption: 2, others: 3 });
+  assert.deepEqual(aiQuestions(emptyGrowthBucketFor('2026-11')), { asked: 0, answered: 0, kept: 0, keptRate: null, noAssumption: 0, others: 0 });
 });

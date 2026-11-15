@@ -35,11 +35,11 @@ function bucket(month: string, over: Partial<GrowthBucket> = {}): GrowthBucket {
 const busy = (month: string): GrowthBucket => bucket(month, {
   tasks: 2, judgeAsked: 3, pending: 1,
   questions: {
-    asked: 3, perTask: 1.5, answered: 3, kept: 2, keptRate: 2 / 3, noAssumption: 0,
-    byCategory: [{ category: 'scope', asked: 2, answered: 2, kept: 2, keptRate: 1, noAssumption: 0 }, { category: 'ui', asked: 1, answered: 1, kept: 0, keptRate: 0, noAssumption: 0 }],
+    asked: 8, perTask: 4, answered: 4, kept: 3, keptRate: 0.75, noAssumption: 4,
+    byCategory: [{ category: 'scope', asked: 4, answered: 3, kept: 2, keptRate: 2 / 3, noAssumption: 1 }, { category: 'ui', asked: 2, answered: 0, kept: 0, keptRate: null, noAssumption: 2 }],
   },
   checks: { decisions: 4, notEnough: 1, notEnoughShare: 0.25 },
-  skills: [{ name: 'release-notes', uses: 3, taskUses: 2, chatUses: 1, tasks: 2, done: 1, failed: 1, cancelled: 0, unfinished: 0 }],
+  skills: [{ name: 'release-notes', uses: 5, taskUses: 4, chatUses: 1, tasks: 4, done: 2, failed: 1, cancelled: 0, unfinished: 1 }],
 });
 
 type Reply = { status: number; body: unknown };
@@ -77,10 +77,11 @@ test('Growth（DOM）: 数が 0 の月も欄を隠さずに出す。割合は「
   assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '—');
   assert.equal(figure(container, 'perTask')?.querySelector('.bt-meta')?.textContent, '0 questions · 0 tasks run');
   assert.equal(figure(container, 'kept')?.querySelector('.bt-stat__n')?.textContent, '—');
-  assert.equal(figure(container, 'kept')?.querySelector('.bt-meta')?.textContent, '0 of 0 answered · 0 without one');
+  assert.equal(figure(container, 'kept')?.querySelector('.bt-meta')?.textContent, '0 of 0 answered · 0 asked without a provisional answer');
   assert.equal(figure(container, 'notEnough')?.querySelector('.bt-stat__n')?.textContent, '—');
   assert.equal(figure(container, 'line')?.textContent, 'the judge asked 0 times · 0 sent to Pending');
-  assert.ok(byText(container, '.bt-meta', 'No questions this month'));
+  assert.ok(byText(container, '.bt-meta', 'No questions from the AI this month'));
+  assert.equal(figure(container, 'others'), null, '0 のときは出さない');
   assert.ok(byText(container, '.bt-meta', 'No skills used this month'));
   assert.equal(figure(container, 'since')?.textContent, 'No tool calls recorded yet');
   assert.equal(container.querySelector('table'), null);
@@ -91,21 +92,24 @@ test('Growth（DOM）: 1 か月ぶんの数。当たり率は仮の答えのあ�
   const month = thisMonth();
   serve(() => ({ status: 200, body: stats(month, [busy(month)], Date.UTC(2026, 10, 1, 3, 0)) }));
   const container = await section();
-  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '1.5');
-  assert.equal(figure(container, 'perTask')?.querySelector('.bt-meta')?.textContent, '3 questions · 2 tasks run');
+  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '4');
+  assert.equal(figure(container, 'perTask')?.querySelector('.bt-meta')?.textContent, '8 questions · 2 tasks run', 'タスクあたりは止まったタスクや確かめの質問も入れた数');
   assert.equal(figure(container, 'kept')?.querySelector('.bt-label')?.textContent, 'Provisional answers kept');
-  assert.equal(figure(container, 'kept')?.querySelector('.bt-stat__n')?.textContent, '67%');
-  assert.equal(figure(container, 'kept')?.querySelector('.bt-meta')?.textContent, '2 of 3 answered · 0 without one');
+  assert.equal(figure(container, 'kept')?.querySelector('.bt-stat__n')?.textContent, '67%', 'AI の質問だけの当たり率（全体の 75% ではない）');
+  assert.equal(figure(container, 'kept')?.querySelector('.bt-meta')?.textContent, '2 of 3 answered · 3 asked without a provisional answer');
   assert.equal(figure(container, 'notEnough')?.querySelector('.bt-stat__n')?.textContent, '25%');
   assert.equal(figure(container, 'notEnough')?.querySelector('.bt-meta')?.textContent, '1 of 4 checks');
   assert.equal(figure(container, 'line')?.textContent, 'the judge asked 3 times · 1 sent to Pending');
-  const scopeRow = [...container.querySelectorAll('[data-category="scope"] td')].map(td => td.textContent);
-  assert.deepEqual(scopeRow, ['Scope', '2', '2', '2', '100%', '0']);
-  assert.equal(container.querySelector('[data-category="ui"] td')?.textContent, 'UI');
+  const cells = (selector: string) => [...container.querySelectorAll(`${selector} th, ${selector} td`)].map(cell => cell.textContent);
+  assert.deepEqual(cells('[data-category="scope"]'), ['Scope', '4', '3', '2', '67%', '1']);
+  assert.deepEqual(cells('[data-category="ui"]'), ['UI', '2', '0', '0', '—', '2']);
+  assert.equal(container.querySelector('[data-category="scope"] th')?.getAttribute('scope'), 'row');
+  assert.equal(figure(container, 'others')?.textContent, '2 more from stuck tasks and failed checks');
+  const tables = [...container.querySelectorAll('table')].map(table => container.querySelector(`[id="${table.getAttribute('aria-labelledby')}"]`)?.textContent);
+  assert.deepEqual(tables, ['Questions from the AI by category', 'Skills']);
   assert.ok(byText(container, '.bt-meta', 'Answered and kept count only questions with a provisional answer'));
-  assert.ok(byText(container, 'th', 'No provisional answer'));
-  const skill = [...container.querySelectorAll('[data-skill="release-notes"] td')].map(td => td.textContent);
-  assert.deepEqual(skill, ['release-notes', '3', '1', '2', '1', '1', '0', '0']);
+  assert.ok(byText(container, 'th', 'None assumed'));
+  assert.deepEqual(cells('[data-skill="release-notes"]'), ['release-notes', '5', '1', '4', '2', '1', '0', '1']);
   assert.match(figure(container, 'since')?.textContent ?? '', /^Skill results counted since 2026\/11\/01 \d{2}:\d{2}$/u);
 });
 
@@ -128,7 +132,7 @@ test('Growth（DOM）: 月を選び替えると、その月を読み直して出
   await settle(250);
   assert.equal(seen.at(-1)?.searchParams.get('month'), before);
   assert.equal(select?.value, before);
-  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '1.5');
+  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '4');
 });
 
 test('Growth（DOM）: 選び替えた月の数が届くまで、前の月の数をその月の数として出さない', async () => {
@@ -142,7 +146,7 @@ test('Growth（DOM）: 選び替えた月の数が届くまで、前の月の数
     return { status: 200, body: stats(month, month === now ? [busy(month)] : []) };
   });
   const container = await section(new Date(`${before}-15T00:00:00Z`).getTime());
-  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '1.5');
+  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '4');
   const select = container.querySelector('select')!;
   await update(() => {
     Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set?.call(select, before);
@@ -150,8 +154,10 @@ test('Growth（DOM）: 選び替えた月の数が届くまで、前の月の数
   });
   await settle(250);
   assert.equal(figure(container, 'perTask'), null, '届く前は数を出さない');
+  assert.equal(container.querySelector('[data-home="growth"]')?.getAttribute('aria-busy'), 'true');
   release();
   await settle();
+  assert.equal(container.querySelector('[data-home="growth"]')?.getAttribute('aria-busy'), 'false');
   assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '—');
 });
 
@@ -166,7 +172,7 @@ test('Growth（DOM）: 読めなかったら「Could not load」と Retry。Retr
   await click(byText(container, 'button', 'Retry'));
   await settle();
   assert.equal(container.textContent?.includes('Could not load the growth numbers'), false);
-  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '1.5');
+  assert.equal(figure(container, 'perTask')?.querySelector('.bt-stat__n')?.textContent, '4');
 });
 
 test('Growth（DOM）: 製品のホームの終わりに Growth の欄がある（Finished の下）', async () => {
