@@ -87,7 +87,7 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
       const { available } = await api.folderPickAvailable();
       canPickRef.current = available;
       setCanPick(available);
-      if (offlineRef.current === 'learn') markOffline(null);
+      if (offlineRef.current === 'learn') { markOffline(null); setRevive(n => n + 1); }
     } catch (e) {
       if (unreachable(e)) { if (offlineRef.current === null) markOffline('learn'); }
       else { canPickRef.current = false; setCanPick(false); }
@@ -166,7 +166,8 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
 
   const wasConnected = useRef(connected);
   useEffect(() => {
-    if (connected && !wasConnected.current) retry();
+    const what = offlineRef.current;
+    if (connected && !wasConnected.current && (what === 'learn' || what === 'check')) retry();
     wasConnected.current = connected;
   });
 

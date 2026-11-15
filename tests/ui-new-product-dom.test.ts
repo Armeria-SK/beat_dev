@@ -247,3 +247,53 @@ test('ui/NewProduct（DOM）: しまった製品の Restore でサーバーが�
   assert.deepEqual(restored, [{ archived: false }]);
   assert.equal(text(c).includes(en['ui.np.notAnswering']), false);
 });
+
+test('ui/NewProduct（DOM）: つながりが戻っても、Create は自分でやり直さない（Retry を押すまで待つ。途中まで打った値で作らない）', async () => {
+  let down = false;
+  const sent = serve((path, method) => (down ? 'down' : base(path, method)));
+  const { container: c, root } = await show({ connected: true });
+  await input(field(c), 'C:\work\shop');
+  down = true;
+  await click(byText(c, 'button', en['ui.np.create']));
+  await settle();
+  assert.ok(text(c).includes(en['ui.np.notAnswering']));
+  await input(field(c), 'C:\wo');
+  await update(() => { root.render(createElement(NewProduct, { onProject: () => undefined, connected: false })); });
+  down = false;
+  await update(() => { root.render(createElement(NewProduct, { onProject: () => undefined, connected: true })); });
+  await settle();
+  assert.equal(sent.filter(s => s.path === '/api/projects' && s.method === 'POST').length, 1, 'Create は 1 回だけ');
+  assert.ok(text(c).includes(en['ui.np.notAnswering']), '知らせは Retry を待って残る');
+});
+
+test('ui/NewProduct（DOM）: つながりが戻っても、窓（Open）は自分でやり直さない（beat が戻るたびに最前面の窓が勝手に出ないように）', async () => {
+  let down = false;
+  const sent = serve((path, method) => (down ? 'down' : base(path, method)));
+  const { container: c, root } = await show({ connected: true });
+  down = true;
+  await click(openButton(c));
+  await settle();
+  await update(() => { root.render(createElement(NewProduct, { onProject: () => undefined, connected: false })); });
+  down = false;
+  await update(() => { root.render(createElement(NewProduct, { onProject: () => undefined, connected: true })); });
+  await settle();
+  assert.equal(sent.filter(s => s.path === '/api/folders/pick' && s.method === 'POST').length, 1);
+});
+
+test('ui/NewProduct（DOM）: 開いたときにサーバーが止まっていて、窓が使えるかの問い合わせで戻ったときも、しまった製品の一覧を読み直す', async () => {
+  let down = true;
+  const sent = serve((path, method) => {
+    if (down) return 'down';
+    if (path === '/api/projects?archived=1') return { body: { projects: [project()] } };
+    return base(path, method);
+  });
+  const { container: c } = await show();
+  assert.ok(text(c).includes(en['ui.np.notAnswering']));
+  down = false;
+  await click(byText(c, 'button', en['ui.fail.retry']));
+  await settle();
+  await settle();
+  assert.equal(text(c).includes(en['ui.np.notAnswering']), false);
+  assert.equal(sent.filter(s => s.path === '/api/projects?archived=1').length, 2);
+  assert.ok(text(c).includes('Old shop'));
+});
