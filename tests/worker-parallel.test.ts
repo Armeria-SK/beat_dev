@@ -8,7 +8,7 @@ import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { languageOf } from '../src/shared/language.ts';
 import { taskText } from '../src/shared/messages/tasks.ts';
-import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 async function waitFor(condition: () => boolean, label: string, timeoutMs = 4000): Promise<void> {
   const until = Date.now() + timeoutMs;
@@ -59,9 +59,9 @@ function gatedReply(text = '変更なし'): { script: Script; release: () => voi
 }
 
 function toolCallScript(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

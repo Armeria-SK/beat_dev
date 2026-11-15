@@ -6,14 +6,14 @@ import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 // 段 8（A3）: 道具ごとの方針がエンジンを通ったときの動き。block はモデルに渡す道具の一覧から外れ、数えるときも同じ一覧を通る
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

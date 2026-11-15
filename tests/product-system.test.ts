@@ -9,13 +9,13 @@ import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { INSTRUCTIONS_DEFAULT_TOKENS, instructionsBudget, instructionsSection, linkTarget, readInstructions } from '../src/projects/instructions.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 import { startScreenServer } from './screen-server.ts';
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

@@ -144,6 +144,7 @@ export interface ToolContext {
   // agent_run: 子の担当を始めて、終わるまで待つ（チャット・許したタスクの実行にだけ付く。子の実行には付かない = 深さ 1）。結果は区切りで包んだ答え。失敗は isError
   agent?: ((input: AgentRunInput, callId?: string) => Promise<ToolOutput>) | undefined;
   runTool?: ((name: string, input: unknown) => Promise<ToolRunResult>) | undefined;
+  deferred?: { loaded: ReadonlySet<string>; list: () => ToolDef[]; load: (names: readonly string[]) => void } | undefined;
   // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
 }

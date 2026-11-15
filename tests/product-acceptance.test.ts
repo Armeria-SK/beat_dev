@@ -27,16 +27,16 @@ import type { ToolContext } from '../src/tools/types.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
 import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
 const PROJECT = 'aaaaaaaa-0000-4000-8000-0000000000aa';
 const OTHER = 'bbbbbbbb-0000-4000-8000-0000000000bb';
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

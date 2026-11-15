@@ -2,6 +2,13 @@ import type { AppConfig } from '../config/schema.ts';
 import type { ToolSpec } from '../engine/types.ts';
 import type { RunKind, ToolDef } from './types.ts';
 
+export const CORE_TOOLS: ReadonlySet<string> = new Set([
+  'file_read', 'file_list', 'file_search', 'file_write', 'file_edit', 'shell_run', 'web_search', 'web_fetch', 'skill_view', 'history_search',
+  'task_complete', 'task_checkpoint', 'question_add', 'plan_write', 'acceptance_write', 'acceptance_change', 'mesh_search', 'mesh_read', 'tool_search',
+]);
+
+export const isCore = (tool: Pick<ToolDef, 'name' | 'mcp'>): boolean => tool.mcp === undefined && CORE_TOOLS.has(tool.name);
+
 export interface RunOptions { limit?: number | undefined; exclude?: (tool: ToolDef) => boolean }
 
 export class ToolRegistry {

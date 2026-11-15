@@ -18,7 +18,7 @@ import { buildPolicy } from '../src/tools/policy.ts';
 import { planAllows } from '../src/tools/pipeline.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, tempDir, type Script, testConfig } from './helpers.ts';
+import { FakeAdapter, offered, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 const KEY = 'sk-ant-test-0000000000000000';
@@ -30,9 +30,9 @@ function git(cwd: string, args: string[], env: Record<string, string> = {}): str
 }
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }
@@ -95,7 +95,7 @@ test('deviation_add: 製品のタスクの実行で動き、deviations.md に 1 
   const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user', projectId: shop.id });
   s.adapter().scripts.push(toolCall('deviation_add', { what: 'Used a table instead of cards', why: 'The data has many columns' }), toolCall('task_complete', { summary: 'done', notify: false }));
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.ok(s.adapter().calls[0]!.tools.some(tool => tool.name === 'deviation_add'), '製品のタスクの実行に渡る');
+  assert.ok(offered(s.adapter().calls[0]!).includes('deviation_add'), '製品のタスクの実行に渡る');
   assert.match(JSON.stringify(s.adapter().calls[1]!.messages), /Recorded in deviations\.md \(no item\)\. Keep working/u);
   const text = readFileSync(fileOf(s, shop.id), 'utf8');
   assert.match(text, /^# Deviations from the plan\n/u);

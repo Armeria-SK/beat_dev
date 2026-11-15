@@ -9,16 +9,16 @@ import { placePath } from '../src/tools/hooks/scope.ts';
 import { BROWSER_TOOLS } from '../src/tools/builtin/browser.ts';
 import { isBrowserTool } from '../src/tools/browser/names.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, type Script, testConfig } from './helpers.ts';
+import { reply, type Script, testConfig, withLoad, notSearch, offered } from './helpers.ts';
 import { FakeBrowserDriver } from './helpers/fake-browser.ts';
 
 // T-09 / T-12: ブラウザの道具が渡る場面（既定は無効、モデルを選んだ会話でも渡る、計画モードでは submits の道具は外す）と、プロファイルの置き場所
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -31,7 +31,7 @@ async function chat(s: Started, id: string, text: string, model?: string): Promi
   return sent.body.runId as string;
 }
 
-const names = (s: Started, n: number) => s.adapter().calls[n]!.tools.map(t => t.name);
+const names = (s: Started, n: number) => offered(s.adapter().calls[n]!);
 const browserNames = (s: Started, n: number) => names(s, n).filter(isBrowserTool).sort();
 const ALL = ['browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type'];
 const enable = (c: ReturnType<typeof testConfig>) => { c.tools.browser.enabled = true; };
@@ -75,7 +75,7 @@ test('T-09 無効のあいだにモデルが browser_open を呼んでも、パ�
   s.adapter().scripts = [call('browser_open', { url: 'https://example.com/' }), reply('断られた')];
   const id = uuid(4);
   await chat(s, id, '開いて');
-  const tool = s.app.conversations.messages(id).find(m => m.role === 'tool');
+  const tool = s.app.conversations.messages(id).find(notSearch);
   assert.ok(tool, '道具の結果がある');
   assert.match(tool.text, /tools\.browser\.enabled/u);
   assert.equal(driver.launches, 0);
@@ -87,7 +87,7 @@ test('有効にして browser_open を呼ぶと、ページの内容が返り、
   s.adapter().scripts = [call('browser_open', { url: 'https://example.com/' }), reply('読んだ')];
   const id = uuid(5);
   await chat(s, id, '開いて');
-  const tool = s.app.conversations.messages(id).find(m => m.role === 'tool');
+  const tool = s.app.conversations.messages(id).find(notSearch);
   assert.ok(tool?.text.includes('hello world'), tool?.text);
   assert.equal(driver.launches, 1);
   assert.equal(s.app.conversations.get(id)?.ever_tainted, 1);

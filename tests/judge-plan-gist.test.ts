@@ -13,11 +13,11 @@ import { PLAN_MAX_CHARS, planGist } from '../src/projects/plan.ts';
 import { PLAN_GIST_LABEL } from '../src/tasks/store.ts';
 import { ACTION_BODY_LIMIT, buildClassifierPrompt, USER_REQUEST_LIMIT, USER_REQUEST_TOKENS } from '../src/tools/auto-approve.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

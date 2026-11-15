@@ -207,7 +207,7 @@ test('試しの提供元で、A・B の 2 組 × 12 問の表が出る。要約�
   const pb = result.request.parts.b!;
   assert.ok(pb.meshTools > 0 && pb.index > 0, JSON.stringify(result.request.parts));
   assert.equal(result.request.added.b, pb.index + pb.meshTools);
-  assert.match(result.notes.join(' '), /mesh tools the chat passes: mesh_search, mesh_read, mesh_state_set/u);
+  assert.match(result.notes.join(' '), /mesh tools the chat passes: mesh_search, mesh_read$/u);
   const ratio = Math.round(((result.request.base + result.request.added.b!) / result.request.base) * 100) / 100;
   assert.ok(ratio > 1 && ratio <= 1.2, String(ratio));
   const report = renderReport(result.rows, { title: 'Mesh probe', notes: result.notes, requests: { [model.id]: result.request } });

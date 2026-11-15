@@ -11,16 +11,16 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { PlanStore, type PlanMeta } from '../src/projects/plan.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 const PROJECT = 'aaaaaaaa-0000-4000-8000-0000000000ab';
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 const OWNER = { by: 'owner' as const, tainted: false, conversationId: null, runId: null };
 const AI_TAINTED = { by: 'ai' as const, tainted: true, conversationId: 'c1', runId: 'r1' };
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

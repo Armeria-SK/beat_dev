@@ -234,6 +234,7 @@ export const en = {
   'tool.task_checkpoint': 'Save progress on a task and rest',
   'tool.task_complete': 'Finish a task',
   'tool.question_add': 'Record a question for you and keep working',
+  'tool.tool_search': 'Load a tool that is not given every time (only for the rest of that run)',
   'tool.question_list': 'List the questions of the product and your answers',
   'tool.deviation_add': 'Note where the work differs from the plan',
   'tool.skill_view': 'Read the body of a skill',

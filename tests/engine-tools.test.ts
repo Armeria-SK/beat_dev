@@ -14,12 +14,12 @@ import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../src/tools/types.ts';
 import { CONVERSATION, fakeModel, startApp } from './app-setup.ts';
-import { fail, JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { fail, JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }
@@ -204,7 +204,7 @@ test('maxTools で渡すツールを絞れる', async t => {
   const s = await setup(t, { maxTools: 2 });
   s.adapter().scripts.push(reply('ok'));
   await (await s.send('やあ')).done;
-  assert.deepEqual(s.adapter().calls[0]!.tools.map(t => t.name), ['history_search', 'web_search'], '履歴の検索を先に残す（記憶の道具は渡さない）');
+  assert.deepEqual(s.adapter().calls[0]!.tools.map(t => t.name), ['tool_search', 'history_search'], '履歴の検索を先に残す（記憶の道具は渡さない）');
 });
 
 test('引数の形が3回続けて正しくなければ止める', async t => {

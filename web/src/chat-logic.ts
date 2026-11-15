@@ -258,6 +258,7 @@ export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
   skill_view: 'wrench', skill_draft: 'wrench',
   task_create: 'tasks', task_list: 'tasks', task_update: 'tasks', task_checkpoint: 'tasks', task_complete: 'tasks',
   question_add: 'help', question_list: 'help', deviation_add: 'pencil',
+  tool_search: 'search',
   curiosity_add: 'sparkles', curiosity_list: 'sparkles', curiosity_update: 'sparkles',
   calculate: 'sliders', date_calc: 'clock',
   checklist_write: 'check', notify_owner: 'bell',

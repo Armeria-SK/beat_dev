@@ -18,7 +18,8 @@ import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
 import { SkillStore } from '../src/tools/skills/store.ts';
 import { isBrowserTool } from '../src/tools/browser/names.ts';
-import { ToolRegistry } from '../src/tools/registry.ts';
+import { isCore, ToolRegistry } from '../src/tools/registry.ts';
+import { deferredSection } from '../src/tools/builtin/tool-search.ts';
 import { FakeAdapter, reply, tempDir } from './helpers.ts';
 
 const CJK = /[\u{3000}-\u{30FF}\u{3400}-\u{4DBF}\u{4E00}-\u{9FFF}\u{FF00}-\u{FFEF}]/u; // 全角の空白・かな・漢字・全角の記号
@@ -152,7 +153,8 @@ test('buildSnapshot: ルールと見出しで組み立てる', t => {
 
 test('baseTokens: ルールと動的な部分の長さで見積もる', async t => {
   const s = await startApp(t);
-  const rest = () => estimateToolTokens(ToolRegistry.specs(s.app.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' || isBrowserTool(tool.name) || tool.name === 'acceptance_change' }))) + 64; // 既定では agent_run と browser_* は無効で、モデルに渡らない。acceptance_change は acceptance_write と同時には渡らない
+  const given = () => s.app.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' || isBrowserTool(tool.name) || tool.name === 'acceptance_change' });
+  const rest = () => estimateToolTokens(ToolRegistry.specs(given().filter(isCore))) + estimateTextTokens(deferredSection(given().filter(tool => !isCore(tool)), s.app.config())) + 64; // 既定では agent_run と browser_* は無効で、モデルに渡らない。acceptance_change は acceptance_write と同時には渡らない
   const expected = estimateTextTokens(buildSnapshot(s.paths, { skills: '' }).text) + estimateTextTokens(buildDynamic(s.app.config().timezone)) + rest();
   assert.equal(s.app.baseTokens(), expected);
 });

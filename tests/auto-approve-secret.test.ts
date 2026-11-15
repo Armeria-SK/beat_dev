@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { withLoad } from './helpers.ts';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,9 +16,9 @@ const KEY = 'Zk3qP9xW7mB2vN8cLd5Tq1';
 type Started = Awaited<ReturnType<typeof startApp>>;
 
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
-const toolCall = (name: string, args: unknown): Script => async function* () {
+const toolCall = (name: string, args: unknown): Script => async function* (req) {
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

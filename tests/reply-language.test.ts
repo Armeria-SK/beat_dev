@@ -14,7 +14,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { systemLocale } from '../src/tools/browser/driver.ts';
 import { attachmentBlock, LEGACY_ATTACHMENT_FRAMES, stripAttachments, type Upload } from '../src/uploads/store.ts';
 import { CONVERSATION, settled, startApp } from './app-setup.ts';
-import { tempDir, testConfig, type Script } from './helpers.ts';
+import { tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 // 0-2a-3: 言語の切り替えを消したあとも、返事は持ち主が書いた言語で返し、持ち主の前からあるデータ（設定・会話・作業フォルダ）は変えない
 
@@ -23,9 +23,9 @@ const JA_SNAPSHOT = '# beat の基本ルール\n\n返事は日本語で書く\n\
 const LANGUAGE_KV = "SELECT key, value FROM kv WHERE key LIKE 'snapshot-language:%' OR key LIKE 'reply-language:%' ORDER BY key";
 
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
-const toolCall = (name: string, args: unknown): Script => async function* () {
+const toolCall = (name: string, args: unknown): Script => async function* (req) {
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

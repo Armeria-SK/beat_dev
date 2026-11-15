@@ -9,7 +9,7 @@ import { scrubEnv } from '../src/tools/shell/runner.ts';
 import { toolRow } from '../web/src/ui/tool-row.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { CONVERSATION, startApp } from './app-setup.ts';
-import { reply, type Script } from './helpers.ts';
+import { reply, type Script, withLoad } from './helpers.ts';
 
 // 伏せ字（redactSecrets）が、URL の中の秘密（? と & と # のあとの名前、userinfo）と、別の「名前:」のうしろに続く秘密を伏せる。
 // 道具に渡した引数は、会話にはそのまま保存し（モデルに戻す中身を変えない）、見せる所・書き出す所で伏せる
@@ -267,9 +267,9 @@ const echoTool: ToolDef = {
 };
 
 function callTool(args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: 'call_secret_1', name: 'echo_args', arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' };
   };
 }

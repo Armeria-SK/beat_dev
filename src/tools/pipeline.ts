@@ -23,7 +23,7 @@ import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
 import { outboundOfCall, type Outbound } from './hooks/outbound.ts';
 import { windowsNames } from './hooks/scope.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
-import type { ToolRegistry } from './registry.ts';
+import { isCore, type ToolRegistry } from './registry.ts';
 import { isBrowserTool } from './browser/names.ts';
 import { effectivePolicy, type HasPolicies, type ToolPolicy } from './tool-policy.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
@@ -255,6 +255,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (isBrowserTool(tool.name) && !browserEnabled(ctx, deps)) return refuse('deny', 'mode', guardText(language, 'browser.off'));
   // 計画モードでは、読む道具と Web の読み取りのほかは使わせない（モデルに渡す一覧からも外している。二重の拒否）
   if (effectiveMode(ctx, deps) === 'plan' && !planAllows(tool)) return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
+  if (ctx.deferred && !isCore(tool) && !ctx.deferred.loaded.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_loaded', { name: tool.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);
   const args = Value.Default(tool.input, Value.Clone(call.arguments));
   if (!Value.Check(tool.input, args)) {

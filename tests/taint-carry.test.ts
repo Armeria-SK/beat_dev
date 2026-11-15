@@ -11,7 +11,7 @@ import { resolvePaths } from '../src/paths.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { settled, waitFor } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 const C = 'c1';
 const EVIL: AttachmentMeta = { id: 'u1', name: 'evil.txt', kind: 'text' };
@@ -24,9 +24,9 @@ const network: PageNetwork = {
   get: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from('<!doctype html><html><head><title>t</title></head><body><main><p>ページの本文</p></main></body></html>') }) as PageResponse,
 };
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 // 止められるまで返事を始めない

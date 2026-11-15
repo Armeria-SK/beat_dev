@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { withLoad } from './helpers.ts';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,9 +16,9 @@ import { startApp } from './app-setup.ts';
 import type { Script } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

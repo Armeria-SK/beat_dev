@@ -12,7 +12,7 @@ import { htmlText } from '../src/tools/web/html-text.ts';
 import { decodeText, defaultNetwork, fetchPublic, mediaTypeOf, pageUrl, publicIPv4, RetrievalFailure, type PageNetwork, type PageResponse } from '../src/tools/web/public-page.ts';
 import { parseDuckDuckGo, searchDuckDuckGo, SearchFailure, SearchThrottle } from '../src/tools/web/search.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 function fakeNetwork(dns: Record<string, string[]>, pages: Record<string, Partial<PageResponse>>): PageNetwork & { gets: string[] } {
   const gets: string[] = [];
@@ -143,9 +143,9 @@ test('検索の回数を抑える（連打は間をあけ、1時間の上限で�
 });
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

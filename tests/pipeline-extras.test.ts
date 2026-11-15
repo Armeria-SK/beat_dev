@@ -17,7 +17,7 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef, ToolEffect } from '../src/tools/types.ts';
 import { CONVERSATION, settled, startApp } from './app-setup.ts';
-import { tempDir, testConfig, type Script } from './helpers.ts';
+import { tempDir, testConfig, type Script, offered } from './helpers.ts';
 
 // 段 4-3: パイプラインの足し分。X1 ToolOutput.fetched（結果が外の中身を持ち込んだ印）、X2 ToolDef.writesFiles（計画モード・外を読んだあとの確かめで書き込みと同じ）、
 // X6 ToolDef.networkCall（この呼び出しが外へ出るなら、外を読んだ印と、自動承認で外を読んだ会話の毎回の確かめを network と同じに）。
@@ -153,7 +153,7 @@ test('X2 モデルに渡す道具の一覧（エンジンの #toolsFor）: 計�
   s.app.tools.register(tool(ran, 'net_writer', 'network', { writesFiles: true }));
   const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
   s.adapter().scripts = [say('計画です'), say('ふつうです')];
-  const names = (index: number) => s.adapter().calls[index]!.tools.map(x => x.name);
+  const names = (index: number) => offered(s.adapter().calls[index]!);
   const plan = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: '計画して', permissionMode: 'plan' });
   await settled(s.app, plan.body.runId);
   assert.ok(names(0).includes('file_read') && names(0).includes('web_fetch') && names(0).includes('net_plain'), '読む道具と writesFiles の無い network の道具は残る');

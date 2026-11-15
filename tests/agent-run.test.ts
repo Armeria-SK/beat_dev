@@ -8,7 +8,7 @@ import { agentRun } from '../src/tools/builtin/agent.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { JudgeAdapter, judgeTextOf, reply, type Script, testConfig } from './helpers.ts';
+import { JudgeAdapter, judgeTextOf, reply, type Script, testConfig, withLoad } from './helpers.ts';
 import { AGENT_RESULT_MAX_CHARS, toFullWidth } from '../src/engine/chat.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
@@ -20,9 +20,9 @@ import { TOOL_OUTPUT_LIMIT } from '../src/tools/pipeline.ts';
 type Started = Awaited<ReturnType<typeof startApp>>;
 type Config = ReturnType<typeof testConfig>;
 
-const call = (name: string, args: unknown, id = `call_${Math.random().toString(36).slice(2)}`): Script => async function* () {
+const call = (name: string, args: unknown, id = `call_${Math.random().toString(36).slice(2)}`): Script => async function* (req) {
   const toolCall: ToolCall = { id, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -40,13 +40,16 @@ async function chat(s: Started, id: string, text: string): Promise<string> {
 }
 
 const names = (s: Started, n: number) => s.adapter().calls[n]!.tools.map(t => t.name);
-const toolMessage = (s: Started, conversationId: string) => s.app.conversations.messages(conversationId).find(m => m.role === 'tool')?.text ?? '';
+const notSearch = (m: { role: string; message: { role: string; name?: string } }) => m.role === 'tool' && !(m.message.role === 'tool' && m.message.name === 'tool_search');
+const toolMessage = (s: Started, conversationId: string) => s.app.conversations.messages(conversationId).find(notSearch)?.text ?? '';
+const deferredList = (s: Started, n: number) => s.adapter().calls[n]!.system.dynamic;
 
 test('T-01 既定（tools.agent を書かない）では、agent_run はモデルに渡らない', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')] });
   s.adapter().scripts = [reply('こんにちは')];
   await chat(s, uuid(1), 'やあ');
   assert.equal(names(s, 0).includes('agent_run'), false);
+  assert.equal(deferredList(s, 0).includes('- agent_run:'), false);
   assert.ok(names(s, 0).includes('file_read'), '前提: ほかの道具は渡っている');
   assert.ok(builtinTools().some(tool => tool.name === 'agent_run'), '道具としては登録されている');
 });
@@ -55,7 +58,7 @@ test('T-02 enabled のとき、チャットの実行には agent_run が渡る',
   const s = await startApp(t, enable());
   s.adapter().scripts = [reply('こんにちは')];
   await chat(s, uuid(1), 'やあ');
-  assert.ok(names(s, 0).includes('agent_run'));
+  assert.ok(deferredList(s, 0).includes('- agent_run:'));
 });
 
 test('T-03 親が agent_run を呼ぶと、子の会話と子の run ができ、子の最後の返事が区切りで包まれて親の結果になる。T-04 子の会話は一覧に出ない。T-05 子の発言は親の履歴に入らない', async t => {
@@ -93,7 +96,7 @@ test('T-03 親が agent_run を呼ぶと、子の会話と子の run ができ�
   for (const allowed of ['file_read', 'calculate', 'web_fetch']) assert.equal(childTools.includes(allowed), true, allowed);
 });
 
-const toolMessages = (s: Started, conversationId: string) => s.app.conversations.messages(conversationId).filter(m => m.role === 'tool');
+const toolMessages = (s: Started, conversationId: string) => s.app.conversations.messages(conversationId).filter(notSearch);
 const gateOf = (s: Started, conversationId: string, name: string) => toolMessages(s, conversationId).map(m => m.message).flatMap(m => (m.role === 'tool' && m.name === name ? [m.gate] : []))[0];
 const childRuns = (s: Started) => s.app.conversations.db.prepare("SELECT id, conversation_id, parent_run_id, ok, tool_calls, tainted FROM engine_runs WHERE kind = 'agent' ORDER BY started_at").all() as Array<{ id: string; conversation_id: string; parent_run_id: string; ok: number; tool_calls: number; tainted: number }>;
 
@@ -660,7 +663,7 @@ test('T-46 親が始めたあとに tools.agent.enabled を切ると、その実
     await s.app.applyConfig(config, { probe: false });
     yield* call('agent_run', { task: '任せる' })(req);
   };
-  s.adapter().scripts = [switchOff, reply('親の最後の返事')];
+  s.adapter().scripts = [call('tool_search', { query: 'agent_run' }), switchOff, reply('親の最後の返事')];
   const parent = uuid(1);
   await chat(s, parent, '任せたい');
   assert.equal(childRuns(s).length, 0, '子は始まらない');
@@ -677,7 +680,7 @@ test('T-47 タスクの親が始めたあとに tools.agent.inTasks を切ると
     await s.app.applyConfig(config, { probe: false });
     yield* call('agent_run', { task: '任せる' })(req);
   };
-  s.adapter().scripts = [switchOff, reply('タスクの返事')];
+  s.adapter().scripts = [call('tool_search', { query: 'agent_run' }), switchOff, reply('タスクの返事')];
   const task = s.app.tasks.create({ title: '任せるタスク', origin: 'user', actor: 'user' });
   await s.app.worker.tick();
   const conversationId = s.app.tasks.get(task.id)!.conversation_id!;

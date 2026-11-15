@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, type Script, testConfig } from './helpers.ts';
+import { reply, type Script, testConfig, withLoad, notSearch } from './helpers.ts';
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
 const WORD = 'zzyzxsecret';
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -38,7 +38,7 @@ async function reviewed(s: Started, source: string): Promise<string> {
   return job.review_conversation_id;
 }
 
-const toolResult = (s: Started, conversationId: string) => (s.app.conversations.messages(conversationId).find(m => m.role === 'tool')?.text ?? '');
+const toolResult = (s: Started, conversationId: string) => (s.app.conversations.messages(conversationId).find(notSearch)?.text ?? '');
 async function asRun(s: Started, conversationId: string, modelId: string | null, script: Script, adapterId: 'fake' | 'ext'): Promise<string> {
   s.app.conversations.create({ id: conversationId, title: '検索する会話' });
   if (modelId) s.app.conversations.setChoice(conversationId, { modelId });
