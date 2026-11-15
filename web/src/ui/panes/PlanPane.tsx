@@ -8,7 +8,7 @@ import { useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
 import { Markdown } from '../../Markdown.tsx';
 import {
-  acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
+  acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildPill, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
   decisionFailure, diffLabel, editAccess, editBase, editHint, editOp, editRequest, formProblem, itemDetails, itemForm, loadedAcceptance, noticeAfterReload, outsideContent, pagingCursor, previousVersion, problemField, proposalRows, proposalStale, removeOp, revealSection, revealStep,
   showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, stateTone, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type EditBase, type ItemForm, type Paging,
 } from '../acceptance.ts';
@@ -454,9 +454,9 @@ function BeforeBuild({ productId, acc, coverage, sectionRef }: { productId: stri
   );
 }
 
-export interface PlanPaneProps { productId: string; revision: string; taskRevision?: string; isGit: boolean; reveal?: boolean; onRevealed?: () => void }
+export interface PlanPaneProps { productId: string; conversationId?: string | undefined; revision: string; taskRevision?: string; isGit: boolean; reveal?: boolean; onRevealed?: () => void }
 
-export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal = false, onRevealed }: PlanPaneProps) {
+export function PlanPane({ productId, conversationId, revision, taskRevision = '', isGit, reveal = false, onRevealed }: PlanPaneProps) {
   const t = useT();
   const key = PLAN_EDITS + productId;
   const [doc, setDoc] = useState<PlanDoc | null>(null);
@@ -556,6 +556,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
   const state = planState(doc, failure !== null);
   const writing = state === 'writing';
   const action = buildAction({ state, mode, acc, task, isGit, pending: building });
+  const pill = buildPill(task?.status);
   const shown = beforeBuildShown({ mode, acc, coverage, action });
   const step = revealStep({ reveal, accLoaded: acc !== null, accFailed, state, shown });
 
@@ -579,7 +580,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
     setBuildNotice(null);
     let outcome: BuildFailure | null = null;
     try {
-      const r = await api.build(productId, hashes);
+      const r = await api.build(productId, hashes, conversationId);
       focusRunning.current = true;
       setSentBuild(r.task.id);
       setTask(r.task);
@@ -704,7 +705,7 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
         </span>
         {mode === 'edit' && <Button variant="primary" small disabled={!canSave(state, dirty, saving)} onClick={() => void save()}>{t('ui.plan.save')}</Button>}
         {action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
-        {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill tone="running">{t('ui.plan.building')}</Pill></span>}
+        {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill {...(pill.tone ? { tone: pill.tone } : {})}>{t(pill.label)}</Pill></span>}
       </div>
       <div role="status" className="ui-plan__live">
         {buildNotice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} />}

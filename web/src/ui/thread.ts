@@ -1,4 +1,4 @@
-import type { ChecklistItem, Message, ToolGate } from '../api.ts';
+import type { ChatBuild, ChecklistItem, Message, ToolGate } from '../api.ts';
 import { replyTurns } from '../chat-logic.ts';
 import { formatDateTime, formatDateTimeSmart, timezoneLabel } from '../i18n/index.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
@@ -21,12 +21,27 @@ export type ThreadItem =
   | { kind: 'tools'; key: string; rows: ToolItem[] }
   | { kind: 'live'; key: string; text: string; since: number | null }
   | { kind: 'notice'; key: string; weight: NoticeWeight; notices: RunNotice[] }
-  | { kind: 'plan'; key: string };
+  | { kind: 'plan'; key: string }
+  | { kind: 'build'; key: string; build: ChatBuild };
 
 export interface ThreadInput {
   messages: readonly Message[];
   draft?: LiveDraft | undefined;
   notices?: readonly RunNotice[];
+  builds?: readonly ChatBuild[];
+}
+
+export type BuildStage = 'queued' | 'running' | 'approval' | 'question' | 'waiting' | 'check' | 'done' | 'failed' | 'stopped';
+
+export function buildStage(b: ChatBuild): BuildStage {
+  switch (b.status) {
+    case 'running': return 'running';
+    case 'waiting': return b.waiting_kind ?? 'waiting';
+    case 'done': return b.check_state === 'awaiting' ? 'check' : 'done';
+    case 'failed': return 'failed';
+    case 'cancelled': return 'stopped';
+    default: return 'queued';
+  }
 }
 
 export function noticeWeight(notice: RunNotice): NoticeWeight {
@@ -53,7 +68,7 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
 
 const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
-export function threadItems({ messages, draft, notices = [] }: ThreadInput): ThreadItem[] {
+export function threadItems({ messages, draft, notices = [], builds = [] }: ThreadInput): ThreadItem[] {
   const pending = new Map<string, string[]>();
   const seen = new Map<string, number>();
   const rowKeyOf = (callId: string): string => {
@@ -76,7 +91,16 @@ export function threadItems({ messages, draft, notices = [] }: ThreadInput): Thr
   const lastOfRun = new Map<string, number>();
   for (const m of visible) if (m.runId && planRuns.has(m.runId)) lastOfRun.set(m.runId, m.id);
 
+  const queue = [...builds].sort((a, b) => a.created_at - b.created_at);
+  const placeBuilds = (until: number): void => {
+    while (queue.length && queue[0]!.created_at < until) {
+      const build = queue.shift()!;
+      items.push({ kind: 'build', key: `build-${build.id}`, build });
+    }
+  };
+
   for (const m of messages) {
+    if (m.role !== 'tool' && !hiddenReply(m)) placeBuilds(m.createdAt);
     if (m.toolCalls?.length) {
       const calls = new Map<string, string[]>();
       for (const call of m.toolCalls) calls.set(call.id, [...(calls.get(call.id) ?? []), call.input]);
@@ -106,16 +130,16 @@ export function threadItems({ messages, draft, notices = [] }: ThreadInput): Thr
     const rowKey = rowKeyOf(done.callId);
     tools(rowKey).push({ key: rowKey, name: done.name, input: done.input, result: null, ...(done.gate ? { gate: done.gate } : {}) });
   });
-  if (draft) {
-    if (draft.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
-    else if (draft.activeTool) {
-      const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
-      tools(rowKey).push({
-        key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
-        running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
-      });
-    } else items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
+  if (draft && !draft.text && draft.activeTool) {
+    const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
+    tools(rowKey).push({
+      key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
+      running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
+    });
   }
+  placeBuilds(Number.POSITIVE_INFINITY);
+  if (draft?.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
+  else if (draft && !draft.activeTool) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
   noticeRows(notices).forEach((row, i) => items.push({ kind: 'notice', key: `n-${row.notices[0]!.runId}-${i}`, ...row }));
   return items;
 }

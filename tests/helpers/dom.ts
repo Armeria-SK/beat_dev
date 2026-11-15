@@ -1,12 +1,14 @@
-import { window } from './dom-env.ts';
+import { listening, window, type Listening } from './dom-env.ts';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 export interface Rendered { container: HTMLElement; root: Root }
 
 const mounted = new Set<Rendered>();
+let before: Listening[] | null = null;
 
 export async function render(node: ReactNode): Promise<Rendered> {
+  before ??= [...listening];
   const container = window.document.createElement('div');
   window.document.body.append(container);
   const root = createRoot(container);
@@ -46,6 +48,9 @@ export async function cleanup(): Promise<void> {
     try { await act(async () => { root.unmount(); }); } catch (error) { first ??= error; }
     container.remove();
   }
+  const kept = before;
+  before = null;
+  if (kept) for (const entry of listening.filter(entry => !kept.includes(entry))) removeEventListener(entry[0], entry[1], entry[2]);
   if (first !== undefined) throw first;
 }
 

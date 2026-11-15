@@ -464,6 +464,10 @@ export class TaskStore {
     return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(parentId));
   }
 
+  buildsFrom(conversationId: string): Task[] {
+    return (this.#db.prepare('SELECT * FROM tasks WHERE created_in_conversation = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 50').all(conversationId) as unknown as Task[]).reverse();
+  }
+
   hasOpenBuild(projectId: string): boolean {
     return this.openBuild(projectId) !== null;
   }
