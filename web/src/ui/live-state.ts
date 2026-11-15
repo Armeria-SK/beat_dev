@@ -2,7 +2,7 @@ import type { ChecklistItem, Conversation, NotificationItem, PendingAction, Pend
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
 
-export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; projectId?: string | null }
+export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; projectId?: string | null; buildChat?: { chat: string; conversation: string | null } }
 
 export interface SettledTool { callId: string; name: string; input: string; gate?: ToolGate | undefined }
 export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined; settledCount?: number | undefined; waitingSince?: number | undefined }
@@ -87,8 +87,11 @@ export const BROWSER_NOTIFY: ReadonlySet<string> = new Set(['task_waiting']);
 const refresh = (...what: Refresh[]): Effect[] => what.map(w => ({ kind: 'refresh', what: w }));
 const counts = (s: LiveState): Effect[] => (s.projects.length ? refresh('projectCounts') : []);
 
+const buildChat = (t: Task): Pick<TaskMark, 'buildChat'> =>
+  (t.created_in_conversation && t.acceptance_items ? { buildChat: { chat: t.created_in_conversation, conversation: t.conversation_id } } : {});
+
 export function mergeTasks(prev: ReadonlyMap<string, TaskMark>, snapshot: readonly Task[]): Map<string, TaskMark> {
-  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), ...(t.check_state ? { checkState: t.check_state, projectId: t.project_id ?? null } : {}) }]));
+  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), ...(t.check_state ? { checkState: t.check_state, projectId: t.project_id ?? null } : {}), ...buildChat(t) }]));
   for (const [id, mark] of prev) {
     const fresh = next.get(id);
     if (fresh ? mark.updatedAt > fresh.updatedAt : mark.live) next.set(id, mark);
@@ -181,8 +184,11 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     }
     case 'memory.changed':
       return { state: addNotice(library(s), e.conversationId, { runId: e.runId, kind: 'memory', action: e.action, content: e.content, eventId: e.eventId }), effects: [] };
-    case 'checklist.updated':
-      return { state: { ...s, checklists: new Map(s.checklists).set(e.conversationId, e.items) }, effects: [] };
+    case 'checklist.updated': {
+      const state = { ...s, checklists: new Map(s.checklists).set(e.conversationId, e.items) };
+      const chat = [...s.tasks.values()].find(mark => mark.buildChat?.conversation === e.conversationId)?.buildChat?.chat;
+      return { state: chat ? bump(state, chat) : state, effects: [] };
+    }
     case 'pendingAction.changed':
       return { state: { ...s, pendingRevision: s.pendingRevision + 1 }, effects: [...refresh('pending'), ...counts(s)] };
     case 'question.changed':
@@ -203,8 +209,9 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
-      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), ...(e.task.check_state ? { checkState: e.task.check_state, projectId: e.task.project_id ?? null } : {}) });
-      const next = { ...s, tasks, taskRevision: s.taskRevision + 1 };
+      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), ...(e.task.check_state ? { checkState: e.task.check_state, projectId: e.task.project_id ?? null } : {}), ...buildChat(e.task) });
+      const chat = buildChat(e.task).buildChat?.chat;
+      const next = { ...(chat ? bump(s, chat) : s), tasks, taskRevision: s.taskRevision + 1 };
       const build = e.task.project_id && e.task.acceptance_items && old?.status !== e.task.status ? e.task.project_id : null;
       return { state: build ? planBump(next, build) : next, effects: [...refresh('worker'), ...counts(s)] };
     }

@@ -273,11 +273,13 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     const planHash = requireString(body, 'planHash', { max: 128 })!;
     const acceptanceHash = body.acceptanceHash === null ? null : requireString(body, 'acceptanceHash', { max: 128 })!;
+    const from = requireString(body, 'conversationId', { optional: true, max: 128 });
+    const conversationId = from !== undefined && app.conversations.get(from)?.kind === 'chat' && app.conversations.projectOf(from) === project.id ? from : undefined;
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
     if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
     let built;
     try {
-      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), now: app.now }, project.id, { planHash, acceptanceHash })));
+      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), now: app.now }, project.id, { planHash, acceptanceHash, conversationId })));
     } catch (error) {
       if (error instanceof BuildError) throw domainProblem(error.code === 'no_plan' ? 400 : 409, 'build', error);
       if (error instanceof ProjectError) throw projectProblem(400, error);

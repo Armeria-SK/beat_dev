@@ -122,6 +122,9 @@ export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: A
   return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' || i.pending === true };
 }
 
+export const buildPill = (status: Task['status'] | undefined): { label: 'ui.plan.queued' | 'ui.plan.building' | 'ui.plan.waiting'; tone?: 'running' | 'waiting' } =>
+  (status === 'running' ? { label: 'ui.plan.building', tone: 'running' } : status === 'waiting' ? { label: 'ui.plan.waiting', tone: 'waiting' } : { label: 'ui.plan.queued' });
+
 export const watchedBuild = (sent: string | null, acc: Acceptance | null): string | null => acc?.open_build_task_id ?? sent;
 
 const buildLeft = (acc: Acceptance): boolean => (acc.unbuilt?.length ?? 0) > 0;

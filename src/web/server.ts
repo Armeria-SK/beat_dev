@@ -246,6 +246,10 @@ export function createWebServer(app: App): WebServer {
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError), ...(m.message.gate ? { gate: m.message.gate } : {}) } : {}),
       })),
       pending: app.engine.pending(id),
+      builds: app.tasks.buildsFrom(id).map(task => {
+        const list = task.conversation_id ? readChecklist(app.kv, task.conversation_id) : undefined;
+        return { id: task.id, status: task.status, waiting_kind: task.waiting_kind, check_state: task.check_state, project_id: task.project_id, created_at: task.created_at, updated_at: task.updated_at, checklist: { items: list?.items ?? [], tainted: list?.tainted ?? false } };
+      }),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
     });
   });

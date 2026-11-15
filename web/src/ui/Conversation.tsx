@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
-import { api, ApiError, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
+import { api, ApiError, type ChatBuild, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
 import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
@@ -21,7 +21,7 @@ import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
-import { contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem } from './thread.ts';
+import { buildStage, contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem } from './thread.ts';
 import { ToolGroup, type PendingLink } from './ToolRow.tsx';
 
 type T = ReturnType<typeof useT>;
@@ -42,7 +42,7 @@ export interface ConversationProps {
   panes?: PanesToggle | undefined;
 }
 
-interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[] }
+interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[]; builds: ChatBuild[] }
 interface Choice { modelId: string | null; effort: string | null; permissionMode: PermissionMode }
 const NO_CHOICE: Choice = { modelId: null, effort: null, permissionMode: 'auto' };
 
@@ -100,6 +100,24 @@ function PlanWritten({ onOpen, rising }: { onOpen: (() => void) | undefined; ris
       <span className="bt-notice__rule" />
     </div>
   );
+}
+
+const BUILD_TEXT = {
+  queued: 'ui.build.queued', running: 'ui.build.running', approval: 'ui.build.approval', question: 'ui.build.question', waiting: 'ui.build.waiting',
+  check: 'ui.build.check', done: 'ui.build.done', stopped: 'ui.build.stopped', failed: 'ui.build.failed',
+} as const;
+
+function BuildRow({ build, openPending }: { build: ChatBuild; openPending: (() => void) | undefined }) {
+  const t = useT();
+  const stage = buildStage(build);
+  const go = (hash: string) => () => { location.hash = hash; };
+  const openTask = { label: t('ui.notifications.open.task'), run: go(routeHash({ view: 'task', id: build.id })) };
+  const product = build.project_id ? { productId: build.project_id } : {};
+  const place = stage === 'approval' ? { label: t('ui.notifications.open.pending'), run: openPending ?? go(routeHash({ view: 'pending', ...product })) }
+    : stage === 'question' ? { label: t('ui.notifications.open.questions'), run: go(routeHash({ view: 'questions', ...product })) } : null;
+  const list = stage !== 'running' && build.checklist.items.length > 0 ? <Checklist items={build.checklist.items} tainted={build.checklist.tainted} live={false} /> : null;
+  if (stage === 'failed') return <div data-build={build.id}><Notice tone="fail" title={t('ui.build.failed')} text={t('ui.build.failedText')} action={openTask} />{list}</div>;
+  return <div data-build={build.id}><Notice title={t(BUILD_TEXT[stage])} {...(place ? { action: place, also: openTask } : { action: openTask })} />{list}</div>;
 }
 
 interface FailAction { label: string; run: () => void }
@@ -318,7 +336,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     try {
       const r = await api.messages(id);
       if (!loads.current.isCurrent(ticket)) return;
-      setLoaded({ conversation: r.conversation, messages: r.messages, pending: r.pending ?? [] });
+      setLoaded({ conversation: r.conversation, messages: r.messages, pending: r.pending ?? [], builds: r.builds ?? [] });
       setGone(false);
     } catch (error) {
       if (!loads.current.isCurrent(ticket)) return;
@@ -341,7 +359,9 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   const conversation = loaded?.conversation ?? null;
   const messages = loaded?.messages ?? [];
   const pending = loaded?.pending ?? [];
-  const items = threadItems({ messages, draft, notices });
+  const builds = loaded?.builds ?? [];
+  const items = threadItems({ messages, draft, notices, builds });
+  const runningBuild = builds.find(b => b.status === 'running' && b.checklist.items.length > 0);
   const checklist = liveChecklist ?? readList?.items ?? [];
   const lastIsUser = messages.at(-1)?.role === 'user';
 
@@ -532,6 +552,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         return <Notice key={item.key} tone="warn" icon="alert" title={noticeText(t, n)} />;
       }
       case 'plan': return <PlanWritten key={item.key} onOpen={panes?.onOpenPlan ? () => panes.onOpenPlan?.(false) : undefined} rising={rise(item.key)} />;
+      case 'build': return <BuildRow key={item.key} build={item.build} openPending={openPending} />;
     }
   }
 
@@ -566,6 +587,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         )}
       </div>
       {running && checklist.length > 0 && <Checklist items={checklist} tainted={readList?.tainted ?? false} live className="ui-pinned bt-rise" />}
+      {!(running && checklist.length > 0) && runningBuild && <Checklist items={runningBuild.checklist.items} tainted={runningBuild.checklist.tainted} live className="ui-pinned bt-rise" />}
       {!gone && !helper && (
         <Composer
           draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} planless={startMode === 'plan'} running={running} sending={sending} pending={pending}

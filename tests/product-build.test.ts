@@ -93,6 +93,17 @@ test('3-2-s 要件の聞き取りの文: ふつうの形は 700 トークン以�
   assert.equal(section.trim().split('\n').length, 2, '一覧を書く節は見出しと 1 行だけ（決まりは道具の説明にある）');
 });
 
+test('要件の聞き取りの文: ファイルを書くのは Build で、持ち主が Plan の欄の Build で始める。コードを貼る・別の環境を勧めることはせず、始めてと言われたら Build を押すよう言う', t => {
+  const paths = resolvePaths(tempDir(t));
+  for (const text of [requirementsText(paths, 100_000), requirementsText(paths, 12_672)]) {
+    assert.match(text, /files are written by Build/iu);
+    assert.match(text, /owner starts it with Build in the Plan pane/iu);
+    assert.match(text, /never offer to paste code/iu);
+    assert.match(text, /another (tool or )?environment/iu);
+    assert.match(text, /if (the owner|they) asks? (you )?to start[^.]*press Build/iu);
+  }
+});
+
 test('3-2-s 要件の聞き取りの文: Windows の改行（CRLF）のファイルでも、モデルへは LF で渡す', t => {
   const paths = resolvePaths(tempDir(t));
   const templates = tempDir(t);
@@ -257,6 +268,40 @@ test('3-2-s Build: 一覧が無くても Build でき、空の v1 と acceptance
   assert.deepEqual({ version: doc.version, items: doc.items, notDoing: doc.notDoing, language: doc.language }, { version: 1, items: [], notDoing: [], language: 'ja' });
   assert.equal(s.app.acceptance.verifyFrozen(shop.id), 'ok');
   assert.equal(judgeSeesTaint(s.app.tasks, built.body.task.id), false);
+});
+
+test('Build の会話: Plan の欄の会話から押した Build は、持ち主が書いた計画でもその会話を記録し、出来事と会話の読み出し（builds）がそれを運ぶ。別の製品の会話・無い会話は記録しない', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const other = await s.product('other');
+  s.adapter().scripts = [reply('hi'), reply('there')];
+  await s.send(uuid(1), { text: 'hello', projectId: shop.id });
+  await s.send(uuid(2), { text: 'hello', projectId: other.id });
+  await s.ownerPlan(shop.id, '# Plan');
+  const wanted = { planHash: (await s.plan(shop.id)).hash, acceptanceHash: (await s.list(shop.id)).acceptance.hash };
+  const built = await s.build(shop.id, { ...wanted, conversationId: uuid(1) });
+  assert.equal(built.status, 201, JSON.stringify(built.body));
+  const task = built.body.task;
+  assert.equal(task.created_in_conversation, uuid(1), '押した会話（計画は持ち主が書いた）');
+  assert.ok(s.events.some(e => e.type === 'task.changed' && e.task.id === task.id && e.task.created_in_conversation === uuid(1)), '出来事が会話を運ぶ');
+  const read = await s.json(`/api/conversations/${uuid(1)}/messages`, 'GET');
+  assert.deepEqual(read.body.builds.map((b: { id: string; status: string }) => [b.id, b.status]), [[task.id, 'ready']]);
+  assert.deepEqual(read.body.builds[0].checklist, { items: [], tainted: false });
+  assert.deepEqual((await s.json(`/api/conversations/${uuid(2)}/messages`, 'GET')).body.builds, []);
+
+  for (const [name, conversationId] of [['p3', uuid(2)], ['p4', uuid(9)]] as const) {
+    const p = await s.product(name);
+    await s.ownerPlan(p.id, '# Plan');
+    const again = await s.build(p.id, { planHash: (await s.plan(p.id)).hash, acceptanceHash: null, conversationId });
+    assert.equal(again.status, 201, JSON.stringify(again.body));
+    assert.equal(again.body.task.created_in_conversation, null, conversationId);
+  }
+  const p5 = await s.product('p5');
+  await s.ownerPlan(p5.id, '# Plan');
+  assert.equal((await s.build(p5.id, { planHash: (await s.plan(p5.id)).hash, acceptanceHash: null, conversationId: 7 })).status, 400);
+  s.adapter().scripts = [call('task_create', { title: 'Side job', requested_by_user: true }), reply('made')];
+  await s.send(uuid(1), { text: 'make a task', projectId: shop.id });
+  assert.deepEqual((await s.json(`/api/conversations/${uuid(1)}/messages`, 'GET')).body.builds.map((b: { id: string }) => b.id), [task.id], 'AI が作ったタスクは Build に数えない');
 });
 
 test('3-2-s Build の汚れ: 外を読んだ実行が書いた計画書・一覧、外で書き換えた計画書、記録の無い計画書では、タスクの経過に印が付き、判定役が題と本文を持ち主の頼みとして使えない。固定した DB の中身に taintedRuns が残る', async t => {

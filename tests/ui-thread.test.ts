@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import type { ChecklistItem, Message } from '../web/src/api.ts';
+import type { ChatBuild, ChecklistItem, Message } from '../web/src/api.ts';
 import { imageHost } from '../web/src/markdown-image.ts';
 import type { RunNotice } from '../web/src/ui/live-state.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
-import { checklistShape, contextMeter, isRising, messageStamp, noticeRows, replyMeta, thinkingSeconds, threadGutter, threadItems } from '../web/src/ui/thread.ts';
+import { buildStage, checklistShape, contextMeter, isRising, messageStamp, noticeRows, replyMeta, thinkingSeconds, threadGutter, threadItems } from '../web/src/ui/thread.ts';
 
 // 新しい画面の会話（p1-ui.md の「会話」）: 発言・返事・道具の行のまとまり・流れている返事・承認の行・お知らせの並びを作る純粋な関数。
 
@@ -327,4 +327,27 @@ test('ui/parts: 静かな知らせ・warn の知らせも、渡された text �
   assert.ok(quiet.includes('{text ? <span className="ui-notice__text">{title} · {text}</span> : title}'), 'fail 以外でも text を描く');
   const plan = readFileSync(new URL('../web/src/ui/panes/PlanPane.tsx', import.meta.url), 'utf8');
   assert.ok(plan.includes(`<Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} />`), '凍ったときの理由を渡している');
+});
+
+const chatBuild = (id: string, status: ChatBuild['status'], at: number, extra: Partial<ChatBuild> = {}): ChatBuild => ({
+  id, status, waiting_kind: null, check_state: null, project_id: 'p1', created_at: at, updated_at: at, checklist: { items: [], tainted: false }, ...extra,
+});
+
+test('ui/thread: Build のタスクは、押した時刻の位置（その時刻までの発言の後ろ、流れている返事より前）に build の行として入る', () => {
+  const items = threadItems({
+    messages: [msg('user', 'plan it', { createdAt: 10 }), msg('assistant', 'written', { createdAt: 20 }), msg('user', 'thanks', { createdAt: 40, runId: 'r2' })],
+    builds: [chatBuild('b2', 'ready', 50), chatBuild('b1', 'running', 30)],
+    draft: { runId: 'r3', conversationId: 'c', modelId: 'm', text: 'typing' },
+  });
+  assert.deepEqual(items.map(i => (i.kind === 'build' ? `build:${i.build.id}` : i.kind)), ['owner', 'reply', 'build:b1', 'owner', 'build:b2', 'live']);
+});
+
+test('ui/thread: Build の段は、状態と返事待ちの種類・確かめ待ちから決まる', () => {
+  const cases: Array<[Partial<ChatBuild> & { status: ChatBuild['status'] }, string]> = [
+    [{ status: 'ready' }, 'queued'], [{ status: 'running' }, 'running'],
+    [{ status: 'waiting', waiting_kind: 'approval' }, 'approval'], [{ status: 'waiting', waiting_kind: 'question' }, 'question'], [{ status: 'waiting' }, 'waiting'],
+    [{ status: 'done', check_state: 'awaiting' }, 'check'], [{ status: 'done', check_state: 'checked' }, 'done'], [{ status: 'done' }, 'done'],
+    [{ status: 'failed' }, 'failed'], [{ status: 'cancelled' }, 'stopped'],
+  ];
+  for (const [over, stage] of cases) assert.equal(buildStage(chatBuild('b', over.status, 1, over)), stage, JSON.stringify(over));
 });
