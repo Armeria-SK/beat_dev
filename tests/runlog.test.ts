@@ -5,7 +5,7 @@ import { TRIGGER_TEXT } from '../src/memory/review.ts';
 import type { ReviewJob, RunRow, ToolCallRow } from '../web/src/api.ts';
 import { parseRoute, routeHash } from '../web/src/ui/routes.ts';
 import {
-  changeLabel, decidedByLabel, decisionLabel, decisionTag, formatTokens, jobStatusLabel, jobTag, jobTriggerLabel, LOG_LIMIT, logHash, runDetail, runKindLabel,
+  changeLabel, decidedByLabel, decisionLabel, formatTokens, jobStatusLabel, jobTriggerLabel, runDetail, runKindLabel,
   runSeconds, runStatus, toolStatus,
 } from '../web/src/runlog-meta.ts';
 import { startScreenServer } from './screen-server.ts';
@@ -53,7 +53,6 @@ test('実行の詳細: 成功は入出力とキャッシュ、失敗は理由と
 
 test('道具の記録: 判定の札と、決めたのは誰かを訳す。知らない値はそのまま出す', () => {
   assert.deepEqual((['allow', 'ask', 'deny'] as const).map(decisionLabel), ['Allowed', 'Asked for approval', 'Denied']);
-  assert.deepEqual((['allow', 'ask', 'deny'] as const).map(decisionTag), ['tag-neutral', 'tag-accent', 'tag-outline']);
   assert.deepEqual(['builtin', 'registry', 'validation', 'user', 'conversation-grant'].map(decidedByLabel), ['Built-in', 'Tool registry', 'Argument check', 'You', 'Granted for this chat']);
   assert.equal(decidedByLabel('hook:no-lan'), 'Hook no-lan');
   assert.equal(decidedByLabel('mystery'), 'mystery');
@@ -69,7 +68,6 @@ test('振り返りの記録: きっかけ・状態・変更の種類をコード
   assert.equal(jobTriggerLabel('heavy_run'), 'Many tools were used');
   assert.equal(jobTriggerLabel('new_trigger'), 'new_trigger');
   assert.deepEqual((['pending', 'running', 'done', 'failed'] as ReviewJob['status'][]).map(jobStatusLabel), ['Waiting', 'Running', 'Done', 'Failed']);
-  assert.deepEqual((['pending', 'running', 'done', 'failed'] as ReviewJob['status'][]).map(jobTag), ['tag-neutral', 'tag-accent', 'tag-neutral', 'tag-outline']);
   assert.deepEqual(['create', 'update', 'forget', 'restore', 'other'].map(changeLabel), ['Added', 'Rewrote', 'Deleted', 'Restored', 'other']);
   assert.equal(jobTriggerLabel('idle'), 'The conversation went quiet');
   assert.equal(changeLabel('forget'), 'Deleted');
@@ -106,9 +104,6 @@ test('経路: #/runs[/run|/tools|/reviews] と、振り返りの実行中のリ�
   assert.deepEqual(parseRoute('#/runs/reviews?x=1'), { view: 'runs', tab: 'reviews' });
   assert.deepEqual(parseRoute('#/runs/unknown'), { view: 'runs' });
   for (const hash of ['#/runs', '#/runs/tools', '#/runs/reviews']) assert.equal(routeHash(parseRoute(hash)), hash);
-  assert.equal(logHash('runs'), '#/runs');
-  assert.equal(logHash('tools'), '#/runs/tools');
-  assert.equal(logHash('reviews'), '#/runs/reviews');
   assert.deepEqual(parseRoute('#/review'), { view: 'skills' });
 });
 
@@ -145,7 +140,6 @@ test('画面が使う API: 実行・道具・振り返りの記録を、画面�
   assert.equal(jobTriggerLabel(reviews.jobs[0]!.trigger), 'The conversation went quiet');
   assert.equal(jobStatusLabel(reviews.jobs[0]!.status), 'Done');
   assert.equal(reviews.pending, 0);
-  assert.equal(LOG_LIMIT, 200, '画面が頼む件数の上限と、API の limit（200）は同じ');
   assert.ok(readFileSync(new URL('../web/src/api.ts', import.meta.url), 'utf8').includes('/api/tool-calls?limit=200'));
 });
 

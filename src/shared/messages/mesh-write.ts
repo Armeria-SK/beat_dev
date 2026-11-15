@@ -1,7 +1,6 @@
 import { defineMessages } from './define.ts';
 
 const en = {
-  'unavailable': 'Writing to the map, the glossary and the decisions of the product is not available yet',
   'no_folder': 'The folder of this product cannot be used in this run, so the map and the glossary cannot be written',
   'secret': '{field} looks like it contains a secret key or token. Leave it out',
   'file_unusable': '{file} in the mesh folder is not a plain file, so it is left as it is',
@@ -22,6 +21,15 @@ const en = {
   'glossary_full': 'GLOSSARY.md already has {max} names. Use a name that is already there',
   'glossary_saved': 'Updated GLOSSARY.md: {term}',
   'glossary_saved_external': 'Updated GLOSSARY.md: {term}. This run has read text from elsewhere, so the line is marked as such',
+  'decision_empty': 'Give the decision in one short English line',
+  'decision_marks': 'The decision cannot contain square brackets',
+  'decision_too_long': 'The decision is too long ({length} characters, up to {max}). Shorten it; put details in a note',
+  'decision_closed': 'This product is archived, so no decision is recorded',
+  'decision_saved': 'Added a line to DECISIONS.md, marked as recorded by the AI',
+  'decision_saved_external': 'Added a line to DECISIONS.md, marked as recorded by the AI. This run has read text from elsewhere, so the line is also marked as such and is not counted in the Mesh',
+  'decision_saved_old': 'DECISIONS.md is full of the owner\'s decisions, so this line went to DECISIONS-old.md; mesh_search finds it',
+  'decision_external_note': 'This run has read text from elsewhere, so the line is marked as such',
+  'decision_hidden': 'Part of it looked like a secret key or token, so it was hidden',
 } as const;
 
 export type MeshWriteMessageKey = keyof typeof en;

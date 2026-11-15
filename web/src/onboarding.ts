@@ -20,42 +20,15 @@ export function resumeStep(steps: OnboardingSteps): StepId {
 
 export const SERVER_KINDS = ['generic', 'lmstudio', 'llamacpp', 'tabbyapi', 'vllm', 'openrouter', 'openai'] as const;
 export type ServerKind = (typeof SERVER_KINDS)[number];
-export type ModelSource = 'anthropic' | 'ollama' | 'openai';
+export type ModelSource = 'anthropic' | 'openai';
 
 export interface ModelForm { source: ModelSource; model: string; baseUrl: string; server: ServerKind; contextLength: string; apiKeyEnv: string }
 
-export const emptyModelForm = (source: ModelSource = 'openai'): ModelForm => ({
-  source, model: '', baseUrl: source === 'openai' ? 'http://127.0.0.1:8000/v1' : '', server: 'generic', contextLength: source === 'openai' ? '32768' : '', apiKeyEnv: '',
-});
-
-export type ModelFormProblem = 'model' | 'baseUrl' | 'contextLength' | 'apiKeyEnv';
-
-export function modelFormProblem(form: ModelForm): ModelFormProblem | null {
-  if (!form.model.trim()) return 'model';
-  if (form.source === 'openai') {
-    if (!/^https?:\/\/\S+$/iu.test(form.baseUrl.trim())) return 'baseUrl';
-    const length = Number(form.contextLength);
-    if (form.contextLength.trim() !== '' && !(Number.isInteger(length) && length >= 1024 && length <= 10_000_000)) return 'contextLength';
-    if (form.apiKeyEnv.trim() && !/^[A-Z][A-Z0-9_]{0,63}$/u.test(form.apiKeyEnv.trim())) return 'apiKeyEnv';
-  }
-  return null;
-}
-
-// 送り先がこの PC の外のアドレスか（会話の内容がそこへ送られることを、確かめる前に知らせる）
-export function isOutsideUrl(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl.trim()).hostname.replace(/^\[|\]$/gu, '');
-    return !(host === 'localhost' || host === '::1' || /^127\./u.test(host) || host.endsWith('.localhost'));
-  } catch { return false; }
-}
-
 const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9_.-]+/gu, '-').replace(/^[^a-z0-9]+/u, '').replace(/-+$/u, '').slice(0, 40) || 'model';
-
-const OLLAMA = { id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', maxParallel: 1, timeoutMs: 600_000 } as const;
 
 type Entry = Record<string, unknown> & { id: string };
 
-const defaultProvider = (config: Config, kind: 'anthropic' | 'ollama'): Entry => (kind === 'anthropic' ? newAnthropicProvider(config) as Entry : { ...OLLAMA });
+const defaultProvider = (config: Config): Entry => newAnthropicProvider(config) as Entry;
 
 // 入力を設定に反映する。同じモデルをもう一度確かめるとき（modelId）は、その項目を直す。
 // 順番（チャット・裏方）が両方空なら、設定のモデル全部と足したモデルを入れる。すでに順番があれば、足したモデルを最後に足す。
@@ -83,7 +56,7 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     const kind = form.source;
     const found = providers.find(p => p.kind === kind);
     if (found) providerId = found.id;
-    else { const made = defaultProvider({ ...config, providers }, kind); providerId = made.id; providers.push(made); }
+    else { const made = defaultProvider({ ...config, providers }); providerId = made.id; providers.push(made); }
   }
 
   const length = Number(form.contextLength);
@@ -111,7 +84,7 @@ export function setupProviderConfig(config: Config, form: ModelForm): { config: 
   if (found) return { config, providerId: found.id };
   const made: Entry = form.source === 'openai'
     ? { id: uniqueId('local', providers.map(p => p.id)), kind: 'openai_compatible', baseUrl: url, server: form.server, maxParallel: 1, timeoutMs: 600_000 }
-    : defaultProvider(config, form.source);
+    : defaultProvider(config);
   return { config: { ...config, providers: [...providers, made] }, providerId: made.id };
 }
 

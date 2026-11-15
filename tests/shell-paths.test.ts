@@ -167,3 +167,89 @@ test('PowerShell: 引用符で始まる引数は閉じたところで終わる�
   assert.equal(f.ps("Set-Content 'a'SOUL.md hi").decision, 'allow', "'a' と SOUL.md の 2 つ（パスは a、値は SOUL.md と hi）");
 }
 );
+
+test('New-Item のリンク（HardLink・SymbolicLink・Junction）は、リンクのもと（-Value）も書き込み先として調べ、持ち主の許可でも今回だけ', t => {
+  const f = fixture(t);
+  const outside = join(f.base, 'outside.txt');
+  writeFileSync(outside, 'x');
+  for (const command of [
+    `New-Item -ItemType HardLink -Path link -Value ${outside}`, 'New-Item -ItemType HardLink -Path link -Value SOUL.md', `New-Item -ItemType SymbolicLink -Path link -Value ${f.base}`,
+    `New-Item -ItemType Junction -Path link -Value ${f.base}`, `New-Item -Path link -ItemType:HardLink -Value ${outside}`, `ni -it hardlink link -Value ${outside}`,
+    `New-Item -Type HardLink link -Value ${outside}`, 'New-Item -ItemType HardLink -Path link -Value notes.md', 'New-Item -ItemType $t -Path link',
+    'New-Item -it h -Path link -Value SOUL.md', `New-Item -Type sym -Path link -Value ${f.base}`, `ni -ItemT j -Path link -Value ${f.base}`, `New-Item -ItemType h -Path link -Target ${outside}`,
+    `New-Item -it:h -Path link -Value ${outside}`, `New-Item -I h -Path link -Value ${outside}`,
+  ]) {
+    const v = f.ps(command);
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+  }
+  const value = f.ps(`New-Item -ItemType HardLink -Path link -Value ${outside}`);
+  assert.ok(value.paths.some(p => p.write && p.input === outside), JSON.stringify(value.paths));
+  for (const command of [`New-Item -it h -Path link -Value ${outside}`, `New-Item -Type sym -Path link -Target ${outside}`]) {
+    const v = f.ps(command);
+    assert.ok(v.paths.some(p => p.write && p.input === outside), `${command}: ${JSON.stringify(v.paths)}`);
+  }
+  for (const command of ['New-Item -ItemType File -Path a.md -Value hello', 'New-Item -ItemType Directory out', 'New-Item -Path docs -Name b.md', 'New-Item -ItemType f -Path a2.md', 'New-Item -it dir -Path d2', 'New-Item -Type d d3']) {
+    assert.equal(f.ps(command).decision, 'allow', command);
+  }
+});
+
+test('リンクを作るコマンド（ln・mklink・fsutil hardlink・cp -l/-s/--link/--symbolic-link）は、持ち主が許可の一覧に入れても今回だけ', t => {
+  const f = fixture(t);
+  const allow = ['ln', 'cp', 'cmd', 'mklink', 'fsutil', 'curl', 'wget'];
+  for (const command of ['ln notes.md link', 'ln -s notes.md link', 'ln -sf ../x link', 'cp -l notes.md link', 'cp -s notes.md link', 'cp -al tmp t2', 'cp --link notes.md link', 'cp --symbolic-link notes.md link']) {
+    const v = f.bash(command, { allow });
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision}`);
+  }
+  for (const command of ['fsutil hardlink create link notes.md', 'cmd /c mklink /H link notes.md', 'cmd /c mklink /J link docs']) {
+    const v = f.ps(command, { allow: [...PS_WRITER_ALLOW, ...allow] });
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision}`);
+  }
+  for (const command of ['cp notes.md copy.md', 'cp -r tmp/nested t3']) assert.equal(f.bash(command, { allow }).decision, 'allow', command);
+  assert.equal(f.ps('fsutil fsinfo drives', { allow: [...PS_WRITER_ALLOW, ...allow] }).decision, 'allow');
+});
+
+test('New-Item: 引用符の中の -Value はパラメータとして読まず、値を取るパラメータはどれも次の語を値として使う。共通のパラメータ（-ErrorAction・-Verbose など）は確かめにしない', t => {
+  const f = fixture(t);
+  const outside = join(f.base, 'outside.txt');
+  writeFileSync(outside, 'x');
+  for (const command of [
+    `New-Item '-Value' -ItemType h -Target ${outside}`, `New-Item "-Value" -ItemType h -Target ${outside}`, `New-Item -Name x -ItemType h -Path link -Value ${outside}`,
+    `New-Item -ErrorAction SilentlyContinue -ItemType h -Path link -Value ${outside}`, `New-Item -Verbose -it h -Path link -Value ${outside}`,
+  ]) {
+    const v = f.ps(command);
+    assert.equal(v.decision, 'ask', `${command}: ${v.decision}`);
+  }
+  for (const command of [
+    'New-Item -Path a5.md -ErrorAction SilentlyContinue', 'New-Item -Path a6.md -ea Stop -Verbose', 'New-Item -Path a7.md -WarningVariable w -OutVariable o -InformationAction Ignore',
+    'New-Item -Path a8.md -Force -WhatIf', 'New-Item -Path a9.md -ItemType File -Debug -pv p',
+  ]) {
+    const v = f.ps(command);
+    assert.equal(v.decision, 'allow', `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+  }
+});
+
+test('bash の引用符つきのコマンド名（"ln"・"cp"・"curl"）は、持ち主の許可の一覧の項目に当たらない', t => {
+  const f = fixture(t);
+  const outside = join(f.base, 'outside.txt');
+  writeFileSync(outside, 'x');
+  const allow = ['ln', 'cp', 'curl'];
+  for (const command of [`"ln" ${outside} link`, `'ln' -s ${outside} link`, '"cp" -l notes.md link', '"cp" notes.md SOUL.md', `"cp" notes.md ${outside}`, `"curl" -o ${outside} https://example.com/`]) {
+    const v = f.bash(command, { allow });
+    assert.notEqual(v.decision, 'allow', `${command}: ${v.decision}`);
+  }
+  assert.equal(f.bash('cp notes.md copy2.md', { allow }).decision, 'allow');
+});
+
+test('リンクを作るコマンド: cmd /c の引用符でまとめた中身・@・/s・くっついた /c と、cp の略した長いオプション（--li・--sy）も今回だけ', t => {
+  const f = fixture(t);
+  const allow = [...PS_WRITER_ALLOW, 'cmd', 'mklink', 'cp'];
+  for (const command of ['cmd /c "mklink /H link notes.md"', 'cmd /s /c "mklink /H link notes.md"', 'cmd /c @mklink /J link docs', 'cmd /c "@mklink /H link notes.md"', 'cmd /cmklink /H link notes.md', 'cmd /c "call mklink /H link notes.md"', 'cmd /c "(mklink /H link notes.md)"', 'cmd /c "( call mklink /J link docs )"']) {
+    const v = f.ps(command, { allow });
+    assert.notEqual(v.decision, 'allow', `${command}: ${v.decision}`);
+  }
+  for (const command of ['cp --l notes.md link', 'cp --li notes.md link', 'cp --lin notes.md link', 'cp --sy notes.md link', 'cp --symb notes.md link']) {
+    const v = f.bash(command, { allow: ['cp'] });
+    assert.notEqual(v.decision, 'allow', `${command}: ${v.decision}`);
+  }
+  assert.equal(f.ps('cmd /c "echo hi"', { allow }).decision, 'allow');
+});

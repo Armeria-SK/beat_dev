@@ -237,10 +237,8 @@ test('3-3-s acceptance_change: 無い番号・外した番号・同じ番号を 
 test('3-3-s Approve: 新しい版とハッシュ・前の版の中身は DB に残る・外した項目は印つきでファイルに残る・変わった項目は open に戻る・足した項目は新しい番号。verifyFrozen は新しい版で合う', async t => {
   const s = await setup(t);
   const shop = await s.frozen();
-  const path = join(s.paths.projects, shop.id, 'acceptance.json');
-  const met = s.file(shop.id);
-  for (const entry of met.items) { entry.state = 'met'; entry.evidence = [{ ran: 'npm test' }]; }
-  writeFileSync(path, JSON.stringify(met));
+  s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task.id, items: ['A-1', 'A-2', 'A-3'].map(id => ({ id, state: 'met' as const, evidence: [{ ran: 'npm test' }] })) });
+  assert.equal(s.file(shop.id).items[0]!.state, 'met', 'ファイルは DB の写し');
   assert.equal(s.app.acceptance.verifyFrozen(shop.id), 'ok', 'state と evidence はハッシュに入らない');
   const v1 = s.app.acceptance.latest(shop.id)!;
 
@@ -424,9 +422,7 @@ test('3-3-s Approve の順: 一時ファイルの書き込みに失敗すると�
   const s = await setup(t);
   const shop = await s.frozen();
   const path = join(s.paths.projects, shop.id, 'acceptance.json');
-  const met = s.file(shop.id);
-  for (const entry of met.items) entry.state = 'met';
-  writeFileSync(path, JSON.stringify(met));
+  s.app.acceptance.markItems(shop.id, { version: 1, taskId: shop.task.id, items: ['A-1', 'A-2', 'A-3'].map(id => ({ id, state: 'met' as const, evidence: [] })) });
   await s.propose(shop.id, uuid(2), 'change', { changes: [{ op: 'add', result: 'Two', check: 'look' }, { op: 'change', id: 'A-1', result: 'Uploads resume within a minute', check: 'look' }] });
   const cid = String(s.rows(shop.id)[0]!.id);
   const before = readFileSync(path, 'utf8');
@@ -452,7 +448,7 @@ test('3-3-s Approve の順: 一時ファイルの書き込みに失敗すると�
   assert.equal(s.app.acceptance.verifyFrozen(shop.id), 'ok');
 });
 
-test('3-3-s 新しい版は DB の中身から作る: 手で書き換えたファイルの result は新しい版に入らない（state と evidence だけを引き継ぐ）', async t => {
+test('3-3-s 新しい版は DB の中身から作る: 手で書き換えたファイルの result も state も新しい版に入らない（5-3b-st: state と evidence も DB から持ち越す）', async t => {
   const s = await setup(t);
   const shop = await s.frozen();
   const path = join(s.paths.projects, shop.id, 'acceptance.json');
@@ -464,7 +460,8 @@ test('3-3-s 新しい版は DB の中身から作る: 手で書き換えたフ�
   s.app.acceptance.ownerEdit(shop.id, { baseVersion: 1, ops: [{ op: 'add', item: { result: 'Four', check: { kind: 'look' } } }] });
   const doc = s.file(shop.id);
   assert.equal(doc.items[0]!.result, 'Uploads resume after a restart');
-  assert.equal(doc.items[0]!.state, 'met');
+  assert.equal(doc.items[0]!.state, 'open', '手で書いた met は持ち越さない');
+  assert.deepEqual(s.app.acceptance.itemStates(shop.id), {});
   assert.equal(s.app.acceptance.verifyFrozen(shop.id), 'ok');
 });
 
@@ -529,7 +526,7 @@ test('3-3-s Build をもう一度: 固定した版の DB の taintedRuns も印�
   assert.ok((cleaned.taintedRuns ?? []).length > 0);
   cleaned.taintedRuns = [];
   writeFileSync(path, JSON.stringify(cleaned));
-  assert.equal(s.app.acceptance.read(shop.id)!.taintedRuns!.length, 0);
+  assert.deepEqual(s.app.acceptance.read(shop.id)!.taintedRuns, JSON.parse(s.app.acceptance.latest(shop.id)!.content).taintedRuns, '5-3b-st: 同じ版でも読む印は DB の値');
   s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(shop.task.id);
   const again = await s.build(shop.id);
   assert.equal(again.status, 201, JSON.stringify(again.body));
@@ -598,9 +595,7 @@ test('3-3-s 一覧の口の unbuilt と open_build_task_id: 固定の前は [] �
 
   await s.json(`/api/tasks/${shop.task.id}/cancel`, 'POST', {});
   assert.deepEqual(pick((await s.list(shop.id)).acceptance), { unbuilt: ['A-1', 'A-2', 'A-3', 'A-4'], open_build_task_id: null }, '止めた Build は受け持ちに数えない');
-  const met = s.file(shop.id);
-  met.items.find(entry => entry.id === 'A-1')!.state = 'met';
-  writeFileSync(join(s.paths.projects, shop.id, 'acceptance.json'), JSON.stringify(met));
+  s.app.acceptance.markItems(shop.id, { version: 3, taskId: shop.task.id, items: [{ id: 'A-1', state: 'met', evidence: [] }] });
   s.app.acceptance.ownerEdit(shop.id, { baseVersion: 3, ops: [{ op: 'remove', id: 'A-3' }] });
   assert.deepEqual(pick((await s.list(shop.id)).acceptance), { unbuilt: ['A-2', 'A-4'], open_build_task_id: null }, '満たした項目と外した項目は数えない');
   const again = await s.build(shop.id);

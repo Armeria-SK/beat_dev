@@ -125,8 +125,72 @@ function privateKeyRanges(input: string, opened: boolean): { ranges: Array<reado
   return { ranges, open: start !== undefined };
 }
 
+const PEM_HEADER = /^[A-Za-z][A-Za-z0-9-]*:/u;
+
+function blankLineStarts(input: string): number[] {
+  const starts: number[] = [];
+  for (let pos = 0; pos <= input.length;) {
+    const newline = input.indexOf('\n', pos);
+    const lineEnd = newline < 0 ? input.length : newline;
+    if (input.slice(pos, lineEnd).trim() === '') starts.push(pos);
+    if (newline < 0) break;
+    pos = newline + 1;
+  }
+  return starts;
+}
+
+function openKeyEnd(input: string, from: number, blanks: () => readonly number[]): number {
+  for (let pos = from; ;) {
+    const newline = input.indexOf('\n', pos);
+    const lineEnd = newline < 0 ? input.length : newline;
+    const line = input.slice(pos, lineEnd).trim();
+    if (line !== '' && !PEM_HEADER.test(line)) {
+      const list = blanks();
+      let low = 0;
+      let high = list.length;
+      while (low < high) { const mid = (low + high) >> 1; if (list[mid]! > pos) high = mid; else low = mid + 1; }
+      const blank = list[low];
+      if (blank === undefined) return input.length;
+      return input[blank - 2] === '\r' ? blank - 2 : blank - 1;
+    }
+    if (newline < 0) return input.length;
+    pos = newline + 1;
+  }
+}
+
+function strayEndStart(input: string, at: number, floor: number): number {
+  let start = at;
+  let lineEnd = at;
+  for (;;) {
+    const lineStart = Math.max(floor, input.lastIndexOf('\n', lineEnd - 1) + 1);
+    if (lineEnd !== at && input.slice(lineStart, lineEnd).trim() === '') return start;
+    start = lineStart;
+    if (lineStart <= floor) return start;
+    lineEnd = lineStart - 1;
+  }
+}
+
 function redactPrivateKeys(input: string): SanitizedModelInputText {
-  return replaceRanges(input, privateKeyRanges(input, false).ranges);
+  const ranges: Array<readonly [number, number]> = [];
+  let open: { start: number; bodyFrom: number; end?: number } | undefined;
+  let blankList: number[] | undefined;
+  const blanks = (): readonly number[] => (blankList ??= blankLineStarts(input));
+  const openEnd = (key: { bodyFrom: number; end?: number }): number => (key.end ??= openKeyEnd(input, key.bodyFrom, blanks));
+  for (const match of input.matchAll(PRIVATE_KEY_MARKER)) {
+    const end = match.index + match[0].length;
+    if (match[1] === 'BEGIN') {
+      if (open) {
+        if (match.index < openEnd(open)) continue;
+        ranges.push([open.start, openEnd(open)]);
+      }
+      open = { start: match.index, bodyFrom: end };
+      continue;
+    }
+    ranges.push([open?.start ?? strayEndStart(input, match.index, ranges.at(-1)?.[1] ?? 0), end]);
+    open = undefined;
+  }
+  if (open) ranges.push([open.start, openEnd(open)]);
+  return replaceRanges(input, ranges);
 }
 
 export function redactKeyEcho(echo: string): { text: string; open: boolean } {
