@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
 import type { RunEvent, ToolCall } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
-import { transcriptOf } from '../src/memory/review.ts';
+import { REVIEW_WINDOW_CHARS, reviewWindow } from '../src/memory/review.ts';
 import { isSensitiveEnvName, redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
 import { scrubEnv } from '../src/tools/shell/runner.ts';
 import { toolRow } from '../web/src/ui/tool-row.ts';
@@ -326,5 +326,5 @@ test('道具に渡した引数の秘密: 会話にはそのまま保存してモ
   clean(JSON.stringify(readHistory(s.app.db, CONVERSATION)), '履歴を読む道具（readHistory）');
   for (const mark of marks) assert.deepEqual(searchHistory(s.app.db, mark), [], '履歴を探す道具（searchHistory）');
   assert.deepEqual(await (await s.api(`/api/history?q=${S3}`)).json(), { hits: [] }, 'GET /api/history');
-  clean(transcriptOf(stored), '振り返りに渡す会話の写し（transcriptOf）');
+  clean(reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }).transcript, '振り返りに渡す会話の写し（reviewWindow）');
 });

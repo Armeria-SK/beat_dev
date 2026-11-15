@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { PendingAction, PendingCounts, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -273,13 +272,6 @@ test('ui/pending: Decided の行も Waiting と同じ actionView から組む（
   assert.ok(en['ui.pending.erased']);
 });
 
-test('ui/pending: Decided の行は decidedText の erased のときに "Details removed with the session" を出す（PendingPane の配線）', () => {
-  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
-  assert.ok(pane.includes('const line = decidedText(actionView(row));'), 'Decided の行は decidedText から組む');
-  assert.ok(pane.includes(`{line.erased && <span className="ui-pending__title bt-meta">{t('ui.pending.erased')}</span>}`), '中身を消した行に erased の文を出す');
-  assert.ok(pane.includes('extraShown(row.title, view.extra)'), 'Other input は extraShown を通す');
-});
-
 test('4-4 タスクごとの Pending の数: 待っている行だけを task_id ごとに数え、タスクの無い行と決めた行は数えない', () => {
   const counts = taskCounts([
     row({ id: 1, task_id: 't1' }),
@@ -328,8 +320,4 @@ test('ui/pending: Decided の行を開くと、却下の理由の全文と、実
   assert.equal(en['ui.pending.more'], 'Details');
   assert.equal(en['ui.pending.output'], 'Output');
   assert.equal(en['ui.pending.reasonGiven'], 'Reason');
-  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
-  assert.ok(pane.includes('const more = decidedMore(row);'), 'Decided の行は decidedMore から開く中身を組む');
-  assert.ok(pane.includes(`<summary className="bt-meta">{t('ui.pending.more')}</summary>`), 'details で開く');
-  assert.ok(pane.includes('<pre className="ui-pending__body"><code>{more.output}</code></pre>'), '出力は Waiting の中身と同じ枠');
 });

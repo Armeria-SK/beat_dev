@@ -9,7 +9,7 @@ import type { SendChoice } from '../src/engine/chat.ts';
 import { contextAvailable } from '../src/engine/context-budget.ts';
 import { estimateMessageTokens, IMAGE_TOKENS } from '../src/engine/tokens.ts';
 import type { ChatMessage, ImageRef, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
-import { transcriptOf } from '../src/memory/review.ts';
+import { REVIEW_WINDOW_CHARS, reviewWindow } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../src/tools/types.ts';
@@ -200,13 +200,6 @@ test('本文に書かれたツール呼び出し（<tool_call>）も拾って実
   assert.equal(s.app.conversations.messages('c1')[1]!.text, '作ります');
 });
 
-test('maxTools で渡すツールを絞れる', async t => {
-  const s = await setup(t, { maxTools: 2 });
-  s.adapter().scripts.push(reply('ok'));
-  await (await s.send('やあ')).done;
-  assert.deepEqual(s.adapter().calls[0]!.tools.map(t => t.name), ['history_search', 'web_search'], '履歴の検索を先に残す（記憶の道具は渡さない）');
-});
-
 test('引数の形が3回続けて正しくなければ止める', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(toolCall('file_write', {}), toolCall('file_write', {}), toolCall('file_write', {}), reply('届かない'));
@@ -229,7 +222,7 @@ test('会話は回数で止まらない: 20 回道具を呼んでから普通に
   assert.equal(s.app.conversations.messages('c1').at(-1)!.text, 'おわり');
 });
 
-test('使用量: 道具の仕様と道具の往復も数に入り、次の送信の見積もり（est_prompt_tokens）と合う。道具を渡さないモデルでは小さくなる', async t => {
+test('使用量: 道具の仕様と道具の往復も数に入り、次の送信の見積もり（est_prompt_tokens）と合う', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(toolCall('file_write', { path: 'hello.md', content: 'やあ' }), reply('書きました'), reply('二つ目の返事'));
   assert.ok((await (await s.send('hello.md を作って')).done).ok);
@@ -241,12 +234,6 @@ test('使用量: 道具の仕様と道具の往復も数に入り、次の送信
   assert.equal(usage.tokens, s.app.runs.get(next.runId)!.est_prompt_tokens, '道具の往復（assistant の呼び出しと tool の結果）と道具の仕様まで同じ組み立て');
   const calls = s.adapter().calls;
   assert.ok(calls.at(-1)!.tools.length > 0 && calls.at(-1)!.messages.some(m => m.role === 'tool'));
-
-  const bare = await setup(t, { maxTools: 0 });
-  const withoutTools = bare.app.engine.contextUsage('fresh');
-  const withTools = s.app.engine.contextUsage('fresh');
-  assert.ok(withoutTools.ok && withTools.ok);
-  assert.ok(withTools.tokens - withoutTools.tokens > 500, `道具の仕様の分が増える（${withTools.tokens} と ${withoutTools.tokens}）`);
 });
 
 // ── 6d: 会話は道具を使う回数で止まらない ──
@@ -355,7 +342,7 @@ test('道具の結果の画像: 出来事・道具の記録・画面の API に�
   assert.equal(listing.includes(MARK), false, 'GET /api/conversations/:id/messages の応答に画像（base64）が無い');
   const stored = s.app.conversations.messages(CONVERSATION);
   assert.equal(JSON.stringify(stored.map(m => m.text)).includes(MARK), false, 'text の列（検索の索引・要約・振り返りの材料）に画像が入らない');
-  assert.equal(transcriptOf(stored).includes(MARK), false, '振り返りの記録に画像が入らない');
+  assert.equal(reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }).transcript.includes(MARK), false, '振り返りの記録に画像が入らない');
 });
 
 test('道具の結果の画像: 古い画像つきのやり取りを要約に回しても、要約の依頼に画像は入らない（原文は DB に残る）', async t => {

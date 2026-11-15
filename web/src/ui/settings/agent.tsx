@@ -265,9 +265,6 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
           <Row k={`${k}:out`} title={t('ui.set.model.maxOutput')}>
             <NumberField k={`${k}:out`} value={model.maxOutputTokens as number} min={256} max={10_000_000} label={t('ui.set.model.maxOutput')} onCommit={v => edit({ maxOutputTokens: v })} />
           </Row>
-          <Row k={`${k}:tools`} title={t('ui.set.model.maxTools')} desc={t('ui.set.model.maxToolsDesc')}>
-            <NumberField k={`${k}:tools`} value={model.maxTools as number | undefined} optional min={0} max={128} label={t('ui.set.model.maxTools')} onCommit={v => edit({ maxTools: v })} />
-          </Row>
           <Row k={`${k}:vision`} title={t('ui.set.model.vision')}><Switch checked={Boolean(model.vision)} label={t('ui.set.model.vision')} disabled={busy} onChange={vision => edit({ vision })} /></Row>
         </div>
         )}

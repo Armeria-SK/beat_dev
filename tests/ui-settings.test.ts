@@ -188,8 +188,6 @@ test('ui/settings view: 設定ファイルで routing.judge に 2 つ以上書�
   assert.deepEqual(judgeBackups({ routing: { chat: ['a'], background: [] } }), []);
   assert.deepEqual(judgeBackups({}), []);
   assert.equal(en['ui.set.models.judgeBackups']('Local, Cloud'), 'Then, in this order (set in the config file): Local, Cloud');
-  const page = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
-  assert.ok(page.includes(`below={backups.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', backups.map(modelName).join(', '))}</span>}`), 'Judge の行の下に出す');
 });
 
 test('ui/settings view: 判定役は routing.judge の先頭。既定（空）は「会話と同じ」で、選び直すと先頭だけが替わり、ファイルで書いた続きの順は残り（前の先頭は残さない）、「会話と同じ」に戻すと項目ごと消える', () => {

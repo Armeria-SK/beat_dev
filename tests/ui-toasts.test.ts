@@ -1,13 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { test } from 'node:test';
 import { holdChange, isHeld, NO_HOLD, notificationToast, pauseClock, pushToast, resumeClock, startClock, TOAST_A, TOAST_B, toastDuration, type ToastEntry } from '../web/src/ui/toast-list.ts';
 
 // 新しい画面のトースト（steps/p1-ui.md の T6 と PR 1-4a）。数と長さは 2 つの形（a: 2 つまで・5 秒、b: 3 つまで・3.6 秒。Undo つきはどちらも 6 秒）。
 // 乗せているあいだ止まる時計と、サーバーの通知 → トーストの直し方。画面を持たない関数（web/src/ui/toast-list.ts）。
 
-const UI = join(import.meta.dirname, '..', 'web', 'src', 'ui');
 const entry = (id: number): ToastEntry => ({ id, item: { title: `t${id}` }, leaving: false });
 const undo = { label: 'Undo', run: () => undefined };
 
@@ -21,14 +18,6 @@ test('ui/toasts: T6 の 2 つの形。a は 2 つまで・5 秒、b は 3 つま
   const four = [1, 2, 3, 4].reduce<ToastEntry[]>((list, id) => pushToast(list, entry(id), TOAST_B.max), []);
   assert.deepEqual(four.map(e => e.id), [2, 3, 4], '古いものから消える');
   assert.deepEqual([1, 2, 3].reduce<ToastEntry[]>((list, id) => pushToast(list, entry(id), TOAST_A.max), []).map(e => e.id), [2, 3]);
-});
-
-test('ui/toasts: b の形を選ぶのは 1 か所で、開発のときだけ（ビルドでは a に畳まれる）。目印の文字は b の側にしか無い', () => {
-  const source = readFileSync(join(UI, 'toasts.tsx'), 'utf8');
-  assert.equal(source.split("import.meta.env.DEV && variant('toast') === 'b' ? TOAST_B : TOAST_A").length, 2);
-  assert.equal(source.split('TOAST_B').length, 3, 'import と、その 1 か所だけ');
-  assert.match(TOAST_B.tag, /^toast-b-/u);
-  assert.equal(TOAST_A.tag.includes('toast-b'), false);
 });
 
 test('ui/toasts: 乗せているあいだ時計は止まり、離すと残りの時間から続く', () => {

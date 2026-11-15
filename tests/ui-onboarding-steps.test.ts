@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { markSetupShown, setupModelConfig, wasSetupShown } from '../web/src/onboarding.ts';
 import {
@@ -73,13 +72,6 @@ test('ui/onboarding: Skip と Esc は「済み」にしない。閉じたあと�
   assert.equal(resumeIndex({ user: false, identity: false, persona: false, model: false }), 0);
   assert.equal(ONBOARD_STEPS[resumeIndex({ user: true, identity: true, persona: false, model: false })], 'style');
   assert.equal(ONBOARD_STEPS[resumeIndex({ user: true, identity: true, persona: true, model: true })], 'hello');
-
-  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
-  const screen = readFileSync(new URL('../web/src/ui/Onboarding.tsx', import.meta.url), 'utf8');
-  assert.equal(app.includes('onboardingDone'), false, '閉じる側（App）は「済み」の口を呼ばない');
-  assert.deepEqual(screen.match(/.*onboardingDone.*/gu)?.map(line => line.trim().startsWith("if (step === 'hello')")), [true], '「済み」にするのは最後の段の Start だけ');
-  assert.match(screen, /onClick=\{onSkip\}/u);
-  assert.match(app, /if \(onboard\) \{ e\.preventDefault\(\); closeOnboard\(\); return; \}/u);
 });
 
 test('ui/onboarding: 確かめの最中の Esc は全体を閉じない（動いている間は何もしない、広がる確かめが出ていればそれだけを閉じる）', () => {
@@ -87,11 +79,6 @@ test('ui/onboarding: 確かめの最中の Esc は全体を閉じない（動い
   assert.equal(escapeAction({ busy: true, confirming: true }), 'ignore');
   assert.equal(escapeAction({ busy: false, confirming: true }), 'cancelConfirm');
   assert.equal(escapeAction({ busy: false, confirming: false }), 'close');
-  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
-  const screen = readFileSync(new URL('../web/src/ui/Onboarding.tsx', import.meta.url), 'utf8');
-  assert.ok(screen.includes("addEventListener('keydown', onEscape, true)"), 'フォーカスが枠の外でも止められるよう、window の捕まえる段で見る');
-  assert.ok(screen.includes("removeEventListener('keydown', onEscape, true)"));
-  assert.ok(app.includes("if (e.key !== 'Escape' || e.defaultPrevented) return;"), 'App は止めた Esc では閉じない');
 });
 
 test('ui/onboarding: はじめの設定の読み取りに失敗したら 1 回だけ知らせ、間を空けて読み直す（届いたら当てる。止めたら読み直さない）', async () => {

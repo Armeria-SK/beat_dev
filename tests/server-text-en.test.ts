@@ -451,7 +451,7 @@ test('エンジンの失敗（英語）: 使えるモデルが無い・ツール
   if (result && !result.ok) {
     filled('invalid_streak', result.errorMessage, '3');
     assert.equal(result.errorCode, 'engine.tool.invalid_streak');
-    assert.equal(result.detail?.hint, 'Reduce the number of tools with maxTools');
+    assert.equal(result.detail?.hint, 'Turn off tools you do not use');
   }
   const toolResults = events.filter(e => e.type === 'tool.result');
   assert.ok(toolResults.length >= 1);

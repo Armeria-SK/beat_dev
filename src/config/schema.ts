@@ -33,7 +33,6 @@ export const ModelConfig = Type.Object({
   contextLength: Type.Optional(Type.Integer({ minimum: 1024, maximum: 10_000_000 })),
   minContext: Type.Integer({ minimum: 1024, maximum: 10_000_000, default: 65536 }),
   maxOutputTokens: Type.Integer({ minimum: 256, maximum: 200_000, default: 8192 }),
-  maxTools: Type.Optional(Type.Integer({ minimum: 0, maximum: 128 })),
   vision: Type.Boolean({ default: false }),
   temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
   // 考える深さとして選べる値（reasoning_effort に送る）。OpenAI 互換のプロバイダのモデルだけで使う。書かなければ、サーバーが supported_reasoning_efforts で知らせた値を使う
@@ -261,7 +260,6 @@ export const AppConfig = Type.Object({
     notesMaxChars: Type.Optional(Type.Integer()),
     review: Type.Boolean({ default: true }),
     reviewIdleMinutes: Type.Integer({ minimum: 5, maximum: 1440, default: 30 }),
-    reviewAfterToolCalls: Type.Integer({ minimum: 1, maximum: 200, default: 8 }),
   }, { additionalProperties: false, default: {} }),
   notify: NotifyConfig,
   mcp: McpConfig,

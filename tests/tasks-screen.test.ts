@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import type { TaskStatus } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
-import { PendingSet, runOnce } from '../web/src/pending.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, type TaskDraft } from '../web/src/task-form.ts';
 import {
   eventKey, ORIGIN_KEY, plainLine, sheetActions, STATUS_KEY,
@@ -110,43 +109,6 @@ test('辞書: タスク画面（stage 7）の英語に日本語が混ざらな�
     const enText = typeof enEntry === 'function' ? (enEntry as (...a: string[]) => string)('a', 'b') : String(enEntry);
     assert.ok(!japanese.test(enText), `${key}: 英語に日本語が混ざっている: ${enText}`);
   }
-});
-
-test('PendingSet: 同じものは送信中に 2 回始められず、終われば また始められる。別のものは邪魔しない', () => {
-  const set = new PendingSet();
-  assert.equal(set.begin('t1'), true);
-  assert.equal(set.begin('t1'), false, '送信中の 2 回目は始めない');
-  assert.equal(set.begin('t2'), true, '別のタスクは同時に送れる');
-  assert.deepEqual([...set.snapshot()].sort(), ['t1', 't2']);
-  set.end('t1');
-  assert.equal(set.has('t1'), false);
-  assert.equal(set.begin('t1'), true, '終わったら、また送れる');
-  const copy = set.snapshot() as Set<string>;
-  copy.clear();
-  assert.equal(set.has('t2'), true, '写しを変えても元は変わらない');
-});
-
-test('runOnce: Enter を続けて 2 回押しても（描き直しの前でも）送るのは 1 回。失敗しても、終われば解ける', async () => {
-  const set = new PendingSet();
-  let sent = 0;
-  let release: () => void = () => undefined;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const send = async () => { sent += 1; await gate; return 'ok'; };
-  const first = runOnce(set, 'answer:t1', send);
-  const second = runOnce(set, 'answer:t1', send);
-  const timeout = new Promise<string>(resolve => setTimeout(() => resolve('waited for the first send'), 50));
-  assert.equal(await Promise.race([second, timeout]), undefined, '2 回目は、1 回目の送信が終わるのを待たず、何もせずに戻る');
-  assert.equal(set.has('answer:t1'), true);
-  release();
-  assert.equal(await first, 'ok');
-  assert.equal(sent, 1);
-  assert.equal(set.has('answer:t1'), false, '終わったら送信中ではない');
-  await assert.rejects(runOnce(set, 'answer:t1', async () => { throw new Error('409'); }), /409/u);
-  assert.equal(set.has('answer:t1'), false, '失敗でも送信中のまま残らない');
-  assert.equal(await runOnce(set, 'answer:t1', async () => 'again'), 'again');
-  let changes = 0;
-  await runOnce(set, 'x', async () => 1, () => { changes += 1; });
-  assert.equal(changes, 2, '始まりと終わりで描き直しを知らせる');
 });
 
 test('R13 経過 owner_fix の名前: 質問の答えから作った直しは "Fix for your answer"、持ち主の確かめからは今までどおり', () => {

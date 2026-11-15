@@ -35,8 +35,8 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls']);
 });
 
 test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残らず、入力は書き換えない', () => {
@@ -69,6 +69,10 @@ const IGNORED_ROWS: Array<{ name: string; key: string; set: (raw: Record<string,
     key: 'tools.shell.approvalTimeoutSec', set: raw => { raw.tools.shell = { ...(raw.tools.shell ?? {}), approvalTimeoutSec: 30 }; }, has: config => 'approvalTimeoutSec' in config.tools.shell },
   { name: '5-2b-s worker.remindAfterHours: 12 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
     key: 'worker.remindAfterHours', set: raw => { raw.worker = { ...(raw.worker ?? {}), remindAfterHours: 12 }; }, has: config => 'remindAfterHours' in config.worker },
+  { name: 'models[].maxTools（0 でも 12 でも）の古い設定で起動でき、読んだ設定のどのモデルにも残らず、起動のログの Ignored の 1 行に入る',
+    key: 'models[].maxTools', set: raw => { raw.models.forEach((model: Record<string, unknown>, i: number) => { model.maxTools = i === 0 ? 0 : 12; }); }, has: config => config.models.some(model => 'maxTools' in model) },
+  { name: '10-1 memory.reviewAfterToolCalls: 8 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'memory.reviewAfterToolCalls', set: raw => { raw.memory = { ...(raw.memory ?? {}), reviewAfterToolCalls: 8 }; }, has: config => 'reviewAfterToolCalls' in config.memory },
 ];
 
 for (const row of IGNORED_ROWS) {

@@ -13,6 +13,7 @@ import { AGENT_RESULT_MAX_CHARS, toFullWidth } from '../src/engine/chat.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
 import { TOOL_OUTPUT_LIMIT } from '../src/tools/pipeline.ts';
+import { conversationWindow, REVIEW_WINDOW_CHARS } from '../src/memory/review.ts';
 
 // F7 agent_run: 親の担当が、別の担当（子）に仕事を任せ、答えを受け取る。深さは 1。
 // 既定（tools.agent を書かない）では、今までと完全に同じ（agent_run はモデルに渡らない）
@@ -564,13 +565,24 @@ test('T-39 親か子が動いているあいだは、親の会話の削除を断
   await settled(s.app, childRuns(s)[0]!.id);
 });
 
-test('T-41 道具を多く使った子の run では heavy_run の振り返りを積まない（親は従来どおり）', async t => {
-  const s = await startApp(t, enable(c => { c.memory.review = true; c.memory.reviewAfterToolCalls = 1; }));
-  s.adapter().scripts = [call('agent_run', { task: '任せる' }), call('calculate', { expression: '1+1' }), call('calculate', { expression: '2+2' }), reply('子の答え'), reply('親の最後の返事')];
-  const runId = await chat(s, uuid(1), '任せたい');
-  assert.equal(childRuns(s)[0]!.tool_calls >= 2, true, '前提: 子は道具を多く使った');
-  const jobs = s.app.db.prepare("SELECT dedup_key FROM memory_jobs WHERE trigger = 'heavy_run'").all() as Array<{ dedup_key: string }>;
-  assert.deepEqual(jobs.map(j => j.dedup_key), [`run:${runId}`], '積まれたのは親の run だけ');
+test('T-41 子の run が終わっても、たまった分の振り返り（heavy_run）を積まない（積むのは親の会話の分だけ）', async t => {
+  const s = await startApp(t, enable(c => { c.memory.review = true; }));
+  const talk = (text: string): Script => async function* (req) {
+    yield { type: 'text', delta: text };
+    for (const c of withLoad({ id: `call_${Math.random().toString(36).slice(2)}`, name: 'calculate', arguments: { expression: '1+1' } }, req)) yield { type: 'tool_call', call: c };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  };
+  const long = 'x'.repeat(3000);
+  s.adapter().scripts = [call('agent_run', { task: '任せる' }), ...Array.from({ length: 6 }, () => talk(long)), reply('子の答え'), reply('親の最後の返事')];
+  const parent = uuid(1);
+  s.app.conversations.create({ id: parent, title: '親の会話' });
+  for (let i = 0; i < 6; i++) s.app.conversations.append(parent, { role: 'user', content: `${i} ${long}` });
+  const sent = await s.json(`/api/conversations/${parent}/messages`, 'POST', { text: '任せたい' });
+  await settled(s.app, sent.body.runId);
+  const child = childConversation(s);
+  assert.equal(conversationWindow(s.app.db, child, 0, { maxChars: REVIEW_WINDOW_CHARS }).full, true, '前提: 子の会話も窓 1 つに収まらない');
+  const jobs = s.app.db.prepare("SELECT dedup_key, conversation_id FROM memory_jobs WHERE trigger = 'heavy_run'").all() as Array<{ dedup_key: string; conversation_id: string }>;
+  assert.deepEqual(jobs.map(j => [j.dedup_key, j.conversation_id]), [[`conv:${parent}:0`, parent]], '積まれたのは親の会話の分だけ');
 });
 
 test('T-42 子の会話への送信・やり直しは 409', async t => {
