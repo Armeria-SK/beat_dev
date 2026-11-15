@@ -915,7 +915,8 @@ test('5-5a 審査の直し: mesh_read の頁が外を読んだ行の途中で切
 });
 
 test('5-5a 再審査の直し: 編集ソフトが角かっこを \\ で逃がしても、外を読んだ行は外を読んだ行のまま', () => {
-  const line = '- web — Hostile \[by task, src: external\]';
+  const line = String.raw`- web — Hostile \[by task, src: external\]`;
+  assert.ok(line.includes(String.fromCharCode(92)), line);
   assert.equal(readMesh({ rel: 'notes.md', lines: ['# Notes', '', line], mtime: 0, fetched: false }, {}, 4000, 'en').fetched, true);
 });
 
@@ -937,7 +938,7 @@ test('5-5a-d 再審査の直し 4: STATE.md の覚え書きでも、短い PEM �
   assert.equal(existsSync(join(f.dir, 'STATE.md')), false);
 });
 
-test('5-5c 地図と用語の表をやめた: 製品のフォルダに残った MAP.md・GLOSSARY.md は消さず、目次・mesh_search・mesh_read に出さない', async t => {
+test('5-5c 地図と用語の表をやめた: mesh の置き場（data/projects/<id>/）に残った MAP.md・GLOSSARY.md は消さず、目次・mesh_search・mesh_read に出さない', async t => {
   const f = meshFixture(t);
   const map = '# MAP\n\n- server/db — database tables zebra [by task]\n';
   const glossary = '# GLOSSARY\n\n- zebra → server/db [by task]\n';

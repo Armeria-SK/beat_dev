@@ -45,7 +45,7 @@ export const SET_LABELS: Record<ProbeSet, string> = {
 };
 
 const PROJECT_ID = 'bbbbbbbb-0000-4000-8000-00000000b5b0';
-const MESH_FILES = ['plan.md', 'STATE.md', 'MAP.md', 'GLOSSARY.md', 'INDEX.md', 'DECISIONS.md', 'acceptance.json'];
+const MESH_FILES = ['plan.md', 'STATE.md', 'INDEX.md', 'DECISIONS.md', 'acceptance.json'];
 const MESH_TOOLS: readonly ToolDef[] = [meshSearch, meshRead];
 const ANSWER_SHOWN = 160;
 const CELL_SHOWN = 60;

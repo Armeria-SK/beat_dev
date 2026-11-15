@@ -154,7 +154,7 @@ test('作ったパス: 作業フォルダに無いパスを数え、HTTP の動�
   assert.deepEqual(madeUpPaths(`C:\\work\\bento\\server\\db\\schema.ts と plan.md、src/orders/table.ts、y/o、https://example.com/a/b`, root), ['src/orders/table.ts']);
   assert.deepEqual(madeUpPaths('discounts/apply.ts と CartBadge.tsx と Missing.tsx', root), ['missing.tsx']);
   assert.deepEqual(madeUpPaths('POST /api/orders で受けて、GET /api/allergens も足す。PUT /web/checkout も。and/or で選べる', root), []);
-  assert.deepEqual(madeUpPaths('地図は data/projects/x/MAP.md と STATE.md にある。/api/menu を読む', root), []);
+  assert.deepEqual(madeUpPaths('決めは data/projects/x/DECISIONS.md と STATE.md にある。/api/menu を読む', root), []);
   assert.deepEqual(madeUpPaths('server/discount/apply.ts と server/allergens と web/components/CartBadge.tsx', root), ['server/discount/apply.ts', 'server/allergens']);
   assert.deepEqual(madeUpPaths('古いのは server/coupons/apply.ts と server/coupons と jobs/cleanup.ts と cleanup.ts', root), []);
 });
