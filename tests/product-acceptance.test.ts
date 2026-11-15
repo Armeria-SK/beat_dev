@@ -432,7 +432,7 @@ test('3-1b frozenHash と verifyFrozen: 固定の部分だけにハッシュを�
   assert.equal(f.store.verifyFrozen(PROJECT), 'mismatch');
 });
 
-test('3-1b ファイルと DB の順: 一時ファイルの書き込みに失敗すると前のまま。DB の版よりファイルが遅れていれば、read は DB の中身にファイルの state を重ねて返し、ファイルは書かない。書き戻しは書く前と起動のとき', t => {
+test('3-1b ファイルと DB の順: 一時ファイルの書き込みに失敗すると前のまま。DB の版よりファイルが遅れていれば、read は DB の中身を返し（item_states が NULL の版は全部 open。ファイルの state は重ねない）、ファイルは書かない。書き戻しは書く前と起動のとき', t => {
   let failing = false;
   const f = storeFixture(t, { writeFileSync: (path, data) => { if (failing) { writeFileSync(path, data.slice(0, 5)); throw new Error('disk full'); } writeFileSync(path, data); } });
   f.store.writeDraft(PROJECT, f.doc(['one']));
@@ -449,14 +449,14 @@ test('3-1b ファイルと DB の順: 一時ファイルの書き込みに失敗
   f.db.prepare("INSERT INTO acceptance_versions (project_id, version, hash, content, source, created_at) VALUES (?, 1, ?, ?, 'build', 1)").run(PROJECT, frozenHash(v1), JSON.stringify(v1));
   const read = f.store.read(PROJECT)!;
   assert.equal(read.version, 1);
-  assert.deepEqual(read.items.map(i => [i.id, i.state]), [['A-1', 'met'], ['A-2', 'open']], 'ファイルの state を重ねる');
+  assert.deepEqual(read.items.map(i => [i.id, i.state]), [['A-1', 'open'], ['A-2', 'open']], 'ファイルの state は重ねない');
   assert.equal((JSON.parse(readFileSync(f.file, 'utf8')) as AcceptanceDoc).version, 0, '読むだけではファイルを書かない');
   assert.equal(f.store.verifyFrozen(PROJECT), 'mismatch', 'ファイルは遅れたまま');
 
   assert.throws(() => f.store.writeDraft(PROJECT, f.doc(['three'])), (e: Error & { code?: string }) => e.code === 'frozen');
   const repaired = JSON.parse(readFileSync(f.file, 'utf8')) as AcceptanceDoc;
   assert.equal(repaired.version, 1, '書く前に DB の中身から書き戻す');
-  assert.deepEqual(repaired.items.map(i => [i.result, i.state]), [['one', 'met'], ['two', 'open']]);
+  assert.deepEqual(repaired.items.map(i => [i.result, i.state]), [['one', 'open'], ['two', 'open']]);
   assert.equal(f.store.verifyFrozen(PROJECT), 'ok');
 });
 
