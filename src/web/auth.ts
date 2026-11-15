@@ -3,6 +3,7 @@ import { isLoopbackHost } from '../shared/url.ts';
 
 const LOGIN = /^[^\s,]{1,256}$/;
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const FORWARDED = /^(?:x-forwarded-[a-z-]+|forwarded|x-real-ip|tailscale-[a-z-]+)$/u;
 
 // local: この PC（ループバック）から来た要求か。login: Tailscale から来た要求のログイン名
 export type AuthResult = { ok: true; origin: string; local: boolean; login?: string } | { ok: false; reason: string };
@@ -33,6 +34,7 @@ export class WebAuth {
     if (WRITE_METHODS.has(req.method ?? '') && origin !== entry.origin) return { ok: false, reason: 'origin_required' };
     const site = req.headers['sec-fetch-site'];
     if (site !== undefined && site !== 'same-origin' && site !== 'none') return { ok: false, reason: 'cross_site' };
+    if (entry.local && Object.keys(req.headers).some(name => FORWARDED.test(name))) return { ok: false, reason: 'forwarded' };
     if (!entry.local) {
       const login = req.headers['tailscale-user-login'];
       if (typeof login !== 'string' || !LOGIN.test(login)) return { ok: false, reason: 'tailnet' };

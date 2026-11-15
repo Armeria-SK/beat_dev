@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
@@ -438,30 +439,31 @@ test('今ある口の製品の欄と絞り込み: タスク・時間割・実行
   assert.deepEqual(Object.fromEntries(hits.map(h => [h.conversationId, h.projectId])), { [uuid(1)]: shop.id, [uuid(2)]: null });
 });
 
-test('フォルダの一覧の API: POST で受け、フォルダの名前だけを返す。ネットワークのパスは 400、無いパスは 400。出発点は path 無し', async t => {
+test('フォルダの確かめの API: POST で受け、製品のフォルダにできるかを checkWorkFolder で答える（実体のパスと notes）。ホーム・使っているフォルダ・無いパス・ネットワークのパスは理由つきで断る。一覧は返さない', async t => {
   const s = await setup(t);
-  s.folder('alpha');
-  s.folder('.ssh');
-  await s.product('beta');
-  const listed = await s.json('/api/folders/list', 'POST', { path: s.products });
-  assert.equal(listed.status, 200);
-  assert.deepEqual(Object.keys(listed.body).sort(), ['entries', 'parent', 'path', 'truncated']);
-  assert.equal(listed.body.path, s.products);
-  assert.deepEqual(listed.body.entries, [
-    { name: 'alpha', path: join(s.products, 'alpha'), selectable: true, isGit: false, link: false },
-    { name: 'beta', path: join(s.products, 'beta'), selectable: false, reason: 'project.root_in_use', isGit: false, link: false },
-  ]);
-  const start = await s.json('/api/folders/list', 'POST', {});
-  assert.deepEqual([start.status, start.body.path, start.body.parent, start.body.truncated], [200, null, null, false]);
-  assert.ok(start.body.entries.length >= 1 && start.body.entries.every((e: { path: string; selectable: boolean }) => typeof e.path === 'string' && typeof e.selectable === 'boolean'));
-  const missing = await s.json('/api/folders/list', 'POST', { path: join(s.products, 'nope') });
+  const alpha = s.folder('alpha');
+  const ok = await s.json('/api/folders/check', 'POST', { path: alpha });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body, { root: alpha, notes: ['not_git'] });
+  const home = await s.json('/api/folders/check', 'POST', { path: homedir() });
+  assert.deepEqual([home.status, home.body.code], [400, 'project.folder_home']);
+  const missing = await s.json('/api/folders/check', 'POST', { path: join(s.products, 'nope') });
   assert.deepEqual([missing.status, missing.body.code], [400, 'project.folder_not_found']);
   assert.doesNotMatch(JSON.stringify(missing.body), /nope/u, 'エラーの文にパスを出さない');
   if (process.platform === 'win32') {
-    const remote = await s.json('/api/folders/list', 'POST', { path: '\\\\server\\share' });
+    const remote = await s.json('/api/folders/check', 'POST', { path: '\\\\server\\share' });
     assert.deepEqual([remote.status, remote.body.code], [400, 'project.folder_remote']);
   }
-  assert.equal((await s.api('/api/folders/list')).status, 405, 'GET では受けない（パスを URL に載せない）');
-  const noOrigin = await fetch(`${s.origin}/api/folders/list`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{}' });
+  assert.equal((await s.json('/api/folders/check', 'POST', {})).status, 400, 'path が要る');
+  assert.equal((await s.api('/api/folders/check')).status, 405, 'GET では受けない（パスを URL に載せない）');
+  assert.equal((await s.api('/api/folders/list', { method: 'POST', body: '{}' })).status, 404, '一覧の口はもう無い');
+  const noOrigin = await fetch(`${s.origin}/api/folders/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: JSON.stringify({ path: alpha }) });
   assert.equal(noOrigin.status, 403, 'よその origin からは呼べない');
+});
+
+test('フォルダの確かめの API: もう使っている製品と同じフォルダは 409', async t => {
+  const s = await setup(t);
+  const beta = await s.product('beta');
+  const used = await s.json('/api/folders/check', 'POST', { path: beta.root });
+  assert.deepEqual([used.status, used.body.code], [409, 'project.root_in_use']);
 });

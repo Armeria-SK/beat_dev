@@ -51,6 +51,7 @@ import { imageView } from './tools/builtin/image.ts';
 import { webDownload } from './tools/builtin/download.ts';
 import { BROWSER_TOOLS } from './tools/builtin/browser.ts';
 import { BrowserSession } from './tools/browser/session.ts';
+import { FolderDialog, type FolderDialogOptions } from './projects/folder-dialog.ts';
 import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
 import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
@@ -122,6 +123,7 @@ export interface AppOptions {
   browserDisplay?: boolean;
   projectFolderExempt?: readonly string[];
   botMemory?: boolean;
+  folderDialog?: FolderDialogOptions;
 }
 
 export class App {
@@ -160,6 +162,7 @@ export class App {
   readonly skills: SkillStore;
   readonly uploads: Uploads;
   readonly browser: BrowserSession;
+  readonly folderDialog: FolderDialog;
   readonly engine: ChatEngine;
   readonly worker: Worker;
   readonly health: HealthMonitor;
@@ -225,6 +228,7 @@ export class App {
     this.#registerExistingSkills();
     this.#offerProtectFiles();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
+    this.folderDialog = new FolderDialog({ log: this.log, ...options.folderDialog });
     // ブラウザ 1 つ（全会話で共有）。無効なら何も起動しない。起動は最初の browser_* の呼び出しのとき
     this.browser = new BrowserSession({
       driver: options.browserDriver ?? new PlaywrightDriver(), config: () => this.config(), paths: this.paths, log: this.log,
@@ -530,6 +534,7 @@ export class App {
     this.#replayStop.abort();
     void this.mcp.stop().catch(() => undefined);
     void this.browser.close().catch(() => undefined);
+    this.folderDialog.stop();
     this.worker.stop();
     this.engine.saveQueued();
     this.engine.stopAll();

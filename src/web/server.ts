@@ -491,7 +491,7 @@ export function createWebServer(app: App): WebServer {
     const match = router.match(req.method ?? 'GET', url.pathname);
     if (!match) { sendJson(res, 404, { error: 'not_found' }); return; }
     if (match === 'method_not_allowed') { sendJson(res, 405, { error: 'method_not_allowed' }); return; }
-    try { await match.handler({ req, res, params: match.params, url }); }
+    try { await match.handler({ req, res, params: match.params, url, local: verdict.local }); }
     catch (error) {
       if (error instanceof HttpProblem) { sendJson(res, error.status, error.render(languageOf(app.config()))); return; }
       app.log(`[ERROR] ${req.method} ${url.pathname}: ${(error as Error).stack ?? error}`);

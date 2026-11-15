@@ -87,7 +87,7 @@ export function requireString(body: Record<string, unknown>, key: string, option
   return value;
 }
 
-export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: string[]; url: URL }) => Promise<void> | void;
+export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: string[]; url: URL; local: boolean }) => Promise<void> | void;
 
 export class Router {
   #routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [];
