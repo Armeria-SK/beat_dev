@@ -73,6 +73,12 @@ test('テンプレート: PowerShell の制限モードで動かない書き方�
   assert.match(shellRun.description, /constrained mode, so do not use \.NET type syntax \([^)]*\[pscustomobject\]/u);
 });
 
+test('テンプレート: 基本ルールの「How you speak」に、道具を使う前に何をするかを 1 文で言い、長く使ったあとは見つけたことを 1 行で言うと書いてある', t => {
+  const speak = /## How you speak\r?\n\r?\n((?:- [^\r\n]*\r?\n)+)/u.exec(readTemplate(paths(t), 'rules'))?.[1] ?? '';
+  assert.match(speak, /^- Before a group of tool calls, say in one sentence what you are about to do\r?$/mu);
+  assert.match(speak, /^- After a long stretch of tool calls, give a one-line note of what you found\. Keep both short\r?$/mu);
+});
+
 test('テンプレート: templates/ の直下を読み、無いファイルは空', t => {
   const real = paths(t);
   assert.match(readTemplate(real, 'rules'), /^# beat's basic rules/u);

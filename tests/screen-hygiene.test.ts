@@ -64,6 +64,7 @@ const DYNAMIC_PREFIXES: Record<string, string> = {
   'settings.mcp.problem.': 'ui/settings/mcp.tsx: 追加フォームの誤り（addProblem の値）の文',
   'settings.mcp.state.': 'ui/settings/mcp.tsx: サーバーの状態（connecting / ready / failed / off）の名前',
   'settings.mcp.toolState.': 'ui/settings/mcp.tsx: 道具の状態（registered / off / changed ほか）の名前',
+  'ui.toolLabel.': 'ui/tool-row.ts: ToolRow の動詞の欄に出す道具の短い名前（組み込みの道具の名前。無い道具は名前を読める形にする）',
 };
 
 // 前半が同じキーのうち、組み立てて使うものが決まっているときの、そのキー（ここに無い同じ前半のキーは、キー全体が文字列で出てこなければ、使われていないとみなす）。
