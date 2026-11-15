@@ -14,7 +14,7 @@ import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
-import { askBeforeRegister } from '../tools/skills/store.ts';
+import { askBeforeRegister, growSkills } from '../tools/skills/store.ts';
 import { resolveConfigPath } from '../tools/hooks/scope.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
@@ -367,6 +367,7 @@ export class Worker {
     const { db, tasks, memory, kv } = this.#d;
     const language = languageOf(this.#d.config());
     const skillsAutoRegister = !askBeforeRegister(this.#d.config());
+    const grow = growSkills(this.#d.config());
     const forgotten = (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
     if (job.trigger === 'book_full') {
       const budget = this.#d.memoryBudget?.();
@@ -377,14 +378,14 @@ export class Worker {
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
       if (!task) return {};
-      return { prompt: reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory }) };
+      return { prompt: reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister, growSkills: grow, memory: this.#d.botMemory }) };
     }
     if (!job.conversation_id) return {};
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
     const upto = Number(kv.get(reviewUptoKey(job.conversation_id)) ?? 0);
     const window = conversationWindow(db, job.conversation_id, upto, this.#reviewLimits(), language);
     if (!window.messages.some(m => m.message.role === 'user' && m.message.note === undefined)) return { upto: window.lastId };
-    return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, language, skillsAutoRegister, memory: this.#d.botMemory }), upto: window.lastId };
+    return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, language, skillsAutoRegister, growSkills: grow, memory: this.#d.botMemory }), upto: window.lastId };
   }
 
   #reviewed(conversationId: string, upto: number | undefined): void {
@@ -397,6 +398,7 @@ export class Worker {
     if (!reviews) return 'idle';
     const language = this.#language();
     if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
+    if (!this.#d.botMemory && !growSkills(this.#d.config())) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
     const { prompt, upto } = this.#reviewInput(job);
     if (!prompt) {
       reviews.finish(job.id, 'done', taskText(language, 'review.nothing'));

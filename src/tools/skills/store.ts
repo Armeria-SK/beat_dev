@@ -27,6 +27,7 @@ const MAX_BODY = 20_000;
 const MAX_DESCRIPTION = 300;
 
 export const askBeforeRegister = (config: Pick<AppConfig, 'skills'>): boolean => config.skills?.askBeforeRegister !== false;
+export const growSkills = (config: Pick<AppConfig, 'skills'>): boolean => config.skills?.grow !== false;
 
 export type SkillAuthor = 'you' | 'beat' | 'beat-auto';
 export interface SkillVersion { id: string; at: number; who: SkillAuthor; lines: number; description: string; body: string }

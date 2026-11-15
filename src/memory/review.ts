@@ -281,12 +281,14 @@ export function reviewPrompt(input: {
   bookPressure?: string | undefined;
   language?: Language | undefined;
   skillsAutoRegister?: boolean | undefined;
+  growSkills?: boolean | undefined;
   memory?: boolean | undefined;
 }): string {
   const language = input.language ?? DEFAULT_LANGUAGE;
   const text = REVIEW_TEXT[language];
   const policy = text.policy
     .filter(line => input.memory || (line.tag !== 'memory' && !line.memoryOnly))
+    .filter(line => line.tag !== 'skill' || input.growSkills !== false)
     .map(line => (input.skillsAutoRegister && line.tag === 'skill' ? text.skillAuto : line.text));
   const parts = [
     (input.memory ? text.intro : text.skillIntro)(TRIGGER_TEXT[language][input.trigger]),

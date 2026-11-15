@@ -381,6 +381,7 @@ export function SkillsPanel() {
     return () => { live = false; };
   }, []);
   const ask = (ctx.config.skills as Json | undefined)?.askBeforeRegister !== false;
+  const grow = (ctx.config.skills as Json | undefined)?.grow !== false;
   const shell = (ctx.config.tools?.shell ?? {}) as Json;
   const setShell = (row: string, patch: Json) => void ctx.commit(row, c => updateAt(c, 'tools', { shell: { ...(c.tools as Config).shell, ...patch } }));
   const goSkills = () => location.replace('#/skills');
@@ -388,8 +389,16 @@ export function SkillsPanel() {
   return (
     <>
       <Group title={t('ui.set.skills.title')}>
-        <Row k="skills:ask" title={t('ui.set.skills.ask')} desc={ask ? t('ui.set.skills.askOn') : t('ui.set.skills.askOff')}>
-          <Switch checked={ask} label={t('ui.set.skills.ask')} disabled={busy} onChange={next => void ctx.commit('skills:ask', c => {
+        <Row k="skills:grow" title={t('ui.set.skills.grow')} desc={grow ? t('ui.set.skills.growOn') : t('ui.set.skills.growOff')}>
+          <Switch checked={grow} label={t('ui.set.skills.grow')} disabled={busy} onChange={next => void ctx.commit('skills:grow', c => {
+            const { grow: _drop, ...rest } = (c.skills ?? {}) as Json;
+            const skills = next ? rest : { ...rest, grow: false };
+            const { skills: _old, ...others } = c;
+            return Object.keys(skills).length ? { ...others, skills } : others;
+          })} />
+        </Row>
+        <Row k="skills:ask" title={t('ui.set.skills.ask')} desc={!grow ? t('ui.set.skills.askGrowOff') : ask ? t('ui.set.skills.askOn') : t('ui.set.skills.askOff')}>
+          <Switch checked={ask} label={t('ui.set.skills.ask')} disabled={busy || !grow} onChange={next => void ctx.commit('skills:ask', c => {
             const { askBeforeRegister: _drop, ...rest } = (c.skills ?? {}) as Json;
             const skills = next ? rest : { ...rest, askBeforeRegister: false };
             const { skills: _old, ...others } = c;

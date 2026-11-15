@@ -264,6 +264,7 @@ export const AppConfig = Type.Object({
   notify: NotifyConfig,
   mcp: McpConfig,
   skills: Type.Optional(Type.Object({
+    grow: Type.Optional(Type.Boolean()),
     askBeforeRegister: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });

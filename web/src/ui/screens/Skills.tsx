@@ -391,6 +391,7 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
   const [tools, setTools] = useState<ToolInfo[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [browserOff, setBrowserOff] = useState(false);
+  const [growOff, setGrowOff] = useState(false);
   const [creating, setCreating] = useState(false);
   const [tick, setTick] = useState(0);
   const loads = useRef(latestOnly());
@@ -410,6 +411,11 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
     }
   }, []);
   useEffect(() => { const timer = setTimeout(() => void load(), 150); return () => clearTimeout(timer); }, [load, revision, tick]);
+  useEffect(() => {
+    let live = true;
+    api.settings().then(view => { if (live) setGrowOff(view.config.skills?.grow === false); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [revision, tick]);
   const hasBrowser = tools?.some(tool => tool.name.startsWith('browser_')) === true;
   useEffect(() => {
     if (!hasBrowser) return undefined;
@@ -431,6 +437,7 @@ export function Skills({ target, revision, running, onDrafts }: SkillsProps) {
         <div className="bt-screen__tools"><Button onClick={() => setCreating(true)}>{t('ui.skills.new')}</Button></div>
       </header>
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
+      {growOff && <p className="bt-meta" data-grow="off">{t('ui.skills.growOff')}</p>}
       <div className="bt-pane__stack ui-lib__stack">
         {creating && <NewSkill existing={sorted.map(s => s.name)} onClose={() => setCreating(false)} onSaved={name => { setCreating(false); reload(); location.hash = skillHash(name); }} />}
         {pending.length > 0 && (
