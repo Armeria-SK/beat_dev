@@ -109,7 +109,7 @@ function remotesOf(ctx: ToolContext): Remote[] | undefined {
   try { return parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes); } catch { return []; }
 }
 
-function shellOutbound(command: string, statements: readonly StatementFacts[], cwd: string, ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, language: Language, created: Set<string>): Outbound | undefined {
+function shellOutbound(command: string, statements: readonly StatementFacts[], ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, language: Language, created: Set<string>): Outbound | undefined {
   if (!statements.length) return { kind: 'send', reason: outboundText(language, 'send.unknown_command', { cmd: command.trim().slice(0, 80) }), targets: [] };
   const outEnv = gitOutboundEnv({
     productRoot: ctx.project?.root, remotes: remotesOf(ctx), dataDir: ctx.paths.data, env, gitExe: gitExe ?? '', language,
@@ -152,7 +152,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const paths = approvalPaths(verdict.paths);
   const pathsMore = approvalPathsMore(verdict.paths);
   const created = new Set<string>();
-  const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, cwd.cwd, ctx, childEnv, gitExe, language, created);
+  const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, ctx, childEnv, gitExe, language, created);
   const places = placesOf(verdict.statements, cwd.cwd);
   const pushes = pushesOf(verdict.statements, verdict.reasonKeys);
   const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];

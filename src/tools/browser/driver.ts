@@ -71,9 +71,6 @@ export interface PageHandle {
   // ariaSnapshot（elements.ts が読む）
   snapshot(): Promise<string>;
   goto(url: string, timeoutMs: number): Promise<{ status: number | undefined }>;
-  // 役割と名前（完全一致）に当たる要素の数 / その nth 番目の状態（無ければ undefined）
-  countRole(role: string, name: string): Promise<number>;
-  stateOf(role: string, name: string, nth: number): Promise<ElementState | undefined>;
   // 数が読んだときと同じで nth 番目があるときだけ、その要素の状態と属性。そうでなければ undefined
   locate(target: ElementTarget): Promise<ElementDetail | undefined>;
   // 押す / 文字を入れる（submit なら最後に Enter）。実行の直前に数をもう一度確かめ、違えば page_changed。
@@ -242,17 +239,6 @@ class PlaywrightPage implements PageHandle {
     } finally {
       this.entry = undefined;
     }
-  }
-
-  async countRole(role: string, name: string): Promise<number> {
-    return this.page.getByRole(role as Parameters<Page['getByRole']>[0], { name, exact: true }).count();
-  }
-
-  async stateOf(role: string, name: string, nth: number): Promise<ElementState | undefined> {
-    const locator = this.page.getByRole(role as Parameters<Page['getByRole']>[0], { name, exact: true });
-    if (nth >= await locator.count()) return undefined;
-    const one = locator.nth(nth);
-    return { visible: await one.isVisible(), enabled: await one.isEnabled() };
   }
 
   async #locator(target: ElementTarget): Promise<Locator | undefined> {
