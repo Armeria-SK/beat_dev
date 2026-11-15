@@ -13,7 +13,7 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
 import { judgeOnce, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
-import { involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
+import { forgetAllow, involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
 import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
 import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
@@ -405,7 +405,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           return involvedSnapshot(cwdNow, { files: [...read.files, ...(first?.writes ?? [])], filesMore: read.more, pushes: first?.pushes, places: first?.places, dataDir: ctx.paths.data }, ctx.signal).catch(() => undefined);
         };
         let judgeModel: unknown;
-        try { judgeModel = judgeIdentity(deps.config?.() ?? ctx.config); } catch { judgeModel = undefined; }
+        try { judgeModel = judgeIdentity(deps.config?.() ?? ctx.config, ctx.model?.id); } catch { judgeModel = undefined; }
         const cacheKey = judgeModel === undefined ? undefined : judgeCacheKey(ctx, {
           judgeInput, input: args, workspace: ctx.workspace, cwd: cwdNow, taintSources: ctx.taint.sources.length,
           reasonKeys: judgeKeys, askKinds: [...askKinds], bind: first?.bind ?? null, judge: judgeModel,
@@ -420,6 +420,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           verdict = judged.verdict;
           noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, judged.spend);
         }
+        const freshAllow = !reused && cacheKey !== undefined && verdict.decision === 'allow' && !verdict.failed;
+        if (known && !reused && !freshAllow && cacheKey !== undefined) forgetAllow(ctx, cacheKey);
+        const storeSnapshot = freshAllow ? await snapshotNow() : undefined;
         if (ctx.signal.aborted) {
           autoEvent('asked');
           return finish({ output: { content: toolText(language, 'pipeline.cancelled'), isError: true }, decision: 'ask', decidedBy: 'user', invalidArguments: false });
@@ -460,10 +463,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons,
         }, shownWhy);
         decision = 'allow'; decidedBy = reused ? JUDGE_REUSE : 'auto-mode'; autoWhy = why; sameAs = reused?.call;
-        if (!reused && cacheKey !== undefined) {
-          const snapshot = await snapshotNow();
-          if (snapshot !== undefined) rememberAllow(ctx, cacheKey, { call: callNumber, reason: why, snapshot });
-        }
+        if (freshAllow && cacheKey !== undefined && storeSnapshot !== undefined) rememberAllow(ctx, cacheKey, { call: callNumber, reason: why, snapshot: storeSnapshot });
         autoEvent('allowed', shownWhy);
         judgedId = autoId;
       }

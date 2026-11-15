@@ -408,3 +408,54 @@ test('J-3: 控えの git の問い合わせは実行の取り消しに従い、�
   controller.abort();
   assert.equal(await involvedSnapshot(repo, involved, controller.signal), undefined);
 });
+
+function pushRepo(s: ReturnType<typeof setup>): string {
+  const repo = join(s.workspace, 'repo');
+  mkdirSync(repo, { recursive: true });
+  git(repo, 'init', '-q');
+  writeFileSync(join(repo, 'a.txt'), 'a');
+  git(repo, 'add', 'a.txt');
+  git(repo, 'commit', '-q', '-m', 'a');
+  return repo;
+}
+
+test('J-3: 覚えるための控えは、判定のあとの確かめの前に取る。控えを取るあいだに計画モードになった・取り消されたら、動かない', async t => {
+  for (const flip of ['plan', 'abort'] as const) {
+    const s = setup(t);
+    s.world.pushes = [{ dir: pushRepo(s) }];
+    const controller = new AbortController();
+    s.ctx.signal = controller.signal;
+    s.state.classify = () => {
+      setTimeout(() => { if (flip === 'plan') s.state.mode = 'plan'; else controller.abort(); }, 15);
+      return ALLOW;
+    };
+    const outcome = await s.call();
+    assert.equal(s.ran(), 0, `${flip}: ${outcome.decidedBy} ${outcome.output.content}`);
+    assert.deepEqual([outcome.decidedBy, s.prompts.length], [flip === 'plan' ? 'mode' : 'user', 1], flip);
+  }
+});
+
+test('J-3: 覚えた allow があっても控えが変わって判定役が「聞きたい」と答えたら、覚えた allow は捨てる（ファイルを戻しても使わない）', async t => {
+  const s = setup(t);
+  const file = join(s.workspace, 'read.txt');
+  writeFileSync(file, 'one');
+  s.world.reads = [file];
+  await s.call();
+  writeFileSync(file, 'two');
+  s.state.classify = () => ASK;
+  assert.equal((await s.call()).decidedBy, 'pending');
+  writeFileSync(file, 'one');
+  s.state.classify = () => ALLOW;
+  assert.equal((await s.call()).decidedBy, 'auto-mode', '捨てたので、もう一度判定役に回る');
+  assert.equal(s.prompts.length, 3);
+});
+
+test('J-3: 判定役のモデルを決めていないとき（いまのモデルが判定役）、いまのモデルが替わったら判定役がもう一度呼ばれる', async t => {
+  const s = setup(t);
+  s.ctx.model = { id: 'm1', vision: false };
+  await s.call();
+  assert.equal((await s.call()).decidedBy, 'judge-reuse', '比べる基準');
+  s.ctx.model = { id: 'm2', vision: false };
+  assert.equal((await s.call()).decidedBy, 'auto-mode');
+  assert.equal(s.prompts.length, 2);
+});

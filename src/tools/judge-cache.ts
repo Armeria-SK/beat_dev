@@ -47,9 +47,10 @@ export function nextCallNumber(ctx: ToolContext): number {
   return ++memoryOf(ctx).calls;
 }
 
-export function judgeIdentity(config: Pick<AppConfig, 'routing' | 'models'>): unknown {
+export function judgeIdentity(config: Pick<AppConfig, 'routing' | 'models'>, current?: string): unknown {
   const named = config.routing.judge ?? [];
-  return named.map(id => { const model = config.models.find(m => m.id === id); return [id, model?.provider ?? null, model?.model ?? null]; });
+  const ids = named.length ? named : [current ?? null];
+  return ids.map(id => { const model = id === null ? undefined : config.models.find(m => m.id === id); return [id, model?.provider ?? null, model?.model ?? null]; });
 }
 
 const onRemoteDrive = (path: string): boolean => {
@@ -84,6 +85,10 @@ export function judgeCacheKey(ctx: ToolContext, parts: JudgeKeyParts): string | 
 
 export function rememberedAllow(ctx: ToolContext, key: string): RememberedAllow | undefined {
   return memoryOf(ctx).allowed.get(key);
+}
+
+export function forgetAllow(ctx: ToolContext, key: string): void {
+  memoryOf(ctx).allowed.delete(key);
 }
 
 export function rememberAllow(ctx: ToolContext, key: string, allow: RememberedAllow): void {
