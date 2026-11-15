@@ -4,6 +4,8 @@ import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { pendingText } from '../../shared/messages/pending.ts';
 import { CHECK_FAIL_LIMIT, CHECK_TEXT, checkSignal, productCheck, runProductCheck } from '../../projects/check-run.ts';
+import { liveList, ownedItems, runGate, type GateItemInput } from '../../projects/gate.ts';
+import { gateText } from '../../shared/messages/gate.ts';
 import { describeCron, validateCron } from '../../tasks/schedule.ts';
 import { TaskError, type Task, type TaskStore } from '../../tasks/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -34,12 +36,13 @@ function parseWhen(when: string | undefined): number | undefined {
   return ms;
 }
 
-export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: string; done_criteria?: string; priority?: number; when?: string; repeat?: string; requested_by_user?: boolean }> = {
+export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: string; done_criteria?: string; priority?: number; when?: string; repeat?: string; requested_by_user?: boolean; items?: string[] }> = {
   name: 'task_create',
   description: [
     'Write a to-do (a task) in the notebook. You work on it yourself later.',
     'For something the user asked for, requested_by_user=true. when is the start date and time (ISO 8601, with a time zone); repeat is the repetition (cron: "minute hour day month weekday", e.g. "0 9 * * MON-FRI").',
     'Do not make a task for something that finishes quickly; do it right away.',
+    'items hands acceptance items this task covers (e.g. ["A-2"]) to the new task.',
   ].join(' '),
   input: Type.Object({
     title: Type.String({ minLength: 1, maxLength: 200 }),
@@ -50,6 +53,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
     when: Type.Optional(Type.String({ maxLength: 40 })),
     repeat: Type.Optional(Type.String({ maxLength: 60 })),
     requested_by_user: Type.Optional(Type.Boolean()),
+    items: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 20 }), { maxItems: 60 })),
   }, { additionalProperties: false }),
   effect: 'meta',
   escalateOnTaint: true,
@@ -58,12 +62,26 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
     try {
       if (input.repeat && !validateCron(input.repeat)) throw new TaskError('error.bad_repeat', { repeat: input.repeat });
       const parent = ctx.task !== undefined && !store(ctx).beatDecided(ctx.task.id) ? ctx.task.id : undefined;
+      const items = input.items === undefined ? undefined : [...new Set(input.items)];
+      if (items?.length) {
+        const language = languageOf(ctx.config);
+        const owner = parent ? store(ctx).get(parent) : undefined;
+        const list = ctx.services?.db ? liveList(ctx.services.db, owner?.project_id ?? null) : undefined;
+        if (!owner || !list || !ctx.project || owner.project_id !== ctx.project.id) return { content: gateText(language, 'items_child_only'), isError: true };
+        if (input.repeat) return { content: gateText(language, 'items_repeat'), isError: true };
+        const unknown = items.filter(id => !list.items.some(entry => entry.id === id));
+        if (unknown.length) return { content: gateText(language, 'items_unknown', { ids: unknown.map(id => id.slice(0, 20)).join(', ') }), isError: true };
+        const mine = ownedItems(owner);
+        const foreign = items.filter(id => !mine.includes(id));
+        if (foreign.length) return { content: gateText(language, 'items_not_owned', { ids: foreign.join(', ') }), isError: true };
+      }
       const inTask = ctx.task !== undefined;
       const self = parent === undefined && (inTask || !input.requested_by_user);
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
         origin: self ? 'self' : 'user', propose: self && (!inTask || input.repeat !== undefined || ctx.config.worker.selfTasksNeedApproval), spawnedBy: parent,
+        ...(items?.length ? { acceptanceItems: items } : {}),
         actor: 'beat', createdInConversation: ctx.conversationId, projectId: ctx.project?.id,
       });
       ctx.touchedTasks?.add(task.id);
@@ -117,7 +135,7 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
       if (input.status === 'done') {
         const text = CHECK_TEXT[languageOf(ctx.config)];
         const children = s.openChildren(task.id);
-        const refused = ctx.task?.id === task.id ? text.selfDone : children > 0 ? text.doneChildren(children)
+        const refused = ctx.task?.id === task.id ? text.selfDone : ownedItems(task).length > 0 ? gateText(languageOf(ctx.config), 'update_done', { id: task.id }) : children > 0 ? text.doneChildren(children)
           : task.spawned_by === null && productCheck(ctx.services?.projects, task.project_id) !== undefined ? text.doneCheck : undefined;
         if (refused) return { content: refused, isError: true };
       }
@@ -153,10 +171,18 @@ export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_actio
   },
 };
 
-export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
+export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: GateItemInput[] }> = {
   name: 'task_complete',
-  description: 'Finish the task you are working on now. Write the result in summary. If there is nothing to tell the user, notify=false (finish quietly). While tasks you made from this task are unfinished (including ones set to start later with when), this only pauses the task until they finish. If the product has a check command, beat runs it first; when it fails, fix the cause and call this again.',
-  input: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4000 }), notify: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+  description: 'Finish the task you are working on now. Write the result in summary. If there is nothing to tell the user, notify=false (finish quietly). While tasks you made from this task are unfinished (including ones set to start later with when), this only pauses the task until they finish. If the product has a check command, beat runs it first; when it fails, fix the cause and call this again. For acceptance items this task covers, beat runs the item commands; for the other items pass items: the tag (E-3) of a successful tool call as evidence, or not_done with the reason.',
+  input: Type.Object({
+    summary: Type.String({ minLength: 1, maxLength: 4000 }),
+    notify: Type.Optional(Type.Boolean()),
+    items: Type.Optional(Type.Array(Type.Object({
+      id: Type.String({ minLength: 1, maxLength: 20 }),
+      evidence: Type.Optional(Type.String({ maxLength: 20 })),
+      not_done: Type.Optional(Type.String({ maxLength: 1000 })),
+    }, { additionalProperties: false }), { maxItems: 60 })),
+  }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
   replayable: false,
@@ -176,6 +202,12 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
     const own = tasks?.get(taskId);
     const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id) : undefined;
     if (check === 'invalid') return { content: text.invalid, isError: true };
+    const gate = own ? await runGate(ctx, own, input.items, language) : { kind: 'skip' as const };
+    if (gate.kind === 'refuse') return { content: gate.text, isError: true };
+    if (gate.kind === 'failed') {
+      ctx.task.control = { outcome: 'failed', reason: gate.reason };
+      return { content: `${gate.text}\n${end}`, isError: true };
+    }
     let passed = '';
     if (tasks && check) {
       const stop = checkSignal(ctx.stopSignal ?? ctx.signal, () => tasks.get(taskId)?.status === 'running');
@@ -196,6 +228,8 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
     const suffix = waiting.length ? pendingText(language, 'task_waiting', { ids: waiting.map(row => `#${row.id}`).join(', ') }) : '';
     ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true };
     const done = toolText(language, 'task.completed', { end });
-    return { content: [passed, done, suffix].filter(Boolean).join('\n') };
+    const items = gate.kind === 'pass' ? gate.text : '';
+    const state = own?.project_id ? gateText(language, 'state_line') : '';
+    return { content: [items, passed, state, done, suffix].filter(Boolean).join('\n') };
   },
 };

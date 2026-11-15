@@ -17,6 +17,8 @@ import { askBeforeRegister } from '../tools/skills/store.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
 import { CHECK_FAIL_LIMIT, CHECK_KEEP, CHECK_OPTIONS, CHECK_TEXT } from '../projects/check-run.ts';
+import { GATE_LIMIT, itemSummary, workAgreement } from '../projects/gate.ts';
+import { gateText } from '../shared/messages/gate.ts';
 import { projectFolderGone } from '../projects/run.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
@@ -107,7 +109,7 @@ export function inQuietHours(now: number, timezone: string, start: string, end: 
   return start < end ? hm >= start && hm < end : hm >= start || hm < end;
 }
 
-export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE): string {
+export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE, agreement?: string): string {
   const text = TASK_TEXT[language];
   const history = events.filter(e => e.content).slice(0, 10).map(e => (e.kind === 'reason'
     ? `- ${text.time(e.created_at, timezone)} ${e.actor === 'user' ? text.ownerReason : text.otherReason}: ${e.content!.replace(/\r\n|[\r\n\p{Zl}\p{Zp}]/gu, '\n  ')}`
@@ -122,6 +124,8 @@ export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; act
     task.body && `${text.details}:\n${task.body}`,
     task.next_action && `${text.nextAction}: ${task.next_action}`,
     task.done_criteria && `${text.doneCriteria}: ${task.done_criteria}`,
+    agreement && `
+${agreement}`,
     history.length ? `\n${text.historyHeading}\n${history.join('\n')}` : '',
     '',
     text.howHeading,
@@ -415,7 +419,7 @@ export class Worker {
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}`, projectId: task.project_id });
       return 'folder_missing';
     }
-    const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language);
+    const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
     const started = engine.runTask(task, conversationId, prompt);
     if (!started.ok) {
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.no_model', { detail: started.errorMessage.split('\n')[0]! }) });
@@ -450,6 +454,7 @@ export class Worker {
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'done', control.summary, 'beat', runId);
+      if (itemSummary(this.#d.db, task)?.remaining.length) tasks.setCheckState(task.id, 'awaiting');
       if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, projectId });
       return;
     }
@@ -462,9 +467,12 @@ export class Worker {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'failed', control.reason, 'beat', runId);
       const failures = tasks.checkFailures(task.id);
+      const items = failures.count >= CHECK_FAIL_LIMIT ? undefined : tasks.gateStreak(task.id);
       if (failures.count >= CHECK_FAIL_LIMIT) {
         const text = CHECK_TEXT[language];
         this.#d.questions?.add({ kind: 'check_failed', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: text.question(task.title), why: text.why(failures.last), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
+      } else if (items && items.itemFailed >= GATE_LIMIT) {
+        this.#d.questions?.add({ kind: 'check_failed', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: gateText(language, 'item_question', { limit: GATE_LIMIT, title: task.title }), why: CHECK_TEXT[language].why(items.last), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
       }
       notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: control.reason, link, dedupKey: `failed:${task.id}:${now}`, projectId });
       return;

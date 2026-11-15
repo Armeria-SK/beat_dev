@@ -6,6 +6,8 @@ import { LocalizedError, type MessageParams } from '../shared/messages/define.ts
 import { taskText, type TaskErrorCode } from '../shared/messages/tasks.ts';
 import { describeCron, nextRunAt } from './schedule.ts';
 
+export const OWNER_FIX = 'owner_fix';
+
 export type TaskStatus = 'inbox' | 'ready' | 'running' | 'waiting' | 'scheduled' | 'done' | 'failed' | 'cancelled';
 export type TaskOrigin = 'user' | 'self' | 'curiosity' | 'schedule';
 
@@ -40,6 +42,7 @@ export interface Task {
   acceptance_items: string | null;
   owner_request: string | null;
   spawned_by: string | null;
+  check_state: 'awaiting' | 'checked' | null;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -466,7 +469,7 @@ export class TaskStore {
   }
 
   openBuild(projectId: string): string | null {
-    const row = this.#db.prepare("SELECT id FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting') ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as { id: string } | undefined;
+    const row = this.#db.prepare("SELECT id FROM tasks t WHERE project_id = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL AND status IN ('ready', 'running', 'waiting') AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = ?) ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId, OWNER_FIX) as { id: string } | undefined;
     return row?.id ?? null;
   }
 
@@ -648,7 +651,7 @@ export class TaskStore {
     if (unapproved && actor !== 'user') throw new TaskError('error.needs_approval');
     transaction(this.#db, () => {
       if (unapproved && task.status === 'cancelled') this.#adopt(task);
-      this.#db.prepare(`UPDATE tasks SET status = ?, attempts = 0, run_at = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
+      this.#db.prepare(`UPDATE tasks SET status = ?, attempts = 0, run_at = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = NULL, check_state = NULL, updated_at = ? WHERE id = ?`)
         .run(isTemplate ? 'scheduled' : 'ready', nextRun, now, id);
       this.event(id, 'reopened', actor, reason ?? null);
     });
@@ -661,6 +664,26 @@ export class TaskStore {
 
   productBusy(task: Task): boolean {
     return task.project_id !== null && this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' AND id != ? LIMIT 1").get(task.project_id, task.id) !== undefined;
+  }
+
+  setCheckState(id: string, state: 'awaiting' | 'checked'): Task {
+    this.#db.prepare('UPDATE tasks SET check_state = ?, updated_at = ? WHERE id = ?').run(state, this.#now(), id);
+    return this.#changed(id);
+  }
+
+  awaitingIn(projectId: string): Task[] {
+    return this.#db.prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'done' AND check_state = 'awaiting' ORDER BY created_at").all(projectId) as unknown as Task[];
+  }
+
+  family(id: string): string[] {
+    const rows = this.#db.prepare('WITH RECURSIVE f(id, depth) AS (SELECT ?, 0 UNION SELECT t.id, f.depth + 1 FROM tasks t JOIN f ON t.spawned_by = f.id WHERE f.depth < 100) SELECT DISTINCT id FROM f').all(id) as Array<{ id: string }>;
+    return rows.map(row => row.id);
+  }
+
+  gateStreak(id: string): { refused: number; itemFailed: number; last: string | null } {
+    const rows = this.#db.prepare("SELECT kind, content FROM task_events WHERE task_id = ? AND kind IN ('gate_refused', 'item_check_failed', 'gate_passed', 'gate_closed', 'reopened') ORDER BY id DESC LIMIT 100").all(id) as Array<{ kind: string; content: string | null }>;
+    const lead = (kind: string): number => { const at = rows.findIndex(row => row.kind !== kind); return at === -1 ? rows.length : at; };
+    return { refused: lead('gate_refused'), itemFailed: lead('item_check_failed'), last: rows[0]?.kind === 'item_check_failed' ? rows[0].content : null };
   }
 
   checkFailures(id: string): { count: number; last: string | null } {
