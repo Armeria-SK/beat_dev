@@ -16,7 +16,7 @@ import { fileEdit, fileList, fileRead, fileWrite, previousForDelta } from '../sr
 import { historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { skillDraft, skillView } from '../src/tools/builtin/skills.ts';
-import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from '../src/tools/builtin/tasks.ts';
+import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from '../src/tools/builtin/tasks.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -224,7 +224,7 @@ test('タスクの道具の結果（英語）', async t => {
   const created = await text(taskCreate, { title: 'Write report', requested_by_user: true, repeat: '0 9 * * *' });
   assert.match(created, /^Created the task - \[[0-9a-f]{8}\] scheduled \/ Every day at 09:00 "Write report"$/u);
   const own = await text(taskCreate, { title: 'My own' });
-  assert.match(own, / \(Autonomous action is off, so it will not run until the user turns it on or presses "Run now"\)$/u);
+  assert.match(own, / \(Created as a proposal. It runs once the user approves it\)$/u);
   const timed = await text(taskCreate, { title: 'Later', requested_by_user: true, when: '2026-12-01T09:00:00+09:00', next_action: 'Start' });
   const enTime = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'Asia/Tokyo' }).format(Date.parse('2026-12-01T09:00:00+09:00'));
   assert.ok(timed.endsWith(` ready / from ${enTime} "Later" next: Start`), timed);
@@ -238,10 +238,8 @@ test('タスクの道具の結果（英語）', async t => {
   const withTask = (control: ToolContext['task']): ToolContext => ({ ...ctx, kind: 'task', task: control });
   const slot = () => ({ id: 't', control: { outcome: 'none' } as never });
   assert.equal((await run(taskComplete, { summary: 's' })).content, 'No task is running');
-  assert.equal((await run(askUser, { question: 'q' })).content, 'No task is running. In a conversation, just ask the question directly');
   const endEn = 'End this run here (do no further work).';
   assert.equal(await text(taskComplete, { summary: 's' }, withTask(slot())), `Recorded as done. ${endEn}`);
-  assert.equal(await text(askUser, { question: 'q' }, withTask(slot())), `Asked the user. It will resume when the answer comes. ${endEn}`);
   const checkpoint = slot();
   assert.equal(await text(taskCheckpoint, { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 5 }, withTask(checkpoint)), `Saved the progress. Will resume in 5 min. ${endEn}`);
   assert.equal((checkpoint.control as { note?: string }).note, 'Tried: a / Result: b');

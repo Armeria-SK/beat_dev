@@ -107,7 +107,7 @@ test('タスクの経過と通知: 英語で書く', async t => {
   assert.equal(done.title, 'Task finished: Stop me');
 
   const asked = s.app.tasks.create({ title: 'Q', origin: 'user', actor: 'user' });
-  s.adapter().scripts.push(toolCall('ask_user', { question: 'What now?' }));
+  s.adapter().scripts.push(toolCall('question_add', { question: 'What now?', why: 'w', options: ['a', 'b'], blocking: true }));
   await s.app.worker.tick();
   assert.equal(s.app.notifications.list()[0]!.title, 'I have a question: Q');
   assert.equal(s.app.tasks.get(asked.id)!.status, 'waiting');
@@ -126,7 +126,7 @@ test('タスクの経過と通知: 英語で書く', async t => {
   for (const n of s.app.notifications.list()) { noJapanese('notification title', n.title); noJapanese('notification body', n.body); }
 });
 
-test('タスクの相談: 3 回続けて決められなければ相談する（英語）', async t => {
+test('進まないタスク: 3 回続けて決められなければ失敗にして質問票に行を足す（英語）', async t => {
   const s = await startApp(t);
   const task = s.app.tasks.create({ title: 'Vague job', origin: 'user', actor: 'user' });
   for (let i = 0; i < 3; i++) {
@@ -135,9 +135,12 @@ test('タスクの相談: 3 回続けて決められなければ相談する（�
     s.clock.now += 40 * MIN;
   }
   const stuck = s.app.tasks.get(task.id)!;
-  assert.equal(stuck.status, 'waiting');
-  assert.equal(stuck.waiting_text, 'I tried to work on "Vague job" 3 times but could not decide how to proceed. Please tell me what to do (cancel it if you would rather drop it)');
-  assert.equal(s.app.notifications.list()[0]!.title, 'I need your advice: Vague job');
+  assert.equal(stuck.status, 'failed');
+  assert.equal(stuck.result_summary, 'Stopped after 3 runs in a row without progress (each ended with a reply only). The owner is asked in Questions.');
+  const [question] = s.app.questions.list({ status: 'open', taskId: task.id });
+  assert.equal(question!.question, '"Vague job" ran 3 times in a row without making progress, so it was stopped. Run the task again?');
+  assert.equal(question!.why, 'Each of those runs ended with a reply only, without task_complete, task_checkpoint or a question.');
+  assert.deepEqual(s.app.notifications.list().map(n => n.title).slice(0, 2).sort(), ['Question recorded', 'Task failed: Vague job']);
   assert.match(stuck.body, /- Note: thought 0/u);
 });
 

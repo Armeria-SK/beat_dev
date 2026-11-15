@@ -222,7 +222,7 @@ test('5-4-s タスクの実行で急ぐ質問を記録すると、未読の知�
   assert.equal(sent[0]!.title, 'I have a question: Build the page');
 });
 
-test('5-4-s 急ぐ質問の知らせを持ち主が読んだあと、同じ文の ask_user で待つと、task_waiting が 1 つ未読で出る', async t => {
+test('5-4-s 急ぐ質問に /answer で答えて知らせを読んだあと、同じ文でまた急ぐ質問をすると、question_new が 1 つ未読で出る（task_waiting は出ない）', async t => {
   const s = await startApp(t, { configure: c => { c.routing = { chat: ['m1'], background: ['m1'], retriesPerModel: 0 }; c.memory.review = false; } });
   const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
   const text = 'Which payment provider?';
@@ -232,11 +232,11 @@ test('5-4-s 急ぐ質問の知らせを持ち主が読んだあと、同じ文�
   const answered = await s.json(`/api/tasks/${task.id}/answer`, 'POST', { text: 'A' });
   assert.equal(answered.status, 200);
   s.app.notifications.markRead();
-  s.adapter().scripts.push(toolCall('ask_user', { question: text }));
+  s.adapter().scripts.push(toolCall('question_add', { question: text, why: 'Still no safe default', options: ['A', 'B'], blocking: true }));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.tasks.get(task.id)!.status, 'waiting');
   const unread = s.app.db.prepare('SELECT kind FROM notifications WHERE read_at IS NULL').all() as Array<{ kind: string }>;
-  assert.deepEqual(unread.map(n => n.kind), ['task_waiting']);
+  assert.deepEqual(unread.map(n => n.kind), ['question_new']);
 });
 
 test('5-4-s 外の送り先: 急ぐ質問の question_new は task_waiting を持つ送り先にも届き、急がない質問は届かない', async () => {

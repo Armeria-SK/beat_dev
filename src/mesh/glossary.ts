@@ -1,4 +1,4 @@
-import { cleanLine, marker, MeshWriteError, refuseSecret, upsertLine, type ParsedRows, type RowAuthor } from './map.ts';
+import { cleanLine, foldFence, marker, MeshWriteError, refuseSecret, upsertLine, type ParsedRows, type RowAuthor } from './map.ts';
 
 export const GLOSSARY_FILE = 'GLOSSARY.md';
 export const GLOSSARY_ROWS_MAX = 30;
@@ -33,7 +33,7 @@ export function cleanTerm(raw: string): string {
   if (!term) throw new MeshWriteError('glossary_term_empty');
   if (/[→⟶]/u.test(term.normalize('NFKC'))) throw new MeshWriteError('glossary_term_arrow');
   refuseSecret(term, 'term');
-  return term;
+  return foldFence(term);
 }
 
 export function upsertGlossary(existing: string | undefined, row: GlossaryRow): { content: string; added: boolean } {

@@ -89,7 +89,7 @@ test('T-03 親が agent_run を呼ぶと、子の会話と子の run ができ�
   assert.equal(s.app.conversations.messages(parent).filter(m => m.role === 'assistant').length, 2);
   // 子に渡った道具には agent_run も、人に聞く・記憶を書く道具もない。読む・計算する道具はある
   const childTools = names(s, 1);
-  for (const forbidden of ['agent_run', 'task_complete', 'ask_user', 'notify_owner', 'memory_save', 'history_search', 'skill_draft', 'checklist_write']) assert.equal(childTools.includes(forbidden), false, forbidden);
+  for (const forbidden of ['agent_run', 'task_complete', 'question_add', 'notify_owner', 'memory_save', 'history_search', 'skill_draft', 'checklist_write']) assert.equal(childTools.includes(forbidden), false, forbidden);
   for (const allowed of ['file_read', 'calculate', 'web_fetch']) assert.equal(childTools.includes(allowed), true, allowed);
 });
 

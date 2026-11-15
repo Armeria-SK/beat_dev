@@ -3,6 +3,7 @@ import type { Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { pendingText } from '../../shared/messages/pending.ts';
+import { CHECK_FAIL_LIMIT, CHECK_TEXT, checkSignal, productCheck, runProductCheck } from '../../projects/check-run.ts';
 import { describeCron, validateCron } from '../../tasks/schedule.ts';
 import { TaskError, type Task, type TaskStore } from '../../tasks/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -56,11 +57,14 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
   async execute(input, ctx) {
     try {
       if (input.repeat && !validateCron(input.repeat)) throw new TaskError('error.bad_repeat', { repeat: input.repeat });
-      const self = !input.requested_by_user || (ctx.task !== undefined && store(ctx).beatDecided(ctx.task.id));
+      const parent = ctx.task !== undefined && !store(ctx).beatDecided(ctx.task.id) ? ctx.task.id : undefined;
+      const inTask = ctx.task !== undefined;
+      const self = parent === undefined && (inTask || !input.requested_by_user);
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
-        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'beat', createdInConversation: ctx.conversationId, projectId: ctx.project?.id,
+        origin: self ? 'self' : 'user', propose: self && (!inTask || input.repeat !== undefined || ctx.config.worker.selfTasksNeedApproval), spawnedBy: parent,
+        actor: 'beat', createdInConversation: ctx.conversationId, projectId: ctx.project?.id,
       });
       ctx.touchedTasks?.add(task.id);
       const language = languageOf(ctx.config);
@@ -110,6 +114,13 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
       const task = s.find(input.id);
       if (!task) throw new TaskError('error.tool_not_found', { id: input.id });
       if (ctx.project && task.project_id !== ctx.project.id) throw new TaskError('error.other_project', { id: input.id });
+      if (input.status === 'done') {
+        const text = CHECK_TEXT[languageOf(ctx.config)];
+        const children = s.openChildren(task.id);
+        const refused = ctx.task?.id === task.id ? text.selfDone : children > 0 ? text.doneChildren(children)
+          : task.spawned_by === null && productCheck(ctx.services?.projects, task.project_id) !== undefined ? text.doneCheck : undefined;
+        if (refused) return { content: refused, isError: true };
+      }
       let updated = s.update(task.id, {
         ...(input.note ? { appendNote: input.note } : {}), ...(input.next_action ? { nextAction: input.next_action } : {}),
         ...(input.priority ? { priority: input.priority } : {}), ...(input.when ? { runAt: parseWhen(input.when) ?? null } : {}),
@@ -144,7 +155,7 @@ export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_actio
 
 export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
   name: 'task_complete',
-  description: 'Finish the task you are working on now. Write the result in summary. If there is nothing to tell the user, notify=false (finish quietly).',
+  description: 'Finish the task you are working on now. Write the result in summary. If there is nothing to tell the user, notify=false (finish quietly). While tasks you made from this task are unfinished (including ones set to start later with when), this only pauses the task until they finish. If the product has a check command, beat runs it first; when it fails, fix the cause and call this again.',
   input: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4000 }), notify: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
@@ -152,25 +163,39 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
+    const end = toolText(language, 'task.end');
+    const text = CHECK_TEXT[language];
+    if (ctx.task.control.outcome !== 'none') return { content: text.already };
+    const taskId = ctx.task.id;
+    const tasks = ctx.services?.tasks;
+    const children = tasks?.openChildren(taskId) ?? 0;
+    if (children > 0) {
+      ctx.task.control = { outcome: 'yield', reason: text.yieldReason(children) };
+      return { content: `${text.childrenLeft(children)} ${end}` };
+    }
+    const own = tasks?.get(taskId);
+    const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id) : undefined;
+    if (check === 'invalid') return { content: text.invalid, isError: true };
+    let passed = '';
+    if (tasks && check) {
+      const stop = checkSignal(ctx.stopSignal ?? ctx.signal, () => tasks.get(taskId)?.status === 'running');
+      let run;
+      try { run = await runProductCheck(check, { config: ctx.config, dataDir: ctx.paths.data, signal: stop.signal }); } finally { stop.dispose(); }
+      if (!run.ok && run.reason === 'aborted') return { content: text.stopped, isError: true };
+      if (!run.ok) {
+        const attempt = tasks.checkFailures(taskId).count + 1;
+        tasks.event(taskId, 'check_failed', 'beat', text.event(run, attempt), ctx.runId);
+        if (attempt < CHECK_FAIL_LIMIT) return { content: text.failed(check.command, run, attempt), isError: true };
+        ctx.task.control = { outcome: 'failed', reason: text.reason(run) };
+        return { content: `${text.gaveUp(check.command, run)}\n${end}`, isError: true };
+      }
+      tasks.event(taskId, 'check_passed', 'beat', null, ctx.runId);
+      passed = text.passed(check.command);
+    }
     const waiting = ctx.services?.db ? (ctx.services.db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(ctx.task.id) as Array<{ id: number }>) : [];
     const suffix = waiting.length ? pendingText(language, 'task_waiting', { ids: waiting.map(row => `#${row.id}`).join(', ') }) : '';
     ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true };
-    const done = toolText(language, 'task.completed', { end: toolText(language, 'task.end') });
-    return { content: suffix ? `${done}\n${suffix}` : done };
-  },
-};
-
-export const askUser: ToolDef<{ question: string }> = {
-  name: 'ask_user',
-  description: 'Ask the user about the task you are working on now (the task stops until the answer comes). Ask only about things where going ahead on a guess would cause trouble.',
-  input: Type.Object({ question: Type.String({ minLength: 1, maxLength: 1500 }) }, { additionalProperties: false }),
-  effect: 'meta',
-  allowedIn: ['task'],
-  replayable: false,
-  async execute(input, ctx) {
-    const language = languageOf(ctx.config);
-    if (!ctx.task) return { content: toolText(language, 'task.not_running_chat'), isError: true };
-    ctx.task.control = { outcome: 'question', question: input.question };
-    return { content: toolText(language, 'task.asked', { end: toolText(language, 'task.end') }) };
+    const done = toolText(language, 'task.completed', { end });
+    return { content: [passed, done, suffix].filter(Boolean).join('\n') };
   },
 };

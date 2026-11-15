@@ -1,6 +1,6 @@
 import { mcpEnvName } from '../../../src/shared/secret-slots.ts';
 import type { PlainKey } from '../i18n/index.ts';
-import type { McpAddInput, McpDiffView, McpEffect, McpServerState, McpShapeView, McpToolView } from '../api.ts';
+import type { McpAddInput, McpEffect, McpServerState, McpShapeView, McpToolView } from '../api.ts';
 import type { Config } from './model.ts';
 
 // 設定の「MCP サーバー」の、画面を使わない部分。広がる変更を保存の前に数えるための「もし変えたら」の設定、追加フォームの組み立て、失敗の扱い、状態の見せ方。
@@ -193,21 +193,6 @@ export function reasonKey(reason: string | undefined): PlainKey {
 export const sameShape = (a: McpShapeView | undefined, b: McpShapeView | undefined): boolean =>
   a === undefined || b === undefined ? a === b
     : a.description === b.description && a.schema === b.schema && a.destructive === b.destructive && a.openWorld === b.openWorld && a.stripped === b.stripped;
-
-export interface ShapeChanges { description: boolean; schema: boolean; destructive: boolean; openWorld: boolean; stripped: boolean }
-
-// 前と今で、何が変わったか（長い文の後ろの変更を見落とさないための一言用）
-export function shapeChanges(diff: McpDiffView): ShapeChanges {
-  const { before, after } = diff;
-  if (!before) return { description: true, schema: true, destructive: after.destructive, openWorld: after.openWorld, stripped: after.stripped > 0 };
-  return {
-    description: before.description !== after.description,
-    schema: before.schema !== after.schema,
-    destructive: before.destructive !== after.destructive,
-    openWorld: before.openWorld !== after.openWorld,
-    stripped: before.stripped !== after.stripped,
-  };
-}
 
 // サーバーが書いた文を差分の画面に出すとき、見えない文字（向きを変える文字・幅の無い文字・タグ文字・異体字選択子・空白に見える文字・対の無いサロゲートなど）を \u{E0041} のような見える形にする。
 // サーバー側でモデルに渡す形からは落としてあるが、落とし損ねた文字が残っていても、持ち主の目には見えるようにする。改行とタブはそのまま

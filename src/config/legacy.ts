@@ -11,6 +11,7 @@ export const LEGACY_KEYS: readonly LegacyKey[] = [
   { path: 'tools.shell.approvalTimeoutSec', removedIn: 'beat 4-3b-1' },
   { path: 'tools.taintEscalation', removedIn: 'beat 4-3b-2' },
   { path: 'mcp.servers[].localOk', removedIn: 'beat 4-1' },
+  { path: 'worker.remindAfterHours', removedIn: 'beat 5-2b-s' },
 ];
 
 function isObject(value: unknown): value is Record<string, unknown> {

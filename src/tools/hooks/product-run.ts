@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { GIT_IDENTITY } from './allowlist-git.ts';
 import { DEV_RUNNERS, GIT_IDENTITY_KEY, PRODUCT_CODE_KEYS, SERVICE_PROGRAMS } from './decision-order.ts';
@@ -43,11 +43,24 @@ const RUNNER_FILES: Readonly<Record<string, readonly string[]>> = {
   npm: ['package.json'],
   make: ['Makefile', 'makefile', 'GNUmakefile'], gmake: ['Makefile', 'makefile', 'GNUmakefile'], nmake: ['Makefile', 'makefile'],
   just: ['justfile', 'Justfile', '.justfile'], rake: ['Rakefile', 'rakefile', 'Rakefile.rb'], ninja: ['build.ninja'],
-  pytest: ['pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini', 'conftest.py'], tox: ['tox.ini', 'pyproject.toml', 'setup.cfg'], nox: ['noxfile.py'],
+  nox: ['noxfile.py'],
   jest: ['package.json', 'jest.config.js', 'jest.config.ts', 'jest.config.mjs', 'jest.config.cjs', 'jest.config.json'],
   vitest: ['package.json', 'vitest.config.ts', 'vitest.config.js', 'vitest.config.mts', 'vitest.config.mjs', 'vite.config.ts', 'vite.config.js'],
   mocha: ['package.json', '.mocharc.js', '.mocharc.cjs', '.mocharc.json', '.mocharc.yml', '.mocharc.yaml', '.mocharc.jsonc'],
 };
+const RUNNER_SECTIONS: Readonly<Record<string, Readonly<Record<string, RegExp | null>>>> = {
+  pytest: { 'pytest.ini': null, '.pytest.ini': null, 'pyproject.toml': /^[ \t]*\[tool\.pytest(?:\.ini_options)?\][ \t\r]*$/mu, 'tox.ini': /^[ \t]*\[pytest\][ \t\r]*$/mu, 'setup.cfg': /^[ \t]*\[tool:pytest\][ \t\r]*$/mu },
+  tox: { 'tox.ini': null, 'pyproject.toml': /^[ \t]*\[tool\.tox\][ \t\r]*$/mu, 'setup.cfg': /^[ \t]*\[tox:tox\][ \t\r]*$/mu },
+};
+const SECTION_READ_LIMIT = 1024 * 1024;
+
+function configHas(file: string, section: RegExp | null): boolean {
+  const st = statSync(file, { throwIfNoEntry: false });
+  if (st?.isFile() !== true) return false;
+  if (section === null) return true;
+  if (st.size > SECTION_READ_LIMIT) return false;
+  try { return section.test(readFileSync(file, 'utf8')); } catch { return false; }
+}
 const PLACE_FLAGS = new Set(['directory', 'file', 'makefile', 'include-dir', 'rootdir', 'root', 'config', 'config-file', 'justfile', 'working-directory', 'pyargs',
   'confcutdir', 'basetemp', 'require', 'workdir', 'toxinidir', 'envdir', 'noxfile', 'project', 'projects', 'dir', 'cwd', 'chdir', 'prefix', 'userconfig', 'globalconfig']);
 const PLACE_SHORT = /^-[A-Za-z]*[CfcpdIrR]/u;
@@ -114,6 +127,8 @@ function runnerStaysInside(st: StatementFacts, root: string): boolean {
   const name = programName(st);
   const files = RUNNER_FILES[name];
   if (files && !files.some(file => statSync(resolve(st.cwd!, file), { throwIfNoEntry: false })?.isFile() === true)) return false;
+  const sections = RUNNER_SECTIONS[name];
+  if (sections && !Object.entries(sections).some(([file, section]) => configHas(resolve(st.cwd!, file), section))) return false;
   if (DEV_RUNNERS.has(name)) return runnerArgsAllowed(st, root, RUNNER_FLAGS[name] ?? {});
   for (const word of st.words.slice(1)) {
     const text = word.text;

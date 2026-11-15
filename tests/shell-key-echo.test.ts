@@ -25,10 +25,13 @@ test('shell の結果: コマンドに BEGIN の印があり、出力が BEGIN �
 });
 
 test('shell の結果: コマンドに鍵そのもの（BEGIN から END まで）があれば写しの中で伏せ、出力はそのまま', () => {
-  const text = shown(`printf '%s' "${BEGIN}\n${BODY}\n${END}" > k.pem`, [`${BODY.slice(0, 4)} plain output\n${END}`]);
+  const command = `printf '%s' "${BEGIN}\n${BODY}\n${END}" > k.pem`;
+  const text = shown(command, [`${BODY.slice(0, 4)} plain output\n\n${END}`]);
   assert.ok(text.includes(HEADER), text);
   assert.ok(!text.includes(BODY), text);
   assert.ok(text.includes('plain output'), text);
+  const raw = shellTranscript(command, HEADER, [`${BODY.slice(0, 4)} plain output\n${END}`]);
+  assert.ok(raw.endsWith(`\n\n${BODY.slice(0, 4)} plain output\n${END}`), raw);
 });
 
 test('shell の結果: 印の無いコマンドは、今までと同じ並び（写し・見出し・出力）', () => {

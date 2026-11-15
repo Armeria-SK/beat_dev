@@ -46,7 +46,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
   const ran: string[] = [];
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun)
     .register(stub('memory_save', ['chat', 'task', 'review'], ran))
-    .register(stub('task_complete', ['task'], ran)).register(stub('task_checkpoint', ['task'], ran)).register(stub('ask_user', ['task'], ran));
+    .register(stub('task_complete', ['task'], ran)).register(stub('task_checkpoint', ['task'], ran));
   const policy = buildPolicy(parsed, paths);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const controller = new AbortController();
@@ -226,10 +226,10 @@ test('A3: タスクの実行で ask になったら、札を待たずに Pending
   assert.deepEqual(rows.map(r => [r.kind, r.conversation_id, r.run_kind]), [['policy', 'task-conv', 'task']]);
 });
 
-test('A3: 方針を持てない道具（task_complete・task_checkpoint・ask_user）は、設定に block・ask と書いてあっても無視する（止めるとワーカーが終われなくなる）', async t => {
-  const s = setup(t, { task_complete: 'block', task_checkpoint: 'ask', ask_user: 'block' });
+test('A3: 方針を持てない道具（task_complete・task_checkpoint）は、設定に block・ask と書いてあっても無視する（止めるとワーカーが終われなくなる）', async t => {
+  const s = setup(t, { task_complete: 'block', task_checkpoint: 'ask' });
   const task = { ...s.ctx, kind: 'task' as const, conversationId: 'task-conv' };
-  for (const [i, name] of ['task_complete', 'task_checkpoint', 'ask_user'].entries()) {
+  for (const [i, name] of ['task_complete', 'task_checkpoint'].entries()) {
     const outcome = await s.call(name, {}, task);
     assert.equal(outcome.decision, 'allow', name);
     assert.equal(outcome.output.content, `ran ${name}\n[E-${i + 1}]`);

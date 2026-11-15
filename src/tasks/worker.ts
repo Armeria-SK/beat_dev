@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schema.ts';
 import type { Conversations } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
+import { Runs } from '../db/runs.ts';
 import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
@@ -10,12 +11,12 @@ import { curiosityText } from '../curiosity/text.ts';
 import { bookPressureText, isNoProposal, reviewPrompt, TIDY_FORBIDDEN_TOOLS, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
 import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
-import { BLOCKING_QUESTION_KEY } from '../shared/notification-list.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister } from '../tools/skills/store.ts';
 import type { TaskControl } from '../tools/types.ts';
 import type { Task, TaskStore } from './store.ts';
+import { CHECK_FAIL_LIMIT, CHECK_KEEP, CHECK_OPTIONS, CHECK_TEXT } from '../projects/check-run.ts';
 import { projectFolderGone } from '../projects/run.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
@@ -92,7 +93,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
       '- Make progress with your tools. Do not overdo it in a single run',
       '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
       '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
-      '- Use ask_user only for what you cannot move forward on without checking with the user',
+      '- If something is unclear, record it with question_add and keep going with the option you assume. Set blocking only when no assumption is safe',
       '- You do not need to wait for a call held in Pending for the user to decide: keep going with whatever else you can do. beat resumes the task as soon as the user decides, so there is no need to check on it. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
       "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
     ],
@@ -195,6 +196,11 @@ export class Worker {
     this.#timer.unref?.();
   }
 
+  #taskTainted(taskId: string): boolean {
+    const conversationId = this.#d.tasks.get(taskId)?.conversation_id ?? null;
+    return this.#d.tasks.textTainted(taskId) || (conversationId !== null && new Runs(this.#d.db).anyTaintedTask(conversationId));
+  }
+
   runsLastHour(): number {
     // タスクと振り返り（どちらも裏で動く実行）を数える。会話は数えない
     return (this.#d.db.prepare("SELECT COUNT(*) AS n FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ?").get(this.#now() - 3_600_000) as { n: number }).n;
@@ -237,13 +243,9 @@ export class Worker {
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
 
-      // 予定から実行用のタスクを作る・返事待ちを知らせ直す（どちらもモデルは呼ばない）
+      // 予定から実行用のタスクを作る（モデルは呼ばない）
       tasks.spawnDueSchedules();
       this.#d.pendingWake?.();
-      const remindMs = c.worker.remindAfterHours * 3_600_000;
-      for (const t of tasks.waitingSince(remindMs).filter(waiting => waiting.waiting_kind !== 'approval')) {
-        this.#d.notifications.notify({ kind: 'task_waiting', title: taskText(languageOf(c), 'notify.waiting_reminder', { title: t.title }), body: t.waiting_text ?? undefined, link: `#/tasks/${t.id}`, dedupKey: `remind:${t.id}:${Math.floor(now / remindMs)}`, projectId: t.project_id });
-      }
       this.#detectReviewTriggers(c, now);
       if (this.paused) { reschedule(); return 'paused'; }
       // ユーザーとの会話の返事を作っている間は始めない（終われば onRunEnd で起こされる）
@@ -257,7 +259,7 @@ export class Worker {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
         // 提供元が満杯のあいだは覚えておく（空けば、終わった実行の onRunEnd で拾う）
-        if (!roomFor()) continue;
+        if (!roomFor() || tasks.productBusy(forced)) continue;
         this.#forced.delete(id);
         task = forced;
         break;
@@ -440,7 +442,7 @@ export class Worker {
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
     if (tasks.get(task.id)?.status !== 'running') { this.#d.kv.delete(splitKey(task.id)); return; }
     // 割り込みは、やり直しと同じに数える（区切りの数を消しも増やしもしない）
-    if (this.#d.engine.wasPreempted(runId)) {
+    if (this.#d.engine.wasPreempted(runId) && control.outcome !== 'complete' && control.outcome !== 'failed') {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }
@@ -451,11 +453,24 @@ export class Worker {
       if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, projectId });
       return;
     }
+    if (control.outcome === 'yield') {
+      this.#d.kv.delete(idleKey);
+      tasks.setReady(task.id, { reason: control.reason });
+      return;
+    }
+    if (control.outcome === 'failed') {
+      this.#d.kv.delete(idleKey);
+      tasks.finish(task.id, 'failed', control.reason, 'beat', runId);
+      const failures = tasks.checkFailures(task.id);
+      if (failures.count >= CHECK_FAIL_LIMIT) {
+        const text = CHECK_TEXT[language];
+        this.#d.questions?.add({ kind: 'check_failed', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: text.question(task.title), why: text.why(failures.last), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
+      }
+      notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: control.reason, link, dedupKey: `failed:${task.id}:${now}`, projectId });
+      return;
+    }
     if (control.outcome === 'question') {
       tasks.setWaiting(task.id, 'question', control.question, runId);
-      const unread = new Set(notifications.unreadOf('question_new').map(n => n.dedup_key));
-      const recorded = this.#d.questions?.list({ status: 'open', taskId: task.id }).some(q => q.blocking && q.question === control.question && unread.has(`${BLOCKING_QUESTION_KEY}${q.id}`)) ?? false;
-      if (!recorded) notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_question', { title: task.title }), body: control.question, link, dedupKey: `waiting:${task.id}:${now}`, projectId });
       return;
     }
     if (control.outcome === 'checkpoint') {
@@ -494,9 +509,10 @@ export class Worker {
       if (result.text.trim()) tasks.update(task.id, { appendNote: taskText(language, result.truncated ? 'note.memo_truncated' : 'note.memo', { text: result.text.trim().slice(0, 500) }) }, 'beat', runId);
       if (strikes >= STAGNATION_LIMIT) {
         this.#d.kv.delete(idleKey);
-        const question = taskText(language, 'stuck.question', { title: task.title, strikes });
-        tasks.setWaiting(task.id, 'question', question, runId);
-        notifications.notify({ kind: 'task_waiting', title: taskText(language, 'notify.task_consult', { title: task.title }), body: question, link, dedupKey: `stuck:${task.id}`, projectId });
+        const reason = taskText(language, 'stuck.reason', { strikes });
+        tasks.finish(task.id, 'failed', reason, 'beat', runId);
+        this.#d.questions?.add({ kind: 'stuck', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: taskText(language, 'stuck.question', { title: task.title, strikes }), why: taskText(language, 'stuck.why'), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
+        notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: reason, link, dedupKey: `failed:${task.id}:${now}`, projectId });
       } else {
         tasks.setReady(task.id, { runAt: now + 15 * 60_000 * 2 ** (strikes - 1), reason: taskText(language, 'reason.no_progress') });
       }

@@ -18,6 +18,7 @@ import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_
 import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
+import { QuestionError } from '../questions/store.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
 import { outboundOfCall, type Outbound } from './hooks/outbound.ts';
 import { windowsNames } from './hooks/scope.ts';
@@ -187,6 +188,22 @@ function conversationTainted(deps: PipelineDeps): boolean {
   try { return deps.conversationTainted(); } catch { return true; }
 }
 
+function askSubmit(tool: ToolDef, args: unknown, ctx: ToolContext, deps: PipelineDeps): void {
+  const questions = ctx.services?.questions;
+  const taskId = ctx.task?.id ?? ctx.parent?.taskId;
+  if (!questions || !taskId) return;
+  const tasks = ctx.services?.tasks;
+  const tab = typeof args === 'object' && args !== null && typeof (args as { tab?: unknown }).tab === 'string' ? (args as { tab: string }).tab : undefined;
+  let url: string | undefined;
+  try { url = ctx.services?.browser?.tabUrl(ctx.conversationId, tab); } catch { url = undefined; }
+  try {
+    questions.addSubmitRefused({
+      taskId, projectId: ctx.project?.id ?? tasks?.get(taskId)?.project_id ?? null, conversationId: ctx.conversationId, tool: tool.name, url,
+      tainted: ctx.taint.tainted || conversationTainted(deps) || tasks?.textTainted(taskId) === true,
+    });
+  } catch (error) { if (!(error instanceof QuestionError)) throw error; }
+}
+
 // truncated: 出力の上限で切れた返事に付いていた呼び出し。動かさず、deny で記録して誤りの結果を返す（message が結果の文、raw が切れた元の文字で、記録の入力欄に 2000 文字まで残す。モデルには送らない）
 export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps, truncated?: { message: string; raw: string }): Promise<ToolCallOutcome> {
   const id = randomUUID();
@@ -244,7 +261,10 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const errors = [...Value.Errors(tool.input, args)].slice(0, 5).map(e => `${e.path || '/'}: ${e.message}`);
     return refuse('deny', 'validation', toolText(language, 'pipeline.bad_args', { errors: errors.join('\n- ') }), true);
   }
-  if (tool.submits === true && ctx.kind !== 'chat') return refuse('deny', 'mode', pendingText('en', 'unattended_submit', { name: tool.name }));
+  if (tool.submits === true && ctx.kind !== 'chat') {
+    askSubmit(tool, args, ctx, deps);
+    return refuse('deny', 'mode', pendingText('en', 'unattended_submit', { name: tool.name }));
+  }
   // この呼び出しが外へ出るか（効果が network、または networkCall がそう答えた）。外から読んだ印だけがこれを使う
   const network = tool.effect === 'network' || callsNetwork(tool, args);
 

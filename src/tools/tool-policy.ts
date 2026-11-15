@@ -14,7 +14,7 @@ export const TOOL_POLICIES: readonly ToolPolicy[] = ['allow', 'ask', 'block'];
 export const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u;
 
 // 方針を持てない道具: タスクの進め方の道具。止めるとワーカーが終われなくなる。設定に書かれていても無視する
-export const POLICYLESS_TOOLS: ReadonlySet<string> = new Set(['task_complete', 'task_checkpoint', 'ask_user']);
+export const POLICYLESS_TOOLS: ReadonlySet<string> = new Set(['task_complete', 'task_checkpoint']);
 
 export const isPolicyable = (name: string): boolean => !POLICYLESS_TOOLS.has(name);
 

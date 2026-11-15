@@ -445,9 +445,6 @@ export function BackgroundPanel() {
       <Row k="bg:parallel" title={t('ui.set.bg.parallel')} desc={t('ui.set.bg.parallelDesc')}>
         <NumberField k="bg:parallel" value={worker.maxParallel as number} min={1} max={4} label={t('ui.set.bg.parallel')} onCommit={v => set('bg:parallel', { maxParallel: v })} />
       </Row>
-      <Row k="bg:remind" title={t('ui.set.bg.remind')} desc={t('ui.set.bg.remindDesc')}>
-        <NumberField k="bg:remind" value={worker.remindAfterHours as number} min={1} max={720} label={t('ui.set.bg.remind')} onCommit={v => set('bg:remind', { remindAfterHours: v })} />
-      </Row>
     </Group>
   );
 }

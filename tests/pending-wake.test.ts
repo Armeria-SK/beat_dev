@@ -90,9 +90,7 @@ test('5-P 何もしなかった回の checkpoint で待ちの行がある → wa
   const calls = s.adapter().calls.length;
   for (let i = 0; i < 14; i++) { s.clock.now += 60 * MIN; await s.app.worker.tick(); }
   assert.equal(s.adapter().calls.length, calls);
-  const reminders = s.app.notifications.list(50).filter(n => n.kind === 'task_waiting').map(n => n.link);
-  assert.ok(reminders.includes(`#/tasks/${asks}`), '同じ時間で、質問の返事待ちは知らせ直される');
-  assert.ok(!reminders.includes(`#/tasks/${id}`), '承認待ちは知らせ直さない');
+  assert.deepEqual(s.app.notifications.list(50).filter(n => n.kind === 'task_waiting'), [], '5-2b-s: 返事待ちも承認待ちも知らせ直さない');
 });
 
 test('5-P 待ちの行が無いときの何もしない checkpoint は、前と同じに時間で起きる', async t => {
@@ -201,7 +199,8 @@ test('5-P 承認待ちのタスクへの /answer は 409 で、タスクは変�
 test('5-P 質問の返事待ちへの /answer は前と同じに通る', async t => {
   const s = await setup(t);
   const id = s.task();
-  s.app.tasks.setWaiting(id, 'question', 'Which one?');
+  const question = s.app.questions.add({ taskId: id, question: 'Which one?', options: ['a', 'b'], blocking: true });
+  s.app.tasks.setWaiting(id, 'question', question.question);
   const answered = await s.json(`/api/tasks/${id}/answer`, 'POST', { text: 'the first' });
   assert.equal(answered.status, 200);
   assert.equal(s.app.tasks.get(id)!.status, 'ready');
