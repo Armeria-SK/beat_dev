@@ -2,13 +2,19 @@ import { randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
+import { meshWriteText, type MeshWriteMessageKey } from '../shared/messages/mesh-write.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { isInside } from '../tools/hooks/scope.ts';
-import { MeshWriteError } from './map.ts';
 
 export class MeshError extends LocalizedError<ToolMessageKey> {
   readonly fetched: boolean;
   constructor(code: ToolMessageKey, params?: MessageParams, fetched = false) { super(toolText, code, params); this.fetched = fetched; }
+}
+
+export interface Writer { by: 'conversation' | 'task' | 'child'; external: boolean }
+
+export class MeshWriteError extends LocalizedError<MeshWriteMessageKey> {
+  constructor(code: MeshWriteMessageKey, params?: MessageParams) { super(meshWriteText, code, params); }
 }
 
 export interface MeshFile { rel: string; abs: string; mtime: number }

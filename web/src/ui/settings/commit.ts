@@ -2,13 +2,6 @@ import { accessKey, accessWidening, keyEntryAccess, type Access } from '../../se
 import { applyEdits, deepEqual, diffConfig } from '../../settings/merge.ts';
 import type { Config } from '../../settings/model.ts';
 
-export type Control = 'switch' | 'seg' | 'select' | 'tile' | 'button' | 'text' | 'path' | 'command' | 'list' | 'url' | 'number' | 'secret';
-
-export const COMMIT_ON: Record<Control, 'press' | 'blur'> = {
-  switch: 'press', seg: 'press', select: 'press', tile: 'press', button: 'press',
-  text: 'blur', path: 'blur', command: 'blur', list: 'blur', url: 'blur', number: 'blur', secret: 'blur',
-};
-
 export interface FieldDraft { saved: string; text: string }
 
 export type FieldEvent =

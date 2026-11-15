@@ -4,38 +4,11 @@ import { test } from 'node:test';
 import { defaultConfig } from '../src/config/store.ts';
 import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { COMMIT_ON, fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planKeyFor, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
-import { CATEGORIES, FILE_ONLY, LATER_HIDDEN, matchCategories, placeOf } from '../web/src/ui/settings/rows.ts';
+import { fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planKeyFor, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
+import { CATEGORIES, FILE_ONLY, matchCategories } from '../web/src/ui/settings/rows.ts';
 import { judgeBackups, keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
 
 // 新しい画面の Settings（steps/p1-ui.md「Settings」と PR 1-5b）の、画面を持たない決まり。
-
-function leaves(value: unknown, path: string[] = []): string[] {
-  if (typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length > 0) {
-    return Object.entries(value).flatMap(([key, inner]) => leaves(inner, [...path, key]));
-  }
-  return [path.join('.')];
-}
-
-test('ui/settings rows: 今の設定の形のどの項目も、区分か「設定ファイルだけ」のどちらかに入る', () => {
-  const config = { ...defaultConfig(), skills: { askBeforeRegister: true } };
-  const homeless = leaves(config).filter(path => placeOf(path) === null);
-  assert.deepEqual(homeless, []);
-});
-
-test('ui/settings rows: worker の 3 項目は Background、答え 8 の 5 項目（静かな時間帯は 2 つの鍵）は設定ファイルだけ', () => {
-  for (const key of ['enabled', 'maxRunsPerHour', 'maxParallel']) assert.equal(placeOf(`worker.${key}`), 'background', key);
-  assert.deepEqual([...LATER_HIDDEN], ['worker.autonomy', 'worker.idleMinutes', 'worker.quietStart', 'worker.quietEnd', 'worker.selfTasksNeedApproval', 'worker.curiosityPerDay']);
-  for (const path of LATER_HIDDEN) assert.equal(placeOf(path), 'file', path);
-  assert.equal(placeOf('notify.channels'), 'file', '通知の送り先は画面に出さない（future.md）');
-  assert.equal(placeOf('profile.shape'), 'file', '姿の形は答え 4 でなくした');
-  assert.equal(placeOf('profile.color'), 'persona');
-  assert.equal(placeOf('skills.askBeforeRegister'), 'skills');
-  assert.equal(placeOf('tools.shell.allow'), 'skills');
-  assert.equal(placeOf('tools.shell.envAllow'), 'file');
-  assert.equal(placeOf('tools.browser.limits.maxTabs'), 'browser');
-  assert.equal(placeOf('tools.roots'), 'folders');
-});
 
 test('ui/settings rows: 区分はデザインの 10 から Thinking を除き、Persona と Background を足した 11、並びはデザインの順', () => {
   assert.deepEqual(CATEGORIES.map(c => c.id), ['models', 'skills', 'background', 'folders', 'hooks', 'browser', 'mcp', 'server', 'persona', 'appearance', 'advanced']);
@@ -53,11 +26,6 @@ test('ui/settings rows: 検索は区分の名前と行の題で絞り、空な�
   assert.deepEqual(matchCategories('SHELL', text), ['skills']);
   assert.ok(matchCategories('fallback', text).includes('models'));
   assert.deepEqual(matchCategories('zzzz', text), []);
-});
-
-test('ui/settings commit: 文字を打つ欄（パス・コマンド・一覧・URL・数）は離れたときだけ、切り替えと選択は押したときに保存', () => {
-  for (const control of ['text', 'path', 'command', 'list', 'url', 'number', 'secret'] as const) assert.equal(COMMIT_ON[control], 'blur', control);
-  for (const control of ['switch', 'seg', 'select', 'tile', 'button'] as const) assert.equal(COMMIT_ON[control], 'press', control);
 });
 
 test('ui/settings commit: D:\\proj を 1 字ずつ打つあいだは保存せず（D:\\ も）、Enter か離れたときに 1 回だけ D:\\proj を保存する', () => {

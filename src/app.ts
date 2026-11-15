@@ -28,7 +28,7 @@ import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
 import { planWrite } from './tools/builtin/plan.ts';
 import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts';
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
-import { meshDecisionAdd, meshGlossarySet, meshMapSet } from './tools/builtin/mesh-write.ts';
+import { meshDecisionAdd } from './tools/builtin/mesh-write.ts';
 import { questionAdd, questionList } from './tools/builtin/questions.ts';
 import { deviationAdd } from './tools/builtin/deviations.ts';
 import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
@@ -92,7 +92,7 @@ export function builtinTools(): ToolDef[] {
     checklistWrite, notifyOwner, docRead, tableWrite,
     imageView, webDownload,
     agentRun,
-    questionList, deviationAdd, meshMapSet, meshGlossarySet, meshDecisionAdd,
+    questionList, deviationAdd, meshDecisionAdd,
     ...BROWSER_TOOLS,
   ];
 }

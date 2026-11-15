@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
-import { openDatabase, type Migration } from '../src/db/database.ts';
+import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { tempDir } from './helpers.ts';
+import { assertMidwayKeepsShape } from './helpers/migrate-midway.ts';
 
 const TABLES = ['conversations', 'messages', 'tasks', 'task_events', 'memories', 'skill_registry', 'notifications', 'engine_runs', 'kv'] as const;
 
@@ -76,23 +77,11 @@ test('移し替え 20: 形 19 の DB を今のコードで開いても、行は 
   } finally { again.close(); }
 });
 
-test('移し替え 20: 途中で落ちると、DB は形 19 のまま（表も列も足されない）で、行も残る', t => {
-  const dir = tempDir(t);
-  const path = join(dir, 'beat.db');
-  const before = seedV19(path);
-  const failing: Migration[] = [...MIGRATIONS.slice(0, 19), db => { db.exec(String(MIGRATIONS[19])); throw new Error('stopped midway'); }];
-  assert.throws(() => openDatabase(path, failing, { backupDir: join(dir, 'backups') }), /stopped midway/u);
-  assert.ok(existsSync(join(dir, 'backups')), '落ちる前に控えは取ってある');
-
-  const db = openDatabase(path, MIGRATIONS.slice(0, 19));
-  try {
-    assert.equal(version(db), 19);
-    assert.deepEqual(counts(db), before);
-    assert.ok(!columns(db, 'conversations').includes('project_id'));
-    assert.ok(!columns(db, 'tasks').includes('project_id'));
-    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get(), undefined);
-  } finally { db.close(); }
-});
+test('移し替え 20: 途中で落ちると、DB は形 19 のまま（表も列も足されない）で、行も残る', t => assertMidwayKeepsShape(t, 19, seedV19, counts, db => {
+  assert.ok(!columns(db, 'conversations').includes('project_id'));
+  assert.ok(!columns(db, 'tasks').includes('project_id'));
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get(), undefined);
+}));
 
 test('移し替え 20: 同じフォルダ（root_key）の使っている製品は 1 つだけ。しまった製品とは重なってよい。前の版のコードは形 20 の DB を開かない', t => {
   const dir = tempDir(t);

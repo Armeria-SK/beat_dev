@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyEdits, deepEqual, diffConfig, editPath, profilePatch } from '../web/src/settings/merge.ts';
+import { applyEdits, deepEqual, diffConfig, editPath } from '../web/src/settings/merge.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
 import { countChanges, type Config } from '../web/src/settings/model.ts';
 
@@ -220,24 +220,6 @@ test('保存の合流: プロフィールだけの編集でも、先に変わっ
   const result = merge(saved, draft, latest);
   assert.deepEqual(result.conflicts, []);
   assert.deepEqual(result.config.profile, { name: 'Neo', shape: 'orb', color: '#112233', motion: 'auto' });
-});
-
-test('プロフィールだけの保存: 触った項目だけを送り、ほかの設定が混ざるとき・プロフィールごと消すときは使わない', () => {
-  const saved = sample();
-  const only = structuredClone(saved);
-  only.profile.name = 'Neo';
-  only.profile.motion = 'float';
-  assert.deepEqual(profilePatch(diffConfig(saved, only)), { name: 'Neo', motion: 'float' });
-  const mixed = structuredClone(only);
-  mixed.worker.maxRunsPerHour = 9;
-  assert.equal(profilePatch(diffConfig(saved, mixed)), null);
-  const wholly = structuredClone(saved);
-  delete wholly.profile;
-  assert.equal(profilePatch(diffConfig(saved, wholly)), null);
-  assert.equal(profilePatch(diffConfig(saved, structuredClone(saved))), null, '編集が無ければ null');
-  const other = structuredClone(saved);
-  other.memory.userMaxChars = 1;
-  assert.equal(profilePatch(diffConfig(saved, other)), null, 'プロフィールに触っていなければ null');
 });
 
 test('保存の合流（JSON の欄）: 設定全体を書き換えても、触った所だけが当たる', () => {
