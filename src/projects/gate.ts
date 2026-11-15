@@ -61,12 +61,14 @@ export function itemSummary(db: DatabaseSync, task: Task): { owned: number; met:
   if (!owned.length) return undefined;
   const list = liveList(db, task.project_id);
   if (!list) return { owned: owned.length, met: 0, remaining: owned };
-  const live = owned.filter(id => list.items.some(entry => entry.id === id));
+  const since = new Map((db.prepare('SELECT version, created_at FROM acceptance_versions WHERE project_id = ?').all(task.project_id) as Array<{ version: number; created_at: number }>).map(row => [row.version, row.created_at]));
+  const handedOver = (entry: AcceptanceItem): boolean => entry.changedIn !== null && (since.get(entry.changedIn) ?? 0) > task.created_at && list.states[entry.id]?.taskId !== task.id;
+  const live = owned.filter(id => list.items.some(entry => entry.id === id && !handedOver(entry)));
   const remaining = live.filter(id => stateOf(list, id) !== 'met');
   return { owned: live.length, met: live.length - remaining.length, remaining };
 }
 
-function settleAwaiting(db: DatabaseSync, tasks: TaskStore, projectId: string | null): void {
+export function settleAwaiting(db: DatabaseSync, tasks: TaskStore, projectId: string | null): void {
   if (!projectId) return;
   for (const task of tasks.awaitingIn(projectId)) {
     if ((itemSummary(db, task)?.remaining.length ?? 0) === 0) tasks.setCheckState(task.id, 'checked');
@@ -297,11 +299,11 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
     tasks.event(task.id, 'item_check_failed', 'beat', [t('item_failed_event', { attempt, limit: GATE_LIMIT, ids: failedIds.join(', ') }), ...failures].join('\n').slice(0, 1500), ctx.runId);
     settleAwaiting(db, tasks, projectId);
     if (attempt >= GATE_LIMIT) return { kind: 'failed', text: [t('gave_up', { limit: GATE_LIMIT }), ...failures].join('\n'), reason: t('gave_up_reason', { ids: failedIds.join(', '), limit: GATE_LIMIT }) };
-    return { kind: 'refuse', text: [t('command_streak', { attempt, limit: GATE_LIMIT }), ...failures, ...(missing.length ? [t('missing', { ids: missing.join(', ') }), ...badTags] : [])].join('\n') };
+    return { kind: 'refuse', text: [t('command_streak', { attempt, limit: GATE_LIMIT }), ...failures, ...(missing.length ? [t('missing', { ids: missing.join(', '), first: missing[0]! }), ...badTags] : [])].join('\n') };
   }
 
   const problems: string[] = [];
-  if (missing.length) problems.push(t('missing', { ids: missing.join(', ') }), ...badTags);
+  if (missing.length) problems.push(t('missing', { ids: missing.join(', '), first: missing[0]! }), ...badTags);
   const free = task.spawned_by === null ? unowned(acceptance, tasks, projectId, list, owned).filter(id => !marks.some(mark => mark.id === id && mark.state !== 'open')) : [];
   if (free.length) problems.push(t('unowned', { ids: free.join(', ') }));
   if (problems.length) {

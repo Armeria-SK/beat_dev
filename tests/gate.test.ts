@@ -631,6 +631,72 @@ test('5-3b 「まだ足りない」は開いた直しのタスクだけを使い
   assert.match(s.app.tasks.get(first.body.fix.id)!.body, /also check the footer/u);
 });
 
+test('R13 答えで開き直した項目は直しのタスクが受け持ち、その門でコマンドを動かし直す。もとのタスクの確かめ待ちには出ず、受け入れの口とも食い違わない', async t => {
+  const s = await setup(t);
+  const api = await s.serve();
+  const p = s.product('shop', [{ result: 'Says hello', check: command(PASS) }, { result: 'Saves files', check: command(PASS) }, { result: 'The page looks right', check: look }]);
+  const build = s.task(p.id, ['A-1', 'A-2', 'A-3']);
+  await s.run(build.id, [echo('page'), done([{ id: 'A-3', evidence: 'E-1' }])]);
+  assert.deepEqual(s.states(p.id), { 'A-1': 'met', 'A-2': 'met', 'A-3': 'unverified' });
+  assert.deepEqual(s.runs(p.root), ['pass', 'pass']);
+  s.clock.now += 1000;
+  const question = s.app.questions.add({ projectId: p.id, taskId: build.id, question: 'Say hello or hi?', options: ['hello', 'hi'], chosen: 0, acceptanceItem: 'A-1' });
+  s.clock.now += 1000;
+  const answered = await api(`/api/questions/${question.id}/answer`, 'POST', { choice: 1 });
+  assert.equal(answered.status, 200, JSON.stringify(answered.body));
+  assert.equal(answered.body.reopenedItem, 'A-1');
+  const fixId = answered.body.fixTaskId as string;
+  assert.equal(s.app.tasks.get(fixId)!.acceptance_items, '["A-1"]');
+  assert.equal(s.app.tasks.openBuild(p.id), null, '直しのタスクは開いた Build ではない');
+  const listed = await api(`/api/tasks?projectId=${p.id}`, 'GET');
+  const original = (listed.body.awaiting as Array<{ id: string; items: { remaining: string[] } }>).find(entry => entry.id === build.id)!;
+  assert.deepEqual(original.items.remaining, ['A-3'], '開き直した項目はもとのタスクの確かめ待ちに出ない');
+  assert.equal((await api(`/api/tasks/${build.id}/items/A-1/check`, 'POST', { result: 'checked', version: 2 })).status, 409, 'もとのタスクで持ち主が met にはできない');
+  const accepted = await api(`/api/projects/${p.id}/acceptance`, 'GET');
+  assert.deepEqual(accepted.body.acceptance.unbuilt, [], '直しのタスクが受け持つので Build を待つ項目ではない');
+  assert.equal(s.states(p.id)['A-1'], 'open');
+  await s.run(fixId, [done()]);
+  assert.deepEqual(s.runs(p.root), ['pass', 'pass', 'pass'], '門がコマンドを動かし直す');
+  assert.equal(s.app.tasks.get(fixId)!.status, 'done');
+  const reran = s.app.acceptance.itemStates(p.id)['A-1']!;
+  assert.deepEqual([reran.state, reran.by, reran.taskId], ['met', 'gate', fixId]);
+  assert.equal(s.app.tasks.get(build.id)!.check_state, 'awaiting');
+});
+
+test('R13 確かめ待ちの項目が答えで開き直されて直しのタスクに移り、もとのタスクに残りが無くなると checked。残りの項目を受け持つほうはそのまま', async t => {
+  const s = await setup(t);
+  const api = await s.serve();
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const build = s.task(p.id, ['A-1']);
+  await s.run(build.id, [echo('page'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  assert.equal(s.app.tasks.get(build.id)!.check_state, 'awaiting');
+  s.clock.now += 1000;
+  const question = s.app.questions.add({ projectId: p.id, taskId: build.id, question: 'Blue or red page?', options: ['blue', 'red'], chosen: 0, acceptanceItem: 'A-1' });
+  s.clock.now += 1000;
+  const answered = await api(`/api/questions/${question.id}/answer`, 'POST', { choice: 1 });
+  assert.equal(answered.status, 200, JSON.stringify(answered.body));
+  assert.equal(s.app.tasks.get(build.id)!.check_state, 'checked');
+  assert.deepEqual(s.app.tasks.events(answered.body.fixTaskId).filter(e => e.kind === 'owner_fix').map(e => JSON.parse(e.content!)), [{ question: question.id, item: 'A-1' }]);
+  await s.run(answered.body.fixTaskId, [done(), echo('red page'), done([{ id: 'A-1', evidence: 'E-2' }])]);
+  const texts = s.toolTexts(answered.body.fixTaskId).filter(m => m.text.startsWith('[task_complete]'));
+  assert.match(texts[0]!.text, /Items with neither evidence nor a reason: A-1/u, '前の札では通らない');
+  assert.equal(texts[1]!.isError, false, texts[1]!.text);
+  const fix = (await api(`/api/tasks?projectId=${p.id}`, 'GET')).body.awaiting as Array<{ id: string; items: { remaining: string[] } }>;
+  assert.deepEqual(fix.map(entry => [entry.id, entry.items.remaining]), [[answered.body.fixTaskId, ['A-1']]]);
+});
+
+test('R13 断りの文の例は、足りない項目の番号と、本物と取り違えない札の形を使う', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Has a page', check: command(PASS) }, { result: 'Reads well', check: read }]);
+  const task = s.task(p.id, ['A-1', 'A-2']);
+  await s.run(task.id, [echo('one'), echo('two'), echo('three'), done(), done([{ id: 'A-2', evidence: 'E-3' }])]);
+  const refusal = s.toolTexts(task.id).filter(m => m.text.startsWith('[task_complete]'))[0]!;
+  assert.equal(refusal.isError, true);
+  assert.match(refusal.text, /\[\{"id": "A-2", "evidence": "E-<n>"\}\]/u);
+  assert.match(refusal.text, /\[\{"id": "A-2", "not_done": "why"\}\]/u);
+  assert.doesNotMatch(refusal.text, /"A-1"|"E-3"/u);
+});
+
 test('5-3b 札は道具 task_* の呼び出しと、項目が最後に変わる前の呼び出しでは通らない', async t => {
   const s = await setup(t);
   const p = s.product('shop', [{ result: 'Has a page', check: look }]);
