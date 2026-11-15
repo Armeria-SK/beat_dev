@@ -6,7 +6,7 @@ import type { Acceptance, Conversation, Project } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
 import { en } from '../web/src/i18n/en.ts';
 
-interface PlanProps { productId: string; revision: string; isGit: boolean }
+interface PlanProps { productId: string; conversationId?: string; revision: string; isGit: boolean }
 interface HomeProps { id: string; project: Project | undefined; conversations: Conversation[]; drafts: never[]; checklists: ReadonlyMap<string, never[]>; worker: null; revision: number }
 interface ArchivedProps { revision: number; projects: readonly Project[]; projectsLoaded: boolean }
 
@@ -46,13 +46,13 @@ test('ui/PlanPane（DOM）: Build の知らせ（changed・frozen）は、前か
   const acceptance: Acceptance = { version: 1, language: 'en', items: [], not_doing: [], draft: false, hash: 'a1', frozen: null } as unknown as Acceptance;
   const refusals = ['build.changed', 'build.frozen'];
   serve((path, method) => {
-    if (path === `/api/projects/${PRODUCT}/plan`) return { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false } };
-    if (path === `/api/projects/${PRODUCT}/acceptance`) return { acceptance };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/plan`) return { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false } };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/acceptance`) return { acceptance };
     if (path === `/api/projects/${PRODUCT}/acceptance/versions`) return { versions: [] };
     if (path === `/api/projects/${PRODUCT}/build` && method === 'POST') return refuse(409, { error: 'refused', code: refusals.shift() });
     return undefined;
   });
-  const { container } = await render(createElement(PlanPane, { productId: PRODUCT, revision: '0', isGit: true }));
+  const { container } = await render(createElement(PlanPane, { productId: PRODUCT, conversationId: 'aaaaaaaa-0000-4000-8000-000000000001', revision: '0', isGit: true }));
   await settle();
   await settle();
   const live = container.querySelector('[role="status"].ui-plan__live');
