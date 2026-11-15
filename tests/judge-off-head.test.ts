@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -7,7 +7,7 @@ import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { PendingStore } from '../src/pending/store.ts';
-import { resolvePaths } from '../src/paths.ts';
+import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { fileEdit, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -101,4 +101,36 @@ test('J-4 段の頭: 判定なしのモードを変えられる口は、持ち�
   const outside = writers.map(path => path.replaceAll('\\', '/')).filter(path => path !== 'src/app.ts' && !path.startsWith('src/web/'));
   assert.deepEqual(outside, []);
   assert.ok(writers.length > 0, '探し方が当たっている');
+});
+
+test('J-4 段の頭: beat の置き場（src・web・templates・package.json・start.* など）にも、判定なしのモードで、ファイルの道具とシェルから書けない（順 1 で断る）', async t => {
+  const s = setup(t, 'off');
+  const root = APP_ROOT.replaceAll('\\', '/');
+  const probes = ['src/zz-j4-probe.txt', 'web/zz-j4-probe.txt', 'templates/zz-j4-probe.txt', 'scripts/zz-j4-probe.txt', 'zz-j4-probe.txt'];
+  t.after(() => { for (const p of probes) rmSync(join(APP_ROOT, p), { force: true }); });
+  const tries: Array<[string, unknown]> = [
+    ['file_write', { path: join(APP_ROOT, probes[0]!), content: 'x' }],
+    ['file_write', { path: join(APP_ROOT, probes[1]!), content: 'x' }],
+    ['file_write', { path: join(APP_ROOT, probes[2]!), content: 'x' }],
+    ['file_edit', { path: join(APP_ROOT, 'package.json'), old_string: '"name"', new_string: '"name"' }],
+    ['shell_run', { command: `Set-Content -Path '${root}/${probes[0]}' -Value x` }],
+    ['shell_run', { command: `Set-Content -Path '${root}/${probes[3]}' -Value x` }],
+    ['shell_run', { command: `echo x > '${root}/start.ps1'` }],
+  ];
+  for (const [name, args] of tries) {
+    const out = await s.call(name, args);
+    assert.equal(out.decision, 'deny', `${name} ${JSON.stringify(args)} → ${out.decidedBy}: ${out.output.content.slice(0, 200)}`);
+  }
+  for (const p of probes) assert.equal(existsSync(join(APP_ROOT, p)), false, p);
+  assert.equal(s.judge.calls, 0);
+  const real = (path: string): string => { try { return realpathSync(path); } catch { return path; } };
+  const policy = buildPolicy(parseConfig(testConfig()), s.paths);
+  for (const name of ['src', 'web', 'templates', 'node_modules', 'package.json', 'package-lock.json', 'start.ps1', 'start.sh', '.git', '.npmrc']) {
+    assert.ok(policy.deny.some(d => d === join(APP_ROOT, name) || d === APP_ROOT || d === real(APP_ROOT)), `${name} は守る一覧に入る`);
+  }
+  const inside = resolvePaths(join(APP_ROOT, 'data'));
+  const local = buildPolicy(parseConfig(testConfig()), inside);
+  for (const name of ['src', 'web', 'templates', 'node_modules', 'package.json', 'start.ps1', '.npmrc']) assert.ok([join(APP_ROOT, name), real(join(APP_ROOT, name))].some(p => local.deny.includes(p)), `data が置き場の中のとき: ${name}`);
+  assert.equal(local.deny.includes(APP_ROOT), false, '置き場まるごとは守らない（data と作業場が中にある）');
+  assert.equal(local.deny.some(d => d === inside.data || inside.workspace.startsWith(`${d}\\`) || inside.workspace.startsWith(`${d}/`)), false, '作業場は守る一覧に入らない');
 });

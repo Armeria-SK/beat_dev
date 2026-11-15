@@ -84,6 +84,8 @@ const en = {
   'notify.task_failed': 'Task failed: {title}',
   'notify.skill_draft': 'Please review the skill draft: {name}',
   'notify.skill_auto': 'Skill registered without review',
+  'notify.judge_off_file.title': 'The settings file was changed to run without the judge, so the judge was kept on',
+  'notify.judge_off_file.body': 'This change did not come from beat. If you want to run without the judge, turn it off in Settings (or restart beat to use the file as written). If you did not change the file, check what did',
 
   'health.auth_title': 'Authentication failed for model "{model}"',
   'health.failing_title': 'Model "{model}" keeps failing ({count} times)',

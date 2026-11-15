@@ -474,8 +474,10 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           : undefined;
         if (ownerNow) { autoEvent('asked'); return park(ownerNow.kind, ownerNow.reason); }
         decision = 'allow';
-        if (noJudge) decidedBy = NO_JUDGE;
-        else {
+        if (noJudge) {
+          decidedBy = NO_JUDGE;
+          judgedId = deps.approvals.recordAuto({ runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons }, guardText(language, 'pipeline.no_judge_reason'));
+        } else {
           const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
           const shownWhy = reused ? guardText(language, 'pipeline.judge_reused', { reason: why }) : why;
           const autoId = deps.approvals.recordAuto({

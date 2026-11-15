@@ -490,11 +490,15 @@ test('4-3a 順 4 の許可の一覧: 開発の実行役は、決まった害の�
     'pytest -k "x or ().__class__" tests', 'pytest -m "a__b"', 'mocha --reporter evilpkg', 'mocha --reporter=evilpkg', 'mocha --reporter SPEC', 'mocha --reporter=PROGRESS', 'vitest init browser', 'mocha init spec', 'mocha --reporter spec init spec', 'tox devenv venv', 'tox quickstart',
   ];
   const leaked: string[] = [];
+  let refused = 0;
   for (const command of judged) {
-    if ((await r.shell(command)).decidedBy === 'product-code') leaked.push(command);
+    const outcome = await r.shell(command);
+    if (outcome.decidedBy === 'product-code') leaked.push(command);
+    if (outcome.decision === 'deny' && outcome.decidedBy === 'builtin') refused++;
   }
   assert.deepEqual(leaked, [], '判定役を飛ばした形');
-  assert.equal(r.judge.calls.length, judged.length, '全部判定役が見る');
+  assert.ok(refused <= 1, 'D:other は、走らせている場所が beat の置き場なら、その中を指すので順 1 で断る');
+  assert.equal(r.judge.calls.length + refused, judged.length, '全部判定役が見る（順 1 で断ったもの以外）');
   for (const command of ['make', 'make -j4 test', 'make -j 4 -k all', 'pytest -q tests', 'pytest -k "fast and not slow" tests', 'npm test', 'vitest --run', 'jest --watch=false -t name', 'mocha --reporter spec src', 'tox -e py311', 'just build', 'ninja -j 2', 'vitest run', 'mocha --reporter=dot', 'jest -t render']) {
     assert.equal((await r.shell(command)).decidedBy, 'product-code', `許可の一覧の形は判定役を飛ばす: ${command}`);
   }

@@ -64,14 +64,14 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const registry = new ToolRegistry().register(probe('probe')).register(probe('probe_taint', { escalateOnTaint: true }));
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const prompts: ClassifierPrompt[] = [];
-  const state = { request: 'run the tests', mode: 'auto' as PermissionMode, modes: [] as PermissionMode[], config: undefined as AppConfig | undefined };
+  const state = { request: 'run the tests', mode: 'auto' as PermissionMode, modes: [] as PermissionMode[], config: undefined as AppConfig | undefined, broken: false };
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
     workspace, taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto',
   };
   const deps: PipelineDeps = {
     registry, approvals: new ApprovalBroker(db), pending, db, emit: e => events.push(e), lastUserRequest: () => state.request, productRoots: () => [workspace],
-    permissionMode: () => state.modes.shift() ?? state.mode, conversationTainted: () => false, config: () => state.config ?? parsed,
+    permissionMode: () => state.modes.shift() ?? state.mode, conversationTainted: () => false, config: () => { if (state.broken) throw new Error('x'); return state.config ?? parsed; },
     ...(options.judge === false ? {} : { autoClassify: async (prompt: ClassifierPrompt) => { prompts.push(prompt); return ALLOW; } }),
   };
   const call = (c: ToolContext = ctx, name = 'probe') => runToolCall({ id: `call-${Math.random()}`, name, arguments: { v: 'a' } }, c, deps);
@@ -95,7 +95,7 @@ test('J-4: 鍵が無い古い設定は On。値は on / off だけ', () => {
   assert.throws(() => parseConfig({ ...testConfig(), routing: { ...testConfig().routing, judgeMode: 'skip' } }), ConfigError);
 });
 
-test('J-4: Off では、判定役に回るはずの呼び出しが判定役を呼ばずに動く。記録は no-judge、判定役の数（judge_calls）は 0、自動の承認の記録も「判定役が通した」の数も増えない', async t => {
+test('J-4: Off では、判定役に回るはずの呼び出しが判定役を呼ばずに動く。記録は no-judge、判定役の数（judge_calls）は 0、「判定役が通した」の数は増えない。判定役に渡るはずだった理由は残す', async t => {
   const s = setup(t);
   const out = await s.call();
   assert.deepEqual([out.decision, out.decidedBy], ['allow', 'no-judge'], out.output.content);
@@ -108,8 +108,9 @@ test('J-4: Off では、判定役に回るはずの呼び出しが判定役を�
   assert.deepEqual(result?.gate, { by: 'no-judge' }, '道具の行に No judge を出す印');
   assert.equal(s.events.filter(e => e.type === 'tool.auto').length, 0, '判定中の印も出さない');
   const row = s.db.prepare('SELECT decided_by, decision, approval_id FROM tool_calls').get() as { decided_by: string; decision: string; approval_id: string | null };
-  assert.deepEqual({ ...row }, { decided_by: 'no-judge', decision: 'allow', approval_id: null });
-  assert.equal(Number((s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get() as { n: number }).n), 0);
+  assert.deepEqual([row.decided_by, row.decision], ['no-judge', 'allow']);
+  const kept = s.db.prepare('SELECT reasons FROM approvals WHERE id = ?').get(row.approval_id) as { reasons: string } | undefined;
+  assert.deepEqual(JSON.parse(kept?.reasons ?? '[]'), ['reads outside', 'Ran without the judge (judge turned off in Settings)'], '判定役に渡るはずだった理由を残す');
   assert.equal(s.pending.judged(0).allowed, 0);
   assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
 });
@@ -263,4 +264,13 @@ test('J-4: Off でも、持ち主の頼みが無い実行（beat が自分で決
   assert.equal(waitingKind(s), 'owner');
   assert.match(s.pending.list({ status: 'waiting' })[0]!.reason, /no request from you/u);
   assert.deepEqual([s.ran(), s.prompts.length, judgeRows(s)], [0, 0, 0]);
+});
+
+test('J-4: 今の設定が読めないときは、判定なしにしない（Off で始めた実行でも判定役が呼ばれる）', async t => {
+  const s = setup(t);
+  s.state.broken = true;
+  const out = await s.call();
+  assert.equal(s.prompts.length, 1, '判定役が呼ばれる');
+  assert.equal(out.decidedBy, 'auto-mode');
+  assert.notEqual(out.decidedBy, 'no-judge');
 });

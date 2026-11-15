@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import type { AppConfig } from '../config/schema.ts';
 import { languageOf } from '../shared/language.ts';
 import type { AppPaths } from '../paths.ts';
@@ -23,6 +24,7 @@ export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root
   const protectedPaths = [
     paths.database, `${paths.database}-wal`, `${paths.database}-shm`, paths.config, `${paths.config}.bak`, paths.backups,
     paths.env, join(paths.data, 'tool_outputs'), join(paths.data, 'git-run'), join(paths.data, 'snapshots'), paths.browserProfile, paths.projects,
+    ...installPaths(paths),
   ].map(p => resolveConfigPath(p, paths.data));
   const deny = [...config.tools.deny.map(p => resolveConfigPath(p, paths.data)), ...protectedPaths];
   // 人格とプロフィールは、beat が書き換えるときに承認を求める（提案として見せる）。スキルのフォルダも同じ:
@@ -37,7 +39,21 @@ export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root
   };
 }
 
-const sameFolder = (a: string, b: string): boolean => isInside(a, b) && isInside(b, a);
+const INSTALL_NAMES = [
+  'src', 'web', 'templates', 'scripts', 'deploy', 'tests', 'node_modules', '.git', '.npmrc', '.yarnrc', '.nvmrc', 'package.json', 'package-lock.json',
+  'start.ps1', 'start.sh', 'tsconfig.json', 'tsconfig.web.json', '.env.example', '.gitattributes', '.gitignore', 'README.md', 'map.md',
+] as const;
+
+function installPaths(paths: AppPaths): string[] {
+  const appRoot = dirname(paths.templates);
+  if (!isInside(appRoot, paths.data)) return [appRoot];
+  const top = relative(appRoot, paths.data).split(/[\\/]/u)[0];
+  let present: string[] = [];
+  try { present = readdirSync(appRoot); } catch { present = []; }
+  return [...new Set([...INSTALL_NAMES, ...present])].filter(name => name !== top).map(name => join(appRoot, name));
+}
+
+const sameFolder =(a: string, b: string): boolean => isInside(a, b) && isInside(b, a);
 
 export function defaultWorkspace(policy: ScopePolicy, paths: AppPaths): string {
   return policy.roots.find(r => r.mode === 'write')?.path ?? paths.workspace;
