@@ -180,7 +180,9 @@ test('5-5a-d 審査の直し 1: 鍵の囲みの印を 2 つの行に分けても
   const shown = s.app.mesh.read(shop.id, { file: 'DECISIONS.md' }, 4000, 'en').content;
   assert.equal((shown.match(/Owner picked: "Resume"/gu) ?? []).length, 2, shown);
   assert.match(shown, /Owner wrote: "Keep going"/u, shown);
-  assert.match(shown, /AI decided: "End ----END PRIVATE KEY---- now"/u, shown);
+  assert.match(shown, /AI decided: "Start \[REDACTED\]" \[by task\]/u, shown);
+  assert.match(shown, /AI asked: "\[REDACTED\] there\?"/u, shown);
+  assert.match(shown, /AI decided: "\[REDACTED\] now" \[by task\]/u, shown);
 });
 
 test('5-5a-d 審査の直し 2: 窓が持ち主の行 30 で埋まっていると、AI の行は DECISIONS-old.md へ行き、道具はそう返す', async t => {
