@@ -226,6 +226,7 @@ export function createWebServer(app: App): WebServer {
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     if (running()) throw problem(409, 'conflict', 'conversation_running');
     const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
+    if (conversation.project_id) erased.files.failed.push(...app.plans.forget(conversation.project_id, id));
     if (erased.files.failed.length) app.log(`[WARN] Some files could not be deleted after deleting the conversation: ${erased.files.failed.join(', ')}`);
     app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted', projectId: conversation.project_id });
     sendJson(res, 200, { deleted: true, ...erased });

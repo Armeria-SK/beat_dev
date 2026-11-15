@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
@@ -8,7 +8,7 @@ import { estimateRequest, estimateTextTokens } from '../src/engine/tokens.ts';
 import { AcceptanceStore, applyChanges, frozenHash, type AcceptanceDoc, type ChangeOp } from '../src/projects/acceptance.ts';
 import { BUILD_BODY } from '../src/projects/build.ts';
 import { acceptanceChange, acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
-import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid, planChat } from './app-setup.ts';
 import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
@@ -39,17 +39,20 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
     return sent;
   };
   const results = () => s.adapter().calls.flatMap(c => c.messages).filter(m => m.role === 'tool').map(m => String(m.content));
-  const list = async (id: string) => (await s.json(`/api/projects/${id}/acceptance`, 'GET')).body;
-  const plan = async (id: string) => (await s.json(`/api/projects/${id}/plan`, 'GET')).body.plan as { hash: string | null };
-  const build = async (id: string) => s.json(`/api/projects/${id}/build`, 'POST', { planHash: (await plan(id)).hash, acceptanceHash: (await list(id)).acceptance.hash });
-  const file = (id: string) => JSON.parse(readFileSync(join(s.paths.projects, id, 'acceptance.json'), 'utf8')) as AcceptanceDoc;
+  const list = async (id: string) => (await s.json(`/api/projects/${id}/acceptance?conversationId=${planChat(s.app, id)}`, 'GET')).body;
+  const plan = async (id: string) => (await s.json(`/api/projects/${id}/plan?conversationId=${planChat(s.app, id)}`, 'GET')).body.plan as { hash: string | null };
+  const build = async (id: string) => s.json(`/api/projects/${id}/build`, 'POST', { planHash: (await plan(id)).hash, acceptanceHash: (await list(id)).acceptance.hash, conversationId: planChat(s.app, id) });
+  const file = (id: string) => {
+    const product = join(s.paths.projects, id, 'acceptance.json');
+    return JSON.parse(readFileSync(existsSync(product) ? product : join(s.paths.projects, id, 'conversation-plans', `${planChat(s.app, id)}.acceptance.json`), 'utf8')) as AcceptanceDoc;
+  };
   const rows = (id: string) => s.app.db.prepare('SELECT * FROM acceptance_changes WHERE project_id = ? ORDER BY created_at, rowid').all(id) as Array<Record<string, unknown>>;
   const versionCount = (id: string) => (s.app.db.prepare('SELECT COUNT(*) AS n FROM acceptance_versions WHERE project_id = ?').get(id) as { n: number }).n;
   const frozen = async (name = 'shop', items = [item('Uploads resume after a restart'), item('Files are listed newest first'), item('Old files are deleted after 30 days')]) => {
     const p = await product(name);
-    await s.json(`/api/projects/${p.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+    await s.json(`/api/projects/${p.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, p.id) });
     s.adapter().scripts = [call('acceptance_write', { items }), reply('ok')];
-    await send(uuid(900 + Math.floor(Math.random() * 99)), { text: 'write the list', projectId: p.id });
+    await send(planChat(s.app, p.id), { text: 'write the list', projectId: p.id });
     const built = await build(p.id);
     assert.equal(built.status, 201, JSON.stringify(built.body));
     return { ...p, task: built.body.task as { id: string } };
@@ -100,7 +103,7 @@ test('3-3-s 一覧の状態で道具を出し分ける: 一覧が無い・下書
   s.adapter().scripts = [call('acceptance_write', { items: [item('One')] }), reply('ok')];
   await s.send(uuid(1), { text: 'list', projectId: shop.id });
   assert.ok(names().includes('acceptance_write') && !names().includes('acceptance_change'), '下書き');
-  await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+  await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, shop.id) });
   assert.equal((await s.build(shop.id)).status, 201);
   for (const [n, mode] of [[3, 'plan'], [4, 'auto']] as const) {
     s.adapter().scripts = [reply('a')];
@@ -145,7 +148,7 @@ test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,67
     const demo = await s.product('Demo');
     if (language) await s.json(`/api/projects/${demo.id}`, 'PATCH', { docLanguage: language });
     if (locked) {
-      await s.json(`/api/projects/${demo.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+      await s.json(`/api/projects/${demo.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, demo.id) });
       assert.equal((await s.build(demo.id)).status, 201);
     }
     s.adapter().scripts = [reply('ok')];
@@ -273,7 +276,7 @@ test('3-3-s Approve: 新しい版とハッシュ・前の版の中身は DB に�
   assert.equal(v2.version, 2);
   assert.equal(v2.source, 'change');
   assert.equal(v2.build_task_id, null);
-  assert.equal(v2.plan_hash, (await s.plan(shop.id)).hash);
+  assert.equal(v2.plan_hash, null, 'R7: an approved version does not carry a plan hash any more');
   assert.equal(v2.hash, frozenHash(doc));
   assert.notEqual(v2.hash, v1.hash);
   assert.equal(s.app.acceptance.verifyFrozen(shop.id), 'ok');
@@ -370,7 +373,7 @@ test('3-3-s 持ち主の直し: 固定の前は下書きを直す（版の行を
   const shop = await s.product('shop');
   s.adapter().scripts = [call('acceptance_write', { items: [item('One'), item('Two')] }), reply('ok')];
   await s.send(uuid(1), { text: 'list', projectId: shop.id });
-  const edited = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 0, baseHash: (await s.list(shop.id)).acceptance.hash, ops: [
+  const edited = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 0, baseHash: (await s.list(shop.id)).acceptance.hash, conversationId: uuid(1), ops: [
     { op: 'change', id: 'A-1', item: { result: 'One, edited', check: { kind: 'read' } } },
     { op: 'remove', id: 'A-2' },
     { op: 'add', item: { result: 'Three', check: { kind: 'command', command: 'npm test' } } },
@@ -384,14 +387,15 @@ test('3-3-s 持ち主の直し: 固定の前は下書きを直す（版の行を
   const wrongBase = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 1, ops: [{ op: 'remove', id: 'A-1' }] });
   assert.equal(wrongBase.status, 409);
   assert.equal(wrongBase.body.code, 'acceptance.stale');
-  const wrongHash = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 0, baseHash: 'f'.repeat(64), ops: [{ op: 'remove', id: 'A-1' }] });
+  const wrongHash = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 0, baseHash: 'f'.repeat(64), conversationId: uuid(1), ops: [{ op: 'remove', id: 'A-1' }] });
   assert.equal(wrongHash.status, 409, '下書きが変わっていれば 409');
-  assert.throws(() => s.app.acceptance.ownerEdit(shop.id, { baseVersion: 0, ops: [{ op: 'remove', id: 'A-1' }] }), /changed since/u, '下書きの直しは baseHash が要る');
+  assert.throws(() => s.app.acceptance.ownerEdit(shop.id, { baseVersion: 0, conversationId: uuid(1), ops: [{ op: 'remove', id: 'A-1' }] }), /changed since/u, '下書きの直しは baseHash が要る');
+  assert.throws(() => s.app.acceptance.ownerEdit(shop.id, { baseVersion: 0, baseHash: (s.app.acceptance.read(shop.id, uuid(1)) ? frozenHash(s.app.acceptance.read(shop.id, uuid(1))!) : null), ops: [{ op: 'remove', id: 'A-1' }] }), /belongs to a conversation/u, '下書きの直しは会話が要る');
   for (const body of [{}, { baseVersion: 0 }, { baseVersion: 0, ops: [{ op: 'remove', id: 'A-1' }] }, { baseVersion: '0', ops: [] }, { baseVersion: 0, ops: [{ op: 'add', item: { result: 'x', check: { kind: 'command' } } }] }, { baseVersion: 0, ops: [{ op: 'add', item: { result: 'x', check: { kind: 'look' } }, source: { kind: 'owner_words', quote: 'x', messageId: 1, conversationId: 'c' } }] }]) {
     assert.equal((await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', body)).status, 400, JSON.stringify(body));
   }
 
-  await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+  await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, shop.id) });
   assert.equal((await s.build(shop.id)).status, 201);
   await s.propose(shop.id, uuid(2), 'change', { changes: [{ op: 'add', result: 'Four', source: 'ai_added', check: 'look' }] });
   const after = await s.json(`/api/projects/${shop.id}/acceptance/edit`, 'POST', { baseVersion: 1, ops: [{ op: 'remove', id: 'A-1' }, { op: 'add', item: { result: 'Five', check: { kind: 'look' } } }] });
@@ -491,7 +495,7 @@ test('3-3-s Build をもう一度: 変わった版に受け持つタスクの無
     { op: 'change', id: 'A-2', item: { result: 'Files are listed oldest first', check: { kind: 'look' } } },
     { op: 'remove', id: 'A-3' },
   ] });
-  const wrong = await s.json(`/api/projects/${shop.id}/build`, 'POST', { planHash: (await s.plan(shop.id)).hash, acceptanceHash: s.app.acceptance.version(shop.id, 1)!.hash });
+  const wrong = await s.json(`/api/projects/${shop.id}/build`, 'POST', { planHash: (await s.plan(shop.id)).hash, acceptanceHash: s.app.acceptance.version(shop.id, 1)!.hash, conversationId: planChat(s.app, shop.id) });
   assert.equal(wrong.status, 409);
   assert.equal(wrong.body.code, 'build.changed', '画面が見ていた版と違えば作らない');
   const again = await s.build(shop.id);

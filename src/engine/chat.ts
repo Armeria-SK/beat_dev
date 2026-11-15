@@ -1114,7 +1114,7 @@ export class ChatEngine {
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
     const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
     const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language } : undefined;
-    const mesh = this.#meshIndex(p.runId, p.project, available);
+    const mesh = this.#meshIndex(p.runId, p.project, available, p.conversationId);
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
@@ -1133,13 +1133,13 @@ export class ChatEngine {
     return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
   }
 
-  #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number): string {
+  #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number, conversationId: string): string {
     const mesh = this.#d.mesh;
     if (!mesh || !project) return '';
     let body = runId ? this.#runIndex.get(runId) : undefined;
     if (body === undefined) {
       body = '';
-      try { body = mesh.indexBody(project.id, meshIndexLimit(available)); } catch (error) { this.#d.log?.(`[WARN] Could not build the mesh index of product ${project.id}: ${(error as Error).message}`); }
+      try { body = mesh.indexBody(project.id, meshIndexLimit(available), conversationId); } catch (error) { this.#d.log?.(`[WARN] Could not build the mesh index of product ${project.id}: ${(error as Error).message}`); }
       if (runId) this.#runIndex.set(runId, body);
     }
     if (!body) return '';

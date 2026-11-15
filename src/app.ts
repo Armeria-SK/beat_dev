@@ -62,6 +62,7 @@ import { askBeforeRegister, growSkills, SkillStore } from './tools/skills/store.
 import { TaskStore, taskView } from './tasks/store.ts';
 import { ProjectStore } from './projects/store.ts';
 import { PlanStore } from './projects/plan.ts';
+import { adoptLegacyPlans } from './projects/plan-adopt.ts';
 import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
@@ -208,11 +209,12 @@ export class App {
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.acceptance = new AcceptanceStore(this.db, this.paths.projects, {
       archived: id => (this.projects.get(id)?.archived_at ?? null) !== null, log: this.log, now, languages: this.projects,
-      planHash: id => { try { return this.plans.view(id).hash; } catch { return null; } },
     });
     this.acceptance.repairAll(this.log);
+    adoptLegacyPlans({ kv: this.kv, projectsDir: this.paths.projects, backupsDir: this.paths.backups, log: this.log, now });
     this.questions = new QuestionStore(this.db, { now, onChange: change => { this.bus.publish({ type: 'question.changed', ...change }); this.#questionChanged(change); }, tasks: this.tasks, projects: this.projects, acceptance: this.acceptance });
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
+    for (const project of this.projects.list()) this.mesh.persist(project.id);
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log, () => this.registry.secrets());
     this.reviews = new ReviewJobs(this.db, now);

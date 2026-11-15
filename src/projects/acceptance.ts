@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { SpeechRow } from '../db/conversations.ts';
@@ -9,6 +9,7 @@ import { acceptanceText, type AcceptanceMessageKey } from '../shared/messages/ac
 import { stripHidden } from '../shared/plain-text.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
 import { stripAttachments } from '../uploads/store.ts';
+import { conversationDraftFile, CONVERSATION_ID, isPlanConversation } from './plan.ts';
 import { CHECK_COMMAND_MAX, checkCommandOf, PROJECT_ID, projectDir, type ProjectStore } from './store.ts';
 
 export const ACCEPTANCE_FILE = 'acceptance.json';
@@ -444,7 +445,6 @@ export interface AcceptanceIo {
   archived?: (projectId: string) => boolean;
   log?: (line: string) => void;
   now?: () => number;
-  planHash?: (projectId: string) => string | null;
   languages?: Pick<ProjectStore, 'get' | 'detectDocLanguage'>;
 }
 
@@ -456,7 +456,6 @@ export class AcceptanceStore {
   readonly #archived: (projectId: string) => boolean;
   readonly #log: (line: string) => void;
   readonly #now: () => number;
-  readonly #planHash: (projectId: string) => string | null;
   readonly #languages: Pick<ProjectStore, 'get' | 'detectDocLanguage'> | undefined;
 
   constructor(db: DatabaseSync, projectsDir: string, io: AcceptanceIo = {}) {
@@ -467,7 +466,6 @@ export class AcceptanceStore {
     this.#archived = io.archived ?? (() => false);
     this.#log = io.log ?? (() => undefined);
     this.#now = io.now ?? Date.now;
-    this.#planHash = io.planHash ?? (() => null);
     this.#languages = io.languages;
   }
 
@@ -585,16 +583,18 @@ export class AcceptanceStore {
     return { ...change, status: 'rejected', decided_at: now };
   }
 
-  ownerEdit(projectId: string, edit: { baseVersion: number; baseHash?: string | null | undefined; ops: readonly OwnerChange[] }): number {
+  ownerEdit(projectId: string, edit: { baseVersion: number; baseHash?: string | null | undefined; ops: readonly OwnerChange[]; conversationId?: string | undefined }): number {
     if (this.#archived(projectId)) throw new AcceptanceError('archived');
     const ops: ChangeOp[] = edit.ops.map(op => ({ ...op, source: { kind: 'owner_edit' } }));
     this.repair(projectId);
     const latest = this.latest(projectId);
     if (!latest) {
-      const current = this.#readFile(projectId);
-      if (edit.baseVersion !== 0 || (current ? frozenHash(current) : null) !== edit.baseHash) throw new AcceptanceError('stale', { version: 0 });
+      if (edit.baseVersion !== 0) throw new AcceptanceError('stale', { version: 0 });
+      const conversationId = this.#draftConversation(projectId, edit.conversationId);
+      const current = this.#readDraft(projectId, conversationId);
+      if ((current ? frozenHash(current) : null) !== edit.baseHash) throw new AcceptanceError('stale', { version: 0 });
       const base: AcceptanceDoc = current ?? { schema: 1, version: 0, language: this.#languages?.get(projectId)?.doc_language ?? null, items: [], notDoing: [] };
-      this.writeDraft(projectId, { ...base, version: 0, items: applyChanges(base, ops, null) });
+      this.writeDraft(projectId, conversationId, { ...base, version: 0, items: applyChanges(base, ops, null) });
       return 0;
     }
     if (edit.baseVersion !== latest.version) throw new AcceptanceError('stale', { version: latest.version });
@@ -643,7 +643,7 @@ export class AcceptanceStore {
     const taintedRuns = [...new Set([...(doc.taintedRuns ?? []), ...(o.taint ? [o.taint] : [])])];
     const made: AcceptanceDoc = withStates({ ...doc, version: next, language: moves ? o.language : doc.language, items, taintedRuns }, states);
     const now = this.#now();
-    return this.#freeze(projectId, made, states, { plan_hash: this.#planHash(projectId), source, created_at: now }, () => {
+    return this.#freeze(projectId, made, states, { plan_hash: null, source, created_at: now }, () => {
       this.#db.prepare("UPDATE acceptance_changes SET status = CASE WHEN id = ? THEN 'approved' ELSE 'superseded' END, decided_at = ? WHERE project_id = ? AND status = 'pending'").run(o.decide ?? '', now, projectId);
       if (moves) this.#languages!.detectDocLanguage(projectId, o.language!);
       return null;
@@ -652,8 +652,20 @@ export class AcceptanceStore {
 
   #file(projectId: string): string { return join(projectDir(this.#dir, projectId), ACCEPTANCE_FILE); }
 
+  #draftConversation(projectId: string, conversationId: string | undefined): string {
+    if (conversationId === undefined || !CONVERSATION_ID.test(conversationId) || !isPlanConversation(this.#db, projectId, conversationId)) throw new AcceptanceError('unknown_conversation');
+    return conversationId;
+  }
+
+  #readDraft(projectId: string, conversationId: string): AcceptanceDoc | undefined {
+    return this.#readAt(conversationDraftFile(this.#dir, projectId, conversationId));
+  }
+
   #readFile(projectId: string): AcceptanceDoc | undefined {
-    const file = this.#file(projectId);
+    return this.#readAt(this.#file(projectId));
+  }
+
+  #readAt(file: string): AcceptanceDoc | undefined {
     const stat = lstatSync(file, { throwIfNoEntry: false });
     if (!stat) return undefined;
     if (!stat.isFile()) throw new AcceptanceError('not_file');
@@ -675,7 +687,8 @@ export class AcceptanceStore {
     return statesText(copy) === statesText(file) ? { doc: copy } : { doc: copy, write: copy };
   }
 
-  read(projectId: string): AcceptanceDoc | undefined {
+  read(projectId: string, conversationId?: string): AcceptanceDoc | undefined {
+    if (conversationId !== undefined && !this.latest(projectId)) return CONVERSATION_ID.test(conversationId) ? this.#readDraft(projectId, conversationId) : undefined;
     return this.#copy(projectId)?.doc;
   }
 
@@ -701,14 +714,18 @@ export class AcceptanceStore {
     }
   }
 
-  writeDraft(projectId: string, doc: AcceptanceDoc): void {
+  writeDraft(projectId: string, conversationId: string, doc: AcceptanceDoc): void {
     if (this.#archived(projectId)) throw new AcceptanceError('archived');
+    this.#draftConversation(projectId, conversationId);
     this.repair(projectId);
-    const current = this.#readFile(projectId);
-    const frozen = Math.max(current?.version ?? 0, this.latest(projectId)?.version ?? 0);
+    const product = this.#readFile(projectId);
+    const frozen = Math.max(product?.version ?? 0, this.latest(projectId)?.version ?? 0);
     if (frozen >= 1) throw new AcceptanceError('frozen', { version: frozen });
+    const file = conversationDraftFile(this.#dir, projectId, conversationId);
+    const current = this.#readAt(file);
     const taintedRuns = [...new Set([...(current?.taintedRuns ?? []), ...(doc.taintedRuns ?? [])])];
-    this.#replace(this.#file(projectId), { ...doc, version: 0, taintedRuns });
+    mkdirSync(join(file, '..'), { recursive: true });
+    this.#replace(file, { ...doc, version: 0, taintedRuns });
   }
 
   verifyFrozen(projectId: string): 'ok' | 'mismatch' | 'not_frozen' {

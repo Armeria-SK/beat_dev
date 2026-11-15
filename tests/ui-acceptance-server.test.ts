@@ -6,7 +6,7 @@ import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { ApiError, type Acceptance, type Task } from '../web/src/api.ts';
 import { buildAction, decisionFailure, editBase, editRequest, loadedAcceptance, removeOp, watchedBuild } from '../web/src/ui/acceptance.ts';
-import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid, planChat } from './app-setup.ts';
 import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 const call = (name: string, args: unknown): Script => async function* (req) {
@@ -25,40 +25,41 @@ async function setup(t: Parameters<typeof startApp>[0]) {
   const made = await s.json('/api/projects', 'POST', { root: dir });
   assert.equal(made.status, 201, JSON.stringify(made.body));
   const id = (made.body.project as { id: string }).id;
-  await s.json(`/api/projects/${id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+  await s.json(`/api/projects/${id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, id) });
+  const chat = planChat(s.app, id);
   const ai = async (conversation: string, name: string, args: unknown) => {
     s.adapter().scripts = [call(name, args), reply('ok')];
     const sent = await s.json(`/api/conversations/${conversation}/messages`, 'POST', { text: 'go', projectId: id });
     if (sent.status === 202 && sent.body.runId) await settled(s.app, sent.body.runId);
   };
-  const list = async () => (await s.json(`/api/projects/${id}/acceptance`, 'GET')).body as { acceptance: Acceptance };
+  const list = async () => (await s.json(`/api/projects/${id}/acceptance?conversationId=${chat}`, 'GET')).body as { acceptance: Acceptance };
   const build = async () => {
-    const plan = (await s.json(`/api/projects/${id}/plan`, 'GET')).body.plan as { hash: string };
-    return s.json(`/api/projects/${id}/build`, 'POST', { planHash: plan.hash, acceptanceHash: (await list()).acceptance.hash });
+    const plan = (await s.json(`/api/projects/${id}/plan?conversationId=${planChat(s.app, id)}`, 'GET')).body.plan as { hash: string };
+    return s.json(`/api/projects/${id}/build`, 'POST', { planHash: plan.hash, acceptanceHash: (await list()).acceptance.hash, conversationId: planChat(s.app, id) });
   };
-  return { ...s, id, ai, list, build };
+  return { ...s, id, chat, ai, list, build };
 }
 
 const ready = (state: Acceptance, task: Task | null) => buildAction({ state: 'ready', mode: 'read', acc: state, task, isGit: true });
 
 test('ui+3-3-s: 直す欄を開いたあとに AI が下書きを書き直すと、開いたときの版とハッシュで送った直しは 409 acceptance.stale になり、画面は読み直す', async t => {
   const s = await setup(t);
-  const talk = uuid(11);
+  const talk = s.chat;
   await s.ai(talk, 'acceptance_write', { items: [item('Uploads resume'), item('Files are listed')] });
   const opened = (await s.list()).acceptance;
   const base = editBase(opened);
   await s.ai(talk, 'acceptance_write', { items: [item('Rewritten by the AI'), item('Another item')] });
-  const sent = await s.json(`/api/projects/${s.id}/acceptance/edit`, 'POST', editRequest(base, removeOp(opened.items[0]!)));
+  const sent = await s.json(`/api/projects/${s.id}/acceptance/edit`, 'POST', { ...editRequest(base, removeOp(opened.items[0]!)), conversationId: s.chat });
   assert.equal(sent.status, 409, JSON.stringify(sent.body));
   assert.deepEqual(decisionFailure(new ApiError(sent.status, sent.body)), { kind: 'stale' });
   assert.deepEqual((await s.list()).acceptance.items.map(i => i.result), ['Rewritten by the AI', 'Another item'], 'AI の項目は残る');
-  const fresh = await s.json(`/api/projects/${s.id}/acceptance/edit`, 'POST', editRequest(editBase((await s.list()).acceptance), removeOp(opened.items[0]!)));
+  const fresh = await s.json(`/api/projects/${s.id}/acceptance/edit`, 'POST', { ...editRequest(editBase((await s.list()).acceptance), removeOp(opened.items[0]!)), conversationId: s.chat });
   assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
 });
 
 test('ui+3-3-s: unbuilt と open_build_task_id が buildAction と watchedBuild を決める。固定のあとに足した項目は、Build のタスクが無ければ Build をもう一度出す', async t => {
   const s = await setup(t);
-  await s.ai(uuid(12), 'acceptance_write', { items: [item('Uploads resume')] });
+  await s.ai(s.chat, 'acceptance_write', { items: [item('Uploads resume')] });
   const built = await s.build();
   assert.equal(built.status, 201, JSON.stringify(built.body));
   const task = built.body.task as Task;
@@ -89,7 +90,7 @@ test('ui+3-3-s: unbuilt と open_build_task_id が buildAction と watchedBuild 
 
 test('ui+3-3-s: Approve の返事を loadedAcceptance に通すと、新しい版になり、案は消える', async t => {
   const s = await setup(t);
-  const talk = uuid(13);
+  const talk = s.chat;
   await s.ai(talk, 'acceptance_write', { items: [item('Uploads resume')] });
   assert.equal((await s.build()).status, 201);
   await s.ai(talk, 'acceptance_change', { changes: [{ op: 'add', result: 'Share links expire', source: 'ai_added', check: 'look' }] });

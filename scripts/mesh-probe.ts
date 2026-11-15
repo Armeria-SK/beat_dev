@@ -45,6 +45,7 @@ export const SET_LABELS: Record<ProbeSet, string> = {
 };
 
 const PROJECT_ID = 'bbbbbbbb-0000-4000-8000-00000000b5b0';
+const PROBE_CONVERSATION = 'bbbbbbbb-0000-4000-8000-00000000c0c0';
 const MESH_FILES = ['plan.md', 'STATE.md', 'INDEX.md', 'DECISIONS.md', 'acceptance.json'];
 const MESH_TOOLS: readonly ToolDef[] = [meshSearch, meshRead];
 const ANSWER_SHOWN = 160;
@@ -154,7 +155,8 @@ export async function buildProduct(base: string, set: ProbeSet, model: ModelConf
   const mesh = set === 'a' ? undefined : new Mesh({ projectsDir: paths.projects, backupsDir: paths.backups, plans, acceptance, timezone: () => TIMEZONE, now: () => NOW.getTime() });
   if (mesh) {
     mkdirSync(projectDir(paths.projects, PROJECT_ID), { recursive: true });
-    plans.write(PROJECT_ID, PLAN_TEXT, { by: 'owner', tainted: false, conversationId: null, runId: null });
+    db.prepare("INSERT INTO conversations (id, kind, created_at, last_message_at, project_id) VALUES (?, 'chat', 0, 0, ?)").run(PROBE_CONVERSATION, PROJECT_ID);
+    plans.write(PROJECT_ID, PROBE_CONVERSATION, PLAN_TEXT, { by: 'owner', tainted: false, conversationId: null, runId: null });
     mesh.setState(PROJECT_ID, { ...STATE_NOTES }, { by: 'owner', external: false });
   }
   for (const change of PRODUCT_CHANGES) {
@@ -177,14 +179,14 @@ export async function buildProduct(base: string, set: ProbeSet, model: ModelConf
   const approvals = new ApprovalBroker(db);
   const services = { db, memory: undefined as never, emit: () => undefined, plans, acceptance, ...(mesh ? { mesh } : {}) };
   const ctx = (signal: AbortSignal): ToolContext => ({
-    runId: 'probe', conversationId: 'probe', kind: 'chat', signal, config, paths, policy, workspace: root, project: { id: PROJECT_ID, root },
+    runId: 'probe', conversationId: PROBE_CONVERSATION, kind: 'chat', signal, config, paths, policy, workspace: root, project: { id: PROJECT_ID, root },
     taint: { tainted: false, sources: [] }, log: () => undefined, services, contextAvailable: available, model: { id: model.id, vision: false },
   });
   const run = async (call: ToolCall, context: ToolContext) => {
     const outcome = await runToolCall(call, context, { registry, approvals, db, emit: () => undefined, permissionMode: () => 'auto', conversationTainted: () => false });
     return { content: outcome.output.content, isError: outcome.output.isError === true };
   };
-  const body = mesh ? mesh.indexBody(PROJECT_ID, meshIndexLimit(available)) : '';
+  const body = mesh ? mesh.indexBody(PROJECT_ID, meshIndexLimit(available), PROBE_CONVERSATION) : '';
   const request = productChatRequest(source ? { ...config, tools: source.tools } : config, paths, model, root, 'en', available);
   return {
     set, root, config, paths, tools, run, ctx, request,
