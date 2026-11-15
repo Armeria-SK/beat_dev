@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
@@ -9,10 +9,13 @@ import { inflateRawSync } from 'node:zlib';
 import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { pushFacts } from '../src/pending/snapshot.ts';
+import { resolvePaths } from '../src/paths.ts';
 import { needsSnapshot, SNAPSHOT_EVENT, SNAPSHOT_REF, snapshotBeforeBuild, snapshotLine, stagingPlan } from '../src/projects/snapshot-before.ts';
 import { OWNER_FIX } from '../src/tasks/store.ts';
+import { isInside } from '../src/tools/hooks/scope.ts';
+import { buildPolicy } from '../src/tools/policy.ts';
 import { fakeModel, startApp, waitFor } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 const TASK = 'aaaaaaaa-0000-4000-8000-00000000c0de';
@@ -284,6 +287,47 @@ test('6-0 控え: 持ち主が道具の設定で禁じたフォルダ（tools.de
   assert.deepEqual(r.git('ls-tree', '-r', '--name-only', result.hash).split('\n'), ['app.txt']);
 });
 
+test('6-0 控え: .gitattributes の export-ignore は控えには入るが zip からは抜ける。経過の 1 文もそう言う', { skip: !gitAvailable }, async t => {
+  const r = repo(t);
+  writeFileSync(join(r.dir, '.gitattributes'), 'skip.txt export-ignore\n');
+  writeFileSync(join(r.dir, 'skip.txt'), 's\n');
+  writeFileSync(join(r.dir, 'app.txt'), 'a\n');
+  const result = await snapshotBeforeBuild(r.dir, TASK, tempDir(t));
+  assert.equal(result.kind, 'taken', JSON.stringify(result));
+  if (result.kind !== 'taken') return;
+  assert.ok(r.git('ls-tree', '-r', '--name-only', result.hash).split('\n').includes('skip.txt'));
+  const line = snapshotLine(result);
+  runHint(line, tempDir(t));
+  assert.deepEqual([...unzip(result.archive).keys()].sort(), ['.gitattributes', 'app.txt']);
+  assert.match(line, /export-ignore are left out of the zip/u);
+  assert.match(line, /ignored by \.gitignore are not in the snapshot/u);
+});
+
+test('6-0 控え: データのフォルダの snapshots/ がリンクなら控えを取らず、その先に書かない。道具の守る場所にも入っている', { skip: !gitAvailable }, async t => {
+  const r = seeded(t);
+  const data = realpathSync.native(tempDir(t));
+  const outside = realpathSync.native(tempDir(t));
+  link(outside, join(data, 'snapshots'));
+  assert.deepEqual(await snapshotBeforeBuild(r.dir, TASK, data), { kind: 'unavailable' });
+  assert.deepEqual(readdirSync(outside), []);
+  assert.equal(r.git('for-each-ref', 'refs/beat'), '');
+  rmdirSync(join(data, 'snapshots'));
+  const paths = resolvePaths(data);
+  assert.ok(buildPolicy(testConfig(), paths).deny.some(dir => isInside(dir, join(paths.data, 'snapshots', 'x.zip'))));
+});
+
+test('6-0 控え: 控えの reflog の置き場に何かあれば（ハードリンクでも）控えを取らず、その先に書かない', { skip: !gitAvailable }, async t => {
+  const r = seeded(t);
+  r.git('config', 'core.logAllRefUpdates', 'always');
+  const outside = join(realpathSync.native(tempDir(t)), 'owner.txt');
+  writeFileSync(outside, 'owner file\n');
+  const leaf = join(r.dir, '.git', 'logs', 'refs', 'beat', 'snapshots', TASK);
+  mkdirSync(dirname(leaf), { recursive: true });
+  linkSync(outside, leaf);
+  assert.deepEqual(await snapshotBeforeBuild(r.dir, TASK, tempDir(t)), { kind: 'unavailable' });
+  assert.equal(readFileSync(outside, 'utf8'), 'owner file\n');
+});
+
 test('6-0 控え: 製品の設定に clean のフィルタがあれば控えを取らず、フィルタを動かさない', { skip: !gitAvailable }, async t => {
   const r = seeded(t);
   const marker = join(realpathSync.native(tempDir(t)), 'ran');
@@ -497,11 +541,12 @@ test('6-0 ワーカー: 控えを取っているあいだに取り消された�
   assert.equal(s.snaps(p.task).length, 1);
 });
 
-test('6-0 ワーカー: 持ち主が tools.deny で禁じた製品の中のフォルダは、控えに入れない', { skip: !gitAvailable }, async t => {
+for (const form of ['absolute', 'data-relative'] as const) test(`6-0 ワーカー: 持ち主が tools.deny で禁じた製品の中のフォルダは、控えに入れない（${form}）`, { skip: !gitAvailable }, async t => {
   const s = await buildRig(t);
   const p = await s.product('shop', true);
   const config = s.app.config();
-  config.tools.deny = [...config.tools.deny, join(p.dir, 'private')];
+  const target = join(p.dir, 'private');
+  config.tools.deny = [...config.tools.deny, form === 'absolute' ? target : relative(s.paths.data, target)];
   await s.app.applyConfig(config, { probe: false });
   mkdirSync(join(p.dir, 'private'));
   writeFileSync(join(p.dir, 'private', 'notes.txt'), 'owner notes\n');

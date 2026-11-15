@@ -22,7 +22,7 @@ export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root
   const instructions = instructionsNow();
   const protectedPaths = [
     paths.database, `${paths.database}-wal`, `${paths.database}-shm`, paths.config, `${paths.config}.bak`, paths.backups,
-    paths.env, join(paths.data, 'tool_outputs'), join(paths.data, 'git-run'), paths.browserProfile, paths.projects,
+    paths.env, join(paths.data, 'tool_outputs'), join(paths.data, 'git-run'), join(paths.data, 'snapshots'), paths.browserProfile, paths.projects,
   ].map(p => resolveConfigPath(p, paths.data));
   const deny = [...config.tools.deny.map(p => resolveConfigPath(p, paths.data)), ...protectedPaths];
   // 人格とプロフィールは、beat が書き換えるときに承認を求める（提案として見せる）。スキルのフォルダも同じ:

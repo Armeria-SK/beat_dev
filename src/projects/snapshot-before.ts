@@ -64,7 +64,8 @@ function gitDirSafe(gitDir: string, taskId: string): boolean {
     try { entries = readdirSync(join(gitDir, name)); } catch { entries = []; }
     if (entries.some(entry => lstatOf(join(gitDir, name, entry))?.isSymbolicLink() !== false)) return false;
   }
-  return ['', 'logs'].every(base => lstatOf(join(gitDir, base, ...SNAPSHOT_REF.split('/').filter(Boolean), taskId))?.isSymbolicLink() !== true);
+  const leaf = [...SNAPSHOT_REF.split('/').filter(Boolean), taskId];
+  return lstatOf(join(gitDir, ...leaf))?.isSymbolicLink() !== true && lstatOf(join(gitDir, 'logs', ...leaf)) === undefined;
 }
 
 function safePath(real: string, rel: string, seen: Map<string, boolean>): boolean {
@@ -126,6 +127,7 @@ export async function snapshotBeforeBuild(root: string, taskId: string, dataDir:
   try {
     mkdirSync(indexDir, { recursive: true });
     mkdirSync(join(dataDir, 'snapshots'), { recursive: true });
+    if (!plainDir(join(dataDir, 'snapshots'))) return { kind: 'unavailable' };
     const childEnv = {
       ...env, ...run.env, GIT_DIR: gitDir, GIT_WORK_TREE: real, GIT_INDEX_FILE: join(indexDir, 'index'), GIT_CEILING_DIRECTORIES: dirname(real), GIT_OPTIONAL_LOCKS: '0',
       GIT_LITERAL_PATHSPECS: '1', GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'beat', GIT_AUTHOR_EMAIL: 'beat@localhost', GIT_COMMITTER_NAME: 'beat', GIT_COMMITTER_EMAIL: 'beat@localhost',
@@ -146,8 +148,7 @@ export async function snapshotBeforeBuild(root: string, taskId: string, dataDir:
     if (head && await git(['read-tree', head]) === null) return end();
     const listed = await git(['ls-files', '-z', '-c', '-o', '-d', '--exclude-standard']);
     if (listed === null) return end();
-    const denied = deny.map(dir => { try { return realpathSync.native(dir); } catch { return dir; } });
-    const plan = await stagingPlan(real, [...new Set(listed.split('\0').filter(Boolean))], deadline, denied);
+    const plan = await stagingPlan(real, [...new Set(listed.split('\0').filter(Boolean))], deadline, deny);
     if (plan === 'timeout') return { kind: 'timeout' };
     const stdin = (paths: readonly string[]): string => paths.map(path => `${path}\0`).join('');
     if (plan.drop.length && await git(['update-index', '--force-remove', '-z', '--stdin'], stdin(plan.drop)) === null) return end();
