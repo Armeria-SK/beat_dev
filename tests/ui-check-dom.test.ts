@@ -122,6 +122,35 @@ test('ui/Kanban（DOM）: 狭い幅の列のタブは Proposed・Awaiting check�
   assert.deepEqual(tabs, ['Proposed', 'Awaiting check', 'In progress', 'Approved', 'Done', 'Failed']);
 });
 
+test('ui/Kanban（DOM）: 送っている最中の 2 回目は送らない。Approve の 2 度押しも、却下の理由の欄の 2 度の Enter（submit）も、口へ送るのは 1 回', async () => {
+  narrow(false);
+  serve(path => {
+    if (path === '/api/tasks') return { active: [task({ id: 't1', status: 'inbox', completed_at: null }), task({ id: 't2', title: 'Drop the cache', status: 'inbox', completed_at: null })], finished: [] };
+    if (path === '/api/tasks/finished?limit=20') return { tasks: [], next: null, total: 0 };
+    if (path === '/api/runs?limit=500') return { runs: [], total: 0, judged: {} };
+    return undefined;
+  });
+  const answer = globalThis.fetch;
+  globalThis.fetch = ((path: string | URL | Request, init?: RequestInit) => (init?.method === 'POST' ? (sent.push({ method: 'POST', path: String(path), body: null }), new Promise<never>(() => undefined)) : answer(path, init))) as typeof fetch;
+  const { container } = await render(createElement(Kanban, { conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map() }));
+  await settle();
+  const card = (title: string) => [...container.querySelectorAll('#ui-col-proposed .bt-card')].find(el => el.querySelector('.bt-card__title')?.textContent === title)!;
+  const approve = byText(card('Ship the parser'), 'button', 'Approve');
+  await click(approve);
+  await click(approve);
+  await settle();
+  assert.deepEqual(sent.map(s => s.path), ['/api/tasks/t1/approve'], 'Approve の 2 回目は送らない');
+
+  await click(card('Drop the cache').querySelector('button[data-reject="t2"]'));
+  const form = card('Drop the cache').querySelector('form.bt-card__reason')!;
+  await input(form.querySelector('input'), 'Not needed');
+  const submit = () => update(() => { form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); });
+  await submit();
+  await submit();
+  await settle();
+  assert.deepEqual(sent.map(s => s.path), ['/api/tasks/t1/approve', '/api/tasks/t2/cancel'], '却下の 2 回目は送らない');
+});
+
 const event = (id: number, kind: string, content: string | null): TaskEvent => ({ id, kind, actor: kind === 'owner_check' ? 'user' : 'beat', content, run_id: null, created_at: id });
 
 async function renderTask(t: Task, events: TaskEvent[] = [], after?: () => Task) {

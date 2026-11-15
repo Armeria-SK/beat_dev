@@ -11,9 +11,6 @@ interface SettingsProps { section: string | undefined; onClose: () => void; held
 const { Settings } = await loadTsx<{ Settings: ComponentType<SettingsProps> }>('../web/src/ui/settings/Settings.tsx', import.meta.url);
 
 type Json = Record<string, any>;
-const g = globalThis as Record<string, unknown>;
-g.addEventListener = window.addEventListener.bind(window);
-g.removeEventListener = window.removeEventListener.bind(window);
 window.HTMLElement.prototype.scrollTo ??= () => undefined;
 const realFetch = globalThis.fetch;
 
@@ -180,6 +177,32 @@ test('Settings の Esc の順番（DOM）: 書きかけがあれば、枠の中�
   assert.equal(closed, 0, 'まだ閉じない');
   await click(buttons(container.querySelector('.ui-set__leave')!, en['ui.set.leave.discard'])[0]);
   assert.equal(closed, 1, 'Discard で閉じる');
+});
+
+test('Settings の Esc の順番（DOM）: 枠の外の Esc は window の捕まえる段で受けるので、先に window の泡の段で待つ App の「閉じる」にも、受け済み（defaultPrevented）で届く', async () => {
+  const seen: boolean[] = [];
+  const app = (e: Event) => { if ((e as KeyboardEvent).key === 'Escape') seen.push(e.defaultPrevented); };
+  window.addEventListener('keydown', app);
+  try {
+    const { editor } = await openAdvanced(defaultConfig() as Json);
+    await input(editor, '{}');
+    await esc(document.body);
+    assert.deepEqual(seen, [true], 'App の泡の段より先に受ける');
+  } finally {
+    window.removeEventListener('keydown', app);
+  }
+});
+
+test('Settings の Esc の順番（DOM）: 枠の中の部品が受けた Esc（行の確かめを閉じる）は、window の段では見ない。書きかけがあっても帯で聞かない', async () => {
+  const { container, editor } = await openAdvanced(defaultConfig() as Json);
+  await input(editor, '{}');
+  await click(container.querySelector('[data-row="adv:reset"] button'));
+  const confirm = container.querySelector('.ui-confirm button');
+  assert.ok(confirm, '行の確かめが出ている');
+  const event = await esc(confirm);
+  assert.equal(event.defaultPrevented, true, '確かめが Esc を受ける');
+  assert.equal(container.querySelector('.ui-confirm'), null, '確かめは閉じる');
+  assert.equal(container.querySelector('.ui-set__leave'), null, '帯は出ない');
 });
 
 test('Settings の保存（DOM）: 保存の読み直しと書き込みは、順番待ちの signal を付けて送る（時間切れで止められる。backlog 196）', async () => {

@@ -13,9 +13,8 @@ const { App } = await loadTsx<{ App: ComponentType }>('../web/src/ui/App.tsx', i
 const g = globalThis as Record<string, unknown>;
 g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
 g.EventSource = class { onmessage = null; onerror = null; onopen = null; addEventListener() {} removeEventListener() {} close() {} };
-g.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-g.addEventListener = window.addEventListener.bind(window);
-g.removeEventListener = window.removeEventListener.bind(window);
+const observed: Array<{ run: () => void; el: Element }> = [];
+g.ResizeObserver = class { readonly #run: () => void; constructor(run: () => void) { this.#run = run; } observe(el: Element) { observed.push({ run: this.#run, el }); } unobserve() {} disconnect() {} };
 window.HTMLElement.prototype.scrollTo ??= () => undefined;
 const realFetch = globalThis.fetch;
 const realGo = window.history.go;
@@ -60,6 +59,7 @@ afterEach(async () => {
   window.history.go = realGo;
   delete g.navigation;
   calls = [];
+  observed.length = 0;
   localStorage.clear();
   clearUnsaved('');
   window.history.replaceState(null, '', '/');
@@ -101,6 +101,7 @@ test('ui/onboarding（DOM）: 「済み」にするのは最後の段の New pro
   await settle();
   assert.equal(posted('/api/onboarding/done'), 1);
   assert.equal(onboarding(container), null);
+  assert.equal(window.location.hash, ONBOARD_DONE_HASH, '済んだら製品を作る画面へ移る');
 });
 
 test('ui/onboarding（DOM）: 送っている最中の Esc では、はじめの設定を閉じない（App は受け済みの Esc で閉じない）', async () => {
@@ -230,6 +231,17 @@ test('作業の一覧の置き場所（DOM）: 実行中は会話の外、入力
   lists = items(container);
   assert.equal(lists.length, 1);
   assert.ok(lists[0]!.closest('.bt-thread'), '終わったあとは会話の中');
+});
+
+test('会話の画面（DOM）: 発言の欄の大きさが変わると、片わきのスクロールバーの幅を --ui-gutter として親に渡す（入力欄と一覧の幅をそろえる）', async () => {
+  const container = await openChat();
+  const thread = container.querySelector<HTMLElement>('.bt-thread')!;
+  const watch = observed.find(o => o.el === thread);
+  assert.ok(watch, '発言の欄の大きさを見ている');
+  Object.defineProperty(thread, 'offsetWidth', { configurable: true, value: 600 });
+  Object.defineProperty(thread, 'clientWidth', { configurable: true, value: 580 });
+  await update(() => { watch.run(); });
+  assert.equal(thread.parentElement?.style.getPropertyValue('--ui-gutter'), '10px');
 });
 
 test('作業の一覧の出来事（checklist.updated）は、その会話の出来事の一覧を置き換える（会話の画面の liveChecklist の出どころ）', () => {

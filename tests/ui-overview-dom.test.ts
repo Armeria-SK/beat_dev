@@ -1,4 +1,4 @@
-import { cleanup, loadTsx, render, update } from './helpers/dom.ts';
+import { byText, cleanup, click, loadTsx, render, update } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { afterEach, test } from 'node:test';
@@ -126,6 +126,20 @@ test('Overview（DOM）: 製品の一覧を読み終える前（読めないま�
   assert.ok(container.querySelector('[data-col]'), '読み込みは終わっている');
   assert.equal(container.querySelector('[data-product="none"]'), null);
   for (const text of ['Mine run', 'Mine chat', 'Mine failure', 'finished since']) assert.equal([...container.querySelectorAll('.ui-home__products')].some(el => el.textContent?.includes(text)), false, text);
+});
+
+test('Overview（DOM）: 止めている最中の Stop の 2 度押しは、止める口へ 1 回だけ送る', async () => {
+  serve({ active: [task('t-mine', 'running', { project_id: 'p1aaaa' })], finished: noFinished });
+  const answer = globalThis.fetch;
+  const stops: string[] = [];
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => (init?.method === 'POST' ? (stops.push(String(input)), new Promise<never>(() => undefined)) : answer(input, init))) as typeof fetch;
+  const { container } = await render(createElement(Overview, props({ worker: worker([{ kind: 'task', taskId: 't-mine', runId: 'r1', title: 'Mine run' }]), projects: [project('p1aaaa')] })));
+  await settle();
+  const stop = byText(container.querySelector('[data-product="p1aaaa"]')!, 'button', 'Stop');
+  await click(stop);
+  await click(stop);
+  await settle();
+  assert.deepEqual(stops, ['/api/runs/r1/stop']);
 });
 
 test('Overview（DOM）: 製品が 5 つ以上の一覧の形でも、動いている製品の行が光る（backlog 306）', async () => {

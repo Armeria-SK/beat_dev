@@ -20,9 +20,6 @@ const { Sidebar } = await loadTsx<{ Sidebar: ComponentType<Record<string, unknow
 
 const PRODUCT = 'prod-abc123';
 const realFetch = globalThis.fetch;
-const g = globalThis as Record<string, unknown>;
-g.addEventListener = window.addEventListener.bind(window);
-g.removeEventListener = window.removeEventListener.bind(window);
 
 const refuse = (status: number, body: unknown) => ({ refused: true, status, body });
 
@@ -65,12 +62,12 @@ test('ui/PlanPane（DOM）: Build の知らせ（changed・frozen）は、前か
   await click(build);
   await settle();
   await settle();
-  assert.equal(container.querySelector('[role="status"].ui-plan__live'), live, '同じ入れ物のまま');
+  assert.ok(container.querySelector('[role="status"].ui-plan__live') === live, '同じ入れ物のまま');
   assert.equal(live.querySelector('.bt-notice')?.textContent, en['ui.plan.buildChanged'], '知らせは入れ物の中');
   await click([...container.querySelectorAll('button')].find(b => b.textContent === 'Build with this plan'));
   await settle();
   await settle();
-  assert.equal(container.querySelector('[role="status"].ui-plan__live'), live);
+  assert.ok(container.querySelector('[role="status"].ui-plan__live') === live, '2 つ目の知らせも同じ入れ物');
   assert.match(live.querySelector('.bt-notice')?.textContent ?? '', new RegExp(`^${en['ui.plan.buildFrozen']}`, 'u'));
 });
 
@@ -192,7 +189,7 @@ test('ui/Sidebar（DOM）: 検索の失敗は「0 件」と分けて Could not l
   await input(container.querySelector('input[aria-label="Search past sessions"]'), 'pricing');
   await update(() => new Promise(resolve => setTimeout(resolve, 300)));
   await settle();
-  assert.equal(container.querySelector('.ui-search [role="status"]'), status);
+  assert.ok(container.querySelector('.ui-search [role="status"]') === status, '同じ入れ物のまま');
   assert.equal(status.textContent, 'Could not load');
   fail = false;
   await input(container.querySelector('input[aria-label="Search past sessions"]'), 'pricing notes');
