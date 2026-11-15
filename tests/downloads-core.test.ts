@@ -19,62 +19,32 @@ test('ダウンロード: downloadsDir は作業フォルダの下', () => {
   assert.equal(downloadsDir('/work'), join('/work', 'downloads'));
 });
 
-test('ダウンロード: safeDownloadName は最後の区切りの後ろだけを取る', () => {
-  assert.deepEqual(safeDownloadName('../../etc/passwd'), { name: 'passwd', renamed: false });
-  assert.deepEqual(safeDownloadName('C:\\Windows\\x.exe'), { name: 'x.exe', renamed: false });
-});
+const kept = (name: string) => ({ name, renamed: false });
+const renamed = (name: string) => ({ name, renamed: true });
 
-test('ダウンロード: safeDownloadName はコロンを落とす', () => {
-  assert.deepEqual(safeDownloadName('a:b.txt'), { name: 'ab.txt', renamed: false });
-});
+const SAFE_NAME_ROWS: Array<{ name: string; cases: Array<[string, ReturnType<typeof kept> | undefined]> }> = [
+  { name: 'ダウンロード: safeDownloadName は最後の区切りの後ろだけを取る', cases: [['../../etc/passwd', kept('passwd')], ['C:\\Windows\\x.exe', kept('x.exe')]] },
+  { name: 'ダウンロード: safeDownloadName はコロンを落とす', cases: [['a:b.txt', kept('ab.txt')]] },
+  { name: 'ダウンロード: safeDownloadName は予約名に _ を付ける', cases: [['CON.txt', kept('_CON.txt')], ['com1', kept('_com1')], ['LPT\u00B9.log', kept('_LPT\u00B9.log')]] },
+  { name: 'ダウンロード: safeDownloadName は最初の . の前の部分（末尾の空白と . を除く）で予約名を見つける',
+    cases: [['nul.tar.gz', kept('_nul.tar.gz')], ['CON .txt', kept('_CON .txt')], ['CONIN$', kept('_CONIN$')], ['conin$.log', kept('_conin$.log')], ['CONOUT$.txt', kept('_CONOUT$.txt')], ['com1.log', kept('_com1.log')], ['Lpt².tar.gz', kept('_Lpt².tar.gz')]] },
+  { name: 'ダウンロード: safeDownloadName は予約名に似ているだけの名前には _ を付けない',
+    cases: [['console.txt', kept('console.txt')], ['a.nul', kept('a.nul')], ['conin.txt', kept('conin.txt')], ['com10.txt', kept('com10.txt')]] },
+  { name: 'ダウンロード: safeDownloadName は前後の空白とドットを落とす', cases: [['report.txt.', kept('report.txt')], ['report.txt   ', kept('report.txt')], ['.bashrc', kept('bashrc')]] },
+  { name: 'ダウンロード: safeDownloadName は向きの印と幅の無い文字を落とす', cases: [['invoice\u202Efdp.exe', kept('invoicefdp.exe')], ['a\u200Bb.txt', kept('ab.txt')]] },
+  { name: 'ダウンロード: safeDownloadName は空なら undefined', cases: [['\u0000', undefined], ['...', undefined], ['   ', undefined]] },
+  { name: 'ダウンロード: safeDownloadName は危険な名前に .download を付ける',
+    cases: [['Desktop.INI', renamed('Desktop.INI.download')], ['x.LNK', renamed('x.LNK.download')], ['_curlrc', renamed('_curlrc.download')], ['sitecustomize.py', renamed('sitecustomize.py.download')], ['Microsoft.PowerShell_profile.ps1', renamed('Microsoft.PowerShell_profile.ps1.download')]] },
+  { name: 'ダウンロード: safeDownloadName は plain-text.ts と同じ見えない文字（タグの文字・行区切り・ソフトハイフンなど）を落とす',
+    cases: [['a\u{E0041}b.txt', kept('ab.txt')], ['a\u2028b.txt', kept('ab.txt')], ['a\u2029b.txt', kept('ab.txt')], ['a\u00ADb\u2060c\u2800d\u3164e.txt', kept('abcde.txt')], ['a\u{E0001}\u{E007F}b.txt', kept('ab.txt')]] },
+  { name: 'ダウンロード: safeDownloadName は見えない文字を落としたあとの名前で、予約名・危険な拡張子を見分ける', cases: [['c\u{E0041}on.txt', kept('_con.txt')], ['x.l\u2028nk', renamed('x.lnk.download')]] },
+];
 
-test('ダウンロード: safeDownloadName は予約名に _ を付ける', () => {
-  assert.deepEqual(safeDownloadName('CON.txt'), { name: '_CON.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('com1'), { name: '_com1', renamed: false });
-  assert.deepEqual(safeDownloadName('LPT\u00B9.log'), { name: '_LPT\u00B9.log', renamed: false });
-});
-
-test('ダウンロード: safeDownloadName は最初の . の前の部分（末尾の空白と . を除く）で予約名を見つける', () => {
-  assert.deepEqual(safeDownloadName('nul.tar.gz'), { name: '_nul.tar.gz', renamed: false });
-  assert.deepEqual(safeDownloadName('CON .txt'), { name: '_CON .txt', renamed: false });
-  assert.deepEqual(safeDownloadName('CONIN$'), { name: '_CONIN$', renamed: false });
-  assert.deepEqual(safeDownloadName('conin$.log'), { name: '_conin$.log', renamed: false });
-  assert.deepEqual(safeDownloadName('CONOUT$.txt'), { name: '_CONOUT$.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('com1.log'), { name: '_com1.log', renamed: false });
-  assert.deepEqual(safeDownloadName('Lpt².tar.gz'), { name: '_Lpt².tar.gz', renamed: false });
-});
-
-test('ダウンロード: safeDownloadName は予約名に似ているだけの名前には _ を付けない', () => {
-  assert.deepEqual(safeDownloadName('console.txt'), { name: 'console.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('a.nul'), { name: 'a.nul', renamed: false });
-  assert.deepEqual(safeDownloadName('conin.txt'), { name: 'conin.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('com10.txt'), { name: 'com10.txt', renamed: false });
-});
-
-test('ダウンロード: safeDownloadName は前後の空白とドットを落とす', () => {
-  assert.deepEqual(safeDownloadName('report.txt.'), { name: 'report.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('report.txt   '), { name: 'report.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('.bashrc'), { name: 'bashrc', renamed: false });
-});
-
-test('ダウンロード: safeDownloadName は向きの印と幅の無い文字を落とす', () => {
-  assert.deepEqual(safeDownloadName('invoice\u202Efdp.exe'), { name: 'invoicefdp.exe', renamed: false });
-  assert.deepEqual(safeDownloadName('a\u200Bb.txt'), { name: 'ab.txt', renamed: false });
-});
-
-test('ダウンロード: safeDownloadName は空なら undefined', () => {
-  assert.equal(safeDownloadName('\u0000'), undefined);
-  assert.equal(safeDownloadName('...'), undefined);
-  assert.equal(safeDownloadName('   '), undefined);
-});
-
-test('ダウンロード: safeDownloadName は危険な名前に .download を付ける', () => {
-  assert.deepEqual(safeDownloadName('Desktop.INI'), { name: 'Desktop.INI.download', renamed: true });
-  assert.deepEqual(safeDownloadName('x.LNK'), { name: 'x.LNK.download', renamed: true });
-  assert.deepEqual(safeDownloadName('_curlrc'), { name: '_curlrc.download', renamed: true });
-  assert.deepEqual(safeDownloadName('sitecustomize.py'), { name: 'sitecustomize.py.download', renamed: true });
-  assert.deepEqual(safeDownloadName('Microsoft.PowerShell_profile.ps1'), { name: 'Microsoft.PowerShell_profile.ps1.download', renamed: true });
-});
+for (const row of SAFE_NAME_ROWS) {
+  test(row.name, () => {
+    for (const [input, expected] of row.cases) assert.deepEqual(safeDownloadName(input), expected, JSON.stringify(input));
+  });
+}
 
 test('ダウンロード: safeDownloadName は 150 文字まで切る', () => {
   const long = 'a'.repeat(300) + '.pdf';
@@ -132,19 +102,6 @@ test('ダウンロード: safeDownloadName は絵文字のそばで切ったあ�
   const r2 = safeDownloadName('a'.repeat(148) + '\u{1F600}' + ' ' + '.' + 'b'.repeat(20));
   assert.deepEqual(r2, { name: 'a'.repeat(148) + '\u{1F600}', renamed: false });
   assert.ok(wellFormed(r2!.name));
-});
-
-test('ダウンロード: safeDownloadName は plain-text.ts と同じ見えない文字（タグの文字・行区切り・ソフトハイフンなど）を落とす', () => {
-  assert.deepEqual(safeDownloadName('a\u{E0041}b.txt'), { name: 'ab.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('a\u2028b.txt'), { name: 'ab.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('a\u2029b.txt'), { name: 'ab.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('a\u00ADb\u2060c\u2800d\u3164e.txt'), { name: 'abcde.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('a\u{E0001}\u{E007F}b.txt'), { name: 'ab.txt', renamed: false });
-});
-
-test('ダウンロード: safeDownloadName は見えない文字を落としたあとの名前で、予約名・危険な拡張子を見分ける', () => {
-  assert.deepEqual(safeDownloadName('c\u{E0041}on.txt'), { name: '_con.txt', renamed: false });
-  assert.deepEqual(safeDownloadName('x.l\u2028nk'), { name: 'x.lnk.download', renamed: true });
 });
 
 test('ダウンロード: safeDownloadName はエクスプローラーが開くと動く拡張子（大文字小文字を問わない）に .download を付ける', () => {

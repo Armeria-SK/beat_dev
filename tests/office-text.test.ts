@@ -18,24 +18,20 @@ function makeZip(documentXml: string): ZipArchive {
 
 const doc = (body: string): string => `<w:document><w:body>${body}</w:body></w:document>`;
 
-test('docxText: 段落ごとに改行、タブはタブ文字', () => {
-  const text = docxText(makeZip(doc('<w:p><w:r><w:t>こんにちは</w:t></w:r></w:p><w:p><w:r><w:t>二行目</w:t><w:tab/><w:t>タブ</w:t></w:r></w:p>')));
-  assert.ok(text.ok);
-  assert.equal(text.text, 'こんにちは\n二行目\tタブ');
-  assert.equal(text.truncated, false);
-});
+const DOCX_TEXT_ROWS: Array<{ name: string; xml: string; text: string }> = [
+  { name: 'docxText: 段落ごとに改行、タブはタブ文字', xml: doc('<w:p><w:r><w:t>こんにちは</w:t></w:r></w:p><w:p><w:r><w:t>二行目</w:t><w:tab/><w:t>タブ</w:t></w:r></w:p>'), text: 'こんにちは\n二行目\tタブ' },
+  { name: 'docxText: フィールドの命令と消した文は出さない', xml: doc('<w:p><w:r><w:t>本文</w:t></w:r><w:r><w:instrText>HYPERLINK "x"</w:instrText></w:r><w:r><w:delText>消した</w:delText></w:r></w:p>'), text: '本文' },
+  { name: 'docxText: 前置きが w: でなく x: でも読める', xml: '<x:document><x:body><x:p><x:r><x:t>読み</x:t></x:r></x:p></x:body></x:document>', text: '読み' },
+];
 
-test('docxText: フィールドの命令と消した文は出さない', () => {
-  const text = docxText(makeZip(doc('<w:p><w:r><w:t>本文</w:t></w:r><w:r><w:instrText>HYPERLINK "x"</w:instrText></w:r><w:r><w:delText>消した</w:delText></w:r></w:p>')));
-  assert.ok(text.ok);
-  assert.equal(text.text, '本文');
-});
-
-test('docxText: 前置きが w: でなく x: でも読める', () => {
-  const text = docxText(makeZip('<x:document><x:body><x:p><x:r><x:t>読み</x:t></x:r></x:p></x:body></x:document>'));
-  assert.ok(text.ok);
-  assert.equal(text.text, '読み');
-});
+for (const row of DOCX_TEXT_ROWS) {
+  test(row.name, () => {
+    const text = docxText(makeZip(row.xml));
+    assert.ok(text.ok);
+    assert.equal(text.text, row.text);
+    assert.equal(text.truncated, false);
+  });
+}
 
 test('docxText: word/document.xml が無い ZIP は damaged', () => {
   const opened = openZip(zipWrite([{ name: '[Content_Types].xml', data: Buffer.from(CONTENT_TYPES, 'utf8') }]));
@@ -48,26 +44,22 @@ test('docxText: word/document.xml が無い ZIP は damaged', () => {
   }
 });
 
-test('docxText: DOCTYPE 入りは dtd', () => {
-  const text = docxText(makeZip('<!DOCTYPE w:document><w:document><w:body><w:p><w:r><w:t>あ</w:t></w:r></w:p></w:body></w:document>'));
-  assert.equal(text.ok, false);
-  if (!text.ok) assert.equal(text.reason, 'dtd');
-});
+const DOCX_FAIL_ROWS: Array<{ name: string; xml: string; reason: string; detail?: string }> = [
+  { name: 'docxText: DOCTYPE 入りは dtd', xml: '<!DOCTYPE w:document><w:document><w:body><w:p><w:r><w:t>あ</w:t></w:r></w:p></w:body></w:document>', reason: 'dtd' },
+  { name: 'docxText: w:p を閉じない XML は damaged', xml: '<w:document><w:body><w:p><w:r><w:t>あ</w:t></w:r></w:body></w:document>', reason: 'damaged', detail: 'xml' },
+  { name: 'docxText: 文字の無い段落だけなら no_text', xml: doc('<w:p><w:r><w:t></w:t></w:r></w:p>'), reason: 'no_text' },
+];
 
-test('docxText: w:p を閉じない XML は damaged', () => {
-  const text = docxText(makeZip('<w:document><w:body><w:p><w:r><w:t>あ</w:t></w:r></w:body></w:document>'));
-  assert.equal(text.ok, false);
-  if (!text.ok) {
-    assert.equal(text.reason, 'damaged');
-    assert.equal(text.detail, 'xml');
-  }
-});
-
-test('docxText: 文字の無い段落だけなら no_text', () => {
-  const text = docxText(makeZip(doc('<w:p><w:r><w:t></w:t></w:r></w:p>')));
-  assert.equal(text.ok, false);
-  if (!text.ok) assert.equal(text.reason, 'no_text');
-});
+for (const row of DOCX_FAIL_ROWS) {
+  test(row.name, () => {
+    const text = docxText(makeZip(row.xml));
+    assert.equal(text.ok, false);
+    if (!text.ok) {
+      assert.equal(text.reason, row.reason);
+      if (row.detail !== undefined) assert.equal(text.detail, row.detail);
+    }
+  });
+}
 
 test('docxText: 上限を超えたら truncation で止める', () => {
   const text = docxText(makeZip(doc(`<w:p><w:r><w:t>${'あ'.repeat(250_000)}</w:t></w:r></w:p>`)));

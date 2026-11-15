@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
-import { openDatabase, type Migration } from '../src/db/database.ts';
+import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { tempDir } from './helpers.ts';
+import { assertMidwayKeepsShape } from './helpers/migrate-midway.ts';
 
 const TABLES = ['conversations', 'messages', 'tasks', 'projects', 'acceptance_versions', 'kv'] as const;
 
@@ -66,20 +67,9 @@ test('移し替え 22: 形 21 の DB を今のコードで開いても行は減�
   assert.throws(() => openDatabase(path, MIGRATIONS.slice(0, 21)), /newer than this app/u, '前の版のコードは形 22 の DB を開かない');
 });
 
-test('移し替え 22: 途中で落ちると DB は形 21 のまま（列が足されない）', t => {
-  const dir = tempDir(t);
-  const path = join(dir, 'beat.db');
-  const before = seedV21(path);
-  const failing: Migration[] = [...MIGRATIONS.slice(0, 21), db => { db.exec(String(MIGRATIONS[21])); throw new Error('stopped midway'); }];
-  assert.throws(() => openDatabase(path, failing, { backupDir: join(dir, 'backups') }), /stopped midway/u);
-  assert.ok(existsSync(join(dir, 'backups')));
-  const db = openDatabase(path, MIGRATIONS.slice(0, 21));
-  try {
-    assert.equal(version(db), 21);
-    assert.deepEqual(counts(db), before);
-    assert.ok(!columns(db, 'tasks').includes('acceptance_items'));
-  } finally { db.close(); }
-});
+test('移し替え 22: 途中で落ちると DB は形 21 のまま（列が足されない）', t => assertMidwayKeepsShape(t, 21, seedV21, counts, db => {
+  assert.ok(!columns(db, 'tasks').includes('acceptance_items'));
+}));
 
 test('移し替え 22: TaskStore.create は受け持ちの項目を JSON の配列で書き、渡さなければ NULL', t => {
   const db = openDatabase(join(tempDir(t), 'beat.db'), MIGRATIONS);

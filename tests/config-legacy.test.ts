@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { dropLegacy, LEGACY_KEYS } from '../src/config/legacy.ts';
 import { ConfigError, ConfigStore, defaultConfig, parseConfig } from '../src/config/store.ts';
 import type { AddressInfo } from 'node:net';
@@ -48,34 +48,7 @@ test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残ら�
   assert.equal(raw.mcp.servers[0].localOk, true);
 });
 
-test('tools.taintEscalation: false の古い設定が読め、読んだ設定に残らず、起動のログの Ignored の 1 行に入る', t => {
-  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
-  raw.tools.taintEscalation = false;
-  const config = parseConfig(raw);
-  assert.equal('taintEscalation' in config.tools, false);
-  assert.deepEqual(dropLegacy(raw).dropped, ['tools.taintEscalation']);
-
-  const dir = tempDir(t);
-  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
-  mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}
-`);
-  const before = readFileSync(paths.config);
-  const logs: string[] = [];
-  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
-  t.after(() => app.close());
-  app.config();
-  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: tools.taintEscalation']);
-  assert.deepEqual(readFileSync(paths.config), before);
-});
-
-test('tools.shell.approvalTimeoutSec: 30 の古い設定が読め、読んだ設定に残らず、起動のログの Ignored の 1 行に入る', t => {
-  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
-  raw.tools.shell = { ...(raw.tools.shell ?? {}), approvalTimeoutSec: 30 };
-  const config = parseConfig(raw);
-  assert.equal('approvalTimeoutSec' in config.tools.shell, false);
-  assert.deepEqual(dropLegacy(raw).dropped, ['tools.shell.approvalTimeoutSec']);
-
+function bootWith(t: TestContext, raw: Record<string, any>) {
   const dir = tempDir(t);
   const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
@@ -84,10 +57,32 @@ test('tools.shell.approvalTimeoutSec: 30 の古い設定が読め、読んだ設
   const logs: string[] = [];
   const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
   t.after(() => app.close());
-  app.config();
-  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: tools.shell.approvalTimeoutSec']);
-  assert.deepEqual(readFileSync(paths.config), before);
-});
+  return { app, logs, unchanged: () => assert.deepEqual(readFileSync(paths.config), before) };
+}
+
+type Config = ReturnType<typeof parseConfig>;
+
+const IGNORED_ROWS: Array<{ name: string; key: string; set: (raw: Record<string, any>) => void; has: (config: Config) => boolean }> = [
+  { name: 'tools.taintEscalation: false の古い設定が読め、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'tools.taintEscalation', set: raw => { raw.tools.taintEscalation = false; }, has: config => 'taintEscalation' in config.tools },
+  { name: 'tools.shell.approvalTimeoutSec: 30 の古い設定が読め、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'tools.shell.approvalTimeoutSec', set: raw => { raw.tools.shell = { ...(raw.tools.shell ?? {}), approvalTimeoutSec: 30 }; }, has: config => 'approvalTimeoutSec' in config.tools.shell },
+  { name: '5-2b-s worker.remindAfterHours: 12 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.remindAfterHours', set: raw => { raw.worker = { ...(raw.worker ?? {}), remindAfterHours: 12 }; }, has: config => 'remindAfterHours' in config.worker },
+];
+
+for (const row of IGNORED_ROWS) {
+  test(row.name, t => {
+    const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+    row.set(raw);
+    assert.equal(row.has(parseConfig(raw)), false);
+    assert.deepEqual(dropLegacy(raw).dropped, [row.key]);
+    const boot = bootWith(t, raw);
+    assert.equal(row.has(boot.app.config()), false);
+    assert.deepEqual(boot.logs.filter(line => line.includes('no longer used')), [`[INFO] Ignored settings that are no longer used: ${row.key}`]);
+    boot.unchanged();
+  });
+}
 
 test('tools.maxIterations（16 でも 0 でも）の設定が parseConfig で読め、dropped に入り、読んだ設定に残らない', () => {
   for (const value of [16, 0]) {
@@ -110,26 +105,6 @@ test('ConfigStore: tools.maxIterations 入りのファイルを読むと dropped
   assert.equal('maxIterations' in config.tools, false);
   assert.deepEqual(store.dropped, ['tools.maxIterations']);
   assert.deepEqual(readFileSync(path), before);
-});
-
-test('持ち主の形に tools.maxIterations: 0 を足した設定が読め、起動のログの Ignored の 1 行に tools.maxIterations が入り、ファイルは書き換えない', t => {
-  const raw = ownerShapedConfig();
-  raw.tools.maxIterations = 0;
-  assert.equal(parseConfig(raw).models[0]!.id, 'qwen-local');
-  assert.deepEqual(dropLegacy(raw).dropped, ['models[].toolMode', 'language', 'tools.maxIterations']);
-
-  const dir = tempDir(t);
-  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
-  mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
-  const before = readFileSync(paths.config);
-  const logs: string[] = [];
-  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
-  t.after(() => app.close());
-  app.config();
-  app.config();
-  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations']);
-  assert.deepEqual(readFileSync(paths.config), before);
 });
 
 test('toolMode: "json_fallback" の設定も parseConfig で読め、モデルに toolMode が残らない。dropped は 1 回だけ', () => {
@@ -195,27 +170,6 @@ test('画面からの保存: PUT /api/settings に toolMode 入りの設定 → 
   const saved = JSON.parse(readFileSync(s.paths.config, 'utf8')) as { models: Array<Record<string, unknown>> };
   assert.equal(saved.models.length, config.models.length);
   assert.equal(saved.models.some(m => 'toolMode' in m), false);
-});
-
-test('持ち主の設定と同じ形（language: "ja"、toolMode: "native"、秘密の欄は空）が読め、起動のログに 1 行出し、ファイルは書き換えない', t => {
-  const raw = ownerShapedConfig();
-  const config = parseConfig(raw);
-  assert.equal(config.models[0]!.id, 'qwen-local');
-  assert.equal('toolMode' in config.models[0]!, false);
-  assert.equal('language' in config, false);
-
-  const dir = tempDir(t);
-  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
-  mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
-  const before = readFileSync(paths.config);
-  const logs: string[] = [];
-  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
-  t.after(() => app.close());
-  app.config();
-  app.config();
-  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: models[].toolMode, language']);
-  assert.deepEqual(readFileSync(paths.config), before);
 });
 
 test('起動のログ: 保存で古い鍵が消えたあと、手で toolMode を書き戻すと、再読み込みでもう一度 1 行出す', async t => {
@@ -304,22 +258,6 @@ test('ConfigStore: 古い Ollama の設定のファイルを読むと rewritten 
   assert.deepEqual(store.rewritten, []);
   const saved = JSON.parse(readFileSync(path, 'utf8')) as { providers: Array<Record<string, unknown>> };
   assert.deepEqual(saved.providers.find(p => p.id === 'ollama'), { id: 'ollama', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:11434/v1', maxParallel: 3, timeoutMs: 120_000, server: 'generic' });
-});
-
-test('起動のログ: 古い Ollama の設定は「Read old settings in their new form」を 1 行だけ出し、2 回目の config() では出さない', t => {
-  const dir = tempDir(t);
-  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
-  mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(withOldOllama('http://127.0.0.1:11434/')), null, 2)}\n`);
-  const before = readFileSync(paths.config);
-  const logs: string[] = [];
-  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
-  t.after(() => app.close());
-  app.config();
-  app.config();
-  assert.deepEqual(logs.filter(line => line.includes('new form')), ['[INFO] Read old settings in their new form: providers.ollama.kind "ollama" → "openai_compatible" (http://127.0.0.1:11434/v1)']);
-  assert.deepEqual(logs.filter(line => line.includes('no longer used')), []);
-  assert.deepEqual(readFileSync(paths.config), before);
 });
 
 test('読み替えたあとの接続先: baseUrl の無い古い Ollama はこの PC、LAN の古い Ollama は書いてあった宛先', () => {
@@ -436,46 +374,52 @@ test('ConfigStore: SearXNG の設定のファイルを読むとファイルの�
   assert.equal('searxngUrl' in saved.tools.web, false);
 });
 
-test('持ち主の形（tools.maxIterations: 0 と SearXNG の tools.web）が読め、region は jp-jp のまま。起動のログは決まった 2 行で、ファイルは書き換えない', t => {
-  const raw = ownerShapedConfig();
-  raw.tools.maxIterations = 0;
-  raw.tools.web = { ...OWNER_WEB };
-  const config = parseConfig(raw);
-  assert.deepEqual(config.tools.web, { fetch: true, search: 'duckduckgo', region: 'jp-jp', maxSearchesPerHour: 30 });
+const BOOT_LOG_ROWS: Array<{ name: string; raw: () => Record<string, any>; check: (raw: Record<string, any>) => void; logs: string[] }> = [
+  {
+    name: '持ち主の形に tools.maxIterations: 0 を足した設定が読め、起動のログの Ignored の 1 行に tools.maxIterations が入り、ファイルは書き換えない',
+    raw: () => { const raw = ownerShapedConfig(); raw.tools.maxIterations = 0; return raw; },
+    check: raw => {
+      assert.equal(parseConfig(raw).models[0]!.id, 'qwen-local');
+      assert.deepEqual(dropLegacy(raw).dropped, ['models[].toolMode', 'language', 'tools.maxIterations']);
+    },
+    logs: ['[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations'],
+  },
+  {
+    name: '持ち主の設定と同じ形（language: "ja"、toolMode: "native"、秘密の欄は空）が読め、起動のログに 1 行出し、ファイルは書き換えない',
+    raw: ownerShapedConfig,
+    check: raw => {
+      const config = parseConfig(raw);
+      assert.equal(config.models[0]!.id, 'qwen-local');
+      assert.equal('toolMode' in config.models[0]!, false);
+      assert.equal('language' in config, false);
+    },
+    logs: ['[INFO] Ignored settings that are no longer used: models[].toolMode, language'],
+  },
+  {
+    name: '起動のログ: 古い Ollama の設定は「Read old settings in their new form」を 1 行だけ出し、2 回目の config() では出さない',
+    raw: () => withOldOllama('http://127.0.0.1:11434/'),
+    check: () => {},
+    logs: ['[INFO] Read old settings in their new form: providers.ollama.kind "ollama" → "openai_compatible" (http://127.0.0.1:11434/v1)'],
+  },
+  {
+    name: '持ち主の形（tools.maxIterations: 0 と SearXNG の tools.web）が読め、region は jp-jp のまま。起動のログは決まった 2 行で、ファイルは書き換えない',
+    raw: () => { const raw = ownerShapedConfig(); raw.tools.maxIterations = 0; raw.tools.web = { ...OWNER_WEB }; return raw; },
+    check: raw => assert.deepEqual(parseConfig(raw).tools.web, { fetch: true, search: 'duckduckgo', region: 'jp-jp', maxSearchesPerHour: 30 }),
+    logs: [
+      '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl',
+      '[INFO] Read old settings in their new form: tools.web.search "searxng" → "duckduckgo"',
+    ],
+  },
+];
 
-  const dir = tempDir(t);
-  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
-  mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
-  const before = readFileSync(paths.config);
-  const logs: string[] = [];
-  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
-  t.after(() => app.close());
-  app.config();
-  app.config();
-  assert.deepEqual(logs.filter(line => /no longer used|new form/u.test(line)), [
-    '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl',
-    '[INFO] Read old settings in their new form: tools.web.search "searxng" → "duckduckgo"',
-  ]);
-  assert.deepEqual(readFileSync(paths.config), before);
-});
-
-test('5-2b-s worker.remindAfterHours: 12 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る', t => {
-  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
-  raw.worker = { ...(raw.worker ?? {}), remindAfterHours: 12 };
-  const config = parseConfig(raw);
-  assert.equal('remindAfterHours' in config.worker, false);
-  assert.deepEqual(dropLegacy(raw).dropped, ['worker.remindAfterHours']);
-
-  const dir = tempDir(t);
-  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
-  mkdirSync(paths.data, { recursive: true });
-  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
-  const before = readFileSync(paths.config);
-  const logs: string[] = [];
-  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
-  t.after(() => app.close());
-  assert.equal('remindAfterHours' in app.config().worker, false);
-  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: worker.remindAfterHours']);
-  assert.deepEqual(readFileSync(paths.config), before);
-});
+for (const row of BOOT_LOG_ROWS) {
+  test(row.name, t => {
+    const raw = row.raw();
+    row.check(raw);
+    const boot = bootWith(t, raw);
+    boot.app.config();
+    boot.app.config();
+    assert.deepEqual(boot.logs.filter(line => /no longer used|new form/u.test(line)), row.logs);
+    boot.unchanged();
+  });
+}
