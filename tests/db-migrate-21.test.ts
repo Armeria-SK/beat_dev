@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
-import { openDatabase, type Migration } from '../src/db/database.ts';
+import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { tempDir } from './helpers.ts';
+import { assertMidwayKeepsShape } from './helpers/migrate-midway.ts';
 
 const TABLES = ['conversations', 'messages', 'tasks', 'projects', 'engine_runs', 'kv'] as const;
 
@@ -64,21 +65,10 @@ test('移し替え 21: 形 20 の DB を今のコードで開いても行は減�
   assert.throws(() => openDatabase(path, MIGRATIONS.slice(0, 20)), /newer than this app/u, '前の版のコードは形 21 の DB を開かない');
 });
 
-test('移し替え 21: 途中で落ちると DB は形 20 のまま（表も列も足されない）', t => {
-  const dir = tempDir(t);
-  const path = join(dir, 'beat.db');
-  const before = seedV20(path);
-  const failing: Migration[] = [...MIGRATIONS.slice(0, 20), db => { db.exec(String(MIGRATIONS[20])); throw new Error('stopped midway'); }];
-  assert.throws(() => openDatabase(path, failing, { backupDir: join(dir, 'backups') }), /stopped midway/u);
-  assert.ok(existsSync(join(dir, 'backups')));
-  const db = openDatabase(path, MIGRATIONS.slice(0, 20));
-  try {
-    assert.equal(version(db), 20);
-    assert.deepEqual(counts(db), before);
-    assert.ok(!columns(db, 'projects').includes('doc_language'));
-    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'acceptance_versions'").get(), undefined);
-  } finally { db.close(); }
-});
+test('移し替え 21: 途中で落ちると DB は形 20 のまま（表も列も足されない）', t => assertMidwayKeepsShape(t, 20, seedV20, counts, db => {
+  assert.ok(!columns(db, 'projects').includes('doc_language'));
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'acceptance_versions'").get(), undefined);
+}));
 
 test('移し替え 21: acceptance_versions は製品と版の組で 1 行、source は決まった 4 つだけ', t => {
   const db = openDatabase(join(tempDir(t), 'beat.db'), MIGRATIONS);

@@ -16,33 +16,20 @@ test('ID の決まり（ID_RULES）は、設定の形（スキーマ）の ID �
   assert.match(ModelConfig.properties.id.pattern!, /\{0,63\}\$$/u);
 });
 
-test('slugId: 大文字は小文字に、空白は - に、使えない文字は外す（持ち主の「Anthropic」が通る）', () => {
-  assert.equal(slugId('Anthropic', 'provider'), 'anthropic');
-  assert.equal(slugId('My Server', 'provider'), 'my-server');
-  assert.equal(slugId('  Open   AI  ', 'provider'), 'open-ai');
-  assert.equal(slugId('a - b', 'provider'), 'a-b', '空白と - が続いても 1 つに');
-  assert.equal(slugId('a\tb\nc', 'provider'), 'a-b-c');
-  assert.equal(slugId('my_server-2', 'provider'), 'my_server-2', '使える文字はそのまま');
-  assert.equal(slugId('a/b\\c:d*e', 'provider'), 'abcde');
-});
+const SLUG_ROWS: Array<{ name: string; cases: Array<[string, 'provider' | 'model', string, string?]> }> = [
+  { name: 'slugId: 大文字は小文字に、空白は - に、使えない文字は外す（持ち主の「Anthropic」が通る）',
+    cases: [['Anthropic', 'provider', 'anthropic'], ['My Server', 'provider', 'my-server'], ['  Open   AI  ', 'provider', 'open-ai'], ['a - b', 'provider', 'a-b', '空白と - が続いても 1 つに'], ['a\tb\nc', 'provider', 'a-b-c'], ['my_server-2', 'provider', 'my_server-2', '使える文字はそのまま'], ['a/b\\c:d*e', 'provider', 'abcde']] },
+  { name: 'slugId: 全角の英数字は半角にして使う。日本語や絵文字だけなら空（決められない）',
+    cases: [['Ａｎｔｈｒｏｐｉｃ', 'provider', 'anthropic'], ['ＯｐｅｎＡＩ　互換', 'provider', 'openai', '後ろに残った - は外す'], ['エーアイ', 'provider', ''], ['😀', 'model', ''], ['   ', 'provider', ''], ['', 'model', '']] },
+  { name: 'slugId: 先頭は英小文字か数字（- _ . は先頭から外す）。後ろの区切りも外す',
+    cases: [['-abc', 'provider', 'abc'], ['__x', 'provider', 'x'], ['.hidden', 'model', 'hidden'], ['abc-', 'provider', 'abc'], ['---', 'provider', ''], ['1st', 'provider', '1st']] },
+];
 
-test('slugId: 全角の英数字は半角にして使う。日本語や絵文字だけなら空（決められない）', () => {
-  assert.equal(slugId('Ａｎｔｈｒｏｐｉｃ', 'provider'), 'anthropic');
-  assert.equal(slugId('ＯｐｅｎＡＩ　互換', 'provider'), 'openai', '後ろに残った - は外す');
-  assert.equal(slugId('エーアイ', 'provider'), '');
-  assert.equal(slugId('😀', 'model'), '');
-  assert.equal(slugId('   ', 'provider'), '');
-  assert.equal(slugId('', 'model'), '');
-});
-
-test('slugId: 先頭は英小文字か数字（- _ . は先頭から外す）。後ろの区切りも外す', () => {
-  assert.equal(slugId('-abc', 'provider'), 'abc');
-  assert.equal(slugId('__x', 'provider'), 'x');
-  assert.equal(slugId('.hidden', 'model'), 'hidden');
-  assert.equal(slugId('abc-', 'provider'), 'abc');
-  assert.equal(slugId('---', 'provider'), '');
-  assert.equal(slugId('1st', 'provider'), '1st');
-});
+for (const row of SLUG_ROWS) {
+  test(row.name, () => {
+    for (const [input, kind, expected, note] of row.cases) assert.equal(slugId(input, kind), expected, note ?? JSON.stringify([input, kind]));
+  });
+}
 
 test('slugId: モデルの ID は . を使える（プロバイダは使えない）。長さの上限はプロバイダ 40・モデル 64', () => {
   assert.equal(slugId('GPT-4.1 mini', 'model'), 'gpt-4.1-mini');
