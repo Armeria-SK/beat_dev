@@ -1023,7 +1023,7 @@ export class ChatEngine {
             d.log?.(`[WARN] Model "${model.id}" has a tool limit (maxTools ${model.maxTools}), so its requests carry up to ${model.maxTools} tools in full, without tool_search or the list of tools to load`);
           }
         }
-        const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name)]);
+        const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name), ...(run?.loaded ?? [])]);
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
         let fitted;

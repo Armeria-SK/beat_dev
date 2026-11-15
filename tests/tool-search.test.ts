@@ -498,3 +498,34 @@ test('T-1 後回しにしない実行（振り返り・上限のあるモデル�
   assert.match(text, /There is no tool "no_such_tool"/u);
   for (const name of ['browser_open', 'agent_run', 'mesh_state_set', 'acceptance_change']) assert.ok(!text.includes(name), `capped: ${name}`);
 });
+
+test('T-1 上限のあるモデルの要求では、上限の外の届く道具も名前で呼べば動き（「先に読み込む」で断らない）、無い道具の文は渡した道具だけを並べる', async t => {
+  const s = await setup(t, { models: [fakeModel('m1', { maxTools: 3 })] });
+  s.adapter().scripts = [call('calculate', { expression: '1+2' }), call('no_such_tool', {}), reply('ok')];
+  const runId = await s.send(uuid(1), { text: 'add' });
+  const first = s.calls()[0]!;
+  assert.equal(first.tools.length, 3);
+  assert.ok(!s.names(first).includes('calculate'), 'calculate is beyond the cap');
+  const [added, missing] = s.toolResults();
+  assert.match(added!, /3/u);
+  assert.doesNotMatch(added!, /not loaded/u);
+  const row = s.app.db.prepare("SELECT decision FROM tool_calls WHERE run_id = ? AND tool = 'calculate'").get(runId) as { decision: string };
+  assert.notEqual(row.decision, 'deny');
+  const named = missing!.match(/Available tools: (.*)$/mu)![1]!.split(', ');
+  assert.deepEqual(named.sort(), s.names(first).sort(), missing);
+  assert.ok(!named.includes('tool_search'));
+});
+
+test('T-1 上限のあるモデルへ替わったあとも、替わる前に読み込んだ道具を本文に書いた呼び出し（<tool_call>）で呼べば拾って動く', async t => {
+  const s = await setup(t, { models: [fakeModel('m1'), fakeModel('m2', { maxTools: 3 })] });
+  const textCall: Script = async function* () {
+    yield { type: 'text', delta: '<tool_call>{"name": "table_write", "arguments": {"path": "after.csv", "rows": [["a"]]}}</tool_call>' };
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  };
+  s.adapter().scripts = [search('table_write'), fail(new ProviderError('provider_error', '503', { retryable: false })), textCall, reply('ok')];
+  await s.send(uuid(1), { text: 'make a table' });
+  const capped = s.calls().find(req => req.model.id === 'm2')!;
+  assert.ok(!s.names(capped).includes('table_write'), 'table_write is not in the capped list');
+  assert.ok(existsSync(join(s.paths.workspace, 'after.csv')), 'table_write ran');
+  assert.ok(!s.app.conversations.messages(uuid(1)).some(m => m.role === 'assistant' && m.text.includes('<tool_call>')));
+});
