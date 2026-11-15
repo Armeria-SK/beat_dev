@@ -9,16 +9,16 @@ import { resolvePaths } from '../src/paths.ts';
 import { AnthropicAdapter, toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { OpenAiCompatibleAdapter, toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import type { ModelRequest, StreamEvent } from '../src/providers/types.ts';
-import { FakeAdapter, fakeServer, reply, sse, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, fakeServer, reply, sse, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 // 出力の上限で切れた返事（停止理由が max_tokens）を、成功として扱わない（AU-1）
 
 const CUT = '{"path":"hello.md","content":"途中で切れ';
 
 function cutCall(args: unknown = undefined, raw: string | undefined = CUT, name = 'file_write'): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args, ...(raw === undefined ? {} : { raw }) };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'max_tokens' as StopReason };
   };
 }

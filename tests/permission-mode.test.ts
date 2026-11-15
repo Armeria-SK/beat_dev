@@ -9,7 +9,7 @@ import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { isPermissionMode, PERMISSION_MODES, readMode, stricterMode } from '../src/shared/permission-mode.ts';
 import { CONVERSATION, settled, startApp } from './app-setup.ts';
-import { tempDir, type Script } from './helpers.ts';
+import { tempDir, type Script, withLoad } from './helpers.ts';
 
 // 段 8b: 入力欄の権限モード（自動承認 / 計画）。会話ごとに覚える。新しい会話はいつも auto
 
@@ -96,9 +96,9 @@ const after = (g: { promise: Promise<void> }, script: Script): Script => async f
   yield* script(req);
 };
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
-const toolCall = (name: string, args: unknown): Script => async function* () {
+const toolCall = (name: string, args: unknown): Script => async function* (req) {
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 const sawText = (req: ModelRequest, text: string) => JSON.stringify(req.messages).includes(text);

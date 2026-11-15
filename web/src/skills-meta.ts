@@ -37,6 +37,7 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   task_complete: { icon: 'circleCheck', desc: 'tool.task_complete' },
   question_add: { icon: 'help', desc: 'tool.question_add' },
   question_list: { icon: 'help', desc: 'tool.question_list' },
+  tool_search: { icon: 'search', desc: 'tool.tool_search' },
   deviation_add: { icon: 'pencil', desc: 'tool.deviation_add' },
   skill_view: { icon: 'book', desc: 'tool.skill_view' },
   skill_draft: { icon: 'book', desc: 'tool.skill_draft' },

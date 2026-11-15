@@ -7,13 +7,13 @@ import { languageOf } from '../src/shared/language.ts';
 import { pendingDecided } from '../src/tasks/pending-wake.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { fakeModel, startApp, waitFor } from './app-setup.ts';
-import { reply, type Script } from './helpers.ts';
+import { reply, type Script, withLoad } from './helpers.ts';
 
 const START = Date.parse('2026-11-14T03:00:00Z');
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

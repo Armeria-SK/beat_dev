@@ -27,7 +27,7 @@ export function requiredContext(model: ModelConfig, baseTokens: number, memoryTo
 export interface ModelStatusDeps {
   registry: ProviderRegistry;
   kv: KV;
-  baseTokens: () => number;
+  baseTokens: (model: ModelConfig) => number;
   memoryTokens?: (() => number) | undefined;
   log?: (line: string) => void;
 }
@@ -39,11 +39,10 @@ export class ModelStatus {
   constructor(deps: ModelStatusDeps) { this.#deps = deps; }
 
   async probeAll(config: AppConfig): Promise<ProbeResult[]> {
-    const base = this.#deps.baseTokens();
     const memory = this.#deps.memoryTokens?.() ?? 0;
     const language = languageOf(config);
     const results = await Promise.all(config.models.map(async model => {
-      const required = requiredContext(model, base, memory);
+      const required = requiredContext(model, this.#deps.baseTokens(model), memory);
       const adapter = this.#deps.registry.get(model.provider);
       if (!adapter) {
         return { modelId: model.id, status: 'error', server: '?', required, message: providerText(language, 'probe.no_provider', { id: model.provider }), messageCode: 'provider.probe.no_provider', messageParams: { id: model.provider }, checkedAt: Date.now() } satisfies ProbeResult;

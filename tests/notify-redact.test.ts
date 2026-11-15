@@ -6,7 +6,7 @@ import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { buildPayload } from '../src/notify/channels.ts';
 import type { NotifyEvent } from '../src/notify/notifications.ts';
 import { fakeModel, settled, startApp } from './app-setup.ts';
-import { reply, type Script, testConfig } from './helpers.ts';
+import { reply, type Script, testConfig, withLoad } from './helpers.ts';
 
 const KEY = 'sk-ant-test-0000000000000000';
 const GH = 'ghp_a1B2c3D4e5F6g7H8i9J0';
@@ -15,9 +15,9 @@ const PROVIDER_KEY = 'opaque-provider-key-7781';
 const LEAK = /sk-ant-test|ghp_a1B2|abc123\.def456|opaque-provider-key/u;
 const URL_ENV = 'BEAT_NOTIFY_PHONE_URL_SECRET';
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

@@ -13,13 +13,13 @@ import { eraseConversation } from '../src/db/erase.ts';
 import { GATE_LIMIT } from '../src/projects/gate.ts';
 import { unbuilt } from '../src/projects/build.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { JudgeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { JudgeAdapter, reply, tempDir, type Script, testConfig, withLoad, notSearch } from './helpers.ts';
 
 function toolCall(name: string, args: unknown, before?: () => void): Script {
-  return async function* () {
+  return async function* (req) {
     before?.();
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }
@@ -70,7 +70,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   };
   const toolTexts = (taskId: string) => {
     const cid = app.tasks.get(taskId)!.conversation_id!;
-    return app.conversations.messages(cid).filter(m => m.role === 'tool').map(m => ({ text: m.text, isError: (m.message as { isError?: boolean }).isError === true }));
+    return app.conversations.messages(cid).filter(notSearch).map(m => ({ text: m.text, isError: (m.message as { isError?: boolean }).isError === true }));
   };
   const states = (projectId: string) => Object.fromEntries(app.acceptance.read(projectId)!.items.map(entry => [entry.id, entry.state]));
   const evidence = (projectId: string, id: string) => app.acceptance.read(projectId)!.items.find(entry => entry.id === id)!.evidence;
@@ -644,6 +644,19 @@ test('5-3b 札は道具 task_* の呼び出しと、項目が最後に変わる�
     s.app.acceptance.applyOwnerDecision(p.id, [{ op: 'change', id: 'A-1', item: { result: 'Has a better page', check: look }, source: { kind: 'owner_edit' } }], 'question');
   })]);
   assert.match(lastText(s.toolTexts(task.id), 'task_complete').text, /E-1 is not accepted \(that call was made before this item last changed\)/u);
+  assert.deepEqual(s.states(p.id), { 'A-1': 'open' });
+});
+
+test('T-1 tool_search の行に札があっても、門は証拠にしない（読み込んだだけで製品は何も確かめていない）', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const task = s.task(p.id, ['A-1'], 'Build searched');
+  const plant = () => {
+    const cid = s.app.tasks.get(task.id)!.conversation_id!;
+    s.app.db.prepare("UPDATE tool_calls SET evidence_no = 99 WHERE conversation_id = ? AND tool = 'tool_search'").run(cid);
+  };
+  await s.run(task.id, [toolCall('tool_search', { query: 'task_list' }), done([{ id: 'A-1', evidence: 'E-99' }], plant)]);
+  assert.match(lastText(s.toolTexts(task.id), 'task_complete').text, /E-99 is not accepted \(there is no such tag/u);
   assert.deepEqual(s.states(p.id), { 'A-1': 'open' });
 });
 

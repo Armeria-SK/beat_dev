@@ -3,14 +3,14 @@ import { test } from 'node:test';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import type { McpConnect } from '../src/mcp/manager.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, type Script, testConfig } from './helpers.ts';
+import { reply, type Script, testConfig, withLoad, notSearch, offered } from './helpers.ts';
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
 const WORD = 'xyzzyquux';
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 const complete = call('task_complete', { summary: 'できた', notify: false });
@@ -40,7 +40,7 @@ async function runIn(s: Started, id: string, modelId: string | null, scripts: Sc
   assert.equal(sent.status, 202);
   await settled(s.app, sent.body.runId);
   await s.app.engine.wait(sent.body.runId);
-  return s.app.conversations.messages(id).find(m => m.role === 'tool')?.text ?? '';
+  return s.app.conversations.messages(id).find(notSearch)?.text ?? '';
 }
 
 const taskRows = (s: Started) => s.app.tasks.list({ statuses: ['inbox', 'ready', 'running', 'waiting', 'scheduled', 'done', 'failed', 'cancelled'] });
@@ -120,7 +120,7 @@ test('4-1 MCP: 登録した道具は、会話で選んだモデルに関わら�
   assert.ok(s.app.tools.get('mcp_srv_echo'));
   const local = await runIn(s, uuid(1), 'loc', [call('mcp_srv_echo', { text: 'a' }), reply('おわり')]);
   const outside = await runIn(s, uuid(2), 'ext1', [call('mcp_srv_echo', { text: 'a' }), reply('おわり')], 'ext');
-  const names = (id: 'fake' | 'ext') => s.adapters.get(id)!.calls[0]!.tools.map(tool => tool.name).sort();
+  const names = (id: 'fake' | 'ext') => offered(s.adapters.get(id)!.calls[0]!).sort();
   assert.ok(names('fake').includes('mcp_srv_echo'));
   assert.deepEqual(names('fake'), names('ext'));
   assert.match(local, /pong/u);

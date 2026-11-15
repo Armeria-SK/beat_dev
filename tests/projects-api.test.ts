@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { APP_ROOT } from '../src/paths.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script, type testConfig } from './helpers.ts';
+import { reply, tempDir, type Script, type testConfig, withLoad } from './helpers.ts';
 
 type Config = ReturnType<typeof testConfig>;
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
@@ -13,9 +13,9 @@ type Options = NonNullable<Parameters<typeof startApp>[1]>;
 const PROJECT_KEYS = ['archived_at', 'check_command', 'created_at', 'doc_language', 'doc_language_pinned', 'folder_missing', 'has_plan', 'id', 'is_git', 'last_activity_at', 'name', 'remotes', 'root', 'running', 'scout_mode', 'updated_at', 'waiting'];
 const NOTES = ['nested_inside', 'contains_product', 'inside_config_root', 'config_root_read_only', 'not_git'];
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

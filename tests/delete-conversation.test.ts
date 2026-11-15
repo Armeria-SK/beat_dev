@@ -10,7 +10,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { searchHistory } from '../src/memory/history.ts';
 import { checklistKey } from '../src/tools/builtin/checklist-core.ts';
 import { startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, type Script } from './helpers.ts';
+import { reply, type Script, withLoad } from './helpers.ts';
 
 const TARGET = uuid(10);
 const OTHER = uuid(11);
@@ -148,9 +148,9 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   assert.deepEqual(leftovers, [], '消した会話の ID や本文が、どこかの表に残っている');
 });
 
-const callTool = (name: string, args: unknown): Script => async function* () {
+const callTool = (name: string, args: unknown): Script => async function* (req) {
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -234,7 +234,7 @@ test('モデルの道具には、会話を消すものが無い（道具の一�
   assert.deepEqual(names, [
     'acceptance_change', 'acceptance_write', 'agent_run', 'browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type', 'calculate', 'checklist_write', 'curiosity_add', 'curiosity_list', 'curiosity_update', 'date_calc', 'deviation_add', 'doc_read', 'file_edit', 'file_list', 'file_read', 'file_search', 'file_write', 'history_read', 'history_search', 'image_view',
     'memory_forget', 'memory_save', 'memory_search', 'memory_update', 'mesh_decision_add', 'mesh_read', 'mesh_search', 'mesh_state_set', 'notify_owner', 'plan_write', 'question_add', 'question_list', 'shell_run', 'skill_draft', 'skill_view', 'table_write', 'task_checkpoint', 'task_complete',
-    'task_create', 'task_list', 'task_update', 'web_download', 'web_fetch', 'web_search',
+    'task_create', 'task_list', 'task_update', 'tool_search', 'web_download', 'web_fetch', 'web_search',
   ], '道具を足したら、会話を消せないことを確かめ直す');
   assert.ok(!names.some(n => /conversation|chat/iu.test(n)));
   const fetchTool = tools.find(t => t.name === 'web_fetch')!;

@@ -18,7 +18,7 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef, ToolEffect } from '../src/tools/types.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { CONVERSATION, settled, startApp, waitFor } from './app-setup.ts';
-import { tempDir, testConfig, type Script } from './helpers.ts';
+import { tempDir, testConfig, type Script, withLoad, offered } from './helpers.ts';
 
 // 段 8b: 計画モード。モデルに渡す道具を読む道具（read）と Web の読み取り（network）だけにし、パイプラインでも他の効果を拒否する
 
@@ -96,9 +96,9 @@ test('計画モード: 英語の指示。毎回組み立てる system に入り�
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
-const callTool = (name: string, args: unknown): Script => async function* () {
+const callTool = (name: string, args: unknown): Script => async function* (req) {
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 function gate() { let open!: () => void; const promise = new Promise<void>(resolve => { open = resolve; }); return { promise, open }; }
@@ -107,7 +107,7 @@ const after = (g: { promise: Promise<void> }, script: Script): Script => async f
   yield* script(req);
 };
 const post = (s: Started, text: string, extra: Record<string, unknown> = {}) => s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text, ...extra });
-const toolNames = (req: { tools: Array<{ name: string }> }) => req.tools.map(t => t.name).sort();
+const toolNames = (req: Parameters<typeof offered>[0]) => offered(req).sort();
 
 test('計画モード（エンジン）: モデルに渡す道具は読む道具と Web の読み取りだけ。自動承認のモードでは書き込み・実行・meta の道具も渡す', async t => {
   const s = await startApp(t);

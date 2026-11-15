@@ -23,7 +23,7 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, waitFor } from './app-setup.ts';
-import { type Script, tempDir, testConfig } from './helpers.ts';
+import { type Script, tempDir, testConfig, withLoad, notSearch } from './helpers.ts';
 
 const bashAvailable = spawnSync('bash', ['-c', 'echo ok'], { encoding: 'utf8' }).stdout?.trim() === 'ok';
 
@@ -170,9 +170,9 @@ test('4-2d: 送る行の宛先の設定（.curlrc など）が積んだあとに
   assert.deepEqual(ran, ['a']);
 });
 
-const toolCall = (name: string, args: unknown): Script => async function* () {
+const toolCall = (name: string, args: unknown): Script => async function* (req) {
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
@@ -210,7 +210,7 @@ test('4-2d: タスクは待ちがあっても次の道具を呼べ、task_comple
   const ids = rows.map(row => `#${row.id}`).reverse().join(', ');
   assert.equal(started.control.value.outcome, 'complete');
   assert.equal((started.control.value as { summary: string }).summary, `done\n\nPending: ${ids}`);
-  const last = s.app.conversations.messages(conversation.id).filter(m => m.role === 'tool').at(-1)!;
+  const last = s.app.conversations.messages(conversation.id).filter(notSearch).at(-1)!;
   assert.match(last.text, new RegExp(`Pending: ${ids}\\n\\[E-\\d+\\]$`, 'u'), last.text);
 });
 
@@ -276,7 +276,7 @@ test('4-2d: 実行中に決まった注記は区切りで差し込まれ、次�
   assert.ok(asked.includes('the owner asked this'), '頼みは持ち主の発言');
   assert.ok(!asked.includes('The owner rejected'), '注記は頼みに入らない');
   const roles = s.app.conversations.messages(conversation).map(m => `${m.message.role}${m.message.role === 'user' && m.message.note ? ':note' : ''}`);
-  assert.deepEqual(roles, ['user', 'assistant', 'tool', 'assistant', 'tool', 'user:note', 'assistant', 'tool', 'assistant'], JSON.stringify(roles));
+  assert.deepEqual(roles, ['user', 'assistant', 'tool', 'tool', 'assistant', 'tool', 'tool', 'user:note', 'assistant', 'tool', 'assistant'], JSON.stringify(roles));
 });
 
 test('4-2d: 製品の waiting.pending は、待ちの行の数 + 変更の案の数', async t => {

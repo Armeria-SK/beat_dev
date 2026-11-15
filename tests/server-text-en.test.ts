@@ -14,15 +14,15 @@ import { contextHint, evaluateContext } from '../src/providers/context.ts';
 import { classifyFetchError, classifyHttpFailure, requireApiKey } from '../src/providers/http.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
 import { providerText } from '../src/shared/messages/providers.ts';
-import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 const MIN = 60_000;
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

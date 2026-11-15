@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AppConfig, ProviderConfig } from './config/schema.ts';
+import type { AppConfig, ModelConfig, ProviderConfig } from './config/schema.ts';
 import { ConfigStore } from './config/store.ts';
 import { Conversations } from './db/conversations.ts';
 import { openDatabase } from './db/database.ts';
@@ -54,6 +54,7 @@ import { BrowserSession } from './tools/browser/session.ts';
 import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
 import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
+import { deferredSection, toolSearch } from './tools/builtin/tool-search.ts';
 import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
@@ -73,7 +74,7 @@ import { parentOf, replayAction } from './pending/replay.ts';
 import { pendingText } from './shared/messages/pending.ts';
 import { notifyText } from './shared/messages/notify.ts';
 import { BLOCKING_QUESTION_KEY } from './shared/notification-list.ts';
-import { ToolRegistry } from './tools/registry.ts';
+import { isCore, ToolRegistry } from './tools/registry.ts';
 import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
 import type { JudgeLimitSet } from './tools/pipeline.ts';
@@ -82,7 +83,7 @@ import { MemoryStore, renderBooks } from './memory/store.ts';
 
 export function builtinTools(): ToolDef[] {
   return [
-    taskComplete, taskCheckpoint, questionAdd,
+    taskComplete, taskCheckpoint, questionAdd, toolSearch,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun,
     planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
     taskCreate, taskList, taskUpdate,
@@ -191,7 +192,7 @@ export class App {
     });
     this.registry.reload(config);
     this.botMemory = options.botMemory === true;
-    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: () => this.baseTokens(), memoryTokens: () => this.memoryTokens(), log: this.log });
+    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: model => this.baseTokens(model), memoryTokens: () => this.memoryTokens(), log: this.log });
     this.bus = new RunBus();
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
@@ -403,12 +404,16 @@ export class App {
     this.#rewrittenReported = rewritten;
   }
 
-  baseTokens(): number {
+  baseTokens(model?: ModelConfig): number {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
     // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
-    const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen' }), config)) : 0;
+    const exclude = (tool: ToolDef) => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen';
+    const all = this.tools?.forRun('chat', { exclude }) ?? [];
+    const defers = model?.maxTools === undefined && all.some(tool => tool.name === 'tool_search' && tool.mcp === undefined);
+    const full = model?.maxTools === 0 ? [] : this.tools?.forRun('chat', { limit: model?.maxTools, exclude: tool => exclude(tool) || tool.name === 'tool_search' }) ?? [];
+    const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : full.length ? estimateToolTokens(ToolRegistry.specs(full, config)) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }
