@@ -36,7 +36,7 @@ const SPLIT_LIMIT = 3;
 export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 
-export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model' | 'folder_missing';
+export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'budget' | 'no_model' | 'folder_missing';
 
 export interface WorkerDeps {
   db: DatabaseSync;
@@ -59,6 +59,8 @@ export interface WorkerDeps {
   questions?: QuestionStore | undefined;
   pendingWake?: (() => unknown) | undefined;
 }
+
+export type WaitReason = { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 
 export interface WorkerRunning { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
 
@@ -219,12 +221,45 @@ export class Worker {
     return inQuietHours(this.#now(), c.timezone, c.worker.quietStart, c.worker.quietEnd);
   }
 
+  #ownerWork(task: Task): boolean { return this.#forced.has(task.id) || !this.#d.tasks.beatDecided(task.id); }
+
+  #budgetFreeAt(c: AppConfig, now: number): number | undefined {
+    const over = this.runsLastHour() - c.worker.maxRunsPerHour;
+    if (over < 0) return undefined;
+    const row = this.#d.db.prepare("SELECT started_at FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ? ORDER BY started_at LIMIT 1 OFFSET ?").get(now - 3_600_000, over) as { started_at: number } | undefined;
+    return (row?.started_at ?? now) + 3_600_000;
+  }
+
+  #hold(): 'paused' | 'chat' | undefined {
+    if (this.paused) return 'paused';
+    if (this.#d.engine.chatting) return 'chat';
+    return undefined;
+  }
+
+  waitReason(task: Task): WaitReason | null {
+    const c = this.#d.config();
+    const now = this.#now();
+    if (task.status !== 'ready' || (task.run_at !== null && task.run_at > now) || task.attempts >= task.max_attempts || !this.#ownerWork(task)) return null;
+    const hold = this.#hold();
+    if (hold) return { kind: hold };
+    const freeAt = this.#forced.has(task.id) ? undefined : this.#budgetFreeAt(c, now);
+    if (freeAt !== undefined) return { kind: 'budget', at: freeAt };
+    if (this.#d.tasks.productBusy(task)) return { kind: 'product' };
+    if (this.#running.size >= c.worker.maxParallel || !this.#d.engine.backgroundHasRoom()) return { kind: 'slots' };
+    return null;
+  }
+
   status() {
     const c = this.#d.config();
+    const waiting: Record<string, WaitReason> = {};
+    for (const task of this.#d.tasks.list({ statuses: ['ready'] })) {
+      const reason = this.waitReason(task);
+      if (reason) waiting[task.id] = reason;
+    }
     return {
       enabled: c.worker.enabled, autonomy: c.worker.autonomy, paused: this.paused, quiet: this.quiet(),
       running: [...this.#running.values()][0] ?? null, runningAll: [...this.#running.values()], maxParallel: c.worker.maxParallel, nextWakeAt: this.#nextWakeAt ?? null,
-      runsLastHour: this.runsLastHour(), maxRunsPerHour: c.worker.maxRunsPerHour,
+      runsLastHour: this.runsLastHour(), maxRunsPerHour: c.worker.maxRunsPerHour, waiting,
     };
   }
 
@@ -247,17 +282,19 @@ export class Worker {
         if (this.#stopped || this.#d.autoSchedule === false) return;
         this.#schedule(Math.max(1000, Math.min(at ?? Infinity, now + IDLE_POLL_MS) - now));
       };
-      if (!c.worker.enabled) { reschedule(); return 'disabled'; }
+      const own = c.worker.enabled;
+      const eligible = (t: Task): boolean => own || this.#ownerWork(t);
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
 
       // 予定から実行用のタスクを作る（モデルは呼ばない）
       tasks.spawnDueSchedules();
       this.#d.pendingWake?.();
-      this.#detectReviewTriggers(c, now);
-      if (this.paused) { reschedule(); return 'paused'; }
+      if (own) this.#detectReviewTriggers(c, now);
+      const hold = this.#hold();
+      if (hold === 'paused') { reschedule(); return 'paused'; }
       // ユーザーとの会話の返事を作っている間は始めない（終われば onRunEnd で起こされる）
-      if (this.#d.engine.chatting) { reschedule(now + 60_000); return 'busy'; }
+      if (hold === 'chat') { reschedule(now + 60_000); return 'busy'; }
       // 「今すぐ実行」を頼まれたものは、1時間の上限より先に実行する（上限は、ひとりでに動く分の費用を抑えるためのもの）
       let task: Task | undefined;
       // 提供元の空きは、動いている裏の実行それぞれの「最初に使う提供元」で数える（計画の「各実行の providers で数える」より意図して狭い:
@@ -272,30 +309,32 @@ export class Worker {
         task = forced;
         break;
       }
-      if (!task && this.runsLastHour() >= c.worker.maxRunsPerHour) {
-        const idleSelf = c.worker.autonomy && !this.quiet() && now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
+      const freeAt = this.#budgetFreeAt(c, now);
+      if (!task && freeAt !== undefined) {
+        const idleSelf = own && c.worker.autonomy && !this.quiet() && now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
         // 「今すぐ実行」で提供元の空きを待っているタスクは、上限より先に動くもの（空き待ちであって上限待ちではない）なので、上限の知らせの数に入れない
-        if (tasks.pickNext({ allowSelf: idleSelf, accept: t => !this.#forced.has(t.id) })) {
+        if (tasks.pickNext({ allowSelf: idleSelf, accept: t => eligible(t) && !this.#forced.has(t.id) })) {
           this.#d.notifications.notify({
             kind: 'info', title: taskText(languageOf(c), 'notify.budget.title'),
             body: taskText(languageOf(c), 'notify.budget.body', { max: c.worker.maxRunsPerHour }),
             link: '#/tasks', dedupKey: `budget:${Math.floor(now / 3_600_000)}`,
           });
         }
-        reschedule(now + 10 * 60_000);
+        reschedule(freeAt);
         return 'budget';
       }
 
       const idleEnough = now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
-      const allowSelf = c.worker.autonomy && !this.quiet() && idleEnough;
-      task ??= tasks.pickNext({ allowSelf, accept: roomFor });
+      const allowSelf = own && c.worker.autonomy && !this.quiet() && idleEnough;
+      task ??= tasks.pickNext({ allowSelf, accept: t => eligible(t) && roomFor() });
       // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りにも回さず）、終わった実行の onRunEnd を待つ
       // （poke が来ない道〔止まっている・自動の予定が無い〕に備えて、保険の予定は 1 分後に置く。終わった実行の poke はそれより早い）
-      if (!task && (this.#forced.size > 0 || tasks.pickNext({ allowSelf }))) { reschedule(now + 60_000); return 'busy'; }
+      if (!task && (this.#forced.size > 0 || tasks.pickNext({ allowSelf, accept: eligible }))) { reschedule(now + 60_000); return 'busy'; }
       // 実行するタスクが無ければ、振り返りを見る
       const holdPiled = this.runsLastHour() >= Math.ceil(c.worker.maxRunsPerHour / 2);
-      const job = !task && c.memory.review ? this.#d.reviews?.next({ skipPiled: holdPiled }) : undefined;
-      if (!task && !job && holdPiled && c.memory.review && this.#d.reviews?.next()) { reschedule(Math.min(now + 10 * 60_000, tasks.nextWakeAt({ allowSelf }) ?? Infinity)); return 'budget'; }
+      const reviewing = own && c.memory.review;
+      const job = !task && reviewing ? this.#d.reviews?.next({ skipPiled: holdPiled }) : undefined;
+      if (!task && !job && holdPiled && reviewing && this.#d.reviews?.next()) { reschedule(Math.min(now + 10 * 60_000, tasks.nextWakeAt({ allowSelf }) ?? Infinity)); return 'budget'; }
       if (job) {
         const outcome = await this.#review(job, release);
         reschedule(outcome === 'busy' ? now + 60_000 : now);

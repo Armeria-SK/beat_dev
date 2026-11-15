@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { api, type Acceptance, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task } from '../../api.ts';
+import { api, type Acceptance, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WaitReason } from '../../api.ts';
+import { waitText } from '../wait.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, formatElapsed, formatRelative, timezoneLabel, useT } from '../../i18n/index.ts';
 import { buildNewTask, emptyDraft, PRIORITIES, type TaskDraft } from '../../task-form.ts';
@@ -29,6 +30,7 @@ export interface KanbanProps {
   projects: readonly Project[];
   pendingByTask: ReadonlyMap<string, number>;
   questionsByTask: ReadonlyMap<string, number>;
+  waits?: Record<string, WaitReason> | undefined;
 }
 
 interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; lists: ReadonlyMap<string, Acceptance> }
@@ -112,8 +114,8 @@ function CheckItems({ task, list }: { task: Task; list: Acceptance | null }) {
   );
 }
 
-function TaskCardView({ card, now, index, first, busy, rejecting, product, pending, questions, list, onApprove, onReject, onRejecting, onChecked }: {
-  card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean; product: string | null; pending: number; questions: number; list: Acceptance | null;
+function TaskCardView({ card, now, index, first, busy, rejecting, product, pending, questions, list, wait, onApprove, onReject, onRejecting, onChecked }: {
+  card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean; product: string | null; pending: number; questions: number; list: Acceptance | null; wait: WaitReason | undefined;
   onApprove: () => void; onReject: (reason: string) => void; onRejecting: (on: boolean) => void; onChecked: () => void;
 }) {
   const t = useT();
@@ -130,7 +132,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
   const body = column === 'proposed' ? plainLine(task.body, 200) : onPending ? '' : task.status === 'waiting' ? plainLine(task.waiting_text, 200) : column === 'failed' ? plainLine(task.result_summary, 120) : '';
   const timed = task.run_at !== null && task.run_at > now;
   const meta: Array<string | false | null> = column === 'approved'
-    ? [timed ? t('ui.kanban.starts', formatDateTimeSmart(task.run_at, now)) : first && t('ui.kanban.next'), card.repeating && t('ui.kanban.repeating')]
+    ? [timed ? t('ui.kanban.starts', formatDateTimeSmart(task.run_at, now)) : first && t('ui.kanban.next'), task.status === 'ready' && wait !== undefined && waitText(wait, now), card.repeating && t('ui.kanban.repeating')]
     : column === 'progress' ? [running && product, card.step && t('ui.kanban.step', card.step.step, card.step.total), card.repeating && t('ui.kanban.repeating')]
     : column === 'proposed' ? [task.origin !== 'user' && t('ui.kanban.byBeat'), card.repeating && t('ui.kanban.repeating')]
     : [formatRelative(card.at, now), column === 'check' && task.items !== undefined && t('ui.check.met', task.items.met, task.items.owned), card.repeating && t('ui.kanban.repeating')];
@@ -230,7 +232,7 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
 
 function columnName(t: T, id: ColumnId): string { return t(COLUMN_KEY[id]); }
 
-export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask, questionsByTask }: KanbanProps) {
+export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask, questionsByTask, waits }: KanbanProps) {
   const t = useT();
   const [picked, setPicked] = useState<ProductFilter>(ALL_PRODUCTS);
   const filter = settleFilter(picked, projects);
@@ -310,7 +312,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     if (card.kind === 'session') return <SessionCardView key={card.key} card={card} now={now} index={index} product={product} />;
     const { task } = card;
     return (
-      <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product} pending={pendingByTask.get(task.id) ?? 0} questions={questionsByTask.get(task.id) ?? 0}
+      <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product} pending={pendingByTask.get(task.id) ?? 0} questions={questionsByTask.get(task.id) ?? 0} wait={waits?.[task.id]}
         onApprove={() => void act(task.id, () => runTaskOp('approve', task))}
         onReject={reason => void act(task.id, async () => { const ok = await runTaskOp('reject', task, { reason }); if (ok) setRejecting(null); return ok; })}
         onRejecting={on => setRejecting(on ? task.id : null)}
