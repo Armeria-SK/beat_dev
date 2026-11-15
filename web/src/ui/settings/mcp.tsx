@@ -181,7 +181,7 @@ function SecretRow({ server, secret, ops }: { server: McpServerView; secret: Mcp
   );
 }
 
-function ServerRow({ server, ops, max }: { server: McpServerView; ops: McpOps; max: number }) {
+function ServerRow({ server, ops }: { server: McpServerView; ops: McpOps }) {
   const t = useT();
   const ctx = useSet();
   const [open, setOpen] = useState(false);
@@ -195,7 +195,6 @@ function ServerRow({ server, ops, max }: { server: McpServerView; ops: McpOps; m
   const desc = [
     t('ui.set.mcp.tools', sum.registered, server.tools.length),
     sum.changed > 0 ? t('ui.set.mcp.changedCount', sum.changed) : null,
-    sum.cut > 0 ? t('ui.set.mcp.cutCount', sum.cut, max) : null,
     server.state === 'failed' ? `${t(reasonKey(server.reason))}${server.detail ? ` — ${server.detail}` : ''}` : null,
   ].filter(Boolean).join(' · ');
   return (
@@ -281,7 +280,7 @@ export function McpPanel() {
   return (
     <Group title={t('ui.set.mcp.connected')}>
       {view.servers.length === 0 && <p className="bt-meta">{t('ui.set.mcp.none')}</p>}
-      {view.servers.map(server => <ServerRow key={server.id} server={server} ops={ops} max={view.limits.maxToolsPerServer} />)}
+      {view.servers.map(server => <ServerRow key={server.id} server={server} ops={ops} />)}
       <Row k="mcp:add" title={t('ui.set.mcp.add')} desc={full ? t('ui.set.mcp.full', view.limits.maxServers) : t('ui.set.mcp.addDesc')}
         below={adding && <AddServer taken={view.servers.map(s => s.id)} ops={ops} onDone={() => setAdding(false)} />}>
         {!adding && <Button small disabled={full} onClick={() => setAdding(true)}>{t('ui.set.mcp.addShort')}</Button>}
