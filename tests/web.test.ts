@@ -27,6 +27,16 @@ test('認証: Host・Origin・Sec-Fetch-Site・Tailscale を確かめる', () =>
   assert.throws(() => new WebAuth(['http://192.168.1.2:4777']), /https/);
 });
 
+test('認証: この PC の Host でも、転送の印（X-Forwarded-*・Forwarded・X-Real-IP・Tailscale-*）が付いた要求は断る（Tailscale からこの PC のふりをして、ログイン名の確かめと「この PC だけ」を飛ばせないように）', () => {
+  const auth = new WebAuth(['http://127.0.0.1:4777', 'https://beat.tail1234.ts.net'], ['me@example.com']);
+  const local = { host: '127.0.0.1:4777', origin: 'http://127.0.0.1:4777', 'sec-fetch-site': 'same-origin' };
+  for (const extra of [{ 'x-forwarded-for': '100.64.0.9' }, { 'x-forwarded-host': '127.0.0.1:4777' }, { 'x-forwarded-proto': 'https' }, { forwarded: 'for=100.64.0.9' }, { 'x-real-ip': '100.64.0.9' }, { 'tailscale-user-login': 'stranger@evil.com' }, { 'tailscale-funnel-request': '?1' }]) {
+    assert.deepEqual(auth.check(req({ ...local, ...extra }, 'POST')), { ok: false, reason: 'forwarded' }, JSON.stringify(extra));
+  }
+  assert.deepEqual(auth.check(req(local, 'POST')), { ok: true, origin: 'http://127.0.0.1:4777', local: true });
+  assert.equal(auth.check(req({ host: 'beat.tail1234.ts.net', 'tailscale-user-login': 'me@example.com', 'x-forwarded-for': '100.64.0.9' })).ok, true, 'Tailscale の Host の要求は今まで通り');
+});
+
 async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, models?: ModelConfig[], botMemory = false) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });

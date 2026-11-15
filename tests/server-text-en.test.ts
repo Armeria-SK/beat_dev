@@ -173,11 +173,12 @@ test('ワーカーの題・理由（英語）: 振り返りの会話の題と、
   const sent = s.app.engine.send('c1', 'hello');
   assert.ok(sent.ok);
   await s.app.engine.wait(sent.runId);
-  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' });
   s.adapter().scripts.push(reply('No changes'));
   await s.app.worker.tick();
   const titles = (s.app.db.prepare("SELECT title FROM conversations WHERE kind = 'task'").all() as Array<{ title: string }>).map(r => r.title);
-  assert.deepEqual(titles, ['Review: Manual']);
+  assert.deepEqual(titles, ['Skill review: Manual']);
   assert.equal(s.app.reviews.list()[0]!.note, 'No changes');
 
   const idle = s.app.tasks.create({ title: 'Needs a model', origin: 'user', actor: 'user' });

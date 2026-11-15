@@ -260,9 +260,10 @@ test('並列 2 でも、同じ会話の振り返りは同時に 2 本動かさ�
   const s = await setup(t, { workerMax: 2, providerMax: 2, edit: reviewOn });
   await chat(s, 'c1', '来週から大阪に出張です');
   await chat(s, 'c2', '犬を飼い始めました');
-  const first = s.app.reviews.enqueue('heavy_run', 'run:c1', { conversationId: 'c1' })!;
-  const second = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' })!;
-  const other = s.app.reviews.enqueue('manual', 'manual:c2', { conversationId: 'c2' })!;
+  s.app.engine.lastUserActivity = 0;
+  const first = s.app.reviews.enqueue('heavy_run', 'run:c1', { conversationId: 'c1', kind: 'skill' })!;
+  const second = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' })!;
+  const other = s.app.reviews.enqueue('manual', 'manual:c2', { conversationId: 'c2', kind: 'skill' })!;
   const base = s.adapter().calls.length;
   const g1 = gatedReply(); const g2 = gatedReply();
   s.adapter().scripts.push(g1.script, g2.script);
@@ -277,7 +278,7 @@ test('並列 2 でも、同じ会話の振り返りは同時に 2 本動かさ�
   assert.match(String(s.adapter().calls[base + 1]!.messages.at(-1)?.content), /犬/u);
   g1.release(); g2.release();
   assert.deepEqual(await Promise.all([t1, t2]), ['ran', 'ran']);
-  assert.ok(s.app.kv.get('review:upto:c1'), '先の振り返りが見た位置を進める');
+  assert.ok(s.app.kv.get('review:skill-upto:c1'), '先の振り返りが見た位置を進める');
   assert.equal(await s.app.worker.tick(), 'idle', '先の分が終われば c1 の 2 本目が選ばれ、見る発言が無いので何もせず終わる');
   assert.equal(jobOf(s, second.id).status, 'done');
   assert.equal(jobOf(s, second.id).note, taskText(languageOf(s.app.config()), 'review.nothing'));
@@ -315,7 +316,8 @@ test('道具を実行している最中の裏の実行（limiter の枠を返し
 test('振り返りも、先に使う提供元が満杯なら始めず（claim せず）実行待ちのまま、空けば始まる', async t => {
   const s = await setup(t, { workerMax: 2, providerMax: 1, edit: reviewOn });
   await chat(s, 'c1', '来週から大阪に出張です');
-  const job = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' })!;
+  s.app.engine.lastUserActivity = 0;
+  const job = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' })!;
   s.userTask('A');
   const g1 = gated();
   s.adapter().scripts.push(g1.script, reply('変更なし'));
@@ -337,11 +339,12 @@ test('振り返りも、先に使う提供元が満杯なら始めず（claim �
 });
 
 test('会話の送信で動いている 2 本の振り返りが止められたら、どちらも実行待ちに戻り、見た位置は進めず、あとでやり直す', async t => {
-  const s = await setup(t, { workerMax: 2, providerMax: 2, edit: reviewOn });
+  const s = await setup(t, { workerMax: 2, providerMax: 2, edit: c => { reviewOn(c); c.worker.maxRunsPerHour = 100; } });
   await chat(s, 'c1', '来週から大阪に出張です');
   await chat(s, 'c2', '犬を飼い始めました');
-  const j1 = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' })!;
-  const j2 = s.app.reviews.enqueue('manual', 'manual:c2', { conversationId: 'c2' })!;
+  s.app.engine.lastUserActivity = 0;
+  const j1 = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' })!;
+  const j2 = s.app.reviews.enqueue('manual', 'manual:c2', { conversationId: 'c2', kind: 'skill' })!;
   const base = s.adapter().calls.length;
   s.adapter().scripts.push(hang(), hang());
   const t1 = s.app.worker.tick();
@@ -359,23 +362,25 @@ test('会話の送信で動いている 2 本の振り返りが止められた�
     assert.equal(jobOf(s, job.id).status, 'pending', '失敗にも完了にもせず、実行待ちに戻す');
     assert.equal(jobOf(s, job.id).run_id, null);
   }
-  assert.equal(s.app.kv.get('review:upto:c1'), undefined);
-  assert.equal(s.app.kv.get('review:upto:c2'), undefined);
+  assert.equal(s.app.kv.get('review:skill-upto:c1'), undefined);
+  assert.equal(s.app.kv.get('review:skill-upto:c2'), undefined);
   assert.equal(s.app.worker.status().runningAll.length, 0);
   await s.app.engine.wait(sent.runId);
+  s.app.engine.lastUserActivity = 0;
   s.adapter().scripts.push(reply('変更なし'), reply('変更なし'));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(jobOf(s, j1.id).status, 'done');
   assert.equal(jobOf(s, j2.id).status, 'done');
-  assert.ok(s.app.kv.get('review:upto:c1') && s.app.kv.get('review:upto:c2'), 'やり直しが終わって初めて位置が進む');
+  assert.ok(s.app.kv.get('review:skill-upto:c1') && s.app.kv.get('review:skill-upto:c2'), 'やり直しが終わって初めて位置が進む');
 });
 
 test('会話の送信は、同じ提供元で動いているタスクと振り返りの両方を止める（タスクは実行待ちへ、振り返りは積み直し）', async t => {
   const s = await setup(t, { workerMax: 2, providerMax: 2, edit: reviewOn });
   await chat(s, 'c1', '来週から大阪に出張です');
   const a = s.userTask('A');
-  const job = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' })!;
+  s.app.engine.lastUserActivity = 0;
+  const job = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' })!;
   const base = s.adapter().calls.length;
   s.adapter().scripts.push(hang(), hang());
   const t1 = s.app.worker.tick();

@@ -139,7 +139,7 @@ export function MiniBoard({ columns, label, index, className, tagOf }: { columns
 
 export function RunningItems({ rows, now, busy, onStop, sheen }: { rows: PlacedRow[]; now: number; busy: ReadonlySet<string>; onStop: (row: RunningRow) => void; sheen: boolean }) {
   const t = useT();
-  const title = (row: RunningRow): string => (row.kind === 'review' ? t('ui.overview.review') : row.title || t('ui.session.untitled'));
+  const title = (row: RunningRow): string => (row.kind === 'review' ? t(row.skill ? 'ui.overview.skillReview' : 'ui.overview.review') : row.title || t('ui.session.untitled'));
   const meta = (row: RunningRow): string => [
     t(row.kind === 'task' ? 'ui.overview.kind.task' : row.kind === 'review' ? 'ui.overview.kind.review' : 'ui.overview.kind.session'),
     row.step && t('ui.kanban.step', row.step.step, row.step.total),

@@ -445,7 +445,8 @@ test('3-1c 目次の入る所: 製品の会話・タスク・子の担当の毎�
   assert.match(s.last().system.dynamic, MARK, 'タスク');
   assert.ok(['mesh_search', 'mesh_read', 'mesh_state_set'].every(name => s.names().includes(name)), s.names().join());
 
-  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1), kind: 'skill' });
   s.adapter().scripts = [reply('No changes')];
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.doesNotMatch(s.last().system.dynamic, MARK, '振り返り');

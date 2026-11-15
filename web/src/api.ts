@@ -103,8 +103,7 @@ export interface Coverage {
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
 export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null }
-export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
-export interface FolderList { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
+export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' };
 export interface Message {
@@ -209,7 +208,7 @@ export type RepeatingTask = Task & { last_run: TaskLastRun | null };
 export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned'; projectId?: string | null }
 export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean; projectId?: string | null }>; ranTruncated: boolean }
 export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
-export interface WorkerRun { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
+export interface WorkerRun { kind: 'task' | 'review'; reviewKind?: 'memory' | 'skill'; taskId: string | null; runId: string; title: string }
 export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
@@ -231,6 +230,7 @@ export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null; change_summary?: string | null; status: string; created_at: number;
   current: { description: string; body: string } | null;
   from_title?: string | null;
+  outside?: 0 | 1;
 }
 export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
 export interface CuriosityItem {
@@ -238,7 +238,7 @@ export interface CuriosityItem {
   task_id: string | null; source: 'beat' | 'user' | 'file'; created_at: number; updated_at: number;
 }
 export interface ReviewJob {
-  id: number; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;
+  id: number; kind?: 'memory' | 'skill'; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;
   conversation_id: string | null; task_id: string | null; run_id: string | null; created_at: number; finished_at: number | null;
   changes: MemoryEvent[];
   project_id?: string | null;
@@ -306,6 +306,8 @@ export class ApiError extends Error {
   }
 }
 
+export const unreachable = (error: unknown): boolean => error instanceof TypeError;
+
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -340,7 +342,9 @@ export const api = {
     call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify({ ...hashes, conversationId }) }),
   planReviewed: (id: string, conversationId: string, baseHash: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan/reviewed`, { method: 'POST', body: JSON.stringify({ baseHash, conversationId }) }),
   savePlan: (id: string, conversationId: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash, conversationId }) }),
-  listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
+  checkFolder: (path: string) => call<FolderCheck>('/api/folders/check', { method: 'POST', body: JSON.stringify({ path }) }),
+  folderPickAvailable: () => call<{ available: boolean }>('/api/folders/pick'),
+  pickFolder: (path?: string, signal?: AbortSignal) => call<{ path: string } | { cancelled: true }>('/api/folders/pick', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }), ...(signal ? { signal } : {}) }),
   archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),

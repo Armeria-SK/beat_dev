@@ -51,6 +51,7 @@ import { imageView } from './tools/builtin/image.ts';
 import { webDownload } from './tools/builtin/download.ts';
 import { BROWSER_TOOLS } from './tools/builtin/browser.ts';
 import { BrowserSession } from './tools/browser/session.ts';
+import { FolderDialog, type FolderDialogOptions } from './projects/folder-dialog.ts';
 import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
 import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
@@ -123,6 +124,7 @@ export interface AppOptions {
   browserDisplay?: boolean;
   projectFolderExempt?: readonly string[];
   botMemory?: boolean;
+  folderDialog?: FolderDialogOptions;
 }
 
 export class App {
@@ -161,6 +163,7 @@ export class App {
   readonly skills: SkillStore;
   readonly uploads: Uploads;
   readonly browser: BrowserSession;
+  readonly folderDialog: FolderDialog;
   readonly engine: ChatEngine;
   readonly worker: Worker;
   readonly health: HealthMonitor;
@@ -221,11 +224,13 @@ export class App {
     this.curiosity = new CuriosityStore(this.db, now);
     this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'), () => growSkills(this.config()));
     this.skills.autoRegister = () => !askBeforeRegister(this.config());
+    this.skills.secrets = () => this.registry.secrets();
     this.#importCuriosity();
     this.#copyLegacyWaits();
     this.#registerExistingSkills();
     this.#offerProtectFiles();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
+    this.folderDialog = new FolderDialog({ log: this.log, ...options.folderDialog });
     // ブラウザ 1 つ（全会話で共有）。無効なら何も起動しない。起動は最初の browser_* の呼び出しのとき
     this.browser = new BrowserSession({
       driver: options.browserDriver ?? new PlaywrightDriver(), config: () => this.config(), paths: this.paths, log: this.log,
@@ -249,7 +254,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), projects: this.projects,
+      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()),
     });
     this.tasks.onChange = task => {
@@ -260,12 +265,13 @@ export class App {
       if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
         this.curiosity.onTaskFinished(task);
         // 実行したタスクが終わったら振り返る（実行の記録があるものだけ）
-        if (task.status !== 'cancelled' && task.conversation_id && this.config().memory.review) {
+        if (task.status !== 'cancelled' && task.conversation_id && this.worker.memoryReviewsOn()) {
           this.reviews.enqueue('task', `task:${task.id}`, { taskId: task.id, conversationId: task.conversation_id });
         }
       }
       this.worker.poke();
     };
+    this.tasks.onFinished = task => { if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task); };
     this.tasks.onUncancelled = task => { this.curiosity.onTaskRestored(task); this.questions.resumeAnswered(task); };
     this.tasks.onDeleted = removed => {
       const title = removed.title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
@@ -301,7 +307,11 @@ export class App {
       this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.change_summary ?? draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
-      if (run.kind === 'chat' && this.config().memory.review) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
+      if (run.kind === 'chat') {
+        if (this.worker.memoryReviewsOn()) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
+        if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillIfDue(run.conversationId);
+        else this.reviews.skipSkillReading(run.conversationId);
+      }
       this.worker.poke();
     };
   }
@@ -526,6 +536,7 @@ export class App {
     this.#replayStop.abort();
     void this.mcp.stop().catch(() => undefined);
     void this.browser.close().catch(() => undefined);
+    this.folderDialog.stop();
     this.worker.stop();
     this.engine.saveQueued();
     this.engine.stopAll();

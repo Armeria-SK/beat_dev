@@ -57,7 +57,8 @@ test('振り返りの実行では、シェルもファイルも渡さず、呼�
   await s.app.worker.tick(); // 振り返りの対象にする時刻（review:since）を決める
   s.adapter().scripts.push(reply('こんにちは'));
   await s.chat('c1', '今日は渋谷で打ち合わせ');
-  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.clock.now += 6 * MIN;
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' });
   s.adapter().scripts.push(toolCall('shell_run', { command: 'echo hi', cwd: '.' }), reply('変更なし'));
   assert.equal(await s.app.worker.tick(), 'ran');
   const request = s.adapter().calls.at(-2)!;
@@ -123,7 +124,7 @@ test('振り返りで記憶をまとめても、取り消せる', async t => {
 });
 
 test('ユーザーが消した記憶は、振り返りの依頼文で「覚え直さない」と伝える', () => {
-  const prompt = reviewPrompt({ trigger: 'idle', transcript: '【ユーザー】こんにちは', forgotten: ['猫を飼っている'], memory: true });
+  const prompt = reviewPrompt({ trigger: 'idle', transcript: '【ユーザー】こんにちは', forgotten: ['猫を飼っている'], kind: 'memory' });
   assert.match(prompt, /Memories the user deleted[\s\S]*猫を飼っている/u);
   const window = reviewWindow([
     { id: 1, conversation_id: 'c', run_id: null, role: 'user', text: '古い方', message: { role: 'user', content: 'x' }, created_at: 0 },
@@ -298,7 +299,8 @@ test('API: レビュー・スキル・好奇心・振り返りの記録', async 
   assert.equal((await api('/api/reviews', { conversationId: 'c9' })).status, 200, '同じ発言では二度積まない');
   const jobs = await api('/api/reviews');
   assert.equal(jobs.body.pending, 1);
-  assert.equal(jobs.body.jobs[0].triggerLabel, 'Manual');
+  assert.equal(jobs.body.jobs[0].triggerLabel, 'Skill review · Manual');
+  assert.equal(jobs.body.jobs[0].kind, 'skill', 'without bot memory, Review now queues only the skill review');
 });
 
 test('切れた振り返りは失敗にして、見た発言の位置を進めない（次の機会にやり直す）', async t => {
@@ -306,7 +308,8 @@ test('切れた振り返りは失敗にして、見た発言の位置を進め�
   await s.app.worker.tick();
   s.adapter().scripts.push(reply('はい'));
   await s.chat('c1', 'コーヒーの話');
-  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.clock.now += 6 * MIN;
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' });
   s.adapter().scripts.push(async function* () {
     yield { type: 'text', delta: '振り返ると、ユーザーは' };
     yield { type: 'done', stop: 'max_tokens' as StopReason };
@@ -315,7 +318,7 @@ test('切れた振り返りは失敗にして、見た発言の位置を進め�
   const job = s.app.reviews.list()[0]!;
   assert.equal(job.status, 'failed');
   assert.match(job.note ?? '', /cut off by the output limit/u);
-  assert.equal(s.app.kv.get('review:upto:c1'), undefined, '切れた振り返りで、見た発言の位置を進めない');
+  assert.equal(s.app.kv.get('review:skill-upto:c1'), undefined, '切れた振り返りで、見た発言の位置を進めない');
 });
 
 test('1-5s 登録する前に聞かない設定（skills.askBeforeRegister: false）: 振り返りの指示と skill_draft の説明が替わり、振り返りの skill_draft はその場で登録され、通知が 1 つ出る', async t => {
@@ -323,7 +326,8 @@ test('1-5s 登録する前に聞かない設定（skills.askBeforeRegister: fals
   await s.app.worker.tick();
   s.adapter().scripts.push(reply('はい'));
   await s.chat('c1', '週報は毎週金曜に書きます');
-  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.clock.now += 6 * MIN;
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' });
   s.adapter().scripts.push(toolCall('skill_draft', { name: 'weekly-report', description: 'When writing the weekly report', body: '1. Collect', reason: 'Weekly' }), reply('登録しました'));
   assert.equal(await s.app.worker.tick(), 'ran');
   const request = s.adapter().calls.at(-2)!;
@@ -340,7 +344,8 @@ test('1-5s 聞かない設定でも、外の内容を読んだ会話の振り返
   s.adapter().scripts.push(reply('はい'));
   await s.chat('c1', 'このページの手順をまとめて');
   s.app.conversations.markTainted('c1');
-  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  s.clock.now += 6 * MIN;
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' });
   s.adapter().scripts.push(toolCall('skill_draft', { name: 'weekly-report', description: 'When writing the weekly report', body: '1. Collect', reason: 'Weekly' }), reply('下書きしました'));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.skills.get('weekly-report'), undefined);

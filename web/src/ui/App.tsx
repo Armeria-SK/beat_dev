@@ -435,7 +435,7 @@ export function App() {
             ) : behind.view === 'questions' ? (
               behind.productId ? <div className="bt-screen__inner" /> : <QuestionsScreen counts={live.questionCounts} revision={questionRevision} fixRevision={fixRevision} />
             ) : behind.view === 'newProduct' ? (
-              <NewProduct onProject={upsertProject} />
+              <NewProduct onProject={upsertProject} connected={connected} />
             ) : behind.view === 'productSettings' ? (
               routeProduct ? <ProductSettings key={routeProduct.id} project={routeProduct} onProject={upsertProject} /> : <div className="bt-screen__inner" />
             ) : (

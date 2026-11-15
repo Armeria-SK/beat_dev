@@ -92,6 +92,10 @@ const en = {
   'notify_url_required': 'The URL cannot be removed. Delete the whole target instead',
   'browser_reset_unsafe': 'The browser profile is not inside the data folder, so nothing was deleted',
   'browser_reset_failed': 'The browser profile could not be deleted ({reason}). Close any open browser window and try again',
+  'folder_dialog_busy': 'A folder window is already open on the PC running beat. Close it first',
+  'folder_dialog_unsupported': 'The folder window is available only when beat runs on Windows. Paste the full path instead',
+  'folder_dialog_not_local': 'The folder window opens on the PC running beat, so it can be used only from that PC. Paste the full path instead',
+  'folder_dialog_failed': 'The folder window could not be opened (check the log). Paste the full path instead',
   'internal': 'An internal error occurred (check the log)',
 };
 

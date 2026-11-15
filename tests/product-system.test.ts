@@ -385,7 +385,8 @@ test('2-3 振り返り: 依頼文に memory_ の字が無く、記憶の道具�
   await s.app.worker.tick();
   s.adapter().scripts.push(reply('ok'));
   await s.send('p1', 'weekly report steps', s.project.id);
-  s.app.reviews.enqueue('manual', 'manual:p1', { conversationId: 'p1' });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:p1', { conversationId: 'p1', kind: 'skill' });
   s.adapter().scripts.push(toolCall('skill_draft', { name: 'weekly-report', description: 'When writing the weekly report', body: '1. Collect', reason: 'Weekly' }), reply('drafted'));
   assert.equal(await s.app.worker.tick(), 'ran');
   const request = s.adapter().calls.at(-2)!;

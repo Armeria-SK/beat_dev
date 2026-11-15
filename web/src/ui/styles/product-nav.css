@@ -9,14 +9,7 @@
 .ui-np__form { display: flex; flex-direction: column; gap: var(--space-4); }
 .ui-np__pathrow { display: flex; gap: var(--space-2); align-items: center; }
 .ui-np__pathrow .bt-field { flex: 1; min-width: 0; }
-.ui-np__browser { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--space-2); }
-.ui-np__tools { display: flex; gap: var(--space-1); flex: none; }
 .ui-np__path { min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); }
-.ui-np__list { max-height: 320px; overflow-y: auto; }
-.ui-np__pick { padding: 0; border: 0; background: none; font: inherit; font-weight: 500; text-align: left; cursor: pointer; max-width: 100%; }
-.ui-np__pick:hover { text-decoration: underline; }
-.ui-np__name { color: var(--ink-mute); }
-.ui-np__row.is-chosen { background: var(--surface-sunk); }
 .ui-np__actions { display: flex; gap: var(--space-2); }
 .ui-ps__lang { max-width: 320px; }
 .ui-np__archived { margin-top: var(--space-6); }
@@ -24,6 +17,5 @@
 @media (max-width: 760px) {
   .ui-frame .bt-side__ov { width: 36px; height: 36px; }
   .ui-frame .ui-bar__product { max-width: 60%; }
-  .ui-np__list { max-height: none; }
-  .ui-np__pathrow .bt-btn, .ui-np__tools .bt-btn, .ui-np__actions .bt-btn { height: 40px; }
+  .ui-np__pathrow .bt-btn, .ui-np__actions .bt-btn { height: 40px; }
 }

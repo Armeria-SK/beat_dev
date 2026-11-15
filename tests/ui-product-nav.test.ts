@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApiError, type Conversation, type FolderEntry, type Project } from '../web/src/api.ts';
+import { ApiError, type Conversation, type Project } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
 import { errorBodyText, serverText } from '../web/src/server-text.ts';
-import { entryReason, folderName, nameFor, newProjectInput, noteKeys, upTarget } from '../web/src/ui/folder-pick.ts';
+import { folderName, nameFor, newProjectInput, noteKeys } from '../web/src/ui/folder-pick.ts';
 import { awaitingProduct, loadProjectList, newSessionHash, productNav, productsMissing, projectLoads, sendOptions, settleLeave } from '../web/src/ui/product-nav.ts';
 import { parseRoute, routeHash, type Route } from '../web/src/ui/routes.ts';
 import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
@@ -173,19 +173,10 @@ test('ui/product-nav: 書きかけのある製品の画面で製品が一覧か�
   clearUnsaved('');
 });
 
-test('ui/folder-pick: フォルダの名前・上へ・選べない理由・作る口へ送る形', () => {
+test('ui/folder-pick: フォルダの名前・作る口へ送る形', () => {
   assert.equal(folderName('C:\\work\\uploader\\'), 'uploader');
   assert.equal(folderName('/home/me/field-notes'), 'field-notes');
   assert.equal(folderName('   '), '');
-  assert.equal(upTarget({ path: null, parent: null, entries: [], truncated: false }), undefined, '出発点の一覧には上が無い');
-  assert.equal(upTarget({ path: 'C:\\', parent: null, entries: [], truncated: false }), null, 'ドライブの直下から上は出発点の一覧');
-  assert.equal(upTarget({ path: 'C:\\a\\b', parent: 'C:\\a', entries: [], truncated: false }), 'C:\\a');
-
-  const entry = (over: Partial<FolderEntry>): FolderEntry => ({ name: 'x', path: 'C:\\x', selectable: true, isGit: false, link: false, ...over });
-  assert.equal(entryReason(entry({})), null);
-  assert.deepEqual(entryReason(entry({ selectable: false, reason: 'project.folder_home' })), { kind: 'code', code: 'project.folder_home' });
-  assert.deepEqual(entryReason(entry({ selectable: false, link: true, reason: 'project.folder_link' })), { kind: 'link' });
-
   assert.equal(nameFor('C:\\work\\uploader', '', false), 'uploader', '既定はフォルダの名前');
   assert.equal(nameFor('C:\\work\\uploader', 'My App', true), 'My App', '打った名前はそのまま（大文字小文字も）');
   assert.equal(newProjectInput('  ', 'n', ''), null);
@@ -202,7 +193,6 @@ test('ui/product-nav: 製品のエラーのコードは画面の文にする。�
   const link = serverText('project.folder_link', null, 'en') ?? '';
   assert.ok(link.length > 0);
   assert.doesNotMatch(link, /open it/iu);
-  assert.match(t('ui.np.link'), /open it/iu, '一覧の行（開けば解ける）の文');
   assert.equal(routeHash({ view: 'productNew', id: 'p1aaaa' }), '#/p/p1aaaa/new');
 });
 

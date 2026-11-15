@@ -33,7 +33,7 @@ export const skillView: ToolDef<{ name: string }> = {
       }
       // 振り返りで読んだだけでは「使った」に数えない
       if (ctx.kind !== 'review') s.recordUse(skill.name);
-      return { content: `# ${skill.name}\n${skill.description}\n\n${skill.body}` };
+      return { content: `# ${skill.name}\n${skill.description}\n\n${skill.body}`, ...(s.fromOutside(skill.name) ? { fetched: true } : {}) };
     } catch (error) { return fail(error, ctx); }
   },
 };
@@ -67,7 +67,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
       const change = input.change?.trim() ?? '';
       if (existing && !change) return { content: toolText(languageOf(ctx.config), 'skill.change_missing', { name: input.name }), isError: true };
       const autoOk = !ctx.taint?.tainted && !s.sawOutside(ctx.conversationId);
-      const draft = s.draft({ name: input.name, description: input.description, body: input.body, reason: input.reason, ...(existing ? { change } : {}), conversationId: ctx.conversationId, runId: ctx.runId, autoOk });
+      const draft = s.draft({ name: input.name, description: input.description, body: input.body, reason: input.reason, ...(existing ? { change } : {}), conversationId: ctx.conversationId, runId: ctx.runId, autoOk, fromReview: ctx.kind === 'review' });
       const language = languageOf(ctx.config);
       if (draft.status === 'approved') return { content: toolText(language, existing ? 'skill.registered_auto_edit' : 'skill.registered_auto_new', { name: draft.name, id: draft.id }) };
       return { content: toolText(language, 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };

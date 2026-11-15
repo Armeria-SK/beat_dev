@@ -83,8 +83,9 @@ test('4-1 振り返り: この PC のモデルを選んだ会話も、消えた�
   chatWith(s, uuid(1), 'loc', 'この PC のモデルで話した内容');
   chatWith(s, uuid(2), 'removed-model', '消えたモデルで話した内容');
   s.adapters.get('ext')!.scripts = [reply('変更なし'), reply('変更なし')];
-  s.app.reviews.enqueue('manual', `manual:${uuid(1)}`, { conversationId: uuid(1) });
-  s.app.reviews.enqueue('manual', `manual:${uuid(2)}`, { conversationId: uuid(2) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', `manual:${uuid(1)}`, { conversationId: uuid(1), kind: 'skill' });
+  s.app.reviews.enqueue('manual', `manual:${uuid(2)}`, { conversationId: uuid(2), kind: 'skill' });
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(await s.app.worker.tick(), 'ran');
   const ext = s.adapters.get('ext')!.calls;
@@ -157,7 +158,7 @@ test('4-1 知らせ: スキルの下書きの知らせは、種類 info の外�
     env: { BEAT_NOTIFY_PHONE_URL_SECRET: 'https://hooks.example.test/in' },
     fetch: (async (_url: string | URL | Request, init?: RequestInit) => { sent.push(String(init?.body)); return new Response(null, { status: 204 }); }) as typeof fetch,
   });
-  s.app.skills.onDraft!({ id: 7, name: 'weekly-report', description: 'd', body: 'b', reason: '毎週まとめるため', change_summary: null, status: 'pending', conversation_id: null, run_id: null, created_at: 0, decided_at: null });
+  s.app.skills.onDraft!({ id: 7, name: 'weekly-report', description: 'd', body: 'b', reason: '毎週まとめるため', change_summary: null, status: 'pending', conversation_id: null, run_id: null, created_at: 0, decided_at: null, outside: 0 as const });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(sent.length, 1);
   const payload = JSON.parse(sent[0]!) as { kind: string; title: string; body: string };

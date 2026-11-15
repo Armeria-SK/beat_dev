@@ -25,6 +25,9 @@ const en = {
   'skill.growth_off': 'Growing skills is off in Settings, so no draft was made. Use the skills that are already registered',
   'skill.too_many_drafts': 'There are 20 drafts waiting for approval. No new draft can be made until the user has reviewed them',
   'skill.not_pending': 'This is not a draft waiting for approval',
+  'skill.secret': 'The skill contains what looks like a password, key or token. Nothing was saved. Leave secrets out of skills',
+  'skill.pending_from_chat': 'A draft of the skill {name} made in a conversation is already waiting for the user. Nothing was saved, so that draft stays as it is',
+  'skill.too_many_review_drafts': 'There are {max} drafts from reviews waiting for approval. No new draft can be made until the user has reviewed them',
   'skill.unavailable': 'Skills are not available',
   'skill.no_description': '(no description)',
 

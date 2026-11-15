@@ -10,7 +10,8 @@ import { diffFlags } from '../projects/diff-flags.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
 import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
-import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
+import { checkWorkFolder, gitFolder, type WorkFolderContext } from '../projects/work-folder.ts';
+import { FolderDialogError } from '../projects/folder-dialog.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import type { PendingCounts } from '../pending/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
@@ -298,11 +299,32 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 201, { task: taskView(built.task, languageOf(app.config())), version: built.version.version });
   });
 
-  router.add('POST', '/api/folders/list', async ({ req, res }) => {
+  router.add('POST', '/api/folders/check', async ({ req, res }) => {
+    const body = requireObject(await readJson(req));
+    const checked = checkWorkFolder(requireString(body, 'path', { max: MAX_PATH_CHARS })!, folderContext());
+    if (!checked.ok) throw projectProblem(checked.reason === 'root_in_use' ? 409 : 400, new ProjectError(checked.reason));
+    sendJson(res, 200, { root: checked.root, notes: checked.notes });
+  });
+
+  router.add('GET', '/api/folders/pick', ({ res, local }) => {
+    sendJson(res, 200, { available: app.folderDialog.supported && local });
+  });
+
+  router.add('POST', '/api/folders/pick', async ({ req, res, local }) => {
     const body = requireObject(await readJson(req));
     const path = optionalText(body, 'path', MAX_PATH_CHARS);
-    const listing = listFolders(path ?? undefined, folderContext());
-    if ('reason' in listing) throw projectProblem(400, new ProjectError(listing.reason));
-    sendJson(res, 200, listing);
+    if (!app.folderDialog.supported) throw problem(501, 'folder_dialog_unsupported', 'folder_dialog_unsupported');
+    if (!local) throw problem(403, 'folder_dialog_not_local', 'folder_dialog_not_local');
+    const gone = new AbortController();
+    res.once('close', () => { if (!res.writableEnded) gone.abort(); });
+    try {
+      sendJson(res, 200, await app.folderDialog.pick(path ?? undefined, gone.signal));
+    } catch (error) {
+      if (error instanceof FolderDialogError) {
+        if (error.code === 'busy') throw problem(409, 'folder_dialog_busy', 'folder_dialog_busy');
+        throw problem(500, 'folder_dialog_failed', 'folder_dialog_failed');
+      }
+      throw error;
+    }
   });
 }

@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import type { AppConfig } from '../config/schema.ts';
@@ -8,7 +8,6 @@ import { isInside, isRemotePath, isSecretPath, resolveConfigPath, windowsHazard 
 
 const WINDOWS = process.platform === 'win32';
 const DRIVE_ABSOLUTE = /^[A-Za-z]:[\\/]/u;
-export const FOLDER_LIST_LIMIT = 500;
 export const MAX_LINK_HOPS = 40;
 const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 
@@ -158,46 +157,4 @@ export function checkWorkFolder(input: string, ctx: WorkFolderContext): WorkFold
   try { isGit = Boolean(fs.lstat(join(walked.path, '.git'))); } catch { isGit = false; }
   if (!isGit) notes.push('not_git');
   return { ok: true, root: real, rootKey, notes, isGit };
-}
-
-export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
-export interface FolderListing { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
-
-function entryOf(name: string, path: string, ctx: WorkFolderContext): FolderEntry {
-  const checked = checkWorkFolder(path, ctx);
-  return checked.ok
-    ? { name, path, selectable: true, isGit: checked.isGit, link: false }
-    : { name, path, selectable: false, reason: `project.${checked.reason}`, isGit: gitFolder(path, ctx.fs ?? REAL_FS), link: false };
-}
-
-export function listFolders(input: string | undefined, ctx: WorkFolderContext): FolderListing | { reason: FolderReason } {
-  const fs = ctx.fs ?? REAL_FS;
-  if (input === undefined) {
-    const home = ctx.home ?? homedir();
-    const starts = [home, resolve(home, '/'), ...ctx.config.tools.roots.map(r => resolveConfigPath(r.path, ctx.paths.data))]
-      .filter(path => !folderTextProblem(path) && !isSecretPath(path));
-    const seen = new Set<string>();
-    const entries = starts.filter(path => !seen.has(rootKeyOf(path)) && Boolean(seen.add(rootKeyOf(path))) && walkFolder(path, fs).ok).map(path => entryOf(path, path, ctx));
-    return { path: null, parent: null, entries, truncated: false };
-  }
-  const walked = walkFolder(input, fs);
-  if (!walked.ok) return { reason: walked.reason };
-  if (!walked.directory) return { reason: 'folder_not_directory' };
-  let real: string;
-  try { real = fs.realpath(walked.path); } catch { return { reason: 'folder_unreadable' }; }
-  if (isRemotePath(real)) return { reason: 'folder_remote' };
-  if (isSecretPath(real) || isSecretPath(resolve(input))) return { reason: 'folder_secret' };
-  let names: Array<{ name: string; link: boolean }>;
-  try {
-    names = readdirSync(real, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
-      .map(entry => ({ name: entry.name, link: entry.isSymbolicLink() }));
-  } catch { return { reason: 'folder_unreadable' }; }
-  const visible = names.filter(entry => !isSecretPath(join(real, entry.name))).sort((a, b) => a.name.localeCompare(b.name));
-  const entries = visible.slice(0, FOLDER_LIST_LIMIT).map(({ name, link }): FolderEntry => {
-    const path = join(real, name);
-    return link ? { name, path, selectable: false, reason: 'project.folder_link', isGit: false, link: true } : entryOf(name, path, ctx);
-  });
-  const parent = dirname(real);
-  return { path: real, parent: parent === real ? null : parent, entries, truncated: visible.length > FOLDER_LIST_LIMIT };
 }

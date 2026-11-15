@@ -231,7 +231,8 @@ test('3-1a 道具の一覧: 製品の会話には plan_write と mesh_read、製
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.ok(s.names().includes('mesh_read') && !s.names().includes('plan_write'), s.names().join());
 
-  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1), kind: 'skill' });
   s.adapter().scripts = [reply('No changes')];
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.ok(!s.names().some(name => name.startsWith('plan_') || name.startsWith('mesh_')), s.names().join());
