@@ -12,6 +12,7 @@ const target = `http://127.0.0.1:${beat ? 4797 : process.env.BEAT_PORT ?? 4777}`
 export default defineConfig({
   root: 'web',
   plugins: [react()],
+  css: { postcss: {} },
   build: { outDir: 'dist', emptyOutDir: true, assetsInlineLimit: 0 },
   server: {
     proxy: {

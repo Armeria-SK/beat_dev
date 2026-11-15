@@ -3,7 +3,7 @@ import { api, type Conversation, type Project } from '../api.ts';
 import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import type { AgentState, FootLine } from './agent-state.ts';
-import { Avatar, CountBadge, Icon } from './parts.tsx';
+import { Avatar, CountBadge, Icon, JudgeOffChip } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
 import { productNav } from './product-nav.ts';
 import { routeHash, type Route } from './routes.ts';
@@ -26,6 +26,7 @@ export interface SidebarProps {
   color?: string | undefined;
   setupPending: boolean;
   onSetup: () => void;
+  judgeOff?: boolean | undefined;
 }
 
 function SideLink({ href, icon, name, active, count, countLabel }: {
@@ -110,7 +111,7 @@ function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<st
   return { extra, expand };
 }
 
-export function Sidebar({ state, route, foot, kanban, questions, pending, sessionPending, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup }: SidebarProps) {
+export function Sidebar({ state, route, foot, kanban, questions, pending, sessionPending, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup, judgeOff }: SidebarProps) {
   const t = useT();
   const { extra, expand } = useMoreSessions(conversations);
   const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra), [projects, conversations, conversationsMore, extra]);
@@ -123,6 +124,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
     <nav className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
       <div className="bt-sidebar__head">
         <a className="bt-wordmark" href="#/">{t('ui.wordmark')}</a>
+        {judgeOff && <JudgeOffChip />}
         <Avatar state={state} size="sm" color={color} />
       </div>
       <div className="bt-mode" role="radiogroup" aria-label={t('ui.mode')} data-mode="dev">

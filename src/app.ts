@@ -76,6 +76,7 @@ import { notifyText } from './shared/messages/notify.ts';
 import { BLOCKING_QUESTION_KEY } from './shared/notification-list.ts';
 import { isCore, ToolRegistry } from './tools/registry.ts';
 import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
+import { dataHoldsInstall } from './tools/policy.ts';
 import type { ToolDef } from './tools/types.ts';
 import type { JudgeLimitSet } from './tools/pipeline.ts';
 import { redactSecrets } from './shared/redaction.ts';
@@ -171,7 +172,7 @@ export class App {
     this.env = (options.env ?? process.env) as Record<string, string | undefined>;
     this.fetch = options.fetch ?? fetch;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
-    this.configStore = new ConfigStore(this.paths.config);
+    this.configStore = new ConfigStore(this.paths.config, { judgeOffAllowed: !dataHoldsInstall(this.paths) });
     const config = this.configStore.load();
     this.#reportDropped();
     ensureWorkspace(this.paths);
@@ -390,6 +391,21 @@ export class App {
     }
     this.#applied ||= json;
     this.#reportDropped();
+    if (this.notifications && this.configStore.takeJudgeOffBlocked()) {
+      const language = languageOf(config);
+      this.log("[WARN] The settings file says to run without the judge (routing.judgeMode: off), but beat's data folder is beat's own folder or holds it, so the judge stays on. Start beat with a data folder elsewhere (--data-dir) to use it");
+      this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_blocked.title'), body: taskText(language, 'notify.judge_off_blocked.body'), link: '#/settings', dedupKey: `judge-off-blocked:${this.bus.bootId}` });
+    }
+    if (this.notifications && this.configStore.takeStartedOff()) {
+      const language = languageOf(config);
+      this.log('[WARN] Started without the judge (routing.judgeMode: off in the settings file). Actions that would go to the judge run without a check. Turn the judge on in Settings › Models if you did not choose this');
+      this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_start.title'), body: taskText(language, 'notify.judge_off_start.body'), link: '#/settings', dedupKey: `judge-off-start:${this.bus.bootId}` });
+    }
+    if (this.notifications && this.configStore.takeJudgeOffRefused()) {
+      const language = languageOf(config);
+      this.log('[WARN] The settings file was changed to run without the judge (routing.judgeMode: off), but the change did not come from beat. Kept the judge on. Turn it off in Settings, or restart beat to use the file as written');
+      this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_file.title'), body: taskText(language, 'notify.judge_off_file.body'), link: '#/settings', dedupKey: `judge-off-file:${this.bus.bootId}` });
+    }
     return config;
   }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -10,7 +10,7 @@ import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
-import { resolvePaths } from '../src/paths.ts';
+import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { ACTION_BODY_LIMIT, buildClassifierPrompt, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeLimits } from '../src/tools/auto-approve.ts';
@@ -23,6 +23,7 @@ import { imageView } from '../src/tools/builtin/image.ts';
 import { webFetch, webSearch } from '../src/tools/builtin/web.ts';
 import { REASON_ORDER } from '../src/tools/hooks/decision-order.ts';
 import { gitDirLinkFree } from '../src/tools/hooks/product-run.ts';
+import { isInside } from '../src/tools/hooks/scope.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { runToolCall, type PipelineDeps } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
@@ -490,11 +491,16 @@ test('4-3a 順 4 の許可の一覧: 開発の実行役は、決まった害の�
     'pytest -k "x or ().__class__" tests', 'pytest -m "a__b"', 'mocha --reporter evilpkg', 'mocha --reporter=evilpkg', 'mocha --reporter SPEC', 'mocha --reporter=PROGRESS', 'vitest init browser', 'mocha init spec', 'mocha --reporter spec init spec', 'tox devenv venv', 'tox quickstart',
   ];
   const leaked: string[] = [];
+  const refused: string[] = [];
   for (const command of judged) {
-    if ((await r.shell(command)).decidedBy === 'product-code') leaked.push(command);
+    const outcome = await r.shell(command);
+    if (outcome.decidedBy === 'product-code') leaked.push(command);
+    if (outcome.decision === 'deny' && outcome.decidedBy === 'builtin') refused.push(command);
   }
   assert.deepEqual(leaked, [], '判定役を飛ばした形');
-  assert.equal(r.judge.calls.length, judged.length, '全部判定役が見る');
+  const drive = process.platform === 'win32' && isInside(APP_ROOT, resolve('D:other'));
+  assert.deepEqual(refused, drive ? ['pytest D:other'] : [], 'D:other は、走らせている場所が beat の置き場なら、その中を指すので順 1 で断る');
+  assert.equal(r.judge.calls.length + refused.length, judged.length, '全部判定役が見る（順 1 で断ったもの以外）');
   for (const command of ['make', 'make -j4 test', 'make -j 4 -k all', 'pytest -q tests', 'pytest -k "fast and not slow" tests', 'npm test', 'vitest --run', 'jest --watch=false -t name', 'mocha --reporter spec src', 'tox -e py311', 'just build', 'ninja -j 2', 'vitest run', 'mocha --reporter=dot', 'jest -t render']) {
     assert.equal((await r.shell(command)).decidedBy, 'product-code', `許可の一覧の形は判定役を飛ばす: ${command}`);
   }

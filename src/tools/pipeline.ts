@@ -40,6 +40,16 @@ export const TOOL_OUTPUT_LIMIT = 16_000;
 
 export const JUDGE_REUSE = 'judge-reuse';
 
+export const NO_JUDGE = 'no-judge';
+
+export const SELF_TOUCH_KEY = 'code.self_touch';
+
+export const judgeOff = (config: Pick<AppConfig, 'routing'>): boolean => config.routing.judgeMode === 'off';
+
+function runsWithoutJudge(ctx: ToolContext, deps: PipelineDeps): boolean {
+  try { return judgeOff(ctx.config) && judgeOff(deps.config?.() ?? ctx.config); } catch { return false; }
+}
+
 // 計画モードで使える道具の効果: 読む道具（read）と Web の読み取り（network）。ただしファイルも書く道具（writesFiles）は除く。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、planAllows を通す
 export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
 
@@ -228,6 +238,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       : outcome.decidedBy === 'not-parked' ? { by: 'not-parked' }
       : outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' && autoWhy !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300) }
       : outcome.decidedBy === JUDGE_REUSE && outcome.decision === 'allow' && autoWhy !== undefined && sameAs !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300), same: sameAs }
+      : outcome.decidedBy === NO_JUDGE && outcome.decision === 'allow' ? { by: 'no-judge' }
       : undefined;
     const tagged = ctx.kind === 'task' && call.name !== 'tool_search' ? 1 : 0;
     const row = deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, evidence_no, created_at)
@@ -392,9 +403,13 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         const noteJudge = (outcome: JudgeOutcome, failed: string | undefined, spend: JudgeSpend) => recordJudgeCall(deps.db, {
           runId: ctx.runId, runKind: ctx.kind, projectId: ctx.project?.id ?? null, tool: tool.name, reasonKeys: judgeKeys, askKinds: [...askKinds], outcome, failed, spend,
         });
-        if (!deps.autoClassify) { noteJudge('failed', 'no_judge', { ms: 0 }); return park('judge_failed', pendingText('en', 'judge_failed_no_judge')); }
+        const noJudge = runsWithoutJudge(ctx, deps);
+        if (noJudge && judgeKeys.includes(SELF_TOUCH_KEY)) return park('owner', pendingText('en', 'owner_no_judge_self', { reasons: reasons.join('; ') }));
+        if (noJudge && !(deps.lastUserRequest?.() ?? '').trim()) return park('owner', pendingText('en', 'owner_no_judge_request'));
+        if (noJudge && tool.mcp && tool.effect === 'write') return park('owner', pendingText('en', 'owner_no_judge_mcp', { server: tool.mcp.server, tool: tool.mcp.tool }));
+        const classify = deps.autoClassify;
         const summary = callSummary() ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
-        const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
+        const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) => noJudge ? undefined :
           deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
         const judgeInput: ClassifierInput = {
           userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons: [...reasons], paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
@@ -406,17 +421,19 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         };
         let judgeModel: unknown;
         try { judgeModel = judgeIdentity(deps.config?.() ?? ctx.config, ctx.model?.id); } catch { judgeModel = undefined; }
-        const cacheKey = judgeModel === undefined ? undefined : judgeCacheKey(ctx, {
+        const cacheKey = noJudge || judgeModel === undefined ? undefined : judgeCacheKey(ctx, {
           judgeInput, input: args, workspace: ctx.workspace, cwd: cwdNow, taintSources: ctx.taint.sources.length,
           reasonKeys: judgeKeys, askKinds: [...askKinds], bind: first?.bind ?? null, judge: judgeModel,
         });
         const known = cacheKey === undefined ? undefined : rememberedAllow(ctx, cacheKey);
         const reused = known && known.snapshot === await snapshotNow() ? known : undefined;
         let verdict: AutoVerdict;
-        if (reused) verdict = { decision: 'allow', reason: reused.reason };
+        if (noJudge) verdict = { decision: 'allow', reason: '' };
+        else if (reused) verdict = { decision: 'allow', reason: reused.reason };
+        else if (!classify) { noteJudge('failed', 'no_judge', { ms: 0 }); return park('judge_failed', pendingText('en', 'judge_failed_no_judge')); }
         else {
           autoEvent('checking');
-          const judged = await judgeOnce(judgeInput, deps.autoClassify, ctx.signal, judgeLimitsFor(ctx, deps));
+          const judged = await judgeOnce(judgeInput, classify, ctx.signal, judgeLimitsFor(ctx, deps));
           verdict = judged.verdict;
           noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, judged.spend);
         }
@@ -457,15 +474,21 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           : ownerKeysOf(keysNow).length ? { kind: 'owner', reason: pendingText('en', 'owner_protected', { reasons: reasons.join('; ') }) }
           : undefined;
         if (ownerNow) { autoEvent('asked'); return park(ownerNow.kind, ownerNow.reason); }
-        const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
-        const shownWhy = reused ? guardText(language, 'pipeline.judge_reused', { reason: why }) : why;
-        const autoId = deps.approvals.recordAuto({
-          runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons,
-        }, shownWhy);
-        decision = 'allow'; decidedBy = reused ? JUDGE_REUSE : 'auto-mode'; autoWhy = why; sameAs = reused?.call;
-        if (freshAllow && cacheKey !== undefined && storeSnapshot !== undefined) rememberAllow(ctx, cacheKey, { call: callNumber, reason: why, snapshot: storeSnapshot });
-        autoEvent('allowed', shownWhy);
-        judgedId = autoId;
+        decision = 'allow';
+        if (noJudge) {
+          decidedBy = NO_JUDGE;
+          judgedId = deps.approvals.recordAuto({ runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons }, guardText(language, 'pipeline.no_judge_reason'));
+        } else {
+          const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
+          const shownWhy = reused ? guardText(language, 'pipeline.judge_reused', { reason: why }) : why;
+          const autoId = deps.approvals.recordAuto({
+            runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons,
+          }, shownWhy);
+          decidedBy = reused ? JUDGE_REUSE : 'auto-mode'; autoWhy = why; sameAs = reused?.call;
+          if (freshAllow && cacheKey !== undefined && storeSnapshot !== undefined) rememberAllow(ctx, cacheKey, { call: callNumber, reason: why, snapshot: storeSnapshot });
+          autoEvent('allowed', shownWhy);
+          judgedId = autoId;
+        }
       }
     }
   }
