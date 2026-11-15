@@ -220,8 +220,6 @@ export const en = {
   'tool.mesh_search': 'Search the notes, plan and acceptance items of the product',
   'tool.mesh_read': 'Read a file of the notes of the product (such as the plan)',
   'tool.mesh_state_set': 'Note where the work on the product stands',
-  'tool.mesh_map_set': 'Describe a folder in the map of the product',
-  'tool.mesh_glossary_set': 'Note what a name you use points to in the product',
   'tool.mesh_decision_add': 'Note a decision made while working on the product',
   'tool.web_fetch': 'Read a public web page',
   'tool.web_search': 'Search the web',

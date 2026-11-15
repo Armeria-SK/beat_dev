@@ -27,7 +27,6 @@ import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { isBrowserTool } from '../src/tools/browser/names.ts';
 import { fileList, fileRead } from '../src/tools/builtin/files.ts';
 import { MEMORY_TOOL_NAMES } from '../src/tools/builtin/memory.ts';
-import { meshGlossarySet, meshMapSet } from '../src/tools/builtin/mesh-write.ts';
 import { meshRead, meshSearch } from '../src/tools/builtin/mesh.ts';
 import { acceptanceAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
@@ -35,17 +34,14 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import { effectivePolicy } from '../src/tools/tool-policy.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import {
-  FILLER, GLOSSARY_ROWS, MAP_ROWS, MESH_QUESTIONS, PLAN_TEXT, PRODUCT_CHANGES, PRODUCT_FILES, PRODUCT_NAME, STATE_NOTES, type MeshQuestion,
+  FILLER, MESH_QUESTIONS, PLAN_TEXT, PRODUCT_CHANGES, PRODUCT_FILES, PRODUCT_NAME, STATE_NOTES, type MeshQuestion,
 } from '../tests/fixtures/mesh-questions.ts';
 
-export type ProbeSet = 'a' | 'b' | 'bg' | 'c' | 'cg';
-export const PROBE_SETS: readonly ProbeSet[] = ['a', 'b', 'bg', 'c', 'cg'];
+export type ProbeSet = 'a' | 'b';
+export const PROBE_SETS: readonly ProbeSet[] = ['a', 'b'];
 export const SET_LABELS: Record<ProbeSet, string> = {
   a: 'A: no mesh (summary only)',
   b: 'B: mesh index + STATE.md',
-  bg: 'B + GLOSSARY.md',
-  c: 'C: B + MAP.md',
-  cg: 'C + GLOSSARY.md',
 };
 
 const PROJECT_ID = 'bbbbbbbb-0000-4000-8000-00000000b5b0';
@@ -121,7 +117,7 @@ export function probeConfig(model: ModelConfig, provider: ProviderConfig): AppCo
   return { ...base, timezone: TIMEZONE, providers: [provider], models: [model], routing: { ...base.routing, chat: [model.id], background: [model.id] } };
 }
 
-export interface ChatRequest { frozen: string; baseTools: string[]; meshTools: string[]; baseTokens: number; meshSpecTokens: number; mapWriteTokens: number; glossaryWriteTokens: number }
+export interface ChatRequest { frozen: string; baseTools: string[]; meshTools: string[]; baseTokens: number; meshSpecTokens: number }
 
 export function productChatRequest(config: AppConfig, paths: AppPaths, model: ModelConfig, root: string, language: Language, smallestAvailable?: number): ChatRequest {
   const registry = new ToolRegistry();
@@ -137,13 +133,12 @@ export function productChatRequest(config: AppConfig, paths: AppPaths, model: Mo
   return {
     frozen, baseTools: base.map(t => t.name), meshTools: chat.filter(t => t.name.startsWith(MESH_TOOL_PREFIX)).map(t => t.name),
     baseTokens: estimateTextTokens(frozen) + size(base), meshSpecTokens: withMesh - size(base),
-    mapWriteTokens: size([...chat, meshMapSet]) - withMesh, glossaryWriteTokens: size([...chat, meshGlossarySet]) - withMesh,
   };
 }
 
 export function addedTokens(set: ProbeSet, request: ChatRequest, meshIndex: string): number {
   if (set === 'a') return 0;
-  return estimateTextTokens(meshIndex) + request.meshSpecTokens + (set === 'c' || set === 'cg' ? request.mapWriteTokens : 0) + (set === 'bg' || set === 'cg' ? request.glossaryWriteTokens : 0);
+  return estimateTextTokens(meshIndex) + request.meshSpecTokens;
 }
 
 export async function buildProduct(base: string, set: ProbeSet, model: ModelConfig, provider: ProviderConfig, source?: AppConfig): Promise<ProductEnv> {
@@ -161,7 +156,6 @@ export async function buildProduct(base: string, set: ProbeSet, model: ModelConf
     mkdirSync(projectDir(paths.projects, PROJECT_ID), { recursive: true });
     plans.write(PROJECT_ID, PLAN_TEXT, { by: 'owner', tainted: false, conversationId: null, runId: null });
     mesh.setState(PROJECT_ID, { ...STATE_NOTES }, { by: 'owner', external: false });
-    if (set === 'c' || set === 'cg') for (const row of MAP_ROWS) await mesh.setMapRow(PROJECT_ID, root, row, { by: 'task', external: false });
   }
   for (const change of PRODUCT_CHANGES) {
     const from = join(root, change.from);
@@ -172,8 +166,6 @@ export async function buildProduct(base: string, set: ProbeSet, model: ModelConf
     try { rmSync(dirname(from)); } catch { }
   }
   if (mesh) {
-    if (set === 'bg' || set === 'cg') for (const row of GLOSSARY_ROWS) mesh.setGlossary(PROJECT_ID, root, row, { by: 'task', external: false });
-    await mesh.refreshMap(PROJECT_ID, root);
     mesh.persist(PROJECT_ID);
   }
   const capacity = model.contextLength ?? model.minContext;
@@ -296,7 +288,7 @@ export interface ProbeOptions {
   onRow?: ((row: ProbeRow) => void) | undefined;
 }
 
-export interface AddedParts { index: number; meshTools: number; writeTools: number }
+export interface AddedParts { index: number; meshTools: number }
 export interface RequestSizes { base: number; added: Partial<Record<ProbeSet, number>>; parts: Partial<Record<ProbeSet, AddedParts>> }
 export interface ProbeRun { rows: ProbeRow[]; notes: string[]; request: RequestSizes }
 
@@ -325,7 +317,7 @@ export async function runProbe(options: ProbeOptions): Promise<ProbeRun> {
       const total = addedTokens(set, env.request, env.meshIndex);
       const index = set === 'a' ? 0 : estimateTextTokens(env.meshIndex);
       const meshTools = set === 'a' ? 0 : env.request.meshSpecTokens;
-      request.parts[set] = { index, meshTools, writeTools: total - index - meshTools };
+      request.parts[set] = { index, meshTools };
       request.added[set] = total;
       const dynamic = [buildDynamic(TIMEZONE, 'en', NOW, 'auto', { name: PRODUCT_NAME, root: env.root }), env.meshIndex, summarySection(summary, 'en')].filter(Boolean).join('\n\n');
       for (const question of questions) {
@@ -410,11 +402,9 @@ export function summarize(rows: readonly ProbeRow[]): SetSummary[] {
   });
 }
 
-export type CompareRule = 'helped' | 'beats';
-
 export interface Comparison { moreCorrect: number; madeUp: string; tokenRatio: number | null; verdict: string }
 
-export function compareSets(base: SetSummary, next: SetSummary, request: { base: number; next: number }, rule: CompareRule = 'helped'): Comparison {
+export function compareSets(base: SetSummary, next: SetSummary, request: { base: number; next: number }): Comparison {
   const moreCorrect = next.correct - base.correct;
   const madeUp = `${base.madeUp} -> ${next.madeUp}`;
   const tokenRatio = request.base > 0 ? Math.round((request.next / request.base) * 100) / 100 : null;
@@ -426,12 +416,11 @@ export function compareSets(base: SetSummary, next: SetSummary, request: { base:
     ...(tokenRatio > 1.2 ? [`tokens ${tokenRatio}x`] : []),
   ];
   if (harms.length) return { moreCorrect, madeUp, tokenRatio, verdict: `harm: ${harms.join(', ')}` };
-  if (rule === 'beats') return { moreCorrect, madeUp, tokenRatio, verdict: moreCorrect > 0 ? 'beats the base' : 'does not beat the base: drop the map' };
   const helped = moreCorrect >= 3 && next.madeUp <= Math.floor(base.madeUp / 2);
   return { moreCorrect, madeUp, tokenRatio, verdict: helped ? 'helped' : 'no harm' };
 }
 
-const COMPARISONS: ReadonlyArray<[ProbeSet, ProbeSet, CompareRule]> = [['a', 'b', 'helped'], ['a', 'c', 'helped'], ['b', 'c', 'beats'], ['b', 'bg', 'helped'], ['c', 'cg', 'helped']];
+const COMPARISONS: ReadonlyArray<[ProbeSet, ProbeSet]> = [['a', 'b']];
 const cell = (text: string) => text.replace(/\|/gu, '\\|').replace(/\r?\n/gu, ' ');
 const shown = (value: number | null) => (value === null ? 'n/a' : String(value));
 
@@ -441,25 +430,25 @@ export function renderReport(rows: readonly ProbeRow[], meta: ReportMeta): strin
   const summary = summarize(rows);
   const lines = [`# ${meta.title}`, '', ...meta.notes.map(n => `- ${n}`), ''];
   lines.push('Sets: ' + PROBE_SETS.map(s => `(${s}) ${SET_LABELS[s]}`).join(', '), '');
-  lines.push('## Summary', '', '| model | set | correct | location (of 6) | plan (of 3) | control said unknown (of 3) | control answered confidently | first mesh_search hit (of 6) | made-up paths | trusted a stale row | tool calls (total / median) | median input tokens per question | request tokens (base + added) | added: index + mesh tools + write tools | failed |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+  lines.push('## Summary', '', '| model | set | correct | location (of 6) | plan (of 3) | control said unknown (of 3) | control answered confidently | first mesh_search hit (of 6) | made-up paths | trusted a stale row | tool calls (total / median) | median input tokens per question | request tokens (base + added) | added: index + mesh tools | failed |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const s of summary) {
     const request = meta.requests[s.model];
     const added = request?.added[s.set];
     const size = request && added !== undefined ? `${request.base + added} (${request.base} + ${added})` : 'n/a';
     const part = request?.parts[s.set];
-    const parts = part ? `${part.index} + ${part.meshTools} + ${part.writeTools}` : 'n/a';
+    const parts = part ? `${part.index} + ${part.meshTools}` : 'n/a';
     lines.push(`| ${s.model} | ${s.set} | ${s.correct} / ${s.questions} | ${s.location} | ${s.plan} | ${s.controlUnknown} | ${s.controlConfident} | ${s.firstSearchHits ?? '-'} | ${s.madeUp} | ${s.trustedStale} | ${s.toolCalls} / ${shown(s.medianToolCalls)} | ${shown(s.medianTokens)} | ${size} | ${parts} | ${s.failed} |`);
   }
-  lines.push('', '## Lines (mesh-plan.md section 6)', '', 'helped = at least 3 more correct than the base, made-up paths at most half, request tokens at most 1.2x. harm = fewer correct, more made-up paths, or request tokens above 1.2x. b -> c: C must beat B (strictly more correct) or the map is dropped. Request tokens = the product chat request without mesh (frozen system text + tool specs) plus what the set adds (mesh index + mesh tool specs). Correct counts a control only when it said unknown without naming any path. Hand-check the control answers (K1-K3, 3 per set) in the Answers table: the unknown check is a phrase list.', '');
+  lines.push('', '## Lines (mesh-plan.md section 6)', '', 'helped = at least 3 more correct than the base, made-up paths at most half, request tokens at most 1.2x. harm = fewer correct, more made-up paths, or request tokens above 1.2x. Request tokens = the product chat request without mesh (frozen system text + tool specs) plus what the set adds (mesh index + mesh tool specs). Correct counts a control only when it said unknown without naming any path. Hand-check the control answers (K1-K3, 3 per set) in the Answers table: the unknown check is a phrase list.', '');
   lines.push('| model | base -> set | more correct | made-up paths | request token ratio | verdict |', '|---|---|---|---|---|---|');
   for (const model of [...new Set(summary.map(s => s.model))]) {
     const request = meta.requests[model];
-    for (const [from, to, rule] of COMPARISONS) {
+    for (const [from, to] of COMPARISONS) {
       const base = summary.find(s => s.model === model && s.set === from);
       const next = summary.find(s => s.model === model && s.set === to);
       if (!base || !next) continue;
       const sizes = { base: request ? request.base + (request.added[from] ?? 0) : 0, next: request ? request.base + (request.added[to] ?? 0) : 0 };
-      const c = compareSets(base, next, sizes, rule);
+      const c = compareSets(base, next, sizes);
       lines.push(`| ${model} | ${from} -> ${to} | ${c.moreCorrect} | ${c.madeUp} | ${shown(c.tokenRatio)} | ${c.verdict} |`);
     }
   }
@@ -475,7 +464,7 @@ export function renderReport(rows: readonly ProbeRow[], meta: ReportMeta): strin
   return `${lines.join('\n')}\n`;
 }
 
-const USAGE = 'Usage: node scripts/mesh-probe.ts --config <settings.json> [--models id,id] [--sets a,b,bg,c,cg] [--questions L1,P1] [--turns 6] [--max-tokens 1500] [--timeout 120000] [--work <folder>] [--out <file.md>]';
+const USAGE = 'Usage: node scripts/mesh-probe.ts --config <settings.json> [--models id,id] [--sets a,b] [--questions L1,P1] [--turns 6] [--max-tokens 1500] [--timeout 120000] [--work <folder>] [--out <file.md>]';
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -504,7 +493,7 @@ async function main(): Promise<void> {
   const interrupted = () => { try { cleanup(); } catch { } process.exit(130); };
   process.once('SIGINT', interrupted);
   const rows: ProbeRow[] = [];
-  const notes = [`date: ${new Date().toISOString()}`, `max turns: ${maxTurns}, max output tokens: ${maxTokens}, timeout per call: ${timeoutMs} ms`, 'tools: file_list, file_read (all sets) + mesh_search, mesh_read (B and C); asked after compaction (the summary of a filled conversation is in the system text)', `models measured: ${ids.length}`];
+  const notes = [`date: ${new Date().toISOString()}`, `max turns: ${maxTurns}, max output tokens: ${maxTokens}, timeout per call: ${timeoutMs} ms`, 'tools: file_list, file_read (all sets) + mesh_search, mesh_read (B); asked after compaction (the summary of a filled conversation is in the system text)', `models measured: ${ids.length}`];
   const requests: ReportMeta['requests'] = {};
   try {
     for (const id of ids) {
