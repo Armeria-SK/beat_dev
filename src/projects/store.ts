@@ -75,6 +75,8 @@ export class ProjectStore {
 
   constructor(db: DatabaseSync, projectsDir: string, now: () => number = Date.now) { this.#db = db; this.#dir = projectsDir; this.#now = now; }
 
+  get dir(): string { return this.#dir; }
+
   get(id: string): ProjectRow | undefined {
     if (!PROJECT_ID.test(id)) return undefined;
     return this.#db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined;

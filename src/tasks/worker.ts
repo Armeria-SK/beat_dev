@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schema.ts';
 import type { Conversations } from '../db/conversations.ts';
@@ -20,6 +21,7 @@ import { CHECK_FAIL_LIMIT, CHECK_KEEP, CHECK_OPTIONS, CHECK_TEXT } from '../proj
 import { GATE_LIMIT, itemSummary, workAgreement } from '../projects/gate.ts';
 import { gateText } from '../shared/messages/gate.ts';
 import { projectFolderGone } from '../projects/run.ts';
+import { needsSnapshot, SNAPSHOT_EVENT, snapshotBeforeBuild, snapshotLine } from '../projects/snapshot-before.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
 import { decidedDuring, openPendingIds } from './pending-wake.ts';
@@ -419,6 +421,8 @@ export class Worker {
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}`, projectId: task.project_id });
       return 'folder_missing';
     }
+    const project = this.#d.projects && needsSnapshot(this.#d.db, task) ? this.#d.projects.get(task.project_id!) : undefined;
+    if (project) tasks.event(task.id, SNAPSHOT_EVENT, 'beat', snapshotLine(await snapshotBeforeBuild(project.root, task.id, dirname(this.#d.projects!.dir))));
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
     const started = engine.runTask(task, conversationId, prompt);
     if (!started.ok) {
