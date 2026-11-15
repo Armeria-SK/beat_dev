@@ -1,43 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, type FolderEntry, type FolderList, type Project } from '../../api.ts';
+import { api, ApiError, type Project, unreachable } from '../../api.ts';
 import { toast } from '../../feedback.ts';
-import { getLanguage, useT } from '../../i18n/index.ts';
+import { useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
-import { serverText } from '../../server-text.ts';
-import { entryReason, nameFor, newProjectInput, noteKeys, upTarget } from '../folder-pick.ts';
+import { nameFor, newProjectInput, noteKeys } from '../folder-pick.ts';
 import { latestOnly } from '../latest.ts';
-import { Button, Icon } from '../parts.tsx';
+import { Button, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 
-type T = ReturnType<typeof useT>;
-
 const failText = (error: unknown): string => (error instanceof ApiError ? error.message : String(error));
-
-function reasonText(t: T, entry: FolderEntry): string | null {
-  const reason = entryReason(entry);
-  if (reason === null) return null;
-  if (reason.kind === 'link') return t('ui.np.link');
-  return serverText(reason.code, null, getLanguage()) ?? t('ui.np.unusable');
-}
-
-function FolderRow({ entry, chosen, onPick, onOpen }: { entry: FolderEntry; chosen: boolean; onPick: () => void; onOpen: () => void }) {
-  const t = useT();
-  const reason = reasonText(t, entry);
-  return (
-    <li className={`bt-row ui-np__row${chosen ? ' is-chosen' : ''}`}>
-      <div className="bt-row__main">
-        {entry.selectable
-          ? <button type="button" className="bt-row__title ui-np__pick" aria-pressed={chosen} onClick={onPick}>{entry.name}</button>
-          : <span className="bt-row__title ui-np__name">{entry.name}</span>}
-        {reason && <span className="bt-row__sub bt-meta">{reason}</span>}
-      </div>
-      <div className="bt-row__end">
-        {entry.isGit && <span className="bt-tag">{t('ui.np.git')}</span>}
-        <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.np.openFolder', entry.name)} title={t('ui.np.open')} onClick={onOpen}><Icon name="chevR" /></button>
-      </div>
-    </li>
-  );
-}
 
 function ArchivedProducts({ onProject }: { onProject: (project: Project) => void }) {
   const t = useT();
@@ -79,8 +50,10 @@ function ArchivedProducts({ onProject }: { onProject: (project: Project) => void
 
 export function NewProduct({ onProject }: { onProject: (project: Project) => void }) {
   const t = useT();
-  const [listing, setListing] = useState<FolderList | null>(null);
-  const [listError, setListError] = useState('');
+  const [canPick, setCanPick] = useState<boolean | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [offline, setOffline] = useState<(() => void) | null>(null);
+  const [folderError, setFolderError] = useState('');
   const [root, setRoot] = useState('');
   const [name, setName] = useState('');
   const [named, setNamed] = useState(false);
@@ -89,26 +62,45 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
   const [busy, setBusy] = useState(false);
   const loads = useRef(latestOnly());
 
-  const open = useCallback(async (path?: string) => {
+  const learn = useCallback(async function learnPick() {
+    setOffline(null);
+    try { setCanPick((await api.folderPickAvailable()).available); }
+    catch (e) {
+      if (unreachable(e)) setOffline(() => () => void learnPick());
+      else setCanPick(false);
+    }
+  }, []);
+  useEffect(() => { void learn(); }, [learn]);
+
+  const open = useCallback(async function openFolder(path: string) {
     const ticket = loads.current.begin();
-    setListError('');
-    try {
-      const next = await api.listFolders(path);
-      if (loads.current.isCurrent(ticket)) setListing(next);
-    } catch (e) {
-      if (loads.current.isCurrent(ticket)) setListError(t('ui.np.listFailed', failText(e)));
+    setFolderError(''); setOffline(null);
+    try { await api.listFolders(path); }
+    catch (e) {
+      if (!loads.current.isCurrent(ticket)) return;
+      if (unreachable(e)) setOffline(() => () => void openFolder(path));
+      else setFolderError(t('ui.np.listFailed', failText(e)));
     }
   }, [t]);
-  useEffect(() => { void open(); }, [open]);
 
-  const pick = (path: string) => { setRoot(path); setError(''); };
-  const up = listing ? upTarget(listing) : undefined;
+  const browse = async () => {
+    if (picking) return;
+    setPicking(true); setFolderError(''); setOffline(null);
+    try {
+      const picked = await api.pickFolder(root.trim() || undefined);
+      if ('path' in picked) { setRoot(picked.path); setError(''); void open(picked.path); }
+    } catch (e) {
+      if (unreachable(e)) setOffline(() => () => void browse());
+      else setFolderError(t('ui.np.pickFailed', failText(e)));
+    } finally { setPicking(false); }
+  };
+
   const shownName = nameFor(root, name, named);
   const input = newProjectInput(root, shownName, check);
 
   const create = async () => {
     if (!input || busy) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setOffline(null);
     try {
       const result = await api.createProject(input);
       onProject(result.project);
@@ -116,7 +108,8 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
       toast({ icon: 'check', title: t('ui.np.created', result.project.name), ...(notes.length ? { body: notes.join(' ') } : {}) });
       location.hash = routeHash({ view: 'productNew', id: result.project.id });
     } catch (e) {
-      setError(t('ui.np.failed', failText(e)));
+      if (unreachable(e)) setOffline(() => () => void create());
+      else setError(t('ui.np.failed', failText(e)));
       setBusy(false);
     }
   };
@@ -127,36 +120,20 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
         <h1 className="bt-screen__title">{t('ui.product.new')}</h1>
       </header>
       <p className="bt-meta">{t('ui.np.lead')}</p>
+      {offline && <Notice tone="warn" icon="alert" title={t('ui.np.notAnswering')} action={{ label: t('ui.fail.retry'), run: offline }} />}
       <form className="ui-np__form" onSubmit={e => { e.preventDefault(); void create(); }}>
         <div className="bt-form-row">
           <label className="bt-label" htmlFor="ui-np-root">{t('ui.np.folder')}</label>
           <div className="ui-np__pathrow">
-            <input id="ui-np-root" className="bt-field bt-field--mono" type="text" value={root} spellCheck={false} autoComplete="off" placeholder={t('ui.np.folderField')}
-              onChange={e => { setRoot(e.target.value); setError(''); }}
+            <input id="ui-np-root" className="bt-field bt-field--mono" type="text" value={root} spellCheck={false} autoComplete="off" placeholder={canPick ? t('ui.np.folderFieldPick') : t('ui.np.folderField')}
+              onChange={e => { setRoot(e.target.value); setError(''); setFolderError(''); }}
               onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); if (root.trim()) void open(root.trim()); } }} />
-            <Button small disabled={!root.trim()} onClick={() => void open(root.trim())}>{t('ui.np.open')}</Button>
+            {canPick
+              ? <Button small disabled={picking} onClick={() => void browse()}>{t('ui.np.open')}</Button>
+              : <Button small disabled={!root.trim()} onClick={() => void open(root.trim())}>{t('ui.np.open')}</Button>}
           </div>
+          {folderError && <p className="bt-meta ui-danger" role="alert">{folderError}</p>}
         </div>
-
-        <section className="bt-section ui-np__browser" aria-label={t('ui.np.folder')}>
-          <div className="bt-section__head">
-            <span className="bt-meta ui-np__path">{listing?.path ?? t('ui.np.starts')}</span>
-            <span className="ui-np__tools">
-              {up !== undefined && <Button small variant="ghost" onClick={() => void open(up ?? undefined)}><Icon name="arrowUp" />{t('ui.np.up')}</Button>}
-              {listing?.path && <Button small variant="ghost" onClick={() => pick(listing.path!)}>{t('ui.np.use')}</Button>}
-            </span>
-          </div>
-          {listError && <p className="bt-meta ui-danger" role="alert">{listError}</p>}
-          {listing && listing.entries.length === 0 && !listError && <p className="bt-meta">{t('ui.np.emptyDir')}</p>}
-          {listing && listing.entries.length > 0 && (
-            <ul className="bt-list ui-np__list">
-              {listing.entries.map(entry => (
-                <FolderRow key={entry.path} entry={entry} chosen={entry.path === root} onPick={() => pick(entry.path)} onOpen={() => void open(entry.path)} />
-              ))}
-            </ul>
-          )}
-          {listing?.truncated && <p className="bt-meta">{t('ui.np.truncated')}</p>}
-        </section>
 
         <label className="bt-form-row">
           <span className="bt-label">{t('ui.np.name')}</span>

@@ -410,6 +410,7 @@ export function App() {
           </main>
         ) : (
           <main className="bt-screen" inert={drawer}>
+            {disconnected && <div className="ui-offline"><Notice tone="warn" icon="alert" title={t('ui.notice.disconnected')} action={{ label: t('ui.notice.reconnect'), run: reconnect }} /></div>}
             {behind.view === 'kanban' ? (
               <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} questionsByTask={questionsByTask} waits={worker?.waiting} />
             ) : behind.view === 'task' ? (

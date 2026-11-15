@@ -1,21 +1,8 @@
-import type { FolderEntry, FolderList, NewProject, ProjectNote } from '../api.ts';
+import type { NewProject, ProjectNote } from '../api.ts';
 
 export function folderName(path: string): string {
   const parts = path.trim().split(/[\\/]+/u).filter(Boolean);
   return parts.at(-1) ?? '';
-}
-
-export function upTarget(listing: FolderList): string | null | undefined {
-  if (listing.path === null) return undefined;
-  return listing.parent;
-}
-
-export type EntryReason = { kind: 'link' } | { kind: 'code'; code: string } | null;
-
-export function entryReason(entry: FolderEntry): EntryReason {
-  if (entry.link) return { kind: 'link' };
-  if (entry.selectable) return null;
-  return { kind: 'code', code: entry.reason ?? '' };
 }
 
 export function nameFor(root: string, typed: string, touched: boolean): string {

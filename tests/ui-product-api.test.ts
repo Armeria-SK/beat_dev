@@ -26,6 +26,9 @@ test('web/api: 製品の 4 つの口', async () => {
   await api.patchProject('p1aaaa', { name: 'B', checkCommand: null, archived: true, refreshRemotes: true });
   await api.listFolders();
   await api.listFolders('C:\\work');
+  await api.folderPickAvailable();
+  await api.pickFolder();
+  await api.pickFolder('C:\\work');
   assert.deepEqual(sent, [
     { url: '/api/projects', method: 'GET', body: undefined },
     { url: '/api/projects?archived=1', method: 'GET', body: undefined },
@@ -33,6 +36,9 @@ test('web/api: 製品の 4 つの口', async () => {
     { url: '/api/projects/p1aaaa', method: 'PATCH', body: { name: 'B', checkCommand: null, archived: true, refreshRemotes: true } },
     { url: '/api/folders/list', method: 'POST', body: {} },
     { url: '/api/folders/list', method: 'POST', body: { path: 'C:\\work' } },
+    { url: '/api/folders/pick', method: 'GET', body: undefined },
+    { url: '/api/folders/pick', method: 'POST', body: {} },
+    { url: '/api/folders/pick', method: 'POST', body: { path: 'C:\\work' } },
   ]);
 });
 
