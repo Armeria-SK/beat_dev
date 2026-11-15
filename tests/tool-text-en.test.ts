@@ -224,7 +224,7 @@ test('タスクの道具の結果（英語）', async t => {
   const created = await text(taskCreate, { title: 'Write report', requested_by_user: true, repeat: '0 9 * * *' });
   assert.match(created, /^Created the task - \[[0-9a-f]{8}\] scheduled \/ Every day at 09:00 "Write report"$/u);
   const own = await text(taskCreate, { title: 'My own' });
-  assert.match(own, / \(Autonomous action is off, so it will not run until the user turns it on or presses "Run now"\)$/u);
+  assert.match(own, / \(Created as a proposal. It runs once the user approves it\)$/u);
   const timed = await text(taskCreate, { title: 'Later', requested_by_user: true, when: '2026-12-01T09:00:00+09:00', next_action: 'Start' });
   const enTime = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'Asia/Tokyo' }).format(Date.parse('2026-12-01T09:00:00+09:00'));
   assert.ok(timed.endsWith(` ready / from ${enTime} "Later" next: Start`), timed);

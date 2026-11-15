@@ -56,11 +56,14 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
   async execute(input, ctx) {
     try {
       if (input.repeat && !validateCron(input.repeat)) throw new TaskError('error.bad_repeat', { repeat: input.repeat });
-      const self = !input.requested_by_user || (ctx.task !== undefined && store(ctx).beatDecided(ctx.task.id));
+      const parent = ctx.task !== undefined && !store(ctx).beatDecided(ctx.task.id) ? ctx.task.id : undefined;
+      const inTask = ctx.task !== undefined;
+      const self = parent === undefined && (inTask || !input.requested_by_user);
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
-        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'beat', createdInConversation: ctx.conversationId, projectId: ctx.project?.id,
+        origin: self ? 'self' : 'user', propose: self && (!inTask || input.repeat !== undefined || ctx.config.worker.selfTasksNeedApproval), spawnedBy: parent,
+        actor: 'beat', createdInConversation: ctx.conversationId, projectId: ctx.project?.id,
       });
       ctx.touchedTasks?.add(task.id);
       const language = languageOf(ctx.config);

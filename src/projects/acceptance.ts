@@ -62,7 +62,13 @@ export interface AcceptanceVersionRow {
   source: 'build' | 'change' | 'question' | 'proposal';
   build_task_id: string | null;
   created_at: number;
+  item_states: string | null;
 }
+
+export type ItemMarker = 'gate' | 'owner';
+export interface ItemState { state: AcceptanceState; evidence: unknown[]; by: ItemMarker; taskId: string; at: number }
+export type ItemStates = Record<string, ItemState>;
+export interface ItemMark { id: string; state: AcceptanceState; evidence: unknown[] }
 
 export interface DraftInput {
   items: Array<{ result: string; source: ClaimedSource; check: AcceptanceCheck }>;
@@ -261,21 +267,38 @@ export function docOf(raw: string): AcceptanceDoc | undefined {
   } catch { return undefined; }
 }
 
-function overlay(base: AcceptanceDoc, file: AcceptanceDoc | undefined): AcceptanceDoc {
-  if (file && file.version > base.version) return base;
-  const live = new Map((file?.items ?? []).map(entry => [entry.id, entry]));
-  return {
-    ...base,
-    items: base.items.map(entry => {
-      const current = live.get(entry.id);
-      return current && (entry.changedIn ?? 0) <= file!.version ? { ...entry, state: current.state, evidence: current.evidence } : entry;
-    }),
-  };
-}
-
 export const ACCEPTANCE_MAX_CHANGES = 60;
 export const ACCEPTANCE_MAX_TOTAL = 200;
 export const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
+export const EVIDENCE_MAX = 4000;
+const STATES: ReadonlySet<unknown> = new Set<AcceptanceState>(['open', 'met', 'unverified']);
+
+export function itemStatesOf(raw: string | null): ItemStates {
+  const out: ItemStates = {};
+  let parsed: unknown;
+  try { parsed = raw === null ? null : JSON.parse(raw); } catch { return out; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
+  for (const [id, value] of Object.entries(parsed)) {
+    const entry = value as Partial<ItemState> | null;
+    if (!ITEM_ID.test(id) || !entry || typeof entry !== 'object' || !STATES.has(entry.state) || !Array.isArray(entry.evidence)
+      || (entry.by !== 'gate' && entry.by !== 'owner') || typeof entry.taskId !== 'string' || typeof entry.at !== 'number') continue;
+    out[id] = { state: entry.state!, evidence: entry.evidence, by: entry.by, taskId: entry.taskId, at: entry.at };
+  }
+  return out;
+}
+
+const stateIn = (states: ItemStates, id: unknown): Pick<AcceptanceItem, 'state' | 'evidence'> => {
+  const found = typeof id === 'string' && Object.hasOwn(states, id) ? states[id]! : undefined;
+  return { state: found?.state ?? 'open', evidence: found?.evidence ?? [] };
+};
+
+const isItem = (entry: unknown): entry is AcceptanceItem => entry !== null && typeof entry === 'object' && !Array.isArray(entry);
+
+const withStates = (doc: AcceptanceDoc, states: ItemStates): AcceptanceDoc => ({
+  ...doc, items: doc.items.map(entry => (isItem(entry) ? { ...entry, ...stateIn(states, entry.id) } : entry)),
+});
+
+const statesText = (doc: AcceptanceDoc): string => canonical([doc.taintedRuns, doc.items.map(entry => (isItem(entry) ? [entry.state, entry.evidence] : null))]);
 
 export type ChangeOpKind = 'add' | 'change' | 'remove';
 export interface ChangeItem { result: string; check: AcceptanceCheck }
@@ -296,7 +319,7 @@ export interface AcceptanceChangeRow {
   decided_at: number | null;
 }
 
-export type AcceptanceVersionSummary = Omit<AcceptanceVersionRow, 'content'>;
+export type AcceptanceVersionSummary = Omit<AcceptanceVersionRow, 'content' | 'item_states'>;
 
 const badChange = (detail: string) => new AcceptanceError('bad_change', { detail });
 
@@ -458,6 +481,53 @@ export class AcceptanceStore {
     return this.#db.prepare('SELECT * FROM acceptance_versions WHERE project_id = ? AND version = ?').get(projectId, version) as AcceptanceVersionRow | undefined;
   }
 
+  itemStates(projectId: string): ItemStates {
+    return itemStatesOf(this.latest(projectId)?.item_states ?? null);
+  }
+
+  markItems(projectId: string, mark: { version: number; taskId: string; items: readonly ItemMark[] }): AcceptanceDoc {
+    return this.#mark(projectId, 'gate', mark.taskId, mark.version, mark.items);
+  }
+
+  ownerCheck(projectId: string, mark: { taskId: string; itemId: string; version: number }): AcceptanceDoc {
+    return this.#mark(projectId, 'owner', mark.taskId, mark.version, [{ id: mark.itemId, state: 'met', evidence: null }]);
+  }
+
+  #mark(projectId: string, by: ItemMarker, taskId: string, version: number, marks: ReadonlyArray<{ id: string; state: AcceptanceState; evidence: unknown[] | null }>): AcceptanceDoc {
+    if (this.#archived(projectId)) throw new AcceptanceError('archived');
+    const doc = transaction(this.#db, () => {
+      const row = this.latest(projectId);
+      const truth = row && this.#truth(row);
+      if (!row || !truth) throw new AcceptanceError('not_frozen');
+      if (version !== row.version) throw new AcceptanceError('stale', { version: row.version });
+      if (typeof taskId !== 'string' || !this.#db.prepare('SELECT 1 FROM tasks WHERE id = ? AND project_id = ?').get(taskId, projectId)) throw badChange('there is no such task for this product');
+      const states = itemStatesOf(row.item_states);
+      const at = this.#now();
+      for (const mark of marks) {
+        const id = mark?.id;
+        const target = typeof id === 'string' && ITEM_ID.test(id) ? truth.items.find(entry => entry.id === id && entry.removedIn === null) : undefined;
+        if (!target) throw badChange(`there is no item ${String(id).slice(0, 20)}`);
+        if (!STATES.has(mark.state)) throw badChange('state must be open, met or unverified');
+        if (by === 'gate' && mark.state === 'met' && target.check?.kind !== 'command') throw badChange(`${target.id} is checked by look or read, so only the owner can mark it met`);
+        const evidence = mark.evidence ?? target.evidence;
+        if (!Array.isArray(evidence)) throw badChange('evidence must be a list');
+        if (JSON.stringify(evidence).length > EVIDENCE_MAX) throw new AcceptanceError('too_long', { field: 'evidence', max: EVIDENCE_MAX });
+        states[target.id] = { state: mark.state, evidence, by, taskId, at };
+      }
+      this.#db.prepare('UPDATE acceptance_versions SET item_states = ? WHERE project_id = ? AND version = ?').run(JSON.stringify(states), projectId, row.version);
+      return withStates(truth, states);
+    });
+    try { this.repair(projectId); } catch (error) {
+      this.#log(`[WARN] Saved the acceptance item states of product ${projectId}, but could not update acceptance.json (${(error as Error).message}). It is restored from the saved version before the next write or at startup`);
+    }
+    return doc;
+  }
+
+  #truth(row: AcceptanceVersionRow): AcceptanceDoc | undefined {
+    const stored = docOf(row.content);
+    return stored && withStates(stored, itemStatesOf(row.item_states));
+  }
+
   pending(projectId: string): AcceptanceChangeRow | undefined {
     return this.#db.prepare("SELECT * FROM acceptance_changes WHERE project_id = ? AND status = 'pending' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as AcceptanceChangeRow | undefined;
   }
@@ -476,11 +546,9 @@ export class AcceptanceStore {
 
   #base(projectId: string): { row: AcceptanceVersionRow; doc: AcceptanceDoc } {
     const row = this.latest(projectId);
-    const stored = row ? docOf(row.content) : undefined;
-    if (!row || !stored) throw new AcceptanceError('not_frozen');
-    let file: AcceptanceDoc | undefined;
-    try { file = this.#readFile(projectId); } catch { file = undefined; }
-    return { row, doc: overlay(stored, file) };
+    const doc = row && this.#truth(row);
+    if (!row || !doc) throw new AcceptanceError('not_frozen');
+    return { row, doc };
   }
 
   propose(projectId: string, ops: readonly ChangeOp[], meta: { language: string | null; conversationId: string | null; tainted: boolean }): AcceptanceChangeRow {
@@ -566,13 +634,16 @@ export class AcceptanceStore {
     this.repair(projectId);
     const { row, doc } = this.#base(projectId);
     const next = row.version + 1;
+    const carried = itemStatesOf(row.item_states);
+    const states: ItemStates = {};
     const items = applyChanges(doc, ops, next);
+    for (const entry of items) if (entry.changedIn !== next && entry.removedIn === null && Object.hasOwn(carried, entry.id)) states[entry.id] = carried[entry.id]!;
     const project = o.language ? this.#languages?.get(projectId) : undefined;
     const moves = Boolean(o.language && project && project.doc_language_pinned === 0 && project.doc_language !== o.language);
     const taintedRuns = [...new Set([...(doc.taintedRuns ?? []), ...(o.taint ? [o.taint] : [])])];
-    const made: AcceptanceDoc = { ...doc, version: next, language: moves ? o.language : doc.language, items, taintedRuns };
+    const made: AcceptanceDoc = withStates({ ...doc, version: next, language: moves ? o.language : doc.language, items, taintedRuns }, states);
     const now = this.#now();
-    return this.freeze(projectId, made, { plan_hash: this.#planHash(projectId), source, created_at: now }, () => {
+    return this.#freeze(projectId, made, states, { plan_hash: this.#planHash(projectId), source, created_at: now }, () => {
       this.#db.prepare("UPDATE acceptance_changes SET status = CASE WHEN id = ? THEN 'approved' ELSE 'superseded' END, decided_at = ? WHERE project_id = ? AND status = 'pending'").run(o.decide ?? '', now, projectId);
       if (moves) this.#languages!.detectDocLanguage(projectId, o.language!);
       return null;
@@ -593,23 +664,26 @@ export class AcceptanceStore {
     return this.#db.prepare('SELECT * FROM acceptance_versions WHERE project_id = ? ORDER BY version DESC LIMIT 1').get(projectId) as AcceptanceVersionRow | undefined;
   }
 
-  #behind(projectId: string): { file: AcceptanceDoc | undefined; doc: AcceptanceDoc } | undefined {
+  #copy(projectId: string): { doc: AcceptanceDoc; write?: AcceptanceDoc; ahead?: number } | undefined {
     const row = this.latest(projectId);
     const file = this.#readFile(projectId);
-    if (!row || (file && file.version === row.version)) return undefined;
-    const stored = docOf(row.content);
-    return stored ? { file, doc: overlay(stored, file) } : undefined;
+    const doc = row && this.#truth(row);
+    if (!row || !doc) return file && { doc: file };
+    if (!file || file.version !== row.version) return { doc, write: doc, ...(file && file.version > row.version ? { ahead: file.version } : {}) };
+    const { taintedRuns: _fileRuns, ...rest } = withStates(file, itemStatesOf(row.item_states));
+    const copy: AcceptanceDoc = { ...rest, ...(doc.taintedRuns ? { taintedRuns: doc.taintedRuns } : {}) };
+    return statesText(copy) === statesText(file) ? { doc: copy } : { doc: copy, write: copy };
   }
 
   read(projectId: string): AcceptanceDoc | undefined {
-    return this.#behind(projectId)?.doc ?? this.#readFile(projectId);
+    return this.#copy(projectId)?.doc;
   }
 
   repair(projectId: string): boolean {
-    const behind = this.#behind(projectId);
-    if (!behind) return false;
-    if (behind.file && behind.file.version > behind.doc.version) this.#log(`[WARN] acceptance.json of product ${projectId} was at version ${behind.file.version}, ahead of the saved version ${behind.doc.version}. Restored the saved version`);
-    this.#replace(this.#file(projectId), behind.doc);
+    const copy = this.#copy(projectId);
+    if (!copy?.write) return false;
+    if (copy.ahead !== undefined) this.#log(`[WARN] acceptance.json of product ${projectId} was at version ${copy.ahead}, ahead of the saved version ${copy.doc.version}. Restored the saved version`);
+    this.#replace(this.#file(projectId), copy.write);
     return true;
   }
 
@@ -646,14 +720,18 @@ export class AcceptanceStore {
   }
 
   freeze(projectId: string, doc: AcceptanceDoc, row: Pick<AcceptanceVersionRow, 'plan_hash' | 'source' | 'created_at'>, inside: () => string | null): AcceptanceVersionRow {
+    return this.#freeze(projectId, withStates(doc, {}), {}, row, inside);
+  }
+
+  #freeze(projectId: string, doc: AcceptanceDoc, states: ItemStates, row: Pick<AcceptanceVersionRow, 'plan_hash' | 'source' | 'created_at'>, inside: () => string | null): AcceptanceVersionRow {
     const file = this.#file(projectId);
     const temp = this.#stage(file, doc);
     let saved: AcceptanceVersionRow;
     try {
       saved = transaction(this.#db, () => {
-        const made: AcceptanceVersionRow = { project_id: projectId, version: doc.version, hash: frozenHash(doc), content: JSON.stringify(doc), ...row, build_task_id: inside() };
-        this.#db.prepare('INSERT INTO acceptance_versions (project_id, version, hash, content, plan_hash, source, build_task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(made.project_id, made.version, made.hash, made.content, made.plan_hash, made.source, made.build_task_id, made.created_at);
+        const made: AcceptanceVersionRow = { project_id: projectId, version: doc.version, hash: frozenHash(doc), content: JSON.stringify(doc), ...row, build_task_id: inside(), item_states: JSON.stringify(states) };
+        this.#db.prepare('INSERT INTO acceptance_versions (project_id, version, hash, content, plan_hash, source, build_task_id, created_at, item_states) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(made.project_id, made.version, made.hash, made.content, made.plan_hash, made.source, made.build_task_id, made.created_at, made.item_states);
         return made;
       });
     } catch (error) {
