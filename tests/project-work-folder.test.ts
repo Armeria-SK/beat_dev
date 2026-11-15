@@ -5,7 +5,7 @@ import { dirname, join, parse } from 'node:path';
 import { test } from 'node:test';
 import { parseConfig } from '../src/config/store.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
-import { checkWorkFolder, folderGone, gitFolder, listFolders, MAX_LINK_HOPS, rootKeyOf, type FolderFs, type WorkFolderContext } from '../src/projects/work-folder.ts';
+import { checkWorkFolder, folderGone, gitFolder, MAX_LINK_HOPS, rootKeyOf, type FolderFs, type WorkFolderContext } from '../src/projects/work-folder.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 const WINDOWS = process.platform === 'win32';
@@ -184,80 +184,6 @@ test('checkWorkFolder: 試しとテストだけの抜け道は、渡したフォ
   assert.equal(f.reason(f.dir('beat', 'tmp', 'preview', 'products', '.ssh'), { exempt: [preview] }), 'folder_secret', '秘密の名前は抜け道でも断る');
 });
 
-test('listFolders: フォルダの名前だけを返す（ファイルと秘密の名前のフォルダは出さない）。リンク・ジャンクションの子は解かずに link: true', t => {
-  const f = fixture(t);
-  const root = f.dir('home', 'projects');
-  f.dir('home', 'projects', 'alpha');
-  mkdirSync(join(f.dir('home', 'projects', 'beta'), '.git'));
-  f.dir('home', 'projects', '.ssh');
-  f.dir('home', 'projects', 'secrets');
-  writeFileSync(join(root, 'notes.txt'), 'x');
-  writeFileSync(join(root, '.env'), 'KEY=1');
-  const target = f.dir('elsewhere', 'target');
-  f.dir('elsewhere', 'target', 'inside-target');
-  symlinkSync(target, join(root, 'jump'), 'junction');
-
-  const listing = listFolders(root, f.ctx());
-  assert.ok(!('reason' in listing));
-  assert.equal(listing.path, root);
-  assert.equal(listing.parent, f.home);
-  assert.equal(listing.truncated, false);
-  assert.deepEqual(listing.entries, [
-    { name: 'alpha', path: join(root, 'alpha'), selectable: true, isGit: false, link: false },
-    { name: 'beta', path: join(root, 'beta'), selectable: true, isGit: true, link: false },
-    { name: 'jump', path: join(root, 'jump'), selectable: false, reason: 'project.folder_link', isGit: false, link: true },
-  ]);
-
-  const opened = listFolders(join(root, 'jump'), f.ctx());
-  assert.ok(!('reason' in opened));
-  assert.equal(opened.path, target, '持ち主がリンクを開いたときは、行き先の実体を返す');
-  assert.deepEqual(opened.entries.map(e => e.name), ['inside-target']);
-});
-
-test('listFolders: ネットワーク・デバイスのパスと危ない形・相対パスは断る。無いパス・ファイル・秘密の名前のフォルダも断る', t => {
-  const f = fixture(t);
-  const root = f.dir('home', 'projects');
-  writeFileSync(join(root, 'notes.txt'), 'x');
-  const reason = (path: string) => { const r = listFolders(path, f.ctx()); return 'reason' in r ? r.reason : 'ok'; };
-  if (WINDOWS) {
-    assert.equal(reason('\\\\server\\share'), 'folder_remote');
-    assert.equal(reason('\\\\?\\C:\\Users'), 'folder_remote');
-    assert.equal(reason('C:\\Users\\con'), 'folder_hazard');
-  }
-  assert.equal(reason('projects'), 'folder_not_absolute');
-  assert.equal(reason(join(root, 'nope')), 'folder_not_found');
-  assert.equal(reason(join(root, 'notes.txt')), 'folder_not_directory');
-  assert.equal(reason(f.dir('home', 'projects', '.aws')), 'folder_secret');
-});
-
-test('listFolders: 1 回に 500 件まで（超えたら truncated）。選べないフォルダには理由が付く', t => {
-  const f = fixture(t);
-  const many = f.dir('home', 'many');
-  for (let i = 0; i < 503; i++) mkdirSync(join(many, `d${String(i).padStart(3, '0')}`));
-  const listing = listFolders(many, f.ctx());
-  assert.ok(!('reason' in listing));
-  assert.equal(listing.entries.length, 500);
-  assert.equal(listing.truncated, true);
-  assert.equal(listing.entries[0]!.name, 'd000');
-
-  const top = listFolders(f.base, f.ctx());
-  assert.ok(!('reason' in top));
-  const byName = Object.fromEntries(top.entries.map(e => [e.name, e]));
-  assert.deepEqual({ selectable: byName.home!.selectable, reason: byName.home!.reason }, { selectable: false, reason: 'project.folder_home' });
-  assert.deepEqual({ selectable: byName.beat!.selectable, reason: byName.beat!.reason }, { selectable: false, reason: 'project.folder_beat' });
-});
-
-test('listFolders: 出発点はホーム・ホームのあるドライブの直下・設定の許可フォルダだけ（ドライブを探して回らない）', t => {
-  const f = fixture(t);
-  const work = f.dir('home', 'work');
-  const config = { ...f.config, tools: { ...f.config.tools, roots: [{ path: work, mode: 'write' as const }] } };
-  const listing = listFolders(undefined, f.ctx({ config }));
-  assert.ok(!('reason' in listing));
-  assert.deepEqual({ path: listing.path, parent: listing.parent, truncated: listing.truncated }, { path: null, parent: null, truncated: false });
-  assert.deepEqual(listing.entries.map(e => e.path), [f.home, parse(f.home).root, work]);
-  assert.deepEqual(listing.entries.map(e => e.selectable), [false, false, true]);
-});
-
 test('checkWorkFolder: ホームの隣（ほかの利用者のフォルダ・Default・Public）は選べない。ホームの中は通る', t => {
   const f = fixture(t);
   assert.equal(f.reason(f.dir('elsewhere')), 'folder_home');
@@ -313,18 +239,16 @@ const LINK_CASES: Array<{ label: string; links: Record<string, string>; path: st
   { label: 'リンクが輪になっている', links: { 'C:/w/a': 'C:/w/b', 'C:/w/b': 'C:/w/a' }, path: w('C:/w/a/leaf'), reason: 'folder_link' },
 ];
 
-test('リンクをたどる歩き方: UNC・デバイスのパスへ届く呼び出しを 1 つもしない（checkWorkFolder・listFolders・gitFolder・folderGone）', { skip: !WINDOWS }, t => {
+test('リンクをたどる歩き方: UNC・デバイスのパスへ届く呼び出しを 1 つもしない（checkWorkFolder・gitFolder・folderGone）', { skip: !WINDOWS }, t => {
   const f = fixture(t);
   for (const c of LINK_CASES) {
     const checkFs = linkFs(c.links);
     assert.deepEqual(checkWorkFolder(c.path, f.ctx({ fs: checkFs.fs })), { ok: false, reason: c.reason }, c.label);
-    const listFs = linkFs(c.links);
-    assert.deepEqual(listFolders(c.path, f.ctx({ fs: listFs.fs })), { reason: c.reason }, c.label);
     const gitFs = linkFs(c.links);
     assert.equal(gitFolder(c.path, gitFs.fs), false, c.label);
     const goneFs = linkFs(c.links);
     assert.equal(folderGone(c.path, rootKeyOf(c.path), goneFs.fs), true, c.label);
-    for (const used of [checkFs, listFs, gitFs, goneFs]) {
+    for (const used of [checkFs, gitFs, goneFs]) {
       assert.deepEqual(used.reached, [], `${c.label}: OS がリンクを追って外へ出た`);
       assert.ok(used.calls.length > 0 && used.calls.every(path => LOCAL.test(path)), `${c.label}: ${used.calls.join(' | ')}`);
       assert.ok(used.calls.length <= 3 * (MAX_LINK_HOPS + 2), `${c.label}: 呼び出しの数に上限がある`);
@@ -356,7 +280,6 @@ test('checkWorkFolder: 改行・行の区切り・制御文字の入ったパス
     const odd = f.dir('home', 'projects', `a${mark}b`);
     assert.equal(f.reason(odd), 'folder_hazard', JSON.stringify(odd));
     assert.equal(folderGone(odd, rootKeyOf(odd)), true, JSON.stringify(odd));
-    assert.deepEqual(listFolders(odd, f.ctx()), { reason: 'folder_hazard' });
     assert.equal(f.reason(f.dir('home', 'projects', `a${mark}b`, 'inner')), 'folder_hazard', '途中の階にあっても断る');
   }
   assert.equal(f.reason(join(f.home, 'projects', 'a\nb')), 'folder_hazard');

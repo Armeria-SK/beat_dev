@@ -103,8 +103,7 @@ export interface Coverage {
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
 export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null }
-export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
-export interface FolderList { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
+export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' };
 export interface Message {
@@ -338,9 +337,9 @@ export const api = {
     call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(conversationId ? { ...hashes, conversationId } : hashes) }),
   planReviewed: (id: string, baseHash: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan/reviewed`, { method: 'POST', body: JSON.stringify({ baseHash }) }),
   savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
-  listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
+  checkFolder: (path: string) => call<FolderCheck>('/api/folders/check', { method: 'POST', body: JSON.stringify({ path }) }),
   folderPickAvailable: () => call<{ available: boolean }>('/api/folders/pick'),
-  pickFolder: (path?: string) => call<{ path: string } | { cancelled: true }>('/api/folders/pick', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
+  pickFolder: (path?: string, signal?: AbortSignal) => call<{ path: string } | { cancelled: true }>('/api/folders/pick', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }), ...(signal ? { signal } : {}) }),
   archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),

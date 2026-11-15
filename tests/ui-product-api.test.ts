@@ -24,8 +24,7 @@ test('web/api: 製品の 4 つの口', async () => {
   await api.projects(true);
   await api.createProject({ root: 'C:\\work\\app', name: 'App', checkCommand: 'npm test' });
   await api.patchProject('p1aaaa', { name: 'B', checkCommand: null, archived: true, refreshRemotes: true });
-  await api.listFolders();
-  await api.listFolders('C:\\work');
+  await api.checkFolder('C:\\work');
   await api.folderPickAvailable();
   await api.pickFolder();
   await api.pickFolder('C:\\work');
@@ -34,8 +33,7 @@ test('web/api: 製品の 4 つの口', async () => {
     { url: '/api/projects?archived=1', method: 'GET', body: undefined },
     { url: '/api/projects', method: 'POST', body: { root: 'C:\\work\\app', name: 'App', checkCommand: 'npm test' } },
     { url: '/api/projects/p1aaaa', method: 'PATCH', body: { name: 'B', checkCommand: null, archived: true, refreshRemotes: true } },
-    { url: '/api/folders/list', method: 'POST', body: {} },
-    { url: '/api/folders/list', method: 'POST', body: { path: 'C:\\work' } },
+    { url: '/api/folders/check', method: 'POST', body: { path: 'C:\\work' } },
     { url: '/api/folders/pick', method: 'GET', body: undefined },
     { url: '/api/folders/pick', method: 'POST', body: {} },
     { url: '/api/folders/pick', method: 'POST', body: { path: 'C:\\work' } },

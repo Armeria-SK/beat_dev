@@ -10,7 +10,7 @@ import { diffFlags } from '../projects/diff-flags.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
 import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
-import { checkWorkFolder, gitFolder, listFolders, type WorkFolderContext } from '../projects/work-folder.ts';
+import { checkWorkFolder, gitFolder, type WorkFolderContext } from '../projects/work-folder.ts';
 import { FolderDialogError } from '../projects/folder-dialog.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import type { PendingCounts } from '../pending/store.ts';
@@ -290,12 +290,11 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 201, { task: taskView(built.task, languageOf(app.config())), version: built.version.version });
   });
 
-  router.add('POST', '/api/folders/list', async ({ req, res }) => {
+  router.add('POST', '/api/folders/check', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
-    const path = optionalText(body, 'path', MAX_PATH_CHARS);
-    const listing = listFolders(path ?? undefined, folderContext());
-    if ('reason' in listing) throw projectProblem(400, new ProjectError(listing.reason));
-    sendJson(res, 200, listing);
+    const checked = checkWorkFolder(requireString(body, 'path', { max: MAX_PATH_CHARS })!, folderContext());
+    if (!checked.ok) throw projectProblem(checked.reason === 'root_in_use' ? 409 : 400, new ProjectError(checked.reason));
+    sendJson(res, 200, { root: checked.root, notes: checked.notes });
   });
 
   router.add('GET', '/api/folders/pick', ({ res, local }) => {

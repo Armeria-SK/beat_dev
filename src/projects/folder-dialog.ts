@@ -1,9 +1,8 @@
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { isDirectory } from '../tools/hooks/path-expand.ts';
-import { windowsHazard } from '../tools/hooks/scope.ts';
 import { scrubEnv } from '../tools/shell/runner.ts';
+import { walkFolder } from './work-folder.ts';
 
 export const FOLDER_DIALOG_TIMEOUT_MS = 10 * 60_000;
 const OUTPUT_LIMIT = 64 * 1024;
@@ -80,6 +79,7 @@ public static class BeatFolderDialog {
         uint options;
         dialog.GetOptions(out options);
         dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+        dialog.SetTitle("beat — Choose a product folder");
         if (!String.IsNullOrEmpty(start)) {
           try {
             IShellItem folder;
@@ -140,8 +140,8 @@ const realSpawn: DialogSpawn = (command, args, env) => spawn(command, args, { en
 const powershellPath = (): string => join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
 function startFolder(input: string | undefined): string {
-  if (input && isAbsolute(input) && windowsHazard(input) === undefined && isDirectory(input)) return input;
-  return homedir();
+  const walked = input ? walkFolder(input) : undefined;
+  return walked?.ok && walked.directory ? walked.path : homedir();
 }
 
 export class FolderDialog {
@@ -149,7 +149,7 @@ export class FolderDialog {
   readonly #spawn: DialogSpawn;
   readonly #timeoutMs: number;
   readonly #log: (line: string) => void;
-  #child: DialogChild | null = null;
+  #cancel: (() => void) | null = null;
 
   constructor(options: FolderDialogOptions = {}) {
     this.#platform = options.platform ?? process.platform;
@@ -160,32 +160,30 @@ export class FolderDialog {
 
   get supported(): boolean { return this.#platform === 'win32'; }
 
-  get open(): boolean { return this.#child !== null; }
+  get open(): boolean { return this.#cancel !== null; }
 
   pick(start: string | undefined, signal?: AbortSignal): Promise<FolderDialogResult> {
     if (!this.supported) return Promise.reject(new FolderDialogError('unsupported'));
-    if (this.#child) return Promise.reject(new FolderDialogError('busy'));
+    if (this.#cancel) return Promise.reject(new FolderDialogError('busy'));
     const env = { ...scrubEnv(), BEAT_PICK_START: startFolder(start) };
     let child: DialogChild;
     try { child = this.#spawn(powershellPath(), DIALOG_ARGS, env); } catch (error) {
       this.#log(`[ERROR] Could not open the folder window: ${(error as Error).message}`);
       return Promise.reject(new FolderDialogError('failed'));
     }
-    this.#child = child;
     return new Promise((resolve, reject) => {
       let out = '';
       let done = false;
-      let stopped = false;
       const finish = (run: () => void) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
-        if (this.#child === child) this.#child = null;
+        if (this.#cancel === onAbort) this.#cancel = null;
         run();
       };
-      const stop = () => { stopped = true; try { child.kill(); } catch { } };
-      const onAbort = () => { stop(); finish(() => resolve({ cancelled: true })); };
+      const onAbort = () => { try { child.kill(); } catch { } finish(() => resolve({ cancelled: true })); };
+      this.#cancel = onAbort;
       const timer = setTimeout(onAbort, this.#timeoutMs);
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) { onAbort(); return; }
@@ -195,7 +193,6 @@ export class FolderDialog {
         finish(() => reject(new FolderDialogError('failed')));
       });
       child.on('close', code => finish(() => {
-        if (stopped) { resolve({ cancelled: true }); return; }
         const text = out.trim();
         if (code === 0 && text === 'CANCEL') { resolve({ cancelled: true }); return; }
         const path = code === 0 && text.startsWith('OK:') ? Buffer.from(text.slice(3), 'base64').toString('utf8') : '';
@@ -207,8 +204,6 @@ export class FolderDialog {
   }
 
   stop(): void {
-    const child = this.#child;
-    if (!child) return;
-    try { child.kill(); } catch { }
+    this.#cancel?.();
   }
 }

@@ -10,7 +10,10 @@ import { routeHash } from '../routes.ts';
 
 const failText = (error: unknown): string => (error instanceof ApiError ? error.message : String(error));
 
-function ArchivedProducts({ onProject }: { onProject: (project: Project) => void }) {
+type Action = 'learn' | 'check' | 'browse' | 'create';
+type Retry = Action | (() => void);
+
+function ArchivedProducts({ onProject, revive, onReached, onUnreached }: { onProject: (project: Project) => void; revive: number; onReached: () => void; onUnreached: (retry: () => void) => void }) {
   const t = useT();
   const [items, setItems] = useState<Project[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -18,17 +21,21 @@ function ArchivedProducts({ onProject }: { onProject: (project: Project) => void
     let live = true;
     void api.projects(true).then(r => { if (live) setItems(r.projects.filter(p => p.archived_at !== null)); }).catch(() => undefined);
     return () => { live = false; };
-  }, []);
+  }, [revive]);
   if (items.length === 0) return null;
   const restore = async (project: Project) => {
     if (busy) return;
     setBusy(project.id);
     try {
       const result = await api.patchProject(project.id, { archived: false });
+      onReached();
       onProject(result.project);
       setItems(old => old.filter(p => p.id !== project.id));
       toast({ icon: 'undo', title: t('ui.np.restored', result.project.name) });
-    } catch (error) { toast({ icon: 'alert', title: t('ui.np.restoreFailed', failText(error)) }); } finally { setBusy(null); }
+    } catch (error) {
+      if (unreachable(error)) onUnreached(() => void restore(project));
+      else toast({ icon: 'alert', title: t('ui.np.restoreFailed', failText(error)) });
+    } finally { setBusy(null); }
   };
   return (
     <section className="bt-section ui-np__archived">
@@ -48,12 +55,14 @@ function ArchivedProducts({ onProject }: { onProject: (project: Project) => void
   );
 }
 
-export function NewProduct({ onProject }: { onProject: (project: Project) => void }) {
+export function NewProduct({ onProject, connected = true }: { onProject: (project: Project) => void; connected?: boolean }) {
   const t = useT();
   const [canPick, setCanPick] = useState<boolean | null>(null);
   const [picking, setPicking] = useState(false);
-  const [offline, setOffline] = useState<(() => void) | null>(null);
+  const [offline, setOffline] = useState<Retry | null>(null);
+  const [revive, setRevive] = useState(0);
   const [folderError, setFolderError] = useState('');
+  const [folderOk, setFolderOk] = useState<string | null>(null);
   const [root, setRoot] = useState('');
   const [name, setName] = useState('');
   const [named, setNamed] = useState(false);
@@ -61,38 +70,67 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const loads = useRef(latestOnly());
+  const canPickRef = useRef<boolean | null>(null);
+  const offlineRef = useRef<Retry | null>(null);
+  const pickAbort = useRef<AbortController | null>(null);
+  const actions = useRef<Record<Action, () => void>>({ learn: () => undefined, check: () => undefined, browse: () => undefined, create: () => undefined });
 
-  const learn = useCallback(async function learnPick() {
-    setOffline(null);
-    try { setCanPick((await api.folderPickAvailable()).available); }
-    catch (e) {
-      if (unreachable(e)) setOffline(() => () => void learnPick());
-      else setCanPick(false);
+  const markOffline = useCallback((retry: Retry | null) => { offlineRef.current = retry; setOffline(() => retry); }, []);
+  const failed = (error: unknown, retry: Retry): boolean => {
+    if (!unreachable(error)) return false;
+    markOffline(retry);
+    return true;
+  };
+
+  const learn = useCallback(async () => {
+    try {
+      const { available } = await api.folderPickAvailable();
+      canPickRef.current = available;
+      setCanPick(available);
+      if (offlineRef.current === 'learn') markOffline(null);
+    } catch (e) {
+      if (unreachable(e)) { if (offlineRef.current === null) markOffline('learn'); }
+      else { canPickRef.current = false; setCanPick(false); }
     }
-  }, []);
+  }, [markOffline]);
   useEffect(() => { void learn(); }, [learn]);
+  useEffect(() => () => pickAbort.current?.abort(), []);
 
-  const open = useCallback(async function openFolder(path: string) {
+  const reached = () => {
+    if (offlineRef.current !== null) { markOffline(null); setRevive(n => n + 1); }
+    if (canPickRef.current === null) void learn();
+  };
+
+  const runCheck = async (path: string) => {
     const ticket = loads.current.begin();
-    setFolderError(''); setOffline(null);
-    try { await api.listFolders(path); }
-    catch (e) {
+    setFolderError(''); setFolderOk(null);
+    try {
+      const checked = await api.checkFolder(path);
       if (!loads.current.isCurrent(ticket)) return;
-      if (unreachable(e)) setOffline(() => () => void openFolder(path));
-      else setFolderError(t('ui.np.listFailed', failText(e)));
+      reached();
+      setFolderOk(noteKeys(checked.notes).map(key => t(key)).join(' '));
+    } catch (e) {
+      if (!loads.current.isCurrent(ticket)) return;
+      if (!failed(e, 'check')) setFolderError(t('ui.np.checkFailed', failText(e)));
     }
-  }, [t]);
+  };
 
   const browse = async () => {
     if (picking) return;
-    setPicking(true); setFolderError(''); setOffline(null);
+    const abort = new AbortController();
+    pickAbort.current = abort;
+    setPicking(true); setFolderError(''); setFolderOk(null);
     try {
-      const picked = await api.pickFolder(root.trim() || undefined);
-      if ('path' in picked) { setRoot(picked.path); setError(''); void open(picked.path); }
+      const picked = await api.pickFolder(root.trim() || undefined, abort.signal);
+      reached();
+      if ('path' in picked) { setRoot(picked.path); setError(''); void runCheck(picked.path); }
     } catch (e) {
-      if (unreachable(e)) setOffline(() => () => void browse());
-      else setFolderError(t('ui.np.pickFailed', failText(e)));
-    } finally { setPicking(false); }
+      if (abort.signal.aborted) return;
+      if (!failed(e, 'browse')) setFolderError(t('ui.np.pickFailed', failText(e)));
+    } finally {
+      if (pickAbort.current === abort) pickAbort.current = null;
+      if (!abort.signal.aborted) setPicking(false);
+    }
   };
 
   const shownName = nameFor(root, name, named);
@@ -100,7 +138,7 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
 
   const create = async () => {
     if (!input || busy) return;
-    setBusy(true); setError(''); setOffline(null);
+    setBusy(true); setError('');
     try {
       const result = await api.createProject(input);
       onProject(result.project);
@@ -108,11 +146,29 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
       toast({ icon: 'check', title: t('ui.np.created', result.project.name), ...(notes.length ? { body: notes.join(' ') } : {}) });
       location.hash = routeHash({ view: 'productNew', id: result.project.id });
     } catch (e) {
-      if (unreachable(e)) setOffline(() => () => void create());
-      else setError(t('ui.np.failed', failText(e)));
+      if (!failed(e, 'create')) setError(t('ui.np.failed', failText(e)));
       setBusy(false);
     }
   };
+
+  actions.current = {
+    learn: () => void learn(),
+    check: () => { if (root.trim()) void runCheck(root.trim()); else markOffline(null); },
+    browse: () => void browse(),
+    create: () => { if (input) void create(); else markOffline(null); },
+  };
+  const retry = () => {
+    const what = offlineRef.current;
+    if (what === null) return;
+    if (canPickRef.current === null && what !== 'learn') void learn();
+    if (typeof what === 'function') what(); else actions.current[what]();
+  };
+
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    if (connected && !wasConnected.current) retry();
+    wasConnected.current = connected;
+  });
 
   return (
     <div className="bt-screen__inner ui-np">
@@ -120,19 +176,21 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
         <h1 className="bt-screen__title">{t('ui.product.new')}</h1>
       </header>
       <p className="bt-meta">{t('ui.np.lead')}</p>
-      {offline && <Notice tone="warn" icon="alert" title={t('ui.np.notAnswering')} action={{ label: t('ui.fail.retry'), run: offline }} />}
+      {offline !== null && <Notice tone="warn" icon="alert" title={t('ui.np.notAnswering')} action={{ label: t('ui.fail.retry'), run: retry }} />}
       <form className="ui-np__form" onSubmit={e => { e.preventDefault(); void create(); }}>
         <div className="bt-form-row">
           <label className="bt-label" htmlFor="ui-np-root">{t('ui.np.folder')}</label>
           <div className="ui-np__pathrow">
             <input id="ui-np-root" className="bt-field bt-field--mono" type="text" value={root} spellCheck={false} autoComplete="off" placeholder={canPick ? t('ui.np.folderFieldPick') : t('ui.np.folderField')}
-              onChange={e => { setRoot(e.target.value); setError(''); setFolderError(''); }}
-              onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); if (root.trim()) void open(root.trim()); } }} />
+              onChange={e => { setRoot(e.target.value); setError(''); setFolderError(''); setFolderOk(null); }}
+              onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); if (root.trim()) void runCheck(root.trim()); } }} />
             {canPick
               ? <Button small disabled={picking} onClick={() => void browse()}>{t('ui.np.open')}</Button>
-              : <Button small disabled={!root.trim()} onClick={() => void open(root.trim())}>{t('ui.np.open')}</Button>}
+              : <Button small disabled={!root.trim()} onClick={() => void runCheck(root.trim())}>{t('ui.np.open')}</Button>}
           </div>
+          {picking && <p className="bt-meta" role="status">{t('ui.np.picking')}</p>}
           {folderError && <p className="bt-meta ui-danger" role="alert">{folderError}</p>}
+          {folderOk !== null && <p className="bt-meta" role="status">{folderOk ? `${t('ui.np.folderOk')} · ${folderOk}` : t('ui.np.folderOk')}</p>}
         </div>
 
         <label className="bt-form-row">
@@ -149,7 +207,7 @@ export function NewProduct({ onProject }: { onProject: (project: Project) => voi
         {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}
         <div className="ui-np__actions"><Button type="submit" variant="primary" disabled={!input || busy}>{t('ui.np.create')}</Button></div>
       </form>
-      <ArchivedProducts onProject={onProject} />
+      <ArchivedProducts onProject={onProject} revive={revive} onReached={reached} onUnreached={again => markOffline(again)} />
     </div>
   );
 }
