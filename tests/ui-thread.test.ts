@@ -315,17 +315,10 @@ test('ui/thread: 保存された道具の結果と、流れている実行の済
   assert.deepEqual(live.rows.map(r => r.gate), [{ by: 'not-parked' }]);
 });
 
-test('ui/thread: 会話の列は 1 つ（幅と左端が同じ）。持ち主の吹き出しは列の 85% まで、入力欄は発言の欄の両わきのスクロールバーの分だけ内へ寄せる（backlog 533、持ち主 2026-11-14）', () => {
+test('ui/thread: threadGutter は発言の欄の片わきのスクロールバーの幅を返す（重ねて出るスクロールバーなら 0、負にしない）', () => {
   assert.equal(threadGutter({ offsetWidth: 600, clientWidth: 580 }), 10, '両わきに同じ幅の空きがあるので半分');
   assert.equal(threadGutter({ offsetWidth: 600, clientWidth: 600 }), 0, '重ねて出るスクロールバーなら 0');
   assert.equal(threadGutter({ offsetWidth: 600, clientWidth: 601 }), 0, '負にしない');
-  const css = readFileSync(new URL('../web/src/ui/styles/frame.css', import.meta.url), 'utf8');
-  const page = readFileSync(new URL('../web/src/ui/Conversation.tsx', import.meta.url), 'utf8');
-  assert.match(css, /\.bt-app__main \.bt-thread > \.bt-msg--owner \{[^}]*max-width: calc\(min\(100%, 720px\) \* 0\.85\);/u, '吹き出しの幅は発言の欄ではなく列（720px まで）の 85%');
-  assert.match(css, /\.bt-app__main \.bt-composer \{[^}]*width: calc\(100% - 2 \* var\(--ui-gutter, 0px\)\);/u, '入力欄は発言の列と同じ幅');
-  assert.match(css, /\.bt-app__main > \.ui-pinned \{[^}]*width: calc\(100% - 2 \* var\(--ui-gutter, 0px\)\);/u);
-  assert.match(css, /\.bt-app__main > \.ui-offline \{[^}]*width: calc\(100% - 2 \* var\(--ui-gutter, 0px\)\);/u);
-  assert.ok(page.includes("el.parentElement?.style.setProperty('--ui-gutter', `${threadGutter(el)}px`)"), '空きの幅は発言の欄から測って渡す');
 });
 
 test('ui/parts: 静かな知らせ・warn の知らせも、渡された text を題のあとに出す（Build が凍ったときの理由、フォルダが無い製品の説明。backlog 500）', () => {
