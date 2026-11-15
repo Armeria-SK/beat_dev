@@ -1,24 +1,40 @@
 import { Type } from '@sinclair/typebox';
 import type { AppConfig } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
+import { neutralizeFence } from '../../shared/fence.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { ToolRegistry } from '../registry.ts';
 import type { ToolDef } from '../types.ts';
 
 const MAX_EXACT = 10;
-const MAX_MATCHES = 5;
+const MAX_MATCHES = 3;
+const MIN_TERM = 3;
 const SUMMARY_MAX = 100;
+const STOP_WORDS: ReadonlySet<string> = new Set([
+  'the', 'and', 'for', 'with', 'from', 'into', 'onto', 'that', 'this', 'these', 'those', 'what', 'which', 'when', 'where', 'how', 'who',
+  'make', 'use', 'using', 'can', 'you', 'please', 'some', 'any', 'new', 'get', 'set', 'tool', 'tools', 'about', 'want', 'need', 'let',
+  'would', 'could', 'should', 'have', 'has', 'are', 'was', 'were', 'will', 'your', 'mine', 'its', 'all', 'not', 'but', 'out', 'one',
+]);
+
+export const DEFERRED_HEADER = 'Tools you can load (name and a short summary; this list stays the same for the whole run). To use one you have not loaded yet, first call tool_search with its name; once loaded it stays usable for the rest of this run:';
+
+const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 
 export function matchTools(tools: readonly ToolDef[], query: string): ToolDef[] {
-  const terms = query.toLowerCase().replace(/^\s*select:/u, '').split(/[\s,]+/u).filter(Boolean);
-  const exact = tools.filter(t => terms.includes(t.name));
+  const raw = query.toLowerCase().replace(/^\s*select:/u, '');
+  const names = raw.split(/[\s,]+/u).filter(Boolean);
+  const exact = tools.filter(t => names.includes(t.name));
   if (exact.length) return exact.slice(0, MAX_EXACT);
-  return tools
-    .map(t => ({ t, score: terms.reduce((sum, term) => sum + (t.name.includes(term) ? 2 : 0) + (t.description.toLowerCase().includes(term) ? 1 : 0), 0) }))
-    .filter(m => m.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_MATCHES)
-    .map(m => m.t);
+  const terms = [...new Set(wordsOf(raw))].filter(term => term.length >= MIN_TERM && !STOP_WORDS.has(term));
+  const scored = tools
+    .map(t => {
+      const name = new Set(wordsOf(t.name));
+      const description = t.mcp ? new Set<string>() : new Set(wordsOf(t.description));
+      return { t, score: terms.reduce((sum, term) => sum + (name.has(term) ? 2 : 0) + (description.has(term) ? 1 : 0), 0) };
+    })
+    .filter(m => m.score > 0);
+  const top = Math.max(0, ...scored.map(m => m.score));
+  return scored.filter(m => m.score === top).slice(0, MAX_MATCHES).map(m => m.t);
 }
 
 const summaryOf = (text: string): string => {
@@ -28,15 +44,20 @@ const summaryOf = (text: string): string => {
 
 export function deferredSection(tools: readonly ToolDef[], config: AppConfig): string {
   if (!tools.length) return '';
+  const language = languageOf(config);
+  const byName = new Map(tools.map(t => [t.name, t]));
   return [
-    'Deferred tools (only names are shown here). To use one, first call tool_search with its name; it then stays loaded for the rest of this run:',
-    ...ToolRegistry.specs(tools, config).map(spec => `- ${spec.name}: ${summaryOf(spec.description)}`),
+    DEFERRED_HEADER,
+    ...ToolRegistry.specs(tools, config).map(spec => {
+      const mcp = byName.get(spec.name)?.mcp;
+      return `- ${spec.name}: ${mcp ? toolText(language, 'tool_search.mcp_line', { server: mcp.server }) : summaryOf(spec.description)}`;
+    }),
   ].join('\n');
 }
 
 export const toolSearch: ToolDef<{ query: string }> = {
   name: 'tool_search',
-  description: 'Load deferred tools. Pass one or more names from the "Deferred tools" list in the system prompt (or words for what you need). Returns their full description and input shape, and they can be called for the rest of this run.',
+  description: 'Load tools from the "Tools you can load" list in the system prompt. Pass one or more of its names (or a few words for what you need). Returns their full description and input shape, and they can be called for the rest of this run.',
   input: Type.Object({ query: Type.String({ minLength: 1, maxLength: 300 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task'],
@@ -48,7 +69,14 @@ export const toolSearch: ToolDef<{ query: string }> = {
     const found = matchTools(ctx.deferred.list(), input.query);
     if (!found.length) return { content: toolText(language, 'tool_search.none') };
     ctx.deferred.load(found.map(t => t.name));
+    const byName = new Map(found.map(t => [t.name, t]));
     const specs = ToolRegistry.specs(found, ctx.config);
-    return { content: [toolText(language, 'tool_search.loaded', { count: specs.length }), ...specs.map(spec => `\n## ${spec.name}\n${spec.description}\nInput: ${JSON.stringify(spec.inputSchema)}`)].join('\n') };
+    return {
+      content: [toolText(language, 'tool_search.loaded', { count: specs.length }), ...specs.map(spec => {
+        const body = `${spec.description}\nInput: ${JSON.stringify(spec.inputSchema)}`;
+        const mcp = byName.get(spec.name)?.mcp;
+        return mcp ? `\n## ${spec.name}\n${toolText(language, 'mcp.external', { server: mcp.server })}\n<<<\n${neutralizeFence(body)}\n>>>` : `\n## ${spec.name}\n${body}`;
+      })].join('\n'),
+    };
   },
 };

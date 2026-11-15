@@ -681,7 +681,7 @@ export class ChatEngine {
   // maxTools で切られた MCP の道具は、モデルと道具の組ごとに 1 回だけ [WARN] を出し、MCP の管理に知らせる（画面の状態が cut になる）
   #excluded(kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false): (t: ToolDef) => boolean {
     const config = this.#d.config();
-    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && agentOff(config, kind)) || (isBrowserTool(t.name) && !config.tools.browser.enabled) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
+    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
       || (mode === 'plan' && !planAllows(t)) || (t.projectOnly === true && !inProject) || !acceptanceAllows(t, frozen);
   }
 
@@ -691,14 +691,19 @@ export class ChatEngine {
     return this.#d.tools.registry.forRun(kind, { exclude: t => excluded(t) || isCore(t) });
   }
 
+  #reachable(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined, mode: PermissionMode, inProject: boolean, frozen: boolean): ToolDef[] {
+    return this.#d.tools?.registry.forRun(kind, { exclude: this.#excluded(kind, forbid, started, mode, inProject, frozen) }) ?? [];
+  }
+
   #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false, loaded?: ReadonlySet<string>): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const excluded = this.#excluded(kind, forbid, started, mode, inProject, frozen);
-    const exclude = loaded ? (t: ToolDef) => excluded(t) || !(isCore(t) || loaded.has(t.name)) : excluded;
+    const full = (t: ToolDef) => excluded(t) || t.name === 'tool_search';
+    const exclude = loaded ? (t: ToolDef) => excluded(t) || !(isCore(t) || loaded.has(t.name)) : full;
     const options = { limit: model.maxTools, exclude };
     const registry = this.#d.tools.registry;
     if (kind === 'chat' && this.#d.mcpCut) {
-      const cut = registry.cut(kind, options).filter(t => t.mcp !== undefined);
+      const cut = registry.cut(kind, { limit: model.maxTools, exclude: full }).filter(t => t.mcp !== undefined);
       this.#d.mcpCut(model.id, cut.map(t => t.name));
       for (const t of cut) {
         const key = `${model.id}\n${t.name}`;
@@ -754,12 +759,13 @@ export class ChatEngine {
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
     ctx.toolWindow = () => this.created.open(ctx);
-    if (this.#defers(kind)) {
+    if (this.#defers(kind, forbid, config, chain.map(route => route.model))) {
       const loaded = new Set<string>();
       this.#loaded.set(runId, loaded);
       ctx.deferred = {
         loaded,
         list: () => this.#deferred(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined, this.#frozen(ctx.project?.id)),
+        reachable: () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined, this.#frozen(ctx.project?.id)),
         load: names => { for (const name of names) loaded.add(name); },
       };
     }
@@ -1004,8 +1010,8 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
-        const toolNames = new Set(toolDefs.map(t => t.name));
+        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
+        const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name)]);
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
         let fitted;
@@ -1101,9 +1107,10 @@ export class ChatEngine {
     const language = languageOf(config);
     const mode = this.#modeFor(p.kind, p.conversationId, p.startedMode);
     const frozen = this.#frozen(p.project?.id);
-    const loaded = this.#defers(p.kind) ? (p.runId ? this.#loaded.get(p.runId) : undefined) ?? new Set<string>() : undefined;
+    const loaded = p.runId ? this.#loaded.get(p.runId) : this.#defers(p.kind, p.forbid, p.started, [model]) ? new Set<string>() : undefined;
     const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen, loaded);
-    const deferred = loaded && toolDefs.some(t => t.name === 'tool_search') ? deferredSection(this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen), config) : '';
+    const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen) : [];
+    const deferred = deferredSection(listed, config);
     const specs = ToolRegistry.specs(toolDefs, config);
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
     const available = contextAvailable(capacity, model);
@@ -1121,7 +1128,7 @@ export class ChatEngine {
     const history = stored.map(m => forModel(m.message));
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
-    return { toolDefs, system, history, stored, conversation, apiTools, capacity, available, factor };
+    return { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, factor };
   }
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
@@ -1195,7 +1202,7 @@ export class ChatEngine {
     let live = 0;
     for (const active of this.#active.values()) if (active.kind === 'agent') live += 1;
     if (live >= MAX_LIVE_AGENTS) return fail('agent.busy');
-    // 子に渡せる道具 = 親にいま渡る道具 ∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
+    // 子に渡せる道具 = 親に渡りうる道具（tool_search で読み込んだかに関わらない）∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
     const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'auto', this.#modeOf(parent.conversationId)) : 'auto';
     const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
     const givableNames = new Set(givable.map(t => t.name));
@@ -1265,9 +1272,10 @@ export class ChatEngine {
     return kind === 'chat' || kind === 'agent' ? stricterMode(startedMode ?? current, current) : 'auto';
   }
 
-  #defers(kind: RunKind): boolean {
+  #defers(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined, models: readonly ModelConfig[]): boolean {
     const search = this.#d.tools?.registry.get('tool_search');
-    return (kind === 'chat' || kind === 'task') && search !== undefined && search.mcp === undefined;
+    return (kind === 'chat' || kind === 'task') && search !== undefined && search.mcp === undefined && search.allowedIn.includes(kind)
+      && !this.#excluded(kind, forbid, started)(search) && models.every(model => model.maxTools === undefined);
   }
 
   #finishCancelled(runId: string, conversationId: string, counters: { attempts: number; iterations: number; toolCalls: number }, route: Route, partial: string): EngineResult {

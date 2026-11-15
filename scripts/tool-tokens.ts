@@ -132,6 +132,8 @@ export function renderTable(measured: Measured): string {
     '|---|---|---|---|---|',
     ...measured.rows.map(r => `| ${r.mode} | ${r.tools} | ${r.toolTokens} | ${r.request} | ${r.percent.toFixed(1)}% |`),
     ...measured.off.map(mode => `| ${mode} | off | - | - | - |`),
+    '',
+    'MCP servers are not connected while measuring, so their tools are not counted.',
   ].join('\n');
 }
 

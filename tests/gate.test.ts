@@ -647,6 +647,19 @@ test('5-3b 札は道具 task_* の呼び出しと、項目が最後に変わる�
   assert.deepEqual(s.states(p.id), { 'A-1': 'open' });
 });
 
+test('T-1 tool_search の行に札があっても、門は証拠にしない（読み込んだだけで製品は何も確かめていない）', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const task = s.task(p.id, ['A-1'], 'Build searched');
+  const plant = () => {
+    const cid = s.app.tasks.get(task.id)!.conversation_id!;
+    s.app.db.prepare("UPDATE tool_calls SET evidence_no = 99 WHERE conversation_id = ? AND tool = 'tool_search'").run(cid);
+  };
+  await s.run(task.id, [toolCall('tool_search', { query: 'task_list' }), done([{ id: 'A-1', evidence: 'E-99' }], plant)]);
+  assert.match(lastText(s.toolTexts(task.id), 'task_complete').text, /E-99 is not accepted \(there is no such tag/u);
+  assert.deepEqual(s.states(p.id), { 'A-1': 'open' });
+});
+
 test('5-3b 一覧の書き換えを知らせられなくても門は断るだけで落ちず、知らせは次の断りでやり直す', async t => {
   const s = await setup(t);
   const p = s.product('shop', [{ result: 'Has a page', check: look }]);

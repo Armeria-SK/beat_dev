@@ -26,7 +26,7 @@ test('GET /api/tools: 組み込みの道具のうち記憶の道具と、どの�
     const def = server.find(d => d.name === tool.name)!;
     assert.deepEqual([tool.effect, tool.allowedIn, tool.policy], [def.effect, [...def.allowedIn], 'allow'], tool.name);
   }
-  assert.deepEqual(tools.filter(tool => !tool.configurable).map(tool => tool.name).sort(), ['task_checkpoint', 'task_complete']);
+  assert.deepEqual(tools.filter(tool => !tool.configurable).map(tool => tool.name).sort(), ['task_checkpoint', 'task_complete', 'tool_search']);
   assert.deepEqual(tools.find(tool => tool.name === 'history_search')!.allowedIn, ['chat', 'task', 'review'], '振り返りでも使う道具は、allowedIn に review がある（画面の添え書きの元）');
 });
 

@@ -411,7 +411,7 @@ export class App {
     // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
     const all = this.tools?.forRun('chat', { exclude: tool => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen' }) ?? [];
     const defers = all.some(tool => tool.name === 'tool_search' && tool.mcp === undefined);
-    const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : estimateToolTokens(ToolRegistry.specs(all, config));
+    const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : estimateToolTokens(ToolRegistry.specs(all.filter(tool => tool.name !== 'tool_search'), config));
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }

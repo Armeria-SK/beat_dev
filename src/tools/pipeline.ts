@@ -223,7 +223,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       : outcome.decidedBy === 'not-parked' ? { by: 'not-parked' }
       : outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' && autoWhy !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300) }
       : undefined;
-    const tagged = ctx.kind === 'task' ? 1 : 0;
+    const tagged = ctx.kind === 'task' && call.name !== 'tool_search' ? 1 : 0;
     const row = deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, evidence_no, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN (SELECT COALESCE(MAX(evidence_no), 0) + 1 FROM tool_calls WHERE conversation_id = ? AND evidence_no IS NOT NULL) END, ?)
       RETURNING evidence_no`).get(
@@ -239,7 +239,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     finish({ output: { content: message, isError: true }, decision, decidedBy, invalidArguments: invalid });
 
   if (truncated) return refuse('deny', 'truncated', truncated.message);
-  if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: deps.registry.forRun(ctx.kind).map(t => t.name).join(', ') }), true);
+  if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: (ctx.deferred ? ctx.deferred.reachable() : deps.registry.forRun(ctx.kind)).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   if (tool.projectOnly === true && !ctx.project) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
   if (tool.acceptanceState !== undefined) {

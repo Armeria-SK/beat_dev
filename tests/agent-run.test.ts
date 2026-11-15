@@ -8,7 +8,7 @@ import { agentRun } from '../src/tools/builtin/agent.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { JudgeAdapter, judgeTextOf, reply, type Script, testConfig, withLoad } from './helpers.ts';
+import { JudgeAdapter, judgeTextOf, notSearch, reply, type Script, testConfig, withLoad } from './helpers.ts';
 import { AGENT_RESULT_MAX_CHARS, toFullWidth } from '../src/engine/chat.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
@@ -40,7 +40,6 @@ async function chat(s: Started, id: string, text: string): Promise<string> {
 }
 
 const names = (s: Started, n: number) => s.adapter().calls[n]!.tools.map(t => t.name);
-const notSearch = (m: { role: string; message: { role: string; name?: string } }) => m.role === 'tool' && !(m.message.role === 'tool' && m.message.name === 'tool_search');
 const toolMessage = (s: Started, conversationId: string) => s.app.conversations.messages(conversationId).find(notSearch)?.text ?? '';
 const deferredList = (s: Started, n: number) => s.adapter().calls[n]!.system.dynamic;
 

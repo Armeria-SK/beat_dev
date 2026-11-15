@@ -8,6 +8,7 @@ import { defaultConfig } from '../src/config/store.ts';
 import type { ModelRequest, ProbeResult, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
 import type { ToolCall } from '../src/engine/types.ts';
 import { isCore } from '../src/tools/registry.ts';
+import { DEFERRED_HEADER } from '../src/tools/builtin/tool-search.ts';
 
 // T-1: 渡っていない核でない道具は、本物のモデルと同じく、一覧に名前があれば同じ往復の前に tool_search で読み込んでから呼ぶ（tool_search が渡る実行だけ）
 export function withLoad(call: ToolCall, req: Pick<ModelRequest, 'tools' | 'system'>): ToolCall[] {
@@ -18,7 +19,7 @@ export function withLoad(call: ToolCall, req: Pick<ModelRequest, 'tools' | 'syst
 
 // T-1: モデルに「渡る」道具の名前。毎回渡る道具と、system の毎回の部分の一覧（あとで読み込む道具）の両方
 export function offered(req: Pick<ModelRequest, 'tools' | 'system'>): string[] {
-  const section = req.system.dynamic.split('\n\n').find(part => part.startsWith('Deferred tools (only names are shown here).')) ?? '';
+  const section = req.system.dynamic.split('\n\n').find(part => part.startsWith(DEFERRED_HEADER)) ?? '';
   return [...req.tools.map(tool => tool.name), ...[...section.matchAll(/^- ([a-z0-9_]+):/gmu)].map(m => m[1]!)];
 }
 
