@@ -16,7 +16,7 @@ function toolCall(name: string, args: unknown): Script {
   };
 }
 
-async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig) => void = () => undefined) {
+async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig) => void = () => undefined, timers = false) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   const config = testConfig();
@@ -31,7 +31,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   const clock = { now: Date.parse('2026-11-05T01:00:00Z') };
   let adapter!: FakeAdapter;
   const app = new App({
-    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false,
+    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: timers,
     adapterOverride: p => (adapter = new FakeAdapter(p)),
   });
   await app.status.probeAll(app.config());
@@ -201,6 +201,39 @@ test('10-1 1 時間の上限: maxRunsPerHour 6 で直近 1 時間に 3 本動い
   s.clock.now += 3_600_001;
   await s.drain();
   assert.equal(s.app.reviews.get(heavy.id)!.status, 'done', '1 時間たてば動く');
+});
+
+test('10-1 heavy_run を待つあいだも、それより早い予定のタスクの時刻に起きる', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 6; }, true);
+  t.after(() => s.app.worker.stop());
+  for (const id of ['a', 'b', 'c']) {
+    s.app.conversations.create({ id });
+    s.app.conversations.append(id, { role: 'user', content: `${id} の話` });
+    s.app.reviews.enqueue('manual', `manual:${id}`, { conversationId: id });
+  }
+  await s.drain();
+  fill(s.app, 'long', 120);
+  const heavy = s.app.reviews.enqueueIfPiled('long', reviewWindowLimits(s.app.engine.backgroundAvailable()))!;
+  s.app.tasks.create({ title: 'あとで', origin: 'user', actor: 'user', runAt: s.clock.now + 120_000 });
+  const calls = s.adapter().calls.length;
+  s.app.worker.start();
+  for (let i = 0; i < 200 && (s.app.worker.status().nextWakeAt ?? s.clock.now) === s.clock.now; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  s.app.worker.stop();
+  assert.equal(s.app.reviews.get(heavy.id)!.status, 'pending', '前提: heavy_run は待っている');
+  assert.equal(s.adapter().calls.length, calls);
+  assert.equal(s.app.worker.status().nextWakeAt, s.clock.now + 120_000, '2 分後のタスクの時刻に起きる');
+});
+
+test('10-1 Pending の注記と道具の結果だけの窓は、持ち主の発言が無いものとして、モデルを呼ばずに進める', async t => {
+  const s = await setup(t);
+  s.app.conversations.create({ id: 'c1' });
+  s.app.conversations.append('c1', { role: 'user', content: 'held call', generated: true, note: 'pending', fetched: true });
+  s.app.conversations.append('c1', { role: 'tool', toolCallId: 'call_1', name: 'calculate', content: '2' });
+  s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1' });
+  const calls = s.adapter().calls.length;
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(s.adapter().calls.length, calls, 'モデルを呼ばない');
+  assert.equal(s.app.kv.get('review:upto:c1'), String(s.app.conversations.messages('c1', 1).at(-1)!.id));
 });
 
 test('10-1 窓は upto の次から古い順に取る（新しい方の 200 件に限らない）', async t => {

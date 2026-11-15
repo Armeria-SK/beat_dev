@@ -1,6 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
-import type { ChatMessage } from '../engine/types.ts';
 import type { StoredMessage } from '../db/conversations.ts';
 import { KV } from '../db/kv.ts';
 import type { Task, TaskEvent } from '../tasks/store.ts';
@@ -33,7 +32,9 @@ const WINDOW_PAGE = 200;
 
 export interface WindowLimits { maxChars: number; maxTokens?: number | undefined }
 
-export interface ReviewWindow { transcript: string; messages: StoredMessage[]; lastId: number | undefined; full: boolean }
+export type WindowMessage = Pick<StoredMessage, 'id' | 'role' | 'text'> & { message: { role: string; note?: unknown; name?: string } };
+
+export interface ReviewWindow { transcript: string; messages: WindowMessage[]; lastId: number | undefined; full: boolean }
 
 export const reviewWindowLimits = (available: number | undefined): WindowLimits => ({
   maxChars: REVIEW_WINDOW_CHARS,
@@ -205,17 +206,17 @@ export const reviewPolicyLines = (language: Language = DEFAULT_LANGUAGE): readon
 
 const clip = (text: string, max: number, language: Language = DEFAULT_LANGUAGE) => (text.length > max ? `${text.slice(0, max)}${REVIEW_TEXT[language].truncated}` : text);
 
-function transcriptLine(m: StoredMessage, language: Language): string | undefined {
+function transcriptLine(m: WindowMessage, language: Language): string | undefined {
   const text = REVIEW_TEXT[language];
   const note = m.message.role === 'user' && m.message.note !== undefined;
-  const label = note ? text.note : m.role === 'user' ? text.user : m.role === 'assistant' ? 'beat' : text.tool(m.message.role === 'tool' ? m.message.name : '');
+  const label = note ? text.note : m.role === 'user' ? text.user : m.role === 'assistant' ? 'beat' : text.tool(m.message.role === 'tool' ? m.message.name ?? '' : '');
   const body = m.role === 'tool' || note ? clip(m.text, 300, language) : clip(m.text, 3000, language);
   return body.trim() ? text.line(label, body) : undefined;
 }
 
-export function reviewWindow(messages: readonly StoredMessage[], limits: WindowLimits, language: Language = DEFAULT_LANGUAGE): ReviewWindow {
+export function reviewWindow(messages: readonly (StoredMessage | WindowMessage)[], limits: WindowLimits, language: Language = DEFAULT_LANGUAGE): ReviewWindow {
   const lines: string[] = [];
-  const taken: StoredMessage[] = [];
+  const taken: WindowMessage[] = [];
   let chars = 0;
   let tokens = 0;
   for (const m of messages) {
@@ -240,11 +241,11 @@ export function reviewWindow(messages: readonly StoredMessage[], limits: WindowL
 }
 
 export function conversationWindow(db: DatabaseSync, conversationId: string, upto: number, limits: WindowLimits, language: Language = DEFAULT_LANGUAGE): ReviewWindow {
-  const page = db.prepare('SELECT * FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?');
-  const loaded: StoredMessage[] = [];
+  const page = db.prepare("SELECT id, role, text, json_extract(parts, '$.role') AS message_role, json_extract(parts, '$.note') AS note, json_extract(parts, '$.name') AS name FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?");
+  const loaded: WindowMessage[] = [];
   for (;;) {
-    const rows = page.all(conversationId, loaded.at(-1)?.id ?? upto, WINDOW_PAGE) as unknown as Array<Omit<StoredMessage, 'message'> & { parts: string }>;
-    loaded.push(...rows.map(({ parts, ...row }) => ({ ...row, message: JSON.parse(parts) as ChatMessage })));
+    const rows = page.all(conversationId, loaded.at(-1)?.id ?? upto, WINDOW_PAGE) as unknown as Array<Pick<StoredMessage, 'id' | 'role' | 'text'> & { message_role: string; note: unknown; name: string | null }>;
+    loaded.push(...rows.map(({ message_role, note, name, ...row }) => ({ ...row, message: { role: message_role, ...(note !== null ? { note } : {}), ...(name !== null ? { name } : {}) } })));
     const window = reviewWindow(loaded, limits, language);
     if (window.full || rows.length < WINDOW_PAGE) return window;
   }

@@ -295,7 +295,7 @@ export class Worker {
       // 実行するタスクが無ければ、振り返りを見る
       const holdPiled = this.runsLastHour() >= Math.ceil(c.worker.maxRunsPerHour / 2);
       const job = !task && c.memory.review ? this.#d.reviews?.next({ skipPiled: holdPiled }) : undefined;
-      if (!task && !job && holdPiled && c.memory.review && this.#d.reviews?.next()) { reschedule(now + 10 * 60_000); return 'budget'; }
+      if (!task && !job && holdPiled && c.memory.review && this.#d.reviews?.next()) { reschedule(Math.min(now + 10 * 60_000, tasks.nextWakeAt({ allowSelf }) ?? Infinity)); return 'budget'; }
       if (job) {
         const outcome = await this.#review(job, release);
         reschedule(outcome === 'busy' ? now + 60_000 : now);
@@ -344,7 +344,7 @@ export class Worker {
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
     const upto = Number(kv.get(reviewUptoKey(job.conversation_id)) ?? 0);
     const window = conversationWindow(db, job.conversation_id, upto, this.#reviewLimits(), language);
-    if (!window.messages.some(m => m.role === 'user')) return { upto: window.lastId };
+    if (!window.messages.some(m => m.message.role === 'user' && m.message.note === undefined)) return { upto: window.lastId };
     return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, language, skillsAutoRegister, memory: this.#d.botMemory }), upto: window.lastId };
   }
 
