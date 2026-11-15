@@ -12,7 +12,7 @@ interface QuestionAddInput { question: string; why: string; options: string[]; c
 
 export const questionAdd: ToolDef<QuestionAddInput> = {
   name: 'question_add',
-  description: 'Record a question for the owner and keep working with the option you assume (chosen: the number of that option, from 0). The owner answers later; a different answer starts a follow-up task. If you can go ahead with an assumption, do not set blocking. Set blocking only when no assumption is safe: the task then waits for the answer. item: the acceptance item the question is about (such as A-3); a different answer reopens it. category: the topic.',
+  description: 'Record a question for the owner and keep working with the option you assume (chosen: the number of that option, from 0). The owner answers later; a different answer starts a follow-up task. If you can go ahead with an assumption, do not set blocking. Set blocking only when no assumption is safe: the task then waits for the answer. item: the acceptance item the question is about (such as A-3); a different answer reopens it. category: scope (what to build), ui, data, naming, tech, security, or other.',
   input: Type.Object({
     question: Type.String({ minLength: 1, maxLength: 1500 }),
     why: Type.String({ minLength: 1, maxLength: 1500 }),

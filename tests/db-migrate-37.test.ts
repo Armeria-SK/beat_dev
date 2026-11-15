@@ -12,7 +12,7 @@ const version = (db: DatabaseSync): number => (db.prepare('PRAGMA user_version')
 const tables = (db: DatabaseSync): string[] => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'messages_fts%' ORDER BY name").all() as Array<{ name: string }>).map(r => r.name);
 const counts = (db: DatabaseSync): Record<string, number> => Object.fromEntries(tables(db).map(name => [name, Number((db.prepare(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number }).n)]));
 
-test('移し替え 37: questions.category を足し、前からある質問は other になり、ほかの表の行の数は変わらず、控えが 1 つでき、2 回目は何もしない', t => {
+test('移し替え 37: questions.category（CHECK なし）と tasks.conversation_id の索引を足し、前からある質問は other になり、ほかの表の行の数は変わらず、控えが 1 つでき、2 回目は何もしない', t => {
   assert.equal(AT, 36, 'the category column is migration 37');
   const dir = tempDir(t);
   const path = join(dir, 'beat.db');
@@ -29,7 +29,8 @@ test('移し替え 37: questions.category を足し、前からある質問は o
     assert.equal(version(db), AT + 1);
     assert.deepEqual(counts(db), before);
     assert.deepEqual({ ...db.prepare('SELECT question, category FROM questions').get() }, { question: 'Old question', category: 'other' });
-    assert.throws(() => db.prepare("INSERT INTO questions (kind, category, question, options, created_at) VALUES ('ai', 'colour', 'q', '[]', 1)").run(), /CHECK/u);
+    db.prepare("INSERT INTO questions (kind, category, question, options, created_at) VALUES ('ai', 'billing', 'q', '[]', 1)").run();
+    assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_tasks_conversation'").get(), 'tasks are found by their conversation through an index');
   } finally { db.close(); }
   assert.deepEqual(readdirSync(backups).map(name => /-v(\d+)-/u.exec(name)?.[1]), [String(AT)]);
 

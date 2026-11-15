@@ -66,12 +66,13 @@ function ctxFor(s: Setup, taskId: string, projectId: string, tainted = false): T
 
 const ask = (question: string, category?: string) => ({ question, why: 'Because', options: ['Keep it', 'Change it'], chosen: 0, ...(category ? { category } : {}) });
 
-function skillRow(s: Setup, input: { conversationId: string | null; name: string; at: number; runKind?: string; ok?: number; tool?: string }) {
+function skillRow(s: Setup, input: { conversationId: string | null; name: string; at: number; runKind?: string; ok?: number; tool?: string; parentRunId?: string }) {
   const id = `tc-${Math.random().toString(36).slice(2)}`;
   const runId = `run-${id}`;
-  s.app.db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at) VALUES (?, ?, ?, ?)').run(runId, input.runKind ?? 'chat', input.conversationId, input.at);
+  s.app.db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, parent_run_id, started_at) VALUES (?, ?, ?, ?, ?)').run(runId, input.runKind ?? 'chat', input.conversationId, input.parentRunId ?? null, input.at);
   s.app.db.prepare("INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, ok, created_at) VALUES (?, ?, ?, ?, ?, 'allow', 'policy', ?, ?)")
     .run(id, runId, input.conversationId, input.tool ?? 'skill_view', JSON.stringify({ name: input.name }), input.ok ?? 1, input.at);
+  return runId;
 }
 
 test('G-1: question_add は category を受けて行に残す。書かなければ other、一覧に無い名前は断る', async t => {
@@ -87,7 +88,9 @@ test('G-1: question_add は category を受けて行に残す。書かなけれ�
   assert.equal(Value.Check(questionAdd.input, ask('q', 'security')), true);
   assert.equal(Value.Check(questionAdd.input, ask('q', 'colour')), false, 'the tool input rejects a name outside the list');
   assert.throws(() => s.app.questions.add({ ...ask('Direct?'), category: 'colour' as never, taskId: task.id, projectId: shop.id }), /category must be one of: scope, ui, data, naming, tech, security, other/u);
-  assert.throws(() => s.app.db.prepare("UPDATE questions SET category = 'colour' WHERE id = 1").run(), /CHECK/u);
+  s.app.db.prepare("UPDATE questions SET category = 'billing' WHERE id = 2").run();
+  const byCategory = growthStats(s.app.db, { timezone: 'UTC' }).buckets[0]!.questions.byCategory.map(c => c.category);
+  assert.deepEqual(byCategory, ['ui', 'billing'], 'a category added later in the database is still counted, after the known ones');
 });
 
 test('G-1: 質問の数・種類ごとの当たり率・判定役が聞いた数・Pending・Not enough の割合を、製品と月ごとに数える', async t => {
@@ -103,6 +106,8 @@ test('G-1: 質問の数・種類ごとの当たり率・判定役が聞いた数
   run('Shop B', shop.id, NOV);
   const old = run('Shop old', shop.id, OCT);
   s.app.tasks.create({ title: 'Never ran', origin: 'user', actor: 'user', projectId: shop.id });
+  const template = run('Every morning', shop.id, NOV);
+  s.app.db.prepare("UPDATE tasks SET cron = '0 9 * * *', parent_id = NULL WHERE id = ?").run(template.id);
 
   const ctx = ctxFor(s, a.id, shop.id);
   await questionAdd.execute(ask('Q ui 1', 'ui') as never, ctx);
@@ -110,6 +115,8 @@ test('G-1: 質問の数・種類ごとの当たり率・判定役が聞いた数
   await questionAdd.execute(ask('Q data', 'data') as never, ctx);
   await questionAdd.execute(ask('Q tainted', 'ui') as never, ctxFor(s, a.id, shop.id, true));
   s.app.questions.add({ kind: 'stuck', projectId: shop.id, taskId: a.id, question: 'Stuck?', options: ['Retry', 'Stop'], chosen: 0 });
+  s.app.questions.add({ kind: 'ai', category: 'ui', projectId: shop.id, taskId: a.id, question: 'No safe guess?', options: ['One', 'Two'], blocking: true });
+  s.app.questions.answer(6, { choice: 1 });
   s.app.questions.answer(1, { choice: 0 });
   s.app.questions.answer(2, { choice: 1 });
   s.app.questions.answer(3, { choice: 0 });
@@ -137,12 +144,12 @@ test('G-1: 質問の数・種類ごとの当たり率・判定役が聞いた数
   const stats = growthStats(s.app.db, { timezone: 'UTC' });
   assert.deepEqual(stats.buckets.map(b => [b.month, b.projectId]), [...[blog.id, shop.id].sort().map(id => ['2026-11', id]), ['2026-10', shop.id]]);
   const nov = stats.buckets.find(b => b.month === '2026-11' && b.projectId === shop.id)!;
-  assert.equal(nov.tasks, 2, 'only tasks that ran, not templates or never-run ones');
+  assert.equal(nov.tasks, 2, 'only tasks that ran, not repeating templates or never-run ones');
   assert.deepEqual(nov.questions, {
-    asked: 5, perTask: 2.5, answered: 4, kept: 3, keptRate: 0.75,
+    asked: 6, perTask: 3, answered: 4, kept: 3, keptRate: 0.75, noAssumption: 1,
     byCategory: [
-      { category: 'ui', asked: 3, answered: 3, kept: 2, keptRate: 2 / 3 },
-      { category: 'data', asked: 1, answered: 1, kept: 1, keptRate: 1 },
+      { category: 'ui', asked: 4, answered: 3, kept: 2, keptRate: 2 / 3, noAssumption: 1 },
+      { category: 'data', asked: 1, answered: 1, kept: 1, keptRate: 1, noAssumption: 0 },
     ],
   });
   assert.equal(nov.judgeAsked, 1);
@@ -156,7 +163,7 @@ test('G-1: 質問の数・種類ごとの当たり率・判定役が聞いた数
   assert.deepEqual(filtered.buckets, [nov]);
   assert.deepEqual(growthStats(s.app.db, { timezone: 'UTC', project: blog.id, month: '2026-10' }).buckets, []);
   const tokyo = growthStats(s.app.db, { timezone: 'Asia/Tokyo', month: '2026-11', project: shop.id }).buckets;
-  assert.deepEqual(tokyo.map(b => [b.month, b.questions.asked, b.pending]), [['2026-11', 5, 3]], 'the month follows the timezone setting');
+  assert.deepEqual(tokyo.map(b => [b.month, b.questions.asked, b.pending]), [['2026-11', 6, 3]], 'the month follows the timezone setting');
 });
 
 test('G-1: スキルを使ったタスクの成否は、実行の会話でタスクにつないで読むときに数える。会話での使用は回数だけ、振り返りは数えない、消した会話の分は落ちる', async t => {
@@ -184,12 +191,21 @@ test('G-1: スキルを使ったタスクの成否は、実行の会話でタス
   skillRow(s, { conversationId: 'chat-1', name: 'missing-skill', at: NOV, ok: 0 });
   skillRow(s, { conversationId: 'chat-1', name: 'Not A Name; rm -rf /', at: NOV });
 
+  const parent = s.app.tasks.create({ title: 'Parent fails', origin: 'user', actor: 'user', projectId: shop.id });
+  s.app.db.prepare("UPDATE tasks SET conversation_id = 'conv-parent', status = 'failed' WHERE id = ?").run(parent.id);
+  const parentRun = skillRow(s, { conversationId: 'conv-parent', name: 'other-skill', at: NOV, runKind: 'task', ok: 0 });
+  s.app.db.prepare("INSERT INTO conversations (id, kind, parent_run_id, created_at, last_message_at) VALUES ('agent-1', 'task', ?, ?, ?)").run(parentRun, NOV, NOV);
+  skillRow(s, { conversationId: 'agent-1', name: 'deploy-steps', at: NOV, runKind: 'agent', parentRunId: parentRun });
+
   const skills = () => growthStats(s.app.db, { timezone: 'UTC', project: shop.id, month: '2026-11' }).buckets[0]!.skills;
-  assert.deepEqual(skills(), [{ name: 'release-notes', uses: 5, taskUses: 4, chatUses: 1, tasks: 3, done: 1, failed: 1, cancelled: 0, unfinished: 1 }]);
+  assert.deepEqual(skills(), [
+    { name: 'release-notes', uses: 5, taskUses: 4, chatUses: 1, tasks: 3, done: 1, failed: 1, cancelled: 0, unfinished: 1 },
+    { name: 'deploy-steps', uses: 1, taskUses: 1, chatUses: 0, tasks: 1, done: 0, failed: 1, cancelled: 0, unfinished: 0 },
+  ], 'a skill read by a sub-agent counts toward the task that started it');
 
   eraseConversation({ db: s.app.db, uploadsDir: join(s.dir, 'u'), toolOutputsDir: join(s.dir, 'o') }, 'conv-failed');
   eraseConversation({ db: s.app.db, uploadsDir: join(s.dir, 'u'), toolOutputsDir: join(s.dir, 'o') }, 'chat-1');
-  assert.deepEqual(skills(), [{ name: 'release-notes', uses: 3, taskUses: 3, chatUses: 0, tasks: 2, done: 1, failed: 0, cancelled: 0, unfinished: 1 }]);
+  assert.deepEqual(skills()[0], { name: 'release-notes', uses: 3, taskUses: 3, chatUses: 0, tasks: 2, done: 1, failed: 0, cancelled: 0, unfinished: 1 });
 });
 
 test('G-1: /api/growth/stats は製品と月で絞れ、持ち主の文や命令の文を返さない', async t => {
@@ -209,9 +225,13 @@ test('G-1: /api/growth/stats は製品と月で絞れ、持ち主の文や命令
   t.after(() => { web.server.closeAllConnections(); web.server.close(); });
   const get = async (path: string) => { const res = await fetch(`${origin}${path}`, { headers: { Origin: origin } }); return { status: res.status, text: await res.text() }; };
 
+  assert.equal(JSON.parse((await get('/api/growth/stats')).text).skillsCountedSince, null, 'no tool calls yet');
+  s.app.db.prepare("INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, ok, created_at) VALUES ('t-old', 'r-old', NULL, 'file_read', '', 'allow', 'policy', 1, ?)").run(OCT);
   const all = await get('/api/growth/stats');
   assert.equal(all.status, 200);
   const body = JSON.parse(all.text);
+  assert.equal(body.skillsCountedSince, OCT, 'success can be counted from the oldest kept tool call');
+  assert.ok(!('projectId' in body), 'no product filter, no projectId');
   assert.equal(body.buckets.length, 1);
   assert.equal(body.buckets[0].questions.byCategory[0].category, 'naming');
   assert.equal(body.buckets[0].questions.kept, 0);

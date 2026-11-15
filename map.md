@@ -62,7 +62,7 @@
 - 移し替え 34（beat 7-4c）: `origin = 'curiosity'` で `status` が `ready` か `running` のタスクを `inbox` にし（`lease_until` は空に。DB を開く時点では、このプロセスで動いている実行は無い）、`updated_at` を今の時刻（ms）にする。ほかの状態・ほかの出どころのタスク、`curiosity_items`、`task_events` は変えない。
 - 移し替え 35（beat R-1a。番号はマージのときの次の空き）: 表 `research_runs`（調べた記録。`phase` products / libraries・`mode` batch / one_by_one・`status` running / done / failed / cancelled / skipped / confirmed・`shown_hash` `confirmed_at`・`limits` の JSON）と `research_items`（行。`kind` similar / feature / choice / library・`name_or_label`・画面だけの `detail`・`url`・抜き書きで確かめた `license` `updated` `language`・`evidence` と `products` の JSON・選択肢の `options`・`default_checked` と `default_reason`〔owner_said / standard〕・持ち主の選び `decision` `reason` `answer_kind`・`recommended`）と索引。足すだけ。読み書きは `src/research/store.ts` だけ。
 - 移し替え 36（beat 5-J1）: 判定役の呼び出しの記録 `judge_calls`（実行・種類・製品・道具・理由のキーと確かめの種類〔JSON の配列〕・答え `allow`/`ask`/`failed`・答えられない理由・判定役のモデル・トークン・時間。会話の ID と文は持たない。実行の種類に CHECK は付けない〔`pending_actions` と同じく、新しい種類を落とさない〕）。書くのは `src/tools/judge-stats.ts`。
-- 移し替え 37（beat G-1）: `questions.category`（質問の話題。`scope` / `ui` / `data` / `naming` / `tech` / `security` / `other` の CHECK つき、既定 `other`）。前からある行は `other` になる。書くのは `src/questions/store.ts`。
+- 移し替え 37（beat G-1）: `questions.category`（質問の話題。既定 `other`。一覧〔`scope` / `ui` / `data` / `naming` / `tech` / `security` / `other`〕はまだ仮なので CHECK は付けず、名前の確かめは store と道具の形でする）と、会話からタスクを引く索引 `ix_tasks_conversation`（`conversation_id` が空でない行だけ）。前からある行は `other` になる。書くのは `src/questions/store.ts`。
 - 入口: `src/db/database.ts`（`openDatabase`）
 - 使うもの: `node:sqlite` だけ（型として `engine/types.ts` を参照）
 
@@ -214,7 +214,7 @@
 
 ### 成長の数 — `src/growth`（beat G-1）
 - 「使うほど成長する」を数えるだけの部品。新しく書かず、読むときにほかの表を組み合わせる。動きは何も変えない。
-- `stats.ts` の `growthStats(db, { project?, month?, timezone? })`: 製品と月（設定のタイムゾーン）ごとの数。動いたタスクの数（ひな形と一度も動いていないものを除く）・質問の数とタスクあたりの数・答えた数と `kept` の割合・話題ごとの割合（`kind: 'ai'` の行だけ）・判定役が聞いた数（`tools/judge-stats.ts` の `judgeStats` の日ごとの `ask`）・Pending に積んだ数・持ち主の確かめ（経過 `owner_check`）のうち Not enough（`insufficient`）の割合・スキルごとの使われ方（`tool_calls` の成功した `skill_view` を、その会話を実行の会話に持つタスクにつなぎ、タスクの今の状態で done / failed / cancelled / まだ、を数える。タスクでない会話は回数だけ、振り返りの実行は数えない。会話を消した分は結び付きが消えるので落ちる）。持ち主の文・命令の文・題は返さない。
+- `stats.ts` の `growthStats(db, { project?, month?, timezone? })`: 製品と月（設定のタイムゾーン）ごとの数。動いたタスクの数（ひな形と一度も動いていないものを除く）・質問の数とタスクあたりの数（その月に作った質問の数 ÷ その月に作って動いたタスクの数）・仮の答えの当たり率（仮の答え `chosen` がある質問だけで、答えた数と `kept` の数。仮の答えの無い質問は `noAssumption` に別に数える）・話題ごとの同じ数（`kind: 'ai'` の行だけ。一覧に無い話題は後ろに）・判定役が聞いた数（`tools/judge-stats.ts` の `judgeStats` の日ごとの `ask`）・Pending に積んだ数・持ち主の確かめ（経過 `owner_check`）のうち Not enough（`insufficient`）の割合・スキルごとの使われ方（`tool_calls` の成功した `skill_view` を、その会話を実行の会話に持つタスクにつなぎ、タスクの今の状態で done / failed / cancelled / まだ、を数える。子の担当〔`agent_run`〕の会話での使用は、`parent_run_id` から親の実行の会話をたどって親のタスクに数える。タスクでない会話は回数だけ、振り返りの実行は数えない。会話を消した分は結び付きが消えるので落ちる）。`skillsCountedSince` はいちばん古い `tool_calls` の時刻（無ければ null）で、成否を数えられるのはそこから（`tool_calls` は消す決まりが無く残る。チャットの会話を消すと、その分は落ちる）。持ち主の文・命令の文・題は返さない。
 - 入口: `src/growth/stats.ts`
 - 使うもの: `db`（表 `tasks` `questions` `judge_calls` `pending_actions` `task_events` `tool_calls` `engine_runs` `conversations`）、`questions/store.ts`（話題の一覧）、`tools/judge-stats.ts`
 
@@ -307,9 +307,9 @@
 - `routes-questions.ts` の答えの口（beat 5-2a-s）: `POST /api/questions/:id/answer` は `QuestionStore.answer` を呼び、`{ question, kind, fixTaskId, reopenedTaskId, resumedTaskId, reopenedItem, repeated }` を返す（形の誤りは 400、開き直せないタスクは 409、知らない番号は 404）。動かすタスク（戻した・開き直した・直しの）はワーカーにすぐ回す（`requestRun`）
 - `routes-questions.ts` の `answerQuestion`（beat 5-2b-s）: 答えの口の中身（`QuestionStore.answer`、誤りの形、`acceptance.changed`、`DECISIONS.md` の 1 行〔`kind` が `ai` でない行は `fromBeat` で「beat asked」〕、kv の区切りの数を消す、`requestRun`）をまとめた関数。`POST /api/questions/:id/answer` と `routes-tasks.ts` の `POST /api/tasks/:id/answer`（`text` は 4,000 文字まで。待っている質問 `waitingQuestion` へ `{ choice: null, text }` で回す。質問の行が無ければ 409）が使う。答える所は質問票の 1 つ
 - 判定役の呼び出しの集計（beat 5-J1）: `GET /api/judge/stats?days=7&project=<id>|none` が `judgeStats`（`src/tools/judge-stats.ts`）の結果を返す（日・実行・理由のキー・確かめの種類・判定役のモデルごとの数とトークンと時間。日は設定のタイムゾーンで区切り、`days` は 1〜90）。画面はまだ無い。
-- 成長の数の口（beat G-1、`routes-growth.ts`）: `GET /api/growth/stats?project=<id>|none&month=YYYY-MM`（どちらも任意）が `growthStats` の結果（`{ month, projectId, buckets }`）を返す。形の違う月は 400 `http.bad_month`。読むだけ。
+- 成長の数の口（beat G-1、`routes-growth.ts`）: `GET /api/growth/stats?project=<id>|none&month=YYYY-MM`（どちらも任意）が `growthStats` の結果（`{ month, projectId?, skillsCountedSince, buckets }`。`projectId` は製品で絞ったときだけ）を返す。形の違う月は 400 `http.bad_month`。読むだけ。
 - 入口: `src/web/server.ts`
-- 使うもの: `App`、`config`、`memory`、`tasks`、`tools`（承認・スキル）、`curiosity`、`uploads`、`engine`（`bus`）、`projects`、`src/shared`
+- 使うもの: `App`、`config`、`memory`、`tasks`、`tools`（承認・スキル）、`curiosity`、`uploads`、`engine`（`bus`）、`projects`、`growth`、`src/shared`
 
 ### 初期ファイルとルール — `templates/`
 - `rules.md`: beat の基本ルール（英語）。新しい会話の最初に system へ入る（作業フォルダに写さず、毎回ここから読む）。返事は「持ち主が書いた言語で返す」。

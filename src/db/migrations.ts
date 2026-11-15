@@ -576,6 +576,7 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_judge_calls_run ON judge_calls (run_id);
   `,
   `
-  ALTER TABLE questions ADD COLUMN category TEXT NOT NULL DEFAULT 'other' CHECK (category IN ('scope', 'ui', 'data', 'naming', 'tech', 'security', 'other'));
+  ALTER TABLE questions ADD COLUMN category TEXT NOT NULL DEFAULT 'other';
+  CREATE INDEX ix_tasks_conversation ON tasks (conversation_id) WHERE conversation_id IS NOT NULL;
   `,
 ];
