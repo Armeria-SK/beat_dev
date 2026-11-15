@@ -282,17 +282,7 @@ test('ID を変えても開いていた行は開いたまま: 開いている行
   assert.ok(screen.includes('renameModel(c, id, next)).then(ok => { if (ok) onRenamed(next); })'));
   assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `p:${p.id}`, `p:${next}`))}'));
   assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `m:${m.id}`, `m:${next}`))}'));
-});
-
-test('モデルを消すボタンは、Edit を開かなくても行の頭に見える（詳しい欄の一番下に埋めない）', () => {
-  const screen = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
-  const row = screen.slice(screen.indexOf('function ModelRow('), screen.indexOf('function AddModel('));
-  const head = row.slice(row.indexOf('{reach && <Pill'));
-  assert.ok(head.includes("aria-label={t('ui.set.list.remove', name)}") && head.includes('onClick={() => setRemoving(true)}'), '行の頭に Remove がある');
-  assert.ok(!row.includes('`${k}:remove`'), '詳しい欄の中の行は無くす（消す口は 1 つ）');
-  assert.ok(row.includes('below={(open || removing) && ('), '確かめは Edit を開いていなくても行の下に出る');
-  assert.ok(row.includes("<RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')}"), '消す前の確かめは今までどおり');
-  assert.equal(en['ui.set.model.removeShort'], 'Remove');
+  assert.ok(screen.includes("onClick={() => setRemoving(true)}>{t('ui.set.model.removeShort')}") && screen.includes("{removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')}"), 'モデルを消すのは RowConfirm の確かめを通す');
 });
 
 test('種類を Anthropic に変える: 鍵の名前が無く、ANTHROPIC_API_KEY をほかの提供元が使っていれば、自分の鍵の名前を持たせる（鍵を共有しない）', () => {

@@ -6,7 +6,7 @@ import { runGit } from './allowlist-git.ts';
 import { pipeBound } from './allowlist-pipe.ts';
 import { cmdHostArgs, parsePs, psArgs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
 import { toolFor } from './allowlist-tools.ts';
-import { isPowerShell, lexShell, type LexFail, type ShellKind, type Statement, type Word } from './shell-lex.ts';
+import { isPowerShell, lexShell, type LexFail, type Statement, type Word } from './shell-lex.ts';
 
 export * from './allowlist-core.ts';
 

@@ -82,12 +82,6 @@ export class FakePage implements PageHandle {
   mutate(site: FakeSite): void { this.#site = site; }
   navigateTo(url: string): void { this.#url = url; }
 
-  async countRole(role: string, name: string): Promise<number> { return (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name).length; }
-  async stateOf(role: string, name: string, nth: number): Promise<ElementState | undefined> {
-    const row = (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name)[nth];
-    return row === undefined ? undefined : row.state ?? { visible: true, enabled: true };
-  }
-
   #rows(role: string, name: string): FakeRow[] { return (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name); }
 
   async locate(target: ElementTarget): Promise<ElementDetail | undefined> {

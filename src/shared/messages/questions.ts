@@ -8,6 +8,7 @@ const en = {
   'empty': 'The question is empty',
   'options_count': 'Give 2 to 4 options',
   'option_empty': 'An option is empty',
+  'bad_category': 'category must be one of: {categories}',
   'chosen_required': 'Give chosen (the number of the option you go ahead with), or set blocking when you cannot go on without the answer',
   'chosen_range': 'chosen must be the number of one of the options (0 to {max})',
   'duplicate': 'The same question is already open for this task (#{id})',

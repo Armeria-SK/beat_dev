@@ -37,7 +37,6 @@ function outsideRead(s: Started): { path: string; command: string } {
 const post = (s: Started, text: string, extra: Record<string, unknown> = {}) => s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text, ...extra });
 const isClassifier = (req: { tools: unknown[]; system: { frozen: string } }) => req.tools.length === 0 && req.system.frozen.includes('safety checker');
 const classifierText = (s: { adapter: () => FakeAdapter }): string => s.adapter().calls.filter(isClassifier).map(c => JSON.stringify(c.messages) + c.system.frozen + c.system.dynamic).join('\n');
-const judgeShown = (s: { adapter: () => FakeAdapter }, index: number): string => { const c = s.adapter().calls.filter(isClassifier)[index]!; return JSON.stringify(c.messages) + c.system.frozen + c.system.dynamic; };
 const autoRows = (s: { app: App }) => s.app.db.prepare("SELECT status, scope, reasons FROM approvals WHERE scope = 'auto'").all() as Array<{ status: string; scope: string; reasons: string }>;
 
 test('自動承認（エンジン）: 外のメモを読むコマンドは、判定役（同じモデル）が allow なら札なしで動き、判定役が見るのは利用者の最後の発言と操作だけ', async t => {

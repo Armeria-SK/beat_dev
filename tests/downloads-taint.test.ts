@@ -67,25 +67,31 @@ function tinyPdf(text: string): Buffer {
   ].join('\n'), 'latin1');
 }
 
-test('downloads-taint: file_read が downloads/ の下を読んだら「外から読んだ」印を付ける', async t => {
-  const s = setup(t);
-  put(s, 'downloads/a.txt', 'downloaded text');
-  const out = await s.call('file_read', { path: 'downloads/a.txt' });
-  assert.equal(out.decision, 'allow');
-  assert.ok(!out.output.isError);
-  assert.equal(s.ctx.taint.tainted, true, 'downloads/ の下を読んだ実行は印を持つ');
-  assert.deepEqual(s.ctx.taint.sources, ['file_read']);
-});
+const MARK_ROWS: Array<{ name: string; files: Array<[string, Buffer | string]>; tool: string; args: unknown; shows?: RegExp[]; hides?: RegExp; tainted: boolean; why?: string }> = [
+  { name: 'downloads-taint: file_read が downloads/ の下を読んだら「外から読んだ」印を付ける', files: [['downloads/a.txt', 'downloaded text']], tool: 'file_read', args: { path: 'downloads/a.txt' }, tainted: true, why: 'downloads/ の下を読んだ実行は印を持つ' },
+  { name: 'downloads-taint: file_read が downloads/ の外を読んだら印を付けない', files: [['notes/a.txt', 'plain text']], tool: 'file_read', args: { path: 'notes/a.txt' }, tainted: false, why: 'downloads/ の外は印を付けない' },
+  { name: 'downloads-taint: file_search が downloads/ の下の行を返したら印を付ける', files: [['downloads/a.txt', 'downloaded text']], tool: 'file_search', args: { text: 'downloaded' }, shows: [/downloads\/a\.txt:1: downloaded text/u], tainted: true, why: 'downloads/ の下の行を返した検索は印を持つ' },
+  { name: 'downloads-taint: file_search が downloads/ の外だけに合えば印を付けない', files: [['notes/a.txt', 'plain text']], tool: 'file_search', args: { text: 'plain' }, shows: [/notes\/a\.txt:1: plain text/u], tainted: false, why: 'downloads/ の外だけに合えば印を付けない' },
+  { name: 'downloads-taint: file_search の名前だけの検索でも、downloads/ の下の名前を返したら印を付ける（名前は相手が決める）', files: [['downloads/a.txt', 'downloaded text']], tool: 'file_search', args: { name: 'a.txt' }, shows: [/downloads\/a\.txt/u], tainted: true, why: 'downloads/ の下の名前を返した検索は印を持つ' },
+  { name: 'downloads-taint: file_search の名前だけの検索が downloads/ の外だけに合えば印を付けない', files: [['downloads/b.txt', 'downloaded text'], ['notes/a.txt', 'plain text']], tool: 'file_search', args: { name: 'a.txt' }, shows: [/notes\/a\.txt/u], hides: /downloads/u, tainted: false, why: 'downloads/ の外だけに合えば印を付けない' },
+  { name: 'downloads-taint: file_search の名前だけの検索が downloads/ の中と外の両方に合えば印を付ける', files: [['downloads/b.txt', 'downloaded text'], ['notes/a.txt', 'plain text']], tool: 'file_search', args: { name: '*.txt' }, shows: [/notes\/a\.txt/u, /downloads\/b\.txt/u], tainted: true },
+  { name: 'downloads-taint: file_list が downloads/ の中を一覧したら印を付ける', files: [['downloads/a.txt', 'downloaded text']], tool: 'file_list', args: { path: 'downloads' }, shows: [/a\.txt/u], tainted: true, why: 'downloads/ の下の名前を返した一覧は印を持つ' },
+  { name: 'downloads-taint: doc_read が downloads/ の下を読んだら印を付ける（Q14 の確認）', files: [['downloads/a.pdf', tinyPdf('Hello PDF')]], tool: 'doc_read', args: { path: 'downloads/a.pdf' }, tainted: true, why: 'doc_read は downloads/ の下でも必ず印を付ける' },
+];
 
-test('downloads-taint: file_read が downloads/ の外を読んだら印を付けない', async t => {
-  const s = setup(t);
-  put(s, 'notes/a.txt', 'plain text');
-  const out = await s.call('file_read', { path: 'notes/a.txt' });
-  assert.equal(out.decision, 'allow');
-  assert.ok(!out.output.isError);
-  assert.equal(s.ctx.taint.tainted, false, 'downloads/ の外は印を付けない');
-  assert.deepEqual(s.ctx.taint.sources, []);
-});
+for (const row of MARK_ROWS) {
+  test(row.name, async t => {
+    const s = setup(t);
+    for (const [name, data] of row.files) put(s, name, data);
+    const out = await s.call(row.tool, row.args);
+    assert.equal(out.decision, 'allow');
+    assert.ok(!out.output.isError);
+    for (const shown of row.shows ?? []) assert.match(out.output.content, shown);
+    if (row.hides) assert.doesNotMatch(out.output.content, row.hides);
+    assert.equal(s.ctx.taint.tainted, row.tainted, row.why);
+    assert.deepEqual(s.ctx.taint.sources, row.tainted ? [row.tool] : []);
+  });
+}
 
 test('downloads-taint: file_read が断られた読み取り（外・秘密）は印を付けない', async t => {
   const s = setup(t);
@@ -98,69 +104,6 @@ test('downloads-taint: file_read が断られた読み取り（外・秘密）�
   assert.equal(secret.decision, 'deny');
   assert.equal(s.ctx.taint.tainted, false, '秘密の場所は印を付けない');
   assert.deepEqual(s.ctx.taint.sources, []);
-});
-
-test('downloads-taint: file_search が downloads/ の下の行を返したら印を付ける', async t => {
-  const s = setup(t);
-  put(s, 'downloads/a.txt', 'downloaded text');
-  const out = await s.call('file_search', { text: 'downloaded' });
-  assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /downloads\/a\.txt:1: downloaded text/u);
-  assert.equal(s.ctx.taint.tainted, true, 'downloads/ の下の行を返した検索は印を持つ');
-  assert.deepEqual(s.ctx.taint.sources, ['file_search']);
-});
-
-test('downloads-taint: file_search が downloads/ の外だけに合えば印を付けない', async t => {
-  const s = setup(t);
-  put(s, 'notes/a.txt', 'plain text');
-  const out = await s.call('file_search', { text: 'plain' });
-  assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /notes\/a\.txt:1: plain text/u);
-  assert.equal(s.ctx.taint.tainted, false, 'downloads/ の外だけに合えば印を付けない');
-  assert.deepEqual(s.ctx.taint.sources, []);
-});
-
-test('downloads-taint: file_search の名前だけの検索でも、downloads/ の下の名前を返したら印を付ける（名前は相手が決める）', async t => {
-  const s = setup(t);
-  put(s, 'downloads/a.txt', 'downloaded text');
-  const out = await s.call('file_search', { name: 'a.txt' });
-  assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /downloads\/a\.txt/u);
-  assert.equal(s.ctx.taint.tainted, true, 'downloads/ の下の名前を返した検索は印を持つ');
-  assert.deepEqual(s.ctx.taint.sources, ['file_search']);
-});
-
-test('downloads-taint: file_search の名前だけの検索が downloads/ の外だけに合えば印を付けない', async t => {
-  const s = setup(t);
-  put(s, 'downloads/b.txt', 'downloaded text');
-  put(s, 'notes/a.txt', 'plain text');
-  const out = await s.call('file_search', { name: 'a.txt' });
-  assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /notes\/a\.txt/u);
-  assert.doesNotMatch(out.output.content, /downloads/u);
-  assert.equal(s.ctx.taint.tainted, false, 'downloads/ の外だけに合えば印を付けない');
-  assert.deepEqual(s.ctx.taint.sources, []);
-});
-
-test('downloads-taint: file_search の名前だけの検索が downloads/ の中と外の両方に合えば印を付ける', async t => {
-  const s = setup(t);
-  put(s, 'downloads/b.txt', 'downloaded text');
-  put(s, 'notes/a.txt', 'plain text');
-  const out = await s.call('file_search', { name: '*.txt' });
-  assert.match(out.output.content, /notes\/a\.txt/u);
-  assert.match(out.output.content, /downloads\/b\.txt/u);
-  assert.equal(s.ctx.taint.tainted, true);
-  assert.deepEqual(s.ctx.taint.sources, ['file_search']);
-});
-
-test('downloads-taint: file_list が downloads/ の中を一覧したら印を付ける', async t => {
-  const s = setup(t);
-  put(s, 'downloads/a.txt', 'downloaded text');
-  const out = await s.call('file_list', { path: 'downloads' });
-  assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /a\.txt/u);
-  assert.equal(s.ctx.taint.tainted, true, 'downloads/ の下の名前を返した一覧は印を持つ');
-  assert.deepEqual(s.ctx.taint.sources, ['file_list']);
 });
 
 test('downloads-taint: file_list は、作業フォルダの 1 階層だけ（downloads/ という固定の名前だけ）なら印を付けず、downloads/ の中まで入ったら付ける', async t => {
@@ -188,14 +131,4 @@ test('downloads-taint: file_list が downloads/ の外や空の downloads/ を�
   assert.ok(!empty.output.isError);
   assert.equal(s.ctx.taint.tainted, false, '名前を何も返していないので印を付けない');
   assert.deepEqual(s.ctx.taint.sources, []);
-});
-
-test('downloads-taint: doc_read が downloads/ の下を読んだら印を付ける（Q14 の確認）', async t => {
-  const s = setup(t);
-  put(s, 'downloads/a.pdf', tinyPdf('Hello PDF'));
-  const out = await s.call('doc_read', { path: 'downloads/a.pdf' });
-  assert.equal(out.decision, 'allow');
-  assert.ok(!out.output.isError);
-  assert.equal(s.ctx.taint.tainted, true, 'doc_read は downloads/ の下でも必ず印を付ける');
-  assert.deepEqual(s.ctx.taint.sources, ['doc_read']);
 });

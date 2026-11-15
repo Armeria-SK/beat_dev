@@ -16,7 +16,7 @@ const TILE_LABEL = { proposals: 'ui.overview.proposals', questions: 'ui.overview
 const TILE_SOME = { proposals: 'ui.overview.proposals.some', questions: 'ui.overview.questions.some', pending: 'ui.overview.pending.some' } as const satisfies Record<TileId, string>;
 const TILE_NONE = { proposals: 'ui.overview.proposals.none', questions: 'ui.overview.questions.none', pending: 'ui.overview.pending.none' } as const satisfies Record<TileId, string>;
 const COLUMN_KEY = {
-  proposed: 'ui.kanban.col.proposed', approved: 'ui.kanban.col.approved', progress: 'ui.kanban.col.progress', done: 'ui.kanban.col.done', failed: 'ui.kanban.col.failed',
+  proposed: 'ui.kanban.col.proposed', approved: 'ui.kanban.col.approved', progress: 'ui.kanban.col.progress', check: 'ui.kanban.col.check', done: 'ui.kanban.col.done', failed: 'ui.kanban.col.failed',
 } as const satisfies Record<ColumnId, string>;
 
 function readStored(key: string): string | null {
@@ -126,7 +126,7 @@ export function MiniBoard({ columns, label, index, className, tagOf }: { columns
           <div key={column.id} className="bt-col" data-col={column.id}>
             <div className="bt-col__head">
               <span className="bt-label">{t(COLUMN_KEY[column.id])}</span>
-              <span className={`bt-count${column.accent ? '' : ' bt-count--quiet'}`} aria-label={t('ui.kanban.count', column.count)}><span className="bt-count__n">{countText(column.count)}</span></span>
+              <span className={`bt-count${column.accent && column.id === 'proposed' ? '' : ' bt-count--quiet'}`} aria-label={t('ui.kanban.count', column.count)}><span className="bt-count__n">{countText(column.count)}</span></span>
             </div>
             {column.cards.map(card => <MiniCard key={card.key} card={card} sessionLabel={t('ui.kanban.session')} untitled={t('ui.session.untitled')} tag={tagOf?.(card) ?? null} />)}
             {column.more > 0 && <a className="bt-mini bt-mini--more" href="#/kanban">{t('ui.kanban.more', column.more)}</a>}

@@ -2,6 +2,7 @@ import { api, ApiError, type Task } from '../api.ts';
 import { toast, type FeedbackItem } from '../feedback.ts';
 import { t } from '../i18n/index.ts';
 import type { SheetAction } from '../task-meta.ts';
+import { routeHash } from './routes.ts';
 
 export type TaskOp = SheetAction | 'reject' | 'restore' | 'stop';
 
@@ -93,4 +94,24 @@ export function taskButtons(status: Task['status'], actions: ReadonlyArray<{ act
   if (status === 'running' && runningHere) buttons.unshift({ op: 'stop', primary: false });
   if (status === 'cancelled') buttons.unshift({ op: 'restore', primary: true });
   return buttons;
+}
+
+export interface CheckChoice { item: string; result: 'checked' | 'insufficient'; note?: string }
+
+export async function checkOp(task: Pick<Task, 'id' | 'title'>, version: number, choice?: CheckChoice): Promise<boolean> {
+  try {
+    if (!choice) {
+      await api.checkTask(task.id, version);
+      toast({ kind: 'done', icon: 'check', title: t('ui.check.toast.checked'), body: task.title });
+      return true;
+    }
+    const note = choice.note?.trim();
+    const { fix } = await api.checkItem(task.id, choice.item, { result: choice.result, version, ...(note ? { note } : {}) });
+    if (fix) toast({ icon: 'check', title: t('ui.check.toast.fix'), body: fix.title, href: routeHash({ view: 'task', id: fix.id }) });
+    else toast({ kind: 'done', icon: 'check', title: t('ui.check.toast.checked'), body: choice.item });
+    return true;
+  } catch (error) {
+    reportOpError(error, REAL, error instanceof ApiError && error.status === 409 ? t('ui.check.stale') : undefined);
+    return false;
+  }
 }

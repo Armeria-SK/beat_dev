@@ -804,7 +804,7 @@ export class ChatEngine {
     const callTool = (toolCall: ToolCall, truncated?: { message: string; raw: string }) => runToolCall(toolCall, ctx, {
       registry: tools!.registry, approvals: tools!.approvals, pending: tools!.pending, productRoots: allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
       permissionMode: () => this.#modeOf(conversationId),
-      autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal, judgeCall),
+      autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, prompt, classifierSignal, judgeCall),
       lastUserRequest: () => (task ? d.tasks?.judgeRequest(task.task.id) ?? ''
         : agent ? (agent.parent.task ? d.tasks?.judgeRequest(agent.parent.task.id) ?? '' : this.#lastUserRequest(agent.parent.conversationId))
         : this.#lastUserRequest(conversationId)),
@@ -911,7 +911,7 @@ export class ChatEngine {
   // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。
   // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。道具は渡さない。
   // 判定役の呼び出しは engine_runs に入れず、会話も作らない
-  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string | JudgeReply> {
+  async #autoAsk(route: Route, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string | JudgeReply> {
     const config = this.#d.config();
     const named = config.routing.judge ?? [];
     const routes: Route[] = named.length

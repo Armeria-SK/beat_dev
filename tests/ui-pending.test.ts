@@ -277,6 +277,7 @@ test('ui/pending: Decided の行は decidedText の erased のときに "Details
   const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
   assert.ok(pane.includes('const line = decidedText(actionView(row));'), 'Decided の行は decidedText から組む');
   assert.ok(pane.includes(`{line.erased && <span className="ui-pending__title bt-meta">{t('ui.pending.erased')}</span>}`), '中身を消した行に erased の文を出す');
+  assert.ok(pane.includes('extraShown(row.title, view.extra)'), 'Other input は extraShown を通す');
 });
 
 test('4-4 タスクごとの Pending の数: 待っている行だけを task_id ごとに数え、タスクの無い行と決めた行は数えない', () => {
@@ -308,21 +309,6 @@ test('ui/pending: Other input は、題の終わりにもう出ている path �
   assert.equal(extraShown('Write to a file: a.md', masked), masked);
   assert.equal(extraShown('Write to a file: a.md', '["a.md"]'), '["a.md"]');
   assert.equal(extraShown('Write to a file: a.md', null), null);
-});
-
-test('ui/pending: 行の Approve / Reject は見出しの横（1 段目）、中身（コマンド・書く中身・理由・パス・出どころ）は下の段で欄の幅いっぱい（持ち主 2026-11-14。PendingPane と pending.css の配線）', () => {
-  const pane = readFileSync(new URL('../web/src/ui/panes/PendingPane.tsx', import.meta.url), 'utf8');
-  const css = readFileSync(new URL('../web/src/ui/styles/pending.css', import.meta.url), 'utf8');
-  const item = pane.slice(pane.indexOf('function PendingItem('), pane.indexOf('function AcceptanceItem('));
-  const at = (text: string) => { const i = item.indexOf(text); assert.ok(i >= 0, `${text} が PendingItem にある`); return i; };
-  assert.ok(at('className="bt-pending__what"') < at('className="bt-pending__actions"'), 'ボタンは見出しのすぐあと');
-  assert.ok(at('className="bt-pending__actions"') < at('className="ui-pending__detail"'), '中身はボタンのあとの段');
-  const detail = item.slice(at('className="ui-pending__detail"'));
-  for (const part of ['ui-pending__code', '<ActionBody', 'ui-pending__why', 'bt-pending__from']) assert.ok(detail.includes(part), `${part} は下の段の中`);
-  assert.ok(!item.slice(at('className="bt-pending__what"'), at('className="bt-pending__actions"')).includes('view.inline'), 'コマンドは見出しの行に入れない');
-  assert.match(css, /\.ui-pending__detail \{[^}]*grid-column: 1 \/ -1;/u, '下の段は列を全部使う');
-  assert.match(css, /\.ui-pending__reject \{[^}]*grid-column: 1 \/ -1;/u, 'Reject の理由の欄も幅いっぱい');
-  assert.ok(pane.includes('extraShown(row.title, view.extra)'), 'Other input は extraShown を通す');
 });
 
 test('ui/pending: Decided の行を開くと、却下の理由の全文と、実行の出力の頭が出る。出すものが無い行は開けない（backlog 489）', () => {

@@ -71,7 +71,3 @@ export function ownerKeysOf(keys: Iterable<string>): string[] {
 export function refusedKeysOf(keys: Iterable<string>): string[] {
   return [...new Set([...keys].filter(key => REASON_ORDER.get(key) === 1))];
 }
-
-export function orderOf(key: string): Order {
-  return REASON_ORDER.get(key) ?? 5;
-}

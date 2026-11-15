@@ -18,8 +18,6 @@ import {
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
-import { fileEdit, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
-import { shellRun } from '../src/tools/builtin/shell.ts';
 import { planAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -28,6 +26,7 @@ import { storeText } from '../src/shared/messages/stores.ts';
 import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
+import { assertProjectFileGuarded } from './helpers/project-file-guard.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
@@ -471,32 +470,8 @@ test('3-1b 起動のとき（repairAll）: 遅れたファイルを DB の中身
   assert.equal(f.store.verifyFrozen(PROJECT), 'ok');
 });
 
-test('3-1b 守り: ふつうのファイルの道具とシェルからは acceptance.json を読めない・書けない（判定役が許すと答えても）', async t => {
-  const paths = resolvePaths(tempDir(t));
-  mkdirSync(paths.workspace, { recursive: true });
-  const dir = join(paths.projects, PROJECT);
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, 'acceptance.json');
-  writeFileSync(file, '{"secret":"list"}');
-  const config = parseConfig(testConfig());
-  const db = openDatabase(':memory:', MIGRATIONS);
-  const policy = buildPolicy(config, paths);
-  const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(shellRun);
-  const ctx: ToolContext = {
-    runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy,
-    workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto', project: { id: PROJECT },
-  };
-  const run = (name: string, args: unknown) => runToolCall({ id: `c-${Math.random()}`, name, arguments: args }, ctx, {
-    registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => 'auto', lastUserRequest: () => 'edit the list',
-    conversationTainted: () => false, autoClassify: async () => '{"decision":"allow","reason":"ok"}',
-  });
-  for (const [name, args] of [['file_read', { path: file }], ['file_write', { path: file, content: 'x' }], ['file_edit', { path: file, old: 'secret', new: 'x' }], ['shell_run', { command: `cat "${file.replaceAll('\\', '/')}"` }]] as const) {
-    const result = await run(name, args);
-    assert.equal(result.decision, 'deny', name);
-    assert.doesNotMatch(result.output.content, /"list"/u, name);
-  }
-  assert.equal(readFileSync(file, 'utf8'), '{"secret":"list"}');
-});
+test('3-1b 守り: ふつうのファイルの道具とシェルからは acceptance.json を読めない・書けない（判定役が許すと答えても）', t =>
+  assertProjectFileGuarded(t, { project: PROJECT, name: 'acceptance.json', body: '{"secret":"list"}', leak: /"list"/u, request: 'edit the list' }));
 
 test('3-1b 毎回の system: 製品の文書の言語があれば、製品の行のあとに言語の 1 行。無ければ入らない', () => {
   const at = new Date('2026-11-12T00:00:00Z');

@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import type { ElementState, PageHandle } from '../src/tools/browser/driver.ts';
-import { formatElements, readElements, relocate } from '../src/tools/browser/elements.ts';
+import { formatElements, readElements } from '../src/tools/browser/elements.ts';
 
 // T-05: 触れるものの番号。手本は、固定版の playwright-core（本物のブラウザ）が出した ariaSnapshot
 
@@ -99,30 +98,6 @@ test('長い名前は表示だけ切る（改行は空白にする）。探し�
   assert.equal(table.items[0]!.name.length, 302);
   const line = formatElements(table, 'en');
   assert.ok(line.length < 200 && !line.includes('\n'));
-});
-
-function fakePage(rows: Array<{ role: string; name: string; state?: ElementState }>): PageHandle {
-  const matching = (role: string, name: string) => rows.filter(r => r.role === role && r.name === name);
-  return {
-    countRole: async (role: string, name: string) => matching(role, name).length,
-    stateOf: async (role: string, name: string, nth: number) => matching(role, name)[nth] === undefined ? undefined : (matching(role, name)[nth]!.state ?? { visible: true, enabled: true }),
-  } as unknown as PageHandle;
-}
-
-test('探し直し: 数が同じなら見つかり、見える・有効かも返る', async () => {
-  const table = readElements(fixture('form'), URL_FORM);
-  const rows = table.items.map(e => ({ role: e.role, name: e.name, ...(e.name === '無効' ? { state: { visible: true, enabled: false } } : {}) }));
-  const page = fakePage(rows);
-  assert.deepEqual(await relocate(page, table.items[0]!), { ok: true, state: { visible: true, enabled: true } });
-  assert.deepEqual(await relocate(page, table.items[3]!), { ok: true, state: { visible: true, enabled: false } });
-});
-
-test('探し直し: 数が変わったら「ページが変わった」（実行しない）', async () => {
-  const table = readElements(fixture('form'), URL_FORM);
-  const home = table.items[1]!;
-  assert.deepEqual(await relocate(fakePage([{ role: 'link', name: 'Home' }]), home), { ok: false, reason: 'changed' });
-  assert.deepEqual(await relocate(fakePage([{ role: 'link', name: 'Home' }, { role: 'link', name: 'Home' }, { role: 'link', name: 'Home' }]), home), { ok: false, reason: 'changed' });
-  assert.deepEqual(await relocate(fakePage([]), home), { ok: false, reason: 'changed' });
 });
 
 test('表は、読んだときの URL を持つ（遷移したら捨てる判定に使う）', () => {

@@ -20,7 +20,6 @@ function cmd(names: string, params: string, pos: string, extra?: PsCmd['extra'],
   for (const n of list) CMDS.set(n, spec);
 }
 export const psCmdlet = (name: string): PsCmd | undefined => CMDS.get(name);
-export const psCmdletNames = (): string[] => [...CMDS.keys()];
 
 // プロバイダ付きのパス（env: function: HKLM: など。ドライブ文字 1 つの C: は除く）
 const PROVIDER = /^[A-Za-z][A-Za-z0-9_]+:(?![\\/]{2})/u;
@@ -247,7 +246,6 @@ cmd('expand-archive', 'Path:s LiteralPath:s DestinationPath:s Force', 'path dest
 
 // ── ネットワーク（11.3.4）──
 const WEB = 'Uri:url UseBasicParsing Method:s TimeoutSec:n MaximumRedirection:n UserAgent:s OutFile:path-w Body:s InFile:path-r ContentType:s';
-export const WEB_NAMES = ['invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm'];
 const webExtra: PsCmd['extra'] = (p, acc, _ctx, st) => {
   acc.fetch = true;
   pipedInput(acc, st);
