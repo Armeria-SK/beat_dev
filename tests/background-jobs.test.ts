@@ -30,7 +30,7 @@ function setup(t: { after: (fn: () => void | Promise<void>) => void }, options: 
   const extra: number[] = [];
   t.after(async () => {
     jobs.closeAll();
-    for (const pid of extra) { try { process.kill(pid); } catch { } }
+    for (const pid of extra) { try { process.kill(pid, 'SIGKILL'); } catch { } }
     await new Promise(r => setTimeout(r, 200));
     rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
@@ -70,18 +70,20 @@ async function gone(pids: number[], ms = 10_000): Promise<boolean> {
   return pids.every(pid => !alive(pid));
 }
 
-async function treePids(jobs: BackgroundJobs, id: string): Promise<number[]> {
+async function treePids(jobs: BackgroundJobs, id: string, track: number[]): Promise<number[]> {
   const text = await until(() => {
     const out = jobs.peek(id, 0)?.text ?? '';
     return /ROOT \d+/u.test(out) && /GRAND \d+/u.test(out) ? out : undefined;
   });
-  return [Number(/ROOT (\d+)/u.exec(text)![1]), Number(/GRAND (\d+)/u.exec(text)![1])];
+  const pids = [Number(/ROOT (\d+)/u.exec(text)![1]), Number(/GRAND (\d+)/u.exec(text)![1])];
+  track.push(...pids);
+  return pids;
 }
 
 test('limits are the plan constants', () => {
   assert.deepEqual(
     { ...BACKGROUND_LIMITS },
-    { perConversation: 4, total: 8, ringBytes: 256 * 1024, logBytes: 50 * 1024 * 1024, keepPerConversation: 8, keepTotal: 32, partialLineBytes: 4096, stopWaitMs: 5000, termGraceMs: 5000 },
+    { perConversation: 4, total: 8, ringBytes: 256 * 1024, logBytes: 50 * 1024 * 1024, keepPerConversation: 8, keepTotal: 32, partialLineBytes: 4096, keyHoldBytes: 64 * 1024, stopWaitMs: 5000, termGraceMs: 5000 },
   );
 });
 
@@ -113,11 +115,11 @@ test('wait: returns on timeout and on abort while the command keeps running', as
 });
 
 test('stop: the child and its grandchild are gone afterwards', async t => {
-  const { jobs, start } = setup(t);
+  const { jobs, start, extra } = setup(t);
   const id = start(TREE);
-  const pids = await treePids(jobs, id);
+  const pids = await treePids(jobs, id, extra);
   assert.ok(pids.every(alive));
-  const view = await jobs.stop(id, 'model');
+  const view = await jobs.stop(id, 'model', 'c1');
   assert.equal(view!.state, 'stopped');
   assert.equal(view!.stoppedBy, 'model');
   assert.equal(view!.orphaned, false);
@@ -125,10 +127,10 @@ test('stop: the child and its grandchild are gone afterwards', async t => {
 });
 
 test('closeAll: no child or grandchild survives', async t => {
-  const { jobs, start } = setup(t);
+  const { jobs, start, extra } = setup(t);
   const a = start(TREE);
   const b = start(TREE, { conversationId: 'c2' });
-  const pids = [...await treePids(jobs, a), ...await treePids(jobs, b)];
+  const pids = [...await treePids(jobs, a, extra), ...await treePids(jobs, b, extra)];
   jobs.closeAll();
   assert.equal(jobs.get(a)!.state, 'stopped');
   assert.equal(jobs.get(a)!.stoppedBy, 'system');
@@ -183,7 +185,7 @@ test('log: an uncut log keeps stdout and stderr', async t => {
   const text = readFileSync(view.logPath, 'utf8');
   assert.match(text, /out line/u);
   assert.match(text, /\[stderr\] err line/u);
-  assert.match(view.logPath, /bg-c1-\d+\.log$/u);
+  assert.match(view.logPath, /bg-c1-\d+-[0-9a-f]{8}\.log$/u);
 });
 
 test('stopWhere: stops only the matching commands and waits for them', async t => {
@@ -234,7 +236,7 @@ test('onExit runs exactly once, whether the command exits or is stopped', async 
   await jobs.wait(a, 'c1', 10, new AbortController().signal);
   await jobs.stop(b, 'owner');
   await jobs.stop(b, 'owner');
-  await jobs.stop(a, 'model');
+  await jobs.stop(a, 'model', 'c1');
   jobs.closeAll();
   assert.equal(exited, 1);
   assert.equal(stopped, 1);
@@ -326,15 +328,135 @@ test('onChange reports the start and the end', async t => {
 });
 
 test('POSIX: stop sends SIGTERM first, then SIGKILL after the grace period', { skip: WINDOWS && 'POSIX only' }, async t => {
-  const { jobs, start } = setup(t, { limits: { termGraceMs: 500 } });
+  const { jobs, start, extra } = setup(t, { limits: { termGraceMs: 500 } });
   const polite = start("process.on('SIGTERM', () => { console.log('bye'); process.exit(0); }); console.log('ready'); setInterval(() => {}, 1000);");
   await until(() => jobs.peek(polite, 0)!.text.includes('ready'));
-  await jobs.stop(polite, 'model');
+  await jobs.stop(polite, 'model', 'c1');
   assert.match(jobs.peek(polite, 0)!.text, /bye/u);
   const stubborn = start("process.on('SIGTERM', () => {}); console.log('ROOT ' + process.pid); setInterval(() => {}, 1000);");
   const text = await until(() => { const out = jobs.peek(stubborn, 0)!.text; return /ROOT \d+/u.test(out) ? out : undefined; });
   const pid = Number(/ROOT (\d+)/u.exec(text)![1]);
-  await jobs.stop(stubborn, 'model');
+  extra.push(pid);
+  await jobs.stop(stubborn, 'model', 'c1');
   assert.equal(await gone([pid], 3000), true);
   assert.equal(jobs.get(stubborn)!.state, 'stopped');
+});
+
+test('read: stdout and stderr are joined per stream, so a stderr line never releases half a stdout key', async t => {
+  const { jobs, start } = setup(t);
+  const id = start(`process.stdout.write('loaded key ${KEY.slice(0, 16)}'); setTimeout(() => process.stderr.write('WARN deprecated option\\n'), 200); setTimeout(() => process.stdout.write('${KEY.slice(16)}: ok\\n'), 700); setTimeout(() => {}, 1200);`);
+  const reads: string[] = [];
+  await until(() => { reads.push(jobs.read(id, 'c1')!.text); return reads.join('').includes('WARN'); });
+  await jobs.wait(id, 'c1', 10, new AbortController().signal);
+  reads.push(jobs.read(id, 'c1')!.text);
+  const joined = reads.join('');
+  assert.doesNotMatch(joined, /BBBBBBBB/u);
+  assert.match(joined, /WARN deprecated option\n/u);
+  assert.match(joined, /loaded key \[REDACTED\]: ok\n/u);
+  assert.doesNotMatch(jobs.peek(id, 0)!.text, /BBBBBBBB/u);
+});
+
+test('read: after the ring drops old output, a key straddling the cut is not shown', async t => {
+  const { jobs, start } = setup(t, { limits: { ringBytes: 200 } });
+  const id = start(`process.stdout.write('A'.repeat(150) + '\\n' + 'x'.repeat(4500) + ' ${KEY.slice(0, 20)}'); setTimeout(() => process.stdout.write('${KEY.slice(20)}\\n' + 'C'.repeat(90) + '\\n'), 400); setTimeout(() => {}, 900);`);
+  await until(() => jobs.peek(id, 0)!.text.length > 0 || undefined);
+  await jobs.wait(id, 'c1', 10, new AbortController().signal);
+  const read = jobs.read(id, 'c1', 0)!;
+  assert.doesNotMatch(read.text, /BBBBBBBB/u);
+  assert.ok(read.skipped > 0);
+  assert.doesNotMatch(jobs.peek(id, 0)!.text, /BBBBBBBB/u);
+});
+
+test('log: each manager writes its own file, never over an earlier one', async t => {
+  const { jobs, dir } = setup(t);
+  const other = new BackgroundJobs({ logDir: join(dir, 'tool_outputs') });
+  t.after(() => other.closeAll());
+  const input = { conversationId: 'c1', projectId: 'p1', command: 'x', cwd: dir, file: process.execPath, env: scrubEnv(), fetched: false };
+  const one = jobs.start({ ...input, args: ['-e', "console.log('SESSION-ONE')"] });
+  const two = other.start({ ...input, args: ['-e', "console.log('SESSION-TWO')"] });
+  assert.ok('id' in one && 'id' in two);
+  assert.equal(one.id, two.id);
+  await jobs.wait(one.id, 'c1', 10, new AbortController().signal);
+  await other.wait(two.id, 'c1', 10, new AbortController().signal);
+  const a = jobs.get(one.id)!.logPath; const b = other.get(two.id)!.logPath;
+  assert.notEqual(a, b);
+  await until(() => { try { return readFileSync(a, 'utf8').includes('SESSION-ONE') && readFileSync(b, 'utf8').includes('SESSION-TWO'); } catch { return false; } });
+});
+
+test('start: a conversation id that is not a plain id is rejected', async t => {
+  const { jobs } = setup(t);
+  for (const conversationId of ['../x', 'a:b', 'a/b', '']) {
+    assert.throws(() => jobs.start({ conversationId, projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: ['-e', ''], env: scrubEnv(), fetched: false }), /Invalid conversation id/u);
+  }
+  assert.deepEqual(jobs.list(), []);
+});
+
+test('forget: removes a finished command and its log, only from its own conversation', async t => {
+  const { jobs, start } = setup(t);
+  const done = start("console.log('quick');");
+  const running = start(SLEEP);
+  await jobs.wait(done, 'c1', 10, new AbortController().signal);
+  const logPath = jobs.get(done)!.logPath;
+  await until(() => { try { return statSync(logPath).size > 0; } catch { return false; } });
+  assert.equal(jobs.forget(done, 'c2'), false);
+  assert.equal(jobs.forget(running, 'c1'), false);
+  assert.equal(jobs.forget(done, 'c1'), true);
+  assert.equal(jobs.get(done), undefined);
+  assert.equal(jobs.read(done, 'c1'), undefined);
+  await until(() => { try { statSync(logPath); return false; } catch { return true; } });
+  assert.equal(jobs.forget(done, 'c1'), false);
+});
+
+test('stop: a model stop works only from the conversation that started the command', async t => {
+  const { jobs, start } = setup(t);
+  const id = start(SLEEP);
+  assert.equal(await jobs.stop(id, 'model', 'c2'), undefined);
+  assert.equal(jobs.get(id)!.state, 'running');
+  assert.equal((await jobs.stop(id, 'model', 'c1'))!.state, 'stopped');
+});
+
+test('the stored command is redacted', async t => {
+  const { jobs, start } = setup(t);
+  const id = start(SLEEP, { command: `API_KEY=${KEY} npm run dev` });
+  const view = jobs.get(id)!;
+  assert.doesNotMatch(view.command, /BBBBBBBB/u);
+  assert.match(view.command, /npm run dev$/u);
+  assert.doesNotMatch(JSON.stringify(jobs.list()), /BBBBBBBB/u);
+});
+
+test('closeAll leaves the manager closed: later starts are refused', async t => {
+  const { jobs } = setup(t);
+  jobs.closeAll();
+  assert.deepEqual(jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: ['-e', SLEEP], env: scrubEnv(), fetched: false }), { refused: 'closed' });
+  assert.deepEqual(jobs.list(), []);
+});
+
+test('stdin is passed to the command', async t => {
+  const { jobs, start } = setup(t);
+  const id = start("let s = ''; process.stdin.on('data', d => { s += d; }); process.stdin.on('end', () => console.log('got ' + s.trim()));", { stdin: 'hello from stdin\n' });
+  await jobs.wait(id, 'c1', 10, new AbortController().signal);
+  assert.equal(jobs.read(id, 'c1')!.text, 'got hello from stdin\n');
+});
+
+test('peek leaves the model read position and unread alone', async t => {
+  const { jobs, start } = setup(t);
+  const id = start("console.log('first');");
+  await jobs.wait(id, 'c1', 10, new AbortController().signal);
+  assert.equal(jobs.peek(id, 0)!.text, 'first\n');
+  assert.equal(jobs.get(id)!.unread, true);
+  assert.equal(jobs.read(id, 'c1')!.text, 'first\n');
+  assert.equal(jobs.get(id)!.unread, false);
+  assert.equal(jobs.peek(id, 0)!.text, 'first\n');
+  assert.equal(jobs.read(id, 'c1')!.text, '');
+});
+
+test('a spawn that throws at once ends as exited with the error and runs onExit once', async t => {
+  const { jobs } = setup(t);
+  let exits = 0;
+  const result = jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: ['bad\u0000arg'], env: scrubEnv(), fetched: false, onExit: () => { exits += 1; } });
+  assert.ok('id' in result);
+  const view = jobs.get(result.id)!;
+  assert.equal(view.state, 'exited');
+  assert.ok(view.spawnError);
+  assert.equal(exits, 1);
 });
