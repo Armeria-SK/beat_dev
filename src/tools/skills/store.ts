@@ -276,6 +276,7 @@ export class SkillStore {
   }
 
   draft(input: { name: string; description: string; body: string; reason?: string | undefined; change?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean }): SkillDraft {
+    if (!this.#grow()) throw new SkillError('skill.growth_off');
     validate(input);
     const pending = this.#db.prepare("SELECT COUNT(*) AS n FROM skill_drafts WHERE status = 'pending'").get() as { n: number };
     if (pending.n >= 20) throw new SkillError('skill.too_many_drafts');

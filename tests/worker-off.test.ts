@@ -248,3 +248,62 @@ test('a Build whose own sub-task is running shows no waiting reason (it is worki
   assert.equal(s.app.worker.waitReason(s.app.tasks.get(parent.id)!), null);
   assert.equal(s.app.worker.status().waiting[parent.id], undefined);
 });
+
+test('worker Off: a repeating task beat proposed and the owner approved runs', async t => {
+  const s = await setup(t);
+  const proposal = s.app.tasks.create({ title: 'weekly tidy', origin: 'self', actor: 'beat', cron: '* * * * *', timezone: 'UTC', propose: true });
+  s.app.tasks.approve(proposal.id);
+  s.app.db.prepare("UPDATE tasks SET run_at = ? WHERE id = ?").run(s.clock.now - 1000, proposal.id);
+  s.adapter().scripts.push(complete);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal((s.app.db.prepare('SELECT status FROM tasks WHERE parent_id = ?').get(proposal.id) as { status: string }).status, 'done');
+});
+
+test('worker Off: the child and grandchild of a run of a repeating task beat set up stay held; a press on the run lets its chain through', async t => {
+  const s = await setup(t);
+  const template = s.app.tasks.create({ title: 'post a summary', origin: 'user', actor: 'beat', cron: '* * * * *', timezone: 'UTC' });
+  s.app.db.prepare("UPDATE tasks SET status = 'scheduled', run_at = ? WHERE id = ?").run(s.clock.now - 1000, template.id);
+  assert.equal(await s.app.worker.tick(), 'idle');
+  const run = s.app.db.prepare('SELECT id FROM tasks WHERE parent_id = ?').get(template.id) as { id: string };
+  s.app.db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(run.id);
+  const child = s.app.tasks.create({ title: 'part 1', origin: 'user', actor: 'beat', spawnedBy: run.id });
+  const grandchild = s.app.tasks.create({ title: 'part 1a', origin: 'user', actor: 'beat', spawnedBy: child.id });
+  s.app.db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(child.id);
+  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(grandchild.id)!), { kind: 'off' });
+  s.app.db.prepare("UPDATE tasks SET status = 'ready' WHERE id = ?").run(child.id);
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(grandchild.id);
+  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(child.id)!), { kind: 'off' });
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(s.adapter().calls.length, 0);
+  s.app.kv.set(`task-owner-run:${run.id}`, '1');
+  assert.equal(s.app.worker.waitReason(s.app.tasks.get(child.id)!), null, 'the owner pressed the run, so its parts are the owner work');
+});
+
+test('worker Off: a pressed task that is cancelled and then restored still runs', async t => {
+  const s = await setup(t);
+  const self = s.app.tasks.create({ title: 'tidy the notes', origin: 'self', actor: 'worker' });
+  s.app.worker.requestRun(self.id);
+  s.app.tasks.finish(self.id, 'cancelled', null, 'user');
+  assert.equal(await s.app.worker.tick(), 'idle', 'the one-shot press is dropped while cancelled');
+  s.app.tasks.uncancel(self.id, 'user');
+  s.adapter().scripts.push(complete);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(self.id)!.status, 'done');
+});
+
+test('worker On: a task beat started that the owner pressed keeps going even with autonomy off (the press is the owner asking)', async t => {
+  const s = await setup(t, c => { c.worker.enabled = true; c.worker.autonomy = false; });
+  const self = s.app.tasks.create({ title: 'tidy the notes', origin: 'self', actor: 'worker' });
+  s.app.worker.requestRun(self.id);
+  s.adapter().scripts.push(checkpoint);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  s.clock.now += 2 * 60_000;
+  s.adapter().scripts.push(complete);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(self.id)!.status, 'done');
+  const other = s.app.tasks.create({ title: 'not pressed', origin: 'self', actor: 'worker' });
+  s.adapter().scripts.push(complete, complete);
+  await s.app.worker.tick();
+  await s.app.worker.tick();
+  assert.equal(s.app.tasks.get(other.id)!.status, 'ready', 'an unpressed one still waits for autonomy');
+});

@@ -223,8 +223,12 @@ export class Worker {
   }
 
   #ownerWork(task: Task): boolean {
-    if (this.#forced.has(task.id) || this.#d.kv.get(`${OWNER_RUN_KV}${task.id}`) !== undefined) return true;
-    return !this.#d.tasks.beatDecided(task.id) && !this.#beatSchedule(task);
+    const chain: Task[] = [];
+    for (let link: Task | undefined = task; link && !chain.some(seen => seen.id === link!.id); link = link.spawned_by ? this.#d.tasks.get(link.spawned_by) : undefined) {
+      if (this.#forced.has(link.id) || this.#d.kv.get(`${OWNER_RUN_KV}${link.id}`) !== undefined) return true;
+      chain.push(link);
+    }
+    return !this.#d.tasks.beatDecided(task.id) && !chain.some(link => this.#beatSchedule(link));
   }
 
   #beatSchedule(task: Task): boolean {

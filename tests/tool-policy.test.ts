@@ -17,6 +17,7 @@ import { runToolCall } from '../src/tools/pipeline.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
+import { OWNER_KEYS } from '../src/tools/hooks/decision-order.ts';
 import { SKILL_AUTO_PER_DAY } from '../src/tools/skills/store.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
@@ -193,6 +194,8 @@ test('スキルのフォルダへの書き込みの確かめの文は、聞か�
   assert.deepEqual([grown.decision, grown.askKinds], ['ask', ['persona']], 'Grow skills Off keeps the check');
   assert.match(grown.reasons[0]!, /Grow skills is off/u);
   assert.doesNotMatch(grown.reasons[0]!, /offer it/u, 'it does not point at skill_draft, which is refused while Off');
+  assert.deepEqual(grown.reasonKeys, ['file.skill_off']);
+  assert.ok(OWNER_KEYS.has('file.skill_off'), 'only the owner decides a skills-folder write while Grow skills is Off, never the judge');
 });
 
 test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {

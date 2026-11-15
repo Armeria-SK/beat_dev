@@ -430,7 +430,7 @@ export class TaskStore {
           .run(status, summary, now, now, id);
       }
       this.event(id, status, actor, summary, runId);
-      this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`${OWNER_RUN_KV}${id}`);
+      if (status !== 'cancelled') this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`${OWNER_RUN_KV}${id}`);
     });
   }
 

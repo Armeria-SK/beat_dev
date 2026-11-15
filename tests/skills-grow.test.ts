@@ -106,8 +106,10 @@ test('Grow skills turned Off while a run is going: skill_draft is refused from t
 });
 
 test('Grow skills Off: a skill_draft call made anyway is refused and no draft is made; existing drafts stay', async t => {
-  const s = await setup(t, false);
+  const s = await setup(t, true);
   const before = s.app.skills.draft({ name: 'old-draft', description: 'd', body: 'b', reason: 'r' });
+  await s.app.applyConfig({ ...s.app.config(), skills: { grow: false } }, { probe: false });
+  assert.throws(() => s.app.skills.draft({ name: 'store-one', description: 'd', body: 'b', reason: 'r', autoOk: true }), /Growing skills is off/u, 'the store itself refuses, whoever calls it');
   s.adapter().scripts = [call('skill_draft', { name: 'new-one', description: 'd', body: 'b', reason: 'r' }), reply('ok')];
   await s.send(uuid(2), 'make a skill');
   const row = s.app.db.prepare("SELECT ok FROM tool_calls WHERE tool = 'skill_draft'").get() as { ok: number };
