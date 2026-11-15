@@ -480,7 +480,7 @@ test('5-3b task_update では項目を受け持つタスク（根も子も）を
   assert.notEqual(s.app.tasks.get(child.id)!.status, 'done');
 });
 
-test('5-3b 一覧のファイルが変えられたままなら何回でも断る（3 回の出口に数えない）。持ち主への質問は 1 つだけ', async t => {
+test('5-3b 一覧のファイルが変えられたままなら何回でも断る（3 回の出口に数えない）。持ち主への知らせは 1 つだけ（質問票は使わない）', async t => {
   const s = await setup(t);
   const p = s.product('shop', [{ result: 'Has a page', check: look }, { result: 'Tests pass', check: command(PASS) }]);
   const hacked = JSON.parse(readFileSync(s.file(p.id), 'utf8')) as AcceptanceDoc;
@@ -497,10 +497,12 @@ test('5-3b 一覧のファイルが変えられたままなら何回でも断る
   assert.deepEqual(s.runs(p.root), [], '項目のコマンドは動かさない');
   assert.equal(s.events(task.id, 'gate_list_changed').length, 4);
   assert.equal(s.events(task.id, 'gate_refused').length + s.events(task.id, 'gate_closed').length, 0);
-  const questions = s.app.db.prepare('SELECT kind, question, blocking FROM questions WHERE task_id = ?').all(task.id) as Array<{ kind: string; question: string; blocking: number }>;
-  assert.equal(questions.length, 1);
-  assert.match(questions[0]!.question, /acceptance\.json was changed outside beat while "Build: shop"/u);
-  assert.equal(questions[0]!.blocking, 0);
+  assert.equal((s.app.db.prepare('SELECT COUNT(*) AS n FROM questions').get() as { n: number }).n, 0, '質問票は使わない');
+  const notes = s.app.db.prepare("SELECT kind, title, body, link FROM notifications WHERE dedup_key = ?").all(`gate-list:${task.id}`) as Array<{ kind: string; title: string; body: string; link: string }>;
+  assert.equal(notes.length, 1);
+  assert.deepEqual([notes[0]!.kind, notes[0]!.title, notes[0]!.link], ['health_alert', 'acceptance.json was changed outside beat', `#/tasks/${task.id}`]);
+  assert.match(notes[0]!.body, /While "Build: shop" was working/u);
+  assert.equal(s.events(task.id, 'gate_list_notified').length, 1);
 });
 
 test('5-3b 一覧のファイルの断りは、項目のコマンドの失敗の続きを切らない', async t => {
@@ -643,4 +645,65 @@ test('5-3b 札は道具 task_* の呼び出しと、項目が最後に変わる�
   })]);
   assert.match(lastText(s.toolTexts(task.id), 'task_complete').text, /E-1 is not accepted \(that call was made before this item last changed\)/u);
   assert.deepEqual(s.states(p.id), { 'A-1': 'open' });
+});
+
+test('5-3b 一覧の書き換えを知らせられなくても門は断るだけで落ちず、知らせは次の断りでやり直す', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const hacked = JSON.parse(readFileSync(s.file(p.id), 'utf8')) as AcceptanceDoc;
+  hacked.items[0]!.result = 'Anything goes';
+  writeFileSync(s.file(p.id), JSON.stringify(hacked));
+  const task = s.task(p.id, ['A-1']);
+  const real = s.app.notifications.notify.bind(s.app.notifications);
+  s.app.notifications.notify = () => { throw new Error('notify broke'); };
+  await s.run(task.id, [done(), done(undefined, () => { s.app.notifications.notify = real; })]);
+  const texts = s.toolTexts(task.id).filter(m => m.text.startsWith('[task_complete]'));
+  assert.equal(texts.length, 2);
+  for (const text of texts) assert.match(text.text, /does not match the fixed version 1/u);
+  assert.equal(s.events(task.id, 'gate_list_notified').length, 1);
+  assert.equal((s.app.db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE dedup_key = ?').get(`gate-list:${task.id}`) as { n: number }).n, 1);
+});
+
+test('5-3b 外を読んだあとに書かれた一覧では、断りの文にも項目のコマンドを出さない', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Tests pass', check: command(FAIL) }], null, ['run-x']);
+  const task = s.task(p.id, ['A-1']);
+  await s.run(task.id, [done()]);
+  const text = lastText(s.toolTexts(task.id), 'task_complete');
+  assert.equal(text.isError, true);
+  assert.match(text.text, /A-1: its command failed/u);
+  assert.match(text.text, /Command: \(not shown; read it in acceptance\.json with mesh_read\)/u);
+  assert.doesNotMatch(text.text, /node fail\.js/u);
+});
+
+test('5-3b 止めたときも、同じ呼び出しで先に動かし終えた項目の結果は残る（Pending に二重に積まない）', { timeout: 30_000 }, async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Uploads the report', check: command(SEND) }, { result: 'Tests pass', check: command('node hold.js') }]);
+  writeFileSync(join(p.root, 'hold.js'), "require('fs').writeFileSync('started', ''); setTimeout(() => process.exit(1), 5000);");
+  const task = s.task(p.id, ['A-1', 'A-2']);
+  s.adapter().scripts.push(done());
+  s.app.worker.requestRun(task.id);
+  const ticking = s.app.worker.tick();
+  await until(() => existsSync(join(p.root, 'started')), 'item command started');
+  assert.equal(s.app.engine.stop(s.app.worker.status().runningAll[0]!.runId), true);
+  assert.equal(await ticking, 'ran');
+  assert.deepEqual(s.states(p.id), { 'A-1': 'unverified', 'A-2': 'open' });
+  assert.equal(s.app.acceptance.itemStates(p.id)['A-1']!.taskId, task.id);
+  assert.equal(s.events(task.id, 'item_check_failed').length + s.events(task.id, 'gate_refused').length, 0);
+  if (s.app.tasks.get(task.id)!.status !== 'ready') s.app.tasks.reopen(task.id, 'user', 'again');
+  await s.run(task.id, [done(undefined, () => writeFileSync(join(p.root, 'hold.js'), 'process.exit(0);'))]);
+  assert.equal((s.app.db.prepare("SELECT COUNT(*) AS n FROM pending_actions WHERE kind = 'send'").get() as { n: number }).n, 1);
+});
+
+test('5-3b この呼び出しで札をもらった項目は、受け持ちの確かめで「どのタスクも受け持たない」と言われない', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const task = s.task(p.id, ['A-1']);
+  s.clock.now += 1000;
+  s.app.acceptance.applyOwnerDecision(p.id, [{ op: 'change', id: 'A-1', item: { result: 'Has a better page', check: look }, source: { kind: 'owner_edit' } }], 'question');
+  await s.run(task.id, [echo('page'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  const text = lastText(s.toolTexts(task.id), 'task_complete');
+  assert.equal(text.isError, false, text.text);
+  assert.deepEqual(s.states(p.id), { 'A-1': 'unverified' });
+  assert.equal(s.app.tasks.get(task.id)!.check_state, 'awaiting');
 });
