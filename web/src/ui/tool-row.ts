@@ -40,7 +40,7 @@ const scoped = (query: string, scope: string): string => (query && scope ? t('ui
 const idOf = (value: unknown): string => ((typeof value === 'string' && value.trim() !== '') || typeof value === 'number' ? `#${String(value).trim()}` : '');
 const tabOf = (args: Args, none: string): string => (str(args, 'tab') ? t('ui.toolTarget.tab', str(args, 'tab')) : none);
 const element = (args: Args): string => (str(args, 'ref') ? t('ui.toolTarget.element', str(args, 'ref')) : '');
-const UNITS = ['days', 'weeks', 'months', 'years'] as const;
+const UNITS = { days: 'ui.toolTarget.days', weeks: 'ui.toolTarget.weeks', months: 'ui.toolTarget.months', years: 'ui.toolTarget.years' } as const;
 
 function doing(args: Args): string {
   const items = Array.isArray(args['items']) ? args['items'] as unknown[] : [];
@@ -52,7 +52,7 @@ function dateTarget(a: Args): string {
   const base = str(a, 'date') || str(a, 'datetime');
   switch (str(a, 'op')) {
     case 'now': return str(a, 'timezone') || t('ui.toolTarget.now');
-    case 'add': return [base, ...UNITS.flatMap(unit => { const n = a[unit]; return typeof n === 'number' && n !== 0 ? [t('ui.toolTarget.amount', n, unit)] : []; })].filter(Boolean).join(' ');
+    case 'add': return [base, ...Object.entries(UNITS).flatMap(([unit, key]) => { const n = a[unit]; return typeof n === 'number' && n !== 0 ? [t(key, n)] : []; })].filter(Boolean).join(' ');
     case 'diff': return [base, str(a, 'to')].filter(Boolean).join(' → ');
     case 'convert': return [[str(a, 'datetime') || str(a, 'date'), str(a, 'timezone')].filter(Boolean).join(' '), str(a, 'to_timezone')].filter(Boolean).join(' → ');
     default: return base;
@@ -70,9 +70,9 @@ const TARGETS: Readonly<Record<string, (args: Args, cut: Cut) => string>> = {
   mesh_search: a => scoped(str(a, 'query'), str(a, 'file')),
   mesh_state_set: a => str(a, 'now') || str(a, 'next') || str(a, 'blocked') || str(a, 'goal'),
   plan_write: () => 'plan.md',
-  acceptance_write: (a, cut) => t('ui.toolTarget.items', count(a, 'items'), cut.has('items')),
-  acceptance_change: (a, cut) => t('ui.toolTarget.changes', count(a, 'changes'), cut.has('changes')),
-  checklist_write: (a, cut) => doing(a) || t('ui.toolTarget.steps', count(a, 'items'), cut.has('items')),
+  acceptance_write: (a, cut) => t(cut.has('items') ? 'ui.toolTarget.itemsMore' : 'ui.toolTarget.items', count(a, 'items')),
+  acceptance_change: (a, cut) => t(cut.has('changes') ? 'ui.toolTarget.changesMore' : 'ui.toolTarget.changes', count(a, 'changes')),
+  checklist_write: (a, cut) => doing(a) || t(cut.has('items') ? 'ui.toolTarget.stepsMore' : 'ui.toolTarget.steps', count(a, 'items')),
   task_update: a => idOf(a['id']),
   memory_forget: a => idOf(a['id']),
   curiosity_update: a => idOf(a['id']),
