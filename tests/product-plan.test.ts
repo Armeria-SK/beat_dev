@@ -231,29 +231,6 @@ test('3-1a 道具の一覧: 製品の会話には plan_write と mesh_read、製
   assert.ok(!s.names().some(name => name.startsWith('plan_') || name.startsWith('mesh_')), s.names().join());
 });
 
-test('3-1a 登録の順（maxTools: 12）: (a) 製品の計画モードに plan_write / mesh_read が残る (b) 製品のタスクとふつうの会話に task_complete・file_read・file_edit・shell_run が残る (c) 製品に属さない会話の一覧は今と同じ', async t => {
-  const s = await setup(t, { models: [fakeModel('m1', { maxTools: 12 })] });
-  const shop = await s.product('shop');
-  s.adapter().scripts = [reply('a'), reply('b')];
-  await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
-  assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_read'), s.names().join());
-  await s.send(uuid(2), { text: 'work', projectId: shop.id, permissionMode: 'auto' });
-  for (const name of ['file_read', 'file_edit', 'shell_run']) assert.ok(s.names().includes(name), `${name}: ${s.names().join()}`);
-  await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
-  s.adapter().scripts = [call('task_complete', { summary: 'done' })];
-  assert.equal(await s.app.worker.tick(), 'ran');
-  for (const name of ['task_complete', 'file_read', 'file_edit', 'shell_run']) assert.ok(s.names().includes(name), `${name}: ${s.names().join()}`);
-
-  const plain = await setup(t, { models: [fakeModel('m1', { maxTools: 12 })], tools: builtinTools().filter(tool => !tool.projectOnly) });
-  for (const [n, mode] of [[3, 'auto'], [4, 'plan']] as const) {
-    s.adapter().scripts = [reply('x')];
-    plain.adapter().scripts = [reply('x')];
-    await s.send(uuid(n), { text: 'hi', permissionMode: mode });
-    await plain.send(uuid(n), { text: 'hi', permissionMode: mode });
-    assert.deepEqual(s.names(), plain.names(), mode);
-  }
-});
-
 test('3-1a 毎回の system（本物の App）: 製品の計画モードの会話にだけ plan_write の 1 行。自動承認のモードと製品に属さない計画モードには無い', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');

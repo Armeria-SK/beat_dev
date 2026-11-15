@@ -128,8 +128,6 @@ export interface ChatEngineDeps {
   // 子の担当の時間切れ（ミリ秒）。試験で短くするためだけの上書き。ふつうは設定 tools.agent.timeoutSec（秒）を使う
   agentTimeoutMs?: number | undefined;
   judgeLimits?: JudgeLimitSet | undefined;
-  // maxTools で切られた MCP の道具を、モデルごとに知らせる（空の一覧は「切られていない」）。MCP の管理が、道具の状態を cut にするために使う
-  mcpCut?: (modelId: string, names: readonly string[]) => void;
   // ブラウザ 1 つ（全会話で共有）。無ければ browser_* は動かない（ToolContext.services.browser）
   browser?: BrowserSession | undefined;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -219,9 +217,6 @@ export class ChatEngine {
   // 実行中に送られて、まだ履歴に入っていない発言（会話ごと。再起動で消える）
   #pending = new Map<string, PendingMessage[]>();
   #notes = new Map<string, Array<{ content: string; fetched: boolean }>>();
-  // maxTools で切られた MCP の道具の警告を出したもの（モデル id と道具の名前の組。1 組に 1 回だけ）
-  #cutWarned = new Set<string>();
-  #cappedWarned = new Set<string>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
 
@@ -679,11 +674,10 @@ export class ChatEngine {
     return Boolean(projectId && this.#d.acceptance?.latest(projectId));
   }
 
-  // モデルに渡す道具の一覧。外す条件はここだけ（maxTools の数える前に外す）: 振り返りで禁止の道具（reviewAllows: 効果が write・exec・network のもの、ファイルも書く道具）・この実行で禁止された道具・持ち主が「止める」にした道具（tools.policies）。
+  // モデルに渡す道具の一覧。外す条件はここだけ: 振り返りで禁止の道具（reviewAllows: 効果が write・exec・network のもの、ファイルも書く道具）・この実行で禁止された道具・持ち主が「止める」にした道具（tools.policies）。
   // 「止める」は、パイプラインと同じく、実行を始めたときの設定（started）といまの設定の厳しい方。始めたときに止めていた道具は、途中で緩めても、その実行のあいだは戻らない。
   // 計画モード（plan）の会話では、planAllows を通る道具だけを渡す: 効果が読む（read）か Web の読み取り（network）で、ファイルも書く道具（writesFiles）でないもの（パイプラインの二重の拒否は runToolCall）。
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
-  // maxTools で切られた MCP の道具は、モデルと道具の組ごとに 1 回だけ [WARN] を出し、MCP の管理に知らせる（画面の状態が cut になる）
   #excluded(kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false): (t: ToolDef) => boolean {
     const config = this.#d.config();
     return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
@@ -700,24 +694,11 @@ export class ChatEngine {
     return this.#d.tools?.registry.forRun(kind, { exclude: this.#excluded(kind, forbid, started, mode, inProject, frozen) }) ?? [];
   }
 
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false, loaded?: ReadonlySet<string>): ToolDef[] {
-    if (!this.#d.tools || model.maxTools === 0) return [];
+  #toolsFor(kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false, loaded?: ReadonlySet<string>): ToolDef[] {
+    if (!this.#d.tools) return [];
     const excluded = this.#excluded(kind, forbid, started, mode, inProject, frozen);
-    const full = (t: ToolDef) => excluded(t) || t.name === 'tool_search';
-    const exclude = loaded ? (t: ToolDef) => excluded(t) || !(isCore(t) || loaded.has(t.name)) : full;
-    const options = { limit: model.maxTools, exclude };
-    const registry = this.#d.tools.registry;
-    if (kind === 'chat' && this.#d.mcpCut) {
-      const cut = registry.cut(kind, { limit: model.maxTools, exclude: full }).filter(t => t.mcp !== undefined);
-      this.#d.mcpCut(model.id, cut.map(t => t.name));
-      for (const t of cut) {
-        const key = `${model.id}\n${t.name}`;
-        if (this.#cutWarned.has(key)) continue;
-        this.#cutWarned.add(key);
-        this.#d.log?.(`[WARN] MCP tool "${t.name}" cannot be passed to model "${model.id}" because it is over the tool limit (maxTools ${model.maxTools}). Raise the limit, or turn off tools you do not use`);
-      }
-    }
-    return registry.forRun(kind, options);
+    const exclude = loaded ? (t: ToolDef) => excluded(t) || !(isCore(t) || loaded.has(t.name)) : (t: ToolDef) => excluded(t) || t.name === 'tool_search';
+    return this.#d.tools.registry.forRun(kind, { exclude });
   }
 
   async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): Promise<EngineResult> {
@@ -1022,10 +1003,6 @@ export class ChatEngine {
         if (run) {
           run.sent.clear();
           for (const tool of toolDefs) run.sent.add(tool.name);
-          if (model.maxTools !== undefined && !this.#cappedWarned.has(model.id)) {
-            this.#cappedWarned.add(model.id);
-            d.log?.(`[WARN] Model "${model.id}" has a tool limit (maxTools ${model.maxTools}), so its requests carry up to ${model.maxTools} tools in full, without tool_search or the list of tools to load`);
-          }
         }
         const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name), ...(run?.loaded ?? [])]);
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
@@ -1123,8 +1100,8 @@ export class ChatEngine {
     const language = languageOf(config);
     const mode = this.#modeFor(p.kind, p.conversationId, p.startedMode);
     const frozen = this.#frozen(p.project?.id);
-    const loaded = model.maxTools !== undefined ? undefined : p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>() : undefined;
-    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen, loaded);
+    const loaded = p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>() : undefined;
+    const toolDefs = this.#toolsFor(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen, loaded);
     const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
     const specs = ToolRegistry.specs(toolDefs, config);
@@ -1220,7 +1197,7 @@ export class ChatEngine {
     if (live >= MAX_LIVE_AGENTS) return fail('agent.busy');
     // 子に渡せる道具 = 親に渡りうる道具（tool_search で読み込んだかに関わらない）∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
     const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'auto', this.#modeOf(parent.conversationId)) : 'auto';
-    const givable = this.#toolsFor(p.routes[0]!.model, parent.kind, p.forbid, config, mode, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
+    const givable = this.#toolsFor(parent.kind, p.forbid, config, mode, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
     const givableNames = new Set(givable.map(t => t.name));
     if (input.tools) {
       const unknown = [...new Set(input.tools)].filter(name => !givableNames.has(name));

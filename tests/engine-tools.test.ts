@@ -200,13 +200,6 @@ test('本文に書かれたツール呼び出し（<tool_call>）も拾って実
   assert.equal(s.app.conversations.messages('c1')[1]!.text, '作ります');
 });
 
-test('maxTools で渡すツールを絞れる', async t => {
-  const s = await setup(t, { maxTools: 2 });
-  s.adapter().scripts.push(reply('ok'));
-  await (await s.send('やあ')).done;
-  assert.deepEqual(s.adapter().calls[0]!.tools.map(t => t.name), ['history_search', 'web_search'], '履歴の検索を先に残す（記憶の道具は渡さない）');
-});
-
 test('引数の形が3回続けて正しくなければ止める', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(toolCall('file_write', {}), toolCall('file_write', {}), toolCall('file_write', {}), reply('届かない'));
@@ -229,7 +222,7 @@ test('会話は回数で止まらない: 20 回道具を呼んでから普通に
   assert.equal(s.app.conversations.messages('c1').at(-1)!.text, 'おわり');
 });
 
-test('使用量: 道具の仕様と道具の往復も数に入り、次の送信の見積もり（est_prompt_tokens）と合う。道具を渡さないモデルでは小さくなる', async t => {
+test('使用量: 道具の仕様と道具の往復も数に入り、次の送信の見積もり（est_prompt_tokens）と合う', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(toolCall('file_write', { path: 'hello.md', content: 'やあ' }), reply('書きました'), reply('二つ目の返事'));
   assert.ok((await (await s.send('hello.md を作って')).done).ok);
@@ -241,12 +234,6 @@ test('使用量: 道具の仕様と道具の往復も数に入り、次の送信
   assert.equal(usage.tokens, s.app.runs.get(next.runId)!.est_prompt_tokens, '道具の往復（assistant の呼び出しと tool の結果）と道具の仕様まで同じ組み立て');
   const calls = s.adapter().calls;
   assert.ok(calls.at(-1)!.tools.length > 0 && calls.at(-1)!.messages.some(m => m.role === 'tool'));
-
-  const bare = await setup(t, { maxTools: 0 });
-  const withoutTools = bare.app.engine.contextUsage('fresh');
-  const withTools = s.app.engine.contextUsage('fresh');
-  assert.ok(withoutTools.ok && withTools.ok);
-  assert.ok(withTools.tokens - withoutTools.tokens > 500, `道具の仕様の分が増える（${withTools.tokens} と ${withoutTools.tokens}）`);
 });
 
 // ── 6d: 会話は道具を使う回数で止まらない ──
