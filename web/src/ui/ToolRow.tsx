@@ -4,7 +4,7 @@ import { useNow } from './hooks.ts';
 import { Icon, Pill } from './parts.tsx';
 import { routeHash, type Route } from './routes.ts';
 import type { ToolItem } from './thread.ts';
-import { elapsedClock, emptyOutput, staggerOf, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
+import { elapsedClock, emptyOutput, staggerOf, toolLabel, toolRow, type ToolMeta, type ToolRowView } from './tool-row.ts';
 
 type T = ReturnType<typeof useT>;
 
@@ -17,7 +17,7 @@ function verbText(t: T, view: ToolRowView): string {
     case 'run': return t('ui.tool.run');
     case 'search': return t('ui.tool.search');
     case 'helper': return t('ui.tool.helper');
-    default: return view.name;
+    default: return toolLabel(view.name);
   }
 }
 
