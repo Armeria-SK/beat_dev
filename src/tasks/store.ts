@@ -139,6 +139,7 @@ export class TaskStore {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
   onChange: ((task: Task) => void) | undefined;
+  onFinished: ((task: Task) => void) | undefined;
   // 取り消しを戻すとき、タスクの書き換えと同じ transaction の中で呼ばれる（好奇心の状態を戻すため）
   onUncancelled: ((task: Task) => void) | undefined;
   onDeleted: ((removed: RemovedTask) => void) | undefined;
@@ -412,7 +413,9 @@ export class TaskStore {
     const before = this.get(id);
     if (status === 'done' && actor !== 'user' && before && this.#unapprovedTemplate(before)) throw new TaskError('error.proposal_not_done');
     this.#writeFinish(id, status, summary, actor, runId, reason);
-    return this.#changed(id);
+    const task = this.#changed(id);
+    this.onFinished?.(task);
+    return task;
   }
 
   #writeFinish(id: string, status: 'done' | 'failed' | 'cancelled', summary: string | null, actor: string, runId?: string, reason?: string): void {

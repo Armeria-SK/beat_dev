@@ -66,11 +66,18 @@ const en = {
 
   'title.review': 'Review: {label}',
   'title.review_running': 'Review ({label})',
+  'title.skill_review': 'Skill review: {label}',
+  'title.skill_review_running': 'Skill review ({label})',
   'title.task': 'Task: {title}',
   'review.nothing': 'There was nothing to review',
   'review.no_reply': '(no reply)',
   'review.truncated': 'The review reply was cut off by the output limit, so its result was not used (it will be retried next time)',
   'review.tidy_skipped': 'Memory tidy-up reviews are off for now, so this one was skipped',
+  'review.memory_nothing': 'Memory reviews have nothing to do yet, so this one was skipped',
+  'review.skill_off': 'Skill reviews are off (Grow skills or Work on its own is off), so this one was skipped',
+  'review.none_grow_off': 'Nothing to review: Grow skills is off',
+  'review.none_worker_off': 'Nothing to review: Work on its own is off',
+  'review.none_off': 'Nothing to review: reviews are off in the settings file',
 
   'notify.budget.title': 'The hourly run limit was reached, so tasks are being held back for a while',
   'notify.budget.body': 'The limit is {max} run(s) per hour (worker.maxRunsPerHour in the settings). Urgent tasks can be started with "Run now"',

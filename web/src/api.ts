@@ -209,7 +209,7 @@ export type RepeatingTask = Task & { last_run: TaskLastRun | null };
 export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned'; projectId?: string | null }
 export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean; projectId?: string | null }>; ranTruncated: boolean }
 export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
-export interface WorkerRun { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
+export interface WorkerRun { kind: 'task' | 'review'; reviewKind?: 'memory' | 'skill'; taskId: string | null; runId: string; title: string }
 export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
@@ -231,6 +231,7 @@ export interface SkillDraft {
   id: number; name: string; description: string; body: string; reason: string | null; change_summary?: string | null; status: string; created_at: number;
   current: { description: string; body: string } | null;
   from_title?: string | null;
+  outside?: 0 | 1;
 }
 export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
 export interface CuriosityItem {
@@ -238,7 +239,7 @@ export interface CuriosityItem {
   task_id: string | null; source: 'beat' | 'user' | 'file'; created_at: number; updated_at: number;
 }
 export interface ReviewJob {
-  id: number; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;
+  id: number; kind?: 'memory' | 'skill'; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;
   conversation_id: string | null; task_id: string | null; run_id: string | null; created_at: number; finished_at: number | null;
   changes: MemoryEvent[];
   project_id?: string | null;

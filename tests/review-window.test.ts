@@ -31,7 +31,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   const clock = { now: Date.parse('2026-11-05T01:00:00Z') };
   let adapter!: FakeAdapter;
   const app = new App({
-    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: timers,
+    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: timers, botMemory: true,
     adapterOverride: p => (adapter = new FakeAdapter(p)),
   });
   await app.status.probeAll(app.config());
@@ -81,16 +81,18 @@ test('10-1 振り返りの方針: 行ごとに印があり、道具の名前は�
     if (tools.test(line.text)) assert.ok(line.tag === 'memory' || line.tag === 'skill', `道具の名前の行は道具の印: ${line.text}`);
   }
   assert.equal(lines.filter(line => line.tag === 'skill').length, 1);
-  const withMemory = reviewPrompt({ trigger: 'idle', forgotten: [], memory: true });
-  const skillOnly = reviewPrompt({ trigger: 'idle', forgotten: [] });
+  const withMemory = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'memory' });
+  const skillOnly = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill' });
   for (const prompt of [withMemory, skillOnly]) {
-    assert.match(prompt, /skill_draft/u, 'スキルの行（B6）は残る');
     assert.doesNotMatch(prompt, /book=user|Facts about the user/u, '持ち主についての事実の行は無い');
     assert.doesNotMatch(prompt, /at most 3/iu, '「1 つの記録から 3 件まで」は無い');
   }
+  assert.match(skillOnly, /skill_draft/u, 'スキルの行はスキルの見直しにある');
+  assert.doesNotMatch(withMemory, /skill_draft/u, 'S-1: 記憶の振り返りはスキルの行を持たない');
   assert.match(withMemory, /Unverified:/u);
   for (const line of lines.filter(l => l.tag === 'memory' || l.memoryOnly)) assert.equal(skillOnly.includes(line.text), false, `記憶の無い振り返りに記憶の行が出ない: ${line.text}`);
-  const auto = reviewPrompt({ trigger: 'idle', forgotten: [], skillsAutoRegister: true });
+  for (const line of lines.filter(l => l.tag === 'skill' || l.skillOnly)) assert.equal(withMemory.includes(line.text), false, `記憶の振り返りにスキルの行が出ない: ${line.text}`);
+  const auto = reviewPrompt({ trigger: 'idle', forgotten: [], skillsAutoRegister: true, kind: 'skill' });
   assert.match(auto, /registered right away/u, 'スキルの行の差し替えは印で決まる');
 });
 

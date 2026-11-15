@@ -90,6 +90,21 @@ function agentOff(config: AppConfig, kind: RunKind): boolean {
   return !config.tools.agent.enabled || (kind === 'task' && !config.tools.agent.inTasks);
 }
 
+class AllBut extends Set<string> {
+  readonly #allowed: ReadonlySet<string>;
+  readonly #forbidden: ReadonlySet<string>;
+  constructor(allowed: ReadonlySet<string>, forbidden: readonly string[]) { super(); this.#allowed = allowed; this.#forbidden = new Set(forbidden); }
+  override has(name: string): boolean { return !this.#allowed.has(name) || this.#forbidden.has(name); }
+  override get size(): number { return unlisted(); }
+  override [Symbol.iterator](): ReturnType<Set<string>['values']> { return unlisted(); }
+  override values(): ReturnType<Set<string>['values']> { return unlisted(); }
+  override keys(): ReturnType<Set<string>['values']> { return unlisted(); }
+  override entries(): ReturnType<Set<string>['entries']> { return unlisted(); }
+  override forEach(): void { unlisted(); }
+}
+
+function unlisted(): never { throw new Error('An allow-list of tools cannot be listed, only checked with has()'); }
+
 const COMPACT_MIN_MESSAGES = 4;
 // 1 回の実行で要約を重ねられる回数。外す発言が増えるたびに要約し直すが、無限には繰り返さない
 const MAX_COMPACTIONS_PER_RUN = 5;
@@ -492,7 +507,7 @@ export class ChatEngine {
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
 
-  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[] } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[]; onlyTools?: ReadonlySet<string> } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.review_running') };
     const chain = this.#chain('background');
     if (!chain.usable.length) {
@@ -502,7 +517,8 @@ export class ChatEngine {
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt });
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
-    this.#start(runId, conversationId, chain.usable, 'review', undefined, options.forbidTools?.length ? new Set(options.forbidTools) : undefined);
+    const forbid = options.onlyTools ? new AllBut(options.onlyTools, options.forbidTools ?? []) : options.forbidTools?.length ? new Set(options.forbidTools) : undefined;
+    this.#start(runId, conversationId, chain.usable, 'review', undefined, forbid);
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
 

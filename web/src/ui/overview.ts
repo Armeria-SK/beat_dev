@@ -27,7 +27,7 @@ export function miniBoard(board: Board, shown = MINI_SHOWN): MiniColumn[] {
 
 export type RunningRow =
   | { kind: 'task'; key: string; runId: string; title: string; href: string; step: null; startedAt: null }
-  | { kind: 'review'; key: string; runId: string; title: null; href: null; step: null; startedAt: null }
+  | { kind: 'review'; key: string; runId: string; title: null; href: null; step: null; startedAt: null; skill: boolean }
   | { kind: 'session'; key: string; runId: string; title: string | null; href: string; step: Step | null; startedAt: number | null };
 
 export interface RunningInput {
@@ -43,7 +43,7 @@ export function runningRows({ worker, drafts, conversations, checklists }: Runni
   for (const run of worker) {
     seen.add(run.runId);
     if (run.kind === 'task' && run.taskId) rows.push({ kind: 'task', key: `w:${run.runId}`, runId: run.runId, title: run.title, href: routeHash({ view: 'task', id: run.taskId }), step: null, startedAt: null });
-    else rows.push({ kind: 'review', key: `w:${run.runId}`, runId: run.runId, title: null, href: null, step: null, startedAt: null });
+    else rows.push({ kind: 'review', key: `w:${run.runId}`, runId: run.runId, title: null, href: null, step: null, startedAt: null, skill: run.reviewKind === 'skill' });
   }
   const titles = new Map(conversations.map(c => [c.id, c.title]));
   for (const draft of drafts) {

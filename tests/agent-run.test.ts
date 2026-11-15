@@ -566,7 +566,7 @@ test('T-39 親か子が動いているあいだは、親の会話の削除を断
 });
 
 test('T-41 子の run が終わっても、たまった分の振り返り（heavy_run）を積まない（積むのは親の会話の分だけ）', async t => {
-  const s = await startApp(t, enable(c => { c.memory.review = true; }));
+  const s = await startApp(t, { ...enable(c => { c.memory.review = true; }), botMemory: true });
   const talk = (text: string): Script => async function* (req) {
     yield { type: 'text', delta: text };
     for (const c of withLoad({ id: `call_${Math.random().toString(36).slice(2)}`, name: 'calculate', arguments: { expression: '1+1' } }, req)) yield { type: 'tool_call', call: c };
