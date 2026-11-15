@@ -14,12 +14,12 @@ import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../src/tools/types.ts';
 import { CONVERSATION, fakeModel, startApp } from './app-setup.ts';
-import { fail, JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { fail, JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

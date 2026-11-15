@@ -18,15 +18,15 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { fail, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { fail, reply, tempDir, testConfig, type Script, withLoad, notSearch } from './helpers.ts';
 
 const WINDOWS = process.platform === 'win32';
 type Config = ReturnType<typeof testConfig>;
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -358,7 +358,7 @@ test('製品の会話の web_download: beat の置き場の downloads/ を確か
   const saved = join(s.paths.workspace, 'downloads', 'report.pdf');
   assert.equal(readFileSync(saved, 'utf8'), 'pdf');
   assert.equal(existsSync(join(outside, 'report.pdf')), false);
-  const result = s.app.conversations.messages(uuid(1)).find(m => m.role === 'tool')!;
+  const result = s.app.conversations.messages(uuid(1)).find(notSearch)!;
   assert.ok(result.text.includes(saved), result.text);
   assert.match(webDownload.description, /downloads folder of beat/u);
 });
@@ -379,7 +379,7 @@ test('製品の会話でダウンロードの置き場（data/workspace/download
     const sent = await s.send(uuid(10 + index), { text: 'read it', projectId: shop.id });
     assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, `${name} ${JSON.stringify(args)}`);
   }
-  const imageResult = s.app.conversations.messages(uuid(14)).find(m => m.role === 'tool')!;
+  const imageResult = s.app.conversations.messages(uuid(14)).find(notSearch)!;
   assert.match(imageResult.text, /came from the web or a downloaded file/u);
   s.adapter().scripts = [call('file_read', { path: 'notes.txt' }), reply('read')];
   writeFileSync(join(shop.root, 'notes.txt'), 'mine');
@@ -431,7 +431,7 @@ test('#execute の念のための守り: 確かめを通っていない製品の
   assert.ok(s.logs.some(line => line.includes(`product ${shop.id}`)), s.logs.join('\n'));
   assert.equal(existsSync(join(s.paths.workspace, 'stray.txt')), false, '相対パスの書き込みが beat の置き場に落ちない');
   assert.equal(existsSync(join(shop.root, 'stray.txt')), false);
-  const refused = s.app.conversations.messages(uuid(1)).filter(m => m.role === 'tool').at(-1)!;
+  const refused = s.app.conversations.messages(uuid(1)).filter(notSearch).at(-1)!;
   assert.match(refused.text, /outside the allowed folders/u);
   const u = s.seen[0]!;
   const shell = shellPreCheck({ command: WINDOWS ? 'Get-ChildItem' : 'ls' }, u);

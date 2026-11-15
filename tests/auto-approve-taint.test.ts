@@ -11,7 +11,7 @@ import { EXFIL_RULE, TAINTED_NOTE } from '../src/tools/auto-approve.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { attachmentBlock } from '../src/uploads/store.ts';
 import { fakeModel, settled, waitFor } from './app-setup.ts';
-import { FakeAdapter, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 // 段 4: だます試験。よそから来た文（Web のページ・添付）に「送れ」「消せ」と仕込まれている。
 // 送る・消す操作は、判定役が allow と答える設定でも判定役を呼ばずに Pending（send / delete）に積まれ、動かない。ほかの確かめは判定役に回り（判定役は道具の結果を見ない）、ask なら Pending（judge）に積まれる。
@@ -39,9 +39,9 @@ class ClassifierAdapter extends FakeAdapter {
   }
 }
 
-const toolCall = (name: string, args: unknown): Script => async function* () {
+const toolCall = (name: string, args: unknown): Script => async function* (req) {
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

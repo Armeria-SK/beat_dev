@@ -30,7 +30,7 @@ import { MEMORY_TOOL_NAMES } from '../src/tools/builtin/memory.ts';
 import { meshRead, meshSearch } from '../src/tools/builtin/mesh.ts';
 import { acceptanceAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
-import { ToolRegistry } from '../src/tools/registry.ts';
+import { isCore, ToolRegistry } from '../src/tools/registry.ts';
 import { effectivePolicy } from '../src/tools/tool-policy.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import {
@@ -123,7 +123,7 @@ export function productChatRequest(config: AppConfig, paths: AppPaths, model: Mo
   const registry = new ToolRegistry();
   for (const tool of builtinTools()) if (!MEMORY_TOOL_NAMES.includes(tool.name)) registry.register(tool);
   const exclude = (t: ToolDef) => (t.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(t.name) && !config.tools.browser.enabled)
-    || effectivePolicy(t.name, config) === 'block' || !acceptanceAllows(t, false);
+    || effectivePolicy(t.name, config) === 'block' || !acceptanceAllows(t, false) || !isCore(t);
   const chat = model.maxTools === 0 ? [] : registry.forRun('chat', { ...(model.maxTools !== undefined ? { limit: model.maxTools } : {}), exclude });
   const base = chat.filter(t => !t.name.startsWith(MESH_TOOL_PREFIX));
   const instructions = instructionsSection(readInstructions(root, instructionsBudget(smallestAvailable)));

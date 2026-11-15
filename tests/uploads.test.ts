@@ -9,7 +9,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { attachmentBlock, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../src/uploads/store.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 // 画面が決める会話の id は UUID（まだ無い会話への最初の発言は、この形だけ受け付ける）
 const C1 = '00000000-0000-4000-8000-000000000001';
@@ -30,9 +30,9 @@ export function tinyPdf(text: string): Buffer {
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

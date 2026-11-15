@@ -16,13 +16,13 @@ import { acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { meshStateSet } from '../src/tools/builtin/mesh.ts';
 import { PLAN_GIST_LABEL, type TaskStore } from '../src/tasks/store.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { reply, tempDir, type Script, withLoad, offered } from './helpers.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -50,7 +50,7 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
     if (sent.status === 202 && sent.body.runId) await settled(s.app, sent.body.runId);
     return sent;
   };
-  const names = (index = -1) => s.adapter().calls.at(index)!.tools.map(tool => tool.name);
+  const names = (index = -1) => offered(s.adapter().calls.at(index)!);
   const dynamic = (index = -1) => s.adapter().calls.at(index)!.system.dynamic;
   const plan = async (id: string) => (await s.json(`/api/projects/${id}/plan`, 'GET')).body.plan as { hash: string | null };
   const list = async (id: string, query = '') => (await s.json(`/api/projects/${id}/acceptance${query}`, 'GET')).body;

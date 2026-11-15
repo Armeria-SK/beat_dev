@@ -9,17 +9,17 @@ import { UNTRUSTED_RUN, type Task } from '../src/tasks/store.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { CONVERSATION, fakeModel, settled, startApp, waitFor } from './app-setup.ts';
-import { fail, FakeAdapter, tempDir, testConfig, type Script } from './helpers.ts';
+import { fail, FakeAdapter, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 // 段 8b: 自動承認を、会話のエンジンから通して確かめる（判定役は同じモデルの提供元に、偽のアダプタが答える）
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
-const toolCall = (name: string, args: unknown, before = ''): Script => async function* () {
+const toolCall = (name: string, args: unknown, before = ''): Script => async function* (req) {
   if (before) yield { type: 'text', delta: before };
   const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call };
+  for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

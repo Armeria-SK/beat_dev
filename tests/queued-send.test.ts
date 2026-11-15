@@ -8,7 +8,7 @@ import { resolvePaths } from '../src/paths.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { CONVERSATION, fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { FakeAdapter, JudgeAdapter, judgeTextOf, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, JudgeAdapter, judgeTextOf, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
@@ -24,9 +24,9 @@ const after = (g: { promise: Promise<void> }, script: Script): Script => async f
   yield* script(req);
 };
 const say = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 // 呼ばれた要求を覚える台本

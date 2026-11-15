@@ -11,7 +11,7 @@ import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { meshDecisionAdd } from '../src/tools/builtin/mesh-write.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 const KEY = `sk-ant-api03-${'c'.repeat(90)}`;
 
@@ -273,9 +273,9 @@ test('5-5a-d しまった製品・知らない製品には書かない', async t
   assert.equal((await meshDecisionAdd.execute({ decision: 'x' }, s.ctx(gone.id, { project: undefined }))).isError, true);
 });
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

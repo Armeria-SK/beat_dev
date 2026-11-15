@@ -26,7 +26,7 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { fail, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { fail, reply, tempDir, testConfig, type Script, withLoad, offered } from './helpers.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
@@ -34,9 +34,9 @@ const PROJECT = 'bbbbbbbb-0000-4000-8000-0000000000bb';
 const DAY = Date.UTC(2026, 10, 12, 9, 0, 0);
 const MARK = /<<MESH-([0-9a-f]{16})>>/u;
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -408,7 +408,7 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
     return sent;
   };
   const last = (index = -1): ModelRequest => s.adapter().calls.at(index)!;
-  const names = (index = -1) => last(index).tools.map(tool => tool.name);
+  const names = (index = -1) => offered(last(index));
   return { ...s, folder, product, send, last, names };
 }
 

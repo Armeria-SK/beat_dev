@@ -10,7 +10,7 @@ import type { RunEvent, StopReason } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
 import { MemoryStore, renderBooks } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 function store() {
   const db = openDatabase(':memory:', MIGRATIONS);
@@ -78,8 +78,8 @@ test('履歴: 会話をまたいで探し、今の会話は除き、前後を読
 // ── エンジンとの組み合わせ ────────────────────────────────
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
-    yield { type: 'tool_call', call: { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args } };
+  return async function* (req) {
+    for (const c of withLoad({ id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args }, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

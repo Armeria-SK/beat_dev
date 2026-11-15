@@ -11,7 +11,7 @@ import { readChecklist, writeChecklist } from '../src/tools/builtin/checklist-co
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { settled } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 // 段 2-11: 作業の一覧を毎回の system に入れる・外から読んだ実行が書いた一覧は、あとの実行に「外から読んだ」印を引き継ぐ
 
@@ -28,9 +28,9 @@ const network: PageNetwork = {
   get: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from('<!doctype html><html><head><title>t</title></head><body><main><p>ページの本文</p></main></body></html>') }) as PageResponse,
 };
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
