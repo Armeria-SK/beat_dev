@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
+import type { WaitReason } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { useMedia } from './hooks.ts';
 import { PendingList, type PendingListProps } from './panes/PendingPane.tsx';
@@ -138,7 +139,7 @@ export type PanePending = Omit<PendingListProps, 'projectId' | 'onOpenPlan'> & {
 
 export type PaneQuestions = Omit<QuestionsListProps, 'projectId'> & { count: number };
 
-export function Panes({ panes, productId, scope, revision, taskRevision, isGit, inert, pending, questions }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions }) {
+export function Panes({ panes, productId, scope, revision, taskRevision, isGit, inert, pending, questions, waits }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; waits?: Record<string, WaitReason> | undefined }) {
   const t = useT();
   const body = (view: PaneView, index: number): ReactNode => {
     switch (view) {
@@ -150,7 +151,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, isGit, 
         const { count: _count, ...list } = questions;
         return <QuestionsList key={productId} projectId={productId} {...list} />;
       }
-      case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} />;
+      case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
     }
   };
   const tabs = tabOrder(panes.views, panes.narrow);

@@ -27,6 +27,7 @@ const MAX_BODY = 20_000;
 const MAX_DESCRIPTION = 300;
 
 export const askBeforeRegister = (config: Pick<AppConfig, 'skills'>): boolean => config.skills?.askBeforeRegister !== false;
+export const growSkills = (config: Pick<AppConfig, 'skills'>): boolean => config.skills?.grow !== false;
 
 export type SkillAuthor = 'you' | 'beat' | 'beat-auto';
 export interface SkillVersion { id: string; at: number; who: SkillAuthor; lines: number; description: string; body: string }
@@ -88,10 +89,13 @@ export class SkillStore {
   readonly #language: () => Language;
   readonly #log: (line: string) => void;
   readonly #backups: string | null;
+  readonly #grow: () => boolean;
 
-  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined, backups: string | null = null) {
-    this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log; this.#backups = backups;
+  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined, backups: string | null = null, grow: () => boolean = () => true) {
+    this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log; this.#backups = backups; this.#grow = grow;
   }
+
+  get growing(): boolean { return this.#grow(); }
 
   get dir(): string { return this.#dir; }
 
@@ -272,6 +276,7 @@ export class SkillStore {
   }
 
   draft(input: { name: string; description: string; body: string; reason?: string | undefined; change?: string | undefined; conversationId?: string; runId?: string; autoOk?: boolean }): SkillDraft {
+    if (!this.#grow()) throw new SkillError('skill.growth_off');
     validate(input);
     const pending = this.#db.prepare("SELECT COUNT(*) AS n FROM skill_drafts WHERE status = 'pending'").get() as { n: number };
     if (pending.n >= 20) throw new SkillError('skill.too_many_drafts');

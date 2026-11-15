@@ -106,9 +106,9 @@ export function Overview({ waiting, conversations, drafts, checklists, worker, o
         </div>
         <div className="bt-screen__tools">
           {worker && !worker.enabled && <span className="bt-meta" data-worker="off">{t('ui.overview.workerOff')} · <a className="bt-tool__link" href="#/settings">{t('ui.nav.settings')}</a></span>}
-          {worker?.enabled && worker.paused && <span className="bt-meta">{t('ui.overview.workerPaused')}</span>}
+          {worker?.paused && <span className="bt-meta">{t('ui.overview.workerPaused')}</span>}
           {line && <span className="bt-meta" data-worker-line>{t('ui.overview.workerRuns', line.runs, line.max)}{line.nextWakeAt !== null && ` · ${t('ui.overview.nextWake', formatDateTimeSmart(line.nextWakeAt, now))}`}</span>}
-          {worker?.enabled && (
+          {worker && (
             <Button icon={worker.paused ? 'refresh' : 'pause'} disabled={busy.has('worker')} data-worker={worker.paused ? 'paused' : 'on'} onClick={() => setPaused(!worker.paused)}>
               {t(worker.paused ? 'ui.overview.resume' : 'ui.overview.pause')}
             </Button>

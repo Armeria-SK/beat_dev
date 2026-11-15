@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { askBeforeRegister, SkillError, type SkillStore } from '../skills/store.ts';
+import { askBeforeRegister, growSkills, SkillError, type SkillStore } from '../skills/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 function store(ctx: ToolContext): SkillStore {
@@ -60,6 +60,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
   async execute(input, ctx) {
+    if (!growSkills(ctx.config) || ctx.services?.skills?.growing === false) return { content: toolText(languageOf(ctx.config), 'skill.growth_off'), isError: true };
     try {
       const s = store(ctx);
       const existing = s.getRegistered(input.name);

@@ -53,3 +53,4 @@
   .ui-ob__fill { display: none; }
   .ui-onboard .bt-screen__title--xl { font-size: 28px; line-height: 32px; }
 }
+.bt-setting[data-row="skills:ask"] [data-grow="off"] > .bt-switch { opacity: 0.4; cursor: default; }

@@ -17,7 +17,7 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths; botMemory?: boolean } = {}) {
   const dir = tempDir(t);
   // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
   const base = { ...resolvePaths(dir), env: join(dir, '.env') };
@@ -44,6 +44,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     ...(options.projectFolderExempt ? { projectFolderExempt: options.projectFolderExempt } : {}),
     ...(options.downloadNetwork ? { downloadNetwork: options.downloadNetwork } : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.botMemory ? { botMemory: true } : {}),
   });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);

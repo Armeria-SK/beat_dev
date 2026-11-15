@@ -405,13 +405,13 @@ export function App() {
               liveChecklist={chatId ? checklists.get(chatId) : undefined}
               revision={(chatId ? live.revisions.get(chatId) ?? 0 : 0) + live.epoch}
               disconnected={disconnected} onReconnect={reconnect}
-              onClearNotices={clearNotices} onInterrupt={interrupt} panes={paneToggle}
+              onClearNotices={clearNotices} onInterrupt={interrupt} panes={paneToggle} waits={worker?.waiting}
             />
           </main>
         ) : (
           <main className="bt-screen" inert={drawer}>
             {behind.view === 'kanban' ? (
-              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} questionsByTask={questionsByTask} />
+              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} questionsByTask={questionsByTask} waits={worker?.waiting} />
             ) : behind.view === 'task' ? (
               <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.pendingRevision}`} worker={worker} projects={projects} pending={pendingByTask.get(behind.id) ?? 0} />
             ) : behind.view === 'overview' ? (
@@ -447,7 +447,7 @@ export function App() {
           </main>
         )}
         {paneProduct && paneCount > 0 && (
-          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`}
+          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} waits={worker?.waiting}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`}
             pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }}
             questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }} />

@@ -58,7 +58,7 @@ import { deferredSection, toolSearch } from './tools/builtin/tool-search.ts';
 import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
-import { askBeforeRegister, SkillStore } from './tools/skills/store.ts';
+import { askBeforeRegister, growSkills, SkillStore } from './tools/skills/store.ts';
 import { TaskStore, taskView } from './tasks/store.ts';
 import { ProjectStore } from './projects/store.ts';
 import { PlanStore } from './projects/plan.ts';
@@ -217,7 +217,7 @@ export class App {
     this.notifications = new Notifications(this.db, now, this.log, () => this.registry.secrets());
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
-    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'));
+    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'), () => growSkills(this.config()));
     this.skills.autoRegister = () => !askBeforeRegister(this.config());
     this.#importCuriosity();
     this.#copyLegacyWaits();
