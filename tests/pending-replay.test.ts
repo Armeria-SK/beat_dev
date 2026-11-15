@@ -322,51 +322,31 @@ function repo(s: ReturnType<typeof setup>) {
   return root;
 }
 
-test('消すの行: 積んだあとに対象のファイルが変わった → 動かず stale、前と今が返る', async t => {
-  const s = setup(t);
-  const root = repo(s);
-  const target = join(root, 'notes.md');
-  const row = await s.park({ tool: 'fake_delete', input: { path: target }, cwd: root, kind: 'delete', targets: [target] });
-  writeFileSync(target, 'owner notes, now longer');
-  const outcome = await s.approve(row.id);
-  assert.equal(outcome.status, 'stale');
-  assert.ok(existsSync(target), '消していない');
-  assert.equal(s.ran.length, 0);
-  assert.ok(outcome.changes!.some(c => c.what.includes('notes.md') && c.before !== c.now));
-  assert.match(s.store.view(row.id)!.output_preview ?? '', /notes\.md/u);
-});
+const STALE_DELETE_ROWS: Array<{ name: string; target: string; change: (root: string, target: string) => void; kept?: string; what?: (c: { what: string; before?: unknown; now?: unknown }) => boolean; preview?: RegExp }> = [
+  {
+    name: '消すの行: 積んだあとに対象のファイルが変わった → 動かず stale、前と今が返る', target: 'notes.md', change: (_, target) => writeFileSync(target, 'owner notes, now longer'),
+    what: c => c.what.includes('notes.md') && c.before !== c.now, preview: /notes\.md/u,
+  },
+  { name: '消すの行: フォルダの中のファイルが増えた → stale', target: 'out', change: (_, target) => writeFileSync(join(target, 'b.log'), 'b'), kept: 'out/a.log' },
+  { name: '消すの行: 積んだあとに HEAD が変わった → stale', target: 'notes.md', change: root => git(root, 'commit', '-q', '--allow-empty', '-m', 'second'), what: c => c.what === 'HEAD' },
+  { name: '消すの行: 作業ツリーが変わった（追っているファイルを書き換えた）→ stale', target: 'notes.md', change: root => writeFileSync(join(root, 'kept.txt'), 'changed'), what: c => c.what === 'git status' },
+];
 
-test('消すの行: フォルダの中のファイルが増えた → stale', async t => {
-  const s = setup(t);
-  const root = repo(s);
-  const target = join(root, 'out');
-  const row = await s.park({ tool: 'fake_delete', input: { path: target }, cwd: root, kind: 'delete', targets: [target] });
-  writeFileSync(join(target, 'b.log'), 'b');
-  assert.equal((await s.approve(row.id)).status, 'stale');
-  assert.ok(existsSync(join(target, 'a.log')));
-});
-
-test('消すの行: 積んだあとに HEAD が変わった → stale', async t => {
-  const s = setup(t);
-  const root = repo(s);
-  const target = join(root, 'notes.md');
-  const row = await s.park({ tool: 'fake_delete', input: { path: target }, cwd: root, kind: 'delete', targets: [target] });
-  git(root, 'commit', '-q', '--allow-empty', '-m', 'second');
-  const outcome = await s.approve(row.id);
-  assert.equal(outcome.status, 'stale');
-  assert.ok(outcome.changes!.some(c => c.what === 'HEAD'));
-});
-
-test('消すの行: 作業ツリーが変わった（追っているファイルを書き換えた）→ stale', async t => {
-  const s = setup(t);
-  const root = repo(s);
-  const target = join(root, 'notes.md');
-  const row = await s.park({ tool: 'fake_delete', input: { path: target }, cwd: root, kind: 'delete', targets: [target] });
-  writeFileSync(join(root, 'kept.txt'), 'changed');
-  const outcome = await s.approve(row.id);
-  assert.equal(outcome.status, 'stale');
-  assert.ok(outcome.changes!.some(c => c.what === 'git status'));
-});
+for (const r of STALE_DELETE_ROWS) {
+  test(r.name, async t => {
+    const s = setup(t);
+    const root = repo(s);
+    const target = join(root, r.target);
+    const row = await s.park({ tool: 'fake_delete', input: { path: target }, cwd: root, kind: 'delete', targets: [target] });
+    r.change(root, target);
+    const outcome = await s.approve(row.id);
+    assert.equal(outcome.status, 'stale');
+    assert.ok(existsSync(r.kept ? join(root, r.kept) : target), '消していない');
+    assert.equal(s.ran.length, 0);
+    if (r.what) assert.ok(outcome.changes!.some(r.what));
+    if (r.preview) assert.match(s.store.view(row.id)!.output_preview ?? '', r.preview);
+  });
+}
 
 test('消すの行: git の状態を調べられないリポジトリ（設定にふつうでない項目）では、変わっていなくても stale', async t => {
   const s = setup(t);
