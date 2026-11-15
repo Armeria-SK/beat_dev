@@ -534,17 +534,22 @@ const FETCH_COMMANDS = process.platform === 'win32'
   ? ['curl.exe -s https://beat-test.invalid/SECRET', 'Invoke-WebRequest -Uri https://beat-test.invalid/SECRET -MaximumRedirection 0', 'irm https://beat-test.invalid/SECRET -MaximumRedirection 0']
   : ['curl -s https://beat-test.invalid/SECRET'];
 
-test('外を読むのを自動承認で許したあとでも、その実行のシェルのコマンドは確かめなしに動く: 許可の一覧にある取得（curl・Invoke-WebRequest・irm）も、ふつうのコマンドも', async t => {
+test('外のファイルを読むのを自動承認で許しても（外から読んだ印は付かない）、その実行のシェルのコマンドは確かめなしに動く: 許可の一覧にある取得（curl・Invoke-WebRequest・irm）も、ふつうのコマンドも。取得で印が付いたあとの取得は判定役に回る（5-J2）', async t => {
   const s = await setup(t);
   assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'auto-mode');
+  assert.equal(s.ctx.taint.tainted, false);
   s.state.classify = ASK('外へ出ます');
-  const commands = [...FETCH_COMMANDS, 'echo hello'];
-  for (const command of commands) {
-    const outcome = await s.call('shell_run', { command });
+  for (const command of [...FETCH_COMMANDS, 'echo hello']) {
+    const outcome = await s.call('shell_run', { command }, { ...s.ctx, taint: { tainted: false, sources: [] } });
     assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'builtin'], command);
   }
   assert.equal(cards(s), 0);
   assert.equal(s.prompts.length, 1, '外読みのあとのシェルは、判定役に回らない');
+  for (const command of FETCH_COMMANDS) {
+    const row = await parked(s, 'shell_run', { command }, { ...s.ctx, taint: { tainted: true, sources: ['shell_run'] } });
+    assert.equal(row.kind, 'judge', command);
+  }
+  assert.equal(s.prompts.length, 1 + FETCH_COMMANDS.length);
 });
 
 test('シェルで外から取得したら、web_fetch と同じに「外から読んだ」印が付く。失敗した取得にも付く。取得でないコマンド・札で断った取得には付かない', async t => {
@@ -597,7 +602,7 @@ test('持ち主が Pending で許した egress の確かめは、動かしたら
   }
 });
 
-test('シェルで取得したあとの外読みは判定役が決める（判定役には taint の 1 行が付く）。取得そのものは、取得したあとも確かめなしに動く', async t => {
+test('シェルで取得したあとの外読みは判定役が決める（判定役には taint の 1 行が付く）。取得したあとの取得も判定役に回る（5-J2）', async t => {
   const s = await setup(t);
   await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
   assert.equal(s.ctx.taint.tainted, true, '前提: 取得で印が付いた');
@@ -606,42 +611,34 @@ test('シェルで取得したあとの外読みは判定役が決める（判�
   assert.equal(s.prompts.length, 1);
   assert.ok(s.prompts[0]!.user.includes(TAINTED_NOTE));
   s.state.classify = ASK('外へ出ます');
-  const again = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
-  assert.deepEqual([again.decision, again.decidedBy], ['allow', 'builtin']);
-  assert.equal(s.prompts.length, 1);
+  const again = await parked(s, 'shell_run', { command: FETCH_COMMANDS[0]! });
+  assert.equal(again.kind, 'judge');
+  assert.equal(s.prompts.length, 2);
 });
 
-test('Q-W1-15: シェルの取得（許可の一覧にある GET）は、仮の答え（切り替え SHELL_FETCH_TO_JUDGE.on が false）では、よそから来た文を読む前も後も確かめなしに動く。切り替えを入れると、読む前も後もすべて判定役に回り、ask なら judge の Pending に積まれ、動かない', async t => {
-  assert.equal(SHELL_FETCH_TO_JUDGE.on, false, '仮の答え');
+test('Q-W1-15（5-J2）: シェルの取得（許可の一覧にある GET）は、よそから来た文を読む前は確かめなしに動き、読んだあとは判定役に回り、ask なら judge の Pending に積まれて動かない。切り替えを切ると、読んだあとも確かめなしに戻る', async t => {
+  assert.equal(SHELL_FETCH_TO_JUDGE.on, true);
   const s = await setup(t, { classify: ASK('外へ出ます') });
   const before = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
   assert.deepEqual([before.decision, before.decidedBy], ['allow', 'builtin'], '読む前の取得');
-  assert.equal(s.ctx.taint.tainted, true);
-  const after = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
-  assert.deepEqual([after.decision, after.decidedBy], ['allow', 'builtin'], '読んだあとの取得');
   assert.equal(s.prompts.length, 0);
+  assert.equal(s.ctx.taint.tainted, true);
+  const tainted = await parked(s, 'shell_run', { command: FETCH_COMMANDS[0]! });
+  assert.equal(tainted.kind, 'judge', '読んだあとの取得は判定役に回る');
+  assert.equal(tainted.tainted, true);
+  assert.ok(tainted.checks.some(r => /fetches something from outside/u.test(r)));
+  assert.equal(s.prompts.length, 1);
+  assert.ok(s.prompts[0]!.user.includes(TAINTED_NOTE));
+  assert.equal((await s.call('shell_run', { command: 'echo hello' })).decidedBy, 'builtin', '読んだあとも、取得でないコマンドは確かめなし');
 
   const flag = SHELL_FETCH_TO_JUDGE as { on: boolean };
-  flag.on = true;
+  flag.on = false;
   try {
-    const fresh = await setup(t, { classify: ASK('外へ出ます') });
-    assert.equal(fresh.ctx.taint.tainted, false);
-    const untainted = await parked(fresh, 'shell_run', { command: FETCH_COMMANDS[0]! });
-    assert.equal(untainted.kind, 'judge', '読む前の取得も判定役に回る');
-    assert.equal(untainted.tainted, false);
-    assert.ok(untainted.checks.some(r => /fetches something from outside/u.test(r)));
-    assert.equal(fresh.prompts.length, 1);
-    assert.ok(!fresh.prompts[0]!.user.includes(TAINTED_NOTE), '読む前は、よそから来た文の 1 行を足さない');
-    assert.equal((await fresh.call('shell_run', { command: 'echo hello' })).decidedBy, 'builtin', '取得でないコマンドは確かめなし');
-
-    const tainted = await parked(s, 'shell_run', { command: FETCH_COMMANDS[0]! });
-    assert.equal(tainted.kind, 'judge', '読んだあとの取得も判定役に回る');
-    assert.equal(tainted.tainted, true);
+    const after = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
+    assert.deepEqual([after.decision, after.decidedBy], ['allow', 'builtin'], '切り替えを切ると、読んだあとの取得も確かめなし');
     assert.equal(s.prompts.length, 1);
-    assert.ok(s.prompts[0]!.user.includes(TAINTED_NOTE));
-    assert.equal((await s.call('shell_run', { command: 'echo hello' })).decidedBy, 'builtin', '切り替えても、取得でないコマンドは確かめなし');
   } finally {
-    flag.on = false;
+    flag.on = true;
   }
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
 });
