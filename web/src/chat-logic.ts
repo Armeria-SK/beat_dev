@@ -1,25 +1,9 @@
 import type { PermissionMode } from '../../src/shared/permission-mode.ts';
-import { ApiError, type ChecklistItem, type ChecklistStatus, type ModelChoice, type ModelView } from './api.ts';
-import { getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
-import type { IconName } from './icon-name.ts';
+import { ApiError, type ModelChoice, type ModelView } from './api.ts';
+import { getLanguage, type Lang, type PlainKey } from './i18n/index.ts';
 import { probeMessage, serverText } from './server-text.ts';
 
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: Record<string, string | number> | undefined }
-
-export interface ContextNumbers {
-  effective: number | null;
-  required: number | null;
-  declared: number | null;
-  measured: number | null;
-  modelMax: number | null;
-}
-
-export interface ContextCardData {
-  modelId: string;
-  status: string;
-  hint: string | null;
-  numbers: ContextNumbers;
-}
 
 export interface SendFailure {
   message: string;
@@ -29,10 +13,7 @@ export interface SendFailure {
   body: unknown;
 }
 
-const CONTEXT_STATUSES: ReadonlySet<string> = new Set(['too_small', 'exceeds_model', 'unknown']);
-
 const asRecord = (value: unknown): Record<string, unknown> | null => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
-const num = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 const text = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
 
 function isProblem(value: unknown): value is ModelProblem {
@@ -73,30 +54,6 @@ export function sendFailureOf(error: unknown, fallback: string, models: readonly
   };
 }
 
-export function contextCardOf(body: unknown, models: readonly ModelView[]): ContextCardData | null {
-  const record = asRecord(body);
-  if (!record || (record.errorKind ?? record.error) !== 'context_overflow') return null;
-  const problems = Array.isArray(record.problems) ? record.problems.filter(isProblem) : [];
-  const problem = problems.find(p => CONTEXT_STATUSES.has(p.status)) ?? null;
-  const probe = problem ? models.find(m => m.id === problem.modelId)?.probe ?? null : null;
-  return {
-    modelId: problem?.modelId ?? '',
-    status: problem?.status ?? '',
-    hint: text(problem?.hint) ?? text(asRecord(record.detail)?.hint),
-    numbers: {
-      effective: num(probe?.effective), required: num(probe?.required), declared: num(probe?.declared),
-      measured: num(probe?.measured), modelMax: num(probe?.modelMax),
-    },
-  };
-}
-
-export function runOverflowOf(notice: { errorKind?: string | undefined; measured?: number | undefined; required?: number | undefined }): { available: number; required: number } | null {
-  if (notice.errorKind !== 'context_overflow') return null;
-  const available = num(notice.measured);
-  const required = num(notice.required);
-  return available !== null && required !== null ? { available, required } : null;
-}
-
 export interface ChatRunRow { id: string; model_id: string | null; model?: string | null; started_at: number }
 
 type IdSource = { randomUUID?: () => string; getRandomValues: (bytes: Uint8Array) => Uint8Array };
@@ -111,29 +68,14 @@ export function newConversationId(source: IdSource = globalThis.crypto): string 
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-// 送る先の会話。まだ無い会話（最初の発言）は、画面が id を決めてそこへ送る（サーバーは受け付けたときだけ会話を作る）。
-// 断られたあとのやり直しは、同じ id をもう一度使う。
-export function sendTarget(conversationId: string | null, created: string | null, generate: () => string = newConversationId): { id: string; created: string | null } {
-  if (conversationId) return { id: conversationId, created };
-  const id = created ?? generate();
-  return { id, created: id };
-}
-
 // 発言と一緒に送る、モデルと考える深さの選び。会話がまだ無いときは、画面で覚えている選びを最初の発言と一緒に送る（サーバーにまだ覚える会話が無いため）。
 // 会話があれば送らない（サーバーが覚えている）。override（使えるモデルで送る道など、その場で決めた選び）は、画面で覚えている選びより優先して、そのまま送る
 // （画面の状態は、押した直後はまだ古いので使わない。モデルだけを替えるときは、古い考える深さも持ち越さない）
-// 会話の変更のうち、使用量の輪を数え直すもの: 使うモデルが変わるとき、権限モードが変わるとき（計画モードは、モデルに渡す道具の一覧と指示が変わる）
-export const recountsUsage = (kind: string): boolean => kind === 'model' || kind === 'mode';
-
 export function sendChoiceOf(conversationId: string | null, current: { modelId: string | null; effort: string | null; permissionMode?: PermissionMode }, override?: ModelChoice, product = false): ModelChoice {
   if (override) return { ...override };
   if (conversationId) return {};
   return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(product ? { permissionMode: current.permissionMode ?? 'auto' } : current.permissionMode && current.permissionMode !== 'auto' ? { permissionMode: current.permissionMode } : {}) };
 }
-
-export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
-
-const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
 
 // 流れている返事を描き直す間隔（ミリ秒）。描き直しは文の長さに比例して重く（1000 文字で約 1 ms、5 万文字で約 60 ms）、
 // 断片が届くたびに全文を描き直すと、長い返事の終わりごろには画面がほぼ描き直しだけで埋まる。短い返事は今までどおり届くたびに描く
@@ -206,10 +148,6 @@ export function replyTurns(
   return out;
 }
 
-export function joinsToolRun(kinds: readonly ChatItemKind[]): boolean[] {
-  return kinds.map((kind, i) => i > 0 && TOOL_KINDS.has(kind) && TOOL_KINDS.has(kinds[i - 1]!));
-}
-
 export const SLASH_COMMANDS = [
   { name: 'new', desc: 'slash.new' },
   { name: 'task', desc: 'slash.task' },
@@ -226,12 +164,6 @@ export const SLASH_COMMANDS = [
 export type SlashCommand = (typeof SLASH_COMMANDS)[number];
 export type SlashName = SlashCommand['name'];
 
-export function slashMatches(input: string): SlashCommand[] {
-  if (!input.startsWith('/')) return [];
-  const query = input.slice(1).toLowerCase();
-  return SLASH_COMMANDS.filter(c => c.name.startsWith(query));
-}
-
 // 実行ごとのお知らせの並び。key が同じ（同じ実行の同じ種類）お知らせは、並べずに最新の内容で置き換える
 // （要約した件数・外した件数が増えるたびに、同じお知らせが並ばないように）。max 件を超えたら古いものから落とす
 export function mergeNotice<T extends { runId: string; key?: string | undefined }>(list: readonly T[], notice: T, max = 8): T[] {
@@ -247,136 +179,12 @@ export function renameTitleOf(input: string): string | null {
 
 export const isRenameWithoutTitle = (input: string): boolean => /^\/rename\s*$/u.test(input.trim());
 
-export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
-  file_read: 'file', file_write: 'filePen', file_edit: 'pencil', file_list: 'folder', file_search: 'search',
-  shell_run: 'terminal',
-  plan_write: 'filePen', acceptance_write: 'filePen', acceptance_change: 'filePen', mesh_search: 'search', mesh_read: 'file', mesh_state_set: 'pencil',
-  mesh_decision_add: 'pencil',
-  web_fetch: 'globe', web_search: 'search',
-  memory_save: 'bookmark', memory_update: 'bookmark', memory_forget: 'bookmark', memory_search: 'bookmark',
-  history_search: 'clock', history_read: 'clock',
-  skill_view: 'wrench', skill_draft: 'wrench',
-  task_create: 'tasks', task_list: 'tasks', task_update: 'tasks', task_checkpoint: 'tasks', task_complete: 'tasks',
-  question_add: 'help', question_list: 'help', deviation_add: 'pencil',
-  curiosity_add: 'sparkles', curiosity_list: 'sparkles', curiosity_update: 'sparkles',
-  calculate: 'sliders', date_calc: 'clock',
-  checklist_write: 'check', notify_owner: 'bell',
-  doc_read: 'file', table_write: 'pencil', image_view: 'paperclip', web_download: 'archive', agent_run: 'cpu',
-  browser_open: 'globe', browser_read: 'globe', browser_screenshot: 'paperclip', browser_close: 'archive', browser_click: 'globe', browser_type: 'pencil',
-};
-
-export const toolIcon = (name: string | null | undefined): IconName => TOOL_ICONS[name ?? ''] ?? 'terminal';
-
-const INPUT_KEYS = ['command', 'path', 'url', 'query', 'topic', 'title', 'name', 'content', 'text'];
-const oneLine = (value: string): string => value.replace(/\s+/gu, ' ').trim();
-
-export function toolInputSummary(input: string, max = 240): string {
-  let shown = input;
-  try {
-    const parsed: unknown = JSON.parse(input);
-    const record = asRecord(parsed);
-    if (typeof parsed === 'string') shown = parsed;
-    else if (record) {
-      const key = INPUT_KEYS.find(k => typeof record[k] === 'string' && record[k] !== '')
-        ?? Object.keys(record).find(k => typeof record[k] === 'string' && record[k] !== '');
-      shown = key ? record[key] as string : JSON.stringify(record);
-    }
-  } catch { shown = input; }
-  const line = oneLine(shown);
-  return line.length > max ? `${line.slice(0, max)}…` : line;
-}
-
 export function firstLine(value: string, max = 160): string {
   const line = value.split('\n').find(l => l.trim()) ?? '';
   const trimmed = line.trim();
   return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
 }
 
-// コンテキストの使用量の表示。割合は四捨五入し、1 を超えたら「100%+」（輪は 100% で止める）
-export function contextPercent(ratio: number): { text: string; over: boolean; fraction: number } {
-  const value = Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
-  if (value > 1) return { text: '100%+', over: true, fraction: 1 };
-  return { text: `${Math.round(value * 100)}%`, over: false, fraction: value };
-}
-
-// トークン数を 12.4k / 180k / 1.25M のようにまとめる
-export function compactTokens(n: number): string {
-  const value = Number.isFinite(n) && n > 0 ? n : 0;
-  if (value < 1000) return String(Math.round(value));
-  if (value >= 999_950) return `${Number((Math.round(value / 10_000) / 100).toFixed(2))}M`;
-  return `${Number((Math.round(value / 100) / 10).toFixed(1))}k`;
-}
-
-const clockFormatters = new Map<string, Intl.DateTimeFormat>();
-
-export function chatTime(ms: number, language = getLanguage(), zone = getTimezone()): string {
-  const key = `${language}|${zone}`;
-  let formatter = clockFormatters.get(key);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat(language, { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-    clockFormatters.set(key, formatter);
-  }
-  return formatter.format(ms);
-}
-
 export function isNearBottom(el: { scrollHeight: number; scrollTop: number; clientHeight: number }, slack = 80): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight <= slack;
-}
-
-// 作業の一覧（入力欄の上の、折りたためる一覧）。画面を使わない部分。
-export interface ChecklistView { items: ChecklistItem[]; tainted: boolean }
-
-const CHECKLIST_STATUSES: readonly ChecklistStatus[] = ['pending', 'in_progress', 'done'];
-
-// サーバーの応答（GET .../checklist）と出来事（checklist.updated）から、画面に出す形を作る。
-// 項目の文は文字のまま持つ（文字でない項目・空の文は捨て、知らない status は pending）。ここでは文を読み解かない: Markdown にもリンクにもしない
-export function checklistOf(raw: unknown): ChecklistView {
-  const record = asRecord(raw);
-  const items: ChecklistItem[] = [];
-  const entries: unknown = record?.['items'];
-  if (Array.isArray(entries)) {
-    for (const entry of entries) {
-      const item = asRecord(entry);
-      const text = item?.['text'];
-      if (typeof text !== 'string' || text.trim() === '') continue;
-      items.push({ text, status: CHECKLIST_STATUSES.find(status => status === item?.['status']) ?? 'pending' });
-    }
-  }
-  return { items, tainted: record?.['tainted'] === true };
-}
-
-// 出来事を、会話ごとの一覧の表へ入れる。渡された表は変えず、その会話の分だけを置き換える（ほかの会話の一覧はそのまま）。
-// 表は Map: 会話の ID は URL からも来るので、`constructor` のような名前が表の継ぎ目に当たらないようにする
-export function withChecklistEvent(state: ReadonlyMap<string, ChecklistView>, event: { conversationId: string; items: unknown; tainted: unknown }): ReadonlyMap<string, ChecklistView> {
-  return new Map(state).set(event.conversationId, checklistOf(event));
-}
-
-// 出す一覧: 出来事で届いたもの（新しい）が先、無ければ開いたときに読んだもの。項目が無ければ何も出さない（出来事の空の一覧は、読んだ古い一覧に勝つ）
-export function checklistToShow(fromEvent: ChecklistView | undefined, fromRead: ChecklistView | null): ChecklistView | null {
-  const view = fromEvent ?? fromRead;
-  return view && view.items.length > 0 ? view : null;
-}
-
-export interface ChecklistCounts { total: number; done: number; active: number; pending: number; allDone: boolean }
-
-export function checklistCounts(items: ReadonlyArray<Pick<ChecklistItem, 'status'>>): ChecklistCounts {
-  let done = 0;
-  let active = 0;
-  for (const item of items) {
-    if (item.status === 'done') done += 1;
-    else if (item.status === 'in_progress') active += 1;
-  }
-  return { total: items.length, done, active, pending: items.length - done - active, allDone: items.length > 0 && done === items.length };
-}
-
-// 持ち主が一覧を開いた・畳んだ選び。全部済みの一覧は畳んで出す: 選びは「作業中」「全部済み」のどちらの間に押したかを覚え、状態が変わったら効かない
-// （全部済みになったら畳み直し、また作業が始まったら開き直す）
-export type ChecklistPhase = 'working' | 'finished';
-export interface ChecklistChoice { phase: ChecklistPhase; open: boolean }
-
-export const checklistPhase = (counts: ChecklistCounts): ChecklistPhase => (counts.allDone ? 'finished' : 'working');
-
-export function checklistOpen(counts: ChecklistCounts, choice: ChecklistChoice | null): boolean {
-  const phase = checklistPhase(counts);
-  return choice !== null && choice.phase === phase ? choice.open : phase === 'working';
 }

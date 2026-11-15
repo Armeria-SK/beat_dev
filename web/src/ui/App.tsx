@@ -3,7 +3,7 @@ import { api, type Conversation as ConversationRow, type Profile, type Project, 
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
-import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
+import { agentState, countChecks, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
 import { composerDrafts } from './composer-state.ts';
 import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
@@ -146,7 +146,7 @@ export function App() {
       void Promise.all([api.pendingCounts(), api.pending({ status: 'waiting' })]).then(([counts, list]) => dispatch({ type: 'pending', counts, waiting: list.items })).catch(() => undefined);
     }, PENDING_MS),
     questions: throttled(() => { void api.questionCounts().then(counts => dispatch({ type: 'questions', counts })).catch(() => undefined); }, PENDING_MS),
-    tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished] })).catch(() => undefined); },
+    tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished, ...(r.awaiting ?? [])] })).catch(() => undefined); },
     drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
     unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
     worker: () => { void api.worker().then(setWorker).catch(() => undefined); },
@@ -284,8 +284,8 @@ export function App() {
   const pendingByTask = useMemo(() => taskCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
   const waiting: Waiting = useMemo(
-    () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask) }),
-    [skillDrafts, live.tasks, pendingAll, questionsAll, questionsByTask],
+    () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask), checks: countChecks(live.tasks.values(), new Set(live.projectsLoaded ? live.projects.map(p => p.id) : [])) }),
+    [skillDrafts, live.tasks, live.projects, live.projectsLoaded, pendingAll, questionsAll, questionsByTask],
   );
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
   const state = agentState(waiting, working);

@@ -23,7 +23,7 @@ import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
 import { outboundOfCall, type Outbound } from './hooks/outbound.ts';
 import { windowsNames } from './hooks/scope.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
-import type { ToolRegistry } from './registry.ts';
+import { isCore, type ToolRegistry } from './registry.ts';
 import { isBrowserTool } from './browser/names.ts';
 import { effectivePolicy, type HasPolicies, type ToolPolicy } from './tool-policy.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
@@ -223,7 +223,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       : outcome.decidedBy === 'not-parked' ? { by: 'not-parked' }
       : outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' && autoWhy !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300) }
       : undefined;
-    const tagged = ctx.kind === 'task' ? 1 : 0;
+    const tagged = ctx.kind === 'task' && call.name !== 'tool_search' ? 1 : 0;
     const row = deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, evidence_no, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN (SELECT COALESCE(MAX(evidence_no), 0) + 1 FROM tool_calls WHERE conversation_id = ? AND evidence_no IS NOT NULL) END, ?)
       RETURNING evidence_no`).get(
@@ -239,7 +239,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     finish({ output: { content: message, isError: true }, decision, decidedBy, invalidArguments: invalid });
 
   if (truncated) return refuse('deny', 'truncated', truncated.message);
-  if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: deps.registry.forRun(ctx.kind).map(t => t.name).join(', ') }), true);
+  if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: (ctx.reachable?.() ?? deps.registry.forRun(ctx.kind)).filter(t => !ctx.deferred || ctx.deferred.sent.has('tool_search') || ctx.deferred.sent.has(t.name)).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   if (tool.projectOnly === true && !ctx.project) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
   if (tool.acceptanceState !== undefined) {
@@ -255,6 +255,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (isBrowserTool(tool.name) && !browserEnabled(ctx, deps)) return refuse('deny', 'mode', guardText(language, 'browser.off'));
   // 計画モードでは、読む道具と Web の読み取りのほかは使わせない（モデルに渡す一覧からも外している。二重の拒否）
   if (effectiveMode(ctx, deps) === 'plan' && !planAllows(tool)) return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
+  if (ctx.deferred?.sent.has('tool_search') && !isCore(tool) && !ctx.deferred.loaded.has(tool.name) && !ctx.deferred.sent.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_loaded', { name: tool.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);
   const args = Value.Default(tool.input, Value.Clone(call.arguments));
   if (!Value.Check(tool.input, args)) {

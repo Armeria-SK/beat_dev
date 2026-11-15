@@ -14,6 +14,8 @@ export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
 export type QuestionStatus = 'open' | 'answered';
 export type QuestionAnswerKind = 'kept' | 'changed';
 export type QuestionFix = 'queued' | 'running' | 'done' | 'failed';
+export const QUESTION_CATEGORIES = ['scope', 'ui', 'data', 'naming', 'tech', 'security', 'other'] as const;
+export type QuestionCategory = typeof QUESTION_CATEGORIES[number];
 
 export class QuestionError extends LocalizedError<QuestionMessageKey> {
   constructor(code: QuestionMessageKey, params?: MessageParams) { super(questionText, code, params); }
@@ -25,6 +27,7 @@ export interface QuestionRow {
   task_id: string | null;
   conversation_id: string | null;
   kind: QuestionKind;
+  category: QuestionCategory;
   question: string;
   why: string | null;
   options: string;
@@ -45,6 +48,7 @@ export interface QuestionView {
   project_id: string | null;
   task_id: string | null;
   kind: QuestionKind;
+  category: QuestionCategory;
   question: string;
   why: string | null;
   options: string[];
@@ -72,6 +76,7 @@ export interface QuestionCounts {
 
 export interface QuestionAdd {
   kind?: QuestionKind | undefined;
+  category?: QuestionCategory | undefined;
   projectId?: string | null | undefined;
   taskId?: string | null | undefined;
   conversationId?: string | null | undefined;
@@ -171,7 +176,7 @@ const SELECT = `SELECT q.*, p.name AS product, t.title AS task, f.status AS fix_
 
 function viewOf(row: JoinedRow): QuestionView {
   return {
-    id: row.id, project_id: row.project_id, task_id: row.task_id, kind: row.kind, question: row.question, why: row.why, options: optionsOf(row.options),
+    id: row.id, project_id: row.project_id, task_id: row.task_id, kind: row.kind, category: row.category, question: row.question, why: row.why, options: optionsOf(row.options),
     chosen: row.chosen, blocking: row.blocking === 1, acceptance_item: row.acceptance_item, status: row.status, answer: row.answer, answer_kind: row.answer_kind,
     fix_task_id: row.fix_task_id, created_at: row.created_at, answered_at: row.answered_at, product: row.product, task: row.task, fix: fixOf(row.fix_status),
   };
@@ -193,6 +198,8 @@ export class QuestionStore {
 
   #insert(input: QuestionAdd, copy: boolean): QuestionRow {
     const kind = input.kind ?? 'ai';
+    const category = input.category ?? 'other';
+    if (!(QUESTION_CATEGORIES as readonly string[]).includes(category)) throw new QuestionError('bad_category', { categories: QUESTION_CATEGORIES.join(', ') });
     const question = cleanBlock(input.question, TEXT_MAX);
     if (!question) throw new QuestionError('empty');
     const why = input.why ? cleanBlock(input.why, TEXT_MAX) || null : null;
@@ -213,9 +220,9 @@ export class QuestionStore {
         const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM questions WHERE task_id = ? AND kind = 'ai'").get(taskId) as { n: number };
         if (n >= QUESTIONS_PER_TASK) throw new QuestionError('too_many', { max: QUESTIONS_PER_TASK });
       }
-      return Number(this.db.prepare(`INSERT INTO questions (project_id, task_id, conversation_id, kind, question, why, options, chosen, blocking, acceptance_item, tainted, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        input.projectId ?? null, taskId, input.conversationId ?? null, kind, question, why, JSON.stringify(options), chosen, blocking ? 1 : 0, item, input.tainted ? 1 : 0, this.#now(),
+      return Number(this.db.prepare(`INSERT INTO questions (project_id, task_id, conversation_id, kind, category, question, why, options, chosen, blocking, acceptance_item, tainted, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        input.projectId ?? null, taskId, input.conversationId ?? null, kind, category, question, why, JSON.stringify(options), chosen, blocking ? 1 : 0, item, input.tainted ? 1 : 0, this.#now(),
       ).lastInsertRowid);
     });
     return this.get(id)!;

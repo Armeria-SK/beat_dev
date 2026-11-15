@@ -157,7 +157,7 @@ test('ui/questions: 答えたあとのトーストは起きたことに合わせ
 test('ui/questions: 急ぎの質問で止まったタスク 1 つは、Workspace の待ちの合計でも製品の行の合計でも 1', () => {
   const c = counts({ open: 1, byProject: { prod01: 1 }, byTask: { t1: 1 } });
   const [row] = withQuestionCounts([project('prod01')], c);
-  const workspace = workspaceTotal({ drafts: 0, pending: 0, questions: c.open, ...countTasks([['t1', 'waiting']], taskQuestions(c)) });
+  const workspace = workspaceTotal({ drafts: 0, pending: 0, questions: c.open, checks: 0, ...countTasks([['t1', 'waiting']], taskQuestions(c)) });
   assert.equal(workspace, 1);
   assert.equal(waitingTotal(row!), 1);
   assert.equal(workspace, waitingTotal(row!), 'Workspace の合計は製品の行の和と同じ');

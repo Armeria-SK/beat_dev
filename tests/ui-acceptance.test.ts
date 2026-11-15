@@ -30,15 +30,15 @@ test('ui/acceptance: 出どころの札は Your words / Your answer / AI added /
   assert.equal(t(sourceLabel({ kind: 'owner_edit' })), 'You edited');
 });
 
-test('ui/acceptance: 確かめ方の札は Command / Look / Read。状態はこの段では Open だけを出す', () => {
+test('ui/acceptance: 確かめ方の札は Command / Look / Read。状態は Open / Met / Unverified（beat 5-3c-u）', () => {
   assert.equal(t(checkLabel({ kind: 'command', command: 'npm test' })), 'Command');
   assert.equal(t(checkLabel({ kind: 'look' })), 'Look');
   assert.equal(t(checkLabel({ kind: 'read' })), 'Read');
   const open = stateLabel('open');
   assert.ok(open);
   assert.equal(t(open), 'Open');
-  assert.equal(stateLabel('met'), null, '済 / 未確認は 5-3b で出す');
-  assert.equal(stateLabel('unverified'), null);
+  assert.equal(t(stateLabel('met')), 'Met');
+  assert.equal(t(stateLabel('unverified')), 'Unverified');
 });
 
 test('ui/acceptance: 開いた中身は 引用 / 質問と答え / コマンド を文字のまま返す', () => {

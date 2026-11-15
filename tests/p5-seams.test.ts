@@ -8,7 +8,7 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { Worker } from '../src/tasks/worker.ts';
 import type { RunKind, TaskControl, ToolContext, ToolDef, ToolRunResult } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 const hiddenProbe: ToolDef = {
   name: 'probe_hidden', description: 'Test tool: given to no run.', input: Type.Object({}, { additionalProperties: false }), effect: 'read', allowedIn: [],
@@ -18,9 +18,9 @@ const emptyNames = (tools: readonly ToolDef[]) => tools.filter(tool => tool.allo
 const KINDS: readonly RunKind[] = ['chat', 'task', 'review', 'agent'];
 const FIXED = Date.parse('2026-11-14T03:00:00Z');
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -46,7 +46,7 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
     assert.equal(made.status, 201, JSON.stringify(made.body));
     return made.body.task.id as string;
   };
-  const calls = (runId: string) => s.app.db.prepare('SELECT tool, decision, decided_by, ok, output_preview FROM tool_calls WHERE run_id = ? ORDER BY rowid').all(runId)
+  const calls = (runId: string) => s.app.db.prepare("SELECT tool, decision, decided_by, ok, output_preview FROM tool_calls WHERE run_id = ? AND tool != 'tool_search' ORDER BY rowid").all(runId)
     .map(r => ({ ...r })) as Array<{ tool: string; decision: string; decided_by: string; ok: number; output_preview: string }>;
   const lastRun = (taskId: string) => (s.app.db.prepare("SELECT run_id FROM task_events WHERE task_id = ? AND kind = 'run' ORDER BY id DESC LIMIT 1").get(taskId) as { run_id: string }).run_id;
   return { ...s, products, product, send, task, calls, lastRun };
@@ -161,7 +161,7 @@ test('5-0 ctx.runTool: タスクの実行の道具がコードから別の道具
   assert.ok(rows[8]!.output_preview.startsWith('inner error [deny/run_tool/-]: A tool started by another tool cannot start one more'), rows[8]!.output_preview);
   assert.match(rows[9]!.output_preview, /^inner ok \[allow\/[^\]]+\/-\]: inner error \[deny\/run_tool\/-\]: A tool started by another tool/u);
   assert.deepEqual(verdict(rows[10]!), ['no_such_tool', 'deny', 'registry', 0]);
-  assert.equal((s.app.db.prepare('SELECT tool_calls FROM engine_runs WHERE id = ?').get(runId) as { tool_calls: number }).tool_calls, 13);
+  assert.equal((s.app.db.prepare('SELECT tool_calls FROM engine_runs WHERE id = ?').get(runId) as { tool_calls: number }).tool_calls, 14);
   assert.equal(s.app.tasks.get(id)!.status, 'done');
 
   s.adapter().scripts = [call('probe_run', { tool: 'shell_run', input: plain }), reply('ok')];

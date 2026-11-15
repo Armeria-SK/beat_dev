@@ -11,7 +11,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { CreatedFiles } from '../src/projects/created.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 const WINDOWS = process.platform === 'win32';
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -252,9 +252,9 @@ test('作ったもの: git でないフォルダは、ファイルの道具が�
   await created.end('r2');
 });
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

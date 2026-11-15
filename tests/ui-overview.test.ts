@@ -26,9 +26,9 @@ test('ui/overview: 小さな盤は列ごとに上の 2 枚と "N more"。Done �
   const board = buildBoard({ active: [task('p1', 'inbox'), task('r1', 'ready'), task('r2', 'ready'), task('r3', 'ready')], finished, hasMore: true, finishedTotal: 30, sessions: [] });
   const mini = miniBoard(board);
   assert.deepEqual(mini.map(c => [c.id, c.count, c.cards.length, c.more, c.accent]), [
-    ['proposed', 1, 1, 0, true], ['approved', 3, 2, 1, false], ['progress', 0, 0, 0, false], ['done', 4, 2, 28, false], ['failed', 0, 0, 26, false],
+    ['proposed', 1, 1, 0, true], ['approved', 3, 2, 1, false], ['progress', 0, 0, 0, false], ['check', 0, 0, 0, false], ['done', 4, 2, 28, false], ['failed', 0, 0, 26, false],
   ]);
-  assert.deepEqual(mini[3]!.cards.map(card => (card.kind === 'task' ? card.task.id : '')), ['d4', 'd3']);
+  assert.deepEqual(mini[4]!.cards.map(card => (card.kind === 'task' ? card.task.id : '')), ['d4', 'd3']);
 });
 
 test('ui/overview: Running now は、ワーカーの実行（タスク・振り返り）と返事を作っている会話。同じ実行を 2 回出さず、一覧に無い会話（タスクの会話）は出さない', () => {

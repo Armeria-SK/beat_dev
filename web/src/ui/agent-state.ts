@@ -8,6 +8,7 @@ export interface Waiting {
   drafts: number;
   pending: number;
   questions: number;
+  checks: number;
 }
 
 export function countTasks(tasks: Iterable<readonly [string, TaskStatus, Task['waiting_kind']?]>, asked: ReadonlyMap<string, number> = new Map()): { proposals: number; answers: number } {
@@ -20,9 +21,12 @@ export function countTasks(tasks: Iterable<readonly [string, TaskStatus, Task['w
   return { proposals, answers };
 }
 
-export const waitingTotal = (w: Waiting): number => w.proposals + w.answers + w.drafts + w.pending + w.questions;
+export const waitingTotal = (w: Waiting): number => w.proposals + w.answers + w.drafts + w.pending + w.questions + w.checks;
 
-export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers'>): number => w.proposals + w.answers;
+export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers' | 'checks'>): number => w.proposals + w.answers + w.checks;
+
+export const countChecks = (marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state']; projectId?: string | null }>, products: ReadonlySet<string>): number =>
+  [...marks].filter(m => m.status === 'done' && m.checkState === 'awaiting' && (!m.projectId || products.has(m.projectId))).length;
 
 export function agentState(w: Waiting, working: boolean): AgentState {
   if (waitingTotal(w) > 0) return 'waiting';

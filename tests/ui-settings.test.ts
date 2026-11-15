@@ -5,7 +5,7 @@ import { defaultConfig } from '../src/config/store.ts';
 import type { ModelView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { fieldStep, listAccepts, listWithout, parseRawConfig, planKey, planKeyFor, planSave, readNumber, type FieldDraft } from '../web/src/ui/settings/commit.ts';
-import { CATEGORIES, FILE_ONLY, matchCategories } from '../web/src/ui/settings/rows.ts';
+import { CATEGORIES, matchCategories } from '../web/src/ui/settings/rows.ts';
 import { judgeBackups, keyLine, providerReach, rolesOf, setConversation, setFallback, setJudge } from '../web/src/ui/settings/view.ts';
 
 // 新しい画面の Settings（steps/p1-ui.md「Settings」と PR 1-5b）の、画面を持たない決まり。
@@ -16,7 +16,6 @@ test('ui/settings rows: 区分はデザインの 10 から Thinking を除き、
     assert.ok(typeof en[c.label] === 'string', c.label);
     for (const row of c.rows) assert.ok(typeof en[row] === 'string', row);
   }
-  assert.ok(!FILE_ONLY.some(path => CATEGORIES.some(c => c.paths.includes(path))));
 });
 
 test('ui/settings rows: 検索は区分の名前と行の題で絞り、空なら全部', () => {

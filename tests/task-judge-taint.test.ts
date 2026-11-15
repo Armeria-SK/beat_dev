@@ -4,11 +4,11 @@ import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { UNTRUSTED_RUN } from '../src/tasks/store.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, type Script } from './helpers.ts';
+import { reply, type Script, withLoad } from './helpers.ts';
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 

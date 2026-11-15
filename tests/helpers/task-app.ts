@@ -5,16 +5,16 @@ import type { AppConfig } from '../../src/config/schema.ts';
 import type { RunEvent, StopReason, ToolCall } from '../../src/engine/types.ts';
 import { resolvePaths } from '../../src/paths.ts';
 import { createWebServer } from '../../src/web/server.ts';
-import { FakeAdapter, tempDir, type Script, testConfig } from '../helpers.ts';
+import { FakeAdapter, tempDir, type Script, testConfig, withLoad } from '../helpers.ts';
 
 export const MIN = 60_000;
 export const HOUR = 60 * MIN;
 export const DAY = 24 * HOUR;
 
 export function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }

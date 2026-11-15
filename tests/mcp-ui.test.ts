@@ -7,7 +7,7 @@ import {
   addBody, addProblem, argsFromText, attempt, emptyAddForm, idFromName, previewAdd, previewServer, previewTool, reasonKey, revealHidden, sameShape, scrubSecrets, summarize, tone,
   PATTERNS,
 } from '../web/src/settings/mcp-model.ts';
-import { SECTION_GROUPS, type Config } from '../web/src/settings/model.ts';
+import type { Config } from '../web/src/settings/model.ts';
 
 // AU-5b-2: 設定の「MCP サーバー」の、画面を使わない部分（広がる変更の検出・追加フォームの組み立て・失敗の扱い・節の登録・文言）
 
@@ -201,12 +201,6 @@ test('理由の語は、画面の文言に対応する。知らない語は「�
 });
 
 // ---- 節・文言 ----
-
-test('MCP の節は「動き」の組の通知の後に入り、設定の mcp を切り出す', () => {
-  const behavior = SECTION_GROUPS.find(g => g.label === 'settings.group.behavior')!;
-  const ids = behavior.items.map(i => i.id);
-  assert.equal(ids.indexOf('mcp'), ids.indexOf('notify') + 1);
-});
 
 test('MCP の文言は en にあり、日本語が混ざらない。確かめの文は差し込みが入る', () => {
   const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('settings.mcp.') || k.startsWith('access.mcp')).sort();

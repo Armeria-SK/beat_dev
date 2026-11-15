@@ -1,5 +1,5 @@
 import type { IconName } from './icon-name.ts';
-import type { NotificationItem, SkillDraft, SkillSummary } from './api.ts';
+import type { SkillDraft } from './api.ts';
 import type { PlainKey } from './i18n/index.ts';
 import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
 
@@ -37,6 +37,7 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   task_complete: { icon: 'circleCheck', desc: 'tool.task_complete' },
   question_add: { icon: 'help', desc: 'tool.question_add' },
   question_list: { icon: 'help', desc: 'tool.question_list' },
+  tool_search: { icon: 'search', desc: 'tool.tool_search' },
   deviation_add: { icon: 'pencil', desc: 'tool.deviation_add' },
   skill_view: { icon: 'book', desc: 'tool.skill_view' },
   skill_draft: { icon: 'book', desc: 'tool.skill_draft' },
@@ -76,22 +77,6 @@ export const EFFECT_LABEL: Record<ToolEffect, PlainKey> = {
   read: 'tools.effect.read', write: 'tools.effect.write', exec: 'tools.effect.exec', network: 'tools.effect.network', meta: 'tools.effect.meta',
 };
 
-// 一覧の行。レビュー待ちの下書きを先頭に、そのあとにスキルを名前順で並べる。
-export type SkillRow =
-  | { kind: 'draft'; name: string; description: string; at: number; revises: boolean }
-  | { kind: 'skill'; name: string; description: string; uses: number; lastUsedAt: number | null; registered: boolean };
-
-export function skillRows(drafts: readonly SkillDraft[], skills: readonly SkillSummary[]): SkillRow[] {
-  const pending = drafts
-    .filter(d => d.status === 'pending')
-    .sort((a, b) => b.created_at - a.created_at)
-    .map((d): SkillRow => ({ kind: 'draft', name: d.name, description: d.description, at: d.created_at, revises: d.current !== null }));
-  const known = [...skills]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((s): SkillRow => ({ kind: 'skill', name: s.name, description: s.description, uses: s.uses, lastUsedAt: s.lastUsedAt, registered: s.registered }));
-  return [...pending, ...known];
-}
-
 // 同じ名前のレビュー待ちが複数あるときは、いちばん新しいものを開く。
 export function findDraft(drafts: readonly SkillDraft[], name: string): SkillDraft | undefined {
   return drafts.filter(d => d.name === name && d.status === 'pending').sort((a, b) => b.created_at - a.created_at)[0];
@@ -105,21 +90,6 @@ export function draftGrowth(draft: Pick<SkillDraft, 'current' | 'change_summary'
   if (change) return { kind: 'change', text: change };
   const reason = draft.reason?.trim();
   return reason ? { kind: 'reason', text: reason } : null;
-}
-
-// SKILL.md の中身（サーバーの renderSkillFile と同じ形）。
-export function skillFileText(skill: { name: string; description: string; body: string }): string {
-  const description = skill.description.replace(/\r?\n/gu, ' ').trim();
-  return `---\nname: ${skill.name}\ndescription: ${JSON.stringify(description)}\n---\n\n${skill.body.trim()}\n`;
-}
-
-// スキルの下書きの通知（題は「…: <名前>」、リンクは #/review）から、開く先を決める。
-// 名前を読み取れなければ、スキル・ツールの一覧へ。#/review 以外のリンクは触らない。
-const SKILL_NAME_AT_END = /:\s*([a-z0-9][a-z0-9-]{0,62})\s*$/u;
-export function skillDraftLink(notification: Pick<NotificationItem, 'link' | 'title'>): string | null {
-  if (notification.link !== '#/review') return null;
-  const name = SKILL_NAME_AT_END.exec(notification.title)?.[1];
-  return name ? `#/skills/draft/${encodeURIComponent(name)}` : '#/skills';
 }
 
 export type RootMode = 'read' | 'write';

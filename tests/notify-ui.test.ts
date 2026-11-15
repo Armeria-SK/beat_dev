@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { NOTIFICATION_KINDS } from '../src/config/schema.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { accessWidening } from '../web/src/settings/access.ts';
-import { SECTION_GROUPS, type Config } from '../web/src/settings/model.ts';
+import type { Config } from '../web/src/settings/model.ts';
 
 // AU-5a T-20: 設定の「通知の送り先」の、画面を使わない部分（広がる変更の検出・文言・節の登録）
 
@@ -47,9 +47,7 @@ test('確かめの文言は、差し込みが入り、日本語が混ざらな�
   for (const text of en7) assert.doesNotMatch(text, /[\u3040-\u30ff\u4e00-\u9fff]/u, text);
 });
 
-test('通知の節は「動き」の組に入り、設定の notify を切り出す。画面の文言は en にある', () => {
-  const ids = SECTION_GROUPS.flatMap(g => g.items.map(s => s.id));
-  assert.ok(ids.includes('notify'));
+test('通知の種類の文言は en にあり、日本語が混ざらない', () => {
   const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('notifications.kind.')).sort();
   assert.deepEqual(keys(en), NOTIFICATION_KINDS.map(k => `notifications.kind.${k}`).sort());
   for (const k of keys(en)) {

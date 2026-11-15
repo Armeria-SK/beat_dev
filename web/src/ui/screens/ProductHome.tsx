@@ -7,6 +7,7 @@ import type { LiveDraft } from '../live-state.ts';
 import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners, ticksEverySecond } from '../overview.ts';
 import { CountBadge, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
+import { GrowthSection } from './GrowthSection.tsx';
 import { FinishedItem, MiniBoard, RunningItems, StatTile, useHomeLoad, useLastLook, useRunActions } from './home-parts.tsx';
 
 export interface ProductHomeProps {
@@ -19,14 +20,14 @@ export interface ProductHomeProps {
   revision: number;
 }
 
-interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
+interface Loaded { active: Task[]; awaiting: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
 
 export function ProductHome({ id, project, conversations, drafts, checklists, worker, revision }: ProductHomeProps) {
   const t = useT();
   const look = useLastLook(productLookKey(id), project !== undefined);
   const read = useCallback(async (): Promise<Loaded> => {
     const [tasks, finished, runs] = await Promise.all([api.tasks(id), api.finishedTasks(null, KANBAN_PAGE, id), api.runs(RUNS_WINDOW, id)]);
-    return { active: tasks.active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs };
+    return { active: tasks.active, awaiting: tasks.awaiting ?? [], finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs };
   }, [id]);
   const { data, failed, load } = useHomeLoad(read, revision, drafts);
   const { busy, stop, retry } = useRunActions(worker, load);
@@ -35,7 +36,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
   const mini = useMemo(() => {
     if (!data) return null;
     const sessions = sessionCards({ conversations: mine, drafts, runs: data.runs, checklists });
-    return miniBoard(buildBoard({ active: data.active, finished: data.finished, hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }));
+    return miniBoard(buildBoard({ active: [...data.active, ...data.awaiting], finished: data.finished, hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }));
   }, [data, mine, drafts, checklists]);
   const running = useMemo(
     () => runningRows(scopeRunning({ worker: worker?.runningAll ?? [], drafts, conversations, checklists }, id, data ? taskOwners(data.active) : null)),
@@ -89,6 +90,8 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
           </ul>
         )}
       </section>
+
+      <GrowthSection key={id} id={id} createdAt={project.created_at} revision={revision} index={7} />
     </div>
   );
 }

@@ -6,12 +6,12 @@ import { App } from '../src/app.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { Runs } from '../src/db/runs.ts';
-import type { AttachmentMeta, StopReason, ToolCall } from '../src/engine/types.ts';
+import type { AttachmentMeta, ChatMessage, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { settled, waitFor } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
-import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script } from './helpers.ts';
+import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 const C = 'c1';
 const EVIL: AttachmentMeta = { id: 'u1', name: 'evil.txt', kind: 'text' };
@@ -24,9 +24,9 @@ const network: PageNetwork = {
   get: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from('<!doctype html><html><head><title>t</title></head><body><main><p>ページの本文</p></main></body></html>') }) as PageResponse,
 };
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 // 止められるまで返事を始めない
@@ -176,55 +176,38 @@ test('出力の上限で切れた返事で終わった実行も、最後の返�
   await expectAsked(s, send(s, '続けて'));
 });
 
-test('履歴の見方: 道具を呼んだ assistant の発言をまたいで、返事の付いていない添付を数える（実行の記録が無くても）', async t => {
-  const s = await setup(t);
-  const { conversations } = s.app;
-  conversations.append(C, { role: 'user', content: '添付を見て', attachments: [EVIL] });
-  conversations.append(C, { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'file_read', arguments: { path: 'a.txt' } }] });
-  conversations.append(C, { role: 'tool', toolCallId: 't1', name: 'file_read', content: 'こんにちは' });
-  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
-  await expectAsked(s, retry(s));
-});
+const ATTACHED: ChatMessage = { role: 'user', content: '添付を見て', attachments: [EVIL] };
+const toolTurn = (i: number | string): ChatMessage[] => [
+  { role: 'assistant', content: '', toolCalls: [{ id: `t${i}`, name: 'file_read', arguments: { path: 'a.txt' } }] },
+  { role: 'tool', toolCallId: `t${i}`, name: 'file_read', content: 'こんにちは' },
+];
+const toolTurns = (n: number): ChatMessage[] => Array.from({ length: n }, (_, i) => toolTurn(i)).flat();
 
-test('履歴の見方: 返事の付いた添付は数えない。道具を呼んだだけの assistant の発言は返事ではない', async t => {
-  const s = await setup(t);
-  const { conversations } = s.app;
-  conversations.append(C, { role: 'user', content: '添付を見て', attachments: [EVIL] });
-  conversations.append(C, { role: 'assistant', content: '読みました' });
-  conversations.append(C, { role: 'user', content: '次はこれ' });
-  conversations.append(C, { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'file_read', arguments: { path: 'a.txt' } }] });
-  conversations.append(C, { role: 'tool', toolCallId: 't1', name: 'file_read', content: 'こんにちは' });
-  s.adapter().scripts = [call('file_write', WRITE), reply('書きました')];
-  await expectWritten(s, retry(s));
-});
+const HISTORY_ROWS: Array<{ name: string; history: ChatMessage[]; longerThan?: number; then: 'asked' | 'judge_failed' | 'written' }> = [
+  { name: '履歴の見方: 道具を呼んだ assistant の発言をまたいで、返事の付いていない添付を数える（実行の記録が無くても）', history: [ATTACHED, ...toolTurn(1)], then: 'asked' },
+  { name: '履歴の見方: 返事の付いた添付は数えない。道具を呼んだだけの assistant の発言は返事ではない', history: [ATTACHED, { role: 'assistant', content: '読みました' }, { role: 'user', content: '次はこれ' }, ...toolTurn(1)], then: 'written' },
+  { name: '履歴の見方: 読み出せる行数（500）のなかに最後の返事が見つからなければ、添付の有無を確かめきれないので「外から読んだ」扱いにする', history: [ATTACHED, ...toolTurns(260)], longerThan: 500, then: 'judge_failed' },
+  {
+    name: '履歴の見方: 500 行より長くても、そのなかに最後の返事が見つかれば、その後ろだけを見る（確かめきれない扱いにしない）',
+    history: [ATTACHED, { role: 'assistant', content: '読みました' }, ...toolTurns(260), { role: 'assistant', content: 'まとめです' }, { role: 'user', content: 'ありがとう' }], then: 'written',
+  },
+];
 
-test('履歴の見方: 読み出せる行数（500）のなかに最後の返事が見つからなければ、添付の有無を確かめきれないので「外から読んだ」扱いにする', async t => {
-  const s = await setup(t);
-  const { conversations } = s.app;
-  conversations.append(C, { role: 'user', content: '添付を見て', attachments: [EVIL] });
-  for (let i = 0; i < 260; i++) {
-    conversations.append(C, { role: 'assistant', content: '', toolCalls: [{ id: `t${i}`, name: 'file_read', arguments: { path: 'a.txt' } }] });
-    conversations.append(C, { role: 'tool', toolCallId: `t${i}`, name: 'file_read', content: 'こんにちは' });
-  }
-  assert.ok(conversations.messages(C, 1000).length > 500, '前提: 500 行より長い');
-  s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
-  await expectAsked(s, retry(s), 'judge_failed');
-});
-
-test('履歴の見方: 500 行より長くても、そのなかに最後の返事が見つかれば、その後ろだけを見る（確かめきれない扱いにしない）', async t => {
-  const s = await setup(t);
-  const { conversations } = s.app;
-  conversations.append(C, { role: 'user', content: '添付を見て', attachments: [EVIL] });
-  conversations.append(C, { role: 'assistant', content: '読みました' });
-  for (let i = 0; i < 260; i++) {
-    conversations.append(C, { role: 'assistant', content: '', toolCalls: [{ id: `t${i}`, name: 'file_read', arguments: { path: 'a.txt' } }] });
-    conversations.append(C, { role: 'tool', toolCallId: `t${i}`, name: 'file_read', content: 'こんにちは' });
-  }
-  conversations.append(C, { role: 'assistant', content: 'まとめです' });
-  conversations.append(C, { role: 'user', content: 'ありがとう' });
-  s.adapter().scripts = [call('file_write', WRITE), reply('書きました')];
-  await expectWritten(s, retry(s));
-});
+for (const row of HISTORY_ROWS) {
+  test(row.name, async t => {
+    const s = await setup(t);
+    const { conversations } = s.app;
+    for (const message of row.history) conversations.append(C, message);
+    if (row.longerThan) assert.ok(conversations.messages(C, 1000).length > row.longerThan, `前提: ${row.longerThan} 行より長い`);
+    if (row.then === 'written') {
+      s.adapter().scripts = [call('file_write', WRITE), reply('書きました')];
+      await expectWritten(s, retry(s));
+    } else {
+      s.adapter().scripts = [call('shell_run', PROBE), reply('おわり')];
+      await expectAsked(s, retry(s), row.then === 'judge_failed' ? 'judge_failed' : 'judge');
+    }
+  });
+}
 
 test('実行の記録の印は、実行が終わらなくても残る（Runs.markTainted。落ちたあとの起動時の closeDangling で消えない）', () => {
   const db = openDatabase(':memory:', MIGRATIONS);

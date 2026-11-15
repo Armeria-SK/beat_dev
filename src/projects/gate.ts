@@ -129,7 +129,7 @@ interface TagRow { tool: string; input: string; ok: number | null; decision: str
 function lookupTag(db: DatabaseSync, conversationId: string, tag: string, since: number): { copy: Record<string, unknown> } | { why: GateMessageKey } {
   const match = TAG.exec(tag);
   if (!match) return { why: 'tag_format' };
-  const row = db.prepare("SELECT tool, input, ok, decision, created_at FROM tool_calls WHERE conversation_id = ? AND evidence_no = ? AND tool NOT LIKE 'task\\_%' ESCAPE '\\'").get(conversationId, Number(match[1])) as TagRow | undefined;
+  const row = db.prepare("SELECT tool, input, ok, decision, created_at FROM tool_calls WHERE conversation_id = ? AND evidence_no = ? AND tool NOT LIKE 'task\\_%' ESCAPE '\\' AND tool != 'tool_search'").get(conversationId, Number(match[1])) as TagRow | undefined;
   if (!row) return { why: 'tag_unknown' };
   if (row.ok !== 1) return { why: 'tag_failed' };
   if (row.decision !== 'allow') return { why: 'tag_not_run' };
@@ -138,7 +138,7 @@ function lookupTag(db: DatabaseSync, conversationId: string, tag: string, since:
 }
 
 function usableTags(db: DatabaseSync, conversationId: string, language: Language): string {
-  const rows = db.prepare("SELECT evidence_no, tool, input FROM tool_calls WHERE conversation_id = ? AND evidence_no IS NOT NULL AND ok = 1 AND decision = 'allow' AND tool NOT LIKE 'task\\_%' ESCAPE '\\' ORDER BY evidence_no DESC LIMIT ?")
+  const rows = db.prepare("SELECT evidence_no, tool, input FROM tool_calls WHERE conversation_id = ? AND evidence_no IS NOT NULL AND ok = 1 AND decision = 'allow' AND tool NOT LIKE 'task\\_%' ESCAPE '\\' AND tool != 'tool_search' ORDER BY evidence_no DESC LIMIT ?")
     .all(conversationId, USABLE_TAGS) as Array<{ evidence_no: number; tool: string; input: string }>;
   if (!rows.length) return gateText(language, 'tags_none');
   return [gateText(language, 'tags_head'), ...rows.map(row => gateText(language, 'tag_line', { tag: `E-${row.evidence_no}`, tool: row.tool, input: clip(row.input, SHOWN_INPUT) }))].join('\n');

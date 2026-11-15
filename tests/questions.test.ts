@@ -11,12 +11,12 @@ import { questionAdd, questionList } from '../src/tools/builtin/questions.ts';
 import { planAllows } from '../src/tools/pipeline.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, tempDir, type Script, testConfig } from './helpers.ts';
+import { FakeAdapter, tempDir, type Script, testConfig, withLoad, offered } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
-  return async function* () {
+  return async function* (req) {
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }
@@ -77,7 +77,7 @@ test('question_add: 記録して進む。control は変わらず、タスクは�
   s.adapter().scripts.push(toolCall('question_add', ask), toolCall('task_complete', { summary: 'done', notify: false }));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.tasks.get(task.id)!.status, 'done', 'blocking でない質問のあと、タスクは止まらずに終わる');
-  const tools = s.adapter().calls[0]!.tools.map(tool => tool.name);
+  const tools = offered(s.adapter().calls[0]!);
   assert.ok(tools.includes('question_add') && tools.includes('question_list'), 'タスクの実行には 2 つの道具が渡る');
   const result = JSON.stringify(s.adapter().calls[1]!.messages);
   assert.match(result, /Recorded as question #1\. Keep working with the option you chose: 2026-11-14/u);

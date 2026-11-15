@@ -67,6 +67,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     sendJson(res, 200, {
       active: app.tasks.list({ project }).map(withItems),
       finished: app.tasks.recentlyFinished(50, project).map(withItems),
+      awaiting: app.tasks.awaiting(project).map(withItems),
       finishedTotal: app.tasks.finishedTotal(project),
       repeating: app.tasks.templates(project).map(task => ({ ...view(task), last_run: task.last_run })),
     });

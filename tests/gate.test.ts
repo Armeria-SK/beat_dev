@@ -13,13 +13,13 @@ import { eraseConversation } from '../src/db/erase.ts';
 import { GATE_LIMIT } from '../src/projects/gate.ts';
 import { unbuilt } from '../src/projects/build.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { JudgeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { JudgeAdapter, reply, tempDir, type Script, testConfig, withLoad, notSearch } from './helpers.ts';
 
 function toolCall(name: string, args: unknown, before?: () => void): Script {
-  return async function* () {
+  return async function* (req) {
     before?.();
     const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-    yield { type: 'tool_call', call };
+    for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
     yield { type: 'done', stop: 'tool_use' as StopReason };
   };
 }
@@ -70,7 +70,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   };
   const toolTexts = (taskId: string) => {
     const cid = app.tasks.get(taskId)!.conversation_id!;
-    return app.conversations.messages(cid).filter(m => m.role === 'tool').map(m => ({ text: m.text, isError: (m.message as { isError?: boolean }).isError === true }));
+    return app.conversations.messages(cid).filter(notSearch).map(m => ({ text: m.text, isError: (m.message as { isError?: boolean }).isError === true }));
   };
   const states = (projectId: string) => Object.fromEntries(app.acceptance.read(projectId)!.items.map(entry => [entry.id, entry.state]));
   const evidence = (projectId: string, id: string) => app.acceptance.read(projectId)!.items.find(entry => entry.id === id)!.evidence;
@@ -647,6 +647,19 @@ test('5-3b 札は道具 task_* の呼び出しと、項目が最後に変わる�
   assert.deepEqual(s.states(p.id), { 'A-1': 'open' });
 });
 
+test('T-1 tool_search の行に札があっても、門は証拠にしない（読み込んだだけで製品は何も確かめていない）', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const task = s.task(p.id, ['A-1'], 'Build searched');
+  const plant = () => {
+    const cid = s.app.tasks.get(task.id)!.conversation_id!;
+    s.app.db.prepare("UPDATE tool_calls SET evidence_no = 99 WHERE conversation_id = ? AND tool = 'tool_search'").run(cid);
+  };
+  await s.run(task.id, [toolCall('tool_search', { query: 'task_list' }), done([{ id: 'A-1', evidence: 'E-99' }], plant)]);
+  assert.match(lastText(s.toolTexts(task.id), 'task_complete').text, /E-99 is not accepted \(there is no such tag/u);
+  assert.deepEqual(s.states(p.id), { 'A-1': 'open' });
+});
+
 test('5-3b 一覧の書き換えを知らせられなくても門は断るだけで落ちず、知らせは次の断りでやり直す', async t => {
   const s = await setup(t);
   const p = s.product('shop', [{ result: 'Has a page', check: look }]);
@@ -706,4 +719,52 @@ test('5-3b この呼び出しで札をもらった項目は、受け持ちの確
   assert.equal(text.isError, false, text.text);
   assert.deepEqual(s.states(p.id), { 'A-1': 'unverified' });
   assert.equal(s.app.tasks.get(task.id)!.check_state, 'awaiting');
+});
+
+test('5-3c-u GET /api/tasks の awaiting: 終わったタスクの新しい 50 件より古い確かめ待ちも、項目の数つきで返る。製品で絞れ、active の意味は変えない', async t => {
+  const s = await setup(t);
+  const api = await s.serve();
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const q = s.product('notes', [{ result: 'Notes are saved', check: look }]);
+  const old = s.task(p.id, ['A-1']);
+  await s.run(old.id, [echo('page'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  const elsewhere = s.task(q.id, ['A-1'], 'Build: notes');
+  await s.run(elsewhere.id, [echo('notes'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  assert.equal(s.app.tasks.get(old.id)!.check_state, 'awaiting');
+  const finish = s.app.db.prepare("UPDATE tasks SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?");
+  for (let i = 0; i < 55; i++) {
+    const row = s.app.tasks.create({ title: `later ${i}`, origin: 'user', actor: 'user', projectId: p.id });
+    finish.run(s.clock.now + 60_000 + i, s.clock.now + 60_000 + i, row.id);
+  }
+  const all = await api('/api/tasks', 'GET');
+  assert.equal(all.status, 200);
+  assert.equal((all.body.finished as Array<{ id: string }>).some(row => row.id === old.id), false, '新しい 50 件には入らない');
+  assert.equal((all.body.active as Array<{ id: string }>).some(row => row.id === old.id), false, 'active には入れない');
+  const rows = all.body.awaiting as Array<{ id: string; check_state: string; items: unknown }>;
+  assert.deepEqual(rows.map(row => row.id).sort(), [old.id, elsewhere.id].sort());
+  assert.deepEqual(rows.find(row => row.id === old.id)!.items, { owned: 1, met: 0, remaining: ['A-1'] });
+  const mine = await api(`/api/tasks?project=${p.id}`, 'GET');
+  assert.deepEqual((mine.body.awaiting as Array<{ id: string }>).map(row => row.id), [old.id], '製品で絞る');
+  assert.deepEqual((await api('/api/tasks?project=none', 'GET')).body.awaiting, []);
+  await api(`/api/tasks/${old.id}/check`, 'POST', { version: 1 });
+  assert.deepEqual(((await api(`/api/tasks?project=${p.id}`, 'GET')).body.awaiting as unknown[]), [], '確かめが済めば外れる');
+});
+
+test('5-3c-u GET /api/tasks の awaiting: しまった製品の確かめ待ちは返さない（持ち主が片づけられないので）。多くても 200 件まで', async t => {
+  const s = await setup(t);
+  const api = await s.serve();
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const q = s.product('notes', [{ result: 'Notes are saved', check: look }]);
+  const shelved = s.task(q.id, ['A-1'], 'Build: notes');
+  await s.run(shelved.id, [echo('notes'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  assert.equal(s.app.tasks.get(shelved.id)!.check_state, 'awaiting');
+  assert.deepEqual((await api('/api/tasks', 'GET')).body.awaiting.map((row: { id: string }) => row.id), [shelved.id]);
+  s.app.projects.update(q.id, { archived: true });
+  assert.deepEqual((await api('/api/tasks', 'GET')).body.awaiting, [], 'しまった製品のものは出さない');
+  const mark = s.app.db.prepare("UPDATE tasks SET status = 'done', check_state = 'awaiting', completed_at = ?, updated_at = ? WHERE id = ?");
+  for (let i = 0; i < 205; i++) {
+    const row = s.app.tasks.create({ title: `old ${i}`, origin: 'user', actor: 'user', projectId: p.id });
+    mark.run(s.clock.now + i, s.clock.now + i, row.id);
+  }
+  assert.equal(((await api('/api/tasks', 'GET')).body.awaiting as unknown[]).length, 200, 'active と同じく 200 件まで');
 });

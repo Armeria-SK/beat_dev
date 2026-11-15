@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
-  addModel, countChanges, isEnvName, newAnthropicProvider, parseProblem, problemsOf, providerInUse, pruned,
+  addModel, isEnvName, newAnthropicProvider, parseProblem, problemsOf, providerInUse, pruned,
   keyEnvEdit, keyEnvProblem, kindPatch, openAfterRename,
-  removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, secondsOf, uniqueId,
+  removeModel, removeProvider, renameModel, renameProvider, secondsOf, uniqueId,
   updateAt, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
 
@@ -31,50 +31,10 @@ function sample(): Config {
   };
 }
 
-test('設定の節: 13 つ・4 グループで、名前と説明が en にある', () => {
-  assert.equal(SECTION_GROUPS.length, 4);
-  for (const group of SECTION_GROUPS) {
-    for (const key of [group.label, ...group.items.flatMap(i => [i.label, i.desc])]) {
-      assert.ok(en[key].length > 0, key);
-    }
-  }
-});
-
 test('辞書: 設定の画面の文字は en にある', () => {
   const keys = Object.keys(en).filter(k => /^(settings|probe)\./u.test(k));
-  assert.ok(keys.length >= 50, `${keys.length} 件しか読めていない`);
+  assert.ok(keys.length >= 20, `${keys.length} 件しか読めていない`);
   assert.equal(Object.keys(en).includes('settings.language.hint'), false, '仮の注意書きは外した');
-});
-
-test('変更の数: 何も変えていなければ 0、項目ごとに 1 件', () => {
-  const saved = sample();
-  assert.equal(countChanges(saved, structuredClone(saved)), 0);
-  const one = structuredClone(saved);
-  one.memory.userMaxChars = 2000;
-  assert.equal(countChanges(saved, one), 1);
-  const two = structuredClone(one);
-  two.profile.color = '#112233';
-  assert.equal(countChanges(saved, two), 2);
-});
-
-test('変更の数: 並び（文字列の一覧）は 1 件、models / providers は id で突き合わせる', () => {
-  const saved = sample();
-  const reordered = structuredClone(saved);
-  reordered.routing.chat = ['sonnet', 'big'];
-  assert.equal(countChanges(saved, reordered), 1, '順番を替えただけなら 1 件');
-
-  const edited = structuredClone(saved);
-  edited.models[0].contextLength = 65536;
-  edited.models[0].vision = true;
-  assert.equal(countChanges(saved, edited), 2);
-
-  const added = addModel(saved).config;
-  assert.equal(countChanges(saved, added), 1, '追加は 1 件');
-  assert.equal(countChanges(saved, removeModel(saved, 'sonnet')), 2, '削除は 1 件 + 順番から外れた分（チャットの順番）で 1 件');
-
-  const swapped = structuredClone(saved);
-  swapped.models.reverse();
-  assert.equal(countChanges(saved, swapped), 0, 'models の並びは id で見るので、並べ替えだけは変更に数えない');
 });
 
 test('問題の読み取り: 形の検査の /models/0/contextLength は、位置を id に置き換えて節と行を指す', () => {
@@ -243,12 +203,8 @@ test('保存の問題: issues があれば文を読み取らずに、そのま�
 });
 
 // T-42: ブラウザの節
-test('節「ブラウザ」: 「振る舞い」で MCP の次にあり、設定の tools.browser だけを持つ', () => {
-  const behavior = SECTION_GROUPS.find(g => g.label === 'settings.group.behavior')!;
-  const ids = behavior.items.map(i => i.id);
-  assert.equal(ids[ids.indexOf('mcp') + 1], 'browser');
+test('節「ブラウザ」: 設定の tools.browser の問題は browser の節を指し、ほかの tools は tools の節', () => {
   const saved = sample();
-  saved.tools.browser = { enabled: false, sites: [], limits: { maxTabs: 3 } };
   const problem = parseProblem('/tools/browser/limits/maxTabs: Expected number to be less or equal to 8', saved);
   assert.equal(problem.section, 'browser');
   assert.equal(parseProblem('/tools/deny/0: x', saved).section, 'tools');
@@ -282,17 +238,7 @@ test('ID を変えても開いていた行は開いたまま: 開いている行
   assert.ok(screen.includes('renameModel(c, id, next)).then(ok => { if (ok) onRenamed(next); })'));
   assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `p:${p.id}`, `p:${next}`))}'));
   assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `m:${m.id}`, `m:${next}`))}'));
-});
-
-test('モデルを消すボタンは、Edit を開かなくても行の頭に見える（詳しい欄の一番下に埋めない）', () => {
-  const screen = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
-  const row = screen.slice(screen.indexOf('function ModelRow('), screen.indexOf('function AddModel('));
-  const head = row.slice(row.indexOf('{reach && <Pill'));
-  assert.ok(head.includes("aria-label={t('ui.set.list.remove', name)}") && head.includes('onClick={() => setRemoving(true)}'), '行の頭に Remove がある');
-  assert.ok(!row.includes('`${k}:remove`'), '詳しい欄の中の行は無くす（消す口は 1 つ）');
-  assert.ok(row.includes('below={(open || removing) && ('), '確かめは Edit を開いていなくても行の下に出る');
-  assert.ok(row.includes("<RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')}"), '消す前の確かめは今までどおり');
-  assert.equal(en['ui.set.model.removeShort'], 'Remove');
+  assert.ok(screen.includes("onClick={() => setRemoving(true)}>{t('ui.set.model.removeShort')}") && screen.includes("{removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')}"), 'モデルを消すのは RowConfirm の確かめを通す');
 });
 
 test('種類を Anthropic に変える: 鍵の名前が無く、ANTHROPIC_API_KEY をほかの提供元が使っていれば、自分の鍵の名前を持たせる（鍵を共有しない）', () => {

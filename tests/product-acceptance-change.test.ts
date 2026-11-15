@@ -9,15 +9,15 @@ import { AcceptanceStore, applyChanges, frozenHash, type AcceptanceDoc, type Cha
 import { BUILD_BODY } from '../src/projects/build.ts';
 import { acceptanceChange, acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script } from './helpers.ts';
+import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
 const SMALL = { contextLength: 98_304, maxOutputTokens: 80_716 };
 
-const call = (name: string, args: unknown): Script => async function* () {
+const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
-  yield { type: 'tool_call', call: toolCall };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 
@@ -133,9 +133,15 @@ test('3-3-s 出し分けはパイプラインでも断る: 名前で呼んでも
   assert.equal(readFileSync(join(s.paths.projects, shop.id, 'acceptance.json'), 'utf8'), before);
 });
 
-test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,672）で、製品の計画モードの最初の頼み（system と道具の説明）は、一覧が下書きでも固定のあとでも、文書の言語が自動でも ja でも 40% 以下', async t => {
-  for (const [language, locked] of [[null, false], ['ja', false], [null, true], ['ja', true]] as const) {
-    const s = await setup(t, { models: [fakeModel('small', SMALL)] });
+const SHAPES: Array<[string, (config: { tools: { browser: { enabled: boolean }; agent: { enabled: boolean } } }) => void]> = [
+  ['default', () => undefined],
+  ['browser', c => { c.tools.browser.enabled = true; }],
+  ['browser+agent', c => { c.tools.browser.enabled = true; c.tools.agent.enabled = true; }],
+];
+
+test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,672）で、製品の計画モードの最初の頼み（system と道具の説明）は、一覧が下書きでも固定のあとでも、文書の言語が自動でも ja でも、既定・ブラウザオン・ブラウザ + agent オンの設定でも 40% 以下（T-1）', async t => {
+  for (const [shape, configure] of SHAPES) for (const [language, locked] of [[null, false], ['ja', false], [null, true], ['ja', true]] as const) {
+    const s = await setup(t, { models: [fakeModel('small', SMALL)], configure });
     const demo = await s.product('Demo');
     if (language) await s.json(`/api/projects/${demo.id}`, 'PATCH', { docLanguage: language });
     if (locked) {
@@ -150,7 +156,7 @@ test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,67
 ${last.system.dynamic}`, [], last.tools);
     const available = (await s.json(`/api/conversations/${uuid(1)}/context?modelId=small`, 'GET')).body.available as number;
     assert.equal(available, 12_672);
-    assert.ok(tokens <= available * 0.4, `${language ?? 'auto'} ${locked ? 'locked' : 'draft'}: ${tokens} > ${available * 0.4}`);
+    assert.ok(tokens <= available * 0.4, `${shape} ${language ?? 'auto'} ${locked ? 'locked' : 'draft'}: ${tokens} > ${available * 0.4}`);
   }
 });
 

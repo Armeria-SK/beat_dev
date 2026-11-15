@@ -26,45 +26,64 @@ function fixture(t: { after: (fn: () => void) => void }) {
 
 const once = (v: { decision: string; onceOnly: boolean }): boolean => v.decision === 'ask' && v.onceOnly;
 
-test('cp・mv: 先がフォルダなら 先/元の名前 が書かれる。守る場所に当たれば今回だけ', t => {
-  const f = fixture(t);
-  for (const command of [
-    'cp tmp/SOUL.md .', 'cp tmp/SOUL.md ./', 'mv tmp/SOUL.md .', 'cp -t . tmp/SOUL.md', 'cp tmp/x.txt tmp/SOUL.md .', 'cp tmp/x.txt SOUL.md', 'cp tmp/x.txt skills/', 'cp -r tmp skills', 'cp tmp/x.txt tmp/SOUL.md sub tmp/nested/a.txt skills',
-    'mv sub skills/', 'mv tmp/x.txt USER.md', 'cp -r tmp/. .', 'cp -r tmp/. ./', 'cp -rT tmp .', 'cp -r tmp/* .', 'cp tmp/* .', 'mv tmp/* .', 'cp $f .', 'cp -r $d .',
-  ]) {
-    const v = f.bash(command);
-    assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
-  }
-  for (const command of [
-    'cp tmp/x.txt .', 'cp -r tmp/nested .', 'cp tmp/x.txt sub/', 'cp -- *.md sub/', 'cp -r sub sub2', 'mv tmp/x.txt notes2.md', 'cp tmp/x.txt tmp/nested/a.txt docs', 'cp -r proj/src docs', 'cp -r sub proj', 'mv sub sub3',
-    'cp notes.md docs/notes.md', 'cp -T tmp/x.txt docs/y.txt', 'cp -v -- tmp/x.txt .',
-  ]) {
-    const v = f.bash(command);
-    assert.equal(v.decision, 'allow', `${command}: ${v.reasons.join(' / ')}`);
-  }
-});
+const BUILD_ROWS: Array<{ name: string; shell: 'bash' | 'ps'; cases: Array<['once' | 'allow' | 'ask', string[]]> }> = [
+  { name: 'cp・mv: 先がフォルダなら 先/元の名前 が書かれる。守る場所に当たれば今回だけ', shell: 'bash', cases: [
+    ['once', [
+      'cp tmp/SOUL.md .', 'cp tmp/SOUL.md ./', 'mv tmp/SOUL.md .', 'cp -t . tmp/SOUL.md', 'cp tmp/x.txt tmp/SOUL.md .', 'cp tmp/x.txt SOUL.md', 'cp tmp/x.txt skills/', 'cp -r tmp skills', 'cp tmp/x.txt tmp/SOUL.md sub tmp/nested/a.txt skills',
+      'mv sub skills/', 'mv tmp/x.txt USER.md', 'cp -r tmp/. .', 'cp -r tmp/. ./', 'cp -rT tmp .', 'cp -r tmp/* .', 'cp tmp/* .', 'mv tmp/* .', 'cp $f .', 'cp -r $d .',
+    ]],
+    ['allow', [
+      'cp tmp/x.txt .', 'cp -r tmp/nested .', 'cp tmp/x.txt sub/', 'cp -- *.md sub/', 'cp -r sub sub2', 'mv tmp/x.txt notes2.md', 'cp tmp/x.txt tmp/nested/a.txt docs', 'cp -r proj/src docs', 'cp -r sub proj', 'mv sub sub3',
+      'cp notes.md docs/notes.md', 'cp -T tmp/x.txt docs/y.txt', 'cp -v -- tmp/x.txt .',
+    ]],
+  ] },
+  { name: 'Copy-Item・Move-Item・Rename-Item・New-Item: 同じ組み立て（PowerShell）', shell: 'ps', cases: [
+    ['once', [
+      'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp\\SOUL.md .\\', 'Copy-Item -Path tmp/SOUL.md -Destination .', 'Move-Item tmp/SOUL.md .', 'Copy-Item tmp/x.txt SOUL.md', 'Copy-Item tmp/x.txt skills',
+      'Rename-Item notes.md -NewName SOUL.md', 'Rename-Item -Path notes.md -NewName USER.md', 'New-Item -Path . -Name SOUL.md', 'New-Item -Path skills -Name new -ItemType Directory', 'New-Item -Path . -Name $n', 'mkdir skills\\new','mkdir -Path . -Name SOUL.md',
+      'Copy-Item tmp/SOUL.md', 'Copy-Item -Path tmp/SOUL.md', 'cp tmp/SOUL.md', 'copy tmp/SOUL.md', 'Move-Item tmp/SOUL.md', 'Copy-Item tmp\\SOUL.md -Force', 'Copy-Item tmp\\* ', 'Copy-Item -Recurse tmp/.',
+      'Copy-Item tmp\\* .', 'Copy-Item tmp/* . -Recurse', 'Copy-Item -Recurse tmp/. .', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Copy-Item $f .', 'Rename-Item notes.md -NewName $n', 'Set-Content -Path skills/a.md x', 'Remove-Item skills -Recurse',
+    ]],
+    ['allow', [
+      'Copy-Item tmp/x.txt', 'Copy-Item tmp\\nested -Recurse', 'Move-Item tmp/x.txt',
+      'Copy-Item tmp/x.txt .', 'Copy-Item tmp/x.txt -Destination docs', 'Copy-Item -Recurse tmp/nested .', 'Move-Item tmp/x.txt notes2.md', 'Rename-Item notes.md -NewName notes2.md', 'New-Item -Path docs -Name b.md',
+      'New-Item -ItemType Directory out', 'Copy-Item *.md docs', 'Copy-Item tmp/x.txt docs/y.txt',
+      'mkdir out', 'md out2', 'mkdir -Path docs -Name made',
+    ]],
+  ] },
+  { name: 'curl -O・wget の既定の名前: URL の最後の名前で作業場所に書く', shell: 'bash', cases: [
+    ['once', [
+      'curl -O https://example.com/SOUL.md', 'curl -sSO https://example.com/USER.md', 'curl --remote-name https://example.com/SOUL.md', 'wget --max-redirect=0 https://example.com/USER.md', 'wget --max-redirect=0 -P . https://example.com/USER.md',
+      'wget --max-redirect=0 -P skills https://example.com/a.txt', 'curl -O --output-dir skills https://example.com/a.txt', 'curl -O https://example.com/%53OUL.md', 'curl -O https://example.com/SOUL.md?x=1',
+    ]],
+    ['allow', [
+      'curl -O https://example.com/notes.txt', 'curl -O --output-dir sub https://example.com/SOUL.md', 'wget --max-redirect=0 -P sub https://example.com/USER.md', 'wget --max-redirect=0 https://example.com/', 'wget --max-redirect=0 -O out.txt https://example.com/SOUL.md', 'curl https://example.com/SOUL.md',
+    ]],
+  ] },
+  { name: 'PowerShell: 括弧・部分式・メンバーの呼び出しで組み立てたパスは、中身が見えないので書くなら今回だけ（読むならふつうの確かめ）', shell: 'ps', cases: [
+    ['once', [
+      "Set-Content ('SOUL'+'.md') hi", "Set-Content -Path ('SOUL'+'.md') hi", "Set-Content 'x'.Replace('x','SOUL.md') hi", 'Set-Content $HOME.x hi', "Copy-Item tmp/x.txt (Join-Path . SOUL.md)", "New-Item -Name ('SOUL'+'.md')",
+      "Rename-Item notes.md -NewName ('SOUL'+'.md')", "Remove-Item ('SOUL'+'.md')", "Out-File ('SO'+'UL.md')", 'Set-Content $(1) hi', "Add-Content (Get-ChildItem)[0] hi", "echo hi | Set-Content ('S'+'OUL.md')",
+    ]],
+    ['ask', [
+      "Get-Content ('SOUL'+'.md')", "Get-Content 'x'.Replace('x','SOUL.md')", 'Get-ChildItem (Get-Location)',
+    ]],
+  ] },
+];
 
-test('Copy-Item・Move-Item・Rename-Item・New-Item: 同じ組み立て（PowerShell）', t => {
-  const f = fixture(t);
-  for (const command of [
-    'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp\\SOUL.md .\\', 'Copy-Item -Path tmp/SOUL.md -Destination .', 'Move-Item tmp/SOUL.md .', 'Copy-Item tmp/x.txt SOUL.md', 'Copy-Item tmp/x.txt skills',
-    'Rename-Item notes.md -NewName SOUL.md', 'Rename-Item -Path notes.md -NewName USER.md', 'New-Item -Path . -Name SOUL.md', 'New-Item -Path skills -Name new -ItemType Directory', 'New-Item -Path . -Name $n', 'mkdir skills\\new','mkdir -Path . -Name SOUL.md',
-    'Copy-Item tmp/SOUL.md', 'Copy-Item -Path tmp/SOUL.md', 'cp tmp/SOUL.md', 'copy tmp/SOUL.md', 'Move-Item tmp/SOUL.md', 'Copy-Item tmp\\SOUL.md -Force', 'Copy-Item tmp\\* ', 'Copy-Item -Recurse tmp/.',
-    'Copy-Item tmp\\* .', 'Copy-Item tmp/* . -Recurse', 'Copy-Item -Recurse tmp/. .', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Copy-Item $f .', 'Rename-Item notes.md -NewName $n', 'Set-Content -Path skills/a.md x', 'Remove-Item skills -Recurse',
-  ]) {
-    const v = f.ps(command);
-    assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
-  }
-  for (const command of [
-    'Copy-Item tmp/x.txt', 'Copy-Item tmp\\nested -Recurse', 'Move-Item tmp/x.txt',
-    'Copy-Item tmp/x.txt .', 'Copy-Item tmp/x.txt -Destination docs', 'Copy-Item -Recurse tmp/nested .', 'Move-Item tmp/x.txt notes2.md', 'Rename-Item notes.md -NewName notes2.md', 'New-Item -Path docs -Name b.md',
-    'New-Item -ItemType Directory out', 'Copy-Item *.md docs', 'Copy-Item tmp/x.txt docs/y.txt',
-    'mkdir out', 'md out2', 'mkdir -Path docs -Name made',
-  ]) {
-    const v = f.ps(command);
-    assert.equal(v.decision, 'allow', `${command}: ${v.reasons.join(' / ')}`);
-  }
-});
+for (const row of BUILD_ROWS) {
+  test(row.name, t => {
+    const f = fixture(t);
+    for (const [want, commands] of row.cases) {
+      for (const command of commands) {
+        const v = f[row.shell](command);
+        if (want === 'once') assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+        else assert.equal(v.decision, want, `${command}: ${v.reasons.join(' / ')}`);
+        if (want === 'ask') assert.equal(v.onceOnly, false, command);
+      }
+    }
+  });
+}
 
 test('ワイルドカード: 書く・消す側は当たるものを全部調べ、読む側も秘密のパスに当たれば止める', t => {
   const f = fixture(t);
@@ -91,21 +110,6 @@ test('ワイルドカード: 書く・消す側は当たるものを全部調べ
     assert.equal(v.decision, 'allow', `${command}: ${v.reasons.join(' / ')}`);
   }
   assert.equal(f.ps('Get-Content .e*').decision, 'deny');
-});
-
-test('curl -O・wget の既定の名前: URL の最後の名前で作業場所に書く', t => {
-  const f = fixture(t);
-  for (const command of [
-    'curl -O https://example.com/SOUL.md', 'curl -sSO https://example.com/USER.md', 'curl --remote-name https://example.com/SOUL.md', 'wget --max-redirect=0 https://example.com/USER.md', 'wget --max-redirect=0 -P . https://example.com/USER.md',
-    'wget --max-redirect=0 -P skills https://example.com/a.txt', 'curl -O --output-dir skills https://example.com/a.txt', 'curl -O https://example.com/%53OUL.md', 'curl -O https://example.com/SOUL.md?x=1',
-  ]) {
-    const v = f.bash(command);
-    assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
-  }
-  for (const command of ['curl -O https://example.com/notes.txt', 'curl -O --output-dir sub https://example.com/SOUL.md', 'wget --max-redirect=0 -P sub https://example.com/USER.md', 'wget --max-redirect=0 https://example.com/', 'wget --max-redirect=0 -O out.txt https://example.com/SOUL.md', 'curl https://example.com/SOUL.md']) {
-    const v = f.bash(command);
-    assert.equal(v.decision, 'allow', `${command}: ${v.reasons.join(' / ')}`);
-  }
 });
 
 test('.git を含むフォルダを丸ごと書く・動かす・消すのは今回だけ（フックが書かれる）', t => {
@@ -140,22 +144,6 @@ test('path-expand: 列挙・.git の探索・守る場所の先祖', t => {
   assert.equal(protectedInside(join(f.ws, 'sub'), f.policy), undefined);
   assert.equal(protectedInside(join(f.ws, 'skills'), f.policy), 'skill');
   assert.equal(protectedInside(join(f.ws, 'docs'), f.policy), undefined);
-});
-
-test('PowerShell: 括弧・部分式・メンバーの呼び出しで組み立てたパスは、中身が見えないので書くなら今回だけ（読むならふつうの確かめ）', t => {
-  const f = fixture(t);
-  for (const command of [
-    "Set-Content ('SOUL'+'.md') hi", "Set-Content -Path ('SOUL'+'.md') hi", "Set-Content 'x'.Replace('x','SOUL.md') hi", 'Set-Content $HOME.x hi', "Copy-Item tmp/x.txt (Join-Path . SOUL.md)", "New-Item -Name ('SOUL'+'.md')",
-    "Rename-Item notes.md -NewName ('SOUL'+'.md')", "Remove-Item ('SOUL'+'.md')", "Out-File ('SO'+'UL.md')", 'Set-Content $(1) hi', "Add-Content (Get-ChildItem)[0] hi", "echo hi | Set-Content ('S'+'OUL.md')",
-  ]) {
-    const v = f.ps(command);
-    assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
-  }
-  for (const command of ["Get-Content ('SOUL'+'.md')", "Get-Content 'x'.Replace('x','SOUL.md')", 'Get-ChildItem (Get-Location)']) {
-    const v = f.ps(command);
-    assert.equal(v.decision, 'ask', `${command}: ${v.reasons.join(' / ')}`);
-    assert.equal(v.onceOnly, false, command);
-  }
 });
 
 test('PowerShell: 引用符で始まる引数は閉じたところで終わる（本物の Parser と同じ）。くっつけて書いた flag も flag として調べる', t => {

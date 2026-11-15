@@ -1,4 +1,4 @@
-import type { CuriosityItem, Task, TaskStatus } from './api.ts';
+import type { Task, TaskStatus } from './api.ts';
 import type { PlainKey } from './i18n/types.ts';
 
 // タスク画面の、画面を使わない部分（行の補足の 1 行・どの操作を出すか）。文字は辞書のキーで持ち、表示のときに引く。
@@ -10,18 +10,14 @@ export const STATUS_KEY: Record<TaskStatus, PlainKey> = {
 export const ORIGIN_KEY: Record<Task['origin'], PlainKey> = {
   user: 'tasks.origin.user', self: 'tasks.origin.self', schedule: 'tasks.origin.schedule', curiosity: 'tasks.origin.curiosity',
 };
-export const CURIOSITY_STATUS_KEY: Record<CuriosityItem['status'], PlainKey> = {
-  open: 'curiosity.status.open', researching: 'curiosity.status.researching', done: 'curiosity.status.done', dropped: 'curiosity.status.dropped',
-};
-
-const PRIORITY_KEYS = { 1: 'tasks.priority.1', 2: 'tasks.priority.2', 3: 'tasks.priority.3' } as const satisfies Record<number, PlainKey>;
-export const priorityKey = (priority: number): PlainKey => (priority === 1 ? PRIORITY_KEYS[1] : priority === 3 ? PRIORITY_KEYS[3] : PRIORITY_KEYS[2]);
 
 const EVENT_KEYS = {
   created: 'tasks.event.created', note: 'tasks.event.note', requeued: 'tasks.event.requeued', question: 'tasks.event.question', approval: 'tasks.event.approval',
   answer: 'tasks.event.answer', run: 'tasks.event.run', done: 'tasks.event.done', failed: 'tasks.event.failed', cancelled: 'tasks.event.cancelled',
   approved: 'tasks.event.approved', reopened: 'tasks.event.reopened', skipped: 'tasks.event.skipped', edited: 'tasks.event.edited', context: 'tasks.event.context',
-  uncancelled: 'tasks.event.uncancelled',
+  uncancelled: 'tasks.event.uncancelled', gate_passed: 'tasks.event.gate_passed', gate_refused: 'tasks.event.gate_refused', gate_closed: 'tasks.event.gate_closed',
+  gate_list_changed: 'tasks.event.gate_list_changed', gate_list_notified: 'tasks.event.gate_list_notified', item_check_failed: 'tasks.event.item_check_failed',
+  check_failed: 'tasks.event.check_failed', check_passed: 'tasks.event.check_passed', owner_check: 'tasks.event.owner_check', owner_fix: 'tasks.event.owner_fix',
 } as const satisfies Record<string, PlainKey>;
 export function eventKey(kind: string): PlainKey | null {
   return Object.hasOwn(EVENT_KEYS, kind) ? EVENT_KEYS[kind as keyof typeof EVENT_KEYS] : null;

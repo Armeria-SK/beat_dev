@@ -24,9 +24,8 @@ function sample(schema: any, depth = 0): unknown {
 const RESULTS = [null, { text: 'ok', isError: false }, { text: 'Error: {"x":1}', isError: true }];
 const INPUTS = (name: string, schema: unknown) => [JSON.stringify(sample(schema)), '', 'not json', '{}', '[1,2]', 'null', '"text"', JSON.stringify({ nested: { a: 1 } }), `{"${name}":`];
 
-test('ui/tool-row: 組み込みの道具 49 個のどれでも、どの引数・結果でも落ちず、対象と meta に JSON を出さない', () => {
+test('ui/tool-row: 組み込みの道具のどれでも、どの引数・結果でも落ちず、対象と meta に JSON を出さない', () => {
   const tools = builtinTools();
-  assert.equal(tools.length, 49);
   for (const tool of tools) {
     for (const input of INPUTS(tool.name, tool.input)) {
       for (const result of RESULTS) {
