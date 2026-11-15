@@ -79,6 +79,9 @@ const RESTORABLE: readonly TaskStatus[] = ACTIVE;
 const IS_TEMPLATE = 'cron IS NOT NULL AND parent_id IS NULL';
 const FINISHED = "status IN ('done', 'failed', 'cancelled')";
 const FINISHED_T = 'COALESCE(completed_at, updated_at)';
+const OPEN_CHILD = "('ready', 'running', 'waiting')";
+const NO_OPEN_CHILD = `NOT EXISTS (SELECT 1 FROM tasks child WHERE child.spawned_by = tasks.id AND child.status IN ${OPEN_CHILD})`;
+const PRODUCT_FREE = "(project_id IS NULL OR NOT EXISTS (SELECT 1 FROM tasks busy WHERE busy.project_id = tasks.project_id AND busy.status = 'running'))";
 
 export const SCHEDULE_MAX_RANGE_MS = 8 * 86_400_000;
 export const SCHEDULE_PLANNED_LIMIT = 200;
@@ -652,12 +655,27 @@ export class TaskStore {
     return this.#changed(id);
   }
 
+  openChildren(id: string): number {
+    return (this.#db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE spawned_by = ? AND status IN ${OPEN_CHILD}`).get(id) as { n: number }).n;
+  }
+
+  productBusy(task: Task): boolean {
+    return task.project_id !== null && this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' AND id != ? LIMIT 1").get(task.project_id, task.id) !== undefined;
+  }
+
+  checkFailures(id: string): { count: number; last: string | null } {
+    const rows = this.#db.prepare("SELECT kind, content FROM task_events WHERE task_id = ? AND kind IN ('check_failed', 'check_passed', 'reopened') ORDER BY id DESC LIMIT 100").all(id) as Array<{ kind: string; content: string | null }>;
+    const streak = rows.findIndex(row => row.kind !== 'check_failed');
+    return { count: streak === -1 ? rows.length : streak, last: rows[0]?.kind === 'check_failed' ? rows[0].content : null };
+  }
+
   // accept: 並べた順に見て、これを通った最初のもの（提供元が満杯のタスクを飛ばして次を見るため）
   pickNext(options: { allowSelf: boolean; accept?: (task: Task) => boolean }): Task | undefined {
     const now = this.#now();
     const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
     const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins}
       AND (project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
+      AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}
       ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at)`;
     if (!options.accept) return this.#db.prepare(`${sql} LIMIT 1`).get(now) as Task | undefined;
     return (this.#db.prepare(sql).all(now) as unknown as Task[]).find(options.accept);
@@ -666,15 +684,11 @@ export class TaskStore {
   nextWakeAt(options: { allowSelf: boolean }): number | undefined {
     const now = this.#now();
     const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
-    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND (status = 'scheduled' OR (status = 'ready' AND origin IN ${origins}))`).get(now) as { t: number | null };
+    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND (status = 'scheduled' OR (status = 'ready' AND origin IN ${origins} AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}))`).get(now) as { t: number | null };
     return row.t ?? undefined;
   }
 
   createdSince(origin: TaskOrigin, since: number): number {
     return (this.#db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE (origin = ? OR proposed_by = ?) AND created_at > ?').get(origin, origin, since) as { n: number }).n;
-  }
-
-  waitingSince(olderThanMs: number): Task[] {
-    return this.#db.prepare("SELECT * FROM tasks WHERE status = 'waiting' AND updated_at < ?").all(this.#now() - olderThanMs) as unknown as Task[];
   }
 }

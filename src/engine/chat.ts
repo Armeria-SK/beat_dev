@@ -209,6 +209,7 @@ export class ChatEngine {
   #runIndex = new Map<string, string>();
   // 止める操作（stop）を受けた実行
   #stopped = new Set<string>();
+  #hardStops = new Map<string, AbortController>();
   // 子の担当の会話 → それを任せた親の会話（親がチャットのときだけ。子の権限モードは、親の会話のいまのモードに従う）
   #modeHost = new Map<string, string>();
   // 実行（親）ごとに、これまでに任せた子の数
@@ -572,7 +573,9 @@ export class ChatEngine {
     const active = this.#active.get(runId);
     if (!active) return false;
     this.#stopped.add(runId);
-    active.controller.abort(providerError('cancelled', 'cancelled', {}, { retryable: false }));
+    const reason = providerError('cancelled', 'cancelled', {}, { retryable: false });
+    this.#hardStops.get(runId)?.abort(reason);
+    active.controller.abort(reason);
     return true;
   }
 
@@ -625,6 +628,7 @@ export class ChatEngine {
 
   #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): void {
     const controller = new AbortController();
+    this.#hardStops.set(runId, new AbortController());
     this.#byConversation.set(conversationId, runId);
     if (kind === 'chat') { this.#runModel.set(runId, this.#d.conversations.get(conversationId)?.model_id ?? null); this.#runMode.set(runId, this.#d.conversations.modeOf(conversationId)); }
     let ended: EngineResult | undefined;
@@ -649,6 +653,7 @@ export class ChatEngine {
         this.#runFence.delete(runId);
         this.#runIndex.delete(runId);
         this.#stopped.delete(runId);
+        this.#hardStops.delete(runId);
         this.#modeHost.delete(conversationId);
         this.#agentSpawned.delete(runId);
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
@@ -721,7 +726,7 @@ export class ChatEngine {
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
-      runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
+      runId, conversationId, kind, signal, stopSignal: this.#hardStops.get(runId)?.signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),

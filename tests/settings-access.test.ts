@@ -382,7 +382,7 @@ test('広がりの検出（道具ごとの方針）: 止める → 承認を求�
   }
   assert.deepEqual(accessWidening(withPolicies(undefined), withPolicies({ shell_run: 'block', file_write: 'ask' })), [], '足すのは厳しくすること');
   // サーバーが無視するものは、緩めても何も広がらない: 方針を持てない道具、読めない値は allow 扱い
-  assert.deepEqual(accessWidening(withPolicies({ task_complete: 'block', ask_user: 'ask', task_checkpoint: 'block' }), withPolicies({})), []);
+  assert.deepEqual(accessWidening(withPolicies({ task_complete: 'block', task_checkpoint: 'ask' }), withPolicies({})), []);
   assert.deepEqual(accessWidening(withPolicies({ shell_run: 'nope' }), withPolicies({ shell_run: 'allow' })), [], '読めない値は allow と同じ');
   assert.deepEqual(accessWidening(withPolicies({ shell_run: 'block' }), withPolicies({ shell_run: 'nope' })), [loosened('shell_run', 'block', 'allow')], '読めない値に書き換えても、緩めたことになる');
   // 確かめた内容と書く直前に数え直した内容が同じかを見る印は、緩め方が変われば変わる

@@ -69,41 +69,37 @@ type Setup = Awaited<ReturnType<typeof setup>>;
 
 // ── 返事待ち ──
 
-test('返事待ちが片づいたら（答えた・取り消した）、そのタスクの質問と知らせ直しの通知が既読になる。ほかのタスクの通知と、同じタスクの別の種類の通知はそのまま', async t => {
+test('返事待ちが片づいたら（答えた）、その急ぐ質問の通知が既読になる。ほかのタスクの質問の通知と、同じタスクの別の種類の通知はそのまま。返事待ちの知らせ直しは出ない', async t => {
   const s = await setup(t);
+  const questionRows = (task: Pick<Task, 'id'>) => {
+    const ids = s.app.questions.list({ status: 'open', taskId: task.id }).concat(s.app.questions.list({ status: 'answered', taskId: task.id })).map(q => `question-blocking:${q.id}`);
+    return s.app.db.prepare(`SELECT id, read_at FROM notifications WHERE kind = 'question_new' AND dedup_key IN (${ids.map(() => '?').join(', ')}) ORDER BY id`).all(...ids) as Array<{ id: number; read_at: number | null }>;
+  };
   const ask = async (title: string) => {
     const task = s.app.tasks.create({ title, origin: 'user', actor: 'user' });
-    s.adapter().scripts.push(toolCall('ask_user', { question: `${title}？` }));
+    s.adapter().scripts.push(toolCall('question_add', { question: `${title}？`, why: 'w', options: ['a', 'b'], blocking: true }));
     assert.equal(await s.app.worker.tick(), 'ran');
     assert.equal(s.app.tasks.get(task.id)!.status, 'waiting');
     return task;
   };
   const answered = await ask('answered');
   const unrelated = await ask('unrelated');
-  const cancelled = await ask('cancelled');
   s.clock.now += 13 * HOUR;
   assert.equal(await s.app.worker.tick(), 'idle');
-  for (const task of [answered, unrelated, cancelled]) {
-    assert.equal(s.rows('task_waiting', task).length, 2, '質問の通知と 12 時間後の知らせ直し');
-    assert.ok(s.rows('task_waiting', task).every(n => n.read_at === null));
+  for (const task of [answered, unrelated]) {
+    assert.equal(questionRows(task).length, 1, '質問の通知は 1 つ（12 時間後の知らせ直しは無い）');
+    assert.equal(s.rows('task_waiting', task).length, 0);
   }
   const done = s.app.notifications.notify({ kind: 'task_done', title: '別の種類', link: `#/tasks/${answered.id}`, dedupKey: 'done:answered' })!;
   assert.equal(s.readEvents().length, 0);
 
+  const answeredIds = questionRows(answered).map(n => n.id);
   assert.equal((await s.json(`/api/tasks/${answered.id}/answer`, 'POST', { text: 'はい' })).status, 200);
-  const answeredIds = s.rows('task_waiting', answered).map(n => n.id);
-  assert.ok(s.rows('task_waiting', answered).every(n => n.read_at !== null), '答えたら、質問も知らせ直しも既読');
-  assert.ok(s.rows('task_waiting', unrelated).every(n => n.read_at === null), 'ほかのタスクはそのまま');
-  assert.equal((s.app.db.prepare('SELECT read_at FROM notifications WHERE id = ?').get(done.id) as { read_at: number | null }).read_at, null, '同じタスクでも、返事待ち以外の通知は触らない');
-  assert.deepEqual(s.readEvents(), [{ type: 'notification.read', ids: answeredIds, unread: 5 }]);
-
-  assert.equal((await s.json(`/api/tasks/${cancelled.id}/cancel`, 'POST')).status, 200);
-  assert.ok(s.rows('task_waiting', cancelled).every(n => n.read_at !== null), '取り消したら既読');
-  assert.ok(s.rows('task_waiting', unrelated).every(n => n.read_at === null));
-
-  s.flood(60);
-  const pinned = s.app.notifications.list().filter(n => n.kind === 'task_waiting').map(n => n.id);
-  assert.deepEqual(pinned, s.rows('task_waiting', unrelated).map(n => n.id).sort((a, b) => b - a), '一覧の先頭に残るのは、まだ答えていないタスクのものだけ');
+  const readOf = (id: number) => (s.app.db.prepare('SELECT read_at FROM notifications WHERE id = ?').get(id) as { read_at: number | null }).read_at;
+  assert.ok(answeredIds.every(id => readOf(id) !== null), '答えたら、質問の通知は既読');
+  assert.ok(questionRows(unrelated).every(n => n.read_at === null), 'ほかのタスクはそのまま');
+  assert.equal((s.app.db.prepare('SELECT read_at FROM notifications WHERE id = ?').get(done.id) as { read_at: number | null }).read_at, null, '同じタスクでも、質問以外の通知は触らない');
+  assert.deepEqual(s.readEvents(), [{ type: 'notification.read', ids: answeredIds, unread: 2 }]);
 });
 
 // ── 失敗 ──
@@ -167,7 +163,7 @@ async function getStuck(s: Setup, task: Pick<Task, 'id'>): Promise<void> {
     assert.equal(await s.app.worker.tick(), 'ran');
     s.clock.now += wait;
   }
-  assert.equal(s.app.tasks.get(task.id)!.status, 'waiting');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'failed');
 }
 
 const noticeEvents = (s: Setup) => s.events.filter(e => e.type === 'notification');
@@ -192,22 +188,27 @@ test('失敗の知らせが片づいたあと、24 時間以内にまた失敗�
   assert.ok(s.clock.now - started < 24 * HOUR, '24 時間以内の出来事');
 });
 
-test('相談の知らせが片づいたあと、24 時間以内にまた行き詰まったら、新しい相談の知らせが未読で出て画面へも流れる', async t => {
+test('行き詰まったタスクは失敗の知らせと質問の知らせを出す。Retry で開き直すと失敗の知らせは既読になり、24 時間以内にまた行き詰まったら新しい失敗の知らせが未読で出て画面へも流れる', async t => {
   const s = await setup(t);
   const task = s.app.tasks.create({ title: 'vague', origin: 'user', actor: 'user' });
   const started = s.clock.now;
   await getStuck(s, task);
-  assert.equal(s.rows('task_waiting', task).length, 1);
+  assert.equal(s.rows('task_failed', task).length, 1);
+  assert.equal(s.rows('task_waiting', task).length, 0);
+  const stuck = s.app.questions.list({ status: 'open', taskId: task.id });
+  assert.deepEqual(stuck.map(q => [q.kind, q.blocking, q.options]), [['stuck', false, ['Retry', 'Leave it']]]);
+  assert.equal(s.app.notifications.list().filter(n => n.kind === 'question_new' && n.dedup_key === `question:${stuck[0]!.id}`).length, 1);
 
-  assert.equal((await s.json(`/api/tasks/${task.id}/answer`, 'POST', { text: 'こうして' })).status, 200);
-  assert.notEqual(s.rows('task_waiting', task)[0]!.read_at, null);
+  assert.equal((await s.json(`/api/questions/${stuck[0]!.id}/answer`, 'POST', { choice: 0 })).status, 200);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
+  assert.notEqual(s.rows('task_failed', task)[0]!.read_at, null);
   const sent = noticeEvents(s).length;
 
   await getStuck(s, task);
-  const after = s.rows('task_waiting', task);
-  assert.equal(after.length, 2, '2 回目の相談にも知らせが出る');
+  const after = s.rows('task_failed', task);
+  assert.equal(after.length, 2, '2 回目の行き詰まりにも知らせが出る');
   assert.equal(after[1]!.read_at, null, '新しい知らせは未読');
-  assert.equal(noticeEvents(s).length, sent + 1, '画面へも流れる');
+  assert.ok(noticeEvents(s).length > sent, '画面へも流れる');
   assert.ok(s.clock.now - started < 24 * HOUR, '24 時間以内の出来事');
 });
 

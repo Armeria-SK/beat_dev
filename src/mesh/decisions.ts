@@ -27,6 +27,7 @@ export interface OwnerDecision {
   kept: boolean;
   item: string | null;
   external: boolean;
+  fromBeat?: boolean | undefined;
 }
 
 const chars = (text: string): number => Array.from(text).length;
@@ -47,7 +48,7 @@ export function decisionLine(d: OwnerDecision): string {
   const tail = d.external ? EXTERNAL_MARK : '';
   const answer = d.picked === 'option' ? aiText(d.answer) : one(d.answer);
   const question = aiText(d.question);
-  const asked = (q: string) => (q ? `. AI asked: "${q}"` : '');
+  const asked = (q: string) => (q ? `. ${d.fromBeat ? 'beat' : 'AI'} asked: "${q}"` : '');
   const frame = chars(asked('-')) - 1;
   const room = DECISIONS_LINE_MAX - chars(head) - chars(tail) - 1;
   const answerRoom = Math.min(chars(answer), Math.max(1, room - (question ? frame + QUESTION_MIN : 0)));

@@ -44,6 +44,17 @@ const anyDynamic = (words: readonly Word[]): boolean => words.some(w => w.dynami
 const STDIN_SCRIPT = /^(?:-|\/dev\/stdin|\/dev\/fd\/0|\/proc\/self\/fd\/0)$/u;
 const SHELL_VALUE_OPTIONS = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
 const XARGS_VALUES: ReadonlySet<string> = new Set([...WRAPPED_VALUE_FLAGS['xargs']!].filter(f => !['-i', '-l', '-e'].includes(f)));
+const LONG_SWITCHES: Record<string, ReadonlySet<string>> = {
+  xargs: new Set(['--replace', '--eof', '--max-lines', '--null', '--no-run-if-empty', '--verbose', '--interactive', '--open-tty', '--exit', '--show-limits']),
+  timeout: new Set(['--preserve-status', '--foreground', '--verbose']),
+  ionice: new Set(['--ignore']),
+  watch: new Set(['--beep', '--chgexit', '--errexit', '--exec', '--no-title', '--precise', '--color', '--no-color', '--no-wrap', '--differences']),
+  parallel: new Set(['--keep-order', '--line-buffer', '--group', '--ungroup', '--dry-run', '--verbose', '--progress', '--bar', '--eta', '--no-notice', '--pipe', '--null', '--tag', '--quote']),
+  time: new Set(['--append', '--verbose', '--portability', '--quiet']),
+  setsid: new Set(['--ctty', '--fork', '--wait']),
+  env: new Set(['--ignore-environment', '--null', '--debug', '--list-signal-handling', '--block-signal', '--default-signal', '--ignore-signal']),
+};
+const unknownLong = (program: string, t: string): boolean => t.startsWith('--') && t !== '--' && !t.includes('=') && !['--help', '--version'].includes(t) && !LONG_SWITCHES[program]?.has(t);
 const PACKAGE_GLOBAL_VALUES = new Set(['--prefix', '-w', '--workspace', '-C', '--dir', '--filter', '-F', '--cwd', '--registry', '--userconfig', '--cache', '--loglevel']);
 const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/u;
 const POWERSHELL = /^(?:powershell|pwsh)$/u;
@@ -120,12 +131,17 @@ function sourceCode(args: readonly Word[], stdin: boolean): InnerSource {
   return !file || file.dynamic || stdinPath(file.text) ? null : undefined;
 }
 
+const cmdLine = (tokens: readonly string[]): string => tokens.map(t => quote({ text: t, dynamic: false, glob: /[*?[]/u.test(t) && !t.includes("'") }, false)).join(' ');
+
 function cmdCode(args: readonly Word[], stdin: boolean): InnerSource {
   const at = args.findIndex(w => /^\/[ckr]$/iu.test(w.text));
   if (at < 0) return stdin || args.length > 0 ? null : undefined;
   const rest = args.slice(at + 1);
   if (rest.length === 0 || anyDynamic(rest) || rest.some(w => /[&|<>^%!()"#;,=]/u.test(w.text))) return null;
-  return { text: rest.map(w => w.text).join(' '), shell: 'bash' };
+  const tokens = rest.flatMap(w => w.text.split(/\s+/u)).filter(Boolean);
+  if (tokens[0]) tokens[0] = tokens[0].replace(/^@+/u, '');
+  while (tokens.length && (tokens[0] === '' || tokens[0]!.toLowerCase() === 'call')) tokens.shift();
+  return tokens.length ? { text: cmdLine(tokens), shell: 'bash' } : null;
 }
 
 function wrapped(program: string, args: readonly Word[], ps: boolean, shell: ShellKind): InnerSource {
@@ -135,6 +151,7 @@ function wrapped(program: string, args: readonly Word[], ps: boolean, shell: She
     const a = args[i]!.text;
     if (a === '--') { i++; break; }
     if (!a.startsWith('-')) break;
+    if (!valueFlags.has(a) && unknownLong(program, a)) return null;
     i += valueFlags.has(a) ? 2 : 1;
   }
   if (program === 'timeout') i++;
@@ -173,6 +190,7 @@ function envCommand(args: readonly Word[], shell: ShellKind): InnerSource {
     if (t === '-C' || t === '--chdir' || t.startsWith('--chdir=')) return null;
     if (t === '-u' || t === '--unset') { i++; continue; }
     if (t === '--') { const rest = args.slice(i + 1); return rest.length ? { text: [...assigns, joinWords(rest, false)].join(' '), shell } : undefined; }
+    if (unknownLong('env', t)) return null;
     if (t.startsWith('-')) continue;
     if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(t)) { assigns.push(quote(w, false)); continue; }
     return { text: [...assigns, joinWords(args.slice(i), false)].join(' '), shell };
@@ -186,6 +204,7 @@ function prefixCommand(program: string, args: readonly Word[], ps: boolean, shel
   let i = 0;
   while (i < args.length && args[i]!.text.startsWith('-')) {
     if (args[i]!.text === '--') { i++; break; }
+    if (!VALUE[program]!.has(args[i]!.text) && unknownLong(program, args[i]!.text)) return null;
     i += VALUE[program]!.has(args[i]!.text) ? 2 : 1;
   }
   const title = args[i];
@@ -240,8 +259,8 @@ function startProcess(args: readonly Word[]): InnerSource {
   if (!file) file = positional.shift();
   if (argList.length === 0) argList.push(...positional);
   if (!file || file.dynamic || anyDynamic(argList)) return null;
-  const argText = argList.map(w => w.text.split(',').map(s => s.trim().replace(/^["']|["']$/gu, '')).join(' ')).join(' ');
-  return { text: `${quote(file, false)} ${argText}`.trim(), shell: 'bash' };
+  const argTokens = argList.flatMap(w => w.text.split(',').map(s => s.trim().replace(/^["']|["']$/gu, ''))).flatMap(s => s.split(/\s+/u)).filter(Boolean);
+  return { text: [quote(file, false), cmdLine(argTokens)].filter(Boolean).join(' '), shell: 'bash' };
 }
 
 function wslCommand(args: readonly Word[]): InnerSource {

@@ -35,8 +35,8 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours']);
 });
 
 test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残らず、入力は書き換えない', () => {
@@ -457,5 +457,25 @@ test('持ち主の形（tools.maxIterations: 0 と SearXNG の tools.web）が�
     '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl',
     '[INFO] Read old settings in their new form: tools.web.search "searxng" → "duckduckgo"',
   ]);
+  assert.deepEqual(readFileSync(paths.config), before);
+});
+
+test('5-2b-s worker.remindAfterHours: 12 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る', t => {
+  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+  raw.worker = { ...(raw.worker ?? {}), remindAfterHours: 12 };
+  const config = parseConfig(raw);
+  assert.equal('remindAfterHours' in config.worker, false);
+  assert.deepEqual(dropLegacy(raw).dropped, ['worker.remindAfterHours']);
+
+  const dir = tempDir(t);
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
+  mkdirSync(paths.data, { recursive: true });
+  writeFileSync(paths.config, `${JSON.stringify(withProtectRow(raw), null, 2)}\n`);
+  const before = readFileSync(paths.config);
+  const logs: string[] = [];
+  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, env: {} });
+  t.after(() => app.close());
+  assert.equal('remindAfterHours' in app.config().worker, false);
+  assert.deepEqual(logs.filter(line => line.includes('no longer used')), ['[INFO] Ignored settings that are no longer used: worker.remindAfterHours']);
   assert.deepEqual(readFileSync(paths.config), before);
 });

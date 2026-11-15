@@ -48,10 +48,11 @@ for (const language of ['en'] as const) {
     await s.app.worker.tick();
     assert.equal(s.linkOf('task_done'), `#/tasks/${done.id}`);
 
-    const asked = s.app.tasks.create({ title: 'Ask', origin: 'user', actor: 'user' });
-    s.adapter().scripts.push(toolCall('ask_user', { question: 'q' }));
+    s.app.tasks.create({ title: 'Ask', origin: 'user', actor: 'user' });
+    s.adapter().scripts.push(toolCall('question_add', { question: 'q', why: 'w', options: ['a', 'b'], blocking: true }));
     await s.app.worker.tick();
-    assert.equal(s.app.notifications.list().find(n => n.kind === 'task_waiting')?.link, `#/tasks/${asked.id}`);
+    assert.equal(s.linkOf('question_new'), '#/questions');
+    assert.equal(s.linkOf('task_waiting'), undefined);
 
     const failing = s.app.tasks.create({ title: 'Fail', origin: 'user', actor: 'user' });
     for (let i = 0; i < 3; i++) {
@@ -60,12 +61,6 @@ for (const language of ['en'] as const) {
       s.clock.now += 10 * MIN;
     }
     assert.equal(s.linkOf('task_failed'), `#/tasks/${failing.id}`);
-
-    // 返事待ちの知らせ直し
-    s.clock.now += 13 * HOUR;
-    await s.app.worker.tick();
-    const reminder = s.app.notifications.list().filter(n => n.kind === 'task_waiting');
-    assert.ok(reminder.length >= 2 && reminder.every(n => n.link === `#/tasks/${asked.id}` || n.link?.startsWith('#/tasks/')), JSON.stringify(reminder.map(n => n.link)));
 
     // 承認が必要（タスクの実行中）
     const running = s.app.tasks.create({ title: 'Needs approval', origin: 'user', actor: 'user' });
@@ -104,10 +99,10 @@ for (const language of ['en'] as const) {
     const links = [...all(), ...limited.app.notifications.list().map(n => n.link), ...noModel.app.notifications.list().map(n => n.link)];
 
     // 最終的に出てくるリンクは、今ある画面だけ（#/review・#/today・#/curiosity・#/notifications は使わない。#/memory は整理の案の通知だけで、tests/memory-budget.test.ts で見る）
-    const allowed = /^#\/(tasks(\/[0-9a-f-]{36})?|settings|pending|skills\/draft\/[^/]+)$/u;
+    const allowed = /^#\/(tasks(\/[0-9a-f-]{36})?|questions|settings|pending|skills\/draft\/[^/]+)$/u;
     for (const link of links) assert.match(link ?? '', allowed);
     assert.ok(!links.some(link => /#\/(review|today|curiosity|notifications)/u.test(link ?? '')));
-    assert.deepEqual([...new Set(links.map(link => link!.replace(/[0-9a-f-]{36}/u, '<id>').replace(/skills\/draft\/.*/u, 'skills/draft/<name>')))].sort(), ['#/pending', '#/settings', '#/skills/draft/<name>', '#/tasks', '#/tasks/<id>']);
+    assert.deepEqual([...new Set(links.map(link => link!.replace(/[0-9a-f-]{36}/u, '<id>').replace(/skills\/draft\/.*/u, 'skills/draft/<name>')))].sort(), ['#/pending', '#/questions', '#/settings', '#/skills/draft/<name>', '#/tasks', '#/tasks/<id>']);
   });
 
   test(`持ち主への知らせはタスクを指し、同じ題は重ねない（${language}）`, async t => {

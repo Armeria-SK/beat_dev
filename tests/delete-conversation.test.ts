@@ -232,7 +232,7 @@ test('モデルの道具には、会話を消すものが無い（道具の一�
   const tools = builtinTools();
   const names = tools.map(t => t.name).sort();
   assert.deepEqual(names, [
-    'acceptance_change', 'acceptance_write', 'agent_run', 'ask_user', 'browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type', 'calculate', 'checklist_write', 'curiosity_add', 'curiosity_list', 'curiosity_update', 'date_calc', 'deviation_add', 'doc_read', 'file_edit', 'file_list', 'file_read', 'file_search', 'file_write', 'history_read', 'history_search', 'image_view',
+    'acceptance_change', 'acceptance_write', 'agent_run', 'browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type', 'calculate', 'checklist_write', 'curiosity_add', 'curiosity_list', 'curiosity_update', 'date_calc', 'deviation_add', 'doc_read', 'file_edit', 'file_list', 'file_read', 'file_search', 'file_write', 'history_read', 'history_search', 'image_view',
     'memory_forget', 'memory_save', 'memory_search', 'memory_update', 'mesh_decision_add', 'mesh_glossary_set', 'mesh_map_set', 'mesh_read', 'mesh_search', 'mesh_state_set', 'notify_owner', 'plan_write', 'question_add', 'question_list', 'shell_run', 'skill_draft', 'skill_view', 'table_write', 'task_checkpoint', 'task_complete',
     'task_create', 'task_list', 'task_update', 'web_download', 'web_fetch', 'web_search',
   ], '道具を足したら、会話を消せないことを確かめ直す');
