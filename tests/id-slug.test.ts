@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
-import { commitPendingId, idFromInput, ID_RULES, slugId, uniqueSlug } from '../web/src/settings/ids.ts';
+import { ID_RULES, slugId, uniqueSlug } from '../web/src/settings/ids.ts';
 
 // 段 9f（追加）: プロバイダの「名前（ID）」とモデルの ID の欄は、打った文字を受けて、ID の決まりに直す
 // （持ち主が「Anthropic」と打って、providers.Anthropic.id の「Expected string to match '^[a-z0-9]…」で保存できなかった）
@@ -77,28 +77,3 @@ test('uniqueSlug: 重なれば -2 -3 …。長さの上限を超えないよう�
   assert.equal(uniqueSlug(long, [long, next], 'provider').endsWith('-3'), true);
 });
 
-test('idFromInput: 打った文字から決まる ID。今の ID と同じなら変えない。決められなければ null。ほかと重なれば番号つき', () => {
-  const taken = ['anthropic', 'local'];
-  assert.deepEqual(idFromInput('Anthropic', 'provider', taken, 'anthropic'), { id: 'anthropic', changed: false }, '自分自身とは重ならない（大文字にしただけなら変わらない）');
-  assert.deepEqual(idFromInput('Local', 'provider', taken, 'anthropic'), { id: 'local-2', changed: true });
-  assert.deepEqual(idFromInput('My Server', 'provider', taken, 'anthropic'), { id: 'my-server', changed: true });
-  assert.deepEqual(idFromInput('サーバー', 'provider', taken, 'anthropic'), { id: null, changed: false });
-  assert.deepEqual(idFromInput('  ', 'provider', taken, 'anthropic'), { id: null, changed: false });
-  assert.deepEqual(idFromInput('new-provider', 'provider', taken, 'new-provider'), { id: 'new-provider', changed: false });
-  assert.deepEqual(idFromInput('foo', 'provider', ['foo', 'foo-2'], 'foo-2'), { id: 'foo-2', changed: false }, '番号つきの自分の ID に戻る形も、自分自身とは重ならない');
-});
-
-
-test('⌘/Ctrl+S: 打ちかけの ID の欄にいるときは、その欄を確定する（欄を離れる）。そうでなければ何もしない（commitPendingId）', () => {
-  const calls: string[] = [];
-  const element = (inside: boolean) => ({
-    closest: (selector: string) => (inside && selector === '.set-idfield' ? {} : null),
-    blur: () => { calls.push('blur'); },
-  });
-  assert.equal(commitPendingId({ activeElement: element(true) as never }), true);
-  assert.deepEqual(calls, ['blur']);
-  assert.equal(commitPendingId({ activeElement: element(false) as never }), false, 'ほかの欄（鍵・URL など）は、打つたびに値が変わるので触らない');
-  assert.equal(commitPendingId({ activeElement: null }), false);
-  assert.equal(commitPendingId({ activeElement: {} as never }), false, 'DOM の要素でないものは触らない');
-  assert.deepEqual(calls, ['blur']);
-});

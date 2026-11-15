@@ -216,7 +216,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (!/^[1-9]\d{0,8}$/u.test(params[1]!)) throw problem(400, 'invalid_id', 'invalid_id');
     const row = app.acceptance.version(project.id, Number(params[1]));
     if (!row) throw problem(404, 'not_found', 'item_missing');
-    const { content, ...rest } = row;
+    const { content, item_states: _states, ...rest } = row;
     sendJson(res, 200, { version: { ...rest, content: JSON.parse(content) as unknown } });
   });
 

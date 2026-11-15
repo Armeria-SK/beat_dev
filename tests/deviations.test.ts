@@ -99,7 +99,7 @@ test('deviation_add: 製品のタスクの実行で動き、deviations.md に 1 
   assert.match(JSON.stringify(s.adapter().calls[1]!.messages), /Recorded in deviations\.md \(no item\)\. Keep working/u);
   const text = readFileSync(fileOf(s, shop.id), 'utf8');
   assert.match(text, /^# Deviations from the plan\n/u);
-  assert.ok(text.includes(`- general | Used a table instead of cards | why: The data has many columns [by task ${task.id}, 2026-11-14]\n`), text);
+  assert.ok(text.includes(`- general | Used a table instead of cards | why: The data has many columns [by task ${task.id}, ${isoDate(Date.now(), s.app.config().timezone)}]\n`), text);
   for (const kind of ['chat', 'agent', 'review'] as const) assert.ok(!s.app.tools.forRun(kind).some(tool => tool.name === 'deviation_add'), kind);
   assert.equal(planAllows(deviationAdd), false);
   assert.equal(placePath(fileOf(s, shop.id), buildPolicy(parseConfig(s.app.config()), s.app.paths)).kind, 'deny', 'ファイルの道具とシェルからは deviations.md に届かない');
