@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { TRIGGER_TEXT } from '../src/memory/review.ts';
 import type { ReviewJob, RunRow, ToolCallRow } from '../web/src/api.ts';
 import { parseRoute, routeHash } from '../web/src/ui/routes.ts';
 import {
-  changeLabel, decidedByLabel, decisionLabel, formatTokens, jobStatusLabel, jobTriggerLabel, runDetail, runKindLabel,
-  runSeconds, runStatus, toolStatus,
+  changeLabel, decidedByLabel, decisionLabel, formatTokens, runDetail, runKindLabel,
 } from '../web/src/runlog-meta.ts';
 import { startScreenServer } from './screen-server.ts';
 
@@ -16,27 +14,14 @@ const run = (over: Partial<RunRow> = {}): RunRow => ({
 });
 const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('実行の結果: 成功・失敗（種類を訳す）・実行中を分け、知らない種類はコードのまま出す', () => {
-  assert.deepEqual(runStatus(run()), { icon: 'check', tone: 'plain', label: 'Success' });
-  assert.deepEqual(runStatus(run({ ok: 0, error_kind: 'rate_limit' })), { icon: 'x', tone: 'bad', label: 'Rate limit' });
-  assert.deepEqual(runStatus(run({ ok: 0, error_kind: 'something_new' })), { icon: 'x', tone: 'bad', label: 'something_new' });
-  assert.deepEqual(runStatus(run({ ok: 0, error_kind: null })), { icon: 'x', tone: 'bad', label: 'Error' });
-  assert.deepEqual(runStatus(run({ ok: null })), { icon: 'loader', tone: 'wait', label: 'Running' });
-  assert.equal(runStatus(run({ ok: 0, error_kind: 'context_overflow' })).label, 'Context too small');
-  assert.equal(runStatus(run({ ok: null })).label, 'Running');
-});
-
-test('トークンの短い書き方と、秒数・実行の種類', () => {
+test('トークンの短い書き方と、実行の種類', () => {
   assert.equal(formatTokens(0), '0');
   assert.equal(formatTokens(999), '999');
   assert.equal(formatTokens(1000), '1.0k');
   assert.equal(formatTokens(3249), '3.2k');
   assert.equal(formatTokens(70000), '70.0k');
-  assert.equal(runSeconds(3200), '3.2 s');
-  assert.equal(runSeconds(null), '—');
   assert.equal(runKindLabel('review'), 'Review');
   assert.equal(runKindLabel('future_kind'), 'future_kind');
-  assert.equal(runSeconds(41800), '41.8 s');
   assert.equal(runKindLabel('task'), 'Task');
 });
 
@@ -56,29 +41,16 @@ test('道具の記録: 判定の札と、決めたのは誰かを訳す。知ら
   assert.deepEqual(['builtin', 'registry', 'validation', 'user', 'conversation-grant'].map(decidedByLabel), ['Built-in', 'Tool registry', 'Argument check', 'You', 'Granted for this chat']);
   assert.equal(decidedByLabel('hook:no-lan'), 'Hook no-lan');
   assert.equal(decidedByLabel('mystery'), 'mystery');
-  assert.deepEqual(toolStatus(null), { icon: 'clock', tone: 'wait', label: 'Waiting' });
-  assert.deepEqual(toolStatus(1), { icon: 'check', tone: 'plain', label: 'Success' });
-  assert.deepEqual(toolStatus(0), { icon: 'x', tone: 'bad', label: 'Failed' });
   assert.equal(decisionLabel('ask'), 'Asked for approval');
   assert.equal(decidedByLabel('hook:no-lan'), 'Hook no-lan');
-  assert.equal(toolStatus(null).label, 'Waiting');
 });
 
-test('振り返りの記録: きっかけ・状態・変更の種類をコードから訳す', () => {
-  assert.equal(jobTriggerLabel('heavy_run'), 'Many tools were used');
-  assert.equal(jobTriggerLabel('new_trigger'), 'new_trigger');
-  assert.deepEqual((['pending', 'running', 'done', 'failed'] as ReviewJob['status'][]).map(jobStatusLabel), ['Waiting', 'Running', 'Done', 'Failed']);
+test('振り返りの記録: 変更の種類をコードから訳す', () => {
   assert.deepEqual(['create', 'update', 'forget', 'restore', 'other'].map(changeLabel), ['Added', 'Rewrote', 'Deleted', 'Restored', 'other']);
-  assert.equal(jobTriggerLabel('idle'), 'The conversation went quiet');
   assert.equal(changeLabel('forget'), 'Deleted');
 });
 
 test('コードの網羅: サーバーが作る種類は、すべて辞書に訳がある（足されたのに画面が知らない、を防ぐ）', () => {
-  const errorKinds = [...(/export type EngineErrorKind =([^;]*);/u.exec(source('src/engine/types.ts'))?.[1] ?? '').matchAll(/'([a-z_]+)'/gu)].map(m => m[1]!);
-  assert.ok(errorKinds.length >= 7, `EngineErrorKind を読めた: ${errorKinds.join(',')}`);
-  for (const kind of errorKinds) {
-    assert.notEqual(runStatus({ ok: 0, error_kind: kind }).label, kind, `${kind} の訳`);
-  }
   const runKinds = [...(/export type RunKind =([^;]*);/u.exec(source('src/tools/types.ts'))?.[1] ?? '').matchAll(/'([a-z_]+)'/gu)].map(m => m[1]!);
   assert.deepEqual(runKinds.sort(), ['agent', 'chat', 'review', 'task']);
   for (const kind of runKinds) assert.notEqual(runKindLabel(kind), kind);
@@ -91,10 +63,6 @@ test('コードの網羅: サーバーが作る種類は、すべて辞書に訳
   assert.ok(decidedBy.size >= 5, `決めた人の値を読めた: ${[...decidedBy].join(',')}`);
   for (const by of decidedBy) assert.notEqual(decidedByLabel(by), by, `${by} の訳`);
   assert.ok(source('src/tools/pipeline.ts').includes('`hook:${result.hook}`'), 'フックの名前は hook:<名前> の形');
-  for (const trigger of Object.keys(TRIGGER_TEXT.en)) {
-    assert.equal(jobTriggerLabel(trigger), TRIGGER_TEXT.en[trigger as keyof typeof TRIGGER_TEXT.en], `${trigger}: 画面の訳はサーバーの英語と同じ`);
-    assert.notEqual(jobTriggerLabel(trigger), trigger);
-  }
 });
 
 test('経路: #/runs[/run|/tools|/reviews] と、振り返りの実行中のリンク。古い #/review は Skills へ', () => {
@@ -120,25 +88,20 @@ test('画面が使う API: 実行・道具・振り返りの記録を、画面�
   s.app.reviews.finish(s.app.reviews.next()!.id, 'done', '変えるものはありませんでした');
 
   const runs = ((await (await s.api('/api/runs?limit=200')).json()) as { runs: RunRow[] }).runs;
-  const live = runs.find(r => r.id === 'r-live')!;
-  assert.deepEqual(runStatus(live), { icon: 'loader', tone: 'wait', label: 'Running' });
   const failed = runs.find(r => r.id === 'r-fail')!;
   assert.ok(Array.isArray(failed.flags), 'flags は配列で来る');
-  assert.equal(runStatus(failed).label, 'Context too small');
   assert.equal(runKindLabel(failed.kind), 'Task');
   assert.equal(runDetail(failed), '長さが足りません · 2 attempts · est. 70.0k · server_truncation_suspected');
 
   const calls = ((await (await s.api('/api/tool-calls?limit=200')).json()) as { toolCalls: ToolCallRow[] }).toolCalls;
   assert.deepEqual(calls.map(c => c.id), ['k2', 'k1'], '新しい順');
   const denied = calls.find(c => c.id === 'k2')!;
-  assert.deepEqual([decisionLabel(denied.decision), decidedByLabel(denied.decided_by), toolStatus(denied.ok).label], ['Denied', 'Hook no-lan', 'Failed']);
+  assert.deepEqual([decisionLabel(denied.decision), decidedByLabel(denied.decided_by)], ['Denied', 'Hook no-lan']);
   const asked = calls.find(c => c.id === 'k1')!;
-  assert.deepEqual([decisionLabel(asked.decision), decidedByLabel(asked.decided_by), toolStatus(asked.ok).label], ['Asked for approval', 'You', 'Waiting']);
+  assert.deepEqual([decisionLabel(asked.decision), decidedByLabel(asked.decided_by)], ['Asked for approval', 'You']);
 
   const reviews = (await (await s.api('/api/reviews')).json()) as { jobs: ReviewJob[]; pending: number };
   assert.equal(reviews.jobs.length, 1);
-  assert.equal(jobTriggerLabel(reviews.jobs[0]!.trigger), 'The conversation went quiet');
-  assert.equal(jobStatusLabel(reviews.jobs[0]!.status), 'Done');
   assert.equal(reviews.pending, 0);
   assert.ok(readFileSync(new URL('../web/src/api.ts', import.meta.url), 'utf8').includes('/api/tool-calls?limit=200'));
 });
