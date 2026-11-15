@@ -20,12 +20,11 @@ const call = (name: string, args: unknown): Script => async function* (req) {
 
 const SKILL_LINE = /skill_draft/u;
 
-test('Grow skills Off: the review prompt has no skill line; On (or unset) keeps it', () => {
-  const base = { trigger: 'manual' as const, transcript: '[User] hi', forgotten: [], language: 'en' as const, memory: true };
-  assert.doesNotMatch(reviewPrompt({ ...base, growSkills: false }), SKILL_LINE);
-  assert.match(reviewPrompt({ ...base, growSkills: true }), SKILL_LINE);
-  assert.equal(reviewPrompt({ ...base, growSkills: true }), reviewPrompt(base), 'On is the same text as before the switch existed');
-  assert.match(reviewPrompt({ ...base, growSkills: true, skillsAutoRegister: true }), /registered right away/u);
+test('the memory review prompt has no skill line; the skill review prompt has it', () => {
+  const base = { trigger: 'manual' as const, transcript: '[User] hi', forgotten: [], language: 'en' as const };
+  assert.doesNotMatch(reviewPrompt({ ...base, kind: 'memory' }), SKILL_LINE);
+  assert.match(reviewPrompt({ ...base, kind: 'skill' }), SKILL_LINE);
+  assert.match(reviewPrompt({ ...base, kind: 'skill', skillsAutoRegister: true }), /registered right away/u);
 });
 
 test('Grow skills: a config without the key reads as On and loads unchanged', t => {
@@ -68,32 +67,46 @@ for (const grow of [false, true]) {
     assert.equal(await s.app.worker.tick(), 'ran');
     s.app.db.prepare("DELETE FROM memory_jobs").run();
     s.app.reviews.enqueue('manual', 'manual:grow', { conversationId: uuid(1) });
-    s.adapter().scripts = [reply('No changes')];
+    s.app.engine.lastUserActivity = 0;
+    const skillJob = s.app.reviews.enqueue('manual', 'skill:manual:grow', { conversationId: uuid(1), kind: 'skill' })!;
+    s.adapter().scripts = [reply('No changes'), reply('No changes')];
     assert.equal(await s.app.worker.tick(), 'ran');
+    await s.app.worker.tick();
     const requests = s.adapter().calls;
-    assert.equal(requests.length, 4);
-    for (const [i, request] of requests.entries()) assert.equal(offered(request), grow, `${i}`);
+    assert.equal(requests.length, grow ? 5 : 4);
+    for (const [i, request] of requests.slice(0, 3).entries()) assert.equal(offered(request), grow, `${i}`);
+    assert.equal(offered(requests[3]!), false, 'the memory review never offers skill_draft');
+    assert.doesNotMatch(String(requests[3]!.messages.at(-1)?.content), SKILL_LINE, 'no skill line in the memory review prompt');
     assert.match(`${requests[0]!.system.frozen}`, /kept-skill/u, 'the skills list is still in the prompt');
-    const review = String(requests.at(-1)!.messages.at(-1)?.content);
-    assert.match(review, /\[Review\]/u);
-    assert.equal(SKILL_LINE.test(review), grow, 'skill line in the review prompt');
+    if (grow) {
+      const review = String(requests[4]!.messages.at(-1)?.content);
+      assert.match(review, /\[Review\]/u);
+      assert.match(review, SKILL_LINE, 'skill line in the skill review prompt');
+      assert.equal(offered(requests[4]!), true);
+    } else {
+      assert.equal(s.app.reviews.get(skillJob.id)!.status, 'done', 'a waiting skill review is skipped while Grow skills is Off');
+    }
   });
 }
 
-test('Grow skills Off without memory: reviews wait (nothing is used up) and run once Grow skills is back on', async t => {
+test('Grow skills Off: a waiting skill review is skipped, not run later, and tool results from while it was Off are not read later', async t => {
   const s = await setup(t, false, false);
   s.adapter().scripts = [reply('hello')];
   await s.send(uuid(1), 'hi there');
   s.app.db.prepare('DELETE FROM memory_jobs').run();
-  const job = s.app.reviews.enqueue('manual', 'manual:none', { conversationId: uuid(1) })!;
-  s.adapter().scripts = [reply('No changes')];
+  s.app.engine.lastUserActivity = 0;
+  const job = s.app.reviews.enqueue('manual', 'skill:manual:none', { conversationId: uuid(1), kind: 'skill' })!;
   assert.equal(await s.app.worker.tick(), 'idle');
-  assert.equal(s.app.reviews.get(job.id)!.status, 'pending');
-  assert.equal(s.adapter().calls.length, 1, 'only the chat reply called the model');
-  await s.app.applyConfig({ ...s.app.config(), skills: {} }, { probe: false });
-  assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.reviews.get(job.id)!.status, 'done');
-  assert.ok(s.app.db.prepare("SELECT 1 FROM engine_runs WHERE kind = 'review'").get(), 'the review called the model');
+  assert.match(s.app.reviews.get(job.id)!.note ?? '', /Skill reviews are off/u);
+  assert.equal(s.adapter().calls.length, 1, 'only the chat reply called the model');
+  s.adapter().scripts = [...Array.from({ length: 10 }, (_, i) => call('skill_view', { name: `missing-${i}` })), reply('done')];
+  await s.send(uuid(1), 'look at many');
+  assert.equal(s.app.kv.get(`review:skill-upto:${uuid(1)}`), String(s.app.conversations.messages(uuid(1), 1).at(-1)!.id), 'the reading place moves past what happened while Off');
+  await s.app.applyConfig({ ...s.app.config(), skills: {} }, { probe: false });
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), 'thanks');
+  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM memory_jobs WHERE kind = 'skill' AND status = 'pending'").get()!.n, 0, 'the 10 tool results from while Off do not queue a review once On');
 });
 
 test('Grow skills turned Off while a run is going: skill_draft is refused from then on, even though the run started with it On', async t => {

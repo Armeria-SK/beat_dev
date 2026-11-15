@@ -228,3 +228,16 @@ test('Overview（DOM）: with Work on its own Off, a paused worker still shows t
   assert.ok(container.textContent?.includes('Background work is paused'), container.textContent ?? '');
   assert.ok(container.querySelector('[data-worker-line]'), 'the runs-per-hour line shows, since the owner work counts toward it');
 });
+
+test('Overview (DOM): a running skill review shows as "Skill review" and a memory review as "Memory review"', async () => {
+  serve({ active: [], finished: noFinished });
+  const runs = worker([
+    { kind: 'review', reviewKind: 'skill', taskId: null, runId: 'r-skill', title: 'Skill review (Many tools were used)' },
+    { kind: 'review', reviewKind: 'memory', taskId: null, runId: 'r-memory', title: 'Review (Manual)' },
+  ]);
+  const { container } = await render(createElement(Overview, props({ worker: runs })));
+  await settle();
+  const text = container.querySelector('[data-product="none"]')?.textContent ?? '';
+  assert.match(text, /Skill review/u);
+  assert.match(text, /Memory review/u);
+});

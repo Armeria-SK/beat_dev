@@ -579,4 +579,9 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE questions ADD COLUMN category TEXT NOT NULL DEFAULT 'other';
   CREATE INDEX ix_tasks_conversation ON tasks (conversation_id) WHERE conversation_id IS NOT NULL;
   `,
+  `
+  ALTER TABLE memory_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'memory' CHECK (kind IN ('memory', 'skill'));
+  ALTER TABLE skill_drafts ADD COLUMN outside INTEGER NOT NULL DEFAULT 0 CHECK (outside IN (0, 1));
+  ALTER TABLE skill_registry ADD COLUMN outside INTEGER NOT NULL DEFAULT 0 CHECK (outside IN (0, 1));
+  `,
 ];

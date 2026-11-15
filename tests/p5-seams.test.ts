@@ -68,7 +68,8 @@ async function requestsOf(t: Parameters<typeof startApp>[0], tools: ToolDef[]) {
   await s.task({ title: 'Loose' });
   s.adapter().scripts = [call('task_complete', { summary: 'done' })];
   assert.equal(await s.app.worker.tick(), 'ran');
-  s.app.reviews.enqueue('manual', 'manual:seam', { conversationId: uuid(1) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:seam', { conversationId: uuid(1), kind: 'skill' });
   s.adapter().scripts = [reply('No changes')];
   assert.equal(await s.app.worker.tick(), 'ran');
   const local = [s.products, s.app.paths.data, shop.id].flatMap(text => [text, text.replaceAll('\\', '/'), text.replaceAll('\\', '\\\\')]);

@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AppConfig } from '../config/schema.ts';
 import { languageOf } from '../shared/language.ts';
 import type { AppPaths } from '../paths.ts';
@@ -28,13 +28,25 @@ export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root
   // 人格とプロフィールは、beat が書き換えるときに承認を求める（提案として見せる）。スキルのフォルダも同じ:
   // 新しい名前のスキルは、ここに置いただけでは使われない（正規の道は skill_draft → 画面の承認で登録）。登録済みの名前は、書き直したものがそのまま使われる
   const skillsDir = resolveConfigPath(join(paths.workspace, 'skills'), paths.data);
+  const guarded = installGuard(paths);
   const fixed = [...['SOUL.md', 'USER.md'].map(name => resolveConfigPath(join(paths.workspace, name), paths.data)), skillsDir];
-  if (typeof productRoots !== 'function') return { roots, deny, askOnWrite: [...fixed, ...instructions], skillsDir, ...(instructions.length ? { instructions } : {}), language: languageOf(config) };
+  if (typeof productRoots !== 'function') return { roots, deny, guarded, askOnWrite: [...fixed, ...instructions], skillsDir, ...(instructions.length ? { instructions } : {}), language: languageOf(config) };
   return {
-    roots, deny, skillsDir, language: languageOf(config),
+    roots, deny, guarded, skillsDir, language: languageOf(config),
     get askOnWrite() { return [...fixed, ...instructionsNow()]; },
     get instructions() { return instructionsNow(); },
   };
+}
+
+function installGuard(paths: AppPaths): { roots: string[]; keep: string[] } {
+  const appRoot = dirname(paths.templates);
+  return { roots: [...new Set([appRoot, resolveConfigPath(appRoot, paths.data)])], keep: [...new Set([paths.data, resolveConfigPath(paths.data, paths.data)])] };
+}
+
+export function dataHoldsInstall(paths: AppPaths): boolean {
+  const appRoot = dirname(paths.templates);
+  const roots = [appRoot, resolveConfigPath(appRoot, paths.data)];
+  return [paths.data, resolveConfigPath(paths.data, paths.data)].some(data => roots.some(root => isInside(data, root)));
 }
 
 const sameFolder = (a: string, b: string): boolean => isInside(a, b) && isInside(b, a);

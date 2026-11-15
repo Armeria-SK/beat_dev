@@ -61,7 +61,8 @@ test('7-4c 好奇心の道具はどの実行にも渡らない: 会話・計画�
   await s.task({ title: 'Loose' });
   s.adapter().scripts = [call('task_complete', { summary: 'done' })];
   assert.equal(await s.app.worker.tick(), 'ran');
-  s.app.reviews.enqueue('manual', 'manual:off', { conversationId: uuid(1) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:off', { conversationId: uuid(1), kind: 'skill' });
   s.adapter().scripts = [reply('No changes')];
   assert.equal(await s.app.worker.tick(), 'ran');
 

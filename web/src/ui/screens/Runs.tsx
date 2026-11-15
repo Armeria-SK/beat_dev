@@ -13,7 +13,7 @@ import { routeHash, type RunsTab } from '../routes.ts';
 import { maskTarget } from '../tool-row.ts';
 
 type T = ReturnType<typeof useT>;
-interface Loaded { runs: RunRow[]; calls: ToolCallRow[]; jobs: ReviewJob[]; totals: LogTotals; judged: JudgedCounts }
+interface Loaded { runs: RunRow[]; calls: ToolCallRow[]; jobs: ReviewJob[]; totals: LogTotals; judged: JudgedCounts; judgeOff: boolean }
 
 const FILTER_KEY = { all: 'ui.runs.all', run: 'ui.runs.run', tool: 'ui.runs.tool', review: 'ui.runs.review' } as const satisfies Record<LogFilter, string>;
 const KIND_KEY = { run: 'ui.runs.run', tool: 'ui.runs.tool', review: 'ui.runs.review' } as const;
@@ -82,7 +82,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
     try {
       const [runs, calls, jobs] = await Promise.all([api.runs(200, project), api.toolCalls(project), api.reviews(project)]);
       if (!loads.current.isCurrent(ticket)) return;
-      setData({ runs: runs.runs, calls: calls.toolCalls, jobs: jobs.jobs, totals: { run: runs.total, tool: calls.total, review: jobs.total }, judged: runs.judged });
+      setData({ runs: runs.runs, calls: calls.toolCalls, jobs: jobs.jobs, totals: { run: runs.total, tool: calls.total, review: jobs.total }, judged: runs.judged, judgeOff: runs.judgeOff === true });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
@@ -104,7 +104,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
   const shown = useMemo(() => filterLog(rows, filter), [rows, filter]);
   const today = startOfDay(Date.now());
   const footer = data ? logFooter(rows, filter, data.totals, today) : null;
-  const judged = data ? judgedLine(data.judged) : null;
+  const judged = data ? judgedLine(data.judged) ?? (data.judgeOff ? { allowed: 0, parked: 0, notRun: 0 } : null) : null;
   const pick = (next: LogFilter) => { setOpen(null); location.hash = routeHash({ view: 'runs', ...(TAB_OF[next] ? { tab: TAB_OF[next] } : {}) }); };
 
   return (
@@ -158,7 +158,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
         </div>
       )}
       {footer && <p className="bt-meta bt-rise ui-lib__footer" style={{ '--bt-i': 2 } as CSSProperties}>{t('ui.runs.footer', formatNumber(footer.shown), formatNumber(footer.total))}</p>}
-      {judged && <p className="bt-meta ui-lib__footer">{t('ui.runs.judged', formatNumber(judged.allowed), formatNumber(judged.parked), formatNumber(judged.notRun))}</p>}
+      {judged && <p className="bt-meta ui-lib__footer">{t('ui.runs.judged', formatNumber(judged.allowed), formatNumber(judged.parked), formatNumber(judged.notRun))}{data?.judgeOff && <> <span className="bt-chip" data-judge-off>{t('ui.runs.judgeOff')}</span></>}</p>}
     </div>
   );
 }

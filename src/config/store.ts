@@ -274,20 +274,44 @@ function fileStamp(path: string): string {
   return `${s.mtimeMs}:${s.size}`;
 }
 
+export const JUDGE_OFF_BLOCKED = "routing.judgeMode: the judge cannot be turned off while beat's data folder is beat's own folder or holds it. Start beat with a data folder elsewhere (--data-dir) first";
+
 export class ConfigStore {
   #cache: AppConfig | undefined;
   #stamp = '';
   #lastError: ConfigError | undefined;
   #dropped: readonly string[] = [];
   #rewritten: readonly string[] = [];
+  #judgeOffRefused = false;
+  #startedOff = false;
+  #offBlocked = false;
+  readonly #offAllowed: boolean;
   readonly path: string;
-  constructor(path: string) { this.path = path; }
+  constructor(path: string, options: { judgeOffAllowed?: boolean } = {}) { this.path = path; this.#offAllowed = options.judgeOffAllowed ?? true; }
 
   get lastError(): ConfigError | undefined { return this.#lastError; }
 
   get dropped(): readonly string[] { return this.#dropped; }
 
   get rewritten(): readonly string[] { return this.#rewritten; }
+
+  takeStartedOff(): boolean {
+    const started = this.#startedOff;
+    this.#startedOff = false;
+    return started;
+  }
+
+  takeJudgeOffBlocked(): boolean {
+    const blocked = this.#offBlocked;
+    this.#offBlocked = false;
+    return blocked;
+  }
+
+  takeJudgeOffRefused(): boolean {
+    const refused = this.#judgeOffRefused;
+    this.#judgeOffRefused = false;
+    return refused;
+  }
 
   current(): AppConfig {
     try {
@@ -317,6 +341,16 @@ export class ConfigStore {
       throw new ConfigError(`The settings file ${this.path} is not valid JSON. It was copied to ${this.path}.bak. Fix it, then start again`);
     }
     const config = parseConfig(raw);
+    if (!this.#offAllowed && config.routing.judgeMode === 'off') {
+      delete config.routing.judgeMode;
+      this.#offBlocked = true;
+    }
+    if (!this.#cache && config.routing.judgeMode === 'off') this.#startedOff = true;
+    if (this.#cache && this.#cache.routing.judgeMode !== 'off' && config.routing.judgeMode === 'off') {
+      if (this.#cache.routing.judgeMode === undefined) delete config.routing.judgeMode;
+      else config.routing.judgeMode = this.#cache.routing.judgeMode;
+      this.#judgeOffRefused = true;
+    }
     ({ dropped: this.#dropped, rewritten: this.#rewritten } = dropLegacy(raw));
     this.#cache = config;
     this.#stamp = stamp;
@@ -344,6 +378,7 @@ export class ConfigStore {
 
   save(config: AppConfig): AppConfig {
     const parsed = parseConfig(config);
+    if (!this.#offAllowed && parsed.routing.judgeMode === 'off') throw new ConfigError('The settings were not saved', [JUDGE_OFF_BLOCKED]);
     if (existsSync(this.path)) {
       try { copyFileSync(this.path, `${this.path}.bak`); } catch { }
     }

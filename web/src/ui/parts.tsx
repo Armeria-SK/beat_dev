@@ -27,6 +27,11 @@ export function Pill({ tone, children }: { tone?: PillTone; children: ReactNode 
 
 export const countText = (n: number): string => (n > 99 ? '99+' : String(n));
 
+export function JudgeOffChip() {
+  const t = useT();
+  return <a className="bt-chip ui-judge-off" href="#/settings/models" title={t('ui.judgeOff.title')} data-judge-off>{t('ui.judgeOff')}</a>;
+}
+
 export function CountBadge({ n, quiet, label }: { n: number; quiet?: boolean; label?: string }) {
   const shown = useRef(n);
   const [tick, setTick] = useState(0);

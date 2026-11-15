@@ -265,7 +265,7 @@ export function DraftRow({ draft, open, now, onDone }: { draft: SkillDraft; open
         <div className="bt-row__main">
           <button type="button" className="bt-row__title ui-rowbtn" aria-expanded={open}><code>{draft.name}</code></button>
           <span className="bt-row__sub bt-meta" title={formatDateTime(draft.created_at, 'full')}>
-            {draft.from_title ? t('ui.skills.draftedFrom', draft.from_title, formatRelative(draft.created_at, now)) : t('ui.skills.drafted', formatRelative(draft.created_at, now))} · {t(draft.current ? 'ui.skills.draftUpdate' : 'ui.skills.draftNew')}
+            {draft.from_title ? t('ui.skills.draftedFrom', draft.from_title, formatRelative(draft.created_at, now)) : t('ui.skills.drafted', formatRelative(draft.created_at, now))} · {t(draft.current ? 'ui.skills.draftUpdate' : 'ui.skills.draftNew')}{draft.outside === 1 && ` · ${t('ui.skills.draftOutside')}`}
             {delta && <Delta {...delta} />}
           </span>
         </div>

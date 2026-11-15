@@ -300,7 +300,8 @@ test('行を作るほかの所: 製品のタスクの会話・子の担当の会
   assert.equal(childConversation.project_id, shop.id, '子の担当の会話');
 
   s.adapter().scripts = [reply('No changes'), reply('No changes'), reply('No changes'), reply('No changes')];
-  s.app.reviews.enqueue('manual', `manual:${uuid(1)}`, { conversationId: uuid(1) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', `manual:${uuid(1)}`, { conversationId: uuid(1), kind: 'skill' });
   const reviewJob = () => s.app.reviews.list().find(j => j.dedup_key === `manual:${uuid(1)}`)!;
   for (let i = 0; i < 4 && !reviewJob().review_conversation_id; i++) await s.app.worker.tick();
   const job = reviewJob();
@@ -417,8 +418,9 @@ test('今ある口の製品の欄と絞り込み: タスク・時間割・実行
   assert.deepEqual([shopCalls.toolCalls.map((c: { id: string }) => c.id), shopCalls.total], [['tc-shop'], 1]);
   assert.equal((await s.json('/api/tool-calls?project=none', 'GET')).body.total, 1);
 
-  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1) });
-  s.app.reviews.enqueue('manual', 'manual:plain', { conversationId: uuid(2) });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', 'manual:shop', { conversationId: uuid(1), kind: 'skill' });
+  s.app.reviews.enqueue('manual', 'manual:plain', { conversationId: uuid(2), kind: 'skill' });
   s.app.reviews.enqueue('task', 'task:shop', { taskId: mine.id });
   const reviews = (await s.json('/api/reviews', 'GET')).body;
   assert.deepEqual(Object.fromEntries(reviews.jobs.map((j: { dedup_key: string; project_id: string | null }) => [j.dedup_key, j.project_id])), { 'manual:shop': shop.id, 'manual:plain': null, 'task:shop': shop.id });

@@ -31,7 +31,8 @@ function chatWith(s: Started, id: string, modelId: string | null, text: string):
 
 // 実際に振り返りを走らせて、振り返りの会話を作らせる
 async function reviewed(s: Started, source: string): Promise<string> {
-  s.app.reviews.enqueue('manual', `manual:${source}`, { conversationId: source });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', `manual:${source}`, { conversationId: source, kind: 'skill' });
   assert.equal(await s.app.worker.tick(), 'ran');
   const job = s.app.reviews.list().find(j => j.conversation_id === source)!;
   assert.ok(job.review_conversation_id, '前提: 振り返りの会話が作られ、振り返りの記録から辿れる');
@@ -65,7 +66,8 @@ test('止められてやり直された振り返りは、前の回の振り返�
   const s = await startApp(t, setup(['loc2']));
   const source = uuid(1);
   chatWith(s, source, 'loc', `手元でだけ話した ${WORD} の内容`);
-  s.app.reviews.enqueue('manual', `manual:${source}`, { conversationId: source });
+  s.app.engine.lastUserActivity = 0;
+  s.app.reviews.enqueue('manual', `manual:${source}`, { conversationId: source, kind: 'skill' });
   s.adapter().scripts = [hang()];
   const ticking = s.app.worker.tick();
   await waitFor(() => s.app.reviews.list().some(j => j.status === 'running'), '振り返りが動き出す');
@@ -79,6 +81,7 @@ test('止められてやり直された振り返りは、前の回の振り返�
   await settled(s.app, sent.body.runId);
   assert.equal(s.app.reviews.list()[0]!.status, 'pending', '前提: 止められて、やり直しの待ちに戻った');
   // やり直し
+  s.app.engine.lastUserActivity = 0;
   s.adapter().scripts = [reply('変更なし')];
   assert.equal(await s.app.worker.tick(), 'ran');
   const job = s.app.reviews.list()[0]!;
@@ -102,7 +105,7 @@ test('再起動で「動いていた」から「待ち」に戻った振り返�
   const first = await reviewed(s, source);
   const job = s.app.reviews.list()[0]!;
   s.app.db.prepare("UPDATE memory_jobs SET status = 'running' WHERE id = ?").run(job.id);
-  s.app.db.prepare('DELETE FROM kv WHERE key = ?').run(`review:upto:${source}`);
+  s.app.db.prepare('DELETE FROM kv WHERE key = ?').run(`review:skill-upto:${source}`);
   assert.equal(s.app.reviews.recoverRunning(), 1);
   s.adapter().scripts = [reply('変更なし')];
   assert.equal(await s.app.worker.tick(), 'ran');

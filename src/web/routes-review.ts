@@ -2,9 +2,10 @@ import type { App } from '../app.ts';
 import { CuriosityError, type CuriosityStatus } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
 import { languageOf } from '../shared/language.ts';
-import { TRIGGER_TEXT } from '../memory/review.ts';
-import { SkillError } from '../tools/skills/store.ts';
+import { reviewLabel } from '../memory/review.ts';
+import { growSkills, SkillError } from '../tools/skills/store.ts';
 import { askReadAsBlock, defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
+import { taskText } from '../shared/messages/tasks.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
 import { taskView, type ProjectFilter } from '../tasks/store.ts';
 import type { ReviewJob } from '../memory/review.ts';
@@ -174,7 +175,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const rows = app.db.prepare(`SELECT memory_jobs.*, ${projectOfSql('memory_jobs')} AS project_id FROM memory_jobs WHERE 1 = 1${filter.sql} ORDER BY id DESC LIMIT 50`)
       .all(...filter.args) as unknown as Array<ReviewJob & { project_id: string | null }>;
     const jobs = rows.map(job => ({
-      ...job, triggerLabel: TRIGGER_TEXT[languageOf(app.config())][job.trigger],
+      ...job, triggerLabel: reviewLabel(languageOf(app.config()), job.kind, job.trigger),
       changes: job.run_id ? app.db.prepare('SELECT * FROM memory_events WHERE run_id = ? ORDER BY id').all(job.run_id) : [],
     }));
     sendJson(res, 200, { jobs, pending: app.reviews.pendingCount(), total: todayCount(app, 'memory_jobs', undefined, project) });
@@ -184,8 +185,18 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const conversationId = requireString(body, 'conversationId', { max: 100 })!;
     if (!app.conversations.get(conversationId)) throw problem(404, 'not_found', 'conversation_missing');
     const last = app.conversations.messages(conversationId, 1).at(-1);
-    const job = app.reviews.enqueue('manual', `manual:${conversationId}:${last?.id ?? 0}`, { conversationId });
+    const c = app.config();
+    const memoryOn = app.worker.memoryReviewsOn(c);
+    const skillOn = app.worker.skillReviewsOn(c);
+    if (!memoryOn && !skillOn) {
+      const reason = !c.memory.review ? 'review.none_off' : !growSkills(c) ? 'review.none_grow_off' : 'review.none_worker_off';
+      sendJson(res, 200, { queued: false, reason: taskText(languageOf(c), reason) });
+      return;
+    }
+    const memory = memoryOn ? app.reviews.enqueue('manual', `manual:${conversationId}:${last?.id ?? 0}`, { conversationId }) : undefined;
+    const skill = skillOn ? app.reviews.enqueue('manual', `skill:manual:${conversationId}:${last?.id ?? 0}`, { conversationId, kind: 'skill' }) : undefined;
+    const queued = Boolean(memory || skill);
     app.worker.poke();
-    sendJson(res, job ? 202 : 200, { queued: Boolean(job) });
+    sendJson(res, queued ? 202 : 200, { queued });
   });
 }

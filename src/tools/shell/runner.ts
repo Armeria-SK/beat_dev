@@ -110,6 +110,13 @@ export function killTree(child: ChildProcess): void {
   try { process.kill(-child.pid, 'SIGKILL'); } catch { if (child.exitCode === null) { try { child.kill('SIGKILL'); } catch { } } }
 }
 
+export function stopTree(child: ChildProcess, graceMs: number): void {
+  if (child.pid === undefined) return;
+  if (WINDOWS) { killTree(child); return; }
+  try { process.kill(-child.pid, 'SIGTERM'); } catch { if (child.exitCode === null) { try { child.kill('SIGTERM'); } catch { } } }
+  setTimeout(() => killTree(child), graceMs).unref();
+}
+
 const SETTLE_GRACE_MS = 500;
 
 export interface RunOptions {

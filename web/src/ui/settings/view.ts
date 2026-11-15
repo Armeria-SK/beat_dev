@@ -48,8 +48,16 @@ export function rolesOf(config: Config): Roles {
 
 export const judgeBackups = (config: Config): string[] => (Array.isArray(config.routing?.judge) ? (config.routing.judge as string[]).slice(1) : []);
 
+export const JUDGE_OFF = ':off';
+
+export const judgeIsOff = (config: Config): boolean => config.routing?.judgeMode === 'off';
+
+export const judgeChoice = (config: Config): string => (judgeIsOff(config) ? JUDGE_OFF : rolesOf(config).judge);
+
 export function setJudge(config: Config, id: string): Config {
   const routing = { ...config.routing };
+  if (id === JUDGE_OFF) return { ...config, routing: { ...routing, judgeMode: 'off' } };
+  delete routing.judgeMode;
   const tail = Array.isArray(routing.judge) ? (routing.judge as string[]).slice(1).filter(x => x !== id) : [];
   if (id) routing.judge = [id, ...tail]; else delete routing.judge;
   return { ...config, routing };

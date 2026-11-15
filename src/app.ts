@@ -77,6 +77,7 @@ import { notifyText } from './shared/messages/notify.ts';
 import { BLOCKING_QUESTION_KEY } from './shared/notification-list.ts';
 import { isCore, ToolRegistry } from './tools/registry.ts';
 import { askReadAsBlock, ignoredPolicyNames } from './tools/tool-policy.ts';
+import { dataHoldsInstall } from './tools/policy.ts';
 import type { ToolDef } from './tools/types.ts';
 import type { JudgeLimitSet } from './tools/pipeline.ts';
 import { redactSecrets } from './shared/redaction.ts';
@@ -174,7 +175,7 @@ export class App {
     this.env = (options.env ?? process.env) as Record<string, string | undefined>;
     this.fetch = options.fetch ?? fetch;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
-    this.configStore = new ConfigStore(this.paths.config);
+    this.configStore = new ConfigStore(this.paths.config, { judgeOffAllowed: !dataHoldsInstall(this.paths) });
     const config = this.configStore.load();
     this.#reportDropped();
     ensureWorkspace(this.paths);
@@ -221,6 +222,7 @@ export class App {
     this.curiosity = new CuriosityStore(this.db, now);
     this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()), this.log, join(this.paths.backups, 'skills'), () => growSkills(this.config()));
     this.skills.autoRegister = () => !askBeforeRegister(this.config());
+    this.skills.secrets = () => this.registry.secrets();
     this.#importCuriosity();
     this.#copyLegacyWaits();
     this.#registerExistingSkills();
@@ -250,7 +252,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), projects: this.projects,
+      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()),
     });
     this.tasks.onChange = task => {
@@ -261,12 +263,13 @@ export class App {
       if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
         this.curiosity.onTaskFinished(task);
         // 実行したタスクが終わったら振り返る（実行の記録があるものだけ）
-        if (task.status !== 'cancelled' && task.conversation_id && this.config().memory.review) {
+        if (task.status !== 'cancelled' && task.conversation_id && this.worker.memoryReviewsOn()) {
           this.reviews.enqueue('task', `task:${task.id}`, { taskId: task.id, conversationId: task.conversation_id });
         }
       }
       this.worker.poke();
     };
+    this.tasks.onFinished = task => { if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task); };
     this.tasks.onUncancelled = task => { this.curiosity.onTaskRestored(task); this.questions.resumeAnswered(task); };
     this.tasks.onDeleted = removed => {
       const title = removed.title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
@@ -302,7 +305,11 @@ export class App {
       this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.change_summary ?? draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
-      if (run.kind === 'chat' && this.config().memory.review) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
+      if (run.kind === 'chat') {
+        if (this.worker.memoryReviewsOn()) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
+        if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillIfDue(run.conversationId);
+        else this.reviews.skipSkillReading(run.conversationId);
+      }
       this.worker.poke();
     };
   }
@@ -389,6 +396,21 @@ export class App {
     }
     this.#applied ||= json;
     this.#reportDropped();
+    if (this.notifications && this.configStore.takeJudgeOffBlocked()) {
+      const language = languageOf(config);
+      this.log("[WARN] The settings file says to run without the judge (routing.judgeMode: off), but beat's data folder is beat's own folder or holds it, so the judge stays on. Start beat with a data folder elsewhere (--data-dir) to use it");
+      this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_blocked.title'), body: taskText(language, 'notify.judge_off_blocked.body'), link: '#/settings', dedupKey: `judge-off-blocked:${this.bus.bootId}` });
+    }
+    if (this.notifications && this.configStore.takeStartedOff()) {
+      const language = languageOf(config);
+      this.log('[WARN] Started without the judge (routing.judgeMode: off in the settings file). Actions that would go to the judge run without a check. Turn the judge on in Settings › Models if you did not choose this');
+      this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_start.title'), body: taskText(language, 'notify.judge_off_start.body'), link: '#/settings', dedupKey: `judge-off-start:${this.bus.bootId}` });
+    }
+    if (this.notifications && this.configStore.takeJudgeOffRefused()) {
+      const language = languageOf(config);
+      this.log('[WARN] The settings file was changed to run without the judge (routing.judgeMode: off), but the change did not come from beat. Kept the judge on. Turn it off in Settings, or restart beat to use the file as written');
+      this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_file.title'), body: taskText(language, 'notify.judge_off_file.body'), link: '#/settings', dedupKey: `judge-off-file:${this.bus.bootId}` });
+    }
     return config;
   }
 
