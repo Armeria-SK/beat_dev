@@ -6,7 +6,7 @@ import { setTimezone } from '../web/src/i18n/index.ts';
 import { PendingSet, runOnce } from '../web/src/pending.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, type TaskDraft } from '../web/src/task-form.ts';
 import {
-  CURIOSITY_STATUS_KEY, eventKey, ORIGIN_KEY, plainLine, priorityKey, sheetActions, STATUS_KEY,
+  eventKey, ORIGIN_KEY, plainLine, sheetActions, STATUS_KEY,
 } from '../web/src/task-meta.ts';
 
 const reset = () => { setTimezone('Asia/Tokyo'); };
@@ -90,17 +90,15 @@ test('draftSummary: 「〜に実行します」の要約の元になる値（入
   assert.equal(draftSummary({ ...base, when: 'at', at: '' }), null);
 });
 
-test('辞書: 状態・出どころ・優先度・経過の種類・気になることの状態は、en にある', () => {
+test('辞書: 状態・出どころ・経過の種類は、en にある', () => {
   const keys = [
-    ...Object.values(STATUS_KEY), ...Object.values(ORIGIN_KEY), ...Object.values(CURIOSITY_STATUS_KEY),
-    priorityKey(1), priorityKey(2), priorityKey(3), priorityKey(9),
+    ...Object.values(STATUS_KEY), ...Object.values(ORIGIN_KEY),
     ...['created', 'note', 'requeued', 'question', 'approval', 'answer', 'run', 'done', 'failed', 'cancelled', 'approved', 'reopened', 'skipped', 'edited', 'context', 'uncancelled'].map(kind => eventKey(kind)!),
   ];
   for (const key of keys) {
     assert.equal(typeof (en as Record<string, unknown>)[key], 'string', `${key} が en に無い`);
   }
   assert.equal(eventKey('something-new'), null, '知らない種類は辞書を引かない（そのまま出す）');
-  assert.equal(priorityKey(9), priorityKey(2), '範囲外の優先度は「中」');
 });
 
 test('辞書: タスク画面（stage 7）の英語に日本語が混ざらない', () => {

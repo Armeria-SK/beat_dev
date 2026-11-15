@@ -306,7 +306,6 @@ const en = {
   'browser.no_elements': '(There is nothing to touch)',
   'browser.more_text': '(Cut here. Continue with offset={offset})',
   'browser.more_elements': '({count} more elements are omitted)',
-  'browser.tabs_header': 'Tabs open in this conversation:',
   'browser.no_tabs': 'No tab is open in this conversation. Open one with browser_open',
   'browser.closed': 'Closed {count} tab(s)',
   'browser.closed_none': 'There is no tab to close',

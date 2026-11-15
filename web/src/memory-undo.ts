@@ -10,8 +10,6 @@ const subscribe = (listener: () => void): (() => void) => {
   return () => { listeners.delete(listener); };
 };
 
-export const isMemoryUndone = (eventId: number): boolean => undone.has(eventId);
-
 export async function undoMemoryEvent(eventId: number): Promise<boolean> {
   if (undone.has(eventId)) return true;
   try {

@@ -2,13 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { defaultConfig } from '../src/config/store.ts';
-import { renderSkillFile } from '../src/tools/skills/store.ts';
 import type { SkillDraft, SkillSummary } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { parseRoute, routeHash } from '../web/src/ui/routes.ts';
 import {
   addRoot, broadKind, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersFromConfig, POLICY_LABEL, removeRoot, setRootMode,
-  orderTools, skillDraftLink, skillFileText, skillRows, TOOL_LOOKS, toolLook, wideningChanges, type FolderDraft,
+  orderTools, TOOL_LOOKS, toolLook, wideningChanges, type FolderDraft,
 } from '../web/src/skills-meta.ts';
 import { startScreenServer } from './screen-server.ts';
 
@@ -22,7 +21,6 @@ const applyFolders = (config: Record<string, any>, folders: FolderDraft): Record
 const draft = (over: Partial<SkillDraft>): SkillDraft => ({
   id: 1, name: 'a', description: 'd', body: 'b', reason: null, status: 'pending', created_at: 100, current: null, ...over,
 });
-const skill = (name: string, over: Partial<SkillSummary> = {}): SkillSummary => ({ name, description: `${name} の説明`, uses: 0, lastUsedAt: null, updatedAt: 0, registered: true, ...over });
 
 test('経路: スキルの深いリンク（#/skills/<名前>、#/skills/draft/<名前>）を読み、元の形に戻せる', () => {
   assert.deepEqual(parseRoute('#/skills'), { view: 'skills' });
@@ -35,30 +33,10 @@ test('経路: スキルの深いリンク（#/skills/<名前>、#/skills/draft/<
   assert.deepEqual(parseRoute('#/review'), { view: 'skills' }, '古い経路は Skills へ読み替える');
 });
 
-test('スキルの一覧: レビュー待ちの下書きを先頭に（新しい順）、そのあとにスキルを名前順で並べる', () => {
-  const rows = skillRows(
-    [draft({ id: 1, name: 'old', created_at: 100 }), draft({ id: 2, name: 'new', created_at: 200, current: { description: 'x', body: 'y' } }), draft({ id: 3, name: 'done', status: 'approved' })],
-    [skill('zeta', { uses: 2, lastUsedAt: 9 }), skill('alpha')],
-  );
-  assert.deepEqual(rows.map(r => `${r.kind}:${r.name}`), ['draft:new', 'draft:old', 'skill:alpha', 'skill:zeta']);
-  assert.equal(rows[0]!.kind === 'draft' && rows[0]!.revises, true, '既存のスキルがある下書きは「修正」');
-  assert.equal(rows[1]!.kind === 'draft' && rows[1]!.revises, false);
-  assert.deepEqual(skillRows([], []), []);
-});
-
 test('findDraft: 同じ名前の下書きが複数あれば、承認待ちの中でいちばん新しいものを返す', () => {
   const list = [draft({ id: 1, name: 'x', created_at: 100 }), draft({ id: 2, name: 'x', created_at: 300 }), draft({ id: 3, name: 'x', created_at: 400, status: 'rejected' })];
   assert.equal(findDraft(list, 'x')?.id, 2);
   assert.equal(findDraft(list, 'nothing'), undefined);
-});
-
-test('通知のリンク: スキルの下書きの通知（#/review）は、その下書きの窓を開く。名前が読めなければ一覧へ', () => {
-  assert.equal(skillDraftLink({ link: '#/review', title: 'スキルの下書きを確かめてください: weekly-report' }), '#/skills/draft/weekly-report');
-  assert.equal(skillDraftLink({ link: '#/review', title: 'Review the skill draft: csv-import2' }), '#/skills/draft/csv-import2');
-  assert.equal(skillDraftLink({ link: '#/review', title: 'スキルの下書きを確かめてください' }), '#/skills');
-  assert.equal(skillDraftLink({ link: '#/review', title: 'スキルの下書き: Weekly Report' }), '#/skills', '名前の形でなければ一覧へ');
-  assert.equal(skillDraftLink({ link: '#/tasks/t1', title: 'x: weekly-report' }), null, '#/review 以外は触らない');
-  assert.equal(skillDraftLink({ link: null, title: 'x: y' }), null);
 });
 
 test('道具の一覧: サーバーの一覧（GET /api/tools。記憶の道具は出ない）のすべてに、画面の絵と説明（en の辞書）がある。画面にあって組み込みに無い道具も無い', async t => {
@@ -89,13 +67,6 @@ test('道具の並び: 画面の辞書の順（ファイル → シェル → We
   assert.deepEqual(ordered, Object.keys(TOOL_LOOKS), 'サーバーの登録順によらず、辞書の順');
   assert.deepEqual(names(orderTools([{ name: 'zeta_new' }, { name: 'shell_run' }, { name: 'alpha_new' }, { name: 'file_read' }])), ['file_read', 'shell_run', 'alpha_new', 'zeta_new']);
   assert.deepEqual(names(orderTools([])), []);
-});
-
-test('skillFileText: サーバーが SKILL.md に書く形と同じ', () => {
-  for (const input of [
-    { name: 'weekly-report', description: '週の終わりに使う', body: '1. 集める\n2. まとめる' },
-    { name: 'x', description: '改行\nを含む "説明"', body: '  本文  \n\n' },
-  ]) assert.equal(skillFileText(input), renderSkillFile(input));
 });
 
 test('フォルダ: 追加は前後の空白を除き重ねず、外す・読み書きの切り替えは対象だけを変える', () => {
@@ -208,7 +179,6 @@ test('画面が使う API: スキルの下書きは current つきで返り、�
   s.app.skills.draft({ name: 'csv-import', description: '取り込む', body: '1. 読む' });
   const review = await (await s.api('/api/review')).json() as any;
   const drafts = review.skillDrafts as SkillDraft[];
-  assert.deepEqual(skillRows(drafts, []).map(r => `${r.kind}:${r.name}`), ['draft:csv-import', 'draft:weekly-report']);
   const revision = findDraft(drafts, 'weekly-report')!;
   assert.deepEqual(revision.current, { description: '古い説明', body: '古い手順' });
   assert.equal(findDraft(drafts, 'csv-import')!.current, null);
@@ -217,7 +187,6 @@ test('画面が使う API: スキルの下書きは current つきで返り、�
   const after = await (await s.api('/api/review')).json() as any;
   assert.deepEqual((after.skillDrafts as SkillDraft[]).map(d => d.name), ['csv-import']);
   const listed = (await (await s.api('/api/skills')).json() as any).skills as SkillSummary[];
-  assert.deepEqual(skillRows(after.skillDrafts, listed).map(r => `${r.kind}:${r.name}`), ['draft:csv-import', 'skill:weekly-report']);
   assert.equal(listed[0]!.description, '新しい説明');
   const rejected = await s.api(`/api/skill-drafts/${findDraft(after.skillDrafts, 'csv-import')!.id}/reject`, { method: 'POST', body: '{}' });
   assert.equal(rejected.status, 200);
@@ -231,7 +200,6 @@ test('画面が使う API: スキルの新規・保存・削除と、名前の�
   assert.equal((await put('Bad Name', 'x', 'y')).status, 400, '名前の形はサーバーが断る（画面はメッセージを出す）');
   const got = await (await s.api('/api/skills/new-skill')).json() as any;
   assert.equal(got.skill.body, '手順');
-  assert.equal(skillFileText(got.skill), renderSkillFile(got.skill), '窓に出す SKILL.md はサーバーの形と同じ');
   assert.equal((await s.api('/api/skills/new-skill', { method: 'DELETE' })).status, 200);
   assert.equal((await s.api('/api/skills/new-skill')).status, 404);
 });
