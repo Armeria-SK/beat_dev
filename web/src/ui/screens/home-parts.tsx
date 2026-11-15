@@ -16,7 +16,7 @@ const TILE_LABEL = { proposals: 'ui.overview.proposals', questions: 'ui.overview
 const TILE_SOME = { proposals: 'ui.overview.proposals.some', questions: 'ui.overview.questions.some', pending: 'ui.overview.pending.some' } as const satisfies Record<TileId, string>;
 const TILE_NONE = { proposals: 'ui.overview.proposals.none', questions: 'ui.overview.questions.none', pending: 'ui.overview.pending.none' } as const satisfies Record<TileId, string>;
 const COLUMN_KEY = {
-  proposed: 'ui.kanban.col.proposed', approved: 'ui.kanban.col.approved', progress: 'ui.kanban.col.progress', done: 'ui.kanban.col.done', failed: 'ui.kanban.col.failed',
+  proposed: 'ui.kanban.col.proposed', approved: 'ui.kanban.col.approved', progress: 'ui.kanban.col.progress', check: 'ui.kanban.col.check', done: 'ui.kanban.col.done', failed: 'ui.kanban.col.failed',
 } as const satisfies Record<ColumnId, string>;
 
 function readStored(key: string): string | null {

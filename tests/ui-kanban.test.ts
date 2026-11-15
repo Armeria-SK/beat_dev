@@ -28,13 +28,15 @@ const board = (active: Task[], finished: Task[] = [], extra: Partial<Parameters<
   buildBoard({ active, finished, hasMore: false, finishedTotal: finished.length, sessions: [], ...extra });
 const NONE = new Map<string, ChecklistItem[]>();
 
-test('ui/kanban: 列は Proposed・Approved・In progress・Done・Failed の順で、状態ごとに 1 つの列に入る', () => {
-  assert.deepEqual([...COLUMNS], ['proposed', 'approved', 'progress', 'done', 'failed']);
+test('ui/kanban: 列は Proposed・Approved・In progress・Awaiting check・Done・Failed の順で、状態ごとに 1 つの列に入る', () => {
+  assert.deepEqual([...COLUMNS], ['proposed', 'approved', 'progress', 'check', 'done', 'failed']);
   assert.equal(columnOf(task('a', 'inbox')), 'proposed');
   assert.equal(columnOf(task('a', 'ready')), 'approved');
   assert.equal(columnOf(task('a', 'running')), 'progress');
   assert.equal(columnOf(task('a', 'waiting')), 'progress');
   assert.equal(columnOf(task('a', 'done')), 'done');
+  assert.equal(columnOf(task('a', 'done', { check_state: 'awaiting' })), 'check', '確かめ待ちは Done でなく Awaiting check');
+  assert.equal(columnOf(task('a', 'done', { check_state: 'checked' })), 'done');
   assert.equal(columnOf(task('a', 'failed')), 'failed');
   assert.equal(columnOf(task('a', 'cancelled')), 'failed');
 });
@@ -66,7 +68,7 @@ test('ui/kanban: 並び。In progress は待っているカードが先、Approv
   assert.deepEqual(ids(b, 'proposed'), ['p-new', 'p-old']);
   assert.deepEqual(ids(b, 'done'), ['d3', 'd2', 'd1']);
   assert.deepEqual(ids(b, 'failed'), ['f1']);
-  assert.deepEqual(b.columns.map(c => c.accent), [true, false, false, false, false], '光る数は Proposed だけ');
+  assert.deepEqual(b.columns.map(c => c.accent), [true, false, false, false, false, false], '光る数は Proposed（と Awaiting check）だけ');
   assert.equal(board([]).columns[0]!.accent, false);
 });
 

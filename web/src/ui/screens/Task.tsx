@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, ApiError, type Project, type Task, type TaskEvent, type WorkerStatus } from '../../api.ts';
+import { api, ApiError, type Acceptance, type AcceptanceItem, type Project, type Task, type TaskEvent, type WorkerStatus } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
@@ -10,9 +10,10 @@ import { latestOnly } from '../latest.ts';
 import { Button, EmptyState, Icon, Notice, Pill, type PillTone } from '../parts.tsx';
 import { productOf } from '../products.ts';
 import { routeHash } from '../routes.ts';
-import { answerTaskOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type TaskOp } from '../task-ops.ts';
+import { checkLabel, evidenceLines, remainingItems, stateLabel, stateTone } from '../acceptance.ts';
+import { answerTaskOp, checkOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type CheckChoice, type TaskOp } from '../task-ops.ts';
 import { SCREEN_EDITS } from '../unsaved.ts';
-import { pendingWait } from '../kanban.ts';
+import { awaitsCheck, pendingWait } from '../kanban.ts';
 import { PRIORITY_KEY } from './Kanban.tsx';
 
 export interface TaskScreenProps {
@@ -39,6 +40,19 @@ const OP_LABEL = {
   cancel: 'ui.task.cancel', restore: 'ui.task.restore', stop: 'ui.task.stop',
 } as const satisfies Record<TaskOp, string>;
 const NEW_EVENT = { reason: 'ui.task.event.reason', unapproved: 'ui.task.event.unapproved' } as const;
+
+function eventText(t: ReturnType<typeof useT>, event: TaskEvent): string | null {
+  if ((event.kind !== 'owner_check' && event.kind !== 'owner_fix') || !event.content) return event.content;
+  try {
+    const value = JSON.parse(event.content) as { item?: unknown; result?: unknown; note?: unknown };
+    const item = typeof value.item === 'string' ? value.item : '';
+    if (event.kind === 'owner_fix') return item || event.content;
+    const head = t(value.result === 'checked' ? 'ui.check.event.checked' : 'ui.check.event.insufficient', item);
+    return typeof value.note === 'string' && value.note ? `${head} · ${value.note}` : head;
+  } catch { return event.content; }
+}
+
+const listChanged = (events: readonly TaskEvent[]): boolean => events.find(e => e.kind === 'gate_list_changed' || e.kind === 'gate_passed')?.kind === 'gate_list_changed';
 
 const fieldValue = (task: Task, field: FieldName): string =>
   (field === 'title' ? task.title : field === 'body' ? task.body : field === 'next' ? task.next_action ?? '' : task.done_criteria ?? '');
@@ -127,6 +141,81 @@ function Answer({ task, onSent }: { task: Task; onSent: () => void }) {
   );
 }
 
+function CheckRow({ id, item, busy, onCheck }: { id: string; item: AcceptanceItem | null; busy: boolean; onCheck: (choice: CheckChoice) => Promise<void> }) {
+  const t = useT();
+  const [noting, setNoting] = useState(false);
+  const [note, setNote] = useState('');
+  useUnsaved(`${SCREEN_EDITS}check:${id}`, note.trim() !== '');
+  const evidence = item ? evidenceLines(item.evidence ?? []) : [];
+  const tone = item ? stateTone(item.state) : undefined;
+  const send = (e: FormEvent) => { e.preventDefault(); void onCheck({ item: id, result: 'insufficient', note }).then(() => { setNoting(false); setNote(''); }); };
+  return (
+    <li className="bt-row ui-acc__row" data-item={id}>
+      <span className="bt-tag ui-acc__id">{id}</span>
+      <div className="bt-row__main">
+        <span className="ui-acc__text">{item?.result ?? ''}</span>
+        {item && <span className="ui-acc__tags"><span className="bt-chip">{t(checkLabel(item.check))}</span></span>}
+        <span className="ui-check__text">
+          {evidence.length === 0 && <span className="bt-meta">{t('ui.check.noEvidence')}</span>}
+          {evidence.map((line, i) => (
+            <span key={i} className="ui-check__ev">
+              <span className="bt-meta">{line.text}</span>
+              {line.output && <pre className="ui-check__out">{line.output}</pre>}
+            </span>
+          ))}
+        </span>
+        {noting ? (
+          <form className="ui-check__note" onSubmit={send} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setNoting(false); } }}>
+            <input className="bt-field" autoFocus value={note} maxLength={1000} aria-label={t('ui.check.note')} placeholder={t('ui.check.note')} onChange={e => setNote(e.target.value)} />
+            <span className="ui-field__buttons">
+              <Button type="submit" variant="primary" small disabled={busy || !item}>{t('ui.check.send')}</Button>
+              <Button variant="ghost" small onClick={() => setNoting(false)}>{t('ui.cancel')}</Button>
+            </span>
+          </form>
+        ) : (
+          <span className="ui-field__buttons">
+            <Button small disabled={busy || !item} onClick={() => void onCheck({ item: id, result: 'checked' })}>{t('ui.check.checked')}</Button>
+            <Button variant="ghost" small disabled={busy || !item} onClick={() => setNoting(true)}>{t('ui.check.notEnough')}</Button>
+          </span>
+        )}
+      </div>
+      {item && <span className="bt-row__end"><Pill {...(tone ? { tone } : {})}>{t(stateLabel(item.state))}</Pill></span>}
+    </li>
+  );
+}
+
+function CheckSection({ task, onDone }: { task: Task; onDone: () => Promise<void> }) {
+  const t = useT();
+  const [list, setList] = useState<Acceptance | null>(null);
+  const [busy, setBusy] = useState(false);
+  const projectId = task.project_id ?? null;
+  useEffect(() => {
+    if (!projectId) return undefined;
+    let live = true;
+    void api.acceptance(projectId).then(r => { if (live) setList(r.acceptance); }, () => { if (live) setList(null); });
+    return () => { live = false; };
+  }, [projectId, task.updated_at]);
+  const run = async (choice?: CheckChoice) => {
+    if (busy || !list) return;
+    setBusy(true);
+    try { await checkOp(task, list.version, choice); await onDone(); } finally { setBusy(false); }
+  };
+  const items = task.items;
+  return (
+    <section className="bt-section ui-check" aria-label={t('ui.kanban.col.check')}>
+      <div className="bt-section__head">
+        <span className="bt-section__kind"><span className="bt-dot" aria-hidden="true" /><span className="bt-label">{t('ui.kanban.col.check')}</span></span>
+        {items && <span className="bt-meta">{t('ui.check.met', items.met, items.owned)}</span>}
+        <Button variant="primary" small disabled={busy || !list} onClick={() => void run()}>{t('ui.check.markChecked')}</Button>
+      </div>
+      <p className="bt-meta">{t('ui.check.text')}</p>
+      <ul className="bt-list">
+        {remainingItems(task, list).map(({ id, item }) => <CheckRow key={id} id={id} item={item} busy={busy || !list} onCheck={choice => run(choice)} />)}
+      </ul>
+    </section>
+  );
+}
+
 export function TaskScreen({ id, revision, worker, projects, pending }: TaskScreenProps) {
   const t = useT();
   const [data, setData] = useState<Detail | null>(null);
@@ -210,7 +299,7 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
           <h1 className="bt-screen__title">{task.title}</h1>
           <div className="ui-task__state">
             {product && <a className="bt-tool__link bt-meta" href={routeHash({ view: 'product', id: product.id })}>{product.name}</a>}
-            <Pill {...(STATUS_TONE[task.status] ? { tone: STATUS_TONE[task.status]! } : {})}>{onPending ? t('ui.kanban.waiting') : t(task.status === 'cancelled' && task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : STATUS_KEY[task.status])}</Pill>
+            {awaitsCheck(task) ? <Pill tone="waiting">{t('ui.kanban.col.check')}</Pill> : <Pill {...(STATUS_TONE[task.status] ? { tone: STATUS_TONE[task.status]! } : {})}>{onPending ? t('ui.kanban.waiting') : t(task.status === 'cancelled' && task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : STATUS_KEY[task.status])}</Pill>}
             <span className="bt-meta">{t('ui.task.updated', formatRelative(task.updated_at))}{task.parent_id !== null && <> · {t('ui.kanban.repeating')}</>}</span>
           </div>
         </div>
@@ -232,6 +321,10 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
           <Button variant="ghost" small onClick={() => setRejecting(false)}>{t('ui.cancel')}</Button>
         </form>
       )}
+
+      {listChanged(events) && <Notice tone="warn" icon="alert" title={t('ui.check.listChanged')} text={t('ui.check.listChangedText')} />}
+
+      {awaitsCheck(task) && <CheckSection task={task} onDone={load} />}
 
       {task.status === 'waiting' && !onPending && <Answer task={task} onSent={() => void load()} />}
 
@@ -302,12 +395,13 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
         <ul className="bt-list">
           {events.map(event => {
             const known = eventKey(event.kind);
+            const content = eventText(t, event);
             const name = known ? t(known) : Object.hasOwn(NEW_EVENT, event.kind) ? t(NEW_EVENT[event.kind as keyof typeof NEW_EVENT]) : event.kind;
             return (
               <li key={event.id} className="bt-row ui-event">
                 <div className="bt-row__main">
                   <span className="bt-row__title">{name}{event.actor === 'user' && <span className="bt-meta"> · {t('ui.task.byYou')}</span>}</span>
-                  {event.content && <span className="ui-event__text">{event.content}</span>}
+                  {content && <span className="ui-event__text">{content}</span>}
                 </div>
                 <div className="bt-row__end"><span className="bt-meta" title={formatDateTime(event.created_at, 'precise')}>{formatRelative(event.created_at)}</span></div>
               </li>

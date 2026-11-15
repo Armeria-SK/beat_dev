@@ -214,3 +214,19 @@ div.bt-stat:hover { box-shadow: none; transform: none; }
 .ui-tool__why, .ui-tool__open { min-width: 4ch; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; }
 .bt-tool__row > .bt-tool__chev { flex: none; }
 .ui-tool__gate { margin: 0 0 var(--space-2); }
+.ui-check__items { display: flex; flex-direction: column; gap: var(--space-1); margin: var(--space-1) 0 0; padding: 0; list-style: none; }
+.ui-check__item { display: flex; align-items: flex-start; gap: var(--space-2); min-width: 0; }
+.ui-check__text { display: flex; flex-direction: column; min-width: 0; color: var(--ink-soft); font: 400 13px/20px var(--font-sans); overflow-wrap: anywhere; }
+.ui-check__ev, .ui-check__out { overflow-wrap: anywhere; }
+.ui-check__out { max-height: 160px; margin: 0; overflow: auto; font: 400 12px/18px var(--font-mono); color: var(--ink); white-space: pre-wrap; }
+.ui-check__note { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); }
+.ui-acc__sign { flex: none; width: 2ch; padding-top: 2px; font: 400 12px/18px var(--font-mono); text-align: center; }
+@media (max-width: 760px) {
+  .bt-board [data-col="proposed"] { order: 1; }
+  .bt-board [data-col="check"] { order: 2; }
+  .bt-board [data-col="progress"] { order: 3; }
+  .bt-board [data-col="approved"] { order: 4; }
+  .bt-board [data-col="done"] { order: 5; }
+  .bt-board [data-col="failed"] { order: 6; }
+  .ui-check .bt-btn { height: 40px; flex: 1; }
+}

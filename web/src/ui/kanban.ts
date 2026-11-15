@@ -2,20 +2,23 @@ import type { ChecklistItem, Conversation, RunRow, Task } from '../api.ts';
 import { checklistStep } from './agent-state.ts';
 import type { Route } from './routes.ts';
 
-export type ColumnId = 'proposed' | 'approved' | 'progress' | 'done' | 'failed';
-export const COLUMNS: readonly ColumnId[] = ['proposed', 'approved', 'progress', 'done', 'failed'];
+export type ColumnId = 'proposed' | 'approved' | 'progress' | 'check' | 'done' | 'failed';
+export const COLUMNS: readonly ColumnId[] = ['proposed', 'approved', 'progress', 'check', 'done', 'failed'];
+export const NARROW_COLUMNS: readonly ColumnId[] = ['proposed', 'check', 'progress', 'approved', 'done', 'failed'];
 export const KANBAN_PAGE = 20;
 export const RUNS_WINDOW = 500;
 
 export const isTemplate = (task: Pick<Task, 'cron' | 'parent_id'>): boolean => task.cron !== null && task.parent_id === null;
 
-export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id'>): ColumnId | null {
+export const awaitsCheck = (task: Pick<Task, 'status' | 'check_state'>): boolean => task.status === 'done' && task.check_state === 'awaiting';
+
+export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state'>): ColumnId | null {
   if (isTemplate(task)) return null;
   switch (task.status) {
     case 'inbox': return 'proposed';
     case 'ready': return 'approved';
     case 'running': case 'waiting': return 'progress';
-    case 'done': return 'done';
+    case 'done': return awaitsCheck(task) ? 'check' : 'done';
     case 'failed': case 'cancelled': return 'failed';
     default: return null;
   }
@@ -96,11 +99,11 @@ export interface Column { id: ColumnId; cards: Card[]; accent: boolean }
 export interface Board { columns: Column[]; more: number }
 
 function taskCard(task: Task, column: ColumnId, checklists: BoardInput['checklists']): TaskCard {
-  const finished = column === 'done' || column === 'failed';
+  const finished = column === 'check' || column === 'done' || column === 'failed';
   const step = column === 'progress' && task.conversation_id ? checklistStep(checklists?.get(task.conversation_id) ?? []) : null;
   return {
     kind: 'task', key: `t:${task.id}:${column}`, column, task, at: finished ? finishedAt(task) : task.updated_at,
-    repeating: task.parent_id !== null, waiting: task.status === 'waiting' || task.status === 'inbox', step,
+    repeating: task.parent_id !== null, waiting: task.status === 'waiting' || task.status === 'inbox' || column === 'check', step,
   };
 }
 
@@ -131,11 +134,11 @@ export function buildBoard({ active, finished, hasMore, finishedTotal, sessions,
     byColumn.get(card.column)!.push(card);
   }
   const order: Record<ColumnId, (a: Card, b: Card) => number> = {
-    proposed: newest, approved: queueOrder, progress: (a, b) => waitsFirst(a, b) || newest(a, b), done: newest, failed: newest,
+    proposed: newest, approved: queueOrder, progress: (a, b) => waitsFirst(a, b) || newest(a, b), check: newest, done: newest, failed: newest,
   };
   const columns = COLUMNS.map(id => {
     const cards = byColumn.get(id)!.sort(order[id]);
-    return { id, cards, accent: id === 'proposed' && cards.length > 0 };
+    return { id, cards, accent: (id === 'proposed' || id === 'check') && cards.length > 0 };
   });
   return { columns, more: Math.max(0, finishedTotal - finished.length) + hidden };
 }

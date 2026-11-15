@@ -22,7 +22,10 @@ export function countTasks(tasks: Iterable<readonly [string, TaskStatus, Task['w
 
 export const waitingTotal = (w: Waiting): number => w.proposals + w.answers + w.drafts + w.pending + w.questions;
 
-export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers'>): number => w.proposals + w.answers;
+export const kanbanCount = (w: Pick<Waiting, 'proposals' | 'answers'>, checks = 0): number => w.proposals + w.answers + checks;
+
+export const countChecks = (marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state'] }>): number =>
+  [...marks].filter(m => m.status === 'done' && m.checkState === 'awaiting').length;
 
 export function agentState(w: Waiting, working: boolean): AgentState {
   if (waitingTotal(w) > 0) return 'waiting';

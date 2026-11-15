@@ -3,7 +3,7 @@ import { api, type Conversation as ConversationRow, type Profile, type Project, 
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
-import { agentState, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
+import { agentState, countChecks, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
 import { composerDrafts } from './composer-state.ts';
 import { Conversation } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
@@ -353,7 +353,7 @@ export function App() {
   const conversation = chatId ? conversations.find(c => c.id === chatId) : undefined;
   const routeProduct = productOf(projects, routeProductId(behind));
   const title = viewTitle(t, behind, conversation, routeProduct);
-  const kanban = kanbanCount(waiting);
+  const kanban = kanbanCount(waiting, countChecks(live.tasks.values()));
   const convo = isConversation(behind) || behind.view === 'productNew';
   const convoProduct = behind.view === 'productNew' ? routeProduct : productOf(projects, conversation?.project_id);
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);

@@ -31,7 +31,40 @@ const CHECK = { command: 'ui.acc.check.command', look: 'ui.acc.check.look', read
 
 export const checkLabel = (check: AcceptanceCheck): (typeof CHECK)[keyof typeof CHECK] => CHECK[check.kind];
 
-export const stateLabel = (state: AcceptanceItem['state']): 'ui.acc.state.open' | null => (state === 'open' ? 'ui.acc.state.open' : null);
+const STATE = { open: 'ui.acc.state.open', met: 'ui.acc.state.met', unverified: 'ui.acc.state.unverified' } as const;
+
+export const stateLabel = (state: AcceptanceItem['state']): (typeof STATE)[keyof typeof STATE] => (Object.hasOwn(STATE, state) ? STATE[state] : STATE.open);
+
+export const stateTone = (state: AcceptanceItem['state']): 'ok' | 'waiting' | undefined => (state === 'met' ? 'ok' : state === 'unverified' ? 'waiting' : undefined);
+
+export interface EvidenceLine { text: string; output?: string }
+
+const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value : null);
+
+export function evidenceLines(evidence: readonly unknown[]): EvidenceLine[] {
+  const out: EvidenceLine[] = [];
+  for (const entry of evidence) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    const notDone = text(e.notDone);
+    const closed = text(e.closed);
+    const command = text(e.command);
+    if (notDone) out.push({ text: t('ui.ev.notDone', notDone) });
+    else if (closed) out.push({ text: closed });
+    else if (command) {
+      const line = e.held === 'pending' ? t('ui.ev.held', command) : t(e.ok === true ? 'ui.ev.passed' : 'ui.ev.failed', command);
+      const output = text(e.output);
+      out.push(output ? { text: line, output } : { text: line });
+    } else if (text(e.tag) && text(e.tool)) out.push({ text: [e.tag, e.tool, text(e.input)].filter(Boolean).join(' · ') });
+  }
+  return out;
+}
+
+const evidenceDetails = (item: AcceptanceItem): Detail[] =>
+  evidenceLines(item.evidence ?? []).flatMap((line): Detail[] => [
+    { label: 'ui.acc.detail.evidence', text: line.text },
+    ...(line.output ? [{ label: 'ui.acc.detail.output', text: line.output, mono: true } as const] : []),
+  ]);
 
 export type Detail = { label: PlainKey; text: string; mono?: true } | { label: PlainKey; note: PlainKey };
 
@@ -64,7 +97,7 @@ function checkDetails(check: AcceptanceCheck): Detail[] {
 }
 
 export const itemDetails = (entry: AcceptanceItem | NotDoingItem): Detail[] =>
-  [...sourceDetails(entry.source), ...('check' in entry ? checkDetails(entry.check) : [])];
+  [...sourceDetails(entry.source), ...('check' in entry ? [...checkDetails(entry.check), ...evidenceDetails(entry)] : [])];
 
 export const conversationLink = (source: AcceptanceSource): string | null =>
   (source.kind === 'owner_words' && source.conversationId ? routeHash({ view: 'chat', id: source.conversationId }) : null);
@@ -322,3 +355,6 @@ export function revealSection(top: Scrollable | null, section: Scrollable & { fo
   (top ?? section).scrollIntoView({ block: 'start' });
   section.focus({ preventScroll: true });
 }
+
+export const remainingItems = (task: Pick<Task, 'items'>, acc: Acceptance | null | undefined): Array<{ id: string; item: AcceptanceItem | null }> =>
+  (task.items?.remaining ?? []).map(id => ({ id, item: acc?.items.find(i => i.id === id && i.removedIn === null) ?? null }));
