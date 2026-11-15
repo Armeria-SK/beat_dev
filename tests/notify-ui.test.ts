@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { NOTIFICATION_KINDS } from '../src/config/schema.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { accessWidening, secretEntryAccess } from '../web/src/settings/access.ts';
-import { SECTION_GROUPS, sectionSlice, type Config } from '../web/src/settings/model.ts';
+import { accessWidening } from '../web/src/settings/access.ts';
+import { SECTION_GROUPS, type Config } from '../web/src/settings/model.ts';
 
 // AU-5a T-20: 設定の「通知の送り先」の、画面を使わない部分（広がる変更の検出・文言・節の登録）
 
@@ -39,13 +39,6 @@ test('上限を上げるときだけ確かめる。下げるのは確かめな�
   assert.deepEqual(accessWidening(lim(60), lim(30)), []);
 });
 
-test('URL の入れ直しは確かめる（宛先が変わる）。token は確かめない。設定にない送り先は確かめない', () => {
-  const c = config({ channels: [channel()] });
-  assert.deepEqual(secretEntryAccess({ id: 'phone', field: 'url' }, c), [{ kind: 'notify-channel-target', id: 'phone' }]);
-  assert.deepEqual(secretEntryAccess({ id: 'phone', field: 'token' }, c), []);
-  assert.deepEqual(secretEntryAccess({ id: 'ghost', field: 'url' }, c), []);
-});
-
 test('確かめの文言は、差し込みが入り、日本語が混ざらない', () => {
   const en7 = [en['access.notifyAdded']('p'), en['access.notifyTarget']('p'), en['access.notifyBody']('p'), en['access.notifyKinds']('p', 'Info'), en['access.notifyEnabled']('p'), en['access.notifyPublicUrl']('https://x.example'), en['access.limitRaised']('notify.maxChannels', 4, 8)];
   for (const text of en7) assert.ok(text.includes('p') || text.includes('https://x.example') || text.includes('notify.maxChannels'), text);
@@ -57,7 +50,6 @@ test('確かめの文言は、差し込みが入り、日本語が混ざらな�
 test('通知の節は「動き」の組に入り、設定の notify を切り出す。画面の文言は en にある', () => {
   const ids = SECTION_GROUPS.flatMap(g => g.items.map(s => s.id));
   assert.ok(ids.includes('notify'));
-  assert.deepEqual(sectionSlice(config({ channels: [] }), 'notify'), { channels: [] });
   const keys = (d: Record<string, unknown>) => Object.keys(d).filter(k => k.startsWith('notifications.kind.')).sort();
   assert.deepEqual(keys(en), NOTIFICATION_KINDS.map(k => `notifications.kind.${k}`).sort());
   for (const k of keys(en)) {

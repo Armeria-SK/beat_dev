@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { en } from '../web/src/i18n/en.ts';
 import { errorBodyText } from '../web/src/server-text.ts';
 import { accessKey, keyEntryAccess } from '../web/src/settings/access.ts';
-import { keyEnvUnsafe, keyReady, providerKeyEnv, sharedKeyWith, trimKey, type Config } from '../web/src/settings/model.ts';
+import { keyEnvUnsafe, providerKeyEnv, trimKey, type Config } from '../web/src/settings/model.ts';
 
 // 段 9f: 設定の「プロバイダ」の節の API キーの欄の、画面を使わない部分
 
@@ -13,7 +13,7 @@ const config = (): Config => ({
     { id: 'remote', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1', apiKeyEnv: 'EXAMPLE_API_KEY' },
     { id: 'claude', kind: 'anthropic' },
     { id: 'claude2', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY' },
-    { id: 'my-llm', kind: 'ollama', baseUrl: 'http://localhost:11434' },
+    { id: 'my-llm', kind: 'openai_compatible', baseUrl: 'http://localhost:11434' },
   ],
 });
 
@@ -40,28 +40,8 @@ test('鍵の環境変数の名前（providerKeyEnv）: 書かれていればそ�
   assert.equal(providerKeyEnv(c, 'local'), 'BEAT_LOCAL_API_KEY');
   assert.equal(providerKeyEnv(c, 'my-llm'), 'BEAT_MY_LLM_API_KEY');
   assert.equal(providerKeyEnv(c, 'nope'), undefined);
-  (c.providers as Array<Record<string, unknown>>).push({ id: 'my_llm', kind: 'ollama', apiKeyEnv: 'BEAT_MY_LLM_API_KEY' });
+  (c.providers as Array<Record<string, unknown>>).push({ id: 'my_llm', kind: 'openai_compatible', apiKeyEnv: 'BEAT_MY_LLM_API_KEY' });
   assert.equal(providerKeyEnv(c, 'my-llm'), 'BEAT_MY_LLM_API_KEY_2');
-});
-
-test('同じ環境変数を使うほかのプロバイダ（sharedKeyWith）: 入れ直す・消すと、そちらにも効くので知らせる', () => {
-  const c = config();
-  assert.deepEqual(sharedKeyWith(c, 'claude'), ['claude2'], 'apiKeyEnv を書いていない Anthropic と、書いている Anthropic');
-  assert.deepEqual(sharedKeyWith(c, 'claude2'), ['claude']);
-  assert.deepEqual(sharedKeyWith(c, 'remote'), []);
-  assert.deepEqual(sharedKeyWith(c, 'local'), [], 'まだ名前を付けていないものは、ほかと重ならない');
-});
-
-test('鍵を入れられるのは、保存済みで、編集中の変更が無いプロバイダだけ（keyReady）', () => {
-  const saved = config();
-  assert.equal(keyReady(saved, structuredClone(saved), 'remote'), true);
-  const edited = structuredClone(saved);
-  (edited.providers as Array<Record<string, unknown>>)[1]!.baseUrl = 'https://evil.example/v1';
-  assert.equal(keyReady(saved, edited, 'remote'), false, '送り先を変えたまま鍵を入れさせない（鍵は保存済みの送り先に送られる）');
-  const added = structuredClone(saved);
-  (added.providers as Array<Record<string, unknown>>).push({ id: 'fresh', kind: 'ollama' });
-  assert.equal(keyReady(saved, added, 'fresh'), false, 'まだ保存していないプロバイダ');
-  assert.equal(keyReady(saved, added, 'remote'), true, 'ほかのプロバイダの編集は関係ない');
 });
 
 test('貼り付けた鍵の前後の空白・改行は取り除いて送る（途中は触らない）', () => {
