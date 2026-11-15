@@ -186,8 +186,8 @@ test('状態の色の種類と、説明が変わって止まっている・切�
   assert.equal(tone('failed'), 'bad');
   assert.equal(tone('off'), 'off');
   const tools = (states: string[]) => states.map((state, i) => ({ name: `t${i}`, registered: `mcp_x_t${i}`, state, description: '' }));
-  assert.deepEqual(summarize({ tools: tools(['registered', 'changed', 'changed', 'cut', 'off', 'unlisted']) } as never), { changed: 2, cut: 1, registered: 1 });
-  assert.deepEqual(summarize({ tools: [] } as never), { changed: 0, cut: 0, registered: 0 });
+  assert.deepEqual(summarize({ tools: tools(['registered', 'changed', 'changed', 'off', 'unlisted']) } as never), { changed: 2, registered: 1 });
+  assert.deepEqual(summarize({ tools: [] } as never), { changed: 0, registered: 0 });
 });
 
 test('理由の語は、画面の文言に対応する。知らない語は「その他」になる', () => {

@@ -124,7 +124,7 @@ export function productChatRequest(config: AppConfig, paths: AppPaths, model: Mo
   for (const tool of builtinTools()) if (!MEMORY_TOOL_NAMES.includes(tool.name)) registry.register(tool);
   const exclude = (t: ToolDef) => (t.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(t.name) && !config.tools.browser.enabled)
     || effectivePolicy(t.name, config) === 'block' || !acceptanceAllows(t, false) || !isCore(t);
-  const chat = model.maxTools === 0 ? [] : registry.forRun('chat', { ...(model.maxTools !== undefined ? { limit: model.maxTools } : {}), exclude });
+  const chat = registry.forRun('chat', { exclude });
   const base = chat.filter(t => !t.name.startsWith(MESH_TOOL_PREFIX));
   const instructions = instructionsSection(readInstructions(root, instructionsBudget(smallestAvailable)));
   const frozen = buildSnapshot(paths, { persona: false, ...(instructions ? { instructions } : {}) }, language).text;

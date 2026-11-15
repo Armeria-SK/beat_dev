@@ -9,7 +9,7 @@ export const CORE_TOOLS: ReadonlySet<string> = new Set([
 
 export const isCore = (tool: Pick<ToolDef, 'name' | 'mcp'>): boolean => tool.mcp === undefined && CORE_TOOLS.has(tool.name);
 
-export interface RunOptions { limit?: number | undefined; exclude?: (tool: ToolDef) => boolean }
+export interface RunOptions { exclude?: (tool: ToolDef) => boolean }
 
 export class ToolRegistry {
   #tools = new Map<string, ToolDef>();
@@ -52,18 +52,8 @@ export class ToolRegistry {
   // 登録されている道具すべて（どの種類の実行で使えるかによらず）。内蔵の道具が先
   list(): ToolDef[] { return [...this.#tools.values(), ...[...this.#groups.values()].flatMap(g => [...g.values()])]; }
 
-  #candidates(kind: RunKind, options: RunOptions): ToolDef[] {
-    return this.list().filter(t => t.allowedIn.includes(kind) && !options.exclude?.(t));
-  }
-
   forRun(kind: RunKind, options: RunOptions = {}): ToolDef[] {
-    const tools = this.#candidates(kind, options);
-    return options.limit === undefined ? tools : tools.slice(0, options.limit);
-  }
-
-  // forRun が limit で切り落とす道具（モデルに渡せなかったもの）
-  cut(kind: RunKind, options: RunOptions = {}): ToolDef[] {
-    return options.limit === undefined ? [] : this.#candidates(kind, options).slice(options.limit);
+    return this.list().filter(t => t.allowedIn.includes(kind) && !options.exclude?.(t));
   }
 
   static specs(tools: readonly ToolDef[], config?: AppConfig): ToolSpec[] {

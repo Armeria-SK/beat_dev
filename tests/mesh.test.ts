@@ -518,20 +518,6 @@ test('3-1c 製品のリポジトリの README に仕込んだ指示を読んだ�
   assert.match(s.last().system.dynamic, /not instructions/u);
 });
 
-test('3-1c 登録の順（maxTools: 12）: 製品の計画モードに plan_write と mesh_search が残り、製品のタスクには task_complete・file_read・file_edit・shell_run が残る', async t => {
-  const s = await setup(t, { models: [fakeModel('m1', { maxTools: 12 })] });
-  const shop = await s.product('shop');
-  s.adapter().scripts = [reply('a')];
-  await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
-  assert.ok(s.names().includes('plan_write') && s.names().includes('mesh_search'), s.names().join());
-  await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
-  s.adapter().scripts = [call('task_complete', { summary: 'done' })];
-  assert.equal(await s.app.worker.tick(), 'ran');
-  for (const name of ['task_complete', 'file_read', 'file_edit', 'shell_run']) assert.ok(s.names().includes(name), `${name}: ${s.names().join()}`);
-  const names = builtinTools().map(tool => tool.name);
-  for (const name of ['mesh_search', 'mesh_read', 'mesh_state_set']) assert.ok(names.indexOf(name) > names.indexOf('shell_run'), name);
-});
-
 test('3-1c 新しい道具の印: mesh_search / mesh_read は read、mesh_state_set は meta。どれも projectOnly。planOk は mesh_search / mesh_read だけ（3-2-s で計画モードから mesh_state_set を外した）', () => {
   assert.deepEqual([meshSearch.effect, meshRead.effect, meshStateSet.effect], ['read', 'read', 'meta']);
   for (const tool of [meshSearch, meshRead, meshStateSet]) assert.equal(tool.projectOnly, true, tool.name);
