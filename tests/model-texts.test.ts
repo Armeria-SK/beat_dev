@@ -12,7 +12,7 @@ import { compactPrompt, compactSpeaker, compactSystem, summarySection } from '..
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildDynamic, buildSnapshot, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
-import { bookPressureText, reviewPrompt, transcriptOf, type ReviewTrigger } from '../src/memory/review.ts';
+import { bookPressureText, reviewPrompt, reviewWindow, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
@@ -209,12 +209,12 @@ test('決まり文: モデルに渡す文に日本語が混ざらない', t => {
     compact: compactPrompt({ previous: 'Before', transcript: 'User: hi' }, 'en'),
     speakers: ['user', 'assistant', 'tool'].map(role => compactSpeaker({ role, name: 'file_list' }, 'en')).join(' '),
     task: taskPrompt(task, events, 'Asia/Tokyo', 'en'),
-    transcript: transcriptOf(stored, 15_000, 'en'),
+    transcript: reviewWindow(stored, { maxChars: 15_000 }, 'en').transcript,
     pressure: bookPressureText(pressure, 'en'),
     curiosity: Object.values(curiosityText('en')).map(v => (typeof v === 'function' ? v('Topic') : v)).join('\n'),
     ...Object.fromEntries(triggers.map(trigger => [`review:${trigger}`, reviewPrompt({
       trigger, language: 'en', forgotten: ['Forgotten fact'], bookPressure: bookPressureText(pressure, 'en'),
-      task: { title: 'T', status: 'done', result_summary: 'Result', body: 'Body' }, taskEvents: [{ kind: 'note', content: 'Event' }], transcript: transcriptOf(stored, 15_000, 'en'),
+      task: { title: 'T', status: 'done', result_summary: 'Result', body: 'Body' }, taskEvents: [{ kind: 'note', content: 'Event' }], transcript: reviewWindow(stored, { maxChars: 15_000 }, 'en').transcript,
     })])),
   };
   for (const [name, text] of Object.entries(texts)) {
@@ -254,10 +254,11 @@ const EN_REVIEW_POLICY = [
   '',
   '# Policy',
   '- Keep only "lessons and facts that will help next time". Do not keep a log of events',
-  '- Do not add what is already in memory. Merge overlapping memories into one with memory_update, and drop the one you no longer need with memory_forget',
-  '- If two memories contradict, keep the newer one',
-  '- Facts about the user that were missed (preferences, plans, relationships, environment): memory_save (book=user). Your own lessons: book=notes',
-  '- Add at most 3 items from a single record',
+  '- Your main job is to check the memories you already have against the record and keep them tidy: correct them, merge overlapping ones into one, and remove the ones that are wrong or no longer needed',
+  "- Add something new only when the record confirms it and it cannot be found in the product's files, the plan or a search of past conversations",
+  '- If memories contradict each other, check the record and correct the wrong one. If the record cannot settle it, start the memory with "Unverified:"',
+  '- If the user asked in the record for something to be remembered and it is not saved yet, save it (in plan mode it could not be saved, so it is picked up here)',
+  '- To correct or merge, use memory_update. To remove, use memory_forget. To add, use memory_save',
   '- If you find a procedure that looks reusable, use skill_draft (it is not used until the user approves it). Prefer fixing an existing skill over creating a new one',
   '- If there is nothing to do, use no tools and reply only "No changes" (exactly these English words, whatever language you write in otherwise)',
   '- At the end, report what you did in one or two sentences',
@@ -275,7 +276,7 @@ const EN_TIDY_POLICY = [
 ];
 const enReviewIntro = (trigger: string) => `[Review] Trigger: ${trigger}. Read the record below and tidy up your memory (this is not a conversation with the user; your reply is only saved to the record).`;
 const enSkillIntro = (trigger: string) => `[Review] Trigger: ${trigger}. Read the record below and look for procedures worth keeping as skills (this is not a conversation with the user; your reply is only saved to the record).`;
-const EN_SKILL_POLICY = EN_REVIEW_POLICY.filter((_, i) => i < 3 || i > 6);
+const EN_SKILL_POLICY = EN_REVIEW_POLICY.filter((_, i) => i < 3 || i > 7);
 
 test('英語の固定文: タスクの実行の指示の全文（日本語のタスクの中身は訳さずに入る）', () => {
   const task = { id: 'abcdef12-0000', title: '請求書をまとめる', origin: 'user', body: '詳細です', next_action: '集計する', done_criteria: '送った' } as any;
@@ -340,7 +341,7 @@ test('英語の固定文: 振り返りの指示の全文（日本語の記録は
   ].join('\n'));
 
   assert.equal(reviewPrompt({
-    trigger: 'task', forgotten: [], task: { title: 'T', status: 'done', result_summary: '結果', body: 'メモ本文' },
+    trigger: 'task', forgotten: [], task: { title: 'T', status: 'done', result_summary: '結果', body: 'メモ本文', conversation_id: 'conv-1' },
     taskEvents: [{ kind: 'note', content: '経過' }, { kind: 'x', content: null }], memory: true,
   }), [
     enReviewIntro('A task finished'),
@@ -349,6 +350,7 @@ test('英語の固定文: 振り返りの指示の全文（日本語の記録は
     '# Finished task',
     'Title: T',
     'Result: done — 結果',
+    'Conversation ID: conv-1 (read the run with history_read)',
     'Notes:',
     'メモ本文',
     'History:',
@@ -360,7 +362,7 @@ test('英語の固定文: 振り返りの指示の全文（日本語の記録は
     { id: 2, role: 'assistant', text: '返事', message: { role: 'assistant' } },
     { id: 3, role: 'tool', text: 'tool out', message: { role: 'tool', name: 'file_list' } },
   ] as any;
-  assert.equal(reviewPrompt({ trigger: 'idle', forgotten: [], transcript: transcriptOf(stored), memory: true }), [
+  assert.equal(reviewPrompt({ trigger: 'idle', forgotten: [], transcript: reviewWindow(stored, { maxChars: 15_000 }).transcript, memory: true }), [
     enReviewIntro('The conversation went quiet'),
     ...EN_REVIEW_POLICY,
     '',
@@ -369,7 +371,7 @@ test('英語の固定文: 振り返りの指示の全文（日本語の記録は
     '[beat] 返事',
     '[Tool file_list] tool out',
   ].join('\n'));
-  assert.equal(reviewPrompt({ trigger: 'idle', forgotten: ['忘れた記憶'], transcript: transcriptOf(stored) }), [
+  assert.equal(reviewPrompt({ trigger: 'idle', forgotten: ['忘れた記憶'], transcript: reviewWindow(stored, { maxChars: 15_000 }).transcript }), [
     enSkillIntro('The conversation went quiet'),
     ...EN_SKILL_POLICY,
     '',
@@ -379,7 +381,7 @@ test('英語の固定文: 振り返りの指示の全文（日本語の記録は
     '[Tool file_list] tool out',
   ].join('\n'));
 
-  const triggers = { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory has grown large', manual: 'Manual' };
+  const triggers = { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Long conversation not reviewed yet', book_full: 'Memory has grown large', manual: 'Manual' };
   for (const [trigger, label] of Object.entries(triggers)) {
     assert.equal(reviewPrompt({ trigger: trigger as ReviewTrigger, forgotten: [], memory: true }).split('\n')[0], enReviewIntro(label), trigger);
     assert.equal(reviewPrompt({ trigger: trigger as ReviewTrigger, forgotten: [] }).split('\n')[0], enSkillIntro(label), trigger);
@@ -388,7 +390,7 @@ test('英語の固定文: 振り返りの指示の全文（日本語の記録は
     { id: 1, role: 'user', text: 'あ'.repeat(3100), message: { role: 'user' } },
     { id: 2, role: 'tool', text: 'い'.repeat(310), message: { role: 'tool', name: 'file_list' } },
   ] as any;
-  assert.equal(transcriptOf(long), `[User] ${'あ'.repeat(3000)}… (truncated)\n[Tool file_list] ${'い'.repeat(300)}… (truncated)`);
+  assert.equal(reviewWindow(long, { maxChars: 15_000 }).transcript, `[User] ${'あ'.repeat(3000)}… (truncated)\n[Tool file_list] ${'い'.repeat(300)}… (truncated)`);
   assert.equal(bookPressureText({ tokens: 900, budget: 500, outside: [{ id: 1, book: 'user', content: '古い事実' }, { id: 2, book: 'notes', content: '古い教訓' }] }), [
     'Memory totals about 900 tokens, over the guideline for what goes into a conversation (about 500 tokens). 2 memories do not fit in a conversation. Propose merging overlapping memories and trimming old ones',
     'Memories that do not fit (oldest first):',

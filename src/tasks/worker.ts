@@ -9,7 +9,7 @@ import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
-import { bookPressureText, isNoProposal, reviewPrompt, TIDY_FORBIDDEN_TOOLS, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
+import { bookPressureText, conversationWindow, isNoProposal, reviewPrompt, reviewUptoKey, reviewWindowLimits, TIDY_FORBIDDEN_TOOLS, TRIGGER_TEXT, type ReviewJob, type ReviewJobs, type WindowLimits } from '../memory/review.ts';
 import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
@@ -54,6 +54,7 @@ export interface WorkerDeps {
   botMemory?: boolean | undefined;
   curiosity?: CuriosityStore | undefined;
   memoryBudget?: (() => number | undefined) | undefined;
+  backgroundAvailable?: (() => number | undefined) | undefined;
   projects?: ProjectStore | undefined;
   questions?: QuestionStore | undefined;
   pendingWake?: (() => unknown) | undefined;
@@ -292,7 +293,9 @@ export class Worker {
       // （poke が来ない道〔止まっている・自動の予定が無い〕に備えて、保険の予定は 1 分後に置く。終わった実行の poke はそれより早い）
       if (!task && (this.#forced.size > 0 || tasks.pickNext({ allowSelf }))) { reschedule(now + 60_000); return 'busy'; }
       // 実行するタスクが無ければ、振り返りを見る
-      const job = !task && c.memory.review ? this.#d.reviews?.next() : undefined;
+      const holdPiled = this.runsLastHour() >= Math.ceil(c.worker.maxRunsPerHour / 2);
+      const job = !task && c.memory.review ? this.#d.reviews?.next({ skipPiled: holdPiled }) : undefined;
+      if (!task && !job && holdPiled && c.memory.review && this.#d.reviews?.next()) { reschedule(now + 10 * 60_000); return 'budget'; }
       if (job) {
         const outcome = await this.#review(job, release);
         reschedule(outcome === 'busy' ? now + 60_000 : now);
@@ -319,8 +322,10 @@ export class Worker {
     }
   }
 
-  #reviewInput(job: ReviewJob): string | undefined {
-    const { db, conversations, tasks, memory, kv } = this.#d;
+  #reviewLimits(): WindowLimits { return reviewWindowLimits(this.#d.backgroundAvailable?.()); }
+
+  #reviewInput(job: ReviewJob): { prompt?: string; upto?: number | undefined } {
+    const { db, tasks, memory, kv } = this.#d;
     const language = languageOf(this.#d.config());
     const skillsAutoRegister = !askBeforeRegister(this.#d.config());
     const forgotten = (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
@@ -328,19 +333,24 @@ export class Worker {
       const budget = this.#d.memoryBudget?.();
       const plan = memory && budget !== undefined ? planBooks(memory.list(), language, budget) : undefined;
       const pressure = plan && budget !== undefined && plan.omitted.length > 0 ? bookPressureText({ tokens: plan.tokens, budget, outside: plan.omitted }, language) : undefined;
-      return reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language, memory: true });
+      return { prompt: reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language, memory: true }) };
     }
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
-      if (!task) return undefined;
-      return reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory });
+      if (!task) return {};
+      return { prompt: reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory }) };
     }
-    if (!job.conversation_id) return undefined;
+    if (!job.conversation_id) return {};
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
-    const upto = Number(kv.get(`review:upto:${job.conversation_id}`) ?? 0);
-    const messages = conversations.messages(job.conversation_id, 200).filter(m => m.id > upto);
-    if (!messages.some(m => m.role === 'user')) return undefined;
-    return reviewPrompt({ trigger: job.trigger, transcript: transcriptOf(messages, undefined, language), forgotten, language, skillsAutoRegister, memory: this.#d.botMemory });
+    const upto = Number(kv.get(reviewUptoKey(job.conversation_id)) ?? 0);
+    const window = conversationWindow(db, job.conversation_id, upto, this.#reviewLimits(), language);
+    if (!window.messages.some(m => m.role === 'user')) return { upto: window.lastId };
+    return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, language, skillsAutoRegister, memory: this.#d.botMemory }), upto: window.lastId };
+  }
+
+  #reviewed(conversationId: string, upto: number | undefined): void {
+    if (upto !== undefined) this.#d.kv.set(reviewUptoKey(conversationId), String(upto));
+    this.#d.reviews?.enqueueIfPiled(conversationId, this.#reviewLimits());
   }
 
   async #review(job: ReviewJob, release: () => void): Promise<TickResult> {
@@ -348,11 +358,15 @@ export class Worker {
     if (!reviews) return 'idle';
     const language = this.#language();
     if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
-    const prompt = this.#reviewInput(job);
-    if (!prompt) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
+    const { prompt, upto } = this.#reviewInput(job);
+    if (!prompt) {
+      reviews.finish(job.id, 'done', taskText(language, 'review.nothing'));
+      if (upto !== undefined && job.conversation_id) this.#reviewed(job.conversation_id, upto);
+      return 'idle';
+    }
     // 先に使う提供元が満杯なら、まだ claim せずに待つ（終わった実行の onRunEnd で呼び直される）
     if (!engine.backgroundHasRoom()) return 'busy';
-    const lastMessageId = job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
+    const lastMessageId = job.trigger === 'task' && job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
     // 止められて・再起動でやり直す振り返りは、前の回の振り返りの会話に続きを書く（新しく作ると、前の回の会話が記録から外れる）。会話は作るときに材料も覚える
     const source = { conversationId: job.conversation_id, taskId: job.task_id };
     const earlier = job.review_conversation_id ? conversations.get(job.review_conversation_id) : undefined;
@@ -375,7 +389,8 @@ export class Worker {
       } else if (result.ok) {
         reviews.finish(job.id, 'done', result.text.trim().slice(0, 1000) || taskText(language, 'review.no_reply'));
         if (job.trigger === 'book_full') this.#proposeTidy(job, result.text, language);
-        if (job.conversation_id && lastMessageId) kv.set(`review:upto:${job.conversation_id}`, String(lastMessageId));
+        if (job.trigger === 'task') { if (job.conversation_id && lastMessageId) kv.set(reviewUptoKey(job.conversation_id), String(lastMessageId)); }
+        else if (job.conversation_id && job.trigger !== 'book_full') this.#reviewed(job.conversation_id, upto);
       } else {
         // 振り返りは再試行しない（失敗が続いて費用が膨らむのを防ぐ）。次のきっかけでまた積まれる
         reviews.finish(job.id, 'failed', result.errorMessage);

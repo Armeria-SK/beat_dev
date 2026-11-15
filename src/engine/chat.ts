@@ -544,9 +544,13 @@ export class ChatEngine {
     return { modelId: model?.id, efforts: model ? modelEfforts(config, model, this.#d.status.get(model.id)) : [] };
   }
 
-  #smallestAvailable(): number | undefined {
+  backgroundAvailable(): number | undefined {
+    return this.#smallestAvailable(['background']);
+  }
+
+  #smallestAvailable(routes: ReadonlyArray<'chat' | 'background'> = ['chat', 'background']): number | undefined {
     const config = this.#d.config();
-    const ids = new Set([...candidateModelIds(config, 'chat'), ...candidateModelIds(config, 'background')]);
+    const ids = new Set(routes.flatMap(route => candidateModelIds(config, route)));
     let smallest: number | undefined;
     for (const id of ids) {
       const model = config.models.find(m => m.id === id);

@@ -76,8 +76,8 @@ function hang(): Script {
   };
 }
 
-// 振り返りを有効にする（きっかけは手で積むので、会話の途切れ・道具の多さでは勝手に積まれないようにする）
-const reviewOn = (c: AppConfig): void => { c.memory.review = true; c.memory.reviewIdleMinutes = 1440; c.memory.reviewAfterToolCalls = 200; };
+// 振り返りを有効にする（きっかけは手で積むので、会話の途切れでは勝手に積まれないようにする）
+const reviewOn = (c: AppConfig): void => { c.memory.review = true; c.memory.reviewIdleMinutes = 1440; };
 
 async function setup(t: { after: (fn: () => void) => void }, options: { workerMax: number; providerMax: number; timers?: boolean; edit?: (c: AppConfig) => void }) {
   const paths = resolvePaths(tempDir(t));

@@ -37,7 +37,7 @@ import { McpManager, type McpConnect } from './mcp/manager.ts';
 import { NotifyChannels } from './notify/channels.ts';
 import { Notifications, type Notification, type NotifyEvent } from './notify/notifications.ts';
 import { CuriosityStore } from './curiosity/store.ts';
-import { ReviewJobs } from './memory/review.ts';
+import { ReviewJobs, reviewWindowLimits } from './memory/review.ts';
 import { curiosityAdd, curiosityList, curiosityUpdate } from './tools/builtin/curiosity.ts';
 import { skillDraft, skillView } from './tools/builtin/skills.ts';
 import { webFetch, webSearch } from './tools/builtin/web.ts';
@@ -246,7 +246,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), projects: this.projects,
+      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), projects: this.projects,
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()),
     });
     this.tasks.onChange = task => {
@@ -298,14 +298,7 @@ export class App {
       this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.change_summary ?? draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
-      // 道具を多く使った重い会話の後に振り返る
-      const config = this.config();
-      if (run.kind === 'chat' && config.memory.review) {
-        const row = this.runs.get(run.runId);
-        if (row && row.ok && row.tool_calls >= config.memory.reviewAfterToolCalls) {
-          this.reviews.enqueue('heavy_run', `run:${run.runId}`, { conversationId: run.conversationId });
-        }
-      }
+      if (run.kind === 'chat' && this.config().memory.review) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
       this.worker.poke();
     };
   }
