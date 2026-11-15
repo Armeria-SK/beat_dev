@@ -230,7 +230,7 @@ const en = {
   'pipeline.policy_ask': 'The tool "{name}" is set to "Ask" in the settings, so it is checked with you every time',
   'pipeline.policy_review': 'The tool "{name}" is set to "Ask", but a review (background work) has nobody to approve it, so it cannot be used',
   'pipeline.auto_no_reason': 'No reason was given',
-  'pipeline.judge_reused': 'Allowed (same as call #{call}): {reason}',
+  'pipeline.judge_reused': 'Allowed (same as an earlier call in this run): {reason}',
 
   'hook.failed': 'The hook "{name}" failed ({reason})',
   'hook.spawn': 'Cannot start it: {detail}',

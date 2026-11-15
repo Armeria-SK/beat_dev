@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -13,10 +14,11 @@ import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker, type ApprovalPath } from '../src/tools/approvals.ts';
 import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
-import { REMEMBERED_MAX, rememberAllow, rememberedAllow } from '../src/tools/judge-cache.ts';
+import { involvedSnapshot, REMEMBERED_MAX, rememberAllow, rememberedAllow } from '../src/tools/judge-cache.ts';
 import { judgeStats } from '../src/tools/judge-stats.ts';
 import type { Outbound } from '../src/tools/hooks/outbound.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
+import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
@@ -30,6 +32,7 @@ const ASK = '{"decision":"ask","reason":"not sure"}';
 interface World {
   reasons: string[]; askKinds: AskKind[]; keys: string[]; cwd: string; reads: string[] | undefined; writes: string[]; paths: ApprovalPath[]; pathsMore: number;
   title: string; body: string; redo: ((check: PreCheck) => PreCheck) | undefined; outbound?: Outbound | undefined; shownCwd?: string | undefined;
+  pushes?: Array<{ dir: string | null }> | undefined; places?: string[] | undefined; bind?: string | undefined;
 }
 
 function setup(t: { after: (fn: () => void) => void }, mutate?: (c: AppConfig) => void) {
@@ -58,15 +61,16 @@ function setup(t: { after: (fn: () => void) => void }, mutate?: (c: AppConfig) =
       const check: PreCheck = {
         decision: 'ask', reasons: [...world.reasons], askKinds: [...world.askKinds], reasonKeys: [...world.keys], cwd: world.cwd, writes: [...world.writes],
         paths: [...world.paths], ...(world.pathsMore ? { pathsMore: world.pathsMore } : {}), ...(world.reads ? { readPaths: [...world.reads] } : {}), sends: false, removes: false, ...(world.outbound ? { outbound: world.outbound } : {}),
+        ...(world.pushes ? { pushes: world.pushes } : {}), ...(world.places ? { places: world.places } : {}), ...(world.bind ? { bind: world.bind } : {}),
       };
       return checks % 2 === 0 && world.redo ? world.redo(check) : check;
     },
     execute: async () => { ran++; return { content: 'ran' }; },
   });
-  const registry = new ToolRegistry().register(probe('probe')).register(probe('probe_twin'));
+  const registry = new ToolRegistry().register(probe('probe')).register(probe('probe_twin')).register(shellRun);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const prompts: ClassifierPrompt[] = [];
-  const state = { classify: (() => ALLOW) as () => string, request: 'run the tests', conversationTainted: false, modes: [] as PermissionMode[], mode: 'auto' as PermissionMode };
+  const state = { classify: (() => ALLOW) as () => string, request: 'run the tests', conversationTainted: false, modes: [] as PermissionMode[], mode: 'auto' as PermissionMode, config: undefined as AppConfig | undefined };
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
     workspace, taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto',
@@ -76,11 +80,12 @@ function setup(t: { after: (fn: () => void) => void }, mutate?: (c: AppConfig) =
       registry, approvals, pending, db, emit: e => events.push(e), lastUserRequest: () => state.request, productRoots: () => [workspace],
       permissionMode: () => state.modes.shift() ?? state.mode,
       conversationTainted: () => state.conversationTainted,
+      config: () => state.config ?? parsed,
       autoClassify: async (prompt: ClassifierPrompt) => { prompts.push(prompt); return state.classify(); },
     });
   // 判定のあとの 2 回目の確かめは「偶数回目の preCheck」。1 回目の呼び出しで 2 回呼ばれるので、2 回目の呼び出しの 2 回目（4 回目）から redo が効く
   const fromNextRedo = (redo: (check: PreCheck) => PreCheck) => { const start = checks; world.redo = check => (checks > start + 1 ? redo(check) : check); };
-  return { paths, ctx, call, world, prompts, state, events, db, pending, workspace, ran: () => ran, fromNextRedo };
+  return { parsed, paths, ctx, call, world, prompts, state, events, db, pending, workspace, ran: () => ran, fromNextRedo };
 }
 
 const judgeRows = (db: ReturnType<typeof setup>['db']): number => Number((db.prepare('SELECT COUNT(*) AS n FROM judge_calls').get() as { n: number }).n);
@@ -106,10 +111,11 @@ test('J-3: 同じ実行で同じ呼び出しを 3 回 → 判定役は 1 回。2
   assert.deepEqual(s.events.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state), ['checking', 'allowed', 'allowed', 'allowed'], '使い回しでは checking を出さない');
   const rows = s.db.prepare("SELECT decided_by FROM tool_calls WHERE decision = 'allow' ORDER BY created_at, rowid").all() as Array<{ decided_by: string }>;
   assert.deepEqual(rows.map(r => r.decided_by), ['auto-mode', 'judge-reuse', 'judge-reuse']);
-  assert.equal(s.pending.judged(0).allowed, 1, '「判定役が許した」の数は、判定役の答えの分だけ');
+  assert.equal(s.pending.judged(0).allowed, 3, '持ち主に見せる「判定役が通した」の数には、使い回した分も入る');
+  assert.equal(s.pending.counts(0).judgedToday.allowed, 3);
   const audit = s.db.prepare("SELECT reasons FROM approvals WHERE scope = 'auto' ORDER BY created_at, rowid").all() as Array<{ reasons: string }>;
   assert.equal(audit.length, 3, '使い回しも自動の承認として記録に残る');
-  assert.match(audit[2]!.reasons, /Allowed \(same as call #2\): in scope/u);
+  assert.match(audit[2]!.reasons, /Allowed \(same as an earlier call in this run\): in scope/u);
 });
 
 const variations: Array<[string, (s: ReturnType<typeof setup>) => { args?: unknown; ctx?: ToolContext; name?: string } | void]> = [
@@ -295,10 +301,110 @@ test('J-3: 文脈の違う前の呼び出しの答えは、別の文脈の同じ
 
 test('J-3: 覚える数には上限があり、超えた分は覚えない（古いものは消さない）。実行が変われば空から', () => {
   const ctx = { runId: 'cap' } as ToolContext;
-  for (let i = 0; i < REMEMBERED_MAX + 5; i++) rememberAllow(ctx, `k${i}`, { call: i, reason: '' });
+  for (let i = 0; i < REMEMBERED_MAX + 5; i++) rememberAllow(ctx, `k${i}`, { call: i, reason: '', snapshot: '' });
   assert.ok(rememberedAllow(ctx, 'k0'));
   assert.ok(rememberedAllow(ctx, `k${REMEMBERED_MAX - 1}`));
   assert.equal(rememberedAllow(ctx, `k${REMEMBERED_MAX}`), undefined);
   ctx.runId = 'cap-2';
   assert.equal(rememberedAllow(ctx, 'k0'), undefined, '同じ文脈の物でも runId が変われば忘れる');
+});
+
+const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, stdio: 'pipe' });
+
+test('J-3: 動かすファイルの指紋（bind）が変わったら、判定役がもう一度呼ばれる', async t => {
+  const s = setup(t);
+  s.world.bind = 'one';
+  await s.call();
+  assert.equal((await s.call()).decidedBy, 'judge-reuse', '比べる基準');
+  s.world.bind = 'two';
+  assert.equal((await s.call()).decidedBy, 'auto-mode');
+  assert.equal(s.prompts.length, 2);
+});
+
+test('J-3: shell_run の npm test は、package.json の test の文を書き換えたら、判定役がもう一度呼ばれる（パスの引数が無くても）', async t => {
+  const s = setup(t);
+  const pkg = join(s.workspace, 'package.json');
+  writeFileSync(pkg, JSON.stringify({ name: 'p', version: '1.0.0', scripts: { test: 'node -e "console.log(1)"' } }));
+  const first = await s.call({ command: 'npm test' }, s.ctx, 'shell_run');
+  assert.equal(first.decidedBy, 'auto-mode', first.output.content);
+  assert.equal((await s.call({ command: 'npm test' }, s.ctx, 'shell_run')).decidedBy, 'judge-reuse', '比べる基準: 何も変えなければ使い回す');
+  writeFileSync(pkg, JSON.stringify({ name: 'p', version: '1.0.0', scripts: { test: 'node -e "console.log(2)"' } }));
+  const again = await s.call({ command: 'npm test' }, s.ctx, 'shell_run');
+  assert.equal(again.decidedBy, 'auto-mode', again.output.content);
+  assert.equal(s.prompts.length, 2);
+});
+
+test('J-3: 判定役のモデルの設定が変わったら、判定役がもう一度呼ばれる', async t => {
+  const s = setup(t);
+  await s.call();
+  assert.equal((await s.call()).decidedBy, 'judge-reuse');
+  const next = structuredClone(s.parsed);
+  next.routing.judge = [next.models[0]!.id];
+  s.state.config = next;
+  assert.equal((await s.call()).decidedBy, 'auto-mode');
+  assert.equal(s.prompts.length, 2);
+});
+
+test('J-3: push の先のリポジトリが動いたら、判定役がもう一度呼ばれる。確かめられない push（dir が分からない）は覚えない', async t => {
+  const s = setup(t);
+  const repo = join(s.workspace, 'repo');
+  mkdirSync(repo, { recursive: true });
+  git(repo, 'init', '-q');
+  writeFileSync(join(repo, 'a.txt'), 'a');
+  git(repo, 'add', 'a.txt');
+  git(repo, 'commit', '-q', '-m', 'a');
+  s.world.pushes = [{ dir: repo }];
+  await s.call();
+  assert.equal((await s.call()).decidedBy, 'judge-reuse', '比べる基準');
+  writeFileSync(join(repo, 'a.txt'), 'b');
+  git(repo, 'commit', '-q', '-am', 'b');
+  assert.equal((await s.call()).decidedBy, 'auto-mode', 'HEAD が動いた');
+  s.world.pushes = [{ dir: null }];
+  await s.call();
+  assert.equal((await s.call()).decidedBy, 'auto-mode', '確かめられない push は覚えない');
+  assert.equal(s.prompts.length, 4);
+});
+
+test('J-3: 送り先の設定（.npmrc など）が変わったら、判定役がもう一度呼ばれる', async t => {
+  const s = setup(t);
+  s.world.places = [s.workspace];
+  await s.call();
+  assert.equal((await s.call()).decidedBy, 'judge-reuse', '比べる基準');
+  writeFileSync(join(s.workspace, '.npmrc'), 'registry=https://example.com/\n');
+  assert.equal((await s.call()).decidedBy, 'auto-mode');
+  assert.equal(s.prompts.length, 2);
+});
+
+test('J-3: 使い回したあとに道具の方針を Ask にしたら、判定役も覚えた答えも使わずに policy の Pending に積む', async t => {
+  const s = setup(t);
+  await s.call();
+  assert.equal((await s.call()).decidedBy, 'judge-reuse');
+  const next = structuredClone(s.parsed);
+  next.tools.policies = { probe: 'ask' };
+  s.state.config = next;
+  const parked = await s.call();
+  assert.deepEqual([parked.decidedBy, s.prompts.length, s.ran()], ['pending', 1, 2]);
+  assert.equal(s.pending.list({ status: 'waiting' })[0]!.kind, 'policy');
+});
+
+test('J-3: 取り消された実行では、覚えた allow があっても動かない', async t => {
+  const s = setup(t);
+  await s.call();
+  const controller = new AbortController();
+  controller.abort();
+  s.ctx.signal = controller.signal;
+  const cancelled = await s.call();
+  assert.deepEqual([cancelled.decision, cancelled.decidedBy, s.ran(), s.prompts.length], ['ask', 'user', 1, 1], cancelled.output.content);
+});
+
+test('J-3: 控えの git の問い合わせは実行の取り消しに従い、取り消されたら控えなし（覚えない）になる', async t => {
+  const s = setup(t);
+  const repo = join(s.workspace, 'repo');
+  mkdirSync(repo, { recursive: true });
+  git(repo, 'init', '-q');
+  const involved = { files: [], filesMore: false, pushes: [{ dir: repo }], places: undefined, dataDir: s.paths.data };
+  assert.equal(typeof await involvedSnapshot(repo, involved), 'string', '比べる基準: 取り消しが無ければ控えが取れる');
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal(await involvedSnapshot(repo, involved, controller.signal), undefined);
 });

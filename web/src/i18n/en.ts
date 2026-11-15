@@ -1692,5 +1692,6 @@ export const en = {
   'ui.ob.hello.there': 'there',
   'ui.ob.hello.meta': 'connected · no products yet',
 
-  'ui.tool.judgeSame': (call: number) => `Allowed (same as call #${call})`,
+  'ui.tool.judgeSame': 'Allowed (same as an earlier call in this run)',
+  'runs.by.judgeReuse': 'Auto-approve (earlier answer in this run)',
 };

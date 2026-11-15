@@ -1,25 +1,22 @@
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { AppConfig } from '../config/schema.ts';
 import { boundFacts, destinationFacts, PUSH_UNCONFIRMED, pushFacts } from '../pending/snapshot.ts';
-import type { ApprovalPath } from './approvals.ts';
+import type { ClassifierInput } from './auto-approve.ts';
+import { isRemotePath } from './hooks/remote-path.ts';
 import type { ToolContext } from './types.ts';
 
 export interface JudgeKeyParts {
-  tool: string;
+  judgeInput: ClassifierInput;
   input: unknown;
   workspace: string;
   cwd: string;
-  userRequest: string;
-  tainted: boolean;
   taintSources: number;
   reasonKeys: readonly string[];
   askKinds: readonly string[];
-  reasons: readonly string[];
-  title: string;
-  body: string;
-  shownCwd: string | undefined;
-  paths: readonly ApprovalPath[];
-  trusted: readonly string[];
+  bind: string | null;
+  judge: unknown;
 }
 
 export interface InvolvedFiles {
@@ -30,7 +27,7 @@ export interface InvolvedFiles {
   dataDir: string;
 }
 
-export interface RememberedAllow { call: number; reason: string }
+export interface RememberedAllow { call: number; reason: string; snapshot: string }
 
 interface RunMemory { runId: string; calls: number; allowed: Map<string, RememberedAllow> }
 
@@ -50,28 +47,35 @@ export function nextCallNumber(ctx: ToolContext): number {
   return ++memoryOf(ctx).calls;
 }
 
-export async function involvedSnapshot(cwd: string, involved: InvolvedFiles): Promise<string | undefined> {
-  if (involved.filesMore) return undefined;
+export function judgeIdentity(config: Pick<AppConfig, 'routing' | 'models'>): unknown {
+  const named = config.routing.judge ?? [];
+  return named.map(id => { const model = config.models.find(m => m.id === id); return [id, model?.provider ?? null, model?.model ?? null]; });
+}
+
+const onRemoteDrive = (path: string): boolean => {
+  if (isRemotePath(path)) return true;
+  try { return isRemotePath(realpathSync.native(path)); } catch { return false; }
+};
+
+export async function involvedSnapshot(cwd: string, involved: InvolvedFiles, signal?: AbortSignal): Promise<string | undefined> {
+  if (involved.filesMore || onRemoteDrive(cwd)) return undefined;
   const files = [...new Set(involved.files.map(f => resolve(cwd, f)))].sort();
   const facts = boundFacts(files);
-  if (facts.some(f => f.more === true || f.unverifiable === true)) return undefined;
+  if (facts.some(f => f.more === true || f.unverifiable === true || (f.real !== undefined && isRemotePath(f.real)))) return undefined;
   const parts: unknown[] = [facts];
   if (involved.pushes?.length) {
-    const pushed = await pushFacts(involved.pushes, involved.dataDir);
-    if (pushed.fingerprint.startsWith(PUSH_UNCONFIRMED)) return undefined;
+    const pushed = await pushFacts(involved.pushes, involved.dataDir, undefined, signal);
+    if (pushed.fingerprint.startsWith(PUSH_UNCONFIRMED) || signal?.aborted) return undefined;
     parts.push(pushed.fingerprint);
   }
   if (involved.pushes?.length || involved.places?.length) parts.push(destinationFacts(cwd, (involved.places ?? []).map(p => resolve(cwd, p))));
   return JSON.stringify(parts);
 }
 
-export async function judgeCacheKey(ctx: ToolContext, parts: JudgeKeyParts, involved: InvolvedFiles): Promise<string | undefined> {
-  let snapshot: string | undefined;
-  try { snapshot = await involvedSnapshot(parts.cwd, involved); } catch { return undefined; }
-  if (snapshot === undefined) return undefined;
+export function judgeCacheKey(ctx: ToolContext, parts: JudgeKeyParts): string | undefined {
   const fields: unknown[] = [
-    ctx.runId, parts.tool, parts.input, parts.workspace, parts.cwd, parts.userRequest, parts.tainted, parts.taintSources,
-    [...parts.reasonKeys].sort(), [...parts.askKinds].sort(), parts.reasons, parts.title, parts.body, parts.shownCwd ?? null, parts.paths, parts.trusted, snapshot,
+    ctx.runId, parts.judgeInput, parts.input, parts.workspace, parts.cwd, parts.taintSources,
+    [...parts.reasonKeys].sort(), [...parts.askKinds].sort(), parts.bind, parts.judge,
   ];
   let text: string;
   try { text = JSON.stringify(fields); } catch { return undefined; }
@@ -84,6 +88,6 @@ export function rememberedAllow(ctx: ToolContext, key: string): RememberedAllow 
 
 export function rememberAllow(ctx: ToolContext, key: string, allow: RememberedAllow): void {
   const memory = memoryOf(ctx);
-  if (memory.allowed.has(key) || memory.allowed.size >= REMEMBERED_MAX) return;
+  if (!memory.allowed.has(key) && memory.allowed.size >= REMEMBERED_MAX) return;
   memory.allowed.set(key, allow);
 }

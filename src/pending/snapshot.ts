@@ -271,7 +271,7 @@ export function fileFacts(paths: readonly string[]): PathFact[] {
 
 type GitRun = (args: string[]) => Promise<string | null>;
 
-async function withGit<T>(cwd: string, dataDir: string, missing: T, unavailable: T, work: (git: GitRun) => Promise<T>): Promise<T> {
+async function withGit<T>(cwd: string, dataDir: string, missing: T, unavailable: T, work: (git: GitRun) => Promise<T>, signal?: AbortSignal): Promise<T> {
   const repo = inspectRepo(cwd);
   if (!repo.found) return missing;
   if (repo.unreadable || !repo.configOk) return unavailable;
@@ -281,7 +281,7 @@ async function withGit<T>(cwd: string, dataDir: string, missing: T, unavailable:
   const prepared = prepareGitRun({ dataDir, env: base, gitExe });
   const git: GitRun = async args => {
     try {
-      const { stdout } = await run(gitExe, ['--no-optional-locks', ...args], { cwd, env: { ...base, ...prepared.env }, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+      const { stdout } = await run(gitExe, ['--no-optional-locks', ...args], { cwd, env: { ...base, ...prepared.env }, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(signal ? { signal } : {}) });
       return stdout;
     } catch { return null; }
   };
@@ -303,7 +303,7 @@ export const MAX_TIPS = 10_000;
 
 export interface PushState { fingerprint: string; tips?: string[] }
 
-export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; parsed?: boolean }>, dataDir: string, rootRefs = '--include-root-refs'): Promise<PushState> {
+export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; parsed?: boolean }>, dataDir: string, rootRefs = '--include-root-refs', signal?: AbortSignal): Promise<PushState> {
   const never = (): PushState => ({ fingerprint: `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}` });
   const lines: string[] = [];
   const tips = new Set<string>();
@@ -319,7 +319,7 @@ export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; pars
       for (const name of HASHED_PSEUDO_REFS) pseudo.push(`${name} ${(await git(['rev-parse', '--verify', '-q', '--end-of-options', name]))?.trim() || 'absent'}`);
       for (const sha of [head, ...refs.split('\n').map(l => l.split(' ')[0]!), ...pseudo.map(p => p.split(' ')[1]!)]) if (/^[0-9a-f]{40,64}$/u.test(sha)) tips.add(sha);
       return parsed ? `${dir}\0parsed\0${head}\0${branch}` : `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).update(pseudo.join('\n')).digest('hex')}`;
-    });
+    }, signal);
     if (line === null) return never();
     lines.push(line);
   }

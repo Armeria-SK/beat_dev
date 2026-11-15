@@ -13,7 +13,7 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
 import { judgeOnce, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
-import { judgeCacheKey, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
+import { involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
 import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
 import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
@@ -400,12 +400,18 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons: [...reasons], paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
         };
         const cwdNow = callCwd();
-        const read = readFilesOf(first);
-        const cacheKey = await judgeCacheKey(ctx, {
-          tool: tool.name, input: args, workspace: ctx.workspace, cwd: cwdNow, userRequest: judgeInput.userRequest, tainted, taintSources: ctx.taint.sources.length,
-          reasonKeys: judgeKeys, askKinds: [...askKinds], reasons: judgeInput.reasons, title: judgeInput.title, body: judgeInput.body, shownCwd: judgeInput.cwd, paths: judgeInput.paths, trusted: judgeInput.trusted ?? [],
-        }, { files: [...read.files, ...(first?.writes ?? [])], filesMore: read.more, pushes: first?.pushes, places: first?.places, dataDir: ctx.paths.data });
-        const reused = cacheKey === undefined ? undefined : rememberedAllow(ctx, cacheKey);
+        const snapshotNow = () => {
+          const read = readFilesOf(first);
+          return involvedSnapshot(cwdNow, { files: [...read.files, ...(first?.writes ?? [])], filesMore: read.more, pushes: first?.pushes, places: first?.places, dataDir: ctx.paths.data }, ctx.signal).catch(() => undefined);
+        };
+        let judgeModel: unknown;
+        try { judgeModel = judgeIdentity(deps.config?.() ?? ctx.config); } catch { judgeModel = undefined; }
+        const cacheKey = judgeModel === undefined ? undefined : judgeCacheKey(ctx, {
+          judgeInput, input: args, workspace: ctx.workspace, cwd: cwdNow, taintSources: ctx.taint.sources.length,
+          reasonKeys: judgeKeys, askKinds: [...askKinds], bind: first?.bind ?? null, judge: judgeModel,
+        });
+        const known = cacheKey === undefined ? undefined : rememberedAllow(ctx, cacheKey);
+        const reused = known && known.snapshot === await snapshotNow() ? known : undefined;
         let verdict: AutoVerdict;
         if (reused) verdict = { decision: 'allow', reason: reused.reason };
         else {
@@ -449,12 +455,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           : undefined;
         if (ownerNow) { autoEvent('asked'); return park(ownerNow.kind, ownerNow.reason); }
         const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
-        const shownWhy = reused ? guardText(language, 'pipeline.judge_reused', { call: reused.call, reason: why }) : why;
+        const shownWhy = reused ? guardText(language, 'pipeline.judge_reused', { reason: why }) : why;
         const autoId = deps.approvals.recordAuto({
           runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons,
         }, shownWhy);
         decision = 'allow'; decidedBy = reused ? JUDGE_REUSE : 'auto-mode'; autoWhy = why; sameAs = reused?.call;
-        if (!reused && cacheKey !== undefined) rememberAllow(ctx, cacheKey, { call: callNumber, reason: why });
+        if (!reused && cacheKey !== undefined) {
+          const snapshot = await snapshotNow();
+          if (snapshot !== undefined) rememberAllow(ctx, cacheKey, { call: callNumber, reason: why, snapshot });
+        }
         autoEvent('allowed', shownWhy);
         judgedId = autoId;
       }

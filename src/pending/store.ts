@@ -356,7 +356,7 @@ export class PendingStore {
     for (const r of this.#db.prepare("SELECT project_id AS id, COUNT(*) AS n FROM pending_actions WHERE status = 'waiting' AND project_id IS NOT NULL GROUP BY project_id").all() as Array<{ id: string; n: number }>) byProject[r.id] = Number(r.n);
     const acceptanceChanges: Record<string, number> = {};
     for (const r of this.#db.prepare("SELECT project_id AS id, COUNT(*) AS n FROM acceptance_changes WHERE status = 'pending' GROUP BY project_id").all() as Array<{ id: string; n: number }>) acceptanceChanges[r.id] = Number(r.n);
-    const allowed = Number((this.#db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'auto-mode' AND decision = 'allow' AND created_at >= ?").get(since) as { n: number }).n);
+    const allowed = Number((this.#db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by IN ('auto-mode', 'judge-reuse') AND decision = 'allow' AND created_at >= ?").get(since) as { n: number }).n);
     const parked = Number((this.#db.prepare("SELECT COUNT(*) AS n FROM pending_actions WHERE kind IN ('judge', 'judge_failed') AND created_at >= ?").get(since) as { n: number }).n);
     return { waiting, byProject, acceptanceChanges, judgedToday: { allowed, parked } };
   }
@@ -366,7 +366,7 @@ export class PendingStore {
     const callWhere = project === undefined ? '' : project === null ? ` AND ${callProject} IS NULL` : ` AND ${callProject} = ?`;
     const parkWhere = project === undefined ? '' : project === null ? ' AND project_id IS NULL' : ' AND project_id = ?';
     const args = project ? [since, project] : [since];
-    const allowed = Number((this.#db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'auto-mode' AND decision = 'allow' AND created_at >= ?${callWhere}`).get(...args) as { n: number }).n);
+    const allowed = Number((this.#db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by IN ('auto-mode', 'judge-reuse') AND decision = 'allow' AND created_at >= ?${callWhere}`).get(...args) as { n: number }).n);
     const notParked = Number((this.#db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'not-parked' AND created_at >= ?${callWhere}`).get(...args) as { n: number }).n);
     const parked: Record<string, number> = {};
     for (const r of this.#db.prepare(`SELECT kind, COUNT(*) AS n FROM pending_actions WHERE created_at >= ?${parkWhere} GROUP BY kind`).all(...args) as Array<{ kind: string; n: number }>) parked[r.kind] = Number(r.n);
