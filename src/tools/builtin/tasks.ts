@@ -135,7 +135,7 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
       if (input.status === 'done') {
         const text = CHECK_TEXT[languageOf(ctx.config)];
         const children = s.openChildren(task.id);
-        const refused = ctx.task?.id === task.id ? text.selfDone : children > 0 ? text.doneChildren(children)
+        const refused = ctx.task?.id === task.id ? text.selfDone : ownedItems(task).length > 0 ? gateText(languageOf(ctx.config), 'update_done', { id: task.id }) : children > 0 ? text.doneChildren(children)
           : task.spawned_by === null && productCheck(ctx.services?.projects, task.project_id) !== undefined ? text.doneCheck : undefined;
         if (refused) return { content: refused, isError: true };
       }

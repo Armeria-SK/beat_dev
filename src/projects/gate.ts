@@ -9,14 +9,19 @@ import { redactSecrets } from '../shared/redaction.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { ToolContext, ToolRunResult } from '../tools/types.ts';
 import { ACCEPTANCE_FILE, AcceptanceError, docOf, frozenHash, ITEM_ID, itemStatesOf, type AcceptanceDoc, type AcceptanceItem, type AcceptanceStore, type ItemMark, type ItemStates } from './acceptance.ts';
+import { unbuilt } from './build.ts';
 import { projectDir } from './store.ts';
 
 export const GATE_LIMIT = 3;
-export const TAG = /^E-([1-9]\d{0,8})$/u;
+const TAG = /^E-([1-9]\d{0,8})$/u;
 const USABLE_TAGS = 20;
 const TAIL_CHARS = 500;
 const SHOWN_INPUT = 60;
 const COPY_INPUT = 300;
+const AGREEMENT_ITEMS = 40;
+const AGREEMENT_NOT_DOING = 20;
+const AGREEMENT_CHARS = 6000;
+export const OWNER_FIX = 'owner_fix';
 
 export class GateError extends LocalizedError<GateMessageKey> {
   constructor(code: GateMessageKey, params?: MessageParams) { super(gateText, code, params); }
@@ -62,7 +67,7 @@ export function itemSummary(db: DatabaseSync, task: Task): { owned: number; met:
   return { owned: live.length, met: live.length - remaining.length, remaining };
 }
 
-export function settleAwaiting(db: DatabaseSync, tasks: TaskStore, projectId: string | null): void {
+function settleAwaiting(db: DatabaseSync, tasks: TaskStore, projectId: string | null): void {
   if (!projectId) return;
   for (const task of tasks.awaitingIn(projectId)) {
     if ((itemSummary(db, task)?.remaining.length ?? 0) === 0) tasks.setCheckState(task.id, 'checked');
@@ -73,18 +78,36 @@ export function workAgreement(db: DatabaseSync, task: Task, language: Language):
   const owned = ownedItems(task);
   const list = liveList(db, task.project_id);
   if (!owned.length || !list) return undefined;
-  const lines = [gateText(language, 'agreement_head')];
+  const tainted = (list.doc.taintedRuns?.length ?? 0) > 0;
+  const kindOf = (entry: AcceptanceItem): string => (entry.check?.kind === 'command' ? 'command' : entry.check?.kind === 'look' ? 'look' : 'read');
+  const wanted: string[] = [];
+  const notDoing: string[] = [];
   for (const id of owned) {
     const entry = list.items.find(item => item.id === id);
     if (!entry) continue;
     const result = clip(String(entry.result ?? ''), 300);
-    if (stateOf(list, id) === 'met') lines.push(gateText(language, 'agreement_met', { id, result }));
-    else if (entry.check?.kind === 'command') lines.push(gateText(language, 'agreement_command', { id, result, command: clip(entry.check.command, 200) }));
-    else lines.push(gateText(language, 'agreement_other', { id, result, kind: entry.check?.kind === 'look' ? 'look' : 'read' }));
+    if (tainted) wanted.push(gateText(language, stateOf(list, id) === 'met' ? 'agreement_bare_met' : 'agreement_bare', { id, kind: kindOf(entry) }));
+    else if (stateOf(list, id) === 'met') wanted.push(gateText(language, 'agreement_met', { id, result }));
+    else if (entry.check?.kind === 'command') wanted.push(gateText(language, 'agreement_command', { id, result, command: clip(entry.check.command, 200) }));
+    else wanted.push(gateText(language, 'agreement_other', { id, result, kind: kindOf(entry) }));
   }
-  for (const entry of list.doc.notDoing.slice(0, 60)) {
-    if (entry && typeof entry.text === 'string') lines.push(gateText(language, 'agreement_not_doing', { text: clip(entry.text, 200) }));
+  if (!tainted) {
+    for (const entry of list.doc.notDoing) {
+      if (entry && typeof entry.text === 'string') notDoing.push(gateText(language, 'agreement_not_doing', { text: clip(entry.text, 200) }));
+    }
   }
+  const picked = [...wanted.slice(0, AGREEMENT_ITEMS), ...notDoing.slice(0, AGREEMENT_NOT_DOING)];
+  const lines = [gateText(language, 'agreement_head'), ...(tainted ? [gateText(language, 'agreement_tainted')] : [])];
+  let size = 0;
+  let shown = 0;
+  for (const line of picked) {
+    if (size + line.length > AGREEMENT_CHARS) break;
+    lines.push(line);
+    size += line.length + 1;
+    shown += 1;
+  }
+  const left = wanted.length + notDoing.length - shown;
+  if (left > 0) lines.push(gateText(language, 'agreement_more', { count: left }));
   lines.push(gateText(language, 'agreement_rules'));
   return lines.join('\n');
 }
@@ -104,13 +127,14 @@ function listIntegrity(acceptance: AcceptanceStore, projectsDir: string, project
 
 interface TagRow { tool: string; input: string; ok: number | null; decision: string; created_at: number }
 
-function lookupTag(db: DatabaseSync, conversationId: string, tag: string): { copy: Record<string, unknown> } | { why: GateMessageKey } {
+function lookupTag(db: DatabaseSync, conversationId: string, tag: string, since: number): { copy: Record<string, unknown> } | { why: GateMessageKey } {
   const match = TAG.exec(tag);
   if (!match) return { why: 'tag_format' };
-  const row = db.prepare('SELECT tool, input, ok, decision, created_at FROM tool_calls WHERE conversation_id = ? AND evidence_no = ?').get(conversationId, Number(match[1])) as TagRow | undefined;
+  const row = db.prepare("SELECT tool, input, ok, decision, created_at FROM tool_calls WHERE conversation_id = ? AND evidence_no = ? AND tool NOT LIKE 'task\\_%' ESCAPE '\\'").get(conversationId, Number(match[1])) as TagRow | undefined;
   if (!row) return { why: 'tag_unknown' };
   if (row.ok !== 1) return { why: 'tag_failed' };
   if (row.decision !== 'allow') return { why: 'tag_not_run' };
+  if (row.created_at < since) return { why: 'tag_old' };
   return { copy: { tag, tool: row.tool, input: clip(row.input, COPY_INPUT), ok: true, at: row.created_at } };
 }
 
@@ -121,24 +145,22 @@ function usableTags(db: DatabaseSync, conversationId: string, language: Language
   return [gateText(language, 'tags_head'), ...rows.map(row => gateText(language, 'tag_line', { tag: `E-${row.evidence_no}`, tool: row.tool, input: clip(row.input, SHOWN_INPUT) }))].join('\n');
 }
 
-function unowned(acceptance: AcceptanceStore, tasks: TaskStore, projectId: string, list: LiveList): string[] {
+function unowned(acceptance: AcceptanceStore, tasks: TaskStore, projectId: string, list: LiveList, owned: readonly string[]): string[] {
+  const doc: AcceptanceDoc = { ...list.doc, items: list.doc.items.map(entry => ({ ...entry, state: stateOf(list, entry.id) })) };
+  return unbuilt({ acceptance, tasks }, projectId, doc).filter(id => owned.includes(id));
+}
+
+function changedAt(acceptance: AcceptanceStore, projectId: string): (entry: AcceptanceItem) => number {
   const since = new Map(acceptance.versions(projectId).map(row => [row.version, row.created_at]));
   const first = Math.min(...since.keys());
-  const builds = tasks.builds(projectId);
-  return list.items
-    .filter(entry => stateOf(list, entry.id) !== 'met')
-    .filter(entry => {
-      const at = since.get(entry.changedIn ?? first) ?? 0;
-      return !builds.some(build => build.created_at >= at && build.items.includes(entry.id));
-    })
-    .map(entry => entry.id);
+  return entry => since.get(entry.changedIn ?? first) ?? 0;
 }
 
 const outcomeOf = (run: ToolRunResult): 'met' | 'held' | 'failed' =>
   run.decision === 'allow' && !run.output.isError ? 'met' : run.decidedBy === 'pending' || run.gate?.by === 'pending' ? 'held' : 'failed';
 
 const tailOf = (text: string): string => {
-  const clean = plainBlock(redactSecrets(text.replace(/\n\[E-\d+\]$/u, '')), Infinity).trimEnd();
+  const clean = plainBlock(redactSecrets(plainBlock(text.replace(/\n\[E-\d+\]$/u, ''), Infinity)), Infinity).trimEnd();
   return clean.length > TAIL_CHARS ? `…${clean.slice(-TAIL_CHARS)}` : clean;
 };
 
@@ -155,24 +177,10 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
   const streak = tasks.gateStreak(task.id);
   const conversationId = task.conversation_id ?? ctx.conversationId;
 
-  const refuse = (problems: string[], marks: ItemMark[] = []): GateOutcome => {
-    const attempt = streak.refused + 1;
-    if (attempt >= GATE_LIMIT) {
-      const family = new Set(tasks.family(task.id));
-      const left = mine.filter(entry => !settled(entry.id, family) && !marks.some(mark => mark.id === entry.id));
-      const closing: ItemMark[] = [...marks, ...left.map(entry => ({ id: entry.id, state: 'unverified' as const, evidence: [{ closed: t('closed_note', { limit: GATE_LIMIT }), at: Date.now() }] }))];
-      if (closing.length) acceptance.markItems(projectId, { version: list.version, taskId: task.id, items: closing });
-      tasks.event(task.id, 'gate_closed', 'beat', t('refused_event', { detail: problems.join(' ').slice(0, 500) }), ctx.runId);
-      settleAwaiting(db, tasks, projectId);
-      return { kind: 'pass', text: t('closed', { limit: GATE_LIMIT, ids: left.map(entry => entry.id).join(', ') || '-' }) };
-    }
-    if (marks.length) acceptance.markItems(projectId, { version: list.version, taskId: task.id, items: marks });
-    tasks.event(task.id, 'gate_refused', 'beat', t('refused_event', { detail: problems.join(' ').slice(0, 500) }), ctx.runId);
-    return { kind: 'refuse', text: [t('refused', { attempt, limit: GATE_LIMIT }), ...problems, usableTags(db, conversationId, language)].join('\n') };
-  };
-
   const mine = list.items.filter(entry => owned.includes(entry.id));
-  const settled = (id: string, family: Set<string>): boolean => {
+  const family = new Set(tasks.family(task.id));
+  const ran = new Set<string>();
+  const settled = (id: string): boolean => {
     const state = list.states[id];
     if (!state) return false;
     if (state.state === 'met') return true;
@@ -180,10 +188,32 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
     return state.state === 'unverified' || state.evidence.some(entry => entry !== null && typeof entry === 'object' && 'notDone' in entry);
   };
 
+  const refuse = (problems: string[], marks: ItemMark[], free: readonly string[]): GateOutcome => {
+    const attempt = streak.refused + 1;
+    if (attempt >= GATE_LIMIT) {
+      const left = mine.filter(entry => !settled(entry.id) && !marks.some(mark => mark.id === entry.id) && (entry.check?.kind !== 'command' || ran.has(entry.id)));
+      const closing: ItemMark[] = [...marks, ...left.map(entry => ({ id: entry.id, state: 'unverified' as const, evidence: [{ closed: t('closed_note', { limit: GATE_LIMIT }), at: Date.now() }] }))];
+      if (closing.length) acceptance.markItems(projectId, { version: list.version, taskId: task.id, items: closing });
+      tasks.event(task.id, 'gate_closed', 'beat', t('refused_event', { detail: problems.join(' ').slice(0, 500) }), ctx.runId);
+      settleAwaiting(db, tasks, projectId);
+      return { kind: 'pass', text: [t('closed', { limit: GATE_LIMIT, ids: left.map(entry => entry.id).join(', ') || '-' }), ...(free.length ? [t('unowned_left', { ids: free.join(', ') })] : [])].join('\n') };
+    }
+    if (marks.length) acceptance.markItems(projectId, { version: list.version, taskId: task.id, items: marks });
+    tasks.event(task.id, 'gate_refused', 'beat', t('refused_event', { detail: problems.join(' ').slice(0, 500) }), ctx.runId);
+    return { kind: 'refuse', text: [t('refused', { attempt, limit: GATE_LIMIT }), ...problems, usableTags(db, conversationId, language)].join('\n') };
+  };
+
   if (!listIntegrity(acceptance, ctx.paths.projects, projectId, list.version)) {
+    const first = !db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'gate_list_changed' LIMIT 1").get(task.id);
     tasks.event(task.id, 'gate_list_changed', 'beat', t('list_changed_event', { version: list.version }), ctx.runId);
     ctx.log(`[WARN] acceptance.json of product ${projectId} did not match the fixed version ${list.version} at task_complete of task ${task.id}`);
-    return refuse([t('list_changed', { version: list.version })]);
+    if (first) {
+      ctx.services?.questions?.add({
+        kind: 'ai', projectId, taskId: task.id, conversationId, question: t('list_changed_question', { title: clip(task.title, 200) }),
+        why: t('list_changed_why', { version: list.version }), options: [t('list_changed_ok'), t('list_changed_later')], chosen: 0, blocking: false, tainted: ctx.taint.tainted,
+      });
+    }
+    return { kind: 'refuse', text: t('list_changed', { version: list.version }) };
   }
 
   const marks: ItemMark[] = [];
@@ -191,10 +221,14 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
   const failedIds: string[] = [];
   const lines: string[] = [];
   for (const entry of mine) {
-    if (entry.check?.kind !== 'command' || stateOf(list, entry.id) !== 'open') continue;
+    if (entry.check?.kind !== 'command') continue;
+    const state = stateOf(list, entry.id);
+    if (state === 'met' || state === 'unverified' && settled(entry.id)) continue;
     const command = entry.check.command;
     const shown = clip(command, COPY_INPUT);
     const run: ToolRunResult = ctx.runTool ? await ctx.runTool('shell_run', { command }) : { output: { content: 'shell_run is not available', isError: true }, decision: 'deny', decidedBy: 'run_tool' };
+    if (ctx.signal.aborted || ctx.stopSignal?.aborted) return { kind: 'refuse', text: t('stopped') };
+    ran.add(entry.id);
     const result = outcomeOf(run);
     const at = Date.now();
     if (result === 'met') {
@@ -211,13 +245,14 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
     }
   }
 
-  const family = new Set(tasks.family(task.id));
+  const since = changedAt(acceptance, projectId);
   const given = new Map<string, GateItemInput>();
   for (const entry of input ?? []) if (entry && typeof entry.id === 'string' && !given.has(entry.id)) given.set(entry.id, entry);
   const missing: string[] = [];
   const badTags: string[] = [];
   for (const entry of mine) {
     if (entry.check?.kind === 'command') {
+      if (ran.has(entry.id)) continue;
       if (stateOf(list, entry.id) === 'met') lines.push(t('state_met_before', { id: entry.id }));
       else if (stateOf(list, entry.id) === 'unverified') lines.push(t('state_unverified', { id: entry.id }));
       continue;
@@ -225,7 +260,7 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
     const wanted = given.get(entry.id);
     if (stateOf(list, entry.id) === 'met') { lines.push(t('state_met_before', { id: entry.id })); continue; }
     if (wanted?.evidence !== undefined) {
-      const found = lookupTag(db, conversationId, wanted.evidence.trim());
+      const found = lookupTag(db, conversationId, wanted.evidence.trim(), since(entry));
       if ('copy' in found) {
         marks.push({ id: entry.id, state: 'unverified', evidence: [found.copy] });
         lines.push(t('state_unverified', { id: entry.id }));
@@ -241,7 +276,7 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
       lines.push(t('state_open', { id: entry.id, reason }));
       continue;
     }
-    if (settled(entry.id, family)) { lines.push(stateOf(list, entry.id) === 'unverified' ? t('state_unverified', { id: entry.id }) : t('state_open', { id: entry.id, reason: '-' })); continue; }
+    if (settled(entry.id)) { lines.push(stateOf(list, entry.id) === 'unverified' ? t('state_unverified', { id: entry.id }) : t('state_open', { id: entry.id, reason: '-' })); continue; }
     missing.push(entry.id);
   }
 
@@ -264,10 +299,10 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
 
   const problems: string[] = [];
   if (missing.length) problems.push(t('missing', { ids: missing.join(', ') }), ...badTags);
-  const free = task.spawned_by === null ? unowned(acceptance, tasks, projectId, list) : [];
+  const free = task.spawned_by === null ? unowned(acceptance, tasks, projectId, list, owned) : [];
   if (free.length) problems.push(t('unowned', { ids: free.join(', ') }));
   if (problems.length) {
-    try { return refuse(problems, marks); } catch (error) {
+    try { return refuse(problems, marks, free); } catch (error) {
       if (error instanceof AcceptanceError && error.code === 'stale') return { kind: 'refuse', text: t('list_moved') };
       throw error;
     }
@@ -302,9 +337,13 @@ export function ownerDecide(d: OwnerCheckDeps, task: Task, itemIds: readonly str
   if (!list || list.version !== decision.version) throw new AcceptanceError('stale', { version: list?.version ?? 0 });
   const id = ids[0]!;
   const entry = list.items.find(item => item.id === id)!;
-  const open = (d.db.prepare("SELECT id FROM tasks WHERE project_id = ? AND acceptance_items = ? AND status IN ('ready', 'running', 'waiting') ORDER BY created_at DESC LIMIT 1").get(projectId, JSON.stringify([id])) as { id: string } | undefined);
+  const open = (d.db.prepare("SELECT t.id FROM tasks t WHERE t.project_id = ? AND t.acceptance_items = ? AND t.status IN ('ready', 'running', 'waiting') AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = ?) ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1").get(projectId, JSON.stringify([id]), OWNER_FIX) as { id: string } | undefined);
   const existing = open ? d.tasks.get(open.id) : undefined;
-  if (existing) { record(id, existing.id); return { checked: [], fix: existing }; }
+  if (existing) {
+    const updated = note ? d.tasks.update(existing.id, { appendNote: gateText(d.language, 'fix_note', { note }) }, 'user') : existing;
+    record(id, existing.id);
+    return { checked: [], fix: updated };
+  }
   const untrusted = (list.doc.taintedRuns?.length ?? 0) > 0;
   const result = clip(String(entry.result ?? ''), 300);
   const fix = d.tasks.create({
@@ -312,6 +351,7 @@ export function ownerDecide(d: OwnerCheckDeps, task: Task, itemIds: readonly str
     body: [gateText(d.language, 'fix_body', { id, result }), ...(note ? [gateText(d.language, 'fix_note', { note })] : [])].join('\n'),
     origin: 'user', actor: 'user', projectId, acceptanceItems: [id], ownerRequest: !untrusted,
   });
+  d.tasks.event(fix.id, OWNER_FIX, 'user', JSON.stringify({ task: task.id, item: id }));
   if (untrusted) d.tasks.markUntrusted(fix.id, 'build', gateText(d.language, 'fix_untrusted'));
   record(id, fix.id);
   return { checked: [], fix };

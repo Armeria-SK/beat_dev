@@ -467,7 +467,7 @@ export class TaskStore {
   }
 
   openBuild(projectId: string): string | null {
-    const row = this.#db.prepare("SELECT id FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND status IN ('ready', 'running', 'waiting') ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as { id: string } | undefined;
+    const row = this.#db.prepare("SELECT id FROM tasks t WHERE project_id = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL AND status IN ('ready', 'running', 'waiting') AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = 'owner_fix') ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as { id: string } | undefined;
     return row?.id ?? null;
   }
 
