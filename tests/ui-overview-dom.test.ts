@@ -217,3 +217,14 @@ test('Overview（DOM）: 一覧の形（製品が 5 つ以上）では、製品�
   await settle();
   assert.equal(delays.includes(1000), false);
 });
+
+test('Overview（DOM）: with Work on its own Off, a paused worker still shows the paused line and Resume (pause also holds the owner work)', async () => {
+  serve({ active: [], finished: () => ({ tasks: [], next: null, total: 0 }) });
+  const off: WorkerStatus = { ...worker([]), enabled: false, paused: true };
+  const { container } = await render(createElement(Overview, props({ worker: off, projects: [project('p1aaaa')] })));
+  await settle();
+  assert.ok(container.querySelector('[data-worker="off"]'), 'the Off line is there');
+  assert.ok(container.querySelector('button[data-worker="paused"]'), 'Resume is offered');
+  assert.ok(container.textContent?.includes('Background work is paused'), container.textContent ?? '');
+  assert.ok(container.querySelector('[data-worker-line]'), 'the runs-per-hour line shows, since the owner work counts toward it');
+});

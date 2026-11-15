@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, type Acceptance, type AcceptanceItem, type Project, type Task, type TaskEvent, type WorkerStatus } from '../../api.ts';
+import { waitText } from '../wait.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTime, formatRelative, useT } from '../../i18n/index.ts';
 import { Markdown } from '../../Markdown.tsx';
@@ -308,6 +309,7 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
             {product && <a className="bt-tool__link bt-meta" href={routeHash({ view: 'product', id: product.id })}>{product.name}</a>}
             {awaitsCheck(task) ? <Pill tone="waiting">{t('ui.kanban.col.check')}</Pill> : <Pill {...(STATUS_TONE[task.status] ? { tone: STATUS_TONE[task.status]! } : {})}>{onPending ? t('ui.kanban.waiting') : t(task.status === 'cancelled' && task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : STATUS_KEY[task.status])}</Pill>}
             <span className="bt-meta">{t('ui.task.updated', formatRelative(task.updated_at))}{task.parent_id !== null && <> · {t('ui.kanban.repeating')}</>}</span>
+            {task.status === 'ready' && worker?.waiting?.[task.id] && <span className="bt-meta" data-wait>{waitText(worker.waiting[task.id]!)}</span>}
           </div>
         </div>
         <div className="bt-screen__tools">

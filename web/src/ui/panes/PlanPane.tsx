@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import {
-  api, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type OwnerOp, type Coverage, type Deviations, type NotDoingItem, type PlanDoc, type Task,
+  api, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type OwnerOp, type Coverage, type Deviations, type NotDoingItem, type PlanDoc, type Task, type WaitReason,
 } from '../../api.ts';
+import { waitText } from '../wait.ts';
 import { newConversationId } from '../../chat-logic.ts';
 import { formatRelative } from '../../i18n/format.ts';
 import { useT } from '../../i18n/index.ts';
@@ -454,9 +455,9 @@ function BeforeBuild({ productId, acc, coverage, sectionRef }: { productId: stri
   );
 }
 
-export interface PlanPaneProps { productId: string; conversationId?: string | undefined; revision: string; taskRevision?: string; isGit: boolean; reveal?: boolean; onRevealed?: () => void }
+export interface PlanPaneProps { productId: string; conversationId?: string | undefined; revision: string; taskRevision?: string; isGit: boolean; reveal?: boolean; onRevealed?: () => void; waits?: Record<string, WaitReason> | undefined }
 
-export function PlanPane({ productId, conversationId, revision, taskRevision = '', isGit, reveal = false, onRevealed }: PlanPaneProps) {
+export function PlanPane({ productId, conversationId, revision, taskRevision = '', isGit, reveal = false, onRevealed, waits }: PlanPaneProps) {
   const t = useT();
   const key = PLAN_EDITS + productId;
   const [doc, setDoc] = useState<PlanDoc | null>(null);
@@ -557,6 +558,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
   const writing = state === 'writing';
   const action = buildAction({ state, mode, acc, task, isGit, pending: building });
   const pill = buildPill(task?.status);
+  const wait = task?.status === 'ready' ? waits?.[task.id] : undefined;
   const shown = beforeBuildShown({ mode, acc, coverage, action });
   const step = revealStep({ reveal, accLoaded: acc !== null, accFailed, state, shown });
 
@@ -708,6 +710,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
         {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill {...(pill.tone ? { tone: pill.tone } : {})}>{t(pill.label)}</Pill></span>}
       </div>
       <div role="status" className="ui-plan__live">
+        {action?.kind === 'building' && wait && <p className="bt-meta" data-wait>{waitText(wait)}</p>}
         {buildNotice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} />}
         {buildNotice?.kind === 'frozen' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} />}
       </div>

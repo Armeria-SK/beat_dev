@@ -14,7 +14,7 @@ const HARD = ['task_events.task_id', 'tasks.parent_id'];
 // やわらかい参照（決まりの無い列）: 行があれば remove は 409 で断る
 const SOFT = ['acceptance_versions.build_task_id', 'conversations.source_task_id', 'curiosity_items.task_id', 'memory_jobs.task_id', 'pending_actions.task_id', 'questions.fix_task_id', 'questions.task_id'];
 // kv の鍵: remove が一緒に消す
-const KV = ['created:task:', 'task-idle:', 'task-split:'];
+const KV = ['created:task:', 'task-idle:', 'task-owner-run:', 'task-split:'];
 // 文字として残すもの（結び付きだけ切れる）: notifications.link の `#/tasks/<ID>` と notifications.dedup_key（approval: / waiting: / stuck: / failed: / split: に ID が入る）
 
 function tablesOf(db: DatabaseSync): string[] {
@@ -59,7 +59,7 @@ test('やわらかい参照の一覧は、DELETE の守りが見る表と同じ�
   assert.deepEqual(taskIdColumns(app.db), [...expected, 'zz_probe.origin_task_id', 'zz_probe.owningTask', 'zz_probe.task_ref']);
 });
 
-test('タスクごとの kv の鍵は task-split: と task-idle: と created:task:（この作業で作ったものの控え）だけで、DELETE が消す鍵と同じ', () => {
+test('タスクごとの kv の鍵は task-split: と task-idle: と task-owner-run:（持ち主が頼んだ印）と created:task:（この作業で作ったものの控え）だけで、DELETE が消す鍵と同じ', () => {
   assert.deepEqual([...TASK_KV_PREFIXES].sort(), KV);
   const root = join(import.meta.dirname, '..', 'src');
   const found = new Set<string>();
