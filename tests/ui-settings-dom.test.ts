@@ -238,3 +238,32 @@ test('Settings › Advanced の Reset（DOM）: 確かめてから Reset する�
   const check = calls.filter(c => c.path === '/api/settings' && c.method === 'GET').at(-2);
   assert.ok(check?.signal instanceof AbortSignal, 'Reset の前の今の設定の読み取りにも signal');
 });
+
+test('Settings › Skills（DOM）: Grow skills sits above Ask before registering; turning it Off saves skills.grow = false without a confirmation and dims Ask before registering with its value kept', async () => {
+  const config = defaultConfig() as Json;
+  config.skills = { askBeforeRegister: false };
+  const sent = serveSettings(config, path => (path === '/api/skills' ? { skills: [] } : path === '/api/review' ? { skillDrafts: [] } : path === '/api/tools' ? { tools: [] } : undefined));
+  const { container } = await render(createElement(Settings, props({ section: 'skills' })));
+  await settle();
+  const rows = [...container.querySelectorAll('.bt-setting')].map(r => r.getAttribute('data-row'));
+  assert.deepEqual(rows.slice(0, 2), ['skills:grow', 'skills:ask']);
+  const sw = (label: string) => container.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
+  assert.equal(sw('Grow skills').getAttribute('aria-checked'), 'true', 'missing key reads as On');
+  assert.equal(sw('Ask before registering').disabled, false);
+  const dim = () => sw('Ask before registering').parentElement?.getAttribute('data-grow');
+  assert.equal(dim(), 'on', 'not dimmed while growth is On');
+  await click(sw('Grow skills'));
+  await settle();
+  await settle();
+  assert.equal(container.querySelector('.ui-set__widen'), null, 'no confirmation sheet');
+  const put = sent.at(-1);
+  assert.equal(put?.method, 'PUT');
+  assert.deepEqual(put?.body?.config.skills, { askBeforeRegister: false, grow: false });
+  assert.equal(sw('Grow skills').getAttribute('aria-checked'), 'false');
+  assert.equal(sw('Ask before registering').disabled, true, 'dimmed while growth is Off');
+  assert.equal(dim(), 'off');
+  assert.equal(sw('Ask before registering').getAttribute('aria-checked'), 'false', 'its value is kept');
+  const text = container.querySelector('[data-row="skills:grow"]')!.textContent!;
+  assert.match(text, /^Grow skillsbeat only uses the skills you already have/u);
+  assert.match(container.querySelector('[data-row="skills:ask"]')!.textContent!, /Applies when Grow skills is on/u);
+});

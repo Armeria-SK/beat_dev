@@ -87,7 +87,7 @@ test('Overview の裏の係の 1 行: この 1 時間の実行数と上限、次
   assert.equal(workerLine(worker({ paused: true }), 1000)?.nextWakeAt, null);
   assert.equal(workerLine(worker({ nextWakeAt: null }), 1000)?.nextWakeAt, null);
   assert.equal(workerLine(worker({ runningAll: [{ runId: 'r', kind: 'review', taskId: null, title: null } as unknown as WorkerStatus['runningAll'][number]] }), 1000)?.nextWakeAt, null);
-  assert.equal(workerLine(worker({ enabled: false }), 1000), null);
+  assert.deepEqual(workerLine(worker({ enabled: false }), 1000), { runs: 3, max: 20, nextWakeAt: 5000 });
   assert.equal(workerLine(null, 1000), null);
 });
 

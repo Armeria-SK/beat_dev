@@ -33,7 +33,7 @@ async function start(): Promise<void> {
   log(`[INFO] beat started: http://${boot.host}:${boot.port}/`);
   log('[INFO] There is no login. Anyone who can open this URL (including other programs on this PC) can operate beat');
   app.worker.start();
-  log(`[INFO] Worker: ${config.worker.enabled ? `running (autonomy: ${config.worker.autonomy ? 'on' : 'off'})` : 'stopped (worker.enabled = false)'}`);
+  log(`[INFO] Worker: ${config.worker.enabled ? `running (autonomy: ${config.worker.autonomy ? 'on' : 'off'})` : 'own work off (worker.enabled = false); Builds and tasks you start still run'}`);
   let closing = false;
   const shutdown = () => {
     if (closing) return;

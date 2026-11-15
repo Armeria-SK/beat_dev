@@ -31,7 +31,7 @@ import type { BrowserSession } from '../tools/browser/session.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
 import type { AgentRunInput, RunKind, TaskControl, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
-import type { SkillStore } from '../tools/skills/store.ts';
+import { growSkills, type SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import { CreatedFiles } from '../projects/created.ts';
 import type { PendingStore } from '../pending/store.ts';
@@ -680,7 +680,7 @@ export class ChatEngine {
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
   #excluded(kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false): (t: ToolDef) => boolean {
     const config = this.#d.config();
-    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
+    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || (t.name === 'skill_draft' && (!growSkills(config) || (started !== undefined && !growSkills(started)))) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
       || (mode === 'plan' && !planAllows(t)) || (t.projectOnly === true && !inProject) || !acceptanceAllows(t, frozen);
   }
 

@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
-import { api, ApiError, type ChatBuild, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView } from '../api.ts';
+import { api, ApiError, type ChatBuild, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView, type WaitReason } from '../api.ts';
+import { waitText } from './wait.ts';
 import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
@@ -40,6 +41,7 @@ export interface ConversationProps {
   onClearNotices: (id: string) => void;
   onInterrupt: (id: string, on: boolean) => void;
   panes?: PanesToggle | undefined;
+  waits?: Record<string, WaitReason> | undefined;
 }
 
 interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[]; builds: ChatBuild[] }
@@ -107,7 +109,7 @@ const BUILD_TEXT = {
   check: 'ui.build.check', done: 'ui.build.done', stopped: 'ui.build.stopped', failed: 'ui.build.failed',
 } as const;
 
-function BuildRow({ build, openPending, alert }: { build: ChatBuild; openPending: (() => void) | undefined; alert: boolean }) {
+function BuildRow({ build, openPending, alert, wait }: { build: ChatBuild; openPending: (() => void) | undefined; alert: boolean; wait: WaitReason | undefined }) {
   const t = useT();
   const stage = buildStage(build);
   const go = (hash: string) => () => { location.hash = hash; };
@@ -117,7 +119,7 @@ function BuildRow({ build, openPending, alert }: { build: ChatBuild; openPending
     : stage === 'question' ? { label: t('ui.notifications.open.questions'), run: go(routeHash({ view: 'questions', ...product })) } : null;
   const list = stage !== 'running' && build.checklist.items.length > 0 ? <Checklist items={build.checklist.items} tainted={build.checklist.tainted} live={false} /> : null;
   if (stage === 'failed') return <><Notice tone="fail" alert={alert} title={t('ui.build.failed')} text={t('ui.build.failedText')} action={openTask} />{list}</>;
-  return <><Notice title={t(BUILD_TEXT[stage])} {...(place ? { action: place, also: openTask } : { action: openTask })} />{list}</>;
+  return <><Notice title={t(BUILD_TEXT[stage])} {...(stage === 'queued' && wait ? { text: waitText(wait) } : {})} {...(place ? { action: place, also: openTask } : { action: openTask })} />{list}</>;
 }
 
 interface FailAction { label: string; run: () => void }
@@ -297,7 +299,7 @@ function revealPending(id: number): void {
   requestAnimationFrame(look);
 }
 
-export function Conversation({ id, listTitle, aiName, product, draft, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes }: ConversationProps) {
+export function Conversation({ id, listTitle, aiName, product, draft, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes, waits }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
@@ -554,7 +556,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         return <Notice key={item.key} tone="warn" icon="alert" title={noticeText(t, n)} />;
       }
       case 'plan': return <PlanWritten key={item.key} onOpen={panes?.onOpenPlan ? () => panes.onOpenPlan?.(false) : undefined} rising={rise(item.key)} />;
-      case 'build': return <BuildRow key={item.key} build={item.build} openPending={openPending} alert={unfinished.current.has(item.build.id)} />;
+      case 'build': return <BuildRow key={item.key} build={item.build} openPending={openPending} alert={unfinished.current.has(item.build.id)} wait={waits?.[item.build.id]} />;
     }
   }
 
