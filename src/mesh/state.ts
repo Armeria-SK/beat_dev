@@ -27,7 +27,7 @@ export function cleanNote(field: NoteField, raw: string): string {
   const length = Array.from(text).length;
   if (length > NOTE_LIMITS[field]) throw new MeshError('mesh.state_too_long', { field, length, max: NOTE_LIMITS[field] });
   if (sanitizeModelInputText(text).redaction_count > 0) throw new MeshError('mesh.state_secret', { field });
-  return text;
+  return text.replace(/-{5,}/gu, '----');
 }
 
 export function applyPatch(notes: readonly StateNote[], patch: StatePatch, writer: { by: NoteAuthor; external: boolean }): StateNote[] {

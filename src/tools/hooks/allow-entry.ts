@@ -28,7 +28,7 @@ export function entryMatches(entry: readonly string[], words: readonly Word[], w
   if (entry.length === 0 || words.length < entry.length) return false;
   return entry.every((e, i) => {
     const w = words[i]!;
-    if (w.kind !== 'plain' || w.dynamic || w.glob || w.home) return false;
+    if (w.kind !== 'plain' || w.dynamic || w.glob || w.home || (i === 0 && w.quoted)) return false;
     return i === 0 && windows ? w.text.toLowerCase() === e.toLowerCase() : w.text === e;
   });
 }

@@ -12,7 +12,7 @@ import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
-import { NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall } from '../tools/auto-approve.ts';
+import { NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall, type JudgeReply } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
 import { acceptanceAllows, planAllows, reviewAllows, runToolCall, type JudgeLimitSet } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
@@ -879,7 +879,7 @@ export class ChatEngine {
   // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。
   // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。道具は渡さない。
   // 判定役の呼び出しは engine_runs に入れず、会話も作らない
-  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string> {
+  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string | JudgeReply> {
     const config = this.#d.config();
     const named = config.routing.judge ?? [];
     const routes: Route[] = named.length
@@ -897,7 +897,7 @@ export class ChatEngine {
       const stop = () => own?.abort(signal.reason);
       if (own) signal.addEventListener('abort', stop, { once: true });
       const step: JudgeCall | undefined = own && call ? {
-        answerMs: call.answerMs, slotWaitMs: call.slotWaitMs, queued: () => call.queued(),
+        answerMs: call.answerMs, slotWaitMs: call.slotWaitMs, queued: () => call.queued(), used: (id, usage) => call.used?.(id, usage),
         started: () => { timer = setTimeout(() => { call.queued(); own.abort(new Error('the judge model did not answer in time')); }, call.answerMs); call.started(); },
       } : call;
       try {
@@ -915,7 +915,7 @@ export class ChatEngine {
     throw failure;
   }
 
-  async #askJudge(route: Route, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<string> {
+  async #askJudge(route: Route, prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall): Promise<JudgeReply> {
     const d = this.#d;
     const { model, provider } = route;
     const adapter = d.registry.get(provider.id);
@@ -926,14 +926,16 @@ export class ChatEngine {
       release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal, true);
       call?.started();
       let text = '';
+      let usage: Usage = {};
       for await (const event of adapter.stream({
         model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,
       })) {
         if (event.type === 'text') text += event.delta;
+        else if (event.type === 'usage') { usage = { ...usage, ...event.usage }; call?.used?.(model.id, usage); }
         else if (event.type === 'done' && event.stop === 'max_tokens') throw new TruncatedReply();
       }
       // 返事の短い理由は承認の記録・画面の出来事・実行ログの API に出るので、API キーそのものは、読む前に伏せる
-      return redactExact(text, d.registry.secrets());
+      return { text: redactExact(text, d.registry.secrets()), model: model.id, usage };
     } finally { release?.(); }
   }
 

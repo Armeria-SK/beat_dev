@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { en } from '../web/src/i18n/en.ts';
-import { actionKey, actorKey, BOOK_TAB_KEY, canUndo, MEMORY_TABS, memoryRef, originKey, roleKey, TAB_KEY } from '../web/src/memory-page.ts';
+import { actionKey, actorKey, BOOK_TAB_KEY, memoryRef, originKey, roleKey, TAB_KEY } from '../web/src/memory-page.ts';
 
 test('記憶の値の読み替え: 出どころ・変更の種類・やった人・発言の役。知らない値は読み替えない', () => {
   assert.equal(originKey('user'), 'memory.origin.user');
@@ -16,24 +16,15 @@ test('記憶の値の読み替え: 出どころ・変更の種類・やった人
   assert.equal(roleKey('system'), undefined);
 });
 
-test('取り消せる変更: まだ取り消していない、復元ではないものだけ', () => {
-  assert.equal(canUndo({ action: 'create', undone_at: null }), true);
-  assert.equal(canUndo({ action: 'update', undone_at: null }), true);
-  assert.equal(canUndo({ action: 'forget', undone_at: null }), true);
-  assert.equal(canUndo({ action: 'restore', undone_at: null }), false, '復元は取り消せない');
-  assert.equal(canUndo({ action: 'create', undone_at: 1_700_000_000_000 }), false, '取り消し済み');
-});
-
 test('記憶の呼び名: ユーザーの本は u、メモの本は n', () => {
   assert.equal(memoryRef({ book: 'user', id: 12 }), '[u12]');
   assert.equal(memoryRef({ book: 'notes', id: 3 }), '[n3]');
 });
 
 test('切り替え: 3 つ（ユーザーについて・メモと教訓・会話を探す）で、どれにも名前がある', () => {
-  assert.deepEqual([...MEMORY_TABS], ['user', 'notes', 'search']);
-  assert.deepEqual(Object.keys(TAB_KEY).sort(), [...MEMORY_TABS].sort());
+  assert.deepEqual(Object.keys(TAB_KEY).sort(), ['notes', 'search', 'user']);
   assert.deepEqual(Object.keys(BOOK_TAB_KEY).sort(), ['notes', 'user']);
-  for (const tab of MEMORY_TABS) assert.ok(TAB_KEY[tab] in en, tab);
+  for (const key of Object.values(TAB_KEY)) assert.ok(key in en, key);
 });
 
 test('辞書: 記憶のページの文字は en にある', () => {

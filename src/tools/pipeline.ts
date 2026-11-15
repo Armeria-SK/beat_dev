@@ -12,7 +12,8 @@ import { guardText } from '../shared/messages/guard.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
-import { autoDecide, type ClassifierPrompt, type JudgeCall, type JudgeLimits } from './auto-approve.ts';
+import { judgeOnce, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
+import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
 import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
@@ -65,7 +66,7 @@ export interface PipelineDeps {
   // 会話のいまの権限モード。実行に効くのは、実行を始めたときのモード（ctx.permissionMode）との厳しい方（effectiveMode）
   permissionMode?: (() => PermissionMode) | undefined;
   // 自動承認の判定役（モデル）を 1 回呼ぶ。返事の文字を返し、呼べなければ投げる。無ければ、自動承認は何も許さない
-  autoClassify?: ((prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall) => Promise<string>) | undefined;
+  autoClassify?: ((prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall) => Promise<string | JudgeReply>) | undefined;
   // 判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）
   lastUserRequest?: (() => string) | undefined;
   // この会話の実行が、よそから来た文を一度でも読んだことがあるか（会話ごとの印）。あれば、判定役に見せる文に「よそから来た文を読んだ会話」の 1 行を足す。渡さない・読めないときも、あるとみなす
@@ -380,14 +381,19 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         decision = 'allow';
         decidedBy = first.productRun;
       } else {
-        if (!deps.autoClassify) return park('judge_failed', pendingText('en', 'judge_failed_no_judge'));
+        const judgeKeys = first?.reasonKeys ?? [];
+        const noteJudge = (outcome: JudgeOutcome, failed: string | undefined, spend: JudgeSpend) => recordJudgeCall(deps.db, {
+          runId: ctx.runId, runKind: ctx.kind, projectId: ctx.project?.id ?? null, tool: tool.name, reasonKeys: judgeKeys, askKinds: [...askKinds], outcome, failed, spend,
+        });
+        if (!deps.autoClassify) { noteJudge('failed', 'no_judge', { ms: 0 }); return park('judge_failed', pendingText('en', 'judge_failed_no_judge')); }
         const summary = callSummary() ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
         const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
           deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
         autoEvent('checking');
-        const verdict = await autoDecide({
+        const { verdict, spend } = await judgeOnce({
           userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
         }, deps.autoClassify, ctx.signal, judgeLimitsFor(ctx, deps));
+        noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, spend);
         if (ctx.signal.aborted) {
           autoEvent('asked');
           return finish({ output: { content: toolText(language, 'pipeline.cancelled'), isError: true }, decision: 'ask', decidedBy: 'user', invalidArguments: false });

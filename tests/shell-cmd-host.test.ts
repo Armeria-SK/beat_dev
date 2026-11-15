@@ -36,7 +36,8 @@ test('PowerShell の cmd: 文字どおりの cmd.exe の記号は、持ち主の
     assert.notEqual(v.decision, 'deny', `${c}: ${v.reasons.join(' / ')}`);
     assert.ok(v.reasonKeys.includes('list.cmd_syntax'), `${c}: ${v.reasonKeys.join(' ')}`);
   }
-  for (const [allow, c] of [[['cmd /c npm view'], 'cmd /c npm view left-pad'], [['cmd /c'], 'cmd /c "npm test"']] as const) assert.equal(guard(c, [...allow]).decision, 'allow', c);
+  for (const [allow, c] of [[['cmd /c npm view'], 'cmd /c npm view left-pad'], [['cmd /c', 'npm test'], 'cmd /c "npm test"']] as const) assert.equal(guard(c, [...allow]).decision, 'allow', c);
+  assert.equal(guard('cmd /c "npm test"', ['cmd /c']).decision, 'ask');
   assert.deepEqual(keysOf('cmd /c "dir /b & echo done"'), ['once:list.command', 'once:list.cmd_syntax']);
 });
 

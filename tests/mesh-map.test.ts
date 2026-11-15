@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -429,4 +430,55 @@ test('5-5a 再審査の直し: 編集ソフトが角かっこを \\ で逃がし
 test('5-5a 再審査の直し: 結合文字を使う名前（デーヴァナーガリー・濁点を分けた日本語・母音記号付きのアラビア文字）は通し、異体字セレクタと U+034F は断る', () => {
   for (const good of ['cafe\u0301', 'हिन्दी', 'か\u3099な', 'كَتَبَ', 'docs/मराठी']) assert.equal(cleanRelPath(good), good, JSON.stringify(good));
   for (const bad of ['x\uFE0F', 'x\uFE00', 'a\u034Fb', 'x\u{E0100}', 'x\u{E01EF}']) assert.equal(cleanRelPath(bad), undefined, JSON.stringify(bad));
+});
+
+test('5-5a-d 審査の直し 1（MAP.md・GLOSSARY.md）: 鍵の囲みの印を 2 つの行に分けても、間の持ち主の行は mesh_read で伏せられない', async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.dir, 'plan.md'), '# plan\n');
+  assert.match((await f.run('mesh_map_set', { path: 'docs', what: 'Notes -----BEGIN RSA PRIVATE KEY----- here' })).output.content, /what looks like it contains a secret key or token/u);
+  assert.equal((await f.run('mesh_map_set', { path: 'docs', what: 'Notes here' })).output.isError, undefined);
+  writeFileSync(join(f.dir, 'MAP.md'), `${f.mapText().replace(/\n*$/u, '')}\n- web — The owner's screens\n`);
+  assert.match((await f.run('mesh_map_set', { path: 'src', what: 'Code -----END RSA PRIVATE KEY----- there' })).output.content, /what looks like it contains a secret key or token/u);
+  assert.doesNotMatch(f.mapText(), /-{5}/u, f.mapText());
+  const map = await f.run('mesh_read', { file: 'MAP.md' });
+  assert.match(map.output.content, /- web — The owner's screens/u, map.output.content);
+  assert.match((await f.run('mesh_glossary_set', { term: 'start -----BEGIN PRIVATE KEY-----', points_to: 'docs' })).output.content, /term looks like it contains a secret key or token/u);
+  assert.equal((await f.run('mesh_glossary_set', { term: 'start', points_to: 'docs' })).output.isError, undefined);
+  const glossary = join(f.dir, 'GLOSSARY.md');
+  writeFileSync(glossary, `${readFileSync(glossary, 'utf8').replace(/\n*$/u, '')}\n- the shop → web\n`);
+  assert.match((await f.run('mesh_glossary_set', { term: 'end -----END PRIVATE KEY-----', points_to: 'plan.md' })).output.content, /term looks like it contains a secret key or token/u);
+  assert.doesNotMatch(readFileSync(glossary, 'utf8'), /-{5}/u);
+  const read = await f.run('mesh_read', { file: 'GLOSSARY.md' });
+  assert.match(read.output.content, /- the shop → web/u, read.output.content);
+});
+
+test('5-5a-d 再審査の直し 1: 短い PEM の鍵（Ed25519）は、- を詰める前に鍵として断る（MAP.md の what・GLOSSARY.md の呼び名）', async t => {
+  const f = fixture(t);
+  const pem = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const body = pem.split('\n')[1]!;
+  const what = await f.run('mesh_map_set', { path: 'docs', what: `Key ${pem}` });
+  assert.match(what.output.content, /what looks like it contains a secret key or token/u, what.output.content);
+  const term = await f.run('mesh_glossary_set', { term: `key ${pem}`, points_to: 'docs' });
+  assert.match(term.output.content, /term looks like it contains a secret key or token/u, term.output.content);
+  assert.equal(existsSync(join(f.dir, 'MAP.md')), false);
+  assert.equal(existsSync(join(f.dir, 'GLOSSARY.md')), false);
+  assert.ok(body.length > 40, body);
+});
+
+test('5-5a-d 再審査の直し 4: STATE.md の AI の覚え書きに鍵の囲みの印を分けて書いても、間の持ち主の覚え書きは mesh_read で伏せられない', async t => {
+  const f = fixture(t);
+  assert.throws(() => f.mesh.setState(PROJECT, { goal: 'Ship -----BEGIN RSA PRIVATE KEY----- soon' }, { by: 'task', external: false }), /goal looks like it contains a secret key or token/u);
+  f.mesh.setState(PROJECT, { goal: 'Ship soon' }, { by: 'task', external: false });
+  f.mesh.setState(PROJECT, { now: 'The owner note in the middle' }, { by: 'owner', external: false });
+  assert.throws(() => f.mesh.setState(PROJECT, { next: 'Then -----END RSA PRIVATE KEY----- later' }, { by: 'task', external: false }), /next looks like it contains a secret key or token/u);
+  assert.doesNotMatch(readFileSync(join(f.dir, 'STATE.md'), 'utf8'), /-{5}/u);
+  const read = await f.run('mesh_read', { file: 'STATE.md' });
+  assert.match(read.output.content, /- now: The owner note in the middle/u, read.output.content);
+});
+
+test('5-5a-d 再審査の直し 4: STATE.md の覚え書きでも、短い PEM の鍵は - を詰める前に断る', async t => {
+  const f = fixture(t);
+  const pem = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  assert.throws(() => f.mesh.setState(PROJECT, { goal: `Key ${pem}` }, { by: 'task', external: false }), /secret/iu);
+  assert.equal(existsSync(join(f.dir, 'STATE.md')), false);
 });
