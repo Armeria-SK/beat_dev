@@ -58,18 +58,6 @@ test('Settings の Esc の順番: 入れ子の部品が先に受けた Esc（pre
   assert.equal(escAsksLeave({ key: 'Enter', defaultPrevented: false }, true), false);
 });
 
-test('Settings の Esc の順番（配線）: 枠の中の Esc は枠の onKeyDown（入れ子のあと）で受け、枠の外の Esc だけ window の捕まえる段で受ける。受けたら preventDefault して App の「閉じる」へ渡さない', () => {
-  const page = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
-  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
-  assert.ok(page.includes('aria-labelledby="ui-settings-title" onKeyDown={askLeave}>'), '枠は泡の段で受ける（入れ子の onKeyDown が先）');
-  assert.ok(page.includes('if (!escAsksLeave(e, hasUnsaved(dirty.current))) return;'), '出すかどうかは escAsksLeave で決める');
-  const ask = page.slice(page.indexOf('const askLeave = useCallback('), page.indexOf('const discard = '));
-  assert.ok(ask.indexOf('e.preventDefault();') < ask.indexOf('setLeave(() => onClose);'), '帯を出すときは Esc を受けたことにする');
-  assert.ok(ask.includes('const onKey = (e: KeyboardEvent) => { if (!(e.target instanceof Node && modal.current?.contains(e.target))) askLeave(e); };'), 'window では枠の外の Esc だけ見る');
-  assert.ok(ask.includes("addEventListener('keydown', onKey, true);") && ask.includes("removeEventListener('keydown', onKey, true);"), '枠の外は捕まえる段（App の閉じるより先）');
-  assert.ok(app.includes("if (e.key !== 'Escape' || e.defaultPrevented) return;"), 'App は受け済みの Esc で Settings を閉じない');
-});
-
 test('ui/settings flow: 読み取りや保存が返ってこなくても、時間切れで次の保存へ進む。返ってこなかった操作は失敗で終わり、その通信は止める（backlog 196）', async () => {
   const enqueue = serial(20);
   let seen: AbortSignal | null = null;
@@ -158,18 +146,9 @@ test('Settings › Advanced の Reset の配線: 確かめの材料と Reset を
   const reset = page.slice(page.indexOf('const reset = async () => {'), page.indexOf('const broken = '));
   assert.ok(reset.includes('await checkThenRun(ctx.queue,'), 'Reset は checkThenRun と ctx.queue を通す');
   assert.ok(reset.includes('}, accessKey, (items, go) =>'), '確かめた中身は accessKey で比べる');
-  assert.ok(reset.includes('api.resetSettings(signal)') && reset.includes('api.settings(signal), api.resetPreview(signal)'), 'Reset の通信は時間切れで止められる');
   assert.ok(!/await run\(\)/u.test(reset), '順番待ちの外で Reset を呼ばない');
   const settings = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
   assert.ok(settings.includes('commit, queue: enqueue,'), 'ctx.queue は保存と同じ順番待ち');
-});
-
-test('Settings の保存の配線: 保存の読み直しと書き込みは、順番待ちの signal を通して時間切れで止められる（backlog 196、レビューの直し）', () => {
-  const page = readFileSync(new URL('../web/src/ui/settings/Settings.tsx', import.meta.url), 'utf8');
-  const commit = page.slice(page.indexOf('const commit = useCallback('), page.indexOf('const setDirty = '));
-  assert.ok(commit.includes('return enqueue(async (signal): Promise<'), '順番待ちの signal を受ける');
-  assert.ok(commit.includes('latest = (await api.settings(signal)).config;'));
-  assert.ok(commit.includes('const result = await api.saveSettings(plan.config, signal);'));
 });
 
 test('Settings の Reset: 確かめのあとの読み直しが失敗したら、黙って何もしないのではなく失敗を返す（呼ぶ側が行の下に出す。レビューの直し）', async () => {

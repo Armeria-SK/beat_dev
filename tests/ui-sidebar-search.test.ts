@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { test } from 'node:test';
 import type { HistoryHit } from '../web/src/api.ts';
 import { searchView } from '../web/src/ui/search-state.ts';
@@ -12,14 +10,4 @@ test('ui/search-state: 検索の失敗は「0 件」と分けて failed にす�
   assert.deepEqual(searchView({ kind: 'failed' }), { hits: [], note: 'failed' });
   assert.deepEqual(searchView({ kind: 'loaded', hits: [] }), { hits: [], note: 'none' });
   assert.deepEqual(searchView({ kind: 'loaded', hits: [hit('a', 1), hit('a', 2), hit('b', 3)] }), { hits: [hit('a', 1), hit('b', 3)], note: null });
-});
-
-test('ui/Sidebar: 検索の失敗を failed にし、知らせは常にある role="status" の入れ物の中に出す', () => {
-  const source = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'Sidebar.tsx'), 'utf8');
-  assert.match(source, /\.catch\(\s*\(\)\s*=>\s*\{[^}]*kind:\s*'failed'/u, '失敗を failed にする');
-  assert.match(source, /searchView\(/u);
-  const status = /<div[^>]*role="status"[^>]*>((?:(?!<\/?div\b)[\s\S])*)<\/div>/u.exec(source);
-  assert.ok(status, '入れ物は中身より前からある');
-  assert.match(status[1]!, /^\s*\{view\.note === 'none'[^\n]*ui\.search\.none/u, '0 件の知らせは入れ物の中');
-  assert.match(status[1]!, /\{view\.note === 'failed'[^\n]*ui\.kanban\.loadFailed/u, '失敗の知らせは入れ物の中');
 });

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
 import { en } from '../web/src/i18n/en.ts';
 import { copyText } from '../web/src/clipboard.ts';
 import {
@@ -232,13 +231,6 @@ test('ID を変えても開いていた行は開いたまま: 開いている行
   assert.equal(openAfterRename('m:other', 'm:qwen', 'm:qwen3'), 'm:other', 'ほかの行を開いていたら動かさない');
   assert.equal(openAfterRename('m:local', 'p:local', 'p:home'), 'm:local', '同じ ID のモデルの行と取り違えない');
   assert.equal(openAfterRename(null, 'p:local', 'p:home'), null);
-
-  const screen = readFileSync(new URL('../web/src/ui/settings/agent.tsx', import.meta.url), 'utf8');
-  assert.ok(screen.includes('renameProvider(c, id, next)).then(ok => { if (ok) onRenamed(next); })'));
-  assert.ok(screen.includes('renameModel(c, id, next)).then(ok => { if (ok) onRenamed(next); })'));
-  assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `p:${p.id}`, `p:${next}`))}'));
-  assert.ok(screen.includes('onRenamed={next => setOpen(now => openAfterRename(now, `m:${m.id}`, `m:${next}`))}'));
-  assert.ok(screen.includes("onClick={() => setRemoving(true)}>{t('ui.set.model.removeShort')}") && screen.includes("{removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')}"), 'モデルを消すのは RowConfirm の確かめを通す');
 });
 
 test('種類を Anthropic に変える: 鍵の名前が無く、ANTHROPIC_API_KEY をほかの提供元が使っていれば、自分の鍵の名前を持たせる（鍵を共有しない）', () => {

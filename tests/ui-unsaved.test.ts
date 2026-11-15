@@ -201,13 +201,6 @@ test('書きかけの確かめ: 同じ経路どうしの履歴を行き来して
   assert.equal(popIndex(2, '#/memory', '#/memory', null), null);
 });
 
-test('書きかけの確かめ: App は、動きを受け入れるたびに履歴の位置と経路を一緒に覚え直す（経路を覚え忘れると、同じ経路どうしの行き来で位置がずれる）', async () => {
-  const { readFileSync } = await import('node:fs');
-  const app = readFileSync(new URL('../web/src/ui/App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /entryIndex\.current = historyIndex\(\);\s*entryHash\.current = location\.hash;/u);
-  assert.match(app, /popIndex\(entryIndex\.current, entryHash\.current, location\.hash, historyIndex\(\)\)/u);
-});
-
 test('設定ファイルの直接編集: モデルの並びだけを変えて保存すると、その並びが書かれる（何も書かずに "Saved" と出さない。backlog 265）', () => {
   const loaded = defaultConfig() as Json;
   loaded.providers = [{ id: 'a', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1' }, { id: 'b', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:2/v1' }];

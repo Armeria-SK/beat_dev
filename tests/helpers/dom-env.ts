@@ -10,3 +10,20 @@ for (const key of Object.getOwnPropertyNames(window)) {
   Object.defineProperty(globalThis, key, { configurable: true, get: () => source[key] });
 }
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
+export type Listening = readonly [type: string, listener: EventListenerOrEventListenerObject, capture: boolean];
+export const listening: Listening[] = [];
+const captures = (options?: boolean | EventListenerOptions) => (typeof options === 'boolean' ? options : options?.capture === true);
+const at = (type: string, listener: EventListenerOrEventListenerObject, capture: boolean) => listening.findIndex(([t, l, c]) => t === type && l === listener && c === capture);
+
+Object.assign(globalThis, {
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) {
+    window.addEventListener(type, listener, options);
+    if (at(type, listener, captures(options)) < 0) listening.push([type, listener, captures(options)]);
+  },
+  removeEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) {
+    window.removeEventListener(type, listener, options);
+    const i = at(type, listener, captures(options));
+    if (i >= 0) listening.splice(i, 1);
+  },
+});
