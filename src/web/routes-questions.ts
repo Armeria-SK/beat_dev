@@ -1,5 +1,5 @@
 import type { App } from '../app.ts';
-import { QuestionError } from '../questions/store.ts';
+import { QuestionError, type QuestionAnswer, type QuestionAnswered } from '../questions/store.ts';
 import { TaskError } from '../tasks/store.ts';
 import { splitKey } from '../tasks/worker.ts';
 import { domainProblem, readJson, requireObject, type Router, sendJson } from './http.ts';
@@ -19,6 +19,34 @@ function answerOf(body: Record<string, unknown>): { choice: number | null; text?
   return { choice, ...(typeof text === 'string' ? { text } : {}) };
 }
 
+export function answerQuestion(app: App, id: number, input: QuestionAnswer): QuestionAnswered {
+  let result;
+  try {
+    result = app.questions.answer(id, input);
+  } catch (error) {
+    if (error instanceof QuestionError) throw error.code === 'task_running' ? domainProblem(409, 'task', error) : domainProblem(400, 'invalid_field', error);
+    if (error instanceof TaskError) throw domainProblem(409, 'task', error);
+    throw error;
+  }
+  if (!result) throw domainProblem(404, 'not_found', new QuestionError('not_found', { id }));
+  if (!result.repeated) {
+    if (result.warning) app.log(`[WARN] ${result.warning}`);
+    const reopenedIn = result.reopenedItem && result.question.project_id ? app.acceptance.latest(result.question.project_id) : undefined;
+    if (reopenedIn) app.bus.publish({ type: 'acceptance.changed', projectId: reopenedIn.project_id, version: reopenedIn.version, draft: false });
+    const row = app.questions.get(id);
+    if (row?.project_id) {
+      try {
+        app.mesh.recordDecision(row.project_id, {
+          questionId: id, question: row.question, answer: row.answer ?? '', picked: input.text?.trim() ? 'text' : 'option', kept: result.kind === 'kept', item: result.reopenedItem, external: row.tainted === 1, fromBeat: row.kind !== 'ai',
+        });
+      } catch (error) { app.log(`[WARN] Could not write DECISIONS.md of product ${row.project_id}: ${(error as Error).message}`); }
+    }
+    if (result.resumedTaskId) app.kv.delete(splitKey(result.resumedTaskId));
+    for (const taskId of [result.resumedTaskId, result.reopenedTaskId, result.fixTaskId]) if (taskId) app.worker.requestRun(taskId);
+  }
+  return result;
+}
+
 export function registerQuestionRoutes(router: Router, app: App): void {
   const text = (url: URL, name: string): string | undefined => {
     const value = url.searchParams.get(name);
@@ -34,30 +62,7 @@ export function registerQuestionRoutes(router: Router, app: App): void {
   router.add('POST', '/api/questions/:id/answer', async ({ req, res, params }) => {
     const id = idOf(params[0]);
     const input = answerOf(requireObject(await readJson(req)));
-    let result;
-    try {
-      result = app.questions.answer(id, input);
-    } catch (error) {
-      if (error instanceof QuestionError) throw error.code === 'task_running' ? domainProblem(409, 'task', error) : domainProblem(400, 'invalid_field', error);
-      if (error instanceof TaskError) throw domainProblem(409, 'task', error);
-      throw error;
-    }
-    if (!result) throw domainProblem(404, 'not_found', new QuestionError('not_found', { id }));
-    if (!result.repeated) {
-      if (result.warning) app.log(`[WARN] ${result.warning}`);
-      const reopenedIn = result.reopenedItem && result.question.project_id ? app.acceptance.latest(result.question.project_id) : undefined;
-      if (reopenedIn) app.bus.publish({ type: 'acceptance.changed', projectId: reopenedIn.project_id, version: reopenedIn.version, draft: false });
-      const row = app.questions.get(id);
-      if (row?.project_id) {
-        try {
-          app.mesh.recordDecision(row.project_id, {
-            questionId: id, question: row.question, answer: row.answer ?? '', picked: input.text?.trim() ? 'text' : 'option', kept: result.kind === 'kept', item: result.reopenedItem, external: row.tainted === 1,
-          });
-        } catch (error) { app.log(`[WARN] Could not write DECISIONS.md of product ${row.project_id}: ${(error as Error).message}`); }
-      }
-      if (result.resumedTaskId) app.kv.delete(splitKey(result.resumedTaskId));
-      for (const taskId of [result.resumedTaskId, result.reopenedTaskId, result.fixTaskId]) if (taskId) app.worker.requestRun(taskId);
-    }
+    const result = answerQuestion(app, id, input);
     sendJson(res, 200, result);
   });
 }

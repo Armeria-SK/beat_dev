@@ -124,6 +124,11 @@ export class BrowserSession {
   enabled(): boolean { return this.#d.config().tools.browser.enabled; }
   // この会話で開いているタブの数（browser_close が、閉じるものが無いのにブラウザを起動しないための確かめ）
   tabCount(conversationId: string): number { return [...this.#tabs.values()].filter(tab => tab.conversationId === conversationId).length; }
+  tabUrl(conversationId: string, id?: string): string | undefined {
+    const mine = [...this.#tabs.values()].filter(tab => tab.conversationId === conversationId);
+    const found = id === undefined ? mine.sort((a, b) => b.used - a.used)[0] : mine.find(tab => tab.id === id);
+    return found?.page.url();
+  }
 
   async run<T>(call: BrowserCall, fn: (api: BrowserApi) => Promise<T>): Promise<T> {
     if (!this.enabled()) throw new BrowserFailure('disabled', 'browser.disabled');

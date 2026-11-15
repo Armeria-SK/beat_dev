@@ -10,6 +10,7 @@ import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 import { projectFilterOf, usableProjectId } from './routes-projects.ts';
+import { answerQuestion } from './routes-questions.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
@@ -160,14 +161,13 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   router.add('POST', '/api/tasks/:id/answer', async ({ req, res, params }) => {
     const task = getTask(params[0]!);
-    const text = requireString(requireObject(await readJson(req)), 'text', { max: 20_000 })!;
+    const text = requireString(requireObject(await readJson(req)), 'text', { max: 4000 })!;
     if (task.status !== 'waiting') throw problem(409, 'task', 'not_waiting');
     if (task.waiting_kind === 'approval') taskProblem(new TaskError('error.waiting_pending'));
-    app.tasks.event(task.id, 'answer', 'user', taskText(languageOf(app.config()), 'event.answer', { question: task.waiting_text ?? '', text }));
-    const updated = app.tasks.setReady(task.id, { actor: 'user' });
-    app.kv.delete(splitKey(task.id));
-    app.worker.requestRun(task.id);
-    sendJson(res, 200, { task: view(updated) });
+    const question = app.questions.waitingQuestion(task.id);
+    if (!question) throw problem(409, 'task', 'not_waiting');
+    answerQuestion(app, question.id, { choice: null, text });
+    sendJson(res, 200, { task: view(app.tasks.get(task.id) ?? task) });
   });
 
   router.add('POST', '/api/tasks/:id/run-now', ({ res, params }) => {

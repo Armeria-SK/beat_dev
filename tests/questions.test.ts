@@ -332,7 +332,7 @@ test('答え: 入力の形を確かめる（選択肢の外・空・両方・知
   assert.equal(s.app.questions.get(row!.id)!.status, 'open');
 });
 
-test('答え: stuck・check_failed の行は、選び直すと元のタスクを開き直す（新しいタスクは作らない）。submit_refused は送ってよいと書いた直しのタスク', async t => {
+test('答え: stuck・check_failed の行は、選び直すと元のタスクを開き直す（新しいタスクは作らない）。submit_refused は直しのタスクを作らず、会話から自分で送るよう経過に書く', async t => {
   const s = await setup(t);
   const stuck = s.app.tasks.create({ title: 'Stuck one', origin: 'user', actor: 'user' });
   s.app.tasks.finish(stuck.id, 'failed', null, 'beat');
@@ -353,9 +353,10 @@ test('答え: stuck・check_failed の行は、選び直すと元のタスクを
   assert.equal(s.app.tasks.get(checkFailed.id)!.status, 'ready');
   assert.equal(total(), before, '開き直しでタスクは増えない');
   const sent = await s.http(`/api/questions/${c.id}/answer`, { choice: 0 });
-  const fix = s.app.tasks.get(sent.body.fixTaskId)!;
-  assert.match(fix.body, /https:\/\/example\.com\/form/u);
-  assert.match(fix.body, /may be sent/u);
+  assert.equal(sent.body.kind, 'changed');
+  assert.equal(sent.body.fixTaskId, null);
+  assert.equal(total(), before, '送ってよいと答えてもタスクは増えない');
+  assert.ok(s.app.tasks.events(browse.id).some(e => e.kind === 'answer' && /https:\/\/example\.com\/form[\s\S]*opens a conversation/u.test(e.content ?? '')));
   const left = s.app.questions.add({ kind: 'stuck', taskId: stuck.id, question: 'again', options: ['Retry', 'Leave it'], chosen: 1 });
   s.app.tasks.finish(stuck.id, 'failed', null, 'beat');
   assert.equal((await s.http(`/api/questions/${left.id}/answer`, { choice: 1 })).body.kind, 'kept');

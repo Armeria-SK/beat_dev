@@ -156,12 +156,10 @@ const en = {
   'task.none': 'There are no tasks',
   'task.updated': 'Updated {line}',
   'task.not_running': 'No task is running',
-  'task.not_running_chat': 'No task is running. In a conversation, just ask the question directly',
   'task.end': 'End this run here (do no further work).',
   'task.checkpoint_saved': 'Saved the progress. Will resume in {minutes} min. {end}',
   'task.checkpoint_note': 'Tried: {tried} / Result: {result}',
   'task.completed': 'Recorded as done. {end}',
-  'task.asked': 'Asked the user. It will resume when the answer comes. {end}',
 
   'calc.result': '{expression} = {value}',
   'calc.error.syntax': 'The expression cannot be read (around character {at})',

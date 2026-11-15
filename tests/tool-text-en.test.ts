@@ -16,7 +16,7 @@ import { fileEdit, fileList, fileRead, fileWrite, previousForDelta } from '../sr
 import { historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { skillDraft, skillView } from '../src/tools/builtin/skills.ts';
-import { askUser, taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from '../src/tools/builtin/tasks.ts';
+import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from '../src/tools/builtin/tasks.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -238,10 +238,8 @@ test('タスクの道具の結果（英語）', async t => {
   const withTask = (control: ToolContext['task']): ToolContext => ({ ...ctx, kind: 'task', task: control });
   const slot = () => ({ id: 't', control: { outcome: 'none' } as never });
   assert.equal((await run(taskComplete, { summary: 's' })).content, 'No task is running');
-  assert.equal((await run(askUser, { question: 'q' })).content, 'No task is running. In a conversation, just ask the question directly');
   const endEn = 'End this run here (do no further work).';
   assert.equal(await text(taskComplete, { summary: 's' }, withTask(slot())), `Recorded as done. ${endEn}`);
-  assert.equal(await text(askUser, { question: 'q' }, withTask(slot())), `Asked the user. It will resume when the answer comes. ${endEn}`);
   const checkpoint = slot();
   assert.equal(await text(taskCheckpoint, { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 5 }, withTask(checkpoint)), `Saved the progress. Will resume in 5 min. ${endEn}`);
   assert.equal((checkpoint.control as { note?: string }).note, 'Tried: a / Result: b');

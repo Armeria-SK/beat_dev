@@ -133,6 +133,18 @@ test('5-3a: check_command が 3 回続けて落ちると failed と質問票の�
   assert.match(s.toolTexts(task.id).at(-1)!.text, /failure 1 of 3/u);
 });
 
+test('5-2b-s: check_failed の行は、外を読んだタスクの実行の印を引き継ぐ', async t => {
+  const s = await setup(t);
+  const { row } = s.product('web');
+  const task = s.app.tasks.create({ title: 'read the web', origin: 'user', projectId: row.id, actor: 'user' });
+  await runTask(s, task.id, [toolCall('task_complete', { summary: 'a', notify: false }), toolCall('task_complete', { summary: 'b', notify: false })]);
+  s.app.db.prepare("UPDATE engine_runs SET tainted = 1 WHERE conversation_id = ? AND kind = 'task'").run(s.app.tasks.get(task.id)!.conversation_id);
+  await runTask(s, task.id, [toolCall('task_complete', { summary: 'c', notify: false })]);
+  const [q] = s.app.questions.list({ status: 'open', taskId: task.id });
+  assert.equal(q!.kind, 'check_failed');
+  assert.equal(s.app.questions.get(q!.id)!.tainted, 1);
+});
+
 test('5-3a: Leave it（仮の選択のまま）ではタスクは失敗のまま', async t => {
   const s = await setup(t);
   const { row } = s.product('shop');

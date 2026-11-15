@@ -199,18 +199,3 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean }> = {
     return { content: [passed, done, suffix].filter(Boolean).join('\n') };
   },
 };
-
-export const askUser: ToolDef<{ question: string }> = {
-  name: 'ask_user',
-  description: 'Ask the user about the task you are working on now (the task stops until the answer comes). Ask only about things where going ahead on a guess would cause trouble.',
-  input: Type.Object({ question: Type.String({ minLength: 1, maxLength: 1500 }) }, { additionalProperties: false }),
-  effect: 'meta',
-  allowedIn: ['task'],
-  replayable: false,
-  async execute(input, ctx) {
-    const language = languageOf(ctx.config);
-    if (!ctx.task) return { content: toolText(language, 'task.not_running_chat'), isError: true };
-    ctx.task.control = { outcome: 'question', question: input.question };
-    return { content: toolText(language, 'task.asked', { end: toolText(language, 'task.end') }) };
-  },
-};
