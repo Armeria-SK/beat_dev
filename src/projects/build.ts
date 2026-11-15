@@ -46,7 +46,7 @@ export function unbuilt(d: Pick<BuildDeps, 'acceptance' | 'tasks'>, projectId: s
     .map(entry => entry.id);
 }
 
-export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: string; acceptanceHash: string | null }): { task: Task; version: AcceptanceVersionRow } {
+export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: string; acceptanceHash: string | null; conversationId?: string | undefined }): { task: Task; version: AcceptanceVersionRow } {
   const project = d.projects.get(projectId);
   if (!project) throw new ProjectError('unknown');
   if (project.archived_at !== null) throw new ProjectError('archived');
@@ -77,7 +77,7 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
     task = d.tasks.create({
       title, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: !untrusted, ownerPlan: gist,
       acceptanceItems: only ?? doc.items.filter(entry => entry.removedIn === null).map(entry => entry.id),
-      createdInConversation: plan.updated_by === 'ai' ? meta?.conversationId ?? undefined : undefined,
+      createdInConversation: wanted.conversationId ?? (plan.updated_by === 'ai' ? meta?.conversationId ?? undefined : undefined),
     });
     if (untrusted) {
       d.tasks.markUntrusted(task.id, BUILD_ACTOR, taskText(d.language(), 'event.build_untrusted'));

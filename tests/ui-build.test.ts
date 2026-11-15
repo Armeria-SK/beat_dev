@@ -7,7 +7,7 @@ import { domainProblem } from '../src/web/http.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  addPage, beforeBuildShown, buildAction, buildFailure, buildRequest, changedAfterBuild, coverageCounts, coverageGroups, mergeUnreferenced, noticeAfterReload, pagingCursor, revealStep, startPaging, unreferencedCursor,
+  addPage, beforeBuildShown, buildAction, buildPill, buildFailure, buildRequest, changedAfterBuild, coverageCounts, coverageGroups, mergeUnreferenced, noticeAfterReload, pagingCursor, revealStep, startPaging, unreferencedCursor,
 } from '../web/src/ui/acceptance.ts';
 
 const item = (id: string, over: Partial<AcceptanceItem> = {}): AcceptanceItem => ({
@@ -194,4 +194,11 @@ test('ui/build: 質問票の答えの項目（owner_answer）は前の出どこ�
   assert.deepEqual(g.answers.map(w => [w.question, w.answer, w.item.id]), [['Where?', 'A', 'A-2']]);
   assert.deepEqual(g.ai.map(i => i.id), ['A-3']);
   assert.deepEqual(g.edited.map(i => i.id), ['A-6']);
+});
+
+test('ui/build: Plan の欄の札は、待っている（ready）なら Queued、動いている（running）なら Running、持ち主を待つ（waiting）なら Waiting for you', () => {
+  assert.deepEqual(buildPill('ready'), { label: 'ui.plan.queued' });
+  assert.deepEqual(buildPill('running'), { label: 'ui.plan.building', tone: 'running' });
+  assert.deepEqual(buildPill('waiting'), { label: 'ui.plan.waiting', tone: 'waiting' });
+  assert.deepEqual([t('ui.plan.queued'), t('ui.plan.building'), t('ui.plan.waiting')], ['Queued', 'Running', 'Waiting for you']);
 });

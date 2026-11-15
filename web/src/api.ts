@@ -188,7 +188,13 @@ export interface Task {
   acceptance_items?: string | null;
   waiting_kind?: 'question' | 'approval' | null;
   check_state?: 'awaiting' | 'checked' | null;
+  created_in_conversation?: string | null;
+  spawned_by?: string | null;
   items?: TaskItems;
+}
+export interface ChatBuild {
+  id: string; status: TaskStatus; waiting_kind: 'question' | 'approval' | null; check_state: 'awaiting' | 'checked' | null; project_id: string | null;
+  created_at: number; updated_at: number; checklist: { items: ChecklistItem[]; tainted: boolean };
 }
 export interface TaskItems { owned: number; met: number; remaining: string[] }
 export interface DeviationRow { item: string | null; what: string; why: string; task: string | null; date: string | null; by: 'task' | 'owner'; external: boolean }
@@ -324,8 +330,8 @@ export const api = {
   decideChange: (id: string, changeId: string, decision: 'approve' | 'reject') =>
     call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/changes/${encodeURIComponent(changeId)}/${decision}`, { method: 'POST', body: '{}' }),
   editAcceptance: (id: string, edit: AcceptanceEdit) => call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/edit`, { method: 'POST', body: JSON.stringify(edit) }),
-  build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }) =>
-    call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(hashes) }),
+  build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }, conversationId?: string) =>
+    call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(conversationId ? { ...hashes, conversationId } : hashes) }),
   planReviewed: (id: string, baseHash: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan/reviewed`, { method: 'POST', body: JSON.stringify({ baseHash }) }),
   savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
   listFolders: (path?: string) => call<FolderList>('/api/folders/list', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }) }),
@@ -333,7 +339,7 @@ export const api = {
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
-  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; activeRun: { runId: string; draft: string } | null }>(`/api/conversations/${id}/messages`),
+  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; builds?: ChatBuild[]; activeRun: { runId: string; draft: string } | null }>(`/api/conversations/${id}/messages`),
   cancelPending: (id: string, pendingId: string) => call<{ cancelled: true }>(`/api/conversations/${encodeURIComponent(id)}/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }),
   deleteConversation: (id: string) => call<{ deleted: true }>(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),

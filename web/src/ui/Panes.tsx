@@ -150,7 +150,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, isGit, 
         const { count: _count, ...list } = questions;
         return <QuestionsList key={productId} projectId={productId} {...list} />;
       }
-      case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} />;
+      case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} />;
     }
   };
   const tabs = tabOrder(panes.views, panes.narrow);
