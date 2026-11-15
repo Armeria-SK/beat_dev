@@ -84,6 +84,8 @@ const en = {
   'notify.task_failed': 'Task failed: {title}',
   'notify.skill_draft': 'Please review the skill draft: {name}',
   'notify.skill_auto': 'Skill registered without review',
+  'notify.judge_off_blocked.title': "The judge stays on: the data folder is beat's own folder or holds it",
+  'notify.judge_off_blocked.body': 'The settings file says to run without the judge, but that cannot be used while beat keeps its data in its own folder. Start beat with a data folder elsewhere (--data-dir) to use it',
   'notify.judge_off_start.title': 'Running without the judge (the settings file said so at start-up)',
   'notify.judge_off_start.body': 'Actions that would go to the judge run without a check. If you did not choose this, turn the judge on in Settings and check what changed the file',
   'notify.judge_off_file.title': 'The settings file was changed to run without the judge, so the judge was kept on',

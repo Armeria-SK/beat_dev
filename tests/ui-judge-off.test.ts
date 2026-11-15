@@ -47,11 +47,12 @@ test('J-4 画面: 確かめの 1 枚は、止まらなくなるもの・外を�
   assert.match(en['access.judgeOff'], /run at once, with no check/u);
   assert.match(en['access.judgeOffTaint'], /after beat has read outside content/u);
   assert.match(en['access.judgeOffTaint'], /Sending data out stays in Pending/u);
-  assert.match(en['access.judgeOffForm'], /by how the command is written. Code that builds them while it runs is not recognised and runs without a check/u);
+  assert.match(en['access.judgeOffForm'], /in scripts it runs. Code that builds them while it runs is not recognised and runs without a check/u);
+  assert.match(en['access.judgeOffForm'], /its program folder\) by how the command is written, including paths written in code and in scripts it runs/u);
   assert.match(en['access.judgeOffForm'], /can also call beat itself, change its settings and approve its own Pending actions, so the lists below hold only for what beat can read from the command/u);
   assert.match(en['ui.set.models.judgeOffDesc'], /as far as beat can tell them from how the command is written/u);
   for (const part of [/Chats \(product chats too\)/u, /other tasks/u, /not git repositories/u, /snapshot timed out/u, /only takes you back to the point where the Build task started/u]) assert.match(en['access.judgeOffSnapshot'], part);
-  for (const part of [/shutdown/u, /calling beat itself/u, /sends, deletions, protected files, Ask tools/u, /code that touches beat itself/u, /plan mode/u, /second check/u, /approve a Pending action/u]) assert.match(en['access.judgeOffStill'], part);
+  for (const part of [/shutdown/u, /calling beat itself/u, /sends, deletions, protected files, Ask tools/u, /code that touches beat itself/u, /writing tools of MCP servers/u, /reading or writing beat's program folder/u, /plan mode/u, /second check/u, /approve a Pending action/u]) assert.match(en['access.judgeOffStill'], part);
   const text = source('web/src/ui/settings/access-text.tsx');
   assert.ok(text.includes("case 'judge-off':"));
   for (const key of ['access.judgeOff', 'access.judgeOffTaint', 'access.judgeOffForm', 'access.judgeOffSnapshot', 'access.judgeOffStill']) assert.ok(text.includes(`t('${key}')`), key);

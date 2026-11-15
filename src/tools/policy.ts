@@ -1,4 +1,4 @@
-import { dirname, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AppConfig } from '../config/schema.ts';
 import { languageOf } from '../shared/language.ts';
 import type { AppPaths } from '../paths.ts';
@@ -38,15 +38,18 @@ export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root
   };
 }
 
-function installGuard(paths: AppPaths): { roots: string[]; keep?: string[] } {
+function installGuard(paths: AppPaths): { roots: string[]; keep: string[] } {
   const appRoot = dirname(paths.templates);
-  const roots = [...new Set([appRoot, resolveConfigPath(appRoot, paths.data)])];
-  if (!isInside(appRoot, paths.data)) return { roots };
-  const top = relative(appRoot, paths.data).split(/[\\/]/u)[0]!;
-  return { roots, keep: [...new Set([join(appRoot, top), resolveConfigPath(join(appRoot, top), paths.data)])] };
+  return { roots: [...new Set([appRoot, resolveConfigPath(appRoot, paths.data)])], keep: [...new Set([paths.data, resolveConfigPath(paths.data, paths.data)])] };
 }
 
-const sameFolder =(a: string, b: string): boolean => isInside(a, b) && isInside(b, a);
+export function dataHoldsInstall(paths: AppPaths): boolean {
+  const appRoot = dirname(paths.templates);
+  const roots = [appRoot, resolveConfigPath(appRoot, paths.data)];
+  return [paths.data, resolveConfigPath(paths.data, paths.data)].some(data => roots.some(root => isInside(data, root)));
+}
+
+const sameFolder = (a: string, b: string): boolean => isInside(a, b) && isInside(b, a);
 
 export function defaultWorkspace(policy: ScopePolicy, paths: AppPaths): string {
   return policy.roots.find(r => r.mode === 'write')?.path ?? paths.workspace;

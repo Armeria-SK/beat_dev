@@ -61,7 +61,8 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     execute: async () => { ran++; return { content: 'ran' }; },
     ...extra,
   });
-  const registry = new ToolRegistry().register(probe('probe')).register(probe('probe_taint', { escalateOnTaint: true }));
+  const registry = new ToolRegistry().register(probe('probe')).register(probe('probe_taint', { escalateOnTaint: true }))
+    .register(probe('mcp__s1__put', { effect: 'write', mcp: { server: 's1', tool: 'put' } })).register(probe('mcp__s1__get', { effect: 'network', mcp: { server: 's1', tool: 'get' } }));
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const prompts: ClassifierPrompt[] = [];
   const state = { request: 'run the tests', mode: 'auto' as PermissionMode, modes: [] as PermissionMode[], config: undefined as AppConfig | undefined, broken: false };
@@ -273,4 +274,18 @@ test('J-4: 今の設定が読めないときは、判定なしにしない（Off
   assert.equal(s.prompts.length, 1, '判定役が呼ばれる');
   assert.equal(out.decidedBy, 'auto-mode');
   assert.notEqual(out.decidedBy, 'no-judge');
+});
+
+test('J-4: Off でも、MCP のサーバーの書く道具（effect: write）は判定役の代わりに持ち主の Pending に積む。書かない MCP の道具は判定なしで動く。On では判定役が見る', async t => {
+  const s = setup(t);
+  const out = await s.call(s.ctx, 'mcp__s1__put');
+  assert.equal(out.decidedBy, 'pending', out.output.content);
+  assert.equal(waitingKind(s), 'owner');
+  assert.equal(s.prompts.length, 0);
+  assert.equal(s.ran(), 0);
+  const read = await s.call(s.ctx, 'mcp__s1__get');
+  assert.equal(read.decidedBy, 'no-judge');
+  const on = setup(t, keepOn);
+  const judged = await on.call(on.ctx, 'mcp__s1__put');
+  assert.equal(on.prompts.length, 1, judged.decidedBy);
 });

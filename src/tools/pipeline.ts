@@ -406,6 +406,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         const noJudge = runsWithoutJudge(ctx, deps);
         if (noJudge && judgeKeys.includes(SELF_TOUCH_KEY)) return park('owner', pendingText('en', 'owner_no_judge_self', { reasons: reasons.join('; ') }));
         if (noJudge && !(deps.lastUserRequest?.() ?? '').trim()) return park('owner', pendingText('en', 'owner_no_judge_request'));
+        if (noJudge && tool.mcp && tool.effect === 'write') return park('owner', pendingText('en', 'owner_no_judge_mcp', { server: tool.mcp.server, tool: tool.mcp.tool }));
         const classify = deps.autoClassify;
         const summary = callSummary() ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
         const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) => noJudge ? undefined :

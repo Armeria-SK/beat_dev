@@ -175,14 +175,19 @@ export function placePath(abs: string, policy: ScopePolicy, secrets: SecretScope
   for (const d of policy.deny) {
     if (isInside(d, real) || isInside(d, abs)) return { kind: 'deny', reason: guardText(language, 'scope.deny_list', { path: d }) };
   }
-  const guard = policy.guarded;
-  const guardRoot = guard && [real, abs].map(p => guard.roots.find(root => isInside(root, p) && !(guard.keep ?? []).some(keep => isInside(keep, p)))).find(Boolean);
+  const guardRoot = guardedRootOf(abs, policy, real);
   if (guardRoot) return { kind: 'deny', reason: guardText(language, 'scope.deny_list', { path: guardRoot }) };
   let best: ResolvedRoot | undefined;
   for (const root of policy.roots) {
     if (isInside(root.path, real) && (!best || root.path.length > best.path.length)) best = root;
   }
   return best ? { kind: 'inside', mode: best.mode, root: best.path } : { kind: 'outside' };
+}
+
+export function guardedRootOf(abs: string, policy: ScopePolicy, real = realish(abs)): string | undefined {
+  const guard = policy.guarded;
+  if (!guard) return undefined;
+  return [real, abs].map(p => guard.roots.find(root => isInside(root, p) && !(guard.keep ?? []).some(keep => isInside(keep, p)))).find(Boolean);
 }
 
 export function resolveConfigPath(p: string, base: string): string {

@@ -441,7 +441,11 @@ export function createWebServer(app: App): WebServer {
       if (error instanceof ConfigError) throw configProblem(error);
       throw error;
     }
-    await app.applyConfig(next);
+    try { await app.applyConfig(next); }
+    catch (error) {
+      if (error instanceof ConfigError) throw configProblem(error);
+      throw error;
+    }
     sendJson(res, 200, { ...settingsView(app), ...modelsView(app) });
   });
   router.add('GET', '/api/settings/reset', ({ res }) => sendJson(res, 200, { config: resetConfig(app.config()) }));
