@@ -11,6 +11,8 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 import { projectFilterOf, usableProjectId } from './routes-projects.ts';
 import { answerQuestion } from './routes-questions.ts';
+import { AcceptanceError } from '../projects/acceptance.ts';
+import { GateError, itemSummary, ownerDecide } from '../projects/gate.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
@@ -53,6 +55,7 @@ function cronOf(body: Record<string, unknown>): string | undefined {
 
 export function registerTaskRoutes(router: Router, app: App): void {
   const view = (task: Task) => taskView(task, languageOf(app.config()));
+  const withItems = (task: Task) => { const items = itemSummary(app.db, task); return items ? { ...view(task), items } : view(task); };
   const getTask = (id: string): Task => {
     const task = app.tasks.get(id);
     if (!task) throw problem(404, 'not_found', 'task_missing');
@@ -62,8 +65,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
   router.add('GET', '/api/tasks', ({ res, url }) => {
     const project = projectFilterOf(url);
     sendJson(res, 200, {
-      active: app.tasks.list({ project }).map(view),
-      finished: app.tasks.recentlyFinished(50, project).map(view),
+      active: app.tasks.list({ project }).map(withItems),
+      finished: app.tasks.recentlyFinished(50, project).map(withItems),
       finishedTotal: app.tasks.finishedTotal(project),
       repeating: app.tasks.templates(project).map(task => ({ ...view(task), last_run: task.last_run })),
     });
@@ -78,7 +81,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit') ?? 20)) || 20, 1), 100);
     const project = projectFilterOf(url);
     const page = app.tasks.finishedPage({ before: beforeT !== null && beforeId !== null ? { t: Number(beforeT), id: beforeId } : undefined, limit, project });
-    sendJson(res, 200, { tasks: page.tasks.map(view), next: page.next ? { beforeT: page.next.t, beforeId: page.next.id } : null, total: app.tasks.finishedTotal(project) });
+    sendJson(res, 200, { tasks: page.tasks.map(withItems), next: page.next ? { beforeT: page.next.t, beforeId: page.next.id } : null, total: app.tasks.finishedTotal(project) });
   });
 
   router.add('GET', '/api/schedule', ({ res, url }) => {
@@ -113,7 +116,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const children = task.status === 'scheduled'
       ? app.db.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at DESC LIMIT 20').all(task.id) as unknown as Task[]
       : [];
-    sendJson(res, 200, { task: view(task), events: app.tasks.events(task.id), runs: children.map(view) });
+    sendJson(res, 200, { task: withItems(task), events: app.tasks.events(task.id), runs: children.map(view) });
   });
 
   router.add('PATCH', '/api/tasks/:id', async ({ req, res, params }) => {
@@ -241,6 +244,31 @@ export function registerTaskRoutes(router: Router, app: App): void {
     } catch (error) { taskProblem(error); }
   });
   router.add('POST', '/api/tasks/:id/done', close('done'));
+
+  const decide = async (req: IncomingMessage, task: Task, items: string[] | 'all', fixed?: 'checked') => {
+    const body = requireObject(await readJson(req));
+    const result = fixed ?? body.result;
+    if (result !== 'checked' && result !== 'insufficient') throw domainProblem(400, 'gate', new GateError('bad_result'));
+    if (!Number.isSafeInteger(body.version)) throw domainProblem(400, 'gate', new GateError('bad_version'));
+    const note = requireString(body, 'note', { optional: true, max: 1000 });
+    try {
+      return ownerDecide({ db: app.db, tasks: app.tasks, acceptance: app.acceptance, language: languageOf(app.config()) }, task, items, { result, note: note?.trim() || undefined, version: body.version as number });
+    } catch (error) {
+      if (error instanceof GateError) throw domainProblem(409, 'gate', error);
+      if (error instanceof AcceptanceError) throw domainProblem(error.code === 'stale' ? 409 : 400, 'acceptance', error);
+      throw error;
+    }
+  };
+  router.add('POST', '/api/tasks/:id/items/:item/check', async ({ req, res, params }) => {
+    const task = getTask(params[0]!);
+    const done = await decide(req, task, [params[1]!]);
+    sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task), ...(done.fix ? { fix: withItems(done.fix) } : {}) });
+  });
+  router.add('POST', '/api/tasks/:id/check', async ({ req, res, params }) => {
+    const task = getTask(params[0]!);
+    await decide(req, task, 'all', 'checked');
+    sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task) });
+  });
 
   // ── ワーカー ──
   router.add('GET', '/api/worker', ({ res }) => sendJson(res, 200, app.worker.status()));
