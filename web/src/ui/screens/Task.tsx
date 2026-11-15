@@ -401,7 +401,7 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
         <div className="bt-section__head"><span className="bt-label">{t('ui.task.activity')}</span><span className="bt-meta">{t('ui.task.activityCount', events.length)}</span></div>
         <ul className="bt-list">
           {events.map(event => {
-            const known = eventKey(event.kind);
+            const known = eventKey(event.kind, event.content);
             const content = eventText(t, event);
             const name = known ? t(known) : Object.hasOwn(NEW_EVENT, event.kind) ? t(NEW_EVENT[event.kind as keyof typeof NEW_EVENT]) : event.kind;
             return (

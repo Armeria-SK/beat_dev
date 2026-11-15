@@ -100,11 +100,12 @@ test('ui/live-state: plan.changed はその製品の計画書の読み直しの�
   assert.equal(again.state.planRevisions.get('p1aaaa'), 2);
 });
 
-test('ui/live-state: acceptance.changed はその製品の Plan の欄を読み直させ、Pending の数（変更の案）を読み直す。ほかは読み直さない（beat 3-1b-u・4-U1）', () => {
+test('ui/live-state: acceptance.changed はその製品の Plan の欄を読み直させ、Pending の数（変更の案）と、確かめ待ちのカードのためにタスクを読み直す。ほかは読み直さない（beat 3-1b-u・4-U1・R13）', () => {
   const r = reduce(EMPTY, ev({ type: 'acceptance.changed', projectId: 'p1aaaa', version: 0, draft: true }));
   assert.equal(r.state.planRevisions.get('p1aaaa'), 1);
   assert.equal(r.state.planRevisions.get('p2bbbb'), undefined);
-  assert.deepEqual(refreshes(r.effects), ['pending']);
+  assert.equal(r.state.taskRevision, EMPTY.taskRevision + 1, 'R13: the awaiting cards read their items again');
+  assert.deepEqual(refreshes(r.effects), ['pending', 'tasks']);
 });
 
 test('ui/live-state: Pending の行の pendingAction.changed は Pending の数と一覧を読み直し、製品の数も読み直す。送る前の発言の pending.changed は今までどおり会話だけ（4-U1）', () => {

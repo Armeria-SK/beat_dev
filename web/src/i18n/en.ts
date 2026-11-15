@@ -278,6 +278,7 @@ export const en = {
   'tasks.event.check_passed': 'Check command passed',
   'tasks.event.owner_check': 'Your check',
   'tasks.event.owner_fix': 'Fix for your check',
+  'tasks.event.owner_fix_answer': 'Fix for your answer',
   // p0-5
   // p0-6
   'ui.wordmark': 'beat',

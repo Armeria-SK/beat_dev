@@ -199,7 +199,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'plan.changed':
       return { state: planBump(s, e.projectId), effects: refresh('projects') };
     case 'acceptance.changed':
-      return { state: planBump(s, e.projectId), effects: refresh('pending') };
+      return { state: { ...planBump(s, e.projectId), taskRevision: s.taskRevision + 1 }, effects: refresh('pending', 'tasks') };
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
