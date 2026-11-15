@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -12,6 +12,7 @@ import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { fileEdit, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
+import { placePath } from '../src/tools/hooks/scope.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -123,14 +124,27 @@ test('J-4 段の頭: beat の置き場（src・web・templates・package.json・
   }
   for (const p of probes) assert.equal(existsSync(join(APP_ROOT, p)), false, p);
   assert.equal(s.judge.calls, 0);
-  const real = (path: string): string => { try { return realpathSync(path); } catch { return path; } };
   const policy = buildPolicy(parseConfig(testConfig()), s.paths);
-  for (const name of ['src', 'web', 'templates', 'node_modules', 'package.json', 'package-lock.json', 'start.ps1', 'start.sh', '.git', '.npmrc']) {
-    assert.ok(policy.deny.some(d => d === join(APP_ROOT, name) || d === APP_ROOT || d === real(APP_ROOT)), `${name} は守る一覧に入る`);
+  for (const name of ['src', 'web', 'templates', 'node_modules', 'package.json', 'package-lock.json', 'start.ps1', 'start.sh', '.git', '.npmrc', 'npm-shrinkwrap.json', 'postcss.config.mjs']) {
+    assert.equal(placePath(join(APP_ROOT, name), policy).kind, 'deny', `${name} は断る`);
   }
-  const inside = resolvePaths(join(APP_ROOT, 'data'));
-  const local = buildPolicy(parseConfig(testConfig()), inside);
-  for (const name of ['src', 'web', 'templates', 'node_modules', 'package.json', 'start.ps1', '.npmrc']) assert.ok([join(APP_ROOT, name), real(join(APP_ROOT, name))].some(p => local.deny.includes(p)), `data が置き場の中のとき: ${name}`);
-  assert.equal(local.deny.includes(APP_ROOT), false, '置き場まるごとは守らない（data と作業場が中にある）');
-  assert.equal(local.deny.some(d => d === inside.data || inside.workspace.startsWith(`${d}\\`) || inside.workspace.startsWith(`${d}/`)), false, '作業場は守る一覧に入らない');
+});
+
+test('J-4 段の頭: data が beat の置き場の中でも、置き場の頂にまだ無い名前（npm-shrinkwrap.json・postcss.config.mjs など）は断る。data と作業場は使える。data の名前の大文字小文字が違っても同じ', () => {
+  for (const name of ['npm-shrinkwrap.json', 'postcss.config.mjs', '.postcssrc.json', 'zz-new-folder']) assert.equal(existsSync(join(APP_ROOT, name)), false, `${name} はまだ無い`);
+  for (const dataName of ['data', 'DATA', 'Data']) {
+    const inside = resolvePaths(join(APP_ROOT, dataName));
+    const config = testConfig();
+    config.tools.roots = [{ path: 'workspace', mode: 'write' }];
+    const local = buildPolicy(parseConfig(config), inside);
+    for (const name of ['npm-shrinkwrap.json', 'postcss.config.mjs', '.postcssrc.json', 'vite.config.ts', 'zz-new-folder/x.js', 'src', 'web', 'templates', 'node_modules', 'package.json', 'start.ps1', '.npmrc']) {
+      assert.equal(placePath(join(APP_ROOT, name), local).kind, 'deny', `data=${dataName}: ${name}`);
+    }
+    const lower = (p: string) => (process.platform === 'win32' ? p.replace(join(APP_ROOT, dataName), join(APP_ROOT, dataName.toLowerCase())) : p);
+    for (const target of [join(inside.workspace, 'notes.md'), lower(join(inside.workspace, 'notes.md'))]) {
+      assert.equal(placePath(target, local).kind, 'inside', `data=${dataName}: 作業場は使える ${target}`);
+    }
+    assert.notEqual(placePath(join(inside.data, 'other.txt'), local).kind, 'deny', `data=${dataName}: data の中は置き場の守りに入らない`);
+  }
+
 });

@@ -143,6 +143,7 @@ export interface ScopePolicy {
   skillsDir?: string;
   instructions?: string[];
   language?: Language;
+  guarded?: { roots: string[]; keep?: string[] };
 }
 
 // 書き込む前に承認を求める場所の種類。persona: SOUL.md・USER.md、skill: workspace/skills/、git: .git の段があるパス（フックや設定でコマンドを動かせる）
@@ -174,6 +175,9 @@ export function placePath(abs: string, policy: ScopePolicy, secrets: SecretScope
   for (const d of policy.deny) {
     if (isInside(d, real) || isInside(d, abs)) return { kind: 'deny', reason: guardText(language, 'scope.deny_list', { path: d }) };
   }
+  const guard = policy.guarded;
+  const guardRoot = guard && [real, abs].map(p => guard.roots.find(root => isInside(root, p) && !(guard.keep ?? []).some(keep => isInside(keep, p)))).find(Boolean);
+  if (guardRoot) return { kind: 'deny', reason: guardText(language, 'scope.deny_list', { path: guardRoot }) };
   let best: ResolvedRoot | undefined;
   for (const root of policy.roots) {
     if (isInside(root.path, real) && (!best || root.path.length > best.path.length)) best = root;

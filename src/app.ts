@@ -392,7 +392,12 @@ export class App {
     }
     this.#applied ||= json;
     this.#reportDropped();
-    if (this.configStore.takeJudgeOffRefused()) {
+    if (this.notifications && this.configStore.takeStartedOff()) {
+      const language = languageOf(config);
+      this.log('[WARN] Started without the judge (routing.judgeMode: off in the settings file). Actions that would go to the judge run without a check. Turn the judge on in Settings › Models if you did not choose this');
+      this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_start.title'), body: taskText(language, 'notify.judge_off_start.body'), link: '#/settings', dedupKey: 'judge-off-start' });
+    }
+    if (this.notifications && this.configStore.takeJudgeOffRefused()) {
       const language = languageOf(config);
       this.log('[WARN] The settings file was changed to run without the judge (routing.judgeMode: off), but the change did not come from beat. Kept the judge on. Turn it off in Settings, or restart beat to use the file as written');
       this.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.judge_off_file.title'), body: taskText(language, 'notify.judge_off_file.body'), link: '#/settings', dedupKey: 'judge-off-file' });

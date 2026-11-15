@@ -1,4 +1,3 @@
-import { readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import type { AppConfig } from '../config/schema.ts';
 import { languageOf } from '../shared/language.ts';
@@ -24,33 +23,27 @@ export function buildPolicy(config: AppConfig, paths: AppPaths, project?: { root
   const protectedPaths = [
     paths.database, `${paths.database}-wal`, `${paths.database}-shm`, paths.config, `${paths.config}.bak`, paths.backups,
     paths.env, join(paths.data, 'tool_outputs'), join(paths.data, 'git-run'), join(paths.data, 'snapshots'), paths.browserProfile, paths.projects,
-    ...installPaths(paths),
   ].map(p => resolveConfigPath(p, paths.data));
   const deny = [...config.tools.deny.map(p => resolveConfigPath(p, paths.data)), ...protectedPaths];
   // 人格とプロフィールは、beat が書き換えるときに承認を求める（提案として見せる）。スキルのフォルダも同じ:
   // 新しい名前のスキルは、ここに置いただけでは使われない（正規の道は skill_draft → 画面の承認で登録）。登録済みの名前は、書き直したものがそのまま使われる
   const skillsDir = resolveConfigPath(join(paths.workspace, 'skills'), paths.data);
+  const guarded = installGuard(paths);
   const fixed = [...['SOUL.md', 'USER.md'].map(name => resolveConfigPath(join(paths.workspace, name), paths.data)), skillsDir];
-  if (typeof productRoots !== 'function') return { roots, deny, askOnWrite: [...fixed, ...instructions], skillsDir, ...(instructions.length ? { instructions } : {}), language: languageOf(config) };
+  if (typeof productRoots !== 'function') return { roots, deny, guarded, askOnWrite: [...fixed, ...instructions], skillsDir, ...(instructions.length ? { instructions } : {}), language: languageOf(config) };
   return {
-    roots, deny, skillsDir, language: languageOf(config),
+    roots, deny, guarded, skillsDir, language: languageOf(config),
     get askOnWrite() { return [...fixed, ...instructionsNow()]; },
     get instructions() { return instructionsNow(); },
   };
 }
 
-const INSTALL_NAMES = [
-  'src', 'web', 'templates', 'scripts', 'deploy', 'tests', 'node_modules', '.git', '.npmrc', '.yarnrc', '.nvmrc', 'package.json', 'package-lock.json',
-  'start.ps1', 'start.sh', 'tsconfig.json', 'tsconfig.web.json', '.env.example', '.gitattributes', '.gitignore', 'README.md', 'map.md',
-] as const;
-
-function installPaths(paths: AppPaths): string[] {
+function installGuard(paths: AppPaths): { roots: string[]; keep?: string[] } {
   const appRoot = dirname(paths.templates);
-  if (!isInside(appRoot, paths.data)) return [appRoot];
-  const top = relative(appRoot, paths.data).split(/[\\/]/u)[0];
-  let present: string[] = [];
-  try { present = readdirSync(appRoot); } catch { present = []; }
-  return [...new Set([...INSTALL_NAMES, ...present])].filter(name => name !== top).map(name => join(appRoot, name));
+  const roots = [...new Set([appRoot, resolveConfigPath(appRoot, paths.data)])];
+  if (!isInside(appRoot, paths.data)) return { roots };
+  const top = relative(appRoot, paths.data).split(/[\\/]/u)[0]!;
+  return { roots, keep: [...new Set([join(appRoot, top), resolveConfigPath(join(appRoot, top), paths.data)])] };
 }
 
 const sameFolder =(a: string, b: string): boolean => isInside(a, b) && isInside(b, a);
