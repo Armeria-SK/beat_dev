@@ -68,7 +68,7 @@ export interface QuestionAnswer { choice: number | null; text?: string }
 export interface QuestionAnswered { question: Question; kind: 'kept' | 'changed'; fixTaskId: string | null; reopenedTaskId: string | null; resumedTaskId: string | null; repeated: boolean; reopenedItem: string | null }
 export interface PendingQuery { status: 'waiting' | 'decided'; project?: string; before?: number; earlier?: true }
 export interface PlanDoc {
-  content: string | null; hash: string | null; updated_at: number | null; updated_by: 'ai' | 'owner' | 'outside' | null; tainted: boolean; writing: boolean; reviewLocked: boolean;
+  content: string | null; hash: string | null; updated_at: number | null; updated_by: 'ai' | 'owner' | 'outside' | null; tainted: boolean; writing: boolean; reviewLocked: boolean; built_hash: string | null;
 }
 export type AcceptanceSource =
   | { kind: 'owner_words'; quote: string; context?: string; messageId?: number; conversationId?: string }
@@ -326,19 +326,22 @@ export const api = {
   projects: (archived = false) => call<{ projects: Project[] }>(`/api/projects${archived ? '?archived=1' : ''}`),
   createProject: (input: NewProject) => call<{ project: Project; notes: ProjectNote[] }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   patchProject: (id: string, patch: ProjectPatch) => call<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
-  plan: (id: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`),
-  acceptance: (id: string, unreferencedBefore?: number) =>
-    call<{ acceptance: Acceptance; coverage?: Coverage }>(`/api/projects/${encodeURIComponent(id)}/acceptance${unreferencedBefore === undefined ? '' : `?unreferencedBefore=${unreferencedBefore}`}`),
+  plan: (id: string, conversationId: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan?conversationId=${encodeURIComponent(conversationId)}`),
+  acceptance: (id: string, conversationId?: string, unreferencedBefore?: number) => {
+    const query = new URLSearchParams({ ...(conversationId === undefined ? {} : { conversationId }), ...(unreferencedBefore === undefined ? {} : { unreferencedBefore: String(unreferencedBefore) }) }).toString();
+    return call<{ acceptance: Acceptance; coverage?: Coverage }>(`/api/projects/${encodeURIComponent(id)}/acceptance${query ? `?${query}` : ''}`);
+  },
   deviations: (id: string) => call<Deviations>(`/api/projects/${encodeURIComponent(id)}/deviations`),
   acceptanceVersions: (id: string) => call<{ versions: AcceptanceVersion[] }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions`),
   acceptanceVersion: (id: string, version: number) => call<{ version: AcceptanceVersionDetail }>(`/api/projects/${encodeURIComponent(id)}/acceptance/versions/${version}`),
   decideChange: (id: string, changeId: string, decision: 'approve' | 'reject') =>
     call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/changes/${encodeURIComponent(changeId)}/${decision}`, { method: 'POST', body: '{}' }),
-  editAcceptance: (id: string, edit: AcceptanceEdit) => call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/edit`, { method: 'POST', body: JSON.stringify(edit) }),
-  build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }, conversationId?: string) =>
-    call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify(conversationId ? { ...hashes, conversationId } : hashes) }),
-  planReviewed: (id: string, baseHash: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan/reviewed`, { method: 'POST', body: JSON.stringify({ baseHash }) }),
-  savePlan: (id: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash }) }),
+  editAcceptance: (id: string, edit: AcceptanceEdit, conversationId?: string) =>
+    call<{ acceptance: Acceptance }>(`/api/projects/${encodeURIComponent(id)}/acceptance/edit`, { method: 'POST', body: JSON.stringify(conversationId ? { ...edit, conversationId } : edit) }),
+  build: (id: string, hashes: { planHash: string; acceptanceHash: string | null }, conversationId: string) =>
+    call<{ task: Task; version: number }>(`/api/projects/${encodeURIComponent(id)}/build`, { method: 'POST', body: JSON.stringify({ ...hashes, conversationId }) }),
+  planReviewed: (id: string, conversationId: string, baseHash: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan/reviewed`, { method: 'POST', body: JSON.stringify({ baseHash, conversationId }) }),
+  savePlan: (id: string, conversationId: string, content: string, baseHash: string | null) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: JSON.stringify({ content, baseHash, conversationId }) }),
   checkFolder: (path: string) => call<FolderCheck>('/api/folders/check', { method: 'POST', body: JSON.stringify({ path }) }),
   folderPickAvailable: () => call<{ available: boolean }>('/api/folders/pick'),
   pickFolder: (path?: string, signal?: AbortSignal) => call<{ path: string } | { cancelled: true }>('/api/folders/pick', { method: 'POST', body: JSON.stringify(path === undefined ? {} : { path }), ...(signal ? { signal } : {}) }),

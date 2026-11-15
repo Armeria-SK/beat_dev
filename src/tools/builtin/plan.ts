@@ -10,7 +10,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput =>
 
 export const planWrite: ToolDef<{ content: string; language?: string }> = {
   name: 'plan_write',
-  description: 'Write the plan of this product (Markdown; it replaces the whole plan). Write it in the owner-facing documents language (if none is set, the language the owner writes in). When you quote the owner, copy their words exactly; never translate or paraphrase them. The owner reads and edits the plan in the Plan pane. Pass its language tag (ja, en, zh...) the first time.',
+  description: 'Write the plan of this conversation for this product (Markdown; it replaces the whole plan; other conversations keep their own plans). Write it in the owner-facing documents language (if none is set, the language the owner writes in). When you quote the owner, copy their words exactly; never translate or paraphrase them. The owner reads and edits the plan in the Plan pane. Pass its language tag (ja, en, zh...) the first time.',
   input: Type.Object({ content: Type.String({ minLength: 1 }), language: Type.Optional(Type.String()) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat'],
@@ -22,8 +22,8 @@ export const planWrite: ToolDef<{ content: string; language?: string }> = {
     let tainted = ctx.taint.tainted;
     if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
     try {
-      const saved = services.plans.write(ctx.project.id, input.content, { by: 'ai', tainted, conversationId: ctx.conversationId, runId: ctx.runId });
-      if (saved.changed) services.emit({ type: 'plan.changed', projectId: ctx.project.id, hash: saved.hash, by: 'ai' });
+      const saved = services.plans.write(ctx.project.id, ctx.conversationId, input.content, { by: 'ai', tainted, conversationId: ctx.conversationId, runId: ctx.runId });
+      if (saved.changed) services.emit({ type: 'plan.changed', projectId: ctx.project.id, conversationId: ctx.conversationId, hash: saved.hash, by: 'ai' });
       const tag = languageTagOf(input.language);
       if (tag && !tainted && services.projects?.detectDocLanguage(ctx.project.id, tag)) services.emit({ type: 'project.changed', projectId: ctx.project.id, change: 'updated' });
       const saidLanguage = input.language !== undefined && !tag ? [toolText(languageOf(ctx.config), 'language.ignored', { tag: input.language })] : [];

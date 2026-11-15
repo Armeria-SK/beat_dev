@@ -27,6 +27,8 @@ import { assertProjectFileGuarded } from './helpers/project-file-guard.ts';
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
 const PROJECT = 'aaaaaaaa-0000-4000-8000-0000000000aa';
+const CONV = 'cccccccc-0000-4000-8000-0000000000c1';
+const chatRow = (db: ReturnType<typeof openDatabase>, id = CONV, project = PROJECT) => db.prepare("INSERT INTO conversations (id, kind, created_at, last_message_at, project_id) VALUES (?, 'chat', 0, 0, ?)").run(id, project);
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 
 const call = (name: string, args: unknown): Script => async function* (req) {
@@ -42,31 +44,34 @@ function storeFixture(t: { after: (fn: () => void) => void }, io?: ConstructorPa
   let clock = 1_000;
   const now = () => clock++;
   const kv = new KV(db, now);
+  chatRow(db);
+  mkdirSync(join(paths.projects, PROJECT, 'conversation-plans'), { recursive: true });
   const store = new PlanStore(kv, { projects: paths.projects, backups: paths.backups }, now, io);
-  const backups = () => existsSync(join(paths.backups, 'mesh', PROJECT)) ? readdirSync(join(paths.backups, 'mesh', PROJECT)).sort() : [];
-  const backupTexts = () => backups().map(name => readFileSync(join(paths.backups, 'mesh', PROJECT, name), 'utf8'));
-  return { paths, db, kv, store, backups, backupTexts, file: join(paths.projects, PROJECT, 'plan.md') };
+  const backupDir = join(paths.backups, 'mesh', PROJECT, 'plans', CONV);
+  const backups = () => existsSync(backupDir) ? readdirSync(backupDir).sort() : [];
+  const backupTexts = () => backups().map(name => readFileSync(join(backupDir, name), 'utf8'));
+  return { paths, db, kv, store, backups, backupTexts, file: join(paths.projects, PROJECT, 'conversation-plans', `${CONV}.md`) };
 }
 
-const AI = { by: 'ai' as const, tainted: false, conversationId: 'c1', runId: 'r1' };
+const AI = { by: 'ai' as const, tainted: false, conversationId: CONV, runId: 'r1' };
 
-test('3-1a 計画書の置き場: plan_write の中身が data/projects/<id>/plan.md に入り、ハッシュと書き手を覚える。無い間は空の形', t => {
+test('3-1a 計画書の置き場: plan_write の中身が data/projects/<id>/conversation-plans/<会話>.md に入り、ハッシュと書き手を覚える。無い間は空の形', t => {
   const f = storeFixture(t);
-  assert.deepEqual(f.store.view(PROJECT), { content: null, hash: null, updated_at: null, updated_by: null, tainted: false });
+  assert.deepEqual(f.store.view(PROJECT, CONV), { content: null, hash: null, updated_at: null, updated_by: null, tainted: false });
   assert.equal(f.store.has(PROJECT), false);
-  const view = f.store.write(PROJECT, '# Goal\nShip it\n', AI);
+  const view = f.store.write(PROJECT, CONV, '# Goal\nShip it\n', AI);
   assert.equal(readFileSync(f.file, 'utf8'), '# Goal\nShip it\n');
   assert.deepEqual(view, { content: '# Goal\nShip it\n', hash: sha('# Goal\nShip it\n'), updated_at: view.updated_at, updated_by: 'ai', tainted: false, changed: true });
   assert.equal(typeof view.updated_at, 'number');
   assert.equal(f.store.has(PROJECT), true);
-  assert.deepEqual(f.kv.getJson(`plan:${PROJECT}`), { hash: sha('# Goal\nShip it\n'), updatedAt: view.updated_at, by: 'ai', tainted: false, conversationId: 'c1', runId: 'r1' });
-  assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT)), ['plan.md'], '一時ファイルが残らない');
+  assert.deepEqual(f.kv.getJson(`plan:${PROJECT}:${CONV}`), { hash: sha('# Goal\nShip it\n'), updatedAt: view.updated_at, by: 'ai', tainted: false, conversationId: CONV, runId: 'r1' });
+  assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT, 'conversation-plans')), [`${CONV}.md`], '一時ファイルが残らない');
   assert.deepEqual(f.backups(), [], '初めての書き込みには控えが無い');
 });
 
-test('3-1a 計画書の控え: 書き換える前の版を data/backups/mesh/<id>/ に置き、新しい順に 20 まで（21 個目で古いものが消える）', t => {
+test('3-1a 計画書の控え: 書き換える前の版を data/backups/mesh/<id>/plans/<会話>/ に置き、新しい順に 20 まで（21 個目で古いものが消える）', t => {
   const f = storeFixture(t);
-  for (let i = 0; i <= PLAN_BACKUPS + 1; i++) f.store.write(PROJECT, `v${i}`, { ...AI, runId: `r${i}` });
+  for (let i = 0; i <= PLAN_BACKUPS + 1; i++) f.store.write(PROJECT, CONV, `v${i}`, { ...AI, runId: `r${i}` });
   assert.equal(PLAN_BACKUPS, 20);
   assert.equal(f.backups().length, 20);
   assert.deepEqual(f.backupTexts(), Array.from({ length: 20 }, (_, i) => `v${i + 1}`), 'v0 が消え、v1〜v20 が残る');
@@ -81,40 +86,40 @@ test('3-1a 計画書の書き込み: 書く途中で落ちても前の中身の�
       writeFileSync(path, data);
     },
   });
-  f.store.write(PROJECT, 'first version', AI);
+  f.store.write(PROJECT, CONV, 'first version', AI);
   failing = true;
-  assert.throws(() => f.store.write(PROJECT, 'second version', AI), /disk full/u);
+  assert.throws(() => f.store.write(PROJECT, CONV, 'second version', AI), /disk full/u);
   assert.equal(readFileSync(f.file, 'utf8'), 'first version');
-  assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT)), ['plan.md']);
-  assert.equal(f.store.view(PROJECT).hash, sha('first version'));
+  assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT, 'conversation-plans')), [`${CONV}.md`]);
+  assert.equal(f.store.view(PROJECT, CONV).hash, sha('first version'));
 });
 
 test('3-1a 計画書の中身: 見えない文字は取り除き、鍵らしい文字と上限越えは断ってファイルを変えない', t => {
   const f = storeFixture(t);
-  const view = f.store.write(PROJECT, 'Ste\u200Bp\u202E 1\uFEFF', AI);
+  const view = f.store.write(PROJECT, CONV, 'Ste\u200Bp\u202E 1\uFEFF', AI);
   assert.equal(view.content, 'Step 1');
   assert.equal(readFileSync(f.file, 'utf8'), 'Step 1');
-  assert.throws(() => f.store.write(PROJECT, 'use sk-abcdefghijklmnop as the key', AI), (e: Error & { code?: string }) => e.code === 'secret');
-  assert.throws(() => f.store.write(PROJECT, 'x'.repeat(PLAN_MAX_CHARS + 1), AI), (e: Error & { code?: string }) => e.code === 'too_long');
+  assert.throws(() => f.store.write(PROJECT, CONV, 'use sk-abcdefghijklmnop as the key', AI), (e: Error & { code?: string }) => e.code === 'secret');
+  assert.throws(() => f.store.write(PROJECT, CONV, 'x'.repeat(PLAN_MAX_CHARS + 1), AI), (e: Error & { code?: string }) => e.code === 'too_long');
   assert.equal(PLAN_MAX_CHARS, 64_000);
   assert.equal(readFileSync(f.file, 'utf8'), 'Step 1');
-  f.store.write(PROJECT, 'x'.repeat(PLAN_MAX_CHARS), AI);
+  f.store.write(PROJECT, CONV, 'x'.repeat(PLAN_MAX_CHARS), AI);
 });
 
 test('3-1a 計画書: beat の外（エクスプローラー）で直されたら updated_by は outside。baseHash が今と違えば断る', t => {
   const f = storeFixture(t);
-  const first = f.store.write(PROJECT, 'one', { ...AI, tainted: true });
+  const first = f.store.write(PROJECT, CONV, 'one', { ...AI, tainted: true });
   assert.equal(first.tainted, true);
   writeFileSync(f.file, 'edited by hand');
-  const outside = f.store.view(PROJECT);
+  const outside = f.store.view(PROJECT, CONV);
   assert.equal(outside.updated_by, 'outside');
   assert.equal(outside.hash, sha('edited by hand'));
   assert.equal(outside.tainted, true, '4-K: 前が tainted なら外の書き換えも tainted');
-  assert.throws(() => f.store.write(PROJECT, 'stale', { by: 'owner', tainted: false, conversationId: null, runId: null }, first.hash), (e: Error & { code?: string }) => e.code === 'changed');
+  assert.throws(() => f.store.write(PROJECT, CONV, 'stale', { by: 'owner', tainted: false, conversationId: null, runId: null }, first.hash), (e: Error & { code?: string }) => e.code === 'changed');
   assert.equal(readFileSync(f.file, 'utf8'), 'edited by hand');
-  const owner = f.store.write(PROJECT, 'fresh', { by: 'owner', tainted: false, conversationId: null, runId: null }, outside.hash);
+  const owner = f.store.write(PROJECT, CONV, 'fresh', { by: 'owner', tainted: false, conversationId: null, runId: null }, outside.hash);
   assert.equal(owner.updated_by, 'owner');
-  assert.throws(() => f.store.write(PROJECT, 'x', { by: 'owner', tainted: false, conversationId: null, runId: null }, null), (e: Error & { code?: string }) => e.code === 'changed', 'null は「まだ無い」の意味');
+  assert.throws(() => f.store.write(PROJECT, CONV, 'x', { by: 'owner', tainted: false, conversationId: null, runId: null }, null), (e: Error & { code?: string }) => e.code === 'changed', 'null は「まだ無い」の意味');
 });
 
 test('3-1a 道具の印: planOk の道具は計画モードでも通り、projectOnly の道具は製品の外では断られる（パイプラインの二重の拒否）', async t => {
@@ -130,12 +135,13 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
   mkdirSync(join(paths.projects, PROJECT), { recursive: true });
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
+  chatRow(db);
   const plans = new PlanStore(new KV(db), { projects: paths.projects, backups: paths.backups });
   const registry = new ToolRegistry().register(planWrite).register(fileWrite);
   const policy = buildPolicy(config, paths);
   const events: RunEvent[] = [];
   const base: ToolContext = {
-    runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy,
+    runId: 'r1', conversationId: CONV, kind: 'chat', signal: new AbortController().signal, config, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'plan',
     services: { db, memory: undefined as never, emit: e => events.push(e), plans },
   };
@@ -147,24 +153,24 @@ test('3-1a 道具の印: planOk の道具は計画モードでも通り、projec
   assert.equal(outside.decision, 'deny');
   assert.equal(outside.decidedBy, 'registry');
   assert.match(outside.output.content, /belongs to a product/u);
-  assert.equal(existsSync(join(paths.projects, PROJECT, 'plan.md')), false);
+  assert.equal(existsSync(join(paths.projects, PROJECT, 'conversation-plans', `${CONV}.md`)), false);
 
   const product = { ...base, project: { id: PROJECT } };
   const written = await run('plan_write', { content: '# Plan\n1. Do it' }, product);
   assert.equal(written.decision, 'allow', written.output.content);
-  assert.equal(readFileSync(join(paths.projects, PROJECT, 'plan.md'), 'utf8'), '# Plan\n1. Do it');
-  assert.deepEqual(events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: PROJECT, hash: sha('# Plan\n1. Do it'), by: 'ai' }]);
+  assert.equal(readFileSync(join(paths.projects, PROJECT, 'conversation-plans', `${CONV}.md`), 'utf8'), '# Plan\n1. Do it');
+  assert.deepEqual(events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: PROJECT, conversationId: CONV, hash: sha('# Plan\n1. Do it'), by: 'ai' }]);
   const blocked = await run('file_write', { path: 'x.txt', content: 'x' }, product);
   assert.equal(blocked.decidedBy, 'mode', '計画モードで projectOnly でない書き込みの道具は今までどおり断る');
 
   const tainted = await run('plan_write', { content: 'after web' }, { ...product, runId: 'r2', taint: { tainted: true, sources: ['web'] } });
   assert.equal(tainted.decision, 'allow', 'よそから来た文を読んだ実行の plan_write は止めない');
-  assert.equal(plans.view(PROJECT).tainted, true);
-  assert.equal(new KV(db).getJson<{ runId: string }>(`plan:${PROJECT}`)?.runId, 'r2');
+  assert.equal(plans.view(PROJECT, CONV).tainted, true);
+  assert.equal(new KV(db).getJson<{ runId: string }>(`plan:${PROJECT}:${CONV}`)?.runId, 'r2');
 
   const secret = await run('plan_write', { content: 'token sk-abcdefghijklmnop' }, product);
   assert.equal(secret.output.isError, true);
-  assert.equal(readFileSync(join(paths.projects, PROJECT, 'plan.md'), 'utf8'), 'after web');
+  assert.equal(readFileSync(join(paths.projects, PROJECT, 'conversation-plans', `${CONV}.md`), 'utf8'), 'after web');
 });
 
 test('3-1a 守り: ふつうのファイルの道具とシェルからは plan.md を読めない・書けない（判定役が許すと答えても）', t =>
@@ -263,7 +269,7 @@ test('3-1a 製品の会話を計画モードで始める: 計画書の無い製�
   await s.send(uuid(1), { text: 'more' });
   assert.equal(s.app.conversations.modeOf(uuid(1)), 'plan', '前からある会話はそのまま');
 
-  const put = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
+  const put = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: uuid(1) });
   assert.equal(put.status, 200, JSON.stringify(put.body));
   await s.send(uuid(5), { text: 'next idea', projectId: shop.id });
   assert.equal(s.app.conversations.modeOf(uuid(5)), 'auto', '計画書のある製品の新しい会話は今までどおり');
@@ -272,33 +278,34 @@ test('3-1a 製品の会話を計画モードで始める: 計画書の無い製�
 test('3-1a 計画書の口: GET は無い間は空の形、PUT は baseHash が合えば書けて updated_by owner と plan.changed、合わなければ 409 plan.changed で変わらない', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
+  const CHAT = s.app.conversations.create({ projectId: shop.id }).id;
   assert.equal(shop.has_plan, false);
-  const empty = await s.json(`/api/projects/${shop.id}/plan`, 'GET');
+  const empty = await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET');
   assert.equal(empty.status, 200);
-  assert.deepEqual(empty.body, { plan: { content: null, hash: null, updated_at: null, updated_by: null, tainted: false, writing: false, reviewLocked: false } });
+  assert.deepEqual(empty.body, { plan: { content: null, hash: null, updated_at: null, updated_by: null, tainted: false, writing: false, reviewLocked: false, built_hash: null } });
 
-  const put = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan\nv1', baseHash: null });
+  const put = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Plan\nv1', baseHash: null, conversationId: CHAT });
   assert.equal(put.status, 200);
-  assert.deepEqual(Object.keys(put.body.plan).sort(), ['content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.deepEqual(Object.keys(put.body.plan).sort(), ['built_hash', 'content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
   assert.equal(put.body.plan.updated_by, 'owner');
   assert.equal(put.body.plan.hash, sha('# Plan\nv1'));
-  assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, hash: sha('# Plan\nv1'), by: 'owner' }]);
-  assert.equal(readFileSync(join(s.paths.projects, shop.id, 'plan.md'), 'utf8'), '# Plan\nv1');
+  assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, conversationId: CHAT, hash: sha('# Plan\nv1'), by: 'owner' }]);
+  assert.equal(readFileSync(join(s.paths.projects, shop.id, 'conversation-plans', `${CHAT}.md`), 'utf8'), '# Plan\nv1');
   const listed = await s.json('/api/projects', 'GET');
   assert.equal(listed.body.projects[0].has_plan, true);
 
-  const stale = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'other', baseHash: null });
+  const stale = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'other', baseHash: null, conversationId: CHAT });
   assert.deepEqual([stale.status, stale.body.code], [409, 'plan.changed']);
-  const wrong = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'other', baseHash: sha('nope') });
+  const wrong = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'other', baseHash: sha('nope'), conversationId: CHAT });
   assert.deepEqual([wrong.status, wrong.body.code], [409, 'plan.changed']);
-  assert.equal(readFileSync(join(s.paths.projects, shop.id, 'plan.md'), 'utf8'), '# Plan\nv1');
-  const next = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'v2', baseHash: put.body.plan.hash });
+  assert.equal(readFileSync(join(s.paths.projects, shop.id, 'conversation-plans', `${CHAT}.md`), 'utf8'), '# Plan\nv1');
+  const next = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'v2', baseHash: put.body.plan.hash, conversationId: CHAT });
   assert.equal(next.status, 200);
-  assert.equal((await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan.content, 'v2');
+  assert.equal((await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET')).body.plan.content, 'v2');
 
-  const secret = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'sk-abcdefghijklmnop', baseHash: next.body.plan.hash });
+  const secret = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'sk-abcdefghijklmnop', baseHash: next.body.plan.hash, conversationId: CHAT });
   assert.deepEqual([secret.status, secret.body.code], [400, 'plan.secret']);
-  const long = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'x'.repeat(64_001), baseHash: next.body.plan.hash });
+  const long = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'x'.repeat(64_001), baseHash: next.body.plan.hash, conversationId: CHAT });
   assert.deepEqual([long.status, long.body.code], [400, 'plan.too_long']);
   for (const body of [{ content: 1, baseHash: null }, { content: 'x' }, { content: 'x', baseHash: 3 }]) {
     assert.equal((await s.json(`/api/projects/${shop.id}/plan`, 'PUT', body)).status, 400, JSON.stringify(body));
@@ -308,6 +315,7 @@ test('3-1a 計画書の口: GET は無い間は空の形、PUT は baseHash が�
 test('3-1a 計画書の口: 無い ID・形の合わない ID は 404 でフォルダに触らない。しまった製品は PUT が 400', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
+  const CHAT = s.app.conversations.create({ projectId: shop.id }).id;
   const before = readdirSync(s.paths.projects).sort();
   for (const id of ['aaaaaaaa-0000-4000-8000-999999999999', '..', 'a b', '%2e%2e']) {
     assert.equal((await s.json(`/api/projects/${id}/plan`, 'GET')).status, 404, id);
@@ -315,22 +323,23 @@ test('3-1a 計画書の口: 無い ID・形の合わない ID は 404 でフォ�
   }
   assert.deepEqual(readdirSync(s.paths.projects).sort(), before);
   assert.equal((await s.json(`/api/projects/${shop.id}`, 'PATCH', { archived: true })).status, 200);
-  const archived = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'x', baseHash: null });
+  const archived = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: 'x', baseHash: null, conversationId: CHAT });
   assert.deepEqual([archived.status, archived.body.code], [400, 'project.archived']);
-  assert.equal(existsSync(join(s.paths.projects, shop.id, 'plan.md')), false);
-  assert.equal((await s.json(`/api/projects/${shop.id}/plan`, 'GET')).status, 200, 'しまった製品も読める');
+  assert.equal(existsSync(join(s.paths.projects, shop.id, 'conversation-plans', `${CHAT}.md`)), false);
+  assert.equal((await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET')).status, 200, 'しまった製品も読める');
 });
 
 test('3-1a 計画書の口: AI の plan_write で plan.changed（by ai）、計画モードの会話が動いているあいだ writing が true。外の文を読んだ実行なら tainted', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
+  const CHAT = uuid(1);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const seen: boolean[] = [];
   s.adapter().scripts = [
     call('plan_write', { content: '# Plan by AI' }),
     async function* () {
-      seen.push((await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan.writing);
+      seen.push((await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET')).body.plan.writing);
       await gate;
       yield { type: 'text', delta: 'done' };
       yield { type: 'done', stop: 'end_turn' as StopReason };
@@ -342,14 +351,14 @@ test('3-1a 計画書の口: AI の plan_write で plan.changed（by ai）、計�
   release();
   await settled(s.app, sent.body.runId);
   assert.deepEqual(seen, [true]);
-  const after = (await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan;
-  assert.deepEqual({ ...after, updated_at: 0 }, { content: '# Plan by AI', hash: sha('# Plan by AI'), updated_at: 0, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false });
-  assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, hash: sha('# Plan by AI'), by: 'ai' }]);
+  const after = (await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET')).body.plan;
+  assert.deepEqual({ ...after, updated_at: 0 }, { content: '# Plan by AI', hash: sha('# Plan by AI'), updated_at: 0, updated_by: 'ai', tainted: false, writing: false, reviewLocked: false, built_hash: null });
+  assert.deepEqual(s.events.filter(e => e.type === 'plan.changed'), [{ type: 'plan.changed', projectId: shop.id, conversationId: CHAT, hash: sha('# Plan by AI'), by: 'ai' }]);
 
   const upload = await (await s.api('/api/uploads?name=notes.txt', { method: 'POST', body: 'outside text', headers: { 'Content-Type': 'text/plain' } })).json() as { upload: { id: string } };
   s.adapter().scripts = [call('plan_write', { content: '# Plan after attachment' }), reply('ok')];
   await s.send(uuid(1), { text: 'see attached', attachments: [upload.upload.id] });
-  const tainted = (await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan;
+  const tainted = (await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET')).body.plan;
   assert.equal(tainted.content, '# Plan after attachment');
   assert.equal(tainted.tainted, true);
 });
@@ -364,8 +373,9 @@ function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
   const registry = new ToolRegistry().register(planWrite);
   const policy = buildPolicy(config, paths);
   const events: RunEvent[] = [];
+  chatRow(db);
   const ctxOf = (over: Partial<ToolContext> = {}): ToolContext => ({
-    runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy, project: { id: PROJECT },
+    runId: 'r1', conversationId: CONV, kind: 'chat', signal: new AbortController().signal, config, paths, policy, project: { id: PROJECT },
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
     services: { db, memory: undefined as never, emit: e => events.push(e), plans }, ...over,
   });
@@ -373,28 +383,30 @@ function toolHarness(t: { after: (fn: () => void) => void }, archived = false) {
     registry, approvals: new ApprovalBroker(db), pending: new PendingStore(db, { tools: registry, dataDir: paths.data }), db, emit: () => undefined, permissionMode: () => ctx.permissionMode ?? 'auto',
     conversationTainted: () => false,
   });
-  return { paths, plans, events, ctxOf, run, file: join(paths.projects, PROJECT, 'plan.md') };
+  mkdirSync(join(paths.projects, PROJECT, 'conversation-plans'), { recursive: true });
+  return { paths, plans, events, ctxOf, run, file: join(paths.projects, PROJECT, 'conversation-plans', `${CONV}.md`) };
 }
 
 test('3-1a 審査 S2: この実行が外を読んでいなくても、会話が前の実行で外を読んでいれば plan_write は tainted。会話の印が読めなければ tainted', async t => {
   const h = toolHarness(t);
   await h.run('plan_write', { content: '# One' }, h.ctxOf({ conversationTainted: () => true }));
-  assert.equal(h.plans.view(PROJECT).tainted, true);
+  assert.equal(h.plans.view(PROJECT, CONV).tainted, true);
   await h.run('plan_write', { content: '# Two' }, h.ctxOf({ conversationTainted: () => false }));
-  assert.equal(h.plans.view(PROJECT).tainted, false);
+  assert.equal(h.plans.view(PROJECT, CONV).tainted, false);
   await h.run('plan_write', { content: '# Three' }, h.ctxOf({ conversationTainted: () => { throw new Error('db closed'); } }));
-  assert.equal(h.plans.view(PROJECT).tainted, true);
+  assert.equal(h.plans.view(PROJECT, CONV).tainted, true);
 });
 
 test('3-1a 審査 S2（本物の App）: 1 回目の実行で添付を読み、2 回目の実行で plan_write すると tainted', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
+  const CHAT = uuid(1);
   const upload = await (await s.api('/api/uploads?name=notes.txt', { method: 'POST', body: 'outside text', headers: { 'Content-Type': 'text/plain' } })).json() as { upload: { id: string } };
   s.adapter().scripts = [reply('read it')];
   await s.send(uuid(1), { text: 'see attached', attachments: [upload.upload.id], projectId: shop.id });
   s.adapter().scripts = [call('plan_write', { content: '# Plan in run 2' }), reply('ok')];
   await s.send(uuid(1), { text: 'now write the plan' });
-  const plan = (await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan;
+  const plan = (await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET')).body.plan;
   assert.equal(plan.content, '# Plan in run 2');
   assert.equal(plan.tainted, true);
 });
@@ -402,10 +414,10 @@ test('3-1a 審査 S2（本物の App）: 1 回目の実行で添付を読み、2
 test('3-1a 審査 S3: 1 つの AI の実行が何度書いても控えは 1 つ。持ち主の最後の版は、AI の実行がいくつ続いても控えから消えない', t => {
   const f = storeFixture(t);
   const OWNER = { by: 'owner' as const, tainted: false, conversationId: null, runId: null };
-  f.store.write(PROJECT, 'owner version', OWNER);
-  for (let i = 0; i < 21; i++) f.store.write(PROJECT, `ai ${i}`, AI);
+  f.store.write(PROJECT, CONV, 'owner version', OWNER);
+  for (let i = 0; i < 21; i++) f.store.write(PROJECT, CONV, `ai ${i}`, AI);
   assert.deepEqual(f.backupTexts(), ['owner version'], '同じ実行の書き直しは控えない');
-  for (let i = 0; i < 25; i++) f.store.write(PROJECT, `run ${i}`, { ...AI, runId: `r-${i}` });
+  for (let i = 0; i < 25; i++) f.store.write(PROJECT, CONV, `run ${i}`, { ...AI, runId: `r-${i}` });
   assert.ok(f.backupTexts().includes('owner version'), f.backupTexts().join());
   assert.ok(f.backups().length <= PLAN_BACKUPS + 1, String(f.backups().length));
   assert.ok(f.backupTexts().includes('run 23'));
@@ -422,14 +434,14 @@ test('3-1a 審査 S4: planOk は効果が meta / read で、ファイルも書�
 
 test('3-1a 審査 S5: 制御文字（タブ・改行を除く）と U+2028 / U+2029 も取り除く', t => {
   const f = storeFixture(t);
-  assert.equal(f.store.write(PROJECT, 'a\u0001b\u0007c\u001Bd\u2028e\u2029f\tg\r\nh\u007F', AI).content, 'abcdef\tg\r\nh');
+  assert.equal(f.store.write(PROJECT, CONV, 'a\u0001b\u0007c\u001Bd\u2028e\u2029f\tg\r\nh\u007F', AI).content, 'abcdef\tg\r\nh');
 });
 
 test('3-1a 審査 S7: plan.md がふつうのファイルでない（フォルダ・リンク）なら、読まず書かない', t => {
   const f = storeFixture(t);
-  mkdirSync(f.file);
-  assert.throws(() => f.store.write(PROJECT, 'x', AI), (e: Error & { code?: string }) => e.code === 'not_file');
-  assert.throws(() => f.store.view(PROJECT), (e: Error & { code?: string }) => e.code === 'not_file');
+  mkdirSync(f.file, { recursive: true });
+  assert.throws(() => f.store.write(PROJECT, CONV, 'x', AI), (e: Error & { code?: string }) => e.code === 'not_file');
+  assert.throws(() => f.store.view(PROJECT, CONV), (e: Error & { code?: string }) => e.code === 'not_file');
   assert.equal(f.store.has(PROJECT), true);
 });
 
@@ -442,24 +454,25 @@ test('3-1a 審査 C1: 名前の付け替えが EPERM / EBUSY / EACCES で一時�
       renameSync(from, to);
     },
   });
-  f.store.write(PROJECT, 'first', AI);
+  f.store.write(PROJECT, CONV, 'first', AI);
   assert.equal(readFileSync(f.file, 'utf8'), 'first');
   assert.equal(failures, 2);
   always = true;
-  assert.throws(() => f.store.write(PROJECT, 'second', { ...AI, runId: 'r2' }), /busy/u);
+  assert.throws(() => f.store.write(PROJECT, CONV, 'second', { ...AI, runId: 'r2' }), /busy/u);
   assert.equal(readFileSync(f.file, 'utf8'), 'first');
-  assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT)), ['plan.md']);
+  assert.deepEqual(readdirSync(join(f.paths.projects, PROJECT, 'conversation-plans')), [`${CONV}.md`]);
 });
 
 test('3-1a 審査 C2: writing は実行に効いているモードで決まる（計画モードで始めた実行は、途中で会話を自動承認に戻しても writing）', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
+  const CHAT = uuid(1);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const seen: boolean[] = [];
   s.adapter().scripts = [async function* () {
     s.app.conversations.setChoice(uuid(1), { permissionMode: 'auto' });
-    seen.push((await s.json(`/api/projects/${shop.id}/plan`, 'GET')).body.plan.writing);
+    seen.push((await s.json(`/api/projects/${shop.id}/plan?conversationId=${CHAT}`, 'GET')).body.plan.writing);
     await gate;
     yield { type: 'text', delta: 'done' };
     yield { type: 'done', stop: 'end_turn' as StopReason };
@@ -480,18 +493,19 @@ test('3-1a 審査 C3: 同じ中身の書き直しは控えも plan.changed も�
   assert.equal(existsSync(join(h.paths.backups, 'mesh', PROJECT)), false);
   const s = await setup(t);
   const shop = await s.product('shop');
-  const first = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: null });
-  const again = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: first.body.plan.hash });
+  const conversationId = s.app.conversations.create({ projectId: shop.id }).id;
+  const first = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: null, conversationId });
+  const again = await s.json(`/api/projects/${shop.id}/plan`, 'PUT', { content: '# Same', baseHash: first.body.plan.hash, conversationId });
   assert.equal(again.status, 200);
-  assert.deepEqual(Object.keys(again.body.plan).sort(), ['content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
+  assert.deepEqual(Object.keys(again.body.plan).sort(), ['built_hash', 'content', 'hash', 'reviewLocked', 'tainted', 'updated_at', 'updated_by', 'writing']);
   assert.equal(s.events.filter(e => e.type === 'plan.changed').length, 1, 'PUT も同じ中身なら流さない');
   const f = storeFixture(t);
-  assert.equal(f.store.write(PROJECT, 'x', AI).changed, true);
-  assert.equal(f.store.write(PROJECT, 'x', { ...AI, runId: 'r9' }).changed, false);
+  assert.equal(f.store.write(PROJECT, CONV, 'x', AI).changed, true);
+  assert.equal(f.store.write(PROJECT, CONV, 'x', { ...AI, runId: 'r9' }).changed, false);
   assert.deepEqual(f.backups(), []);
-  f.store.write(PROJECT, 'y', { ...AI, tainted: true });
-  f.store.write(PROJECT, 'y', { ...AI, runId: 'r10' });
-  assert.equal(f.store.view(PROJECT).tainted, true, '同じ中身を外を読んでいない実行が書き直しても、tainted は消えない');
+  f.store.write(PROJECT, CONV, 'y', { ...AI, tainted: true });
+  f.store.write(PROJECT, CONV, 'y', { ...AI, runId: 'r10' });
+  assert.equal(f.store.view(PROJECT, CONV).tainted, true, '同じ中身を外を読んでいない実行が書き直しても、tainted は消えない');
 });
 
 test('3-1a 審査 C4: plan_write / mesh_read は builtinTools の shell_run の後ろに並ぶ', () => {
@@ -513,38 +527,38 @@ test('3-1a 審査: しまった製品の plan_write は、PUT と同じく分か
 test('3-1a 再審査 1: beat の外で書かれた計画書と同じ中身を AI が書いても AI の版にしない。その版は AI の実行が続いても控えに残る。持ち主が同じ中身を保存したら持ち主の版になり plan.changed', async t => {
   const f = storeFixture(t);
   writeFileSync(f.file, 'hand written');
-  const same = f.store.write(PROJECT, 'hand written', AI);
+  const same = f.store.write(PROJECT, CONV, 'hand written', AI);
   assert.equal(same.changed, false);
   assert.equal(same.updated_by, 'outside');
-  assert.equal(f.store.view(PROJECT).updated_by, 'outside');
-  assert.equal(f.kv.getJson(`plan:${PROJECT}`), undefined);
-  for (let i = 0; i < 25; i++) f.store.write(PROJECT, `run ${i}`, { ...AI, runId: `r-${i}` });
+  assert.equal(f.store.view(PROJECT, CONV).updated_by, 'outside');
+  assert.equal(f.kv.getJson(`plan:${PROJECT}:${CONV}`), undefined);
+  for (let i = 0; i < 25; i++) f.store.write(PROJECT, CONV, `run ${i}`, { ...AI, runId: `r-${i}` });
   assert.ok(f.backupTexts().includes('hand written'), f.backups().join());
 
   const h = toolHarness(t);
   writeFileSync(h.file, 'by hand');
   await h.run('plan_write', { content: 'by hand' }, h.ctxOf());
-  assert.equal(h.plans.view(PROJECT).updated_by, 'outside');
+  assert.equal(h.plans.view(PROJECT, CONV).updated_by, 'outside');
   assert.equal(h.events.length, 0);
-  const owner = h.plans.write(PROJECT, 'by hand', { by: 'owner', tainted: false, conversationId: null, runId: null });
+  const owner = h.plans.write(PROJECT, CONV, 'by hand', { by: 'owner', tainted: false, conversationId: null, runId: null });
   assert.equal(owner.changed, true);
-  assert.equal(h.plans.view(PROJECT).updated_by, 'owner');
+  assert.equal(h.plans.view(PROJECT, CONV).updated_by, 'owner');
 });
 
 test('3-1a 再審査 2: 同じ中身を外を読んだ実行が書き直したら、tainted と一緒に runId / conversationId もその実行にし、plan.changed を流す', async t => {
   const h = toolHarness(t);
-  await h.run('plan_write', { content: '# Same' }, h.ctxOf({ runId: 'r3', conversationId: 'c3' }));
-  await h.run('plan_write', { content: '# Same' }, h.ctxOf({ runId: 'r4', conversationId: 'c4', taint: { tainted: true, sources: ['web'] } }));
-  const meta = h.plans.meta(PROJECT)!;
-  assert.deepEqual([meta.tainted, meta.runId, meta.conversationId, meta.by], [true, 'r4', 'c4', 'ai']);
+  await h.run('plan_write', { content: '# Same' }, h.ctxOf({ runId: 'r3' }));
+  await h.run('plan_write', { content: '# Same' }, h.ctxOf({ runId: 'r4', taint: { tainted: true, sources: ['web'] } }));
+  const meta = h.plans.meta(PROJECT, CONV)!;
+  assert.deepEqual([meta.tainted, meta.runId, meta.conversationId, meta.by], [true, 'r4', CONV, 'ai']);
   assert.equal(h.events.filter(e => e.type === 'plan.changed').length, 2);
 });
 
 test('3-1a 再審査 3: 記録の書き手が知らない値でも、控えの名前には ai / owner / outside しか入らない', t => {
   const f = storeFixture(t);
-  f.store.write(PROJECT, 'one', AI);
-  f.kv.setJson(`plan:${PROJECT}`, { ...f.store.meta(PROJECT)!, by: '..\\..\\x' });
-  f.store.write(PROJECT, 'two', { ...AI, runId: 'r2' });
+  f.store.write(PROJECT, CONV, 'one', AI);
+  f.kv.setJson(`plan:${PROJECT}:${CONV}`, { ...f.store.meta(PROJECT, CONV)!, by: '..\\..\\x' });
+  f.store.write(PROJECT, CONV, 'two', { ...AI, runId: 'r2' });
   assert.equal(f.backups().length, 1);
   assert.match(f.backups()[0]!, /^plan-\d+-[0-9a-f]+-ai\.md$/u);
 });

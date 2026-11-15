@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { api, ApiError, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type AcceptanceVersionDetail, type Conversation, type Task } from '../web/src/api.ts';
+import { api, ApiError, type Acceptance, type AcceptanceChange, type AcceptanceItem, type AcceptanceVersion, type AcceptanceVersionDetail, type Task } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  ASK_TEXT, approveDisabled, askAfterSave, askSend, askTarget, buildAction, editAccess, editBase, editHint, loadedAcceptance, noticeAfterReload, problemField, versionItems, watchedBuild, decisionFailure, diffLabel, editOp, editRequest, formProblem, itemForm, previousVersion, proposalRows, proposalStale, removeOp,
+  ASK_TEXT, approveDisabled, askAfterSave, askSend, buildAction, editAccess, editBase, editHint, loadedAcceptance, noticeAfterReload, problemField, versionItems, watchedBuild, decisionFailure, diffLabel, editOp, editRequest, formProblem, itemForm, previousVersion, proposalRows, proposalStale, removeOp,
   revealSection, versionDiff, versionSourceLabel, versionsShown,
 } from '../web/src/ui/acceptance.ts';
 
@@ -15,7 +15,6 @@ const frozen = { version: 1, hash: 'ah', plan_hash: 'p1', created_at: 5, source:
 const acc = (over: Partial<Acceptance> = {}): Acceptance => ({ version: 1, language: 'en', items: [], not_doing: [], draft: false, hash: 'ah', frozen, ...over });
 const draft = (over: Partial<Acceptance> = {}): Acceptance => acc({ version: 0, draft: true, frozen: null, ...over });
 const change = (over: Partial<AcceptanceChange> = {}): AcceptanceChange => ({ id: 'ch1', base_version: 1, ops: [], language: 'en', conversation_id: 'c1', tainted: false, status: 'pending', created_at: 9, ...over });
-const convo = (id: string, over: Partial<Conversation> = {}): Conversation => ({ id, title: null, created_at: 1, last_message_at: 1, project_id: 'P1', permission_mode: 'plan', ...over });
 const version = (n: number, source = 'build', at = n): AcceptanceVersion => ({ project_id: 'P1', version: n, hash: `h${n}`, plan_hash: null, source, build_task_id: null, created_at: at });
 
 test('ui/acceptance 3-3: 変更の案の行は Added / Changed / Removed と、その出どころ', () => {
@@ -190,17 +189,6 @@ test('ui/acceptance 3-3: 「一覧も変えますか」は、固定のあとに�
   assert.equal(askAfterSave(acc()), true);
   assert.equal(askAfterSave(draft()), false);
   assert.equal(askAfterSave(null), false);
-});
-
-test('ui/acceptance 3-3: Ask beat の送り先は、その製品のいちばん新しい計画モードの会話。ほかの製品・ほかのモードは使わない', () => {
-  const list = [
-    convo('old', { last_message_at: 10 }),
-    convo('newest', { last_message_at: 30 }),
-    convo('auto', { last_message_at: 99, permission_mode: 'auto' }),
-    convo('other', { last_message_at: 99, project_id: 'P2' }),
-  ];
-  assert.equal(askTarget(list, 'P1'), 'newest');
-  assert.equal(askTarget(list.filter(c => c.id !== 'newest' && c.id !== 'old'), 'P1'), null);
 });
 
 test('ui/acceptance 3-3: Ask beat は決まった文を generated: true で送る。会話が無ければ新しい製品の会話を計画モードで作る', () => {

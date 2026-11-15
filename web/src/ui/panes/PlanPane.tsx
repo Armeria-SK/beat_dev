@@ -9,7 +9,7 @@ import { useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
 import { Markdown } from '../../Markdown.tsx';
 import {
-  acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, askTarget, beforeBuildShown, buildAction, buildFailure, buildPill, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
+  acceptanceMeta, addPage, approveDisabled, askAfterSave, askSend, beforeBuildShown, buildAction, buildFailure, buildPill, buildRequest, changedAfterBuild, checkLabel, conversationLink, coverageCounts, coverageGroups,
   decisionFailure, diffLabel, editAccess, editBase, editHint, editOp, editRequest, formProblem, itemDetails, itemForm, loadedAcceptance, noticeAfterReload, outsideContent, pagingCursor, previousVersion, problemField, proposalRows, proposalStale, removeOp, revealSection, revealStep,
   showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, stateTone, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type EditBase, type ItemForm, type Paging,
 } from '../acceptance.ts';
@@ -367,7 +367,7 @@ function Group({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Unreferenced({ productId, coverage }: { productId: string; coverage: Coverage }) {
+function Unreferenced({ productId, conversationId, coverage }: { productId: string; conversationId: string | undefined; coverage: Coverage }) {
   const t = useT();
   const now = useNow(60_000);
   const [open, setOpen] = useState(false);
@@ -388,7 +388,7 @@ function Unreferenced({ productId, coverage }: { productId: string; coverage: Co
     const asked = generation.current;
     setBusy(true);
     try {
-      const r = await api.acceptance(productId, cursor);
+      const r = await api.acceptance(productId, conversationId, cursor);
       setPaging(current => addPage(current, asked, r.coverage?.unreferenced ?? []));
       if (asked === generation.current) setFailed(false);
     } catch {
@@ -420,7 +420,7 @@ function Unreferenced({ productId, coverage }: { productId: string; coverage: Co
   );
 }
 
-function BeforeBuild({ productId, acc, coverage, sectionRef }: { productId: string; acc: Acceptance; coverage: Coverage; sectionRef: Ref<HTMLElement> }) {
+function BeforeBuild({ productId, conversationId, acc, coverage, sectionRef }: { productId: string; conversationId: string | undefined; acc: Acceptance; coverage: Coverage; sectionRef: Ref<HTMLElement> }) {
   const t = useT();
   const g = coverageGroups(acc);
   const empty = shownItems(acc).length === 0;
@@ -450,7 +450,7 @@ function BeforeBuild({ productId, acc, coverage, sectionRef }: { productId: stri
       )}
       {g.ai.length > 0 && <Group label={t('ui.acc.source.ai')}>{g.ai.map(i => <li key={i.id} className="bt-row ui-cov__row"><ItemRef item={i} /></li>)}</Group>}
       {g.edited.length > 0 && <Group label={t('ui.acc.source.edit')}>{g.edited.map(i => <li key={i.id} className="bt-row ui-cov__row"><ItemRef item={i} /></li>)}</Group>}
-      {coverage.unreferenced_total > 0 && <Unreferenced productId={productId} coverage={coverage} />}
+      {coverage.unreferenced_total > 0 && <Unreferenced productId={productId} conversationId={conversationId} coverage={coverage} />}
     </section>
   );
 }
@@ -459,13 +459,13 @@ export interface PlanPaneProps { productId: string; conversationId?: string | un
 
 export function PlanPane({ productId, conversationId, revision, taskRevision = '', isGit, reveal = false, onRevealed, waits }: PlanPaneProps) {
   const t = useT();
-  const key = PLAN_EDITS + productId;
+  const key = conversationId === undefined ? null : PLAN_EDITS + conversationId;
   const [doc, setDoc] = useState<PlanDoc | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [reviewFailed, setReviewFailed] = useState<{ detail: string | null } | null>(null);
   const [seen, setSeen] = useState<ReviewSeen>({ hash: null, changed: false });
   const [failure, setFailure] = useState<{ detail: string | null } | null>(null);
-  const [draft, setDraft] = useState<PlanDraft | null>(() => keptDraft(planDrafts.get(productId), hasUnsavedEdits(key)));
+  const [draft, setDraft] = useState<PlanDraft | null>(() => (key && conversationId ? keptDraft(planDrafts.get(conversationId), hasUnsavedEdits(key)) : null));
   const [mode, setMode] = useState<'read' | 'edit'>(draft ? 'edit' : 'read');
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<SaveOutcome | null>(null);
@@ -492,7 +492,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
   const loadAcceptance = useCallback(async () => {
     const ticket = accLoads.current.begin();
     try {
-      const r = await api.acceptance(productId);
+      const r = await api.acceptance(productId, conversationId);
       if (!accLoads.current.isCurrent(ticket)) return;
       const next = loadedAcceptance(r);
       setAcc(next.acc);
@@ -504,7 +504,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
     } catch {
       if (accLoads.current.isCurrent(ticket)) setAccFailed(true);
     }
-  }, [productId]);
+  }, [productId, conversationId]);
   useEffect(() => { void loadAcceptance(); }, [loadAcceptance, revision]);
 
   const [deviations, setDeviations] = useState<Deviations | null>(null);
@@ -532,8 +532,9 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
 
   const load = useCallback(async (): Promise<PlanDoc | null> => {
     const ticket = loads.current.begin();
+    if (conversationId === undefined) return null;
     try {
-      const r = await api.plan(productId);
+      const r = await api.plan(productId, conversationId);
       if (!loads.current.isCurrent(ticket)) return null;
       setDoc(r.plan);
       setFailure(null);
@@ -542,7 +543,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
       if (loads.current.isCurrent(ticket)) setFailure({ detail: apiDetail(error) });
       return null;
     }
-  }, [productId]);
+  }, [productId, conversationId]);
   useEffect(() => { void load(); }, [load, revision]);
 
   useEffect(() => { setDraft(current => followDoc(current, doc)); }, [doc]);
@@ -550,10 +551,12 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
 
   const dirty = planDirty(draft);
   useEffect(() => {
+    if (!key || !conversationId) return;
     setUnsaved(key, dirty);
-    if (dirty && draft) planDrafts.set(productId, draft); else planDrafts.delete(productId);
-  }, [key, dirty, draft, productId]);
+    if (dirty && draft) planDrafts.set(conversationId, draft); else planDrafts.delete(conversationId);
+  }, [key, dirty, draft, conversationId]);
 
+  const planless = conversationId === undefined;
   const state = planState(doc, failure !== null);
   const writing = state === 'writing';
   const action = buildAction({ state, mode, acc, task, isGit, pending: building });
@@ -577,7 +580,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
 
   const build = async () => {
     const hashes = acc ? buildRequest(doc, acc) : null;
-    if (!hashes || building) return;
+    if (!hashes || building || !conversationId) return;
     setBuilding(true);
     setBuildNotice(null);
     let outcome: BuildFailure | null = null;
@@ -597,10 +600,10 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
   };
 
   const save = async () => {
-    if (!draft || !canSave(state, dirty, saving)) return;
+    if (!draft || !canSave(state, dirty, saving) || !conversationId) return;
     setSaving(true);
     try {
-      const r = await api.savePlan(productId, draft.text, draft.base);
+      const r = await api.savePlan(productId, conversationId, draft.text, draft.base);
       setDoc(r.plan);
       setDraft(null);
       setMode('read');
@@ -636,7 +639,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
     setAccNotice(null);
     let out: 'saved' | 'stale' | 'failed' = 'saved';
     try {
-      await api.editAcceptance(productId, editRequest(base, op));
+      await api.editAcceptance(productId, editRequest(base, op), conversationId);
     } catch (error) {
       const failure = decisionFailure(error);
       out = failure.kind;
@@ -662,13 +665,13 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
 
   const review = reviewButton(doc, mode, reviewing, seen.changed);
   const markReviewed = async () => {
-    if (reviewing) return;
+    if (reviewing || !conversationId) return;
     const click = reviewClick(seen, doc?.hash ?? null);
     if (click.send === null) { setSeen(click.seen); return; }
     setReviewing(true);
     setReviewFailed(null);
     try {
-      const r = await api.planReviewed(productId, click.send);
+      const r = await api.planReviewed(productId, conversationId, click.send);
       setSeen({ hash: r.plan.hash, changed: false });
       setDoc(r.plan);
     } catch (error) {
@@ -682,8 +685,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
     setAskBusy(true);
     setAskFailed(null);
     try {
-      const list = await api.conversationsOf(productId);
-      const out = askSend(askTarget(list.conversations, productId), productId, newConversationId);
+      const out = askSend(conversationId ?? null, productId, newConversationId);
       await api.send(out.id, out.text, [], out.choice, out.options);
       setAsking(false);
       location.hash = routeHash({ view: 'chat', id: out.id });
@@ -692,7 +694,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
     } finally { setAskBusy(false); }
   };
 
-  const access = editAccess({ acc, state, mode, pending: building });
+  const access = planless && !acc?.frozen ? 'off' : editAccess({ acc, state, mode, pending: building });
   const editing: Editing | undefined = access !== 'off' && acc
     ? { hint: editHint(acc, change), busy: accBusy, locked: access === 'locked', base: editBase(acc), onEdit: changeItems }
     : undefined;
@@ -701,12 +703,12 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
     <div ref={rootRef} className="ui-plan">
       <div className="bt-pane__bar">
         <Meta doc={doc} writing={writing} />
-        <span className="bt-seg" role="group" aria-label={t('ui.plan.view')}>
+        {!planless && <span className="bt-seg" role="group" aria-label={t('ui.plan.view')}>
           <button type="button" className="bt-seg__opt" aria-pressed={mode === 'read'} onClick={() => { if (!dirty) setDraft(null); setMode('read'); }}>{t('ui.plan.read')}</button>
           <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} disabled={!canEdit(state) && mode !== 'edit'} onClick={edit}>{t('ui.plan.edit')}</button>
-        </span>
+        </span>}
         {mode === 'edit' && <Button variant="primary" small disabled={!canSave(state, dirty, saving)} onClick={() => void save()}>{t('ui.plan.save')}</Button>}
-        {action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
+        {!planless && action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
         {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill {...(pill.tone ? { tone: pill.tone } : {})}>{t(pill.label)}</Pill></span>}
       </div>
       <div role="status" className="ui-plan__live">
@@ -717,15 +719,20 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
       {buildNotice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.buildFailed')} text={buildNotice.detail ?? undefined} />}
       {asking && !askFailed && <div role="status"><Notice title={t('ui.acc.ask.title')} action={{ label: t('ui.acc.ask.ask'), run: () => void ask() }} also={{ label: t('ui.acc.ask.notNow'), run: () => setAsking(false) }} /></div>}
       {asking && askFailed && <Notice tone="fail" title={t('ui.acc.ask.failed')} text={askFailed.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void ask() }} />}
-      {shown && acc && coverage && <BeforeBuild productId={productId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
-      {changedAfterBuild(doc, acc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
+      {shown && acc && coverage && <BeforeBuild productId={productId} conversationId={conversationId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
+      {changedAfterBuild(doc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
       {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}{review !== 'hidden' && <Button small variant="ghost" disabled={review === 'off'} onClick={() => void markReviewed()}>{t(review === 'again' ? 'ui.plan.readNewVersion' : 'ui.plan.markReviewed')}</Button>}</p>}
       {review !== 'hidden' && seen.changed && <p className="bt-meta ui-acc__outside" role="status"><Icon name="alert" />{t('ui.plan.changedReadAgain')}</p>}
       {reviewFailed && <Notice tone="fail" title={t('ui.plan.reviewFailed')} text={reviewFailed.detail ?? undefined} />}
       {notice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} also={{ label: t('ui.plan.discard'), run: discard }} />}
       {draft?.replaces && dirty && notice?.kind !== 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.rebased')} action={{ label: t('ui.plan.discard'), run: discard }} />}
       {notice?.kind === 'failed' && <Notice tone="fail" title={t('ui.plan.saveFailed')} text={notice.detail ?? undefined} />}
-      {mode === 'edit' ? (
+      {planless ? (
+        <div className="bt-empty ui-plan__empty">
+          <h2 className="bt-empty__title">{t('ui.plan.noConversation')}</h2>
+          <p className="bt-meta">{t('ui.plan.emptyText')}</p>
+        </div>
+      ) : mode === 'edit' ? (
         <textarea className="bt-doc bt-doc--edit ui-plan__editor" aria-label={t('ui.plan.editor')} spellCheck={false} value={draft?.text ?? ''}
           onChange={e => setDraft(typed(draft, doc, e.target.value))}
           onKeyDown={e => { if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void save(); } }} />

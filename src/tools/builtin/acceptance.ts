@@ -95,7 +95,7 @@ function unconfirmedText(changed: Partial<Record<string, number>>): string {
 
 export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
   name: 'acceptance_write',
-  description: "Replace this product's draft acceptance list (owner-facing documents language): one checkable result per item, not how to build it. source: owner_words with quote (the owner's exact words; never translate) or ai_added. check: a command that succeeds only when the item holds, whenever possible; else look or read (keep these few; split mixed items). notDoing: what the owner ruled out. Quotes are checked against the conversation.",
+  description: "Replace this conversation's draft acceptance list (owner-facing documents language): one checkable result per item, not how to build it. source: owner_words with quote (the owner's exact words; never translate) or ai_added. check: a command that succeeds only when the item holds, whenever possible; else look or read (keep these few; split mixed items). notDoing: what the owner ruled out. Quotes are checked against the conversation.",
   input: INPUT,
   effect: 'meta',
   allowedIn: ['chat'],
@@ -112,7 +112,7 @@ export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
       const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id));
       const docLanguage = services.projects?.get(ctx.project.id)?.doc_language ?? null;
       const { doc, verified, changed } = buildDraft({ items: input.items.map(entry => ({ result: entry.result, source: claimOf(entry), check: checkOf(entry) })), notDoing: input.notDoing?.map(entry => ({ text: entry.text, source: claimOf(entry) })) }, speech, { language: docLanguage, taintedRuns: tainted ? [ctx.runId] : [] });
-      services.acceptance.writeDraft(ctx.project.id, doc);
+      services.acceptance.writeDraft(ctx.project.id, ctx.conversationId, doc);
       services.emit({ type: 'acceptance.changed', projectId: ctx.project.id, version: 0, draft: true });
       const aiAdded = [...doc.items, ...doc.notDoing].filter(entry => entry.source.kind === 'ai_added').length;
       return { content: toolText(language, 'acceptance.saved', { items: doc.items.length, notDoing: doc.notDoing.length, verified, aiAdded, unconfirmed: unconfirmedText(changed) }) };

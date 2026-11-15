@@ -182,8 +182,8 @@ const PLAN = { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owne
 function servePlan(status: () => Task['status']) {
   let built = false;
   serve((path, method) => {
-    if (path === `/api/projects/${PRODUCT}/plan`) return { plan: PLAN };
-    if (path === `/api/projects/${PRODUCT}/acceptance`) return { acceptance: acceptance(built), coverage: { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 } };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/plan`) return { plan: PLAN };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/acceptance`) return { acceptance: acceptance(built), coverage: { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 } };
     if (path === `/api/projects/${PRODUCT}/build` && method === 'POST') { built = true; return { task: task('ready'), version: 1 }; }
     if (path === '/api/tasks/b1') return { task: task(status()), events: [], runs: [] };
     if (path === `/api/projects/${PRODUCT}/deviations`) return { deviations: { rows: [], unreadable: 0, unusable: false }, flags: { checked: false, reason: 'no_git' } };
@@ -215,15 +215,22 @@ test('ui/PlanPane（DOM）: Build はその会話の id を送る。札は ready
 
 const panesState = { views: ['plan'], shown: [{ view: 'plan', width: 420 }], narrow: false, single: true, room: 1, width: 420, reveal: false, toggle: () => {}, close: () => {}, select: () => {}, split: () => {}, begin: () => {}, drag: () => {}, nudge: () => {}, openPlan: () => {}, openPane: () => {}, revealed: () => {} };
 
-test('ui/Panes（DOM）: Plan の欄は今の会話の id を Build に渡す。新しい会話の画面（scope new）では渡さない', async () => {
-  for (const [scope, body] of [[CHAT, { planHash: 'p1', acceptanceHash: 'ah', conversationId: CHAT }], ['new', { planHash: 'p1', acceptanceHash: 'ah' }]] as const) {
-    servePlan(() => 'ready');
-    await render(createElement(Panes, { panes: panesState, productId: PRODUCT, scope, revision: '0', taskRevision: '0', isGit: true, inert: false, pending: { count: 0 } as never, questions: { count: 0 } as never }));
-    await settle();
-    await click(byText(document.body, 'button', 'Build with this plan'));
-    await settle();
-    assert.deepEqual(sent, [{ path: `/api/projects/${PRODUCT}/build`, body }], scope);
-    await cleanup();
-    sent = [];
-  }
+test('ui/Panes（DOM）: Plan の欄は今の会話の id を Build に渡す。新しい会話の画面（scope new）では計画が空で、Edit と Build を出さない', async () => {
+  servePlan(() => 'ready');
+  await render(createElement(Panes, { panes: panesState, productId: PRODUCT, scope: CHAT, revision: '0', taskRevision: '0', isGit: true, inert: false, pending: { count: 0 } as never, questions: { count: 0 } as never }));
+  await settle();
+  await click(byText(document.body, 'button', 'Build with this plan'));
+  await settle();
+  assert.deepEqual(sent, [{ path: `/api/projects/${PRODUCT}/build`, body: { planHash: 'p1', acceptanceHash: 'ah', conversationId: CHAT } }]);
+  await cleanup();
+  sent = [];
+  servePlan(() => 'ready');
+  await render(createElement(Panes, { panes: panesState, productId: PRODUCT, scope: 'new', revision: '0', taskRevision: '0', isGit: true, inert: false, pending: { count: 0 } as never, questions: { count: 0 } as never }));
+  await settle();
+  const buttons = [...document.body.querySelectorAll('button')].map(b => b.textContent);
+  assert.ok(!buttons.includes('Build with this plan') && !buttons.includes('Edit'), buttons.join());
+  assert.match(document.body.textContent ?? '', /No plan for this conversation yet/u);
+  assert.equal(document.body.querySelector('.ui-plan__doc'), null, '別の会話の計画を出さない');
+  assert.deepEqual(sent, []);
+  await cleanup();
 });

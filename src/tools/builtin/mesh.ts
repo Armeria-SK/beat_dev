@@ -35,7 +35,7 @@ export const meshSearch: ToolDef<{ query: string; file?: string }> = {
   async execute(input, ctx) {
     const mesh = ctx.services?.mesh;
     if (!mesh || !ctx.project) return unavailable(ctx);
-    try { return result(mesh.search(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config)), ctx); } catch (error) { return fail(error, ctx); }
+    try { return result(mesh.search(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config), ctx.conversationId), ctx); } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -50,7 +50,7 @@ export const meshRead: ToolDef<{ file: string; section?: string; offset?: number
   async execute(input, ctx) {
     const mesh = ctx.services?.mesh;
     if (!mesh || !ctx.project) return unavailable(ctx);
-    try { return result(mesh.read(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config)), ctx); } catch (error) { return fail(error, ctx); }
+    try { return result(mesh.read(ctx.project.id, input, meshBudget(ctx.contextAvailable, ctx.outputTokens), languageOf(ctx.config), ctx.conversationId), ctx); } catch (error) { return fail(error, ctx); }
   },
 };
 

@@ -92,8 +92,8 @@ const acceptance: Acceptance = {
 test('ui/PlanPane（DOM）: the pill stays "Queued" and the reason is a meta line under the bar; Running shows no reason', async () => {
   let status: Task['status'] = 'ready';
   serve(path => {
-    if (path === `/api/projects/${PRODUCT}/plan`) return { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false } };
-    if (path === `/api/projects/${PRODUCT}/acceptance`) return { acceptance, coverage: { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 } };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/plan`) return { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false } };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/acceptance`) return { acceptance, coverage: { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 } };
     if (path === '/api/tasks/b1') return { task: task(status), events: [], runs: [] };
     if (path === `/api/projects/${PRODUCT}/deviations`) return { deviations: { rows: [], unreadable: 0, unusable: false }, flags: { checked: false, reason: 'no_git' } };
     return undefined;

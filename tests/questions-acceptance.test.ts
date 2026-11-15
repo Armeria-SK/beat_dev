@@ -46,7 +46,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
       ],
     };
     if (locked) app.acceptance.freeze(made.id, doc, { plan_hash: null, source: 'build', created_at: clock.now }, () => null);
-    else app.acceptance.writeDraft(made.id, doc);
+    else app.acceptance.writeDraft(made.id, app.conversations.create({ projectId: made.id }).id, doc);
     return made;
   };
   const web = createWebServer(app);

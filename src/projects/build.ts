@@ -6,7 +6,7 @@ import { estimateTextTokens } from '../engine/tokens.ts';
 import { PLAN_GIST_LABEL, type Task, type TaskStore } from '../tasks/store.ts';
 import { USER_REQUEST_LIMIT, USER_REQUEST_TOKENS } from '../tools/auto-approve.ts';
 import { docOf, frozenHash, type AcceptanceDoc, type AcceptanceStore, type AcceptanceVersionRow } from './acceptance.ts';
-import { planGist, type PlanStore } from './plan.ts';
+import { PlanError, planGist, type PlanStore } from './plan.ts';
 import { languageTagOf, ProjectError, type ProjectStore } from './store.ts';
 
 export const BUILD_ACTOR = 'build';
@@ -46,22 +46,23 @@ export function unbuilt(d: Pick<BuildDeps, 'acceptance' | 'tasks'>, projectId: s
     .map(entry => entry.id);
 }
 
-export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: string; acceptanceHash: string | null; conversationId?: string | undefined }): { task: Task; version: AcceptanceVersionRow } {
+export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: string; acceptanceHash: string | null; conversationId: string }): { task: Task; version: AcceptanceVersionRow } {
   const project = d.projects.get(projectId);
   if (!project) throw new ProjectError('unknown');
   if (project.archived_at !== null) throw new ProjectError('archived');
-  const plan = d.plans.view(projectId);
+  if (!d.plans.owns(projectId, wanted.conversationId)) throw new PlanError('unknown_conversation');
+  const plan = d.plans.view(projectId, wanted.conversationId);
   if (plan.content === null || plan.hash === null) throw new BuildError('no_plan');
   if (d.tasks.hasOpenBuild(projectId)) throw new BuildError('running');
   const fixed = d.acceptance.latest(projectId);
-  const draft = d.acceptance.read(projectId);
+  const draft = d.acceptance.read(projectId, wanted.conversationId);
   const only = fixed && draft ? unbuilt(d, projectId, draft) : undefined;
   if (fixed && !only?.length) throw new BuildError('frozen', { version: fixed.version });
   if (plan.hash !== wanted.planHash || (draft ? frozenHash(draft) : null) !== wanted.acceptanceHash) throw new BuildError('changed');
 
   const language = languageTagOf(project.doc_language) ?? null;
   const doc: AcceptanceDoc = only ? draft! : { schema: 1, language: draft?.language ?? language, items: draft?.items ?? [], notDoing: draft?.notDoing ?? [], taintedRuns: draft?.taintedRuns ?? [], version: 1 };
-  const meta = d.plans.meta(projectId);
+  const meta = d.plans.meta(projectId, wanted.conversationId);
   const runs = new Set<string>();
   if (plan.tainted && meta?.runId) runs.add(meta.runId);
   for (const run of [...(doc.taintedRuns ?? []), ...(fixed ? docOf(fixed.content)?.taintedRuns ?? [] : [])]) runs.add(run);
@@ -77,8 +78,9 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
     task = d.tasks.create({
       title, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: !untrusted, ownerPlan: gist,
       acceptanceItems: only ?? doc.items.filter(entry => entry.removedIn === null).map(entry => entry.id),
-      createdInConversation: wanted.conversationId ?? (plan.updated_by === 'ai' ? meta?.conversationId ?? undefined : undefined),
+      createdInConversation: wanted.conversationId,
     });
+    d.plans.markBuilt(projectId, wanted.conversationId, plan.hash!);
     if (untrusted) {
       d.tasks.markUntrusted(task.id, BUILD_ACTOR, taskText(d.language(), 'event.build_untrusted'));
       for (const run of marked) d.tasks.event(task.id, 'context', BUILD_ACTOR, null, run);

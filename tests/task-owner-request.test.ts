@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { PLAN_GIST_LABEL } from '../src/tasks/store.ts';
-import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid, planChat } from './app-setup.ts';
 import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 const LATER = '2099-01-01T00:00:00Z';
@@ -42,9 +42,9 @@ async function setup(t: Parameters<typeof startApp>[0]) {
     return made.body.project as { id: string; name: string };
   };
   const build = async (id: string) => {
-    const plan = (await s.json(`/api/projects/${id}/plan`, 'GET')).body.plan as { hash: string };
+    const plan = (await s.json(`/api/projects/${id}/plan?conversationId=${planChat(s.app, id)}`, 'GET')).body.plan as { hash: string };
     const list = (await s.json(`/api/projects/${id}/acceptance`, 'GET')).body;
-    return s.json(`/api/projects/${id}/build`, 'POST', { planHash: plan.hash, acceptanceHash: list.acceptance.hash });
+    return s.json(`/api/projects/${id}/build`, 'POST', { planHash: plan.hash, acceptanceHash: list.acceptance.hash, conversationId: planChat(s.app, id) });
   };
   return { ...s, taintedRun, ownerTask, ownerRequest, product, build };
 }
@@ -94,7 +94,7 @@ test('4-J 確かめ: store から直に作ったタスク（好奇心・AI の�
 test('4-J 確かめ: Build のタスクの owner_request は決まった文で、外を読んだ実行のメモのあとも頼みが残る', async t => {
   const s = await setup(t);
   const product = await s.product('owner-build');
-  assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'PUT', { content: '# Plan', baseHash: null })).status, 200);
+  assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, product.id) })).status, 200);
   const built = await s.build(product.id);
   assert.equal(built.status, 201, JSON.stringify(built.body));
   const taskId = built.body.task.id as string;
@@ -108,10 +108,10 @@ test('4-J 確かめ: Build のタスクの owner_request は決まった文で�
 test('4-J 確かめ: 汚れた計画書の Build は owner_request を持たず、頼みは今までどおり空', async t => {
   const s = await setup(t);
   const product = await s.product('tainted-build');
-  assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'PUT', { content: '# Plan', baseHash: null })).status, 200);
-  const meta = s.app.plans.meta(product.id)!;
-  s.app.kv.set(`plan:${product.id}`, JSON.stringify({ ...meta, tainted: true }));
-  assert.equal(s.app.plans.view(product.id).tainted, true, '前提: 計画書に外を読んだ印');
+  assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, product.id) })).status, 200);
+  const meta = s.app.plans.meta(product.id, planChat(s.app, product.id))!;
+  s.app.kv.set(`plan:${product.id}:${planChat(s.app, product.id)}`, JSON.stringify({ ...meta, tainted: true }));
+  assert.equal(s.app.plans.view(product.id, planChat(s.app, product.id)).tainted, true, '前提: 計画書に外を読んだ印');
   const built = await s.build(product.id);
   assert.equal(built.status, 201, JSON.stringify(built.body));
   const taskId = built.body.task.id as string;

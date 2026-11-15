@@ -24,7 +24,7 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
 import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
-import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid, planFile } from './app-setup.ts';
 import { reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 import { assertProjectFileGuarded } from './helpers/project-file-guard.ts';
 
@@ -32,6 +32,7 @@ type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
 const PROJECT = 'aaaaaaaa-0000-4000-8000-0000000000aa';
 const OTHER = 'bbbbbbbb-0000-4000-8000-0000000000bb';
+const CONV = 'cccccccc-0000-4000-8000-0000000000c1';
 
 const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
@@ -239,12 +240,13 @@ function toolHarness(t: { after: (fn: () => void) => void }, options: { archived
   const config = parseConfig(testConfig());
   const db = openDatabase(':memory:', MIGRATIONS);
   const conversations = new Conversations(db);
+  conversations.create({ id: CONV, projectId: PROJECT });
   const acceptance = new AcceptanceStore(db, paths.projects, { archived: () => options.archived === true });
   const registry = new ToolRegistry().register(acceptanceWrite);
   const policy = buildPolicy(config, paths);
   const events: RunEvent[] = [];
   const ctxOf = (over: Partial<ToolContext> = {}): ToolContext => ({
-    runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy, project: { id: PROJECT },
+    runId: 'r1', conversationId: CONV, kind: 'chat', signal: new AbortController().signal, config, paths, policy, project: { id: PROJECT },
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
     services: { db, memory: undefined as never, emit: e => events.push(e), acceptance }, ...over,
   });
@@ -256,7 +258,7 @@ function toolHarness(t: { after: (fn: () => void) => void }, options: { archived
     if (!conversations.get(conversationId)) conversations.create({ id: conversationId, projectId: PROJECT });
     return conversations.append(conversationId, { role, content } as ChatMessage).id;
   };
-  return { db, paths, acceptance, events, ctxOf, run, say, file: join(paths.projects, PROJECT, 'acceptance.json') };
+  return { db, paths, acceptance, events, ctxOf, run, say, file: join(paths.projects, PROJECT, 'conversation-plans', `${CONV}.acceptance.json`), product: join(paths.projects, PROJECT, 'acceptance.json') };
 }
 
 const flat = (source: Record<string, unknown>) => { const { kind, ...rest } = source; return { source: kind, ...rest }; };
@@ -277,7 +279,7 @@ function freeze(db: DatabaseSync, file: string, doc: AcceptanceDoc, version = 1)
 
 test('3-1b acceptance_write: コードが出どころを付け替えて番号を振り、acceptance.json を丸ごと置き換え、acceptance.changed を流し、確かめた数と付け替えた数を返す', async t => {
   const h = toolHarness(t);
-  const said = h.say('c1', 'user', 'Uploads must resume after a restart. Do not add user accounts for now');
+  const said = h.say(CONV, 'user', 'Uploads must resume after a restart. Do not add user accounts for now');
   const out = await h.run('acceptance_write', {
     items: [
       item('Uploads resume after a restart', { kind: 'owner_words', quote: 'uploads must resume after a restart' }),
@@ -294,15 +296,16 @@ test('3-1b acceptance_write: コードが出どころを付け替えて番号を
   assert.deepEqual(doc, {
     schema: 1, version: 0, language: null,
     items: [
-      { id: 'A-1', result: 'Uploads resume after a restart', source: { kind: 'owner_words', quote: 'Uploads must resume after a restart', messageId: said, conversationId: 'c1', context: 'Uploads must resume after a restart.' }, check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
+      { id: 'A-1', result: 'Uploads resume after a restart', source: { kind: 'owner_words', quote: 'Uploads must resume after a restart', messageId: said, conversationId: CONV, context: 'Uploads must resume after a restart.' }, check: { kind: 'command', command: 'npm test' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
       { id: 'A-2', result: 'Files are listed newest first', source: { kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: 'files must be sorted by date' }, check: { kind: 'look' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
       { id: 'A-3', result: 'The page loads under a second', source: { kind: 'ai_added' }, check: { kind: 'read' }, state: 'open', evidence: [], changedIn: null, removedIn: null },
     ],
-    notDoing: [{ id: 'N-1', text: 'User accounts', source: { kind: 'owner_words', quote: 'Do not add user accounts', messageId: said, conversationId: 'c1', context: 'Do not add user accounts for now' } }],
+    notDoing: [{ id: 'N-1', text: 'User accounts', source: { kind: 'owner_words', quote: 'Do not add user accounts', messageId: said, conversationId: CONV, context: 'Do not add user accounts for now' } }],
     taintedRuns: [],
   });
   assert.deepEqual(h.events.filter(e => e.type === 'acceptance.changed'), [{ type: 'acceptance.changed', projectId: PROJECT, version: 0, draft: true }]);
-  assert.deepEqual(readdirSync(join(h.paths.projects, PROJECT)), ['acceptance.json'], '一時ファイルが残らない');
+  assert.deepEqual(readdirSync(join(h.paths.projects, PROJECT, 'conversation-plans')), [`${CONV}.acceptance.json`], '一時ファイルが残らない');
+  assert.equal(existsSync(h.product), false, '版 0 の下書きは製品のファイルにしない');
 
   await h.run('acceptance_write', { items: [item('Only one now')] }, h.ctxOf());
   const again = JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc;
@@ -361,8 +364,8 @@ test('3-1b acceptance_write: 固定のあと（version >= 1）は断られ、フ
   const h = toolHarness(t);
   await h.run('acceptance_write', { items: [item('First')] }, h.ctxOf());
   const draft = JSON.parse(readFileSync(h.file, 'utf8')) as AcceptanceDoc;
-  freeze(h.db, h.file, draft);
-  const before = readFileSync(h.file, 'utf8');
+  freeze(h.db, h.product, draft);
+  const before = readFileSync(h.product, 'utf8');
   const out = await h.run('acceptance_write', { items: [item('Second')] }, h.ctxOf());
   assert.equal(out.output.isError, true);
   assert.equal(out.decidedBy, 'registry', '固定のあとはパイプラインが断る');
@@ -371,7 +374,7 @@ test('3-1b acceptance_write: 固定のあと（version >= 1）は断られ、フ
   const direct = await acceptanceWrite.execute({ items: [item('Second')] } as never, h.ctxOf());
   assert.equal(direct.isError, true, '道具の中でも断る（二重）');
   assert.match(direct.content, /fixed \(version 1\)/u);
-  assert.equal(readFileSync(h.file, 'utf8'), before);
+  assert.equal(readFileSync(h.product, 'utf8'), before);
 
   const archived = toolHarness(t, { archived: true });
   const refused = await archived.run('acceptance_write', { items: [item('First')] }, archived.ctxOf());
@@ -398,6 +401,7 @@ function storeFixture(t: { after: (fn: () => void) => void }, io: ConstructorPar
   const dir = join(paths.projects, PROJECT);
   mkdirSync(dir, { recursive: true });
   const db = openDatabase(':memory:', MIGRATIONS);
+  db.prepare("INSERT INTO conversations (id, kind, created_at, last_message_at, project_id) VALUES (?, 'chat', 0, 0, ?)").run(CONV, PROJECT);
   const store = new AcceptanceStore(db, paths.projects, io);
   const doc = (results: string[], version = 0): AcceptanceDoc => ({
     schema: 1, version, language: 'ja',
@@ -434,12 +438,12 @@ test('3-1b frozenHash と verifyFrozen: 固定の部分だけにハッシュを�
 test('3-1b ファイルと DB の順: 一時ファイルの書き込みに失敗すると前のまま。DB の版よりファイルが遅れていれば、read は DB の中身を返し（item_states が NULL の版は全部 open。ファイルの state は重ねない）、ファイルは書かない。書き戻しは書く前と起動のとき', t => {
   let failing = false;
   const f = storeFixture(t, { writeFileSync: (path, data) => { if (failing) { writeFileSync(path, data.slice(0, 5)); throw new Error('disk full'); } writeFileSync(path, data); } });
-  f.store.writeDraft(PROJECT, f.doc(['one']));
+  f.store.writeDraft(PROJECT, CONV, f.doc(['one']));
   failing = true;
-  assert.throws(() => f.store.writeDraft(PROJECT, f.doc(['two'])), /disk full/u);
+  assert.throws(() => f.store.writeDraft(PROJECT, CONV, f.doc(['two'])), /disk full/u);
   failing = false;
-  assert.deepEqual(f.store.read(PROJECT)?.items.map(i => i.result), ['one']);
-  assert.deepEqual(readdirSync(f.dir), ['acceptance.json']);
+  assert.deepEqual(f.store.read(PROJECT, CONV)?.items.map(i => i.result), ['one']);
+  assert.deepEqual(readdirSync(join(f.dir, 'conversation-plans')), [`${CONV}.acceptance.json`]);
 
   const draft = f.doc(['one', 'two']);
   draft.items[0]!.state = 'met';
@@ -452,7 +456,7 @@ test('3-1b ファイルと DB の順: 一時ファイルの書き込みに失敗
   assert.equal((JSON.parse(readFileSync(f.file, 'utf8')) as AcceptanceDoc).version, 0, '読むだけではファイルを書かない');
   assert.equal(f.store.verifyFrozen(PROJECT), 'mismatch', 'ファイルは遅れたまま');
 
-  assert.throws(() => f.store.writeDraft(PROJECT, f.doc(['three'])), (e: Error & { code?: string }) => e.code === 'frozen');
+  assert.throws(() => f.store.writeDraft(PROJECT, CONV, f.doc(['three'])), (e: Error & { code?: string }) => e.code === 'frozen');
   const repaired = JSON.parse(readFileSync(f.file, 'utf8')) as AcceptanceDoc;
   assert.equal(repaired.version, 1, '書く前に DB の中身から書き戻す');
   assert.deepEqual(repaired.items.map(i => [i.result, i.state]), [['one', 'open'], ['two', 'open']]);
@@ -521,6 +525,7 @@ test('3-1b 道具の一覧（本物の App）: acceptance_write は製品の会�
   assert.ok(child.length > 0 && !child.includes('acceptance_write'), child.join());
   assert.match(s.adapter().calls.at(-2)!.messages.filter(m => m.role === 'tool').at(-1)!.content, /cannot be used|not allowed|not available/iu, '子の担当が名前で呼んでも断られる');
   assert.equal(existsSync(join(s.paths.projects, shop.id, 'acceptance.json')), false);
+  assert.equal(existsSync(join(s.paths.projects, shop.id, 'conversation-plans', `${uuid(6)}.acceptance.json`)), false);
 
   const made = await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
   assert.equal(made.status, 201);
@@ -541,14 +546,15 @@ test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_w
   s.adapter().scripts = [call('acceptance_write', { items: [item('Uploads resume after a restart', { kind: 'owner_words', quote: 'uploads must resume after a restart' })], notDoing: [nd('Accounts')] }), reply('ok')];
   await s.send(uuid(1), { text: 'Uploads must resume after a restart', projectId: shop.id });
   assert.match(s.lastTool(), /1 confirmed in the conversation/u);
-  const got = (await s.json(`/api/projects/${shop.id}/acceptance`, 'GET')).body.acceptance;
+  assert.equal((await s.json(`/api/projects/${shop.id}/acceptance`, 'GET')).body.acceptance.items.length, 0, '会話なしでは下書きを見せない');
+  const got = (await s.json(`/api/projects/${shop.id}/acceptance?conversationId=${uuid(1)}`, 'GET')).body.acceptance;
   assert.equal(got.draft, true);
   assert.equal(got.version, 0);
   assert.equal(got.items[0].source.kind, 'owner_words');
   assert.equal(got.items[0].source.conversationId, uuid(1));
   assert.deepEqual(got.not_doing.map((n: { id: string }) => n.id), ['N-1']);
+  const doc = JSON.parse(readFileSync(join(s.paths.projects, shop.id, 'conversation-plans', `${uuid(1)}.acceptance.json`), 'utf8')) as AcceptanceDoc;
   const file = join(s.paths.projects, shop.id, 'acceptance.json');
-  const doc = JSON.parse(readFileSync(file, 'utf8')) as AcceptanceDoc;
   assert.equal(got.hash, frozenHash(doc));
   assert.deepEqual(s.events.filter(e => e.type === 'acceptance.changed'), [{ type: 'acceptance.changed', projectId: shop.id, version: 0, draft: true }]);
 
@@ -561,7 +567,7 @@ test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_w
   assert.deepEqual(fixed.frozen, { version: 1, hash: frozenHash(v1), plan_hash: 'ph', created_at: 77, source: 'build', build_task_id: 'task-1' });
 });
 
-test('3-1b 一覧の口: よそから来た文を読んだ実行が書いたら tainted: true、あとできれいな会話が書き直しても true のまま。言語は製品のものを使う', async t => {
+test('3-1b 一覧の口: よそから来た文を読んだ実行が書いたら tainted: true、別の会話の下書きは別のもので、その印を引き継がない。言語は製品のものを使う', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   await s.json(`/api/projects/${shop.id}`, 'PATCH', { docLanguage: 'ja' });
@@ -569,13 +575,15 @@ test('3-1b 一覧の口: よそから来た文を読んだ実行が書いたら 
   await s.send(uuid(1), { text: 'hi', projectId: shop.id });
   s.app.conversations.markTainted(uuid(1));
   await s.send(uuid(1), { text: 'write it' });
-  const dirty = (await s.json(`/api/projects/${shop.id}/acceptance`, 'GET')).body.acceptance;
+  const dirty = (await s.json(`/api/projects/${shop.id}/acceptance?conversationId=${uuid(1)}`, 'GET')).body.acceptance;
   assert.equal(dirty.tainted, true);
   assert.equal(dirty.language, 'ja');
   await s.send(uuid(2), { text: 'rewrite it', projectId: shop.id });
-  const after = (await s.json(`/api/projects/${shop.id}/acceptance`, 'GET')).body.acceptance;
-  assert.deepEqual(after.items.map((i: { result: string }) => i.result), ['Second']);
-  assert.equal(after.tainted, true, 'きれいな書き直しでは消えない');
+  const other = (await s.json(`/api/projects/${shop.id}/acceptance?conversationId=${uuid(2)}`, 'GET')).body.acceptance;
+  assert.deepEqual(other.items.map((i: { result: string }) => i.result), ['Second']);
+  assert.equal(other.tainted, false, '別の会話の下書きは別のもの');
+  const still = (await s.json(`/api/projects/${shop.id}/acceptance?conversationId=${uuid(1)}`, 'GET')).body.acceptance;
+  assert.deepEqual([still.items.map((i: { result: string }) => i.result), still.tainted], [['First'], true]);
 });
 
 test('3-1b 言語: plan_write が初めて ja を渡すと製品に控えて project.changed を流す。選んでいなければ 2 回目の en にすぐ従う。持ち主が選んだ（pinned）製品では変わらない。読めない印は控えず結果に 1 行。外を読んだ実行の印は控えない', async t => {
@@ -603,7 +611,7 @@ test('3-1b 言語: plan_write が初めて ja を渡すと製品に控えて pro
   await s.send(uuid(2), { text: 'plan', projectId: cafe.id });
   assert.equal(s.app.projects.get(cafe.id)?.doc_language, null);
   assert.match(s.lastTool(), /"japanese" is not a language tag/u);
-  assert.equal(readFileSync(join(s.paths.projects, cafe.id, 'plan.md'), 'utf8'), '# Plan', '計画書は書ける');
+  assert.equal(readFileSync(planFile(s.app, cafe.id), 'utf8'), '# Plan', '計画書は書ける');
 
   const pinned = await s.json(`/api/projects/${cafe.id}`, 'PATCH', { docLanguage: 'zh-Hant' });
   assert.equal(pinned.status, 200);
@@ -630,7 +638,7 @@ test('3-1b 言語: plan_write が初めて ja を渡すと製品に控えて pro
   await s.send(uuid(3), { text: 'hi', projectId: dirty.id });
   s.app.conversations.markTainted(uuid(3));
   await s.send(uuid(3), { text: 'plan' });
-  assert.equal(readFileSync(join(s.paths.projects, dirty.id, 'plan.md'), 'utf8'), '# Plan');
+  assert.equal(readFileSync(planFile(s.app, dirty.id), 'utf8'), '# Plan');
   assert.equal(s.app.projects.get(dirty.id)?.doc_language, null, '外を読んだ実行の印では決めない');
   await s.json(`/api/projects/${dirty.id}`, 'PATCH', { docLanguage: 'en' });
   const reset = await s.json(`/api/projects/${dirty.id}`, 'PATCH', { docLanguage: null });

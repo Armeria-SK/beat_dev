@@ -92,11 +92,11 @@ test('ui/live-state: project.changed は製品の一覧を読み直す（しま�
 });
 
 test('ui/live-state: plan.changed はその製品の計画書の読み直しの数を進め、製品の一覧（has_plan）を読み直す（beat 3-1a-u）', () => {
-  const r = reduce(EMPTY, ev({ type: 'plan.changed', projectId: 'p1aaaa', hash: 'h2', by: 'ai' }));
+  const r = reduce(EMPTY, ev({ type: 'plan.changed', projectId: 'p1aaaa', conversationId: 'c1', hash: 'h2', by: 'ai' }));
   assert.equal(r.state.planRevisions.get('p1aaaa'), 1);
   assert.equal(r.state.planRevisions.get('p2bbbb'), undefined);
   assert.deepEqual(refreshes(r.effects), ['projects']);
-  const again = reduce(r.state, ev({ type: 'plan.changed', projectId: 'p1aaaa', hash: 'h3', by: 'owner' }));
+  const again = reduce(r.state, ev({ type: 'plan.changed', projectId: 'p1aaaa', conversationId: 'c2', hash: 'h3', by: 'owner' }));
   assert.equal(again.state.planRevisions.get('p1aaaa'), 2);
 });
 

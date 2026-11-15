@@ -80,3 +80,15 @@ export async function waitFor(check: () => boolean, label = 'condition', ms = 30
     await new Promise(r => setTimeout(r, 5));
   }
 }
+
+export function planChat(app: App, projectId: string): string {
+  const chats = app.db.prepare("SELECT id FROM conversations WHERE project_id = ? AND kind = 'chat' AND parent_run_id IS NULL ORDER BY last_message_at DESC, rowid DESC").all(projectId) as Array<{ id: string }>;
+  const planned = chats.find(row => app.plans.read(projectId, row.id) !== undefined);
+  return planned?.id ?? chats[0]?.id ?? app.conversations.create({ projectId, ...(app.conversations.get(uuid(1)) ? {} : { id: uuid(1) }) }).id;
+}
+
+export function planFile(app: App, projectId: string): string {
+  const dir = join(app.paths.projects, projectId, 'conversation-plans');
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${planChat(app, projectId)}.md`);
+}

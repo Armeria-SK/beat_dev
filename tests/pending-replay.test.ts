@@ -287,9 +287,12 @@ test('自分で決めたタスク（self）から積んだ task_create は、承
 test('外を読んだ会話から積んだ plan_write は、承認しても「外を読んだ」印のまま', async t => {
   const s = setup(t, { conversationTainted: true });
   const p = product(s);
-  const row = await s.park({ tool: 'plan_write', input: { content: '# Plan\n- step' }, projectId: p.id, cwd: p.root, kind: 'policy' });
+  const chat = 'aaaaaaaa-0000-4000-8000-0000000000c1';
+  s.db.prepare("INSERT INTO conversations (id, kind, created_at, last_message_at, project_id) VALUES (?, 'chat', 0, 0, ?)").run(chat, p.id);
+  s.live.add(chat);
+  const row = await s.park({ tool: 'plan_write', input: { content: '# Plan\n- step' }, projectId: p.id, cwd: p.root, kind: 'policy', conversationId: chat });
   assert.equal((await s.approve(row.id)).status, 'ran', s.store.view(row.id)!.output_preview ?? '');
-  assert.equal(s.plans.view(p.id).tainted, true);
+  assert.equal(s.plans.view(p.id, chat).tainted, true);
 });
 
 test('通信した・持ち主が通した「外とやり取りする」確かめの行は fetched を返し、行にも残す', async t => {

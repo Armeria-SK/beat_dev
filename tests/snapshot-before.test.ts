@@ -14,7 +14,7 @@ import { needsSnapshot, SNAPSHOT_EVENT, SNAPSHOT_REF, snapshotBeforeBuild, snaps
 import { OWNER_FIX } from '../src/tasks/store.ts';
 import { isInside } from '../src/tools/hooks/scope.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
-import { fakeModel, startApp, waitFor } from './app-setup.ts';
+import { fakeModel, startApp, waitFor, planChat } from './app-setup.ts';
 import { reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -475,10 +475,10 @@ async function buildRig(t: Parameters<typeof startApp>[0]) {
     const made = await s.json('/api/projects', 'POST', { root: dir });
     assert.equal(made.status, 201, JSON.stringify(made.body));
     const id = made.body.project.id as string;
-    await s.json(`/api/projects/${id}/plan`, 'PUT', { content: '# Plan', baseHash: null });
-    const plan = (await s.json(`/api/projects/${id}/plan`, 'GET')).body.plan.hash;
+    await s.json(`/api/projects/${id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, id) });
+    const plan = (await s.json(`/api/projects/${id}/plan?conversationId=${planChat(s.app, id)}`, 'GET')).body.plan.hash;
     const acceptance = (await s.json(`/api/projects/${id}/acceptance`, 'GET')).body.acceptance.hash;
-    const built = await s.json(`/api/projects/${id}/build`, 'POST', { planHash: plan, acceptanceHash: acceptance });
+    const built = await s.json(`/api/projects/${id}/build`, 'POST', { planHash: plan, acceptanceHash: acceptance, conversationId: planChat(s.app, id) });
     assert.equal(built.status, 201, JSON.stringify(built.body));
     return { id, dir, task: built.body.task.id as string };
   };

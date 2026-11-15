@@ -5,8 +5,10 @@ import { createElement, type ComponentType } from 'react';
 import type { Acceptance, Conversation, Project } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
 import { en } from '../web/src/i18n/en.ts';
+import { PLAN_EDITS, planDrafts, planStays } from '../web/src/ui/plan.ts';
+import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS } from '../web/src/ui/unsaved.ts';
 
-interface PlanProps { productId: string; revision: string; isGit: boolean }
+interface PlanProps { productId: string; conversationId?: string; revision: string; isGit: boolean }
 interface HomeProps { id: string; project: Project | undefined; conversations: Conversation[]; drafts: never[]; checklists: ReadonlyMap<string, never[]>; worker: null; revision: number }
 interface ArchivedProps { revision: number; projects: readonly Project[]; projectsLoaded: boolean }
 
@@ -46,13 +48,13 @@ test('ui/PlanPane（DOM）: Build の知らせ（changed・frozen）は、前か
   const acceptance: Acceptance = { version: 1, language: 'en', items: [], not_doing: [], draft: false, hash: 'a1', frozen: null } as unknown as Acceptance;
   const refusals = ['build.changed', 'build.frozen'];
   serve((path, method) => {
-    if (path === `/api/projects/${PRODUCT}/plan`) return { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false } };
-    if (path === `/api/projects/${PRODUCT}/acceptance`) return { acceptance };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/plan`) return { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false } };
+    if (path.split('?')[0] === `/api/projects/${PRODUCT}/acceptance`) return { acceptance };
     if (path === `/api/projects/${PRODUCT}/acceptance/versions`) return { versions: [] };
     if (path === `/api/projects/${PRODUCT}/build` && method === 'POST') return refuse(409, { error: 'refused', code: refusals.shift() });
     return undefined;
   });
-  const { container } = await render(createElement(PlanPane, { productId: PRODUCT, revision: '0', isGit: true }));
+  const { container } = await render(createElement(PlanPane, { productId: PRODUCT, conversationId: 'aaaaaaaa-0000-4000-8000-000000000001', revision: '0', isGit: true }));
   await settle();
   await settle();
   const live = container.querySelector('[role="status"].ui-plan__live');
@@ -69,6 +71,47 @@ test('ui/PlanPane（DOM）: Build の知らせ（changed・frozen）は、前か
   await settle();
   assert.ok(container.querySelector('[role="status"].ui-plan__live') === live, '2 つ目の知らせも同じ入れ物');
   assert.match(live.querySelector('.bt-notice')?.textContent ?? '', new RegExp(`^${en['ui.plan.buildFrozen']}`, 'u'));
+});
+
+test('ui/PlanPane（DOM, R2）: 会話 A の書きかけは A のもの。B へ移ると「離れますか」の対象になり、B には A の書きかけが出ず、A に戻ると書きかけが戻る', async () => {
+  const A = 'aaaaaaaa-0000-4000-8000-00000000000a';
+  const B = 'bbbbbbbb-0000-4000-8000-00000000000b';
+  const acceptance = { version: 0, language: 'en', items: [], not_doing: [], draft: true, hash: 'a0', frozen: null } as unknown as Acceptance;
+  const planOf: Record<string, string> = { [A]: '# Plan of A', [B]: '# Plan of B' };
+  serve(path => {
+    const [route, query] = path.split('?');
+    if (route === `/api/projects/${PRODUCT}/plan`) {
+      const id = new URLSearchParams(query).get('conversationId') ?? '';
+      return { plan: { content: planOf[id], hash: `h-${id}`, updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false, built_hash: null } };
+    }
+    if (route === `/api/projects/${PRODUCT}/acceptance`) return { acceptance };
+    if (route === `/api/projects/${PRODUCT}/acceptance/versions`) return { versions: [] };
+    return undefined;
+  });
+  const pane = (conversationId: string) => createElement(PlanPane, { key: `${PRODUCT}:${conversationId}`, productId: PRODUCT, conversationId, revision: '0', isGit: true });
+  const editor = (container: HTMLElement) => container.querySelector<HTMLTextAreaElement>('textarea.ui-plan__editor');
+  const { container, root } = await render(pane(A));
+  await settle();
+  await settle();
+  await click([...container.querySelectorAll('button')].find(b => b.textContent === 'Edit'));
+  await input(editor(container), '# Plan of A\n\nhalf-written step');
+  try {
+    const kept = planStays({ view: 'chat', id: A }, { view: 'chat', id: B });
+    assert.equal(leaveAsks(hasUnsavedEdits(SCREEN_EDITS, kept === null ? undefined : PLAN_EDITS + kept), { view: 'chat', id: A }, { view: 'chat', id: B }), true, 'moving to B asks first');
+    await update(() => root.render(pane(B)));
+    await settle();
+    await settle();
+    assert.equal(editor(container) === null, true, 'B opens to read, not to the draft of A');
+    assert.match(container.textContent ?? '', /Plan of B/u);
+    assert.doesNotMatch(container.textContent ?? '', /half-written step/u);
+    await update(() => root.render(pane(A)));
+    await settle();
+    await settle();
+    assert.equal(editor(container)?.value, '# Plan of A\n\nhalf-written step', 'back in A the draft is there again');
+  } finally {
+    clearUnsaved('');
+    planDrafts.clear();
+  }
 });
 
 const SHELF = 'prod-shelf01';
@@ -143,6 +186,25 @@ test('ui/Archived（DOM）: しまった製品の一覧がまだ無いうちに 
   } finally {
     stop();
   }
+});
+
+test('ui/Archived（DOM）: 製品の会話を消す確認には、その会話の計画・控え・下書きの一覧も消えると出す。製品の無い会話はいつもの文のまま', async () => {
+  const loose = { ...archivedSession, id: 'c2', title: 'Loose talk', project_id: null };
+  serve(path => {
+    if (path === '/api/conversations?archived=1') return { conversations: [archivedSession, loose] };
+    if (path === '/api/projects?archived=1') return { projects: [shelvedProduct] };
+    return undefined;
+  });
+  const { container } = await render(createElement(Archived, { revision: 0, projects: [], projectsLoaded: true }));
+  await update(() => new Promise(resolve => setTimeout(resolve, 150)));
+  await settle();
+  const deleteOf = (name: string) => [...container.querySelectorAll('.ui-lib__archived')].find(row => row.textContent?.includes(name))?.querySelector<HTMLButtonElement>('.bt-btn--danger');
+  await click(deleteOf('Pricing notes'));
+  assert.ok(container.textContent?.includes(en['ui.session.deleteWhatProduct']), 'product conversation');
+  assert.match(en['ui.session.deleteWhatProduct'], /plan of this conversation with its saved versions and its draft acceptance list/u);
+  await click(deleteOf('Loose talk'));
+  assert.ok(container.textContent?.includes(en['ui.session.deleteWhat']), 'conversation without a product');
+  assert.equal(container.textContent?.includes(en['ui.session.deleteWhatProduct']), false);
 });
 
 test('ui/ProductHome（DOM）: 知らない製品の ID で開いても、最後に見た時刻 beat.lastLook.<ID> を書かない。製品が分かったら書く（backlog 302）', async () => {

@@ -105,7 +105,7 @@ export function Archived({ revision, projects, projectsLoaded }: { revision: num
                   <span className="bt-row__sub bt-meta" title={archivedAt !== null ? formatDateTime(archivedAt, 'full') : undefined}>{meta}</span>
                 </div>
                 {confirming === c.id ? (
-                  <RowConfirm warn={t('ui.lib.deleteWarn')} note={t('ui.session.deleteWhat')} action={t('ui.lib.delete')} busy={busy === c.id}
+                  <RowConfirm warn={t('ui.lib.deleteWarn')} note={t(c.project_id ? 'ui.session.deleteWhatProduct' : 'ui.session.deleteWhat')} action={t('ui.lib.delete')} busy={busy === c.id}
                     onConfirm={() => void remove(c)} onKeep={refocus => keep(c.id, refocus)} />
                 ) : (
                   <div className="bt-row__end">

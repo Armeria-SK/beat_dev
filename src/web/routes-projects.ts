@@ -126,9 +126,13 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 200, { project: projectWire(app, updated) });
   });
 
-  const planWire = (projectId: string, view: PlanView = app.plans.view(projectId)) => {
-    const chats = app.engine.activeRuns().filter(r => r.kind === 'chat' && app.conversations.projectOf(r.conversationId) === projectId);
-    return { ...view, writing: chats.some(r => r.mode === 'plan'), reviewLocked: chats.length > 0 };
+  const planWire = (projectId: string, conversationId: string, view: PlanView = app.plans.view(projectId, conversationId)) => {
+    const chats = app.engine.activeRuns().filter(r => r.kind === 'chat' && r.conversationId === conversationId);
+    return { ...view, writing: chats.some(r => r.mode === 'plan'), reviewLocked: chats.length > 0, built_hash: app.plans.builtHash(projectId, conversationId) };
+  };
+  const planConversation = (projectId: string, value: unknown): string => {
+    if (typeof value !== 'string' || !app.plans.owns(projectId, value)) planned(() => { throw new PlanError('unknown_conversation'); });
+    return value as string;
   };
   const planned = <T>(work: () => T): T => {
     try { return work(); } catch (error) {
@@ -137,10 +141,11 @@ export function registerProjectRoutes(router: Router, app: App): void {
     }
   };
 
-  router.add('GET', '/api/projects/:id/plan', ({ res, params }) => {
+  router.add('GET', '/api/projects/:id/plan', ({ res, params, url }) => {
     const project = app.projects.get(params[0]!);
     if (!project) throw problem(404, 'not_found', 'project_missing');
-    sendJson(res, 200, { plan: planned(() => planWire(project.id)) });
+    const conversationId = planConversation(project.id, url.searchParams.get('conversationId'));
+    sendJson(res, 200, { plan: planned(() => planWire(project.id, conversationId)) });
   });
 
   router.add('PUT', '/api/projects/:id/plan', async ({ req, res, params }) => {
@@ -148,13 +153,14 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (!project) throw problem(404, 'not_found', 'project_missing');
     const body = requireObject(await readJson(req, 1024 * 1024));
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
+    const conversationId = planConversation(project.id, body.conversationId);
     const content = requireString(body, 'content')!;
     const baseHash = body.baseHash;
     if (baseHash !== null && typeof baseHash !== 'string') throw problem(400, 'invalid_field', 'required', { field: 'baseHash', params: { field: 'baseHash' } });
-    const saved = planned(() => app.plans.write(project.id, content, { by: 'owner', tainted: false, conversationId: null, runId: null }, baseHash));
-    if (saved.changed) app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: saved.hash, by: 'owner' });
+    const saved = planned(() => app.plans.write(project.id, conversationId, content, { by: 'owner', tainted: false, conversationId: null, runId: null }, baseHash));
+    if (saved.changed) app.bus.publish({ type: 'plan.changed', projectId: project.id, conversationId, hash: saved.hash, by: 'owner' });
     const { changed: _changed, ...view } = saved;
-    sendJson(res, 200, { plan: planWire(project.id, view) });
+    sendJson(res, 200, { plan: planWire(project.id, conversationId, view) });
   });
 
   router.add('POST', '/api/projects/:id/plan/reviewed', async ({ req, res, params }) => {
@@ -162,11 +168,12 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (!project) throw problem(404, 'not_found', 'project_missing');
     const body = requireObject(await readJson(req));
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
+    const conversationId = planConversation(project.id, body.conversationId);
     const baseHash = requireString(body, 'baseHash', { max: 128 })!;
-    if (planWire(project.id).reviewLocked) planned(() => { throw new PlanError('writing'); });
-    const view = planned(() => app.plans.review(project.id, baseHash));
-    app.bus.publish({ type: 'plan.changed', projectId: project.id, hash: view.hash, by: 'owner' });
-    sendJson(res, 200, { plan: planWire(project.id, view) });
+    if (planWire(project.id, conversationId).reviewLocked) planned(() => { throw new PlanError('writing'); });
+    const view = planned(() => app.plans.review(project.id, conversationId, baseHash));
+    app.bus.publish({ type: 'plan.changed', projectId: project.id, conversationId, hash: view.hash, by: 'owner' });
+    sendJson(res, 200, { plan: planWire(project.id, conversationId, view) });
   });
 
   const accepted = <T>(work: () => T): T => {
@@ -179,7 +186,8 @@ export function registerProjectRoutes(router: Router, app: App): void {
     id: row.id, base_version: row.base_version, ops: JSON.parse(row.ops) as unknown, language: row.language, conversation_id: row.conversation_id,
     tainted: row.tainted === 1, status: row.status, created_at: row.created_at,
   } : null;
-  const acceptanceWire = (projectId: string, doc: AcceptanceDoc | undefined = accepted(() => app.acceptance.read(projectId))) => {
+  const draftConversation = (projectId: string, value: string | null | undefined): string | undefined => (value && app.plans.owns(projectId, value) ? value : undefined);
+  const acceptanceWire = (projectId: string, conversationId?: string, doc: AcceptanceDoc | undefined = accepted(() => app.acceptance.read(projectId, conversationId))) => {
     const frozen = app.acceptance.latest(projectId);
     return {
       version: doc?.version ?? 0, language: doc?.language ?? null, items: doc?.items ?? [], not_doing: doc?.notDoing ?? [], draft: (doc?.version ?? 0) === 0,
@@ -201,9 +209,10 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (!project) throw problem(404, 'not_found', 'project_missing');
     const rawBefore = url.searchParams.get('unreferencedBefore');
     if (rawBefore !== null && !/^\d{1,16}$/u.test(rawBefore)) throw problem(400, 'invalid_field', 'bad_time', { field: 'unreferencedBefore', params: { field: 'unreferencedBefore' } });
-    const doc = accepted(() => app.acceptance.read(project.id));
+    const conversationId = draftConversation(project.id, url.searchParams.get('conversationId'));
+    const doc = accepted(() => app.acceptance.read(project.id, conversationId));
     sendJson(res, 200, {
-      acceptance: acceptanceWire(project.id, doc),
+      acceptance: acceptanceWire(project.id, conversationId, doc),
       coverage: coverageOf(doc, ownerSpeech(app.db, project.id), rawBefore === null ? undefined : Number(rawBefore)),
     });
   });
@@ -263,9 +272,10 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (typeof baseVersion !== 'number' || !Number.isInteger(baseVersion) || baseVersion < 0) throw problem(400, 'invalid_field', 'required', { field: 'baseVersion', params: { field: 'baseVersion' } });
     if (baseVersion === 0 && body.baseHash === undefined) throw problem(400, 'invalid_field', 'required', { field: 'baseHash', params: { field: 'baseHash' } });
     const baseHash = body.baseHash === undefined || body.baseHash === null ? body.baseHash : requireString(body, 'baseHash', { max: 128 })!;
-    const version = accepted(() => app.acceptance.ownerEdit(project.id, { baseVersion, baseHash, ops: ownerChanges(body.ops) }));
+    const conversationId = typeof body.conversationId === 'string' ? body.conversationId : undefined;
+    const version = accepted(() => app.acceptance.ownerEdit(project.id, { baseVersion, baseHash, ops: ownerChanges(body.ops), conversationId }));
     decided(project.id, project.doc_language, version);
-    sendJson(res, 200, { acceptance: acceptanceWire(project.id) });
+    sendJson(res, 200, { acceptance: acceptanceWire(project.id, draftConversation(project.id, conversationId)) });
   });
 
   router.add('POST', '/api/projects/:id/build', async ({ req, res, params }) => {
@@ -274,8 +284,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     const planHash = requireString(body, 'planHash', { max: 128 })!;
     const acceptanceHash = body.acceptanceHash === null ? null : requireString(body, 'acceptanceHash', { max: 128 })!;
-    const from = requireString(body, 'conversationId', { optional: true, max: 128 });
-    const conversationId = from !== undefined && app.conversations.get(from)?.kind === 'chat' && app.conversations.projectOf(from) === project.id ? from : undefined;
+    const conversationId = planConversation(project.id, body.conversationId);
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
     if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
     let built;

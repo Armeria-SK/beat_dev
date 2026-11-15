@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
 import { join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
@@ -13,6 +14,10 @@ import { redactSecrets, sanitizeModelInputText } from '../shared/redaction.ts';
 import { projectDir } from './store.ts';
 
 export const PLAN_FILE = 'plan.md';
+export const CONVERSATION_PLANS = 'conversation-plans';
+export const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const PLAN_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.md$/u;
+const PLAN_HOPS = 8;
 export const PLAN_MAX_CHARS = 64_000;
 export const PLAN_BACKUPS = 20;
 const BACKUP_NAME = /^plan-\d+-[0-9a-f]+(?:-(ai|owner|outside))?\.md$/u;
@@ -172,7 +177,9 @@ export class PlanStore {
     this.#archived = io.archived ?? (() => false);
   }
 
-  #file(projectId: string): string { return join(projectDir(this.#dirs.projects, projectId), PLAN_FILE); }
+  #file(projectId: string, conversationId: string): string { return conversationPlanFile(this.#dirs.projects, projectId, conversationId); }
+
+  #key(projectId: string, conversationId: string): string { return `plan:${projectId}:${conversationId}`; }
 
   #stat(file: string): Stats | undefined {
     const stat = lstatSync(file, { throwIfNoEntry: false });
@@ -180,67 +187,98 @@ export class PlanStore {
     return stat;
   }
 
-  read(projectId: string): string | undefined {
-    const file = this.#file(projectId);
+  #own(projectId: string, conversationId: string): void {
+    if (!this.owns(projectId, conversationId)) throw new PlanError('unknown_conversation');
+  }
+
+  conversationOf(conversationId: string | null | undefined, projectId: string): string | null { return planConversationOf(this.#kv.db, conversationId, projectId); }
+
+  owns(projectId: string, conversationId: string): boolean { return CONVERSATION_ID.test(conversationId) && isPlanConversation(this.#kv.db, projectId, conversationId); }
+
+  read(projectId: string, conversationId: string): string | undefined {
+    if (!CONVERSATION_ID.test(conversationId)) return undefined;
+    const file = this.#file(projectId, conversationId);
     return this.#stat(file) ? readFileSync(file, 'utf8') : undefined;
   }
 
   has(projectId: string): boolean {
-    try { return lstatSync(this.#file(projectId), { throwIfNoEntry: false }) !== undefined; } catch { return false; }
+    const dir = projectDir(this.#dirs.projects, projectId);
+    try {
+      if (lstatSync(join(dir, PLAN_FILE), { throwIfNoEntry: false }) !== undefined) return true;
+      return readdirSync(join(dir, CONVERSATION_PLANS)).some(name => PLAN_NAME.test(name));
+    } catch { return false; }
   }
 
-  meta(projectId: string): PlanMeta | undefined { return this.#kv.getJson<PlanMeta>(`plan:${projectId}`); }
+  meta(projectId: string, conversationId: string): PlanMeta | undefined { return this.#kv.getJson<PlanMeta>(this.#key(projectId, conversationId)); }
 
-  view(projectId: string): PlanView {
-    const file = this.#file(projectId);
+  builtHash(projectId: string, conversationId: string): string | null { return this.#kv.get(`plan-built:${projectId}:${conversationId}`) ?? null; }
+
+  markBuilt(projectId: string, conversationId: string, hash: string): void { this.#kv.set(`plan-built:${projectId}:${conversationId}`, hash); }
+
+  view(projectId: string, conversationId: string | null): PlanView {
+    const empty: PlanView = { content: null, hash: null, updated_at: null, updated_by: null, tainted: false };
+    if (conversationId === null || !CONVERSATION_ID.test(conversationId)) return empty;
+    const file = this.#file(projectId, conversationId);
     const stat = this.#stat(file);
-    if (!stat) return { content: null, hash: null, updated_at: null, updated_by: null, tainted: false };
+    if (!stat) return empty;
     const content = readFileSync(file, 'utf8');
     const hash = planHash(content);
-    const meta = this.meta(projectId);
+    const meta = this.meta(projectId, conversationId);
     if (meta?.hash === hash) return { content, hash, updated_at: meta.updatedAt, updated_by: meta.by, tainted: meta.tainted === true };
     return { content, hash, updated_at: Math.floor(stat.mtimeMs), updated_by: 'outside', tainted: meta?.tainted === true };
   }
 
-  write(projectId: string, raw: string, by: Omit<PlanMeta, 'hash' | 'updatedAt'>, baseHash?: string | null): PlanView & { content: string; hash: string; changed: boolean } {
+  write(projectId: string, conversationId: string, raw: string, by: Omit<PlanMeta, 'hash' | 'updatedAt'>, baseHash?: string | null): PlanView & { content: string; hash: string; changed: boolean } {
     if (this.#archived(projectId)) throw new PlanError('archived');
+    this.#own(projectId, conversationId);
     const content = cleanPlan(raw);
-    const file = this.#file(projectId);
+    const file = this.#file(projectId, conversationId);
+    const key = this.#key(projectId, conversationId);
     mkdirSync(join(file, '..'), { recursive: true });
-    const previous = this.read(projectId);
+    const previous = this.read(projectId, conversationId);
     if (baseHash !== undefined && (previous === undefined ? null : planHash(previous)) !== baseHash) throw new PlanError('changed');
     const hash = planHash(content);
-    const known = this.meta(projectId);
+    const known = this.meta(projectId, conversationId);
     const author = previous !== undefined && known?.hash === planHash(previous) ? known : undefined;
     if (previous === content && author) {
       if (!by.tainted || author.tainted) return { content, hash, updated_at: author.updatedAt, updated_by: author.by, tainted: author.tainted, changed: false };
-      this.#kv.setJson(`plan:${projectId}`, { ...author, tainted: true, conversationId: by.conversationId, runId: by.runId });
+      this.#kv.setJson(key, { ...author, tainted: true, conversationId: by.conversationId, runId: by.runId });
       return { content, hash, updated_at: author.updatedAt, updated_by: author.by, tainted: true, changed: true };
     }
-    if (previous === content && by.by === 'ai') return { ...this.view(projectId), content, hash, changed: false };
+    if (previous === content && by.by === 'ai') return { ...this.view(projectId, conversationId), content, hash, changed: false };
     const now = this.#now();
     if (previous !== undefined && previous !== content && !(by.by === 'ai' && author?.by === 'ai' && author.runId !== null && author.runId === by.runId)) {
-      this.#backup(projectId, previous, author?.by ?? 'outside', now);
+      this.#backup(projectId, conversationId, previous, author?.by ?? 'outside', now);
     }
     if (previous !== content) this.#replace(file, content);
     const meta: PlanMeta = by.by === 'owner' && !by.tainted && known?.tainted === true
       ? { hash, updatedAt: now, by: by.by, tainted: true, conversationId: known.conversationId, runId: known.runId }
       : { hash, updatedAt: now, ...by };
-    this.#kv.setJson(`plan:${projectId}`, meta);
+    this.#kv.setJson(key, meta);
     return { content, hash, updated_at: now, updated_by: by.by, tainted: meta.tainted, changed: true };
   }
 
-  review(projectId: string, baseHash: string): PlanView & { content: string; hash: string } {
+  review(projectId: string, conversationId: string, baseHash: string): PlanView & { content: string; hash: string } {
     if (this.#archived(projectId)) throw new PlanError('archived');
-    const content = this.read(projectId);
+    this.#own(projectId, conversationId);
+    const content = this.read(projectId, conversationId);
     if (content === undefined || planHash(content) !== baseHash) throw new PlanError('changed');
-    const known = this.meta(projectId);
+    const known = this.meta(projectId, conversationId);
     const now = this.#now();
     const meta: PlanMeta = known?.hash === baseHash
       ? { ...known, tainted: false, reviewedAt: now }
       : { hash: baseHash, updatedAt: now, by: 'owner', tainted: false, conversationId: null, runId: null, reviewedAt: now };
-    this.#kv.setJson(`plan:${projectId}`, meta);
+    this.#kv.setJson(this.#key(projectId, conversationId), meta);
     return { content, hash: baseHash, updated_at: meta.updatedAt, updated_by: meta.by, tainted: false };
+  }
+
+  forget(projectId: string, conversationId: string): string[] {
+    if (!CONVERSATION_ID.test(conversationId)) return [];
+    const failed: string[] = [];
+    for (const target of [this.#file(projectId, conversationId), conversationDraftFile(this.#dirs.projects, projectId, conversationId), this.#backupDir(projectId, conversationId)]) {
+      try { rmSync(target, { recursive: true, force: true }); } catch { failed.push(target); }
+    }
+    return failed;
   }
 
   #replace(file: string, content: string): void {
@@ -259,8 +297,10 @@ export class PlanStore {
     }
   }
 
-  #backup(projectId: string, content: string, author: PlanAuthor | 'outside', now: number): void {
-    const dir = join(this.#dirs.backups, 'mesh', projectId);
+  #backupDir(projectId: string, conversationId: string): string { return join(this.#dirs.backups, 'mesh', projectId, 'plans', conversationId); }
+
+  #backup(projectId: string, conversationId: string, content: string, author: PlanAuthor | 'outside', now: number): void {
+    const dir = this.#backupDir(projectId, conversationId);
     mkdirSync(dir, { recursive: true });
     const label = AUTHORS.has(author) ? author : 'ai';
     writeFileSync(join(dir, `plan-${String(now).padStart(15, '0')}-${randomBytes(3).toString('hex')}-${label}.md`), content);
@@ -268,4 +308,34 @@ export class PlanStore {
     const human = kept.findLast(name => /-(?:owner|outside)\.md$/u.test(name));
     for (const name of kept.slice(0, Math.max(0, kept.length - PLAN_BACKUPS))) if (name !== human) rmSync(join(dir, name), { force: true });
   }
+}
+
+export function conversationPlanFile(projectsDir: string, projectId: string, conversationId: string): string {
+  if (!CONVERSATION_ID.test(conversationId)) throw new PlanError('unknown_conversation');
+  return join(projectDir(projectsDir, projectId), CONVERSATION_PLANS, `${conversationId}.md`);
+}
+
+export function conversationDraftFile(projectsDir: string, projectId: string, conversationId: string): string {
+  if (!CONVERSATION_ID.test(conversationId)) throw new PlanError('unknown_conversation');
+  return join(projectDir(projectsDir, projectId), CONVERSATION_PLANS, `${conversationId}.acceptance.json`);
+}
+
+interface ConversationLink { kind: string; project_id: string | null; parent_run_id: string | null; source_conversation_id: string | null }
+
+export function isPlanConversation(db: DatabaseSync, projectId: string, conversationId: string): boolean {
+  const row = db.prepare('SELECT kind, project_id, parent_run_id FROM conversations WHERE id = ?').get(conversationId) as Omit<ConversationLink, 'source_conversation_id'> | undefined;
+  return row?.kind === 'chat' && row.parent_run_id === null && row.project_id === projectId;
+}
+
+export function planConversationOf(db: DatabaseSync, conversationId: string | null | undefined, projectId: string): string | null {
+  let at = conversationId ?? null;
+  for (let step = 0; at !== null && step <= PLAN_HOPS; step++) {
+    const row = db.prepare('SELECT kind, project_id, parent_run_id, source_conversation_id FROM conversations WHERE id = ?').get(at) as ConversationLink | undefined;
+    if (!row) return null;
+    if (row.kind === 'chat' && row.parent_run_id === null) return row.project_id === projectId && CONVERSATION_ID.test(at) ? at : null;
+    if (row.source_conversation_id !== null) { at = row.source_conversation_id; continue; }
+    const task = db.prepare('SELECT created_in_conversation FROM tasks WHERE conversation_id = ? ORDER BY created_at LIMIT 1').get(at) as { created_in_conversation: string | null } | undefined;
+    at = task?.created_in_conversation ?? null;
+  }
+  return null;
 }
