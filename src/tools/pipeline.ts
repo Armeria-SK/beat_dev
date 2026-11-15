@@ -12,7 +12,8 @@ import { guardText } from '../shared/messages/guard.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
-import { judgeOnce, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
+import { judgeOnce, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
+import { judgeCacheKey, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
 import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
 import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
@@ -36,6 +37,8 @@ export function reviewAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles'>): boo
 }
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
+
+export const JUDGE_REUSE = 'judge-reuse';
 
 // 計画モードで使える道具の効果: 読む道具（read）と Web の読み取り（network）。ただしファイルも書く道具（writesFiles）は除く。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、planAllows を通す
 export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
@@ -209,6 +212,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const id = randomUUID();
   const language = languageOf(ctx.config);
   const started = Date.now();
+  const callNumber = nextCallNumber(ctx);
   const tool = deps.registry.get(call.name);
   const shownInput = truncated
     ? redactSecrets(truncated.raw).slice(0, 2000)
@@ -217,11 +221,13 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
   let autoWhy: string | undefined;
+  let sameAs: number | undefined;
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
     const capped = capOutput(outcome.output, language, ctx.outputTokens);
     const gate: ToolGate | undefined = outcome.decidedBy === 'pending' && approvalId?.startsWith('pending:') ? { by: 'pending', id: Number(approvalId.slice('pending:'.length)) }
       : outcome.decidedBy === 'not-parked' ? { by: 'not-parked' }
       : outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' && autoWhy !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300) }
+      : outcome.decidedBy === JUDGE_REUSE && outcome.decision === 'allow' && autoWhy !== undefined && sameAs !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300), same: sameAs }
       : undefined;
     const tagged = ctx.kind === 'task' && call.name !== 'tool_search' ? 1 : 0;
     const row = deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, evidence_no, created_at)
@@ -390,11 +396,24 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         const summary = callSummary() ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
         const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
           deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
-        autoEvent('checking');
-        const { verdict, spend } = await judgeOnce({
-          userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
-        }, deps.autoClassify, ctx.signal, judgeLimitsFor(ctx, deps));
-        noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, spend);
+        const judgeInput: ClassifierInput = {
+          userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons: [...reasons], paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
+        };
+        const cwdNow = callCwd();
+        const read = readFilesOf(first);
+        const cacheKey = await judgeCacheKey(ctx, {
+          tool: tool.name, input: args, workspace: ctx.workspace, cwd: cwdNow, userRequest: judgeInput.userRequest, tainted, taintSources: ctx.taint.sources.length,
+          reasonKeys: judgeKeys, askKinds: [...askKinds], reasons: judgeInput.reasons, title: judgeInput.title, body: judgeInput.body, shownCwd: judgeInput.cwd, paths: judgeInput.paths, trusted: judgeInput.trusted ?? [],
+        }, { files: [...read.files, ...(first?.writes ?? [])], filesMore: read.more, pushes: first?.pushes, places: first?.places, dataDir: ctx.paths.data });
+        const reused = cacheKey === undefined ? undefined : rememberedAllow(ctx, cacheKey);
+        let verdict: AutoVerdict;
+        if (reused) verdict = { decision: 'allow', reason: reused.reason };
+        else {
+          autoEvent('checking');
+          const judged = await judgeOnce(judgeInput, deps.autoClassify, ctx.signal, judgeLimitsFor(ctx, deps));
+          verdict = judged.verdict;
+          noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, judged.spend);
+        }
         if (ctx.signal.aborted) {
           autoEvent('asked');
           return finish({ output: { content: toolText(language, 'pipeline.cancelled'), isError: true }, decision: 'ask', decidedBy: 'user', invalidArguments: false });
@@ -430,11 +449,13 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           : undefined;
         if (ownerNow) { autoEvent('asked'); return park(ownerNow.kind, ownerNow.reason); }
         const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
+        const shownWhy = reused ? guardText(language, 'pipeline.judge_reused', { call: reused.call, reason: why }) : why;
         const autoId = deps.approvals.recordAuto({
           runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons,
-        }, why);
-        decision = 'allow'; decidedBy = 'auto-mode'; autoWhy = why;
-        autoEvent('allowed', why);
+        }, shownWhy);
+        decision = 'allow'; decidedBy = reused ? JUDGE_REUSE : 'auto-mode'; autoWhy = why; sameAs = reused?.call;
+        if (!reused && cacheKey !== undefined) rememberAllow(ctx, cacheKey, { call: callNumber, reason: why });
+        autoEvent('allowed', shownWhy);
         judgedId = autoId;
       }
     }

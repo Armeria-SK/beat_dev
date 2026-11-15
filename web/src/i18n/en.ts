@@ -1691,4 +1691,6 @@ export const en = {
   'ui.ob.hello.title': (name: string) => `Hello, ${name}. What should we build?`,
   'ui.ob.hello.there': 'there',
   'ui.ob.hello.meta': 'connected · no products yet',
+
+  'ui.tool.judgeSame': (call: number) => `Allowed (same as call #${call})`,
 };

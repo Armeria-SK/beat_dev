@@ -106,7 +106,7 @@ export interface ProjectPatch { name?: string; checkCommand?: string | null; arc
 export interface FolderEntry { name: string; path: string; selectable: boolean; reason?: string; isGit: boolean; link: boolean }
 export interface FolderList { path: string | null; parent: string | null; entries: FolderEntry[]; truncated: boolean }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
-export type ToolGate = { by: 'judge'; reason: string } | { by: 'pending'; id: number } | { by: 'not-parked' };
+export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' };
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
