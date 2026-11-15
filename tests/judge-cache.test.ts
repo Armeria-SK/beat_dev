@@ -426,7 +426,7 @@ test('J-3: 覚えるための控えは、判定のあとの確かめの前に取
     const controller = new AbortController();
     s.ctx.signal = controller.signal;
     s.state.classify = () => {
-      setTimeout(() => { if (flip === 'plan') s.state.mode = 'plan'; else controller.abort(); }, 15);
+      setImmediate(() => { if (flip === 'plan') s.state.mode = 'plan'; else controller.abort(); });
       return ALLOW;
     };
     const outcome = await s.call();
