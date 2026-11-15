@@ -1,5 +1,7 @@
 import { lineDelta } from '../../../src/shared/line-delta.ts';
 import { isSensitiveName, redactSecrets } from '../../../src/shared/redaction.ts';
+import { en } from '../i18n/en.ts';
+import { t, type PlainKey } from '../i18n/index.ts';
 import type { UiIconName } from './icons.ts';
 
 export type ToolVerb = 'edit' | 'run' | 'search' | 'helper' | 'tool';
@@ -26,13 +28,52 @@ const SEARCH = new Set([
   'file_read', 'file_list', 'file_search', 'doc_read', 'image_view',
   'web_search', 'web_fetch', 'browser_read',
   'history_search', 'history_read', 'memory_search', 'skill_view',
+  'mesh_read', 'mesh_search',
 ]);
-const TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
-  shell_run: ['command'],
-  agent_run: ['title', 'task'],
-  file_search: ['text', 'name', 'path'],
-  web_search: ['query'],
-  web_fetch: ['url'],
+type Args = Record<string, unknown>;
+const str = (args: Args, key: string): string => (typeof args[key] === 'string' ? args[key].trim() : '');
+const count = (args: Args, key: string): number => (Array.isArray(args[key]) ? args[key].length : 0);
+const scoped = (query: string, scope: string): string => (query && scope ? `"${query}" in ${scope}` : query);
+const idOf = (value: unknown): string => ((typeof value === 'string' && value.trim() !== '') || typeof value === 'number' ? `#${String(value).trim()}` : '');
+const tabOf = (args: Args, none: string): string => (str(args, 'tab') ? t('ui.toolTarget.tab', str(args, 'tab')) : none);
+
+function doing(args: Args): string {
+  const items = Array.isArray(args['items']) ? args['items'] as unknown[] : [];
+  const item = items.find((i): i is Args => i !== null && typeof i === 'object' && (i as Args)['status'] === 'in_progress');
+  return item ? str(item, 'text') : '';
+}
+
+const TARGETS: Readonly<Record<string, (args: Args) => string>> = {
+  shell_run: a => str(a, 'command'),
+  agent_run: a => str(a, 'title') || str(a, 'task'),
+  file_list: a => str(a, 'path') || t('ui.toolTarget.folder'),
+  file_search: a => scoped(str(a, 'text') || str(a, 'name'), str(a, 'path')) || str(a, 'path') || t('ui.toolTarget.folder'),
+  web_search: a => str(a, 'query'),
+  web_fetch: a => str(a, 'url'),
+  mesh_read: a => [str(a, 'file'), str(a, 'section')].filter(Boolean).join(' › '),
+  mesh_search: a => scoped(str(a, 'query'), str(a, 'file')),
+  plan_write: () => 'plan.md',
+  acceptance_write: a => t('ui.toolTarget.items', count(a, 'items')),
+  acceptance_change: a => t('ui.toolTarget.changes', count(a, 'changes')),
+  checklist_write: a => doing(a) || t('ui.toolTarget.steps', count(a, 'items')),
+  task_update: a => idOf(a['id']),
+  memory_forget: a => idOf(a['id']),
+  curiosity_update: a => idOf(a['id']),
+  history_read: a => idOf(a['conversation_id']),
+  calculate: a => str(a, 'expression'),
+  question_add: a => str(a, 'question'),
+  task_complete: a => str(a, 'summary'),
+  task_checkpoint: a => str(a, 'next_action'),
+  deviation_add: a => str(a, 'what'),
+  task_list: a => t(a['include_finished'] === true ? 'ui.toolTarget.allTasks' : 'ui.toolTarget.openTasks'),
+  curiosity_list: a => t(a['include_closed'] === true ? 'ui.toolTarget.allItems' : 'ui.toolTarget.openItems'),
+  question_list: () => t('ui.toolTarget.product'),
+  date_calc: a => [str(a, 'op'), str(a, 'date') || str(a, 'datetime'), str(a, 'to') || str(a, 'to_timezone')].filter(Boolean).join(' '),
+  browser_read: a => tabOf(a, t('ui.toolTarget.page')),
+  browser_screenshot: a => tabOf(a, t('ui.toolTarget.page')),
+  browser_close: a => tabOf(a, t('ui.toolTarget.allTabs')),
+  browser_click: a => str(a, 'ref'),
+  browser_type: a => str(a, 'ref'),
 };
 const COMMON_KEYS = ['path', 'command', 'query', 'url', 'title', 'name', 'topic', 'text', 'content'];
 const MAX_TARGET = 240;
@@ -60,13 +101,22 @@ function oneLine(value: string): string {
   return line.length > MAX_TARGET ? `${line.slice(0, MAX_TARGET)}…` : line;
 }
 
-function pick(args: Record<string, unknown> | null, keys: readonly string[]): string {
+function pick(name: string, args: Args | null): string {
   if (!args) return '';
+  const own = Object.hasOwn(TARGETS, name) ? TARGETS[name]!(args) : '';
+  if (own) return oneLine(own);
+  const keys = [...COMMON_KEYS, ...Object.keys(args).filter(key => !isSensitiveName(key))];
   for (const key of keys) {
     const value = args[key];
     if (typeof value === 'string' && value.trim() !== '') return oneLine(value);
   }
   return '';
+}
+
+export function toolLabel(name: string): string {
+  const key = `ui.toolLabel.${name}`;
+  if (Object.hasOwn(en, key)) return t(key as PlainKey);
+  return name.replace(/^mcp__/u, '').split('__').map(part => part.replace(/[_-]+/gu, ' ').trim()).filter(Boolean).join(' · ') || name;
 }
 
 export function toolVerb(name: string): ToolVerb {
@@ -134,7 +184,7 @@ export function elapsedClock(ms: number): string {
 export function toolRow(name: string, input: string, result: ToolResult | null): ToolRowView {
   const verb = toolVerb(name);
   const args = record(input);
-  const target = pick(args, TARGET_KEYS[name] ?? COMMON_KEYS);
+  const target = pick(name, args);
   const view = { verb, name, icon: VERB_ICON[verb], target };
   if (!result) return { ...view, meta: null };
   if (verb === 'run') return { ...view, meta: runMeta(result, args?.['command']) };

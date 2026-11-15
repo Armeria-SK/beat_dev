@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { redactSecrets } from '../src/shared/redaction.ts';
-import { maskTarget, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
+import { maskTarget, toolLabel, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
 
 // 新しい画面の ToolRow（p1-ui.md の「会話」）: 道具の名前と引数から、動詞・対象・meta を作る。
 // ファイルを書く・直す → Edit + パス + 足し引きの行、シェル → Run + コマンド + 終了コードと秒、検索・読む・Web → Search + 語、
-// agent_run → Helper、ほかは道具の名前をそのまま。生の JSON は出さない。
+// agent_run → Helper、ほかは人の言葉の短い名前（en.ts）。生の JSON は出さない。
 
 function sample(schema: any, depth = 0): unknown {
   if (!schema || depth > 4) return 'x';
@@ -30,7 +30,7 @@ test('ui/tool-row: 組み込みの道具のどれでも、どの引数・結果�
     for (const input of INPUTS(tool.name, tool.input)) {
       for (const result of RESULTS) {
         const row = toolRow(tool.name, input, result);
-        assert.ok(!/[{}[\]]/u.test(row.target.replace('some {"a":1} value second line', '')), `${tool.name} ${input} → ${row.target}`);
+        assert.ok(!/[{}[\]]/u.test(row.target.replaceAll('some {"a":1} value second line', '')), `${tool.name} ${input} → ${row.target}`);
         assert.ok(!row.target.includes('\n'), tool.name);
         assert.ok(row.target.length <= 241, tool.name);
         assert.equal(row.name, tool.name);
@@ -47,6 +47,8 @@ test('ui/tool-row: 動詞の分け方（嘘の分類をしない: 知らない�
   assert.equal(toolVerb('web_search'), 'search');
   assert.equal(toolVerb('file_read'), 'search');
   assert.equal(toolVerb('agent_run'), 'helper');
+  assert.equal(toolVerb('mesh_read'), 'search');
+  assert.equal(toolVerb('mesh_search'), 'search');
   assert.equal(toolVerb('memory_save'), 'tool');
   assert.equal(toolVerb('mcp__x__y'), 'tool');
 });
@@ -75,7 +77,7 @@ test('ui/tool-row: shell_run はコマンドを 1 行に、結果の見出しか
 
 test('ui/tool-row: 検索・Web は語、agent_run は題（無ければ頼んだ仕事）、知らない道具は引数の中の 1 つの値', () => {
   assert.equal(toolRow('web_search', JSON.stringify({ query: 'resumable upload' }), null).target, 'resumable upload');
-  assert.equal(toolRow('file_search', JSON.stringify({ text: 'uploadFile', path: 'src' }), null).target, 'uploadFile');
+  assert.equal(toolRow('file_search', JSON.stringify({ text: 'uploadFile', path: 'src' }), null).target, '"uploadFile" in src');
   assert.equal(toolRow('agent_run', JSON.stringify({ task: 'Find flaky tests\nand more' }), null).target, 'Find flaky tests and more');
   assert.deepEqual(toolRow('agent_run', JSON.stringify({ task: 't', title: 'Flaky' }), { text: 'answer', isError: false }), { verb: 'helper', name: 'agent_run', icon: 'branch', target: 'Flaky', meta: { kind: 'returned' } });
   assert.equal(toolRow('memory_save', JSON.stringify({ book: 'notes', content: 'Likes tea' }), null).target, 'Likes tea');
@@ -140,4 +142,106 @@ test('ui/tool-row: タスクの道具の結果の末尾にコードが足す [E-
   assert.equal(emptyOutput(''), true);
   assert.equal(emptyOutput('done\n[E-1]'), false);
   assert.equal(emptyOutput('[E-x]'), false);
+});
+
+const VERB_WORDS = { edit: 'Edit', run: 'Run', search: 'Search', helper: 'Helper' } as const;
+const shownVerb = (name: string, verb: string): string => (verb === 'tool' ? toolLabel(name) : VERB_WORDS[verb as keyof typeof VERB_WORDS]);
+
+const REAL: Record<string, [unknown, string, string]> = {
+  task_complete: [{ summary: 'Added retry with backoff', items: [{ id: 'A-1' }] }, 'Finish task', 'Added retry with backoff'],
+  task_checkpoint: [{ tried: 'ran tests', result: '2 failed', next_action: 'Fix the upload test', resume_after_minutes: 30 }, 'Save progress', 'Fix the upload test'],
+  question_add: [{ question: 'Apply it to existing data too?', why: 'Not said', options: ['No', 'Yes'] }, 'Ask question', 'Apply it to existing data too?'],
+  tool_search: [{ query: 'browser' }, 'Load tool', 'browser'],
+  memory_save: [{ book: 'user', content: 'Likes tea' }, 'Save memory', 'Likes tea'],
+  history_search: [{ query: 'upload bug' }, 'Search', 'upload bug'],
+  web_search: [{ query: 'resumable upload' }, 'Search', 'resumable upload'],
+  web_fetch: [{ url: 'https://example.com/docs' }, 'Search', 'https://example.com/docs'],
+  file_read: [{ path: 'src/upload/queue.ts' }, 'Search', 'src/upload/queue.ts'],
+  file_list: [{}, 'Search', 'working folder'],
+  file_write: [{ path: 'notes.md', content: 'x' }, 'Edit', 'notes.md'],
+  file_edit: [{ path: 'src/q.ts', old: 'a', new: 'b' }, 'Edit', 'src/q.ts'],
+  shell_run: [{ command: 'npm test' }, 'Run', 'npm test'],
+  plan_write: [{ content: '# Plan\n1. Upload' }, 'Write plan', 'plan.md'],
+  acceptance_write: [{ items: [{ result: 'a', source: 'ai_added', check: 'look' }, { result: 'b', source: 'ai_added', check: 'look' }] }, 'Draft acceptance', '2 items'],
+  acceptance_change: [{ changes: [{ op: 'add', result: 'c' }] }, 'Propose change', '1 change'],
+  mesh_search: [{ query: 'upload', file: 'plan.md' }, 'Search', '"upload" in plan.md'],
+  mesh_read: [{ file: 'plan.md', section: 'Steps' }, 'Search', 'plan.md › Steps'],
+  mesh_state_set: [{ now: 'Writing tests', next: 'Run them' }, 'Note status', 'Writing tests'],
+  task_create: [{ title: 'Weekly report' }, 'Create task', 'Weekly report'],
+  task_list: [{}, 'List tasks', 'open tasks'],
+  task_update: [{ id: 'a1b2c3', status: 'done' }, 'Update task', '#a1b2c3'],
+  memory_update: [{ id: 'u7', content: 'Likes green tea' }, 'Update memory', 'Likes green tea'],
+  memory_forget: [{ id: 'u7', reason: 'outdated' }, 'Forget memory', '#u7'],
+  memory_search: [{ query: 'tea' }, 'Search', 'tea'],
+  history_read: [{ conversation_id: 'c42' }, 'Search', '#c42'],
+  skill_view: [{ name: 'weekly-report' }, 'Search', 'weekly-report'],
+  skill_draft: [{ name: 'weekly-report', description: 'd', body: 'b', reason: 'r' }, 'Draft skill', 'weekly-report'],
+  curiosity_add: [{ topic: 'WebGPU', why: 'w' }, 'Add curiosity', 'WebGPU'],
+  curiosity_list: [{}, 'List curiosities', 'open items'],
+  curiosity_update: [{ id: 3, status: 'done' }, 'Update curiosity', '#3'],
+  file_search: [{ text: 'uploadFile', path: 'src' }, 'Search', '"uploadFile" in src'],
+  calculate: [{ expression: '12*(3+4)' }, 'Calculate', '12*(3+4)'],
+  date_calc: [{ op: 'diff', date: '2026-11-15', to: '2026-12-25' }, 'Work out date', 'diff 2026-11-15 2026-12-25'],
+  checklist_write: [{ items: [{ text: 'Find code', status: 'done' }, { text: 'Make the change', status: 'in_progress' }, { text: 'Run tests', status: 'pending' }] }, 'Update checklist', 'Make the change'],
+  notify_owner: [{ title: 'Build finished' }, 'Notify owner', 'Build finished'],
+  doc_read: [{ path: 'report.pdf' }, 'Search', 'report.pdf'],
+  table_write: [{ path: 'out.csv', rows: [['a']] }, 'Edit', 'out.csv'],
+  image_view: [{ path: 'shot.png' }, 'Search', 'shot.png'],
+  web_download: [{ url: 'https://example.com/a.zip' }, 'Download', 'https://example.com/a.zip'],
+  agent_run: [{ task: 'Find flaky tests', title: 'Flaky' }, 'Helper', 'Flaky'],
+  question_list: [{}, 'List questions', 'this product'],
+  deviation_add: [{ what: 'Skipped the CLI flag', why: 'w' }, 'Note deviation', 'Skipped the CLI flag'],
+  mesh_decision_add: [{ decision: 'Use SQLite' }, 'Note decision', 'Use SQLite'],
+  browser_open: [{ url: 'https://example.com' }, 'Open page', 'https://example.com'],
+  browser_read: [{}, 'Search', 'current page'],
+  browser_screenshot: [{ tab: 't2' }, 'Screenshot', 'tab t2'],
+  browser_close: [{}, 'Close tab', 'all tabs'],
+  browser_click: [{ ref: 'e12' }, 'Click', 'e12'],
+  browser_type: [{ ref: 'e7', text: 'hello' }, 'Type text', 'e7'],
+};
+
+test('ui/tool-row: 組み込みの道具のどれも、ふつうの引数なら行に人の言葉の名前と空でない対象が出る（snake_case の名前を出さない）', () => {
+  for (const tool of builtinTools()) {
+    const sample = REAL[tool.name];
+    assert.ok(sample, `${tool.name} の見本が無い`);
+    const row = toolRow(tool.name, JSON.stringify(sample[0]), null);
+    const label = shownVerb(tool.name, row.verb);
+    assert.ok(row.target !== '', `${tool.name} の対象が空`);
+    assert.ok(!/_/u.test(label) && label !== tool.name, `${tool.name} → ${label}`);
+    assert.deepEqual([label, row.target], [sample[1], sample[2]], tool.name);
+  }
+});
+
+test('ui/tool-row: 対象の言い方（節・範囲・数・作業中の項目・番号・タブ）', () => {
+  const target = (name: string, args: unknown) => toolRow(name, JSON.stringify(args), null).target;
+  assert.equal(target('mesh_read', { file: 'notes/ideas.md' }), 'notes/ideas.md');
+  assert.equal(target('mesh_search', { query: 'upload' }), 'upload');
+  assert.equal(target('file_list', { path: 'src' }), 'src');
+  assert.equal(target('file_search', { name: '*.ts' }), '*.ts');
+  assert.equal(target('file_search', { name: '*.ts', path: 'web' }), '"*.ts" in web');
+  assert.equal(target('file_search', {}), 'working folder');
+  assert.equal(target('acceptance_write', { items: [{ result: 'a' }] }), '1 item');
+  assert.equal(target('acceptance_change', { changes: [{ op: 'a' }, { op: 'b' }] }), '2 changes');
+  assert.equal(target('checklist_write', { items: [{ text: 'a', status: 'done' }, { text: 'b', status: 'pending' }] }), '2 steps');
+  assert.equal(target('checklist_write', { items: [{ text: 'a', status: 'done' }] }), '1 step');
+  assert.equal(target('task_list', { include_finished: true }), 'all tasks');
+  assert.equal(target('curiosity_list', { include_closed: true }), 'all items');
+  assert.equal(target('browser_read', { tab: 't3' }), 'tab t3');
+  assert.equal(target('browser_close', { tab: 't3' }), 'tab t3');
+  assert.equal(target('browser_screenshot', {}), 'current page');
+});
+
+test('ui/tool-row: 知らない道具（MCP など）は、読める名前と、引数の中の最初の空でない文字の値を 1 行で出す', () => {
+  assert.equal(toolLabel('mcp__github__create_issue'), 'github · create issue');
+  assert.equal(toolLabel('some_tool'), 'some tool');
+  assert.equal(toolRow('mcp__github__create_issue', JSON.stringify({ count: 2, repo: '', body: 'Line one\n  line two' }), null).target, 'Line one line two');
+  assert.equal(toolRow('mcp__x__y', JSON.stringify({ n: 1 }), null).target, '');
+});
+
+test('ui/tool-row: 知らない道具の対象でも、鍵らしい値は伏せ、鍵らしい名前の引数は使わない', () => {
+  const masked = toolRow('mcp__x__call', JSON.stringify({ header: 'Authorization: Bearer abcdefghijklmnop1234' }), null).target;
+  assert.ok(!masked.includes('abcdefghijklmnop1234'), masked);
+  assert.ok(masked.includes('[REDACTED]'), masked);
+  assert.equal(toolRow('mcp__x__login', JSON.stringify({ password: 'hunter2hunter2', user: 'sam' }), null).target, 'sam');
+  assert.ok(!toolRow('mcp__x__fetch', JSON.stringify({ endpoint: 'https://u:pw123@h.test/?token=abc' }), null).target.includes('pw123'));
 });
