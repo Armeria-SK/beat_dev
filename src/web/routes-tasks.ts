@@ -6,6 +6,7 @@ import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
 import { SCHEDULE_MAX_RANGE_MS, TaskError, taskView, type Task } from '../tasks/store.ts';
 import { splitKey } from '../tasks/worker.ts';
+import { judgeOff } from '../tools/pipeline.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
@@ -272,7 +273,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   // ── ワーカー ──
-  router.add('GET', '/api/worker', ({ res }) => sendJson(res, 200, app.worker.status()));
+  const workerView = () => ({ ...app.worker.status(), judgeOff: judgeOff(app.config()) });
+  router.add('GET', '/api/worker', ({ res }) => sendJson(res, 200, workerView()));
   router.add('POST', '/api/worker', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     if (body.paused !== undefined) {
@@ -284,7 +286,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
       const config = app.config();
       if (config.worker.autonomy !== body.autonomy) await app.applyConfig({ ...config, worker: { ...config.worker, autonomy: body.autonomy } });
     }
-    sendJson(res, 200, app.worker.status());
+    sendJson(res, 200, workerView());
   });
 
   // ── 通知 ──

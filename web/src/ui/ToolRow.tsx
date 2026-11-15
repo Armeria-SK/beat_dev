@@ -66,6 +66,7 @@ function gateMeta(t: T, item: ToolItem, pending: PendingLink | undefined): React
   if (!gate) return null;
   if (gate.by === 'judge') return <span className="ui-tool__why" title={gate.reason}>{gate.same !== undefined ? t('ui.tool.judgeSame') : t('ui.tool.judgeReason', gate.reason)}</span>;
   if (gate.by === 'not-parked') return <Pill tone="danger">{t('ui.tool.notRun')}</Pill>;
+  if (gate.by === 'no-judge') return <span className="ui-tool__why">{t('ui.tool.noJudge')}</span>;
   const open = pending ? (e: MouseEvent<HTMLAnchorElement>) => { e.preventDefault(); pending.open(gate.id); } : undefined;
   return <><Pill tone="warn">{t('ui.tool.parked')}</Pill><a className="bt-tool__link ui-tool__open" href={routeHash(pending?.route ?? { view: 'pending' })} onClick={open}>{t('ui.tool.openPending', gate.id)}</a></>;
 }
@@ -80,7 +81,7 @@ function ToolLine({ item, enter, pending }: { item: ToolItem; enter: number | nu
     if (running.checking) meta = t('ui.tool.checking');
     else if (running.helperTools !== null) meta = t('ui.tool.helperTools', running.helperTools);
     else meta = running.startedAt !== null ? t('ui.tool.running', elapsedClock(now - running.startedAt)) : t('ui.tool.runningPlain');
-  } else meta = item.gate && item.gate.by !== 'judge' ? gateMeta(t, item, pending) : <>{metaNode(t, view.meta)}{gateMeta(t, item, pending)}</>;
+  } else meta = item.gate && item.gate.by !== 'judge' && item.gate.by !== 'no-judge' ? gateMeta(t, item, pending) : <>{metaNode(t, view.meta)}{gateMeta(t, item, pending)}</>;
   const helperLink = running?.helperConversation ? <a className="bt-tool__link" href={routeHash({ view: 'chat', id: running.helperConversation })}>{t('ui.tool.openHelper')}</a> : null;
   return (
     <details className={`bt-tool${running ? ' bt-tool--running' : ''}${enterClass(enter)}`} style={enterStyle(enter)} open={running && view.verb === 'helper' ? true : undefined}>

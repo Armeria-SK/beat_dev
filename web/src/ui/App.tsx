@@ -384,10 +384,10 @@ export function App() {
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
-      <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} panes={paneToggle} />
+      <NarrowBar title={title} unread={unread} expanded={drawer} covered={covered} menuRef={menuButton} onMenu={() => setDrawer(true)} panes={paneToggle} judgeOff={worker?.judgeOff === true} />
       <div className={convo ? `bt-app${paneCount ? ' has-panes' : ''}${paneCount && panes.single ? ' is-pane-single' : ''}` : 'bt-shell'} data-panes={convo ? String(paneCount) : undefined} inert={shut}
         style={paneCount && !panes.single ? { '--ui-panes-w': `${panes.width}px` } as CSSProperties : undefined}>
-        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} questions={questionsAll} pending={pendingAll} sessionPending={sessionPending} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} />
+        <Sidebar state={state} route={behind} foot={foot} kanban={kanban} questions={questionsAll} pending={pendingAll} sessionPending={sessionPending} drafts={skillDrafts} unread={unread} conversations={conversations} conversationsMore={live.conversationsMore} projects={projects} running={running} color={profile?.color} setupPending={setupPending(setup?.done ?? null, onboard !== null)} onSetup={resumeSetup} judgeOff={worker?.judgeOff === true} />
         {productsMissing(behind, live.projectsLoaded, projectsFailing) ? (
           <main className={convo ? 'bt-app__main' : 'bt-screen'} inert={drawer}>
             <div className="bt-screen__inner">
