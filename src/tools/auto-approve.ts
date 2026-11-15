@@ -109,7 +109,45 @@ export type AutoVerdict = { decision: 'allow' | 'ask'; reason: string; failed?: 
 
 export interface JudgeLimits { answerMs: number; slotWaitMs?: number | undefined }
 
-export interface JudgeCall extends JudgeLimits { queued(): void; started(): void }
+export interface JudgeReply { text: string; model?: string | undefined; usage?: { inputTokens?: number | undefined; outputTokens?: number | undefined } | undefined }
+
+export interface JudgeSpend { ms: number; model?: string; inputTokens?: number; outputTokens?: number }
+
+type JudgeAsk = (prompt: ClassifierPrompt, signal: AbortSignal, call?: JudgeCall) => Promise<string | JudgeReply>;
+
+const tokenCount = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
+export async function judgeOnce(
+  input: ClassifierInput,
+  ask: JudgeAsk,
+  signal: AbortSignal,
+  limits: JudgeLimits | number = CLASSIFIER_TIMEOUT_MS,
+): Promise<{ verdict: AutoVerdict; spend: JudgeSpend }> {
+  const started = Date.now();
+  const byModel = new Map<string, NonNullable<JudgeReply['usage']>>();
+  let model: string | undefined;
+  const note = (id: unknown, usage: JudgeReply['usage']): void => {
+    if (typeof id !== 'string' || !id) return;
+    model = id.slice(0, 200);
+    if (usage) byModel.set(model, usage);
+  };
+  const counted = async (prompt: ClassifierPrompt, combined: AbortSignal, call?: JudgeCall): Promise<string> => {
+    const reply = await (call ? ask(prompt, combined, { ...call, used: (id, usage) => { note(id, usage); call.used?.(id, usage); } }) : ask(prompt, combined));
+    if (typeof reply !== 'object' || reply === null) return reply;
+    note(reply.model, reply.usage);
+    return reply.text;
+  };
+  const verdict = await autoDecide(input, counted, signal, limits);
+  const sum = (key: 'inputTokens' | 'outputTokens'): number | undefined => {
+    const counts = [...byModel.values()].map(usage => tokenCount(usage[key])).filter((n): n is number => n !== undefined);
+    return counts.length ? counts.reduce((a, b) => a + b, 0) : undefined;
+  };
+  const inputTokens = sum('inputTokens');
+  const outputTokens = sum('outputTokens');
+  return { verdict, spend: { ms: Math.max(0, Date.now() - started), ...(model !== undefined ? { model } : {}), ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}) } };
+}
+
+export interface JudgeCall extends JudgeLimits { queued(): void; started(): void; used?(model: string, usage: NonNullable<JudgeReply['usage']>): void }
 
 export class NoJudge extends Error {
   constructor(detail: string) { super(detail); }
