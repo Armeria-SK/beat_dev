@@ -515,4 +515,44 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   UPDATE tasks SET status = 'inbox', lease_until = NULL, updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE origin = 'curiosity' AND status IN ('ready', 'running');
   `,
+  `
+  CREATE TABLE research_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    conversation_id TEXT,
+    run_id TEXT,
+    phase TEXT NOT NULL CHECK (phase IN ('products', 'libraries')),
+    mode TEXT NOT NULL CHECK (mode IN ('batch', 'one_by_one')),
+    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed', 'cancelled', 'skipped', 'confirmed')),
+    shown_hash TEXT,
+    confirmed_at INTEGER,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    limits TEXT NOT NULL DEFAULT '{}'
+  ) STRICT;
+  CREATE INDEX ix_research_runs_project ON research_runs (project_id, created_at DESC);
+  CREATE INDEX ix_research_runs_run ON research_runs (run_id) WHERE run_id IS NOT NULL;
+
+  CREATE TABLE research_items (
+    id INTEGER PRIMARY KEY,
+    research_id TEXT NOT NULL REFERENCES research_runs (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('similar', 'feature', 'choice', 'library')),
+    name_or_label TEXT NOT NULL,
+    detail TEXT,
+    url TEXT,
+    license TEXT,
+    updated TEXT,
+    language TEXT,
+    evidence TEXT NOT NULL DEFAULT '[]',
+    products TEXT NOT NULL DEFAULT '[]',
+    options TEXT,
+    default_checked INTEGER NOT NULL DEFAULT 0 CHECK (default_checked IN (0, 1)),
+    default_reason TEXT CHECK (default_reason IN ('owner_said', 'standard')),
+    decision TEXT,
+    reason TEXT,
+    recommended INTEGER,
+    answer_kind TEXT CHECK (answer_kind IN ('kept', 'changed'))
+  ) STRICT;
+  CREATE INDEX ix_research_items_research ON research_items (research_id, id);
+  `,
 ];
