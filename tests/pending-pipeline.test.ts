@@ -264,7 +264,7 @@ test('4-2d: 実行中に決まった注記は区切りで差し込まれ、次�
     yield* toolCall('judge_stub', {})(req);
   };
   const judge: Script = async function* () { yield { type: 'text', delta: '{"decision":"allow","reason":"ok"}' }; yield { type: 'done', stop: 'end_turn' as StopReason }; };
-  s.adapter().scripts = [toolCall('fake_send', { to: 'x' }), reject, judge, toolCall('judge_stub', {}), judge, say('done')];
+  s.adapter().scripts = [toolCall('fake_send', { to: 'x' }), reject, judge, toolCall('judge_stub', { second: true }), judge, say('done')];
   const sent = await s.json(`/api/conversations/${conversation}/messages`, 'POST', { text: 'the owner asked this', permissionMode: 'auto' });
   assert.equal(sent.status, 202);
   await settled(s.app, sent.body.runId);

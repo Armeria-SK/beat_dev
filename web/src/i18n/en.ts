@@ -1651,4 +1651,7 @@ export const en = {
   'ui.ob.hello.title': (name: string) => `Hello, ${name}. What should we build?`,
   'ui.ob.hello.there': 'there',
   'ui.ob.hello.meta': 'connected · no products yet',
+
+  'ui.tool.judgeSame': 'Allowed (same as an earlier call in this run)',
+  'runs.by.judgeReuse': 'Auto-approve (earlier answer in this run)',
 };
