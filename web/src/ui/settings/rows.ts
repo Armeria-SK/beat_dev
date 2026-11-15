@@ -66,17 +66,6 @@ export const isCategory = (value: unknown): value is CategoryId => CATEGORIES.so
 
 export const categoryById = (id: CategoryId): Category => CATEGORIES.find(c => c.id === id)!;
 
-const under = (path: string, prefix: string): boolean => path === prefix || path.startsWith(`${prefix}.`);
-
-export function placeOf(path: string): CategoryId | 'file' | null {
-  let best: { at: CategoryId | 'file'; length: number } | null = null;
-  for (const category of CATEGORIES) {
-    for (const prefix of category.paths) if (under(path, prefix) && (!best || prefix.length > best.length)) best = { at: category.id, length: prefix.length };
-  }
-  for (const prefix of FILE_ONLY) if (under(path, prefix) && (!best || prefix.length > best.length)) best = { at: 'file', length: prefix.length };
-  return best?.at ?? null;
-}
-
 export function matchCategories(query: string, text: (key: PlainKey) => string): CategoryId[] {
   const q = query.trim().toLowerCase();
   if (!q) return CATEGORIES.map(c => c.id);

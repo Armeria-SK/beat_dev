@@ -38,7 +38,6 @@ export type Access =
   | { kind: 'provider-key'; id: string; env: string }
   // 画面で入れる鍵を、この PC の外のアドレスへ送る
   | { kind: 'provider-key-send'; id: string; url: string }
-  | { kind: 'searxng-url'; url: string }
   // 道具ごとの方針を緩める（止める → 承認を求める / 承認なし、承認を求める → 承認なし）
   | { kind: 'tool-policy-loosened'; tool: string; from: ToolPolicy; to: ToolPolicy }
   // 外への通知（webhook）: 送り先を足す・変える / 本文も送る / 送る種類を増やす / 止めていたものを動かす / 通知の中のリンクの宛先を決める
@@ -313,9 +312,6 @@ export function accessWidening(before: Config, after: Config): Access[] {
   out.push(...providerChanges(before, after));
   out.push(...toolPolicyChanges(before, after));
   out.push(...notifyChanges(before, after), ...mcpChanges(before, after), ...browserChanges(before, after), ...limitChanges(before, after));
-  const searxHost = hostOf(obj(at.web).searxngUrl);
-  const searxChanged = searxHost !== hostOf(obj(bt.web).searxngUrl) || ((obj(bt.web).search ?? 'duckduckgo') !== 'searxng' && (obj(at.web).search ?? 'duckduckgo') === 'searxng');
-  if (searxHost !== null && !isLoopbackHost(searxHost) && searxChanged) out.push({ kind: 'searxng-url', url: String(obj(at.web).searxngUrl) });
 
   const bv = obj(before.server);
   const av = obj(after.server);

@@ -85,7 +85,6 @@ export const en = {
   'access.providerUrl': (id: string, url: string) => `Send provider "${id}" to an address outside this PC: ${url}`,
   'access.providerKey': (id: string, env: string) => `Use the key in environment variable ${env} for provider "${id}" (the key is sent to that provider's address)`,
   'access.providerKeySend': (id: string, url: string) => `Send the key entered for provider "${id}" to an address outside this PC: ${url}`,
-  'access.searxng': (url: string) => `Send web searches (SearXNG) to an address outside this PC: ${url}`,
   'access.toolPolicy': (tool: string, from: string, to: string) => `Loosen the tool "${tool}" from "${from}" to "${to}"`,
   'access.notifyAdded': (id: string) => `Add the notification target "${id}" (titles, and bodies where you allow them, go to an address outside this PC, whichever model did the work)`,
   'access.notifyTarget': (id: string) => `Change where the notification target "${id}" sends to (notifications will go to a different address)`,
