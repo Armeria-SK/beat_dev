@@ -1,0 +1,217 @@
+import { cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts';
+import assert from 'node:assert/strict';
+import { afterEach, test } from 'node:test';
+import { createElement, type ComponentType } from 'react';
+import { defaultConfig } from '../src/config/store.ts';
+import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
+import { en } from '../web/src/i18n/en.ts';
+
+interface SettingsProps { section: string | undefined; onClose: () => void; held: (() => void) | null; onReplay: () => void; onSaved: () => void; onProfile: () => void }
+
+const { Settings } = await loadTsx<{ Settings: ComponentType<SettingsProps> }>('../web/src/ui/settings/Settings.tsx', import.meta.url);
+
+type Json = Record<string, any>;
+const g = globalThis as Record<string, unknown>;
+g.addEventListener = window.addEventListener.bind(window);
+g.removeEventListener = window.removeEventListener.bind(window);
+window.HTMLElement.prototype.scrollTo ??= () => undefined;
+const realFetch = globalThis.fetch;
+
+afterEach(async () => {
+  await cleanup();
+  globalThis.fetch = realFetch;
+  calls = [];
+});
+
+let calls: Array<{ method: string; path: string; signal: AbortSignal | null }> = [];
+
+interface Sent { method: string; path: string; body: Json | null }
+
+function serveSettings(config: Json, extra: (path: string, method: string) => unknown = () => undefined): Sent[] {
+  const sent: Sent[] = [];
+  let current = structuredClone(config);
+  const view = () => ({ config: current, apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json' });
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Json : null;
+    calls.push({ method, path: String(path), signal: init?.signal ?? null });
+    if (method !== 'GET') sent.push({ method, path: String(path), body });
+    let out: unknown = await extra(String(path), method);
+    if (out === undefined && String(path) === '/api/settings' && method === 'GET') out = view();
+    if (out === undefined && String(path) === '/api/settings' && method === 'PUT') { current = body!.config; out = { ...view(), models: [] }; }
+    if (out === undefined && String(path) === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  return sent;
+}
+
+const settle = () => update(() => new Promise(resolve => setTimeout(resolve, 0)));
+const props = (over: Partial<SettingsProps> = {}): SettingsProps => ({ section: undefined, onClose: () => undefined, held: null, onReplay: () => undefined, onSaved: () => undefined, onProfile: () => undefined, ...over });
+const blur = (el: Element | null | undefined) => update(() => { el?.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true })); });
+const buttons = (root: ParentNode, text: string) => [...root.querySelectorAll('button')].filter(b => b.textContent === text);
+
+test('Settings › Hooks（DOM）: 「Tools」の欄（Protect files と自分で足したフック）は、空にして離れると保存した値へ戻り、保存しない。値を入れて離れるとその値で保存する', async () => {
+  const config = defaultConfig() as Json;
+  config.tools.hooks.preToolUse = [structuredClone(DEFAULT_PROTECT_FILES), { matcher: 'shell_run', command: ['node', 'check.js'], timeoutMs: 30_000, onError: 'deny' }];
+  const sent = serveSettings(config);
+  const { container } = await render(createElement(Settings, props({ section: 'hooks' })));
+  await settle();
+  for (const edit of buttons(container, 'Edit')) await click(edit);
+  const fields = [...container.querySelectorAll<HTMLInputElement>('input[aria-label="Tools"]')];
+  assert.equal(fields.length, 2, 'Protect files の欄と、自分で足すフックの欄');
+  for (const [i, field] of fields.entries()) {
+    const saved = field.value;
+    await input(field, '');
+    await blur(field);
+    await settle();
+    assert.equal(field.value, saved, `欄 ${i}: 空のままにしない`);
+    assert.equal(sent.length, 0, `欄 ${i}: 空では保存しない`);
+    await input(field, `file_write_${i}`);
+    await blur(field);
+    await settle();
+    await settle();
+    const widen = container.querySelector('.ui-set__widen');
+    assert.ok(widen, `欄 ${i}: 値を入れて離れたら保存へ進む（フックの変更は確かめを出す）`);
+    await click(buttons(widen, 'Confirm')[0]);
+    await settle();
+    await settle();
+    const put = sent.at(-1);
+    assert.equal(put?.method, 'PUT', `欄 ${i}: 値を入れたら保存する`);
+    assert.equal(put?.body?.config.tools.hooks.preToolUse[i].matcher, `file_write_${i}`);
+    sent.length = 0;
+  }
+});
+
+const withModels = (judge: string[] = []): Json => {
+  const config = defaultConfig() as Json;
+  config.providers = [{ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 }];
+  config.models = ['qwen', 'gemma', 'phi'].map(id => ({ id, label: id.toUpperCase(), provider: 'local', model: id, minContext: 8192, maxOutputTokens: 4096 }));
+  config.routing = { ...config.routing, chat: ['qwen'], background: [], ...(judge.length ? { judge } : {}) };
+  return config;
+};
+
+async function openModels(config: Json) {
+  const sent = serveSettings(config);
+  const { container } = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  return { container, sent };
+}
+
+async function commitText(container: HTMLElement, field: HTMLInputElement | null, text: string) {
+  await input(field, text);
+  await blur(field);
+  await settle();
+  await settle();
+  const widen = container.querySelector('.ui-set__widen');
+  if (widen) { await click(buttons(widen, 'Confirm')[0]); await settle(); await settle(); }
+}
+
+test('Settings › Models（DOM）: 提供元・モデルの ID を変えて保存しても、開いていた行は開いたまま（新しい ID の行が開く）', async () => {
+  const { container, sent } = await openModels(withModels());
+  const providerRow = () => [...container.querySelectorAll<HTMLInputElement>('input[aria-label="Name"]')];
+  await click(buttons(container, 'Edit')[0]);
+  assert.equal(providerRow().length, 1, '提供元の行が開いている');
+  await commitText(container, providerRow()[0]!, 'home');
+  assert.equal(sent.at(-1)?.body?.config.providers[0].id, 'home', '保存した');
+  assert.equal(providerRow()[0]?.value, 'home', '新しい ID の行が開いたまま');
+
+  const modelIds = () => [...container.querySelectorAll<HTMLInputElement>('input[aria-label="ID"]')];
+  await click(buttons(container, 'Edit')[0]);
+  assert.deepEqual(modelIds().map(f => f.value), ['qwen']);
+  await commitText(container, modelIds()[0]!, 'qwen3');
+  assert.deepEqual(sent.at(-1)?.body?.config.models.map((m: Json) => m.id), ['qwen3', 'gemma', 'phi']);
+  assert.deepEqual(modelIds().map(f => f.value), ['qwen3'], '新しい ID の行が開いたまま');
+});
+
+test('Settings › Models（DOM）: モデルの Remove は、行の確かめ（Remove model）を通してから消す', async () => {
+  const { container, sent } = await openModels(withModels());
+  await click(container.querySelector('button[aria-label="Remove GEMMA"]'));
+  await settle();
+  assert.equal(sent.length, 0, '押しただけでは消さない');
+  const confirm = buttons(container, 'Remove model')[0];
+  assert.ok(confirm, '確かめの行が出る');
+  await click(confirm);
+  await settle();
+  await settle();
+  const widen = container.querySelector('.ui-set__widen');
+  if (widen) { await click(buttons(widen, 'Confirm')[0]); await settle(); await settle(); }
+  assert.deepEqual(sent.at(-1)?.body?.config.models.map((m: Json) => m.id), ['qwen', 'phi']);
+});
+
+test('Settings › Models（DOM）: 設定ファイルで routing.judge に 2 つ以上書いてあるとき、先頭のあとの判定役を Judge の行の下に出す（backlog 522）', async () => {
+  const { container } = await openModels(withModels(['gemma', 'phi', 'qwen']));
+  assert.equal(container.querySelector('[data-below="roles:judge"] .bt-meta')?.textContent, en['ui.set.models.judgeBackups']('PHI, QWEN'), 'ラベルの名前で、ファイルの順に出す');
+  await cleanup();
+  const { container: plain } = await openModels(withModels(['gemma']));
+  assert.ok(plain.querySelector('[data-row="roles:judge"]'));
+  assert.equal(plain.querySelector('[data-below="roles:judge"]'), null, '1 つだけなら出さない');
+});
+
+const esc = async (target: EventTarget): Promise<KeyboardEvent> => {
+  const event = new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  await update(() => { target.dispatchEvent(event); });
+  return event;
+};
+
+async function openAdvanced(config: Json, extra?: (path: string, method: string) => unknown, over: Partial<SettingsProps> = {}) {
+  const sent = serveSettings(config, extra);
+  const { container } = await render(createElement(Settings, props({ section: 'advanced', ...over })));
+  await settle();
+  await click(buttons(container, 'Open config file')[0]);
+  await settle();
+  const editor = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Config file"]')!;
+  return { container, sent, editor };
+}
+
+test('Settings の Esc の順番（DOM）: 書きかけがあれば、枠の中の Esc も枠の外の Esc も受けて（preventDefault）帯で聞き、閉じない。書きかけが無ければ受けずに App の閉じるへ渡す', async () => {
+  let closed = 0;
+  const { container, editor } = await openAdvanced(defaultConfig() as Json, undefined, { onClose: () => { closed += 1; } });
+  assert.equal((await esc(document.body)).defaultPrevented, false, '書きかけが無い');
+  await input(editor, '{}');
+  const inside = await esc(editor);
+  assert.equal(inside.defaultPrevented, true, '枠の中の Esc を受ける');
+  const leave = container.querySelector('.ui-set__leave');
+  assert.ok(leave, '帯で聞く');
+  await click(buttons(leave, en['ui.set.leave.keep'])[0]);
+  assert.equal(container.querySelector('.ui-set__leave'), null);
+  const outside = await esc(document.body);
+  assert.equal(outside.defaultPrevented, true, '枠の外の Esc も受ける');
+  assert.ok(container.querySelector('.ui-set__leave'));
+  assert.equal(closed, 0, 'まだ閉じない');
+  await click(buttons(container.querySelector('.ui-set__leave')!, en['ui.set.leave.discard'])[0]);
+  assert.equal(closed, 1, 'Discard で閉じる');
+});
+
+test('Settings の保存（DOM）: 保存の読み直しと書き込みは、順番待ちの signal を付けて送る（時間切れで止められる。backlog 196）', async () => {
+  const { container, editor } = await openAdvanced(defaultConfig() as Json);
+  const edited = JSON.parse(editor.value) as Json;
+  edited.worker.maxRunsPerHour = 7;
+  await input(editor, JSON.stringify(edited, null, 2));
+  const before = calls.length;
+  await click(buttons(container, 'Save')[0]);
+  await settle();
+  await settle();
+  const during = calls.slice(before).filter(c => c.path === '/api/settings');
+  assert.deepEqual(during.map(c => c.method), ['GET', 'PUT', 'GET']);
+  assert.ok(during[0]!.signal instanceof AbortSignal, '読み直しに signal');
+  assert.ok(during[1]!.signal instanceof AbortSignal, '書き込みに signal');
+});
+
+test('Settings › Advanced の Reset（DOM）: 確かめてから Reset する。確かめの材料の読み取りと Reset の通信には、順番待ちの signal を付ける（時間切れで止められる。backlog 279）', async () => {
+  const { container, sent } = await openAdvanced(defaultConfig() as Json, (path, method) => {
+    if (path === '/api/settings/reset' && method === 'GET') return { config: defaultConfig() };
+    if (path === '/api/settings/reset' && method === 'POST') return { config: defaultConfig(), apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json', models: [], backup: 'config.json.bak' };
+    return undefined;
+  });
+  await click(container.querySelector('[data-row="adv:reset"] button'));
+  assert.equal(sent.length, 0, '押しただけでは Reset しない');
+  await click(container.querySelector('[data-below="adv:reset"] .ui-confirm button.bt-btn--danger'));
+  await settle();
+  await settle();
+  await settle();
+  const reset = calls.filter(c => c.path === '/api/settings/reset');
+  assert.deepEqual(reset.map(c => c.method), ['GET', 'POST']);
+  for (const call of reset) assert.ok(call.signal instanceof AbortSignal, `${call.method} に signal`);
+  const check = calls.filter(c => c.path === '/api/settings' && c.method === 'GET').at(-2);
+  assert.ok(check?.signal instanceof AbortSignal, 'Reset の前の今の設定の読み取りにも signal');
+});
