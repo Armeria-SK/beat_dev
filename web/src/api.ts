@@ -365,7 +365,7 @@ export const api = {
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
   recentMemoryEvents: () => call<{ events: MemoryEvent[] }>('/api/memory-events'),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
-  tasks: (project?: string) => call<{ active: Task[]; finished: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>(`/api/tasks${inProject(project, '?')}`),
+  tasks: (project?: string) => call<{ active: Task[]; finished: Task[]; awaiting?: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>(`/api/tasks${inProject(project, '?')}`),
   schedule: (from: number, to: number) => call<ScheduleView>(`/api/schedule?from=${from}&to=${to}`),
   deleteTask: (id: string) => call<{ deleted: { id: string; events: number; keptRuns: number } }>(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   finishedTasks: (before: FinishedCursor | null, limit = 20, project?: string) =>

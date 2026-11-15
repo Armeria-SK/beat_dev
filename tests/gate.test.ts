@@ -707,3 +707,32 @@ test('5-3b この呼び出しで札をもらった項目は、受け持ちの確
   assert.deepEqual(s.states(p.id), { 'A-1': 'unverified' });
   assert.equal(s.app.tasks.get(task.id)!.check_state, 'awaiting');
 });
+
+test('5-3c-u GET /api/tasks の awaiting: 終わったタスクの新しい 50 件より古い確かめ待ちも、項目の数つきで返る。製品で絞れ、active の意味は変えない', async t => {
+  const s = await setup(t);
+  const api = await s.serve();
+  const p = s.product('shop', [{ result: 'Has a page', check: look }]);
+  const q = s.product('notes', [{ result: 'Notes are saved', check: look }]);
+  const old = s.task(p.id, ['A-1']);
+  await s.run(old.id, [echo('page'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  const elsewhere = s.task(q.id, ['A-1'], 'Build: notes');
+  await s.run(elsewhere.id, [echo('notes'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+  assert.equal(s.app.tasks.get(old.id)!.check_state, 'awaiting');
+  const finish = s.app.db.prepare("UPDATE tasks SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?");
+  for (let i = 0; i < 55; i++) {
+    const row = s.app.tasks.create({ title: `later ${i}`, origin: 'user', actor: 'user', projectId: p.id });
+    finish.run(s.clock.now + 60_000 + i, s.clock.now + 60_000 + i, row.id);
+  }
+  const all = await api('/api/tasks', 'GET');
+  assert.equal(all.status, 200);
+  assert.equal((all.body.finished as Array<{ id: string }>).some(row => row.id === old.id), false, '新しい 50 件には入らない');
+  assert.equal((all.body.active as Array<{ id: string }>).some(row => row.id === old.id), false, 'active には入れない');
+  const rows = all.body.awaiting as Array<{ id: string; check_state: string; items: unknown }>;
+  assert.deepEqual(rows.map(row => row.id).sort(), [old.id, elsewhere.id].sort());
+  assert.deepEqual(rows.find(row => row.id === old.id)!.items, { owned: 1, met: 0, remaining: ['A-1'] });
+  const mine = await api(`/api/tasks?project=${p.id}`, 'GET');
+  assert.deepEqual((mine.body.awaiting as Array<{ id: string }>).map(row => row.id), [old.id], '製品で絞る');
+  assert.deepEqual((await api('/api/tasks?project=none', 'GET')).body.awaiting, []);
+  await api(`/api/tasks/${old.id}/check`, 'POST', { version: 1 });
+  assert.deepEqual(((await api(`/api/tasks?project=${p.id}`, 'GET')).body.awaiting as unknown[]), [], '確かめが済めば外れる');
+});

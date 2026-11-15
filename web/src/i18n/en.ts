@@ -1558,7 +1558,7 @@ export const en = {
   'ui.dev.why': (why: string) => `why: ${why}`,
   'ui.dev.byOwner': 'by you',
   'ui.dev.byTask': 'by a task',
-  'ui.dev.outside': 'written after reading outside content',
+  'ui.dev.outside': 'written after reading text from elsewhere',
   'ui.dev.unreadable': (n: number) => `${n} ${pluralEn(n, { one: 'line', other: 'lines' })} could not be read`,
   'ui.dev.unusable': 'deviations.md could not be read',
   'ui.dev.since.build': 'Compared with the build',

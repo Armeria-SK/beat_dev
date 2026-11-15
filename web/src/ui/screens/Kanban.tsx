@@ -254,7 +254,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     const project = filterQuery(filter);
     try {
       const [tasks, finished, runs] = await Promise.all([api.tasks(project), readFinished(wanted.current, project), api.runs(RUNS_WINDOW, project)]);
-      const active = [...tasks.active, ...tasks.finished.filter(awaitsCheck)];
+      const active = [...tasks.active, ...(tasks.awaiting ?? [])];
       const products = [...new Set([...active, ...finished.tasks].filter(awaitsCheck).flatMap(task => (task.project_id ? [task.project_id] : [])))];
       const lists = new Map((await Promise.all(products.map(id => api.acceptance(id).then(r => [id, r.acceptance] as const, () => null)))).filter(entry => entry !== null));
       if (!loads.current.isCurrent(ticket)) return;

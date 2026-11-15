@@ -274,6 +274,8 @@ function AcceptanceList({ acc, editing, differs }: { acc: Acceptance; editing: E
   );
 }
 
+const DEVIATIONS_GAP_MS = 10_000;
+
 const NOT_COMPARED = {
   no_git: 'ui.dev.notChecked.no_git', git_unusable: 'ui.dev.notChecked.git_unusable', failed: 'ui.dev.notChecked.failed', folder_missing: 'ui.dev.notChecked.folder_missing',
 } as const;
@@ -296,7 +298,7 @@ function FileRow({ path, change, scripts }: { path: string; change: keyof typeof
 function DiffFlagsView({ flags }: { flags: Deviations['flags'] }) {
   const t = useT();
   if (!flags.checked) return <p className="bt-meta ui-acc__problem">{t(NOT_COMPARED[flags.reason])}</p>;
-  if (flags.testsDeleted.length === 0 && flags.checkChanged.length === 0) return <p className="bt-meta ui-acc__problem">{t('ui.dev.noFlags')}</p>;
+  if (flags.testsDeleted.length === 0 && flags.checkChanged.length === 0) return flags.since === 'build' ? <p className="bt-meta ui-acc__problem">{t('ui.dev.noFlags')}</p> : null;
   return (
     <>
       {flags.testsDeleted.length > 0 && (
@@ -506,11 +508,15 @@ export function PlanPane({ productId, revision, taskRevision = '', isGit, reveal
 
   const [deviations, setDeviations] = useState<Deviations | null>(null);
   const built = acc?.frozen != null;
+  const devAt = useRef(0);
   useEffect(() => {
     if (!built) { setDeviations(null); return undefined; }
     let live = true;
-    void api.deviations(productId).then(r => { if (live) setDeviations(r); }, () => { if (live) setDeviations(null); });
-    return () => { live = false; };
+    const read = () => { devAt.current = Date.now(); void api.deviations(productId).then(r => { if (live) setDeviations(r); }, () => { if (live) setDeviations(null); }); };
+    const wait = devAt.current + DEVIATIONS_GAP_MS - Date.now();
+    if (wait <= 0) { read(); return () => { live = false; }; }
+    const timer = setTimeout(read, wait);
+    return () => { live = false; clearTimeout(timer); };
   }, [productId, built, revision, taskRevision]);
   const differs = useMemo(() => new Set((deviations?.deviations.rows ?? []).flatMap(row => (row.item ? [row.item] : []))), [deviations]);
 

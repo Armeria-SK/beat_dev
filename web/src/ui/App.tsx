@@ -146,7 +146,7 @@ export function App() {
       void Promise.all([api.pendingCounts(), api.pending({ status: 'waiting' })]).then(([counts, list]) => dispatch({ type: 'pending', counts, waiting: list.items })).catch(() => undefined);
     }, PENDING_MS),
     questions: throttled(() => { void api.questionCounts().then(counts => dispatch({ type: 'questions', counts })).catch(() => undefined); }, PENDING_MS),
-    tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished] })).catch(() => undefined); },
+    tasks: () => { void api.tasks().then(r => dispatch({ type: 'tasks', tasks: [...r.active, ...r.finished, ...(r.awaiting ?? [])] })).catch(() => undefined); },
     drafts: () => { void api.review().then(r => dispatch({ type: 'skillDrafts', count: r.skillDrafts.length })).catch(() => undefined); },
     unread: () => { void api.notifications().then(r => dispatch({ type: 'unread', count: r.unread })).catch(() => undefined); },
     worker: () => { void api.worker().then(setWorker).catch(() => undefined); },
@@ -284,7 +284,7 @@ export function App() {
   const pendingByTask = useMemo(() => taskCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
   const waiting: Waiting = useMemo(
-    () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask) }),
+    () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask), checks: countChecks(live.tasks.values()) }),
     [skillDrafts, live.tasks, pendingAll, questionsAll, questionsByTask],
   );
   const working = drafts.length > 0 || (worker?.runningAll.length ?? 0) > 0;
@@ -353,7 +353,7 @@ export function App() {
   const conversation = chatId ? conversations.find(c => c.id === chatId) : undefined;
   const routeProduct = productOf(projects, routeProductId(behind));
   const title = viewTitle(t, behind, conversation, routeProduct);
-  const kanban = kanbanCount(waiting, countChecks(live.tasks.values()));
+  const kanban = kanbanCount(waiting);
   const convo = isConversation(behind) || behind.view === 'productNew';
   const convoProduct = behind.view === 'productNew' ? routeProduct : productOf(projects, conversation?.project_id);
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);

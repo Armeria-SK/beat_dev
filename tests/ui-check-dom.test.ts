@@ -24,6 +24,7 @@ const g = globalThis as { matchMedia?: unknown };
 const realMedia = g.matchMedia;
 
 interface Sent { method: string; path: string; body: unknown }
+class Refused { status: number; body: unknown; constructor(status: number, body: unknown) { this.status = status; this.body = body; } }
 let sent: Sent[] = [];
 
 function serve(routes: (path: string, method: string) => unknown): void {
@@ -32,6 +33,7 @@ function serve(routes: (path: string, method: string) => unknown): void {
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as unknown : null;
     if (method !== 'GET') sent.push({ method, path: String(path), body });
     const out = routes(String(path), method);
+    if (out instanceof Refused) return new Response(JSON.stringify(out.body), { status: out.status, headers: { 'Content-Type': 'application/json' } });
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
 }
@@ -233,5 +235,88 @@ test('ui/agent-state: Kanban の数は Proposed と Awaiting check（確かめ�
   const marks = mergeTasks(new Map(), [awaiting({ id: 'a' }), task({ id: 'b', check_state: 'checked' }), task({ id: 'c' })]);
   assert.equal(marks.get('a')?.checkState, 'awaiting', '一覧の行の check_state を覚える');
   assert.equal(countChecks(marks.values()), 1);
-  assert.equal(kanbanCount({ proposals: 2, answers: 0 }, countChecks(marks.values())), 3);
+  assert.equal(kanbanCount({ proposals: 2, answers: 0, checks: countChecks(marks.values()) }), 3);
+});
+
+const { agentState, footLine, waitingTotal } = await import('../web/src/ui/agent-state.ts');
+const { EMPTY, reduce } = await import('../web/src/ui/live-state.ts');
+const { subscribe } = await import('../web/src/feedback.ts');
+
+test('ui/agent-state: 確かめ待ちは「待ち」の合計に入り、ほかに待ちが無くても姿は waiting、下の一言は待ちの数（Design の Avatar・KanbanPane「Waits for the owner? Yes」）', () => {
+  const w = { proposals: 0, answers: 0, drafts: 0, pending: 0, questions: 0, checks: 1 };
+  assert.equal(waitingTotal(w), 1);
+  assert.equal(agentState(w, false), 'waiting');
+  assert.deepEqual(footLine(w, false, [], null), { kind: 'waiting', n: 1 });
+});
+
+test('ui/live-state: task.changed の check_state を覚え、確かめが済めば checked に変わる（数が減る）', () => {
+  const first = reduce(EMPTY, { type: 'event', event: { type: 'task.changed', task: awaiting({ updated_at: 5 }) }, hidden: false, now: 1 }).state;
+  assert.equal(first.tasks.get('t1')?.checkState, 'awaiting');
+  assert.equal(countChecks(first.tasks.values()), 1);
+  const next = reduce(first, { type: 'event', event: { type: 'task.changed', task: task({ check_state: 'checked', updated_at: 6 }) }, hidden: false, now: 2 }).state;
+  assert.equal(next.tasks.get('t1')?.checkState, 'checked');
+  assert.equal(countChecks(next.tasks.values()), 0);
+});
+
+test('ui/Kanban（DOM）: 終わったタスクの新しい 50 件にもめくった分にも無い確かめ待ちも、/api/tasks の awaiting から Awaiting check に出る', async () => {
+  narrow(false);
+  serve(path => {
+    if (path === '/api/tasks') return { active: [], finished: [], awaiting: [awaiting({ completed_at: 1, updated_at: 1 })] };
+    if (path === '/api/tasks/finished?limit=20') return { tasks: Array.from({ length: 20 }, (_, i) => task({ id: `d${i}`, completed_at: 100 + i, updated_at: 100 + i })), next: null, total: 80 };
+    if (path === '/api/runs?limit=500') return { runs: [], total: 0, judged: {} };
+    if (path === `/api/projects/${PRODUCT}/acceptance`) return { acceptance: acceptance() };
+    return undefined;
+  });
+  const { container } = await render(createElement(Kanban, { conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map() }));
+  await settle();
+  const card = container.querySelector('#ui-col-check .bt-card');
+  assert.ok(card, '確かめ待ちのカードが出る');
+  assert.ok(byText(card, 'button', 'Mark checked'));
+});
+
+test('ui/Task（DOM）: 古い版で 409 が返ると「表示のあとで変わった」と出し、一覧を読み直して次は新しい版で送る。送れなかったメモは消さない', async () => {
+  let version = 3;
+  let reads = 0;
+  const toasts: string[] = [];
+  const stop = subscribe(item => { toasts.push(item.title); });
+  serve((path, method) => {
+    if (path === '/api/tasks/t1') return { task: awaiting(), events: [], runs: [] };
+    if (path === `/api/projects/${PRODUCT}/acceptance`) { reads += 1; return { acceptance: { ...acceptance(), version } }; }
+    if (method === 'POST' && path === '/api/tasks/t1/items/A-3/check') {
+      if ((sent.at(-1)!.body as { version: number }).version !== version) return new Refused(409, { error: 'conflict', message: 'stale' });
+      return { task: awaiting(), fix: task({ id: 'fix1', title: 'Fix A-3', status: 'ready', check_state: null }) };
+    }
+    return undefined;
+  });
+  try {
+    const { container } = await render(createElement(TaskScreen, { id: 't1', revision: '0', worker: null, projects: [project], pending: 0 }));
+    await settle();
+    const before = reads;
+    version = 4;
+    const a3 = () => container.querySelector('[data-item="A-3"]')!;
+    await click(byText(a3(), 'button', 'Not enough'));
+    await input(a3().querySelector('input')!, 'Still red');
+    await click(byText(a3(), 'button', 'Make a fix task'));
+    await settle();
+    assert.equal((sent.at(-1)!.body as { version: number }).version, 3);
+    assert.ok(toasts.includes('This changed since it was shown. Look again.'), toasts.join(' | '));
+    assert.ok(reads > before, '一覧を読み直す');
+    assert.equal(a3().querySelector('input')?.value, 'Still red', '送れなかったメモは残る');
+    await click(byText(a3(), 'button', 'Make a fix task'));
+    await settle();
+    assert.deepEqual(sent.at(-1)!.body, { result: 'insufficient', version: 4, note: 'Still red' }, '読み直した版で送る');
+    assert.equal(a3().querySelector('input'), null, '送れたらメモの欄を閉じる');
+  } finally { stop(); }
+});
+
+for (const kind of ['gate_refused', 'gate_closed', 'item_check_failed']) {
+  test(`ui/Task（DOM）: 一覧の変更のあとに ${kind} があれば、ファイルは元に戻っているので変えられた印は出さない`, async () => {
+    const container = await renderTask(task({ status: 'running' }), [event(3, kind, 'x'), event(2, 'gate_list_changed', 'x')]);
+    assert.equal(container.textContent!.includes('acceptance.json was changed outside beat'), false);
+  });
+}
+
+test('ui/Task（DOM）: gate_list_notified は印を消さない（知らせただけ）', async () => {
+  const container = await renderTask(task({ status: 'running' }), [event(3, 'gate_list_notified', null), event(2, 'gate_list_changed', 'x')]);
+  assert.equal(container.textContent!.includes('acceptance.json was changed outside beat'), true);
 });

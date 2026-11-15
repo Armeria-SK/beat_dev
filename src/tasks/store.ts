@@ -675,6 +675,11 @@ export class TaskStore {
     return this.#db.prepare("SELECT * FROM tasks WHERE project_id = ? AND status = 'done' AND check_state = 'awaiting' ORDER BY created_at").all(projectId) as unknown as Task[];
   }
 
+  awaiting(project?: ProjectFilter): Task[] {
+    const filter = byProject(project);
+    return this.#db.prepare(`SELECT * FROM tasks WHERE status = 'done' AND check_state = 'awaiting'${filter.sql} ORDER BY COALESCE(completed_at, updated_at) DESC`).all(...filter.args) as unknown as Task[];
+  }
+
   family(id: string): string[] {
     const rows = this.#db.prepare('WITH RECURSIVE f(id, depth) AS (SELECT ?, 0 UNION SELECT t.id, f.depth + 1 FROM tasks t JOIN f ON t.spawned_by = f.id WHERE f.depth < 100) SELECT DISTINCT id FROM f').all(id) as Array<{ id: string }>;
     return rows.map(row => row.id);

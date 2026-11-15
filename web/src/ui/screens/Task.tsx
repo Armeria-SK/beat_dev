@@ -52,7 +52,8 @@ function eventText(t: ReturnType<typeof useT>, event: TaskEvent): string | null 
   } catch { return event.content; }
 }
 
-const listChanged = (events: readonly TaskEvent[]): boolean => events.find(e => e.kind === 'gate_list_changed' || e.kind === 'gate_passed')?.kind === 'gate_list_changed';
+const GATE_AFTER = new Set(['gate_list_changed', 'gate_passed', 'gate_refused', 'gate_closed', 'item_check_failed']);
+const listChanged = (events: readonly TaskEvent[]): boolean => events.find(e => GATE_AFTER.has(e.kind))?.kind === 'gate_list_changed';
 
 const fieldValue = (task: Task, field: FieldName): string =>
   (field === 'title' ? task.title : field === 'body' ? task.body : field === 'next' ? task.next_action ?? '' : task.done_criteria ?? '');
@@ -141,14 +142,14 @@ function Answer({ task, onSent }: { task: Task; onSent: () => void }) {
   );
 }
 
-function CheckRow({ id, item, busy, onCheck }: { id: string; item: AcceptanceItem | null; busy: boolean; onCheck: (choice: CheckChoice) => Promise<void> }) {
+function CheckRow({ id, item, busy, onCheck }: { id: string; item: AcceptanceItem | null; busy: boolean; onCheck: (choice: CheckChoice) => Promise<boolean> }) {
   const t = useT();
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState('');
   useUnsaved(`${SCREEN_EDITS}check:${id}`, note.trim() !== '');
   const evidence = item ? evidenceLines(item.evidence ?? []) : [];
   const tone = item ? stateTone(item.state) : undefined;
-  const send = (e: FormEvent) => { e.preventDefault(); void onCheck({ item: id, result: 'insufficient', note }).then(() => { setNoting(false); setNote(''); }); };
+  const send = (e: FormEvent) => { e.preventDefault(); void onCheck({ item: id, result: 'insufficient', note }).then(ok => { if (ok) { setNoting(false); setNote(''); } }); };
   return (
     <li className="bt-row ui-acc__row" data-item={id}>
       <span className="bt-tag ui-acc__id">{id}</span>
@@ -188,17 +189,23 @@ function CheckSection({ task, onDone }: { task: Task; onDone: () => Promise<void
   const t = useT();
   const [list, setList] = useState<Acceptance | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reads, setReads] = useState(0);
   const projectId = task.project_id ?? null;
   useEffect(() => {
     if (!projectId) return undefined;
     let live = true;
     void api.acceptance(projectId).then(r => { if (live) setList(r.acceptance); }, () => { if (live) setList(null); });
     return () => { live = false; };
-  }, [projectId, task.updated_at]);
-  const run = async (choice?: CheckChoice) => {
-    if (busy || !list) return;
+  }, [projectId, task.updated_at, reads]);
+  const run = async (choice?: CheckChoice): Promise<boolean> => {
+    if (busy || !list) return false;
     setBusy(true);
-    try { await checkOp(task, list.version, choice); await onDone(); } finally { setBusy(false); }
+    try {
+      const ok = await checkOp(task, list.version, choice);
+      if (!ok) setReads(n => n + 1);
+      await onDone();
+      return ok;
+    } finally { setBusy(false); }
   };
   const items = task.items;
   return (
