@@ -58,14 +58,6 @@ function walk(before: unknown, after: unknown, path: Path, edits: Edit[]): void 
   edits.push({ type: 'set', path, before, after });
 }
 
-// 編集が、名前・色・形・動きの値を変えるものだけなら、触った項目だけを返す（保存で、ほかの項目をいまの値で上書きしないため）。
-// ほかの設定が 1 つでも混ざる・プロフィールごと消す、などのときは null。
-export function profilePatch(edits: readonly Edit[]): Record<string, unknown> | null {
-  const sets = edits.filter((e): e is Extract<Edit, { type: 'set' }> => e.type === 'set' && e.path.length === 2 && e.path[0] === 'profile');
-  if (!sets.length || sets.length !== edits.length) return null;
-  return Object.fromEntries(sets.map(e => [e.path[1]!, e.after]));
-}
-
 export const editPath = (edit: Edit): string => (edit.type === 'set' || edit.type === 'order' ? edit.path : [...edit.path, edit.id]).join('.');
 
 export function applyEdits(latest: Config, edits: readonly Edit[]): MergeResult {

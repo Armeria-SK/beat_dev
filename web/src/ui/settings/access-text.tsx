@@ -35,7 +35,6 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'provider-url': return t('access.providerUrl', a.id, a.url);
     case 'provider-key': return t('access.providerKey', a.id, a.env);
     case 'provider-key-send': return t('access.providerKeySend', a.id, a.url);
-    case 'searxng-url': return t('access.searxng', a.url);
     case 'notify-channel-added': return t('access.notifyAdded', a.id);
     case 'notify-channel-target': return t('access.notifyTarget', a.id);
     case 'notify-channel-body': return t('access.notifyBody', a.id);

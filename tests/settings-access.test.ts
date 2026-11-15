@@ -320,30 +320,6 @@ test('広がりの検出（プロバイダの外向き）: 内向きのままの
   assert.deepEqual(accessWidening({ providers: [null, 3] } as unknown as Config, { providers: [null, 3] } as unknown as Config), []);
 });
 
-test('広がりの検出（Web 検索の送り先）: SearXNG の URL が外のアドレスに変わる・外の URL があるまま SearXNG を選ぶ。内向きや変えていないものは数えない', () => {
-  const before: Config = { tools: { web: { fetch: true, search: 'duckduckgo', searxngUrl: '' } } };
-  const set = structuredClone(before);
-  set.tools.web.searxngUrl = 'https://search.example.org';
-  assert.deepEqual(accessWidening(before, set), [{ kind: 'searxng-url', url: 'https://search.example.org' }], '使っていなくても、外の URL を書けば数える');
-  const withUrl = structuredClone(set);
-  const switched = structuredClone(withUrl);
-  switched.tools.web.search = 'searxng';
-  assert.deepEqual(accessWidening(withUrl, switched), [{ kind: 'searxng-url', url: 'https://search.example.org' }], '外の URL があるまま SearXNG を選ぶ');
-  const moved = structuredClone(switched);
-  moved.tools.web.searxngUrl = 'https://other.example.org';
-  assert.deepEqual(accessWidening(switched, moved), [{ kind: 'searxng-url', url: 'https://other.example.org' }]);
-  const samePlace = structuredClone(switched);
-  samePlace.tools.web.searxngUrl = 'https://search.example.org/path';
-  assert.deepEqual(accessWidening(switched, samePlace), [], '同じ送り先の中の変更');
-  const local = structuredClone(before);
-  local.tools.web.searxngUrl = 'http://localhost:8080';
-  assert.deepEqual(accessWidening(before, local), [], '内向き');
-  const cleared = structuredClone(switched);
-  cleared.tools.web.searxngUrl = '';
-  assert.deepEqual(accessWidening(switched, cleared), [], '消すのは狭くなる');
-  assert.deepEqual(accessWidening(switched, structuredClone(switched)), []);
-});
-
 test('決め: worker.autonomy の false → true（右のパネルの「自発行動」のスイッチ）は、広がりとして数えない。パネルで 1 回押すだけの操作として設計してあり、設定の保存にだけ確認を付けても意味がないため', () => {
   const off: Config = { worker: { enabled: true, autonomy: false, selfTasksNeedApproval: false } };
   const on = structuredClone(off);
