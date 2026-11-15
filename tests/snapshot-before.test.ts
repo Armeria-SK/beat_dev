@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { pushFacts } from '../src/pending/snapshot.ts';
-import { needsSnapshot, SNAPSHOT_EVENT, SNAPSHOT_REF, snapshotBeforeBuild, snapshotLine } from '../src/projects/snapshot-before.ts';
+import { needsSnapshot, SNAPSHOT_EVENT, SNAPSHOT_REF, snapshotBeforeBuild, snapshotLine, stagingPlan } from '../src/projects/snapshot-before.ts';
 import { OWNER_FIX } from '../src/tasks/store.ts';
 import { fakeModel, startApp, waitFor } from './app-setup.ts';
 import { reply, tempDir, type Script } from './helpers.ts';
@@ -191,6 +191,74 @@ test('6-0 控え: 無視されていない秘密らしいファイル（.env・*
   assert.ok(files.includes('new/b.txt') && files.includes('a.txt'), files.join(','));
 });
 
+test('6-0 控え: 無視したフォルダの中の追っているファイルの書き換え・追っているファイルの削除・名前の変更・ファイルからフォルダへの置き換えを、そのまま控える（フォルダの中の秘密とリンクは入れない）', { skip: !gitAvailable }, async t => {
+  const r = repo(t);
+  const outside = realpathSync.native(tempDir(t));
+  writeFileSync(join(outside, 'outside.txt'), 'not the product\n');
+  writeFileSync(join(r.dir, '.gitignore'), 'ign/\n');
+  mkdirSync(join(r.dir, 'ign'));
+  writeFileSync(join(r.dir, 'ign', 't.log'), 'v1\n');
+  for (const name of ['gone.txt', 'old.txt', 'conf']) writeFileSync(join(r.dir, name), `${name}\n`);
+  r.git('add', '-A');
+  r.git('add', '-f', 'ign/t.log');
+  r.git('commit', '-q', '-m', 'first');
+  writeFileSync(join(r.dir, 'ign', 't.log'), 'v2\n');
+  rmSync(join(r.dir, 'gone.txt'));
+  renameSync(join(r.dir, 'old.txt'), join(r.dir, 'new.txt'));
+  rmSync(join(r.dir, 'conf'));
+  mkdirSync(join(r.dir, 'conf'));
+  writeFileSync(join(r.dir, 'conf', 'ok.txt'), 'ok\n');
+  writeFileSync(join(r.dir, 'conf', '.env'), 'TOKEN=x\n');
+  writeFileSync(join(r.dir, 'conf', 'id_rsa'), 'key\n');
+  link(outside, join(r.dir, 'conf', 'lnk'));
+  const result = await snapshotBeforeBuild(r.dir, TASK, tempDir(t));
+  assert.equal(result.kind, 'taken', JSON.stringify(result));
+  if (result.kind !== 'taken') return;
+  const files = r.git('ls-tree', '-r', '--name-only', result.hash).split('\n').sort();
+  assert.deepEqual(files, ['.gitignore', 'conf/ok.txt', 'ign/t.log', 'new.txt']);
+  assert.equal(r.git('show', `${result.hash}:ign/t.log`), 'v2');
+});
+
+test('6-0 控え: 追っている秘密らしいファイルも控えに入れず、経過の戻し方（--overlay）はそれを持ち主の書き換えのまま残し、ほかのファイルを戻す', { skip: !gitAvailable }, async t => {
+  const r = repo(t);
+  writeFileSync(join(r.dir, '.env.example'), 'KEY=committed\n');
+  writeFileSync(join(r.dir, 'app.txt'), 'v1\n');
+  r.git('add', '-A');
+  r.git('commit', '-q', '-m', 'first');
+  writeFileSync(join(r.dir, '.env.example'), 'KEY=owner edit\n');
+  const result = await snapshotBeforeBuild(r.dir, TASK, tempDir(t));
+  assert.equal(result.kind, 'taken', JSON.stringify(result));
+  if (result.kind !== 'taken') return;
+  assert.deepEqual(r.git('ls-tree', '-r', '--name-only', result.hash).split('\n'), ['app.txt']);
+  writeFileSync(join(r.dir, 'app.txt'), 'changed by build\n');
+  const line = snapshotLine(result);
+  assert.match(line, /--overlay/u);
+  r.git(.../`git ([^`]+)`/u.exec(line)![1]!.split(' '));
+  assert.equal(readFileSync(join(r.dir, 'app.txt'), 'utf8'), 'v1\n');
+  assert.equal(readFileSync(join(r.dir, '.env.example'), 'utf8'), 'KEY=owner edit\n');
+});
+
+test('6-0 控え: 中に自分のコミットを持つリポジトリはフォルダごと 1 つの印（gitlink）で控える', { skip: !gitAvailable }, async t => {
+  const r = repo(t);
+  mkdirSync(join(r.dir, 'sub'));
+  const sub = (...args: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: join(r.dir, 'sub'), encoding: 'utf8' });
+  sub('init', '-q', '-b', 'main');
+  writeFileSync(join(r.dir, 'sub', 'x.txt'), 'x\n');
+  sub('add', '-A');
+  sub('commit', '-q', '-m', 'sub');
+  const result = await snapshotBeforeBuild(r.dir, TASK, tempDir(t));
+  assert.equal(result.kind, 'taken', JSON.stringify(result));
+  if (result.kind !== 'taken') return;
+  assert.match(r.git('ls-tree', result.hash, 'sub'), /^160000 commit [0-9a-f]+\tsub$/u);
+});
+
+test('6-0 控え: 候補を見分けるあいだも時間の上限を守る', async t => {
+  const dir = realpathSync.native(tempDir(t));
+  assert.equal(await stagingPlan(dir, ['a.txt'], Date.now() - 1), 'timeout');
+  writeFileSync(join(dir, 'a.txt'), 'a');
+  assert.deepEqual(await stagingPlan(dir, ['a.txt', 'gone.txt'], Date.now() + 10_000), { add: ['a.txt'], drop: ['gone.txt'] });
+});
+
 for (const name of ['commondir', 'gitdir']) {
   test(`6-0 控え: .git/${name} が別のリポジトリを指すなら控えを取らず、そのリポジトリに物も名前も足さない`, { skip: !gitAvailable }, async t => {
     const other = repo(t);
@@ -204,17 +272,13 @@ for (const name of ['commondir', 'gitdir']) {
   });
 }
 
-for (const at of ['refs', 'refs/beat', 'refs/beat/snapshots', 'logs']) {
+for (const at of ['refs/beat', 'refs/beat/snapshots', `refs/beat/snapshots/${TASK}`, 'logs', 'objects/pack', 'reftable']) {
   test(`6-0 控え: .git/${at} が外へのリンクなら控えを取らず、外に書かない`, { skip: !gitAvailable }, async t => {
     const r = seeded(t);
     const outside = realpathSync.native(tempDir(t));
     const path = join(r.dir, '.git', ...at.split('/'));
-    if (at === 'refs') {
-      rmSync(join(r.dir, '.git', 'refs'), { recursive: true, force: true });
-    } else {
-      mkdirSync(dirname(path), { recursive: true });
-      rmSync(path, { recursive: true, force: true });
-    }
+    mkdirSync(dirname(path), { recursive: true });
+    rmSync(path, { recursive: true, force: true });
     link(outside, path);
     assert.deepEqual(await snapshotBeforeBuild(r.dir, TASK, tempDir(t)), { kind: 'unavailable' });
     assert.deepEqual(readdirSync(outside), []);
