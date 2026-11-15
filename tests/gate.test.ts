@@ -685,6 +685,27 @@ test('R13 確かめ待ちの項目が答えで開き直されて直しのタス�
   assert.deepEqual(fix.map(entry => [entry.id, entry.items.remaining]), [[answered.body.fixTaskId, ['A-1']]]);
 });
 
+for (const path of ['edit', 'approve'] as const) {
+  test(`R13 確かめ待ちの最後の項目を持ち主が一覧で変えると（${path}）、もとのタスクは checked になり、task.changed が出る`, async t => {
+    const s = await setup(t);
+    const api = await s.serve();
+    const p = s.product('shop', [{ result: 'Has a page', check: look }, { result: 'Tests pass', check: command(PASS) }]);
+    const build = s.task(p.id, ['A-1', 'A-2']);
+    await s.run(build.id, [echo('page'), done([{ id: 'A-1', evidence: 'E-1' }])]);
+    assert.equal(s.app.tasks.get(build.id)!.check_state, 'awaiting');
+    s.clock.now += 1000;
+    const changed: string[] = [];
+    s.app.bus.subscribe(e => { if (e.event.type === 'task.changed' && e.event.task.id === build.id) changed.push(e.event.task.check_state ?? ''); });
+    const item = { result: 'Has a blue page', check: { kind: 'look' } };
+    const res = path === 'edit'
+      ? await api(`/api/projects/${p.id}/acceptance/edit`, 'POST', { baseVersion: 1, ops: [{ op: 'change', id: 'A-1', item }] })
+      : await api(`/api/projects/${p.id}/acceptance/changes/${s.app.acceptance.propose(p.id, [{ op: 'change', id: 'A-1', item: item as never, source: { kind: 'owner_edit' } }], { language: null, conversationId: null, tainted: false }).id}/approve`, 'POST', {});
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(s.app.tasks.get(build.id)!.check_state, 'checked');
+    assert.deepEqual(changed, ['checked']);
+  });
+}
+
 test('R13 断りの文の例は、足りない項目の番号と、本物と取り違えない札の形を使う', async t => {
   const s = await setup(t);
   const p = s.product('shop', [{ result: 'Has a page', check: command(PASS) }, { result: 'Reads well', check: read }]);

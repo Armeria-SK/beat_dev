@@ -148,3 +148,10 @@ test('runOnce: Enter を続けて 2 回押しても（描き直しの前でも�
   await runOnce(set, 'x', async () => 1, () => { changes += 1; });
   assert.equal(changes, 2, '始まりと終わりで描き直しを知らせる');
 });
+
+test('R13 経過 owner_fix の名前: 質問の答えから作った直しは "Fix for your answer"、持ち主の確かめからは今までどおり', () => {
+  assert.equal(en[eventKey('owner_fix', JSON.stringify({ question: 4, item: 'A-1' }))!], 'Fix for your answer');
+  assert.equal(en[eventKey('owner_fix', JSON.stringify({ task: 't1', item: 'A-1' }))!], 'Fix for your check');
+  assert.equal(en[eventKey('owner_fix', 'not json')!], 'Fix for your check');
+  assert.equal(en[eventKey('owner_fix')!], 'Fix for your check');
+});

@@ -61,7 +61,8 @@ export function itemSummary(db: DatabaseSync, task: Task): { owned: number; met:
   if (!owned.length) return undefined;
   const list = liveList(db, task.project_id);
   if (!list) return { owned: owned.length, met: 0, remaining: owned };
-  const since = new Map((db.prepare('SELECT version, created_at FROM acceptance_versions WHERE project_id = ?').all(task.project_id) as Array<{ version: number; created_at: number }>).map(row => [row.version, row.created_at]));
+  const changed = list.items.some(entry => entry.changedIn !== null && owned.includes(entry.id));
+  const since = changed ? new Map((db.prepare('SELECT version, created_at FROM acceptance_versions WHERE project_id = ?').all(task.project_id) as Array<{ version: number; created_at: number }>).map(row => [row.version, row.created_at])) : new Map<number, number>();
   const handedOver = (entry: AcceptanceItem): boolean => entry.changedIn !== null && (since.get(entry.changedIn) ?? 0) > task.created_at && list.states[entry.id]?.taskId !== task.id;
   const live = owned.filter(id => list.items.some(entry => entry.id === id && !handedOver(entry)));
   const remaining = live.filter(id => stateOf(list, id) !== 'met');

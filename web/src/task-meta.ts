@@ -19,7 +19,13 @@ const EVENT_KEYS = {
   gate_list_changed: 'tasks.event.gate_list_changed', gate_list_notified: 'tasks.event.gate_list_notified', item_check_failed: 'tasks.event.item_check_failed',
   check_failed: 'tasks.event.check_failed', check_passed: 'tasks.event.check_passed', owner_check: 'tasks.event.owner_check', owner_fix: 'tasks.event.owner_fix',
 } as const satisfies Record<string, PlainKey>;
-export function eventKey(kind: string): PlainKey | null {
+export function eventKey(kind: string, content?: string | null): PlainKey | null {
+  if (kind === 'owner_fix' && content) {
+    try {
+      const value = JSON.parse(content) as { question?: unknown } | null;
+      if (value && typeof value === 'object' && value.question !== undefined) return 'tasks.event.owner_fix_answer';
+    } catch { return 'tasks.event.owner_fix'; }
+  }
   return Object.hasOwn(EVENT_KEYS, kind) ? EVENT_KEYS[kind as keyof typeof EVENT_KEYS] : null;
 }
 
