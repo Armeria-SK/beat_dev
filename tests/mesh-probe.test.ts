@@ -78,26 +78,20 @@ test('測りの問い: 12 個（場所 6・計画と状態 3・対照 3）、9 �
   assert.match(PLAN_TEXT, /allergy filter on the menu list \(next\)/u);
 });
 
-test('測りの製品: C は地図の 2 行が古い印（missing・stale）で読め、B に地図は無く、A は mesh の道具も目次も持たない。用語の表は g の組だけ', async t => {
+test('測りの製品: B に地図と用語の表は無く、目次に STATE.md の覚え書きが載る。A は mesh の道具も目次も持たない', async t => {
   const base = realpathSync.native(tempDir(t));
-  const read = async (set: 'a' | 'b' | 'c' | 'cg', file: string) => {
+  const read = async (set: 'a' | 'b', file: string) => {
     const env = await buildProduct(join(base, 'p'), set, model, provider);
     try {
       const out = env.tools.some(tool => tool.name === 'mesh_read') ? await env.run({ id: 'r', name: 'mesh_read', arguments: { file } }, env.ctx(new AbortController().signal)) : undefined;
       return { env, out };
     } finally { env.close(); }
   };
-  const c = await read('c', 'MAP.md');
-  assert.match(c.out!.content, /server\/coupons .*\[missing\]/u);
-  assert.match(c.out!.content, /- jobs .*cleanup\.ts.*\[stale\]/u);
-  assert.match(c.env.meshIndex, /MAP\.md — 9 parts \(1 stale, 1 missing\)/u);
-  assert.doesNotMatch(c.env.meshIndex, /GLOSSARY\.md/u);
   const b = await read('b', 'MAP.md');
   assert.equal(b.out!.isError, true);
   assert.match(b.env.meshIndex, /STATE\.md/u);
   assert.match(b.env.meshIndex, /next: Add allergy labels/u);
-  const cg = await read('cg', 'GLOSSARY.md');
-  assert.match(cg.out!.content, /カートの数 → web\/components\/CartBadge\.tsx/u);
+  assert.doesNotMatch(b.env.meshIndex, /MAP\.md|GLOSSARY\.md/u);
   const a = await read('a', 'MAP.md');
   assert.equal(a.out, undefined);
   assert.equal(a.env.meshIndex, '');
@@ -160,7 +154,7 @@ test('作ったパス: 作業フォルダに無いパスを数え、HTTP の動�
   assert.deepEqual(madeUpPaths(`C:\\work\\bento\\server\\db\\schema.ts と plan.md、src/orders/table.ts、y/o、https://example.com/a/b`, root), ['src/orders/table.ts']);
   assert.deepEqual(madeUpPaths('discounts/apply.ts と CartBadge.tsx と Missing.tsx', root), ['missing.tsx']);
   assert.deepEqual(madeUpPaths('POST /api/orders で受けて、GET /api/allergens も足す。PUT /web/checkout も。and/or で選べる', root), []);
-  assert.deepEqual(madeUpPaths('地図は data/projects/x/MAP.md と STATE.md にある。/api/menu を読む', root), []);
+  assert.deepEqual(madeUpPaths('決めは data/projects/x/DECISIONS.md と STATE.md にある。/api/menu を読む', root), []);
   assert.deepEqual(madeUpPaths('server/discount/apply.ts と server/allergens と web/components/CartBadge.tsx', root), ['server/discount/apply.ts', 'server/allergens']);
   assert.deepEqual(madeUpPaths('古いのは server/coupons/apply.ts と server/coupons と jobs/cleanup.ts と cleanup.ts', root), []);
 });
@@ -175,7 +169,7 @@ test('最初の mesh_search の当たり: 期待した地図の行のパスか�
   assert.equal(searchHit(l1, 'server/dbx — other'), false);
 });
 
-test('線の判定: 効いた・3 問の境目・作ったパスの半分の境目・正答が減る害・作ったパスが増える害・1.2 倍の境目・土台が 0・失敗のある組・C が B を上回るか', () => {
+test('線の判定: 効いた・3 問の境目・作ったパスの半分の境目・正答が減る害・作ったパスが増える害・1.2 倍の境目・土台が 0・失敗のある組', () => {
   const base = setSummary({});
   const sizes = { base: 1000, next: 1200 };
   assert.equal(compareSets(base, setSummary({ correct: 6, madeUp: 4 }), sizes).verdict, 'helped');
@@ -189,42 +183,38 @@ test('線の判定: 効いた・3 問の境目・作ったパスの半分の境�
   const zero = compareSets(base, setSummary({ correct: 6, madeUp: 0 }), { base: 0, next: 100 });
   assert.deepEqual([zero.tokenRatio, zero.verdict], [null, 'n/a: no base request size']);
   assert.equal(compareSets(base, setSummary({ correct: 6, madeUp: 0, failed: 2 }), sizes).verdict, 'n/a: 2 failed questions');
-  assert.equal(compareSets(setSummary({ correct: 10, madeUp: 0 }), setSummary({ correct: 11, madeUp: 0 }), sizes, 'beats').verdict, 'beats the base');
-  assert.equal(compareSets(setSummary({ correct: 10, madeUp: 0 }), setSummary({ correct: 10, madeUp: 0 }), sizes, 'beats').verdict, 'does not beat the base: drop the map');
 });
 
-test('試しの提供元で、A・B・C の 3 組 × 12 問の表が出る。要約と目次が頼みに入り、C は最初の mesh_search で地図の行を当て、トークンの線は本物の製品チャットの頼みの増え方で見る', async t => {
+test('試しの提供元で、A・B の 2 組 × 12 問の表が出る。要約と目次が頼みに入り、トークンの線は本物の製品チャットの頼みの増え方で見る', async t => {
   const adapter = fakeAdapter();
-  const result = await runProbe({ model, adapter, sets: ['a', 'b', 'c'], base: realpathSync.native(tempDir(t)), maxTurns: 4, maxTokens: 500, timeoutMs: 10_000 });
-  assert.equal(result.rows.length, 36);
-  for (const set of ['a', 'b', 'c']) assert.equal(result.rows.filter(r => r.set === set).length, 12);
+  const result = await runProbe({ model, adapter, sets: ['a', 'b'], base: realpathSync.native(tempDir(t)), maxTurns: 4, maxTokens: 500, timeoutMs: 10_000 });
+  assert.equal(result.rows.length, 24);
+  for (const set of ['a', 'b']) assert.equal(result.rows.filter(r => r.set === set).length, 12);
   const asked = adapter.requests.filter(r => r.system.frozen !== compactSystem('en'));
   assert.ok(asked.every(r => r.system.dynamic.includes(SUMMARY)));
   assert.equal(adapter.requests.filter(r => r.system.frozen === compactSystem('en')).length, 1);
   const plain = asked.filter(r => !r.tools.some(tool => tool.name === 'mesh_search'));
   assert.equal(plain.length, 12);
   assert.ok(plain.every(r => !r.system.dynamic.includes(MESH_GUIDE_MARK) && !r.system.dynamic.includes('STATE.md')));
-  assert.equal(asked.filter(r => r.system.dynamic.includes(MESH_GUIDE_MARK)).length, 48);
-  assert.equal(asked.filter(r => r.system.dynamic.includes('MAP.md —')).length, 24);
+  assert.equal(asked.filter(r => r.system.dynamic.includes(MESH_GUIDE_MARK)).length, 24);
+  assert.equal(asked.filter(r => r.system.dynamic.includes('MAP.md')).length, 0);
   const summary = summarize(result.rows);
   const of = (set: string) => summary.find(s => s.set === set)!;
   assert.deepEqual([of('a').correct, of('a').madeUp, of('a').controlUnknown, of('a').controlConfident, of('a').firstSearchHits], [3, 9, 0, 3, null]);
-  assert.deepEqual([of('b').correct, of('b').madeUp, of('b').controlUnknown, of('b').firstSearchHits], [12, 0, 3, 1]);
-  assert.deepEqual([of('c').correct, of('c').firstSearchHits, of('c').toolCalls, of('c').medianTokens, of('a').medianTokens], [12, 6, 12, 220, 100]);
+  assert.deepEqual([of('b').correct, of('b').madeUp, of('b').controlUnknown, of('b').firstSearchHits, of('b').toolCalls, of('b').medianTokens, of('a').medianTokens], [12, 0, 3, 1, 12, 220, 100]);
   assert.ok(result.request.base > 1000, String(result.request.base));
   assert.equal(result.request.added.a, 0);
-  assert.ok(result.request.added.c! > result.request.added.b! && result.request.added.b! > 0);
-  const [pb, pc] = [result.request.parts.b!, result.request.parts.c!];
-  assert.ok(pb.meshTools > 0 && pb.meshTools === pc.meshTools && pb.writeTools === 0 && pc.writeTools > 0 && pc.index > pb.index, JSON.stringify(result.request.parts));
-  assert.equal(result.request.added.c, pc.index + pc.meshTools + pc.writeTools);
+  const pb = result.request.parts.b!;
+  assert.ok(pb.meshTools > 0 && pb.index > 0, JSON.stringify(result.request.parts));
+  assert.equal(result.request.added.b, pb.index + pb.meshTools);
   assert.match(result.notes.join(' '), /mesh tools the chat passes: mesh_search, mesh_read, mesh_state_set/u);
-  const ratio = Math.round(((result.request.base + result.request.added.c!) / result.request.base) * 100) / 100;
+  const ratio = Math.round(((result.request.base + result.request.added.b!) / result.request.base) * 100) / 100;
   assert.ok(ratio > 1 && ratio <= 1.2, String(ratio));
   const report = renderReport(result.rows, { title: 'Mesh probe', notes: result.notes, requests: { [model.id]: result.request } });
-  assert.match(report, /\| fake-model \| c \| 12 \/ 12 \| 6 \| 3 \| 3 \| 0 \| 6 \| 0 \| 0 \| 12 \/ 1 \| 220 \| \d+ \(\d+ \+ \d+\) \| \d+ \+ \d+ \+ [1-9]\d* \| 0 \|/u);
-  assert.match(report, new RegExp(`\\| fake-model \\| a -> c \\| 9 \\| 9 -> 0 \\| ${ratio} \\| helped \\|`, 'u'));
-  assert.match(report, /\| fake-model \| b -> c \| 0 \| 0 -> 0 \| [\d.]+ \| does not beat the base: drop the map \|/u);
-  assert.equal(report.split('\n').filter(line => /^\| fake-model \| (a|b|c) \| [LPK]\d \|/u.test(line)).length, 36);
+  assert.match(report, /\| fake-model \| b \| 12 \/ 12 \| 6 \| 3 \| 3 \| 0 \| 1 \| 0 \| 0 \| 12 \/ 1 \| 220 \| \d+ \(\d+ \+ \d+\) \| \d+ \+ \d+ \| 0 \|/u);
+  assert.match(report, new RegExp(`\\| fake-model \\| a -> b \\| 9 \\| 9 -> 0 \\| ${ratio} \\| helped \\|`, 'u'));
+  assert.doesNotMatch(report, /drop the map|b -> c/u);
+  assert.equal(report.split('\n').filter(line => /^\| fake-model \| (a|b) \| [LPK]\d \|/u.test(line)).length, 24);
 });
 
 test('鍵らしい文字: モデルの答えや道具の名前に鍵が入っても、表には出ない', async t => {
@@ -240,18 +230,18 @@ test('鍵らしい文字: モデルの答えや道具の名前に鍵が入って
 
 test('相手に届かないモデルでも最後まで走り、どの問いも失敗として表に残り、トークンと判定は n/a', async t => {
   const dead: ProviderAdapter = { provider, async *stream() { throw new Error('connect ECONNREFUSED 127.0.0.1:1'); }, async probe() { throw new Error('not used'); } };
-  const result = await runProbe({ model, adapter: dead, sets: ['a', 'c'], base: realpathSync.native(tempDir(t)), maxTurns: 2, maxTokens: 100, timeoutMs: 1000 });
+  const result = await runProbe({ model, adapter: dead, sets: ['a', 'b'], base: realpathSync.native(tempDir(t)), maxTurns: 2, maxTokens: 100, timeoutMs: 1000 });
   assert.equal(result.rows.length, 24);
   assert.ok(result.rows.every(r => r.failed?.includes('ECONNREFUSED') && !r.correct));
   assert.match(result.notes.join('\n'), /compaction failed/u);
   const report = renderReport(result.rows, { title: 'Mesh probe', notes: result.notes, requests: { [model.id]: result.request } });
-  assert.match(report, /^\| fake-model \| c \| 0 \/ 12 .*\| 0 \/ n\/a \| n\/a \| \d+ \(\d+ \+ \d+\) \| \d+ \+ \d+ \+ \d+ \| 12 \|$/mu);
-  assert.match(report, /\| fake-model \| a -> c \| 0 \| 0 -> 0 \| [\d.]+ \| n\/a: 24 failed questions \|/u);
+  assert.match(report, /^\| fake-model \| b \| 0 \/ 12 .*\| 0 \/ n\/a \| n\/a \| \d+ \(\d+ \+ \d+\) \| \d+ \+ \d+ \| 12 \|$/mu);
+  assert.match(report, /\| fake-model \| a -> b \| 0 \| 0 -> 0 \| [\d.]+ \| n\/a: 24 failed questions \|/u);
 });
 
-test('組が足す分: 目次と、製品チャットに mesh を入れたときに増える道具の説明に、地図の組は mesh_map_set、用語の組は mesh_glossary_set を足す', () => {
-  const request = { frozen: '', baseTools: [], meshTools: [], baseTokens: 1000, meshSpecTokens: 40, mapWriteTokens: 7, glossaryWriteTokens: 5 };
-  assert.deepEqual((['a', 'b', 'bg', 'c', 'cg'] as const).map(set => addedTokens(set, request, '')), [0, 40, 45, 47, 52]);
+test('組が足す分: B は目次と、製品チャットに mesh を入れたときに増える道具の説明。A は 0', () => {
+  const request = { frozen: '', baseTools: [], meshTools: [], baseTokens: 1000, meshSpecTokens: 40 };
+  assert.deepEqual((['a', 'b'] as const).map(set => addedTokens(set, request, '')), [0, 40]);
   assert.ok(addedTokens('b', request, 'x'.repeat(400)) > 40);
 });
 
@@ -332,7 +322,7 @@ test('持ち主の設定の道具（場所・フック・方針）は、本物�
   owner.tools.roots = [{ path: outside, mode: 'write' }];
   owner.tools.hooks.preToolUse = [{ matcher: 'file_read', command: [process.execPath, '-e', 'process.exit(0)'], timeoutMs: 10_000, onError: 'deny' }];
   owner.tools.policies = { ...owner.tools.policies, web_fetch: 'block' };
-  const env = await buildProduct(join(base, 'p'), 'c', model, provider, owner);
+  const env = await buildProduct(join(base, 'p'), 'b', model, provider, owner);
   try {
     const ctx = env.ctx(new AbortController().signal);
     assert.deepEqual(ctx.config.tools, defaultConfig().tools);

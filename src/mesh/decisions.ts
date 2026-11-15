@@ -3,8 +3,7 @@ import { join } from 'node:path';
 import { projectDir } from '../projects/store.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
-import { readOwn, replaceFile } from './files.ts';
-import { MeshWriteError, type Writer } from './map.ts';
+import { MeshWriteError, readOwn, replaceFile, type Writer } from './files.ts';
 
 export const DECISIONS_FILE = 'DECISIONS.md';
 export const DECISIONS_OLD_FILE = 'DECISIONS-old.md';

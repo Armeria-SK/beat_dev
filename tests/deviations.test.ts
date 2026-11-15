@@ -245,6 +245,19 @@ test('差分の印: 一覧を固めた時刻があれば、その前の最後の
   assert.deepEqual(await diffFlags(root, 'make check', s.app.paths.data, null), { checked: true, since: 'head', testsDeleted: [], testsDeletedMore: 0, checkChanged: [], checkChangedMore: 0 }, '時刻が無ければ HEAD からの差分だけ');
 });
 
+test('差分の印: 設定が危ないリポジトリ（core.fsmonitor）では git を動かさず、見ていない（git_unusable）と返す', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const root = join(s.dir, 'repo');
+  mkdirSync(root, { recursive: true });
+  git(root, ['init', '-q']);
+  writeFileSync(join(root, 'a.test.ts'), 'a');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-q', '-m', 'one']);
+  git(root, ['config', 'core.fsmonitor', 'x']);
+  rmSync(join(root, 'a.test.ts'));
+  assert.deepEqual(await diffFlags(root, 'npm test', s.app.paths.data, null), { checked: false, reason: 'git_unusable' });
+});
+
 test('deviation_add: タスクの文が外を読んだ印を持つ・会話の印が読めないときも src: external', async t => {
   const s = await setup(t);
   const shop = s.project('shop');

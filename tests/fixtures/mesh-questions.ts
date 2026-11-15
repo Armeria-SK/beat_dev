@@ -37,25 +37,6 @@ export const PRODUCT_CHANGES: ReadonlyArray<{ from: string; to: string; content?
   { from: 'jobs/cleanup.ts', to: 'jobs/daily-report.ts', content: 'export function dailyOrderReport() { return "orders per team for the kitchen, every night at 21:00"; }\n' },
 ];
 
-export const MAP_ROWS: ReadonlyArray<{ path: string; what: string; entry?: string }> = [
-  { path: 'server/routes', what: 'HTTP API of the server', entry: 'server/routes/orders.ts' },
-  { path: 'server/db', what: 'database tables and migrations', entry: 'server/db/schema.ts' },
-  { path: 'server/payments', what: 'card payments' },
-  { path: 'server/mail', what: 'mails sent to customers' },
-  { path: 'server/coupons', what: 'coupon codes and their discounts', entry: 'server/coupons/apply.ts' },
-  { path: 'jobs', what: 'nightly cleanup of old orders (cleanup.ts)' },
-  { path: 'web/screens', what: 'screens of the web app' },
-  { path: 'web/components', what: 'small UI parts shared by the screens' },
-  { path: 'tests', what: 'tests' },
-];
-
-export const GLOSSARY_ROWS: ReadonlyArray<{ term: string; points_to: string }> = [
-  { term: 'カートの数', points_to: 'web/components/CartBadge.tsx' },
-  { term: '返金', points_to: 'server/payments/refunds.ts' },
-  { term: '毎晩の集計', points_to: 'jobs/daily-report.ts' },
-  { term: 'お弁当の一覧画面', points_to: 'web/screens/MenuList.tsx' },
-];
-
 export const PLAN_TEXT = [
   '# Bento: lunch pre-orders for office teams',
   '',

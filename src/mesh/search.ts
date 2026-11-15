@@ -11,7 +11,7 @@ export interface MeshText { rel: string; lines: string[]; mtime: number; fetched
 const LINE_MAX = 300;
 const QUERY_TERMS = 10;
 const EXTERNAL = /src: external\\?\]/u;
-const PRIORITY = ['STATE.md', 'MAP.md', 'DECISIONS.md'];
+const PRIORITY = ['STATE.md', 'DECISIONS.md'];
 
 const HEADING_MAX = 60;
 

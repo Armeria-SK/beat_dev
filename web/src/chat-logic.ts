@@ -251,7 +251,7 @@ export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
   file_read: 'file', file_write: 'filePen', file_edit: 'pencil', file_list: 'folder', file_search: 'search',
   shell_run: 'terminal',
   plan_write: 'filePen', acceptance_write: 'filePen', acceptance_change: 'filePen', mesh_search: 'search', mesh_read: 'file', mesh_state_set: 'pencil',
-  mesh_map_set: 'pencil', mesh_glossary_set: 'pencil', mesh_decision_add: 'pencil',
+  mesh_decision_add: 'pencil',
   web_fetch: 'globe', web_search: 'search',
   memory_save: 'bookmark', memory_update: 'bookmark', memory_forget: 'bookmark', memory_search: 'bookmark',
   history_search: 'clock', history_read: 'clock',
