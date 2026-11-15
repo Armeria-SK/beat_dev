@@ -59,8 +59,6 @@ export const AVATAR_SHAPES = [
   'square', 'puddle', 'ghost', 'bunny', 'cat', 'bear', 'mushroom', 'bell', 'peanut', 'comet',
 ] as const;
 
-export const RESTART_KEYS = ['server'] as const;
-
 export const LANGUAGES = ['en'] as const;
 export type Language = (typeof LANGUAGES)[number];
 export const DEFAULT_LANGUAGE: Language = 'en';

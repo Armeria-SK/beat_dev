@@ -1,58 +1,15 @@
-import type { PlainKey } from '../i18n/index.ts';
 import { getLanguage, type Lang } from '../i18n/state.ts';
 import { serverText } from '../server-text.ts';
 import { derivedKeyEnv, isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
 
-// 設定の画面の、画面を使わない部分。節の一覧・変更の数え方・保存に失敗したときの問題の読み取り・設定の書き換え。
+// 設定の画面の、画面を使わない部分。保存に失敗したときの問題の読み取り・設定の書き換え。
 
 export type Config = Record<string, any>;
 
 export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'notify' | 'mcp' | 'browser' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
 
-export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArray<{ id: SettingsSection; label: PlainKey; desc: PlainKey }> }> = [
-  { label: 'settings.group.model', items: [
-    { id: 'models', label: 'settings.section.models', desc: 'settings.desc.models' },
-    { id: 'providers', label: 'settings.section.providers', desc: 'settings.desc.providers' },
-    { id: 'keys', label: 'settings.section.keys', desc: 'settings.desc.keys' },
-  ] },
-  { label: 'settings.group.behavior', items: [
-    { id: 'tools', label: 'settings.section.tools', desc: 'settings.desc.tools' },
-    { id: 'notify', label: 'settings.section.notify', desc: 'settings.desc.notify' },
-  { id: 'mcp', label: 'settings.section.mcp', desc: 'settings.desc.mcp' },
-    { id: 'browser', label: 'settings.section.browser', desc: 'settings.desc.browser' },
-    { id: 'worker', label: 'settings.section.worker', desc: 'settings.desc.worker' },
-    { id: 'memory', label: 'settings.section.memory', desc: 'settings.desc.memory' },
-  ] },
-  { label: 'settings.group.beat', items: [
-    { id: 'about', label: 'settings.section.about', desc: 'settings.desc.about' },
-    { id: 'look', label: 'settings.section.look', desc: 'settings.desc.look' },
-  ] },
-  { label: 'settings.group.system', items: [
-    { id: 'server', label: 'settings.section.server', desc: 'settings.desc.server' },
-    { id: 'file', label: 'settings.section.file', desc: 'settings.desc.file' },
-  ] },
-];
-
 export const isPlain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const hasIds = (list: unknown[]): list is Array<Record<string, unknown> & { id: string }> => list.every(item => isPlain(item) && typeof item.id === 'string');
-
-// 保存していない変更の数。項目ごとに 1 件。id を持つ一覧（models / providers）は id で突き合わせ、追加・削除は 1 件。
-export function countChanges(saved: unknown, draft: unknown): number {
-  if (JSON.stringify(saved) === JSON.stringify(draft)) return 0;
-  if (isPlain(saved) && isPlain(draft)) {
-    let n = 0;
-    for (const key of new Set([...Object.keys(saved), ...Object.keys(draft)])) n += countChanges(saved[key], draft[key]);
-    return n;
-  }
-  if (Array.isArray(saved) && Array.isArray(draft) && hasIds(saved) && hasIds(draft)) {
-    const before = new Map(saved.map(item => [item.id, item]));
-    let n = 0;
-    for (const item of draft) n += before.has(item.id) ? countChanges(before.get(item.id), item) : 1;
-    for (const item of saved) if (!draft.some(d => d.id === item.id)) n += 1;
-    return n;
-  }
-  return 1;
-}
 
 export interface Problem {
   text: string;
