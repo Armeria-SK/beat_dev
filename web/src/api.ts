@@ -275,6 +275,16 @@ export interface McpAddInput {
 }
 export interface McpToolPatch { enabled?: boolean; effect?: McpEffect | null; sends?: boolean | null; removes?: boolean | null }
 export interface EnvReloadView { loaded: boolean; apiKeys: Record<string, boolean>; notApplied: string[] }
+export interface GrowthCategory { category: string; asked: number; answered: number; kept: number; keptRate: number | null; noAssumption: number }
+export interface GrowthSkill { name: string; uses: number; taskUses: number; chatUses: number; tasks: number; done: number; failed: number; cancelled: number; unfinished: number }
+export interface GrowthBucket {
+  month: string; projectId: string | null; tasks: number;
+  questions: { asked: number; perTask: number | null; answered: number; kept: number; keptRate: number | null; noAssumption: number; byCategory: GrowthCategory[] };
+  judgeAsked: number; pending: number;
+  checks: { decisions: number; notEnough: number; notEnoughShare: number | null };
+  skills: GrowthSkill[];
+}
+export interface GrowthStats { month: string | null; projectId?: string | null; skillsCountedSince: number | null; buckets: GrowthBucket[] }
 
 export class ApiError extends Error {
   readonly status: number;
@@ -337,6 +347,7 @@ export const api = {
   questions: (query: QuestionQuery) =>
     call<{ items: Question[] }>(`/api/questions?status=${query.status}${query.projectId ? `&projectId=${encodeURIComponent(query.projectId)}` : ''}${query.before === undefined ? '' : `&before=${query.before}`}`),
   questionCounts: () => call<QuestionCounts>('/api/questions/counts'),
+  growthStats: (project: string, month: string) => call<GrowthStats>(`/api/growth/stats?project=${encodeURIComponent(project)}&month=${encodeURIComponent(month)}`),
   answerQuestion: (id: number, answer: QuestionAnswer) => call<QuestionAnswered>(`/api/questions/${id}/answer`, { method: 'POST', body: JSON.stringify(answer) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
   send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean; projectId?: string; generated?: boolean } = {}) =>

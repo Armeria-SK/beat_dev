@@ -1,0 +1,3 @@
+.ui-growth .bt-stat:hover { box-shadow: none; transform: none; }
+.ui-growth .bt-stat__n { overflow-wrap: anywhere; }
+.ui-growth__part { margin-top: var(--space-3); }
