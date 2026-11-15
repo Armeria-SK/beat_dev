@@ -58,22 +58,6 @@ test('A3: 止めた道具は、モデルに渡す道具の一覧から外れる�
   assert.ok(names.includes('shell_run'));
 });
 
-test('A3: 道具の数の上限（maxTools）は、止めた道具を外したあとの一覧で数える', async t => {
-  const plain = await setup(t, {}, { maxTools: 2 });
-  plain.adapter().scripts.push(reply('はい'));
-  await (await plain.send('こんにちは')).done;
-  const [first, second] = toolNames(plain.adapter().calls[0]!);
-  assert.ok(first && second);
-
-  const s = await setup(t, { [first]: 'block' }, { maxTools: 2 });
-  s.adapter().scripts.push(reply('はい'));
-  await (await s.send('こんにちは')).done;
-  const names = toolNames(s.adapter().calls[0]!);
-  assert.equal(names.length, 2, '止めた分が穴にならず、次の道具が入って 2 個のまま');
-  assert.ok(!names.includes(first));
-  assert.equal(names[0], second);
-});
-
 test('A3: 設定を変えると、次のモデルの呼び出しから一覧が変わる（会話の途中でも）。数えるとき（コンテキストの使用量）も同じ一覧を通る', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(reply('1'));

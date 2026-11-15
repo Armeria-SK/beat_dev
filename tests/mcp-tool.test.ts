@@ -278,7 +278,7 @@ test('パイプライン: MCP の道具は、会話のモデルに関わらず�
   assert.deepEqual(ran, ['called', 'called']);
 });
 
-test('レジストリの組: 内蔵が先・組が後。組の置き換えと削除、名前の重複（内蔵・別の組・組の中）は何も変えずに投げる。limit で切られた道具は cut で分かる', () => {
+test('レジストリの組: 内蔵が先・組が後。組の置き換えと削除、名前の重複（内蔵・別の組・組の中）は何も変えずに投げる', () => {
   const plain = (name: string): ToolDef => ({ name, description: name, input: Type.Object({}), effect: 'read', allowedIn: ['chat'], async execute() { return { content: name }; } });
   const r = new ToolRegistry();
   r.setGroup('a', [plain('mcp_a_x'), plain('mcp_a_y')]);
@@ -292,9 +292,6 @@ test('レジストリの組: 内蔵が先・組が後。組の置き換えと削
   r.setGroup('a', [plain('mcp_a_y'), plain('mcp_a_z')]);
   assert.deepEqual(r.names(), ['builtin', 'mcp_a_y', 'mcp_a_z'], '同じ組は丸ごと置き換え（自分の名前との重複は許す）');
   assert.equal(r.get('mcp_a_z')?.name, 'mcp_a_z');
-  assert.deepEqual(r.forRun('chat', { limit: 2 }).map(t => t.name), ['builtin', 'mcp_a_y']);
-  assert.deepEqual(r.cut('chat', { limit: 2 }).map(t => t.name), ['mcp_a_z']);
-  assert.deepEqual(r.cut('chat').map(t => t.name), []);
   assert.deepEqual(r.forRun('chat', { exclude: t => t.name === 'mcp_a_y' }).map(t => t.name), ['builtin', 'mcp_a_z']);
   assert.deepEqual(r.forRun('task').map(t => t.name), []);
   r.removeGroup('a');

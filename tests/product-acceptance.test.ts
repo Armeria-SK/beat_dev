@@ -529,16 +529,6 @@ test('3-1b 道具の一覧（本物の App）: acceptance_write は製品の会�
   assert.ok(!s.names().includes('acceptance_write'), s.names().join());
 });
 
-test('3-1b 登録の順（maxTools: 12）: 製品の計画モードの会話に plan_write と acceptance_write が残る', async t => {
-  const s = await setup(t, { models: [fakeModel('m1', { maxTools: 12 })] });
-  const shop = await s.product('shop');
-  s.adapter().scripts = [reply('a')];
-  await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
-  for (const name of ['plan_write', 'acceptance_write']) assert.ok(s.names().includes(name), `${name}: ${s.names().join()}`);
-  const order = builtinTools().map(tool => tool.name);
-  assert.ok(order.indexOf('acceptance_write') > order.indexOf('shell_run'));
-});
-
 test('3-1b 一覧の口: 無い間は空の下書きの形。AI の acceptance_write のあとは中身と hash、固定のあとは frozen。無い ID は 404', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');

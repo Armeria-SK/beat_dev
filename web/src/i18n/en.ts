@@ -124,7 +124,6 @@ export const en = {
   'settings.mcp.toolState.missing': 'Not found',
   'settings.mcp.toolState.schema_invalid': 'Input shape unreadable',
   'settings.mcp.toolState.unlisted': 'Not configured (unused)',
-  'settings.mcp.toolState.cut': 'Over the limit',
   'settings.mcp.problem.id': 'The id must be up to 16 lowercase letters and digits, starting with a letter.',
   'settings.mcp.problem.taken': 'This id is already in use.',
   'settings.mcp.problem.program': 'Enter a program.',
@@ -284,6 +283,7 @@ export const en = {
   'tasks.event.check_passed': 'Check command passed',
   'tasks.event.owner_check': 'Your check',
   'tasks.event.owner_fix': 'Fix for your check',
+  'tasks.event.owner_fix_answer': 'Fix for your answer',
   // p0-5
   // p0-6
   'ui.wordmark': 'beat',
@@ -1107,8 +1107,6 @@ export const en = {
   'ui.set.model.contextDesc': 'Empty asks the server',
   'ui.set.model.minContext': 'Least context needed',
   'ui.set.model.maxOutput': 'Longest reply',
-  'ui.set.model.maxTools': 'Tool limit',
-  'ui.set.model.maxToolsDesc': 'Empty sends every tool',
   'ui.set.model.vision': 'Reads images',
   'ui.set.model.remove': 'Remove model',
   'ui.set.model.removeShort': 'Remove',
@@ -1234,7 +1232,6 @@ export const en = {
   'ui.set.mcp.none': 'No server yet',
   'ui.set.mcp.tools': (registered: number, total: number) => `${registered} of ${total} tools`,
   'ui.set.mcp.changedCount': (n: number) => `${n} changed · review`,
-  'ui.set.mcp.cutCount': (n: number, max: number) => `${n} over the ${max} limit`,
   'ui.set.mcp.serverSwitch': (id: string) => `Use ${id}`,
   'ui.set.mcp.toolSwitch': (name: string) => `Use ${name}`,
   'ui.set.mcp.target': 'Starts',

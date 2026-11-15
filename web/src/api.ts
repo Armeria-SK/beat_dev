@@ -258,7 +258,7 @@ export type NotifyTestResult = { ok: true } | { ok: false; reason: string };
 export interface BrowserStatusView { enabled: boolean; running: boolean; loginOpen: boolean; tabs: number; pausedMinutes: number; canShowWindow: boolean }
 // 外の MCP サーバー（GET /api/mcp）。秘密の値は返らない（入っているかだけ）
 export type McpServerState = 'connecting' | 'ready' | 'failed' | 'off';
-export type McpToolState = 'registered' | 'off' | 'changed' | 'missing' | 'schema_invalid' | 'unlisted' | 'cut';
+export type McpToolState = 'registered' | 'off' | 'changed' | 'missing' | 'schema_invalid' | 'unlisted';
 export type McpEffect = 'read' | 'write' | 'network';
 export interface McpToolView { name: string; registered: string; state: McpToolState; reason?: string; description: string }
 export interface McpSecretView { kind: 'env' | 'header'; name: string; set: boolean; source?: 'os' }

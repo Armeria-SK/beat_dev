@@ -6,7 +6,7 @@ const en = {
   'list_changed_event': 'acceptance.json did not match the fixed version {version} at task_complete (changed outside beat)',
   'list_moved': 'The acceptance list changed to a new version while it was being checked. Call task_complete again.',
   'refused': 'The acceptance items of this task are not settled, so the task is not complete (refusal {attempt} of {limit} in a row). Fix what is listed and call task_complete again.',
-  'missing': 'Items with neither evidence nor a reason: {ids}. For each, pass items: [{"id": "A-1", "evidence": "E-3"}] with the tag of a successful tool call from this task, or [{"id": "A-1", "not_done": "why"}].',
+  'missing': 'Items with neither evidence nor a reason: {ids}. For each, pass items: [{"id": "{first}", "evidence": "E-<n>"}] with the tag of a successful tool call from this task in place of E-<n>, or [{"id": "{first}", "not_done": "why"}].',
   'bad_tag': '{id}: {tag} is not accepted ({why}).',
   'tag_format': 'write the tag as E-<number>, as it appears at the end of a tool result',
   'tag_unknown': 'there is no such tag in the tool calls of this task',
