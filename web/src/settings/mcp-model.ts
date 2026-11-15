@@ -169,10 +169,10 @@ export async function attempt(
 export type Tone = 'ok' | 'busy' | 'bad' | 'off';
 export const tone = (state: McpServerState): Tone => (state === 'ready' ? 'ok' : state === 'connecting' ? 'busy' : state === 'failed' ? 'bad' : 'off');
 
-// 説明が変わって止まっている道具・maxTools で渡せていない道具・登録できている道具の数
-export function summarize(server: { tools: ReadonlyArray<Pick<McpToolView, 'state'>> }): { changed: number; cut: number; registered: number } {
+// 説明が変わって止まっている道具・登録できている道具の数
+export function summarize(server: { tools: ReadonlyArray<Pick<McpToolView, 'state'>> }): { changed: number; registered: number } {
   const count = (state: McpToolView['state']): number => server.tools.filter(t => t.state === state).length;
-  return { changed: count('changed'), cut: count('cut'), registered: count('registered') };
+  return { changed: count('changed'), registered: count('registered') };
 }
 
 // サーバーが返す固定の理由の語を、画面の文言の鍵にする

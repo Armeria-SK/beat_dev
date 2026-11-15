@@ -36,7 +36,7 @@ export interface McpConnectInput {
 export type McpConnect = (input: McpConnectInput) => Promise<McpLink>;
 
 export type McpServerState = 'connecting' | 'ready' | 'failed' | 'off';
-export type McpToolState = 'registered' | 'off' | 'changed' | 'missing' | 'schema_invalid' | 'unlisted' | 'cut';
+export type McpToolState = 'registered' | 'off' | 'changed' | 'missing' | 'schema_invalid' | 'unlisted';
 
 export interface McpToolStatus {
   // サーバーでの元の名前
@@ -156,7 +156,6 @@ export class McpManager {
   readonly #d: McpManagerDeps;
   readonly #pins: McpPins;
   readonly #entries = new Map<string, Entry>();
-  readonly #cuts = new Map<string, ReadonlySet<string>>();
   #started = false;
 
   constructor(deps: McpManagerDeps) {
@@ -227,14 +226,8 @@ export class McpManager {
     return { ...(before ? { before } : {}), after: shapeOf(remote) };
   }
 
-  // chat.ts が maxTools で切った MCP の道具を知らせる（モデルごと。切られなくなれば空で呼ばれる）
-  cut(modelId: string, names: readonly string[]): void {
-    if (names.length === 0) this.#cuts.delete(modelId); else this.#cuts.set(modelId, new Set(names));
-  }
-
   status(): McpServerStatus[] {
     const config = this.#d.config();
-    const cut = new Set([...this.#cuts.values()].flatMap(s => [...s]));
     return config.mcp.servers.map(server => {
       const entry = this.#entries.get(server.id);
       const state: McpServerState = !server.enabled ? 'off' : entry?.state ?? 'connecting';
@@ -248,7 +241,7 @@ export class McpManager {
         id: server.id, transport: server.transport, enabled: server.enabled, target: this.#target(server, entry?.secrets ?? []),
         state, ...(entry?.reason ? { reason: entry.reason } : {}), ...(entry?.detail ? { detail: entry.detail } : {}),
         stderr: redactSecrets(stderr.slice(-2 * STDERR_MAX), entry?.secrets ?? []).slice(-STDERR_MAX),
-        tools: tools.map(t => (t.state === 'registered' && cut.has(t.registered) ? { ...t, state: 'cut' as const } : t)),
+        tools,
       };
     });
   }

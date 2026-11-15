@@ -271,15 +271,6 @@ test('T-34: 落ちている間、道具を呼ぶと mcp.unavailable で返る（
   assert.match(out.content, /is not connected/u);
 });
 
-test('T-35: maxTools で切られた道具は、状態が cut になる（モデルごとの記録。切られなくなれば戻る）', async () => {
-  const s = setup([server()]);
-  await s.manager.start();
-  s.manager.cut('m1', ['mcp_srv_echo']);
-  assert.equal(s.manager.status()[0]!.tools[0]!.state, 'cut');
-  s.manager.cut('m1', []);
-  assert.equal(s.manager.status()[0]!.tools[0]!.state, 'registered');
-});
-
 test('T-36: stop は全部切断して、道具を外す。stderr の末尾は秘密を伏せて状態に出る', async () => {
   const s = setup([server()]);
   await s.manager.start();
