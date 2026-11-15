@@ -24,6 +24,11 @@ import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
+const assertFilled = (text: string): void => {
+  assert.ok(text.trim().length > 0, 'empty');
+  assert.doesNotMatch(text, /[{}]/u, text);
+  assert.doesNotMatch(text, CJK, text);
+};
 
 function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => void = () => undefined, taint = false) {
   const paths: AppPaths = resolvePaths(tempDir(t));
@@ -105,21 +110,32 @@ test('承認の依頼: 題と理由は英語で書く', async t => {
   const outsideRead = setup(t);
   const outsideAbs = resolve(outsideRead.ctx.workspace, '../out.txt');
   const catRequest = await outsideRead.parked('shell_run', { command: 'cat ../out.txt' });
-  assert.deepEqual(catRequest.checks, [`It touches something outside the allowed folders (${outsideAbs})`]);
-  assert.deepEqual((await shellRun.preCheck!({ command: 'cat ../out.txt' }, outsideRead.ctx)).details, [`../out.txt -> ${outsideAbs}: outside the allowed folders`]);
+  const catCheck = await shellRun.preCheck!({ command: 'cat ../out.txt' }, outsideRead.ctx);
+  assert.deepEqual([catCheck.reasonKeys, catCheck.askKinds], [['guard.touches_outside'], ['outside_read']]);
+  assert.deepEqual(catRequest.checks, catCheck.reasons);
+  assert.equal(catRequest.checks.length, 1);
+  assertFilled(catRequest.checks[0]!);
+  assert.ok(catRequest.checks[0]!.includes(`(${outsideAbs})`), catRequest.checks[0]);
+  assert.deepEqual(catCheck.details, [`../out.txt -> ${outsideAbs}: outside the allowed folders`]);
 
   const hardDenied = setup(t);
-  assert.equal((await hardDenied.call('shell_run', { command: 'mkfs' })).output.content, 'Not run (denied):\n- Creating a filesystem is not allowed (mkfs)\nThink of another way, or ask the user');
+  const mkfsCheck = await shellRun.preCheck!({ command: 'mkfs' }, hardDenied.ctx);
+  assert.deepEqual([mkfsCheck.decision, mkfsCheck.reasonKeys], ['deny', ['guard.hard_denied']]);
+  assertFilled(mkfsCheck.reasons[0]!);
+  assert.ok(mkfsCheck.reasons[0]!.includes('(mkfs)'), mkfsCheck.reasons[0]);
+  assert.equal((await hardDenied.call('shell_run', { command: 'mkfs' })).output.content, `Not run (denied):\n- ${mkfsCheck.reasons[0]}\nThink of another way, or ask the user`);
 
   const shellEdit = setup(t);
   const shellRequest = await shellEdit.parked('shell_run', { command: 'npm install left-pad' });
   assert.equal(shellRequest.title, 'Run a command');
-  assert.deepEqual(shellRequest.checks, [
-    'Installing runs code along the way (npm)',
-    'npm runs code in the working folder (package.json scripts, tests, a Makefile and the like). It is checked with you every time',
-    'This command also runs code from files it loads and from parts it installs, beyond the files shown. Only the files shown were checked',
-  ]);
-  const shellDetails = (await shellRun.preCheck!({ command: 'npm install left-pad' }, shellEdit.ctx)).details ?? [];
+  const npmCheck = await shellRun.preCheck!({ command: 'npm install left-pad' }, shellEdit.ctx);
+  assert.deepEqual([npmCheck.reasonKeys, npmCheck.askKinds], [['list.install', 'code.project_tool'], ['code']]);
+  assert.deepEqual(shellRequest.checks, npmCheck.reasons);
+  assert.equal(shellRequest.checks.length, 3);
+  for (const reason of shellRequest.checks) assertFilled(reason);
+  assert.ok(shellRequest.checks[0]!.includes('(npm)') && shellRequest.checks[1]!.startsWith('npm '), shellRequest.checks.join(' / '));
+  assert.equal(shellRequest.checks[2], 'This command also runs code from files it loads and from parts it installs, beyond the files shown. Only the files shown were checked');
+  const shellDetails = npmCheck.details ?? [];
   assert.ok(shellDetails.length === 0 || shellDetails.every(d => typeof d === 'string'));
 });
 
@@ -129,9 +145,17 @@ test('コードを動かす確かめ: 理由・beat 自身に触れる目印・�
   mkdirSync(join(s.paths.workspace, 'sub'), { recursive: true });
   const command = 'node put.js; node nothere.js; node ./sub';
   const request = await s.parked('shell_run', { command });
-  assert.equal((await shellRun.preCheck!({ command }, s.ctx)).askKinds?.includes('code'), true);
-  assert.equal(request.checks[0], 'This code contains text that touches beat itself (its settings, persona, approvals or memory): /api/, 127.0.0.1 / localhost');
-  assert.ok(request.checks.includes('It runs code written in a file (put.js). beat can rewrite that file, so it is checked with you every time'));
+  const check = await shellRun.preCheck!({ command }, s.ctx);
+  assert.equal(check.askKinds?.includes('code'), true);
+  assert.equal(check.reasonKeys?.[0], 'code.self_touch');
+  assert.equal(request.checks[0], check.reasons[0]);
+  assertFilled(request.checks[0]!);
+  assert.ok(request.checks[0]!.endsWith(': /api/, 127.0.0.1 / localhost'), request.checks[0]);
+  const fileRun = check.reasonKeys!.indexOf('code.file_run');
+  assert.ok(fileRun >= 0, check.reasonKeys!.join(', '));
+  assert.ok(request.checks.includes(check.reasons[fileRun]!));
+  assertFilled(check.reasons[fileRun]!);
+  assert.ok(check.reasons[fileRun]!.includes('(put.js)'), check.reasons[fileRun]);
   const texts = request.preview.map(p => p.text);
   assert.equal(texts[0], "fetch('http://127.0.0.1:4777/api/settings');\n");
   assert.equal(texts[1], 'This file does not exist yet (the command creates it). Its contents cannot be shown');
