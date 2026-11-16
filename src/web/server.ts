@@ -94,16 +94,25 @@ function modelsView(app: App) {
   const config = app.config();
   return {
     routing: config.routing,
-    models: config.models.map(m => ({
-      id: m.id, label: m.label ?? m.id, provider: m.provider, model: m.model,
-      providerKind: config.providers.find(p => p.id === m.provider)?.kind,
-      contextLength: m.contextLength, minContext: m.minContext, maxOutputTokens: m.maxOutputTokens,
-      inChat: config.routing.chat.includes(m.id),
-      efforts: modelEfforts(config, m, app.status.get(m.id)),
-      probe: app.status.get(m.id) ?? null,
-      cooldown: app.status.coolingDown(m.id) ?? null,
-      recentFailures: app.health.failures(m.id),
-    })),
+    models: config.models.map(m => {
+      const { capacity, maxOutput } = app.status.limits(m);
+      const probe = app.status.get(m.id);
+      return {
+        id: m.id, label: m.label ?? m.id, provider: m.provider, model: m.model,
+        providerKind: config.providers.find(p => p.id === m.provider)?.kind,
+        contextLength: m.contextLength, maxOutputTokens: m.maxOutputTokens,
+        limits: {
+          context: capacity > 0 ? capacity : null,
+          maxOutput: capacity > 0 || m.maxOutputTokens !== undefined ? maxOutput : null,
+          required: probe?.required ?? null,
+        },
+        inChat: config.routing.chat.includes(m.id),
+        efforts: modelEfforts(config, m, probe),
+        probe: probe ?? null,
+        cooldown: app.status.coolingDown(m.id) ?? null,
+        recentFailures: app.health.failures(m.id),
+      };
+    }),
   };
 }
 
@@ -249,6 +258,7 @@ export function createWebServer(app: App): WebServer {
         id: m.id, role: m.role, runId: m.run_id, createdAt: m.created_at,
         text: m.message.role === 'user' ? stripAttachments(m.message.content) : m.message.content,
         ...(m.message.role === 'user' && m.message.attachments?.length ? { attachments: m.message.attachments } : {}),
+        ...(m.message.role === 'user' && m.message.note ? { note: m.message.note } : {}),
         ...(m.message.role === 'assistant' && m.message.toolCalls?.length
           ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(redactJsonValue(c.arguments ?? c.raw ?? null)).slice(0, 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError), ...(m.message.gate ? { gate: m.message.gate } : {}) } : {}),

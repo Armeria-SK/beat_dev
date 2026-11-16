@@ -10,7 +10,7 @@ import { ProviderError, type ModelRequest, type StreamEvent } from '../src/provi
 import { fakeServer, sse } from './helpers.ts';
 
 const model = (over: Partial<ModelConfig> = {}): ModelConfig => ({
-  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 65536, maxOutputTokens: 1024, vision: false, ...over,
+  id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, maxOutputTokens: 1024, vision: false, ...over,
 });
 const request = (m: ModelConfig, over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: m, system: { frozen: 'あなたは beat', dynamic: '現在時刻' }, messages: [{ role: 'user', content: 'こんにちは' }],

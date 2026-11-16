@@ -38,9 +38,9 @@ export function testConfig(): AppConfig {
     ...defaultConfig(),
     providers: [...defaultConfig().providers, { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:11434/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 }],
     models: [
-      { id: 'claude-sonnet', label: 'Claude Sonnet 5.5', provider: 'anthropic', model: 'claude-sonnet-5-5', minContext: 65536, maxOutputTokens: 8192, vision: true },
-      { id: 'claude-haiku', label: 'Claude Haiku 5.5', provider: 'anthropic', model: 'claude-haiku-5-5', minContext: 65536, maxOutputTokens: 8192, vision: true },
-      { id: 'local', label: 'ローカル', provider: 'local', model: 'qwen3:32b', contextLength: 65536, minContext: 65536, maxOutputTokens: 8192, vision: false },
+      { id: 'claude-sonnet', label: 'Claude Sonnet 5.5', provider: 'anthropic', model: 'claude-sonnet-5-5', maxOutputTokens: 8192, vision: true },
+      { id: 'claude-haiku', label: 'Claude Haiku 5.5', provider: 'anthropic', model: 'claude-haiku-5-5', maxOutputTokens: 8192, vision: true },
+      { id: 'local', label: 'ローカル', provider: 'local', model: 'qwen3:32b', contextLength: 65536, maxOutputTokens: 8192, vision: false },
     ],
     routing: { chat: ['claude-sonnet'], background: ['claude-haiku'], retriesPerModel: 2 },
   };

@@ -30,7 +30,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   before(paths.workspace);
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   edit(config);
   writeFileSync(paths.config, JSON.stringify(config));
@@ -310,10 +310,10 @@ test('切れた振り返りは失敗にして、見た発言の位置を進め�
   await s.chat('c1', 'コーヒーの話');
   s.clock.now += 6 * MIN;
   s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' });
-  s.adapter().scripts.push(async function* () {
+  s.adapter().scripts.push(...Array.from({ length: 4 }, (): Script => async function* () {
     yield { type: 'text', delta: '振り返ると、ユーザーは' };
     yield { type: 'done', stop: 'max_tokens' as StopReason };
-  });
+  }));
   assert.equal(await s.app.worker.tick(), 'ran');
   const job = s.app.reviews.list()[0]!;
   assert.equal(job.status, 'failed');

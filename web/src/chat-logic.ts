@@ -121,31 +121,39 @@ export interface ReplyTurn {
 }
 
 // 1 回の返事（同じ runId）の中で、道具を使うたびに文が分かれて保存される。画面では見出しを 1 つにして、
-// 中間の文と道具の行を、見出しの下に順に並べる。発言（user）が入ったら、そこで次の返事になる。runId の無い文は、それぞれが 1 回の返事
+// 中間の文と道具の行を、見出しの下に順に並べる。発言（user）が入ったら、そこで次の返事になる。runId の無い文は、それぞれが 1 回の返事。
+// 返事が上限で切れて beat が続きを頼んだ一言（note: 'continue'）は区切りにせず、切れた文と続きを区切りなしでつないでコピーする
 export function replyTurns(
-  messages: ReadonlyArray<{ id: number; role: string; runId: string | null; text: string }>,
+  messages: ReadonlyArray<{ id: number; role: string; runId: string | null; text: string; note?: string | undefined }>,
   liveRunId: string | null = null,
 ): Map<number, ReplyTurn> {
   const out = new Map<number, ReplyTurn>();
-  let group: Array<{ id: number; text: string }> = [];
+  let group: Array<{ id: number; text: string; glued: boolean }> = [];
+  let glue = false;
   let groupRun: string | null = null;
   const close = (): void => {
     const last = group.at(-1);
     if (!last) return;
-    const copyText = groupRun !== null && groupRun === liveRunId ? null : group.map(g => g.text).join('\n\n');
+    const copyText = groupRun !== null && groupRun === liveRunId ? null : group.map((g, i) => (i === 0 ? '' : g.glued ? '' : '\n\n') + g.text).join('');
     group.forEach((g, i) => out.set(g.id, { head: i === 0, copyText: g === last ? copyText : null }));
     group = [];
     groupRun = null;
   };
   for (const m of messages) {
-    if (m.role === 'user') { close(); continue; }
-    if (m.role !== 'assistant') continue;
-    if (m.runId === null || m.runId !== groupRun) close();
+    if (m.role === 'user' && m.note === 'continue') { glue = true; continue; }
+    if (m.role === 'user') { close(); glue = false; continue; }
+    if (m.role !== 'assistant') { glue = false; continue; }
+    if (m.runId === null || m.runId !== groupRun) { close(); glue = false; }
     groupRun = m.runId;
-    group.push({ id: m.id, text: m.text });
+    group.push({ id: m.id, text: m.text, glued: glue });
+    glue = false;
   }
   close();
   return out;
+}
+
+export function endsWithUserTurn(messages: ReadonlyArray<{ role: string }>): boolean {
+  return messages.at(-1)?.role === 'user';
 }
 
 export const SLASH_COMMANDS = [

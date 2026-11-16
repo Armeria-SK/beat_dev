@@ -39,6 +39,7 @@ export interface ProbeResult {
   measured?: number | undefined;
   modelMax?: number | undefined;
   effective?: number | undefined;
+  maxOutput?: number | undefined;
   required: number;
   message: string;
   messageCode?: string | undefined;

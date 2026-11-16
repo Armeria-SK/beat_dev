@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer,
 import type { PermissionMode } from '../../../src/shared/permission-mode.ts';
 import { api, ApiError, type ChatBuild, type ChecklistItem, type Conversation as ConversationRow, type Message, type ModelChoice, type ModelView, type PendingMessage, type Project, type UploadView, type WaitReason } from '../api.ts';
 import { waitText } from './wait.ts';
-import { isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
+import { endsWithUserTurn, isNearBottom, newConversationId, sendChoiceOf, sendFailureOf, TextThrottle, type SendFailure } from '../chat-logic.ts';
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
@@ -380,7 +380,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   const unfinished = useRef(new Set<string>());
   useEffect(() => { for (const b of builds) if (b.status !== 'failed') unfinished.current.add(b.id); });
   const checklist = liveChecklist ?? readList?.items ?? [];
-  const lastIsUser = messages.at(-1)?.role === 'user';
+  const lastIsUser = endsWithUserTurn(messages);
 
   useLayoutEffect(() => {
     const el = scroller.current;

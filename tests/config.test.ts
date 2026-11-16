@@ -46,12 +46,12 @@ test('形式の誤りは場所つきで返す', () => {
 test('整合性の問題をまとめて返す', () => {
   const config = testConfig();
   config.models.push({ ...config.models[0]!, provider: 'nope' });
-  config.models.push({ id: 'local2', provider: 'local', model: 'x', minContext: 65536, maxOutputTokens: 8192, vision: false });
+  config.models.push({ id: 'local2', provider: 'local', model: 'x', maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   assert.throws(() => parseConfig(config), (e: unknown) => {
     const problems = (e as ConfigError).problems.join('\n');
-    return /is duplicated/.test(problems) && /contextLength is required/.test(problems) && /routing\.chat/.test(problems) && /Use https for connections that use an API key/.test(problems);
+    return /is duplicated/.test(problems) && !/contextLength is required/.test(problems) && /routing\.chat/.test(problems) && /Use https for connections that use an API key/.test(problems);
   });
 });
 
@@ -70,9 +70,9 @@ test('apiKeyEnv の無い Anthropic も ANTHROPIC_API_KEY を使うので、こ�
   assert.doesNotThrow(() => parseConfig(loopback));
 });
 
-test('contextLength が minContext より小さくても保存は止めない（使う前の確認で知らせる）', () => {
+test('contextLength が必要な長さより小さくても保存は止めない（使う前の確認で知らせる）', () => {
   const config = testConfig();
-  config.models[2]!.contextLength = 16384; // minContext（65536）より小さい
+  config.models[2]!.contextLength = 16384; // 必要な長さより小さい
   assert.doesNotThrow(() => parseConfig(config));
 });
 
@@ -164,9 +164,9 @@ test('内容の問題は ID で書いた場所（path）つきで返し、文（
   config.providers.push({ id: 'oa', kind: 'openai_compatible', maxParallel: 1, timeoutMs: 60_000 });
   config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'http://192.168.1.10:8000/v1', apiKeyEnv: 'REMOTE_KEY', maxParallel: 1, timeoutMs: 60_000 });
   config.models.push({ ...config.models[0]! });
-  config.models.push({ id: 'orphan', provider: 'nope', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
-  config.models.push({ id: 'no-ctx', provider: 'local', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
-  config.models.push({ id: 'too-big', provider: 'local', model: 'x', contextLength: 8192, minContext: 4096, maxOutputTokens: 8192, vision: false });
+  config.models.push({ id: 'orphan', provider: 'nope', model: 'x', maxOutputTokens: 1024, vision: false });
+  config.models.push({ id: 'no-ctx', provider: 'local', model: 'x', maxOutputTokens: 1024, vision: false });
+  config.models.push({ id: 'too-big', provider: 'local', model: 'x', contextLength: 8192, maxOutputTokens: 8192, vision: false });
   config.routing.chat = ['missing'];
   config.tools.shell.allow = ['npm test', 'npm test; rm -rf .'];
   config.server.origins = ['http://a.example/path'];
@@ -174,9 +174,10 @@ test('内容の問題は ID で書いた場所（path）つきで返し、文（
 
   const paths = issues.map(i => i.path);
   for (const path of [
-    'providers.local.id', 'providers.oa.baseUrl', 'providers.remote.baseUrl', 'models.claude-sonnet.id', 'models.orphan.provider', 'models.no-ctx.contextLength',
+    'providers.local.id', 'providers.oa.baseUrl', 'providers.remote.baseUrl', 'models.claude-sonnet.id', 'models.orphan.provider',
     'models.too-big.maxOutputTokens', 'routing.chat', 'tools.shell.allow', 'server.origins',
   ]) assert.ok(paths.includes(path), `${path} が無い: ${paths.join(', ')}`);
+  assert.ok(!paths.includes('models.no-ctx.contextLength'), 'contextLength は書かなくてよい（model-auto）');
   assert.equal(issues.length, problems.length, '文と同じ数');
   issues.forEach((issue, i) => assert.ok(problems[i]!.endsWith(issue.message), `${issue.path}: 文の後ろが message と同じ`));
   assert.ok(problems.includes('routing.chat: Model "missing" does not exist'), '文は今までと同じ');
@@ -204,7 +205,7 @@ test('形式の誤りの番号（/models/0/...）はサーバーが ID に直す
 
 test('番号が指す項目に id が無い・一覧の形が壊れているときは、番号のままにする（落ちない）', () => {
   const raw = JSON.parse(JSON.stringify(testConfig()));
-  raw.models.push({ provider: 'local', model: 'x', minContext: 4096, maxOutputTokens: 1024, vision: false });
+  raw.models.push({ provider: 'local', model: 'x', maxOutputTokens: 1024, vision: false });
   const paths = issuesOf(raw).issues.map(i => i.path);
   assert.ok(paths.some(p => p === 'models.3.id' || p.startsWith('models.3')), paths.join(', '));
   const broken = issuesOf({ ...JSON.parse(JSON.stringify(testConfig())), models: 'none' });
@@ -231,4 +232,17 @@ test('tools.agent: 既定は無効・タスクから使わない・1 回に 3 �
   for (const [path, value] of bad) {
     assert.throws(() => parseConfig(withAgent(value)), (e: unknown) => e instanceof ConfigError && e.issues.some(i => i.path.startsWith(path)), JSON.stringify(value));
   }
+});
+test('model-auto: OpenAI 互換のモデルも contextLength なしで保存できる。両方書いてあって maxOutputTokens >= contextLength なら今どおり断る', () => {
+  const config = testConfig();
+  delete config.models[2]!.contextLength;
+  assert.doesNotThrow(() => parseConfig(config));
+  const both = testConfig();
+  both.models[2]!.contextLength = 8192;
+  both.models[2]!.maxOutputTokens = 8192;
+  assert.throws(() => parseConfig(both), (e: unknown) => /models\.local: maxOutputTokens is equal to or larger than the context length/.test((e as ConfigError).problems.join('\n')));
+  const onlyOut = testConfig();
+  delete onlyOut.models[2]!.contextLength;
+  onlyOut.models[2]!.maxOutputTokens = 100_000;
+  assert.doesNotThrow(() => parseConfig(onlyOut), '長さを書いていなければ比べない');
 });

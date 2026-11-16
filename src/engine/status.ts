@@ -5,7 +5,7 @@ import type { ProbeResult } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { providerText } from '../shared/messages/providers.ts';
-import { contextAvailable, MEMORY_BUDGET_RATIO } from './context-budget.ts';
+import { contextAvailable, maxOutputFor, MEMORY_BUDGET_RATIO } from './context-budget.ts';
 
 export const HISTORY_RESERVE = 8192;
 
@@ -13,10 +13,13 @@ export const HISTORY_RESERVE = 8192;
 // 長さが分からないと予算が決まらず、予算が決まらないと必要な長さが決まらない、という堂々巡りを避けるため、
 // 「その長さで足りる」いちばん短い長さを二分探索で求める（長さが増えるほど足りないものは減るので、答えは 1 つに決まる）。
 export function requiredContext(model: ModelConfig, baseTokens: number, memoryTokens = 0): number {
-  const fixed = baseTokens + HISTORY_RESERVE + model.maxOutputTokens;
-  const needAt = (capacity: number) => Math.max(model.minContext, fixed + Math.min(memoryTokens, Math.floor(MEMORY_BUDGET_RATIO * Math.max(0, contextAvailable(capacity, model)))));
+  const fixed = baseTokens + HISTORY_RESERVE;
+  const needAt = (capacity: number) => {
+    const maxOutput = maxOutputFor(model, capacity);
+    return fixed + maxOutput + Math.min(memoryTokens, Math.floor(MEMORY_BUDGET_RATIO * Math.max(0, contextAvailable(capacity, maxOutput))));
+  };
   let low = 0;
-  let high = Math.max(model.minContext, fixed + memoryTokens);
+  let high = fixed + maxOutputFor(model, Infinity) + memoryTokens;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
     if (middle >= needAt(middle)) high = middle; else low = middle + 1;
@@ -65,6 +68,12 @@ export class ModelStatus {
   get(modelId: string): ProbeResult | undefined { return this.#results.get(modelId); }
   all(): ProbeResult[] { return [...this.#results.values()]; }
   usable(modelId: string): boolean { return this.#results.get(modelId)?.status === 'ok'; }
+
+  limits(model: ModelConfig): { capacity: number; maxOutput: number } {
+    const probe = this.#results.get(model.id);
+    const capacity = probe?.effective ?? model.contextLength ?? 0;
+    return { capacity, maxOutput: maxOutputFor(model, capacity, probe?.maxOutput) };
+  }
 
   cooldown(modelId: string, until: number, reason: string): void { this.#cooldowns.set(modelId, { until, reason }); }
   endCooldown(modelId: string): void { this.#cooldowns.delete(modelId); }

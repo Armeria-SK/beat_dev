@@ -259,9 +259,9 @@ async function start(): Promise<void> {
   config.server = { host: HOST, port: PORT, origins: [], tailscaleLogins: [] };
   config.providers = [...config.providers, { id: 'preview', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'PREVIEW_KEY', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [
-    { id: 'preview-a', label: 'Preview A', provider: 'preview', model: 'preview-a', contextLength: 65536, minContext: 4096, maxOutputTokens: 2048, vision: false, efforts: ['low', 'medium', 'high'] },
-    { id: 'preview-b', label: 'Preview B', provider: 'preview', model: 'preview-b', contextLength: 32768, minContext: 4096, maxOutputTokens: 2048, vision: false },
-    { id: 'preview-small', label: 'Preview small', provider: 'preview', model: 'preview-small', contextLength: 4096, minContext: 4096, maxOutputTokens: 2048, vision: false },
+    { id: 'preview-a', label: 'Preview A', provider: 'preview', model: 'preview-a', contextLength: 65536, maxOutputTokens: 2048, vision: false, efforts: ['low', 'medium', 'high'] },
+    { id: 'preview-b', label: 'Preview B', provider: 'preview', model: 'preview-b', contextLength: 32768, maxOutputTokens: 2048, vision: false },
+    { id: 'preview-small', label: 'Preview small', provider: 'preview', model: 'preview-small', contextLength: 4096, maxOutputTokens: 2048, vision: false },
   ];
   config.routing = { chat: ['preview-a', 'preview-b'], background: ['preview-a'], retriesPerModel: 0 };
   config.tools.roots = [{ path: WORK, mode: 'write' }];

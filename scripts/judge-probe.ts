@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import { findModel, parseConfig } from '../src/config/store.ts';
+import { maxOutputFor } from '../src/engine/context-budget.ts';
 import { modelEfforts } from '../src/engine/efforts.ts';
 import { EndpointLimiter } from '../src/providers/limiter.ts';
 import { ProviderRegistry } from '../src/providers/registry.ts';
@@ -87,7 +88,7 @@ async function classify(options: ProbeOptions, limiter: EndpointLimiter, prompt:
   try {
     let text = '';
     for await (const event of adapter.stream({
-      model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(options.maxTokens, model.maxOutputTokens), effort, signal,
+      model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(options.maxTokens, maxOutputFor(model, model.contextLength ?? Infinity)), effort, signal,
     })) {
       if (event.type === 'text') text += event.delta;
       else if (event.type === 'done' && event.stop === 'max_tokens') { note.truncated = true; note.raw = text; throw new TruncatedReply(); }
@@ -103,7 +104,7 @@ async function holdSlot(options: ProbeOptions, limiter: EndpointLimiter, signal:
   const done = (async () => {
     try {
       for await (const _event of adapter.stream({
-        model, system: { frozen: CONTENTION_SYSTEM, dynamic: '' }, messages: [{ role: 'user', content: CONTENTION_USER }], tools: [], maxOutputTokens: Math.min(CONTENTION_TOKENS, model.maxOutputTokens), signal,
+        model, system: { frozen: CONTENTION_SYSTEM, dynamic: '' }, messages: [{ role: 'user', content: CONTENTION_USER }], tools: [], maxOutputTokens: Math.min(CONTENTION_TOKENS, maxOutputFor(model, model.contextLength ?? Infinity)), signal,
       })) { if (signal.aborted) break; }
     } catch { } finally { release(); }
   })();

@@ -39,7 +39,7 @@ function router(options: { tools: number; summaryFails?: (n: number) => boolean 
 }
 
 async function setup(t: { after: (fn: () => void) => void }, options: { tools: number; summaryFails?: (n: number) => boolean }) {
-  const s = await startApp(t, { models: [fakeModel('m1', { contextLength: 32768, minContext: 4096, maxOutputTokens: 1024 })] });
+  const s = await startApp(t, { models: [fakeModel('m1', { contextLength: 32768, maxOutputTokens: 1024 })] });
   mkdirSync(s.paths.workspace, { recursive: true });
   writeFileSync(join(s.paths.workspace, 'big.txt'), 'う'.repeat(2000));
   const r = router(options);

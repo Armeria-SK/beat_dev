@@ -17,7 +17,7 @@ export function groupExchanges(messages: readonly ChatMessage[]): ChatMessage[][
   const groups: ChatMessage[][] = [];
   let current: ChatMessage[] = [];
   for (const m of messages) {
-    if (m.role === 'user' && current.length) { groups.push(current); current = []; }
+    if (m.role === 'user' && m.note !== 'continue' && current.length) { groups.push(current); current = []; }
     current.push(m);
   }
   if (current.length) groups.push(current);

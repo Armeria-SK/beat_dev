@@ -87,12 +87,9 @@ function findings(config: AppConfig): Finding[] {
     modelIds.add(model.id);
     const provider = config.providers.find(p => p.id === model.provider);
     if (!provider) { add(`models.${model.id}.provider`, `Provider "${model.provider}" does not exist`, `models.${model.id}`); continue; }
-    if (provider.kind !== 'anthropic' && model.contextLength === undefined) {
-      add(`models.${model.id}.contextLength`, 'contextLength is required for local LLMs and OpenAI-compatible providers (see the README section on the context length of local LLMs)', `models.${model.id}`);
-    }
-    // contextLength < minContext は保存を止めない（使う前の確認で「使えない」と知らせる）。
+    // 長さが足りないことは保存を止めない（使う前の確認で「使えない」と知らせる）。
     // 起動や保存を拒否すると、メタデータの誤りで全体が止まってしまう
-    if (model.contextLength !== undefined && model.maxOutputTokens >= model.contextLength) {
+    if (model.contextLength !== undefined && model.maxOutputTokens !== undefined && model.maxOutputTokens >= model.contextLength) {
       add(`models.${model.id}.maxOutputTokens`, 'maxOutputTokens is equal to or larger than the context length', `models.${model.id}`);
     }
   }

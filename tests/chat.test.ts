@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  firstLine, liveRenderDelay, replyTurns, isNearBottom, isRenameWithoutTitle, newConversationId, renameTitleOf,
+  endsWithUserTurn, firstLine, liveRenderDelay, replyTurns, isNearBottom, isRenameWithoutTitle, newConversationId, renameTitleOf,
   mergeNotice, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, TextThrottle,
 } from '../web/src/chat-logic.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -18,7 +18,7 @@ const probe = (patch: Partial<Probe> = {}): Probe => ({
   message: 'too small', checkedAt: 1, ...patch,
 });
 const model = (id: string, patch: Partial<ModelView> = {}): ModelView => ({
-  id, label: id, provider: 'p', model: `${id}-name`, minContext: 4096, maxOutputTokens: 512, inChat: true, probe: null, ...patch,
+  id, label: id, provider: 'p', model: `${id}-name`, maxOutputTokens: 512, limits: { context: null, maxOutput: null, required: null }, inChat: true, probe: null, ...patch,
 });
 
 test('sendFailureOf: ApiError の 409 は context と見分け、ApiError 以外は渡された代わりの文にする', () => {
@@ -298,4 +298,21 @@ test('作業の一覧の部品: 項目の文は文字のまま出す（Markdown�
     assert.doesNotMatch(typeof en[key] === 'string' ? en[key] : en[key](1, 2), CJK_CHARS, `${key}: 英語に日本語が混ざらない`);
   }
   assert.equal(en['ui.checklist.count'](2, 5), '2 / 5');
+});
+
+test('replyTurns（model-auto B）: 続きを頼んだ一言は返事を区切らない（見出しは 1 つ）。持ち主の発言は今どおり区切る', () => {
+  const m = (id: number, role: string, runId: string | null, text = '', note?: string) => ({ id, role, runId, text, ...(note ? { note } : {}) });
+  const turns = replyTurns([m(1, 'user', null, '書いて'), m(2, 'assistant', 'r1', 'あい'), m(3, 'user', 'r1', 'continue', 'continue'), m(4, 'assistant', 'r1', 'うえ'), m(5, 'user', null, '次'), m(6, 'assistant', 'r2', 'お')]);
+  assert.deepEqual([2, 4].map(id => turns.get(id)?.head), [true, false]);
+  assert.equal(turns.get(4)?.copyText, 'あいうえ');
+  assert.equal(turns.get(6)?.head, true);
+  const viaTool = replyTurns([m(1, 'user', null, 'go'), m(2, 'assistant', 'r1', 'A'), m(3, 'user', 'r1', 'continue', 'continue'), m(4, 'tool', 'r1', 'out'), m(5, 'assistant', 'r1', 'B')]);
+  assert.equal(viaTool.get(5)?.copyText, 'A\n\nB', '道具の行を挟んだら、画面と同じく区切る');
+});
+
+test('endsWithUserTurn（model-auto B）: 最後が続きの一言でも、持ち主の発言と同じくやり直せる（engine の retry と同じ判定）', () => {
+  assert.equal(endsWithUserTurn([{ role: 'user' }, { role: 'assistant' }, { role: 'user', note: 'continue' }] as Array<{ role: string }>), true);
+  assert.equal(endsWithUserTurn([{ role: 'user' }]), true);
+  assert.equal(endsWithUserTurn([{ role: 'user' }, { role: 'assistant' }]), false);
+  assert.equal(endsWithUserTurn([]), false);
 });

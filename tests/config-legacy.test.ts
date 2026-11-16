@@ -27,7 +27,7 @@ function ownerShapedConfig() {
   const config = JSON.parse(JSON.stringify(defaultConfig())) as Record<string, any>;
   config.language = 'ja';
   config.providers.push({ id: 'custom-local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8081/v1', maxParallel: 1, timeoutMs: 600000 });
-  config.models = [{ id: 'qwen-local', provider: 'custom-local', model: 'qwen', contextLength: 65536, minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false }];
+  config.models = [{ id: 'qwen-local', provider: 'custom-local', model: 'qwen', contextLength: 65536, maxOutputTokens: 4096, toolMode: 'native', vision: false }];
   config.routing = { chat: ['qwen-local'], background: ['qwen-local'], retriesPerModel: 2 };
   config.tools.roots = [{ path: 'workspace', mode: 'write' }];
   config.worker.autonomy = true;
@@ -201,7 +201,7 @@ test('起動のログ: 保存で古い鍵が消えたあと、手で toolMode �
 function withOldOllama(baseUrl?: string, id = 'ollama') {
   const config = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
   config.providers.push({ id, kind: 'ollama', ...(baseUrl === undefined ? {} : { baseUrl }), maxParallel: 3, timeoutMs: 120_000 });
-  config.models.push({ id: 'old-local', provider: id, model: 'qwen3:8b', contextLength: 32768, minContext: 4096, maxOutputTokens: 2048, vision: false });
+  config.models.push({ id: 'old-local', provider: id, model: 'qwen3:8b', contextLength: 32768, maxOutputTokens: 2048, vision: false });
   return config;
 }
 
@@ -427,3 +427,55 @@ for (const row of BOOT_LOG_ROWS) {
     boot.unchanged();
   });
 }
+
+// model-auto: 古い形（モデルの項目に minContext がある）は、minContext と maxOutputTokens を自動に戻す。contextLength は残す
+function withOldModelLimits() {
+  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+  raw.models = [
+    { id: 'claude-sonnet-5-5', provider: 'anthropic', model: 'claude-sonnet-5-5', contextLength: 500000, minContext: 120000, maxOutputTokens: 3000, vision: true },
+    { id: 'kept', provider: 'local', model: 'qwen', contextLength: 32768, maxOutputTokens: 3000, vision: false },
+  ];
+  raw.routing = { chat: ['claude-sonnet-5-5'], background: ['claude-sonnet-5-5'], retriesPerModel: 2 };
+  return raw;
+}
+
+test('model-auto: 古い形（minContext あり）の項目は minContext と maxOutputTokens を消し、contextLength は残す。minContext の無い項目の maxOutputTokens は残す', () => {
+  const raw = withOldModelLimits();
+  const result = dropLegacy(raw);
+  assert.deepEqual(result.rewritten, ['models.claude-sonnet-5-5.maxOutputTokens 3000 → auto', 'models.claude-sonnet-5-5.minContext 120000 → removed']);
+  assert.deepEqual(result.dropped, []);
+  const config = parseConfig(raw);
+  const sonnet = config.models.find(m => m.id === 'claude-sonnet-5-5')!;
+  assert.equal('minContext' in sonnet, false);
+  assert.equal(sonnet.maxOutputTokens, undefined);
+  assert.equal(sonnet.contextLength, 500000);
+  assert.equal(config.models.find(m => m.id === 'kept')!.maxOutputTokens, 3000);
+  assert.equal(raw.models[0].maxOutputTokens, 3000, '入力は書き換えない');
+});
+
+test('model-auto: 古い形を読むだけではファイルを書かない。maxOutputTokens: 512 を足して保存すると、読み直しても 512 で、読み替えは出ず、ファイルに minContext が無い', t => {
+  const path = join(tempDir(t), 'config.json');
+  writeFileSync(path, `${JSON.stringify(withProtectRow(withOldModelLimits()), null, 2)}\n`);
+  const before = readFileSync(path);
+  const store = new ConfigStore(path);
+  const config = store.load();
+  assert.deepEqual(readFileSync(path), before, '読むだけでは書かない');
+  assert.deepEqual(store.rewritten, ['models.claude-sonnet-5-5.maxOutputTokens 3000 → auto', 'models.claude-sonnet-5-5.minContext 120000 → removed']);
+  config.models[0]!.maxOutputTokens = 512;
+  store.save(config);
+  const file = JSON.parse(readFileSync(path, 'utf8')) as Record<string, any>;
+  assert.equal(file.models.some((m: Record<string, unknown>) => 'minContext' in m), false);
+  assert.equal(file.models[0].maxOutputTokens, 512);
+  assert.equal(JSON.parse(readFileSync(`${path}.bak`, 'utf8')).models[0].maxOutputTokens, 3000, '最初の保存で古いファイルが .bak に残る');
+  const again = new ConfigStore(path);
+  assert.equal(again.load().models[0]!.maxOutputTokens, 512);
+  assert.deepEqual(again.rewritten, []);
+});
+
+test('model-auto: 古い形で起動すると、起動のログに読み替えの 1 行が出て、ファイルは書き換えない', t => {
+  const boot = bootWith(t, withOldModelLimits());
+  boot.app.config();
+  assert.deepEqual(boot.logs.filter(line => /new form/u.test(line)), ['[INFO] Read old settings in their new form: models.claude-sonnet-5-5.maxOutputTokens 3000 → auto, models.claude-sonnet-5-5.minContext 120000 → removed']);
+  assert.equal(boot.app.config().models[0]!.maxOutputTokens, undefined);
+  boot.unchanged();
+});

@@ -251,3 +251,29 @@ test('作業の一覧の出来事（checklist.updated）は、その会話の出
   const two = [{ text: 'Check prices', status: 'done' as const }];
   assert.deepEqual(reduce(next, { type: 'event', hidden: false, event: { type: 'checklist.updated', runId: 'r1', conversationId: 'c1', items: two, tainted: false } }).state.checklists.get('c1'), two);
 });
+
+test('会話の画面（DOM、model-auto）: 続きを頼んだ一言のあとで実行が失敗したら Retry を出す（engine の retry と同じ判定）。返事で終わっていれば出さない', async () => {
+  const failed = [{ runId: 'r1', kind: 'error', errorKind: 'provider_error', errorMessage: 'upstream failed' }] as never[];
+  const open = async (messages: unknown[]) => {
+    serve(path => {
+      if (path === '/api/conversations/c1/messages') return { conversation: chatRow, messages, pending: [], activeRun: null };
+      if (path === '/api/conversations/c1/checklist') return { items: [], tainted: false, updatedAt: null };
+      if (path === '/api/models') return { models: [], routing: { chat: [], background: [] } };
+      return undefined;
+    });
+    const { container } = await render(createElement(Chat, {
+      id: 'c1', listTitle: 'Pricing', draft: undefined, notices: failed, liveChecklist: undefined, revision: 0, disconnected: false,
+      onReconnect: () => undefined, onClearNotices: () => undefined, onInterrupt: () => undefined,
+    }));
+    await settle();
+    await settle();
+    return [...container.querySelectorAll('button')].some(b => b.textContent?.trim() === 'Retry');
+  };
+  const base = [
+    { id: 1, role: 'user', text: 'Write a long essay', runId: 'r1', createdAt: 1 },
+    { id: 2, role: 'assistant', text: 'The quick ', runId: 'r1', createdAt: 2 },
+  ];
+  assert.equal(await open([...base, { id: 3, role: 'user', text: 'Output limit reached.', runId: 'r1', createdAt: 3, note: 'continue' }]), true, '一言で終わっていればやり直せる');
+  await cleanup();
+  assert.equal(await open(base), false, '返事で終わっていれば出さない');
+});

@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import { App } from '../src/app.ts';
 import type { AppConfig, ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import { defaultConfig, parseConfig } from '../src/config/store.ts';
-import { contextAvailable } from '../src/engine/context-budget.ts';
+import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts';
 import { estimateRequest, estimateToolTokens } from '../src/engine/tokens.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import { checkWorkFolder } from '../src/projects/work-folder.ts';
@@ -15,7 +15,7 @@ import type { ModelRequest, ProviderAdapter, StreamEvent } from '../src/provider
 const USAGE = 'usage: node scripts/tool-tokens.ts [--config <path to config.json>] [--json]';
 
 const PROVIDER: ProviderConfig = { id: 'measure', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
-export const MEASURE_MODEL: ModelConfig = { id: 'measure', provider: 'measure', model: 'measure', contextLength: 98_304, minContext: 4096, maxOutputTokens: 80_716, vision: false };
+export const MEASURE_MODEL: ModelConfig = { id: 'measure', provider: 'measure', model: 'measure', contextLength: 98_304, maxOutputTokens: 80_716, vision: false };
 
 export const MODES = ['product plan', 'plan (no product)', 'chat (no product)', 'chat (product)', 'task', 'review', 'agent child'] as const;
 export type Mode = typeof MODES[number];
@@ -74,7 +74,7 @@ export async function measure(source: AppConfig): Promise<Measured> {
     app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, env: {}, adapterOverride: () => adapter, projectFolderExempt: [products] });
     const live = app;
     await live.status.probeAll(live.config());
-    const available = contextAvailable(MEASURE_MODEL.contextLength!, MEASURE_MODEL);
+    const available = contextAvailable(MEASURE_MODEL.contextLength!, maxOutputFor(MEASURE_MODEL, MEASURE_MODEL.contextLength!));
     const root = join(products, 'Demo');
     mkdirSync(root, { recursive: true });
     const checked = checkWorkFolder(root, { paths: live.paths, appRoot: APP_ROOT, config: live.config(), active: live.projects.list(), exempt: live.projectFolderExempt });

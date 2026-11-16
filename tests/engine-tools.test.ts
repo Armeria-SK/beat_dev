@@ -6,7 +6,7 @@ import { Type } from '@sinclair/typebox';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import type { SendChoice } from '../src/engine/chat.ts';
-import { contextAvailable } from '../src/engine/context-budget.ts';
+import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts';
 import { estimateMessageTokens, IMAGE_TOKENS } from '../src/engine/tokens.ts';
 import type { ChatMessage, ImageRef, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { REVIEW_WINDOW_CHARS, reviewWindow } from '../src/memory/review.ts';
@@ -33,7 +33,7 @@ async function setup(t: { after: (fn: () => void) => void }, model: Partial<Mode
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...model }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: JudgeAdapter;
@@ -117,7 +117,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、製品の外�
 });
 
 test('道具の結果は、モデルのコンテキストに合わせて切る（小さなコンテキストで、大きな一覧 1 つが入りきらなくならない）', async t => {
-  const small = await setup(t, { contextLength: 16384, minContext: 4096, maxOutputTokens: 1024 });
+  const small = await setup(t, { contextLength: 16384, maxOutputTokens: 1024 });
   const lines = Array.from({ length: 600 }, (_, i) => `remotion-app/node_modules/@remotion/renderer/dist/esm/file${i}.js`).join('\n');
   writeFileSync(join(small.paths.workspace, 'listing.txt'), lines);
   small.adapter().scripts.push(...[1, 2, 3].map(() => toolCall('file_read', { path: 'listing.txt' })), reply('読みました'));
@@ -135,7 +135,7 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   assert.ok(last.messages.length >= 7, '3 回分の結果が入っている');
   assert.equal(small.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), false, '古い発言を削らずに収まる');
 
-  const large = await setup(t, { contextLength: 200_000, minContext: 4096, maxOutputTokens: 4096 });
+  const large = await setup(t, { contextLength: 200_000, maxOutputTokens: 4096 });
   writeFileSync(join(large.paths.workspace, 'listing.txt'), lines.repeat(2));
   large.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
   assert.ok((await (await large.send('一覧を読んで')).done).ok);
@@ -149,14 +149,14 @@ test('道具の結果: 固定の分が大きい 16k のモデルでも、結果�
   const lines = Array.from({ length: 600 }, (_, i) => `remotion-app/node_modules/@remotion/renderer/dist/esm/file${i}.js`).join('\n');
   const minutes = Array.from({ length: 900 }, (_, i) => `第${i}回議事録: 予算の見直しと来期の採用計画について話し合い、各部門の担当者が持ち帰って検討することになった。`).join('\n');
   for (const [name, text, count] of [['英数字', lines, 5], ['日本語', minutes, 5]] as const) {
-    const s = await setup(t, { contextLength: 16384, minContext: 4096, maxOutputTokens: 1024 });
+    const s = await setup(t, { contextLength: 16384, maxOutputTokens: 1024 });
     writeFileSync(join(s.paths.workspace, 'listing.txt'), text);
     s.adapter().scripts.push(...Array.from({ length: count }, () => toolCall('file_read', { path: 'listing.txt' })), reply('読みました'));
     const result = await (await s.send('一覧を読んで')).done;
     assert.ok(result.ok, `${name}: ${JSON.stringify(result)}`);
     assert.equal(s.app.conversations.messages('c1').filter(m => m.role === 'tool').length, count);
     assert.equal(s.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), false, `${name}: 古い発言を削らずに収まる`);
-    const available = contextAvailable(16384, s.app.config().models[0]!);
+    const available = contextAvailable(16384, maxOutputFor(s.app.config().models[0]!, 16384));
     const run = s.app.runs.get(result.runId)!;
     const estimate = run.est_prompt_tokens ?? 0;
     assert.ok(estimate > 0 && estimate <= available, `${name}: 最後の呼び出しの見積もり ${estimate} が使える量 ${available} に収まる`);
@@ -166,7 +166,7 @@ test('道具の結果: 固定の分が大きい 16k のモデルでも、結果�
 // 古いやり取りは、次の呼び出しで外せる（fit.ts）ので、結果の量を決める「削れない分」には数えない。数えると、長い会話ほど結果が小さくなってしまう
 test('道具の結果の量は、削れない分だけから決まる: 古いやり取りが長くても小さくならず、入りきらない分は古い発言を外して収める', async t => {
   const lines = Array.from({ length: 600 }, (_, i) => `remotion-app/node_modules/@remotion/renderer/dist/esm/file${i}.js`).join('\n');
-  const model = { contextLength: 16384, minContext: 4096, maxOutputTokens: 1024 };
+  const model = { contextLength: 16384, maxOutputTokens: 1024 };
   const toolText = (s: Awaited<ReturnType<typeof setup>>) => s.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
 
   const fresh = await setup(t, model);
@@ -346,7 +346,7 @@ test('道具の結果の画像: 出来事・道具の記録・画面の API に�
 });
 
 test('道具の結果の画像: 古い画像つきのやり取りを要約に回しても、要約の依頼に画像は入らない（原文は DB に残る）', async t => {
-  const small = fakeModel('m1', { contextLength: 20_000, minContext: 1024, maxOutputTokens: 1024 });
+  const small = fakeModel('m1', { contextLength: 20_000, maxOutputTokens: 1024 });
   const s = await startApp(t, { models: [small], tools: [] });
   const conversations = s.app.conversations;
   conversations.append(CONVERSATION, { role: 'user', content: `質問0${'い'.repeat(3000)}` });

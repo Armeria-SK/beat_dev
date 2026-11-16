@@ -65,6 +65,15 @@ const TRUNCATION_STRIKES = 2;
 const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
+export const MAX_CONTINUATIONS = 3;
+const RESUME_WORD_MAX = 40;
+
+export function resumePoint(text: string): string {
+  const at = text.search(/\s\S*$/u);
+  if (at < 0) return text;
+  const tail = text.slice(at + 1);
+  return tail.length <= RESUME_WORD_MAX && !/[\u3000-\u9fff\uff00-\uffef]/u.test(tail) ? text.slice(0, at + 1) : text;
+}
 
 function forModel(message: ChatMessage): ChatMessage {
   if (message.role !== 'tool' || !message.gate) return message;
@@ -575,9 +584,9 @@ export class ChatEngine {
     for (const id of ids) {
       const model = config.models.find(m => m.id === id);
       if (!model || !this.#d.status.usable(id)) continue;
-      const capacity = this.#d.status.get(id)?.effective ?? model.contextLength ?? 0;
+      const { capacity, maxOutput } = this.#d.status.limits(model);
       if (!(capacity > 0)) continue;
-      const available = contextAvailable(capacity, model);
+      const available = contextAvailable(capacity, maxOutput);
       if (available > 0) smallest = smallest === undefined ? available : Math.min(smallest, available);
     }
     return smallest;
@@ -741,6 +750,11 @@ export class ChatEngine {
     let invalidStreak = 0;
     // 切れた呼び出しが続けて何回目か（invalidStreak とは別に数える）
     let truncatedStreak = 0;
+    // 文だけの返事が上限で切れたとき、beat が続きを頼んだ回数（1 回の実行の合計）と、それまでの切れた文
+    let continuations = 0;
+    const cutTexts: string[] = [];
+    let cutTail = '';
+    let warnedToolCut = false;
     let lastEstimate = 0;
     let lastRoute: Route = chain[0]!;
     const project = kind === 'review' ? undefined : resolved;
@@ -852,22 +866,57 @@ export class ChatEngine {
       lastEstimate = call.estimate;
       addUsage(call.usage);
       // 考える部分を別に返すモデル（Qwen3 など）は、答えの頭に空行が付く。保存する前に落とす
-      call.text = call.text.replace(/^\s+/u, '');
+      const lead = /^\s*/u.exec(call.text)![0];
+      const space = cutTexts.length > 0 && /[ \t]/u.test(lead) && !/\s$/u.test(cutTexts.at(-1)!);
+      const rest = call.text.slice(lead.length);
+      call.text = space && rest ? ` ${rest}` : rest;
 
       // 出力の上限で切れた返事: 黙って成功にしない。お知らせと実行の印を残し、付いていたツール呼び出しは動かさない
       // （切れた元の文字は記録の入力欄にだけ残し、会話には {} で保存する。次の呼び出しにも、提供元に断られる切れた文字を送らない）
       const cutRaw = new Map<string, string>();
       if (call.truncated) {
-        if (!flags.includes('output_truncated')) {
-          flags.push('output_truncated');
+        if (!flags.includes('output_truncated')) flags.push('output_truncated');
+        if (call.toolCalls.length && !warnedToolCut) {
+          warnedToolCut = true;
           d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_truncated', message: engineText(languageOf(config), 'warn.output_truncated') });
         }
         for (const c of call.toolCalls) cutRaw.set(c.id, c.raw ?? JSON.stringify(c.arguments ?? null));
         call.toolCalls = call.toolCalls.map(c => ({ id: c.id, name: c.name, arguments: {} }));
       }
+      const language = languageOf(config);
+      const ask: ChatMessage = { role: 'user', content: engineText(language, 'message.continue'), generated: true, note: 'continue' };
+      const empty = !call.toolCalls.length && cutTexts.length > 0 && !call.truncated && !call.text;
+      const room = !call.toolCalls.length && call.truncated && continuations < MAX_CONTINUATIONS
+        && this.#continuationFits({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project }, [{ role: 'assistant', content: resumePoint(call.text) }, ask]);
+      if (room) {
+        const kept = resumePoint(call.text);
+        cutTail = call.text.slice(kept.length);
+        call.text = kept;
+      }
+      if (empty) call.text = cutTail;
       const saved = d.conversations.append(conversationId, { role: 'assistant', content: call.text, ...(call.toolCalls.length ? { toolCalls: call.toolCalls } : {}) }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
-      if (!call.toolCalls.length) return finishOk(call.text, call.stop);
+      if (!call.toolCalls.length) {
+        if (empty) {
+          d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_empty', message: engineText(language, 'warn.output_continue_empty') });
+          return finishOk(cutTexts.join('') + call.text, 'max_tokens');
+        }
+        if (room) {
+          continuations++;
+          cutTexts.push(call.text);
+          if (continuations === 1) d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continued', message: engineText(language, 'warn.output_continued') });
+          const asked = d.conversations.append(conversationId, ask, runId);
+          d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: asked.id, role: 'user' });
+          continue;
+        }
+        if (call.truncated && continuations < MAX_CONTINUATIONS) {
+          d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_no_room', message: engineText(language, 'warn.output_continue_no_room') });
+        } else if (call.truncated) {
+          d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_limit', message: engineText(language, 'warn.output_continue_limit', { count: MAX_CONTINUATIONS }), params: { count: MAX_CONTINUATIONS } });
+        }
+        return finishOk(cutTexts.join('') + call.text, call.stop);
+      }
+      cutTexts.length = 0;
       if (!d.tools) return finishOk(call.text, call.stop);
 
       let invalidThisRound = 0;
@@ -970,7 +1019,7 @@ export class ChatEngine {
       let text = '';
       let usage: Usage = {};
       for await (const event of adapter.stream({
-        model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,
+        model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, d.status.limits(model).maxOutput), signal,
       })) {
         if (event.type === 'text') text += event.delta;
         else if (event.type === 'usage') { usage = { ...usage, ...event.usage }; call?.used?.(model.id, usage); }
@@ -1023,7 +1072,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
+        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
         const run = this.#loaded.get(p.runId);
         if (run) {
           run.sent.clear();
@@ -1072,7 +1121,7 @@ export class ChatEngine {
         let release: (() => void) | undefined;
         try {
           release = await d.limiter.acquire(provider.id, () => provider.maxParallel, p.signal);
-          for await (const event of adapter.stream({ model, system, messages: fitted.messages, tools: apiTools, maxOutputTokens: model.maxOutputTokens, ...(effort ? { effort } : {}), signal: p.signal })) {
+          for await (const event of adapter.stream({ model, system, messages: fitted.messages, tools: apiTools, maxOutputTokens: maxOutput, ...(effort ? { effort } : {}), signal: p.signal })) {
             if (event.type === 'text') { text += event.delta; d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: event.delta }); }
             else if (event.type === 'usage') usage = { ...usage, ...event.usage };
             else if (event.type === 'tool_call') toolCalls.push(event.call);
@@ -1130,8 +1179,8 @@ export class ChatEngine {
     const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
     const specs = ToolRegistry.specs(toolDefs, config);
-    const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
-    const available = contextAvailable(capacity, model);
+    const { capacity, maxOutput } = d.status.limits(model);
+    const available = contextAvailable(capacity, maxOutput);
     const conversation = d.conversations.get(p.conversationId);
     const upto = conversation?.summary_upto ?? 0;
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
@@ -1147,7 +1196,7 @@ export class ChatEngine {
     const history = stored.map(m => forModel(m.message));
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
-    return { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, factor };
+    return { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, factor };
   }
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
@@ -1157,6 +1206,13 @@ export class ChatEngine {
     if (!(built.capacity > 0)) return { tokens: undefined, available: undefined };
     const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
     return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
+  }
+
+  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }, pending: ChatMessage[]): boolean {
+    const built = this.#assemble(p);
+    if (!(built.capacity > 0)) return true;
+    const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: [...built.history, ...pending], tools: built.apiTools, factor: built.factor });
+    return tokens <= built.available;
   }
 
   #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number, conversationId: string): string {
@@ -1190,12 +1246,12 @@ export class ChatEngine {
         if (modelId === undefined) return this.#noUsableModel(this.#chain('chat', wanted).problems);
         return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: engineText(language, 'usage.model_missing', { id: wanted }), errorCode: 'engine.usage.model_missing', errorParams: { id: wanted } };
       }
-      if (!((d.status.get(model.id)?.effective ?? model.contextLength ?? 0) > 0)) {
+      if (!(d.status.limits(model).capacity > 0)) {
         return this.#noUsableModel([{ modelId: model.id, status: 'unknown', message: engineText(language, 'problem.unchecked'), messageCode: 'engine.problem.unchecked' }]);
       }
     } else {
       const chain = this.#chain('chat');
-      model = chain.usable.map(r => r.model).find(m => (d.status.get(m.id)?.effective ?? m.contextLength ?? 0) > 0);
+      model = chain.usable.map(r => r.model).find(m => d.status.limits(m).capacity > 0);
       if (!model) return this.#noUsableModel(chain.problems);
     }
     const project = runProject(d.projects, d.conversations.projectOf(conversationId));
@@ -1315,7 +1371,7 @@ export class ChatEngine {
     const language = languageOf(d.config());
     const transcript = c.removed.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, m.message.role === 'user' && m.message.note !== undefined ? COMPACT_NOTE_CHARS : 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
     const prompt = compactPrompt({ previous: c.previous, transcript }, language);
-    const maxOutputTokens = Math.min(2000, c.route.model.maxOutputTokens);
+    const maxOutputTokens = Math.min(2000, d.status.limits(c.route.model).maxOutput);
     if (estimateTextTokens(prompt) * 1.15 + maxOutputTokens > c.capacity * CONTEXT_FILL_RATIO) return false;
     let release: (() => void) | undefined;
     try {

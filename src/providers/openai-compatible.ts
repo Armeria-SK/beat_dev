@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { ChatMessage, ImageRef, StopReason, ToolCall } from '../engine/types.ts';
-import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
+import { contextHint, errorProbeText, evaluateContext, probeText, serverNumber } from './context.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import {
   checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, providerSecrets, readSnippet, readSseData, requireApiKey, withTimeout,
@@ -201,9 +201,9 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
         const info = await getJson(new URL(`/api/v0/models/${encodeURIComponent(model.model)}`, origin));
         const loaded = info?.state === 'loaded' && typeof info.loaded_context_length === 'number' ? info.loaded_context_length : undefined;
         return evaluateContext({
-          ...facts, measured: loaded, modelMax: typeof info?.max_context_length === 'number' ? info.max_context_length : undefined,
+          ...facts, measured: loaded, modelMax: typeof info?.max_context_length === 'number' ? info.max_context_length : undefined, trustModelMax: false,
           hint: contextHint(language, 'lmstudio', required),
-          unmeasuredNote: 'probe.note.not_loaded',
+          unmeasuredNote: 'probe.note.not_loaded', unknownHint: 'hint.unknown_not_loaded',
         });
       }
       if (server === 'llamacpp') {
@@ -229,16 +229,16 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
       if (server === 'openrouter') {
         if (!entry) return { ...facts, status: 'not_found', ...probeText(language, 'probe.openrouter_missing', { model: model.model }), checkedAt: Date.now() };
         const max = entry.top_provider?.context_length ?? entry.context_length;
-        return evaluateContext({ ...facts, modelMax: typeof max === 'number' ? max : undefined, hint: contextHint(language, 'hosted', required) });
+        return evaluateContext({ ...facts, modelMax: typeof max === 'number' ? max : undefined, maxOutput: serverNumber(entry.top_provider?.max_completion_tokens), hint: contextHint(language, 'hosted', required) });
       }
       if (server === 'openai') {
         return evaluateContext({ ...facts, hint: contextHint(language, 'hosted', required), unmeasuredNote: 'probe.note.use_config' });
       }
       // generic: サーバーの種類が分からなくても、/v1/models によく載る欄（vLLM・TabbyAPI・llama.cpp など）があれば使う
-      const measured = [entry?.max_model_len, entry?.context_length, entry?.parameters?.max_seq_len, entry?.max_seq_len].find((v): v is number => typeof v === 'number' && v > 0);
+      const measured = [entry?.max_model_len, entry?.context_length, entry?.parameters?.max_seq_len, entry?.max_seq_len].map(serverNumber).find(v => v !== undefined);
       const trained = typeof entry?.meta?.n_ctx_train === 'number' ? entry.meta.n_ctx_train : undefined;
       return evaluateContext({
-        ...facts, measured, ...(trained ? { modelMax: trained } : {}), hint: contextHint(language, 'generic', required),
+        ...facts, measured, ...(trained ? { modelMax: trained } : {}), trustModelMax: false, hint: contextHint(language, 'generic', required),
         unmeasuredNote: 'probe.note.use_config',
       });
     } catch (error) {

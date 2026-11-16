@@ -615,7 +615,7 @@ const listen = (s: Started) => {
 test('T-43 子の最後の返事が出力の上限で切れたら、親の結果の包みの中に決まった注が入り、親の会話に知らせが出る', async t => {
   const s = await startApp(t, enable());
   const seen = listen(s);
-  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), cutReply('子の答えは途中で'), reply('親の最後の返事')];
+  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), ...Array.from({ length: 4 }, () => cutReply('子の答えは途中で')), reply('親の最後の返事')];
   const parent = uuid(1);
   await chat(s, parent, '任せたい');
   const message = toolMessages(s, parent)[0]!;
@@ -629,7 +629,8 @@ test('T-43 子の最後の返事が出力の上限で切れたら、親の結果
   assert.ok(open >= 0 && text.indexOf(note) > open && text.indexOf(note) < close, '注は包みの中');
   // 子の会話にだけ出ていた知らせが、親の会話にも出る（前提: 子の会話の知らせは従来どおり）
   const child = childConversation(s);
-  assert.equal(warningsOf(seen, child, 'output_truncated').length, 1, '前提: 子の会話の知らせ');
+  assert.equal(warningsOf(seen, child, 'output_continued').length, 1, '前提: 子の会話に、続きを頼んだ知らせ');
+  assert.equal(warningsOf(seen, child, 'output_continue_limit').length, 1, '前提: 3 回頼んでも切れた知らせ');
   const onParent = warningsOf(seen, parent, 'agent_output_truncated');
   assert.equal(onParent.length, 1, '親の会話に知らせが出る');
   assert.equal(onParent[0]!.message, engineText('en', 'warn.agent_output_truncated'));
@@ -703,7 +704,7 @@ test('T-47 タスクの親が始めたあとに tools.agent.inTasks を切ると
 
 test('T-48 子の返事が長くて切れてもいるとき、両方の注が包みの中に入り、閉じの区切りで終わり、道具の結果の上限に収まる', async t => {
   const s = await startApp(t, enable());
-  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), cutReply('あ'.repeat(AGENT_RESULT_MAX_CHARS + 5000)), reply('親の最後の返事')];
+  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), ...Array.from({ length: 4 }, () => cutReply('あ'.repeat(AGENT_RESULT_MAX_CHARS + 5000))), reply('親の最後の返事')];
   const parent = uuid(1);
   await chat(s, parent, '任せたい');
   const text = toolMessage(s, parent);
@@ -716,7 +717,7 @@ test('T-48 子の返事が長くて切れてもいるとき、両方の注が包
 test('T-49 注と親の会話への知らせは英語で出る', async t => {
   const s = await startApp(t, enable());
   const seen = listen(s);
-  s.adapter().scripts = [call('agent_run', { task: 'answer at length' }), cutReply('The answer is cut off mid'), reply('parent final')];
+  s.adapter().scripts = [call('agent_run', { task: 'answer at length' }), ...Array.from({ length: 4 }, () => cutReply('The answer is cut off mid')), reply('parent final')];
   const parent = uuid(1);
   await chat(s, parent, 'delegate');
   const text = toolMessage(s, parent);
@@ -724,4 +725,17 @@ test('T-49 注と親の会話への知らせは英語で出る', async t => {
   const note = text.indexOf(toolText('en', 'agent.output_truncated'));
   assert.ok(open >= 0 && note > open && note < text.indexOf(toolText('en', 'agent.result_close')), '注は包みの中');
   assert.equal(warningsOf(seen, parent, 'agent_output_truncated')[0]?.message, engineText('en', 'warn.agent_output_truncated'));
+});
+
+test('B 子の答えが 1 回切れて続きで書き終えたら、親が受け取る答えは全体で、切れた注は付かない', async t => {
+  const s = await startApp(t, enable());
+  const seen = listen(s);
+  s.adapter().scripts = [call('agent_run', { task: '長く答える' }), cutReply('子の答えの前半、'), reply('子の答えの後半。'), reply('親の最後の返事')];
+  const parent = uuid(1);
+  await chat(s, parent, '任せたい');
+  const text = toolMessage(s, parent);
+  assert.ok(text.includes('子の答えの前半、子の答えの後半。'), text);
+  assert.equal(text.includes(toolText('en', 'agent.output_truncated')), false, '切れた注は付かない');
+  assert.equal(warningsOf(seen, parent, 'agent_output_truncated').length, 0);
+  assert.equal(warningsOf(seen, childConversation(s), 'output_continued').length, 1);
 });

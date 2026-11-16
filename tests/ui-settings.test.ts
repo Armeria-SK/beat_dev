@@ -155,7 +155,7 @@ test('ui/settings commit: 鍵を送る確かめは、送る直前に読み直し
 
 const probe = (status: string) => ({ modelId: 'm', status, server: '', required: 0, message: '', checkedAt: 1 });
 const model = (id: string, provider: string, status: string | null): ModelView =>
-  ({ id, label: id, provider, model: id, minContext: 1, maxOutputTokens: 1, inChat: true, probe: status ? probe(status) : null });
+  ({ id, label: id, provider, model: id, maxOutputTokens: 1, limits: { context: null, maxOutput: null, required: null }, inChat: true, probe: status ? probe(status) : null });
 
 test('ui/settings view: 提供元の届き方は Reachable / Offline / Rejected（確かめていなければ出さない）', () => {
   assert.equal(providerReach('p', [model('a', 'p', 'ok'), model('b', 'p', 'unreachable')]), 'ok');

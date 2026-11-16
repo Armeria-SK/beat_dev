@@ -37,7 +37,8 @@ const en = {
   'probe.no_provider': 'There is no provider "{id}"',
 
   'hint.exceeds_model': 'Set contextLength to {modelMax} or less',
-  'hint.unknown': 'In the config, write the length you set on the server under models[].contextLength',
+  'hint.unknown': 'Enter the length you set on the server in Settings › Models › Advanced › Context length',
+  'hint.unknown_not_loaded': 'Load the model in LM Studio, then press Check now, or enter the length in Settings › Models › Advanced › Context length',
   'hint.tabby_other': 'Load the model you want in TabbyAPI, or make models[].model match',
   'hint.lmstudio': 'Reload the model in LM Studio with a Context Length of {required} or more, and set contextLength to match',
   'hint.llamacpp': 'Start llama-server with -c so that each slot has {required} or more (raising the slots with -np splits -c)',

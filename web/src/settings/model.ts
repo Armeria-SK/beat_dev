@@ -104,7 +104,7 @@ export function uniqueId(base: string, taken: readonly string[]): string {
 export function addModel(config: Config): { config: Config; id: string } {
   const providers = config.providers as Array<{ id: string }>;
   const id = uniqueId('new-model', (config.models as Array<{ id: string }>).map(m => m.id));
-  const model = { id, label: '', provider: providers[0]?.id ?? '', model: '', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, vision: false };
+  const model = { id, label: '', provider: providers[0]?.id ?? '', model: '', vision: false };
   const ids = (config.models as Array<{ id: string }>).map(m => m.id);
   const routing = config.routing as { chat: string[]; background: string[] };
   // チャットも裏方も順番が空のときは、サーバーが設定のモデル全部を候補にする。足したモデルが他のモデルを押しのけないよう、今の候補に足した順番にする

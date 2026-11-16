@@ -9,7 +9,7 @@ import { defaultConfig, findModel, parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { KV } from '../src/db/kv.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { contextAvailable } from '../src/engine/context-budget.ts';
+import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from '../src/engine/prompts.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import type { ChatMessage, ToolCall, ToolSpec } from '../src/engine/types.ts';
@@ -170,8 +170,9 @@ export async function buildProduct(base: string, set: ProbeSet, model: ModelConf
   if (mesh) {
     mesh.persist(PROJECT_ID);
   }
-  const capacity = model.contextLength ?? model.minContext;
-  const available = contextAvailable(capacity, model);
+  const capacity = model.contextLength;
+  if (capacity === undefined) throw new Error(`mesh-probe needs contextLength for model ${model.id} (write it in the config)`);
+  const available = contextAvailable(capacity, maxOutputFor(model, capacity));
   const policy = buildPolicy(config, paths, { root });
   const tools: ToolDef[] = mesh ? [fileList, fileRead, ...MESH_TOOLS] : [fileList, fileRead];
   const registry = new ToolRegistry();
@@ -259,7 +260,7 @@ async function callModel(adapter: ProviderAdapter, model: ModelConfig, system: {
   let text = '';
   const calls: ToolCall[] = [];
   let inputTokens: number | undefined;
-  for await (const event of adapter.stream({ model, system, messages, tools, maxOutputTokens: Math.min(maxTokens, model.maxOutputTokens), signal })) {
+  for await (const event of adapter.stream({ model, system, messages, tools, maxOutputTokens: Math.min(maxTokens, maxOutputFor(model, model.contextLength ?? Infinity)), signal })) {
     if (event.type === 'text') text += event.delta;
     else if (event.type === 'tool_call') calls.push(event.call);
     else if (event.type === 'usage' && event.usage.inputTokens !== undefined) inputTokens = event.usage.inputTokens;

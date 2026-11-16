@@ -64,7 +64,7 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     id: existing?.id ?? uniqueId(slug(form.model), models.map(m => m.id)),
     label: '', provider: providerId, model: form.model.trim(),
     ...(form.source === 'openai' && form.contextLength.trim() !== '' ? { contextLength: length } : {}),
-    minContext: 8192, maxOutputTokens: 4096, vision: false,
+    vision: false,
   };
   const at = existing ? models.findIndex(m => m.id === existing.id) : -1;
   if (at >= 0) models[at] = { ...existing, ...model }; else models.push(model);

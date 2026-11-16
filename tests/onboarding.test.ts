@@ -22,7 +22,7 @@ async function start(t: Parameters<typeof tempDir>[0], models = true) {
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = models ? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }] : [];
+  config.models = models ? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }] : [];
   config.routing = { chat: models ? ['m'] : [], background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   const app = new App({

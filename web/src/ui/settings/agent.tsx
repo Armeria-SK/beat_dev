@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type ProviderKeyState } from '../../api.ts';
 import { toast } from '../../feedback.ts';
-import { formatRelative, getLanguage, useT } from '../../i18n/index.ts';
+import { formatNumber, formatRelative, getLanguage, useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
 import { probeMessage, serverText } from '../../server-text.ts';
 import type { Access } from '../../settings/access.ts';
@@ -232,10 +232,28 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
   const id = model.id as string;
   const k = `model:${id}`;
   const [removing, setRemoving] = useState(false);
-  const probe = ctx.models.find(m => m.id === id)?.probe ?? null;
+  const [advanced, setAdvanced] = useState(false);
+  const view = ctx.models.find(m => m.id === id);
+  const probe = view?.probe ?? null;
+  const limits = view?.limits ?? null;
   const reach: ModelReach | null = probe ? modelReach(probe.status) : null;
   const edit = (patch: Json) => void ctx.commit(k, c => updateListItem(c, 'models', id, patch));
   const busy = ctx.busy !== null;
+  const askContext = probe?.status === 'unknown' && model.contextLength === undefined;
+  const autoText = (n: number | null | undefined) => (n === null || n === undefined ? undefined : t('ui.set.model.auto', formatNumber(n)));
+  const sourceOf = (value: number | undefined, current: number | null | undefined, clear: () => void) => value !== undefined
+    ? <>{t('ui.set.model.setByYou')} · <Button small variant="ghost" disabled={busy} onClick={clear}>{t('ui.set.model.useAuto')}</Button></>
+    : autoText(current);
+  const summary = [
+    limits?.context != null ? t('ui.set.model.sumContext', formatNumber(limits.context)) : null,
+    limits?.maxOutput != null ? t('ui.set.model.sumReply', formatNumber(limits.maxOutput)) : null,
+    limits?.required != null ? t('ui.set.model.sumNeeds', formatNumber(limits.required)) : null,
+  ].filter(part => part !== null).join(' · ');
+  const contextRow = (
+    <Row k={`${k}:ctx`} title={t('ui.set.model.context')} desc={askContext ? t('ui.set.model.contextNeeded') : sourceOf(model.contextLength as number | undefined, limits?.context, () => edit({ contextLength: undefined }))}>
+      <NumberField k={`${k}:ctx`} value={model.contextLength as number | undefined} optional min={1024} max={10_000_000} label={t('ui.set.model.context')} placeholder={autoText(limits?.context)} onCommit={v => edit({ contextLength: v })} />
+    </Row>
+  );
   const rename = (text: string) => {
     const slug = slugId(text, 'model');
     if (!slug) { ctx.fail(k, t('ui.set.id.none')); return; }
@@ -256,16 +274,22 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
           <Row k={`${k}:id`} title={t('ui.set.model.id')}><CommitField value={id} label={t('ui.set.model.id')} mono onCommit={rename} /></Row>
           <Row k={`${k}:provider`} title={t('ui.set.model.provider')}><Select value={model.provider as string} options={providers} label={t('ui.set.model.provider')} onChange={provider => edit({ provider })} /></Row>
           <Row k={`${k}:model`} title={t('ui.set.model.name')} desc={t('ui.set.model.nameDesc')}><CommitField value={model.model as string} label={t('ui.set.model.name')} mono required onCommit={v => edit({ model: v })} /></Row>
-          <Row k={`${k}:ctx`} title={t('ui.set.model.context')} desc={t('ui.set.model.contextDesc')}>
-            <NumberField k={`${k}:ctx`} value={model.contextLength as number | undefined} optional min={1024} max={10_000_000} label={t('ui.set.model.context')} onCommit={v => edit({ contextLength: v })} />
-          </Row>
-          <Row k={`${k}:min`} title={t('ui.set.model.minContext')}>
-            <NumberField k={`${k}:min`} value={model.minContext as number} min={1024} max={10_000_000} label={t('ui.set.model.minContext')} onCommit={v => edit({ minContext: v })} />
-          </Row>
-          <Row k={`${k}:out`} title={t('ui.set.model.maxOutput')}>
-            <NumberField k={`${k}:out`} value={model.maxOutputTokens as number} min={256} max={10_000_000} label={t('ui.set.model.maxOutput')} onCommit={v => edit({ maxOutputTokens: v })} />
-          </Row>
           <Row k={`${k}:vision`} title={t('ui.set.model.vision')}><Switch checked={Boolean(model.vision)} label={t('ui.set.model.vision')} disabled={busy} onChange={vision => edit({ vision })} /></Row>
+          {askContext && contextRow}
+          <Row k={`${k}:advanced`} title={t('ui.set.model.advanced')} desc={summary || undefined}>
+            <Button small variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? t('ui.set.less') : t('ui.set.edit')}</Button>
+          </Row>
+          {advanced && (
+            <>
+              {!askContext && contextRow}
+              <Row k={`${k}:out`} title={t('ui.set.model.maxOutput')} desc={sourceOf(model.maxOutputTokens as number | undefined, limits?.maxOutput, () => edit({ maxOutputTokens: undefined }))}>
+                <NumberField k={`${k}:out`} value={model.maxOutputTokens as number | undefined} optional min={256} max={200_000} label={t('ui.set.model.maxOutput')} placeholder={autoText(limits?.maxOutput)} onCommit={v => edit({ maxOutputTokens: v })} />
+              </Row>
+              <Row k={`${k}:min`} title={t('ui.set.model.minContext')} desc={t('ui.set.model.minContextDesc')}>
+                <span className="bt-meta">{autoText(limits?.required) ?? '—'}</span>
+              </Row>
+            </>
+          )}
         </div>
         )}
         </>

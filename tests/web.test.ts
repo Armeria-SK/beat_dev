@@ -42,7 +42,7 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = models ?? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = models ?? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: config.models.map(m => m.id), background: [], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
@@ -111,7 +111,7 @@ test('API: 発言を送ると返事が SSE で流れ、保存される', async t
 });
 
 test('API: 使えるモデルが無ければ 409 で理由と直し方を返し、発言は保存しない', async t => {
-  const s = await startApp(t, [{ id: 'small', provider: 'fake', model: 'x', contextLength: 4096, minContext: 4096, maxOutputTokens: 1024, vision: false }]);
+  const s = await startApp(t, [{ id: 'small', provider: 'fake', model: 'x', contextLength: 4096, maxOutputTokens: 1024, vision: false }]);
   const sent = await s.api('/api/conversations/00000000-0000-4000-8000-0000000000c1/messages', { method: 'POST', body: JSON.stringify({ text: 'やあ' }) });
   assert.equal(sent.status, 409);
   const body = await sent.json() as any;
@@ -297,8 +297,8 @@ test('API: 設定の問題は文（problems）のほかに、ID で書いた場�
 
 test('API: GET /api/conversations/:id/context は使用量を返す。無い会話でも会話を作らず、指定のモデルが設定に無ければ 404、使えるモデルが無ければ 409', async t => {
   const s = await startApp(t, [
-    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false },
-    { id: 'big', provider: 'fake', model: 'y', contextLength: 131072, minContext: 4096, maxOutputTokens: 2048, vision: false },
+    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false },
+    { id: 'big', provider: 'fake', model: 'y', contextLength: 131072, maxOutputTokens: 2048, vision: false },
   ]);
   const get = async (path: string) => { const res = await s.api(path); return { status: res.status, body: (await res.json()) as any }; };
   s.app.conversations.create({ id: 'chat1', title: '会話' });
@@ -326,7 +326,7 @@ test('API: GET /api/conversations/:id/context は使用量を返す。無い会�
   const task = await get('/api/conversations/task-conv/context');
   assert.deepEqual([task.status, task.body.code], [409, 'http.not_chat_conversation']);
 
-  const none = await startApp(t, [{ id: 'tiny', provider: 'fake', model: 'z', contextLength: 4096, minContext: 4096, maxOutputTokens: 512, vision: false }]);
+  const none = await startApp(t, [{ id: 'tiny', provider: 'fake', model: 'z', contextLength: 4096, maxOutputTokens: 512, vision: false }]);
   const refused = await (await none.api('/api/conversations/c1/context')).json() as any;
   assert.equal(refused.errorCode, 'engine.no_usable');
   assert.equal(refused.problems.length, 1);
@@ -334,4 +334,16 @@ test('API: GET /api/conversations/:id/context は使用量を返す。無い会�
   const empty = await noModels.api('/api/conversations/c1/context');
   assert.equal(empty.status, 409);
   assert.deepEqual(((await empty.json()) as any).problems, []);
+});
+
+test('API（model-auto B）: 会話の発言の API は、beat が足した一言に note を付けて渡す（持ち主の発言には付けない）', async t => {
+  const s = await startApp(t);
+  const id = 'cnote';
+  s.app.conversations.create({ id });
+  s.app.conversations.append(id, { role: 'user', content: '持ち主の発言' });
+  s.app.conversations.append(id, { role: 'assistant', content: '途中' });
+  s.app.conversations.append(id, { role: 'user', content: 'Output limit reached.', generated: true, note: 'continue' });
+  const history = await (await s.api(`/api/conversations/${id}/messages`)).json() as { messages: Array<Record<string, unknown>> };
+  const users = history.messages.filter(m => m.role === 'user');
+  assert.deepEqual(users.map(m => m.note), [undefined, 'continue']);
 });

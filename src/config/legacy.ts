@@ -65,10 +65,24 @@ function rewriteSearxng(config: Record<string, unknown>): string[] {
   return ['tools.web.search "searxng" → "duckduckgo"'];
 }
 
+function rewriteModelLimits(config: Record<string, unknown>): string[] {
+  const models = config.models;
+  if (!Array.isArray(models)) return [];
+  const rewritten: string[] = [];
+  for (const model of models) {
+    if (!isObject(model) || !Object.hasOwn(model, 'minContext')) continue;
+    if (Object.hasOwn(model, 'maxOutputTokens')) rewritten.push(`models.${String(model.id)}.maxOutputTokens ${String(model.maxOutputTokens)} → auto`);
+    rewritten.push(`models.${String(model.id)}.minContext ${String(model.minContext)} → removed`);
+    delete model.maxOutputTokens;
+    delete model.minContext;
+  }
+  return rewritten;
+}
+
 export function dropLegacy(raw: unknown): { config: unknown; dropped: string[]; rewritten: string[] } {
   if (!isObject(raw)) return { config: raw, dropped: [], rewritten: [] };
   const config = structuredClone(raw);
   const dropped = LEGACY_KEYS.filter(key => dropPath(config, key.path.split('.'))).map(key => key.path);
-  const rewritten = [...rewriteOllama(config), ...rewriteSearxng(config)];
+  const rewritten = [...rewriteOllama(config), ...rewriteSearxng(config), ...rewriteModelLimits(config)];
   return dropped.length || rewritten.length ? { config, dropped, rewritten } : { config: raw, dropped, rewritten };
 }
