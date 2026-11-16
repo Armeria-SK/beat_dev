@@ -1125,7 +1125,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const lower = t.t === 'word' ? t.v.toLowerCase() : '';
       if (current && (t.t === 'word' || t.t === 'str')) current.push(t.v);
       else if (current && t.t === 'var') current.push(`$${t.v}`);
-      else if (current && (isP(t, '{') || t.t === 'sub')) { current.push(isP(t, '{') ? '{…}' : '$(…)'); current = null; }
+      else if (current && (isP(t, '{') || t.t === 'sub' || t.t === 'arr' || t.t === 'hash' || t.t === 'splat' || isP(t, '('))) { current.push(isP(t, '{') ? '{…}' : '$(…)'); current = null; }
       else if (current && t.t !== 'redir' && !isP(t, ',')) current = null;
       if (callStart && (t.t === 'var' || t.t === 'sub' || t.t === 'arr' || isP(t, '(') || (t.t === 'str' && t.dyn))) st.callComputed = true;
       const wasCall = callStart;

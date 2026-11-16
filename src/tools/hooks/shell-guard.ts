@@ -113,9 +113,12 @@ function hardDenyOf(name: string, words: readonly string[]): GuardMessageKey | u
 
 const CIM_METHOD_CMDS: ReadonlySet<string> = new Set(['invoke-cimmethod', 'icim', 'invoke-wmimethod', 'iwmi']);
 const DISK_METHODS = /^(?:format|clear|initialize|deleteobject|createpartition)$/iu;
-const DISKUTIL_WIPE = /^(?:erase(?:disk|volume)?|zerodisk|randomdisk|secureerase|partitiondisk|reformat)$/iu;
+const DISKUTIL_WIPE = /^(?:erase\w*|zerodisk|randomdisk|secureerase|partitiondisk|reformat)$/iu;
 const DISKUTIL_APFS_WIPE = /^(?:deletecontainer|erasevolume|deletevolume)$/iu;
 const ALIAS_CMDS: ReadonlySet<string> = new Set(['set-alias', 'new-alias', 'sal', 'nal']);
+const ITEM_CMDS: ReadonlySet<string> = new Set(['set-item', 'si', 'new-item', 'ni']);
+const COMMON_VALUED = ['erroraction', 'warningaction', 'informationaction', 'progressaction', 'errorvariable', 'warningvariable', 'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable'];
+const COMMON_VALUED_ALIASES: ReadonlySet<string> = new Set(['ea', 'wa', 'infa', 'proga', 'ev', 'wv', 'iv', 'ov', 'ob', 'pv']);
 
 const programNameOf = (text: string): string => (text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, '');
 
@@ -131,7 +134,7 @@ function aliasValue(args: readonly string[]): string | undefined {
     const value = m[2] ? m[3] || args[++i] : undefined;
     if ('value'.startsWith(param)) return value ?? args[i + 1];
     if ('name'.startsWith(param)) { named = true; if (!m[2]) i++; continue; }
-    if (['scope', 'option', 'description'].some(p => p.startsWith(param)) && !m[2]) i++;
+    if ((['scope', 'option', 'description', ...COMMON_VALUED].some(p => p.startsWith(param)) || COMMON_VALUED_ALIASES.has(param)) && !m[2]) i++;
   }
   return positional[named ? 0 : 1];
 }
@@ -145,6 +148,10 @@ function hardOfWords(words: readonly string[], depth = 0): HardHit | undefined {
   if (ALIAS_CMDS.has(name)) {
     const value = aliasValue(words.slice(1));
     return value && depth < 3 ? hardOfWords([value], depth + 1) : undefined;
+  }
+  if (ITEM_CMDS.has(name) && depth < 3 && words.some(w => /^(?:-[A-Za-z]+:)?alias:/iu.test(w))) {
+    return words.slice(1).map(w => w.replace(/^-[A-Za-z]+:/u, '')).filter(w => w && !w.startsWith('-') && !/^alias:/iu.test(w))
+      .map(w => hardOfWords([w], depth + 1)).find(Boolean);
   }
   const key = hardDenyOf(name, words);
   return key ? { key, cmd: name } : undefined;
@@ -203,9 +210,11 @@ function cmdParts(text: string): string[] {
     const ch = text[i]!;
     if (ch === '&' || ch === '|' || ch === '\r' || ch === '\n') { if (text[i + 1] === ch) i++; flush(); continue; }
     if (ch === '(') {
-      const words = part.trim().toLowerCase().split(/\s+/u).filter(Boolean);
+      let words = part.trim().toLowerCase().split(/\s+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
       const last = words.at(-1) ?? '';
-      if (words.length === 0 || ['do', 'else', 'in'].includes(last) || words[0]?.replace(/^@+/u, '') === 'if') { flush(); open++; continue; }
+      while (words.length && CMD_LEADS.has(words[0]!)) words.shift();
+      words = cmdCondition(words);
+      if (words.length === 0 || ['do', 'else', 'in'].includes(last)) { flush(); open++; continue; }
     }
     if (ch === ')' && open > 0) { open--; flush(); continue; }
     part += ch;
@@ -662,12 +671,21 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       const inner = innerSource(prog, ws.map(w => ({ ...w, dynamic: false })), shell, fromStdin);
       return inner ? hardIn(inner.text, inner.shell) : undefined;
     };
+    const iexHard = (prog: string, texts: readonly string[]): Said | undefined => {
+      if (prog !== 'iex' && prog !== 'invoke-expression') return undefined;
+      for (const t of texts.slice(1)) {
+        const code = t.replace(/^-[A-Za-z]+:/u, '');
+        const hit = code && !code.startsWith('-') ? hardIn(code, 'powershell') : undefined;
+        if (hit) return hit;
+      }
+      return undefined;
+    };
     const headHard = (head: readonly string[]): Said | undefined => {
-      const direct = hardSaid(hardOfWords(head));
+      const direct = hardSaid(hardOfWords(head)) ?? iexHard(programNameOf(head[0] ?? ''), head);
       if (direct) return direct;
       const headName = programNameOf(head[0] ?? '');
       if (!headName) return undefined;
-      const headWords = head.map((h): Word => ({ text: h, dynamic: h.includes('$') || h === '{…}', glob: false, quoted: false, home: false, kind: h === '{…}' ? 'block' : 'plain' }));
+      const headWords = head.map((h): Word => ({ text: h, dynamic: h.includes('$'), glob: false, quoted: false, home: false, kind: h === '{…}' ? 'block' : 'plain' }));
       const inner = innerSource(headName, headWords, shell, false);
       if (inner === null) {
         if (current) current.programDynamic = true;
@@ -675,7 +693,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       }
       return inner ? hardIn(inner.text, inner.shell) : undefined;
     };
-    const topHard = name ? hardSaid(hardOfWords(words)) ?? (source === null ? literalHard(name, st.words, stdin) : undefined) : undefined;
+    const topHard = name ? hardSaid(hardOfWords(words)) ?? (source === null ? literalHard(name, st.words, stdin) : undefined) ?? iexHard(name, words) : undefined;
     const hardReason = topHard ?? st.heads?.map(headHard).find(Boolean);
     const hard = hardReason !== undefined;
     if (hardReason) add('deny', hardReason);
