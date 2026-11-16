@@ -54,6 +54,12 @@ const anthropicProbe = async (body: Record<string, unknown>) => {
   const fetchImpl = (async () => new Response(JSON.stringify({ id: 'claude-x', type: 'model', display_name: 'x', created_at: '2026-01-01T00:00:00Z', max_input_tokens: 200000, ...body }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
   return new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'k' }, fetchImpl).probe(auto(), 65536);
 };
+const anthropicRaw = async (fragment: string) => {
+  const text = `{"id":"claude-x","type":"model","display_name":"x","created_at":"2026-01-01T00:00:00Z","max_input_tokens":200000,${fragment}}`;
+  const fetchImpl = (async () => new Response(text, { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+  return new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'k' }, fetchImpl).probe(auto(), 65536);
+};
+const BAD_NUMBERS = ['0', '-1', '0.5', '2e7', '1e999', '"200000"'];
 
 test('model-auto: Anthropic の確認は max_tokens を返事の上限（maxOutput）として読み、null・負の数・小数・数でない値は無視する', async () => {
   const ok = await anthropicProbe({ max_tokens: 64000 });
@@ -61,10 +67,30 @@ test('model-auto: Anthropic の確認は max_tokens を返事の上限（maxOutp
   assert.equal(ok.maxOutput, 64000);
   assert.equal(maxOutputFor(auto(), ok.effective!, ok.maxOutput), 32_000);
   assert.equal(maxOutputFor(auto(), ok.effective!, (await anthropicProbe({ max_tokens: 8192 })).maxOutput), 8192);
-  for (const bad of [null, -1, 0.5, '64000', 1e999]) {
-    const result = await anthropicProbe({ max_tokens: bad });
-    assert.equal(result.maxOutput, undefined, JSON.stringify(bad));
+  for (const bad of ['null', ...BAD_NUMBERS, '1', '255']) {
+    const result = await anthropicRaw(`"max_tokens":${bad}`);
+    assert.equal(result.maxOutput, undefined, bad);
     assert.equal(result.status, 'ok');
+  }
+  assert.equal((await anthropicRaw('"max_tokens":256')).maxOutput, 256, '256 から使う（書ける値の下限と同じ）');
+});
+
+test('model-auto: モデルの上限（Anthropic max_input_tokens・OpenRouter context_length・LM Studio max_context_length）も 1〜10,000,000 の整数だけ使う', async t => {
+  for (const bad of BAD_NUMBERS) {
+    const a = await anthropicRaw(`"max_input_tokens":${bad}`);
+    assert.equal(a.modelMax, undefined, `anthropic ${bad}`);
+    assert.equal(a.effective, undefined, `anthropic ${bad}`);
+    assert.equal(a.status, 'unknown', `anthropic ${bad}`);
+    const or = await jsonServer(t, { '/v1/models': `{"data":[{"id":"test-model","context_length":${bad}}]}` });
+    const o = await new OpenAiCompatibleAdapter(compat(`${or.url}/v1`, { server: 'openrouter' }), {}).probe(auto(), 4096);
+    assert.equal(o.modelMax, undefined, `openrouter ${bad}`);
+    assert.equal(o.effective, undefined, `openrouter ${bad}`);
+    assert.equal(o.status, 'unknown', `openrouter ${bad}`);
+    const lm = await jsonServer(t, { '/api/v0/models/test-model': `{"id":"test-model","state":"not-loaded","max_context_length":${bad}}`, '/v1/models': '{"data":[]}' });
+    const l = await new OpenAiCompatibleAdapter(compat(`${lm.url}/v1`, { server: 'lmstudio' }), {}).probe(auto({ contextLength: 32768 }), 4096);
+    assert.equal(l.modelMax, undefined, `lmstudio ${bad}`);
+    assert.equal(l.status, 'ok', `lmstudio ${bad}: 書いた長さが壊れた上限を超えたことにしない`);
+    assert.equal(l.effective, 32768, `lmstudio ${bad}`);
   }
 });
 

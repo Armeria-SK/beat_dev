@@ -13,6 +13,7 @@ import { FakeAdapter, fakeServer, reply, sse, tempDir, testConfig, type Script, 
 import type { SpeechRow } from '../src/db/conversations.ts';
 import { prepareSpeech } from '../src/projects/acceptance.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
+import { ContextOverflow, fitMessages, groupExchanges } from '../src/engine/fit.ts';
 
 // 出力の上限で切れた返事（停止理由が max_tokens）を、成功として扱わない（AU-1）
 
@@ -269,4 +270,79 @@ test('B 安全: 続きの一言は受け入れの項目（持ち主の発言）�
   const rows = s.app.conversations.db.prepare("SELECT id, conversation_id, role, text, COALESCE(json_extract(parts, '$.generated'), 0) IS 1 AS generated FROM messages WHERE conversation_id = 'c1' AND role = 'user' ORDER BY id").all() as unknown as SpeechRow[];
   assert.equal(rows.length, 2, '前提: 持ち主の発言と続きの一言');
   assert.deepEqual(prepareSpeech(rows).owner.map(o => o.raw), ['持ち主の頼み']);
+});
+
+test('B 量: 続きの一言は直前のやり取りと 1 つのまとまり。入りきらなければ一言だけを送らず ContextOverflow', () => {
+  const request: ChatMessage = { role: 'user', content: 'あ'.repeat(3000) };
+  const cut: ChatMessage = { role: 'assistant', content: 'い'.repeat(3000) };
+  const ask: ChatMessage = { role: 'user', content: continueText, generated: true, note: 'continue' };
+  assert.equal(groupExchanges([request, cut, ask]).length, 1);
+  assert.throws(() => fitMessages({ system: '', messages: [request, cut, ask], tools: [], available: 5000 }), ContextOverflow);
+  assert.equal(groupExchanges([request, cut, { role: 'user', content: 'next' }]).length, 2, '持ち主の発言は今どおり区切る');
+});
+
+test('B 量: 頼みと切れた文で残りが無いときは続きを頼まず、つないだ文で切れたとして終える（一言だけを送らない）', async t => {
+  const s = await setup(t);
+  const cut = 'い'.repeat(25_000);
+  s.adapter().scripts.push(cutText(cut), reply('呼ばれない'));
+  const { result } = await s.run('あ'.repeat(30_000));
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.equal(result.ok && result.truncated, true);
+  assert.equal(result.ok && result.text, cut);
+  assert.equal(s.adapter().calls.length, 1, '続きの呼び出しをしない');
+  assert.equal(s.app.conversations.messages('c1').some(m => isContinue(m.message)), false, '一言を残さない');
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_no_room').length, 1);
+  assert.equal(s.events.some(e => e.type === 'warning' && (e.code === 'output_continued' || e.code === 'output_continue_limit')), false);
+});
+
+test('B 量: 古いやり取りを外せば入るときは続きを頼み、送る履歴には持ち主の頼みと切れた文と一言が残る', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(reply('う'.repeat(45_000)));
+  await s.run('old');
+  s.adapter().scripts.push(cutText('お'.repeat(10_000)), reply('end'));
+  const { result } = await s.run('え'.repeat(5000));
+  assert.ok(result.ok);
+  assert.equal(result.ok && result.text, `${'お'.repeat(10_000)}end`);
+  const sent = s.adapter().calls.at(-1)!.messages;
+  assert.equal(sent.length, 3, JSON.stringify(sent.map(m => m.role)));
+  assert.equal(sent[0]!.role === 'user' && sent[0]!.content, 'え'.repeat(5000));
+  assert.ok(isContinue(sent[2]!));
+});
+
+test('B 継ぎ目: 英語の語の境目は空白で残す。切れた文は最後の空白まで戻して保存し（途中の語はモデルが書き直す）、続きの頭の空白は落とさない。重なった空白は 1 つ。最初の返事の頭の空行は今どおり落とす', async t => {
+  const cases: Array<[string, string, string, string[]]> = [
+    ['\n\nThe quick bro', 'brown fox jumps.', 'The quick brown fox jumps.', ['The quick ', 'brown fox jumps.']],
+    ['The quick brown', ' fox jumps.', 'The quick fox jumps.', ['The quick ', 'fox jumps.']],
+    ['The quick ', ' brown fox.', 'The quick brown fox.', ['The quick ', 'brown fox.']],
+    ['The quick', ' brown fox.', 'The brown fox.', ['The ', 'brown fox.']],
+    ['日本語の文 です途中', 'で、続き', '日本語の文 です途中で、続き', ['日本語の文 です途中', 'で、続き']],
+    ['see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbb end', 'see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbb end', ['see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbb end']],
+    ['nospace', ' after', 'nospace after', ['nospace', ' after']],
+  ];
+  for (const [cut, rest, joined, pieces] of cases) {
+    const s = await setup(t);
+    s.adapter().scripts.push(cutText(cut), reply(rest));
+    const { result } = await s.run('Write a sentence');
+    assert.equal(result.ok && result.text, joined, cut);
+    const stored = s.app.conversations.messages('c1').map(m => m.message).filter(m => m.role === 'assistant').map(m => m.content);
+    assert.deepEqual(stored, pieces, cut);
+  }
+});
+
+test('B 継ぎ目: 続きを頼まないとき（上限まで頼んだあと）は切れた文を戻さない', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('one '), cutText('two '), cutText('three '), cutText('four fiv'));
+  const { result } = await s.run('Write');
+  assert.equal(result.ok && result.text, 'one two three four fiv');
+});
+
+test('B 空の続き: 続きを頼んだ返事が空（end_turn）なら、黙って成功にせず切れたとして返し、知らせを出す', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('The forest behind me the'), reply(''));
+  const { result } = await s.run('Write');
+  assert.ok(result.ok);
+  assert.equal(result.ok && result.truncated, true);
+  assert.equal(result.ok && result.text, 'The forest behind me ');
+  assert.equal(s.adapter().calls.length, 2);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_empty').length, 1);
 });

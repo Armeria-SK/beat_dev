@@ -142,7 +142,7 @@ export function replyTurns(
   for (const m of messages) {
     if (m.role === 'user' && m.note === 'continue') { glue = true; continue; }
     if (m.role === 'user') { close(); glue = false; continue; }
-    if (m.role !== 'assistant') continue;
+    if (m.role !== 'assistant') { glue = false; continue; }
     if (m.runId === null || m.runId !== groupRun) { close(); glue = false; }
     groupRun = m.runId;
     group.push({ id: m.id, text: m.text, glued: glue });
@@ -150,6 +150,10 @@ export function replyTurns(
   }
   close();
   return out;
+}
+
+export function endsWithUserTurn(messages: ReadonlyArray<{ role: string }>): boolean {
+  return messages.at(-1)?.role === 'user';
 }
 
 export const SLASH_COMMANDS = [

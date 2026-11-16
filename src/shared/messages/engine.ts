@@ -30,6 +30,8 @@ const en = {
   'warn.output_truncated': 'The reply was cut off at the output limit, so its tool call was not run and the model was asked to write it in smaller pieces',
   'warn.output_continued': 'The reply reached the output limit, so the model was asked to continue where it stopped',
   'warn.output_continue_limit': 'The reply was still cut off after asking for the rest {count} times. Ask for something shorter, or raise Longest reply in Settings › Models › Advanced',
+  'warn.output_continue_empty': 'The reply was cut off at the output limit, and the model returned nothing when asked for the rest. Ask for the rest again, or ask for something shorter',
+  'warn.output_continue_no_room':'The reply was cut off at the output limit, and the context has no room left to ask for the rest. Ask for something shorter, or start a new session',
   'warn.agent_output_truncated': "The sub-agent's final report was cut off at its output limit, so the answer handed to the parent is incomplete",
   'warn.context_trimmed': 'To fit the context, {count} older message(s) were left out of this reply',
   'warn.partial_discarded': 'The reply failed partway, so the part written so far was not saved',

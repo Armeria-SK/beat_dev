@@ -66,6 +66,14 @@ const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
 export const MAX_CONTINUATIONS = 3;
+const RESUME_WORD_MAX = 40;
+
+export function resumePoint(text: string): string {
+  const at = text.search(/\s\S*$/u);
+  if (at < 0) return text;
+  const tail = text.slice(at + 1);
+  return tail.length <= RESUME_WORD_MAX && !/[\u3000-\u9fff\uff00-\uffef]/u.test(tail) ? text.slice(0, at + 1) : text;
+}
 
 function forModel(message: ChatMessage): ChatMessage {
   if (message.role !== 'tool' || !message.gate) return message;
@@ -857,7 +865,9 @@ export class ChatEngine {
       lastEstimate = call.estimate;
       addUsage(call.usage);
       // 考える部分を別に返すモデル（Qwen3 など）は、答えの頭に空行が付く。保存する前に落とす
-      call.text = call.text.replace(/^\s+/u, '');
+      if (!cutTexts.length) call.text = call.text.replace(/^\s+/u, '');
+      else if (/\s$/u.test(cutTexts.at(-1)!)) call.text = call.text.replace(/^[ \t]+/u, '');
+      if (call.truncated && !call.toolCalls.length && continuations < MAX_CONTINUATIONS) call.text = resumePoint(call.text);
 
       // 出力の上限で切れた返事: 黙って成功にしない。お知らせと実行の印を残し、付いていたツール呼び出しは動かさない
       // （切れた元の文字は記録の入力欄にだけ残し、会話には {} で保存する。次の呼び出しにも、提供元に断られる切れた文字を送らない）
@@ -874,17 +884,25 @@ export class ChatEngine {
       const saved = d.conversations.append(conversationId, { role: 'assistant', content: call.text, ...(call.toolCalls.length ? { toolCalls: call.toolCalls } : {}) }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
       if (!call.toolCalls.length) {
-        if (call.truncated && continuations < MAX_CONTINUATIONS) {
+        const language = languageOf(config);
+        if (cutTexts.length && !call.truncated && !call.text.trim()) {
+          d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_empty', message: engineText(language, 'warn.output_continue_empty') });
+          return finishOk(cutTexts.join(''), 'max_tokens');
+        }
+        const ask: ChatMessage ={ role: 'user', content: engineText(language, 'message.continue'), generated: true, note: 'continue' };
+        const room = call.truncated && continuations < MAX_CONTINUATIONS
+          && this.#continuationFits({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project }, ask);
+        if (room) {
           continuations++;
           cutTexts.push(call.text);
-          const language = languageOf(config);
           if (continuations === 1) d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continued', message: engineText(language, 'warn.output_continued') });
-          const asked = d.conversations.append(conversationId, { role: 'user', content: engineText(language, 'message.continue'), generated: true, note: 'continue' }, runId);
+          const asked = d.conversations.append(conversationId, ask, runId);
           d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: asked.id, role: 'user' });
           continue;
         }
-        if (call.truncated) {
-          const language = languageOf(config);
+        if (call.truncated && continuations < MAX_CONTINUATIONS) {
+          d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_no_room', message: engineText(language, 'warn.output_continue_no_room') });
+        } else if (call.truncated) {
           d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_limit', message: engineText(language, 'warn.output_continue_limit', { count: MAX_CONTINUATIONS }), params: { count: MAX_CONTINUATIONS } });
         }
         return finishOk(cutTexts.join('') + call.text, call.stop);
@@ -1179,6 +1197,13 @@ export class ChatEngine {
     if (!(built.capacity > 0)) return { tokens: undefined, available: undefined };
     const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
     return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
+  }
+
+  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }, ask: ChatMessage): boolean {
+    const built = this.#assemble(p);
+    if (!(built.capacity > 0)) return true;
+    const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: [...built.history, ask], tools: built.apiTools, factor: built.factor });
+    return tokens <= built.available;
   }
 
   #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number, conversationId: string): string {

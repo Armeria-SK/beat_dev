@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  firstLine, liveRenderDelay, replyTurns, isNearBottom, isRenameWithoutTitle, newConversationId, renameTitleOf,
+  endsWithUserTurn, firstLine, liveRenderDelay, replyTurns, isNearBottom, isRenameWithoutTitle, newConversationId, renameTitleOf,
   mergeNotice, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, TextThrottle,
 } from '../web/src/chat-logic.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -306,4 +306,13 @@ test('replyTurns（model-auto B）: 続きを頼んだ一言は返事を区切�
   assert.deepEqual([2, 4].map(id => turns.get(id)?.head), [true, false]);
   assert.equal(turns.get(4)?.copyText, 'あいうえ');
   assert.equal(turns.get(6)?.head, true);
+  const viaTool = replyTurns([m(1, 'user', null, 'go'), m(2, 'assistant', 'r1', 'A'), m(3, 'user', 'r1', 'continue', 'continue'), m(4, 'tool', 'r1', 'out'), m(5, 'assistant', 'r1', 'B')]);
+  assert.equal(viaTool.get(5)?.copyText, 'A\n\nB', '道具の行を挟んだら、画面と同じく区切る');
+});
+
+test('endsWithUserTurn（model-auto B）: 最後が続きの一言でも、持ち主の発言と同じくやり直せる（engine の retry と同じ判定）', () => {
+  assert.equal(endsWithUserTurn([{ role: 'user' }, { role: 'assistant' }, { role: 'user', note: 'continue' }] as Array<{ role: string }>), true);
+  assert.equal(endsWithUserTurn([{ role: 'user' }]), true);
+  assert.equal(endsWithUserTurn([{ role: 'user' }, { role: 'assistant' }]), false);
+  assert.equal(endsWithUserTurn([]), false);
 });

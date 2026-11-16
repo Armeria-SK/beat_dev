@@ -32,8 +32,11 @@ export function serverNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_SERVER_NUMBER ? value : undefined;
 }
 
+export const MIN_SERVER_MAX_OUTPUT = 256;
+
 export function evaluateContext(facts: ContextFacts): ProbeResult {
-  const f = { ...facts, measured: serverNumber(facts.measured), modelMax: serverNumber(facts.modelMax), maxOutput: serverNumber(facts.maxOutput) };
+  const maxOutput = serverNumber(facts.maxOutput);
+  const f = { ...facts, measured: serverNumber(facts.measured), modelMax: serverNumber(facts.modelMax), maxOutput: maxOutput !== undefined && maxOutput >= MIN_SERVER_MAX_OUTPUT ? maxOutput : undefined };
   const language = f.language ?? DEFAULT_LANGUAGE;
   const base = {
     modelId: f.modelId, server: f.server, required: f.required, checkedAt: f.now ?? Date.now(),

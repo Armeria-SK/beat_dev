@@ -433,4 +433,18 @@ test('ui/thread（model-auto B）: 続きを頼んだ一言（note: continue）�
   assert.deepEqual(afterOwner.filter(i => i.kind === 'reply').map(i => i.kind === 'reply' && i.text), ['AB', 'C'], '持ち主の発言の後の返事はつながない');
   const twoReplies = threadItems({ messages: [msg('user', 'go'), msg('assistant', 'A'), msg('user', 'go on', { note: 'continue' }), msg('assistant', 'B'), msg('assistant', 'C')] });
   assert.deepEqual(twoReplies.filter(i => i.kind === 'reply').map(i => i.kind === 'reply' && i.text), ['AB', 'C'], 'つなぐのは一言の直後の 1 つだけ');
+  const otherRun = threadItems({ messages: [msg('user', 'go'), msg('assistant', 'A'), msg('user', 'go on', { note: 'continue' }), msg('assistant', 'B', { runId: 'r2' })] });
+  assert.deepEqual(otherRun.filter(i => i.kind === 'reply').map(i => i.kind === 'reply' && i.text), ['A', 'B'], '別の実行（やり直し）の返事はつながない');
+  const viaTool = threadItems({ messages: [msg('user', 'go'), msg('assistant', 'A'), msg('user', 'go on', { note: 'continue' }), msg('assistant', '', { toolCalls: [call('t1', 'file_read', { path: 'a' })] }), msg('tool', 'x', { toolName: 'file_read', toolCallId: 't1' }), msg('assistant', 'B')] });
+  assert.deepEqual(viaTool.map(i => i.kind), ['owner', 'reply', 'tools', 'reply'], '道具の行を挟んだらつながない');
+  const planLast = threadItems({
+    messages: [
+      msg('user', 'plan it', { runId: 'p1' }),
+      msg('assistant', '', { runId: 'p1', toolCalls: [call('w1', 'plan_write', { content: '# Plan' })] }),
+      msg('tool', 'Wrote plan.md', { runId: 'p1', toolName: 'plan_write', toolCallId: 'w1' }),
+      msg('assistant', 'Plan is', { runId: 'p1' }),
+      msg('user', 'go on', { runId: 'p1', note: 'continue' }),
+    ],
+  });
+  assert.deepEqual(planLast.map(i => i.kind), ['owner', 'tools', 'reply', 'plan'], '一言が実行の最後でも「Plan written」を出す');
 });
