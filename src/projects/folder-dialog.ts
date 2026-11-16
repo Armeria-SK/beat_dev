@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute } from 'node:path';
+import { powershellPath } from '../os/win-job.ts';
 import { scrubEnv } from '../tools/shell/runner.ts';
 import { walkFolder } from './work-folder.ts';
 
@@ -136,8 +137,6 @@ export interface FolderDialogOptions {
 }
 
 const realSpawn: DialogSpawn = (command, args, env) => spawn(command, args, { env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-
-const powershellPath = (): string => join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
 function startFolder(input: string | undefined): string {
   const walked = input ? walkFolder(input) : undefined;

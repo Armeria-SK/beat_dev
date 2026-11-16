@@ -6,30 +6,31 @@ import { test } from 'node:test';
 const WINDOWS = process.platform === 'win32';
 const FAKE_BEAT = join(import.meta.dirname, 'fixtures', 'win-job-fake-beat.mjs');
 
-type Run = { beat: number; shell: number; child: number; grand: number; result: { state: string; reason?: string } | null };
+type Run = { beat: number; shell: number; child: number; grand: number; result: { state: string; reason?: string } | null; dead: Set<number> };
 
-function alive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+function alive(pid: number, dead?: Set<number>): boolean {
+  try { process.kill(pid, 0); return true; } catch { dead?.add(pid); return false; }
 }
 
-async function gone(pids: number[], ms = 5000): Promise<boolean> {
+async function gone(run: Run, pids: number[], ms = 5000): Promise<boolean> {
   const end = Date.now() + ms;
   while (Date.now() < end) {
-    if (pids.every(pid => !alive(pid))) return true;
+    if (pids.every(pid => !alive(pid, run.dead))) return true;
     await new Promise(r => setTimeout(r, 100));
   }
-  return pids.every(pid => !alive(pid));
+  return pids.every(pid => !alive(pid, run.dead));
 }
 
-function forceKill(pid: number): void {
-  try { execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' }); } catch { }
+function forceKill(pid: number, dead?: Set<number>): void {
+  try { execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' }); dead?.add(pid); } catch { }
 }
 
 function startFakeBeat(t: { after: (fn: () => void) => void }, mode: 'job' | 'nojob', inject: { failAt?: number; haltAfter?: number; timeoutMs?: number } = {}): Promise<Run> {
   const args = [FAKE_BEAT, 'beat', mode, String(inject.failAt ?? 0), String(inject.haltAfter ?? 0), String(inject.timeoutMs ?? 0)];
   const proc = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
-  const run: Partial<Run> = { beat: proc.pid! };
-  t.after(() => { for (const pid of [run.grand, run.child, run.shell, run.beat]) if (pid) forceKill(pid); });
+  const dead = new Set<number>();
+  const run: Partial<Run> = { beat: proc.pid!, dead };
+  t.after(() => { for (const pid of [run.grand, run.child, run.shell, run.beat]) if (pid && !dead.has(pid) && alive(pid)) forceKill(pid); });
   return new Promise((resolve, reject) => {
     let text = '';
     const timer = setTimeout(() => reject(new Error(`fake beat did not get ready: ${text}`)), 30_000);
@@ -56,15 +57,15 @@ test('a force-killed beat takes its children and grandchildren with it', { skip:
   const run = await startFakeBeat(t, 'job');
   assert.deepEqual(run.result, { state: 'joined' });
   const tree = [run.shell, run.child, run.grand];
-  assert.ok(tree.every(alive));
-  forceKill(run.beat);
-  assert.equal(await gone(tree), true, `still alive: ${tree.filter(alive).join(', ')}`);
+  assert.ok(tree.every(pid => alive(pid)));
+  forceKill(run.beat, run.dead);
+  assert.equal(await gone(run, tree), true, `still alive: ${tree.filter(pid => alive(pid)).join(', ')}`);
 });
 
 test('control: without the job the grandchildren outlive a force-killed beat', { skip: !WINDOWS && 'Windows only' }, async t => {
   const run = await startFakeBeat(t, 'nojob');
-  forceKill(run.beat);
-  assert.equal(await gone([run.grand], 2000), false);
+  forceKill(run.beat, run.dead);
+  assert.equal(await gone(run, [run.grand], 2000), false);
 });
 
 test('a helper that fails at any stage leaves beat running', { skip: !WINDOWS && 'Windows only', concurrency: true }, async t => {
@@ -72,7 +73,7 @@ test('a helper that fails at any stage leaves beat running', { skip: !WINDOWS &&
     t.test(`failure at stage ${failAt}`, async t => {
       const run = await startFakeBeat(t, 'job', { failAt });
       assert.equal(run.result?.state, 'failed');
-      assert.match(run.result?.reason ?? '', new RegExp(`stage ${failAt}`, 'u'));
+      assert.match(run.result?.reason ?? '', new RegExp(`^stage ${failAt} `, 'u'));
       await new Promise(r => setTimeout(r, 500));
       assert.equal(alive(run.beat), true);
     })));
@@ -84,11 +85,12 @@ test('a helper killed after any stage leaves beat running', { skip: !WINDOWS && 
       const run = await startFakeBeat(t, 'job', { haltAfter, timeoutMs: 6000 });
       assert.equal(run.result?.state, 'failed');
       assert.match(run.result?.reason ?? '', /timed out/u);
+      assert.ok(run.result?.reason?.includes(`last completed stage ${haltAfter} of 4`), run.result?.reason);
       await new Promise(r => setTimeout(r, 500));
       assert.equal(alive(run.beat), true);
       if (haltAfter === 4) {
-        forceKill(run.beat);
-        assert.equal(await gone([run.shell, run.child, run.grand]), true, 'beat was in the job before the helper died, so the job still works');
+        forceKill(run.beat, run.dead);
+        assert.equal(await gone(run, [run.shell, run.child, run.grand]), true, 'beat was in the job before the helper died, so the job still works');
       }
     })));
 });

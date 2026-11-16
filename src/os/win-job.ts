@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process';
+import { execFile, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { scrubEnv } from '../tools/shell/runner.ts';
 
 export type JobResult = { state: 'joined' | 'skipped' } | { state: 'failed'; reason: string };
 
@@ -13,7 +14,7 @@ const TIMEOUT_MS = 15_000;
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
 const PROCESS_DUP_HANDLE_SET_QUOTA_TERMINATE = 0x141;
 
-const powershellPath = (): string => join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+export const powershellPath = (): string => join(process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
 function jobHelperScript(pid: number, inject: { failAt?: number; haltAfter?: number } = {}): string {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`invalid pid: ${pid}`);
@@ -81,16 +82,29 @@ export function enterKillOnCloseJob(options: JobOptions = {}): Promise<JobResult
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const timeout = options.timeoutMs ?? TIMEOUT_MS;
   return new Promise(resolve => {
+    let streamed = '';
+    let settled = false;
+    const reached = (stdout: string) => `last completed stage ${lastStage(stdout)} of 4`;
+    const finish = (result: JobResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    let child: ChildProcess | undefined;
+    const timer = setTimeout(() => {
+      child?.kill();
+      finish({ state: 'failed', reason: `the helper timed out after ${timeout} ms (${reached(streamed)})` });
+    }, timeout);
     try {
-      execFile(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { windowsHide: true, timeout, encoding: 'utf8', maxBuffer: 64 * 1024 }, (error, stdout) => {
-        if (!error && /^ok\s*$/mu.test(stdout)) { resolve({ state: 'joined' }); return; }
-        const reached = `last completed stage ${lastStage(stdout)} of 4`;
-        if ((error as (Error & { killed?: boolean }) | null)?.killed) { resolve({ state: 'failed', reason: `the helper timed out after ${timeout} ms (${reached})` }); return; }
+      child = execFile(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { env: scrubEnv(), windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024 }, (error, stdout) => {
+        if (!error && /^ok\s*$/mu.test(stdout)) { finish({ state: 'joined' }); return; }
         const detail = /^error: (.*?)\s*$/mu.exec(stdout)?.[1] ?? (error?.message ?? 'no confirmation from the helper').split(/\r?\n/u)[0];
-        resolve({ state: 'failed', reason: `${detail} (${reached})` });
+        finish({ state: 'failed', reason: `${detail} (${reached(stdout)})` });
       });
+      child.stdout?.on('data', (chunk: string) => { streamed += chunk; });
     } catch (error) {
-      resolve({ state: 'failed', reason: (error as Error).message });
+      finish({ state: 'failed', reason: (error as Error).message });
     }
   });
 }
