@@ -117,20 +117,60 @@ function hardOfWords(words: readonly string[], depth = 0): HardHit | undefined {
 
 const CMD_LEADS: ReadonlySet<string> = new Set(['@', 'call', 'do', 'else']);
 
+const CMD_IF_TESTS: ReadonlySet<string> = new Set(['exist', 'defined', 'errorlevel', 'cmdextversion']);
+const CMD_COMPARE: ReadonlySet<string> = new Set(['equ', 'neq', 'lss', 'leq', 'gtr', 'geq', '==']);
+
+function cmdRemainder(args: readonly string[]): string[] | undefined {
+  for (const [i, arg] of args.entries()) {
+    if (!arg.startsWith('/')) continue;
+    const pieces = arg.split(/(?=\/)/u);
+    const at = pieces.findIndex(p => /^\/[ckr]/iu.test(p));
+    if (at < 0) continue;
+    const joined = pieces[at]!.slice(2) + pieces.slice(at + 1).join('');
+    return [...(joined ? [joined] : []), ...args.slice(i + 1)];
+  }
+  return undefined;
+}
+
+function cmdCondition(tokens: string[]): string[] {
+  while (tokens[0]?.toLowerCase() === 'if') {
+    let i = 1;
+    while (tokens[i] && ['/i', 'not'].includes(tokens[i]!.toLowerCase())) i++;
+    const a = tokens[i]?.toLowerCase() ?? '';
+    const b = tokens[i + 1]?.toLowerCase() ?? '';
+    if (CMD_IF_TESTS.has(a)) i += 2;
+    else if (CMD_COMPARE.has(b)) i += 3;
+    else if (a.endsWith('==')) i += 2;
+    else if (b.startsWith('==')) i += 2;
+    else i += 1;
+    tokens = tokens.slice(i);
+    while (tokens.length && CMD_LEADS.has(tokens[0]!.toLowerCase())) tokens.shift();
+  }
+  return tokens;
+}
+
+function cmdHeadHard(tokens: readonly string[], depth: number): HardHit | undefined {
+  const first = tokens[0] ?? '';
+  const slash = first.indexOf('/');
+  if (slash > 0) {
+    const hit = hardOfWords([first.slice(0, slash), first.slice(slash), ...tokens.slice(1)], depth);
+    if (hit) return hit;
+  }
+  return hardOfWords(tokens, depth);
+}
+
 function cmdHard(args: readonly string[], depth: number): HardHit | undefined {
-  const at = args.findIndex(a => /^\/[ckr]$/iu.test(a));
-  if (at < 0) return undefined;
-  const text = args.slice(at + 1).join(' ').replace(/\^(.)/gsu, '$1').replace(/"/gu, ' ')
+  const rest = cmdRemainder(args);
+  if (!rest) return undefined;
+  const text = rest.join(' ').replace(/\^(.)/gsu, '$1').replace(/"/gu, ' ')
     .replace(/\d?>>?\s*(?:&\d|[^\s&|()<>]+)?|<\s*[^\s&|()<>]+/gu, ' ');
   for (const part of text.split(/&&|\|\||[&|()\r\n]/u)) {
-    const tokens = part.split(/[\s,;=]+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
+    let tokens = part.split(/[\s,;]+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
     while (tokens.length && CMD_LEADS.has(tokens[0]!.toLowerCase())) tokens.shift();
     if (tokens[0]?.toLowerCase() === 'start') { tokens.shift(); while (tokens[0]?.startsWith('/')) tokens.shift(); }
-    const starts = tokens[0]?.toLowerCase() === 'if' ? tokens.keys() : [0];
-    for (const i of starts) {
-      const hit = hardOfWords(tokens.slice(i), depth);
-      if (hit) return hit;
-    }
+    tokens = cmdCondition(tokens).join(' ').split(/[\s,;=]+/u).filter(Boolean);
+    const hit = cmdHeadHard(tokens, depth);
+    if (hit) return hit;
   }
   return undefined;
 }
@@ -532,7 +572,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const stdin = st.pipedIn || st.redirects.some(r => STDIN_OPS.has(r.op));
     const inline = inlineCode(name, st.words);
     current = {
-      program: name, programDynamic: first?.dynamic ?? false, programOdd: !!first && !first.dynamic && programOdd(first.text, name), words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
+      program: name, programDynamic: (first?.dynamic ?? false) || st.callComputed === true, programOdd: !!first && !first.dynamic && programOdd(first.text, name), words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
       urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
       env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: inline.code, codeDynamic: inline.dynamic,
       stdin, shapes: [...st.shapes], reasonKeys: result.reasons.map(r => r.id ?? r.key),

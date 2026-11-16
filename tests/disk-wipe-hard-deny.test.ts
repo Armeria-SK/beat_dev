@@ -19,8 +19,11 @@ import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 // Q-62-1: disk-wiping commands are refused before any judge or Pending: by name, inside wrappers (powershell -c, bash -c, cmd /c, &, iex),
-// inside PowerShell control bodies (try, while, do, for, switch, trap, begin/process/end) and inside cmd /c remainders.
-// Still open: a command name that only exists at run time (a variable, string concatenation, base64, a script file).
+// inside PowerShell control bodies (try, while, do, for, switch, trap, begin/process/end, including after } and after a keyword's parens)
+// and inside cmd /c remainders (joined /c, name/switch, if conditions).
+// Still run unattended with the judge off: a command name that only exists at run time (a variable, string concatenation, base64, a script file;
+// a computed & / . target inside a control body goes to owner approval), Invoke-CimMethod -MethodName Format, wmic ... call format,
+// device writes through > / cp / tee. Only reach owner approval: %COMSPEC%, & $env:ComSpec, and any cmd spelling not read here.
 // Every case here goes through the guard only (checkShellCommand / preCheck, or the pipeline with a counting execute stub); nothing is executed.
 
 function check(t: { after: (fn: () => void) => void }, command: string, shell: ShellKind): ShellVerdict {
@@ -74,7 +77,39 @@ const DENIED_CMD = [
   'cmd /c "@format c:"', 'cmd /c "call format c:"', 'cmd /c "for %i in (1) do format c:"', 'cmd /c "cipher /w:%SystemDrive%\\"',
   'cmd /c fsutil file setzerodata offset=0 length=1 a.txt', 'cmd /c "dir 2>&1 && C:\\Windows\\System32\\format.com c:"', 'cmd /k "echo ok || diskpart /s x.txt"',
   'cmd /c "if exist x (format c:) else (echo no)"', 'cmd /c "if exist x format c:"', 'cmd /c "if not %a%==b cipher /w:C:\\"', 'cmd /c "cmd /c format c: a=1"', 'cmd /c "shutdown /s a=1"',
+  'cmd /c "if /i %a% equ b format c:"', 'cmd /c "if "%MODE%"=="x" format c:"', 'cmd /c "if defined X diskpart /s x.txt"',
 ];
+
+// Security re-review (HIGH): a new statement starts after } and after the ) of a keyword's parens, with no ; or newline
+const DENIED_PS_AFTER_CLOSE = [
+  'Invoke-Command -ScriptBlock { param($n) Clear-Disk -Number $n -RemoveData -Confirm:$false } -ArgumentList 1',
+  'try { Get-Date } catch {} Clear-Disk -Number 1 -RemoveData -Confirm:$false',
+  'try { if ($true) { 1 } Format-Volume -DriveLetter Z } catch {}',
+  'do { 1 } while ($false) Format-Volume -DriveLetter Z',
+  'while ($x) { 1 } Clear-Disk -Number 1', 'switch (1) { 1 { 2 } } Clear-Disk -Number 1', 'for (;;) { break } Clear-Disk -Number 1', 'trap { continue } Clear-Disk -Number 1',
+  'try { Get-Date } catch {} finally {} Clear-Disk -Number 1', 'param($n) Format-Volume -DriveLetter Z', 'do { 1 } until ($true) Remove-Partition -DriveLetter Z',
+];
+
+// Security re-review (MEDIUM): cmd ends a command name at / and accepts a joined /c
+const DENIED_CMD_SLASH = [
+  'cmd /c format/q Z: /y', 'cmd /c format.com/q Z: /y', 'cmd /c diskpart/s x.txt', 'cmd /c cmd/c format Z: /q /y',
+  'cmd /cformat Z:', 'cmd /c"format Z: /q /y"', 'cmd /s/c "format Z: /q /y"', 'cmd /c "format/q Z: a=1"', 'cmd /C "cmd /Kformat Z:"', 'cmd /d /s /c "fo^rmat/q Z:"',
+];
+
+// Not hard-denied: hashtable keys, switch labels, function names, cmd if conditions (security re-review, false positives)
+const NOT_HARD_PS = [
+  "try { $body = @{ model = 'llama3'; format = 'json' } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:1/x -Body $body } catch { Write-Error $_ }",
+  "try { $p = @{ Format = 'yyyy-MM-dd' }; Get-Date @p } catch {}", "try { [pscustomobject]@{ Name='a'; Format='b' } } catch {}", "try { $cfg = @{ net='x'; reg='y' } } catch {}",
+  "try { $h = @{\n format = 'json'\n net = 'x' } } catch {}",
+  'switch ($m) { format { npm run format } }', 'switch -regex ($m) { diskpart { Write-Output x } default { 1 } }', 'function net { 1 }', 'filter format { $_ }',
+  'cmd /c "if "%MODE%"=="format" echo yes"', 'cmd /c "if %a%==format echo yes"', 'cmd /c "if exist format echo yes"',
+];
+
+// Hash values are commands: still caught
+const DENIED_PS_HASH_VALUE = ["try { $h = @{ a= Format-Volume -DriveLetter Z } } catch {}", "try { foreach ($d in Clear-Disk -Number 1) { 1 } } catch {}", "try { $h = @{ a = Format-Volume -DriveLetter Z } } catch {}", "try { $h = @{ format = 'x'; b = (Clear-Disk -Number 1) } } catch {}"];
+
+// Computed call targets inside a control body go to owner approval, the same as at top level
+const COMPUTED_CALL = ["try { & ('Format-Volume') -DriveLetter Z } catch {}", 'try { & $cmd -DriveLetter Z } catch {}', 'while ($true) { . $x; break }'];
 
 const DENIED_BASH = [
   'wipefs -a /dev/sdb', '/sbin/wipefs /dev/sdb', 'sgdisk --zap-all /dev/sdb', 'sgdisk -Z /dev/sdb', 'gdisk /dev/sdb', 'sfdisk /dev/sdb < t', 'cfdisk /dev/sdb',
@@ -85,7 +120,7 @@ const DENIED_BASH = [
 ];
 
 test('disk wipe: PowerShell / cmd forms are hard-denied before any judge', t => {
-  for (const command of [...DENIED_PS, ...DENIED_PS_CONTROL, ...DENIED_CMD]) {
+  for (const command of [...DENIED_PS, ...DENIED_PS_CONTROL, ...DENIED_CMD, ...DENIED_PS_AFTER_CLOSE, ...DENIED_CMD_SLASH, ...DENIED_PS_HASH_VALUE]) {
     const v = check(t, command, 'powershell');
     assert.ok(hardDenied(v), `${command} -> ${v.decision} ${v.reasonKeys.join(',')}`);
   }
@@ -111,7 +146,7 @@ test('disk wipe: read-only storage commands, file-level forms and ordinary bodie
     'while ($i -lt 3) { Write-Output "format c:"; $i++ }', 'try { Get-Volume } catch { Write-Output \'Format-Volume failed\' }', 'do { Get-Date -Format o } while ($false)',
     'try { $r = Get-Date } catch {}', "try { & 'Get-Disk' } catch {}", 'try { powershell -c "Get-Volume" } catch {}', 'function Show-Disk { Get-Disk }', "try { 'Format-Volume' } catch {}",
     'cmd /c "npm run format & echo ok"', 'cmd /c "dir /b | findstr format"', 'cmd /c "git commit -m "net, format" && echo"', 'cmd /c "echo format c: > notes.txt"',
-    'cmd /c "type a.txt | find "diskpart""',
+    'cmd /c "type a.txt | find "diskpart""', ...NOT_HARD_PS,
   ];
   for (const command of ps) {
     const v = check(t, command, 'powershell');
@@ -154,6 +189,7 @@ test('disk wipe: with the judge off and a user request, shell_run still refuses 
   const commands = [
     'Format-Volume -DriveLetter Z', 'Clear-Disk -Number 1 -RemoveData', 'Initialize-Disk -Number 1', 'Remove-Partition -DriveLetter Z',
     ...DENIED_PS_CONTROL, 'cmd /c "format c: a=1"', 'cmd /c fsutil file setzerodata offset=0 length=1 a.txt', 'cmd /c "echo y| format Z: /q"',
+    ...DENIED_PS_AFTER_CLOSE, ...DENIED_CMD_SLASH,
   ];
   for (const command of commands) {
     for (const args of [{ command }, { command, background: true }]) {
@@ -171,4 +207,17 @@ test('disk wipe: the stub does run an ordinary body with the judge off (the refu
   const w = pipelineWorld(t);
   const outcome = await w.run({ command: 'try { Get-Date } catch { Write-Error $_ }' });
   assert.equal(w.ran(), 1, `${outcome.decidedBy}: ${outcome.output.content}`);
+  const after = await w.run({ command: 'try { Get-Date } catch {} Write-Output done' });
+  assert.equal(w.ran(), 2, `${after.decidedBy}: ${after.output.content}`);
+});
+
+test('disk wipe: a computed call target inside a control body waits for the owner with the judge off, as at top level', async t => {
+  const w = pipelineWorld(t);
+  const top = await w.run({ command: "& ('Format-Volume') -DriveLetter Z" });
+  assert.equal(top.decidedBy, 'pending', `top level: ${top.output.content}`);
+  for (const command of COMPUTED_CALL) {
+    const outcome = await w.run({ command });
+    assert.equal(outcome.decidedBy, 'pending', `${command} -> ${outcome.decidedBy}: ${outcome.output.content}`);
+  }
+  assert.equal(w.ran(), 0);
 });
