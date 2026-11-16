@@ -283,7 +283,7 @@ test('B 量: 続きの一言は直前のやり取りと 1 つのまとまり。�
 
 test('B 量: 頼みと切れた文で残りが無いときは続きを頼まず、つないだ文で切れたとして終える（一言だけを送らない）', async t => {
   const s = await setup(t);
-  const cut = 'い'.repeat(25_000);
+  const cut = `${'い'.repeat(25_000)} Visit https://example.com/a/b`;
   s.adapter().scripts.push(cutText(cut), reply('呼ばれない'));
   const { result } = await s.run('あ'.repeat(30_000));
   assert.ok(result.ok, JSON.stringify(result));
@@ -309,23 +309,27 @@ test('B 量: 古いやり取りを外せば入るときは続きを頼み、送�
   assert.ok(isContinue(sent[2]!));
 });
 
-test('B 継ぎ目: 英語の語の境目は空白で残す。切れた文は最後の空白まで戻して保存し（途中の語はモデルが書き直す）、続きの頭の空白は落とさない。重なった空白は 1 つ。最初の返事の頭の空行は今どおり落とす', async t => {
-  const cases: Array<[string, string, string, string[]]> = [
-    ['\n\nThe quick bro', 'brown fox jumps.', 'The quick brown fox jumps.', ['The quick ', 'brown fox jumps.']],
-    ['The quick brown', ' fox jumps.', 'The quick fox jumps.', ['The quick ', 'fox jumps.']],
-    ['The quick ', ' brown fox.', 'The quick brown fox.', ['The quick ', 'brown fox.']],
-    ['The quick', ' brown fox.', 'The brown fox.', ['The ', 'brown fox.']],
-    ['日本語の文 です途中', 'で、続き', '日本語の文 です途中で、続き', ['日本語の文 です途中', 'で、続き']],
-    ['see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbb end', 'see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbb end', ['see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbb end']],
-    ['nospace', ' after', 'nospace after', ['nospace', ' after']],
+test('B 継ぎ目: 続きを頼む切れた文は最後の空白まで戻して保存し、モデルはそこから書く。続きの頭の改行は落とし、空白は前の文が空白で終わらないときだけ 1 つ残す（Qwen の空行・英語の語・日本語）', async t => {
+  // 2 つ目の返事は、実際のモデルのように「保存された文（モデルに送った文）」の続きを書く
+  const cases: Array<[cut: string, sent: string, next: string, joined: string]> = [
+    ['\n\nThe quick bro', 'The quick ', 'brown fox jumps.', 'The quick brown fox jumps.'],
+    ['The quick brown', 'The quick ', ' brown fox.', 'The quick brown fox.'],
+    ['The quick ', 'The quick ', '\n\nbrown fox.', 'The quick brown fox.'],
+    ['The quick bro', 'The quick ', '\n\n brown fox.', 'The quick brown fox.'],
+    ['途中', '途中', '\n\nで、続き', '途中で、続き'],
+    ['日本語の文 です途中', '日本語の文 です途中', '\n\nで、続き', '日本語の文 です途中で、続き'],
+    ['see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbb end', 'see https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbb end'],
+    ['nospace', 'nospace', ' after', 'nospace after'],
   ];
-  for (const [cut, rest, joined, pieces] of cases) {
+  for (const [cut, sent, next, joined] of cases) {
     const s = await setup(t);
-    s.adapter().scripts.push(cutText(cut), reply(rest));
+    s.adapter().scripts.push(cutText(cut), reply(next));
     const { result } = await s.run('Write a sentence');
-    assert.equal(result.ok && result.text, joined, cut);
-    const stored = s.app.conversations.messages('c1').map(m => m.message).filter(m => m.role === 'assistant').map(m => m.content);
-    assert.deepEqual(stored, pieces, cut);
+    assert.equal(result.ok && result.text, joined, JSON.stringify(cut));
+    const seen = s.adapter().calls[1]!.messages.filter(m => m.role === 'assistant').at(-1)!;
+    assert.equal(seen.content, sent, `モデルに送った切れた文: ${JSON.stringify(cut)}`);
+    const stored = s.app.conversations.messages('c1').map(m => m.message).filter(m => m.role === 'assistant').map(m => m.content).join('');
+    assert.equal(stored, joined, '画面でつないだ文も同じ');
   }
 });
 
@@ -342,7 +346,17 @@ test('B 空の続き: 続きを頼んだ返事が空（end_turn）なら、黙�
   const { result } = await s.run('Write');
   assert.ok(result.ok);
   assert.equal(result.ok && result.truncated, true);
-  assert.equal(result.ok && result.text, 'The forest behind me ');
+  assert.equal(result.ok && result.text, 'The forest behind me the', '戻した語は失わない');
+  assert.deepEqual(s.app.conversations.messages('c1').map(m => m.message).filter(m => m.role === 'assistant').map(m => m.content), ['The forest behind me ', 'the'], '画面でも戻した語が見える');
   assert.equal(s.adapter().calls.length, 2);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_empty').length, 1);
+});
+
+test('B 空の続き: 空白だけの続きも空として扱う（前の文が空白で終わらないときも）', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('nospace'), reply(' \n'));
+  const { result } = await s.run('Write');
+  assert.equal(result.ok && result.truncated, true);
+  assert.equal(result.ok && result.text, 'nospace');
   assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_empty').length, 1);
 });

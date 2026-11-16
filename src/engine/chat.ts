@@ -753,6 +753,7 @@ export class ChatEngine {
     // 文だけの返事が上限で切れたとき、beat が続きを頼んだ回数（1 回の実行の合計）と、それまでの切れた文
     let continuations = 0;
     const cutTexts: string[] = [];
+    let cutTail = '';
     let warnedToolCut = false;
     let lastEstimate = 0;
     let lastRoute: Route = chain[0]!;
@@ -865,9 +866,10 @@ export class ChatEngine {
       lastEstimate = call.estimate;
       addUsage(call.usage);
       // 考える部分を別に返すモデル（Qwen3 など）は、答えの頭に空行が付く。保存する前に落とす
-      if (!cutTexts.length) call.text = call.text.replace(/^\s+/u, '');
-      else if (/\s$/u.test(cutTexts.at(-1)!)) call.text = call.text.replace(/^[ \t]+/u, '');
-      if (call.truncated && !call.toolCalls.length && continuations < MAX_CONTINUATIONS) call.text = resumePoint(call.text);
+      const lead = /^\s*/u.exec(call.text)![0];
+      const space = cutTexts.length > 0 && /[ \t]/u.test(lead) && !/\s$/u.test(cutTexts.at(-1)!);
+      const rest = call.text.slice(lead.length);
+      call.text = space && rest ? ` ${rest}` : rest;
 
       // 出力の上限で切れた返事: 黙って成功にしない。お知らせと実行の印を残し、付いていたツール呼び出しは動かさない
       // （切れた元の文字は記録の入力欄にだけ残し、会話には {} で保存する。次の呼び出しにも、提供元に断られる切れた文字を送らない）
@@ -881,17 +883,24 @@ export class ChatEngine {
         for (const c of call.toolCalls) cutRaw.set(c.id, c.raw ?? JSON.stringify(c.arguments ?? null));
         call.toolCalls = call.toolCalls.map(c => ({ id: c.id, name: c.name, arguments: {} }));
       }
+      const language = languageOf(config);
+      const ask: ChatMessage = { role: 'user', content: engineText(language, 'message.continue'), generated: true, note: 'continue' };
+      const empty = !call.toolCalls.length && cutTexts.length > 0 && !call.truncated && !call.text;
+      const room = !call.toolCalls.length && call.truncated && continuations < MAX_CONTINUATIONS
+        && this.#continuationFits({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project }, [{ role: 'assistant', content: resumePoint(call.text) }, ask]);
+      if (room) {
+        const kept = resumePoint(call.text);
+        cutTail = call.text.slice(kept.length);
+        call.text = kept;
+      }
+      if (empty) call.text = cutTail;
       const saved = d.conversations.append(conversationId, { role: 'assistant', content: call.text, ...(call.toolCalls.length ? { toolCalls: call.toolCalls } : {}) }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
       if (!call.toolCalls.length) {
-        const language = languageOf(config);
-        if (cutTexts.length && !call.truncated && !call.text.trim()) {
+        if (empty) {
           d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_empty', message: engineText(language, 'warn.output_continue_empty') });
-          return finishOk(cutTexts.join(''), 'max_tokens');
+          return finishOk(cutTexts.join('') + call.text, 'max_tokens');
         }
-        const ask: ChatMessage ={ role: 'user', content: engineText(language, 'message.continue'), generated: true, note: 'continue' };
-        const room = call.truncated && continuations < MAX_CONTINUATIONS
-          && this.#continuationFits({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project }, ask);
         if (room) {
           continuations++;
           cutTexts.push(call.text);
@@ -1199,10 +1208,10 @@ export class ChatEngine {
     return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
   }
 
-  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }, ask: ChatMessage): boolean {
+  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }, pending: ChatMessage[]): boolean {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return true;
-    const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: [...built.history, ask], tools: built.apiTools, factor: built.factor });
+    const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: [...built.history, ...pending], tools: built.apiTools, factor: built.factor });
     return tokens <= built.available;
   }
 
