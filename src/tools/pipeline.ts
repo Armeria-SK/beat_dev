@@ -498,15 +498,16 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // ── 実行 ──
   let output: ToolOutput;
   const closeWindow = opensWindow(tool) ? ctx.toolWindow?.() : undefined;
-  try { output = await tool.execute(args, ctx, { approvedOnce: false, callId: call.id }); }
+  const approvedEgress = [first, earlier].some(check => check?.decision === 'ask' && check.askKinds?.includes('egress') === true);
+  const fetchedBefore = first?.fetched === true || earlier?.fetched === true || approvedEgress;
+  try { output = await tool.execute(args, ctx, { approvedOnce: false, callId: call.id, ...(fetchedBefore ? { fetched: true } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   finally { closeWindow?.(); }
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。
   // シェルのコマンドが外から取得する・外の中身を持ち込む（curl・Invoke-WebRequest・git clone・npm install など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）。
   // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した呼び出しも、動かしたら付ける。
-  const approvedEgress = [first, earlier].some(check => check?.decision === 'ask' && check.askKinds?.includes('egress') === true);
   // 結果が外の中身を持ち込んだと自分で言ったとき（output.fetched。実行してみないと分からない道具）も付ける。付ける向きにしか働かない。
-  if ((network && !(output.isError && output.noRemoteContent)) || first?.fetched === true || earlier?.fetched === true || output.fetched === true || approvedEgress) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
+  if ((network && !(output.isError && output.noRemoteContent)) || fetchedBefore || output.fetched === true) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 
   // ── 実行後フック（記録用。結果は変えない） ──
   for (const hook of ctx.config.tools.hooks.postToolUse) {

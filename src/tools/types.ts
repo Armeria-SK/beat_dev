@@ -9,6 +9,7 @@ import type { SkillStore } from './skills/store.ts';
 import type { DownloadNetwork, PageNetwork } from './web/public-page.ts';
 import type { SearchThrottle } from './web/search.ts';
 import type { BrowserSession } from './browser/session.ts';
+import type { BackgroundJobs } from './shell/background.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
 import type { Outbound } from './hooks/outbound.ts';
@@ -94,6 +95,7 @@ export interface ExecuteInfo {
   // この呼び出しの id（モデルが付けたもの。agent_run が、画面の agent.state をどの呼び出しの行に結ぶかに使う）
   callId?: string;
   pushCheck?: { tips: readonly string[]; required: boolean };
+  fetched?: boolean;
 }
 
 export interface ToolContext {
@@ -126,6 +128,7 @@ export interface ToolContext {
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
     // ブラウザの道具（browser_*）が使う、全会話で 1 つのブラウザ。無ければ道具は「ブラウザが無い」で失敗する
     browser?: BrowserSession | undefined;
+    background?: BackgroundJobs | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。

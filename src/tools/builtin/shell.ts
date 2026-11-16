@@ -23,9 +23,10 @@ import { parseRemotes, type Remote } from '../../projects/remotes.ts';
 import type { ShellKind } from '../hooks/shell-lex.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../shell/git-env.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
-import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
+import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
+import { BACKGROUND_OUTPUT_CHARS, BACKGROUND_SETTLE_SEC, jobLines, jobState, newest } from './shell-bg.ts';
 
-interface ShellInput { command: string; cwd?: string; timeoutSec?: number }
+interface ShellInput { command: string; cwd?: string; timeoutSec?: number; background?: boolean }
 
 export function shellTranscript(command: string, header: string, body: readonly string[]): string {
   const echo = redactKeyEcho(`$ ${command}`);
@@ -128,6 +129,7 @@ function shellOutbound(command: string, statements: readonly StatementFacts[], c
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
   if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
+  if (input.background === true && !ctx.project?.root) return { decision: 'deny', reasons: [guardText(language, 'shell.background_no_product')] };
   const cwd = resolveCwd(input, ctx);
   if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem] };
   const shell = ctx.config.tools.shell;
@@ -155,6 +157,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, ctx, childEnv, gitExe, language, created);
   const places = placesOf(verdict.statements, cwd.cwd);
   const pushes = pushesOf(verdict.statements, verdict.reasonKeys);
+  if (input.background === true && pushes.length) return { decision: 'deny', reasons: [guardText(language, 'shell.background_push')] };
   const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];
   const run = ctx.project?.root && verdict.decision === 'ask' ? productRunOf({
     root: ctx.project.root, verdict,
@@ -186,6 +189,78 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   };
 }
 
+interface BackgroundRun { cwd: string; shell: ReturnType<typeof resolveShell>; child: ReturnType<typeof childEnvFor>; settings: AppConfig['tools']['shell'] }
+
+async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteInfo | undefined, run: BackgroundRun): Promise<ToolOutput> {
+  const language = languageOf(ctx.config);
+  const jobs = ctx.services?.background;
+  const project = ctx.project;
+  if (!jobs || !project?.root || info?.pushCheck) return { content: toolText(language, 'shell.bg_unavailable'), isError: true };
+  const { cwd, shell, child, settings } = run;
+  const ownerHooks = info?.approvedOnce === true ? info.check?.ownHooksDir : undefined;
+  const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ...(ownerHooks ? { ownerHooks } : {}), ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
+  let cleaned = false;
+  const cleanup = () => { if (!cleaned) { cleaned = true; gitRun?.cleanup(); } };
+  const check = info?.check;
+  const fetched = info?.fetched === true || check?.fetched === true || (check?.decision === 'ask' && check.askKinds?.includes('egress') === true);
+  let started: ReturnType<typeof jobs.start>;
+  try {
+    started = jobs.start({
+      conversationId: ctx.conversationId, projectId: project.id, ...(ctx.task ? { taskId: ctx.task.id } : {}),
+      command: input.command, cwd, file: shell.file, args: shell.args(input.command), env: { ...child.env, ...gitRun?.env },
+      ...(shell.stdin ? { stdin: shell.stdin(input.command) } : {}), fetched, ...(ctx.taint.tainted ? { tainted: true } : {}), onExit: cleanup,
+    });
+  } catch (error) {
+    cleanup();
+    return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: (error as Error).message }), isError: true };
+  }
+  if ('refused' in started) {
+    cleanup();
+    if (started.refused === 'closed') return { content: toolText(language, 'shell.bg_closed'), isError: true };
+    const list = started.running.length ? `\n${toolText(language, 'shell.bg_mine')}\n${jobLines(started.running, language)}` : '';
+    return started.refused === 'conversation_limit'
+      ? { content: toolText(language, 'shell.bg_limit_conversation', { max: started.running.length, list }), isError: true }
+      : { content: toolText(language, 'shell.bg_limit_total', { max: started.running.length + started.elsewhere, elsewhere: started.elsewhere, list }), isError: true };
+  }
+  await jobs.wait(started.id, ctx.conversationId, BACKGROUND_SETTLE_SEC, ctx.signal);
+  const read = jobs.read(started.id, ctx.conversationId);
+  if (!read) return { content: toolText(language, 'shell.bg_closed'), isError: true };
+  const mark = read.fetched ? { fetched: true } : {};
+  if (read.state === 'running') {
+    const cut = newest(read.text);
+    const shown = cut.text.trimEnd();
+    const skipped = cut.skipped + read.skipped;
+    const parts = [
+      ...(skipped > 0 ? [toolText(language, 'bg.skipped', { bytes: skipped.toLocaleString('en-US') })] : []),
+      shown ? `${toolText(language, 'shell.bg_so_far')}\n${shown}` : toolText(language, 'shell.bg_none_yet'),
+    ];
+    return { content: shellTranscript(input.command, toolText(language, 'shell.bg_started', { id: read.id, shell: shell.name, cwd }), parts), ...mark };
+  }
+  if (read.spawnError !== undefined) {
+    jobs.forget(read.id, ctx.conversationId);
+    return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: read.spawnError }), isError: true };
+  }
+  const seconds = (((read.endedAt ?? read.startedAt) - read.startedAt) / 1000).toFixed(1);
+  const header = read.state === 'stopped'
+    ? toolText(language, 'shell.bg_stopped_header', { shell: shell.name, cwd, state: jobState(read, language), seconds })
+    : toolText(language, 'shell.header', { shell: shell.name, cwd, code: read.exitCode ?? '—', seconds });
+  const held = Buffer.byteLength(read.text, 'utf8');
+  const truncated = read.skipped > 0 || held > settings.outputCapBytes;
+  const tail = truncated ? newest(read.text, Math.min(BACKGROUND_OUTPUT_CHARS, settings.outputCapBytes)).text : read.text;
+  const parts: string[] = [];
+  if (truncated) parts.push(toolText(language, 'bg.skipped', { bytes: (read.skipped + held - Buffer.byteLength(tail, 'utf8')).toLocaleString('en-US') }));
+  if (tail.trim()) parts.push(tail.trimEnd());
+  if (truncated) parts.push(toolText(language, 'shell.bg_full_log', { path: read.logPath }));
+  else jobs.forget(read.id, ctx.conversationId);
+  return {
+    content: shellTranscript(input.command, header, parts),
+    isError: read.exitCode !== 0,
+    ...(truncated ? { fullRef: read.logPath } : {}),
+    ...(typeof read.exitCode === 'number' ? { exitCode: read.exitCode } : {}),
+    ...mark,
+  };
+}
+
 export const shellRun: ToolDef<ShellInput> = {
   name: 'shell_run',
   description: [
@@ -197,16 +272,24 @@ export const shellRun: ToolDef<ShellInput> = {
     'PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
     'In Windows PowerShell, cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user\'s confirmation every time, even when the path is fixed. To write a file, use the file_write / file_edit tools, not the shell. Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
     'Forms of curl or wget that save to a file (curl with -o or -O; wget in any form other than -O -) need the user\'s confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).',
+    'For a long-running command (a dev server, a watcher, a long test run), set background: true and keep working. It goes through the same checks, waits about 2 seconds, then returns an id such as bg-3 with the output so far (if the command ends within those 2 seconds, you get the normal result instead). Read its later output with shell_output and stop it with shell_stop; the background commands of this conversation are listed in the system prompt.',
+    'timeoutSec does not apply to a background command: it runs until it is stopped, this conversation is deleted or archived, the task ends, or beat stops. Background commands work only in a product\'s conversation or task, and git push cannot run in the background.',
+    'Never put a command in the background yourself with &, nohup, start or Start-Process: beat could not see or stop it.',
   ].join(' '),
   input: Type.Object({
     command: Type.String({ minLength: 1, maxLength: 8000 }),
     cwd: Type.Optional(Type.String({ maxLength: 1024 })),
     timeoutSec: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
+    background: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false }),
   effect: 'exec',
   allowedIn: ['chat', 'task', 'agent'],
   preCheck: shellPreCheck,
-  summarize: (input, language) => ({ title: toolText(language, 'summary.shell'), body: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) }),
+  summarize: (input, language) => ({
+    title: toolText(language, input.background === true ? 'summary.shell_background' : 'summary.shell'),
+    body: input.command,
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+  }),
   async execute(input, ctx, info) {
     const cwd = resolveCwd(input, ctx);
     if ('problem' in cwd) return { content: cwd.problem, isError: true };
@@ -215,6 +298,7 @@ export const shellRun: ToolDef<ShellInput> = {
     const shell = resolveShell(settings.shell);
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
     const child = childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh');
+    if (input.background === true) return runBackground(input, ctx, info, { cwd: cwd.cwd, shell, child, settings });
     const ownerHooks = info?.approvedOnce === true ? info.check?.ownHooksDir : undefined;
     const pushCheck = info?.pushCheck;
     const prePush = pushCheck ? { prePush: { tips: pushCheck.tips, node: process.execPath, ...(ownerHooks ? { ownerHooks } : {}) } } : {};

@@ -223,8 +223,13 @@ export function createWebServer(app: App): WebServer {
       for (const run of reviewRuns) app.engine.stop(run.runId);
       await Promise.all(reviewRuns.map(run => app.engine.wait(run.runId)));
     }
+    for (let round = 0; app.background.list({ conversationId: id }).some(job => job.state === 'running'); round++) {
+      if (round >= MAX_REVIEW_STOP_ROUNDS) throw problem(409, 'conflict', 'conversation_running');
+      await app.background.stopWhere({ conversationId: id });
+    }
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     if (running()) throw problem(409, 'conflict', 'conversation_running');
+    for (const job of app.background.list({ conversationId: id })) app.background.forget(job.id, id);
     const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
     if (conversation.project_id) erased.files.failed.push(...app.plans.forget(conversation.project_id, id));
     if (erased.files.failed.length) app.log(`[WARN] Some files could not be deleted after deleting the conversation: ${erased.files.failed.join(', ')}`);

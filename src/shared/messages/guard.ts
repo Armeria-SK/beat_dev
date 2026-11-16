@@ -187,6 +187,8 @@ const en = {
   'file.tool_config': 'This is a tool configuration file (git, curl, wget, npm, shell startup files, PowerShell profiles and the like), so it is checked with you every time before anything is written. Settings can make a command that runs later load code',
 
   'shell.disabled': 'Running the shell is disabled in the settings',
+  'shell.background_no_product': "Background commands can run only in a product's conversation or task. Run it without background (it then waits until the command ends, up to the timeout)",
+  'shell.background_push': 'git push cannot run in the background: beat checks a push by waiting for it to end. Run it without background',
   'shell.cwd_unresolved': 'The cwd cannot be determined: {detail}',
   'shell.cwd_outside': 'The cwd must be inside the allowed folders ({path})',
   'shell.cwd_missing': 'The cwd folder does not exist ({path})',
