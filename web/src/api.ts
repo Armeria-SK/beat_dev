@@ -25,6 +25,15 @@ export interface Conversation {
   message_count?: number; archived_at?: number | null;
   project_id?: string | null;
 }
+// beat 6-4: 製品の裏のコマンド（Terminal の欄）。command と出力は、サーバーが鍵らしい文字を伏せ、色のコードを消したもの
+export type BackgroundState = 'running' | 'exited' | 'stopped';
+export interface BackgroundItem {
+  id: string; command: string; state: BackgroundState; exitCode: number | null; stoppedBy?: 'model' | 'owner' | 'system';
+  startedAt: number; endedAt?: number; orphaned: boolean; tainted: boolean; spawnFailed: boolean; port: number | null;
+  conversationId: string; taskId?: string;
+  startedBy: { kind: 'task' | 'conversation'; id: string; title: string | null };
+}
+export interface BackgroundOutput extends BackgroundItem { text: string; next: number; skipped: number }
 export interface ProjectRemote { name: string; url: string; push_url: string | null }
 export interface ProjectWaiting { proposals: number; questions: number; pending: number }
 export interface Project {
@@ -378,6 +387,10 @@ export const api = {
     return (body as { upload: UploadView }).upload;
   },
   retry: (id: string) => call<{ runId: string }>(`/api/conversations/${id}/retry`, { method: 'POST', body: '{}' }),
+  background: (projectId: string) => call<{ items: BackgroundItem[] }>(`/api/background?projectId=${encodeURIComponent(projectId)}`),
+  backgroundOutput: (id: string, projectId: string, from?: number) =>
+    call<BackgroundOutput>(`/api/background/${encodeURIComponent(id)}/output?projectId=${encodeURIComponent(projectId)}${from === undefined ? '' : `&from=${from}`}`),
+  stopBackground: (id: string, projectId: string) => call<{ item: BackgroundItem }>(`/api/background/${encodeURIComponent(id)}/stop`, { method: 'POST', body: JSON.stringify({ projectId }) }),
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
   runs: (limit = 200, project?: string) => call<{ runs: RunRow[]; total: number; judged: JudgedCounts; judgeOff?: boolean }>(`/api/runs?limit=${limit}${inProject(project, '&')}`),
   toolCalls: (project?: string) => call<{ toolCalls: ToolCallRow[]; total: number }>(`/api/tool-calls?limit=200${inProject(project, '&')}`),

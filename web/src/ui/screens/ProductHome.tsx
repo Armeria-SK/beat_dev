@@ -8,7 +8,7 @@ import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, sc
 import { CountBadge, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { GrowthSection } from './GrowthSection.tsx';
-import { FinishedItem, MiniBoard, RunningItems, StatTile, useHomeLoad, useLastLook, useRunActions } from './home-parts.tsx';
+import { CommandItems, FinishedItem, MiniBoard, RunningItems, StatTile, useHomeLoad, useLastLook, useProductCommands, useRunActions } from './home-parts.tsx';
 
 export interface ProductHomeProps {
   id: string;
@@ -18,11 +18,12 @@ export interface ProductHomeProps {
   checklists: ReadonlyMap<string, ChecklistItem[]>;
   worker: WorkerStatus | null;
   revision: number;
+  backgroundRevision?: number;
 }
 
 interface Loaded { active: Task[]; awaiting: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
 
-export function ProductHome({ id, project, conversations, drafts, checklists, worker, revision }: ProductHomeProps) {
+export function ProductHome({ id, project, conversations, drafts, checklists, worker, revision, backgroundRevision = 0 }: ProductHomeProps) {
   const t = useT();
   const look = useLastLook(productLookKey(id), project !== undefined);
   const read = useCallback(async (): Promise<Loaded> => {
@@ -31,6 +32,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
   }, [id]);
   const { data, failed, load } = useHomeLoad(read, revision, drafts);
   const { busy, stop, retry } = useRunActions(worker, load);
+  const commands = useProductCommands(id, backgroundRevision);
 
   const mine = useMemo(() => conversations.filter(c => c.project_id === id), [conversations, id]);
   const mini = useMemo(() => {
@@ -47,7 +49,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
     () => (project ? productTiles(project) : []),
     [project],
   );
-  const now = useNow(ticksEverySecond(running) ? 1000 : 30_000);
+  const now = useNow(ticksEverySecond(running) || commands.commands.length > 0 ? 1000 : 30_000);
   const lookText = formatDateTimeSmart(look.at, now);
 
   if (!project) return <div className="bt-screen__inner ui-home" />;
@@ -75,9 +77,9 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
       {mini && <MiniBoard columns={mini} label={t('ui.nav.kanban')} index={4} className="ui-home__board" />}
 
       <section className="bt-section bt-rise" style={{ '--bt-i': 5 } as CSSProperties} aria-label={t('ui.overview.running')} data-home="running">
-        <div className="bt-section__head"><span className="bt-label">{t('ui.overview.running')}</span><CountBadge n={running.length} quiet /></div>
-        {running.length === 0 ? <p className="bt-meta ui-col__empty">{t('ui.overview.nothingRunning')}</p> : (
-          <ul className="bt-list"><RunningItems rows={running} now={now} busy={busy} onStop={stop} sheen /></ul>
+        <div className="bt-section__head"><span className="bt-label">{t('ui.overview.running')}</span><CountBadge n={running.length + commands.commands.length} quiet /></div>
+        {running.length + commands.commands.length === 0 ? <p className="bt-meta ui-col__empty">{t('ui.overview.nothingRunning')}</p> : (
+          <ul className="bt-list"><RunningItems rows={running} now={now} busy={busy} onStop={stop} sheen /><CommandItems commands={commands.commands} now={now} busy={commands.busy} onStop={commands.stop} /></ul>
         )}
       </section>
 

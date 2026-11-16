@@ -45,12 +45,13 @@ export interface LiveState {
   pendingRevision: number;
   questionCounts: QuestionCounts | null;
   questionRevision: number;
+  backgroundRevision: number;
   epoch: number;
 }
 
 export const EMPTY: LiveState = {
   conversations: [], conversationsMore: {}, conversationsSettled: false, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, epoch: 0,
+  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
@@ -193,6 +194,8 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       return { state: { ...s, pendingRevision: s.pendingRevision + 1 }, effects: [...refresh('pending'), ...counts(s)] };
     case 'question.changed':
       return { state: { ...s, questionRevision: s.questionRevision + 1 }, effects: [...refresh('questions'), ...counts(s)] };
+    case 'background.changed':
+      return { state: { ...s, backgroundRevision: s.backgroundRevision + 1 }, effects: [] };
     case 'pending.changed':
       return { state: bump(s, e.conversationId), effects: [] };
     case 'conversation.changed':
