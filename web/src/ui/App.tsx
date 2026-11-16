@@ -382,7 +382,7 @@ export function App() {
     if (want.view === 'plan') panes.openPlan(false); else panes.openPane(want.view);
     setWant(null);
   }, [want, paneProduct, panes]);
-  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan, onOpenPending: () => panes.openPane('pending') } : undefined;
+  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan, onOpenPending: () => panes.openPane('pending'), onOpenTerminal: panes.openTerminal } : undefined;
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
@@ -419,7 +419,7 @@ export function App() {
             ) : behind.view === 'overview' ? (
               <Overview waiting={waiting} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} questionCounts={live.questionCounts} pendingCounts={live.pendingCounts} />
             ) : behind.view === 'product' ? (
-              <ProductHome key={behind.id} id={behind.id} project={productOf(projects, behind.id)} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} revision={live.taskRevision + live.epoch} />
+              <ProductHome key={behind.id} id={behind.id} project={productOf(projects, behind.id)} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} revision={live.taskRevision + live.epoch} backgroundRevision={live.backgroundRevision + live.epoch} />
             ) : behind.view === 'schedule' ? (
               <Schedule revision={live.taskRevision + live.epoch} projects={projects} />
             ) : behind.view === 'notifications' ? (
@@ -449,7 +449,7 @@ export function App() {
           </main>
         )}
         {paneProduct && paneCount > 0 && (
-          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} waits={worker?.waiting}
+          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`}
             pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }}
             questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }} />

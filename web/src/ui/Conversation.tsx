@@ -561,7 +561,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         );
       }
       case 'live': return <LiveReply key={item.key} text={item.text} since={item.since} />;
-      case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} pending={pendingLink} />;
+      case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} pending={pendingLink} terminal={panes?.onOpenTerminal} />;
       case 'notice': {
         if (item.weight === 'quiet') return <QuietNotice key={item.key} notices={item.notices} />;
         const n = item.notices[0]!;

@@ -81,6 +81,7 @@ test('6-2: 2 秒以内に終わるコマンドはふつうの結果（終了コ�
   await s.send(uuid(1), { text: 'read it' });
   const first = s.calls().at(-2)!;
   assert.match(first.system.dynamic, /Background commands of this conversation as of now, including any you just started/u);
+  assert.match(first.system.dynamic, /Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart/u, 'backlog: numbers restart per boot');
   assert.match(first.system.dynamic, /- bg-2 \[running(?:, unread output)?\] node tick\.js/u);
   const read = s.results().at(-1)!;
   assert.match(read, /^bg-2: running/u, read);
@@ -256,8 +257,9 @@ test('6-2: よその会話の番号は読めず止められない。数の上限
   s.adapter().scripts = [call('shell_output', { id: mine }), call('shell_stop', { id: mine }), reply('ok')];
   await s.send(uuid(2), { text: 'peek', permissionMode: 'auto' });
   const [read, stop] = s.results();
-  assert.equal(read, `There is no background command ${mine} in this conversation`);
-  assert.equal(stop, `There is no background command ${mine} in this conversation`);
+  const gone = `There is no background command ${mine} in this conversation. Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart`;
+  assert.equal(read, gone);
+  assert.equal(stop, gone);
   assert.equal(stateOf(s, mine), 'running', 'still running');
   for (let i = 0; i < 3; i++) startedId(direct(s, { conversationId: uuid(1), projectId: shop.id }, shop.dir));
   for (let i = 0; i < 4; i++) startedId(direct(s, { conversationId: uuid(2), projectId: shop.id }, shop.dir, 'tick.js'));

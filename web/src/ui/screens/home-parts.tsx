@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { api, type Task, type WorkerStatus } from '../../api.ts';
+import { api, type BackgroundItem, type Task, type WorkerStatus } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatElapsed, formatRelative, startOfDay, useT } from '../../i18n/index.ts';
 import { plainLine } from '../../task-meta.ts';
@@ -10,6 +10,7 @@ import { readLastLook, type MiniColumn, type PlacedRow, type RunningRow, type Ti
 import { Button, countText, Icon, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
+import { holdsText } from '../terminal.ts';
 
 const RELOAD_DELAY_MS = 150;
 const TILE_LABEL = { proposals: 'ui.overview.proposals', questions: 'ui.overview.questions', pending: 'ui.overview.pending' } as const satisfies Record<TileId, string>;
@@ -175,3 +176,42 @@ export function FinishedItem({ task, now, busy, onRetry }: { task: Task; now: nu
   );
 }
 
+
+// beat 6-4: 製品の Running now に出す裏のコマンド（動いているものだけ）と、持ち主の Stop
+export function useProductCommands(productId: string, revision: number): { commands: BackgroundItem[]; busy: ReadonlySet<string>; stop: (item: BackgroundItem) => void } {
+  const t = useT();
+  const [items, setItems] = useState<BackgroundItem[]>([]);
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const loads = useRef(latestOnly());
+  const load = useCallback(async () => {
+    const ticket = loads.current.begin();
+    try {
+      const next = (await api.background(productId)).items;
+      if (loads.current.isCurrent(ticket)) setItems(Array.isArray(next) ? next : []);
+    } catch { return; }
+  }, [productId]);
+  useEffect(() => { void load(); }, [load, revision]);
+  const stop = (item: BackgroundItem) => {
+    if (busy.has(item.id)) return;
+    setBusy(current => new Set(current).add(item.id));
+    void api.stopBackground(item.id, productId)
+      .then(() => { toast({ icon: 'square', title: t('ui.term.stoppedToast') }); return load(); })
+      .catch(reportOpError)
+      .finally(() => setBusy(current => { const next = new Set(current); next.delete(item.id); return next; }));
+  };
+  return { commands: items.filter(i => i.state === 'running'), busy, stop };
+}
+
+export function CommandItems({ commands, now, busy, onStop }: { commands: BackgroundItem[]; now: number; busy: ReadonlySet<string>; onStop: (item: BackgroundItem) => void }) {
+  const t = useT();
+  return commands.map(item => (
+    <li key={item.id} className="bt-row" data-command={item.id}>
+      <Icon name="terminal" />
+      <div className="bt-row__main">
+        <span className="bt-row__title"><code>{item.command}</code></span>
+        <span className="bt-row__sub bt-meta">{[t('ui.tool.background'), holdsText(item, now)].join(' · ')}</span>
+      </div>
+      <div className="bt-row__end"><Button small disabled={busy.has(item.id)} onClick={() => onStop(item)}>{t('ui.term.stop')}</Button></div>
+    </li>
+  ));
+}
