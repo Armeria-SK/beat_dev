@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './database.ts';
@@ -21,6 +21,15 @@ export interface EraseResult {
 }
 
 const inside = (dir: string, path: string): boolean => { const base = resolve(dir) + sep; return resolve(path).startsWith(base); };
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+
+function backgroundLogs(dir: string, id: string): string[] {
+  const name = new RegExp(`^bg-${escapeRegExp(id)}-\\d+-[0-9a-f]{8}\\.log$`, 'u');
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return []; }
+  return names.filter(entry => name.test(entry)).map(entry => join(dir, entry));
+}
 
 // 会話を消す（元に戻せない）。消すもの: 会話・発言（検索の索引も）・要約と固定の system（会話の行にある）・承認の記録・
 // 会話ごとの kv（`<名前>:<会話ID>` の形のもの全部）・待っている振り返り・その会話だけが使う添付（行とファイル）と長い出力の全文ファイル・
@@ -66,6 +75,7 @@ function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: num
   }
   const refs = db.prepare('SELECT full_ref FROM tool_calls WHERE conversation_id = ? AND full_ref IS NOT NULL').all(id) as Array<{ full_ref: string }>;
   for (const ref of refs) if (inside(deps.toolOutputsDir, ref.full_ref)) files.push(ref.full_ref);
+  files.push(...backgroundLogs(deps.toolOutputsDir, id));
 
   const messages = Number(db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(id).changes);
   db.prepare('DELETE FROM approvals WHERE conversation_id = ?').run(id);

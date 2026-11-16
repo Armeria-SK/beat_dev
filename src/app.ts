@@ -25,6 +25,8 @@ import { ApprovalBroker } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
+import { shellOutput, shellStop } from './tools/builtin/shell-bg.ts';
+import { BackgroundJobs, type JobOwner } from './tools/shell/background.ts';
 import { planWrite } from './tools/builtin/plan.ts';
 import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts';
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
@@ -87,7 +89,7 @@ import { MemoryStore, renderBooks } from './memory/store.ts';
 export function builtinTools(): ToolDef[] {
   return [
     taskComplete, taskCheckpoint, questionAdd, toolSearch,
-    memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun,
+    memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun, shellOutput, shellStop,
     planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
     taskCreate, taskList, taskUpdate,
     memoryUpdate, memoryForget, memorySearch, historyRead,
@@ -163,6 +165,7 @@ export class App {
   readonly skills: SkillStore;
   readonly uploads: Uploads;
   readonly browser: BrowserSession;
+  readonly background: BackgroundJobs;
   readonly folderDialog: FolderDialog;
   readonly engine: ChatEngine;
   readonly worker: Worker;
@@ -237,6 +240,15 @@ export class App {
       notify: input => this.notifications.notify(input), secrets: () => this.registry.secrets(), now,
       ...(options.browserDisplay !== undefined ? { canShowWindow: () => options.browserDisplay === true } : {}),
     });
+    this.background = new BackgroundJobs({ logDir: join(this.paths.data, 'tool_outputs'), now, isOpen: owner => this.#backgroundOpen(owner) });
+    this.background.onChange(view => this.bus.publish({ type: 'background.changed', projectId: view.projectId, conversationId: view.conversationId, id: view.id, state: view.state }));
+    this.bus.subscribe(({ event }) => {
+      const stop = event.type === 'conversation.changed' && (event.change === 'archived' || event.change === 'deleted') ? { conversationId: event.conversationId }
+        : event.type === 'project.changed' && event.change === 'archived' ? { projectId: event.projectId }
+          : event.type === 'task.changed' && TASK_ENDED.has(event.task.status) ? { taskId: event.task.id }
+            : undefined;
+      if (stop) void this.background.stopWhere(stop).catch(error => this.log(`[ERROR] Failed to stop background commands: ${(error as Error).message}`));
+    });
     // 会話を消したら、その会話のタブを閉じる
     this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); this.pending.cancelConversations(ids); };
     this.engine = new ChatEngine({
@@ -247,6 +259,7 @@ export class App {
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       browser: this.browser,
+      background: this.background,
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
       ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
@@ -528,12 +541,25 @@ export class App {
     void replayAction(row, {
       db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
       conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
-      services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, questions: this.questions, notify: input => this.notifications.notify(input), browser: this.browser, emit: e => this.bus.publish(e) }),
+      services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, questions: this.questions, notify: input => this.notifications.notify(input), browser: this.browser, background: this.background, emit: e => this.bus.publish(e) }),
     }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
+  }
+
+  #backgroundOpen(owner: JobOwner): boolean {
+    const conversation = this.conversations.get(owner.conversationId);
+    if (!conversation || conversation.archived === 1) return false;
+    const project = this.projects.get(owner.projectId);
+    if (!project || project.archived_at !== null) return false;
+    if (owner.taskId !== undefined) {
+      const task = this.tasks.get(owner.taskId);
+      if (!task || TASK_ENDED.has(task.status)) return false;
+    }
+    return conversation.parent_run_id === null || this.engine.activeRuns().some(run => run.conversationId === owner.conversationId);
   }
 
   close(): void {
     this.#replayStop.abort();
+    this.background.closeAll();
     void this.mcp.stop().catch(() => undefined);
     void this.browser.close().catch(() => undefined);
     this.folderDialog.stop();
@@ -545,6 +571,7 @@ export class App {
 }
 
 const LEGACY_WAITS_COPIED = 'questions:legacy-waits-copied';
+const TASK_ENDED: ReadonlySet<string> = new Set(['done', 'failed', 'cancelled']);
 
 const questionKey = (row: Pick<QuestionRow, 'id' | 'blocking'>): string => `${row.blocking === 1 ? BLOCKING_QUESTION_KEY : 'question:'}${row.id}`;
 

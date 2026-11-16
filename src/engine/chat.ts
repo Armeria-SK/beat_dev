@@ -25,6 +25,8 @@ import type { QuestionStore } from '../questions/store.ts';
 import { rootsLister, runProject } from '../projects/run.ts';
 import { isCore, ToolRegistry } from '../tools/registry.ts';
 import { deferredSection } from '../tools/builtin/tool-search.ts';
+import { backgroundSection } from '../tools/builtin/shell-bg.ts';
+import type { BackgroundJobs } from '../tools/shell/background.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import { stricterMode } from '../shared/permission-mode.ts';
 import type { BrowserSession } from '../tools/browser/session.ts';
@@ -145,6 +147,7 @@ export interface ChatEngineDeps {
   judgeLimits?: JudgeLimitSet | undefined;
   // ブラウザ 1 つ（全会話で共有）。無ければ browser_* は動かない（ToolContext.services.browser）
   browser?: BrowserSession | undefined;
+  background?: BackgroundJobs | undefined;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   retriesPerModel?: number;
 }
@@ -751,7 +754,7 @@ export class ChatEngine {
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, web: d.web, notify: d.notify, browser: d.browser, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, web: d.web, notify: d.notify, browser: d.browser, background: d.background, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
@@ -1128,11 +1131,12 @@ export class ChatEngine {
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
+    const background = backgroundSection(d.background?.list({ conversationId: p.conversationId }) ?? [], language);
     const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
     const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language } : undefined;
     const mesh = this.#meshIndex(p.runId, p.project, available, p.conversationId);
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist].filter(Boolean).join('\n\n');
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist, background].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     const history = stored.map(m => forModel(m.message));
     const apiTools = specs;
@@ -1246,6 +1250,7 @@ export class ChatEngine {
     if (parent.signal.aborted) onParentAbort();
     let result: EngineResult;
     try { result = await this.#active.get(childRunId)!.done; } finally { clearTimeout(timer); parent.signal.removeEventListener('abort', onParentAbort); }
+    await d.background?.stopWhere({ conversationId: child.id }).catch(() => 0);
 
     const row = d.runs.get(childRunId);
     const toolCalls = row?.tool_calls ?? 0;

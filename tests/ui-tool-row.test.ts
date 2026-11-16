@@ -191,6 +191,8 @@ const REAL: Record<string, [unknown, string, string]> = {
   web_download: [{ url: 'https://example.com/a.zip' }, 'Download', 'https://example.com/a.zip'],
   agent_run: [{ task: 'Find flaky tests', title: 'Flaky' }, 'Helper', 'Flaky'],
   question_list: [{}, 'List questions', 'this product'],
+  shell_output: [{ id: 'bg-3', waitSec: 5 }, 'Read background output', 'bg-3'],
+  shell_stop: [{ id: 'bg-3' }, 'Stop background command', 'bg-3'],
   deviation_add: [{ what: 'Skipped the CLI flag', why: 'w' }, 'Note deviation', 'Skipped the CLI flag'],
   mesh_decision_add: [{ decision: 'Use SQLite' }, 'Note decision', 'Use SQLite'],
   browser_open: [{ url: 'https://example.com' }, 'Open page', 'https://example.com'],

@@ -155,7 +155,7 @@ test('10-1 持ち主の発言の無い窓は、モデルを呼ばずに upto を
 });
 
 test('10-1 窓がモデルに入る: 日本語 20,000 文字の会話を、使える量が 12,000 ほどのモデルで振り返っても、どの回も context_overflow にならない', async t => {
-  const s = await setup(t, c => { c.models[0]!.contextLength = 14_000; c.models[0]!.minContext = 4096; });
+  const s = await setup(t, c => { c.models[0]!.contextLength = 14_500; c.models[0]!.minContext = 4096; });
   const available = s.app.engine.backgroundAvailable()!;
   assert.ok(available > 10_000 && available < 13_500, `前提: 使える量 ${available}`);
   s.app.conversations.create({ id: 'c1' });

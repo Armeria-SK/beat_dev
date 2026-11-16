@@ -61,6 +61,8 @@ function dateTarget(a: Args): string {
 
 const TARGETS: Readonly<Record<string, (args: Args, cut: Cut) => string>> = {
   shell_run: a => str(a, 'command'),
+  shell_output: a => str(a, 'id'),
+  shell_stop: a => str(a, 'id'),
   agent_run: a => str(a, 'title') || str(a, 'task'),
   file_list: a => str(a, 'path') || t('ui.toolTarget.folder'),
   file_search: a => scoped(str(a, 'text') || str(a, 'name'), str(a, 'path')) || str(a, 'path') || t('ui.toolTarget.folder'),

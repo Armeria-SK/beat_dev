@@ -15,6 +15,8 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   file_list: { icon: 'folder', desc: 'tool.file_list' },
   file_search: { icon: 'search', desc: 'tool.file_search' },
   shell_run: { icon: 'terminal', desc: 'tool.shell_run' },
+  shell_output: { icon: 'terminal', desc: 'tool.shell_output' },
+  shell_stop: { icon: 'terminal', desc: 'tool.shell_stop' },
   plan_write: { icon: 'filePen', desc: 'tool.plan_write' },
   acceptance_write: { icon: 'filePen', desc: 'tool.acceptance_write' },
   acceptance_change: { icon: 'filePen', desc: 'tool.acceptance_change' },

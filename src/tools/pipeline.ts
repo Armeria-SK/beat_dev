@@ -498,7 +498,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // ── 実行 ──
   let output: ToolOutput;
   const closeWindow = opensWindow(tool) ? ctx.toolWindow?.() : undefined;
-  try { output = await tool.execute(args, ctx, { approvedOnce: false, callId: call.id }); }
+  try { output = await tool.execute(args, ctx, { approvedOnce: false, callId: call.id, ...(first?.fetched === true || (first?.decision === 'ask' && first.askKinds?.includes('egress') === true) ? { fetched: true } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   finally { closeWindow?.(); }
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。

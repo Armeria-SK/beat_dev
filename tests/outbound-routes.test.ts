@@ -6,6 +6,7 @@ import type { ToolDef } from '../src/tools/types.ts';
 type Route = 'shell-statements' | 'submits' | 'precheck-outbound' | 'none';
 
 const ROUTES: Readonly<Record<string, { route: Route; why: string }>> = {
+  shell_stop: { route: 'none', why: 'stops a background command of this conversation; stopping is protective, it neither sends nor removes anything' },
   shell_run: { route: 'shell-statements', why: 'preCheck puts outboundOf(statements) into PreCheck.outbound: uploads, git push, scp/ssh, rm -rf, Remove-Item, Clear-Content' },
   browser_click: { route: 'submits', why: 'ToolDef.submits: every click may submit a form' },
   browser_type: { route: 'submits', why: 'ToolDef.submits: typing with Enter may submit a form' },
