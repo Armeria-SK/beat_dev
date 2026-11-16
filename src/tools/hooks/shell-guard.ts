@@ -100,17 +100,52 @@ function hardDenyOf(name: string, words: readonly string[]): GuardMessageKey | u
   if (name === 'cipher' && args.some(a => /^\/w(?::|$)/iu.test(a))) return 'hard.disk_wipe';
   if (name === 'fsutil' && args[0]?.toLowerCase() === 'file' && args[1]?.toLowerCase() === 'setzerodata') return 'hard.disk_wipe';
   if (name === 'shred' && args.some(a => !a.startsWith('-') && posix.normalize(a).startsWith('/dev/'))) return 'hard.disk_wipe';
+  if (CIM_METHOD_CMDS.has(name) && args.some(a => DISK_METHODS.test(a.replace(/^-[A-Za-z]+:/u, '')))) return 'hard.disk_wipe';
+  const lower = args.map(a => a.toLowerCase());
+  if (name === 'wmic' && lower.some((a, i) => a === 'call' && lower[i + 1] === 'format')) return 'hard.disk_format';
+  if (name.startsWith('newfs')) return 'hard.fs_create';
+  const positional = lower.filter(a => !a.startsWith('-'));
+  if (name === 'diskutil' && (DISKUTIL_WIPE.test(positional[0] ?? '') || (positional[0] === 'apfs' && DISKUTIL_APFS_WIPE.test(positional[1] ?? '')))) return 'hard.disk_wipe';
+  if (name === 'gpt' && positional[0] === 'destroy') return 'hard.disk_ops';
+  if (name === 'asr' && lower.some(a => a === '--erase' || a === '-erase')) return 'hard.disk_wipe';
   return undefined;
 }
 
+const CIM_METHOD_CMDS: ReadonlySet<string> = new Set(['invoke-cimmethod', 'icim', 'invoke-wmimethod', 'iwmi']);
+const DISK_METHODS = /^(?:format|clear|initialize|deleteobject|createpartition)$/iu;
+const DISKUTIL_WIPE = /^(?:erase(?:disk|volume)?|zerodisk|randomdisk|secureerase|partitiondisk|reformat)$/iu;
+const DISKUTIL_APFS_WIPE = /^(?:deletecontainer|erasevolume|deletevolume)$/iu;
+const ALIAS_CMDS: ReadonlySet<string> = new Set(['set-alias', 'new-alias', 'sal', 'nal']);
+
 const programNameOf = (text: string): string => (text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, '');
+
+const systemToolOf = (text: string): string => (text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|com)$/u, '');
+
+function aliasValue(args: readonly string[]): string | undefined {
+  const positional: string[] = [];
+  let named = false;
+  for (let i = 0; i < args.length; i++) {
+    const m = /^-([A-Za-z]+)(:?)(.*)$/u.exec(args[i]!);
+    if (!m) { positional.push(args[i]!); continue; }
+    const param = m[1]!.toLowerCase();
+    const value = m[2] ? m[3] || args[++i] : undefined;
+    if ('value'.startsWith(param)) return value ?? args[i + 1];
+    if ('name'.startsWith(param)) { named = true; if (!m[2]) i++; continue; }
+    if (['scope', 'option', 'description'].some(p => p.startsWith(param)) && !m[2]) i++;
+  }
+  return positional[named ? 0 : 1];
+}
 
 interface HardHit { key: GuardMessageKey; cmd: string }
 
 function hardOfWords(words: readonly string[], depth = 0): HardHit | undefined {
-  const name = programNameOf(words[0] ?? '');
+  const name = systemToolOf(words[0] ?? '');
   if (!name) return undefined;
   if (name === 'cmd') return depth < 3 ? cmdHard(words.slice(1), depth + 1) : undefined;
+  if (ALIAS_CMDS.has(name)) {
+    const value = aliasValue(words.slice(1));
+    return value && depth < 3 ? hardOfWords([value], depth + 1) : undefined;
+  }
   const key = hardDenyOf(name, words);
   return key ? { key, cmd: name } : undefined;
 }
@@ -159,12 +194,32 @@ function cmdHeadHard(tokens: readonly string[], depth: number): HardHit | undefi
   return hardOfWords(tokens, depth);
 }
 
+function cmdParts(text: string): string[] {
+  const parts: string[] = [];
+  let part = '';
+  let open = 0;
+  const flush = () => { parts.push(part); part = ''; };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '&' || ch === '|' || ch === '\r' || ch === '\n') { if (text[i + 1] === ch) i++; flush(); continue; }
+    if (ch === '(') {
+      const words = part.trim().toLowerCase().split(/\s+/u).filter(Boolean);
+      const last = words.at(-1) ?? '';
+      if (words.length === 0 || ['do', 'else', 'in'].includes(last) || words[0]?.replace(/^@+/u, '') === 'if') { flush(); open++; continue; }
+    }
+    if (ch === ')' && open > 0) { open--; flush(); continue; }
+    part += ch;
+  }
+  flush();
+  return parts;
+}
+
 function cmdHard(args: readonly string[], depth: number): HardHit | undefined {
   const rest = cmdRemainder(args);
   if (!rest) return undefined;
   const text = rest.join(' ').replace(/\^(.)/gsu, '$1').replace(/"/gu, ' ')
     .replace(/\d?>>?\s*(?:&\d|[^\s&|()<>]+)?|<\s*[^\s&|()<>]+/gu, ' ');
-  for (const part of text.split(/&&|\|\||[&|()\r\n]/u)) {
+  for (const part of cmdParts(text)) {
     let tokens = part.split(/[\s,;]+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
     while (tokens.length && CMD_LEADS.has(tokens[0]!.toLowerCase())) tokens.shift();
     if (tokens[0]?.toLowerCase() === 'start') { tokens.shift(); while (tokens[0]?.startsWith('/')) tokens.shift(); }
@@ -597,21 +652,34 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
     statements.push(current);
     const hardSaid = (hit: HardHit | undefined): Said | undefined => hit && say('guard.hard_denied', { label: text(hit.key), cmd: hit.cmd });
-    const headHard = (head: readonly string[]): Said | undefined => {
-      const direct = hardSaid(hardOfWords(head));
-      if (direct || depth >= 3) return direct;
-      const headName = programNameOf(head[0] ?? '');
-      const headWords = head.map((h): Word => ({ text: h, dynamic: h.includes('$'), glob: false, quoted: false, home: false, kind: 'plain' }));
-      const inner = headName ? innerSource(headName, headWords, shell, false) : undefined;
-      if (!inner) return undefined;
-      const v = checkShellCommand(inner.text, cwd, { ...opts, shell: inner.shell, depth: depth + 1 });
+    const hardIn = (code: string, sh: ShellKind): Said | undefined => {
+      if (depth >= 3) return undefined;
+      const v = checkShellCommand(code, cwd, { ...opts, shell: sh, depth: depth + 1 });
       const at = v.reasonKeys.indexOf('guard.hard_denied');
       return at >= 0 ? { key: 'guard.hard_denied', text: v.reasons[at]! } : undefined;
     };
-    const hardReason = (name ? hardSaid(hardOfWords(words)) : undefined) ?? st.heads?.map(headHard).find(Boolean);
+    const literalHard = (prog: string, ws: readonly Word[], fromStdin: boolean): Said | undefined => {
+      const inner = innerSource(prog, ws.map(w => ({ ...w, dynamic: false })), shell, fromStdin);
+      return inner ? hardIn(inner.text, inner.shell) : undefined;
+    };
+    const headHard = (head: readonly string[]): Said | undefined => {
+      const direct = hardSaid(hardOfWords(head));
+      if (direct) return direct;
+      const headName = programNameOf(head[0] ?? '');
+      if (!headName) return undefined;
+      const headWords = head.map((h): Word => ({ text: h, dynamic: h.includes('$') || h === '{…}', glob: false, quoted: false, home: false, kind: h === '{…}' ? 'block' : 'plain' }));
+      const inner = innerSource(headName, headWords, shell, false);
+      if (inner === null) {
+        if (current) current.programDynamic = true;
+        return literalHard(headName, headWords, false);
+      }
+      return inner ? hardIn(inner.text, inner.shell) : undefined;
+    };
+    const topHard = name ? hardSaid(hardOfWords(words)) ?? (source === null ? literalHard(name, st.words, stdin) : undefined) : undefined;
+    const hardReason = topHard ?? st.heads?.map(headHard).find(Boolean);
     const hard = hardReason !== undefined;
     if (hardReason) add('deny', hardReason);
-    if (name === 'dd' && words.some(a => /^of=/u.test(a) && posix.normalize(a.slice(3)).startsWith('/dev/'))) add('deny', say('guard.device_write'));
+    if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a) || (/^of=/u.test(a) && posix.normalize(a.slice(3)).startsWith('/dev/')))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;

@@ -290,6 +290,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   let dbl = false;
   // [[ … ]] を閉じた直後。bash は ]] の次の語を、then・do などの言葉として読める新しい文の頭と見る（if [[ -n x ]] then pwn; fi）
   let afterCond = false;
+  let fnName = false;
   const stack: string[] = [];
   const pending: Array<{ delim: string; quoted: boolean; strip: boolean }> = [];
 
@@ -579,6 +580,13 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       if (r) continue;
     }
     cur.words.push(w);
+    if (fnName && cur.words.length === 2) {
+      fnName = false;
+      cur.shapes.push('function');
+      end(false);
+      continue;
+    }
+    fnName = atCommand && !w.quoted && !w.dynamic && w.text === 'function';
     if (cur.words.length === 1 && !w.quoted && w.text === '[[') dbl = true;
     else if (dbl && w.text === ']]') { dbl = false; afterCond = true; }
   }
@@ -1117,7 +1125,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const lower = t.t === 'word' ? t.v.toLowerCase() : '';
       if (current && (t.t === 'word' || t.t === 'str')) current.push(t.v);
       else if (current && t.t === 'var') current.push(`$${t.v}`);
-      else if (current && t.t !== 'redir') current = null;
+      else if (current && (isP(t, '{') || t.t === 'sub')) { current.push(isP(t, '{') ? '{…}' : '$(…)'); current = null; }
+      else if (current && t.t !== 'redir' && !isP(t, ',')) current = null;
       if (callStart && (t.t === 'var' || t.t === 'sub' || t.t === 'arr' || isP(t, '(') || (t.t === 'str' && t.dyn))) st.callComputed = true;
       const wasCall = callStart;
       callStart = false;
@@ -1137,7 +1146,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         }
         callStart = atStart && (isP(t, '&') || (t.t === 'word' && t.v === '.'));
         atStart = (t.t === 'p' && ['{', '(', '|', '&', '&&', '||'].includes(t.v)) || t.t === 'sub' || t.t === 'arr'
-          || (isSep(t) && top !== 'hash') || (atStart && keyword && !ASSIGN_OPS.has(t.v))
+          || (isSep(t) && (top !== 'hash' || atStart)) || (atStart && keyword && !ASSIGN_OPS.has(t.v))
+          || ((isP(t, ']') || t.t === 'type') && peek(1)?.t === 'word' && PS_EXPR_KEYWORDS.has(peek(1)!.v.toLowerCase()))
           || (t.t === 'word' && (ASSIGN_OPS.has(t.v) || (top === 'hash' && t.v.endsWith('='))))
           || (top === 'kwparen' && lower === 'in');
       }
