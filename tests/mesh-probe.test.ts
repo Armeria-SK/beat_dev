@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { addedTokens, buildProduct, compareSets, madeUpPaths, productChatRequest, productPaths, renderReport, runProbe, scoreAnswer, searchHit, summarize, type SetSummary } from '../scripts/mesh-probe.ts';
 import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import { builtinTools } from '../src/app.ts';
-import { contextAvailable } from '../src/engine/context-budget.ts';
+import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts';
 import { compactSystem } from '../src/engine/prompts.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { defaultConfig } from '../src/config/store.ts';
@@ -16,7 +16,7 @@ import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { isJudgeRequest, reply, tempDir } from './helpers.ts';
 
 const provider: ProviderConfig = { id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
-const model: ModelConfig = { id: 'fake-model', provider: 'fake', model: 'fake', contextLength: 65536, minContext: 8192, maxOutputTokens: 4096, vision: false };
+const model: ModelConfig = { id: 'fake-model', provider: 'fake', model: 'fake', contextLength: 65536, maxOutputTokens: 4096, vision: false };
 const SUMMARY = '- The owner is moving the coupon logic; next is allergy labels.';
 const SECRET = 'zq-mesh-secret-4b8e2d7a';
 const MESH_GUIDE_MARK = 'The text between the MESH markers';
@@ -303,7 +303,7 @@ test('土台の頼み: 本物の App の製品チャットが送る道具（mesh
   const baseSpecs = real.tools.filter(tool => !tool.name.startsWith('mesh_'));
   const config = s.app.config();
   const m1 = config.models[0]!;
-  const probe = productChatRequest(config, s.app.paths, m1, root, languageOf(config), contextAvailable(m1.contextLength!, m1));
+  const probe = productChatRequest(config, s.app.paths, m1, root, languageOf(config), contextAvailable(m1.contextLength!, maxOutputFor(m1, m1.contextLength!)));
   assert.match(real.system.frozen, /Product instructions \(AGENTS\.md\)/u);
   assert.equal(probe.frozen, real.system.frozen);
   assert.deepEqual(probe.baseTools, baseSpecs.map(tool => tool.name));

@@ -114,6 +114,7 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
     }
   };
 
+  let glue = false;
   for (const m of messages) {
     if (m.role !== 'tool' && !hiddenReply(m)) placeBuilds(m.createdAt);
     if (m.toolCalls?.length) {
@@ -128,11 +129,16 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
       const input = m.toolCallId ? pending.get(m.toolCallId)?.shift() : undefined;
       tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) }, ...(m.gate ? { gate: m.gate } : {}) });
     } else if (m.role === 'user') {
+      if (m.note === 'continue') { glue = true; continue; }
       items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
     } else {
       const turn = turns.get(m.id);
-      items.push({ kind: 'reply', key, text: m.text, copyText: turn ? turn.copyText : m.text, at: m.createdAt, stamped: turn ? turn.copyText !== null : true });
+      const reply = { text: m.text, copyText: turn ? turn.copyText : m.text, at: m.createdAt, stamped: turn ? turn.copyText !== null : true };
+      const last = items.at(-1);
+      if (glue && last?.kind === 'reply') Object.assign(last, reply, { text: last.text + m.text });
+      else items.push({ kind: 'reply', key, ...reply });
     }
+    glue = false;
     if (m.runId && lastOfRun.get(m.runId) === m.id) items.push({ kind: 'plan', key: `plan-${m.runId}` });
   }
 

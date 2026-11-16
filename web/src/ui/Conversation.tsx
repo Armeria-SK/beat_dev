@@ -380,7 +380,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   const unfinished = useRef(new Set<string>());
   useEffect(() => { for (const b of builds) if (b.status !== 'failed') unfinished.current.add(b.id); });
   const checklist = liveChecklist ?? readList?.items ?? [];
-  const lastIsUser = messages.at(-1)?.role === 'user';
+  const lastIsUser = messages.findLast(m => !(m.role === 'user' && m.note === 'continue'))?.role === 'user';
 
   useLayoutEffect(() => {
     const el = scroller.current;

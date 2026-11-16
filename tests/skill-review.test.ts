@@ -33,7 +33,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { botMemor
   mkdirSync(paths.workspace, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000, ...(options.key ? { apiKeyEnv: 'FAKE_KEY' } : {}) }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = true;
   config.memory.reviewIdleMinutes = 1440;
@@ -100,10 +100,10 @@ test('S-1a: a successful skill_draft in the chat restarts the count; a failed on
 test('S-1a R1: after a failed skill review, 9 more tool results queue nothing and 10 more queue it again', async t => {
   const s = await setup(t);
   await s.chat('c1', 'work', Array.from({ length: 10 }, calc));
-  s.adapter().scripts.push(async function* () {
+  s.adapter().scripts.push(...Array.from({ length: 4 }, (): Script => async function* () {
     yield { type: 'text', delta: 'cut' };
     yield { type: 'done', stop: 'max_tokens' as StopReason };
-  });
+  }));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.skillJobs()[0]!.status, 'failed');
   assert.equal(s.app.kv.get('review:skill-upto:c1'), undefined, 'a failed review does not move the reading place');

@@ -17,7 +17,7 @@ import { dropToast, leaveToast, pushToast, toastDuration, type ToastEntry } from
 
 const base: ComposerInput = { hasConversation: true, running: false, mode: 'auto', chatModels: 2, text: 'hi', attachments: 0, uploading: false, sending: false };
 const model = (id: string, extra: Partial<ModelView> = {}): ModelView => ({
-  id, label: id.toUpperCase(), provider: 'p', model: id, minContext: 0, maxOutputTokens: 0, inChat: true,
+  id, label: id.toUpperCase(), provider: 'p', model: id, maxOutputTokens: 0, limits: { context: null, maxOutput: null, required: null }, inChat: true,
   probe: { modelId: id, status: 'ok', server: 's', required: 0, message: '', checkedAt: 0 }, ...extra,
 });
 const pend = (id: string, text: string, interrupt = false): PendingMessage => ({ id, text, attachments: [], interrupt, createdAt: 0 });

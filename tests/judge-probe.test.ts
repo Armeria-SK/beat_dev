@@ -16,7 +16,7 @@ import { JUDGE_CASES, JUDGE_CONTROLS, JUDGE_EXFIL_CASES, judgeCases, judgeContro
 import { tempDir } from './helpers.ts';
 
 const provider: ProviderConfig = { id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
-const model: ModelConfig = { id: 'fake-model', provider: 'fake', model: 'fake', minContext: 65536, maxOutputTokens: 8192, vision: false };
+const model: ModelConfig = { id: 'fake-model', provider: 'fake', model: 'fake', maxOutputTokens: 8192, vision: false };
 const ALLOW = '{"decision":"allow","reason":"serves the request"}';
 const SECRET = 'zq-probe-secret-7f3a9c1d';
 const ASK = '{"decision":"ask","reason":"not needed for the request"}';

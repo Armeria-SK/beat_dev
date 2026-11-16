@@ -227,8 +227,8 @@ export function CommitField({ value, label, mono, short, placeholder, type, disa
   return <input className={classes} type={type ?? 'text'} aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off" disabled={disabled} {...field} />;
 }
 
-export function NumberField({ k, value, label, min, max, optional, onCommit }: {
-  k: string; value: number | undefined; label: string; min?: number; max?: number; optional?: boolean; onCommit: (value: number | undefined) => void;
+export function NumberField({ k, value, label, min, max, optional, placeholder, onCommit }: {
+  k: string; value: number | undefined; label: string; min?: number; max?: number; optional?: boolean; placeholder?: string | undefined; onCommit: (value: number | undefined) => void;
 }) {
   const t = useT();
   const ctx = useSet();
@@ -238,7 +238,7 @@ export function NumberField({ k, value, label, min, max, optional, onCommit }: {
     ctx.clear(k);
     onCommit(read.value);
   });
-  return <input className="bt-field bt-field--mono bt-field--short" inputMode="numeric" aria-label={label} spellCheck={false} autoComplete="off" {...field} />;
+  return <input className="bt-field bt-field--mono bt-field--short" inputMode="numeric" aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off" {...field} />;
 }
 
 export function ListField({ items, label, placeholder, disabled, allowDuplicates, onChange }: { items: readonly string[]; label: string; placeholder?: string; disabled?: boolean; allowDuplicates?: boolean; onChange: (items: string[]) => void }) {

@@ -43,7 +43,7 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   options.before?.(p.workspace);
   const config = defaultConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: options.contextLength ?? 65536, minContext: 1024, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: options.contextLength ?? 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   writeFileSync(p.config, JSON.stringify(config));
   const clock = { now: Date.parse('2026-11-04T20:00:00Z') };

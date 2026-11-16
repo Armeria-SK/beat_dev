@@ -32,7 +32,7 @@ test('setupModelConfig（OpenAI 互換）: 送り先・サーバーの種類・�
   const { config, modelId } = setupModelConfig(base(), form({ server: 'tabbyapi', apiKeyEnv: 'LOCAL_KEY', contextLength: '65536' }), null);
   assert.equal(modelId, 'qwen3-27b');
   assert.deepEqual(config.providers.at(-1), { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1', server: 'tabbyapi', maxParallel: 1, timeoutMs: 600000, apiKeyEnv: 'LOCAL_KEY' });
-  assert.deepEqual(config.models, [{ id: 'qwen3-27b', label: '', provider: 'local', model: 'qwen3-27b', contextLength: 65536, minContext: 8192, maxOutputTokens: 4096, vision: false }]);
+  assert.deepEqual(config.models, [{ id: 'qwen3-27b', label: '', provider: 'local', model: 'qwen3-27b', contextLength: 65536, vision: false }], 'model-auto: 返事の上限と minContext は書かない（自動）');
   assert.deepEqual(config.routing, { chat: ['qwen3-27b'], background: ['qwen3-27b'], retriesPerModel: 2 });
   assert.equal(config.providers.length, 3, '最初から入っているプロバイダは残す');
   const noKey = setupModelConfig(base(), form(), null).config;

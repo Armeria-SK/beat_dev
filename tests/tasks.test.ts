@@ -46,7 +46,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   // 振り返りは tests/review.test.ts で確かめる（ここではタスクの実行回数を数えたいので止める）
   config.memory.review = false;
@@ -865,7 +865,7 @@ test('モデルが 0 個のあいだは、タスクも振り返りも選ばず�
   assert.equal(s.app.runs.recent(10).length, 0);
 
   const next = s.app.config();
-  next.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  next.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   next.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   await s.app.applyConfig(next);
   s.adapter().scripts.push(toolCall('task_complete', { summary: '済み', notify: false }));
@@ -876,10 +876,10 @@ test('モデルが 0 個のあいだは、タスクも振り返りも選ばず�
 test('切れた返事だけで終わったタスクは、メモに「切れた」と書く（普通の返事と区別する）', async t => {
   const s = await setup(t);
   const task = s.userTask('資料を作る');
-  s.adapter().scripts.push(async function* () {
+  s.adapter().scripts.push(...Array.from({ length: 4 }, (): Script => async function* () {
     yield { type: 'text', delta: '資料の骨子は次のとおりです。第一に' };
     yield { type: 'done', stop: 'max_tokens' as StopReason };
-  });
+  }));
   assert.equal(await s.app.worker.tick(), 'ran');
   const after = s.app.tasks.get(task.id)!;
   assert.match(after.body, /the reply was cut off by the output limit/u);

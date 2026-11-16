@@ -21,7 +21,7 @@ import { ProviderError } from '../src/providers/types.ts';
 import { FakeAdapter, fail, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function localModel(id: string, over: Partial<ModelConfig> = {}): ModelConfig {
-  return { id, provider: 'fake', model: id, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false, ...over };
+  return { id, provider: 'fake', model: id, contextLength: 65536, maxOutputTokens: 1024, vision: false, ...over };
 }
 
 async function setup(t: { after: (fn: () => void) => void }, options: { models?: ModelConfig[]; scripts?: Script[] } = {}) {
@@ -75,8 +75,8 @@ test('返事を保存し、実行記録を残す', async t => {
 });
 
 test('使えるモデルが無ければ、発言を保存せず、モデルにも送らない', async t => {
-  const s = await setup(t, { models: [localModel('a', { contextLength: 4096, minContext: 4096 })] });
-  // 必要量（minContext と system＋履歴＋出力の合計の大きい方）に届かない
+  const s = await setup(t, { models: [localModel('a', { contextLength: 4096 })] });
+  // 必要量（system＋履歴＋出力の合計）に届かない
   assert.equal(s.status.get('a')?.status, 'too_small');
   const outcome = s.engine.send('c1', 'やあ');
   assert.equal(outcome.ok, false);
@@ -197,7 +197,7 @@ test('利用者が止めたら、途中までの返事を「止めた」と分�
 });
 
 test('古い発言を外しても入らなければ、送らずに context_overflow にする', async t => {
-  const s = await setup(t, { models: [localModel('a', { contextLength: 6000, minContext: 1024, maxOutputTokens: 1024 })] });
+  const s = await setup(t, { models: [localModel('a', { contextLength: 6000, maxOutputTokens: 1024 })] });
   assert.equal(s.status.get('a')?.status, 'too_small'); // 必要量 = 500 + 8192 + 1024
   // 必要量を満たすよう、確認結果を上書きして実行時の判定だけを試す
   s.adapter.probeResult = { status: 'ok' };
@@ -212,7 +212,7 @@ test('古い発言を外しても入らなければ、送らずに context_overf
 });
 
 async function longConversation(t: { after: (fn: () => void) => void }) {
-  const s = await setup(t, { models: [localModel('a', { contextLength: 20000, minContext: 1024, maxOutputTokens: 1024 })] });
+  const s = await setup(t, { models: [localModel('a', { contextLength: 20000, maxOutputTokens: 1024 })] });
   s.adapter.probeResult = { status: 'ok' };
   await s.status.probeAll(s.config);
   for (let i = 0; i < 6; i++) {
@@ -392,7 +392,7 @@ test('使用量: 容量を超えていても数える（ratio は 1 を超える
 });
 
 test('使用量: モデルは指定 → 無ければ会話で使う順番の最初の使えるモデル。指定が設定に無ければ 404、使えるモデルが無ければ 409', async t => {
-  const s = await setup(t, { models: [localModel('a', { contextLength: 4096, minContext: 4096 }), localModel('b', { contextLength: 32768 }), localModel('c', { contextLength: 131072 })] });
+  const s = await setup(t, { models: [localModel('a', { contextLength: 4096 }), localModel('b', { contextLength: 32768 }), localModel('c', { contextLength: 131072 })] });
   assert.equal(s.status.get('a')?.status, 'too_small');
   const auto = s.engine.contextUsage('c1');
   assert.ok(auto.ok);
@@ -406,7 +406,7 @@ test('使用量: モデルは指定 → 無ければ会話で使う順番の最�
   const unknown = s.engine.contextUsage('c1', 'zzz');
   assert.deepEqual(unknown.ok === false && [unknown.httpStatus, unknown.errorKind, unknown.errorCode], [404, 'not_found', 'engine.usage.model_missing']);
 
-  const none = await setup(t, { models: [localModel('a', { contextLength: 4096, minContext: 4096 })] });
+  const none = await setup(t, { models: [localModel('a', { contextLength: 4096 })] });
   const refused = none.engine.contextUsage('c1');
   assert.ok(!refused.ok);
   assert.deepEqual([refused.httpStatus, refused.errorCode], [409, 'engine.no_usable']);

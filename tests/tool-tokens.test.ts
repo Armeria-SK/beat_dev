@@ -59,7 +59,7 @@ test('T-1 tool-tokens: 新しいプロセスで設定のファイルを渡すと
     c.timezone = 'Asia/Tokyo';
     c.tools.roots = [{ path: join(dir, 'zq-root-7c1f'), mode: 'read' }];
     c.providers = [{ id: 'zq-provider-7c1f', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:9/v1', apiKeyEnv: 'ZQ_KEY_7C1F', maxParallel: 1, timeoutMs: 1000 }];
-    c.models = [{ id: 'zq-model-7c1f', provider: 'zq-provider-7c1f', model: 'zq-name-7c1f', contextLength: 4096, minContext: 1024, maxOutputTokens: 512, vision: false }];
+    c.models = [{ id: 'zq-model-7c1f', provider: 'zq-provider-7c1f', model: 'zq-name-7c1f', contextLength: 4096, maxOutputTokens: 512, vision: false }];
   });
   writeFileSync(file, JSON.stringify(config));
   const before = readFileSync(file, 'utf8');

@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { ChatMessage, ImageRef, StopReason } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
-import { contextHint, errorProbeText, evaluateContext } from './context.ts';
+import { contextHint, errorProbeText, evaluateContext, serverNumber } from './context.ts';
 import { checkBaseUrl, classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
 import { ProviderError, providerError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
@@ -172,7 +172,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     try {
       const info = await this.#clientFor().models.retrieve(model.model, undefined, { timeout: 10_000 });
       const modelMax = typeof info.max_input_tokens === 'number' ? info.max_input_tokens : undefined;
-      return evaluateContext({ ...facts, modelMax, hint: contextHint(language, 'hosted', required), unmeasuredNote: modelMax === undefined ? 'probe.note.max_unavailable' : undefined });
+      return evaluateContext({ ...facts, modelMax, maxOutput: serverNumber(info.max_tokens), hint: contextHint(language, 'hosted', required), unmeasuredNote: modelMax === undefined ? 'probe.note.max_unavailable' : undefined });
     } catch (error) {
       const e = classifyAnthropicError(error, new AbortController().signal, this.#secrets());
       const status = e.kind === 'auth' ? 'no_api_key' : e.status === 404 ? 'not_found' : e.status === undefined ? 'unreachable' : 'error';

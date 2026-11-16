@@ -120,6 +120,8 @@ export interface Message {
   toolCalls?: Array<{ id: string; name: string; input: string }>;
   toolName?: string; toolCallId?: string; isError?: boolean; gate?: ToolGate;
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
+  // beat が足した一言（'continue' は返事が上限で切れたときの続きの頼み。画面に出さない）
+  note?: 'pending' | 'continue';
 }
 // 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す
 export interface ModelChoice { modelId?: string | null; effort?: string | null; permissionMode?: PermissionMode }
@@ -132,12 +134,14 @@ export interface ContextUsage { modelId: string; tokens: number; available: numb
 export interface ContextDetail { reason: string; measured?: number; required?: number; hint?: string }
 
 export interface Probe {
-  modelId: string; status: string; server: string; declared?: number; measured?: number; modelMax?: number; effective?: number;
+  modelId: string; status: string; server: string; declared?: number; measured?: number; modelMax?: number; effective?: number; maxOutput?: number;
   required: number; message: string; messageCode?: string; messageParams?: Record<string, string | number>; hint?: string; capabilities?: string[]; checkedAt: number;
 }
 export interface ModelView {
   id: string; label: string; provider: string; model: string; providerKind?: string;
-  contextLength?: number; minContext: number; maxOutputTokens: number; inChat: boolean; probe: Probe | null;
+  contextLength?: number; maxOutputTokens?: number; inChat: boolean; probe: Probe | null;
+  // サーバーが決めた、いま使っている値（書いた値か自動の値）。長さが分からなければ null
+  limits: { context: number | null; maxOutput: number | null; required: number | null };
   // そのモデルで選べる考える深さ（無ければ選ばせない）
   efforts?: string[];
 }

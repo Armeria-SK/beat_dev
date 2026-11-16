@@ -20,7 +20,7 @@ function toolCall(name: string, args: unknown): Script {
   };
 }
 
-const model = (id: string, contextLength: number): ModelConfig => ({ id, provider: 'fake', model: id, contextLength, minContext: 4096, maxOutputTokens: 1024, vision: false });
+const model = (id: string, contextLength: number): ModelConfig => ({ id, provider: 'fake', model: id, contextLength, maxOutputTokens: 1024, vision: false });
 
 async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig) => void = () => undefined) {
   const dir = tempDir(t);

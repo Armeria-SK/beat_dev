@@ -409,3 +409,28 @@ test('ui/thread（build-in-chat）: 道具が終わって次がまだなら直�
   const fresh = reduce(EMPTY, { type: 'event', event: { type: 'run.start', runId: 'task-run', conversationId: 'task-conv', modelId: 'm' }, hidden: false, now: 1 }).state;
   assert.equal(buildToolItem(fresh.drafts, liveBuild()), undefined, 'no tool used yet');
 });
+
+test('ui/thread（model-auto B）: 続きを頼んだ一言（note: continue）は項目にならず、前後の文は 1 つの返事（コピーは区切りなしで全体）。note の無い user は今どおり持ち主の発言', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', '長く書いて'),
+      msg('assistant', '前半は途中'),
+      msg('user', 'Output limit reached. Resume directly…', { note: 'continue' }),
+      msg('assistant', 'で、後半'),
+      msg('user', 'ありがとう', { runId: null }),
+    ],
+  });
+  assert.deepEqual(items.map(i => i.kind), ['owner', 'reply', 'owner']);
+  assert.equal(items.some(i => i.kind === 'owner' && i.text.startsWith('Output limit')), false, '一言は出さない');
+  const reply = items[1]!;
+  assert.ok(reply.kind === 'reply');
+  assert.equal(reply.text, '前半は途中で、後半', '途中で切れた語も 1 つの文として描く');
+  assert.equal(reply.copyText, '前半は途中で、後半', 'コピーは全体を区切りなしで');
+  assert.equal(reply.stamped, true);
+  const afterOwner = threadItems({
+    messages: [msg('user', '長く書いて'), msg('assistant', 'A'), msg('user', 'go on', { note: 'continue' }), msg('assistant', 'B'), msg('user', 'next', { runId: null }), msg('assistant', 'C', { runId: null })],
+  });
+  assert.deepEqual(afterOwner.filter(i => i.kind === 'reply').map(i => i.kind === 'reply' && i.text), ['AB', 'C'], '持ち主の発言の後の返事はつながない');
+  const twoReplies = threadItems({ messages: [msg('user', 'go'), msg('assistant', 'A'), msg('user', 'go on', { note: 'continue' }), msg('assistant', 'B'), msg('assistant', 'C')] });
+  assert.deepEqual(twoReplies.filter(i => i.kind === 'reply').map(i => i.kind === 'reply' && i.text), ['AB', 'C'], 'つなぐのは一言の直後の 1 つだけ');
+});

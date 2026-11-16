@@ -19,8 +19,8 @@ function sample(): Config {
       { id: 'claude', kind: 'anthropic', maxParallel: 2, timeoutMs: 120000 },
     ],
     models: [
-      { id: 'big', provider: 'local', model: 'qwen', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, vision: false },
-      { id: 'sonnet', provider: 'claude', model: 'claude-sonnet', minContext: 8192, maxOutputTokens: 4096, vision: true },
+      { id: 'big', provider: 'local', model: 'qwen', contextLength: 32768, maxOutputTokens: 4096, vision: false },
+      { id: 'sonnet', provider: 'claude', model: 'claude-sonnet', maxOutputTokens: 4096, vision: true },
     ],
     routing: { chat: ['big', 'sonnet'], background: ['big'], retriesPerModel: 1 },
     tools: { deny: ['.env'], shell: { enabled: true, allow: ['git status'] } },
@@ -94,6 +94,7 @@ test('モデル・プロバイダの追加と削除', () => {
   const second = addModel(first.config);
   assert.deepEqual([first.id, second.id], ['new-model', 'new-model-2']);
   assert.equal(first.config.models.at(-1).provider, 'local', '最初のプロバイダを使う');
+  for (const key of ['contextLength', 'minContext', 'maxOutputTokens']) assert.equal(key in first.config.models.at(-1), false, `model-auto: モデルを足すとき ${key} を書かない`);
   const providerFirst = { config: { ...config, providers: [...config.providers, { id: 'new-provider', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 }] } };
 
   const without = removeModel(config, 'big');

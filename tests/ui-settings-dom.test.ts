@@ -82,7 +82,7 @@ test('Settings › Hooks（DOM）: 「Tools」の欄（Protect files と自分�
 const withModels = (judge: string[] = []): Json => {
   const config = defaultConfig() as Json;
   config.providers = [{ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 }];
-  config.models = ['qwen', 'gemma', 'phi'].map(id => ({ id, label: id.toUpperCase(), provider: 'local', model: id, minContext: 8192, maxOutputTokens: 4096 }));
+  config.models = ['qwen', 'gemma', 'phi'].map(id => ({ id, label: id.toUpperCase(), provider: 'local', model: id, maxOutputTokens: 4096 }));
   config.routing = { ...config.routing, chat: ['qwen'], background: [], ...(judge.length ? { judge } : {}) };
   return config;
 };
@@ -266,4 +266,81 @@ test('Settings › Skills（DOM）: Grow skills sits above Ask before registerin
   const text = container.querySelector('[data-row="skills:grow"]')!.textContent!;
   assert.match(text, /^Grow skillsbeat only uses the skills you already have/u);
   assert.match(container.querySelector('[data-row="skills:ask"]')!.textContent!, /Applies when Grow skills is on/u);
+});
+
+// model-auto: モデルの長さ・返事の上限・必要な長さは Advanced にたたみ、いま使っている値を「Auto: …」で見せる
+function withAutoModels(): { config: Json; models: Json[] } {
+  const config = defaultConfig() as Json;
+  config.providers = [{ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 }];
+  config.models = [
+    { id: 'qwen', label: 'QWEN', provider: 'local', model: 'qwen', contextLength: 131072, vision: false },
+    { id: 'blind', label: 'BLIND', provider: 'local', model: 'blind', vision: false },
+  ];
+  config.routing = { ...config.routing, chat: ['qwen'], background: [] };
+  const probe = (id: string, status: string) => ({ modelId: id, status, server: 'generic', required: 61_440, message: '', checkedAt: 1 });
+  const models = [
+    { id: 'qwen', label: 'QWEN', provider: 'local', model: 'qwen', contextLength: 131072, limits: { context: 131072, maxOutput: 32_000, required: 61_440 }, inChat: true, probe: probe('qwen', 'ok') },
+    { id: 'blind', label: 'BLIND', provider: 'local', model: 'blind', limits: { context: null, maxOutput: null, required: 61_440 }, inChat: false, probe: probe('blind', 'unknown') },
+  ];
+  return { config, models };
+}
+
+async function openAutoModels() {
+  const { config, models } = withAutoModels();
+  const sent = serveSettings(config, path => (path === '/api/models' ? { models, routing: config.routing } : undefined));
+  const { container } = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  return { container, sent };
+}
+
+const modelEdit = (container: HTMLElement, id: string) => container.querySelector(`[data-row="model:${id}"] button[aria-expanded]`);
+const advancedToggle = (container: HTMLElement, id: string) => container.querySelector(`[data-row="model:${id}:advanced"] button[aria-expanded]`);
+const field = (container: HTMLElement, label: string) => container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+const descOf = (container: HTMLElement, row: string) => container.querySelector(`[data-row="${row}"] .bt-setting__desc`)?.textContent ?? '';
+
+test('Settings › Models（DOM）model-auto: Advanced は閉じて始まり、ふだんは 1 行の読みものだけ。開くと Auto: の値が見え、Least context needed は読むだけ', async () => {
+  const { container } = await openAutoModels();
+  await click(modelEdit(container, 'qwen'));
+  assert.equal(advancedToggle(container, 'qwen')?.getAttribute('aria-expanded'), 'false', 'Advanced は閉じている');
+  assert.equal(field(container, 'Context length'), null, '閉じている間は長さの欄が無い');
+  assert.equal(field(container, 'Longest reply'), null);
+  assert.equal(descOf(container, 'model:qwen:advanced'), 'Context 131,072 · Reply up to 32,000 · Needs 61,440');
+  await click(advancedToggle(container, 'qwen'));
+  assert.equal(advancedToggle(container, 'qwen')?.getAttribute('aria-expanded'), 'true');
+  assert.equal(field(container, 'Longest reply')?.value, '', '書いていなければ空');
+  assert.equal(field(container, 'Longest reply')?.placeholder, 'Auto: 32,000');
+  assert.equal(descOf(container, 'model:qwen:out'), 'Auto: 32,000');
+  assert.equal(field(container, 'Context length')?.value, '131072');
+  assert.match(descOf(container, 'model:qwen:ctx'), /^Set by you · Use auto$/u);
+  assert.equal(field(container, 'Least context needed'), null, '必要な長さは書けない');
+  assert.equal(container.querySelector('[data-row="model:qwen:min"] .bt-setting__end')?.textContent, 'Auto: 61,440');
+  assert.equal(descOf(container, 'model:qwen:min'), 'beat computes this');
+});
+
+test('Settings › Models（DOM）model-auto: Longest reply を書くと保存し、Use auto でその項目を消す', async () => {
+  const { container, sent } = await openAutoModels();
+  await click(modelEdit(container, 'qwen'));
+  await click(advancedToggle(container, 'qwen'));
+  await commitText(container, field(container, 'Longest reply'), '512');
+  assert.equal(sent.at(-1)?.body?.config.models[0].maxOutputTokens, 512);
+  assert.match(descOf(container, 'model:qwen:out'), /^Set by you · Use auto$/u);
+  const useAuto = [...container.querySelectorAll('[data-row="model:qwen:out"] button')].find(b => b.textContent === 'Use auto');
+  await click(useAuto);
+  await settle();
+  await settle();
+  const widen = container.querySelector('.ui-set__widen');
+  if (widen) { await click(buttons(widen, 'Confirm')[0]); await settle(); await settle(); }
+  assert.equal('maxOutputTokens' in sent.at(-1)!.body!.config.models[0], false, 'Use auto で項目が消える');
+  assert.equal(sent.at(-1)?.body?.config.models[0].contextLength, 131072, 'ほかの値は残る');
+});
+
+test('Settings › Models（DOM）model-auto: 長さが分からない（unknown）モデルだけ、Context length が Advanced の外に出て入力を求める', async () => {
+  const { container } = await openAutoModels();
+  await click(modelEdit(container, 'blind'));
+  assert.equal(advancedToggle(container, 'blind')?.getAttribute('aria-expanded'), 'false');
+  assert.ok(field(container, 'Context length'), 'Advanced を開かなくても長さの欄がある');
+  assert.equal(descOf(container, 'model:blind:ctx'), en['ui.set.model.contextNeeded']);
+  await click(modelEdit(container, 'blind'));
+  await click(modelEdit(container, 'qwen'));
+  assert.equal(field(container, 'Context length'), null, 'unknown でないモデルは Advanced の中だけ');
 });

@@ -11,6 +11,7 @@ import { resolvePaths } from '../src/paths.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { settled, waitFor } from './app-setup.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
+import { engineText } from '../src/shared/messages/engine.ts';
 import { JudgeAdapter, judgeTextOf, reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 const C = 'c1';
@@ -39,7 +40,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
@@ -167,7 +168,7 @@ test('前からある実行の記録の道具の上限の印（max_iterations）
 test('出力の上限で切れた返事で終わった実行も、最後の返事ではないので、Web を読んだ印を次の実行に持ち越す', async t => {
   const s = await setup(t);
   const cut: Script = async function* () { yield { type: 'text', delta: '読みました。次は' }; yield { type: 'done', stop: 'max_tokens' as StopReason }; };
-  s.adapter().scripts = [call('web_fetch', FETCH), cut];
+  s.adapter().scripts = [call('web_fetch', FETCH), cut, cut, cut, cut];
   const first = send(s, 'このページを読んで');
   await settled(s.app, first);
   await s.app.engine.wait(first);
@@ -230,7 +231,7 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
@@ -262,4 +263,32 @@ test('実行の途中で落ちて、起動し直したあとのやり直しも�
     assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [['judge', true]], '再起動後のやり直しも外から読んだ扱いで積まれる');
     assert.ok(judgeTextOf(adapter.judged[0]!).includes(TAINTED_NOTE));
   } finally { second.close(); await new Promise(resolve => setTimeout(resolve, 50)); }
+});
+
+// ── 文だけの返事が切れて beat が続きを頼んだとき（model-auto PR B）の安全の見張り ──
+const cutOnce: Script = async function* () { yield { type: 'text', delta: '途中まで' }; yield { type: 'done', stop: 'max_tokens' as StopReason }; };
+
+test('B 安全: 続きのあとの判定役に渡る「持ち主の頼み」は持ち主の元の文のまま。外から読んでいない会話には印が付かない', async t => {
+  const s = await setup(t);
+  s.adapter().scripts = [cutOnce, call('shell_run', PROBE), reply('おわり')];
+  const runId = send(s, 'ZQX の一覧を作って');
+  await settled(s.app, runId);
+  await s.app.engine.wait(runId);
+  assert.equal(s.app.conversations.messages(C).filter(m => m.message.role === 'user' && m.message.note === 'continue').length, 1, '前提: 続きを頼んだ');
+  assert.equal(s.adapter().judged.length, 1, '前提: 判定役に回った');
+  const judged = judgeTextOf(s.adapter().judged[0]!);
+  assert.ok(judged.includes('ZQX の一覧を作って'), '持ち主の元の文');
+  assert.equal(judged.includes(engineText('en', 'message.continue')), false, '続きの一言は持ち主の頼みにならない');
+  assert.equal(judged.includes(TAINTED_NOTE), false);
+  assert.equal(s.app.conversations.everTainted(C), false, '会話に外から読んだ印が付かない');
+  assert.equal(s.app.runs.get(runId)!.tainted, 0, '実行にも付かない');
+});
+
+test('B 安全: 外から読んだ実行は、続きの呼び出しのあとも印を持ったまま判定役に伝わる', async t => {
+  const s = await setup(t);
+  s.adapter().scripts = [call('web_fetch', FETCH), cutOnce, call('shell_run', PROBE), reply('おわり')];
+  const runId = send(s, 'このページを読んで');
+  await expectAsked(s, runId);
+  assert.equal(s.app.conversations.messages(C).filter(m => m.message.role === 'user' && m.message.note === 'continue').length, 1, '前提: 続きを頼んだ');
+  assert.equal(s.app.runs.get(runId)!.tainted, 1);
 });

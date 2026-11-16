@@ -7,6 +7,7 @@ import type { AppConfig, ModelConfig } from '../src/config/schema.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable } from '../src/engine/chat.ts';
+import { maxOutputFor } from '../src/engine/context-budget.ts';
 import { requiredContext } from '../src/engine/status.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
@@ -139,7 +140,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
 }
 
 const model = (id: string, provider: string, contextLength: number | undefined, over: Partial<ModelConfig> = {}): ModelConfig => ({
-  id, provider, model: id, ...(contextLength === undefined ? {} : { contextLength }), minContext: 4096, maxOutputTokens: 1024, vision: false, ...over,
+  id, provider, model: id, ...(contextLength === undefined ? {} : { contextLength }), maxOutputTokens: 1024, vision: false, ...over,
 });
 
 // 容量が書かれていない（Anthropic）モデルで、確認の結果にも長さが無い場合
@@ -228,16 +229,16 @@ test('必要な長さ: 記憶が増えても base は変わらず、必要な長
   const after = s.app.status.get('big')!.required;
   assert.equal(after, requiredContext(m, base, s.app.memoryTokens()), '確認の required は、base と記憶の全部の見積もりから決まる');
   assert.ok(after > before, '記憶が増えれば必要な長さも増える');
-  assert.ok(after - before <= Math.floor(MEMORY_BUDGET_RATIO * contextAvailable(20_000, m)), '増える分は、そのモデルの available の 12% まで');
+  assert.ok(after - before <= Math.floor(MEMORY_BUDGET_RATIO * contextAvailable(20_000, maxOutputFor(m, 20_000))), '増える分は、そのモデルの available の 12% まで');
 });
 
 test('requiredContext: 記憶の分は、そのモデル自身の available の 12% までしか数えない（ほかのモデルや確認の結果に左右されない）', () => {
   const m = model('m', 'fa', 16_384);
   const base = 3500;
-  const fixed = base + 8192 + m.maxOutputTokens;
-  assert.equal(requiredContext(m, base), Math.max(m.minContext, fixed), '記憶が無ければ今までと同じ');
+  const fixed = base + 8192 + m.maxOutputTokens!;
+  assert.equal(requiredContext(m, base), fixed, '記憶が無ければ system と履歴と返事の上限の和');
   assert.equal(requiredContext(m, base, 0), requiredContext(m, base));
-  const needAt = (capacity: number, memory: number) => Math.max(m.minContext, fixed + Math.min(memory, Math.floor(MEMORY_BUDGET_RATIO * (Math.floor(capacity * CONTEXT_FILL_RATIO) - m.maxOutputTokens))));
+  const needAt = (capacity: number, memory: number) => fixed + Math.min(memory, Math.floor(MEMORY_BUDGET_RATIO * (Math.floor(capacity * CONTEXT_FILL_RATIO) - m.maxOutputTokens!)));
   let previous = 0;
   for (const memory of [0, 300, 2000, 12_000, 1_000_000]) {
     const required = requiredContext(m, base, memory);
@@ -247,7 +248,6 @@ test('requiredContext: 記憶の分は、そのモデル自身の available の 
     previous = required;
   }
   assert.ok(requiredContext(m, base, 1_000_000) < fixed * 1.2, '記憶がどれだけ大きくても、必要な長さは頭打ち');
-  assert.equal(requiredContext(model('small-min', 'fa', 16_384, { minContext: 30_000 }), base, 5000), 30_000, 'minContext が大きければそちら');
 });
 
 test('起動したばかりで確認の結果がまだ無くても、大きな記憶のせいでモデルが使えなくならない', async t => {

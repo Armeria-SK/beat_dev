@@ -18,7 +18,7 @@ const probe = (patch: Partial<Probe> = {}): Probe => ({
   message: 'too small', checkedAt: 1, ...patch,
 });
 const model = (id: string, patch: Partial<ModelView> = {}): ModelView => ({
-  id, label: id, provider: 'p', model: `${id}-name`, minContext: 4096, maxOutputTokens: 512, inChat: true, probe: null, ...patch,
+  id, label: id, provider: 'p', model: `${id}-name`, maxOutputTokens: 512, limits: { context: null, maxOutput: null, required: null }, inChat: true, probe: null, ...patch,
 });
 
 test('sendFailureOf: ApiError の 409 は context と見分け、ApiError 以外は渡された代わりの文にする', () => {
@@ -298,4 +298,12 @@ test('作業の一覧の部品: 項目の文は文字のまま出す（Markdown�
     assert.doesNotMatch(typeof en[key] === 'string' ? en[key] : en[key](1, 2), CJK_CHARS, `${key}: 英語に日本語が混ざらない`);
   }
   assert.equal(en['ui.checklist.count'](2, 5), '2 / 5');
+});
+
+test('replyTurns（model-auto B）: 続きを頼んだ一言は返事を区切らない（見出しは 1 つ）。持ち主の発言は今どおり区切る', () => {
+  const m = (id: number, role: string, runId: string | null, text = '', note?: string) => ({ id, role, runId, text, ...(note ? { note } : {}) });
+  const turns = replyTurns([m(1, 'user', null, '書いて'), m(2, 'assistant', 'r1', 'あい'), m(3, 'user', 'r1', 'continue', 'continue'), m(4, 'assistant', 'r1', 'うえ'), m(5, 'user', null, '次'), m(6, 'assistant', 'r2', 'お')]);
+  assert.deepEqual([2, 4].map(id => turns.get(id)?.head), [true, false]);
+  assert.equal(turns.get(4)?.copyText, 'あいうえ');
+  assert.equal(turns.get(6)?.head, true);
 });

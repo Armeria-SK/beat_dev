@@ -25,4 +25,13 @@ export function toolResultTokens(available: number, irreducible: number, factor 
   return Math.max(MIN_TOOL_RESULT_TOKENS, Math.floor((room * TOOL_RESULT_RATIO) / (factor * SAFETY_MARGIN)));
 }
 
-export const contextAvailable = (capacity: number, model: ModelConfig): number => Math.floor(capacity * CONTEXT_FILL_RATIO) - model.maxOutputTokens;
+export const AUTO_MAX_OUTPUT = 32_000;
+export const MIN_AUTO_OUTPUT = 1_024;
+
+export function maxOutputFor(model: Pick<ModelConfig, 'maxOutputTokens'>, capacity: number, providerMax?: number): number {
+  const cap = providerMax ?? Infinity;
+  if (model.maxOutputTokens !== undefined) return Math.min(model.maxOutputTokens, cap);
+  return Math.min(cap, Math.max(MIN_AUTO_OUTPUT, Math.min(AUTO_MAX_OUTPUT, Math.floor(capacity / 4))));
+}
+
+export const contextAvailable = (capacity: number, maxOutput: number): number => Math.floor(capacity * CONTEXT_FILL_RATIO) - maxOutput;

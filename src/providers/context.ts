@@ -10,8 +10,11 @@ export interface ContextFacts {
   declared?: number | undefined;
   measured?: number | undefined;
   modelMax?: number | undefined;
+  maxOutput?: number | undefined;
+  trustModelMax?: boolean | undefined;
   hint?: string | undefined;
   unmeasuredNote?: ProviderMessageKey | undefined;
+  unknownHint?: ProviderMessageKey | undefined;
   capabilities?: string[] | undefined;
   language?: Language | undefined;
   now?: number;
@@ -23,13 +26,21 @@ export function probeText(language: Language, key: ProviderMessageKey, params: M
   return { message: providerText(language, key, params), messageCode: `provider.${key}`, messageParams };
 }
 
-export function evaluateContext(f: ContextFacts): ProbeResult {
+export const MAX_SERVER_NUMBER = 10_000_000;
+
+export function serverNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_SERVER_NUMBER ? value : undefined;
+}
+
+export function evaluateContext(facts: ContextFacts): ProbeResult {
+  const f = { ...facts, measured: serverNumber(facts.measured), modelMax: serverNumber(facts.modelMax), maxOutput: serverNumber(facts.maxOutput) };
   const language = f.language ?? DEFAULT_LANGUAGE;
   const base = {
     modelId: f.modelId, server: f.server, required: f.required, checkedAt: f.now ?? Date.now(),
     ...(f.declared === undefined ? {} : { declared: f.declared }),
     ...(f.measured === undefined ? {} : { measured: f.measured }),
     ...(f.modelMax === undefined ? {} : { modelMax: f.modelMax }),
+    ...(f.maxOutput === undefined ? {} : { maxOutput: f.maxOutput }),
     ...(f.capabilities === undefined ? {} : { capabilities: f.capabilities }),
   };
   if (f.declared !== undefined && f.modelMax !== undefined && f.declared > f.modelMax) {
@@ -39,12 +50,13 @@ export function evaluateContext(f: ContextFacts): ProbeResult {
       hint: providerText(language, 'hint.exceeds_model', { modelMax: fmt(f.modelMax) }),
     };
   }
-  const candidates = [f.declared, f.measured, f.modelMax].filter((n): n is number => typeof n === 'number' && n > 0);
+  const trustMax = f.trustModelMax !== false || f.declared !== undefined || f.measured !== undefined;
+  const candidates = [f.declared, f.measured, trustMax ? f.modelMax : undefined].filter((n): n is number => typeof n === 'number' && n > 0);
   if (!candidates.length) {
     return {
       ...base, status: 'unknown',
       ...probeText(language, 'probe.unknown'),
-      hint: providerText(language, 'hint.unknown'),
+      hint: providerText(language, f.unknownHint ?? 'hint.unknown'),
     };
   }
   const effective = Math.min(...candidates);

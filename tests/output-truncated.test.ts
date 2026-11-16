@@ -10,6 +10,9 @@ import { AnthropicAdapter, toAnthropicMessages } from '../src/providers/anthropi
 import { OpenAiCompatibleAdapter, toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import type { ModelRequest, StreamEvent } from '../src/providers/types.ts';
 import { FakeAdapter, fakeServer, reply, sse, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
+import type { SpeechRow } from '../src/db/conversations.ts';
+import { prepareSpeech } from '../src/projects/acceptance.ts';
+import { engineText } from '../src/shared/messages/engine.ts';
 
 // 出力の上限で切れた返事（停止理由が max_tokens）を、成功として扱わない（AU-1）
 
@@ -32,7 +35,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
@@ -52,13 +55,13 @@ async function setup(t: { after: (fn: () => void) => void }) {
   return { app, adapter: () => adapter, events, run, paths };
 }
 
-test('切れた返事（本文だけ）: お知らせと実行の印を出し、結果に切れたと載せる', async t => {
+test('切れた返事（本文だけ）: 続きを 3 回頼んでも切れたら、お知らせと実行の印を出し、結果に切れたと載せる', async t => {
   const s = await setup(t);
-  s.adapter().scripts.push(cutText('これは途中で'));
+  s.adapter().scripts.push(cutText('これは途中で'), cutText('まだ'), cutText('まだ'), cutText('まだ'));
   const { runId, result } = await s.run('書いて');
   assert.ok(result.ok);
   assert.equal(result.ok && result.truncated, true);
-  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_truncated').length, 1);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_limit').length, 1);
   assert.deepEqual(JSON.parse(s.app.runs.get(runId)!.flags), ['output_truncated']);
 });
 
@@ -137,7 +140,7 @@ test('切れた呼び出しのあとに正しく終われば、続けて切れ�
 
 // ── 提供元 ───────────────────────────────────────────────
 
-const streamModel: ModelConfig = { id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false };
+const streamModel: ModelConfig = { id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, maxOutputTokens: 1024, vision: false };
 const streamRequest: ModelRequest = {
   model: streamModel, system: { frozen: 'あなたは beat', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
   tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
@@ -184,4 +187,86 @@ test('2 つの提供元とも、会話に残した {} の呼び出しをその�
   const anth = toAnthropicMessages(saved, false).find(m => m.role === 'assistant')!;
   const block = (anth.content as Array<{ type: string; input?: unknown }>).find(b => b.type === 'tool_use')!;
   assert.deepEqual(block.input, {});
+});
+
+// ── 文だけの返事が上限で切れたら、beat が続きを頼む（model-auto PR B） ──
+const listCall: Script = async function* (req) {
+  for (const c of withLoad({ id: `call_${Math.random().toString(36).slice(2)}`, name: 'file_list', arguments: {} }, req)) yield { type: 'tool_call', call: c };
+  yield { type: 'done', stop: 'tool_use' as StopReason };
+};
+const continueText = engineText('en', 'message.continue');
+const isContinue = (m: ChatMessage) => m.role === 'user' && m.note === 'continue';
+
+test('B: 文だけ 1 回切れて次で終わる → 見えない一言で続きを頼み、実行は 1 つのまま成功し、結果の文は 2 つをつないだもの', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('前半は途中'), reply('で、後半はここまで'));
+  const { runId, result } = await s.run('長く書いて');
+  assert.ok(result.ok);
+  assert.equal(result.ok && result.truncated, undefined, '最後まで書けたので切れたとは載せない');
+  assert.equal(result.ok && result.text, '前半は途中で、後半はここまで');
+  assert.equal(s.adapter().calls.length, 2);
+  const lastSent = s.adapter().calls[1]!.messages.at(-1)!;
+  assert.equal(lastSent.role, 'user');
+  assert.equal(lastSent.role === 'user' && lastSent.content, continueText);
+  const stored = s.app.conversations.messages('c1').map(m => m.message);
+  assert.deepEqual(stored.map(m => m.role), ['user', 'assistant', 'user', 'assistant']);
+  const asked = stored[2]!;
+  assert.ok(isContinue(asked), 'beat が足した印つき');
+  assert.equal(asked.role === 'user' && asked.generated, true);
+  assert.equal(asked.role === 'user' && 'fetched' in asked, false);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continued').length, 1);
+  assert.equal(s.events.some(e => e.type === 'warning' && (e.code === 'output_truncated' || e.code === 'output_continue_limit')), false);
+  assert.deepEqual(JSON.parse(s.app.runs.get(runId)!.flags), ['output_truncated'], '切れた印は残す（厳しい側）');
+  assert.equal(new Set(s.app.conversations.messages('c1').filter(m => m.role !== 'user' || isContinue(m.message)).map(m => m.run_id)).size, 1, '1 つの実行');
+});
+
+test('B: 4 回続けて切れる → 一言は 3 つ、呼び出しは 4 回で 5 回目は無く、成功で truncated、3 回でも切れた知らせ', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('一'), cutText('二'), cutText('三'), cutText('四'), reply('五は呼ばれない'));
+  const { result } = await s.run('長く書いて');
+  assert.ok(result.ok);
+  assert.equal(result.ok && result.truncated, true);
+  assert.equal(result.ok && result.text, '一二三四');
+  assert.equal(s.adapter().calls.length, 4);
+  assert.equal(s.app.conversations.messages('c1').filter(m => isContinue(m.message)).length, 3);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continued').length, 1, '続きの知らせは 1 回の実行で 1 回');
+  const limit = s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_limit');
+  assert.equal(limit.length, 1);
+  assert.equal(limit[0]!.type === 'warning' && limit[0]!.message, engineText('en', 'warn.output_continue_limit', { count: 3 }));
+});
+
+test('B: 道具を挟む → 結果の文は最後の文だけ。続きは道具を挟んでも 1 回の実行で合計 3 回まで', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('切れた'), listCall, reply('最後の文'));
+  const first = await s.run('調べて');
+  assert.ok(first.result.ok);
+  assert.equal(first.result.ok && first.result.text, '最後の文');
+  s.adapter().calls.length = 0;
+  s.adapter().scripts.push(cutText('a'), cutText('b'), listCall, cutText('c'), cutText('d'), reply('呼ばれない'));
+  const second = await s.run('もう一度');
+  assert.ok(second.result.ok);
+  assert.equal(second.result.ok && second.result.truncated, true);
+  assert.equal(second.result.ok && second.result.text, 'cd', '道具の前の切れた文は捨てる');
+  assert.equal(s.adapter().calls.length, 5);
+  assert.equal(s.app.conversations.messages('c1').filter(m => isContinue(m.message) && m.run_id === second.runId).length, 3);
+});
+
+test('B: 道具の呼び出しが切れたときの知らせに「continue」の語が無い', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutCall(undefined, CUT), reply('書き直します'));
+  await s.run('hello.md を作って');
+  const warned = s.events.filter(e => e.type === 'warning' && e.code === 'output_truncated');
+  assert.equal(warned.length, 1);
+  assert.doesNotMatch(warned[0]!.type === 'warning' ? warned[0]!.message : '', /continue/iu);
+  assert.doesNotMatch(engineText('en', 'warn.output_truncated'), /continue/iu);
+  assert.equal(s.app.conversations.messages('c1').some(m => isContinue(m.message)), false, '道具の側は一言を足さない');
+});
+
+test('B 安全: 続きの一言は受け入れの項目（持ち主の発言）に入らない', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('途中'), reply('おわり'));
+  await s.run('持ち主の頼み');
+  const rows = s.app.conversations.db.prepare("SELECT id, conversation_id, role, text, COALESCE(json_extract(parts, '$.generated'), 0) IS 1 AS generated FROM messages WHERE conversation_id = 'c1' AND role = 'user' ORDER BY id").all() as unknown as SpeechRow[];
+  assert.equal(rows.length, 2, '前提: 持ち主の発言と続きの一言');
+  assert.deepEqual(prepareSpeech(rows).owner.map(o => o.raw), ['持ち主の頼み']);
 });

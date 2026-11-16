@@ -50,7 +50,7 @@ async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, 
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, vision: false }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   options.edit?.(config);
@@ -261,7 +261,7 @@ test('API: タスクの操作の失敗は、コードとパラメータを添え
 
 // ── モデルの確認・プロバイダのエラー ──
 
-const probeModel = (over: Partial<ModelConfig> = {}): ModelConfig => ({ id: 'm', provider: 'p', model: 'test-model', contextLength: 8192, minContext: 1024, maxOutputTokens: 512, vision: false, ...over });
+const probeModel = (over: Partial<ModelConfig> = {}): ModelConfig => ({ id: 'm', provider: 'p', model: 'test-model', contextLength: 8192, maxOutputTokens: 512, vision: false, ...over });
 const compatProvider = (baseUrl: string, over: Partial<ProviderConfig> = {}): ProviderConfig => ({ id: 'p', kind: 'openai_compatible', baseUrl, maxParallel: 1, timeoutMs: 10_000, ...over });
 
 test('モデルの確認: 言語を渡さない呼び出しは英語の文', () => {
@@ -276,7 +276,7 @@ test('モデルの確認: 言語を渡さない呼び出しは英語の文', () 
   assert.equal(exceeds.hint, 'Set contextLength to 131,072 or less');
   const unknown = evaluateContext(facts);
   coded(unknown, 'provider.probe.unknown');
-  assert.equal(unknown.hint, 'In the config, write the length you set on the server under models[].contextLength');
+  assert.equal(unknown.hint, 'Enter the length you set on the server in Settings › Models › Advanced › Context length');
   coded(evaluateContext({ ...facts, declared: 70000 }), 'provider.probe.ok', '70,000');
   coded(evaluateContext({ ...facts, declared: 70000, unmeasuredNote: 'probe.note.use_config' }), 'provider.probe.ok', '70,000', providerText('en', 'probe.note.use_config'));
   assert.equal(contextHint('en', 'hosted', 65536), 'Choose a model whose context length is 65,536 or more');
