@@ -36,7 +36,7 @@ test('ui/tool-row: 組み込みの道具のどれでも、どの引数・結果�
         assert.ok(!row.target.includes('\n'), tool.name);
         assert.ok(row.target.length <= 241, tool.name);
         assert.equal(row.name, tool.name);
-        if (row.meta) assert.ok(['lines', 'exit', 'failed', 'returned'].includes(row.meta.kind), tool.name);
+        if (row.meta) assert.ok(['lines', 'exit', 'failed', 'returned', 'background'].includes(row.meta.kind), tool.name);
       }
     }
   }

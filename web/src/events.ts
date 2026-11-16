@@ -16,6 +16,7 @@ export type RunEvent =
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
   | { type: 'agent.state'; runId: string; conversationId: string; callId: string; childRunId: string; childConversationId: string; state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout'; toolCalls: number }
   | { type: 'pending.changed'; conversationId: string }
+  | { type: 'background.changed'; projectId: string; conversationId: string; id: string; state: 'running' | 'exited' | 'stopped' }
   | { type: 'pendingAction.changed'; id: number; status: PendingStatus; projectId: string | null; conversationId: string; taskId: string | null }
   | { type: 'question.changed'; id: number; projectId: string | null; status: 'open' | 'answered' }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted'; projectId?: string | null }

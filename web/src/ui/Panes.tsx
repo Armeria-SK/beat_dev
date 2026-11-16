@@ -6,6 +6,7 @@ import { useMedia } from './hooks.ts';
 import { PendingList, type PendingListProps } from './panes/PendingPane.tsx';
 import { PlanPane } from './panes/PlanPane.tsx';
 import { QuestionsList, type QuestionsListProps } from './panes/QuestionsPane.tsx';
+import { TerminalPane } from './panes/TerminalPane.tsx';
 import {
   closePane, fitLayout, keepHidden, KEY_STEP, openable, openView, PANE_MIN, paneDef, paneRange, panesWidth, parseLayout, resizePane, selectView, showSplit, singlePane, STORE_KEY, tabOrder, togglePanes, visiblePanes,
   type PaneLayout, type PaneView,
@@ -16,7 +17,7 @@ import './styles/panes.css';
 const NARROW = '(max-width: 760px)';
 const SIDEBAR = 248;
 
-export interface PanesToggle { open: boolean; onToggle: () => void; onOpenPlan?: ((reveal: boolean) => void) | undefined; onOpenPending?: (() => void) | undefined }
+export interface PanesToggle { open: boolean; onToggle: () => void; onOpenPlan?: ((reveal: boolean) => void) | undefined; onOpenPending?: (() => void) | undefined; onOpenTerminal?: ((jobId: string) => void) | undefined }
 
 export function PanesButton({ open, onToggle }: PanesToggle) {
   const t = useT();
@@ -59,6 +60,8 @@ export interface PanesState {
   openPlan: (reveal: boolean) => void;
   openPane: (view: PaneView) => void;
   revealed: () => void;
+  terminalFocus: string | null;
+  openTerminal: (jobId: string) => void;
 }
 
 export function usePanes(productId: string | null): PanesState {
@@ -67,6 +70,7 @@ export function usePanes(productId: string | null): PanesState {
   const [layout, setLayout] = useState<PaneLayout>(() => parseLayout(readStored()));
   const [singleView, setSingleView] = useState<PaneView | null>(null);
   const [reveal, setReveal] = useState(false);
+  const [terminalFocus, setTerminalFocus] = useState<string | null>(null);
   const views = useMemo(() => openable({ productId }), [productId]);
   const single = singlePane(narrow, room);
   const visible = visiblePanes(layout, views);
@@ -106,6 +110,13 @@ export function usePanes(productId: string | null): PanesState {
       if (!views.includes(view)) return;
       if (single) setSingleView(view); else keep(openView(shown, views, view));
     },
+    terminalFocus,
+    openTerminal: jobId => {
+      if (!views.includes('terminal')) return;
+      setTerminalFocus(jobId);
+      if (single) setSingleView('terminal');
+      else if (!shown.some(p => p.view === 'terminal')) keep(shown.length ? selectView(shown, shown.length - 1, 'terminal') : openView(shown, views, 'terminal'));
+    },
   };
 }
 
@@ -139,7 +150,7 @@ export type PanePending = Omit<PendingListProps, 'projectId' | 'onOpenPlan'> & {
 
 export type PaneQuestions = Omit<QuestionsListProps, 'projectId'> & { count: number };
 
-export function Panes({ panes, productId, scope, revision, taskRevision, isGit, inert, pending, questions, waits }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; waits?: Record<string, WaitReason> | undefined }) {
+export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, waits }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; waits?: Record<string, WaitReason> | undefined }) {
   const t = useT();
   const body = (view: PaneView, index: number): ReactNode => {
     switch (view) {
@@ -151,6 +162,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, isGit, 
         const { count: _count, ...list } = questions;
         return <QuestionsList key={productId} projectId={productId} {...list} />;
       }
+      case 'terminal': return <TerminalPane key={productId} productId={productId} revision={backgroundRevision} focus={panes.terminalFocus} />;
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
     }
   };

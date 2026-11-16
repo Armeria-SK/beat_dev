@@ -13,6 +13,7 @@ export type ToolMeta =
   | { kind: 'exit'; code: string; seconds: string }
   | { kind: 'failed' }
   | { kind: 'returned' }
+  | { kind: 'background'; id: string | null }
   | null;
 
 export interface ToolRowView {
@@ -250,6 +251,15 @@ function runMeta(result: ToolResult, command: unknown): ToolMeta {
   return { kind: 'exit', code, seconds: match[2]! };
 }
 
+const BACKGROUND_STARTED = /^Started in the background as (bg-\d+) /mu;
+
+// 裏で始めた shell_run（beat 6-4）。番号は結果の文から読む（2 秒以内に終わったふつうの結果は、終了コードの行のまま）
+function backgroundMeta(result: ToolResult, args: Args | null): ToolMeta {
+  if (args?.['background'] !== true || result.isError) return null;
+  const id = BACKGROUND_STARTED.exec(result.text)?.[1] ?? null;
+  return id || !/exit code: /u.test(result.text) ? { kind: 'background', id } : null;
+}
+
 export function elapsedClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const s = String(total % 60).padStart(2, '0');
@@ -264,7 +274,7 @@ export function toolRow(name: string, input: string, result: ToolResult | null):
   const target = pick(name, input);
   const view = { verb, name, icon: VERB_ICON[verb], target };
   if (!result) return { ...view, meta: null };
-  if (verb === 'run') return { ...view, meta: runMeta(result, args?.['command']) };
+  if (verb === 'run') return { ...view, meta: backgroundMeta(result, args) ?? runMeta(result, args?.['command']) };
   if (result.isError) return { ...view, meta: { kind: 'failed' } };
   if (verb === 'edit') return { ...view, meta: editMeta(name, args, result) };
   if (verb === 'helper') return { ...view, meta: { kind: 'returned' } };

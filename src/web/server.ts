@@ -24,6 +24,7 @@ import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
 import { registerKeyRoutes } from './routes-keys.ts';
 import { registerMcpRoutes } from './routes-mcp.ts';
 import { registerBrowserRoutes } from './routes-browser.ts';
+import { registerBackgroundRoutes } from './routes-background.ts';
 import { registerNotifyRoutes } from './routes-notify.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { projectFilterOf, projectProblem, registerProjectRoutes, usableProjectId } from './routes-projects.ts';
@@ -427,6 +428,7 @@ export function createWebServer(app: App): WebServer {
   // ── タスク・ワーカー・通知・プロフィール ──
   registerTaskRoutes(router, app);
   registerPendingRoutes(router, app);
+  registerBackgroundRoutes(router, app);
   registerQuestionRoutes(router, app);
   registerGrowthRoutes(router, app);
   // ── スキル・レビュー・好奇心・振り返り ──
