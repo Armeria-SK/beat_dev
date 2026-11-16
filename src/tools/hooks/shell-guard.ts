@@ -210,11 +210,10 @@ function cmdParts(text: string): string[] {
     const ch = text[i]!;
     if (ch === '&' || ch === '|' || ch === '\r' || ch === '\n') { if (text[i + 1] === ch) i++; flush(); continue; }
     if (ch === '(') {
-      let words = part.trim().toLowerCase().split(/\s+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
+      const words = part.trim().toLowerCase().split(/\s+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
       const last = words.at(-1) ?? '';
       while (words.length && CMD_LEADS.has(words[0]!)) words.shift();
-      words = cmdCondition(words);
-      if (words.length === 0 || ['do', 'else', 'in'].includes(last)) { flush(); open++; continue; }
+      if (words.length === 0 || words[0] === 'if' || ['do', 'else', 'in'].includes(last)) { flush(); open++; continue; }
     }
     if (ch === ')' && open > 0) { open--; flush(); continue; }
     part += ch;
@@ -223,10 +222,24 @@ function cmdParts(text: string): string[] {
   return parts;
 }
 
+// cmd reads ( and ) inside "…" as plain text, so they are blanked before the parts are cut (^ outside quotes escapes the next character)
+function blankQuotedParens(text: string): string {
+  let out = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '\r' || ch === '\n') quoted = false;
+    else if (ch === '^' && !quoted && i + 1 < text.length) { out += ch + text[++i]; continue; }
+    else if (ch === '"') quoted = !quoted;
+    out += quoted && (ch === '(' || ch === ')') ? ' ' : ch;
+  }
+  return out;
+}
+
 function cmdHard(args: readonly string[], depth: number): HardHit | undefined {
   const rest = cmdRemainder(args);
   if (!rest) return undefined;
-  const text = rest.join(' ').replace(/\^(.)/gsu, '$1').replace(/"/gu, ' ')
+  const text = blankQuotedParens(rest.join(' ')).replace(/\^(.)/gsu, '$1').replace(/"/gu, ' ')
     .replace(/\d?>>?\s*(?:&\d|[^\s&|()<>]+)?|<\s*[^\s&|()<>]+/gu, ' ');
   for (const part of cmdParts(text)) {
     let tokens = part.split(/[\s,;]+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
