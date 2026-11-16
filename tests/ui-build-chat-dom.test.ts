@@ -4,12 +4,14 @@ import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import type { Acceptance, ChatBuild, ChecklistItem, Task } from '../web/src/api.ts';
 import type { LiveDraft } from '../web/src/ui/live-state.ts';
+import { buildToolItem } from '../web/src/ui/thread.ts';
 
 // Build を押した会話に Build の様子（待ち・動いている・持ち主を待つ・終わり・失敗）が出る。Plan の欄の札は Queued / Running / Waiting for you を分ける。
 
 interface ConversationProps {
   id: string | null; listTitle: string | null; draft: LiveDraft | undefined; notices: never[]; liveChecklist: ChecklistItem[] | undefined; revision: number;
   disconnected: boolean; onReconnect: () => void; onClearNotices: () => void; onInterrupt: () => void;
+  buildLive?: unknown; waits?: Record<string, { kind: string }>; panes?: unknown;
 }
 interface PlanProps { productId: string; conversationId?: string; revision: string; taskRevision?: string; isGit: boolean }
 interface PanesProps { panes: unknown; productId: string; scope: string; revision: string; taskRevision: string; isGit: boolean; inert: boolean; pending: never; questions: never }
@@ -46,7 +48,7 @@ afterEach(async () => {
 });
 
 const build = (status: ChatBuild['status'], extra: Partial<ChatBuild> = {}): ChatBuild => ({
-  id: 'b1', status, waiting_kind: null, check_state: null, project_id: PRODUCT, created_at: 30, updated_at: 30, checklist: { items: [], tainted: false }, ...extra,
+  id: 'b1', status, waiting_kind: null, check_state: null, project_id: PRODUCT, created_at: 30, updated_at: 30, checklist: { items: [], tainted: false }, conversation_id: null, summary: null, summary_tainted: false, ...extra,
 });
 
 const STEPS = [{ text: 'Read the plan', status: 'done' as const }, { text: 'Write the parser', status: 'in_progress' as const }, { text: 'Run the tests', status: 'pending' as const }];
@@ -233,4 +235,167 @@ test('ui/Panes（DOM）: Plan の欄は今の会話の id を Build に渡す。
   assert.equal(document.body.querySelector('.ui-plan__doc'), null, '別の会話の計画を出さない');
   assert.deepEqual(sent, []);
   await cleanup();
+});
+
+const TASK_CONV = 'bbbbbbbb-0000-4000-8000-000000000002';
+const liveDraft = (extra: Partial<LiveDraft> = {}): LiveDraft => ({ runId: 'tr', conversationId: TASK_CONV, modelId: 'm', text: '', ...extra });
+const buildLive = (drafts: LiveDraft[], counts: { questions?: number; pending?: number } = {}) => ({
+  toolOf: (b: ChatBuild) => buildToolItem(drafts, b), questions: () => counts.questions ?? 0, pending: () => counts.pending ?? 0,
+});
+const running = (extra: Partial<ChatBuild> = {}) => build('running', { conversation_id: TASK_CONV, checklist: { items: STEPS, tainted: false }, ...extra });
+const toolsAfter = (container: HTMLElement) => { const next = row(container)?.nextElementSibling; return next?.matches('.bt-tools') ? next : null; };
+
+test('ui/Conversation（DOM・build-in-chat）: 動いている Build のタスクの会話に今の道具があれば、Build の Notice のすぐ下に running の ToolRow が 1 本（動詞と対象）、その下に Open the session（タスクの会話へ）', async () => {
+  const drafts = [liveDraft({ activeTool: 'shell_run', activeInput: '{"command":"npm test"}', toolCallId: 'c1', toolStartedAt: Date.now() })];
+  const { container } = await renderChat([running()], { buildLive: buildLive(drafts) });
+  const tools = toolsAfter(container)!;
+  assert.ok(tools, 'the tool row sits right under the Build notice');
+  assert.equal(tools.querySelectorAll('.bt-tool').length, 1);
+  assert.ok(tools.querySelector('.bt-tool--running'));
+  assert.equal(tools.querySelector('.bt-tool__verb')?.textContent, 'Run');
+  assert.match(tools.querySelector('.bt-tool__target')?.textContent ?? '', /npm test/u);
+  assert.match(tools.querySelector('.bt-tool__meta')?.textContent ?? '', /^running/u);
+  const link = tools.nextElementSibling!.querySelector('a')!;
+  assert.equal(link.textContent, 'Open the session');
+  assert.equal(link.getAttribute('href'), `#/c/${TASK_CONV}`);
+  assert.equal(container.querySelectorAll('.bt-tool--running').length, 1);
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 道具が終わって次がまだなら直前の道具を running でない形で 1 本。下書きが無ければ道具の行は出ない（Notice はある）', async () => {
+  const settled = [liveDraft({ settled: [{ callId: 'c0', name: 'file_read', input: '{"path":"a.ts"}' }, { callId: 'c1', name: 'shell_run', input: '{"command":"npm test"}' }], settledCount: 2 })];
+  const a = (await renderChat([running()], { buildLive: buildLive(settled) })).container;
+  const tools = toolsAfter(a)!;
+  assert.equal(tools.querySelectorAll('.bt-tool').length, 1);
+  assert.equal(tools.querySelector('.bt-tool--running'), null);
+  assert.match(tools.querySelector('.bt-tool__target')?.textContent ?? '', /npm test/u, 'the last settled tool');
+  await cleanup();
+  const b = (await renderChat([running()], { buildLive: buildLive([]) })).container;
+  assert.match(row(b)!.textContent!, /^Build running/u);
+  assert.equal(toolsAfter(b), null);
+  assert.equal(b.querySelector('.ui-build__session'), null);
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 会話自身が running の道具の行を出している間は Build の行を running でない形に（running の ToolRow は 1 本）。会話が文を流している・道具を使っていないときは running のまま', async () => {
+  const drafts = [liveDraft({ activeTool: 'shell_run', activeInput: '{"command":"npm test"}', toolCallId: 'c1', toolStartedAt: Date.now() })];
+  const own = liveDraft({ runId: 'own', conversationId: CHAT, activeTool: 'file_read', activeInput: '{"path":"notes.md"}', toolCallId: 'o1', toolStartedAt: Date.now() });
+  const a = (await renderChat([running()], { buildLive: buildLive([...drafts, own]), draft: own })).container;
+  assert.equal(a.querySelectorAll('.bt-tool--running').length, 1, 'only one running row on screen');
+  assert.equal(toolsAfter(a)!.querySelector('.bt-tool--running'), null, 'the Build row is the quiet one');
+  assert.match(toolsAfter(a)!.querySelector('.bt-tool__target')?.textContent ?? '', /npm test/u);
+  await cleanup();
+  const streaming = liveDraft({ runId: 'own', conversationId: CHAT, text: 'Thinking about it', activeTool: 'file_read', toolCallId: 'o1' });
+  const b = (await renderChat([running()], { buildLive: buildLive(drafts), draft: streaming })).container;
+  assert.ok(toolsAfter(b)!.querySelector('.bt-tool--running'), 'still running while the conversation streams text');
+  await cleanup();
+  const idle = liveDraft({ runId: 'own', conversationId: CHAT });
+  const c = (await renderChat([running()], { buildLive: buildLive(drafts), draft: idle })).container;
+  assert.ok(toolsAfter(c)!.querySelector('.bt-tool--running'), 'still running while the conversation uses no tool');
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 判定役に聞いている間（autoChecking）は meta が checking', async () => {
+  const drafts = [liveDraft({ activeTool: 'shell_run', activeInput: '{"command":"git push"}', toolCallId: 'c1', autoChecking: true })];
+  const { container } = await renderChat([running()], { buildLive: buildLive(drafts) });
+  assert.equal(toolsAfter(container)!.querySelector('.bt-tool__meta')?.textContent, 'judge checking');
+});
+
+test('ui/Conversation（DOM・build-in-chat）: Pending に積んだ直前の道具のリンクは #/pending（会話自身の Pending の開き方は使わない）', async () => {
+  const drafts = [liveDraft({ settled: [{ callId: 'c1', name: 'shell_run', input: '{"command":"git push"}', gate: { by: 'pending', id: 12 } }], settledCount: 1 })];
+  let opened = 0;
+  const panes = { open: false, onToggle: () => {}, onOpenPending: () => { opened += 1; } };
+  const { container } = await renderChat([running()], { buildLive: buildLive(drafts), panes });
+  const link = toolsAfter(container)!.querySelector('a.ui-tool__open')!;
+  assert.equal(link.getAttribute('href'), '#/pending');
+  await click(link as HTMLElement);
+  assert.equal(opened, 0);
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 開いている質問・待っている Pending の数を Notice の 1 行に。質問があれば Open Questions、Pending だけなら Open Pending。approval / question の段は今の行き先。0 なら出さず、数が 0 になれば消える。並び待ちの理由と 1 行につながる', async () => {
+  const both = (await renderChat([running()], { buildLive: buildLive([], { questions: 1, pending: 1 }) })).container;
+  assert.match(row(both)!.textContent!, /^Build running · 1 question recorded · 1 action held in Pending/u);
+  assert.deepEqual(actions(row(both)), ['Open Questions', 'Open task']);
+  await click(byText(row(both)!, 'button', 'Open Questions'));
+  assert.equal(window.location.hash, `#/questions/${PRODUCT}`);
+  await cleanup();
+  const held = (await renderChat([running()], { buildLive: buildLive([], { pending: 2 }) })).container;
+  assert.match(row(held)!.textContent!, /^Build running · 2 actions held in Pending/u);
+  assert.deepEqual(actions(row(held)), ['Open Pending', 'Open task']);
+  await cleanup();
+  const approval = (await renderChat([build('waiting', { waiting_kind: 'approval' })], { buildLive: buildLive([], { questions: 2 }) })).container;
+  assert.match(row(approval)!.textContent!, /^Build waiting for your approval · 2 questions recorded/u);
+  assert.deepEqual(actions(row(approval)), ['Open Pending', 'Open task']);
+  await cleanup();
+  const question = (await renderChat([build('waiting', { waiting_kind: 'question' })], { buildLive: buildLive([], { pending: 1 }) })).container;
+  assert.deepEqual(actions(row(question)), ['Open Questions', 'Open task']);
+  await cleanup();
+  let counts = { questions: 1 };
+  const answered = await renderChat([running()], { buildLive: buildLive([], counts) });
+  assert.match(row(answered.container)!.textContent!, /1 question recorded/u);
+  counts = { questions: 0 };
+  await cleanup();
+  const none = (await renderChat([running()], { buildLive: buildLive([], counts) })).container;
+  assert.doesNotMatch(row(none)!.textContent!, /recorded|held/u);
+  assert.deepEqual(actions(row(none)), ['Open task']);
+  await cleanup();
+  const queued = (await renderChat([build('ready')], { buildLive: buildLive([], { questions: 1 }), waits: { b1: { kind: 'paused' } } })).container;
+  assert.match(row(queued)!.textContent!, /^Build queued · paused · 1 question recorded/u);
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 終わった（確かめ待ちも）・失敗した Build のまとめは Notice の下、Checklist の上に返事の形で（Markdown。生の HTML は描かない）。外を読んだ印。取り消し・動いている間は出ない', async () => {
+  const summary = '# Result\n\n- parser added\n- tests pass\n\n<b>raw</b>';
+  const done = (await renderChat([build('done', { summary, summary_tainted: true, checklist: { items: STEPS, tainted: false } })], { buildLive: buildLive([]) })).container;
+  const box = row(done)!.nextElementSibling!;
+  assert.ok(box.matches('.bt-msg.ui-build__summary'), 'right under the notice');
+  assert.equal(box.querySelector('h1')?.textContent, 'Result');
+  assert.equal(box.querySelectorAll('li').length, 2);
+  assert.equal(box.querySelector('b'), null, 'raw HTML is not rendered');
+  assert.equal(box.querySelector('.bt-meta')?.textContent, 'Written after reading text from elsewhere');
+  assert.ok(box.nextElementSibling?.matches('.bt-checklist'), 'the checklist follows the summary');
+  await cleanup();
+  const check = (await renderChat([build('done', { check_state: 'awaiting', summary: 'All good.' })])).container;
+  assert.equal(row(check)!.nextElementSibling?.textContent, 'All good.', 'no taint mark when the summary is clean');
+  await cleanup();
+  const failed = (await renderChat([build('failed', { summary: 'Tests kept failing.' })])).container;
+  assert.match(row(failed)!.nextElementSibling?.textContent ?? '', /Tests kept failing/u);
+  assert.match(row(failed)!.textContent!, /It stopped before finishing/u, 'the failure notice text stays');
+  await cleanup();
+  const stopped = (await renderChat([build('cancelled', { summary: 'Should not show.' })])).container;
+  assert.equal(stopped.querySelector('.ui-build__summary'), null);
+  await cleanup();
+  const live = (await renderChat([build('running', { summary: 'Should not show.' })])).container;
+  assert.equal(live.querySelector('.ui-build__summary'), null);
+});
+
+test('ui/Conversation（DOM・build-in-chat・回帰の守り）: 読み直し（同じ読み出しの結果で描き直す）でも、まとめ・数・Checklist が同じに出る', async () => {
+  const builds = [build('done', { summary: 'Done. 1 file changed.', checklist: { items: STEPS, tainted: false } })];
+  const live = buildLive([], { questions: 1 });
+  const { container, next } = await renderChat(builds, { buildLive: live });
+  const before = row(container)!.parentElement!.innerHTML;
+  await next(builds, 1);
+  assert.equal(row(container)!.parentElement!.innerHTML, before);
+  assert.match(row(container)!.textContent!, /1 question recorded/u);
+  assert.equal(container.querySelector('.ui-build__summary')?.textContent, 'Done. 1 file changed.');
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 失敗した Build も、開いている質問の数を失敗の文につなぎ、Open Questions と Open task を出す（Pending だけなら Open Pending）', async () => {
+  const failed = (await renderChat([build('failed')], { buildLive: buildLive([], { questions: 1 }) })).container;
+  const fail = row(failed)!;
+  assert.ok(fail.classList.contains('bt-notice--fail'));
+  assert.equal(fail.querySelector('p')?.textContent, 'It stopped before finishing. The task has the details. · 1 question recorded');
+  assert.deepEqual(actions(fail), ['Open Questions', 'Open task']);
+  await click(byText(fail, 'button', 'Open Questions'));
+  assert.equal(window.location.hash, `#/questions/${PRODUCT}`);
+  await cleanup();
+  const held = (await renderChat([build('failed')], { buildLive: buildLive([], { pending: 1 }) })).container;
+  assert.deepEqual(actions(row(held)), ['Open Pending', 'Open task']);
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 道具の行は動いている Build だけ。待っている・終わった Build は、タスクの会話に今の道具があっても出さない', async () => {
+  const drafts = [liveDraft({ activeTool: 'shell_run', activeInput: '{"command":"npm test"}', toolCallId: 'c1', toolStartedAt: Date.now() })];
+  for (const b of [build('waiting', { waiting_kind: 'approval', conversation_id: TASK_CONV }), build('done', { conversation_id: TASK_CONV }), build('ready', { conversation_id: TASK_CONV })]) {
+    const { container } = await renderChat([b], { buildLive: buildLive(drafts) });
+    assert.ok(row(container), b.status);
+    assert.equal(container.querySelector('.bt-tools .bt-tool'), null, b.status);
+    assert.equal(container.querySelector('.ui-build__session'), null, b.status);
+    await cleanup();
+  }
 });

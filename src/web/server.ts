@@ -9,7 +9,7 @@ import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
-import { redactJsonValue } from '../shared/redaction.ts';
+import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
 import { judgeStats } from '../tools/judge-stats.ts';
@@ -250,7 +250,9 @@ export function createWebServer(app: App): WebServer {
       pending: app.engine.pending(id),
       builds: app.tasks.buildsFrom(id).map(task => {
         const list = task.conversation_id ? readChecklist(app.kv, task.conversation_id) : undefined;
-        return { id: task.id, status: task.status, waiting_kind: task.waiting_kind, check_state: task.check_state, project_id: task.project_id, created_at: task.created_at, updated_at: task.updated_at, checklist: { items: list?.items ?? [], tainted: list?.tainted ?? false } };
+        const summary = task.status === 'done' || task.status === 'failed' ? redactSecrets(task.result_summary ?? '', app.registry.secrets()) || null : null;
+        const summaryTainted = summary !== null && (app.tasks.textTainted(task.id) || (task.conversation_id !== null && app.runs.anyTaintedTask(task.conversation_id)));
+        return { id: task.id, status: task.status, waiting_kind: task.waiting_kind, check_state: task.check_state, project_id: task.project_id, created_at: task.created_at, updated_at: task.updated_at, checklist: { items: list?.items ?? [], tainted: list?.tainted ?? false }, conversation_id: task.conversation_id, summary, summary_tainted: summaryTainted };
       }),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
     });

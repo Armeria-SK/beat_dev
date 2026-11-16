@@ -12,9 +12,19 @@ export interface ActiveDraft {
   modelId: string;
   text: string;
   startedAt: number;
+  activeTool?: string | undefined;
+  activeInput?: string | undefined;
+  toolCallId?: string | undefined;
+  toolStartedAt?: number | undefined;
+  autoChecking?: boolean | undefined;
+  agent?: { conversationId: string; toolCalls: number } | undefined;
 }
 
 const RING_SIZE = 5000;
+
+function clearTool(draft: ActiveDraft): void {
+  delete draft.activeTool; delete draft.activeInput; delete draft.toolCallId; delete draft.toolStartedAt; delete draft.autoChecking; delete draft.agent;
+}
 
 export class RunBus {
   readonly bootId = randomUUID();
@@ -54,7 +64,7 @@ export class RunBus {
       this.#drafts.set(event.runId, { runId: event.runId, conversationId: event.conversationId, modelId: event.modelId, text: '', startedAt: Date.now() });
     } else if (event.type === 'model.switch') {
       const draft = this.#drafts.get(event.runId);
-      if (draft) { draft.modelId = event.to; draft.text = ''; }
+      if (draft) { draft.modelId = event.to; draft.text = ''; clearTool(draft); }
     } else if (event.type === 'text.delta') {
       const draft = this.#drafts.get(event.runId);
       if (draft) draft.text += event.text;
@@ -62,6 +72,18 @@ export class RunBus {
       // ツールを使う返事は何回かに分かれる。保存した分は履歴に出るので、書きかけは空に戻す
       const draft = this.#drafts.get(event.runId);
       if (draft) draft.text = '';
+    } else if (event.type === 'tool.call') {
+      const draft = this.#drafts.get(event.runId);
+      if (draft) Object.assign(draft, { activeTool: event.name, activeInput: event.input, toolCallId: event.callId, toolStartedAt: Date.now() });
+    } else if (event.type === 'tool.result') {
+      const draft = this.#drafts.get(event.runId);
+      if (draft?.toolCallId === event.callId) clearTool(draft);
+    } else if (event.type === 'tool.auto') {
+      const draft = this.#drafts.get(event.runId);
+      if (draft) { if (event.state === 'checking') draft.autoChecking = true; else delete draft.autoChecking; }
+    } else if (event.type === 'agent.state') {
+      const draft = this.#drafts.get(event.runId);
+      if (draft) { if (event.state === 'running') draft.agent = { conversationId: event.childConversationId, toolCalls: event.toolCalls }; else delete draft.agent; }
     } else if (event.type === 'run.end') {
       this.#drafts.delete(event.runId);
     }

@@ -5,7 +5,7 @@ import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
 import { agentState, countChecks, countTasks, footLine, kanbanCount, type Waiting } from './agent-state.ts';
 import { composerDrafts } from './composer-state.ts';
-import { Conversation } from './Conversation.tsx';
+import { Conversation, type BuildLive } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
@@ -19,6 +19,7 @@ import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending }
 import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
 import { awaitingProduct, productsMissing, projectLoads, settleLeave } from './product-nav.ts';
+import { buildToolItem } from './thread.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settingsDepth, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
 import { Kanban } from './screens/Kanban.tsx';
@@ -283,6 +284,7 @@ export function App() {
   const sessionPending = useMemo(() => sessionCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingByTask = useMemo(() => taskCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
+  const buildLive = useMemo((): BuildLive => ({ toolOf: b => buildToolItem(drafts, b), questions: id => questionsByTask.get(id) ?? 0, pending: id => pendingByTask.get(id) ?? 0 }), [drafts, questionsByTask, pendingByTask]);
   const waiting: Waiting = useMemo(
     () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask), checks: countChecks(live.tasks.values(), new Set(live.projectsLoaded ? live.projects.map(p => p.id) : [])) }),
     [skillDrafts, live.tasks, live.projects, live.projectsLoaded, pendingAll, questionsAll, questionsByTask],
@@ -405,7 +407,7 @@ export function App() {
               liveChecklist={chatId ? checklists.get(chatId) : undefined}
               revision={(chatId ? live.revisions.get(chatId) ?? 0 : 0) + live.epoch}
               disconnected={disconnected} onReconnect={reconnect}
-              onClearNotices={clearNotices} onInterrupt={interrupt} panes={paneToggle} waits={worker?.waiting}
+              onClearNotices={clearNotices} onInterrupt={interrupt} panes={paneToggle} waits={worker?.waiting} buildLive={buildLive}
             />
           </main>
         ) : (
