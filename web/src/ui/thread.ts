@@ -66,6 +66,21 @@ export function noticeRows(notices: readonly RunNotice[]): Array<{ weight: Notic
   return rows;
 }
 
+export function liveToolItem(draft: LiveDraft, key: string): ToolItem {
+  return {
+    key, name: draft.activeTool ?? '', input: draft.activeInput ?? '', result: null,
+    running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
+  };
+}
+
+export function buildToolItem(drafts: readonly LiveDraft[], build: ChatBuild): ToolItem | undefined {
+  const draft = build.conversation_id ? drafts.find(d => d.conversationId === build.conversation_id) : undefined;
+  if (!draft) return undefined;
+  if (draft.activeTool) return liveToolItem(draft, `build-${build.id}-${draft.toolCallId ?? draft.runId}`);
+  const last = draft.settled?.at(-1);
+  return last ? { key: `build-${build.id}-${last.callId}`, name: last.name, input: last.input, result: null, ...(last.gate ? { gate: last.gate } : {}) } : undefined;
+}
+
 const hiddenReply = (m: Message): boolean => m.role === 'assistant' && !m.text.trim() && Boolean(m.toolCalls?.length);
 
 export function threadItems({ messages, draft, notices = [], builds = [] }: ThreadInput): ThreadItem[] {
@@ -132,10 +147,7 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
   });
   if (draft && !draft.text && draft.activeTool) {
     const rowKey = draft.toolCallId ? rowKeyOf(draft.toolCallId) : `run-${draft.runId}-${draft.activeTool}`;
-    tools(rowKey).push({
-      key: rowKey, name: draft.activeTool, input: draft.activeInput ?? '', result: null,
-      running: { startedAt: draft.toolStartedAt ?? null, checking: draft.autoChecking === true, helperTools: draft.agent?.toolCalls ?? null, helperConversation: draft.agent?.conversationId ?? null },
-    });
+    tools(rowKey).push(liveToolItem(draft, rowKey));
   }
   placeBuilds(Number.POSITIVE_INFINITY);
   if (draft?.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });

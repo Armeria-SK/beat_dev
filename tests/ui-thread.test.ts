@@ -5,7 +5,8 @@ import type { ChatBuild, ChecklistItem, Message } from '../web/src/api.ts';
 import { imageHost } from '../web/src/markdown-image.ts';
 import type { RunNotice } from '../web/src/ui/live-state.ts';
 import { setTimezone } from '../web/src/i18n/index.ts';
-import { buildStage, checklistShape, contextMeter, isRising, messageStamp, noticeRows, replyMeta, thinkingSeconds, threadGutter, threadItems } from '../web/src/ui/thread.ts';
+import { buildStage, buildToolItem, checklistShape, contextMeter, isRising, liveToolItem, messageStamp, noticeRows, replyMeta, thinkingSeconds, threadGutter, threadItems } from '../web/src/ui/thread.ts';
+import { EMPTY, reduce } from '../web/src/ui/live-state.ts';
 
 // 新しい画面の会話（p1-ui.md の「会話」）: 発言・返事・道具の行のまとまり・流れている返事・承認の行・お知らせの並びを作る純粋な関数。
 
@@ -371,4 +372,40 @@ test('ui/thread: 会話の返事が道具を続けて呼んでいる途中に押
     draft: { runId: 'r7', conversationId: 'c', modelId: 'm', text: '', activeTool: 'file_read', activeInput: '{}', toolCallId: 'd' },
   });
   assert.deepEqual(live.map(i => (i.kind === 'tools' ? `tools:${i.rows.length}` : i.kind)), ['owner', 'tools:2', 'build'], '動いている道具の行も同じまとまりに入る');
+});
+
+const liveBuild = (extra: Partial<ChatBuild> = {}): ChatBuild => ({
+  id: 'b1', status: 'running', waiting_kind: null, check_state: null, project_id: 'p1', created_at: 1, updated_at: 1, checklist: { items: [], tainted: false }, conversation_id: 'task-conv', summary: null, summary_tainted: false, ...extra,
+});
+
+test('ui/thread（build-in-chat）: liveToolItem は下書きの今の道具から running の行を作る（始めた時刻・checking・子の担当の道具の数とリンクの会話）', () => {
+  const item = liveToolItem({ runId: 'r', conversationId: 'c', modelId: 'm', text: '', activeTool: 'agent_run', activeInput: '{"task":"x"}', toolStartedAt: 7, autoChecking: true, agent: { conversationId: 'child', toolCalls: 3 } }, 'k1');
+  assert.deepEqual(item, { key: 'k1', name: 'agent_run', input: '{"task":"x"}', result: null, running: { startedAt: 7, checking: true, helperTools: 3, helperConversation: 'child' } });
+});
+
+test('ui/thread（build-in-chat）: 配線。run.start（タスクの会話）→ tool.call の状態の drafts から、buildToolItem がその Build の running の行を返す。chat の id の下書きでは引かない', () => {
+  let s = reduce(EMPTY, { type: 'event', event: { type: 'run.start', runId: 'chat-run', conversationId: 'chat', modelId: 'm' }, hidden: false, now: 1 }).state;
+  s = reduce(s, { type: 'event', event: { type: 'tool.call', runId: 'chat-run', conversationId: 'chat', callId: 'cc', name: 'file_read', input: '{"path":"chat.md"}' }, hidden: false, now: 2 }).state;
+  s = reduce(s, { type: 'event', event: { type: 'run.start', runId: 'task-run', conversationId: 'task-conv', modelId: 'm' }, hidden: false, now: 3 }).state;
+  s = reduce(s, { type: 'event', event: { type: 'tool.call', runId: 'task-run', conversationId: 'task-conv', callId: 'tc', name: 'shell_run', input: '{"command":"npm test"}' }, hidden: false, now: 4 }).state;
+  const item = buildToolItem(s.drafts, liveBuild({ created_at: 1 }))!;
+  assert.equal(item.name, 'shell_run');
+  assert.equal(item.input, '{"command":"npm test"}');
+  assert.deepEqual(item.running, { startedAt: 4, checking: false, helperTools: null, helperConversation: null });
+  assert.equal(buildToolItem(s.drafts, liveBuild({ conversation_id: null })), undefined, 'no task conversation yet');
+  assert.equal(buildToolItem(s.drafts, liveBuild({ conversation_id: 'chat' }))?.name, 'file_read', 'it looks up by the task conversation id it is given');
+});
+
+test('ui/thread（build-in-chat）: 道具が終わって次がまだなら直前の道具を running でない形で（gate も運ぶ）。下書きが無ければ undefined', () => {
+  let s = reduce(EMPTY, { type: 'event', event: { type: 'run.start', runId: 'task-run', conversationId: 'task-conv', modelId: 'm' }, hidden: false, now: 1 }).state;
+  s = reduce(s, { type: 'event', event: { type: 'tool.call', runId: 'task-run', conversationId: 'task-conv', callId: 'tc', name: 'shell_run', input: '{"command":"git push"}' }, hidden: false, now: 2 }).state;
+  s = reduce(s, { type: 'event', event: { type: 'tool.result', runId: 'task-run', conversationId: 'task-conv', callId: 'tc', name: 'shell_run', ok: true, decision: 'ask', preview: '', gate: { by: 'pending', id: 12 } }, hidden: false, now: 3 }).state;
+  const item = buildToolItem(s.drafts, liveBuild())!;
+  assert.equal(item.name, 'shell_run');
+  assert.equal(item.running, undefined);
+  assert.equal(item.result, null);
+  assert.deepEqual(item.gate, { by: 'pending', id: 12 });
+  assert.equal(buildToolItem([], liveBuild()), undefined);
+  const fresh = reduce(EMPTY, { type: 'event', event: { type: 'run.start', runId: 'task-run', conversationId: 'task-conv', modelId: 'm' }, hidden: false, now: 1 }).state;
+  assert.equal(buildToolItem(fresh.drafts, liveBuild()), undefined, 'no tool used yet');
 });

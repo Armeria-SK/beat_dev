@@ -1551,6 +1551,8 @@ export const en = {
   'ui.build.stopped': 'Build stopped',
   'ui.build.failed': 'Build failed',
   'ui.build.failedText': 'It stopped before finishing. The task has the details.',
+  'ui.build.questions': (n: number) => `${n} ${n === 1 ? 'question' : 'questions'} recorded`,
+  'ui.build.pending': (n: number) => `${n} ${n === 1 ? 'action' : 'actions'} held in Pending`,
   'ui.wait.off': 'Work on its own is off',
   'ui.wait.paused': 'paused',
   'ui.wait.chat': 'waiting for the chat reply to finish',

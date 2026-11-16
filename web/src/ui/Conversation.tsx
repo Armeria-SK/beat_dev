@@ -22,7 +22,7 @@ import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { routeHash } from './routes.ts';
-import { buildStage, contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem } from './thread.ts';
+import { buildStage, contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem, type ToolItem } from './thread.ts';
 import { ToolGroup, type PendingLink } from './ToolRow.tsx';
 
 type T = ReturnType<typeof useT>;
@@ -42,7 +42,10 @@ export interface ConversationProps {
   onInterrupt: (id: string, on: boolean) => void;
   panes?: PanesToggle | undefined;
   waits?: Record<string, WaitReason> | undefined;
+  buildLive?: BuildLive | undefined;
 }
+
+export interface BuildLive { toolOf: (build: ChatBuild) => ToolItem | undefined; questions: (taskId: string) => number; pending: (taskId: string) => number }
 
 interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[]; builds: ChatBuild[] }
 interface Choice { modelId: string | null; effort: string | null; permissionMode: PermissionMode }
@@ -109,17 +112,27 @@ const BUILD_TEXT = {
   check: 'ui.build.check', done: 'ui.build.done', stopped: 'ui.build.stopped', failed: 'ui.build.failed',
 } as const;
 
-function BuildRow({ build, openPending, alert, wait }: { build: ChatBuild; openPending: (() => void) | undefined; alert: boolean; wait: WaitReason | undefined }) {
+const NEVER_NEW = (): boolean => false;
+
+function BuildRow({ build, openPending, alert, wait, live, ownToolRunning }: { build: ChatBuild; openPending: (() => void) | undefined; alert: boolean; wait: WaitReason | undefined; live: BuildLive | undefined; ownToolRunning: boolean }) {
   const t = useT();
   const stage = buildStage(build);
+  const questions = live?.questions(build.id) ?? 0;
+  const held = live?.pending(build.id) ?? 0;
   const go = (hash: string) => () => { location.hash = hash; };
   const openTask = { label: t('ui.notifications.open.task'), run: go(routeHash({ view: 'task', id: build.id })) };
   const product = build.project_id ? { productId: build.project_id } : {};
   const place = stage === 'approval' ? { label: t('ui.notifications.open.pending'), run: openPending ?? go(routeHash({ view: 'pending', ...product })) }
-    : stage === 'question' ? { label: t('ui.notifications.open.questions'), run: go(routeHash({ view: 'questions', ...product })) } : null;
+    : stage === 'question' || questions > 0 ? { label: t('ui.notifications.open.questions'), run: go(routeHash({ view: 'questions', ...product })) }
+    : held > 0 ? { label: t('ui.notifications.open.pending'), run: openPending ?? go(routeHash({ view: 'pending', ...product })) } : null;
+  const note = [stage === 'queued' && wait ? waitText(wait) : null, questions > 0 ? t('ui.build.questions', questions) : null, held > 0 ? t('ui.build.pending', held) : null].filter(Boolean).join(' · ');
+  const tool = stage === 'running' ? live?.toolOf(build) : undefined;
+  const shown = tool && ownToolRunning ? { ...tool, running: undefined } : tool;
+  const toolRow = shown && build.conversation_id ? <><ToolGroup rows={[shown]} isNew={NEVER_NEW} /><div className="bt-msg bt-meta ui-build__session"><a className="bt-tool__link" href={routeHash({ view: 'chat', id: build.conversation_id })}>{t('ui.task.openSession')}</a></div></> : null;
+  const summary = (stage === 'done' || stage === 'check' || stage === 'failed') && build.summary ? <div className="bt-msg ui-reply ui-build__summary"><Markdown text={build.summary} />{build.summary_tainted && <p className="bt-meta">{t('ui.checklist.tainted')}</p>}</div> : null;
   const list = stage !== 'running' && build.checklist.items.length > 0 ? <Checklist items={build.checklist.items} tainted={build.checklist.tainted} live={false} /> : null;
-  if (stage === 'failed') return <><Notice tone="fail" alert={alert} title={t('ui.build.failed')} text={t('ui.build.failedText')} action={openTask} />{list}</>;
-  return <><Notice title={t(BUILD_TEXT[stage])} {...(stage === 'queued' && wait ? { text: waitText(wait) } : {})} {...(place ? { action: place, also: openTask } : { action: openTask })} />{list}</>;
+  if (stage === 'failed') return <><Notice tone="fail" alert={alert} title={t('ui.build.failed')} text={t('ui.build.failedText')} action={openTask} />{summary}{list}</>;
+  return <><Notice title={t(BUILD_TEXT[stage])} {...(note ? { text: note } : {})} {...(place ? { action: place, also: openTask } : { action: openTask })} />{toolRow}{summary}{list}</>;
 }
 
 interface FailAction { label: string; run: () => void }
@@ -299,7 +312,7 @@ function revealPending(id: number): void {
   requestAnimationFrame(look);
 }
 
-export function Conversation({ id, listTitle, aiName, product, draft, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes, waits }: ConversationProps) {
+export function Conversation({ id, listTitle, aiName, product, draft, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes, waits, buildLive }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
@@ -556,7 +569,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         return <Notice key={item.key} tone="warn" icon="alert" title={noticeText(t, n)} />;
       }
       case 'plan': return <PlanWritten key={item.key} onOpen={panes?.onOpenPlan ? () => panes.onOpenPlan?.(false) : undefined} rising={rise(item.key)} />;
-      case 'build': return <BuildRow key={item.key} build={item.build} openPending={openPending} alert={unfinished.current.has(item.build.id)} wait={waits?.[item.build.id]} />;
+      case 'build': return <BuildRow key={item.key} build={item.build} openPending={openPending} alert={unfinished.current.has(item.build.id)} wait={waits?.[item.build.id]} live={buildLive} ownToolRunning={Boolean(draft && !draft.text && draft.activeTool)} />;
     }
   }
 
