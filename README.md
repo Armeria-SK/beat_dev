@@ -164,6 +164,8 @@ npm start                   # http://127.0.0.1:4777/ を開く
 | `npm run typecheck` | 型チェック（サーバーと画面） |
 | `npm run check` | 型チェック＋テスト＋画面のビルド |
 
+Windows では、beat が落ちても（強制終了でも）、beat が始めた子のプロセス（コマンド・MCP サーバー・ブラウザ・開発サーバー）は孫まで OS が止めます（beat を起動の早いうちに Job Object に入れるため。入れられなかったときは起動のログに `[WARN] Could not put beat in a job object` が出て、そのまま動きます）。beat が終わると（Ctrl+C でも）、AI が開いたアプリも一緒に止まります。
+
 ### ほかの端末から使う
 
 beat は 127.0.0.1 でだけ待ち受けます。スマートフォンなどから使うときは Tailscale Serve を通します。
