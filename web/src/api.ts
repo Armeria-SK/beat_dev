@@ -194,6 +194,7 @@ export interface Task {
 export interface ChatBuild {
   id: string; status: TaskStatus; waiting_kind: 'question' | 'approval' | null; check_state: 'awaiting' | 'checked' | null; project_id: string | null;
   created_at: number; updated_at: number; checklist: { items: ChecklistItem[]; tainted: boolean };
+  conversation_id: string | null; summary: string | null; summary_tainted: boolean;
 }
 export interface TaskItems { owned: number; met: number; remaining: string[] }
 export interface DeviationRow { item: string | null; what: string; why: string; task: string | null; date: string | null; by: 'task' | 'owner'; external: boolean }

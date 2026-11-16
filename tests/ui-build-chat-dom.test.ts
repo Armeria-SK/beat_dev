@@ -46,7 +46,7 @@ afterEach(async () => {
 });
 
 const build = (status: ChatBuild['status'], extra: Partial<ChatBuild> = {}): ChatBuild => ({
-  id: 'b1', status, waiting_kind: null, check_state: null, project_id: PRODUCT, created_at: 30, updated_at: 30, checklist: { items: [], tainted: false }, ...extra,
+  id: 'b1', status, waiting_kind: null, check_state: null, project_id: PRODUCT, created_at: 30, updated_at: 30, checklist: { items: [], tainted: false }, conversation_id: null, summary: null, summary_tainted: false, ...extra,
 });
 
 const STEPS = [{ text: 'Read the plan', status: 'done' as const }, { text: 'Write the parser', status: 'in_progress' as const }, { text: 'Run the tests', status: 'pending' as const }];

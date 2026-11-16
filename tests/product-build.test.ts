@@ -775,3 +775,109 @@ test('3-2-s generated: 終了のときに保存だけした待ちの決まった
   release();
   await settled(s.app, first.body.runId);
 });
+
+const SECRET = 'plain-registered-value-42';
+const SHAPED = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+
+async function buildFixture(t: Parameters<typeof startApp>[0]) {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('hi')];
+  await s.send(uuid(1), { text: 'hello', projectId: shop.id });
+  s.app.registry.secrets = () => [SECRET];
+  const make = (title: string) => s.app.tasks.create({ title, origin: 'user', actor: 'user', projectId: shop.id, acceptanceItems: [], createdInConversation: uuid(1) });
+  const attach = (taskId: string, conversationId: string) => {
+    s.app.conversations.create({ id: conversationId, kind: 'task', projectId: shop.id });
+    s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(conversationId, taskId);
+  };
+  const setStatus = (taskId: string, status: string, summary: string | null) => s.app.db.prepare('UPDATE tasks SET status = ?, result_summary = ? WHERE id = ?').run(status, summary, taskId);
+  const builds = async () => (await s.json(`/api/conversations/${uuid(1)}/messages`, 'GET')).body.builds as { id: string; conversation_id: string | null; summary: string | null; summary_tainted: boolean }[];
+  const one = async (id: string) => (await builds()).find(b => b.id === id)!;
+  return { s, make, attach, setStatus, builds, one };
+}
+
+test('Build の会話（build-in-chat）: builds は始まる前は conversation_id が null、動き始めたらタスクの会話の id を返す', async t => {
+  const f = await buildFixture(t);
+  const task = f.make('Build: shop');
+  assert.equal((await f.one(task.id)).conversation_id, null);
+  f.attach(task.id, uuid(7));
+  f.setStatus(task.id, 'running', null);
+  assert.equal((await f.one(task.id)).conversation_id, uuid(7));
+});
+
+test('Build の会話（build-in-chat）: summary は done / failed のときだけ返り、ready・running・waiting・cancelled では null', async t => {
+  const f = await buildFixture(t);
+  const task = f.make('Build: shop');
+  f.attach(task.id, uuid(7));
+  for (const status of ['ready', 'running', 'waiting', 'cancelled']) {
+    f.setStatus(task.id, status, 'Did things.');
+    assert.equal((await f.one(task.id)).summary, null, status);
+  }
+  for (const status of ['done', 'failed']) {
+    f.setStatus(task.id, status, 'Did things.');
+    assert.equal((await f.one(task.id)).summary, 'Did things.', status);
+  }
+  f.setStatus(task.id, 'done', '');
+  assert.equal((await f.one(task.id)).summary, null, 'an empty summary is null');
+});
+
+test('Build の会話（build-in-chat）: まとめの秘密（登録した秘密の値・鍵の形の文字）は伏せて返る', async t => {
+  const f = await buildFixture(t);
+  const task = f.make('Build: shop');
+  f.attach(task.id, uuid(7));
+  f.setStatus(task.id, 'done', `Deployed with ${SECRET} and ${SHAPED}.`);
+  const summary = (await f.one(task.id)).summary!;
+  assert.ok(!summary.includes(SECRET), summary);
+  assert.ok(!summary.includes('abcdefghijklmnop'), summary);
+  assert.match(summary, /^Deployed with /u);
+});
+
+test('Build の会話（build-in-chat）: 失敗のまとめ（ワーカーがエンジンの errorMessage を入れる道〔tasks.finish(failed, errorMessage)〕）の登録した秘密も伏せて返る', async t => {
+  const f = await buildFixture(t);
+  const task = f.make('Build: shop');
+  f.attach(task.id, uuid(7));
+  f.s.app.tasks.finish(task.id, 'failed', `provider error: invalid key ${SECRET}`, 'worker');
+  const b = await f.one(task.id);
+  assert.ok(b.summary?.startsWith('provider error: invalid key'), String(b.summary));
+  assert.ok(!b.summary!.includes(SECRET));
+});
+
+test('Build の会話（build-in-chat）: summary_tainted はタスクの文が外を読んだ・タスクの会話の実行が外を読んだのどちらでも true。summary が null の Build では false で、外を読んだかを問い合わせない', async t => {
+  const f = await buildFixture(t);
+  const clean = f.make('Clean');
+  f.attach(clean.id, uuid(7));
+  f.setStatus(clean.id, 'done', 'ok');
+  const byText = f.make('By text');
+  f.attach(byText.id, uuid(8));
+  f.setStatus(byText.id, 'done', 'ok');
+  f.s.app.tasks.event(byText.id, 'note', 'beat', 'from outside', 'no-such-run');
+  const byRun = f.make('By run');
+  f.attach(byRun.id, uuid(9));
+  f.setStatus(byRun.id, 'failed', 'ok');
+  f.s.app.db.prepare("INSERT INTO engine_runs (id, kind, conversation_id, started_at, tainted) VALUES ('tr', 'task', ?, 1, 1)").run(uuid(9));
+  const running = f.make('Running');
+  f.attach(running.id, uuid(10));
+  f.setStatus(running.id, 'running', null);
+  f.s.app.db.prepare("INSERT INTO engine_runs (id, kind, conversation_id, started_at, tainted) VALUES ('tr2', 'task', ?, 1, 1)").run(uuid(10));
+  const asked: string[] = [];
+  const textTainted = f.s.app.tasks.textTainted.bind(f.s.app.tasks);
+  const anyTaintedTask = f.s.app.runs.anyTaintedTask.bind(f.s.app.runs);
+  f.s.app.tasks.textTainted = id => { asked.push(id); return textTainted(id); };
+  f.s.app.runs.anyTaintedTask = id => { asked.push(id); return anyTaintedTask(id); };
+  const all = await f.builds();
+  const tainted = Object.fromEntries(all.map(b => [b.id, b.summary_tainted]));
+  assert.deepEqual([tainted[clean.id], tainted[byText.id], tainted[byRun.id], tainted[running.id]], [false, true, true, false]);
+  assert.ok(!asked.includes(running.id) && !asked.includes(uuid(10)), 'no taint lookup for a Build without a summary');
+  assert.ok(asked.includes(clean.id));
+});
+
+test('Build の会話（build-in-chat・回帰の守り）: まとめは会話の messages に入らない', async t => {
+  const f = await buildFixture(t);
+  const before = (await f.s.json(`/api/conversations/${uuid(1)}/messages`, 'GET')).body.messages.length;
+  const task = f.make('Build: shop');
+  f.attach(task.id, uuid(7));
+  f.setStatus(task.id, 'done', 'Summary text that must stay out of messages.');
+  const read = (await f.s.json(`/api/conversations/${uuid(1)}/messages`, 'GET')).body;
+  assert.equal(read.messages.length, before);
+  assert.ok(!JSON.stringify(read.messages).includes('must stay out'));
+});

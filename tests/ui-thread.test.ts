@@ -330,7 +330,7 @@ test('ui/parts: 静かな知らせ・warn の知らせも、渡された text �
 });
 
 const chatBuild = (id: string, status: ChatBuild['status'], at: number, extra: Partial<ChatBuild> = {}): ChatBuild => ({
-  id, status, waiting_kind: null, check_state: null, project_id: 'p1', created_at: at, updated_at: at, checklist: { items: [], tainted: false }, ...extra,
+  id, status, waiting_kind: null, check_state: null, project_id: 'p1', created_at: at, updated_at: at, checklist: { items: [], tainted: false }, conversation_id: null, summary: null, summary_tainted: false, ...extra,
 });
 
 test('ui/thread: Build のタスクは、押した時刻の位置（その時刻までの発言の後ろ、流れている返事より前）に build の行として入る', () => {

@@ -60,7 +60,7 @@ const REASONS: Array<[WaitReason, string]> = [
 ];
 
 test('ui/Conversation（DOM）: a queued Build says why it is not running ("Build queued · paused" and the other reasons); without a reason it stays "Build queued"', async () => {
-  const build: ChatBuild = { id: 'b1', status: 'ready', waiting_kind: null, check_state: null, project_id: PRODUCT, created_at: 30, updated_at: 30, checklist: { items: [], tainted: false } };
+  const build: ChatBuild = { id: 'b1', status: 'ready', waiting_kind: null, check_state: null, project_id: PRODUCT, created_at: 30, updated_at: 30, checklist: { items: [], tainted: false }, conversation_id: null, summary: null, summary_tainted: false };
   serve(path => {
     if (path === `/api/conversations/${CHAT}/messages`) {
       return { conversation: { id: CHAT, title: 'Parser', created_at: 0, last_message_at: 0, permission_mode: 'plan' }, messages: [{ id: 1, role: 'user', text: 'plan it', runId: 'r1', createdAt: 10 }], pending: [], builds: [build], activeRun: null };
