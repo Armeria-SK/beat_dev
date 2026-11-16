@@ -146,6 +146,8 @@ const en = {
   'hard.fs_create': 'Creating a filesystem',
   'hard.disk_format': 'Formatting a disk',
   'hard.disk_ops': 'Disk operations',
+  'hard.disk_wipe': 'Wiping disk data',
+  'hard.backup': 'Backup operations',
   'hard.os_stop': 'Shutting down the OS',
   'hard.os_restart': 'Restarting the OS',
   'hard.boot': 'Changing boot settings',

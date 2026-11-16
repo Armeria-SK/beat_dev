@@ -84,7 +84,24 @@ const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
   ['set-executionpolicy', 'hard.exec_policy'], ['reg', 'hard.registry'], ['regedit', 'hard.registry'], ['takeown', 'hard.ownership'],
   ['passwd', 'hard.password'], ['useradd', 'hard.user_add'], ['userdel', 'hard.user_del'], ['net', 'hard.net'],
   ['crontab', 'hard.schedule'], ['schtasks', 'hard.schedule'], ['register-scheduledtask', 'hard.schedule'],
+  ['format-volume', 'hard.disk_format'], ['initialize-volume', 'hard.disk_format'], ['new-volume', 'hard.disk_format'],
+  ['mke2fs', 'hard.fs_create'], ['mkswap', 'hard.fs_create'], ['mkntfs', 'hard.fs_create'], ['mkdosfs', 'hard.fs_create'],
+  ['clear-disk', 'hard.disk_wipe'], ['reset-physicaldisk', 'hard.disk_wipe'], ['remove-virtualdisk', 'hard.disk_wipe'], ['remove-storagepool', 'hard.disk_wipe'],
+  ['wipefs', 'hard.disk_wipe'], ['blkdiscard', 'hard.disk_wipe'],
+  ['initialize-disk', 'hard.disk_ops'], ['set-disk', 'hard.disk_ops'], ['new-partition', 'hard.disk_ops'], ['remove-partition', 'hard.disk_ops'],
+  ['set-partition', 'hard.disk_ops'], ['resize-partition', 'hard.disk_ops'], ['gdisk', 'hard.disk_ops'], ['sgdisk', 'hard.disk_ops'], ['sfdisk', 'hard.disk_ops'], ['cfdisk', 'hard.disk_ops'],
+  ['wbadmin', 'hard.backup'],
 ]);
+
+function hardDenyOf(name: string, words: readonly string[]): GuardMessageKey | undefined {
+  const fixed = HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined);
+  if (fixed) return fixed;
+  const args = words.slice(1);
+  if (name === 'cipher' && args.some(a => /^\/w(?::|$)/iu.test(a))) return 'hard.disk_wipe';
+  if (name === 'fsutil' && args[0]?.toLowerCase() === 'file' && args[1]?.toLowerCase() === 'setzerodata') return 'hard.disk_wipe';
+  if (name === 'shred' && args.some(a => a.startsWith('/dev/'))) return 'hard.disk_wipe';
+  return undefined;
+}
 const ELEVATE = /^\s*\(?\s*(?:sudo|doas|su|runas|pkexec)(?:\.exe)?\b/iu;
 const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
 // 外の中身を持ち込む git のサブコマンド（NET のうち、通信するもの。init と worktree は含めない）
@@ -507,7 +524,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       current.inner = wrapped?.statements.length && cwdKnown ? wrapped.statements : null;
     }
     statements.push(current);
-    const hard = name ? HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined) : undefined;
+    const hard = name ? hardDenyOf(name, words) : undefined;
     if (hard) add('deny', say('guard.hard_denied', { label: text(hard), cmd: name }));
     if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
