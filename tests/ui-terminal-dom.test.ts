@@ -368,3 +368,15 @@ test('ui/tool-row: 裏で始めた印は、コマンドの写しのすぐ後の�
   const real = { text: `$ node fake.js${nl}${nl}Started in the background as bg-4 (pwsh, cwd: .). It keeps running with no time limit.${nl}[Output so far]${nl}Started in the background as bg-9 x`, isError: false };
   assert.deepEqual(toolRow('shell_run', input, real).meta, { kind: 'background', id: 'bg-4' });
 });
+
+test('ui/TerminalPane（DOM）: 最初の読みが空で、続きの読みで間が飛んだら、頭に「前の出力は出ていない」の印', async () => {
+  const server: Server = { items: [job()], outputs: { 'bg-1': [] }, calls: [], skips: { 'bg-1@0': 150_000 } };
+  const { container, root } = await show(server);
+  assert.equal(container.querySelector('.ui-term__earlier'), null);
+  server.outputs['bg-1']!.push(`L900${nl}L901`);
+  await update(() => root.render(createElement(TerminalPane, { productId: 'prod01', revision: '1', focus: null })));
+  await settle();
+  await settle();
+  assert.deepEqual(shownLines(container).filter(l => l !== 'Earlier output is not shown here'), ['L900', 'L901']);
+  assert.ok(container.querySelector('.ui-term__earlier'), container.innerHTML);
+});

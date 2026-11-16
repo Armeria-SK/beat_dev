@@ -69,7 +69,7 @@ export function TerminalPane({ productId, revision, focus }: TerminalPaneProps) 
       const base = goOn ? prev : { id, startedAt: out.startedAt, text: EMPTY_TEXT, next: undefined, skipped: out.skipped, fresh: null };
       const { next, added } = addText(base.text, out.text, goOn ? out.skipped : 0);
       const fresh = from !== undefined && added > 0 && live ? next.count - added : null;
-      return { id, startedAt: out.startedAt, text: next, next: out.next, skipped: base.skipped, fresh };
+      return { id, startedAt: out.startedAt, text: next, next: out.next, skipped: base.skipped + (goOn && base.text.lines.length === 0 ? out.skipped : 0), fresh };
     });
     if (from !== undefined && !live) {
       const added = out.text.split('\n').length - (out.text.endsWith('\n') ? 1 : 0);
