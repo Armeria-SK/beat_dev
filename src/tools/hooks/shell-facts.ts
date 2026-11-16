@@ -303,7 +303,11 @@ export function innerSource(program: string, words: readonly Word[], shell: Shel
   if (SHELLS.test(program)) return shellCode(args, stdin);
   if (POWERSHELL.test(program)) return powershellCode(args, stdin);
   if (program === 'cmd') return cmdCode(args, stdin);
-  if (program === 'iex' || program === 'invoke-expression') return args.length === 0 || anyDynamic(args) ? null : { text: args.map(w => w.text).join(' '), shell: 'powershell' };
+  if (program === 'iex' || program === 'invoke-expression') {
+    const m = args[0] && !args[0].dynamic ? /^-([A-Za-z]+):?$/u.exec(args[0].text) : null;
+    const code = m && 'command'.startsWith(m[1]!.toLowerCase()) ? args.slice(1) : args;
+    return code.length === 0 || anyDynamic(code) || (!code[0]!.quoted && /^-[A-Za-z]/u.test(code[0]!.text)) ? null : { text: code.map(w => w.text).join(' '), shell: 'powershell' };
+  }
   if (program === 'eval') return args.length === 0 || anyDynamic(args) ? null : { text: args.map(w => w.text).join(' '), shell };
   if (program === '.' || program === 'source') return sourceCode(args, stdin);
   if (program === 'find') return findExec(args, shell);

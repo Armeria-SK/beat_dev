@@ -7,7 +7,7 @@ const REFUSED = [
   'lex.denied', 'lex.curly_quote', 'lex.dash', 'lex.space', 'lex.fullwidth', 'lex.control', 'lex.depth', 'lex.unclosed', 'lex.backtick', 'lex.backslash', 'lex.parse_token',
   'lex.block_comment', 'lex.provider_var', 'lex.dollar_form', 'lex.fd', 'lex.dev_net', 'lex.here_expand', 'lex.tilde_user', 'lex.ps_expand', 'lex.here_string', 'lex.ansi_c',
   'lex.unexpected', 'lex.chain_op', 'lex.bash_sub',
-  'hard.fs_create', 'hard.disk_format', 'hard.disk_ops', 'hard.os_stop', 'hard.os_restart', 'hard.boot', 'hard.shadow', 'hard.exec_policy', 'hard.registry', 'hard.ownership',
+  'hard.fs_create', 'hard.disk_format', 'hard.disk_ops', 'hard.disk_wipe', 'hard.backup', 'hard.os_stop', 'hard.os_restart', 'hard.boot', 'hard.shadow', 'hard.exec_policy', 'hard.registry', 'hard.ownership',
   'hard.password', 'hard.user_add', 'hard.user_del', 'hard.net', 'hard.schedule',
   'list.winargs', 'list.winargs_ps',
   'web.secret_text', 'web.long_query', 'web.fetch_off', 'web.search_off',

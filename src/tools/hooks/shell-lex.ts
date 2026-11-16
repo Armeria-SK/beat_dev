@@ -46,6 +46,10 @@ export interface Statement {
   shapes: string[];
   // 制御の形: 'for' | 'foreach' | 'if'
   header?: string;
+  // 読み飛ばした制御の本体（try・while など）の中で、コマンドの位置にある語と、そのあとの引数（必ず断るコマンドを見つけるためだけに使う）
+  heads?: string[][];
+  // 読み飛ばした本体の中に、呼ぶ先が変数・式で決まる & / . がある
+  callComputed?: boolean;
   source: string;
 }
 
@@ -286,6 +290,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   let dbl = false;
   // [[ … ]] を閉じた直後。bash は ]] の次の語を、then・do などの言葉として読める新しい文の頭と見る（if [[ -n x ]] then pwn; fi）
   let afterCond = false;
+  let fnName = false;
   const stack: string[] = [];
   const pending: Array<{ delim: string; quoted: boolean; strip: boolean }> = [];
 
@@ -575,6 +580,13 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       if (r) continue;
     }
     cur.words.push(w);
+    if (fnName && cur.words.length === 2) {
+      fnName = false;
+      cur.shapes.push('function');
+      end(false);
+      continue;
+    }
+    fnName = atCommand && !w.quoted && !w.dynamic && w.text === 'function';
     if (cur.words.length === 1 && !w.quoted && w.text === '[[') dbl = true;
     else if (dbl && w.text === ']]') { dbl = false; afterCond = true; }
   }
@@ -596,6 +608,8 @@ const PS_OTHER_CONTROL = new Set([
   'return', 'throw', 'break', 'continue', 'exit', 'data', 'workflow', 'parallel', 'sequence', 'inlinescript', 'foreach-object-parallel',
 ]);
 const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=', '%=']);
+const PS_DEFINERS = new Set(['function', 'filter', 'workflow', 'class', 'enum', 'configuration']);
+const PS_PAREN_KEYWORDS = new Set(['param', 'while', 'until', 'for', 'switch', 'catch', 'foreach', 'if', 'elseif']);
 const PS_OPERATORS = new Set([
   '-eq', '-ne', '-gt', '-ge', '-lt', '-le', '-like', '-notlike', '-match', '-notmatch', '-contains', '-notcontains', '-in', '-notin', '-replace', '-split', '-join', '-f',
   '-and', '-or', '-not', '-is', '-as', '+', '-', '*', '/', '%', '..', '!', '-xor',
@@ -1095,19 +1109,63 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     const st = blank();
     st.kind = 'control';
     st.shapes.push(`control:${peek()!.v.toLowerCase()}`);
-    let level = 0;
+    const heads: string[][] = [];
+    const stack: Array<'brace' | 'switch' | 'paren' | 'kwparen' | 'hash' | 'sub'> = [];
+    let current: string[] | null = null;
+    let atStart = true;
+    let callStart = false;
+    let nameNext = false;
+    let switchNext = false;
+    let kwParen = false;
     while (peek()) {
       const t = peek()!;
-      if (level === 0 && (isSep(t) || isP(t, '|') || isP(t, ')') || isP(t, ']'))) break;
-      if (t.t === 'p' && (t.v === '(' || t.v === '{')) level++;
-      if (t.t === 'sub' || t.t === 'arr' || t.t === 'hash') level++;
-      if (t.t === 'p' && (t.v === ')' || t.v === '}')) { if (level === 0) break; level--; }
+      if (stack.length === 0 && (isSep(t) || isP(t, '|') || isP(t, ')') || isP(t, ']'))) break;
+      if (t.t === 'p' && (t.v === ')' || t.v === '}') && stack.length === 0) break;
+      const top = stack.at(-1);
+      const lower = t.t === 'word' ? t.v.toLowerCase() : '';
+      if (current && (t.t === 'word' || t.t === 'str')) current.push(t.v);
+      else if (current && t.t === 'var') current.push(`$${t.v}`);
+      else if (current && (isP(t, '{') || t.t === 'sub' || t.t === 'arr' || t.t === 'hash' || t.t === 'splat' || isP(t, '('))) { current.push(isP(t, '{') ? '{…}' : '$(…)'); current = null; }
+      else if (current && t.t !== 'redir' && !isP(t, ',')) current = null;
+      if (callStart && (t.t === 'var' || t.t === 'sub' || t.t === 'arr' || isP(t, '(') || (t.t === 'str' && t.dyn))) st.callComputed = true;
+      const wasCall = callStart;
+      callStart = false;
+      const keyword = t.t === 'word' && (PS_EXPR_KEYWORDS.has(lower) || t.v === '.' || ASSIGN_OPS.has(t.v));
+      if (!current && atStart && (t.t === 'word' || (t.t === 'str' && wasCall)) && !keyword) {
+        const label = top === 'switch' && isP(peek(1), '{');
+        if (!nameNext && !label) { current = [t.v]; heads.push(current); }
+        nameNext = false;
+        atStart = false;
+      } else if (!current) {
+        const assignTail = t.t === 'word' ? (top === 'hash' ? /^[^=]*=(.+)$/su : /^[+\-*/%]?=(.+)$/su).exec(t.v) : null;
+        if (assignTail) { current = [assignTail[1]!]; heads.push(current); }
+        if (atStart && keyword && t.v !== '.' && !ASSIGN_OPS.has(t.v)) {
+          if (PS_DEFINERS.has(lower)) nameNext = true;
+          if (lower === 'switch') switchNext = true;
+          if (PS_PAREN_KEYWORDS.has(lower)) kwParen = true;
+        }
+        callStart = atStart && (isP(t, '&') || (t.t === 'word' && t.v === '.'));
+        atStart = (t.t === 'p' && ['{', '(', '|', '&', '&&', '||'].includes(t.v)) || t.t === 'sub' || t.t === 'arr'
+          || (isSep(t) && (top !== 'hash' || atStart)) || (atStart && keyword && !ASSIGN_OPS.has(t.v))
+          || ((isP(t, ']') || t.t === 'type') && peek(1)?.t === 'word' && PS_EXPR_KEYWORDS.has(peek(1)!.v.toLowerCase()))
+          || (t.t === 'word' && (ASSIGN_OPS.has(t.v) || (top === 'hash' && t.v.endsWith('='))))
+          || (top === 'kwparen' && lower === 'in');
+      }
+      if (isP(t, '{')) { stack.push(switchNext ? 'switch' : 'brace'); switchNext = false; kwParen = false; }
+      else if (isP(t, '(')) { stack.push(kwParen ? 'kwparen' : 'paren'); kwParen = false; }
+      else if (t.t === 'hash') { stack.push('hash'); atStart = false; }
+      else if (t.t === 'sub' || t.t === 'arr') stack.push('sub');
+      else if (isP(t, ')') || isP(t, '}')) {
+        const closed = stack.pop();
+        atStart = closed === 'kwparen' || closed === 'brace' || closed === 'switch';
+      } else if (isSep(t)) kwParen = false;
       k++;
       const inner = stringSubs(t, depth);
       if (inner) return inner;
-      if (level > PS_MAX_DEPTH + 2) return fail('depth', String(PS_MAX_DEPTH));
+      if (stack.length > PS_MAX_DEPTH + 2) return fail('depth', String(PS_MAX_DEPTH));
     }
     void depth;
+    if (heads.length) st.heads = heads;
     return finish(st);
   };
 

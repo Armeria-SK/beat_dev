@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { basename, dirname, extname, join, parse as parsePath, resolve } from 'node:path';
+import { basename, dirname, extname, join, parse as parsePath, posix, resolve } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import type { AskKind } from '../types.ts';
@@ -84,7 +84,173 @@ const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
   ['set-executionpolicy', 'hard.exec_policy'], ['reg', 'hard.registry'], ['regedit', 'hard.registry'], ['takeown', 'hard.ownership'],
   ['passwd', 'hard.password'], ['useradd', 'hard.user_add'], ['userdel', 'hard.user_del'], ['net', 'hard.net'],
   ['crontab', 'hard.schedule'], ['schtasks', 'hard.schedule'], ['register-scheduledtask', 'hard.schedule'],
+  ['format-volume', 'hard.disk_format'], ['initialize-volume', 'hard.disk_format'], ['new-volume', 'hard.disk_format'],
+  ['mke2fs', 'hard.fs_create'], ['mkswap', 'hard.fs_create'], ['mkntfs', 'hard.fs_create'], ['mkdosfs', 'hard.fs_create'],
+  ['clear-disk', 'hard.disk_wipe'], ['reset-physicaldisk', 'hard.disk_wipe'], ['remove-virtualdisk', 'hard.disk_wipe'], ['remove-storagepool', 'hard.disk_wipe'], ['remove-physicaldisk', 'hard.disk_wipe'],
+  ['wipefs', 'hard.disk_wipe'], ['blkdiscard', 'hard.disk_wipe'],
+  ['initialize-disk', 'hard.disk_ops'], ['set-disk', 'hard.disk_ops'], ['new-partition', 'hard.disk_ops'], ['remove-partition', 'hard.disk_ops'],
+  ['set-partition', 'hard.disk_ops'], ['resize-partition', 'hard.disk_ops'], ['gdisk', 'hard.disk_ops'], ['sgdisk', 'hard.disk_ops'], ['sfdisk', 'hard.disk_ops'], ['cfdisk', 'hard.disk_ops'],
+  ['wbadmin', 'hard.backup'],
 ]);
+
+function hardDenyOf(name: string, words: readonly string[]): GuardMessageKey | undefined {
+  const fixed = HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined);
+  if (fixed) return fixed;
+  const args = words.slice(1);
+  if (name === 'cipher' && args.some(a => /^\/w(?::|$)/iu.test(a))) return 'hard.disk_wipe';
+  if (name === 'fsutil' && args[0]?.toLowerCase() === 'file' && args[1]?.toLowerCase() === 'setzerodata') return 'hard.disk_wipe';
+  if (name === 'shred' && args.some(a => !a.startsWith('-') && posix.normalize(a).startsWith('/dev/'))) return 'hard.disk_wipe';
+  if (CIM_METHOD_CMDS.has(name) && args.some(a => DISK_METHODS.test(a.replace(/^-[A-Za-z]+:/u, '')))) return 'hard.disk_wipe';
+  const lower = args.map(a => a.toLowerCase());
+  if (name === 'wmic' && lower.some((a, i) => a === 'call' && lower[i + 1] === 'format')) return 'hard.disk_format';
+  if (name.startsWith('newfs')) return 'hard.fs_create';
+  const positional = lower.filter(a => !a.startsWith('-'));
+  if (name === 'diskutil' && (DISKUTIL_WIPE.test(positional[0] ?? '') || (positional[0] === 'apfs' && DISKUTIL_APFS_WIPE.test(positional[1] ?? '')))) return 'hard.disk_wipe';
+  if (name === 'gpt' && positional[0] === 'destroy') return 'hard.disk_ops';
+  if (name === 'asr' && lower.some(a => a === '--erase' || a === '-erase')) return 'hard.disk_wipe';
+  return undefined;
+}
+
+const CIM_METHOD_CMDS: ReadonlySet<string> = new Set(['invoke-cimmethod', 'icim', 'invoke-wmimethod', 'iwmi']);
+const DISK_METHODS = /^(?:format|clear|initialize|deleteobject|createpartition)$/iu;
+const DISKUTIL_WIPE = /^(?:erase\w*|zerodisk|randomdisk|secureerase|partitiondisk|reformat)$/iu;
+const DISKUTIL_APFS_WIPE = /^(?:deletecontainer|erasevolume|deletevolume)$/iu;
+const ALIAS_CMDS: ReadonlySet<string> = new Set(['set-alias', 'new-alias', 'sal', 'nal']);
+const ITEM_CMDS: ReadonlySet<string> = new Set(['set-item', 'si', 'new-item', 'ni']);
+const COMMON_VALUED = ['erroraction', 'warningaction', 'informationaction', 'progressaction', 'errorvariable', 'warningvariable', 'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable'];
+const COMMON_VALUED_ALIASES: ReadonlySet<string> = new Set(['ea', 'wa', 'infa', 'proga', 'ev', 'wv', 'iv', 'ov', 'ob', 'pv']);
+
+const programNameOf = (text: string): string => (text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, '');
+
+const systemToolOf = (text: string): string => (text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|com)$/u, '');
+
+function aliasValue(args: readonly string[]): string | undefined {
+  const positional: string[] = [];
+  let named = false;
+  for (let i = 0; i < args.length; i++) {
+    const m = /^-([A-Za-z]+)(:?)(.*)$/u.exec(args[i]!);
+    if (!m) { positional.push(args[i]!); continue; }
+    const param = m[1]!.toLowerCase();
+    const value = m[2] ? m[3] || args[++i] : undefined;
+    if ('value'.startsWith(param)) return value ?? args[i + 1];
+    if ('name'.startsWith(param)) { named = true; if (!m[2]) i++; continue; }
+    if ((['scope', 'option', 'description', ...COMMON_VALUED].some(p => p.startsWith(param)) || COMMON_VALUED_ALIASES.has(param)) && !m[2]) i++;
+  }
+  return positional[named ? 0 : 1];
+}
+
+interface HardHit { key: GuardMessageKey; cmd: string }
+
+function hardOfWords(words: readonly string[], depth = 0): HardHit | undefined {
+  const name = systemToolOf(words[0] ?? '');
+  if (!name) return undefined;
+  if (name === 'cmd') return depth < 3 ? cmdHard(words.slice(1), depth + 1) : undefined;
+  if (ALIAS_CMDS.has(name)) {
+    const value = aliasValue(words.slice(1));
+    return value && depth < 3 ? hardOfWords([value], depth + 1) : undefined;
+  }
+  if (ITEM_CMDS.has(name) && depth < 3 && words.some(w => /^(?:-[A-Za-z]+:)?alias:/iu.test(w))) {
+    return words.slice(1).map(w => w.replace(/^-[A-Za-z]+:/u, '')).filter(w => w && !w.startsWith('-') && !/^alias:/iu.test(w))
+      .map(w => hardOfWords([w], depth + 1)).find(Boolean);
+  }
+  const key = hardDenyOf(name, words);
+  return key ? { key, cmd: name } : undefined;
+}
+
+const CMD_LEADS: ReadonlySet<string> = new Set(['@', 'call', 'do', 'else']);
+
+const CMD_IF_TESTS: ReadonlySet<string> = new Set(['exist', 'defined', 'errorlevel', 'cmdextversion']);
+const CMD_COMPARE: ReadonlySet<string> = new Set(['equ', 'neq', 'lss', 'leq', 'gtr', 'geq', '==']);
+
+function cmdRemainder(args: readonly string[]): string[] | undefined {
+  for (const [i, arg] of args.entries()) {
+    if (!arg.startsWith('/')) continue;
+    const pieces = arg.split(/(?=\/)/u);
+    const at = pieces.findIndex(p => /^\/[ckr]/iu.test(p));
+    if (at < 0) continue;
+    const joined = pieces[at]!.slice(2) + pieces.slice(at + 1).join('');
+    return [...(joined ? [joined] : []), ...args.slice(i + 1)];
+  }
+  return undefined;
+}
+
+function cmdCondition(tokens: string[]): string[] {
+  while (tokens[0]?.toLowerCase() === 'if') {
+    let i = 1;
+    while (tokens[i] && ['/i', 'not'].includes(tokens[i]!.toLowerCase())) i++;
+    const a = tokens[i]?.toLowerCase() ?? '';
+    const b = tokens[i + 1]?.toLowerCase() ?? '';
+    if (CMD_IF_TESTS.has(a)) i += 2;
+    else if (CMD_COMPARE.has(b)) i += 3;
+    else if (a.endsWith('==')) i += 2;
+    else if (b.startsWith('==')) i += 2;
+    else i += 1;
+    tokens = tokens.slice(i);
+    while (tokens.length && CMD_LEADS.has(tokens[0]!.toLowerCase())) tokens.shift();
+  }
+  return tokens;
+}
+
+function cmdHeadHard(tokens: readonly string[], depth: number): HardHit | undefined {
+  const first = tokens[0] ?? '';
+  const slash = first.indexOf('/');
+  if (slash > 0) {
+    const hit = hardOfWords([first.slice(0, slash), first.slice(slash), ...tokens.slice(1)], depth);
+    if (hit) return hit;
+  }
+  return hardOfWords(tokens, depth);
+}
+
+function cmdParts(text: string): string[] {
+  const parts: string[] = [];
+  let part = '';
+  let open = 0;
+  const flush = () => { parts.push(part); part = ''; };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '&' || ch === '|' || ch === '\r' || ch === '\n') { if (text[i + 1] === ch) i++; flush(); continue; }
+    if (ch === '(') {
+      const words = part.trim().toLowerCase().split(/\s+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
+      const last = words.at(-1) ?? '';
+      while (words.length && CMD_LEADS.has(words[0]!)) words.shift();
+      if (words.length === 0 || words[0] === 'if' || ['do', 'else', 'in'].includes(last)) { flush(); open++; continue; }
+    }
+    if (ch === ')' && open > 0) { open--; flush(); continue; }
+    part += ch;
+  }
+  flush();
+  return parts;
+}
+
+// cmd reads ( and ) inside "…" as plain text, so they are blanked before the parts are cut (^ outside quotes escapes the next character)
+function blankQuotedParens(text: string): string {
+  let out = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '\r' || ch === '\n') quoted = false;
+    else if (ch === '^' && !quoted && i + 1 < text.length) { out += ch + text[++i]; continue; }
+    else if (ch === '"') quoted = !quoted;
+    out += quoted && (ch === '(' || ch === ')') ? ' ' : ch;
+  }
+  return out;
+}
+
+function cmdHard(args: readonly string[], depth: number): HardHit | undefined {
+  const rest = cmdRemainder(args);
+  if (!rest) return undefined;
+  const text = blankQuotedParens(rest.join(' ')).replace(/\^(.)/gsu, '$1').replace(/"/gu, ' ')
+    .replace(/\d?>>?\s*(?:&\d|[^\s&|()<>]+)?|<\s*[^\s&|()<>]+/gu, ' ');
+  for (const part of cmdParts(text)) {
+    let tokens = part.split(/[\s,;]+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
+    while (tokens.length && CMD_LEADS.has(tokens[0]!.toLowerCase())) tokens.shift();
+    if (tokens[0]?.toLowerCase() === 'start') { tokens.shift(); while (tokens[0]?.startsWith('/')) tokens.shift(); }
+    tokens = cmdCondition(tokens).join(' ').split(/[\s,;=]+/u).filter(Boolean);
+    const hit = cmdHeadHard(tokens, depth);
+    if (hit) return hit;
+  }
+  return undefined;
+}
 const ELEVATE = /^\s*\(?\s*(?:sudo|doas|su|runas|pkexec)(?:\.exe)?\b/iu;
 const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
 // 外の中身を持ち込む git のサブコマンド（NET のうち、通信するもの。init と worktree は含めない）
@@ -483,7 +649,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const stdin = st.pipedIn || st.redirects.some(r => STDIN_OPS.has(r.op));
     const inline = inlineCode(name, st.words);
     current = {
-      program: name, programDynamic: first?.dynamic ?? false, programOdd: !!first && !first.dynamic && programOdd(first.text, name), words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
+      program: name, programDynamic: (first?.dynamic ?? false) || st.callComputed === true, programOdd: !!first && !first.dynamic && programOdd(first.text, name), words: st.words.map(w => ({ text: w.text, dynamic: w.dynamic, glob: w.glob })),
       urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
       env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: inline.code, codeDynamic: inline.dynamic,
       stdin, shapes: [...st.shapes], reasonKeys: result.reasons.map(r => r.id ?? r.key),
@@ -507,9 +673,44 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       current.inner = wrapped?.statements.length && cwdKnown ? wrapped.statements : null;
     }
     statements.push(current);
-    const hard = name ? HARD_DENY_CMDS.get(name) ?? (name.startsWith('mkfs') ? 'hard.fs_create' : undefined) : undefined;
-    if (hard) add('deny', say('guard.hard_denied', { label: text(hard), cmd: name }));
-    if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a))) add('deny', say('guard.device_write'));
+    const hardSaid = (hit: HardHit | undefined): Said | undefined => hit && say('guard.hard_denied', { label: text(hit.key), cmd: hit.cmd });
+    const hardIn = (code: string, sh: ShellKind): Said | undefined => {
+      if (depth >= 3) return undefined;
+      const v = checkShellCommand(code, cwd, { ...opts, shell: sh, depth: depth + 1 });
+      const at = v.reasonKeys.indexOf('guard.hard_denied');
+      return at >= 0 ? { key: 'guard.hard_denied', text: v.reasons[at]! } : undefined;
+    };
+    const literalHard = (prog: string, ws: readonly Word[], fromStdin: boolean): Said | undefined => {
+      const inner = innerSource(prog, ws.map(w => ({ ...w, dynamic: false })), shell, fromStdin);
+      return inner ? hardIn(inner.text, inner.shell) : undefined;
+    };
+    const iexHard = (prog: string, texts: readonly string[]): Said | undefined => {
+      if (prog !== 'iex' && prog !== 'invoke-expression') return undefined;
+      for (const t of texts.slice(1)) {
+        const code = t.replace(/^-[A-Za-z]+:/u, '');
+        const hit = code && !code.startsWith('-') ? hardIn(code, 'powershell') : undefined;
+        if (hit) return hit;
+      }
+      return undefined;
+    };
+    const headHard = (head: readonly string[]): Said | undefined => {
+      const direct = hardSaid(hardOfWords(head)) ?? iexHard(programNameOf(head[0] ?? ''), head);
+      if (direct) return direct;
+      const headName = programNameOf(head[0] ?? '');
+      if (!headName) return undefined;
+      const headWords = head.map((h): Word => ({ text: h, dynamic: h.includes('$'), glob: false, quoted: false, home: false, kind: h === '{…}' ? 'block' : 'plain' }));
+      const inner = innerSource(headName, headWords, shell, false);
+      if (inner === null) {
+        if (current) current.programDynamic = true;
+        return literalHard(headName, headWords, false);
+      }
+      return inner ? hardIn(inner.text, inner.shell) : undefined;
+    };
+    const topHard = name ? hardSaid(hardOfWords(words)) ?? (source === null ? literalHard(name, st.words, stdin) : undefined) ?? iexHard(name, words) : undefined;
+    const hardReason = topHard ?? st.heads?.map(headHard).find(Boolean);
+    const hard = hardReason !== undefined;
+    if (hardReason) add('deny', hardReason);
+    if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a) || (/^of=/u.test(a) && posix.normalize(a.slice(3)).startsWith('/dev/')))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;
