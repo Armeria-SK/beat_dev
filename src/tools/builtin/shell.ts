@@ -24,7 +24,7 @@ import type { ShellKind } from '../hooks/shell-lex.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../shell/git-env.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
-import { BACKGROUND_SETTLE_SEC, jobLines, newest } from './shell-bg.ts';
+import { BACKGROUND_SETTLE_SEC, jobLines, jobState, newest } from './shell-bg.ts';
 
 interface ShellInput { command: string; cwd?: string; timeoutSec?: number; background?: boolean }
 
@@ -208,7 +208,7 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
     started = jobs.start({
       conversationId: ctx.conversationId, projectId: project.id, ...(ctx.task ? { taskId: ctx.task.id } : {}),
       command: input.command, cwd, file: shell.file, args: shell.args(input.command), env: { ...child.env, ...gitRun?.env },
-      ...(shell.stdin ? { stdin: shell.stdin(input.command) } : {}), fetched, onExit: cleanup,
+      ...(shell.stdin ? { stdin: shell.stdin(input.command) } : {}), fetched, ...(ctx.taint.tainted ? { tainted: true } : {}), onExit: cleanup,
     });
   } catch (error) {
     cleanup();
@@ -240,13 +240,17 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
     jobs.forget(read.id, ctx.conversationId);
     return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: read.spawnError }), isError: true };
   }
-  const header = toolText(language, 'shell.header', { shell: shell.name, cwd, code: read.exitCode ?? '—', seconds: (((read.endedAt ?? read.startedAt) - read.startedAt) / 1000).toFixed(1) });
-  const total = Buffer.byteLength(read.text, 'utf8');
-  const truncated = total > settings.outputCapBytes;
-  const text = truncated ? Buffer.from(read.text, 'utf8').subarray(0, settings.outputCapBytes).toString('utf8').replace(/�+$/u, '') : read.text;
+  const seconds = (((read.endedAt ?? read.startedAt) - read.startedAt) / 1000).toFixed(1);
+  const header = read.state === 'stopped'
+    ? toolText(language, 'shell.bg_stopped_header', { shell: shell.name, cwd, state: jobState(read, language), seconds })
+    : toolText(language, 'shell.header', { shell: shell.name, cwd, code: read.exitCode ?? '—', seconds });
+  const held = Buffer.byteLength(read.text, 'utf8');
+  const truncated = read.skipped > 0 || held > settings.outputCapBytes;
+  const tail = truncated ? newest(read.text).text : read.text;
   const parts: string[] = [];
-  if (text.trim()) parts.push(text.trimEnd());
-  if (truncated) parts.push(toolText(language, 'shell.truncated', { total: total.toLocaleString('en-US'), cap: settings.outputCapBytes.toLocaleString('en-US'), tail: toolText(language, 'shell.truncated_tail', { path: read.logPath }) }));
+  if (truncated) parts.push(toolText(language, 'bg.skipped', { bytes: (read.skipped + held - Buffer.byteLength(tail, 'utf8')).toLocaleString('en-US') }));
+  if (tail.trim()) parts.push(tail.trimEnd());
+  if (truncated) parts.push(toolText(language, 'shell.bg_full_log', { path: read.logPath }));
   else jobs.forget(read.id, ctx.conversationId);
   return {
     content: shellTranscript(input.command, header, parts),

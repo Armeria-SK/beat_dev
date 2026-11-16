@@ -48,7 +48,7 @@ export function backgroundSection(views: readonly JobView[], language: Language)
   if (!views.length) return '';
   const ordered = [...views].sort((a, b) => Number(b.state === 'running') - Number(a.state === 'running') || a.startedAt - b.startedAt);
   return [toolText(language, 'bg.section_title'), ...ordered.map(view => toolText(language, 'bg.section_line', {
-    id: view.id, state: jobState(view, language), unread: view.unread ? toolText(language, 'bg.section_unread') : '', command: commandLine(view.command), cwd: view.cwd,
+    id: view.id, state: jobState(view, language), unread: view.unread ? toolText(language, 'bg.section_unread') : '', command: commandLine(view.command), cwd: view.cwd, tainted: view.tainted ? toolText(language, 'bg.section_tainted') : '',
   }))].join('\n');
 }
 

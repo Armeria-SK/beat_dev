@@ -45,6 +45,7 @@ export interface StartInput extends JobOwner {
   env: Record<string, string>;
   stdin?: string;
   fetched: boolean;
+  tainted?: boolean;
   onExit?: () => void;
 }
 
@@ -60,6 +61,7 @@ export interface JobView extends JobOwner {
   orphaned: boolean;
   unread: boolean;
   fetched: boolean;
+  tainted?: boolean;
   spawnError?: string;
   logPath: string;
   logCut: boolean;
@@ -285,6 +287,7 @@ interface Job extends JobOwner {
   stoppedBy?: StopBy;
   orphaned: boolean;
   fetched: boolean;
+  tainted?: boolean;
   spawnError?: string;
   child: ChildProcess | undefined;
   ring: OutputRing;
@@ -346,7 +349,7 @@ export class BackgroundJobs {
     const gate = () => new LineGate(this.#limits.partialLineBytes, this.#limits.keyHoldBytes);
     const job: Job = {
       ...owner, id: `bg-${seq}`, command: redactSecrets(input.command), cwd: input.cwd, startedAt: this.#now(), state: 'running', exitCode: null, orphaned: false,
-      fetched: input.fetched, child: undefined, ring: new OutputRing(),
+      fetched: input.fetched, ...(input.tainted ? { tainted: true } : {}), child: undefined, ring: new OutputRing(),
       decoders: { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }, gates: { stdout: gate(), stderr: gate() },
       incoming: { stdout: '', stderr: '' }, flushTimer: undefined, cursor: 0,
       log: undefined, logOpened: false, logQueue: [], logPath: join(this.#logDir, `bg-${input.conversationId}-${seq}-${this.#instance}.log`), logBytes: 0, logCut: false,
@@ -602,7 +605,7 @@ export class BackgroundJobs {
       id: job.id, conversationId: job.conversationId, projectId: job.projectId, ...(job.taskId !== undefined ? { taskId: job.taskId } : {}),
       command: job.command, cwd: job.cwd, startedAt: job.startedAt, ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
       state: job.state, exitCode: job.exitCode, ...(job.stoppedBy ? { stoppedBy: job.stoppedBy } : {}), orphaned: job.orphaned,
-      unread: job.ring.total > job.cursor, fetched: job.fetched, ...(job.spawnError !== undefined ? { spawnError: job.spawnError } : {}),
+      unread: job.ring.total > job.cursor, fetched: job.fetched, ...(job.tainted ? { tainted: true } : {}), ...(job.spawnError !== undefined ? { spawnError: job.spawnError } : {}),
       logPath: job.logPath, logCut: job.logCut,
     };
   }

@@ -1,28 +1,17 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
-import { parseConfig } from '../src/config/store.ts';
-import { openDatabase } from '../src/db/database.ts';
-import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
-import { resolvePaths } from '../src/paths.ts';
-import { PendingStore } from '../src/pending/store.ts';
-import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { backgroundSection, shellOutput, shellStop } from '../src/tools/builtin/shell-bg.ts';
-import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
-import { runToolCall, type PipelineDeps } from '../src/tools/pipeline.ts';
-import { buildPolicy } from '../src/tools/policy.ts';
-import { ToolRegistry } from '../src/tools/registry.ts';
-import { BackgroundJobs, type BackgroundLimits } from '../src/tools/shell/background.ts';
-import type { ToolContext, ToolDef } from '../src/tools/types.ts';
+import { shellRun } from '../src/tools/builtin/shell.ts';
+import type { BackgroundJobs } from '../src/tools/shell/background.ts';
 import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, tempDir, testConfig, withLoad, type Script } from './helpers.ts';
+import { reply, tempDir, withLoad, type Script } from './helpers.ts';
 
 // beat 6-2: shell_run の background と shell_output / shell_stop。裏の道も、事前の判定・判定役・Pending・見張りを同じに通る
 
@@ -392,11 +381,16 @@ test('6-2: 取得したものを流すコマンドを裏で動かすと、読ん
   const s = await setup(t);
   const shop = await s.product('shop');
   const fetch = `${CURL} -sN http://127.0.0.1:${port}/`;
-  s.adapter().scripts = [call('shell_run', { command: fetch, background: true }), reply('ok')];
+  s.adapter().scripts = [call('shell_run', { command: fetch, background: true }), call('shell_run', { command: 'node tick.js', background: true }), reply('ok')];
   const first = await s.send(uuid(1), { text: 'stream it', projectId: shop.id, permissionMode: 'auto' });
-  assert.match(s.results().at(-1)!, /Started in the background as bg-1/u, s.results().at(-1));
+  assert.match(s.results().at(-2)!, /Started in the background as bg-1/u, s.results().at(-2));
   assert.equal(s.app.runs.get(first)!.tainted, 1);
   assert.equal(s.app.background.get('bg-1')!.fetched, true);
+  const section = s.calls().at(-1)!.system.dynamic;
+  assert.match(section, /not the owner's instructions/u);
+  assert.match(section, /- bg-1 \[running[^\]]*\] curl[^\n]*\(cwd: [^)\n]*\)\n/u, 'started before anything was read: no mark');
+  assert.match(section, /- bg-2 \[running[^\]]*\] node tick\.js \(cwd: [^)\n]*\) \(started after reading text that came from elsewhere\)/u);
+  s.app.background.stop('bg-2', 'owner');
 
   s.adapter().scripts = [call('shell_output', { id: 'bg-1', waitSec: 1 }), reply('ok')];
   const second = await s.send(uuid(2), { text: 'hi', projectId: shop.id });
@@ -435,4 +429,112 @@ test('6-2: 子のエージェントが裏で始めたコマンドは、子の実
   await stoppedSoon(s, child.id, 'child run ended');
   assert.equal(s.app.background.get(child.id)!.stoppedBy, 'system');
   assert.deepEqual(direct(s, { conversationId: child.conversationId, projectId: shop.id }, shop.dir), { refused: 'closed' });
+});
+
+test('6-2: 2 秒以内に終わっても出力が輪からあふれたら、終わりの方を返し、番号と全文のログを残す（上限が輪より大きい設定でも）', async t => {
+  const s = await setup(t, { configure: c => { c.tools.shell.outputCapBytes = 1024 * 1024; } });
+  const shop = await s.product('shop');
+  writeFileSync(join(shop.dir, 'big.js'), "for (let i = 1; i <= 6000; i++) console.log('line ' + i + ' ' + 'x'.repeat(60));\n");
+  s.adapter().scripts = [call('shell_run', { command: 'node big.js', background: true }), reply('ok')];
+  await s.send(uuid(1), { text: 'run it', projectId: shop.id, permissionMode: 'auto' });
+  const result = s.results().at(-1)!;
+  assert.match(result, /exit code: 0/u);
+  assert.match(result, /\[[\d,]+ bytes of output before this point were not returned\]/u, result.slice(0, 400));
+  assert.match(result, /line 6000 x+\n/u);
+  assert.doesNotMatch(result, /\bline 1 x/u, 'the start that the ring dropped is not shown as the start');
+  const [job] = s.app.background.list({ conversationId: uuid(1) });
+  assert.ok(job, 'the job is kept so the log stays');
+  assert.equal(job.state, 'exited');
+  assert.ok(result.includes(`[Full output: ${job.logPath}]`), result.slice(-300));
+  await waitFor(() => existsSync(job.logPath), 'log', 5_000);
+  const log = readFileSync(job.logPath, 'utf8');
+  assert.match(log, /^line 1 x/u);
+  assert.match(log, /line 6000 x/u);
+});
+
+test('6-2: 2 秒待つあいだに止められたら、終了コードでなく止められたと返す', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const off = s.app.background.onChange(view => { if (view.state === 'running') void s.app.background.stop(view.id, 'owner'); });
+  s.adapter().scripts = [call('shell_run', { command: 'node tick.js', background: true }), reply('ok')];
+  await s.send(uuid(1), { text: 'run it', projectId: shop.id, permissionMode: 'auto' });
+  off();
+  const result = s.results().at(-1)!;
+  assert.match(result, /, stopped by the user after [\d.]+ s\)/u, result);
+  assert.doesNotMatch(result, /exit code/u);
+});
+
+test('6-2: 会話を消すとき、裏のコマンドが止まらなければ 409 で断り、番号もログも残す', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'hi', projectId: shop.id });
+  const id = startedId(direct(s, { conversationId: uuid(1), projectId: shop.id }, shop.dir));
+  const log = s.app.background.get(id)!.logPath;
+  await waitFor(() => existsSync(log), 'log written', 10_000);
+  let tries = 0;
+  Object.assign(s.app.background, { stopWhere: async () => { tries++; return 0; } });
+  const refused = await s.json(`/api/conversations/${uuid(1)}`, 'DELETE');
+  Reflect.deleteProperty(s.app.background, 'stopWhere');
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.equal(tries, 10, 'gives up after MAX_REVIEW_STOP_ROUNDS tries');
+  assert.ok(s.app.conversations.get(uuid(1)), 'the conversation stays');
+  assert.equal(stateOf(s, id), 'running');
+  assert.ok(existsSync(log));
+  s.app.background.stop(id, 'owner');
+  await stoppedSoon(s, id, 'stopped');
+  let calls = 0;
+  Object.assign(s.app.engine, { activeRuns: () => (calls++ === 0 ? [] : [{ conversationId: uuid(1), runId: 'x', kind: 'chat' }]) });
+  const late = await s.json(`/api/conversations/${uuid(1)}`, 'DELETE');
+  Reflect.deleteProperty(s.app.engine, 'activeRuns');
+  assert.equal(late.status, 409, JSON.stringify(late.body));
+  assert.ok(calls >= 2, 'refused by the last check, after the stop loop');
+  assert.ok(s.app.background.get(id), 'a refused delete keeps the ended job');
+  assert.ok(existsSync(log), 'and its log');
+});
+
+test('6-2: 子のエージェントの裏のコマンドが Pending で待つあいだに子の実行が終わると、承認しても始めず失敗にする', async t => {
+  const s = await setup(t, { configure: c => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow', shell_run: 'ask' }; } });
+  const shop = await s.product('shop');
+  const loaded = (name: string, args: unknown): Script => async function* (req) {
+    for (const c of withLoad({ id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args }, req)) yield { type: 'tool_call', call: c };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  };
+  s.adapter().scripts = [loaded('agent_run', { task: 'start the ticker' }), call('shell_run', { command: 'node tick.js', background: true }), reply('child done'), reply('parent done')];
+  await s.send(uuid(1), { text: 'delegate', projectId: shop.id, permissionMode: 'auto' });
+  const parked = s.app.pending.list({ status: 'waiting' })[0]!;
+  assert.ok(parked, 'the child parked it');
+  assert.notEqual(parked.conversation_id, uuid(1));
+  assert.equal(s.app.engine.activeRuns().length, 0, 'the child run has ended');
+  assert.equal((await s.json(`/api/pending/${parked.id}/approve`, 'POST')).status, 202);
+  await pendingSettled(s, parked.id);
+  assert.equal(s.app.pending.view(parked.id)!.status, 'failed');
+  assert.equal(s.app.background.list().length, 0, 'never started');
+});
+
+test('6-2: Pending で承認して裏で始めた取得のコマンドも、あとで読んだ実行に外を読んだ印がつく', async t => {
+  const server: Server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    const timer = setInterval(() => res.write('chunk from outside\n'), 100);
+    res.on('close', () => clearInterval(timer));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const port = (server.address() as AddressInfo).port;
+  const s = await setup(t, { configure: c => { c.tools.policies = { shell_run: 'ask' }; } });
+  const shop = await s.product('shop');
+  s.adapter().scripts = [call('shell_run', { command: `${CURL} -sN http://127.0.0.1:${port}/`, background: true }), reply('ok')];
+  await s.send(uuid(1), { text: 'stream it', projectId: shop.id, permissionMode: 'auto' });
+  const [parked] = s.app.pending.list({ status: 'waiting' });
+  assert.ok(parked);
+  assert.equal((await s.json(`/api/pending/${parked.id}/approve`, 'POST')).status, 202);
+  await pendingSettled(s, parked.id);
+  assert.equal(s.app.pending.view(parked.id)!.status, 'ran', JSON.stringify(s.app.pending.view(parked.id)));
+  const [job] = s.app.background.list({ conversationId: uuid(1) });
+  assert.equal(job!.fetched, true);
+  await waitFor(() => !s.app.engine.activeRuns().some(run => run.conversationId === uuid(1)), 'no run in the conversation', 30_000);
+  s.adapter().scripts = [call('shell_output', { id: job!.id, waitSec: 1 }), reply('ok')];
+  const read = await s.send(uuid(1), { text: 'read it', permissionMode: 'auto' });
+  assert.match(s.results().at(-1)!, /chunk from outside/u);
+  assert.equal(s.app.runs.get(read)!.tainted, 1);
 });
