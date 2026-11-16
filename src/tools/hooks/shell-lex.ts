@@ -46,6 +46,8 @@ export interface Statement {
   shapes: string[];
   // 制御の形: 'for' | 'foreach' | 'if'
   header?: string;
+  // 読み飛ばした制御の本体（try・while など）の中で、コマンドの位置にある語と、そのあとの引数（必ず断るコマンドを見つけるためだけに使う）
+  heads?: string[][];
   source: string;
 }
 
@@ -1095,10 +1097,27 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     const st = blank();
     st.kind = 'control';
     st.shapes.push(`control:${peek()!.v.toLowerCase()}`);
+    const heads: string[][] = [];
+    let current: string[] | null = null;
+    let atStart = true;
     let level = 0;
     while (peek()) {
       const t = peek()!;
       if (level === 0 && (isSep(t) || isP(t, '|') || isP(t, ')') || isP(t, ']'))) break;
+      if (current && (t.t === 'word' || t.t === 'str')) current.push(t.v);
+      else if (current && t.t === 'var') current.push(`$${t.v}`);
+      else if (current && t.t !== 'redir') current = null;
+      const afterCall = k > 0 && (isP(toks[k - 1], '&') || (toks[k - 1]!.t === 'word' && toks[k - 1]!.v === '.'));
+      if (!current && atStart && (t.t === 'word' || (t.t === 'str' && afterCall)) && !(t.t === 'word' && (PS_EXPR_KEYWORDS.has(t.v.toLowerCase()) || t.v === '.' || ASSIGN_OPS.has(t.v)))) {
+        current = [t.v];
+        heads.push(current);
+        atStart = false;
+      } else if (!current) {
+        const assignTail = t.t === 'word' ? /^[+\-*/%]?=(.+)$/su.exec(t.v) : null;
+        if (assignTail) { current = [assignTail[1]!]; heads.push(current); }
+        atStart = t.t === 'sub' || t.t === 'arr' || t.t === 'hash' || (t.t === 'p' && ['{', '(', ';', '\n', '|', '&', '&&', '||'].includes(t.v))
+          || (atStart && t.t === 'word' && (PS_EXPR_KEYWORDS.has(t.v.toLowerCase()) || t.v === '.')) || (t.t === 'word' && ASSIGN_OPS.has(t.v));
+      }
       if (t.t === 'p' && (t.v === '(' || t.v === '{')) level++;
       if (t.t === 'sub' || t.t === 'arr' || t.t === 'hash') level++;
       if (t.t === 'p' && (t.v === ')' || t.v === '}')) { if (level === 0) break; level--; }
@@ -1108,6 +1127,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       if (level > PS_MAX_DEPTH + 2) return fail('depth', String(PS_MAX_DEPTH));
     }
     void depth;
+    if (heads.length) st.heads = heads;
     return finish(st);
   };
 

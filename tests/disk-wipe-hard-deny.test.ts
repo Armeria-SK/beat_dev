@@ -18,8 +18,10 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
-// Q-62-1: disk-wiping commands are refused before any judge or Pending, however they are written.
-// Every case here goes through the guard only (checkShellCommand / preCheck); nothing is executed.
+// Q-62-1: disk-wiping commands are refused before any judge or Pending: by name, inside wrappers (powershell -c, bash -c, cmd /c, &, iex),
+// inside PowerShell control bodies (try, while, do, for, switch, trap, begin/process/end) and inside cmd /c remainders.
+// Still open: a command name that only exists at run time (a variable, string concatenation, base64, a script file).
+// Every case here goes through the guard only (checkShellCommand / preCheck, or the pipeline with a counting execute stub); nothing is executed.
 
 function check(t: { after: (fn: () => void) => void }, command: string, shell: ShellKind): ShellVerdict {
   const ws = join(tempDir(t), 'workspace');
@@ -35,7 +37,7 @@ const DENIED_PS = [
   'Initialize-Volume -DriveLetter Z', 'New-Volume -FriendlyName x -FileSystem NTFS',
   'Clear-Disk -Number 1 -RemoveData', 'Initialize-Disk -Number 1', 'Remove-Partition -DriveLetter Z', 'Set-Partition -DriveLetter Z -IsActive $true',
   'Resize-Partition -DriveLetter Z -Size 1GB', 'New-Partition -DiskNumber 1 -UseMaximumSize', 'Set-Disk -Number 1 -PartitionStyle GPT',
-  'Remove-VirtualDisk -FriendlyName x', 'Remove-StoragePool -FriendlyName x', 'Reset-PhysicalDisk -FriendlyName x',
+  'Remove-VirtualDisk -FriendlyName x', 'Remove-StoragePool -FriendlyName x', 'Reset-PhysicalDisk -FriendlyName x', 'Remove-PhysicalDisk -PhysicalDisks $d -StoragePoolFriendlyName x',
   'cipher /w:C:\\', 'cipher.exe /W:Z:', 'fsutil file setzerodata offset=0 length=100 a.txt', 'fsutil.exe FILE SetZeroData offset=0 length=1 a.txt',
   'wbadmin delete catalog', 'wbadmin start recovery -version:x', 'vssadmin delete shadows /all', 'bcdedit /deletevalue x',
   '& Format-Volume -DriveLetter Z', "& 'Format-Volume' -DriveLetter Z", 'Invoke-Expression "Clear-Disk -Number 1 -RemoveData"', "iex 'Remove-Partition -DriveLetter Z'",
@@ -43,45 +45,85 @@ const DENIED_PS = [
   'Get-Disk; Clear-Disk -Number 1 -RemoveData', 'Get-Volume -DriveLetter Z | Format-Volume',
 ];
 
+// Security review (HIGH): PowerShell control bodies were skipped token by token and never read
+const DENIED_PS_CONTROL = [
+  'try { Format-Volume -DriveLetter Z -Confirm:$false } catch { Write-Error $_ }',
+  'while ($true) { Clear-Disk -Number 1 -RemoveData -Confirm:$false; break }',
+  'do { Remove-Partition -DriveLetter Z } while ($false)',
+  'switch (1) { 1 { Initialize-Disk -Number 1 } }',
+  'for (;;) { Format-Volume -DriveLetter Z; break }',
+  'powershell -c "try { Format-Volume -DriveLetter Z } catch {}"',
+  'Invoke-Command { try { Clear-Disk -Number 1 } catch {} }',
+  'try { format Z: /q /y } catch {}',
+  'try { Get-Date } catch { Format-Volume -DriveLetter Z }',
+  'try { Get-Date } finally { & \'Clear-Disk\' -Number 1 }',
+  'trap { continue }; while ($x) { . Storage\\Format-Volume -DriveLetter Z }',
+  'try { try { Get-Date } catch { cipher /w:C:\\ } } catch {}',
+  'while ($true) { Get-Volume | Format-Volume; break }',
+  'do { fsutil file setzerodata offset=0 length=1 a.txt } until ($true)',
+  'switch -regex ($x) { default { (Remove-Partition -DriveLetter Z) } }',
+  'try { Get-Date } catch [System.Exception] { wbadmin delete catalog }',
+  'try { powershell -c "Format-Volume -DriveLetter Z" } catch {}', "try { iex 'Clear-Disk -Number 1' } catch {}", 'try { cmd /c "format c: a=1" } catch {}',
+  'while ($true) { $r = Format-Volume -DriveLetter Z; break }', 'try { $r=Clear-Disk -Number 1 } catch {}', 'function f { Format-Volume -DriveLetter Z }; f',
+  'trap { Clear-Disk -Number 1 }; Get-Date', 'try { return Format-Volume -DriveLetter Z } catch {}','for ($i = 0; $i -lt 1; $i++) { Initialize-Disk -Number $i }',
+];
+
+// Security review (MEDIUM): a cmd /c remainder with & | < > ^ % ! ( ) " # ; , = was not read
+const DENIED_CMD = [
+  'cmd /c "format c: a=1"', 'cmd /c "echo y| format Z: /q"', 'cmd /c "echo y & format Z: /q"', 'cmd /c fo^rmat c:', 'cmd /c ">nul format c:"', 'cmd /c "(format c:)"',
+  'cmd /c "@format c:"', 'cmd /c "call format c:"', 'cmd /c "for %i in (1) do format c:"', 'cmd /c "cipher /w:%SystemDrive%\\"',
+  'cmd /c fsutil file setzerodata offset=0 length=1 a.txt', 'cmd /c "dir 2>&1 && C:\\Windows\\System32\\format.com c:"', 'cmd /k "echo ok || diskpart /s x.txt"',
+  'cmd /c "if exist x (format c:) else (echo no)"', 'cmd /c "if exist x format c:"', 'cmd /c "if not %a%==b cipher /w:C:\\"', 'cmd /c "cmd /c format c: a=1"', 'cmd /c "shutdown /s a=1"',
+];
+
 const DENIED_BASH = [
   'wipefs -a /dev/sdb', '/sbin/wipefs /dev/sdb', 'sgdisk --zap-all /dev/sdb', 'sgdisk -Z /dev/sdb', 'gdisk /dev/sdb', 'sfdisk /dev/sdb < t', 'cfdisk /dev/sdb',
   'blkdiscard /dev/sdb', 'mkfs.ext4 /dev/sdb1', 'mke2fs /dev/sdb1', 'mkswap /dev/sdb2', 'mkntfs /dev/sdb1', 'mkdosfs /dev/sdb1',
-  'dd if=/dev/zero of=/dev/sdb', 'shred /dev/sdb', 'shred -n 1 -z /dev/sdb', 'shred -- /dev/sdb',
+  'dd if=/dev/zero of=/dev/sdb', 'dd if=/dev/zero of=//dev/sdb', 'shred /dev/sdb', 'shred -n 1 -z /dev/sdb', 'shred -- /dev/sdb', 'shred /./dev/sdb', 'shred //dev/sdb',
   'bash -c "wipefs -a /dev/sdb"', "sh -c 'blkdiscard /dev/sdb'", 'nohup shred /dev/sdb', 'echo ok && sgdisk -o /dev/sdb',
+  'while true; do wipefs -a /dev/sdb; done', 'for d in a; do blkdiscard /dev/sdb; done', 'if true; then mkfs.ext4 /dev/sdb1; fi',
 ];
 
 test('disk wipe: PowerShell / cmd forms are hard-denied before any judge', t => {
-  for (const command of DENIED_PS) {
+  for (const command of [...DENIED_PS, ...DENIED_PS_CONTROL, ...DENIED_CMD]) {
     const v = check(t, command, 'powershell');
     assert.ok(hardDenied(v), `${command} -> ${v.decision} ${v.reasonKeys.join(',')}`);
   }
-  for (const command of ['Format-Volume -DriveLetter Z', 'cipher /w:C:\\', 'powershell -c "Clear-Disk -Number 1"']) {
+  for (const command of ['Format-Volume -DriveLetter Z', 'cipher /w:C:\\', 'powershell -c "Clear-Disk -Number 1"', 'try { Format-Volume -DriveLetter Z } catch {}', 'cmd /c "format c: a=1"']) {
     const v = check(t, command, 'pwsh');
     assert.ok(hardDenied(v), `pwsh: ${command} -> ${v.decision} ${v.reasonKeys.join(',')}`);
   }
 });
 
 test('disk wipe: POSIX forms are hard-denied before any judge', t => {
-  for (const command of DENIED_BASH) {
+  for (const command of [...DENIED_BASH, 'cmd /c "format c: a=1"']) {
     const v = check(t, command, 'bash');
     assert.equal(v.decision, 'deny', `${command} -> ${v.decision} ${v.reasons.join(' / ')}`);
-    if (!command.startsWith('dd ')) assert.ok(hardDenied(v), `${command} -> ${v.reasonKeys.join(',')}`);
+    if (command.startsWith('dd ')) assert.ok(v.reasonKeys.includes('guard.device_write'), `${command} -> ${v.reasonKeys.join(',')}`);
+    else assert.ok(hardDenied(v), `${command} -> ${v.reasonKeys.join(',')}`);
   }
 });
 
-test('disk wipe: read-only storage commands and file-level forms are not hard-denied', t => {
-  const ps = ['Get-Disk', 'Get-Volume', 'Get-Partition -DiskNumber 0', 'fsutil fsinfo drives', 'fsutil volume diskfree C:', 'fsutil file queryvaliddata a.txt', 'cipher', 'cipher /c a.txt', 'manage-bde -status'];
+test('disk wipe: read-only storage commands, file-level forms and ordinary bodies are not hard-denied', t => {
+  const ps = [
+    'Get-Disk', 'Get-Volume', 'Get-Partition -DiskNumber 0', 'fsutil fsinfo drives', 'fsutil volume diskfree C:', 'fsutil file queryvaliddata a.txt', 'cipher', 'cipher /c a.txt', 'manage-bde -status',
+    'try { npm test } catch { Write-Error $_ }', 'switch ($x) { 1 { Get-Date } default { Write-Output format } }', 'foreach ($d in Get-Disk) { Write-Output $d.Number }',
+    'while ($i -lt 3) { Write-Output "format c:"; $i++ }', 'try { Get-Volume } catch { Write-Output \'Format-Volume failed\' }', 'do { Get-Date -Format o } while ($false)',
+    'try { $r = Get-Date } catch {}', "try { & 'Get-Disk' } catch {}", 'try { powershell -c "Get-Volume" } catch {}', 'function Show-Disk { Get-Disk }', "try { 'Format-Volume' } catch {}",
+    'cmd /c "npm run format & echo ok"', 'cmd /c "dir /b | findstr format"', 'cmd /c "git commit -m "net, format" && echo"', 'cmd /c "echo format c: > notes.txt"',
+    'cmd /c "type a.txt | find "diskpart""',
+  ];
   for (const command of ps) {
     const v = check(t, command, 'powershell');
     assert.ok(!v.reasonKeys.includes('guard.hard_denied'), `${command} -> ${v.reasonKeys.join(',')}`);
   }
-  for (const command of ['shred a.txt', 'dd if=a.img of=b.img', 'lsblk', 'blkid']) {
+  for (const command of ['shred a.txt', 'shred ./dev/x', 'dd if=a.img of=b.img', 'lsblk', 'blkid', 'while true; do echo format; done']) {
     const v = check(t, command, 'bash');
     assert.ok(!v.reasonKeys.includes('guard.hard_denied'), `${command} -> ${v.reasonKeys.join(',')}`);
   }
 });
 
-test('disk wipe: with the judge off and a user request, shell_run still refuses and never reaches execute', async t => {
+function pipelineWorld(t: { after: (fn: () => void) => void }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   const config = testConfig();
@@ -94,18 +136,39 @@ test('disk wipe: with the judge off and a user request, shell_run still refuses 
   const registry = new ToolRegistry().register(stubbed);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(parsed, paths);
+  const workspace = defaultWorkspace(policy, paths);
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
-    workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto',
+    workspace, taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto', project: { id: 'p1', root: workspace },
   };
   const deps = {
     registry, approvals: new ApprovalBroker(db), pending, db, emit: () => undefined, lastUserRequest: () => 'format drive Z for me',
     config: () => parsed, permissionMode: () => 'auto' as const,
   };
-  for (const command of ['Format-Volume -DriveLetter Z', 'Clear-Disk -Number 1 -RemoveData', 'Initialize-Disk -Number 1', 'Remove-Partition -DriveLetter Z']) {
-    const outcome = await runToolCall({ id: `call-${command}`, name: 'shell_run', arguments: { command } }, ctx, deps);
-    assert.equal(outcome.decidedBy !== 'pending' && outcome.output.content.startsWith('Not run (denied)'), true, `${command} -> ${outcome.decidedBy}: ${outcome.output.content}`);
+  const run = (args: Record<string, unknown>) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: args }, ctx, deps);
+  return { ctx, run, pending, ran: () => ran };
+}
+
+test('disk wipe: with the judge off and a user request, shell_run still refuses and never reaches execute', async t => {
+  const w = pipelineWorld(t);
+  const commands = [
+    'Format-Volume -DriveLetter Z', 'Clear-Disk -Number 1 -RemoveData', 'Initialize-Disk -Number 1', 'Remove-Partition -DriveLetter Z',
+    ...DENIED_PS_CONTROL, 'cmd /c "format c: a=1"', 'cmd /c fsutil file setzerodata offset=0 length=1 a.txt', 'cmd /c "echo y| format Z: /q"',
+  ];
+  for (const command of commands) {
+    for (const args of [{ command }, { command, background: true }]) {
+      const check = await shellRun.preCheck!(args as never, w.ctx);
+      assert.ok(check.decision === 'deny' && (check.reasonKeys ?? []).includes('guard.hard_denied'), `${JSON.stringify(args)} -> ${check.decision} ${(check.reasonKeys ?? []).join(',')}`);
+      const outcome = await w.run(args);
+      assert.equal(outcome.decidedBy !== 'pending' && outcome.output.content.startsWith('Not run (denied)'), true, `${JSON.stringify(args)} -> ${outcome.decidedBy}: ${outcome.output.content}`);
+    }
   }
-  assert.equal(ran, 0);
-  assert.equal(pending.list({ status: 'waiting' }).length, 0);
+  assert.equal(w.ran(), 0);
+  assert.equal(w.pending.list({ status: 'waiting' }).length, 0);
+});
+
+test('disk wipe: the stub does run an ordinary body with the judge off (the refusal above is not a broken setup)', async t => {
+  const w = pipelineWorld(t);
+  const outcome = await w.run({ command: 'try { Get-Date } catch { Write-Error $_ }' });
+  assert.equal(w.ran(), 1, `${outcome.decidedBy}: ${outcome.output.content}`);
 });

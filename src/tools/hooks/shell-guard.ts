@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { basename, dirname, extname, join, parse as parsePath, resolve } from 'node:path';
+import { basename, dirname, extname, join, parse as parsePath, posix, resolve } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import type { AskKind } from '../types.ts';
@@ -86,7 +86,7 @@ const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
   ['crontab', 'hard.schedule'], ['schtasks', 'hard.schedule'], ['register-scheduledtask', 'hard.schedule'],
   ['format-volume', 'hard.disk_format'], ['initialize-volume', 'hard.disk_format'], ['new-volume', 'hard.disk_format'],
   ['mke2fs', 'hard.fs_create'], ['mkswap', 'hard.fs_create'], ['mkntfs', 'hard.fs_create'], ['mkdosfs', 'hard.fs_create'],
-  ['clear-disk', 'hard.disk_wipe'], ['reset-physicaldisk', 'hard.disk_wipe'], ['remove-virtualdisk', 'hard.disk_wipe'], ['remove-storagepool', 'hard.disk_wipe'],
+  ['clear-disk', 'hard.disk_wipe'], ['reset-physicaldisk', 'hard.disk_wipe'], ['remove-virtualdisk', 'hard.disk_wipe'], ['remove-storagepool', 'hard.disk_wipe'], ['remove-physicaldisk', 'hard.disk_wipe'],
   ['wipefs', 'hard.disk_wipe'], ['blkdiscard', 'hard.disk_wipe'],
   ['initialize-disk', 'hard.disk_ops'], ['set-disk', 'hard.disk_ops'], ['new-partition', 'hard.disk_ops'], ['remove-partition', 'hard.disk_ops'],
   ['set-partition', 'hard.disk_ops'], ['resize-partition', 'hard.disk_ops'], ['gdisk', 'hard.disk_ops'], ['sgdisk', 'hard.disk_ops'], ['sfdisk', 'hard.disk_ops'], ['cfdisk', 'hard.disk_ops'],
@@ -99,7 +99,39 @@ function hardDenyOf(name: string, words: readonly string[]): GuardMessageKey | u
   const args = words.slice(1);
   if (name === 'cipher' && args.some(a => /^\/w(?::|$)/iu.test(a))) return 'hard.disk_wipe';
   if (name === 'fsutil' && args[0]?.toLowerCase() === 'file' && args[1]?.toLowerCase() === 'setzerodata') return 'hard.disk_wipe';
-  if (name === 'shred' && args.some(a => a.startsWith('/dev/'))) return 'hard.disk_wipe';
+  if (name === 'shred' && args.some(a => !a.startsWith('-') && posix.normalize(a).startsWith('/dev/'))) return 'hard.disk_wipe';
+  return undefined;
+}
+
+const programNameOf = (text: string): string => (text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, '');
+
+interface HardHit { key: GuardMessageKey; cmd: string }
+
+function hardOfWords(words: readonly string[], depth = 0): HardHit | undefined {
+  const name = programNameOf(words[0] ?? '');
+  if (!name) return undefined;
+  if (name === 'cmd') return depth < 3 ? cmdHard(words.slice(1), depth + 1) : undefined;
+  const key = hardDenyOf(name, words);
+  return key ? { key, cmd: name } : undefined;
+}
+
+const CMD_LEADS: ReadonlySet<string> = new Set(['@', 'call', 'do', 'else']);
+
+function cmdHard(args: readonly string[], depth: number): HardHit | undefined {
+  const at = args.findIndex(a => /^\/[ckr]$/iu.test(a));
+  if (at < 0) return undefined;
+  const text = args.slice(at + 1).join(' ').replace(/\^(.)/gsu, '$1').replace(/"/gu, ' ')
+    .replace(/\d?>>?\s*(?:&\d|[^\s&|()<>]+)?|<\s*[^\s&|()<>]+/gu, ' ');
+  for (const part of text.split(/&&|\|\||[&|()\r\n]/u)) {
+    const tokens = part.split(/[\s,;=]+/u).map(w => w.replace(/^@+/u, '')).filter(Boolean);
+    while (tokens.length && CMD_LEADS.has(tokens[0]!.toLowerCase())) tokens.shift();
+    if (tokens[0]?.toLowerCase() === 'start') { tokens.shift(); while (tokens[0]?.startsWith('/')) tokens.shift(); }
+    const starts = tokens[0]?.toLowerCase() === 'if' ? tokens.keys() : [0];
+    for (const i of starts) {
+      const hit = hardOfWords(tokens.slice(i), depth);
+      if (hit) return hit;
+    }
+  }
   return undefined;
 }
 const ELEVATE = /^\s*\(?\s*(?:sudo|doas|su|runas|pkexec)(?:\.exe)?\b/iu;
@@ -524,9 +556,22 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       current.inner = wrapped?.statements.length && cwdKnown ? wrapped.statements : null;
     }
     statements.push(current);
-    const hard = name ? hardDenyOf(name, words) : undefined;
-    if (hard) add('deny', say('guard.hard_denied', { label: text(hard), cmd: name }));
-    if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a))) add('deny', say('guard.device_write'));
+    const hardSaid = (hit: HardHit | undefined): Said | undefined => hit && say('guard.hard_denied', { label: text(hit.key), cmd: hit.cmd });
+    const headHard = (head: readonly string[]): Said | undefined => {
+      const direct = hardSaid(hardOfWords(head));
+      if (direct || depth >= 3) return direct;
+      const headName = programNameOf(head[0] ?? '');
+      const headWords = head.map((h): Word => ({ text: h, dynamic: h.includes('$'), glob: false, quoted: false, home: false, kind: 'plain' }));
+      const inner = headName ? innerSource(headName, headWords, shell, false) : undefined;
+      if (!inner) return undefined;
+      const v = checkShellCommand(inner.text, cwd, { ...opts, shell: inner.shell, depth: depth + 1 });
+      const at = v.reasonKeys.indexOf('guard.hard_denied');
+      return at >= 0 ? { key: 'guard.hard_denied', text: v.reasons[at]! } : undefined;
+    };
+    const hardReason = (name ? hardSaid(hardOfWords(words)) : undefined) ?? st.heads?.map(headHard).find(Boolean);
+    const hard = hardReason !== undefined;
+    if (hardReason) add('deny', hardReason);
+    if (name === 'dd' && words.some(a => /^of=/u.test(a) && posix.normalize(a.slice(3)).startsWith('/dev/'))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;
