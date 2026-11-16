@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { App } from './app.ts';
 import { ConfigError } from './config/store.ts';
+import { enterKillOnCloseJob } from './os/win-job.ts';
 import { loadEnvFile, resolvePaths } from './paths.ts';
 import { serverHostProblem } from './shared/url.ts';
 import { createWebServer } from './web/server.ts';
@@ -12,6 +13,8 @@ async function start(): Promise<void> {
   // node src/main.ts [--data-dir <dir>]（--data-dir は環境変数 BEAT_DATA_DIR より優先）
   const { values: args } = parseArgs({ options: { 'data-dir': { type: 'string' } } });
   const dataDir = args['data-dir'] ?? process.env.BEAT_DATA_DIR;
+  const job = await enterKillOnCloseJob();
+  if (job.state === 'failed') log(`[WARN] Could not put beat in a job object: ${job.reason}`);
   loadEnvFile();
   const paths = resolvePaths(dataDir);
   mkdirSync(paths.data, { recursive: true });
