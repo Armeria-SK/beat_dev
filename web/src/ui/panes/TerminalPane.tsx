@@ -6,11 +6,11 @@ import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, EmptyState, Notice, Pill } from '../parts.tsx';
 import { reportOpError } from '../task-ops.ts';
-import { addText, atBottom, EMPTY_TEXT, holdsText, linkParts, pickJob, pillOf, POLL_MS, type TermText } from '../terminal.ts';
+import { addText, atBottom, EMPTY_TEXT, holdsText, linkParts, pickJob, pillOf, POLL_MS, type TerminalFocus, type TermText } from '../terminal.ts';
 
-export interface TerminalPaneProps { productId: string; revision: string; focus?: string | null | undefined }
+export interface TerminalPaneProps { productId: string; revision: string; focus?: TerminalFocus | null | undefined }
 
-interface Shown { id: string; text: TermText; next: number | undefined; skipped: number; fresh: number | null }
+interface Shown { id: string; startedAt: number; text: TermText; next: number | undefined; skipped: number; fresh: number | null }
 
 function Line({ text }: { text: string }) {
   return <>{linkParts(text).map((part, i) => (part.href ? <a key={i} className="bt-tool__link" href={part.href} target="_blank" rel="noreferrer noopener">{part.text}</a> : part.text))}</>;
@@ -20,7 +20,7 @@ export function TerminalPane({ productId, revision, focus }: TerminalPaneProps) 
   const t = useT();
   const [items, setItems] = useState<BackgroundItem[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [wanted, setWanted] = useState<string | null>(focus ?? null);
+  const [wanted, setWanted] = useState<string | null>(focus?.id ?? null);
   const [shown, setShown] = useState<Shown | null>(null);
   const [unseen, setUnseen] = useState(0);
   const [stopping, setStopping] = useState(false);
@@ -29,7 +29,7 @@ export function TerminalPane({ productId, revision, focus }: TerminalPaneProps) 
   const lists = useRef(latestOnly());
   const reads = useRef(latestOnly());
 
-  useEffect(() => { if (focus) setWanted(focus); }, [focus]);
+  useEffect(() => { if (focus) setWanted(focus.id); }, [focus]);
 
   const loadList = useCallback(async () => {
     const ticket = lists.current.begin();
@@ -48,18 +48,28 @@ export function TerminalPane({ productId, revision, focus }: TerminalPaneProps) 
   const selected = items ? pickJob(items, wanted) : null;
   const item = items?.find(i => i.id === selected);
   const running = item?.state === 'running';
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
 
   const read = useCallback(async (id: string, from: number | undefined) => {
     const ticket = reads.current.begin();
     let out;
     try { out = await api.backgroundOutput(id, productId, from); } catch { return; }
     if (!reads.current.isCurrent(ticket)) return;
+    const had = shownRef.current;
+    if (from !== undefined && had?.id === id && (out.next < from || had.startedAt !== out.startedAt)) {
+      void read(id, undefined);
+      return;
+    }
     const live = follow.current;
     setShown(prev => {
-      const base = prev && prev.id === id && from !== undefined ? prev : { id, text: EMPTY_TEXT, next: undefined, skipped: out.skipped, fresh: null };
-      const { next, added } = addText(base.text, out.text);
+      const goOn = prev && prev.id === id && from !== undefined;
+      const base = goOn ? prev : { id, startedAt: out.startedAt, text: EMPTY_TEXT, next: undefined, skipped: out.skipped, fresh: null };
+      const { next, added } = addText(base.text, out.text, goOn ? out.skipped : 0);
       const fresh = from !== undefined && added > 0 && live ? next.count - added : null;
-      return { id, text: next, next: out.next, skipped: base.skipped, fresh };
+      return { id, startedAt: out.startedAt, text: next, next: out.next, skipped: base.skipped, fresh };
     });
     if (from !== undefined && !live) {
       const added = out.text.split('\n').length - (out.text.endsWith('\n') ? 1 : 0);
@@ -115,7 +125,7 @@ export function TerminalPane({ productId, revision, focus }: TerminalPaneProps) 
       const { item: next } = await api.stopBackground(item.id, productId);
       setItems(list => list?.map(i => (i.id === next.id ? next : i)) ?? list);
       toast({ icon: 'square', title: t('ui.term.stoppedToast') });
-      void read(item.id, positionRef.current);
+      if (selectedRef.current === item.id) void read(item.id, positionRef.current);
     } catch (error) { reportOpError(error); } finally { setStopping(false); }
   };
 
@@ -146,13 +156,13 @@ export function TerminalPane({ productId, revision, focus }: TerminalPaneProps) 
         {running && <Button small icon="square" disabled={stopping} onClick={() => void stop()}>{t('ui.term.stop')}</Button>}
       </div>
       <pre className="bt-term ui-term__out" ref={term} aria-live="off" tabIndex={0} onScroll={onScroll}>
-        {text && text.skipped > 0 && <span className="bt-term__line bt-meta ui-term__earlier">{t('ui.term.earlier')}</span>}
+        {text && (text.skipped > 0 || text.text.trimmed) && <span className="bt-term__line bt-meta ui-term__earlier">{t('ui.term.earlier')}</span>}
         <span className="bt-term__line bt-term__line--cmd">$ {item.command}</span>
-        {lines.map((line, i) => (
+        {lines.map((line, i) => (line.gap ? <span key={line.n} className="bt-term__line bt-meta ui-term__gap">{t('ui.term.gap')}</span> : (
           <span key={line.n} className={`bt-term__line${text?.fresh !== null && text?.fresh !== undefined && line.n >= text.fresh ? ' bt-term__line--new' : ''}`}>
             <Line text={line.text || ' '} />{running && i === lines.length - 1 && <span className="bt-caret" />}
           </span>
-        ))}
+        )))}
         {running && lines.length === 0 && <span className="bt-term__line"><span className="bt-caret" /></span>}
       </pre>
       <p className="bt-meta ui-term__meta">

@@ -13,7 +13,7 @@ export type ToolMeta =
   | { kind: 'exit'; code: string; seconds: string }
   | { kind: 'failed' }
   | { kind: 'returned' }
-  | { kind: 'background'; id: string | null }
+  | { kind: 'background'; id: string }
   | null;
 
 export interface ToolRowView {
@@ -237,27 +237,31 @@ function storedEcho(text: string, command: string): string | undefined {
   return lines.length > count ? `${lines.slice(0, count).join('\n')}\n` : undefined;
 }
 
-function runMeta(result: ToolResult, command: unknown): ToolMeta {
-  const failed: ToolMeta = result.isError ? { kind: 'failed' } : null;
-  if (typeof command !== 'string') return failed;
+// コマンドの写し（$ command）のすぐ後の見出しの行。写しが見つからなければ undefined
+function runHeader(result: ToolResult, command: unknown): { header: string; exact: boolean } | undefined {
+  if (typeof command !== 'string') return undefined;
   const exact = [command, ...(PRIVATE_KEY_BEGIN.test(command) ? [] : [redactSecrets(command)])].map(c => `$ ${c}\n`).find(e => result.text.startsWith(e));
   const echo = exact ?? storedEcho(result.text, command);
-  if (!echo) return failed;
-  const header = result.text.slice(echo.length).replace(/^\n/u, '').split('\n', 1)[0]!;
-  const match = /^\(.*, exit code: ([^,()]+), ([\d.]+) s\)$/u.exec(header);
+  if (!echo) return undefined;
+  return { header: result.text.slice(echo.length).replace(/^\n/u, '').split('\n', 1)[0]!, exact: exact !== undefined };
+}
+
+function runMeta(result: ToolResult, command: unknown): ToolMeta {
+  const failed: ToolMeta = result.isError ? { kind: 'failed' } : null;
+  const found = runHeader(result, command);
+  if (!found) return failed;
+  const match = /^\(.*, exit code: ([^,()]+), ([\d.]+) s\)$/u.exec(found.header);
   if (!match) return failed;
   const code = match[1]!.trim();
-  if (!exact && (code === '0') !== !result.isError) return failed;
+  if (!found.exact && (code === '0') !== !result.isError) return failed;
   return { kind: 'exit', code, seconds: match[2]! };
 }
 
-const BACKGROUND_STARTED = /^Started in the background as (bg-\d+) /mu;
-
-// 裏で始めた shell_run（beat 6-4）。番号は結果の文から読む（2 秒以内に終わったふつうの結果は、終了コードの行のまま）
+// 裏で始めた shell_run（beat 6-4）。番号は写しのすぐ後の見出しの行からだけ読む（出力の中の同じ文では付けない。2 秒以内に終わったふつうの結果は、終了コードの行のまま）
 function backgroundMeta(result: ToolResult, args: Args | null): ToolMeta {
   if (args?.['background'] !== true || result.isError) return null;
-  const id = BACKGROUND_STARTED.exec(result.text)?.[1] ?? null;
-  return id || !/exit code: /u.test(result.text) ? { kind: 'background', id } : null;
+  const id = /^Started in the background as (bg-\d+) /u.exec(runHeader(result, args['command'])?.header ?? '')?.[1];
+  return id ? { kind: 'background', id } : null;
 }
 
 export function elapsedClock(ms: number): string {

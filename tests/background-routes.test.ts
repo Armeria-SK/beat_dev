@@ -91,8 +91,12 @@ test('6-4: 最初の読みは新しい 64KB まで（それより前は skipped 
   const read = await s.json(`/api/background/${id}/output?projectId=${shop.id}`, 'GET');
   assert.ok(Buffer.byteLength(read.body.text) <= 64 * 1024, String(Buffer.byteLength(read.body.text)));
   assert.ok(read.body.skipped > 0);
+  assert.equal(read.body.skipped + Buffer.byteLength(read.body.text), read.body.next, '飛ばした分と見せた分で、全部の位置になる');
   assert.match(read.body.text, /line 2999 x+\n$/u);
   assert.match(read.body.text, /^line \d+ /u, '行の途中からは始めない');
+  const fromStart = await s.json(`/api/background/${id}/output?projectId=${shop.id}&from=0`, 'GET');
+  assert.ok(Buffer.byteLength(fromStart.body.text) <= 64 * 1024);
+  assert.equal(fromStart.body.skipped + Buffer.byteLength(fromStart.body.text), fromStart.body.next - 0, '頭からの続きでも、飛ばした分を数える');
 });
 
 test('6-4: 持ち主の Stop で止まり、状態は stopped（owner）。出来事 background.changed が流れる。ほかの製品の番号は止められない', async t => {

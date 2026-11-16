@@ -12,6 +12,7 @@ import {
   type PaneLayout, type PaneView,
 } from './panes.ts';
 import { Button, CountBadge } from './parts.tsx';
+import type { TerminalFocus } from './terminal.ts';
 import './styles/panes.css';
 
 const NARROW = '(max-width: 760px)';
@@ -60,7 +61,7 @@ export interface PanesState {
   openPlan: (reveal: boolean) => void;
   openPane: (view: PaneView) => void;
   revealed: () => void;
-  terminalFocus: string | null;
+  terminalFocus: TerminalFocus | null;
   openTerminal: (jobId: string) => void;
 }
 
@@ -70,7 +71,7 @@ export function usePanes(productId: string | null): PanesState {
   const [layout, setLayout] = useState<PaneLayout>(() => parseLayout(readStored()));
   const [singleView, setSingleView] = useState<PaneView | null>(null);
   const [reveal, setReveal] = useState(false);
-  const [terminalFocus, setTerminalFocus] = useState<string | null>(null);
+  const [terminalFocus, setTerminalFocus] = useState<TerminalFocus | null>(null);
   const views = useMemo(() => openable({ productId }), [productId]);
   const single = singlePane(narrow, room);
   const visible = visiblePanes(layout, views);
@@ -113,7 +114,7 @@ export function usePanes(productId: string | null): PanesState {
     terminalFocus,
     openTerminal: jobId => {
       if (!views.includes('terminal')) return;
-      setTerminalFocus(jobId);
+      setTerminalFocus(prev => ({ id: jobId, n: (prev?.n ?? 0) + 1 }));
       if (single) setSingleView('terminal');
       else if (!shown.some(p => p.view === 'terminal')) keep(shown.length ? selectView(shown, shown.length - 1, 'terminal') : openView(shown, views, 'terminal'));
     },

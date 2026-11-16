@@ -6,10 +6,11 @@ import { t } from '../i18n/index.ts';
 export const POLL_MS = 2000;
 export const MAX_LINES = 2000;
 
-export interface TermLine { n: number; text: string }
-export interface TermText { lines: TermLine[]; open: boolean; count: number }
+export interface TermLine { n: number; text: string; gap?: true }
+export interface TermText { lines: TermLine[]; open: boolean; count: number; trimmed: boolean }
+export interface TerminalFocus { id: string; n: number }
 
-export const EMPTY_TEXT: TermText = { lines: [], open: false, count: 0 };
+export const EMPTY_TEXT: TermText = { lines: [], open: false, count: 0, trimmed: false };
 
 export function pillOf(item: BackgroundItem): { tone: 'running' | 'ok' | 'danger' | undefined; label: string } {
   if (item.state === 'running') return { tone: 'running', label: t('ui.term.running') };
@@ -39,24 +40,29 @@ export function pickJob(items: readonly BackgroundItem[], wanted: string | null)
   return (items.find(i => i.state === 'running') ?? items[0])?.id ?? null;
 }
 
-// 出力を行に足す。text は行の切れ目まで（書きかけを 4KB で出したときだけ改行で終わらない。その続きは次の text の頭）
-export function addText(prev: TermText, text: string, max = MAX_LINES): { next: TermText; added: number } {
-  if (!text) return { next: prev, added: 0 };
-  const parts = text.split('\n');
-  const open = parts.at(-1) !== '';
-  if (!open) parts.pop();
+// 出力を行に足す。text は行の切れ目まで（書きかけを 4KB で出したときだけ改行で終わらない。その続きは次の text の頭）。
+// skipped は前に読んだ所からこの text までに飛んだバイト数。飛んだら印の行を入れ、書きかけの行にはつながない
+export function addText(prev: TermText, text: string, skipped = 0, max = MAX_LINES): { next: TermText; added: number } {
+  const gap = skipped > 0 && prev.lines.length > 0;
+  if (!text && !gap) return { next: prev, added: 0 };
+  const parts = text ? text.split('\n') : [];
+  const open = text ? parts.at(-1) !== '' : false;
+  if (text && !open) parts.pop();
   const lines = [...prev.lines];
   let count = prev.count;
   let added = 0;
+  if (gap) { lines.push({ n: count++, text: '', gap: true }); added++; }
   parts.forEach((part, i) => {
     const last = lines.at(-1);
-    if (i === 0 && prev.open && last) lines[lines.length - 1] = { n: last.n, text: last.text + part };
+    if (i === 0 && prev.open && !gap && last) lines[lines.length - 1] = { n: last.n, text: last.text + part };
     else { lines.push({ n: count++, text: part }); added++; }
   });
-  return { next: { lines: lines.length > max ? lines.slice(lines.length - max) : lines, open, count }, added };
+  const over = lines.length > max;
+  return { next: { lines: over ? lines.slice(lines.length - max) : lines, open, count, trimmed: prev.trimmed || over }, added };
 }
 
-const LOCALHOST = /http:\/\/localhost(?::\d{1,5})?(?:\/[^\s"'<>`]*)?/gu;
+// 宛先が localhost そのものの http だけ（localhost@… や localhost.… のようなよその宛先、ほかの語の続きは外す）
+const LOCALHOST = /(?<![\w/:.@-])http:\/\/localhost(?::\d{1,5})?(?![\w@-]|[.:]\S)(?:\/[^\s"'<>`]*)?/gu;
 
 export type LinePart = { text: string; href?: string };
 

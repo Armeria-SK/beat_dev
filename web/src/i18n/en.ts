@@ -1430,6 +1430,7 @@ export const en = {
   'ui.term.orphaned': 'some child processes may have kept running',
   'ui.term.newLines': (n: number) => `${n} new ${n === 1 ? 'line' : 'lines'}`,
   'ui.term.earlier': 'Earlier output is not shown here',
+  'ui.term.gap': 'Some output was skipped here',
   'ui.term.empty': 'No background commands',
   'ui.term.emptyText': 'When the AI runs a command in the background, such as a dev server, its output shows here. Background commands end when beat restarts.',
   'ui.term.loadFailed': 'Could not load the background commands',
