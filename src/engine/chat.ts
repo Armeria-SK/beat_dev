@@ -347,6 +347,7 @@ export class ChatEngine {
     if (since.unknown) sources.push(engineText(language, 'taint.unknown'));
     if (this.#previousRunCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
     if (this.#checklistCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.checklist'));
+    if (this.#backgroundCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.background'));
     if (sources.length) this.#initialTaint.set(runId, sources);
   }
 
@@ -389,6 +390,10 @@ export class ChatEngine {
 
   #noteSinceReply(conversationId: string): boolean {
     return this.#sinceReply(conversationId).after.some(m => m.role === 'user' && m.note !== undefined && m.fetched === true);
+  }
+
+  #backgroundCarriesTaint(conversationId: string): boolean {
+    return this.#d.background?.list({ conversationId }).some(job => job.tainted === true) ?? false;
   }
 
   #checklistCarriesTaint(conversationId: string): boolean {
@@ -503,6 +508,7 @@ export class ChatEngine {
     const sources = [
       ...(this.#d.runs.anyTaintedTask(conversationId) || this.#d.tasks?.textTainted(task.id) ? [engineText(language, 'taint.carried')] : []),
       ...(this.#checklistCarriesTaint(conversationId) ? [engineText(language, 'taint.checklist')] : []),
+      ...(this.#backgroundCarriesTaint(conversationId) ? [engineText(language, 'taint.background')] : []),
       ...(this.#noteSinceReply(conversationId) ? [pendingText(language, 'taint_note')] : []),
     ];
     if (sources.length) this.#initialTaint.set(runId, sources);

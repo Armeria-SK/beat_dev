@@ -538,3 +538,57 @@ test('6-2: Pending で承認して裏で始めた取得のコマンドも、あ�
   assert.match(s.results().at(-1)!, /chunk from outside/u);
   assert.equal(s.app.runs.get(read)!.tainted, 1);
 });
+
+test('6-2: 外を読んだあとに始めた裏のコマンドが一覧にある会話は、次の実行（チャット・タスク）が外を読んだ扱いで始まる。印の無いものだけなら始まらない', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('ok'), reply('ok')];
+  await s.send(uuid(1), { text: 'hi', projectId: shop.id });
+  await s.send(uuid(2), { text: 'hi', projectId: shop.id });
+  const marked = startedId(s.app.background.start({ conversationId: uuid(1), projectId: shop.id, command: 'node tick.js', cwd: shop.dir, file: process.execPath, args: ['tick.js'], env: { ...process.env } as Record<string, string>, fetched: false, tainted: true }));
+  startedId(direct(s, { conversationId: uuid(2), projectId: shop.id }, shop.dir));
+  s.adapter().scripts = [reply('ok')];
+  const chat = await s.send(uuid(1), { text: 'again' });
+  assert.equal(s.app.runs.get(chat)!.tainted, 1, 'a marked job in the list carries the mark');
+  s.adapter().scripts = [reply('ok')];
+  const clean = await s.send(uuid(2), { text: 'again' });
+  assert.equal(s.app.runs.get(clean)!.tainted, 0, 'an unmarked job does not');
+
+  const taskConversation = s.app.conversations.create({ kind: 'task', projectId: shop.id });
+  const task = s.app.tasks.create({ title: 'Watch', origin: 'user', actor: 'user', projectId: shop.id });
+  startedId(s.app.background.start({ conversationId: taskConversation.id, projectId: shop.id, command: 'node tick.js', cwd: shop.dir, file: process.execPath, args: ['tick.js'], env: { ...process.env } as Record<string, string>, fetched: false, tainted: true }));
+  s.adapter().scripts = [reply('ok')];
+  const started = s.app.engine.runTask(task, taskConversation.id, 'go on');
+  assert.ok(started.ok);
+  await started.done;
+  assert.equal(s.app.runs.get(started.runId)!.tainted, 1, 'the task run starts marked too');
+  s.app.background.stop(marked, 'owner');
+});
+
+test('6-2: 輪からあふれた出力は、上限（outputCapBytes）が 12,000 より小さければ、その上限までの終わりの方を返す', async t => {
+  const s = await setup(t, { configure: c => { c.tools.shell.outputCapBytes = 2048; } });
+  const shop = await s.product('shop');
+  writeFileSync(join(shop.dir, 'big.js'), "for (let i = 1; i <= 6000; i++) console.log('line ' + i + ' ' + 'x'.repeat(60));\n");
+  s.adapter().scripts = [call('shell_run', { command: 'node big.js', background: true }), reply('ok')];
+  await s.send(uuid(1), { text: 'run it', projectId: shop.id, permissionMode: 'auto' });
+  const result = s.results().at(-1)!;
+  assert.match(result, /line 6000 x+/u);
+  const shown = result.split('\n').filter(line => /^line \d+ x+$/u.test(line));
+  assert.ok(shown.join('\n').length <= 2048, `shown ${shown.join('\n').length} chars`);
+  assert.ok(shown.length > 10, 'still shows the end');
+});
+
+test('6-2: 数の上限で断られた start も、git の切り離しの片付けを呼ぶ（実行ごとのフォルダを残さない）', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'hi', projectId: shop.id });
+  for (let i = 0; i < 4; i++) startedId(direct(s, { conversationId: uuid(1), projectId: shop.id }, shop.dir));
+  const gitRuns = join(s.app.paths.data, 'git-run');
+  const before = existsSync(gitRuns) ? readdirSync(gitRuns).length : 0;
+  s.adapter().scripts = [call('shell_run', { command: 'node tick.js', background: true }), reply('ok')];
+  await s.send(uuid(1), { text: 'one more', permissionMode: 'auto' });
+  assert.match(s.results().at(-1)!, /^Not started: 4 background commands are already running/mu);
+  const after = existsSync(gitRuns) ? readdirSync(gitRuns).length : 0;
+  assert.equal(after, before, 'the folder made for the refused start is removed');
+});
