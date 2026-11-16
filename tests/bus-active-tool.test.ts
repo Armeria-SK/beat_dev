@@ -90,3 +90,23 @@ test('bus: 繋ぎ直し（SSE の hello）の drafts に今の道具が入り、
   assert.equal(after.activeTool, undefined, 'the restored tool settles on its own tool.result');
   assert.equal(after.settled?.[0]?.name, 'shell_run');
 });
+
+test('bus: 判定役に聞いている印（tool.auto）と子の担当（agent.state）も覚え、hello → resync のあとも checking と子の担当の数・リンクが戻る。終われば消える', () => {
+  const bus = started();
+  bus.publish(call('a', 'agent_run', '{"task":"x"}'));
+  bus.publish({ type: 'tool.auto', ...R, callId: 'a', name: 'agent_run', state: 'checking' });
+  assert.equal(bus.drafts()[0]!.autoChecking, true);
+  bus.publish({ type: 'tool.auto', ...R, callId: 'a', name: 'agent_run', state: 'allowed' });
+  assert.equal(bus.drafts()[0]!.autoChecking, undefined);
+  bus.publish({ type: 'tool.auto', ...R, callId: 'a', name: 'agent_run', state: 'checking' });
+  bus.publish({ type: 'agent.state', ...R, callId: 'a', childRunId: 'cr', childConversationId: 'child', state: 'running', toolCalls: 3 });
+  const { drafts } = hello(bus);
+  const d = reduce(EMPTY, { type: 'resync', drafts }).state.drafts[0]!;
+  assert.equal(d.autoChecking, true);
+  assert.deepEqual(d.agent, { conversationId: 'child', toolCalls: 3 });
+  bus.publish({ type: 'agent.state', ...R, callId: 'a', childRunId: 'cr', childConversationId: 'child', state: 'done', toolCalls: 4 });
+  assert.equal(bus.drafts()[0]!.agent, undefined);
+  bus.publish({ type: 'agent.state', ...R, callId: 'a', childRunId: 'cr', childConversationId: 'child', state: 'running', toolCalls: 4 });
+  bus.publish(result('a', 'agent_run'));
+  assert.deepEqual([bus.drafts()[0]!.agent, bus.drafts()[0]!.autoChecking], [undefined, undefined]);
+});

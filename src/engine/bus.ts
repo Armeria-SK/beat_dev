@@ -16,12 +16,14 @@ export interface ActiveDraft {
   activeInput?: string | undefined;
   toolCallId?: string | undefined;
   toolStartedAt?: number | undefined;
+  autoChecking?: boolean | undefined;
+  agent?: { conversationId: string; toolCalls: number } | undefined;
 }
 
 const RING_SIZE = 5000;
 
 function clearTool(draft: ActiveDraft): void {
-  delete draft.activeTool; delete draft.activeInput; delete draft.toolCallId; delete draft.toolStartedAt;
+  delete draft.activeTool; delete draft.activeInput; delete draft.toolCallId; delete draft.toolStartedAt; delete draft.autoChecking; delete draft.agent;
 }
 
 export class RunBus {
@@ -76,6 +78,12 @@ export class RunBus {
     } else if (event.type === 'tool.result') {
       const draft = this.#drafts.get(event.runId);
       if (draft?.toolCallId === event.callId) clearTool(draft);
+    } else if (event.type === 'tool.auto') {
+      const draft = this.#drafts.get(event.runId);
+      if (draft) { if (event.state === 'checking') draft.autoChecking = true; else delete draft.autoChecking; }
+    } else if (event.type === 'agent.state') {
+      const draft = this.#drafts.get(event.runId);
+      if (draft) { if (event.state === 'running') draft.agent = { conversationId: event.childConversationId, toolCalls: event.toolCalls }; else delete draft.agent; }
     } else if (event.type === 'run.end') {
       this.#drafts.delete(event.runId);
     }

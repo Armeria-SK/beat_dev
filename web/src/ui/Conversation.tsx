@@ -131,7 +131,7 @@ function BuildRow({ build, openPending, alert, wait, live, ownToolRunning }: { b
   const toolRow = shown && build.conversation_id ? <><ToolGroup rows={[shown]} isNew={NEVER_NEW} /><div className="bt-msg bt-meta ui-build__session"><a className="bt-tool__link" href={routeHash({ view: 'chat', id: build.conversation_id })}>{t('ui.task.openSession')}</a></div></> : null;
   const summary = (stage === 'done' || stage === 'check' || stage === 'failed') && build.summary ? <div className="bt-msg ui-reply ui-build__summary"><Markdown text={build.summary} />{build.summary_tainted && <p className="bt-meta">{t('ui.checklist.tainted')}</p>}</div> : null;
   const list = stage !== 'running' && build.checklist.items.length > 0 ? <Checklist items={build.checklist.items} tainted={build.checklist.tainted} live={false} /> : null;
-  if (stage === 'failed') return <><Notice tone="fail" alert={alert} title={t('ui.build.failed')} text={t('ui.build.failedText')} action={openTask} />{summary}{list}</>;
+  if (stage === 'failed') return <><Notice tone="fail" alert={alert} title={t('ui.build.failed')} text={[t('ui.build.failedText'), note].filter(Boolean).join(' · ')} {...(place ? { action: place, also: openTask } : { action: openTask })} />{summary}{list}</>;
   return <><Notice title={t(BUILD_TEXT[stage])} {...(note ? { text: note } : {})} {...(place ? { action: place, also: openTask } : { action: openTask })} />{toolRow}{summary}{list}</>;
 }
 
