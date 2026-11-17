@@ -15,10 +15,12 @@ import { ledgerPath } from '../src/scout/ledger.ts';
 import { proposalAdd } from '../src/tools/builtin/proposal.ts';
 import { taskList } from '../src/tools/builtin/tasks.ts';
 import { webFetch } from '../src/tools/builtin/web.ts';
+import type { PageNetwork } from '../src/tools/web/public-page.ts';
+import { scoutProjects } from '../src/scout/run.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
-import type { ToolContext } from '../src/tools/types.ts';
+import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import type { Task } from '../src/tasks/store.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { fail, FakeAdapter, reply, type Script, tempDir, testConfig } from './helpers.ts';
@@ -48,7 +50,13 @@ async function setup(t: { after: (fn: () => void) => void }, options: Options = 
   writeFileSync(paths.config, JSON.stringify(config));
   const clock = { now: Date.parse('2026-11-17T03:00:00Z') };
   const adapters = new Map<string, FakeAdapter>();
+  const fetched = { n: 0 };
+  const webNetwork: PageNetwork = {
+    resolve: async () => ['93.184.216.34'],
+    get: async () => { fetched.n += 1; return { status: 200, contentType: 'text/plain', body: Buffer.from('page text') }; },
+  };
   const app = new App({
+    webNetwork,
     paths, ...(options.file ? {} : { databasePath: ':memory:' }), log: () => undefined, now: () => clock.now, workerTimers: options.timers === true, botMemory: options.botMemory === true,
     adapterOverride: p => {
       const adapter = adapters.get(p.id) ?? new FakeAdapter(p);
@@ -82,7 +90,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: Options = 
   const proposals = () => app.db.prepare('SELECT * FROM tasks WHERE proposal IS NOT NULL ORDER BY created_at, rowid').all() as unknown as Task[];
   const count = (table: string, where = '1 = 1') => (app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`).get() as { n: number }).n;
   const prompt = (req: ModelRequest) => JSON.stringify(req.messages);
-  return { app, dir, root, projectId, adapter, clock, scoutRows, proposals, count, prompt, close };
+  return { app, dir, root, projectId, paths, adapter, clock, scoutRows, proposals, count, prompt, close, fetched };
 }
 
 const loop = (title = 'Add tests'): Script[] => [
@@ -153,6 +161,7 @@ test('scout loop: the next run sees the checked area as seen, and a rejected pro
   const proposal = s.proposals()[0]!;
   s.app.tasks.finish(proposal.id, 'cancelled', 'rejected', 'user', undefined, 'too vague for now');
   s.adapter().scripts.push(reply('Nothing to check.'));
+  s.clock.now += 61_000;
   assert.equal(await s.app.worker.tick(), 'ran');
   const second = s.prompt(s.adapter().calls.at(-1)!);
   const unseen = /## Unseen areas\\n(.*?)<<<END/u.exec(second)?.[1] ?? '';
@@ -548,4 +557,159 @@ test('scout: when all sub-agents of the run are used, the lead run ends there in
   assert.equal(row.status, 'done');
   assert.match(row.result_summary ?? '', /all sub-agents for this run were used/u);
   assert.equal(s.adapter().calls.length, 3);
+});
+
+test('scout: the scout run and its scouts read only the product folder, not the owner workspace; an ordinary task still can', async t => {
+  const s = await setup(t);
+  mkdirSync(s.paths.workspace, { recursive: true });
+  writeFileSync(join(s.paths.workspace, 'USER.md'), 'owner profile');
+  writeFileSync(join(s.paths.workspace, 'notes.md'), 'owner notes');
+  const product = join(s.root, 'src', 'a.ts');
+  s.adapter().scripts.push(
+    toolCall('file_read', { path: join(s.paths.workspace, 'USER.md') }),
+    toolCall('file_list', { path: s.paths.workspace }),
+    toolCall('file_read', { path: product }),
+    toolCall('agent_run', { task: 'read', title: 'Read' }),
+    toolCall('file_read', { path: join(s.paths.workspace, 'notes.md') }),
+    toolCall('file_read', { path: product }),
+    reply('area: src\nchecked: x\nresult: no problem'),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  assert.equal(s.count('tool_calls', "tool IN ('file_read', 'file_list') AND decision = 'deny'"), 3);
+  assert.equal(s.count('tool_calls', "tool = 'file_read' AND decision = 'allow' AND output_preview LIKE '%export const a%'"), 2);
+  assert.equal(s.count('tool_calls', "decision = 'allow' AND (output_preview LIKE '%owner profile%' OR output_preview LIKE '%owner notes%' OR output_preview LIKE '%USER.md%')"), 0);
+  s.app.projects.update(s.projectId, { scoutMode: 'off' });
+  s.app.tasks.create({ title: 'plain task', origin: 'user', actor: 'user' });
+  s.adapter().scripts.push(toolCall('file_read', { path: join(s.paths.workspace, 'USER.md') }), toolCall('task_complete', { summary: 'ok', notify: false }));
+  await s.app.worker.tick();
+  assert.equal(s.count('tool_calls', "tool = 'file_read' AND decision = 'allow' AND output_preview LIKE '%owner profile%'"), 1);
+});
+
+test('scout: the URL rule counts the host too; a normal docs URL is still fine', () => {
+  const config = testConfig();
+  const host = `${'a'.repeat(60)}.${'b'.repeat(60)}.${'c'.repeat(60)}.example.com`;
+  const long = `https://${host}/p?d=${'x'.repeat(120)}`;
+  const check = (url: string, scout: boolean) => (webFetch.preCheck!({ url }, { config, ...(scout ? { scout: true } : {}) } as never) as { decision: string }).decision;
+  assert.equal(check(long, true), 'ask');
+  assert.equal(check(long, false), 'allow');
+  assert.equal(check('https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/findLast', true), 'allow');
+});
+
+test('scout: at most 30 web_fetch calls per scout run, shared by the lead and its scouts', async t => {
+  const s = await setup(t);
+  const url = (i: number) => `https://example.com/page-${i}`;
+  s.adapter().scripts.push(
+    ...Array.from({ length: 20 }, (_, i) => toolCall('web_fetch', { url: url(i) })),
+    toolCall('agent_run', { task: 'read more pages', title: 'Pages' }),
+    ...Array.from({ length: 12 }, (_, i) => toolCall('web_fetch', { url: url(100 + i) })),
+    reply('area: -\nchecked: pages\nresult: no problem'),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  assert.equal(s.fetched.n, 30);
+  assert.equal(s.count('tool_calls', "tool = 'web_fetch' AND decision = 'deny'"), 2);
+  s.app.projects.update(s.projectId, { scoutMode: 'off' });
+  s.app.tasks.create({ title: 'plain task', origin: 'user', actor: 'user' });
+  s.adapter().scripts.push(toolCall('web_fetch', { url: url(500) }), toolCall('task_complete', { summary: 'ok', notify: false }));
+  await s.app.worker.tick();
+  assert.equal(s.fetched.n, 31, 'the cap is per scout run only');
+});
+
+test('scout: an owner task in the scouted product stops the scout run (the scout row does not make the product look busy)', async t => {
+  const s = await setup(t);
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const running = s.app.worker.tick();
+  await held.started;
+  s.app.tasks.create({ title: 'fix the shop', origin: 'user', actor: 'user', projectId: s.projectId });
+  await s.app.worker.tick();
+  assert.ok(await until(() => s.scoutRows()[0]!.status === 'cancelled', 3000), 'scout stopped for owner work in the same product');
+  await running;
+});
+
+test('scout: an ask with a judge-class reason is refused in a scout run without calling the judge', async t => {
+  const s = await setup(t, { edit: c => { c.routing.judge = ['m']; } });
+  const probe: ToolDef = {
+    name: 'ask_probe', description: 'probe', input: Type.Object({}), effect: 'read', allowedIn: ['task'],
+    preCheck: () => ({ decision: 'ask', reasons: ['an unknown flag'], reasonKeys: ['list.flag'], askKinds: ['code'] }) as never,
+    execute: async () => ({ content: 'ran' }),
+  };
+  const registry = new ToolRegistry().register(probe);
+  let judged = 0;
+  const ctx: ToolContext = {
+    runId: 'r-scout', conversationId: 'c-scout', kind: 'task', signal: new AbortController().signal, config: s.app.config(), paths: resolvePaths(s.dir),
+    policy: buildPolicy(s.app.config(), resolvePaths(s.dir)), workspace: s.root, taint: { tainted: false, sources: [] }, log: () => undefined,
+    project: { id: s.projectId, root: s.root }, scout: true,
+  };
+  const out = await runToolCall({ id: 'k', name: 'ask_probe', arguments: {} }, ctx, {
+    registry, approvals: s.app.approvals, db: s.app.db, emit: () => undefined, conversationTainted: () => false, lastUserRequest: () => 'check it',
+    autoClassify: async () => { judged += 1; return '{"decision":"allow","reason":"ok"}'; },
+  });
+  assert.equal(out.decision, 'deny');
+  assert.equal(judged, 0);
+  assert.equal(s.count('judge_calls'), 0);
+  assert.equal(s.count('pending_actions'), 0);
+});
+
+test('scout: scout rows publish no task.changed on the bus', async t => {
+  const s = await setup(t);
+  const changed: string[] = [];
+  s.app.bus.subscribe(e => { const event = e.event as { type: string; task?: { id: string } }; if (event.type === 'task.changed' && event.task) changed.push(event.task.id); });
+  s.adapter().scripts.push(...loop());
+  await s.app.worker.tick();
+  const row = s.scoutRows()[0]!;
+  assert.equal(row.status, 'done');
+  assert.ok(!changed.includes(row.id));
+  assert.ok(changed.length > 0, 'the proposal row still publishes');
+});
+
+test('scout (timers): an owner task held by the hourly cap starts when the window reopens, not minutes later', async t => {
+  const s = await setup(t, { timers: true, edit: c => { c.worker.maxRunsPerHour = 1; } });
+  const other = s.app.conversations.create({ kind: 'task', title: 'earlier task' });
+  s.app.runs.start('old-run', 'task', other.id);
+  s.app.db.prepare('UPDATE engine_runs SET started_at = ? WHERE id = ?').run(s.clock.now - 3_600_000 + 1500, 'old-run');
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  s.app.worker.start();
+  await held.started;
+  s.app.tasks.create({ title: 'owner work', origin: 'user', actor: 'user' });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(s.scoutRows()[0]!.status, 'running', 'held by the cap: the scout keeps going');
+  s.clock.now += 2000;
+  assert.ok(await until(() => s.scoutRows()[0]!.status === 'cancelled', 4000), 'the scout stops when the window reopens');
+});
+
+test('scout: scoutProjects skips a product with owner work ready or running', async t => {
+  const s = await setup(t);
+  assert.equal(scoutProjects(s.app.db).length, 1);
+  const task = s.app.tasks.create({ title: 'fix the shop', origin: 'user', actor: 'user', projectId: s.projectId });
+  assert.equal(scoutProjects(s.app.db).length, 0);
+  s.app.tasks.finish(task.id, 'done', 'ok', 'user');
+  assert.equal(scoutProjects(s.app.db).length, 1);
+});
+
+test('scout: a run that ends with every scout failed counts as a failure; a good run leaves a 1-minute gap before the next', async t => {
+  const s = await setup(t, { edit: c => { c.tools.agent.maxPerRun = 1; } });
+  s.adapter().scripts.push(
+    toolCall('agent_run', { task: 'look', title: 'Look' }),
+    fail(new ProviderError('provider_error', 'broken', { retryable: false })),
+    toolCall('agent_run', { task: 'look again', title: 'Again' }),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows()[0]!.status, 'failed');
+  const state = s.app.kv.getJson<{ fails: number; until: number }>(`scout:product:${s.projectId}`)!;
+  assert.equal(state.fails, 1);
+  assert.ok(state.until > s.clock.now);
+  s.clock.now = state.until + 1;
+  s.adapter().scripts.push(reply('nothing to do'));
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows()[1]!.status, 'done');
+  s.adapter().scripts.push(reply('again'));
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 2, 'no run right after a good one');
+  s.clock.now += 61_000;
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 3);
 });

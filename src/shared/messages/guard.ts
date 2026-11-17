@@ -204,6 +204,7 @@ const en = {
   'shell.place.unknown': 'cannot be determined',
   'shell.unresolved_path': '(cannot be determined)',
 
+  'web.scout_fetch_limit': 'This scout run has already read {max} web pages (the lead and its scouts together). Work with what was read',
   'web.fetch_off': 'web_fetch is turned off in the settings (tools.web.fetch)',
   'browser.off': 'The browser tools are turned off in the settings (tools.browser.enabled)',
   'browser.open.listed': 'Opens a site in the operation list. You may be signed in, so just opening it (especially with a query, or after reading text from elsewhere) can trigger an action; asking first',

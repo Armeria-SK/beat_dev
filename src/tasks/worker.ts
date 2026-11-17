@@ -642,9 +642,15 @@ export class Worker {
     if (tasks.get(task.id)?.status !== 'running') return;
     const stop = this.#scoutStops.get(runId);
     const end = this.#d.engine.scoutEnd(runId);
+    if (end && this.#d.engine.scoutChildrenAllFailed(runId)) {
+      const why = scoutText(language, 'run.ended', { reason: scoutText(language, 'stop.children_failed') });
+      tasks.finish(task.id, 'failed', why, 'worker', runId);
+      this.#scoutFailure(projectId, now, why, language);
+      return;
+    }
     if (result.ok || end) {
       tasks.finish(task.id, 'done', end ? scoutText(language, 'run.ended', { reason: scoutText(language, end === 'agents_busy' ? 'stop.agents_busy' : 'stop.agents_used') }) : result.ok && result.text.trim() ? result.text.trim().slice(0, 1000) : scoutText(language, 'run.done'), 'worker', runId);
-      saveScoutState(kv, projectId, { fails: 0, until: end === 'agents_busy' ? now + SCOUT_SHORT_WAIT_MS : 0, note: '' });
+      saveScoutState(kv, projectId, { fails: 0, until: now + SCOUT_SHORT_WAIT_MS, note: '' });
       return;
     }
     if (stop || result.errorKind === 'cancelled') {

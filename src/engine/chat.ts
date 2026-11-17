@@ -236,6 +236,7 @@ export class ChatEngine {
   #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
   #scoutEnds = new Map<string, ScoutEnd>();
+  #scoutChildren = new Map<string, { spawned: number; ok: number }>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
   #runModel = new Map<string, string | null>();
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
@@ -578,6 +579,8 @@ export class ChatEngine {
 
   scoutEnd(runId: string): ScoutEnd | undefined { return this.#scoutEnds.get(runId); }
 
+  scoutChildrenAllFailed(runId: string): boolean { const kids = this.#scoutChildren.get(runId); return kids !== undefined && kids.spawned > 0 && kids.ok === 0; }
+
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
 
   // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
@@ -731,7 +734,7 @@ export class ChatEngine {
         this.#hardStops.delete(runId);
         this.#modeHost.delete(conversationId);
         this.#agentSpawned.delete(runId);
-        setTimeout(() => { this.#preempted.delete(runId); this.#scoutEnds.delete(runId); }, 60_000).unref?.();
+        setTimeout(() => { this.#preempted.delete(runId); this.#scoutEnds.delete(runId); this.#scoutChildren.delete(runId); }, 60_000).unref?.();
         // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
         this.#flushNotes(conversationId, runId);
         if (kind === 'chat') {
@@ -803,8 +806,9 @@ export class ChatEngine {
     const allRoots = rootsLister(d.projects);
     allRoots();
     const productRoots = agent || kind === 'review' ? [] : allRoots;
-    const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
-    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
+    const reach: AppConfig = scout ? { ...config, tools: { ...config.tools, roots: project?.root ? [{ path: project.root, mode: 'read' }] : [] } } : config;
+    const base = agent ? undefined : buildPolicy(reach, d.paths, undefined, productRoots);
+    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(reach, d.paths, { root: project.root }, productRoots) : base!);
     const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
@@ -820,7 +824,7 @@ export class ChatEngine {
       ...(forbid ? { forbiddenTools: forbid } : {}),
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'auto' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
-      ...(scout ? { scout: true as const } : {}),
+      ...(scout ? { scout: true as const, scoutFetches: agent?.parent.scoutFetches ?? { n: 0 } } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
@@ -1341,6 +1345,8 @@ export class ChatEngine {
     if (parent.taint.tainted || d.conversations.everTainted(parent.conversationId)) this.#initialTaint.set(childRunId, [engineText(language, 'taint.parent')]);
     if (parent.kind === 'chat') this.#modeHost.set(child.id, parent.conversationId);
     this.#agentSpawned.set(parent.runId, spawned + 1);
+    const kids = scout ? this.#scoutChildren.get(parent.runId) ?? { spawned: 0, ok: 0 } : undefined;
+    if (kids) { kids.spawned += 1; this.#scoutChildren.set(parent.runId, kids); }
 
     const emit = (state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout', toolCalls = 0) => d.bus.publish({
       type: 'agent.state', runId: parent.runId, conversationId: parent.conversationId, callId: callId ?? '', childRunId, childConversationId: child.id, state, toolCalls,
@@ -1381,6 +1387,7 @@ export class ChatEngine {
     if (shown < body.length) body = `${body.slice(0, shown)}\n${truncated}`;
     if (result.truncated) d.bus.publish({ type: 'warning', runId: parent.runId, conversationId: parent.conversationId, code: 'agent_output_truncated', message: engineText(language, 'warn.agent_output_truncated') });
     emit('done', toolCalls);
+    if (kids) kids.ok += 1;
     return { content: `${open}\n${cutNote}${body}\n${close}`, ...(fetched ? { fetched: true } : {}) };
   }
   // 会話のいまの権限モード。子の担当の会話は、任せた親の会話のモードを見る（子の会話自身のモードは使わない）

@@ -152,6 +152,7 @@ export interface ToolContext {
   // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
   scout?: true | undefined;
+  scoutFetches?: { n: number } | undefined;
 }
 
 export interface ToolRunResult { output: ToolOutput; decision: Decision; decidedBy: string; gate?: ToolGate }

@@ -8,6 +8,7 @@ const en = {
   'proposal.added': 'Added proposal {id} "{title}" to the Kanban (Proposed). The owner approves or rejects it',
   'proposal.untrusted': 'Proposed by a scout run, from material that includes web reads and model output',
   'run.title': 'Scout: {name}',
+  'stop.children_failed': 'every scout sent in this run failed',
   'run.done': 'Scout run finished',
   'run.ended': 'Scout run ended: {reason}',
   'run.stopped': 'Scout run stopped: {reason}',
