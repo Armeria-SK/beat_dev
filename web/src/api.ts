@@ -39,7 +39,7 @@ export interface ProjectWaiting { proposals: number; questions: number; pending:
 export interface Project {
   id: string; name: string; root: string;
   check_command: string | null;
-  scout_mode: 'off' | 'research' | 'fix';
+  scout_mode: ScoutMode;
   remotes: ProjectRemote[];
   archived_at: number | null; created_at: number; updated_at: number;
   is_git: boolean;
@@ -111,7 +111,7 @@ export interface Coverage {
 }
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
-export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null }
+export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode }
 export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' };
@@ -203,7 +203,11 @@ export interface Task {
   created_in_conversation?: string | null;
   spawned_by?: string | null;
   items?: TaskItems;
+  proposal?: Proposal | null;
 }
+export interface Proposal { kind: 'feature' | 'bug'; why: string; area: string[]; size: 'S' | 'M' | 'L'; goal: string | null; evidence: string | null; ledger: string | null }
+export type ScoutMode = 'off' | 'research' | 'fix';
+export interface ScoutState { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null }
 export interface ChatBuild {
   id: string; status: TaskStatus; waiting_kind: 'question' | 'approval' | null; check_state: 'awaiting' | 'checked' | null; project_id: string | null;
   created_at: number; updated_at: number; checklist: { items: ChecklistItem[]; tainted: boolean };
@@ -222,7 +226,7 @@ export type RepeatingTask = Task & { last_run: TaskLastRun | null };
 export interface ScheduleSlot { taskId: string; runTaskId: string | null; title: string; start: number; length: number; state: 'past' | 'live' | 'planned'; projectId?: string | null }
 export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean; projectId?: string | null }>; ranTruncated: boolean }
 export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
-export interface WorkerRun { kind: 'task' | 'review'; reviewKind?: 'memory' | 'skill'; taskId: string | null; runId: string; title: string }
+export interface WorkerRun { kind: 'task' | 'review' | 'scout'; reviewKind?: 'memory' | 'skill'; taskId: string | null; runId: string; title: string }
 export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 export interface WorkerStatus {
   enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
@@ -340,6 +344,8 @@ export const api = {
   projects: (archived = false) => call<{ projects: Project[] }>(`/api/projects${archived ? '?archived=1' : ''}`),
   createProject: (input: NewProject) => call<{ project: Project; notes: ProjectNote[] }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   patchProject: (id: string, patch: ProjectPatch) => call<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  scout: (id: string) => call<ScoutState>(`/api/projects/${encodeURIComponent(id)}/scout`),
+  scoutRun: (id: string) => call<unknown>(`/api/projects/${encodeURIComponent(id)}/scout/run`, { method: 'POST', body: '{}' }),
   plan: (id: string, conversationId: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan?conversationId=${encodeURIComponent(conversationId)}`),
   acceptance: (id: string, conversationId?: string, unreferencedBefore?: number) => {
     const query = new URLSearchParams({ ...(conversationId === undefined ? {} : { conversationId }), ...(unreferencedBefore === undefined ? {} : { unreferencedBefore: String(unreferencedBefore) }) }).toString();

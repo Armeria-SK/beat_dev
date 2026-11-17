@@ -92,7 +92,7 @@ const buildChat = (t: Task): Pick<TaskMark, 'buildChat'> =>
   (t.created_in_conversation && t.acceptance_items && !t.spawned_by ? { buildChat: { chat: t.created_in_conversation, conversation: t.conversation_id } } : {});
 
 export function mergeTasks(prev: ReadonlyMap<string, TaskMark>, snapshot: readonly Task[]): Map<string, TaskMark> {
-  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), ...(t.check_state ? { checkState: t.check_state, projectId: t.project_id ?? null } : {}), ...buildChat(t) }]));
+  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), projectId: t.project_id ?? null, ...(t.check_state ? { checkState: t.check_state } : {}), ...buildChat(t) }]));
   for (const [id, mark] of prev) {
     const fresh = next.get(id);
     if (fresh ? mark.updatedAt > fresh.updatedAt : mark.live) next.set(id, mark);
@@ -212,7 +212,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
-      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), ...(e.task.check_state ? { checkState: e.task.check_state, projectId: e.task.project_id ?? null } : {}), ...buildChat(e.task) });
+      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), projectId: e.task.project_id ?? null, ...(e.task.check_state ? { checkState: e.task.check_state } : {}), ...buildChat(e.task) });
       const mark = tasks.get(e.task.id)!;
       const moved = !old || old.status !== mark.status || old.waitingKind !== mark.waitingKind || old.checkState !== mark.checkState || old.buildChat?.conversation !== mark.buildChat?.conversation;
       const chat = moved ? mark.buildChat?.chat : undefined;

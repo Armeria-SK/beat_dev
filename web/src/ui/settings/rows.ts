@@ -16,7 +16,7 @@ export const GROUP_LABEL: Record<GroupId, PlainKey> = { agent: 'ui.set.group.age
 
 export const CATEGORIES: readonly Category[] = [
   { id: 'models', group: 'agent', icon: 'cpu', label: 'ui.set.cat.models',
-    rows: ['ui.set.models.providers', 'ui.set.models.models', 'ui.set.models.roles', 'ui.set.models.conversation', 'ui.set.models.judge', 'ui.set.models.fallback', 'ui.set.models.background', 'ui.set.models.check', 'ui.set.key.title'] },
+    rows: ['ui.set.models.providers', 'ui.set.models.models', 'ui.set.models.roles', 'ui.set.models.conversation', 'ui.set.models.judge', 'ui.set.models.fallback', 'ui.set.models.background', 'ui.set.models.scout', 'ui.set.models.check', 'ui.set.key.title'] },
   { id: 'skills', group: 'agent', icon: 'layers', label: 'ui.set.cat.skills',
     rows: ['ui.set.skills.grow', 'ui.set.skills.ask', 'ui.set.skills.registered', 'ui.set.skills.tools', 'ui.set.shell.title', 'ui.set.shell.enabled', 'ui.set.shell.kind', 'ui.set.shell.timeout', 'ui.set.shell.allow', 'ui.set.shell.ask', 'ui.set.shell.deny'] },
   { id: 'background', group: 'agent', icon: 'refresh', label: 'ui.set.cat.background',

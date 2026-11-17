@@ -344,3 +344,30 @@ test('Settings › Models（DOM）model-auto: 長さが分からない（unknown
   await click(modelEdit(container, 'qwen'));
   assert.equal(field(container, 'Context length'), null, 'unknown でないモデルは Advanced の中だけ');
 });
+
+test('Settings › Models（DOM）: the Scout row (beat 7-1) shows Off when routing.scout is empty; picking a model saves routing.scout, picking Off removes the key; backups written in the file stay', async () => {
+  const pick = async (container: HTMLElement, label: string) => {
+    await click(container.querySelector('button[aria-label="Scout"]'));
+    await settle();
+    await click([...container.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent === label));
+    await settle();
+    await settle();
+    const widen = container.querySelector('.ui-set__widen');
+    if (widen) { await click(buttons(widen, 'Confirm')[0]); await settle(); await settle(); }
+  };
+  const { container, sent } = await openModels(withModels());
+  assert.ok(container.querySelector('[data-row="roles:scout"]'));
+  assert.equal(container.querySelector('button[aria-label="Scout"]')?.textContent?.trim(), en['ui.set.models.scoutOff']);
+  await pick(container, 'GEMMA');
+  assert.deepEqual(sent.at(-1)?.body?.config.routing.scout, ['gemma']);
+  assert.equal(container.querySelector('button[aria-label="Scout"]')?.textContent?.trim(), 'GEMMA');
+  await pick(container, en['ui.set.models.scoutOff']);
+  assert.equal('scout' in (sent.at(-1)?.body?.config.routing ?? {}), false, 'Off removes routing.scout');
+  await cleanup();
+
+  const withBackup = withModels();
+  withBackup.routing.scout = ['qwen', 'phi'];
+  const second = await openModels(withBackup);
+  await pick(second.container, 'GEMMA');
+  assert.deepEqual(second.sent.at(-1)?.body?.config.routing.scout, ['gemma', 'phi']);
+});

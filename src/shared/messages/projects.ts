@@ -11,6 +11,9 @@ const en = {
   'bad_check_command': 'The check command must be one line of up to 1000 characters',
   'bad_refresh': 'refreshRemotes must be true',
   'fixed_on_conversation': 'The product of a conversation cannot be changed',
+  'bad_scout_mode': 'scoutMode must be off, research or fix',
+  'scout_mode_key': 'Send the mode as scoutMode (scout_mode is only in the reply)',
+  'scout_fix_later': 'Research and pre-fix arrives later. Choose Off or Research only for now',
 
   'folder_not_absolute': 'Enter the full path of a folder (without "." or ".." parts)',
   'folder_remote': 'Network and device paths cannot be used',

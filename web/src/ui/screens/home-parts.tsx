@@ -6,7 +6,7 @@ import { plainLine } from '../../task-meta.ts';
 import type { Card, ColumnId } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
-import { readLastLook, type MiniColumn, type PlacedRow, type RunningRow, type Tile, type TileId } from '../overview.ts';
+import { ownerRuns, readLastLook, type MiniColumn, type PlacedRow, type RunningRow, type Tile, type TileId } from '../overview.ts';
 import { Button, countText, Icon, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { reportOpError, runTaskOp } from '../task-ops.ts';
@@ -74,7 +74,7 @@ export function useRunActions(worker: WorkerStatus | null, reload: () => Promise
     await api.stop(row.runId);
     toast({ icon: 'square', title: t('ui.task.toast.stopped'), ...(row.kind === 'task' ? { body: t('ui.task.toast.stoppedBody') } : {}) });
   });
-  const retry = (task: Task) => void act(task.id, async () => { if (await runTaskOp('retry', task, { busyWithOther: (worker?.runningAll.length ?? 0) > 0 })) await reload(); });
+  const retry = (task: Task) => void act(task.id, async () => { if (await runTaskOp('retry', task, { busyWithOther: ownerRuns(worker?.runningAll ?? []).length > 0 })) await reload(); });
   return { busy, act, stop, retry };
 }
 

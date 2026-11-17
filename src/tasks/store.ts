@@ -4,6 +4,7 @@ import { transaction } from '../db/database.ts';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { taskText, type TaskErrorCode } from '../shared/messages/tasks.ts';
+import { proposalProblem, readProposal, type Proposal } from './proposal.ts';
 import { describeCron, nextRunAt } from './schedule.ts';
 
 export const OWNER_FIX = 'owner_fix';
@@ -43,10 +44,11 @@ export interface Task {
   owner_request: string | null;
   spawned_by: string | null;
   check_state: 'awaiting' | 'checked' | null;
+  proposal: string | null;
 }
 
-export type TaskView = Task & { cron_text: string | null };
-export function taskView(task: Task, language: Language = DEFAULT_LANGUAGE): TaskView { return { ...task, cron_text: task.cron ? describeCron(task.cron, language) : null }; }
+export type TaskView = Omit<Task, 'proposal'> & { cron_text: string | null; proposal: Proposal | null };
+export function taskView(task: Task, language: Language = DEFAULT_LANGUAGE): TaskView { return { ...task, cron_text: task.cron ? describeCron(task.cron, language) : null, proposal: readProposal(task.proposal) }; }
 
 export interface TaskEvent { id: number; task_id: string; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
 
@@ -68,6 +70,7 @@ export interface CreateTask {
   ownerRequest?: boolean | undefined;
   ownerPlan?: string | undefined;
   spawnedBy?: string | undefined;
+  proposal?: Proposal | undefined;
   actor: string;
 }
 
@@ -346,6 +349,8 @@ export class TaskStore {
   create(input: CreateTask): Task {
     const title = input.title.trim();
     if (!title) throw new TaskError('error.empty_title');
+    const problem = input.proposal === undefined ? null : proposalProblem(input.proposal);
+    if (problem !== null) throw new TaskError('error.bad_proposal', { reason: problem });
     const now = this.#now();
     const id = randomUUID();
     let status: TaskStatus = input.propose ? 'inbox' : 'ready';
@@ -358,10 +363,10 @@ export class TaskStore {
       else status = 'scheduled';
     }
     const ownerRequest: OwnerRequest | null = input.ownerRequest ? { title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null, ...(input.ownerPlan ? { plan: input.ownerPlan } : {}) } : null;
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, spawned_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, spawned_by, proposal, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, ownerRequest ? JSON.stringify(ownerRequest) : null, input.spawnedBy ?? null, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, ownerRequest ? JSON.stringify(ownerRequest) : null, input.spawnedBy ?? null, input.proposal ? JSON.stringify(input.proposal) : null, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);

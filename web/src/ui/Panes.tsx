@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import type { WaitReason } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { useMedia } from './hooks.ts';
+import { KanbanPane, type KanbanPaneProps } from './panes/KanbanPane.tsx';
 import { PendingList, type PendingListProps } from './panes/PendingPane.tsx';
 import { PlanPane } from './panes/PlanPane.tsx';
 import { QuestionsList, type QuestionsListProps } from './panes/QuestionsPane.tsx';
@@ -151,7 +152,9 @@ export type PanePending = Omit<PendingListProps, 'projectId' | 'onOpenPlan'> & {
 
 export type PaneQuestions = Omit<QuestionsListProps, 'projectId'> & { count: number };
 
-export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, waits }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; waits?: Record<string, WaitReason> | undefined }) {
+export type PaneKanban = Omit<KanbanPaneProps, 'productId'> & { count: number };
+
+export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, kanban, waits }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; kanban: PaneKanban; waits?: Record<string, WaitReason> | undefined }) {
   const t = useT();
   const body = (view: PaneView, index: number): ReactNode => {
     switch (view) {
@@ -162,6 +165,10 @@ export function Panes({ panes, productId, scope, revision, taskRevision, backgro
       case 'questions': {
         const { count: _count, ...list } = questions;
         return <QuestionsList key={productId} projectId={productId} {...list} />;
+      }
+      case 'kanban': {
+        const { count: _count, ...board } = kanban;
+        return <KanbanPane key={productId} productId={productId} {...board} />;
       }
       case 'terminal': return <TerminalPane key={productId} productId={productId} revision={backgroundRevision} focus={panes.terminalFocus} />;
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
@@ -182,7 +189,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, backgro
           <section id={paneId(i)} className="bt-pane ui-panes__pane" style={panes.single ? undefined : { flexBasis: pane.width }}>
             <div className="bt-tabs" role="tablist">
               {tabs.map(view => (
-                <button key={view} type="button" className="bt-tab" role="tab" aria-selected={pane.view === view} onClick={() => panes.select(i, view)}>{t(paneDef(view).label)}{view === 'pending' && <> <CountBadge n={pending.count} label={t('ui.count.waiting', pending.count)} /></>}{view === 'questions' && <> <CountBadge n={questions.count} label={t('ui.count.open', questions.count)} /></>}</button>
+                <button key={view} type="button" className="bt-tab" role="tab" aria-selected={pane.view === view} onClick={() => panes.select(i, view)}>{t(paneDef(view).label)}{view === 'pending' && <> <CountBadge n={pending.count} label={t('ui.count.waiting', pending.count)} /></>}{view === 'questions' && <> <CountBadge n={questions.count} label={t('ui.count.open', questions.count)} /></>}{view === 'kanban' && <> <CountBadge n={kanban.count} label={t('ui.count.waiting', kanban.count)} /></>}</button>
               ))}
               <span className="bt-tabs__end">
                 {splittable && <Button variant="ghost" small icon="columns" aria-label={t('ui.pane.split')} title={t('ui.pane.split')} onClick={() => panes.split(i)} />}

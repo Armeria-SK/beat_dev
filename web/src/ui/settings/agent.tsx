@@ -15,7 +15,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKeyFor } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
-import { JUDGE_OFF, judgeBackups, judgeChoice, judgeIsOff, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, setConversation, setFallback, setJudge, type ModelReach } from './view.ts';
+import { JUDGE_OFF, judgeBackups, judgeChoice, judgeIsOff, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, scoutChoice, setConversation, setFallback, setJudge, setScout, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
 type T = ReturnType<typeof useT>;
@@ -388,6 +388,9 @@ export function ModelsPanel() {
           below={<OrderList k="fallback" ids={roles.fallback} label={t('ui.set.models.fallback')} models={models.filter(m => m.id !== roles.conversation)} onChange={ids => void ctx.commit('roles:fallback', c => setFallback(c, ids))} />} />
         <Row k="roles:background" title={t('ui.set.models.background')} desc={t('ui.set.models.backgroundDesc')}
           below={<OrderList k="background" ids={roles.background} label={t('ui.set.models.background')} models={models} onChange={ids => void ctx.commit('roles:background', c => ({ ...c, routing: { ...c.routing, background: ids } }))} />} />
+        <Row k="roles:scout" title={t('ui.set.models.scout')} desc={t('ui.set.models.scoutDesc')}>
+          <Select value={scoutChoice(ctx.config)} options={[{ value: '', label: t('ui.set.models.scoutOff') }, ...modelOptions]} label={t('ui.set.models.scout')} onChange={id => void ctx.commit('roles:scout', c => setScout(c, id))} />
+        </Row>
       </Group>
     </>
   );

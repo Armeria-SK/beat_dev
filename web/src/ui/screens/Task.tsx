@@ -15,6 +15,7 @@ import { checkLabel, evidenceLines, remainingItems, stateLabel, stateTone } from
 import { answerTaskOp, checkOp, editOverwrites, reportOpError, runTaskOp, taskButtons, type CheckChoice, type TaskOp } from '../task-ops.ts';
 import { SCREEN_EDITS } from '../unsaved.ts';
 import { awaitsCheck, pendingWait } from '../kanban.ts';
+import { ownerRuns } from '../overview.ts';
 import { PRIORITY_KEY } from './Kanban.tsx';
 
 export interface TaskScreenProps {
@@ -271,7 +272,7 @@ export function TaskScreen({ id, revision, worker, projects, pending }: TaskScre
   const { task, events, runs } = data;
   const product = productOf(projects, task.project_id);
   const mine = worker?.runningAll.find(r => r.taskId === task.id);
-  const busyWithOther = (worker?.runningAll.length ?? 0) > 0 && !mine;
+  const busyWithOther = ownerRuns(worker?.runningAll ?? []).length > 0 && !mine;
   const onPending = pendingWait(task);
   const buttons = taskButtons(task.status, sheetActions(task.status), mine !== undefined);
 

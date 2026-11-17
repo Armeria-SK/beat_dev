@@ -113,11 +113,11 @@ export function addModel(config: Config): { config: Config; id: string } {
 }
 
 export function removeModel(config: Config, id: string): Config {
-  const routing = config.routing as { chat: string[]; background: string[]; judge?: string[] };
+  const routing = config.routing as { chat: string[]; background: string[]; judge?: string[]; scout?: string[] };
   return {
     ...config,
     models: (config.models as Array<{ id: string }>).filter(m => m.id !== id),
-    routing: { ...routing, chat: routing.chat.filter(m => m !== id), background: routing.background.filter(m => m !== id), ...(routing.judge ? { judge: routing.judge.filter(m => m !== id) } : {}) },
+    routing: { ...routing, chat: routing.chat.filter(m => m !== id), background: routing.background.filter(m => m !== id), ...(routing.judge ? { judge: routing.judge.filter(m => m !== id) } : {}), ...(routing.scout ? { scout: routing.scout.filter(m => m !== id) } : {}) },
   };
 }
 
@@ -184,11 +184,11 @@ export const trimKey = (raw: string): string => raw.trim();
 export function renameModel(config: Config, from: string, to: string): Config {
   if (!to || from === to) return config;
   const swap = (id: string) => (id === from ? to : id);
-  const routing = config.routing as { chat: string[]; background: string[]; judge?: string[] };
+  const routing = config.routing as { chat: string[]; background: string[]; judge?: string[]; scout?: string[] };
   return {
     ...config,
     models: (config.models as Array<{ id: string }>).map(m => (m.id === from ? { ...m, id: to } : m)),
-    routing: { ...routing, chat: routing.chat.map(swap), background: routing.background.map(swap), ...(routing.judge ? { judge: routing.judge.map(swap) } : {}) },
+    routing: { ...routing, chat: routing.chat.map(swap), background: routing.background.map(swap), ...(routing.judge ? { judge: routing.judge.map(swap) } : {}), ...(routing.scout ? { scout: routing.scout.map(swap) } : {}) },
   };
 }
 
