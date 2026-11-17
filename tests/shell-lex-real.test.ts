@@ -679,9 +679,10 @@ const PS_BODY_ROWS = [
   "switch -Regex (Get-Date) { 'a' { Write-Output a } default { Remove-Item c.txt } }", 'switch (1) { { Test-Path x } { Get-Item y } format { npm run format } }', 'switch ((Get-Item x).Name) { 1 { 2 } }',
   'switch -File notes.txt { default { Write-Output $_ } }', 'function f([string]$a = \'x\') { Get-Content $a }', 'filter g { Write-Output $_ }', 'function h { param($p) begin { Get-Date } process { Get-Item $p } end { Write-Output done } }',
   'trap { Write-Warning t; continue }; Get-Item x', 'trap [System.Exception] { Remove-Item z }', 'return Get-Item x', 'throw (Get-Date)', 'exit (Get-Random)', 'param($n) Get-Item $n',
-  '[CmdletBinding()]\nparam([Parameter(Mandatory=$true)][ValidateSet(\'a\',\'b\')][string]$x = \'a\')\nGet-Item $x',
   'function f { try { while ($true) { switch ($x) { default { Get-Content y } } } } finally { Write-Output z } }', 'foreach ($i in Get-ChildItem) { Remove-Item $i }',
 ];
+// An attribute in front of param ([CmdletBinding()] param(...)) stays unreadable and refused, as before (the lexer does not read inside attributes there)
+const PS_UNREADABLE_ROWS = ['[CmdletBinding()]\nparam([Parameter(Mandatory=$true)][string]$x)\nGet-Item $x', 'if ($true) { [CmdletBinding()] param($x) }'];
 const PS_OPAQUE_ROWS = ['param([ValidateScript({ Get-Content k })]$x) Get-Item y', 'class A { [void] M() { Get-Content k } }', 'switch -Bogus ($x) { default { Get-Item y } }'];
 
 test('PowerShell 5.1: コマンドを本体に置いた制御の形（try・while・do・for・switch・function・trap・param・return など）で、本物の Parser が見つけるコマンドと字句の読み取りの文が同じ。読めない形は control_opaque', { skip: !host && 'Windows の PowerShell が無い' }, t => {
@@ -700,5 +701,6 @@ test('PowerShell 5.1: コマンドを本体に置いた制御の形（try・whil
     const theirs = (byRow.get(i) ?? []).map(words => (words[0] ?? '').toLowerCase()).sort();
     if (JSON.stringify(mine) !== JSON.stringify(theirs)) wrong.push(`${row}: 字句 ${JSON.stringify(mine)} / 本物 ${JSON.stringify(theirs)}`);
   }
+  for (const row of PS_UNREADABLE_ROWS) if (lexShell(row, 'powershell').ok) wrong.push(`${row}: 読めてしまう`);
   assert.deepEqual(wrong, []);
 });

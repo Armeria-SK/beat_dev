@@ -474,7 +474,7 @@ function walk(list: readonly StatementFacts[], prior: readonly StatementFacts[],
   return list.flatMap((st, i) => statementHits(st, [...prior, ...list.slice(0, i)], env, nested));
 }
 
-const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? [])]);
+const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? st.unknownInner ?? [])]);
 
 const GIT_NETWORK = new Set([...GIT_PULLING, ...GIT_SENDERS, 'push', 'svn', 'p4', 'lfs', 'config', 'archive', 'fetch-pack', 'bisect', 'difftool', 'mergetool', 'grep']);
 const gitNetwork = (st: StatementFacts): boolean => {
@@ -544,8 +544,7 @@ const PLACE_FLAGS = ['--prefix', '-C', '--cwd', '--dir', '--directory', '--manif
 
 export function placesOf(statements: readonly StatementFacts[], cwd: string): string[] {
   const out = new Set<string>();
-  for (const st of flatten(statements)) {
-    const base = st.cwd ?? cwd;
+  for (const st of flatten(statements)) for (const base of new Set([...(st.cwds ?? []), st.cwd ?? cwd])) {
     out.add(base);
     for (let i = 0; i < st.words.length; i++) {
       const text = st.words[i]!.text;
@@ -581,19 +580,21 @@ function literalLocation(st: StatementFacts): boolean {
 export function pushesOf(statements: readonly StatementFacts[], reasonKeys: readonly string[] = []): RepoBind[] {
   const out: RepoBind[] = [];
   const detached = reasonKeys.some(k => DETACHING.has(k)) || flatten(statements).some(st => st.reasonKeys.some(k => DETACHING.has(k)));
-  const visit = (list: readonly StatementFacts[], prior: readonly StatementFacts[]): void => list.forEach((st, i) => {
+  // unknown: 作業フォルダが分からない包んだコマンドの中（push は残し、宛先は決めない）
+  const visit = (list: readonly StatementFacts[], prior: readonly StatementFacts[], unknown: boolean): void => list.forEach((st, i) => {
     const before = [...prior, ...list.slice(0, i)];
-    if (st.inner) visit(st.inner, [...before, st]);
+    if (st.inner) visit(st.inner, [...before, st], unknown);
+    else if (st.unknownInner) visit(st.unknownInner, [...before, st], true);
     if (st.program !== 'git') return;
     const found = gitHit(st, before, NO_GIT);
     if (!found || (found.kind !== 'send' && found.key !== 'delete.git_remote_branch')) return;
     const sub = st.words[st.gitGlobal.length + 1]?.text ?? '';
     const parsed = found.key !== 'send.git_unknown' && sub === 'push';
     const alone = prior.length === 0 && i === list.length - 1 && before.every(literalLocation) && !st.words.some(w => w.dynamic && SUBSTITUTION.test(w.text));
-    const dir = found.key === 'send.git_unknown' || HOOKLESS_SENDERS.has(sub) || pushUnconfirmable(st) || (parsed && (detached || !alone)) ? null : pushRepo(st, before);
+    const dir = unknown || found.key === 'send.git_unknown' || HOOKLESS_SENDERS.has(sub) || pushUnconfirmable(st) || (parsed && (detached || !alone)) ? null : pushRepo(st, before);
     out.push(parsed ? { dir, parsed } : { dir });
   });
-  visit(statements, []);
+  visit(statements, [], false);
   return out;
 }
 

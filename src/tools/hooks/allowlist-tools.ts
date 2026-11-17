@@ -1,7 +1,7 @@
 // 許可の一覧の表（security-self-api.md §11.3.1・11.3.4・11.3.5・11.7）: bash のコマンドと、PowerShell からも呼ぶ外部の道具（rg・tar・curl・言語の道具）。
 // 表にある綴り以外のフラグ・形は、すべて「今回だけ」（exempt: 持ち主の tools.shell.allow で外せる）。
 
-import { Acc, checkUrl, checkValue, envAssignOk, flagMap, isFlagLike, literal, parseGnu, walkAll, type CopyUse, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
+import { Acc, checkUrl, checkValue, envAssignOk, flagMap, isFlagLike, literal, parseGnu, SH_CD_NAMES, SH_POP_NAMES, walkAll, type CopyUse, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
 import type { Word } from './shell-lex.ts';
 
 export type Run = (words: Word[], acc: Acc, ctx: MatchCtx) => void;
@@ -154,7 +154,7 @@ register(['export'], (words, acc) => {
     if (!envAssignOk(m[1]!, { ...w, text: m[2] })) acc.add('once', 'list.env', { name: m[1]! }, false);
   }
 }, true);
-register(['cd', 'pushd', 'chdir'], (words, acc) => {
+register(SH_CD_NAMES, (words, acc) => {
   const args = words.slice(1).filter(w => !(literal(w) && /^-[PL]$/u.test(w.text)));
   if (args.length > 1) { formOnce(acc, words[0]!.text, args.map(w => w.text).join(' ')); acc.cwd = { word: null }; return; }
   const target = args[0];
@@ -162,7 +162,7 @@ register(['cd', 'pushd', 'chdir'], (words, acc) => {
   acc.read(target);
   acc.cwd = { word: target };
 }, true);
-register(['popd'], (_words, acc) => { acc.cwd = { word: null }; }, true);
+register(SH_POP_NAMES, (_words, acc) => { acc.cwd = { word: null }; }, true);
 
 // ── jq ──
 const JQ_BOOL = new Set(['-r', '-j', '-c', '-S', '-e', '-n', '-s', '-a', '-M', '-R', '-C', '--tab', '--raw-output', '--join-output', '--compact-output', '--sort-keys', '--exit-status', '--null-input', '--slurp', '--ascii-output', '--monochrome-output', '--raw-input', '--color-output', '--seq']);

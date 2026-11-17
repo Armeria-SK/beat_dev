@@ -14,6 +14,7 @@ const en = {
   'guard.empty': 'The command is empty',
   'guard.fork_bomb': 'This is a fork bomb',
   'guard.elevate': 'Running with administrator rights (sudo and the like) is not allowed',
+  'guard.cwd_many': 'With its cd commands, this command can end up in too many working folders (over {max}) to check. Split it into smaller commands',
   'guard.substitution': 'It contains command substitution, so what will actually run cannot be determined',
   'guard.no_command': 'There is no command to run',
   'guard.hard_denied': '{label} is not allowed ({cmd})',

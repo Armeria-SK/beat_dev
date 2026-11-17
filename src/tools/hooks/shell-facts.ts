@@ -23,8 +23,12 @@ export interface StatementFacts {
   piped?: boolean;
   redirected?: boolean;
   cwd: string | null;
+  // この文が動きうるすべての作業フォルダ（cwd が null でも分かっている分）
+  cwds?: string[];
   shell?: ShellKind;
   inner?: StatementFacts[] | null;
+  // 作業フォルダが分からないので inner を null にした、包んだコマンドの中の文（push を落とさないため）
+  unknownInner?: StatementFacts[];
 }
 
 export type InnerSource = { text: string; shell: ShellKind } | null | undefined;

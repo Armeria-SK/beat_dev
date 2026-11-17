@@ -5,9 +5,10 @@ import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts'
 import type { AskKind } from '../types.ts';
 import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
-import { classifyStatements, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
+import { classifyStatements, matchStatement, noRepo, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
 import { codeFindings } from './code-guard.ts';
 import { gitGlobalOf, inlineCode, innerSource, programOdd, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
+import { CD_COMMANDS } from './allowlist-core.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
@@ -41,10 +42,15 @@ export interface ShellGuardOptions {
   depth?: number;
   // 包むコマンドの中を調べるとき、それより前の文が外から取得したか
   fetchedBefore?: boolean;
+  // 包むコマンドの中を調べるとき、外の文が今いられるフォルダ
+  cwdState?: CwdState;
 }
 
-// cwd: いま（直前の cd の先）。cwds: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか。looped: 繰り返す本体の中の cd で決められなくなった（cwds は今までどおり調べる）
-interface CwdTrack { cwd: string; cwds: string[]; known: boolean; looped?: boolean }
+// now: 次の文が動きうるフォルダ。all: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか（変数・ワイルドカード・決められない先、また動く本体の中の cd で false）。
+// 動いたか分からない cd、決められない cd でも、フォルダを now・all から消さず、確かめも飛ばさない
+interface CwdTrack { now: string[]; all: string[]; known: boolean }
+export interface CwdState { now: readonly string[]; all: readonly string[]; known: boolean }
+const CWD_CAP = 32;
 
 export interface CheckedPath { input: string; path?: string; placement: Placement | { kind: 'unresolved'; reason: string }; write: boolean }
 
@@ -393,10 +399,6 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   if (FORK_BOMB.test(command)) add('deny', say('guard.fork_bomb'));
   if (splitCommand(command).some(part => ELEVATE.test(part))) add('deny', say('guard.elevate'));
 
-  const cwds: string[] = [initialCwd];
-  let cwd = initialCwd;
-  let cwdKnown = true;
-  let cwdLooped = false;
   const resolved = new Map<string, string | undefined>();
   const external: MatchCtx['external'] = opts.which ? (name: string) => {
     if (!resolved.has(name)) resolved.set(name, opts.which!(name));
@@ -411,16 +413,43 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     return { ok: true, ext, detail: '' };
   } : undefined;
   // 許可の一覧の判定は文の順に進む。リポジトリの設定・curl の設定ファイルは、そのとき cd でいられるすべてのフォルダ（最初と、cd で動いた先すべて）で調べる。
-  // cd の先が分からなければ（変数・ワイルドカード・cd -・popd など）、調べられないので今回だけ
-  const seen: CwdTrack = { cwd: initialCwd, cwds: [initialCwd], known: true };
-  const followCd = (track: CwdTrack, cd: { word: Word | null }, repeats: boolean): void => {
-    if (!cd.word || cd.word.dynamic || cd.word.glob) { track.known = false; return; }
-    const e = resolveWord(cd.word, track.cwd, windows, language);
-    if ('unresolved' in e) { track.known = false; return; }
-    track.cwd = e.path;
-    track.cwds.push(e.path);
-    if (repeats) { track.known = false; track.looped = true; }
+  // cd の先が分からなければ（変数・ワイルドカード・cd -・popd など）、調べられないので今回だけ。
+  // seen は分類の判定（リポジトリ・設定ファイル）に、track はパスの確かめ（下の文ごとの並び）に使う。どちらも同じ決まりで進む
+  const startTrack = (): CwdTrack => (opts.cwdState
+    ? { now: [...opts.cwdState.now], all: [...opts.cwdState.all], known: opts.cwdState.known }
+    : { now: [initialCwd], all: [initialCwd], known: true });
+  const seen = startTrack();
+  const track = startTrack();
+  // maybe: 動いたか分からない cd（前のフォルダも残す）。again: また動きうる本体の中の cd（このあとのフォルダは決められない）
+  const followCd = (t: CwdTrack, cd: { word: Word | null }, maybe: boolean, again: boolean): void => {
+    if (again) t.known = false;
+    if (!cd.word || cd.word.dynamic || cd.word.glob) { t.known = false; return; }
+    const next = maybe ? [...t.now] : [];
+    for (const from of t.now) {
+      const e = resolveWord(cd.word, from, windows, language);
+      if ('unresolved' in e) t.known = false;
+      const to = 'unresolved' in e ? from : e.path;
+      if (!next.includes(to)) next.push(to);
+    }
+    const added = next.filter(p => !t.all.includes(p));
+    if (t.all.length + added.length > CWD_CAP) { t.known = false; add('deny', say('guard.cwd_many', { max: CWD_CAP })); return; }
+    t.now = next;
+    t.all.push(...added);
   };
+  // また動きうる本体（ループ・関数・trap・スクリプトブロック）の中の cd は、その本体の入口の前にも足す（2 回目に動くときは、その先から始まる）
+  const entries = new Map<number, Array<{ word: Word | null }>>();
+  const beforeStatements: MatchCtx['beforeStatements'] = all => {
+    for (const st of all) {
+      const head = st.words[0];
+      if (st.reentry === undefined || !head || head.dynamic || !CD_COMMANDS.has(head.text.toLowerCase())) continue;
+      const cd = matchStatement(st, { shell, windows, repo: noRepo, selfHosts }).cwd;
+      if (!cd) continue;
+      const list = entries.get(st.reentry) ?? [];
+      list.push(cd);
+      entries.set(st.reentry, list);
+    }
+  };
+  const enter = (t: CwdTrack, index: number): void => { for (const cd of entries.get(index) ?? []) followCd(t, cd, true, true); };
   const unresolvedRepo = (badKey: string): RepoInfo => { repoLog.unsafe = true; return { found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [], localRemotes: [] }; };
   const inspect = (path: string): RepoInfo => { const info = inspectRepo(path); repoLog.repos.push(info); return info; };
   const mergeRepos = (infos: readonly RepoInfo[]): RepoInfo => infos.find(i => i.unreadable) ?? infos.find(i => !i.configOk) ?? {
@@ -430,9 +459,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   };
   const repoFor = (dashC: string | undefined): RepoInfo => {
     if (!seen.known) return unresolvedRepo('cwd');
-    if (dashC === undefined) return mergeRepos([...new Set(seen.cwds)].map(inspect));
+    if (dashC === undefined) return mergeRepos([...new Set(seen.all)].map(inspect));
     const targets = new Set<string>();
-    for (const base of seen.cwds) {
+    for (const base of seen.all) {
       const target = resolveWord({ text: dashC, dynamic: false, glob: false, quoted: false, home: dashC === '~' || dashC.startsWith('~/'), kind: 'plain' }, base, windows, language);
       if (!('path' in target)) return unresolvedRepo('-C');
       targets.add(target.path);
@@ -442,8 +471,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   let wroteEarlier = false;
   const toolConfig: MatchCtx['toolConfig'] = tool => {
     if (!seen.known || (tool === 'npm' && wroteEarlier)) return { unknownCwd: true };
-    const file = tool === 'curl' ? seen.cwds.map(c => curlConfigFile(env, c)).find(Boolean)
-      : tool === 'npm' ? seen.cwds.map(c => npmProjectConfigFile(c, env, opts.policy.roots.map(r => r.path))).find(Boolean)
+    const file = tool === 'curl' ? seen.all.map(c => curlConfigFile(env, c)).find(Boolean)
+      : tool === 'npm' ? seen.all.map(c => npmProjectConfigFile(c, env, opts.policy.roots.map(r => r.path))).find(Boolean)
         : wgetConfigFile(env);
     return file ? { file } : undefined;
   };
@@ -451,15 +480,15 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const afterStatement: MatchCtx['afterStatement'] = (result, st) => {
     if (result.paths.some(p => p.mode === 'write') || result.copies.length > 0) wroteEarlier = true;
     if (st.shapes.some(s => s.startsWith('control:'))) enclosedEarlier = true;
-    if (result.cwd) followCd(seen, result.cwd, st.repeats === true);
+    if (result.cwd) followCd(seen, result.cwd, st.nested === true, st.reentry !== undefined);
   };
+  const beforeStatement: MatchCtx['beforeStatement'] = (_st, index) => enter(seen, index);
   const fileExists = (path: string): boolean => {
     if (wroteEarlier || enclosedEarlier) return false;
     if (!seen.known && !parsePath(path).root) return false;
-    const full = resolve(seen.cwd, path);
-    return exists(full) && !isDirectory(full);
+    return seen.now.every(base => { const full = resolve(base, path); return exists(full) && !isDirectory(full); });
   };
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement, beforeStatements, beforeStatement };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
     add('deny', say('lex.denied', { detail: lexDetail(language, classified.lex) }));
@@ -503,20 +532,21 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const write = ref.mode === 'write';
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
-    const unknownCwd = relative && !cwdKnown;
+    const unknownCwd = relative && !track.known;
     const target = (t: DeleteTarget): void => { if (record && write && current) current.targets.push(t); };
     if (unknownCwd) {
       target({ input, wild: false });
+      if (record) paths.push({ input, placement: { kind: 'unresolved', reason: text('list.cwd_unknown', { input }) }, write });
       if (write) addCode(say('list.cwd_unknown', { input })); else add('ask', say('list.cwd_unknown', { input }), 'opaque');
-      if (!cwdLooped) return;
     }
     // バッククォートでエスケープした名前（'.en`v' は .env）は、エスケープを外した名前でも調べる。秘密のパスに当たるなら止める
     if (ref.word.unescaped !== undefined) {
       const { unescaped, ...rest } = ref.word;
       checkPath({ ...ref, word: { ...rest, text: unescaped, dynamic: false, glob: /[*?[]/u.test(unescaped) } }, deletes, false);
     }
-    for (const base of relative ? cwds : [cwd]) {
-      const primary = base === cwd;
+    // 分かっているフォルダはすべて、どれにいても同じ確かめをする（決められない cd のあとでも飛ばさない）
+    for (const base of relative ? track.all : [track.now[0]!]) {
+      const primary = !unknownCwd && (!relative || track.now.includes(base));
       const expanded = resolveWord(ref.word, base, windows, language);
       if (primary && !unknownCwd) target(ref.word.glob ? { input, wild: true } : 'unresolved' in expanded || ref.word.dynamic ? { input, wild: false } : { input, path: expanded.path, wild: false });
       if ('unresolved' in expanded) {
@@ -576,7 +606,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
 
   // cp・mv・Copy-Item・Move-Item・Rename-Item・New-Item: 実際に書かれるパスを組み立てて調べる
   const checkCopy = (use: CopyUse): void => {
-    for (const base of cwds) {
+    for (const base of track.all) {
       const unresolvedWord = (w: Word | null): boolean => w !== null && 'unresolved' in resolveWord(w, base, windows, language);
       const dyn = (w: Word | null): void => { if (w) addCode(say('list.write_dynamic', { input: w.text })); };
       if (use.kind === 'join') {
@@ -638,7 +668,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     let name = '';
     try { name = decodeURIComponent(new URL(url.text).pathname.split('/').filter(Boolean).pop() ?? ''); } catch { /* URL でなければ別の理由で止まっている */ }
     name ||= 'index.html';
-    for (const base of cwds) {
+    for (const base of track.all) {
       const d = dir ? resolveWord(dir, base, windows, language) : { path: base };
       if ('unresolved' in d) { addCode(say('list.write_dynamic', { input: dir?.text ?? '' })); continue; }
       const target = windows ? windowsNames(resolve(d.path, name)) : resolve(d.path, name);
@@ -647,7 +677,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   };
 
   for (const [index, st] of classified.statements.entries()) {
+    enter(track, index);
     const result = classified.results[index]!;
+    const here = track.now[0]!;
+    const cwdState = (): CwdState => ({ now: [...track.now], all: [...track.all], known: track.known });
     const words = st.words.map(w => w.text);
     const first = st.words[0];
     const name = first && !first.dynamic ? (first.text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, '') : '';
@@ -658,7 +691,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
       env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: inline.code, codeDynamic: inline.dynamic,
       stdin, shapes: [...st.shapes], reasonKeys: result.reasons.map(r => r.id ?? r.key),
-      deletes: result.deletes, targets: [], writes: [], piped: st.pipedIn || st.pipedOut, redirected: st.redirects.length > 0, cwd: cwdKnown ? cwd : null, shell,
+      deletes: result.deletes, targets: [], writes: [], piped: st.pipedIn || st.pipedOut, redirected: st.redirects.length > 0, cwd: track.known && track.now.length === 1 ? here : null, cwds: [...track.now], shell,
     };
     const source = name ? innerSource(name, st.words, shell, stdin) : undefined;
     const matchedEntries = allowEntries.filter(entry => entryMatches(entry, st.words, windows));
@@ -666,7 +699,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const depth = opts.depth ?? 0;
     let wrapped: ShellVerdict | undefined;
     if (source !== undefined) {
-      const checkInner = (allow: readonly string[]) => checkShellCommand(source!.text, cwd, { ...opts, allow, shell: source!.shell, depth: depth + 1, fetchedBefore: fetched });
+      const checkInner = (allow: readonly string[]) => checkShellCommand(source!.text, here, { ...opts, allow, shell: source!.shell, depth: depth + 1, fetchedBefore: fetched, cwdState: cwdState() });
       wrapped = source && depth < 3 ? checkInner(opts.allow ?? []) : undefined;
       if (wrapped && wrapped.statements.length === 0 && (name === 'cmd' || (isPowerShell(shell) && START_PROCESS_NAMES.has(name)))) wrapped = undefined;
       const head = wrapped?.statements[0]?.words.map(w => w.text) ?? [];
@@ -675,13 +708,14 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         return [];
       });
       if (wrapped && tails.length) wrapped = checkInner([...(opts.allow ?? []), ...tails]);
-      current.inner = wrapped?.statements.length && cwdKnown ? wrapped.statements : null;
+      current.inner = wrapped?.statements.length && track.known ? wrapped.statements : null;
+      if (wrapped?.statements.length && !track.known) current.unknownInner = wrapped.statements;
     }
     statements.push(current);
     const hardSaid = (hit: HardHit | undefined): Said | undefined => hit && say('guard.hard_denied', { label: text(hit.key), cmd: hit.cmd });
     const hardIn = (code: string, sh: ShellKind): Said | undefined => {
       if (depth >= 3) return undefined;
-      const v = checkShellCommand(code, cwd, { ...opts, shell: sh, depth: depth + 1 });
+      const v = checkShellCommand(code, here, { ...opts, shell: sh, depth: depth + 1, cwdState: cwdState() });
       const at = v.reasonKeys.indexOf('guard.hard_denied');
       return at >= 0 ? { key: 'guard.hard_denied', text: v.reasons[at]! } : undefined;
     };
@@ -737,7 +771,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if (fetched) add('deny', say('guard.download_exec'));
         else if (depth >= 3) add('deny', say('code.wrapped_unknown', { cmd: name }));
         else if (allowedByConfig) addCode(say('code.wrapped_unknown', { cmd: name }));
-      } else if (allowedByConfig && cwdKnown) {
+      } else if (allowedByConfig && track.known) {
         decision = worst(decision, wrapped.decision);
         innerReasons();
         for (const kind of wrapped.askKinds) if (!askKinds.includes(kind)) askKinds.push(kind);
@@ -749,7 +783,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if (allowedByConfig) addCode(say('code.wrapped_unknown', { cmd: name }));
         decision = worst(decision, wrapped.decision);
         if (wrapped.decision === 'deny' || result.level !== 'allow') innerReasons();
-        if (cwdKnown) { paths.push(...wrapped.paths); writes.push(...wrapped.writes); }
+        if (track.known) { paths.push(...wrapped.paths); writes.push(...wrapped.writes); }
       }
       if (wrapped) { fetched ||= wrapped.downloaded; pulled ||= wrapped.fetched; }
     }
@@ -761,20 +795,16 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     for (const remote of result.remoteNames) checkRemoteName(remote.url, remote.dir);
     if (result.level === 'once' || result.level === 'deny') {
       for (const token of suspectPaths(st.words)) {
-        const resolved = resolveWord({ text: token, dynamic: st.words.some(w => w.text === token && w.dynamic), glob: false, quoted: false, home: token === '~' || token.startsWith('~/'), kind: 'plain' }, cwd, windows, language);
-        if ('unresolved' in resolved) continue;
-        const placement = placePath(resolved.path, opts.policy);
-        if (placement.kind === 'deny') add('deny', { key: 'scope.deny', text: placement.reason });
+        for (const base of track.all) {
+          const resolved = resolveWord({ text: token, dynamic: st.words.some(w => w.text === token && w.dynamic), glob: false, quoted: false, home: token === '~' || token.startsWith('~/'), kind: 'plain' }, base, windows, language);
+          if ('unresolved' in resolved) continue;
+          const placement = placePath(resolved.path, opts.policy);
+          if (placement.kind === 'deny') add('deny', { key: 'scope.deny', text: placement.reason });
+        }
       }
     }
 
-    if (result.cwd) {
-      const track: CwdTrack = { cwd, cwds, known: cwdKnown, looped: cwdLooped };
-      followCd(track, result.cwd, st.repeats === true);
-      cwd = track.cwd;
-      cwdKnown = track.known;
-      cwdLooped = track.looped === true;
-    }
+    if (result.cwd) followCd(track, result.cwd, st.nested === true, st.reentry !== undefined);
   }
   return done();
 }

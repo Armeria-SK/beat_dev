@@ -41,8 +41,10 @@ export interface Statement {
   upstream?: Statement;
   // スクリプトブロックの中の文
   inBlock?: boolean;
-  // 何度も動くか、いつ動くか分からない本体（ループ・関数・process）の中の文。中の cd のあとの作業フォルダは決められない
-  repeats?: boolean;
+  // 動くかどうか分からない文（本体・条件・括弧の中、&& / || のあと）。中の cd は前のフォルダを消さない（「かもしれない」）
+  nested?: boolean;
+  // また動きうる本体（ループ・関数・trap・スクリプトブロック）の中の文: その本体のいちばん外の入口の文の番号。そこに入る前に中の cd の先も足す
+  reentry?: number;
   background: boolean;
   // 形そのものが今回だけになる理由の印（関数の定義・呼び出し演算子・splatting・許していない型など）
   shapes: string[];
@@ -611,7 +613,7 @@ const PS_OTHER_CONTROL = new Set([
 ]);
 // 本体を文として読む制御の言葉と、本体の文に付ける印。読めなければ読み飛ばしに戻し、control_opaque の印を付ける
 const PS_READ_CONTROL = new Map<string, { inBlock?: true; repeats?: true }>([
-  ['try', {}], ['trap', { inBlock: true }], ['while', { repeats: true }], ['do', { repeats: true }], ['for', { repeats: true }], ['switch', { repeats: true }],
+  ['try', {}], ['trap', { inBlock: true, repeats: true }], ['while', { repeats: true }], ['do', { repeats: true }], ['for', { repeats: true }], ['switch', { repeats: true }],
   ['function', { inBlock: true, repeats: true }], ['filter', { inBlock: true, repeats: true }], ['begin', { inBlock: true }], ['process', { inBlock: true, repeats: true }],
   ['end', { inBlock: true }], ['param', {}], ['return', {}], ['throw', {}], ['exit', {}],
 ]);
@@ -860,16 +862,20 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
 
   const statements = (close: string | null, depth: number): LexFail | null => {
     if (depth > PS_MAX_DEPTH) return fail('depth', String(PS_MAX_DEPTH));
+    let chained = false;
     for (;;) {
       while (isSep(peek())) k++;
       const t = peek();
       if (!t) return close ? fail('unclosed', close) : null;
       if (close && isP(t, close)) { k++; return null; }
       if (t.t === 'p' && (t.v === ')' || t.v === '}' || t.v === ']')) return fail('unexpected', t.v);
+      const from = sink.length;
       const r = pipeline(depth);
       if (r) return r;
+      if (chained) for (const s of sink.slice(from)) s.nested = true;
       const a = peek();
-      if (a?.t === 'p' && (a.v === '&&' || a.v === '||')) k++;
+      chained = a?.t === 'p' && (a.v === '&&' || a.v === '||');
+      if (chained) k++;
     }
   };
 
@@ -893,6 +899,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     for (;;) {
       const st = element(depth);
       if (isFail(st)) return st;
+      if (depth > 0) st.nested = true;
       st.pipedIn = pipedIn;
       if (prev) st.upstream = prev;
       prev = st;
@@ -908,7 +915,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     const r = statements('}', depth + 1);
     if (r) return r;
     const inner = sink.slice(before);
-    for (const st of inner) st.inBlock = true;
+    for (const st of inner) { st.inBlock = true; st.reentry = Math.min(st.reentry ?? Infinity, before); }
     return plain('{…}', { kind: 'block', dynamic: true, block: inner });
   };
 
@@ -1362,7 +1369,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const flags = PS_READ_CONTROL.get(kw)!;
       for (const inner of sink.slice(mark + 1)) {
         if (flags.inBlock) inner.inBlock = true;
-        if (flags.repeats) inner.repeats = true;
+        if (flags.repeats) inner.reentry = Math.min(inner.reentry ?? Infinity, kw === 'trap' ? 0 : mark + 1);
       }
       return st;
     }
@@ -1395,7 +1402,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         const bodyStart = sink.length;
         r = statements('}', depth + 1);
         if (r) return r;
-        for (const inner of sink.slice(bodyStart)) inner.repeats = true;
+        for (const inner of sink.slice(bodyStart)) inner.reentry = Math.min(inner.reentry ?? Infinity, bodyStart);
         st.kind = 'control'; st.header = 'foreach'; st.words.push(plain(`$${v.v}`, { dynamic: true }));
         return finish(st);
       }
@@ -1429,11 +1436,6 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       if (PS_READ_CONTROL.has(lower)) return controlRead(lower, depth);
       if (PS_OPAQUE_CONTROL.has(lower) || (lower === 'using' && isWordOf(peek(1), 'module', 'assembly'))) return opaque(lower, depth);
       if (PS_OTHER_CONTROL.has(lower)) return controlSkip(depth);
-      if (PS_ATTRIBUTE.test(t.v) && isP(peek(1), '(')) {
-        let j = k;
-        for (let a = attributeAt(j); a >= 0; a = attributeAt(j)) { j = a; while (isP(toks[j], '\n')) j++; }
-        if (j > k && isWordOf(toks[j], 'param')) return controlRead('param', depth);
-      }
     }
     // 代入。左辺（$a.b[ … ]）は chain で読む（添字の中の文もトップレベルの文と同じに判定される）。代入でなければ、読んだ位置と文を戻して、式として読み直す
     if (t.t === 'var') {

@@ -1,7 +1,7 @@
 export type Order = 1 | 3 | 4 | 5;
 
 const REFUSED = [
-  'guard.empty', 'guard.fork_bomb', 'guard.elevate', 'guard.no_command', 'guard.hard_denied', 'guard.device_write', 'guard.config_denied',
+  'guard.empty', 'guard.fork_bomb', 'guard.elevate', 'guard.cwd_many', 'guard.no_command', 'guard.hard_denied', 'guard.device_write', 'guard.config_denied',
   'guard.download_exec', 'guard.irreversible', 'guard.write_readonly', 'guard.path_unresolved', 'guard.self_port', 'scope.deny',
   'scope.cmd_subst', 'scope.other_home', 'scope.unknown_env', 'scope.glob_dotdot', 'scope.hazard_prefix', 'scope.hazard_stream', 'scope.hazard_device', 'scope.secret', 'scope.deny_list',
   'lex.denied', 'lex.curly_quote', 'lex.dash', 'lex.space', 'lex.fullwidth', 'lex.control', 'lex.depth', 'lex.unclosed', 'lex.backtick', 'lex.backslash', 'lex.parse_token',

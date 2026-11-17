@@ -1,6 +1,6 @@
 // PowerShell の許可の一覧（security-self-api.md §11.3.2・11.3.4）。コマンドレットと別名は表の名前だけ。引数は省略しない正式な名前（大文字小文字は問わない）。
 
-import { Acc, checkValue, flagMap, isFlagLike, literal, type FlagDef, type MatchCtx, type ValueType } from './allowlist-core.ts';
+import { Acc, checkValue, flagMap, isFlagLike, literal, PS_CD_NAMES, PS_POP_NAMES, type FlagDef, type MatchCtx, type ValueType } from './allowlist-core.ts';
 import type { Statement, Word } from './shell-lex.ts';
 
 // writes: ファイルを書く・作る・移す・消すコマンドレット（毎回確かめる。パイプで受けるファイルの読みの判定 allowlist-pipe.ts は、読むコマンドだけを見る）
@@ -150,11 +150,11 @@ cmd('start-sleep sleep', 'Seconds:n Milliseconds:n', 'seconds', (p, acc) => {
   const s = first(p, 'seconds')[0];
   if (s && !s.dynamic && Number(s.text) > 600) acc.add('once', 'list.form', { cmd: 'Start-Sleep', detail: s.text }, true);
 });
-cmd('set-location sl cd chdir push-location pushd', 'Path:path-r LiteralPath:path-r', 'path', (p, acc) => {
+cmd(PS_CD_NAMES.join(' '), 'Path:path-r LiteralPath:path-r', 'path', (p, acc) => {
   const w = pathWords(p)[0];
   acc.cwd = { word: w && !(w.text === '-' || w.text === '+') ? w : null };
 });
-cmd('pop-location popd', '', '', (_p, acc) => { acc.cwd = { word: null }; });
+cmd(PS_POP_NAMES.join(' '), '', '', (_p, acc) => { acc.cwd = { word: null }; });
 
 // ── 書く: 毎回確かめる（security-self-api.md §11.13）──
 // PowerShell のパラメータの結び付き（パイプで流れてくる値の名前から -Destination や -Path が決まる、など）はガードが真似しきれず、審査のたびに確かめなしの書き込みが見つかった。

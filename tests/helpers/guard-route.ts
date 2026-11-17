@@ -103,9 +103,9 @@ export interface GuardModules {
 
 const NO_GIT = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
 
-export function guardRowOf(mods: GuardModules, command: string, shell: 'powershell' | 'bash', ws: string): GuardRow {
+export function guardRowOf(mods: GuardModules, command: string, shell: 'powershell' | 'bash' | 'pwsh', ws: string, policy?: Record<string, unknown>): GuardRow {
   try {
-    const v = mods.checkShellCommand(command, ws, { policy: { roots: [{ path: ws, mode: 'write' }], deny: [] }, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
+    const v = mods.checkShellCommand(command, ws, { policy: policy ?? { roots: [{ path: ws, mode: 'write' }], deny: [] }, outsideRoots: 'ask', shell, windows: shell !== 'bash' });
     const statements = v.statements as never[];
     const out = v.decision === 'deny' ? undefined : mods.outboundOf({ tool: 'shell', statements }, NO_GIT);
     return {
@@ -120,3 +120,20 @@ export function guardRowOf(mods: GuardModules, command: string, shell: 'powershe
 export const normal = (row: GuardRow): GuardRow => ({
   ...row, reasonKeys: [...new Set(row.reasonKeys)].sort(), askKinds: [...new Set(row.askKinds)].sort(), pushes: [...row.pushes].map(String).sort() as Array<string | null>,
 });
+
+// cd prefixes for the prefix invariant and the corpus script: [prefix, in the default unit run]. Each puts a cd that may not run, may run again,
+// or cannot be worked out, in front of a command
+export const CD_PREFIXES: ReadonlyArray<[string, boolean]> = [
+  ['try { cd $x } catch {}', true],
+  ['try { Set-Location sub } catch {}', false],
+  ['try {} catch { cd .. }', true],
+  ['try {} finally { cd sub }', false],
+  ['trap { cd .. }', false],
+  ['while ($false) { cd sub }', true],
+  ['do { cd .. } while ($false)', false],
+  ['switch (1) { 2 { cd .. } }', false],
+  ['function f { cd sub }', false],
+  ['if ($false) { cd sub }', true],
+  ['foreach ($i in @()) { cd .. }', false],
+  ['1 | ForEach-Object { cd sub }', false],
+];

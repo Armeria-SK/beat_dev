@@ -120,6 +120,7 @@ const OPAQUE = [
   'switch -Bogus ($x) { default { Get-Date } }',
   'until ($true) { Get-Date }',
   'data { "x" }',
+  'function f { [CmdletBinding()] param($x) }',
   'param($x = "$(Remove-Item -Recurse -Force C:/Users)")',
   'function f($x = "$(Remove-Item -Recurse -Force C:/Users)") { 1 }',
 ];
@@ -162,21 +163,27 @@ test('control bodies: a read body and a skipped body leave exactly their own sta
   assert.ok(opaque[0]!.includes('control_opaque:try'), opaque.join(' | '));
 });
 
-test('control bodies: function and trap bodies are inBlock; loop and function bodies repeat; foreach too', () => {
+test('control bodies: function and trap bodies are inBlock; body statements are nested; re-runnable bodies carry their entry (trap: 0)', () => {
   const flags = (command: string) => {
     const lexed = lexShell(command, 'powershell');
     assert.ok(lexed.ok, command);
     const st = lexed.ok ? lexed.statements.find(s => s.words[0]?.text === 'ls') : undefined;
-    return { inBlock: st?.inBlock === true, repeats: st?.repeats === true };
+    return { inBlock: st?.inBlock === true, nested: st?.nested === true, reentry: st?.reentry ?? null };
   };
-  assert.deepEqual(flags('function f { ls }'), { inBlock: true, repeats: true });
-  assert.deepEqual(flags('trap { ls }'), { inBlock: true, repeats: false });
-  assert.deepEqual(flags('while ($x) { ls }'), { inBlock: false, repeats: true });
-  assert.deepEqual(flags('do { ls } until ($x)'), { inBlock: false, repeats: true });
-  assert.deepEqual(flags('for (;;) { ls }'), { inBlock: false, repeats: true });
-  assert.deepEqual(flags('foreach ($i in 1..3) { ls }'), { inBlock: false, repeats: true });
-  assert.deepEqual(flags('try { ls } catch {}'), { inBlock: false, repeats: false });
-  assert.deepEqual(flags('process { ls }'), { inBlock: true, repeats: true });
+  assert.deepEqual(flags('function f { ls }'), { inBlock: true, nested: true, reentry: 1 });
+  assert.deepEqual(flags('Get-Date; trap { ls }'), { inBlock: true, nested: true, reentry: 0 });
+  assert.deepEqual(flags('while ($x) { ls }'), { inBlock: false, nested: true, reentry: 1 });
+  assert.deepEqual(flags('do { ls } until ($x)'), { inBlock: false, nested: true, reentry: 1 });
+  assert.deepEqual(flags('for (;;) { ls }'), { inBlock: false, nested: true, reentry: 1 });
+  assert.deepEqual(flags('foreach ($i in 1..3) { ls }'), { inBlock: false, nested: true, reentry: 1 });
+  assert.deepEqual(flags('try { ls } catch {}'), { inBlock: false, nested: true, reentry: null });
+  assert.deepEqual(flags('if ($x) { ls }'), { inBlock: false, nested: true, reentry: null });
+  assert.deepEqual(flags('process { ls }'), { inBlock: true, nested: true, reentry: 1 });
+  assert.deepEqual(flags('1 | ForEach-Object { ls }'), { inBlock: true, nested: true, reentry: 1 });
+  assert.deepEqual(flags('ls'), { inBlock: false, nested: false, reentry: null });
+  assert.deepEqual(flags('Get-Date; ls'), { inBlock: false, nested: false, reentry: null });
+  const pwsh = lexShell('Test-Path a && ls', 'pwsh');
+  assert.ok(pwsh.ok && pwsh.statements.find(s => s.words[0]?.text === 'ls')?.nested === true, 'pwsh: a statement after && may not run');
 });
 
 test('control bodies: a cd inside a loop body makes the working folder unknown afterwards, and the known folders are still checked', t => {
@@ -185,8 +192,6 @@ test('control bodies: a cd inside a loop body makes the working folder unknown a
     const row = guardRowOf(MODS, command, 'powershell', ws);
     assert.ok(row.reasonKeys.includes('list.cwd_unknown'), `${command} -> ${row.reasonKeys.join(',')}`);
   }
-  const once = guardRowOf(MODS, 'try { cd .. } catch {}; Remove-Item x', 'powershell', ws);
-  assert.ok(!once.reasonKeys.includes('list.cwd_unknown'), `try runs once: ${once.reasonKeys.join(',')}`);
   const home = guardRowOf(MODS, 'cd ~; while ($true) { cd .ssh; break }; Get-Content id_rsa', 'powershell', ws);
   assert.equal(home.decision, 'deny', `the folder the loop leaves you in is still checked: ${home.reasonKeys.join(',')}`);
 });
@@ -199,7 +204,7 @@ test('control bodies: ordinary bodies stay readable and are not refused', t => {
     'param([string]$Path = \'.\') Get-ChildItem $Path', 'exit $LASTEXITCODE', 'return', 'throw "bad input"',
   ];
   // A function body is read too. As before, a command after a function definition may be that function, so outbound counts it as sending (owner, not refused)
-  for (const command of ['function Get-Thing([string]$Name) { Get-ChildItem $Name }', 'function f {\n  [CmdletBinding()]\n  param([Parameter(Mandatory)][string]$Name)\n  process { Write-Output $Name }\n}']) {
+  for (const command of ['function Get-Thing([string]$Name) { Get-ChildItem $Name }', 'function f {\n  param([Parameter(Mandatory)][string]$Name)\n  process { Write-Output $Name }\n}']) {
     const lexed = lexShell(command, 'powershell');
     assert.ok(lexed.ok && !lexed.statements.some(s => s.shapes.some(x => x.startsWith('control_opaque:'))), `${command}: fell back`);
     assert.notEqual(routeOf(guardRowOf(MODS, command, 'powershell', ws), { judgeOff: true }), 'refused', command);

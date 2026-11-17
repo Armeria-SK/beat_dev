@@ -24,6 +24,13 @@ export interface CopyUse { kind: 'copy' | 'join' | 'rename'; sources: Word[]; de
 // hooksDir: そのリポジトリ自身のフックの置き場所（共通の git フォルダの hooks/）。見つからなければ空
 export interface RepoInfo { found: boolean; configOk: boolean; badKey: string; unreadable: boolean; hooksPath: boolean; hooksFiles: boolean; hooksDir: string; remotes: readonly string[]; localRemotes: readonly string[] }
 
+// 作業フォルダを変えるコマンドの名前（ここだけに書く。allowlist-ps.ts・allowlist-tools.ts の登録と、shell-guard.ts の本体の入口の先読み）
+export const PS_CD_NAMES: readonly string[] = ['set-location', 'sl', 'cd', 'chdir', 'push-location', 'pushd'];
+export const PS_POP_NAMES: readonly string[] = ['pop-location', 'popd'];
+export const SH_CD_NAMES: readonly string[] = ['cd', 'pushd', 'chdir'];
+export const SH_POP_NAMES: readonly string[] = ['popd'];
+export const CD_COMMANDS: ReadonlySet<string> = new Set([...PS_CD_NAMES, ...PS_POP_NAMES, ...SH_CD_NAMES, ...SH_POP_NAMES]);
+
 export interface MatchCtx {
   shell: ShellKind;
   windows: boolean;
@@ -38,6 +45,9 @@ export interface MatchCtx {
   toolConfig?: ((tool: 'curl' | 'wget' | 'npm') => ToolRc | undefined) | undefined;
   // 文 1 つの判定が終わるたびに呼ばれる（cd で動いた先を、あとの文の判定で数えるため）
   afterStatement?: ((result: StatementResult, st: Statement) => void) | undefined;
+  // 文の判定の前に、並び全体を 1 回（また動きうる本体の cd を先に読むため）と、文ごとに 1 回（番号つき）呼ばれる
+  beforeStatements?: ((all: readonly Statement[]) => void) | undefined;
+  beforeStatement?: ((st: Statement, index: number) => void) | undefined;
 }
 
 // file: 読まれる設定ファイルの場所。unknownCwd: cd の先が分からず、調べられない
