@@ -31,6 +31,7 @@ function shapes(st: Statement, acc: Acc): void {
     const detail = rest.join(':');
     if (SHAPES[shape]) acc.add('once', SHAPES[shape] as 'shape.call', {}, false);
     else if (head === 'control') acc.add('once', 'shape.control', { name: detail || 'bash' }, false);
+    else if (head === 'control_opaque') acc.add('once', 'shape.control_opaque', { name: detail }, false);
     else if (head === 'static') acc.add('once', 'shape.static', { name: detail }, false);
     else if (head === 'cast') acc.add('once', 'shape.cast', { name: detail }, false);
     else if (head === 'method') acc.add('once', 'shape.method', { name: detail }, false);
@@ -146,6 +147,7 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   if (st.kind === 'control') {
     if (st.header === 'for' || st.header === 'foreach') loopVariable(st, acc);
     if (st.header === 'for') for (const w of st.words.slice(2)) if (w.glob) acc.read(w);
+    if (st.header === 'switch') for (const w of st.words.slice(1)) acc.read(w);
     return acc.result();
   }
   assignments(st, ps, acc);

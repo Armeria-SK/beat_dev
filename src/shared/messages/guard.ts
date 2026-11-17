@@ -111,6 +111,7 @@ const en = {
   'shape.process_out': '>( … ) (the place written is not visible)',
   'shape.pipe_stderr': '|&',
   'shape.control': 'a control form ({name})',
+  'shape.control_opaque': 'a control form whose body beat cannot read ({name})',
   'shape.script_block': 'a script block { … } outside the places that are allowed',
   'shape.static': 'a .NET static member ({name})',
   'shape.cast': 'a type cast ({name})',

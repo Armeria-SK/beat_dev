@@ -43,8 +43,8 @@ export interface ShellGuardOptions {
   fetchedBefore?: boolean;
 }
 
-// cwd: いま（直前の cd の先）。cwds: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか
-interface CwdTrack { cwd: string; cwds: string[]; known: boolean }
+// cwd: いま（直前の cd の先）。cwds: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか。looped: 繰り返す本体の中の cd で決められなくなった（cwds は今までどおり調べる）
+interface CwdTrack { cwd: string; cwds: string[]; known: boolean; looped?: boolean }
 
 export interface CheckedPath { input: string; path?: string; placement: Placement | { kind: 'unresolved'; reason: string }; write: boolean }
 
@@ -252,6 +252,8 @@ function cmdHard(args: readonly string[], depth: number): HardHit | undefined {
   return undefined;
 }
 const ELEVATE = /^\s*\(?\s*(?:sudo|doas|su|runas|pkexec)(?:\.exe)?\b/iu;
+// 文の頭を見る ELEVATE は、PowerShell の本体の中（try { sudo … }・return sudo …）の文を見ないので、文ごとにも見る
+const ELEVATE_NAMES: ReadonlySet<string> = new Set(['sudo', 'doas', 'su', 'runas', 'pkexec']);
 const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
 // 外の中身を持ち込む git のサブコマンド（NET のうち、通信するもの。init と worktree は含めない）
 const PULLING_GIT: ReadonlySet<string> = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'submodule']);
@@ -394,6 +396,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const cwds: string[] = [initialCwd];
   let cwd = initialCwd;
   let cwdKnown = true;
+  let cwdLooped = false;
   const resolved = new Map<string, string | undefined>();
   const external: MatchCtx['external'] = opts.which ? (name: string) => {
     if (!resolved.has(name)) resolved.set(name, opts.which!(name));
@@ -410,12 +413,13 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   // 許可の一覧の判定は文の順に進む。リポジトリの設定・curl の設定ファイルは、そのとき cd でいられるすべてのフォルダ（最初と、cd で動いた先すべて）で調べる。
   // cd の先が分からなければ（変数・ワイルドカード・cd -・popd など）、調べられないので今回だけ
   const seen: CwdTrack = { cwd: initialCwd, cwds: [initialCwd], known: true };
-  const followCd = (track: CwdTrack, cd: { word: Word | null }): void => {
+  const followCd = (track: CwdTrack, cd: { word: Word | null }, repeats: boolean): void => {
     if (!cd.word || cd.word.dynamic || cd.word.glob) { track.known = false; return; }
     const e = resolveWord(cd.word, track.cwd, windows, language);
     if ('unresolved' in e) { track.known = false; return; }
     track.cwd = e.path;
     track.cwds.push(e.path);
+    if (repeats) { track.known = false; track.looped = true; }
   };
   const unresolvedRepo = (badKey: string): RepoInfo => { repoLog.unsafe = true; return { found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [], localRemotes: [] }; };
   const inspect = (path: string): RepoInfo => { const info = inspectRepo(path); repoLog.repos.push(info); return info; };
@@ -447,7 +451,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const afterStatement: MatchCtx['afterStatement'] = (result, st) => {
     if (result.paths.some(p => p.mode === 'write') || result.copies.length > 0) wroteEarlier = true;
     if (st.shapes.some(s => s.startsWith('control:'))) enclosedEarlier = true;
-    if (result.cwd) followCd(seen, result.cwd);
+    if (result.cwd) followCd(seen, result.cwd, st.repeats === true);
   };
   const fileExists = (path: string): boolean => {
     if (wroteEarlier || enclosedEarlier) return false;
@@ -499,11 +503,12 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const write = ref.mode === 'write';
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
+    const unknownCwd = relative && !cwdKnown;
     const target = (t: DeleteTarget): void => { if (record && write && current) current.targets.push(t); };
-    if (relative && !cwdKnown) {
+    if (unknownCwd) {
       target({ input, wild: false });
       if (write) addCode(say('list.cwd_unknown', { input })); else add('ask', say('list.cwd_unknown', { input }), 'opaque');
-      return;
+      if (!cwdLooped) return;
     }
     // バッククォートでエスケープした名前（'.en`v' は .env）は、エスケープを外した名前でも調べる。秘密のパスに当たるなら止める
     if (ref.word.unescaped !== undefined) {
@@ -513,7 +518,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     for (const base of relative ? cwds : [cwd]) {
       const primary = base === cwd;
       const expanded = resolveWord(ref.word, base, windows, language);
-      if (primary) target(ref.word.glob ? { input, wild: true } : 'unresolved' in expanded || ref.word.dynamic ? { input, wild: false } : { input, path: expanded.path, wild: false });
+      if (primary && !unknownCwd) target(ref.word.glob ? { input, wild: true } : 'unresolved' in expanded || ref.word.dynamic ? { input, wild: false } : { input, path: expanded.path, wild: false });
       if ('unresolved' in expanded) {
         if (primary) paths.push({ input, placement: { kind: 'unresolved', reason: expanded.unresolved }, write });
         if (write) addCode(say('list.write_dynamic', { input }));
@@ -710,6 +715,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const hardReason = topHard ?? st.heads?.map(headHard).find(Boolean);
     const hard = hardReason !== undefined;
     if (hardReason) add('deny', hardReason);
+    if (isPowerShell(shell) && ELEVATE_NAMES.has(name)) add('deny', say('guard.elevate'));
     if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a) || (/^of=/u.test(a) && posix.normalize(a.slice(3)).startsWith('/dev/')))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
@@ -763,10 +769,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
 
     if (result.cwd) {
-      const track: CwdTrack = { cwd, cwds, known: cwdKnown };
-      followCd(track, result.cwd);
+      const track: CwdTrack = { cwd, cwds, known: cwdKnown, looped: cwdLooped };
+      followCd(track, result.cwd, st.repeats === true);
       cwd = track.cwd;
       cwdKnown = track.known;
+      cwdLooped = track.looped === true;
     }
   }
   return done();

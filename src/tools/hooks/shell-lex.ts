@@ -41,10 +41,12 @@ export interface Statement {
   upstream?: Statement;
   // スクリプトブロックの中の文
   inBlock?: boolean;
+  // 何度も動くか、いつ動くか分からない本体（ループ・関数・process）の中の文。中の cd のあとの作業フォルダは決められない
+  repeats?: boolean;
   background: boolean;
   // 形そのものが今回だけになる理由の印（関数の定義・呼び出し演算子・splatting・許していない型など）
   shapes: string[];
-  // 制御の形: 'for' | 'foreach' | 'if'
+  // 制御の形: 'for' | 'foreach' | 'if' | 'switch'（-File のときだけ。words[1] が読むファイル）
   header?: string;
   // 読み飛ばした制御の本体（try・while など）の中で、コマンドの位置にある語と、そのあとの引数（必ず断るコマンドを見つけるためだけに使う）
   heads?: string[][];
@@ -607,6 +609,15 @@ const PS_OTHER_CONTROL = new Set([
   'function', 'filter', 'class', 'enum', 'param', 'begin', 'process', 'end', 'trap', 'try', 'catch', 'finally', 'switch', 'do', 'while', 'for', 'until', 'using',
   'return', 'throw', 'break', 'continue', 'exit', 'data', 'workflow', 'parallel', 'sequence', 'inlinescript', 'foreach-object-parallel',
 ]);
+// 本体を文として読む制御の言葉と、本体の文に付ける印。読めなければ読み飛ばしに戻し、control_opaque の印を付ける
+const PS_READ_CONTROL = new Map<string, { inBlock?: true; repeats?: true }>([
+  ['try', {}], ['trap', { inBlock: true }], ['while', { repeats: true }], ['do', { repeats: true }], ['for', { repeats: true }], ['switch', { repeats: true }],
+  ['function', { inBlock: true, repeats: true }], ['filter', { inBlock: true, repeats: true }], ['begin', { inBlock: true }], ['process', { inBlock: true, repeats: true }],
+  ['end', { inBlock: true }], ['param', {}], ['return', {}], ['throw', {}], ['exit', {}],
+]);
+const PS_OPAQUE_CONTROL = new Set(['class', 'enum', 'data', 'workflow', 'parallel', 'sequence', 'inlinescript', 'foreach-object-parallel', 'until', 'catch', 'finally']);
+const PS_SWITCH_OPTIONS = new Set(['-regex', '-wildcard', '-exact', '-casesensitive', '-file']);
+const PS_ATTRIBUTE = /^\[[A-Za-z_][A-Za-z0-9_.]*$/u;
 const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=', '%=']);
 const PS_DEFINERS = new Set(['function', 'filter', 'workflow', 'class', 'enum', 'configuration']);
 const PS_PAREN_KEYWORDS = new Set(['param', 'while', 'until', 'for', 'switch', 'catch', 'foreach', 'if', 'elseif']);
@@ -1105,10 +1116,10 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     }
   };
 
-  const controlSkip = (depth: number): Statement | LexFail => {
+  const controlSkip = (depth: number, kw = peek()!.v.toLowerCase()): Statement | LexFail => {
     const st = blank();
     st.kind = 'control';
-    st.shapes.push(`control:${peek()!.v.toLowerCase()}`);
+    st.shapes.push(`control:${kw}`);
     const heads: string[][] = [];
     const stack: Array<'brace' | 'switch' | 'paren' | 'kwparen' | 'hash' | 'sub'> = [];
     let current: string[] | null = null;
@@ -1169,6 +1180,198 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     return finish(st);
   };
 
+  const isWordOf = (t: Tok | undefined, ...vs: string[]): boolean => t?.t === 'word' && vs.includes(t.v.toLowerCase());
+  const pastNl = (): number => { let j = 0; while (isP(peek(j), '\n')) j++; return j; };
+  const notRead = (kw: string): LexFail => fail('unexpected', kw);
+  const bodyOf = (depth: number, kw: string): LexFail | null => {
+    skipNl();
+    if (!isP(peek(), '{')) return notRead(kw);
+    k++;
+    return statements('}', depth + 1);
+  };
+  const condOf = (depth: number, kw: string): LexFail | null => {
+    skipNl();
+    if (!isP(peek(), '(')) return notRead(kw);
+    k++;
+    return statements(')', depth + 1);
+  };
+
+  // 名前を呼ぶときに何も動かない属性 [Name(定数, Name=定数)]。終わりの次の位置、属性でなければ -1
+  const attributeAt = (j: number): number => {
+    const t = toks[j];
+    if (t?.t === 'type') return j + 1;
+    // ] のすぐあとの [ は、字句の段で添字の [ として分かれる（[Parameter()][string]$x）
+    if (isP(t, '[') && toks[j + 1]?.t === 'word') {
+      const name = /^([A-Za-z_][A-Za-z0-9_.]*)(\[?)$/u.exec(toks[j + 1]!.v);
+      if (!name) return -1;
+      if (name[2]) return isP(toks[j + 2], ']') && isP(toks[j + 3], ']') ? j + 4 : -1;
+      if (isP(toks[j + 2], ']')) return j + 3;
+      if (!isP(toks[j + 2], '(')) return -1;
+      j += 1;
+    } else if (!(t?.t === 'word' && PS_ATTRIBUTE.test(t.v) && isP(toks[j + 1], '('))) return -1;
+    for (j += 2; ; j++) {
+      const a = toks[j];
+      if (!a) return -1;
+      if (isP(a, ')')) return isP(toks[j + 1], ']') ? j + 2 : -1;
+      if (a.t === 'type' || (a.t === 'p' && (a.v === ',' || a.v === '\n')) || (a.t === 'str' && a.dyn !== true) || (a.t === 'var' && ['true', 'false', 'null'].includes(a.v.toLowerCase()))) continue;
+      if (a.t === 'word' && /^[A-Za-z0-9_.=+-]+$/u.test(a.v)) continue;
+      return -1;
+    }
+  };
+  // param( … ) と function f( … ) の簡単な形: [型]・属性・$名前・= 定数。) の次の位置、簡単な形でなければ -1
+  const simpleParamsAt = (j: number): number => {
+    for (;;) {
+      const t = toks[j];
+      if (!t) return -1;
+      if (isP(t, ')')) return j + 1;
+      if (t.t === 'p' && (t.v === ',' || t.v === '\n')) { j++; continue; }
+      const attr = attributeAt(j);
+      if (attr >= 0) { j = attr; continue; }
+      if (t.t !== 'var') return -1;
+      j++;
+      const eq = toks[j];
+      if (!(eq?.t === 'word' && eq.v.startsWith('='))) continue;
+      if (eq.v !== '=') { if (!isNumberWord(eq.v.slice(1))) return -1; j++; continue; }
+      const v = toks[j + 1];
+      const constant = (v?.t === 'word' && isNumberWord(v.v)) || (v?.t === 'str' && v.dyn !== true) || (v?.t === 'var' && ['true', 'false', 'null'].includes(v.v.toLowerCase()));
+      if (!constant) return -1;
+      j += 2;
+    }
+  };
+
+  const readControl = (kw: string, st: Statement, depth: number): LexFail | null => {
+    if (kw === 'param') {
+      let j = k;
+      for (let a = attributeAt(j); a >= 0; a = attributeAt(j)) { j = a; while (isP(toks[j], '\n')) j++; }
+      if (!isWordOf(toks[j], 'param') || !isP(toks[j + 1], '(')) return notRead(kw);
+      const end = simpleParamsAt(j + 2);
+      if (end < 0) return notRead(kw);
+      k = end;
+      return null;
+    }
+    k++;
+    if (kw === 'return' || kw === 'throw' || kw === 'exit') return isEnd(peek()) ? null : pipeline(depth + 1);
+    if (kw === 'try') {
+      let r = bodyOf(depth, kw);
+      if (r) return r;
+      let handlers = 0;
+      for (;;) {
+        const skip = pastNl();
+        const next = peek(skip);
+        if (!isWordOf(next, 'catch', 'finally')) break;
+        k += skip + 1;
+        if (isWordOf(next, 'catch')) while (peek()?.t === 'type' || isP(peek(), ',')) k++;
+        r = bodyOf(depth, kw);
+        if (r) return r;
+        handlers++;
+        if (isWordOf(next, 'finally')) break;
+      }
+      return handlers ? null : notRead(kw);
+    }
+    if (kw === 'trap') {
+      if (peek()?.t === 'type') k++;
+      return bodyOf(depth, kw);
+    }
+    if (kw === 'while') return condOf(depth, kw) ?? bodyOf(depth, kw);
+    if (kw === 'for') return condOf(depth, kw) ?? bodyOf(depth, kw);
+    if (kw === 'do') {
+      const r = bodyOf(depth, kw);
+      if (r) return r;
+      const skip = pastNl();
+      if (!isWordOf(peek(skip), 'while', 'until')) return notRead(kw);
+      k += skip + 1;
+      return condOf(depth, kw);
+    }
+    if (kw === 'function' || kw === 'filter') {
+      if (peek()?.t !== 'word') return notRead(kw);
+      st.source = `${kw} ${peek()!.v}`;
+      k++;
+      if (isP(peek(), '(')) {
+        const end = simpleParamsAt(k + 1);
+        if (end < 0) return notRead(kw);
+        k = end;
+      }
+      return bodyOf(depth, kw);
+    }
+    if (kw === 'begin' || kw === 'process' || kw === 'end') return bodyOf(depth, kw);
+    // switch [-Regex|-Wildcard|-Exact|-CaseSensitive]* (-File <path> | ( 条件 )) { ラベル { 本体 } … }
+    let file: Word | null = null;
+    while (peek()?.t === 'word' && peek()!.v.startsWith('-')) {
+      const option = peek()!.v.toLowerCase();
+      if (!PS_SWITCH_OPTIONS.has(option) || (option === '-file' && file)) return notRead(kw);
+      k++;
+      if (option !== '-file') continue;
+      const w = argument(depth + 1, st);
+      if (isFail(w)) return w;
+      if (!w) return notRead(kw);
+      file = w;
+    }
+    if (file) { st.header = 'switch'; st.words.push(plain('switch'), file); } else {
+      const r = condOf(depth, kw);
+      if (r) return r;
+    }
+    skipNl();
+    if (!isP(peek(), '{')) return notRead(kw);
+    k++;
+    for (;;) {
+      while (isSep(peek())) k++;
+      const t = peek();
+      if (!t) return fail('unclosed', '{');
+      if (isP(t, '}')) { k++; return null; }
+      if (isP(t, '{')) {
+        k++;
+        const b = block(depth + 1);
+        if (isFail(b)) return b;
+      } else if (t.t === 'word' || t.t === 'var') k++;
+      else if (t.t === 'str') { k++; const r = stringSubs(t, depth + 1); if (r) return r; }
+      else if (isP(t, '(') || t.t === 'sub' || t.t === 'arr') {
+        const r = operand(depth + 1, st);
+        if (isFail(r)) return r;
+      } else return notRead(kw);
+      const r = bodyOf(depth, kw);
+      if (r) return r;
+    }
+  };
+
+  // 読めない本体: 今の読み飛ばし（必ず断るコマンドを heads で拾う）に control_opaque の印を付ける
+  const opaque = (kw: string, depth: number): Statement | LexFail => {
+    const st = controlSkip(depth, kw);
+    if (isFail(st)) return st;
+    st.shapes.push(`control_opaque:${kw}`);
+    return st;
+  };
+
+  // 制御の文を本体より先に並びに置き、本体の文はふつうの文として読む。字句の形が読めなければ、そこまで戻して読み飛ばす（深さの失敗は戻さず断る）
+  const controlRead = (kw: string, depth: number): Statement | LexFail => {
+    const from = k;
+    const mark = sink.length;
+    // 読み飛ばしと同じ heads も残す（文の読み方が違っても、必ず断るコマンドの見つけ方は前より減らない）
+    const skipped = controlSkip(depth, kw);
+    if (isFail(skipped)) return skipped;
+    k = from;
+    sink.length = mark;
+    const st = blank();
+    st.kind = 'control';
+    st.shapes.push(`control:${kw}`);
+    st.source = kw;
+    if (skipped.heads) st.heads = skipped.heads;
+    if (skipped.callComputed) st.callComputed = true;
+    sink.push(st);
+    const r = readControl(kw, st, depth);
+    if (!r) {
+      const flags = PS_READ_CONTROL.get(kw)!;
+      for (const inner of sink.slice(mark + 1)) {
+        if (flags.inBlock) inner.inBlock = true;
+        if (flags.repeats) inner.repeats = true;
+      }
+      return st;
+    }
+    if (r.code !== 'unexpected' && r.code !== 'unclosed' && r.code !== 'parse_token') return r;
+    k = from;
+    sink.length = mark;
+    return opaque(kw, depth);
+  };
+
   const element = (depth: number): Statement | LexFail => {
     if (depth > PS_MAX_DEPTH) return fail('depth', String(PS_MAX_DEPTH));
     const t = peek();
@@ -1189,8 +1392,10 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         skipNl();
         if (!isP(peek(), '{')) return fail('unexpected', 'foreach');
         k++;
+        const bodyStart = sink.length;
         r = statements('}', depth + 1);
         if (r) return r;
+        for (const inner of sink.slice(bodyStart)) inner.repeats = true;
         st.kind = 'control'; st.header = 'foreach'; st.words.push(plain(`$${v.v}`, { dynamic: true }));
         return finish(st);
       }
@@ -1221,7 +1426,14 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         st.kind = 'control'; st.header = 'if';
         return finish(st);
       }
+      if (PS_READ_CONTROL.has(lower)) return controlRead(lower, depth);
+      if (PS_OPAQUE_CONTROL.has(lower) || (lower === 'using' && isWordOf(peek(1), 'module', 'assembly'))) return opaque(lower, depth);
       if (PS_OTHER_CONTROL.has(lower)) return controlSkip(depth);
+      if (PS_ATTRIBUTE.test(t.v) && isP(peek(1), '(')) {
+        let j = k;
+        for (let a = attributeAt(j); a >= 0; a = attributeAt(j)) { j = a; while (isP(toks[j], '\n')) j++; }
+        if (j > k && isWordOf(toks[j], 'param')) return controlRead('param', depth);
+      }
     }
     // 代入。左辺（$a.b[ … ]）は chain で読む（添字の中の文もトップレベルの文と同じに判定される）。代入でなければ、読んだ位置と文を戻して、式として読み直す
     if (t.t === 'var') {

@@ -93,6 +93,7 @@ const en = {
   'owner_task_taint': 'this run read outside content, and {name} would change tasks',
   'owner_no_judge_request': 'there is no request from you that this run comes from (it was started by beat itself, or it came from outside content), so it waits for you even with the judge off',
   'owner_no_judge_mcp': 'it is a writing tool of the MCP server "{server}" ({tool}) and the judge is off, so it waits for you',
+  'owner_no_judge_opaque': 'beat cannot read inside a PowerShell control form here and the judge is off, so it waits for you: {reasons}',
   'owner_no_judge_self':'it touches beat itself and the judge is off, so it waits for you: {reasons}',
   'owner_protected_push': 'the push would send changes to protected files: {files}',
   'owner_push_unchecked': 'beat could not check whether the push sends changes to protected files',

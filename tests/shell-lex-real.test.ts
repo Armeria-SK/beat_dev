@@ -670,3 +670,35 @@ test('bash: name () { … }（括弧の前に空白・タブ・改行）も本�
   assert.equal(existsSync(ran), true);
   for (const row of ['(echo ran >> ran.txt)', 'echo ran | (cat >> ran.txt)']) assert.ok(!(lexShell(row, 'bash') as { statements?: Array<{ shapes: string[] }> }).statements?.some(s => s.shapes.includes('function')), `${row}: 文の頭の ( は部分シェルで、関数ではない`);
 });
+
+// control-bodies: commands inside try / while / switch / function / param bodies. Every command the real Parser finds (FindAll CommandAst)
+// is one of the lexer's statements, and the lexer reads no command the Parser does not have. A body the lexer cannot read carries control_opaque instead.
+const PS_BODY_ROWS = [
+  'try { Get-Content a.txt } catch { Write-Error x } finally { Remove-Item b.txt }', 'try { Get-Date } catch [System.IO.IOException], [System.Exception] { Write-Output e }',
+  'while ($true) { Get-ChildItem; break }', 'do { Start-Sleep 1 } while (Test-Path x)', 'do { Start-Sleep 1 }\nuntil (Test-Path x)', 'for ($i = 0; $i -lt (Get-Random); $i++) { Write-Output $i }',
+  "switch -Regex (Get-Date) { 'a' { Write-Output a } default { Remove-Item c.txt } }", 'switch (1) { { Test-Path x } { Get-Item y } format { npm run format } }', 'switch ((Get-Item x).Name) { 1 { 2 } }',
+  'switch -File notes.txt { default { Write-Output $_ } }', 'function f([string]$a = \'x\') { Get-Content $a }', 'filter g { Write-Output $_ }', 'function h { param($p) begin { Get-Date } process { Get-Item $p } end { Write-Output done } }',
+  'trap { Write-Warning t; continue }; Get-Item x', 'trap [System.Exception] { Remove-Item z }', 'return Get-Item x', 'throw (Get-Date)', 'exit (Get-Random)', 'param($n) Get-Item $n',
+  '[CmdletBinding()]\nparam([Parameter(Mandatory=$true)][ValidateSet(\'a\',\'b\')][string]$x = \'a\')\nGet-Item $x',
+  'function f { try { while ($true) { switch ($x) { default { Get-Content y } } } } finally { Write-Output z } }', 'foreach ($i in Get-ChildItem) { Remove-Item $i }',
+];
+const PS_OPAQUE_ROWS = ['param([ValidateScript({ Get-Content k })]$x) Get-Item y', 'class A { [void] M() { Get-Content k } }', 'switch -Bogus ($x) { default { Get-Item y } }'];
+
+test('PowerShell 5.1: コマンドを本体に置いた制御の形（try・while・do・for・switch・function・trap・param・return など）で、本物の Parser が見つけるコマンドと字句の読み取りの文が同じ。読めない形は control_opaque', { skip: !host && 'Windows の PowerShell が無い' }, t => {
+  const rows = [...PS_BODY_ROWS, ...PS_OPAQUE_ROWS];
+  const { byRow, errored } = realWordsOfFile(tempDir(t), rows);
+  const wrong: string[] = [];
+  for (const [i, row] of rows.entries()) {
+    if (errored.has(i) && !PS_OPAQUE_ROWS.includes(row)) { wrong.push(`${row}: 本物の Parser が構文エラー`); continue; }
+    const lexed = lexShell(row, 'powershell');
+    if (!lexed.ok) { wrong.push(`${row}: 読めない (${lexed.fail.code})`); continue; }
+    const opaque = lexed.statements.some(s => s.shapes.some(x => x.startsWith('control_opaque:')));
+    if (PS_OPAQUE_ROWS.includes(row)) { if (!opaque) wrong.push(`${row}: control_opaque が無い`); continue; }
+    if (opaque) { wrong.push(`${row}: 読めるはずの形が control_opaque`); continue; }
+    const name = (w: { text: string; dynamic: boolean }) => (w.dynamic ? '<<dyn>>' : w.text.toLowerCase());
+    const mine = lexed.statements.filter(s => s.kind === 'command' && s.words.length > 0).map(s => name(s.words[0]!)).sort();
+    const theirs = (byRow.get(i) ?? []).map(words => (words[0] ?? '').toLowerCase()).sort();
+    if (JSON.stringify(mine) !== JSON.stringify(theirs)) wrong.push(`${row}: 字句 ${JSON.stringify(mine)} / 本物 ${JSON.stringify(theirs)}`);
+  }
+  assert.deepEqual(wrong, []);
+});

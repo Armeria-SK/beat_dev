@@ -151,13 +151,13 @@ test('PowerShell: 先読みで読み飛ばしていたかもしれない、ほ�
     }
   }
   assert.deepEqual(wrong, []);
-  for (const c of ['$x.($(Get-Content .env))', '$h = @{ a = $(Get-Content .env) }', '@($(Get-Content .env))', 'if ($(Get-Content .env)) { 1 }', 'foreach ($i in $(Get-Content .env)) { 1 }', '[datetime]::Now.ToString($(Get-Content .env))', '$h = @{ k = { Get-Content .env } }']) {
+  for (const c of ['$x.($(Get-Content .env))', '$h = @{ a = $(Get-Content .env) }', '@($(Get-Content .env))', 'if ($(Get-Content .env)) { 1 }', 'foreach ($i in $(Get-Content .env)) { 1 }', '[datetime]::Now.ToString($(Get-Content .env))', '$h = @{ k = { Get-Content .env } }', 'switch ($(Get-Content .env)) { default { 1 } }']) {
     assert.equal(level(f.ps(c)), 'deny', c);
   }
-  // 中を読まず、文全体を今回だけの確かめにする形（制御の形）: 確かめなしでは動かない
+  // 制御の形: 本体も文として読み（control-bodies の段）、文全体は今回だけの確かめ。確かめなしでは動かない。秘密を読む条件は上と同じく止める
   for (const c of [
     'switch ($(Remove-Item x)) { default { 1 } }', 'switch ($x) { 1 { Remove-Item x } }', 'while ($(Remove-Item x)) { 1 }', 'for ($i = $(Remove-Item x); $i -lt 1; $i++) { 1 }', 'do { 1 } while ($(Remove-Item x))',
-    'try { $(Remove-Item x) } catch { 1 }', 'try { 1 } catch { Remove-Item x }', 'try { 1 } finally { $(Remove-Item x) }', 'function f { $(Remove-Item x) }', 'switch ($(Get-Content .env)) { default { 1 } }',
+    'try { $(Remove-Item x) } catch { 1 }', 'try { 1 } catch { Remove-Item x }', 'try { 1 } finally { $(Remove-Item x) }', 'function f { $(Remove-Item x) }',
   ]) {
     for (const run of [f.ps, f.pwsh]) assert.equal(level(run(c)), 'once', c);
   }

@@ -134,7 +134,7 @@ const WRAPPERS = new Set(['sudo', 'command', 'env', 'nohup', 'time', 'exec', 'bu
 const POSIX_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const PWSH = new Set(['pwsh', 'powershell']);
 // 文の頭に付く言葉（その次が本当のコマンド）と、それだけで終わる行
-const LEADING_WORDS = new Set(['then', 'do', 'else', 'elif', 'if', 'while', 'until', '!', '{']);
+const LEADING_WORDS = new Set(['then', 'do', 'else', 'elif', 'if', 'while', 'until', '!', '{', 'return', 'throw', 'exit']);
 const CLOSERS = new Set(['}', ')', 'fi', 'done', 'esac']);
 // コマンドではなく文の言葉（引数にコードの拡張子があっても、コードのファイルを渡したことにしない）
 export const STATEMENT_WORDS = new Set([

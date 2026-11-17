@@ -33,7 +33,7 @@ const JUDGE = [
   'list.git_moves', 'list.npm_rc', 'list.npm_rc_unknown', 'list.git_remote', 'list.git_old', 'list.git_hooks', 'list.git_remote_local', 'list.git_hooks_path', 'list.git_net',
   'list.git_write', 'list.git_push', 'list.cmd_syntax', 'list.ps_write', 'list.ps_pipe', 'list.download', 'list.url_glob', 'list.file_list', 'list.pipe_read', 'list.write_dynamic',
   'list.protected_write', 'list.expand', 'list.lan', 'list.redirect', 'list.header', 'list.send', 'list.read_dynamic', 'list.wild_many', 'list.cwd_unknown',
-  'shape.call', 'shape.dot_source', 'shape.splat', 'shape.background', 'shape.function', 'shape.process_out', 'shape.pipe_stderr', 'shape.control', 'shape.script_block',
+  'shape.call', 'shape.dot_source', 'shape.splat', 'shape.background', 'shape.function', 'shape.process_out', 'shape.pipe_stderr', 'shape.control', 'shape.control_opaque', 'shape.script_block',
   'shape.static', 'shape.cast', 'shape.method', 'shape.expr', 'shape.replace_block',
   'code.spawn', 'code.powershell', 'code.launcher', 'code.wrapped_unknown', 'code.unknown_target', 'code.env', 'code.loopback', 'code.self_touch', 'code.limits',
   'code.preview_missing', 'code.preview_unreadable',

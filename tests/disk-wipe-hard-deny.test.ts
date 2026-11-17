@@ -27,7 +27,7 @@ import { tempDir, testConfig } from './helpers.ts';
 // Repo scripts (.ps1/.cmd/.bat, ./x.sh) are not the system tool of the same name.
 // Accepted residuals: a name built at run time, -ArgumentList @(...) arrays and stdin-fed code (these go to owner approval, not hard deny);
 // device writes through > / cp / tee (need root/admin); unknown precommand wrappers (flock, chrt, taskset, systemd-run, ...).
-// Known gap, not fixed here: control bodies are checked only for hard-deny names, so other destructive commands inside try { } run with the judge off.
+// Control bodies are also read as statements (control-bodies step), so every other rule sees them too; the heads are still collected for every body.
 // Every case here goes through the guard only (checkShellCommand / preCheck, or the pipeline with a counting execute stub); nothing is executed.
 
 function check(t: { after: (fn: () => void) => void }, command: string, shell: ShellKind): ShellVerdict {
@@ -275,7 +275,11 @@ test('disk wipe: the stub does run an ordinary body with the judge off (the refu
   assert.equal(w.ran(), 1, `${outcome.decidedBy}: ${outcome.output.content}`);
   const after = await w.run({ command: 'try { Get-Date } catch {} Write-Output done' });
   assert.equal(w.ran(), 2, `${after.decidedBy}: ${after.output.content}`);
-  for (const command of ['try { Invoke-Command -ScriptBlock { Get-Date } } catch {}', "try { Start-Process notepad -ArgumentList 'a','b' } catch {}", 'try { powershell -NoProfile -Command { Get-Date } } catch {}']) {
+  // control-bodies: `powershell -Command { … }` inside try is now read as at top level, where outbound cannot tell what it runs (owner Pending)
+  const nested = await w.run({ command: 'try { powershell -NoProfile -Command { Get-Date } } catch {}' });
+  const top = await w.run({ command: 'powershell -NoProfile -Command { Get-Date }' });
+  assert.deepEqual([nested.decidedBy, top.decidedBy], ['pending', 'pending'], `${nested.output.content} / ${top.output.content}`);
+  for (const command of ['try { Invoke-Command -ScriptBlock { Get-Date } } catch {}', "try { Start-Process notepad -ArgumentList 'a','b' } catch {}"]) {
     for (const args of [{ command }, { command, background: true }]) {
       const before = w.ran();
       const outcome = await w.run(args);
@@ -288,10 +292,13 @@ test('disk wipe: a computed call target inside a control body waits for the owne
   const w = pipelineWorld(t);
   const top = await w.run({ command: "& ('Format-Volume') -DriveLetter Z" });
   assert.equal(top.decidedBy, 'pending', `top level: ${top.output.content}`);
+  // control-bodies: `Start-Process @p` inside try is now read as at top level, where it is refused (list.winargs), which is stricter than Pending
+  const refusedAtTop = new Set(['try { Start-Process @p } catch {}']);
   for (const command of [...COMPUTED_CALL, ...PENDING_PS_R3, ...PENDING_PS_R4]) {
     for (const args of [{ command }, { command, background: true }]) {
       const outcome = await w.run(args);
-      assert.equal(outcome.decidedBy, 'pending', `${JSON.stringify(args)} -> ${outcome.decidedBy}: ${outcome.output.content}`);
+      if (refusedAtTop.has(command)) assert.equal(outcome.decision, 'deny', `${JSON.stringify(args)} -> ${outcome.decidedBy}: ${outcome.output.content}`);
+      else assert.equal(outcome.decidedBy, 'pending', `${JSON.stringify(args)} -> ${outcome.decidedBy}: ${outcome.output.content}`);
     }
   }
   assert.equal(w.ran(), 0);
