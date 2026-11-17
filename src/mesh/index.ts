@@ -13,7 +13,7 @@ import type { AcceptanceDoc } from '../projects/acceptance.ts';
 import { dateIn, isMarkdown, listMeshFiles, MeshError, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
 import { acceptanceLines, readMesh, searchMesh, type MeshText } from './search.ts';
 import { appendDecision, DECISIONS_FILE, DECISIONS_OLD_FILE, decisionLine, decisionRows, type OwnerDecision } from './decisions.ts';
-import { LEDGER_FILE, ledgerSummary, SCOUT_DIR } from '../scout/ledger.ts';
+import { LEDGER_FILE, LEDGER_NAME, ledgerSummary, SCOUT_DIR } from '../scout/ledger.ts';
 import { isInside } from '../tools/hooks/scope.ts';
 import { applyPatch, hasForeignLines, parseNotes, renderState, STATE_FILE, type NoteAuthor, type StateNote, type StatePatch } from './state.ts';
 
@@ -108,7 +108,7 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
       ...(planLine ? [`- ${planLine}`] : []),
       `- acceptance.json — ${acceptanceText(m.acceptance, false)}`,
       ...(m.decisions ? [`- ${DECISIONS_FILE} — ${m.decisions.rows} decisions`] : []),
-      ...(m.ledger ? [`- ${LEDGER_FILE} — ${m.ledger === 'unreadable' ? 'cannot be read' : `${m.ledger.entries} entries`}`] : []),
+      ...(m.ledger ? [`- ${LEDGER_FILE} — ${m.ledger === 'unreadable' ? 'cannot be read' : `${m.ledger.entries} entries (scout notes from web reads)`}`] : []),
     ];
     const tail = [`questions: ${m.counts.questions} unanswered (question_list) / proposals: ${m.counts.proposals}`];
     const body = largest(fileLines.length, keep => {
@@ -226,7 +226,7 @@ export class Mesh {
     const planMeta = plan ? this.#d.plans.meta(projectId, plan) ?? null : null;
     const planStat = plan ? statOf(conversationPlanFile(this.#d.projectsDir, projectId, plan)) : null;
     const decisions = regular(join(dir, DECISIONS_FILE)) ? { rows: decisionRows(readFileSync(join(dir, DECISIONS_FILE), 'utf8')) } : null;
-    const ledger = files.some(file => file.rel === LEDGER_FILE) ? ledgerSummary(this.#d.projectsDir, projectId) ?? 'unreadable' : null;
+    const ledger = statOf(join(dir, SCOUT_DIR, LEDGER_NAME)) ? ledgerSummary(this.#d.projectsDir, projectId) ?? 'unreadable' : null;
     const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan === undefined ? 'none' : plan, planMeta, planStat, decisions, ledger]);
     return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, decisions, ledger };
   }
@@ -238,7 +238,7 @@ export class Mesh {
       state: light.stateMtime === null ? null : { updatedAt: light.stateMtime },
       plan: view === undefined ? undefined : view.content === null ? null : { updatedAt: view.updated_at ?? 0, heading: /^#+\s+(.+)$/mu.exec(view.content)?.[1]?.trim() ?? null, clean: !view.tainted && view.updated_by !== 'outside', ai: view.updated_by === 'ai' },
       acceptance: light.acceptance,
-      files: light.files.filter(file => file.rel !== PLAN_FILE).map(file => ({ path: file.rel, updatedAt: file.mtime, heading: firstHeading(file.abs) })),
+      files: light.files.filter(file => file.rel !== PLAN_FILE && !this.#inScout(projectId, file.rel, file.abs)).map(file => ({ path: file.rel, updatedAt: file.mtime, heading: firstHeading(file.abs) })),
       counts: light.counts,
       timezone: light.timezone,
       decisions: light.decisions,

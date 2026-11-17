@@ -22,7 +22,7 @@ const fold = (path: string): string => (WINDOWS ? path.toLowerCase() : path);
 export const validCommit = (commit: string | null | undefined): commit is string => typeof commit === 'string' && COMMIT.test(commit);
 
 export function cleanAreaPath(input: string): string | null {
-  if (!input || CONTROLS.test(input) || input.includes(':')) return null;
+  if (!input || CONTROLS.test(input) || input.includes(':') || /^\((whole product|none)\)$/u.test(input.trim())) return null;
   const slashed = input.trim().replaceAll('\\', '/');
   if (!slashed || slashed.startsWith('/') || slashed.startsWith('-')) return null;
   const parts = slashed.split('/').filter(part => part !== '' && part !== '.');
