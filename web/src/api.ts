@@ -24,6 +24,7 @@ export interface Conversation {
   parent_run_id?: string | null; source_conversation_id?: string | null;
   message_count?: number; archived_at?: number | null;
   project_id?: string | null;
+  kind?: string;
 }
 // beat 6-4: 製品の裏のコマンド（Terminal の欄）。command と出力は、サーバーが鍵らしい文字を伏せ、色のコードを消したもの
 export type BackgroundState = 'running' | 'exited' | 'stopped';

@@ -311,19 +311,22 @@ test('7-2 外扱い（D-5 a）: file なしの mesh_search は scout/ を探さ�
   assert.equal((await meshRead.execute({ file: 'notes/build.md' }, ctx)).fetched, undefined);
 });
 
-test('7-2 ledger_record は 7-2 では登録しない（builtinTools に無い）', () => {
-  assert.ok(!builtinTools().some(tool => tool.name === 'ledger_record'));
+test('7-3a ledger_record は組み込みに入り、タスクの実行だけ・考える実行だけ（scoutOnly）', () => {
+  assert.ok(builtinTools().some(tool => tool.name === 'ledger_record'));
+  assert.deepEqual(ledgerRecord.allowedIn, ['task']);
+  assert.equal(ledgerRecord.scoutOnly, true);
 });
 
 
-test('7-2 ledger_record: どの実行にも渡らない（allowedIn は空）。commit・when・by はコードが入れ、直せないパスは捨てて返す', { skip: !gitAvailable }, async t => {
-  assert.deepEqual(ledgerRecord.allowedIn, []);
+test('7-2 ledger_record: 考える実行でなければ書かない。commit・when・by はコードが入れ、直せないパスは捨てて返す', { skip: !gitAvailable }, async t => {
   const s = setup(t);
   const shop = s.project('shop');
+  const plain = await ledgerRecord.execute({ title: 'x', checked: 'x', result: 'x' }, s.ctx(shop.id));
+  assert.equal(plain.isError, true);
   initRepo(shop.root);
   write(shop.root, 'src/a/x.ts');
   const head = commitAll(shop.root, 'one');
-  const out = await ledgerRecord.execute({ title: 'Retry\nlimit', area: ['src/a', '../../etc', '-rf'], checked: 'max attempts', result: 'no problem' }, s.ctx(shop.id));
+  const out = await ledgerRecord.execute({ title: 'Retry\nlimit', area: ['src/a', '../../etc', '-rf'], checked: 'max attempts', result: 'no problem' }, s.ctx(shop.id, { scout: true }));
   assert.equal(out.isError, undefined, out.content);
   assert.match(out.content, new RegExp(`^Recorded L-0001 in scout/ledger\\.md \\(commit ${head.slice(0, 12)}\\)\\. Not kept: 2 area paths`, 'u'));
   const [entry] = readLedger(s.paths.projects, shop.id).entries;
@@ -332,7 +335,7 @@ test('7-2 ledger_record: どの実行にも渡らない（allowedIn は空）。
   assert.equal(entry!.commit, head);
   assert.equal(entry!.by, 'qwen-local');
   assert.ok(Math.abs(entry!.at! - Date.now()) < 60_000);
-  const rewrite = await ledgerRecord.execute({ id: 'L-0001', title: 'Retry limit', area: ['../x'], checked: 'again', result: 'no problem' }, s.ctx(shop.id));
+  const rewrite = await ledgerRecord.execute({ id: 'L-0001', title: 'Retry limit', area: ['../x'], checked: 'again', result: 'no problem' }, s.ctx(shop.id, { scout: true }));
   assert.match(rewrite.content, /^Rewrote L-0001.*No area path was usable/u);
   assert.deepEqual(readLedger(s.paths.projects, shop.id).entries[0]!.area, []);
 });
@@ -341,14 +344,14 @@ test('7-2 ledger_record: しまった製品・製品の無い実行では書か�
   const s = setup(t);
   const shop = s.project('shop');
   const key = `sk-ant-api03-${'c'.repeat(90)}`;
-  const hidden = await ledgerRecord.execute({ title: 'Key check', checked: `found ${key}`, result: 'no problem' }, s.ctx(shop.id));
+  const hidden = await ledgerRecord.execute({ title: 'Key check', checked: `found ${key}`, result: 'no problem' }, s.ctx(shop.id, { scout: true }));
   assert.match(hidden.content, /^Recorded L-0001 in scout\/ledger\.md \(commit none\)\. Part of it looked like a secret/u);
   assert.ok(!readFileSync(ledgerPath(s.paths.projects, shop.id), 'utf8').includes(key.slice(0, 30)));
   assert.deepEqual(readLedger(s.paths.projects, shop.id).entries[0]!.area, 'whole', 'area を渡さなければ全体');
-  const none = await ledgerRecord.execute({ title: 'x', checked: 'x', result: 'x' }, s.ctx(shop.id, { project: undefined }));
+  const none = await ledgerRecord.execute({ title: 'x', checked: 'x', result: 'x' }, s.ctx(shop.id, { project: undefined, scout: true }));
   assert.equal(none.isError, true);
   s.app.db.prepare('UPDATE projects SET archived_at = 1 WHERE id = ?').run(shop.id);
-  const closed = await ledgerRecord.execute({ title: 'x', checked: 'x', result: 'x' }, s.ctx(shop.id));
+  const closed = await ledgerRecord.execute({ title: 'x', checked: 'x', result: 'x' }, s.ctx(shop.id, { scout: true }));
   assert.equal(closed.isError, true);
   assert.match(closed.content, /archived/u);
   assert.equal(readLedger(s.paths.projects, shop.id).entries.length, 1);

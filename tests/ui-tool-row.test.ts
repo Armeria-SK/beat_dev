@@ -195,6 +195,8 @@ const REAL: Record<string, [unknown, string, string]> = {
   shell_stop: [{ id: 'bg-3' }, 'Stop background command', 'bg-3'],
   deviation_add: [{ what: 'Skipped the CLI flag', why: 'w' }, 'Note deviation', 'Skipped the CLI flag'],
   mesh_decision_add: [{ decision: 'Use SQLite' }, 'Note decision', 'Use SQLite'],
+  ledger_record: [{ title: 'Upload checks', checked: 'read upload.ts', result: 'no problem' }, 'Note checked area', 'Upload checks'],
+  proposal_add: [{ title: 'Add retry to upload', kind: 'bug', why: 'w', size: 'S' }, 'Propose', 'Add retry to upload'],
   browser_open: [{ url: 'https://example.com' }, 'Open page', 'https://example.com'],
   browser_read: [{}, 'Search', 'current page'],
   browser_screenshot: [{ tab: 't2' }, 'Screenshot', 'tab t2'],

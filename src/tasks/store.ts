@@ -71,6 +71,7 @@ export interface CreateTask {
   ownerPlan?: string | undefined;
   spawnedBy?: string | undefined;
   proposal?: Proposal | undefined;
+  scoutRun?: true | undefined;
   actor: string;
 }
 
@@ -87,7 +88,10 @@ const FINISHED = "status IN ('done', 'failed', 'cancelled')";
 const FINISHED_T = 'COALESCE(completed_at, updated_at)';
 const OPEN_CHILD = "('ready', 'running', 'waiting')";
 const NO_OPEN_CHILD = `NOT EXISTS (SELECT 1 FROM tasks child WHERE child.spawned_by = tasks.id AND child.status IN ${OPEN_CHILD})`;
-const PRODUCT_FREE = "(project_id IS NULL OR NOT EXISTS (SELECT 1 FROM tasks busy WHERE busy.project_id = tasks.project_id AND busy.status = 'running'))";
+export const SCOUT_RUN = 'scout-run';
+export const isScoutRun = (task: Pick<Task, 'proposed_by'>): boolean => task.proposed_by === SCOUT_RUN;
+const NOT_SCOUT = `proposed_by IS NOT '${SCOUT_RUN}'`;
+const PRODUCT_FREE = `(project_id IS NULL OR NOT EXISTS (SELECT 1 FROM tasks busy WHERE busy.project_id = tasks.project_id AND busy.status = 'running' AND busy.${NOT_SCOUT}))`;
 
 export const SCHEDULE_MAX_RANGE_MS = 8 * 86_400_000;
 export const SCHEDULE_PLANNED_LIMIT = 200;
@@ -171,13 +175,13 @@ export class TaskStore {
     const statuses = options.statuses ?? ACTIVE;
     const placeholders = statuses.map(() => '?').join(',');
     const filter = byProject(options.project);
-    return this.#db.prepare(`SELECT * FROM tasks WHERE status IN (${placeholders})${filter.sql} ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at) LIMIT ?`)
+    return this.#db.prepare(`SELECT * FROM tasks WHERE status IN (${placeholders}) AND ${NOT_SCOUT}${filter.sql} ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at) LIMIT ?`)
       .all(...statuses, ...filter.args, options.limit ?? 200) as unknown as Task[];
   }
 
   recentlyFinished(limit = 50, project?: ProjectFilter): Task[] {
     const filter = byProject(project);
-    return this.#db.prepare(`SELECT * FROM tasks WHERE status IN ('done', 'failed', 'cancelled')${filter.sql} ORDER BY COALESCE(completed_at, updated_at) DESC LIMIT ?`).all(...filter.args, limit) as unknown as Task[];
+    return this.#db.prepare(`SELECT * FROM tasks WHERE status IN ('done', 'failed', 'cancelled') AND ${NOT_SCOUT}${filter.sql} ORDER BY COALESCE(completed_at, updated_at) DESC LIMIT ?`).all(...filter.args, limit) as unknown as Task[];
   }
 
   templates(project?: ProjectFilter): RepeatingTask[] {
@@ -192,13 +196,13 @@ export class TaskStore {
 
   finishedTotal(project?: ProjectFilter): number {
     const filter = byProject(project);
-    return (this.#db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})${filter.sql}`).get(...filter.args) as { n: number }).n;
+    return (this.#db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE}) AND ${NOT_SCOUT}${filter.sql}`).get(...filter.args) as { n: number }).n;
   }
 
   finishedPage(options: { before?: FinishedCursor | undefined; limit: number; project?: ProjectFilter }): { tasks: Task[]; next: FinishedCursor | null } {
     const before = options.before;
     const filter = byProject(options.project);
-    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE})${filter.sql}
+    const rows = this.#db.prepare(`SELECT * FROM tasks WHERE ${FINISHED} AND NOT (${IS_TEMPLATE}) AND ${NOT_SCOUT}${filter.sql}
       ${before ? `AND (${FINISHED_T} < ? OR (${FINISHED_T} = ? AND id < ?))` : ''}
       ORDER BY ${FINISHED_T} DESC, id DESC LIMIT ?`).all(...filter.args, ...(before ? [before.t, before.t, before.id] : []), options.limit + 1) as unknown as Task[];
     const tasks = rows.slice(0, options.limit);
@@ -211,7 +215,7 @@ export class TaskStore {
     const slots: ScheduleSlot[] = [];
     const ran = this.#db.prepare(`SELECT COALESCE(t.parent_id, t.id) AS taskId, t.project_id AS projectId, t.id AS runTaskId, COALESCE(p.title, t.title) AS title, r.started_at AS start, r.ended_at AS ended
       FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id LEFT JOIN tasks p ON p.id = t.parent_id
-      WHERE r.kind = 'task' AND r.started_at < ? AND COALESCE(r.ended_at, ?) >= ?
+      WHERE r.kind = 'task' AND t.${NOT_SCOUT} AND r.started_at < ? AND COALESCE(r.ended_at, ?) >= ?
       ORDER BY r.started_at DESC LIMIT ?`).all(to, now, from, SCHEDULE_RAN_LIMIT + 1) as Array<{ taskId: string; projectId: string | null; runTaskId: string; title: string; start: number; ended: number | null }>;
     for (const row of ran.slice(0, SCHEDULE_RAN_LIMIT)) {
       slots.push({ taskId: row.taskId, projectId: row.projectId, runTaskId: row.runTaskId, title: row.title, start: row.start, length: Math.max(0, (row.ended ?? now) - row.start), state: row.ended === null ? 'live' : 'past' });
@@ -363,8 +367,8 @@ export class TaskStore {
       else status = 'scheduled';
     }
     const ownerRequest: OwnerRequest | null = input.ownerRequest ? { title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null, ...(input.ownerPlan ? { plan: input.ownerPlan } : {}) } : null;
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, spawned_by, proposal, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, spawned_by, proposal, proposed_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${input.scoutRun ? `'${SCOUT_RUN}'` : 'NULL'}, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
       Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.projectId ?? null, input.acceptanceItems ? JSON.stringify(input.acceptanceItems) : null, ownerRequest ? JSON.stringify(ownerRequest) : null, input.spawnedBy ?? null, input.proposal ? JSON.stringify(input.proposal) : null, now, now,
     );
@@ -613,10 +617,17 @@ export class TaskStore {
   recoverExpiredLeases(options: { all?: boolean } = {}): number {
     const now = this.#now();
     const rows = (options.all
-      ? this.#db.prepare("SELECT id FROM tasks WHERE status = 'running'").all()
-      : this.#db.prepare("SELECT id FROM tasks WHERE status = 'running' AND (lease_until IS NULL OR lease_until < ?)").all(now)) as Array<{ id: string }>;
+      ? this.#db.prepare(`SELECT id FROM tasks WHERE status = 'running' AND ${NOT_SCOUT}`).all()
+      : this.#db.prepare(`SELECT id FROM tasks WHERE status = 'running' AND ${NOT_SCOUT} AND (lease_until IS NULL OR lease_until < ?)`).all(now)) as Array<{ id: string }>;
     for (const { id } of rows) this.setReady(id, { reason: taskText(this.#language(), 'event.recovered') });
+    if (options.all) this.closeScoutRuns(taskText(this.#language(), 'event.scout_closed'));
     return rows.length;
+  }
+
+  closeScoutRuns(reason: string, except?: string): number {
+    const open = this.#db.prepare(`SELECT id FROM tasks WHERE proposed_by = '${SCOUT_RUN}' AND status NOT IN ('done', 'failed', 'cancelled') AND id IS NOT ?`).all(except ?? null) as Array<{ id: string }>;
+    for (const { id } of open) this.finish(id, 'cancelled', reason, 'worker');
+    return open.length;
   }
 
   spawnDueSchedules(): Task[] {
@@ -677,7 +688,7 @@ export class TaskStore {
   }
 
   productBusy(task: Task): boolean {
-    return task.project_id !== null && this.#db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' AND id != ? LIMIT 1").get(task.project_id, task.id) !== undefined;
+    return task.project_id !== null && this.#db.prepare(`SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' AND ${NOT_SCOUT} AND id != ? LIMIT 1`).get(task.project_id, task.id) !== undefined;
   }
 
   setCheckState(id: string, state: 'awaiting' | 'checked'): Task {
@@ -717,7 +728,7 @@ export class TaskStore {
   pickNext(options: { allowSelf: boolean; accept?: (task: Task) => boolean }): Task | undefined {
     const now = this.#now();
     const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
-    const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins}
+    const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins} AND ${NOT_SCOUT}
       AND (project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
       AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}
       ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at)`;
@@ -728,7 +739,7 @@ export class TaskStore {
   nextWakeAt(options: { allowSelf: boolean }): number | undefined {
     const now = this.#now();
     const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
-    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND (status = 'scheduled' OR (status = 'ready' AND origin IN ${origins} AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}))`).get(now) as { t: number | null };
+    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND ${NOT_SCOUT} AND (status = 'scheduled' OR (status = 'ready' AND origin IN ${origins} AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}))`).get(now) as { t: number | null };
     return row.t ?? undefined;
   }
 

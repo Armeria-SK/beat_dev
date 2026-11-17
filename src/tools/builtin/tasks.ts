@@ -105,9 +105,10 @@ export const taskList: ToolDef<{ include_finished?: boolean }> = {
       const s = store(ctx);
       const active = s.list();
       const language = languageOf(ctx.config);
-      const lines = active.map(t => line(t, ctx.config.timezone, language));
-      if (input.include_finished) lines.push(...s.recentlyFinished(10).map(t => line(t, ctx.config.timezone, language)));
-      return { content: lines.length ? lines.join('\n') : toolText(language, 'task.none') };
+      const shown = [...active, ...(input.include_finished ? s.recentlyFinished(10) : [])];
+      const lines = shown.map(t => line(t, ctx.config.timezone, language));
+      const fetched = shown.some(t => s.textTainted(t.id));
+      return { content: lines.length ? lines.join('\n') : toolText(language, 'task.none'), ...(fetched ? { fetched: true } : {}) };
     } catch (error) { return fail(error, ctx); }
   },
 };

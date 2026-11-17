@@ -4,7 +4,7 @@ import { transaction } from '../db/database.ts';
 import { AVATAR_SHAPES } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
-import { SCHEDULE_MAX_RANGE_MS, TaskError, taskView, type Task } from '../tasks/store.ts';
+import { isScoutRun, SCHEDULE_MAX_RANGE_MS, TaskError, taskView, type Task } from '../tasks/store.ts';
 import { splitKey } from '../tasks/worker.ts';
 import { judgeOff } from '../tools/pipeline.ts';
 import { languageOf } from '../shared/language.ts';
@@ -60,6 +60,11 @@ export function registerTaskRoutes(router: Router, app: App): void {
   const getTask = (id: string): Task => {
     const task = app.tasks.get(id);
     if (!task) throw problem(404, 'not_found', 'task_missing');
+    return task;
+  };
+  const ownerTask = (id: string): Task => {
+    const task = getTask(id);
+    if (isScoutRun(task)) throw problem(409, 'task', 'scout_run');
     return task;
   };
 
@@ -122,7 +127,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   router.add('PATCH', '/api/tasks/:id', async ({ req, res, params }) => {
-    const task = getTask(params[0]!);
+    const task = ownerTask(params[0]!);
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
     const text = requireString(body, 'body', { optional: true, max: 20_000 });
@@ -157,7 +162,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   router.add('DELETE', '/api/tasks/:id', ({ res, params }) => {
-    const task = getTask(params[0]!);
+    const task = ownerTask(params[0]!);
     try {
       const removed = app.tasks.remove(task.id);
       sendJson(res, 200, { deleted: { id: removed.id, events: removed.events, keptRuns: removed.keptRuns } });
@@ -165,7 +170,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   router.add('POST', '/api/tasks/:id/answer', async ({ req, res, params }) => {
-    const task = getTask(params[0]!);
+    const task = ownerTask(params[0]!);
     const text = requireString(requireObject(await readJson(req)), 'text', { max: 4000 })!;
     if (task.status !== 'waiting') throw problem(409, 'task', 'not_waiting');
     if (task.waiting_kind === 'approval') taskProblem(new TaskError('error.waiting_pending'));
@@ -176,7 +181,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   router.add('POST', '/api/tasks/:id/run-now', ({ res, params }) => {
-    let task = getTask(params[0]!);
+    let task = ownerTask(params[0]!);
     try {
       if (task.status === 'running') throw new TaskError('error.running');
       if (task.status === 'waiting') throw new TaskError(task.waiting_kind === 'approval' ? 'error.waiting_pending' : 'error.waiting_answer');
@@ -206,11 +211,11 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   router.add('POST', '/api/tasks/:id/approve', ({ res, params }) => {
-    try { sendJson(res, 200, { task: view(app.tasks.approve(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
+    try { sendJson(res, 200, { task: view(app.tasks.approve(ownerTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
   });
 
   router.add('POST', '/api/tasks/:id/unapprove', ({ res, params }) => {
-    try { sendJson(res, 200, { task: view(app.tasks.unapprove(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
+    try { sendJson(res, 200, { task: view(app.tasks.unapprove(ownerTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
   });
 
   const cancelReasonOf = async (req: IncomingMessage): Promise<string | undefined> => {
@@ -223,7 +228,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   const close = (status: 'cancelled' | 'done') => async ({ req, res, params }: { req: IncomingMessage; res: Parameters<typeof sendJson>[0]; params: string[] }) => {
     const reason = status === 'cancelled' ? await cancelReasonOf(req) : undefined;
-    const task = getTask(params[0]!);
+    const task = ownerTask(params[0]!);
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
@@ -238,7 +243,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
   router.add('POST', '/api/tasks/:id/uncancel', ({ res, params }) => {
-    const task = getTask(params[0]!);
+    const task = ownerTask(params[0]!);
     try {
       const restored = app.tasks.uncancel(task.id, 'user');
       app.kv.delete(splitKey(task.id));
@@ -262,12 +267,12 @@ export function registerTaskRoutes(router: Router, app: App): void {
     }
   };
   router.add('POST', '/api/tasks/:id/items/:item/check', async ({ req, res, params }) => {
-    const task = getTask(params[0]!);
+    const task = ownerTask(params[0]!);
     const done = await decide(req, task, [params[1]!]);
     sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task), ...(done.fix ? { fix: withItems(done.fix) } : {}) });
   });
   router.add('POST', '/api/tasks/:id/check', async ({ req, res, params }) => {
-    const task = getTask(params[0]!);
+    const task = ownerTask(params[0]!);
     await decide(req, task, 'all', 'checked');
     sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task) });
   });

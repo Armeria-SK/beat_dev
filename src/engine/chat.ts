@@ -29,6 +29,7 @@ import { backgroundSection } from '../tools/builtin/shell-bg.ts';
 import type { BackgroundJobs } from '../tools/shell/background.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
 import { stricterMode } from '../shared/permission-mode.ts';
+import { isLoopbackHost } from '../shared/url.ts';
 import type { BrowserSession } from '../tools/browser/session.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
 import type { AgentRunInput, RunKind, TaskControl, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
@@ -115,6 +116,13 @@ class AllBut extends Set<string> {
 }
 
 function unlisted(): never { throw new Error('An allow-list of tools cannot be listed, only checked with has()'); }
+
+class ScoutAllow extends AllBut {}
+
+export const SCOUT_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list', 'file_search', 'mesh_read', 'mesh_search', 'web_search', 'web_fetch', 'agent_run', 'ledger_record', 'proposal_add', 'calculate', 'date_calc']);
+export const SCOUT_AGENT_TIMEOUT_MS = 1_800_000;
+export type ScoutEnd = 'agents_busy' | 'agents_used';
+export interface ScoutRoute { modelId: string; providerId: string; local: boolean; room: boolean; available: number | undefined }
 
 const COMPACT_MIN_MESSAGES = 4;
 // 1 回の実行で要約を重ねられる回数。外す発言が増えるたびに要約し直すが、無限には繰り返さない
@@ -227,6 +235,8 @@ export class ChatEngine {
   // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
   #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
+  #scoutEnds = new Map<string, ScoutEnd>();
+  #scoutChildren = new Map<string, { spawned: number; ok: number }>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
   #runModel = new Map<string, string | null>();
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
@@ -540,6 +550,37 @@ export class ChatEngine {
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
 
+  // 考える実行が使う 1 本（routing.scout の使える先頭。鎖の後ろへは落ちない）。空・使えるものが無ければ null
+  scoutRoute(): ScoutRoute | null {
+    const first = this.#chain('scout').usable[0];
+    if (!first) return null;
+    let host = '';
+    try { host = first.provider.baseUrl ? new URL(first.provider.baseUrl).hostname : ''; } catch { host = ''; }
+    let running = 0;
+    for (const active of this.#active.values()) if (active.kind !== 'chat' && active.primary === first.provider.id) running += 1;
+    const { capacity, maxOutput } = this.#d.status.limits(first.model);
+    return { modelId: first.model.id, providerId: first.provider.id, local: host !== '' && isLoopbackHost(host), room: running < first.provider.maxParallel, available: capacity > 0 ? contextAvailable(capacity, maxOutput) : undefined };
+  }
+
+  runScout(task: Task, conversationId: string, prompt: string, modelId: string, materials: string): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+    if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
+    const route = this.#chain('scout').usable.find(r => r.model.id === modelId);
+    if (!route) {
+      const outcome = this.#noUsableModel(this.#chain('scout').problems);
+      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
+    }
+    const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt });
+    const runId = randomUUID();
+    this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    this.#initialTaint.set(runId, [materials]);
+    this.#start(runId, conversationId, [{ model: route.model, provider: route.provider }], 'task', { task, control: { value: { outcome: 'none' } } }, new ScoutAllow(SCOUT_TOOLS, []));
+    return { ok: true, runId, done: this.#active.get(runId)!.done };
+  }
+
+  scoutEnd(runId: string): ScoutEnd | undefined { return this.#scoutEnds.get(runId); }
+
+  scoutChildrenAllFailed(runId: string): boolean { const kids = this.#scoutChildren.get(runId); return kids !== undefined && kids.spawned > 0 && kids.ok === 0; }
+
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
 
   // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
@@ -627,10 +668,10 @@ export class ChatEngine {
   }
 
   // 会話で選んだモデルがあれば（pinned）、そのモデルだけで鎖を作る。使えなければ、ほかのモデルへ切り替えずに、そのモデルの問題だけを返す
-  #chain(route: 'chat' | 'background', pinned: string | null = null): { usable: Route[]; problems: ModelProblem[] } {
+  #chain(route: 'chat' | 'background' | 'scout', pinned: string | null = null): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
     const language = languageOf(config);
-    const ids = pinned ? [pinned] : candidateModelIds(config, route);
+    const ids = pinned ? [pinned] : route === 'scout' ? [...(config.routing.scout ?? [])] : candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];
@@ -693,7 +734,7 @@ export class ChatEngine {
         this.#hardStops.delete(runId);
         this.#modeHost.delete(conversationId);
         this.#agentSpawned.delete(runId);
-        setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
+        setTimeout(() => { this.#preempted.delete(runId); this.#scoutEnds.delete(runId); this.#scoutChildren.delete(runId); }, 60_000).unref?.();
         // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
         this.#flushNotes(conversationId, runId);
         if (kind === 'chat') {
@@ -714,7 +755,8 @@ export class ChatEngine {
   // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
   #excluded(kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false): (t: ToolDef) => boolean {
     const config = this.#d.config();
-    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.name === 'agent_run' && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || (t.name === 'skill_draft' && (!growSkills(config) || (started !== undefined && !growSkills(started)))) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
+    const scout = forbid instanceof ScoutAllow;
+    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.scoutOnly === true && !scout) || (t.name === 'agent_run' && !scout && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || (t.name === 'skill_draft' && (!growSkills(config) || (started !== undefined && !growSkills(started)))) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
       || (mode === 'plan' && !planAllows(t)) || (t.projectOnly === true && !inProject) || !acceptanceAllows(t, frozen);
   }
 
@@ -741,7 +783,8 @@ export class ChatEngine {
     const config = agent?.parent.config ?? d.config();
     d.runs.start(runId, kind, conversationId, agent?.parent.runId);
     const resolved = agent ? agent.parent.project : runProject(d.projects, d.conversations.projectOf(conversationId));
-    const snapshot = this.#snapshot(conversationId, resolved);
+    const scout = agent ? agent.parent.scout === true : forbid instanceof ScoutAllow;
+    const snapshot = this.#snapshot(conversationId, resolved, scout);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
@@ -763,8 +806,9 @@ export class ChatEngine {
     const allRoots = rootsLister(d.projects);
     allRoots();
     const productRoots = agent || kind === 'review' ? [] : allRoots;
-    const base = agent ? undefined : buildPolicy(config, d.paths, undefined, productRoots);
-    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(config, d.paths, { root: project.root }, productRoots) : base!);
+    const reach: AppConfig = scout ? { ...config, tools: { ...config.tools, roots: project?.root ? [{ path: project.root, mode: 'read' }] : [] } } : config;
+    const base = agent ? undefined : buildPolicy(reach, d.paths, undefined, productRoots);
+    const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(reach, d.paths, { root: project.root }, productRoots) : base!);
     const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
@@ -780,6 +824,7 @@ export class ChatEngine {
       ...(forbid ? { forbiddenTools: forbid } : {}),
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'auto' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
+      ...(scout ? { scout: true as const, scoutFetches: agent?.parent.scoutFetches ?? { n: 0 } } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
@@ -798,7 +843,7 @@ export class ChatEngine {
     }
     if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
     // 子の担当を任せる道具の入口（設定で有効のときだけ。子は孫を作れない。タスクは tools.agent.inTasks で許したときだけ）
-    if (kind !== 'agent' && config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))) {
+    if (kind !== 'agent' && (scout || (config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))))) {
       ctx.agent = (input, callId) => this.#runAgent({ ctx, routes: chain.slice(index), forbid }, input, callId);
     }
     // 外から読んだ印は、実行の記録に読んだ時点で書く（途中で止まる・落ちる実行でも、やり直し・続きが引き継げるように）
@@ -1270,13 +1315,15 @@ export class ChatEngine {
     const language = languageOf(config);
     const fail = (key: ToolMessageKey, params?: MessageParams, fetched = false): ToolOutput => ({ content: toolText(language, key, params), isError: true, ...(fetched ? { fetched: true } : {}) });
     // 親が始めたあとに設定で切られていても、子は始めない（入口は実行の開始時に決まるので、ここでいまの設定を確かめ直す）
-    if (!d.tools || !p.routes.length || agentOff(d.config(), parent.kind)) return fail('agent.unavailable');
+    const scout = parent.scout === true;
+    if (!d.tools || !p.routes.length || (!scout && agentOff(d.config(), parent.kind))) return fail('agent.unavailable');
+    const endScout = (why: ScoutEnd): void => { if (!scout) return; this.#scoutEnds.set(parent.runId, why); this.stop(parent.runId); };
     // 数の歯止め（どちらも、始めずにエラーで返す。待たない）
     const spawned = this.#agentSpawned.get(parent.runId) ?? 0;
-    if (spawned >= config.tools.agent.maxPerRun) return fail('agent.too_many', { max: config.tools.agent.maxPerRun });
+    if (spawned >= config.tools.agent.maxPerRun) { endScout('agents_used'); return fail('agent.too_many', { max: config.tools.agent.maxPerRun }); }
     let live = 0;
     for (const active of this.#active.values()) if (active.kind === 'agent') live += 1;
-    if (live >= MAX_LIVE_AGENTS) return fail('agent.busy');
+    if (live >= MAX_LIVE_AGENTS) { endScout('agents_busy'); return fail('agent.busy'); }
     // 子に渡せる道具 = 親に渡りうる道具（tool_search で読み込んだかに関わらない）∩ allowedIn に 'agent' を明示した道具 ∩ 入力の tools（狭めるだけ）
     const mode: PermissionMode = parent.kind === 'chat' ? stricterMode(parent.permissionMode ?? 'auto', this.#modeOf(parent.conversationId)) : 'auto';
     const givable = this.#toolsFor(parent.kind, p.forbid, config, mode, parent.project !== undefined, this.#frozen(parent.project?.id)).filter(t => t.allowedIn.includes('agent'));
@@ -1286,8 +1333,8 @@ export class ChatEngine {
       if (unknown.length) return fail('agent.unknown_tools', { names: unknown.join(', ') });
     }
     const granted = new Set(input.tools ?? [...givableNames]);
-    const childForbid = new Set<string>([...(p.forbid ?? []), 'agent_run']);
-    for (const name of d.tools.registry.names()) if (!granted.has(name)) childForbid.add(name);
+    const childForbid = scout ? new ScoutAllow(granted, ['agent_run']) : new Set<string>([...(p.forbid ?? []), 'agent_run']);
+    if (!scout) for (const name of d.tools.registry.names()) if (!granted.has(name)) childForbid.add(name);
 
     const title = plainLine(input.title ?? input.task, AGENT_CHILD_TITLE_MAX) || plainLine(input.task, AGENT_CHILD_TITLE_MAX) || 'agent';
     const childRunId = randomUUID();
@@ -1298,6 +1345,8 @@ export class ChatEngine {
     if (parent.taint.tainted || d.conversations.everTainted(parent.conversationId)) this.#initialTaint.set(childRunId, [engineText(language, 'taint.parent')]);
     if (parent.kind === 'chat') this.#modeHost.set(child.id, parent.conversationId);
     this.#agentSpawned.set(parent.runId, spawned + 1);
+    const kids = scout ? this.#scoutChildren.get(parent.runId) ?? { spawned: 0, ok: 0 } : undefined;
+    if (kids) { kids.spawned += 1; this.#scoutChildren.set(parent.runId, kids); }
 
     const emit = (state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout', toolCalls = 0) => d.bus.publish({
       type: 'agent.state', runId: parent.runId, conversationId: parent.conversationId, callId: callId ?? '', childRunId, childConversationId: child.id, state, toolCalls,
@@ -1305,7 +1354,7 @@ export class ChatEngine {
     this.#start(childRunId, child.id, p.routes, 'agent', undefined, childForbid, null, { parent, mode });
     emit('running');
     const why: { value?: 'timeout' | 'parent' } = {};
-    const timeoutMs = d.agentTimeoutMs ?? config.tools.agent.timeoutSec * 1000;
+    const timeoutMs = d.agentTimeoutMs ?? (scout ? SCOUT_AGENT_TIMEOUT_MS : config.tools.agent.timeoutSec * 1000);
     const timer = setTimeout(() => { why.value ??= 'timeout'; this.stop(childRunId); }, timeoutMs);
     const onParentAbort = () => { why.value ??= 'parent'; this.stop(childRunId); };
     parent.signal.addEventListener('abort', onParentAbort, { once: true });
@@ -1338,6 +1387,7 @@ export class ChatEngine {
     if (shown < body.length) body = `${body.slice(0, shown)}\n${truncated}`;
     if (result.truncated) d.bus.publish({ type: 'warning', runId: parent.runId, conversationId: parent.conversationId, code: 'agent_output_truncated', message: engineText(language, 'warn.agent_output_truncated') });
     emit('done', toolCalls);
+    if (kids) kids.ok += 1;
     return { content: `${open}\n${cutNote}${body}\n${close}`, ...(fetched ? { fetched: true } : {}) };
   }
   // 会話のいまの権限モード。子の担当の会話は、任せた親の会話のモードを見る（子の会話自身のモードは使わない）
@@ -1391,25 +1441,25 @@ export class ChatEngine {
     } finally { release?.(); }
   }
 
-  #snapshot(conversationId: string, project: ToolContext['project']): string {
+  #snapshot(conversationId: string, project: ToolContext['project'], scout = false): string {
     const d = this.#d;
     const existing = d.conversations.get(conversationId)?.snapshot;
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = this.#buildSnapshotText(language, conversationId, project, d.log);
+    const snapshot = this.#buildSnapshotText(language, conversationId, project, d.log, scout);
     d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 
   // 会話の始めに固定する system の文。作るだけで、何も書かない
-  #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void) {
+  #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void, scout = false) {
     const d = this.#d;
     const product = d.conversations.projectOf(conversationId) !== null;
     const root = project?.root;
     const rootKey = root ? d.projects?.get(project.id)?.root_key : undefined;
     return buildSnapshot(d.paths, {
-      ...(d.botMemory && d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
+      ...(d.botMemory && d.memory && !scout ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
       ...(product ? { persona: false, instructions: root && rootKey ? instructionsSection(readInstructions(root, instructionsBudget(this.#smallestAvailable()), log, rootKey)) : undefined } : {}),
     }, language);

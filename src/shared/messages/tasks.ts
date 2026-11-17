@@ -35,6 +35,7 @@ const en = {
   'event.proposed': 'Created as a proposal',
   'event.repeat': 'Repeat: {cron}',
   'event.recovered': 'The previous run stopped midway, so it will run again',
+  'event.scout_closed': 'This scout run stopped midway (a restart of beat), so it was closed. Scout runs are never resumed',
   'event.skipped': 'The previous run has not finished yet, so none was created this time',
   'event.created_from': 'Created from the schedule "{title}"',
   'event.answer': 'Reply to the question "{question}": {text}',

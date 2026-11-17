@@ -72,7 +72,7 @@ export function growthStats(db: DatabaseSync, query: GrowthQuery = {}): GrowthSt
   const keyOf = (b: GrowthBucket): string => `${b.month}\u0000${b.projectId ?? ''}`;
 
   const tasks = projectSql('project_id');
-  for (const row of db.prepare(`SELECT project_id, created_at FROM tasks WHERE conversation_id IS NOT NULL AND NOT (cron IS NOT NULL AND parent_id IS NULL)
+  for (const row of db.prepare(`SELECT project_id, created_at FROM tasks WHERE conversation_id IS NOT NULL AND NOT (cron IS NOT NULL AND parent_id IS NULL) AND proposed_by IS NOT 'scout-run'
     AND created_at >= ? AND created_at < ?${tasks.sql}`).all(since, until, ...tasks.args) as Array<{ project_id: string | null; created_at: number }>) {
     const b = bucket(Number(row.created_at), row.project_id);
     if (b) b.tasks++;

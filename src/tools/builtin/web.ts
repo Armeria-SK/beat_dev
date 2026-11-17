@@ -11,6 +11,7 @@ import { searchDuckDuckGo, SearchFailure, SearchThrottle } from '../web/search.t
 
 const PAGE_CHARS = 20_000;
 const SEARCH_BLOCK_LIMIT = 2;
+export const SCOUT_FETCH_MAX = 30;
 
 const sharedThrottle = new SearchThrottle();
 
@@ -47,11 +48,13 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
     if (!ctx.config.tools.web.fetch) return { decision: 'deny', reasons: [guardText(language, 'web.fetch_off')] };
     let url: URL;
     try { url = pageUrl(input.url); } catch (error) { return { decision: 'deny', reasons: [error instanceof RetrievalFailure ? error.text(language) : (error as Error).message] }; }
-    return exfiltrationCheck(input.url, language, url.search.length > 300);
+    if (ctx.scout && (ctx.scoutFetches?.n ?? 0) >= SCOUT_FETCH_MAX) return { decision: 'deny', reasons: [guardText(language, 'web.scout_fetch_limit', { max: SCOUT_FETCH_MAX })] };
+    return exfiltrationCheck(input.url, language, (ctx.scout ? url.hostname.length + url.pathname.length + url.search.length : url.search.length) > 300);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_fetch'), body: input.url }),
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
+    if (ctx.scoutFetches) ctx.scoutFetches.n += 1;
     try {
       const page = await fetchPublic(input.url, ctx.signal, web(ctx).network);
       const raw = decodeText(page.body, page.contentType).replace(page.truncated ? /�$/u : /(?!)/u, '');
