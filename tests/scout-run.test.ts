@@ -727,3 +727,30 @@ test('scout: failed lookups count toward the 30 web_fetch limit (the lookup itse
   assert.equal(new Set(lookups).size, 30);
   assert.equal(s.count('tool_calls', "tool = 'web_fetch' AND decision = 'deny'"), 10);
 });
+
+test('scout: a scout run and its scouts do not move the product\'s last activity; an ordinary task conversation and an owner chat do', async t => {
+  const s = await setup(t);
+  const before = s.app.projects.counts(s.projectId).lastActivityAt;
+  assert.ok(before !== null);
+  s.clock.now += 10 * MIN;
+  s.adapter().scripts.push(
+    toolCall('agent_run', { task: 'Check the src folder', title: 'Check src' }),
+    reply('Looked at a.ts.\narea: src\nchecked: read a.ts\nresult: nothing'),
+    toolCall('ledger_record', { title: 'src check', area: ['src'], checked: 'read a.ts', result: 'nothing' }),
+    reply('Checked src.'),
+  );
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const row = s.scoutRows()[0]!;
+  assert.equal(row.status, 'done');
+  assert.equal(s.count('conversations', `project_id = '${s.projectId}' AND id = '${row.conversation_id}' AND last_message_at = ${s.clock.now}`), 1);
+  assert.equal(s.count('conversations', `project_id = '${s.projectId}' AND parent_run_id IS NOT NULL AND last_message_at = ${s.clock.now}`), 1);
+  assert.equal(s.app.projects.counts(s.projectId).lastActivityAt, before);
+  s.clock.now += MIN;
+  const work = s.app.conversations.create({ kind: 'task', projectId: s.projectId });
+  s.app.conversations.append(work.id, { role: 'user', content: 'do it' });
+  assert.equal(s.app.projects.counts(s.projectId).lastActivityAt, s.clock.now);
+  s.clock.now += MIN;
+  const chat = s.app.conversations.create({ kind: 'chat', projectId: s.projectId });
+  s.app.conversations.append(chat.id, { role: 'user', content: 'hello' });
+  assert.equal(s.app.projects.counts(s.projectId).lastActivityAt, s.clock.now);
+});
