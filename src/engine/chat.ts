@@ -780,7 +780,8 @@ export class ChatEngine {
     const config = agent?.parent.config ?? d.config();
     d.runs.start(runId, kind, conversationId, agent?.parent.runId);
     const resolved = agent ? agent.parent.project : runProject(d.projects, d.conversations.projectOf(conversationId));
-    const snapshot = this.#snapshot(conversationId, resolved);
+    const scout = agent ? agent.parent.scout === true : forbid instanceof ScoutAllow;
+    const snapshot = this.#snapshot(conversationId, resolved, scout);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
@@ -808,7 +809,6 @@ export class ChatEngine {
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
     const touchedTasks = new Set<string>();
-    const scout = agent ? agent.parent.scout === true : forbid instanceof ScoutAllow;
     const ctx: ToolContext = {
       runId, conversationId, kind, signal, stopSignal: this.#hardStops.get(runId)?.signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
@@ -1434,25 +1434,25 @@ export class ChatEngine {
     } finally { release?.(); }
   }
 
-  #snapshot(conversationId: string, project: ToolContext['project']): string {
+  #snapshot(conversationId: string, project: ToolContext['project'], scout = false): string {
     const d = this.#d;
     const existing = d.conversations.get(conversationId)?.snapshot;
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = this.#buildSnapshotText(language, conversationId, project, d.log);
+    const snapshot = this.#buildSnapshotText(language, conversationId, project, d.log, scout);
     d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 
   // 会話の始めに固定する system の文。作るだけで、何も書かない
-  #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void) {
+  #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void, scout = false) {
     const d = this.#d;
     const product = d.conversations.projectOf(conversationId) !== null;
     const root = project?.root;
     const rootKey = root ? d.projects?.get(project.id)?.root_key : undefined;
     return buildSnapshot(d.paths, {
-      ...(d.botMemory && d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
+      ...(d.botMemory && d.memory && !scout ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
       ...(product ? { persona: false, instructions: root && rootKey ? instructionsSection(readInstructions(root, instructionsBudget(this.#smallestAvailable()), log, rootKey)) : undefined } : {}),
     }, language);

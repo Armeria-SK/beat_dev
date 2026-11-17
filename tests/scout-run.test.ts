@@ -14,6 +14,7 @@ import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { ledgerPath } from '../src/scout/ledger.ts';
 import { proposalAdd } from '../src/tools/builtin/proposal.ts';
 import { taskList } from '../src/tools/builtin/tasks.ts';
+import { webFetch } from '../src/tools/builtin/web.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -25,7 +26,7 @@ import { MIN, toolCall } from './helpers/task-app.ts';
 
 const NEVER_GIVEN = ['task_complete', 'task_create', 'task_checkpoint', 'task_list', 'question_add', 'acceptance_change', 'plan_write', 'memory_save', 'web_download', 'browser_click', 'browser_type', 'shell_run', 'file_write', 'tool_search', 'mcp_fake_write'];
 
-interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; down?: string[]; review?: boolean }
+interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; down?: string[]; review?: boolean; timers?: boolean; botMemory?: boolean }
 
 async function setup(t: { after: (fn: () => void) => void }, options: Options = {}) {
   const dir = options.dir ?? tempDir(t);
@@ -48,7 +49,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: Options = 
   const clock = { now: Date.parse('2026-11-17T03:00:00Z') };
   const adapters = new Map<string, FakeAdapter>();
   const app = new App({
-    paths, ...(options.file ? {} : { databasePath: ':memory:' }), log: () => undefined, now: () => clock.now, workerTimers: false,
+    paths, ...(options.file ? {} : { databasePath: ':memory:' }), log: () => undefined, now: () => clock.now, workerTimers: options.timers === true, botMemory: options.botMemory === true,
     adapterOverride: p => {
       const adapter = adapters.get(p.id) ?? new FakeAdapter(p);
       if (options.down?.includes(p.id)) adapter.probeResult = { status: 'error', message: 'down' };
@@ -178,6 +179,22 @@ test('scout: the same proposal title is refused while one is open, and approving
   assert.equal(listed.fetched, true);
 });
 
+test('scout: proposal_add is refused once the product has 10 open proposals', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(
+    ...Array.from({ length: 12 }, (_, i) => toolCall('proposal_add', { title: `Idea ${i + 1}`, kind: 'feature', why: 'w', size: 'S' })),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  assert.equal(s.proposals().filter(p => p.status === 'inbox').length, 10);
+  assert.equal(s.count('tool_calls', "tool = 'proposal_add' AND ok = 0 AND output_preview LIKE '%10 open proposals%'"), 2);
+  s.app.tasks.finish(s.proposals()[0]!.id, 'cancelled', 'not now', 'user');
+  s.adapter().scripts.push(toolCall('proposal_add', { title: 'Idea 13', kind: 'feature', why: 'w', size: 'S' }), reply('done'));
+  s.clock.now += 2 * MIN;
+  await s.app.worker.tick();
+  assert.equal(s.proposals().filter(p => p.status === 'inbox').length, 10, 'room again after one is rejected');
+});
+
 test('scout: tools outside the allow-list are refused when the model calls them anyway', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(
@@ -231,6 +248,39 @@ test('scout: a call that would ask (a tool set to ask the owner) is refused, in 
   assert.equal(s.count('pending_actions'), 0);
   assert.equal(s.count('judge_calls'), 0);
   assert.equal(s.count('tool_calls', "tool = 'file_read' AND output_preview LIKE '%export const a%'"), 0);
+});
+
+test('scout: the owner\'s memory books are not in the scout run or its scouts, though an ordinary task run has them', async t => {
+  const s = await setup(t, { botMemory: true });
+  s.app.memory.save({ book: 'user', content: 'Owner bank PIN hint: blue-otter-42', actor: 'user' });
+  s.adapter().scripts.push(toolCall('agent_run', { task: 'look', title: 'Look' }), reply('area: src\nchecked: x\nresult: no problem'), reply('done'));
+  await s.app.worker.tick();
+  assert.equal(s.adapter().calls.length, 3);
+  for (const req of s.adapter().calls) assert.doesNotMatch(JSON.stringify(req.system), /blue-otter-42/u);
+  s.app.projects.update(s.projectId, { scoutMode: 'off' });
+  s.app.tasks.create({ title: 'plain task', origin: 'user', actor: 'user', projectId: s.projectId });
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'ok', notify: false }));
+  await s.app.worker.tick();
+  assert.match(JSON.stringify(s.adapter().calls.at(-1)!.system), /blue-otter-42/u);
+});
+
+test('scout: web_fetch with a long URL path is refused in the scout run and its scouts; elsewhere only the query counts', async t => {
+  const s = await setup(t);
+  const long = `https://example.com/${'a'.repeat(400)}`;
+  s.adapter().scripts.push(
+    toolCall('web_fetch', { url: long }),
+    toolCall('agent_run', { task: 'fetch it', title: 'Fetch' }),
+    toolCall('web_fetch', { url: long }),
+    reply('area: -\nchecked: nothing\nresult: no problem'),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  assert.equal(s.count('tool_calls', "tool = 'web_fetch' AND decision = 'deny'"), 2);
+  assert.equal(s.count('pending_actions'), 0);
+  const config = s.app.config();
+  assert.equal((webFetch.preCheck!({ url: long }, { config } as never) as { decision: string }).decision, 'allow');
+  assert.equal((webFetch.preCheck!({ url: long }, { config, scout: true } as never) as { decision: string }).decision, 'ask');
+  assert.equal((webFetch.preCheck!({ url: 'https://example.com/a/b' }, { config, scout: true } as never) as { decision: string }).decision, 'allow');
 });
 
 test('scout: no run while background work is Off, while routing.scout is empty (no fallback to the chat route), or while the product mode is off', async t => {
@@ -293,6 +343,43 @@ test('scout: an owner task that can start now stops the scout run, one held by t
   assert.equal(s.app.tasks.get(task.id)!.status, 'done');
 });
 
+async function until(check: () => boolean, ms = 6000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (check()) return true; await new Promise(resolve => setTimeout(resolve, 50)); }
+  return check();
+}
+
+test('scout (timers): an owner task whose time comes during a scout run stops it without a manual poke', async t => {
+  const s = await setup(t, { timers: true });
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const task = s.app.tasks.create({ title: 'later work', origin: 'user', actor: 'user', runAt: s.clock.now + 1500 });
+  s.app.worker.start();
+  await held.started;
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(s.scoutRows()[0]!.status, 'running');
+  s.clock.now += 2000;
+  assert.ok(await until(() => s.scoutRows()[0]!.status === 'cancelled'), 'the scout run stops once the task is due');
+  assert.match(s.scoutRows()[0]!.result_summary ?? '', /owner approved or asked for/u);
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'ok', notify: false }));
+  assert.ok(await until(() => s.app.tasks.get(task.id)!.status === 'done'));
+});
+
+test('scout (timers): a schedule that falls due during a scout run is spawned and stops the scout run', async t => {
+  const s = await setup(t, { timers: true });
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  s.app.worker.start();
+  await held.started;
+  const schedule = s.app.tasks.create({ title: 'daily report', origin: 'user', actor: 'user', cron: '* * * * *' });
+  const due = s.app.tasks.get(schedule.id)!.run_at!;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  s.clock.now = due + 10;
+  s.app.worker.poke();
+  assert.ok(await until(() => s.scoutRows()[0]!.status === 'cancelled'), 'the scout run stops once the schedule is due');
+  assert.ok(s.app.db.prepare('SELECT 1 FROM tasks WHERE parent_id = ?').get(schedule.id), 'the due run was spawned');
+});
+
 test('scout: scout runs are not counted in worker.maxRunsPerHour, so an approved task does not wait behind them', async t => {
   const s = await setup(t, { edit: c => { c.worker.maxRunsPerHour = 1; } });
   for (let i = 0; i < 3; i++) {
@@ -334,6 +421,7 @@ test('scout: owner task routes answer 409 for a scout run row (no way into #forc
     [`/api/tasks/${row.id}/run-now`, 'POST'], [`/api/tasks/${row.id}/uncancel`, 'POST'], [`/api/tasks/${row.id}/approve`, 'POST'],
     [`/api/tasks/${row.id}/unapprove`, 'POST'], [`/api/tasks/${row.id}/cancel`, 'POST'], [`/api/tasks/${row.id}/done`, 'POST'],
     [`/api/tasks/${row.id}`, 'PATCH', { title: 'x' }], [`/api/tasks/${row.id}`, 'DELETE'],
+    [`/api/tasks/${row.id}/answer`, 'POST', { answer: 'go' }], [`/api/tasks/${row.id}/items/0/check`, 'POST', { checked: true }], [`/api/tasks/${row.id}/check`, 'POST', {}],
   ] as Array<[string, string, unknown?]>) {
     const res = await call(path, method, body);
     assert.equal(res.status, 409, `${method} ${path}`);
@@ -342,6 +430,13 @@ test('scout: owner task routes answer 409 for a scout run row (no way into #forc
   assert.equal(s.app.tasks.get(row.id)!.status, 'cancelled');
   const listed = await call('/api/tasks', 'GET');
   assert.ok(!JSON.stringify(listed.body).includes(row.id));
+  const runs = s.count('engine_runs');
+  const conversation = s.app.conversations.create({ kind: 'task', title: 'scout conversation', projectId: s.projectId });
+  s.app.conversations.append(conversation.id, { role: 'user', content: '[Scout run] materials' });
+  const retry = await call(`/api/conversations/${conversation.id}/retry`, 'POST', {});
+  assert.equal(retry.status, 409, 'retry of a task conversation');
+  assert.equal(retry.body.code, 'http.not_chat_conversation');
+  assert.equal(s.count('engine_runs'), runs, 'no chat run started from a task conversation');
 });
 
 test('scout: rows left open by a restart are closed, never put back as ready, and a ready scout row is never picked while a plain task is', async t => {

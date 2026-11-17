@@ -4,6 +4,7 @@ const en = {
   'unavailable': 'The scout ledger can be written only in a scout run on a product',
   'proposal.unavailable': 'Proposals can be added only in a scout run on a product',
   'proposal.duplicate': 'Not added: "{title}" is already open or was rejected in the last 30 days ({id}). Do not propose it again',
+  'proposal.too_many': 'Not added: the product already has {max} open proposals waiting for the owner. Do not add more until the owner approves or rejects some',
   'proposal.added': 'Added proposal {id} "{title}" to the Kanban (Proposed). The owner approves or rejects it',
   'proposal.untrusted': 'Proposed by a scout run, from material that includes web reads and model output',
   'run.title': 'Scout: {name}',

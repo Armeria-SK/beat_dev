@@ -13,6 +13,7 @@ import type { ToolDef } from '../types.ts';
 interface ProposalAddInput { title: string; kind: 'feature' | 'bug'; why: string; area?: string[]; size: 'S' | 'M' | 'L'; goal?: string; evidence?: string; ledger?: string }
 
 export const REJECTED_WINDOW_MS = 30 * 86_400_000;
+export const PROPOSAL_OPEN_MAX = 10;
 
 export const sameTitle = (title: string): string => title.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim();
 
@@ -49,6 +50,8 @@ export const proposalAdd: ToolDef<ProposalAddInput> = {
       AND (status = 'inbox' OR (status = 'cancelled' AND COALESCE(completed_at, updated_at) > ?))`).all(project.id, since) as Array<{ id: string; title: string }>;
     const same = earlier.find(row => sameTitle(row.title) === key);
     if (same) return { content: scoutText(language, 'proposal.duplicate', { title, id: same.id.slice(0, 8) }), isError: true };
+    const open = (db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND proposal IS NOT NULL AND status = 'inbox'").get(project.id) as { n: number }).n;
+    if (open >= PROPOSAL_OPEN_MAX) return { content: scoutText(language, 'proposal.too_many', { max: PROPOSAL_OPEN_MAX }), isError: true };
     const area = [...new Set((input.area ?? []).map(raw => usableAreaPath(raw, PROPOSAL_LIMITS.area)).filter((path): path is string => path !== null))];
     const proposal: Proposal = {
       kind: input.kind, why: plainLine(input.why, PROPOSAL_LIMITS.why), area, size: input.size,

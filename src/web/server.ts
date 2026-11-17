@@ -338,7 +338,7 @@ export function createWebServer(app: App): WebServer {
   router.add('POST', '/api/conversations/:id/retry', ({ res, params }) => {
     // 子の担当（agent_run）の会話は読むだけ。やり直しで普通の会話として動かさない
     const conversation = app.conversations.get(params[0]!);
-    if (conversation?.parent_run_id) throw problem(409, 'conflict', 'not_chat_conversation');
+    if (conversation && (conversation.parent_run_id || conversation.kind !== 'chat')) throw problem(409, 'conflict', 'not_chat_conversation');
     if (projectFolderGone(app.projects, conversation?.project_id)) throw projectProblem(409, new ProjectError('folder_missing'));
     const outcome = app.engine.retry(params[0]!);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }

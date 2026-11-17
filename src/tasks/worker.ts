@@ -306,7 +306,7 @@ export class Worker {
 
   async tick(): Promise<TickResult> {
     const c = this.#d.config();
-    this.#guardScout(c);
+    if (this.#scoutRunning()) this.#whileScout(c);
     // 選ぶ部分は 1 本ずつ（#ticking）。実行を始めたら（await の前に）外して、枠が残っていれば次を選べるようにする
     if (this.#ticking || this.#running.size >= c.worker.maxParallel) return 'busy';
     this.#ticking = true;
@@ -552,6 +552,15 @@ export class Worker {
     return undefined;
   }
 
+  #whileScout(c: AppConfig): void {
+    const now = this.#now();
+    if (c.models.length) this.#d.tasks.spawnDueSchedules();
+    this.#guardScout(c);
+    if (this.#stopped || this.#d.autoSchedule === false || !this.#scoutRunning()) return;
+    const at = Math.min(this.#d.tasks.nextWakeAt({ allowSelf: true }) ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);
+    this.#schedule(Math.max(1000, at - now));
+  }
+
   #guardScout(c: AppConfig): void {
     const run = this.#scoutRunning();
     if (!run || this.#scoutStops.has(run.runId)) return;
@@ -609,6 +618,7 @@ export class Worker {
     saveScoutState(kv, project.id, { last: now, ...(materials.head ? { head: materials.head } : {}), stale: materials.stale });
     this.#running.set(started.runId, { kind: 'scout', taskId: task.id, runId: started.runId, title, projectId: project.id });
     release();
+    this.#whileScout(c);
     tasks.event(task.id, 'run', 'worker', null, started.runId);
     try {
       const result = await started.done;

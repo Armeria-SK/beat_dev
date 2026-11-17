@@ -506,7 +506,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     run: () => void api.chooseModel(id, { modelId: alternative.id }).then(() => { void load(); then(); }, error => fail(error, null)),
   } : null);
   const openSettings = { label: t('ui.fail.openSettings'), run: () => { location.hash = '#/settings'; } };
-  const canRetry = lastIsUser && !draft && !conversation?.parent_run_id;
+  const canRetry = lastIsUser && !draft && !conversation?.parent_run_id && (conversation?.kind ?? 'chat') === 'chat';
 
   function runFailure(n: Extract<RunNotice, { kind: 'error' }>): ReactNode {
     const text = noticeText(t, n);

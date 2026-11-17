@@ -47,7 +47,7 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
     if (!ctx.config.tools.web.fetch) return { decision: 'deny', reasons: [guardText(language, 'web.fetch_off')] };
     let url: URL;
     try { url = pageUrl(input.url); } catch (error) { return { decision: 'deny', reasons: [error instanceof RetrievalFailure ? error.text(language) : (error as Error).message] }; }
-    return exfiltrationCheck(input.url, language, url.search.length > 300);
+    return exfiltrationCheck(input.url, language, (ctx.scout ? url.pathname.length + url.search.length + url.hash.length : url.search.length) > 300);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_fetch'), body: input.url }),
   async execute(input, ctx) {
