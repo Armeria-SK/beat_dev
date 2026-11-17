@@ -32,6 +32,7 @@ const WRAPS: Array<[string, (c: string) => string, ((c: string) => boolean)?]> =
   ['trap', c => `trap {\n${c}\n}`],
   ['begin', c => `begin {\n${c}\n}`],
   ['return', c => `return ${c}`, c => onePipeline(c)],
+  ['assign', c => `$r=${c}`, c => onePipeline(c)],
 ];
 
 // One pipeline with no statement separator: the only kind `return C` can carry

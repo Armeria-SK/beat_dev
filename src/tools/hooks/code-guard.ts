@@ -258,19 +258,35 @@ function spawnFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   return segments(inner.join(' ')).flatMap(innerSeg => codeFindings(innerSeg, { ...ctx, prev: undefined, depth: (ctx.depth ?? 0) + 1 }).map(f => ({ ...f, exemptable: false })));
 }
 
+// 引用符の外の最初の = の位置（$h['a=b']=x の右辺を、添字の中の = で切らない）
+function firstUnquotedEq(raw: string): number {
+  let quote: string | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '=') return i;
+  }
+  return raw.indexOf('=');
+}
+
 // ── R1.6 何を動かすか分からない形 ──
 function unknownTargetFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   const lang = ctx.language;
   const raw = seg.rawCmd;
   const detail: string[] = [];
-  const assignment = /^\$[\w:{}.]+[+\-*/%]?=/u.test(raw) || /^[+\-*/%]?=$/u.test(seg.args[0] ?? '');
+  const plainAssignment = /^\$[\w:{}.]+[+\-*/%]?=/u.test(raw) || /^[+\-*/%]?=$/u.test(seg.args[0] ?? '');
+  // 型・添字・メンバーの付いた左辺（[int]$x=・$x[0]=・$a.b=）と、演算子に右辺がくっついた形（$x =Cmd）も、右辺を調べる
+  const assignment = plainAssignment || /^(?:\[[\w.]+(?:\[\])?\])*\$[^=\s]*[+\-*/%]?=/u.test(raw)
+    || (/^(?:\[[\w.]+(?:\[\])?\])*\$[^=\s]*$/u.test(raw) && /^(?:\?\?|[+\-*/%])?=/u.test(seg.args[0] ?? ''));
   const nested: CodeFinding[] = [];
   if (assignment) {
-    const rhs = seg.raw.slice(seg.raw.indexOf('=') + 1).trim();
+    const rhs = seg.raw.slice(firstUnquotedEq(seg.raw) + 1).trim();
     if (rhs && (ctx.depth ?? 0) < 3) {
       for (const inner of segments(rhs)) nested.push(...codeFindings(inner, { ...ctx, prev: undefined, depth: (ctx.depth ?? 0) + 1 }));
     }
-  } else {
+  }
+  if (!plainAssignment) {
     const bareVar = /^\$(?:\{[^}]+\}|[\w:?]+)$/u.test(raw);
     if (bareVar && seg.args.length > 0 && !PS_OPERATOR.test(seg.args[0]!)) detail.push(raw);
     else if (seg.invoke && /^[$(]/u.test(seg.raw)) detail.push(seg.raw.split(/\s/u)[0]!);
