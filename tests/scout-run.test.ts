@@ -28,7 +28,7 @@ import { MIN, toolCall } from './helpers/task-app.ts';
 
 const NEVER_GIVEN = ['task_complete', 'task_create', 'task_checkpoint', 'task_list', 'question_add', 'acceptance_change', 'plan_write', 'memory_save', 'web_download', 'browser_click', 'browser_type', 'shell_run', 'file_write', 'tool_search', 'mcp_fake_write'];
 
-interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; down?: string[]; review?: boolean; timers?: boolean; botMemory?: boolean }
+interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; down?: string[]; review?: boolean; timers?: boolean; botMemory?: boolean; network?: PageNetwork }
 
 async function setup(t: { after: (fn: () => void) => void }, options: Options = {}) {
   const dir = options.dir ?? tempDir(t);
@@ -56,7 +56,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: Options = 
     get: async () => { fetched.n += 1; return { status: 200, contentType: 'text/plain', body: Buffer.from('page text') }; },
   };
   const app = new App({
-    webNetwork,
+    webNetwork: options.network ?? webNetwork,
     paths, ...(options.file ? {} : { databasePath: ':memory:' }), log: () => undefined, now: () => clock.now, workerTimers: options.timers === true, botMemory: options.botMemory === true,
     adapterOverride: p => {
       const adapter = adapters.get(p.id) ?? new FakeAdapter(p);
@@ -712,4 +712,18 @@ test('scout: a run that ends with every scout failed counts as a failure; a good
   s.clock.now += 61_000;
   await s.app.worker.tick();
   assert.equal(s.scoutRows().length, 3);
+});
+
+test('scout: failed lookups count toward the 30 web_fetch limit (the lookup itself reaches the name server)', async t => {
+  const lookups: string[] = [];
+  const network: PageNetwork = {
+    resolve: async host => { lookups.push(host); throw new Error('lookup failed'); },
+    get: async () => { throw new Error('never reached'); },
+  };
+  const s = await setup(t, { network });
+  s.adapter().scripts.push(...Array.from({ length: 40 }, (_, i) => toolCall('web_fetch', { url: `https://h${i}.example.com/` })), reply('done'));
+  await s.app.worker.tick();
+  assert.equal(lookups.length, 30);
+  assert.equal(new Set(lookups).size, 30);
+  assert.equal(s.count('tool_calls', "tool = 'web_fetch' AND decision = 'deny'"), 10);
 });
