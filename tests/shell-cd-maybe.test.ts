@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { outboundOf, pushesOf } from '../src/tools/hooks/outbound.ts';
+import { outboundOf, placesOf, pushesOf } from '../src/tools/hooks/outbound.ts';
 import { protectedTouchOf } from '../src/tools/hooks/protected-touch.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../src/tools/hooks/shell-guard.ts';
@@ -158,4 +158,53 @@ test('cd maybe: [CmdletBinding()] param stays refused as before, at top level an
     const r = f.row(command);
     assert.equal(r.decision, 'deny', `${command} -> ${r.reasonKeys.join(',')}`);
   }
+});
+
+function wrapFixture(t: { after: (fn: () => void) => void }) {
+  const ws = realish(join(tempDir(t), 'ws'));
+  for (const dir of ['b', 'pkg', 'sub']) mkdirSync(join(ws, dir), { recursive: true });
+  writeFileSync(join(ws, 'notes.txt'), 'x');
+  execFileSync('git', ['init', '-q', join(ws, 'b')]);
+  execFileSync('git', ['config', '--file', join(ws, 'b', '.git', 'config'), 'core.fsmonitor', 'node put.js']);
+  const policy = { roots: [{ path: ws, mode: 'write' }], deny: [] };
+  return {
+    ws,
+    row: (c: string) => guardRowOf(MODS, c, 'powershell', ws, policy),
+    check: (c: string) => checkShellCommand(c, ws, { policy: policy as never, outsideRoots: 'ask', shell: 'powershell', windows: true }),
+  };
+}
+
+test('cd maybe: a wrapped shell starts in every folder the outer command may be in', t => {
+  const f = wrapFixture(t);
+  for (const prefix of ['if ($c) { cd .. }', 'try { cd .. } catch {}', 'trap { cd .. }']) {
+    for (const inner of ['powershell -Command "Remove-Item -Recurse -Force ws"', 'bash -c "rm -rf ws"', 'cmd /c "rmdir /s /q ws"']) {
+      assert.match(route(f.row(`${prefix}\n${inner}`)), /^refused /u, `${prefix} / ${inner}`);
+    }
+  }
+  assert.match(route(f.row('try { cd b } catch {}\npowershell -Command "git status"')), /^owner /u);
+});
+
+test('cd maybe: places of a wrapped command after an unknown cd are still listed', t => {
+  const f = wrapFixture(t);
+  const v = f.check('cd $x\nbash -c "npm --prefix ../pkg publish"');
+  const places = placesOf(v.statements, f.ws);
+  assert.ok(places.some(p => p !== f.ws && p.endsWith('pkg')), JSON.stringify(places));
+});
+
+test('cd maybe: a relative path under an unknown folder is listed with an unresolved placement', t => {
+  const f = wrapFixture(t);
+  const v = f.check('cd $x\nGet-Content notes.txt');
+  assert.ok(v.paths.some(p => p.input === 'notes.txt' && p.placement.kind === 'unresolved'), JSON.stringify(v.paths));
+});
+
+test('cd maybe: walking through many subfolders one after another is not refused; many folders at once is', t => {
+  const f = fixture(t);
+  const walk = Array.from({ length: 33 }, (_, n) => `cd d${n}\nGet-Date\ncd ..`).join('\n');
+  const r = f.row(walk);
+  assert.ok(!r.reasonKeys.includes('guard.cwd_many'), r.reasonKeys.join(','));
+  assert.doesNotMatch(route(r), /^refused /u);
+  const six = [1, 2, 3, 4, 5, 6].map(n => `if ($c${n}) { cd d${n} }`).join('\n');
+  assert.match(route(f.row(`${six}\nGet-Date`)), /^refused .*guard\.cwd_many/u);
+  const far = Array.from({ length: 257 }, (_, n) => `cd d${n}\ncd ..`).join('\n');
+  assert.ok(f.row(far).reasonKeys.includes('guard.cwd_many'));
 });

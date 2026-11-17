@@ -26,12 +26,12 @@ const CD_TEMPLATES = [
   'Set-Location ..\nRemove-Item -Recurse -Force sub', 'cd ..\ncd ..\nRemove-Item -Recurse -Force *', 'cd b; git fetch origin', 'git pull',
 ];
 
-// Forms of one string (PowerShell): plain, two bodies, and seven cd prefixes in front
+// Forms of one string (PowerShell): plain, two bodies, and every cd prefix in front
 const FORMS: Array<[string, (c: string) => string]> = [
   ['plain', c => c],
   ['try', c => `try {\n${c}\n} catch {}`],
   ['while', c => `while ($true) {\n${c}\n}`],
-  ...CD_PREFIXES.filter((_, i) => [0, 1, 2, 3, 4, 5, 9].includes(i)).map(([p]): [string, (c: string) => string] => [`after ${p}`, c => `${p}\n${c}`]),
+  ...CD_PREFIXES.map(([p]): [string, (c: string) => string] => [`after ${p}`, c => `${p}\n${c}`]),
 ];
 
 // Plain rows without a control keyword that are expected to become stricter in this change (security review D7)

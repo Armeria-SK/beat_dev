@@ -51,6 +51,7 @@ export interface ShellGuardOptions {
 interface CwdTrack { now: string[]; all: string[]; known: boolean }
 export interface CwdState { now: readonly string[]; all: readonly string[]; known: boolean }
 const CWD_CAP = 32;
+const CWD_ALL_CAP = 256;
 
 export interface CheckedPath { input: string; path?: string; placement: Placement | { kind: 'unresolved'; reason: string }; write: boolean }
 
@@ -432,7 +433,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       if (!next.includes(to)) next.push(to);
     }
     const added = next.filter(p => !t.all.includes(p));
-    if (t.all.length + added.length > CWD_CAP) { t.known = false; add('deny', say('guard.cwd_many', { max: CWD_CAP })); return; }
+    // 同時にありうるフォルダは CWD_CAP まで、これまでに通ったフォルダは CWD_ALL_CAP まで。超えたら断る（すべてを見きれないため）
+    if (next.length > CWD_CAP || t.all.length + added.length > CWD_ALL_CAP) { t.known = false; add('deny', say('guard.cwd_many', { max: next.length > CWD_CAP ? CWD_CAP : CWD_ALL_CAP })); return; }
     t.now = next;
     t.all.push(...added);
   };
