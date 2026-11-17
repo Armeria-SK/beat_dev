@@ -42,7 +42,7 @@ export interface IndexMaterials {
   counts: { questions: number; proposals: number };
   timezone: string;
   decisions?: { rows: number } | null;
-  ledger?: { entries: number } | 'unreadable' | null;
+  ledger?: { entries: number; stale?: number } | 'unreadable' | null;
 }
 
 export const meshIndexLimit = (available: number): number => Math.min(MESH_INDEX_MAX, Math.max(MESH_INDEX_MIN, Math.floor(available * 0.02)));
@@ -108,7 +108,7 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
       ...(planLine ? [`- ${planLine}`] : []),
       `- acceptance.json — ${acceptanceText(m.acceptance, false)}`,
       ...(m.decisions ? [`- ${DECISIONS_FILE} — ${m.decisions.rows} decisions`] : []),
-      ...(m.ledger ? [`- ${LEDGER_FILE} — ${m.ledger === 'unreadable' ? 'cannot be read' : `${m.ledger.entries} entries (scout notes from web reads)`}`] : []),
+      ...(m.ledger ? [`- ${LEDGER_FILE} — ${m.ledger === 'unreadable' ? 'cannot be read' : `${m.ledger.entries} entries${m.ledger.stale !== undefined ? `, ${m.ledger.stale} stale` : ''} (scout notes from web reads)`}`] : []),
     ];
     const tail = [`questions: ${m.counts.questions} unanswered (question_list) / proposals: ${m.counts.proposals}`];
     const body = largest(fileLines.length, keep => {
@@ -137,6 +137,7 @@ export interface MeshDeps {
   timezone: () => string;
   now?: () => number;
   log?: (line: string) => void;
+  scoutStale?: ((projectId: string) => number | undefined) | undefined;
 }
 
 interface Light {
@@ -149,7 +150,7 @@ interface Light {
   running: string[];
   timezone: string;
   decisions: { rows: number } | null;
-  ledger: { entries: number } | 'unreadable' | null;
+  ledger: { entries: number; stale?: number } | 'unreadable' | null;
 }
 
 function summarize(doc: AcceptanceDoc | undefined): AcceptanceSummary | null {
@@ -226,7 +227,9 @@ export class Mesh {
     const planMeta = plan ? this.#d.plans.meta(projectId, plan) ?? null : null;
     const planStat = plan ? statOf(conversationPlanFile(this.#d.projectsDir, projectId, plan)) : null;
     const decisions = regular(join(dir, DECISIONS_FILE)) ? { rows: decisionRows(readFileSync(join(dir, DECISIONS_FILE), 'utf8')) } : null;
-    const ledger = statOf(join(dir, SCOUT_DIR, LEDGER_NAME)) ? ledgerSummary(this.#d.projectsDir, projectId) ?? 'unreadable' : null;
+    const summary = statOf(join(dir, SCOUT_DIR, LEDGER_NAME)) ? ledgerSummary(this.#d.projectsDir, projectId) ?? 'unreadable' : null;
+    const stale = this.#d.scoutStale?.(projectId);
+    const ledger = summary && summary !== 'unreadable' && stale !== undefined ? { ...summary, stale } : summary;
     const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan === undefined ? 'none' : plan, planMeta, planStat, decisions, ledger]);
     return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, decisions, ledger };
   }

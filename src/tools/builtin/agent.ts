@@ -1,7 +1,8 @@
 import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import type { AgentRunInput, ToolDef } from '../types.ts';
+import { appendDispatch } from '../../scout/ledger.ts';
+import type { AgentRunInput, ToolDef, ToolOutput } from '../types.ts';
 
 // 子の担当に任せられる仕事の文・題の長さ、渡す道具の名前の数
 export const AGENT_TASK_MAX = 8000;
@@ -27,6 +28,18 @@ export const agentRun: ToolDef<AgentRunInput> = {
   }),
   async execute(input, ctx, info) {
     if (!ctx.agent) return { content: toolText(languageOf(ctx.config), 'agent.unavailable'), isError: true };
-    return ctx.agent(input, info?.callId);
+    const output = await ctx.agent(input, info?.callId);
+    if (ctx.scout && ctx.project) noteDispatch(ctx.paths.projects, ctx.project.id, input, output);
+    return output;
   },
 };
+
+function noteDispatch(projectsDir: string, projectId: string, input: AgentRunInput, output: ToolOutput): void {
+  const field = (name: string): string | undefined => new RegExp(`^\\s*${name}\\s*:\\s*(.+)$`, 'imu').exec(output.content)?.[1];
+  try {
+    appendDispatch(projectsDir, projectId, {
+      when: new Date().toISOString(), title: input.title ?? input.task,
+      area: output.isError ? '-' : field('area') ?? '-', result: output.isError ? output.content : field('result') ?? 'reported',
+    });
+  } catch { return; }
+}

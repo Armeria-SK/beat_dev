@@ -1,0 +1,456 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { Type } from '@sinclair/typebox';
+import { App } from '../src/app.ts';
+import type { AppConfig } from '../src/config/schema.ts';
+import { SCOUT_TOOLS } from '../src/engine/chat.ts';
+import type { ModelRequest } from '../src/providers/types.ts';
+import { ProviderError } from '../src/providers/types.ts';
+import { resolvePaths } from '../src/paths.ts';
+import { rootKeyOf } from '../src/projects/work-folder.ts';
+import { ledgerPath } from '../src/scout/ledger.ts';
+import { proposalAdd } from '../src/tools/builtin/proposal.ts';
+import { taskList } from '../src/tools/builtin/tasks.ts';
+import { runToolCall } from '../src/tools/pipeline.ts';
+import { buildPolicy } from '../src/tools/policy.ts';
+import { ToolRegistry } from '../src/tools/registry.ts';
+import type { ToolContext } from '../src/tools/types.ts';
+import type { Task } from '../src/tasks/store.ts';
+import { createWebServer } from '../src/web/server.ts';
+import { fail, FakeAdapter, reply, type Script, tempDir, testConfig } from './helpers.ts';
+import { MIN, toolCall } from './helpers/task-app.ts';
+
+const NEVER_GIVEN = ['task_complete', 'task_create', 'task_checkpoint', 'task_list', 'question_add', 'acceptance_change', 'plan_write', 'memory_save', 'web_download', 'browser_click', 'browser_type', 'shell_run', 'file_write', 'tool_search', 'mcp_fake_write'];
+
+interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; down?: string[]; review?: boolean }
+
+async function setup(t: { after: (fn: () => void) => void }, options: Options = {}) {
+  const dir = options.dir ?? tempDir(t);
+  const paths = resolvePaths(dir);
+  mkdirSync(paths.data, { recursive: true });
+  const config = testConfig();
+  config.providers = [
+    { id: 'near', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 2, timeoutMs: 10_000 },
+    { id: 'far', kind: 'openai_compatible', baseUrl: 'https://cloud.example.test/v1', maxParallel: 2, timeoutMs: 10_000 },
+  ];
+  config.models = [
+    { id: 'm', provider: 'near', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false },
+    { id: 'c', provider: 'far', model: 'y', contextLength: 65536, maxOutputTokens: 1024, vision: false },
+  ];
+  config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0, scout: options.scout ?? ['m'] };
+  config.worker.enabled = true;
+  config.memory.review = options.review ?? false;
+  options.edit?.(config);
+  writeFileSync(paths.config, JSON.stringify(config));
+  const clock = { now: Date.parse('2026-11-17T03:00:00Z') };
+  const adapters = new Map<string, FakeAdapter>();
+  const app = new App({
+    paths, ...(options.file ? {} : { databasePath: ':memory:' }), log: () => undefined, now: () => clock.now, workerTimers: false,
+    adapterOverride: p => {
+      const adapter = adapters.get(p.id) ?? new FakeAdapter(p);
+      if (options.down?.includes(p.id)) adapter.probeResult = { status: 'error', message: 'down' };
+      adapters.set(p.id, adapter);
+      return adapter;
+    },
+  });
+  app.tools.register({
+    name: 'mcp_fake_write', description: 'fake MCP tool', input: Type.Object({}), effect: 'write', allowedIn: ['chat', 'task', 'agent'],
+    mcp: { server: 'fake', tool: 'write' }, execute: async () => ({ content: 'wrote' }),
+  });
+  await app.status.probeAll(app.config());
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; app.worker.stop(); app.engine.stopAll(); app.close(); };
+  t.after(close);
+  const root = join(dir, 'shop');
+  let projectId = app.projects.list()[0]?.id;
+  if (!projectId) {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    mkdirSync(join(root, 'docs'), { recursive: true });
+    writeFileSync(join(root, 'src', 'a.ts'), 'export const a = 1;\n');
+    writeFileSync(join(root, 'docs', 'b.md'), '# b\n');
+    projectId = app.projects.create({ name: 'shop', root, rootKey: rootKeyOf(root), checkCommand: null }).id;
+    app.projects.update(projectId, { scoutMode: 'research' });
+    const build = app.tasks.create({ title: 'build the shop', origin: 'user', actor: 'user', projectId, acceptanceItems: ['i1'] });
+    app.tasks.finish(build.id, 'done', 'built', 'user');
+  }
+  const adapter = (id = 'near') => adapters.get(id)!;
+  const scoutRows = () => app.db.prepare("SELECT * FROM tasks WHERE proposed_by = 'scout-run' ORDER BY created_at, rowid").all() as unknown as Task[];
+  const proposals = () => app.db.prepare('SELECT * FROM tasks WHERE proposal IS NOT NULL ORDER BY created_at, rowid').all() as unknown as Task[];
+  const count = (table: string, where = '1 = 1') => (app.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`).get() as { n: number }).n;
+  const prompt = (req: ModelRequest) => JSON.stringify(req.messages);
+  return { app, dir, root, projectId, adapter, clock, scoutRows, proposals, count, prompt, close };
+}
+
+const loop = (title = 'Add tests'): Script[] => [
+  toolCall('agent_run', { task: 'Check the src folder', title: 'Check src' }),
+  reply('Looked at a.ts.\narea: src\nchecked: read a.ts\nresult: proposal'),
+  toolCall('ledger_record', { title: 'src check', area: ['src'], checked: 'read a.ts', result: `proposal ${title}` }),
+  toolCall('proposal_add', { title, kind: 'feature', why: 'There are no tests.', area: ['src'], size: 'S' }),
+  reply('Checked src.'),
+];
+
+function gate(): { script: Script; started: Promise<void> } {
+  let begin!: () => void;
+  const started = new Promise<void>(resolve => { begin = resolve; });
+  const script: Script = async function* (req) {
+    begin();
+    yield { type: 'text', delta: '…' };
+    await new Promise<void>((_resolve, reject) => {
+      if (req.signal.aborted) reject(req.signal.reason);
+      req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true });
+    });
+  };
+  return { script, started };
+}
+
+const names = (req: ModelRequest | undefined) => (req?.tools ?? []).map(tool => tool.name).sort();
+
+test('scout loop: a scout run sends a scout, records the ledger and puts a proposal on the Kanban, and the run row stays hidden', async t => {
+  const s = await setup(t, { review: true });
+  s.adapter().scripts.push(...loop());
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const rows = s.scoutRows();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, 'done');
+  assert.equal(rows[0]!.origin, 'self');
+  const ledger = readFileSync(ledgerPath(s.app.paths.projects, s.projectId), 'utf8');
+  assert.match(ledger, /^## L-\d{4} src check$/mu);
+  assert.match(ledger, /## Dispatches[\s\S]*\| Check src \| area: src \| proposal/u);
+  const [proposal] = s.proposals();
+  assert.equal(proposal?.status, 'inbox');
+  assert.equal(proposal?.origin, 'self');
+  assert.equal(proposal?.proposed_by, null);
+  assert.equal(proposal?.project_id, s.projectId);
+  assert.equal(s.app.tasks.textTainted(proposal!.id), true);
+  // 見えなくする所
+  assert.ok(!s.app.tasks.list({ statuses: ['inbox', 'ready', 'running', 'done', 'failed', 'cancelled'] }).some(task => task.id === rows[0]!.id));
+  assert.ok(!s.app.tasks.recentlyFinished(50).some(task => task.id === rows[0]!.id));
+  assert.ok(!s.app.tasks.finishedPage({ limit: 50 }).tasks.some(task => task.id === rows[0]!.id));
+  assert.equal(s.app.tasks.finishedTotal(), 1);
+  assert.ok(!s.app.tasks.schedule(s.clock.now - 3_600_000, s.clock.now + 60_000).slots.some(slot => slot.runTaskId === rows[0]!.id));
+  assert.equal(s.app.worker.runsLastHour(), 0);
+  assert.equal(s.count('memory_jobs', `task_id = '${rows[0]!.id}'`), 0);
+  // 始めから外を読んだ扱い
+  assert.equal(s.count('engine_runs', `conversation_id = '${rows[0]!.conversation_id}' AND tainted = 1`), 1);
+  // 道具の組: まとめ役と子
+  const [lead, child] = s.adapter().calls;
+  for (const name of names(lead)) assert.ok(SCOUT_TOOLS.has(name), `lead got ${name}`);
+  for (const name of ['agent_run', 'ledger_record', 'proposal_add']) assert.ok(names(lead).includes(name), `lead lacks ${name}`);
+  for (const name of NEVER_GIVEN) assert.ok(!names(lead).includes(name) && !names(child).includes(name), `${name} was given`);
+  for (const name of names(child)) assert.ok(SCOUT_TOOLS.has(name), `child got ${name}`);
+  for (const name of ['agent_run', 'ledger_record', 'proposal_add']) assert.ok(!names(child).includes(name), `child got ${name}`);
+  assert.match(s.prompt(lead!), /OUTSIDE CONTENT/u);
+});
+
+test('scout loop: the next run sees the checked area as seen, and a rejected proposal comes back with its reason', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...loop());
+  await s.app.worker.tick();
+  const proposal = s.proposals()[0]!;
+  s.app.tasks.finish(proposal.id, 'cancelled', 'rejected', 'user', undefined, 'too vague for now');
+  s.adapter().scripts.push(reply('Nothing to check.'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const second = s.prompt(s.adapter().calls.at(-1)!);
+  const unseen = /## Unseen areas\\n(.*?)<<<END/u.exec(second)?.[1] ?? '';
+  assert.match(unseen, /- docs/u);
+  assert.doesNotMatch(unseen, /- src/u);
+  assert.match(second, /Add tests — the owner's reason: too vague for now/u);
+});
+
+test('scout: the same proposal title is refused while one is open, and approving a proposal gives no owner request to the judge', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(
+    toolCall('proposal_add', { title: 'Add tests', kind: 'feature', why: 'No tests.', size: 'S' }),
+    toolCall('proposal_add', { title: '  ADD   tests ', kind: 'bug', why: 'Same thing.', size: 'M' }),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  assert.equal(s.proposals().length, 1);
+  assert.equal(s.count('tool_calls', "tool = 'proposal_add' AND ok = 0"), 1);
+  const approved = s.app.tasks.approve(s.proposals()[0]!.id);
+  assert.equal(approved.origin, 'user');
+  assert.equal(approved.owner_request, null);
+  assert.equal(s.app.tasks.judgeRequest(approved.id), '');
+  const listed = await taskList.execute({}, { config: s.app.config(), services: { tasks: s.app.tasks } } as never);
+  assert.equal(listed.fetched, true);
+});
+
+test('scout: tools outside the allow-list are refused when the model calls them anyway', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(
+    toolCall('task_complete', { summary: 'x', notify: false }),
+    toolCall('mcp_fake_write', {}),
+    toolCall('shell_run', { command: 'echo hi' }),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  for (const tool of ['task_complete', 'mcp_fake_write', 'shell_run']) assert.equal(s.count('tool_calls', `tool = '${tool}' AND decision = 'deny'`), 1, tool);
+  assert.equal(s.count('tool_calls', "decision = 'allow' AND tool IN ('task_complete', 'mcp_fake_write', 'shell_run')"), 0);
+  assert.equal(s.scoutRows()[0]!.status, 'done');
+});
+
+test('scout: ledger_record and proposal_add are not given to ordinary task runs and are refused there', async t => {
+  const s = await setup(t);
+  s.app.projects.update(s.projectId, { scoutMode: 'off' });
+  const task = s.app.tasks.create({ title: 'plain task', origin: 'user', actor: 'user', projectId: s.projectId });
+  s.adapter().scripts.push(toolCall('proposal_add', { title: 'x', kind: 'bug', why: 'y', size: 'S' }), toolCall('task_complete', { summary: 'ok', notify: false }));
+  await s.app.worker.tick();
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+  assert.ok(!names(s.adapter().calls[0]).includes('proposal_add'));
+  assert.ok(!names(s.adapter().calls[0]).includes('ledger_record'));
+  assert.doesNotMatch(s.adapter().calls[0]!.system.dynamic, /proposal_add|ledger_record/u, 'not in the tool_search list either');
+  assert.equal(s.count('tool_calls', "tool = 'proposal_add' AND decision = 'deny'"), 1);
+  assert.equal(s.proposals().length, 0);
+  const ctx: ToolContext = {
+    runId: 'r-plain', conversationId: 'c-plain', kind: 'task', signal: new AbortController().signal, config: s.app.config(), paths: resolvePaths(s.dir),
+    policy: buildPolicy(s.app.config(), resolvePaths(s.dir)), workspace: s.root, taint: { tainted: false, sources: [] }, log: () => undefined,
+    project: { id: s.projectId, root: s.root },
+  };
+  const registry = new ToolRegistry().register(proposalAdd);
+  const direct = await runToolCall({ id: 'k', name: 'proposal_add', arguments: { title: 'x', kind: 'bug', why: 'y', size: 'S' } }, ctx, {
+    registry, approvals: s.app.approvals, db: s.app.db, emit: () => undefined, conversationTainted: () => false, lastUserRequest: () => '',
+  });
+  assert.deepEqual([direct.decision, direct.decidedBy], ['deny', 'registry'], 'refused by the pipeline even when a caller hands it over');
+});
+
+test('scout: a call that would ask (a tool set to ask the owner) is refused, in the lead and in its scout, with nothing parked and no judge call', async t => {
+  const s = await setup(t, { edit: c => { c.tools.policies = { ...c.tools.policies, file_read: 'ask' }; c.routing.judge = ['m']; } });
+  const inside = join(s.root, 'src', 'a.ts');
+  s.adapter().scripts.push(
+    toolCall('file_read', { path: inside }),
+    toolCall('agent_run', { task: 'read it', title: 'Read a file' }),
+    toolCall('file_read', { path: inside }),
+    reply('area: -\nchecked: nothing\nresult: no problem'),
+    reply('done'),
+  );
+  await s.app.worker.tick();
+  assert.equal(s.count('tool_calls', "tool = 'file_read' AND decision = 'deny'"), 2);
+  assert.equal(s.count('pending_actions'), 0);
+  assert.equal(s.count('judge_calls'), 0);
+  assert.equal(s.count('tool_calls', "tool = 'file_read' AND output_preview LIKE '%export const a%'"), 0);
+});
+
+test('scout: no run while background work is Off, while routing.scout is empty (no fallback to the chat route), or while the product mode is off', async t => {
+  const off = await setup(t, { edit: c => { c.worker.enabled = false; } });
+  off.adapter().scripts.push(...loop());
+  await off.app.worker.tick();
+  assert.equal(off.scoutRows().length, 0);
+  const empty = await setup(t, { scout: [] });
+  empty.adapter().scripts.push(...loop());
+  await empty.app.worker.tick();
+  assert.equal(empty.scoutRows().length, 0);
+  assert.equal(empty.adapter().calls.length, 0);
+  const mode = await setup(t);
+  mode.app.projects.update(mode.projectId, { scoutMode: 'off' });
+  mode.adapter().scripts.push(...loop());
+  await mode.app.worker.tick();
+  assert.equal(mode.scoutRows().length, 0);
+});
+
+test('scout: a running scout run stops when background work is turned Off, paused, or the product mode goes off, and its row is closed', async t => {
+  for (const change of ['off', 'paused', 'mode'] as const) {
+    const s = await setup(t);
+    const held = gate();
+    s.adapter().scripts.push(held.script);
+    const running = s.app.worker.tick();
+    await held.started;
+    assert.equal(s.app.worker.status().runningAll.some(run => run.kind === 'scout'), true);
+    if (change === 'off') { const next = s.app.config(); next.worker.enabled = false; await s.app.applyConfig(next, { probe: false }); }
+    if (change === 'paused') s.app.worker.setPaused(true);
+    if (change === 'mode') s.app.projects.update(s.projectId, { scoutMode: 'off' });
+    await s.app.worker.tick();
+    assert.equal(await running, 'ran');
+    const row = s.scoutRows()[0]!;
+    assert.equal(row.status, 'cancelled', change);
+    assert.match(row.result_summary ?? '', /stopped/u);
+    assert.equal(s.app.tasks.pickNext({ allowSelf: true }), undefined);
+  }
+});
+
+test('scout: an owner task that can start now stops the scout run, one held by the hourly cap does not', async t => {
+  const s = await setup(t, { edit: c => { c.worker.maxRunsPerHour = 1; } });
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const running = s.app.worker.tick();
+  await held.started;
+  const other = s.app.conversations.create({ kind: 'task', title: 'earlier task' });
+  s.app.runs.start('busy-r', 'task', other.id);
+  const task = s.app.tasks.create({ title: 'owner work', origin: 'user', actor: 'user' });
+  await s.app.worker.tick();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(s.scoutRows()[0]!.status, 'running', 'held by the hourly cap: the scout keeps going');
+  assert.equal(s.app.worker.status().runningAll.some(run => run.kind === 'scout'), true);
+  s.app.worker.requestRun(task.id);
+  await s.app.worker.tick();
+  await running;
+  assert.equal(s.scoutRows()[0]!.status, 'cancelled');
+  assert.match(s.scoutRows()[0]!.result_summary ?? '', /owner approved or asked for/u);
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'ok', notify: false }));
+  await s.app.worker.tick();
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+});
+
+test('scout: scout runs are not counted in worker.maxRunsPerHour, so an approved task does not wait behind them', async t => {
+  const s = await setup(t, { edit: c => { c.worker.maxRunsPerHour = 1; } });
+  for (let i = 0; i < 3; i++) {
+    s.adapter().scripts.push(reply('nothing'));
+    assert.equal(await s.app.worker.tick(), 'ran');
+    s.clock.now += 2 * MIN;
+  }
+  assert.equal(s.scoutRows().length, 3);
+  assert.equal(s.app.worker.runsLastHour(), 0);
+  const task = s.app.tasks.create({ title: 'approved', origin: 'self', actor: 'worker', propose: true });
+  s.app.tasks.approve(task.id);
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'ok', notify: false }));
+  await s.app.worker.tick();
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+});
+
+test('scout: owner task routes answer 409 for a scout run row (no way into #forced)', async t => {
+  const s = await setup(t);
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const running = s.app.worker.tick();
+  await held.started;
+  s.app.worker.setPaused(true);
+  await s.app.worker.tick();
+  await running;
+  s.app.worker.setPaused(false);
+  const row = s.scoutRows()[0]!;
+  assert.equal(row.status, 'cancelled');
+  const web = createWebServer(s.app);
+  await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
+  web.setOrigins([origin]);
+  t.after(() => { web.server.closeAllConnections(); web.server.close(); });
+  const call = async (path: string, method = 'POST', body?: unknown) => {
+    const res = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    return { status: res.status, body: await res.json() as { code?: string } };
+  };
+  for (const [path, method, body] of [
+    [`/api/tasks/${row.id}/run-now`, 'POST'], [`/api/tasks/${row.id}/uncancel`, 'POST'], [`/api/tasks/${row.id}/approve`, 'POST'],
+    [`/api/tasks/${row.id}/unapprove`, 'POST'], [`/api/tasks/${row.id}/cancel`, 'POST'], [`/api/tasks/${row.id}/done`, 'POST'],
+    [`/api/tasks/${row.id}`, 'PATCH', { title: 'x' }], [`/api/tasks/${row.id}`, 'DELETE'],
+  ] as Array<[string, string, unknown?]>) {
+    const res = await call(path, method, body);
+    assert.equal(res.status, 409, `${method} ${path}`);
+    assert.equal(res.body.code, 'http.scout_run', `${method} ${path}`);
+  }
+  assert.equal(s.app.tasks.get(row.id)!.status, 'cancelled');
+  const listed = await call('/api/tasks', 'GET');
+  assert.ok(!JSON.stringify(listed.body).includes(row.id));
+});
+
+test('scout: rows left open by a restart are closed, never put back as ready, and a ready scout row is never picked while a plain task is', async t => {
+  const s = await setup(t);
+  const running = s.app.tasks.create({ title: 'Scout: shop', origin: 'self', projectId: s.projectId, scoutRun: true, actor: 'worker' });
+  s.app.tasks.claim(running.id, 60_000, 'c-scout');
+  const ready = s.app.tasks.create({ title: 'Scout: shop', origin: 'self', projectId: s.projectId, scoutRun: true, actor: 'worker' });
+  s.app.db.prepare("UPDATE tasks SET origin = 'user' WHERE id = ?").run(ready.id);
+  assert.equal(s.app.tasks.pickNext({ allowSelf: true }), undefined);
+  const plain = s.app.tasks.create({ title: 'plain', origin: 'user', actor: 'user' });
+  assert.equal(s.app.tasks.pickNext({ allowSelf: true })?.id, plain.id);
+  s.app.worker.start();
+  s.app.worker.stop();
+  assert.equal(s.app.tasks.get(running.id)!.status, 'cancelled');
+  assert.equal(s.app.tasks.get(ready.id)!.status, 'cancelled');
+});
+
+test('scout: with a cloud model, runs stay within scout.cloudRunsPerHour (default 1) and 0 means none, across a restart', async t => {
+  const dir = tempDir(t);
+  const s = await setup(t, { scout: ['c'], dir, file: true });
+  s.adapter('far').scripts.push(reply('one'), reply('two'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 1);
+  s.close();
+  const again = await setup(t, { scout: ['c'], dir, file: true });
+  again.clock.now = s.clock.now + 10 * MIN;
+  again.adapter('far').scripts.push(reply('two'));
+  await again.app.worker.tick();
+  assert.equal(again.scoutRows().length, 1, 'the hourly count survives a restart');
+  again.clock.now = s.clock.now + 61 * MIN;
+  assert.equal(await again.app.worker.tick(), 'ran');
+  assert.equal(again.scoutRows().length, 2);
+  again.close();
+  const zero = await setup(t, { scout: ['c'], edit: c => { c.scout = { cloudRunsPerHour: 0 }; } });
+  zero.adapter('far').scripts.push(reply('none'));
+  await zero.app.worker.tick();
+  assert.equal(zero.scoutRows().length, 0);
+});
+
+test('scout: with routing.scout [local, cloud] and the local model unusable, the run uses the cloud model only and counts as cloud', async t => {
+  const s = await setup(t, { scout: ['m', 'c'], down: ['near'] });
+  s.adapter('far').scripts.push(reply('one'), reply('two'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.adapter('far').calls.length, 1);
+  assert.equal(s.adapter('near').calls.length, 0);
+  assert.equal(s.app.kv.getJson<number[]>('scout:cloud-runs')?.length, 1);
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 1);
+});
+
+test('scout: with routing.scout [local, cloud], a local failure during the run does not fall through to the cloud model', async t => {
+  const s = await setup(t, { scout: ['m', 'c'] });
+  s.adapter('near').scripts.push(fail(new ProviderError('provider_error', 'broken', { retryable: false })));
+  s.adapter('far').scripts.push(reply('cloud'));
+  await s.app.worker.tick();
+  assert.equal(s.adapter('near').calls.length, 1);
+  assert.equal(s.adapter('far').calls.length, 0);
+  assert.equal(s.app.kv.getJson<number[]>('scout:cloud-runs'), undefined);
+  assert.equal(s.scoutRows()[0]!.status, 'failed');
+});
+
+test('scout: a rate limit or a billing error rests the scout until midnight, with one notice, also after a restart', async t => {
+  for (const error of [new ProviderError('rate_limit', 'busy', { retryable: false }), new ProviderError('provider_error', 'rejected', { retryable: false, upstream: 'Your credit balance is too low' })]) {
+    const dir = tempDir(t);
+    const s = await setup(t, { scout: ['c'], dir, file: true, edit: c => { c.scout = { cloudRunsPerHour: 60 }; c.timezone = 'UTC'; } });
+    s.adapter('far').scripts.push(fail(error), reply('again'));
+    await s.app.worker.tick();
+    assert.equal(s.scoutRows()[0]!.status, 'failed');
+    s.clock.now += 30 * MIN;
+    await s.app.worker.tick();
+    assert.equal(s.scoutRows().length, 1, error.kind);
+    assert.equal(s.count('notifications', "dedup_key LIKE 'scout-rest:%'"), 1);
+    s.close();
+    const again = await setup(t, { scout: ['c'], dir, file: true, edit: c => { c.scout = { cloudRunsPerHour: 60 }; c.timezone = 'UTC'; } });
+    again.clock.now = s.clock.now + 60 * MIN;
+    again.adapter('far').scripts.push(reply('again'));
+    await again.app.worker.tick();
+    assert.equal(again.scoutRows().length, 1, 'the rest survives a restart');
+    again.clock.now = Date.parse('2026-11-18T00:00:01Z');
+    assert.equal(await again.app.worker.tick(), 'ran');
+    again.close();
+  }
+});
+
+test('scout: a model that fails every time makes at most 3 scout rows in 10 minutes, and an unusable model makes none', async t => {
+  const s = await setup(t);
+  for (let i = 0; i < 40; i++) s.adapter().scripts.push(fail(new ProviderError('provider_error', 'broken', { retryable: false })));
+  const start = s.clock.now;
+  while (s.clock.now < start + 10 * MIN) { await s.app.worker.tick(); s.clock.now += 15_000; }
+  assert.ok(s.scoutRows().length <= 3, `${s.scoutRows().length} rows`);
+  assert.ok(s.scoutRows().length >= 2);
+  assert.match(s.app.kv.getJson<{ note?: string }>(`scout:product:${s.projectId}`)?.note ?? '', /failed 3 times/u);
+  const down = await setup(t, { down: ['near'] });
+  for (let i = 0; i < 20; i++) { await down.app.worker.tick(); down.clock.now += 30_000; }
+  assert.equal(down.scoutRows().length, 0);
+});
+
+test('scout: when all sub-agents of the run are used, the lead run ends there instead of spinning', async t => {
+  const s = await setup(t, { edit: c => { c.tools.agent.maxPerRun = 1; } });
+  s.adapter().scripts.push(
+    toolCall('agent_run', { task: 'one', title: 'One' }),
+    reply('area: src\nchecked: x\nresult: no problem'),
+    toolCall('agent_run', { task: 'two', title: 'Two' }),
+    reply('should not be asked'),
+  );
+  await s.app.worker.tick();
+  const row = s.scoutRows()[0]!;
+  assert.equal(row.status, 'done');
+  assert.match(row.result_summary ?? '', /all sub-agents for this run were used/u);
+  assert.equal(s.adapter().calls.length, 3);
+});

@@ -57,12 +57,15 @@ import { FolderDialog, type FolderDialogOptions } from './projects/folder-dialog
 import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
 import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
+import { ledgerRecord } from './tools/builtin/ledger.ts';
+import { proposalAdd } from './tools/builtin/proposal.ts';
+import { scoutState } from './scout/run.ts';
 import { deferredSection, toolSearch } from './tools/builtin/tool-search.ts';
 import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { askBeforeRegister, growSkills, SkillStore } from './tools/skills/store.ts';
-import { TaskStore, taskView } from './tasks/store.ts';
+import { isScoutRun, TaskStore, taskView } from './tasks/store.ts';
 import { ProjectStore } from './projects/store.ts';
 import { PlanStore } from './projects/plan.ts';
 import { adoptLegacyPlans } from './projects/plan-adopt.ts';
@@ -99,6 +102,7 @@ export function builtinTools(): ToolDef[] {
     imageView, webDownload,
     agentRun,
     questionList, deviationAdd, meshDecisionAdd,
+    ledgerRecord, proposalAdd,
     ...BROWSER_TOOLS,
   ];
 }
@@ -219,7 +223,7 @@ export class App {
     this.acceptance.repairAll(this.log);
     adoptLegacyPlans({ kv: this.kv, projectsDir: this.paths.projects, backupsDir: this.paths.backups, log: this.log, now });
     this.questions = new QuestionStore(this.db, { now, onChange: change => { this.bus.publish({ type: 'question.changed', ...change }); this.#questionChanged(change); }, tasks: this.tasks, projects: this.projects, acceptance: this.acceptance });
-    this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log });
+    this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log, scoutStale: id => scoutState(this.kv, id).stale });
     for (const project of [...this.projects.list(), ...this.projects.list({ archived: true })]) this.mesh.persist(project.id);
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log, () => this.registry.secrets());
@@ -268,9 +272,10 @@ export class App {
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
-      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()),
+      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans,
     });
     this.tasks.onChange = task => {
+      if (isScoutRun(task)) { this.worker.poke(); return; }
       this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
       // 返事待ち・失敗でなくなったタスクの、返事や確認を求める通知は、もう答えることが無い
       if (task.status !== 'waiting') this.notifications.settle('task_waiting', { link: `#/tasks/${task.id}` });
@@ -284,7 +289,7 @@ export class App {
       }
       this.worker.poke();
     };
-    this.tasks.onFinished = task => { if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task); };
+    this.tasks.onFinished = task => { if (!isScoutRun(task) && this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task); };
     this.tasks.onUncancelled = task => { this.curiosity.onTaskRestored(task); this.questions.resumeAnswered(task); };
     this.tasks.onDeleted = removed => {
       const title = removed.title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');

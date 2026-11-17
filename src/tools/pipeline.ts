@@ -96,7 +96,8 @@ export interface JudgeLimitSet { chat: JudgeLimits; unattended: JudgeLimits }
 
 export const JUDGE_LIMITS: JudgeLimitSet = { chat: { answerMs: 20_000, slotWaitMs: 40_000 }, unattended: { answerMs: 60_000 } };
 
-export const unattendedRun = (ctx: Pick<ToolContext, 'kind' | 'parent'>): boolean => ctx.kind === 'task' || (ctx.kind === 'agent' && ctx.parent?.kind !== 'chat');
+export const noOneToAsk = (ctx: Pick<ToolContext, 'kind' | 'scout'>): boolean => ctx.kind === 'review' || ctx.scout === true;
+export const unattendedRun =(ctx: Pick<ToolContext, 'kind' | 'parent'>): boolean => ctx.kind === 'task' || (ctx.kind === 'agent' && ctx.parent?.kind !== 'chat');
 
 function judgeLimitsFor(ctx: ToolContext, deps: PipelineDeps): JudgeLimits {
   const base = (deps.judgeLimits ?? JUDGE_LIMITS)[unattendedRun(ctx) ? 'unattended' : 'chat'];
@@ -260,6 +261,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: (ctx.reachable?.() ?? deps.registry.forRun(ctx.kind)).filter(t => !ctx.deferred || ctx.deferred.sent.has('tool_search') || ctx.deferred.sent.has(t.name)).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   if (tool.projectOnly === true && !ctx.project) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
+  if (tool.scoutOnly === true && !ctx.scout) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   if (tool.acceptanceState !== undefined) {
     const frozen = Boolean(ctx.project && ctx.services?.acceptance?.latest(ctx.project.id));
     if (!acceptanceAllows(tool, frozen)) return refuse('deny', 'registry', toolText(language, frozen ? 'pipeline.acceptance_frozen' : 'pipeline.acceptance_draft', { name: call.name }));
@@ -363,7 +365,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const park =async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound): Promise<ToolCallOutcome> => {
     const sendOrDelete = parkOutbound?.kind === 'send' || parkOutbound?.kind === 'delete' ? parkOutbound : undefined;
     const parkReasons = [...new Set([...(sendOrDelete ? [sendOrDelete.reason] : []), ...reasons])];
-    if (ctx.kind === 'review') return refuse('deny', 'pending', toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
+    if (noOneToAsk(ctx)) return refuse('deny', 'pending',toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
     if (tool.replayable === false) return finish({ output: { content: pendingText('en', 'not_parked', { tool: tool.name, reason }), isError: true }, decision: 'ask', decidedBy: 'not-parked', invalidArguments: false });
     if (!deps.pending) return refuse('deny', 'pending', pendingText('en', 'no_pending', { reason }));
     const parkCwd = callCwd();
@@ -395,7 +397,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       : undefined;
     if (parkAs) return park(parkAs.kind, parkAs.reason);
     if (decision === 'ask') {
-      if (ctx.kind === 'review') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
+      if (noOneToAsk(ctx)) return refuse('deny', decidedBy,toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
       if (stepFour && first?.productRun !== undefined) {
         decision = 'allow';
         decidedBy = first.productRun;

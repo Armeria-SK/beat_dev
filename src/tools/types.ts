@@ -151,6 +151,7 @@ export interface ToolContext {
   deferred?: { loaded: ReadonlySet<string>; sent: ReadonlySet<string>; list: () => ToolDef[]; load: (names: readonly string[]) => void } | undefined;
   // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
+  scout?: true | undefined;
 }
 
 export interface ToolRunResult { output: ToolOutput; decision: Decision; decidedBy: string; gate?: ToolGate }
@@ -188,6 +189,7 @@ export interface ToolDef<I = any> {
   replayable?: false;
   redact?: (text: string) => string;
   projectOnly?: true;
+  scoutOnly?: true;
   acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;

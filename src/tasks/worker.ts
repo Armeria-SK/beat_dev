@@ -17,7 +17,12 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister, growSkills } from '../tools/skills/store.ts';
 import { resolveConfigPath } from '../tools/hooks/scope.ts';
 import type { TaskControl } from '../tools/types.ts';
-import { OWNER_RUN_KV, type Task, type TaskStore } from './store.ts';
+import { OWNER_RUN_KV, SCOUT_RUN, type Task, type TaskStore } from './store.ts';
+import type { ScoutRoute } from '../engine/chat.ts';
+import type { PlanStore } from '../projects/plan.ts';
+import type { ProjectRow } from '../projects/store.ts';
+import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutFailed, scoutMaterials, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
+import { scoutText, type ScoutMessageKey } from '../shared/messages/scout.ts';
 import { CHECK_FAIL_LIMIT, CHECK_KEEP, CHECK_OPTIONS, CHECK_TEXT } from '../projects/check-run.ts';
 import { GATE_LIMIT, itemSummary, workAgreement } from '../projects/gate.ts';
 import { gateText } from '../shared/messages/gate.ts';
@@ -59,11 +64,16 @@ export interface WorkerDeps {
   projects?: ProjectStore | undefined;
   questions?: QuestionStore | undefined;
   pendingWake?: (() => unknown) | undefined;
+  plans?: PlanStore | undefined;
 }
 
 export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 
-export interface WorkerRunning { kind: 'task' | 'review'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string }
+export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string; projectId?: string }
+
+interface ScoutPlan { project: ProjectRow; route: ScoutRoute }
+
+const NOT_SCOUT_RUN = `conversation_id NOT IN (SELECT conversation_id FROM tasks WHERE proposed_by = '${SCOUT_RUN}' AND conversation_id IS NOT NULL)`;
 
 interface TaskText {
   intro: string;
@@ -147,6 +157,7 @@ export class Worker {
   // 動いている裏の実行（キーは runId）。入れた順 = 始めた順。worker.maxParallel 本まで
   readonly #running = new Map<string, WorkerRunning>();
   #forced = new Set<string>();
+  readonly #scoutStops = new Map<string, ScoutMessageKey>();
   #ticking = false;
   #stopped = true;
 
@@ -217,7 +228,7 @@ export class Worker {
 
   runsLastHour(): number {
     // タスクと振り返り（どちらも裏で動く実行）を数える。会話は数えない
-    return (this.#d.db.prepare("SELECT COUNT(*) AS n FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ?").get(this.#now() - 3_600_000) as { n: number }).n;
+    return (this.#d.db.prepare(`SELECT COUNT(*) AS n FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ? AND ${NOT_SCOUT_RUN}`).get(this.#now() - 3_600_000) as { n: number }).n;
   }
 
   skillReviewsOn(c: AppConfig = this.#d.config()): boolean { return c.worker.enabled && c.memory.review && growSkills(c); }
@@ -248,7 +259,7 @@ export class Worker {
   #budgetFreeAt(c: AppConfig, now: number): number | undefined {
     const over = this.runsLastHour() - c.worker.maxRunsPerHour;
     if (over < 0) return undefined;
-    const row = this.#d.db.prepare("SELECT started_at FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ? ORDER BY started_at LIMIT 1 OFFSET ?").get(now - 3_600_000, over) as { started_at: number } | undefined;
+    const row = this.#d.db.prepare(`SELECT started_at FROM engine_runs WHERE kind IN ('task', 'review') AND started_at > ? AND ${NOT_SCOUT_RUN} ORDER BY started_at LIMIT 1 OFFSET ?`).get(now - 3_600_000, over) as { started_at: number } | undefined;
     return (row?.started_at ?? now) + 3_600_000;
   }
 
@@ -295,6 +306,7 @@ export class Worker {
 
   async tick(): Promise<TickResult> {
     const c = this.#d.config();
+    this.#guardScout(c);
     // 選ぶ部分は 1 本ずつ（#ticking）。実行を始めたら（await の前に）外して、枠が残っていれば次を選べるようにする
     if (this.#ticking || this.#running.size >= c.worker.maxParallel) return 'busy';
     this.#ticking = true;
@@ -344,6 +356,7 @@ export class Worker {
         break;
       }
       const freeAt = this.#budgetFreeAt(c, now);
+      let freeAtWake = Infinity;
       if (!task && freeAt !== undefined) {
         const idleSelf = own && c.worker.autonomy && !this.quiet() && now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
         // 「今すぐ実行」で提供元の空きを待っているタスクは、上限より先に動くもの（空き待ちであって上限待ちではない）なので、上限の知らせの数に入れない
@@ -353,8 +366,16 @@ export class Worker {
             body: taskText(languageOf(c), 'notify.budget.body', { max: c.worker.maxRunsPerHour }),
             link: '#/tasks', dedupKey: `budget:${Math.floor(now / 3_600_000)}`,
           });
+        } else if (own && this.#forced.size === 0) {
+          const scout = this.#scoutPlan(c, now);
+          if (scout.plan) {
+            const outcome = await this.#runScout(scout.plan, c, now, release);
+            reschedule(now);
+            return outcome;
+          }
+          if (scout.wakeAt !== undefined) freeAtWake = scout.wakeAt;
         }
-        reschedule(freeAt);
+        reschedule(Math.min(freeAt, freeAtWake));
         return 'budget';
       }
 
@@ -375,7 +396,16 @@ export class Worker {
         reschedule(outcome === 'busy' ? now + 60_000 : now);
         return outcome;
       }
-      if (!task) { reschedule(tasks.nextWakeAt({ allowSelf })); return 'idle'; }
+      if (!task) {
+        const scout = own && this.#forced.size === 0 ? this.#scoutPlan(c, now) : {};
+        if (scout.plan) {
+          const outcome = await this.#runScout(scout.plan, c, now, release);
+          reschedule(now);
+          return outcome;
+        }
+        reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity));
+        return 'idle';
+      }
       const outcome = await this.#run(task, release);
       reschedule(now);
       return outcome;
@@ -505,6 +535,122 @@ export class Worker {
     });
     curiosity.update(item.id, { status: 'researching', taskId: task.id });
     return task.status === 'ready' ? task : undefined;
+  }
+
+  #scoutRunning(): WorkerRunning | undefined { return [...this.#running.values()].find(run => run.kind === 'scout'); }
+
+  // 動いている考える実行を止める理由（D-4・Approach 2）。Off・一時停止・考える役のモデルなし・しまった・モード off・持ち主のタスクがすぐ始められる
+  #scoutStopReason(c: AppConfig, run: WorkerRunning): ScoutMessageKey | undefined {
+    if (!c.worker.enabled) return 'stop.off';
+    if (this.paused) return 'stop.paused';
+    if (!(c.routing.scout ?? []).length) return 'stop.route';
+    const project = run.projectId ? this.#d.projects?.get(run.projectId) : undefined;
+    if (!project || project.archived_at !== null) return 'stop.archived';
+    if (project.scout_mode !== 'research') return 'stop.mode';
+    const freeAt = this.#budgetFreeAt(c, this.#now());
+    if (this.#d.tasks.pickNext({ allowSelf: true, accept: t => this.#ownerWork(t) && (freeAt === undefined || this.#forced.has(t.id)) })) return 'stop.owner';
+    return undefined;
+  }
+
+  #guardScout(c: AppConfig): void {
+    const run = this.#scoutRunning();
+    if (!run || this.#scoutStops.has(run.runId)) return;
+    const why = this.#scoutStopReason(c, run);
+    if (!why) return;
+    this.#scoutStops.set(run.runId, why);
+    this.#d.engine.stop(run.runId);
+  }
+
+  #scoutPlan(c: AppConfig, now: number): { plan?: ScoutPlan; wakeAt?: number } {
+    if (this.#scoutRunning() || !this.#d.projects || !(c.routing.scout ?? []).length) return {};
+    const route = this.#d.engine.scoutRoute();
+    if (!route || !route.room) return {};
+    const rest = restUntil(this.#d.kv, route.providerId);
+    if (rest > now) return { wakeAt: rest };
+    if (!route.local) {
+      const runs = cloudRunsLastHour(this.#d.kv, now);
+      if (runs.length >= (c.scout?.cloudRunsPerHour ?? 1)) return runs.length ? { wakeAt: Math.min(...runs) + 3_600_000 } : {};
+    }
+    const picked = pickScoutProject(this.#d.db, this.#d.kv, now);
+    return picked.project ? { plan: { project: picked.project, route } } : picked.wakeAt !== undefined ? { wakeAt: picked.wakeAt } : {};
+  }
+
+  async #runScout(plan: ScoutPlan, c: AppConfig, now: number, release: () => void): Promise<TickResult> {
+    const { tasks, conversations, engine, kv, projects } = this.#d;
+    const language = languageOf(c);
+    const { project, route } = plan;
+    if (projectFolderGone(projects!, project.id)) {
+      this.#scoutFailure(project.id, now, scoutText(language, 'note.folder'), language);
+      return 'folder_missing';
+    }
+    const window = route.available ?? 32_000;
+    let materials: Awaited<ReturnType<typeof scoutMaterials>>;
+    try {
+      materials = await scoutMaterials({
+        db: this.#d.db, project, projectsDir: projects!.dir, dataDir: dirname(projects!.dir), plans: this.#d.plans,
+        previousHead: scoutState(kv, project.id).head, maxAgents: c.tools.agent.maxPerRun, budgetChars: Math.max(4000, Math.floor(window * 0.4) * 3), now,
+      });
+    } catch (error) {
+      this.#scoutFailure(project.id, now, (error as Error).message, language);
+      return 'idle';
+    }
+    const title = scoutText(language, 'run.title', { name: project.name }).slice(0, 200);
+    const task = tasks.create({ title, origin: 'self', projectId: project.id, scoutRun: true, actor: 'worker' });
+    const conversationId = randomUUID();
+    if (!tasks.claim(task.id, LEASE_MS, conversationId)) { tasks.finish(task.id, 'cancelled', scoutText(language, 'run.stopped', { reason: 'busy' }), 'worker'); return 'busy'; }
+    conversations.create({ id: conversationId, kind: 'task', title, projectId: project.id });
+    const started = engine.runScout(task, conversationId, materials.prompt, route.modelId, scoutText(language, 'proposal.untrusted'));
+    if (!started.ok) {
+      tasks.finish(task.id, 'failed', started.errorMessage.split('\n')[0]!, 'worker');
+      this.#scoutFailure(project.id, now, started.errorMessage.split('\n')[0]!, language);
+      return 'no_model';
+    }
+    if (!route.local) noteCloudRun(kv, now);
+    saveScoutState(kv, project.id, { last: now, ...(materials.head ? { head: materials.head } : {}), stale: materials.stale });
+    this.#running.set(started.runId, { kind: 'scout', taskId: task.id, runId: started.runId, title, projectId: project.id });
+    release();
+    tasks.event(task.id, 'run', 'worker', null, started.runId);
+    try {
+      const result = await started.done;
+      this.#closeScout(task, plan, result, started.runId, language);
+    } finally {
+      this.#running.delete(started.runId);
+      this.#scoutStops.delete(started.runId);
+    }
+    return 'ran';
+  }
+
+  #scoutFailure(projectId: string, now: number, reason: string, language: Language): void {
+    scoutFailed(this.#d.kv, projectId, now, (count, minutes) => scoutText(language, 'note.failing', { count, reason: reason.slice(0, 200), minutes }));
+  }
+
+  // 考える実行の行は使い捨て: どの終わり方でも閉じる（ready に戻さない）
+  #closeScout(task: Task, plan: ScoutPlan, result: EngineResult, runId: string, language: Language): void {
+    const { tasks, kv } = this.#d;
+    const now = this.#now();
+    const projectId = plan.project.id;
+    if (tasks.get(task.id)?.status !== 'running') return;
+    const stop = this.#scoutStops.get(runId);
+    const end = this.#d.engine.scoutEnd(runId);
+    if (result.ok || end) {
+      tasks.finish(task.id, 'done', end ? scoutText(language, 'run.ended', { reason: scoutText(language, end === 'agents_busy' ? 'stop.agents_busy' : 'stop.agents_used') }) : result.ok && result.text.trim() ? result.text.trim().slice(0, 1000) : scoutText(language, 'run.done'), 'worker', runId);
+      saveScoutState(kv, projectId, { fails: 0, until: end === 'agents_busy' ? now + SCOUT_SHORT_WAIT_MS : 0, note: '' });
+      return;
+    }
+    if (stop || result.errorKind === 'cancelled') {
+      tasks.finish(task.id, 'cancelled', scoutText(language, 'run.stopped', { reason: stop ? scoutText(language, stop) : result.errorMessage }), 'worker', runId);
+      saveScoutState(kv, projectId, { until: now + SCOUT_SHORT_WAIT_MS });
+      return;
+    }
+    tasks.finish(task.id, 'failed', result.errorMessage, 'worker', runId);
+    const upstream = new Runs(this.#d.db).get(runId)?.error_message ?? '';
+    if (result.errorKind === 'rate_limit' || CREDIT_ERROR.test(upstream) || CREDIT_ERROR.test(result.errorMessage)) {
+      const until = nextMidnight(now, this.#d.config().timezone);
+      restScout(kv, plan.route.providerId, until);
+      this.#d.notifications.notify({ kind: 'health_alert', title: scoutText(language, 'rest.title'), body: scoutText(language, 'rest.body', { model: plan.route.modelId }), link: '#/settings', dedupKey: `scout-rest:${plan.route.providerId}:${until}` });
+      return;
+    }
+    this.#scoutFailure(projectId, now, result.errorMessage.split('\n')[0]!, language);
   }
 
   async #run(task: Task, release: () => void): Promise<TickResult> {

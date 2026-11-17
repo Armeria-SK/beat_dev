@@ -37,12 +37,13 @@ export const ledgerRecord: ToolDef<LedgerRecordInput> = {
     result: line(LIMITS.result),
   }, { additionalProperties: false }),
   effect: 'meta',
-  allowedIn: [],
+  allowedIn: ['task'],
   projectOnly: true,
+  scoutOnly: true,
   replayable: false,
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
-    if (!ctx.project) return { content: scoutText(language, 'unavailable'), isError: true };
+    if (!ctx.project || !ctx.scout) return { content: scoutText(language, 'unavailable'), isError: true };
     const project = ctx.services?.projects?.get(ctx.project.id);
     if (!project || project.archived_at !== null || folderMissing(project)) return { content: scoutText(language, 'closed'), isError: true };
     const texts = { title: plainLine(input.title, Infinity), checked: plainLine(input.checked, Infinity), result: plainLine(input.result, Infinity) };
