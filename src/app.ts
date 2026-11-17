@@ -273,6 +273,7 @@ export class App {
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans,
+      onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
     this.tasks.onChange = task => {
       if (isScoutRun(task)) { this.worker.poke(); return; }

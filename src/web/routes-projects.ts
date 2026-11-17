@@ -146,6 +146,19 @@ export function registerProjectRoutes(router: Router, app: App): void {
     }
   };
 
+  router.add('GET', '/api/projects/:id/scout', ({ res, params }) => {
+    const view = app.worker.scoutView(params[0]!);
+    if (!view) throw problem(404, 'not_found', 'project_missing');
+    sendJson(res, 200, view);
+  });
+
+  router.add('POST', '/api/projects/:id/scout/run', ({ res, params }) => {
+    const asked = app.worker.scoutNow(params[0]!);
+    if (!asked) throw problem(404, 'not_found', 'project_missing');
+    if (!asked.ok) throw projectProblem(409, new ProjectError(asked.code));
+    sendJson(res, 202, asked.view);
+  });
+
   router.add('GET', '/api/projects/:id/plan', ({ res, params, url }) => {
     const project = app.projects.get(params[0]!);
     if (!project) throw problem(404, 'not_found', 'project_missing');

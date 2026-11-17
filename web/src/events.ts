@@ -24,6 +24,7 @@ export type RunEvent =
   | { type: 'plan.changed'; projectId: string; conversationId: string; hash: string; by: 'ai' | 'owner' }
   | { type: 'acceptance.changed'; projectId: string; version: number; draft: boolean }
   | { type: 'task.changed'; task: Task }
+  | { type: 'scout.changed'; projectId: string }
   | { type: 'task.deleted'; id: string }
   | { type: 'notification'; notification: NotificationItem }
   | { type: 'notification.read'; ids: number[]; unread: number };

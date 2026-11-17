@@ -107,6 +107,8 @@ export type RunEvent =
   | { type: 'acceptance.changed'; projectId: string; version: number; draft: boolean }
   | { type: 'question.changed'; id: number; projectId: string | null; status: 'open' | 'answered' }
   | { type: 'task.changed'; task: TaskView }
+  // 考える役の状態（GET /api/projects/:id/scout）が変わった。画面は状態を読み直す
+  | { type: 'scout.changed'; projectId: string }
   | { type: 'task.deleted'; id: string }
   | { type: 'background.changed'; projectId: string; conversationId: string; id: string; state: 'running' | 'exited' | 'stopped' }
   | { type: 'notification'; notification: Notification }

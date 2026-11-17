@@ -78,3 +78,9 @@ test('ui/live-state (7-1): an inbox task\'s mark carries its product from the ta
   assert.equal(live.tasks.get('t2')?.projectId, 'p1');
   assert.equal(kanbanPaneCount(live.tasks.values(), 'p1'), 2);
 });
+
+test('ui/live-state (7-3b): scout.changed moves the revision the Kanban pane and the product home pass to useScout, so they read the scout state again at once', () => {
+  const next = reduce(EMPTY, { type: 'event', event: { type: 'scout.changed', projectId: 'p1' }, hidden: false });
+  assert.equal(next.state.taskRevision, EMPTY.taskRevision + 1);
+  assert.deepEqual(next.effects, []);
+});

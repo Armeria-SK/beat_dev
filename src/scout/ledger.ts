@@ -7,7 +7,7 @@ import { scoutText, type ScoutMessageKey } from '../shared/messages/scout.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { isInside } from '../tools/hooks/scope.ts';
-import { cleanAreaPath, examineAreas, seenPlaces, usableAreaPath, validCommit, type Area } from './areas.ts';
+import { cleanAreaPath, examineAreas, seenPlaces, under, usableAreaPath, validCommit, type Area } from './areas.ts';
 
 export const SCOUT_DIR = 'scout';
 export const LEDGER_NAME = 'ledger.md';
@@ -275,7 +275,10 @@ export function ledgerSummary(projectsDir: string, projectId: string): { entries
 export async function ledgerView(projectsDir: string, projectId: string, root: string, dataDir: string): Promise<LedgerView> {
   const ledger = readLedger(projectsDir, projectId);
   const report = await examineAreas(root, dataDir, ledger.entries.map(entry => ({ area: entry.area, commit: entry.commit, at: entry.at })));
-  const stale = new Set(ledger.entries.filter((_entry, index) => report.stale[index]).map(entry => entry.id));
+  // 古いエントリでも、あとに書かれた古くないエントリが同じ場所（以上）を見ていれば、見直し済みとして古いに数えない
+  const covers = (newer: Area, older: Area): boolean => newer === 'whole' || (older !== 'whole' && older.length > 0 && older.every(path => newer.some(base => under(path, base))));
+  const stale = new Set(ledger.entries.filter((entry, index) => report.stale[index]
+    && !ledger.entries.some((later, j) => j > index && !report.stale[j] && later.area !== null && entry.area !== null && covers(later.area, entry.area))).map(entry => entry.id));
   const seen = seenPlaces(report.places, ledger.entries.map(entry => entry.area));
   return { ...ledger, mode: report.mode, head: report.head, stale, places: report.places, unseen: report.places.filter(place => !seen.has(place)) };
 }
