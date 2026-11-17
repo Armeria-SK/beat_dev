@@ -1,18 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { KV } from '../db/kv.ts';
-import { headOf } from './areas.ts';
+import { headOf, treeMark } from './areas.ts';
 
 export type SleepReason = 'done' | 'deepened' | 'stuck';
 
-export interface Marks { head: string | null; plan: string; kanban: string }
+export interface Marks { head: string | null; plan: string; kanban: string; tree: string }
 
 export interface ScoutSleep extends Marks { reason: SleepReason; at: number }
 
 export const SCOUT_FLAT_RUNS = 3;
-
-export const DEEPENED_EVENT = 'deepened';
-export const deepenNote = (head: string | null): string => `commit ${head ?? 'none'}`;
 
 const sleepKey = (projectId: string): string => `scout:sleep:${projectId}`;
 
@@ -23,7 +20,7 @@ export function readSleep(kv: KV, projectId: string): ScoutSleep | undefined {
   if (!raw || typeof raw !== 'object' || !['done', 'deepened', 'stuck'].includes(raw.reason as string)) return undefined;
   return {
     reason: raw.reason as SleepReason, at: typeof raw.at === 'number' ? raw.at : 0,
-    head: typeof raw.head === 'string' ? raw.head : null, plan: typeof raw.plan === 'string' ? raw.plan : '', kanban: typeof raw.kanban === 'string' ? raw.kanban : '',
+    head: typeof raw.head === 'string' ? raw.head : null, plan: typeof raw.plan === 'string' ? raw.plan : '', kanban: typeof raw.kanban === 'string' ? raw.kanban : '', tree: typeof raw.tree === 'string' ? raw.tree : '',
   };
 }
 
@@ -48,8 +45,10 @@ export function planMark(kv: KV, projectId: string): string {
   }));
 }
 
-export async function currentMarks(db: DatabaseSync, kv: KV, projectId: string, root: string, dataDir: string, head?: string | null): Promise<Marks> {
-  return { head: head === undefined ? await headOf(root, dataDir).catch(() => null) : head, plan: planMark(kv, projectId), kanban: kanbanMark(db, projectId) };
+export async function currentMarks(db: DatabaseSync, kv: KV, projectId: string, root: string, dataDir: string): Promise<Marks> {
+  const plan = planMark(kv, projectId);
+  const kanban = kanbanMark(db, projectId);
+  return { head: await headOf(root, dataDir).catch(() => null), plan, kanban, tree: await treeMark(root, dataDir).catch(() => '') };
 }
 
-export const sameMarks = (a: Marks, b: Marks): boolean => a.head === b.head && a.plan === b.plan && a.kanban === b.kanban;
+export const sameMarks = (a: Marks, b: Marks): boolean => a.head === b.head && a.plan === b.plan && a.kanban === b.kanban && a.tree === b.tree;

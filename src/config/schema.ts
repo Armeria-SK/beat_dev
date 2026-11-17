@@ -270,7 +270,6 @@ export const AppConfig = Type.Object({
   }, { additionalProperties: false })),
   scout: Type.Optional(Type.Object({
     cloudRunsPerHour: Type.Integer({ minimum: 0, maximum: 60, default: 1 }),
-    cloudTokensPerRun: Type.Optional(Type.Integer({ minimum: 10_000, maximum: 10_000_000 })),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 

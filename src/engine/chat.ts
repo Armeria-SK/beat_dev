@@ -121,15 +121,7 @@ class ScoutAllow extends AllBut {}
 
 export const SCOUT_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list', 'file_search', 'mesh_read', 'mesh_search', 'web_search', 'web_fetch', 'agent_run', 'ledger_record', 'proposal_add', 'calculate', 'date_calc']);
 export const SCOUT_AGENT_TIMEOUT_MS = 1_800_000;
-export type ScoutEnd = 'agents_busy' | 'agents_used' | 'tokens';
-export const SCOUT_CLOUD_TOKENS_PER_RUN = 500_000;
-
-// 手元（baseUrl がループバック）かどうか。考える実行のクラウドの数え方（D-7）と 1 回のトークンの上限に使う
-function localProvider(provider: { baseUrl?: string | undefined }): boolean {
-  let host = '';
-  try { host = provider.baseUrl ? new URL(provider.baseUrl).hostname : ''; } catch { host = ''; }
-  return host !== '' && isLoopbackHost(host);
-}
+export type ScoutEnd = 'agents_busy' | 'agents_used';
 export interface ScoutRoute { modelId: string; providerId: string; local: boolean; room: boolean; available: number | undefined }
 
 const COMPACT_MIN_MESSAGES = 4;
@@ -245,7 +237,6 @@ export class ChatEngine {
   #initialTaint = new Map<string, string[]>();
   #scoutEnds = new Map<string, ScoutEnd>();
   #scoutChildren = new Map<string, { spawned: number; ok: number; area?: string }>();
-  #scoutBudgets = new Map<string, { n: number; max: number }>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
   #runModel = new Map<string, string | null>();
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
@@ -563,10 +554,12 @@ export class ChatEngine {
   scoutRoute(): ScoutRoute | null {
     const first = this.#chain('scout').usable[0];
     if (!first) return null;
+    let host = '';
+    try { host = first.provider.baseUrl ? new URL(first.provider.baseUrl).hostname : ''; } catch { host = ''; }
     let running = 0;
     for (const active of this.#active.values()) if (active.kind !== 'chat' && active.primary === first.provider.id) running += 1;
     const { capacity, maxOutput } = this.#d.status.limits(first.model);
-    return { modelId: first.model.id, providerId: first.provider.id, local: localProvider(first.provider), room: running < first.provider.maxParallel, available: capacity > 0 ? contextAvailable(capacity, maxOutput) : undefined };
+    return { modelId: first.model.id, providerId: first.provider.id, local: host !== '' && isLoopbackHost(host), room: running < first.provider.maxParallel, available: capacity > 0 ? contextAvailable(capacity, maxOutput) : undefined };
   }
 
   runScout(task: Task, conversationId: string, prompt: string, modelId: string, materials: string): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
@@ -580,7 +573,6 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     this.#initialTaint.set(runId, [materials]);
-    if (!localProvider(route.provider)) this.#scoutBudgets.set(runId, { n: 0, max: this.#d.config().scout?.cloudTokensPerRun ?? SCOUT_CLOUD_TOKENS_PER_RUN });
     this.#start(runId, conversationId, [{ model: route.model, provider: route.provider }], 'task', { task, control: { value: { outcome: 'none' } } }, new ScoutAllow(SCOUT_TOOLS, []));
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
@@ -744,7 +736,7 @@ export class ChatEngine {
         this.#hardStops.delete(runId);
         this.#modeHost.delete(conversationId);
         this.#agentSpawned.delete(runId);
-        setTimeout(() => { this.#preempted.delete(runId); this.#scoutEnds.delete(runId); this.#scoutChildren.delete(runId); this.#scoutBudgets.delete(runId); }, 60_000).unref?.();
+        setTimeout(() => { this.#preempted.delete(runId); this.#scoutEnds.delete(runId); this.#scoutChildren.delete(runId); }, 60_000).unref?.();
         // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
         this.#flushNotes(conversationId, runId);
         if (kind === 'chat') {
@@ -835,7 +827,6 @@ export class ChatEngine {
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'auto' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
       ...(scout ? { scout: true as const, scoutFetches: agent?.parent.scoutFetches ?? { n: 0 } } : {}),
-      ...(scout && (agent?.parent.scoutTokens ?? this.#scoutBudgets.get(runId)) ? { scoutTokens: agent?.parent.scoutTokens ?? this.#scoutBudgets.get(runId) } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
@@ -921,11 +912,6 @@ export class ChatEngine {
       lastRoute = chain[index]!;
       lastEstimate = call.estimate;
       addUsage(call.usage);
-      if (ctx.scoutTokens) {
-        ctx.scoutTokens.n += (call.usage.inputTokens ?? 0) + (call.usage.outputTokens ?? 0) + (call.usage.cacheReadTokens ?? 0) + (call.usage.cacheWriteTokens ?? 0);
-        const lead = agent ? agent.parent.runId : runId;
-        if (ctx.scoutTokens.n > ctx.scoutTokens.max && !this.#scoutEnds.has(lead)) { this.#scoutEnds.set(lead, 'tokens'); this.stop(lead); }
-      }
       // 考える部分を別に返すモデル（Qwen3 など）は、答えの頭に空行が付く。保存する前に落とす
       const lead = /^\s*/u.exec(call.text)![0];
       const space = cutTexts.length > 0 && /[ \t]/u.test(lead) && !/\s$/u.test(cutTexts.at(-1)!);

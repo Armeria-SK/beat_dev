@@ -153,7 +153,6 @@ export interface ToolContext {
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
   scout?: true | undefined;
   scoutFetches?: { n: number } | undefined;
-  scoutTokens?: { n: number; max: number } | undefined;
 }
 
 export interface ToolRunResult { output: ToolOutput; decision: Decision; decidedBy: string; gate?: ToolGate }

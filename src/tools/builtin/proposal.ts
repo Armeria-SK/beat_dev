@@ -2,12 +2,11 @@ import { Type } from '@sinclair/typebox';
 import { transaction } from '../../db/database.ts';
 import { folderMissing } from '../../projects/store.ts';
 import { headOf, usableAreaPath } from '../../scout/areas.ts';
-import { DEEPENED_EVENT, deepenNote } from '../../scout/sleep.ts';
 import { languageOf } from '../../shared/language.ts';
 import { scoutText } from '../../shared/messages/scout.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { plainLine } from '../../shared/plain-text.ts';
-import { PROPOSAL_LIMITS, type Proposal } from '../../tasks/proposal.ts';
+import { DEEPENED_EVENT, deepenNote, PROPOSAL_LIMITS, type Proposal } from '../../tasks/proposal.ts';
 import { TaskError } from '../../tasks/store.ts';
 import type { ToolDef } from '../types.ts';
 

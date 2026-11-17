@@ -7,7 +7,8 @@ import { plainLine } from '../shared/plain-text.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
 import { validCommit } from './areas.ts';
 import { dispatchLine, ledgerView, type LedgerEntry } from './ledger.ts';
-import { DEEPENED_EVENT, deepenNote, readSleep } from './sleep.ts';
+import { DEEPENED_EVENT, deepenNote, OWNER_EDITED_SQL } from '../tasks/proposal.ts';
+import { readSleep } from './sleep.ts';
 
 export const SCOUT_BACKOFF_MIN = [1, 5, 15, 60] as const;
 export const SCOUT_FAIL_REST = 3;
@@ -17,7 +18,7 @@ export const CREDIT_ERROR = /credit balance|billing|insufficient_quota/iu;
 const CLOUD_KEY = 'scout:cloud-runs';
 const HOUR = 3_600_000;
 
-export interface ScoutState { last?: number; fails: number; until?: number; note?: string; head?: string; stale?: number; examined?: number; left?: number; flat?: number; changedAt?: number }
+export interface ScoutState { last?: number; fails: number; until?: number; note?: string; head?: string; stale?: number; examined?: number; left?: number; flat?: number; deep?: boolean; changedAt?: number }
 
 
 const stateKey = (projectId: string): string => `scout:product:${projectId}`;
@@ -60,6 +61,10 @@ export function nextMidnight(now: number, timezone: string): number {
 
 export function scoutBuilt(db: DatabaseSync, projectId: string): boolean {
   return db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL AND status = 'done' LIMIT 1").get(projectId) !== undefined;
+}
+
+export function scoutBusy(db: DatabaseSync, projectId: string): boolean {
+  return db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status IN ('ready', 'running') AND proposed_by IS NOT 'scout-run' LIMIT 1").get(projectId) !== undefined;
 }
 
 export function scoutProjects(db: DatabaseSync): ProjectRow[] {
@@ -111,8 +116,8 @@ const entryLine = (entry: LedgerEntry, stale: boolean): string => {
 };
 
 function deepenLines(db: DatabaseSync, projectId: string, head: string | null): string[] {
-  const rows = db.prepare(`SELECT id, title, proposal FROM tasks t WHERE project_id = ? AND proposal IS NOT NULL AND status = 'inbox'
-    AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = ? AND e.content = ?) ORDER BY created_at, rowid LIMIT 30`).all(projectId, DEEPENED_EVENT, deepenNote(head)) as Array<{ id: string; title: string; proposal: string }>;
+  const rows = db.prepare(`SELECT id, title, proposal FROM tasks WHERE project_id = ? AND proposal IS NOT NULL AND status = 'inbox' AND NOT ${OWNER_EDITED_SQL}
+    AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = tasks.id AND e.kind = ? AND e.content = ?) ORDER BY created_at, rowid LIMIT 30`).all(projectId, DEEPENED_EVENT, deepenNote(head)) as Array<{ id: string; title: string; proposal: string }>;
   return rows.map(row => {
     let detail = '';
     try {

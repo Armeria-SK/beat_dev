@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -104,8 +104,8 @@ async function server(t: { after: (fn: () => void) => void }, s: S) {
   const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
   web.setOrigins([origin]);
   t.after(() => { web.server.closeAllConnections(); web.server.close(); });
-  return async (path: string, method = 'GET') => {
-    const res = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) }, ...(method === 'POST' ? { body: '{}' } : {}) });
+  return async (path: string, method = 'GET', body: unknown = {}) => {
+    const res = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, ...(method !== 'GET' ? { 'Content-Type': 'application/json' } : {}) }, ...(method !== 'GET' ? { body: JSON.stringify(body) } : {}) });
     return { status: res.status, body: await res.json() as Record<string, unknown> };
   };
 }
@@ -232,7 +232,7 @@ test('scout deepen: with 10 open proposals the run deepens instead, once per pro
   s.adapter().scripts.push(reply('more'));
   s.later();
   await s.app.worker.tick();
-  assert.doesNotMatch(prompts(s).at(-1)!.split('Open proposals to deepen')[1]!.split('END OF OUTSIDE')[0]!, new RegExp(id, 'u'));
+  assert.doesNotMatch(prompts(s).at(-1)!.split('Open proposals to deepen').at(-1)!.split('END OF OUTSIDE')[0]!, new RegExp(id, 'u'));
   // 全部深めたら休む
   for (const task of open) s.app.tasks.event(task.id, 'deepened', 'scout', 'commit none');
   s.later();
@@ -360,37 +360,6 @@ test('scout: new proposals give one notification per product while it is unread'
   assert.equal(rows[0]!.link, `#/p/${s.projectId}`);
 });
 
-test('scout: a cloud scout run stops when it has used scout.cloudTokensPerRun tokens; a local run has no such cap', async t => {
-  const usageCall = (name: string, args: unknown, inputTokens: number): Script => async function* (req) {
-    for await (const e of toolCall(name, args)(req)) {
-      if (e.type === 'done') yield { type: 'usage', usage: { inputTokens, outputTokens: 10 } };
-      yield e;
-    }
-  };
-  const cloud = await setup(t, { scout: ['c'], edit: c => { c.scout = { cloudRunsPerHour: 1, cloudTokensPerRun: 10_000 }; } });
-  cloud.adapter('far').scripts.push(
-    usageCall('ledger_record', { title: 'src check', area: ['src'], checked: 'read', result: 'no problem' }, 6_000),
-    usageCall('ledger_record', { title: 'docs check', area: ['docs'], checked: 'read', result: 'no problem' }, 6_000),
-    reply('never reached'),
-  );
-  assert.equal(await cloud.app.worker.tick(), 'ran');
-  const row = cloud.scoutRows()[0]!;
-  assert.equal(row.status, 'done');
-  assert.match(row.result_summary ?? '', /token budget/u);
-  assert.equal(cloud.adapter('far').calls.length, 2, 'stopped after the call that crossed the budget');
-  assert.equal(scoutState(cloud.app.kv, cloud.projectId).fails, 0, 'not counted as a failure');
-
-  const local = await setup(t, { edit: c => { c.scout = { cloudRunsPerHour: 1, cloudTokensPerRun: 10_000 }; } });
-  local.adapter().scripts.push(
-    usageCall('ledger_record', { title: 'src check', area: ['src'], checked: 'read', result: 'no problem' }, 6_000),
-    usageCall('ledger_record', { title: 'docs check', area: ['docs'], checked: 'read', result: 'no problem' }, 6_000),
-    reply('done'),
-  );
-  await local.app.worker.tick();
-  assert.equal(local.adapter().calls.length, 3);
-  assert.doesNotMatch(local.scoutRows()[0]!.result_summary ?? '', /token budget/u);
-});
-
 test('scout sleep: a newer fresh entry for the same area replaces a stale one, so re-checking a changed area lets the scout sleep again (found in the 7-3b launch check)', { skip: !gitAvailable }, async t => {
   const s = await setup(t, { git: true });
   s.adapter().scripts.push(...checkBoth);
@@ -422,4 +391,212 @@ test('Think now: a second press while the first one is starting (materials being
   s.later();
   await s.app.worker.tick();
   assert.equal(s.scoutRows().length, 1, 'two presses, one run');
+});
+
+// 材料を読んでいる間（plans.read は計画書の見出しを読むときに呼ばれる）に何かを差し込むための足場
+function duringMaterials(s: S, once: () => void): () => boolean {
+  const chat = s.app.conversations.create({ kind: 'chat', title: 'build', projectId: s.projectId });
+  s.app.db.prepare('UPDATE tasks SET created_in_conversation = ? WHERE project_id = ? AND acceptance_items IS NOT NULL').run(chat.id, s.projectId);
+  const read = s.app.plans.read.bind(s.app.plans);
+  let done = false;
+  s.app.plans.read = (...args: Parameters<typeof read>) => {
+    if (!done) { done = true; once(); }
+    return read(...args);
+  };
+  return () => done;
+}
+
+test('scout deepen: when the open proposals do not get deepened in 3 runs in a row, the scout sleeps instead of running forever (review HIGH)', async t => {
+  const s = await setup(t);
+  for (let i = 0; i < 10; i += 1) propose(s, `Idea ${i}`);
+  for (let i = 0; i < 8; i += 1) s.adapter().scripts.push(reply(`only talk ${i}`));
+  for (let i = 0; i < 3; i += 1) { assert.equal(await s.app.worker.tick(), 'ran', `run ${i + 1}`); s.later(); }
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(s.scoutRows().length, 3, 'three runs that deepen nothing, then sleep');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+  s.later();
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 3, 'still asleep');
+});
+
+test('Think now: a press while an autonomous run is reading its materials and would sleep is not lost (review MEDIUM)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth, reply('the asked run'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  s.later();
+  const pressed = duringMaterials(s, () => assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true));
+  assert.equal(await s.app.worker.tick(), 'ran', 'the press turns this pass into a run instead of a sleep');
+  assert.equal(pressed(), true);
+  assert.equal(s.scoutRows().length, 2);
+  assert.equal(readSleep(s.app.kv, s.projectId), undefined);
+});
+
+test('scout sleep: a product without git wakes when a file is edited and looks at that area again (review MEDIUM)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  await s.app.worker.tick();
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'done');
+  s.later();
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 1, 'asleep while nothing changes');
+  const file = join(s.root, 'src', 'a.ts');
+  writeFileSync(file, 'export const a = 2;\n');
+  const at = new Date(Math.max(Date.now(), s.clock.now) + 3_600_000);
+  utimesSync(file, at, at);
+  s.adapter().scripts.push(reply('Looked at src again.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'the edit wakes the scout');
+  assert.match(prompts(s).at(-1)!, /\[STALE\] src check/u);
+});
+
+test('scout sleep: a git product wakes on a new untracked folder and on an uncommitted edit (review MEDIUM)', { skip: !gitAvailable }, async t => {
+  const s = await setup(t, { git: true });
+  s.adapter().scripts.push(...checkBoth);
+  await s.app.worker.tick();
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  const first = readSleep(s.app.kv, s.projectId)!;
+  // 書きかけの変更: 起きて見直す（コミットされていない変更は一覧を古くしないので、そのまま新しい印でまた休む）
+  appendFileSync(join(s.root, 'src', 'a.ts'), 'export const draft = 1;\n');
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  const second = readSleep(s.app.kv, s.projectId)!;
+  assert.ok(second.at > first.at, 'woke on the uncommitted edit');
+  assert.equal(s.scoutRows().length, 1, 'no model run for an edit that leaves nothing to look at');
+  // まだ追っていない新しいフォルダ: 見ていない場所になるので動く
+  mkdirSync(join(s.root, 'lib'));
+  writeFileSync(join(s.root, 'lib', 'c.ts'), 'export const c = 3;\n');
+  s.adapter().scripts.push(reply('Looked at lib.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.match(prompts(s).at(-1)!, /- lib/u);
+});
+
+test('scout deepen: a proposal the owner edited is not deepened and not listed to deepen (review MEDIUM)', async t => {
+  const s = await setup(t);
+  const open = Array.from({ length: 10 }, (_v, i) => propose(s, `Idea ${i}`));
+  s.app.tasks.event(open[0]!.id, 'edited', 'user');
+  const id = open[0]!.id.slice(0, 8);
+  s.adapter().scripts.push(toolCall('proposal_add', { title: 'Idea 0', kind: 'bug', why: 'Rewritten by the scout.', size: 'M', deepen: id }), reply('tried'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const listed = prompts(s)[0]!.split('Open proposals to deepen').at(-1)!.split('END OF OUTSIDE')[0]!;
+  assert.doesNotMatch(listed, new RegExp(id, 'u'));
+  assert.match(listed, new RegExp(open[1]!.id.slice(0, 8), 'u'));
+  const result = (s.app.db.prepare("SELECT text FROM messages WHERE role = 'tool' ORDER BY id").get() as { text: string }).text;
+  assert.match(result, /owner edited/u);
+  const row = s.app.tasks.get(open[0]!.id)!;
+  assert.equal(row.body, 'x', 'the owner\'s text stays');
+  assert.equal(JSON.parse(row.proposal!).why, PROPOSAL.why);
+});
+
+test('scout deepen: only an open proposal of the same product can be deepened (review MEDIUM)', async t => {
+  const s = await setup(t);
+  const otherRoot = join(s.dir, 'other');
+  mkdirSync(otherRoot);
+  const other = s.app.projects.create({ name: 'other', root: otherRoot, rootKey: rootKeyOf(otherRoot), checkCommand: null });
+  const theirs = s.app.tasks.create({ title: 'Their idea', body: 'x', origin: 'self', propose: true, projectId: other.id, proposal: PROPOSAL, actor: 'beat' });
+  const closed = propose(s, 'Closed idea');
+  s.app.tasks.finish(closed.id, 'cancelled', 'Not now', 'user');
+  s.adapter().scripts.push(
+    toolCall('proposal_add', { title: 'Their idea', kind: 'bug', why: 'Taken over.', size: 'S', deepen: theirs.id.slice(0, 8) }),
+    toolCall('proposal_add', { title: 'Closed idea', kind: 'bug', why: 'Reopened.', size: 'S', deepen: closed.id.slice(0, 8) }),
+    reply('done'),
+  );
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const results = s.app.db.prepare("SELECT text FROM messages WHERE role = 'tool' ORDER BY id").all() as Array<{ text: string }>;
+  assert.match(results[0]!.text, /no single open proposal/u);
+  assert.match(results[1]!.text, /no single open proposal/u);
+  assert.equal(JSON.parse(s.app.tasks.get(theirs.id)!.proposal!).why, PROPOSAL.why);
+  assert.equal(JSON.parse(s.app.tasks.get(closed.id)!.proposal!).why, PROPOSAL.why);
+  assert.throws(() => s.app.tasks.deepenProposal(closed.id, { ...PROPOSAL, why: 'Again.' }, 'commit none'), /not a proposal waiting/u);
+});
+
+test('Think now: it runs past the cloud hourly count (D-7), and waits while a chat reply is being written (D-4)', async t => {
+  const s = await setup(t, { scout: ['c'], edit: c => { c.scout = { cloudRunsPerHour: 1 }; } });
+  s.adapter('far').scripts.push(reply('first'), reply('asked'), reply('after chat'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  s.later();
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 1, 'the hourly count is used');
+  assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true);
+  assert.equal(await s.app.worker.tick(), 'ran', 'Think now goes past the hourly count');
+  assert.equal(s.scoutRows().length, 2);
+  let chatting = true;
+  Object.defineProperty(s.app.engine, 'chatting', { get: () => chatting, configurable: true });
+  s.later();
+  assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true);
+  assert.equal(await s.app.worker.tick(), 'busy');
+  assert.equal(s.scoutRows().length, 2, 'waits while a chat reply is being written');
+  chatting = false;
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.scoutRows().length, 3);
+});
+
+test('scout sleep: a product asleep because the ledger was not growing starts counting afresh when it wakes (review LOW)', { skip: !gitAvailable }, async t => {
+  const s = await setup(t, { git: true });
+  for (let i = 0; i < 6; i += 1) s.adapter().scripts.push(reply(`nothing ${i}`));
+  for (let i = 0; i < 3; i += 1) { await s.app.worker.tick(); s.later(); }
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+  appendFileSync(join(s.root, 'src', 'a.ts'), 'export const b = 2;\n');
+  commitAll(s.root, 'change src');
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'woken by the commit, it runs instead of going straight back to sleep');
+});
+
+test('scout sleep: the marks are taken before the materials are read, so a Reject during that read still wakes the scout (review LOW)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  await s.app.worker.tick();
+  const open = propose(s, 'Add tests');
+  s.later();
+  duringMaterials(s, () => s.app.tasks.finish(open.id, 'cancelled', 'Not now', 'user'));
+  assert.equal(await s.app.worker.tick(), 'idle');
+  const first = readSleep(s.app.kv, s.projectId)!;
+  s.later();
+  await s.app.worker.tick();
+  assert.ok(readSleep(s.app.kv, s.projectId)!.at > first.at, 'the Reject during the read woke the scout');
+});
+
+test('scout.changed: on a failure to read the materials, on mode and archive changes, and on a scout model change (review LOW)', async t => {
+  const s = await setup(t);
+  const call = await server(t, s);
+  duringMaterials(s, () => { throw new Error('disk trouble'); });
+  s.changed.length = 0;
+  await s.app.worker.tick();
+  assert.equal(s.app.worker.scoutView(s.projectId)?.state, 'resting');
+  assert.ok(s.changed.includes(s.projectId), 'materials failure');
+  s.changed.length = 0;
+  assert.equal((await call(`/api/projects/${s.projectId}`, 'PATCH', { scoutMode: 'off' })).status, 200);
+  assert.ok(s.changed.includes(s.projectId), 'mode change');
+  s.changed.length = 0;
+  assert.equal((await call(`/api/projects/${s.projectId}`, 'PATCH', { archived: true })).status, 200);
+  assert.ok(s.changed.includes(s.projectId), 'archive');
+  await call(`/api/projects/${s.projectId}`, 'PATCH', { archived: false });
+  await call(`/api/projects/${s.projectId}`, 'PATCH', { scoutMode: 'research' });
+  s.changed.length = 0;
+  const next = s.app.config(); next.routing.scout = []; await s.app.applyConfig(next, { probe: false });
+  assert.ok(s.changed.includes(s.projectId), 'scout model change');
+});
+
+test('Think now: refused (409) while the product has work waiting or running, and a press is dropped when work arrives while background work is Off (review LOW)', async t => {
+  const s = await setup(t, { edit: c => { c.worker.enabled = false; } });
+  const call = await server(t, s);
+  const work = s.app.tasks.create({ title: 'tidy up', origin: 'self', projectId: s.projectId, actor: 'beat' });
+  const busy = await call(`/api/projects/${s.projectId}/scout/run`, 'POST');
+  assert.equal(busy.status, 409);
+  assert.equal(busy.body.code, 'project.scout_busy');
+  s.app.tasks.finish(work.id, 'cancelled', 'not now', 'user');
+  assert.equal((await call(`/api/projects/${s.projectId}/scout/run`, 'POST')).status, 202);
+  const later = s.app.tasks.create({ title: 'tidy again', origin: 'self', projectId: s.projectId, actor: 'beat' });
+  s.changed.length = 0;
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 0);
+  assert.ok(s.changed.includes(s.projectId), 'the dropped press is shown');
+  s.app.tasks.finish(later.id, 'cancelled', 'not now', 'user');
+  s.adapter().scripts.push(reply('should not run'));
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 0, 'the press does not wait forever behind work the Off worker never runs');
 });

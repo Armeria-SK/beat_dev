@@ -21,8 +21,8 @@ import { OWNER_RUN_KV, SCOUT_RUN, type Task, type TaskStore } from './store.ts';
 import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
-import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutFailed, scoutMaterials, scoutProjects, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
-import { clearSleep, currentMarks, readSleep, sameMarks, saveSleep, SCOUT_FLAT_RUNS, type SleepReason } from '../scout/sleep.ts';
+import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
+import { clearSleep, currentMarks, readSleep, sameMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
 import { readLedger } from '../scout/ledger.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
 import { scoutText, type ScoutMessageKey } from '../shared/messages/scout.ts';
@@ -75,10 +75,10 @@ export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' }
 
 export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string; projectId?: string }
 
-interface ScoutPlan { project: ProjectRow; route: ScoutRoute; asked?: true }
+interface ScoutPlan { project: ProjectRow; route: ScoutRoute; asked?: boolean }
 
 export type ScoutView = { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null };
-export type ScoutAsk = { ok: true; view: ScoutView } | { ok: false; code: 'scout_off' | 'scout_no_model' | 'scout_cloud_zero' | 'scout_resting' | 'scout_not_built' };
+export type ScoutAsk = { ok: true; view: ScoutView } | { ok: false; code: 'scout_off' | 'scout_no_model' | 'scout_cloud_zero' | 'scout_resting' | 'scout_not_built' | 'scout_busy' };
 
 const NOT_SCOUT_RUN = `conversation_id NOT IN (SELECT conversation_id FROM tasks WHERE proposed_by = '${SCOUT_RUN}' AND conversation_id IS NOT NULL)`;
 
@@ -169,7 +169,7 @@ export class Worker {
   readonly #scoutAsked = new Set<string>();
   readonly #scoutAskedRuns = new Set<string>();
   // 材料を読んでいて、まだ #running に入っていない考える実行の製品（そのあいだの Think now を重ねないため）
-  #scoutStarting: string | undefined;
+  #scoutStarting: ScoutPlan | undefined;
   #ticking = false;
   #stopped = true;
 
@@ -598,6 +598,11 @@ export class Worker {
       }
       const ready = eligible.find(p => p.id === id);
       if (ready) return { plan: { project: ready, route, asked: true } };
+      // 押したあとに製品の作業が来た: worker が On ならその作業のあとに動く。Off なら（ひとりでに動く作業は Off のまま動かないので）待ち続けずに捨てる
+      if (!own && scoutBusy(this.#d.db, id)) {
+        this.#scoutAsked.delete(id);
+        this.#scoutChanged(id);
+      }
     }
     if (!own) return {};
     await this.#wakeSleepers(eligible);
@@ -610,7 +615,7 @@ export class Worker {
   }
 
   async #runScout(plan: ScoutPlan, c: AppConfig, now: number, release: () => void): Promise<TickResult> {
-    this.#scoutStarting = plan.project.id;
+    this.#scoutStarting = plan;
     try { return await this.#startScout(plan, c, now, release); } finally { this.#scoutStarting = undefined; }
   }
 
@@ -627,6 +632,8 @@ export class Worker {
       return 'folder_missing';
     }
     const window = route.available ?? 32_000;
+    // 休みの印は材料を読む前に取る（読んでいる間の Reject・計画書の保存を、休んだあとの変化として拾う）
+    const marks: Marks | undefined = plan.asked ? undefined : await currentMarks(this.#d.db, kv, project.id, project.root, dirname(projects!.dir));
     let materials: Awaited<ReturnType<typeof scoutMaterials>>;
     try {
       materials = await scoutMaterials({
@@ -635,12 +642,13 @@ export class Worker {
       });
     } catch (error) {
       this.#scoutFailure(project.id, now, (error as Error).message, language);
+      this.#scoutChanged(project.id);
       return 'idle';
     }
     saveScoutState(kv, project.id, { examined: materials.examined });
-    const sleep = plan.asked ? undefined : this.#sleepReason(project.id, materials);
-    if (sleep) {
-      saveSleep(kv, project.id, { reason: sleep, at: now, ...(await currentMarks(this.#d.db, kv, project.id, project.root, dirname(projects!.dir), materials.head)) });
+    const sleep = plan.asked || !marks ? undefined : this.#sleepReason(project.id, materials);
+    if (sleep && marks) {
+      saveSleep(kv, project.id, { reason: sleep, at: now, ...marks });
       this.#scoutChanged(project.id);
       return 'idle';
     }
@@ -700,15 +708,17 @@ export class Worker {
   }
 
   // 見る所が無い（見ていない場所も古いエントリも無い）・深める提案が残っていない・見ていない場所の数が続けて減らない、なら休む
+  // 深める形（未処理 10 件）では、深めていない提案の数で同じように数える（深めないモデルが止まらずに回らないように）。形が変わったら数え直す
   #sleepReason(projectId: string, materials: { unseen: number; stale: number; open: number; deepen: number }): SleepReason | undefined {
     const { kv } = this.#d;
-    if (materials.open >= PROPOSAL_OPEN_MAX) return materials.deepen === 0 ? 'deepened' : undefined;
-    if (materials.unseen === 0 && materials.stale === 0) return 'done';
+    const deep = materials.open >= PROPOSAL_OPEN_MAX;
+    if (deep && materials.deepen === 0) return 'deepened';
+    if (!deep && materials.unseen === 0 && materials.stale === 0) return 'done';
     const state = scoutState(kv, projectId);
-    const left = materials.unseen + materials.stale;
-    const before = state.left ?? -1;
+    const left = deep ? materials.deepen : materials.unseen + materials.stale;
+    const before = (state.deep ?? false) === deep ? state.left ?? -1 : -1;
     const flat = before >= 0 && left >= before ? (state.fails > 0 ? state.flat ?? 0 : (state.flat ?? 0) + 1) : 0;
-    saveScoutState(kv, projectId, { left, flat });
+    saveScoutState(kv, projectId, { left, flat, deep });
     return flat >= SCOUT_FLAT_RUNS ? 'stuck' : undefined;
   }
 
@@ -758,7 +768,15 @@ export class Worker {
     if (!route.local && (c.scout?.cloudRunsPerHour ?? 1) === 0) return { ok: false, code: 'scout_cloud_zero' };
     if (restUntil(this.#d.kv, route.providerId) > this.#now()) return { ok: false, code: 'scout_resting' };
     if (!scoutBuilt(this.#d.db, projectId)) return { ok: false, code: 'scout_not_built' };
-    const running = this.#scoutStarting === projectId || [...this.#running.values()].some(r => r.kind === 'scout' && r.projectId === projectId);
+    // 材料を読んでいる最中のひとりでの回は、押されたら持ち主の頼みの回に替える（休みの判定を飛ばして必ず動く）
+    const starting = this.#scoutStarting?.project.id === projectId ? this.#scoutStarting : undefined;
+    if (starting && !starting.asked) {
+      starting.asked = true;
+      this.#scoutChanged(projectId);
+    }
+    const running = starting !== undefined || [...this.#running.values()].some(r => r.kind === 'scout' && r.projectId === projectId);
+    // 製品の作業が待っている・動いているあいだは考える役は動かない（考える役は製品が空いているときだけ）。待たせずに断る
+    if (!running && scoutBusy(this.#d.db, projectId)) return { ok: false, code: 'scout_busy' };
     if (!running && !this.#scoutAsked.has(projectId)) {
       this.#scoutAsked.add(projectId);
       this.#scoutChanged(projectId);
@@ -779,14 +797,14 @@ export class Worker {
     if (tasks.get(task.id)?.status !== 'running') return;
     const stop = this.#scoutStops.get(runId);
     const end = this.#d.engine.scoutEnd(runId);
-    if (end && end !== 'tokens' && this.#d.engine.scoutChildrenAllFailed(runId)) {
+    if (end && this.#d.engine.scoutChildrenAllFailed(runId)) {
       const why = scoutText(language, 'run.ended', { reason: scoutText(language, 'stop.children_failed') });
       tasks.finish(task.id, 'failed', why, 'worker', runId);
       this.#scoutFailure(projectId, now, why, language);
       return;
     }
     if (result.ok || end) {
-      tasks.finish(task.id, 'done', end ? scoutText(language, 'run.ended', { reason: scoutText(language, end === 'agents_busy' ? 'stop.agents_busy' : end === 'tokens' ? 'stop.tokens' : 'stop.agents_used') }) : result.ok && result.text.trim() ? result.text.trim().slice(0, 1000) : scoutText(language, 'run.done'), 'worker', runId);
+      tasks.finish(task.id, 'done', end ? scoutText(language, 'run.ended', { reason: scoutText(language, end === 'agents_busy' ? 'stop.agents_busy' : 'stop.agents_used') }) : result.ok && result.text.trim() ? result.text.trim().slice(0, 1000) : scoutText(language, 'run.done'), 'worker', runId);
       saveScoutState(kv, projectId, { fails: 0, until: now + SCOUT_SHORT_WAIT_MS, note: '' });
       return;
     }

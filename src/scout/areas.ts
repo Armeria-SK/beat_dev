@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { withGit } from '../mesh/folders.ts';
@@ -196,6 +197,25 @@ export async function examineAreas(root: string, dataDir: string, entries: reado
   });
   if (viaGit) return viaGit;
   return { mode: 'mtime', head: null, stale: mtimeStale(root, entries), places: walkPlaces(root) };
+}
+
+// 作業フォルダの指紋（休みの印）: git があればコミットしていない変更・追っていないファイルとその更新時刻、無ければ（まだコミットが無い git も）全部のファイルの更新時刻。
+// 変われば休んでいる考える役を起こす（起きて材料を読み直し、見る所が無ければモデルを呼ばずにまた休む）
+export async function treeMark(root: string, dataDir: string): Promise<string> {
+  const stamp = (abs: string): number => { try { return statSync(abs).mtimeMs; } catch { return 0; } };
+  const dirty = await withGit(root, dataDir, async git => {
+    if (!(await gitHead(git))) return undefined;
+    const listed = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames']);
+    if (listed === null) return undefined;
+    return listed.toString('utf8').split('\0').filter(Boolean).slice(0, WALK_FILES).map(line => `${line}:${stamp(join(root, line.slice(3)))}`);
+  }).catch(() => undefined);
+  const parts: string[] = dirty ?? [];
+  if (!dirty) {
+    let real: string;
+    try { real = realpathSync.native(root); } catch { return ''; }
+    walkFiles(real, real, '', WALK_DEPTH, (path, abs, _level, directory) => { if (!directory) parts.push(`${path}:${stamp(abs)}`); return true; });
+  }
+  return createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 32);
 }
 
 export async function headOf(root: string, dataDir: string): Promise<string | null> {

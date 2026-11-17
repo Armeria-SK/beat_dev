@@ -10,6 +10,13 @@ export interface Proposal {
 
 export const PROPOSAL_LIMITS = { why: 400, areas: 10, area: 200, goal: 200, evidence: 2000, ledger: 64 } as const;
 
+// 深めた経過（task_events.kind）と、その中身（深めたときの HEAD）。同じ HEAD で 2 回は深めない
+export const DEEPENED_EVENT = 'deepened';
+export const deepenNote = (head: string | null): string => `commit ${head ?? 'none'}`;
+
+// 持ち主が直した提案（PATCH /api/tasks/:id が残す 'edited' / 'user' の経過）。考える実行はこれを書き換えない
+export const OWNER_EDITED_SQL = "EXISTS (SELECT 1 FROM task_events oe WHERE oe.task_id = tasks.id AND oe.kind = 'edited' AND oe.actor = 'user')";
+
 const KEYS = ['kind', 'why', 'area', 'size', 'goal', 'evidence', 'ledger'] as const;
 
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;

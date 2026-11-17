@@ -127,6 +127,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const updated = docLanguage === undefined ? changed : app.projects.setDocLanguage(current.id, docLanguage);
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
     app.bus.publish({ type: 'project.changed', projectId: current.id, change });
+    if (updated.scout_mode !== current.scout_mode || updated.archived_at !== current.archived_at) app.bus.publish({ type: 'scout.changed', projectId: current.id });
     app.worker.poke();
     sendJson(res, 200, { project: projectWire(app, updated) });
   });

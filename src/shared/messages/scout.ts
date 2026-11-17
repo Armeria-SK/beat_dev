@@ -27,7 +27,6 @@ const en = {
   'stop.owner': 'a task the owner approved or asked for is ready to run',
   'stop.agents_busy': 'the sub-agent limit was busy',
   'stop.agents_used': 'all sub-agents for this run were used',
-  'stop.tokens': 'the token budget for one cloud scout run (scout.cloudTokensPerRun) was used',
   'note.failing': 'The scout failed {count} times in a row (last: {reason}). It rests for {minutes} minutes before trying again',
   'note.folder': 'the product folder cannot be found',
   'rest.title': 'The scout is resting until midnight',

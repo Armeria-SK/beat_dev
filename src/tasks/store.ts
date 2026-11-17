@@ -4,8 +4,7 @@ import { transaction } from '../db/database.ts';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { taskText, type TaskErrorCode } from '../shared/messages/tasks.ts';
-import { proposalProblem, readProposal, type Proposal } from './proposal.ts';
-import { DEEPENED_EVENT } from '../scout/sleep.ts';
+import { DEEPENED_EVENT, OWNER_EDITED_SQL, proposalProblem, readProposal, type Proposal } from './proposal.ts';
 import { describeCron, nextRunAt } from './schedule.ts';
 
 export const OWNER_FIX = 'owner_fix';
@@ -505,6 +504,7 @@ export class TaskStore {
     const problem = proposalProblem(proposal);
     if (problem !== null) throw new TaskError('error.bad_proposal', { reason: problem });
     return transaction(this.#db, () => {
+      if (this.#db.prepare(`SELECT 1 FROM tasks WHERE id = ? AND ${OWNER_EDITED_SQL}`).get(id)) throw new TaskError('error.owner_edited');
       const result = this.#db.prepare("UPDATE tasks SET proposal = ?, body = ?, updated_at = ? WHERE id = ? AND status = 'inbox' AND proposal IS NOT NULL").run(JSON.stringify(proposal), proposal.why, this.#now(), id);
       if (Number(result.changes) !== 1) throw new TaskError('error.not_proposal');
       this.event(id, DEEPENED_EVENT, 'scout', note, runId);

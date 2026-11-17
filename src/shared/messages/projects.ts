@@ -19,6 +19,7 @@ const en = {
   'scout_cloud_zero': 'The scout model is a cloud model and scout.cloudRunsPerHour is 0, so the scout does not run',
   'scout_resting': 'The scout model answered with a rate limit or a billing error, so the scout rests until midnight',
   'scout_not_built': 'The scout starts after the first Build of this product is done',
+  'scout_busy': 'A task of this product is waiting or running. The scout looks at the product when no task is on it, so try Think now after that',
 
   'folder_not_absolute': 'Enter the full path of a folder (without "." or ".." parts)',
   'folder_remote': 'Network and device paths cannot be used',
