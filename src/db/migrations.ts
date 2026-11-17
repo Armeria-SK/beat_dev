@@ -584,4 +584,7 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE skill_drafts ADD COLUMN outside INTEGER NOT NULL DEFAULT 0 CHECK (outside IN (0, 1));
   ALTER TABLE skill_registry ADD COLUMN outside INTEGER NOT NULL DEFAULT 0 CHECK (outside IN (0, 1));
   `,
+  `
+  ALTER TABLE tasks ADD COLUMN proposal TEXT;
+  `,
 ];

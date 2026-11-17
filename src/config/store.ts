@@ -93,7 +93,7 @@ function findings(config: AppConfig): Finding[] {
       add(`models.${model.id}.maxOutputTokens`, 'maxOutputTokens is equal to or larger than the context length', `models.${model.id}`);
     }
   }
-  for (const route of ['chat', 'background', 'judge'] as const) {
+  for (const route of ['chat', 'background', 'judge', 'scout'] as const) {
     for (const id of config.routing[route] ?? []) if (!modelIds.has(id)) add(`routing.${route}`, `Model "${id}" does not exist`);
   }
   config.tools.shell.allow.forEach((entry, i) => {

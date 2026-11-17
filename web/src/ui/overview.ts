@@ -37,10 +37,12 @@ export interface RunningInput {
   checklists: ReadonlyMap<string, readonly ChecklistItem[]>;
 }
 
+export const ownerRuns = (runs: ReadonlyArray<WorkerRun>): WorkerRun[] => runs.filter(run => run.kind === 'task' || run.kind === 'review');
+
 export function runningRows({ worker, drafts, conversations, checklists }: RunningInput): RunningRow[] {
   const rows: RunningRow[] = [];
   const seen = new Set<string>();
-  for (const run of worker) {
+  for (const run of ownerRuns(worker)) {
     seen.add(run.runId);
     if (run.kind === 'task' && run.taskId) rows.push({ kind: 'task', key: `w:${run.runId}`, runId: run.runId, title: run.title, href: routeHash({ view: 'task', id: run.taskId }), step: null, startedAt: null });
     else rows.push({ kind: 'review', key: `w:${run.runId}`, runId: run.runId, title: null, href: null, step: null, startedAt: null, skill: run.reviewKind === 'skill' });

@@ -63,6 +63,15 @@ export function setJudge(config: Config, id: string): Config {
   return { ...config, routing };
 }
 
+export const scoutChoice = (config: Config): string => (Array.isArray(config.routing?.scout) ? (config.routing.scout as string[])[0] ?? '' : '');
+
+export function setScout(config: Config, id: string): Config {
+  const routing = { ...config.routing };
+  const tail = Array.isArray(routing.scout) ? (routing.scout as string[]).slice(1).filter(x => x !== id) : [];
+  if (id) routing.scout = [id, ...tail]; else delete routing.scout;
+  return { ...config, routing };
+}
+
 export function setConversation(config: Config, id: string): Config {
   const chat = (config.routing.chat as string[]).filter(x => x !== id);
   return { ...config, routing: { ...config.routing, chat: [id, ...chat] } };

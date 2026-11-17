@@ -1,6 +1,6 @@
 import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
-import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJECT_ID, ProjectError, projectName, type ProjectRow } from '../projects/store.ts';
+import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJECT_ID, ProjectError, projectName, SCOUT_MODES, type ProjectRow, type ScoutMode } from '../projects/store.ts';
 import { ownerSpeech } from '../db/conversations.ts';
 import { AcceptanceError, coverageOf, frozenHash, ownerChanges, type AcceptanceChangeRow, type AcceptanceDoc } from '../projects/acceptance.ts';
 import { BuildError, startBuild, unbuilt } from '../projects/build.ts';
@@ -114,11 +114,14 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const rawCheck = optionalText(body, 'checkCommand', 4000);
     const docLanguage = body.docLanguage === null ? null : languageTagOf(body.docLanguage);
     if (body.docLanguage !== undefined && docLanguage === undefined) throw problem(400, 'invalid_field', 'bad_language', { field: 'docLanguage', params: { field: 'docLanguage' } });
+    if (body.scoutMode !== undefined && !(SCOUT_MODES as readonly unknown[]).includes(body.scoutMode)) throw projectProblem(400, new ProjectError('bad_scout_mode'));
+    if (body.scoutMode === 'fix') throw projectProblem(400, new ProjectError('scout_fix_later'));
     const changed = guarded(() => app.projects.update(current.id, {
       ...(rawName !== undefined ? { name: projectName(rawName) } : {}),
       ...(rawCheck !== undefined ? { checkCommand: checkCommandOf(rawCheck) } : {}),
       ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {}),
       ...(body.refreshRemotes === true ? { remotes: readRemotes(current.root) } : {}),
+      ...(body.scoutMode !== undefined ? { scoutMode: body.scoutMode as ScoutMode } : {}),
     }));
     const updated = docLanguage === undefined ? changed : app.projects.setDocLanguage(current.id, docLanguage);
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';

@@ -11,6 +11,7 @@ import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
 import { Panes, usePanes } from './Panes.tsx';
 import { paneTarget, pendingFor, pendingRouteReady, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
+import { kanbanPaneCount } from './kanban.ts';
 import type { PaneView } from './panes.ts';
 import { questionsFor, taskQuestions, withQuestionCounts } from './questions.ts';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
@@ -419,7 +420,7 @@ export function App() {
             ) : behind.view === 'overview' ? (
               <Overview waiting={waiting} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} onWorker={setWorker} revision={live.taskRevision + live.epoch} projects={projects} projectsLoaded={live.projectsLoaded} questionCounts={live.questionCounts} pendingCounts={live.pendingCounts} />
             ) : behind.view === 'product' ? (
-              <ProductHome key={behind.id} id={behind.id} project={productOf(projects, behind.id)} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} revision={live.taskRevision + live.epoch} backgroundRevision={live.backgroundRevision + live.epoch} />
+              <ProductHome key={behind.id} id={behind.id} project={productOf(projects, behind.id)} conversations={conversations} drafts={drafts} checklists={checklists} worker={worker} revision={live.taskRevision + live.epoch} backgroundRevision={live.backgroundRevision + live.epoch} onProject={upsertProject} />
             ) : behind.view === 'schedule' ? (
               <Schedule revision={live.taskRevision + live.epoch} projects={projects} />
             ) : behind.view === 'notifications' ? (
@@ -452,7 +453,8 @@ export function App() {
           <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`}
             pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }}
-            questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }} />
+            questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }}
+            kanban={{ conversations, drafts, checklists, revision: live.taskRevision + live.epoch, projects, pendingByTask, questionsByTask, waits: worker?.waiting, count: kanbanPaneCount(live.tasks.values(), paneProduct) }} />
         )}
       </div>
       {drawer && <div className="ui-navveil" onClick={closeDrawer} inert={shut} />}

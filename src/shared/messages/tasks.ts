@@ -29,6 +29,7 @@ const en = {
   'error.bad_when': '"when" cannot be read as a date and time (example: 2026-11-06T09:00:00+09:00): {when}',
   'error.bad_repeat': 'The cron in "repeat" is not valid: {repeat}',
   'error.tool_not_found': 'Task {id} was not found (check with task_list)',
+  'error.bad_proposal': 'The proposal is not in the expected form: {reason}',
   'error.other_project': 'Task {id} belongs to another product, so it cannot be changed from this product',
 
   'event.proposed': 'Created as a proposal',

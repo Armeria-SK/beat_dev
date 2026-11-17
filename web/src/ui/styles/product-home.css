@@ -8,3 +8,5 @@
 @media (max-width: 760px) {
   .ui-home__board { order: 1; }
 }
+.ui-home__mode .bt-seg__opt:disabled { color: var(--ink-mute); cursor: default; }
+.ui-home__later { font-size: 12px; }

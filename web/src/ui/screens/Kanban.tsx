@@ -8,7 +8,7 @@ import { plainLine } from '../../task-meta.ts';
 import { evidenceLines, remainingItems } from '../acceptance.ts';
 import { useMedia, useNow } from '../hooks.ts';
 import {
-  awaitsCheck, buildBoard, cardProject, COLUMN_TABS_MEDIA, KANBAN_PAGE, NARROW_COLUMNS, mergeFinished, pagesToReload, pendingRoute, pendingWait, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
+  awaitsCheck, buildBoard, cardProject, COLUMN_TABS_MEDIA, firstSentences, KANBAN_PAGE, NARROW_COLUMNS, mergeFinished, pagesToReload, pendingRoute, pendingWait, proposalOf, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
   type Card, type Column, type ColumnId, type SessionCard, type Step, type TaskCard,
 } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
@@ -31,6 +31,8 @@ export interface KanbanProps {
   pendingByTask: ReadonlyMap<string, number>;
   questionsByTask: ReadonlyMap<string, number>;
   waits?: Record<string, WaitReason> | undefined;
+  productId?: string | undefined;
+  emptyProposed?: ReactNode;
 }
 
 interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; lists: ReadonlyMap<string, Acceptance> }
@@ -122,18 +124,20 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
   const { task, column } = card;
   const [reason, setReason] = useState('');
   const running = task.status === 'running';
-  const label = column === 'approved' ? t('ui.kanban.queued') : column === 'check' ? t('ui.kanban.checkIt') : t('ui.kanban.task');
+  const proposal = proposalOf(task);
+  const label = proposal && column === 'proposed' ? t(proposal.kind === 'bug' ? 'ui.kanban.proposal.bug' : 'ui.kanban.proposal.feature') : column === 'approved' ? t('ui.kanban.queued') : column === 'check' ? t('ui.kanban.checkIt') : t('ui.kanban.task');
   const right = column === 'proposed' ? <span className="bt-meta">{formatRelative(task.created_at, now)}</span>
     : running ? <Pill tone="running">{t('ui.kanban.running')}</Pill>
     : task.status === 'waiting' ? <Pill tone="waiting">{t('ui.kanban.waiting')}</Pill>
     : task.status === 'failed' ? <Pill tone="danger">{t('ui.kanban.failed')}</Pill>
     : task.status === 'cancelled' ? <span className="bt-tag">{t(task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : 'ui.kanban.cancelled')}</span> : undefined;
   const onPending = pendingWait(task);
-  const body = column === 'proposed' ? plainLine(task.body, 200) : onPending ? '' : task.status === 'waiting' ? plainLine(task.waiting_text, 200) : column === 'failed' ? plainLine(task.result_summary, 120) : '';
+  const body = column === 'proposed' ? (proposal ? firstSentences(proposal.why) : plainLine(task.body, 200)) : onPending ? '' : task.status === 'waiting' ? plainLine(task.waiting_text, 200) : column === 'failed' ? plainLine(task.result_summary, 120) : '';
   const timed = task.run_at !== null && task.run_at > now;
   const meta: Array<string | false | null> = column === 'approved'
     ? [timed ? t('ui.kanban.starts', formatDateTimeSmart(task.run_at, now)) : first && t('ui.kanban.next'), task.status === 'ready' && wait !== undefined && waitText(wait, now), card.repeating && t('ui.kanban.repeating')]
     : column === 'progress' ? [running && product, card.step && t('ui.kanban.step', card.step.step, card.step.total), card.repeating && t('ui.kanban.repeating')]
+    : column === 'proposed' && proposal ? [...new Set(proposal.area), t('ui.kanban.proposal.size', proposal.size), proposal.goal !== null && t('ui.kanban.proposal.goal', proposal.goal)]
     : column === 'proposed' ? [task.origin !== 'user' && t('ui.kanban.byBeat'), card.repeating && t('ui.kanban.repeating')]
     : [formatRelative(card.at, now), column === 'check' && task.items !== undefined && t('ui.check.met', task.items.met, task.items.owned), card.repeating && t('ui.kanban.repeating')];
   return (
@@ -145,6 +149,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       {column === 'progress' && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
       {column === 'check' && <CheckItems task={task} list={list} />}
       <Meta items={meta} />
+      {column === 'proposed' && proposal && proposal.goal === null && <div className="bt-card__meta"><span className="bt-tag" data-off-plan>{t('ui.kanban.proposal.offPlan')}</span></div>}
       {pending > 0 && !onPending && <a className="bt-tool__link bt-meta" href={routeHash(pendingRoute(task))}>{t('ui.task.pending', pending)}</a>}
       {questions > 0 && <a className="bt-tool__link bt-meta" href={routeHash(questionsRoute(task))} data-questions={questions}>{t('ui.task.questions', questions)}</a>}
       {column === 'check' && (
@@ -232,10 +237,11 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
 
 function columnName(t: T, id: ColumnId): string { return t(COLUMN_KEY[id]); }
 
-export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask, questionsByTask, waits }: KanbanProps) {
+export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask, questionsByTask, waits, productId, emptyProposed }: KanbanProps) {
   const t = useT();
   const [picked, setPicked] = useState<ProductFilter>(ALL_PRODUCTS);
-  const filter = settleFilter(picked, projects);
+  const pane = productId !== undefined;
+  const filter = productId ?? settleFilter(picked, projects);
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -308,7 +314,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
   const closeNew = () => { setCreating(false); newButton.current?.focus(); };
 
   const renderCard = (card: Card, index: number, firstTask: boolean) => {
-    const product = productName(projects, cardProject(card));
+    const product = pane ? null : productName(projects, cardProject(card));
     if (card.kind === 'session') return <SessionCardView key={card.key} card={card} now={now} index={index} product={product} />;
     const { task } = card;
     return (
@@ -322,8 +328,8 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
   };
 
   return (
-    <div className="bt-screen__inner bt-screen__inner--wide ui-kanban">
-      <header className="bt-screen__head bt-rise">
+    <div className={pane ? 'ui-kanban ui-kanban--pane' : 'bt-screen__inner bt-screen__inner--wide ui-kanban'} data-kanban={pane ? 'pane' : 'screen'}>
+      {!pane && <header className="bt-screen__head bt-rise">
         <h1 className="bt-screen__title">{t('ui.nav.kanban')}</h1>
         <div className="bt-screen__tools">
           {options.length > 0 && (
@@ -337,10 +343,11 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
           )}
           <Button ref={newButton} icon="plus" aria-expanded={creating} onClick={() => setCreating(open => !open)}>{t('ui.kanban.new')}</Button>
         </div>
-      </header>
+      </header>}
       {creating && <NewTask projects={projects} product={newTaskProduct(filter)} onClose={closeNew} />}
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
-      {board && (
+      {board && pane && emptyProposed && board.columns.every(column => column.cards.length === 0) && <div className="ui-kanban__empty">{emptyProposed}</div>}
+      {board && !(pane && emptyProposed && board.columns.every(column => column.cards.length === 0)) && (
         <>
           <div className="bt-tabs ui-coltabs" role="tablist" aria-label={t('ui.kanban.columns')}>
             {order(board.columns).map(column => (
@@ -369,7 +376,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
                   </div>
                   <div className="ui-col__cards">
                     {column.cards.map((card, index) => renderCard(card, index, index === firstTask))}
-                    {column.id === 'proposed' && column.cards.length === 0 && <p className="bt-meta ui-col__empty">{t('ui.kanban.noProposals')}</p>}
+                    {column.id === 'proposed' && column.cards.length === 0 && (emptyProposed ?? <p className="bt-meta ui-col__empty">{t('ui.kanban.noProposals')}</p>)}
                     {(column.id === 'done' || column.id === 'failed') && board.more > 0 && (
                       <button type="button" className="bt-tool__link bt-meta ui-more" disabled={moreBusy} title={t('ui.kanban.moreHint')} onClick={() => void more()}>{t('ui.kanban.more', board.more)}</button>
                     )}

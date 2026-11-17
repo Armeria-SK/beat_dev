@@ -50,6 +50,7 @@ export const RoutingConfig = Type.Object({
   background: Type.Array(Type.String(), { default: [] }),
   judge: Type.Optional(Type.Array(Type.String())),
   judgeMode: Type.Optional(Type.Union([Type.Literal('on'), Type.Literal('off')])),
+  scout: Type.Optional(Type.Array(Type.String())),
   retriesPerModel: Type.Integer({ minimum: 0, maximum: 5, default: 2 }),
 }, { additionalProperties: false });
 
@@ -266,6 +267,9 @@ export const AppConfig = Type.Object({
   skills: Type.Optional(Type.Object({
     grow: Type.Optional(Type.Boolean()),
     askBeforeRegister: Type.Optional(Type.Boolean()),
+  }, { additionalProperties: false })),
+  scout: Type.Optional(Type.Object({
+    cloudRunsPerHour: Type.Integer({ minimum: 0, maximum: 60, default: 1 }),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 

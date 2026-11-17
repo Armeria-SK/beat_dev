@@ -1,4 +1,4 @@
-import type { ChecklistItem, Conversation, RunRow, Task } from '../api.ts';
+import type { ChecklistItem, Conversation, Proposal, RunRow, Task, TaskStatus } from '../api.ts';
 import { checklistStep } from './agent-state.ts';
 import type { Route } from './routes.ts';
 
@@ -163,4 +163,20 @@ export function tabStep(current: number, count: number, key: string): number | n
   }
 }
 
-export const stepPercent = (step: Step | null): number => (step ? Math.round((Math.max(0, step.step - 1) / step.total) * 100) : 0);
+export const proposalOf = (task: Pick<Task, 'proposal'>): Proposal | null => task.proposal ?? null;
+
+export function firstSentences(text: string, count = 2): string {
+  const sentences = text.trim().match(/[^.!?\u3002\uFF01\uFF1F]+(?:[.!?\u3002\uFF01\uFF1F]+|$)/gu) ?? [];
+  return sentences.slice(0, count).join('').trim();
+}
+
+export function kanbanPaneCount(marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state']; projectId?: string | null }>, productId: string): number {
+  let n = 0;
+  for (const mark of marks) {
+    if (mark.projectId !== productId) continue;
+    if (mark.status === 'inbox' || (mark.status === 'done' && mark.checkState === 'awaiting')) n += 1;
+  }
+  return n;
+}
+
+export const stepPercent =(step: Step | null): number => (step ? Math.round((Math.max(0, step.step - 1) / step.total) * 100) : 0);
