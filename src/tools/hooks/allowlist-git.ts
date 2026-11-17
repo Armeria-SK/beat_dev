@@ -92,11 +92,12 @@ export function runGit(words: Word[], acc: Acc, ctx: MatchCtx): void {
   const sub = subWord.text;
   const rest = [words[0]!, ...args.slice(i + 1)];
   if (sub === 'version' && rest.length === 1) return;
-  if (ctx.gitIsolated === false) { acc.add('once', 'list.git_old', {}, false); return; }
+  // 古い git・読めない・決められないリポジトリでも、ここで戻らずに取得・パスの確かめまで進む（外の中身を持ち込む印や、禁止のパスの確かめを落とさない）
+  if (ctx.gitIsolated === false) acc.add('once', 'list.git_old', {}, false);
   const repo = ctx.repo(dashC && !dashC.dynamic ? dashC.text : undefined);
   if (dashC?.dynamic) { acc.add('once', 'list.form', { cmd: 'git', detail: dashC.text }, true); return; }
-  if (repo.unreadable) { acc.add('once', 'list.git_unreadable', {}, false); return; }
-  if (!repo.configOk) { acc.add('once', 'list.git_config', { key: repo.badKey }, false); return; }
+  if (repo.unreadable) acc.add('once', 'list.git_unreadable', {}, false);
+  else if (!repo.configOk) acc.add('once', 'list.git_config', { key: repo.badKey }, false);
   const readSub = READ[sub];
   if (readSub) {
     const p = parseGnu(spec(sub, readSub.flags, { numeric: readSub.numeric ?? false, ...(readSub.patFlags ? { patFlags: readSub.patFlags } : {}) }), rest, acc, ctx);

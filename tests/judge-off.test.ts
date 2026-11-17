@@ -289,3 +289,20 @@ test('J-4: Off でも、MCP のサーバーの書く道具（effect: write）は
   const judged = await on.call(on.ctx, 'mcp__s1__put');
   assert.equal(on.prompts.length, 1, judged.decidedBy);
 });
+
+test('control-bodies: Off でも、beat が中を読めない PowerShell の制御の形（shape.control_opaque）は判定役の代わりに持ち主の Pending に積む。On では今までどおり判定役が見る', async t => {
+  const s = setup(t);
+  s.world.keys = ['shape.control_opaque', 'shape.control'];
+  s.world.askKinds = ['code'];
+  assert.equal((await s.call()).decidedBy, 'pending');
+  assert.equal(waitingKind(s), 'owner');
+  assert.match(s.pending.list({ status: 'waiting' })[0]!.reason, /cannot read inside/u);
+  assert.deepEqual([s.ran(), s.prompts.length], [0, 0]);
+  const readable = setup(t);
+  readable.world.keys = ['shape.control'];
+  assert.equal((await readable.call()).decidedBy, 'no-judge', '読めた制御の形は今までどおり判定なしで動く');
+  const on = setup(t, keepOn);
+  on.world.keys = ['shape.control_opaque', 'shape.control'];
+  assert.equal((await on.call()).decidedBy, 'auto-mode');
+  assert.equal(on.prompts.length, 1);
+});

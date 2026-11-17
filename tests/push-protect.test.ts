@@ -107,3 +107,8 @@ test('push の守るファイル（6-0）: Build の前の控え（refs/beat/sna
   const mirror = r.protectOf('git push --mirror origin');
   assert.ok(mirror && 'files' in mirror && mirror.files.some(f => f.includes('ci.yml')), JSON.stringify(mirror));
 });
+
+test('push の守るファイル: 行き先の分からない cd のあとに包んだ git push も見る（確かめられないと返す）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const r = repo(t);
+  assert.deepEqual(r.protectOf('cd "$X"\nbash -c "git push origin main"'), { unchecked: true });
+});

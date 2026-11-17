@@ -16,10 +16,12 @@ const READ_ONLY_GIT = new Set(['status', 'log', 'diff', 'show', 'ls-files', 'rev
 
 const tokensOf = (st: StatementFacts): string[] => splitTokens([...st.words.filter(w => !w.dynamic).map(w => w.text), ...st.code]);
 
-const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? [])]);
+const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? st.unknownInner ?? [])]);
+// 文が動きうるすべての作業フォルダ
+const basesOf = (st: StatementFacts, fallbackCwd: string): string[] => [...new Set([...(st.cwds ?? []), st.cwd ?? fallbackCwd])];
 
 function readOnly(st: StatementFacts): boolean {
-  if (st.writes.length > 0 || (st.inner?.length ?? 0) > 0 || st.code.length > 0) return false;
+  if (st.writes.length > 0 || (st.inner?.length ?? st.unknownInner?.length ?? 0) > 0 || st.code.length > 0) return false;
   const name = st.program.toLowerCase().replace(/\.(?:cmd|exe|bat|ps1)$/u, '');
   if (name === 'git') return !st.gitGlobal.some(w => /^-c|^--config-env/u.test(w)) && READ_ONLY_GIT.has(st.words[st.gitGlobal.length + 1]?.text ?? '');
   return READ_ONLY.has(name);
@@ -32,7 +34,7 @@ function splitTokens(texts: string[]): string[] {
 export function protectedTouchOf(command: string, statements: readonly StatementFacts[], policy: ScopePolicy, fallbackCwd: string): { key: TouchKey; path: string } | undefined {
   const all = flatten(statements);
   const opaque = all.some(st => st.program === '' || st.programOdd || st.shapes.length > 0);
-  const groups: Array<[string, string[]]> = all.filter(st => !readOnly(st)).map(st => [st.cwd ?? fallbackCwd, tokensOf(st)]);
+  const groups: Array<[string, string[]]> = all.filter(st => !readOnly(st)).flatMap(st => basesOf(st, fallbackCwd).map(base => [base, tokensOf(st)] as [string, string[]]));
   if (opaque) groups.push([fallbackCwd, splitTokens([command])]);
   for (const [base, tokens] of groups) {
     for (const token of tokens) {
@@ -45,7 +47,7 @@ export function protectedTouchOf(command: string, statements: readonly Statement
 }
 
 export function installTouchOf(statements: readonly StatementFacts[], policy: ScopePolicy, fallbackCwd: string, texts: readonly string[] = []): string | undefined {
-  const groups: Array<[string, string[]]> = [...flatten(statements).map(st => [st.cwd ?? fallbackCwd, splitTokens(st.code)] as [string, string[]]), [fallbackCwd, splitTokens([...texts])]];
+  const groups: Array<[string, string[]]> = [...flatten(statements).flatMap(st => basesOf(st, fallbackCwd).map(base => [base, splitTokens(st.code)] as [string, string[]])), [fallbackCwd, splitTokens([...texts])]];
   for (const [base, tokens] of groups) {
     for (const token of tokens) {
       const path = isAbsolute(token) ? token : resolve(base, token);

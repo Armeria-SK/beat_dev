@@ -43,6 +43,7 @@ export const JUDGE_REUSE = 'judge-reuse';
 export const NO_JUDGE = 'no-judge';
 
 export const SELF_TOUCH_KEY = 'code.self_touch';
+export const OPAQUE_CONTROL_KEY = 'shape.control_opaque';
 
 export const judgeOff = (config: Pick<AppConfig, 'routing'>): boolean => config.routing.judgeMode === 'off';
 
@@ -405,6 +406,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         });
         const noJudge = runsWithoutJudge(ctx, deps);
         if (noJudge && judgeKeys.includes(SELF_TOUCH_KEY)) return park('owner', pendingText('en', 'owner_no_judge_self', { reasons: reasons.join('; ') }));
+        if (noJudge && judgeKeys.includes(OPAQUE_CONTROL_KEY)) return park('owner', pendingText('en', 'owner_no_judge_opaque', { reasons: reasons.join('; ') }));
         if (noJudge && !(deps.lastUserRequest?.() ?? '').trim()) return park('owner', pendingText('en', 'owner_no_judge_request'));
         if (noJudge && tool.mcp && tool.effect === 'write') return park('owner', pendingText('en', 'owner_no_judge_mcp', { server: tool.mcp.server, tool: tool.mcp.tool }));
         const classify = deps.autoClassify;
