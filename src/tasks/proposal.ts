@@ -12,8 +12,17 @@ export const PROPOSAL_LIMITS = { why: 400, areas: 10, area: 200, goal: 200, evid
 
 const KEYS = ['kind', 'why', 'area', 'size', 'goal', 'evidence', 'ledger'] as const;
 
-const text = (value: unknown, max: number): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= max;
-const optional = (value: unknown, max: number): boolean => value === null || text(value, max);
+const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+const LINE_BREAKS = /[\r\n\t]/gu;
+
+const textProblem = (name: string, value: unknown, max: number, multiline = false): string | null => {
+  if (typeof value !== 'string') return `${name} must be text`;
+  if (value.trim() === '') return `${name} is empty`;
+  if (value.length > max) return `${name} must be up to ${max} characters`;
+  if (UNSAFE_TEXT.test(multiline ? value.replace(LINE_BREAKS, ' ') : value)) return `${name} has control or invisible characters`;
+  return null;
+};
+const optionalProblem = (name: string, value: unknown, max: number, multiline = false): string | null => (value === null ? null : textProblem(name, value, max, multiline));
 
 export function proposalProblem(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'not an object';
@@ -21,15 +30,17 @@ export function proposalProblem(value: unknown): string | null {
   const extra = Object.keys(p).find(key => !(KEYS as readonly string[]).includes(key));
   if (extra !== undefined) return `unknown field "${extra}"`;
   if (p.kind !== 'feature' && p.kind !== 'bug') return 'kind must be feature or bug';
-  if (!text(p.why, PROPOSAL_LIMITS.why)) return `why must be 1 to ${PROPOSAL_LIMITS.why} characters`;
-  if (!Array.isArray(p.area) || p.area.length > PROPOSAL_LIMITS.areas || !p.area.every(a => text(a, PROPOSAL_LIMITS.area))) {
-    return `area must be up to ${PROPOSAL_LIMITS.areas} paths of up to ${PROPOSAL_LIMITS.area} characters`;
+  const why = textProblem('why', p.why, PROPOSAL_LIMITS.why);
+  if (why !== null) return why;
+  if (!Array.isArray(p.area) || p.area.length > PROPOSAL_LIMITS.areas) return `area must be a list of up to ${PROPOSAL_LIMITS.areas} paths`;
+  for (const area of p.area) {
+    const problem = textProblem('area', area, PROPOSAL_LIMITS.area);
+    if (problem !== null) return problem;
   }
   if (p.size !== 'S' && p.size !== 'M' && p.size !== 'L') return 'size must be S, M or L';
-  if (!optional(p.goal, PROPOSAL_LIMITS.goal)) return `goal must be null or up to ${PROPOSAL_LIMITS.goal} characters`;
-  if (!optional(p.evidence, PROPOSAL_LIMITS.evidence)) return `evidence must be null or up to ${PROPOSAL_LIMITS.evidence} characters`;
-  if (!optional(p.ledger, PROPOSAL_LIMITS.ledger)) return `ledger must be null or up to ${PROPOSAL_LIMITS.ledger} characters`;
-  return null;
+  return optionalProblem('goal', p.goal, PROPOSAL_LIMITS.goal)
+    ?? optionalProblem('evidence', p.evidence, PROPOSAL_LIMITS.evidence, true)
+    ?? optionalProblem('ledger', p.ledger, PROPOSAL_LIMITS.ledger);
 }
 
 export function readProposal(raw: string | null | undefined): Proposal | null {

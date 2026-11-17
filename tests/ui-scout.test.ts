@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { WorkerRun } from '../web/src/api.ts';
+import type { Task, WorkerRun } from '../web/src/api.ts';
 import { removeModel, renameModel } from '../web/src/settings/model.ts';
 import { firstSentences, kanbanPaneCount, NARROW_COLUMNS } from '../web/src/ui/kanban.ts';
+import { EMPTY, reduce } from '../web/src/ui/live-state.ts';
 import { ownerRuns, runningRows } from '../web/src/ui/overview.ts';
 import { canThinkNow, isScoutState, SCOUT_MODE_CHOICES } from '../web/src/ui/scout.ts';
 import { scoutChoice, setScout } from '../web/src/ui/settings/view.ts';
@@ -64,4 +65,16 @@ test('ui/settings (7-1): the Scout row writes routing.scout and Off removes it; 
   assert.deepEqual(removeModel(set, 'b').routing.scout, []);
   assert.deepEqual(renameModel(set, 'b', 'c').routing.scout, ['c']);
   assert.equal('scout' in removeModel(config, 'a').routing, false, 'no key is added when there was none');
+});
+
+test('ui/live-state (7-1): an inbox task\'s mark carries its product from the task list and from task.changed, so the Kanban pane badge counts it (without it the badge is a silent 0)', () => {
+  const inbox = (id: string, updated: number): Task => ({
+    id, title: id, body: '', next_action: null, done_criteria: null, status: 'inbox', origin: 'self', priority: 0, cron: null, cron_text: null, run_at: null,
+    parent_id: null, waiting_text: null, conversation_id: null, result_summary: null, attempts: 0, max_attempts: 3, created_at: 0, updated_at: updated, completed_at: null, project_id: 'p1',
+  });
+  const listed = reduce(EMPTY, { type: 'tasks', tasks: [inbox('t1', 10)] }).state;
+  assert.equal(listed.tasks.get('t1')?.projectId, 'p1');
+  const live = reduce(listed, { type: 'event', event: { type: 'task.changed', task: inbox('t2', 20) }, hidden: false }).state;
+  assert.equal(live.tasks.get('t2')?.projectId, 'p1');
+  assert.equal(kanbanPaneCount(live.tasks.values(), 'p1'), 2);
 });

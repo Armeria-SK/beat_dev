@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ConfigError, parseConfig } from '../src/config/store.ts';
-import type { Proposal } from '../src/tasks/proposal.ts';
+import { proposalProblem, readProposal, type Proposal } from '../src/tasks/proposal.ts';
 import { taskView, TaskError } from '../src/tasks/store.ts';
 import { fakeModel, startApp } from './app-setup.ts';
 import { tempDir, testConfig } from './helpers.ts';
@@ -84,6 +84,23 @@ test('proposal shape: create refuses a wrong shape or a field over its limit; ta
   assert.equal(res.body.task.proposal, null, 'the API never passes the raw column through');
 });
 
+test('proposal text: control, bidi and invisible characters are refused (they can disguise the card); evidence alone keeps line breaks; each problem names its field', () => {
+  const ch = (code: number) => String.fromCharCode(code);
+  const unsafe: Array<[string, Partial<Record<keyof Proposal, unknown>>]> = [
+    ['why bidi override', { why: `a${ch(0x202e)}b` }], ['why isolate', { why: `a${ch(0x2066)}b` }], ['why zero width', { why: `a${ch(0x200b)}b` }],
+    ['why newline', { why: 'a\nb' }], ['area bidi', { area: [`src/${ch(0x202e)}x`] }], ['goal line separator', { goal: `a${ch(0x2028)}b` }],
+    ['evidence bidi', { evidence: `see ${ch(0x202e)}here` }], ['evidence nul', { evidence: `a${ch(0)}b` }], ['ledger bom', { ledger: `L${ch(0xfeff)}1` }],
+  ];
+  for (const [label, over] of unsafe) assert.match(proposalProblem({ ...PROPOSAL, ...over }) ?? '', /control or invisible characters$/, label);
+  assert.equal(proposalProblem({ ...PROPOSAL, evidence: 'line one\r\nline two\n\tindented' }), null, 'evidence may span lines');
+  assert.equal(proposalProblem({ ...PROPOSAL, why: 'Les données arrivent en retard — 遅い' }), null, 'ordinary non-ASCII text is fine');
+  assert.equal(proposalProblem({ ...PROPOSAL, goal: '' }), 'goal is empty');
+  assert.equal(proposalProblem({ ...PROPOSAL, goal: 'x'.repeat(201) }), 'goal must be up to 200 characters');
+  assert.equal(proposalProblem({ ...PROPOSAL, goal: 3 }), 'goal must be text');
+  assert.equal(proposalProblem({ ...PROPOSAL, area: ['src/', ' '] }), 'area is empty');
+  assert.equal(readProposal(JSON.stringify({ ...PROPOSAL, why: `a${ch(0x202e)}b` })), null, 'a stored value with such characters reads as null');
+});
+
 test('PATCH /api/projects/:id scoutMode: off and research are saved; fix is refused until it arrives; other values are refused', async t => {
   const s = await setup(t);
   const patch = (body: unknown) => s.json(`/api/projects/${s.projectId}`, 'PATCH', body);
@@ -101,7 +118,13 @@ test('PATCH /api/projects/:id scoutMode: off and research are saved; fix is refu
     assert.equal(r.status, 400, String(value));
     assert.equal(r.body.code, 'project.bad_scout_mode');
   }
+  for (const body of [{ scout_mode: 'off' }, { scout_mode: 'off', name: 'Renamed' }]) {
+    const old = await patch(body);
+    assert.equal(old.status, 400, 'the reply key sent as a request key fails loudly instead of saving nothing');
+    assert.equal(old.body.code, 'project.scout_mode_key');
+  }
   assert.equal(s.app.projects.get(s.projectId)!.scout_mode, 'research', 'refused patches change nothing');
+  assert.equal(s.app.projects.get(s.projectId)!.name, 'Shop');
   const off = await patch({ scoutMode: 'off' });
   assert.equal(off.body.project.scout_mode, 'off');
 });

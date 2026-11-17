@@ -179,4 +179,4 @@ export function kanbanPaneCount(marks: Iterable<{ status: TaskStatus; checkState
   return n;
 }
 
-export const stepPercent =(step: Step | null): number => (step ? Math.round((Math.max(0, step.step - 1) / step.total) * 100) : 0);
+export const stepPercent = (step: Step | null): number => (step ? Math.round((Math.max(0, step.step - 1) / step.total) * 100) : 0);

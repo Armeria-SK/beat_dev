@@ -636,6 +636,8 @@ export const en = {
   'ui.scout.nothingNew': 'Nothing new since the last change',
   'ui.scout.offTitle': 'Thinking is off for this product',
   'ui.scout.offMeta': 'Turn on Research only in the product home to get proposals',
+  'ui.scout.offMetaModel': 'Choose a model for Scout in Settings › Models to get proposals',
+  'ui.scout.offMetaArchived': 'This product is archived. Restore it to get proposals',
   'ui.scout.examined': (n: number) => `examined ${n} ${pluralEn(n, { one: 'area', other: 'areas' })}, nothing to propose yet`,
   'ui.scout.reading': (area: string) => `now reading ${area}`,
   'ui.scout.lastChange': (when: string) => `last change ${when}`,

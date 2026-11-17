@@ -107,6 +107,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (!current) throw problem(404, 'not_found', 'project_missing');
     const body = requireObject(await readJson(req));
     if (body.root !== undefined) throw projectProblem(400, new ProjectError('root_fixed'));
+    if (body.scout_mode !== undefined) throw projectProblem(400, new ProjectError('scout_mode_key'));
     if (body.archived !== undefined && typeof body.archived !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
     if (body.refreshRemotes !== undefined && body.refreshRemotes !== true) throw projectProblem(400, new ProjectError('bad_refresh'));
     if (body.refreshRemotes === true && folderMissing(current)) throw projectProblem(409, new ProjectError('folder_missing'));

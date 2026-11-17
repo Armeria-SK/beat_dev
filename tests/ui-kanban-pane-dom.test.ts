@@ -2,7 +2,7 @@ import { byText, cleanup, click, loadTsx, render, update } from './helpers/dom.t
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
-import type { Conversation, Project, Proposal, ScoutState, Task } from '../web/src/api.ts';
+import type { Conversation, Project, Proposal, ScoutState, Task, WorkerRun, WorkerStatus } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 
 interface PaneProps { productId: string; conversations: Conversation[]; drafts: never[]; checklists: ReadonlyMap<string, never[]>; revision: number; projects: Project[]; pendingByTask: ReadonlyMap<string, number>; questionsByTask: ReadonlyMap<string, number> }
@@ -138,6 +138,24 @@ test('ui/KanbanPane（DOM）: an empty board while asleep shows the whole-pane e
   assert.equal(byText(off.container, 'button', en['ui.scout.thinkNow']), undefined, 'mode Off: no Think now');
 });
 
+test('ui/KanbanPane（DOM）: state off says why: mode Off points to Research only, mode on with no Scout model points to Settings › Models, an archived product says to restore it; none offers Think now', async () => {
+  const off: ScoutState = { state: 'off', examined: 0, area: null, lastChangeAt: null, note: null };
+  const cases: Array<[Partial<Project>, string]> = [
+    [{ scout_mode: 'off' }, en['ui.scout.offMeta']],
+    [{ scout_mode: 'research' }, en['ui.scout.offMetaModel']],
+    [{ scout_mode: 'research', archived_at: 5 }, en['ui.scout.offMetaArchived']],
+  ];
+  for (const [over, hint] of cases) {
+    serve({ active: [] }, off);
+    const { container } = await pane([project(over)]);
+    await settle();
+    assert.equal(container.querySelector('[data-scout]')?.getAttribute('data-scout'), 'off');
+    assert.equal(container.querySelector('.ui-scout__meta')?.textContent, hint, JSON.stringify(over));
+    assert.equal(byText(container, 'button', en['ui.scout.thinkNow']), undefined);
+    await cleanup();
+  }
+});
+
 test('ui/ProductHome（DOM）: the head has the mode switch (Off / Research only / Research and pre-fix, the last not pressable, "Arrives later"); picking sends PATCH scoutMode. Without the state endpoint there is no Think now', async () => {
   let saved = null as Project | null;
   serve({ active: [] }, null, (path, method) => (path === `/api/projects/${PRODUCT}` && method === 'PATCH' ? { project: project({ scout_mode: 'research' }) } : undefined));
@@ -184,3 +202,38 @@ test('ui/KanbanPane（DOM）: on a narrow screen the columns come in the order P
 });
 
 test.after(() => { g.matchMedia = realMatch; });
+
+test('ui/Task and ProductHome（DOM）: a thinking run ("scout") is not "another task is running": Run now on the task screen and Retry on the product home say "Task started"; a task run still makes them "Runs next"', async () => {
+  const { TaskScreen } = await loadTsx<{ TaskScreen: ComponentType<{ id: string; revision: string; worker: WorkerStatus | null; projects: readonly Project[]; pending: number }> }>('../web/src/ui/screens/Task.tsx', import.meta.url);
+  const { subscribe } = await import('../web/src/feedback.ts');
+  const toasts: string[] = [];
+  const stop = subscribe(item => { toasts.push(item.title); });
+  const worker = (kind: WorkerRun['kind']): WorkerStatus => ({
+    enabled: true, autonomy: false, paused: false, quiet: false, running: null, maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 10,
+    runningAll: [{ kind, taskId: 'other', runId: `r-${kind}`, title: 'other' }],
+  });
+  const ready = task('t1', 'ready', { origin: 'user' });
+  const failed = task('Broken build', 'failed', { origin: 'user', completed_at: Date.now() - 1000 });
+  try {
+    for (const [kind, title] of [['scout', en['ui.task.toast.started']], ['task', en['ui.task.toast.runNext']]] as const) {
+      toasts.length = 0;
+      serve({ active: [] }, null, (path, method) => (path === '/api/tasks/t1' && method === 'GET' ? { task: ready, events: [], runs: [] } : undefined));
+      const screen = await render(createElement(TaskScreen, { id: 't1', revision: '0', worker: worker(kind), projects: [project()], pending: 0 }));
+      await settle();
+      await click(byText(screen.container, 'button', en['ui.task.runNow']));
+      await settle();
+      assert.deepEqual(toasts, [title], `task screen, other run: ${kind}`);
+      await cleanup();
+
+      toasts.length = 0;
+      localStorage.clear();
+      serve({ active: [], finished: [failed] }, null);
+      const home = await render(createElement(ProductHome, { id: PRODUCT, project: project(), conversations: [], drafts: [], checklists: new Map(), worker: worker(kind) as never, revision: 0 }));
+      await settle();
+      await click(byText(home.container, 'button', en['ui.task.retry']));
+      await settle();
+      assert.deepEqual(toasts, [title], `product home retry, other run: ${kind}`);
+      await cleanup();
+    }
+  } finally { stop(); }
+});
