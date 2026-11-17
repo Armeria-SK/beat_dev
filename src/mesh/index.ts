@@ -13,6 +13,8 @@ import type { AcceptanceDoc } from '../projects/acceptance.ts';
 import { dateIn, isMarkdown, listMeshFiles, MeshError, replaceFile, resolveMeshPath, safeName, safeText, scrubText } from './files.ts';
 import { acceptanceLines, readMesh, searchMesh, type MeshText } from './search.ts';
 import { appendDecision, DECISIONS_FILE, DECISIONS_OLD_FILE, decisionLine, decisionRows, type OwnerDecision } from './decisions.ts';
+import { LEDGER_FILE, LEDGER_NAME, ledgerSummary, SCOUT_DIR } from '../scout/ledger.ts';
+import { isInside } from '../tools/hooks/scope.ts';
 import { applyPatch, hasForeignLines, parseNotes, renderState, STATE_FILE, type NoteAuthor, type StateNote, type StatePatch } from './state.ts';
 
 const MESH_GUIDE = "Before naming a file or the plan, look in the MESH index below; if it is not there, call mesh_search. Never guess a path. Answer the owner in the owner's language.";
@@ -40,6 +42,7 @@ export interface IndexMaterials {
   counts: { questions: number; proposals: number };
   timezone: string;
   decisions?: { rows: number } | null;
+  ledger?: { entries: number } | 'unreadable' | null;
 }
 
 export const meshIndexLimit = (available: number): number => Math.min(MESH_INDEX_MAX, Math.max(MESH_INDEX_MIN, Math.floor(available * 0.02)));
@@ -93,7 +96,7 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
   const heading = m.plan?.clean && m.plan.heading ? secretFree(safeText(m.plan.heading, 60)) : undefined;
   const planLine = m.plan === undefined ? undefined : m.plan ? `plan.md${heading ? ` — ${m.plan.ai ? AI_NOTE : ''}${heading}` : ''} (updated ${date(m.plan.updatedAt)})` : 'plan.md — not written yet';
 
-  const special = (path: string) => path === DECISIONS_FILE && m.decisions;
+  const special = (path: string) => (path === DECISIONS_FILE && m.decisions) || inScout(path);
   if (limit > MESH_INDEX_MIN) {
     const fileLines = shown.filter(file => !special(file.path)).map(file => {
       const note = file.heading ? secretFree(safeText(file.heading, 80)) : undefined;
@@ -105,6 +108,7 @@ export function composeIndex(m: IndexMaterials, limit: number): string {
       ...(planLine ? [`- ${planLine}`] : []),
       `- acceptance.json — ${acceptanceText(m.acceptance, false)}`,
       ...(m.decisions ? [`- ${DECISIONS_FILE} — ${m.decisions.rows} decisions`] : []),
+      ...(m.ledger ? [`- ${LEDGER_FILE} — ${m.ledger === 'unreadable' ? 'cannot be read' : `${m.ledger.entries} entries (scout notes from web reads)`}`] : []),
     ];
     const tail = [`questions: ${m.counts.questions} unanswered (question_list) / proposals: ${m.counts.proposals}`];
     const body = largest(fileLines.length, keep => {
@@ -145,6 +149,7 @@ interface Light {
   running: string[];
   timezone: string;
   decisions: { rows: number } | null;
+  ledger: { entries: number } | 'unreadable' | null;
 }
 
 function summarize(doc: AcceptanceDoc | undefined): AcceptanceSummary | null {
@@ -175,6 +180,8 @@ function firstHeading(file: string): string | null {
     return line ? line.replace(/^#+\s*/u, '').trim() : null;
   } catch { return null; }
 }
+
+const inScout = (rel: string): boolean => rel.replaceAll('\\', '/').toLowerCase().startsWith(`${SCOUT_DIR}/`);
 
 const planPath = (rel: string): boolean => rel.replaceAll('\\', '/').split('/')[0]!.toLowerCase() === CONVERSATION_PLANS;
 
@@ -219,8 +226,9 @@ export class Mesh {
     const planMeta = plan ? this.#d.plans.meta(projectId, plan) ?? null : null;
     const planStat = plan ? statOf(conversationPlanFile(this.#d.projectsDir, projectId, plan)) : null;
     const decisions = regular(join(dir, DECISIONS_FILE)) ? { rows: decisionRows(readFileSync(join(dir, DECISIONS_FILE), 'utf8')) } : null;
-    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan === undefined ? 'none' : plan, planMeta, planStat, decisions]);
-    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, decisions };
+    const ledger = statOf(join(dir, SCOUT_DIR, LEDGER_NAME)) ? ledgerSummary(this.#d.projectsDir, projectId) ?? 'unreadable' : null;
+    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan === undefined ? 'none' : plan, planMeta, planStat, decisions, ledger]);
+    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, decisions, ledger };
   }
 
   #materials(projectId: string, light: Light, plan: string | null | undefined): IndexMaterials {
@@ -230,10 +238,11 @@ export class Mesh {
       state: light.stateMtime === null ? null : { updatedAt: light.stateMtime },
       plan: view === undefined ? undefined : view.content === null ? null : { updatedAt: view.updated_at ?? 0, heading: /^#+\s+(.+)$/mu.exec(view.content)?.[1]?.trim() ?? null, clean: !view.tainted && view.updated_by !== 'outside', ai: view.updated_by === 'ai' },
       acceptance: light.acceptance,
-      files: light.files.filter(file => file.rel !== PLAN_FILE).map(file => ({ path: file.rel, updatedAt: file.mtime, heading: firstHeading(file.abs) })),
+      files: light.files.filter(file => file.rel !== PLAN_FILE && !this.#inScout(projectId, file.rel, file.abs)).map(file => ({ path: file.rel, updatedAt: file.mtime, heading: firstHeading(file.abs) })),
       counts: light.counts,
       timezone: light.timezone,
       decisions: light.decisions,
+      ledger: light.ledger,
     };
   }
 
@@ -322,7 +331,12 @@ export class Mesh {
       return { rel: PLAN_FILE, lines: (view.content ?? '').split(/\r?\n/u), mtime, fetched: view.tainted || view.updated_by === 'outside' };
     }
     const lines = readFileSync(abs, 'utf8').split(/\r?\n/u);
-    return { rel, lines, mtime, fetched: false };
+    return { rel, lines, mtime, fetched: this.#inScout(projectId, rel, abs) };
+  }
+
+  #inScout(projectId: string, rel: string, abs: string): boolean {
+    if (inScout(rel)) return true;
+    try { return isInside(realpathSync.native(join(this.#dir(projectId), SCOUT_DIR)), realpathSync.native(abs)); } catch { return false; }
   }
 
   #planView(projectId: string, plan: string | null): PlanView | undefined {
@@ -367,7 +381,7 @@ export class Mesh {
       const { abs, rel } = this.#resolve(projectId, plan, input.file);
       texts = [this.#text(projectId, plan, rel, abs, this.#mtime(projectId, plan, rel, abs))];
     } else {
-      texts = this.#files(dir).filter(file => file.rel !== INDEX_FILE && file.rel !== PLAN_FILE).map(file => this.#text(projectId, plan, file.rel, file.abs, file.mtime));
+      texts = this.#files(dir).filter(file => file.rel !== INDEX_FILE && file.rel !== PLAN_FILE && !this.#inScout(projectId, file.rel, file.abs)).map(file => this.#text(projectId, plan, file.rel, file.abs, file.mtime));
       if (this.#planView(projectId, plan)) texts.push(this.#text(projectId, plan, PLAN_FILE, '', this.#mtime(projectId, plan, PLAN_FILE, '')));
       const { doc } = this.#acceptance(projectId, plan);
       if (doc) texts.push(this.#text(projectId, plan, ACCEPTANCE_FILE, '', this.#mtime(projectId, plan, ACCEPTANCE_FILE, ''), doc));

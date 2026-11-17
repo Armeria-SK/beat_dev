@@ -15,8 +15,9 @@ import { projectText } from './projects.ts';
 import { providerText } from './providers.ts';
 import { questionText } from './questions.ts';
 import { researchText } from './research.ts';
+import { scoutText } from './scout.ts';
 import { storeText } from './stores.ts';
 import { taskText } from './tasks.ts';
 import { toolText } from './tools.ts';
 
-export const CATALOGS = { task: taskText, provider: providerText, engine: engineText, guard: guardText, tool: toolText, store: storeText, http: httpText, config: configText, notify: notifyText, project: projectText, plan: planText, acceptance: acceptanceText, build: buildText, pending: pendingText, outbound: outboundText, question: questionText, deviation: deviationText, meshwrite: meshWriteText, gate: gateText, research: researchText } as const;
+export const CATALOGS = { task: taskText, provider: providerText, engine: engineText, guard: guardText, tool: toolText, store: storeText, http: httpText, config: configText, notify: notifyText, project: projectText, plan: planText, acceptance: acceptanceText, build: buildText, pending: pendingText, outbound: outboundText, question: questionText, deviation: deviationText, meshwrite: meshWriteText, gate: gateText, research: researchText, scout: scoutText } as const;
