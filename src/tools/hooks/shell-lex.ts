@@ -54,6 +54,8 @@ export interface Statement {
   heads?: string[][];
   // 読み飛ばした本体の中に、呼ぶ先が変数・式で決まる & / . がある
   callComputed?: boolean;
+  // PowerShell の代入の右辺・@{ } の値として読んだ文（コードを動かす確かめの説明で、文字の分け方では見えないコマンドも調べる）
+  assigned?: boolean;
   source: string;
 }
 
@@ -603,7 +605,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
 
 // ── PowerShell ──────────────────────────────────────────────────────────
 
-interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][] }
+interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][]; split?: true }
 
 const PS_WORD_STOPS = new Set([' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '{', '}', ',', "'", '"', '`', '$', '<', '>']);
 const PS_HASH_STARTS = new Set([';', '|', '&', '(', '{', ',', '\n']);
@@ -620,7 +622,7 @@ const PS_READ_CONTROL = new Map<string, { inBlock?: true; repeats?: true }>([
 const PS_OPAQUE_CONTROL = new Set(['class', 'enum', 'data', 'workflow', 'parallel', 'sequence', 'inlinescript', 'foreach-object-parallel', 'until', 'catch', 'finally']);
 const PS_SWITCH_OPTIONS = new Set(['-regex', '-wildcard', '-exact', '-casesensitive', '-file']);
 const PS_ATTRIBUTE = /^\[[A-Za-z_][A-Za-z0-9_.]*$/u;
-const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=', '%=']);
+const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '??=']);
 const PS_DEFINERS = new Set(['function', 'filter', 'workflow', 'class', 'enum', 'configuration']);
 const PS_PAREN_KEYWORDS = new Set(['param', 'while', 'until', 'for', 'switch', 'catch', 'foreach', 'if', 'elseif']);
 const PS_OPERATORS = new Set([
@@ -714,7 +716,15 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
   let i = from;
   let sp = true;
   let parens = 0;
-  const push = (t: Omit<Tok, 'sp'>): void => { toks.push({ ...t, sp }); sp = false; };
+  // 開いているかっこの種類（h: @{ }、b: { }、p: ( ) $( ) @( )）。@{ } のキーの位置を知るため
+  const opens: Array<'h' | 'b' | 'p'> = [];
+  const push = (t: Omit<Tok, 'sp'>): void => {
+    toks.push({ ...t, sp }); sp = false;
+    if (t.t === 'hash') opens.push('h');
+    else if (t.t === 'sub' || t.t === 'arr' || (t.t === 'p' && t.v === '(')) opens.push('p');
+    else if (t.t === 'p' && t.v === '{') opens.push('b');
+    else if (t.t === 'p' && (t.v === ')' || t.v === '}')) opens.pop();
+  };
   const prevEndsValue = (): boolean => {
     const p = toks.at(-1);
     if (!p) return false;
@@ -802,7 +812,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
       const next = src[i + 1];
       if (next === '(') { push({ t: 'sub', v: '$(' }); i += 2; parens++; continue; }
       if (next === '{') return fail('provider_var', '${…}');
-      const m = /^\$(?:([A-Za-z_][A-Za-z0-9_]*):)?([A-Za-z_][A-Za-z0-9_]*)|^\$[?_^$]/u.exec(src.slice(i, i + 120));
+      const m = /^\$(?:([A-Za-z_][A-Za-z0-9_]*):)?([A-Za-z_][A-Za-z0-9_?]*)|^\$[?_^$]/u.exec(src.slice(i, i + 120));
       if (!m) return fail('unexpected', '$');
       if (m[1] !== undefined && !['env', 'global', 'script', 'local', 'private'].includes(m[1].toLowerCase())) return fail('provider_var', `$${m[1]}:`);
       push({ t: 'var', v: m[1] !== undefined && m[1].toLowerCase() === 'env' ? `env:${m[2]}` : m[2] ?? m[0].slice(1), dyn: true });
@@ -833,6 +843,12 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
       const m = /^::([A-Za-z_][A-Za-z0-9_]*)/u.exec(src.slice(i, i + 120));
       if (m) { push({ t: 'static', v: m[1]! }); i += m[0].length; continue; }
     }
+    // 代入の演算子で始まり、右辺がくっついた語（$r=Clear-Disk・$x?+=x・[T]::P=x・$a.'b'=x・@{a =x}）は、演算子と右辺に分ける。右辺はコマンドの文として読む。
+    // 引数の中なら、分けた語は隣どうしでつながり、文字は変わらない
+    const assignOp = /^(?:\?\?|[+\-*/%])?=/u.exec(src.slice(i, i + 3));
+    if (assignOp && i + assignOp[0].length < n && !PS_WORD_STOPS.has(src[i + assignOp[0].length]!)) {
+      push({ t: 'word', v: assignOp[0], split: true, glob: /[*?]/u.test(assignOp[0]) }); i += assignOp[0].length; continue;
+    }
     // 裸の語
     let j = i;
     // 添字の中（[ のすぐあと）の語は ] で終わる: $a[0] $a[1..2] $a[-1]
@@ -842,6 +858,12 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
     const text = src.slice(i, j);
     if (text.startsWith('--%')) return fail('parse_token', '--%');
     if (text.includes('#') && ((!sp && (prevEndsValue() || toks.at(-1)?.t === 'splat')) || !psInArguments(toks, text))) return fail('unexpected', '#');
+    // @{ } のキーの位置の `キー=値` は、キーと `=値` に分ける（値はコマンドの文として読む）
+    const key = toks.at(-1);
+    const eq = text.indexOf('=');
+    if (eq > 0 && opens.at(-1) === 'h' && (key?.t === 'hash' || (key?.t === 'p' && (key.v === ';' || key.v === '\n')))) {
+      push({ t: 'word', v: text.slice(0, eq), glob: /[*?[]/u.test(text.slice(0, eq)) }); i += eq; continue;
+    }
     push({ t: 'word', v: text, glob: /[*?[]/u.test(text) });
     i = j;
   }
@@ -909,6 +931,14 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     }
   };
 
+  // 代入の右辺・@{ } の値を文として読み、その文に assigned の印を付ける
+  const rightSide = (depth: number): LexFail | null => {
+    const from = sink.length;
+    const r = pipeline(depth);
+    for (const s of sink.slice(from)) s.assigned = true;
+    return r;
+  };
+
   const block = (depth: number): Word | LexFail => {
     // peek() は { の次
     const before = sink.length;
@@ -939,13 +969,13 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         k++;
         rest = eq.v.slice(1);
       }
-      if (rest !== '') continue;
+      if (rest !== '') return fail('unexpected', `${t.v}`);
       if (isP(peek(), '{')) {
         k++;
         const b = block(depth);
         if (isFail(b)) return b;
       } else {
-        const r = pipeline(depth + 1);
+        const r = rightSide(depth + 1);
         if (r) return r;
       }
     }
@@ -977,7 +1007,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
   const operand = (depth: number, st: Statement): Word | LexFail | null => {
     const t = peek()!;
     // .メンバー・[添字] が続くと、値は計算されたもの（'a'.Replace(..) など）。元の文字ではないので、パスとして読めない印の $( … ) にする
-    if (t.t === 'var') { k++; const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(`$${t.v}`, { dynamic: true })); }
+    if (t.t === 'var') { k++; if (t.v !== '?' && t.v.includes('?')) st.shapes.push(`expr:$${t.v}`); const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(`$${t.v}`, { dynamic: true })); }
     if (t.t === 'str') {
       k++;
       const inner = stringSubs(t, depth);
@@ -1111,6 +1141,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
           continue;
         }
         st.shapes.push(`expr:${t!.v}`);
+        // 型の付いた左辺（[int]$x = …）など、式として読んだ代入も、右辺はコマンドの文として読む
+        if (ASSIGN_OPS.has(t!.v)) { skipNl(); return rightSide(depth + 1); }
         continue;
       }
       if (isP(t, ',')) { k++; continue; }
@@ -1448,9 +1480,12 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       if (op?.t === 'word' && ASSIGN_OPS.has(op.v)) {
         k++;
         skipNl();
-        const r = pipeline(depth + 1);
+        const r = rightSide(depth + 1);
         if (r) return r;
         st.kind = 'assign';
+        if (op.split || op.v === '??=') st.shapes.push(`expr:${op.v}`);
+        // `?` の入った変数の名前は、前は $a と ? の語に読んで判定役へ回していたので、その印を残す
+        if (t.v !== '?' && t.v.includes('?')) st.shapes.push(`expr:$${t.v}`);
         st.assigns.push({ name: t.v, op: op.v, value: null });
         return finish(st);
       }

@@ -41,7 +41,27 @@ const EXPECTED: Array<{ shell: 'powershell' | 'bash'; pattern: RegExp; why: stri
   { shell: 'powershell', pattern: /^\s*git\b|\bgit\s/iu, why: 'git after an odd / unknown repo goes on to the network and path checks' },
   { shell: 'bash', pattern: /^\s*git\b|\bgit\s/iu, why: 'git after an odd / unknown repo goes on to the network and path checks' },
   { shell: 'powershell', pattern: /^\s*\[CmdletBinding/iu, why: 'an attribute before param is refused again, as on base' },
+  // assign-guard: sudo and the like at a command position that is not the head of the line (after ; & | ( { ) ` $( then do else, an env prefix, or a path)
+  { shell: 'bash', pattern: /(?:^|[;&|({)`]|\$\(|\b(?:then|do|else)\s|\b[A-Za-z_]\w*=\S*\s)\s*(?:\/[\w./-]*\/)?(?:sudo|doas|su|pkexec|runas)(?:\s|;|$)/u, why: 'assign-guard: sudo / doas / su / pkexec not at the head of a line is refused as guard.elevate' },
+  // assign-guard: a PowerShell assignment whose operator touches its right side ($x=Cmd, $x =Cmd, [T]$x=Cmd, $a.b[0]+=Cmd), or has no right side at all
+  { shell: 'powershell', pattern: /^\s*(?:(?:\[[\w.]+(?:\[\])?\])*\$[\w:?]+(?:,\s*\$[\w:?]+)*|\[[\w.]+\]::\w+)(?:\.(?:\w+|'[^']*'|"[^"]*"|\([^)]*\))|\[[^\]]*\])*\s*(?:\?\?|[+\-*/%])?=(?:\S|\s*$)/u, why: 'assign-guard: the right-hand side of an assignment is read as a statement ($p=@{…} as a hashtable, a bare right side as a command, no right side as a lex error)' },
+  // assign-guard: a spaced assignment to a variable whose name holds `?` ($x? = 1), or with the `??=` operator ($x ??= Cmd)
+  { shell: 'powershell', pattern: /^\s*\$(?:[\w:]*\?[\w:?]*\s*(?:\?\?|[+\-*/%])?=|[\w:?]+\s*\?\?=)/u, why: 'assign-guard: `?` in a variable name and the ??= operator are read as PowerShell does' },
+  // assign-guard: the code check (shared by both shells) reads the right side of a `$x=` / `$x ??=` shape, so a bash row of that shape can gain a code reason
+  { shell: 'bash', pattern: /^\s*\$[\w:?]+(?:\[[^\]]*\])*\s*(?:\?\?)?=/u, why: 'assign-guard: the code check reads the right side of an assignment shape' },
+  // assign-guard: a hashtable value glued to its `=` (`@{a=Stop-Computer}`, `@{b=1;'a'=C}`, `@{a =C}`) is read as a statement (base dropped it)
+  { shell: 'powershell', pattern: /@\{\s*(?:[^{}]*[;\n]\s*)?(?:[\w.-]+|'[^']*'|"[^"]*")\s*=\S/u, why: 'assign-guard: a hashtable value glued to = is read as a statement (base dropped the value)' },
 ];
+
+// Looser rows accepted by the owner's ruling (plans/beat/steps/control-bodies/deviations.md, assign-guard): head reads them as PowerShell does.
+// Exact corpus strings, in every form and fixture. Any other looser row still fails the compare
+const ACCEPTED_LOOSER: ReadonlyMap<string, string> = new Map([
+  ['$x=@{a=1}', 'a hashtable of plain values is an expression (base misread =@ and {…} as a command and a script block)'],
+  ['$p=@{Path=$f}', 'a hashtable of plain values is an expression (base misread =@ and {…} as a command and a script block)'],
+  ['$x=a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
+  ['$x=Remove-Item a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
+  ['Write-Output $x=a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
+]);
 
 const SHELLS = ['powershell', 'bash'] as const;
 type Shell = typeof SHELLS[number];
@@ -107,11 +127,16 @@ function compare(baseFile: string, headFile: string, corpusFile: string): number
   if (JSON.stringify(base.keys) !== JSON.stringify(head.keys)) { console.log('the two runs have different rows (run both with the same script and corpus)'); return 2; }
   const groups = new Map<string, { same: number; stricter: number; looser: number; leaked: number; moves: Map<string, number> }>();
   const expectedHits = new Map<string, number>();
+  const accepted = new Map<string, number>();
   const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
   let bad = 0;
   let printed = 0;
   for (const [n, key] of base.keys.entries()) {
-    const [shell, fixture, form, index] = key.split('|') as [Shell, string, string, string];
+    // A form name can hold `|` (the prefix `1 | ForEach-Object { cd sub }`), so the index is the last field
+    const parts = key.split('|');
+    const [shell, fixture] = parts as [Shell, string];
+    const form = parts.slice(2, -1).join('|');
+    const index = parts.at(-1)!;
     const command = corpus[Number(index)]!;
     const group = `${shell} | ${fixture} | ${form}`;
     const g = groups.get(group) ?? { same: 0, stricter: 0, looser: 0, leaked: 0, moves: new Map() };
@@ -120,6 +145,7 @@ function compare(baseFile: string, headFile: string, corpusFile: string): number
     const b = head.rows[n]!;
     if (JSON.stringify(normal(a)) === JSON.stringify(normal(b))) { g.same++; continue; }
     const looser = looserThan(a, b);
+    if (looser.length && ACCEPTED_LOOSER.has(command)) { bump(accepted, command); continue; }
     if (looser.length) {
       g.looser++;
       if (printed++ < 200) console.log(`LOOSER ${group} #${index}: ${JSON.stringify(command).slice(0, 200)}\n  ${looser.join('; ')}`);
@@ -143,10 +169,13 @@ function compare(baseFile: string, headFile: string, corpusFile: string): number
     for (const [move, n] of [...g.moves].sort((x, y) => x[0].localeCompare(y[0]))) console.log(`    ${move}\t${n}`);
     bad += g.looser + g.leaked;
   }
+  console.log('\naccepted looser rows (ACCEPTED_LOOSER):');
+  for (const [command, n] of accepted) console.log(`  ${n}\t${JSON.stringify(command)}: ${ACCEPTED_LOOSER.get(command)}`);
   console.log('\nexpected stricter plain rows without a control keyword:');
   for (const [why, n] of expectedHits) console.log(`  ${n}\t${why}`);
   const total = [...groups.values()].reduce((s, g) => ({ rows: s.rows + g.same + g.stricter + g.looser, looser: s.looser + g.looser, stricter: s.stricter + g.stricter }), { rows: 0, looser: 0, stricter: 0 });
-  console.log(`\nTOTAL rows ${total.rows}, stricter ${total.stricter}, looser ${total.looser}, changed and not expected ${bad - total.looser}`);
+  const acceptedRows = [...accepted.values()].reduce((s, n) => s + n, 0);
+  console.log(`\nTOTAL rows ${total.rows + acceptedRows}, stricter ${total.stricter}, looser ${total.looser}, accepted looser ${acceptedRows}, changed and not expected ${bad - total.looser}`);
   return bad > 0 ? 1 : 0;
 }
 

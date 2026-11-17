@@ -42,7 +42,7 @@ function quote(w: Word | FactWord, ps: boolean): string {
   return ps ? `'${w.text.replaceAll("'", "''")}'` : `'${w.text.replaceAll("'", `'"'"'`)}'`;
 }
 
-const joinWords = (words: readonly Word[], ps: boolean): string => words.map(w => quote(w, ps)).join(' ');
+export const joinWords = (words: readonly Word[], ps: boolean): string => words.map(w => quote(w, ps)).join(' ');
 const anyDynamic = (words: readonly Word[]): boolean => words.some(w => w.dynamic);
 
 const STDIN_SCRIPT = /^(?:-|\/dev\/stdin|\/dev\/fd\/0|\/proc\/self\/fd\/0)$/u;

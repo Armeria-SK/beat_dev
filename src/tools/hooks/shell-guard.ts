@@ -7,14 +7,14 @@ import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
 import { classifyStatements, matchStatement, noRepo, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
 import { codeFindings } from './code-guard.ts';
-import { gitGlobalOf, inlineCode, innerSource, programOdd, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
+import { gitGlobalOf, inlineCode, innerSource, joinWords, programOdd, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
 import { CD_COMMANDS } from './allowlist-core.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
 import { containsToolConfig, curlConfigFile, isToolConfigPath, npmProjectConfigFile, wgetConfigFile, type Env } from './tool-config.ts';
 import { expandPath, inDependencies, isInside, isSecretPath, placePath, realish, windowsNames, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
-import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
+import { isPowerShell, type LexFail, type ShellKind, type Statement, type Word } from './shell-lex.ts';
 
 export type Decision = 'allow' | 'ask' | 'deny';
 const RANK: Record<Decision, number> = { allow: 0, ask: 1, deny: 2 };
@@ -362,6 +362,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (d === 'ask' && !askKinds.includes(kind)) askKinds.push(kind);
   };
   const addCode = (said: Said) => add('ask', said, 'code');
+  // PowerShell の代入の右辺・@{ } の値の文（文字の分け方〔segments〕では見えないので、説明のときに文の語から調べ直す）
+  let assignedStatements: Statement[] = [];
   // コマンドの git が調べたリポジトリ。持ち主が許したときに、そのリポジトリ自身のフックだけを動かせるかを決める
   const repoLog: { repos: RepoInfo[]; unsafe: boolean } = { repos: [], unsafe: false };
   const ownHooksDir = (): string | null => {
@@ -392,6 +394,14 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         const target = seg.args.find(a => !a.startsWith('-'));
         const e = target ? expandPath(target, cwd, process.env, language) : undefined;
         if (e && 'path' in e) cwd = e.path;
+      }
+    }
+    for (const st of assignedStatements) {
+      for (const seg of segments(joinWords(st.words, true))) {
+        for (const found of codeFindings(seg, { cwd: initialCwd, language, selfHosts })) {
+          if (!reasons.includes(found.reason)) { reasons.push(found.reason); reasonKeys.push(found.key); }
+          for (const file of found.scripts) if (!scripts.includes(file) && scripts.length < 3) scripts.push(file);
+        }
       }
     }
   }
@@ -492,6 +502,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   };
   const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement, beforeStatements, beforeStatement };
   const classified = classifyStatements(command, ctx);
+  if (isPowerShell(shell)) assignedStatements = classified.statements.filter(st => st.assigned && st.kind === 'command' && st.words.length > 0);
   if (classified.lex) {
     add('deny', say('lex.denied', { detail: lexDetail(language, classified.lex) }));
     return done();
@@ -751,7 +762,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const hardReason = topHard ?? st.heads?.map(headHard).find(Boolean);
     const hard = hardReason !== undefined;
     if (hardReason) add('deny', hardReason);
-    if (isPowerShell(shell) && ELEVATE_NAMES.has(name)) add('deny', say('guard.elevate'));
+    if (ELEVATE_NAMES.has(name)) add('deny', say('guard.elevate'));
     if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a) || (/^of=/u.test(a) && posix.normalize(a.slice(3)).startsWith('/dev/')))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
