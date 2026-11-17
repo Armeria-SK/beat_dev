@@ -1,6 +1,6 @@
 import { Type } from '@sinclair/typebox';
 import { folderMissing } from '../../projects/store.ts';
-import { cleanAreaPath, headOf, type Area } from '../../scout/areas.ts';
+import { headOf, usableAreaPath, type Area } from '../../scout/areas.ts';
 import { LIMITS, oneLine, recordEntry, ScoutError } from '../../scout/ledger.ts';
 import { languageOf } from '../../shared/language.ts';
 import { errorText } from '../../shared/messages/define.ts';
@@ -19,9 +19,8 @@ export function areaOf(paths: readonly string[] | undefined): { area: Area; drop
   const kept: string[] = [];
   const dropped: string[] = [];
   for (const raw of paths) {
-    const shown = plainLine(raw, LIMITS.path);
-    const clean = shown === raw.trim() && redactSecrets(shown) === shown && !shown.includes(',') ? cleanAreaPath(shown) : null;
-    if (clean === null) dropped.push(shown || '-');
+    const clean = usableAreaPath(raw, LIMITS.path);
+    if (clean === null) dropped.push(plainLine(raw, LIMITS.path) || '-');
     else if (!kept.includes(clean)) kept.push(clean);
   }
   return { area: kept, dropped };

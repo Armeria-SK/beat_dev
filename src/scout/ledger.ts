@@ -7,7 +7,7 @@ import { scoutText, type ScoutMessageKey } from '../shared/messages/scout.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { isInside } from '../tools/hooks/scope.ts';
-import { cleanAreaPath, examineAreas, seenPlaces, validCommit, type Area } from './areas.ts';
+import { cleanAreaPath, examineAreas, seenPlaces, usableAreaPath, validCommit, type Area } from './areas.ts';
 
 export const SCOUT_DIR = 'scout';
 export const LEDGER_NAME = 'ledger.md';
@@ -26,10 +26,10 @@ const ENTRY = /^## (L-\d{4,8}) (.+)$/u;
 const ANY_HEADING = /^#{1,2}(\s|$)/u;
 const FIELD = /^- (area|checked|result|when|commit|by): ?(.*)$/u;
 const DISPATCH = /^- (\S+) \| ([^|]+) \| area: ([^|]*) \| ([^|]+)$/u;
-const DISPATCH_LINE_MAX = 1000;
+const DISPATCH_LINE_MAX = 2000;
 const dispatchRow = (row: string): RegExpExecArray | null => {
   const text = row.trim();
-  return text.length <= DISPATCH_LINE_MAX ? DISPATCH.exec(text) : null;
+  return text.length <= DISPATCH_LINE_MAX * 2 && Array.from(text).length <= DISPATCH_LINE_MAX ? DISPATCH.exec(text) : null;
 };
 const WHOLE = '(whole product)';
 const NONE = '(none)';
@@ -179,7 +179,7 @@ export interface EntryInput { id?: string | undefined; title: string; area: Area
 export interface EntryMeta { when: string; commit: string | null; by: string }
 
 export function renderEntry(id: string, input: EntryInput, meta: EntryMeta): string[] {
-  const area = input.area === 'whole' ? 'whole' : input.area.flatMap(path => cleanAreaPath(path) ?? []);
+  const area = input.area === 'whole' ? 'whole' : input.area.flatMap(path => usableAreaPath(path, LIMITS.path) ?? []);
   return [
     `## ${id} ${oneLine(input.title, LIMITS.title) || '-'}`,
     `- area: ${renderArea(area)}`,
@@ -212,7 +212,7 @@ const trimBlank = (lines: string[]): string[] => {
 function nextId(text: string): string {
   let max = 0;
   for (const m of text.matchAll(/^## L-(\d{4,8})(?!\d)/gmu)) max = Math.max(max, Number(m[1]));
-  if (max >= 99_999_999) throw new ScoutError('bad_id', { id: 'L-99999999' });
+  if (max >= 99_999_999) throw new ScoutError('ids_used_up');
   return `L-${String(max + 1).padStart(4, '0')}`;
 }
 

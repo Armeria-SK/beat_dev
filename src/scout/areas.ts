@@ -1,6 +1,8 @@
 import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { withGit } from '../mesh/folders.ts';
+import { plainLine } from '../shared/plain-text.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import { isInside } from '../tools/hooks/scope.ts';
 
 export type Area = 'whole' | string[];
@@ -22,12 +24,19 @@ const fold = (path: string): string => (WINDOWS ? path.toLowerCase() : path);
 export const validCommit = (commit: string | null | undefined): commit is string => typeof commit === 'string' && COMMIT.test(commit);
 
 export function cleanAreaPath(input: string): string | null {
-  if (!input || CONTROLS.test(input) || input.includes(':') || /^\((whole product|none)\)$/u.test(input.trim())) return null;
+  if (!input || CONTROLS.test(input) || input.includes(':')) return null;
   const slashed = input.trim().replaceAll('\\', '/');
   if (!slashed || slashed.startsWith('/') || slashed.startsWith('-')) return null;
   const parts = slashed.split('/').filter(part => part !== '' && part !== '.');
   if (!parts.length || parts.some(part => part === '..' || part.startsWith('-'))) return null;
-  return parts.join('/');
+  const path = parts.join('/');
+  return /^\((whole product|none)\)$/u.test(path) ? null : path;
+}
+
+export function usableAreaPath(raw: string, max: number): string | null {
+  const shown = plainLine(raw, max);
+  if (shown !== raw.trim() || redactSecrets(shown) !== shown || shown.includes(',')) return null;
+  return cleanAreaPath(shown);
 }
 
 export function under(path: string, base: string): boolean {

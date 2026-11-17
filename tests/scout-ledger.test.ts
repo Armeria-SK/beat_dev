@@ -372,6 +372,44 @@ test('7-2 一覧: scout がリンク（ジャンクション）やファイル�
   assert.deepEqual(readdirSync(elsewhere), [], "リンクの先には何も書かない");
 });
 
+test('7-2 審査 2: 上限の内の長さで戻りを誘う指令の行（最後の x の前に U+2028）でも読むのは一瞬', () => {
+  const line = `- a | b${' | area: c'.repeat(195)}  x`;
+  assert.ok(Array.from(line).length <= 2000, String(Array.from(line).length));
+  const started = performance.now();
+  const ledger = parseLedger(`## Dispatches\n${`${line}\n`.repeat(5)}`);
+  const took = performance.now() - started;
+  assert.ok(took < 100, `parseLedger took ${took} ms`);
+  assert.equal(ledger.broken, 5);
+});
+
+test('7-2 審査 2: 絵文字の欄でもコードが書いた指令の行は読め、200 行の上限が効く', t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  for (let i = 0; i < DISPATCHES_MAX + 50; i++) {
+    appendDispatch(s.paths.projects, shop.id, { when: `2026-11-17T03:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`, title: '🔥'.repeat(120), area: '🔥'.repeat(300), result: '🔥'.repeat(200) });
+  }
+  const ledger = readLedger(s.paths.projects, shop.id);
+  assert.equal(ledger.broken, 0);
+  assert.equal(ledger.dispatches.length, DISPATCHES_MAX);
+});
+
+test('7-2 審査 2: (whole product) / (none) は ./ や末尾の / を付けてもパスにしない。renderEntry は , や見えない改行のパスを書かない', () => {
+  for (const raw of ['./(whole product)', '(whole product)/', '(none)/', './(none)']) assert.equal(cleanAreaPath(raw), null, raw);
+  assert.deepEqual(areaOf(['./(whole product)', 'src']).area, ['src']);
+  const lines = renderEntry('L-0001', { title: 't', area: ['a, b', 'c d', 'src/ok'], checked: 'c', result: 'r' }, { when: '2026-11-17T00:00:00.000Z', commit: null, by: 'm' });
+  assert.equal(lines[1], '- area: src/ok');
+  assert.equal(parseLedger(lines.join('\n')).broken, 0);
+});
+
+test('7-2 審査 2: ID を使い切ったときは専用の文で断る（id を渡していないのに「id を外せ」と言わない）', t => {
+  const s = setup(t);
+  const shop = s.project('shop');
+  s.entry(shop.id, ['src/a'], null);
+  const file = ledgerPath(s.paths.projects, shop.id);
+  writeFileSync(file, readFileSync(file, 'utf8').replace('## L-0001', '## L-99999999'));
+  assert.throws(() => s.entry(shop.id, ['src/b'], null), (error: Error) => !/Leave id out/u.test(error.message) && /no free/iu.test(error.message));
+});
+
 test('7-2 審査: 手で書いた長い指令の行でも読むのは一瞬（正規表現が戻りで固まらない）', () => {
   const line = `- a | b${' | area: c'.repeat(600)} x`;
   const started = performance.now();
