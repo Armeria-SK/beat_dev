@@ -263,14 +263,18 @@ function unknownTargetFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   const lang = ctx.language;
   const raw = seg.rawCmd;
   const detail: string[] = [];
-  const assignment = /^\$[\w:{}.]+[+\-*/%]?=/u.test(raw) || /^[+\-*/%]?=$/u.test(seg.args[0] ?? '');
+  const plainAssignment = /^\$[\w:{}.]+[+\-*/%]?=/u.test(raw) || /^[+\-*/%]?=$/u.test(seg.args[0] ?? '');
+  // 型・添字・メンバーの付いた左辺（[int]$x=・$x[0]=・$a.b=）と、演算子に右辺がくっついた形（$x =Cmd）も、右辺を調べる
+  const assignment = plainAssignment || /^(?:\[[\w.]+(?:\[\])?\])*\$[^=\s]*[+\-*/%]?=/u.test(raw)
+    || (/^(?:\[[\w.]+(?:\[\])?\])*\$[^=\s]*$/u.test(raw) && /^[+\-*/%]?=/u.test(seg.args[0] ?? ''));
   const nested: CodeFinding[] = [];
   if (assignment) {
     const rhs = seg.raw.slice(seg.raw.indexOf('=') + 1).trim();
     if (rhs && (ctx.depth ?? 0) < 3) {
       for (const inner of segments(rhs)) nested.push(...codeFindings(inner, { ...ctx, prev: undefined, depth: (ctx.depth ?? 0) + 1 }));
     }
-  } else {
+  }
+  if (!plainAssignment) {
     const bareVar = /^\$(?:\{[^}]+\}|[\w:?]+)$/u.test(raw);
     if (bareVar && seg.args.length > 0 && !PS_OPERATOR.test(seg.args[0]!)) detail.push(raw);
     else if (seg.invoke && /^[$(]/u.test(seg.raw)) detail.push(seg.raw.split(/\s/u)[0]!);

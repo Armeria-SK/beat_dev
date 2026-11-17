@@ -751,7 +751,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const hardReason = topHard ?? st.heads?.map(headHard).find(Boolean);
     const hard = hardReason !== undefined;
     if (hardReason) add('deny', hardReason);
-    if (isPowerShell(shell) && ELEVATE_NAMES.has(name)) add('deny', say('guard.elevate'));
+    if (ELEVATE_NAMES.has(name)) add('deny', say('guard.elevate'));
     if (name === 'dd' && words.some(a => /^of=\/dev\//u.test(a) || (/^of=/u.test(a) && posix.normalize(a.slice(3)).startsWith('/dev/')))) add('deny', say('guard.device_write'));
     const denied = matchesPrefix(words, opts.deny);
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));

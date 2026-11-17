@@ -603,7 +603,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
 
 // ── PowerShell ──────────────────────────────────────────────────────────
 
-interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][] }
+interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][]; split?: true }
 
 const PS_WORD_STOPS = new Set([' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '{', '}', ',', "'", '"', '`', '$', '<', '>']);
 const PS_HASH_STARTS = new Set([';', '|', '&', '(', '{', ',', '\n']);
@@ -832,6 +832,12 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
     if (ch === ':' && src[i + 1] === ':' && toks.at(-1)?.t === 'type') {
       const m = /^::([A-Za-z_][A-Za-z0-9_]*)/u.exec(src.slice(i, i + 120));
       if (m) { push({ t: 'static', v: m[1]! }); i += m[0].length; continue; }
+    }
+    // 代入の演算子に右辺がくっついた語（$r=Clear-Disk・$a.b+=x・$x[0]=x）は、演算子と右辺に分ける。右辺はコマンドの文として読む
+    const assignOp = /^[+\-*/%]?=/u.exec(src.slice(i, i + 2));
+    const left = toks.at(-1);
+    if (assignOp && left && (left.t === 'var' || left.t === 'member' || (left.t === 'p' && left.v === ']')) && i + assignOp[0].length < n && !PS_WORD_STOPS.has(src[i + assignOp[0].length]!)) {
+      push({ t: 'word', v: assignOp[0], split: true }); i += assignOp[0].length; continue;
     }
     // 裸の語
     let j = i;
@@ -1111,6 +1117,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
           continue;
         }
         st.shapes.push(`expr:${t!.v}`);
+        // 型の付いた左辺（[int]$x = …）など、式として読んだ代入も、右辺はコマンドの文として読む
+        if (ASSIGN_OPS.has(t!.v)) { skipNl(); return pipeline(depth + 1); }
         continue;
       }
       if (isP(t, ',')) { k++; continue; }
@@ -1451,6 +1459,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         const r = pipeline(depth + 1);
         if (r) return r;
         st.kind = 'assign';
+        if (op.split) st.shapes.push(`expr:${op.v}`);
         st.assigns.push({ name: t.v, op: op.v, value: null });
         return finish(st);
       }

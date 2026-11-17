@@ -41,6 +41,8 @@ const EXPECTED: Array<{ shell: 'powershell' | 'bash'; pattern: RegExp; why: stri
   { shell: 'powershell', pattern: /^\s*git\b|\bgit\s/iu, why: 'git after an odd / unknown repo goes on to the network and path checks' },
   { shell: 'bash', pattern: /^\s*git\b|\bgit\s/iu, why: 'git after an odd / unknown repo goes on to the network and path checks' },
   { shell: 'powershell', pattern: /^\s*\[CmdletBinding/iu, why: 'an attribute before param is refused again, as on base' },
+  { shell: 'bash', pattern: /(?:^|[\s;&|({/$])(?:sudo|doas|su|pkexec|runas)\s/u, why: 'assign-guard: sudo / doas / su / pkexec not at the head of a line is refused as guard.elevate' },
+  { shell: 'powershell', pattern: /^\s*(?:\[[\w.]+(?:\[\])?\])*\$[\w:]+[^\s=]*\s*[+\-*/%]?=/u, why: 'assign-guard: the right-hand side of an assignment is read as a statement ($p=@{…} as a hashtable, a bare right side as a command, no right side as a lex error)' },
 ];
 
 const SHELLS = ['powershell', 'bash'] as const;
