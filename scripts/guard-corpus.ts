@@ -61,6 +61,8 @@ const ACCEPTED_LOOSER: ReadonlyMap<string, string> = new Map([
   ['$x=a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
   ['$x=Remove-Item a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
   ['Write-Output $x=a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
+  // guard-cd: the push destination moves from the subshell's folder (wrong, base) to the folder the push really runs in
+  ['(cd sub); git push', 'guard-cd: a cd inside ( ) ends with the subshell, so the push is checked in the folder it runs in (base checked sub)'],
 ]);
 
 const SHELLS = ['powershell', 'bash'] as const;
