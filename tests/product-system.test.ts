@@ -431,7 +431,8 @@ test('2-3 ルールの「覚えておくこと」は、記憶を約束せず USE
   await s.send('n1', 'hello');
   const frozen = frozenOf(s.app, 'n1');
   assert.ok(!frozen.includes('Write important things to memory') && !frozen.includes('Write to memory'), frozen);
-  assert.match(frozen, /You do not keep memories between conversations for now\. Do not promise to remember something\. Outside a product, if the user wants you to know something about them every time, suggest they write it in USER\.md \(Settings › Persona\)\. A product's conversations do not read USER\.md: there, suggest the product's AGENTS\.md or CLAUDE\.md instead/u);
+  assert.match(frozen, /- Outside a product, you do not keep memories between conversations for now: do not promise to remember something, and if the user wants you to know something about them every time, suggest they write it in USER\.md \(Settings › Persona\)\. A product's conversations do not read USER\.md: there, suggest the product's AGENTS\.md or CLAUDE\.md instead/u);
+  assert.ok(!frozen.includes('- You do not keep memories between conversations'), '10-2: 「覚えない」は製品の外だけ（製品の会話は記憶の道具・目次の記憶の行と食い違わない）');
 });
 
 test('2-3 Memory の画面の API: 記憶が会話に入らないあいだは context が null（画面は「今は会話に使わない」）', async t => {
