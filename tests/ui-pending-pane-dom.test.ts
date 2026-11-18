@@ -104,3 +104,21 @@ test('walk-1118 D7: しまった製品の行は、画面の会話一覧に無く
   const from = [...container.querySelectorAll('.bt-pending__from > span:first-child')].map(s => s.textContent).sort();
   assert.deepEqual(from, ['Shop site · archived · from “Please create hello.txt”', 'from “Fix the price rounding”', 'from “Untitled”'].sort());
 });
+
+test('ui/PendingPane（DOM）: 前の版で保存した下見には、伏せてあるかもしれないことを出す', async () => {
+  const old = row({ id: 21, kind: 'send', oldPreview: true, preview: [{ path: 'run.ps1', text: 'pw=[REDACTED]', truncated: false }] });
+  const container = await showList([old], []);
+  assert.equal(container.querySelector('.ui-pending__file .ui-pending__old')?.textContent, 'Saved by an older version of beat: parts of this preview may be hidden. The file at this path is what runs.');
+});
+
+test('ui/PendingPane（DOM）: 名前の無い伏せ字（前の版の札）は「N parts hidden」、コマンドに書かれた [BEAT-SECRET…] は置き換えていないと出す', async () => {
+  const hidden = row({ id: 22, kind: 'send', shown: 'echo [REDACTED] [REDACTED]', masked: 2, held: [] });
+  const literal = row({ id: 23, kind: 'send', shown: 'echo "[BEAT-SECRET: env X]"', masked: 0 });
+  const both = row({ id: 24, kind: 'send', shown: 'echo [BEAT-SECRET: env GITHUB_TOKEN]', masked: 1, held: ['env GITHUB_TOKEN'] });
+  const container = await showList([hidden, literal, both], []);
+  const why = (id: number) => container.querySelector(`[data-pending="${id}"] .ui-pending__why`)?.textContent ?? '';
+  assert.match(why(22), /2 parts hidden/u);
+  assert.doesNotMatch(why(22), /replaced/u);
+  assert.match(why(23), /This text contains “\[BEAT-SECRET…\]” written in the command itself\. beat replaced nothing here\./u);
+  assert.doesNotMatch(why(24), /written in the command itself/u);
+});

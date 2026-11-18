@@ -456,6 +456,8 @@ export const ja = {
   'ui.pending.missing': 'まだありません',
   'ui.pending.previewCut': (shown: number, total: number) => `下見はここで切れています: ${total} 文字のうち、はじめの ${shown} 文字だけを出しています。残りはここに出ていませんが、実行されます。`,
   'ui.pending.previewCutAny': '下見はここで切れています: ファイルの残りはここに出ていませんが、実行されます。',
+  'ui.pending.oldPreview': '前の版の beat が保存した下見です: 一部が伏せてあるかもしれません。実行されるのは、この場所のファイルです。',
+  'ui.pending.literalMark': 'この文には、コマンドそのものに書かれた「[BEAT-SECRET…]」があります。ここでは beat は何も置き換えていません。',
   'ui.pending.heldKey': (n: number, names: string) => `beat が保存している値を ${n} か所で置き換えて出しています: ${names}。[BEAT-SECRET: 名前] の所には、実行のときに本当の値が入ります。`,
   'ui.pending.stale': (time: string) => `approved · not run: 待たせたあとに変わりました · ${time}`,
   'ui.pending.noneDecided': '今日決めたものはありません',

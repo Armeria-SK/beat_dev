@@ -214,3 +214,20 @@ test('承認の札: 72 KB の入力も 2,000 ms 未満で札にする（並べ�
     assert.ok(took < 2000, `${JSON.stringify(unit)}: ${took.toFixed(1)}ms`);
   }
 });
+
+test('承認の札: 作業フォルダに入った鍵は 1 回だけ印に替えて数える（札の文と parts.cwd で 2 回数えない）', async t => {
+  const s = setup(t, [ANTHROPIC]);
+  const row = await s.store.park({
+    tool: 'shell_run', input: { command: 'npm test', cwd: `/tmp/${ANTHROPIC.value}` }, cwd: s.dir, kind: 'judge', reason: 'r', preview: [{ path: 'run.ps1', text: `echo ${ANTHROPIC.value}`, truncated: false }],
+    runId: 'r', runKind: 'chat', conversationId: 'c', check: { decision: 'ask', reasons: ['r'] },
+  });
+  assert.equal(row.parts.cwd, `/tmp/${heldMark('env ANTHROPIC_API_KEY')}`);
+  assert.equal(row.masked, 2);
+});
+
+test('記録の形: 決めたあとの下見も、前に字が付いた beat の鍵（xxxxsk-ant-…）を残さない', async t => {
+  const s = setup(t, [ANTHROPIC]);
+  const row = await s.park('pwsh ./run.ps1', `xxxx${ANTHROPIC.value}`);
+  s.store.reject(row.id);
+  assert.ok(!JSON.stringify(s.store.view(row.id)).includes(ANTHROPIC.value));
+});

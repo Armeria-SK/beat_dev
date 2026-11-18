@@ -100,6 +100,7 @@ test('構造のある入力: 待っているあいだは鍵の名前の値も出
   const decided = s.store.reject(row.id);
   assert.ok(!JSON.stringify(decided).includes('abcdef123456'));
   assert.equal(decided.masked, 1);
+  assert.equal(decided.oldPreview, undefined, '決めた行には付けない');
 });
 
 test('実行の外で動かせない道具（agent_run・question_add・task_complete・task_checkpoint）は積めない', async t => {
@@ -353,7 +354,7 @@ test('前の版で積んだ待ちの行（state.rest が無い・伏せた形で
   const s = setup(t);
   const command = 'echo token=abc123def456 | iex';
   const oldShown = 'Run a command\necho token=[REDACTED] | iex';
-  const oldState = { title: 'Run a command', parts: { body: 'echo token=[REDACTED] | iex', cwd: null, extra: null }, cwdReal: null };
+  const oldState = { title: 'Run a command', parts: { body: 'echo token=[REDACTED] | iex', cwd: null, extra: null }, cwdReal: null, preview: [{ path: 'run.ps1', text: 'pw=[REDACTED]', truncated: false }] };
   const id = Number(s.db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
     VALUES ('shell_run', ?, ?, 1, ?, 'judge', 'r', '[]', NULL, ?, NULL, 'run-1', 'chat', 'conv-1', NULL, NULL, 0, 'waiting', 1)`).run(JSON.stringify({ command }), oldShown, s.dir, JSON.stringify(oldState)).lastInsertRowid);
   const view = s.store.view(id)!;
@@ -361,6 +362,7 @@ test('前の版で積んだ待ちの行（state.rest が無い・伏せた形で
   assert.ok(view.shown.includes(command), view.shown);
   assert.equal(view.masked, 0);
   assert.deepEqual(view.held, []);
+  assert.equal(view.oldPreview, true, '前の版の下見には印を付ける');
   s.store.reject(id);
   const decided = s.store.view(id)!;
   assert.equal(decided.shown, oldShown);

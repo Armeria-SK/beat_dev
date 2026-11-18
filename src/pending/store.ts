@@ -89,7 +89,7 @@ export interface PendingRow {
 }
 
 export interface PendingView {
-  id: number; tool: string; title: string | null; shown: string; parts: PendingParts; masked: number; held: string[]; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
+  id: number; tool: string; title: string | null; shown: string; parts: PendingParts; masked: number; held: string[]; oldPreview?: true; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
   preview: PreviewFile[]; files: PathFact[]; effect: PendingEffect | null; fetched: boolean; run_kind: string; conversation_id: string; task_id: string | null; task_title: string | null;
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
@@ -254,10 +254,11 @@ function approvalCard(tool: ToolDef, input: unknown, title: string, mark: Mark):
   const cwdKey = keyOf(summary?.cwd);
   const parts: PendingParts = { ...NO_PARTS };
   const lines: string[] = [title];
-  if (summary?.cwd !== undefined) lines.push(pendingText('en', 'cwd_line', { path: mark(summary.cwd) }));
+  const cwd = summary?.cwd === undefined ? null : mark(summary.cwd);
+  if (cwd !== null) lines.push(pendingText('en', 'cwd_line', { path: cwd }));
   if (summary && bodyKey !== undefined && plain(input)) {
     parts.body = mark(summary.body);
-    parts.cwd = summary.cwd === undefined ? null : mark(summary.cwd);
+    parts.cwd = cwd;
     const rest = Object.keys(input).filter(k => k !== bodyKey && k !== cwdKey);
     if (rest.length) parts.extra = mark(JSON.stringify(Object.fromEntries(rest.map(k => [k, input[k]])), null, 2));
   } else {
@@ -355,7 +356,7 @@ export class PendingStore {
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
       ...(files.length ? { sent: boundFacts(files) } : {}),
       ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
-      rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: redactSecrets(toolMask(kept?.text ?? p.text)) })) } : {}) },
+      rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: redactSecrets(toolMask(kept?.text ?? p.text), this.#held(tool).map(h => h.value)) })) } : {}) },
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(
@@ -384,7 +385,7 @@ export class PendingStore {
     const project = row.project_id ? this.#db.prepare('SELECT name FROM projects WHERE id = ?').get(row.project_id) as { name: string } | undefined : undefined;
     return {
       id: row.id, tool: row.tool, title: state.title ?? null, shown: card?.shown ?? row.shown, parts: card?.parts ?? state.parts ?? { ...NO_PARTS }, masked: card?.masked ?? row.masked, held: card?.held ?? state.held ?? [], cwd: row.cwd, kind: row.kind, reason: row.reason, checks: parseJson<string[]>(row.checks, []),
-      preview: state.preview ?? [], files: fileFacts(parseJson<string[]>(row.files, [])),
+      preview: state.preview ?? [], ...(row.status === 'waiting' && !state.rest && state.preview?.length ? { oldPreview: true as const } : {}), files: fileFacts(parseJson<string[]>(row.files, [])),
       effect: row.kind === 'delete' ? effectOf(state.snapshot) : null, fetched: state.fetched === true,
       run_kind: row.run_kind, conversation_id: row.conversation_id,
       task_id: row.task_id, task_title: task?.title ?? null, project_id: row.project_id, project_name: project?.name ?? null, tainted: row.tainted === 1,

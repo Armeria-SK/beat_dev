@@ -56,7 +56,7 @@ export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'jud
 export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
 export interface PendingFact { path: string; exists: boolean; type?: 'file' | 'dir' | 'link' | 'other'; size?: number; mtime?: number; files?: number; newest?: number; more?: boolean }
 export interface PendingAction {
-  id: number; tool: string; title?: string | null; shown: string; parts?: { body: string | null; cwd: string | null; extra: string | null }; masked: number; held?: string[]; kind: PendingKind; reason: string;
+  id: number; tool: string; title?: string | null; shown: string; parts?: { body: string | null; cwd: string | null; extra: string | null }; masked: number; held?: string[]; oldPreview?: true; kind: PendingKind; reason: string;
   cwd: string | null; preview: PendingPreview[]; files: PendingFact[]; effect?: { files: number; bytes: number; more?: true } | null;
   conversation_id: string; task_id: string | null; project_id: string | null;
   task_title: string | null; project_name: string | null; conversation_title?: string | null; project_archived?: boolean;
