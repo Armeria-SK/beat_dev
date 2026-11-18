@@ -80,7 +80,7 @@ test('入力欄の Esc: 返事を作っている最中だけ止める。メニ�
 
 test('Overview の裏の係の 1 行: この 1 時間の実行数と上限、次に起きる時刻（止めている・動いている・係が off のときは時刻を出さない）', () => {
   const worker = (patch: Partial<WorkerStatus> = {}): WorkerStatus => ({
-    enabled: true, autonomy: false, paused: false, quiet: false, running: null, runningAll: [], maxParallel: 1, nextWakeAt: 5000, runsLastHour: 3, maxRunsPerHour: 20, ...patch,
+    enabled: true, paused: false, quiet: false, running: null, runningAll: [], maxParallel: 1, nextWakeAt: 5000, runsLastHour: 3, maxRunsPerHour: 20, ...patch,
   });
   assert.deepEqual(workerLine(worker(), 1000), { runs: 3, max: 20, nextWakeAt: 5000 });
   assert.deepEqual(workerLine(worker(), 9000), { runs: 3, max: 20, nextWakeAt: 9000 }, '過ぎた時刻は今として出す');

@@ -59,8 +59,8 @@ async function taskMakes(s: Awaited<ReturnType<typeof setup>>, parentId: string,
   assert.equal(await s.app.worker.tick(), 'ran');
 }
 
-test('5-1: 承認した beat の提案は、自発行動オフ・静かな時間帯・持ち主が今触っている、のどれでも選ばれて動く', async t => {
-  const s = await setup(t, c => { c.worker.autonomy = false; c.worker.idleMinutes = 5; c.worker.quietStart = '00:00'; c.worker.quietEnd = '23:59'; });
+test('5-1: 承認した beat の提案は、静かな時間帯・持ち主が今触っている、のどちらでも選ばれて動く', async t => {
+  const s = await setup(t, c => { c.worker.quietStart = '00:00'; c.worker.quietEnd = '23:59'; });
   for (const origin of ['self', 'curiosity'] as const) {
     const proposal = s.app.tasks.create({ title: `proposal-${origin}`, origin, propose: true, actor: 'beat' });
     assert.equal(proposal.status, 'inbox');
@@ -296,7 +296,7 @@ test('5-1: 予定の回から切り出した子は、予定のひな形に外を
 });
 
 test('5-1: beat が決めたタスクの中で作った繰り返しは、selfTasksNeedApproval が false でも提案になる', async t => {
-  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = false; c.worker.autonomy = false; });
+  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = false; });
   const parent = s.app.tasks.create({ title: 'beat job', origin: 'self', actor: 'beat' });
   await taskMakes(s, parent.id, { title: 'self repeat', repeat: '0 9 * * *' });
   await taskMakes(s, s.app.tasks.create({ title: 'beat job 2', origin: 'self', actor: 'beat' }).id, { title: 'self once' });

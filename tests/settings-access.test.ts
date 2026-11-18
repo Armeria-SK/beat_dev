@@ -320,14 +320,8 @@ test('広がりの検出（プロバイダの外向き）: 内向きのままの
   assert.deepEqual(accessWidening({ providers: [null, 3] } as unknown as Config, { providers: [null, 3] } as unknown as Config), []);
 });
 
-test('決め: worker.autonomy の false → true（右のパネルの「自発行動」のスイッチ）は、広がりとして数えない。パネルで 1 回押すだけの操作として設計してあり、設定の保存にだけ確認を付けても意味がないため', () => {
-  const off: Config = { worker: { enabled: true, autonomy: false, selfTasksNeedApproval: false } };
-  const on = structuredClone(off);
-  on.worker.autonomy = true;
-  assert.deepEqual(accessWidening(off, on), []);
-  assert.deepEqual(accessWidening(on, off), []);
-  // 一方、自分で作ったタスクの承認を外すのは、人の確認を 1 つ外すので数える
-  const gated: Config = { worker: { autonomy: true, selfTasksNeedApproval: true } };
+test('自分で作ったタスクの承認を外すのは、人の確認を 1 つ外すので数える', () => {
+  const gated: Config = { worker: { selfTasksNeedApproval: true } };
   const ungated = structuredClone(gated);
   ungated.worker.selfTasksNeedApproval = false;
   assert.deepEqual(accessWidening(gated, ungated), [{ kind: 'self-tasks-unapproved' }]);

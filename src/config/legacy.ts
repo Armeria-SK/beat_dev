@@ -14,6 +14,8 @@ export const LEGACY_KEYS: readonly LegacyKey[] = [
   { path: 'worker.remindAfterHours', removedIn: 'beat 5-2b-s' },
   { path: 'models[].maxTools', removedIn: 'beat no-maxtools' },
   { path: 'memory.reviewAfterToolCalls', removedIn: 'beat 10-1' },
+  { path: 'worker.autonomy', removedIn: 'beat 7-4' },
+  { path: 'worker.idleMinutes', removedIn: 'beat 7-4' },
 ];
 
 function isObject(value: unknown): value is Record<string, unknown> {

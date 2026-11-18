@@ -50,7 +50,7 @@ export function defaultConfig(): AppConfig {
     tools: defaultTools(),
     profile: { name: 'beat', shape: 'pebble', color: '#61B8A5', motion: 'auto' },
     ui: { explainLanguage: 'auto' },
-    worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, maxParallel: 1, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, curiosityPerDay: 2 },
+    worker: { enabled: true, maxRunsPerHour: 6, maxParallel: 1, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, curiosityPerDay: 2 },
     memory: { review: true, reviewIdleMinutes: 30 },
     notify: { channels: [], publicBaseUrl: '', limits: { maxChannels: 4, maxSendsPerHour: 30, timeoutMs: 5000, retries: 1, failsBeforeAlert: 3 } },
     mcp: { servers: [], limits: { maxServers: 4, maxToolsPerServer: 32, callTimeoutMs: 60_000, connectTimeoutMs: 15_000, restartsPerHour: 3, resultMaxChars: 15_000 } },

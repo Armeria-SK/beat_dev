@@ -209,7 +209,7 @@ test('ui/Task and ProductHome（DOM）: a thinking run ("scout") is not "another
   const toasts: string[] = [];
   const stop = subscribe(item => { toasts.push(item.title); });
   const worker = (kind: WorkerRun['kind']): WorkerStatus => ({
-    enabled: true, autonomy: false, paused: false, quiet: false, running: null, maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 10,
+    enabled: true, paused: false, quiet: false, running: null, maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 10,
     runningAll: [{ kind, taskId: 'other', runId: `r-${kind}`, title: 'other' }],
   });
   const ready = task('t1', 'ready', { origin: 'user' });

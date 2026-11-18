@@ -115,6 +115,18 @@ function gate(): { script: Script; started: Promise<void> } {
   return { script, started };
 }
 
+test('7-4: scout keeps running with old worker.autonomy / idleMinutes keys in the config, the owner active a moment ago and a beat-decided self task waiting (none of them is a scout switch)', async t => {
+  const s = await setup(t, { edit: c => { Object.assign(c.worker, { autonomy: false, idleMinutes: 1440 }); } });
+  assert.equal('autonomy' in s.app.config().worker, false);
+  const mine = s.app.tasks.create({ title: 'tidy the notes', origin: 'self', actor: 'beat' });
+  s.app.engine.lastUserActivity = s.clock.now;
+  s.adapter().scripts.push(...loop());
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.scoutRows()[0]?.status, 'done');
+  assert.equal(s.proposals().length, 1);
+  assert.equal(s.app.tasks.get(mine.id)!.status, 'ready', 'the self task was not picked');
+});
+
 const names = (req: ModelRequest | undefined) => (req?.tools ?? []).map(tool => tool.name).sort();
 
 test('scout loop: a scout run sends a scout, records the ledger and puts a proposal on the Kanban, and the run row stays hidden', async t => {
@@ -352,7 +364,7 @@ test('scout: a running scout run stops when background work is turned Off, pause
     const row = s.scoutRows()[0]!;
     assert.equal(row.status, 'cancelled', change);
     assert.match(row.result_summary ?? '', /stopped/u);
-    assert.equal(s.app.tasks.pickNext({ allowSelf: true }), undefined);
+    assert.equal(s.app.tasks.pickNext(), undefined);
   }
 });
 
@@ -506,9 +518,9 @@ test('scout: rows left open by a restart are closed, never put back as ready, an
   s.app.tasks.claim(running.id, 60_000, 'c-scout');
   const ready = s.app.tasks.create({ title: 'Scout: shop', origin: 'self', projectId: s.projectId, scoutRun: true, actor: 'worker' });
   s.app.db.prepare("UPDATE tasks SET origin = 'user' WHERE id = ?").run(ready.id);
-  assert.equal(s.app.tasks.pickNext({ allowSelf: true }), undefined);
+  assert.equal(s.app.tasks.pickNext(), undefined);
   const plain = s.app.tasks.create({ title: 'plain', origin: 'user', actor: 'user' });
-  assert.equal(s.app.tasks.pickNext({ allowSelf: true })?.id, plain.id);
+  assert.equal(s.app.tasks.pickNext()?.id, plain.id);
   s.app.worker.start();
   s.app.worker.stop();
   assert.equal(s.app.tasks.get(running.id)!.status, 'cancelled');

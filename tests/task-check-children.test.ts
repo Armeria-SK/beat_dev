@@ -195,7 +195,7 @@ test('5-3a: 子が 2 つ。親は子が終わるまで区切って選ばれず�
 
   const order: string[] = [];
   for (let i = 0; i < 2; i += 1) {
-    const next = s.app.tasks.pickNext({ allowSelf: false });
+    const next = s.app.tasks.pickNext();
     assert.ok(next);
     assert.notEqual(next.id, parent.id);
     order.push(next.id);
@@ -204,11 +204,11 @@ test('5-3a: 子が 2 つ。親は子が終わるまで区切って選ばれず�
     assert.equal(s.app.tasks.get(next.id)!.status, 'done');
   }
   assert.equal(s.runs(root), 0);
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, parent.id);
+  assert.equal(s.app.tasks.pickNext()?.id, parent.id);
   s.app.tasks.reopen(order[0]!, 'beat', 'approved Pending item failed');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, order[0]);
+  assert.equal(s.app.tasks.pickNext()?.id, order[0]);
   s.app.tasks.finish(order[0]!, 'done', 'again', 'beat');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, parent.id);
+  assert.equal(s.app.tasks.pickNext()?.id, parent.id);
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'all done', notify: false }));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.tasks.get(parent.id)!.status, 'done');
@@ -227,12 +227,12 @@ test('5-3a: 子が failed / cancelled でも親は選ばれる。repeat と inbo
   child('repeat', { cron: '0 9 * * *' });
   child('proposal', { propose: true });
   assert.equal(s.app.tasks.openChildren(parent.id), 2);
-  assert.notEqual(s.app.tasks.pickNext({ allowSelf: false })?.id, parent.id);
+  assert.notEqual(s.app.tasks.pickNext()?.id, parent.id);
   s.app.tasks.finish(a.id, 'failed', 'x', 'worker');
   assert.equal(s.app.tasks.openChildren(parent.id), 1);
   s.app.tasks.finish(b.id, 'cancelled', 'x', 'user');
   assert.equal(s.app.tasks.openChildren(parent.id), 0);
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, parent.id);
+  assert.equal(s.app.tasks.pickNext()?.id, parent.id);
 });
 
 test('5-3a: 子が Pending の承認待ち・返事待ちでも親は選ばれない。子が待ちの時間にいるあいだ、ワーカーは busy にならない', async t => {
@@ -240,14 +240,14 @@ test('5-3a: 子が Pending の承認待ち・返事待ちでも親は選ばれ�
   const parent = s.app.tasks.create({ title: 'parent', origin: 'user', actor: 'user' });
   const kid = s.app.tasks.create({ title: 'kid', origin: 'user', actor: 'beat', spawnedBy: parent.id });
   s.app.tasks.setWaiting(kid.id, 'approval', '#12');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false }), undefined);
+  assert.equal(s.app.tasks.pickNext(), undefined);
   s.app.tasks.setWaiting(kid.id, 'question', 'which?');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false }), undefined);
+  assert.equal(s.app.tasks.pickNext(), undefined);
   assert.equal(await s.app.worker.tick(), 'idle');
   s.app.tasks.setReady(kid.id, { runAt: s.clock.now + 60 * 60_000 });
   s.app.tasks.update(parent.id, { runAt: s.clock.now + 5 * 60_000 }, 'user');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false }), undefined);
-  assert.equal(s.app.tasks.nextWakeAt({ allowSelf: false }), s.clock.now + 60 * 60_000);
+  assert.equal(s.app.tasks.pickNext(), undefined);
+  assert.equal(s.app.tasks.nextWakeAt(), s.clock.now + 60 * 60_000);
   assert.equal(await s.app.worker.tick(), 'idle');
 });
 
@@ -273,14 +273,14 @@ test('5-3a: 1 つの製品で同時に動くタスクは 1 つ（ほかの製品
   const a = s.app.tasks.create({ title: 'a', origin: 'user', projectId: shop.id, actor: 'user' });
   const b = s.app.tasks.create({ title: 'b', origin: 'user', projectId: shop.id, actor: 'user' });
   assert.ok(s.app.tasks.claim(a.id, 60_000, 'conv-a'));
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false }), undefined);
+  assert.equal(s.app.tasks.pickNext(), undefined);
   assert.equal(s.app.tasks.productBusy(s.app.tasks.get(b.id)!), true);
   const c = s.app.tasks.create({ title: 'c', origin: 'user', projectId: blog.id, actor: 'user' });
   const d = s.app.tasks.create({ title: 'd', origin: 'user', actor: 'user' });
-  assert.deepEqual([c.id, d.id].includes(s.app.tasks.pickNext({ allowSelf: false })!.id), true);
+  assert.deepEqual([c.id, d.id].includes(s.app.tasks.pickNext()!.id), true);
   s.app.tasks.update(b.id, { runAt: s.clock.now + 60_000 }, 'user');
   s.app.tasks.update(c.id, { runAt: s.clock.now + 120_000 }, 'user');
-  assert.equal(s.app.tasks.nextWakeAt({ allowSelf: false }), s.clock.now + 120_000);
+  assert.equal(s.app.tasks.nextWakeAt(), s.clock.now + 120_000);
   s.app.tasks.update(b.id, { runAt: null }, 'user');
   s.app.tasks.finish(c.id, 'cancelled', null, 'user');
   s.app.tasks.finish(d.id, 'cancelled', null, 'user');

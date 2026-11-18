@@ -7,8 +7,6 @@ import { foldersFromConfig, wideningChanges, type Widening } from '../skills-met
 // 設定の保存で、beat が触れられる範囲・動かせるもの・外から届く範囲が広がる変更を、そのまま並べるための部分。
 // フォルダ（触れないパスを外す・フォルダを足す・読み書きにする）は、スキル・ツールの画面と同じ `wideningChanges` をそのまま使う。
 // 狭くなる変更や、広がりに関わらない変更は含めない。
-// worker.autonomy の false → true（右のパネルの「自発行動」のスイッチ）は、わざと含めない。パネルで 1 回押すだけで切り替えられる操作として設計してあり、
-// 設定の保存だけに確認を付けても意味がない（費用に関わるが、触れる範囲は広がらない）。この決めは tests/settings-access.test.ts が固定している。
 
 export type HookStage = 'preToolUse' | 'postToolUse';
 export interface HookSummary { matcher: string; command: string[] }

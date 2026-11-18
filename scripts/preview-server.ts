@@ -266,7 +266,6 @@ async function start(): Promise<void> {
   config.routing = { chat: ['preview-a', 'preview-b'], background: ['preview-a'], retriesPerModel: 0 };
   config.tools.roots = [{ path: WORK, mode: 'write' }];
   config.tools.deny = [...config.tools.deny, join(APP_ROOT, 'data'), join(APP_ROOT, '.env')];
-  config.worker.autonomy = false;
   config.tools.agent = { ...config.tools.agent, enabled: true };
   writeFileSync(paths.config, JSON.stringify(config, null, 2));
 

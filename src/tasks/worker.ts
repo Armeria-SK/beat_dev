@@ -44,6 +44,7 @@ const STAGNATION_LIMIT = 3;
 const SPLIT_LIMIT = 3;
 export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
+const SKILL_REVIEW_IDLE_MS = 5 * 60_000;
 
 export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'budget' | 'no_model' | 'folder_missing';
 
@@ -316,7 +317,7 @@ export class Worker {
       if (reason) waiting[task.id] = reason;
     }
     return {
-      enabled: c.worker.enabled, autonomy: c.worker.autonomy, paused: this.paused, quiet: this.quiet(),
+      enabled: c.worker.enabled, paused: this.paused, quiet: this.quiet(),
       running: [...this.#running.values()][0] ?? null, runningAll: [...this.#running.values()], maxParallel: c.worker.maxParallel, nextWakeAt: this.#nextWakeAt ?? null,
       runsLastHour: this.runsLastHour(), maxRunsPerHour: c.worker.maxRunsPerHour, waiting,
     };
@@ -346,8 +347,7 @@ export class Worker {
       };
       const own = c.worker.enabled;
       const eligible = (t: Task): boolean => own || this.#ownerWork(t);
-      const pick = (selfOk: boolean, accept: (t: Task) => boolean): Task | undefined =>
-        tasks.pickNext({ allowSelf: true, accept: t => eligible(t) && (selfOk || (t.origin !== 'self' && t.origin !== 'curiosity') || this.#ownerWork(t)) && accept(t) });
+      const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
 
@@ -378,9 +378,8 @@ export class Worker {
       const freeAt = this.#budgetFreeAt(c, now);
       let freeAtWake = Infinity;
       if (!task && freeAt !== undefined) {
-        const idleSelf = own && c.worker.autonomy && !this.quiet() && now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
         // 「今すぐ実行」で提供元の空きを待っているタスクは、上限より先に動くもの（空き待ちであって上限待ちではない）なので、上限の知らせの数に入れない
-        if (pick(idleSelf, t => !this.#forced.has(t.id))) {
+        if (pick(t => !this.#forced.has(t.id))) {
           this.#d.notifications.notify({
             kind: 'info', title: taskText(languageOf(c), 'notify.budget.title'),
             body: taskText(languageOf(c), 'notify.budget.body', { max: c.worker.maxRunsPerHour }),
@@ -399,12 +398,11 @@ export class Worker {
         return 'budget';
       }
 
-      const idleEnough = now - this.#d.engine.lastUserActivity >= c.worker.idleMinutes * 60_000;
-      const allowSelf = own && c.worker.autonomy && !this.quiet() && idleEnough;
-      task ??= pick(allowSelf, roomFor);
+      const idleEnough = now - this.#d.engine.lastUserActivity >= SKILL_REVIEW_IDLE_MS;
+      task ??= pick(roomFor);
       // 実行待ちはあるが、先に使う提供元が満杯で選べない: 何も始めず（振り返りにも回さず）、終わった実行の onRunEnd を待つ
       // （poke が来ない道〔止まっている・自動の予定が無い〕に備えて、保険の予定は 1 分後に置く。終わった実行の poke はそれより早い）
-      if (!task && (this.#forced.size > 0 || pick(allowSelf, () => true))) { reschedule(now + 60_000); return 'busy'; }
+      if (!task && (this.#forced.size > 0 || pick(() => true))) { reschedule(now + 60_000); return 'busy'; }
       // 実行するタスクが無ければ、振り返りを見る
       const holdPiled = this.runsLastHour() >= Math.ceil(c.worker.maxRunsPerHour / 2);
       const reviewing = own && c.memory.review;
@@ -424,7 +422,7 @@ export class Worker {
           reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
           return outcome;
         }
-        reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
+        reschedule(Math.min(tasks.nextWakeAt() ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
         return reviewWait !== undefined ? 'no_model' : held ? 'budget' : 'idle';
       }
       const outcome = await this.#run(task, release);
@@ -578,7 +576,7 @@ export class Worker {
     if (!project || project.archived_at !== null) return 'stop.archived';
     if (project.scout_mode !== 'research') return 'stop.mode';
     const freeAt = this.#budgetFreeAt(c, this.#now());
-    if (this.#d.tasks.pickNext({ allowSelf: true, accept: t => this.#ownerWork(t) && (freeAt === undefined || this.#forced.has(t.id)) })) return 'stop.owner';
+    if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && (freeAt === undefined || this.#forced.has(t.id)) })) return 'stop.owner';
     return undefined;
   }
 
@@ -587,7 +585,7 @@ export class Worker {
     if (c.models.length) this.#d.tasks.spawnDueSchedules();
     this.#guardScout(c);
     if (this.#stopped || this.#d.autoSchedule === false || !this.#scoutRunning()) return;
-    const at = Math.min(this.#d.tasks.nextWakeAt({ allowSelf: true }) ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);
+    const at = Math.min(this.#d.tasks.nextWakeAt() ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);
     this.#schedule(Math.max(1000, at - now));
   }
 

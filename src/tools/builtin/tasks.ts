@@ -88,7 +88,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
       const language = languageOf(ctx.config);
       store(ctx).event(task.id, 'context', 'beat', toolText(language, 'task.context', { cid: ctx.conversationId }), ctx.runId);
       const note = task.status === 'inbox' ? toolText(language, 'task.note_proposal')
-        : self && !ctx.config.worker.autonomy ? toolText(language, 'task.note_autonomy_off') : '';
+        : self ? toolText(language, 'task.note_self_waits') : '';
       return { content: toolText(language, 'task.created', { line: line(task, ctx.config.timezone, language), note }) };
     } catch (error) { return fail(error, ctx); }
   },

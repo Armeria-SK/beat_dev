@@ -27,11 +27,10 @@ const propose = (s: Awaited<ReturnType<typeof setup>>, over: Partial<Proposal> =
   title: 'Resume interrupted uploads', body: 'Resume from the last byte the server has.', origin: 'self', propose: true, projectId: s.projectId, proposal: { ...PROPOSAL, ...over }, actor: 'beat',
 });
 
-test('proposal rows: origin self + proposed_by NULL + proposal; approve makes it the owner\'s (origin user) so pickNext takes it with autonomy off; unapprove puts it back in inbox as self and keeps the proposal', async t => {
+test('proposal rows: origin self + proposed_by NULL + proposal; approve makes it the owner\'s (origin user) so pickNext takes it; unapprove puts it back in inbox as self and keeps the proposal', async t => {
   const s = await setup(t);
   const made = propose(s);
   assert.deepEqual({ status: made.status, origin: made.origin, proposed_by: made.proposed_by }, { status: 'inbox', origin: 'self', proposed_by: null });
-  assert.equal(s.app.config().worker.autonomy, false, 'precondition: Work on its own is off');
 
   const listed = await s.json(`/api/tasks?project=${s.projectId}`, 'GET');
   assert.equal(listed.status, 200);
@@ -42,13 +41,13 @@ test('proposal rows: origin self + proposed_by NULL + proposal; approve makes it
   assert.equal(approved.status, 200, JSON.stringify(approved.body));
   assert.deepEqual({ status: approved.body.task.status, origin: approved.body.task.origin, proposed_by: approved.body.task.proposed_by }, { status: 'ready', origin: 'user', proposed_by: 'self' });
   assert.deepEqual(approved.body.task.proposal, PROPOSAL, 'the proposal stays after approval');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, made.id, 'the worker picks the approved proposal without autonomy');
+  assert.equal(s.app.tasks.pickNext()?.id, made.id, 'the worker picks the approved proposal');
 
   const undone = await s.json(`/api/tasks/${made.id}/unapprove`, 'POST', {});
   assert.equal(undone.status, 200, JSON.stringify(undone.body));
   assert.deepEqual({ status: undone.body.task.status, origin: undone.body.task.origin, proposed_by: undone.body.task.proposed_by }, { status: 'inbox', origin: 'self', proposed_by: null });
   assert.deepEqual(undone.body.task.proposal, PROPOSAL, 'the proposal stays after unapproval');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false }), undefined, 'back in inbox: nothing to pick');
+  assert.equal(s.app.tasks.pickNext(), undefined, 'back in inbox: nothing to pick');
 
   assert.throws(() => s.app.db.prepare("UPDATE tasks SET origin = 'scout' WHERE id = ?").run(made.id), /CHECK/u, 'the origin CHECK is intact');
 });

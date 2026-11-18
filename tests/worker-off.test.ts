@@ -55,8 +55,6 @@ async function setup(t: { after: (fn: () => void) => void }, edit?: (c: AppConfi
   config.memory.review = true;
   config.memory.reviewIdleMinutes = 1440;
   config.worker.enabled = false;
-  config.worker.autonomy = true;
-  config.worker.idleMinutes = 0;
   edit?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
   const clock = { now: Date.parse('2026-11-15T03:00:00Z') };
@@ -125,15 +123,16 @@ test('worker Off: the owner pressing Run now on a task beat started runs it', as
   assert.equal(s.app.tasks.get(self.id)!.status, 'done');
 });
 
-test('worker On: beat\'s own task and reviews run as before', async t => {
+test('worker On: reviews run as before; beat\'s own task no longer runs on its own (7-4)', async t => {
   const s = await setup(t, c => { c.worker.enabled = true; });
   const job = s.app.reviews.enqueue('manual', 'manual:2')!;
   const self = s.app.tasks.create({ title: 'tidy the notes', origin: 'self', actor: 'worker' });
   s.adapter().scripts.push(complete);
-  assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.tasks.get(self.id)!.status, 'done');
   await s.app.worker.tick();
   assert.equal(s.app.reviews.get(job.id)!.status, 'done');
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(s.app.tasks.get(self.id)!.status, 'ready');
+  assert.equal(s.adapter().calls.length, 0);
 });
 
 test('worker Off: the worker wakes at once for a task the owner adds, not on the next poll', async t => {
@@ -291,8 +290,8 @@ test('worker Off: a pressed task that is cancelled and then restored still runs'
   assert.equal(s.app.tasks.get(self.id)!.status, 'done');
 });
 
-test('worker On: a task beat started that the owner pressed keeps going even with autonomy off (the press is the owner asking)', async t => {
-  const s = await setup(t, c => { c.worker.enabled = true; c.worker.autonomy = false; });
+test('worker On: a task beat started that the owner pressed keeps going (the press is the owner asking)', async t => {
+  const s = await setup(t, c => { c.worker.enabled = true; });
   const self = s.app.tasks.create({ title: 'tidy the notes', origin: 'self', actor: 'worker' });
   s.app.worker.requestRun(self.id);
   s.adapter().scripts.push(checkpoint);
@@ -305,5 +304,5 @@ test('worker On: a task beat started that the owner pressed keeps going even wit
   s.adapter().scripts.push(complete, complete);
   await s.app.worker.tick();
   await s.app.worker.tick();
-  assert.equal(s.app.tasks.get(other.id)!.status, 'ready', 'an unpressed one still waits for autonomy');
+  assert.equal(s.app.tasks.get(other.id)!.status, 'ready', 'an unpressed one never runs on its own (7-4)');
 });
