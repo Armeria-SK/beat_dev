@@ -269,6 +269,8 @@ test('review: with no usable background model a waiting review waits a minute an
   assert.equal(s.skillJobs()[0]?.status, 'pending', 'the review still waits for a model');
   assert.equal(reviewConversations(), 0, 'no empty review conversation per try');
   assert.ok(wake !== null && wake - s.clock.now >= 60_000, `next try in ${wake === null ? 'none' : wake - s.clock.now} ms`);
+  const alerts = s.app.db.prepare("SELECT kind FROM notifications WHERE dedup_key = 'no-model-for-review'").all() as Array<{ kind: string }>;
+  assert.deepEqual(alerts.map(a => a.kind), ['health_alert'], 'the review path was reached and told the owner once');
 });
 
 test('S-1b: without bot memory no memory review is queued (idle, long chat, task end, Review now), and a left-over one is closed without the model', async t => {

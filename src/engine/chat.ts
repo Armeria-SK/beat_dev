@@ -585,14 +585,14 @@ export class ChatEngine {
 
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
 
-  // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
-  // 数えるのは、動いている裏の実行の「最初に使う提供元」（道具を動かしている最中で limiter の枠を返しているものも含む）。使えるモデルが無いときは true（始めて、いつもの失敗の道に任せる）
   // 裏の振り分けに使えるモデルが無いときの理由の文（runReview が断るのと同じ文）。使えるなら undefined
   backgroundBlocked(): string | undefined {
     const chain = this.#chain('background');
     return chain.usable.length ? undefined : this.#noUsableModel(chain.problems).errorMessage;
   }
 
+  // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
+  // 数えるのは、動いている裏の実行の「最初に使う提供元」（道具を動かしている最中で limiter の枠を返しているものも含む）。使えるモデルが無いときは true（始めて、いつもの失敗の道に任せる）
   backgroundHasRoom(): boolean {
     const first = this.#chain('background').usable[0];
     if (!first) return true;

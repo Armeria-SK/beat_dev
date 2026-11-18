@@ -417,6 +417,19 @@ test('scout: a review held back by the piled-review rule does not keep the scout
   assert.equal(s.count('memory_jobs', "status = 'pending'"), 1, 'the held review still waits');
 });
 
+test('scout: a review waiting for a background model does not keep the scout from running on its own model (7-9 review)', async t => {
+  const s = await setup(t, { review: true, botMemory: true, scout: ['c'], down: ['near'] });
+  const talk = s.app.conversations.create({ kind: 'chat', title: 'earlier chat' });
+  s.app.conversations.append(talk.id, { role: 'user', content: 'Remember that I like short replies.' });
+  s.app.conversations.append(talk.id, { role: 'assistant', content: 'Noted.' });
+  assert.ok(s.app.reviews.enqueue('manual', 'manual:waiting', { conversationId: talk.id }), 'a review waits');
+  s.adapter('far').scripts.push(reply('nothing'));
+  assert.equal(await s.app.worker.tick(), 'ran', 'the scout runs on the cloud model');
+  assert.equal(s.scoutRows().length, 1);
+  assert.equal(s.count('memory_jobs', "status = 'pending'"), 1, 'the review still waits for a background model');
+  assert.equal(s.count('notifications', "dedup_key = 'no-model-for-review'"), 1, 'the review path was reached and told the owner once');
+});
+
 test('scout: owner task routes answer 409 for a scout run row (no way into #forced)', async t => {
   const s = await setup(t);
   const held = gate();

@@ -411,10 +411,11 @@ export class Worker {
       const kinds: ReviewKind[] = skillOn && idleEnough ? ['memory', 'skill'] : ['memory'];
       const job = !task && reviewing ? this.#d.reviews?.next({ skipPiled: holdPiled, kinds }) : undefined;
       const held = !task && !job && holdPiled && reviewing && this.#d.reviews?.next({ kinds }) !== undefined;
+      let reviewWait: number | undefined;
       if (job) {
         const outcome = await this.#review(job, release);
-        reschedule(outcome === 'busy' || outcome === 'no_model' ? now + 60_000 : now);
-        return outcome;
+        if (outcome !== 'no_model') { reschedule(outcome === 'busy' ? now + 60_000 : now); return outcome; }
+        reviewWait = now + 60_000;
       }
       if (!task) {
         const scout = (own || this.#scoutAsked.size > 0) && this.#forced.size === 0 ? await this.#scoutPlan(c, now, own) : {};
@@ -423,8 +424,8 @@ export class Worker {
           reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
           return outcome;
         }
-        reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity));
-        return held ? 'budget' : 'idle';
+        reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
+        return reviewWait !== undefined ? 'no_model' : held ? 'budget' : 'idle';
       }
       const outcome = await this.#run(task, release);
       reschedule(now);
