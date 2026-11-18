@@ -37,6 +37,7 @@ import { registerTaskRoutes } from './routes-tasks.ts';
 import { registerPendingRoutes } from './routes-pending.ts';
 import { registerQuestionRoutes } from './routes-questions.ts';
 import { registerGrowthRoutes } from './routes-growth.ts';
+import { registerMemoryRoutes } from './routes-memory.ts';
 import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
@@ -436,6 +437,7 @@ export function createWebServer(app: App): WebServer {
 
   // ── 製品・フォルダの一覧 ──
   registerProjectRoutes(router, app);
+  registerMemoryRoutes(router, app);
   // ── タスク・ワーカー・通知・プロフィール ──
   registerTaskRoutes(router, app);
   registerPendingRoutes(router, app);

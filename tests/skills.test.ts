@@ -39,11 +39,11 @@ test('findDraft: 同じ名前の下書きが複数あれば、承認待ちの中
   assert.equal(findDraft(list, 'nothing'), undefined);
 });
 
-test('道具の一覧: サーバーの一覧（GET /api/tools。記憶の道具は出ない）のすべてに、画面の絵と説明（en の辞書）がある。画面にあって組み込みに無い道具も無い', async t => {
+test('道具の一覧: サーバーの一覧（GET /api/tools。製品の記憶の書く道具 3 つは出て、DB の memory_search は出ない）のすべてに、画面の絵と説明（en の辞書）がある。画面にあって組み込みに無い道具も無い', async t => {
   const s = await startScreenServer(t);
   const { tools } = (await (await s.api('/api/tools')).json()) as { tools: Array<{ name: string; effect: keyof typeof EFFECT_LABEL }> };
   const server = builtinTools();
-  const listed = server.filter(def => !def.name.startsWith('memory_') && def.allowedIn.length > 0);
+  const listed = server.filter(def => def.name !== 'memory_search' && def.allowedIn.length > 0);
   assert.equal(tools.length, listed.length);
   assert.deepEqual(tools.map(tool => tool.name).sort(), listed.map(def => def.name).sort());
   assert.deepEqual(Object.keys(TOOL_LOOKS).sort(), server.map(def => def.name).sort(), '絵と説明の辞書は、サーバーの道具と同じ名前');
