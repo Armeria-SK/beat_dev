@@ -10,6 +10,7 @@ import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { PreCheck, RunKind, ToolDef } from '../tools/types.ts';
 import { identityOf } from '../projects/created.ts';
+import { pushRule, storedCandidate, type RuleCandidate } from '../tools/approval-rules.ts';
 import { boundFacts, destinationFacts, fileFacts, pushFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
 export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
@@ -43,6 +44,7 @@ export interface ParkInput {
   projectId?: string | null | undefined;
   tainted?: boolean | undefined;
   outbound?: ParkedOutbound | undefined;
+  rule?: RuleCandidate | undefined;
 }
 
 export interface ParkedOutbound { kind: string; reason?: string; targets: string[] }
@@ -67,6 +69,7 @@ export interface PendingState {
   pushes?: Array<{ dir: string | null; parsed?: boolean }>;
   pushed?: string;
   tips?: string[];
+  rule?: RuleCandidate;
 }
 
 export interface CreatedMark { path: string; id: string; inside?: string; more?: true }
@@ -89,6 +92,7 @@ export interface PendingView {
   preview: PreviewFile[]; files: PathFact[]; effect: PendingEffect | null; fetched: boolean; run_kind: string; conversation_id: string; task_id: string | null; task_title: string | null;
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
+  rule: { shown: string; push?: true } | null;
 }
 
 export interface PendingChange { id: number; status: PendingStatus; projectId: string | null; conversationId: string; taskId: string | null }
@@ -111,7 +115,7 @@ export interface PendingCounts {
   judgedToday: { allowed: number; parked: number };
 }
 
-export interface JudgedCounts { allowed: number; parked: Record<string, number>; notParked: number }
+export interface JudgedCounts { allowed: number; parked: Record<string, number>; notParked: number; ruled: Record<string, number> }
 
 export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined }
 
@@ -140,6 +144,19 @@ export function cleanReason(text: string | undefined): string | null {
 }
 
 const unique = (items: readonly string[]): string[] => [...new Set(items)].sort();
+
+// J-5: the row offers "don't ask again in this product" only when a code-built shape was stored at park time, the run had a product and had not read outside text, and it is still waiting
+export function rememberable(row: Pick<PendingRow, 'project_id' | 'tainted' | 'status' | 'tool' | 'run_kind'>, state: Pick<PendingState, 'rule'>): boolean {
+  const rule = storedCandidate(state.rule);
+  return rule !== undefined && rule.tool === row.tool && row.project_id !== null && row.tainted === 0 && row.status === 'waiting'
+    && !((row.tool === 'task_create' || row.tool === 'task_update') && row.run_kind !== 'chat');
+}
+
+const ruleView = (rule: RuleCandidate): { shown: string; push?: true } => ({ shown: rule.shown, ...(pushRule(rule) ? { push: true as const } : {}) });
+
+export function storedRule(row: Pick<PendingRow, 'state'>): RuleCandidate | undefined {
+  return storedCandidate(parseJson<PendingState>(row.state, {}).rule);
+}
 
 const realOf = (path: string): string => { try { return realish(path); } catch { return path; } };
 
@@ -284,6 +301,7 @@ export class PendingStore {
       ...(preview?.length ? { preview: preview.map(p => ({ ...p, text: redactSecrets(toolMask(p.text)) })) } : {}),
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
       ...(files.length ? { sent: boundFacts(files) } : {}),
+      ...(input.rule && input.projectId && !input.tainted ? { rule: input.rule } : {}),
       ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
@@ -318,6 +336,7 @@ export class PendingStore {
       task_id: row.task_id, task_title: task?.title ?? null, project_id: row.project_id, project_name: project?.name ?? null, tainted: row.tainted === 1,
       status: row.status, reject_reason: row.reject_reason, exit_code: row.exit_code, output_preview: row.output_preview,
       created_at: row.created_at, decided_at: row.decided_at, ran_at: row.ran_at,
+      rule: rememberable(row, state) ? ruleView(storedCandidate(state.rule)!) : null,
     };
   }
 
@@ -370,7 +389,9 @@ export class PendingStore {
     const notParked = Number((this.#db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'not-parked' AND created_at >= ?${callWhere}`).get(...args) as { n: number }).n);
     const parked: Record<string, number> = {};
     for (const r of this.#db.prepare(`SELECT kind, COUNT(*) AS n FROM pending_actions WHERE created_at >= ?${parkWhere} GROUP BY kind`).all(...args) as Array<{ kind: string; n: number }>) parked[r.kind] = Number(r.n);
-    return { allowed, parked, notParked };
+    const ruled: Record<string, number> = {};
+    for (const r of this.#db.prepare(`SELECT COALESCE((SELECT ar.kind FROM approval_rules ar WHERE 'rule:' || ar.id = tool_calls.approval_id), 'removed') AS kind, COUNT(*) AS n FROM tool_calls WHERE decided_by = 'owner-rule' AND decision = 'allow' AND created_at >= ?${callWhere} GROUP BY 1`).all(...args) as Array<{ kind: string; n: number }>) ruled[r.kind] = Number(r.n);
+    return { allowed, parked, notParked, ruled };
   }
 
   #require(id: number): PendingRow {

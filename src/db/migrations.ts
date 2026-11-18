@@ -592,4 +592,19 @@ export const MIGRATIONS: readonly Migration[] = [
   WHERE origin = 'self' AND status IN ('ready', 'running') AND proposed_by IS NOT 'scout-run'
     AND NOT EXISTS (SELECT 1 FROM kv WHERE kv.key = 'task-owner-run:' || tasks.id);
   `,
+  `
+  CREATE TABLE approval_rules (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('judge', 'send', 'delete', 'policy')),
+    tool TEXT NOT NULL,
+    base TEXT NOT NULL,
+    base_key TEXT NOT NULL,
+    keys TEXT NOT NULL,
+    shown TEXT NOT NULL,
+    from_pending INTEGER,
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX ix_approval_rules_lookup ON approval_rules (project_id, kind, base_key);
+  `,
 ];

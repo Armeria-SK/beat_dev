@@ -140,9 +140,10 @@ export function callResult(call: Pick<ToolCallRow, 'ok' | 'decided_by' | 'decisi
   return call.ok === null ? 'running' : call.ok === 1 ? 'ok' : 'failed';
 }
 
-export function judgedLine(judged: JudgedCounts): { allowed: number; parked: number; notRun: number } | null {
+export function judgedLine(judged: JudgedCounts): { allowed: number; parked: number; notRun: number; ruled?: number } | null {
   const parked = (judged.parked.judge ?? 0) + (judged.parked.judge_failed ?? 0);
-  return judged.allowed + parked + judged.notParked > 0 ? { allowed: judged.allowed, parked, notRun: judged.notParked } : null;
+  const ruled = Object.values(judged.ruled ?? {}).reduce((sum, n) => sum + n, 0);
+  return judged.allowed + parked + judged.notParked + ruled > 0 ? { allowed: judged.allowed, parked, notRun: judged.notParked, ...(ruled > 0 ? { ruled } : {}) } : null;
 }
 
 export function jobResult(status: ReviewJob['status']): LogResult {

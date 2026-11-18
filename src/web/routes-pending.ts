@@ -1,5 +1,7 @@
 import type { App } from '../app.ts';
-import { PendingError } from '../pending/store.ts';
+import { transaction } from '../db/database.ts';
+import { PendingError, rememberable, storedRule, type PendingRow } from '../pending/store.ts';
+import { addRule } from '../tools/approval-rules.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
 import { domainProblem, readJson, requireObject, type Router, sendJson } from './http.ts';
 
@@ -35,10 +37,22 @@ export function registerPendingRoutes(router: Router, app: App): void {
     });
   });
   router.add('GET', '/api/pending/counts', ({ res }) => sendJson(res, 200, app.pending.counts(today())));
-  router.add('POST', '/api/pending/:id/approve', ({ res, params }) => {
+  router.add('POST', '/api/pending/:id/approve', async ({ req, res, params }) => {
     const id = idOf(params[0]);
-    let row;
-    try { row = app.pending.claim(id); } catch (error) { pendingProblem(error); }
+    const body = req.headers['content-type'] === undefined ? {} : requireObject(await readJson(req));
+    if (body.remember !== undefined && typeof body.remember !== 'boolean') throw domainProblem(400, 'invalid_field', new PendingError('invalid_remember'));
+    let row: PendingRow;
+    try {
+      row = body.remember === true ? transaction(app.db, () => {
+        const before = app.pending.row(id);
+        if (!before) throw new PendingError('not_found', { id });
+        if (before.status !== 'waiting') throw new PendingError('not_waiting', { id, status: before.status });
+        const rule = storedRule(before);
+        if (!rule || !before.project_id || !rememberable(before, { rule })) throw new PendingError('not_rememberable', { id });
+        addRule(app.db, { projectId: before.project_id, candidate: rule, fromPending: id, now: app.now() });
+        return app.pending.claim(id);
+      }) : app.pending.claim(id);
+    } catch (error) { pendingProblem(error); }
     app.replayPending(row);
     sendJson(res, 202, { item: app.pending.view(id) });
   });

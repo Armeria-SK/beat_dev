@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, ApiError, type ProviderKeyState } from '../../api.ts';
+import { api, ApiError, type ApprovalRule, type ProviderKeyState } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatNumber, formatRelative, getExplainLanguage, useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
@@ -411,6 +411,43 @@ export function ModelsPanel() {
   );
 }
 
+const RULE_KIND = { judge: 'ui.set.rules.kind.judge', policy: 'ui.set.rules.kind.policy', send: 'ui.set.rules.kind.send', delete: 'ui.set.rules.kind.delete' } as const satisfies Record<ApprovalRule['kind'], string>;
+
+export function RulesGroup() {
+  const t = useT();
+  const [rules, setRules] = useState<ApprovalRule[] | null | 'failed'>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+  const load = () => { api.approvalRules().then(r => setRules(r.items)).catch(() => setRules('failed')); };
+  useEffect(load, []);
+  const remove = async (id: number) => {
+    setBusy(id);
+    try { await api.removeApprovalRule(id); } catch (error) { toast({ icon: 'alert', title: errorText(error, t('ui.set.rules.removeFailed')) }); }
+    setBusy(null);
+    load();
+  };
+  return (
+    <Group title={t('ui.set.rules.title')}>
+      <p className="bt-meta" data-rules-desc>{t('ui.set.rules.desc')}</p>
+      {rules === 'failed' && <p className="bt-meta">{t('ui.set.rules.loadFailed')}</p>}
+      {Array.isArray(rules) && rules.length === 0 && <p className="bt-meta" data-rules-empty>{t('ui.set.rules.empty')}</p>}
+      {Array.isArray(rules) && [...new Set(rules.map(rule => rule.project_id))].map(projectId => {
+        const own = rules.filter(rule => rule.project_id === projectId);
+        const product = own[0]!.project_name ?? projectId;
+        return (
+          <div key={projectId} data-rules-product={projectId}>
+            <p className="bt-label">{own[0]!.archived ? t('ui.set.rules.archived', product) : product}</p>
+            {own.map(rule => (
+              <Row key={rule.id} k={`rules:${rule.id}`} title={<code>{rule.shown}</code>} desc={rule.push ? `${t(RULE_KIND[rule.kind])} · ${t('ui.set.rules.push')}` : t(RULE_KIND[rule.kind])}>
+                <Button small variant="ghost" disabled={busy !== null} onClick={() => void remove(rule.id)}>{t('ui.set.rules.remove')}</Button>
+              </Row>
+            ))}
+          </div>
+        );
+      })}
+    </Group>
+  );
+}
+
 export function SkillsPanel() {
   const t = useT();
   const ctx = useSet();
@@ -456,6 +493,7 @@ export function SkillsPanel() {
           <Button small onClick={goSkills}>{t('ui.set.skills.open')}</Button>
         </Row>
       </Group>
+      <RulesGroup />
       <Group title={t('ui.set.shell.title')}>
         <Row k="shell:enabled" title={t('ui.set.shell.enabled')} desc={t('ui.set.shell.enabledDesc')}>
           <Switch checked={shell.enabled !== false} label={t('ui.set.shell.enabled')} disabled={busy} onChange={enabled => setShell('shell:enabled', { enabled })} />

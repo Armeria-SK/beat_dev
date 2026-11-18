@@ -15,6 +15,7 @@ import type { Decision } from './hooks/shell-guard.ts';
 import type { Outbound } from './hooks/outbound.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
+import type { ShellRuleShape } from './approval-rules.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
@@ -82,6 +83,8 @@ export interface PreCheck {
   reasonKeys?: string[];
   productRun?: 'product-code' | 'product-git';
   ownerReason?: string;
+  // J-5: the shape a "don't ask again in this product" rule would have (shell.ts only; built from the parsed statements, never from the model)
+  ruleShape?: ShellRuleShape;
 }
 
 // 実行の直前に、パイプライン（承認なし）または Pending の再実行（replay.ts）が道具へ渡す、この 1 回の呼び出しの承認の結果
