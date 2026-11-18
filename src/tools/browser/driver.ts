@@ -2,37 +2,45 @@
 // 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は BEAT_BROWSER_LIVE=1 のときだけ動かす
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BrowserContext, Locator, Page, Request, Route } from 'playwright-core';
+import type { Browser, BrowserContext, Frame, Locator, Page, Request, Route } from 'playwright-core';
 import type { Language } from '../../config/schema.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
 import { isEdgeExecutable } from '../../shared/browser-path.ts';
+import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
-import { listedNavigationVerdict, routeVerdict, type RouteRefusal, type RouteVerdict } from './route.ts';
+import { isLoopbackUrl } from './loopback.ts';
+import { listedNavigationVerdict, loopbackVerdict, routeVerdict, type RouteRefusal, type RouteVerdict } from './route.ts';
 
 export type BrowserFailureCode =
   | 'disabled' | 'no_browser' | 'launch_failed' | 'profile_busy' | 'paused' | 'tab_limit' | 'no_tab'
   | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed' | 'login_open' | 'no_display';
 
+// 文の鍵は道具の文（tools.ts）か、守りの文（guard.ts。9-1a で足したループバックなどの文）
+export type BrowserMessageKey = ToolMessageKey | GuardMessageKey;
+const browserText = (language: Language, key: BrowserMessageKey, params: MessageParams): string =>
+  Object.hasOwn(toolText.tables.en, key) ? toolText(language, key as ToolMessageKey, params) : guardText(language, key as GuardMessageKey, params);
+
 // ブラウザの道具の失敗。key と params からアプリの決まった文を作る（nav_failed だけ、相手・Playwright の文字が params に入る）
 export class BrowserFailure extends Error {
   readonly code: BrowserFailureCode;
-  readonly key: ToolMessageKey;
+  readonly key: BrowserMessageKey;
   readonly params: MessageParams;
-  constructor(code: BrowserFailureCode, key: ToolMessageKey, params: MessageParams = {}) {
-    super(toolText('en', key, params));
+  constructor(code: BrowserFailureCode, key: BrowserMessageKey, params: MessageParams = {}) {
+    super(browserText('en', key, params));
     this.code = code; this.key = key; this.params = params;
   }
 
-  text(language: Language): string { return toolText(language, this.key, this.params); }
+  text(language: Language): string { return browserText(language, this.key, this.params); }
   // 文が全部アプリの決まった文か（そうなら、外から読んだ内容を含まない）
   get appTextOnly(): boolean { return this.code !== 'nav_failed'; }
 }
 
-export const REFUSAL_KEYS: Record<RouteRefusal, ToolMessageKey> = {
+export const REFUSAL_KEYS: Record<RouteRefusal, BrowserMessageKey> = {
   scheme: 'browser.blocked_scheme',
   navigation: 'browser.blocked_navigation',
   downgrade: 'browser.blocked_downgrade',
   listed: 'browser.blocked_listed',
+  loopback: 'browser.blocked_loopback',
 };
 
 export interface LaunchOptions {
@@ -48,6 +56,20 @@ export interface LaunchOptions {
   // 操作の一覧（tools.browser.sites）を、遷移のたびに読む関数。一覧のサイトへの確かめを出せない遷移（リダイレクトなど）を断るのに使う。
   // 省くと（ログイン用の窓など）この守りは働かない
   sites?: (() => readonly string[]) | undefined;
+}
+
+// 作業用のブラウザ（プロファイルを残さない chromium.launch）の起動の選択。proxy は土台の中継（公開の決まりだけ・ループバックなし）
+export type WorkLaunchOptions = Pick<LaunchOptions, 'channel' | 'executablePath' | 'headless' | 'proxy'>;
+
+// 作業用の文脈（会話ごと）。proxy はその文脈だけの中継。loopback は「許されたループバックの URL か」（許しが無ければ undefined = ループバックは全部断る）
+export interface WorkContextOptions extends Pick<LaunchOptions, 'proxy' | 'viewport' | 'locale' | 'actionTimeoutMs' | 'sites'> {
+  loopback?: ((url: string) => boolean) | undefined;
+}
+
+export interface WorkBrowserHandle {
+  newContext(options: WorkContextOptions): Promise<BrowserHandle>;
+  onDisconnected(cb: () => void): void;
+  close(): Promise<void>;
 }
 
 export interface ElementState { visible: boolean; enabled: boolean }
@@ -96,6 +118,8 @@ export interface BrowserHandle {
 export interface BrowserDriver {
   // 起動に失敗したら BrowserFailure を投げる
   launch(options: LaunchOptions): Promise<BrowserHandle>;
+  // 作業用のブラウザ（会話ごとの文脈を作る）。起動に失敗したら BrowserFailure を投げる。持たない driver（下見のサーバーの起動しない driver）は作業用を起動できない
+  launchWork?(options: WorkLaunchOptions): Promise<WorkBrowserHandle>;
 }
 
 export const LAUNCH_TIMEOUT_MS = 30_000;
@@ -140,24 +164,43 @@ export function launchArgs(): string[] {
   ];
 }
 
-// Playwright の起動の選択（固定。設定で変えられるのは headless・channel・executablePath だけ）
-export function playwrightOptions(o: LaunchOptions, env: Record<string, string> = childEnv()) {
+// Playwright の起動の選択（ブラウザの分。固定。設定で変えられるのは headless・channel・executablePath だけ）
+export function browserLaunchOptions(o: WorkLaunchOptions, env: Record<string, string> = childEnv()) {
   return {
     ...(o.channel ? { channel: o.channel } : {}),
     ...(o.executablePath ? { executablePath: o.executablePath } : {}),
     headless: o.headless,
     proxy: { server: o.proxy.server, username: o.proxy.username, password: o.proxy.password },
-    viewport: { width: o.viewport.width, height: o.viewport.height },
-    locale: o.locale,
     args: launchArgs(),
     env,
+    timeout: LAUNCH_TIMEOUT_MS,
+  };
+}
+
+// Playwright の文脈の選択（ページの分。固定）
+export function contextOptions(o: Pick<LaunchOptions, 'viewport' | 'locale'>) {
+  return {
+    viewport: { width: o.viewport.width, height: o.viewport.height },
+    locale: o.locale,
     acceptDownloads: false,
     serviceWorkers: 'block' as const,
     bypassCSP: false,
     javaScriptEnabled: true,
     permissions: [] as string[],
     ignoreHTTPSErrors: false,
-    timeout: LAUNCH_TIMEOUT_MS,
+  };
+}
+
+// 持ち主のプロファイル（launchPersistentContext）の選択 = ブラウザの分 + 文脈の分
+export function playwrightOptions(o: LaunchOptions, env: Record<string, string> = childEnv()) {
+  return { ...browserLaunchOptions(o, env), ...contextOptions(o) };
+}
+
+// 作業用の文脈の選択。中継は文脈ごと。ループバックも文脈の中継に通す（<-loopback> を自分で書く: Playwright の環境変数に左右されない）
+export function workContextOptions(o: WorkContextOptions) {
+  return {
+    ...contextOptions(o),
+    proxy: { server: o.proxy.server, username: o.proxy.username, password: o.proxy.password, bypass: '<-loopback>' },
   };
 }
 
@@ -193,6 +236,20 @@ function classifyLaunchError(error: unknown): BrowserFailure {
 }
 
 const clipLine = (text: string, max: number) => text.replace(/\s+/gu, ' ').trim().slice(0, max);
+
+// 要求を出した枠の出どころの URL。空の枠（about:blank / about:srcdoc）は親の枠、空の窓は開いた元のページの URL。読めなければ undefined
+export async function frameSource(frame: Frame): Promise<string | undefined> {
+  let current: Frame | null = frame;
+  for (let depth = 0; current !== null && depth < 16; depth += 1) {
+    const url = current.url();
+    if (url !== '' && !url.startsWith('about:')) return url;
+    const parent: Frame | null = current.parentFrame();
+    if (parent !== null) { current = parent; continue; }
+    const opener: Page | null = await current.page().opener().catch(() => null);
+    current = opener === null ? null : opener.mainFrame();
+  }
+  return undefined;
+}
 
 // 押したあと、遷移や新しい窓が起きるのを少し待つ（長くは待たない）
 const SETTLE_MS = 250;
@@ -301,8 +358,12 @@ export class PlaywrightBrowser implements BrowserHandle {
   readonly #undecided = new Set<Page>();
 
   readonly #sites: () => readonly string[];
+  // 許されたループバックの URL か（作業用の文脈で許しがあるときだけ）。持ち主のプロファイル・許しの無い文脈は、ループバックを全部断る
+  readonly #loopback: (url: string) => boolean;
 
-  constructor(context: BrowserContext, sites: () => readonly string[] = () => []) { this.#context = context; this.#sites = sites; }
+  constructor(context: BrowserContext, sites: () => readonly string[] = () => [], loopback?: ((url: string) => boolean) | undefined) {
+    this.#context = context; this.#sites = sites; this.#loopback = loopback ?? (() => false);
+  }
 
   wrap(page: Page): PlaywrightPage {
     let wrapper = this.#wrappers.get(page);
@@ -333,16 +394,25 @@ export class PlaywrightBrowser implements BrowserHandle {
       const request = route.request();
       const frame = request.frame();
       const owner = this.#wrappers.get(frame.page());
-      const verdict = routeVerdict({ url: request.url(), navigation: request.isNavigationRequest(), mainFrame: frame.parentFrame() === null, pageUrl: frame.page().url() || undefined });
+      const verdict = routeVerdict({ url: request.url(), navigation: request.isNavigationRequest(), mainFrame: frame.parentFrame() === null, pageUrl: frame.page().url() || undefined, allowed: this.#loopback });
       const mainNavigation = request.isNavigationRequest() && frame.parentFrame() === null;
       let final: RouteVerdict = verdict;
-      if (verdict.allow && mainNavigation) final = await this.#listedVerdict(request, frame.page(), owner);
+      if (final.allow && isLoopbackUrl(request.url())) final = await this.#loopbackVerdict(request, frame, mainNavigation ? owner : undefined);
+      if (final.allow && mainNavigation) final = await this.#listedVerdict(request, frame.page(), owner);
       if (final.allow) { await route.continue(); return; }
       if (owner && mainNavigation) owner.refusal = final.reason;
       await route.abort('blockedbyclient');
     } catch {
       await route.abort('blockedbyclient').catch(() => undefined);
     }
+  }
+
+  // ループバックへの要求の出どころを確かめる（副の守り。判定は route.ts の loopbackVerdict）
+  async #loopbackVerdict(request: Request, frame: Frame, owner: PlaywrightPage | undefined): Promise<RouteVerdict> {
+    const navigation = request.isNavigationRequest();
+    const redirectedFrom = navigation ? request.redirectedFrom()?.url() : undefined;
+    const source = redirectedFrom === undefined ? await frameSource(frame) : undefined;
+    return loopbackVerdict({ url: request.url(), navigation, frameUrl: source, redirectedFrom, sourceUrl: source, entryUrl: owner?.entry, allowed: this.#loopback });
   }
 
   // 一覧のサイトへの、確かめを出せない遷移（リダイレクト・一覧外のページからの移動）を断る。判定は route.ts の listedNavigationVerdict
@@ -415,5 +485,49 @@ export class PlaywrightDriver implements BrowserDriver {
       }
     }
     throw failure ?? new BrowserFailure('launch_failed', 'browser.launch_failed');
+  }
+
+  // 作業用のブラウザ: プロファイルを残さない chromium.launch。起動の引数・子の環境・Edge を断る・channel の試し方は持ち主のものと同じ。
+  // 起動のときは土台の中継（文脈の外の通信もそのまま外へ出さない）。会話ごとの文脈は newContext で、その文脈だけの中継を付ける
+  async launchWork(options: WorkLaunchOptions): Promise<WorkBrowserHandle> {
+    if (options.executablePath && isEdgeExecutable(options.executablePath)) throw new BrowserFailure('no_browser', 'browser.edge_refused');
+    let chromium: typeof import('playwright-core').chromium;
+    try { ({ chromium } = await import('playwright-core')); } catch { throw new BrowserFailure('launch_failed', 'browser.launch_failed'); }
+    let failure: BrowserFailure | undefined;
+    for (const channel of launchAttempts(options)) {
+      try {
+        return new PlaywrightWorkBrowser(await chromium.launch(browserLaunchOptions({ ...options, channel })));
+      } catch (e) {
+        failure = e instanceof BrowserFailure ? e : classifyLaunchError(e);
+        if (failure.code !== 'no_browser') break;
+      }
+    }
+    throw failure ?? new BrowserFailure('launch_failed', 'browser.launch_failed');
+  }
+}
+
+class PlaywrightWorkBrowser implements WorkBrowserHandle {
+  readonly #browser: Browser;
+  constructor(browser: Browser) { this.#browser = browser; }
+
+  async newContext(options: WorkContextOptions): Promise<BrowserHandle> {
+    const context = await this.#browser.newContext(workContextOptions(options));
+    try {
+      context.setDefaultTimeout(options.actionTimeoutMs);
+      const handle = new PlaywrightBrowser(context, options.sites, options.loopback);
+      await handle.install();
+      return handle;
+    } catch (e) {
+      await context.close().catch(() => undefined);
+      throw e;
+    }
+  }
+
+  onDisconnected(cb: () => void): void { this.#browser.on('disconnected', cb); }
+
+  async close(): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const limit = new Promise<void>(resolve => { timer = setTimeout(resolve, CLOSE_TIMEOUT_MS); timer.unref(); });
+    try { await Promise.race([this.#browser.close(), limit]); } finally { if (timer) clearTimeout(timer); }
   }
 }

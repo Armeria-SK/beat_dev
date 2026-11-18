@@ -10,7 +10,7 @@ import { headedAvailable } from '../src/tools/browser/session.ts';
 // T-41: ブラウザの API（状態・ログイン用の窓・閉じる・ログイン情報を消す）
 
 const enable = (config: { tools: { browser: { enabled: boolean } } }) => { config.tools.browser.enabled = true; };
-const call = (conversationId = 'c1') => ({ conversationId, signal: new AbortController().signal });
+const call = (conversationId = 'c1') => ({ grant: { conversationId, runId: 'r1', attended: true, loopback: false }, signal: new AbortController().signal });
 
 test('headedAvailable: 画面の無い Linux だけが false', () => {
   assert.equal(headedAvailable('linux', {}), false);
@@ -40,7 +40,7 @@ test('状態: 無効・有効・起動中が分かる', async t => {
   const first = await json('/api/browser/status', 'GET');
   assert.equal(first.status, 200);
   assert.deepEqual({ ...first.body }, { enabled: true, running: false, loginOpen: false, tabs: 0, pausedMinutes: 0, canShowWindow: true });
-  await app.browser.run(call(), async api => { await api.openTab(); });
+  await app.browser.run(call(), async api => { await api.openTab('owner'); });
   const second = await json('/api/browser/status', 'GET');
   assert.equal(second.body.running, true);
   assert.equal(second.body.tabs, 1);
@@ -67,7 +67,7 @@ test('login: 見えるブラウザを同じプロファイルで開き、窓の�
   const driver = new FakeBrowserDriver();
   const { app, json } = await startApp(t, { configure: enable, browserDriver: driver, browserDisplay: true });
   // 先に自動操作のブラウザが動いていたら、止めてから窓を開く
-  await app.browser.run(call(), async api => { await api.openTab(); });
+  await app.browser.run(call(), async api => { await api.openTab('owner'); });
   const automatic = driver.current!;
   const opened = await json('/api/browser/login', 'POST', {});
   assert.equal(opened.status, 200);
@@ -82,8 +82,8 @@ test('login: 見えるブラウザを同じプロファイルで開き、窓の�
   const again = await json('/api/browser/login', 'POST', {});
   assert.equal(again.status, 200);
   assert.equal(driver.launches, 2);
-  // 窓のあいだ、道具は断る
-  await assert.rejects(app.browser.run(call(), async () => 'x'), (e: unknown) => e instanceof BrowserFailure && e.code === 'login_open' && /for logging in/u.test(e.text('en')));
+  // 窓のあいだ、持ち主のブラウザを使う道具は断る
+  await assert.rejects(app.browser.run(call(), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'login_open' && /for logging in/u.test(e.text('en')));
   // 閉じれば戻る
   const closed = await json('/api/browser/close', 'POST', {});
   assert.equal(closed.status, 200);
@@ -121,7 +121,7 @@ test('profile/reset: ブラウザを止めてから、プロファイルだけ�
   writeFileSync(join(app.paths.browserProfile, 'Cookies'), 'x');
   const sibling = join(paths.data, 'keep.txt');
   writeFileSync(sibling, 'keep');
-  await app.browser.run(call(), async api => { await api.openTab(); });
+  await app.browser.run(call(), async api => { await api.openTab('owner'); });
   const browser = driver.current!;
   const res = await json('/api/browser/profile/reset', 'POST', {});
   assert.equal(res.status, 200);

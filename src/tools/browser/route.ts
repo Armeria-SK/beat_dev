@@ -1,6 +1,7 @@
 // ブラウザの要求の横取り（context.route）で使う判定。副の守り（本体は中継 egress-proxy.ts）。
 // playwright に依存しない純関数にして、driver.ts の handler と試験が同じものを使う
 import { pageUrl } from '../web/public-page.ts';
+import { isLoopbackUrl } from './loopback.ts';
 import { siteAllows } from './sites.ts';
 
 export interface RouteRequest {
@@ -10,11 +11,14 @@ export interface RouteRequest {
   mainFrame: boolean;
   // いまの main frame の URL（まだ無ければ undefined）
   pageUrl: string | undefined;
+  // 許されたループバックの URL か（作業用の文脈で許しがあるときだけ。無ければループバックは全部断る）
+  allowed?: ((url: string) => boolean) | undefined;
 }
 
 // scheme: 許さない種類の URL / navigation: ページの遷移として許さない / downgrade: https のページから http への遷移 /
-// listed: 操作の一覧のサイトの（クエリ付き・根ページでない）URL への、確かめを出せない遷移（リダイレクト・一覧外のページからの移動）
-export type RouteRefusal = 'scheme' | 'navigation' | 'downgrade' | 'listed';
+// listed: 操作の一覧のサイトの（クエリ付き・根ページでない）URL への、確かめを出せない遷移（リダイレクト・一覧外のページからの移動） /
+// loopback: 許されていないループバック、または公開のページから来たループバックへの要求
+export type RouteRefusal = 'scheme' | 'navigation' | 'downgrade' | 'listed' | 'loopback';
 export type RouteVerdict = { allow: true } | { allow: false; reason: RouteRefusal };
 
 const PARTS = new Set(['http:', 'https:', 'ws:', 'wss:', 'data:', 'blob:']);
@@ -27,7 +31,12 @@ export function routeVerdict(request: RouteRequest): RouteVerdict {
   // ページの遷移としての data: / blob: は断る（画像などの部品としては上で通している）
   if (url.protocol === 'data:' || url.protocol === 'blob:') return { allow: false, reason: 'navigation' };
   if (!request.mainFrame) return { allow: true };
-  try { pageUrl(request.url); } catch { return { allow: false, reason: 'navigation' }; }
+  if (isLoopbackUrl(request.url)) {
+    // ループバックの遷移は、公開の決まり（pageUrl）の代わりに許し（allowed）で決める
+    if (!(request.allowed?.(request.url) ?? false)) return { allow: false, reason: 'loopback' };
+  } else {
+    try { pageUrl(request.url); } catch { return { allow: false, reason: 'navigation' }; }
+  }
   if (url.protocol === 'http:' && request.pageUrl !== undefined && /^https:/iu.test(request.pageUrl)) return { allow: false, reason: 'downgrade' };
   return { allow: true };
 }
@@ -86,4 +95,36 @@ export function listedNavigationVerdict(nav: ListedNavigation): RouteVerdict {
   if (source === undefined || source === '' || !/^https?:/iu.test(source)) return refuse;
   if (sameSite(nav.sites, source, nav.url) || siteAllows(nav.sites, source)) return { allow: true };
   return refuse;
+}
+
+export interface LoopbackRequest {
+  // 要求の URL（行き先がループバックの書き方のものだけをここで見る）
+  url: string;
+  navigation: boolean;
+  // 要求を出した枠の URL（空の枠は親の枠、空の窓は開いた元のページの URL）。読めなければ undefined
+  frameUrl: string | undefined;
+  // 遷移がリダイレクトなら、その手前の URL
+  redirectedFrom: string | undefined;
+  // リダイレクトでない遷移の遷移元（枠のいまの URL。空なら親・開いた元）
+  sourceUrl: string | undefined;
+  // browser_open の goto の最中だけ入る、入口の URL
+  entryUrl: string | undefined;
+  allowed: (url: string) => boolean;
+}
+
+function sameUrl(a: string, b: string): boolean {
+  try { return withoutHash(new URL(a)) === withoutHash(new URL(b)); } catch { return false; }
+}
+
+// 公開のページからループバックへ行かせない（副の守り。本体は中継の Sec-Fetch-Site / Origin の確かめ）。
+// 通すのは、行き先が許されたループバックで、出どころも許されたループバックのとき（遷移はリダイレクトの手前・遷移元）、または入口の URL そのもの
+export function loopbackVerdict(request: LoopbackRequest): RouteVerdict {
+  const refuse: RouteVerdict = { allow: false, reason: 'loopback' };
+  if (!isLoopbackUrl(request.url)) return { allow: true };
+  if (!request.allowed(request.url)) return refuse;
+  const from = (source: string | undefined): RouteVerdict => (source !== undefined && request.allowed(source) ? { allow: true } : refuse);
+  if (!request.navigation) return from(request.frameUrl);
+  if (request.redirectedFrom !== undefined) return from(request.redirectedFrom);
+  if (request.entryUrl !== undefined && sameUrl(request.entryUrl, request.url)) return { allow: true };
+  return from(request.sourceUrl);
 }

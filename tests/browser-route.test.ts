@@ -31,8 +31,10 @@ test('ページの遷移としての data: と blob: は断る（main frame で�
 });
 
 test('main frame の遷移は pageUrl を通るものだけ（内向きの名前・IP・ポート・userinfo は断る）', () => {
-  const refused = ['http://localhost/', 'https://127.0.0.1/', 'http://192.168.0.1/', 'http://10.0.0.1/admin', 'http://169.254.169.254/latest/meta-data', 'http://[::1]/', 'http://user@example.net/', 'https://example.net:8443/', 'http://intranet/', 'https://printer.local/', 'http://x.internal/'];
+  const refused = ['http://192.168.0.1/', 'http://10.0.0.1/admin', 'http://169.254.169.254/latest/meta-data', 'http://user@example.net/', 'https://example.net:8443/', 'http://intranet/', 'https://printer.local/', 'http://x.internal/'];
   for (const url of refused) assert.deepEqual(routeVerdict(nav(url, null)), { allow: false, reason: 'navigation' }, url);
+  // ループバックは許し（allowed）が無ければ loopback で断る（9-1a）
+  for (const url of ['http://localhost/', 'https://127.0.0.1/', 'http://[::1]/']) assert.deepEqual(routeVerdict(nav(url, null)), { allow: false, reason: 'loopback' }, url);
   for (const url of ['https://example.net/', 'http://example.net/a?b=1', 'https://sub.example.net/path#frag']) assert.deepEqual(routeVerdict(nav(url, null)), { allow: true }, url);
 });
 
