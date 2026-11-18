@@ -1,12 +1,27 @@
-export type Lang = 'en';
+export type Lang = 'en' | 'ja';
+export const EXPLAIN_CHOICES = ['auto', 'en', 'ja'] as const;
+export type ExplainChoice = typeof EXPLAIN_CHOICES[number];
+export const LANG_NAME: Record<Lang, string> = { en: 'English', ja: '日本語' };
 
 export const DEFAULT_TIMEZONE = 'Asia/Tokyo';
+export const EXPLAIN_KEY = 'beat.explainLanguage';
 
 export function isValidTimeZone(zone: string): boolean {
   try { new Intl.DateTimeFormat('en', { timeZone: zone }); return true; } catch { return false; }
 }
 
+export const isExplainChoice = (value: unknown): value is ExplainChoice => typeof value === 'string' && (EXPLAIN_CHOICES as readonly string[]).includes(value);
+
+function storage(): Storage | undefined {
+  try { return globalThis.localStorage; } catch { return undefined; }
+}
+
+function readSavedChoice(): ExplainChoice {
+  try { const saved = storage()?.getItem(EXPLAIN_KEY); return isExplainChoice(saved) ? saved : 'auto'; } catch { return 'auto'; }
+}
+
 let timezone = DEFAULT_TIMEZONE;
+let explainChoice: ExplainChoice = readSavedChoice();
 let version = 0;
 const listeners = new Set<() => void>();
 
@@ -22,7 +37,30 @@ export function setTimezone(zone: string): void {
   changed();
 }
 
-// 画面は英語だけ。呼ぶ所（文の表・Intl の書式）は P1 で言語の引数ごと消す。
+export function resolveAuto(languages: readonly string[]): Lang {
+  for (const tag of languages) {
+    if (/^ja(?:-|$)/iu.test(tag)) return 'ja';
+    if (/^en(?:-|$)/iu.test(tag)) return 'en';
+  }
+  return 'en';
+}
+
+function browserLanguages(): readonly string[] {
+  try { return globalThis.navigator?.languages ?? []; } catch { return []; }
+}
+
+export function setExplainLanguage(choice: ExplainChoice): void {
+  if (!isExplainChoice(choice) || choice === explainChoice) return;
+  explainChoice = choice;
+  try { storage()?.setItem(EXPLAIN_KEY, choice); } catch { }
+  changed();
+}
+
+export const getExplainChoice = (): ExplainChoice => explainChoice;
+export const autoLanguage = (): Lang => resolveAuto(browserLanguages());
+export const getExplainLanguage = (): Lang => (explainChoice === 'auto' ? autoLanguage() : explainChoice);
+
+// 日付・数（Intl）の書き方は英語のまま。説明の文の言語は getExplainLanguage。
 export const getLanguage = (): Lang => 'en';
 export const getTimezone = (): string => timezone;
 export const getVersion = (): number => version;

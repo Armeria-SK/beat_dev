@@ -41,16 +41,20 @@ function codeLines(text: string): Array<{ no: number; code: string }> {
   return out;
 }
 
-test('画面は英語だけ: web/src のどこにも（辞書 en.ts も含めて）日本語の文字が無い（API に送る曜日の値だけ除く）', () => {
+test('画面は英語だけ: web/src のどこにも（辞書 en.ts も含めて）日本語の文字が無い（API に送る曜日の値・説明の日本語の表 ja.ts・言語の選びの「日本語」だけ除く）', () => {
   const files = walk(WEB);
   assert.ok(files.some(file => /[\\/]i18n[\\/]en\.ts$/u.test(file)), '辞書 en.ts を読めていない');
   assert.ok(files.length > 50, `${files.length} ファイルしか読めていない`);
   const hits: string[] = [];
   for (const file of files) {
+    // 説明の言語が日本語のときの表（beat i18n）。鍵は explain.ts の一覧の中だけで、tests/i18n-explain.test.ts が見張る
+    if (/[\\/]i18n[\\/]ja\.ts$/u.test(file)) continue;
     for (const { no, code } of codeLines(readFileSync(file, 'utf8'))) {
       if (!JAPANESE.test(code)) continue;
       // 曜日の値（月〜日）は、サーバーの src/tasks/schedule.ts の DAY_MAP と対で API に送る値で、表示の文字ではない
       if (file.endsWith('weekdays.ts') && /^\s*\{ value: '[月火水木金土日]', label: 'weekday\.\w+' \},?\s*$/u.test(code)) continue;
+      // 言語の選び（Settings › Appearance）は、各言語をその言語の文字で出す
+      if (file.endsWith('state.ts') && /^export const LANG_NAME: Record<Lang, string> = \{ en: 'English', ja: '日本語' \};$/u.test(code)) continue;
       hits.push(`${file.slice(WEB.length + 1)}:${no}: ${code.trim().slice(0, 100)}`);
     }
   }
@@ -88,7 +92,8 @@ test('辞書に、使われない項目が無い（キー全体が文字列で�
     }
   };
   for (const file of walk(WEB)) {
-    if (/[\\/]i18n[\\/]en\.ts$/u.test(file)) continue;
+    // 辞書と、鍵を並べるだけの説明の一覧・日本語の表は、使っている所に数えない
+    if (/[\\/]i18n[\\/](?:en|ja|explain)\.ts$/u.test(file)) continue;
     addFrom(readFileSync(file, 'utf8'));
   }
   // 「.」で終わる前半は、キーの組み立てかもしれないので、書き留めてあるものだけを認める（書き留めていない新しいものが出たら、ここで落ちる）

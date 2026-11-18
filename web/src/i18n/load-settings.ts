@@ -1,6 +1,6 @@
-import { setTimezone } from './state.ts';
+import { isExplainChoice, setExplainLanguage, setTimezone } from './state.ts';
 
-export interface ServerSettingsView { config: { timezone?: unknown } }
+export interface ServerSettingsView { config: { timezone?: unknown; ui?: unknown } }
 
 export interface LoadSettingsOptions {
   waitMs?: number;
@@ -10,9 +10,11 @@ export interface LoadSettingsOptions {
 export const SETTINGS_WAIT_MS = 3000;
 export const SETTINGS_RETRY_MS = 5000;
 
-// サーバーの設定のうち、画面の表示に関わるもの（タイムゾーン）を反映する。
+// サーバーの設定のうち、画面の表示に関わるもの（タイムゾーン・説明の言語）を反映する。
 export function applyServerSettings({ config }: ServerSettingsView): void {
   if (typeof config.timezone === 'string') setTimezone(config.timezone);
+  const explain = (config.ui as { explainLanguage?: unknown } | undefined)?.explainLanguage;
+  if (isExplainChoice(explain)) setExplainLanguage(explain);
 }
 
 // 最初の描画は waitMs までしか待たない。そのあとで設定が届いたら、届いた時点で反映する

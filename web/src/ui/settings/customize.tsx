@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type PersonaView } from '../../api.ts';
 import { toast } from '../../feedback.ts';
-import { formatNumber, useT } from '../../i18n/index.ts';
+import { autoLanguage, EXPLAIN_CHOICES, formatNumber, isExplainChoice, LANG_NAME, useT, type ExplainChoice } from '../../i18n/index.ts';
 import { accessKey, accessWidening } from '../../settings/access.ts';
 import { issueMessage } from '../../settings/model.ts';
 import { estimateTokens, overPersonaBudget } from '../../tokens.ts';
@@ -9,7 +9,7 @@ import { Button } from '../parts.tsx';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { applyTheme, browserStorage, readReducedMotion, readTheme, saveReducedMotion, saveTheme, THEMES, type Theme } from '../theme.ts';
 import { mergeRawConfig, parseRawConfig } from './commit.ts';
-import { CommitField, Group, Row, Switch, useSet } from './controls.tsx';
+import { CommitField, Group, Row, Seg, Switch, useSet } from './controls.tsx';
 import { checkThenRun } from './flow.ts';
 
 const errorText = (error: unknown, fallback: string): string => (error instanceof ApiError ? error.message : fallback);
@@ -116,8 +116,18 @@ export function AppearancePanel() {
   const [reduced, setReduced] = useState(() => readReducedMotion(browserStorage()));
   const pick = (next: Theme) => { applyTheme(document.documentElement, next); saveTheme(browserStorage(), next); setTheme(next); };
   const reduce = (on: boolean) => { document.body.classList.toggle('is-reduced', on); saveReducedMotion(browserStorage(), on); setReduced(on); };
+  const ctx = useSet();
+  const saved: unknown = ctx.config.ui?.explainLanguage;
+  const explain: ExplainChoice = isExplainChoice(saved) ? saved : 'auto';
+  const explainOptions = EXPLAIN_CHOICES.map(value => ({ value, label: value === 'auto' ? t('ui.set.look.explainAuto', LANG_NAME[autoLanguage()]) : LANG_NAME[value] }));
   return (
     <>
+      <Group title={t('ui.set.look.language')}>
+        <Row k="look:explain" title={t('ui.set.look.explain')} desc={t('ui.set.look.explainDesc')}>
+          <Seg value={explain} options={explainOptions} label={t('ui.set.look.explain')} disabled={ctx.busy !== null}
+            onChange={next => void ctx.commit('look:explain', c => ({ ...c, ui: { ...c.ui, explainLanguage: next } }))} />
+        </Row>
+      </Group>
       <Group title={t('ui.set.look.theme')}>
         <div className="bt-themes" role="group" aria-label={t('ui.set.look.theme')}>
           {THEMES.map(id => (

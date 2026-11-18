@@ -245,6 +245,9 @@ export const AppConfig = Type.Object({
     color: Type.String({ pattern: '^#[0-9a-fA-F]{6}$', default: '#61B8A5' }),
     motion: Type.Union([Type.Literal('auto'), Type.Literal('none'), Type.Literal('float'), Type.Literal('sway'), Type.Literal('pulse')], { default: 'auto' }),
   }, { additionalProperties: false, default: {} }),
+  ui: Type.Object({
+    explainLanguage: Type.Union([Type.Literal('auto'), Type.Literal('en'), Type.Literal('ja')], { default: 'auto' }),
+  }, { additionalProperties: false, default: {} }),
   worker: Type.Object({
     enabled: Type.Boolean({ default: true }),
     autonomy: Type.Boolean({ default: false }),
