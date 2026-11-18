@@ -190,6 +190,21 @@ test('V6: コードを動かす確かめは、積んだ行に動かすファイ�
   assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
 });
 
+test('B4: 動かすファイルの見せる中身は、全体を伏せてから切る。切れ目をまたぐ鍵も断片が残らない', async t => {
+  const s = setup(t);
+  const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const head = `const pad = '${'x'.repeat(7960)}';\nconst t = '`;
+  assert.ok(head.length < 8000 && head.length + token.length > 8000 && 8000 - head.length < 20, '鍵が 8000 文字の切れ目をまたぐ');
+  writeFileSync(join(s.paths.workspace, 'put.js'), `${head}${token}';\n`);
+  const first = await s.call('shell_run', { command: 'node put.js' });
+  assert.equal(first.decidedBy, 'pending', first.output.content);
+  const [shown] = latest(s).preview;
+  assert.equal(shown?.truncated, true);
+  assert.doesNotMatch(shown?.text ?? '', /ghp_/u, '切れ目の前の鍵の断片も見せない');
+  assert.ok((shown?.text.length ?? 0) <= 8000);
+  s.pending.reject(latest(s).id);
+});
+
 test('V7: 積んだあとでファイルの中身が書き換わったら、承認しても動かさない', async t => {
   const s = setup(t);
   const file = join(s.paths.workspace, 'put.js');
