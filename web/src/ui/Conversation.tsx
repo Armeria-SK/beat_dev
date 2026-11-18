@@ -57,7 +57,7 @@ const short = (text: string, max = 80): string => {
   return line.length > max ? `${line.slice(0, max)}…` : line;
 };
 
-function noticeText(t: T, n: RunNotice): string {
+export function noticeText(t: T, n: RunNotice): string {
   switch (n.kind) {
     case 'switch': return t('ui.notice.switched', n.to);
     case 'warning': return warningText({ code: n.code, message: n.message, ...(n.params ? { params: n.params as Record<string, string | number> } : {}) }, getExplainLanguage());

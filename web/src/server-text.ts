@@ -41,9 +41,11 @@ function template(code: string | undefined | null, language: Lang): string | nul
   if (dot <= 0) return null;
   const domain = code.slice(0, dot);
   const key = code.slice(dot + 1);
-  const english = DOMAINS[domain]?.tables.en[key];
-  if (english === undefined) return null;
-  return (language === 'ja' ? JA_SERVER[domain]?.[key] : undefined) ?? english;
+  if (!Object.hasOwn(DOMAINS, domain)) return null;
+  const table = DOMAINS[domain]!.tables.en;
+  if (!Object.hasOwn(table, key)) return null;
+  const japanese = language === 'ja' && Object.hasOwn(JA_SERVER, domain) && Object.hasOwn(JA_SERVER[domain]!, key) ? JA_SERVER[domain]![key] : undefined;
+  return japanese ?? table[key]!;
 }
 
 // `<領域>.<キー>` のコードを、画面の言語の文にする。表に無い・値が足りない（{名前} が残る）ときは null。

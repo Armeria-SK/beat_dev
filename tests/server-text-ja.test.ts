@@ -1,12 +1,19 @@
+import { loadTsx } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { format } from '../src/shared/messages/define.ts';
 import { ApiError } from '../web/src/api.ts';
+import { sendFailureOf } from '../web/src/chat-logic.ts';
+import { t } from '../web/src/i18n/index.ts';
+import { issueMessage, problemsOf } from '../web/src/settings/model.ts';
+import type { RunNotice } from '../web/src/ui/live-state.ts';
 import { setExplainLanguage } from '../web/src/i18n/state.ts';
 import { JA_SERVER } from '../web/src/i18n/ja-server/index.ts';
 import { DOMAINS, errorBodyText, probeMessage, serverText, warningText } from '../web/src/server-text.ts';
 
 // beat i18n I-3: サーバーの文（コードつき）の日本語は画面の側の表（web/src/i18n/ja-server）。表に無いコードは英語。
+
+const { noticeText } = await loadTsx<{ noticeText: (tr: typeof t, n: RunNotice) => string }>('../web/src/ui/Conversation.tsx', import.meta.url);
 
 const names = (text: string): string[] => [...new Set([...text.matchAll(/\{(\w+)\}/gu)].map(m => m[1]!))].sort();
 const english = (domain: string): Record<string, string> => DOMAINS[domain]!.tables.en;
@@ -66,4 +73,25 @@ test('見張り: 15 分野の英語の鍵のうち、日本語の無いものの
   const total = Object.values(DOMAINS).reduce((sum, catalog) => sum + Object.keys(catalog.tables.en).length, 0);
   t.diagnostic(`server codes without Japanese: ${missing.length} of ${total}`);
   assert.ok(missing.length <= total);
+});
+
+test('表に無い名前（プロトタイプの名前）は null。en・ja どちらでも', () => {
+  for (const language of ['en', 'ja'] as const) {
+    for (const code of ['http.constructor', 'http.toString', 'http.__proto__', 'constructor.x', 'toString.required', 'hasOwnProperty.x']) assert.equal(serverText(code, {}, language), null, `${language} ${code}`);
+  }
+});
+
+test('呼ぶ側（使えるモデルが無い 409・設定の問題・会話のお知らせ）も、説明の言語が ja なら日本語', () => {
+  try {
+    setExplainLanguage('ja');
+    const ja = (domain: string, key: string): string => JA_SERVER[domain]![key]!;
+    const body = { errorCode: 'engine.no_usable', errorMessage: 'srv', problems: [{ modelId: 'm', status: 'unknown', message: 'srv', messageCode: 'provider.probe.unknown' }] };
+    const failure = sendFailureOf(new ApiError(409, body), 'x', []);
+    assert.equal(failure.message, format(ja('engine', 'no_usable'), { lines: format(ja('engine', 'problem.line'), { id: 'm', message: ja('provider', 'probe.unknown'), hintPart: '' }) }));
+    const issue = { path: 'server.port', message: 'srv', code: 'config.number.min', params: { min: 1 } };
+    assert.equal(issueMessage(issue), format(ja('config', 'number.min'), { min: 1 }));
+    assert.equal(problemsOf({ issues: [issue] }, 'fallback', {})[0]!.message, format(ja('config', 'number.min'), { min: 1 }));
+    assert.equal(noticeText(t, { runId: 'r', kind: 'warning', code: 'context_trimmed', message: 'srv', params: { count: 3 } }), format(ja('engine', 'warn.context_trimmed'), { count: 3 }));
+    assert.equal(noticeText(t, { runId: 'r', kind: 'error', errorKind: 'internal', errorCode: 'engine.run.no_provider', errorParams: { id: 'p' }, errorMessage: 'srv' }), format(ja('engine', 'run.no_provider'), { id: 'p' }));
+  } finally { setExplainLanguage('en'); }
 });
