@@ -83,6 +83,12 @@ test('3-3-s acceptance_change の印: meta・planOk・projectOnly・製品の会
   assert.match(acceptanceChange.description, /never translate or paraphrase/u);
   assert.match(acceptanceChange.description, /succeeds only when the item holds/u);
   assert.match(acceptanceChange.description, /look or read/u);
+  const commandOf = (schema: any) => schema.properties.command.description as string;
+  for (const text of [commandOf((acceptanceWrite.input as any).properties.items.items), commandOf((acceptanceChange.input as any).properties.changes.items)]) {
+    assert.match(text, /beat's shell \(PowerShell on Windows, bash on Linux\) from the product folder/u, 'B2: 確かめのコマンドが動くシェル');
+    assert.match(text, /Never cmd\.exe syntax/u);
+    assert.match(text, /Test-Path \/ Select-String/u);
+  }
   assert.equal(acceptanceChange.acceptanceState, 'frozen');
   assert.equal(acceptanceWrite.acceptanceState, 'draft');
   const write = estimateTextTokens(JSON.stringify({ name: acceptanceWrite.name, description: acceptanceWrite.description, inputSchema: acceptanceWrite.input }));
