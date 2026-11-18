@@ -26,9 +26,22 @@ export function offered(req: Pick<ModelRequest, 'tools' | 'system'>): string[] {
 // T-1: 保存した発言のうち、tool_search の結果でない道具の結果
 export const notSearch = (m: { role: string; message: { role: string; name?: string } }): boolean => m.role === 'tool' && !(m.message.role === 'tool' && m.message.name === 'tool_search');
 
-export function tempDir(t: { after: (fn: () => void) => void }): string {
+// Windows では、消す瞬間にほかのプロセス（止めた直後の子・ウイルス対策の読み取り）がファイルを開いていると EPERM・EBUSY で断られる。
+// rmSync の maxRetries は Node 24 で EPERM を待ち直さないので、ここで決まった時間だけ待ち直す。それを過ぎても開いたままなら、そのまま落とす（本当の取り残しは隠さない）
+const BUSY = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES']);
+export async function removeDir(dir: string, waitMs = 10_000): Promise<void> {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    try { rmSync(dir, { recursive: true, force: true }); return; } catch (error) {
+      if (!BUSY.has((error as NodeJS.ErrnoException).code ?? '') || Date.now() >= until) throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+export function tempDir(t: { after: (fn: () => void | Promise<void>) => void }): string {
   const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeDir(dir));
   return dir;
 }
 

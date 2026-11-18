@@ -69,6 +69,7 @@ import { isScoutRun, TaskStore, taskView } from './tasks/store.ts';
 import { ProjectStore } from './projects/store.ts';
 import { PlanStore } from './projects/plan.ts';
 import { adoptLegacyPlans } from './projects/plan-adopt.ts';
+import { setGitNotice } from './mesh/folders.ts';
 import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
@@ -151,6 +152,7 @@ export class App {
   readonly approvals: ApprovalBroker;
   readonly pending: PendingStore;
   readonly #replayStop = new AbortController();
+  readonly #gitNoticeOff: () => void;
   readonly memory: MemoryStore;
   readonly tasks: TaskStore;
   readonly projects: ProjectStore;
@@ -183,6 +185,7 @@ export class App {
     this.env = (options.env ?? process.env) as Record<string, string | undefined>;
     this.fetch = options.fetch ?? fetch;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
+    this.#gitNoticeOff = setGitNotice(this.log);
     this.configStore = new ConfigStore(this.paths.config, { judgeOffAllowed: !dataHoldsInstall(this.paths) });
     const config = this.configStore.load();
     this.#reportDropped();
@@ -575,6 +578,7 @@ export class App {
   }
 
   close(): void {
+    this.#gitNoticeOff();
     this.#replayStop.abort();
     this.background.closeAll();
     void this.mcp.stop().catch(() => undefined);

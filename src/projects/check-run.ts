@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { AppConfig, Language } from '../config/schema.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { isInside } from '../tools/hooks/scope.ts';
@@ -46,7 +48,15 @@ export function checkEnv(config: AppConfig, cwd: string, dataDir: string): { env
   return { env: { ...base, ...gitRun.env }, cleanup: gitRun.cleanup };
 }
 
+export const NO_PACKAGE_JSON = "beat did not run the check command: it starts with a package manager (npm, pnpm or yarn), but the product folder has no package.json, so the package manager would look in the folders above it and run another project's scripts. Add package.json to the product folder, or change the check command in the project settings.";
+
+// npm・pnpm・yarn は、作業フォルダに package.json が無いと上のフォルダへさかのぼって、そこにある package.json の scripts を動かす
+const PACKAGE_MANAGER_FIRST = /^\s*(?:npm|pnpm|yarn)(?:\.cmd|\.ps1|\.exe)?(?:\s|$)/iu;
+export const climbsToParent = (command: string, root: string): boolean =>
+  PACKAGE_MANAGER_FIRST.test(command) && !/(?:^|\s)--prefix(?:[\s=]|$)/u.test(command) && !existsSync(join(root, 'package.json'));
+
 export async function runProductCheck(check: ProductCheck, options: { config: AppConfig; dataDir: string; signal: AbortSignal; timeoutMs?: number }): Promise<CheckResult> {
+  if (climbsToParent(check.command, check.root)) return { ok: false, reason: 'spawn', exitCode: null, tail: NO_PACKAGE_JSON, durationMs: 0 };
   const shell = resolveShell(options.config.tools.shell.shell);
   const { env, cleanup } = checkEnv(options.config, check.root, options.dataDir);
   let result;

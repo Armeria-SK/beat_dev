@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import { App, builtinTools } from '../src/app.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
-import { cleanAreaPath, gitStale, placesFrom, seenPlaces, type GitRun } from '../src/scout/areas.ts';
+import { setGitNotice } from '../src/mesh/folders.ts';
+import { cleanAreaPath, gitStale, headOf, placesFrom, seenPlaces, type GitRun } from '../src/scout/areas.ts';
 import { appendDispatch, DISPATCHES_MAX, LEDGER_FILE, ledgerPath, ledgerView, parseLedger, readLedger, recordEntry, renderEntry } from '../src/scout/ledger.ts';
 import { areaOf, ledgerRecord } from '../src/tools/builtin/ledger.ts';
 import { meshRead, meshSearch } from '../src/tools/builtin/mesh.ts';
@@ -215,6 +216,48 @@ test('7-2 古さ（git）: area に触れるコミットで古く、触れない
   const rewritten = await s.view(shop.id, shop.root);
   assert.ok(rewritten.stale.has('L-0004'), 'amend で消えた commit は辿れないので古い（src/a はその後変わっていなくても）');
   assert.ok(rewritten.stale.has('L-0002'), 'first からの差分が src/b/y.ts に触れた');
+});
+
+function setKey(root: string, key: string, value: string): void {
+  const r = spawnSync('git', ['config', '--file', join(root, '.git', 'config'), key, value], { cwd: join(root, '..'), encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+}
+
+test('backlog: 署名の設定（commit.gpgsign など）だけなら git で古さを見る。コードを動かせる設定は今までどおり断り、更新時刻に落ちたことをログに 1 回出す', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const lines: string[] = [];
+  const off = setGitNotice(line => { lines.push(line); });
+  t.after(off);
+  const signed = s.project('signed');
+  initRepo(signed.root);
+  write(signed.root, 'src/a/x.ts');
+  const head = commitAll(signed.root, 'one');
+  for (const [key, value] of [['commit.gpgsign', 'true'], ['tag.gpgsign', 'true'], ['user.signingkey', '~/.ssh/id_ed25519.pub'], ['gpg.format', 'ssh'], ['gpg.ssh.allowedSignersFile', '~/.ssh/allowed']] as const) setKey(signed.root, key, value);
+  s.entry(signed.id, ['src/a'], head);
+  const view = await s.view(signed.id, signed.root);
+  assert.equal(view.mode, 'git');
+  assert.equal(view.head, head);
+  assert.equal(await headOf(signed.root, s.paths.data), head);
+  assert.deepEqual(lines, []);
+
+  for (const [name, key, value] of [['fsmon', 'core.fsmonitor', 'C:/x/evil.exe'], ['gpgprog', 'gpg.program', 'C:/x/evil.exe'], ['mixed', 'core.fsmonitor', 'C:/x/evil.exe'], ['dangling', 'branch.main.remote', '../evil']] as const) {
+    const shop = s.project(name);
+    initRepo(shop.root);
+    write(shop.root, 'src/a/x.ts');
+    commitAll(shop.root, 'one');
+    if (name === 'mixed' || name === 'dangling') setKey(shop.root, 'commit.gpgsign', 'true');
+    setKey(shop.root, key, value);
+    assert.equal((await s.view(shop.id, shop.root)).mode, 'mtime', name);
+    assert.equal(await headOf(shop.root, s.paths.data), null, name);
+  }
+  assert.equal(lines.length, 4, lines.join('\n'));
+  assert.equal((await s.view(s.app.projects.list().find(p => p.name === 'fsmon')!.id, join(s.dir, 'fsmon'))).mode, 'mtime');
+  assert.equal(lines.length, 4, 'told once per folder and reason');
+  assert.match(lines[0]!, /^\[WARN\] beat does not run git in .*fsmon \(its git settings have core\.fsmonitor, which can run programs\); checks that need git use file times there or are skipped$/u);
+  assert.match(lines[1]!, /gpg\.program, which can run programs/u);
+  assert.match(lines[2]!, /mixed \(its git settings have core\.fsmonitor, which/u, 'the signing key is not named as the reason');
+  assert.match(lines[3]!, /dangling \(its git settings have branch\.main\.remote, which/u);
+  assert.doesNotMatch(lines.join('\n'), /evil/u, 'the value is not shown');
 });
 
 test('7-2 まだ見ていない場所（git）: .gitignore の中は出ず、追っていないが無視されないファイルは出る。見たエントリの場所は消える', { skip: !gitAvailable }, async t => {
