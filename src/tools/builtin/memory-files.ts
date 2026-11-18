@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import { MEMORY_CONTENT_MAX, MEMORY_TITLE_MAX, MemoryFileError, type MemoryWriter } from '../../memory/files.ts';
+import { MEMORY_CONTENT_MAX, MEMORY_FILES_MAX, MEMORY_TITLE_MAX, MemoryFileError, type MemoryWriter } from '../../memory/files.ts';
+import { storeText } from '../../shared/messages/stores.ts';
 import { languageOf } from '../../shared/language.ts';
 import { errorText } from '../../shared/messages/define.ts';
 import { toolText } from '../../shared/messages/tools.ts';
@@ -25,6 +26,7 @@ const NameArg = Type.String({ pattern: '^[a-z0-9][a-z0-9-]{0,47}$', description:
 const TitleArg = Type.String({ minLength: 1, maxLength: MEMORY_TITLE_MAX, description: 'A one-line title in English' });
 const ContentArg = Type.String({ minLength: 1, maxLength: MEMORY_CONTENT_MAX, description: 'The note in English (quote the owner\'s words as they are)' });
 const WhyArg = Type.String({ minLength: 1, maxLength: 80, description: 'A short title for this change, shown to the owner in the note\'s history' });
+const EvidenceArg = Type.Optional(Type.String({ maxLength: 500, description: 'Only in a review: words copied exactly from the record that show why' }));
 
 export function memoryProjectOf(ctx: ToolContext): string | undefined {
   return ctx.project?.id ?? (ctx.kind === 'review' ? ctx.memoryProject : undefined);
@@ -37,6 +39,40 @@ export function memoryWriter(ctx: ToolContext): MemoryWriter {
   return { actor: ctx.kind === 'review' ? 'review' : 'beat', tainted, runId: ctx.runId, conversationId: ctx.conversationId };
 }
 
+export const EVIDENCE_MIN_CHARS = 12;
+const QUOTES = /^["'“”‘’「」『』`\s]+|["'“”‘’「」『』`\s]+$/gu;
+const plain = (text: string): string => text.normalize('NFKC').replaceAll('⏎', ' ').replace(/\s+/gu, ' ').toLowerCase().trim();
+
+const quoteOf = (evidence: string): string => plain(plain(evidence.replace(QUOTES, '')).replace(/^\[user\]\s*/u, '').replace(QUOTES, ''));
+
+// 振り返りの実行が記憶を直す・消すときの見張り（beat mem-fix）。振り返りの記録に触れていない記憶を、記録に無いという理由だけで書き換えさせない。
+// 通すのは: この振り返りの実行が作った・もう直した記憶、または evidence（記録からそのまま写した言葉。頭の [User] は外して照らす）が記録にあるとき。
+// 持ち主が確かめた記憶（最後の版が持ち主のもの・履歴が無い・外で直された）は、持ち主の発言（添付と beat の文を除く）にあるときだけ。持ち主の発言 1 つ丸ごとなら短くてもよい。記憶が読めなければ断る
+function reviewGuard(ctx: ToolContext, projectId: string, store: NonNullable<NonNullable<ToolContext['services']>['memoryFiles']>, name: string, evidence: string | undefined): void {
+  if (ctx.kind !== 'review') return;
+  const history = store.history(projectId, name);
+  if (history.some(event => event.run_id === ctx.runId)) return;
+  const current = store.read(projectId, name).text;
+  const last = history[0];
+  const ownerHeld = !last || last.actor === 'owner' || last.after !== current;
+  const quote = quoteOf(evidence ?? '');
+  if (!quote) throw new MemoryFileError(ownerHeld ? 'memfile.review_owner_words' : 'memfile.review_no_evidence', { name });
+  const owner = (ctx.reviewEvidence?.owner ?? []).map(plain);
+  if (owner.includes(quote)) return;
+  if (Array.from(quote).length < EVIDENCE_MIN_CHARS) throw new MemoryFileError('memfile.review_short', { name, min: EVIDENCE_MIN_CHARS });
+  if (owner.some(m => m.includes(quote))) return;
+  if (ownerHeld) throw new MemoryFileError('memfile.review_owner_words', { name });
+  if (ctx.reviewEvidence && plain(ctx.reviewEvidence.record).includes(quote)) return;
+  throw new MemoryFileError('memfile.review_not_found', { name });
+}
+
+// 振り返りが上限で保存できなかったとき: 振り返りは場所を空けられない（記録に触れていない記憶は消せない）ので、そう言って返し、持ち主にも知らせる
+function reviewFull(ctx: ToolContext, language: ReturnType<typeof languageOf>): string {
+  const projectId = memoryProjectOf(ctx);
+  ctx.services?.notify?.({ kind: 'info', title: storeText(language, 'memfile.full_title'), body: storeText(language, 'memfile.full_body', { max: MEMORY_FILES_MAX }), link: '#/memory', dedupKey: `memory-full:${projectId ?? ''}` });
+  return storeText(language, 'memfile.review_full', { max: MEMORY_FILES_MAX });
+}
+
 function run(ctx: ToolContext, work: (projectId: string, store: NonNullable<NonNullable<ToolContext['services']>['memoryFiles']>) => { name: string; eventId: number; action: 'create' | 'update' | 'forget'; key: 'memfile.saved' | 'memfile.updated' | 'memfile.forgotten' }): ToolOutput {
   const language = languageOf(ctx.config);
   try {
@@ -47,6 +83,7 @@ function run(ctx: ToolContext, work: (projectId: string, store: NonNullable<NonN
     ctx.services?.emit({ type: 'memoryFile.changed', runId: ctx.runId, conversationId: ctx.conversationId, projectId, name: done.name, action: done.action, eventId: done.eventId });
     return { content: toolText(language, done.key, { name: done.name }) };
   } catch (error) {
+    if (error instanceof MemoryFileError && error.code === 'memfile.too_many' && ctx.kind === 'review') return { content: reviewFull(ctx, language), isError: true };
     return { content: error instanceof MemoryFileError ? error.text(language) : toolText(language, 'failed', { detail: errorText(error, language) }), isError: true };
   }
 }
@@ -63,23 +100,29 @@ export const memoryFileSave: ToolDef<{ title: string; content: string; why: stri
   },
 };
 
-export const memoryFileUpdate: ToolDef<{ name: string; title?: string; content: string; why: string }> = {
+export const memoryFileUpdate: ToolDef<{ name: string; title?: string; content: string; why: string; evidence?: string }> = {
   name: 'memory_update',
   description: MEMORY_FILE_DESCRIPTIONS.memory_update,
-  input: Type.Object({ name: NameArg, title: Type.Optional(TitleArg), content: ContentArg, why: WhyArg }, { additionalProperties: false }),
+  input: Type.Object({ name: NameArg, title: Type.Optional(TitleArg), content: ContentArg, why: WhyArg, evidence: EvidenceArg }, { additionalProperties: false }),
   ...common,
   async execute(input, ctx) {
-    return run(ctx, (projectId, store) => ({ ...store.update(projectId, input.name, { title: input.title, content: input.content, summary: input.why }, memoryWriter(ctx)), action: 'update', key: 'memfile.updated' }));
+    return run(ctx, (projectId, store) => {
+      reviewGuard(ctx, projectId, store, input.name, input.evidence);
+      return { ...store.update(projectId, input.name, { title: input.title, content: input.content, summary: input.why }, memoryWriter(ctx)), action: 'update', key: 'memfile.updated' };
+    });
   },
 };
 
-export const memoryFileForget: ToolDef<{ name: string; reason: string }> = {
+export const memoryFileForget: ToolDef<{ name: string; reason: string; evidence?: string }> = {
   name: 'memory_forget',
   description: MEMORY_FILE_DESCRIPTIONS.memory_forget,
-  input: Type.Object({ name: NameArg, reason: Type.String({ minLength: 1, maxLength: 300 }) }, { additionalProperties: false }),
+  input: Type.Object({ name: NameArg, reason: Type.String({ minLength: 1, maxLength: 300 }), evidence: EvidenceArg }, { additionalProperties: false }),
   ...common,
   async execute(input, ctx) {
-    return run(ctx, (projectId, store) => ({ ...store.forget(projectId, input.name, input.reason, memoryWriter(ctx)), action: 'forget', key: 'memfile.forgotten' }));
+    return run(ctx, (projectId, store) => {
+      reviewGuard(ctx, projectId, store, input.name, input.evidence);
+      return { ...store.forget(projectId, input.name, input.reason, memoryWriter(ctx)), action: 'forget', key: 'memfile.forgotten' };
+    });
   },
 };
 

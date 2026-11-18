@@ -260,9 +260,11 @@ export interface CuriosityItem {
 export interface ReviewJob {
   id: number; kind?: 'memory' | 'skill'; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;
   conversation_id: string | null; task_id: string | null; run_id: string | null; created_at: number; finished_at: number | null;
-  changes: MemoryEvent[];
+  changes: Array<MemoryEvent | MemoryFileChange>;
   project_id?: string | null;
 }
+// 振り返りが変えた製品の記憶のファイル（memory_file_events）。after はファイルの場所（memory/<name>.md）
+export interface MemoryFileChange { id: string; source: 'file'; project_id: string; name: string; action: string; actor: string; summary: string | null; tainted: number; before: null; after: string; undone_at: null; created_at: number }
 
 export interface TemplatesView { rules: string; files: Array<{ name: string; content: string }> }
 export interface OnboardingView { done: boolean; steps: { user: boolean; identity: boolean; persona: boolean; model: boolean } }

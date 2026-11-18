@@ -238,6 +238,7 @@ export class ChatEngine {
   // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
   #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
+  #reviewEvidence = new Map<string, NonNullable<ToolContext['reviewEvidence']>>();
   #scoutEnds = new Map<string, ScoutEnd>();
   #scoutChildren = new Map<string, { spawned: number; ok: number; area?: string }>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
@@ -544,7 +545,7 @@ export class ChatEngine {
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
 
-  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[]; onlyTools?: ReadonlySet<string> } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[]; onlyTools?: ReadonlySet<string>; evidence?: ToolContext['reviewEvidence'] } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.review_running') };
     const chain = this.#chain('background');
     if (!chain.usable.length) {
@@ -556,6 +557,7 @@ export class ChatEngine {
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     const forbid = options.onlyTools ? new AllBut(options.onlyTools, options.forbidTools ?? []) : options.forbidTools?.length ? new Set(options.forbidTools) : undefined;
     if (this.#reviewSawOutside(conversationId)) this.#initialTaint.set(runId, [engineText(languageOf(this.#d.config()), 'taint.review_material')]);
+    if (options.evidence) this.#reviewEvidence.set(runId, options.evidence);
     this.#start(runId, conversationId, chain.usable, 'review', undefined, forbid);
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
@@ -763,6 +765,7 @@ export class ChatEngine {
         this.#runFence.delete(runId);
         this.#runIndex.delete(runId);
         this.#loaded.delete(runId);
+        this.#reviewEvidence.delete(runId);
         this.#stopped.delete(runId);
         this.#hardStops.delete(runId);
         this.#modeHost.delete(conversationId);
@@ -848,6 +851,7 @@ export class ChatEngine {
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
       runId, conversationId, kind, signal, stopSignal: this.#hardStops.get(runId)?.signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}), ...(kind === 'review' && resolved ? { memoryProject: resolved.id } : {}),
+      ...(() => { const evidence = this.#reviewEvidence.get(runId); this.#reviewEvidence.delete(runId); return kind === 'review' && evidence ? { reviewEvidence: evidence } : {}; })(),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
@@ -1266,7 +1270,8 @@ export class ChatEngine {
     const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
     const background = backgroundSection(d.background?.list({ conversationId: p.conversationId }) ?? [], language);
     const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
-    const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language } : undefined;
+    const planMemory = p.kind === 'chat' && mode === 'plan' && row?.archived_at === null && !d.botMemory && d.memoryFiles ? (config.memory.review ? 'review' as const : 'off' as const) : undefined;
+    const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language, memory: planMemory } : undefined;
     const mesh = this.#meshIndex(p.runId, p.project, available, p.conversationId);
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist, background].filter(Boolean).join('\n\n');
