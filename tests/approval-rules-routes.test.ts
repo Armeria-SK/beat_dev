@@ -14,10 +14,14 @@ const fake: ToolDef<{ text: string }> = {
   summarize: input => ({ title: 'Fake', body: input.text }), execute: async () => ({ content: 'done', exitCode: 0 }),
 };
 
+const HELD = 'heldvalue-9f8e7d6c5b4a';
+const held: Array<{ source: string; value: string }> = [];
+const holder: ToolDef<{ text: string }> = { ...fake, name: 'fake_held', held: () => held };
+
 const CANDIDATE: RuleCandidate = { kind: 'policy', tool: 'fake_rule', base: '{"name":"fake_rule","v":1}', keys: ['policy.tool'], shown: 'Use tool fake_rule' };
 
 async function setup(t: Parameters<typeof startApp>[0]) {
-  const s = await startApp(t, { tools: [...builtinTools(), fake] });
+  const s = await startApp(t, { tools: [...builtinTools(), fake, holder] });
   const root = join(s.paths.workspace, 'shop');
   mkdirSync(root, { recursive: true });
   const project = s.app.projects.create({ name: 'Shop', root, rootKey: rootKeyOf(root), checkCommand: null });
@@ -90,4 +94,18 @@ test('J-5 口: Origin の無い書き込みは今までどおり断る（決ま�
   const del = await fetch(`${s.origin}/api/approval-rules/${id}`, { method: 'DELETE' });
   assert.equal(del.status, 403);
   assert.equal((await s.rules()).length, 1);
+});
+
+test('J-5 口（預かった秘密）: 積んだあとで道具の預かった値が行の入力に入った行は、remember を送られても 409 で決まりは増えず、行は待ちのまま。本文なしの Approve は通る', async t => {
+  const s = await setup(t);
+  held.length = 0;
+  t.after(() => { held.length = 0; });
+  const row = await s.app.pending.park({ tool: 'fake_held', input: { text: `use ${HELD}` }, cwd: s.project.root, kind: 'policy', reason: 'Ask', runId: 'run-1', runKind: 'chat', conversationId: s.app.conversations.create({ title: 'c' }).id, projectId: s.project.id, tainted: false, rule: { ...CANDIDATE, tool: 'fake_held' } });
+  assert.ok(row.rule, 'control: offered while the value is not held');
+  held.push({ source: 'fake key', value: HELD });
+  const res = await s.json(`/api/pending/${row.id}/approve`, 'POST', { remember: true });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal((await s.rules()).length, 0);
+  assert.equal(s.app.pending.row(row.id)!.status, 'waiting');
+  assert.equal((await s.json(`/api/pending/${row.id}/approve`, 'POST', {})).status, 202);
 });

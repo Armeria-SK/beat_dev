@@ -1,6 +1,6 @@
 import type { App } from '../app.ts';
 import { transaction } from '../db/database.ts';
-import { PendingError, rememberable, storedRule, type PendingRow } from '../pending/store.ts';
+import { PendingError, storedRule, type PendingRow } from '../pending/store.ts';
 import { addRule } from '../tools/approval-rules.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
 import { domainProblem, readJson, requireObject, type Router, sendJson } from './http.ts';
@@ -53,7 +53,7 @@ export function registerPendingRoutes(router: Router, app: App): void {
         if (!before) throw new PendingError('not_found', { id });
         if (before.status !== 'waiting') throw new PendingError('not_waiting', { id, status: before.status });
         const rule = storedRule(before);
-        if (!rule || !before.project_id || !rememberable(before, { rule })) throw new PendingError('not_rememberable', { id });
+        if (!rule || !before.project_id || !app.pending.rememberableNow(before)) throw new PendingError('not_rememberable', { id });
         addRule(app.db, { projectId: before.project_id, candidate: rule, fromPending: id, now: app.now() });
         return app.pending.claim(id);
       }) : app.pending.claim(id);

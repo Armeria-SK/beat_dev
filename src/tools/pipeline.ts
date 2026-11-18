@@ -18,7 +18,7 @@ import { judgeOnce, type AutoVerdict, type ClassifierInput, type ClassifierPromp
 import { forgetAllow, involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
 import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
-import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
+import { carriesHeld, newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { QuestionError } from '../questions/store.ts';
@@ -373,7 +373,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   };
   const ruleFor = (candidate: RuleCandidate | undefined): RuleHit | undefined => {
     if (!candidate || !ctx.project?.id) return undefined;
-    try { return matchRule(deps.db, ctx.project.id, candidate); } catch { return undefined; }
+    // A call carrying a value beat holds (the same list the Pending card hides) never goes by a rule; without that list, no rule at all
+    try { return deps.pending && !carriesHeld([JSON.stringify(args) ?? '', candidate.base, candidate.shown], deps.pending.heldFor(tool)) ? matchRule(deps.db, ctx.project.id, candidate) : undefined; } catch { return undefined; }
   };
   const park =async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound, offer = false): Promise<ToolCallOutcome> => {
     const sendOrDelete = parkOutbound?.kind === 'send' || parkOutbound?.kind === 'delete' ? parkOutbound : undefined;
