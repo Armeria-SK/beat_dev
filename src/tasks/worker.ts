@@ -22,7 +22,8 @@ import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
 import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
-import { clearSleep, currentMarks, readSleep, sameMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
+import { clearSleep, currentMarks, quickMarks, readSleep, sameQuickMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
+import { treeMark } from '../scout/areas.ts';
 import { readLedger } from '../scout/ledger.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
 import { scoutText, type ScoutMessageKey } from '../shared/messages/scout.ts';
@@ -75,7 +76,7 @@ export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' }
 
 export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string; projectId?: string }
 
-interface ScoutPlan { project: ProjectRow; route: ScoutRoute; asked?: boolean }
+interface ScoutPlan { project: ProjectRow; route: ScoutRoute; asked?: boolean; marks?: Marks }
 
 export type ScoutView = { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null };
 export type ScoutAsk = { ok: true; view: ScoutView } | { ok: false; code: 'scout_off' | 'scout_no_model' | 'scout_cloud_zero' | 'scout_resting' | 'scout_not_built' | 'scout_busy' };
@@ -170,6 +171,8 @@ export class Worker {
   readonly #scoutAskedRuns = new Set<string>();
   // 材料を読んでいて、まだ #running に入っていない考える実行の製品（そのあいだの Think now を重ねないため）
   #scoutStarting: ScoutPlan | undefined;
+  // 作業フォルダの印を最後に比べた時刻（製品ごと）。見回りの間隔より短くは比べない
+  readonly #treeCheckedAt = new Map<string, number>();
   #ticking = false;
   #stopped = true;
 
@@ -382,7 +385,7 @@ export class Worker {
           const scout = await this.#scoutPlan(c, now, own);
           if (scout.plan) {
             const outcome = await this.#runScout(scout.plan, c, now, release);
-            reschedule(now);
+            reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
             return outcome;
           }
           if (scout.wakeAt !== undefined) freeAtWake = scout.wakeAt;
@@ -412,7 +415,7 @@ export class Worker {
         const scout = (own || this.#scoutAsked.size > 0) && this.#forced.size === 0 ? await this.#scoutPlan(c, now, own) : {};
         if (scout.plan) {
           const outcome = await this.#runScout(scout.plan, c, now, release);
-          reschedule(now);
+          reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
           return outcome;
         }
         reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity));
@@ -598,20 +601,22 @@ export class Worker {
       }
       const ready = eligible.find(p => p.id === id);
       if (ready) return { plan: { project: ready, route, asked: true } };
-      // 押したあとに製品の作業が来た: worker が On ならその作業のあとに動く。Off なら（ひとりでに動く作業は Off のまま動かないので）待ち続けずに捨てる
-      if (!own && scoutBusy(this.#d.db, id)) {
+      // 押したあとに製品の作業が来た: worker が On ならその作業のあとに動く。Off でも、動いている作業と持ち主の作業（Off でも動く）は待つ。
+      // Off のまま動かない作業（ひとりでの作業）だけが塞いでいるなら、待ち続けずに捨てる
+      if (!own && scoutBusy(this.#d.db, id) && !this.#ownerBlocking(id)) {
         this.#scoutAsked.delete(id);
         this.#scoutChanged(id);
       }
     }
     if (!own) return {};
-    await this.#wakeSleepers(eligible);
+    const woken = await this.#wakeSleepers(eligible, now);
     if (!route.local) {
       const runs = cloudRunsLastHour(this.#d.kv, now);
       if (runs.length >= (c.scout?.cloudRunsPerHour ?? 1)) return runs.length ? { wakeAt: Math.min(...runs) + 3_600_000 } : {};
     }
     const picked = pickScoutProject(this.#d.db, this.#d.kv, now);
-    return picked.project ? { plan: { project: picked.project, route } } : picked.wakeAt !== undefined ? { wakeAt: picked.wakeAt } : {};
+    const marks = picked.project ? woken.get(picked.project.id) : undefined;
+    return picked.project ? { plan: { project: picked.project, route, ...(marks ? { marks } : {}) } } : picked.wakeAt !== undefined ? { wakeAt: picked.wakeAt } : {};
   }
 
   async #runScout(plan: ScoutPlan, c: AppConfig, now: number, release: () => void): Promise<TickResult> {
@@ -633,7 +638,7 @@ export class Worker {
     }
     const window = route.available ?? 32_000;
     // 休みの印は材料を読む前に取る（読んでいる間の Reject・計画書の保存を、休んだあとの変化として拾う）
-    const marks: Marks | undefined = plan.asked ? undefined : await currentMarks(this.#d.db, kv, project.id, project.root, dirname(projects!.dir));
+    const marks: Marks | undefined = plan.asked ? undefined : plan.marks ?? await currentMarks(this.#d.db, kv, project.id, project.root, dirname(projects!.dir));
     let materials: Awaited<ReturnType<typeof scoutMaterials>>;
     try {
       materials = await scoutMaterials({
@@ -649,6 +654,7 @@ export class Worker {
     const sleep = plan.asked || !marks ? undefined : this.#sleepReason(project.id, materials);
     if (sleep && marks) {
       saveSleep(kv, project.id, { reason: sleep, at: now, ...marks });
+      this.#treeCheckedAt.set(project.id, now);
       this.#scoutChanged(project.id);
       return 'idle';
     }
@@ -691,20 +697,41 @@ export class Worker {
     this.#d.onScoutChange?.(projectId);
   }
 
-  #wake(projectId: string): void {
+  // recount: 「一覧が育たない」の数え直し。作業フォルダの変化だけで起きたときは数え直さない（コミットしていない保存のたびに空回りの 3 回が戻らないように）
+  #wake(projectId: string, recount = true): void {
     clearSleep(this.#d.kv, projectId);
-    saveScoutState(this.#d.kv, projectId, { flat: 0, left: -1 });
+    if (recount) saveScoutState(this.#d.kv, projectId, { flat: 0, left: -1 });
     this.#scoutChanged(projectId);
   }
 
-  // 休んでいる製品のうち、HEAD・計画書・カンバン（考える実行の行と、まだ触られていない提案を除く）が休んだときと違うものを起こす
-  async #wakeSleepers(projects: readonly ProjectRow[]): Promise<void> {
+  // 休んでいる製品のうち、HEAD・計画書・カンバン（考える実行の行と、まだ触られていない提案を除く）が休んだときと違うものを起こす。
+  // 作業フォルダの印は、見回りの間隔（5 分）に 1 回だけ比べる。起こした製品の印を返す（行を作る前にもう一度取らない）
+  async #wakeSleepers(projects: readonly ProjectRow[], now: number): Promise<Map<string, Marks>> {
     const dataDir = dirname(this.#d.projects!.dir);
+    const woken = new Map<string, Marks>();
     for (const project of projects) {
       const sleep = readSleep(this.#d.kv, project.id);
       if (!sleep) continue;
-      if (!sameMarks(sleep, await currentMarks(this.#d.db, this.#d.kv, project.id, project.root, dataDir))) this.#wake(project.id);
+      const quick = await quickMarks(this.#d.db, this.#d.kv, project.id, project.root, dataDir);
+      const moved = !sameQuickMarks(sleep, quick);
+      if (!moved && now - (this.#treeCheckedAt.get(project.id) ?? sleep.at) < IDLE_POLL_MS) continue;
+      this.#treeCheckedAt.set(project.id, now);
+      const tree = await treeMark(project.root, dataDir).catch(() => '');
+      if (!moved && tree === sleep.tree) continue;
+      woken.set(project.id, { ...quick, tree });
+      this.#wake(project.id, moved);
     }
+    return woken;
+  }
+
+  // 動いている作業か、持ち主の作業（worker が Off でも動く）が製品を塞いでいる
+  #ownerBlocking(projectId: string): boolean {
+    const rows = this.#d.db.prepare("SELECT id, status FROM tasks WHERE project_id = ? AND status IN ('ready', 'running') AND proposed_by IS NOT 'scout-run'").all(projectId) as Array<{ id: string; status: string }>;
+    return rows.some(row => {
+      if (row.status === 'running') return true;
+      const task = this.#d.tasks.get(row.id);
+      return task !== undefined && this.#ownerWork(task);
+    });
   }
 
   // 見る所が無い（見ていない場所も古いエントリも無い）・深める提案が残っていない・見ていない場所の数が続けて減らない、なら休む

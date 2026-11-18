@@ -45,10 +45,15 @@ export function planMark(kv: KV, projectId: string): string {
   }));
 }
 
-export async function currentMarks(db: DatabaseSync, kv: KV, projectId: string, root: string, dataDir: string): Promise<Marks> {
+// 安い印（HEAD・計画書・カンバン）。作業フォルダの印 `tree` はファイルを読むので、見回りごとに 1 回までにする（worker が間引く）
+export async function quickMarks(db: DatabaseSync, kv: KV, projectId: string, root: string, dataDir: string): Promise<Omit<Marks, 'tree'>> {
   const plan = planMark(kv, projectId);
   const kanban = kanbanMark(db, projectId);
-  return { head: await headOf(root, dataDir).catch(() => null), plan, kanban, tree: await treeMark(root, dataDir).catch(() => '') };
+  return { head: await headOf(root, dataDir).catch(() => null), plan, kanban };
 }
 
-export const sameMarks = (a: Marks, b: Marks): boolean => a.head === b.head && a.plan === b.plan && a.kanban === b.kanban && a.tree === b.tree;
+export async function currentMarks(db: DatabaseSync, kv: KV, projectId: string, root: string, dataDir: string): Promise<Marks> {
+  return { ...(await quickMarks(db, kv, projectId, root, dataDir)), tree: await treeMark(root, dataDir).catch(() => '') };
+}
+
+export const sameQuickMarks = (a: Omit<Marks, 'tree'>, b: Omit<Marks, 'tree'>): boolean => a.head === b.head && a.plan === b.plan && a.kanban === b.kanban;

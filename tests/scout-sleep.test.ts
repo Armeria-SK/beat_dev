@@ -11,6 +11,7 @@ import type { ModelRequest } from '../src/providers/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { ledgerPath } from '../src/scout/ledger.ts';
+import { treeMark } from '../src/scout/areas.ts';
 import { readSleep } from '../src/scout/sleep.ts';
 import { restScout, scoutState } from '../src/scout/run.ts';
 import type { Proposal } from '../src/tasks/proposal.ts';
@@ -446,7 +447,7 @@ test('scout sleep: a product without git wakes when a file is edited and looks a
   const at = new Date(Math.max(Date.now(), s.clock.now) + 3_600_000);
   utimesSync(file, at, at);
   s.adapter().scripts.push(reply('Looked at src again.'));
-  s.later();
+  s.later(6);
   assert.equal(await s.app.worker.tick(), 'ran', 'the edit wakes the scout');
   assert.match(prompts(s).at(-1)!, /\[STALE\] src check/u);
 });
@@ -460,7 +461,7 @@ test('scout sleep: a git product wakes on a new untracked folder and on an uncom
   const first = readSleep(s.app.kv, s.projectId)!;
   // 書きかけの変更: 起きて見直す（コミットされていない変更は一覧を古くしないので、そのまま新しい印でまた休む）
   appendFileSync(join(s.root, 'src', 'a.ts'), 'export const draft = 1;\n');
-  s.later();
+  s.later(6);
   assert.equal(await s.app.worker.tick(), 'idle');
   const second = readSleep(s.app.kv, s.projectId)!;
   assert.ok(second.at > first.at, 'woke on the uncommitted edit');
@@ -469,7 +470,7 @@ test('scout sleep: a git product wakes on a new untracked folder and on an uncom
   mkdirSync(join(s.root, 'lib'));
   writeFileSync(join(s.root, 'lib', 'c.ts'), 'export const c = 3;\n');
   s.adapter().scripts.push(reply('Looked at lib.'));
-  s.later();
+  s.later(6);
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.match(prompts(s).at(-1)!, /- lib/u);
 });
@@ -599,4 +600,70 @@ test('Think now: refused (409) while the product has work waiting or running, an
   s.adapter().scripts.push(reply('should not run'));
   await s.app.worker.tick();
   assert.equal(s.scoutRows().length, 0, 'the press does not wait forever behind work the Off worker never runs');
+});
+
+test('scout sleep: an uncommitted edit does not give a product asleep as "not growing" fresh model runs (re-review HIGH)', { skip: !gitAvailable }, async t => {
+  const s = await setup(t, { git: true });
+  for (let i = 0; i < 12; i += 1) s.adapter().scripts.push(reply(`nothing ${i}`));
+  for (let i = 0; i < 3; i += 1) { assert.equal(await s.app.worker.tick(), 'ran'); s.later(); }
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+  const calls = s.adapter().calls.length;
+  for (let i = 0; i < 3; i += 1) {
+    appendFileSync(join(s.root, 'src', 'a.ts'), `export const draft${i} = ${i};\n`);
+    s.later(6);
+    assert.notEqual(await s.app.worker.tick(), 'ran', `edit ${i + 1}: no model run`);
+  }
+  assert.equal(s.adapter().calls.length, calls, 'the model is not called for uncommitted edits');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+});
+
+test('scout sleep: a file rewritten all the time is checked at most once per idle poll, not on every tick (re-review MEDIUM)', { skip: !gitAvailable }, async t => {
+  const s = await setup(t, { git: true });
+  s.adapter().scripts.push(...checkBoth);
+  await s.app.worker.tick();
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  const first = readSleep(s.app.kv, s.projectId)!;
+  s.changed.length = 0;
+  for (let i = 0; i < 4; i += 1) {
+    appendFileSync(join(s.root, 'src', 'a.ts'), `export const log${i} = ${i};\n`);
+    s.later(1);
+    await s.app.worker.tick();
+  }
+  assert.equal(readSleep(s.app.kv, s.projectId)!.at, first.at, 'no wake and re-sleep within the poll interval');
+  assert.equal(s.changed.length, 0, 'no scout.changed on every tick');
+  appendFileSync(join(s.root, 'src', 'a.ts'), 'export const log9 = 9;\n');
+  s.later(2);
+  await s.app.worker.tick();
+  assert.ok(readSleep(s.app.kv, s.projectId)!.at > first.at, 'checked again once the poll interval passed');
+  assert.equal(s.scoutRows().length, 1, 'never a model run');
+});
+
+test('Think now: with background work Off, a press waits for the owner\'s own task (which runs while Off) instead of being dropped (re-review LOW)', async t => {
+  const s = await setup(t, { edit: c => { c.worker.enabled = false; } });
+  assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true);
+  const own = s.app.tasks.create({ title: 'owner work', origin: 'user', projectId: s.projectId, actor: 'user' });
+  s.app.db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(own.id);
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 0, 'waits while the owner\'s task is running');
+  s.app.db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(own.id);
+  s.adapter().scripts.push(reply('after the owner task'));
+  assert.equal(await s.app.worker.tick(), 'ran', 'the press was kept');
+});
+
+test('treeMark: changes when a product file changes, not when beat\'s own data folder inside the product changes', async t => {
+  const root = tempDir(t);
+  const data = join(root, 'beat-data');
+  mkdirSync(data);
+  mkdirSync(join(root, 'src'));
+  writeFileSync(join(root, 'src', 'a.ts'), 'a\n');
+  writeFileSync(join(data, 'beat.db'), '1');
+  const before = await treeMark(root, data);
+  const later = new Date(Date.now() + 3_600_000);
+  writeFileSync(join(data, 'beat.db'), '22');
+  utimesSync(join(data, 'beat.db'), later, later);
+  assert.equal(await treeMark(root, data), before, 'beat\'s own writes do not move the mark');
+  utimesSync(join(root, 'src', 'a.ts'), later, later);
+  assert.notEqual(await treeMark(root, data), before, 'a product edit moves the mark');
 });
