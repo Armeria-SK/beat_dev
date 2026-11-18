@@ -237,3 +237,45 @@ test('ui/Task and ProductHome（DOM）: a thinking run ("scout") is not "another
     }
   } finally { stop(); }
 });
+
+test('ui/KanbanPane and ProductHome（DOM）: before the first load finishes, the board area says Loading… (it used to be blank), and the cards replace it once they come (backlog 7-9)', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  serve({ active: [task('Resume interrupted uploads', 'inbox', { proposal: PROPOSAL })] }, null);
+  const served = globalThis.fetch;
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    if (String(path).startsWith('/api/tasks')) await gate;
+    return served(path, init);
+  }) as typeof fetch;
+  const { container } = await pane();
+  await settle();
+  assert.equal(container.querySelector('[data-loading]')?.textContent, en['ui.set.loading'], 'the pane says Loading');
+  assert.equal(container.querySelector('.bt-col'), null, 'no empty columns while loading');
+  const home = await render(createElement(ProductHome, { id: PRODUCT, project: project(), conversations: [], drafts: [], checklists: new Map(), worker: null, revision: 0 }));
+  await settle();
+  const homeLoading = home.container.querySelector('[data-loading]');
+  assert.equal(homeLoading?.textContent, en['ui.set.loading'], 'the product home says Loading where the board goes');
+  assert.ok(homeLoading?.classList.contains('ui-home__board'), 'it takes the place of the board in the narrow order');
+  release();
+  await settle();
+  assert.equal(container.querySelector('[data-loading]'), null);
+  assert.ok(byText(column(container, 'proposed'), '.bt-card__title', 'Resume interrupted uploads'));
+  assert.equal(home.container.querySelector('[data-loading]'), null);
+});
+
+test('ui/KanbanPane and ProductHome（DOM）: when the first load fails, the failure notice shows and Loading… does not stay (backlog 7-9 review)', async () => {
+  serve({ active: [] }, null);
+  const served = globalThis.fetch;
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    if (String(path).startsWith('/api/tasks')) return new Response(JSON.stringify({ error: 'boom' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    return served(path, init);
+  }) as typeof fetch;
+  const { container } = await pane();
+  await settle();
+  assert.ok(container.textContent!.includes(en['ui.kanban.loadFailed']), 'the failure notice');
+  assert.equal(container.querySelector('[data-loading]'), null, 'no Loading… next to the failure');
+  const home = await render(createElement(ProductHome, { id: PRODUCT, project: project(), conversations: [], drafts: [], checklists: new Map(), worker: null, revision: 0 }));
+  await settle();
+  assert.ok(home.container.textContent!.includes(en['ui.kanban.loadFailed']));
+  assert.equal(home.container.querySelector('[data-loading]'), null);
+});

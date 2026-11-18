@@ -144,6 +144,19 @@ test('Settings › Models（DOM）: 設定ファイルで routing.judge に 2 �
   assert.equal(plain.querySelector('[data-below="roles:judge"]'), null, '1 つだけなら出さない');
 });
 
+test('Settings › Models（DOM）: routing.scout に 2 つ以上書いてあるとき、先頭のあとの予備を Scout の行の下に出す（backlog 7-1 の残り）', async () => {
+  const config = withModels();
+  config.routing.scout = ['gemma', 'phi', 'qwen'];
+  const { container } = await openModels(config);
+  assert.equal(container.querySelector('[data-below="roles:scout"] .bt-meta')?.textContent, en['ui.set.models.judgeBackups']('PHI, QWEN'), 'ラベルの名前で、ファイルの順に出す');
+  await cleanup();
+  const one = withModels();
+  one.routing.scout = ['gemma'];
+  const { container: plain } = await openModels(one);
+  assert.ok(plain.querySelector('[data-row="roles:scout"]'));
+  assert.equal(plain.querySelector('[data-below="roles:scout"]'), null, '1 つだけなら出さない');
+});
+
 const esc = async (target: EventTarget): Promise<KeyboardEvent> => {
   const event = new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
   await update(() => { target.dispatchEvent(event); });

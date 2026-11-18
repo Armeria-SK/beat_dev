@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Acceptance, AcceptanceItem, PlanDoc } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
-import { acceptanceMeta, checkLabel, conversationLink, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../web/src/ui/acceptance.ts';
+import { acceptanceMeta, checkLabel, conversationLink, evidenceLines, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../web/src/ui/acceptance.ts';
 
 // 受け入れの一覧の表示（beat 3-1b-u）。画面を持たない決まり: 並べ方・札の言葉・開いた中身（web/src/ui/acceptance.ts）。
 
@@ -163,4 +163,29 @@ test('ui/acceptance: claimed は分かるが reason が知らない値なら、�
   const why = itemDetails(odd).find(d => d.label === 'ui.acc.detail.why');
   assert.ok(why && 'note' in why);
   assert.equal(why.note, 'ui.acc.reason.not_found');
+});
+
+test('ui/acceptance (backlog 7-9): with short, a tagged call shows the tool and a short readable target, not its input JSON, even when the copied input was cut off; without it the full copy stays (PlanPane details)', () => {
+  const short = (input: string): string => evidenceLines([{ tag: 'E-1', tool: 'x', input, ok: true, at: 1 }], { short: true })[0]!.text.slice('E-1 · x · '.length);
+  const write = JSON.stringify({ path: 'src/cli.js', content: '#!/usr/bin/env node\nimport { readFileSync } from "node:fs";\n' + 'x'.repeat(400) }).slice(0, 300);
+  assert.equal(short(write), 'src/cli.js');
+  assert.equal(short('{"command":"node parse.js empty.txt"}'), 'node parse.js empty.txt');
+  const long = short(JSON.stringify({ command: `node -e "${'y'.repeat(200)}"` }));
+  assert.ok(Array.from(long).length === 80 && long.endsWith('…'), long);
+  assert.equal(short('{"a":1,\n"b":[2,3]}'), '{"a":1, "b":[2,3]}', 'no known field: the input on one line');
+  assert.equal(short('{}'), '{}');
+  assert.deepEqual(evidenceLines([{ tag: 'E-3', tool: 'shell_run', input: '{"command":"node parse.js"}', ok: true, at: 1 }]), [{ text: 'E-3 · shell_run · {"command":"node parse.js"}' }], 'the full copy without short');
+});
+
+test('ui/acceptance (backlog 7-9 review): a target cut off by the 300-character copy is still shown short; escapes are read, a half escape at the cut is dropped, control characters go, and the 80-character cut never splits an emoji', () => {
+  const short = (input: string): string => evidenceLines([{ tag: 'E-1', tool: 'x', input, ok: true, at: 1 }], { short: true })[0]!.text.slice('E-1 · x · '.length);
+  const cutOff = JSON.stringify({ command: 'node -e "' + 'z'.repeat(400) + '"' }).slice(0, 300);
+  assert.equal(short(cutOff), 'node -e "' + 'z'.repeat(70) + '…', 'a value with no closing quote');
+  assert.equal(short('{"command":"echo ab\\'), 'echo ab…', 'a half escape at the cut is dropped');
+  assert.equal(short('{"command":"echo ab\\u00'), 'echo ab…', 'a half \\u escape at the cut is dropped');
+  assert.equal(short('{"command":"echo \\"hi\\" \\u00e9 tab\\there"}'), 'echo "hi" é tab here', 'JSON escapes are read');
+  assert.equal(short('{"command":"a\\u0001b\\u202ec"}'), 'abc', 'control and invisible characters are removed');
+  assert.equal(short('{"path":"a\\qb"}'), 'a\\qb', 'an escape JSON cannot read is shown as written');
+  const emoji = short(JSON.stringify({ command: 'a'.repeat(78) + '😀' + 'b'.repeat(5) }));
+  assert.equal(emoji, 'a'.repeat(78) + '😀…', 'cut by characters, not UTF-16 halves');
 });

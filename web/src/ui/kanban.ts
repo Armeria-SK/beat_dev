@@ -166,8 +166,17 @@ export function tabStep(current: number, count: number, key: string): number | n
 export const proposalOf = (task: Pick<Task, 'proposal'>): Proposal | null => task.proposal ?? null;
 
 export function firstSentences(text: string, count = 2): string {
-  const sentences = text.trim().match(/[^.!?\u3002\uFF01\uFF1F]+(?:[.!?\u3002\uFF01\uFF1F]+|$)/gu) ?? [];
-  return sentences.slice(0, count).join('').trim();
+  const t = text.trim();
+  const stop = /[.!?]+(?=\s|$)|[\u3002\uFF01\uFF1F]+/gu;
+  const sentences: string[] = [];
+  let start = 0;
+  for (let m = stop.exec(t); m && sentences.length < count; m = stop.exec(t)) {
+    if (m[0] === '.' && /\b(?:e\.g|i\.e)$/i.test(t.slice(0, m.index))) continue;
+    sentences.push(t.slice(start, m.index + m[0].length));
+    start = m.index + m[0].length;
+  }
+  if (sentences.length < count && start < t.length) sentences.push(t.slice(start));
+  return sentences.join('').trim();
 }
 
 export function kanbanPaneCount(marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state']; projectId?: string | null }>, productId: string): number {

@@ -97,7 +97,7 @@ test('ui/Kanban（DOM）: 確かめ待ちのタスクは Awaiting check の列�
   assert.ok(byText(card, '.bt-label', 'Task · check it'));
   assert.ok(card.querySelector('.bt-dot'), '持ち主を待つカードは点が打つ');
   assert.deepEqual([...card.querySelectorAll('[data-item]')].map(li => li.getAttribute('data-item')), ['A-2', 'A-3'], '残った項目だけ（済の A-1 は出さない）');
-  assert.match(card.querySelector('[data-item="A-2"]')!.textContent!, /The parser reads empty files.*E-3 · shell_run/u, '項目の文と証拠の写し');
+  assert.match(card.querySelector('[data-item="A-2"]')!.textContent!, /The parser reads empty files.*E-3 · shell_run · node parse\.js empty\.txt$/u, '項目の文と証拠の短い写し（入力の JSON ではない。backlog 7-9）');
   assert.match(card.querySelector('[data-item="A-3"]')!.textContent!, /npm run lint · failed/u);
   assert.ok(byText(card, '.bt-card__meta span', '1 of 3 met'));
   assert.equal(byText(card, 'a', 'Open')?.getAttribute('href'), '#/tasks/t1');
@@ -180,6 +180,8 @@ test('ui/Task（DOM）: 確かめ待ちのタスクの画面に、残った項�
   assert.ok(byText(a2, '.bt-pill', 'Unverified'));
   assert.ok(byText(a3, '.bt-pill', 'Open'));
   assert.ok(byText(a3, 'pre', 'lint: 2 errors'), '失敗したコマンドの出力の末尾');
+  assert.match(a2.textContent!, /E-3 · shell_run · node parse\.js empty\.txt/u, 'Task の画面も証拠は短い写し（backlog 7-9）');
+  assert.doesNotMatch(a2.textContent!, /\{"command"/u);
   await click(byText(a2, 'button', 'Checked'));
   await settle();
   assert.deepEqual(sent.at(-1), { method: 'POST', path: '/api/tasks/t1/items/A-2/check', body: { result: 'checked', version: 3 } });

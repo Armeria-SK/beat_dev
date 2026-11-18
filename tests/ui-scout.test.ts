@@ -17,6 +17,14 @@ test('ui/kanban (7-1): a proposal card shows at most two sentences of why', () =
   assert.equal(firstSentences('  '), '');
 });
 
+test('ui/kanban (backlog 7-1): a "." inside a file name or "e.g." does not end a sentence; only a "." before whitespace or the end does', () => {
+  assert.equal(firstSentences('Add tests for src/cli.js and README.md now. Then ship. Later more.'), 'Add tests for src/cli.js and README.md now. Then ship.');
+  assert.equal(firstSentences('Use a flag, e.g.--verbose, for logs. Second one! Third.'), 'Use a flag, e.g.--verbose, for logs. Second one!');
+  assert.equal(firstSentences('Version 1.2.3 is out.Next'), 'Version 1.2.3 is out.Next');
+  assert.equal(firstSentences('Ends with dots...'), 'Ends with dots...');
+  assert.equal(firstSentences('Cover edge cases, e.g. empty input and i.e. no args. Second. Third.'), 'Cover edge cases, e.g. empty input and i.e. no args. Second.');
+});
+
 test('ui/kanban (7-1): the Kanban pane tab counts Proposed plus Awaiting check of this product only; the narrow order is Proposed, Awaiting check, In progress, Approved, Done', () => {
   const marks = [
     { status: 'inbox' as const, projectId: 'p1' }, { status: 'inbox' as const, projectId: 'p2' }, { status: 'inbox' as const, projectId: null },
