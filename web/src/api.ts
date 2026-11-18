@@ -1,6 +1,6 @@
 import type { PermissionMode } from '../../src/shared/permission-mode.ts';
 import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
-import { getLanguage } from './i18n/state.ts';
+import { getExplainLanguage } from './i18n/state.ts';
 import { errorBodyText } from './server-text.ts';
 
 // 会話の要約（読むだけ）。要約が無ければ summary は null
@@ -319,7 +319,7 @@ export class ApiError extends Error {
   readonly body: any;
   constructor(status: number, body: any) {
     // コード（code / errorCode）が辞書にあれば画面の言語で、無ければサーバーの文のまま
-    super(errorBodyText(body, getLanguage()) ?? (typeof body?.errorMessage === 'string' ? body.errorMessage : typeof body?.message === 'string' ? body.message : `HTTP ${status}`));
+    super(errorBodyText(body, getExplainLanguage()) ?? (typeof body?.errorMessage === 'string' ? body.errorMessage : typeof body?.message === 'string' ? body.message : `HTTP ${status}`));
     this.status = status;
     this.body = body;
   }

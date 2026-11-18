@@ -1,4 +1,4 @@
-import { getLanguage, type Lang } from '../i18n/state.ts';
+import { getExplainLanguage, type Lang } from '../i18n/state.ts';
 import { serverText } from '../server-text.ts';
 import { derivedKeyEnv, isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
 
@@ -55,7 +55,7 @@ const isIssue = (value: unknown): value is ServerIssue =>
   isPlain(value) && typeof value.path === 'string' && typeof value.message === 'string';
 
 // 画面の言語の文。コードが表に無い・差し込みの値が足りないときは、サーバーの文のまま
-export const issueMessage = (issue: ServerIssue, language: Lang = getLanguage()): string => serverText(issue.code, issue.params, language) ?? issue.message;
+export const issueMessage = (issue: ServerIssue, language: Lang = getExplainLanguage()): string => serverText(issue.code, issue.params, language) ?? issue.message;
 
 // サーバーが ID で書いた場所つきで返した問題（issues）を、そのまま行と節に結ぶ。モデルの ID に点があっても取り違えないよう、設定の ID と突き合わせる
 function problemOfIssue(issue: ServerIssue, config: Config, language: Lang): Problem {
@@ -73,7 +73,7 @@ function problemOfIssue(issue: ServerIssue, config: Config, language: Lang): Pro
 }
 
 // 保存を断られたときの応答から、画面に出す問題の一覧を作る。issues があればそれを使い、無い・読めない古い応答は文（problems）を今までの読み取りで読む。
-export function problemsOf(body: unknown, fallback: string, config: Config, language: Lang = getLanguage()): Problem[] {
+export function problemsOf(body: unknown, fallback: string, config: Config, language: Lang = getExplainLanguage()): Problem[] {
   const record = isPlain(body) ? body : {};
   if (Array.isArray(record.issues) && record.issues.length > 0 && record.issues.every(isIssue)) return record.issues.map(issue => problemOfIssue(issue, config, language));
   const texts = Array.isArray(record.problems) ? record.problems.filter((text): text is string => typeof text === 'string') : [];
