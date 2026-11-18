@@ -151,7 +151,7 @@ test('scout sleep: once every area is checked the scout sleeps without a run, an
   assert.match(prompts(s).at(-1)!, /src check/u);
 });
 
-test('scout sleep: a proposal or a deepening by the scout does not wake it; the owner\'s Reject and a plan save do', async t => {
+test('scout sleep: a proposal or a deepening by the scout does not wake it; the owner\'s Reject wakes it for one run with the reason (Q-79-1); a plan save wakes it without a run', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(...checkBoth);
   await s.app.worker.tick();
@@ -166,12 +166,18 @@ test('scout sleep: a proposal or a deepening by the scout does not wake it; the 
   s.later();
   await s.app.worker.tick();
   assert.equal(readSleep(s.app.kv, s.projectId)!.at, first.at, 'still the same sleep');
-  // 持ち主の Reject で起きる（見る所が無いので、起きてすぐ新しい印でまた休む）
-  s.app.tasks.finish(open.id, 'cancelled', 'Not now', 'user');
+  // 持ち主の Reject で起き、見る所が無くても 1 回考え直す（Reject の理由が材料に入る。Q-79-1）。そのあとはまた休む
+  s.app.tasks.finish(open.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not now, the shop has no users yet');
+  s.adapter().scripts.push(reply('Thought again.'));
   s.later();
-  await s.app.worker.tick();
+  assert.equal(await s.app.worker.tick(), 'ran', 'the Reject gives one run');
+  assert.equal(s.scoutRows().length, 2);
+  assert.match(prompts(s).at(-1)!, /the shop has no users yet/u);
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
   const third = readSleep(s.app.kv, s.projectId)!;
-  assert.ok(third.at > first.at, 'woke on the Reject and slept again');
+  assert.ok(third.at > first.at, 'slept again after the one run');
+  assert.equal(third.reason, 'done');
   assert.notEqual(third.kanban, first.kanban);
   // 計画書の保存で起きる
   const chat = s.app.conversations.create({ kind: 'chat', title: 'plan', projectId: s.projectId });
@@ -181,7 +187,7 @@ test('scout sleep: a proposal or a deepening by the scout does not wake it; the 
   const fourth = readSleep(s.app.kv, s.projectId)!;
   assert.ok(fourth.at > third.at, 'woke on the plan save');
   assert.notEqual(fourth.plan, third.plan);
-  assert.equal(s.scoutRows().length, 1, 'no model run while there is nothing to look at');
+  assert.equal(s.scoutRows().length, 2, 'a plan save wakes the scout, but with nothing to look at it sleeps again without a run');
 });
 
 test('scout sleep: when the areas left do not go down in 3 runs in a row, the scout sleeps with a note; the sleep survives a restart', async t => {
@@ -556,10 +562,62 @@ test('scout sleep: the marks are taken before the materials are read, so a Rejec
   s.later();
   duringMaterials(s, () => s.app.tasks.finish(open.id, 'cancelled', 'Not now', 'user'));
   assert.equal(await s.app.worker.tick(), 'idle');
-  const first = readSleep(s.app.kv, s.projectId)!;
+  assert.ok(readSleep(s.app.kv, s.projectId), 'that read decides to sleep (the reason is not in what it read)');
+  s.adapter().scripts.push(reply('Thought again.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'the Reject during the read wakes the scout for one run (Q-79-1)');
+  assert.match(prompts(s).at(-1)!, /Rejected proposals.*Add tests.*Earlier proposals/u);
+});
+
+test('scout sleep: a Reject gives a product asleep as "not growing" one fresh run, then it sleeps as stuck again (Q-79-1)', async t => {
+  const s = await setup(t);
+  const open = propose(s, 'Add tests');
+  for (let i = 0; i < 3; i += 1) s.adapter().scripts.push(reply(`nothing ${i}`));
+  for (let i = 0; i < 3; i += 1) { assert.equal(await s.app.worker.tick(), 'ran'); s.later(); }
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+  s.later();
+  s.app.tasks.finish(open.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not this one');
+  s.adapter().scripts.push(reply('Thought again.'), reply('one too many'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'one fresh run');
+  assert.match(prompts(s).at(-1)!, /Not this one/u);
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(s.scoutRows().length, 4, 'only one run for the Reject');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+});
+
+test('scout deepen: a Reject wakes a product asleep as "deepened" for one run (Q-79-1)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  assert.equal(await s.app.worker.tick(), 'ran', 'every area is in the ledger, so without the Reject rule it would sleep as done');
+  const open = Array.from({ length: 10 }, (_v, i) => propose(s, `Idea ${i}`));
+  for (const task of open) s.app.tasks.event(task.id, 'deepened', 'scout', 'commit none');
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'deepened');
+  s.app.tasks.finish(open[0]!.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Out of scope');
+  s.adapter().scripts.push(reply('Thought again.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.match(prompts(s).at(-1)!, /Out of scope/u);
+});
+
+test('scout sleep: the run a Reject gives still counts against the cloud hourly count (Q-79-1)', async t => {
+  const s = await setup(t, { scout: ['c'], edit: c => { c.scout = { cloudRunsPerHour: 1 }; } });
+  s.adapter('far').scripts.push(...checkBoth);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  s.later();
+  const open = propose(s, 'Add tests');
+  s.app.tasks.finish(open.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not now');
   s.later();
   await s.app.worker.tick();
-  assert.ok(readSleep(s.app.kv, s.projectId)!.at > first.at, 'the Reject during the read woke the scout');
+  assert.equal(s.scoutRows().length, 1, 'the hourly count is used up: no run yet');
+  s.adapter('far').scripts.push(reply('Thought again.'));
+  s.later(61);
+  assert.equal(await s.app.worker.tick(), 'ran', 'after the hour the Reject still gets its run');
+  assert.match(JSON.stringify(s.adapter('far').calls.at(-1)!.messages), /Not now/u);
 });
 
 test('scout.changed: on a failure to read the materials, on mode and archive changes, and on a scout model change (review LOW)', async t => {

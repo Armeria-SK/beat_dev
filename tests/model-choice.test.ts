@@ -206,17 +206,19 @@ test('エフォート: 送信でモデルを替えて今の値が新しいモデ
   await settled(s.app, changed.body.runId);
 });
 
-test('エフォート: 設定の efforts は openai_compatible だけ。確認した結果（supported_reasoning_efforts）も使うが、設定が先', async t => {
+test('エフォート: 提供元の種類を問わず、設定の efforts が先で、無ければ確認した結果（OpenAI 互換の supported_reasoning_efforts・Anthropic の capabilities.effort）を使う', async t => {
   const s = await startApp(t, {
-    models: [fakeModel('m1'), fakeModel('m2', { efforts: ['low'] }), fakeModel('o', { provider: 'not-compat', efforts })],
-    configure: config => { config.providers.push({ id: 'not-compat', kind: 'anthropic', baseUrl: 'http://127.0.0.1:2', maxParallel: 1, timeoutMs: 10_000 }); },
+    models: [fakeModel('m1'), fakeModel('m2', { efforts: ['low'] }), fakeModel('o', { provider: 'anth', efforts }), fakeModel('a', { provider: 'anth' })],
+    configure: config => { config.providers.push({ id: 'anth', kind: 'anthropic', baseUrl: 'http://127.0.0.1:2', maxParallel: 1, timeoutMs: 10_000 }); },
   });
   s.adapter().probeResult = { efforts: ['low', 'medium', 'xhigh'] } as never;
+  s.adapters.get('anth')!.probeResult = { efforts: ['low', 'medium', 'high', 'xhigh', 'max'] } as never;
   await s.app.status.probeAll(s.app.config());
   const models = (await s.json('/api/models', 'GET')).body.models as Array<{ id: string; efforts: string[] }>;
   assert.deepEqual(models.find(m => m.id === 'm1')!.efforts, ['low', 'medium', 'xhigh'], '確認で分かった値');
   assert.deepEqual(models.find(m => m.id === 'm2')!.efforts, ['low'], '設定に書けばそれが先');
-  assert.deepEqual(models.find(m => m.id === 'o')!.efforts, [], 'OpenAI 互換でないモデルに書いても使わない');
+  assert.deepEqual(models.find(m => m.id === 'o')!.efforts, efforts, 'Anthropic のモデルでも設定に書けばそれが先');
+  assert.deepEqual(models.find(m => m.id === 'a')!.efforts, ['low', 'medium', 'high', 'xhigh', 'max'], 'Anthropic のモデルは確認で分かった値');
 });
 
 function compat(baseUrl: string, server: ProviderConfig['server'] = 'generic'): ProviderConfig {

@@ -34,7 +34,7 @@ export const CATEGORIES: readonly Category[] = [
   { id: 'persona', group: 'customize', icon: 'person', label: 'ui.set.cat.persona',
     rows: ['ui.set.persona.name', 'ui.set.persona.color', 'ui.set.persona.soul', 'ui.set.persona.user', 'ui.set.persona.replay'] },
   { id: 'appearance', group: 'customize', icon: 'palette', label: 'ui.set.cat.appearance',
-    rows: ['ui.set.look.theme', 'ui.set.look.reduce'] },
+    rows: ['ui.set.look.explain', 'ui.set.look.theme', 'ui.set.look.reduce'] },
   { id: 'advanced', group: 'customize', icon: 'sliders', label: 'ui.set.cat.advanced',
     rows: ['ui.set.adv.file', 'ui.set.adv.open', 'ui.set.adv.reset'] },
 ];

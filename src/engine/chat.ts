@@ -573,7 +573,7 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     this.#initialTaint.set(runId, [materials]);
-    this.#start(runId, conversationId, [{ model: route.model, provider: route.provider }], 'task', { task, control: { value: { outcome: 'none' } } }, new ScoutAllow(SCOUT_TOOLS, []));
+    this.#start(runId, conversationId, [{ model: route.model, provider: route.provider }], 'task', { task, control: { value: { outcome: 'none' } } }, new ScoutAllow(SCOUT_TOOLS, []), this.#d.config().scout?.effort ?? null);
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
 
@@ -584,6 +584,12 @@ export class ChatEngine {
   scoutChildrenAllFailed(runId: string): boolean { const kids = this.#scoutChildren.get(runId); return kids !== undefined && kids.spawned > 0 && kids.ok === 0; }
 
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
+
+  // 裏の振り分けに使えるモデルが無いときの理由の文（runReview が断るのと同じ文）。使えるなら undefined
+  backgroundBlocked(): string | undefined {
+    const chain = this.#chain('background');
+    return chain.usable.length ? undefined : this.#noUsableModel(chain.problems).errorMessage;
+  }
 
   // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
   // 数えるのは、動いている裏の実行の「最初に使う提供元」（道具を動かしている最中で limiter の枠を返しているものも含む）。使えるモデルが無いときは true（始めて、いつもの失敗の道に任せる）
@@ -613,7 +619,7 @@ export class ChatEngine {
     const config = this.#d.config();
     const id = pinned ?? this.#chain('chat').usable[0]?.model.id ?? candidateModelIds(config, 'chat')[0];
     const model = config.models.find(m => m.id === id);
-    return { modelId: model?.id, efforts: model ? modelEfforts(config, model, this.#d.status.get(model.id)) : [] };
+    return { modelId: model?.id, efforts: model ? modelEfforts(model, this.#d.status.get(model.id)) : [] };
   }
 
   backgroundAvailable(): number | undefined {
@@ -1127,7 +1133,7 @@ export class ChatEngine {
         }
         const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name), ...(run?.loaded ?? [])]);
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
-        const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
+        const effort = p.effort && modelEfforts(model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
         let fitted;
         try {
           fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
@@ -1353,7 +1359,7 @@ export class ChatEngine {
     const emit = (state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout', toolCalls = 0) => d.bus.publish({
       type: 'agent.state', runId: parent.runId, conversationId: parent.conversationId, callId: callId ?? '', childRunId, childConversationId: child.id, state, toolCalls,
     });
-    this.#start(childRunId, child.id, p.routes, 'agent', undefined, childForbid, null, { parent, mode });
+    this.#start(childRunId, child.id, p.routes, 'agent', undefined, childForbid, scout ? config.scout?.effort ?? null : null, { parent, mode });
     emit('running');
     const why: { value?: 'timeout' | 'parent' } = {};
     const timeoutMs = d.agentTimeoutMs ?? (scout ? SCOUT_AGENT_TIMEOUT_MS : config.tools.agent.timeoutSec * 1000);

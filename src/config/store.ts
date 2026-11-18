@@ -49,6 +49,7 @@ export function defaultConfig(): AppConfig {
     routing: { chat: [], background: [], retriesPerModel: 2 },
     tools: defaultTools(),
     profile: { name: 'beat', shape: 'pebble', color: '#61B8A5', motion: 'auto' },
+    ui: { explainLanguage: 'auto' },
     worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, maxParallel: 1, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, curiosityPerDay: 2 },
     memory: { review: true, reviewIdleMinutes: 30 },
     notify: { channels: [], publicBaseUrl: '', limits: { maxChannels: 4, maxSendsPerHour: 30, timeoutMs: 5000, retries: 1, failsBeforeAlert: 3 } },
@@ -62,7 +63,7 @@ export function defaultTools(): ToolsConfig {
 
 export function resetConfig(current: AppConfig): AppConfig {
   const next = defaultConfig();
-  return { ...next, timezone: current.timezone, server: structuredClone(current.server), tools: { ...next.tools, roots: structuredClone(current.tools.roots), deny: [...current.tools.deny], hooks: { ...next.tools.hooks, preToolUse: [structuredClone(DEFAULT_PROTECT_FILES)] } } };
+  return { ...next, timezone: current.timezone, ui: structuredClone(current.ui), server: structuredClone(current.server), tools: { ...next.tools, roots: structuredClone(current.tools.roots), deny: [...current.tools.deny], hooks: { ...next.tools.hooks, preToolUse: [structuredClone(DEFAULT_PROTECT_FILES)] } } };
 }
 
 interface Finding extends ConfigIssue { text: string }

@@ -107,7 +107,7 @@ function modelsView(app: App) {
           required: probe?.required ?? null,
         },
         inChat: config.routing.chat.includes(m.id),
-        efforts: modelEfforts(config, m, probe),
+        efforts: modelEfforts(m, probe),
         probe: probe ?? null,
         cooldown: app.status.coolingDown(m.id) ?? null,
         recentFailures: app.health.failures(m.id),

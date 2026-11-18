@@ -25,6 +25,8 @@ export const ProviderConfig = Type.Object({
   timeoutMs: Type.Integer({ minimum: 1000, maximum: 3_600_000, default: 600_000 }),
 }, { additionalProperties: false });
 
+const EFFORT_PATTERN = '^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$';
+
 export const ModelConfig = Type.Object({
   id: Type.String({ pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }),
   label: Type.Optional(Type.String({ maxLength: 80 })),
@@ -34,8 +36,9 @@ export const ModelConfig = Type.Object({
   maxOutputTokens: Type.Optional(Type.Integer({ minimum: 256, maximum: 200_000 })),
   vision: Type.Boolean({ default: false }),
   temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
-  // 考える深さとして選べる値（reasoning_effort に送る）。OpenAI 互換のプロバイダのモデルだけで使う。書かなければ、サーバーが supported_reasoning_efforts で知らせた値を使う
-  efforts: Type.Optional(Type.Array(Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$' }), { maxItems: 8 })),
+  // 考える深さとして選べる値（OpenAI 互換は reasoning_effort、Anthropic は output_config.effort に送る）。書かなければ、確認で分かった値
+  // （OpenAI 互換のサーバーの supported_reasoning_efforts、Anthropic の Models API の capabilities.effort）を使う
+  efforts: Type.Optional(Type.Array(Type.String({ pattern: EFFORT_PATTERN }), { maxItems: 8 })),
 }, { additionalProperties: false });
 
 export const ServerConfig = Type.Object({
@@ -245,6 +248,9 @@ export const AppConfig = Type.Object({
     color: Type.String({ pattern: '^#[0-9a-fA-F]{6}$', default: '#61B8A5' }),
     motion: Type.Union([Type.Literal('auto'), Type.Literal('none'), Type.Literal('float'), Type.Literal('sway'), Type.Literal('pulse')], { default: 'auto' }),
   }, { additionalProperties: false, default: {} }),
+  ui: Type.Object({
+    explainLanguage: Type.Union([Type.Literal('auto'), Type.Literal('en'), Type.Literal('ja')], { default: 'auto' }),
+  }, { additionalProperties: false, default: {} }),
   worker: Type.Object({
     enabled: Type.Boolean({ default: true }),
     autonomy: Type.Boolean({ default: false }),
@@ -270,6 +276,8 @@ export const AppConfig = Type.Object({
   }, { additionalProperties: false })),
   scout: Type.Optional(Type.Object({
     cloudRunsPerHour: Type.Integer({ minimum: 0, maximum: 60, default: 1 }),
+    // 考える実行（まとめ役と、その子の調べ役）の考える深さ。書かなければモデルの既定（何も送らない）。そのモデルが受けない値も送らない
+    effort: Type.Optional(Type.String({ pattern: EFFORT_PATTERN })),
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
