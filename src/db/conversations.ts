@@ -56,6 +56,18 @@ export function messageText(message: ChatMessage): string {
   return message.content;
 }
 
+const AUTO_TITLE_MAX = 40;
+
+function shortTitle(text: string): string {
+  if (text.length <= AUTO_TITLE_MAX) return text;
+  let head = text.slice(0, AUTO_TITLE_MAX - 1);
+  const space = head.lastIndexOf(' ');
+  if (text[AUTO_TITLE_MAX - 1] !== ' ' && space >= AUTO_TITLE_MAX / 2) head = head.slice(0, space);
+  const last = head.charCodeAt(head.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1);
+  return `${head.trimEnd()}…`;
+}
+
 export interface ReviewSource { conversationId?: string | null | undefined; taskId?: string | null | undefined }
 
 export interface SpeechRow { id: number; conversation_id: string; role: 'user' | 'assistant'; text: string; generated: number; created_at?: number }
@@ -256,7 +268,7 @@ export class Conversations {
   }
 
   autoTitle(id: string, text: string): void {
-    const title = text.replace(/\s+/g, ' ').trim().slice(0, 40);
+    const title = shortTitle(text.replace(/\s+/g, ' ').trim());
     if (title) this.db.prepare('UPDATE conversations SET title = ? WHERE id = ? AND title IS NULL').run(title, id);
   }
 }

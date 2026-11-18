@@ -30,7 +30,8 @@ function outcomeText(t: T, outcome: Outcome): string {
 
 function fromText(t: T, row: PendingAction, withProduct: boolean, titles: ReadonlyMap<string, string | null>): string {
   const title = fromTitle(row, titles) ?? t('ui.session.untitled');
-  return withProduct && row.project_name ? t('ui.pending.fromProduct', row.project_name, title) : t('ui.pending.from', title);
+  const product = row.project_name && row.project_archived ? t('ui.pf.archived', row.project_name) : withProduct ? row.project_name : null;
+  return product ? t('ui.pending.fromProduct', product, title) : t('ui.pending.from', title);
 }
 
 function sizeText(t: T, bytes: number): string {

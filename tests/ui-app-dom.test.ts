@@ -277,3 +277,29 @@ test('会話の画面（DOM、model-auto）: 続きを頼んだ一言のあと�
   await cleanup();
   assert.equal(await open(base), false, '返事で終わっていれば出さない');
 });
+
+test('walk-1118 D5（DOM）: 製品のホームで方式を変えた直後に、提案の数が変わっていても、PROPOSALS の札は変えた応答（古い数）のままにせず、一覧を読み直して今の数を出す', async () => {
+  const base = {
+    id: 'prod-abc123', name: 'Shop', root: '/w/shop', check_command: null, remotes: [], archived_at: null, created_at: 1, updated_at: 1,
+    is_git: true, folder_missing: false, running: 0, last_activity_at: null, has_plan: false, doc_language: null, doc_language_pinned: false,
+  };
+  let proposals = 0;
+  serve((path, method) => {
+    if (path === '/api/projects' && method === 'GET') return { projects: [{ ...base, scout_mode: proposals ? 'research' : 'off', waiting: { proposals, questions: 0, pending: 0 } }] };
+    if (path === `/api/projects/${base.id}` && method === 'PATCH') {
+      const answer = { project: { ...base, scout_mode: 'research', waiting: { proposals: 0, questions: 0, pending: 0 } } };
+      proposals = 1;
+      return answer;
+    }
+    return undefined;
+  });
+  const container = await start(`#/p/${base.id}`);
+  await wait(50);
+  const tile = () => container.querySelector('.bt-stats > *')?.textContent ?? '';
+  assert.match(tile(), /^Proposals0/u);
+  const research = [...container.querySelectorAll<HTMLButtonElement>('.ui-home__mode button')].find(b => b.textContent === 'Research only')!;
+  await click(research);
+  await wait(50);
+  await settle();
+  assert.match(tile(), /^Proposals1/u, '変えた応答のあとに一覧を読み直す');
+});

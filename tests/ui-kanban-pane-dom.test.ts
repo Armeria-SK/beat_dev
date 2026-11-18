@@ -279,3 +279,28 @@ test('ui/KanbanPane and ProductHome（DOM）: when the first load fails, the fai
   assert.ok(home.container.textContent!.includes(en['ui.kanban.loadFailed']));
   assert.equal(home.container.querySelector('[data-loading]'), null);
 });
+
+test('walk-1118 D6: a rejected proposal leaves the board (Design: Reject removes the card; Undo is the toast), so it is in no column and not counted as Failed on the board or the product home; a task the owner cancelled and a failed task stay in Failed', async () => {
+  const at = Date.now() - 30_000;
+  const ended = { completed_at: at, updated_at: at, result_summary: 'Cancelled from the screen' };
+  const finished = [
+    task('Rejected idea', 'cancelled', { ...ended, cancelled_from: 'inbox', proposal: PROPOSAL, reject_reason: 'Not now, the shop has no users yet' }),
+    task('Rejected without reason', 'cancelled', { ...ended, cancelled_from: 'inbox', reject_reason: null }),
+    task('Stopped task', 'cancelled', { ...ended, cancelled_from: 'ready' }),
+    task('Broken task', 'failed', { completed_at: at, updated_at: at, result_summary: 'The page did not answer.' }),
+  ];
+  serve({ active: [], finished }, null);
+  const { container } = await pane();
+  await settle();
+  const titles = (el: Element) => [...el.querySelectorAll('article.bt-card .bt-card__title')].map(n => n.textContent).sort();
+  assert.deepEqual(titles(column(container, 'failed')), ['Broken task', 'Stopped task']);
+  assert.equal(container.textContent?.includes('Rejected idea'), false, 'no column shows a rejected proposal');
+  assert.equal(container.textContent?.includes('Rejected without reason'), false);
+  await cleanup();
+  serve({ active: [], finished }, null);
+  const home = await render(createElement(ProductHome, { id: PRODUCT, project: project(), conversations: [], drafts: [], checklists: new Map(), worker: null, revision: 0 }));
+  await settle();
+  const failed = home.container.querySelector('.ui-home__board [data-col=failed]')!;
+  assert.equal(failed.querySelector('.bt-count__n')?.textContent, '2', 'the product home counts only the stopped and the failed task');
+  assert.equal(home.container.textContent?.includes('Rejected idea'), false);
+});

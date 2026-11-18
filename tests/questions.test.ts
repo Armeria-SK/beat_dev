@@ -11,7 +11,7 @@ import { questionAdd, questionList } from '../src/tools/builtin/questions.ts';
 import { planAllows } from '../src/tools/pipeline.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, tempDir, type Script, testConfig, withLoad, offered } from './helpers.ts';
+import { FakeAdapter, tempDir, type Script, testConfig, withLoad, offered, reply } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
   return async function* (req) {
@@ -38,10 +38,11 @@ async function setup(t: { after: (fn: () => void) => void }) {
   const changes: unknown[] = [];
   app.bus.subscribe(e => { if (e.event.type === 'question.changed') changes.push(e.event); });
   t.after(() => app.close());
-  const project = (name: string) => {
+  const project = (name: string, checkCommand: string | null = null) => {
     const root = join(dir, name);
     mkdirSync(root, { recursive: true });
-    return app.projects.create({ name, root, rootKey: rootKeyOf(root), checkCommand: null });
+    if (checkCommand) writeFileSync(join(root, 'check.js'), 'process.exit(1)\n');
+    return app.projects.create({ name, root, rootKey: rootKeyOf(root), checkCommand });
   };
   const web = createWebServer(app);
   await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
@@ -194,7 +195,7 @@ test('B5 (backlog 662): 動く前のタスクの、急ぎでない質問への�
   assert.deepEqual((await s.http('/api/questions/counts')).body.byTask, {});
 });
 
-test('B5: 終わったタスクの質問への違う答えは、今までどおり直しのタスク。動いているタスクの質問の答えも直しのタスク（断らない）。仮の選択のままなら何も変えない', async t => {
+test('B5: 終わったタスクの質問への違う答えは、今までどおり直しのタスク。動いているタスクには経過に答えを書くだけ（断らない・直しのタスクは作らない）。仮の選択のままなら何も変えない', async t => {
   const s = await setup(t);
   const done = s.app.tasks.create({ title: 'Done one', origin: 'user', actor: 'user' });
   await questionAdd.execute(ask as never, ctxFor(s, done.id));
@@ -212,11 +213,10 @@ test('B5: 終わったタスクの質問への違う答えは、今までどお�
   const count = s.app.tasks.list().length;
   const sent = await s.http(`/api/questions/${live!.id}/answer`, { choice: 1 });
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
-  assert.ok(sent.body.fixTaskId, '動いている実行は始めに読んだ経過しか見ないので、答えは直しのタスクにする');
-  assert.equal(sent.body.resumedTaskId, null);
+  assert.deepEqual([sent.body.fixTaskId, sent.body.resumedTaskId, sent.body.question.fix_task_id], [null, null, null], '答えは聞いたタスクに戻す（実行の終わりでもう一度動かす）');
   assert.equal(s.app.tasks.get(running.id)!.status, 'running', '動いているタスクはそのまま');
-  assert.equal(s.app.tasks.events(running.id).filter(e => e.kind === 'answer').length, 0);
-  assert.equal(s.app.tasks.list().length, count + 1);
+  assert.equal(s.app.tasks.events(running.id).filter(e => e.kind === 'answer').length, 1);
+  assert.equal(s.app.tasks.list().length, count);
 
   const later = s.app.tasks.create({ title: 'Later one', origin: 'user', actor: 'user', runAt: s.clock.now + 3_600_000 });
   await questionAdd.execute({ ...ask, question: 'Which zone?' } as never, ctxFor(s, later.id));
@@ -227,22 +227,275 @@ test('B5: 終わったタスクの質問への違う答えは、今までどお�
   assert.equal(s.app.tasks.events(later.id).filter(e => e.kind === 'answer').length, 0);
 });
 
-test('B5 の見落とし: 実行の途中に答え、その実行が task_complete で終わっても、違う答えは直しのタスクとして残る', async t => {
+function answerMidRun(s: Setup, end: Script, sink: { res?: { status: number; body: any } }, body: unknown = { choice: 1 }, first?: (questionId: number) => void): Script {
+  return async function* (req) {
+    const [row] = s.app.questions.list({ status: 'open' });
+    first?.(row!.id);
+    sink.res = await s.http(`/api/questions/${row!.id}/answer`, body);
+    yield* end(req);
+  };
+}
+
+const promptOf = (req: { messages: unknown }): string => JSON.stringify(req.messages);
+const ANSWER_IN_PROMPT = /answer: Reply to question #1 \\"Which date format\?\\": 11\/14/u;
+
+test('実行の途中の答え: task_complete で終わっても終わらせず、同じタスクが答えを持ってすぐもう一度動く（直しのタスクは作らない）。2 回目で終わる', async t => {
   const s = await setup(t);
   const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
-  let answered: { status: number; body: any } | undefined;
-  const answerMidRun = async function* (req: Parameters<Script>[0]) {
-    const [row] = s.app.questions.list({ status: 'open' });
-    answered = await s.http(`/api/questions/${row!.id}/answer`, { choice: 1 });
-    yield* toolCall('task_complete', { summary: 'done with 2026-11-14', notify: false })(req);
-  };
-  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun as Script);
+  const sink: { res?: { status: number; body: any } } = {};
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, toolCall('task_complete', { summary: 'done with 2026-11-14', notify: false }), sink));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(sink.res?.status, 200, JSON.stringify(sink.res?.body));
+  assert.deepEqual([sink.res!.body.fixTaskId, sink.res!.body.question.fix_task_id], [null, null]);
+  assert.equal(s.app.tasks.list().length, 1, '「Answer to question」のタスクを作らない');
+  const after = s.app.tasks.get(task.id)!;
+  assert.deepEqual([after.status, after.run_at], ['ready', s.clock.now], '終わらせずに、今すぐ動ける');
+  assert.ok(s.app.tasks.events(task.id).some(e => e.kind === 'requeued' && /answered a question while it was running/u.test(e.content ?? '')));
+  assert.ok(s.app.tasks.events(task.id).some(e => e.kind === 'note' && e.content === 'done with 2026-11-14'), '1 回目の要約は経過に残す');
+
+  const before = s.adapter().calls.length;
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'switched to 11/14', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.match(promptOf(s.adapter().calls[before]!), ANSWER_IN_PROMPT, '2 回目の実行は答えを読む');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done', '使った答えで、もう一度動かすことはしない');
+  assert.deepEqual(s.app.db.prepare('SELECT id FROM tasks').all().map(r => r.id), [task.id], 'どの状態のタスクも増えていない');
+});
+
+test('実行の途中の答え: task_checkpoint で終わっても、先の時刻でなく今すぐもう一度動く', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const sink: { res?: { status: number; body: any } } = {};
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 60 }), sink));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(sink.res?.status, 200);
+  const after = s.app.tasks.get(task.id)!;
+  assert.deepEqual([after.status, after.run_at, after.next_action], ['ready', s.clock.now, 'c']);
+  assert.equal(s.app.tasks.list().length, 1);
+});
+
+test('実行の途中の答え: 返事だけで終わっても、進展なしと数えずに今すぐもう一度動く', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const sink: { res?: { status: number; body: any } } = {};
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, reply('thinking'), sink));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(sink.res?.status, 200);
+  const after = s.app.tasks.get(task.id)!;
+  assert.deepEqual([after.status, after.run_at], ['ready', s.clock.now]);
+  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), undefined, '進展なしの数は増やさない');
+  assert.equal(s.app.tasks.list().length, 1);
+});
+
+test('実行の途中に答えが無ければ、終わり方は今までどおり（task_checkpoint は先の時刻・返事だけは進展なし）', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  s.adapter().scripts.push(toolCall('question_add', ask), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 60 }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now + 60 * 60_000]);
+  s.clock.now += 60 * 60_000;
+  s.adapter().scripts.push(reply('thinking'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now + 15 * 60_000]);
+  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), 1);
+  assert.equal(s.app.questions.list({ status: 'open' }).length, 1);
+});
+
+test('前の実行の間の答えは、次の実行のあとでもう一度動かす理由にならない（答えは実行の前に来ていた）', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user', runAt: s.clock.now + 3_600_000 });
+  await questionAdd.execute(ask as never, ctxFor(s, task.id));
+  const [row] = s.app.questions.list({ status: 'open' });
+  const res = await s.http(`/api/questions/${row!.id}/answer`, { choice: 1 });
+  assert.equal(res.body.resumedTaskId, task.id);
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'done', notify: false }));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.tasks.get(task.id)!.status, 'done');
-  assert.equal(answered?.status, 200, JSON.stringify(answered?.body));
-  assert.ok(answered!.body.fixTaskId, '答えを拾うタスクがある');
-  assert.equal(answered!.body.question.fix_task_id, answered!.body.fixTaskId);
-  assert.equal(s.app.tasks.get(answered!.body.fixTaskId)!.status, 'ready');
+});
+
+test('実行の途中の答えのあとに経過が 10 個より多く積もっても、もう一度の実行は答えを読む', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const sink: { res?: { status: number; body: any } } = {};
+  const notes = [2, 3, 4, 5, 6, 7, 8].map(n => toolCall('task_update', { id: task.id, note: `n${n}` }));
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, toolCall('task_update', { id: task.id, note: 'n1' }), sink), ...notes, toolCall('task_complete', { summary: 'done', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(sink.res?.status, 200);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
+  const before = s.adapter().calls.length;
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'switched', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.match(promptOf(s.adapter().calls[before]!), ANSWER_IN_PROMPT);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+});
+
+const fixTasks = (s: Setup, taskId: string) => s.app.db.prepare('SELECT id FROM tasks WHERE id != ?').all(taskId).map(r => String(r.id));
+
+async function endsWithoutRerun(t: { after: (fn: () => void) => void }, scripts: (s: Setup, sink: { res?: { status: number; body: any } }) => { taskId: string; scripts: Script[] }, status: string) {
+  const s = await setup(t);
+  const sink: { res?: { status: number; body: any } } = {};
+  const made = scripts(s, sink);
+  s.adapter().scripts.push(...made.scripts);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(sink.res?.status, 200, JSON.stringify(sink.res?.body));
+  assert.equal(s.app.tasks.get(made.taskId)!.status, status);
+  const fixes = fixTasks(s, made.taskId);
+  assert.equal(fixes.length, 1, '答えを持つ直しのタスクを 1 つ作る（答えをなくさない）');
+  const fix = s.app.tasks.get(fixes[0]!)!;
+  assert.equal(fix.status, 'ready');
+  assert.match(fix.body, /11\/14/u);
+  const [row] = s.app.questions.list({ status: 'answered' });
+  assert.equal(row!.fix_task_id, fix.id);
+  assert.equal(s.app.kv.get(`task-owner-run:${fix.id}`), '1', '直しのタスクは持ち主の頼みとして回す');
+  assert.equal(s.changes.filter(c => (c as { id: number }).id === row!.id).length, 3, 'open・答えた・直しのタスクの印、の 3 回を画面に知らせる');
+  return { s, fix, taskId: made.taskId };
+}
+
+test('実行の途中の答え: 確かめが 3 回落ちて failed で終わったら、答えは直しのタスクに渡す', async t => {
+  await endsWithoutRerun(t, (s, sink) => {
+    const shop = s.project('shop', 'node check.js');
+    const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user', projectId: shop.id });
+    const done = toolCall('task_complete', { summary: 'done', notify: false });
+    return { taskId: task.id, scripts: [toolCall('question_add', ask), answerMidRun(s, done, sink), done, done] };
+  }, 'failed');
+});
+
+test('実行の途中の答え: やり直しを使い切って failed で終わったら、答えは直しのタスクに渡す', async t => {
+  await endsWithoutRerun(t, (s, sink) => {
+    const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+    s.app.db.prepare('UPDATE tasks SET max_attempts = 1 WHERE id = ?').run(task.id);
+    const boom: Script = async function* () { throw new Error('boom'); };
+    return { taskId: task.id, scripts: [toolCall('question_add', ask), answerMidRun(s, boom, sink)] };
+  }, 'failed');
+});
+
+test('実行の途中の答え: モデルが自分のタスクを取り消して終わったら、答えは直しのタスクに渡す', async t => {
+  await endsWithoutRerun(t, (s, sink) => {
+    const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+    return { taskId: task.id, scripts: [toolCall('question_add', ask), answerMidRun(s, toolCall('task_update', { id: task.id, status: 'cancelled' }), sink)] };
+  }, 'cancelled');
+});
+
+test('実行の途中の答え: 外を読んだ質問を選択肢で答えたら、直しのタスクに owner_request を入れず外の印。自分で書いた答えなら owner_request はその文', async t => {
+  for (const [body, owner] of [[{ choice: 1 }, null], [{ choice: null, text: '11/14 by hand' }, '11/14 by hand']] as const) {
+    const { s, fix } = await endsWithoutRerun(t, (s, sink) => {
+      const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+      const taint = (id: number) => { s.app.db.prepare('UPDATE questions SET tainted = 1 WHERE id = ?').run(id); };
+      const end = toolCall('task_update', { id: task.id, status: 'cancelled' });
+      return { taskId: task.id, scripts: [toolCall('question_add', ask), answerMidRun(s, end, sink, body, taint)] };
+    }, 'cancelled');
+    const request = s.app.tasks.get(fix.id)!.owner_request;
+    if (owner === null) assert.equal(request, null, JSON.stringify(body));
+    else assert.equal(JSON.parse(request!).title, owner);
+    assert.equal(s.app.tasks.textTainted(fix.id), true, JSON.stringify(body));
+  }
+});
+
+test('実行の途中の答え: 前の実行で読んだ答えは、あとの実行が失敗で終わっても直しのタスクにしない（その実行の答えだけ）', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const sink: { res?: { status: number; body: any } } = {};
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, toolCall('task_complete', { summary: 'done', notify: false }), sink));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
+  s.clock.now += 1;
+  s.app.db.prepare('UPDATE tasks SET max_attempts = 1 WHERE id = ?').run(task.id);
+  const boom: Script = async function* () { throw new Error('boom'); };
+  const sink2: { res?: { status: number; body: any } } = {};
+  s.adapter().scripts.push(toolCall('question_add', { ...ask, question: 'Which time format?' }), answerMidRun(s, boom, sink2));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(sink2.res?.status, 200);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'failed');
+  const fixes = fixTasks(s, task.id);
+  assert.equal(fixes.length, 1, JSON.stringify(fixes));
+  const [q1, q2] = s.app.questions.list({ status: 'answered' }).sort((a, b) => a.id - b.id);
+  assert.deepEqual([q1!.fix_task_id, q2!.fix_task_id], [null, fixes[0]]);
+});
+
+test('実行の途中の答えに、答えたときに直しのタスクができていたら、もう一度動かさない', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const other = s.app.tasks.create({ title: 'Other', origin: 'user', actor: 'user', runAt: s.clock.now + 3_600_000 });
+  const sink: { res?: { status: number; body: any } } = {};
+  const markFixed: Script = async function* (req) {
+    s.app.db.prepare('UPDATE questions SET fix_task_id = ?').run(other.id);
+    yield* toolCall('task_complete', { summary: 'done', notify: false })(req);
+  };
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, markFixed, sink));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(sink.res?.status, 200);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+});
+
+test('直しのタスクに渡した答えは、もとのタスクを開き直しても、そのタスクの「読んでいない答え」には入れない', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const sink: { res?: { status: number; body: any } } = {};
+  const notes = [2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => toolCall('task_update', { id: task.id, note: `n${n}` }));
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, toolCall('task_update', { id: task.id, note: 'n1' }), sink), ...notes, toolCall('task_update', { id: task.id, status: 'cancelled' }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'cancelled');
+  const [fix] = fixTasks(s, task.id);
+  assert.ok(fix);
+  s.app.tasks.finish(fix, 'cancelled', null, 'user');
+  s.app.tasks.reopen(task.id, 'user');
+  const before = s.adapter().calls.length;
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'done', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const prompt = promptOf(s.adapter().calls[before]!);
+  assert.doesNotMatch(prompt, ANSWER_IN_PROMPT, '答えは直しのタスクのもの');
+  assert.match(prompt, /The reply to question #1 went to the follow-up task/u);
+});
+
+function answerByText(s: Setup, question: string, body: unknown, end: Script): Script {
+  return async function* (req) {
+    const row = s.app.questions.list({ status: 'open' }).find(q => q.question === question);
+    const res = await s.http(`/api/questions/${row!.id}/answer`, body);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    yield* end(req);
+  };
+}
+
+async function laterRunFails(t: { after: (fn: () => void) => void }, first: { question: string; body: unknown }, second: { question: string; body: unknown }) {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  s.adapter().scripts.push(
+    toolCall('question_add', { ...ask, question: first.question }), toolCall('question_add', { ...ask, question: second.question }),
+    answerByText(s, first.question, first.body, toolCall('task_complete', { summary: 'done', notify: false })),
+  );
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready', '1 回目の実行の間の答えで、もう一度動く');
+  s.app.db.prepare('UPDATE tasks SET max_attempts = 1 WHERE id = ?').run(task.id);
+  const boom: Script = async function* () { throw new Error('boom'); };
+  s.adapter().scripts.push(answerByText(s, second.question, second.body, boom));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'failed');
+  const fixes = fixTasks(s, task.id);
+  assert.equal(fixes.length, 1, JSON.stringify(fixes));
+  const byText = new Map(s.app.questions.list({ status: 'answered' }).map(q => [q.question, q.fix_task_id]));
+  assert.deepEqual([byText.get(first.question), byText.get(second.question)], [null, fixes[0]], '直しのタスクは、失敗した実行の間に答えた質問だけ');
+}
+
+test('実行の途中の答え: 前の実行で答えた別の質問は、文が合わないので直しのタスクにしない（あとから答えた方だけ）', async t => {
+  await laterRunFails(t, { question: 'Which time format?', body: { choice: 1 } }, { question: 'Which date format?', body: { choice: 1 } });
+});
+
+test('実行の途中の答え: 質問と答えの文をつないで同じ文になる 2 つの質問も、質問の番号で取り違えない', async t => {
+  await laterRunFails(t, { question: 'Which": one?', body: { choice: null, text: 'yes' } }, { question: 'Which', body: { choice: null, text: 'one?": yes' } });
+});
+
+test('実行の途中の submit_refused の答えは、もう一度動かす理由にならない（ai の質問の答えだけ）', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  const answerSubmit: Script = async function* (req) {
+    const q = s.app.questions.add({ kind: 'submit_refused', taskId: task.id, question: 'Send the form?', options: ['Send it', 'Keep it'], chosen: 1 });
+    const res = await s.http(`/api/questions/${q.id}/answer`, { choice: 0 });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    yield* toolCall('task_complete', { summary: 'done', notify: false })(req);
+  };
+  s.adapter().scripts.push(answerSubmit);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.ok(s.app.tasks.events(task.id).some(e => e.kind === 'answer'), '経過には書く');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
 });
 
 test('B5: 外を読んだ実行の質問の答えを返したタスクには、外の印を付ける（直しのタスクと同じ）', async t => {

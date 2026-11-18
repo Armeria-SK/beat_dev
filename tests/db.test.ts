@@ -193,3 +193,20 @@ test('マイグレーション 18: 会話と実行の記録に親の実行 paren
     assert.deepEqual(conversations.list().map(c => c.id), ['old'], '子の会話は一覧に出ない（kind が chat でない）');
   } finally { db.close(); }
 });
+test('walk-1118 D4: 最初の発言からの題は 40 字に収め、長いときは単語の切れ目で切って … を付ける（空白の無い文は 39 字で切る。サロゲートの片割れを残さない）', () => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  const conversations = new Conversations(db);
+  const titled = (text: string) => {
+    const c = conversations.create({});
+    conversations.autoTitle(c.id, text);
+    return conversations.get(c.id)!.title;
+  };
+  assert.equal(titled('Please create hello.txt with the word hello in it'), 'Please create hello.txt with the word…');
+  assert.equal(titled('  Short   request  '), 'Short request', '40 字までは今までどおり、そのまま');
+  assert.equal(titled('a'.repeat(40)), 'a'.repeat(40));
+  assert.equal(titled('a'.repeat(60)), `${'a'.repeat(39)}…`, '切れ目が無ければ字数で切る');
+  assert.equal(titled('あ'.repeat(50)), `${'あ'.repeat(39)}…`);
+  assert.equal(titled(`${'a'.repeat(38)}😀 tail text`), `${'a'.repeat(38)}…`, 'サロゲートの片割れを残さない');
+  assert.ok([...titled('word '.repeat(20))!].length <= 40);
+  db.close();
+});
