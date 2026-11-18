@@ -7,9 +7,10 @@ import { growSkills, SkillError } from '../tools/skills/store.ts';
 import { askReadAsBlock, defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
-import { taskView, type ProjectFilter } from '../tasks/store.ts';
+import type { ProjectFilter } from '../tasks/store.ts';
 import type { ReviewJob } from '../memory/review.ts';
 import { projectFilterOf } from './routes-projects.ts';
+import { maskedTaskView } from './task-view.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const STATUSES: readonly CuriosityStatus[] = ['open', 'researching', 'done', 'dropped'];
@@ -119,7 +120,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
     });
     sendJson(res, 200, {
       skillDrafts: drafts,
-      taskProposals: app.tasks.list({ statuses: ['inbox'] }).map(t => taskView(t, languageOf(app.config()))),
+      taskProposals: app.tasks.list({ statuses: ['inbox'] }).map(t => maskedTaskView(app, t)),
     });
   });
   router.add('POST', '/api/skill-drafts/:id/approve', ({ res, params }) => {
@@ -165,7 +166,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
     });
     app.curiosity.update(item.id, { status: 'researching', taskId: task.id });
     app.worker.requestRun(task.id);
-    sendJson(res, 201, { task: taskView(task, languageOf(app.config())) });
+    sendJson(res, 201, { task: maskedTaskView(app, task) });
   });
 
   // ── 振り返りの記録 ──

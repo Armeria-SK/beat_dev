@@ -65,7 +65,8 @@ import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from '.
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { askBeforeRegister, growSkills, SkillStore } from './tools/skills/store.ts';
-import { isScoutRun, TaskStore, taskView } from './tasks/store.ts';
+import { isScoutRun, TaskStore } from './tasks/store.ts';
+import { maskedTaskView } from './web/task-view.ts';
 import { ProjectStore } from './projects/store.ts';
 import { PlanStore } from './projects/plan.ts';
 import { adoptLegacyPlans } from './projects/plan-adopt.ts';
@@ -280,7 +281,7 @@ export class App {
     });
     this.tasks.onChange = task => {
       if (isScoutRun(task)) { this.worker.poke(); return; }
-      this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
+      this.bus.publish({ type: 'task.changed', task: maskedTaskView(this, task) });
       // 返事待ち・失敗でなくなったタスクの、返事や確認を求める通知は、もう答えることが無い
       if (task.status !== 'waiting') this.notifications.settle('task_waiting', { link: `#/tasks/${task.id}` });
       if (task.status !== 'failed') this.notifications.settle('task_failed', { link: `#/tasks/${task.id}` });
