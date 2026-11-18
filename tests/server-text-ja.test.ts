@@ -4,7 +4,7 @@ import { format } from '../src/shared/messages/define.ts';
 import { ApiError } from '../web/src/api.ts';
 import { setExplainLanguage } from '../web/src/i18n/state.ts';
 import { JA_SERVER } from '../web/src/i18n/ja-server/index.ts';
-import { DOMAINS, errorBodyText, serverText, warningText } from '../web/src/server-text.ts';
+import { DOMAINS, errorBodyText, probeMessage, serverText, warningText } from '../web/src/server-text.ts';
 
 // beat i18n I-3: サーバーの文（コードつき）の日本語は画面の側の表（web/src/i18n/ja-server）。表に無いコードは英語。
 
@@ -55,6 +55,9 @@ test('API のエラー・返事の失敗・警告も、ja なら日本語（呼�
     assert.equal(new ApiError(404, body).message, english('http').task_missing);
   } finally { setExplainLanguage('en'); }
   assert.equal(warningText({ code: 'something_new', message: 'server text' }, 'ja'), 'server text');
+  assert.equal(warningText({ code: 'context_trimmed', message: 'server text', params: { count: 3 } }, 'ja'), format(JA_SERVER.engine!['warn.context_trimmed']!, { count: 3 }));
+  const probe = probeMessage({ message: 'server text', messageCode: 'provider.probe.too_small', messageParams: { effective: 8192, required: 32768, sourceKind: 'measured', n: 8192 } }, 'ja');
+  assert.equal(probe, format(JA_SERVER.provider!['probe.too_small']!, { effective: 8192, required: 32768, source: format(JA_SERVER.provider!['probe.source.measured']!, { n: 8192 }) }), 'モデルの確認の文は、組み立ての部品も日本語');
 });
 
 test('見張り: 15 分野の英語の鍵のうち、日本語の無いものの数を出す（段階 7 の本線が鍵を足し終えるまでは落とさない。I-4 で落ちる形に）', t => {
