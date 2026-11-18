@@ -74,6 +74,16 @@ export function setScout(config: Config, id: string): Config {
   return { ...config, routing };
 }
 
+export const scoutEffort = (config: Config): string => (typeof config.scout?.effort === 'string' ? config.scout.effort as string : '');
+
+export function setScoutEffort(config: Config, effort: string): Config {
+  const scout = { ...config.scout };
+  if (effort) scout.effort = effort; else delete scout.effort;
+  const next = { ...config, scout };
+  if (Object.keys(scout).length === 0) delete next.scout;
+  return next;
+}
+
 export function setConversation(config: Config, id: string): Config {
   const chat = (config.routing.chat as string[]).filter(x => x !== id);
   return { ...config, routing: { ...config.routing, chat: [id, ...chat] } };
