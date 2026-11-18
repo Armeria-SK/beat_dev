@@ -5,6 +5,8 @@ import { createElement, type ComponentType } from 'react';
 import { defaultConfig } from '../src/config/store.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { en } from '../web/src/i18n/en.ts';
+import { setExplainLanguage } from '../web/src/i18n/index.ts';
+import { serverText } from '../web/src/server-text.ts';
 
 interface SettingsProps { section: string | undefined; onClose: () => void; held: (() => void) | null; onReplay: () => void; onSaved: () => void; onProfile: () => void }
 
@@ -469,4 +471,31 @@ test('Settings › Models（DOM）: 選べる値の無いモデルでも保存�
   assert.equal(container.querySelector('[data-depth-none]'), null, '選びを出すときは「値が無い」の行を出さない');
   await pickIn(container, depth, en['ui.set.models.scoutEffortDefault']);
   assert.deepEqual(sent.at(-1)?.body?.config.scout, { cloudRunsPerHour: 3 });
+});
+
+test('Settings › Models（DOM）: 説明の言語が日本語なら、モデルの確認の文と Key variable の誤り（サーバーの文）も日本語で出す（i18n I-3 の残り）', async () => {
+  const config = defaultConfig() as Json;
+  config.providers = [{ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8000/v1', maxParallel: 1, timeoutMs: 600_000 }];
+  config.models = [{ id: 'blind', label: 'BLIND', provider: 'local', model: 'blind', vision: false }];
+  config.routing = { ...config.routing, chat: ['blind'], background: [] };
+  config.ui = { explainLanguage: 'ja' };
+  const models = [{ id: 'blind', label: 'BLIND', provider: 'local', model: 'blind', limits: { context: null, maxOutput: null, required: 61_440 }, inChat: true,
+    probe: { modelId: 'blind', status: 'unknown', server: 'generic', required: 61_440, message: 'english from the server', messageCode: 'provider.probe.unknown', messageParams: {}, checkedAt: 1 } }];
+  const probeJa = serverText('provider.probe.unknown', {}, 'ja');
+  const keyEnvJa = serverText('config.pattern.key_env', null, 'ja');
+  assert.ok(probeJa && keyEnvJa && probeJa !== serverText('provider.probe.unknown', {}, 'en'), '日本語の表に文がある');
+  setExplainLanguage('ja');
+  try {
+    serveSettings(config, path => (path === '/api/models' ? { models, routing: config.routing } : undefined), models);
+    const { container } = await render(createElement(Settings, props({ section: 'models' })));
+    await settle();
+    assert.ok(descOf(container, 'model:blind').includes(probeJa), `確認の文が日本語でない: ${descOf(container, 'model:blind')}`);
+    await click(container.querySelector('[data-row="provider:local"] button[aria-expanded]'));
+    const env = field(container, 'Key variable');
+    assert.ok(env, 'Key variable の欄がある');
+    await input(env, 'sk-not-a-name');
+    await blur(env);
+    await settle();
+    assert.ok(container.textContent?.includes(keyEnvJa), 'Key variable の誤りが日本語でない');
+  } finally { setExplainLanguage('en'); }
 });

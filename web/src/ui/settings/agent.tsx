@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type ProviderKeyState } from '../../api.ts';
 import { toast } from '../../feedback.ts';
-import { formatNumber, formatRelative, getLanguage, useT } from '../../i18n/index.ts';
+import { formatNumber, formatRelative, getExplainLanguage, useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
 import { probeMessage, serverText } from '../../server-text.ts';
 import type { Access } from '../../settings/access.ts';
@@ -156,7 +156,7 @@ function ProviderRow({ provider, open, onToggle, onRenamed }: { provider: Json; 
           <Row k={`${k}:env`} title={t('ui.set.provider.env')} desc={t('ui.set.provider.envDesc')}>
             <CommitField value={(provider.apiKeyEnv as string | undefined) ?? ''} label={t('ui.set.provider.env')} mono placeholder={t('ui.set.provider.envAuto')} onCommit={v => {
               const result = keyEnvEdit(v);
-              if ('fail' in result) { ctx.fail(`${k}:env`, 'key' in result.fail ? t(result.fail.key) : serverText(result.fail.code, null, getLanguage()) ?? ''); return; }
+              if ('fail' in result) { ctx.fail(`${k}:env`, 'key' in result.fail ? t(result.fail.key) : serverText(result.fail.code, null, getExplainLanguage()) ?? ''); return; }
               ctx.clear(`${k}:env`);
               edit(result.patch);
             }} />
@@ -262,7 +262,7 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
   };
   const providers: Option<string>[] = (ctx.config.providers as Json[]).map(p => ({ value: p.id as string, label: p.id as string }));
   const name = (model.label as string) || id;
-  const status = probing ? t('ui.set.models.checking') : probe ? probeMessage(probe, getLanguage()) || probe.status : t('ui.set.models.unchecked');
+  const status = probing ? t('ui.set.models.checking') : probe ? probeMessage(probe, getExplainLanguage()) || probe.status : t('ui.set.models.unchecked');
   return (
     <Row k={k} title={name} desc={<><code>{model.provider as string} · {model.model as string}</code> · {status}</>}
       below={(open || removing) && (
