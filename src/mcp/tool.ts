@@ -9,7 +9,7 @@ import { neutralizeFence } from '../shared/fence.ts';
 import { languageOf } from '../shared/language.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { toolText } from '../shared/messages/tools.ts';
-import type { PreCheck, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
+import type { HeldValue, PreCheck, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
 import { mcpToolName } from './names.ts';
 
 export const DESCRIPTION_MAX = 1024;
@@ -165,6 +165,17 @@ export interface BuildToolParams {
   caller: () => McpCaller | undefined;
   // このサーバーへ渡した秘密の値（env・headers）。答え・エラーの文から、一般の形に当たらなくても伏せる
   secrets?: () => readonly string[];
+  // 承認の札で印に替える値（名前が鍵らしい env・header の値だけ。heldValues）
+  held?: () => readonly HeldValue[];
+}
+
+const HELD_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|CREDENTIAL/iu;
+const HELD_MIN = 8;
+
+// 承認の札で印に替える、サーバーへ渡す env・header の値: 名前が鍵らしく 8 文字以上のものだけ（NODE_ENV=production のような設定の値は替えない）
+export function heldValues(env: Record<string, string>, headers: Record<string, string>): HeldValue[] {
+  const pick = (kind: string, map: Record<string, string>): HeldValue[] => Object.entries(map).filter(([name, value]) => HELD_NAME.test(name) && value.length >= HELD_MIN).map(([name, value]) => ({ source: `${kind} ${name}`, value }));
+  return [...pick('env', env), ...pick('header', headers)];
 }
 
 export type BuildToolResult = { ok: true; tool: ToolDef } | { ok: false; reason: string };
@@ -200,6 +211,7 @@ export function buildMcpTool(p: BuildToolParams): BuildToolResult {
     mcp: { server: server.id, tool: remote.name },
     preCheck,
     redact,
+    held: () => p.held?.() ?? [],
     summarize: (input, lang) => ({ title: toolText(lang, 'mcp.summary_title', label), body: redact(safeJson(input)).slice(0, 2000) }),
     async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutput> {
       const lang = languageOf(ctx.config);

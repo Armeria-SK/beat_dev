@@ -56,6 +56,18 @@ export function messageText(message: ChatMessage): string {
   return message.content;
 }
 
+const AUTO_TITLE_MAX = 40;
+
+function shortTitle(text: string): string {
+  if (text.length <= AUTO_TITLE_MAX) return text;
+  let head = text.slice(0, AUTO_TITLE_MAX - 1);
+  const space = head.lastIndexOf(' ');
+  if (text[AUTO_TITLE_MAX - 1] !== ' ' && space >= AUTO_TITLE_MAX / 2) head = head.slice(0, space);
+  const last = head.charCodeAt(head.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1);
+  return `${head.trimEnd()}…`;
+}
+
 export interface ReviewSource { conversationId?: string | null | undefined; taskId?: string | null | undefined }
 
 export interface SpeechRow { id: number; conversation_id: string; role: 'user' | 'assistant'; text: string; generated: number; created_at?: number }
@@ -236,6 +248,7 @@ export class Conversations {
       const result = this.db.prepare(`INSERT INTO messages (conversation_id, run_id, role, text, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(conversationId, runId ?? null, message.role, text, JSON.stringify(message), now);
       this.db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(now, conversationId);
+      if (message.role === 'user' && message.attachments?.length) this.markTainted(conversationId);
       return {
         id: Number(result.lastInsertRowid), conversation_id: conversationId, run_id: runId ?? null,
         role: message.role, text, message, created_at: now,
@@ -255,7 +268,7 @@ export class Conversations {
   }
 
   autoTitle(id: string, text: string): void {
-    const title = text.replace(/\s+/g, ' ').trim().slice(0, 40);
+    const title = shortTitle(text.replace(/\s+/g, ' ').trim());
     if (title) this.db.prepare('UPDATE conversations SET title = ? WHERE id = ? AND title IS NULL').run(title, id);
   }
 }

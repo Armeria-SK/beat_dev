@@ -564,3 +564,35 @@ test('cancel の理由は、user の別の行（kind: reason）として経過�
   assert.equal((await s.api(`/api/tasks/${doneTask.id}/done`, { reason: 'ignored' })).status, 200);
   assert.deepEqual(s.app.tasks.events(doneTask.id).map(e => e.kind), ['done', 'created'], 'done は理由を受けない');
 });
+
+test('walk-1118 D6: 断った提案は、持ち主の理由を reject_reason として画面へ渡す（応答・終わった一覧・知らせ）。要約は今までどおり、取り消したタスクには付けない', async t => {
+  const s = await taskApp(t);
+  const proposal = s.userTask('Proposed', { origin: 'self', propose: true });
+  const res = await s.api(`/api/tasks/${proposal.id}/cancel`, { reason: 'Not now, the shop has no users yet' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.task.reject_reason, 'Not now, the shop has no users yet');
+  assert.equal(res.body.task.result_summary, 'Cancelled from the screen', '要約には混ぜない');
+  const published = s.events.filter(e => e.type === 'task.changed' && e.task.id === proposal.id).at(-1) as { task: { reject_reason?: string | null } };
+  assert.equal(published.task.reject_reason, 'Not now, the shop has no users yet');
+  const silent = s.userTask('Proposed without reason', { origin: 'self', propose: true });
+  await s.api(`/api/tasks/${silent.id}/cancel`, {});
+  const plain = s.userTask('Owner task');
+  await s.api(`/api/tasks/${plain.id}/cancel`, { reason: 'Changed my mind' });
+  const finished = (await s.api('/api/tasks/finished')).body.tasks as Array<{ id: string; reject_reason?: string | null }>;
+  const of = (id: string) => finished.find(task => task.id === id)!;
+  assert.equal(of(proposal.id).reject_reason, 'Not now, the shop has no users yet');
+  assert.equal(of(silent.id).reject_reason, null, '理由なしで断った提案は null');
+  assert.equal('reject_reason' in of(plain.id), false, '提案でないタスクの取り消しには付けない');
+});
+
+test('walk-1118 D6: 断った提案を Undo（uncancel）で戻し、理由なしでもう一度断ったら、前の理由を reject_reason に出さない', async t => {
+  const s = await taskApp(t);
+  const proposal = s.userTask('Proposed', { origin: 'self', propose: true });
+  assert.equal((await s.api(`/api/tasks/${proposal.id}/cancel`, { reason: 'old' })).body.task.reject_reason, 'old');
+  assert.equal((await s.api(`/api/tasks/${proposal.id}/uncancel`, {})).status, 200);
+  const again = await s.api(`/api/tasks/${proposal.id}/cancel`, {});
+  assert.equal(again.status, 200);
+  assert.equal(again.body.task.reject_reason, null);
+  const third = s.app.tasks.get(proposal.id)!;
+  assert.equal(third.cancelled_from, 'inbox');
+});

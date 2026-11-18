@@ -89,6 +89,7 @@ export type RunEvent =
   // 自動承認の判定役に聞いている（checking）/ 判定役が許した（allowed。reason は判定役の短い理由）/ 判定役が確かめると言った・答えられなかった（asked。このあと Pending に積む）
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
+  | { type: 'memoryFile.changed'; runId: string; conversationId: string; projectId: string; name: string; action: 'create' | 'update' | 'forget' | 'restore' | 'reviewed'; eventId: number }
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }>; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   // 子の担当（agent_run）の状態。runId・conversationId・callId は親のもの（親の会話の画面が、その呼び出しの行に結ぶ）。toolCalls は子が動かした道具の回数（running のときは 0）

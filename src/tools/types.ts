@@ -3,6 +3,7 @@ import type { TSchema } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ImageRef, RunEvent, ToolGate } from '../engine/types.ts';
 import type { MemoryStore } from '../memory/store.ts';
+import type { ProductMemory } from '../memory/files.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from './skills/store.ts';
@@ -113,6 +114,8 @@ export interface ToolContext {
   workspace: string;
   home?: string | undefined;
   project?: { id: string; root?: string | undefined } | undefined;
+  // 振り返りの実行だけ: 記憶の道具が書く製品の id（振り返りの会話の製品。作業フォルダは渡さない）
+  memoryProject?: string | undefined;
   taint: { tainted: boolean; sources: string[] };
   // この会話が、これまでの実行のどこかで「よそから来た文を読んだ」ことがあるか（taint はこの実行だけ。これは会話ぜんぶ。読めないときは「ある」側）。
   // 無いとき（試験など）は「ない」として扱う。browser_open の事前の確かめが、この実行で読んでいなくても、会話が読んだあとなら確かめるために見る
@@ -125,7 +128,7 @@ export interface ToolContext {
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined; plans?: PlanStore | undefined; mesh?: Mesh | undefined;
-    acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined; questions?: QuestionStore | undefined;
+    acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined; questions?: QuestionStore | undefined; memoryFiles?: ProductMemory | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
@@ -170,6 +173,8 @@ export type TaskControl =
   | { outcome: 'yield'; reason: string }
   | { outcome: 'failed'; reason: string };
 
+export interface HeldValue { source: string; value: string }
+
 export interface ToolDef<I = any> {
   name: string;
   description: string;
@@ -192,7 +197,11 @@ export interface ToolDef<I = any> {
   planOk?: true;
   replayable?: false;
   redact?: (text: string) => string;
+  // 承認の札で印に替える、beat が持っている鍵の値と、その出どころの名前（redact の代わりに使う。redact は形でも伏せ、実行される値を隠しうるため）
+  held?: () => readonly HeldValue[];
   projectOnly?: true;
+  // projectOnly の道具のうち、製品の会話・タスクの振り返り（memoryProject のある振り返り）でも使えるもの（製品の記憶の道具）
+  productReview?: true;
   scoutOnly?: true;
   acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };

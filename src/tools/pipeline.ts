@@ -26,7 +26,7 @@ import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
 import { outboundOfCall, type Outbound } from './hooks/outbound.ts';
 import { windowsNames } from './hooks/scope.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
-import { isCore, type ToolRegistry } from './registry.ts';
+import { isCore, projectAllows, type ToolRegistry } from './registry.ts';
 import { isBrowserTool } from './browser/names.ts';
 import { effectivePolicy, type HasPolicies, type ToolPolicy } from './tool-policy.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
@@ -266,7 +266,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (truncated) return refuse('deny', 'truncated', truncated.message);
   if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: (ctx.reachable?.() ?? deps.registry.forRun(ctx.kind)).filter(t => !ctx.deferred || ctx.deferred.sent.has('tool_search') || ctx.deferred.sent.has(t.name)).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
-  if (tool.projectOnly === true && !ctx.project) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
+  if (!projectAllows(tool, { kind: ctx.kind, project: ctx.project !== undefined, memoryProject: ctx.memoryProject !== undefined })) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
   if (tool.scoutOnly === true && !ctx.scout) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   if (tool.acceptanceState !== undefined) {
     const frozen = Boolean(ctx.project && ctx.services?.acceptance?.latest(ctx.project.id));

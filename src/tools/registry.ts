@@ -7,6 +7,10 @@ export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'task_complete', 'task_checkpoint', 'question_add', 'plan_write', 'acceptance_write', 'acceptance_change', 'mesh_search', 'mesh_read', 'tool_search',
 ]);
 
+// 製品が要る道具（projectOnly）を、この実行に出してよいか。振り返りは作業フォルダを持たないので、製品の記憶の道具（productReview）だけを、振り返りの会話の製品（memoryProject）があるときに出す
+export const projectAllows = (tool: Pick<ToolDef, 'projectOnly' | 'productReview'>, scope: { kind: RunKind; project: boolean; memoryProject: boolean }): boolean =>
+  tool.projectOnly !== true || (scope.kind === 'review' ? scope.memoryProject && tool.productReview === true : scope.project);
+
 export const isCore = (tool: Pick<ToolDef, 'name' | 'mcp'>): boolean => tool.mcp === undefined && CORE_TOOLS.has(tool.name);
 
 export interface RunOptions { exclude?: (tool: ToolDef) => boolean }

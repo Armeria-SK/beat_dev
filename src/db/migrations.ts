@@ -593,6 +593,24 @@ export const MIGRATIONS: readonly Migration[] = [
     AND NOT EXISTS (SELECT 1 FROM kv WHERE kv.key = 'task-owner-run:' || tasks.id);
   `,
   `
+  CREATE TABLE memory_file_events (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('create', 'update', 'forget', 'restore', 'outside', 'reviewed')),
+    before TEXT,
+    after TEXT,
+    actor TEXT NOT NULL CHECK (actor IN ('beat', 'review', 'owner')),
+    summary TEXT,
+    tainted INTEGER NOT NULL CHECK (tainted IN (0, 1)),
+    run_id TEXT,
+    conversation_id TEXT,
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX ix_memory_file_events_name ON memory_file_events (project_id, name, id DESC);
+  CREATE INDEX ix_memory_file_events_action ON memory_file_events (project_id, action, actor);
+  `,
+  `
   CREATE TABLE approval_rules (
     id INTEGER PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

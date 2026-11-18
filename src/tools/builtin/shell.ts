@@ -85,8 +85,8 @@ function peek(file: string, language: Language): Peeked {
   const fingerprint = `${file}\0${sha256(bytes)}`;
   if (bytes.subarray(0, 8000).includes(0)) return unreadable(fingerprint);
   const content = bytes.toString('utf8');
-  const shown = redactSecrets(content);
-  return { preview: { path: file, text: shown.slice(0, PREVIEW_CHARS), truncated: shown.length > PREVIEW_CHARS }, fingerprint, content };
+  const rest = redactSecrets(content);
+  return { preview: { path: file, text: content.slice(0, PREVIEW_CHARS), truncated: content.length > PREVIEW_CHARS, ...(content.length > PREVIEW_CHARS ? { chars: content.length } : {}), rest: { text: rest.slice(0, PREVIEW_CHARS), truncated: rest.length > PREVIEW_CHARS } }, fingerprint, content };
 }
 
 function hookFingerprints(dir: string | null | undefined, language: Language): string[] {
