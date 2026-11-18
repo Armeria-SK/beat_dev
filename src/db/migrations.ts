@@ -610,4 +610,27 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_memory_file_events_name ON memory_file_events (project_id, name, id DESC);
   CREATE INDEX ix_memory_file_events_action ON memory_file_events (project_id, action, actor);
   `,
+  `
+  CREATE TABLE worktrees (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    task_id TEXT,
+    proposal_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('task', 'fix')),
+    path TEXT,
+    branch TEXT NOT NULL,
+    base TEXT NOT NULL,
+    tip TEXT,
+    own_tip TEXT,
+    state TEXT NOT NULL CHECK (state IN ('creating', 'active', 'branch', 'merged', 'discarded', 'removing', 'gone')),
+    keep_branch INTEGER NOT NULL DEFAULT 1 CHECK (keep_branch IN (0, 1)),
+    ending TEXT CHECK (ending IS NULL OR ending IN ('branch', 'merged', 'discarded', 'gone')),
+    note TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX ix_worktrees_project ON worktrees (project_id);
+  CREATE INDEX ix_worktrees_task ON worktrees (task_id) WHERE task_id IS NOT NULL;
+  `,
 ];

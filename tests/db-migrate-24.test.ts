@@ -99,6 +99,8 @@ test('移し替え 24: 前からある、外を読んだ実行・会話の書い
     assert.equal(tasks.judgeRequest('t-child-clean'), 'Weekly\nclean body');
     assert.equal(count(db, 't-approved'), 1, '前提: 承認のあとに印が足された');
     assert.equal(tasks.unapprove('t-approved').status, 'inbox', '印は承認の取り消しを妨げない');
+    // remove は今の DB の形（worktrees の参照の確かめ）を前提にする。この試験は 7-4 より前の形で止めているので、その表だけを足す（版の番号は変えない）
+    db.exec(String(MIGRATIONS.find(m => typeof m === 'string' && m.includes('CREATE TABLE worktrees'))));
     tasks.remove('tpl');
     assert.equal(tasks.get('t-child')!.parent_id, null);
     assert.equal(tasks.judgeRequest('t-child'), '', '予定を消しても、写した本文は判定役に届かない');
