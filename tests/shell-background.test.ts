@@ -11,7 +11,7 @@ import { backgroundSection, shellOutput, shellStop } from '../src/tools/builtin/
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import type { BackgroundJobs } from '../src/tools/shell/background.ts';
 import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply, tempDir, withLoad, type Script } from './helpers.ts';
+import { removeDir, reply, tempDir, withLoad, type Script } from './helpers.ts';
 
 // beat 6-2: shell_run の background と shell_output / shell_stop。裏の道も、事前の判定・判定役・Pending・見張りを同じに通る
 
@@ -41,7 +41,7 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
   });
   const s = await startApp(t, { models: [fakeModel('m1')], projectFolderExempt: [products], tools: builtinTools(), judge: '{"decision":"allow","reason":"fits"}', ...options });
   jobs = s.app.background;
-  t.after(() => { s.app.background.closeAll(); rmSync(products, { recursive: true, force: true, maxRetries: 25, retryDelay: 200 }); });
+  t.after(async () => { s.app.background.closeAll(); await removeDir(products); });
   const product = async (name: string) => {
     const dir = join(products, name);
     mkdirSync(dir, { recursive: true });

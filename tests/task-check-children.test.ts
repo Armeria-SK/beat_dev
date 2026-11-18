@@ -6,7 +6,7 @@ import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { CHECK_FAIL_LIMIT, runProductCheck } from '../src/projects/check-run.ts';
+import { CHECK_FAIL_LIMIT, climbsToParent, NO_PACKAGE_JSON, runProductCheck } from '../src/projects/check-run.ts';
 import { checkCommandOf } from '../src/projects/store.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { selfTarget } from '../src/tools/hooks/self-port.ts';
@@ -467,6 +467,32 @@ for (const outcome of ['pass', 'fail'] as const) {
     assert.match(s.toolTexts(task.id).at(-1)!.text, /failure 2 of 3/u);
   });
 }
+
+test('backlog: 確かめが npm・pnpm・yarn で始まり、製品のフォルダに package.json が無いと、上のフォルダの package.json へさかのぼらせず、わけを書いて断る', async t => {
+  const s = await setup(t);
+  const parent = tempDir(t);
+  writeFileSync(join(parent, 'package.json'), JSON.stringify({ name: 'other-project', private: true, scripts: { test: "node -e \"require('fs').writeFileSync('climbed', '')\"" } }));
+  const root = join(parent, 'shop');
+  mkdirSync(root, { recursive: true });
+  const config = s.app.config();
+  const refused = await runProductCheck({ command: 'npm test', root }, { config, dataDir: s.dataDir, signal: new AbortController().signal });
+  assert.equal(!refused.ok && refused.reason, 'spawn');
+  assert.equal(!refused.ok && refused.reason !== 'aborted' ? refused.tail : '', NO_PACKAGE_JSON);
+  assert.doesNotMatch(NO_PACKAGE_JSON, /add (a )?package\.json/iu, 'the task AI is not invited to add a stub package.json');
+  assert.match(NO_PACKAGE_JSON, /needs the owner/u);
+  assert.equal(existsSync(join(parent, 'climbed')), false, "the other project's test script did not run");
+
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'shop', private: true, scripts: { test: "node -e \"require('fs').writeFileSync('ran-here', '')\"" } }));
+  const own = await runProductCheck({ command: 'npm test', root }, { config, dataDir: s.dataDir, signal: new AbortController().signal });
+  assert.equal(own.ok, true, JSON.stringify(own));
+  assert.equal(existsSync(join(root, 'ran-here')), true);
+  assert.equal(existsSync(join(parent, 'climbed')), false);
+
+  const bare = join(parent, 'bare');
+  mkdirSync(bare);
+  for (const command of ['npm test', '  NPM.cmd run check', 'pnpm test', 'yarn', 'npm run build && npm test']) assert.equal(climbsToParent(command, bare), true, command);
+  for (const command of ['node npm-check.js', 'cd web && npm test', 'npm --prefix web test', 'npm test --prefix=web', 'npm -C web test', 'pnpm --dir web test', 'pnpm -C web test', 'yarn --cwd web test', 'yarn --cwd=web test', 'make test', 'npx vitest']) assert.equal(climbsToParent(command, bare), false, command);
+});
 
 test('5-3a: 確かめは shell_run と同じ git の切り離しで動き、長い出力でも本当の最後を返す。コマンドの中の秘密は伏せる', async t => {
   const s = await setup(t);

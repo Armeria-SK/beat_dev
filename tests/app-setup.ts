@@ -1,5 +1,6 @@
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
@@ -11,7 +12,7 @@ import type { ToolDef } from '../src/tools/types.ts';
 import type { JudgeLimitSet } from '../src/tools/pipeline.ts';
 import type { DownloadNetwork, PageNetwork } from '../src/tools/web/public-page.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, JudgeAdapter, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, JudgeAdapter, removeDir, testConfig } from './helpers.ts';
 
 export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelConfig {
   return { id, provider: 'fake', model: `${id}-name`, contextLength: 65536, maxOutputTokens: 1024, vision: false, ...over };
@@ -19,7 +20,9 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
 export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths; botMemory?: boolean; folderDialog?: FolderDialogOptions } = {}) {
-  const dir = tempDir(t);
+  const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
+  let stop = async (): Promise<void> => undefined;
+  t.after(async () => { await stop(); await removeDir(dir); });
   // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
   const base = { ...resolvePaths(dir), env: join(dir, '.env') };
   const paths = options.paths ? options.paths(base) : base;
@@ -54,7 +57,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
   const port = (web.server.address() as AddressInfo).port;
   const origin = `http://127.0.0.1:${port}`;
   web.setOrigins([origin]);
-  t.after(async () => { web.server.closeAllConnections(); await new Promise(r => web.server.close(r)); app.close(); rmSync(dir, { recursive: true, force: true }); });
+  stop = async () => { web.server.closeAllConnections(); await new Promise(r => web.server.close(r)); app.close(); };
   const api = (path: string, init: RequestInit = {}) => fetch(`${origin}${path}`, {
     ...init, headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), Origin: origin, ...init.headers },
   });
