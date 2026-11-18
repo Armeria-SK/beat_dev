@@ -119,6 +119,6 @@ test('ui/PendingPane（DOM）: 名前の無い伏せ字（前の版の札）は�
   const why = (id: number) => container.querySelector(`[data-pending="${id}"] .ui-pending__why`)?.textContent ?? '';
   assert.match(why(22), /2 parts hidden/u);
   assert.doesNotMatch(why(22), /replaced/u);
-  assert.match(why(23), /This text contains “\[BEAT-SECRET…\]” written in the command itself\. beat replaced nothing here\./u);
+  assert.match(why(23), /This text contains “\[BEAT-SECRET…\]” written in the command itself. Nothing here was replaced by beat./u);
   assert.doesNotMatch(why(24), /written in the command itself/u);
 });
