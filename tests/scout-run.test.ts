@@ -170,6 +170,24 @@ test('scout loop: the next run sees the checked area as seen, and a rejected pro
   assert.match(second, /Add tests — the owner's reason: too vague for now/u);
 });
 
+test('scout (backlog 7-9): the plan headings are given without "#" marks with a rule to put the matching heading in goal, and a goal sent with "#" marks is stored without them', async t => {
+  const s = await setup(t);
+  const chat = s.app.conversations.create({ kind: 'chat', title: 'plan', projectId: s.projectId });
+  s.app.plans.write(s.projectId, chat.id, '# Shop plan\n\n## Scope\n- tests and README\n\n### CLI errors\n\n## Out of scope\n', { by: 'owner', tainted: false, conversationId: null, runId: null }, null);
+  const build = s.app.tasks.create({ title: 'build again', origin: 'user', actor: 'user', projectId: s.projectId, acceptanceItems: ['i1'], createdInConversation: chat.id });
+  s.app.tasks.finish(build.id, 'done', 'built', 'user');
+  const steps = loop();
+  steps[3] = toolCall('proposal_add', { title: 'Add tests', kind: 'feature', why: 'There are no tests.', area: ['src'], size: 'S', goal: '## Scope' });
+  s.adapter().scripts.push(...steps);
+  await s.app.worker.tick();
+  const lead = s.prompt(s.adapter().calls[0]!);
+  const goals = /## Plan goals[^\\]*\\n(.*?)<<<END/u.exec(lead)?.[1] ?? '';
+  assert.match(goals, /- Shop plan\\n {2}- Scope\\n {4}- CLI errors\\n {2}- Out of scope/u, goals);
+  assert.doesNotMatch(goals, /#/u);
+  assert.match(lead, /set goal to that heading exactly as written/u);
+  assert.equal(JSON.parse(s.proposals()[0]!.proposal as unknown as string).goal, 'Scope');
+});
+
 test('scout: the same proposal title is refused while one is open, and approving a proposal gives no owner request to the judge', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(

@@ -254,7 +254,7 @@ test('ui/PlanPane（DOM）: 項目ごとに Met / Open / Unverified、計画と�
   assert.ok(byText(differs, '.bt-meta', 'scripts: test'));
   assert.ok(byText(differs, '.bt-meta', '2 more'), 'checkChangedMore の数');
   await click(rows[1]!.querySelector('button.ui-acc__text'));
-  assert.ok(byText(rows[1]!, 'dd', 'E-3 · shell_run · {"command":"node parse.js empty.txt"}'), '開くと証拠の写し');
+  assert.ok(byText(rows[1]!, 'dd', 'E-3 · shell_run · node parse.js empty.txt'), '開くと証拠の写し');
 });
 
 const { countChecks, kanbanCount } = await import('../web/src/ui/agent-state.ts');

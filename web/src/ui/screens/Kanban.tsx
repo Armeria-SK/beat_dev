@@ -346,6 +346,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
       </header>}
       {creating && <NewTask projects={projects} product={newTaskProduct(filter)} onClose={closeNew} />}
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
+      {!board && !failed && <p className="bt-meta ui-col__empty" role="status" data-loading>{t('ui.set.loading')}</p>}
       {board && pane && emptyProposed && board.columns.every(column => column.cards.length === 0) && <div className="ui-kanban__empty">{emptyProposed}</div>}
       {board && !(pane && emptyProposed && board.columns.every(column => column.cards.length === 0)) && (
         <>

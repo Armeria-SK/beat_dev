@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Acceptance, AcceptanceItem, PlanDoc } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
-import { acceptanceMeta, checkLabel, conversationLink, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../web/src/ui/acceptance.ts';
+import { acceptanceMeta, checkLabel, conversationLink, evidenceLines, itemDetails, outsideContent, showAcceptance, shownItems, shownNotDoing, sourceLabel, stateLabel } from '../web/src/ui/acceptance.ts';
 
 // 受け入れの一覧の表示（beat 3-1b-u）。画面を持たない決まり: 並べ方・札の言葉・開いた中身（web/src/ui/acceptance.ts）。
 
@@ -163,4 +163,14 @@ test('ui/acceptance: claimed は分かるが reason が知らない値なら、�
   const why = itemDetails(odd).find(d => d.label === 'ui.acc.detail.why');
   assert.ok(why && 'note' in why);
   assert.equal(why.note, 'ui.acc.reason.not_found');
+});
+
+test('ui/acceptance (backlog 7-9): a tagged call shows the tool and a short readable target, not its input JSON, even when the copied input was cut off', () => {
+  const write = JSON.stringify({ path: 'src/cli.js', content: '#!/usr/bin/env node\nimport { readFileSync } from "node:fs";\n' + 'x'.repeat(400) }).slice(0, 300);
+  assert.deepEqual(evidenceLines([{ tag: 'E-7', tool: 'file_write', input: write, ok: true, at: 1 }]), [{ text: 'E-7 · file_write · src/cli.js' }]);
+  assert.deepEqual(evidenceLines([{ tag: 'E-3', tool: 'shell_run', input: '{"command":"node parse.js empty.txt"}', ok: true, at: 1 }]), [{ text: 'E-3 · shell_run · node parse.js empty.txt' }]);
+  const long = evidenceLines([{ tag: 'E-4', tool: 'shell_run', input: JSON.stringify({ command: `node -e "${'y'.repeat(200)}"` }), ok: true, at: 1 }])[0]!.text;
+  assert.ok(long.length <= 'E-4 · shell_run · '.length + 80 && long.endsWith('…'), long);
+  assert.deepEqual(evidenceLines([{ tag: 'E-5', tool: 'mcp_x', input: '{"a":1,\n"b":[2,3]}', ok: true, at: 1 }]), [{ text: 'E-5 · mcp_x · {"a":1, "b":[2,3]}' }], 'no known field: the input on one line');
+  assert.deepEqual(evidenceLines([{ tag: 'E-6', tool: 'file_list', input: '{}', ok: true, at: 1 }]), [{ text: 'E-6 · file_list · {}' }]);
 });

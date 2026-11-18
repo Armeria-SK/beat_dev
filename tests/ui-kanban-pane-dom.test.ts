@@ -237,3 +237,26 @@ test('ui/Task and ProductHome（DOM）: a thinking run ("scout") is not "another
     }
   } finally { stop(); }
 });
+
+test('ui/KanbanPane and ProductHome（DOM）: while the tasks are still loading, the board says Loading instead of empty columns, and the cards replace it once they come (backlog 7-9)', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  serve({ active: [task('Resume interrupted uploads', 'inbox', { proposal: PROPOSAL })] }, null);
+  const served = globalThis.fetch;
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    if (String(path).startsWith('/api/tasks')) await gate;
+    return served(path, init);
+  }) as typeof fetch;
+  const { container } = await pane();
+  await settle();
+  assert.equal(container.querySelector('[data-loading]')?.textContent, en['ui.set.loading'], 'the pane says Loading');
+  assert.equal(container.querySelector('.bt-col'), null, 'no empty columns while loading');
+  const home = await render(createElement(ProductHome, { id: PRODUCT, project: project(), conversations: [], drafts: [], checklists: new Map(), worker: null, revision: 0 }));
+  await settle();
+  assert.equal(home.container.querySelector('[data-loading]')?.textContent, en['ui.set.loading'], 'the product home says Loading where the board goes');
+  release();
+  await settle();
+  assert.equal(container.querySelector('[data-loading]'), null);
+  assert.ok(byText(column(container, 'proposed'), '.bt-card__title', 'Resume interrupted uploads'));
+  assert.equal(home.container.querySelector('[data-loading]'), null);
+});

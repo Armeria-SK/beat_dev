@@ -125,6 +125,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
 
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
 
+      {!mini && !failed && <p className="bt-meta ui-col__empty" role="status" data-loading>{t('ui.set.loading')}</p>}
       {mini && <MiniBoard columns={mini} label={t('ui.nav.kanban')} index={4} className="ui-home__board" />}
 
       <section className="bt-section bt-rise" style={{ '--bt-i': 5 } as CSSProperties} aria-label={t('ui.overview.running')} data-home="running">

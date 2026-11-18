@@ -63,6 +63,8 @@ export function setJudge(config: Config, id: string): Config {
   return { ...config, routing };
 }
 
+export const scoutBackups = (config: Config): string[] => (Array.isArray(config.routing?.scout) ? (config.routing.scout as string[]).slice(1) : []);
+
 export const scoutChoice = (config: Config): string => (Array.isArray(config.routing?.scout) ? (config.routing.scout as string[])[0] ?? '' : '');
 
 export function setScout(config: Config, id: string): Config {
