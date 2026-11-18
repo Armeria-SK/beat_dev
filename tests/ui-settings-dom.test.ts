@@ -359,29 +359,21 @@ test('Settings › Models（DOM）model-auto: 長さが分からない（unknown
 });
 
 test('Settings › Models（DOM）: the Scout row (beat 7-1) shows Off when routing.scout is empty; picking a model saves routing.scout, picking Off removes the key; backups written in the file stay', async () => {
-  const pick = async (container: HTMLElement, label: string) => {
-    await click(container.querySelector('button[aria-label="Scout"]'));
-    await settle();
-    await click([...container.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent === label));
-    await settle();
-    await settle();
-    const widen = container.querySelector('.ui-set__widen');
-    if (widen) { await click(buttons(widen, 'Confirm')[0]); await settle(); await settle(); }
-  };
+
   const { container, sent } = await openModels(withModels());
   assert.ok(container.querySelector('[data-row="roles:scout"]'));
   assert.equal(container.querySelector('button[aria-label="Scout"]')?.textContent?.trim(), en['ui.set.models.scoutOff']);
-  await pick(container, 'GEMMA');
+  await pickIn(container, 'Scout', 'GEMMA');
   assert.deepEqual(sent.at(-1)?.body?.config.routing.scout, ['gemma']);
   assert.equal(container.querySelector('button[aria-label="Scout"]')?.textContent?.trim(), 'GEMMA');
-  await pick(container, en['ui.set.models.scoutOff']);
+  await pickIn(container, 'Scout', en['ui.set.models.scoutOff']);
   assert.equal('scout' in (sent.at(-1)?.body?.config.routing ?? {}), false, 'Off removes routing.scout');
   await cleanup();
 
   const withBackup = withModels();
   withBackup.routing.scout = ['qwen', 'phi'];
   const second = await openModels(withBackup);
-  await pick(second.container, 'GEMMA');
+  await pickIn(second.container, 'Scout', 'GEMMA');
   assert.deepEqual(second.sent.at(-1)?.body?.config.routing.scout, ['gemma', 'phi']);
 });
 
@@ -462,4 +454,19 @@ test('Settings › Models（DOM）: Scout が Off なら深さの行は出ない
   assert.equal(mismatch.container.querySelector(`button[aria-label="${depth}"]`)?.textContent?.trim(), 'xhigh', '保存した値を選んだまま');
   assert.equal(mismatch.container.querySelector('[data-below="roles:scoutEffort"] [data-depth-missing]')?.textContent, en['ui.set.models.scoutEffortMissing']('xhigh'));
   assert.equal(mismatch.container.querySelector('[data-depth-none]'), null);
+});
+
+test('Settings › Models（DOM）: 選べる値の無いモデルでも保存した値があれば、Model default とその値の選びと注意の 1 行を出し、Model default で effort だけ消せる', async () => {
+  const depth = en['ui.set.models.scoutEffort'];
+  const config = withModels();
+  config.routing.scout = ['phi'];
+  config.scout = { cloudRunsPerHour: 3, effort: 'xhigh' };
+  const sent = serveSettings(config, () => undefined, modelViews({ gemma: ['low', 'high'] }));
+  const { container } = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  assert.equal(container.querySelector(`button[aria-label="${depth}"]`)?.textContent?.trim(), 'xhigh', '保存した値を選んだまま');
+  assert.ok(container.querySelector('[data-below="roles:scoutEffort"] [data-depth-missing]'));
+  assert.equal(container.querySelector('[data-depth-none]'), null, '選びを出すときは「値が無い」の行を出さない');
+  await pickIn(container, depth, en['ui.set.models.scoutEffortDefault']);
+  assert.deepEqual(sent.at(-1)?.body?.config.scout, { cloudRunsPerHour: 3 });
 });
