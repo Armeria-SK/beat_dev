@@ -8,7 +8,7 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { DEDUP_MS } from '../src/notify/notifications.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { inQuietHours, taskPrompt } from '../src/tasks/worker.ts';
+import { taskPrompt } from '../src/tasks/worker.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { fail, FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
@@ -82,7 +82,7 @@ async function serve(t: { after: (fn: () => void) => void }, s: Awaited<ReturnTy
 // ── 予定と precheck ──
 
 test('偽の時計で 24 時間進めても、やることが無ければモデルを 1 回も呼ばない', async t => {
-  const s = await setup(t, c => { c.worker.autonomy = true; });
+  const s = await setup(t);
   const results = new Set<string>();
   for (let i = 0; i < 24 * 12; i++) {
     results.add(await s.app.worker.tick());
@@ -122,20 +122,27 @@ test('前回分が終わっていなければ、予定から重ねて作らな�
   assert.ok(s.app.tasks.events(template.id).some(e => e.kind === 'skipped'));
 });
 
-test('自分で決めたタスクは、自発行動がオンで・操作が途切れて・静かな時間帯でないときだけ動く', async t => {
-  const s = await setup(t, c => { c.worker.idleMinutes = 5; c.worker.quietStart = '23:00'; c.worker.quietEnd = '07:00'; });
-  s.app.tasks.create({ title: '気になったことを調べる', origin: 'self', actor: 'beat' });
-  assert.equal(await s.app.worker.tick(), 'idle', '自発行動がオフ');
-  await s.app.applyConfig({ ...s.app.config(), worker: { ...s.app.config().worker, autonomy: true } });
-  // 設定を保存するとプロバイダが作り直されるので、台本はその後に積む
-  s.adapter().scripts.push(toolCall('task_complete', { summary: '調べました', notify: true }));
-  assert.equal(await s.app.worker.tick(), 'idle', '日本時間 05:00 は静かな時間帯');
-  s.clock.now = Date.parse('2026-11-05T00:00:00Z'); // 09:00
-  s.app.engine.lastUserActivity = s.clock.now - 2 * MIN;
-  assert.equal(await s.app.worker.tick(), 'idle', 'ユーザーが 2 分前に操作した');
-  s.clock.now += 5 * MIN;
+test('7-4: 設定ファイルに古い worker.autonomy: true と idleMinutes: 0 を書いても、自分で決めたタスク（self・curiosity）は選ばれず、起きる時刻にも入らない。持ち主が「今すぐ実行」したものだけ動く', async t => {
+  const s = await setup(t, c => { Object.assign(c.worker, { autonomy: true, idleMinutes: 0 }); });
+  assert.equal('autonomy' in s.app.config().worker, false, '古い鍵は読んだ設定に残らない');
+  assert.equal('idleMinutes' in s.app.config().worker, false);
+  s.clock.now = Date.parse('2026-11-05T00:00:00Z');
+  s.app.engine.lastUserActivity = 0;
+  const mine = s.app.tasks.create({ title: '気になったことを調べる', origin: 'self', actor: 'beat' });
+  const curious = s.app.tasks.create({ title: '好奇心から', origin: 'curiosity', actor: 'beat' });
+  s.app.tasks.create({ title: 'あとで', origin: 'self', actor: 'beat', runAt: s.clock.now + HOUR });
+  s.adapter().scripts.push(toolCall('task_complete', { summary: '調べました', notify: false }));
+  for (let i = 0; i < 3; i++) {
+    assert.equal(await s.app.worker.tick(), 'idle', String(i));
+    s.clock.now += 10 * MIN;
+  }
+  assert.equal(s.app.tasks.pickNext(), undefined);
+  assert.equal(s.app.tasks.nextWakeAt(), undefined, '自分で決めたタスクの時刻では起きない');
+  assert.equal(s.adapter().calls.length, 0);
+  s.app.worker.requestRun(mine.id);
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.notifications.list()[0]?.kind, 'task_done');
+  assert.equal(s.app.tasks.get(mine.id)!.status, 'done');
+  assert.equal(s.app.tasks.get(curious.id)!.status, 'ready', '押していないものは動かない');
 });
 
 test('「今すぐ実行」は自発行動がオフでも動く', async t => {
@@ -169,15 +176,6 @@ test('一時停止中と、1 時間あたりの上限を超えたときは動か
   s.clock.now += HOUR + MIN;
   s.adapter().scripts.push(toolCall('task_complete', { summary: '3' }));
   assert.equal(await s.app.worker.tick(), 'ran');
-});
-
-test('静かな時間帯の判定（日付をまたぐ指定にも対応）', () => {
-  const at = (iso: string) => Date.parse(iso);
-  assert.equal(inQuietHours(at('2026-11-05T14:30:00Z'), 'Asia/Tokyo', '23:00', '07:00'), true); // 23:30
-  assert.equal(inQuietHours(at('2026-11-04T21:59:00Z'), 'Asia/Tokyo', '23:00', '07:00'), true); // 06:59
-  assert.equal(inQuietHours(at('2026-11-04T22:00:00Z'), 'Asia/Tokyo', '23:00', '07:00'), false); // 07:00
-  assert.equal(inQuietHours(at('2026-11-05T04:00:00Z'), 'Asia/Tokyo', '12:00', '14:00'), true); // 13:00
-  assert.equal(inQuietHours(at('2026-11-05T04:00:00Z'), 'Asia/Tokyo', '', ''), false);
 });
 
 // ── 実行の結果 ──
@@ -487,8 +485,8 @@ test('画面の「止める」で止めたタスクは、20 秒ほど休んで�
 
 // ── 道具・通知・画面 ──
 
-test('会話の中で task_create を呼ぶと、メモ帳にタスクが増える（自発のものは承認制にできる）', async t => {
-  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = true; });
+test('会話の中で task_create を呼ぶと、メモ帳にタスクが増える（自発のものは提案）', async t => {
+  const s = await setup(t);
   s.adapter().scripts.push(
     toolCall('task_create', { title: '請求書をまとめる', requested_by_user: true, priority: 1 }),
     toolCall('task_create', { title: '気になった論文を読む' }),
@@ -577,8 +575,8 @@ test('API: タスク・ワーカー・通知・プロフィール', async t => {
 
   const worker = await api('/api/worker', { paused: true });
   assert.equal(worker.body.paused, true);
-  assert.equal((await api('/api/worker', { autonomy: true })).body.autonomy, true);
-  assert.equal(s.app.config().worker.autonomy, true, '設定ファイルにも保存する');
+  assert.equal('autonomy' in (await api('/api/worker', { autonomy: true })).body, false, '7-4: 自分から動くの切り替えはもう無い');
+  assert.equal('autonomy' in s.app.config().worker, false);
 
   const notes = await api('/api/notifications');
   assert.ok(notes.body.unread >= 1);
@@ -651,7 +649,7 @@ test('取り消しを戻すと、取り消す前の状態に返る（提案・�
   assert.equal(cancel(s, running.id).cancelled_from, 'running');
   const backRunning = s.app.tasks.uncancel(running.id, 'user');
   assert.deepEqual([backRunning.status, backRunning.run_at, backRunning.lease_until, backRunning.attempts], ['ready', null, null, 0], '実行中だったものは、すぐ次に選ばれる');
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, running.id);
+  assert.equal(s.app.tasks.pickNext()?.id, running.id);
 
   const waiting = s.userTask('返事待ちだったもの');
   s.app.tasks.setWaiting(waiting.id, 'question', 'いつ行く？');

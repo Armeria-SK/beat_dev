@@ -24,7 +24,7 @@ function sample(): Config {
     ],
     routing: { chat: ['big', 'sonnet'], background: ['big'], retriesPerModel: 1 },
     tools: { deny: ['.env'], shell: { enabled: true, allow: ['git status'] } },
-    worker: { enabled: false, autonomy: false },
+    worker: { enabled: false, maxParallel: 1 },
     memory: { userMaxChars: 1500, notesMaxChars: 2500 },
     profile: { name: 'beat', shape: 'orb', color: '#C9A227', motion: 'auto' },
   };
@@ -83,7 +83,7 @@ test('設定の書き換え: 元の設定は変えず、空欄（undefined）の
   assert.equal(next.models[0].label, 'Big');
   assert.equal(next.models[1], config.models[1], '触っていない項目は同じもの');
   assert.deepEqual(pruned({ a: 1, b: undefined }), { a: 1 });
-  assert.deepEqual(updateAt(config, 'worker', { enabled: true }).worker, { enabled: true, autonomy: false });
+  assert.deepEqual(updateAt(config, 'worker', { enabled: true }).worker, { enabled: true, maxParallel: 1 });
 });
 
 test('モデル・プロバイダの追加と削除', () => {

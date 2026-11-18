@@ -38,7 +38,6 @@ async function setup(t: { after: (fn: () => void) => void }, options: { botMemor
   config.memory.review = true;
   config.memory.reviewIdleMinutes = 1440;
   config.worker.enabled = true;
-  config.worker.idleMinutes = 0;
   config.worker.maxRunsPerHour = 100;
   options.edit?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
@@ -57,6 +56,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { botMemor
     const outcome = app.engine.send(id, text);
     assert.ok(outcome.ok, JSON.stringify(outcome));
     await app.engine.wait(outcome.runId);
+    app.engine.lastUserActivity = 0;
   };
   const skillJobs = () => app.db.prepare("SELECT trigger, dedup_key, status, note FROM memory_jobs WHERE kind = 'skill' ORDER BY id").all() as Array<{ trigger: string; dedup_key: string; status: string; note: string | null }>;
   const memoryJobs = () => app.db.prepare("SELECT trigger, dedup_key, status, note FROM memory_jobs WHERE kind = 'memory' ORDER BY id").all() as Array<{ trigger: string; dedup_key: string; status: string; note: string | null }>;
@@ -318,8 +318,8 @@ test('S-1b R10: a review draft does not replace a chat draft of the same name, r
   assert.deepEqual(outside.map(r => [r.name, r.outside]), [['r-0', 1], ['same', 0]]);
 });
 
-test('S-1c: a skill review waits while paused, while the owner was active within worker.idleMinutes, and once half the hourly limit is used', async t => {
-  const s = await setup(t, { edit: c => { c.worker.idleMinutes = 5; c.worker.maxRunsPerHour = 4; } });
+test('S-1c: a skill review waits while paused, while the owner was active within the last 5 minutes, and once half the hourly limit is used', async t => {
+  const s = await setup(t, { edit: c => { c.worker.maxRunsPerHour = 4; } });
   s.app.tasks.finish(s.taskWithTools('finished'), 'done', 'ok', 'beat');
   s.app.engine.lastUserActivity = s.clock.now;
   assert.deepEqual(s.skillJobs().map(j => j.trigger), ['task'], 'a task-end skill review (R11: not only heavy_run waits)');
@@ -393,7 +393,7 @@ test('S-1a R5: worker.start() copies the memory reading places to the skill read
 });
 
 test('S-1a: more tool results while a skill review of the conversation waits queue no second job', async t => {
-  const s = await setup(t, { edit: c => { c.worker.idleMinutes = 5; } });
+  const s = await setup(t);
   for (let i = 0; i < 3; i++) {
     results(s.app, 'c1', 10);
     await s.chat('c1', `round ${i}`);

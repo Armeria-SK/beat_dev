@@ -7,8 +7,6 @@ import { foldersFromConfig, wideningChanges, type Widening } from '../skills-met
 // 設定の保存で、beat が触れられる範囲・動かせるもの・外から届く範囲が広がる変更を、そのまま並べるための部分。
 // フォルダ（触れないパスを外す・フォルダを足す・読み書きにする）は、スキル・ツールの画面と同じ `wideningChanges` をそのまま使う。
 // 狭くなる変更や、広がりに関わらない変更は含めない。
-// worker.autonomy の false → true（右のパネルの「自発行動」のスイッチ）は、わざと含めない。パネルで 1 回押すだけで切り替えられる操作として設計してあり、
-// 設定の保存だけに確認を付けても意味がない（費用に関わるが、触れる範囲は広がらない）。この決めは tests/settings-access.test.ts が固定している。
 
 export type HookStage = 'preToolUse' | 'postToolUse';
 export interface HookSummary { matcher: string; command: string[] }
@@ -24,7 +22,6 @@ export type Access =
   | { kind: 'outside-loosened' }
   | { kind: 'web-fetch-on' }
   | { kind: 'web-search-on' }
-  | { kind: 'self-tasks-unapproved' }
   | { kind: 'judge-off' }
   | { kind: 'skills-auto-register' }
   | { kind: 'hook-added'; stage: HookStage; hook: HookSummary }
@@ -307,7 +304,6 @@ export function accessWidening(before: Config, after: Config): Access[] {
   if ((bt.outsideRoots ?? 'ask') === 'deny' && (at.outsideRoots ?? 'ask') === 'ask') out.push({ kind: 'outside-loosened' });
   if ((obj(bt.web).fetch ?? true) === false && (obj(at.web).fetch ?? true) === true) out.push({ kind: 'web-fetch-on' });
   if ((obj(bt.web).search ?? 'duckduckgo') === 'off' && (obj(at.web).search ?? 'duckduckgo') !== 'off') out.push({ kind: 'web-search-on' });
-  if ((obj(before.worker).selfTasksNeedApproval ?? false) === true && (obj(after.worker).selfTasksNeedApproval ?? false) === false) out.push({ kind: 'self-tasks-unapproved' });
   if (obj(before.skills).askBeforeRegister !== false && obj(after.skills).askBeforeRegister === false) out.push({ kind: 'skills-auto-register' });
   if (obj(before.routing).judgeMode !== 'off' && obj(after.routing).judgeMode === 'off') out.push({ kind: 'judge-off' });
   out.push(...hookChanges(before, after, 'preToolUse'), ...hookChanges(before, after, 'postToolUse'));

@@ -228,9 +228,9 @@ export interface ScheduleSlot { taskId: string; runTaskId: string | null; title:
 export interface ScheduleView { from: number; to: number; slots: ScheduleSlot[]; templates: Array<{ taskId: string; title: string; cron_text: string; truncated: boolean; projectId?: string | null }>; ranTruncated: boolean }
 export interface TaskEvent { id: number; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
 export interface WorkerRun { kind: 'task' | 'review' | 'scout'; reviewKind?: 'memory' | 'skill'; taskId: string | null; runId: string; title: string }
-export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
+export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 export interface WorkerStatus {
-  enabled: boolean; autonomy: boolean; paused: boolean; quiet: boolean;
+  enabled: boolean; paused: boolean;
   running: WorkerRun | null; runningAll: WorkerRun[]; maxParallel: number; nextWakeAt: number | null; runsLastHour: number; maxRunsPerHour: number;
   judgeOff?: boolean;
   waiting?: Record<string, WaitReason>;
@@ -434,7 +434,7 @@ export const api = {
   checkTask: (id: string, version: number) => call<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}/check`, { method: 'POST', body: JSON.stringify({ version }) }),
   taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'uncancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
   worker: () => call<WorkerStatus>('/api/worker'),
-  setWorker: (patch: { paused?: boolean; autonomy?: boolean }) => call<WorkerStatus>('/api/worker', { method: 'POST', body: JSON.stringify(patch) }),
+  setWorker: (patch: { paused?: boolean }) => call<WorkerStatus>('/api/worker', { method: 'POST', body: JSON.stringify(patch) }),
   notifications: () => call<{ notifications: NotificationItem[]; unread: number }>('/api/notifications'),
   readNotifications: (ids?: number[]) => call<{ unread: number }>('/api/notifications/read', { method: 'POST', body: JSON.stringify(ids ? { ids } : {}) }),
   profile: () => call<Profile>('/api/profile'),

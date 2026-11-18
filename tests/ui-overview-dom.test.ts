@@ -45,7 +45,7 @@ const project = (id: string, over: Partial<Project> = {}): Project => ({
 });
 
 const worker = (runs: WorkerStatus['runningAll']): WorkerStatus => ({
-  enabled: true, autonomy: false, paused: false, quiet: false, running: runs[0] ?? null, runningAll: runs, maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 10,
+  enabled: true, paused: false, running: runs[0] ?? null, runningAll: runs, maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 10,
 });
 
 interface Server { active: Task[]; awaiting?: Task[]; finished: (url: URL) => { tasks: Task[]; next: { beforeT: number; beforeId: string } | null; total: number }; hold?: Promise<void> }

@@ -54,7 +54,6 @@ test('長さ・数の範囲・形・必須・知らない項目も、友好的�
     c.worker.maxRunsPerHour = 0;
     c.profile.name = '';
     c.models[0].label = 'x'.repeat(81);
-    c.worker.quietStart = '25:99';
     c.profile.color = 'red';
     c.models[0].efforts = ['ok', '!bad'];
     c.scout = { cloudRunsPerHour: 1, effort: 'very deep!' };
@@ -69,7 +68,6 @@ test('長さ・数の範囲・形・必須・知らない項目も、友好的�
   assert.equal(at('worker.maxRunsPerHour').message, 'Use a number from 1 to 120');
   assert.deepEqual([at('profile.name').code, at('profile.name').message], ['config.string.required', 'Enter a value']);
   assert.deepEqual([at(`models.${testConfig().models[0]!.id}.label`).code, at(`models.${testConfig().models[0]!.id}.label`).params], ['config.string.max_length', { max: 80 }]);
-  assert.equal(at('worker.quietStart').code, 'config.pattern.time');
   assert.equal(at('profile.color').code, 'config.pattern.color');
   assert.ok(error.issues.some(i => i.path.endsWith('.efforts.1') && i.code === 'config.pattern.effort'), String(error.issues.map(i => i.path)));
   assert.equal(at('scout.effort').code, 'config.pattern.effort');

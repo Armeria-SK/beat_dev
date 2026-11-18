@@ -80,15 +80,14 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
-        origin: self ? 'self' : 'user', propose: self && (!inTask || input.repeat !== undefined || ctx.config.worker.selfTasksNeedApproval), spawnedBy: parent,
+        origin: self ? 'self' : 'user', propose: self, spawnedBy: parent,
         ...(items?.length ? { acceptanceItems: items } : {}),
         actor: 'beat', createdInConversation: ctx.conversationId, projectId: ctx.project?.id,
       });
       ctx.touchedTasks?.add(task.id);
       const language = languageOf(ctx.config);
       store(ctx).event(task.id, 'context', 'beat', toolText(language, 'task.context', { cid: ctx.conversationId }), ctx.runId);
-      const note = task.status === 'inbox' ? toolText(language, 'task.note_proposal')
-        : self && !ctx.config.worker.autonomy ? toolText(language, 'task.note_autonomy_off') : '';
+      const note = task.status === 'inbox' ? toolText(language, 'task.note_proposal') : '';
       return { content: toolText(language, 'task.created', { line: line(task, ctx.config.timezone, language), note }) };
     } catch (error) { return fail(error, ctx); }
   },

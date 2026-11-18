@@ -209,15 +209,14 @@ test('SKILL.md の読み書き（先頭の --- の中の name と description）
   assert.deepEqual(parseSkillFile('本文だけ'), { body: '本文だけ' });
 });
 
-test('7-4c ワーカーは好奇心からタスクを作らない: 自発行動がオン・待ち 0 分・1 日 2 件・開いた行が 2 つでも idle。承認制でも提案に積まない', async t => {
-  const s = await setup(t, c => { c.memory.review = false; c.worker.autonomy = true; c.worker.curiosityPerDay = 2; c.worker.idleMinutes = 0; });
+test('7-4c ワーカーは好奇心からタスクを作らない: 1 日 2 件・開いた行が 2 つでも idle。提案にも積まない', async t => {
+  const s = await setup(t, c => { c.memory.review = false; c.worker.curiosityPerDay = 2; });
   const a = s.app.curiosity.add({ topic: 'node:sqlite の FTS5', why: '日本語検索に使えるか', source: 'beat' });
   const b = s.app.curiosity.add({ topic: 'croner のタイムゾーン', source: 'beat' });
   const curiosityTasks = () => (s.app.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE origin = 'curiosity'").get() as { n: number }).n;
   assert.equal(await s.app.worker.tick(), 'idle');
   assert.equal(await s.app.worker.tick(), 'idle');
   assert.equal(curiosityTasks(), 0);
-  await s.app.applyConfig({ ...s.app.config(), worker: { ...s.app.config().worker, selfTasksNeedApproval: true } });
   assert.equal(await s.app.worker.tick(), 'idle');
   assert.equal(curiosityTasks(), 0);
   assert.deepEqual(s.app.tasks.list({ statuses: ['inbox'] }), []);
@@ -226,7 +225,7 @@ test('7-4c ワーカーは好奇心からタスクを作らない: 自発行動�
 });
 
 test('持ち主が好奇心の行から作ったタスク（POST /api/curiosity/:id/task）は、終わると結果を行に書き戻す', async t => {
-  const s = await setup(t, c => { c.memory.review = false; c.worker.autonomy = true; c.worker.idleMinutes = 0; });
+  const s = await setup(t, c => { c.memory.review = false; });
   const web = createWebServer(s.app);
   await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;

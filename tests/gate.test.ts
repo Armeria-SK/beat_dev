@@ -333,7 +333,7 @@ test('5-3b 確かめ待ちのタスクは親と 1 製品 1 タスクの枠を止
   assert.equal(s.app.tasks.get(child.id)!.status, 'done');
   assert.equal(s.app.tasks.get(child.id)!.check_state, 'awaiting');
   assert.equal(s.app.tasks.openChildren(parent.id), 0);
-  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, parent.id, '親が選ばれる');
+  assert.equal(s.app.tasks.pickNext()?.id, parent.id, '親が選ばれる');
   assert.equal(s.app.tasks.productBusy(s.app.tasks.get(parent.id)!), false);
 });
 

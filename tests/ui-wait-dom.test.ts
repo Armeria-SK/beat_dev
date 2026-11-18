@@ -51,6 +51,7 @@ const task = (status: Task['status'], extra: Partial<Task> = {}): Task => ({
 
 const AT = Date.now() + 25 * 60_000;
 const REASONS: Array<[WaitReason, string]> = [
+  [{ kind: 'owner' }, 'Decided by beat itself · it runs when you press Run now'],
   [{ kind: 'off' }, 'Work on its own is off'],
   [{ kind: 'paused' }, 'paused'],
   [{ kind: 'chat' }, 'waiting for the chat reply to finish'],
@@ -118,7 +119,7 @@ test('ui/PlanPane（DOM）: the pill stays "Queued" and the reason is a meta lin
 });
 
 const worker = (waits: Record<string, WaitReason>): WorkerStatus => ({
-  enabled: false, autonomy: false, paused: true, quiet: false, running: null, runningAll: [], maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 6, waiting: waits,
+  enabled: false, paused: true, running: null, runningAll: [], maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 6, waiting: waits,
 });
 const project = { id: PRODUCT, name: 'Parser' } as Project;
 
@@ -153,7 +154,7 @@ test('ui/Kanban（DOM）: an Approved card says why it is waiting ("another task
   assert.ok(card()!.textContent!.includes('another task of this product is running'), card()!.textContent!);
 });
 
-test('ui/Kanban（DOM）: while Work on its own is Off, a beat task says so and "next in queue" goes to the owner task that will run', async () => {
+test('ui/Kanban（DOM）: a beat task waiting for Run now says so (7-4) and "next in queue" goes to the owner task that will run', async () => {
   serve(path => {
     if (path === '/api/tasks') return { active: [task('ready', { id: 's1', title: 'Tidy the notes', origin: 'self', priority: 1 }), task('ready', { title: 'Build: Parser' })], finished: [] };
     if (path === '/api/tasks/finished?limit=20') return { tasks: [], next: null, total: 0 };
@@ -161,11 +162,11 @@ test('ui/Kanban（DOM）: while Work on its own is Off, a beat task says so and 
     return undefined;
   });
   g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
-  const props: KanbanProps = { conversations: [], drafts: [], checklists: new Map<string, never[]>(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map(), waits: { s1: { kind: 'off' } } };
+  const props: KanbanProps = { conversations: [], drafts: [], checklists: new Map<string, never[]>(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map(), waits: { s1: { kind: 'owner' } } };
   const { container } = await render(createElement(Kanban, props));
   await settle();
   const card = (title: string) => [...container.querySelectorAll('.bt-card')].find(c => c.textContent?.includes(title))!.textContent!;
-  assert.ok(card('Tidy the notes').includes('Work on its own is off'), card('Tidy the notes'));
+  assert.ok(card('Tidy the notes').includes('Decided by beat itself'), card('Tidy the notes'));
   assert.ok(!card('Tidy the notes').includes('next in queue'), card('Tidy the notes'));
   assert.ok(card('Build: Parser').includes('next in queue'), card('Build: Parser'));
 });

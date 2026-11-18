@@ -14,8 +14,6 @@ const PATTERN_ENTRIES: ReadonlyArray<readonly [string | undefined, ConfigMessage
   [ModelConfig.properties.id.pattern, 'pattern.model_id'],
   [ModelConfig.properties.efforts.items.pattern, 'pattern.effort'],
   [AppConfig.properties.profile.properties.color.pattern, 'pattern.color'],
-  [AppConfig.properties.worker.properties.quietStart.pattern, 'pattern.time'],
-  [AppConfig.properties.worker.properties.quietEnd.pattern, 'pattern.time'],
   [AppConfig.properties.notify.properties.channels.items.properties.id.pattern, 'pattern.notify_id'],
   [MCP_ID_PATTERN, 'pattern.mcp_id'],
   [MCP_TOOL_KEY_PATTERN, 'pattern.mcp_tool'],

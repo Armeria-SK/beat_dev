@@ -118,6 +118,7 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'questions', column: 'fix_task_id' },
 ] as const;
 export const OWNER_RUN_KV = 'task-owner-run:';
+const OWNER_PICKABLE = `(origin IN ('user', 'schedule') OR EXISTS (SELECT 1 FROM kv WHERE kv.key = '${OWNER_RUN_KV}' || tasks.id))`;
 export const TASK_KV_PREFIXES = ['task-split:', 'task-idle:', 'created:task:', OWNER_RUN_KV] as const;
 export const UNTRUSTED_RUN = 'untrusted-input';
 const TEXT_EVENT_KINDS: readonly string[] = ['context', 'note', 'edited'];
@@ -533,7 +534,7 @@ export class TaskStore {
       if (template && next === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
       this.#adopt(task);
       if (template) this.#db.prepare("UPDATE tasks SET status = 'scheduled', run_at = ?, lease_until = NULL, updated_at = ? WHERE id = ?").run(next, now, id);
-      else this.#db.prepare("UPDATE tasks SET status = 'ready', lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, run_at = NULL, updated_at = ? WHERE id = ?").run(now, id);
+      else this.#db.prepare("UPDATE tasks SET status = 'ready', lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, run_at = CASE WHEN run_at > ? THEN run_at END, updated_at = ? WHERE id = ?").run(now, now, id);
     });
     return this.#changed(id);
   }
@@ -737,10 +738,9 @@ export class TaskStore {
   }
 
   // accept: 並べた順に見て、これを通った最初のもの（提供元が満杯のタスクを飛ばして次を見るため）
-  pickNext(options: { allowSelf: boolean; accept?: (task: Task) => boolean }): Task | undefined {
+  pickNext(options: { accept?: (task: Task) => boolean } = {}): Task | undefined {
     const now = this.#now();
-    const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
-    const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND origin IN ${origins} AND ${NOT_SCOUT}
+    const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND ${OWNER_PICKABLE} AND ${NOT_SCOUT}
       AND (project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
       AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}
       ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at)`;
@@ -748,10 +748,9 @@ export class TaskStore {
     return (this.#db.prepare(sql).all(now) as unknown as Task[]).find(options.accept);
   }
 
-  nextWakeAt(options: { allowSelf: boolean }): number | undefined {
+  nextWakeAt(): number | undefined {
     const now = this.#now();
-    const origins = options.allowSelf ? "('user', 'schedule', 'self', 'curiosity')" : "('user', 'schedule')";
-    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND ${NOT_SCOUT} AND (status = 'scheduled' OR (status = 'ready' AND origin IN ${origins} AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}))`).get(now) as { t: number | null };
+    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND ${NOT_SCOUT} AND (status = 'scheduled' OR (status = 'ready' AND ${OWNER_PICKABLE} AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}))`).get(now) as { t: number | null };
     return row.t ?? undefined;
   }
 

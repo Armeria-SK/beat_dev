@@ -370,7 +370,7 @@ test('DELETE: ひな形に会話が結び付いていたら 409', async t => {
 // ── モデルの道具（task_create / task_update）で作った・触ったタスク ──
 
 test('task_create の道具で作ったタスク（作ったときの context の行に会話の実行の印が付く）も、動いていなければ承認を戻せて、消せる', async t => {
-  const s = await taskApp(t, config => { config.worker.selfTasksNeedApproval = true; });
+  const s = await taskApp(t);
   s.app.worker.setPaused(true);
   s.adapter().scripts.push(toolCall('task_create', { title: 'Tidy the notes' }), reply('Proposed.'));
   await s.chat('Anything to tidy?');

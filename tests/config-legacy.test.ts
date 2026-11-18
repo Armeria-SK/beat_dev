@@ -35,8 +35,8 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls・worker.autonomy・worker.idleMinutes・worker.selfTasksNeedApproval・worker.quietStart・worker.quietEnd', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls', 'worker.autonomy', 'worker.idleMinutes', 'worker.selfTasksNeedApproval', 'worker.quietStart', 'worker.quietEnd']);
 });
 
 test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残らず、入力は書き換えない', () => {
@@ -73,6 +73,16 @@ const IGNORED_ROWS: Array<{ name: string; key: string; set: (raw: Record<string,
     key: 'models[].maxTools', set: raw => { raw.models.forEach((model: Record<string, unknown>, i: number) => { model.maxTools = i === 0 ? 0 : 12; }); }, has: config => config.models.some(model => 'maxTools' in model) },
   { name: '10-1 memory.reviewAfterToolCalls: 8 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
     key: 'memory.reviewAfterToolCalls', set: raw => { raw.memory = { ...(raw.memory ?? {}), reviewAfterToolCalls: 8 }; }, has: config => 'reviewAfterToolCalls' in config.memory },
+  { name: '7-4 worker.autonomy: true の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.autonomy', set: raw => { raw.worker = { ...(raw.worker ?? {}), autonomy: true }; }, has: config => 'autonomy' in config.worker },
+  { name: '7-4 worker.idleMinutes: 0 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.idleMinutes', set: raw => { raw.worker = { ...(raw.worker ?? {}), idleMinutes: 0 }; }, has: config => 'idleMinutes' in config.worker },
+  { name: '7-4 worker.selfTasksNeedApproval: false の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.selfTasksNeedApproval', set: raw => { raw.worker = { ...(raw.worker ?? {}), selfTasksNeedApproval: false }; }, has: config => 'selfTasksNeedApproval' in config.worker },
+  { name: '7-4 worker.quietStart: "23:00" の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.quietStart', set: raw => { raw.worker = { ...(raw.worker ?? {}), quietStart: '23:00' }; }, has: config => 'quietStart' in config.worker },
+  { name: '7-4 worker.quietEnd: "07:00" の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.quietEnd', set: raw => { raw.worker = { ...(raw.worker ?? {}), quietEnd: '07:00' }; }, has: config => 'quietEnd' in config.worker },
 ];
 
 for (const row of IGNORED_ROWS) {
@@ -384,9 +394,9 @@ const BOOT_LOG_ROWS: Array<{ name: string; raw: () => Record<string, any>; check
     raw: () => { const raw = ownerShapedConfig(); raw.tools.maxIterations = 0; return raw; },
     check: raw => {
       assert.equal(parseConfig(raw).models[0]!.id, 'qwen-local');
-      assert.deepEqual(dropLegacy(raw).dropped, ['models[].toolMode', 'language', 'tools.maxIterations']);
+      assert.deepEqual(dropLegacy(raw).dropped, ['models[].toolMode', 'language', 'tools.maxIterations', 'worker.autonomy']);
     },
-    logs: ['[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations'],
+    logs: ['[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, worker.autonomy'],
   },
   {
     name: '持ち主の設定と同じ形（language: "ja"、toolMode: "native"、秘密の欄は空）が読め、起動のログに 1 行出し、ファイルは書き換えない',
@@ -397,7 +407,7 @@ const BOOT_LOG_ROWS: Array<{ name: string; raw: () => Record<string, any>; check
       assert.equal('toolMode' in config.models[0]!, false);
       assert.equal('language' in config, false);
     },
-    logs: ['[INFO] Ignored settings that are no longer used: models[].toolMode, language'],
+    logs: ['[INFO] Ignored settings that are no longer used: models[].toolMode, language, worker.autonomy'],
   },
   {
     name: '起動のログ: 古い Ollama の設定は「Read old settings in their new form」を 1 行だけ出し、2 回目の config() では出さない',
@@ -410,7 +420,7 @@ const BOOT_LOG_ROWS: Array<{ name: string; raw: () => Record<string, any>; check
     raw: () => { const raw = ownerShapedConfig(); raw.tools.maxIterations = 0; raw.tools.web = { ...OWNER_WEB }; return raw; },
     check: raw => assert.deepEqual(parseConfig(raw).tools.web, { fetch: true, search: 'duckduckgo', region: 'jp-jp', maxSearchesPerHour: 30 }),
     logs: [
-      '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl',
+      '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl, worker.autonomy',
       '[INFO] Read old settings in their new form: tools.web.search "searxng" → "duckduckgo"',
     ],
   },

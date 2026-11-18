@@ -287,11 +287,6 @@ export function registerTaskRoutes(router: Router, app: App): void {
       if (typeof body.paused !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'paused', params: { field: 'paused' } });
       app.worker.setPaused(body.paused);
     }
-    if (body.autonomy !== undefined) {
-      if (typeof body.autonomy !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'autonomy', params: { field: 'autonomy' } });
-      const config = app.config();
-      if (config.worker.autonomy !== body.autonomy) await app.applyConfig({ ...config, worker: { ...config.worker, autonomy: body.autonomy } });
-    }
     sendJson(res, 200, workerView());
   });
 

@@ -368,7 +368,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
           </div>
           <div className="bt-board">
             {order(board.columns).map(column => {
-              const firstTask = column.cards.findIndex(card => card.kind === 'task' && !(card.task.run_at !== null && card.task.run_at > now) && waits?.[card.task.id]?.kind !== 'off');
+              const firstTask = column.cards.findIndex(card => card.kind === 'task' && !(card.task.run_at !== null && card.task.run_at > now) && waits?.[card.task.id]?.kind !== 'off' && waits?.[card.task.id]?.kind !== 'owner');
               return (
                 <section key={column.id} id={`ui-col-${column.id}`} className={`bt-col${tab === column.id ? '' : ' ui-col--off'}`} aria-label={columnName(t, column.id)} {...(tabbed ? { role: 'tabpanel' } : {})}>
                   <div className="bt-col__head">

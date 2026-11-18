@@ -188,7 +188,6 @@ const en = {
   'task.next': ' next: {next}',
   'task.created': 'Created the task {line}{note}',
   'task.note_proposal': ' (Created as a proposal. It runs once the user approves it)',
-  'task.note_autonomy_off': ' (Autonomous action is off, so it will not run until the user turns it on or presses "Run now")',
   'task.context': 'Created in conversation {cid}',
   'task.none': 'There are no tasks',
   'task.updated': 'Updated {line}',
