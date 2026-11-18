@@ -232,6 +232,20 @@ test('B4: 伏せて長くなった中身が 8000 文字を越えたら、切っ�
   s.pending.reject(latest(s).id);
 });
 
+test('B1: 承認のあとに動かした呼び出しの記録（replay）も、長い入力を JSON のまま残す', async t => {
+  const s = setup(t);
+  const outsideFile = join(s.paths.data, 'outside.txt');
+  writeFileSync(outsideFile, 'outside-content');
+  const command = `${process.platform === 'win32' ? 'Get-Content' : 'cat'} "${outsideFile}" # ${'x'.repeat(6000)}`;
+  const parked = await s.call('shell_run', { command });
+  assert.equal(parked.decidedBy, 'pending', parked.output.content);
+  const approved = await s.approve(latest(s).id);
+  assert.equal(approved.status, 'ran', approved.output);
+  const row = s.db.prepare("SELECT input FROM tool_calls WHERE decided_by = 'owner-pending'").get() as { input: string };
+  assert.ok(row.input.length <= 4000);
+  assert.match(JSON.parse(row.input).command, /^(Get-Content|cat) .*x…$/u);
+});
+
 test('V7: 積んだあとでファイルの中身が書き換わったら、承認しても動かさない', async t => {
   const s = setup(t);
   const file = join(s.paths.workspace, 'put.js');
