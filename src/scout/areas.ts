@@ -1,5 +1,7 @@
-import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { lstatSync, readdirSync, realpathSync, statSync, type Dirent } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
 import { withGit } from '../mesh/folders.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
@@ -196,6 +198,52 @@ export async function examineAreas(root: string, dataDir: string, entries: reado
   });
   if (viaGit) return viaGit;
   return { mode: 'mtime', head: null, stale: mtimeStale(root, entries), places: walkPlaces(root) };
+}
+
+// 作業フォルダの指紋（休みの印）: git があればコミットしていない変更・追っていないファイルとその更新時刻、無ければ（まだコミットが無い git も）全部のファイルの更新時刻。
+// 変われば休んでいる考える役を起こす（起きて材料を読み直し、見る所が無ければモデルを呼ばずにまた休む）
+// beat のデータのフォルダが製品のフォルダの中にあれば、その中（beat 自身の kv・DB の書き込み）は数えない。読み書きは非同期（イベントループを止めない）
+export async function treeMark(root: string, dataDir: string): Promise<string> {
+  let real: string;
+  try { real = realpathSync.native(root); } catch { return ''; }
+  let data: string | undefined;
+  try { data = realpathSync.native(dataDir); } catch { data = undefined; }
+  const own = data !== undefined && fold(data) !== fold(real) && isInside(real, data) ? fold(relative(real, data).split(sep).join('/')) : undefined;
+  const beats = (path: string): boolean => own !== undefined && (fold(path) === own || fold(path).startsWith(`${own}/`));
+  const stamp = async (abs: string): Promise<number> => { try { return (await stat(abs)).mtimeMs; } catch { return 0; } };
+  const dirty = await withGit(root, dataDir, async git => {
+    if (!(await gitHead(git))) return undefined;
+    const listed = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames']);
+    if (listed === null) return undefined;
+    const lines = listed.toString('utf8').split('\0').filter(line => line && !beats(line.slice(3))).slice(0, WALK_FILES);
+    return Promise.all(lines.map(async line => `${line}:${await stamp(join(real, line.slice(3)))}`));
+  }).catch(() => undefined);
+  const parts = dirty ?? await walkStamps(real, beats, stamp);
+  return createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 32);
+}
+
+async function walkStamps(root: string, skip: (path: string) => boolean, stamp: (abs: string) => Promise<number>): Promise<string[]> {
+  const parts: string[] = [];
+  let count = 0;
+  const walk = async (dir: string, rel: string, level: number): Promise<boolean> => {
+    let entries: Dirent[];
+    try { entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)); } catch { return true; }
+    const files: Array<{ path: string; abs: string }> = [];
+    let more = true;
+    for (const entry of entries) {
+      if (SKIPPED.has(entry.name.toLowerCase()) || entry.name.startsWith('.') || entry.isSymbolicLink()) continue;
+      const path = rel ? `${rel}/${entry.name}` : entry.name;
+      if (skip(path)) continue;
+      if (++count > WALK_FILES) { more = false; break; }
+      const abs = join(dir, entry.name);
+      if (!entry.isDirectory()) files.push({ path, abs });
+      else if (level < WALK_DEPTH && !(await walk(abs, path, level + 1))) { more = false; break; }
+    }
+    for (const [i, at] of (await Promise.all(files.map(file => stamp(file.abs)))).entries()) parts.push(`${files[i]!.path}:${at}`);
+    return more;
+  };
+  await walk(root, '', 1);
+  return parts;
 }
 
 export async function headOf(root: string, dataDir: string): Promise<string | null> {

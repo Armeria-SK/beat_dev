@@ -127,6 +127,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const updated = docLanguage === undefined ? changed : app.projects.setDocLanguage(current.id, docLanguage);
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
     app.bus.publish({ type: 'project.changed', projectId: current.id, change });
+    if (updated.scout_mode !== current.scout_mode || updated.archived_at !== current.archived_at) app.bus.publish({ type: 'scout.changed', projectId: current.id });
     app.worker.poke();
     sendJson(res, 200, { project: projectWire(app, updated) });
   });
@@ -145,6 +146,19 @@ export function registerProjectRoutes(router: Router, app: App): void {
       throw error;
     }
   };
+
+  router.add('GET', '/api/projects/:id/scout', ({ res, params }) => {
+    const view = app.worker.scoutView(params[0]!);
+    if (!view) throw problem(404, 'not_found', 'project_missing');
+    sendJson(res, 200, view);
+  });
+
+  router.add('POST', '/api/projects/:id/scout/run', ({ res, params }) => {
+    const asked = app.worker.scoutNow(params[0]!);
+    if (!asked) throw problem(404, 'not_found', 'project_missing');
+    if (!asked.ok) throw projectProblem(409, new ProjectError(asked.code));
+    sendJson(res, 202, asked.view);
+  });
 
   router.add('GET', '/api/projects/:id/plan', ({ res, params, url }) => {
     const project = app.projects.get(params[0]!);

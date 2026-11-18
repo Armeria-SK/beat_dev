@@ -273,6 +273,7 @@ export class App {
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans,
+      onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
     this.tasks.onChange = task => {
       if (isScoutRun(task)) { this.worker.poke(); return; }
@@ -405,6 +406,7 @@ export class App {
     const config = this.configStore.current();
     const json = JSON.stringify(config);
     if (this.#applied && json !== this.#applied) {
+      const previous = this.#applied;
       this.#applied = json;
       this.registry.reload(config);
       void this.browser?.applyConfig(config).catch(() => undefined);
@@ -412,6 +414,7 @@ export class App {
       void this.status.probeAll(config).catch(error => this.log(`[ERROR] Failed to check the models after reloading the settings: ${(error as Error).message}`));
       this.log('[INFO] Loaded the changes to the settings file');
       this.#warnIgnoredPolicies(config);
+      this.#scoutSettingsChanged(JSON.parse(previous) as AppConfig, config);
       this.worker?.poke();
     }
     this.#applied ||= json;
@@ -464,7 +467,9 @@ export class App {
 
   // probe: false は、モデルやプロバイダに関わらない変更（道具の方針など）で、モデルの確認の通信をしない
   async applyConfig(next: AppConfig, options: { probe?: boolean } = {}): Promise<AppConfig> {
+    const before = this.configStore.current();
     const saved = this.configStore.save(next);
+    this.#scoutSettingsChanged(before, saved);
     this.#applied = JSON.stringify(saved);
     this.registry.reload(saved);
     void this.browser.applyConfig(saved).catch(() => undefined);
@@ -472,6 +477,13 @@ export class App {
     if (options.probe !== false) await this.status.probeAll(saved);
     this.worker.poke();
     return saved;
+  }
+
+  // 考える役のモデル・回数の設定が変わったら、どの製品の状態（off / resting など）も変わりうるので知らせる
+  #scoutSettingsChanged(before: AppConfig, after: AppConfig): void {
+    const scoutOf = (c: AppConfig): string => JSON.stringify([c.routing.scout ?? [], c.scout ?? null]);
+    if (scoutOf(before) === scoutOf(after)) return;
+    for (const project of this.projects.list({ archived: false })) this.bus.publish({ type: 'scout.changed', projectId: project.id });
   }
 
   // 画面から反映した server の設定を、「いま動いているもの」として覚える（restartRequired の比べ先）

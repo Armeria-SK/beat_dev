@@ -5,6 +5,7 @@ const en = {
   'error.bad_cron': 'The repeat setting (cron) is not valid: {cron}',
   'error.not_found': 'Task {id} was not found',
   'error.not_proposal': 'This is not a proposal waiting for approval',
+  'error.owner_edited': 'Not deepened: the owner edited this proposal, so it stays as the owner wrote it. Pick another one',
   'error.needs_approval': 'This repeating task was proposed by beat and has not been approved, so only the owner can restart it',
   'error.proposal_not_done': 'This repeating task was proposed by beat and the owner has not approved it, so it cannot be marked done (cancel it to withdraw the proposal)',
   'error.proposal_changed': 'The proposal changed after you opened it. Read it again, then approve',

@@ -236,7 +236,7 @@ export class ChatEngine {
   #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
   #scoutEnds = new Map<string, ScoutEnd>();
-  #scoutChildren = new Map<string, { spawned: number; ok: number }>();
+  #scoutChildren = new Map<string, { spawned: number; ok: number; area?: string }>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
   #runModel = new Map<string, string | null>();
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
@@ -578,6 +578,8 @@ export class ChatEngine {
   }
 
   scoutEnd(runId: string): ScoutEnd | undefined { return this.#scoutEnds.get(runId); }
+
+  scoutArea(runId: string): string | null { return this.#scoutChildren.get(runId)?.area ?? null; }
 
   scoutChildrenAllFailed(runId: string): boolean { const kids = this.#scoutChildren.get(runId); return kids !== undefined && kids.spawned > 0 && kids.ok === 0; }
 
@@ -1346,7 +1348,7 @@ export class ChatEngine {
     if (parent.kind === 'chat') this.#modeHost.set(child.id, parent.conversationId);
     this.#agentSpawned.set(parent.runId, spawned + 1);
     const kids = scout ? this.#scoutChildren.get(parent.runId) ?? { spawned: 0, ok: 0 } : undefined;
-    if (kids) { kids.spawned += 1; this.#scoutChildren.set(parent.runId, kids); }
+    if (kids) { kids.spawned += 1; kids.area = title; this.#scoutChildren.set(parent.runId, kids); }
 
     const emit = (state: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout', toolCalls = 0) => d.bus.publish({
       type: 'agent.state', runId: parent.runId, conversationId: parent.conversationId, callId: callId ?? '', childRunId, childConversationId: child.id, state, toolCalls,
