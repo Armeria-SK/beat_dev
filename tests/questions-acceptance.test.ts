@@ -71,8 +71,26 @@ async function setup(t: { after: (fn: () => void) => void }) {
   };
   const doc = (projectId: string) => JSON.parse(readFileSync(join(paths.projects, projectId, 'acceptance.json'), 'utf8')) as AcceptanceDoc;
   const decisions = (projectId: string, name = 'DECISIONS.md') => readFileSync(join(paths.projects, projectId, name), 'utf8');
-  return { app, clock, project, answer, ask, doc, decisions, paths, logs };
+  return { app, clock, project, answer, ask, doc, decisions, paths, logs, ctxFor };
 }
+
+test('B5: 項目を受け持つ動く前のタスクの質問なら、違う答えで項目を開き直し、答えはそのタスクに返す（直しのタスクを作らない）', async t => {
+  const s = await setup(t);
+  const shop = s.project('shop');
+  const build = s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user', projectId: shop.id, acceptanceItems: ['A-1', 'A-2'], runAt: s.clock.now + 240 * 60_000 });
+  const out = await questionAdd.execute({ question: 'Resume after restart, or start over?', why: 'Uploads can break', options: ['Resume', 'Start over'], chosen: 0, item: 'A-2' } as never, s.ctxFor(build.id, shop.id));
+  assert.equal(out.isError, undefined, out.content);
+  const [row] = s.app.questions.list({ status: 'open', projectId: shop.id });
+  const before = s.app.db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as { n: number };
+  const res = await s.answer(row!.id, { choice: 1 });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.reopenedItem, 'A-2');
+  assert.deepEqual([res.body.fixTaskId, res.body.resumedTaskId], [null, build.id]);
+  assert.equal((s.app.db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n, before.n);
+  assert.equal(s.doc(shop.id).items.find(i => i.id === 'A-2')!.state, 'open');
+  assert.deepEqual([s.app.tasks.get(build.id)!.status, s.app.tasks.get(build.id)!.run_at], ['ready', null]);
+  assert.ok(s.app.tasks.events(build.id).some(e => e.kind === 'answer' && /Start over/u.test(e.content ?? '')));
+});
 
 test('5-2c-s question_add の item: 固定した一覧に実在する項目だけ受ける。無い番号・消した項目・下書きの一覧・製品の外は断る', async t => {
   const s = await setup(t);

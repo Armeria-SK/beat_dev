@@ -8,7 +8,7 @@ import { plainBlock, plainLine, stripHidden } from '../shared/plain-text.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { AcceptanceError, ITEM_ID, type AcceptanceStore } from '../projects/acceptance.ts';
 import type { ProjectStore } from '../projects/store.ts';
-import { settleAwaiting } from '../projects/gate.ts';
+import { ownedItems, settleAwaiting } from '../projects/gate.ts';
 import { OWNER_FIX, type Task, type TaskStore } from '../tasks/store.ts';
 
 export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
@@ -371,6 +371,7 @@ export class QuestionStore {
       let reopenedTaskId: string | null = null;
       let resumedTaskId: string | null = null;
       const waitedOn = blockedTask !== undefined && this.#waitedOn(blockedTask.id) === row.id;
+      const asker = row.task_id ? tasks.get(row.task_id) : undefined;
       const heldByCancel = waitedOn && blockedTask.status === 'cancelled' && blockedTask.cancelled_from === 'waiting' && blockedTask.waiting_kind === 'question';
       if (text === null && this.#legacyStop(row, options, answer.choice)) {
         if (blockedTask && (!FINISHED.includes(blockedTask.status) || heldByCancel)) {
@@ -389,6 +390,12 @@ export class QuestionStore {
         if (row.task_id) {
           tasks.reopen(row.task_id, 'user', questionText(DEFAULT_LANGUAGE, 'reopen_reason', { id, answer: answerText }));
           reopenedTaskId = row.task_id;
+        }
+      } else if (kind === 'changed' && asker && !FINISHED.includes(asker.status) && (!row.acceptance_item || ownedItems(asker).includes(row.acceptance_item))) {
+        tasks.event(asker.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
+        if (asker.status === 'ready') {
+          tasks.setReady(asker.id, { actor: 'user' });
+          resumedTaskId = asker.id;
         }
       } else if (kind === 'changed') {
         fixTaskId = this.#fixTask(tasks, row, options, answerText, text !== null, reopenedItem);
