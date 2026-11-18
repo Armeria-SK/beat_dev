@@ -9,6 +9,9 @@ import { HOUR, MIN, taskApp, toolCall } from './helpers/task-app.ts';
 type S = Awaited<ReturnType<typeof taskApp>>;
 const DAILY_9 = { freq: 'daily', values: { time: '09:00' } };
 const HOURLY_30 = { freq: 'hourly', values: { minute: '30' } };
+const worktreeRow = (db: S['app']['db'], id: string, column: string, taskId: string, state: string): void => {
+  db.prepare(`INSERT INTO worktrees (id, project_id, repo, ${column === 'proposal_id' ? 'proposal_id' : 'task_id'}, kind, path, branch, base, state, created_at, updated_at) VALUES (?, 'p', 'C:/r', ?, 'task', NULL, 'beat/x-1a2b', 'abc', ?, 1, 1)`).run(id, taskId, state);
+};
 
 function snapshot(s: S) {
   return JSON.stringify({
@@ -319,6 +322,7 @@ test('DELETE: やわらかい参照の表のどれかに行があると 409', as
     acceptance_versions: id => { s.app.db.prepare("INSERT INTO acceptance_versions (project_id, version, hash, content, source, build_task_id, created_at) VALUES (?, 1, 'h', '{}', 'build', ?, 1)").run(`p-${id}`, id); },
     pending_actions: id => { s.app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, task_id, status, created_at) VALUES ('shell_run', '{}', 'x', 'send', 'r', 'r1', 'task', 'c1', ?, 'waiting', 1)").run(id); },
     questions: (id, column) => { s.app.db.prepare(`INSERT INTO questions (question, ${column === 'fix_task_id' ? 'fix_task_id' : 'task_id'}, created_at) VALUES ('q', ?, 1)`).run(id); },
+    worktrees: (id, column) => { worktreeRow(s.app.db, `w-${column}-${id}`, column, id, 'branch'); },
   };
   assert.deepEqual(Object.keys(insert).sort(), [...new Set(TASK_SOFT_REFERENCES.map(r => r.table))].sort());
   for (const ref of TASK_SOFT_REFERENCES) {
@@ -335,6 +339,29 @@ test('DELETE: やわらかい参照の表のどれかに行があると 409', as
       }
       assert.ok(s.app.tasks.get(task.id), task.title);
     }
+  }
+});
+
+test('DELETE: worktree の行は、終わっていなければ（creating・active・branch・removing）409、終わっていれば（gone・discarded・merged）参照を空にして消す', async t => {
+  const s = await taskApp(t);
+  for (const column of ['task_id', 'proposal_id']) {
+    for (const state of ['creating', 'active', 'branch', 'removing']) {
+      const task = s.userTask(`open ${column} ${state}`, { runAt: s.clock.now + HOUR });
+      worktreeRow(s.app.db, `open-${column}-${state}`, column, task.id, state);
+      worktreeRow(s.app.db, `ended-${column}-${state}`, column, task.id, 'gone');
+      const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
+      assert.equal(res.status, 409, task.title);
+      assert.equal(res.body.code, 'task.error.still_referenced');
+      assert.ok(s.app.tasks.get(task.id));
+      assert.equal((s.app.db.prepare(`SELECT ${column} AS ref FROM worktrees WHERE id = ?`).get(`ended-${column}-${state}`) as { ref: string | null }).ref, task.id, '断ったときは何も切らない');
+    }
+    const task = s.userTask(`ended ${column}`, { runAt: s.clock.now + HOUR });
+    for (const state of ['gone', 'discarded', 'merged']) worktreeRow(s.app.db, `done-${column}-${state}`, column, task.id, state);
+    const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(s.app.tasks.get(task.id), undefined);
+    const rows = s.app.db.prepare(`SELECT id, state, ${column} AS ref FROM worktrees WHERE id LIKE ? ORDER BY id`).all(`done-${column}-%`) as Array<{ state: string; ref: string | null }>;
+    assert.deepEqual(rows.map(r => [r.state, r.ref]), [['discarded', null], ['gone', null], ['merged', null]], '行は残り、参照だけ切れる');
   }
 });
 

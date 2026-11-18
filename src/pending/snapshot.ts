@@ -6,6 +6,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { SNAPSHOT_REF } from '../projects/snapshot-before.ts';
+import { BEAT_BRANCHES } from '../projects/worktree.ts';
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { findGitDir, inspectRepo } from '../tools/hooks/git-repo.ts';
 import { HASHED_PSEUDO_REFS } from '../tools/hooks/push-target.ts';
@@ -307,10 +308,11 @@ export interface PushState { fingerprint: string; tips?: string[] }
 export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; parsed?: boolean }>, dataDir: string, rootRefs = '--include-root-refs', signal?: AbortSignal): Promise<PushState> {
   const never = (): PushState => ({ fingerprint: `${PUSH_UNCONFIRMED}${Date.now()}:${randomUUID()}` });
   const lines: string[] = [];
+  const counted: string[] = [];
   const tips = new Set<string>();
   for (const { dir, parsed } of pushes) {
     if (dir === null) return never();
-    const line = await withGit<string | null>(dir, dataDir, `${dir}\0no-repo`, null, async git => {
+    const line = await withGit<[string, string] | null>(dir, dataDir, [`${dir}\0no-repo`, `${dir}\0no-repo`], null, async git => {
       const head = (await git(['rev-parse', '--verify', '-q', 'HEAD']))?.trim() || NO_COMMIT;
       const branch = (await git(['symbolic-ref', '-q', 'HEAD']))?.trim() || DETACHED;
       const rooted = await git(['for-each-ref', rootRefs, '--format=%(objectname) %(refname)']);
@@ -320,14 +322,17 @@ export async function pushFacts(pushes: ReadonlyArray<{ dir: string | null; pars
       const pseudo: string[] = [];
       for (const name of HASHED_PSEUDO_REFS) pseudo.push(`${name} ${(await git(['rev-parse', '--verify', '-q', '--end-of-options', name]))?.trim() || 'absent'}`);
       for (const sha of [head, ...refs.split('\n').map(l => l.split(' ')[0]!), ...pseudo.map(p => p.split(' ')[1]!)]) if (/^[0-9a-f]{40,64}$/u.test(sha)) tips.add(sha);
-      return parsed ? `${dir}\0parsed\0${head}\0${branch}` : `${dir}\0${head}\0${branch}\0${createHash('sha256').update(refs).update(pseudo.join('\n')).digest('hex')}`;
+      if (parsed) return [`${dir}\0parsed\0${head}\0${branch}`, `${dir}\0parsed\0${head}\0${branch}`];
+      const own = refs.split('\n').filter(l => !l.includes(` ${BEAT_BRANCHES}`)).join('\n');
+      const hashed = (text: string): string => `${dir}\0${head}\0${branch}\0${createHash('sha256').update(text).update(pseudo.join('\n')).digest('hex')}`;
+      return [hashed(refs), hashed(own)];
     }, signal);
     if (line === null) return never();
-    lines.push(line);
+    lines.push(line[0]);
+    counted.push(line[1]);
   }
-  const fingerprint = createHash('sha256').update(lines.join('\n')).digest('hex');
-  if (tips.size > MAX_TIPS) return pushes.some(p => p.parsed) ? never() : { fingerprint };
-  return { fingerprint, tips: [...tips].sort() };
+  if (tips.size > MAX_TIPS) return pushes.some(p => p.parsed) ? never() : { fingerprint: createHash('sha256').update(lines.join('\n')).digest('hex') };
+  return { fingerprint: createHash('sha256').update(counted.join('\n')).digest('hex'), tips: [...tips].sort() };
 }
 
 export async function takeSnapshot(cwd: string, targets: readonly string[], dataDir: string): Promise<Snapshot> {

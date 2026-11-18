@@ -70,6 +70,7 @@ import { askBeforeRegister, growSkills, SkillStore } from './tools/skills/store.
 import { isScoutRun, TaskStore } from './tasks/store.ts';
 import { maskedTaskView } from './web/task-view.ts';
 import { ProjectStore } from './projects/store.ts';
+import { Worktrees } from './projects/worktree.ts';
 import { PlanStore } from './projects/plan.ts';
 import { adoptLegacyPlans } from './projects/plan-adopt.ts';
 import { setGitNotice } from './mesh/folders.ts';
@@ -159,6 +160,7 @@ export class App {
   readonly memory: MemoryStore;
   readonly tasks: TaskStore;
   readonly projects: ProjectStore;
+  readonly worktrees: Worktrees;
   readonly plans: PlanStore;
   readonly acceptance: AcceptanceStore;
   readonly questions: QuestionStore;
@@ -224,6 +226,8 @@ export class App {
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
+    this.worktrees = new Worktrees({ db: this.db, paths: this.paths, config: () => this.config(), projects: this.projects, now, log: this.log });
+    void this.worktrees.sweepWorktrees().catch(error => this.log(`[WARN] Could not check beat working copies: ${(error as Error).message}`));
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.acceptance = new AcceptanceStore(this.db, this.paths.projects, {
       archived: id => (this.projects.get(id)?.archived_at ?? null) !== null, log: this.log, now, languages: this.projects,

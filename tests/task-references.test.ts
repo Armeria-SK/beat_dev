@@ -12,7 +12,11 @@ import { taskApp } from './helpers/task-app.ts';
 // 決まりのある参照（FOREIGN KEY）: remove が自分で片づける（子の parent_id は空にし、経過は消す）
 const HARD = ['task_events.task_id', 'tasks.parent_id'];
 // やわらかい参照（決まりの無い列）: 行があれば remove は 409 で断る
-const SOFT = ['acceptance_versions.build_task_id', 'conversations.source_task_id', 'curiosity_items.task_id', 'memory_jobs.task_id', 'pending_actions.task_id', 'questions.fix_task_id', 'questions.task_id'];
+const SOFT = ['acceptance_versions.build_task_id', 'conversations.source_task_id', 'curiosity_items.task_id', 'memory_jobs.task_id', 'pending_actions.task_id', 'questions.fix_task_id', 'questions.task_id', 'worktrees.proposal_id', 'worktrees.task_id'];
+// やわらかい参照のうち、終わった行（gone・discarded・merged）なら remove が参照を空にして消すもの（終わっていない行があれば 409）
+const CUT_WHEN_ENDED = ['worktrees.proposal_id', 'worktrees.task_id'];
+// タスクの ID を持つのに名前に task が入らない列（下の名前の見張りでは拾えないので、ここに書く）
+const UNNAMED = ['worktrees.proposal_id'];
 // kv の鍵: remove が一緒に消す
 const KV = ['created:task:', 'task-idle:', 'task-owner-run:', 'task-split:'];
 // 文字として残すもの（結び付きだけ切れる）: notifications.link の `#/tasks/<ID>` と notifications.dedup_key（approval: / waiting: / stuck: / failed: / split: に ID が入る）
@@ -53,7 +57,9 @@ test('tasks を参照する FOREIGN KEY は tasks.parent_id と task_events.task
 test('やわらかい参照の一覧は、DELETE の守りが見る表と同じ。名前に task が入る列は、ほかに無い（task_id で終わらない名前も拾う）', async t => {
   const { app } = await taskApp(t);
   assert.deepEqual(TASK_SOFT_REFERENCES.map(r => `${r.table}.${r.column}`).sort(), SOFT);
-  const expected = [...SOFT, ...HARD.filter(c => c !== 'tasks.parent_id')].sort();
+  assert.deepEqual(TASK_SOFT_REFERENCES.filter(r => 'cutWhen' in r).map(r => `${r.table}.${r.column}`).sort(), CUT_WHEN_ENDED);
+  assert.ok(UNNAMED.every(c => SOFT.includes(c)));
+  const expected = [...SOFT.filter(c => !UNNAMED.includes(c)), ...HARD.filter(c => c !== 'tasks.parent_id')].sort();
   assert.deepEqual(taskIdColumns(app.db), expected);
   app.db.exec('CREATE TABLE zz_probe (id INTEGER PRIMARY KEY, origin_task_id TEXT, task_ref TEXT, owningTask TEXT, title TEXT)');
   assert.deepEqual(taskIdColumns(app.db), [...expected, 'zz_probe.origin_task_id', 'zz_probe.owningTask', 'zz_probe.task_ref']);

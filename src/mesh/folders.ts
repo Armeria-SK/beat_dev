@@ -7,7 +7,7 @@ import { isInside } from '../tools/hooks/scope.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../tools/shell/git-env.ts';
 import { findExecutable, scrubEnv } from '../tools/shell/runner.ts';
 
-const GIT_TIMEOUT_MS = 15_000;
+export const GIT_TIMEOUT_MS = 15_000;
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const NOTICE_MAX = 400;
 

@@ -256,6 +256,7 @@ export const AppConfig = Type.Object({
     maxRunsPerHour: Type.Integer({ minimum: 1, maximum: 120, default: 6 }),
     maxParallel: Type.Integer({ minimum: 1, maximum: 4, default: 1 }),
     curiosityPerDay: Type.Integer({ minimum: 0, maximum: 48, default: 2 }),
+    worktreeRoot: Type.Optional(Type.String({ maxLength: 1024 })),
   }, { additionalProperties: false, default: {} }),
   memory: Type.Object({
     userMaxChars: Type.Optional(Type.Integer()),
