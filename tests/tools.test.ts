@@ -195,7 +195,7 @@ test('B4: 動かすファイルの見せる中身は、全体を伏せてから�
   const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   const head = `const pad = '${'x'.repeat(7960)}';\nconst t = '`;
   assert.ok(head.length < 8000 && head.length + token.length > 8000 && 8000 - head.length < 20, '鍵が 8000 文字の切れ目をまたぐ');
-  writeFileSync(join(s.paths.workspace, 'put.js'), `${head}${token}';\n`);
+  writeFileSync(join(s.paths.workspace, 'put.js'), `${head}${token}';\n${'// tail\n'.repeat(10)}`);
   const first = await s.call('shell_run', { command: 'node put.js' });
   assert.equal(first.decidedBy, 'pending', first.output.content);
   const [shown] = latest(s).preview;
@@ -217,6 +217,19 @@ test('B1: 長い file_write の入力も、記録と出来事には JSON のま�
   assert.ok(stored.content.endsWith('…'));
   const event = s.events.find(e => e.type === 'tool.call' && e.name === 'file_write');
   assert.equal(event?.type === 'tool.call' ? JSON.parse(event.input).path : undefined, 'notes/long.md');
+});
+
+test('B4: 伏せて長くなった中身が 8000 文字を越えたら、切ったと印を付ける', async t => {
+  const s = setup(t);
+  const lines = Array.from({ length: 250 }, (_, i) => `p${String(i).padStart(3, '0')} = { password: 'a1' };`);
+  const code = `${lines.join('\n')}\n${'/'.repeat(7990 - lines.join('\n').length - 20)}\nconsole.log('END');\n`;
+  assert.ok(code.length < 8000, String(code.length));
+  writeFileSync(join(s.paths.workspace, 'put.js'), code);
+  await s.call('shell_run', { command: 'node put.js' });
+  const [shown] = latest(s).preview;
+  assert.doesNotMatch(shown?.text ?? '', /END/u, '最後の行は見えていない');
+  assert.equal(shown?.truncated, true);
+  s.pending.reject(latest(s).id);
 });
 
 test('V7: 積んだあとでファイルの中身が書き換わったら、承認しても動かさない', async t => {
