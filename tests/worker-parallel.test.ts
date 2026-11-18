@@ -262,8 +262,9 @@ test('並列 2 でも、同じ会話の振り返りは同時に 2 本動かさ�
   await chat(s, 'c2', '犬を飼い始めました');
   s.app.engine.lastUserActivity = 0;
   const first = s.app.reviews.enqueue('heavy_run', 'run:c1', { conversationId: 'c1', kind: 'skill' })!;
-  const second = s.app.reviews.enqueue('manual', 'manual:c1', { conversationId: 'c1', kind: 'skill' })!;
-  const other = s.app.reviews.enqueue('manual', 'manual:c2', { conversationId: 'c2', kind: 'skill' })!;
+  // Non-manual on purpose: manual reviews are picked before automatic ones (10-3), and this test relies on first-queued order.
+  const second = s.app.reviews.enqueue('heavy_run', 'run:c1:2', { conversationId: 'c1', kind: 'skill' })!;
+  const other = s.app.reviews.enqueue('heavy_run', 'run:c2', { conversationId: 'c2', kind: 'skill' })!;
   const base = s.adapter().calls.length;
   const g1 = gatedReply(); const g2 = gatedReply();
   s.adapter().scripts.push(g1.script, g2.script);

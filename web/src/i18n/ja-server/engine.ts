@@ -52,6 +52,7 @@ export const engineJa = {
   'taint.unknown': "長すぎて確かめられない履歴",
   'taint.checklist': "ほかから来た文を読んだあとに書かれた作業の一覧",
   'taint.background': "ほかから来た文を読んだあとに始めた裏のコマンド",
+  'taint.review_material': "振り返る会話かタスクが、ほかから来た文を読んでいました",
   'taint.parent': "この仕事を渡した親のエージェントが、ほかから来た文を読んでいました",
   'agent.preamble': "あなたはメインのエージェントから仕事を受けたサブエージェントです。最後の返事はメインに戻ります。持ち主と直接は話せません。",
 } satisfies JaTable<typeof engineText>;

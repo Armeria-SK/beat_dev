@@ -15,7 +15,7 @@ const insert = (db: DatabaseSync, id: string, kind: string, state: string) => db
   "INSERT INTO worktrees (id, project_id, repo, task_id, proposal_id, kind, path, branch, base, tip, state, created_at, updated_at) VALUES (?, 'p', 'C:/r', NULL, NULL, ?, NULL, 'beat/x-1a2b', 'abc', NULL, ?, 1, 1)").run(id, kind, state);
 
 test('worktree の表の移し替え: 前の版の DB に当てると空の worktrees ができ、ほかの表の数は変わらず、控えが 1 つでき、2 回目は何もしない', t => {
-  assert.ok(AT > 0, 'worktrees を作る移し替えがある');
+  assert.equal(AT, 41, 'worktrees is migration 42');
   const dir = tempDir(t);
   const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');

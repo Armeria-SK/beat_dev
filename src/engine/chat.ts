@@ -3,6 +3,7 @@ import { DEFAULT_LANGUAGE, type AppConfig, type Language, type ModelConfig, type
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
+import { conversationSawOutside } from '../db/outside.ts';
 import type { AppPaths } from '../paths.ts';
 import { redactExact, redactSecrets } from '../shared/redaction.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
@@ -11,6 +12,7 @@ import { UPSTREAM_KEEP, upstreamText } from '../providers/http.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
+import type { ProductMemory } from '../memory/files.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall, type JudgeReply } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
@@ -23,7 +25,7 @@ import { newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
 import type { QuestionStore } from '../questions/store.ts';
 import { rootsLister, runProject } from '../projects/run.ts';
-import { isCore, ToolRegistry } from '../tools/registry.ts';
+import { isCore, projectAllows, ToolRegistry } from '../tools/registry.ts';
 import { deferredSection } from '../tools/builtin/tool-search.ts';
 import { backgroundSection } from '../tools/builtin/shell-bg.ts';
 import type { BackgroundJobs } from '../tools/shell/background.ts';
@@ -153,6 +155,7 @@ export interface ChatEngineDeps {
   projects?: ProjectStore | undefined;
   plans?: PlanStore | undefined;
   mesh?: Mesh | undefined;
+  memoryFiles?: ProductMemory | undefined;
   acceptance?: AcceptanceStore | undefined;
   questions?: QuestionStore | undefined;
   web?: NonNullable<ToolContext['services']>['web'];
@@ -370,6 +373,12 @@ export class ChatEngine {
     if (sources.length) this.#initialTaint.set(runId, sources);
   }
 
+  // 道具に渡す店の一式。実行の中と、Pending の承認のあとの実行（app.ts の replayPending）で同じものを使う
+  toolServices(): ToolContext['services'] {
+    const d = this.#d;
+    return d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, memoryFiles: d.memoryFiles, web: d.web, notify: d.notify, browser: d.browser, background: d.background, emit: e => d.bus.publish(e) } : undefined;
+  }
+
   addNote(conversationId: string, content: string, fetched: boolean): void {
     if (!this.#d.conversations.get(conversationId)) return;
     if (this.#byConversation.has(conversationId)) {
@@ -546,8 +555,24 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     const forbid = options.onlyTools ? new AllBut(options.onlyTools, options.forbidTools ?? []) : options.forbidTools?.length ? new Set(options.forbidTools) : undefined;
+    if (this.#reviewSawOutside(conversationId)) this.#initialTaint.set(runId, [engineText(languageOf(this.#d.config()), 'taint.review_material')]);
     this.#start(runId, conversationId, chain.usable, 'review', undefined, forbid);
     return { ok: true, runId, done: this.#active.get(runId)!.done };
+  }
+
+  // 振り返りの材料が外を読んでいたか（振り返りの実行を「外を読んだ」で始める）。会話: 材料の会話が一度でも外を読んだ。タスク: タスクの実行のどれかが外を読んだ、またはタスクの文が外を読んだ実行から書かれた（次のタスクの実行の始め方と同じ）。
+  // 材料の無い振り返り（整理の振り返り）は今のまま。材料の会話・タスクが見つからなければ「読んだ」側
+  #reviewSawOutside(reviewConversationId: string): boolean {
+    const d = this.#d;
+    const review = d.conversations.get(reviewConversationId);
+    if (!review) return true;
+    if (review.source_task_id) {
+      const task = d.tasks?.get(review.source_task_id);
+      if (!task) return true;
+      return d.tasks!.textTainted(task.id) || (task.conversation_id !== null && d.runs.anyTaintedTask(task.conversation_id));
+    }
+    if (review.source_conversation_id) return conversationSawOutside(d.conversations.db, review.source_conversation_id);
+    return false;
   }
 
   // 考える実行が使う 1 本（routing.scout の使える先頭。鎖の後ろへは落ちない）。空・使えるものが無ければ null
@@ -765,7 +790,7 @@ export class ChatEngine {
     const config = this.#d.config();
     const scout = forbid instanceof ScoutAllow;
     return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.scoutOnly === true && !scout) || (t.name === 'agent_run' && !scout && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || (t.name === 'skill_draft' && (!growSkills(config) || (started !== undefined && !growSkills(started)))) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
-      || (mode === 'plan' && !planAllows(t)) || (t.projectOnly === true && !inProject) || !acceptanceAllows(t, frozen);
+      || (mode === 'plan' && !planAllows(t)) || !projectAllows(t, { kind, project: inProject, memoryProject: inProject }) || !acceptanceAllows(t, frozen);
   }
 
   #deferred(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined, mode: PermissionMode, inProject: boolean, frozen: boolean): ToolDef[] {
@@ -822,11 +847,11 @@ export class ChatEngine {
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
-      runId, conversationId, kind, signal, stopSignal: this.#hardStops.get(runId)?.signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}),
+      runId, conversationId, kind, signal, stopSignal: this.#hardStops.get(runId)?.signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}), ...(kind === 'review' && resolved ? { memoryProject: resolved.id } : {}),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, web: d.web, notify: d.notify, browser: d.browser, background: d.background, emit: e => d.bus.publish(e) } : undefined,
+      services: this.toolServices(),
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
@@ -837,7 +862,7 @@ export class ChatEngine {
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
     ctx.toolWindow = () => this.created.open(ctx);
-    ctx.reachable = () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined, this.#frozen(ctx.project?.id));
+    ctx.reachable = () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined || ctx.memoryProject !== undefined, this.#frozen(ctx.project?.id));
     if (this.#defers(kind, forbid, config)) {
       const loaded = new Set<string>();
       const sent = new Set<string>();
@@ -845,7 +870,7 @@ export class ChatEngine {
       ctx.deferred = {
         loaded,
         sent,
-        list: () => this.#deferred(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined, this.#frozen(ctx.project?.id)),
+        list: () => this.#deferred(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined || ctx.memoryProject !== undefined, this.#frozen(ctx.project?.id)),
         load: names => { for (const name of names) loaded.add(name); },
       };
     }
@@ -908,8 +933,8 @@ export class ChatEngine {
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       this.#injectNotes(runId, conversationId, ctx);
-      if (kind === 'chat' || kind === 'agent' || kind === 'task') recordTaint();
-      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project });
+      recordTaint();
+      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
         return finishFail(call.failure);
@@ -940,7 +965,7 @@ export class ChatEngine {
       const ask: ChatMessage = { role: 'user', content: engineText(language, 'message.continue'), generated: true, note: 'continue' };
       const empty = !call.toolCalls.length && cutTexts.length > 0 && !call.truncated && !call.text;
       const room = !call.toolCalls.length && call.truncated && continuations < MAX_CONTINUATIONS
-        && this.#continuationFits({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project }, [{ role: 'assistant', content: resumePoint(call.text) }, ask]);
+        && this.#continuationFits({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject }, [{ role: 'assistant', content: resumePoint(call.text) }, ask]);
       if (room) {
         const kept = resumePoint(call.text);
         cutTail = call.text.slice(kept.length);
@@ -978,7 +1003,7 @@ export class ChatEngine {
         counters.toolCalls++;
         if (!toolCall.name.startsWith('task_') && toolCall.name !== 'tool_search') counters.workCalls++;
         // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
-        const budget = this.#toolResultTokens({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project });
+        const budget = this.#toolResultTokens({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
         ctx.outputTokens = budget.tokens;
         ctx.contextAvailable = budget.available;
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
@@ -1105,7 +1130,7 @@ export class ChatEngine {
     }
   }
 
-  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }): Promise<CallResult> {
+  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): Promise<CallResult> {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
@@ -1125,7 +1150,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project });
+        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject });
         const run = this.#loaded.get(p.runId);
         if (run) {
           run.sent.clear();
@@ -1220,7 +1245,7 @@ export class ChatEngine {
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
   // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
   // startedMode: 実行を始めたときの権限モード（実行の中でだけ渡す。使用量の数え方は次の実行のためなので、会話のいまのモードで数える）
-  #assemble(p: { runId?: string | undefined; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }) {
+  #assemble(p: { runId?: string | undefined; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }) {
     const d = this.#d;
     const { model } = p;
     const config = d.config();
@@ -1228,8 +1253,8 @@ export class ChatEngine {
     const mode = this.#modeFor(p.kind, p.conversationId, p.startedMode);
     const frozen = this.#frozen(p.project?.id);
     const loaded = p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>() : undefined;
-    const toolDefs = this.#toolsFor(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen, loaded);
-    const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined, frozen) : [];
+    const toolDefs = this.#toolsFor(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen, loaded);
+    const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
     const specs = ToolRegistry.specs(toolDefs, config);
     const { capacity, maxOutput } = d.status.limits(model);
@@ -1254,14 +1279,14 @@ export class ChatEngine {
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
   // そのモデルの available から引いた余裕の一部（context-budget.ts の toolResultTokens）。モデルの容量が分からなければ undefined（文字数の上限だけ）。何も書かない
-  #toolResultTokens(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }): { tokens: number | undefined; available: number | undefined } {
+  #toolResultTokens(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): { tokens: number | undefined; available: number | undefined } {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return { tokens: undefined, available: undefined };
     const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
     return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
   }
 
-  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project'] }, pending: ChatMessage[]): boolean {
+  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }, pending: ChatMessage[]): boolean {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return true;
     const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: [...built.history, ...pending], tools: built.apiTools, factor: built.factor });

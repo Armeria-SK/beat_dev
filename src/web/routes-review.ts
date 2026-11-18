@@ -187,7 +187,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
     if (!app.conversations.get(conversationId)) throw problem(404, 'not_found', 'conversation_missing');
     const last = app.conversations.messages(conversationId, 1).at(-1);
     const c = app.config();
-    const memoryOn = app.worker.memoryReviewsOn(c);
+    const memoryOn = app.worker.memoryReviewsOn({ conversationId }, c);
     const skillOn = app.worker.skillReviewsOn(c);
     if (!memoryOn && !skillOn) {
       const reason = !c.memory.review ? 'review.none_off' : !growSkills(c) ? 'review.none_grow_off' : 'review.none_worker_off';
