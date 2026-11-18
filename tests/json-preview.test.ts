@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { previewJson } from '../src/shared/json-preview.ts';
+import { redactJsonValue } from '../src/shared/redaction.ts';
 
 function shown(value: unknown, max: number): any {
   const text = previewJson(value, max);
@@ -55,6 +56,13 @@ test('B1: 切れ目のサロゲートペア・日本語・バックスラッシ�
   const back = shown({ path: 'a', content: '日本語\\"\n'.repeat(3000) }, 2000);
   assert.equal(back.path, 'a');
   shown('\\"'.repeat(5000), 2000);
+});
+
+test('B1: 鍵らしいオブジェクトのキーも伏せる（縮めてもキーは残るので）', () => {
+  const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWX0123456789';
+  const text = previewJson(redactJsonValue({ content: 'c'.repeat(10_000), env: { [token]: 'v', path: 'p' } }), 2000);
+  assert.ok(!text.includes('ghp_'), text.slice(-200));
+  assert.deepEqual(JSON.parse(text).env, { '[REDACTED]': 'v', path: 'p' });
 });
 
 test('B1: どうしても収まらないときは JSON の文字列', () => {

@@ -310,5 +310,5 @@ export function redactJsonValue(value: unknown, depth = 0): unknown {
   }
   const named = Object.entries(value).some(([key, item]) => (key === 'name' || key === 'key') && typeof item === 'string' && isSensitiveKey(item));
   return Object.fromEntries(Object.entries(value).map(([key, item]) =>
-    [key, isSensitiveKey(key) || (named && key === 'value') ? '[REDACTED]' : redactJsonValue(item, depth + 1)]));
+    [redactSecrets(key), isSensitiveKey(key) || (named && key === 'value') ? '[REDACTED]' : redactJsonValue(item, depth + 1)]));
 }
