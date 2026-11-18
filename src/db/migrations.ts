@@ -588,8 +588,8 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE tasks ADD COLUMN proposal TEXT;
   `,
   `
-  UPDATE tasks SET status = 'inbox', updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
-  WHERE origin = 'self' AND status = 'ready' AND proposed_by IS NOT 'scout-run'
+  UPDATE tasks SET status = 'inbox', lease_until = NULL, updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+  WHERE origin = 'self' AND status IN ('ready', 'running') AND proposed_by IS NOT 'scout-run'
     AND NOT EXISTS (SELECT 1 FROM kv WHERE kv.key = 'task-owner-run:' || tasks.id);
   `,
 ];
