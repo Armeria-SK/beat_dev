@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { mcpToolName } from '../src/mcp/names.ts';
+import { previewJson } from '../src/shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { maskTarget, toolLabel, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
@@ -307,6 +308,19 @@ test('ui/tool-row: サーバーが途中で切った引数（2,000 字・4,000 �
       const target = toolRow(name, input, null).target;
       assert.match(target, expected, `${name} ${limit}: ${target}`);
     }
+  }
+});
+
+test('ui/tool-row: サーバーが縮めた引数（previewJson）の「… N more」の印は数に足し、項目として数えない', () => {
+  const items = (n: number) => Array.from({ length: n }, (_, i) => ({ result: `Result ${i} ${'r'.repeat(120)}`, source: 'ai_added', check: 'look' }));
+  for (const limit of [2000, 4000]) {
+    const input = previewJson(redactJsonValue({ items: items(200) }), limit);
+    assert.match(JSON.parse(input).items.at(-1), /^… \d+ more$/u, '縮めた印が付いている');
+    assert.equal(toolRow('acceptance_write', input, null).target, '200 items');
+    const steps = previewJson(redactJsonValue({ items: Array.from({ length: 300 }, (_, i) => ({ text: `Step ${i} ${'y'.repeat(150)}`, status: 'pending' })) }), limit);
+    assert.equal(toolRow('checklist_write', steps, null).target, '300 steps');
+    const changes = previewJson(redactJsonValue({ changes: Array.from({ length: 250 }, (_, i) => ({ op: 'add', result: `R ${i} ${'r'.repeat(120)}` })) }), limit);
+    assert.equal(toolRow('acceptance_change', changes, null).target, '250 acceptance changes');
   }
 });
 

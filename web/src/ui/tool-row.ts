@@ -36,7 +36,13 @@ const SEARCH = new Set([
 type Args = Record<string, unknown>;
 type Cut = ReadonlySet<string>;
 const str = (args: Args, key: string): string => (typeof args[key] === 'string' ? args[key].trim() : '');
-const count = (args: Args, key: string): number => (Array.isArray(args[key]) ? args[key].length : 0);
+const MORE = /^… (\d+) more$/u;
+const count = (args: Args, key: string): number => {
+  const list = args[key];
+  if (!Array.isArray(list)) return 0;
+  const more = typeof list.at(-1) === 'string' ? MORE.exec(list.at(-1) as string) : null;
+  return more ? list.length - 1 + Number(more[1]) : list.length;
+};
 const scoped = (query: string, scope: string): string => (query && scope ? t('ui.toolTarget.scoped', query, scope) : query);
 const idOf = (value: unknown): string => ((typeof value === 'string' && value.trim() !== '') || typeof value === 'number' ? `#${String(value).trim()}` : '');
 const tabOf = (args: Args, none: string): string => (str(args, 'tab') ? t('ui.toolTarget.tab', str(args, 'tab')) : none);
