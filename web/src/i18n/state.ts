@@ -4,7 +4,7 @@ export type ExplainChoice = typeof EXPLAIN_CHOICES[number];
 export const LANG_NAME: Record<Lang, string> = { en: 'English', ja: '日本語' };
 
 export const DEFAULT_TIMEZONE = 'Asia/Tokyo';
-export const EXPLAIN_KEY = 'beat.explainLanguage';
+export const EXPLAIN_STORAGE_KEY = 'beat.explainLanguage';
 
 export function isValidTimeZone(zone: string): boolean {
   try { new Intl.DateTimeFormat('en', { timeZone: zone }); return true; } catch { return false; }
@@ -17,7 +17,7 @@ function storage(): Storage | undefined {
 }
 
 function readSavedChoice(): ExplainChoice {
-  try { const saved = storage()?.getItem(EXPLAIN_KEY); return isExplainChoice(saved) ? saved : 'auto'; } catch { return 'auto'; }
+  try { const saved = storage()?.getItem(EXPLAIN_STORAGE_KEY); return isExplainChoice(saved) ? saved : 'auto'; } catch { return 'auto'; }
 }
 
 let timezone = DEFAULT_TIMEZONE;
@@ -52,7 +52,7 @@ function browserLanguages(): readonly string[] {
 export function setExplainLanguage(choice: ExplainChoice): void {
   if (!isExplainChoice(choice) || choice === explainChoice) return;
   explainChoice = choice;
-  try { storage()?.setItem(EXPLAIN_KEY, choice); } catch { }
+  try { storage()?.setItem(EXPLAIN_STORAGE_KEY, choice); } catch { }
   changed();
 }
 

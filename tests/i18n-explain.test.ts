@@ -13,6 +13,14 @@ const enTable = en as Record<string, unknown>;
 const jaTable = ja as Record<string, unknown>;
 const listed = new Set<string>(EXPLAIN_KEYS);
 
+// 最初に置く（ほかの試験が選びを変える前の既定を見る）
+test('既定の選び（Auto）は、試験では PC の言語によらず英語になる（tests/helpers/tsx-loader.mjs が言語の並びを en-US にする）', () => {
+  assert.equal(getExplainChoice(), 'auto');
+  assert.deepEqual([...navigator.languages], ['en-US']);
+  assert.equal(getExplainLanguage(), 'en');
+  assert.equal(t('ui.set.look.reduceDesc'), en['ui.set.look.reduceDesc']);
+});
+
 test('説明の一覧の鍵は、すべて英語の表にある', () => {
   assert.ok(EXPLAIN_KEYS.length > 0);
   assert.deepEqual(EXPLAIN_KEYS.filter(key => !(key in enTable)), []);
@@ -36,6 +44,20 @@ test('日本語の表の値は英語と同じ形（文字列なら文字列、�
   }).map(([key]) => key);
   assert.deepEqual(bad, []);
   assert.ok(Object.values(jaTable).some(value => typeof value === 'function'), '関数の項目を 1 つは試す');
+});
+
+test('日本語の表: 文字列の項目は空でなく、関数の項目は引数が訳に出る（tests/i18n.test.ts の en と同じ確かめ）', () => {
+  let functionEntries = 0;
+  for (const [key, entry] of Object.entries(jaTable)) {
+    assert.ok(typeof entry === 'string' ? entry.trim().length > 0 : typeof entry === 'function', `${key}: 空の訳`);
+    if (typeof entry !== 'function') continue;
+    functionEntries += 1;
+    const fn = entry as (...a: unknown[]) => string;
+    const args = Array.from({ length: fn.length }, (_, i) => 7001 + i);
+    const out = fn(...args);
+    for (const arg of args) assert.ok(out.includes(String(arg)), `${key}: 引数 ${arg} が訳に出ない: ${out}`);
+  }
+  assert.ok(functionEntries > 0, '関数の項目を 1 つは試す');
 });
 
 test('ja を選ぶと説明は日本語、名前は英語のまま。en に戻すと今と同じ。聞き手が呼ばれる', () => {

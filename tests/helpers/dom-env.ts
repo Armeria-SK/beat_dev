@@ -10,8 +10,6 @@ for (const key of Object.getOwnPropertyNames(window)) {
   Object.defineProperty(globalThis, key, { configurable: true, get: () => source[key] });
 }
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
-// navigator は Node のもの（OS の言語）が残る。説明の言語の Auto が PC ごとに変わらないよう、言語の並びは jsdom のもの（en-US）にする
-Object.defineProperty(globalThis.navigator, 'languages', { configurable: true, get: () => window.navigator.languages });
 
 export type Listening = readonly [type: string, listener: EventListenerOrEventListenerObject, capture: boolean];
 export const listening: Listening[] = [];

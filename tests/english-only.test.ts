@@ -50,7 +50,7 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
 // 丸ごと日本語の表（持ち主が頼んだ説明の日本語。beat i18n）。中身は数えない。鍵と形は tests/i18n-explain.test.ts が見張る。
 const JAPANESE_TABLES = ['web/src/i18n/ja.ts'];
 
-const japaneseLines =(text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.replace(/^[ \t]+|[ \t]+$/gu, ''));
+const japaneseLines = (text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.replace(/^[ \t]+|[ \t]+$/gu, ''));
 
 type Hit = { line: number; text: string };
 

@@ -1286,7 +1286,7 @@ export const en = {
   'ui.set.adv.reset': 'Reset',
   'ui.set.adv.resetDesc': 'Back to defaults; keys and folders stay',
   'ui.set.adv.resetWarn': 'Reset all settings',
-  'ui.set.adv.resetNote': 'Models, hooks, tool rules, MCP servers, notification targets, profile, background work and memory settings go back to defaults · API keys, folders, the server address, time zone, conversations, memory and skills stay · a copy of the config file is kept',
+  'ui.set.adv.resetNote': 'Models, hooks, tool rules, MCP servers, notification targets, profile, background work and memory settings go back to defaults · API keys, folders, the server address, time zone, explanation language, conversations, memory and skills stay · a copy of the config file is kept',
   'ui.set.model.listedFirst': (count: number) => `First ${count} shown · type the name if yours is missing`,
   'ui.set.adv.resetWiden': 'Resetting also loosens these',
   'ui.set.adv.resetDone': 'Settings reset',

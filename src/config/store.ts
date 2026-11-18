@@ -63,7 +63,7 @@ export function defaultTools(): ToolsConfig {
 
 export function resetConfig(current: AppConfig): AppConfig {
   const next = defaultConfig();
-  return { ...next, timezone: current.timezone, server: structuredClone(current.server), tools: { ...next.tools, roots: structuredClone(current.tools.roots), deny: [...current.tools.deny], hooks: { ...next.tools.hooks, preToolUse: [structuredClone(DEFAULT_PROTECT_FILES)] } } };
+  return { ...next, timezone: current.timezone, ui: structuredClone(current.ui), server: structuredClone(current.server), tools: { ...next.tools, roots: structuredClone(current.tools.roots), deny: [...current.tools.deny], hooks: { ...next.tools.hooks, preToolUse: [structuredClone(DEFAULT_PROTECT_FILES)] } } };
 }
 
 interface Finding extends ConfigIssue { text: string }
