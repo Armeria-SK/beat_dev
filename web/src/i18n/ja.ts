@@ -146,7 +146,7 @@ export const ja = {
   'ui.np.pickFailed': (reason: string) => `フォルダを選ぶウィンドウが開きませんでした · ${reason}`,
   'ui.np.notAnswering': 'beat のサーバーが応答しません。止まっているか、再起動中かもしれません。',
   'ui.np.nameHint': '空ならフォルダの名前になります',
-  'ui.np.checkHint': '任意。npm test など。あとのために控えるだけで、beat はまだ実行しません。',
+  'ui.np.checkHint': '任意。npm test など。タスクが終わったと言うたびに beat が実行し、通るまでタスクは完了になりません。',
   'ui.np.agents': 'フォルダに AGENTS.md（か CLAUDE.md）があれば、beat は指示として読みます。',
   'ui.np.failed': (reason: string) => `作れませんでした · ${reason}`,
   'ui.np.note.nested': 'このフォルダは別の製品の中にあります。',

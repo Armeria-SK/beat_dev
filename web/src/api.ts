@@ -59,7 +59,7 @@ export interface PendingAction {
   id: number; tool: string; title?: string | null; shown: string; parts?: { body: string | null; cwd: string | null; extra: string | null }; masked: number; held?: string[]; kind: PendingKind; reason: string;
   cwd: string | null; preview: PendingPreview[]; files: PendingFact[]; effect?: { files: number; bytes: number; more?: true } | null;
   conversation_id: string; task_id: string | null; project_id: string | null;
-  task_title: string | null; project_name: string | null;
+  task_title: string | null; project_name: string | null; conversation_title?: string | null; project_archived?: boolean;
   status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
   created_at: number; decided_at: number | null; ran_at: number | null;
 }
@@ -196,6 +196,7 @@ export interface Task {
   conversation_id: string | null; result_summary: string | null; attempts: number; max_attempts: number;
   created_at: number; updated_at: number; completed_at: number | null;
   cancelled_from?: TaskStatus | null;
+  reject_reason?: string | null;
   timezone?: string | null;
   project_id?: string | null;
   acceptance_items?: string | null;

@@ -341,7 +341,7 @@ export const en = {
   'ui.np.name': 'Name',
   'ui.np.nameHint': 'Defaults to the folder name',
   'ui.np.check': 'Check command',
-  'ui.np.checkHint': 'Optional, such as npm test. Kept for later; beat does not run it yet.',
+  'ui.np.checkHint': 'Optional, such as npm test. beat runs it each time a task says it is finished; the task is not marked done until it passes.',
   'ui.np.agents': 'If the folder has AGENTS.md (or CLAUDE.md), beat reads it as instructions.',
   'ui.np.create': 'Create product',
   'ui.np.failed': (reason: string) => `Not created · ${reason}`,

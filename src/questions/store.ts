@@ -375,13 +375,13 @@ export class QuestionStore {
       const heldByCancel = waitedOn && blockedTask.status === 'cancelled' && blockedTask.cancelled_from === 'waiting' && blockedTask.waiting_kind === 'question';
       if (text === null && this.#legacyStop(row, options, answer.choice)) {
         if (blockedTask && (!FINISHED.includes(blockedTask.status) || heldByCancel)) {
-          tasks.event(blockedTask.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
+          tasks.event(blockedTask.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { id: row.id, question: row.question, text: answerText }));
           if (blockedTask.status === 'waiting' && waitedOn) tasks.finish(blockedTask.id, 'cancelled', questionText(DEFAULT_LANGUAGE, 'legacy_stopped'), 'user');
         }
       } else if (row.kind === 'submit_refused') {
         if (kind === 'changed' && row.task_id && tasks.get(row.task_id)) tasks.event(row.task_id, 'answer', 'user', questionText(DEFAULT_LANGUAGE, 'submit_yourself', { question: row.question, answer: answerText }));
       } else if (blockedTask && (!FINISHED.includes(blockedTask.status) || heldByCancel)) {
-        tasks.event(blockedTask.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
+        tasks.event(blockedTask.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { id: row.id, question: row.question, text: answerText }));
         if (blockedTask.status === 'waiting' && blockedTask.waiting_kind === 'question' && waitedOn) {
           tasks.setReady(blockedTask.id, { actor: 'user' });
           resumedTaskId = blockedTask.id;
@@ -391,8 +391,8 @@ export class QuestionStore {
           tasks.reopen(row.task_id, 'user', questionText(DEFAULT_LANGUAGE, 'reopen_reason', { id, answer: answerText }));
           reopenedTaskId = row.task_id;
         }
-      } else if (kind === 'changed' && asker && asker.status !== 'running' && !FINISHED.includes(asker.status) && (!row.acceptance_item || ownedItems(asker).includes(row.acceptance_item))) {
-        tasks.event(asker.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
+      } else if (kind === 'changed' && asker && !FINISHED.includes(asker.status) && (!row.acceptance_item || ownedItems(asker).includes(row.acceptance_item))) {
+        tasks.event(asker.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { id: row.id, question: row.question, text: answerText }));
         if (row.tainted === 1) tasks.markUntrusted(asker.id, 'question', questionText(DEFAULT_LANGUAGE, 'untrusted_note'));
         if (asker.status === 'ready') {
           tasks.setReady(asker.id, { actor: 'user' });
@@ -410,6 +410,30 @@ export class QuestionStore {
     if (!result) return this.#answered(latest);
     this.options.onChange?.({ id, projectId: latest.project_id, status: 'answered' });
     return { question: this.view(id)!, kind, ...result, repeated: false };
+  }
+
+  answeredDuringRun(taskId: string, runId: string): QuestionRow[] {
+    const run = this.db.prepare("SELECT id, created_at FROM task_events WHERE task_id = ? AND kind = 'run' AND run_id = ? ORDER BY id DESC LIMIT 1").get(taskId, runId) as { id: number; created_at: number } | undefined;
+    if (!run) return [];
+    const events = new Set((this.db.prepare("SELECT content FROM task_events WHERE task_id = ? AND kind = 'answer' AND id > ?").all(taskId, run.id) as Array<{ content: string | null }>).map(e => e.content));
+    if (!events.size) return [];
+    const candidates = this.db.prepare("SELECT * FROM questions WHERE task_id = ? AND kind = 'ai' AND status = 'answered' AND answer_kind = 'changed' AND fix_task_id IS NULL ORDER BY id").all(taskId) as unknown as QuestionRow[];
+    return candidates.filter(q => events.has(taskText(DEFAULT_LANGUAGE, 'event.answer', { id: q.id, question: q.question, text: q.answer ?? '' })));
+  }
+
+  followUpUnread(taskId: string, runId: string): string[] {
+    const tasks = this.options.tasks;
+    if (!tasks) return [];
+    const made = transaction(this.db, () => this.answeredDuringRun(taskId, runId).map(row => {
+      const options = optionsOf(row.options);
+      const answer = row.answer ?? '';
+      const fixTaskId = this.#fixTask(tasks, row, options, answer, !options.includes(answer), row.acceptance_item);
+      this.db.prepare('UPDATE questions SET fix_task_id = ? WHERE id = ?').run(fixTaskId, row.id);
+      tasks.event(taskId, 'answer_moved', 'beat', taskText(DEFAULT_LANGUAGE, 'event.answer_moved', { id: row.id, task: fixTaskId.slice(0, 8) }));
+      return { row, fixTaskId };
+    }));
+    for (const { row } of made) this.options.onChange?.({ id: row.id, projectId: row.project_id, status: 'answered' });
+    return made.map(m => m.fixTaskId);
   }
 
   #answered(row: QuestionRow): QuestionAnswered {

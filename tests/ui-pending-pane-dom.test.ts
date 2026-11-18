@@ -95,3 +95,12 @@ test('ui/PendingPane（DOM）: 切れた下見の文字数は、印で長さが�
   assert.equal(container.querySelector('.ui-pending__file [role="note"]')?.textContent, 'Preview cut off: showing the first 8000 of 1000081 characters. The rest is not shown here but will run.');
   assert.match(container.querySelector('[data-pending="13"] .ui-pending__why')?.textContent ?? '', /env GITHUB_TOKEN/u);
 });
+
+test('walk-1118 D7: しまった製品の行は、画面の会話一覧に無くてもサーバーの会話の題で「from …」を出し（Untitled にしない）、製品がしまってあることを出す', async () => {
+  const archived = row({ id: 11, conversation_id: 'gone1', conversation_title: 'Please create hello.txt', project_archived: true });
+  const live = row({ id: 12, conversation_id: 'c2', conversation_title: 'Fix the price rounding', project_archived: false });
+  const untitled = row({ id: 13, conversation_id: 'c3', conversation_title: null, project_archived: false });
+  const container = await showList([archived, live, untitled], []);
+  const from = [...container.querySelectorAll('.bt-pending__from > span:first-child')].map(s => s.textContent).sort();
+  assert.deepEqual(from, ['Shop site · archived · from “Please create hello.txt”', 'from “Fix the price rounding”', 'from “Untitled”'].sort());
+});

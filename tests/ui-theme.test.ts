@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import {
-  applyTheme, DEFAULT_THEME, readReducedMotion, readTheme, REDUCED_MOTION_KEY, saveReducedMotion, saveTheme, THEME_KEY, THEMES, type ThemeStorage,
+  applyTheme, DEFAULT_THEME, followExplainLanguage, readReducedMotion, readTheme, REDUCED_MOTION_KEY, saveReducedMotion, saveTheme, THEME_KEY, THEMES, type ThemeStorage,
 } from '../web/src/ui/theme.ts';
 
 // 新しい画面のテーマ（6 つ。初めは light）と「動きを減らす」の保存。保存はこのブラウザの localStorage（beat.theme / beat.reducedMotion）。
@@ -78,4 +78,21 @@ test('applyTheme は data-theme を書き直す', () => {
   assert.equal(root.dataset.theme, 'ember');
   applyTheme(root, 'light');
   assert.equal(root.dataset.theme, 'light');
+});
+
+test('<html lang> は説明の言語に付いていく（切り替え・サーバーから届いた設定のどちらでも、読み込み直さずに）', async () => {
+  const { setExplainLanguage } = await import('../web/src/i18n/state.ts');
+  const { applyServerSettings } = await import('../web/src/i18n/load-settings.ts');
+  const root = { lang: '' };
+  const stop = followExplainLanguage(root);
+  try {
+    assert.equal(root.lang, 'en');
+    setExplainLanguage('ja');
+    assert.equal(root.lang, 'ja');
+    applyServerSettings({ config: { ui: { explainLanguage: 'en' } } });
+    assert.equal(root.lang, 'en');
+  } finally {
+    stop();
+    setExplainLanguage('auto');
+  }
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DAY_MAP } from '../src/tasks/schedule.ts';
 import { en } from '../web/src/i18n/en.ts';
+import { ja } from '../web/src/i18n/ja.ts';
 import {
   applyServerSettings, formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getTimezone, loadServerSettings, parseZonedInput, pluralEn,
   setTimezone, startOfDay, t, timezoneLabel,
@@ -222,4 +223,13 @@ test('formatDateTimeSmart: 今日（設定のタイムゾーンで）の時刻�
   assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 0, 30), now), '19:30', 'ニューヨークでは now と同じ日（11/4）の晩');
   assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 12, 0), now), '11/5 07:00', 'ニューヨークでは翌日（11/5）の朝');
   reset();
+});
+
+test('walk-1118 D1: Check command の説明は「まだ実行しない」と言わず、タスクが終わったと言うたびに実行し、通るまで完了にしないと言う（task_complete が runProductCheck を呼ぶので）', () => {
+  assert.doesNotMatch(en['ui.np.checkHint'], /does not run|not run it/u);
+  assert.match(en['ui.np.checkHint'], /runs it each time a task says it is finished/u);
+  assert.match(en['ui.np.checkHint'], /not marked done until it passes/u);
+  assert.doesNotMatch(ja['ui.np.checkHint'], /まだ実行しません|控えるだけ/u);
+  assert.match(ja['ui.np.checkHint'], /タスクが終わったと言うたびに beat が実行し/u);
+  assert.match(ja['ui.np.checkHint'], /通るまでタスクは完了になりません/u);
 });
