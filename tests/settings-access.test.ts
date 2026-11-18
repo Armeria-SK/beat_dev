@@ -16,7 +16,7 @@ function base(): Config {
       hooks: { preToolUse: [{ matcher: 'shell_run', command: ['node', 'guard.js'], timeoutMs: 30000, onError: 'deny' }], postToolUse: [] },
       web: { fetch: true, search: 'duckduckgo' },
     },
-    worker: { enabled: true, autonomy: false, selfTasksNeedApproval: true },
+    worker: { enabled: true, maxRunsPerHour: 6 },
     memory: { userMaxChars: 1500 },
   };
 }
@@ -37,7 +37,7 @@ test('広がりの検出: 何も変えなければ無し。狭くなる変更や
   narrower.tools.web.fetch = false;
   narrower.server.origins = [];
   narrower.memory.userMaxChars = 9999;
-  narrower.worker.autonomy = true;
+  narrower.worker.maxRunsPerHour = 2;
   assert.deepEqual(accessWidening(base(), narrower), []);
 });
 
@@ -83,7 +83,7 @@ test('広がりの検出（シェル）: 有効にする・承認なしに足す
   ]);
 });
 
-test('広がりの検出（承認まわり・Web）: outsideRoots を止めるから承認に・取得と検索を入れる・自分で作ったタスクの承認を外す', () => {
+test('広がりの検出（承認まわり・Web）: outsideRoots を止めるから承認に・取得と検索を入れる', () => {
   const strict = base();
   strict.tools.outsideRoots = 'deny';
   strict.tools.web.fetch = false;
@@ -92,8 +92,7 @@ test('広がりの検出（承認まわり・Web）: outsideRoots を止める�
   loose.tools.outsideRoots = 'ask';
   loose.tools.web.fetch = true;
   loose.tools.web.search = 'duckduckgo';
-  loose.worker.selfTasksNeedApproval = false;
-  assert.deepEqual(kinds(strict, loose), ['outside-loosened', 'web-fetch-on', 'web-search-on', 'self-tasks-unapproved']);
+  assert.deepEqual(kinds(strict, loose), ['outside-loosened', 'web-fetch-on', 'web-search-on']);
   const oldKey = structuredClone(base()) as Config & { tools: Record<string, unknown> };
   oldKey.tools.taintEscalation = false;
   assert.deepEqual(kinds(base(), oldKey), [], '消した鍵（tools.taintEscalation）を切っても、広がりには数えない');
@@ -320,11 +319,11 @@ test('広がりの検出（プロバイダの外向き）: 内向きのままの
   assert.deepEqual(accessWidening({ providers: [null, 3] } as unknown as Config, { providers: [null, 3] } as unknown as Config), []);
 });
 
-test('自分で作ったタスクの承認を外すのは、人の確認を 1 つ外すので数える', () => {
+test('7-4: 古い鍵 worker.selfTasksNeedApproval を外しても広がりに数えない（beat が自分で決めたタスクは設定に関わらず必ず提案になるため）', () => {
   const gated: Config = { worker: { selfTasksNeedApproval: true } };
   const ungated = structuredClone(gated);
   ungated.worker.selfTasksNeedApproval = false;
-  assert.deepEqual(accessWidening(gated, ungated), [{ kind: 'self-tasks-unapproved' }]);
+  assert.deepEqual(accessWidening(gated, ungated), []);
 });
 
 test('広がりの検出（待ち受け）: 内向きの別の書き方（127.0.0.2・localhost・::1）への変更は数えない', () => {

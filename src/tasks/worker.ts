@@ -73,7 +73,7 @@ export interface WorkerDeps {
   onScoutChange?: ((projectId: string) => void) | undefined;
 }
 
-export type WaitReason = { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
+export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 
 export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string; projectId?: string }
 
@@ -296,7 +296,7 @@ export class Worker {
 
   #waitReason(task: Task, c: AppConfig, now: number, hold: 'paused' | 'chat' | undefined, budgetAt: number | undefined, room: boolean): WaitReason | null {
     if (task.status !== 'ready' || (task.run_at !== null && task.run_at > now) || task.attempts >= task.max_attempts) return null;
-    if (!this.#ownerWork(task)) return c.worker.enabled ? null : { kind: 'off' };
+    if (!this.#ownerWork(task)) return task.origin === 'self' || task.origin === 'curiosity' ? { kind: 'owner' } : c.worker.enabled ? null : { kind: 'off' };
     if (this.#d.tasks.openChildren(task.id) > 0) return null;
     if (hold) return { kind: hold };
     if (budgetAt !== undefined && !this.#forced.has(task.id)) return { kind: 'budget', at: budgetAt };
@@ -559,7 +559,7 @@ export class Worker {
       title: text.title(item.topic).slice(0, 200),
       body: [item.why && text.why(item.why), text.summarize].filter(Boolean).join('\n'),
       doneCriteria: text.doneCriteriaQuiet,
-      origin: 'curiosity', priority: 3, curiosityId: item.id, propose: c.worker.selfTasksNeedApproval, actor: 'worker',
+      origin: 'curiosity', priority: 3, curiosityId: item.id, propose: true, actor: 'worker',
     });
     curiosity.update(item.id, { status: 'researching', taskId: task.id });
     return task.status === 'ready' ? task : undefined;

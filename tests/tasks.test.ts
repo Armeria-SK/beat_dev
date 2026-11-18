@@ -494,8 +494,8 @@ test('画面の「止める」で止めたタスクは、20 秒ほど休んで�
 
 // ── 道具・通知・画面 ──
 
-test('会話の中で task_create を呼ぶと、メモ帳にタスクが増える（自発のものは承認制にできる）', async t => {
-  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = true; });
+test('会話の中で task_create を呼ぶと、メモ帳にタスクが増える（自発のものは提案）', async t => {
+  const s = await setup(t);
   s.adapter().scripts.push(
     toolCall('task_create', { title: '請求書をまとめる', requested_by_user: true, priority: 1 }),
     toolCall('task_create', { title: '気になった論文を読む' }),

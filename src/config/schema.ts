@@ -257,7 +257,6 @@ export const AppConfig = Type.Object({
     maxParallel: Type.Integer({ minimum: 1, maximum: 4, default: 1 }),
     quietStart: Type.String({ default: '', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$|^$' }),
     quietEnd: Type.String({ default: '', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$|^$' }),
-    selfTasksNeedApproval: Type.Boolean({ default: false }),
     curiosityPerDay: Type.Integer({ minimum: 0, maximum: 48, default: 2 }),
   }, { additionalProperties: false, default: {} }),
   memory: Type.Object({

@@ -129,8 +129,8 @@ test('5-1: 繰り返しつきの提案は inbox のまま待ち、承認で予�
   assert.throws(() => s.app.tasks.unapprove(proposal.id), /already|started/iu);
 });
 
-test('5-1: 会話で自分から作ったタスクは selfTasksNeedApproval が false でも提案。繰り返しつきでも提案。頼まれたものは今までどおり実行待ち', async t => {
-  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = false; });
+test('5-1: 会話で自分から作ったタスクは提案。繰り返しつきでも提案。頼まれたものは今までどおり実行待ち', async t => {
+  const s = await setup(t);
   await chatMakes(s, { title: 'own idea' });
   await chatMakes(s, { title: 'own repeat', repeat: '0 9 * * *' });
   await chatMakes(s, { title: 'asked', requested_by_user: true });
@@ -163,7 +163,7 @@ test('5-1: user・schedule のタスクの実行の中で作ったタスクは u
 });
 
 test('5-1: beat が決めたタスクの中からは user にならない（requested_by_user でも self。spawned_by も付かない）', async t => {
-  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = true; });
+  const s = await setup(t);
   for (const origin of ['self', 'curiosity'] as const) {
     const parent = s.app.tasks.create({ title: `beat-${origin}`, origin, actor: 'beat' });
     await taskMakes(s, parent.id, { title: `from-${origin}`, requested_by_user: true });
@@ -295,13 +295,13 @@ test('5-1: 予定の回から切り出した子は、予定のひな形に外を
   assert.equal(s.app.tasks.judgeRequest(child.id), '');
 });
 
-test('5-1: beat が決めたタスクの中で作った繰り返しは、selfTasksNeedApproval が false でも提案になる', async t => {
-  const s = await setup(t, c => { c.worker.selfTasksNeedApproval = false; });
+test('7-4: beat が決めたタスク（今すぐ実行で動かしたもの）の中で作ったタスクは、繰り返しも一回きりも提案になる（実行待ちのまま動かないタスクを作らない）', async t => {
+  const s = await setup(t);
   const parent = s.app.tasks.create({ title: 'beat job', origin: 'self', actor: 'beat' });
   await taskMakes(s, parent.id, { title: 'self repeat', repeat: '0 9 * * *' });
   await taskMakes(s, s.app.tasks.create({ title: 'beat job 2', origin: 'self', actor: 'beat' }).id, { title: 'self once' });
   assert.deepEqual([s.byTitle('self repeat')?.origin, s.byTitle('self repeat')?.status], ['self', 'inbox']);
-  assert.deepEqual([s.byTitle('self once')?.origin, s.byTitle('self once')?.status], ['self', 'ready']);
+  assert.deepEqual([s.byTitle('self once')?.origin, s.byTitle('self once')?.status], ['self', 'inbox']);
 });
 
 test('5-1: 承認していない beat の繰り返しを「もう一度」で開き直すと、持ち主の承認と同じ扱いになる。持ち主でなければ断る', async t => {

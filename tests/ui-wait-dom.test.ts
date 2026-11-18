@@ -51,6 +51,7 @@ const task = (status: Task['status'], extra: Partial<Task> = {}): Task => ({
 
 const AT = Date.now() + 25 * 60_000;
 const REASONS: Array<[WaitReason, string]> = [
+  [{ kind: 'owner' }, 'beat decided this itself · it runs when you press Run now'],
   [{ kind: 'off' }, 'Work on its own is off'],
   [{ kind: 'paused' }, 'paused'],
   [{ kind: 'chat' }, 'waiting for the chat reply to finish'],

@@ -107,8 +107,8 @@ test('worker Off: tasks beat started on its own, curiosity and memory reviews do
   assert.equal(s.app.tasks.get(curious.id)!.status, 'ready');
   assert.equal(s.app.reviews.get(job.id)!.status, 'pending');
   assert.equal(s.adapter().calls.length, 0);
-  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(self.id)!), { kind: 'off' }, 'beat\'s own work says the switch holds it');
-  assert.deepEqual(s.app.worker.status().waiting[curious.id], { kind: 'off' });
+  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(self.id)!), { kind: 'owner' }, 'beat\'s own task waits for the owner (7-4), not for the switch');
+  assert.deepEqual(s.app.worker.status().waiting[curious.id], { kind: 'owner' });
 });
 
 test('worker Off: the owner pressing Run now on a task beat started runs it', async t => {
@@ -142,6 +142,18 @@ test('worker Off: the worker wakes at once for a task the owner adds, not on the
   s.adapter().scripts.push(complete);
   const task = s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user' });
   await waitFor(() => s.app.tasks.get(task.id)!.status === 'done', 'the owner task runs without a manual tick', 3000);
+});
+
+test('7-4: a self / curiosity task waiting in ready says it waits for the owner (Run now), with the worker On or Off; once pressed it no longer does', async t => {
+  for (const enabled of [true, false]) {
+    const s = await setup(t, c => { c.worker.enabled = enabled; });
+    const mine = s.app.tasks.create({ title: 'tidy the notes', origin: 'self', actor: 'beat' });
+    const curious = s.app.tasks.create({ title: 'look into it', origin: 'curiosity', actor: 'beat' });
+    const waits = () => s.app.worker.status().waiting;
+    assert.deepEqual([waits()[mine.id], waits()[curious.id]], [{ kind: 'owner' }, { kind: 'owner' }], String(enabled));
+    s.app.worker.requestRun(mine.id);
+    assert.notDeepEqual(waits()[mine.id], { kind: 'owner' }, String(enabled));
+  }
 });
 
 test('waiting reasons match what the worker does: paused, chat reply, hourly limit, product busy, no free slot', async t => {

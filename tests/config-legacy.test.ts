@@ -35,8 +35,8 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls・worker.autonomy・worker.idleMinutes', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls', 'worker.autonomy', 'worker.idleMinutes']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls・worker.autonomy・worker.idleMinutes・worker.selfTasksNeedApproval', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls', 'worker.autonomy', 'worker.idleMinutes', 'worker.selfTasksNeedApproval']);
 });
 
 test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残らず、入力は書き換えない', () => {
@@ -77,6 +77,8 @@ const IGNORED_ROWS: Array<{ name: string; key: string; set: (raw: Record<string,
     key: 'worker.autonomy', set: raw => { raw.worker = { ...(raw.worker ?? {}), autonomy: true }; }, has: config => 'autonomy' in config.worker },
   { name: '7-4 worker.idleMinutes: 0 の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
     key: 'worker.idleMinutes', set: raw => { raw.worker = { ...(raw.worker ?? {}), idleMinutes: 0 }; }, has: config => 'idleMinutes' in config.worker },
+  { name: '7-4 worker.selfTasksNeedApproval: false の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.selfTasksNeedApproval', set: raw => { raw.worker = { ...(raw.worker ?? {}), selfTasksNeedApproval: false }; }, has: config => 'selfTasksNeedApproval' in config.worker },
 ];
 
 for (const row of IGNORED_ROWS) {

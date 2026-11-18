@@ -22,7 +22,6 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'outside-loosened': return t('access.outside');
     case 'web-fetch-on': return t('access.webFetch');
     case 'web-search-on': return t('access.webSearch');
-    case 'self-tasks-unapproved': return t('access.selfTasks');
     case 'skills-auto-register': return t('access.skillsAutoRegister');
     case 'judge-off': return <>{t('access.judgeOff')}<span className="sk-warn">{t('access.judgeOffTaint')}</span><span className="sk-warn">{t('access.judgeOffForm')}</span><span className="sk-warn">{t('access.judgeOffSnapshot')}</span><span className="ui-set__still">{t('access.judgeOffStill')}</span></>;
     case 'hook-added': return t('access.hookAdded', stage(a.stage), hook(a.hook));

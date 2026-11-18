@@ -188,7 +188,6 @@ const en = {
   'task.next': ' next: {next}',
   'task.created': 'Created the task {line}{note}',
   'task.note_proposal': ' (Created as a proposal. It runs once the user approves it)',
-  'task.note_self_waits': ' (beat does not start tasks it decided on its own, so it will not run until the user presses "Run now")',
   'task.context': 'Created in conversation {cid}',
   'task.none': 'There are no tasks',
   'task.updated': 'Updated {line}',

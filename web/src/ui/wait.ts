@@ -3,6 +3,7 @@ import { formatDateTimeSmart, t } from '../i18n/index.ts';
 
 export function waitText(reason: WaitReason, now = Date.now()): string {
   switch (reason.kind) {
+    case 'owner': return t('ui.wait.owner');
     case 'off': return t('ui.wait.off');
     case 'paused': return t('ui.wait.paused');
     case 'chat': return t('ui.wait.chat');

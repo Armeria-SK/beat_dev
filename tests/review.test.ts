@@ -209,7 +209,7 @@ test('SKILL.md の読み書き（先頭の --- の中の name と description）
   assert.deepEqual(parseSkillFile('本文だけ'), { body: '本文だけ' });
 });
 
-test('7-4c ワーカーは好奇心からタスクを作らない: 1 日 2 件・開いた行が 2 つでも idle。承認制でも提案に積まない', async t => {
+test('7-4c ワーカーは好奇心からタスクを作らない: 1 日 2 件・開いた行が 2 つでも idle。提案にも積まない', async t => {
   const s = await setup(t, c => { c.memory.review = false; c.worker.curiosityPerDay = 2; });
   const a = s.app.curiosity.add({ topic: 'node:sqlite の FTS5', why: '日本語検索に使えるか', source: 'beat' });
   const b = s.app.curiosity.add({ topic: 'croner のタイムゾーン', source: 'beat' });
@@ -217,7 +217,6 @@ test('7-4c ワーカーは好奇心からタスクを作らない: 1 日 2 件�
   assert.equal(await s.app.worker.tick(), 'idle');
   assert.equal(await s.app.worker.tick(), 'idle');
   assert.equal(curiosityTasks(), 0);
-  await s.app.applyConfig({ ...s.app.config(), worker: { ...s.app.config().worker, selfTasksNeedApproval: true } });
   assert.equal(await s.app.worker.tick(), 'idle');
   assert.equal(curiosityTasks(), 0);
   assert.deepEqual(s.app.tasks.list({ statuses: ['inbox'] }), []);
