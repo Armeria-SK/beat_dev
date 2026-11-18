@@ -42,21 +42,24 @@ export interface EvidenceLine { text: string; output?: string }
 const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value : null);
 
 const INPUT_SHOWN = 80;
-const TARGET = /\x22(path|command|url|query|pattern|name)\x22\s*:\s*\x22((?:[^\x22\\]|\\.)*)\x22/u;
+const TARGET = /\x22(path|command|url|query|pattern|name)\x22\s*:\s*\x22((?:[^\x22\\]|\\u[0-9a-fA-F]{4}|\\[^u])*)(\\u[0-9a-fA-F]{0,3}|\\)?(\x22|$)/u;
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
-const cut = (value: string): string => {
-  const line = value.replace(/\s+/gu, ' ').trim();
-  return line.length > INPUT_SHOWN ? `${line.slice(0, INPUT_SHOWN - 1)}…` : line;
+const cut = (value: string, more = false): string => {
+  const chars = Array.from(value.replace(/\s+/gu, ' ').replace(HIDDEN, '').trim());
+  if (chars.length > (more ? INPUT_SHOWN - 1 : INPUT_SHOWN)) return `${chars.slice(0, INPUT_SHOWN - 1).join('')}…`;
+  return more ? `${chars.join('')}…` : chars.join('');
 };
 
-function inputSummary(input: string | null): string | null {
-  if (input === null) return null;
+function inputSummary(input: string): string {
   const match = TARGET.exec(input);
   if (!match) return cut(input);
-  try { return cut(JSON.parse(`"${match[2]}"`) as string); } catch { return cut(match[2]!); }
+  let value: string;
+  try { value = JSON.parse(`"${match[2]}"`) as string; } catch { value = match[2]!; }
+  return cut(value, match[4] === '');
 }
 
-export function evidenceLines(evidence: readonly unknown[]): EvidenceLine[] {
+export function evidenceLines(evidence: readonly unknown[], { short = false }: { short?: boolean } = {}): EvidenceLine[] {
   const out: EvidenceLine[] = [];
   for (const entry of evidence) {
     if (!entry || typeof entry !== 'object') continue;
@@ -70,7 +73,7 @@ export function evidenceLines(evidence: readonly unknown[]): EvidenceLine[] {
       const line = e.held === 'pending' ? t('ui.ev.held', command) : t(e.ok === true ? 'ui.ev.passed' : 'ui.ev.failed', command);
       const output = text(e.output);
       out.push(output ? { text: line, output } : { text: line });
-    } else if (text(e.tag) && text(e.tool)) out.push({ text: [e.tag, e.tool, inputSummary(text(e.input))].filter(Boolean).join(' · ') });
+    } else if (text(e.tag) && text(e.tool)) out.push({ text: [e.tag, e.tool, short && text(e.input) ? inputSummary(text(e.input)!) : text(e.input)].filter(Boolean).join(' · ') });
   }
   return out;
 }

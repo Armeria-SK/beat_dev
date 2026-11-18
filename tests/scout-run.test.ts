@@ -12,7 +12,7 @@ import { ProviderError } from '../src/providers/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { ledgerPath } from '../src/scout/ledger.ts';
-import { proposalAdd } from '../src/tools/builtin/proposal.ts';
+import { goalText, proposalAdd } from '../src/tools/builtin/proposal.ts';
 import { taskList } from '../src/tools/builtin/tasks.ts';
 import { webFetch } from '../src/tools/builtin/web.ts';
 import type { PageNetwork } from '../src/tools/web/public-page.ts';
@@ -186,6 +186,15 @@ test('scout (backlog 7-9): the plan headings are given without "#" marks with a 
   assert.doesNotMatch(goals, /#/u);
   assert.match(lead, /set goal to that heading exactly as written/u);
   assert.equal(JSON.parse(s.proposals()[0]!.proposal as unknown as string).goal, 'Scope');
+});
+
+test('scout (backlog 7-9 review): goal drops a heading mark or a bullet copied from the materials, but keeps a # or - that is part of the text', () => {
+  assert.equal(goalText('## Scope'), 'Scope');
+  assert.equal(goalText('- Scope'), 'Scope');
+  assert.equal(goalText('  * CLI errors'), 'CLI errors');
+  assert.equal(goalText('#1 priority'), '#1 priority');
+  assert.equal(goalText('-x flag support'), '-x flag support');
+  assert.equal(goalText('## '), null);
 });
 
 test('scout: the same proposal title is refused while one is open, and approving a proposal gives no owner request to the judge', async t => {

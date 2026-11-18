@@ -149,7 +149,7 @@ function CheckRow({ id, item, busy, onCheck }: { id: string; item: AcceptanceIte
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState('');
   useUnsaved(`${SCREEN_EDITS}check:${id}`, note.trim() !== '');
-  const evidence = item ? evidenceLines(item.evidence ?? []) : [];
+  const evidence = item ? evidenceLines(item.evidence ?? [], { short: true }) : [];
   const tone = item ? stateTone(item.state) : undefined;
   const send = (e: FormEvent) => { e.preventDefault(); void onCheck({ item: id, result: 'insufficient', note }).then(ok => { if (ok) { setNoting(false); setNote(''); } }); };
   return (

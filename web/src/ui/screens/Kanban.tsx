@@ -104,7 +104,7 @@ function CheckItems({ task, list }: { task: Task; list: Acceptance | null }) {
   return (
     <ul className="ui-check__items">
       {rows.map(({ id, item }) => {
-        const evidence = item ? evidenceLines(item.evidence ?? []) : [];
+        const evidence = item ? evidenceLines(item.evidence ?? [], { short: true }) : [];
         return (
           <li key={id} className="ui-check__item" data-item={id}>
             <span className="bt-tag">{id}</span>

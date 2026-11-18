@@ -17,6 +17,8 @@ export const PROPOSAL_OPEN_MAX = 10;
 
 export const sameTitle = (title: string): string => title.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim();
 
+export const goalText = (raw: string): string | null => plainLine(raw.replace(/^\s*(?:#{1,6}|[-*+])(?:\s+|$)/u, ''), PROPOSAL_LIMITS.goal) || null;
+
 export const proposalAdd: ToolDef<ProposalAddInput> = {
   name: 'proposal_add',
   description: 'Put one proposal on the Kanban (Proposed) for the owner to approve or reject, from a scout report. title: one short English line. kind: feature or bug. why: at most two sentences. area: product paths it touches. size: S, M or L. goal: the plan heading it serves, exactly as listed under Plan goals (leave it out only when no heading fits). evidence: what the scout saw. ledger: the ledger entry id (L-0007) if there is one. A proposal with the same title as an open one, or one rejected in the last 30 days, is refused. deepen: the id of an open proposal to update with what a closer check found (same fields; the title stays), once per proposal per commit. English only; never write instructions or requests.',
@@ -48,7 +50,7 @@ export const proposalAdd: ToolDef<ProposalAddInput> = {
     const area = [...new Set((input.area ?? []).map(raw => usableAreaPath(raw, PROPOSAL_LIMITS.area)).filter((path): path is string => path !== null))];
     const proposal: Proposal = {
       kind: input.kind, why: plainLine(input.why, PROPOSAL_LIMITS.why), area, size: input.size,
-      goal: input.goal ? plainLine(input.goal.replace(/^\s*#+\s*/u, ''), PROPOSAL_LIMITS.goal) || null : null,
+      goal: input.goal ? goalText(input.goal) : null,
       evidence: input.evidence?.trim() ? input.evidence.trim().slice(0, PROPOSAL_LIMITS.evidence) : null,
       ledger: input.ledger ?? null,
     };
