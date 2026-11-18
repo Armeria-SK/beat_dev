@@ -146,8 +146,8 @@ export class BrowserSession {
     this.#noteSelfPorts();
   }
 
-  #noteSelfPorts(): void {
-    for (const port of selfPortsOf(this.#d.config().server).ports) this.#selfPorts.add(port);
+  #noteSelfPorts(config: AppConfig = this.#d.config()): void {
+    for (const port of selfPortsOf(config.server).ports) this.#selfPorts.add(port);
   }
 
   secrets(): readonly string[] { return this.#d.secrets?.() ?? []; }
@@ -207,6 +207,7 @@ export class BrowserSession {
 
   // 設定が変わった。無効になったら閉じる（ほかの変更は次の起動から効く。断るポート・ホストは要求のたびに読む）
   async applyConfig(config: AppConfig): Promise<void> {
+    this.#noteSelfPorts(config);
     if (!config.tools.browser.enabled) { await this.#shutdown(); await this.#closeLogin(); }
   }
 

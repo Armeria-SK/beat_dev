@@ -887,6 +887,23 @@ test('T1（動いているポート）: server.port を保存しただけで反�
   assert.deepEqual(r.connected, []);
 });
 
+test('T1（動いているポート）: 呼び出しのあいだに保存して反映したポート（その次の保存の反映が失敗して動いたまま）も 403', async t => {
+  const hits: Hit[] = [];
+  const boot = await sink(t, hits);
+  const running = await sink(t, hits);
+  const r = sessionRig(t, c => { c.server.port = boot; });
+  r.config.server.port = running;
+  await r.session.applyConfig(r.config);
+  r.config.server.port = 4898;
+  await r.session.applyConfig(r.config);
+  assert.equal(r.session.loopbackDenied().has(running), true);
+  await r.session.run(callOf(grantOfTest('c1', { loopback: true })), async api => { await api.openTab('work'); });
+  const context = r.proxies.find(p => p.proxy.port === portOf(r.driver.context!.contextOptions!.proxy.server))!;
+  assert.equal(status(await raw(context.proxy.port, `GET http://127.0.0.1:${running}/api/conversations HTTP/1.1\r\nHost: x\r\nSec-Fetch-Site: none\r\n${auth(context.options.password)}\r\n`)), 403);
+  assert.deepEqual(hits, []);
+  assert.deepEqual(r.connected, []);
+});
+
 test('片づけ: 文脈の中継・文脈づくりが失敗し、文脈が 1 つも無ければ、作業用のブラウザと土台の中継を閉じる（次の呼び出しで起動し直す）', async t => {
   let refuse = true;
   const r = sessionRig(t, () => undefined, options => refuse && options.loopback !== undefined);
