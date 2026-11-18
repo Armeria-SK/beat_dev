@@ -22,7 +22,7 @@ import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
 import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
-import { clearSleep, currentMarks, quickMarks, readSleep, sameQuickMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
+import { clearSleep, currentMarks, ownerRejectedSince, quickMarks, readSleep, sameQuickMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
 import { treeMark } from '../scout/areas.ts';
 import { readLedger } from '../scout/ledger.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
@@ -410,11 +410,12 @@ export class Worker {
       const reviewing = own && c.memory.review;
       const kinds: ReviewKind[] = skillOn && idleEnough ? ['memory', 'skill'] : ['memory'];
       const job = !task && reviewing ? this.#d.reviews?.next({ skipPiled: holdPiled, kinds }) : undefined;
-      if (!task && !job && holdPiled && reviewing && this.#d.reviews?.next({ kinds })) { reschedule(Math.min(now + 10 * 60_000, tasks.nextWakeAt({ allowSelf }) ?? Infinity)); return 'budget'; }
+      const held = !task && !job && holdPiled && reviewing && this.#d.reviews?.next({ kinds }) !== undefined;
+      let reviewWait: number | undefined;
       if (job) {
         const outcome = await this.#review(job, release);
-        reschedule(outcome === 'busy' ? now + 60_000 : now);
-        return outcome;
+        if (outcome !== 'no_model') { reschedule(outcome === 'busy' ? now + 60_000 : now); return outcome; }
+        reviewWait = now + 60_000;
       }
       if (!task) {
         const scout = (own || this.#scoutAsked.size > 0) && this.#forced.size === 0 ? await this.#scoutPlan(c, now, own) : {};
@@ -423,8 +424,8 @@ export class Worker {
           reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
           return outcome;
         }
-        reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity));
-        return 'idle';
+        reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
+        return reviewWait !== undefined ? 'no_model' : held ? 'budget' : 'idle';
       }
       const outcome = await this.#run(task, release);
       reschedule(now);
@@ -489,6 +490,10 @@ export class Worker {
     if (this.memoryReviewsOn()) this.#d.reviews?.enqueueIfPiled(conversationId, this.#reviewLimits());
   }
 
+  #noReviewModel(detail: string, language: Language): void {
+    this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.review_no_model'), body: detail, link: '#/settings', dedupKey: 'no-model-for-review' });
+  }
+
   async #review(job: ReviewJob, release: () => void): Promise<TickResult> {
     const { reviews, conversations, engine, kv } = this.#d;
     if (!reviews) return 'idle';
@@ -503,6 +508,9 @@ export class Worker {
     }
     // 先に使う提供元が満杯なら、まだ claim せずに待つ（終わった実行の onRunEnd で呼び直される）
     if (!engine.backgroundHasRoom()) return 'busy';
+    // 使えるモデルが無ければ、会話を作る前に断る（作ってから断ると、呼び直すたびに空の振り返りの会話が増える）
+    const blocked = engine.backgroundBlocked();
+    if (blocked !== undefined) { this.#noReviewModel(blocked, language); return 'no_model'; }
     const lastMessageId = job.trigger === 'task' && job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
     // 止められて・再起動でやり直す振り返りは、前の回の振り返りの会話に続きを書く（新しく作ると、前の回の会話が記録から外れる）。会話は作るときに材料も覚える
     const source = { conversationId: job.conversation_id, taskId: job.task_id };
@@ -512,10 +520,7 @@ export class Worker {
     const label = TRIGGER_TEXT[language][job.kind][job.trigger];
     const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, skill ? 'title.skill_review' : 'title.review', { label }), source, projectId: (job.conversation_id ? conversations.projectOf(job.conversation_id) : null) ?? (job.task_id ? this.#d.tasks.get(job.task_id)?.project_id : null) });
     const started = engine.runReview(conversation.id, prompt, skill ? { onlyTools: SKILL_REVIEW_TOOLS } : { forbidTools: job.trigger === 'book_full' ? TIDY_FORBIDDEN_TOOLS : ['skill_draft'] });
-    if (!started.ok) {
-      this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.review_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-review' });
-      return 'no_model';
-    }
+    if (!started.ok) { this.#noReviewModel(started.errorMessage, language); return 'no_model'; }
     reviews.claim(job.id, started.runId, conversation.id);
     this.#running.set(started.runId, { kind: 'review', reviewKind: job.kind, taskId: job.task_id, runId: started.runId, title: taskText(language, skill ? 'title.skill_review_running' : 'title.review_running', { label }) });
     release();
@@ -649,6 +654,8 @@ export class Worker {
     const window = route.available ?? 32_000;
     // 休みの印は材料を読む前に取る（読んでいる間の Reject・計画書の保存を、休んだあとの変化として拾う）
     const marks: Marks | undefined = plan.asked ? undefined : plan.marks ?? await currentMarks(this.#d.db, kv, project.id, project.root, dirname(projects!.dir));
+    // 前の回のあとに持ち主が Reject していれば（材料を読む前に見る。読んでいる最中の Reject は、印の変化で次の回に拾う）、休む判定を飛ばして 1 回考え直す（Q-79-1。クラウドの回数の上限は #scoutPlan がもう見た）
+    const rethink = !plan.asked && ownerRejectedSince(this.#d.db, project.id, scoutState(kv, project.id).last ?? 0);
     let materials: Awaited<ReturnType<typeof scoutMaterials>>;
     try {
       materials = await scoutMaterials({
@@ -661,7 +668,7 @@ export class Worker {
       return 'idle';
     }
     saveScoutState(kv, project.id, { examined: materials.examined });
-    const sleep = plan.asked || !marks ? undefined : this.#sleepReason(project.id, materials);
+    const sleep = plan.asked || rethink || !marks ? undefined : this.#sleepReason(project.id, materials);
     if (sleep && marks) {
       saveSleep(kv, project.id, { reason: sleep, at: now, ...marks });
       this.#treeCheckedAt.set(project.id, now);
@@ -729,7 +736,9 @@ export class Worker {
       const tree = await treeMark(project.root, dataDir).catch(() => '');
       if (!moved && tree === sleep.tree) continue;
       woken.set(project.id, { ...quick, tree });
-      this.#wake(project.id, moved || sleep.reason !== 'stuck');
+      // stuck の製品を Reject だけで起こしたときは数え直さない（考え直しは 1 回。一覧が育たなければまた stuck で休む）
+      const rejectOnly = sleep.head === quick.head && sleep.plan === quick.plan && ownerRejectedSince(this.#d.db, project.id, sleep.at);
+      this.#wake(project.id, sleep.reason !== 'stuck' || (moved && !rejectOnly));
     }
     return woken;
   }
