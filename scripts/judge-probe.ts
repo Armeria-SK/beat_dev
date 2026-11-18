@@ -224,7 +224,7 @@ async function main(): Promise<void> {
     let effort = values.effort;
     if (!effort && modes.includes('b')) {
       const probed = await adapter.probe(found.model, 0).catch(() => undefined);
-      effort = minimalEffort(modelEfforts(config, found.model, probed));
+      effort = minimalEffort(modelEfforts(found.model, probed));
     }
     const modelModes = modes.filter(m => m !== 'b' || effort !== undefined);
     if (modes.includes('b')) notes.push(effort ? `${id}: mode b sends reasoning_effort "${effort}"` : `${id}: mode b skipped (the provider offers no reasoning effort; pass --effort to force one)`);

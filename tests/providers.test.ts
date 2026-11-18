@@ -231,6 +231,42 @@ test('Anthropic: キーが無ければ no_api_key', async () => {
   assert.equal(result.status, 'no_api_key');
 });
 
+test('Anthropic: effort があれば output_config.effort に入れ、無ければ output_config を送らない。どちらも thinking は送らない', async () => {
+  const bodies: any[] = [];
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return anthropicSse([
+      { type: 'message_start', message: { id: 'msg', type: 'message', role: 'assistant', model: 'x', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ]);
+  }) as typeof fetch;
+  const adapter = new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'k' }, fetchImpl);
+  await collect(adapter.stream(request(model(), { effort: 'xhigh' })));
+  await collect(adapter.stream(request(model())));
+  assert.deepEqual(bodies[0].output_config, { effort: 'xhigh' });
+  assert.equal('output_config' in bodies[1], false);
+  for (const body of bodies) assert.equal('thinking' in body, false);
+});
+
+test('Anthropic: probe は capabilities.effort の受ける段だけを弱い順に efforts へ入れ、受けない・知らせないモデルでは入れない', async () => {
+  const level = (supported: boolean) => ({ supported });
+  const probeWith = async (capabilities: unknown) => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ id: 'claude-x', type: 'model', display_name: 'x', created_at: '2026-01-01T00:00:00Z', max_input_tokens: 200000, max_tokens: 64000, capabilities }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+    return new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'k' }, fetchImpl).probe(model({ contextLength: undefined } as unknown as Partial<ModelConfig>), 65536);
+  };
+  const all = await probeWith({ effort: { supported: true, max: level(true), xhigh: level(true), high: level(true), medium: level(true), low: level(true) } });
+  assert.equal(all.status, 'ok');
+  assert.deepEqual(all.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  const noXhigh = await probeWith({ effort: { supported: true, low: level(true), medium: level(true), high: level(true), xhigh: null, max: level(true) } });
+  assert.deepEqual(noXhigh.efforts, ['low', 'medium', 'high', 'max'], 'xhigh が null のモデル（4.6 の形）は 4 段');
+  const off = await probeWith({ effort: { supported: false, low: level(true), medium: level(true), high: level(true), xhigh: level(true), max: level(true) } });
+  assert.equal(off.efforts, undefined);
+  assert.equal(off.status, 'ok');
+  assert.equal((await probeWith(null)).efforts, undefined, 'capabilities が null');
+  assert.equal((await probeWith(undefined)).efforts, undefined, 'capabilities が無い（中継など）');
+});
+
 // ── 道具の結果の画像 ─────────────────────────────────────
 
 const PNG: ImageRef = { mediaType: 'image/png', data: 'AAAA' };

@@ -9,6 +9,15 @@ import { ProviderError, providerError, type Env, type FetchLike, type ModelReque
 type Block = Anthropic.ContentBlockParam;
 const EPHEMERAL = { type: 'ephemeral' } as const;
 const ANTHROPIC_URL = 'https://api.anthropic.com';
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+// Models API の capabilities.effort から、そのモデルが受ける深さを弱い順に並べる。capabilities が無い（中継など）・effort.supported が偽なら undefined
+function anthropicEfforts(capabilities: Anthropic.ModelCapabilities | null | undefined): string[] | undefined {
+  const effort = capabilities?.effort;
+  if (!effort?.supported) return undefined;
+  const levels = EFFORT_LEVELS.filter(level => effort[level]?.supported === true);
+  return levels.length ? levels : undefined;
+}
 
 const imageBlock = (img: ImageRef): Anthropic.ImageBlockParam => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType as 'image/png', data: img.data } });
 
@@ -125,6 +134,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         messages: toAnthropicMessages(req.messages, req.model.vision),
         ...(tools.length ? { tools } : {}),
         ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
+        ...(req.effort ? { output_config: { effort: req.effort as NonNullable<Anthropic.OutputConfig['effort']> } } : {}),
         stream: true,
       }, { signal: req.signal });
       for await (const event of stream) {
@@ -172,7 +182,9 @@ export class AnthropicAdapter implements ProviderAdapter {
     try {
       const info = await this.#clientFor().models.retrieve(model.model, undefined, { timeout: 10_000 });
       const modelMax = typeof info.max_input_tokens === 'number' ? info.max_input_tokens : undefined;
-      return evaluateContext({ ...facts, modelMax, maxOutput: serverNumber(info.max_tokens), hint: contextHint(language, 'hosted', required), unmeasuredNote: modelMax === undefined ? 'probe.note.max_unavailable' : undefined });
+      const result = evaluateContext({ ...facts, modelMax, maxOutput: serverNumber(info.max_tokens), hint: contextHint(language, 'hosted', required), unmeasuredNote: modelMax === undefined ? 'probe.note.max_unavailable' : undefined });
+      const efforts = anthropicEfforts(info.capabilities);
+      return efforts ? { ...result, efforts } : result;
     } catch (error) {
       const e = classifyAnthropicError(error, new AbortController().signal, this.#secrets());
       const status = e.kind === 'auth' ? 'no_api_key' : e.status === 404 ? 'not_found' : e.status === undefined ? 'unreachable' : 'error';
