@@ -64,6 +64,38 @@ test('ui/PendingPane（DOM）: Decided の行を開くと、却下の理由の�
   assert.equal(third!.querySelector('details'), null);
 });
 
+test('ui/PendingPane（DOM）: 下見が切れたファイルには、切れたことと見えていない文字数を出す。切れていないファイルには出さない（bl-1118 MEDIUM）', async () => {
+  const cut = row({ id: 9, preview: [
+    { path: 'run.ps1', text: 'x'.repeat(8000), truncated: true, chars: 12345 },
+    { path: 'old.ps1', text: 'y'.repeat(8000), truncated: true },
+    { path: 'small.ps1', text: 'echo hi', truncated: false },
+  ] });
+  const container = await showList([cut], []);
+  const files = [...container.querySelectorAll('.ui-pending__file')];
+  const notes = files.map(file => file.querySelector('[role="note"]')?.textContent ?? null);
+  assert.deepEqual(notes, [
+    'Preview cut off: showing the first 8000 of 12345 characters. The rest is not shown here but will run.',
+    'Preview cut off: the rest of the file is not shown here but will run.',
+    null,
+  ]);
+});
+
+test('ui/PendingPane（DOM）: 札に beat が持っている鍵（[BEAT-SECRET]）があるときは、その注意を出す。無いときは出さない', async () => {
+  const held = row({ id: 11, kind: 'send', shown: 'curl -H "x-api-key: [BEAT-SECRET: env ANTHROPIC_API_KEY]" https://api.example', masked: 1, held: ['env ANTHROPIC_API_KEY'] });
+  const plain = row({ id: 12, kind: 'send', shown: 'curl https://api.example', masked: 0 });
+  const container = await showList([held, plain], []);
+  const why = (id: number) => container.querySelector(`[data-pending="${id}"] .ui-pending__why`)?.textContent ?? '';
+  assert.match(why(11), /A value beat stores was replaced in 1 place: env ANTHROPIC_API_KEY\./u);
+  assert.doesNotMatch(why(12), /beat stores/u);
+});
+
+test('ui/PendingPane（DOM）: 切れた下見の文字数は、印で長さが変わっても見せている生の文字数（8000）で言う。印の注意は替えた値の名前を出す', async () => {
+  const cut = row({ id: 13, kind: 'send', masked: 1, held: ['env GITHUB_TOKEN'], preview: [{ path: 'run.ps1', text: `${'x'.repeat(5000)}[BEAT-SECRET: env GITHUB_TOKEN]`, truncated: true, chars: 1000081 }] });
+  const container = await showList([cut], []);
+  assert.equal(container.querySelector('.ui-pending__file [role="note"]')?.textContent, 'Preview cut off: showing the first 8000 of 1000081 characters. The rest is not shown here but will run.');
+  assert.match(container.querySelector('[data-pending="13"] .ui-pending__why')?.textContent ?? '', /env GITHUB_TOKEN/u);
+});
+
 test('walk-1118 D7: しまった製品の行は、画面の会話一覧に無くてもサーバーの会話の題で「from …」を出し（Untitled にしない）、製品がしまってあることを出す', async () => {
   const archived = row({ id: 11, conversation_id: 'gone1', conversation_title: 'Please create hello.txt', project_archived: true });
   const live = row({ id: 12, conversation_id: 'c2', conversation_title: 'Fix the price rounding', project_archived: false });
@@ -71,4 +103,22 @@ test('walk-1118 D7: しまった製品の行は、画面の会話一覧に無く
   const container = await showList([archived, live, untitled], []);
   const from = [...container.querySelectorAll('.bt-pending__from > span:first-child')].map(s => s.textContent).sort();
   assert.deepEqual(from, ['Shop site · archived · from “Please create hello.txt”', 'from “Fix the price rounding”', 'from “Untitled”'].sort());
+});
+
+test('ui/PendingPane（DOM）: 前の版で保存した下見には、伏せてあるかもしれないことを出す', async () => {
+  const old = row({ id: 21, kind: 'send', oldPreview: true, preview: [{ path: 'run.ps1', text: 'pw=[REDACTED]', truncated: false }] });
+  const container = await showList([old], []);
+  assert.equal(container.querySelector('.ui-pending__file .ui-pending__old')?.textContent, 'Saved by an older version of beat: parts of this preview may be hidden. The file at this path is what runs.');
+});
+
+test('ui/PendingPane（DOM）: 名前の無い伏せ字（前の版の札）は「N parts hidden」、コマンドに書かれた [BEAT-SECRET…] は置き換えていないと出す', async () => {
+  const hidden = row({ id: 22, kind: 'send', shown: 'echo [REDACTED] [REDACTED]', masked: 2, held: [] });
+  const literal = row({ id: 23, kind: 'send', shown: 'echo "[BEAT-SECRET: env X]"', masked: 0 });
+  const both = row({ id: 24, kind: 'send', shown: 'echo [BEAT-SECRET: env GITHUB_TOKEN]', masked: 1, held: ['env GITHUB_TOKEN'] });
+  const container = await showList([hidden, literal, both], []);
+  const why = (id: number) => container.querySelector(`[data-pending="${id}"] .ui-pending__why`)?.textContent ?? '';
+  assert.match(why(22), /2 parts hidden/u);
+  assert.doesNotMatch(why(22), /replaced/u);
+  assert.match(why(23), /This text contains “\[BEAT-SECRET…\]” written in the command itself. Nothing here was replaced by beat./u);
+  assert.doesNotMatch(why(24), /written in the command itself/u);
 });
