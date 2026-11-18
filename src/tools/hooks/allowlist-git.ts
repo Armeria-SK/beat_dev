@@ -69,7 +69,7 @@ export const GIT_IDENTITY = /^user\.(name|email)=[^\r\n]*$/iu;
 
 // 頭のオプション（値を取るものは値ごと飛ばす）のあとのサブコマンド。runGit が -C の変数・2 つ目の -C・知らないオプションで判定を打ち切っても、
 // shell-guard.ts が外の中身を持ち込む印を落とさないために使う。オプションの位置の語が変数なら決められない（undefined）
-const GIT_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env']);
+const GIT_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--attr-source']);
 export function gitSubcommand(words: readonly Word[]): string | undefined {
   for (let i = 1; i < words.length; i++) {
     const w = words[i]!;

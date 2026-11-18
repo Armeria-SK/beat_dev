@@ -311,6 +311,8 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   let fnBody = false;
   // 閉じたばかりの囲みの最初の文の番号。すぐあとに | か & が来れば、その囲みはパイプ・裏で動く（中の cd は外に残らないかもしれない）
   let lastGroup: number | null = null;
+  // && || | で行が終わった（次の行もその続き）
+  let afterOp = false;
   const openScope = (kind: Scope['kind']): void => {
     scopes.push({ kind, start: sink.length, nested: cond || pipePrev, cond, ...(kind === 'sub' ? { id: env.ids.next++ } : {}) });
     cond = false;
@@ -331,7 +333,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     if (ids.length) st.subshells = [...ids, ...(st.subshells ?? [])];
   };
   const groupInBackground = (): void => {
-    if (lastGroup !== null && empty()) for (const st of sink.slice(lastGroup)) st.nested = true;
+    if (lastGroup !== null && cur.words.length === 0 && cur.assigns.length === 0 && cur.header === undefined) for (const st of sink.slice(lastGroup)) st.nested = true;
     lastGroup = null;
   };
 
@@ -508,24 +510,24 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     if (ch === ' ' || ch === '\t') { i++; continue; }
     if (ch === '\n') {
       i++;
-      end(false);
-      cond = false; lastGroup = null;
+      if (!afterOp) { end(false); cond = false; lastGroup = null; }
       if (pending.length) { const f = readHeredocs(); if (f) return f; }
       continue;
     }
     if (ch === '#') { while (i < n && src[i] !== '\n') i++; continue; }
     if (!dbl) {
-      if (ch === ';') { i += src[i + 1] === ';' ? 2 : 1; end(false); cond = false; lastGroup = null; continue; }
-      if (ch === '&' && src[i + 1] === '&') { i += 2; end(false); cond = true; lastGroup = null; continue; }
+      if (ch === ';') { i += src[i + 1] === ';' ? 2 : 1; end(false); cond = false; lastGroup = null; afterOp = false; continue; }
+      if (ch === '&' && src[i + 1] === '&') { i += 2; end(false); cond = true; lastGroup = null; afterOp = true; continue; }
       if (ch === '|') {
-        if (src[i + 1] === '|') { i += 2; end(false); cond = true; lastGroup = null; continue; }
+        if (src[i + 1] === '|') { i += 2; end(false); cond = true; lastGroup = null; afterOp = true; continue; }
         if (src[i + 1] === '&') cur.shapes.push('pipe_stderr');
         i += src[i + 1] === '&' ? 2 : 1;
         groupInBackground();
         end(true);
+        afterOp = true;
         continue;
       }
-      if (ch === '&' && src[i + 1] !== '>') { i++; groupInBackground(); cur.background = true; end(false); cond = false; continue; }
+      if (ch === '&' && src[i + 1] !== '>') { i++; groupInBackground(); cur.background = true; end(false); cond = false; afterOp = false; continue; }
       if (ch === '(' || ch === ')') {
         if (ch === '(' && cur.words.length > 0) cur.shapes.push('function');
         // f() の括弧と、function f () の括弧
@@ -535,6 +537,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
         // NAME=( … ) は配列の代入。閉じ ) のあとに続く # もコメントでなく語の一部（ech=()#o } a | pwn）
         if (ch === '(' && src[i - 1] === '=') return fail('unexpected', '=(');
         i++;
+        afterOp = false;
         end(false);
         if (ch === ')') closeScope(['sub', 'pattern', 'fnparen']);
         else { openScope(fnParen ? 'fnparen' : scopes.at(-1)?.kind === 'case' ? 'pattern' : 'sub'); if (!fnParen) fnBody = false; }
@@ -627,6 +630,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     if (i === before) return fail('unexpected', src[i] ?? '');
     if (afterCond) end(false);
     lastGroup = null;
+    afterOp = false;
     const atCommand = cur.words.length === 0 && cur.header === undefined && cur.assigns.length === 0;
     if (atCommand && !dbl && !w.quoted && !w.dynamic && !w.glob && BASH_KEYWORDS.has(w.text)) {
       const r = keyword(w.text);
@@ -634,7 +638,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       if (r) continue;
     }
     fnBody = false;
-    if (atCommand && !dbl && !w.quoted && !w.dynamic && w.text === 'esac') closeScope(['case']);
+    if (atCommand && !dbl && !w.quoted && !w.dynamic && w.text === 'esac' && !pipePrev) closeScope(['case']);
     cur.words.push(w);
     if (fnName && cur.words.length === 2) {
       fnName = false;

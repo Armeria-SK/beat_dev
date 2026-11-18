@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
-import { join, parse } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { join, parse, relative } from 'node:path';
 import { test } from 'node:test';
 import { outboundOf, pushesOf } from '../src/tools/hooks/outbound.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
@@ -13,10 +13,14 @@ import { tempDir } from './helpers.ts';
 // shell does not move. PowerShell `cd..` / `cd\` (built-in functions) and a module-qualified Set-Location move; a top-level cd to a folder
 // that is not there fails and the next statement runs where it was; a bash cd inside a body, after && / ||, in a pipeline or background
 // keeps the folder before it, and one inside ( ) or $( ) is gone when the subshell ends; `git -C $x fetch` still reads from outside.
+// bash runs in both modes: as on Linux (windows false) and as Git Bash on Windows (windows true, what beat uses on win32).
 // Nothing here is executed: the guard only.
 
 const MODS = { checkShellCommand, pushesOf, outboundOf } as unknown as GuardModules;
-type Shell = 'powershell' | 'bash';
+type Shell = 'powershell' | 'bash' | 'bash-win';
+const BASH = ['bash', 'bash-win'] as const;
+const shellOf = (s: Shell) => (s === 'powershell' ? 'powershell' : 'bash');
+const windowsOf = (s: Shell) => s !== 'bash';
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const ws = realish(join(tempDir(t), 'ws'));
@@ -25,8 +29,8 @@ function fixture(t: { after: (fn: () => void) => void }) {
   execFileSync('git', ['config', '--file', join(ws, 'evil', '.git', 'config'), 'core.fsmonitor', 'node put.js']);
   execFileSync('git', ['init', '-q', join(ws, 'evil', 'ok')]);
   const policy = (deny: string[] = []): ScopePolicy => ({ roots: [{ path: ws, mode: 'write' }], deny: deny.map(d => join(ws, d)) });
-  const check = (command: string, shell: Shell, cwd = ws, deny: string[] = []) => checkShellCommand(command, cwd, { policy: policy(deny), outsideRoots: 'ask', shell, windows: shell === 'powershell', gitIsolated: true });
-  const row = (command: string, shell: Shell, deny: string[] = []) => guardRowOf(MODS, command, shell, ws, policy(deny) as unknown as Record<string, unknown>);
+  const check = (command: string, shell: Shell, cwd = ws, deny: string[] = [], over?: ScopePolicy) => checkShellCommand(command, cwd, { policy: over ?? policy(deny), outsideRoots: 'ask', shell: shellOf(shell), windows: windowsOf(shell), gitIsolated: true });
+  const row = (command: string, shell: Shell, deny: string[] = []) => guardRowOf(MODS, command, shellOf(shell), ws, policy(deny) as unknown as Record<string, unknown>, windowsOf(shell));
   // the facts of the last statement whose program is `program`
   const factsOf = (command: string, shell: Shell, program: string, cwd = ws): StatementFacts => {
     const found = check(command, shell, cwd).statements.filter(s => s.program === program).at(-1);
@@ -60,30 +64,31 @@ test('guard-cd: PowerShell cd.. / cd\\ and a module-qualified Set-Location / Pus
 
 test('guard-cd: a top-level cd to a folder that is not there may fail, so the folder before it is kept', t => {
   const f = fixture(t);
-  for (const shell of ['powershell', 'bash'] as const) {
+  for (const shell of ['powershell', ...BASH] as const) {
+    const bash = shell !== 'powershell';
     assert.deepEqual(new Set(f.factsOf('cd nope; git push', shell, 'git').cwds), new Set([f.ws, join(f.ws, 'nope')]), shell);
     // the push destination is no longer taken to be the missing folder
     assert.deepEqual(f.pushes('cd nope; git push', shell), [null], shell);
     // the delete target in the folder where the shell still is, is reported too
-    const rm = f.factsOf(shell === 'bash' ? 'cd nope; rm x' : 'cd nope; Remove-Item x', shell, shell === 'bash' ? 'rm' : 'remove-item');
+    const rm = f.factsOf(bash ? 'cd nope; rm x' : 'cd nope; Remove-Item x', shell, bash ? 'rm' : 'remove-item');
     assert.ok(rm.targets.some(target => typeof target === 'object' && 'path' in target && target.path === join(f.ws, 'x')), `${shell}: ${JSON.stringify(rm.targets)}`);
     // a folder that is there now, after an earlier statement wrote or deleted, may be gone by the time the cd runs
-    const removed = shell === 'bash' ? 'rm -r sub; cd sub; git push' : 'Remove-Item -Recurse sub; cd sub; git push';
+    const removed = bash ? 'rm -r sub; cd sub; git push' : 'Remove-Item -Recurse sub; cd sub; git push';
     assert.deepEqual(new Set(f.factsOf(removed, shell, 'git').cwds), new Set([f.ws, join(f.ws, 'sub')]), `${shell}: ${removed}`);
     // a folder that is there still moves exactly as before
     assert.deepEqual(f.pushes('cd sub; git push', shell), [join(f.ws, 'sub')], shell);
     assert.equal(f.factsOf('cd sub; git push', shell, 'git').cwd, join(f.ws, 'sub'), shell);
   }
-  assert.deepEqual(f.pushes('cd sub && git push', 'bash'), [join(f.ws, 'sub')]);
+  for (const shell of BASH) assert.deepEqual(f.pushes('cd sub && git push', shell), [join(f.ws, 'sub')], shell);
 });
 
 test('guard-cd: git with an unreadable -C, a second -C or a global option still marks the read from outside', t => {
   const f = fixture(t);
-  for (const shell of ['powershell', 'bash'] as const) {
-    for (const command of ['git -C $x fetch', 'git -C $x pull origin main', 'git -C a -C b fetch', 'git -c http.extraHeader=x fetch', 'git --git-dir=$g clone x', 'git --no-pager -C $x submodule update', 'git -C $x ls-remote origin']) {
+  for (const shell of ['powershell', ...BASH] as const) {
+    for (const command of ['git -C $x fetch', 'git -C $x pull origin main', 'git -C a -C b fetch', 'git -c http.extraHeader=x fetch', 'git --git-dir=$g clone x', 'git --no-pager -C $x submodule update', 'git -C $x ls-remote origin', 'git --attr-source HEAD fetch']) {
       assert.equal(f.check(command, shell).fetched, true, `${shell}: ${command}`);
     }
-    for (const command of ['git -C $x status', 'git commit -m fetch', 'git -C $x log fetch', 'git status']) {
+    for (const command of ['git -C $x status', 'git commit -m fetch', 'git -C $x log fetch', 'git status', 'git --attr-source fetch status']) {
       assert.equal(f.check(command, shell).fetched, false, `${shell}: ${command}`);
     }
   }
@@ -92,38 +97,77 @@ test('guard-cd: git with an unreadable -C, a second -C or a global option still 
 test('guard-cd: a bash cd that may not run (body, && / ||, pipeline, background, case) keeps the folder before it', t => {
   const f = fixture(t);
   const both = [f.ws, join(f.ws, 'sub')];
-  for (const command of [
-    'false && cd sub; git push', 'true || cd sub; git push', 'if false; then cd sub; fi; git push', 'if cd sub; then true; fi; git push',
-    'cd sub | cat; git push', 'cat x | cd sub; git push', 'cd sub & git push', '{ cd sub; } | cat; git push', '{ cd sub; } & git push',
-    'echo | { cd sub; true; }; git push', 'case x in x) cd sub;; esac; git push', 'while false; do cd sub; done; git push',
-  ]) {
-    const cwds = f.factsOf(command, 'bash', 'git').cwds ?? [];
-    assert.ok(both.every(dir => cwds.includes(dir)), `${command}: ${JSON.stringify(cwds)}`);
+  for (const shell of BASH) {
+    for (const command of [
+      'false && cd sub; git push', 'true || cd sub; git push', 'if false; then cd sub; fi; git push', 'if cd sub; then true; fi; git push',
+      'cd sub | cat; git push', 'cat x | cd sub; git push', 'cd sub & git push', '{ cd sub; } | cat; git push', '{ cd sub; } & git push',
+      'echo | { cd sub; true; }; git push', 'case x in x) cd sub;; esac; git push', 'while false; do cd sub; done; git push',
+      // the operator ends a line: the next line still belongs to it (security review)
+      'cd . ||\ncd sub\ngit push', 'false &&\ncd sub\ngit push', 'true |\ncd sub\ngit push', 'false && # note\ncd sub\ngit push', 'false &&\n\ncd sub\ngit push',
+      // a redirect on a group in the background
+      '{ cd sub; } >/dev/null & git push',
+    ]) {
+      const cwds = f.factsOf(command, shell, 'git').cwds ?? [];
+      assert.ok(both.every(dir => cwds.includes(dir)), `${shell}: ${JSON.stringify(command)}: ${JSON.stringify(cwds)}`);
+    }
   }
 });
 
 test('guard-cd: a bash cd inside ( ) or $( ) ends with the subshell', t => {
   const f = fixture(t);
   const sub = join(f.ws, 'sub');
-  for (const command of ['(cd sub); git push', '(cd sub && true); git push', 'x=$(cd sub); git push', 'echo "$(cd sub; pwd)"; git push', '(cd sub; (cd ..)); git push', 'diff <(cd sub; ls) x; git push']) {
-    assert.equal(f.factsOf(command, 'bash', 'git').cwd, f.ws, command);
+  for (const shell of BASH) {
+    for (const command of ['(cd sub); git push', '(cd sub && true); git push', 'x=$(cd sub); git push', 'echo "$(cd sub; pwd)"; git push', '(cd sub; (cd ..)); git push', 'diff <(cd sub; ls) x; git push']) {
+      assert.equal(f.factsOf(command, shell, 'git').cwd, f.ws, `${shell}: ${command}`);
+    }
+    assert.deepEqual(f.pushes('(cd sub); git push', shell), [f.ws], shell);
+    // inside the subshell the cd still counts, as before
+    assert.deepEqual(f.pushes('(cd sub && git push)', shell), [sub], shell);
+    assert.equal(f.factsOf('(cd sub; git push)', shell, 'git').cwd, sub, shell);
+    // a case pattern's `)` does not end the subshell around it, and `esac` in a pattern list does not end the case
+    assert.equal(f.factsOf('(cd sub; case x in x) true;; esac; git push)', shell, 'git').cwd, sub, shell);
+    assert.equal(f.factsOf('(case x in a|esac) ;; x) cd sub;; esac); git push', shell, 'git').cwd, f.ws, shell);
+    // braces are not a subshell: the cd stays after them
+    assert.equal(f.factsOf('{ cd sub; }; git push', shell, 'git').cwd, sub, shell);
   }
-  assert.deepEqual(f.pushes('(cd sub); git push', 'bash'), [f.ws]);
-  // inside the subshell the cd still counts, as before
-  assert.deepEqual(f.pushes('(cd sub && git push)', 'bash'), [sub]);
-  assert.equal(f.factsOf('(cd sub; git push)', 'bash', 'git').cwd, sub);
-  // a case pattern's `)` does not end the subshell around it
-  assert.equal(f.factsOf('(cd sub; case x in x) true;; esac; git push)', 'bash', 'git').cwd, sub);
-  // braces are not a subshell: the cd stays after them
-  assert.equal(f.factsOf('{ cd sub; }; git push', 'bash', 'git').cwd, sub);
 });
 
 test('guard-cd: a bash cd inside a loop or a function body is applied at the body entry too', t => {
   const f = fixture(t);
-  for (const command of ['for i in 1 2; do cat private/notes.txt; cd a; done', 'while true; do cat private/notes.txt; cd a; done']) {
-    assert.equal(routeOf(f.row(command, 'bash', ['a/private']), { judgeOff: true }), 'refused', command);
+  for (const shell of BASH) {
+    for (const command of ['for i in 1 2; do cat private/notes.txt; cd a; done', 'while true; do cat private/notes.txt; cd a; done']) {
+      assert.equal(routeOf(f.row(command, shell, ['a/private']), { judgeOff: true }), 'refused', `${shell}: ${command}`);
+    }
+    // a loop that cds into a repo whose config runs code: git on the next pass runs there
+    assert.notEqual(f.check('for i in 1 2; do git status; cd evil; done', shell).decision, 'allow', shell);
+    assert.notEqual(f.check('f() { cd evil; }; f; git status', shell).decision, 'allow', shell);
+    // a loop right after a subshell: leaving the subshell must not drop the loop's entry folders (security review)
+    const v = f.check('(true); while [ -n x ]; do cat x.ts; cd sub; done', shell);
+    assert.ok(v.reasonKeys.includes('list.cwd_unknown'), `${shell}: ${v.reasonKeys.join(',')}`);
+    assert.ok((v.statements.find(s => s.program === 'cat')?.cwds ?? []).includes(join(f.ws, 'sub')), shell);
   }
-  // a loop that cds into a repo whose config runs code: git on the next pass runs there
-  assert.notEqual(f.check('for i in 1 2; do git status; cd evil; done', 'bash').decision, 'allow');
-  assert.notEqual(f.check('f() { cd evil; }; f; git status', 'bash').decision, 'allow');
+});
+
+// A path from the root of the drive (`\x`) after a cd that may have gone to another drive: every folder the shell may be in is checked
+// (security review: the folder before the cd was checked alone, so the other drive's path was missed). Needs a second drive.
+test('guard-cd: a drive-root path after a cd that may change drives is checked on every drive the shell may be on', t => {
+  const f = fixture(t);
+  const here = parse(f.ws).root;
+  const other = ['C:\\', 'D:\\', 'E:\\'].find(d => d.toLowerCase() !== here.toLowerCase() && existsSync(d));
+  if (!other) { t.skip('no second drive'); return; }
+  const otherSlash = other.replace(/\\$/u, '/');
+  const rel = `\\${relative(here, f.ws)}\\evil.txt`;
+  for (const shell of ['powershell', ...BASH] as const) {
+    if (shell === 'bash') continue;
+    const maybe = shell === 'powershell' ? `if ($true) { cd ${otherSlash} }; ` : `true && cd ${otherSlash}; `;
+    const write = shell === 'powershell' ? `Set-Content "${rel}" x` : `echo x > "${rel}"`;
+    // the root is ws only: on the other drive the same path is outside it
+    const v = f.check(`${maybe}${write}`, shell);
+    assert.ok(v.paths.some(p => p.write && p.placement.kind !== 'inside' && p.input === rel && v.decision !== 'allow'), `${shell}: ${v.decision} ${JSON.stringify(v.paths)}`);
+    assert.ok(v.askKinds.includes('outside_write') || v.decision === 'deny', `${shell}: ${v.askKinds.join(',')}`);
+    const del = shell === 'powershell' ? `${maybe}Remove-Item "${rel}"` : `if true; then cd ${otherSlash}; fi; rm "${rel}"`;
+    assert.notEqual(f.check(del, shell).decision, 'allow', `${shell}: ${del}`);
+    // a wrapped command is checked the same way
+    if (shell === 'bash-win') assert.notEqual(f.check(`${maybe}bash -c 'echo x > "${rel}"'`, shell).decision, 'allow', 'wrapped');
+  }
 });
