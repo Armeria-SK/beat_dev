@@ -43,8 +43,12 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'src/memory/review.ts': { strings: ['/^(?:変更なし|No changes?)[\u{3002}.!\u{FF01}]?$/iu'], reason: 'isNoProposal: モデルが日本語で書いた「変更なし」（と句読点）も拾う' },
   'src/memory/store.ts': { strings: ['/[\\s\u{3000}]+/u'], reason: 'searchTerms: 記憶の検索の語を全角の空白でも区切る' },
   'src/tasks/schedule.ts': { strings: ['月'], reason: 'DAY_MAP の曜日の値（API の値。cronToFields の既定。画面の weekdays.ts と対）' },
+  'web/src/i18n/state.ts': { strings: ['日本語'], reason: 'LANG_NAME: 説明の言語の選び（Settings › Appearance）は、各言語をその言語の文字で出す（beat i18n）' },
   'src/uploads/store.ts': { strings: ['\u{FF1C}', '\u{FF1E}', '<<<添付ファイル', '<<<添付ファイルここまで>>>'], reason: 'neutralizeMarkers の全角の ＜ ＞（添付の名前と中身の <<< >>> を全角にして枠の印の偽装を防ぐ。安全）と、LEGACY_ATTACHMENT_FRAMES: 前からある発言の日本語の添付の枠を外す（安全: 外さないと添付の中身が利用者の依頼として自動承認の判定役に渡る）' },
 };
+
+// 丸ごと日本語の表（持ち主が頼んだ説明の日本語。beat i18n）。中身は数えない。鍵と形は tests/i18n-explain.test.ts が見張る。
+const JAPANESE_TABLES = ['web/src/i18n/ja.ts'];
 
 const japaneseLines = (text: string) => text.split(/\r?\n/u).filter(line => JAPANESE.test(line)).map(line => line.replace(/^[ \t]+|[ \t]+$/gu, ''));
 
@@ -97,9 +101,13 @@ test('英語だけの見張り: src と web/src の日本語の文字列は、�
   const files = [...walk(join(ROOT, 'src'), /\.ts$/u), ...walk(join(ROOT, 'web', 'src'), /\.tsx?$/u)];
   assert.ok(files.length > 200, `${files.length} ファイルしか読めていない`);
   const found = new Map<string, Hit[]>();
+  const names = files.map(file => relative(ROOT, file).replaceAll('\\', '/'));
+  assert.deepEqual(JAPANESE_TABLES.filter(name => !names.includes(name)), [], '日本語の表が見つからない（消えたら一覧から外す）');
   for (const file of files) {
+    const name = relative(ROOT, file).replaceAll('\\', '/');
+    if (JAPANESE_TABLES.includes(name)) continue;
     const hits = japaneseStrings(file, readFileSync(file, 'utf8'));
-    if (hits.length) found.set(relative(ROOT, file).replaceAll('\\', '/'), hits);
+    if (hits.length) found.set(name, hits);
   }
   const show = (file: string, hits: Hit[]) => hits.map(hit => `  ${file}:${hit.line}: ${hit.text.slice(0, 100)}`).join('\n');
   const problems: string[] = [];

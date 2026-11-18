@@ -20,7 +20,7 @@ import type { Lang } from './i18n/state.ts';
 // モデルの確認）を、画面の言語で書き直す。文の表はサーバーが作る側（src/shared/messages）と同じものを使うので、コードの意味と
 // 画面の訳が食い違わない。コードが表に無い・差し込みの値が足りないときは null を返し、呼ぶ側はサーバーが書いた文（message）を出す。
 
-type Catalog = { readonly tables: Record<Lang, Record<string, string>> };
+type Catalog = { readonly tables: { readonly en: Record<string, string> } & Partial<Record<Lang, Record<string, string>>> };
 const DOMAINS: Record<string, Catalog> = { http: httpText, task: taskText, store: storeText, provider: providerText, engine: engineText, config: configText, project: projectText, plan: planText, acceptance: acceptanceText, build: buildText, pending: pendingText, question: questionText, deviation: deviationText, meshwrite: meshWriteText, gate: gateText };
 
 export type Params = Record<string, unknown> | undefined | null;
@@ -38,7 +38,8 @@ function template(code: string | undefined | null, language: Lang): string | nul
   if (!code) return null;
   const dot = code.indexOf('.');
   if (dot <= 0) return null;
-  return DOMAINS[code.slice(0, dot)]?.tables[language]?.[code.slice(dot + 1)] ?? null;
+  const tables = DOMAINS[code.slice(0, dot)]?.tables;
+  return (tables?.[language] ?? tables?.en)?.[code.slice(dot + 1)] ?? null;
 }
 
 // `<領域>.<キー>` のコードを、画面の言語の文にする。表に無い・値が足りない（{名前} が残る）ときは null。

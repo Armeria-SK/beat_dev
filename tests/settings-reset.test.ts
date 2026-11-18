@@ -18,6 +18,7 @@ async function start(t: Parameters<typeof startApp>[0]) {
     configure: c => {
       c.server.origins = ['https://me.example.ts.net'];
       c.timezone = 'Europe/Berlin';
+      c.ui.explainLanguage = 'ja';
       c.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }];
       c.tools.deny = [...c.tools.deny, '~/private'];
       c.tools.hooks.preToolUse = [{ matcher: 'shell_run', command: ['node', 'guard.js'], timeoutMs: 1000, onError: 'deny' }];
@@ -45,6 +46,7 @@ test('Reset: 設定ファイルの控えを書いてから既定に戻し、控�
   assert.equal(readFileSync(done.body.backup, 'utf8'), before, '控えは戻す前の設定ファイルそのまま');
   assert.equal(placePath(done.body.backup, buildPolicy(s.app.config(), s.paths)).kind, 'deny', 'モデルの道具は控えを読めない・書けない');
   assert.equal(s.app.config().timezone, 'Europe/Berlin', '時刻帯は残す（予定の時刻がずれない）');
+  assert.deepEqual(s.app.config().ui, { explainLanguage: 'ja' }, '説明の言語は残す（表示の好み。時刻帯と同じ）');
 
   const now = s.app.config();
   const fresh = defaultConfig();

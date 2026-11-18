@@ -6,6 +6,9 @@ const require = createRequire(import.meta.url);
 const ENV = JSON.stringify({ DEV: false, PROD: true, MODE: 'production', BASE_URL: '/', SSR: false });
 let esbuild;
 
+// Node の navigator.languages は OS の言語に従う。画面の説明の言語の Auto が PC ごとに変わらないよう、どの試験でも en-US にする
+Object.defineProperty(globalThis.navigator, 'languages', { configurable: true, get: () => Object.freeze(['en-US']) });
+
 registerHooks({
   load(url, context, nextLoad) {
     if (url.startsWith('file:') && url.endsWith('.css')) return { format: 'module', source: '', shortCircuit: true };
