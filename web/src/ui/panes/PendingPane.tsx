@@ -12,6 +12,7 @@ import {
 import { reportOpError } from '../task-ops.ts';
 import '../styles/pending.css';
 
+const PREVIEW_CHARS = 8000;
 const TILE_ICON = { send: 'send', delete: 'bin', unsure: 'alert' } as const satisfies Record<KindTile, string>;
 
 type T = ReturnType<typeof useT>;
@@ -64,6 +65,7 @@ function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
         <div key={file.path} className="ui-pending__file">
           <span className="bt-meta">{t('ui.pending.preview')} · <code>{file.path}</code></span>
           <pre className="ui-pending__body"><code>{file.text}</code></pre>
+          {file.truncated && <p className="bt-meta" role="note">{file.chars !== undefined && file.chars > PREVIEW_CHARS ? t('ui.pending.previewCut', PREVIEW_CHARS, file.chars) : t('ui.pending.previewCutAny')}</p>}
         </div>
       ))}
       {facts.length > 0 && (
@@ -118,7 +120,7 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
         {view.inline && <code className="ui-pending__code ui-pending__command">{view.inline}</code>}
         <ActionBody row={row} view={view} />
         {(why || row.masked > 0) && (
-          <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && t('ui.pending.masked', row.masked)].filter(Boolean).join(' · ')}</p>
+          <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && t('ui.pending.heldKey', row.masked, row.held?.join(', ') || '-')].filter(Boolean).join(' · ')}</p>
         )}
         <div className="bt-pending__from bt-meta"><span>{fromText(t, row, withProduct, titles)}</span><span>{formatRelative(row.created_at, now)}</span></div>
       </div>

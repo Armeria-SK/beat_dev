@@ -63,3 +63,35 @@ test('ui/PendingPane（DOM）: Decided の行を開くと、却下の理由の�
   assert.equal(second!.querySelector('details .ui-pending__why')?.textContent, 'Reason: wrong host');
   assert.equal(third!.querySelector('details'), null);
 });
+
+test('ui/PendingPane（DOM）: 下見が切れたファイルには、切れたことと見えていない文字数を出す。切れていないファイルには出さない（bl-1118 MEDIUM）', async () => {
+  const cut = row({ id: 9, preview: [
+    { path: 'run.ps1', text: 'x'.repeat(8000), truncated: true, chars: 12345 },
+    { path: 'old.ps1', text: 'y'.repeat(8000), truncated: true },
+    { path: 'small.ps1', text: 'echo hi', truncated: false },
+  ] });
+  const container = await showList([cut], []);
+  const files = [...container.querySelectorAll('.ui-pending__file')];
+  const notes = files.map(file => file.querySelector('[role="note"]')?.textContent ?? null);
+  assert.deepEqual(notes, [
+    'Preview cut off: showing the first 8000 of 12345 characters. The rest is not shown here but will run.',
+    'Preview cut off: the rest of the file is not shown here but will run.',
+    null,
+  ]);
+});
+
+test('ui/PendingPane（DOM）: 札に beat が持っている鍵（[BEAT-SECRET]）があるときは、その注意を出す。無いときは出さない', async () => {
+  const held = row({ id: 11, kind: 'send', shown: 'curl -H "x-api-key: [BEAT-SECRET: env ANTHROPIC_API_KEY]" https://api.example', masked: 1, held: ['env ANTHROPIC_API_KEY'] });
+  const plain = row({ id: 12, kind: 'send', shown: 'curl https://api.example', masked: 0 });
+  const container = await showList([held, plain], []);
+  const why = (id: number) => container.querySelector(`[data-pending="${id}"] .ui-pending__why`)?.textContent ?? '';
+  assert.match(why(11), /A value beat stores was replaced in 1 place: env ANTHROPIC_API_KEY\./u);
+  assert.doesNotMatch(why(12), /beat stores/u);
+});
+
+test('ui/PendingPane（DOM）: 切れた下見の文字数は、印で長さが変わっても見せている生の文字数（8000）で言う。印の注意は替えた値の名前を出す', async () => {
+  const cut = row({ id: 13, kind: 'send', masked: 1, held: ['env GITHUB_TOKEN'], preview: [{ path: 'run.ps1', text: `${'x'.repeat(5000)}[BEAT-SECRET: env GITHUB_TOKEN]`, truncated: true, chars: 1000081 }] });
+  const container = await showList([cut], []);
+  assert.equal(container.querySelector('.ui-pending__file [role="note"]')?.textContent, 'Preview cut off: showing the first 8000 of 1000081 characters. The rest is not shown here but will run.');
+  assert.match(container.querySelector('[data-pending="13"] .ui-pending__why')?.textContent ?? '', /env GITHUB_TOKEN/u);
+});

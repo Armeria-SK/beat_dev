@@ -8,7 +8,7 @@ import type { PreviewFile } from '../tools/approvals.ts';
 import { inspectRepo } from '../tools/hooks/git-repo.ts';
 import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
-import type { PreCheck, RunKind, ToolDef } from '../tools/types.ts';
+import type { HeldValue, PreCheck, RunKind, ToolDef } from '../tools/types.ts';
 import { identityOf } from '../projects/created.ts';
 import { boundFacts, destinationFacts, fileFacts, pushFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
@@ -67,7 +67,11 @@ export interface PendingState {
   pushes?: Array<{ dir: string | null; parsed?: boolean }>;
   pushed?: string;
   tips?: string[];
+  rest?: RestingCard;
+  held?: string[];
 }
+
+export interface RestingCard { shown: string; masked: number; parts: PendingParts; preview?: PreviewFile[] }
 
 export interface CreatedMark { path: string; id: string; inside?: string; more?: true }
 
@@ -85,7 +89,7 @@ export interface PendingRow {
 }
 
 export interface PendingView {
-  id: number; tool: string; title: string | null; shown: string; parts: PendingParts; masked: number; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
+  id: number; tool: string; title: string | null; shown: string; parts: PendingParts; masked: number; held: string[]; cwd: string | null; kind: PendingKind; reason: string; checks: string[];
   preview: PreviewFile[]; files: PathFact[]; effect: PendingEffect | null; fetched: boolean; run_kind: string; conversation_id: string; task_id: string | null; task_title: string | null;
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
@@ -213,6 +217,64 @@ function render(tool: ToolDef, input: unknown): { title: string; shown: string; 
   return { title: mask(title), shown: shown.join('\n'), raw: raw.join('\n'), parts };
 }
 
+export const heldMark = (source: string): string => `[BEAT-SECRET: ${source}]`;
+const HELD_MIN = 8;
+const STRADDLE_MIN = 4;
+const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/gu;
+
+type Mark = (text: string, cut?: boolean) => string;
+
+function heldMarker(held: readonly HeldValue[]): { mark: Mark; sources: string[] } {
+  const sources: string[] = [];
+  const kept = held.filter(h => h.value.trim().length >= HELD_MIN);
+  const forms = kept.flatMap(h => [h.value, JSON.stringify(h.value).slice(1, -1)].map(form => ({ form, source: h.source })))
+    .filter((f, i, all) => all.findIndex(g => g.form === f.form) === i).sort((x, y) => y.form.length - x.form.length);
+  const pattern = forms.length ? new RegExp(forms.map(f => `(${f.form.trim().split(/\s+/u).map(part => part.replace(REGEX_SPECIAL, '\\$&')).join('\\s+')})`).join('|'), 'gu') : undefined;
+  const mark: Mark = (text, cut = false) => {
+    let out = pattern ? text.replace(pattern, (...m: unknown[]) => { const source = forms[m.slice(1, forms.length + 1).findIndex(g => g !== undefined)]!.source; sources.push(source); return heldMark(source); }) : text;
+    if (cut) {
+      let best: { size: number; source: string } | undefined;
+      for (const h of kept) {
+        for (let size = Math.min(h.value.length - 1, out.length); size >= STRADDLE_MIN && size > (best?.size ?? 0); size -= 1) {
+          if (out.endsWith(h.value.slice(0, size))) { best = { size, source: h.source }; break; }
+        }
+      }
+      if (best) { out = out.slice(0, -best.size) + heldMark(best.source); sources.push(best.source); }
+    }
+    return out;
+  };
+  return { mark, sources };
+}
+
+function approvalCard(tool: ToolDef, input: unknown, title: string, mark: Mark): { shown: string; parts: PendingParts } {
+  let summary: { title: string; body: string; cwd?: string } | undefined;
+  try { summary = tool.summarize?.(input as never, 'en'); } catch { summary = undefined; }
+  const keyOf = (value: string | undefined): string | undefined => plain(input) && value !== undefined ? Object.keys(input).find(k => input[k] === value) : undefined;
+  const bodyKey = keyOf(summary?.body);
+  const cwdKey = keyOf(summary?.cwd);
+  const parts: PendingParts = { ...NO_PARTS };
+  const lines: string[] = [title];
+  if (summary?.cwd !== undefined) lines.push(pendingText('en', 'cwd_line', { path: mark(summary.cwd) }));
+  if (summary && bodyKey !== undefined && plain(input)) {
+    parts.body = mark(summary.body);
+    parts.cwd = summary.cwd === undefined ? null : mark(summary.cwd);
+    const rest = Object.keys(input).filter(k => k !== bodyKey && k !== cwdKey);
+    if (rest.length) parts.extra = mark(JSON.stringify(Object.fromEntries(rest.map(k => [k, input[k]])), null, 2));
+  } else {
+    parts.body = mark(JSON.stringify(input, null, 2));
+  }
+  lines.push(...[parts.body, parts.extra].filter((v): v is string => v !== null));
+  return { shown: lines.join('\n'), parts };
+}
+
+function settled(row: PendingRow, state: PendingState | null): { shown: string; masked: number; state: string | null } {
+  if (!state?.rest) return { shown: row.shown, masked: row.masked, state: state === null ? null : JSON.stringify(state) };
+  const { rest, ...others } = state;
+  delete others.preview;
+  delete others.held;
+  return { shown: rest.shown, masked: rest.masked, state: JSON.stringify({ ...others, parts: rest.parts, ...(rest.preview ? { preview: rest.preview } : {}) }) };
+}
+
 function effectOf(snapshot: Snapshot | undefined): PendingEffect | null {
   if (!snapshot) return null;
   let files = 0;
@@ -232,6 +294,7 @@ export interface PendingStoreOptions {
   dataDir: string;
   now?: (() => number) | undefined;
   onChange?: ((change: PendingChange) => void) | undefined;
+  held?: (() => readonly HeldValue[]) | undefined;
 }
 
 export class PendingStore {
@@ -239,6 +302,8 @@ export class PendingStore {
   readonly #o: PendingStoreOptions;
 
   constructor(db: DatabaseSync, options: PendingStoreOptions) { this.#db = db; this.#o = options; }
+
+  #held(tool: ToolDef): HeldValue[] { return [...(this.#o.held?.() ?? []), ...(tool.held?.() ?? [])]; }
 
   #now(): number { return this.#o.now?.() ?? Date.now(); }
 
@@ -254,7 +319,9 @@ export class PendingStore {
     if (tool.preCheck && !input.check) throw new PendingError('check_required', { tool: input.tool });
     const toolMask = (text: string): string => (tool.redact ? tool.redact(text) : text);
     const { title, shown, raw, parts } = render(tool, input.input);
-    const masked = Math.max(0, marks(shown) - marks(raw));
+    const restMasked = Math.max(0, marks(shown) - marks(raw));
+    const marker = heldMarker(this.#held(tool));
+    const card = approvalCard(tool, input.input, title, marker.mark);
     const targets = (input.targets ?? []).map(t => resolve(input.cwd, t));
     const files = (input.files ?? []).map(f => resolve(input.cwd, f));
     const places = [...new Set((input.places ?? []).map(p => resolve(input.cwd, p)))];
@@ -270,9 +337,12 @@ export class PendingStore {
     const pushState = pushes.length ? await pushFacts(pushes, this.#o.dataDir) : undefined;
     const preview = input.preview ?? input.check?.preview;
     const bind = input.bind ?? input.check?.bind;
+    const cardPreview = preview?.map(({ rest: _rest, ...p }) => ({ ...p, text: marker.mark(p.text, p.truncated) }));
+    const masked = marker.sources.length;
     const state: PendingState = {
       title,
-      parts,
+      parts: card.parts,
+      ...(masked ? { held: [...new Set(marker.sources)].sort() } : {}),
       cwdReal: realCwd(input.cwd),
       ...(input.workspace !== undefined ? { workspace: input.workspace } : {}),
       ...(places.length ? { places } : {}),
@@ -281,14 +351,15 @@ export class PendingStore {
       ...(pushState ? { pushes, pushed: pushState.fingerprint, ...(pushState.tips ? { tips: pushState.tips } : {}) } : {}),
       ...(input.check ? { recheck: recheckOf(input.check, toolMask) } : {}),
       ...(input.kind === 'delete' ? { snapshot: await takeSnapshot(input.cwd, targets, this.#o.dataDir) } : {}),
-      ...(preview?.length ? { preview: preview.map(p => ({ ...p, text: redactSecrets(toolMask(p.text)) })) } : {}),
+      ...(cardPreview?.length ? { preview: cardPreview } : {}),
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
       ...(files.length ? { sent: boundFacts(files) } : {}),
       ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
+      rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: redactSecrets(toolMask(kept?.text ?? p.text)) })) } : {}) },
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(
-      input.tool, JSON.stringify(input.input), shown, masked, input.cwd, input.kind, redactSecrets(toolMask(input.reason)), JSON.stringify((input.checks ?? []).map(c => redactSecrets(toolMask(c)))),
+      input.tool, JSON.stringify(input.input), card.shown, masked, input.cwd, input.kind, redactSecrets(toolMask(input.reason)), JSON.stringify((input.checks ?? []).map(c => redactSecrets(toolMask(c)))),
       bind ?? null, JSON.stringify(state), files.length ? JSON.stringify(files) : null,
       input.runId, input.runKind, input.conversationId, input.taskId ?? null, input.projectId ?? null, input.tainted ? 1 : 0, this.#now(),
     );
@@ -308,10 +379,11 @@ export class PendingStore {
 
   #view(row: PendingRow): PendingView {
     const state = parseJson<PendingState>(row.state, {});
+    const card = row.status === 'waiting' && !state.rest ? this.#rebuilt(row, state) : undefined;
     const task = row.task_id ? this.#db.prepare('SELECT title FROM tasks WHERE id = ?').get(row.task_id) as { title: string } | undefined : undefined;
     const project = row.project_id ? this.#db.prepare('SELECT name FROM projects WHERE id = ?').get(row.project_id) as { name: string } | undefined : undefined;
     return {
-      id: row.id, tool: row.tool, title: state.title ?? null, shown: row.shown, parts: state.parts ?? { ...NO_PARTS }, masked: row.masked, cwd: row.cwd, kind: row.kind, reason: row.reason, checks: parseJson<string[]>(row.checks, []),
+      id: row.id, tool: row.tool, title: state.title ?? null, shown: card?.shown ?? row.shown, parts: card?.parts ?? state.parts ?? { ...NO_PARTS }, masked: card?.masked ?? row.masked, held: card?.held ?? state.held ?? [], cwd: row.cwd, kind: row.kind, reason: row.reason, checks: parseJson<string[]>(row.checks, []),
       preview: state.preview ?? [], files: fileFacts(parseJson<string[]>(row.files, [])),
       effect: row.kind === 'delete' ? effectOf(state.snapshot) : null, fetched: state.fetched === true,
       run_kind: row.run_kind, conversation_id: row.conversation_id,
@@ -319,6 +391,17 @@ export class PendingStore {
       status: row.status, reject_reason: row.reject_reason, exit_code: row.exit_code, output_preview: row.output_preview,
       created_at: row.created_at, decided_at: row.decided_at, ran_at: row.ran_at,
     };
+  }
+
+  // 前の版で積んだ待ちの行（伏せた形で保存してあり state.rest が無い）は、生の入力から札を作り直す。保存した形は変えない
+  #rebuilt(row: PendingRow, state: PendingState): { shown: string; parts: PendingParts; masked: number; held: string[] } | undefined {
+    const tool = this.#o.tools.get(row.tool);
+    if (!tool || row.input === '') return undefined;
+    let input: unknown;
+    try { input = JSON.parse(row.input); } catch { return undefined; }
+    const marker = heldMarker(this.#held(tool));
+    const card = approvalCard(tool, input, state.title ?? tool.name, marker.mark);
+    return { ...card, masked: marker.sources.length, held: [...new Set(marker.sources)].sort() };
   }
 
   list(filter: PendingFilter): PendingView[] {
@@ -396,10 +479,11 @@ export class PendingStore {
     const erased = current.input === '';
     const state = parseJson<PendingState | null>(current.state, null);
     const nextState = state && result.fetched !== undefined ? { ...state, fetched: result.fetched } : state;
-    const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', state = ?
+    const rest = settled(current, nextState);
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', shown = ?, masked = ?, state = ?
       WHERE id = ? AND status = 'running'`).run(
       result.status, result.exitCode ?? null, erased || result.output === undefined ? null : outputTail(result.output), erased ? null : result.fullRef ?? null,
-      result.status === 'ran' || result.status === 'failed' ? now : null, now, nextState === null ? null : JSON.stringify(nextState), id,
+      result.status === 'ran' || result.status === 'failed' ? now : null, now, rest.shown, rest.masked, rest.state, id,
     );
     if (Number(changed.changes) !== 1) return this.view(id);
     const row = this.row(id)!;
@@ -409,7 +493,9 @@ export class PendingStore {
 
   reject(id: number, reason?: string): PendingView {
     const before = this.#require(id);
-    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '' WHERE id = ? AND status = 'waiting'`).run(cleanReason(reason), this.#now(), id);
+    const rest = settled(before, parseJson<PendingState | null>(before.state, null));
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ? WHERE id = ? AND status = 'waiting'`)
+      .run(cleanReason(reason), this.#now(), rest.shown, rest.masked, rest.state, id);
     if (Number(changed.changes) !== 1) throw new PendingError('not_waiting', { id, status: this.row(id)?.status ?? before.status });
     const row = this.row(id)!;
     this.#changed(row);
@@ -421,7 +507,9 @@ export class PendingStore {
     for (const id of ids) {
       const rows = this.#db.prepare("SELECT * FROM pending_actions WHERE conversation_id = ? AND status = 'waiting'").all(id) as unknown as PendingRow[];
       for (const row of rows) {
-        const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '' WHERE id = ? AND status = 'waiting'`).run(this.#now(), row.id);
+        const rest = settled(row, parseJson<PendingState | null>(row.state, null));
+        const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '', shown = ?, masked = ?, state = ? WHERE id = ? AND status = 'waiting'`)
+          .run(this.#now(), rest.shown, rest.masked, rest.state, row.id);
         if (Number(changed.changes) === 1) { count += 1; this.#changed(this.row(row.id)!); }
       }
     }
@@ -429,7 +517,13 @@ export class PendingStore {
   }
 
   closeInterrupted(): number {
-    const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '' WHERE status = 'running'`).run(pendingText('en', 'interrupted'), this.#now());
-    return Number(result.changes);
+    let closed = 0;
+    for (const row of this.#db.prepare("SELECT * FROM pending_actions WHERE status = 'running'").all() as unknown as PendingRow[]) {
+      const rest = settled(row, parseJson<PendingState | null>(row.state, null));
+      const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '', shown = ?, masked = ?, state = ? WHERE id = ? AND status = 'running'`)
+        .run(pendingText('en', 'interrupted'), this.#now(), rest.shown, rest.masked, rest.state, row.id);
+      closed += Number(result.changes);
+    }
+    return closed;
   }
 }

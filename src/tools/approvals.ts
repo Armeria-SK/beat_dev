@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Placement } from './hooks/scope.ts';
 
-// 確かめの札で見せるコードのファイル（読めないものは text に理由の文を入れる）
-export interface PreviewFile { path: string; text: string; truncated: boolean }
+// 確かめの札で見せるコードのファイル（読めないものは text に理由の文を入れる）。truncated のとき chars は切る前の文字数。
+// rest は決めたあとに残す伏せた形（全体を伏せてから切ったもの）。無ければ text を伏せて残す
+export interface PreviewFile { path: string; text: string; truncated: boolean; chars?: number; rest?: { text: string; truncated: boolean } }
 
 // 承認の札に出す、見つけたパスごとの判定。in: 許可フォルダの中（mode はそのフォルダの読み書き / 読むだけ）、out: 外、deny: 拒否、unknown: 判定できない（変数など。path は無い）
 export interface ApprovalPath { input: string; path?: string; verdict: 'in' | 'out' | 'deny' | 'unknown'; mode?: 'read' | 'write' }

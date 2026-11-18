@@ -15,8 +15,12 @@ export function apiKey(provider: ProviderConfig, env: Env): string | undefined {
 }
 
 // このプロバイダの API キーの値。相手のサーバーが返した本文から、鍵そのものを伏せるのに使う
+export function providerKeyName(provider: ProviderConfig): string | undefined {
+  return provider.apiKeyEnv ?? (provider.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined);
+}
+
 export function providerSecrets(provider: ProviderConfig, env: Env): string[] {
-  const name = provider.apiKeyEnv ?? (provider.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined);
+  const name = providerKeyName(provider);
   const value = name ? env[name]?.trim() : undefined;
   return value ? [value] : [];
 }
