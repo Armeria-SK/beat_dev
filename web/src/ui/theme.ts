@@ -1,3 +1,5 @@
+import { getExplainLanguage, subscribe } from '../i18n/state.ts';
+
 export const THEMES = ['light', 'dusk', 'sand', 'mist', 'moss', 'ember'] as const;
 export type Theme = typeof THEMES[number];
 export const DEFAULT_THEME: Theme = 'light';
@@ -39,6 +41,12 @@ export function saveReducedMotion(storage: ThemeStorage | undefined, on: boolean
 
 export function applyTheme(root: { dataset: DOMStringMap }, theme: Theme): void {
   root.dataset.theme = theme;
+}
+
+export function followExplainLanguage(root: { lang: string }): () => void {
+  const sync = () => { root.lang = getExplainLanguage(); };
+  sync();
+  return subscribe(sync);
 }
 
 export function browserStorage(): ThemeStorage | undefined {
