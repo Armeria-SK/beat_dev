@@ -5,7 +5,7 @@ export const deviationJa = {
   'not_in_task': "deviation_add は製品のタスクの中でだけ使えます",
   'no_items': "この製品にはまだ受け入れの一覧が無いので、item は渡せません。item を外してください",
   'items_unreadable': "この製品の受け入れの一覧が今は読めないので、item を確かめられません。item を外すか、あとでもう一度試してください",
-  'bad_item': "今の一覧に受け入れの項目 \"{item}\" はありません。項目: {items}。違いが 1 つの項目の話でなければ、item を外してください",
+  'bad_item': "今の一覧に受け入れの項目「{item}」はありません。項目: {items}。違いが 1 つの項目の話でなければ、item を外してください",
   'empty': "{field} を短い 1 文で渡してください",
   'too_long': "{field} が長すぎます（{length} 文字、{max} 文字まで）",
   'duplicate': "この違いはもう記録されています（{item}）",

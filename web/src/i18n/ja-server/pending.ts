@@ -93,7 +93,7 @@ export const pendingJa = {
   'owner_protected': "beat が守っているものを変えます: {reasons}",
   'owner_task_taint': "この実行は外の内容を読んでいて、{name} はタスクを変えます",
   'owner_no_judge_request': "この実行の元になったあなたの頼みがありません（beat 自身が始めたか、外の内容から来ました）。なので判定役がオフでもあなたを待ちます",
-  'owner_no_judge_mcp': "MCP サーバー \"{server}\" の書き込みの道具（{tool}）で、判定役がオフなので、あなたを待ちます",
+  'owner_no_judge_mcp': "MCP サーバー「{server}」の書き込みの道具（{tool}）で、判定役がオフなので、あなたを待ちます",
   'owner_no_judge_opaque': "ここでは PowerShell の制御の形の中を beat が読めず、判定役がオフなので、あなたを待ちます: {reasons}",
   'owner_no_judge_self': "beat 自身に触れ、判定役がオフなので、あなたを待ちます: {reasons}",
   'owner_protected_push': "push が守っているファイルへの変更を送ります: {files}",

@@ -15,7 +15,7 @@ export const storeJa = {
   'memory.gone': "その記憶はありません",
   'memory.cannot_undo': "この変更は元に戻せません",
   'memory.unavailable': "記憶の機能が使えません",
-  'memory.undo_note': "元に戻す",
+  'memory.undo_note': "Undo",
   'skill.bad_name': "名前は英小文字・数字・ハイフンで、63 文字までにしてください（例: weekly-report）",
   'skill.empty_description': "説明が空です（この手順をいつ使うかを 1 文で書いてください）",
   'skill.long_description': "説明は {max} 文字以内にしてください",
