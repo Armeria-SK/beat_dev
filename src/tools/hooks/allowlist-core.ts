@@ -30,6 +30,12 @@ export const PS_POP_NAMES: readonly string[] = ['pop-location', 'popd'];
 export const SH_CD_NAMES: readonly string[] = ['cd', 'pushd', 'chdir'];
 export const SH_POP_NAMES: readonly string[] = ['popd'];
 export const CD_COMMANDS: ReadonlySet<string> = new Set([...PS_CD_NAMES, ...PS_POP_NAMES, ...SH_CD_NAMES, ...SH_POP_NAMES]);
+// PowerShell の組み込みの関数 cd..（Set-Location ..）と cd\（Set-Location \）。引数は使わない（5.1 の Get-Command で確かめた）
+export const PS_CD_SHORTCUTS: ReadonlyMap<string, string> = new Map([['cd..', '..'], ['cd\\', '\\']]);
+// モジュール名つきの Set-Location など（Microsoft.PowerShell.Management\Set-Location）
+export const PS_QUALIFIED_CD = /^([A-Za-z0-9_.]+)\\((?:set|push|pop)-location)$/iu;
+// 文の頭が作業フォルダを変えうるコマンドか（shell-guard.ts の本体の入口の先読み）
+export const isCdHead = (text: string): boolean => { const t = text.toLowerCase(); return CD_COMMANDS.has(t) || PS_CD_SHORTCUTS.has(t) || PS_QUALIFIED_CD.test(t); };
 
 export interface MatchCtx {
   shell: ShellKind;
@@ -53,6 +59,7 @@ export interface MatchCtx {
 // file: 読まれる設定ファイルの場所。unknownCwd: cd の先が分からず、調べられない
 export type ToolRc = { file: string } | { unknownCwd: true };
 
+export interface CdUse { word: Word | null; maybe?: boolean }
 export interface StatementResult {
   level: Level;
   reasons: Reason[];
@@ -62,8 +69,8 @@ export interface StatementResult {
   fetch: boolean;
   // 消すコマンド（rm・Remove-Item など）。ルートやホームを消す形は止める
   deletes: boolean;
-  // cd・Set-Location など。word が null なら、行き先が分からない
-  cwd?: { word: Word | null };
+  // cd・Set-Location など。word が null なら、行き先が分からない。maybe: 動くか分からない（前のフォルダも残す）
+  cwd?: CdUse;
   // curl -O・wget の既定の名前: URL の最後の名前で書く先
   remoteNames: Array<{ url: Word; dir: Word | null }>;
 }
@@ -74,7 +81,7 @@ export class Acc {
   readonly copies: CopyUse[] = [];
   fetch = false;
   deletes = false;
-  cwd?: { word: Word | null };
+  cwd?: CdUse;
   readonly remoteNames: Array<{ url: Word; dir: Word | null }> = [];
   add(level: Level, key: GuardMessageKey, params: Record<string, string | number> = {}, exempt = false, id?: string): void {
     if (level === 'allow') return;

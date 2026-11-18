@@ -103,9 +103,10 @@ export interface GuardModules {
 
 const NO_GIT = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
 
-export function guardRowOf(mods: GuardModules, command: string, shell: 'powershell' | 'bash' | 'pwsh', ws: string, policy?: Record<string, unknown>): GuardRow {
+// windows: bash runs as on Linux unless given (Git Bash on Windows passes true, as src/tools/builtin/shell.ts does on win32)
+export function guardRowOf(mods: GuardModules, command: string, shell: 'powershell' | 'bash' | 'pwsh', ws: string, policy?: Record<string, unknown>, windows = shell !== 'bash'): GuardRow {
   try {
-    const v = mods.checkShellCommand(command, ws, { policy: policy ?? { roots: [{ path: ws, mode: 'write' }], deny: [] }, outsideRoots: 'ask', shell, windows: shell !== 'bash' });
+    const v = mods.checkShellCommand(command, ws, { policy: policy ?? { roots: [{ path: ws, mode: 'write' }], deny: [] }, outsideRoots: 'ask', shell, windows });
     const statements = v.statements as never[];
     const out = v.decision === 'deny' ? undefined : mods.outboundOf({ tool: 'shell', statements }, NO_GIT);
     return {

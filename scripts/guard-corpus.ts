@@ -1,7 +1,7 @@
 // Compare the shell guard of two checkouts (base and head) over the same corpus of strings (plans/beat/steps/control-bodies).
 //   extract --repo <base> --repo <head> --out <dir>/corpus.json   string literals of every <repo>/tests/**/*.ts (union), under 2,000 chars, plus the cd templates
 //   run --repo <checkout> --corpus <dir>/corpus.json --out <file>     each string, in each form (plain, wrapped, after a cd prefix), in each fixture,
-//                                                                     through checkShellCommand as powershell (windows); bash: plain form only
+//                                                                     through checkShellCommand as powershell (windows); bash: plain form only, as on Linux and as Git Bash on Windows
 //   compare <base.json> <head.json> --corpus <dir>/corpus.json        same / stricter / looser per row; exit code 1 on any looser row,
 //                                                                     or on a changed plain row with no control keyword that is not in EXPECTED
 // The fixtures live in <dir of corpus>/fx, so both runs see the same paths: ws (with sub, private, ro, and a repo b whose config sets core.fsmonitor).
@@ -62,9 +62,15 @@ const ACCEPTED_LOOSER: ReadonlyMap<string, string> = new Map([
   ['$x=Remove-Item a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
   ['Write-Output $x=a#b', 'a#b after a glued = is one generic token, as in PowerShell (base refused the #)'],
 ]);
+// The same, for bash only (guard-cd, Q-GCD-4): in bash ( ) is a subshell, so the cd inside it does not stay. In PowerShell ( ) does move the folder
+const ACCEPTED_LOOSER_BASH: ReadonlyMap<string, string> = new Map([
+  ['(cd sub); git push', 'guard-cd: a cd inside ( ) ends with the subshell, so the push is checked in the folder it runs in (base checked sub)'],
+]);
 
-const SHELLS = ['powershell', 'bash'] as const;
+// bash-win: bash as Git Bash on Windows (windows: true, as src/tools/builtin/shell.ts passes on win32); bash: as on Linux
+const SHELLS = ['powershell', 'bash', 'bash-win'] as const;
 type Shell = typeof SHELLS[number];
+const acceptedLooser = (shell: Shell, command: string): string | undefined => ACCEPTED_LOOSER.get(command) ?? (shell === 'powershell' ? undefined : ACCEPTED_LOOSER_BASH.get(command));
 interface Fixture { name: string; cwd: string; policy: Record<string, unknown> }
 interface Verdicts { repo: string; keys: string[]; rows: GuardRow[] }
 
@@ -114,10 +120,12 @@ async function run(repo: string, corpusFile: string, outFile: string): Promise<v
       }
       keys.push(`bash|${f.name}|plain|${i}`);
       rows.push(guardRowOf(mods, command, 'bash', f.cwd, f.policy));
+      keys.push(`bash-win|${f.name}|plain|${i}`);
+      rows.push(guardRowOf(mods, command, 'bash', f.cwd, f.policy, true));
     }
   }
   writeFileSync(outFile, JSON.stringify({ repo: resolve(repo), keys, rows } satisfies Verdicts));
-  console.log(`run: ${corpus.length} strings, ${fx.length} fixtures, ${FORMS.length} PowerShell forms + bash plain = ${rows.length} rows in ${((Date.now() - started) / 1000).toFixed(1)} s -> ${outFile}`);
+  console.log(`run: ${corpus.length} strings, ${fx.length} fixtures, ${FORMS.length} PowerShell forms + bash plain (as on Linux and as Git Bash on Windows) = ${rows.length} rows in ${((Date.now() - started) / 1000).toFixed(1)} s -> ${outFile}`);
 }
 
 function compare(baseFile: string, headFile: string, corpusFile: string): number {
@@ -145,13 +153,13 @@ function compare(baseFile: string, headFile: string, corpusFile: string): number
     const b = head.rows[n]!;
     if (JSON.stringify(normal(a)) === JSON.stringify(normal(b))) { g.same++; continue; }
     const looser = looserThan(a, b);
-    if (looser.length && ACCEPTED_LOOSER.has(command)) { bump(accepted, command); continue; }
+    if (looser.length && acceptedLooser(shell, command) !== undefined) { bump(accepted, `${shell} ${command}`); continue; }
     if (looser.length) {
       g.looser++;
       if (printed++ < 200) console.log(`LOOSER ${group} #${index}: ${JSON.stringify(command).slice(0, 200)}\n  ${looser.join('; ')}`);
     } else g.stricter++;
     if (form === 'plain' && !CONTROL_WORD.test(command)) {
-      const why = EXPECTED.find(e => e.shell === shell && e.pattern.test(command));
+      const why = EXPECTED.find(e => (e.shell === shell || (shell === 'bash-win' && e.shell === 'bash')) && e.pattern.test(command));
       if (why) bump(expectedHits, `${shell}: ${why.why}`);
       else {
         g.leaked++;
@@ -170,7 +178,11 @@ function compare(baseFile: string, headFile: string, corpusFile: string): number
     bad += g.looser + g.leaked;
   }
   console.log('\naccepted looser rows (ACCEPTED_LOOSER):');
-  for (const [command, n] of accepted) console.log(`  ${n}\t${JSON.stringify(command)}: ${ACCEPTED_LOOSER.get(command)}`);
+  for (const [key, n] of accepted) {
+    const shell = key.slice(0, key.indexOf(' ')) as Shell;
+    const command = key.slice(key.indexOf(' ') + 1);
+    console.log(`  ${n}\t${shell} ${JSON.stringify(command)}: ${acceptedLooser(shell, command)}`);
+  }
   console.log('\nexpected stricter plain rows without a control keyword:');
   for (const [why, n] of expectedHits) console.log(`  ${n}\t${why}`);
   const total = [...groups.values()].reduce((s, g) => ({ rows: s.rows + g.same + g.stricter + g.looser, looser: s.looser + g.looser, stricter: s.stricter + g.stricter }), { rows: 0, looser: 0, stricter: 0 });

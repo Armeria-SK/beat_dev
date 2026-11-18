@@ -1,7 +1,7 @@
 // 許可の一覧で、文 1 つを判定する（security-self-api.md §11.1 の 5）。結果は 許す / ふつうの確かめ / 今回だけ / 止める と、理由と、調べるパス。
 // 表は allowlist-tools.ts（bash・外部の道具）・allowlist-git.ts・allowlist-ps.ts（コマンドレット）。ここは、名前の決まり（C1）・外部の実体（C2）・代入（C8）・リダイレクト・形の印をまとめる。
 
-import { Acc, bashVarOk, envAssignOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
+import { Acc, PS_CD_SHORTCUTS, PS_QUALIFIED_CD, bashVarOk, envAssignOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
 import { runGit } from './allowlist-git.ts';
 import { pipeBound } from './allowlist-pipe.ts';
 import { cmdHostArgs, parsePs, psArgs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
@@ -106,6 +106,7 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
   }
   acc.add('once', 'list.command', { cmd: words[0]!.text }, true);
   unlistedArgs(st, acc, ctx);
+  psCdShape(st, acc, ctx);
 }
 
 function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
@@ -116,6 +117,19 @@ function unlistedArgs(st: Statement, acc: Acc, ctx: MatchCtx): void {
   const trimmed = name.text.replace(/[ .]+$/u, '') || name.text;
   if (name.dynamic || cmdTarget(name.text) || cmdTarget(trimmed)) winArgs(trimmed, st.words, '.cmd', acc);
   else cmdHostArgs(trimmed, st, cmdTarget, acc);
+}
+
+// cd..・cd\（組み込みの関数）とモジュール名つきの Set-Location は、理由は今までどおり（知らないコマンド）のまま、作業フォルダだけ追う。
+// Microsoft.PowerShell.Management 以外のモジュール名は、そのコマンドが無ければ失敗して動かないので「かもしれない」
+function psCdShape(st: Statement, acc: Acc, ctx: MatchCtx): void {
+  const name = st.words[0]!;
+  if (name.dynamic) return;
+  const short = PS_CD_SHORTCUTS.get(name.text.toLowerCase());
+  if (short !== undefined) { acc.cwd = { word: { text: short, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' } }; return; }
+  const qualified = PS_QUALIFIED_CD.exec(name.text);
+  if (!qualified) return;
+  const cd = matchStatement({ ...st, words: [{ ...name, text: qualified[2]! }, ...st.words.slice(1)] }, ctx).cwd;
+  if (cd) acc.cwd = qualified[1]!.toLowerCase() === 'microsoft.powershell.management' ? cd : { ...cd, maybe: true };
 }
 
 function linkFormOf(key: string, words: readonly Word[], ps: boolean): string | undefined {
@@ -158,7 +172,7 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   const named = quotedName || (name.kind === 'plain' && !name.dynamic && !name.quoted && !name.home && (NAME_RE.test(text) || (ps ? text === '%' || text === '?' : BASH_SPECIAL.has(text)) || text === 'tree.com' || text === 'where.exe'));
   if (!named) {
     acc.add('once', 'list.command', { cmd: text }, true);
-    if (ps) unlistedArgs(st, acc, ctx);
+    if (ps) { unlistedArgs(st, acc, ctx); psCdShape(st, acc, ctx); }
     return acc.result();
   }
   let key = ctx.windows || ps ? text.toLowerCase() : text;

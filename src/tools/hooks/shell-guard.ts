@@ -5,10 +5,11 @@ import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts'
 import type { AskKind } from '../types.ts';
 import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
-import { classifyStatements, matchStatement, noRepo, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
+import { classifyStatements, matchStatement, noRepo, type CdUse, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
 import { codeFindings } from './code-guard.ts';
 import { gitGlobalOf, inlineCode, innerSource, joinWords, programOdd, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
-import { CD_COMMANDS } from './allowlist-core.ts';
+import { isCdHead } from './allowlist-core.ts';
+import { gitSubcommand } from './allowlist-git.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
@@ -48,7 +49,8 @@ export interface ShellGuardOptions {
 
 // now: 次の文が動きうるフォルダ。all: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか（変数・ワイルドカード・決められない先、また動く本体の中の cd で false）。
 // 動いたか分からない cd、決められない cd でも、フォルダを now・all から消さず、確かめも飛ばさない
-interface CwdTrack { now: string[]; all: string[]; known: boolean }
+// open: いま中にいる bash のサブシェル（( ) $( )）と、入ったときの now・known。出たら戻す（中の cd は外に残らない）。changed: 前の文が書いた・消した（cd の先が今あっても、そのときには無いかもしれない）
+interface CwdTrack { now: string[]; all: string[]; known: boolean; open: Array<{ id: number; now: string[]; known: boolean }>; changed: boolean }
 export interface CwdState { now: readonly string[]; all: readonly string[]; known: boolean }
 const CWD_CAP = 32;
 const CWD_ALL_CAP = 256;
@@ -427,20 +429,32 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   // cd の先が分からなければ（変数・ワイルドカード・cd -・popd など）、調べられないので今回だけ。
   // seen は分類の判定（リポジトリ・設定ファイル）に、track はパスの確かめ（下の文ごとの並び）に使う。どちらも同じ決まりで進む
   const startTrack = (): CwdTrack => (opts.cwdState
-    ? { now: [...opts.cwdState.now], all: [...opts.cwdState.all], known: opts.cwdState.known }
-    : { now: [initialCwd], all: [initialCwd], known: true });
+    ? { now: [...opts.cwdState.now], all: [...opts.cwdState.all], known: opts.cwdState.known, open: [], changed: false }
+    : { now: [initialCwd], all: [initialCwd], known: true, open: [], changed: false });
   const seen = startTrack();
   const track = startTrack();
-  // maybe: 動いたか分からない cd（前のフォルダも残す）。again: また動きうる本体の中の cd（このあとのフォルダは決められない）
-  const followCd = (t: CwdTrack, cd: { word: Word | null }, maybe: boolean, again: boolean): void => {
+  // 文が入っているサブシェルの並び（外から内）に合わせる: 出たサブシェルは入ったときのフォルダに戻し、入ったサブシェルは今のフォルダを覚える
+  // 戻したあとは、その文から始まるまた動く本体の入口（entries）を足し直す（戻すと入口の分が消えるため）
+  const enterScope = (t: CwdTrack, st: Statement, index: number): void => {
+    const chain = st.subshells ?? [];
+    let left = false;
+    while (t.open.length && !chain.includes(t.open.at(-1)!.id)) { const o = t.open.pop()!; t.now = o.now; t.known = o.known; left = true; }
+    if (left) enter(t, index);
+    for (const id of chain) if (!t.open.some(o => o.id === id)) t.open.push({ id, now: [...t.now], known: t.known });
+  };
+  const changes = (r: { paths: readonly PathRef[]; copies: readonly CopyUse[]; deletes: boolean }): boolean => r.deletes || r.copies.length > 0 || r.paths.some(p => p.mode === 'write');
+  // maybe: 動いたか分からない cd（前のフォルダも残す）。again: また動きうる本体の中の cd（このあとのフォルダは決められない）。
+  // 今は無いフォルダ（前の文が書いた・消したなら、あるフォルダでも）への cd は失敗しうる。失敗すれば次の文は元のフォルダで動くので、元も残す
+  const followCd = (t: CwdTrack, cd: CdUse, maybe: boolean, again: boolean): void => {
     if (again) t.known = false;
     if (!cd.word || cd.word.dynamic || cd.word.glob) { t.known = false; return; }
-    const next = maybe ? [...t.now] : [];
+    const next = maybe || cd.maybe ? [...t.now] : [];
     for (const from of t.now) {
       const e = resolveWord(cd.word, from, windows, language);
       if ('unresolved' in e) t.known = false;
       const to = 'unresolved' in e ? from : e.path;
       if (!next.includes(to)) next.push(to);
+      if ((t.changed || !isDirectory(to)) && !next.includes(from)) next.push(from);
     }
     const added = next.filter(p => !t.all.includes(p));
     // 同時にありうるフォルダは CWD_CAP まで、これまでに通ったフォルダは CWD_ALL_CAP まで。超えたら断る（すべてを見きれないため）
@@ -453,7 +467,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const beforeStatements: MatchCtx['beforeStatements'] = all => {
     for (const st of all) {
       const head = st.words[0];
-      if (st.reentry === undefined || !head || head.dynamic || !CD_COMMANDS.has(head.text.toLowerCase())) continue;
+      if (st.reentry === undefined || !head || head.dynamic || !isCdHead(head.text)) continue;
       const cd = matchStatement(st, { shell, windows, repo: noRepo, selfHosts }).cwd;
       if (!cd) continue;
       const list = entries.get(st.reentry) ?? [];
@@ -493,8 +507,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (result.paths.some(p => p.mode === 'write') || result.copies.length > 0) wroteEarlier = true;
     if (st.shapes.some(s => s.startsWith('control:'))) enclosedEarlier = true;
     if (result.cwd) followCd(seen, result.cwd, st.nested === true, st.reentry !== undefined);
+    if (changes(result)) seen.changed = true;
   };
-  const beforeStatement: MatchCtx['beforeStatement'] = (_st, index) => enter(seen, index);
+  const beforeStatement: MatchCtx['beforeStatement'] = (st, index) => { enter(seen, index); enterScope(seen, st, index); };
   const fileExists = (path: string): boolean => {
     if (wroteEarlier || enclosedEarlier) return false;
     if (!seen.known && !parsePath(path).root) return false;
@@ -546,8 +561,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
     const unknownCwd = relative && !track.known;
+    // Windows のドライブの根からのパス（\x）・ドライブだけのパス（X:foo）は、フォルダが分からなければドライブも分からない
+    const rootish = windows && !ref.word.dynamic && !ref.word.home && (/^[\\/](?![\\/])/u.test(input) || /^[A-Za-z]:(?![\\/])/u.test(input));
     const target = (t: DeleteTarget): void => { if (record && write && current) current.targets.push(t); };
-    if (unknownCwd) {
+    if (unknownCwd || (rootish && !track.known)) {
       target({ input, wild: false });
       if (record) paths.push({ input, placement: { kind: 'unresolved', reason: text('list.cwd_unknown', { input }) }, write });
       if (write) addCode(say('list.cwd_unknown', { input })); else add('ask', say('list.cwd_unknown', { input }), 'opaque');
@@ -558,9 +575,15 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       checkPath({ ...ref, word: { ...rest, text: unescaped, dynamic: false, glob: /[*?[]/u.test(unescaped) } }, deletes, false);
     }
     // 分かっているフォルダはすべて、どれにいても同じ確かめをする（決められない cd のあとでも飛ばさない）
-    for (const base of relative ? track.all : [track.now[0]!]) {
+    // 相対パスはこれまでにいられたすべてのフォルダで、ドライブの根からのパス・別のドライブのパス（X:foo）はいま動きうるすべてのフォルダで調べる
+    // 同じ場所になるフォルダは 1 回だけ調べる（先に主でない形で調べた場所が、主として出てきたときだけもう一度）
+    const checked = new Map<string, boolean>();
+    for (const base of relative ? track.all : track.now) {
       const primary = !unknownCwd && (!relative || track.now.includes(base));
       const expanded = resolveWord(ref.word, base, windows, language);
+      const place = 'unresolved' in expanded ? '' : expanded.path;
+      if (checked.has(place) && (checked.get(place) || !primary)) continue;
+      checked.set(place, primary || checked.get(place) === true);
       if (primary && !unknownCwd) target(ref.word.glob ? { input, wild: true } : 'unresolved' in expanded || ref.word.dynamic ? { input, wild: false } : { input, path: expanded.path, wild: false });
       if ('unresolved' in expanded) {
         if (primary) paths.push({ input, placement: { kind: 'unresolved', reason: expanded.unresolved }, write });
@@ -691,6 +714,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
 
   for (const [index, st] of classified.statements.entries()) {
     enter(track, index);
+    enterScope(track, st, index);
     const result = classified.results[index]!;
     const here = track.now[0]!;
     const cwdState = (): CwdState => ({ now: [...track.now], all: [...track.all], known: track.known });
@@ -768,6 +792,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (denied) add('deny', say('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;
     else if (fetched && name && SHELL_SINKS.has(name)) add('deny', say('guard.download_exec'));
+    if (name === 'git' && PULLING_GIT.has(gitSubcommand(st.words) ?? '')) pulled = true;
 
     for (const reason of result.reasons) {
       if (hard || denied) break;
@@ -818,6 +843,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
 
     if (result.cwd) followCd(track, result.cwd, st.nested === true, st.reentry !== undefined);
+    if (changes(result)) track.changed = true;
   }
   return done();
 }

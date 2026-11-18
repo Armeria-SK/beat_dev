@@ -45,6 +45,8 @@ export interface Statement {
   nested?: boolean;
   // また動きうる本体（ループ・関数・trap・スクリプトブロック）の中の文: その本体のいちばん外の入口の文の番号。そこに入る前に中の cd の先も足す
   reentry?: number;
+  // bash: 文が入っているサブシェル（( ) と $( ) <( ) >( )）の番号の並び（外から内）。そこから出ると、中の cd は消える
+  subshells?: number[];
   background: boolean;
   // 形そのものが今回だけになる理由の印（関数の定義・呼び出し演算子・splatting・許していない型など）
   shapes: string[];
@@ -231,14 +233,15 @@ function precheck(src: string, shell: ShellKind): LexFail | null {
   return null;
 }
 
-interface BashEnv { crlf: boolean }
+// ids: サブシェルの番号（入れ子の $( ) をまたいで重ならない）
+interface BashEnv { crlf: boolean; ids: { next: number } }
 
 export function lexShell(command: string, shell: ShellKind): LexResult {
   const early = precheck(command, shell);
   if (early) return { ok: false, fail: early };
   const normalized = command.replace(/\r\n/gu, '\n');
   const sink: Statement[] = [];
-  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink, { crlf: command.includes('\r\n') });
+  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink, { crlf: command.includes('\r\n'), ids: { next: 0 } });
   return failure ? { ok: false, fail: failure } : { ok: true, statements: sink };
 }
 
@@ -299,10 +302,45 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   let fnName = false;
   const stack: string[] = [];
   const pending: Array<{ delim: string; quoted: boolean; strip: boolean }> = [];
+  // 囲み（cd の追い方のため）。if・ループ・case・関数の本体の文は動くか分からない（nested）、ループと関数の本体はまた動く（reentry）。
+  // ( ) はサブシェル（番号を付け、出ると中の cd が消える）。{ } はそのまま。pattern: case の (a) の括弧、fnparen: f() の括弧。
+  // nested: && || のあと・パイプの中で開いた囲み。cond: 今の文が && || のあと
+  type Scope = { kind: 'if' | 'loop' | 'case' | 'fn' | 'sub' | 'brace' | 'pattern' | 'fnparen'; start: number; id?: number; nested: boolean; cond: boolean };
+  const scopes: Scope[] = [];
+  let cond = false;
+  let fnBody = false;
+  // 閉じたばかりの囲みの最初の文の番号。すぐあとに | か & が来れば、その囲みはパイプ・裏で動く（中の cd は外に残らないかもしれない）
+  let lastGroup: number | null = null;
+  // && || | で行が終わった（次の行もその続き）
+  let afterOp = false;
+  const openScope = (kind: Scope['kind']): void => {
+    scopes.push({ kind, start: sink.length, nested: cond || pipePrev, cond, ...(kind === 'sub' ? { id: env.ids.next++ } : {}) });
+    cond = false;
+  };
+  const closeScope = (kinds: ReadonlyArray<Scope['kind']>): boolean => {
+    const top = scopes.at(-1);
+    if (!top || !kinds.includes(top.kind)) return false;
+    scopes.pop();
+    cond = top.cond;
+    lastGroup = top.start;
+    if (top.kind === 'fnparen') fnBody = true;
+    return true;
+  };
+  const mark = (st: Statement, nested: boolean): void => {
+    if (nested || cond || scopes.some(s => s.nested || s.kind === 'if' || s.kind === 'loop' || s.kind === 'case' || s.kind === 'fn' || s.kind === 'pattern')) st.nested = true;
+    for (const s of scopes) if (s.kind === 'loop' || s.kind === 'fn') st.reentry = Math.min(st.reentry ?? Infinity, s.start);
+    const ids = scopes.flatMap(s => (s.id === undefined ? [] : [s.id]));
+    if (ids.length) st.subshells = [...ids, ...(st.subshells ?? [])];
+  };
+  const groupInBackground = (): void => {
+    if (lastGroup !== null && cur.words.length === 0 && cur.assigns.length === 0 && cur.header === undefined) for (const st of sink.slice(lastGroup)) st.nested = true;
+    lastGroup = null;
+  };
 
   const empty = () => cur.words.length === 0 && cur.assigns.length === 0 && cur.redirects.length === 0 && cur.header === undefined;
   const end = (pipeOut: boolean) => {
     if (!empty()) {
+      mark(cur, pipeOut || pipePrev || cur.background);
       cur.pipedIn = pipePrev;
       cur.pipedOut = pipeOut;
       cur.source = cur.words.map(w => w.text).join(' ');
@@ -321,8 +359,12 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     const close = closeParen(src, at);
     if (close === SUB_AMBIGUOUS) return { end: n, fail: fail('bash_sub') };
     if (close < 0) return { end: n, fail: fail('unclosed', '$(') };
+    const from = sink.length;
     const inner = lexBash(src.slice(at + 1, close), depth + 1, sink, env);
-    return inner ? { end: close, fail: inner } : { end: close };
+    if (inner) return { end: close, fail: inner };
+    const id = env.ids.next++;
+    for (const st of sink.slice(from)) { st.subshells = [id, ...(st.subshells ?? [])]; mark(st, pipePrev); }
+    return { end: close };
   };
 
   // $ で始まる形を読む。inQuote: "…" の中
@@ -449,15 +491,16 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   // 制御の言葉。true: 言葉として消費した、false: 普通の言葉（コマンド）として扱う
   const keyword = (text: string): boolean | LexFail => {
     switch (text) {
-      case 'if': case 'while': stack.push(text); return true;
-      case 'until': cur.shapes.push('control'); stack.push('while'); return true;
+      case 'if': case 'while': stack.push(text); openScope(text === 'if' ? 'if' : 'loop'); return true;
+      case 'until': cur.shapes.push('control'); stack.push('while'); openScope('loop'); return true;
       case 'elif': case 'then': case 'else': if (stack.at(-1) !== 'if') return fail('unexpected', text); return true;
-      case 'fi': if (stack.pop() !== 'if') return fail('unexpected', 'fi'); end(false); return true;
+      case 'fi': if (stack.pop() !== 'if') return fail('unexpected', 'fi'); end(false); closeScope(['if']); return true;
       case 'do': if (!['for', 'while'].includes(stack.at(-1) ?? '')) return fail('unexpected', 'do'); return true;
-      case 'done': { const top = stack.pop(); if (top !== 'for' && top !== 'while') return fail('unexpected', 'done'); end(false); return true; }
-      case 'for': cur.header = 'for'; stack.push('for'); return true;
-      case 'case': if (depth > 0) return fail('bash_sub'); cur.shapes.push('control'); return false;
-      case '{': case '}': return true;
+      case 'done': { const top = stack.pop(); if (top !== 'for' && top !== 'while') return fail('unexpected', 'done'); end(false); closeScope(['loop']); return true; }
+      case 'for': cur.header = 'for'; stack.push('for'); openScope('loop'); return true;
+      case 'case': if (depth > 0) return fail('bash_sub'); cur.shapes.push('control'); openScope('case'); return false;
+      case '{': openScope(fnBody ? 'fn' : 'brace'); fnBody = false; return true;
+      case '}': closeScope(['brace', 'fn']); return true;
       default: cur.shapes.push('control'); return false;
     }
   };
@@ -467,30 +510,37 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     if (ch === ' ' || ch === '\t') { i++; continue; }
     if (ch === '\n') {
       i++;
-      end(false);
+      if (!afterOp || !empty()) { end(false); cond = false; lastGroup = null; afterOp = false; }
       if (pending.length) { const f = readHeredocs(); if (f) return f; }
       continue;
     }
     if (ch === '#') { while (i < n && src[i] !== '\n') i++; continue; }
     if (!dbl) {
-      if (ch === ';') { i += src[i + 1] === ';' ? 2 : 1; end(false); continue; }
-      if (ch === '&' && src[i + 1] === '&') { i += 2; end(false); continue; }
+      if (ch === ';') { i += src[i + 1] === ';' ? 2 : 1; end(false); cond = false; lastGroup = null; afterOp = false; continue; }
+      if (ch === '&' && src[i + 1] === '&') { i += 2; end(false); cond = true; lastGroup = null; afterOp = true; continue; }
       if (ch === '|') {
-        if (src[i + 1] === '|') { i += 2; end(false); continue; }
+        if (src[i + 1] === '|') { i += 2; end(false); cond = true; lastGroup = null; afterOp = true; continue; }
         if (src[i + 1] === '&') cur.shapes.push('pipe_stderr');
         i += src[i + 1] === '&' ? 2 : 1;
+        groupInBackground();
         end(true);
+        afterOp = true;
         continue;
       }
-      if (ch === '&' && src[i + 1] !== '>') { i++; cur.background = true; end(false); continue; }
+      if (ch === '&' && src[i + 1] !== '>') { i++; groupInBackground(); cur.background = true; end(false); cond = false; afterOp = false; continue; }
       if (ch === '(' || ch === ')') {
         if (ch === '(' && cur.words.length > 0) cur.shapes.push('function');
+        // f() の括弧と、function f () の括弧
+        const fnParen = ch === '(' && (cur.words.length > 0 || (fnBody && /^\(\s*\)/u.test(src.slice(i, i + 64))));
         // (( … )) は算術のコマンド。中は式として読まれ、# はコメントでない（(( ls # )); pwn は pwn も動かす）
         if (ch === '(' && src[i + 1] === '(') return fail('unexpected', '((');
         // NAME=( … ) は配列の代入。閉じ ) のあとに続く # もコメントでなく語の一部（ech=()#o } a | pwn）
         if (ch === '(' && src[i - 1] === '=') return fail('unexpected', '=(');
         i++;
+        afterOp = false;
         end(false);
+        if (ch === ')') closeScope(['sub', 'pattern', 'fnparen']);
+        else { openScope(fnParen ? 'fnparen' : scopes.at(-1)?.kind === 'case' ? 'pattern' : 'sub'); if (!fnParen) fnBody = false; }
         continue;
       }
     }
@@ -579,15 +629,20 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     if (isFail(w)) return w;
     if (i === before) return fail('unexpected', src[i] ?? '');
     if (afterCond) end(false);
+    lastGroup = null;
+    afterOp = false;
     const atCommand = cur.words.length === 0 && cur.header === undefined && cur.assigns.length === 0;
     if (atCommand && !dbl && !w.quoted && !w.dynamic && !w.glob && BASH_KEYWORDS.has(w.text)) {
       const r = keyword(w.text);
       if (isFail(r)) return r;
       if (r) continue;
     }
+    fnBody = false;
+    if (atCommand && !dbl && !w.quoted && !w.dynamic && w.text === 'esac' && !pipePrev) closeScope(['case']);
     cur.words.push(w);
     if (fnName && cur.words.length === 2) {
       fnName = false;
+      fnBody = true;
       cur.shapes.push('function');
       end(false);
       continue;
