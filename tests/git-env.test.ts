@@ -212,6 +212,30 @@ test('途中で止まった実行の残り（古い置き場所）は、次の�
   run.cleanup();
 });
 
+// 確かめ役の指摘（backlog 665）: 裏のコマンドは時間の上限が無いので、6 時間を超えて動くと、ほかの実行の片付けに置き場所を消され、名前・メールを失った
+test('まだ動いている実行（cleanup 前）の置き場所は、6 時間を超えても次の実行の片付けで消さない。cleanup のあとは消える', t => {
+  const root = tempDir(t);
+  const home = join(root, 'home');
+  mkdirSync(home);
+  writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = Taro Yamada\n');
+  const env = { HOME: home, USERPROFILE: home };
+  const data = join(root, 'data');
+  const running = prepareGitRun({ dataDir: data, env });
+  const file = running.env.GIT_CONFIG_GLOBAL!;
+  const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
+  utimesSync(dirname(file), old, old);
+  prepareGitRun({ dataDir: data, env }).cleanup();
+  assert.equal(existsSync(file), true, '動いている実行の設定が消された');
+  assert.match(readFileSync(file, 'utf8'), /Taro Yamada/u);
+  running.cleanup();
+  assert.equal(existsSync(dirname(file)), false);
+  // cleanup のあとは「動いている」から外れる: cleanup で消せずに残った置き場所も、6 時間たてば次の実行が消す
+  mkdirSync(dirname(file));
+  utimesSync(dirname(file), old, old);
+  prepareGitRun({ dataDir: data, env }).cleanup();
+  assert.equal(existsSync(dirname(file)), false, 'cleanup した実行の残りが、片付けで消えない');
+});
+
 test('置き場所を作れなくても、無いファイルを指す（git は何も読まない）。cleanup は失敗しても例外にしない', t => {
   const root = tempDir(t);
   const blocker = join(root, 'data');
@@ -226,6 +250,13 @@ test('置き場所を作れなくても、無いファイルを指す（git は�
 // 審査の指摘: リポジトリの見つけ方が git とずれると、ガードが見ていないリポジトリの設定が git に読まれる。
 // ずれに頼らないように、リポジトリの設定より優先されるコマンドレベルの設定で、プログラムを動かす決まった名前の項目を打ち消す
 
+// prepareGitRun は os.homedir()（試験を動かす人の本当のホーム）の設定も読む。その間だけホームを仮のフォルダにして、本当のホームの認証の補助（manager など）を読ませない
+function withHome<T>(home: string, fn: () => T): T {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  Object.assign(process.env, { HOME: home, USERPROFILE: home });
+  try { return fn(); } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+}
+
 function overridesOf(env: Record<string, string>): Array<[string, string]> {
   const count = Number(env.GIT_CONFIG_COUNT);
   return Array.from({ length: count }, (_, i) => [env[`GIT_CONFIG_KEY_${i}`]!, env[`GIT_CONFIG_VALUE_${i}`]!]);
@@ -235,7 +266,7 @@ test('コマンドレベルの上書き: プログラムを動かす決まった
   const root = tempDir(t);
   const home = join(root, 'home');
   mkdirSync(home);
-  const run = prepareGitRun({ dataDir: join(root, 'data'), env: { HOME: home, USERPROFILE: home } });
+  const run = withHome(home, () => prepareGitRun({ dataDir: join(root, 'data'), env: { HOME: home, USERPROFILE: home } }));
   const list = overridesOf(run.env);
   const map = new Map(list);
   for (const [key, value] of [['core.fsmonitor', 'false'], ['core.pager', 'cat'], ['core.editor', 'true'], ['sequence.editor', 'true'], ['core.sshCommand', 'ssh'], ['core.askPass', ''], ['core.gitProxy', 'none'],
@@ -327,7 +358,7 @@ test('コマンドレベルの上書き: ホームの設定の安全な認証の
   const home = join(root, 'home');
   mkdirSync(home);
   writeFileSync(join(home, '.gitconfig'), '[credential]\n\thelper = manager\n\thelper = !evil\n\thelper = cache --timeout=3600\n');
-  const run = prepareGitRun({ dataDir: join(root, 'data'), env: { HOME: home, USERPROFILE: home } });
+  const run = withHome(home, () => prepareGitRun({ dataDir: join(root, 'data'), env: { HOME: home, USERPROFILE: home } }));
   assert.deepEqual(overridesOf(run.env).filter(([k]) => k === 'credential.helper'), [['credential.helper', ''], ['credential.helper', 'manager'], ['credential.helper', 'cache --timeout=3600']]);
   run.cleanup();
 });
@@ -347,10 +378,11 @@ test('本物の git: リポジトリの設定の fsmonitor・フック・sshComm
   writeFileSync(join(root, 'empty-global'), '');
   const baseEnv: Record<string, string> = {
     ...(process.env as Record<string, string>), HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(root, 'empty-global'), GIT_TERMINAL_PROMPT: '0',
-    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e',
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e', GCM_INTERACTIVE: 'never',
+    XDG_CONFIG_HOME: join(home, '.config'), ProgramData: join(root, 'programdata'),
   };
-  for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete baseEnv[key];
-  const git = (args: string[], env: Record<string, string>, input?: string) => spawnSync('git', args, { cwd: repo, env, encoding: 'utf8', ...(input === undefined ? {} : { input }) });
+  for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_ASKPASS', 'SSH_ASKPASS']) delete baseEnv[key];
+  const git = (args: string[], env: Record<string, string>, input?: string) => spawnSync('git', args, { cwd: repo, env, encoding: 'utf8', timeout: 60_000, ...(input === undefined ? {} : { input }) });
   assert.equal(git(['init', '-q'], baseEnv).status, 0);
   git(['config', 'core.fsmonitor', script('fsmonitor')], baseEnv);
   git(['config', 'core.sshCommand', script('ssh')], baseEnv);
@@ -365,17 +397,17 @@ test('本物の git: リポジトリの設定の fsmonitor・フック・sshComm
   writeFileSync(join(fakeBin, 'gpg'), `#!/bin/sh\necho ran > "${slash(marker('pathgpg'))}"\nexit 1\n`, { mode: 0o755 });
   const withFakeGpg = (env: Record<string, string>): Record<string, string> => ({ ...env, PATH: `${fakeBin}${delimiter}${env.PATH ?? env.Path ?? ''}` });
   const exercise = (env: Record<string, string>): void => {
-    git(['status', '--short'], env);
-    git(['ls-remote', 'ssh://example.invalid/x'], env);
-    git(['commit', '-q', '--allow-empty', '-m', 'x'], env);
-    git(['credential', 'fill'], env, 'protocol=https\nhost=example.invalid\n\n');
+    for (const [args, input] of [[['status', '--short']], [['ls-remote', 'ssh://example.invalid/x']], [['commit', '-q', '--allow-empty', '-m', 'x']], [['credential', 'fill'], 'protocol=https\nhost=example.invalid\n\n']] as const) {
+      assert.equal(git([...args], env, input).signal, null, `git ${args[0]} did not finish (waited for a prompt?)`);
+    }
   };
   const names = ['fsmonitor', 'ssh', 'gpg', 'hook', 'credential'];
   // 前提: 上書きが無ければ、どれも動く
   exercise(baseEnv);
   assert.deepEqual(names.filter(n => !existsSync(marker(n))), [], '前提: 本物の git は、リポジトリの設定のプログラムを動かす');
   for (const n of names) rmSync(marker(n));
-  const run = prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv });
+  const run = withHome(home, () => prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv }));
+  assert.deepEqual(overridesOf(run.env).filter(([k]) => k === 'credential.helper'), [['credential.helper', '']], '前提: この機械の認証の補助を読まない');
   exercise(withFakeGpg({ ...baseEnv, ...run.env }));
   assert.deepEqual(names.filter(n => existsSync(marker(n))), [], '上書きがあっても動いた');
   assert.equal(existsSync(marker('pathgpg')), true, 'gpg.program=gpg の上書きは、PATH の gpg を指す');
