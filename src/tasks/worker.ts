@@ -132,7 +132,10 @@ const TASK_TEXT: Record<Language, TaskText> = {
 
 export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE, agreement?: string): string {
   const text = TASK_TEXT[language];
-  const history = events.filter(e => e.content).slice(0, 10).map(e => (e.kind === 'reason'
+  const shown = events.filter(e => e.content).slice(0, 10);
+  const lastRun = events.findIndex(e => e.kind === 'run' || e.kind === 'answer_moved');
+  const unread = (lastRun === -1 ? events : events.slice(0, lastRun)).filter(e => e.kind === 'answer' && e.content && !shown.includes(e));
+  const history = [...shown, ...unread].map(e => (e.kind === 'reason'
     ? `- ${text.time(e.created_at, timezone)} ${e.actor === 'user' ? text.ownerReason : text.otherReason}: ${e.content!.replace(/\r\n|[\r\n\p{Zl}\p{Zp}]/gu, '\n  ')}`
     : `- ${text.time(e.created_at, timezone)} ${e.kind}: ${e.content}`));
   return [
@@ -896,6 +899,10 @@ export class Worker {
     return 'ran';
   }
 
+  #followUpAnswers(taskId: string, runId: string): void {
+    for (const id of this.#d.questions?.followUpUnread(taskId, runId) ?? []) this.requestRun(id);
+  }
+
   #finalize(task: Task, result: EngineResult, control: TaskControl, runId: string): void {
     const { tasks, notifications } = this.#d;
     const now = this.#now();
@@ -904,15 +911,26 @@ export class Worker {
     const language = this.#language();
     const idleKey = `task-idle:${task.id}`;
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
-    if (tasks.get(task.id)?.status !== 'running') { this.#d.kv.delete(splitKey(task.id)); return; }
+    const status = tasks.get(task.id)?.status;
+    if (status !== 'running') {
+      this.#d.kv.delete(splitKey(task.id));
+      if (status === 'done' || status === 'failed' || status === 'cancelled') this.#followUpAnswers(task.id, runId);
+      return;
+    }
     // 割り込みは、やり直しと同じに数える（区切りの数を消しも増やしもしない）
     if (this.#d.engine.wasPreempted(runId) && control.outcome !== 'complete' && control.outcome !== 'failed') {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }
     if (!(result.ok && result.split)) this.#d.kv.delete(splitKey(task.id));
+    const answered = (this.#d.questions?.answeredDuringRun(task.id, runId).length ?? 0) > 0;
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
+      if (answered) {
+        tasks.update(task.id, { appendNote: control.summary }, 'beat', runId);
+        tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.answered') });
+        return;
+      }
       tasks.finish(task.id, 'done', control.summary, 'beat', runId);
       if (itemSummary(this.#d.db, task)?.remaining.length) tasks.setCheckState(task.id, 'awaiting');
       if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, projectId });
@@ -926,6 +944,7 @@ export class Worker {
     if (control.outcome === 'failed') {
       this.#d.kv.delete(idleKey);
       tasks.finish(task.id, 'failed', control.reason, 'beat', runId);
+      this.#followUpAnswers(task.id, runId);
       const failures = tasks.checkFailures(task.id);
       const items = failures.count >= CHECK_FAIL_LIMIT ? undefined : tasks.gateStreak(task.id);
       if (failures.count >= CHECK_FAIL_LIMIT) {
@@ -944,9 +963,9 @@ export class Worker {
     if (control.outcome === 'checkpoint') {
       this.#d.kv.delete(idleKey);
       const decided = decidedDuring(this.#d.db, task.id, runId);
-      if (decided) {
+      if (decided || answered) {
         tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
-        tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.pending_decided', { id: decided.id, status: decided.status }) });
+        tasks.setReady(task.id, { runAt: now, reason: decided ? taskText(language, 'reason.pending_decided', { id: decided.id, status: decided.status }) : taskText(language, 'reason.answered') });
         return;
       }
       const open = result.ok && result.workCalls === 0 ? openPendingIds(this.#d.db, task.id) : [];
@@ -968,6 +987,11 @@ export class Worker {
         notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}`, projectId });
       }
       tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
+      return;
+    }
+    if (result.ok && answered) {
+      if (result.text.trim()) tasks.update(task.id, { appendNote: taskText(language, result.truncated ? 'note.memo_truncated' : 'note.memo', { text: result.text.trim().slice(0, 500) }) }, 'beat', runId);
+      tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.answered') });
       return;
     }
     if (result.ok) {
@@ -993,6 +1017,7 @@ export class Worker {
     const attempts = task.attempts + 1;
     if (attempts >= task.max_attempts) {
       tasks.finish(task.id, 'failed', result.errorMessage, 'worker', runId);
+      this.#followUpAnswers(task.id, runId);
       notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: result.errorMessage, link, dedupKey: `failed:${task.id}`, projectId });
       return;
     }
