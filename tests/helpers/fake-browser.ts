@@ -162,6 +162,8 @@ export class FakeWorkBrowser implements WorkBrowserHandle {
   constructor(driver: FakeBrowserDriver, options: WorkLaunchOptions) { this.driver = driver; this.options = options; }
 
   async newContext(options: WorkContextOptions): Promise<BrowserHandle> {
+    const failure = this.driver.contextFailures.shift();
+    if (failure) throw failure;
     const context = new FakeBrowser(this.driver, { ...this.options, profileDir: '', viewport: options.viewport, locale: options.locale, actionTimeoutMs: options.actionTimeoutMs, proxy: options.proxy, sites: options.sites });
     context.contextOptions = options;
     this.contexts.push(context);
@@ -179,6 +181,8 @@ export class FakeBrowserDriver implements BrowserDriver {
   readonly workBrowsers: FakeWorkBrowser[] = [];
   // 起動を失敗させる回数（先頭から）。BrowserFailure を渡せばその失敗になる。持ち主のブラウザと作業用のブラウザで共有
   failures: Array<Error | undefined> = [];
+  // 作業用の文脈づくり（newContext）を失敗させる回数（先頭から）
+  contextFailures: Array<Error | undefined> = [];
   launchGate: Promise<void> | undefined;
   launches = 0;
   workLaunches = 0;

@@ -4,7 +4,7 @@ import type { AppConfig } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import { selfPortsOf } from '../hooks/self-port.ts';
 import type { ToolContext } from '../types.ts';
-import { pageUrl, RetrievalFailure } from '../web/public-page.ts';
+import { pageUrl, publicHostName, RetrievalFailure } from '../web/public-page.ts';
 
 // ブラウザを使う実行の許し。attended は持ち主が見ている会話（kind chat）。loopback は製品の作業フォルダを持つ実行（考える実行・振り返りでない）
 export interface BrowserGrant {
@@ -53,21 +53,22 @@ export function loopbackOrigin(origin: string | undefined): boolean {
   return url.protocol === 'http:' && url.origin === origin && loopbackHost(url.hostname) !== undefined;
 }
 
-function loopbackPortOf(raw: string | undefined): number | undefined {
+// 公開の名前・公開の IP の直書きでない宛先（0.0.0.0・LAN の IP・localhost.localdomain・ドットの無い名前など、この PC の上かもしれないもの）のポート
+function localPortOf(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   let url: URL;
   try { url = new URL(raw); } catch { return undefined; }
-  if (loopbackHost(url.hostname) === undefined) return undefined;
+  if (publicHostName(url.hostname) && !/^localhost\.localdomain\.?$/iu.test(url.hostname)) return undefined;
   return portOf(url) ?? 80;
 }
 
-// 断るポート: beat のポート（server.port と origins）・既定の 4777・この beat の中継すべて・設定の提供元と MCP の http のうちループバックの宛先。呼ぶたびに作る
+// 断るポート: beat のポート（server.port と origins）・既定の 4777・この beat の中継すべて・設定の提供元と MCP の http のうち公開でない宛先。呼ぶたびに作る
 export function deniedLoopbackPorts(config: AppConfig, proxyPorts: Iterable<number>): Set<number> {
   const denied = new Set<number>(selfPortsOf(config.server).ports);
   denied.add(DEFAULT_BEAT_PORT);
   for (const port of proxyPorts) denied.add(port);
-  for (const provider of config.providers) { const port = loopbackPortOf(provider.baseUrl); if (port !== undefined) denied.add(port); }
-  for (const server of config.mcp.servers) { const port = loopbackPortOf(server.transport === 'http' ? server.url : undefined); if (port !== undefined) denied.add(port); }
+  for (const provider of config.providers) { const port = localPortOf(provider.baseUrl); if (port !== undefined) denied.add(port); }
+  for (const server of config.mcp.servers) { const port = localPortOf(server.transport === 'http' ? server.url : undefined); if (port !== undefined) denied.add(port); }
   return denied;
 }
 

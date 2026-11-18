@@ -168,6 +168,20 @@ test('T7: deniedLoopbackPorts は beat のポート・origins・4777・中継・
   assert.equal(denied.has(5173), false);
 });
 
+test('T7: 提供元と MCP の http の宛先が公開の名前・公開の IP でなければ（0.0.0.0・LAN・localhost.localdomain・ドットの無い名前・.local・IPv6）そのポートも断る。公開の宛先のポートは断らない', () => {
+  const config = testConfig();
+  const provider = (id: string, baseUrl: string) => ({ id, kind: 'openai_compatible' as const, baseUrl, maxParallel: 1, timeoutMs: 600_000 });
+  config.providers = [
+    provider('a', 'http://0.0.0.0:11434/v1'), provider('b', 'http://192.168.1.20:8001/v1'), provider('c', 'http://localhost.localdomain:8002/v1'),
+    provider('d', 'http://llmbox:8003/v1'), provider('e', 'http://gpu.local:8004/v1'), provider('f', 'http://[fe80::1]:8005/v1'),
+    provider('g', 'https://api.example.com:8443/v1'), provider('h', 'http://8.8.8.8:8444/v1'),
+  ];
+  config.mcp.servers = [{ id: 'm1', transport: 'http', enabled: true, tools: {}, env: {}, headers: {}, url: 'http://10.0.0.5:9200/mcp' }];
+  const denied = deniedLoopbackPorts(config, []);
+  for (const port of [11434, 8001, 8002, 8003, 8004, 8005, 9200]) assert.ok(denied.has(port), String(port));
+  for (const port of [8443, 8444]) assert.equal(denied.has(port), false, String(port));
+});
+
 test('T6: browserPageUrl は正規化してから決める（127.1・0x7f000001・2130706433・0177.0.0.1・127.0.0.1. は 127.0.0.1。断るポートが効く）', () => {
   const grant: BrowserGrant = { conversationId: 'c1', runId: 'r1', attended: true, loopback: true };
   const denied = new Set([4777]);
@@ -645,7 +659,8 @@ interface SessionRig {
   connected: Array<[string, number]>;
 }
 
-function sessionRig(t: TestContext, change: (config: AppConfig) => void = () => undefined): SessionRig {
+// 中継の公開の宛先はつながらない（ポート 1）。ループバックの宛先は 127.0.0.1 の同じポートへ本当につなぐ
+function sessionRig(t: TestContext, change: (config: AppConfig) => void = () => undefined, refuseProxy: (options: EgressProxyOptions) => boolean = () => false): SessionRig {
   const config = testConfig();
   config.tools.browser.enabled = true;
   change(config);
@@ -659,7 +674,8 @@ function sessionRig(t: TestContext, change: (config: AppConfig) => void = () => 
     schedule: (fn, ms) => { const timer = { at: clock.now + ms, fn, live: true }; clock.timers.push(timer); return () => { timer.live = false; }; },
     canShowWindow: () => true,
     startProxy: async options => {
-      const proxy = await startEgressProxy({ ...options, resolve: async () => [PUBLIC], connect: (address, port) => { connected.push([address, port]); return connect(1, '127.0.0.1'); } });
+      if (refuseProxy(options)) throw new Error('proxy failed');
+      const proxy = await startEgressProxy({ ...options, resolve: async () => [PUBLIC], connect: (address, port) => { connected.push([address, port]); return connect(address === PUBLIC ? 1 : port, '127.0.0.1'); } });
       proxies.push({ options, proxy });
       return proxy;
     },
@@ -839,17 +855,60 @@ test('T7: 文脈の中継は、自分・持ち主の中継・別の文脈の中�
 test('T18: 文脈を開いたまま server.port・提供元の baseUrl・server.origins を変えると、次の要求から新しいポート・ホストが 403', async t => {
   const hits: Hit[] = [];
   const port = await sink(t, hits);
+  const providerPort = await sink(t, hits);
   const r = sessionRig(t);
   await r.session.run(callOf(grantOfTest('c1', { loopback: true })), async api => { await api.openTab('work'); });
   const context = r.proxies.find(p => p.proxy.port === portOf(r.driver.context!.contextOptions!.proxy.server))!;
-  const ask = () => raw(context.proxy.port, `GET http://127.0.0.1:${port}/ HTTP/1.1\r\nHost: x\r\nSec-Fetch-Site: none\r\n${auth(context.options.password)}\r\n`);
+  const ask = (target: number) => raw(context.proxy.port, `GET http://127.0.0.1:${target}/ HTTP/1.1\r\nHost: x\r\nSec-Fetch-Site: none\r\n${auth(context.options.password)}\r\n`);
+  assert.equal(status(await ask(providerPort)), 200, '変える前は開発サーバーとして届く');
+  hits.length = 0;
+  r.connected.length = 0;
   r.config.server.port = port;
-  assert.equal(status(await ask()), 403, 'server.port');
-  r.config.server.port = 4898;
-  r.config.providers = [...r.config.providers, { id: 'z', kind: 'openai_compatible', baseUrl: `http://localhost:${port}/v1`, maxParallel: 1, timeoutMs: 600_000 }];
-  assert.equal(status(await ask()), 403, 'baseUrl');
+  assert.equal(status(await ask(port)), 403, 'server.port');
+  r.config.providers = [...r.config.providers, { id: 'z', kind: 'openai_compatible', baseUrl: `http://localhost:${providerPort}/v1`, maxParallel: 1, timeoutMs: 600_000 }];
+  assert.equal(status(await ask(providerPort)), 403, 'baseUrl');
   assert.deepEqual(hits, []);
   r.config.server.origins = ['https://new.tail1234.ts.net'];
   assert.equal(status(await raw(context.proxy.port, `CONNECT new.tail1234.ts.net:443 HTTP/1.1\r\nHost: x\r\n${auth(context.options.password)}\r\n`)), 403, 'origins');
   assert.deepEqual(r.connected, []);
+});
+
+test('T1（動いているポート）: server.port を保存しただけで反映していないあいだも、起動したときの beat のポートは 403（受け口に届かない）', async t => {
+  const hits: Hit[] = [];
+  const running = await sink(t, hits);
+  const r = sessionRig(t, c => { c.server.port = running; });
+  r.config.server.port = 4898;
+  await r.session.run(callOf(grantOfTest('c1', { loopback: true })), async api => { await api.openTab('work'); });
+  const context = r.proxies.find(p => p.proxy.port === portOf(r.driver.context!.contextOptions!.proxy.server))!;
+  assert.equal(status(await raw(context.proxy.port, `GET http://127.0.0.1:${running}/api/conversations HTTP/1.1\r\nHost: x\r\nSec-Fetch-Site: none\r\n${auth(context.options.password)}\r\n`)), 403);
+  assert.equal(r.session.loopbackDenied().has(running), true);
+  assert.equal(r.session.loopbackDenied().has(4898), true, '保存した新しいポートも断る');
+  assert.deepEqual(hits, []);
+  assert.deepEqual(r.connected, []);
+});
+
+test('片づけ: 文脈の中継・文脈づくりが失敗し、文脈が 1 つも無ければ、作業用のブラウザと土台の中継を閉じる（次の呼び出しで起動し直す）', async t => {
+  let refuse = true;
+  const r = sessionRig(t, () => undefined, options => refuse && options.loopback !== undefined);
+  await assert.rejects(r.session.run(callOf(grantOfTest('c1', { loopback: true })), async api => { await api.openTab('work'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'launch_failed');
+  assert.equal(r.driver.workLaunches, 1);
+  assert.equal(r.driver.work!.closed, true, '中継の失敗: 作業用のブラウザを閉じた');
+  assert.equal(r.proxies.length, 1);
+  assert.equal(await raw(r.proxies[0]!.proxy.port, get('example.com')), '', '中継の失敗: 土台の中継も閉じた');
+  assert.equal(r.session.status().running, false);
+
+  refuse = false;
+  r.driver.contextFailures.push(new Error('newContext failed'));
+  await assert.rejects(r.session.run(callOf(grantOfTest('c1', { loopback: true })), async api => { await api.openTab('work'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'launch_failed');
+  assert.equal(r.driver.workLaunches, 2);
+  assert.equal(r.driver.work!.closed, true, '文脈づくりの失敗: 作業用のブラウザを閉じた');
+  for (const { proxy } of r.proxies.slice(1)) assert.equal(await raw(proxy.port, get('example.com')), '', '文脈づくりの失敗: 土台と文脈の中継を閉じた');
+  assert.equal(r.session.status().running, false);
+
+  // 別の文脈が動いているときは、作業用のブラウザを閉じない
+  await r.session.run(callOf(grantOfTest('c1', { loopback: true })), async api => { await api.openTab('work'); });
+  r.driver.contextFailures.push(new Error('newContext failed'));
+  await assert.rejects(r.session.run(callOf(grantOfTest('c2', { loopback: true })), async api => { await api.openTab('work'); }));
+  assert.equal(r.driver.work!.closed, false);
+  assert.equal(r.driver.context!.closed, false);
 });

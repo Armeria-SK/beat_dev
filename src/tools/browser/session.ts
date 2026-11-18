@@ -136,11 +136,18 @@ export class BrowserSession {
   #ownerIdle: Idle = { token: 0, cancel: undefined };
   // close() のたびに増える。起動の途中で閉じられたら、できたものを捨てる
   #epoch = 0;
+  // 作ってから見た beat のポートすべて（起動の時の設定を含む）。設定を変えて反映する前も、動いている古いポートを断り続ける
+  #selfPorts = new Set<number>();
 
   constructor(deps: BrowserSessionDeps) {
     this.#d = deps;
     this.#now = deps.now ?? Date.now;
     this.#schedule = deps.schedule ?? defaultSchedule;
+    this.#noteSelfPorts();
+  }
+
+  #noteSelfPorts(): void {
+    for (const port of selfPortsOf(this.#d.config().server).ports) this.#selfPorts.add(port);
   }
 
   secrets(): readonly string[] { return this.#d.secrets?.() ?? []; }
@@ -158,9 +165,10 @@ export class BrowserSession {
     return tab?.conversationId === conversationId ? tab.kind : undefined;
   }
 
-  // ループバックの断るポート（D-3）。設定と、いま動いている中継すべてのポートから、呼ぶたびに作る
+  // ループバックの断るポート（D-3）。設定・これまで見た beat のポート・いま動いている中継すべてのポートから、呼ぶたびに作る
   loopbackDenied(): ReadonlySet<number> {
-    const ports: number[] = [];
+    this.#noteSelfPorts();
+    const ports: number[] = [...this.#selfPorts];
     for (const proxied of [this.#owner, this.#login, this.#work, ...this.#contexts.values()]) if (proxied) ports.push(proxied.proxy.port);
     return deniedLoopbackPorts(this.#d.config(), ports);
   }
@@ -380,9 +388,10 @@ export class BrowserSession {
     if (existing) return existing;
     const browser = await this.#ensureWork();
     const config = this.#d.config().tools.browser;
-    const made = await this.#proxy(grant.loopback);
+    let made: { proxy: EgressProxy; username: string; password: string } | undefined;
     let handle: BrowserHandle;
     try {
+      made = await this.#proxy(grant.loopback);
       handle = await browser.newContext({
         proxy: { server: `http://${made.proxy.host}:${made.proxy.port}`, username: made.username, password: made.password },
         viewport: VIEWPORT,
@@ -392,7 +401,9 @@ export class BrowserSession {
         loopback: grant.loopback ? url => allowedLoopbackUrl(url, this.loopbackDenied()) : undefined,
       });
     } catch (error) {
-      await made.proxy.close().catch(() => undefined);
+      await made?.proxy.close().catch(() => undefined);
+      // 文脈が 1 つも無いなら、いま起動した作業用のブラウザと土台の中継を残さない
+      if (this.#contexts.size === 0) await this.#shutdownWork();
       throw error instanceof BrowserFailure ? error : new BrowserFailure('launch_failed', 'browser.launch_failed');
     }
     // 作っているあいだに作業用のブラウザが閉じられたら、できた文脈を捨てる
