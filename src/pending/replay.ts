@@ -7,6 +7,7 @@ import type { AppConfig } from '../config/schema.ts';
 import type { AppPaths } from '../paths.ts';
 import { folderMissing, type ProjectStore } from '../projects/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
+import { previewJson } from '../shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
 import { runCommandHook } from '../tools/hooks/command-hook.ts';
@@ -214,7 +215,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     if (!kept && output.fullRef && resolve(output.fullRef).startsWith(resolve(join(deps.paths.data, 'tool_outputs')) + sep)) {
       try { rmSync(output.fullRef, { force: true }); } catch { }
     }
-    const shownInput = kept ? JSON.stringify(redactJsonValue(args)).slice(0, 4000) : '';
+    const shownInput = kept ? previewJson(redactJsonValue(args), 4000) : '';
     const preview = kept ? redactSecrets(output.content).slice(0, 2000) : null;
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
       VALUES (?, ?, ?, ?, ?, 'allow', 'owner-pending', ?, ?, ?, ?, ?, ?)`).run(

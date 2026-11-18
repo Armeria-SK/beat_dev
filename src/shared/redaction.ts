@@ -300,15 +300,33 @@ function redactAssignments(input: string): string {
 
 const JSON_DEPTH_LIMIT = 100;
 
-export function redactJsonValue(value: unknown, depth = 0): unknown {
+function redactJson(value: unknown, keys: boolean, depth: number): unknown {
   if (typeof value === 'string') return value.length < 6 && !/[=:@]/u.test(value) ? value : redactSecrets(value);
   if (value === null || typeof value !== 'object') return value;
   if (depth >= JSON_DEPTH_LIMIT) return '[REDACTED]';
   if (Array.isArray(value)) {
     if (value.length === 2 && typeof value[0] === 'string' && typeof value[1] === 'string' && isSensitiveKey(value[0])) return [value[0], '[REDACTED]'];
-    return value.map(item => redactJsonValue(item, depth + 1));
+    return value.map(item => redactJson(item, keys, depth + 1));
   }
   const named = Object.entries(value).some(([key, item]) => (key === 'name' || key === 'key') && typeof item === 'string' && isSensitiveKey(item));
+  const renamed = new Map(Object.keys(value).map(key => [key, keys ? redactSecrets(key) : key]));
+  const taken = new Set([...renamed].filter(([key, masked]) => masked === key).map(([key]) => key));
+  const keyOf = (key: string): string => {
+    const masked = renamed.get(key)!;
+    if (masked === key) return key;
+    let name = masked;
+    for (let n = 2; taken.has(name); n++) name = `${masked} (${n})`;
+    taken.add(name);
+    return name;
+  };
   return Object.fromEntries(Object.entries(value).map(([key, item]) =>
-    [key, isSensitiveKey(key) || (named && key === 'value') ? '[REDACTED]' : redactJsonValue(item, depth + 1)]));
+    [keyOf(key), isSensitiveKey(key) || (named && key === 'value') ? '[REDACTED]' : redactJson(item, keys, depth + 1)]));
+}
+
+export function redactJsonValue(value: unknown, depth = 0): unknown {
+  return redactJson(value, true, depth);
+}
+
+export function redactJsonValues(value: unknown): unknown {
+  return redactJson(value, false, 0);
 }

@@ -12,9 +12,10 @@ import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
 import { checkWorkFolder, gitFolder, type WorkFolderContext } from '../projects/work-folder.ts';
 import { FolderDialogError } from '../projects/folder-dialog.ts';
-import { taskView, type ProjectFilter } from '../tasks/store.ts';
+import type { ProjectFilter } from '../tasks/store.ts';
 import type { PendingCounts } from '../pending/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
+import { maskedTaskView } from './task-view.ts';
 
 const MAX_PATH_CHARS = 4096;
 const ACCEPTANCE_STATUS: Partial<Record<string, number>> = { stale: 409, not_pending: 409, no_change: 404 };
@@ -315,7 +316,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
       throw error;
     }
     app.bus.publish({ type: 'acceptance.changed', projectId: project.id, version: built.version.version, draft: false });
-    sendJson(res, 201, { task: taskView(built.task, languageOf(app.config())), version: built.version.version });
+    sendJson(res, 201, { task: maskedTaskView(app, built.task), version: built.version.version });
   });
 
   router.add('POST', '/api/folders/check', async ({ req, res }) => {

@@ -4,7 +4,7 @@ import { transaction } from '../db/database.ts';
 import { AVATAR_SHAPES } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
-import { isScoutRun, SCHEDULE_MAX_RANGE_MS, TaskError, taskView, type Task } from '../tasks/store.ts';
+import { isScoutRun, SCHEDULE_MAX_RANGE_MS, TaskError, type Task } from '../tasks/store.ts';
 import { splitKey } from '../tasks/worker.ts';
 import { judgeOff } from '../tools/pipeline.ts';
 import { languageOf } from '../shared/language.ts';
@@ -12,6 +12,7 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 import { projectFilterOf, usableProjectId } from './routes-projects.ts';
 import { answerQuestion } from './routes-questions.ts';
+import { maskedEvents, maskedLastRun, maskedTaskView } from './task-view.ts';
 import { AcceptanceError } from '../projects/acceptance.ts';
 import { GateError, itemSummary, ownerDecide } from '../projects/gate.ts';
 
@@ -55,7 +56,7 @@ function cronOf(body: Record<string, unknown>): string | undefined {
 }
 
 export function registerTaskRoutes(router: Router, app: App): void {
-  const view = (task: Task) => taskView(task, languageOf(app.config()));
+  const view = (task: Task) => maskedTaskView(app, task);
   const withItems = (task: Task) => { const items = itemSummary(app.db, task); return items ? { ...view(task), items } : view(task); };
   const getTask = (id: string): Task => {
     const task = app.tasks.get(id);
@@ -75,7 +76,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
       finished: app.tasks.recentlyFinished(50, project).map(withItems),
       awaiting: app.tasks.awaiting(project).map(withItems),
       finishedTotal: app.tasks.finishedTotal(project),
-      repeating: app.tasks.templates(project).map(task => ({ ...view(task), last_run: task.last_run })),
+      repeating: app.tasks.templates(project).map(task => ({ ...view(task), last_run: maskedLastRun(app, task.last_run) })),
     });
   });
 
@@ -123,7 +124,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const children = task.status === 'scheduled'
       ? app.db.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at DESC LIMIT 20').all(task.id) as unknown as Task[]
       : [];
-    sendJson(res, 200, { task: withItems(task), events: app.tasks.events(task.id), runs: children.map(view) });
+    sendJson(res, 200, { task: withItems(task), events: maskedEvents(app, app.tasks.events(task.id)), runs: children.map(view) });
   });
 
   router.add('PATCH', '/api/tasks/:id', async ({ req, res, params }) => {

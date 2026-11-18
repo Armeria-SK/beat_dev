@@ -9,6 +9,7 @@ import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
+import { previewJson } from '../shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { eraseConversation } from '../db/erase.ts';
 import { readChecklist } from '../tools/builtin/checklist-core.ts';
@@ -260,7 +261,7 @@ export function createWebServer(app: App): WebServer {
         ...(m.message.role === 'user' && m.message.attachments?.length ? { attachments: m.message.attachments } : {}),
         ...(m.message.role === 'user' && m.message.note ? { note: m.message.note } : {}),
         ...(m.message.role === 'assistant' && m.message.toolCalls?.length
-          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(redactJsonValue(c.arguments ?? c.raw ?? null)).slice(0, 2000) })) } : {}),
+          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: previewJson(redactJsonValue(c.arguments ?? c.raw ?? null), 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError), ...(m.message.gate ? { gate: m.message.gate } : {}) } : {}),
       })),
       pending: app.engine.pending(id),

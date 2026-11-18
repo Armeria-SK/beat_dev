@@ -14,8 +14,10 @@ const SOURCE = {
   quote: Type.Optional(Type.String()), question: Type.Optional(Type.String()), answer: Type.Optional(Type.String()),
 };
 
+const COMMAND = Type.Optional(Type.String({ description: "Runs in beat's shell (PowerShell on Windows, bash on Linux) from the product folder. Never cmd.exe syntax (type x | findstr); on Windows prefer Test-Path / Select-String." }));
+
 const INPUT = Type.Object({
-  items: Type.Array(Type.Object({ result: Type.String({ minLength: 1 }), ...SOURCE, check: Type.String({ pattern: '^(command|look|read)$' }), command: Type.Optional(Type.String()) }, { additionalProperties: false })),
+  items: Type.Array(Type.Object({ result: Type.String({ minLength: 1 }), ...SOURCE, check: Type.String({ pattern: '^(command|look|read)$' }), command: COMMAND }, { additionalProperties: false })),
   notDoing: Type.Optional(Type.Array(Type.Object({ text: Type.String({ minLength: 1 }), ...SOURCE }, { additionalProperties: false }))),
 }, { additionalProperties: false });
 
@@ -41,7 +43,7 @@ function checkOf(entry: { check: string; command?: string | undefined }): Accept
 
 const CHANGE_INPUT = Type.Object({
   changes: Type.Array(Type.Object({
-    op: Type.String(), id: Type.Optional(Type.String()), result: Type.Optional(Type.String()), quote: Type.Optional(Type.String()), check: Type.Optional(Type.String()), command: Type.Optional(Type.String()),
+    op: Type.String(), id: Type.Optional(Type.String()), result: Type.Optional(Type.String()), quote: Type.Optional(Type.String()), check: Type.Optional(Type.String()), command: COMMAND,
   })),
   language: Type.Optional(Type.String()),
 });
