@@ -547,4 +547,11 @@ export const ja = {
   'ui.ob.model.problem.context': '1024 以上の整数で入れてください',
   'ui.tool.judgeSame': 'Allowed（この実行の前の呼び出しと同じ）',
   'runs.by.judgeReuse': 'Auto-approve（この実行の前の答え）',
+  'ui.files.emptyFolder': '空のフォルダ',
+  'ui.files.more': 'ここから先の項目は出していません',
+  'ui.files.pickHint': '左でファイルを選ぶと、ここで読めます。',
+  'ui.files.loadFailed': 'ファイルの一覧を読み込めませんでした',
+  'ui.files.openFailed': 'このファイルを開けませんでした',
+  'ui.files.hiddenNote': '秘密の情報らしいファイルなので、中身はここに出しません。',
+  'ui.files.binaryNote': '文字のファイルではないので、中身はここに出しません。',
 } satisfies { [K in ExplainKey]?: Dict[K] };

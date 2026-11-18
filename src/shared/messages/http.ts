@@ -98,6 +98,11 @@ const en = {
   'folder_dialog_not_local': 'The folder window opens on the PC running beat, so it can be used only from that PC. Paste the full path instead',
   'folder_dialog_failed': 'The folder window could not be opened (check the log). Paste the full path instead',
   'internal': 'An internal error occurred (check the log)',
+  'files_bad_path': 'Use a path inside the folder, written with / and without . or .. parts',
+  'files_refused': 'This path is not shown (a link, a name that differs from the one on disk, an ignored or protected place, or a file with more than one name)',
+  'files_missing': 'The file or folder was not found',
+  'files_not_dir': 'This is not a folder',
+  'files_not_file': 'This is not a file',
 };
 
 export const httpText = defineMessages('http', en);

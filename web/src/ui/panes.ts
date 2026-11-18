@@ -1,6 +1,6 @@
 import type { PlainKey } from '../i18n/index.ts';
 
-export type PaneView = 'plan' | 'questions' | 'kanban' | 'pending' | 'terminal';
+export type PaneView = 'plan' | 'questions' | 'kanban' | 'pending' | 'files' | 'terminal';
 
 export interface PaneContext { productId: string | null }
 
@@ -11,6 +11,7 @@ export const PANES: readonly PaneDef[] = [
   { view: 'questions', label: 'ui.pane.questions', counted: true, opens: c => c.productId !== null },
   { view: 'kanban', label: 'ui.pane.kanban', counted: true, opens: c => c.productId !== null },
   { view: 'pending', label: 'ui.pane.pending', counted: true, opens: c => c.productId !== null },
+  { view: 'files', label: 'ui.pane.files', counted: false, opens: c => c.productId !== null },
   { view: 'terminal', label: 'ui.pane.terminal', counted: false, opens: c => c.productId !== null },
 ];
 

@@ -546,6 +546,13 @@ export const EXPLAIN_KEYS = [
   'ui.ob.model.problem.context',
   'ui.tool.judgeSame',
   'runs.by.judgeReuse',
+  'ui.files.emptyFolder',
+  'ui.files.more',
+  'ui.files.pickHint',
+  'ui.files.loadFailed',
+  'ui.files.openFailed',
+  'ui.files.hiddenNote',
+  'ui.files.binaryNote',
 ] as const satisfies readonly DictKey[];
 
 export type ExplainKey = typeof EXPLAIN_KEYS[number];
