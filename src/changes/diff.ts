@@ -1,18 +1,19 @@
-import { lstatSync, readFileSync, type Stats } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, lstatSync, openSync, readSync, realpathSync, type Stats } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { withGit } from '../mesh/folders.ts';
 import { parseNameStatus } from '../projects/diff-flags.ts';
 import { lineDiff } from '../shared/line-delta.ts';
 import { isInside, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
-import { readKept, type FileChangeRow } from './record.ts';
+import { KEEP_MAX_BYTES, readKept, type FileChangeRow } from './record.ts';
 
 export type BaseKind = 'build' | 'commit' | 'records' | 'branch';
 export interface ChangeBase { kind: BaseKind; ref: string | null; at: number | null }
 
-// before / after: 中身、null = 無い、'unknown' = 取れない（控えが無い・リンクの先・大きすぎる）
-export type Content = Buffer | null | 'unknown';
-export interface ChangeEntry { path: string; before: Content; after: Content; hidden: boolean }
+// before / after: 中身、null = 無い、'unknown' = 取れない（控えが無い・リンクの先・別名）、'large' = 控えられる大きさ（5MB）を超えるので読まない
+export type Content = Buffer | null | 'unknown' | 'large';
+// mode: git の木の実行の印（100755 → 0o755）。無ければ書き戻すときに今のファイルの印のまま
+export interface ChangeEntry { path: string; before: Content; after: Content; hidden: boolean; mode?: number | undefined }
 
 export interface ChangedFile {
   path: string;
@@ -25,12 +26,13 @@ export interface ChangedFile {
 }
 
 export const MAX_FILES = 200;
-const READ_MAX_BYTES = 64 * 1024 * 1024;
 const HUNK_MAX_BYTES = 1024 * 1024;
 const HUNK_MAX_LINES = 2000;
 const CONTEXT = 3;
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 const WINDOWS = process.platform === 'win32';
+const SHORT_NAME = /~\d/u;
+export const foldPath = (path: string): string => (WINDOWS ? path.toLowerCase() : path);
 
 const lstatOf = (path: string): Stats | undefined | null => {
   try { return lstatSync(path, { throwIfNoEntry: false }); } catch { return null; }
@@ -38,14 +40,31 @@ const lstatOf = (path: string): Stats | undefined | null => {
 
 export function safeRel(rel: string): boolean {
   if (!rel || rel.length > 4096 || /[\0\\�]/u.test(rel) || rel.startsWith('/') || /^[A-Za-z]:/u.test(rel) || windowsHazard(rel)) return false;
-  return rel.split('/').every(part => part !== '' && part !== '.' && part !== '..' && part.toLowerCase() !== '.git' && !(WINDOWS && /[. ]$/u.test(part)));
+  return rel.split('/').every(part => part !== '' && part !== '.' && part !== '..' && part.toLowerCase() !== '.git' && !(WINDOWS && (/[. ]$/u.test(part) || SHORT_NAME.test(part))));
 }
 
 export function hiddenPath(realRoot: string, rel: string, deny: readonly string[]): boolean {
   return !safeRel(rel) || isSecretPath(rel) || deny.some(dir => isInside(dir, join(realRoot, ...rel.split('/'))));
 }
 
-// 製品のフォルダの中のファイルを、途中のリンク・ジャンクションをたどらずに読む
+// その場所の名前が、ディスクの上の名前そのものか（Windows の短い名前 GIT~1 などの別名・大文字小文字の違いは別名として断る）
+export function ownName(path: string, part: string): boolean {
+  try { return foldPath(basename(realpathSync.native(path))) === foldPath(part); } catch { return false; }
+}
+
+function readUpTo(path: string, size: number): Buffer | 'unknown' | 'large' {
+  if (size > KEEP_MAX_BYTES) return 'large';
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const buffer = Buffer.alloc(KEEP_MAX_BYTES + 1);
+    let total = 0;
+    for (let n = 1; n > 0 && total < buffer.length; total += n) n = readSync(fd, buffer, total, buffer.length - total, null);
+    return total > KEEP_MAX_BYTES ? 'large' : buffer.subarray(0, total);
+  } catch { return 'unknown'; } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+// 製品のフォルダの中のファイルを、途中のリンク・ジャンクション・別名をたどらずに読む。5MB を超えるものは読まない
 export function readCurrent(realRoot: string, rel: string): Content {
   if (!safeRel(rel)) return 'unknown';
   let path = realRoot;
@@ -54,14 +73,14 @@ export function readCurrent(realRoot: string, rel: string): Content {
     path = join(path, part);
     const st = lstatOf(path);
     if (st === undefined) return null;
-    if (st === null || st.isSymbolicLink()) return 'unknown';
+    if (st === null || st.isSymbolicLink() || !ownName(path, part)) return 'unknown';
     if (i < parts.length - 1 && !st.isDirectory()) return null;
     if (i === parts.length - 1) {
       if (!st.isFile()) return st.isDirectory() ? null : 'unknown';
-      if (st.size > READ_MAX_BYTES) return 'unknown';
+      return readUpTo(path, st.size);
     }
   }
-  try { return readFileSync(path); } catch { return 'unknown'; }
+  return 'unknown';
 }
 
 const same = (a: Content, b: Content): boolean => (a === null && b === null) || (Buffer.isBuffer(a) && Buffer.isBuffer(b) && a.equals(b));
@@ -107,7 +126,7 @@ export function present(entries: readonly ChangeEntry[], options: { undo: boolea
   return entries.map(entry => {
     const status = entry.before === null ? 'added' as const : entry.after === null ? 'deleted' as const : 'modified' as const;
     if (entry.hidden) return { path: entry.path, status, added: 0, removed: 0, hunks: null, hidden: true, undo: false };
-    const undo = options.undo && entry.before !== 'unknown' && entry.after !== 'unknown';
+    const undo = options.undo && (entry.before === null || Buffer.isBuffer(entry.before)) && (entry.after === null || Buffer.isBuffer(entry.after));
     const left = entry.before === null ? '' : Buffer.isBuffer(entry.before) ? text(entry.before) : null;
     const right = entry.after === null ? '' : Buffer.isBuffer(entry.after) ? text(entry.after) : null;
     if (left === null || right === null) return { path: entry.path, status, added: 0, removed: 0, hunks: null, hidden: false, undo };
@@ -117,20 +136,30 @@ export function present(entries: readonly ChangeEntry[], options: { undo: boolea
 
 type Git = (args: string[]) => Promise<Buffer | null>;
 
-async function treeOf(git: Git, oid: string): Promise<Map<string, { mode: string; oid: string }> | null> {
-  const out = await git(['ls-tree', '-r', '-z', '--full-tree', oid]);
+interface TreeItem { mode: string; oid: string; size: number }
+
+async function treeOf(git: Git, oid: string): Promise<Map<string, TreeItem> | null> {
+  const out = await git(['ls-tree', '-r', '-z', '-l', '--full-tree', oid]);
   if (!out) return null;
-  const map = new Map<string, { mode: string; oid: string }>();
+  const map = new Map<string, TreeItem>();
   for (const line of out.toString('utf8').split('\0')) {
     const tab = line.indexOf('\t');
     if (tab < 0) continue;
-    const [mode, type, blob] = line.slice(0, tab).split(' ');
-    if (type === 'blob' && mode && blob && OID.test(blob)) map.set(line.slice(tab + 1), { mode, oid: blob });
+    const [mode, type, blob, size] = line.slice(0, tab).split(/ +/u);
+    if (type === 'blob' && mode && blob && OID.test(blob)) map.set(line.slice(tab + 1), { mode, oid: blob, size: /^\d+$/u.test(size ?? '') ? Number(size) : Infinity });
   }
   return map;
 }
 
 const regularBlob = (mode: string): boolean => mode === '100644' || mode === '100755';
+const modeOf = (item: TreeItem | undefined): number | undefined => (item?.mode === '100755' ? 0o755 : item?.mode === '100644' ? 0o644 : undefined);
+
+// 大きさを先に見て、控えられる大きさを超える中身は取り出さない
+async function blobOf(git: Git, item: TreeItem): Promise<Content> {
+  if (!regularBlob(item.mode)) return 'unknown';
+  if (item.size > KEEP_MAX_BYTES) return 'large';
+  return (await git(['cat-file', 'blob', item.oid])) ?? 'unknown';
+}
 
 const CRLF = Buffer.from('\r\n');
 
@@ -172,13 +201,13 @@ export async function gitEntries(realRoot: string, dataDir: string, base: { kind
       const after = readCurrent(realRoot, path);
       let before: Content = null;
       if (blob) {
-        const raw = regularBlob(blob.mode) ? await git(['cat-file', 'blob', blob.oid]) : null;
-        const filtered = raw ? (await git(['cat-file', '--filters', `--path=${path}`, blob.oid])) ?? raw : null;
-        before = raw && filtered ? lineEndingsLike(after, filtered, raw) : 'unknown';
-        if (raw && filtered && (same(raw, after) || same(filtered, after))) continue;
+        const raw = await blobOf(git, blob);
+        const filtered = Buffer.isBuffer(raw) ? (await git(['cat-file', '--filters', `--path=${path}`, blob.oid])) ?? raw : null;
+        before = Buffer.isBuffer(raw) && filtered ? lineEndingsLike(after, filtered, raw) : raw;
+        if (Buffer.isBuffer(raw) && filtered && (same(raw, after) || same(filtered, after))) continue;
       }
       if (same(before, after)) continue;
-      entries.push({ path, before, after, hidden: false });
+      entries.push({ path, before, after, hidden: false, mode: modeOf(blob) });
     }
     return { ok: true, base: { kind: base.kind, ref: oid, at: Number.isFinite(time) && time > 0 ? time * 1000 : null }, entries, more: Math.max(0, sorted.length - MAX_FILES) };
   });
@@ -193,11 +222,11 @@ export function recordEntries(db: DatabaseSync, dir: string, projectId: string, 
   if (scope.conversation) { where.push('conversation_id = ?'); args.push(scope.conversation); }
   const rows = db.prepare(`SELECT * FROM file_changes WHERE ${where.join(' AND ')} ORDER BY id`).all(...args) as unknown as FileChangeRow[];
   const first = new Map<string, FileChangeRow>();
-  for (const row of rows) if (!first.has(row.path)) first.set(row.path, row);
-  const sorted = [...first.keys()].filter(path => !only || only.has(path)).sort();
+  for (const row of rows) if (!first.has(foldPath(row.path))) first.set(foldPath(row.path), row);
+  const sorted = [...first.values()].map(row => row.path).filter(path => !only || only.has(path)).sort();
   const entries: ChangeEntry[] = [];
   for (const path of sorted.slice(0, MAX_FILES)) {
-    const row = first.get(path)!;
+    const row = first.get(foldPath(path))!;
     if (hiddenPath(realRoot, path, deny)) {
       const there = lstatOf(join(realRoot, ...path.split('/'))) !== undefined;
       entries.push({ path, before: row.action === 'create' ? null : 'unknown', after: there ? 'unknown' : null, hidden: true });
@@ -223,7 +252,7 @@ export async function branchEntries(realRoot: string, dataDir: string, branch: s
     if (!left || !right) return { ok: false, reason: 'failed' };
     const sorted = [...new Set([...left.keys(), ...right.keys()])].filter(path => left.get(path)?.oid !== right.get(path)?.oid).sort();
     const entries: ChangeEntry[] = [];
-    const blob = async (item: { mode: string; oid: string } | undefined): Promise<Content> => (!item ? null : regularBlob(item.mode) ? (await git(['cat-file', 'blob', item.oid])) ?? 'unknown' : 'unknown');
+    const blob = async (item: TreeItem | undefined): Promise<Content> => (!item ? null : blobOf(git, item));
     for (const path of sorted.slice(0, MAX_FILES)) {
       if (hiddenPath(realRoot, path, deny)) { entries.push({ path, before: left.has(path) ? 'unknown' : null, after: right.has(path) ? 'unknown' : null, hidden: true }); continue; }
       entries.push({ path, before: await blob(left.get(path)), after: await blob(right.get(path)), hidden: false });

@@ -1,12 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { isInside, isSecretPath } from '../tools/hooks/scope.ts';
-import { readCurrent, safeRel, type ChangeEntry } from './diff.ts';
+import { foldPath, ownName, readCurrent, safeRel, type ChangeEntry } from './diff.ts';
 import { insertChange, keepContent, KEEP_MAX_BYTES, readKept, sha256, type FileChangeRow } from './record.ts';
 
-export type Refusal = 'not_changed' | 'hidden' | 'unsafe_path' | 'link' | 'not_kept' | 'cannot_keep' | 'changed' | 'failed';
+export type Refusal = 'not_changed' | 'hidden' | 'unsafe_path' | 'link' | 'not_kept' | 'too_large' | 'cannot_keep' | 'same_file' | 'changed' | 'failed';
 export type WriteResult = { ok: true } | { ok: false; reason: Refusal };
 
 const WINDOWS = process.platform === 'win32';
@@ -36,9 +36,12 @@ function renameOver(tmp: string, target: string): void {
   }
 }
 
-// 書き戻しの 1 つの関数。製品のフォルダからの相対パスだけを受け、途中を 1 段ずつ lstat で確かめ（リンク・ジャンクションは断る）、
-// 一時ファイル → 名前の付け替えで書き、書いたあとにもう一度実体を確かめる。content が null なら、ファイル 1 つを消す（フォルダは空のときだけ）
-export function writeBack(realRoot: string, rel: string, content: Buffer | null, deny: readonly string[]): WriteResult {
+// 書き戻しの 1 つの関数。製品のフォルダからの相対パスだけを受け、途中と最後を 1 段ずつ lstat と実体の名前で確かめ
+// （リンク・ジャンクション・短い名前などの別名は断る）、一時ファイル → 名前の付け替えで書く。content が null なら、ファイル 1 つを消す（フォルダは空のときだけ）。
+// mode: 書くファイルの印。無ければ今のファイルの印のまま（POSIX の実行の印を落とさない）。
+// 残る危うさ（受け入れたもの）: 確かめてから書くまでのあいだに、同じ持ち主の権限で動くほかのプロセスがフォルダをジャンクションに差し替えると、
+// 書き込みはその先へ行きうる。書いたあとの確かめはそれを見つけて failed を返すだけで、書いたものは戻せない。消す形には書いたあとの確かめが無い。
+export function writeBack(realRoot: string, rel: string, content: Buffer | null, deny: readonly string[], mode?: number): WriteResult {
   if (!safeRel(rel)) return { ok: false, reason: 'unsafe_path' };
   if (isSecretPath(rel)) return { ok: false, reason: 'hidden' };
   const parts = rel.split('/');
@@ -56,7 +59,7 @@ export function writeBack(realRoot: string, rel: string, content: Buffer | null,
     dir = next;
   }
   const st = lstatOf(target);
-  if (st === null || (st && (st.isSymbolicLink() || !st.isFile()))) return { ok: false, reason: 'link' };
+  if (st === null || (st && (st.isSymbolicLink() || !st.isFile() || !ownName(target, parts.at(-1)!)))) return { ok: false, reason: 'link' };
   try {
     if (content === null) {
       if (!st) return { ok: true };
@@ -68,7 +71,9 @@ export function writeBack(realRoot: string, rel: string, content: Buffer | null,
       return { ok: true };
     }
     const tmp = join(dir, `.beat-undo-${randomBytes(6).toString('hex')}.tmp`);
+    const keepMode = mode ?? (st ? st.mode & 0o777 : undefined);
     writeFileSync(tmp, content, { flag: 'wx' });
+    if (keepMode !== undefined) try { chmodSync(tmp, keepMode); } catch { }
     try { renameOver(tmp, target); } catch (error) {
       try { unlinkSync(tmp); } catch { }
       throw error;
@@ -82,6 +87,8 @@ export function writeBack(realRoot: string, rel: string, content: Buffer | null,
 export interface UndoDeps { db: DatabaseSync; dir: string; projectId: string; realRoot: string; deny: readonly string[]; now: number }
 export interface UndoResult { undone: string[]; refused: Array<{ path: string; reason: Refusal }>; redo: string | null }
 
+const sizeOf = (content: Buffer | null): number => content?.length ?? 0;
+
 const hashOrNull = (content: Buffer | null): string | null => (content === null ? null : sha256(content));
 
 // Undo: 元の中身（entry.before）を書き戻す。書く前に今の中身を Redo の控えに取り、取れないファイルは断る
@@ -92,22 +99,27 @@ export function undoEntries(deps: UndoDeps, entries: readonly ChangeEntry[], pat
     : [...new Set(paths)].map(path => ({ path, entry: byPath.get(path) }));
   const batch = randomUUID();
   const out: UndoResult = { undone: [], refused: [], redo: null };
+  const handled = new Set<string>();
   for (const { path, entry } of chosen) {
     if (!entry) { out.refused.push({ path, reason: 'not_changed' }); continue; }
     if (entry.hidden) { out.refused.push({ path: entry.path, reason: 'hidden' }); continue; }
+    if (handled.has(foldPath(entry.path))) { out.refused.push({ path: entry.path, reason: 'same_file' }); continue; }
+    handled.add(foldPath(entry.path));
     if (entry.before === 'unknown') { out.refused.push({ path: entry.path, reason: 'not_kept' }); continue; }
+    if (entry.before === 'large') { out.refused.push({ path: entry.path, reason: 'too_large' }); continue; }
     const current = readCurrent(deps.realRoot, entry.path);
     if (current === 'unknown') { out.refused.push({ path: entry.path, reason: 'link' }); continue; }
+    if (current === 'large') { out.refused.push({ path: entry.path, reason: 'cannot_keep' }); continue; }
     let kept: string | null = null;
     if (current !== null) {
       if (current.length > KEEP_MAX_BYTES) { out.refused.push({ path: entry.path, reason: 'cannot_keep' }); continue; }
       try { kept = keepContent(deps.dir, deps.projectId, current); } catch { out.refused.push({ path: entry.path, reason: 'cannot_keep' }); continue; }
     }
-    const wrote = writeBack(deps.realRoot, entry.path, entry.before, deps.deny);
+    const wrote = writeBack(deps.realRoot, entry.path, entry.before, deps.deny, entry.mode);
     if (!wrote.ok) { out.refused.push({ path: entry.path, reason: wrote.reason }); continue; }
     insertChange(deps.db, {
       project_id: deps.projectId, place: null, run_id: null, conversation_id: null, task_id: null, batch, path: entry.path, action: 'undo',
-      before_hash: kept, after_hash: hashOrNull(entry.before), size: current?.length ?? 0, kept: 1, created_at: deps.now,
+      before_hash: kept, after_hash: hashOrNull(entry.before), size: sizeOf(current), kept: 1, created_at: deps.now,
     });
     out.undone.push(entry.path);
   }
@@ -127,7 +139,7 @@ export function redoBatch(deps: UndoDeps, batch: string): RedoResult {
   for (const row of undos) {
     const current = readCurrent(deps.realRoot, row.path);
     if (current === 'unknown') { out.refused.push({ path: row.path, reason: 'link' }); continue; }
-    if (hashOrNull(current) !== row.after_hash) { out.refused.push({ path: row.path, reason: 'changed' }); continue; }
+    if (current === 'large' || hashOrNull(current) !== row.after_hash) { out.refused.push({ path: row.path, reason: 'changed' }); continue; }
     let content: Buffer | null = null;
     if (row.before_hash !== null) {
       content = readKept(deps.dir, deps.projectId, row.before_hash);

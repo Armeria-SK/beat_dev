@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
-import { hunksOf, lineEndingsLike } from '../src/changes/diff.ts';
+import { hiddenPath, hunksOf, lineEndingsLike, readCurrent } from '../src/changes/diff.ts';
 import { changesDir, insertChange, keepContent, KEEP_MAX_BYTES, type FileChangeRow } from '../src/changes/record.ts';
-import { writeBack } from '../src/changes/restore.ts';
+import { undoEntries, writeBack } from '../src/changes/restore.ts';
 import { pruneChanges } from '../src/changes/retention.ts';
 import { SNAPSHOT_EVENT, snapshotBeforeBuild, snapshotLine } from '../src/projects/snapshot-before.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
@@ -108,6 +108,7 @@ test('8-4 Undo / Redo（記録の元・git でない製品）: 元に戻り、�
   const listed = await s.changes(p.id);
   assert.equal(listed.status, 200, JSON.stringify(listed.body));
   assert.equal(listed.body.base.kind, 'records');
+  assert.equal(listed.body.redo, null, 'Undo の前は Redo できるものが無い');
   assert.deepEqual(listed.body.files.map((f: any) => [f.path, f.status, f.added, f.removed, f.hidden, f.undo]), [
     ['a.txt', 'modified', 1, 1, false, true],
     ['sub/new.txt', 'added', 1, 0, false, true],
@@ -123,7 +124,10 @@ test('8-4 Undo / Redo（記録の元・git でない製品）: 元に戻り、�
   assert.equal(existsSync(join(p.root, 'sub')), false, '空になったフォルダも消える');
   assert.equal(existsSync(join(p.root, 't.csv')), false);
   assert.equal(read(p.root, 'keep.txt'), 'same\n');
-  assert.deepEqual((await s.changes(p.id)).body.files, []);
+  const after = await s.changes(p.id);
+  assert.deepEqual(after.body.files, []);
+  assert.deepEqual(after.body.redo, { id: undone.body.redo, created_at: after.body.redo?.created_at, paths: ['a.txt', 'sub/new.txt', 't.csv'] }, '差分の答えに、まだ Redo していない最後の Undo が載る');
+  assert.equal(typeof after.body.redo.created_at, 'number');
 
   const redone = await s.redo(p.id, undone.body.redo);
   assert.equal(redone.status, 200, JSON.stringify(redone.body));
@@ -131,6 +135,7 @@ test('8-4 Undo / Redo（記録の元・git でない製品）: 元に戻り、�
   assert.equal(read(p.root, 'a.txt'), 'v3\n');
   assert.equal(read(p.root, 'sub/new.txt'), 'fresh\n');
   assert.equal((await s.redo(p.id, undone.body.redo)).status, 409, '同じ Redo は 2 回しない');
+  assert.equal((await s.changes(p.id)).body.redo, null, 'Redo したあとは載らない');
   assert.equal((await s.redo(p.id, '00000000-0000-4000-8000-000000000000')).status, 404);
 });
 
@@ -413,4 +418,144 @@ test('8-4 差分の塊: 3 行の前後つきで、離れた変更は別の塊', 
     ['@@ -1,6 +1,6 @@', ' l0', ' l1', '-l2', '+L2', ' l3', ' l4', ' l5'],
     ['@@ -13,7 +13,7 @@', ' l12', ' l13', ' l14', '-l15', '+L15', ' l16', ' l17', ' l18'],
   ]);
+});
+
+test('8-4 短い名前（8.3）: ENV~1.LOC は .env.local の別名として断り、中身は変わらない。GIT~1 から .git の中へも書かない', { skip: !WINDOWS }, async t => {
+  const root = realpathSync.native(tempDir(t));
+  writeFileSync(join(root, '.env.local'), 'SECRET=1\n');
+  mkdirSync(join(root, '.git', 'hooks'), { recursive: true });
+  if (!existsSync(join(root, 'ENV~1.LOC')) || !existsSync(join(root, 'GIT~1'))) { t.skip('この場所のドライブに短い名前が無い'); return; }
+  assert.equal(readCurrent(root, 'ENV~1.LOC'), 'unknown');
+  assert.equal(hiddenPath(root, 'ENV~1.LOC', []), true);
+  assert.equal(writeBack(root, 'ENV~1.LOC', Buffer.from('x'), []).ok, false);
+  assert.equal(writeBack(root, 'ENV~1.LOC', null, []).ok, false);
+  assert.equal(readFileSync(join(root, '.env.local'), 'utf8'), 'SECRET=1\n');
+  assert.equal(writeBack(root, 'GIT~1/hooks/x', Buffer.from('run me'), []).ok, false);
+  assert.equal(existsSync(join(root, '.git', 'hooks', 'x')), false);
+
+  const s = await rig(t);
+  const p = await s.product('short', { '.env.local': 'SECRET=1\n', 'a.txt': 'a\n' });
+  if (!existsSync(join(p.root, 'ENV~1.LOC'))) { t.skip('製品のドライブに短い名前が無い'); return; }
+  await s.run(p.id, [call('file_write', { path: 'ENV~1.LOC', content: 'AI\n' })]);
+  const written = read(p.root, '.env.local');
+  const rows = s.rows(p.id);
+  assert.ok(rows.every(r => r.path === '.env.local'), JSON.stringify(rows.map(r => r.path)));
+  const listed = await s.changes(p.id);
+  assert.ok(listed.body.files.every((f: any) => f.hidden && !f.undo), JSON.stringify(listed.body.files));
+  const all = await s.undo(p.id, { paths: 'all' });
+  assert.deepEqual(all.body.undone, []);
+  const named = await s.undo(p.id, { paths: ['ENV~1.LOC'] });
+  assert.deepEqual(named.body.undone, []);
+  assert.equal(read(p.root, '.env.local'), written, 'Undo は秘密のファイルを書き戻さない');
+});
+
+test('8-4 大文字小文字だけの違い: 同じファイルとして読み書きする（短い名前とは違い、別名として断らない）', { skip: !WINDOWS }, t => {
+  const root = realpathSync.native(tempDir(t));
+  mkdirSync(join(root, 'sub'));
+  writeFileSync(join(root, 'sub', 'a.txt'), 'keep\n');
+  assert.equal((readCurrent(root, 'sub/A.TXT') as Buffer).toString('utf8'), 'keep\n');
+  assert.deepEqual(writeBack(root, 'sub/A.TXT', Buffer.from('x\n'), []), { ok: true });
+  assert.equal(readFileSync(join(root, 'sub', 'a.txt'), 'utf8'), 'x\n');
+});
+
+test('8-4 大文字小文字の違う 2 回の書き込み: README.md → readme.md → 持ち主の書き足し C のあと、Undo all で元に戻り、Redo で C に戻る', { skip: !WINDOWS }, async t => {
+  const s = await rig(t);
+  const p = await s.product('plain', { 'README.md': 'O\n' });
+  await s.run(p.id, [call('file_write', { path: 'README.md', content: 'X\n' }), call('file_write', { path: 'readme.md', content: 'Y\n' })]);
+  assert.deepEqual(s.rows(p.id).map(r => r.path), ['README.md', 'README.md'], '記録はディスクの上の名前');
+  writeFileSync(join(p.root, 'README.md'), 'C\n');
+  const listed = await s.changes(p.id);
+  assert.deepEqual(listed.body.files.map((f: any) => [f.path, f.undo]), [['README.md', true]]);
+  const undone = await s.undo(p.id, { paths: 'all' });
+  assert.deepEqual([undone.body.undone, undone.body.refused], [['README.md'], []]);
+  assert.equal(read(p.root, 'README.md'), 'O\n');
+  const redone = await s.redo(p.id, undone.body.redo);
+  assert.deepEqual([redone.body.redone, redone.body.refused], [['README.md'], []]);
+  assert.equal(read(p.root, 'README.md'), 'C\n');
+});
+
+test('8-4 大文字小文字だけ違う記録の行は 1 つのファイルにまとめ、Undo でも同じファイルを 2 度書かない（same_file）', { skip: !WINDOWS }, async t => {
+  const s = await rig(t);
+  const p = await s.product('plain', { 'Doc.txt': 'C\n' });
+  const dir = changesDir(s.paths);
+  const add = (path: string, before: string) => insertChange(s.app.db, { project_id: p.id, place: null, run_id: 'r', conversation_id: 'c', task_id: null, batch: null, path, action: 'modify', before_hash: keepContent(dir, p.id, Buffer.from(before)), after_hash: null, size: 2, kept: 1, created_at: Date.now() });
+  add('Doc.txt', 'O\n');
+  add('doc.txt', 'X\n');
+  const listed = await s.changes(p.id);
+  assert.deepEqual(listed.body.files.map((f: any) => f.path), ['Doc.txt']);
+  const realRoot = realpathSync.native(p.root);
+  const made = undoEntries({ db: s.app.db, dir, projectId: p.id, realRoot, deny: [], now: Date.now() }, [
+    { path: 'Doc.txt', before: Buffer.from('O\n'), after: Buffer.from('C\n'), hidden: false },
+    { path: 'doc.txt', before: Buffer.from('X\n'), after: Buffer.from('C\n'), hidden: false },
+  ], 'all');
+  assert.deepEqual([made.undone, made.refused], [['Doc.txt'], [{ path: 'doc.txt', reason: 'same_file' }]]);
+  assert.equal(read(p.root, 'Doc.txt'), 'O\n');
+});
+
+test('8-4 動いているあいだ（会話の実行）: 製品の会話の実行が動いていれば Undo は 409', async t => {
+  const s = await rig(t);
+  const p = await s.product('plain', { 'a.txt': 'v1\n' });
+  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' })]);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const waiting: Script = async function* (req) { await gate; yield* reply('later')(req); };
+  s.adapter().scripts = [waiting];
+  const sent = await s.json(`/api/conversations/${uuid(77)}/messages`, 'POST', { text: 'work', projectId: p.id, permissionMode: 'auto' });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  try {
+    for (let i = 0; i < 200 && !s.app.engine.activeRuns().length; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(s.app.engine.activeRuns().length > 0);
+    const blocked = await s.undo(p.id, { paths: 'all' });
+    assert.deepEqual([blocked.status, blocked.body.code], [409, 'project.changes_busy']);
+    assert.equal(read(p.root, 'a.txt'), 'v2\n');
+  } finally {
+    release();
+    await settled(s.app, sent.body.runId);
+  }
+});
+
+test('8-4 書き込みに失敗したら記録の行は残さない（控えは先に取る）', { skip: !WINDOWS }, async t => {
+  const s = await rig(t);
+  const p = await s.product('plain', { 'a.txt': 'v1\n', 't.csv': 'x\n' });
+  chmodSync(join(p.root, 'a.txt'), 0o444);
+  chmodSync(join(p.root, 't.csv'), 0o444);
+  t.after(() => { try { chmodSync(join(p.root, 'a.txt'), 0o666); chmodSync(join(p.root, 't.csv'), 0o666); } catch { } });
+  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' }), call('table_write', { path: 't.csv', rows: [['y']], overwrite: true })]);
+  assert.equal(read(p.root, 'a.txt'), 'v1\n', '書き込みは失敗している');
+  assert.equal(read(p.root, 't.csv'), 'x\n');
+  assert.deepEqual(s.rows(p.id), []);
+});
+
+test('8-4 Undo all は 200 ファイルまで: 残りの数を more で返す', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const g = await s.product('repo', { 'a.txt': 'x\n' }, { git: true });
+  for (let i = 0; i < 201; i++) writeFileSync(join(g.root, `n${String(i).padStart(3, '0')}.txt`), 'n\n');
+  const undone = await s.undo(g.id, { base: 'commit', paths: 'all' });
+  assert.equal(undone.status, 200, JSON.stringify(undone.body).slice(0, 300));
+  assert.deepEqual([undone.body.undone.length, undone.body.more], [200, 1]);
+  const named = await s.undo(g.id, { base: 'commit', paths: ['n200.txt'] });
+  assert.deepEqual([named.body.undone, named.body.more], [['n200.txt'], 0]);
+});
+
+test('8-4 大きさ: 5MB を超える git の中身は取り出さず（too_large）、今のファイルも読まない（large）', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const g = await s.product('repo', { 'big.bin': Buffer.alloc(KEEP_MAX_BYTES + 1, 0x63) }, { git: true });
+  writeFileSync(join(g.root, 'big.bin'), 'small\n');
+  const listed = await s.changes(g.id, '?base=commit');
+  assert.deepEqual(listed.body.files.map((f: any) => [f.path, f.undo]), [['big.bin', false]]);
+  const refused = await s.undo(g.id, { base: 'commit', paths: ['big.bin'] });
+  assert.deepEqual([refused.body.undone, refused.body.refused], [[], [{ path: 'big.bin', reason: 'too_large' }]]);
+  assert.equal(read(g.root, 'big.bin'), 'small\n');
+  writeFileSync(join(g.root, 'big.bin'), Buffer.alloc(KEEP_MAX_BYTES + 1, 0x64));
+  assert.equal(readCurrent(realpathSync.native(g.root), 'big.bin'), 'large');
+});
+
+test('8-4 書き戻しは今のファイルの印（実行の印）を残し、渡された印で新しいファイルを作る', { skip: WINDOWS }, t => {
+  const root = realpathSync.native(tempDir(t));
+  writeFileSync(join(root, 'run.sh'), 'old\n');
+  chmodSync(join(root, 'run.sh'), 0o755);
+  assert.deepEqual(writeBack(root, 'run.sh', Buffer.from('new\n'), []), { ok: true });
+  assert.equal(statSync(join(root, 'run.sh')).mode & 0o777, 0o755);
+  assert.deepEqual(writeBack(root, 'made.sh', Buffer.from('x\n'), [], 0o755), { ok: true });
+  assert.equal(statSync(join(root, 'made.sh')).mode & 0o777, 0o755);
 });

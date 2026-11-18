@@ -81,7 +81,7 @@ export function readKept(dir: string, projectId: string, hash: string): Buffer |
 export function productRel(root: string, abs: string): string | null {
   try {
     const real = realpathSync.native(root);
-    const full = join(realpathSync.native(dirname(abs)), basename(abs));
+    const full = lstatOf(abs) ? realpathSync.native(abs) : join(realpathSync.native(dirname(abs)), basename(abs));
     const rel = relative(real, full);
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
     const parts = rel.split(/[\\/]/u);
@@ -95,15 +95,18 @@ export function insertChange(db: DatabaseSync, row: Omit<FileChangeRow, 'id'>): 
   return Number(made.lastInsertRowid);
 }
 
-export function recordToolWrite(ctx: ToolContext, abs: string, next: string | Uint8Array): void {
+const NOTHING = (): void => undefined;
+
+// 書く前に呼ぶ: 元の中身を控えに置く。返す関数は、書き込みがうまくいったあとに呼ぶ（そのとき表に 1 行書く。失敗した書き込みは記録しない）
+export function recordToolWrite(ctx: ToolContext, abs: string, next: string | Uint8Array): () => void {
   const db = ctx.services?.db;
   const project = ctx.project;
-  if (!db || !project?.root) return;
+  if (!db || !project?.root) return NOTHING;
   try {
     const rel = productRel(project.root, abs);
-    if (rel === null) return;
+    if (rel === null) return NOTHING;
     const st = lstatOf(abs);
-    if (st === null || (st && (st.isSymbolicLink() || !st.isFile()))) return;
+    if (st === null || (st && (st.isSymbolicLink() || !st.isFile()))) return NOTHING;
     const dir = changesDir(ctx.paths);
     let before: string | null = null;
     let kept = 1;
@@ -115,13 +118,21 @@ export function recordToolWrite(ctx: ToolContext, abs: string, next: string | Ui
         try { before = keepContent(dir, project.id, readFileSync(abs)); } catch { kept = 0; }
       }
     }
-    const now = Date.now();
-    insertChange(db, {
-      project_id: project.id, place: null, run_id: ctx.runId, conversation_id: ctx.conversationId, task_id: ctx.task?.id ?? ctx.parent?.taskId ?? null, batch: null,
-      path: rel, action: st ? 'modify' : 'create', before_hash: before, after_hash: sha256(next), size, kept, created_at: now,
-    });
-    pruneChangesSoon(db, dir, now);
+    const after = sha256(next);
+    return () => {
+      try {
+        const now = Date.now();
+        insertChange(db, {
+          project_id: project.id, place: null, run_id: ctx.runId, conversation_id: ctx.conversationId, task_id: ctx.task?.id ?? ctx.parent?.taskId ?? null, batch: null,
+          path: rel, action: st ? 'modify' : 'create', before_hash: before, after_hash: after, size, kept, created_at: now,
+        });
+        pruneChangesSoon(db, dir, now);
+      } catch (error) {
+        ctx.log(`[WARN] Could not record the change of ${abs}: ${(error as Error).message}`);
+      }
+    };
   } catch (error) {
     ctx.log(`[WARN] Could not keep a copy of ${abs} before writing it: ${(error as Error).message}`);
+    return NOTHING;
   }
 }

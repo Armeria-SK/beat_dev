@@ -44,6 +44,15 @@ export function registerChangeRoutes(router: Router, app: App): void {
     'SELECT e.task_id AS id FROM task_events e JOIN tasks t ON t.id = e.task_id WHERE t.project_id = ? AND e.kind = ? ORDER BY e.id DESC LIMIT 1',
   ).get(projectId, SNAPSHOT_EVENT) as { id: string } | undefined)?.id;
 
+  const redoOf = (projectId: string): { id: string; created_at: number; paths: string[] } | null => {
+    const last = app.db.prepare(
+      "SELECT batch, MAX(created_at) AS created_at FROM file_changes c WHERE project_id = ? AND place IS NULL AND action = 'undo' AND batch IS NOT NULL AND NOT EXISTS (SELECT 1 FROM file_changes r WHERE r.project_id = c.project_id AND r.batch = c.batch AND r.action = 'redo') GROUP BY batch ORDER BY MAX(id) DESC LIMIT 1",
+    ).get(projectId) as { batch: string; created_at: number } | undefined;
+    if (!last) return null;
+    const rows = app.db.prepare("SELECT path FROM file_changes WHERE project_id = ? AND batch = ? AND action = 'undo' ORDER BY id").all(projectId, last.batch) as Array<{ path: string }>;
+    return { id: last.batch, created_at: last.created_at, paths: rows.map(row => row.path) };
+  };
+
   const scopeOf = (project: ProjectRow, raw: { base?: unknown; task?: unknown; conversation?: unknown }): Scope => {
     const isGit = gitFolder(project.root);
     const base = raw.base === undefined || raw.base === null || raw.base === '' ? (isGit ? (lastBuild(project.id) ? 'build' : 'commit') : 'records') : raw.base;
@@ -73,7 +82,7 @@ export function registerChangeRoutes(router: Router, app: App): void {
     const { project, realRoot } = projectOf(params[0]!);
     const scope = scopeOf(project, { base: url.searchParams.get('base'), task: url.searchParams.get('task'), conversation: url.searchParams.get('conversation') });
     const made = await load(project, realRoot, scope);
-    sendJson(res, 200, { base: made.base, files: present(made.entries, { undo: true }), more: made.more });
+    sendJson(res, 200, { base: made.base, files: present(made.entries, { undo: true }), more: made.more, redo: redoOf(project.id) });
   });
 
   router.add('POST', '/api/projects/:id/changes/undo', async ({ req, res, params }) => {
@@ -88,7 +97,7 @@ export function registerChangeRoutes(router: Router, app: App): void {
     const made = await load(project, realRoot, scope, list === 'all' ? undefined : new Set(list));
     if (busy(project.id)) throw projectProblem(409, new ProjectError('changes_busy'));
     const done = undoEntries({ db: app.db, dir: dir(), projectId: project.id, realRoot, deny: deny(), now: app.now() }, made.entries, list);
-    sendJson(res, 200, done);
+    sendJson(res, 200, { ...done, more: list === 'all' ? made.more : 0 });
   });
 
   router.add('POST', '/api/projects/:id/changes/redo', async ({ req, res, params }) => {

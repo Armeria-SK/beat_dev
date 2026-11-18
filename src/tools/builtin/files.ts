@@ -114,8 +114,9 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     const current = appending ? readFileSync(abs, 'utf8') : '';
     const next = appending ? current + input.content : input.content;
     const before = appending ? null : exists ? previousForDelta(abs) : '';
-    recordToolWrite(ctx, abs, next);
+    const recorded = recordToolWrite(ctx, abs, next);
     atomicWriteFile(abs, next);
+    recorded();
     if (!exists) ctx.noteCreated?.(abs);
     const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
     const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
@@ -141,8 +142,9 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
     if (count === 0) return { content: toolText(language, 'file.no_match'), isError: true };
     if (count > 1 && !input.all) return { content: toolText(language, 'file.many_matches', { count }), isError: true };
     const next = input.all ? text.split(input.old).join(input.new) : text.replace(input.old, () => input.new);
-    recordToolWrite(ctx, abs, next);
+    const recorded = recordToolWrite(ctx, abs, next);
     atomicWriteFile(abs, next);
+    recorded();
     return { content: toolText(language, 'file.replaced', { count, path: shown(abs, ctx) }) };
   },
 };

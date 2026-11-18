@@ -111,7 +111,7 @@ export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | numb
         content = made.bytes;
         neutralized = made.neutralized;
       }
-      recordToolWrite(ctx, abs, content);
+      const recorded = recordToolWrite(ctx, abs, content);
       const claimed = input.overwrite !== true;
       if (claimed && !claimNewFile(abs)) return error(toolText(language, 'file.exists', { path }));
       try {
@@ -120,6 +120,7 @@ export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | numb
         if (claimed) try { unlinkSync(abs); } catch { }
         throw thrown;
       }
+      recorded();
       if (!stat) ctx.noteCreated?.(abs);
       const cols = input.rows.reduce((max, row) => Math.max(max, row.length), 0);
       const wrote = toolText(language, 'table.wrote', { path, rows: input.rows.length, cols });
