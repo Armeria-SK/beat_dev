@@ -39,7 +39,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
 
 test('製品の知識の置き場所（data/projects/）は禁止の場所。フォルダそのもの・製品ごとのフォルダ・中のファイルのどれも', t => {
   const f = fixture(t);
-  for (const path of [f.paths.projects, f.dir, join(f.dir, 'context.md'), join(f.dir, 'new.md'), join(f.paths.projects, 'other', 'deep', 'x.md')]) {
+  for (const path of [f.paths.projects, f.dir, join(f.dir, 'context.md'), join(f.dir, 'new.md'), join(f.paths.projects, 'other', 'deep', 'x.md'), join(f.dir, 'memory', 'x.md')]) {
     assert.equal(placePath(path, f.policy).kind, 'deny', path);
   }
 });
@@ -61,7 +61,7 @@ test('ファイルの道具（読む・書く・書き換える・一覧・検�
   });
   const file = join(f.dir, 'context.md');
   for (const [name, args] of [
-    ['file_read', { path: file }], ['file_write', { path: file, content: 'changed\n' }], ['file_write', { path: join(f.dir, 'new.md'), content: 'x' }],
+    ['file_read', { path: file }], ['file_write', { path: file, content: 'changed\n' }], ['file_write', { path: join(f.dir, 'new.md'), content: 'x' }], ['file_write', { path: join(f.dir, 'memory', 'x.md'), content: '# x' }],
     ['file_edit', { path: file, old: 'product', new: 'changed' }], ['file_list', { path: f.dir }], ['file_list', { path: f.paths.projects }],
     ['file_search', { path: f.dir, text: 'knowledge' }], ['file_search', { path: f.paths.projects, name: '*.md' }],
   ] as const) {
@@ -69,13 +69,14 @@ test('ファイルの道具（読む・書く・書き換える・一覧・検�
     assert.equal(result.decision, 'deny', `${name} ${JSON.stringify(args)}`);
     assert.doesNotMatch(result.output.content, /product knowledge|context\.md/u, name);
   }
-  for (const command of [`cat "${file.replaceAll('\\', '/')}"`, `echo x > "${file.replaceAll('\\', '/')}"`]) {
+  for (const command of [`cat "${file.replaceAll('\\', '/')}"`, `echo x > "${file.replaceAll('\\', '/')}"`, `echo x > "${join(f.dir, 'memory', 'x.md').replaceAll('\\', '/')}"`]) {
     const result = await call('shell_run', { command });
     assert.equal(result.decision, 'deny', command);
   }
   assert.equal(judged, 0, '禁止の場所は、判定役に聞く前に止まる');
   assert.equal(readFileSync(file, 'utf8'), 'product knowledge\n');
   assert.equal(existsSync(join(f.dir, 'new.md')), false);
+  assert.equal(existsSync(join(f.dir, 'memory', 'x.md')), false);
 });
 
 test('シェルからの読み書き: data/projects/<id>/ の中は止める（bash も PowerShell も）', t => {

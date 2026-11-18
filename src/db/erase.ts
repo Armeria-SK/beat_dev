@@ -83,6 +83,7 @@ function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: num
   db.prepare('UPDATE engine_runs SET conversation_id = NULL, error_message = NULL WHERE conversation_id = ?').run(id);
   db.prepare("DELETE FROM kv WHERE length(key) > length(?) AND substr(key, -(length(?) + 1)) = ':' || ?").run(id, id, id);
   db.prepare('UPDATE memories SET source_conversation_id = NULL, source_message_id = NULL WHERE source_conversation_id = ?').run(id);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_file_events'").get()) db.prepare('UPDATE memory_file_events SET conversation_id = NULL WHERE conversation_id = ?').run(id);
   db.prepare('UPDATE skill_drafts SET conversation_id = NULL WHERE conversation_id = ?').run(id);
   db.prepare('UPDATE tasks SET created_in_conversation = NULL WHERE created_in_conversation = ?').run(id);
   db.prepare("UPDATE task_events SET content = REPLACE(content, ?, '-') WHERE content IS NOT NULL AND instr(content, ?) > 0").run(id, id);

@@ -23,6 +23,8 @@ import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
 import { ApprovalBroker } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
+import { memoryFileTools } from './tools/builtin/memory-files.ts';
+import { ProductMemory } from './memory/files.ts';
 import { historyRead, historySearch, MEMORY_TOOL_NAMES, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { droppedGitEnv, shellRun } from './tools/builtin/shell.ts';
 import { shellOutput, shellStop } from './tools/builtin/shell-bg.ts';
@@ -162,6 +164,7 @@ export class App {
   readonly questions: QuestionStore;
   readonly now: () => number;
   readonly mesh: Mesh;
+  readonly memoryFiles: ProductMemory;
   readonly projectFolderExempt: readonly string[];
   readonly botMemory: boolean;
   readonly notifications: Notifications;
@@ -213,6 +216,7 @@ export class App {
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
     for (const tool of options.tools ?? builtinTools()) if (this.botMemory || !MEMORY_TOOL_NAMES.includes(tool.name)) this.tools.register(tool);
+    if (!this.botMemory && !options.tools) for (const tool of memoryFileTools) this.tools.register(tool);
     this.approvals = new ApprovalBroker(this.db);
     this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); this.#pendingWake(change); } });
     const interrupted = this.pending.closeInterrupted();
@@ -227,7 +231,8 @@ export class App {
     this.acceptance.repairAll(this.log);
     adoptLegacyPlans({ kv: this.kv, projectsDir: this.paths.projects, backupsDir: this.paths.backups, log: this.log, now });
     this.questions = new QuestionStore(this.db, { now, onChange: change => { this.bus.publish({ type: 'question.changed', ...change }); this.#questionChanged(change); }, tasks: this.tasks, projects: this.projects, acceptance: this.acceptance });
-    this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, timezone: () => this.config().timezone, now, log: this.log, scoutStale: id => scoutState(this.kv, id).stale });
+    this.memoryFiles = new ProductMemory({ db: this.db, projectsDir: this.paths.projects, projects: this.projects, now });
+    this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, memory: this.memoryFiles, timezone: () => this.config().timezone, now, log: this.log, scoutStale: id => scoutState(this.kv, id).stale });
     for (const project of [...this.projects.list(), ...this.projects.list({ archived: true })]) this.mesh.persist(project.id);
     this.projectFolderExempt = [...(options.projectFolderExempt ?? [])];
     this.notifications = new Notifications(this.db, now, this.log, () => this.registry.secrets());
@@ -262,7 +267,7 @@ export class App {
     this.engine = new ChatEngine({
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
-      tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, botMemory: this.botMemory, tasks: this.tasks,
+      tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, memoryFiles: this.memoryFiles, botMemory: this.botMemory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, questions: this.questions, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
@@ -275,7 +280,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
+      reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, memoryFiles: this.memoryFiles, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
@@ -288,7 +293,7 @@ export class App {
       if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
         this.curiosity.onTaskFinished(task);
         // 実行したタスクが終わったら振り返る（実行の記録があるものだけ）
-        if (task.status !== 'cancelled' && task.conversation_id && this.worker.memoryReviewsOn()) {
+        if (task.status !== 'cancelled' && task.conversation_id && this.worker.memoryReviewsOn({ taskId: task.id, conversationId: task.conversation_id })) {
           this.reviews.enqueue('task', `task:${task.id}`, { taskId: task.id, conversationId: task.conversation_id });
         }
       }
@@ -331,7 +336,7 @@ export class App {
     };
     this.engine.onRunEnd = run => {
       if (run.kind === 'chat') {
-        if (this.worker.memoryReviewsOn()) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
+        if (this.worker.memoryReviewsOn({ conversationId: run.conversationId })) this.reviews.enqueueIfPiled(run.conversationId, reviewWindowLimits(this.engine.backgroundAvailable()));
         if (this.worker.skillReviewsOn()) this.reviews.enqueueSkillIfDue(run.conversationId);
         else this.reviews.skipSkillReading(run.conversationId);
       }
@@ -562,7 +567,7 @@ export class App {
     void replayAction(row, {
       db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
       conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
-      services: () => ({ db: this.db, memory: this.memory, tasks: this.tasks, curiosity: this.curiosity, skills: this.skills, plans: this.plans, acceptance: this.acceptance, projects: this.projects, mesh: this.mesh, questions: this.questions, notify: input => this.notifications.notify(input), browser: this.browser, background: this.background, emit: e => this.bus.publish(e) }),
+      services: () => this.engine.toolServices(),
     }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
   }
 

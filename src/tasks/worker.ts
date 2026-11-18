@@ -9,8 +9,9 @@ import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
-import { bookPressureText, conversationWindow, isNoProposal, reviewPrompt, reviewUptoKey, reviewWindowLimits, seedSkillUpto, SKILL_REVIEW_TOOLS, skillUpto, skillUptoKey, TIDY_FORBIDDEN_TOOLS, TRIGGER_TEXT, type ReviewJob, type ReviewJobs, type ReviewKind, type WindowLimits } from '../memory/review.ts';
+import { bookPressureText, conversationWindow, isNoProposal, productMemoryBudget, productMemoryText, reviewPrompt, reviewUptoKey, reviewWindowLimits, seedSkillUpto, SKILL_REVIEW_TOOLS, skillUpto, skillUptoKey, TIDY_FORBIDDEN_TOOLS, TRIGGER_TEXT, type ReviewJob, type ReviewJobs, type ReviewKind, type WindowLimits } from '../memory/review.ts';
 import { planBooks, type MemoryStore } from '../memory/store.ts';
+import type { ProductMemory } from '../memory/files.ts';
 import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
@@ -62,6 +63,7 @@ export interface WorkerDeps {
   reviews?: ReviewJobs | undefined;
   memory?: MemoryStore | undefined;
   botMemory?: boolean | undefined;
+  memoryFiles?: ProductMemory | undefined;
   curiosity?: CuriosityStore | undefined;
   memoryBudget?: (() => number | undefined) | undefined;
   backgroundAvailable?: (() => number | undefined) | undefined;
@@ -194,7 +196,7 @@ export class Worker {
     if (recovered) this.#d.log(`[INFO] Put ${recovered} task(s) that had stopped midway back in the queue`);
     const reviews = this.#d.reviews?.recoverRunning() ?? 0;
     if (reviews) this.#d.log(`[INFO] Re-queued ${reviews} review(s) that had stopped midway`);
-    if (this.#d.botMemory !== true) this.#d.reviews?.skipPending('memory', taskText(this.#language(), 'review.memory_nothing'));
+    if (this.#d.botMemory !== true) this.#d.reviews?.skipPending('memory', taskText(this.#language(), 'review.memory_nothing'), { outsideProduct: true });
     seedSkillUpto(this.#d.db, this.#now());
     this.#d.pendingWake?.();
     this.poke();
@@ -247,7 +249,14 @@ export class Worker {
 
   skillReviewsOn(c: AppConfig = this.#d.config()): boolean { return c.worker.enabled && c.memory.review && growSkills(c); }
 
-  memoryReviewsOn(c: AppConfig = this.#d.config()): boolean { return c.memory.review && this.#d.botMemory === true; }
+  memoryReviewsOn(ref?: { conversationId?: string | null | undefined; taskId?: string | null | undefined }, c: AppConfig = this.#d.config()): boolean {
+    return c.memory.review && (this.#d.botMemory === true || (ref !== undefined && this.#productOf(ref) !== null));
+  }
+
+  #productOf(ref: { conversationId?: string | null | undefined; taskId?: string | null | undefined }): string | null {
+    const id = (ref.conversationId ? this.#d.conversations.projectOf(ref.conversationId) : null) ?? (ref.taskId ? this.#d.tasks.get(ref.taskId)?.project_id ?? null : null);
+    return id !== null && (!this.#d.projects || this.#d.projects.get(id)?.archived_at === null) ? id : null;
+  }
 
 
   #ownerWork(task: Task): boolean {
@@ -433,7 +442,13 @@ export class Worker {
     // 機能を入れる前の古い会話を一度に振り返らないよう、最初に動いた時刻より後の会話だけを見る
     let since = Number(kv.get('review:since'));
     if (!Number.isFinite(since) || since <= 0) { since = now; kv.set('review:since', String(now)); }
-    if (this.memoryReviewsOn(c)) reviews.enqueueIdleConversations(c.memory.reviewIdleMinutes * 60_000, since);
+    // 製品の記憶の振り返り（Bot モードの外）も同じ: 初めて動いた時刻より前の製品の会話は振り返らない（10-3 を入れた直後に、溜まった会話の振り返りが一度に積まれないように）
+    if (this.#d.botMemory !== true) {
+      let productSince = Number(kv.get('review:product-since'));
+      if (!Number.isFinite(productSince) || productSince <= 0) { productSince = now; kv.set('review:product-since', String(now)); }
+      since = Math.max(since, productSince);
+    }
+    reviews.enqueueIdleConversations(c.memory.reviewIdleMinutes * 60_000, since, { productOnly: this.#d.botMemory !== true });
     // 記憶が会話に入れる量の予算を超えたら、整理の振り返りを 1 日 1 回積む（予算が決まらないとき・モデルが 0 個のときは積まない）
     const budget = this.#d.memoryBudget?.();
     if (this.#d.botMemory && memory && budget !== undefined && planBooks(memory.list(), languageOf(c), budget).omitted.length > 0) {
@@ -448,17 +463,19 @@ export class Worker {
     const language = languageOf(this.#d.config());
     const skillsAutoRegister = !askBeforeRegister(this.#d.config());
     const kind = job.kind;
-    const forgotten = kind === 'skill' ? [] : (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
+    const forgotten = kind === 'skill' || this.#d.botMemory !== true ? [] : (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
     if (job.trigger === 'book_full') {
       const budget = this.#d.memoryBudget?.();
       const plan = memory && budget !== undefined ? planBooks(memory.list(), language, budget) : undefined;
       const pressure = plan && budget !== undefined && plan.omitted.length > 0 ? bookPressureText({ tokens: plan.tokens, budget, outside: plan.omitted }, language) : undefined;
       return { prompt: reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language, kind: 'memory' }) };
     }
+    const projectId = kind === 'memory' && this.#d.botMemory !== true && this.#d.memoryFiles ? this.#productOf({ conversationId: job.conversation_id, taskId: job.task_id }) : null;
+    const productMemory = () => projectId !== null ? productMemoryText(this.#d.memoryFiles!, projectId, productMemoryBudget(this.#d.backgroundAvailable?.()), this.#d.secrets?.() ?? []) : undefined;
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
       if (!task) return {};
-      return { prompt: reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, language, skillsAutoRegister, kind }) };
+      return { prompt: reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, productMemory: productMemory(), fileMemory: projectId !== null, language, skillsAutoRegister, kind }) };
     }
     if (!job.conversation_id) return {};
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
@@ -466,7 +483,7 @@ export class Worker {
     const window = conversationWindow(db, job.conversation_id, upto, this.#reviewLimits(), language, kind, this.#d.secrets?.() ?? []);
     const owner = window.messages.some(m => m.message.role === 'user' && m.message.note === undefined);
     if (!owner && (kind === 'memory' || !window.messages.some(m => m.role === 'tool'))) return { upto: window.lastId };
-    return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, language, skillsAutoRegister, kind }), upto: window.lastId };
+    return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, productMemory: productMemory(), fileMemory: projectId !== null, language, skillsAutoRegister, kind }), upto: window.lastId };
   }
 
   #reviewed(conversationId: string, upto: number | undefined, kind: ReviewKind): void {
@@ -476,7 +493,7 @@ export class Worker {
       return;
     }
     if (upto !== undefined) this.#d.kv.set(reviewUptoKey(conversationId), String(upto));
-    if (this.memoryReviewsOn()) this.#d.reviews?.enqueueIfPiled(conversationId, this.#reviewLimits());
+    if (this.memoryReviewsOn({ conversationId })) this.#d.reviews?.enqueueIfPiled(conversationId, this.#reviewLimits());
   }
 
   #noReviewModel(detail: string, language: Language): void {
@@ -488,7 +505,7 @@ export class Worker {
     if (!reviews) return 'idle';
     const language = this.#language();
     if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
-    if (job.kind === 'memory' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.memory_nothing')); return 'idle'; }
+    if (job.kind === 'memory' && !this.#d.botMemory && this.#productOf({ conversationId: job.conversation_id, taskId: job.task_id }) === null) { reviews.finish(job.id, 'done', taskText(language, 'review.memory_nothing')); return 'idle'; }
     const { prompt, upto } = this.#reviewInput(job);
     if (!prompt) {
       reviews.finish(job.id, 'done', taskText(language, 'review.nothing'));

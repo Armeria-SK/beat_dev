@@ -13,13 +13,13 @@ const patch = (s: Awaited<ReturnType<typeof startScreenServer>>, name: string, b
   s.api(`/api/tools/${name}`, { method: 'PATCH', body: JSON.stringify(body), headers });
 const fileOf = (s: Awaited<ReturnType<typeof startScreenServer>>) => JSON.parse(readFileSync(s.app.paths.config, 'utf8')) as { tools: { policies?: Record<string, string> } };
 
-test('GET /api/tools: 組み込みの道具のうち記憶の道具と、どの実行にも渡らない道具（allowedIn が空）を除いた全部を、名前・効果・使える場面・方針・方針を持てるかで返す（既定はすべて allow。agent_run も）', async t => {
+test('GET /api/tools: 組み込みの道具のうち DB の memory_search と、どの実行にも渡らない道具（allowedIn が空）を除いた全部を、名前・効果・使える場面・方針・方針を持てるかで返す（既定はすべて allow。agent_run も）', async t => {
   const s = await startScreenServer(t);
   const res = await s.api('/api/tools');
   assert.equal(res.status, 200);
   const { tools } = (await res.json()) as { tools: ToolRow[] };
   const server = builtinTools();
-  const listed = server.filter(tool => !tool.name.startsWith('memory_') && tool.allowedIn.length > 0);
+  const listed = server.filter(tool => tool.name !== 'memory_search' && tool.allowedIn.length > 0);
   assert.ok(listed.length > 0 && tools.every(tool => tool.allowedIn.length > 0));
   assert.deepEqual(tools.map(tool => tool.name).sort(), listed.map(tool => tool.name).sort());
   for (const tool of tools) {

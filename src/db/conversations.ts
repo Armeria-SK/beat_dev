@@ -236,6 +236,7 @@ export class Conversations {
       const result = this.db.prepare(`INSERT INTO messages (conversation_id, run_id, role, text, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(conversationId, runId ?? null, message.role, text, JSON.stringify(message), now);
       this.db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(now, conversationId);
+      if (message.role === 'user' && message.attachments?.length) this.markTainted(conversationId);
       return {
         id: Number(result.lastInsertRowid), conversation_id: conversationId, run_id: runId ?? null,
         role: message.role, text, message, created_at: now,
