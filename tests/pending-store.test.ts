@@ -298,6 +298,26 @@ test('作業フォルダが鍵の名前の項目から来るときは、作業�
   assert.equal(row.parts.cwd, '[REDACTED]');
 });
 
+test('鍵らしいトップのキーが 2 つあっても、どちらの値も見せる（キーの文字は伏せる）。要約のある道具では残りの項目に出る', async t => {
+  const s = setup(t);
+  const keyA = 'ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0001';
+  const keyB = 'ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB0002';
+  const bare: ToolDef<Record<string, string>> = {
+    name: 'fake_bare', description: 'x', input: Type.Record(Type.String(), Type.String()), effect: 'exec', allowedIn: ['chat'],
+    execute: async () => ({ content: 'ok' }),
+  };
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(bare).register(echo), dataDir: s.dir });
+  const base = { cwd: s.dir, kind: 'owner' as const, reason: 'r', runId: 'r', runKind: 'chat' as const, conversationId: 'c' };
+  const both = await store.park({ ...base, tool: bare.name, input: { [keyA]: 'one', [keyB]: 'two' } });
+  assert.match(both.parts.body ?? '', /"one"/u);
+  assert.match(both.parts.body ?? '', /"two"/u);
+  assert.ok(!JSON.stringify(both).includes('ghp_'), both.parts.body ?? '');
+  const extra = await store.park({ ...base, tool: echo.name, input: { text: 'hello', [keyA]: 'three' } });
+  assert.equal(extra.parts.body, 'hello');
+  assert.match(extra.parts.extra ?? '', /"three"/u);
+  assert.ok(!JSON.stringify(extra).includes('ghp_'), extra.parts.extra ?? '');
+});
+
 test('MCP の道具: 入力まるごとを見せるときも、サーバーに渡した秘密の値をそのまま伏せる', async t => {
   const s = setup(t);
   const built = buildMcpTool({

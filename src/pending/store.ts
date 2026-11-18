@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
-import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
+import { redactJsonValues, redactSecrets } from '../shared/redaction.ts';
 import type { PreviewFile } from '../tools/approvals.ts';
 import { inspectRepo } from '../tools/hooks/git-repo.ts';
 import { realish } from '../tools/hooks/scope.ts';
@@ -181,7 +181,7 @@ function render(tool: ToolDef, input: unknown): { title: string; shown: string; 
   let summary: { title: string; body: string; cwd?: string } | undefined;
   try { summary = tool.summarize?.(input as never, 'en'); } catch { summary = undefined; }
   const title = summary?.title ?? tool.name;
-  const masked = redactJsonValue(input);
+  const masked = redactJsonValues(input);
   const keyOf = (value: string | undefined): string | undefined => plain(input) && plain(masked) && value !== undefined
     ? Object.keys(input).find(k => input[k] === value && masked[k] !== MARK)
     : undefined;

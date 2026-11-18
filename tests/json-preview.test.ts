@@ -63,6 +63,8 @@ test('B1: 鍵らしいオブジェクトのキーも伏せる（縮めてもキ�
   const text = previewJson(redactJsonValue({ content: 'c'.repeat(10_000), env: { [token]: 'v', path: 'p' } }), 2000);
   assert.ok(!text.includes('ghp_'), text.slice(-200));
   assert.deepEqual(JSON.parse(text).env, { '[REDACTED]': 'v', path: 'p' });
+  const two = redactJsonValue({ [token]: 'one', [`${token}9`]: 'two' });
+  assert.deepEqual(two, { '[REDACTED]': 'one', '[REDACTED] (2)': 'two' }, '伏せたキーが重なっても値を落とさない');
 });
 
 test('B1: どうしても収まらないときは JSON の文字列', () => {
