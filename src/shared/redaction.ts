@@ -309,13 +309,15 @@ function redactJson(value: unknown, keys: boolean, depth: number): unknown {
     return value.map(item => redactJson(item, keys, depth + 1));
   }
   const named = Object.entries(value).some(([key, item]) => (key === 'name' || key === 'key') && typeof item === 'string' && isSensitiveKey(item));
-  const used = new Map<string, number>();
+  const renamed = new Map(Object.keys(value).map(key => [key, keys ? redactSecrets(key) : key]));
+  const taken = new Set([...renamed].filter(([key, masked]) => masked === key).map(([key]) => key));
   const keyOf = (key: string): string => {
-    const masked = keys ? redactSecrets(key) : key;
+    const masked = renamed.get(key)!;
     if (masked === key) return key;
-    const n = (used.get(masked) ?? 0) + 1;
-    used.set(masked, n);
-    return n === 1 ? masked : `${masked} (${n})`;
+    let name = masked;
+    for (let n = 2; taken.has(name); n++) name = `${masked} (${n})`;
+    taken.add(name);
+    return name;
   };
   return Object.fromEntries(Object.entries(value).map(([key, item]) =>
     [keyOf(key), isSensitiveKey(key) || (named && key === 'value') ? '[REDACTED]' : redactJson(item, keys, depth + 1)]));

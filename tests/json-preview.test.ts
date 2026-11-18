@@ -65,6 +65,10 @@ test('B1: 鍵らしいオブジェクトのキーも伏せる（縮めてもキ�
   assert.deepEqual(JSON.parse(text).env, { '[REDACTED]': 'v', path: 'p' });
   const two = redactJsonValue({ [token]: 'one', [`${token}9`]: 'two' });
   assert.deepEqual(two, { '[REDACTED]': 'one', '[REDACTED] (2)': 'two' }, '伏せたキーが重なっても値を落とさない');
+  const literal = redactJsonValue({ '[REDACTED]': 'literal', [token]: 'hidden-value', '[REDACTED] (2)': 'also' }) as Record<string, string>;
+  assert.deepEqual(Object.values(literal).sort(), ['also', 'hidden-value', 'literal'], '入力にもとからある同じ名前のキーも落とさない');
+  assert.equal(literal['[REDACTED]'], 'literal');
+  assert.ok(!JSON.stringify(literal).includes('ghp_'));
 });
 
 test('B1: どうしても収まらないときは JSON の文字列', () => {
